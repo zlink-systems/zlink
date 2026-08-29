@@ -1927,6 +1927,100 @@ public sealed class ActorHandoffTests
     }
 
     [Fact]
+    public async Task CanonicalAdmission_Retry_Reuses_Decision_When_Local_Deadline_Changes()
+    {
+        var time = new ManualTimeProvider();
+        var admissions = new ZLinkActorHandoffAdmissions(time);
+        var sourceNode = RoutingId.From("canonical-admission-source");
+        var targetNode = RoutingId.From("canonical-admission-target");
+        var canonical = new ZLinkCanonicalActorJoinAdmission(
+            new ActorJoinRequest(
+                Correlation: 91,
+                new ActorRef("actor-1", 7, "mesh", sourceNode),
+                ActorNodeGeneration: 11,
+                ActorAuthorityOwnerGeneration: 13,
+                ActorOwnerLeaseGeneration: 17,
+                Entry: false,
+                TargetSpotId: "spot-1",
+                TargetSpotGeneration: 19,
+                targetNode,
+                TargetNodeGeneration: 23,
+                TargetAuthorityOwnerGeneration: 29,
+                TargetOwnerLeaseGeneration: 31));
+        var first = AdmissionRequest(time, "handoff-canonical-retry") with
+        {
+            DeadlineUnixTimeMilliseconds =
+                (time.GetUtcNow() + TimeSpan.FromSeconds(30))
+                .ToUnixTimeMilliseconds(),
+            ActorGeneration = 7,
+            ActorAuthorityOwnerGeneration = 13,
+            PredictedPayloadBytes = 37,
+            TargetSpotGeneration = 19,
+            TargetSpotAuthorityOwnerGeneration = 41,
+            Canonical = canonical
+        };
+        var retryWhileAdmitting = first with
+        {
+            DeadlineUnixTimeMilliseconds =
+                first.DeadlineUnixTimeMilliseconds + 5_000,
+            Canonical = new ZLinkCanonicalActorJoinAdmission(
+                canonical.Request)
+        };
+        var retryAfterTerminal = first with
+        {
+            DeadlineUnixTimeMilliseconds =
+                first.DeadlineUnixTimeMilliseconds + 10_000,
+            Canonical = new ZLinkCanonicalActorJoinAdmission(
+                canonical.Request)
+        };
+        var entered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+
+        async ValueTask<ZLinkRemoteActorAdmissionReply> Decide(
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref calls);
+            entered.TrySetResult();
+            await release.Task.WaitAsync(cancellationToken);
+            return new ZLinkRemoteActorAdmissionReply(
+                false,
+                "application/json",
+                "{\"reason\":\"ZoneMaintenance\"}"u8.ToArray(),
+                first.DeadlineUnixTimeMilliseconds);
+        }
+
+        var initial = admissions.AdmitAsync(
+            first,
+            "spot-1",
+            Decide,
+            CancellationToken.None).AsTask();
+        await entered.Task;
+        var concurrentRetry = admissions.AdmitAsync(
+            retryWhileAdmitting,
+            "spot-1",
+            Decide,
+            CancellationToken.None).AsTask();
+        release.TrySetResult();
+
+        var concurrentReplies = await Task.WhenAll(initial, concurrentRetry);
+        var memoized = await admissions.AdmitAsync(
+            retryAfterTerminal,
+            "spot-1",
+            Decide,
+            CancellationToken.None);
+
+        Assert.Equal(1, calls);
+        Assert.Same(concurrentReplies[0], concurrentReplies[1]);
+        Assert.Same(concurrentReplies[0], memoized);
+        Assert.Equal(
+            first.DeadlineUnixTimeMilliseconds,
+            memoized.DeadlineUnixTimeMilliseconds);
+    }
+
+    [Fact]
     public async Task ExpiredAdmission_DoesNotInvokeCallbackOrCreateReservation()
     {
         var time = new ManualTimeProvider();

@@ -7,8 +7,11 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class CanonicalActorJoinIngressReplyTests
 {
-    [Fact]
-    public async Task ManagedSource_Command28Request_ConsumesCommand20TailAndApplicationReply()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ManagedSource_Command28Request_ConsumesCommand20TailAndApplicationReply(
+        bool targetDialsSource)
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var source = new ZLinkManagedMeshNode(context, "mesh");
@@ -17,15 +20,18 @@ public sealed class CanonicalActorJoinIngressReplyTests
         var suffix = Guid.NewGuid().ToString("N");
         var sourceRid = RoutingId.From($"actor-join-source-{suffix}");
         var targetRid = RoutingId.From($"actor-join-target-{suffix}");
-        var sourceEndpoint = $"inproc://actor-join-source-{suffix}";
-        var targetEndpoint = $"inproc://actor-join-target-{suffix}";
+        var sourceEndpoint = AllocateTcpEndpoint();
+        var targetEndpoint = AllocateTcpEndpoint();
         const string targetSpotId = "target-spot";
 
         source.SetRoutingId(sourceRid);
         source.SetBind(sourceEndpoint);
-        source.ConnectPeer(targetEndpoint, targetRid);
         target.SetRoutingId(targetRid);
         target.SetBind(targetEndpoint);
+        if (targetDialsSource)
+            target.ConnectPeer(sourceEndpoint, sourceRid);
+        else
+            source.ConnectPeer(targetEndpoint, targetRid);
         var targetSpot = (ZLinkManagedSpot)target.GetOrCreateSpot(
             targetSpotId,
             out var created);
@@ -116,6 +122,118 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 "{\"accepted\":true}"u8.ToArray(),
                 application.Payload.ToArray());
             Assert.Equal(0UL, targetMonitor.Status().ProtocolErrors);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(replyParts);
+        }
+    }
+
+    [Fact]
+    public async Task ManagedSource_Command28Request_Retries_Same_Correlation_After_Lost_Reply()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        ReplySubmitOperation? firstReplyRoute = null;
+        await using var source = new ZLinkManagedMeshNode(context, "mesh");
+        await using var target = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            nativeTerminalReplySubmitOverride: reply =>
+            {
+                firstReplyRoute ??= reply;
+                if (ReferenceEquals(firstReplyRoute, reply))
+                    return SubmitResult.Ok;
+                reply.Submit();
+                return SubmitResult.Ok;
+            });
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceRid = RoutingId.From($"actor-join-source-{suffix}");
+        var targetRid = RoutingId.From($"actor-join-target-{suffix}");
+        var sourceEndpoint = AllocateTcpEndpoint();
+        var targetEndpoint = AllocateTcpEndpoint();
+        const string targetSpotId = "target-spot";
+
+        source.SetRoutingId(sourceRid);
+        source.SetBind(sourceEndpoint);
+        target.SetRoutingId(targetRid);
+        target.SetBind(targetEndpoint);
+        target.ConnectPeer(sourceEndpoint, sourceRid);
+        var targetSpot = (ZLinkManagedSpot)target.GetOrCreateSpot(
+            targetSpotId,
+            out var created);
+        Assert.True(created);
+        source.ObserveSpotAuthority(
+            targetRid,
+            targetSpotId,
+            targetSpot.LifecycleGeneration,
+            target.Status().LifecycleGeneration,
+            targetSpot.AuthorityOwnerGeneration,
+            ownerLeaseGeneration: 7);
+        source.Start();
+        target.Start();
+
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1
+            && target.Status().AdmittedPeerCount == 1);
+
+        var operationId = source.AllocateOperationId();
+        var request = new ZLinkBackendCanonicalActorJoinRequest(
+            new ZLinkBackendActorRef(sourceRid, "actor-lost-reply", 11),
+            source.Status().LifecycleGeneration,
+            ActorAuthorityOwnerGeneration: 3,
+            ActorOwnerLeaseGeneration: 5,
+            Entry: false,
+            targetRid,
+            targetSpotId,
+            targetSpot.LifecycleGeneration,
+            target.Status().LifecycleGeneration,
+            targetSpot.AuthorityOwnerGeneration,
+            TargetOwnerLeaseGeneration: 7,
+            "ZLinkFrameworkActorJoinRequest",
+            "application/json",
+            "{}"u8.ToArray());
+
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.TryRequestCanonicalActorJoin(
+                request,
+                operationId,
+                TimeSpan.FromSeconds(8)));
+
+        var firstIngress = await ReceiveActorJoinAsync(target);
+        using var firstReply = Message.From(
+            "{\"reason\":\"ZoneMaintenance\"}"u8);
+        Assert.Equal(
+            SubmitResult.Ok,
+            firstIngress.ReplyJoin(
+                ActorJoinResult.Rejected,
+                [firstReply]));
+
+        var retryIngress = await ReceiveActorJoinAsync(
+            target,
+            TimeSpan.FromSeconds(7));
+        Assert.Equal(firstIngress.OperationId, retryIngress.OperationId);
+        using var retryReply = Message.From(
+            "{\"reason\":\"ZoneMaintenance\"}"u8);
+        Assert.Equal(
+            SubmitResult.Ok,
+            retryIngress.ReplyJoin(
+                ActorJoinResult.Rejected,
+                [retryReply]));
+
+        var (completion, replyParts) = await ReceiveCompletionAsync(
+            source,
+            operationId);
+        try
+        {
+            Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
+            var join = Assert.IsType<ActorJoinCompletion>(
+                completion.JoinCompletion);
+            Assert.Equal(ActorJoinResult.Rejected, join.JoinResult);
+            var applicationReply = Assert.Single(replyParts);
+            Assert.Equal(
+                "{\"reason\":\"ZoneMaintenance\"}"u8.ToArray(),
+                applicationReply.AsReadOnlyMemory().ToArray());
         }
         finally
         {
@@ -724,9 +842,10 @@ public sealed class CanonicalActorJoinIngressReplyTests
     }
 
     private static async Task<MeshReceiveRecord> ReceiveActorJoinAsync(
-        ZLinkManagedMeshNode target)
+        ZLinkManagedMeshNode target,
+        TimeSpan? timeout = null)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(2));
         while (DateTime.UtcNow < deadline)
         {
             using var ready = new MeshReadyBatch();

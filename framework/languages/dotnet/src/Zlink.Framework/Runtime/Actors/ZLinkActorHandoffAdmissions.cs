@@ -717,7 +717,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
             => string.Equals(request.ActorId, candidate.ActorId, StringComparison.Ordinal)
                && string.Equals(request.ActorType, candidate.ActorType, StringComparison.Ordinal)
                && string.Equals(request.HandoffId, candidate.HandoffId, StringComparison.Ordinal)
-               && request.DeadlineUnixTimeMilliseconds == candidate.DeadlineUnixTimeMilliseconds
+               && MatchesAdmissionDeadline(request, candidate)
                && request.SourceNodeRid.AsSpan().SequenceEqual(candidate.SourceNodeRid)
                && string.Equals(request.SourceSpotId, candidate.SourceSpotId, StringComparison.Ordinal)
                 && string.Equals(request.RequestContentType, candidate.RequestContentType, StringComparison.Ordinal)
@@ -749,7 +749,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
                && string.Equals(request.ActorId, candidate.ActorId, StringComparison.Ordinal)
                && string.Equals(request.ActorType, candidate.ActorType, StringComparison.Ordinal)
                && string.Equals(request.HandoffId, candidate.HandoffId, StringComparison.Ordinal)
-               && request.DeadlineUnixTimeMilliseconds == candidate.DeadlineUnixTimeMilliseconds
+               && MatchesAdmissionDeadline(request, candidate)
                && request.SourceNodeRid.AsSpan().SequenceEqual(candidate.SourceNodeRid)
                && string.Equals(request.SourceSpotId, candidate.SourceSpotId, StringComparison.Ordinal)
                && string.Equals(request.RequestContentType, candidate.RequestContentType, StringComparison.Ordinal)
@@ -765,6 +765,16 @@ internal sealed class ZLinkActorHandoffAdmissions(
         public void Complete(ZLinkRemoteActorAdmissionReply reply) => _result.TrySetResult(reply);
 
         public void Fail(Exception exception) => _result.TrySetException(exception);
+    }
+
+    private static bool MatchesAdmissionDeadline(
+        ZLinkRemoteActorAdmissionRequest expected,
+        ZLinkRemoteActorAdmissionRequest candidate)
+    {
+        if (expected.Canonical is not null || candidate.Canonical is not null)
+            return expected.Canonical == candidate.Canonical;
+        return expected.DeadlineUnixTimeMilliseconds
+               == candidate.DeadlineUnixTimeMilliseconds;
     }
 
     private sealed class TerminalOutcome(

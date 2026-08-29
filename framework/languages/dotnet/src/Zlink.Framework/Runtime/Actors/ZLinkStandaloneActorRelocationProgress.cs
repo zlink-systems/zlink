@@ -124,7 +124,11 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
             // Direct transfer (spec 52 §3.1.7) carries the immutable root on
             // command 52 rather than through the Relocation Store.  Its
             // canonical authority has no tree pointer to load or delete.
-            if (current.Canonical is { RelocationReference.Length: 0 })
+            if (current.Canonical is { } directCanonical
+                && ZLinkStandaloneActorRelocationPrecommitCoordinator
+                    .IsDirectTransferReference(
+                        directCanonical.RelocationReference,
+                        directCanonical.RelocationChecksumCrc32c))
             {
                 var direct = await authorityStore.CompareExchangeAuthorityAsync(
                         identity.Participants.Single().AuthorityKey,
@@ -201,7 +205,10 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                 "Standalone Actor relocation authority changed during replay.");
         if (ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
                 found.Snapshot.Payload.Span, out var directCanonical)
-            && directCanonical.RelocationReference.Length == 0)
+            && ZLinkStandaloneActorRelocationPrecommitCoordinator
+                .IsDirectTransferReference(
+                    directCanonical.RelocationReference,
+                    directCanonical.RelocationChecksumCrc32c))
         {
             if (directCanonical.RelocationHigh != identity.CanonicalRelocationHigh
                 || directCanonical.RelocationLow != identity.CanonicalRelocationLow)

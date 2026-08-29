@@ -12,7 +12,14 @@ namespace Zlink.Framework.Runtime.Actors;
 internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
     IZLinkLocationRepository store)
 {
+    internal const string DirectTransferReference = "pending";
     private const int MaxConflictRetries = 8;
+
+    internal static bool IsDirectTransferReference(
+        string reference,
+        uint checksumCrc32c) =>
+        checksumCrc32c == 0
+        && StringComparer.Ordinal.Equals(reference, DirectTransferReference);
 
     internal async ValueTask<ZLinkAuthoritySnapshot> BeginPreparingAsync(
         ZLinkAuthoritySnapshot source,
@@ -44,7 +51,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             applicationVersion)
         {
             CoordinatorExpectedAuthorityStoreVersion = source.StoreVersion,
-            RelocationReference = "pending"
+            RelocationReference = DirectTransferReference
         };
         var payload = ZLinkCanonicalRelocationAuthorityStateCodec
             .ReplaceRelocationState(source.Payload.Span, state, root: null);
@@ -457,7 +464,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             AggregateGeneration = root.AggregateGeneration,
             CoordinatorExpectedAuthorityStoreVersion = prepare.Coordinator
                 .ExpectedAuthorityStoreVersion,
-            RelocationReference = "pending"
+            RelocationReference = DirectTransferReference
         };
         return new ZLinkCanonicalRelocationAuthorityProjection(
             high, low, 0, string.Empty, 0, 2,

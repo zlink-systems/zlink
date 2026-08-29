@@ -436,34 +436,6 @@ internal sealed class ZLinkSessionActorBindingTable
         }
     }
 
-    internal ValueTask<bool> IsLateCanonicalRouteAsync(
-        ZLinkServiceWireCodec.SessionRelocationRouteRecord request) =>
-        _lane.RunAsync(() =>
-        {
-            if (_timedOutCanonicalSeals.Contains(
-                    CanonicalRelocationKey.From(request)))
-            {
-                LogLateSessionRouteUpdate(request);
-                return true;
-            }
-            if (!TryFindCanonicalBinding(
-                    request.Actor,
-                    request.Session,
-                    out _,
-                    out var entry)
-                || entry.AppliedCanonicalRelocationRoute is not null
-                || entry.CanonicalRelocationSeal is not { } seal
-                || seal.RelocationId != request.RelocationId
-                || seal.Coordinator != request.Coordinator
-                || seal.Actor.Actor != request.Actor
-                || seal.Session != request.Session)
-            {
-                LogLateSessionRouteUpdate(request);
-                return true;
-            }
-            return false;
-        });
-
     private async Task RunCanonicalSealTimeoutAsync(
         ZLinkSessionBindingKey key,
         CanonicalSealTimeoutState timeout)
@@ -670,67 +642,42 @@ internal sealed class ZLinkSessionActorBindingTable
             return null;
         });
 
-    internal ValueTask<ZLinkSessionRelocationAuthenticatedRoute?>
-        GetMemoizedOutboundProofAsync(
-            ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
-            ZLinkSessionRelocationAuthenticatedRoute authenticatedCandidate) =>
-        _lane.RunAsync<ZLinkSessionRelocationAuthenticatedRoute?>(() =>
-        {
-            if (route.Route.Action
-                    != ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
-                || !TryFindCanonicalBinding(
-                    route.Actor,
-                    route.Session,
-                    out var key,
-                    out var entry)
-                || !_outbound.TryGetValue(key, out var outbound)
-                || outbound.PendingTenureProof is not { } proof)
-            {
-                return null;
-            }
-
-            var tenure = proof.Tenure;
-            var exact = MatchesPhysicalSession(entry, tenure)
-                        && string.Equals(
-                            tenure.BindingToken,
-                            key.BindingToken,
-                            StringComparison.Ordinal)
-                        && tenure.ActorId == route.Actor.ActorId
-                        && tenure.ObjectGeneration
-                        == route.Actor.ObjectGeneration
-                        && tenure.BindingGeneration
-                        == route.Session.BindingGeneration
-                        && tenure.SessionOwnerNodeGeneration
-                        == route.Session.SessionOwnerNodeGeneration
-                        && tenure.SessionRid == route.Session.SessionRid
-                        && tenure.TargetNodeRid
-                        == route.Route.TargetNodeRid
-                        && tenure.TargetNodeRid
-                        == authenticatedCandidate.NodeRid
-                        && tenure.TargetNodeGeneration
-                        == route.Route.TargetNodeGeneration
-                        && tenure.TargetNodeGeneration
-                        == authenticatedCandidate.NodeGeneration
-                        && tenure.AuthorityOwnerGeneration
-                        == route.Route.TargetAuthorityOwnerGeneration
-                        && tenure.AuthorityOwnerGeneration
-                        == authenticatedCandidate.AuthorityOwnerGeneration
-                        && tenure.OwnerLeaseGeneration > 0
-                        && string.Equals(
-                            tenure.MeshName,
-                            authenticatedCandidate.MeshName,
-                            StringComparison.Ordinal)
-                        && !string.IsNullOrWhiteSpace(proof.OwnerId);
-            if (!exact)
-            {
-                return null;
-            }
-
-            return authenticatedCandidate with
-            {
-                OwnerLeaseGeneration = tenure.OwnerLeaseGeneration
-            };
-        });
+    private static bool MatchesCanonicalOutboundProof(
+        ZLinkSessionBindingEntry entry,
+        ZLinkSessionBindingKey key,
+        ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
+        ZLinkSessionRelocationAuthenticatedRoute authenticatedCandidate,
+        ZLinkSessionOutboundTenureProof proof)
+    {
+        var tenure = proof.Tenure;
+        return MatchesPhysicalSession(entry, tenure)
+               && string.Equals(
+                   tenure.BindingToken,
+                   key.BindingToken,
+                   StringComparison.Ordinal)
+               && tenure.ActorId == route.Actor.ActorId
+               && tenure.ObjectGeneration == route.Actor.ObjectGeneration
+               && tenure.BindingGeneration == route.Session.BindingGeneration
+               && tenure.SessionOwnerNodeGeneration
+               == route.Session.SessionOwnerNodeGeneration
+               && tenure.SessionRid == route.Session.SessionRid
+               && tenure.TargetNodeRid == route.Route.TargetNodeRid
+               && tenure.TargetNodeRid == authenticatedCandidate.NodeRid
+               && tenure.TargetNodeGeneration
+               == route.Route.TargetNodeGeneration
+               && tenure.TargetNodeGeneration
+               == authenticatedCandidate.NodeGeneration
+               && tenure.AuthorityOwnerGeneration
+               == route.Route.TargetAuthorityOwnerGeneration
+               && tenure.AuthorityOwnerGeneration
+               == authenticatedCandidate.AuthorityOwnerGeneration
+               && tenure.OwnerLeaseGeneration > 0
+               && string.Equals(
+                   tenure.MeshName,
+                   authenticatedCandidate.MeshName,
+                   StringComparison.Ordinal)
+               && !string.IsNullOrWhiteSpace(proof.OwnerId);
+    }
 
     private static bool MatchesPhysicalSession(
         ZLinkSessionBindingEntry entry,
@@ -1179,12 +1126,12 @@ internal sealed class ZLinkSessionActorBindingTable
                 if (targetOwnerLeaseGeneration == 0
                     && _outbound.TryGetValue(key, out var provenOutbound)
                     && provenOutbound.PendingTenureProof is { } proven
-                    && proven.Tenure.TargetNodeRid
-                    == request.Route.TargetNodeRid
-                    && proven.Tenure.TargetNodeGeneration
-                    == request.Route.TargetNodeGeneration
-                    && proven.Tenure.AuthorityOwnerGeneration
-                    == request.Route.TargetAuthorityOwnerGeneration)
+                    && MatchesCanonicalOutboundProof(
+                        entry,
+                        key,
+                        request,
+                        authenticatedRoute,
+                        proven))
                     targetOwnerLeaseGeneration =
                         proven.Tenure.OwnerLeaseGeneration;
                 if (!ZLinkSessionBindingRoute.TryCreateRelocated(

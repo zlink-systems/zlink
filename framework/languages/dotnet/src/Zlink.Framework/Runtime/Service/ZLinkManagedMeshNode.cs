@@ -4304,20 +4304,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         PendingOperation pending,
         IReadOnlyList<ReadOnlyMemory<byte>> wire)
     {
-        var remainingMilliseconds = pending.DeadlineUnixMs
-            - Math.Min(
-                pending.DeadlineUnixMs,
-                checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
-        var remaining = TimeSpan.FromMilliseconds(
-            Math.Max(1, Math.Min(remainingMilliseconds, (ulong)int.MaxValue)));
         try
         {
+            var nodeCancellation = _stop?.Token ?? CancellationToken.None;
             if (!RunInboundOperation(() => CompleteNativeActorJoinRequestAsync(
                     peer.PhysicalRoutingId,
                     pending,
                     wire,
-                    remaining,
-                    _stop?.Token ?? CancellationToken.None)))
+                    pending.DeadlineStartTimestamp,
+                    pending.DeadlineTimeout,
+                    nodeCancellation)))
                 return SubmitResult.Terminated;
 
             Publish(
@@ -4594,6 +4590,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             : timeout;
         if (!TryCreateOperation(kind, operationId, out var correlation, out operation))
             return false;
+        operation.DeadlineStartTimestamp = Stopwatch.GetTimestamp();
+        operation.DeadlineTimeout = effectiveTimeout;
         operation.DeadlineUnixMs = checked((ulong)DateTimeOffset.UtcNow
             .Add(effectiveTimeout)
             .ToUnixTimeMilliseconds());
@@ -6300,7 +6298,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         try
         {
             message = Message.From(terminal);
-            nativeReply.Message(message).Submit();
+            SubmitCapturedNativeReply(nativeReply.Message(message));
             message = null;
         }
         catch (ZlinkException exception)
@@ -9247,72 +9245,86 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RoutingId target,
         PendingOperation pending,
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
-        TimeSpan timeout,
+        long deadlineStartTimestamp,
+        TimeSpan deadlineTimeout,
         CancellationToken cancellationToken)
     {
-        var messages = new Message[wire.Count];
-        var created = 0;
-        var ownershipTransferred = false;
-        try
+        while (true)
         {
-            for (; created < messages.Length; created++)
-                messages[created] = Message.From(wire[created]);
-            Task<IReadOnlyList<Message>> request;
-            lock (_socketGate)
+            var remaining = deadlineTimeout
+                            - Stopwatch.GetElapsedTime(
+                                deadlineStartTimestamp);
+            if (remaining <= TimeSpan.Zero)
             {
-                var socket = _socket;
-                if (socket is null
-                    || _activeSocketGeneration != _lifecycleGeneration)
-                    throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
-                request = socket.Request(target)
-                    .Messages(messages)
-                    .Timeout(timeout)
-                    .Async(cancellationToken);
-                ownershipTransferred = true;
+                CompleteNativeActorJoinRequest(
+                    pending,
+                    RequestResult.TimedOut,
+                    Array.Empty<Message>());
+                return;
             }
 
-            var replies = await request.ConfigureAwait(false);
-            CompleteNativeActorJoinRequest(pending, RequestResult.Ok, replies);
-        }
-        catch (ZlinkRequestException exception)
-        {
-            CompleteNativeActorJoinRequest(
-                pending,
-                NormalizeNativeRequestFailure(
-                    exception.Result,
-                    AcceptsApplicationOperations),
-                Array.Empty<Message>());
-        }
-        catch (OperationCanceledException)
-        {
-            CompleteNativeActorJoinRequest(
-                pending,
-                RequestResult.Terminated,
-                Array.Empty<Message>());
-        }
-        catch (ObjectDisposedException)
-        {
-            CompleteNativeActorJoinRequest(
-                pending,
-                NormalizeNativeRequestFailure(
-                    ZlinkRequestException.ErrorCode.Terminated,
-                    AcceptsApplicationOperations),
-                Array.Empty<Message>());
-        }
-        catch (ZlinkException)
-        {
-            CompleteNativeActorJoinRequest(
-                pending,
-                NormalizeNativeRequestFailure(
-                    ZlinkRequestException.ErrorCode.Terminated,
-                    AcceptsApplicationOperations),
-                Array.Empty<Message>());
-        }
-        finally
-        {
-            if (!ownershipTransferred)
-                for (var index = 0; index < created; index++)
-                    messages[index].Dispose();
+            try
+            {
+                var replies = await RequestNativeOnceAsync(
+                        target,
+                        wire,
+                        remaining < ServiceTerminalRetryTimeout
+                            ? remaining
+                            : ServiceTerminalRetryTimeout,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                CompleteNativeActorJoinRequest(
+                    pending,
+                    RequestResult.Ok,
+                    replies);
+                return;
+            }
+            catch (ZlinkRequestException exception)
+                when (exception.Result == ZlinkRequestException.ErrorCode.TimedOut)
+            {
+                // Canonical actorJoin admission is memoized by its deterministic
+                // handoff identity. Retry the same correlation so a lost native
+                // request/reply can consume that terminal before the caller's
+                // overall deadline.
+            }
+            catch (ZlinkRequestException exception)
+            {
+                CompleteNativeActorJoinRequest(
+                    pending,
+                    NormalizeNativeRequestFailure(
+                        exception.Result,
+                        AcceptsApplicationOperations),
+                    Array.Empty<Message>());
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                CompleteNativeActorJoinRequest(
+                    pending,
+                    RequestResult.Terminated,
+                    Array.Empty<Message>());
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                CompleteNativeActorJoinRequest(
+                    pending,
+                    NormalizeNativeRequestFailure(
+                        ZlinkRequestException.ErrorCode.Terminated,
+                        AcceptsApplicationOperations),
+                    Array.Empty<Message>());
+                return;
+            }
+            catch (ZlinkException)
+            {
+                CompleteNativeActorJoinRequest(
+                    pending,
+                    NormalizeNativeRequestFailure(
+                        ZlinkRequestException.ErrorCode.Terminated,
+                        AcceptsApplicationOperations),
+                    Array.Empty<Message>());
+                return;
+            }
         }
     }
 
@@ -9338,7 +9350,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
             try
             {
-                var replies = await RequestNativeInfrastructureOnceAsync(
+                var replies = await RequestNativeOnceAsync(
                         target,
                         wire,
                         remaining < ServiceTerminalRetryTimeout
@@ -9403,7 +9415,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private async Task<IReadOnlyList<Message>> RequestNativeInfrastructureOnceAsync(
+    private async Task<IReadOnlyList<Message>> RequestNativeOnceAsync(
         RoutingId target,
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
         TimeSpan timeout,
@@ -9961,7 +9973,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return submitOverride(reply);
         try
         {
-            reply.Submit();
+            SubmitCapturedNativeReply(reply);
             return SubmitResult.Ok;
         }
         catch (ObjectDisposedException)
@@ -9984,6 +9996,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             return SubmitResult.Terminated;
         }
+    }
+
+    private void SubmitCapturedNativeReply(ReplySubmitOperation reply)
+    {
+        lock (_socketGate)
+            reply.Submit();
     }
 
     private SubmitResult SubmitOrQueueNativeReply(
@@ -11750,6 +11768,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             AwaitedCompletion { get; } = awaitCompletion
                 ? new(TaskCreationOptions.RunContinuationsAsynchronously)
                 : null;
+        internal long DeadlineStartTimestamp { get; set; }
+        internal TimeSpan DeadlineTimeout { get; set; }
         internal ulong DeadlineUnixMs { get; set; }
         internal ActorJoinOrigin? ActorJoinOrigin { get; set; }
         internal CancellationToken Token => _timeout.Token;
