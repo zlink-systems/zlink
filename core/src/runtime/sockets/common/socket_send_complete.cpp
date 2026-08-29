@@ -136,12 +136,23 @@ void zlink::socket_base_t::end_send_async_public_call ()
     const uint32_t old = pending.public_async_depth.fetch_sub (
       1, std::memory_order_acq_rel);
     zlink_assert (old > 0);
-    // Release the public-depth gate through the shared dispatch owner. An
-    // unresolved record is admission work and publishes no completion wake;
-    // an actual queued completion is either dispatched locally or handed to
-    // the poller while the owner gate excludes a check-vs-drain race.
-    if (old == 1)
-        dispatch_send_completions_if_local ();
+    // A public submit must not run its completion callback inline while
+    // releasing this depth. In particular, a callback may close its own
+    // socket and wait for the async mailbox to quiesce; dispatching here while
+    // holding the completion-owner gate would then deadlock that mailbox.
+    // Publish a wake only for an actual queued completion. The owner gate
+    // makes the queue check and notification atomic with every completion
+    // drain, while unresolved admission work remains an internal redrive.
+    if (old == 1) {
+        scoped_lock_t owner_lock (_completion_owner_sync);
+        bool completion_ready = false;
+        {
+            scoped_lock_t lock (pending.sync);
+            completion_ready = pending.completion_head != NULL;
+        }
+        if (completion_ready)
+            notify_request_completion ();
+    }
     dec_mailbox_ref ();
 }
 
