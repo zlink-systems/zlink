@@ -154,10 +154,18 @@ GameApi doesn't directly change PlayerQuestSpot state. QuestMission doesn't term
 sessions. Even reconnecting through a different GameApi, the owner Spot is resolved by logical ID —
 only the binding is replaced with the current session.
 
-The `PlayerQuestSpot` factory selects `DisableRelocation`. This sample covers cold activation from
-Missing and a new generation after explicit close; state handoff and planned relocation aren't
-completion criteria. The Relocation Store is registered to retain the first Instance activation
-record, not to demonstrate relocation.
+The `PlayerQuestSpot` factory selects `RecreateOnRelocation`. A Spot that exists at relocation time
+must not disappear. RecreateOnRelocation re-runs the factory on the target node under the same
+logical incarnation (ObjectGeneration preserved), forwarding incomplete queue and timer state to the
+target via capture ([Location Runtime](../../spec/server/05-location-relocation/01-location-runtime.en.md),
+[Glossary](../../spec/server/00-foundation/02-glossary.en.md)). GameQuest's quest state is sourced from
+QuestEventStore, and PlayerQuestSpot's in-memory application state is rebuilt by replay, so not
+carrying application state itself across relocation causes no loss. This sample's completion
+criteria remain cold activation from Missing and a new generation after explicit close; state
+handoff and planned relocation demonstrations still aren't completion criteria — choosing
+RecreateOnRelocation doesn't replace those two paths, it's the safe default that preserves Spot
+continuity if relocation actually occurs. The Relocation Store is registered to retain the first
+Instance activation record, not to demonstrate relocation.
 
 ## 5. Framework Elements Used And Why
 

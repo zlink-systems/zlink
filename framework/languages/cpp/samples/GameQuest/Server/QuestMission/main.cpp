@@ -415,7 +415,7 @@ int main (int argc, char **argv)
       .server ()
       .add_instance_spot_factory<player_quest_spot_t, quest_event_store_t, actor_directory_t,
                                  actor_client_t, sample_topology_t> (sample_names_t::player_quest_spot)
-      .disable_relocation ();
+      .recreate_on_relocation ();
     app.add_hosted_service (std::make_unique<sample_readiness_service_t> (
       "instance-factory", topology.mission_name));
     return app.run (argc, argv);

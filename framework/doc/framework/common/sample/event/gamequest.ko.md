@@ -150,10 +150,17 @@ GameApi는 PlayerQuestSpot state를 직접 변경하지 않는다. QuestMission�
 종단하지 않는다. 다른 GameApi에 재접속해도 owner Spot은 logical ID로 해결되고 binding만
 현재 session으로 교체된다.
 
-`PlayerQuestSpot` factory는 `DisableRelocation`을 선택한다. 이 sample은 Missing 상태의 cold
-activation과 explicit close 뒤 새 generation만 다루며 state handoff나 planned relocation을 완료 조건으로
-두지 않는다. Relocation Store는 relocation 시연을 위해서가 아니라 최초 Instance activation record를
-보존하기 위해 등록한다.
+`PlayerQuestSpot` factory는 `RecreateOnRelocation`을 선택한다. relocation 시점에 존재하던 Spot이
+사라지면 안 되기 때문이다. RecreateOnRelocation은 같은 logical incarnation(ObjectGeneration 유지)으로
+target node에서 factory를 다시 실행하고 미완료 queue·timer를 target으로 capture 전송한다
+([Location Runtime](../../spec/server/05-location-relocation/01-location-runtime.ko.md), [Glossary](../../spec/server/00-foundation/02-glossary.ko.md)).
+GameQuest는 quest state의 정본이 QuestEventStore이고 PlayerQuestSpot의 in-memory application
+state는 replay로 재구성하므로, application state 자체를 relocation으로 이전하지 않아도 손실이 없다.
+이 sample이 다루는 완료 조건은 여전히 Missing 상태의 cold activation과 explicit close 뒤 새
+generation이며, state handoff나 planned relocation 시연은 완료 조건으로 두지 않는다 — RecreateOnRelocation
+선택은 그 두 경로를 대체하지 않고, relocation이 실제로 발생했을 때 Spot 연속성을 보장하기 위한
+안전한 기본값이다. Relocation Store는 relocation 시연을 위해서가 아니라 최초 Instance activation
+record를 보존하기 위해 등록한다.
 
 ## 5. 사용하는 Framework 요소와 선택 이유
 

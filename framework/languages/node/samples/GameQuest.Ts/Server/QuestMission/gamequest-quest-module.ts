@@ -48,7 +48,7 @@ function createQuestMissionModule(instanceId: 'mission-a' | 'mission-b') {
           spotMesh.objects().server().addInstanceSpotFactory(
             SampleNames.playerQuestSpotType,
             PlayerQuestSpot,
-            (factory) => factory.disableRelocation()
+            (factory) => factory.recreateOnRelocation()
           );
           return builder.build();
         }

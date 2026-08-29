@@ -468,7 +468,7 @@ int main (int argc, char **argv)
       .server ()
       .add_entry_spot<player_entry_spot_t, game_api_store_t> ()
       .add_actor_factory<player_actor_t, player_actor_factory_t> (gamequest_player_actor_type)
-      .disable_relocation ();
+      .recreate_on_relocation ();
     options.add_stream_node (sample_names_t::stream_node)
       .bind (topology.selected_api_stream_endpoint ())
       .register_session<gamequest_session_t> ();

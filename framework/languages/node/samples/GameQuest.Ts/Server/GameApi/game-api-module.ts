@@ -63,7 +63,7 @@ function createGameApiModule(instanceId: 'api-a' | 'api-b') {
           objectServer.addActorFactory(
             SampleNames.playerActorType,
             GameQuestPlayerActorFactory,
-            (factory) => factory.disableRelocation()
+            (factory) => factory.recreateOnRelocation()
           );
           return builder.build();
         }
