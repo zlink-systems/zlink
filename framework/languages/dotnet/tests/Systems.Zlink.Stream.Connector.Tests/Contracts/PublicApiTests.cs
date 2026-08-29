@@ -160,6 +160,11 @@ public sealed partial class StreamConnectorTests
             typeof(void),
             (typeof(ZlinkStreamDiagnosticsLevel), false));
         AssertMethod(
+            typeof(IZlinkStreamConnector),
+            nameof(IZlinkStreamConnector.SetDiagnosticsLevelAsync),
+            typeof(Task),
+            (typeof(ZlinkStreamDiagnosticsLevel), false));
+        AssertMethod(
             typeof(ZlinkStreamAssert),
             nameof(ZlinkStreamAssert.Ensure),
             typeof(void),

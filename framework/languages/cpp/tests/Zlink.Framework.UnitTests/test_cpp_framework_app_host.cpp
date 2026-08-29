@@ -828,6 +828,23 @@ int main ()
         return 37;
     }
 
+    {
+        auto diagnostics_app = zlink::framework::app_t::create ();
+        auto async_update = diagnostics_app.set_message_flow_mode_async (
+          zlink::framework::message_flow_log_mode_t::normal);
+        async_update.result ().value ();
+        if (diagnostics_app.message_flow_mode ()
+            != zlink::framework::message_flow_log_mode_t::normal) {
+            return 138;
+        }
+        diagnostics_app.set_message_flow_mode (
+          zlink::framework::message_flow_log_mode_t::detailed);
+        if (diagnostics_app.message_flow_mode ()
+            != zlink::framework::message_flow_log_mode_t::detailed) {
+            return 139;
+        }
+    }
+
     auto app = zlink::framework::app_t::create ();
     const auto config_path =
       std::filesystem::temp_directory_path () / "zlink_cpp_framework_app.json";

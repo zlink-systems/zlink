@@ -63,6 +63,10 @@ public sealed class MonitoringExactContracts
         Assert.Equal(nameof(IZLinkDiagnosticsRuntime.Level), level.Name);
         Assert.True(level.CanRead);
         Assert.True(level.CanWrite);
+        var setLevelAsync = Assert.Single(
+            typeof(IZLinkDiagnosticsRuntime).GetMethods(),
+            static method => method.Name == nameof(IZLinkDiagnosticsRuntime.SetLevelAsync));
+        Assert.Equal(typeof(Task), setLevelAsync.ReturnType);
     }
 
     [Fact]

@@ -61,6 +61,23 @@ final class ZLinkStreamDiagnosticsLevelTest {
         }
     }
 
+    @Test
+    void asyncAndSyncDiagnosticsControlsCompleteBeforeObservation() throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector = ZLinkStreamConnectorFactory.create(
+                server.options(ZLinkStreamDispatchMode.MANUAL));
+            try {
+                connector.setDiagnosticsLevelAsync(ZLinkStreamDiagnosticsLevel.NORMAL).join();
+                assertEquals(ZLinkStreamDiagnosticsLevel.NORMAL, connector.diagnosticsLevel());
+
+                connector.setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF);
+                assertEquals(ZLinkStreamDiagnosticsLevel.OFF, connector.options().diagnosticsLevel());
+            } finally {
+                ConnectorTestAwait.await(connector.close());
+            }
+        }
+    }
+
     //  Server spec 26 §4.1: application reads/changes the level without
     //  recreating the connector, and the change applies to processing points
     //  read after the call, not retroactively to already-built frames.

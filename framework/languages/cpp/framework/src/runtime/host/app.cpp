@@ -948,10 +948,17 @@ monitoring_builder_t &app_t::monitoring () noexcept
 
 app_t &app_t::set_message_flow_mode (message_flow_log_mode_t mode) noexcept
 {
+    auto operation = set_message_flow_mode_async (mode);
+    (void) operation.result ();
+    return *this;
+}
+
+task_t<void> app_t::set_message_flow_mode_async (message_flow_log_mode_t mode) noexcept
+{
     // Note: before apply() this is overwritten by the configured mode (config seeds
     // at apply); the intended use is runtime toggling after the app is running.
     _state->message_flow_mode->store (mode, std::memory_order_relaxed);
-    return *this;
+    return task_t<void> (result_t<void>::success ());
 }
 
 message_flow_log_mode_t app_t::message_flow_mode () const noexcept

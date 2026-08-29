@@ -33,8 +33,11 @@ export interface ZlinkStreamConnector {
    * processing points that read the level after this call returns; never
    * applied retroactively to frames already built. Rejects unknown values
    * with {@link import('./ZlinkStreamEnums').ZlinkStreamErrorCode.ConfigurationError}.
+   * Do not call this synchronous bridge from a framework execution context such
+   * as a handler or callback; use setDiagnosticsLevelAsync there.
    */
   setDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel): void;
+  setDiagnosticsLevelAsync(level: ZlinkStreamDiagnosticsLevel): Promise<void>;
   onErrorReceived(handler: (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void): Disposable;
   onDisconnected(handler: (signal?: AbortSignal) => Promise<void> | void): Disposable;
   onConnectionStateChanged(handler: (change: ZlinkStreamConnectionStateChanged, signal?: AbortSignal) => Promise<void> | void): Disposable;

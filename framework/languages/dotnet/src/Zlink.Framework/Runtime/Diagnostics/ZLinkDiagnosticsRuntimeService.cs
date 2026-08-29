@@ -13,15 +13,18 @@ internal sealed class ZLinkDiagnosticsRuntimeService : IZLinkDiagnosticsRuntime
     public ZLinkDiagnosticsLevel Level
     {
         get => _options.EffectiveLevel;
-        set
-        {
-            if (!Enum.IsDefined(value))
-                throw new ArgumentOutOfRangeException(nameof(value));
-            if (_options.LiveLevel is { } cell)
-                cell.Level = value;
-            else
-                _options.SetLevel(value);
-            ZLinkTelemetry.SetDiagnosticsLevel(value);
-        }
+        set => SetLevelAsync(value).GetAwaiter().GetResult();
+    }
+
+    public Task SetLevelAsync(ZLinkDiagnosticsLevel level)
+    {
+        if (!Enum.IsDefined(level))
+            throw new ArgumentOutOfRangeException(nameof(level));
+        if (_options.LiveLevel is { } cell)
+            cell.Level = level;
+        else
+            _options.SetLevel(level);
+        ZLinkTelemetry.SetDiagnosticsLevel(level);
+        return Task.CompletedTask;
     }
 }

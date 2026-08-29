@@ -102,7 +102,12 @@ export interface ZLinkRuntimeMessageFlowEvent {
  * at runtime without a restart. Read live by every dispatch surface.
  */
 export interface ZLinkMessageFlowControl {
+  /**
+   * Synchronous compatibility bridge. Do not call from a framework execution
+   * context such as a handler or callback; use setMessageFlowModeAsync there.
+   */
   setMessageFlowMode(mode: ZLinkMessageFlowLogMode): void;
+  setMessageFlowModeAsync(mode: ZLinkMessageFlowLogMode): Promise<void>;
   messageFlowMode(): ZLinkMessageFlowLogMode;
 }
 

@@ -24,6 +24,20 @@ public sealed class ExactMessageFlowRuntimeTests
     }
 
     [Fact]
+    public async Task RuntimeLevelAsyncAndSyncControlsCompleteBeforeObservation()
+    {
+        var options = new ZLinkDiagnosticsOptionsModel();
+        options.LiveLevel = new ZLinkDiagnosticsLevelCell(options.ConfiguredLevel);
+        IZLinkDiagnosticsRuntime runtime = new ZLinkDiagnosticsRuntimeService(options);
+
+        await runtime.SetLevelAsync(ZLinkDiagnosticsLevel.Normal);
+        Assert.Equal(ZLinkDiagnosticsLevel.Normal, runtime.Level);
+
+        runtime.Level = ZLinkDiagnosticsLevel.Detailed;
+        Assert.Equal(ZLinkDiagnosticsLevel.Detailed, options.EffectiveLevel);
+    }
+
+    [Fact]
     public void OffLevelSkipsDispatchLoggerAndActivityBeforeEventConstruction()
     {
         var activities = new List<Activity>();

@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -629,7 +630,20 @@ diagnostics_level_t connector_t::diagnostics_level () const
 
 void connector_t::set_diagnostics_level (diagnostics_level_t level)
 {
+    std::optional<result_t<void>> completion;
+    set_diagnostics_level_async (
+      level, [&completion] (result_t<void> result) { completion = std::move (result); });
+    if (!completion || !*completion) {
+        std::terminate ();
+    }
+}
+
+void connector_t::set_diagnostics_level_async (
+  diagnostics_level_t level,
+  std::function<void (result_t<void>)> callback)
+{
     detail::state_from (_state)->diagnostics_level_cell.store (level, std::memory_order_release);
+    callback (result_t<void>::success ());
 }
 
 std::size_t connector_t::pending_dispatch_count () const

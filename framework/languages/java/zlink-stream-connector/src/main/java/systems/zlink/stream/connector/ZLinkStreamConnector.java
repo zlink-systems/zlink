@@ -1,6 +1,7 @@
 package systems.zlink.stream.connector;
 
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 
 public interface ZLinkStreamConnector {
     boolean isConnected();
@@ -26,7 +27,17 @@ public interface ZLinkStreamConnector {
      * each processing point reads the level exactly once so a flip mid-way
      * through one send/receive never produces an inconsistent decision.
      */
-    void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
+    /**
+     * Synchronous compatibility bridge. Do not call from a framework execution
+     * context such as a handler or callback; use
+     * {@link #setDiagnosticsLevelAsync} there.
+     */
+    default void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level) {
+        setDiagnosticsLevelAsync(level).join();
+    }
+
+    CompletableFuture<Void> setDiagnosticsLevelAsync(
+        ZLinkStreamDiagnosticsLevel level);
 
     int pendingDispatchCount();
 

@@ -56,6 +56,18 @@ import systems.zlink.framework.streams.ZLinkStreamError;
 
 final class NodesAndServicesTest {
     @Test
+    void messageFlowAsyncAndSyncControlsCompleteBeforeObservation() {
+        try (ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(
+                 new DefaultZLinkFrameworkOptions(), new ZLinkJavaBackendAdapterFactory())) {
+            runtime.setMessageFlowModeAsync(ZLinkMessageFlowLogMode.NORMAL).join();
+            assertEquals(ZLinkMessageFlowLogMode.NORMAL, runtime.messageFlowMode());
+
+            runtime.setMessageFlowMode(ZLinkMessageFlowLogMode.DETAILED);
+            assertEquals(ZLinkMessageFlowLogMode.DETAILED, runtime.messageFlowMode());
+        }
+    }
+
+    @Test
     void factoryBuilderRequiresOneRelocationChoiceAndKeepsDocumentedDefaults() {
         var missing = new DefaultZLinkFrameworkOptions();
         var missingObjects = missing.addRouteMesh("missing-policy")

@@ -666,11 +666,12 @@ public final class ZLinkFrameworkRuntime
     // Runtime toggle (ZLinkMessageFlowControl): flip the shared live-mode cell so every
     // surface starts/stops tracing without a restart. Thread-safe.
     @Override
-    public void setMessageFlowMode(ZLinkMessageFlowLogMode mode) {
+    public CompletableFuture<Void> setMessageFlowModeAsync(ZLinkMessageFlowLogMode mode) {
         if (mode == null) {
             throw new IllegalArgumentException("mode is required");
         }
         messageFlowMode.set(mode);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override

@@ -1,4 +1,5 @@
 package systems.zlink.framework.spring.internal.runtime;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow;
 import systems.zlink.framework.channels.ZLinkClientServerChannelRuntimeOptions;
@@ -279,8 +280,8 @@ public final class ZLinkFrameworkLifecycle
     }
 
     @Override
-    public void setMessageFlowMode(ZLinkMessageFlowLogMode mode) {
-        requireRuntime().setMessageFlowMode(mode);
+    public CompletableFuture<Void> setMessageFlowModeAsync(ZLinkMessageFlowLogMode mode) {
+        return requireRuntime().setMessageFlowModeAsync(mode);
     }
 
     @Override

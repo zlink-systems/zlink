@@ -55,7 +55,14 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     ///     <paramref name="level" /> is not one of the defined <see cref="ZlinkStreamDiagnosticsLevel" /> values.
     /// </exception>
     /// <exception cref="ObjectDisposedException">The connector has already been disposed.</exception>
+    /// <remarks>
+    ///     Do not call this synchronous bridge from a framework execution context such as a handler
+    ///     or callback; use <see cref="SetDiagnosticsLevelAsync" /> there.
+    /// </remarks>
     void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level);
+
+    /// <summary>Atomically changes the connector's diagnostics level asynchronously.</summary>
+    Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level);
 
     /// <summary>
     ///     Gets the number of messages waiting for manual dispatch.

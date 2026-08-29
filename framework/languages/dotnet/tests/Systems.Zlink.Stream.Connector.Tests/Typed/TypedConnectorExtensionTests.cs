@@ -285,11 +285,17 @@ public sealed partial class StreamConnectorTests
 
         public void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level)
         {
+            SetDiagnosticsLevelAsync(level).GetAwaiter().GetResult();
+        }
+
+        public Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level)
+        {
             if (!System.Enum.IsDefined(level))
                 throw new ZlinkStreamException(
                     new ZlinkStreamError(ZlinkStreamErrorCode.ValidationFailed, "DiagnosticsLevel is invalid."));
 
             Options.SetDiagnosticsLevelLive(level);
+            return Task.CompletedTask;
         }
 
         public int PendingDispatchCount => 0;

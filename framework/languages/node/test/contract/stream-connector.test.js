@@ -2017,6 +2017,19 @@ test('stream connector rejects unknown diagnostics level at construction and at 
   assert.equal(instance.options.diagnosticsLevel, connector.ZlinkStreamDiagnosticsLevel.Errors);
 });
 
+test('stream connector async and sync diagnostics controls complete before observation', async () => {
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: new MemoryTransportFactory()
+  });
+
+  await instance.setDiagnosticsLevelAsync(connector.ZlinkStreamDiagnosticsLevel.Normal);
+  assert.equal(instance.diagnosticsLevel, connector.ZlinkStreamDiagnosticsLevel.Normal);
+
+  instance.setDiagnosticsLevel(connector.ZlinkStreamDiagnosticsLevel.Off);
+  assert.equal(instance.options.diagnosticsLevel, connector.ZlinkStreamDiagnosticsLevel.Off);
+});
+
 // D2 (spec 26 §4.1 / spec stream-connector 32 §13): switching the level from
 // on to off at runtime stops flow attachment on the *next* outbound frame
 // without retroactively touching the frame already sent, and

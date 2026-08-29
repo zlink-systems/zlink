@@ -48,6 +48,21 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
+    public async Task SetDiagnosticsLevel_AsyncAndSyncControlsCompleteBeforeObservation()
+    {
+        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
+        {
+            Endpoint = new Uri("tcp://127.0.0.1:1")
+        });
+
+        await connector.SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel.Normal);
+        Assert.Equal(ZlinkStreamDiagnosticsLevel.Normal, connector.DiagnosticsLevel);
+
+        connector.SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel.Off);
+        Assert.Equal(ZlinkStreamDiagnosticsLevel.Off, connector.Options.DiagnosticsLevel);
+    }
+
+    [Fact]
     public async Task LiveLevelChange_OnToOff_ClearsFlowFieldsOnTheNextOutboundFrame()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);

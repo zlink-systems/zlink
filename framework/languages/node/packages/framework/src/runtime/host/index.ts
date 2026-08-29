@@ -1274,10 +1274,17 @@ export class ZLinkFrameworkRuntimeHost implements
 
   /**
    * Runtime toggle (ZLinkMessageFlowControl): flip the shared live-mode cell so every
-   * surface starts/stops tracing without a restart.
+   * surface starts/stops tracing without a restart. Do not call this synchronous
+   * bridge from a framework execution context such as a handler or callback; use
+   * setMessageFlowModeAsync there.
    */
   setMessageFlowMode(mode: ZLinkMessageFlowLogMode): void {
+    void this.setMessageFlowModeAsync(mode);
+  }
+
+  setMessageFlowModeAsync(mode: ZLinkMessageFlowLogMode): Promise<void> {
     this.messageFlowModeCell.mode = requireMessageFlowLogMode(mode);
+    return Promise.resolve();
   }
 
   messageFlowMode(): ZLinkMessageFlowLogMode {

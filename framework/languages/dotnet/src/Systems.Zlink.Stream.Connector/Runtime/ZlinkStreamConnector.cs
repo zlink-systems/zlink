@@ -136,6 +136,11 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
 
     public void SetDiagnosticsLevel(ZlinkStreamDiagnosticsLevel level)
     {
+        SetDiagnosticsLevelAsync(level).GetAwaiter().GetResult();
+    }
+
+    public Task SetDiagnosticsLevelAsync(ZlinkStreamDiagnosticsLevel level)
+    {
         ThrowIfDisposed();
         if (!Enum.IsDefined(level))
             throw Error(ZlinkStreamErrorCode.ValidationFailed, "DiagnosticsLevel is invalid.");
@@ -143,6 +148,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         // The change applies to processing points that read the level after this
         // write; frames already built are not revisited (stream-connector spec §13).
         Options.SetDiagnosticsLevelLive(level);
+        return Task.CompletedTask;
     }
 
     public IZlinkStreamSendCall Send(ZlinkStreamEncodedPayload payload)

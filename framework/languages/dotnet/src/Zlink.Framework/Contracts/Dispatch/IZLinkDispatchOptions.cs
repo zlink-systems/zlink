@@ -35,7 +35,16 @@ public enum ZLinkDiagnosticsLevel
 
 public interface IZLinkDiagnosticsRuntime
 {
+    /// <summary>Gets or changes the process-wide diagnostics level synchronously.</summary>
+    /// <remarks>
+    /// Do not set this property from a framework execution context such as a handler or callback;
+    /// use <see cref="SetLevelAsync" /> there. The setter is the blocking compatibility bridge over
+    /// the asynchronous control surface.
+    /// </remarks>
     ZLinkDiagnosticsLevel Level { get; set; }
+
+    /// <summary>Changes the process-wide diagnostics level asynchronously.</summary>
+    Task SetLevelAsync(ZLinkDiagnosticsLevel level);
 }
 
 public enum ZLinkUnhandledDispatchAction

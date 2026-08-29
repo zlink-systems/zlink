@@ -71,11 +71,18 @@ class connector_t
     /// and uses that single value for the whole operation.
     diagnostics_level_t diagnostics_level () const;
 
-    /// Changes the diagnostics level in effect from the next processing point onward.
+    /// Synchronous compatibility bridge over set_diagnostics_level_async().
     ///
-    /// The connector is not recreated. Frames already encoded or decoded before this call keep
-    /// their original level; nothing is applied retroactively (message-flow-tracing §4.1).
+    /// Do not call from a Framework execution context (handler, lane/turn, or completion
+    /// callback); use the asynchronous surface there. The connector is not recreated and
+    /// nothing is applied retroactively (message-flow-tracing §4.1).
     void set_diagnostics_level (diagnostics_level_t level);
+
+    /// Canonical asynchronous diagnostics-level control for the connector's existing
+    /// no-coroutine callback boundary. The callback runs after the level is installed.
+    void set_diagnostics_level_async (
+      diagnostics_level_t level,
+      std::function<void (result_t<void>)> callback);
 
     /// Returns the number of received packets waiting for manual callback dispatch.
     std::size_t pending_dispatch_count () const;

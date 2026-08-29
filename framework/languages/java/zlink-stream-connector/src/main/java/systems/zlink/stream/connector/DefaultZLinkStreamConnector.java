@@ -105,8 +105,10 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     }
 
     @Override
-    public void setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level) {
+    public CompletableFuture<Void> setDiagnosticsLevelAsync(
+        ZLinkStreamDiagnosticsLevel level) {
         configuration.diagnosticsLevel(level);
+        return CompletableFuture.completedFuture(null);
     }
 
     @Override

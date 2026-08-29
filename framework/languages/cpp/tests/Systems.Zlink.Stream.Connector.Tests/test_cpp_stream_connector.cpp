@@ -890,6 +890,16 @@ int main ()
                 || live_level_connector.options ().diagnostics_level != diagnostics_level_t::errors) {
                 return 230;
             }
+            bool async_completed = false;
+            live_level_connector.set_diagnostics_level_async (
+              diagnostics_level_t::normal,
+              [&async_completed] (zlink::stream_connector::result_t<void> result) {
+                  async_completed = static_cast<bool> (result);
+              });
+            if (!async_completed
+                || live_level_connector.diagnostics_level () != diagnostics_level_t::normal) {
+                return 233;
+            }
             live_level_connector.set_diagnostics_level (diagnostics_level_t::off);
             if (live_level_connector.diagnostics_level () != diagnostics_level_t::off
                 || live_level_connector.options ().diagnostics_level != diagnostics_level_t::off) {

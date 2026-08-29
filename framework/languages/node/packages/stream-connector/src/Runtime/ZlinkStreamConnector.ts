@@ -139,9 +139,16 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
    * state update: it applies to processing points that read the level after
    * this call returns and is never applied retroactively to frames already
    * built. Rejects unknown values with {@link ZlinkStreamErrorCode.ConfigurationError}.
+   * Do not call this synchronous bridge from a framework execution context such
+   * as a handler or callback; use setDiagnosticsLevelAsync there.
    */
   setDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel): void {
+    void this.setDiagnosticsLevelAsync(level);
+  }
+
+  setDiagnosticsLevelAsync(level: ZlinkStreamDiagnosticsLevel): Promise<void> {
     this.diagnosticsLevelCell.set(level);
+    return Promise.resolve();
   }
 
   onErrorReceived(handler: (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void): Disposable {

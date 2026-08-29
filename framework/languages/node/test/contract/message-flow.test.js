@@ -99,6 +99,18 @@ test.beforeEach(() => {
 
 test.after(async () => loggerProvider.shutdown());
 
+test('message-flow async and sync controls complete before observation', async () => {
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration()
+  });
+
+  await host.setMessageFlowModeAsync('normal');
+  assert.equal(host.messageFlowMode(), 'normal');
+
+  host.setMessageFlowMode('detailed');
+  assert.equal(host.messageFlowMode(), 'detailed');
+});
+
 function receivedEvent() {
   return {
     outcome: ZLinkMessageFlowOutcome.Received,

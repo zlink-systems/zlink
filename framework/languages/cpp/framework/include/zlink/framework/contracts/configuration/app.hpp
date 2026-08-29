@@ -63,11 +63,14 @@ class app_t
     health_builder_t &health () noexcept;
     app_advanced_t advanced () noexcept;
 
-    // Turn message-flow tracing on/off (or change verbosity) at runtime, after the
-    // app is built/running — for temporary diagnostics in production without a
-    // restart. Reads live on every dispatch via a shared atomic. No-op until the
-    // framework is applied. Thread-safe.
+    // Synchronous compatibility bridge for set_message_flow_mode_async(). Do not
+    // call from a Framework execution context (handler, lane/turn, or completion
+    // callback); use the coroutine surface there.
     app_t &set_message_flow_mode (message_flow_log_mode_t mode) noexcept;
+
+    // Canonical asynchronous runtime control. The change is complete when the
+    // returned task completes and is read live by every dispatch surface.
+    task_t<void> set_message_flow_mode_async (message_flow_log_mode_t mode) noexcept;
     message_flow_log_mode_t message_flow_mode () const noexcept;
 
     app_t &add_module (module_t &module);
