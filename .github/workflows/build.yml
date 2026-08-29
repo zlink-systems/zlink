@@ -241,7 +241,7 @@ jobs:
       - name: Build and test libzlink
         run: |
           chmod +x ./core/builds/linux/build.sh
-          ./core/builds/linux/build.sh x64 "ON" || true
+          ./core/builds/linux/build.sh x64 "ON"
 
       - name: Verify build output
         run: test -f core/dist/linux-x64/libzlink.so
@@ -274,7 +274,7 @@ jobs:
       - name: Build and test libzlink
         run: |
           chmod +x ./core/builds/linux/build.sh
-          ./core/builds/linux/build.sh arm64 "ON" || true
+          ./core/builds/linux/build.sh arm64 "ON"
 
       - name: Verify build output
         run: test -f core/dist/linux-arm64/libzlink.so
