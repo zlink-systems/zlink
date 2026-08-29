@@ -22,6 +22,10 @@ class spot_route_internal_dispatcher_t final : public route_internal_packet_disp
     bool can_handle_request (std::string_view packet_name) const override;
     result_t<void> dispatch_send (const route_received_packet_t &received,
                                   service_provider_t &services) const override;
+    result_t<void> dispatch_send (const route_received_packet_t &received,
+                                  service_provider_t &services,
+                                  std::function<void ()> transfer_owner_reservation,
+                                  std::size_t transferred_owner_byte_cost) const;
     result_t<zlink::message_t>
     dispatch_request (const route_received_packet_t &received,
                       const runtime::messaging::envelope_header_t &header,

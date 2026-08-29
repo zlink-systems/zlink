@@ -75,6 +75,8 @@ import type {
 import { ZLinkDispatchErrorReporter } from '../channels';
 import { ZLinkWorkerRuntime } from '../workers';
 import {
+  type ZLinkActorHandoffPrefixAdmission,
+  type ZLinkActorHandoffPrefixRecord,
   type ZLinkDeferredJoinAcceptedRoot,
   type ZLinkRemoteBoundSessionTarget
 } from '../actors';
@@ -1391,6 +1393,46 @@ export class DefaultZLinkSpotManager {
       returnResponse,
       remoteBoundSessionTarget,
       fallbackActorRef
+    );
+  }
+
+  /** @internal Replays a record already owned by the Actor handoff queue. */
+  dispatchRoutedActorPacketDirect(
+    spotId: RoutingId,
+    actorId: string,
+    parts: readonly Message[],
+    returnResponse = false,
+    remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
+    fallbackActorRef?: ActorRef
+  ): Promise<unknown> {
+    const activation = this.activations.resolveUnique(spotId);
+    if (activation === undefined) {
+      throw new ZLinkConfigurationException(`Spot '${spotId}' is not active.`);
+    }
+    return this.activationLifecycle.dispatchActorPacketDirect(
+      activation,
+      actorId,
+      parts,
+      returnResponse,
+      remoteBoundSessionTarget,
+      fallbackActorRef
+    );
+  }
+
+  /** @internal Atomically restores one durable packet prefix to an Actor FIFO. */
+  admitRoutedActorPacketPrefix(
+    spotId: RoutingId,
+    actorId: string,
+    records: readonly ZLinkActorHandoffPrefixRecord[]
+  ): ZLinkActorHandoffPrefixAdmission {
+    const activation = this.activations.resolveUnique(spotId);
+    if (activation === undefined) {
+      throw new ZLinkConfigurationException(`Spot '${spotId}' is not active.`);
+    }
+    return this.activationLifecycle.admitActorPacketPrefix(
+      activation,
+      actorId,
+      records
     );
   }
 

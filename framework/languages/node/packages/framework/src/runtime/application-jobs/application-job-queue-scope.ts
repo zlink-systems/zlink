@@ -32,6 +32,11 @@ export function releaseApplicationJobPermitBeforeHandler(): void {
   applicationJobPermitScope.getStore()?.permit.releaseBeforeHandler();
 }
 
+/** @internal Returns an ingress permit after a durable queue takes record ownership. */
+export function releaseApplicationJobPermitForDurableHandoff(): void {
+  applicationJobPermitScope.getStore()?.permit.releaseAfterInternalProcessing();
+}
+
 /** True while dispatch already owns the host-wide application job permit. */
 export function hasApplicationJobPermit(): boolean {
   return applicationJobPermitScope.getStore() !== undefined;

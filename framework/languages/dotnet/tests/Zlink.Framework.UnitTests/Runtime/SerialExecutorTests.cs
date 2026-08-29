@@ -931,15 +931,22 @@ public sealed class SerialExecutorTests
             CancellationToken.None,
             policy);
 
+        var entered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         Assert.Equal(
             ZLinkAcceptedWorkAdmission.Accepted,
             queue.TryPostAccepted(
                 new byte[48],
-                async _ => await release.Task.ConfigureAwait(false),
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await release.Task.ConfigureAwait(false);
+                },
                 static () => { },
                 out var accepted));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(
             ZLinkAcceptedWorkAdmission.Accepted,
             queue.TryPostAccepted(

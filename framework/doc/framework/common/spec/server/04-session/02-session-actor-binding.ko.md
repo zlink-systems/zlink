@@ -160,7 +160,12 @@ Bind는 caller가 제출한 `ActorRef`의 위치를 최초 route로 사용해 co
 `ObjectGeneration`, target `NodeGeneration`(target node process lifecycle을 식별하는
 generation)과 `AuthorityOwnerGeneration`을 모두 확인한 뒤
 [binding generation](../00-foundation/02-glossary.ko.md#binding-generation)을 등록하고 terminal
-reply를 한 번만 반환한다.
+reply를 한 번만 반환한다. **승인 판정은 이 세 값으로만 한다.**
+`OwnerLeaseGeneration`은 envelope에 보존하는 값이지 bind 승인 판정의 입력이 아니다 —
+caller 측 lookup·projection이 실어 온 lease 사본과 Actor owner의 current lease가
+다르다는 이유로 bind를 거부하지 않는다. lease는 route fence
+검증([routing](../03-spot-actor/08-routing.ko.md))의 관심사이고, bind 승인에까지 쓰면
+파생 사본 불일치가 stale 판정 근거가 되어 §8.1의 판정 권위 원칙과 충돌한다.
 
 Session에서 Actor로 들어가는 payload는 등록된 binding generation과
 session sequence를 포함한 `actorSend(24)`

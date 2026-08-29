@@ -509,7 +509,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 out var canonical))
         {
             var pointerMatches = root.Reference.Length == 0
-                ? canonical.RelocationReference.Length == 0
+                ? ZLinkStandaloneActorRelocationPrecommitCoordinator
+                    .IsDirectTransferReference(
+                        canonical.RelocationReference,
+                        canonical.RelocationChecksumCrc32c)
                 : StringComparer.Ordinal.Equals(
                       canonical.RelocationReference,
                       root.Reference)

@@ -208,6 +208,7 @@ class spot_node_builder_state_t
         spot_id_t source_spot_id;
         std::uint64_t source_spot_generation = 0;
         spot_id_t target_spot_id;
+        runtime::protocol::actor_route_fence_t target_fence;
         std::chrono::steady_clock::time_point not_before;
         // True once submit_remote_actor_leave has validated and accepted the
         // OnLeave command for this transfer (idempotency guard against a
@@ -228,6 +229,29 @@ class spot_node_builder_state_t
         std::chrono::steady_clock::time_point leave_deadline;
     };
     std::vector<pending_remote_source_cleanup_t> pending_remote_source_cleanups;
+    // A canonical routed Join can deliver the target's one-way OnLeave
+    // command before the source has observed the Join completion and
+    // installed its exact source-cleanup/Message-Follow fence.  A command
+    // without the source Spot generation cannot safely run against the live
+    // Spot until that fence exists, so retain the already authority-validated
+    // identity and replay it when complete_remote_actor_transfer publishes the
+    // matching cleanup. Its lifetime is owned by the exact source_remote move,
+    // not MessageFollowDuration (which may legitimately be zero).
+    struct pending_remote_actor_leave_t
+    {
+        std::string transfer_id;
+        actor_ref_t source_actor;
+        spot_id_t source_spot_id;
+        spot_id_t target_spot_id;
+        runtime::protocol::actor_route_fence_t target_fence;
+        // The early node-send already owns an application-mailbox
+        // reservation. Keep that exact terminal with the deferred command so
+        // replay can transfer it into the source Spot lifecycle lane without
+        // a second capacity decision.
+        std::function<void ()> transfer_owner_reservation;
+        std::size_t transferred_owner_byte_cost = 0;
+    };
+    std::vector<pending_remote_actor_leave_t> pending_remote_actor_leaves;
     struct actor_factory_registration_t
     {
         std::type_index actor_type{typeid (void)};
@@ -1076,7 +1100,9 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
       std::function<void (const std::shared_ptr<runtime::serial_execution_queue_t> &,
                           runtime::serial_submission_id_t)> submitted = {},
       std::function<void ()> activated = {},
-      std::function<void (bool)> cancellation_observed = {});
+      std::function<void (bool)> cancellation_observed = {},
+      std::function<void ()> transfer_owner_reservation = {},
+      std::size_t transferred_owner_byte_cost = 0);
     result_t<void> run_serial_task (std::string name, std::function<task_t<void> ()> work);
     bool run_serial_sync (std::string name, std::function<void ()> work);
     bool owns_current_serial_turn () const;
@@ -1932,7 +1958,9 @@ class spot_node_runtime_t
                                const spot_id_t &source_spot_id,
                                std::uint64_t source_spot_generation,
                                const spot_id_t &target_spot_id,
-                               const runtime::protocol::actor_route_fence_t &target_fence);
+                               const runtime::protocol::actor_route_fence_t &target_fence,
+                               std::function<void ()> transfer_owner_reservation = {},
+                               std::size_t transferred_owner_byte_cost = 0);
     void fail_remote_actor_transfer (
       const actor_ref_t &actor_ref,
       bool reconcile,
@@ -2611,10 +2639,13 @@ class spot_node_runtime_t
                                              std::string transfer_id,
                                              bool reuse_active_actor_queue,
                                              std::function<bool ()> stop_requested);
-    void deliver_actor_join_completion_async (actor_ref_t actor_ref,
-                                              actor_join_completion_t completion,
-                                              std::optional<spot_id_t> source_spot_id,
-                                              std::function<void (result_t<void>)> completed);
+    void deliver_actor_join_completion_async (
+      actor_ref_t actor_ref,
+      actor_join_completion_t completion,
+      std::optional<spot_id_t> source_spot_id,
+      std::function<void (result_t<void>)> completed,
+      std::function<void (result_t<void>, std::function<void (result_t<void>)>)> settle_delivery =
+        {});
     void enqueue_actor_handoff_replay (const actor_ref_t &actor_ref,
                                        std::vector<handoff_packet_t> backlog,
                                        service_provider_t &services,

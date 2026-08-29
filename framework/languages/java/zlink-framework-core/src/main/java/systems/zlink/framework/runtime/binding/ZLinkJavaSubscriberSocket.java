@@ -30,7 +30,7 @@ final class ZLinkJavaSubscriberSocket
     }
 
     @Override
-    public synchronized ZLinkBackendTopicMessage subscribe(ZLinkBackendRecvMode mode) {
+    public ZLinkBackendTopicMessage subscribe(ZLinkBackendRecvMode mode) {
         try (TopicMessage result = new TopicMessage()) {
             return socket.subscribe(result, ZLinkJavaSocketSupport.map(mode))
                 ? new ZLinkBackendTopicMessage(

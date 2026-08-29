@@ -137,6 +137,53 @@ test('a transferred record is accounted without capacity rejection until termina
   });
 });
 
+test('durable readiness yields to lifecycle arbitration without claiming the serial owner', async () => {
+  const serial = scheduler([], { ownerTimeBudget: 0, lifecycleBurstLimit: 8 });
+  const firstPreparationStarted = deferred<void>();
+  const events: string[] = [];
+  let attempts = 0;
+  const durable = serial.admitDurablePrefix(
+    () => { events.push('durable'); },
+    {},
+    undefined,
+    {
+      async prepare(signal) {
+        attempts += 1;
+        events.push(`prepare-${attempts}`);
+        if (attempts !== 1) return;
+        firstPreparationStarted.resolve();
+        await new Promise<never>((_resolve, reject) => {
+          const aborted = () => {
+            events.push('prepare-aborted');
+            reject(signal.reason);
+          };
+          signal.addEventListener('abort', aborted, { once: true });
+        });
+      },
+      cancel() {
+        events.push('preparation-canceled');
+      }
+    }
+  );
+  await firstPreparationStarted.promise;
+
+  const lifecycle = serial.submit(
+    () => { events.push('lifecycle'); },
+    { lane: 'lifecycle' }
+  );
+  await Promise.all([lifecycle, durable]);
+
+  assert.deepEqual(events, [
+    'prepare-1',
+    'prepare-aborted',
+    'preparation-canceled',
+    'lifecycle',
+    'prepare-2',
+    'durable',
+    'preparation-canceled'
+  ]);
+});
+
 test('a yielded Spot owner retains its reservation until the actual owner terminal', async () => {
   const serial = new ZLinkSpotSerialTurnExecutor(true, undefined, {
     applicationMessageCapacity: 1,

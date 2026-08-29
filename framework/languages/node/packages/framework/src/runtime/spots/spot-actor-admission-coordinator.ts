@@ -4,6 +4,8 @@ import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-con
 import type { ZLinkBackendSpot } from '../backend/contracts';
 import {
   type ZLinkActorHandoffPacket,
+  type ZLinkActorHandoffPrefixAdmission,
+  type ZLinkActorHandoffPrefixRecord,
   type ZLinkActorHandoffResult,
   type ZLinkRemoteBoundSessionTarget
 } from '../actors';
@@ -13,6 +15,7 @@ import type { ZLinkSpotActivationLifecycleOptions } from './spot-activation';
 import { ZLinkSpotActivation } from './spot-activation-state';
 import { ZLinkSpotActorJoinDispatch } from './spot-actor-join-dispatch';
 import { ZLinkSpotActorPacketDispatch } from './spot-actor-packet-dispatch';
+import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import type { ZLinkNativeActorJoinSnapshot } from './spot-runtime-ports';
 
 type AdmissionOptions = Pick<ZLinkSpotActivationLifecycleOptions,
@@ -135,7 +138,8 @@ export class ZLinkSpotActorAdmissionCoordinator {
     return nativeDispatch;
   }
 
-  private async dispatchActorPacketDirect(
+  /** @internal Dispatches a coordinator-owned replay without recapturing it. */
+  dispatchActorPacketDirect(
     activation: ZLinkSpotActivation,
     actorId: string,
     parts: readonly Message[],
@@ -144,8 +148,75 @@ export class ZLinkSpotActorAdmissionCoordinator {
     fallbackActorRef?: ActorRef,
     requestTerminal?: (response: unknown) => Promise<void> | void
   ): Promise<unknown> {
-    return await activation.executeActor(actorId, async (actorSerial) =>
-      new ZLinkSpotActorPacketDispatch({
+    return activation.executeActor(actorId, actorSerial =>
+      this.dispatchActorPacketInActorTurn(
+        activation,
+        actorSerial,
+        actorId,
+        parts,
+        returnResponse,
+        remoteBoundSessionTarget,
+        fallbackActorRef,
+        requestTerminal
+      )
+    );
+  }
+
+  /**
+   * Atomically restores one durable packet prefix at the Actor FIFO tail.
+   * The prefix itself is not an executing Actor record. Its child callbacks
+   * enter the Actor context one by one after the prefix reaches the head.
+   *
+   * @internal
+   */
+  admitActorPacketPrefix(
+    activation: ZLinkSpotActivation,
+    actorId: string,
+    records: readonly ZLinkActorHandoffPrefixRecord[]
+  ): ZLinkActorHandoffPrefixAdmission {
+    const terminals = activation.admitActorDurablePrefix(
+      actorId,
+      records.map(record => ({
+        operation: executeChild => record.drain((
+            parts,
+            returnResponse,
+            remoteBoundSessionTarget,
+            fallbackActorRef
+          ) => executeChild(actorSerial => this.dispatchActorPacketInActorTurn(
+            activation,
+            actorSerial,
+            actorId,
+            parts,
+            returnResponse,
+            remoteBoundSessionTarget,
+            fallbackActorRef
+          ))),
+        preparation: record.preparation,
+        workOptions: { payloadBytes: record.payloadBytes }
+      }))
+    );
+    const terminal = Promise.allSettled(terminals).then(outcomes => {
+      const errors = outcomes.flatMap(outcome =>
+        outcome.status === 'rejected' ? [outcome.reason] : []);
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) {
+        throw new AggregateError(errors, `Actor '${actorId}' durable prefix replay failed.`);
+      }
+    });
+    return { terminal };
+  }
+
+  private dispatchActorPacketInActorTurn(
+    activation: ZLinkSpotActivation,
+    actorSerial: ZLinkSpotSerialTurnExecutor,
+    actorId: string,
+    parts: readonly Message[],
+    returnResponse = false,
+    remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
+    fallbackActorRef?: ActorRef,
+    requestTerminal?: (response: unknown) => Promise<void> | void
+  ): Promise<unknown> {
+    return new ZLinkSpotActorPacketDispatch({
         spot: activation.spot,
         spotId: () => String(activation.spotId),
         registry: activation.actorHandlers,
@@ -171,8 +242,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
         remoteBoundSessionTarget,
         fallbackActorRef,
         requestTerminal
-      )
-    );
+      );
   }
 
   private async commitNativeActorTransaction(

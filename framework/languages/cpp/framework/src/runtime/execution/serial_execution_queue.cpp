@@ -863,8 +863,7 @@ serial_execution_queue_t::lane_locked (serial_work_lane_t lane) const noexcept
 bool serial_execution_queue_t::can_enqueue_locked (
   const serial_work_options_t &options) const noexcept
 {
-    if (options.lane == serial_work_lane_t::application
-        && options.transfer_owner_reservation) {
+    if (options.transfer_owner_reservation) {
         return true;
     }
     const auto &lane = lane_locked (options.lane);

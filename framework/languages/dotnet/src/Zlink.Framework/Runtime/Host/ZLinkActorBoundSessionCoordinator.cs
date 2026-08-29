@@ -620,75 +620,15 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         });
     }
 
-    internal async ValueTask
+    internal ValueTask
         RouteCanonicalSessionAsync(
             ZLinkServiceWireCodec.SessionRelocationRouteRecord request,
             ZLinkSessionRelocationAuthenticatedRoute authenticatedCandidate,
             CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (await _sessionBindings.IsLateCanonicalRouteAsync(request)
-                .ConfigureAwait(false))
-            return;
-        var authenticated = authenticatedCandidate;
-        if (request.Route.Action
-                == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
-            && authenticated.OwnerLeaseGeneration == 0)
-        {
-            var store = _resolveAuthorityStore()
-                        ?? throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.Unavailable,
-                            "Remote command 44 requires an Authority Store proof.",
-                            ZLinkRetryAdvice.RetryAfterBackoff);
-            var authorityRead = await store.ReadAuthorityAsync(
-                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(
-                        request.Actor.ActorId),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (authorityRead is not ZLinkAuthorityReadResult.Found found)
-                throw new InvalidDataException(
-                    "Remote command 44 target authority is unavailable.");
-            var actorAuthorityPayload = found.Snapshot.Payload;
-            if (ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                    actorAuthorityPayload.Span,
-                    out var canonical))
-                actorAuthorityPayload = canonical.SteadyAuthorityPayload;
-            if (found.Snapshot.ObjectGeneration
-                    != request.Actor.ObjectGeneration
-                || found.Snapshot.AuthorityOwnerGeneration
-                   != request.Route.TargetAuthorityOwnerGeneration
-                || found.Snapshot.OwnerLeaseGeneration <= 0
-                || found.Snapshot.Allocation.ObjectKind
-                   != ZLinkPlacementObjectKind.Actor
-                || found.Snapshot.Allocation.Descriptor.Rid
-                   != authenticated.NodeRid
-                || found.Snapshot.Allocation.DescriptorLifecycleGeneration
-                   != authenticated.NodeGeneration
-                || !string.Equals(
-                    found.Snapshot.Allocation.Descriptor.MeshName,
-                    authenticated.MeshName,
-                    StringComparison.Ordinal)
-                || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                    actorAuthorityPayload.Span,
-                    out var actorAuthority)
-                || actorAuthority.State != ZLinkActorAuthorityState.Ready
-                || actorAuthority.NodeRid != authenticated.NodeRid
-                || actorAuthority.NodeGeneration != authenticated.NodeGeneration
-                || !string.Equals(
-                    actorAuthority.OwnerId,
-                    found.Snapshot.OwnerId,
-                    StringComparison.Ordinal)
-                || actorAuthority.OwnerLeaseGeneration
-                   != checked((ulong)found.Snapshot.OwnerLeaseGeneration))
-                throw new InvalidDataException(
-                    "Remote command 44 target authority proof changed.");
-            authenticated = authenticated with
-            {
-                OwnerLeaseGeneration = checked(
-                    (ulong)found.Snapshot.OwnerLeaseGeneration)
-            };
-        }
-        _ = RouteCanonicalSession(request, authenticated);
+        _ = RouteCanonicalSession(request, authenticatedCandidate);
+        return ValueTask.CompletedTask;
     }
 
     private void RequireOpenApplicationEpoch()

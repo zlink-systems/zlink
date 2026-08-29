@@ -45,8 +45,18 @@ export interface ZLinkSerialWorkRecord<T> {
   fail(reason: unknown): void;
 }
 
+/** Readiness work that must complete without claiming the serial owner. */
+export interface ZLinkSerialWorkPreparation {
+  prepare(signal: AbortSignal): Promise<void>;
+  cancel(): void;
+}
+
 type SerialWorkRecord<T> = Omit<ZLinkSerialWorkRecord<T>, 'acceptedSequence'> & {
   acceptedSequence: bigint;
+  readonly preparation?: ZLinkSerialWorkPreparation;
+  preparationState: 'idle' | 'pending' | 'canceling' | 'ready' | 'failed';
+  preparationController?: AbortController;
+  preparationError?: unknown;
 };
 
 interface ZLinkSerialAdmissionLane {
@@ -144,6 +154,29 @@ export class ZLinkSerialExecutionQueue {
   }
 
   /**
+   * Atomically transfers an already-accepted durable FIFO prefix into this
+   * owner queue. Admission failures remain synchronous so the durable owner
+   * cannot publish a restore linearization point for a prefix that was never
+   * queued.
+   *
+   * @internal
+   */
+  admitDurablePrefix<T>(
+    operation: () => Promise<T> | T,
+    options: ZLinkSerialWorkOptions = {},
+    context?: unknown,
+    preparation?: ZLinkSerialWorkPreparation
+  ): Promise<T> {
+    return this.admit(
+      operation,
+      { ...options, lane: 'application' },
+      context,
+      'transferred',
+      preparation
+    );
+  }
+
+  /**
    * Enqueues work that already owns the host-wide application job permit.
    * Its owner-local reservation transfers from the mailbox without a second
    * capacity decision and remains held through handler terminal completion.
@@ -191,7 +224,8 @@ export class ZLinkSerialExecutionQueue {
     operation: () => Promise<T> | T,
     options: ZLinkSerialWorkOptions,
     context?: unknown,
-    reservationMode: ZLinkSerialReservationMode = 'enforce-capacity'
+    reservationMode: ZLinkSerialReservationMode = 'enforce-capacity',
+    preparation?: ZLinkSerialWorkPreparation
   ): Promise<T> {
     if (this.closed) throw new Error('The serial execution queue is closed.');
     const lane = options.lane ?? 'application';
@@ -232,6 +266,8 @@ export class ZLinkSerialExecutionQueue {
       byteCost,
       operation,
       context,
+      preparation,
+      preparationState: preparation === undefined ? 'ready' : 'idle',
       resolve,
       reject,
       release,
@@ -279,15 +315,43 @@ export class ZLinkSerialExecutionQueue {
   private async drain(): Promise<void> {
     if (this.draining) return;
     this.draining = true;
+    let waitingForPreparation = false;
     try {
       for (;;) {
-        const record = this.takeNext();
-        if (record === undefined) break;
+        const selection = this.selectNext();
+        if (selection === undefined) break;
+        const record = selection.record;
+        if (selection.lane === 'lifecycle') {
+          const applicationHead = this.application.records[0]!;
+          if (this.application.records.length > 0
+              && !this.cancelPreparationForRearbitration(applicationHead)) {
+            waitingForPreparation = true;
+            break;
+          }
+        }
+        if (record.preparationState === 'idle') {
+          this.startPreparation(record);
+          waitingForPreparation = true;
+          break;
+        }
+        if (record.preparationState === 'pending'
+            || record.preparationState === 'canceling') {
+          waitingForPreparation = true;
+          break;
+        }
+        this.takeSelected(selection);
+        if (record.preparationState === 'failed') {
+          record.preparation?.cancel();
+          record.fail(record.preparationError);
+          continue;
+        }
         this.claimStartedAt ??= performance.now();
         try {
           await this.executeRecord(record);
         } catch (error) {
           record.fail(error);
+        } finally {
+          record.preparation?.cancel();
         }
         if (this.shouldYield()) {
           this.claimStartedAt = undefined;
@@ -297,24 +361,47 @@ export class ZLinkSerialExecutionQueue {
     } finally {
       this.draining = false;
       this.claimStartedAt = undefined;
-      if (this.application.records.length > 0 || this.lifecycle.records.length > 0) {
+      if (!waitingForPreparation
+          && (this.application.records.length > 0 || this.lifecycle.records.length > 0)) {
         this.scheduleDrain();
       } else {
-        this.resolveIdleWaiters();
+        if (this.application.records.length === 0 && this.lifecycle.records.length === 0) {
+          this.resolveIdleWaiters();
+        }
       }
     }
   }
 
-  private takeNext(): ZLinkSerialWorkRecord<unknown> | undefined {
+  private selectNext(): {
+    readonly lane: ZLinkSerialWorkLane;
+    readonly record: SerialWorkRecord<unknown>;
+  } | undefined {
     const applicationReady = this.application.records.length > 0;
     const lifecycleReady = this.lifecycle.records.length > 0;
     if (!applicationReady && !lifecycleReady) return undefined;
-    if (!applicationReady) return this.takeLifecycle();
-    if (!lifecycleReady) return this.takeApplication();
-    if (!this.lifecycleDebt && this.lifecycleStreak < this.lifecycleBurstLimit) {
-      return this.takeLifecycle();
+    if (!applicationReady) {
+      return { lane: 'lifecycle', record: this.lifecycle.records[0]! };
     }
-    return this.takeApplication();
+    if (!lifecycleReady) {
+      return { lane: 'application', record: this.application.records[0]! };
+    }
+    if (!this.lifecycleDebt && this.lifecycleStreak < this.lifecycleBurstLimit) {
+      return { lane: 'lifecycle', record: this.lifecycle.records[0]! };
+    }
+    return { lane: 'application', record: this.application.records[0]! };
+  }
+
+  private takeSelected(selection: {
+    readonly lane: ZLinkSerialWorkLane;
+    readonly record: SerialWorkRecord<unknown>;
+  }): ZLinkSerialWorkRecord<unknown> {
+    const record = selection.lane === 'lifecycle'
+      ? this.takeLifecycle()
+      : this.takeApplication();
+    if (record !== selection.record) {
+      throw new Error('The selected serial work record changed before owner claim.');
+    }
+    return record;
   }
 
   private takeLifecycle(): ZLinkSerialWorkRecord<unknown> {
@@ -332,6 +419,60 @@ export class ZLinkSerialExecutionQueue {
     this.lifecycleStreak = 0;
     this.lifecycleDebt = false;
     return this.application.records.shift()!;
+  }
+
+  private startPreparation(record: SerialWorkRecord<unknown>): void {
+    const preparation = record.preparation;
+    if (preparation === undefined || record.preparationState !== 'idle') return;
+    const controller = new AbortController();
+    record.preparationController = controller;
+    record.preparationError = undefined;
+    record.preparationState = 'pending';
+    void Promise.resolve()
+      .then(() => preparation.prepare(controller.signal))
+      .then(
+        () => {
+          if (record.preparationState === 'canceling' || controller.signal.aborted) {
+            preparation.cancel();
+            record.preparationState = 'idle';
+          } else {
+            record.preparationState = 'ready';
+          }
+          record.preparationController = undefined;
+          this.scheduleDrain();
+        },
+        error => {
+          if (record.preparationState === 'canceling' || controller.signal.aborted) {
+            preparation.cancel();
+            record.preparationState = 'idle';
+          } else {
+            record.preparationError = error;
+            record.preparationState = 'failed';
+          }
+          record.preparationController = undefined;
+          this.scheduleDrain();
+        }
+      );
+  }
+
+  /** Returns false while an outstanding readiness attempt is being canceled. */
+  private cancelPreparationForRearbitration(
+    record: SerialWorkRecord<unknown>
+  ): boolean {
+    if (record.preparation === undefined || record.preparationState === 'idle') return true;
+    if (record.preparationState === 'ready') {
+      record.preparation.cancel();
+      record.preparationState = 'idle';
+      return true;
+    }
+    if (record.preparationState === 'failed') return true;
+    if (record.preparationState === 'pending') {
+      record.preparationState = 'canceling';
+      record.preparationController?.abort(
+        new Error('Serial work readiness was re-arbitrated by the lifecycle lane.')
+      );
+    }
+    return false;
   }
 
   private shouldYield(): boolean {

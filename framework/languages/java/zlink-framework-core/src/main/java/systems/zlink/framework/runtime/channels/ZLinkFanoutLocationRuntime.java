@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -70,8 +71,9 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, Published> published =
         new ConcurrentHashMap<>();
+    // The state lane exclusively owns connection membership and phase.
     private final Map<String, Connection> connections =
-        new ConcurrentHashMap<>();
+        new LinkedHashMap<>();
     private final Set<String> automaticChannels =
         ConcurrentHashMap.newKeySet();
     private final ScheduledExecutorService scheduler;
@@ -203,17 +205,38 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
             ? CompletableFuture.completedFuture(null)
             : pendingTick.handle((ignored, failure) -> null);
         settled.thenCompose(ignored -> removePublished(servers))
+            .handle((ignored, failure) -> completionCause(failure))
+            .thenCompose(publishFailure -> closeConnections()
+                .handle((ignored, closeFailure) -> {
+                    Throwable closeCause = completionCause(closeFailure);
+                    if (publishFailure != null) {
+                        if (closeCause != null && closeCause != publishFailure) {
+                            publishFailure.addSuppressed(closeCause);
+                        }
+                        throw new CompletionException(publishFailure);
+                    }
+                    if (closeCause != null) {
+                        throw new CompletionException(closeCause);
+                    }
+                    return null;
+                }))
             .whenComplete((ignored, failure) -> {
-                closeConnections();
                 if (failure == null) {
-                    completion.completeAsync(() -> null);
+                    completion.complete(null);
                 } else {
-                    completion.completeAsync(() -> {
-                        throw new java.util.concurrent.CompletionException(failure);
-                    });
+                    completion.completeExceptionally(completionCause(failure));
                 }
             });
         return completion;
+    }
+
+    private static Throwable completionCause(Throwable failure) {
+        Throwable current = failure;
+        while (current instanceof CompletionException
+            && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
     }
 
     private CompletionStage<Void> removePublished(
@@ -337,14 +360,14 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                 return;
             }
             long now = System.nanoTime();
-            receiveAvailable(now);
-            expireConnections(now);
+            receiveAvailable(epoch, settlement);
+            expireConnections(now, epoch, settlement);
             if (now < nextReconcileNanos) {
                 settleTick(settlement, null);
                 return;
             }
             nextReconcileNanos = now + pollingInterval.toNanos();
-            work = reconcile(epoch);
+            work = reconcile(epoch, settlement);
         } catch (Throwable failure) {
             settleTick(settlement, failure);
             return;
@@ -375,11 +398,14 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         }
     }
 
-    private CompletionStage<Void> reconcile(long epoch) {
+    private CompletionStage<Void> reconcile(
+        long epoch,
+        CompletableFuture<Void> settlement) {
         List<CompletionStage<?>> reads = new ArrayList<>();
         for (String channelName : automaticChannels) {
             reads.add(readChannel(channelName).thenAccept(
-                rows -> reconcileChannel(channelName, rows, epoch)));
+                rows -> reconcileChannel(
+                    channelName, rows, epoch, settlement)));
         }
         return CompletableFuture.allOf(reads.stream()
             .map(stage -> stage.toCompletableFuture())
@@ -422,8 +448,12 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
     private void reconcileChannel(
         String channelName,
         List<ZLinkFanoutPublisherDescriptor> rows,
-        long epoch) {
-        if (!running || epoch != lifecycleEpoch) {
+        long epoch,
+        CompletableFuture<Void> settlement) {
+        boolean current = inStateLane(() -> running
+            && epoch == lifecycleEpoch
+            && admittedTick == settlement);
+        if (!current) {
             return;
         }
         Set<String> desired = new HashSet<>();
@@ -433,28 +463,29 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
             }
             String id = connectionId(row);
             desired.add(id);
-            if (!connections.containsKey(id)) {
-                open(row, id, epoch);
+            boolean absent = inStateLane(() -> !connections.containsKey(id));
+            if (absent) {
+                open(row, id, epoch, settlement);
             }
         }
-        List<Map.Entry<String, Connection>> removed = connections.entrySet().stream()
-            .filter(entry -> entry.getValue().descriptor.channelName()
+        List<Connection> removed = inStateLane(() -> connections.values().stream()
+            .filter(connection -> connection.descriptor.channelName()
                 .equals(channelName))
-            .filter(entry -> !desired.contains(entry.getKey()))
-            .toList();
-        removed.forEach(entry -> remove(entry.getKey(), entry.getValue()));
+            .filter(connection -> !desired.contains(connection.connectionId))
+            .toList());
+        removed.forEach(connection -> remove(
+            connection.connectionId, connection, settlement));
     }
 
     private void open(
         ZLinkFanoutPublisherDescriptor descriptor,
         String connectionId,
-        long epoch) {
-        if (!running || epoch != lifecycleEpoch) {
-            return;
-        }
+        long epoch,
+        CompletableFuture<Void> settlement) {
         removeByPublisher(
             descriptor.channelName(),
-            descriptor.publisherRid());
+            descriptor.publisherRid(),
+            settlement);
         ZLinkBackendSubscriberSocket subscriber =
             backend.createSubscriberSocket(context);
         ZLinkBackendSocketMonitor monitor = null;
@@ -472,33 +503,49 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
             monitor.onEvent(event -> {
                 if (isReadyEvent(event.event())) {
                     inStateLane(() -> {
-                        candidate.nativeReady = true;
+                        if (connections.get(connectionId) == candidate
+                            && candidate.phase != ConnectionPhase.CLOSING) {
+                            candidate.nativeReady = true;
+                        }
                         return null;
                     });
                 } else if (isTerminatedEvent(event.event())) {
-                    remove(connectionId, candidate);
+                    remove(connectionId, candidate, null);
                 }
             });
             boolean accepted = inStateLane(() -> {
                 boolean current = running
                     && epoch == lifecycleEpoch
+                    && admittedTick == settlement
                     && !connections.containsKey(connectionId);
                 if (current) {
+                    candidate.liveness.connect(
+                        descriptor.publisherRid(),
+                        connectionId,
+                        System.nanoTime());
                     connections.put(connectionId, candidate);
                 }
                 return current;
             });
             if (!accepted) {
-                closeConnection(candidate);
+                closeUnregistered(candidate);
                 return;
             }
-            Connection acceptedConnection = candidate;
-            inStateLane(() -> {
-                acceptedConnection.liveness.connect(
-                    descriptor.publisherRid(), connectionId, System.nanoTime());
-                return null;
-            });
             subscriber.connect(descriptor.endpoint());
+            boolean committed = inStateLane(() -> {
+                if (connections.get(connectionId) != candidate
+                    || candidate.phase != ConnectionPhase.OPENING
+                    || !running
+                    || lifecycleEpoch != epoch
+                    || admittedTick != settlement) {
+                    return false;
+                }
+                candidate.phase = ConnectionPhase.RECEIVABLE;
+                return true;
+            });
+            if (!committed) {
+                remove(connectionId, candidate, settlement);
+            }
         } catch (RuntimeException failure) {
             LOGGER.log(
                 Level.WARNING,
@@ -507,7 +554,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                     + " at " + descriptor.endpoint(),
                 failure);
             if (connection != null) {
-                remove(connectionId, connection);
+                remove(connectionId, connection, settlement);
             } else {
                 if (monitor != null) {
                     try {
@@ -523,138 +570,252 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         }
     }
 
-    private void receiveAvailable(long nowNanos) {
-        List<Connection> ordered = new ArrayList<>(connections.values());
-        ordered.sort((left, right) ->
-            left.connectionId.compareTo(right.connectionId));
+    private static void closeUnregistered(Connection connection) {
+        try {
+            connection.monitor.close();
+        } catch (RuntimeException ignored) {
+        }
+        try {
+            connection.subscriber.close();
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private void receiveAvailable(
+        long epoch,
+        CompletableFuture<Void> settlement) {
+        ReceiveSnapshot snapshot = inStateLane(() -> {
+            if (!running
+                || lifecycleEpoch != epoch
+                || admittedTick != settlement) {
+                return ReceiveSnapshot.empty();
+            }
+            List<Connection> ordered = connections.values().stream()
+                .filter(connection ->
+                    connection.phase == ConnectionPhase.RECEIVABLE)
+                .sorted(Comparator.comparing(
+                    connection -> connection.connectionId))
+                .toList();
+            if (ordered.isEmpty()) {
+                return ReceiveSnapshot.empty();
+            }
+            int cursor = (int) Math.floorMod(
+                receiveCursor, ordered.size());
+            return new ReceiveSnapshot(List.copyOf(ordered), cursor);
+        });
+        List<Connection> ordered = snapshot.connections();
         if (ordered.isEmpty()) {
             return;
         }
         ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
-        int cursor = (int) Math.floorMod(receiveCursor, ordered.size());
+        int cursor = snapshot.cursor();
         int idleConnections = 0;
-        while (batch.canReceiveNext() && idleConnections < ordered.size()) {
-            Connection connection = ordered.get(cursor);
-            cursor = (cursor + 1) % ordered.size();
-            receiveCursor = cursor;
-            ZLinkBackendTopicMessage received;
-            boolean readable = inStateLane(() ->
-                connections.containsKey(connection.connectionId));
-            if (!readable || !connection.subscriber.waitForReadable(Duration.ZERO)) {
-                received = null;
-            } else {
-                received = connection.subscriber.subscribe(
-                    ZLinkBackendRecvMode.DONT_WAIT);
-            }
-            if (received == null) {
-                idleConnections++;
-                continue;
-            }
-            idleConnections = 0;
-            batch.record(ZLinkReceiveBatchBudget.bytesOf(
-                received.parts(),
-                received.applicationMetadataSize(),
-                received.topic().getBytes(StandardCharsets.UTF_8).length));
-            List<byte[]> frames = new ArrayList<>();
-            frames.add(received.topic().getBytes(StandardCharsets.UTF_8));
-            frames.addAll(received.parts().stream()
-                .map(Message::toByteArray)
-                .toList());
-            ZLinkClassicFanoutLiveness.ReceiveKind kind;
-            try {
-                kind = inStateLane(() -> {
-                    if (connections.get(connection.connectionId) != connection) {
-                        return null;
-                    }
-                    ZLinkClassicFanoutLiveness.ReceiveKind accepted = connection.liveness.receive(
-                            connection.descriptor.publisherRid(),
-                            connection.connectionId,
-                            frames,
-                            System.nanoTime());
-                    connection.ready = connection.nativeReady
-                        && connection.liveness.isReady(
-                            connection.descriptor.publisherRid());
-                    return accepted;
-                });
-                if (kind == null) {
-                    received.parts().forEach(Message::close);
+        try {
+            while (batch.canReceiveNext()
+                && idleConnections < ordered.size()) {
+                Connection connection = ordered.get(cursor);
+                cursor = (cursor + 1) % ordered.size();
+                ZLinkBackendTopicMessage received;
+                if (!connection.subscriber.waitForReadable(Duration.ZERO)) {
+                    received = null;
+                } else {
+                    received = connection.subscriber.subscribe(
+                        ZLinkBackendRecvMode.DONT_WAIT);
+                }
+                if (received == null) {
+                    idleConnections++;
                     continue;
                 }
-            } catch (IllegalArgumentException malformed) {
-                received.parts().forEach(Message::close);
-                remove(connection.connectionId, connection);
-                continue;
+                idleConnections = 0;
+                batch.record(ZLinkReceiveBatchBudget.bytesOf(
+                    received.parts(),
+                    received.applicationMetadataSize(),
+                    received.topic().getBytes(StandardCharsets.UTF_8).length));
+                List<byte[]> frames = new ArrayList<>();
+                frames.add(received.topic().getBytes(StandardCharsets.UTF_8));
+                frames.addAll(received.parts().stream()
+                    .map(Message::toByteArray)
+                    .toList());
+                ZLinkClassicFanoutLiveness.ReceiveKind kind;
+                try {
+                    kind = inStateLane(() -> {
+                        if (admittedTick != settlement
+                            || connections.get(connection.connectionId) != connection
+                            || connection.phase != ConnectionPhase.RECEIVABLE) {
+                            return null;
+                        }
+                        ZLinkClassicFanoutLiveness.ReceiveKind accepted =
+                            connection.liveness.receive(
+                                connection.descriptor.publisherRid(),
+                                connection.connectionId,
+                                frames,
+                                System.nanoTime());
+                        connection.ready = connection.nativeReady
+                            && connection.liveness.isReady(
+                                connection.descriptor.publisherRid());
+                        return accepted;
+                    });
+                    if (kind == null) {
+                        received.parts().forEach(Message::close);
+                        continue;
+                    }
+                } catch (IllegalArgumentException malformed) {
+                    received.parts().forEach(Message::close);
+                    remove(connection.connectionId, connection, settlement);
+                    continue;
+                }
+                if (kind == ZLinkClassicFanoutLiveness.ReceiveKind.APPLICATION) {
+                    // Dispatch owns the received message. Keep user-facing queue
+                    // admission outside the connection registry monitor.
+                    dispatch.accept(connection.descriptor.channelName(), received);
+                } else {
+                    received.parts().forEach(Message::close);
+                }
             }
-            if (kind == ZLinkClassicFanoutLiveness.ReceiveKind.APPLICATION) {
-                // Dispatch owns the received message. Keep user-facing queue
-                // admission outside the connection registry monitor.
-                dispatch.accept(connection.descriptor.channelName(), received);
-            } else {
-                received.parts().forEach(Message::close);
-            }
+        } finally {
+            int nextCursor = cursor;
+            inStateLane(() -> {
+                if (admittedTick == settlement) {
+                    receiveCursor = nextCursor;
+                }
+                return null;
+            });
         }
     }
 
-    private void expireConnections(long nowNanos) {
-        connections.values().stream()
-            .filter(connection -> expire(connection, nowNanos))
-            .forEach(connection -> remove(
-                connection.connectionId,
-                connection));
-    }
-
-    private boolean expire(Connection connection, long nowNanos) {
-        return inStateLane(() -> !connection.liveness.expire(nowNanos).isEmpty());
+    private void expireConnections(
+        long nowNanos,
+        long epoch,
+        CompletableFuture<Void> settlement) {
+        List<Connection> expired = inStateLane(() -> {
+            if (!running
+                || lifecycleEpoch != epoch
+                || admittedTick != settlement) {
+                return List.of();
+            }
+            return connections.values().stream()
+                .filter(connection ->
+                    connection.phase == ConnectionPhase.RECEIVABLE)
+                .filter(connection ->
+                    !connection.liveness.expire(nowNanos).isEmpty())
+                .toList();
+        });
+        expired.forEach(connection -> remove(
+            connection.connectionId, connection, settlement));
     }
 
     private void removeByPublisher(
         String channelName,
-        RoutingId rid) {
-        connections.entrySet().stream()
-            .filter(entry ->
-                entry.getValue().descriptor.channelName()
+        RoutingId rid,
+        CompletableFuture<Void> settlement) {
+        List<Connection> matching = inStateLane(() ->
+            connections.values().stream()
+            .filter(connection ->
+                connection.descriptor.channelName()
                     .equals(channelName)
-                && entry.getValue().descriptor.publisherRid()
+                && connection.descriptor.publisherRid()
                     .equals(rid))
-            .toList()
-            .forEach(entry -> remove(entry.getKey(), entry.getValue()));
+            .toList());
+        matching.forEach(connection -> remove(
+            connection.connectionId, connection, settlement));
     }
 
-    private void remove(String connectionId) {
-        Connection connection = connections.remove(connectionId);
-        if (connection == null) {
-            return;
-        }
-        closeConnection(connection);
-    }
-
-    private void remove(
+    private CompletionStage<Void> remove(
         String connectionId,
-        Connection expected) {
-        if (connections.remove(connectionId, expected)) {
-            closeConnection(expected);
+        Connection expected,
+        CompletableFuture<Void> currentTick) {
+        CloseReservation reservation = inStateLane(() -> {
+            if (connections.get(connectionId) != expected) {
+                return null;
+            }
+            if (expected.phase == ConnectionPhase.CLOSING) {
+                return CloseReservation.joining(expected);
+            }
+            expected.phase = ConnectionPhase.CLOSING;
+            expected.liveness.disconnect(
+                expected.descriptor.publisherRid(),
+                expected.connectionId);
+            return CloseReservation.owned(expected, admittedTick);
+        });
+        if (reservation == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        if (!reservation.owner()) {
+            return reservation.connection().closeSettlement;
+        }
+        // A receive snapshot is admission for the whole bounded tick. Closing
+        // prevents a later snapshot, then joins the already-admitted tick.
+        CompletionStage<Void> gate = reservation.pendingTick() == null
+            || reservation.pendingTick() == currentTick
+            ? CompletableFuture.completedFuture(null)
+            : reservation.pendingTick().handle((ignored, failure) -> null);
+        gate.thenRun(() -> closeNative(reservation.connection()))
+            .whenComplete((ignored, failure) -> finishClose(
+                reservation.connection(), failure));
+        return reservation.connection().closeSettlement;
+    }
+
+    private void finishClose(
+        Connection connection,
+        Throwable failure) {
+        Throwable completionFailure = failure;
+        try {
+            inStateLane(() -> {
+                if (connections.get(connection.connectionId) == connection) {
+                    connections.remove(connection.connectionId);
+                }
+                return null;
+            });
+        } catch (RuntimeException stateFailure) {
+            if (completionFailure == null) {
+                completionFailure = stateFailure;
+            } else {
+                completionFailure.addSuppressed(stateFailure);
+            }
+        }
+        if (completionFailure == null) {
+            connection.closeSettlement.complete(null);
+        } else {
+            connection.closeSettlement.completeExceptionally(
+                completionFailure);
         }
     }
 
-    private void closeConnection(Connection connection) {
-        inStateLane(() -> {
-            connection.liveness.disconnect(
-                connection.descriptor.publisherRid(),
-                connection.connectionId);
-            return null;
-        });
+    private static void closeNative(Connection connection) {
         try {
             connection.subscriber.disconnect(connection.descriptor.endpoint());
         } catch (RuntimeException ignored) {
         }
-        connection.monitor.close();
-        connection.subscriber.close();
+        RuntimeException failure = null;
+        try {
+            connection.monitor.close();
+        } catch (RuntimeException monitorFailure) {
+            failure = monitorFailure;
+        }
+        try {
+            connection.subscriber.close();
+        } catch (RuntimeException subscriberFailure) {
+            if (failure == null) {
+                failure = subscriberFailure;
+            } else {
+                failure.addSuppressed(subscriberFailure);
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
     }
 
-    private void closeConnections() {
-        List.copyOf(connections.values()).forEach(connection -> remove(
-            connection.connectionId,
-            connection));
+    private CompletionStage<Void> closeConnections() {
+        List<Connection> snapshot = inStateLane(() ->
+            List.copyOf(connections.values()));
+        List<CompletionStage<Void>> closes = snapshot.stream()
+            .map(connection -> remove(
+                connection.connectionId, connection, null))
+            .toList();
+        return CompletableFuture.allOf(closes.stream()
+            .map(CompletionStage::toCompletableFuture)
+            .toArray(CompletableFuture[]::new));
     }
 
     private static ZLinkFanoutPublisherDescriptor descriptor(
@@ -716,7 +877,9 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
     }
 
     List<FanoutPublisherSnapshot> publisherSnapshots(String channelName) {
-        return connections.values().stream()
+        return inStateLane(() -> connections.values().stream()
+            .filter(connection ->
+                connection.phase == ConnectionPhase.RECEIVABLE)
             .filter(connection ->
                 connection.descriptor.channelName().equals(channelName))
             .map(connection -> new FanoutPublisherSnapshot(
@@ -724,12 +887,41 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                 connection.ready))
             .sorted(Comparator.comparing(
                 snapshot -> snapshot.nodeRid().toHex()))
-            .toList();
+            .toList());
     }
 
     record FanoutPublisherSnapshot(
         RoutingId nodeRid,
         boolean ready) {
+    }
+
+    private record ReceiveSnapshot(
+        List<Connection> connections,
+        int cursor) {
+        private static ReceiveSnapshot empty() {
+            return new ReceiveSnapshot(List.of(), 0);
+        }
+    }
+
+    private record CloseReservation(
+        Connection connection,
+        CompletableFuture<Void> pendingTick,
+        boolean owner) {
+        private static CloseReservation owned(
+            Connection connection,
+            CompletableFuture<Void> pendingTick) {
+            return new CloseReservation(connection, pendingTick, true);
+        }
+
+        private static CloseReservation joining(Connection connection) {
+            return new CloseReservation(connection, null, false);
+        }
+    }
+
+    private enum ConnectionPhase {
+        OPENING,
+        RECEIVABLE,
+        CLOSING
     }
 
     private record StartState(
@@ -816,8 +1008,11 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         private final ZLinkBackendSocketMonitor monitor;
         private final ZLinkClassicFanoutLiveness liveness =
             new ZLinkClassicFanoutLiveness();
-        private volatile boolean nativeReady;
-        private volatile boolean ready;
+        private final CompletableFuture<Void> closeSettlement =
+            new CompletableFuture<>();
+        private ConnectionPhase phase = ConnectionPhase.OPENING;
+        private boolean nativeReady;
+        private boolean ready;
 
         private Connection(
             ZLinkFanoutPublisherDescriptor descriptor,

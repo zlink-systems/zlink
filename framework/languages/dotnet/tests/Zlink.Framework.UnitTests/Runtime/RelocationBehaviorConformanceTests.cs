@@ -24,6 +24,64 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class RelocationBehaviorConformanceTests
 {
     [Fact]
+    public async Task Maintenance_stop_relocates_parallel_standalone_actors_to_target()
+    {
+        var trace = new RelocationBehaviorTrace();
+        var locationStore = new RecordingLocationStore(
+            new ZLinkInMemoryProviderLocationStore(),
+            trace);
+        var relocationStore = new SynchronizedRelocationStore();
+        var actorIds = new[]
+        {
+            $"behavior-maintenance-a-{Guid.NewGuid():N}",
+            $"behavior-maintenance-b-{Guid.NewGuid():N}"
+        };
+
+        await using var source = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            locationStore,
+            relocationStore,
+            registerTargetSpot: false);
+        var actorManager = source.Services.GetRequiredService<IZLinkActorManager>();
+        foreach (var actorId in actorIds)
+        {
+            _ = Assert.IsType<ZLinkActorCreateResult.Created>(
+                await actorManager.GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+                    .InMesh(RelocationBehaviorHost.MeshName)
+                    .Request(new BehaviorCreate(7))
+                    .Timeout(TimeSpan.FromSeconds(10))
+                    .Async());
+        }
+
+        await using var target = await RelocationBehaviorHost.StartAsync(
+            "target",
+            trace,
+            locationStore,
+            relocationStore,
+            registerTargetSpot: false);
+        await WaitUntilAsync(
+            () => source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                      .Node.Status().ActivePeerCount == 1
+                  && target.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                      .Node.Status().ActivePeerCount == 1);
+
+        var shutdown = await source.Services
+            .GetRequiredService<IZLinkFrameworkRuntime>()
+            .ShutdownAsync(TimeSpan.FromSeconds(30))
+            .AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(35));
+        Assert.Equal(ZLinkFrameworkTerminationOutcome.Stopped, shutdown.Outcome);
+
+        foreach (var actorId in actorIds)
+        {
+            Assert.True(target.Runtime.TryGetActorState(actorId, out var state));
+            Assert.NotNull(state.Actor);
+            Assert.Equal(target.LocalNodeRid, state.NativeActorRef?.NodeRid);
+        }
+    }
+
+    [Fact]
     public void Target_attempt_slot_keeps_identity_until_last_user_quiesces()
     {
         var slots = new ConcurrentDictionary<string, ZLinkRelocationAttemptLeaseState>();

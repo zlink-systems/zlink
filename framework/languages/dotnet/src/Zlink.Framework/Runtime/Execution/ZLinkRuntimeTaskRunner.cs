@@ -3,7 +3,6 @@ namespace Zlink.Framework.Runtime.Execution;
 internal sealed class ZLinkRuntimeTaskRunner
 {
     private static readonly AsyncLocal<ExecutionLease?> AmbientExecution = new();
-    private readonly ZLinkStateLane _lane = new();
     private readonly HashSet<Task> _active = [];
     private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly object _executionOwner;
@@ -21,6 +20,16 @@ internal sealed class ZLinkRuntimeTaskRunner
            && ReferenceEquals(lease.Runner, this);
 
     internal object ExecutionOwner => _executionOwner;
+
+    // Runner admission state is owned by the fixed supervisor lane. These
+    // accessors must only be used from a supervisor-lane turn.
+    internal bool AcceptingOnSupervisorLane
+    {
+        get => _accepting;
+        set => _accepting = value;
+    }
+
+    internal HashSet<Task> ActiveOnSupervisorLane => _active;
 
     internal static bool IsCurrentExecutionFor(object executionOwner)
         => AmbientExecution.Value is { IsActive: true } lease
@@ -91,25 +100,7 @@ internal sealed class ZLinkRuntimeTaskRunner
             throw new InvalidOperationException(
                 "A runtime task cannot synchronously stop the runner that owns it.");
 
-        await _lane.RunAsync(() => _accepting = false).ConfigureAwait(false);
-
-        if (_ownsSupervisor)
-        {
-            await _supervisor.StopAsync().ConfigureAwait(false);
-            return;
-        }
-
-        while (true)
-        {
-            var active = await _lane.RunAsync(() =>
-            {
-                _active.RemoveWhere(static candidate => candidate.IsCompleted);
-                return _active.ToArray();
-            }).ConfigureAwait(false);
-            if (active.Length == 0) return;
-
-            await Task.WhenAll(active).ConfigureAwait(false);
-        }
+        await _supervisor.StopRunnerAsync(this, _ownsSupervisor).ConfigureAwait(false);
     }
 
     private bool TryStart(
@@ -118,9 +109,9 @@ internal sealed class ZLinkRuntimeTaskRunner
         TaskCreationOptions creationOptions,
         out Task task)
     {
-        // The outer task is created cold and started only after both state lanes
-        // release it, so its synchronous callback prefix cannot inherit either
-        // lane's AsyncLocal ownership.
+        // The outer task is created cold and started only after the supervisor
+        // state lane releases it, so its synchronous callback prefix cannot
+        // inherit that lane's AsyncLocal ownership.
         var outer = new Task<Task>(
             static state => RunDetachedCoreAsync((TaskState)state!),
             new TaskState(this, name, callback, _errorSink, _shutdownToken),
@@ -133,20 +124,11 @@ internal sealed class ZLinkRuntimeTaskRunner
                                          && ReferenceEquals(lease.Owner, _executionOwner));
         var acceptsOwnerExecution = AmbientExecution.Value is { IsActive: true } ownerLease
                                     && ReferenceEquals(ownerLease.Owner, _executionOwner);
-        var accepted = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (!_accepting
-                && !acceptsRunnerExecution)
-            {
-                return false;
-            }
-
-            if (!_supervisor.TryStart(startedTask, acceptsOwnerExecution))
-                return false;
-            _active.Add(startedTask);
-            RegisterCompletion(startedTask);
-            return true;
-        }));
+        var accepted = _supervisor.TryStart(
+            this,
+            startedTask,
+            acceptsRunnerExecution,
+            acceptsOwnerExecution);
 
         if (!accepted)
         {
@@ -154,14 +136,14 @@ internal sealed class ZLinkRuntimeTaskRunner
             return false;
         }
         task = startedTask;
+        RegisterCompletion(startedTask);
         outer.Start(TaskScheduler.Default);
         return true;
     }
 
     private void RemoveCompletedTask(Task completed)
     {
-        AwaitStateLane(_lane.RunAsync(() => _active.Remove(completed)));
-        _supervisor.Remove(completed);
+        _supervisor.Remove(this, completed);
     }
 
     private void RegisterCompletion(Task task)
@@ -224,12 +206,6 @@ internal sealed class ZLinkRuntimeTaskRunner
 
     internal IZLinkRuntimeFailureReporter ErrorSink => _errorSink;
 
-    private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-        operation.GetAwaiter().GetResult();
-
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
-
     private sealed record TaskState(
         ZLinkRuntimeTaskRunner Runner,
         string Name,
@@ -267,32 +243,53 @@ internal sealed class ZLinkRuntimeTaskSupervisor
     private readonly ZLinkStateLane _lane = new();
     private bool _accepting = true;
 
-    public bool TryStart(Task task, bool acceptsOwnerExecution)
+    public bool TryStart(
+        ZLinkRuntimeTaskRunner runner,
+        Task task,
+        bool acceptsRunnerExecution,
+        bool acceptsOwnerExecution)
     {
         return AwaitStateLane(_lane.RunAsync(() =>
         {
+            if (!runner.AcceptingOnSupervisorLane && !acceptsRunnerExecution)
+                return false;
+
             if (!_accepting && !acceptsOwnerExecution)
                 return false;
 
+            runner.ActiveOnSupervisorLane.Add(task);
             _active.Add(task);
             return true;
         }));
     }
 
-    public void Remove(Task completed)
+    public void Remove(ZLinkRuntimeTaskRunner runner, Task completed)
     {
-        AwaitStateLane(_lane.RunAsync(() => _active.Remove(completed)));
+        AwaitStateLane(_lane.RunAsync(() =>
+        {
+            runner.ActiveOnSupervisorLane.Remove(completed);
+            _active.Remove(completed);
+            return true;
+        }));
     }
 
-    public async ValueTask StopAsync()
+    public async ValueTask StopRunnerAsync(
+        ZLinkRuntimeTaskRunner runner,
+        bool ownsSupervisor)
     {
         while (true)
         {
             var active = await _lane.RunAsync(() =>
             {
-                _accepting = false;
-                _active.RemoveWhere(static candidate => candidate.IsCompleted);
-                return _active.ToArray();
+                runner.AcceptingOnSupervisorLane = false;
+                if (ownsSupervisor)
+                    _accepting = false;
+
+                var activeSet = ownsSupervisor
+                    ? _active
+                    : runner.ActiveOnSupervisorLane;
+                activeSet.RemoveWhere(static candidate => candidate.IsCompleted);
+                return activeSet.ToArray();
             }).ConfigureAwait(false);
             if (active.Length == 0) return;
 

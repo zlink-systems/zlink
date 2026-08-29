@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using System.Diagnostics.Metrics;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.Contracts.Messaging;
+using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Streams;
@@ -1311,12 +1312,18 @@ public sealed class SessionActorCoordinatorTests
         Assert.Equal(new byte[] { 7, 8, 9 }, stream.Writes[1].Payload);
     }
 
-    [Fact]
-    public async Task Canonical_Seal_Retries_Target_Push_Until_Command_44_Commits()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Canonical_Seal_Routes_Command_44_Without_Store_Reread(
+        bool pushBeforeRoute)
     {
         var loggerFactory = new SessionRouteLoggerFactory();
-        var runtime = CreateRuntime(loggerFactory: loggerFactory);
-        runtime.Registration.Locations.UseInMemoryStores = true;
+        var locationStore = new BlockingReadLocationStore(
+            new ZLinkInMemoryProviderLocationStore());
+        var runtime = CreateRuntime(
+            loggerFactory: loggerFactory,
+            locationStore: locationStore);
         var store = runtime.Registration.Locations.ResolveStore()!;
         var targetNode = RoutingId.From("actor-node-canonical-target");
         const ulong targetNodeGeneration = 2;
@@ -1426,13 +1433,11 @@ public sealed class SessionActorCoordinatorTests
             identity.Context.RoutingId.Value.ToHex(),
             [7, 8, 9]);
 
-        var pending = runtime.DeliverRemoteSessionPushAsync(
+        if (pushBeforeRoute)
+            await runtime.AdmitRemoteSessionPushOneWayAsync(
                 relay,
-                relay.Frame,
                 targetNode,
-                CancellationToken.None)
-            .AsTask();
-        Assert.False(pending.IsCompleted);
+                CancellationToken.None);
         Assert.Empty(stream.Writes);
 
         var command44 = new ZLinkServiceWireCodec.SessionRelocationRouteRecord(
@@ -1446,17 +1451,34 @@ public sealed class SessionActorCoordinatorTests
                 targetAuthority,
                 targetNode,
                 targetNodeGeneration));
-        var routed = runtime.RouteCanonicalSessionActor(
-            command44,
-            new ZLinkSessionRelocationAuthenticatedRoute(
-                targetNode,
-                targetNodeGeneration,
-                identity.MeshName,
-                targetAuthority,
-                targetOwnerLease));
+        locationStore.BlockReads();
+        try
+        {
+            await runtime.RouteCanonicalSessionActorAsync(
+                    command44,
+                    new ZLinkSessionRelocationAuthenticatedRoute(
+                        targetNode,
+                        targetNodeGeneration,
+                        identity.MeshName,
+                        targetAuthority,
+                        OwnerLeaseGeneration: 0),
+                    CancellationToken.None)
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(1));
+            Assert.Equal(0, locationStore.BlockedReadCount);
+            Assert.Equal(pushBeforeRoute ? 1 : 0, stream.Writes.Count);
+        }
+        finally
+        {
+            locationStore.ReleaseReads();
+        }
 
-        Assert.True(routed);
-        await pending.WaitAsync(TimeSpan.FromSeconds(1));
+        if (!pushBeforeRoute)
+            await runtime.DeliverRemoteSessionPushAsync(
+                relay,
+                relay.Frame,
+                targetNode,
+                CancellationToken.None);
         Assert.Single(stream.Writes);
         Assert.Equal(new byte[] { 7, 8, 9 }, stream.Writes[0].Payload);
 
@@ -2343,9 +2365,11 @@ public sealed class SessionActorCoordinatorTests
     private static ZLinkFrameworkRuntime CreateRuntime(
         IZLinkActorResolver? actorDirectory = null,
         TimeSpan? defaultRequestTimeout = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        IZLinkLocationStore? locationStore = null)
     {
         var registration = new ZLinkFrameworkRegistration();
+        registration.Locations.StoreInstance = locationStore;
         if (defaultRequestTimeout is { } timeout)
             registration.DefaultRequestTimeout = timeout;
         var services = new ServiceCollection();
@@ -2362,6 +2386,47 @@ public sealed class SessionActorCoordinatorTests
             new ZLinkHandlerDispatcher(
                 provider.GetRequiredService<IServiceScopeFactory>(),
                 registration));
+    }
+
+    private sealed class BlockingReadLocationStore(
+        IZLinkLocationStore inner) : IZLinkLocationStore
+    {
+        private readonly TaskCompletionSource _release = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _blockReads;
+        private int _blockedReadCount;
+
+        internal int BlockedReadCount => Volatile.Read(ref _blockedReadCount);
+
+        internal void BlockReads() => Volatile.Write(ref _blockReads, 1);
+
+        internal void ReleaseReads()
+        {
+            Volatile.Write(ref _blockReads, 0);
+            _release.TrySetResult();
+        }
+
+        public async ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default)
+        {
+            if (Volatile.Read(ref _blockReads) != 0)
+            {
+                Interlocked.Increment(ref _blockedReadCount);
+                await _release.Task.WaitAsync(cancellationToken);
+            }
+            return await inner.ReadAsync(key, cancellationToken);
+        }
+
+        public ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default) =>
+            inner.WriteAsync(request, cancellationToken);
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default) =>
+            inner.ScanAsync(request, cancellationToken);
     }
 
     private sealed record SessionPush(string Value);

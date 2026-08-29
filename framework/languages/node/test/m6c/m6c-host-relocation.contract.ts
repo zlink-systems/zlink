@@ -257,7 +257,15 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
       sealConnectionBoundIngress() {},
       snapshot() { return []; },
       takeRelocationRelay() { return []; },
-      async releaseCanceled() { events.push('queue-restored'); }
+      admitCanceledPrefix(
+        _actorId: string,
+        _queue: unknown,
+        _preparation: unknown,
+        start: Promise<void>
+      ) {
+        events.push('queue-restored');
+        return { terminal: start.then(() => undefined) };
+      }
     },
     actorTransferRegistry: {},
     authorityStore: () => ({ readAuthority: async () => authority }),
@@ -1251,6 +1259,7 @@ test('public ActorJoin profile crosses the Host Prepare READY DATA CUTOVER owner
     await harness.targetIdle();
     assert.deepEqual(harness.events.filter(value =>
       value === 'cas'
+      || value.startsWith('raw-authority:')
       || value === 'route:closed'
       || value.startsWith('queue:merged:')
       || value === 'onJoined'
@@ -1261,6 +1270,7 @@ test('public ActorJoin profile crosses the Host Prepare READY DATA CUTOVER owner
       || value === 'command44'
     ), [
       'cas',
+      'raw-authority:12',
       'queue:merged:B1,B2,D1',
       'route:closed',
       'onJoined',
@@ -1272,6 +1282,11 @@ test('public ActorJoin profile crosses the Host Prepare READY DATA CUTOVER owner
       'replay:D1',
       'command44'
     ]);
+    assert.equal(
+      harness.targetAuthorityGeneration(),
+      12n,
+      'command 44 must observe the committed target authority in the native registry'
+    );
     assert.equal(
       harness.events.includes('source:onLeave:completed'),
       false,
@@ -1775,12 +1790,34 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   };
 
   let targetState: Record<string, any> | undefined;
+  let targetNativeAuthority: {
+    actor: { actorId: string; generation: bigint; nodeRid: string };
+    authorityOwnerGeneration: bigint;
+    spotId: string;
+    spotGeneration: bigint;
+    membershipEpoch: bigint;
+  } | undefined;
   const targetActor = { context: { actorId, meshName: 'mesh-a' } };
   const targetActorManager = {
     published: 0,
     aborted: 0,
-    async prepareRelocationActor() {
+    async prepareRelocationActor(
+      restoredActorId: string,
+      _actorType: string,
+      objectGeneration: bigint,
+      authorityOwnerGeneration: bigint,
+      spotId: string,
+      spotGeneration: bigint,
+      membershipEpoch: bigint
+    ) {
       events.push('restore:hidden');
+      targetNativeAuthority = {
+        actor: { actorId: restoredActorId, generation: objectGeneration, nodeRid: 'target' },
+        authorityOwnerGeneration,
+        spotId,
+        spotGeneration,
+        membershipEpoch
+      };
       targetState = {
         actorId,
         nativeActorRef: { actorId, generation: 5n, nodeRid: 'target' },
@@ -1928,6 +1965,36 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   const targetNode = {
     status: () => ({ routingId: 'target', lifecycleGeneration: 6n }),
     peers: () => [{ routingId: 'source', lifecycleGeneration: 2n, state: 3 }],
+    actorLookup(lookupActorId: string) {
+      assert.equal(lookupActorId, actorId);
+      assert.notEqual(targetNativeAuthority, undefined);
+      return {
+        actor: targetNativeAuthority!.actor,
+        spotId: targetNativeAuthority!.spotId,
+        spotGeneration: targetNativeAuthority!.spotGeneration,
+        membershipEpoch: targetNativeAuthority!.membershipEpoch
+      };
+    },
+    restoreActorAuthority(
+      restoredActorId: string,
+      stableType: string,
+      objectGeneration: bigint,
+      authorityOwnerGeneration: bigint,
+      spotId: string,
+      spotGeneration: bigint,
+      membershipEpoch: bigint
+    ) {
+      assert.equal(stableType, 'Player');
+      targetNativeAuthority = {
+        actor: { actorId: restoredActorId, generation: objectGeneration, nodeRid: 'target' },
+        authorityOwnerGeneration,
+        spotId,
+        spotGeneration,
+        membershipEpoch
+      };
+      events.push(`raw-authority:${authorityOwnerGeneration}`);
+      return targetNativeAuthority.actor;
+    },
     sendInfrastructureControl(_sourceRid: string, bytes: Uint8Array) {
       events.push('sourceLeave:submit');
       if (options.sourceLeaveResult !== undefined) return options.sourceLeaveResult;
@@ -2220,6 +2287,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     prepareFingerprints,
     location,
     targetActorManager,
+    targetAuthorityGeneration: () => targetNativeAuthority?.authorityOwnerGeneration,
     canonicalRecoveryIdentity: () => restoredCanonicalRecovery,
     canonicalAdmissionActorNodeRid: () => {
       if (canonicalHandoffId === undefined) return undefined;

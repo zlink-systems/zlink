@@ -23,6 +23,9 @@ export interface ZLinkRemoteBoundSessionTarget {
   readonly spotId: RoutingId;
   readonly sessionNodeRid?: RoutingId;
   readonly sessionRid?: RoutingId;
+  readonly sessionOwnerNodeGeneration?: bigint;
+  readonly sessionOwnerId?: string;
+  readonly sessionOwnerLeaseGeneration?: bigint;
   readonly bindingGeneration?: bigint;
   readonly previousAuthorityOwnerGeneration?: bigint;
   readonly previousOwnerLeaseGeneration?: bigint;
@@ -66,7 +69,7 @@ export function mergeRemoteBoundSessionTarget(
     || !routingIdsEqual(fallback.targetNodeRid, target.targetNodeRid)
     || (
       !routingIdsEqual(fallback.spotId, target.spotId)
-      && !sameRemoteSessionOwner(fallback, target)
+      && !samePhysicalRemoteSession(fallback, target)
     )
     || isSuccessorSessionBinding(fallback, target)
   ) {
@@ -77,6 +80,11 @@ export function mergeRemoteBoundSessionTarget(
     ...target,
     sessionNodeRid: target.sessionNodeRid ?? fallback.sessionNodeRid,
     sessionRid: target.sessionRid ?? fallback.sessionRid,
+    sessionOwnerNodeGeneration:
+      target.sessionOwnerNodeGeneration ?? fallback.sessionOwnerNodeGeneration,
+    sessionOwnerId: target.sessionOwnerId ?? fallback.sessionOwnerId,
+    sessionOwnerLeaseGeneration:
+      target.sessionOwnerLeaseGeneration ?? fallback.sessionOwnerLeaseGeneration,
     bindingGeneration: target.bindingGeneration ?? fallback.bindingGeneration,
     previousAuthorityOwnerGeneration:
       target.previousAuthorityOwnerGeneration ?? fallback.previousAuthorityOwnerGeneration,
@@ -119,12 +127,38 @@ function isSuccessorSessionBinding(
     fallback.sessionRid !== undefined
     && target.sessionRid !== undefined
     && !routingIdsEqual(fallback.sessionRid, target.sessionRid)
+  ) || (
+    fallback.sessionOwnerNodeGeneration !== undefined
+    && target.sessionOwnerNodeGeneration !== undefined
+    && fallback.sessionOwnerNodeGeneration !== target.sessionOwnerNodeGeneration
+  ) || (
+    fallback.sessionOwnerId !== undefined
+    && target.sessionOwnerId !== undefined
+    && fallback.sessionOwnerId !== target.sessionOwnerId
+  ) || (
+    fallback.sessionOwnerLeaseGeneration !== undefined
+    && target.sessionOwnerLeaseGeneration !== undefined
+    && fallback.sessionOwnerLeaseGeneration !== target.sessionOwnerLeaseGeneration
   );
 }
 
-function sameRemoteSessionOwner(
+type ZLinkRemoteSessionOwnerIdentity = Pick<
+  ZLinkRemoteBoundSessionTarget,
+  | 'sessionNodeRid'
+  | 'sessionRid'
+  | 'sessionOwnerNodeGeneration'
+  | 'sessionOwnerId'
+  | 'sessionOwnerLeaseGeneration'
+>;
+
+type ZLinkRemoteSessionOwnerLifecycle = Omit<
+  ZLinkRemoteSessionOwnerIdentity,
+  'sessionRid'
+>;
+
+function samePhysicalRemoteSession(
   left: ZLinkRemoteBoundSessionTarget,
-  right: ZLinkRemoteBoundSessionTarget
+  right: Pick<ZLinkRemoteBoundSessionTarget, 'sessionNodeRid' | 'sessionRid'>
 ): boolean {
   return left.sessionNodeRid !== undefined
     && right.sessionNodeRid !== undefined
@@ -132,6 +166,50 @@ function sameRemoteSessionOwner(
     && right.sessionRid !== undefined
     && routingIdsEqual(left.sessionNodeRid, right.sessionNodeRid)
     && routingIdsEqual(left.sessionRid, right.sessionRid);
+}
+
+function sameRemoteSessionOwnerLifecycle(
+  left: ZLinkRemoteBoundSessionTarget,
+  right: ZLinkRemoteSessionOwnerLifecycle
+): boolean {
+  return left.sessionNodeRid !== undefined
+    && right.sessionNodeRid !== undefined
+    && left.sessionOwnerNodeGeneration !== undefined
+    && right.sessionOwnerNodeGeneration !== undefined
+    && left.sessionOwnerId !== undefined
+    && right.sessionOwnerId !== undefined
+    && left.sessionOwnerLeaseGeneration !== undefined
+    && right.sessionOwnerLeaseGeneration !== undefined
+    && routingIdsEqual(left.sessionNodeRid, right.sessionNodeRid)
+    && left.sessionOwnerNodeGeneration === right.sessionOwnerNodeGeneration
+    && left.sessionOwnerId === right.sessionOwnerId
+    && left.sessionOwnerLeaseGeneration === right.sessionOwnerLeaseGeneration;
+}
+
+function sameRemoteSessionOwner(
+  left: ZLinkRemoteBoundSessionTarget,
+  right: ZLinkRemoteSessionOwnerIdentity
+): boolean {
+  return left.sessionRid !== undefined
+    && right.sessionRid !== undefined
+    && routingIdsEqual(left.sessionRid, right.sessionRid)
+    && sameRemoteSessionOwnerLifecycle(left, right);
+}
+
+type ZLinkBoundSessionBindingIdentity = Pick<
+  ZLinkRemoteBoundSessionTarget,
+  keyof ZLinkRemoteSessionOwnerIdentity
+  | 'bindingGeneration'
+>;
+
+function sameRemoteSessionBinding(
+  left: ZLinkRemoteBoundSessionTarget,
+  right: ZLinkBoundSessionBindingIdentity
+): boolean {
+  return sameRemoteSessionOwner(left, right)
+    && left.bindingGeneration !== undefined
+    && right.bindingGeneration !== undefined
+    && left.bindingGeneration === right.bindingGeneration;
 }
 
 /**
@@ -494,6 +572,80 @@ export class ZLinkActorRuntimeState {
         };
       }
     }
+  }
+
+  /** @internal Installs one authority-confirmed binding inside its Actor owner turn. */
+  installBoundSessionBinding(target: ZLinkRemoteBoundSessionTarget): boolean {
+    if (
+      target.sessionNodeRid === undefined
+      || target.sessionRid === undefined
+      || target.sessionOwnerNodeGeneration === undefined
+      || target.sessionOwnerId === undefined
+      || target.sessionOwnerLeaseGeneration === undefined
+      || target.bindingGeneration === undefined
+    ) {
+      throw new TypeError('An installed bound Session target requires its complete binding identity.');
+    }
+    const current = preferredRemoteBoundSessionTarget(
+      this.remoteBoundSessionTargetValue,
+      this.boundSessionTransferTargetValue
+    );
+    if (current !== undefined && sameRemoteSessionOwnerLifecycle(current, target)) {
+      // A duplicate command for the exact physical Session is idempotent. A
+      // different Session in the same owner lifecycle must advance that
+      // lifecycle's generation; a late equal/lower generation is stale.
+      if (sameRemoteSessionOwner(current, target)) return true;
+      if (
+        current.bindingGeneration !== undefined
+        && current.bindingGeneration >= target.bindingGeneration
+      ) return false;
+    }
+    const installed = mergeRemoteBoundSessionTarget(target, current);
+    // Binding generations are scoped to a Session-owner lifecycle. A restarted
+    // owner can legitimately reset its counter below the predecessor value.
+    this.boundSessionBindingGenerationValue = target.bindingGeneration;
+    this.remoteBoundSessionTargetValue = undefined;
+    this.boundSessionTransferTargetValue = {
+      ...installed,
+      bindingGeneration: target.bindingGeneration
+    };
+    return true;
+  }
+
+  /** @internal Removes only the exact authority-confirmed Session incarnation. */
+  retireBoundSessionBinding(target: ZLinkBoundSessionBindingIdentity): boolean {
+    if (
+      target.sessionNodeRid === undefined
+      || target.sessionRid === undefined
+      || target.sessionOwnerNodeGeneration === undefined
+      || target.sessionOwnerId === undefined
+      || target.sessionOwnerLeaseGeneration === undefined
+      || target.bindingGeneration === undefined
+    ) {
+      throw new TypeError('A retired bound Session target requires its complete binding identity.');
+    }
+    let retired = false;
+    if (
+      this.remoteBoundSessionTargetValue !== undefined
+      && sameRemoteSessionBinding(this.remoteBoundSessionTargetValue, target)
+    ) {
+      this.remoteBoundSessionTargetValue = undefined;
+      retired = true;
+    }
+    if (
+      this.boundSessionTransferTargetValue !== undefined
+      && sameRemoteSessionBinding(this.boundSessionTransferTargetValue, target)
+    ) {
+      this.boundSessionTransferTargetValue = undefined;
+      retired = true;
+    }
+    if (retired) {
+      this.boundSessionBindingGenerationValue = preferredRemoteBoundSessionTarget(
+        this.remoteBoundSessionTargetValue,
+        this.boundSessionTransferTargetValue
+      )?.bindingGeneration ?? 0n;
+    }
+    return retired;
   }
 
   setEntryNodeRid(entryNodeRid: RoutingId): void {

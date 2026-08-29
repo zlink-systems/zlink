@@ -28,6 +28,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace
@@ -3031,6 +3032,7 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
         .source_spot_id = spot_id_t ("actor-a-entry"),
         .source_spot_generation = 7,
         .target_spot_id = spot_id_t ("spot-b-target"),
+        .target_fence = target_fence,
         .not_before = std::chrono::steady_clock::now (),
         .leave_submitted = false,
         .leave_completed = false,
@@ -3139,6 +3141,351 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
     if (leave_calls.load (std::memory_order_acquire) != 1)
         return 6;
     return 0;
+}
+
+int early_zero_generation_leave_waits_for_source_transfer_completion ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    namespace stateful = zlink::framework::runtime::stateful;
+
+    // The target-side materialization path cannot project the source Spot
+    // lifecycle generation, so its node-level OnLeave command legitimately
+    // carries zero. Pin the ordering in which that one-way command reaches
+    // the source before complete_remote_actor_transfer has installed the
+    // source-cleanup record that resolves the generation. The command must
+    // be retained and applied exactly once after the completion registration.
+    serializer_registry_t serializers;
+    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    // Message Follow may be disabled independently of membership lifecycle.
+    // The early OnLeave must still survive until the source transfer completes.
+    node->message_follow_duration = std::chrono::milliseconds (0);
+    node->worker_executor =
+      std::make_shared<runtime::offload_executor_t> (1, 16, "early-actor-leave");
+    std::mutex blocker_mutex;
+    std::condition_variable blocker_changed;
+    std::optional<runtime::serial_execution_queue_t::async_completion_t> complete_blocker;
+    bool blocker_entered = false;
+    const auto release_blocker = [&] {
+        std::optional<runtime::serial_execution_queue_t::async_completion_t> completion;
+        {
+            std::lock_guard lock (blocker_mutex);
+            if (complete_blocker) {
+                completion.emplace (std::move (*complete_blocker));
+                complete_blocker.reset ();
+            }
+        }
+        if (completion)
+            (*completion) ([] {});
+    };
+    const auto finish = [&] (int code) {
+        release_blocker ();
+        if (node->worker_executor) {
+            node->worker_executor->drain ();
+            node->worker_executor.reset ();
+        }
+        return code;
+    };
+    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+
+    auto entry_spot = std::make_shared<spot_context_state_t> ();
+    entry_spot->node = node;
+    entry_spot->node_rid = node_rid_t::from_string ("actor-a");
+    entry_spot->spot_id = spot_id_t ("actor-a-entry");
+    entry_spot->spot_name = "entry";
+    entry_spot->spot_instance = std::make_shared<int> (1);
+    entry_spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    entry_spot->channel_runtime->serializers = &serializers;
+    entry_spot->serial_executor = node->worker_executor;
+    runtime::serial_execution_queue_options_t serial_options;
+    serial_options.lifecycle_message_capacity = 1;
+    serial_options.lifecycle_byte_capacity =
+      runtime::serial_execution_queue_t::fixed_work_byte_cost;
+    entry_spot->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *entry_spot->serial_executor, serial_options);
+    const auto native_entry_spot = std::make_shared<service::spot_t> (
+      nullptr, stateful::object_ref_t{stateful::object_kind_t::user_spot, "actor-a-entry", 7, 0,
+                                      "mesh", "actor-a"});
+    entry_spot->native_spot = native_entry_spot;
+    node->spot_contexts_by_id.emplace (entry_spot->spot_id,
+                                       spot_context_access_t::create (entry_spot));
+
+    std::atomic_int leave_calls{0};
+    spot_actor_admission_callbacks_t callbacks;
+    callbacks.on_leave_actor = [&leave_calls] (void *, void *) -> task_t<void> {
+        leave_calls.fetch_add (1, std::memory_order_acq_rel);
+        co_return;
+    };
+    entry_spot->actor_admissions.emplace (std::type_index (typeid (int)), std::move (callbacks));
+
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.create_instance = [] (std::string) { return std::make_shared<int> (1); };
+    factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+    node->actor_factories.emplace ("player", std::move (factory));
+
+    constexpr auto transfer_id = "transfer-early-leave";
+    const auto actor = test_actor_ref ("actor-a", "player", "early-leave-actor", 7);
+    const auto target_actor = test_actor_ref ("actor-b", "player", "early-leave-actor", 7);
+    const auto key = std::string ("player:early-leave-actor");
+    node->actor_instances.emplace (key, std::make_shared<int> (1));
+    node->actor_spot_ids.emplace (key, entry_spot->spot_id);
+    node->actor_generations.emplace (key, 7);
+    if (!node->actor_transfer_coordinator.try_reserve_source (key, transfer_id)
+        || !node->actor_transfer_coordinator.try_begin_source_remote (key, transfer_id)) {
+        return finish (1);
+    }
+
+    class fixed_authority_store_t final : public stateful::authority_relocation_port_t
+    {
+      public:
+        std::optional<stateful::authority_relocation_reference_t> record;
+
+        stateful::authority_publish_result_t publish (const stateful::object_ref_t &,
+                                                      const stateful::object_ref_t &,
+                                                      location_owner_token_t,
+                                                      object_creation_target_t,
+                                                      std::string,
+                                                      std::uint32_t,
+                                                      stateful::inventory_digest_t,
+                                                      std::vector<std::byte> = {}) override
+        {
+            return {};
+        }
+        std::optional<stateful::authority_relocation_reference_t>
+        read (stateful::object_kind_t, const std::string &) override
+        {
+            return record;
+        }
+    };
+    auto authority = std::make_shared<fixed_authority_store_t> ();
+    authority->record = stateful::authority_relocation_reference_t{
+      .source = stateful::object_ref_t{stateful::object_kind_t::actor, "early-leave-actor", 7, 0,
+                                       "", "actor-a"},
+      .target = stateful::object_ref_t{stateful::object_kind_t::actor, "early-leave-actor", 7, 5,
+                                       "", "actor-b"},
+      .relocation_reference = transfer_id,
+      .checksum_crc32c = 0,
+      .inventory_digest = {},
+      .target_owner = location_owner_token_t{"owner-b", 9},
+      .application_payload = {}};
+    node->relocation_authority = authority;
+
+    const auto source_fence = runtime::protocol::actor_route_fence_t{
+      "early-leave-actor", 7, zlink::routing_id_t::from ("actor-a").to_bytes (), 1, 1, 1};
+    const auto target_fence = runtime::protocol::actor_route_fence_t{
+      "early-leave-actor", 7, zlink::routing_id_t::from ("actor-b").to_bytes (), 1, 5, 9};
+    const auto leave_command =
+      spot_actor_leave_route_command_t{.transfer_id = transfer_id,
+                                       .actor_node_rid = "actor-a",
+                                       .actor_type = "player",
+                                       .actor_id = "early-leave-actor",
+                                       .actor_generation = 7,
+                                       .source_spot_id = "actor-a-entry",
+                                       .source_spot_generation = 0,
+                                       .target_spot_id = "spot-b-target",
+                                       .target_node_rid = "actor-b",
+                                       .target_node_generation = 1,
+                                       .target_authority_owner_generation = 5,
+                                       .target_owner_lease_generation = 9};
+    runtime::messaging::envelope_header_t leave_header;
+    leave_header.kind = runtime::messaging::message_kind_t::command;
+    leave_header.channel_name = "node";
+    leave_header.message_name = spot_actor_leave_route_command_t::packet_name;
+
+    spot_node_runtime_t spots (node);
+    service_collection_t services;
+    services.add_singleton<actor_gateway_runtime_t> ();
+    auto provider = services.build_provider ();
+    node->route_client_lane.run ([&] { node->route_client.emplace (); }).get ();
+    const runtime::host::ready_record_t owner{
+      .owner_kind = runtime::host::owner_kind_t::node,
+      .domain = runtime::host::ready_domain_t::application};
+    const auto dispatch_leave = [&] (
+                                  const spot_actor_leave_route_command_t &command,
+                                  std::function<void ()> transfer_owner_reservation = {},
+                                  std::size_t transferred_owner_byte_cost = 0) {
+        auto encoded = runtime::messaging::envelope_codec_t{}.encode_parts (
+          leave_header, command, serializers);
+        auto parts = std::move (encoded).take_items ();
+        runtime::host::receive_record_t record{
+          .kind = runtime::host::record_kind_t::node_send,
+          .domain = runtime::host::ready_domain_t::application};
+        record.source_node_rid = zlink::routing_id_t::from ("actor-b");
+        record.transferred_owner_byte_cost = transferred_owner_byte_cost;
+        const bool owns_terminal = static_cast<bool> (transfer_owner_reservation);
+        bool terminal_deferred = false;
+        const auto handled = spots.dispatch_mesh_record (
+          owner, record, parts, provider, serializers, std::move (transfer_owner_reservation),
+          &terminal_deferred);
+        return handled && (!owns_terminal || terminal_deferred);
+    };
+
+    const auto lifecycle = runtime::serial_work_options_t{
+      runtime::serial_work_lane_t::lifecycle,
+      runtime::serial_execution_queue_t::fixed_work_byte_cost};
+    if (!entry_spot->serial_queue->try_post_async (
+          "block-source-lifecycle-capacity",
+          [&] (auto complete) {
+              std::lock_guard lock (blocker_mutex);
+              complete_blocker.emplace (std::move (complete));
+              blocker_entered = true;
+              blocker_changed.notify_all ();
+          },
+          lifecycle)) {
+        return finish (10);
+    }
+    {
+        std::unique_lock lock (blocker_mutex);
+        if (!blocker_changed.wait_for (lock, std::chrono::seconds (2),
+                                      [&] { return blocker_entered; })) {
+            return finish (11);
+        }
+    }
+    if (entry_spot->serial_queue->try_post (
+          "untransferred-source-lifecycle-over-capacity", [] {}, lifecycle)) {
+        return finish (12);
+    }
+
+    std::atomic_int owner_reservation_settles{0};
+    constexpr auto transferred_owner_byte_cost =
+      runtime::serial_execution_queue_t::fixed_work_byte_cost * 2;
+    const auto early = dispatch_leave (
+      leave_command,
+      [&] { owner_reservation_settles.fetch_add (1, std::memory_order_release); },
+      transferred_owner_byte_cost);
+    const auto early_state = node->lane.run ([&] {
+        const auto reservation_retained = !node->pending_remote_actor_leaves.empty ()
+                                          && static_cast<bool> (
+                                            node->pending_remote_actor_leaves.front ()
+                                              .transfer_owner_reservation)
+                                          && node->pending_remote_actor_leaves.front ()
+                                               .transferred_owner_byte_cost
+                                               == transferred_owner_byte_cost;
+        return std::make_tuple (node->pending_remote_source_cleanups.size (),
+                                node->pending_remote_actor_leaves.size (),
+                                reservation_retained);
+    }).get ();
+    if (!early || leave_calls.load (std::memory_order_acquire) != 0
+        || owner_reservation_settles.load (std::memory_order_acquire) != 0
+        || std::get<0> (early_state) != 0 || std::get<1> (early_state) != 1
+        || !std::get<2> (early_state)) {
+        return finish (2);
+    }
+
+    std::atomic_int exact_duplicate_reservation_settles{0};
+    const auto exact_duplicate = dispatch_leave (
+      leave_command,
+      [&] { exact_duplicate_reservation_settles.fetch_add (1, std::memory_order_release); },
+      transferred_owner_byte_cost);
+    if (!exact_duplicate
+        || exact_duplicate_reservation_settles.load (std::memory_order_acquire) != 1
+        || owner_reservation_settles.load (std::memory_order_acquire) != 0) {
+        return finish (13);
+    }
+
+    auto conflicting_command = leave_command;
+    conflicting_command.target_spot_id = "spot-b-conflict";
+    conflicting_command.target_node_generation = 2;
+    std::atomic_int conflicting_reservation_settles{0};
+    const auto conflict = dispatch_leave (
+      conflicting_command,
+      [&] { conflicting_reservation_settles.fetch_add (1, std::memory_order_release); },
+      transferred_owner_byte_cost);
+    const auto pending_after_conflict = node->lane.run ([&] {
+        return node->pending_remote_actor_leaves.size ();
+    }).get ();
+    if (!conflict || pending_after_conflict != 1
+        || conflicting_reservation_settles.load (std::memory_order_acquire) != 1)
+        return finish (8);
+
+    const auto swept_active = spots.cleanup_expired_actor_admissions_at (
+      std::chrono::steady_clock::now () + std::chrono::seconds (31));
+    const auto pending_after_active_sweep = node->lane.run ([&] {
+        return node->pending_remote_actor_leaves.size ();
+    }).get ();
+    if (swept_active != 0 || pending_after_active_sweep != 1)
+        return finish (9);
+
+    const auto completed = finite_task_result (spots.complete_remote_actor_transfer (
+      actor, target_actor,
+      spot_route_t{node_rid_t::from_string ("actor-b"), spot_id_t ("spot-b-target"), "game"},
+      source_fence, target_fence, transfer_id));
+    if (!completed || !*completed)
+        return finish (3);
+
+    const auto admitted_leave_state = node->lane.run ([&] {
+        const auto cleanup = std::find_if (
+          node->pending_remote_source_cleanups.begin (),
+          node->pending_remote_source_cleanups.end (),
+          [&] (const auto &candidate) { return candidate.transfer_id == transfer_id; });
+        return std::make_tuple (
+          cleanup != node->pending_remote_source_cleanups.end () && cleanup->leave_submitted,
+          cleanup != node->pending_remote_source_cleanups.end () && cleanup->leave_completed,
+          node->pending_remote_actor_leaves.size ());
+    }).get ();
+    if (owner_reservation_settles.load (std::memory_order_acquire) != 1
+        || leave_calls.load (std::memory_order_acquire) != 0
+        || entry_spot->serial_queue->pending_count (runtime::serial_work_lane_t::lifecycle) != 2
+        || !std::get<0> (admitted_leave_state) || std::get<1> (admitted_leave_state)
+        || std::get<2> (admitted_leave_state) != 0) {
+        return finish (14);
+    }
+    release_blocker ();
+
+    const auto leave_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    struct leave_state_t
+    {
+        bool cleanup_present = false;
+        bool leave_submitted = false;
+        bool leave_completed = false;
+        std::size_t pending_leaves = 0;
+    };
+    leave_state_t leave_state;
+    do {
+        leave_state = node->lane.run ([&] {
+            leave_state_t state;
+            const auto cleanup = std::find_if (
+              node->pending_remote_source_cleanups.begin (),
+              node->pending_remote_source_cleanups.end (),
+              [&] (const auto &candidate) { return candidate.transfer_id == transfer_id; });
+            state.cleanup_present = cleanup != node->pending_remote_source_cleanups.end ();
+            if (state.cleanup_present) {
+                state.leave_submitted = cleanup->leave_submitted;
+                state.leave_completed = cleanup->leave_completed;
+            }
+            state.pending_leaves = node->pending_remote_actor_leaves.size ();
+            return state;
+        }).get ();
+        if (leave_calls.load (std::memory_order_acquire) == 1 && leave_state.cleanup_present
+            && leave_state.leave_submitted && leave_state.leave_completed
+            && leave_state.pending_leaves == 0) {
+            break;
+        }
+        std::this_thread::yield ();
+    } while (std::chrono::steady_clock::now () < leave_deadline);
+    if (leave_calls.load (std::memory_order_acquire) != 1 || !leave_state.cleanup_present
+        || !leave_state.leave_submitted || !leave_state.leave_completed
+        || leave_state.pending_leaves != 0) {
+        return finish (4);
+    }
+
+    const auto duplicate = dispatch_leave (leave_command);
+    if (!duplicate)
+        return finish (5);
+    node->worker_executor->drain ();
+    if (leave_calls.load (std::memory_order_acquire) != 1)
+        return finish (6);
+
+    (void) spots.cleanup_expired_actor_admissions_at (
+      std::chrono::steady_clock::now () + std::chrono::seconds (31));
+    const auto late_duplicate = dispatch_leave (leave_command);
+    const auto pending_after_late_duplicate = node->lane.run ([&] {
+        return node->pending_remote_actor_leaves.size ();
+    }).get ();
+    return finish (late_duplicate && pending_after_late_duplicate == 0 ? 0 : 7);
 }
 
 int rebound_session_keeps_prior_ingress_exact_fence ()
@@ -4293,13 +4640,19 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
     actor_gateway_runtime_t gateway (state);
     const auto actor = test_actor_ref ("join-completion-node", "game.actor", "join-player", 7);
     auto delivery = std::make_shared<task_completion_source_t<void>> ();
+    std::atomic_int delivery_calls{0};
     std::atomic_bool delivery_started{false};
+    std::atomic_bool next_delivery_started{false};
     if (!gateway.bind_session_sink (
           actor,
-          [delivery, &delivery_started] (std::string, stream_codec_t,
-                                         const zlink::message_t &) -> task_t<void> {
-              delivery_started.store (true, std::memory_order_release);
-              co_await delivery->task ();
+          [delivery, &delivery_calls, &delivery_started, &next_delivery_started] (
+            std::string, stream_codec_t, const zlink::message_t &) -> task_t<void> {
+              if (delivery_calls.fetch_add (1, std::memory_order_acq_rel) == 0) {
+                  delivery_started.store (true, std::memory_order_release);
+                  co_await delivery->task ();
+              } else {
+                  next_delivery_started.store (true, std::memory_order_release);
+              }
               co_return;
           })) {
         return 1;
@@ -4314,14 +4667,24 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
     std::mutex mutex;
     std::condition_variable changed;
     std::optional<result_t<void>> terminal;
-    gateway.settle_join_completion_delivery_fence (actor, fence, result_t<void>::success (),
-                                                   [&] (result_t<void> result) {
-                                                       {
-                                                           std::lock_guard lock (mutex);
-                                                           terminal.emplace (std::move (result));
-                                                       }
-                                                       changed.notify_all ();
-                                                   });
+    std::atomic<int> terminal_calls{0};
+    gateway.settle_join_completion_delivery_fence (
+      actor, fence, result_t<void>::success (), [&] (result_t<void> result) {
+          terminal_calls.fetch_add (1, std::memory_order_relaxed);
+          {
+              std::lock_guard lock (mutex);
+              terminal.emplace (std::move (result));
+          }
+          changed.notify_all ();
+          throw std::runtime_error ("delivery settlement observer failed");
+      });
+    const auto delivery_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
+    while (!delivery_started.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < delivery_deadline) {
+        std::this_thread::yield ();
+    }
+    if (!delivery_started.load (std::memory_order_acquire))
+        return 4;
     {
         std::unique_lock lock (mutex);
         if (changed.wait_for (lock, std::chrono::milliseconds (25),
@@ -4329,17 +4692,47 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
             return 3;
         }
     }
-    if (!delivery_started.load (std::memory_order_acquire))
-        return 4;
-    delivery->complete (result_t<void>::success ());
+    auto next_submitted = gateway.actor_context (actor)
+                            .bound_session ()
+                            .send (std::string ("after-settlement-observer"))
+                            .submit ();
+    if (!next_submitted.result () || next_delivery_started.load (std::memory_order_acquire)) {
+        return 5;
+    }
+    delivery->complete (
+      result_t<void>::failure (framework_error_kind_t::unavailable, "join callback push failed"));
     {
         std::unique_lock lock (mutex);
         if (!changed.wait_for (lock, std::chrono::seconds (1),
                                [&] { return terminal.has_value (); })) {
-            return 5;
+            return 6;
         }
     }
-    return *terminal ? 0 : 6;
+    const auto next_delivery_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (1);
+    while (!next_delivery_started.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < next_delivery_deadline) {
+        std::this_thread::yield ();
+    }
+    if (!next_delivery_started.load (std::memory_order_acquire))
+        return 7;
+    if (*terminal || terminal->error_kind () != framework_error_kind_t::unavailable
+        || terminal_calls.load (std::memory_order_relaxed) != 1) {
+        return 8;
+    }
+
+    const auto next_fence = gateway.begin_join_completion_delivery_fence (actor);
+    if (next_fence == fence)
+        return 9;
+    std::atomic<int> next_terminal_calls{0};
+    bool next_succeeded = false;
+    gateway.settle_join_completion_delivery_fence (
+      actor, next_fence, result_t<void>::success (), [&] (result_t<void> result) {
+          next_succeeded = static_cast<bool> (result);
+          next_terminal_calls.fetch_add (1, std::memory_order_relaxed);
+          throw std::runtime_error ("immediate settlement observer failed");
+      });
+    return next_succeeded && next_terminal_calls.load (std::memory_order_relaxed) == 1 ? 0 : 10;
 }
 
 int main ()
@@ -4455,6 +4848,11 @@ int main ()
           leave_notification_travels_node_level_and_reaches_source_entry_spot_once ();
         leave_notify != 0) {
         return 330 + leave_notify;
+    }
+    if (const auto early_leave =
+          early_zero_generation_leave_waits_for_source_transfer_completion ();
+        early_leave != 0) {
+        return 390 + early_leave;
     }
     if (const auto pending = disconnect_notification_survives_pending_dispatcher_completion ();
         pending != 0) {

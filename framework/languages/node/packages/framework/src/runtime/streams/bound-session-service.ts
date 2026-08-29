@@ -354,7 +354,8 @@ export class ZLinkBoundSessionService {
       if ((await this.routes.route(actorId))?.bindingToken !== route.bindingToken) {
         return false;
       }
-      if (!route.context.stream.writeRaw(frame)) {
+      const result = await route.context.stream.submitRaw(frame);
+      if (result.status !== ZLinkSubmitStatus.Submitted) {
         throw new Error(`Actor '${actorId}' local bound session ${operationName} failed.`);
       }
       return true;

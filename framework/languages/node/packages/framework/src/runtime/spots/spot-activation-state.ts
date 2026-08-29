@@ -269,6 +269,22 @@ export class ZLinkSpotActivation {
     return this.serialExecutor.executeActor(actorId, operation);
   }
 
+  /** @internal Restores a non-executing durable prefix into one Actor FIFO. */
+  admitActorDurablePrefix(
+    actorId: string,
+    records: readonly {
+      readonly operation: (
+        executeChild: <TChild>(
+          child: (serial: import('./spot-serial-turn-executor').ZLinkSpotSerialTurnExecutor) =>
+            Promise<TChild> | TChild
+        ) => Promise<TChild>
+      ) => Promise<void>;
+      readonly workOptions?: import('../execution/serial-execution-queue').ZLinkSerialWorkOptions;
+    }[]
+  ): readonly Promise<void>[] {
+    return this.serialExecutor.admitActorDurablePrefix(actorId, records);
+  }
+
   sealExecution(): ZLinkExecutionBarrierSeal {
     return this.executionBarrier.seal();
   }

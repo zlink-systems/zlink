@@ -23,7 +23,10 @@ import type {
 } from '../backend/contracts';
 import { RequestResult, isBackendNotConnectedError } from '../backend/runtime-values';
 import { ZLinkBufferMessage as NativeMessage } from '../backend/runtime-message';
-import type { StreamSessionService } from '../foundation/service-runtime-contracts';
+import type {
+  StreamSessionActorAuthorityFence,
+  StreamSessionService
+} from '../foundation/service-runtime-contracts';
 import type { ServiceRetiredBoundSessionRouteFence } from '../foundation/service-stateful-wire-codec';
 import type { ServiceActorRef } from '../foundation/service-stateful-registry';
 import {
@@ -36,6 +39,7 @@ import {
   encodeStreamControlFrame,
   ZLinkStreamCloseReasonCode
 } from './protocol';
+import type { ZLinkActorSessionAuthorityFence } from './actor-session-binding-registry';
 
 const ZLINK_SEND_DONT_WAIT = 1;
 const NO_ACCEPTED_TERMINAL_RESULTS: ReadonlySet<number> = new Set();
@@ -181,7 +185,8 @@ export class ZLinkManagedStream implements ZLinkStream {
     onBindingReplaced?: (
       actor: ServiceActorRef,
       retiredSession: ServiceRetiredBoundSessionRouteFence
-    ) => void
+    ) => void,
+    authorityFence?: ZLinkActorSessionAuthorityFence
   ): Promise<void> {
     throwIfAborted(signal);
     if (this.transportClosed) {
@@ -214,7 +219,8 @@ export class ZLinkManagedStream implements ZLinkStream {
             ? undefined
             : (_actorId, retiredSession, replacedActor) => {
                 onBindingReplaced(replacedActor, retiredSession);
-              }
+              },
+          toStreamSessionActorAuthorityFence(authorityFence)
         ),
         `Actor '${actor.actorId}' native session bind`,
       );
@@ -443,7 +449,8 @@ export class ZLinkManagedStream implements ZLinkStream {
       actor: string,
       retiredSession: ServiceRetiredBoundSessionRouteFence,
       replacedActor: ServiceActorRef
-    ) => void
+    ) => void,
+    actorAuthority?: StreamSessionActorAuthorityFence
   ): Promise<ZLinkMeshCompletion> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
@@ -454,7 +461,8 @@ export class ZLinkManagedStream implements ZLinkStream {
             this.backendRoutingId(),
             actor,
             Math.max(0, deadline - Date.now()),
-            onBindingReplaced
+            onBindingReplaced,
+            actorAuthority
           ),
           signal
         );
@@ -528,6 +536,17 @@ function toNativeActorRef(actor: ActorRef): ZLinkBackendActorRef {
     nodeRid: actor.nodeRid,
     actorId: actor.actorId,
     generation: actor.objectGeneration
+  };
+}
+
+function toStreamSessionActorAuthorityFence(
+  fence: ZLinkActorSessionAuthorityFence | undefined
+): StreamSessionActorAuthorityFence | undefined {
+  if (fence?.ownerNodeGeneration === undefined) return undefined;
+  return {
+    targetNodeGeneration: fence.ownerNodeGeneration,
+    authorityOwnerGeneration: fence.authorityOwnerGeneration,
+    ownerLeaseGeneration: fence.ownerLeaseGeneration
   };
 }
 

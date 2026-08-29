@@ -1,4 +1,8 @@
 import type { Message } from '../../contracts/Common/Message';
+import {
+  ZLinkSubmitStatus,
+  type ZLinkSubmitResult
+} from '../messaging/submission-result';
 import { ZLinkStreamMessageKind } from './protocol';
 import type { ZLinkStreamFrameMessageFactory } from './stream-frame-factory';
 
@@ -8,18 +12,18 @@ export interface ZLinkBoundSessionResponseTarget {
     requestSeq: bigint,
     message: unknown,
     metadata: ReadonlyMap<string, string>
-  ): boolean;
+  ): Promise<boolean>;
   sendError(
     packetName: string,
     requestSeq: bigint,
     error: unknown,
     metadata: ReadonlyMap<string, string>
-  ): boolean;
+  ): Promise<boolean>;
 }
 
 export interface ZLinkBoundSessionResponseContext {
   readonly stream: {
-    writeRaw(payload: Message): boolean;
+    submitRaw(payload: Message): Promise<ZLinkSubmitResult>;
   };
 }
 
@@ -35,7 +39,7 @@ export class DefaultZLinkBoundSessionResponseTarget implements ZLinkBoundSession
     requestSeq: bigint,
     message: unknown,
     metadata: ReadonlyMap<string, string>
-  ): boolean {
+  ): Promise<boolean> {
     return this.send(ZLinkStreamMessageKind.Response, packetName, requestSeq, message, metadata, 'response');
   }
 
@@ -44,21 +48,22 @@ export class DefaultZLinkBoundSessionResponseTarget implements ZLinkBoundSession
     requestSeq: bigint,
     error: unknown,
     metadata: ReadonlyMap<string, string>
-  ): boolean {
+  ): Promise<boolean> {
     return this.send(ZLinkStreamMessageKind.Error, packetName, requestSeq, boundSessionErrorPayload(error), metadata, 'error response');
   }
 
-  private send(
+  private async send(
     kind: ZLinkStreamMessageKind,
     packetName: string,
     requestSeq: bigint,
     payload: unknown,
     metadata: ReadonlyMap<string, string>,
     operationName: string
-  ): boolean {
+  ): Promise<boolean> {
     const frame = this.frameMessages.createJsonFrameMessage(kind, packetName, metadata, false, requestSeq, payload);
     try {
-      if (!this.context.stream.writeRaw(frame)) {
+      const result = await this.context.stream.submitRaw(frame);
+      if (result.status !== ZLinkSubmitStatus.Submitted) {
         throw new Error(`Actor '${this.actorId}' local bound session ${operationName} failed.`);
       }
       return true;

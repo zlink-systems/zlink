@@ -29,7 +29,7 @@ final class ZLinkJavaRouterSocket
     @Override public synchronized void connect(String endpoint) { socket.connect(endpoint); }
     @Override public synchronized void disconnect(String endpoint) { socket.disconnect(endpoint); }
     @Override public void setChannelName(String channelName) { ZLinkJavaSocketSupport.validateChannelName(channelName); }
-    @Override public synchronized void setReceiveFlowState(ReceiveFlowState state) {
+    @Override public void setReceiveFlowState(ReceiveFlowState state) {
         socket.options().receiveFlowState(state);
     }
     @Override public void setRoutingId(RoutingId routingId) { socket.setRoutingId(routingId); }
@@ -45,7 +45,7 @@ final class ZLinkJavaRouterSocket
     }
 
     @Override
-    public synchronized ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
+    public ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
         try (Received result = new Received()) {
             return ZLinkJavaSocketSupport.recvOrNoData(
                     () -> socket.recv(result, ZLinkJavaSocketSupport.map(mode)))

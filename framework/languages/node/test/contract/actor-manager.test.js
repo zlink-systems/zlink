@@ -19,6 +19,20 @@ const {
   ZLinkSpotActorPacketDispatch
 } = require('../../packages/framework/dist/runtime/spots/spot-actor-packet-dispatch');
 const {
+  ZLinkActorSerialExecutor
+} = require('../../packages/framework/dist/runtime/actors/actor-mailbox');
+const {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} = require('../../packages/framework/dist/runtime/host/application-job-queue');
+const {
+  runWithApplicationJobPermit
+} = require('../../packages/framework/dist/runtime/application-jobs/application-job-queue-scope');
+const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
+const messageFollow = require(
+  '../../packages/framework/dist/runtime/actors/actor-message-follow-context'
+);
+const {
   runActorHandlerWithDeferredJoins
 } = require('../../packages/framework/dist/runtime/actors/actor-join-deferred-scope');
 const payloadCodec = require('../../packages/framework/dist/runtime/messaging/payload-codec');
@@ -2853,6 +2867,16 @@ test('Core source leave submission releases the target fence before its callback
 test('precommit abort reopens source admission and replays backlog before one-way command 44 abort', async () => {
   const actor = { context: { actorId: 'actor-abort-reopen' } };
   const events = [];
+  const mailbox = new ZLinkActorSerialExecutor(actor.context.actorId, rid('room-source'));
+  const applicationQueue = new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration(
+      { maxQueuedApplicationJobs: 1n },
+      () => 1n
+    )
+  );
+  let replayAdmissions = 0;
+  let prefixTerminal = Promise.resolve();
+  let outerEnded = false;
   let moving = false;
   let remoteTarget = {
     routerChannelId: 'session.route',
@@ -2913,10 +2937,53 @@ test('precommit abort reopens source admission and replays backlog before one-wa
     spotManager: () => ({
       async beginActorTransfer() { events.push('begin-transfer'); },
       async cancelActorTransfer() { events.push('cancel-transfer'); },
-      async dispatchRoutedActorPacket(_spotId, _actorId, parts) {
+      admitRoutedActorPacketPrefix(_spotId, _actorId, records) {
+        events.push('prefix-admitted');
+        const terminals = mailbox.admitDurablePrefix(
+          records.map(record => ({
+            operation: executeChild => record.drain((parts) =>
+              executeChild(async () => {
+                assert.equal(outerEnded, true, 'replay cannot overtake the Join failure turn');
+                events.push(`replay:${parts[1].data().toString()}`);
+              })),
+            preparation: record.preparation,
+            workOptions: { payloadBytes: record.payloadBytes }
+          }))
+        );
+        prefixTerminal = Promise.all(terminals).then(() => undefined);
+        return { terminal: prefixTerminal };
+      },
+      async dispatchRoutedActorPacket() {
+        throw new Error('handoff replay must bypass ordinary capture');
+      },
+      async dispatchRoutedActorPacketDirect(_spotId, _actorId, parts) {
         events.push(`replay:${parts[1].data().toString()}`);
       }
     }),
+    async prepareApplicationJob(signal) {
+      const permit = await applicationQueue.acquire();
+      permit.markApplicationQueued();
+      replayAdmissions += 1;
+      let ready = true;
+      const abort = () => {
+        if (!ready) return;
+        ready = false;
+        permit.releaseAfterInternalProcessing();
+      };
+      signal.addEventListener('abort', abort, { once: true });
+      return {
+        async run(operation) {
+          assert.equal(ready, true);
+          ready = false;
+          signal.removeEventListener('abort', abort);
+          return await runWithApplicationJobPermit(permit, operation);
+        },
+        cancel() {
+          signal.removeEventListener('abort', abort);
+          abort();
+        }
+      };
+    },
     actorManager: () => ({ getState: () => state }),
     primaryMeshNode: () => ({
       status() {
@@ -2949,35 +3016,79 @@ test('precommit abort reopens source admission and replays backlog before one-wa
       async sendSessionRelocationRoute(_meshName, _targetNodeRid, route) {
         assert.equal(route.route.action, 'abort');
         events.push('session-abort');
+        const permit = await applicationQueue.acquire();
+        permit.markApplicationQueued();
+        events.push('tail-permit-acquired');
+        const parts = [zlink.Message.from('header:Q'), zlink.Message.from('Q')];
+        try {
+          await runWithApplicationJobPermit(permit, async () => {
+            const captured = coordinator.capture('actor-abort-reopen', parts, false);
+            assert.notEqual(captured, undefined, 'rollback hold must retain later ingress');
+            await captured;
+            events.push('tail-captured');
+          });
+        } finally {
+          parts.forEach(part => part.close());
+        }
       }
     }),
     clearRemoteActorPacketTarget() {}
   });
 
-  const prepared = await runtime.prepareMaintenanceSession(
-    actor,
-    state,
-    undefined,
-    true,
-    relocation
-  );
-  for (const value of ['P1', 'P2']) {
-    const parts = [zlink.Message.from(`header:${value}`), zlink.Message.from(value)];
-    await coordinator.capture('actor-abort-reopen', parts, false);
-    parts.forEach((part) => part.close());
+  try {
+    let timeout;
+    try {
+      await Promise.race([
+        mailbox.execute(async () => {
+          const prepared = await runtime.prepareMaintenanceSession(
+            actor,
+            state,
+            undefined,
+            true,
+            relocation
+          );
+          for (const value of ['P1', 'P2']) {
+            const parts = [zlink.Message.from(`header:${value}`), zlink.Message.from(value)];
+            await coordinator.capture('actor-abort-reopen', parts, false);
+            parts.forEach((part) => part.close());
+          }
+          await prepared.rollback();
+          events.push('rollback-returned');
+          outerEnded = true;
+        }),
+        new Promise((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error(`precommit rollback deadlocked: ${events.join(',')}`)),
+            1_000
+          );
+        })
+      ]);
+    } finally {
+      clearTimeout(timeout);
+    }
+    await prefixTerminal;
+    assert.deepEqual(events, [
+      'begin-transfer',
+      'session-sealed',
+      'cancel-transfer',
+      'prefix-admitted',
+      'session-abort',
+      'tail-permit-acquired',
+      'prefix-admitted',
+      'tail-captured',
+      'rollback-returned',
+      'replay:P1',
+      'replay:P2',
+      'replay:Q'
+    ]);
+    assert.equal(replayAdmissions, 3);
+    assert.equal(applicationQueue.snapshot().permitsInUse, 0n);
+    assert.equal(applicationQueue.snapshot().peakPermitsInUse, 1n);
+    assert.equal(moving, false);
+    assert.equal(coordinator.isActive('actor-abort-reopen'), false);
+  } finally {
+    await mailbox.close();
   }
-
-  await prepared.rollback();
-  assert.deepEqual(events, [
-    'begin-transfer',
-    'session-sealed',
-    'cancel-transfer',
-    'replay:P1',
-    'replay:P2',
-    'session-abort'
-  ]);
-  assert.equal(moving, false);
-  assert.equal(coordinator.isActive('actor-abort-reopen'), false);
 });
 
 test('target route opening never submits a second route after command 44', async () => {
@@ -4646,6 +4757,156 @@ test('spot actor dispatch rejects a missing handler before payload deserializati
   assert.equal(deserializeCalls, 0);
   header.close();
   payload.close();
+});
+
+test('queued bound-session Actor request reports DeadlineExceeded before handler admission', async () => {
+  let handlerInvocations = 0;
+  const terminalErrors = [];
+  class PlayerActor {
+    constructor(actorId) {
+      this.actorId = actorId;
+    }
+  }
+  class MoveHandler {
+    async handle() {
+      handlerInvocations += 1;
+    }
+  }
+  const actor = new PlayerActor('alice');
+  const registry = new framework.ZLinkSpotActorHandlerRegistryRuntime().addPacket({
+    kind: framework.ZLinkActorPacketKind.Request,
+    packetName: 'Move',
+    actorType: PlayerActor,
+    handlerType: MoveHandler
+  });
+  const dispatch = new ZLinkSpotActorPacketDispatch({
+    spot: { context: { meshName: 'play' } },
+    spotId: () => 'room-1',
+    registry,
+    resolveActor: () => actor,
+    onDisconnectActor: async () => {},
+    actorErrorSender: async (_actorId, _packetName, _requestSeq, error) => {
+      terminalErrors.push(error);
+    }
+  });
+  const deadlineUnixMs = Date.now() + 20;
+  const header = zlink.Message.from(Buffer.from(framework.encodeStreamHeader({
+    kind: framework.ZLinkStreamMessageKind.Request,
+    codec: framework.ZLinkStreamCodec.Json,
+    flags: framework.ZLinkStreamHeaderFlags.None,
+    requestSeq: 17n,
+    name: 'Move',
+    metadata: streamProtocol.actorRequestDeadlineMetadata(deadlineUnixMs)
+  })));
+  const payload = zlink.Message.from(Buffer.from('{}'));
+  const mailbox = new ZLinkActorSerialExecutor('alice', 'room-1');
+  let releaseBlocker;
+  let markStarted;
+  const started = new Promise(resolve => { markStarted = resolve; });
+  const blocked = new Promise(resolve => { releaseBlocker = resolve; });
+
+  try {
+    const blocker = mailbox.execute(async () => {
+      markStarted();
+      await blocked;
+    });
+    await started;
+    const queued = mailbox.execute(() => dispatch.dispatch(
+      'alice',
+      [header, payload],
+      false
+    ));
+    await new Promise(resolve => setTimeout(resolve, 30));
+    releaseBlocker();
+    await blocker;
+    assert.equal(await queued, undefined);
+    assert.equal(handlerInvocations, 0);
+    assert.equal(terminalErrors.length, 1);
+    assert.equal(
+      terminalErrors[0] instanceof framework.ZLinkFrameworkException
+        ? terminalErrors[0].kind
+        : undefined,
+      framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+    );
+  } finally {
+    header.close();
+    payload.close();
+    releaseBlocker?.();
+    await mailbox.close();
+  }
+});
+
+test('Message Follow replay keeps its captured Session route packet-scoped', async () => {
+  const received = [];
+  const rememberedTargets = [];
+  class PlayerActor {
+    constructor(actorId) {
+      this.actorId = actorId;
+    }
+  }
+  class StateHandler {
+    async handle(_spot, _actor, _context, value) {
+      received.push(value);
+    }
+  }
+  const actor = new PlayerActor('alice');
+  const registry = new framework.ZLinkSpotActorHandlerRegistryRuntime().addPacket({
+    kind: framework.ZLinkActorPacketKind.Send,
+    packetName: 'State',
+    actorType: PlayerActor,
+    handlerType: StateHandler
+  });
+  const dispatch = new ZLinkSpotActorPacketDispatch({
+    spot: { context: { meshName: 'play' } },
+    spotId: () => 'room-1',
+    registry,
+    resolveActor: () => actor,
+    onRemoteBoundSessionTarget: (_actorId, target) => rememberedTargets.push(target),
+    onDisconnectActor: async () => {}
+  });
+  const header = zlink.Message.from(Buffer.from(framework.encodeStreamHeader({
+    kind: framework.ZLinkStreamMessageKind.Send,
+    codec: framework.ZLinkStreamCodec.Json,
+    flags: framework.ZLinkStreamHeaderFlags.None,
+    name: 'State',
+    metadata: new Map()
+  })));
+  const payload = zlink.Message.from(Buffer.from('{"position":45}'));
+  const actorRef = {
+    nodeRid: zlink.RoutingId.from('actor-node'),
+    actorId: 'alice',
+    objectGeneration: 1n,
+    meshName: 'play'
+  };
+  const context = messageFollow.createInitialActorMessageFollowContext({
+    actorRef,
+    ownerId: 'actor-owner',
+    ownerLeaseGeneration: 1n,
+    ownerNodeGeneration: 1n,
+    authorityOwnerGeneration: 1n
+  }, [header, payload], false);
+  const replayRef = messageFollow.attachActorMessageFollowContext(actorRef, context);
+  const predecessorTarget = {
+    routerChannelId: 'play.route',
+    targetNodeRid: zlink.RoutingId.from('session-node'),
+    spotId: zlink.RoutingId.from('session-entry'),
+    bindingGeneration: 100n
+  };
+
+  try {
+    await dispatch.dispatch(
+      'alice',
+      [header, payload],
+      false,
+      predecessorTarget,
+      replayRef
+    );
+    assert.deepEqual(received, [{ position: 45 }]);
+    assert.deepEqual(rememberedTargets, []);
+  } finally {
+    header.close();
+    payload.close();
+  }
 });
 
 test('spot actor dispatch selects the decoder from the packet codec header', async () => {

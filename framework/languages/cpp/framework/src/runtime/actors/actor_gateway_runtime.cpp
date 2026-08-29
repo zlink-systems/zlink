@@ -52,8 +52,13 @@ class bound_session_delivery_fence_t
                 --_pending;
             take_terminal_unlocked (settled, terminal);
         }
-        if (settled)
-            settled (std::move (*terminal));
+        if (settled) {
+            try {
+                settled (std::move (*terminal));
+            }
+            catch (...) {
+            }
+        }
     }
 
     void seal (result_t<void> result, std::function<void (result_t<void>)> settled)
@@ -68,8 +73,13 @@ class bound_session_delivery_fence_t
             _settled = std::move (settled);
             take_terminal_unlocked (ready, terminal);
         }
-        if (ready)
-            ready (std::move (*terminal));
+        if (ready) {
+            try {
+                ready (std::move (*terminal));
+            }
+            catch (...) {
+            }
+        }
     }
 
   private:

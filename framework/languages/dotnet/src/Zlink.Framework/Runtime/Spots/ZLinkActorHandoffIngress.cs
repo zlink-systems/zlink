@@ -137,11 +137,19 @@ internal static class ZLinkActorHandoffIngress
             try
             {
                 var state = runtime.GetOrCreateActorState(frame.Actor.ActorId);
+                var ingress = state.Handoff.ProjectArrivalIngress(
+                    state.NativeActorRef,
+                    frame,
+                    runtime,
+                    static (rt, fr) =>
+                        ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(rt, fr));
+                var capture = ingress.Capture;
                 try
                 {
                     if (ZLinkActorMessageFollowDispatcher.TryFollow(
                             runtime,
                             state,
+                            ingress.Route,
                             frame.Actor,
                             frame.SourceNodeRid,
                             frame.SourceSessionRid,
@@ -162,19 +170,23 @@ internal static class ZLinkActorHandoffIngress
                 catch (ZLinkFrameworkException exception)
                     when (exception.Kind == ZLinkFrameworkErrorKind.Unavailable)
                 {
-                    // The async dispatcher owns stale request replies.
+                    // A Message Follow resolution is projected before capture
+                    // so a valid relay is never backlogged. If validation
+                    // rejects that route, preserve the previous pump-order
+                    // fallback capture before the detached dispatch batch.
+                    if (ingress.Route.Route == ZLinkActorFrameRoute.MessageFollow)
+                        capture = state.Handoff.TryCapture(
+                            frame,
+                            runtime,
+                            static (rt, fr) =>
+                                ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(rt, fr));
                 }
 
                 // Capture here, in pump-event order: the dispatch batches run
                 // detached and concurrently, so capturing inside the pipeline
                 // would race sibling frames and break the backlog's arrival
                 // sequence (spec 23 §10.2).
-                if (state.Handoff.TryCapture(
-                        frame,
-                        runtime,
-                        static (rt, fr) =>
-                            ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(rt, fr))
-                    == ZLinkActorHandoffCaptureResult.Captured)
+                if (capture == ZLinkActorHandoffCaptureResult.Captured)
                 {
                     // TryCapture copied the payload into the durable handoff
                     // aggregate. The raw Message no longer owns any bytes for

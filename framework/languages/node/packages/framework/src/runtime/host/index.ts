@@ -1,4 +1,8 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException,
+  internalFrameworkWireReply
+} from '../framework-errors-internal';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import {
@@ -713,6 +717,50 @@ export class ZLinkFrameworkRuntimeHost implements
       sessionRelocationWire: () => this.serviceRelocation,
       clearRemoteActorPacketTarget: (actorId) =>
         this.boundSessionRelay.clearRemoteActorPacketTarget(actorId),
+      prepareApplicationJob: async (preparationSignal) => {
+        const runtimeSignal = this.executionState?.abortController.signal;
+        const signal = runtimeSignal === undefined
+          ? preparationSignal
+          : AbortSignal.any([runtimeSignal, preparationSignal]);
+        const permit = await this.applicationJobQueue.acquire(signal);
+        let state: 'ready' | 'running' | 'closed' = 'ready';
+        let closedReason: unknown;
+        let abort: (() => void) | undefined;
+        const cancel = (reason?: unknown): void => {
+          if (state !== 'ready') return;
+          state = 'closed';
+          closedReason = reason;
+          if (abort !== undefined) signal.removeEventListener('abort', abort);
+          permit.releaseAfterInternalProcessing();
+        };
+        try {
+          if (signal.aborted) {
+            cancel(signal.reason);
+            throw signal.reason;
+          }
+          permit.markApplicationQueued();
+          abort = () => cancel(signal.reason);
+          signal.addEventListener('abort', abort, { once: true });
+        } catch (error) {
+          cancel(error);
+          throw error;
+        }
+        return {
+          run: async <T>(operation: () => Promise<T>): Promise<T> => {
+            if (state !== 'ready') {
+              throw closedReason ?? new Error('Prepared application job is no longer runnable.');
+            }
+            state = 'running';
+            signal.removeEventListener('abort', abort);
+            try {
+              return await runWithApplicationJobPermit(permit, operation);
+            } finally {
+              state = 'closed';
+            }
+          },
+          cancel
+        };
+      },
       reportPostCommitError: (error) =>
         (this.errorSink ?? this.preStartErrorSink).reportRuntimeTaskException('source actor departure', error),
       onSourceDepartureCompleted: (actorId) =>
@@ -2677,38 +2725,133 @@ export class ZLinkFrameworkRuntimeHost implements
           'MeshNode Actor binding record has no binding generation.'
         );
       }
-      if (record.kindData.transition === 'tombstone') {
-        const actorRef: ActorRef = {
-          actorId: record.kindData.actor.actorId,
-          objectGeneration: record.kindData.actor.generation,
-          meshName,
-          nodeRid: record.kindData.actor.nodeRid
-        };
-        await this.streamBindingRuntime.retireRemoteBinding(
-          actorRef,
-          record.kindData.sessionRid,
-          record.kindData.bindingGeneration,
-          signal
+      const binding = record.kindData;
+      const replyBindingFailure = (
+        kind: ZLinkFrameworkInternalErrorKind,
+        message: string
+      ): void => {
+        const terminal = kind === ZLinkFrameworkInternalErrorKind.ActorGenerationStale
+          ? { terminalResult: RequestResult.InvalidState, failureCode: 0 }
+          : internalFrameworkWireReply(createInternalFrameworkException(kind, message));
+        if (
+          record.replyFailure?.(terminal.terminalResult, terminal.failureCode)
+          !== SubmitResult.Ok
+        ) {
+          throw new ZLinkConfigurationException(
+            `MeshNode Actor binding target '${binding.actor.actorId}' failure acknowledgement failed.`
+          );
+        }
+      };
+      const replyBindingSuccess = (): void => {
+        if (record.reply(Buffer.alloc(0)) !== SubmitResult.Ok) {
+          throw new ZLinkConfigurationException(
+            `MeshNode Actor binding target '${binding.actor.actorId}' acknowledgement failed.`
+          );
+        }
+      };
+      const state = this.actorManager?.getState(binding.actor.actorId);
+      const nativeActorRef = state?.nativeActorRef;
+      if (
+        state === undefined
+        || nativeActorRef === undefined
+        || nativeActorRef.actorId !== binding.actor.actorId
+        || !routingIdsEqual(nativeActorRef.nodeRid, binding.actor.nodeRid)
+      ) {
+        replyBindingFailure(
+          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+          `Actor '${binding.actor.actorId}' binding target is no longer current.`
         );
-        record.reply(Buffer.alloc(0));
         return;
       }
-      this.actorManager
-        ?.getState(record.kindData.actor.actorId)
-        ?.setBoundSessionBindingGeneration(record.kindData.bindingGeneration);
-      const state = this.actorManager?.getState(record.kindData.actor.actorId);
-      const target = this.boundSessionRelay.boundSessions.resolveRemoteBoundSessionTarget(
-        record.kindData.sessionNodeRid,
-        record.kindData.sessionRid
-      );
-      if (state !== undefined && target !== undefined) {
-        state.setBoundSessionTransferTarget({
-          ...target,
-          sessionNodeRid: record.kindData.sessionNodeRid,
-          sessionRid: record.kindData.sessionRid,
-          bindingGeneration: record.kindData.bindingGeneration
-        });
+      if (nativeActorRef.generation !== binding.actor.generation) {
+        replyBindingFailure(
+          ZLinkFrameworkInternalErrorKind.ActorGenerationStale,
+          `Actor '${binding.actor.actorId}' binding object generation is stale.`
+        );
+        return;
       }
+      const node = state.meshName === meshName
+        ? this.spotNodeRuntime?.meshNode(meshName)
+        : undefined;
+      const localStatus = node?.status();
+      // ownsLocation tracks local cleanup responsibility, not Actor authority.
+      // A relocation target can exact-read committed authority without owning that cleanup.
+      if (
+        localStatus === undefined
+        || !routingIdsEqual(localStatus.routingId, binding.actor.nodeRid)
+        || localStatus.lifecycleGeneration !== binding.actorNodeGeneration
+        || state.locationGeneration !== binding.authorityOwnerGeneration
+        || state.isMoving
+      ) {
+        replyBindingFailure(
+          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+          `Actor '${binding.actor.actorId}' binding authority fence is stale.`
+        );
+        return;
+      }
+      const sessionOwnerIsLocal = routingIdsEqual(
+        localStatus.routingId,
+        binding.sessionNodeRid
+      ) && localStatus.lifecycleGeneration === binding.sessionOwnerNodeGeneration;
+      const sessionOwnerIsCurrentPeer = sessionOwnerIsLocal || node?.peers().some((peer) =>
+        peer.routingId !== null
+        && routingIdsEqual(peer.routingId, binding.sessionNodeRid)
+        && peer.lifecycleGeneration === binding.sessionOwnerNodeGeneration
+      ) === true;
+      if (binding.transition === 'tombstone') {
+        const actorRef: ActorRef = {
+          actorId: binding.actor.actorId,
+          objectGeneration: binding.actor.generation,
+          meshName,
+          nodeRid: binding.actor.nodeRid
+        };
+        if (sessionOwnerIsLocal) {
+          await this.streamBindingRuntime.retireRemoteBinding(
+            actorRef,
+            binding.sessionRid,
+            binding.bindingGeneration,
+            signal
+          );
+        }
+        state.retireBoundSessionBinding(binding);
+        replyBindingSuccess();
+        return;
+      }
+      if (!sessionOwnerIsCurrentPeer) {
+        replyBindingFailure(
+          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+          `Actor '${binding.actor.actorId}' Session owner lifecycle is stale.`
+        );
+        return;
+      }
+      const target = this.boundSessionRelay.boundSessions.resolveRemoteBoundSessionTarget(
+        binding.sessionNodeRid,
+        binding.sessionRid
+      );
+      if (target === undefined) {
+        replyBindingFailure(
+          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+          `Actor '${binding.actor.actorId}' Session route is unavailable.`
+        );
+        return;
+      }
+      const installed = state.installBoundSessionBinding({
+        ...target,
+        sessionNodeRid: binding.sessionNodeRid,
+        sessionRid: binding.sessionRid,
+        sessionOwnerNodeGeneration: binding.sessionOwnerNodeGeneration,
+        sessionOwnerId: binding.sessionOwnerId,
+        sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
+        bindingGeneration: binding.bindingGeneration
+      });
+      if (!installed) {
+        replyBindingFailure(
+          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+          `Actor '${binding.actor.actorId}' Session binding generation is stale.`
+        );
+        return;
+      }
+      replyBindingSuccess();
       return Promise.resolve();
     }
     switch (record.kind) {
