@@ -9,8 +9,12 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.spots.ZLinkSpotSerialExecutor;
 
 final class ZLinkActorDispatchSerialsTest {
     @Test
@@ -170,5 +174,118 @@ final class ZLinkActorDispatchSerialsTest {
         CompletableFuture.allOf(
             first.toCompletableFuture(),
             second.toCompletableFuture()).join();
+    }
+
+    @Test
+    void committedQueuesAreRetiredAcrossActorReturnToPreviousSpot() {
+        AtomicReference<ZLinkActorDispatchTarget> owner = new AtomicReference<>();
+        ZLinkActorDispatchSerials dispatches = dispatches(owner);
+        ZLinkActorDispatchTarget spotA = actorTarget();
+        ZLinkActorDispatchTarget spotB = actorTarget();
+        List<String> order = new ArrayList<>();
+
+        relocateAndRetire(dispatches, owner, spotA, order, "A");
+        relocateAndRetire(dispatches, owner, spotB, order, "B");
+        owner.set(spotA);
+
+        enqueueLazy(dispatches, order, "A-return")
+            .toCompletableFuture()
+            .join();
+
+        assertEquals(List.of("A", "B", "A-return"), order);
+    }
+
+    @Test
+    void removeRetiresLastPreparedTargetAfterResolverLosesActor() {
+        AtomicReference<ZLinkActorDispatchTarget> owner = new AtomicReference<>();
+        ZLinkActorDispatchSerials dispatches = dispatches(owner);
+        ZLinkActorDispatchTarget spotA = actorTarget();
+        List<String> order = new ArrayList<>();
+
+        owner.set(spotA);
+        enqueueLazy(dispatches, order, "before-remove")
+            .toCompletableFuture()
+            .join();
+        var seal = dispatches.trySeal("actor-1").orElseThrow();
+        dispatches.commit("actor-1", seal).orElseThrow();
+
+        owner.set(null);
+        dispatches.remove("actor-1");
+        owner.set(spotA);
+        enqueueLazy(dispatches, order, "after-remove")
+            .toCompletableFuture()
+            .join();
+
+        assertEquals(List.of("before-remove", "after-remove"), order);
+    }
+
+    @Test
+    void removeRetiresQueueCreatedOnlyForRelocation() {
+        AtomicReference<ZLinkActorDispatchTarget> owner = new AtomicReference<>();
+        ZLinkActorDispatchSerials dispatches = dispatches(owner);
+        ZLinkActorDispatchTarget spotA = actorTarget();
+        List<String> order = new ArrayList<>();
+
+        owner.set(spotA);
+        dispatches.relocationLane("actor-1");
+        var seal = dispatches.trySeal("actor-1").orElseThrow();
+        dispatches.commit("actor-1", seal).orElseThrow();
+
+        owner.set(null);
+        dispatches.remove("actor-1");
+        owner.set(spotA);
+        enqueueLazy(dispatches, order, "after-remove")
+            .toCompletableFuture()
+            .join();
+
+        assertEquals(List.of("after-remove"), order);
+    }
+
+    private static ZLinkActorDispatchSerials dispatches(
+        AtomicReference<ZLinkActorDispatchTarget> owner) {
+        return new ZLinkActorDispatchSerials(
+            new Object(), actorId -> actorId, Runnable::run,
+            actorId -> owner.get());
+    }
+
+    private static ZLinkActorDispatchTarget actorTarget() {
+        return new ZLinkSpotSerialExecutor(
+            new ZLinkSerialExecutionQueue(
+                Runnable::run, ZLinkExecutionLanePolicy.spot()),
+            Runnable::run,
+            Runnable::run,
+            ZLinkUserSpotExecutionMode.PER_ACTOR,
+            false);
+    }
+
+    private static void relocateAndRetire(
+        ZLinkActorDispatchSerials dispatches,
+        AtomicReference<ZLinkActorDispatchTarget> owner,
+        ZLinkActorDispatchTarget target,
+        List<String> order,
+        String step) {
+        owner.set(target);
+        enqueueLazy(dispatches, order, step).toCompletableFuture().join();
+        var seal = dispatches.trySeal("actor-1").orElseThrow();
+        dispatches.commit("actor-1", seal).orElseThrow();
+        dispatches.beginTeardown("actor-1", () -> {
+            owner.set(null);
+            return CompletableFuture.completedFuture(null);
+        }).toCompletableFuture().join();
+    }
+
+    private static CompletionStage<Void> enqueueLazy(
+        ZLinkActorDispatchSerials dispatches,
+        List<String> order,
+        String step) {
+        return dispatches.enqueueLazyRecord(
+            dispatches.prepare("actor-1"),
+            () -> new byte[] {1},
+            1,
+            () -> {
+                order.add(step);
+                return CompletableFuture.completedFuture(null);
+            },
+            () -> { });
     }
 }

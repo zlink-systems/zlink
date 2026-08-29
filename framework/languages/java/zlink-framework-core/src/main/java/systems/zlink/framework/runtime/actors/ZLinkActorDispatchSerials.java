@@ -32,7 +32,11 @@ final class ZLinkActorDispatchSerials {
     private final ZLinkActorDispatchTarget legacyTarget;
     private final Function<String, ZLinkActorDispatchTarget> targetResolver;
     private final Set<String> activeActorIds = new HashSet<>();
-    private final Set<String> knownActorIds = new HashSet<>();
+    // Source cleanup can outlive its Actor registry entry. Keep the accepted
+    // turn's Spot target so queue retirement never falls back to a different
+    // coordinator after that registry entry disappears.
+    private final Map<String, ZLinkActorDispatchTarget> actorTargets =
+        new HashMap<>();
     private final Map<String, CompletionStage<Void>> teardowns = new HashMap<>();
     private final Map<String, Object> admissionGates = new HashMap<>();
     // An accepted packet claims admission while its queue entry is installed
@@ -99,6 +103,17 @@ final class ZLinkActorDispatchSerials {
         return target == null ? legacyTarget : target;
     }
 
+    private ZLinkActorDispatchTarget trackedTarget(String actorId) {
+        ZLinkActorDispatchTarget tracked =
+            inStateLane(() -> actorTargets.get(actorId));
+        if (tracked != null) {
+            return tracked;
+        }
+        ZLinkActorDispatchTarget resolved = target(actorId);
+        return inStateLane(() -> actorTargets.computeIfAbsent(
+            actorId, ignored -> resolved));
+    }
+
     private <T> T inStateLane(Supplier<T> work) {
         try {
             return stateLane.runAsync(work).toCompletableFuture().join();
@@ -141,7 +156,7 @@ final class ZLinkActorDispatchSerials {
                 throw new IllegalStateException(
                     "actor dispatch admission is closed: " + actorId);
             }
-            knownActorIds.add(actorId);
+            actorTargets.put(actorId, target);
             return new QueuedTurn(
                 actorId,
                 target);
@@ -149,12 +164,15 @@ final class ZLinkActorDispatchSerials {
     }
 
     ZLinkSerialExecutionQueue relocationLane(String actorId) {
-        return target(actorId).actorRelocationLane(actorId);
+        return trackedTarget(actorId).actorRelocationLane(actorId);
     }
 
     void remove(String actorId) {
         inStateLane(() -> {
-            knownActorIds.remove(actorId);
+            ZLinkActorDispatchTarget target = actorTargets.remove(actorId);
+            if (target != null) {
+                target.removeActorQueue(actorId);
+            }
             activeActorIds.remove(actorId);
             teardowns.remove(actorId);
             return null;
@@ -338,8 +356,11 @@ final class ZLinkActorDispatchSerials {
                 if (existing == null) {
                     CompletableFuture<Void> createdTerminal = new CompletableFuture<>();
                     teardowns.put(actorId, createdTerminal);
+                    ZLinkActorDispatchTarget target = actorTargets.get(actorId);
                     return new TeardownSetup(
-                        createdTerminal, target(actorId), createdTerminal,
+                        createdTerminal,
+                        target == null ? target(actorId) : target,
+                        createdTerminal,
                         List.copyOf(pendingAdmissions.getOrDefault(
                             actorId, Set.of())), true);
                 }
@@ -360,44 +381,45 @@ final class ZLinkActorDispatchSerials {
     CompletionStage<Void> enqueueBarrier(
         String actorId,
         Supplier<CompletionStage<Void>> operation) {
-        return target(actorId).executeActorLifecycleNext(
+        return trackedTarget(actorId).executeActorLifecycleNext(
             actorId, () -> runTurn(actorId, operation));
     }
 
     Optional<ZLinkSerialExecutionQueue.RelocationSeal> trySeal(
         String actorId) {
-        return target(actorId).trySealActorRelocation(actorId);
+        return trackedTarget(actorId).trySealActorRelocation(actorId);
     }
 
     boolean abort(
         String actorId,
         ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return target(actorId).abortActorRelocation(actorId, seal);
+        return trackedTarget(actorId).abortActorRelocation(actorId, seal);
     }
 
     Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>> commit(
         String actorId,
         ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return target(actorId).commitActorRelocation(actorId, seal);
+        return trackedTarget(actorId).commitActorRelocation(actorId, seal);
     }
 
     Optional<ZLinkRetainedSerialQueueCommit.Commit> retainCommit(
         String actorId,
         ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return target(actorId).retainActorRelocationCommit(actorId, seal);
+        return trackedTarget(actorId).retainActorRelocationCommit(actorId, seal);
     }
 
     Optional<List<ZLinkSerialExecutionQueue.QueuedRecord>>
         freezeIngress(
         String actorId,
         ZLinkSerialExecutionQueue.RelocationSeal seal) {
-        return target(actorId).freezeActorRelocationIngress(actorId, seal);
+        return trackedTarget(actorId).freezeActorRelocationIngress(actorId, seal);
     }
 
     CompletionStage<Void> awaitQuiescence() {
-        List<String> snapshot = inStateLane(() -> List.copyOf(knownActorIds));
-        CompletableFuture<?>[] barriers = snapshot.stream()
-            .map(actorId -> target(actorId).awaitActorQuiescence(actorId))
+        Map<String, ZLinkActorDispatchTarget> snapshot =
+            inStateLane(() -> Map.copyOf(actorTargets));
+        CompletableFuture<?>[] barriers = snapshot.entrySet().stream()
+            .map(entry -> entry.getValue().awaitActorQuiescence(entry.getKey()))
             .map(CompletionStage::toCompletableFuture)
             .toArray(CompletableFuture[]::new);
         return CompletableFuture.allOf(barriers);
@@ -512,7 +534,8 @@ final class ZLinkActorDispatchSerials {
         inStateLane(() -> {
             teardowns.remove(actorId, setup.terminal());
             if (error == null) {
-                knownActorIds.remove(actorId);
+                actorTargets.remove(actorId, setup.target());
+                setup.target().removeActorQueue(actorId);
                 activeActorIds.remove(actorId);
             }
             return null;
