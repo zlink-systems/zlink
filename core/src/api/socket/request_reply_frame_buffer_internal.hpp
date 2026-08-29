@@ -3,8 +3,7 @@
 #ifndef __ZLINK_API_REQUEST_REPLY_FRAME_BUFFER_INTERNAL_HPP_INCLUDED__
 #define __ZLINK_API_REQUEST_REPLY_FRAME_BUFFER_INTERNAL_HPP_INCLUDED__
 
-#include <boost/container/small_vector.hpp>
-
+#include "api/socket/inline_msg_buffer_internal.hpp"
 #include "api/socket/request_reply_protocol_internal.hpp"
 
 namespace zlink
@@ -15,8 +14,7 @@ namespace socket_reqrep_internal
 // payload frames. Keep that aggregate in the receiving call; only unusually
 // large multipart records need dynamic storage.
 const size_t inline_request_reply_frame_capacity = 8;
-typedef boost::container::small_vector<zlink_msg_t,
-                                       inline_request_reply_frame_capacity>
+typedef zlink::socket_internal::inline_msg_buffer_t<inline_request_reply_frame_capacity>
   request_reply_frame_buffer_t;
 
 inline void close_request_reply_frame_buffer (

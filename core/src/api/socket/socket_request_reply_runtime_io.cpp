@@ -577,7 +577,7 @@ int recv_router_message_direct (const socket_handle_t &handle_,
                 test_throw_request_reply_allocation_failpoint (
                   request_reply_allocation_receive_spill);
 #endif
-            raw_parts.push_back (zlink_msg_t ());
+            raw_parts.append_uninitialized ();
         } catch (...) {
             zlink::close_msg_frames (&raw_parts);
             discard_received_message_tail (
@@ -761,7 +761,7 @@ int recv_dealer_message_direct (
                 test_throw_request_reply_allocation_failpoint (
                   request_reply_allocation_receive_spill);
 #endif
-            raw_parts.push_back (zlink_msg_t ());
+            raw_parts.append_uninitialized ();
         } catch (...) {
             zlink::close_msg_frames (&raw_parts);
             discard_received_message_tail (

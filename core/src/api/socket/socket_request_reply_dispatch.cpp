@@ -146,7 +146,7 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
             }
 
             try {
-                parts.push_back (zlink_msg_t ());
+                parts.append_uninitialized ();
             } catch (...) {
                 const int close_rc = frame.close ();
                 errno_assert (close_rc == 0);

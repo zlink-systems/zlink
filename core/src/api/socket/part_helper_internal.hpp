@@ -3,7 +3,6 @@
 #ifndef __ZLINK_API_PART_HELPER_INTERNAL_HPP_INCLUDED__
 #define __ZLINK_API_PART_HELPER_INTERNAL_HPP_INCLUDED__
 
-#include <boost/container/small_vector.hpp>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -13,6 +12,7 @@
 
 #include "sockets/common/socket_runtime.hpp"
 #include "core/ctx_physical_queue_registry.hpp"
+#include "api/socket/inline_msg_buffer_internal.hpp"
 #include <zlink.h>
 
 namespace zlink
@@ -75,15 +75,15 @@ struct send_sequence_state_t
     send_sequence_spec_t spec;
     zlink::socket_base_t *sink_socket;
     std::optional<zlink::socket_public_send_scope_t> send_scope;
-    boost::container::small_vector<zlink_msg_t, 4> buffered_parts;
+    zlink::socket_internal::inline_msg_buffer_t<4> buffered_parts;
     std::thread::id owner_thread;
 };
 
 // Perf's normal multipart receive is two application parts. Keep those parts
 // with the socket-owned receive sequence; larger records spill to bounded
-// dynamic storage through small_vector's existing allocator path.
+// dynamic storage through the internal buffer's spill path.
 const size_t inline_recv_part_capacity = 2;
-typedef boost::container::small_vector<zlink_msg_t, inline_recv_part_capacity>
+typedef zlink::socket_internal::inline_msg_buffer_t<inline_recv_part_capacity>
   recv_part_buffer_t;
 
 struct recv_sequence_state_t
