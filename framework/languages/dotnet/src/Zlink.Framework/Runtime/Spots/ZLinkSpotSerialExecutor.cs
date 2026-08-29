@@ -137,11 +137,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         if (Volatile.Read(ref _stopping) != 0 || _isDisposed())
             return ValueTask.CompletedTask;
-        var claim = AcquireApplicationClaim(actorLane: true);
-        var lane = GetLane(
-            _actorLanes,
-            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
-            _actorLanePolicy);
+        var (lane, claim) = AcquireActorApplicationAdmission(actorId);
         return RunClaimedAsync(
             lane,
             ct => _executionMode == ZLinkUserSpotExecutionMode.SpotWide
@@ -171,11 +167,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         if (Volatile.Read(ref _stopping) != 0 || _isDisposed())
             return ValueTask.CompletedTask;
-        var claim = AcquireRelocationReplayClaim(seal);
-        var lane = GetLane(
-            _actorLanes,
-            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
-            _actorLanePolicy);
+        var admission = TryAcquireRelocationActorAdmission(seal, actorId);
+        if (admission is not { } accepted)
+            return ValueTask.CompletedTask;
+        var (lane, claim) = accepted;
         return RunClaimedAsync(
             lane,
             ct => _executionMode == ZLinkUserSpotExecutionMode.SpotWide
@@ -205,7 +200,9 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                 ZLinkFrameworkErrorKind.ShuttingDown,
                 "SPOT relocation replay cannot reserve a stopped execution queue.");
 
-        var claim = AcquireRelocationReplayClaim(seal);
+        var (lane, claim) = AcquireRelocationActorReservationAdmission(
+            seal,
+            actorId);
         var reservation =
             new ZLinkSpotRelocationActorQueueReservation(actorId);
         try
@@ -214,12 +211,6 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             // queue now prevents Message Follow or direct ingress from
             // overtaking a target-captured Actor frame while its mailbox turn
             // is still pending.
-            var lane = _executionMode == ZLinkUserSpotExecutionMode.SpotWide
-                ? _queue
-                : GetLane(
-                    _actorLanes,
-                    ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
-                    _actorLanePolicy);
             var execution = RunClaimedAsync(
                     lane,
                     reservation.RunAsync,
@@ -1331,6 +1322,28 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                    "SPOT application admission is sealed for relocation.");
     }
 
+    private (ZLinkSerialExecutionQueue Lane, ZLinkExecutionClaim Claim)
+        AcquireActorApplicationAdmission(string actorId)
+    {
+        var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
+        return RunBarrierState(() =>
+        {
+            if (Volatile.Read(ref _stopping) != 0
+                || _relocationBarrier is { AllowActorClaims: false })
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Rejected,
+                    "SPOT application admission is sealed for relocation.");
+
+            var lane = GetLaneOnStateLane(
+                _actorLanes,
+                actorKey,
+                _actorLanePolicy);
+            _activeApplicationClaims++;
+            _activeActorClaims++;
+            return (lane, new ZLinkExecutionClaim(this, actorLane: true));
+        });
+    }
+
     private ZLinkExecutionClaim? TryAcquireApplicationClaim(bool actorLane)
     {
         return RunBarrierState(() =>
@@ -1359,11 +1372,18 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         });
     }
 
-    private ZLinkExecutionClaim AcquireRelocationReplayClaim(
-        ZLinkSpotExecutionRelocationSeal seal)
+    private (ZLinkSerialExecutionQueue Lane, ZLinkExecutionClaim Claim)?
+        TryAcquireRelocationActorAdmission(
+            ZLinkSpotExecutionRelocationSeal seal,
+            string actorId)
     {
+        var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
         return RunBarrierState(() =>
         {
+            if (Volatile.Read(ref _stopping) != 0
+                || _completedChildLanes is not null)
+                return null;
+
             var barrier = _relocationBarrier
                           ?? throw new InvalidOperationException(
                               "SPOT relocation replay requires an active relocation seal.");
@@ -1372,10 +1392,52 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                 || !barrier.Quiescent.Task.IsCompleted)
                 throw new InvalidOperationException(
                     "SPOT relocation replay requires the current quiescent seal.");
+
+            var lane = GetLaneOnStateLane(
+                _actorLanes,
+                actorKey,
+                _actorLanePolicy);
             _activeApplicationClaims++;
             _activeActorClaims++;
             barrier.ActiveClaims++;
-            return new ZLinkExecutionClaim(this, actorLane: true);
+            return ((ZLinkSerialExecutionQueue Lane, ZLinkExecutionClaim Claim)?)
+                (lane, new ZLinkExecutionClaim(this, actorLane: true));
+        }, allowRelocationReservation: true);
+    }
+
+    private (ZLinkSerialExecutionQueue Lane, ZLinkExecutionClaim Claim)
+        AcquireRelocationActorReservationAdmission(
+            ZLinkSpotExecutionRelocationSeal seal,
+            string actorId)
+    {
+        return RunBarrierState(() =>
+        {
+            if (Volatile.Read(ref _spotStopping) != 0
+                || Volatile.Read(ref _stopping) != 0
+                || _completedChildLanes is not null)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.ShuttingDown,
+                    "SPOT relocation replay cannot reserve a stopped execution queue.");
+
+            var barrier = _relocationBarrier
+                          ?? throw new InvalidOperationException(
+                              "SPOT relocation replay requires an active relocation seal.");
+            if (barrier.Generation != seal.Generation
+                || !barrier.BoundaryReached
+                || !barrier.Quiescent.Task.IsCompleted)
+                throw new InvalidOperationException(
+                    "SPOT relocation replay requires the current quiescent seal.");
+
+            var lane = _executionMode == ZLinkUserSpotExecutionMode.SpotWide
+                ? _queue
+                : GetLaneOnStateLane(
+                    _actorLanes,
+                    ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+                    _actorLanePolicy);
+            _activeApplicationClaims++;
+            _activeActorClaims++;
+            barrier.ActiveClaims++;
+            return (lane, new ZLinkExecutionClaim(this, actorLane: true));
         }, allowRelocationReservation: true);
     }
 

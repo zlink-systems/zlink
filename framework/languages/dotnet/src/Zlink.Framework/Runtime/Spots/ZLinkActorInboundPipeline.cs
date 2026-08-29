@@ -305,16 +305,21 @@ internal sealed class ZLinkActorInboundPipeline(
                 : null,
             runtime.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Inbound);
+        // The pump projection is intentionally not carried across the detached
+        // queue. Resolve the registry again so a successor state published in
+        // between is the owner of this dispatch-phase snapshot.
         var state = runtime.GetOrCreateActorState(frame.Actor.ActorId);
+        ZLinkActorHandoffIngressStateSnapshot ingress;
         ZLinkActorHandoffCaptureResult capture;
         try
         {
-            capture = allowCapture
-                ? state.Handoff.TryCapture(
-                    frame,
-                    runtime,
-                    static (rt, fr) => EnsureRelocationReplyRoute(rt, fr))
-                : ZLinkActorHandoffCaptureResult.NotSealed;
+            ingress = state.Handoff.ProjectDispatchIngress(
+                state.NativeActorRef,
+                frame,
+                allowCapture,
+                runtime,
+                static (rt, fr) => EnsureRelocationReplyRoute(rt, fr));
+            capture = ingress.Capture;
         }
         catch (ZLinkActorHandoffRejectedException)
         {
@@ -342,7 +347,7 @@ internal sealed class ZLinkActorInboundPipeline(
             return;
         }
         if (allowCapture
-            && state.Handoff.BlocksLocalDispatch
+            && ingress.BlocksLocalDispatch
             && !frame.RouteContext.IsDirectRoute)
         {
             await CompleteMovingBoundaryAsync(
@@ -372,7 +377,11 @@ internal sealed class ZLinkActorInboundPipeline(
             acknowledgeHandledFrame?.Invoke();
             return;
         }
-        if (await RouteAwayFromCurrentActorAsync(state, frame, cancellationToken)
+        if (await RouteAwayFromCurrentActorAsync(
+                state,
+                ingress.Route,
+                frame,
+                cancellationToken)
                 .ConfigureAwait(false))
         {
             acknowledgeHandledFrame?.Invoke();
@@ -595,6 +604,7 @@ internal sealed class ZLinkActorInboundPipeline(
 
     private async ValueTask<bool> RouteAwayFromCurrentActorAsync(
         ZLinkActorRuntimeState state,
+        ZLinkActorMessageFollowRouteResolution route,
         ZLinkSpotActorFrame frame,
         CancellationToken cancellationToken)
     {
@@ -603,6 +613,7 @@ internal sealed class ZLinkActorInboundPipeline(
             if (!ZLinkActorMessageFollowDispatcher.TryFollow(
                     runtime,
                     state,
+                    route,
                     frame.Actor,
                     frame.SourceNodeRid,
                     frame.SourceSessionRid,

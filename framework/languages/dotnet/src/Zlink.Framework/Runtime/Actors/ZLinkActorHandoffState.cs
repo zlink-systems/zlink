@@ -251,20 +251,22 @@ internal sealed class ZLinkActorHandoffState(
     {
         get
         {
-            return AwaitStateLane(_lane.RunAsync(() =>
-                _sourcePhase is ZLinkActorSourceHandoffPhase.Capturing
-                           or ZLinkActorSourceHandoffPhase.CutoverPending
-                           or ZLinkActorSourceHandoffPhase.AbortRestoring
-                           or ZLinkActorSourceHandoffPhase.MessageFollowCommitted
-                       || _targetPhase is ZLinkActorTargetHandoffPhase.Importing
-                           or ZLinkActorTargetHandoffPhase.AuthorityCommitted
-                           or ZLinkActorTargetHandoffPhase.NotifyingJoined
-                           or ZLinkActorTargetHandoffPhase.Prepared
-                           or ZLinkActorTargetHandoffPhase.Replaying
-                           or ZLinkActorTargetHandoffPhase.Failed
-                           or ZLinkActorTargetHandoffPhase.Quarantined));
+            return AwaitStateLane(_lane.RunAsync(BlocksLocalDispatchOnStateLane));
         }
     }
+
+    private bool BlocksLocalDispatchOnStateLane() =>
+        _sourcePhase is ZLinkActorSourceHandoffPhase.Capturing
+                   or ZLinkActorSourceHandoffPhase.CutoverPending
+                   or ZLinkActorSourceHandoffPhase.AbortRestoring
+                   or ZLinkActorSourceHandoffPhase.MessageFollowCommitted
+               || _targetPhase is ZLinkActorTargetHandoffPhase.Importing
+                   or ZLinkActorTargetHandoffPhase.AuthorityCommitted
+                   or ZLinkActorTargetHandoffPhase.NotifyingJoined
+                   or ZLinkActorTargetHandoffPhase.Prepared
+                   or ZLinkActorTargetHandoffPhase.Replaying
+                   or ZLinkActorTargetHandoffPhase.Failed
+                   or ZLinkActorTargetHandoffPhase.Quarantined;
 
     public void CompleteSourceMigration()
     {
@@ -344,102 +346,158 @@ internal sealed class ZLinkActorHandoffState(
         TState prepareState,
         Action<TState, ZLinkSpotActorFrame>? prepareCapture)
     {
+        return AwaitStateLane(_lane.RunAsync(() => TryCaptureOnStateLane(
+            frame,
+            prepareState,
+            prepareCapture)));
+    }
+
+    private ZLinkActorHandoffCaptureResult TryCaptureOnStateLane<TState>(
+        ZLinkSpotActorFrame frame,
+        TState prepareState,
+        Action<TState, ZLinkSpotActorFrame>? prepareCapture)
+    {
+        var capturesSourceIngress =
+            _deferredJoinCapture
+            || _sourcePhase == ZLinkActorSourceHandoffPhase.Capturing;
+        var capturesSourceHold = capturesSourceIngress
+                                 && _sourceCaptureSealed;
+        var capturesTargetIngress =
+            _targetPhase is ZLinkActorTargetHandoffPhase.Importing
+                or ZLinkActorTargetHandoffPhase.AuthorityCommitted
+                or ZLinkActorTargetHandoffPhase.NotifyingJoined
+                or ZLinkActorTargetHandoffPhase.Prepared
+                or ZLinkActorTargetHandoffPhase.Replaying;
+        //  Several NotSealed returns share one result; print the values
+        //  they test so a frame that is not backlogged names its reason.
+        diagnostic?.Invoke(
+            $"capture_entry actor={actorId} src_ingress={capturesSourceIngress} "
+            + $"tgt_ingress={capturesTargetIngress} direct={frame.RouteContext.IsDirectRoute} "
+            + $"flags={frame.Flags} bound_route={frame.RouteContext.IsBoundSessionRoute} "
+            + $"arrival={_arrivalIndex} kind={frame.Header.Kind} request_id={frame.RequestId}");
+        if (!capturesSourceIngress
+            && !capturesTargetIngress)
+            return ZLinkActorHandoffCaptureResult.NotSealed;
+
+        if (!frame.RouteContext.IsDirectRoute)
+        {
+            // A source-ingress request keeps its live reply route and must
+            // drain before the session route seal. A target-ingress
+            // request is already at the committed authority and can be
+            // retained in the target replay queue when its exact binding
+            // fence is valid. One-way work can cross either boundary
+            // because its accepted sequence is frozen.
+            if ((frame.Flags & 1U) != 0 && !capturesTargetIngress)
+                return ZLinkActorHandoffCaptureResult.NotSealed;
+            if (!frame.RouteContext.IsBoundSessionRoute
+                || frame.RequestSource is not { } boundSource
+                || frame.SourceNodeGeneration == 0
+                || frame.SourceNodeRid != boundSource.NodeRid
+                || frame.SourceNodeGeneration != boundSource.NodeGeneration
+                || !ZLinkActorBoundSessionHandoffMetadata.TryDecode(
+                    frame.ApplicationMetadata.Span,
+                    out var boundSession)
+                || boundSession.ActorId != actorId
+                || boundSession.ActorGeneration != frame.Actor.Generation
+                || boundSession.SessionRid != frame.SourceSessionRid)
+                throw new ZLinkActorHandoffRejectedException(
+                    $"Actor '{actorId}' received a bound-session frame without "
+                    + "an exact owner, binding, and accepted-sequence fence.");
+        }
+
+        else if (frame.RequestSource is not { } source
+            || frame.SourceNodeGeneration == 0
+            || frame.SourceNodeRid != source.NodeRid
+            || frame.SourceNodeGeneration != source.NodeGeneration)
+            throw new ZLinkActorHandoffRejectedException(
+                $"Actor '{actorId}' cannot accept a direct request without "
+                + "an exact ingress request-source fence.");
+
+        prepareCapture?.Invoke(prepareState, frame);
+        var captured = ZLinkActorHandoffFrames.Capture(frame, _arrivalIndex);
+        var encodedBytes = capturesSourceIngress || capturesTargetIngress
+            ? ZLinkActorHandoffFrames.CanonicalEncodedLength(
+                captured,
+                frame.Actor)
+            : 0;
+        if (capturesSourceIngress || capturesTargetIngress)
+            captured = captured with
+            {
+                CanonicalEncodedLength = encodedBytes
+            };
+        if (capturesSourceIngress
+            && !capturesSourceHold
+            && !_sourceIngressAdmission.TryAcquire(encodedBytes))
+            return ZLinkActorHandoffCaptureResult.Full;
+        if (capturesSourceHold
+            && !_sourceHoldAdmission.TryAcquire(encodedBytes))
+            return ZLinkActorHandoffCaptureResult.Full;
+        try
+        {
+            if (capturesSourceHold)
+                _sourceHoldFrames.Add(captured);
+            else
+                _frames.Add(captured);
+            _arrivalIndex++;
+        }
+        catch
+        {
+            if (capturesSourceIngress && !capturesSourceHold)
+                _sourceIngressAdmission.Release(encodedBytes);
+            if (capturesSourceHold)
+                _sourceHoldAdmission.Release(encodedBytes);
+            throw;
+        }
+        diagnostic?.Invoke(
+            $"handoff_backlog actor={actorId} arrival={_arrivalIndex - 1} kind={frame.Header.Kind} request_id={frame.RequestId} flags={frame.Flags}");
+        return ZLinkActorHandoffCaptureResult.Captured;
+    }
+
+    internal ZLinkActorHandoffIngressStateSnapshot ProjectArrivalIngress<TState>(
+        ZLinkBackendActorRef? currentActor,
+        ZLinkSpotActorFrame frame,
+        TState prepareState,
+        Action<TState, ZLinkSpotActorFrame>? prepareCapture)
+    {
         return AwaitStateLane(_lane.RunAsync(() =>
         {
-            var capturesSourceIngress =
-                _deferredJoinCapture
-                || _sourcePhase == ZLinkActorSourceHandoffPhase.Capturing;
-            var capturesSourceHold = capturesSourceIngress
-                                     && _sourceCaptureSealed;
-            var capturesTargetIngress =
-                _targetPhase is ZLinkActorTargetHandoffPhase.Importing
-                    or ZLinkActorTargetHandoffPhase.AuthorityCommitted
-                    or ZLinkActorTargetHandoffPhase.NotifyingJoined
-                    or ZLinkActorTargetHandoffPhase.Prepared
-                    or ZLinkActorTargetHandoffPhase.Replaying;
-            //  Several NotSealed returns share one result; print the values
-            //  they test so a frame that is not backlogged names its reason.
-            diagnostic?.Invoke(
-                $"capture_entry actor={actorId} src_ingress={capturesSourceIngress} "
-                + $"tgt_ingress={capturesTargetIngress} direct={frame.RouteContext.IsDirectRoute} "
-                + $"flags={frame.Flags} bound_route={frame.RouteContext.IsBoundSessionRoute} "
-                + $"arrival={_arrivalIndex} kind={frame.Header.Kind} request_id={frame.RequestId}");
-            if (!capturesSourceIngress
-                && !capturesTargetIngress)
-                return ZLinkActorHandoffCaptureResult.NotSealed;
+            var route = ResolveMessageFollowRouteOnStateLane(
+                currentActor,
+                frame.Actor);
+            var capture = route.Route == ZLinkActorFrameRoute.MessageFollow
+                ? ZLinkActorHandoffCaptureResult.NotSealed
+                : TryCaptureOnStateLane(frame, prepareState, prepareCapture);
+            return new ZLinkActorHandoffIngressStateSnapshot(
+                capture,
+                BlocksLocalDispatchOnStateLane(),
+                route);
+        }));
+    }
 
-            if (!frame.RouteContext.IsDirectRoute)
-            {
-                // A source-ingress request keeps its live reply route and must
-                // drain before the session route seal. A target-ingress
-                // request is already at the committed authority and can be
-                // retained in the target replay queue when its exact binding
-                // fence is valid. One-way work can cross either boundary
-                // because its accepted sequence is frozen.
-                if ((frame.Flags & 1U) != 0 && !capturesTargetIngress)
-                    return ZLinkActorHandoffCaptureResult.NotSealed;
-                if (!frame.RouteContext.IsBoundSessionRoute
-                    || frame.RequestSource is not { } boundSource
-                    || frame.SourceNodeGeneration == 0
-                    || frame.SourceNodeRid != boundSource.NodeRid
-                    || frame.SourceNodeGeneration != boundSource.NodeGeneration
-                    || !ZLinkActorBoundSessionHandoffMetadata.TryDecode(
-                        frame.ApplicationMetadata.Span,
-                        out var boundSession)
-                    || boundSession.ActorId != actorId
-                    || boundSession.ActorGeneration != frame.Actor.Generation
-                    || boundSession.SessionRid != frame.SourceSessionRid)
-                    throw new ZLinkActorHandoffRejectedException(
-                        $"Actor '{actorId}' received a bound-session frame without "
-                        + "an exact owner, binding, and accepted-sequence fence.");
-            }
-
-            else if (frame.RequestSource is not { } source
-                || frame.SourceNodeGeneration == 0
-                || frame.SourceNodeRid != source.NodeRid
-                || frame.SourceNodeGeneration != source.NodeGeneration)
-                throw new ZLinkActorHandoffRejectedException(
-                    $"Actor '{actorId}' cannot accept a direct request without "
-                    + "an exact ingress request-source fence.");
-
-            prepareCapture?.Invoke(prepareState, frame);
-            var captured = ZLinkActorHandoffFrames.Capture(frame, _arrivalIndex);
-            var encodedBytes = capturesSourceIngress || capturesTargetIngress
-                ? ZLinkActorHandoffFrames.CanonicalEncodedLength(
-                    captured,
-                    frame.Actor)
-                : 0;
-            if (capturesSourceIngress || capturesTargetIngress)
-                captured = captured with
-                {
-                    CanonicalEncodedLength = encodedBytes
-                };
-            if (capturesSourceIngress
-                && !capturesSourceHold
-                && !_sourceIngressAdmission.TryAcquire(encodedBytes))
-                return ZLinkActorHandoffCaptureResult.Full;
-            if (capturesSourceHold
-                && !_sourceHoldAdmission.TryAcquire(encodedBytes))
-                return ZLinkActorHandoffCaptureResult.Full;
-            try
-            {
-                if (capturesSourceHold)
-                    _sourceHoldFrames.Add(captured);
-                else
-                    _frames.Add(captured);
-                _arrivalIndex++;
-            }
-            catch
-            {
-                if (capturesSourceIngress && !capturesSourceHold)
-                    _sourceIngressAdmission.Release(encodedBytes);
-                if (capturesSourceHold)
-                    _sourceHoldAdmission.Release(encodedBytes);
-                throw;
-            }
-            diagnostic?.Invoke(
-                $"handoff_backlog actor={actorId} arrival={_arrivalIndex - 1} kind={frame.Header.Kind} request_id={frame.RequestId} flags={frame.Flags}");
-            return ZLinkActorHandoffCaptureResult.Captured;
+    internal ZLinkActorHandoffIngressStateSnapshot ProjectDispatchIngress<TState>(
+        ZLinkBackendActorRef? currentActor,
+        ZLinkSpotActorFrame frame,
+        bool allowCapture,
+        TState prepareState,
+        Action<TState, ZLinkSpotActorFrame>? prepareCapture)
+    {
+        return AwaitStateLane(_lane.RunAsync(() =>
+        {
+            var capture = allowCapture
+                ? TryCaptureOnStateLane(frame, prepareState, prepareCapture)
+                : ZLinkActorHandoffCaptureResult.NotSealed;
+            var route = capture is ZLinkActorHandoffCaptureResult.Captured
+                or ZLinkActorHandoffCaptureResult.Full
+                ? new ZLinkActorMessageFollowRouteResolution(
+                    ZLinkActorFrameRoute.Current,
+                    null)
+                : ResolveMessageFollowRouteOnStateLane(
+                    currentActor,
+                    frame.Actor);
+            return new ZLinkActorHandoffIngressStateSnapshot(
+                capture,
+                BlocksLocalDispatchOnStateLane(),
+                route);
         }));
     }
 
@@ -1678,18 +1736,26 @@ internal sealed class ZLinkActorHandoffState(
         ZLinkBackendActorRef? currentActor,
         ZLinkBackendActorRef frameActor)
     {
-        var result = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            var targetActor = default(ZLinkBackendActorRef);
-            var route = ResolveFrameRouteLocked(currentActor, frameActor, out targetActor);
-            var messageFollowRoute = route == ZLinkActorFrameRoute.MessageFollow
-                ? _messageFollowRoute
-                : null;
-            return (route, messageFollowRoute);
-        }));
+        return AwaitStateLane(_lane.RunAsync(() =>
+            ResolveMessageFollowRouteOnStateLane(currentActor, frameActor)));
+    }
+
+    private ZLinkActorMessageFollowRouteResolution
+        ResolveMessageFollowRouteOnStateLane(
+            ZLinkBackendActorRef? currentActor,
+            ZLinkBackendActorRef frameActor)
+    {
+        var targetActor = default(ZLinkBackendActorRef);
+        var route = ResolveFrameRouteLocked(
+            currentActor,
+            frameActor,
+            out targetActor);
+        var messageFollowRoute = route == ZLinkActorFrameRoute.MessageFollow
+            ? _messageFollowRoute
+            : null;
         return new ZLinkActorMessageFollowRouteResolution(
-            result.route,
-            result.messageFollowRoute);
+            route,
+            messageFollowRoute);
     }
 
     public ZLinkActorFrameRoute RouteFrame(
@@ -1914,6 +1980,11 @@ internal readonly record struct ZLinkActorFrameRouteResolution(
 internal readonly record struct ZLinkActorMessageFollowRouteResolution(
     ZLinkActorFrameRoute Route,
     ZLinkActorMessageFollowRoute? MessageFollowRoute);
+
+internal readonly record struct ZLinkActorHandoffIngressStateSnapshot(
+    ZLinkActorHandoffCaptureResult Capture,
+    bool BlocksLocalDispatch,
+    ZLinkActorMessageFollowRouteResolution Route);
 
 internal sealed class ZLinkActorMessageFollowLease(TimeProvider timeProvider)
 {

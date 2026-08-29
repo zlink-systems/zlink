@@ -45,6 +45,41 @@ internal static class ZLinkActorMessageFollowDispatcher
         var resolution = actorState.Handoff.RouteFrame(
             actorState.NativeActorRef,
             frameActor);
+        return TryFollow(
+            runtime,
+            actorState,
+            resolution,
+            frameActor,
+            sourceNodeRid,
+            sourceSessionRid,
+            requestId,
+            flags,
+            routeContext,
+            header,
+            body,
+            sourceNodeGeneration,
+            requestSource,
+            directReply,
+            applicationMetadata);
+    }
+
+    internal static bool TryFollow(
+        ZLinkFrameworkRuntime runtime,
+        ZLinkActorRuntimeState actorState,
+        ZLinkActorMessageFollowRouteResolution resolution,
+        ZLinkBackendActorRef frameActor,
+        RoutingId sourceNodeRid,
+        RoutingId sourceSessionRid,
+        ulong requestId,
+        uint flags,
+        ZLinkBackendActorRouteContext routeContext,
+        ZlinkStreamHeader header,
+        Message body,
+        ulong sourceNodeGeneration = 0,
+        ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
+        Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? directReply = null,
+        ReadOnlyMemory<byte> applicationMetadata = default)
+    {
         var route = resolution.Route;
         var messageFollowRoute = resolution.MessageFollowRoute;
         if (route is not ZLinkActorFrameRoute.Current)

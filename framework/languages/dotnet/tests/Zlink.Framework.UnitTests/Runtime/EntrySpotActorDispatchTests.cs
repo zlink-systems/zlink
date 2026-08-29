@@ -1277,6 +1277,94 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task InvalidMessageFollowFallback_PreservesPumpCaptureOrder()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, _) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            var sourceActor = new ZLinkBackendActorRef(
+                node.RoutingId,
+                "actor-invalid-follow-capture",
+                17);
+            var targetActor = new ZLinkBackendActorRef(
+                RoutingId.From("target-node"),
+                sourceActor.ActorId,
+                18);
+            var actor = RegisterProbeActor(runtime, sourceActor);
+            var state = runtime.GetOrCreateActorState(actor.ActorId);
+            state.Handoff.BeginCapture();
+            state.Handoff.CutoverCaptureToMessageFollow(
+                committedFrameCount: 0,
+                sourceActor: sourceActor,
+                targetActor: targetActor,
+                targetMeshName: "mesh-a",
+                sourceNodeGeneration: 43,
+                targetNodeGeneration: 44,
+                sourceAuthorityOwnerGeneration: 47,
+                targetAuthorityOwnerGeneration: 48,
+                sourceOwnerLeaseGeneration: 53,
+                targetOwnerLeaseGeneration: 54);
+            state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(5));
+            state.Handoff.CompleteSourceMigration();
+            state.Handoff.BeginCapture();
+
+            var source = new ZLinkServiceWireCodec.RequestSourceFence(
+                "caller-owner",
+                19,
+                RoutingId.From("caller-node"),
+                23);
+            var firstMessages = new[]
+            {
+                Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(
+                    CreateHeader("first")).Span),
+                Message.From("first-body")
+            };
+            var secondMessages = new[]
+            {
+                Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(
+                    CreateHeader("second")).Span),
+                Message.From("second-body")
+            };
+            var parts = CreateStaleManagedParts(
+                    sourceActor,
+                    source,
+                    new MeshOperationId(29, 31),
+                    firstMessages,
+                    flags: 0,
+                    messageFollowHopCount: 8)
+                .Concat(CreateStaleManagedParts(
+                    sourceActor,
+                    source,
+                    new MeshOperationId(37, 41),
+                    secondMessages,
+                    flags: 0,
+                    messageFollowHopCount: 8))
+                .ToArray();
+
+            using var batch = ZLinkActorHandoffIngress.CaptureMovingFrames(
+                runtime,
+                parts);
+
+            Assert.Equal(0, batch.Count);
+            var captured = state.Handoff.SnapshotFrames();
+            Assert.Equal(
+                new[] { "first-body", "second-body" },
+                captured.Select(static frame =>
+                    Encoding.UTF8.GetString(frame.Body)));
+            Assert.Equal(
+                new long[] { 0, 1 },
+                captured
+                    .Select(static frame => frame.ArrivalIndex));
+            state.Handoff.Reset();
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task StaleManagedIngress_CapturesBeforeMessageFollowAndRestoresAbortOrder()
     {
         var node = new CapturingSpotNode();
@@ -7420,11 +7508,12 @@ public sealed partial class EntrySpotActorDispatchTests
             IReadOnlyList<Message> messages,
             uint flags,
             Func<IReadOnlyList<Message>, SendFlags, SubmitResult>?
-                directReply = null)
+                directReply = null,
+            byte messageFollowHopCount = 0)
     {
         var route = new ZLinkBackendActorRouteContext(
             operation,
-            MessageFollowHopCount: 0,
+            MessageFollowHopCount: messageFollowHopCount,
             TargetNodeGeneration: 43,
             AuthorityOwnerGeneration: 47,
             OwnerLeaseGeneration: 53,
