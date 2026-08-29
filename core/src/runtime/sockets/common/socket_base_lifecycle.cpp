@@ -421,6 +421,7 @@ void zlink::socket_base_t::process_async_mailbox ()
     do {
         process_commands (0, false);
         drive_send_pending ();
+        bool completion_poller_owned = false;
         {
             // A public POLLCOMPLETION registration is the sole completion
             // owner while it exists. The gate also fences a 0 -> 1 owner
@@ -436,8 +437,16 @@ void zlink::socket_base_t::process_async_mailbox ()
                 //  which is what makes "same callback, different dispatch
                 //  location" true rather than a second channel.
                 dispatch_send_completions (false);
-            }
+            } else
+                completion_poller_owned = true;
         }
+        // The mailbox worker can win admission after the poller consumed the
+        // command wake and skipped the still-owned admission gate. Re-enter
+        // the common handoff only for the poller-owned branch: it checks the
+        // actual completion queue under the owner gate and publishes a fresh
+        // wake, or dispatches locally if ownership changed in between.
+        if (completion_poller_owned)
+            dispatch_send_completions_if_local ();
         if (lifecycle_coordinator ().is_destroyed ()) {
             if (!lifecycle_coordinator ().is_async_mailbox_active ()) {
                 mailbox_t *mailbox = static_cast<mailbox_t *> (_mailbox);

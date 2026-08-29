@@ -136,8 +136,12 @@ void zlink::socket_base_t::end_send_async_public_call ()
     const uint32_t old = pending.public_async_depth.fetch_sub (
       1, std::memory_order_acq_rel);
     zlink_assert (old > 0);
-    if (old == 1 && has_send_pending ())
-        notify_request_completion ();
+    // Release the public-depth gate through the shared dispatch owner. An
+    // unresolved record is admission work and publishes no completion wake;
+    // an actual queued completion is either dispatched locally or handed to
+    // the poller while the owner gate excludes a check-vs-drain race.
+    if (old == 1)
+        dispatch_send_completions_if_local ();
     dec_mailbox_ref ();
 }
 
@@ -703,9 +707,27 @@ void zlink::socket_base_t::dispatch_send_completions_if_local ()
     if (socket_send_complete_dispatch_scope_t::dispatching_socket (this))
         return;
     scoped_lock_t owner_lock (_completion_owner_sync);
-    if (_completion_poller_refs.load (std::memory_order_acquire) != 0)
+    if (_completion_poller_refs.load (std::memory_order_acquire) != 0) {
+        socket_send_pending_runtime_t &pending = send_pending_runtime ();
+        // The final public-depth release re-enters this owner gate. Publishing
+        // earlier would let the waiter consume the wake while callbacks are
+        // still deliberately barred from dispatch.
+        if (pending.public_async_depth.load (std::memory_order_acquire) != 0)
+            return;
+        bool completion_ready = false;
+        {
+            scoped_lock_t lock (pending.sync);
+            completion_ready = pending.completion_head != NULL;
+        }
+        // Producers that resolve work outside poller_wait (notably public
+        // cancellation) must wake the transferred dispatch owner themselves.
+        // The notification is tied to an actual queued completion, so a
+        // redrive-only wake cannot escape as public POLLCOMPLETION.
+        if (completion_ready)
+            notify_request_completion ();
         return;
-    dispatch_send_completions (false);
+    }
+    (void) dispatch_send_completions (false);
 }
 
 int zlink::socket_base_t::drain_send_completions ()
@@ -718,20 +740,21 @@ int zlink::socket_base_t::drain_send_completions ()
         if (!pending.completion_head)
             return 0;
     }
-    dispatch_send_completions (false);
-    return 1;
+    return dispatch_send_completions (false);
 }
 
-//  Run the completion callback for every resolved record. One socket never
-//  dispatches two completions concurrently: the callback scope serialises
-//  them, exactly as the removed readiness dispatch loop did.
-void zlink::socket_base_t::dispatch_send_completions (bool closing_)
+//  Run the completion callback for every resolved record and return the
+//  number actually invoked. One socket never dispatches two completions
+//  concurrently: the callback scope serialises them, exactly as the removed
+//  readiness dispatch loop did.
+int zlink::socket_base_t::dispatch_send_completions (bool closing_)
 {
     socket_send_pending_runtime_t &pending = send_pending_runtime ();
     if (!closing_
         && pending.public_async_depth.load (std::memory_order_acquire) != 0)
-        return;
+        return 0;
 
+    int dispatched = 0;
     while (true) {
         send_pending_record_t *record = NULL;
         zlink_send_complete_handler_fn handler = NULL;
@@ -739,11 +762,11 @@ void zlink::socket_base_t::dispatch_send_completions (bool closing_)
         {
             scoped_lock_t lock (pending.sync);
             if (!pending.completion_head)
-                return;
+                return dispatched;
             handler = pending.handler;
             userdata = pending.handler_userdata;
             if (!handler)
-                return;
+                return dispatched;
             record = pending.completion_head;
             pending.completion_head = record->completion_next;
             if (!pending.completion_head)
@@ -767,6 +790,7 @@ void zlink::socket_base_t::dispatch_send_completions (bool closing_)
         if (closing_) {
             socket_send_complete_dispatch_scope_t dispatch_scope (this);
             handler (public_handle (), &event, userdata);
+            ++dispatched;
             destroy_send_pending_record (record);
             continue;
         }
@@ -783,15 +807,16 @@ void zlink::socket_base_t::dispatch_send_completions (bool closing_)
                 pending.completion_head = record;
                 if (!pending.completion_tail)
                     pending.completion_tail = record;
-                return;
+                return dispatched;
             }
             socket_send_complete_dispatch_scope_t dispatch_scope (this);
             handler (public_handle (), &event, userdata);
+            ++dispatched;
             close_requested = lifecycle_coordinator ().public_close_requested ();
         }
         destroy_send_pending_record (record);
         if (close_requested)
-            return;
+            return dispatched;
     }
 }
 

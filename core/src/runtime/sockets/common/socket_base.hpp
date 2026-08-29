@@ -943,7 +943,7 @@ class socket_base_t : public own_t,
     //  apply - it covers bytes already admitted, and a pending record is by
     //  definition not admitted yet.
     void fail_all_send_pending (int terminal_errno_);
-    void dispatch_send_completions (bool closing_ = false);
+    int dispatch_send_completions (bool closing_ = false);
     void dispatch_send_completions_if_local ();
     //  Claim/finish helpers used by the admit loop.
     bool claim_send_pending_head (send_pending_record_t **out_);

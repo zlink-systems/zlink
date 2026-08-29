@@ -753,6 +753,173 @@ void test_completion_poller_drains_pending_send_eterm_after_context_shutdown ()
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, term_result);
 }
 
+void test_completion_poller_does_not_publish_send_redrive_as_completion ()
+{
+    void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
+    const uint64_t hwm = 1024;
+    const int zero = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (sender, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (receiver, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (sender, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (receiver, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (receiver, "inproc://send-async-poller-redrive"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (sender, "inproc://send-async-poller-redrive"));
+
+    completion_probe_t completion;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_send_complete_handler (sender, &capture_completion, &completion));
+
+    void *poller = zlink_poller_new ();
+    TEST_ASSERT_NOT_NULL (poller);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_poller_add (poller, sender, sender, ZLINK_POLLCOMPLETION));
+
+    const std::string filler_payload (400, 'F');
+    zlink_msg_t filler;
+    init_part (&filler, filler_payload);
+    const zlink_submit_result_t filler_result = zlink_send_part (
+      sender, &filler, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&filler));
+
+    const std::vector<std::string> pending_record = {
+      std::string (128, 'A'), std::string (128, 'B'),
+      std::string (400, 'C')};
+    zlink_send_async_options_t options;
+    memset (&options, 0, sizeof (options));
+    options.struct_size = sizeof (options);
+    zlink_send_op_id_t op_id = 0;
+    const zlink_submit_result_t submit_result =
+      submit_record (sender, pending_record, &options, &op_id);
+
+    // Hold the async mailbox driver at its blocked-target gate. The poller can
+    // then consume the real HWM-release command while admission is still
+    // owned by that worker; releasing this hook makes the worker, rather than
+    // the waiter, create the completion after the original command wake.
+    gate_release_probe_t async_gate;
+    socket_handle_t sender_handle = as_socket_handle (sender);
+    TEST_ASSERT_NOT_NULL (sender_handle.socket);
+    sender_handle.socket->test_set_send_pending_gate_release_hook (
+      &block_first_gate_release, &async_gate);
+    sender_handle.socket->notify_incremental_send_released ();
+    bool async_gate_entered = false;
+    {
+        std::unique_lock<std::mutex> lock (async_gate.mutex);
+        async_gate_entered = async_gate.changed.wait_for (
+          lock, std::chrono::seconds (3),
+          [&async_gate] { return async_gate.entered; });
+    }
+
+    std::atomic<bool> wait_started (false);
+    std::atomic<bool> wait_returned (false);
+    int first_wait_result = -1;
+    zlink_config_result_t first_wait_error = ZLINK_CONFIG_INTERNAL_ERROR;
+    zlink_poller_event_t first_event;
+    memset (&first_event, 0, sizeof (first_event));
+    size_t completions_at_first_return = 0;
+    std::thread::id wait_thread_id;
+    std::thread waiter ([&] () {
+        wait_thread_id = std::this_thread::get_id ();
+        wait_started.store (true, std::memory_order_release);
+        first_wait_result = zlink_poller_wait (
+          poller, &first_event, 1, 3000, &first_wait_error);
+        completions_at_first_return = completion_count (&completion);
+        wait_returned.store (true, std::memory_order_release);
+    });
+
+    while (!wait_started.load (std::memory_order_acquire))
+        std::this_thread::yield ();
+    // Any submit-side progress/redrive wake is internal. It may wake the
+    // native poller, but no public completion exists until receiver credit is
+    // returned and the send callback runs on this waiter.
+    msleep (100);
+    const bool returned_before_credit =
+      wait_returned.load (std::memory_order_acquire);
+
+    const bool filler_received = recv_pair_record_eventually (
+      receiver, std::vector<std::string> (1, filler_payload));
+    msleep (100);
+    const bool returned_while_async_gate_owned =
+      wait_returned.load (std::memory_order_acquire);
+    {
+        std::lock_guard<std::mutex> lock (async_gate.mutex);
+        async_gate.release = true;
+    }
+    async_gate.changed.notify_all ();
+    waiter.join ();
+    sender_handle.socket->test_set_send_pending_gate_release_hook (NULL, NULL);
+    sender_handle = socket_handle_t ();
+
+    // Keep cleanup bounded even when the first wait exposed the regression
+    // and consumed only the internal redrive wake.
+    int recovery_wait_result = 0;
+    if (completion_count (&completion) == 0) {
+        zlink_poller_event_t recovery_event;
+        memset (&recovery_event, 0, sizeof (recovery_event));
+        recovery_wait_result =
+          zlink_poller_wait (poller, &recovery_event, 1, 3000, NULL);
+    }
+    const bool pending_record_received =
+      recv_pair_record_eventually (receiver, pending_record);
+
+    std::thread::id callback_thread;
+    {
+        std::lock_guard<std::mutex> lock (completion.mutex);
+        callback_thread = completion.callback_thread;
+    }
+    const size_t final_completion_count = completion_count (&completion);
+    completion_snapshot_t completion_event;
+    memset (&completion_event, 0, sizeof (completion_event));
+    if (final_completion_count != 0)
+        completion_event = completion_at (&completion, 0);
+    const zlink_config_result_t remove_result =
+      zlink_poller_remove (poller, sender);
+    const zlink_close_result_t poller_close_result =
+      zlink_poller_destroy (&poller);
+    const bool sender_closed = close_test_socket_eventually (sender);
+    const bool receiver_closed = close_test_socket_eventually (receiver);
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, filler_result);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, submit_result);
+    TEST_ASSERT_TRUE_MESSAGE (
+      op_id != 0, "poller regression did not create a pending send");
+    TEST_ASSERT_TRUE_MESSAGE (
+      async_gate_entered,
+      "async mailbox did not own the blocked admission pass");
+    TEST_ASSERT_FALSE_MESSAGE (
+      returned_before_credit,
+      "send redrive wake escaped as POLLCOMPLETION before its callback");
+    TEST_ASSERT_FALSE_MESSAGE (
+      returned_while_async_gate_owned,
+      "poller completed while the async mailbox still owned admission");
+    TEST_ASSERT_EQUAL_INT (1, first_wait_result);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, first_wait_error);
+    TEST_ASSERT_EQUAL_PTR (sender, first_event.socket);
+    TEST_ASSERT_TRUE (
+      (first_event.events & ZLINK_POLLCOMPLETION) != 0);
+    TEST_ASSERT_EQUAL_UINT64 (1, completions_at_first_return);
+    TEST_ASSERT_TRUE (callback_thread == wait_thread_id);
+    TEST_ASSERT_EQUAL_UINT64 (1, final_completion_count);
+    TEST_ASSERT_EQUAL_UINT64 (op_id, completion_event.op_id);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion_event.result);
+    TEST_ASSERT_EQUAL_INT (0, completion_event.terminal_errno);
+    TEST_ASSERT_EQUAL_INT (0, recovery_wait_result);
+    TEST_ASSERT_TRUE (filler_received);
+    TEST_ASSERT_TRUE (pending_record_received);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, remove_result);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, poller_close_result);
+    TEST_ASSERT_TRUE (sender_closed);
+    TEST_ASSERT_TRUE (receiver_closed);
+}
+
 void test_pair_async_multipart_retries_pristine_after_later_frame_hwm ()
 {
     void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
@@ -2025,6 +2192,8 @@ int main ()
     RUN_TEST (test_pair_immediate_async_admission_has_zero_op_id_and_no_callback);
     RUN_TEST (
       test_completion_poller_drains_pending_send_eterm_after_context_shutdown);
+    RUN_TEST (
+      test_completion_poller_does_not_publish_send_redrive_as_completion);
     RUN_TEST (test_pair_async_multipart_retries_pristine_after_later_frame_hwm);
     RUN_TEST (test_pair_pending_multipart_peer_detach_completes_terminal_once);
     RUN_TEST (test_inline_terminal_completion_can_self_close_before_submit_returns);
