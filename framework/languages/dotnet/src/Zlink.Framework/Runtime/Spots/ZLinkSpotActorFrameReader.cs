@@ -49,6 +49,8 @@ internal sealed class ZLinkSpotActorFrame(
     // produced it. Live ingress frames do not have this identity.
     internal long? HandoffArrivalIndex { get; } = handoffArrivalIndex;
 
+    internal ZLinkActorRuntimeState? AcceptedState { get; set; }
+
     public ulong RelocationReplyRouteId { get; private set; }
 
     internal void BindRelocationReplyRoute(ulong replyRouteId)

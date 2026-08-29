@@ -305,10 +305,8 @@ internal sealed class ZLinkActorInboundPipeline(
                 : null,
             runtime.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Inbound);
-        // The pump projection is intentionally not carried across the detached
-        // queue. Resolve the registry again so a successor state published in
-        // between is the owner of this dispatch-phase snapshot.
-        var state = runtime.GetOrCreateActorState(frame.Actor.ActorId);
+        var state = frame.AcceptedState
+                    ?? runtime.GetOrCreateActorState(frame.Actor.ActorId);
         ZLinkActorHandoffIngressStateSnapshot ingress;
         ZLinkActorHandoffCaptureResult capture;
         try
@@ -900,6 +898,7 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(
     {
         return runtime.SubmitActorAsync(
             actor,
+            state,
             header,
             body,
             relocationReplay,
@@ -919,7 +918,8 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(
             + $"correlation_id={header.CorrelationId} live_activation={state.LiveActivation is not null}");
         if (state.LiveActivation is not null)
             return await runtime.SubmitActorForReplyAsync(
-                    actor.Context.ActorId,
+                    actor,
+                    state,
                     header,
                     body,
                     relocationReplay,
@@ -942,7 +942,8 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(
         return result.Handled
             ? result.Reply
             : await runtime.SubmitActorForReplyAsync(
-                    actor.Context.ActorId,
+                    actor,
+                    state,
                     header,
                     body,
                     relocationReplay,

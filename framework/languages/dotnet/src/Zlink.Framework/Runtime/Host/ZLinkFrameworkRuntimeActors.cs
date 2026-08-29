@@ -3824,6 +3824,23 @@ internal sealed partial class ZLinkFrameworkRuntime
             cancellationToken);
     }
 
+    internal ValueTask SubmitActorAsync(
+        IZLinkActor actor,
+        ZLinkActorRuntimeState state,
+        ZlinkStreamHeader header,
+        Message payload,
+        bool relocationReplay,
+        CancellationToken cancellationToken = default)
+    {
+        return _actorSessionManager.SubmitActorAsync(
+            actor,
+            state,
+            header,
+            payload,
+            relocationReplay,
+            cancellationToken);
+    }
+
     internal ValueTask<CreateActorResult> CreateLocalActorAsync(
         string actorId,
         string actorType,
@@ -4053,6 +4070,23 @@ internal sealed partial class ZLinkFrameworkRuntime
     {
         return _actorSessionManager.SubmitActorForReplyAsync(
             actorId,
+            header,
+            payload,
+            relocationReplay,
+            cancellationToken);
+    }
+
+    internal ValueTask<ZLinkActorReply> SubmitActorForReplyAsync(
+        IZLinkActor actor,
+        ZLinkActorRuntimeState state,
+        ZlinkStreamHeader header,
+        Message payload,
+        bool relocationReplay,
+        CancellationToken cancellationToken = default)
+    {
+        return _actorSessionManager.SubmitActorForReplyAsync(
+            actor,
+            state,
             header,
             payload,
             relocationReplay,

@@ -316,6 +316,23 @@ internal sealed partial class ZLinkActorSessionManager(
             .ConfigureAwait(false);
     }
 
+    internal ValueTask<ZLinkActorReply> SubmitActorForReplyAsync(
+        IZLinkActor actor,
+        ZLinkActorRuntimeState state,
+        ZlinkStreamHeader header,
+        Message payload,
+        bool relocationReplay,
+        CancellationToken cancellationToken = default)
+    {
+        return DispatchRouter.SubmitForReplyAsync(
+            actor,
+            state,
+            header,
+            payload,
+            relocationReplay,
+            cancellationToken);
+    }
+
     public async ValueTask SubmitActorAsync(
         IZLinkActor actor,
         ZlinkStreamHeader header,
@@ -330,6 +347,23 @@ internal sealed partial class ZLinkActorSessionManager(
                 relocationReplay,
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    internal ValueTask SubmitActorAsync(
+        IZLinkActor actor,
+        ZLinkActorRuntimeState state,
+        ZlinkStreamHeader header,
+        Message payload,
+        bool relocationReplay,
+        CancellationToken cancellationToken = default)
+    {
+        return DispatchRouter.Async(
+            actor,
+            state,
+            header,
+            payload,
+            relocationReplay,
+            cancellationToken);
     }
 
     public async ValueTask NotifyDisconnectedByIdAsync(

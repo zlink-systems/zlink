@@ -50,7 +50,7 @@ internal sealed class ZLinkActorDispatchRouter(
                         ZLinkFrameworkErrorKind.NotFound,
                         $"Actor '{actorId}' is not active.");
 
-        return await SubmitForReplyAsync(
+        return await SubmitForReplyCoreAsync(
                 actor,
                 state,
                 header,
@@ -67,14 +67,32 @@ internal sealed class ZLinkActorDispatchRouter(
         bool relocationReplay,
         CancellationToken cancellationToken = default)
     {
+        var state = actorSessions.GetOrCreate(
+            ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor)));
+
+        await Async(
+                actor,
+                state,
+                header,
+                payload,
+                relocationReplay,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async ValueTask Async(
+        IZLinkActor actor,
+        ZLinkActorRuntimeState state,
+        ZlinkStreamHeader header,
+        Message payload,
+        bool relocationReplay,
+        CancellationToken cancellationToken = default)
+    {
         using var flow = ZLinkFlowContext.Enter(
             header.FlowId,
             header.FlowOrigin is { } streamOrigin ? (ZLinkFlowOrigin)(byte)streamOrigin : null,
             _dispatchErrors.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Inbound);
-        var actorId = actor.Context.ActorId;
-        var state = actorSessions.GetOrCreate(
-            ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor)));
         var shouldPrune = false;
         ensureActorContext(actor, state);
 
@@ -122,7 +140,7 @@ internal sealed class ZLinkActorDispatchRouter(
             .ConfigureAwait(false);
     }
 
-    private async ValueTask<ZLinkActorReply> SubmitForReplyAsync(
+    private async ValueTask<ZLinkActorReply> SubmitForReplyCoreAsync(
         IZLinkActor actor,
         ZLinkActorRuntimeState state,
         ZlinkStreamHeader header,
@@ -149,6 +167,21 @@ internal sealed class ZLinkActorDispatchRouter(
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
     }
+
+    public ValueTask<ZLinkActorReply> SubmitForReplyAsync(
+        IZLinkActor actor,
+        ZLinkActorRuntimeState state,
+        ZlinkStreamHeader header,
+        Message payload,
+        bool relocationReplay,
+        CancellationToken cancellationToken = default) =>
+        SubmitForReplyCoreAsync(
+            actor,
+            state,
+            header,
+            payload,
+            relocationReplay,
+            cancellationToken);
 
     private async ValueTask<bool> SubmitByCurrentLocationAsync(
         IZLinkActor actor,

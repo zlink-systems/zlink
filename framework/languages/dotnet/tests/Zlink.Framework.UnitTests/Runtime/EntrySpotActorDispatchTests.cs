@@ -4629,6 +4629,55 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task EntrySpotActorDispatch_Uses_The_State_Accepted_By_The_Target_Queue()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            _ = RegisterProbeActor(runtime, actorRef);
+            var acceptedState = runtime.GetOrCreateActorState(actorRef.ActorId);
+            var parts = CreateActorRequestParts(
+                actorRef,
+                "request",
+                "accepted-state",
+                requestId: 43,
+                flags: 1);
+            var frames = ZLinkActorHandoffIngress.CaptureMovingFrames(runtime, parts);
+            var manager = Assert.IsType<ZLinkActorSessionManager>(
+                typeof(ZLinkFrameworkRuntime)
+                    .GetField(
+                        "_actorSessionManager",
+                        BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(runtime));
+            var registry = Assert.IsType<ZLinkActorSessionRegistry>(
+                typeof(ZLinkActorSessionManager)
+                    .GetField(
+                        "_actorSessions",
+                        BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(manager));
+            var actorId = ZLinkActorId.FromBoundary(actorRef.ActorId, "actorId");
+            registry.RemoveIfCurrent(actorId, acceptedState);
+            var successor = registry.GetOrCreate(actorId);
+            successor.BindNativeActorRef(actorRef with { Generation = actorRef.Generation + 1 });
+
+            var pipeline = new ZLinkActorInboundPipeline(
+                runtime,
+                new ZLinkEntrySpotActorInboundEndpoint(runtime));
+            await pipeline.DispatchAsync(frames, CancellationToken.None);
+
+            var reply = Assert.Single(node.NoBindReplies);
+            var decoded = DecodeReplyFrame<ProbeReply>(Assert.Single(reply.Parts));
+            Assert.Equal("accepted-state:actor-a", decoded.Payload.Value);
+            Assert.Null(successor.Actor);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task BoundSessionRequestDuringRelocation_GetsActorMovingTerminal_AndNeverEntersJournal()
     {
         var node = new CapturingSpotNode();

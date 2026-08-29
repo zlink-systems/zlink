@@ -1,7 +1,10 @@
+using System.Collections.Concurrent;
+using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Contracts.Errors;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.UnitTests.Runtime;
@@ -63,6 +66,43 @@ public sealed class ActorHandlerActivationTests
         Assert.Equal(1, first.DisposeCount);
         Assert.Equal(1, second.DisposeCount);
         Assert.Equal(2, probe.DisposedDependencies);
+    }
+
+    [Fact]
+    public async Task Runtime_Generation_Reset_Fences_States_Before_The_Next_Registry_Turn()
+    {
+        var registry = new ZLinkActorSessionRegistry();
+        var state = registry.GetOrCreate(
+            ZLinkActorId.FromBoundary("actor-reset-fence", "actorId"));
+        var lane = Assert.IsType<ZLinkStateLane>(
+            typeof(ZLinkActorSessionRegistry)
+                .GetField("_lane", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(registry));
+        var mailbox = Assert.IsType<ConcurrentQueue<Func<ValueTask>>>(
+            typeof(ZLinkStateLane)
+                .GetField("_mailbox", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(lane));
+        var blockerStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseBlocker = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.True(lane.TryPost(async () =>
+        {
+            blockerStarted.TrySetResult();
+            await releaseBlocker.Task.ConfigureAwait(false);
+        }));
+        await blockerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var reset = Task.Run(async () => await registry.ResetGenerationAsync());
+        Assert.True(SpinWait.SpinUntil(
+            () => mailbox.Count == 1,
+            TimeSpan.FromSeconds(5)));
+        var observedByNextTurn = lane.RunAsync(() => state.ContextInvalidated).AsTask();
+
+        releaseBlocker.TrySetResult();
+
+        Assert.True(await observedByNextTurn.WaitAsync(TimeSpan.FromSeconds(5)));
+        await reset.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]

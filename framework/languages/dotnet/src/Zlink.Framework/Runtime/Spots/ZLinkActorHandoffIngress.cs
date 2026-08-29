@@ -61,6 +61,7 @@ internal static class ZLinkActorHandoffIngress
         var frameTransferred = false;
         try
         {
+            frame.AcceptedState = state;
             var capture = state.Handoff.TryCapture(
                 frame,
                 runtime,
@@ -137,6 +138,7 @@ internal static class ZLinkActorHandoffIngress
             try
             {
                 var state = runtime.GetOrCreateActorState(frame.Actor.ActorId);
+                frame.AcceptedState = state;
                 var ingress = state.Handoff.ProjectArrivalIngress(
                     state.NativeActorRef,
                     frame,

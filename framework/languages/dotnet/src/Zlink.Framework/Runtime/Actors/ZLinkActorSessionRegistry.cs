@@ -64,18 +64,17 @@ internal sealed class ZLinkActorSessionRegistry(
         CancellationToken cancellationToken = default,
         Action<Exception>? detachedCleanupFailure = null)
     {
-        // The reset call itself is the force-stop admission boundary.  Take
-        // the snapshot before the first asynchronous cleanup wait so every
-        // state is fenced before the caller can observe reset in progress.
+        // The reset call itself is the force-stop admission boundary. Fence
+        // the snapshot before clearing it so the registry cannot publish a
+        // successor while the previous runtime generation is still usable.
         var states = AwaitStateLane(_lane.RunAsync(() =>
         {
             var snapshot = _states.Values.ToArray();
+            foreach (var state in snapshot)
+                state.FenceRuntimeGeneration();
             _states.Clear();
             return snapshot;
         }));
-
-        foreach (var state in states)
-            state.FenceRuntimeGeneration();
         var cleanup = Task.WhenAll(
             states.Select(
                 static state => state
