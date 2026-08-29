@@ -250,7 +250,8 @@ ready gate는 패턴이 실제 active payload를 시작할 수 있는 최소 조
 
 | 패턴군 | ready 조건 |
 |---|---|
-| raw socket | client socket의 `CONNECTION_READY` 확인 뒤 `CLIENT_READY,<size>` 출력 |
+| raw socket | client socket의 `CONNECTION_READY` 확인 |
+| runner barrier를 사용하는 raw socket | `CONNECTION_READY` 확인 뒤 `CLIENT_READY,<size>` 출력, runner의 `START,<size>` 수신 |
 | `MULTI_STREAM` | STREAM 연결과 패턴별 HELLO/READY 계약 완료 |
 
 ### 1.6 Auto-HWM 정책
@@ -294,10 +295,12 @@ multi lifecycle에서 아래 단계는 만들지 않는다.
 - `stable`
 - `quiet`
 - `quiescent`
-- `server stop wait`
+- 측정 phase로 추가한 `server stop wait`
 
 위 항목이 이미 존재하지만 실제로는 ready 이벤트 대기나 phase 종료 정리를
 우회적으로 표현한 것뿐이면 삭제하고 `ready -> active`에 흡수한다.
+runner가 teardown 중 server process 종료를 확인하는 대기는 측정 phase가 아니며
+graceful shutdown 계약에 포함된다.
 
 ---
 
@@ -327,13 +330,17 @@ Multi 벤치마크는 **server/client 별도 프로세스**로 동작한다.
 | 1. server 시작 | 스크립트가 server 바이너리를 spawn |
 | 2. server READY | server가 bind 완료 후 stdout에 `READY,<endpoint>` 출력 |
 | 3. client 시작 | 스크립트가 READY를 읽은 후 client 바이너리를 spawn (`--endpoint <endpoint>`) |
-| 4. 측정 수행 | client가 active phase에서 throughput/latency를 동시 측정 |
-| 5. client 종료 | client가 phase 완료 후 종료 (exit code 0) |
+| 4. 측정 수행 | 패턴별 측정 주체인 server 또는 client가 active phase에서 throughput/latency를 측정하고 패턴의 완료 지점에서 `RESULT`를 출력한다. |
+| 5. client 완료 | client는 패턴 계약에 따라 `CLIENT_DONE` 또는 process exit로 완료를 알린다. request/reply 패턴은 `CLIENT_DONE` 뒤에도 completion 대상 socket을 유지하며 runner의 `STOP`을 기다린다. |
 | 6. server 종료 | 스크립트가 server stdin에 `STOP` 메시지 송신 → graceful shutdown 대기 → timeout 시 SIGTERM (Linux) / TerminateProcess (Windows) → 재 timeout 시 SIGKILL (Linux). server/client가 출력한 RESULT line을 합산 |
+| 7. request/reply client 종료 | server 종료를 확인한 뒤 스크립트가 client stdin에 `STOP`을 보낸다. client는 socket을 닫고 exit code 0으로 종료한다. |
 
 > **server 종료 순서**: ① stdin `STOP\n` 송신 + stdin close ② shutdown timeout 대기 ③ `terminate()` (SIGTERM) ④ 2차 timeout 대기 ⑤ `kill()` (SIGKILL). server는 stdin에서 `STOP` 또는 `QUIT` 수신 시 graceful shutdown을 수행한다.
 
-- server는 client 종료까지 상시 대기하며 relay/echo를 수행한다.
+- server는 `CLIENT_DONE` 또는 process exit로 확인한 client 측정 완료까지 relay/echo를 수행한다.
+- `MULTI_DEALER_ROUTER_REQREP`와 `MULTI_ROUTER_ROUTER_REQREP`에서는 client가
+  먼저 `CLIENT_DONE`을 출력하되 socket은 닫지 않는다. runner는 server 종료를
+  확인한 뒤 client에 `STOP`을 보내 queued reply가 completion 대상을 잃지 않게 한다.
 - phase 전환은 패턴별로 제어한다: echo는 client가 phase를 제어하고 server는 relay/echo 대기, one-way는 sender/receiver가 동일 순서의 phase를 수행한다. throughput/latency는 모두 active phase 한 구간에서 계산한다.
 - multi active 유효 메시지 규칙은 패턴별 정책 문서에 정의된 단일 기준으로
   고정한다. C 기준과 모든 bindings는 같은 pattern에서 동일한 active 유효 메시지
@@ -387,6 +394,8 @@ runner(스크립트/Python 엔진)와 server/client 바이너리는 **stdin/stdo
 |--------|------|------|
 | `START` | `START,<msg_size>` | 해당 size 케이스 active 시작 |
 | `PHASE_ACTIVE` | `PHASE_ACTIVE,<msg_size>` | C runner 호환용 one-way 보조 token. active gate가 아니며 client가 필수 조건으로 기다리면 안 됨 |
+| `STOP` | `STOP` | request/reply client의 completion 대상 socket 해제와 graceful shutdown 요청 |
+| `QUIT` | `QUIT` | graceful shutdown 요청 (`STOP`과 동일) |
 
 #### 패턴별 Orchestration 시퀀스
 
@@ -401,11 +410,21 @@ sequenceDiagram
     S->>R: READY,endpoint
     R->>C: endpoint argument
     C->>S: connect and complete ready gate
-    C->>R: CLIENT_READY,size
-    R->>S: START,size
-    R->>C: START,size
-    C->>R: RESULT lines and CLIENT_DONE,size
+    opt pattern uses runner start barrier
+        C->>R: CLIENT_READY,size
+        R->>S: START,size
+        R->>C: START,size
+    end
+    Note over S,C: RESULT source and timing follow the pattern measurement contract
+    opt pattern emits completion token
+        C->>R: CLIENT_DONE,size
+    end
     R->>S: STOP
+    S-->>R: process exit
+    opt MULTI_DEALER_ROUTER_REQREP or MULTI_ROUTER_ROUTER_REQREP
+        R->>C: STOP
+        C-->>R: process exit
+    end
 ```
 
 #### 메시지 규격 정리
@@ -415,8 +434,8 @@ sequenceDiagram
 - `PHASE_ACTIVE,<msg_size>`는 C runner 호환용 보조 token이다. 실제 active 시작
   조건은 아니므로, 언어별 client가 이 token을 기다리는 구조를 만들면 안 된다.
 - raw socket의 실제 연결 확인은 바이너리 내부 `CONNECTION_READY`가 담당한다.
-  그 확인이 끝난 뒤 `CLIENT_READY,<msg_size>`와 `START,<msg_size>`가 active 시작
-  barrier를 구성한다.
+  runner barrier를 사용하는 raw pattern은 그 확인이 끝난 뒤
+  `CLIENT_READY,<msg_size>`와 `START,<msg_size>`로 active 시작을 조정한다.
 
 ### 2.2 소스 파일 구조
 
@@ -449,8 +468,9 @@ perf/multi/
 │  │  │    [1] spawn server(pattern, transport)                         │  │  │
 │  │  │    [2] wait READY,<endpoint>                                    │  │  │
 │  │  │    [3] spawn client(pattern, transport, size, endpoint)         │  │  │
-│  │  │    [4] client 종료, RESULT line 수집                            │  │  │
+│  │  │    [4] client 완료 신호/exit, RESULT 수집                       │  │  │
 │  │  │    [5] server 종료, server RESULT line 수집                     │  │  │
+│  │  │    [6] request/reply client STOP 및 종료                        │  │  │
 │  │  │  → run_cooldown (3s)                                            │  │  │
 │  │  └────────────────────────────────────────────────────────────────┘  │  │
 │  │  → transport_transition_cooldown (3s)                                │  │
@@ -467,8 +487,13 @@ for pattern in [MULTI_DEALER_DEALER, MULTI_PUBSUB, ...]:
                 spawn server(pattern, transport)
                 wait READY
                 spawn client(pattern, transport, size, endpoint)
-                wait client exit
-                stop server
+                wait client completion (CLIENT_DONE or process exit)
+                if pattern is request/reply:
+                    stop server and wait server exit
+                    stop client and wait client exit
+                else:
+                    request server stop
+                    wait client exit and server exit
             run_cooldown
         transport_transition_cooldown
     pattern_transition_cooldown
@@ -511,7 +536,8 @@ for pattern in [MULTI_DEALER_DEALER, MULTI_PUBSUB, ...]:
 - 각 size 케이스는 반드시 **독립된 server/client 프로세스 쌍**으로 실행한다.
 - runner는 size마다 server/client 바이너리를 **다시 실행**해야 한다.
 - 여러 size를 하나의 server/client 생명주기에 묶어 실행하는 리팩토링은 정책 위반이다.
-- server/client 바이너리는 해당 size 케이스를 측정하고 `RESULT` line만 출력한다.
+- server/client 바이너리는 해당 size 케이스를 측정하고 `RESULT`와 정책에 명시된
+  orchestration 제어 신호를 출력한다.
 - size 반복 실행, runs 집계, markdown table 출력, 결과 파일 저장은 runner 책임이다.
 - size 간 상태 공유는 허용하지 않는다. 다음 size는 이전 size의 연결, ready 상태,
   active 집계, control state를 이어받아서는 안 된다.

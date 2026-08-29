@@ -389,6 +389,7 @@ total: 29 bytes (고정)
 | `PHASE_ACTIVE,<msg_size>` | runner stdin → client | C runner 호환용 one-way 보조 token. active gate가 아니며 benchmark process가 필수 조건으로 요구하면 안 됨 |
 | `CLIENT_DONE,<msg_size>` | client stdout → runner | client가 해당 size RESULT 출력까지 완료 |
 | `STOP` | runner stdin → server/client | 실패, timeout, 정리 요청 |
+| `QUIT` | runner stdin → server/client | graceful shutdown 요청 (`STOP`과 동일) |
 | `UNSUPPORTED,...` / `SKIP,...` | process stdout → runner | 해당 조합 제외 |
 | `RESULT,...` | process stdout → runner | 측정 결과 |
 
@@ -412,6 +413,10 @@ total: 29 bytes (고정)
   금지한다.
 - `STOP`은 runner orchestration 정리 명령이다. data-plane phase 종료 신호가
   필요한 패턴은 suite 정책에 정의된 wire-level stop token을 사용한다.
+- `MULTI_DEALER_ROUTER_REQREP`와 `MULTI_ROUTER_ROUTER_REQREP` client는
+  `RESULT`와 `CLIENT_DONE`을 출력한 뒤 request completion 대상 socket을 유지한다.
+  runner는 server에 `STOP`을 보내 종료를 확인한 뒤 client에 `STOP`을 보낸다.
+  client는 이 `STOP`을 받은 뒤 socket을 닫고 종료한다.
 - C perf handshake에 없는 언어별 ready token, 별도 ack, 추가 quorum, 별도 warmup
   start 명령은 정책 위반이다. 특정 바인딩 public API 부족으로 C handshake를
   구현할 수 없으면 binding public API를 보강하거나 해당 perf 조합을

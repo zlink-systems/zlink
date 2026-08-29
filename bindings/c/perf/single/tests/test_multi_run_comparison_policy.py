@@ -404,6 +404,296 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
             os.environ.clear()
             os.environ.update(old_env)
 
+    def test_multi_size_failure_continues_without_merging_failed_metrics(self):
+        old_allow_multi = RC.ALLOW_MULTI
+        old_split = RC.run_sizes_test_split
+        calls = []
+        result_callbacks = []
+        size_callbacks = []
+        callback_events = []
+        try:
+            RC.ALLOW_MULTI = True
+
+            def fake_split(server_name, client_name, lib_name, transport, sizes,
+                           pattern_name, result_line_callback=None, **kwargs):
+                size = sizes[0]
+                calls.append(size)
+                parsed = {
+                    f"tcp|{size}|{metric_name}": float(size)
+                    for metric_name, _ in tier1_metrics(1.0)
+                }
+                if size == 65536:
+                    return {
+                        "status": "fail",
+                        "parsed": parsed,
+                        "timed_out": False,
+                        "returncode": 1,
+                        "reason": "server_non_zero_exit_1",
+                        "warnings": [],
+                    }
+                return {
+                    "status": "success",
+                    "parsed": parsed,
+                    "timed_out": False,
+                    "returncode": 0,
+                    "reason": "",
+                    "warnings": [],
+                }
+
+            RC.run_sizes_test_split = fake_split
+            outcome = RC.run_sizes_test(
+                "ignored",
+                "current",
+                "tcp",
+                [65536, 131072],
+                "DEALER_ROUTER_REQREP",
+                result_line_callback=lambda tr, size, metric, value: (
+                    result_callbacks.append((tr, size, metric, value)),
+                    callback_events.append(("metric", size, metric)),
+                ),
+                size_result_callback=lambda tr, size, item: (
+                    size_callbacks.append((tr, size, item["status"])),
+                    callback_events.append(("terminal", size, item["status"])),
+                ),
+            )
+
+            self.assertEqual(calls, [65536, 131072])
+            self.assertEqual(outcome["status"], "fail")
+            self.assertEqual(
+                outcome["reason"],
+                "server_non_zero_exit_1_size_65536",
+            )
+            self.assertEqual(
+                outcome["size_failures"],
+                {
+                    65536: {
+                        "reason": "server_non_zero_exit_1",
+                        "timed_out": False,
+                        "returncode": 1,
+                    }
+                },
+            )
+            self.assertNotIn("tcp|65536|throughput", outcome["parsed"])
+            self.assertEqual(outcome["parsed"]["tcp|131072|throughput"], 131072.0)
+            self.assertEqual(
+                {size for _tr, size, _metric, _value in result_callbacks},
+                {131072},
+            )
+            self.assertEqual(
+                size_callbacks,
+                [
+                    ("tcp", 65536, "fail"),
+                    ("tcp", 131072, "success"),
+                ],
+            )
+            self.assertEqual(callback_events[0], ("terminal", 65536, "fail"))
+            self.assertEqual(callback_events[-1], ("terminal", 131072, "success"))
+            self.assertTrue(
+                all(event[0] == "metric" for event in callback_events[1:-1])
+            )
+        finally:
+            RC.ALLOW_MULTI = old_allow_multi
+            RC.run_sizes_test_split = old_split
+
+    def test_split_runner_releases_reqrep_client_after_server_exit(self):
+        old_popen = RC.subprocess.Popen
+        old_run_command = RC.run_command_with_metrics
+        events = []
+
+        class RecordingStdin:
+            def __init__(self, name, owner):
+                self.name = name
+                self.owner = owner
+                self.closed = False
+
+            def write(self, text):
+                token = text.strip()
+                events.append(f"{self.name}:{token}")
+                if self.name == "client" and token == "STOP":
+                    self.owner.returncode = 0
+                return len(text)
+
+            def flush(self):
+                return None
+
+            def close(self):
+                self.closed = True
+
+        class FakeServerProcess:
+            def __init__(self):
+                self.returncode = None
+                self.stdin = RecordingStdin("server", self)
+                self.stdout = io.StringIO("READY,tcp://127.0.0.1:5555\n")
+                self.stderr = io.StringIO("")
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                events.append("server:exit")
+                self.returncode = 0
+                return 0
+
+            def terminate(self):
+                self.returncode = -15
+
+            def kill(self):
+                self.returncode = -9
+
+        class FakeClientProcess:
+            def __init__(self):
+                self.returncode = None
+                self.stdin = RecordingStdin("client", self)
+
+            def poll(self):
+                return self.returncode
+
+        result_lines = "".join(
+            "RESULT,current,MULTI_DEALER_ROUTER_REQREP,tcp,65536,"
+            f"{metric_name},1.0\n"
+            for metric_name, _ in tier1_metrics(1.0)
+        )
+
+        def fake_popen(*args, **kwargs):
+            return FakeServerProcess()
+
+        def fake_run_command(cmd, env, timeout_sec, on_stdout_line=None,
+                             on_stderr_line=None, on_sample=None,
+                             on_process_start=None):
+            client = FakeClientProcess()
+            if on_process_start is not None:
+                on_process_start(client)
+            if on_stdout_line is not None:
+                for line in result_lines.splitlines(True):
+                    on_stdout_line(line)
+                on_stdout_line("CLIENT_DONE,65536\n")
+            self.assertEqual(client.returncode, 0)
+            return {
+                "returncode": 0,
+                "stdout": result_lines + "CLIENT_DONE,65536\n",
+                "stderr": "",
+                "timed_out": False,
+            }
+
+        try:
+            RC.subprocess.Popen = fake_popen
+            RC.run_command_with_metrics = fake_run_command
+            outcome = RC.run_sizes_test_split(
+                "server",
+                "client",
+                "current",
+                "tcp",
+                [65536],
+                "DEALER_ROUTER_REQREP",
+            )
+
+            self.assertEqual(outcome["status"], "success")
+            self.assertLess(events.index("server:STOP"), events.index("server:exit"))
+            self.assertLess(events.index("server:exit"), events.index("client:STOP"))
+        finally:
+            RC.subprocess.Popen = old_popen
+            RC.run_command_with_metrics = old_run_command
+
+    def test_split_runner_does_not_wait_for_dealer_done_callback(self):
+        old_popen = RC.subprocess.Popen
+        old_run_command = RC.run_command_with_metrics
+        events = []
+        server_ref = []
+
+        class RecordingStdin:
+            def __init__(self, name):
+                self.name = name
+
+            def write(self, text):
+                events.append(f"{self.name}:{text.strip()}")
+                return len(text)
+
+            def flush(self):
+                return None
+
+            def close(self):
+                return None
+
+        class FakeServerProcess:
+            def __init__(self):
+                self.returncode = None
+                self.stdin = RecordingStdin("server")
+                self.stdout = io.StringIO("READY,tcp://127.0.0.1:5555\n")
+                self.stderr = io.StringIO("")
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                events.append("server:exit")
+                self.returncode = 0
+                return 0
+
+            def terminate(self):
+                self.returncode = -15
+
+            def kill(self):
+                self.returncode = -9
+
+        class FakeClientProcess:
+            def __init__(self):
+                self.returncode = None
+                self.stdin = RecordingStdin("client")
+
+            def poll(self):
+                return self.returncode
+
+        result_lines = "".join(
+            "RESULT,current,MULTI_DEALER_DEALER,tcp,65536,"
+            f"{metric_name},1.0\n"
+            for metric_name, _ in tier1_metrics(1.0)
+        )
+
+        def fake_popen(*args, **kwargs):
+            server = FakeServerProcess()
+            server_ref.append(server)
+            return server
+
+        def fake_run_command(cmd, env, timeout_sec, on_stdout_line=None,
+                             on_stderr_line=None, on_sample=None,
+                             on_process_start=None):
+            client = FakeClientProcess()
+            if on_process_start is not None:
+                on_process_start(client)
+            if on_stdout_line is not None:
+                on_stdout_line("CLIENT_DONE,65536\n")
+            events.append("client:callback-return")
+            self.assertIn("server:STOP", events)
+            self.assertNotIn("server:exit", events)
+            self.assertNotIn("client:STOP", events)
+            client.returncode = 0
+            server_ref[0].returncode = 0
+            return {
+                "returncode": 0,
+                "stdout": result_lines + "CLIENT_DONE,65536\n",
+                "stderr": "",
+                "timed_out": False,
+            }
+
+        try:
+            RC.subprocess.Popen = fake_popen
+            RC.run_command_with_metrics = fake_run_command
+            outcome = RC.run_sizes_test_split(
+                "server",
+                "client",
+                "current",
+                "tcp",
+                [65536],
+                "DEALER_DEALER",
+            )
+
+            self.assertEqual(outcome["status"], "success")
+            self.assertNotIn("server:exit", events)
+            self.assertNotIn("client:STOP", events)
+        finally:
+            RC.subprocess.Popen = old_popen
+            RC.run_command_with_metrics = old_run_command
+
     def test_multi_transport_cooldown_runs_only_between_transports(self):
         old_allow_multi = RC.ALLOW_MULTI
         old_run_sizes_test = RC.run_sizes_test
@@ -530,7 +820,108 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
             self.assertEqual(start_callbacks, [("tcp", 65536)])
             self.assertEqual(result_callbacks, [("tcp", 65536)])
             self.assertIn("Testing tcp | 65536B:", output)
-            self.assertIn("999.000 ms", output)
+            self.assertIn("0.123 Kmsg/s", output)
+            self.assertIn("1.500 ms", output)
+            self.assertNotIn("999.000 ms", output)
+        finally:
+            RC.ALLOW_MULTI = old_allow_multi
+            RC.run_sizes_test = old_run_sizes_test
+            RC.MSG_SIZES = old_msg_sizes
+            os.environ.clear()
+            os.environ.update(old_env)
+
+    def test_multi_collect_data_attributes_failure_to_exact_size(self):
+        old_allow_multi = RC.ALLOW_MULTI
+        old_run_sizes_test = RC.run_sizes_test
+        old_msg_sizes = RC.MSG_SIZES
+        old_env = os.environ.copy()
+        try:
+            RC.ALLOW_MULTI = True
+            RC.MSG_SIZES = [65536, 131072]
+            os.environ["PERF_RUN_COOLDOWN_MS"] = "0"
+            os.environ["PERF_TRANSPORT_TRANSITION_MS"] = "0"
+
+            def fake_run_sizes_test(binary_name, lib_name, transport, sizes,
+                                    pattern_name, result_line_callback=None,
+                                    size_start_callback=None,
+                                    size_result_callback=None):
+                parsed = {
+                    f"tcp|131072|{metric_name}": value
+                    for metric_name, value in tier1_metrics(10.0)
+                }
+                failed_size_outcome = {
+                    "status": "fail",
+                    "parsed": {},
+                    "timed_out": False,
+                    "returncode": 1,
+                    "reason": "server_non_zero_exit_1",
+                    "warnings": [],
+                }
+                successful_size_outcome = {
+                    "status": "success",
+                    "parsed": parsed,
+                    "timed_out": False,
+                    "returncode": 0,
+                    "reason": "",
+                    "warnings": [],
+                }
+                if size_start_callback is not None:
+                    size_start_callback(transport, 65536)
+                if size_result_callback is not None:
+                    size_result_callback(transport, 65536, failed_size_outcome)
+                if size_start_callback is not None:
+                    size_start_callback(transport, 131072)
+                if size_result_callback is not None:
+                    size_result_callback(transport, 131072, successful_size_outcome)
+                return {
+                    "status": "fail",
+                    "parsed": parsed,
+                    "timed_out": False,
+                    "returncode": 1,
+                    "reason": "server_non_zero_exit_1_size_65536",
+                    "warnings": [],
+                    "size_failures": {
+                        65536: {
+                            "reason": "server_non_zero_exit_1",
+                            "timed_out": False,
+                            "returncode": 1,
+                        }
+                    },
+                }
+
+            RC.run_sizes_test = fake_run_sizes_test
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                final_stats, failures = RC.collect_data(
+                    "ignored",
+                    "current",
+                    "DEALER_ROUTER_REQREP",
+                    1,
+                    transports=["tcp"],
+                    table_lines=[],
+                )
+
+            self.assertEqual(
+                failures,
+                [
+                    (
+                        "DEALER_ROUTER_REQREP",
+                        "current",
+                        "tcp",
+                        65536,
+                        "server_non_zero_exit_1",
+                    )
+                ],
+            )
+            self.assertEqual(final_stats["tcp|65536|throughput"], 0)
+            self.assertEqual(final_stats["tcp|131072|throughput"], 10.0)
+            output = stdout.getvalue()
+            self.assertIn("| 65536B", output)
+            self.assertIn("| 131072B", output)
+            self.assertLess(
+                output.index("| 65536B"),
+                output.index("Testing tcp | 131072B:"),
+            )
         finally:
             RC.ALLOW_MULTI = old_allow_multi
             RC.run_sizes_test = old_run_sizes_test

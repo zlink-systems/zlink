@@ -432,6 +432,18 @@ inline void close_client_state (client_state_t *state)
     }
 }
 
+inline bool wait_for_runner_stop_after_done ()
+{
+    std::string line;
+    while (std::getline (std::cin, line)) {
+        if (!line.empty () && line[line.size () - 1] == '\r')
+            line.erase (line.size () - 1);
+        if (line == "STOP" || line == "QUIT")
+            return true;
+    }
+    return false;
+}
+
 inline int run_client_benchmark (const endpoint_config_t &config,
                                  const std::string &lib_name,
                                  const std::string &transport,
@@ -488,6 +500,11 @@ inline int run_client_benchmark (const endpoint_config_t &config,
         perf_multi_client::print_echo_client_result_lines (config.pattern_name, lib_name,
                                                            transport, msg_size, throughput,
                                                            latency);
+        std::cout << "CLIENT_DONE," << msg_size << std::endl;
+    }
+    if (!wait_for_runner_stop_after_done ()) {
+        close_client_state (&state);
+        return 1;
     }
 
     close_client_state (&state);
@@ -620,9 +637,15 @@ inline server_recv_step_t reply_one_request (void *server,
     if (submit_router_reply_with_retry (server, source_rid, request_seq, &part))
         return server_recv_step_replied;
 
+    const int reply_err = zlink_errno ();
+    // Once the runner has requested teardown, an in-flight reply may stop on
+    // ENOTCONN or leave no errno when a backpressure retry observes STOP.
+    // Neither outcome is a measurement failure after CLIENT_DONE.
+    if (perf_stop_requested ().load (std::memory_order_acquire)) {
+        return server_recv_step_drained;
+    }
     if (bench_debug_enabled ()) {
-        std::cerr << "[perf-multi-socket-reqrep] reply failed err=" << zlink_errno ()
-                  << std::endl;
+        std::cerr << "[perf-multi-socket-reqrep] reply failed err=" << reply_err << std::endl;
     }
     return server_recv_step_error;
 }

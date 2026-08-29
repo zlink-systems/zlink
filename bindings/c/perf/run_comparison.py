@@ -63,6 +63,10 @@ ECHO_PATTERNS = {
     "ROUTER_ROUTER_REQREP",
     "STREAM",
 }
+SOCKET_REQREP_PATTERNS = {
+    "DEALER_ROUTER_REQREP",
+    "ROUTER_ROUTER_REQREP",
+}
 SINGLE_ECHO_PATTERNS = set()
 ALLOW_MULTI = os.environ.get("PERF_ALLOW_MULTI", "0") == "1"
 SINGLE_COMPARISONS = [
@@ -2130,6 +2134,16 @@ def run_sizes_test_split(
     pending_phase_active_sizes = set()
     client_proc = [None]
 
+    def stop_client():
+        proc = client_proc[0]
+        if not proc or proc.poll() is not None or not proc.stdin:
+            return
+        try:
+            proc.stdin.write("STOP\n")
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+
     def maybe_send_phase_active(size_value):
         try:
             size_int = int(size_value)
@@ -2483,14 +2497,19 @@ def run_sizes_test_split(
                 return
             done_size = parse_client_done_size(line)
             if done_size is not None:
-                if done_size not in stop_requested_sizes:
-                    try:
-                        if server_proc.stdin:
-                            server_proc.stdin.write("STOP\n")
-                            server_proc.stdin.flush()
-                            stop_requested_sizes.add(done_size)
-                    except Exception:
-                        pass
+                if done_size in expected_sizes and done_size not in stop_requested_sizes:
+                    stop_requested_sizes.add(done_size)
+                    if pattern_name in SOCKET_REQREP_PATTERNS:
+                        if stop_requested_sizes == expected_sizes:
+                            stop_server()
+                            stop_client()
+                    else:
+                        try:
+                            if server_proc.stdin:
+                                server_proc.stdin.write("STOP\n")
+                                server_proc.stdin.flush()
+                        except (BrokenPipeError, OSError, ValueError):
+                            pass
                 return
             emit_result_metrics_from_line(
                 line, transport, expected_sizes, result_line_callback
@@ -2697,7 +2716,7 @@ def run_sizes_test(
                 transport,
                 [case_size],
                 pattern_name,
-                result_line_callback=result_line_callback,
+                result_line_callback=None,
             )
 
         # Continue through the common per-size aggregation below so C and
@@ -2735,7 +2754,7 @@ def run_sizes_test(
                 transport,
                 [case_size],
                 pattern_name,
-                result_line_callback=result_line_callback,
+                result_line_callback=None,
             )
 
         def run_one_size_case_with_env(case_size, extra_env):
@@ -2757,7 +2776,17 @@ def run_sizes_test(
         "returncode": 0,
         "reason": "",
         "warnings": [],
+        "size_failures": {},
     }
+
+    def notify_size_result(size_value, size_outcome):
+        if size_result_callback is None:
+            return
+        try:
+            size_result_callback(transport, size_value, size_outcome)
+        except Exception:
+            pass
+
     for size_index, size in enumerate(size_list):
         isolated = None
         if size_start_callback is not None:
@@ -2767,21 +2796,65 @@ def run_sizes_test(
                 pass
         isolated = run_one_size_case(size)
         merged["warnings"].extend(isolated.get("warnings", []))
-        merged["parsed"].update(isolated.get("parsed", {}))
 
-        if isolated.get("status") != "success":
-            merged["status"] = isolated.get("status", "fail")
-            merged["timed_out"] = isolated.get("timed_out", False)
-            merged["returncode"] = isolated.get("returncode", -1)
-            reason = isolated.get("reason", "size_case_failed")
-            merged["reason"] = f"{reason}_size_{size}"
-            return merged
+        isolated_status = isolated.get("status", "fail")
+        if isolated_status in ("unsupported", "skip"):
+            if not merged["parsed"] and not merged["size_failures"]:
+                merged["status"] = isolated_status
+                merged["timed_out"] = isolated.get("timed_out", False)
+                merged["returncode"] = isolated.get("returncode", 0)
+                merged["reason"] = isolated.get("reason", isolated_status)
+                notify_size_result(size, isolated)
+                return merged
 
-        if size_result_callback is not None:
-            try:
-                size_result_callback(transport, size, isolated)
-            except Exception:
-                pass
+            failure_reason = isolated.get("reason", isolated_status)
+            failure = {
+                "reason": failure_reason,
+                "timed_out": isolated.get("timed_out", False),
+                "returncode": isolated.get("returncode", -1),
+            }
+            merged["size_failures"][size] = failure
+            if merged["status"] == "success":
+                merged["status"] = "fail"
+                merged["returncode"] = failure["returncode"]
+                merged["reason"] = f"{failure_reason}_size_{size}"
+            merged["timed_out"] = merged["timed_out"] or failure["timed_out"]
+            notify_size_result(size, isolated)
+            continue
+
+        if isolated_status != "success":
+            failure_reason = isolated.get("reason", "size_case_failed")
+            failure = {
+                "reason": failure_reason,
+                "timed_out": isolated.get("timed_out", False),
+                "returncode": isolated.get("returncode", -1),
+            }
+            merged["size_failures"][size] = failure
+            if merged["status"] == "success":
+                merged["status"] = "fail"
+                merged["returncode"] = failure["returncode"]
+                merged["reason"] = f"{failure_reason}_size_{size}"
+            merged["timed_out"] = merged["timed_out"] or failure["timed_out"]
+            notify_size_result(size, isolated)
+            continue
+
+        isolated_parsed = isolated.get("parsed", {}) or {}
+        merged["parsed"].update(isolated_parsed)
+        if result_line_callback is not None:
+            for key, value in isolated_parsed.items():
+                try:
+                    line_transport, line_size_text, metric_name = key.split("|", 2)
+                    line_size = int(line_size_text)
+                except (TypeError, ValueError):
+                    continue
+                _emit_result_metric_callback(
+                    result_line_callback,
+                    line_transport,
+                    line_size,
+                    metric_name,
+                    value,
+                )
+        notify_size_result(size, isolated)
 
     return merged
 
@@ -3036,49 +3109,11 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                 live_metrics = {}
                 live_emitted_sizes = set()
 
-                def maybe_emit_live_row(sz):
-                    tp_key = f"{tr}|{sz}|throughput"
-                    bw_key = f"{tr}|{sz}|bandwidth"
-                    lat_key = f"{tr}|{sz}|latency"
-                    lat95_key = f"{tr}|{sz}|{LATENCY_P95_METRIC}"
-                    lat99_key = f"{tr}|{sz}|{LATENCY_P99_METRIC}"
-                    tp_value = live_metrics.get(tp_key)
-                    bw_value = live_metrics.get(bw_key)
-                    lat_value = live_metrics.get(lat_key)
-                    lat95_value = live_metrics.get(lat95_key)
-                    lat99_value = live_metrics.get(lat99_key)
-                    if sz in live_emitted_sizes:
-                        return
-
-                    if (
-                        tp_value is None
-                        or bw_value is None
-                        or lat_value is None
-                    ):
-                        return
-                    if lat95_value is None or lat99_value is None:
-                        return
-                    _lat_mean, lat95_value, lat99_value = resolve_latency_triplet(
-                        lat_value, lat95_value, lat99_value
-                    )
-
-                    emit_size_row(
-                        sz,
-                        "success",
-                        throughput=tp_value,
-                        bandwidth=bw_value,
-                        latency=lat_value,
-                        latency_p95=lat95_value,
-                        latency_p99=lat99_value,
-                    )
-                    live_emitted_sizes.add(sz)
-
                 def on_result_metric(line_transport, line_size, metric_name, value):
                     if line_transport != tr.lower() or line_size not in sizes:
                         return
                     key = f"{line_transport}|{line_size}|{metric_name}"
                     live_metrics[key] = value
-                    maybe_emit_live_row(line_size)
 
                 live_result_callback = on_result_metric
 
@@ -3087,7 +3122,13 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                         return
                     if line_size in live_emitted_sizes:
                         return
-                    if size_outcome.get("status") != "success":
+                    size_status = size_outcome.get("status", "fail")
+                    if size_status != "success":
+                        emit_size_row(
+                            line_size,
+                            "unsupported" if size_status == "unsupported" else "fail",
+                        )
+                        live_emitted_sizes.add(line_size)
                         return
                     parsed = size_outcome.get("parsed", {}) or {}
                     tp_key = f"{tr}|{line_size}|throughput"
@@ -3102,6 +3143,8 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                         or lat95_key not in parsed
                         or lat99_key not in parsed
                     ):
+                        emit_size_row(line_size, "fail")
+                        live_emitted_sizes.add(line_size)
                         return
                     emit_size_row(
                         line_size,
@@ -3166,7 +3209,9 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                     metrics_raw.setdefault(key, []).append(value)
 
                 timed_out_run = outcome.get("timed_out", False)
-                if timed_out_run and not parsed:
+                size_failures = outcome.get("size_failures", {}) or {}
+
+                if timed_out_run and not parsed and not size_failures:
                     for sz in sizes:
                         if sz in live_emitted_sizes:
                             continue
@@ -3178,7 +3223,7 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                     maybe_cooldown()
                     continue
 
-                if not parsed:
+                if not parsed and not size_failures:
                     base_reason = outcome.get("reason", "")
                     reason = base_reason if base_reason else (
                         f"no_data_rc_{rc}" if rc not in (0, None) else "no_data"
@@ -3195,6 +3240,25 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
                     continue
 
                 for sz in sizes:
+                    size_failure = size_failures.get(sz)
+                    if size_failure is None:
+                        size_failure = size_failures.get(str(sz))
+                    if size_failure is not None:
+                        run_failed_sizes.add(sz)
+                        reason = (size_failure.get("reason", "") or "").strip()
+                        if not reason:
+                            reason = (
+                                "timeout"
+                                if size_failure.get("timed_out", False)
+                                else "size_case_failed"
+                            )
+                        failures.append((pattern_name, lib_name, tr, sz, reason))
+                        if sz not in live_emitted_sizes:
+                            emit_size_row(sz, "fail")
+                        if FAIL_FAST:
+                            return final_stats, failures
+                        continue
+
                     tp_key = f"{tr}|{sz}|throughput"
                     bw_key = f"{tr}|{sz}|bandwidth"
                     lat_key = f"{tr}|{sz}|latency"
@@ -3215,9 +3279,11 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
 
                     if missing:
                         run_failed_sizes.add(sz)
-                        outcome_reason = (outcome.get("reason", "") or "").strip()
+                        outcome_reason = ""
+                        if not size_failures:
+                            outcome_reason = (outcome.get("reason", "") or "").strip()
                         for metric in missing:
-                            if timed_out_run:
+                            if timed_out_run and not size_failures:
                                 reason = f"timeout_missing_{metric}"
                             else:
                                 if outcome_reason:
