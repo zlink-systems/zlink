@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string.h>
@@ -768,10 +769,81 @@ void test_router_exact_target_is_invalid_after_same_rid_handover ()
         || target_b.transport_pair_generation
              != target_a.transport_pair_generation,
       "same-RID replacement did not publish a new exact target");
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_NOT_CONNECTED,
-      router_send_text (router, &target_a, "must-not-enter-old-pair"));
-    TEST_ASSERT_EQUAL_INT (EHOSTUNREACH, zlink_errno ());
+    // Hold a different complete-record admission across the exact FINAL call.
+    // A complete FINAL must serialize on the socket sync and then evaluate the
+    // stale target. Treating it as the start of an incremental multipart send
+    // instead would fail immediately with transient EINVAL while the complete
+    // scope is active.
+    struct exact_final_result_t
+    {
+        exact_final_result_t () :
+            init_rc (ZLINK_CONFIG_INTERNAL_ERROR),
+            submit (ZLINK_SUBMIT_INTERNAL_ERROR),
+            err (0),
+            remaining (0),
+            close_rc (ZLINK_CONFIG_INTERNAL_ERROR)
+        {
+        }
+
+        int init_rc;
+        zlink_submit_result_t submit;
+        int err;
+        size_t remaining;
+        int close_rc;
+    };
+
+    socket_handle_t router_handle = as_socket_handle (router);
+    TEST_ASSERT_NOT_NULL (router_handle.socket);
+    std::unique_ptr<zlink::socket_public_send_scope_t> held_complete =
+      router_handle.socket->begin_complete_send_scope (false);
+    TEST_ASSERT_NOT_NULL (held_complete.get ());
+    TEST_ASSERT_TRUE (held_complete->acquired ());
+
+    const char stale_payload[] = "must-not-enter-old-pair";
+    std::promise<void> about_to_call;
+    std::future<void> call_ready = about_to_call.get_future ();
+    std::promise<exact_final_result_t> finished;
+    std::future<exact_final_result_t> result_future = finished.get_future ();
+    std::thread contender ([&] {
+        exact_final_result_t observed;
+        zlink_msg_t part;
+        observed.init_rc =
+          zlink_msg_init_size (&part, sizeof (stale_payload) - 1);
+        if (observed.init_rc == ZLINK_CONFIG_OK) {
+            memcpy (zlink_msg_data (&part), stale_payload,
+                    sizeof (stale_payload) - 1);
+        }
+        about_to_call.set_value ();
+        if (observed.init_rc == ZLINK_CONFIG_OK) {
+            errno = 0;
+            observed.submit = zlink_send_part_transport_pair (
+              router, &target_a.peer_rid, target_a.transport_pair_id,
+              target_a.transport_pair_generation, &part,
+              ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL);
+            observed.err = zlink_errno ();
+            observed.remaining = zlink_msg_size (&part);
+            observed.close_rc = zlink_msg_close (&part);
+        }
+        finished.set_value (observed);
+    });
+
+    call_ready.wait ();
+    const bool returned_while_complete_held =
+      result_future.wait_for (std::chrono::milliseconds (750))
+      == std::future_status::ready;
+    held_complete.reset ();
+    contender.join ();
+    const exact_final_result_t exact_final = result_future.get ();
+    router_handle = socket_handle_t ();
+
+    TEST_ASSERT_FALSE_MESSAGE (
+      returned_while_complete_held,
+      "exact FINAL returned while another complete-record scope held socket sync");
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, exact_final.init_rc);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_NOT_CONNECTED, exact_final.submit);
+    TEST_ASSERT_EQUAL_INT (EHOSTUNREACH, exact_final.err);
+    TEST_ASSERT_EQUAL_UINT64 (0, exact_final.remaining);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, exact_final.close_rc);
 
     dealer_a = test_context_socket_close_zero_linger (dealer_a);
     {

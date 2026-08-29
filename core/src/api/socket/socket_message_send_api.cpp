@@ -742,6 +742,23 @@ zlink_submit_result_t zlink_send_part_transport_pair (
         return zlink::submit_result_internal::from_errno (errno);
     }
 
+    // A lone FINAL part is one complete record. Keep it out of the incremental
+    // multipart helper just like zlink_send_part_rid(): an internal async-send
+    // retry can concurrently own a short complete-record admission scope, and
+    // treating this call as a new multipart sequence would report transient
+    // EINVAL before the exact target is even checked.
+    if (part_flag_ == ZLINK_PART_FINAL
+        && !zlink::part_helper_internal::send_sequence_active (socket)) {
+        const int rc = socket->send_routed_transport_pair (
+          target_rid_, transport_pair_id_, transport_pair_generation_,
+          reinterpret_cast<zlink::msg_t *> (part_),
+          static_cast<int> (flags_ & ZLINK_DONTWAIT));
+        const int saved_errno = errno;
+        zlink::part_helper_internal::consume_send_part (part_);
+        errno = saved_errno;
+        return zlink::submit_result_internal::from_rc (rc);
+    }
+
     zlink::part_helper_internal::send_sequence_spec_t spec;
     spec.family = zlink::part_helper_internal::send_family_send_rid;
     spec.flags = flags_;
@@ -783,6 +800,22 @@ zlink_submit_result_t zlink_dealer_send_transport_pair_part (
         zlink::part_helper_internal::consume_send_part (part_);
         errno = ENOTSUP;
         return zlink::submit_result_internal::from_errno (errno);
+    }
+
+    // Match the ROUTER exact-pair FINAL path above. The complete-record scope
+    // serializes with Core-owned pending admission while an actual open
+    // multipart sequence still falls through to the helper continuation.
+    if (part_flag_ == ZLINK_PART_FINAL
+        && !zlink::part_helper_internal::send_sequence_active (socket)) {
+        const int rc = socket->send_routed_transport_pair (
+          &target_->peer_rid, target_->transport_pair_id,
+          target_->transport_pair_generation,
+          reinterpret_cast<zlink::msg_t *> (part_),
+          static_cast<int> (flags_ & ZLINK_DONTWAIT));
+        const int saved_errno = errno;
+        zlink::part_helper_internal::consume_send_part (part_);
+        errno = saved_errno;
+        return zlink::submit_result_internal::from_rc (rc);
     }
 
     zlink::part_helper_internal::send_sequence_spec_t spec;

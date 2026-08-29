@@ -146,7 +146,11 @@ int zlink::socket_base_t::send_routed_transport_pair (
   const zlink_routing_id_t *target_rid_, uint64_t transport_pair_id_,
   uint64_t transport_pair_generation_, msg_t *msg_, int flags_)
 {
-    socket_public_send_scope_t send_scope (lifecycle_coordinator (), true);
+    // This entry point always owns one complete record. Mark it as such so it
+    // can serialize with an internal async-admission retry without being
+    // mistaken for the first part of an incremental multipart sequence.
+    socket_public_send_scope_t send_scope (
+      lifecycle_coordinator (), true, socket_send_admission_complete);
     if (!send_scope.acquired ())
         return -1;
 
