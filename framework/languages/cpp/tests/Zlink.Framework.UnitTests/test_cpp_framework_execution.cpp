@@ -1659,6 +1659,224 @@ bool verify_spot_wide_yield_retains_actor_claim ()
            && resume < next;
 }
 
+struct spot_wide_yield_idle_eviction_probe_t
+{
+    std::shared_ptr<zlink::framework::detail::task_completion_source_t<int>> reply =
+      std::make_shared<zlink::framework::detail::task_completion_source_t<int>> ();
+    serial_test_signal_t handler_entered;
+    serial_test_signal_t handler_resumed;
+    serial_test_signal_t follower_ran;
+};
+
+zlink::framework::task_t<zlink::message_t>
+run_spot_wide_yield_idle_eviction_probe (
+  const std::shared_ptr<spot_wide_yield_idle_eviction_probe_t> &probe)
+{
+    probe->handler_entered.set ();
+    zlink::framework::request_call_t<int> call (
+      "YieldIdleEvictionProbe",
+      [reply = probe->reply] (const auto &, auto, const auto &) {
+          return reply->task ();
+      });
+    const auto value = co_await call.yield ();
+    if (value != 7)
+        throw std::runtime_error ("yield idle-eviction probe reply mismatch");
+    probe->handler_resumed.set ();
+    co_return zlink::message_t{};
+}
+
+bool verify_spot_wide_yield_blocks_idle_eviction_until_handler_terminal ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    namespace host = zlink::framework::runtime::host;
+    namespace messaging = zlink::framework::runtime::messaging;
+    namespace protocol = zlink::framework::runtime::protocol;
+
+    auto node = std::make_shared<spot_node_builder_state_t> (
+      "yield-idle-eviction-node");
+    node->instance_spot_idle_timeout = std::chrono::seconds (1);
+
+    auto executor = std::make_shared<runtime::offload_executor_t> (1);
+    node->worker_executor = executor;
+    serializer_registry_t serializers;
+    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+    const auto native = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      .mesh = {.descriptor = {
+                 .mesh_name = "yield-idle-eviction",
+                 .node_routing_id =
+                   zlink::routing_id_t::from (std::string ("yield-idle-eviction-node")).to_bytes (),
+                 .lifecycle_generation = 3,
+                 .descriptor_revision = 1,
+                 .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+    node->native_node = native;
+
+    auto context = std::make_shared<spot_context_state_t> ();
+    context->node = node;
+    context->lane_owner = node;
+    context->spot_id = "yield-idle-eviction-spot";
+    context->spot_name = "yield-idle-eviction-player";
+    context->lifecycle_domain = spot_lifecycle_domain_t::instance ();
+    context->execution_mode = user_spot_execution_mode_t::spot_wide;
+    context->object_generation = 17;
+    context->authority_owner_generation = 19;
+    auto spot_instance = std::make_shared<int> (1);
+    context->spot_instance = spot_instance;
+    context->serial_executor = executor;
+    context->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *executor, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
+
+    auto probe = std::make_shared<spot_wide_yield_idle_eviction_probe_t> ();
+    context->handlers.push_back (
+      spot_handler_descriptor_t{spot_handler_kind_t::actor_send,
+                                "YieldIdleEvictionProbe", "",
+                                std::type_index (typeid (int)),
+                                std::type_index (typeid (void)),
+                                std::type_index (typeid (int)),
+                                std::type_index (typeid (void))});
+    context->handler_invokers.push_back (
+      [probe] (void *, void *, service_provider_t &, serializer_registry_t &,
+               const zlink::message_t &,
+               const spot_inbound_message_t &) -> task_t<zlink::message_t> {
+          return run_spot_wide_yield_idle_eviction_probe (probe);
+      });
+
+    node->spot_ids_by_name.emplace (context->spot_name, context->spot_id);
+    node->spot_names_by_id.emplace (context->spot_id, context->spot_name);
+    node->spot_contexts_by_id.emplace (
+      context->spot_id, spot_context_access_t::create (context));
+
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.create_instance = [] (std::string) { return std::make_shared<int> (7); };
+    factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+    node->actor_factories.emplace ("player", std::move (factory));
+    const auto actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("yield-idle-eviction-node"), "player", "yield-actor", 5);
+    const auto actor_key = std::string ("player:yield-actor");
+    node->actor_types_by_id.emplace ("yield-actor", "player");
+    node->actor_instances.emplace (actor_key, std::make_shared<int> (7));
+    node->actor_spot_ids.emplace (actor_key, context->spot_id);
+    node->actor_generations.emplace (actor_key, 5);
+    const protocol::actor_route_fence_t exact_route{
+      "yield-actor", 5, native->status ().routing_id ().to_bytes (),
+      native->status ().lifecycle_generation (), 11, 13};
+    node->actor_authority_fences.emplace (actor_key, exact_route);
+
+    int eviction_admission_calls = 0;
+    bool eviction_identity_valid = true;
+    bool eviction_after_terminal = false;
+    bool closing_called = false;
+    bool closing_after_resume = false;
+    context->lifecycle.on_closing = [&] (
+      void *, const spot_closing_context_t &, std::stop_token) {
+        closing_called = true;
+        closing_after_resume = probe->handler_resumed.is_set ();
+    };
+    node->admit_instance_spot_idle_eviction = [&] (
+      const spot_id_t &spot_id,
+      std::string_view spot_name,
+      std::uint64_t object_generation,
+      std::uint64_t authority_owner_generation,
+      std::function<bool ()> close_local) {
+        ++eviction_admission_calls;
+        if (spot_id != context->spot_id || spot_name != context->spot_name
+            || object_generation != context->object_generation
+            || authority_owner_generation
+                 != context->authority_owner_generation) {
+            eviction_identity_valid = false;
+            return false;
+        }
+        eviction_after_terminal = probe->handler_resumed.is_set ()
+                                  && !context->has_active_callback ();
+        return close_local ();
+    };
+
+    const auto set_idle_age = [&context] {
+        context->last_application_work_completed_ns.store (
+          std::chrono::duration_cast<std::chrono::nanoseconds> (
+            std::chrono::steady_clock::now ().time_since_epoch ())
+              .count ()
+            - std::chrono::duration_cast<std::chrono::nanoseconds> (
+                std::chrono::seconds (2))
+                .count (),
+          std::memory_order_relaxed);
+    };
+
+    service_collection_t services;
+    services.add_singleton<actor_gateway_runtime_t> ();
+    auto provider = services.build_provider ();
+    const host::ready_record_t owner{.owner_kind = host::owner_kind_t::actor,
+                                     .domain = host::ready_domain_t::application,
+                                     .spot_id = std::string (context->spot_id),
+                                     .actor = actor};
+    host::receive_record_t record{.kind = host::record_kind_t::actor_send,
+                                  .domain = host::ready_domain_t::application};
+    record.actor_route = exact_route;
+    messaging::envelope_codec_t codec;
+    auto encoded = codec.encode_raw_body_parts (
+      messaging::envelope_header_t{.kind = messaging::message_kind_t::command,
+                                   .channel_name = "actor",
+                                   .message_name = "YieldIdleEvictionProbe"},
+      zlink::message_t::from (std::string ("yield")));
+    auto parts = std::move (encoded).take_items ();
+    std::atomic_int ingress_terminals{0};
+    bool terminal_deferred = false;
+    const auto dispatched = spot_node_runtime_t (node).dispatch_mesh_record (
+      owner, record, parts, provider, serializers,
+      [&ingress_terminals] { ingress_terminals.fetch_add (1, std::memory_order_acq_rel); },
+      &terminal_deferred);
+
+    const auto handler_entered = dispatched && terminal_deferred
+                                 && probe->handler_entered.wait_for ();
+    const auto follower_posted = handler_entered
+                                 && context->try_post_serial (
+                                   "yield-idle-eviction-follower",
+                                   [probe] { probe->follower_ran.set (); });
+    const auto follower_ran = follower_posted && probe->follower_ran.wait_for ();
+    if (follower_ran)
+        context->serial_queue->drain ();
+    const auto single_lifecycle_claim =
+      follower_ran
+      && node->lane.run ([&] { return context->callback_depth == 1; }).get ();
+
+    bool eviction_rejected_while_yielded = false;
+    if (follower_ran) {
+        set_idle_age ();
+        spot_node_runtime_t (node).evict_idle_spots ();
+        eviction_rejected_while_yielded =
+          eviction_admission_calls == 0 && !closing_called
+          && !probe->handler_resumed.is_set ()
+          && context->has_active_callback ()
+          && node->spot_contexts_by_id.contains (context->spot_id);
+    }
+
+    probe->reply->complete (result_t<int>::success (7));
+    context->serial_queue->drain ();
+    executor->drain ();
+
+    const auto handler_completed = probe->handler_resumed.is_set ()
+                                   && !context->has_active_callback ();
+    if (!handler_entered || !follower_ran || !single_lifecycle_claim
+        || !eviction_rejected_while_yielded || !handler_completed) {
+        return false;
+    }
+
+    set_idle_age ();
+    spot_node_runtime_t (node).evict_idle_spots ();
+
+    return ingress_terminals.load (std::memory_order_acquire) == 1
+           && eviction_admission_calls == 1 && eviction_identity_valid
+           && eviction_after_terminal && closing_called
+           && closing_after_resume && node->spot_contexts_by_id.empty ()
+           && node->spot_ids_by_name.empty ()
+           && node->spot_names_by_id.empty ();
+}
+
 bool verify_same_actor_synchronous_reentry_is_immediate ()
 {
     using namespace zlink::framework;
@@ -6430,6 +6648,9 @@ int main ()
     }
     if (!verify_spot_wide_yield_retains_actor_claim ()) {
         return 126;
+    }
+    if (!verify_spot_wide_yield_blocks_idle_eviction_until_handler_terminal ()) {
+        return 128;
     }
     if (!verify_cancellable_serial_submission_lifecycle ()) {
         return 92;

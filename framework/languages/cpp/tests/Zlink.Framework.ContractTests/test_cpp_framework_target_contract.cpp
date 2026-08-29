@@ -2075,14 +2075,28 @@ int main ()
       "CPP-DISP-004",
       "logical multicast failures after dequeue are not observable");
 
-    /* CPP-DISP-006 — close and idle-eviction admission remain locked until
-     * the per-Spot serial queue has accepted or rejected the work item. */
+    /* CPP-DISP-006 — close and idle-eviction admission share the node owner;
+     * the unified Actor token carries that lease through handler terminal. */
     gate.require (
-      spot_runtime.find ("auto queue = callback_lane.run ([this] {") != std::string::npos
-        && spot_runtime.find ("if (callback_admission_closed || idle_eviction_in_progress)")
+      spot_runtime.find ("auto queue = state_sync ([this] {") != std::string::npos
+        && spot_runtime.find (
+             "if (callback_admission_closed || idle_eviction_in_progress || close_reservation != 0)")
              != std::string::npos
+        && spot_runtime.find ("class actor_dispatch_admission_token_t final")
+             != std::string::npos
+        && spot_runtime.find ("admission_token->acquire_dispatch_phase")
+             != std::string::npos
+        && spot_runtime.find ("admission_token->inherit_materialized_context")
+             != std::string::npos
+        && spot_runtime.find ("admission_token ? admission_token->handler_terminal ()")
+             != std::string::npos
+        && spot_runtime.find ("const bool admission_preclaimed =") != std::string::npos
+        && spot_runtime.find ("!admission_preclaimed && !state->enter_callback ()")
+             != std::string::npos
+        && spot_runtime.find ("&& state->close_reservation == 0") != std::string::npos
         && spot_runtime.find ("return queue->try_post_async") != std::string::npos,
-      "CPP-DISP-006", "Spot admission and serial enqueue use separate lock spans");
+      "CPP-DISP-006",
+      "Spot lifecycle admission is not retained by the unified token through handler terminal");
 
     /* CPP-EXEC-001 — actor queue lookup is a lifecycle-boundary update, not
      * a node-mutex acquisition on every inbound Actor packet. The immutable

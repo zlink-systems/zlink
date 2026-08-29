@@ -335,6 +335,14 @@ class actor_gateway_runtime_t
                          std::uint64_t binding_generation,
                          std::uint64_t session_sequence,
                          const runtime::protocol::actor_route_fence_t *target_route = nullptr);
+    result_t<actor_context_t>
+    admit_session_relay_context (
+      const actor_ref_t &actor_ref,
+      const zlink::routing_id_t &source_node_rid,
+      const zlink::routing_id_t &session_rid,
+      std::uint64_t binding_generation,
+      std::uint64_t session_sequence,
+      const runtime::protocol::actor_route_fence_t *target_route = nullptr);
     result_t<void> begin_session_relay_completion (const actor_ref_t &actor_ref,
                                                    const zlink::routing_id_t &source_node_rid,
                                                    const zlink::routing_id_t &session_rid,

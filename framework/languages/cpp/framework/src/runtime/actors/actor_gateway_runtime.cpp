@@ -2047,6 +2047,38 @@ exact_session_relay_route (actor_gateway_state_t &state,
     return result_t<actor_bound_session_route_t *>::success (&route);
 }
 
+result_t<void> admit_session_relay_unlocked (
+  actor_gateway_state_t &state,
+  const actor_ref_t &actor_ref,
+  const zlink::routing_id_t &source_node_rid,
+  const zlink::routing_id_t &session_rid,
+  std::uint64_t binding_generation,
+  std::uint64_t session_sequence,
+  const runtime::protocol::actor_route_fence_t *target_route)
+{
+    const auto exact = exact_session_relay_route (state, actor_ref, source_node_rid, session_rid,
+                                                  binding_generation, target_route);
+    if (!exact)
+        return detail::propagate_failure<void> (exact, "bound Session relay admission failed");
+    auto &route = *exact.value ();
+    if (route.session_sequence_baseline_unknown) {
+        // Relocation-target routes learn the source's relay high-water from
+        // the first sequence admitted on the exact route (spec 20 keeps
+        // command 43/44 free of numeric high-water); afterwards the strict
+        // next check applies.
+        route.session_sequence = session_sequence;
+        route.session_sequence_baseline_unknown = false;
+        return result_t<void>::success ();
+    }
+    if (route.session_sequence == std::numeric_limits<std::uint64_t>::max ()
+        || session_sequence != route.session_sequence + 1) {
+        return result_t<void>::failure (framework_error_kind_t::invalid_operation,
+                                        "bound Session relay sequence is not next");
+    }
+    route.session_sequence = session_sequence;
+    return result_t<void>::success ();
+}
+
 result_t<void> bind_session_components (const std::shared_ptr<actor_gateway_state_t> &state,
                                         actor_ref_t actor_ref,
                                         bound_session_sink_t sink,
@@ -2631,27 +2663,42 @@ result_t<void> actor_gateway_runtime_t::admit_session_relay (
     }
     return _state->sync ([this, &actor_ref, &source_node_rid, &session_rid,
                           binding_generation, session_sequence, target_route] {
-    const auto exact = exact_session_relay_route (*_state, actor_ref, source_node_rid, session_rid,
-                                                  binding_generation, target_route);
-    if (!exact)
-        return detail::propagate_failure<void> (exact, "bound Session relay admission failed");
-    auto &route = *exact.value ();
-    if (route.session_sequence_baseline_unknown) {
-        //  Relocation-target routes learn the source's relay high-water from
-        //  the first sequence admitted on the exact route (spec 20 keeps
-        //  command 43/44 free of numeric high-water); afterwards the strict
-        //  next check applies.
-        route.session_sequence = session_sequence;
-        route.session_sequence_baseline_unknown = false;
-        return result_t<void>::success ();
+    return admit_session_relay_unlocked (*_state, actor_ref, source_node_rid, session_rid,
+                                         binding_generation, session_sequence, target_route);
+    });
+}
+
+result_t<actor_context_t> actor_gateway_runtime_t::admit_session_relay_context (
+  const actor_ref_t &actor_ref,
+  const zlink::routing_id_t &source_node_rid,
+  const zlink::routing_id_t &session_rid,
+  std::uint64_t binding_generation,
+  std::uint64_t session_sequence,
+  const runtime::protocol::actor_route_fence_t *target_route)
+{
+    if (binding_generation == 0 || session_sequence == 0) {
+        return result_t<actor_context_t>::failure (
+          framework_error_kind_t::protocol_error,
+          "bound Session relay sequence fence is invalid");
     }
-    if (route.session_sequence == std::numeric_limits<std::uint64_t>::max ()
-        || session_sequence != route.session_sequence + 1) {
-        return result_t<void>::failure (framework_error_kind_t::invalid_operation,
-                                        "bound Session relay sequence is not next");
+    return _state->sync ([this, &actor_ref, &source_node_rid, &session_rid,
+                          binding_generation, session_sequence, target_route] {
+    const auto admitted = admit_session_relay_unlocked (
+      *_state, actor_ref, source_node_rid, session_rid, binding_generation, session_sequence,
+      target_route);
+    if (!admitted) {
+        return detail::propagate_failure<actor_context_t> (
+          admitted, "bound Session relay admission failed");
     }
-    route.session_sequence = session_sequence;
-    return result_t<void>::success ();
+    const auto found = _state->actors_by_id.find (
+      std::string (actor_ref.actor_id ().value ()));
+    if (found == _state->actors_by_id.end ()) {
+        return result_t<actor_context_t>::failure (
+          framework_error_kind_t::not_found, "bound Session relay actor is not current");
+    }
+    found->second.source_binding_generation = binding_generation;
+    return result_t<actor_context_t>::success (
+      actor_context_t (_state, actor_ref, found->second.source_binding_generation));
     });
 }
 

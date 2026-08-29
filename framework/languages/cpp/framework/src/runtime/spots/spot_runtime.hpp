@@ -51,6 +51,8 @@ namespace runtime = zlink::framework::runtime;
 
 namespace service = zlink::framework::runtime::host;
 
+class actor_dispatch_admission_token_t;
+
 using instance_spot_idle_eviction_callback_t = std::function<bool (
   const spot_id_t &, std::string_view, std::uint64_t, std::uint64_t, std::function<bool ()>)>;
 using instance_spot_close_begin_callback_t =
@@ -173,9 +175,6 @@ class spot_node_builder_state_t
         }
     };
     std::map<pending_handoff_request_key_t, pending_handoff_request_t> pending_handoff_requests;
-    runtime::offload_executor_t pending_handoff_requests_lane_executor;
-    runtime::state_lane_t pending_handoff_requests_lane{
-      pending_handoff_requests_lane_executor};
     std::function<task_t<bool> (const zlink::routing_id_t &,
                                 const zlink::routing_id_t &,
                                 const runtime::protocol::wire_operation_id_t &,
@@ -194,12 +193,10 @@ class spot_node_builder_state_t
       actor_leave_notification_sender;
     // Requests currently dispatched to each actor and not yet replied. Sampled
     // once per transfer right at the moving transition (runtime-metrics §4.3
-    // pending_requests). This is an independent ownership region: dispatch
-    // runs on the packet-drain thread while the sample is taken on the
-    // transfer path.
+    // pending_requests). The node state lane owns both dispatch updates and
+    // transfer samples, so the token can settle this counter with its lifecycle
+    // claim in one terminal turn.
     std::map<std::string, std::size_t> actor_pending_requests;
-    runtime::offload_executor_t actor_pending_requests_lane_executor;
-    runtime::state_lane_t actor_pending_requests_lane{actor_pending_requests_lane_executor};
     struct pending_remote_source_cleanup_t
     {
         actor_ref_t source_actor;
@@ -898,6 +895,20 @@ class spot_serial_executor_t
 
 class spot_context_state_t : public std::enable_shared_from_this<spot_context_state_t>
 {
+  private:
+    template<typename Work>
+    decltype(auto) state_sync (Work &&work) const
+    {
+        auto owner = state_lane_owner ();
+        if (!owner || owner->lane.is_on_lane ())
+            return std::invoke (work);
+        return owner->lane
+          .run ([work = std::forward<Work> (work)] () mutable -> decltype(auto) {
+              return std::invoke (work);
+          })
+          .get ();
+    }
+
   public:
     void detach_application_instance (
       bool notify_closing,
@@ -907,7 +918,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
       std::stop_token cleanup_cancellation = {})
     {
         auto lifetime_guard = shared_from_this ();
-        callback_lane.run ([this] { callback_admission_closed = true; }).get ();
+        state_sync ([this] { callback_admission_closed = true; });
 
         auto owner = state_lane_owner ();
         if (!owner) {
@@ -991,7 +1002,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         if (start.token == 0)
             return false;
         if (start.existing) {
-            return callback_lane.run ([this] { return close_requested; }).get ();
+            return state_sync ([this] { return close_requested; });
         }
 
         std::optional<service::instance_spot_close_completion_t> completion;
@@ -1015,36 +1026,29 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             return false;
         }
 
-        const auto deferred = callback_lane.run ([this, &completion] {
+        const auto decision = owner->lane.run ([this, &owner, token = start.token,
+                                                &completion] {
+            if (close_reservation != token || close_reservation_is_idle
+                || node.get () != owner.get () || closed || actor_count != 0) {
+                if (callback_depth == 0 && !close_requested)
+                    callback_admission_closed = false;
+                clear_close_reservation_core (token);
+                return close_decision_t{};
+            }
             callback_admission_closed = true;
             if (callback_depth != 0) {
                 close_requested = true;
                 if (completion)
                     pending_instance_spot_close_completion = std::move (*completion);
-                return true;
+                return close_decision_t{true, false};
             }
             close_requested = false;
-            return false;
-        }).get ();
-        if (deferred)
-            return true;
-
-        const auto committed = owner->lane.run ([this, &owner, token = start.token] {
-            if (close_reservation != token || close_reservation_is_idle
-                || node.get () != owner.get () || closed || actor_count != 0) {
-                return false;
-            }
             closed = true;
-            return true;
+            return close_decision_t{false, true};
         }).get ();
-        if (!committed) {
-            callback_lane.run ([this] {
-                if (callback_depth == 0 && !close_requested)
-                    callback_admission_closed = false;
-            }).get ();
-            owner->lane.run ([this, token = start.token] {
-                clear_close_reservation_core (token);
-            }).get ();
+        if (decision.deferred)
+            return true;
+        if (!decision.committed) {
             if (completion) {
                 (void) (*completion) (false);
             }
@@ -1073,13 +1077,14 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
 
     bool enter_callback ();
     timer_fire_state_snapshot_t enter_timer_callback ();
-    void leave_callback () noexcept;
+    void leave_callback (std::function<void ()> settle_owner_state = {}) noexcept;
     bool is_current_callback_thread () const;
     bool admission_blocked () const noexcept
     {
-        return callback_lane.run ([this] {
-            return callback_admission_closed || idle_eviction_in_progress;
-        }).get ();
+        return state_sync ([this] {
+            return callback_admission_closed || idle_eviction_in_progress
+                   || close_reservation != 0;
+        });
     }
 
     bool idle_quiescent () const;
@@ -1166,15 +1171,15 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     bool close_reservation_is_idle = false;
     const spot_context_t *close_registered_context = nullptr;
     std::atomic<std::int64_t> last_application_work_completed_ns{0};
-    runtime::offload_executor_t callback_lane_executor;
-    mutable runtime::state_lane_t callback_lane{callback_lane_executor};
+    // The node state lane owns lifecycle admission and close/eviction state.
+    // A token acquired in a node turn can therefore retain this depth through
+    // queue wait, Yield, and handler terminal without a second owner claim.
     std::size_t callback_depth = 0;
     service::instance_spot_close_completion_t pending_instance_spot_close_completion;
 
-
     bool has_active_callback () const
     {
-        return callback_lane.run ([this] { return callback_depth > 0; }).get ();
+        return state_sync ([this] { return callback_depth > 0; });
     }
 
     std::shared_ptr<spot_serial_executor_t> ensure_spot_serial_executor ()
@@ -1219,7 +1224,6 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     }
 
   public:
-
     bool is_entry_spot () const noexcept { return lifecycle_domain.is_entry (); }
 
     bool is_instance_spot () const noexcept { return lifecycle_domain.is_instance (); }
@@ -1240,7 +1244,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         auto owner = state_lane_owner ();
         if (!owner)
             return 0;
-        return owner->lane.run ([this, &owner] {
+        return state_sync ([this, &owner] {
             if (node.get () != owner.get () || closed || actor_count != 0
                 || !lifecycle_domain.allows_idle_eviction ()) {
                 return std::uint64_t{0};
@@ -1248,17 +1252,21 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             if (close_reservation != 0)
                 return close_reservation_is_idle ? close_reservation : std::uint64_t{0};
             return reserve_close_core (*owner, true);
-        }).get ();
+        });
     }
 
     void cancel_idle_close_reservation (std::uint64_t token) noexcept
     {
         try {
             if (auto owner = state_lane_owner ()) {
-                owner->lane.run ([this, token] {
-                    if (!closed && close_reservation_is_idle)
+                state_sync ([this, token] {
+                    if (!closed && close_reservation == token && close_reservation_is_idle) {
                         clear_close_reservation_core (token);
-                }).get ();
+                        idle_eviction_in_progress = false;
+                        if (!close_requested)
+                            callback_admission_closed = false;
+                    }
+                });
             }
         }
         catch (...) {
@@ -1288,6 +1296,12 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                 || !lifecycle_domain.allows_idle_eviction ()) {
                 return idle_close_start_t{};
             }
+            if (callback_depth != 0 || close_requested
+                || (callback_admission_closed && !idle_eviction_in_progress)) {
+                return idle_close_start_t{token, false};
+            }
+            callback_admission_closed = true;
+            idle_eviction_in_progress = true;
             return idle_close_start_t{token, idle_age_allows_close_core (*owner)};
         }).get ();
         if (start.token == 0 || !start.age_allows_close) {
@@ -1296,24 +1310,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             return false;
         }
 
-        const auto callback_sealed = callback_lane.run ([this] {
-            if (!idle_eviction_in_progress || callback_depth != 0 || close_requested
-                || callback_admission_closed) {
-                return false;
-            }
-            callback_admission_closed = true;
-            return true;
-        }).get ();
-        if (!callback_sealed) {
-            cancel_idle_close_reservation (start.token);
-            return false;
-        }
-
         if (!idle_quiescent ()) {
-            callback_lane.run ([this] {
-                if (idle_eviction_in_progress && !close_requested)
-                    callback_admission_closed = false;
-            }).get ();
             cancel_idle_close_reservation (start.token);
             return false;
         }
@@ -1322,17 +1319,14 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             if (close_reservation != token || !close_reservation_is_idle
                 || node.get () != owner.get () || closed || actor_count != 0
                 || !lifecycle_domain.allows_idle_eviction ()
-                || !idle_age_allows_close_core (*owner)) {
+                || !idle_age_allows_close_core (*owner) || callback_depth != 0
+                || !callback_admission_closed || !idle_eviction_in_progress) {
                 return false;
             }
             closed = true;
             return true;
         }).get ();
         if (!committed) {
-            callback_lane.run ([this] {
-                if (idle_eviction_in_progress && !close_requested)
-                    callback_admission_closed = false;
-            }).get ();
             cancel_idle_close_reservation (start.token);
             return false;
         }
@@ -1343,6 +1337,12 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     }
 
   private:
+    struct close_decision_t
+    {
+        bool deferred = false;
+        bool committed = false;
+    };
+
     struct close_start_t
     {
         std::uint64_t token = 0;
@@ -2028,7 +2028,8 @@ class spot_node_runtime_t
       std::uint64_t inbound_reply_route_id = 0,
       std::optional<std::string> inbound_deadline = std::nullopt,
       std::function<void ()> transfer_owner_reservation = {},
-      std::size_t transferred_owner_byte_cost = 0);
+      std::size_t transferred_owner_byte_cost = 0,
+      std::shared_ptr<actor_dispatch_admission_token_t> admission_token = {});
     result_t<void> notify_actor_disconnected_erased (const actor_ref_t &actor_ref) const;
 
     template <typename TActor>

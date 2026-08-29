@@ -175,6 +175,13 @@ struct actor_transfer_dispatch_state_snapshot_t
     bool transfer_in_progress = false;
 };
 
+struct actor_transfer_packet_admission_t
+{
+    bool matches_message_follow_source = false;
+    bool transfer_in_progress = false;
+    handoff_append_result_t append_result = handoff_append_result_t::not_moving;
+};
+
 class actor_transfer_coordinator_t
 {
   public:
@@ -227,6 +234,14 @@ class actor_transfer_coordinator_t
     // order until the commit path drains them into the commit request.
     handoff_append_result_t try_append_backlog (const std::string &actor_key,
                                                 handoff_packet_t packet);
+    // Projects the fresh Message Follow/transfer state and makes the backlog
+    // admission decision in the same coordinator turn. A packet already on a
+    // committed source edge bypasses the local moving backlog.
+    actor_transfer_packet_admission_t admit_dispatch_packet (
+      const std::string &actor_key,
+      const runtime::protocol::actor_route_fence_t *source_fence,
+      bool targets_current_authority,
+      handoff_packet_t packet);
     // Stages one source-retained batch without allowing live target traffic to
     // interleave between its packets. The exact committing transfer owns the
     // append or the whole batch is rejected.
@@ -382,6 +397,12 @@ class actor_transfer_coordinator_t
       const std::string &actor_key,
       const runtime::protocol::actor_route_fence_t &source_fence,
       std::chrono::steady_clock::time_point now) const;
+    actor_transfer_dispatch_state_snapshot_t project_dispatch_state_unlocked (
+      const std::string &actor_key,
+      const runtime::protocol::actor_route_fence_t *source_fence,
+      std::chrono::steady_clock::time_point now) const;
+    handoff_append_result_t try_append_backlog_unlocked (const std::string &actor_key,
+                                                         handoff_packet_t packet);
 
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
