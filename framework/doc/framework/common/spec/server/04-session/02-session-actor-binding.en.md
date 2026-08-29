@@ -181,7 +181,14 @@ checks the Actor `ObjectGeneration`, target `NodeGeneration` (the generation
 identifying the target node's process lifecycle), and
 `AuthorityOwnerGeneration`, all together, then registers a
 [binding generation](../00-foundation/02-glossary.en.md#binding-generation) and returns a
-terminal reply exactly once.
+terminal reply exactly once. **The admission decision uses these three values
+only.** `OwnerLeaseGeneration` is a value preserved in the envelope, not an
+input to the bind admission decision — a bind is never rejected because the
+lease copy carried by the caller-side lookup or projection differs from the
+Actor owner's current lease. The lease belongs to route-fence
+verification ([routing](../03-spot-actor/08-routing.en.md)); using it in bind
+admission would turn a derived-copy mismatch into grounds for a stale verdict,
+conflicting with the judging-authority principle of §8.1.
 
 Payload going from session to Actor is delivered to the Actor owner as an
 `actorSend(24)` record including the registered binding generation and
