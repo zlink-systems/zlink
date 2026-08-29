@@ -108,7 +108,7 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
 
     @Override
     public CompletionStage<Void> onLeaveActor(PlayerActor actor) {
-        residents.remove(actor.actorId());
+        residents.remove(actor.actorId(), actor);
         census.record(context.spotId(), residents.size());
         System.out.println("zone actor left zone=" + context.spotId() + " actor=" + actor.actorId());
         return CompletableFuture.completedFuture(null);
@@ -116,7 +116,7 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
 
     @Override
     public CompletionStage<Void> onDisconnectActor(PlayerActor actor) {
-        residents.remove(actor.actorId());
+        residents.remove(actor.actorId(), actor);
         census.record(context.spotId(), residents.size());
         System.out.println("zone actor disconnected zone=" + context.spotId()
             + " actor=" + actor.actorId());

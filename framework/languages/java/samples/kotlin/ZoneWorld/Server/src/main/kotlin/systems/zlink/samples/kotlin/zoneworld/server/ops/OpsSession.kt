@@ -79,7 +79,14 @@ class OpsConsoleRegistry {
     fun remove(context: ZLinkSessionContext) { sessions -= context }
     fun record(alert: Messages.NodeAlertNotify) { alerts += alert }
     fun broadcast(message: Any) {
-        sessions.toList().forEach { it.client().send(message).submit().exceptionally { null } }
+        sessions.toList().forEach { session ->
+            try {
+                session.client().send(message).submit().exceptionally { null }
+            } catch (_: RuntimeException) {
+                // A stale console cannot prevent later live consoles from receiving
+                // this best-effort status or alert notification.
+            }
+        }
     }
     fun replay(context: ZLinkSessionContext, nodes: List<Messages.NodeView>): CompletionStage<Void> {
         var sends: CompletionStage<Void> = CompletableFuture.completedFuture(null)

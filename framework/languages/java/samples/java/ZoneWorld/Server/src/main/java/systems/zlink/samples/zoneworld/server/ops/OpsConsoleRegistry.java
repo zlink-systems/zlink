@@ -17,7 +17,12 @@ public final class OpsConsoleRegistry {
 
     public void broadcast(Object message) {
         for (ZLinkSessionContext session : List.copyOf(sessions)) {
-            session.client().send(message).submit().exceptionally(error -> null);
+            try {
+                session.client().send(message).submit().exceptionally(error -> null);
+            } catch (RuntimeException ignored) {
+                // A stale console cannot prevent later live consoles from receiving
+                // this best-effort status or alert notification.
+            }
         }
     }
 

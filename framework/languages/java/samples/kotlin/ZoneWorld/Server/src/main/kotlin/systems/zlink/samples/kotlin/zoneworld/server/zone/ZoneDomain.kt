@@ -291,13 +291,13 @@ class ZoneSpot(
     }
 
     override fun onLeaveActor(actor: PlayerActor): CompletionStage<Void> {
-        residents.remove(actor.actorId); census.record(context.spotId(), residents.size)
+        residents.remove(actor.actorId, actor); census.record(context.spotId(), residents.size)
         println("zone actor left zone=${context.spotId()} actor=${actor.actorId}")
         return CompletableFuture.completedFuture(null)
     }
 
     override fun onDisconnectActor(actor: PlayerActor): CompletionStage<Void> {
-        residents.remove(actor.actorId); census.record(context.spotId(), residents.size)
+        residents.remove(actor.actorId, actor); census.record(context.spotId(), residents.size)
         println("zone actor disconnected zone=${context.spotId()} actor=${actor.actorId}")
         return CompletableFuture.completedFuture(null)
     }
