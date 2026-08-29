@@ -51,6 +51,7 @@ struct stream_routed_ready_event_t
     uint64_t pair_id;
     uint64_t pair_generation;
     zlink_send_complete_result_t result;
+    int terminal_errno;
 };
 
 struct stream_routed_ready_probe_t
@@ -76,6 +77,7 @@ void capture_stream_routed_ready (void *,
     copy.pair_id = event_->transport_pair_id;
     copy.pair_generation = event_->transport_pair_generation;
     copy.result = event_->result;
+    copy.terminal_errno = event_->terminal_errno;
     {
         std::lock_guard<std::mutex> lock (probe->sync);
         probe->events.push_back (copy);
@@ -86,7 +88,7 @@ void capture_stream_routed_ready (void *,
 bool wait_stream_routed_completion (stream_routed_ready_probe_t *probe_,
                                     const zlink_routing_id_t *rid_,
                                     zlink_send_op_id_t op_id_,
-                                    zlink_send_complete_result_t *result_out_,
+                                    stream_routed_ready_event_t *event_out_,
                                     int timeout_ms_ = 3000)
 {
     const std::chrono::steady_clock::time_point deadline =
@@ -97,8 +99,8 @@ bool wait_stream_routed_completion (stream_routed_ready_probe_t *probe_,
             const stream_routed_ready_event_t &event = probe_->events[i];
             if (event.op_id == op_id_ && event.rid.size == rid_->size
                 && memcmp (event.rid.data, rid_->data, rid_->size) == 0) {
-                if (result_out_)
-                    *result_out_ = event.result;
+                if (event_out_)
+                    *event_out_ = event;
                 return true;
             }
         }
@@ -556,13 +558,21 @@ void test_stream_routed_admission_is_exact_and_initial_wake_is_lossless ()
     TEST_ASSERT_NOT_EQUAL (0, parked_op);
 
     close_raw_fd (raw_fd);
-    zlink_send_complete_result_t parked_result = ZLINK_SEND_TIMED_OUT;
+    stream_routed_ready_event_t parked_event;
+    memset (&parked_event, 0, sizeof (parked_event));
     TEST_ASSERT_TRUE_MESSAGE (
       wait_stream_routed_completion (&before_attach_probe, &rid, parked_op,
-                                     &parked_result),
+                                     &parked_event),
       "STREAM detach race did not complete the reserved exact-target record");
-    TEST_ASSERT_TRUE (parked_result == ZLINK_SEND_ADMITTED
-                      || parked_result == ZLINK_SEND_TERMINAL);
+    TEST_ASSERT_TRUE (parked_event.result == ZLINK_SEND_ADMITTED
+                      || parked_event.result == ZLINK_SEND_TERMINAL);
+    TEST_ASSERT_EQUAL_UINT64 (target.transport_pair_id,
+                              parked_event.pair_id);
+    TEST_ASSERT_EQUAL_UINT64 (target.transport_pair_generation,
+                              parked_event.pair_generation);
+    if (parked_event.result == ZLINK_SEND_TERMINAL)
+        TEST_ASSERT_TRUE (parked_event.terminal_errno == ENOTCONN
+                          || parked_event.terminal_errno == EHOSTUNREACH);
     test_context_socket_close (server);
 
     void *late_server = test_context_socket (ZLINK_SOCKET_STREAM);

@@ -4,6 +4,7 @@
 #include "testutil_monitoring.hpp"
 #include "testutil_unity.hpp"
 
+#include "core/msg.hpp"
 #include "utils/config.hpp"
 
 #include <errno.h>
@@ -12,6 +13,7 @@
 #include <string.h>
 #include <atomic>
 #include <condition_variable>
+#include <cstdlib>
 #include <map>
 #include <set>
 #include <mutex>
@@ -43,6 +45,7 @@ static const char *const stream_socket_smoke_cases[] = {
   "test_stream_recv_handler_delivers_raw_chunks_not_len32be_frames",
   "test_stream_packet_handler_mode_gates",
   "test_stream_packet_framing_contracts",
+  "test_stream_packet_retained_view_survives_next_read_and_close",
   "test_stream_packet_disconnect_rid_closes_client",
   "test_stream_packet_ordering_contracts",
   "test_stream_packet_malformed_close_contracts",
@@ -518,6 +521,36 @@ struct stream_packet_probe_t
 
 static stream_packet_probe_t *g_stream_packet_probe = NULL;
 
+struct stream_packet_retain_probe_t
+{
+    stream_packet_retain_probe_t () :
+        callbacks (0),
+        move_error (0),
+        retained (false),
+        retained_header_is_view (false),
+        retained_body_is_view (false)
+    {
+        if (zlink_msg_init (&retained_header) != 0 || zlink_msg_init (&retained_body) != 0)
+            std::abort ();
+    }
+
+    ~stream_packet_retain_probe_t ()
+    {
+        (void) zlink_msg_close (&retained_header);
+        (void) zlink_msg_close (&retained_body);
+    }
+
+    std::atomic<int> callbacks;
+    std::atomic<int> move_error;
+    std::atomic<bool> retained;
+    std::atomic<bool> retained_header_is_view;
+    std::atomic<bool> retained_body_is_view;
+    zlink_msg_t retained_header;
+    zlink_msg_t retained_body;
+};
+
+static stream_packet_retain_probe_t *g_stream_packet_retain_probe = NULL;
+
 static bool is_stream_control_chunk (const unsigned char *data_, size_t size_)
 {
     (void) data_;
@@ -634,6 +667,37 @@ static void stream_packet_callback (
 
     release_stream_callback_msg (header_);
     release_stream_callback_msg (body_);
+}
+
+static void stream_packet_retain_callback (
+  void *, const zlink_routing_id_t *, zlink_msg_t *header_, zlink_msg_t *body_, void *)
+{
+    stream_packet_retain_probe_t *probe = g_stream_packet_retain_probe;
+    if (!probe || !header_ || !body_) {
+        release_stream_callback_msg (header_);
+        release_stream_callback_msg (body_);
+        return;
+    }
+
+    zlink::msg_t *const core_header = reinterpret_cast<zlink::msg_t *> (header_);
+    zlink::msg_t *const core_body = reinterpret_cast<zlink::msg_t *> (body_);
+    const bool body_is_view = core_body->is_zcmsg ();
+    bool expected = false;
+    if (body_is_view
+        && probe->retained.compare_exchange_strong (expected, true, std::memory_order_acq_rel,
+                                                    std::memory_order_acquire)) {
+        probe->retained_header_is_view.store (core_header->is_zcmsg (),
+                                              std::memory_order_release);
+        probe->retained_body_is_view.store (true, std::memory_order_release);
+        if (zlink_msg_move (&probe->retained_header, header_) != 0
+            || zlink_msg_move (&probe->retained_body, body_) != 0) {
+            probe->move_error.store (1, std::memory_order_release);
+        }
+    }
+
+    release_stream_callback_msg (header_);
+    release_stream_callback_msg (body_);
+    probe->callbacks.fetch_add (1, std::memory_order_release);
 }
 
 static void assert_stream_packet_record (const stream_packet_record_t &record_,
@@ -2346,6 +2410,68 @@ void test_stream_packet_framing_contracts ()
     test_context_socket_close_zero_linger (server);
 }
 
+void test_stream_packet_retained_view_survives_next_read_and_close ()
+{
+    void *server = test_context_socket (ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (server);
+
+    const int zero = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+
+    stream_packet_retain_probe_t probe;
+    g_stream_packet_retain_probe = &probe;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_stream_packet_handler (server, &stream_packet_retain_callback, NULL));
+
+    const int client_fd = connect_raw_tcp (endpoint);
+    TEST_ASSERT_TRUE (client_fd >= 0);
+    TEST_ASSERT_EQUAL_INT (0, set_raw_fd_timeout (client_fd, 2000));
+
+    const unsigned char retained_header[] = "retained-header";
+    std::vector<unsigned char> retained_body (1024);
+    for (size_t i = 0; i < retained_body.size (); ++i)
+        retained_body[i] = static_cast<unsigned char> ((i * 37u + 11u) & 0xffu);
+
+    int expected_callbacks = 0;
+    for (int attempt = 0; attempt < 8 && !probe.retained.load (std::memory_order_acquire);
+         ++attempt) {
+        TEST_ASSERT_EQUAL_INT (
+          0, send_stream_packet_frame (client_fd, retained_header,
+                                       sizeof (retained_header) - 1, &retained_body[0],
+                                       retained_body.size ()));
+        ++expected_callbacks;
+        TEST_ASSERT_TRUE (wait_counter_at_least (&probe.callbacks, expected_callbacks, 5000));
+    }
+
+    TEST_ASSERT_TRUE (probe.retained.load (std::memory_order_acquire));
+    TEST_ASSERT_EQUAL_INT (0, probe.move_error.load (std::memory_order_acquire));
+    TEST_ASSERT_TRUE (probe.retained_header_is_view.load (std::memory_order_acquire));
+    TEST_ASSERT_TRUE (probe.retained_body_is_view.load (std::memory_order_acquire));
+
+    const unsigned char next_header[] = "next-read";
+    const unsigned char next_body[] = "next-body";
+    TEST_ASSERT_EQUAL_INT (
+      0, send_stream_packet_frame (client_fd, next_header, sizeof (next_header) - 1, next_body,
+                                   sizeof (next_body) - 1));
+    ++expected_callbacks;
+    TEST_ASSERT_TRUE (wait_counter_at_least (&probe.callbacks, expected_callbacks, 5000));
+
+    g_stream_packet_retain_probe = NULL;
+    close_raw_fd (client_fd);
+    test_context_socket_close_zero_linger (server);
+
+    TEST_ASSERT_EQUAL_UINT64 (sizeof (retained_header) - 1,
+                              zlink_msg_size (&probe.retained_header));
+    TEST_ASSERT_EQUAL_MEMORY (retained_header, zlink_msg_data (&probe.retained_header),
+                              sizeof (retained_header) - 1);
+    TEST_ASSERT_EQUAL_UINT64 (retained_body.size (), zlink_msg_size (&probe.retained_body));
+    TEST_ASSERT_EQUAL_MEMORY (&retained_body[0], zlink_msg_data (&probe.retained_body),
+                              retained_body.size ());
+}
+
 void test_stream_packet_disconnect_rid_closes_client ()
 {
     void *server = test_context_socket (ZLINK_SOCKET_STREAM);
@@ -2580,6 +2706,9 @@ int main (void)
         RUN_TEST (test_stream_packet_handler_mode_gates);
     if (should_run_stream_socket_test ("test_stream_packet_framing_contracts"))
         RUN_TEST (test_stream_packet_framing_contracts);
+    if (should_run_stream_socket_test (
+          "test_stream_packet_retained_view_survives_next_read_and_close"))
+        RUN_TEST (test_stream_packet_retained_view_survives_next_read_and_close);
     if (should_run_stream_socket_test ("test_stream_packet_disconnect_rid_closes_client"))
         RUN_TEST (test_stream_packet_disconnect_rid_closes_client);
     if (should_run_stream_socket_test ("test_stream_packet_ordering_contracts"))

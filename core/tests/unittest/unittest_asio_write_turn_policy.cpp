@@ -24,18 +24,38 @@
 #include "engine/asio/asio_stream_fastpath_policy.hpp"
 
 #include <unity.h>
-
-void setUp ()
-{
-}
-
-void tearDown ()
-{
-}
+#include <cstdlib>
 
 namespace
 {
 namespace policy = zlink::asio_stream_fastpath_policy;
+
+const char *const legacy_sync_write_env = "ZLINK_ASIO_LEGACY_SYNC_WRITE";
+const char *const stream_async_write_env = "ZLINK_ASIO_STREAM_ASYNC_WRITE";
+
+void set_diagnostic_option (const char *name_, bool enabled_)
+{
+#ifdef ZLINK_HAVE_WINDOWS
+    TEST_ASSERT_EQUAL_INT (0, _putenv_s (name_, enabled_ ? "1" : ""));
+#else
+    if (enabled_)
+        TEST_ASSERT_EQUAL_INT (0, setenv (name_, "1", 1));
+    else
+        TEST_ASSERT_EQUAL_INT (0, unsetenv (name_));
+#endif
+}
+
+policy::connection_fastpath_policy_t make_policy (int socket_type_,
+                                                  const char *transport_name_,
+                                                  bool transport_supports_speculative_,
+                                                  bool legacy_sync_write_ = false,
+                                                  bool stream_async_write_ = false)
+{
+    const policy::speculative_write_diagnostics_t diagnostics = {
+      legacy_sync_write_, stream_async_write_};
+    return policy::connection_fastpath_policy_t (
+      socket_type_, transport_name_, transport_supports_speculative_, diagnostics);
+}
 
 //  Every socket type the asio engine can carry except STREAM.
 const int general_socket_types[] = {
@@ -47,18 +67,34 @@ const size_t general_socket_type_count =
   sizeof (general_socket_types) / sizeof (general_socket_types[0]);
 }
 
+void setUp ()
+{
+    set_diagnostic_option (legacy_sync_write_env, false);
+    set_diagnostic_option (stream_async_write_env, false);
+}
+
+void tearDown ()
+{
+    set_diagnostic_option (legacy_sync_write_env, false);
+    set_diagnostic_option (stream_async_write_env, false);
+}
+
 //  The one admitted case: STREAM over tcp, where the byte budget applies.
 void test_stream_tcp_is_admitted ()
 {
-    TEST_ASSERT_TRUE (
-      policy::use_speculative_write_for (ZLINK_CORE_SOCKET_STREAM, true, true));
+    const policy::connection_fastpath_policy_t connection =
+      make_policy (ZLINK_CORE_SOCKET_STREAM, "tcp", true);
+    TEST_ASSERT_TRUE (connection.tcp_transport ());
+    TEST_ASSERT_TRUE (connection.speculative_write_enabled ());
 }
 
 //  STREAM off tcp has no budgeted turn, so it is not admitted either.
 void test_stream_off_tcp_is_not_admitted ()
 {
-    TEST_ASSERT_FALSE (
-      policy::use_speculative_write_for (ZLINK_CORE_SOCKET_STREAM, false, true));
+    const policy::connection_fastpath_policy_t connection =
+      make_policy (ZLINK_CORE_SOCKET_STREAM, "wss", true);
+    TEST_ASSERT_FALSE (connection.tcp_transport ());
+    TEST_ASSERT_FALSE (connection.speculative_write_enabled ());
 }
 
 //  The regression itself. No general socket may drain synchronously, on tcp or
@@ -68,11 +104,15 @@ void test_no_general_socket_is_admitted ()
 {
     for (size_t i = 0; i < general_socket_type_count; ++i) {
         const int socket_type = general_socket_types[i];
+        const policy::connection_fastpath_policy_t tcp_connection =
+          make_policy (socket_type, "tcp", true);
+        const policy::connection_fastpath_policy_t wss_connection =
+          make_policy (socket_type, "wss", true);
         TEST_ASSERT_FALSE_MESSAGE (
-          policy::use_speculative_write_for (socket_type, true, true),
+          tcp_connection.speculative_write_enabled (),
           "general socket admitted into the synchronous write turn on tcp");
         TEST_ASSERT_FALSE_MESSAGE (
-          policy::use_speculative_write_for (socket_type, false, true),
+          wss_connection.speculative_write_enabled (),
           "general socket admitted into the synchronous write turn off tcp");
     }
 }
@@ -81,8 +121,9 @@ void test_no_general_socket_is_admitted ()
 void test_transport_without_speculative_support_is_not_admitted ()
 {
     for (size_t i = 0; i < general_socket_type_count; ++i) {
-        TEST_ASSERT_FALSE (
-          policy::use_speculative_write_for (general_socket_types[i], true, false));
+        const policy::connection_fastpath_policy_t connection =
+          make_policy (general_socket_types[i], "tcp", false, true);
+        TEST_ASSERT_FALSE (connection.speculative_write_enabled ());
     }
 }
 
@@ -98,8 +139,54 @@ void test_admitted_turn_carries_a_positive_byte_budget ()
 //  spec'd speculative write for STREAM.
 void test_diagnostic_opt_ins_default_off ()
 {
-    TEST_ASSERT_FALSE (policy::legacy_sync_write_opt_in ());
-    TEST_ASSERT_FALSE (policy::stream_async_write_opt_in ());
+    const policy::speculative_write_diagnostics_t diagnostics =
+      policy::load_speculative_write_diagnostics ();
+    TEST_ASSERT_FALSE (diagnostics.legacy_sync_write);
+    TEST_ASSERT_FALSE (diagnostics.stream_async_write);
+}
+
+//  Environment options are creation-time diagnostics. Changing one affects
+//  the next connection policy but cannot rewrite an existing connection.
+void test_legacy_sync_write_is_snapshotted_per_connection ()
+{
+    const policy::connection_fastpath_policy_t before =
+      policy::connection_fastpath_policy_t::from_environment (
+        ZLINK_CORE_SOCKET_PAIR, "tcp", true);
+
+    set_diagnostic_option (legacy_sync_write_env, true);
+    const policy::connection_fastpath_policy_t enabled =
+      policy::connection_fastpath_policy_t::from_environment (
+        ZLINK_CORE_SOCKET_PAIR, "tcp", true);
+
+    set_diagnostic_option (legacy_sync_write_env, false);
+    const policy::connection_fastpath_policy_t after =
+      policy::connection_fastpath_policy_t::from_environment (
+        ZLINK_CORE_SOCKET_PAIR, "tcp", true);
+
+    TEST_ASSERT_FALSE (before.speculative_write_enabled ());
+    TEST_ASSERT_TRUE (enabled.speculative_write_enabled ());
+    TEST_ASSERT_FALSE (after.speculative_write_enabled ());
+}
+
+void test_stream_async_write_is_snapshotted_per_connection ()
+{
+    const policy::connection_fastpath_policy_t before =
+      policy::connection_fastpath_policy_t::from_environment (
+        ZLINK_CORE_SOCKET_STREAM, "tcp", true);
+
+    set_diagnostic_option (stream_async_write_env, true);
+    const policy::connection_fastpath_policy_t async =
+      policy::connection_fastpath_policy_t::from_environment (
+        ZLINK_CORE_SOCKET_STREAM, "tcp", true);
+
+    set_diagnostic_option (stream_async_write_env, false);
+    const policy::connection_fastpath_policy_t after =
+      policy::connection_fastpath_policy_t::from_environment (
+        ZLINK_CORE_SOCKET_STREAM, "tcp", true);
+
+    TEST_ASSERT_TRUE (before.speculative_write_enabled ());
+    TEST_ASSERT_FALSE (async.speculative_write_enabled ());
+    TEST_ASSERT_TRUE (after.speculative_write_enabled ());
 }
 
 int main ()
@@ -111,5 +198,7 @@ int main ()
     RUN_TEST (test_transport_without_speculative_support_is_not_admitted);
     RUN_TEST (test_admitted_turn_carries_a_positive_byte_budget);
     RUN_TEST (test_diagnostic_opt_ins_default_off);
+    RUN_TEST (test_legacy_sync_write_is_snapshotted_per_connection);
+    RUN_TEST (test_stream_async_write_is_snapshotted_per_connection);
     return UNITY_END ();
 }

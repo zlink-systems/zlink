@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.10)
 set(unittests
     unittest_ypipe
     unittest_poller
+    unittest_socket_poller
     unittest_fast_mutex
     unittest_mtrie
     unittest_ip_resolver
@@ -24,6 +25,7 @@ set(unittests
     unittest_flow_state_frame
     unittest_pipe_byte_charge
     unittest_asio_write_turn_policy
+    unittest_asio_transport_writev_lifetime
     unittest_control_runtime)
 
 # add location of platform.hpp for Windows builds

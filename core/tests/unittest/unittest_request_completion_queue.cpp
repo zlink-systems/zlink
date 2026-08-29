@@ -95,9 +95,46 @@ void test_reservation_is_held_until_callback_returns ()
     callback_state.cv.notify_all ();
     owner.join ();
 
+    TEST_ASSERT_EQUAL_UINT64 (1, state.cached);
+    zlink::request_completion::control_t *const released = state.cached_head;
+    TEST_ASSERT_NOT_NULL (released);
+    TEST_ASSERT_TRUE (zlink::request_completion::try_reserve (&state));
+    TEST_ASSERT_EQUAL_PTR (released, state.reserved_head);
+    zlink::request_completion::release_reservation (&state);
+
     for (size_t i = 1;
          i < zlink::request_completion::max_pending_completions; ++i)
         zlink::request_completion::release_reservation (&state);
+}
+
+void test_released_controls_are_reused_from_a_bounded_cache ()
+{
+    zlink::request_completion::queue_state_t state;
+    TEST_ASSERT_TRUE (zlink::request_completion::try_reserve (&state));
+    zlink::request_completion::control_t *first = state.reserved_head;
+    TEST_ASSERT_NOT_NULL (first);
+
+    zlink::request_completion::release_reservation (&state);
+    TEST_ASSERT_EQUAL_UINT64 (1, state.cached);
+    TEST_ASSERT_EQUAL_PTR (first, state.cached_head);
+
+    TEST_ASSERT_TRUE (zlink::request_completion::try_reserve (&state));
+    TEST_ASSERT_EQUAL_PTR (first, state.reserved_head);
+    TEST_ASSERT_EQUAL_UINT64 (0, state.cached);
+    zlink::request_completion::release_reservation (&state);
+
+    for (size_t i = 0;
+         i < zlink::request_completion::max_cached_controls + 1; ++i)
+        TEST_ASSERT_TRUE (zlink::request_completion::try_reserve (&state));
+    for (size_t i = 0;
+         i < zlink::request_completion::max_cached_controls + 1; ++i)
+        zlink::request_completion::release_reservation (&state);
+    TEST_ASSERT_EQUAL_UINT64 (
+      zlink::request_completion::max_cached_controls, state.cached);
+
+    zlink::request_completion::close (&state);
+    TEST_ASSERT_EQUAL_UINT64 (0, state.cached);
+    TEST_ASSERT_NULL (state.cached_head);
 }
 
 int main ()
@@ -105,5 +142,6 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (test_completion_reservations_have_a_finite_admission_limit);
     RUN_TEST (test_reservation_is_held_until_callback_returns);
+    RUN_TEST (test_released_controls_are_reused_from_a_bounded_cache);
     return UNITY_END ();
 }
