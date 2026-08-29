@@ -29,9 +29,9 @@ std::string make_monitor_ready_key (const zlink::endpoint_uri_pair_t &endpoint_u
             key.append (reinterpret_cast<const char *> (routing_id_),
                         routing_id_size_);
         key.push_back ('\0');
-        key.append (reinterpret_cast<const char *> (
-                      &endpoint_uri_pair_.connection_id),
-                    sizeof (endpoint_uri_pair_.connection_id));
+        const uint64_t connection_id = endpoint_uri_pair_.connection_id.load ();
+        key.append (reinterpret_cast<const char *> (&connection_id),
+                    sizeof (connection_id));
     }
     return key;
 }

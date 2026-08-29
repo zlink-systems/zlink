@@ -45,14 +45,24 @@ struct pending_key_hash_t
     size_t operator() (const pending_key_t &key_) const;
 };
 
+struct pending_request_identity_t
+{
+    pending_request_identity_t () : request_seq (0), cookie (0) {}
+
+    uint64_t request_seq;
+    uint64_t cookie;
+
+    bool operator== (const pending_request_identity_t &other_) const
+    {
+        return request_seq == other_.request_seq && cookie == other_.cookie;
+    }
+};
+
 struct pending_request_token_t
 {
-    pending_request_token_t () : resolved_timeout_ms (0)
-    {
-        key.request_seq = 0;
-    }
+    pending_request_token_t () : resolved_timeout_ms (0) {}
 
-    pending_key_t key;
+    pending_request_identity_t identity;
     //  Registration resolves the policy once. The token carries that decision
     //  across physical admission so arm does not reopen the pending aggregate.
     uint32_t resolved_timeout_ms;
@@ -60,7 +70,7 @@ struct pending_request_token_t
 
 struct pending_request_t
 {
-    pending_key_t key;
+    pending_request_identity_t identity;
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
     //  Retained by the lifecycle owner so a resumed multipart send can rebuild
@@ -95,8 +105,11 @@ struct socket_request_reply_state_t : public zlink::request_reply_runtime::seque
     zlink::socket_base_t *socket;
     int socket_type;
     std::mutex mutex;
-    std::unordered_map<pending_key_t, pending_request_t, pending_key_hash_t> pending_requests;
-    std::unordered_map<uint64_t, pending_key_t> pending_request_keys_by_seq;
+    // Request sequences select the aggregate on the wire. The independent
+    // socket-owned cookie fences local observers, timeout callbacks and send
+    // failures after a forced sequence wrap/reuse.
+    uint64_t next_pending_cookie;
+    std::unordered_map<uint64_t, pending_request_t> pending_requests;
     std::unordered_map<uint64_t, dealer_reply_target_t> dealer_reply_targets;
     std::unordered_map<pending_key_t, router_reply_target_t, pending_key_hash_t>
       router_reply_targets;
@@ -196,113 +209,31 @@ void claim_completion_owner (const std::shared_ptr<socket_request_reply_state_t>
 bool current_thread_is_completion_owner (
   const std::shared_ptr<socket_request_reply_state_t> &state_);
 bool in_socket_request_completion_callback (void *socket_);
-inline int add_socket_pending_request_locked (socket_request_reply_state_t *state_,
-                                              const pending_key_t &key_,
-                                              const pending_request_t &pending_)
-{
-    if (!state_) {
-        errno = EFAULT;
-        return -1;
-    }
-
-    bool sequence_inserted = false;
-    bool pending_inserted = false;
-    bool sequence_key_inserted = false;
-    try {
-        sequence_inserted =
-          state_->pending_sequences.insert (key_.request_seq).second;
-        pending_inserted =
-          state_->pending_requests.emplace (key_, pending_).second;
-        sequence_key_inserted =
-          state_->pending_request_keys_by_seq
-            .emplace (key_.request_seq, key_)
-            .second;
-    } catch (...) {
-        if (sequence_key_inserted)
-            state_->pending_request_keys_by_seq.erase (key_.request_seq);
-        if (pending_inserted)
-            state_->pending_requests.erase (key_);
-        if (sequence_inserted)
-            state_->pending_sequences.erase (key_.request_seq);
-        errno = ENOMEM;
-        return -1;
-    }
-
-    if (!sequence_inserted || !pending_inserted || !sequence_key_inserted) {
-        if (sequence_key_inserted)
-            state_->pending_request_keys_by_seq.erase (key_.request_seq);
-        if (pending_inserted)
-            state_->pending_requests.erase (key_);
-        if (sequence_inserted)
-            state_->pending_sequences.erase (key_.request_seq);
-        errno = EALREADY;
-        return -1;
-    }
-    return 0;
-}
-
-inline bool remove_socket_pending_request_locked (socket_request_reply_state_t *state_,
-                                                  const pending_key_t &key_,
-                                                  pending_request_t *pending_out_)
-{
-    if (!state_)
-        return false;
-
-    std::unordered_map<pending_key_t, pending_request_t, pending_key_hash_t>::iterator it =
-      state_->pending_requests.find (key_);
-    if (it == state_->pending_requests.end ())
-        return false;
-
-    if (pending_out_)
-        *pending_out_ = std::move (it->second);
-    state_->pending_sequences.erase (it->first.request_seq);
-    state_->pending_request_keys_by_seq.erase (it->first.request_seq);
-    state_->pending_requests.erase (it);
-    return true;
-}
-
-inline bool take_pending_reply_from_transport_locked (
+int add_socket_pending_request_locked (socket_request_reply_state_t *state_,
+                                       pending_request_t pending_);
+bool remove_socket_pending_request_locked (socket_request_reply_state_t *state_,
+                                           const pending_request_identity_t &identity_,
+                                           pending_request_t *pending_out_);
+bool take_pending_reply_from_transport_locked (
   socket_request_reply_state_t *state_,
-  const pending_key_t &key_,
+  uint64_t request_seq_,
   uint64_t transport_pair_id_,
   uint64_t transport_pair_generation_,
-  pending_request_t *pending_out_)
-{
-    if (!state_)
-        return false;
-
-    pending_key_t key = key_;
-    std::unordered_map<pending_key_t, pending_request_t,
-                       pending_key_hash_t>::const_iterator pending_it =
-      state_->pending_requests.find (key);
-    if (pending_it == state_->pending_requests.end ()) {
-        //  A request may be addressed to a routing id the caller only knows
-        //  by intent, while the reply carries the peer's settled routing id.
-        //  The sequence is allocated per socket, so it identifies the request
-        //  on its own; the transport pair below still fences a reply that
-        //  belongs to an earlier connection.
-        std::unordered_map<uint64_t, pending_key_t>::const_iterator by_seq =
-          state_->pending_request_keys_by_seq.find (key_.request_seq);
-        if (by_seq == state_->pending_request_keys_by_seq.end ())
-            return false;
-        key = by_seq->second;
-        pending_it = state_->pending_requests.find (key);
-        if (pending_it == state_->pending_requests.end ())
-            return false;
-    }
-    if (pending_it->second.transport_pair_id != transport_pair_id_
-        || pending_it->second.transport_pair_generation
-             != transport_pair_generation_)
-        return false;
-    return remove_socket_pending_request_locked (state_, key, pending_out_);
-}
+  pending_request_t *pending_out_);
+bool take_disconnected_socket_pending_request_locked (
+  socket_request_reply_state_t *state_,
+  uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_,
+  pending_request_t *pending_out_);
+bool take_next_socket_pending_request_locked (
+  socket_request_reply_state_t *state_, pending_request_t *pending_out_);
 
 bool remove_socket_pending_request (const std::shared_ptr<socket_request_reply_state_t> &state_,
-                                    const pending_key_t &key_,
+                                    const pending_request_identity_t &identity_,
                                     pending_request_t *pending_out_);
 int schedule_socket_pending_timeout (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
-  const pending_key_t &key_,
+  const pending_request_identity_t &identity_,
   uint32_t timeout_ms_,
   std::shared_ptr<zlink::request_timeout::task_t> *task_out_);
 int arm_socket_pending_request_timeout (
@@ -329,13 +260,21 @@ enum request_reply_allocation_failpoint_t
     request_reply_allocation_dealer_combined,
     request_reply_allocation_router_payload,
     request_reply_allocation_runtime_combined,
-    request_reply_allocation_reply_key
+    request_reply_allocation_reply_key,
+    request_reply_allocation_pending_insert,
+    request_reply_allocation_lazy_state_create,
+    request_reply_allocation_receive_spill,
+    request_reply_allocation_payload_export
 };
+
+typedef void (*request_reply_timeout_after_remove_hook_fn) (void *userdata_);
 
 void test_set_request_reply_allocation_failpoint (
   request_reply_allocation_failpoint_t failpoint_);
 void test_throw_request_reply_allocation_failpoint (
   request_reply_allocation_failpoint_t failpoint_);
+void test_set_request_reply_timeout_after_remove_hook (
+  request_reply_timeout_after_remove_hook_fn hook_, void *userdata_);
 #endif
 }
 }

@@ -211,6 +211,18 @@ void test_typed_raw_socket_options ()
       zlink_get_router_option (router, ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS, &value, &size));
     TEST_ASSERT_EQUAL_INT (4321, value);
 
+    // A per-call timeout of zero selects this socket default, so storing a
+    // zero default would leave an admitted request with no valid deadline.
+    // Reset zero to the documented implementation default instead.
+    value = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_router_option (
+      router, ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS, &value, sizeof (value)));
+    value = -1;
+    size = sizeof (value);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_router_option (router, ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS, &value, &size));
+    TEST_ASSERT_EQUAL_INT (5000, value);
+
     value = 50;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_router_option (router, ZLINK_ROUTER_OPT_WEIGHT, &value, sizeof (value)));
@@ -237,6 +249,15 @@ void test_typed_raw_socket_options ()
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_get_dealer_option (dealer, ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS, &value, &size));
     TEST_ASSERT_EQUAL_INT (3210, value);
+
+    value = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_dealer_option (
+      dealer, ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS, &value, sizeof (value)));
+    value = -1;
+    size = sizeof (value);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_dealer_option (dealer, ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS, &value, &size));
+    TEST_ASSERT_EQUAL_INT (5000, value);
 
     value = 25;
     TEST_ASSERT_SUCCESS_ERRNO (

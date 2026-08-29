@@ -97,9 +97,18 @@ const zlink::endpoint_uri_pair_t &zlink::session_base_t::get_endpoint () const
 
 void zlink::session_base_t::set_peer_routing_id (const unsigned char *data_, size_t size_)
 {
+    //  STREAM owns its integral route in stream_t. In particular, a WS
+    //  protocol identity must not overwrite the session-side route that the
+    //  socket/direct-dispatch path publishes for this transport.
+    if (options.type == ZLINK_CORE_SOCKET_STREAM)
+        return;
+
     if (_pipe) {
         _pipe->set_peer_routing_id (data_, size_);
-        if (_socket_pipe) {
+        //  Once bound, the peer endpoint belongs to the socket thread. Keep
+        //  handshake publication on this session-owned endpoint; Router and
+        //  STREAM publish their socket-side route on the socket thread.
+        if (_socket_pipe && !_socket_pipe_bound) {
             if (_socket_pipe->get_transport_pair_id () != 0)
                 _socket_pipe->set_transport_peer_identity (data_, size_);
             const bool preserve_connect_routing_id =
@@ -129,17 +138,13 @@ void zlink::session_base_t::set_peer_max_message_bytes (uint64_t max_message_byt
         _socket_pipe->set_max_message_bytes (max_message_bytes_);
 }
 
-const zlink::blob_t &zlink::session_base_t::peer_routing_id () const
+void zlink::session_base_t::snapshot_peer_routing_id (blob_t *routing_id_) const
 {
-    if (_pipe) {
-        const blob_t &routing_id = _pipe->get_routing_id ();
-        if (routing_id.size () > 0)
-            return routing_id;
-        if (_socket_pipe)
-            return _socket_pipe->get_routing_id ();
-    }
-    static const blob_t empty_routing_id;
-    return empty_routing_id;
+    zlink_assert (routing_id_);
+    if (_pipe)
+        _pipe->snapshot_routing_id (routing_id_);
+    else
+        routing_id_->clear ();
 }
 
 int zlink::session_base_t::set_peer_transport_pair (transport_lane_t lane_,
@@ -330,7 +335,8 @@ void zlink::session_base_t::engine_ready ()
             std::shared_ptr<physical_queue_record_t> (), true);
         const int rc = pipepair (
           parents, pipes, hwms, conflates, true, _transport_lane,
-          attach_policy.role, attach_policy.planning_enabled);
+          attach_policy.role, attach_policy.planning_enabled,
+          physical_queue_class_application, 0);
         if (rc != 0) {
             const int pipepair_errno = errno;
             const endpoint_uri_pair_t endpoint = _engine->get_endpoint ();
@@ -380,8 +386,11 @@ void zlink::session_base_t::engine_ready ()
         pipes[1]->set_endpoint_pair (_engine->get_endpoint ());
 
         if (_pending_peer_routing_id_valid) {
-            // Apply peer routing id to the socket-side pipe (pipes[1]),
-            // so routing sockets can identify the peer before reading data.
+            // Publish the handshake identity to the session-owned endpoint
+            // used by I/O-thread disconnect reporting, and initialize the
+            // socket endpoint before send_bind transfers its ownership.
+            pipes[0]->set_peer_routing_id (_pending_peer_routing_id.data (),
+                                           _pending_peer_routing_id.size ());
             pipes[1]->set_peer_routing_id (_pending_peer_routing_id.data (),
                                            _pending_peer_routing_id.size ());
             if (_transport_pair_id != 0)

@@ -5,6 +5,7 @@
 #include "testutil_unity.hpp"
 
 #include "core/msg.hpp"
+#include "core/pipe_stream_packet_state.hpp"
 #include "utils/config.hpp"
 
 #include <errno.h>
@@ -45,7 +46,9 @@ static const char *const stream_socket_smoke_cases[] = {
   "test_stream_recv_handler_delivers_raw_chunks_not_len32be_frames",
   "test_stream_packet_handler_mode_gates",
   "test_stream_packet_framing_contracts",
-  "test_stream_packet_retained_view_survives_next_read_and_close",
+  "test_stream_packet_callback_may_leave_parts_valid",
+  "test_stream_packet_retained_parts_follow_vsm_boundary_and_survive_close",
+  "test_stream_packet_coalesced_allocation_failures_close_source",
   "test_stream_packet_disconnect_rid_closes_client",
   "test_stream_packet_ordering_contracts",
   "test_stream_packet_malformed_close_contracts",
@@ -698,6 +701,15 @@ static void stream_packet_retain_callback (
     release_stream_callback_msg (header_);
     release_stream_callback_msg (body_);
     probe->callbacks.fetch_add (1, std::memory_order_release);
+}
+
+static void stream_packet_leave_valid_callback (
+  void *, const zlink_routing_id_t *rid_, zlink_msg_t *header_, zlink_msg_t *body_, void *)
+{
+    // The dispatch boundary defensively owns any part the callback does not
+    // close or move. Intentionally leave both parts valid to cover that cleanup
+    // path, including decoder-backed views.
+    record_stream_packet_message (rid_, header_, body_);
 }
 
 static void assert_stream_packet_record (const stream_packet_record_t &record_,
@@ -2393,9 +2405,24 @@ void test_stream_packet_framing_contracts ()
     TEST_ASSERT_EQUAL_INT (0, send_stream_packet_frame (client_fd, NULL, 0, NULL, 0));
     TEST_ASSERT_TRUE (wait_counter_at_least (&probe.callbacks, 7, 5000));
 
+    std::vector<unsigned char> fragmented_header (zlink::msg_t::max_vsm_size + 1);
+    std::vector<unsigned char> fragmented_body (128 * 1024);
+    for (size_t i = 0; i < fragmented_header.size (); ++i)
+        fragmented_header[i] = static_cast<unsigned char> ((i * 19u + 3u) & 0xffu);
+    for (size_t i = 0; i < fragmented_body.size (); ++i)
+        fragmented_body[i] = static_cast<unsigned char> ((i * 23u + 17u) & 0xffu);
+    const std::vector<unsigned char> fragmented_frame = build_stream_packet_frame (
+      &fragmented_header[0], fragmented_header.size (), &fragmented_body[0],
+      fragmented_body.size ());
+    TEST_ASSERT_EQUAL_INT (0, send_stream_packet (client_fd, &fragmented_frame[0], 6));
+    test_sleep_ms (50);
+    TEST_ASSERT_EQUAL_INT (
+      0, send_stream_packet (client_fd, &fragmented_frame[6], fragmented_frame.size () - 6));
+    TEST_ASSERT_TRUE (wait_counter_at_least (&probe.callbacks, 8, 5000));
+
     {
         std::lock_guard<std::mutex> lk (probe.mu);
-        TEST_ASSERT_EQUAL_UINT64 (7, probe.records.size ());
+        TEST_ASSERT_EQUAL_UINT64 (8, probe.records.size ());
         assert_stream_packet_record (probe.records[0], "hdr", "body-1");
         assert_stream_packet_record (probe.records[1], "split", "body-2");
         assert_stream_packet_record (probe.records[2], "m1", "payload-a");
@@ -2403,6 +2430,14 @@ void test_stream_packet_framing_contracts ()
         assert_stream_packet_record (probe.records[4], "", "body-only");
         assert_stream_packet_record (probe.records[5], "header-only", "");
         assert_stream_packet_record (probe.records[6], "", "");
+        TEST_ASSERT_EQUAL_UINT64 (fragmented_header.size (), probe.records[7].header.size ());
+        TEST_ASSERT_EQUAL_MEMORY (&fragmented_header[0], &probe.records[7].header[0],
+                                  fragmented_header.size ());
+        TEST_ASSERT_EQUAL_UINT64 (fragmented_body.size (), probe.records[7].body.size ());
+        TEST_ASSERT_EQUAL_MEMORY (&fragmented_body[0], &probe.records[7].body[0],
+                                  fragmented_body.size ());
+        TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size,
+                                  probe.records[7].source_rid.size ());
     }
 
     close_raw_fd (client_fd);
@@ -2410,7 +2445,70 @@ void test_stream_packet_framing_contracts ()
     test_context_socket_close_zero_linger (server);
 }
 
-void test_stream_packet_retained_view_survives_next_read_and_close ()
+void test_stream_packet_callback_may_leave_parts_valid ()
+{
+    void *server = test_context_socket (ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (server);
+
+    const int zero = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+
+    stream_packet_probe_t probe;
+    probe.socket = server;
+    g_stream_packet_probe = &probe;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_stream_packet_handler (server, &stream_packet_leave_valid_callback, NULL));
+
+    const int client_fd = connect_raw_tcp (endpoint);
+    TEST_ASSERT_TRUE (client_fd >= 0);
+    TEST_ASSERT_EQUAL_INT (0, set_raw_fd_timeout (client_fd, 2000));
+
+    const std::vector<unsigned char> small_header (zlink::msg_t::max_vsm_size, 0x31);
+    const std::vector<unsigned char> large_header (zlink::msg_t::max_vsm_size + 1, 0x32);
+    const std::vector<unsigned char> body (1024, 0x42);
+    const std::vector<unsigned char> small_frame = build_stream_packet_frame (
+      &small_header[0], small_header.size (), &body[0], body.size ());
+    const std::vector<unsigned char> zero_frame =
+      build_stream_packet_frame (NULL, 0, NULL, 0);
+    const std::vector<unsigned char> large_frame = build_stream_packet_frame (
+      &large_header[0], large_header.size (), &body[0], body.size ());
+
+    std::vector<unsigned char> combined;
+    combined.reserve (small_frame.size () + zero_frame.size () + large_frame.size ());
+    combined.insert (combined.end (), small_frame.begin (), small_frame.end ());
+    combined.insert (combined.end (), zero_frame.begin (), zero_frame.end ());
+    combined.insert (combined.end (), large_frame.begin (), large_frame.end ());
+
+    TEST_ASSERT_EQUAL_INT (0, send_stream_packet (client_fd, &combined[0], combined.size ()));
+    TEST_ASSERT_TRUE (wait_counter_at_least (&probe.callbacks, 3, 5000));
+
+    {
+        std::lock_guard<std::mutex> lk (probe.mu);
+        TEST_ASSERT_EQUAL_UINT64 (3, probe.records.size ());
+        TEST_ASSERT_EQUAL_UINT64 (small_header.size (), probe.records[0].header.size ());
+        TEST_ASSERT_EQUAL_MEMORY (&small_header[0], &probe.records[0].header[0],
+                                  small_header.size ());
+        TEST_ASSERT_EQUAL_UINT64 (body.size (), probe.records[0].body.size ());
+        TEST_ASSERT_EQUAL_MEMORY (&body[0], &probe.records[0].body[0], body.size ());
+        TEST_ASSERT_EQUAL_UINT64 (0, probe.records[1].header.size ());
+        TEST_ASSERT_EQUAL_UINT64 (0, probe.records[1].body.size ());
+        TEST_ASSERT_EQUAL_UINT64 (large_header.size (), probe.records[2].header.size ());
+        TEST_ASSERT_EQUAL_MEMORY (&large_header[0], &probe.records[2].header[0],
+                                  large_header.size ());
+        TEST_ASSERT_EQUAL_UINT64 (body.size (), probe.records[2].body.size ());
+        TEST_ASSERT_EQUAL_MEMORY (&body[0], &probe.records[2].body[0], body.size ());
+    }
+
+    close_raw_fd (client_fd);
+    g_stream_packet_probe = NULL;
+    test_context_socket_close_zero_linger (server);
+}
+
+void test_stream_packet_retained_parts_follow_vsm_boundary_and_survive_close ()
 {
     void *server = test_context_socket (ZLINK_SOCKET_STREAM);
     TEST_ASSERT_NOT_NULL (server);
@@ -2421,8 +2519,8 @@ void test_stream_packet_retained_view_survives_next_read_and_close ()
     char endpoint[MAX_SOCKET_STRING];
     bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
 
-    stream_packet_retain_probe_t probe;
-    g_stream_packet_retain_probe = &probe;
+    stream_packet_retain_probe_t small_header_probe;
+    g_stream_packet_retain_probe = &small_header_probe;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_stream_packet_handler (server, &stream_packet_retain_callback, NULL));
 
@@ -2430,26 +2528,37 @@ void test_stream_packet_retained_view_survives_next_read_and_close ()
     TEST_ASSERT_TRUE (client_fd >= 0);
     TEST_ASSERT_EQUAL_INT (0, set_raw_fd_timeout (client_fd, 2000));
 
-    const unsigned char retained_header[] = "retained-header";
+    TEST_ASSERT_EQUAL_UINT64 (29, zlink::msg_t::max_vsm_size);
+    std::vector<unsigned char> small_header (zlink::msg_t::max_vsm_size);
+    std::vector<unsigned char> large_header (zlink::msg_t::max_vsm_size + 1);
+    for (size_t i = 0; i < small_header.size (); ++i)
+        small_header[i] = static_cast<unsigned char> ((i * 13u + 7u) & 0xffu);
+    for (size_t i = 0; i < large_header.size (); ++i)
+        large_header[i] = static_cast<unsigned char> ((i * 17u + 5u) & 0xffu);
+
     std::vector<unsigned char> retained_body (1024);
     for (size_t i = 0; i < retained_body.size (); ++i)
         retained_body[i] = static_cast<unsigned char> ((i * 37u + 11u) & 0xffu);
 
     int expected_callbacks = 0;
-    for (int attempt = 0; attempt < 8 && !probe.retained.load (std::memory_order_acquire);
+    for (int attempt = 0;
+         attempt < 8 && !small_header_probe.retained.load (std::memory_order_acquire);
          ++attempt) {
         TEST_ASSERT_EQUAL_INT (
-          0, send_stream_packet_frame (client_fd, retained_header,
-                                       sizeof (retained_header) - 1, &retained_body[0],
+          0, send_stream_packet_frame (client_fd, &small_header[0], small_header.size (),
+                                       &retained_body[0],
                                        retained_body.size ()));
         ++expected_callbacks;
-        TEST_ASSERT_TRUE (wait_counter_at_least (&probe.callbacks, expected_callbacks, 5000));
+        TEST_ASSERT_TRUE (
+          wait_counter_at_least (&small_header_probe.callbacks, expected_callbacks, 5000));
     }
 
-    TEST_ASSERT_TRUE (probe.retained.load (std::memory_order_acquire));
-    TEST_ASSERT_EQUAL_INT (0, probe.move_error.load (std::memory_order_acquire));
-    TEST_ASSERT_TRUE (probe.retained_header_is_view.load (std::memory_order_acquire));
-    TEST_ASSERT_TRUE (probe.retained_body_is_view.load (std::memory_order_acquire));
+    TEST_ASSERT_TRUE (small_header_probe.retained.load (std::memory_order_acquire));
+    TEST_ASSERT_EQUAL_INT (0, small_header_probe.move_error.load (std::memory_order_acquire));
+    TEST_ASSERT_FALSE (
+      small_header_probe.retained_header_is_view.load (std::memory_order_acquire));
+    TEST_ASSERT_TRUE (
+      small_header_probe.retained_body_is_view.load (std::memory_order_acquire));
 
     const unsigned char next_header[] = "next-read";
     const unsigned char next_body[] = "next-body";
@@ -2457,19 +2566,184 @@ void test_stream_packet_retained_view_survives_next_read_and_close ()
       0, send_stream_packet_frame (client_fd, next_header, sizeof (next_header) - 1, next_body,
                                    sizeof (next_body) - 1));
     ++expected_callbacks;
-    TEST_ASSERT_TRUE (wait_counter_at_least (&probe.callbacks, expected_callbacks, 5000));
+    TEST_ASSERT_TRUE (
+      wait_counter_at_least (&small_header_probe.callbacks, expected_callbacks, 5000));
+
+    stream_packet_retain_probe_t large_header_probe;
+    g_stream_packet_retain_probe = &large_header_probe;
+    expected_callbacks = 0;
+    for (int attempt = 0;
+         attempt < 8 && !large_header_probe.retained.load (std::memory_order_acquire);
+         ++attempt) {
+        TEST_ASSERT_EQUAL_INT (
+          0, send_stream_packet_frame (client_fd, &large_header[0], large_header.size (),
+                                       &retained_body[0], retained_body.size ()));
+        ++expected_callbacks;
+        TEST_ASSERT_TRUE (
+          wait_counter_at_least (&large_header_probe.callbacks, expected_callbacks, 5000));
+    }
+
+    TEST_ASSERT_TRUE (large_header_probe.retained.load (std::memory_order_acquire));
+    TEST_ASSERT_EQUAL_INT (0, large_header_probe.move_error.load (std::memory_order_acquire));
+    TEST_ASSERT_TRUE (
+      large_header_probe.retained_header_is_view.load (std::memory_order_acquire));
+    TEST_ASSERT_TRUE (
+      large_header_probe.retained_body_is_view.load (std::memory_order_acquire));
+
+    stream_packet_retain_probe_t fragmented_probe;
+    g_stream_packet_retain_probe = &fragmented_probe;
+    std::vector<unsigned char> fragmented_header (zlink::msg_t::max_vsm_size + 1);
+    std::vector<unsigned char> fragmented_body (128 * 1024);
+    for (size_t i = 0; i < fragmented_header.size (); ++i)
+        fragmented_header[i] = static_cast<unsigned char> ((i * 29u + 13u) & 0xffu);
+    for (size_t i = 0; i < fragmented_body.size (); ++i)
+        fragmented_body[i] = static_cast<unsigned char> ((i * 31u + 19u) & 0xffu);
+    const std::vector<unsigned char> fragmented_frame = build_stream_packet_frame (
+      &fragmented_header[0], fragmented_header.size (), &fragmented_body[0],
+      fragmented_body.size ());
+    TEST_ASSERT_EQUAL_INT (0, send_stream_packet (client_fd, &fragmented_frame[0], 6));
+    test_sleep_ms (50);
+    TEST_ASSERT_EQUAL_INT (
+      0, send_stream_packet (client_fd, &fragmented_frame[6], fragmented_frame.size () - 6));
+    TEST_ASSERT_TRUE (wait_counter_at_least (&fragmented_probe.callbacks, 1, 5000));
+    TEST_ASSERT_TRUE (fragmented_probe.retained.load (std::memory_order_acquire));
+    TEST_ASSERT_EQUAL_INT (0, fragmented_probe.move_error.load (std::memory_order_acquire));
+    TEST_ASSERT_TRUE (
+      fragmented_probe.retained_header_is_view.load (std::memory_order_acquire));
+    TEST_ASSERT_TRUE (
+      fragmented_probe.retained_body_is_view.load (std::memory_order_acquire));
+
+    TEST_ASSERT_EQUAL_INT (
+      0, send_stream_packet_frame (client_fd, next_header, sizeof (next_header) - 1, next_body,
+                                   sizeof (next_body) - 1));
+    TEST_ASSERT_TRUE (wait_counter_at_least (&fragmented_probe.callbacks, 2, 5000));
 
     g_stream_packet_retain_probe = NULL;
     close_raw_fd (client_fd);
     test_context_socket_close_zero_linger (server);
 
-    TEST_ASSERT_EQUAL_UINT64 (sizeof (retained_header) - 1,
-                              zlink_msg_size (&probe.retained_header));
-    TEST_ASSERT_EQUAL_MEMORY (retained_header, zlink_msg_data (&probe.retained_header),
-                              sizeof (retained_header) - 1);
-    TEST_ASSERT_EQUAL_UINT64 (retained_body.size (), zlink_msg_size (&probe.retained_body));
-    TEST_ASSERT_EQUAL_MEMORY (&retained_body[0], zlink_msg_data (&probe.retained_body),
+    TEST_ASSERT_EQUAL_UINT64 (small_header.size (),
+                              zlink_msg_size (&small_header_probe.retained_header));
+    TEST_ASSERT_EQUAL_MEMORY (&small_header[0],
+                              zlink_msg_data (&small_header_probe.retained_header),
+                              small_header.size ());
+    TEST_ASSERT_EQUAL_UINT64 (retained_body.size (),
+                              zlink_msg_size (&small_header_probe.retained_body));
+    TEST_ASSERT_EQUAL_MEMORY (&retained_body[0],
+                              zlink_msg_data (&small_header_probe.retained_body),
                               retained_body.size ());
+
+    TEST_ASSERT_EQUAL_UINT64 (large_header.size (),
+                              zlink_msg_size (&large_header_probe.retained_header));
+    TEST_ASSERT_EQUAL_MEMORY (&large_header[0],
+                              zlink_msg_data (&large_header_probe.retained_header),
+                              large_header.size ());
+    TEST_ASSERT_EQUAL_UINT64 (retained_body.size (),
+                              zlink_msg_size (&large_header_probe.retained_body));
+    TEST_ASSERT_EQUAL_MEMORY (&retained_body[0],
+                              zlink_msg_data (&large_header_probe.retained_body),
+                              retained_body.size ());
+
+    TEST_ASSERT_EQUAL_UINT64 (fragmented_header.size (),
+                              zlink_msg_size (&fragmented_probe.retained_header));
+    TEST_ASSERT_EQUAL_MEMORY (&fragmented_header[0],
+                              zlink_msg_data (&fragmented_probe.retained_header),
+                              fragmented_header.size ());
+    TEST_ASSERT_EQUAL_UINT64 (fragmented_body.size (),
+                              zlink_msg_size (&fragmented_probe.retained_body));
+    TEST_ASSERT_EQUAL_MEMORY (&fragmented_body[0],
+                              zlink_msg_data (&fragmented_probe.retained_body),
+                              fragmented_body.size ());
+}
+
+void test_stream_packet_coalesced_allocation_failures_close_source ()
+{
+    const zlink::stream_packet_allocation_failpoint_t failpoints[] = {
+      zlink::stream_packet_allocation_backing,
+      zlink::stream_packet_allocation_body_view,
+    };
+
+    for (size_t case_index = 0;
+         case_index < sizeof (failpoints) / sizeof (failpoints[0]); ++case_index) {
+        zlink::test_set_stream_packet_allocation_failpoint (
+          zlink::stream_packet_allocation_none);
+
+        void *server = test_context_socket (ZLINK_SOCKET_STREAM);
+        TEST_ASSERT_NOT_NULL (server);
+
+        const int zero = 0;
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+
+        char endpoint[MAX_SOCKET_STRING];
+        bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+
+        zlink_socket_monitor_open_options_t monitor_opts;
+        memset (&monitor_opts, 0, sizeof (monitor_opts));
+        monitor_opts.events = ZLINK_EVENT_CONNECTION_READY | ZLINK_EVENT_DISCONNECTED;
+        void *monitor = zlink_socket_monitor_open (server, &monitor_opts);
+        TEST_ASSERT_NOT_NULL (monitor);
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_option (monitor, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+
+        stream_packet_probe_t probe;
+        probe.socket = server;
+        g_stream_packet_probe = &probe;
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_stream_packet_handler (server, &stream_packet_callback, NULL));
+
+        const int client_fd = connect_raw_tcp (endpoint);
+        TEST_ASSERT_TRUE (client_fd >= 0);
+        TEST_ASSERT_EQUAL_INT (0, set_raw_fd_timeout (client_fd, 2000));
+
+        unsigned char expected_rid[stream_routing_id_size];
+        TEST_ASSERT_TRUE (wait_monitor_event_direct (
+          monitor, ZLINK_EVENT_CONNECTION_READY, expected_rid, 10000));
+
+        std::vector<unsigned char> large_header (zlink::msg_t::max_vsm_size + 1, 0x5a);
+        std::vector<unsigned char> large_body (zlink::msg_t::max_vsm_size + 1, 0xa5);
+        const std::vector<unsigned char> frame = build_stream_packet_frame (
+          &large_header[0], large_header.size (), &large_body[0], large_body.size ());
+        zlink::test_set_stream_packet_allocation_failpoint (failpoints[case_index]);
+
+        int expected_callbacks = 0;
+        if (failpoints[case_index] == zlink::stream_packet_allocation_backing) {
+            std::vector<unsigned char> vsm_header (zlink::msg_t::max_vsm_size, 0x3c);
+            std::vector<unsigned char> body_only_large (1024, 0xc3);
+            const std::vector<unsigned char> separate_frame = build_stream_packet_frame (
+              &vsm_header[0], vsm_header.size (), &body_only_large[0],
+              body_only_large.size ());
+            TEST_ASSERT_EQUAL_INT (
+              0, send_stream_packet (client_fd, &separate_frame[0], 6));
+            test_sleep_ms (50);
+            TEST_ASSERT_EQUAL_INT (
+              0, send_stream_packet (client_fd, &separate_frame[6],
+                                     separate_frame.size () - 6));
+            TEST_ASSERT_TRUE (wait_counter_at_least (&probe.callbacks, 1, 5000));
+            expected_callbacks = 1;
+        }
+
+        TEST_ASSERT_EQUAL_INT (0, send_stream_packet (client_fd, &frame[0], 6));
+        if (failpoints[case_index] == zlink::stream_packet_allocation_body_view) {
+            test_sleep_ms (50);
+            TEST_ASSERT_EQUAL_INT (
+              0, send_stream_packet (client_fd, &frame[6], frame.size () - 6));
+        }
+
+        unsigned char disconnect_rid[stream_routing_id_size];
+        TEST_ASSERT_TRUE (wait_monitor_event_direct (
+          monitor, ZLINK_EVENT_DISCONNECTED, disconnect_rid, 10000));
+        TEST_ASSERT_EQUAL_UINT8_ARRAY (expected_rid, disconnect_rid, stream_routing_id_size);
+        TEST_ASSERT_EQUAL_INT (expected_callbacks,
+                               probe.callbacks.load (std::memory_order_acquire));
+
+        zlink::test_set_stream_packet_allocation_failpoint (
+          zlink::stream_packet_allocation_none);
+        close_raw_fd (client_fd);
+        g_stream_packet_probe = NULL;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
+        test_context_socket_close_zero_linger (server);
+    }
 }
 
 void test_stream_packet_disconnect_rid_closes_client ()
@@ -2707,8 +2981,14 @@ int main (void)
     if (should_run_stream_socket_test ("test_stream_packet_framing_contracts"))
         RUN_TEST (test_stream_packet_framing_contracts);
     if (should_run_stream_socket_test (
-          "test_stream_packet_retained_view_survives_next_read_and_close"))
-        RUN_TEST (test_stream_packet_retained_view_survives_next_read_and_close);
+          "test_stream_packet_callback_may_leave_parts_valid"))
+        RUN_TEST (test_stream_packet_callback_may_leave_parts_valid);
+    if (should_run_stream_socket_test (
+          "test_stream_packet_retained_parts_follow_vsm_boundary_and_survive_close"))
+        RUN_TEST (test_stream_packet_retained_parts_follow_vsm_boundary_and_survive_close);
+    if (should_run_stream_socket_test (
+          "test_stream_packet_coalesced_allocation_failures_close_source"))
+        RUN_TEST (test_stream_packet_coalesced_allocation_failures_close_source);
     if (should_run_stream_socket_test ("test_stream_packet_disconnect_rid_closes_client"))
         RUN_TEST (test_stream_packet_disconnect_rid_closes_client);
     if (should_run_stream_socket_test ("test_stream_packet_ordering_contracts"))

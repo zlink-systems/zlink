@@ -82,7 +82,7 @@ class object_t
                           uint64_t epoch_);
     void send_hiccup (zlink::pipe_t *destination_, void *pipe_, uint64_t generation_);
     void send_pipe_term (zlink::pipe_t *destination_);
-    void send_pipe_term_ack (zlink::pipe_t *destination_);
+    bool send_pipe_term_ack (zlink::pipe_t *destination_);
     void send_pipe_hwm (zlink::pipe_t *destination_, uint64_t inhwm_, uint64_t outhwm_);
     void send_term_req (zlink::own_t *destination_, zlink::own_t *object_);
     void send_term (zlink::own_t *destination_, int linger_);
@@ -133,7 +133,7 @@ class object_t
     uint32_t _tid;
 
     void send_command (const command_t &cmd_);
-    void send_pipe_command (zlink::pipe_t *destination_,
+    bool send_pipe_command (zlink::pipe_t *destination_,
                             command_t &cmd_,
                             bool allow_self_dispatch_);
 

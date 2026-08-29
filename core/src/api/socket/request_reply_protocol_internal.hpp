@@ -84,14 +84,14 @@ inline uint32_t decode_u32_be (const unsigned char *in_)
 }
 
 inline uint32_t resolve_timeout_ms (uint32_t per_call_timeout_ms_,
-                                    uint32_t default_timeout_ms,
+                                    uint32_t default_timeout_ms_,
                                     uint32_t socket_timeout_ms_ = 0)
 {
     if (per_call_timeout_ms_ != 0)
         return per_call_timeout_ms_;
     if (socket_timeout_ms_ != 0)
         return socket_timeout_ms_;
-    return default_timeout_ms;
+    return default_timeout_ms_ != 0 ? default_timeout_ms_ : default_timeout_ms;
 }
 
 inline bool is_valid_message_type (uint8_t message_type_)

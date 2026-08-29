@@ -4,6 +4,7 @@
 
 #include <memory>
 
+#include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "api/socket/socket_request_reply_submit_internal.hpp"
 namespace reqrep = zlink::socket_reqrep_internal;
@@ -55,7 +56,9 @@ extern "C" int zlink_socket_request_reply_set_default_timeout (void *socket_,
     std::shared_ptr<reqrep::socket_request_reply_state_t> state =
       reqrep::find_or_create_request_reply_state (handle);
     std::lock_guard<std::mutex> lock (state->mutex);
-    state->default_timeout_ms = static_cast<uint32_t> (timeout_ms);
+    state->default_timeout_ms =
+      timeout_ms == 0 ? zlink::request_reply::default_timeout_ms
+                      : static_cast<uint32_t> (timeout_ms);
     return 0;
 }
 

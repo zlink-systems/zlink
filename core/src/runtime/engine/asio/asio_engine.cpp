@@ -114,9 +114,6 @@ const bool asio_stream_enable_read_drain = zlink::asio_stream_fastpath_policy::e
 
 const bool asio_stream_enable_rx_slab = zlink::asio_stream_fastpath_policy::enable_rx_slab ();
 
-const bool asio_stream_enable_non_tcp_spec_read =
-  zlink::asio_stream_fastpath_policy::enable_non_tcp_spec_read ();
-
 const size_t asio_stream_spec_write_budget_bytes =
   zlink::asio_stream_fastpath_policy::spec_write_budget_bytes ();
 
@@ -163,7 +160,10 @@ zlink::asio_engine_t::asio_engine_t (fd_t fd_,
     _connection_fastpath_policy (
       zlink::asio_stream_fastpath_policy::connection_fastpath_policy_t::from_environment (
         _options.type, _transport_adapter.transport->name (),
-        _transport_adapter.transport->supports_speculative_write ())),
+        zlink::asio_stream_fastpath_policy::transport_fastpath_capabilities_t{
+          _transport_adapter.transport->supports_speculative_write (),
+          _transport_adapter.transport->supports_speculative_read (),
+          _transport_adapter.transport->supports_gather_write ()})),
     _pipeline (),
     _connection_facade ()
 {
@@ -172,7 +172,8 @@ zlink::asio_engine_t::asio_engine_t (fd_t fd_,
     //  _pipeline.read_buffer is allocated lazily on the first handshake
     //  read (see start_async_read/speculative_read). Raw engines create
     //  their decoder at plug time and never use it.
-    _connection_facade.callback_guard.reset (new connection_facade_t::callback_guard_t ());
+    _connection_facade.callback_guard =
+      std::make_shared<connection_facade_t::callback_guard_t> ();
     _pipeline.stream_decoder_read_target_size =
       zlink::asio_stream_fastpath_policy::decoder_initial_read_target (options_);
     _pipeline.stream_decoder_read_target_max =
@@ -253,10 +254,6 @@ void zlink::asio_engine_t::plug (io_thread_t *io_thread_, session_base_t *sessio
     //  Get reference to io_context from the io_thread's poller
     asio_poller_t *poller = static_cast<asio_poller_t *> (io_thread_->get_poller ());
     _transport_adapter.io_context = &poller->get_io_context ();
-
-    //  Allocate timer with correct io_context
-    _transport_adapter.timer = std::unique_ptr<boost::asio::steady_timer> (
-      new boost::asio::steady_timer (*_transport_adapter.io_context));
 
     _pipeline.io_error = false;
 
@@ -515,11 +512,8 @@ void zlink::asio_engine_t::start_async_read ()
 
 bool zlink::asio_engine_t::speculative_read ()
 {
-    const bool supports_speculative_read =
-      _transport_adapter.transport
-      && (_transport_adapter.transport->supports_speculative_read ()
-          || use_non_tcp_speculative_read ());
-    if (_pipeline.read_pending || _pipeline.io_error || !supports_speculative_read)
+    if (_pipeline.read_pending || _pipeline.io_error || !_transport_adapter.transport
+        || !_connection_fastpath_policy.speculative_read_enabled ())
         return false;
 
     _pipeline.last_speculative_read_bytes = 0;
@@ -722,7 +716,7 @@ bool zlink::asio_engine_t::prepare_gather_output ()
 
     if (!gather_enabled)
         return false;
-    if (!_transport_adapter.transport || !_transport_adapter.transport->supports_gather_write ())
+    if (!_transport_adapter.transport || !_connection_fastpath_policy.gather_write_enabled ())
         return false;
     if (_encoder == NULL || _connection_facade.handshaking)
         return false;
@@ -810,17 +804,6 @@ void zlink::asio_engine_t::finish_gather_output ()
     errno_assert (rc == 0);
     const int rc_init = _pipeline.tx_msg.init ();
     errno_assert (rc_init == 0);
-}
-
-bool zlink::asio_engine_t::use_non_tcp_speculative_read () const
-{
-    if (!_transport_adapter.transport || _options.type != ZLINK_CORE_SOCKET_STREAM)
-        return false;
-
-    if (_connection_fastpath_policy.tcp_transport ())
-        return true;
-
-    return asio_stream_enable_non_tcp_spec_read;
 }
 
 bool zlink::asio_engine_t::use_stream_rx_slab () const
@@ -1004,9 +987,7 @@ void zlink::asio_engine_t::maybe_drain_stream_reads ()
         return;
 
     const bool supports_speculative_read =
-      _transport_adapter.transport
-      && (_transport_adapter.transport->supports_speculative_read ()
-          || use_non_tcp_speculative_read ());
+      _transport_adapter.transport && _connection_fastpath_policy.speculative_read_enabled ();
     const bool should_drain = _options.type == ZLINK_CORE_SOCKET_STREAM
                               && asio_stream_enable_read_drain
                               && asio_stream_read_drain_max_loops > 0 && supports_speculative_read;
@@ -1843,12 +1824,11 @@ void zlink::asio_engine_t::error (error_reason_t reason_)
         disconnect_reason = ZLINK_DISCONNECT_TRANSPORT_ERROR;
     }
 
-    const zlink::blob_t *routing_id =
-      _connection_facade.session ? &_connection_facade.session->peer_routing_id () : NULL;
-    const unsigned char *routing_id_data = routing_id ? routing_id->data () : NULL;
-    const size_t routing_id_size = routing_id ? routing_id->size () : 0;
+    zlink::blob_t routing_id;
+    if (_connection_facade.session)
+        _connection_facade.session->snapshot_peer_routing_id (&routing_id);
     _connection_facade.socket->event_disconnected (_endpoint_uri_pair, disconnect_reason,
-                                                   routing_id_data, routing_id_size,
+                                                   routing_id.data (), routing_id.size (),
                                                    _connection_facade.session->transport_lane (),
                                                    _connection_facade.session->transport_pair_id (),
                                                    _connection_facade.session->transport_pair_generation ());
@@ -1892,7 +1872,13 @@ void zlink::asio_engine_t::add_timer (int timeout_, int id_)
 {
     ENGINE_DBG ("add_timer: timeout=%d, id=%d", timeout_, id_);
 
-    zlink_assert (_transport_adapter.timer);
+    //  Raw TCP/IPC STREAM connections never arm a timer. Keep the timer lazy
+    //  so those connections do not pay for an unused ASIO object.
+    zlink_assert (_transport_adapter.io_context);
+    if (!_transport_adapter.timer) {
+        _transport_adapter.timer.reset (
+          new boost::asio::steady_timer (*_transport_adapter.io_context));
+    }
     _transport_adapter.current_timer_id = id_;
     _transport_adapter.timer->expires_after (std::chrono::milliseconds (timeout_));
     _transport_adapter.timer->async_wait (

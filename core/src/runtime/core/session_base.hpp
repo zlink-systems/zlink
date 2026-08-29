@@ -64,7 +64,7 @@ class session_base_t : public own_t, public io_object_t, public i_pipe_events
     socket_base_t *get_socket () const;
     const endpoint_uri_pair_t &get_endpoint () const;
     void set_peer_routing_id (const unsigned char *data_, size_t size_);
-    const blob_t &peer_routing_id () const;
+    void snapshot_peer_routing_id (blob_t *routing_id_) const;
     transport_lane_t transport_lane () const { return _transport_lane; }
     uint64_t transport_pair_id () const { return _transport_pair_id; }
     uint64_t transport_pair_generation () const { return _transport_pair_generation; }

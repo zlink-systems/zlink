@@ -57,10 +57,22 @@ enum flow_state_transition_t
 struct transport_lifetime_t
 {
     explicit transport_lifetime_t (uint64_t connection_id_) :
-        connection_id (connection_id_)
+        connection_id (connection_id_),
+        stream_routing_id (0),
+        stream_route_closed (false),
+        stream_connect_event_emitted (false)
     {
     }
     std::atomic<uint64_t> connection_id;
+    std::atomic<uint32_t> stream_routing_id;
+    std::atomic<bool> stream_route_closed;
+    std::atomic<bool> stream_connect_event_emitted;
+    // STREAM parser state and callback serialization belong to the physical
+    // transport, not to either pipe endpoint. The session endpoint remains
+    // alive while an I/O callback runs, so this shared owner keeps the gate
+    // valid when the socket endpoint terminates concurrently.
+    fast_mutex_t stream_dispatch_sync;
+    pipe_stream_packet_state_t stream_packet_state;
 };
 
 //  Create a pipepair for bi-directional transfer of messages.
@@ -83,7 +95,8 @@ int pipepair (zlink::object_t *parents_[2],
               auto_hwm_role_t role_ = auto_hwm_role_none,
               bool planning_enabled_ = false,
               physical_queue_class_t queue_class_ =
-                physical_queue_class_application);
+                physical_queue_class_application,
+              int session_owner_index_ = -1);
 
 struct i_pipe_events
 {
@@ -134,7 +147,8 @@ class pipe_t ZLINK_FINAL : public object_t,
                          transport_lane_t lane_,
                          auto_hwm_role_t role_,
                          bool planning_enabled_,
-                         physical_queue_class_t queue_class_);
+                         physical_queue_class_t queue_class_,
+                         int session_owner_index_);
 
   public:
     typedef pipe_stream_packet_state_t stream_packet_state_t;
@@ -148,8 +162,15 @@ class pipe_t ZLINK_FINAL : public object_t,
 
     //  Pipe endpoint can store an opaque ID to be used by its clients.
     void set_router_socket_routing_id (const blob_t &router_socket_routing_id_);
+    //  Copies the routing ID while holding the cold publication lock. Use this
+    //  only from foreign-thread control/error paths; socket-owner hot paths
+    //  retain the zero-overhead get_routing_id() view.
+    void snapshot_routing_id (blob_t *routing_id_) const;
     const blob_t &get_routing_id () const;
     pipe_t *get_peer () const;
+    //  Returns a lifetime-pinned peer snapshot for control/monitor paths. The
+    //  caller must release_lifetime_ref() after its last dereference.
+    pipe_t *retain_peer_snapshot () const;
     void set_peer_routing_id (const unsigned char *data_, size_t size_);
     void set_transport_peer_identity (const unsigned char *data_, size_t size_);
     const blob_t &get_transport_peer_identity () const;
@@ -181,8 +202,10 @@ class pipe_t ZLINK_FINAL : public object_t,
     void reset_connection_ready_event_emitted ();
     stream_packet_state_t &stream_packet_state ();
     const stream_packet_state_t &stream_packet_state () const;
-    fast_mutex_t &stream_packet_dispatch_sync ();
+    fast_mutex_t &stream_dispatch_sync ();
     void reset_stream_packet_state ();
+    void close_stream_route ();
+    bool stream_route_closed () const;
 
     //  Returns true if there is at least one message to read in the pipe.
     bool check_read ();
@@ -442,10 +465,13 @@ class pipe_t ZLINK_FINAL : public object_t,
       bool allow_empty_pipe_exception_);
     bool check_hwm_with_peer_snapshot_unlocked ();
     void refresh_peer_credit_snapshot_unlocked ();
+    pipe_t *retain_peer_snapshot_unlocked () const;
     void account_inbound_frame (const msg_t *msg_);
     void snapshot_outbound_queue_accounting (const pipe_t *reader_,
                                              uint64_t *provisional_out_,
                                              uint64_t *committed_out_) const;
+    void publish_session_outbound_accounting_unlocked (
+      bool provisional_changed_);
     bool read_internal (msg_t *msg_);
     void refresh_inbound_lwm_from_physical_queue ();
 
@@ -461,12 +487,13 @@ class pipe_t ZLINK_FINAL : public object_t,
             const std::shared_ptr<transport_lifetime_t> &transport_lifetime_,
             const std::shared_ptr<physical_queue_record_t> &in_physical_queue_,
             const std::shared_ptr<physical_queue_record_t> &out_physical_queue_,
-            bool registry_accounting_);
+            bool registry_accounting_,
+            bool session_io_writer_);
 
     //  Pipepair uses this function to let us know about
     //  the peer pipe object.
     void set_peer (pipe_t *peer_);
-    void detach_peer_backref ();
+    pipe_t *detach_peer_link ();
     void retire_physical_queue_endpoints ();
 
     //  Destructor is private. Pipe objects destroy themselves.
@@ -519,6 +546,11 @@ class pipe_t ZLINK_FINAL : public object_t,
     // Only multipart reads need this extra publication. Single-part traffic
     // remains on the existing complete-message credit publication path.
     std::atomic<uint64_t> _published_incomplete_bytes_read;
+    //  A session decoder owns this endpoint without taking _out_sync. Its
+    //  queue total is the synchronization source for cold Auto-HWM snapshots;
+    //  the provisional value only classifies that total for diagnostics.
+    std::atomic<uint64_t> _published_outbound_total_bytes;
+    std::atomic<uint64_t> _published_outbound_provisional_bytes;
     uint64_t _last_credit_bytes_read;
     uint64_t _in_generation;
     uint64_t _out_generation;
@@ -538,8 +570,11 @@ class pipe_t ZLINK_FINAL : public object_t,
     uint64_t _peers_msgs_read;
     uint64_t _peers_bytes_read;
 
-    //  The pipe object on the other side of the pipepair.
-    pipe_t *_peer;
+    //  The pipe object on the other side of the pipepair. Each non-null link
+    //  owns one lifetime reference on the pointed-to endpoint. Termination
+    //  detaches the link atomically and releases (or transfers) that reference
+    //  only after its final peer access.
+    std::atomic<pipe_t *> _peer;
 
     //  Sink to send events to.
     i_pipe_events *_sink;
@@ -573,10 +608,6 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Routing id of the writer. Used uniquely by the reader side.
     blob_t _router_socket_routing_id;
     blob_t _transport_peer_identity;
-    //  Routing id of the writer. Used uniquely by the reader side.
-    int _server_socket_routing_id;
-
-    std::atomic<bool> _stream_connect_event_emitted;
     std::atomic<bool> _connection_ready_event_emitted;
     class lifetime_state_t
     {
@@ -603,8 +634,6 @@ class pipe_t ZLINK_FINAL : public object_t,
     };
 
     lifetime_state_t _lifetime;
-    fast_mutex_t _stream_packet_sync;
-    stream_packet_state_t _stream_packet_state;
 
     //  Returns true if the message is delimiter; false otherwise.
     static bool is_delimiter (const msg_t &msg_);
@@ -621,6 +650,9 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  True for session<->socket pipes; hiccup() recreates the inpipe with
     //  the matching (smaller) chunk granularity.
     const bool _session_pipe;
+    //  True only for the endpoint owned by session_base_t's I/O thread. The
+    //  peer endpoint remains on the ordinary _out_sync socket-send path.
+    const bool _session_io_writer;
 
     // The endpoints of this pipe.
     endpoint_uri_pair_t _endpoint_pair;

@@ -18,12 +18,23 @@
 
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO && defined ZLINK_HAVE_ASIO_WS
 
+#include "transports/ws/ws_transport.hpp"
+#if defined ZLINK_HAVE_WSS
+#include "transports/tls/wss_transport.hpp"
+#endif
+
 #include <boost/asio.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
+#if defined ZLINK_HAVE_WSS
+#include <boost/asio/ssl.hpp>
+#include <boost/beast/ssl.hpp>
+#include <boost/beast/websocket/ssl.hpp>
+#endif
 
 #include <string>
 #include <string.h>
+#include <array>
 #include <atomic>
 #include <mutex>
 #include <vector>
@@ -336,6 +347,52 @@ void test_ws_binary_message ()
 
 #if defined ZLINK_HAVE_WS
 
+void test_ws_transport_config_initialization_is_thread_safe ()
+{
+    const size_t worker_count = 16;
+    std::atomic<size_t> ready (0);
+    std::atomic<bool> start (false);
+    std::vector<std::array<size_t, 4> > values (worker_count);
+    std::vector<std::thread> workers;
+    workers.reserve (worker_count);
+
+    for (size_t i = 0; i != worker_count; ++i) {
+        workers.push_back (std::thread ([&, i] () {
+            ready.fetch_add (1, std::memory_order_release);
+            while (!start.load (std::memory_order_acquire))
+                std::this_thread::yield ();
+
+            values[i][0] = zlink::test_ws_write_buffer_bytes ();
+            values[i][1] = zlink::test_ws_read_message_max ();
+#if defined ZLINK_HAVE_WSS
+            values[i][2] = zlink::test_wss_write_buffer_bytes ();
+            values[i][3] = zlink::test_wss_read_message_max ();
+#else
+            values[i][2] = 0;
+            values[i][3] = 0;
+#endif
+        }));
+    }
+
+    while (ready.load (std::memory_order_acquire) != worker_count)
+        std::this_thread::yield ();
+    start.store (true, std::memory_order_release);
+
+    for (size_t i = 0; i != workers.size (); ++i)
+        workers[i].join ();
+
+    TEST_ASSERT_GREATER_THAN_UINT64 (0, values[0][0]);
+    TEST_ASSERT_GREATER_THAN_UINT64 (0, values[0][1]);
+    for (size_t i = 1; i != worker_count; ++i) {
+        TEST_ASSERT_EQUAL_UINT64 (values[0][0], values[i][0]);
+        TEST_ASSERT_EQUAL_UINT64 (values[0][1], values[i][1]);
+#if defined ZLINK_HAVE_WSS
+        TEST_ASSERT_EQUAL_UINT64 (values[0][2], values[i][2]);
+        TEST_ASSERT_EQUAL_UINT64 (values[0][3], values[i][3]);
+#endif
+    }
+}
+
 //  Global ZLINK context for WebSocket integration tests
 static void *g_ctx = NULL;
 
@@ -359,6 +416,17 @@ namespace
 std::mutex g_ws_stream_probe_mutex;
 std::atomic<bool> g_ws_stream_probe_ready (false);
 zlink_routing_id_t g_ws_stream_probe_rid;
+std::vector<unsigned char> g_ws_stream_probe_header;
+std::vector<unsigned char> g_ws_stream_probe_body;
+
+void reset_ws_stream_probe ()
+{
+    std::lock_guard<std::mutex> lock (g_ws_stream_probe_mutex);
+    memset (&g_ws_stream_probe_rid, 0, sizeof (g_ws_stream_probe_rid));
+    g_ws_stream_probe_header.clear ();
+    g_ws_stream_probe_body.clear ();
+    g_ws_stream_probe_ready.store (false, std::memory_order_release);
+}
 
 void ws_stream_packet_handler (void *,
                                const zlink_routing_id_t *rid_,
@@ -366,9 +434,16 @@ void ws_stream_packet_handler (void *,
                                zlink_msg_t *body_,
                                void *)
 {
-    if (rid_) {
+    if (rid_ && header_ && body_) {
         std::lock_guard<std::mutex> lock (g_ws_stream_probe_mutex);
         g_ws_stream_probe_rid = *rid_;
+        const unsigned char *header_data =
+          static_cast<const unsigned char *> (zlink_msg_data (header_));
+        const unsigned char *body_data =
+          static_cast<const unsigned char *> (zlink_msg_data (body_));
+        g_ws_stream_probe_header.assign (header_data,
+                                         header_data + zlink_msg_size (header_));
+        g_ws_stream_probe_body.assign (body_data, body_data + zlink_msg_size (body_));
         g_ws_stream_probe_ready.store (true, std::memory_order_release);
     }
     if (header_)
@@ -391,6 +466,70 @@ std::vector<unsigned char> ws_stream_packet (const char *header_, const char *bo
     memcpy (&frame[6], header_, header_size);
     memcpy (&frame[6 + header_size], body_, body_size);
     return frame;
+}
+
+std::string patterned_ws_stream_body (size_t size_, unsigned int offset_)
+{
+    std::string body (size_, ' ');
+    for (size_t i = 0; i != size_; ++i)
+        body[i] = static_cast<char> ('!' + (i + offset_) % 90);
+    return body;
+}
+
+template <typename WebSocketStream>
+void write_fragmented_ws_message (WebSocketStream &client_,
+                                  const std::vector<unsigned char> &message_)
+{
+    //  Split both the six-byte STREAM packet prefix and the much larger body.
+    //  The final fragment is also larger than the decoder's initial read target,
+    //  so one logical WebSocket message requires repeated transport reads.
+    const size_t first_fragment_size = 2;
+    const size_t second_fragment_size = 3;
+    TEST_ASSERT_GREATER_THAN_UINT64 (first_fragment_size + second_fragment_size,
+                                     message_.size ());
+
+    boost::system::error_code ec;
+    size_t written = client_.write_some (
+      false, net::buffer (&message_[0], first_fragment_size), ec);
+    TEST_ASSERT_FALSE_MESSAGE (ec.failed (), ec.message ().c_str ());
+    TEST_ASSERT_EQUAL_UINT64 (first_fragment_size, written);
+
+    written = client_.write_some (
+      false, net::buffer (&message_[first_fragment_size], second_fragment_size), ec);
+    TEST_ASSERT_FALSE_MESSAGE (ec.failed (), ec.message ().c_str ());
+    TEST_ASSERT_EQUAL_UINT64 (second_fragment_size, written);
+
+    const size_t final_offset = first_fragment_size + second_fragment_size;
+    written = client_.write_some (
+      true, net::buffer (&message_[final_offset], message_.size () - final_offset), ec);
+    TEST_ASSERT_FALSE_MESSAGE (ec.failed (), ec.message ().c_str ());
+    TEST_ASSERT_EQUAL_UINT64 (message_.size () - final_offset, written);
+}
+
+void wait_for_ws_stream_probe (const char *failure_message_)
+{
+    for (int waited = 0;
+         waited < 5000 && !g_ws_stream_probe_ready.load (std::memory_order_acquire);
+         waited += 10)
+        msleep (10);
+    TEST_ASSERT_TRUE_MESSAGE (
+      g_ws_stream_probe_ready.load (std::memory_order_acquire), failure_message_);
+}
+
+void assert_ws_stream_probe_payload (const std::string &header_, const std::string &body_)
+{
+    std::vector<unsigned char> received_header;
+    std::vector<unsigned char> received_body;
+    {
+        std::lock_guard<std::mutex> lock (g_ws_stream_probe_mutex);
+        received_header = g_ws_stream_probe_header;
+        received_body = g_ws_stream_probe_body;
+    }
+
+    TEST_ASSERT_EQUAL_UINT64 (header_.size (), received_header.size ());
+    TEST_ASSERT_EQUAL_MEMORY (header_.data (), &received_header[0], header_.size ());
+    TEST_ASSERT_EQUAL_UINT64 (body_.size (), received_body.size ());
+    TEST_ASSERT_EQUAL_MEMORY (body_.data (), &received_body[0], body_.size ());
 }
 }
 
@@ -526,8 +665,7 @@ void test_zlink_ws_pair_message ()
 void test_zlink_ws_stream_packet_handler_routed_send ()
 {
     setup_zlink_ctx ();
-    g_ws_stream_probe_ready.store (false, std::memory_order_release);
-    memset (&g_ws_stream_probe_rid, 0, sizeof (g_ws_stream_probe_rid));
+    reset_ws_stream_probe ();
 
     void *server = zlink_socket (g_ctx, ZLINK_SOCKET_STREAM);
     TEST_ASSERT_NOT_NULL (server);
@@ -602,6 +740,49 @@ void test_zlink_ws_stream_packet_handler_routed_send ()
     TEST_ASSERT_EQUAL_MEMORY (&first[0], received_bytes.data (), first.size ());
     TEST_ASSERT_EQUAL_MEMORY (&second[0], received_bytes.data () + first.size (),
                               second.size ());
+
+    boost::system::error_code ignored;
+    client.close (websocket::close_code::normal, ignored);
+    zlink_close (server);
+    teardown_zlink_ctx ();
+}
+
+void test_zlink_ws_stream_fragmented_partial_read ()
+{
+    setup_zlink_ctx ();
+    reset_ws_stream_probe ();
+
+    void *server = zlink_socket (g_ctx, ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (server);
+    const int zero = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, "ws://127.0.0.1:*"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_stream_packet_handler (server, &ws_stream_packet_handler, NULL));
+
+    char endpoint[256];
+    size_t endpoint_size = sizeof (endpoint);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (server, ZLINK_OPT_LAST_ENDPOINT, endpoint, &endpoint_size));
+    unsigned int port = 0;
+    TEST_ASSERT_EQUAL_INT (1, sscanf (endpoint, "ws://127.0.0.1:%u", &port));
+
+    net::io_context client_io;
+    tcp::resolver resolver (client_io);
+    websocket::stream<tcp::socket> client (client_io);
+    const std::string port_text = std::to_string (port);
+    net::connect (client.next_layer (), resolver.resolve ("127.0.0.1", port_text));
+    client.binary (true);
+    client.handshake ("127.0.0.1:" + port_text, "/");
+
+    const std::string header = "fragmented-ws";
+    const std::string body = patterned_ws_stream_body (128 * 1024, 7);
+    const std::vector<unsigned char> request =
+      ws_stream_packet (header.c_str (), body.c_str ());
+    write_fragmented_ws_message (client, request);
+    wait_for_ws_stream_probe ("fragmented WS STREAM packet timed out");
+    assert_ws_stream_probe_payload (header, body);
 
     boost::system::error_code ignored;
     client.close (websocket::close_code::normal, ignored);
@@ -783,6 +964,61 @@ void test_zlink_wss_repeated_pending_read_close ()
     cleanup_tls_test_files (files);
     teardown_zlink_ctx ();
 }
+
+void test_zlink_wss_stream_fragmented_partial_read ()
+{
+    setup_zlink_ctx ();
+    reset_ws_stream_probe ();
+
+    const tls_test_files_t files = make_tls_test_files ();
+    void *server = zlink_socket (g_ctx, ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (server);
+    const int zero = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      server, ZLINK_OPT_TLS_CERT, files.server_cert.c_str (), files.server_cert.size ()));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      server, ZLINK_OPT_TLS_KEY, files.server_key.c_str (), files.server_key.size ()));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, "wss://127.0.0.1:*"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_stream_packet_handler (server, &ws_stream_packet_handler, NULL));
+
+    char endpoint[256];
+    size_t endpoint_size = sizeof (endpoint);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (server, ZLINK_OPT_LAST_ENDPOINT, endpoint, &endpoint_size));
+    unsigned int port = 0;
+    TEST_ASSERT_EQUAL_INT (1, sscanf (endpoint, "wss://127.0.0.1:%u", &port));
+
+    namespace ssl = boost::asio::ssl;
+    net::io_context client_io;
+    ssl::context client_ssl_ctx (ssl::context::tls_client);
+    client_ssl_ctx.set_verify_mode (ssl::verify_none);
+    tcp::resolver resolver (client_io);
+    websocket::stream<ssl::stream<tcp::socket> > client (client_io, client_ssl_ctx);
+    const std::string port_text = std::to_string (port);
+    net::connect (client.next_layer ().next_layer (),
+                  resolver.resolve ("127.0.0.1", port_text));
+    client.next_layer ().handshake (ssl::stream_base::client);
+    client.binary (true);
+    client.handshake ("localhost:" + port_text, "/");
+
+    const std::string header = "fragmented-wss";
+    const std::string body = patterned_ws_stream_body (128 * 1024, 19);
+    const std::vector<unsigned char> request =
+      ws_stream_packet (header.c_str (), body.c_str ());
+    write_fragmented_ws_message (client, request);
+    wait_for_ws_stream_probe ("fragmented WSS STREAM packet timed out");
+    assert_ws_stream_probe_payload (header, body);
+
+    boost::system::error_code ignored;
+    client.close (websocket::close_code::normal, ignored);
+    beast::get_lowest_layer (client).close (ignored);
+    zlink_close (server);
+    cleanup_tls_test_files (files);
+    teardown_zlink_ctx ();
+}
 #endif // ZLINK_HAVE_WSS
 
 #endif // ZLINK_HAVE_WS
@@ -812,6 +1048,9 @@ int main ()
     UNITY_BEGIN ();
 
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO && defined ZLINK_HAVE_ASIO_WS
+#if defined ZLINK_HAVE_WS
+    RUN_TEST (test_ws_transport_config_initialization_is_thread_safe);
+#endif
     //  Beast WebSocket infrastructure tests
     RUN_TEST (test_ws_stream_creation);
     RUN_TEST (test_ws_stream_options);
@@ -826,11 +1065,13 @@ int main ()
     RUN_TEST (test_zlink_ws_connect);
     RUN_TEST (test_zlink_ws_pair_message);
     RUN_TEST (test_zlink_ws_stream_packet_handler_routed_send);
+    RUN_TEST (test_zlink_ws_stream_fragmented_partial_read);
     RUN_TEST (test_zlink_ws_pubsub);
     RUN_TEST (test_zlink_ws_with_path);
 #if defined ZLINK_HAVE_WSS
     RUN_TEST (test_zlink_wss_pair_message);
     RUN_TEST (test_zlink_wss_repeated_pending_read_close);
+    RUN_TEST (test_zlink_wss_stream_fragmented_partial_read);
 #endif
 #endif // ZLINK_HAVE_WS
 

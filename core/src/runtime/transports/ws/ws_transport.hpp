@@ -18,6 +18,11 @@
 namespace zlink
 {
 
+#ifdef ZLINK_BUILD_TESTS
+size_t test_ws_write_buffer_bytes ();
+size_t test_ws_read_message_max ();
+#endif
+
 //  WebSocket transport implementation using Boost.Beast
 //
 //  This transport wraps a TCP socket with WebSocket framing.
@@ -91,24 +96,11 @@ class ws_transport_t : public i_asio_transport
   private:
     //  WebSocket stream type (over TCP socket, no compression for simplicity)
     typedef boost::beast::websocket::stream<boost::asio::ip::tcp::socket> ws_stream_t;
-    struct read_state_t
-    {
-        read_state_t () : closed (false) {}
-
-        void clear ()
-        {
-            message_buffer.consume (message_buffer.size ());
-        }
-
-        boost::beast::flat_buffer message_buffer;
-        bool closed;
-    };
 
     std::string _path;
     std::string _host;
     std::shared_ptr<ws_stream_t> _ws_stream;
     bool _handshake_complete;
-    std::shared_ptr<read_state_t> _read_state;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (ws_transport_t)
 };

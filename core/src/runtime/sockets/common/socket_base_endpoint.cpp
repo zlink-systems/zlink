@@ -357,6 +357,8 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
           session_base_t::create (io_thread, true, this, lane_options, paddr);
         errno_assert (session);
         pipe_t *newpipe = NULL;
+        endpoint_uri_pair_t endpoint_pair =
+          make_unconnected_connect_endpoint_pair (endpoint_uri_);
 
         if (lane_options.immediate != 1 || subscribe_to_all) {
             object_t *parents[2] = {this, session};
@@ -370,7 +372,8 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
                 std::shared_ptr<physical_queue_record_t> (), true);
             rc = pipepair (parents, new_pipes, hwms, conflates, true,
                            lane_options.transport_lane, attach_policy.role,
-                           attach_policy.planning_enabled);
+                           attach_policy.planning_enabled,
+                           physical_queue_class_application, 1);
             if (rc != 0) {
                 const int pipepair_errno = errno;
                 std::string failed_endpoint;
@@ -388,6 +391,14 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
             new_pipes[1]->set_transport_pair (
               lane_options.transport_lane, pair_id, pair_generation);
             new_pipes[0]->set_locally_initiated (paired_transport);
+
+            // Publish immutable endpoint metadata before either endpoint is
+            // attached or the session child is launched. The engine publishes
+            // the live connection id independently after it is ready.
+            endpoint_uri_pair_t pipe_endpoint_pair = endpoint_pair;
+            pipe_endpoint_pair.connection_id = 0;
+            new_pipes[0]->set_endpoint_pair (
+              ZLINK_MOVE (pipe_endpoint_pair));
 
             if (!paired_transport)
                 attach_pipe (new_pipes[0], subscribe_to_all, true);
@@ -410,11 +421,11 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
         //  - reaches the whole pair without knowing that lanes exist.
         if (paired_transport)
             add_transport_pair_endpoint (
-              make_unconnected_connect_endpoint_pair (endpoint_uri_),
-              static_cast<own_t *> (session), newpipe, pair_state);
+              endpoint_pair, static_cast<own_t *> (session), newpipe,
+              pair_state);
         else
-            add_endpoint (make_unconnected_connect_endpoint_pair (endpoint_uri_),
-                          static_cast<own_t *> (session), newpipe);
+            add_endpoint (endpoint_pair, static_cast<own_t *> (session),
+                          newpipe);
     }
     return 0;
 }
@@ -487,12 +498,6 @@ void zlink::socket_base_t::add_transport_pair_endpoint (
     endpoint_runtime ().endpoints.ZLINK_MAP_INSERT_OR_EMPLACE (
       endpoint_pair_.identifier (),
       endpoint_pipe_t (endpoint_, pipe_, endpoint_pair_.local_type, pair_state_));
-
-    if (pipe_ != NULL) {
-        endpoint_uri_pair_t pipe_endpoint_pair = endpoint_pair_;
-        pipe_endpoint_pair.connection_id = 0;
-        pipe_->set_endpoint_pair (ZLINK_MOVE (pipe_endpoint_pair));
-    }
 }
 
 void zlink::socket_base_t::add_endpoint (const endpoint_uri_pair_t &endpoint_pair_,
@@ -502,16 +507,6 @@ void zlink::socket_base_t::add_endpoint (const endpoint_uri_pair_t &endpoint_pai
     launch_child (endpoint_);
     endpoint_runtime ().endpoints.ZLINK_MAP_INSERT_OR_EMPLACE (
       endpoint_pair_.identifier (), endpoint_pipe_t (endpoint_, pipe_, endpoint_pair_.local_type));
-
-    if (pipe_ != NULL) {
-        endpoint_uri_pair_t pipe_endpoint_pair = endpoint_pair_;
-        //  add_endpoint receives the placeholder made before a connect
-        //  attempt has a physical transport. Keep endpoint bookkeeping on
-        //  the pipe, but leave its shared transport identity unbound until
-        //  session_base_t installs the engine endpoint.
-        pipe_endpoint_pair.connection_id = 0;
-        pipe_->set_endpoint_pair (ZLINK_MOVE (pipe_endpoint_pair));
-    }
 }
 
 int zlink::socket_base_t::term_endpoint_internal (const char *endpoint_uri_)

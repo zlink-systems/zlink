@@ -346,11 +346,11 @@ void zlink::object_t::send_pipe_term (pipe_t *destination_)
     send_pipe_command (destination_, cmd, false);
 }
 
-void zlink::object_t::send_pipe_term_ack (pipe_t *destination_)
+bool zlink::object_t::send_pipe_term_ack (pipe_t *destination_)
 {
     command_t cmd;
     cmd.type = command_t::pipe_term_ack;
-    send_pipe_command (destination_, cmd, false);
+    return send_pipe_command (destination_, cmd, false);
 }
 
 void zlink::object_t::send_pipe_hwm (pipe_t *destination_,
@@ -537,17 +537,22 @@ void zlink::object_t::process_conn_failed ()
     zlink_assert (false);
 }
 
-void zlink::object_t::send_pipe_command (pipe_t *destination_,
+bool zlink::object_t::send_pipe_command (pipe_t *destination_,
                                          command_t &cmd_,
                                          bool allow_self_dispatch_)
 {
+    zlink_assert (destination_);
+    if (!destination_)
+        return false;
+
     cmd_.destination = destination_;
     if (!destination_->retain_lifetime_ref ())
-        return;
+        return false;
     if (allow_self_dispatch_ && destination_->get_tid () == _tid)
         destination_->process_command (cmd_);
     else
         send_command (cmd_);
+    return true;
 }
 
 void zlink::object_t::send_command (const command_t &cmd_)

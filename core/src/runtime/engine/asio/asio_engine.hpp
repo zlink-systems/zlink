@@ -226,7 +226,6 @@ class asio_engine_t : public i_engine
 
     void destroy_after_callbacks ();
 
-    bool use_non_tcp_speculative_read () const;
     bool use_stream_rx_slab () const;
     bool use_stream_dynamic_read_growth () const;
     bool use_stream_dynamic_write_growth () const;

@@ -29,23 +29,33 @@ boost::asio::ip::tcp protocol_for_fd (fd_t fd_)
 
 size_t ws_write_buffer_bytes ()
 {
-    static size_t value = 0;
-    if (value == 0)
-        value = env::positive_size ("ZLINK_WS_WRITE_BUFFER_BYTES", 64 * 1024);
+    static const size_t value =
+      env::positive_size ("ZLINK_WS_WRITE_BUFFER_BYTES", 64 * 1024);
     return value;
 }
 
 size_t ws_read_message_max ()
 {
-    static size_t value = 0;
-    if (value == 0)
-        value = env::positive_size ("ZLINK_WS_READ_MESSAGE_MAX", 64 * 1024 * 1024);
+    static const size_t value =
+      env::positive_size ("ZLINK_WS_READ_MESSAGE_MAX", 64 * 1024 * 1024);
     return value;
 }
 }
 
+#ifdef ZLINK_BUILD_TESTS
+size_t test_ws_write_buffer_bytes ()
+{
+    return ws_write_buffer_bytes ();
+}
+
+size_t test_ws_read_message_max ()
+{
+    return ws_read_message_max ();
+}
+#endif
+
 ws_transport_t::ws_transport_t (const std::string &path, const std::string &host) :
-    _path (path), _host (host), _handshake_complete (false), _read_state (new read_state_t)
+    _path (path), _host (host), _handshake_complete (false)
 {
 }
 
@@ -79,7 +89,7 @@ bool ws_transport_t::open (boost::asio::io_context &io_context, fd_t fd)
 
     //  Create WebSocket stream wrapping the socket
     try {
-        _ws_stream = std::shared_ptr<ws_stream_t> (new ws_stream_t (std::move (socket)));
+        _ws_stream = std::make_shared<ws_stream_t> (std::move (socket));
     }
     catch (const std::bad_alloc &) {
         ASIO_GLOBAL_ERROR ("ws_transport stream allocation failed");
@@ -94,7 +104,6 @@ bool ws_transport_t::open (boost::asio::io_context &io_context, fd_t fd)
     _ws_stream->read_message_max (ws_read_message_max ());
 
     _handshake_complete = false;
-    _read_state.reset (new read_state_t);
 
     ASIO_DBG_WS ("opened with path=%s, host=%s", _path.c_str (), _host.c_str ());
     return true;
@@ -122,10 +131,6 @@ void ws_transport_t::close ()
         }
 
         _handshake_complete = false;
-        if (_read_state) {
-            _read_state->closed = true;
-            _read_state->clear ();
-        }
     }
 }
 
@@ -134,8 +139,7 @@ void ws_transport_t::async_read_some (unsigned char *buffer,
                                       completion_handler_t handler)
 {
     std::shared_ptr<ws_stream_t> stream = _ws_stream;
-    std::shared_ptr<read_state_t> read_state = _read_state;
-    if (!stream || !read_state || !_handshake_complete) {
+    if (!stream || !_handshake_complete) {
         if (handler) {
             handler (boost::asio::error::not_connected, 0);
         }
@@ -152,57 +156,18 @@ void ws_transport_t::async_read_some (unsigned char *buffer,
         return;
     }
 
-    const std::size_t buffered_size = read_state->message_buffer.size ();
-    if (buffered_size > 0) {
-        const std::size_t deliver = std::min<std::size_t> (buffer_size, buffered_size);
-        boost::asio::buffer_copy (boost::asio::buffer (buffer, deliver),
-                                  read_state->message_buffer.data ());
-        read_state->message_buffer.consume (deliver);
-        if (handler) {
-            boost::asio::post (stream->get_executor (),
-                               [handler = std::move (handler), deliver] () {
-                handler (boost::system::error_code (), deliver);
-            });
-        }
-        return;
-    }
-
-    stream->async_read (read_state->message_buffer,
-                        [stream, read_state, buffer, buffer_size,
-                         handler = std::move (handler)] (const boost::system::error_code &ec,
-                                                         std::size_t) {
-        if (read_state->closed) {
-            if (handler) {
-                handler (boost::asio::error::operation_aborted, 0);
-            }
-            return;
-        }
-
-        if (ec) {
-            ASIO_DBG ("WS", "read failed: %s", ec.message ().c_str ());
-            if (handler) {
-                handler (ec, 0);
-            }
-            return;
-        }
-
-        const std::size_t available = boost::asio::buffer_size (read_state->message_buffer.data ());
-        if (available == 0) {
-            if (handler) {
-                handler (boost::system::error_code (), 0);
-            }
-            return;
-        }
-
-        const std::size_t deliver = std::min<std::size_t> (buffer_size, available);
-        boost::asio::buffer_copy (boost::asio::buffer (buffer, deliver),
-                                  read_state->message_buffer.data ());
-        read_state->message_buffer.consume (deliver);
-
-        if (handler) {
-            handler (boost::system::error_code (), deliver);
-        }
-    });
+    //  The engine owns this writable input buffer (normally the decoder buffer)
+    //  until completion. Beast can therefore place WebSocket payload directly
+    //  into it while retaining fragmented-message state inside the stream.
+    stream->async_read_some (
+      boost::asio::buffer (buffer, buffer_size),
+      [stream, handler = std::move (handler)] (const boost::system::error_code &ec,
+                                               std::size_t bytes_transferred) {
+          if (ec)
+              ASIO_DBG ("WS", "read failed: %s", ec.message ().c_str ());
+          if (handler)
+              handler (ec, bytes_transferred);
+      });
 }
 
 std::size_t ws_transport_t::read_some (std::uint8_t *buffer, std::size_t len)

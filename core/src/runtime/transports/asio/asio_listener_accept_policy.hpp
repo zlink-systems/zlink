@@ -40,7 +40,8 @@ inline void start_asio_listener_accepts (boost::asio::io_context &io_context_,
 
     const size_t target_accepts = asio_stream_accept_target (options_);
     while (*accepting_count_ < target_accepts && acceptor_.is_open ()) {
-        const std::shared_ptr<socket_t> accept_socket (new (std::nothrow) socket_t (io_context_));
+        const std::shared_ptr<socket_t> accept_socket =
+          std::make_shared<socket_t> (io_context_);
         alloc_assert (accept_socket.get ());
 
         ++*accepting_count_;

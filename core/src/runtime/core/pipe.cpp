@@ -14,6 +14,11 @@
 
 namespace
 {
+#ifdef ZLINK_BUILD_TESTS
+std::atomic<int> g_stream_packet_allocation_failpoint (
+  zlink::stream_packet_allocation_none);
+#endif
+
 void pipe_debug_log (
   const zlink::pipe_t *pipe_, const char *phase_, int state_, bool delay_, const char *identifier_)
 {
@@ -39,7 +44,8 @@ int zlink::pipepair (object_t *parents_[2],
                      transport_lane_t lane_,
                      auto_hwm_role_t role_,
                      bool planning_enabled_,
-                     physical_queue_class_t queue_class_)
+                     physical_queue_class_t queue_class_,
+                     int session_owner_index_)
 {
     //   Creates two pipe objects. These objects are connected by two ypipes,
     //   each to pass messages in one direction.
@@ -54,6 +60,8 @@ int zlink::pipepair (object_t *parents_[2],
 
     pipes_[0] = NULL;
     pipes_[1] = NULL;
+    zlink_assert (session_owner_index_ >= -1 && session_owner_index_ <= 1);
+    zlink_assert (session_pipe_ || session_owner_index_ == -1);
 
     ctx_t *const ctx = parents_[0]->get_ctx ();
     zlink_assert (ctx == parents_[1]->get_ctx ());
@@ -96,13 +104,17 @@ int zlink::pipepair (object_t *parents_[2],
       pipe_t (parents_[0], upipe1, upipe2, hwms_[1], hwms_[0], conflate_[0],
               session_pipe_, transport_lifetime, physical_queues[0],
               physical_queues[1],
-              resolved_queue_class != physical_queue_class_application);
+              resolved_queue_class != physical_queue_class_application,
+              resolved_queue_class == physical_queue_class_application
+                && session_owner_index_ == 0);
     alloc_assert (pipes_[0]);
     pipes_[1] = new (std::nothrow)
       pipe_t (parents_[1], upipe2, upipe1, hwms_[0], hwms_[1], conflate_[1],
               session_pipe_, transport_lifetime, physical_queues[1],
               physical_queues[0],
-              resolved_queue_class != physical_queue_class_application);
+              resolved_queue_class != physical_queue_class_application,
+              resolved_queue_class == physical_queue_class_application
+                && session_owner_index_ == 1);
     alloc_assert (pipes_[1]);
 
     pipes_[0]->set_peer (pipes_[1]);
@@ -143,6 +155,7 @@ void zlink::send_hello_msg (pipe_t *pipe_, const options_t &options_)
 
 zlink::pipe_stream_packet_state_t::pipe_stream_packet_state_t () :
     stage (prefix_stage),
+    storage (separate_storage),
     prefix_used (0),
     header_size (0),
     body_size (0),
@@ -174,7 +187,6 @@ void zlink::pipe_stream_packet_state_t::reset ()
         const int body_rc = body.close ();
         errno_assert (body_rc == 0);
     }
-
     const int header_rc = header.init ();
     errno_assert (header_rc == 0);
     const int body_rc = body.init ();
@@ -186,8 +198,27 @@ void zlink::pipe_stream_packet_state_t::reset ()
     body_size = 0;
     header_used = 0;
     body_used = 0;
+    storage = separate_storage;
     memset (prefix, 0, sizeof (prefix));
 }
+
+#ifdef ZLINK_BUILD_TESTS
+void zlink::test_set_stream_packet_allocation_failpoint (
+  stream_packet_allocation_failpoint_t failpoint_)
+{
+    g_stream_packet_allocation_failpoint.store (static_cast<int> (failpoint_),
+                                                 std::memory_order_release);
+}
+
+bool zlink::test_consume_stream_packet_allocation_failpoint (
+  stream_packet_allocation_failpoint_t failpoint_)
+{
+    int expected = static_cast<int> (failpoint_);
+    return g_stream_packet_allocation_failpoint.compare_exchange_strong (
+      expected, static_cast<int> (stream_packet_allocation_none),
+      std::memory_order_acq_rel, std::memory_order_acquire);
+}
+#endif
 
 zlink::pipe_t::pipe_t (object_t *parent_,
                        upipe_t *inpipe_,
@@ -199,7 +230,8 @@ zlink::pipe_t::pipe_t (object_t *parent_,
                        const std::shared_ptr<transport_lifetime_t> &transport_lifetime_,
                        const std::shared_ptr<physical_queue_record_t> &in_physical_queue_,
                        const std::shared_ptr<physical_queue_record_t> &out_physical_queue_,
-                       bool registry_accounting_) :
+                       bool registry_accounting_,
+                       bool session_io_writer_) :
     object_t (parent_),
     _in_pipe (inpipe_),
     _out_pipe (outpipe_),
@@ -224,6 +256,8 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _published_msgs_read (0),
     _published_bytes_read (0),
     _published_incomplete_bytes_read (0),
+    _published_outbound_total_bytes (0),
+    _published_outbound_provisional_bytes (0),
     _last_credit_bytes_read (0),
     _in_generation (1),
     _out_generation (1),
@@ -242,12 +276,11 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _sink (NULL),
     _state (active),
     _delay (true),
-    _server_socket_routing_id (0),
-    _stream_connect_event_emitted (false),
     _connection_ready_event_emitted (false),
     _lifetime (),
     _conflate (conflate_),
     _session_pipe (session_pipe_),
+    _session_io_writer (session_io_writer_),
     _transport_lifetime (transport_lifetime_),
     _in_physical_queue (in_physical_queue_),
     _out_physical_queue (out_physical_queue_),
@@ -268,15 +301,56 @@ zlink::pipe_t::~pipe_t ()
 
 void zlink::pipe_t::set_peer (pipe_t *peer_)
 {
-    //  Peer can be set once only.
-    zlink_assert (!_peer);
-    _peer = peer_;
+    zlink_assert (peer_);
+
+    // The published pair link owns a lifetime reference. A hot-path acquire
+    // load can therefore dereference its result until termination detaches the
+    // link after both endpoints have left the data path.
+    const bool retained = peer_->retain_lifetime_ref ();
+    zlink_assert (retained);
+    pipe_t *expected = NULL;
+    const bool published = _peer.compare_exchange_strong (
+      expected, peer_, std::memory_order_release, std::memory_order_relaxed);
+    if (!published)
+        peer_->release_lifetime_ref ();
+    zlink_assert (published);
 }
 
-void zlink::pipe_t::detach_peer_backref ()
+zlink::pipe_t *zlink::pipe_t::detach_peer_link ()
 {
-    if (_peer && _peer->_peer == this)
-        _peer->_peer = NULL;
+    pipe_t *peer = NULL;
+    {
+        scoped_fast_lock_t lock (_out_sync);
+        // Transfer this endpoint's link reference to the caller. Taking the
+        // owner lock makes load+retain snapshots atomic with this exchange.
+        peer = _peer.exchange (NULL, std::memory_order_acq_rel);
+    }
+    if (!peer)
+        return NULL;
+
+    // Both endpoints may process their final ack concurrently. Exactly one
+    // side can remove a still-published back-link; the other observes that its
+    // peer already exchanged it to null. Removing the back-link also releases
+    // the lifetime reference that peer owned on this endpoint. The current
+    // pipe-term-ack command (or the direct test owner before terminal marking)
+    // keeps `this` alive for the remainder of this method.
+    pipe_t *expected = this;
+    bool removed_back_link = false;
+    {
+        // Never hold both endpoint locks: concurrent final acknowledgements
+        // first exchange their own link, then independently serialize the
+        // reciprocal CAS with that endpoint's retained snapshots.
+        scoped_fast_lock_t peer_lock (peer->_out_sync);
+        removed_back_link = peer->_peer.compare_exchange_strong (
+          expected, NULL, std::memory_order_acq_rel,
+          std::memory_order_acquire);
+    }
+    if (removed_back_link)
+        release_lifetime_ref ();
+    else
+        zlink_assert (expected == NULL);
+
+    return peer;
 }
 
 void zlink::pipe_t::retire_physical_queue_endpoints ()
@@ -380,17 +454,26 @@ void zlink::pipe_t::set_event_sink (i_pipe_events *sink_)
 
 void zlink::pipe_t::set_server_socket_routing_id (uint32_t server_socket_routing_id_)
 {
-    _server_socket_routing_id = server_socket_routing_id_;
+    _transport_lifetime->stream_routing_id.store (server_socket_routing_id_,
+                                                  std::memory_order_release);
 }
 
 uint32_t zlink::pipe_t::get_server_socket_routing_id () const
 {
-    return _server_socket_routing_id;
+    return _transport_lifetime->stream_routing_id.load (std::memory_order_acquire);
 }
 
 void zlink::pipe_t::set_router_socket_routing_id (const blob_t &router_socket_routing_id_)
 {
+    scoped_fast_lock_t lock (_out_sync);
     _router_socket_routing_id.set_deep_copy (router_socket_routing_id_);
+}
+
+void zlink::pipe_t::snapshot_routing_id (blob_t *routing_id_) const
+{
+    zlink_assert (routing_id_);
+    scoped_fast_lock_t lock (const_cast<fast_mutex_t &> (_out_sync));
+    routing_id_->set_deep_copy (_router_socket_routing_id);
 }
 
 const zlink::blob_t &zlink::pipe_t::get_routing_id () const
@@ -400,7 +483,19 @@ const zlink::blob_t &zlink::pipe_t::get_routing_id () const
 
 zlink::pipe_t *zlink::pipe_t::get_peer () const
 {
-    return _peer;
+    return _peer.load (std::memory_order_acquire);
+}
+
+zlink::pipe_t *zlink::pipe_t::retain_peer_snapshot () const
+{
+    scoped_fast_lock_t lock (const_cast<fast_mutex_t &> (_out_sync));
+    return retain_peer_snapshot_unlocked ();
+}
+
+zlink::pipe_t *zlink::pipe_t::retain_peer_snapshot_unlocked () const
+{
+    pipe_t *const peer = get_peer ();
+    return peer && peer->retain_lifetime_ref () ? peer : NULL;
 }
 
 void zlink::pipe_t::set_peer_routing_id (const unsigned char *data_, size_t size_)
@@ -462,10 +557,12 @@ uint64_t zlink::pipe_t::get_snd_pending_msgs () const
 
 uint64_t zlink::pipe_t::get_rcv_pending_msgs_approx () const
 {
-    if (!_peer)
+    pipe_t *const peer = retain_peer_snapshot ();
+    if (!peer)
         return 0;
 
-    const uint64_t peer_written = _peer->get_msgs_written ();
+    const uint64_t peer_written = peer->get_msgs_written ();
+    peer->release_lifetime_ref ();
     const uint64_t msgs_read = get_msgs_read ();
     if (peer_written <= msgs_read)
         return 0;
@@ -476,11 +573,13 @@ uint64_t zlink::pipe_t::get_snd_pending_bytes () const
 {
     scoped_optional_fast_lock_t lock (const_cast<fast_mutex_t *> (&_out_sync));
     uint64_t peer_bytes_read = _peers_bytes_read;
-    if (_peer) {
+    pipe_t *const peer = retain_peer_snapshot_unlocked ();
+    if (peer) {
         const uint64_t published =
-          _peer->_published_bytes_read.load (std::memory_order_relaxed);
+          peer->_published_bytes_read.load (std::memory_order_relaxed);
         if (published > peer_bytes_read)
             peer_bytes_read = published;
+        peer->release_lifetime_ref ();
     }
     if (_bytes_written <= peer_bytes_read)
         return 0;
@@ -489,10 +588,12 @@ uint64_t zlink::pipe_t::get_snd_pending_bytes () const
 
 uint64_t zlink::pipe_t::get_rcv_pending_bytes_approx () const
 {
-    if (!_peer)
+    pipe_t *const peer = retain_peer_snapshot ();
+    if (!peer)
         return 0;
 
-    const uint64_t peer_written = _peer->get_bytes_written ();
+    const uint64_t peer_written = peer->get_bytes_written ();
+    peer->release_lifetime_ref ();
     const uint64_t bytes_read = get_bytes_read ();
     if (peer_written <= bytes_read)
         return 0;
@@ -618,17 +719,19 @@ void zlink::pipe_t::refresh_write_credit (uint64_t peer_msgs_read_, uint64_t pee
 
 bool zlink::pipe_t::mark_stream_connect_event_emitted ()
 {
-    if (_stream_connect_event_emitted.load (std::memory_order_acquire))
+    if (_transport_lifetime->stream_connect_event_emitted.load (
+          std::memory_order_acquire))
         return false;
 
     bool expected = false;
-    return _stream_connect_event_emitted.compare_exchange_strong (
+    return _transport_lifetime->stream_connect_event_emitted.compare_exchange_strong (
       expected, true, std::memory_order_acq_rel, std::memory_order_acquire);
 }
 
 void zlink::pipe_t::reset_stream_connect_event_emitted ()
 {
-    _stream_connect_event_emitted.store (false, std::memory_order_release);
+    _transport_lifetime->stream_connect_event_emitted.store (
+      false, std::memory_order_release);
 }
 
 bool zlink::pipe_t::mark_connection_ready_event_emitted ()
@@ -648,23 +751,37 @@ void zlink::pipe_t::reset_connection_ready_event_emitted ()
 
 zlink::pipe_t::stream_packet_state_t &zlink::pipe_t::stream_packet_state ()
 {
-    return _stream_packet_state;
+    return _transport_lifetime->stream_packet_state;
 }
 
 const zlink::pipe_t::stream_packet_state_t &zlink::pipe_t::stream_packet_state () const
 {
-    return _stream_packet_state;
+    return _transport_lifetime->stream_packet_state;
 }
 
-zlink::fast_mutex_t &zlink::pipe_t::stream_packet_dispatch_sync ()
+zlink::fast_mutex_t &zlink::pipe_t::stream_dispatch_sync ()
 {
-    return _stream_packet_sync;
+    return _transport_lifetime->stream_dispatch_sync;
 }
 
 void zlink::pipe_t::reset_stream_packet_state ()
 {
-    scoped_fast_lock_t lock (_stream_packet_sync);
-    _stream_packet_state.reset ();
+    scoped_fast_lock_t lock (_transport_lifetime->stream_dispatch_sync);
+    _transport_lifetime->stream_packet_state.reset ();
+}
+
+void zlink::pipe_t::close_stream_route ()
+{
+    scoped_fast_lock_t lock (_transport_lifetime->stream_dispatch_sync);
+    _transport_lifetime->stream_route_closed.store (
+      true, std::memory_order_release);
+    _transport_lifetime->stream_packet_state.reset ();
+}
+
+bool zlink::pipe_t::stream_route_closed () const
+{
+    return _transport_lifetime->stream_route_closed.load (
+      std::memory_order_acquire);
 }
 
 bool zlink::pipe_t::check_read ()
@@ -900,6 +1017,7 @@ int zlink::pipe_t::write_reserved_decoder_frame (
 
     decoder_frame_reservation_t *const reserved = *reservation_;
     if (!_registry_accounting) {
+        const uint64_t incomplete_before = _out_incomplete_bytes;
         *reservation_ = NULL;
         if (!reserved->active
             || reserved->payload_bytes != static_cast<uint64_t> (msg_->size ())
@@ -950,6 +1068,8 @@ int zlink::pipe_t::write_reserved_decoder_frame (
             _out_multipart_started_empty = false;
             _decoder_multipart_started_empty = false;
         }
+        publish_session_outbound_accounting_unlocked (
+          more || incomplete_before != 0);
         return 0;
     }
 
@@ -1014,6 +1134,8 @@ int zlink::pipe_t::write_reserved_decoder_frame (
         _out_multipart_started_empty = false;
         _decoder_multipart_started_empty = false;
     }
+    publish_session_outbound_accounting_unlocked (
+      more || incomplete_before != 0);
     return 0;
 }
 
@@ -1547,6 +1669,7 @@ bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
             ++_msgs_written;
         if (admission_out_)
             *admission_out_ = pipe_message_admission_ready;
+        publish_session_outbound_accounting_unlocked (false);
         flush_unlocked ();
         return true;
     }
@@ -1688,6 +1811,7 @@ void zlink::pipe_t::process_hiccup (void *pipe_, uint64_t generation_)
         _peers_msgs_read = 0;
         _peers_bytes_read = 0;
         _waiting_for_byte_credit.store (false, std::memory_order_release);
+        publish_session_outbound_accounting_unlocked (true);
 
         //  If appropriate, notify the user about the hiccup.
         notify = (_state == active && !_transport_pair_write_held);
@@ -1711,7 +1835,7 @@ void zlink::pipe_t::process_pipe_term ()
         return;
     }
     if (_state == term_ack_sent || _state == term_req_sent2) {
-        send_pipe_term_ack (_peer);
+        (void) send_pipe_term_ack (get_peer ());
         return;
     }
 
@@ -1736,7 +1860,7 @@ void zlink::pipe_t::process_pipe_term ()
             _out_pipe = NULL;
             if (_sink)
                 _sink->pipe_peer_terminated (this);
-            send_pipe_term_ack (_peer);
+            (void) send_pipe_term_ack (get_peer ());
         }
     }
 
@@ -1747,7 +1871,7 @@ void zlink::pipe_t::process_pipe_term ()
         _out_pipe = NULL;
         if (_sink)
             _sink->pipe_peer_terminated (this);
-        send_pipe_term_ack (_peer);
+        (void) send_pipe_term_ack (get_peer ());
     }
 
     //  This is the case where both ends of the pipe are closed in parallel.
@@ -1758,7 +1882,7 @@ void zlink::pipe_t::process_pipe_term ()
         _out_pipe = NULL;
         if (_sink)
             _sink->pipe_peer_terminated (this);
-        send_pipe_term_ack (_peer);
+        (void) send_pipe_term_ack (get_peer ());
     }
 }
 
@@ -1781,14 +1905,20 @@ void zlink::pipe_t::process_pipe_term_ack ()
             zlink_assert (_state == term_ack_sent || _state == term_req_sent2);
     }
 
-    detach_peer_backref ();
+    pipe_t *const peer = detach_peer_link ();
 
     //  A locally initiated close that receives the peer's acknowledgement
     //  owes one reciprocal acknowledgement. Queue it before reporting local
     //  completion so cascading socket/context teardown cannot discard the
-    //  peer's final close notification.
-    if (ack_peer)
-        send_pipe_term_ack (_peer);
+    //  peer's final close notification. The captured pair-link reference pins
+    //  this exact peer until send_pipe_term_ack acquires the command reference.
+    if (ack_peer) {
+        zlink_assert (peer);
+        const bool queued = send_pipe_term_ack (peer);
+        zlink_assert (queued);
+    }
+    if (peer)
+        peer->release_lifetime_ref ();
 
     //  Notify the user that all the references to the pipe should be dropped.
     zlink_assert (_sink);
@@ -1839,7 +1969,7 @@ void zlink::pipe_t::set_nodelay ()
     if (_state == waiting_for_delimiter) {
         rollback_unlocked ();
         _out_pipe = NULL;
-        send_pipe_term_ack (_peer);
+        (void) send_pipe_term_ack (get_peer ());
         _state = term_ack_sent;
     }
 }
@@ -1864,7 +1994,7 @@ void zlink::pipe_t::terminate (bool delay_)
     //  The simple sync termination case. Ask the peer to terminate and wait
     //  for the ack.
     if (_state == active) {
-        send_pipe_term (_peer);
+        send_pipe_term (get_peer ());
         _state = term_req_sent1;
     }
     //  There are still pending messages available, but the user calls
@@ -1873,7 +2003,7 @@ void zlink::pipe_t::terminate (bool delay_)
         //  Drop any unfinished outbound messages.
         rollback_unlocked ();
         _out_pipe = NULL;
-        send_pipe_term_ack (_peer);
+        (void) send_pipe_term_ack (get_peer ());
         _state = term_ack_sent;
     }
     //  If there are pending messages still available, do nothing.
@@ -1883,7 +2013,7 @@ void zlink::pipe_t::terminate (bool delay_)
     //  the delimiter and ack synchronously terminate as if we were in
     //  active state.
     else if (_state == delimiter_received) {
-        send_pipe_term (_peer);
+        send_pipe_term (get_peer ());
         _state = term_req_sent1;
     }
     //  There are no other states.
@@ -1963,7 +2093,7 @@ void zlink::pipe_t::process_delimiter ()
     else {
         rollback_unlocked ();
         _out_pipe = NULL;
-        send_pipe_term_ack (_peer);
+        (void) send_pipe_term_ack (get_peer ());
         _state = term_ack_sent;
     }
 }
@@ -2000,24 +2130,38 @@ void zlink::pipe_t::hiccup ()
     _in_incomplete_bytes = 0;
 
     //  Notify the peer about the hiccup.
-    send_hiccup (_peer, _in_pipe, _in_generation);
+    send_hiccup (get_peer (), _in_pipe, _in_generation);
 }
 
 void zlink::pipe_t::set_hwms (uint64_t inhwm_, uint64_t outhwm_)
 {
-    scoped_fast_lock_t lock (_out_sync);
     uint64_t in = inhwm_;
     uint64_t out = outhwm_;
+    physical_queue_handle_t in_queue;
+    physical_queue_handle_t out_queue;
+    {
+        scoped_fast_lock_t lock (_out_sync);
+        if (_transport_lane == transport_lane_completion)
+            in = out = 0;
+        in_queue = _in_physical_queue;
+        out_queue = _out_physical_queue;
+    }
 
-    if (_transport_lane == transport_lane_completion)
-        in = out = 0;
+    // Updating a shrinking application target samples its writer pipe. Never
+    // carry this endpoint's outbound lock into that registry path: the two
+    // endpoints can receive HWM updates concurrently and would otherwise take
+    // their `_out_sync` locks in opposite order.
+    get_ctx ()->_physical_queue_registry.update_hwm_target (
+      in_queue, in);
+    get_ctx ()->_physical_queue_registry.update_hwm_target (
+      out_queue, out);
 
-    get_ctx ()->_physical_queue_registry.update_hwm_target (
-      _in_physical_queue, in);
-    get_ctx ()->_physical_queue_registry.update_hwm_target (
-      _out_physical_queue, out);
-    in = applied_in_hwm ();
-    out = planned_out_hwm ();
+    // Concurrent HWM updates may overlap outside the lock. Read the registry's
+    // latest values only at publication time so the last publisher cannot
+    // install a stale target captured before a newer update.
+    scoped_fast_lock_t lock (_out_sync);
+    in = get_ctx ()->_physical_queue_registry.applied_hwm (in_queue);
+    out = get_ctx ()->_physical_queue_registry.planned_hwm (out_queue);
     _inhwm.store (in, std::memory_order_relaxed);
     const uint64_t lwm = apply_lwm_hint (
       in, compute_lwm (in), _lwm_hint);
@@ -2097,13 +2241,14 @@ bool zlink::pipe_t::check_hwm_unlocked () const
 
 void zlink::pipe_t::refresh_peer_credit_snapshot_unlocked ()
 {
-    if (!_peer)
+    pipe_t *const peer = get_peer ();
+    if (!peer)
         return;
 
     const uint64_t peer_msgs_read =
-      _peer->_published_msgs_read.load (std::memory_order_acquire);
+      peer->_published_msgs_read.load (std::memory_order_acquire);
     const uint64_t peer_bytes_read =
-      _peer->_published_bytes_read.load (std::memory_order_acquire);
+      peer->_published_bytes_read.load (std::memory_order_acquire);
     if (peer_msgs_read > _peers_msgs_read)
         _peers_msgs_read = peer_msgs_read;
     if (peer_bytes_read > _peers_bytes_read)
@@ -2128,19 +2273,27 @@ void zlink::pipe_t::send_hwms_to_peer (uint64_t inhwm_, uint64_t outhwm_)
         //  steady-state data path. During async termination the peer can be in
         //  the final ack/delete phase, so skip late updates instead of sending
         //  pipe_hwm to a dying peer object.
-        if (_state != active || !_peer)
+        if (_state != active)
             return;
 
-        peer = _peer;
+        peer = retain_peer_snapshot_unlocked ();
+        if (!peer)
+            return;
     }
 
     send_pipe_hwm (peer, inhwm_, outhwm_);
+    peer->release_lifetime_ref ();
 }
 
 void zlink::pipe_t::set_endpoint_pair (zlink::endpoint_uri_pair_t endpoint_pair_)
 {
+    // Static endpoint metadata is published exactly once before the pipe is
+    // exposed to its socket/session owner. Reconnect identity is the only
+    // mutable member and publishes independently through its atomic wrapper.
+    zlink_assert (_endpoint_pair.local_type == endpoint_type_none);
+    const uint64_t connection_id = endpoint_pair_.connection_id.load ();
     _endpoint_pair = ZLINK_MOVE (endpoint_pair_);
-    set_transport_connection_id (_endpoint_pair.connection_id);
+    set_transport_connection_id (connection_id);
 }
 
 const zlink::endpoint_uri_pair_t &zlink::pipe_t::get_endpoint_pair () const
@@ -2161,7 +2314,7 @@ uint64_t zlink::pipe_t::get_transport_connection_id () const
     return _transport_lifetime
              ? _transport_lifetime->connection_id.load (
                  std::memory_order_acquire)
-             : _endpoint_pair.connection_id;
+             : _endpoint_pair.connection_id.load ();
 }
 
 void zlink::pipe_t::set_transport_pair (transport_lane_t lane_,
@@ -2348,6 +2501,10 @@ bool zlink::pipe_t::can_commit_bytes_with_peer_snapshot_unlocked (
 
 void zlink::pipe_t::set_max_message_bytes (uint64_t max_message_bytes_)
 {
+    //  A completed transport handshake may publish the peer limit after the
+    //  socket endpoint is already writable. All admission readers own this
+    //  endpoint's outbound lock, so publish through the same state boundary.
+    scoped_fast_lock_t lock (_out_sync);
     _max_message_bytes = max_message_bytes_;
 }
 
@@ -2490,6 +2647,8 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
     }
     if (admission_out_)
         *admission_out_ = pipe_message_admission_ready;
+    publish_session_outbound_accounting_unlocked (
+      more || incomplete_before != 0);
     return true;
 }
 
@@ -2540,14 +2699,15 @@ void zlink::pipe_t::account_inbound_frame (const msg_t *msg_)
     const uint64_t lwm = _lwm.load (std::memory_order_relaxed);
     const bool lwm_reached = lwm > 0 && credit_delta >= lwm;
     bool blocked_writer_drained = false;
-    if (!lwm_reached && credit_delta > 0 && _peer
-        && _peer->_waiting_for_byte_credit.load (std::memory_order_acquire))
+    pipe_t *const peer = get_peer ();
+    if (!lwm_reached && credit_delta > 0 && peer
+        && peer->_waiting_for_byte_credit.load (std::memory_order_acquire))
         blocked_writer_drained = _in_pipe && !_in_pipe->check_read ();
     const bool credit_boundary =
       credit_delta > 0 && (lwm_reached || blocked_writer_drained);
     if (credit_boundary) {
         _last_credit_bytes_read = _bytes_read;
-        send_activate_write (_peer, _in_generation, _msgs_read,
+        send_activate_write (peer, _in_generation, _msgs_read,
                              _bytes_read);
     }
     if (!_registry_accounting && credit_boundary)
@@ -2564,11 +2724,6 @@ void zlink::pipe_t::snapshot_outbound_queue_accounting (
     if (committed_out_)
         *committed_out_ = 0;
 
-    // This path is reached only by context snapshots and Auto-HWM replanning.
-    // The normal send path already holds _out_sync and never calls here.
-    scoped_optional_fast_lock_t lock (const_cast<fast_mutex_t *> (&_out_sync));
-    const uint64_t provisional = _out_incomplete_bytes;
-    const uint64_t written = _bytes_written;
     uint64_t completed_read = 0;
     uint64_t partial_read = 0;
     if (reader_) {
@@ -2582,10 +2737,58 @@ void zlink::pipe_t::snapshot_outbound_queue_accounting (
         ? UINT64_MAX
         : completed_read + partial_read;
 
+    uint64_t provisional = 0;
+    uint64_t available = 0;
+    if (_session_io_writer) {
+        // The decoder is the sole writer of this endpoint and deliberately
+        // avoids _out_sync. Load its classification hint first: observing a
+        // newer hint synchronizes with the preceding total publication. A
+        // stale hint is harmless because it is clamped inside the authoritative
+        // available total.
+        const uint64_t published_provisional =
+          _published_outbound_provisional_bytes.load (
+            std::memory_order_acquire);
+        const uint64_t published_total =
+          _published_outbound_total_bytes.load (std::memory_order_acquire);
+        available = published_total > consumed ? published_total - consumed : 0;
+        provisional = std::min (published_provisional, available);
+    } else {
+        // This path is reached only by context snapshots and Auto-HWM
+        // replanning. Ordinary writers use _out_sync, so their local ledger can
+        // be copied exactly without adding publication work to socket sends.
+        scoped_optional_fast_lock_t lock (
+          const_cast<fast_mutex_t *> (&_out_sync));
+        const uint64_t written = _bytes_written;
+        provisional = _out_incomplete_bytes;
+        available = written > consumed ? written - consumed : 0;
+        available = UINT64_MAX - available < provisional
+                      ? UINT64_MAX
+                      : available + provisional;
+    }
+
     if (provisional_out_)
         *provisional_out_ = provisional;
     if (committed_out_)
-        *committed_out_ = written > consumed ? written - consumed : 0;
+        *committed_out_ = available - provisional;
+}
+
+void zlink::pipe_t::publish_session_outbound_accounting_unlocked (
+  bool provisional_changed_)
+{
+    if (likely (!_session_io_writer))
+        return;
+
+    const uint64_t total =
+      UINT64_MAX - _bytes_written < _out_incomplete_bytes
+        ? UINT64_MAX
+        : _bytes_written + _out_incomplete_bytes;
+    // Publish the authoritative total first. A concurrent snapshot can retain
+    // an older provisional classification, but clamps it inside this total, so
+    // Auto-HWM never double-counts or reads the decoder-owned local fields.
+    _published_outbound_total_bytes.store (total, std::memory_order_release);
+    if (provisional_changed_)
+        _published_outbound_provisional_bytes.store (
+          _out_incomplete_bytes, std::memory_order_release);
 }
 
 void zlink::pipe_t::rollback_unlocked ()
@@ -2610,6 +2813,7 @@ void zlink::pipe_t::rollback_unlocked ()
     //  message, so the in-progress exception ends here.
     _out_owner_message_started = false;
     _out_owner_message_start_pending = false;
+    publish_session_outbound_accounting_unlocked (true);
 }
 
 void zlink::pipe_t::flush_unlocked ()
@@ -2620,5 +2824,5 @@ void zlink::pipe_t::flush_unlocked ()
 
     const bool sleeping = _out_pipe && !_out_pipe->flush ();
     if (sleeping)
-        send_activate_read (_peer);
+        send_activate_read (get_peer ());
 }

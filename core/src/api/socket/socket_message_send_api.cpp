@@ -204,7 +204,10 @@ int send_stream_message (const socket_handle_t &handle_,
         return -1;
     }
 
-    stream_api_lock_t api_lock (handle_);
+    // A complete routed STREAM send takes the route-shard branch before the
+    // legacy multipart state in stream_t::xsend. s_sendmsg's lifecycle scope
+    // already serializes send/close; taking the wrapper mutex here would
+    // invert it with mailbox command ownership during pipe termination.
     if (core_msg->set_routing_id (routing_id) != 0) {
         const int err = errno;
         consume_checked_core_msg (core_msg);

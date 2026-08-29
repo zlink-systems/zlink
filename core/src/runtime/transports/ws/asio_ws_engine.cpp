@@ -1415,13 +1415,13 @@ void zlink::asio_ws_engine_t::error (error_reason_t reason_)
         disconnect_reason = ZLINK_DISCONNECT_TRANSPORT_ERROR;
     }
 
-    const blob_t *routing_id = _session ? &_session->peer_routing_id () : NULL;
-    const unsigned char *routing_id_data = routing_id ? routing_id->data () : NULL;
-    const size_t routing_id_size = routing_id ? routing_id->size () : 0;
+    blob_t routing_id;
+    if (_session)
+        _session->snapshot_peer_routing_id (&routing_id);
 
     if (_socket) {
-        _socket->event_disconnected (_endpoint_uri_pair, disconnect_reason, routing_id_data,
-                                     routing_id_size,
+        _socket->event_disconnected (_endpoint_uri_pair, disconnect_reason,
+                                     routing_id.data (), routing_id.size (),
                                      _session ? _session->transport_lane ()
                                               : transport_lane_application,
                                      _session ? _session->transport_pair_id () : 0,

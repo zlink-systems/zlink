@@ -9,7 +9,6 @@
 #include <errno.h>
 #include <memory>
 #include <stdint.h>
-#include <unordered_set>
 
 namespace zlink
 {
@@ -24,12 +23,11 @@ struct sequence_state_t
 
     uint32_t default_timeout_ms;
     uint64_t next_request_seq;
-    std::unordered_set<uint64_t> pending_sequences;
 };
 
 template <typename PendingSet>
 inline uint64_t allocate_request_sequence (uint64_t *next_request_seq_,
-                                           const PendingSet &pending_sequences_)
+                                           const PendingSet &pending_requests_)
 {
     if (!next_request_seq_) {
         errno = EFAULT;
@@ -43,7 +41,7 @@ inline uint64_t allocate_request_sequence (uint64_t *next_request_seq_,
         if (candidate == 0)
             candidate = 1;
 
-        if (pending_sequences_.count (candidate) == 0) {
+        if (pending_requests_.count (candidate) == 0) {
             uint64_t next = candidate + 1;
             if (next == 0)
                 next = 1;
@@ -67,7 +65,8 @@ template <typename SequenceState> inline uint64_t allocate_request_sequence (Seq
         return 0;
     }
 
-    return allocate_request_sequence (&state_->next_request_seq, state_->pending_sequences);
+    return allocate_request_sequence (&state_->next_request_seq,
+                                      state_->pending_requests);
 }
 
 template <typename CallbackContext> inline void destroy_timeout_callback_ctx (void *userdata_)

@@ -2,6 +2,7 @@
 
 #include "utils/precompiled.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <map>
@@ -21,6 +22,9 @@ namespace
 {
 typedef std::multimap<uint64_t, std::shared_ptr<struct task_t>> schedule_map_t;
 const uint64_t idle_exit_wait_ns = static_cast<uint64_t> (100) * static_cast<uint64_t> (1000000);
+#ifdef ZLINK_BUILD_TESTS
+std::atomic<uint64_t> cancel_notification_count (0);
+#endif
 }
 
 struct task_t
@@ -213,19 +217,27 @@ void cancel (const std::shared_ptr<task_t> &task_)
         return;
 
     bool notify_scheduler = false;
+    scheduler_state_t &state = scheduler_state ();
     {
-        scheduler_state_t &state = scheduler_state ();
         std::lock_guard<std::mutex> schedule_lock (state.mutex);
         if (task_->registered) {
-            if (task_->schedule_it != state.schedule.end ())
+            if (task_->schedule_it != state.schedule.end ()) {
+                // The scheduler only needs to recompute its wait when the
+                // canceled task owns the deadline it is currently waiting
+                // for. Removing any later task leaves that wait valid.
+                notify_scheduler = task_->schedule_it == state.schedule.begin ();
                 state.schedule.erase (task_->schedule_it);
+            }
             task_->registered = false;
             task_->schedule_it = schedule_map_t::iterator ();
-            notify_scheduler = true;
         }
     }
-    if (notify_scheduler)
-        scheduler_state ().cv.notify_all ();
+    if (notify_scheduler) {
+#ifdef ZLINK_BUILD_TESTS
+        cancel_notification_count.fetch_add (1, std::memory_order_relaxed);
+#endif
+        state.cv.notify_one ();
+    }
 
     std::unique_lock<std::mutex> lock (task_->mutex);
     task_->canceled = true;
@@ -233,6 +245,18 @@ void cancel (const std::shared_ptr<task_t> &task_)
         task_->cv.wait (lock);
     task_->completed = true;
 }
+
+#ifdef ZLINK_BUILD_TESTS
+void test_reset_cancel_notification_count ()
+{
+    cancel_notification_count.store (0, std::memory_order_relaxed);
+}
+
+uint64_t test_cancel_notification_count ()
+{
+    return cancel_notification_count.load (std::memory_order_relaxed);
+}
+#endif
 
 uint64_t monotonic_now_ns ()
 {

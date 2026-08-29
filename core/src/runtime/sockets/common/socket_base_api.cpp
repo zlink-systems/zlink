@@ -81,11 +81,14 @@ int zlink::socket_base_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
         const blob_t &routing_id = pipe->get_routing_id ();
         bool matches = routing_id.size () == peer_rid_->size && routing_id.size () > 0
                        && memcmp (routing_id.data (), peer_rid_->data, peer_rid_->size) == 0;
-        if (!matches && pipe->get_peer ()) {
-            const blob_t &peer_routing_id = pipe->get_peer ()->get_routing_id ();
+        pipe_t *const peer = pipe->retain_peer_snapshot ();
+        if (!matches && peer) {
+            const blob_t &peer_routing_id = peer->get_routing_id ();
             matches = peer_routing_id.size () == peer_rid_->size && peer_routing_id.size () > 0
                       && memcmp (peer_routing_id.data (), peer_rid_->data, peer_rid_->size) == 0;
         }
+        if (peer)
+            peer->release_lifetime_ref ();
         if (!matches)
             continue;
         if (match && match != pipe) {

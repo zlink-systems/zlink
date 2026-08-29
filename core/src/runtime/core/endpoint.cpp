@@ -4,6 +4,7 @@
 #include "core/endpoint.hpp"
 
 #include <atomic>
+#include <utility>
 
 namespace
 {
@@ -30,6 +31,54 @@ zlink::endpoint_uri_pair_t::endpoint_uri_pair_t (
     local_type (local_type_),
     connection_id (allocate_connection_id ())
 {
+}
+
+zlink::endpoint_uri_pair_t::endpoint_uri_pair_t (
+  const endpoint_uri_pair_t &other_) :
+    local (other_.local),
+    remote (other_.remote),
+    local_type (other_.local_type),
+    connection_id (other_.connection_id.load ())
+{
+}
+
+zlink::endpoint_uri_pair_t::endpoint_uri_pair_t (
+  endpoint_uri_pair_t &&other_) :
+    local (std::move (other_.local)),
+    remote (std::move (other_.remote)),
+    local_type (other_.local_type),
+    connection_id (other_.connection_id.load ())
+{
+}
+
+zlink::endpoint_uri_pair_t &zlink::endpoint_uri_pair_t::operator= (
+  const endpoint_uri_pair_t &other_)
+{
+    if (this != &other_) {
+        endpoint_uri_pair_t replacement (other_);
+        swap (replacement);
+    }
+    return *this;
+}
+
+zlink::endpoint_uri_pair_t &zlink::endpoint_uri_pair_t::operator= (
+  endpoint_uri_pair_t &&other_)
+{
+    if (this != &other_) {
+        endpoint_uri_pair_t replacement (std::move (other_));
+        swap (replacement);
+    }
+    return *this;
+}
+
+void zlink::endpoint_uri_pair_t::swap (endpoint_uri_pair_t &other_)
+{
+    local.swap (other_.local);
+    remote.swap (other_.remote);
+    std::swap (local_type, other_.local_type);
+    const uint64_t this_connection_id = connection_id.load ();
+    connection_id = other_.connection_id.load ();
+    other_.connection_id = this_connection_id;
 }
 
 zlink::endpoint_uri_pair_t

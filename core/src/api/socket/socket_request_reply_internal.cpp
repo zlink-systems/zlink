@@ -25,6 +25,24 @@ size_t hash_combine (size_t seed_, size_t value_)
 #ifdef ZLINK_BUILD_TESTS
 std::atomic<int> g_request_reply_allocation_failpoint (
   request_reply_allocation_none);
+std::mutex g_request_reply_timeout_hook_mutex;
+request_reply_timeout_after_remove_hook_fn
+  g_request_reply_timeout_after_remove_hook = NULL;
+void *g_request_reply_timeout_after_remove_userdata = NULL;
+
+void invoke_request_reply_timeout_after_remove_hook ()
+{
+    request_reply_timeout_after_remove_hook_fn hook = NULL;
+    void *userdata = NULL;
+    {
+        std::lock_guard<std::mutex> lock (
+          g_request_reply_timeout_hook_mutex);
+        hook = g_request_reply_timeout_after_remove_hook;
+        userdata = g_request_reply_timeout_after_remove_userdata;
+    }
+    if (hook)
+        hook (userdata);
+}
 #endif
 }
 
@@ -59,6 +77,7 @@ socket_request_reply_state_t::socket_request_reply_state_t (zlink::socket_base_t
                                                             int socket_type_) :
     socket (socket_),
     socket_type (socket_type_),
+    next_pending_cookie (1),
     reply_target_slots (0),
     reply_target_reservations (0),
     reply_target_checkouts (0),
@@ -145,7 +164,7 @@ namespace
 struct socket_timeout_callback_ctx_t
 {
     std::shared_ptr<socket_request_reply_state_t> state;
-    pending_key_t key;
+    pending_request_identity_t identity;
 };
 
 void on_socket_request_timeout (void *userdata_)
@@ -155,26 +174,34 @@ void on_socket_request_timeout (void *userdata_)
     if (!ctx.get () || !ctx->state)
         return;
 
+    zlink::socket_callback_scope_t callback_scope (ctx->state->socket);
+    if (!callback_scope.acquired ())
+        return;
+
     pending_request_t pending;
-    if (remove_socket_pending_request (ctx->state, ctx->key, &pending))
+    if (remove_socket_pending_request (ctx->state, ctx->identity, &pending)) {
+#ifdef ZLINK_BUILD_TESTS
+        invoke_request_reply_timeout_after_remove_hook ();
+#endif
         queue_socket_pending_timeout_completion (ctx->state, pending);
+    }
 }
 }
 
 bool remove_socket_pending_request (const std::shared_ptr<socket_request_reply_state_t> &state_,
-                                    const pending_key_t &key_,
+                                    const pending_request_identity_t &identity_,
                                     pending_request_t *pending_out_)
 {
     if (!state_)
         return false;
 
     std::lock_guard<std::mutex> lock (state_->mutex);
-    return remove_socket_pending_request_locked (state_.get (), key_, pending_out_);
+    return remove_socket_pending_request_locked (state_.get (), identity_, pending_out_);
 }
 
 int schedule_socket_pending_timeout (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
-  const pending_key_t &key_,
+  const pending_request_identity_t &identity_,
   uint32_t timeout_ms_,
   std::shared_ptr<zlink::request_timeout::task_t> *task_out_)
 {
@@ -182,7 +209,7 @@ int schedule_socket_pending_timeout (
       timeout_ms_, &on_socket_request_timeout,
       [&] (socket_timeout_callback_ctx_t &ctx_) {
           ctx_.state = state_;
-          ctx_.key = key_;
+          ctx_.identity = identity_;
       },
       task_out_);
 }
@@ -240,6 +267,15 @@ void test_throw_request_reply_allocation_failpoint (
           expected, static_cast<int> (request_reply_allocation_none),
           std::memory_order_acq_rel, std::memory_order_acquire))
         throw std::bad_alloc ();
+}
+
+void test_set_request_reply_timeout_after_remove_hook (
+  request_reply_timeout_after_remove_hook_fn hook_, void *userdata_)
+{
+    std::lock_guard<std::mutex> lock (
+      g_request_reply_timeout_hook_mutex);
+    g_request_reply_timeout_after_remove_userdata = userdata_;
+    g_request_reply_timeout_after_remove_hook = hook_;
 }
 #endif
 

@@ -2,12 +2,10 @@
 
 #include "utils/precompiled.hpp"
 
-#include <vector>
-
+#include "api/socket/request_reply_frame_buffer_internal.hpp"
 #include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "sockets/common/socket_base.hpp"
-#include "utils/routing_id.hpp"
 
 namespace zlink
 {
@@ -21,11 +19,8 @@ router_recv_metadata_tls_t &router_recv_metadata_tls ()
 
 namespace
 {
-const size_t completion_part_capacity = 8;
-
 void complete_reply_from_transport (
   socket_request_reply_state_t *state_,
-  const zlink_routing_id_t *source_rid_,
   uint64_t transport_pair_id_,
   uint64_t transport_pair_generation_,
   zlink_msg_t *parts_,
@@ -44,17 +39,12 @@ void complete_reply_from_transport (
         return;
     }
 
-    pending_key_t key;
-    key.request_seq = envelope.request_seq;
-    if (state_->socket_type == ZLINK_CORE_SOCKET_ROUTER
-        && zlink::valid_routing_id (source_rid_))
-        key.peer_rid = zlink::routing_id_key (source_rid_);
-
     pending_request_t pending;
     {
         std::lock_guard<std::mutex> lock (state_->mutex);
         if (!take_pending_reply_from_transport_locked (
-              state_, key, transport_pair_id_, transport_pair_generation_, &pending)) {
+              state_, envelope.request_seq, transport_pair_id_,
+              transport_pair_generation_, &pending)) {
             zlink::request_reply::close_request_reply_parts (parts_, part_count_);
             return;
         }
@@ -81,6 +71,23 @@ void complete_reply_from_transport (
     zlink::request_reply::close_request_reply_parts (parts_, part_count_);
 }
 
+void discard_completion_message_tail (zlink::pipe_t *pipe_, bool more_)
+{
+    while (more_) {
+        zlink::msg_t frame;
+        const int init_rc = frame.init ();
+        errno_assert (init_rc == 0);
+        if (!pipe_->read (&frame)) {
+            const int close_rc = frame.close ();
+            errno_assert (close_rc == 0);
+            return;
+        }
+        more_ = (frame.flags () & zlink::msg_t::more) != 0;
+        const int close_rc = frame.close ();
+        errno_assert (close_rc == 0);
+    }
+}
+
 }
 
 void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe_)
@@ -89,8 +96,7 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
         return;
 
     std::shared_ptr<socket_request_reply_state_t> state = socket_->request_reply_state ();
-    std::vector<zlink_msg_t> parts;
-    parts.reserve (completion_part_capacity);
+    request_reply_frame_buffer_t parts;
     while (true) {
         // Every exit below closes or consumes the current elements. Keep the
         // vector's storage for the lifetime of this drain so steady-state
@@ -105,7 +111,7 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
             if (!pipe_->read (&frame)) {
                 const int close_rc = frame.close ();
                 errno_assert (close_rc == 0);
-                zlink::request_reply::close_built_parts (&parts);
+                close_request_reply_frame_buffer (&parts);
                 return;
             }
 
@@ -139,7 +145,16 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
                 continue;
             }
 
-            parts.push_back (zlink_msg_t ());
+            try {
+                parts.push_back (zlink_msg_t ());
+            } catch (...) {
+                const int close_rc = frame.close ();
+                errno_assert (close_rc == 0);
+                discard_completion_message_tail (pipe_, more);
+                complete = true;
+                malformed = true;
+                break;
+            }
             zlink_msg_init (&parts.back ());
             zlink::msg_t *stored = reinterpret_cast<zlink::msg_t *> (&parts.back ());
             const int move_rc = stored->move (frame);
@@ -148,35 +163,13 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
         }
 
         if (!state || malformed) {
-            zlink::request_reply::close_built_parts (&parts);
+            close_request_reply_frame_buffer (&parts);
             continue;
         }
 
-        zlink_routing_id_t source_rid;
-        memset (&source_rid, 0, sizeof (source_rid));
-        const blob_t *rid = &pipe_->get_routing_id ();
-        //  This drain runs on the completion owner (often the async mailbox
-        //  worker) while an application thread inside process_commands can be
-        //  running the application lane's pipe_terminated, which clears the
-        //  transport-pair slot and then deallocates that pipe. The accessor
-        //  therefore returns a pinned pipe; rid aliases into it, so the pin
-        //  has to outlive the copy into source_rid below.
-        pipe_t *application = NULL;
-        if (rid->size () == 0) {
-            application = socket_->application_pipe_for_completion (pipe_);
-            if (application)
-                rid = &application->get_routing_id ();
-        }
-        if (rid->size () > 0 && rid->size () <= sizeof (source_rid.data)) {
-            source_rid.size = static_cast<uint8_t> (rid->size ());
-            memcpy (source_rid.data, rid->data (), rid->size ());
-        }
-        if (application)
-            application->release_lifetime_ref ();
         complete_reply_from_transport (
-          state.get (), source_rid.size > 0 ? &source_rid : NULL,
-          pipe_->get_transport_pair_id (), pipe_->get_transport_pair_generation (),
-          &parts[0], parts.size ());
+          state.get (), pipe_->get_transport_pair_id (),
+          pipe_->get_transport_pair_generation (), &parts[0], parts.size ());
     }
 }
 
@@ -209,24 +202,9 @@ void fail_disconnected_peer_requests (
         bool found = false;
         {
             std::lock_guard<std::mutex> lock (state_->mutex);
-            for (std::unordered_map<pending_key_t, pending_request_t,
-                                    pending_key_hash_t>::iterator it =
-                   state_->pending_requests.begin ();
-                 it != state_->pending_requests.end (); ++it) {
-                const bool matches =
-                  it->second.transport_pair_id == transport_pair_id_
-                  && it->second.transport_pair_generation
-                       == transport_pair_generation_;
-                if (!matches)
-                    continue;
-                failed = std::move (it->second);
-                state_->pending_sequences.erase (it->first.request_seq);
-                state_->pending_request_keys_by_seq.erase (
-                  it->first.request_seq);
-                state_->pending_requests.erase (it);
-                found = true;
-                break;
-            }
+            found = take_disconnected_socket_pending_request_locked (
+              state_.get (), transport_pair_id_, transport_pair_generation_,
+              &failed);
         }
         if (!found)
             break;
@@ -257,17 +235,8 @@ int drain_close_request_reply_socket (const socket_handle_t &handle_)
         bool found = false;
         {
             std::lock_guard<std::mutex> lock (state->mutex);
-            if (!state->pending_requests.empty ()) {
-                std::unordered_map<pending_key_t, pending_request_t,
-                                   pending_key_hash_t>::iterator it =
-                  state->pending_requests.begin ();
-                pending = std::move (it->second);
-                state->pending_sequences.erase (it->first.request_seq);
-                state->pending_request_keys_by_seq.erase (
-                  it->first.request_seq);
-                state->pending_requests.erase (it);
-                found = true;
-            }
+            found = take_next_socket_pending_request_locked (state.get (),
+                                                             &pending);
         }
         if (!found)
             break;
@@ -280,8 +249,6 @@ int drain_close_request_reply_socket (const socket_handle_t &handle_)
 
     {
         std::lock_guard<std::mutex> lock (state->mutex);
-        state->pending_request_keys_by_seq.clear ();
-        state->pending_sequences.clear ();
         state->dealer_reply_targets.clear ();
         state->router_reply_targets.clear ();
         state->reply_target_slots =
@@ -299,34 +266,23 @@ void cleanup_request_reply_socket (const socket_handle_t &handle_)
     std::shared_ptr<socket_request_reply_state_t> state = handle_.socket->request_reply_state ();
     if (state) {
         while (true) {
-            std::shared_ptr<zlink::request_timeout::task_t> timeout_task;
+            pending_request_t pending;
             bool found = false;
             {
                 std::lock_guard<std::mutex> state_lock (state->mutex);
                 state->closing = true;
-                if (!state->pending_requests.empty ()) {
-                    std::unordered_map<pending_key_t, pending_request_t,
-                                       pending_key_hash_t>::iterator it =
-                      state->pending_requests.begin ();
-                    timeout_task.swap (it->second.timeout_task);
-                    state->pending_sequences.erase (it->first.request_seq);
-                    state->pending_request_keys_by_seq.erase (
-                      it->first.request_seq);
-                    state->pending_requests.erase (it);
-                    found = true;
-                }
+                found = take_next_socket_pending_request_locked (state.get (),
+                                                                 &pending);
             }
             if (!found)
                 break;
-            zlink::request_timeout::cancel (timeout_task);
+            zlink::request_timeout::cancel (pending.timeout_task);
             zlink::request_completion::release_reservation (
               &state->completion);
         }
         {
             std::lock_guard<std::mutex> state_lock (state->mutex);
             state->closing = true;
-            state->pending_request_keys_by_seq.clear ();
-            state->pending_sequences.clear ();
             state->dealer_reply_targets.clear ();
             state->router_reply_targets.clear ();
             state->reply_target_slots =

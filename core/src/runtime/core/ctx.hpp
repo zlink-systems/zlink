@@ -150,7 +150,8 @@ class ctx_t ZLINK_FINAL
                          transport_lane_t lane_,
                          auto_hwm_role_t role_,
                          bool planning_enabled_,
-                         physical_queue_class_t queue_class_);
+                         physical_queue_class_t queue_class_,
+                         int session_owner_index_);
 
     bool start ();
     bool start_runtime_locked ();

@@ -264,8 +264,7 @@ ipc_transport_t::~ipc_transport_t ()
 bool ipc_transport_t::open (boost::asio::io_context &io_context, fd_t fd)
 {
     try {
-        _socket = std::shared_ptr<boost::asio::local::stream_protocol::socket> (
-          new boost::asio::local::stream_protocol::socket (io_context));
+        _socket = std::make_shared<boost::asio::local::stream_protocol::socket> (io_context);
     }
     catch (const std::bad_alloc &) {
         return false;

@@ -2191,36 +2191,33 @@ void test_router_completion_correlation_accepts_settled_peer_and_fences_pair ()
     using namespace zlink::socket_reqrep_internal;
     socket_request_reply_state_t state (NULL, ZLINK_CORE_SOCKET_ROUTER);
 
-    pending_key_t expected_key;
-    expected_key.peer_rid = "peer-a";
-    expected_key.request_seq = 77;
     pending_request_t expected;
-    expected.key = expected_key;
+    expected.identity.request_seq = 77;
+    expected.identity.cookie = 7001;
     expected.transport_pair_id = 101;
     expected.transport_pair_generation = 9;
     expected.handler = NULL;
     expected.userdata = NULL;
-    add_socket_pending_request_locked (&state, expected_key, expected);
+    add_socket_pending_request_locked (&state, expected);
 
     pending_request_t taken;
-    pending_key_t wrong_peer_key = expected_key;
-    wrong_peer_key.peer_rid = "peer-b";
     //  The peer may settle on a routing ID different from the requested
     //  intent. The per-socket sequence identifies the pending request while
     //  the transport pair still fences stale connections.
     TEST_ASSERT_TRUE (take_pending_reply_from_transport_locked (
-      &state, wrong_peer_key, 101, 9, &taken));
-    TEST_ASSERT_EQUAL_STRING ("peer-a", taken.key.peer_rid.c_str ());
+      &state, expected.identity.request_seq, 101, 9, &taken));
+    TEST_ASSERT_EQUAL_UINT64 (expected.identity.cookie,
+                              taken.identity.cookie);
     TEST_ASSERT_TRUE (state.pending_requests.empty ());
 
-    add_socket_pending_request_locked (&state, expected_key, expected);
+    add_socket_pending_request_locked (&state, expected);
     TEST_ASSERT_FALSE (take_pending_reply_from_transport_locked (
-      &state, expected_key, 202, 9, &taken));
+      &state, expected.identity.request_seq, 202, 9, &taken));
     TEST_ASSERT_FALSE (take_pending_reply_from_transport_locked (
-      &state, expected_key, 101, 10, &taken));
+      &state, expected.identity.request_seq, 101, 10, &taken));
     TEST_ASSERT_TRUE (take_pending_reply_from_transport_locked (
-      &state, expected_key, 101, 9, &taken));
-    TEST_ASSERT_EQUAL_UINT64 (77, taken.key.request_seq);
+      &state, expected.identity.request_seq, 101, 9, &taken));
+    TEST_ASSERT_EQUAL_UINT64 (77, taken.identity.request_seq);
     TEST_ASSERT_TRUE (state.pending_requests.empty ());
 }
 
@@ -2486,10 +2483,9 @@ void test_close_drain_failure_still_completes_socket_handoff ()
       zlink::socket_reqrep_internal::find_or_create_request_reply_state (handle);
     TEST_ASSERT_NOT_NULL (state.get ());
     TEST_ASSERT_TRUE (zlink::request_completion::try_reserve (&state->completion));
-    zlink::socket_reqrep_internal::pending_key_t key;
-    key.request_seq = 1;
     zlink::socket_reqrep_internal::pending_request_t pending;
-    pending.key = key;
+    pending.identity.request_seq = 1;
+    pending.identity.cookie = 1;
     pending.transport_pair_id = 0;
     pending.transport_pair_generation = 0;
     pending.handler = &capture_reply;
@@ -2497,7 +2493,7 @@ void test_close_drain_failure_still_completes_socket_handoff ()
     {
         std::lock_guard<std::mutex> lock (state->mutex);
         zlink::socket_reqrep_internal::add_socket_pending_request_locked (
-          state.get (), key, pending);
+          state.get (), pending);
     }
     zlink::request_completion::close (&state->completion);
     handle = socket_handle_t ();
@@ -3108,6 +3104,100 @@ void test_dealer_to_dealer_multipart_reply_preserves_large_first_part ()
     test_context_socket_close (server_dealer);
 }
 
+void test_dealer_multipart_request_preserves_pending_cookie ()
+{
+    void *server_dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *client_dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (server_dealer);
+    TEST_ASSERT_NOT_NULL (client_dealer);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (server_dealer, "inproc://zmp-dealer-request-cookie"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (client_dealer, "inproc://zmp-dealer-request-cookie"));
+    msleep (SETTLE_TIME);
+
+    zlink_msg_t first;
+    zlink_msg_init (&first);
+    init_string_part (&first, "request-head");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request_part (client_dealer, &first, ZLINK_SEND_FLAGS_NONE,
+                                 ZLINK_PART_MORE, 0, NULL, NULL));
+
+    socket_handle_t client_handle = as_socket_handle (client_dealer);
+    std::shared_ptr<zlink::part_helper_internal::handle_state_t> helper_state =
+      zlink::part_helper_internal::find_socket_state (client_handle.socket);
+    TEST_ASSERT_NOT_NULL (helper_state.get ());
+    {
+        std::lock_guard<std::mutex> lock (helper_state->mutex);
+        TEST_ASSERT_TRUE (helper_state->send.active);
+        TEST_ASSERT_EQUAL_UINT64 (0, helper_state->send.spec.request_seq);
+        TEST_ASSERT_EQUAL_UINT64 (0, helper_state->send.spec.pending_cookie);
+    }
+
+    zlink_msg_t final;
+    zlink_msg_init (&final);
+    init_string_part (&final, "request-tail");
+    reply_probe_t reply_probe;
+    reply_probe.progress_handle = client_dealer;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request_part (client_dealer, &final, ZLINK_SEND_FLAGS_NONE,
+                                 ZLINK_PART_FINAL, 3000, &capture_reply,
+                                 &reply_probe));
+    {
+        std::lock_guard<std::mutex> lock (helper_state->mutex);
+        TEST_ASSERT_FALSE (helper_state->send.active);
+    }
+
+    uint8_t message_type = 0;
+    uint64_t request_seq = 0;
+    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+    zlink_msg_t received;
+    zlink_msg_init (&received);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      recv_dealer_part_with_retry (server_dealer, &message_type, &request_seq,
+                                   &received, &has_more));
+    TEST_ASSERT_EQUAL_UINT8 (ZLINK_DEALER_MESSAGE_REQUEST, message_type);
+    TEST_ASSERT_TRUE (request_seq != 0);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, has_more);
+    TEST_ASSERT_EQUAL_STRING ("request-head",
+                              part_to_string_and_close (&received).c_str ());
+
+    const uint64_t first_request_seq = request_seq;
+    zlink_msg_init (&received);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      recv_dealer_part_with_retry (server_dealer, &message_type, &request_seq,
+                                   &received, &has_more));
+    TEST_ASSERT_EQUAL_UINT8 (ZLINK_DEALER_MESSAGE_REQUEST, message_type);
+    TEST_ASSERT_EQUAL_UINT64 (first_request_seq, request_seq);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_STRING ("request-tail",
+                              part_to_string_and_close (&received).c_str ());
+
+    zlink_msg_t reply;
+    zlink_msg_init (&reply);
+    init_string_part (&reply, "cookie-ok");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_reply_part (server_dealer, request_seq, &reply,
+                               ZLINK_PART_FINAL));
+    TEST_ASSERT_TRUE (wait_for_reply (&reply_probe));
+    {
+        std::lock_guard<std::mutex> lock (reply_probe.mutex);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, reply_probe.result);
+        TEST_ASSERT_EQUAL_UINT64 (1, reply_probe.callback_count);
+        TEST_ASSERT_EQUAL_STRING ("cookie-ok", reply_probe.payload.c_str ());
+    }
+
+    client_handle = socket_handle_t ();
+    helper_state.reset ();
+    close_test_socket_after_reply_callback (client_dealer);
+    test_context_socket_close_zero_linger (server_dealer);
+}
+
 void test_request_stage_allocation_failure_consumes_and_aborts_sequence ()
 {
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
@@ -3140,6 +3230,363 @@ void test_request_stage_allocation_failure_consumes_and_aborts_sequence ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&failed));
 
     test_context_socket_close_zero_linger (dealer);
+}
+
+void test_runtime_receive_spill_failure_discards_record_tail ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *router_sender = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (router);
+    TEST_ASSERT_NOT_NULL (router_sender);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://zmp-router-recv-spill-oom"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (router_sender, "inproc://zmp-router-recv-spill-oom"));
+    msleep (SETTLE_TIME);
+
+    const char router_spill[] = "router-spill";
+    for (size_t i = 0; i < 10; ++i) {
+        send_raw_request_frame (
+          router_sender, router_spill, strlen (router_spill),
+          i + 1 == 10 ? ZLINK_PART_FINAL : ZLINK_PART_MORE);
+    }
+    const char router_after[] = "router-after-spill";
+    send_raw_request_frame (router_sender, router_after,
+                            strlen (router_after), ZLINK_PART_FINAL);
+
+    zlink::socket_reqrep_internal::test_set_request_reply_allocation_failpoint (
+      zlink::socket_reqrep_internal::request_reply_allocation_receive_spill);
+    const zlink_routing_id_t *source_rid = NULL;
+    uint64_t request_seq = 0;
+    zlink_msg_t *parts = NULL;
+    size_t part_count = 0;
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_INTERNAL_ERROR,
+      zlink_router_recv (router, &source_rid, &request_seq, &parts,
+                         &part_count, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
+
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_router_recv (router, &source_rid, &request_seq, &parts,
+                         &part_count, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_NOT_NULL (source_rid);
+    TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
+    TEST_ASSERT_EQUAL_UINT64 (1, part_count);
+    TEST_ASSERT_EQUAL_STRING (router_after, msg_to_string (&parts[0]).c_str ());
+    zlink_multipart_close (parts, part_count);
+
+    void *dealer_receiver = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *dealer_sender = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (dealer_receiver);
+    TEST_ASSERT_NOT_NULL (dealer_sender);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (dealer_receiver, "inproc://zmp-dealer-recv-spill-oom"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer_sender, "inproc://zmp-dealer-recv-spill-oom"));
+    msleep (SETTLE_TIME);
+
+    const char dealer_spill[] = "dealer-spill";
+    for (size_t i = 0; i < 10; ++i) {
+        send_raw_request_frame (
+          dealer_sender, dealer_spill, strlen (dealer_spill),
+          i + 1 == 10 ? ZLINK_PART_FINAL : ZLINK_PART_MORE);
+    }
+    const char dealer_after[] = "dealer-after-spill";
+    send_raw_request_frame (dealer_sender, dealer_after,
+                            strlen (dealer_after), ZLINK_PART_FINAL);
+
+    zlink::socket_reqrep_internal::test_set_request_reply_allocation_failpoint (
+      zlink::socket_reqrep_internal::request_reply_allocation_receive_spill);
+    uint8_t message_type = 0xff;
+    request_seq = std::numeric_limits<uint64_t>::max ();
+    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    zlink_msg_t received;
+    zlink_msg_init (&received);
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_INTERNAL_ERROR,
+      zlink_dealer_recv_part (dealer_receiver, &message_type, &request_seq,
+                              &received, &has_more, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&received));
+
+    zlink_msg_init (&received);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      recv_dealer_part_with_retry (dealer_receiver, &message_type,
+                                   &request_seq, &received, &has_more));
+    TEST_ASSERT_EQUAL_UINT8 (ZLINK_DEALER_MESSAGE_RAW, message_type);
+    TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_STRING (dealer_after,
+                              part_to_string_and_close (&received).c_str ());
+
+    test_context_socket_close_zero_linger (dealer_sender);
+    test_context_socket_close_zero_linger (dealer_receiver);
+    test_context_socket_close_zero_linger (router_sender);
+    test_context_socket_close_zero_linger (router);
+}
+
+void test_router_lazy_state_failure_discards_record_tail ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (router);
+    TEST_ASSERT_NOT_NULL (dealer);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://zmp-router-lazy-state-oom"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://zmp-router-lazy-state-oom"));
+    msleep (SETTLE_TIME);
+
+    send_raw_request_frame (dealer, "failed-head", 11, ZLINK_PART_MORE);
+    send_raw_request_frame (dealer, "failed-tail", 11, ZLINK_PART_FINAL);
+    send_raw_request_frame (dealer, "record-after-oom", 16,
+                            ZLINK_PART_FINAL);
+
+    {
+        const socket_handle_t router_handle = as_socket_handle (router);
+        TEST_ASSERT_NOT_NULL (router_handle.socket);
+        TEST_ASSERT_FALSE (router_handle.socket->has_request_reply_state ());
+    }
+    zlink::socket_reqrep_internal::test_set_request_reply_allocation_failpoint (
+      zlink::socket_reqrep_internal::request_reply_allocation_lazy_state_create);
+
+    const zlink_routing_id_t *source_rid = NULL;
+    uint64_t request_seq = 0;
+    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    zlink_msg_t part;
+    zlink_msg_init (&part);
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_INTERNAL_ERROR,
+      zlink_router_recv_part (router, &source_rid, &request_seq, &part,
+                              &has_more, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+
+    zlink_msg_init (&part);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_router_recv_part (router, &source_rid, &request_seq, &part,
+                              &has_more, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_NOT_NULL (source_rid);
+    TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_STRING ("record-after-oom",
+                              msg_to_string (&part).c_str ());
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
+void test_router_receive_export_failure_rolls_back_reply_target ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (router);
+    TEST_ASSERT_NOT_NULL (dealer);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://zmp-router-recv-export-oom"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://zmp-router-recv-export-oom"));
+    msleep (SETTLE_TIME);
+
+    reply_probe_t failed_probe;
+    failed_probe.progress_handle = dealer;
+    zlink_msg_t failed_request;
+    zlink_msg_init (&failed_request);
+    init_string_part (&failed_request, "router-export-failed-request");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request (dealer, &failed_request, 1, &capture_reply,
+                            &failed_probe, ZLINK_SEND_FLAGS_NONE, 100));
+
+    zlink::socket_reqrep_internal::test_set_request_reply_allocation_failpoint (
+      zlink::socket_reqrep_internal::request_reply_allocation_payload_export);
+    const zlink_routing_id_t *source_rid = NULL;
+    uint64_t request_seq = 0;
+    zlink_msg_t *parts = NULL;
+    size_t part_count = 0;
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_INTERNAL_ERROR,
+      zlink_router_recv (router, &source_rid, &request_seq, &parts,
+                         &part_count, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
+
+    std::shared_ptr<zlink::socket_reqrep_internal::socket_request_reply_state_t>
+      router_state = zlink::socket_reqrep_internal::find_request_reply_state (
+        as_socket_handle (router));
+    TEST_ASSERT_NOT_NULL (router_state.get ());
+    {
+        std::lock_guard<std::mutex> lock (router_state->mutex);
+        TEST_ASSERT_TRUE (router_state->router_reply_targets.empty ());
+        TEST_ASSERT_EQUAL_UINT64 (0, router_state->reply_target_slots);
+        TEST_ASSERT_EQUAL_UINT64 (0, router_state->reply_target_reservations);
+        TEST_ASSERT_EQUAL_UINT64 (0, router_state->reply_target_checkouts);
+    }
+
+    reply_probe_t reply_probe;
+    reply_probe.progress_handle = dealer;
+    zlink_msg_t request;
+    zlink_msg_init (&request);
+    init_string_part (&request, "router-export-retry");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request (dealer, &request, 1, &capture_reply, &reply_probe,
+                            ZLINK_SEND_FLAGS_NONE, 3000));
+
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_router_recv (router, &source_rid, &request_seq, &parts,
+                         &part_count, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_NOT_NULL (source_rid);
+    TEST_ASSERT_TRUE (request_seq != 0);
+    TEST_ASSERT_EQUAL_UINT64 (1, part_count);
+    zlink_routing_id_t reply_rid = *source_rid;
+    zlink_multipart_close (parts, part_count);
+    {
+        std::lock_guard<std::mutex> lock (router_state->mutex);
+        TEST_ASSERT_EQUAL_UINT64 (1, router_state->router_reply_targets.size ());
+        TEST_ASSERT_EQUAL_UINT64 (1, router_state->reply_target_slots);
+    }
+
+    zlink_msg_t reply;
+    zlink_msg_init (&reply);
+    init_string_part (&reply, "router-export-retry-ok");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_router_reply (router, &reply_rid, request_seq, &reply, 1));
+    {
+        std::lock_guard<std::mutex> lock (router_state->mutex);
+        TEST_ASSERT_TRUE (router_state->router_reply_targets.empty ());
+        TEST_ASSERT_EQUAL_UINT64 (0, router_state->reply_target_slots);
+    }
+    TEST_ASSERT_TRUE (wait_for_reply (&reply_probe));
+    TEST_ASSERT_TRUE (wait_for_reply (&failed_probe));
+    {
+        std::lock_guard<std::mutex> lock (reply_probe.mutex);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, reply_probe.result);
+        TEST_ASSERT_EQUAL_STRING ("router-export-retry-ok",
+                                  reply_probe.payload.c_str ());
+    }
+    {
+        std::lock_guard<std::mutex> lock (failed_probe.mutex);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_TIMED_OUT, failed_probe.result);
+    }
+
+    router_state.reset ();
+    close_test_socket_after_reply_callback (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
+void test_dealer_receive_export_failure_rolls_back_reply_target ()
+{
+    void *server = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *client = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (server);
+    TEST_ASSERT_NOT_NULL (client);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (server, "inproc://zmp-dealer-recv-export-oom"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (client, "inproc://zmp-dealer-recv-export-oom"));
+    msleep (SETTLE_TIME);
+
+    reply_probe_t failed_probe;
+    failed_probe.progress_handle = client;
+    zlink_msg_t failed_request;
+    zlink_msg_init (&failed_request);
+    init_string_part (&failed_request, "dealer-export-failed-request");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request (client, &failed_request, 1, &capture_reply,
+                            &failed_probe, ZLINK_SEND_FLAGS_NONE, 100));
+
+    zlink::socket_reqrep_internal::test_set_request_reply_allocation_failpoint (
+      zlink::socket_reqrep_internal::request_reply_allocation_payload_export);
+    uint8_t message_type = 0xff;
+    uint64_t request_token = 0;
+    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    zlink_msg_t received;
+    zlink_msg_init (&received);
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_INTERNAL_ERROR,
+      zlink_dealer_recv_part (server, &message_type, &request_token, &received,
+                              &has_more, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&received));
+
+    std::shared_ptr<zlink::socket_reqrep_internal::socket_request_reply_state_t>
+      server_state = zlink::socket_reqrep_internal::find_request_reply_state (
+        as_socket_handle (server));
+    TEST_ASSERT_NOT_NULL (server_state.get ());
+    {
+        std::lock_guard<std::mutex> lock (server_state->mutex);
+        TEST_ASSERT_TRUE (server_state->dealer_reply_targets.empty ());
+        TEST_ASSERT_EQUAL_UINT64 (0, server_state->reply_target_slots);
+        TEST_ASSERT_EQUAL_UINT64 (0, server_state->reply_target_reservations);
+        TEST_ASSERT_EQUAL_UINT64 (0, server_state->reply_target_checkouts);
+    }
+
+    reply_probe_t reply_probe;
+    reply_probe.progress_handle = client;
+    zlink_msg_t request;
+    zlink_msg_init (&request);
+    init_string_part (&request, "dealer-export-retry");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request (client, &request, 1, &capture_reply, &reply_probe,
+                            ZLINK_SEND_FLAGS_NONE, 3000));
+
+    zlink_msg_init (&received);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      recv_dealer_part_with_retry (server, &message_type, &request_token,
+                                   &received, &has_more));
+    TEST_ASSERT_EQUAL_UINT8 (ZLINK_DEALER_MESSAGE_REQUEST, message_type);
+    TEST_ASSERT_TRUE (request_token != 0);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_STRING ("dealer-export-retry",
+                              part_to_string_and_close (&received).c_str ());
+    {
+        std::lock_guard<std::mutex> lock (server_state->mutex);
+        TEST_ASSERT_EQUAL_UINT64 (1, server_state->dealer_reply_targets.size ());
+        TEST_ASSERT_EQUAL_UINT64 (1, server_state->reply_target_slots);
+    }
+
+    zlink_msg_t reply;
+    zlink_msg_init (&reply);
+    init_string_part (&reply, "dealer-export-retry-ok");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_reply_part (server, request_token, &reply,
+                               ZLINK_PART_FINAL));
+    {
+        std::lock_guard<std::mutex> lock (server_state->mutex);
+        TEST_ASSERT_TRUE (server_state->dealer_reply_targets.empty ());
+        TEST_ASSERT_EQUAL_UINT64 (0, server_state->reply_target_slots);
+    }
+    TEST_ASSERT_TRUE (wait_for_reply (&reply_probe));
+    TEST_ASSERT_TRUE (wait_for_reply (&failed_probe));
+    {
+        std::lock_guard<std::mutex> lock (reply_probe.mutex);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, reply_probe.result);
+        TEST_ASSERT_EQUAL_STRING ("dealer-export-retry-ok",
+                                  reply_probe.payload.c_str ());
+    }
+    {
+        std::lock_guard<std::mutex> lock (failed_probe.mutex);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_TIMED_OUT, failed_probe.result);
+    }
+
+    server_state.reset ();
+    close_test_socket_after_reply_callback (client);
+    test_context_socket_close_zero_linger (server);
 }
 
 void test_dealer_reply_combined_allocation_failure_preserves_token ()
@@ -3206,6 +3653,21 @@ void test_dealer_reply_combined_allocation_failure_preserves_token ()
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&staged[i]));
     }
 
+    std::shared_ptr<zlink::socket_reqrep_internal::socket_request_reply_state_t>
+      server_reply_state = zlink::socket_reqrep_internal::find_request_reply_state (
+        as_socket_handle (server_dealer));
+    TEST_ASSERT_NOT_NULL (server_reply_state.get ());
+    {
+        std::lock_guard<std::mutex> lock (server_reply_state->mutex);
+        std::unordered_map<uint64_t,
+                           zlink::socket_reqrep_internal::dealer_reply_target_t>::const_iterator
+          restored = server_reply_state->dealer_reply_targets.find (request_seq);
+        TEST_ASSERT_TRUE (restored != server_reply_state->dealer_reply_targets.end ());
+        TEST_ASSERT_FALSE (restored->second.checked_out);
+        TEST_ASSERT_EQUAL_UINT64 (1, server_reply_state->reply_target_slots);
+        TEST_ASSERT_EQUAL_UINT64 (0, server_reply_state->reply_target_checkouts);
+    }
+
     zlink_msg_t fresh_reply;
     zlink_msg_init (&fresh_reply);
     init_string_part (&fresh_reply, "fresh-dealer-reply");
@@ -3213,6 +3675,12 @@ void test_dealer_reply_combined_allocation_failure_preserves_token ()
       ZLINK_SUBMIT_OK,
       zlink_dealer_reply_part (server_dealer, request_seq, &fresh_reply,
                                ZLINK_PART_FINAL));
+    {
+        std::lock_guard<std::mutex> lock (server_reply_state->mutex);
+        TEST_ASSERT_TRUE (server_reply_state->dealer_reply_targets.empty ());
+        TEST_ASSERT_EQUAL_UINT64 (0, server_reply_state->reply_target_slots);
+        TEST_ASSERT_EQUAL_UINT64 (0, server_reply_state->reply_target_checkouts);
+    }
     TEST_ASSERT_TRUE (wait_for_reply (&reply_probe));
     {
         std::lock_guard<std::mutex> lock (reply_probe.mutex);
@@ -3224,6 +3692,7 @@ void test_dealer_reply_combined_allocation_failure_preserves_token ()
     }
 
     msleep (SETTLE_TIME);
+    server_reply_state.reset ();
     test_context_socket_close (client_dealer);
     test_context_socket_close (server_dealer);
 }
@@ -3367,6 +3836,18 @@ void test_router_reply_allocations_preserve_target_until_fresh_reply ()
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&key_failure));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&key_failure));
 
+    std::shared_ptr<zlink::socket_reqrep_internal::socket_request_reply_state_t>
+      router_reply_state = zlink::socket_reqrep_internal::find_request_reply_state (
+        as_socket_handle (router));
+    TEST_ASSERT_NOT_NULL (router_reply_state.get ());
+    {
+        std::lock_guard<std::mutex> lock (router_reply_state->mutex);
+        TEST_ASSERT_EQUAL_UINT64 (1, router_reply_state->router_reply_targets.size ());
+        TEST_ASSERT_FALSE (router_reply_state->router_reply_targets.begin ()->second.checked_out);
+        TEST_ASSERT_EQUAL_UINT64 (1, router_reply_state->reply_target_slots);
+        TEST_ASSERT_EQUAL_UINT64 (0, router_reply_state->reply_target_checkouts);
+    }
+
     zlink_msg_t fresh_reply;
     zlink_msg_init (&fresh_reply);
     init_string_part (&fresh_reply, "fresh-router-reply");
@@ -3374,6 +3855,12 @@ void test_router_reply_allocations_preserve_target_until_fresh_reply ()
       ZLINK_SUBMIT_OK,
       zlink_router_reply_part (router, &reply_rid, request_seq, &fresh_reply,
                                ZLINK_PART_FINAL));
+    {
+        std::lock_guard<std::mutex> lock (router_reply_state->mutex);
+        TEST_ASSERT_TRUE (router_reply_state->router_reply_targets.empty ());
+        TEST_ASSERT_EQUAL_UINT64 (0, router_reply_state->reply_target_slots);
+        TEST_ASSERT_EQUAL_UINT64 (0, router_reply_state->reply_target_checkouts);
+    }
     TEST_ASSERT_TRUE (wait_for_reply (&reply_probe));
     {
         std::lock_guard<std::mutex> lock (reply_probe.mutex);
@@ -3385,6 +3872,7 @@ void test_router_reply_allocations_preserve_target_until_fresh_reply ()
     }
 
     msleep (SETTLE_TIME);
+    router_reply_state.reset ();
     test_context_socket_close (dealer);
     test_context_socket_close (router);
 }
@@ -3745,7 +4233,12 @@ int main ()
     RUN_SELECTED (test_extra_reply_is_dropped_after_first_completion);
     RUN_SELECTED (test_dealer_to_dealer_reply_routes_to_source_peer_and_closes);
     RUN_SELECTED (test_dealer_to_dealer_multipart_reply_preserves_large_first_part);
+    RUN_SELECTED (test_dealer_multipart_request_preserves_pending_cookie);
     RUN_SELECTED (test_request_stage_allocation_failure_consumes_and_aborts_sequence);
+    RUN_SELECTED (test_runtime_receive_spill_failure_discards_record_tail);
+    RUN_SELECTED (test_router_lazy_state_failure_discards_record_tail);
+    RUN_SELECTED (test_router_receive_export_failure_rolls_back_reply_target);
+    RUN_SELECTED (test_dealer_receive_export_failure_rolls_back_reply_target);
     RUN_SELECTED (test_dealer_reply_combined_allocation_failure_preserves_token);
     RUN_SELECTED (test_router_reply_allocations_preserve_target_until_fresh_reply);
     RUN_SELECTED (test_dealer_request_receive_without_reply_closes_cleanly);

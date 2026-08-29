@@ -11,6 +11,7 @@
 #include <set>
 #include <mutex>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "core/own.hpp"
@@ -316,7 +317,8 @@ class socket_base_t : public own_t,
     void test_set_local_receive_flow_epoch (uint64_t epoch_);
     uint64_t test_local_receive_flow_epoch () const;
 #endif
-    std::unique_ptr<socket_public_send_scope_t> begin_public_send_scope (bool force_sync_);
+    bool begin_public_send_scope (
+      bool force_sync_, std::optional<socket_public_send_scope_t> *scope_out_);
     std::unique_ptr<socket_public_send_scope_t> begin_complete_send_scope (bool force_sync_);
     void notify_incremental_send_released ();
     std::unique_ptr<socket_public_api_scope_t> begin_public_api_scope ();
@@ -428,7 +430,6 @@ class socket_base_t : public own_t,
     virtual int stream_dispatch_stop ();
     virtual bool stream_dispatch_active () const;
     virtual bool stream_dispatch_in_callback () const;
-    virtual uint32_t stream_dispatch_inflight () const;
     virtual int stream_dispatch_send_from_io (const zlink_routing_id_t *rid_,
                                               const void *data_,
                                               size_t size_,

@@ -32,8 +32,7 @@ inline pipe_t *resolve_direct_dispatch_output_pipe (const stream_t *socket_, uin
     if (!dispatch_pipe)
         return NULL;
 
-    pipe_t *out = dispatch_pipe->get_peer ();
-    return out ? out : dispatch_pipe;
+    return dispatch_pipe->get_peer ();
 }
 
 inline pipe_t *resolve_current_dispatch_output_pipe ()
@@ -42,8 +41,7 @@ inline pipe_t *resolve_current_dispatch_output_pipe ()
     if (!dispatch_pipe)
         return NULL;
 
-    pipe_t *direct_out = dispatch_pipe->get_peer ();
-    return direct_out ? direct_out : dispatch_pipe;
+    return dispatch_pipe->get_peer ();
 }
 
 class stream_dispatch_send_policy_t

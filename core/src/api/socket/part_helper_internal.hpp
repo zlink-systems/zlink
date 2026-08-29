@@ -3,9 +3,10 @@
 #ifndef __ZLINK_API_PART_HELPER_INTERNAL_HPP_INCLUDED__
 #define __ZLINK_API_PART_HELPER_INTERNAL_HPP_INCLUDED__
 
-#include <condition_variable>
+#include <boost/container/small_vector.hpp>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -50,6 +51,7 @@ struct send_sequence_spec_t
     zlink_send_flags_t flags;
     uint32_t timeout_ms;
     uint64_t request_seq;
+    uint64_t pending_cookie;
     zlink_reply_handler_fn handler;
     void *userdata;
     zlink_routing_id_t rid1;
@@ -72,10 +74,17 @@ struct send_sequence_state_t
     bool active;
     send_sequence_spec_t spec;
     zlink::socket_base_t *sink_socket;
-    std::unique_ptr<zlink::socket_public_send_scope_t> send_scope;
-    std::vector<zlink_msg_t> buffered_parts;
+    std::optional<zlink::socket_public_send_scope_t> send_scope;
+    boost::container::small_vector<zlink_msg_t, 4> buffered_parts;
     std::thread::id owner_thread;
 };
+
+// Perf's normal multipart receive is two application parts. Keep those parts
+// with the socket-owned receive sequence; larger records spill to bounded
+// dynamic storage through small_vector's existing allocator path.
+const size_t inline_recv_part_capacity = 2;
+typedef boost::container::small_vector<zlink_msg_t, inline_recv_part_capacity>
+  recv_part_buffer_t;
 
 struct recv_sequence_state_t
 {
@@ -92,14 +101,13 @@ struct recv_sequence_state_t
     uint64_t transport_pair_generation;
     uint8_t message_type;
     std::string topic_id;
-    std::vector<zlink_msg_t> buffered_parts;
+    recv_part_buffer_t buffered_parts;
     size_t next_part_index;
 };
 
 struct handle_state_t
 {
     std::mutex mutex;
-    std::condition_variable cv;
     send_sequence_state_t send;
     recv_sequence_state_t recv;
 };
@@ -154,21 +162,11 @@ void export_recv_transport_pair (const std::shared_ptr<handle_state_t> &state_,
                                   uint64_t *transport_pair_generation_out_);
 void reset_send_sequence (send_sequence_state_t *state_);
 void reset_recv_sequence (recv_sequence_state_t *state_);
-bool aggregate_send_mode_active ();
-void set_aggregate_send_mode (bool active_);
 int prepare_send_step (void *handle_,
                        const send_sequence_spec_t &spec_,
                        zlink::socket_base_t *sink_socket_,
                        std::shared_ptr<handle_state_t> *state_out_,
                        bool *first_part_out_);
-int prepare_staged_send_step (void *handle_,
-                              const send_sequence_spec_t &spec_,
-                              std::shared_ptr<handle_state_t> *state_out_,
-                              bool *first_part_out_);
-int stage_staged_send_part (handle_state_t *state_, zlink_msg_t *part_);
-int move_staged_parts_for_submit (const std::shared_ptr<handle_state_t> &state_,
-                                  zlink_msg_t *part_,
-                                  std::vector<zlink_msg_t> *parts_out_);
 int prepare_recv_step (void *handle_,
                        recv_family_t family_,
                        zlink::socket_base_t *source_socket_,

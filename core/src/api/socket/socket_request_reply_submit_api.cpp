@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "api/socket/request_reply_protocol_internal.hpp"
+#include "api/socket/request_reply_frame_buffer_internal.hpp"
 #include "api/socket/part_helper_internal.hpp"
 #include "api/monitoring/poller_api_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
@@ -23,31 +24,31 @@ const size_t stack_request_reply_part_capacity = 8;
 
 struct pending_pair_observer_t
 {
-    pending_pair_observer_t () : key (NULL) {}
+    pending_pair_observer_t () : identity (NULL) {}
 
     std::shared_ptr<reqrep::socket_request_reply_state_t> state;
-    const reqrep::pending_key_t *key;
+    const reqrep::pending_request_identity_t *identity;
 };
 
 void record_pending_pair (zlink::pipe_t *pipe_, void *userdata_)
 {
     pending_pair_observer_t *observer =
       static_cast<pending_pair_observer_t *> (userdata_);
-    if (observer && observer->key)
+    if (observer && observer->identity)
         reqrep::record_socket_pending_transport_pair (
-          observer->state, *observer->key, pipe_);
+          observer->state, *observer->identity, pipe_);
 }
 
 zlink_submit_result_t finish_request_submit_failure (
   const std::shared_ptr<reqrep::socket_request_reply_state_t> &state_,
-  const reqrep::pending_key_t &key_,
+  const reqrep::pending_request_identity_t &identity_,
   zlink_submit_result_t failure_)
 {
     // A timeout or disconnect may remove the pending entry while the send
     // operation is still unwinding. In that case Core has already retained a
     // completion callback and the caller must receive a successful submit
     // result so its callback userdata remains owned by that completion.
-    if (!reqrep::erase_socket_pending_request (state_, key_)) {
+    if (!reqrep::erase_socket_pending_request (state_, identity_)) {
         errno = 0;
         return ZLINK_SUBMIT_OK;
     }
@@ -187,6 +188,7 @@ zlink_submit_result_t request_part_common (
         helper_send_active = helper_state->send.active;
         if (helper_state->send.active && helper_state->send.spec.family == family_) {
             spec.request_seq = helper_state->send.spec.request_seq;
+            spec.pending_cookie = helper_state->send.spec.pending_cookie;
             helper_state_matches_family = true;
         }
     }
@@ -219,7 +221,7 @@ zlink_submit_result_t request_part_common (
     reqrep::pending_request_token_t pending_token;
     if (spec.request_seq == 0) {
         if (reqrep::ensure_socket_pending_request (
-              socket_handle_, peer_rid_, timeout_ms_, handler_, userdata_,
+              socket_handle_, timeout_ms_, handler_, userdata_,
               &spec.request_seq, &request_state, &pending_token)
             != 0) {
             zlink::part_helper_internal::abort_current_non_publish_send_sequence (handle_);
@@ -228,15 +230,19 @@ zlink_submit_result_t request_part_common (
         }
     } else {
         request_state = reqrep::find_or_create_request_reply_state (socket_handle_);
+        reqrep::pending_request_identity_t identity;
+        identity.request_seq = spec.request_seq;
+        identity.cookie = spec.pending_cookie;
         if (!request_state
-            || reqrep::lookup_socket_pending_request_by_seq (request_state, spec.request_seq,
-                                                             &pending_token)
+            || reqrep::lookup_socket_pending_request (request_state, identity,
+                                                      &pending_token)
                  != 0) {
             zlink::part_helper_internal::abort_current_non_publish_send_sequence (handle_);
             zlink::part_helper_internal::consume_send_part (part_);
             return zlink::submit_result_internal::from_errno (errno);
         }
     }
+    spec.pending_cookie = pending_token.identity.cookie;
 
     zlink::msg_t *core_part = reinterpret_cast<zlink::msg_t *> (part_);
     if (!part_ || !core_part->check ()) {
@@ -245,7 +251,7 @@ zlink_submit_result_t request_part_common (
         zlink::part_helper_internal::consume_send_part (part_);
         errno = EFAULT;
         return finish_request_submit_failure (
-          request_state, pending_token.key,
+          request_state, pending_token.identity,
           zlink::submit_result_internal::from_errno (errno));
     }
 
@@ -267,13 +273,13 @@ zlink_submit_result_t request_part_common (
             zlink::part_helper_internal::consume_send_part (part_);
             errno = saved_errno;
             return finish_request_submit_failure (
-              request_state, pending_token.key,
+              request_state, pending_token.identity,
               zlink::submit_result_internal::from_errno (saved_errno));
         }
 
         pending_pair_observer_t pair_observer;
         pair_observer.state = request_state;
-        pair_observer.key = &pending_token.key;
+        pair_observer.identity = &pending_token.identity;
         const int send_rc =
           peer_rid_
             ? zlink::logical_multipart_send_routed_tracked (
@@ -287,13 +293,13 @@ zlink_submit_result_t request_part_common (
         if (send_rc != 0) {
             errno = saved_errno;
             return finish_request_submit_failure (
-              request_state, pending_token.key,
+              request_state, pending_token.identity,
               zlink::submit_result_internal::from_errno (saved_errno));
         }
         if (reqrep::arm_socket_pending_request_timeout (request_state, pending_token) != 0) {
             const int saved_errno = errno;
             return finish_request_submit_failure (
-              request_state, pending_token.key,
+              request_state, pending_token.identity,
               zlink::submit_result_internal::from_errno (saved_errno));
         }
         return ZLINK_SUBMIT_OK;
@@ -309,7 +315,7 @@ zlink_submit_result_t request_part_common (
         zlink::part_helper_internal::abort_current_non_publish_send_sequence (handle_);
         zlink::part_helper_internal::consume_send_part (part_);
         return spec.request_seq != 0
-                 ? finish_request_submit_failure (request_state, pending_token.key, failure)
+                 ? finish_request_submit_failure (request_state, pending_token.identity, failure)
                  : failure;
     }
 
@@ -320,7 +326,7 @@ zlink_submit_result_t request_part_common (
             zlink::part_helper_internal::consume_send_part (part_);
             errno = saved_errno;
             return finish_request_submit_failure (
-              request_state, pending_token.key,
+              request_state, pending_token.identity,
               zlink::submit_result_internal::from_errno (saved_errno));
         }
 
@@ -335,7 +341,7 @@ zlink_submit_result_t request_part_common (
                                      : zlink::request_reply::request_type;
         pending_pair_observer_t pair_observer;
         pair_observer.state = request_state;
-        pair_observer.key = &pending_token.key;
+        pair_observer.identity = &pending_token.identity;
         if (zlink::request_reply::send_envelope_control_frames (
               type, spec.request_seq,
               [&] (size_t index_, const void *data_, size_t size_) {
@@ -358,7 +364,7 @@ zlink_submit_result_t request_part_common (
             zlink::part_helper_internal::consume_send_part (part_);
             errno = saved_errno;
             return finish_request_submit_failure (
-              request_state, pending_token.key,
+              request_state, pending_token.identity,
               zlink::submit_result_internal::from_errno (saved_errno));
         }
     }
@@ -373,7 +379,7 @@ zlink_submit_result_t request_part_common (
             zlink::part_helper_internal::consume_send_part (part_);
             errno = saved_errno;
             return finish_request_submit_failure (
-              request_state, pending_token.key,
+              request_state, pending_token.identity,
               zlink::submit_result_internal::from_errno (saved_errno));
         }
     }
@@ -386,7 +392,7 @@ zlink_submit_result_t request_part_common (
         zlink::part_helper_internal::consume_send_part (part_);
         errno = saved_errno;
         return finish_request_submit_failure (
-          request_state, pending_token.key,
+          request_state, pending_token.identity,
           zlink::submit_result_internal::from_errno (saved_errno));
     }
 
@@ -395,7 +401,7 @@ zlink_submit_result_t request_part_common (
         zlink::part_helper_internal::abort_send_step (state);
         errno = saved_errno;
         return finish_request_submit_failure (
-          request_state, pending_token.key,
+          request_state, pending_token.identity,
           zlink::submit_result_internal::from_errno (saved_errno));
     }
 
@@ -581,7 +587,7 @@ zlink_submit_result_t zlink_router_reply_part (void *router_,
     }
 
     const size_t payload_count = state->send.buffered_parts.size () + 1;
-    std::vector<zlink_msg_t> payload;
+    reqrep::request_reply_frame_buffer_t payload;
     try {
 #ifdef ZLINK_BUILD_TESTS
         reqrep::test_throw_request_reply_allocation_failpoint (
@@ -599,7 +605,7 @@ zlink_submit_result_t zlink_router_reply_part (void *router_,
     for (size_t i = 0; i < state->send.buffered_parts.size (); ++i) {
         if (zlink_msg_move (&payload[i], &state->send.buffered_parts[i]) != 0) {
             const int saved_errno = errno;
-            zlink::request_reply::close_built_parts (&payload);
+            reqrep::close_request_reply_frame_buffer (&payload);
             zlink::part_helper_internal::abort_send_step (state);
             zlink::part_helper_internal::consume_send_part (part_);
             errno = saved_errno;
@@ -608,7 +614,7 @@ zlink_submit_result_t zlink_router_reply_part (void *router_,
     }
     if (zlink_msg_move (&payload[payload_count - 1], part_) != 0) {
         const int saved_errno = errno;
-        zlink::request_reply::close_built_parts (&payload);
+        reqrep::close_request_reply_frame_buffer (&payload);
         zlink::part_helper_internal::abort_send_step (state);
         zlink::part_helper_internal::consume_send_part (part_);
         errno = saved_errno;
@@ -620,14 +626,14 @@ zlink_submit_result_t zlink_router_reply_part (void *router_,
           zlink::request_reply::reply_type, request_seq_)
         != 0) {
         const int saved_errno = errno;
-        zlink::request_reply::close_built_parts (&payload);
+        reqrep::close_request_reply_frame_buffer (&payload);
         zlink::part_helper_internal::abort_send_step (state);
         zlink::part_helper_internal::consume_send_part (part_);
         errno = saved_errno;
         return zlink::submit_result_internal::from_errno (saved_errno);
     }
 
-    zlink::request_reply::close_built_parts (&payload);
+    reqrep::close_request_reply_frame_buffer (&payload);
     zlink::part_helper_internal::complete_send_step (state, part_flag_);
     return ZLINK_SUBMIT_OK;
 }

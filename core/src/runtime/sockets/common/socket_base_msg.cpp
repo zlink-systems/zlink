@@ -200,26 +200,27 @@ int zlink::socket_base_t::send_routed_scoped (const zlink_routing_id_t *target_r
       expected_transport_pair_generation_);
 }
 
-std::unique_ptr<zlink::socket_public_send_scope_t>
-zlink::socket_base_t::begin_public_send_scope (bool force_sync_)
+bool zlink::socket_base_t::begin_public_send_scope (
+  bool force_sync_, std::optional<socket_public_send_scope_t> *scope_out_)
 {
+    if (!scope_out_) {
+        errno = EFAULT;
+        return false;
+    }
+
     // Incremental multipart owns pipe-local staged state across public calls.
     // PAIR normally omits the socket sync on complete-record sends, but this
     // lease must serialize its active/cleanup rollback with async pipe
     // termination just like every other multipart-capable socket.
     const bool needs_sync = force_sync_ || direct_send_needs_public_api_sync ()
                             || options.type == ZLINK_CORE_SOCKET_PAIR;
-    std::unique_ptr<socket_public_send_scope_t> send_scope (
-      new (std::nothrow) socket_public_send_scope_t (
-        lifecycle_coordinator (), needs_sync,
-        socket_send_admission_multipart));
-    if (!send_scope) {
-        errno = ENOMEM;
-        return std::unique_ptr<socket_public_send_scope_t> ();
+    scope_out_->emplace (lifecycle_coordinator (), needs_sync,
+                         socket_send_admission_multipart);
+    if (!(*scope_out_)->acquired ()) {
+        scope_out_->reset ();
+        return false;
     }
-    if (!send_scope->acquired ())
-        return std::unique_ptr<socket_public_send_scope_t> ();
-    return send_scope;
+    return true;
 }
 
 std::unique_ptr<zlink::socket_public_send_scope_t>

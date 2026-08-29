@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "api/socket/request_reply_protocol_internal.hpp"
+#include "api/socket/request_reply_frame_buffer_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "api/socket/socket_request_reply_runtime_io_helpers.hpp"
 #include "core/c_api_copy_internal.hpp"
@@ -85,6 +86,123 @@ class reply_target_reservation_t
     const std::shared_ptr<socket_request_reply_state_t> _state;
     bool _active;
 };
+
+class reply_target_publish_guard_t
+{
+  public:
+    reply_target_publish_guard_t () :
+        _router_key (NULL),
+        _dealer_token (0),
+        _active (false)
+    {
+    }
+
+    ~reply_target_publish_guard_t ()
+    {
+        if (!_active || !_state)
+            return;
+
+        std::lock_guard<std::mutex> lock (_state->mutex);
+        bool erased = false;
+        if (_router_key) {
+            std::unordered_map<pending_key_t, router_reply_target_t,
+                               pending_key_hash_t>::iterator it =
+              _state->router_reply_targets.find (*_router_key);
+            if (it != _state->router_reply_targets.end ()) {
+                zlink_assert (!it->second.checked_out);
+                if (!it->second.checked_out) {
+                    _state->router_reply_targets.erase (it);
+                    erased = true;
+                }
+            }
+        } else if (_dealer_token != 0) {
+            std::unordered_map<uint64_t, dealer_reply_target_t>::iterator it =
+              _state->dealer_reply_targets.find (_dealer_token);
+            if (it != _state->dealer_reply_targets.end ()) {
+                zlink_assert (!it->second.checked_out);
+                if (!it->second.checked_out) {
+                    _state->dealer_reply_targets.erase (it);
+                    erased = true;
+                }
+            }
+        }
+
+        // Close clears published targets and recomputes the slot count while
+        // holding the same mutex. A missing node therefore means close already
+        // released this slot.
+        if (erased) {
+            zlink_assert (_state->reply_target_slots > 0);
+            --_state->reply_target_slots;
+        }
+    }
+
+    void arm_router (const std::shared_ptr<socket_request_reply_state_t> &state_,
+                     const pending_key_t *key_)
+    {
+        _state = state_;
+        _router_key = key_;
+        _dealer_token = 0;
+        _active = state_ && key_;
+    }
+
+    void arm_dealer (const std::shared_ptr<socket_request_reply_state_t> &state_,
+                     uint64_t token_)
+    {
+        _state = state_;
+        _router_key = NULL;
+        _dealer_token = token_;
+        _active = state_ && token_ != 0;
+    }
+
+    void release () { _active = false; }
+
+  private:
+    std::shared_ptr<socket_request_reply_state_t> _state;
+    const pending_key_t *_router_key;
+    uint64_t _dealer_token;
+    bool _active;
+};
+
+void discard_received_message_tail (zlink::socket_base_t *socket_,
+                                    zlink::msg_t *current_,
+                                    bool current_has_more_,
+                                    bool reinitialize_current_)
+{
+    if (current_) {
+        const int close_rc = current_->close ();
+        errno_assert (close_rc == 0);
+        if (reinitialize_current_) {
+            const int init_rc = current_->init ();
+            errno_assert (init_rc == 0);
+        }
+    }
+
+    bool more = current_has_more_;
+    while (more && socket_) {
+        zlink::msg_t next;
+        const int init_rc = next.init ();
+        errno_assert (init_rc == 0);
+        if (socket_->recv (&next, ZLINK_DONTWAIT) != 0) {
+            const int close_rc = next.close ();
+            errno_assert (close_rc == 0);
+            return;
+        }
+        more = (next.flags () & zlink::msg_t::more) != 0;
+        const int close_rc = next.close ();
+        errno_assert (close_rc == 0);
+    }
+}
+
+int begin_payload_export (zlink_msg_t **parts_out_,
+                          size_t *part_count_out_)
+{
+    try {
+        return zlink::recv_tls_view::begin (parts_out_, part_count_out_);
+    } catch (...) {
+        errno = ENOMEM;
+        return -1;
+    }
+}
 
 uint64_t allocate_dealer_reply_token (socket_request_reply_state_t *state_)
 {
@@ -293,7 +411,17 @@ int export_router_payload_parts (zlink_msg_t *parts_,
     }
 
     for (size_t i = start_index_; i < part_count_; ++i) {
-        if (zlink::recv_tls_view::push (&parts_[i]) != 0) {
+        int push_rc = -1;
+        try {
+#ifdef ZLINK_BUILD_TESTS
+            test_throw_request_reply_allocation_failpoint (
+              request_reply_allocation_payload_export);
+#endif
+            push_rc = zlink::recv_tls_view::push (&parts_[i]);
+        } catch (...) {
+            errno = ENOMEM;
+        }
+        if (push_rc != 0) {
             const int saved_errno = errno;
             zlink::recv_tls_view::abort ();
             for (size_t j = i; j < part_count_; ++j)
@@ -410,33 +538,50 @@ int recv_router_message_direct (const socket_handle_t &handle_,
         return export_rc;
     }
 
-    if (!state)
-        state = find_or_create_request_reply_state (handle_);
+    if (!state) {
+        try {
+#ifdef ZLINK_BUILD_TESTS
+            test_throw_request_reply_allocation_failpoint (
+              request_reply_allocation_lazy_state_create);
+#endif
+            state = find_or_create_request_reply_state (handle_);
+        } catch (...) {
+            discard_received_message_tail (
+              handle_.socket, &current, true, receive_terminal_direct);
+            errno = ENOMEM;
+            return -1;
+        }
+        if (!state) {
+            const int saved_errno = errno;
+            discard_received_message_tail (
+              handle_.socket, &current, true, receive_terminal_direct);
+            errno = saved_errno;
+            return -1;
+        }
+    }
     reply_target_reservation_t reply_target_reservation (state);
     if (!reply_target_reservation.acquire ()) {
         const int saved_errno = errno;
-        const int close_rc = current.close ();
-        errno_assert (close_rc == 0);
+        discard_received_message_tail (
+          handle_.socket, &current, true, receive_terminal_direct);
         errno = saved_errno;
         return -1;
     }
 
-    std::vector<zlink_msg_t> raw_parts;
-    try {
-        raw_parts.reserve (stack_request_reply_part_capacity);
-    } catch (...) {
-        const int close_rc = current.close ();
-        errno_assert (close_rc == 0);
-        errno = ENOMEM;
-        return -1;
-    }
+    request_reply_frame_buffer_t raw_parts;
     while (true) {
+        const bool more = (current.flags () & zlink::msg_t::more) != 0;
         try {
+#ifdef ZLINK_BUILD_TESTS
+            if (raw_parts.size () == inline_request_reply_frame_capacity)
+                test_throw_request_reply_allocation_failpoint (
+                  request_reply_allocation_receive_spill);
+#endif
             raw_parts.push_back (zlink_msg_t ());
         } catch (...) {
             zlink::close_msg_frames (&raw_parts);
-            const int close_rc = current.close ();
-            errno_assert (close_rc == 0);
+            discard_received_message_tail (
+              handle_.socket, &current, more, receive_terminal_direct);
             errno = ENOMEM;
             return -1;
         }
@@ -468,7 +613,7 @@ int recv_router_message_direct (const socket_handle_t &handle_,
         }
     }
 
-    if (zlink::recv_tls_view::begin (parts_out_, part_count_out_) != 0) {
+    if (begin_payload_export (parts_out_, part_count_out_) != 0) {
         zlink::close_msg_frames (&raw_parts);
         return -1;
     }
@@ -478,6 +623,8 @@ int recv_router_message_direct (const socket_handle_t &handle_,
       zlink::request_reply::parse_envelope (raw_parts.data (), raw_parts.size (), &envelope);
     const size_t start_index = parsed ? zlink::request_reply::control_part_count : 0;
 
+    pending_key_t published_reply_key;
+    reply_target_publish_guard_t published_reply_guard;
     if (parsed) {
         *request_seq_out_ = envelope.request_seq;
         if (envelope.message_type == zlink::request_reply::request_type
@@ -487,9 +634,8 @@ int recv_router_message_direct (const socket_handle_t &handle_,
                 zlink::recv_tls_view::abort ();
                 return -1;
             }
-            pending_key_t key;
             try {
-                key.peer_rid.assign (
+                published_reply_key.peer_rid.assign (
                   reinterpret_cast<const char *> (source_rid->data),
                   source_rid->size);
             } catch (...) {
@@ -498,7 +644,7 @@ int recv_router_message_direct (const socket_handle_t &handle_,
                 errno = ENOMEM;
                 return -1;
             }
-            key.request_seq = envelope.request_seq;
+            published_reply_key.request_seq = envelope.request_seq;
             {
                 std::lock_guard<std::mutex> lock (state->mutex);
                 if (state->closing) {
@@ -512,7 +658,7 @@ int recv_router_message_direct (const socket_handle_t &handle_,
                 bool inserted = false;
                 try {
                     inserted = state->router_reply_targets.emplace (
-                      key, target).second;
+                      published_reply_key, target).second;
                 } catch (...) {
                     zlink::close_msg_frames (&raw_parts);
                     zlink::recv_tls_view::abort ();
@@ -526,10 +672,13 @@ int recv_router_message_direct (const socket_handle_t &handle_,
                     return -1;
                 }
                 if (!reply_target_reservation.commit_locked ()) {
+                    state->router_reply_targets.erase (published_reply_key);
                     zlink::close_msg_frames (&raw_parts);
                     zlink::recv_tls_view::abort ();
                     return -1;
                 }
+                published_reply_guard.arm_router (
+                  state, &published_reply_key);
             }
         }
         for (size_t i = 0; i < start_index; ++i)
@@ -542,6 +691,8 @@ int recv_router_message_direct (const socket_handle_t &handle_,
     const int export_rc = export_router_payload_parts (
       raw_parts.data (), raw_parts.size (), start_index, parts_out_,
       part_count_out_);
+    if (export_rc == 0)
+        published_reply_guard.release ();
     return export_rc;
 }
 
@@ -601,23 +752,20 @@ int recv_dealer_message_direct (
         return 0;
     }
 
-    std::vector<zlink_msg_t> raw_parts;
-    try {
-        raw_parts.reserve (stack_request_reply_part_capacity);
-    } catch (...) {
-        const int close_rc = current.close ();
-        errno_assert (close_rc == 0);
-        errno = ENOMEM;
-        return -1;
-    }
+    request_reply_frame_buffer_t raw_parts;
     while (true) {
         const bool more = (current.flags () & zlink::msg_t::more) != 0;
         try {
+#ifdef ZLINK_BUILD_TESTS
+            if (raw_parts.size () == inline_request_reply_frame_capacity)
+                test_throw_request_reply_allocation_failpoint (
+                  request_reply_allocation_receive_spill);
+#endif
             raw_parts.push_back (zlink_msg_t ());
         } catch (...) {
             zlink::close_msg_frames (&raw_parts);
-            const int close_rc = current.close ();
-            errno_assert (close_rc == 0);
+            discard_received_message_tail (
+              handle_.socket, &current, more, receive_terminal_direct);
             errno = ENOMEM;
             return -1;
         }
@@ -652,6 +800,8 @@ int recv_dealer_message_direct (
     size_t start_index = 0;
     uint64_t exported_seq = 0;
     uint8_t exported_type = ZLINK_DEALER_MESSAGE_RAW;
+    std::shared_ptr<socket_request_reply_state_t> request_state = state_;
+    reply_target_publish_guard_t published_reply_guard;
     if (parsed) {
         if (envelope.message_type != zlink::request_reply::request_type) {
             zlink::close_msg_frames (&raw_parts);
@@ -663,7 +813,6 @@ int recv_dealer_message_direct (
             errno = EPROTO;
             return -1;
         }
-        std::shared_ptr<socket_request_reply_state_t> request_state = state_;
         if (!request_state)
             request_state = find_or_create_request_reply_state (handle_);
         reply_target_reservation_t reply_target_reservation (request_state);
@@ -699,9 +848,11 @@ int recv_dealer_message_direct (
                 return -1;
             }
             if (!reply_target_reservation.commit_locked ()) {
+                request_state->dealer_reply_targets.erase (exported_seq);
                 zlink::close_msg_frames (&raw_parts);
                 return -1;
             }
+            published_reply_guard.arm_dealer (request_state, exported_seq);
         }
         exported_type = ZLINK_DEALER_MESSAGE_REQUEST;
         start_index = zlink::request_reply::control_part_count;
@@ -709,7 +860,7 @@ int recv_dealer_message_direct (
             zlink_msg_close (&raw_parts[i]);
     }
 
-    if (zlink::recv_tls_view::begin (parts_out_, part_count_out_) != 0) {
+    if (begin_payload_export (parts_out_, part_count_out_) != 0) {
         zlink::close_msg_frames (&raw_parts);
         return -1;
     }
@@ -717,6 +868,7 @@ int recv_dealer_message_direct (
                                      parts_out_, part_count_out_)
         != 0)
         return -1;
+    published_reply_guard.release ();
     *message_type_out_ = exported_type;
     *request_seq_out_ = exported_seq;
     return 0;

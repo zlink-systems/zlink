@@ -63,8 +63,9 @@ int zlink::socket_base_t::peer_command_from_io (msg_t *msg_, pipe_t *pipe_)
     std::lock_guard<std::recursive_mutex> dispatch_lock (
       dispatch_runtime ().socket_msg_dispatch_sync);
     pipe_t *socket_pipe = pipe_;
-    if (socket_pipe && socket_pipe->get_peer ())
-        socket_pipe = socket_pipe->get_peer ();
+    pipe_t *const peer = socket_pipe ? socket_pipe->get_peer () : NULL;
+    if (peer)
+        socket_pipe = peer;
     return xpeer_command (msg_, socket_pipe);
 }
 
@@ -391,11 +392,6 @@ bool zlink::socket_base_t::stream_dispatch_active () const
 bool zlink::socket_base_t::stream_dispatch_in_callback () const
 {
     return false;
-}
-
-uint32_t zlink::socket_base_t::stream_dispatch_inflight () const
-{
-    return 0;
 }
 
 int zlink::socket_base_t::stream_dispatch_send_from_io (const zlink_routing_id_t *,

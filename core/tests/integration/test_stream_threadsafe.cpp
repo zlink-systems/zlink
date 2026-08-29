@@ -3,6 +3,7 @@
 #include "testutil.hpp"
 #include "testutil_unity.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <chrono>
@@ -30,6 +31,8 @@ namespace
 {
 const char *const stream_threadsafe_smoke_cases[] = {
   "test_stream_callback_rejects_detach_and_close",
+  "test_stream_callback_disconnect_is_reentrant",
+  "test_stream_detach_quiesces_callback_userdata",
   "test_stream_send_is_thread_safe_across_app_threads",
   "test_stream_send_and_close_race_is_safe",
   "test_stream_send_to_stale_rid_after_disconnect",
@@ -79,6 +82,28 @@ struct lifecycle_probe_t
     std::atomic<int> detach_errno;
     std::atomic<int> close_rc;
     std::atomic<int> close_errno;
+};
+
+struct dispatch_quiesce_probe_t
+{
+    dispatch_quiesce_probe_t () : entered (false), release (false), exited (false), calls (0) {}
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool entered;
+    bool release;
+    bool exited;
+    int calls;
+};
+
+struct callback_disconnect_probe_t
+{
+    callback_disconnect_probe_t () : socket (NULL), hits (0), send_rc (-1), send_errno (0) {}
+
+    void *socket;
+    std::atomic<int> hits;
+    std::atomic<int> send_rc;
+    std::atomic<int> send_errno;
 };
 
 struct worker_probe_t
@@ -419,6 +444,59 @@ int lifecycle_reject_callback (const zlink_routing_id_t *, zlink_msg_t *msg_)
 
     (void) zlink_msg_close (msg_);
     return 0;
+}
+
+void blocking_userdata_handler (const zlink_routing_id_t *,
+                                zlink_msg_t *parts_,
+                                size_t part_count_,
+                                void *userdata_)
+{
+    dispatch_quiesce_probe_t *const probe =
+      static_cast<dispatch_quiesce_probe_t *> (userdata_);
+    if (!probe)
+        return;
+
+    {
+        std::unique_lock<std::mutex> lock (probe->mutex);
+        ++probe->calls;
+        probe->entered = true;
+        probe->cv.notify_all ();
+        probe->cv.wait (lock, [probe] () { return probe->release; });
+    }
+
+    for (size_t i = 0; parts_ && i < part_count_; ++i)
+        (void) zlink_msg_close (&parts_[i]);
+
+    {
+        std::lock_guard<std::mutex> lock (probe->mutex);
+        probe->exited = true;
+    }
+    probe->cv.notify_all ();
+}
+
+void callback_disconnect_handler (const zlink_routing_id_t *rid_,
+                                  zlink_msg_t *parts_,
+                                  size_t part_count_,
+                                  void *userdata_)
+{
+    callback_disconnect_probe_t *const probe =
+      static_cast<callback_disconnect_probe_t *> (userdata_);
+    if (!probe || !probe->socket || !rid_)
+        return;
+
+    zlink_msg_t disconnect_msg;
+    if (zlink_msg_init (&disconnect_msg) == 0) {
+        errno = 0;
+        const int rc =
+          test_stream_send_single_msg (probe->socket, rid_, &disconnect_msg, ZLINK_DONTWAIT);
+        probe->send_rc.store (rc, std::memory_order_release);
+        probe->send_errno.store (errno, std::memory_order_release);
+        (void) zlink_msg_close (&disconnect_msg);
+    }
+
+    for (size_t i = 0; parts_ && i < part_count_; ++i)
+        (void) zlink_msg_close (&parts_[i]);
+    probe->hits.fetch_add (1, std::memory_order_release);
 }
 
 void establish_route (void *server_, int raw_fd_, zlink_routing_id_t *rid_, bool keep_attached_)
@@ -963,6 +1041,130 @@ void test_stream_callback_rejects_detach_and_close ()
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_stream_detach (server));
     g_lifecycle_probe = NULL;
+    close_raw_fd (raw_fd);
+    test_context_socket_close_zero_linger (server);
+#endif
+}
+
+void test_stream_callback_disconnect_is_reentrant ()
+{
+#if defined(ZLINK_HAVE_WINDOWS)
+    TEST_IGNORE_MESSAGE ("raw tcp helper unavailable on Windows");
+#else
+    void *server = test_context_socket (ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (server);
+    configure_stream_socket (server);
+
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+
+    const int raw_fd = connect_raw_tcp (endpoint);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT (0, raw_fd);
+    set_raw_timeout (raw_fd, 5000);
+
+    callback_disconnect_probe_t probe;
+    probe.socket = server;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_recv_handler (server, &callback_disconnect_handler, &probe));
+
+    const unsigned char payload = 0x44;
+    TEST_ASSERT_EQUAL_INT (0, send_all (raw_fd, &payload, sizeof (payload)));
+    TEST_ASSERT_TRUE (wait_flag (&probe.hits, 5000));
+    TEST_ASSERT_EQUAL_INT (0, probe.send_rc.load (std::memory_order_acquire));
+    TEST_ASSERT_EQUAL_INT (0, probe.send_errno.load (std::memory_order_acquire));
+
+    unsigned char byte = 0;
+    const ssize_t recv_rc = recv (raw_fd, &byte, sizeof (byte), 0);
+    TEST_ASSERT_TRUE (recv_rc == 0
+                      || (recv_rc < 0 && (errno == ECONNRESET || errno == EPIPE)));
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_stream_detach (server));
+    close_raw_fd (raw_fd);
+    test_context_socket_close_zero_linger (server);
+#endif
+}
+
+void test_stream_detach_quiesces_callback_userdata ()
+{
+#if defined(ZLINK_HAVE_WINDOWS)
+    TEST_IGNORE_MESSAGE ("raw tcp helper unavailable on Windows");
+#else
+    void *server = test_context_socket (ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (server);
+    configure_stream_socket (server);
+
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+
+    const int raw_fd = connect_raw_tcp (endpoint);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT (0, raw_fd);
+    set_raw_timeout (raw_fd, 500);
+
+    dispatch_quiesce_probe_t first;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_recv_handler (server, &blocking_userdata_handler, &first));
+
+    std::vector<unsigned char> payload (kPayloadSize, 0x51);
+    TEST_ASSERT_EQUAL_INT (0, send_all (raw_fd, &payload[0], payload.size ()));
+    {
+        std::unique_lock<std::mutex> lock (first.mutex);
+        TEST_ASSERT_TRUE (first.cv.wait_for (
+          lock, std::chrono::seconds (5), [&first] () { return first.entered; }));
+    }
+
+    std::atomic<int> detach_started (0);
+    std::atomic<int> detach_done (0);
+    int detach_rc = -1;
+    int detach_errno = 0;
+    std::thread detacher ([&] () {
+        detach_started.store (1, std::memory_order_release);
+        errno = 0;
+        detach_rc = zlink_stream_detach (server);
+        detach_errno = errno;
+        detach_done.store (1, std::memory_order_release);
+    });
+
+    TEST_ASSERT_TRUE (wait_flag (&detach_started, 5000));
+    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+    TEST_ASSERT_EQUAL_INT (0, detach_done.load (std::memory_order_acquire));
+
+    {
+        std::lock_guard<std::mutex> lock (first.mutex);
+        first.release = true;
+    }
+    first.cv.notify_all ();
+    detacher.join ();
+
+    TEST_ASSERT_EQUAL_INT (0, detach_rc);
+    TEST_ASSERT_EQUAL_INT (0, detach_errno);
+    TEST_ASSERT_EQUAL_INT (1, detach_done.load (std::memory_order_acquire));
+    {
+        std::lock_guard<std::mutex> lock (first.mutex);
+        TEST_ASSERT_TRUE (first.exited);
+        TEST_ASSERT_EQUAL_INT (1, first.calls);
+    }
+
+    // Replacing dispatch after detach must publish one coherent
+    // handler/userdata snapshot, never the quiesced callback's userdata.
+    dispatch_quiesce_probe_t replacement;
+    replacement.release = true;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_recv_handler (server, &blocking_userdata_handler, &replacement));
+    std::fill (payload.begin (), payload.end (), 0x52);
+    TEST_ASSERT_EQUAL_INT (0, send_all (raw_fd, &payload[0], payload.size ()));
+    {
+        std::unique_lock<std::mutex> lock (replacement.mutex);
+        TEST_ASSERT_TRUE (replacement.cv.wait_for (
+          lock, std::chrono::seconds (5),
+          [&replacement] () { return replacement.exited; }));
+        TEST_ASSERT_EQUAL_INT (1, replacement.calls);
+    }
+    {
+        std::lock_guard<std::mutex> lock (first.mutex);
+        TEST_ASSERT_EQUAL_INT (1, first.calls);
+    }
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_stream_detach (server));
     close_raw_fd (raw_fd);
     test_context_socket_close_zero_linger (server);
 #endif
@@ -1626,6 +1828,10 @@ int main ()
     UNITY_BEGIN ();
     if (should_run_stream_threadsafe_test ("test_stream_callback_rejects_detach_and_close"))
         RUN_TEST (test_stream_callback_rejects_detach_and_close);
+    if (should_run_stream_threadsafe_test ("test_stream_callback_disconnect_is_reentrant"))
+        RUN_TEST (test_stream_callback_disconnect_is_reentrant);
+    if (should_run_stream_threadsafe_test ("test_stream_detach_quiesces_callback_userdata"))
+        RUN_TEST (test_stream_detach_quiesces_callback_userdata);
     if (should_run_stream_threadsafe_test ("test_stream_send_is_thread_safe_across_app_threads"))
         RUN_TEST (test_stream_send_is_thread_safe_across_app_threads);
     if (should_run_stream_threadsafe_test ("test_stream_send_and_close_race_is_safe"))

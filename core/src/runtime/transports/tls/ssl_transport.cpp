@@ -60,8 +60,7 @@ bool ssl_transport_t::open (boost::asio::io_context &io_context, fd_t fd)
 
     //  Create SSL stream wrapping the socket
     try {
-        _ssl_stream =
-          std::shared_ptr<ssl_stream_t> (new ssl_stream_t (std::move (socket), _ssl_ctx));
+        _ssl_stream = std::make_shared<ssl_stream_t> (std::move (socket), _ssl_ctx);
     }
     catch (const std::bad_alloc &) {
         ASIO_GLOBAL_ERROR ("ssl_transport stream allocation failed");

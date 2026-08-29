@@ -96,16 +96,24 @@ inline bool stream_async_write_opt_in ()
     return env::flag_enabled ("ZLINK_ASIO_STREAM_ASYNC_WRITE");
 }
 
-struct speculative_write_diagnostics_t
+struct transport_fastpath_capabilities_t
+{
+    bool speculative_write;
+    bool speculative_read;
+    bool gather_write;
+};
+
+struct connection_fastpath_diagnostics_t
 {
     bool legacy_sync_write;
     bool stream_async_write;
+    bool non_tcp_speculative_read;
 };
 
-inline speculative_write_diagnostics_t load_speculative_write_diagnostics ()
+inline connection_fastpath_diagnostics_t load_connection_fastpath_diagnostics ()
 {
-    const speculative_write_diagnostics_t diagnostics = {
-      legacy_sync_write_opt_in (), stream_async_write_opt_in ()};
+    const connection_fastpath_diagnostics_t diagnostics = {
+      legacy_sync_write_opt_in (), stream_async_write_opt_in (), enable_non_tcp_spec_read ()};
     return diagnostics;
 }
 
@@ -130,7 +138,7 @@ inline speculative_write_diagnostics_t load_speculative_write_diagnostics ()
 inline bool use_speculative_write_for (int socket_type_,
                                        bool tcp_transport_,
                                        bool transport_supports_speculative_,
-                                       const speculative_write_diagnostics_t &diagnostics_)
+                                       const connection_fastpath_diagnostics_t &diagnostics_)
 {
     if (socket_type_ == ZLINK_CORE_SOCKET_STREAM && tcp_transport_)
         return enable_speculative_write () && !diagnostics_.stream_async_write;
@@ -138,39 +146,60 @@ inline bool use_speculative_write_for (int socket_type_,
     return transport_supports_speculative_ && diagnostics_.legacy_sync_write;
 }
 
+inline bool use_speculative_read_for (int socket_type_,
+                                      bool tcp_transport_,
+                                      bool transport_supports_speculative_,
+                                      const connection_fastpath_diagnostics_t &diagnostics_)
+{
+    return transport_supports_speculative_
+           || (socket_type_ == ZLINK_CORE_SOCKET_STREAM
+               && (tcp_transport_ || diagnostics_.non_tcp_speculative_read));
+}
+
 //  A connection owns this immutable snapshot. Diagnostic environment changes
-//  affect engines created afterwards, never a write already running on an
-//  existing engine.
+//  affect engines created afterwards, never a fast-path turn already running
+//  on an existing engine.
 class connection_fastpath_policy_t
 {
   public:
     connection_fastpath_policy_t (
       int socket_type_,
       const char *transport_name_,
-      bool transport_supports_speculative_,
-      const speculative_write_diagnostics_t &diagnostics_) :
+      const transport_fastpath_capabilities_t &capabilities_,
+      const connection_fastpath_diagnostics_t &diagnostics_) :
         _tcp_transport (transport_name_ && std::strcmp (transport_name_, "tcp") == 0),
         _speculative_write_enabled (
           use_speculative_write_for (socket_type_, _tcp_transport,
-                                     transport_supports_speculative_, diagnostics_))
+                                     capabilities_.speculative_write, diagnostics_)),
+        _speculative_read_enabled (
+          use_speculative_read_for (socket_type_, _tcp_transport,
+                                    capabilities_.speculative_read, diagnostics_)),
+        _gather_write_enabled (capabilities_.gather_write)
     {
     }
 
     static connection_fastpath_policy_t from_environment (
-      int socket_type_, const char *transport_name_, bool transport_supports_speculative_)
+      int socket_type_,
+      const char *transport_name_,
+      const transport_fastpath_capabilities_t &capabilities_)
     {
         return connection_fastpath_policy_t (
-          socket_type_, transport_name_, transport_supports_speculative_,
-          load_speculative_write_diagnostics ());
+          socket_type_, transport_name_, capabilities_, load_connection_fastpath_diagnostics ());
     }
 
     bool tcp_transport () const { return _tcp_transport; }
 
     bool speculative_write_enabled () const { return _speculative_write_enabled; }
 
+    bool speculative_read_enabled () const { return _speculative_read_enabled; }
+
+    bool gather_write_enabled () const { return _gather_write_enabled; }
+
   private:
     const bool _tcp_transport;
     const bool _speculative_write_enabled;
+    const bool _speculative_read_enabled;
+    const bool _gather_write_enabled;
 };
 
 inline size_t read_drain_max_loops ()

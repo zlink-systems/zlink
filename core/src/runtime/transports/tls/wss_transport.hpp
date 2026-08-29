@@ -22,6 +22,11 @@
 namespace zlink
 {
 
+#ifdef ZLINK_BUILD_TESTS
+size_t test_wss_write_buffer_bytes ();
+size_t test_wss_read_message_max ();
+#endif
+
 //  Secure WebSocket (WSS) transport implementation using Boost.Beast
 //
 //  This transport wraps a TCP socket with SSL and then WebSocket framing.
@@ -104,18 +109,6 @@ class wss_transport_t : public i_asio_transport
 
     //  WebSocket stream over SSL
     typedef boost::beast::websocket::stream<ssl_stream_t> wss_stream_t;
-    struct read_state_t
-    {
-        read_state_t () : closed (false) {}
-
-        void clear ()
-        {
-            message_buffer.consume (message_buffer.size ());
-        }
-
-        boost::beast::flat_buffer message_buffer;
-        bool closed;
-    };
 
     boost::asio::ssl::context &_ssl_ctx;
     std::string _path;
@@ -125,7 +118,6 @@ class wss_transport_t : public i_asio_transport
     bool _ws_handshake_complete;
     int _handshake_type;
     std::string _tls_hostname;
-    std::shared_ptr<read_state_t> _read_state;
 
     //  Internal handshake continuation
     void continue_ws_handshake (const std::shared_ptr<wss_stream_t> &stream,
