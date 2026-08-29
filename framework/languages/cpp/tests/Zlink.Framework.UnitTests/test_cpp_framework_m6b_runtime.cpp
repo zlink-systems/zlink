@@ -1420,35 +1420,57 @@ protocol::actor_route_fence_t same_node_bound_session_route ()
       11, 13, 17};
 }
 
-void verify_same_node_bound_session_accepts_current_store_fence ()
+stateful::object_ref_t same_node_bound_session_actor ()
 {
-    assert (
-      host::classify_bound_session_bind_admission (
-        same_node_bound_session_route (),
-        host::route_fence_t{13, 17}, true)
-      == host::bound_session_bind_admission_t::ready);
+    return stateful::object_ref_t{
+      stateful::object_kind_t::actor,
+      "same-node-actor", 7, 13, "m6b-mesh", "same-node-owner"};
 }
 
-void verify_bound_session_waits_for_current_local_actor_materialization ()
+host::bound_session_bind_admission_t
+classify_same_node_bound_session_bind (
+  const protocol::actor_route_fence_t &requested,
+  const std::optional<stateful::object_ref_t> &local_actor,
+  std::optional<host::route_fence_t> authoritative = host::route_fence_t{13, 23})
 {
-    assert (
-      host::classify_bound_session_bind_admission (
-        same_node_bound_session_route (),
-        host::route_fence_t{13, 17}, false)
-      == host::bound_session_bind_admission_t::actor_not_ready);
+    const auto local_routing_id = zlink::routing_id_t::from ("same-node-owner");
+    return host::classify_bound_session_bind_admission (
+      requested, authoritative,
+      host::bound_session_bind_actor_matches (
+        requested, local_actor, local_routing_id, 11));
 }
 
-void verify_bound_session_rejects_mismatched_store_fence ()
+void verify_bound_session_bind_uses_only_three_value_actor_fence ()
 {
-    assert (
-      host::classify_bound_session_bind_admission (
-        same_node_bound_session_route (),
-        host::route_fence_t{14, 18}, true)
-      == host::bound_session_bind_admission_t::stale_route);
-    assert (
-      host::classify_bound_session_bind_admission (
-        same_node_bound_session_route (), std::nullopt, true)
-      == host::bound_session_bind_admission_t::stale_route);
+    const auto requested = same_node_bound_session_route ();
+    const auto actor = same_node_bound_session_actor ();
+
+    // The authoritative lease is 23 while the command-38 envelope preserves
+    // 17. OwnerLeaseGeneration is not one of the three bind approval values.
+    assert (classify_same_node_bound_session_bind (requested, actor)
+            == host::bound_session_bind_admission_t::ready);
+
+    auto wrong_object = actor;
+    ++wrong_object.object_generation;
+    assert (classify_same_node_bound_session_bind (requested, wrong_object)
+            == host::bound_session_bind_admission_t::actor_not_ready);
+
+    auto wrong_node = requested;
+    ++wrong_node.target_node_generation;
+    assert (classify_same_node_bound_session_bind (wrong_node, actor)
+            == host::bound_session_bind_admission_t::actor_not_ready);
+
+    auto wrong_authority = actor;
+    ++wrong_authority.authority_owner_generation;
+    assert (classify_same_node_bound_session_bind (requested, wrong_authority)
+            == host::bound_session_bind_admission_t::actor_not_ready);
+
+    assert (classify_same_node_bound_session_bind (
+              requested, actor, host::route_fence_t{14, 23})
+            == host::bound_session_bind_admission_t::stale_route);
+    assert (classify_same_node_bound_session_bind (
+              requested, actor, std::nullopt)
+            == host::bound_session_bind_admission_t::stale_route);
 }
 
 void verify_bound_session_push_uses_session_registry_when_gateway_projection_rejects ()
@@ -6841,9 +6863,7 @@ int main ()
     verify_mesh_stop_drains_admitted_request_completion ();
     verify_remote_bound_session_bind_classifies_retryable_outcomes ();
     verify_local_session_binding_uses_location_authority ();
-    verify_same_node_bound_session_accepts_current_store_fence ();
-    verify_bound_session_waits_for_current_local_actor_materialization ();
-    verify_bound_session_rejects_mismatched_store_fence ();
+    verify_bound_session_bind_uses_only_three_value_actor_fence ();
     verify_bound_session_push_uses_session_registry_when_gateway_projection_rejects ();
     verify_spot_id_contract ();
     verify_spot_route_fence_admission_precedes_body_decode ();

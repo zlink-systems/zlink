@@ -212,6 +212,12 @@ enum class bound_session_bind_admission_t
     actor_not_ready
 };
 
+bool bound_session_bind_actor_matches (
+  const protocol::actor_route_fence_t &requested,
+  const std::optional<stateful::object_ref_t> &local_actor,
+  const zlink::routing_id_t &local_routing_id,
+  std::uint64_t local_node_generation) noexcept;
+
 bound_session_bind_admission_t
 classify_bound_session_bind_admission (const protocol::actor_route_fence_t &requested,
                                        const std::optional<route_fence_t> &authoritative,

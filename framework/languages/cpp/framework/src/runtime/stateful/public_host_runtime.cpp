@@ -34,13 +34,27 @@
 namespace zlink::framework::runtime::host
 {
 
+bool
+bound_session_bind_actor_matches (
+  const protocol::actor_route_fence_t &requested,
+  const std::optional<stateful::object_ref_t> &local_actor,
+  const zlink::routing_id_t &local_routing_id,
+  std::uint64_t local_node_generation) noexcept
+{
+    return local_actor && local_actor->key == requested.actor_id
+           && local_actor->object_generation == requested.object_generation
+           && local_actor->authority_owner_generation == requested.authority_owner_generation
+           && local_actor->node_id == local_routing_id.to_string ()
+           && requested.target_node_routing_id == local_routing_id.to_bytes ()
+           && requested.target_node_generation == local_node_generation;
+}
+
 bound_session_bind_admission_t
 classify_bound_session_bind_admission (const protocol::actor_route_fence_t &requested,
                                        const std::optional<route_fence_t> &authoritative,
                                        bool local_actor_matches) noexcept
 {
-    if (!authoritative || authoritative->first != requested.authority_owner_generation
-        || authoritative->second != requested.owner_lease_generation) {
+    if (!authoritative || authoritative->first != requested.authority_owner_generation) {
         return bound_session_bind_admission_t::stale_route;
     }
     return local_actor_matches ? bound_session_bind_admission_t::ready
@@ -4117,11 +4131,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     const auto actor =
                       _objects.find (stateful::object_kind_t::actor, bind.actor.actor_id);
                     const auto authority_matches =
-                      actor && actor->object_generation == bind.actor.object_generation
-                      && actor->authority_owner_generation == bind.actor.authority_owner_generation
-                      && actor->node_id == local.routing_id ().to_string ()
-                      && bind.actor.target_node_routing_id == local.routing_id ().to_bytes ()
-                      && bind.actor.target_node_generation == local.lifecycle_generation ();
+                      bound_session_bind_actor_matches (
+                        bind.actor, actor, local.routing_id (), local.lifecycle_generation ());
                     const auto owner_fence = read_route_owner_fence (
                       store, '1', bind.actor.actor_id, bind.actor.object_generation, 0, 0,
                       _options.owner_lease_fencing_margin);
