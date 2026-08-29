@@ -267,9 +267,9 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
             : await this.turn.yieldFrameworkPromise(pending);
         } catch (error) {
           this.state.endDeferredJoin();
-          await notifyJoinFailure(this.actor, operationId, error, this.coordinator);
           await this.coordinator.abortDeferredJoin?.(this.actor, this.state, operationId)
             .catch(() => undefined);
+          await notifyJoinFailure(this.actor, operationId, error, this.coordinator);
           return;
         } finally {
           deadline.close();
@@ -400,9 +400,9 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
             : await this.turn.yieldFrameworkPromise(pending);
         } catch (error) {
           this.state.endDeferredJoin();
-          await notifyJoinFailure(this.actor, operationId, error, this.coordinator);
           await this.coordinator.abortDeferredJoin?.(this.actor, this.state, operationId)
             .catch(() => undefined);
+          await notifyJoinFailure(this.actor, operationId, error, this.coordinator);
           return;
         } finally {
           deadline.close();

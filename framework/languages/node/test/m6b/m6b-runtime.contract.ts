@@ -55,7 +55,8 @@ import {
 import {
   ServiceStaleGenerationError,
   ServiceStatefulRegistry,
-  ServiceTerminalOperationRegistry
+  ServiceTerminalOperationRegistry,
+  type ServiceActorRef
 } from '../../packages/framework/src/runtime/foundation/service-stateful-registry';
 import {
   M6bServiceWireCommand,
@@ -3895,7 +3896,14 @@ test('membership and session binding generations advance and remain scoped to th
   const firstSpot = registry.createSpot('spot-a');
   const secondSpot = registry.createSpot('spot-b');
   const actor = registry.createActor('actor-a', 'Player', firstSpot.ref);
-  const binding = registry.bindSession(actor.ref, 'session-a', 'node-session');
+  const binding = registry.bindSession(
+    actor.ref,
+    'session-a',
+    'node-session',
+    3n,
+    'node-session',
+    3n
+  );
   const transition = registry.joinActor(actor.ref, secondSpot.ref);
   assert.equal(transition.previousMembershipEpoch, 1n);
   assert.equal(transition.currentMembershipEpoch, 2n);
@@ -3907,21 +3915,43 @@ test('membership and session binding generations advance and remain scoped to th
   );
   registry.installSessionBinding({
     ...binding,
-    sessionRid: 'session-b',
-    sessionOwnerNodeRid: 'node-session-b',
+    bindingGeneration: 100n
+  });
+  registry.installSessionBinding({
+    ...binding,
+    sessionOwnerNodeGeneration: 4n,
+    sessionOwnerLeaseGeneration: 4n,
     bindingGeneration: 1n
   });
+  registry.installSessionBinding({
+    ...binding,
+    sessionRid: 'session-b',
+    sessionOwnerNodeGeneration: 4n,
+    sessionOwnerLeaseGeneration: 4n,
+    bindingGeneration: 2n
+  });
+  assert.throws(
+    () => registry.installSessionBinding({
+      ...binding,
+      sessionOwnerNodeGeneration: 4n,
+      sessionOwnerLeaseGeneration: 4n,
+      bindingGeneration: 1n
+    }),
+    ServiceStaleGenerationError
+  );
   assert.throws(
     () => registry.unbindSession(
       actor.ref,
-      binding.bindingGeneration,
+      100n,
       binding.sessionRid,
       binding.sessionOwnerNodeRid
     ),
     ServiceStaleGenerationError
   );
+  assert.equal(registry.binding(actor.ref)?.sessionOwnerNodeGeneration, 4n);
   assert.equal(registry.binding(actor.ref)?.sessionRid, 'session-b');
-  assert.equal(registry.unbindSession(actor.ref, 1n, 'session-b', 'node-session-b'), true);
+  assert.equal(registry.binding(actor.ref)?.bindingGeneration, 2n);
+  assert.equal(registry.unbindSession(actor.ref, 2n, 'session-b', 'node-session'), true);
 });
 
 test('Spot and Actor turns serialize per owner while independent owners progress', async () => {
@@ -4043,6 +4073,7 @@ test('bound-session replacement is one-way, does not retry admission, and fences
   };
   const rejectSendOnce = new Set<string>();
   const rejectRequestOnce = new Set<string>();
+  const holdBindingControlOnce = new Set<string>();
   const nodes = new Map<string, {
     ingress?: (record: RawServiceIngressRecord) => unknown;
     readonly mailbox: Array<{
@@ -4099,6 +4130,10 @@ test('bound-session replacement is one-way, does not retry admission, and fences
             parts,
             resolveReply: resolve
           } as TestIngress);
+          if (!holdBindingControlOnce.delete(`${nodeRid}->${targetNodeRid}`)) {
+            const control = target.mailbox.shift();
+            control?.stateful?.reply(RequestResult.Ok, 0);
+          }
         });
       },
       replyService(record: RawServiceIngressRecord, parts: readonly Buffer[]) {
@@ -4125,7 +4160,8 @@ test('bound-session replacement is one-way, does not retry admission, and fences
   oldSessionRuntime.rememberActorRoute(actorRoute);
   newSessionRuntime.rememberActorRoute(actorRoute);
   try {
-    const oldBind = await oldSessionRuntime.bindSession(
+    holdBindingControlOnce.add('session-old->actor-node');
+    const oldBindPromise = oldSessionRuntime.bindSession(
       'old-rid',
       actor,
       1_000,
@@ -4138,7 +4174,12 @@ test('bound-session replacement is one-way, does not retry admission, and fences
         });
       }
     ).promise;
+    assert.equal(oldSessionRuntime.sessionBindings('old-rid').length, 0);
+    const initialControl = nodes.get('actor-node')!.mailbox.shift();
+    assert.equal(initialControl?.stateful?.reply(RequestResult.Ok, 0), true);
+    const oldBind = await oldBindPromise;
     assert.equal(oldBind.terminalResult, RequestResult.Ok);
+    assert.equal(oldSessionRuntime.sessionBindings('old-rid').length, 1);
 
     // A same-session duplicate keeps the authority-owned binding generation,
     // rather than exposing the local retry sequence to later sends.
@@ -4295,6 +4336,298 @@ test('mailbox saturation reports dropped actor binding control records', async (
   assert.deepEqual(dropped, [{ kind: 'actor_binding', owner: actor.ref.actorId }]);
   assert.equal(replies.length, 1);
   runtime.close();
+});
+
+test('active session bind replies only after the Actor binding control turn', async () => {
+  let ingress: ((record: RawServiceIngressRecord) => string | undefined) | undefined;
+  const mailbox: Array<{
+    readonly stateful?: {
+      readonly kindData?: { readonly kind?: string; readonly transition?: string };
+      reply(terminalResult: number, failureCode: number): boolean;
+    };
+  }> = [];
+  const replies: Buffer[][] = [];
+  const raw = {
+    topology: {
+      peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
+    },
+    mailbox: {
+      tryEnqueue(record: unknown) {
+        mailbox.push(record as typeof mailbox[number]);
+        return true;
+      }
+    },
+    setServiceIngress(handler: typeof ingress) {
+      ingress = (record) => handler!(withIngressOwner(record));
+    },
+    replyService(_record: RawServiceIngressRecord, parts: readonly Buffer[]) {
+      replies.push([...parts]);
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'actor-node', 3n);
+  const actor = runtime.createActor('actor-bind-linearization');
+  const header = encodeBoundSessionBindHeader(
+    43n,
+    {
+      actor: actor.ref,
+      targetNodeGeneration: 3n,
+      authorityOwnerGeneration: actor.authorityOwnerGeneration,
+      ownerLeaseGeneration: 3n
+    },
+    'session-linearized',
+    { state: 'active', generation: 11n }
+  );
+  const duplicateHeader = encodeBoundSessionBindHeader(
+    44n,
+    {
+      actor: actor.ref,
+      targetNodeGeneration: 3n,
+      authorityOwnerGeneration: actor.authorityOwnerGeneration,
+      ownerLeaseGeneration: 3n
+    },
+    'session-linearized',
+    { state: 'active', generation: 12n }
+  );
+
+  assert.equal(await ingress?.({
+    command: M6bServiceWireCommand.boundSessionBind,
+    flags: 0,
+    sourceRoutingId: 'session-node',
+    requestSequence: 8n,
+    parts: [header]
+  }), 'infrastructure');
+  assert.equal(await ingress?.({
+    command: M6bServiceWireCommand.boundSessionBind,
+    flags: 0,
+    sourceRoutingId: 'session-node',
+    requestSequence: 9n,
+    parts: [duplicateHeader]
+  }), 'infrastructure');
+  assert.equal(replies.length, 0);
+  assert.equal(runtime.registry.binding(actor.ref), undefined);
+  assert.equal(mailbox.length, 2);
+  assert.deepEqual(mailbox[0]!.stateful?.kindData, {
+    kind: 'actorBinding',
+    transition: 'active',
+    actor: actor.ref,
+    actorNodeGeneration: 3n,
+    authorityOwnerGeneration: actor.authorityOwnerGeneration,
+    ownerLeaseGeneration: 3n,
+    bindingGeneration: 11n,
+    sessionNodeRid: 'session-node',
+    sessionRid: 'session-linearized',
+    sessionOwnerNodeGeneration: 3n,
+    sessionOwnerId: 'session-node',
+    sessionOwnerLeaseGeneration: 3n
+  });
+
+  assert.equal(mailbox.shift()!.stateful!.reply(RequestResult.Ok, 0), true);
+  assert.equal(replies.length, 1);
+  assert.equal(runtime.registry.binding(actor.ref)?.sessionRid, 'session-linearized');
+  const reply = decodeStatefulReply(replies[0]![0]!, 43n, 'streamBind');
+  assert.equal(reply.terminalResult, RequestResult.Ok);
+  assert.equal(reply.tail?.kind, 'streamBind');
+  assert.equal(reply.tail?.kind === 'streamBind' ? reply.tail.bindingGeneration : undefined, 11n);
+
+  assert.equal(mailbox.shift()!.stateful!.reply(RequestResult.Ok, 0), true);
+  assert.equal(runtime.registry.binding(actor.ref)?.bindingGeneration, 11n);
+  const duplicateReply = decodeStatefulReply(replies[1]![0]!, 44n, 'streamBind');
+  assert.equal(duplicateReply.terminalResult, RequestResult.Ok);
+  assert.equal(duplicateReply.tail?.kind, 'streamBind');
+  assert.equal(
+    duplicateReply.tail?.kind === 'streamBind'
+      ? duplicateReply.tail.bindingGeneration
+      : undefined,
+    11n
+  );
+
+  const tombstoneHeader = encodeBoundSessionBindHeader(
+    45n,
+    {
+      actor: actor.ref,
+      targetNodeGeneration: 3n,
+      authorityOwnerGeneration: actor.authorityOwnerGeneration,
+      ownerLeaseGeneration: 3n
+    },
+    'session-linearized',
+    { state: 'tombstone', retiredGeneration: 11n }
+  );
+  assert.equal(await ingress?.({
+    command: M6bServiceWireCommand.boundSessionBind,
+    flags: 0,
+    sourceRoutingId: 'session-node',
+    sourceNodeGeneration: 3n,
+    requestSequence: 10n,
+    parts: [tombstoneHeader]
+  }), 'infrastructure');
+  assert.equal(replies.length, 2);
+  assert.equal(runtime.registry.binding(actor.ref)?.bindingGeneration, 11n);
+  assert.deepEqual(mailbox[0]!.stateful?.kindData, {
+    kind: 'actorBinding',
+    transition: 'tombstone',
+    actor: actor.ref,
+    actorNodeGeneration: 3n,
+    authorityOwnerGeneration: actor.authorityOwnerGeneration,
+    ownerLeaseGeneration: 3n,
+    bindingGeneration: 11n,
+    sessionNodeRid: 'session-node',
+    sessionRid: 'session-linearized',
+    sessionOwnerNodeGeneration: 3n,
+    sessionOwnerId: 'session-node',
+    sessionOwnerLeaseGeneration: 3n
+  });
+  assert.equal(mailbox.shift()!.stateful!.reply(RequestResult.Ok, 0), true);
+  assert.equal(runtime.registry.binding(actor.ref), undefined);
+  assert.equal(
+    decodeStatefulReply(replies[2]![0]!, 45n, 'streamUnbind').terminalResult,
+    RequestResult.Ok
+  );
+  runtime.close();
+});
+
+test('concurrent remote bind completions publish the newest Session-owner generation', async () => {
+  const requests: Array<{
+    readonly correlation: bigint;
+    readonly resolve: (parts: readonly Buffer[]) => void;
+  }> = [];
+  const raw = {
+    topology: {
+      peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
+    },
+    mailbox: { tryEnqueue: () => true },
+    setServiceIngress() {},
+    requestService(_targetNodeRid: string, parts: readonly Buffer[]) {
+      const header = decodeStatefulHeader(parts[0]!);
+      if (header.kind !== 'boundSessionBind') {
+        throw new Error(`Unexpected request kind '${header.kind}'.`);
+      }
+      return new Promise<readonly Buffer[]>((resolve) => {
+        requests.push({ correlation: header.correlation, resolve });
+      });
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'session-owner', 3n);
+  const actor: ServiceActorRef = {
+    nodeRid: 'actor-node',
+    actorId: 'actor-concurrent-session-bind',
+    generation: 7n
+  };
+  const authorityOwnerGeneration = 9n;
+  runtime.rememberActorRoute({
+    actor,
+    targetNodeGeneration: 3n,
+    authorityOwnerGeneration,
+    ownerLeaseGeneration: 10n
+  });
+  try {
+    const first = runtime.bindSession('session-a', actor, 1_000, () => true).promise;
+    const second = runtime.bindSession('session-b', actor, 1_000, () => true).promise;
+    assert.equal(requests.length, 2);
+    assert.equal(runtime.allSessionBindings().length, 0);
+
+    requests[0]!.resolve([encodeStatefulReply(
+      requests[0]!.correlation,
+      RequestResult.Ok,
+      0,
+      { kind: 'streamBind', bindingGeneration: 1n, authorityOwnerGeneration }
+    )]);
+    assert.equal((await first).terminalResult, RequestResult.Ok);
+    assert.deepEqual(runtime.sessionBindings('session-a').map(value => value.bindingGeneration), [1n]);
+
+    requests[1]!.resolve([encodeStatefulReply(
+      requests[1]!.correlation,
+      RequestResult.Ok,
+      0,
+      { kind: 'streamBind', bindingGeneration: 2n, authorityOwnerGeneration }
+    )]);
+    assert.equal((await second).terminalResult, RequestResult.Ok);
+    assert.equal(runtime.sessionBindings('session-a').length, 0);
+    assert.deepEqual(runtime.sessionBindings('session-b').map(value => value.bindingGeneration), [2n]);
+  } finally {
+    runtime.close();
+  }
+});
+
+test('remote Session bind publishes its exact Location fence for the first Actor relay', async () => {
+  const bindHeaders: Array<ReturnType<typeof decodeStatefulHeader>> = [];
+  const relayHeaders: Array<ReturnType<typeof decodeStatefulHeader>> = [];
+  const raw = {
+    topology: {
+      peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
+    },
+    mailbox: { tryEnqueue: () => true },
+    setServiceIngress() {},
+    requestService(_targetNodeRid: string, parts: readonly Buffer[]) {
+      const header = decodeStatefulHeader(parts[0]!);
+      if (header.kind !== 'boundSessionBind') {
+        throw new Error(`Unexpected request kind '${header.kind}'.`);
+      }
+      bindHeaders.push(header);
+      return Promise.resolve([encodeStatefulReply(
+        header.correlation,
+        RequestResult.Ok,
+        0,
+        {
+          kind: 'streamBind',
+          bindingGeneration: 1n,
+          authorityOwnerGeneration: 9n
+        }
+      )]);
+    },
+    async sendService(_targetNodeRid: string, parts: readonly Buffer[]) {
+      relayHeaders.push(decodeStatefulHeader(parts[0]!));
+      return true;
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'session-owner', 3n);
+  const actor: ServiceActorRef = {
+    nodeRid: 'actor-node',
+    actorId: 'actor-exact-session-bind',
+    generation: 7n
+  };
+  const exactAuthority = {
+    targetNodeGeneration: 3n,
+    authorityOwnerGeneration: 9n,
+    ownerLeaseGeneration: 10n
+  };
+  runtime.rememberActorRoute({
+    actor,
+    ...exactAuthority,
+    ownerLeaseGeneration: 3n
+  });
+
+  try {
+    const completion = await runtime.bindSession(
+      'session',
+      actor,
+      1_000,
+      () => true,
+      undefined,
+      undefined,
+      exactAuthority
+    ).promise;
+    assert.equal(completion.terminalResult, RequestResult.Ok);
+    assert.equal(bindHeaders.length, 1);
+    const bindHeader = bindHeaders[0]!;
+    assert.equal(bindHeader.kind, 'boundSessionBind');
+    if (bindHeader.kind === 'boundSessionBind') {
+      assert.deepEqual(bindHeader.actor, { actor, ...exactAuthority });
+    }
+
+    assert.equal(await runtime.sendSessionToActor('session', actor, {
+      packetName: 'JoinWorldReq',
+      contentType: 'application/json',
+      payload: Buffer.from('{}')
+    }), SubmitResult.Ok);
+    assert.equal(relayHeaders.length, 1);
+    const relayHeader = relayHeaders[0]!;
+    assert.equal(relayHeader.kind, 'actorSend');
+    if (relayHeader.kind === 'actorSend') {
+      assert.deepEqual(relayHeader.target, { actor, ...exactAuthority });
+    }
+  } finally {
+    runtime.close();
+  }
 });
 
 test('authority reconciliation exact-reads complete scans and publishes only Ready mesh-local routes', async () => {

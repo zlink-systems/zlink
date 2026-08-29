@@ -12,6 +12,22 @@ const messageFollow = require(
   '../../packages/framework/dist/runtime/actors/actor-message-follow-context'
 );
 const routingIds = require('../../packages/framework/dist/runtime/routing-id');
+const {
+  ZLinkActorSerialExecutor
+} = require('../../packages/framework/dist/runtime/actors/actor-mailbox');
+const {
+  ZLinkSpotSerialTurnExecutor
+} = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
+const {
+  ZLinkActorTransferRuntime
+} = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
+const {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} = require('../../packages/framework/dist/runtime/host/application-job-queue');
+const {
+  runWithApplicationJobPermit
+} = require('../../packages/framework/dist/runtime/application-jobs/application-job-queue-scope');
 
 function frame(value) {
   return [zlink.Message.from(`header:${value}`), zlink.Message.from(value)];
@@ -292,6 +308,210 @@ test('provisional Join ingress replays one-way packets through the source mailbo
   assert.equal(coordinator.isActive('actor-1'), false);
 });
 
+test('rejected provisional Join releases its current Actor mailbox record before source replay', async () => {
+  const { coordinator } = harness();
+  const actorMailbox = new ZLinkActorSerialExecutor('actor-1', 'source-spot');
+  const spotSerial = new ZLinkSpotSerialTurnExecutor(true, 'source-spot');
+  const events = [];
+  const detachedErrors = [];
+  let applicationAdmissions = 0;
+  let activeApplicationAdmissions = 0;
+  let peakApplicationAdmissions = 0;
+  let newerQueued;
+  let newerParts;
+  let replayedNewerResolve;
+  const replayedNewer = new Promise(resolve => {
+    replayedNewerResolve = resolve;
+  });
+  const directReplay = (
+    replayedParts,
+    _returnResponse,
+    _remoteBoundSessionTarget,
+    _fallbackActorRef
+  ) => actorMailbox.execute(() => spotSerial.execute(() => {
+    const value = replayedParts[1].data().toString();
+    events.push(`source:replayed:${value}`);
+    if (value === 'newer') replayedNewerResolve();
+  }));
+  const replayInCurrentActorTurn = (
+    replayedParts,
+    _returnResponse,
+    _remoteBoundSessionTarget,
+    _fallbackActorRef
+  ) => spotSerial.execute(() => {
+    const value = replayedParts[1].data().toString();
+    events.push(`source:replayed:${value}`);
+    if (value === 'newer') replayedNewerResolve();
+  });
+  const transfer = new ZLinkActorTransferRuntime({
+    actorHandoff: coordinator,
+    spotManager: () => ({
+      admitRoutedActorPacketPrefix(_spotId, _actorId, records) {
+        const terminals = actorMailbox.admitDurablePrefix(
+          records.map(record => ({
+            operation: executeChild => record.drain((...args) =>
+              executeChild(() => replayInCurrentActorTurn(...args))),
+            preparation: record.preparation,
+            workOptions: { payloadBytes: record.payloadBytes }
+          }))
+        );
+        return { terminal: Promise.all(terminals).then(() => undefined) };
+      },
+      dispatchRoutedActorPacket(
+        _spotId,
+        actorId,
+        replayedParts,
+        returnResponse,
+        remoteBoundSessionTarget,
+        fallbackActorRef
+      ) {
+        return coordinator.capture(
+          actorId,
+          replayedParts,
+          returnResponse,
+          remoteBoundSessionTarget,
+          fallbackActorRef,
+          undefined,
+          undefined,
+          directReplay
+        ) ?? directReplay(
+          replayedParts,
+          returnResponse,
+          remoteBoundSessionTarget,
+          fallbackActorRef
+        );
+      }
+    }),
+    reportPostCommitError(error) {
+      detachedErrors.push(error);
+    },
+    async prepareApplicationJob() {
+      applicationAdmissions += 1;
+      activeApplicationAdmissions += 1;
+      peakApplicationAdmissions = Math.max(
+        peakApplicationAdmissions,
+        activeApplicationAdmissions
+      );
+      let ready = true;
+      return {
+        async run(operation) {
+          assert.equal(ready, true);
+          ready = false;
+          try {
+            return await operation();
+          } finally {
+            activeApplicationAdmissions -= 1;
+          }
+        },
+        cancel() {
+          if (!ready) return;
+          ready = false;
+          activeApplicationAdmissions -= 1;
+        }
+      };
+    }
+  });
+  try {
+    const current = actorMailbox.execute(() => spotSerial.execute(async () => {
+      events.push('handler');
+      coordinator.beginProvisional('actor-1', 'join-rejected', 1n);
+      for (const value of ['held-1', 'held-2']) {
+        const parts = frame(value);
+        try {
+          await coordinator.capture(
+            'actor-1',
+            parts,
+            false,
+            undefined,
+            actorRef(),
+            undefined,
+            undefined,
+            directReplay
+          );
+        } finally {
+          parts.forEach((part) => part.close());
+        }
+      }
+      events.push('release:start');
+      await transfer.cancelDeferredActorHandoff(
+        { context: { actorId: 'actor-1' } },
+        { spotId: 'source-spot' },
+        'join-rejected'
+      );
+      events.push('release:end');
+      newerParts = frame('newer');
+      const captured = coordinator.capture(
+        'actor-1',
+        newerParts,
+        false,
+        undefined,
+        actorRef(),
+        undefined,
+        undefined,
+        directReplay
+      );
+      newerQueued = captured ?? directReplay(
+        newerParts,
+        false,
+        undefined,
+        actorRef()
+      );
+    }));
+
+    let timeout;
+    try {
+      await Promise.race([
+        current,
+        new Promise((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error(
+              `rejected Join replay deadlocked behind its current Actor mailbox record: ${events.join(',')}`
+            )),
+            1_000
+          );
+        })
+      ]);
+    } finally {
+      clearTimeout(timeout);
+    }
+    let replayTimeout;
+    try {
+      await Promise.race([
+        Promise.all([newerQueued, replayedNewer]),
+        new Promise((_, reject) => {
+          replayTimeout = setTimeout(
+            () => reject(new Error(`replayed backlog did not drain: ${events.join(',')}`)),
+            1_000
+          );
+        })
+      ]);
+    } finally {
+      clearTimeout(replayTimeout);
+    }
+    await actorMailbox.execute(() => spotSerial.execute(() => {
+      events.push('actor:next');
+    }));
+
+    assert.deepEqual(events, [
+      'handler',
+      'release:start',
+      'release:end',
+      'source:replayed:held-1',
+      'source:replayed:held-2',
+      'source:replayed:newer',
+      'actor:next'
+    ]);
+    assert.deepEqual(detachedErrors, []);
+    assert.equal(applicationAdmissions, 3);
+    assert.equal(peakApplicationAdmissions, 1);
+    assert.equal(coordinator.isActive('actor-1'), false);
+  } finally {
+    newerParts?.forEach((part) => part.close());
+    await actorMailbox.close();
+    await spotSerial.close();
+  }
+});
+
 test('provisional Join ingress preserves request completion when replayed locally', async () => {
   const { coordinator } = harness();
   const parts = frame('request');
@@ -311,6 +531,189 @@ test('provisional Join ingress preserves request completion when replayed locall
 
   await coordinator.releaseDeferred('actor-1', 'join-2');
   assert.equal(await pending, 'local-reply');
+});
+
+test('deferred Join release uses the direct Spot replay path without recapturing itself', async () => {
+  const { coordinator } = harness();
+  const replayed = [];
+  const reported = [];
+  let ordinaryDispatches = 0;
+  let directDispatches = 0;
+  const transfer = new ZLinkActorTransferRuntime({
+    actorHandoff: coordinator,
+    spotManager: () => ({
+      admitRoutedActorPacketPrefix(_spotId, _actorId, records) {
+        const terminals = records.map(record => record.drain(async (
+          parts,
+          returnResponse,
+          remoteBoundSessionTarget,
+          fallbackActorRef
+        ) => {
+          directDispatches += 1;
+          const value = parts[1].data().toString();
+          replayed.push(value);
+          if (value === 'D2') throw new Error('observed direct replay failure');
+          return returnResponse
+            ? { remoteBoundSessionTarget, fallbackActorRef }
+            : undefined;
+        }));
+        return { terminal: Promise.allSettled(terminals).then(outcomes => {
+          const failed = outcomes.find(outcome => outcome.status === 'rejected');
+          if (failed !== undefined) throw failed.reason;
+        }) };
+      },
+      dispatchRoutedActorPacket() {
+        ordinaryDispatches += 1;
+        throw new Error('release replay re-entered ordinary handoff capture');
+      },
+      async dispatchRoutedActorPacketDirect(
+        _spotId,
+        _actorId,
+        parts
+      ) {
+        directDispatches += 1;
+        const value = parts[1].data().toString();
+        replayed.push(value);
+        if (value === 'D2') throw new Error('observed direct replay failure');
+      }
+    }),
+    reportPostCommitError(error) {
+      reported.push(error);
+    }
+  });
+  coordinator.beginProvisional('actor-1', 'join-direct', 1n, 'source-node');
+  for (const value of ['D1', 'D2']) {
+    const parts = frame(value);
+    await coordinator.capture(
+      'actor-1',
+      parts,
+      false,
+      undefined,
+      actorRef()
+    );
+    parts.forEach(part => part.close());
+  }
+
+  await transfer.completeDeferredActorHandoff(
+    { context: { actorId: 'actor-1' } },
+    { spotId: 'target-spot' },
+    actorRef(),
+    'join-direct'
+  );
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(replayed, ['D1', 'D2']);
+  assert.equal(directDispatches, 2);
+  assert.equal(ordinaryDispatches, 0);
+  assert.equal(reported.length, 1);
+  assert.match(String(reported[0]), /observed direct replay failure/);
+  assert.equal(coordinator.isActive('actor-1'), false);
+});
+
+test('release replay preserves typed request failures and observes one-way failures', async () => {
+  const { coordinator } = harness();
+  const requestDeadlineUnixMs = Date.now() + 10;
+  const requestParts = frame('expired-release');
+  coordinator.beginProvisional('actor-1', 'join-expired-release', 1n, 'source-node');
+  const request = coordinator.capture(
+    'actor-1',
+    requestParts,
+    true,
+    undefined,
+    contextRef(requestParts, {
+      request: true,
+      deadlineUnixMs: requestDeadlineUnixMs
+    }),
+    requestDeadlineUnixMs,
+    undefined,
+    async () => 'too-late'
+  );
+  requestParts.forEach(part => part.close());
+  await new Promise(resolve => setTimeout(resolve, 20));
+  await coordinator.releaseDeferred('actor-1', 'join-expired-release');
+  await assert.rejects(
+    request,
+    error => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+  );
+
+  coordinator.beginProvisional('actor-1', 'join-one-way-failure', 1n, 'source-node');
+  const sendParts = frame('failed-release-send');
+  await coordinator.capture(
+    'actor-1',
+    sendParts,
+    false,
+    undefined,
+    actorRef(),
+    undefined,
+    undefined,
+    async () => {
+      throw new Error('one-way replay failed');
+    }
+  );
+  sendParts.forEach(part => part.close());
+  await assert.rejects(
+    coordinator.releaseDeferred('actor-1', 'join-one-way-failure'),
+    /one-way replay failed/
+  );
+  assert.equal(coordinator.isActive('actor-1'), false);
+});
+
+test('durable request handoff returns its initial permit before capacity-one replay admission', async () => {
+  const { coordinator } = harness();
+  const queue = new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration(
+      { maxQueuedApplicationJobs: 1n },
+      () => 1n
+    )
+  );
+  coordinator.beginProvisional('actor-1', 'join-capacity-one', 1n, 'source-node');
+  const parts = frame('capacity-one-request');
+  const initialPermit = await queue.acquire();
+  initialPermit.markApplicationQueued();
+  const ingress = runWithApplicationJobPermit(initialPermit, () =>
+    coordinator.capture(
+      'actor-1',
+      parts,
+      true,
+      undefined,
+      actorRef(),
+      undefined,
+      undefined,
+      async () => 'capacity-one-reply'
+    )
+  );
+  parts.forEach(part => part.close());
+
+  let replayAdmissions = 0;
+  const release = coordinator.releaseDeferred(
+    'actor-1',
+    'join-capacity-one',
+    undefined,
+    async operation => {
+      const permit = await queue.acquire();
+      permit.markApplicationQueued();
+      replayAdmissions += 1;
+      return await runWithApplicationJobPermit(permit, operation);
+    }
+  );
+  let timeout;
+  try {
+    const [, reply] = await Promise.race([
+      Promise.all([release, ingress]),
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error('capacity-one handoff replay did not reacquire its permit')),
+          1_000
+        );
+      })
+    ]);
+    assert.equal(reply, 'capacity-one-reply');
+  } finally {
+    clearTimeout(timeout);
+  }
+  assert.equal(replayAdmissions, 1);
+  assert.equal(queue.snapshot().permitsInUse, 0n);
+  assert.equal(coordinator.isActive('actor-1'), false);
 });
 
 test('Message Follow preserves operation identity and rejects an exhausted hop with its marker', async () => {
@@ -690,6 +1093,71 @@ test('precommit abort returns the seal-era ingress hold to the source queue in o
     replayed.push(parts[1].data().toString());
   });
   assert.deepEqual(replayed, ['H1', 'H2', 'H3']);
+  assert.equal(coordinator.isActive('actor-1'), false);
+});
+
+test('precommit abort drains appended ingress once through a single release task', async () => {
+  const { coordinator } = harness();
+  const replayed = [];
+  let admissions = 0;
+  let activeAdmissions = 0;
+  let peakAdmissions = 0;
+  let unblockFirstAdmission;
+  let firstAdmissionStartedResolve;
+  const firstAdmissionStarted = new Promise(resolve => {
+    firstAdmissionStartedResolve = resolve;
+  });
+  const firstAdmissionBlocked = new Promise(resolve => {
+    unblockFirstAdmission = resolve;
+  });
+  const admission = async operation => {
+    admissions += 1;
+    activeAdmissions += 1;
+    peakAdmissions = Math.max(peakAdmissions, activeAdmissions);
+    try {
+      if (admissions === 1) {
+        firstAdmissionStartedResolve();
+        await firstAdmissionBlocked;
+      }
+      return await operation();
+    } finally {
+      activeAdmissions -= 1;
+    }
+  };
+  const replay = async (parts, returnResponse) => {
+    const value = parts[1].data().toString();
+    replayed.push(value);
+    return returnResponse ? `reply:${value}` : undefined;
+  };
+
+  coordinator.begin('actor-1', 1n);
+  const requestParts = frame('P1');
+  const request = coordinator.capture(
+    'actor-1',
+    requestParts,
+    true,
+    undefined,
+    actorRef()
+  );
+  requestParts.forEach(part => part.close());
+  const secondParts = frame('P2');
+  await coordinator.capture('actor-1', secondParts, false, undefined, actorRef());
+  secondParts.forEach(part => part.close());
+
+  const firstRelease = coordinator.releaseCanceled('actor-1', replay, admission);
+  await firstAdmissionStarted;
+  const newerParts = frame('newer');
+  await coordinator.capture('actor-1', newerParts, false, undefined, actorRef());
+  newerParts.forEach(part => part.close());
+  const duplicateRelease = coordinator.releaseCanceled('actor-1', replay, admission);
+  coordinator.cancel('actor-1');
+  unblockFirstAdmission();
+
+  await Promise.all([firstRelease, duplicateRelease]);
+  assert.equal(await request, 'reply:P1');
+  assert.deepEqual(replayed, ['P1', 'P2', 'newer']);
+  assert.equal(admissions, 3);
+  assert.equal(peakAdmissions, 1);
   assert.equal(coordinator.isActive('actor-1'), false);
 });
 

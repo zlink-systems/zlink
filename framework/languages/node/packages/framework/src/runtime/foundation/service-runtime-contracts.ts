@@ -171,9 +171,15 @@ export interface ActorBindingControlPayload {
   readonly kind: 'actorBinding';
   readonly transition: 'active' | 'tombstone';
   readonly actor: ServiceActorRef;
+  readonly actorNodeGeneration: bigint;
+  readonly authorityOwnerGeneration: bigint;
+  readonly ownerLeaseGeneration: bigint;
   readonly bindingGeneration: bigint;
   readonly sessionNodeRid: RoutingId;
   readonly sessionRid: RoutingId;
+  readonly sessionOwnerNodeGeneration: bigint;
+  readonly sessionOwnerId: string;
+  readonly sessionOwnerLeaseGeneration: bigint;
 }
 
 export type ReceiveKindData =
@@ -308,6 +314,12 @@ export interface StreamSessionStatus {
   readonly lastError: number;
 }
 
+export interface StreamSessionActorAuthorityFence {
+  readonly targetNodeGeneration: bigint;
+  readonly authorityOwnerGeneration: bigint;
+  readonly ownerLeaseGeneration: bigint;
+}
+
 export interface StreamSessionService {
   start(): void;
   shutdown(timeoutMs: number): RequestResult;
@@ -322,7 +334,8 @@ export interface StreamSessionService {
       actorId: string,
       retiredSession: ServiceRetiredBoundSessionRouteFence,
       actor: ServiceActorRef
-    ) => void
+    ) => void,
+    actorAuthority?: StreamSessionActorAuthorityFence
   ): MeshOperationId;
   unbindActor(
     sessionRid: RoutingId,

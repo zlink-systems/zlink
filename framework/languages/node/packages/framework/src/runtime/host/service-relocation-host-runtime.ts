@@ -4277,8 +4277,25 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         store,
         { value: hidden.authorityKey } as ZLinkAuthorityKey
       );
+      const actorId = hidden.actor.context.actorId;
+      const node = this.options.meshNode(this.meshName);
+      const restore = node?.restoreActorAuthority;
+      if (node === undefined || restore === undefined) {
+        throw new Error(`Relocation Actor '${actorId}' native authority publication is unavailable.`);
+      }
+      const native = node.actorLookup(actorId);
+      restore.call(
+        node,
+        actorId,
+        hidden.participant.stableType,
+        current.objectGeneration,
+        current.authorityOwnerGeneration,
+        String(native.spotId),
+        native.spotGeneration,
+        native.membershipEpoch
+      );
       this.requireActorManager().adoptCreatedAuthority(
-        hidden.actor.context.actorId,
+        actorId,
         current.authorityOwnerGeneration,
         current.ownerLeaseGeneration
       );

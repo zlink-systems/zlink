@@ -37,7 +37,10 @@ import {
   ZLinkStreamMessageKind,
   type ZLinkStreamReplyMessageKind
 } from './protocol';
-import { ZLinkActorSessionBindingRegistry } from './actor-session-binding-registry';
+import {
+  ZLinkActorSessionBindingRegistry,
+  type ZLinkActorSessionAuthorityFence
+} from './actor-session-binding-registry';
 import {
   actorSessionBindingRuntimeOwner,
   registerActorSessionBindingRuntimeOwner
@@ -115,10 +118,7 @@ export interface ZLinkStreamBindingRuntimeOptions {
   readonly actorAuthorityFenceResolver?: (
     actorId: string,
     signal?: AbortSignal
-  ) => Promise<{
-    readonly authorityOwnerGeneration: bigint;
-    readonly ownerLeaseGeneration: bigint;
-  } | undefined>;
+  ) => Promise<ZLinkActorSessionAuthorityFence | undefined>;
   readonly nativeActorNodeProvider?: () => {
     status(): { readonly routingId: unknown };
   } | undefined;

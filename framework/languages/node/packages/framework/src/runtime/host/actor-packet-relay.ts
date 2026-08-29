@@ -116,7 +116,12 @@ export class ZLinkActorPacketRelay {
   async notifyBoundActorDisconnected(actor: ZLinkSessionActor, signal?: AbortSignal): Promise<void> {
     const state = this.options.actorManager()?.getState(actor.actorId);
     const currentRemoteBoundSessionTarget =
-      state?.spotId === undefined ? undefined : state.remoteBoundSessionTarget;
+      state?.spotId === undefined
+        ? undefined
+        : preferredRemoteBoundSessionTarget(
+            state.remoteBoundSessionTarget,
+            state.boundSessionTransferTarget
+          );
     const currentRemoteActorPacketTarget =
       state?.spotId === undefined ? undefined : state.remoteActorPacketTarget;
     const remoteTarget = currentRemoteBoundSessionTarget
@@ -161,7 +166,12 @@ export class ZLinkActorPacketRelay {
 
   async notifyActorDisconnectedById(actorId: string, signal?: AbortSignal): Promise<void> {
     const state = this.options.actorManager()?.getState(actorId);
-    const remoteTarget = state?.remoteBoundSessionTarget ?? state?.remoteActorPacketTarget;
+    const remoteTarget = state === undefined
+      ? undefined
+      : preferredRemoteBoundSessionTarget(
+          state.remoteBoundSessionTarget,
+          state.boundSessionTransferTarget
+        ) ?? state.remoteActorPacketTarget;
     if (remoteTarget !== undefined) {
       await this.notifyRemoteActorDisconnected(actorId, remoteTarget, signal);
       return;
@@ -849,7 +859,13 @@ export class ZLinkActorPacketRelay {
     relay: ReturnType<typeof decodeRemoteActorPacketRelayPayload>,
     routeContext: ZLinkRouteMessageContext
   ): void {
-    const current = this.options.actorManager()?.getState(relay.actorId)?.remoteBoundSessionTarget;
+    const state = this.options.actorManager()?.getState(relay.actorId);
+    const current = state === undefined
+      ? undefined
+      : preferredRemoteBoundSessionTarget(
+          state.remoteBoundSessionTarget,
+          state.boundSessionTransferTarget
+        );
     if (
       current === undefined
       || current.sessionNodeRid === undefined
@@ -990,15 +1006,16 @@ export class ZLinkActorPacketRelay {
     response: unknown,
     metadata: ReadonlyMap<string, string>
   ): Promise<boolean> {
-    const sent = target?.sendResponse(packetName, requestSeq, response, metadata);
-    return sent ?? await this.options.streamBindingRuntime().sendLocalBoundSessionResponse(
-      actorId,
-      packetName,
-      requestSeq,
-      response,
-      metadata,
-      false
-    );
+    return target === undefined
+      ? await this.options.streamBindingRuntime().sendLocalBoundSessionResponse(
+        actorId,
+        packetName,
+        requestSeq,
+        response,
+        metadata,
+        false
+      )
+      : await target.sendResponse(packetName, requestSeq, response, metadata);
   }
 
   private async sendCapturedOrCurrentBoundSessionError(
@@ -1009,14 +1026,15 @@ export class ZLinkActorPacketRelay {
     error: unknown,
     metadata: ReadonlyMap<string, string>
   ): Promise<boolean> {
-    const sent = target?.sendError(packetName, requestSeq, error, metadata);
-    return sent ?? await this.options.streamBindingRuntime().sendLocalBoundSessionError(
-      actorId,
-      packetName,
-      requestSeq,
-      error,
-      metadata
-    );
+    return target === undefined
+      ? await this.options.streamBindingRuntime().sendLocalBoundSessionError(
+        actorId,
+        packetName,
+        requestSeq,
+        error,
+        metadata
+      )
+      : await target.sendError(packetName, requestSeq, error, metadata);
   }
 
   private requireSpotNodeRuntime(): ZLinkSpotNodeRuntimeManager {

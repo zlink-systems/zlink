@@ -28,7 +28,9 @@ import {
   mergeRemoteBoundSessionTarget,
   preferredRemoteBoundSessionTarget,
   type ZLinkActorHandoffCoordinator,
-  type ZLinkActorHandoffDispatch,
+  type ZLinkActorHandoffPrefixAdmission,
+  type ZLinkActorHandoffPrefixQueue,
+  type ZLinkActorHandoffReplayPreparation,
   type ZLinkActorRoutedJoinTransport,
   type ZLinkActorTransferRegistry,
   isDeferredJoinAcceptedRootPublication,
@@ -137,6 +139,17 @@ function requireSourceObjectGeneration(
   return generation;
 }
 
+function createHandoffReplayGate(): {
+  readonly start: Promise<void>;
+  open(): void;
+} {
+  let open!: () => void;
+  const start = new Promise<void>(resolve => {
+    open = resolve;
+  });
+  return { start, open };
+}
+
 export interface ZLinkActorTransferRuntimeActorManager {
   getState(actorId: string): ZLinkActorRuntimeState | undefined;
   getOrCreateActor(actorId: string, actorType: string, signal?: AbortSignal): Promise<ZLinkActor>;
@@ -201,6 +214,8 @@ export interface ZLinkActorTransferRuntimeOptions {
   /** Service-wire command 42/43/44 bridge, installed after the host runtime is assembled. */
   readonly sessionRelocationWire?: () => ZLinkSessionRelocationWirePort | undefined;
   readonly clearRemoteActorPacketTarget: (actorId: string) => void;
+  /** Acquires that permit before the Actor FIFO claims the runnable child. */
+  readonly prepareApplicationJob?: ZLinkActorHandoffReplayPreparation;
   readonly reportPostCommitError?: (error: unknown) => void;
   readonly onSourceDepartureCompleted?: (actorId: string) => void;
   readonly shutdownSignal?: () => AbortSignal | undefined;
@@ -260,32 +275,30 @@ export class ZLinkActorTransferRuntime {
     if (manager === undefined) {
       throw new Error(`Actor '${actorId}' same-node Join has no local Spot manager.`);
     }
-    const dispatch: ZLinkActorHandoffDispatch = (
-      parts,
-      returnResponse,
-      remoteBoundSessionTarget,
-      fallbackActorRef
-    ) => manager.dispatchRoutedActorPacket(
-      target.spotId,
-      actorId,
-      parts,
-      returnResponse,
-      remoteBoundSessionTarget,
-      fallbackActorRef
+    const admitted = this.options.actorHandoff.admitDeferredPrefix(
+        actorId,
+        operationId,
+        drain => manager.admitRoutedActorPacketPrefix(
+          target.spotId,
+          actorId,
+          drain
+        ),
+        this.options.prepareApplicationJob
     );
-    await this.options.actorHandoff.releaseDeferred(actorId, operationId, dispatch);
+    void this.observeHandoffReplay(admitted.terminal);
   }
 
   async cancelDeferredActorHandoff(
     actor: ZLinkActor,
-    state: ZLinkActorRuntimeState,
+    _state: ZLinkActorRuntimeState,
     operationId: string
   ): Promise<void> {
-    await this.options.actorHandoff.releaseDeferred(
-      actor.context.actorId,
-      operationId,
-      this.sourceHandoffReplay(actor, state)
+    const admitted = this.admitDeferredSourcePrefix(
+      actor,
+      _state,
+      operationId
     );
+    void this.observeHandoffReplay(admitted.terminal);
   }
 
   async prepareDeferredJoinAccepted(
@@ -495,12 +508,12 @@ export class ZLinkActorTransferRuntime {
       if (deferredOperationId === undefined) {
         this.options.actorHandoff.cancel(actor.context.actorId);
       } else {
-        await this.options.actorHandoff.releaseDeferred(
-          actor.context.actorId,
-          deferredOperationId,
-          this.sourceHandoffReplay(actor, state)
-        )
-          .catch(() => undefined);
+        const admitted = this.admitDeferredSourcePrefix(
+          actor,
+          state,
+          deferredOperationId
+        );
+        void this.observeHandoffReplay(admitted.terminal);
       }
       state.endMove();
       throw error;
@@ -510,62 +523,102 @@ export class ZLinkActorTransferRuntime {
   private async cancelSourceActorMove(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
-    deferredOperationId?: string
+    deferredOperationId?: string,
+    replayStart: Promise<void> = Promise.resolve()
   ): Promise<void> {
     try {
       if (state.spotId !== undefined) {
         await this.options.spotManager()?.cancelActorTransfer(state.spotId, actor.context.actorId);
       }
     } finally {
-      if (deferredOperationId === undefined) {
-        await this.releaseCanceledHandoff(actor, state);
-      } else {
-        await this.options.actorHandoff.releaseDeferred(
-          actor.context.actorId,
-          deferredOperationId,
-          this.sourceHandoffReplay(actor, state)
-        );
+      try {
+        if (deferredOperationId === undefined) {
+          const admitted = this.admitCanceledSourcePrefix(actor, state, replayStart);
+          void this.observeHandoffReplay(admitted.terminal);
+        } else {
+          const admitted = this.admitDeferredSourcePrefix(
+            actor,
+            state,
+            deferredOperationId,
+            replayStart
+          );
+          void this.observeHandoffReplay(admitted.terminal);
+        }
+      } finally {
+        state.endMove();
       }
-      state.endMove();
     }
   }
 
-  private async releaseCanceledHandoff(
+  private admitCanceledSourcePrefix(
     actor: ZLinkActor,
-    state: ZLinkActorRuntimeState
-  ): Promise<void> {
+    state: ZLinkActorRuntimeState,
+    replayStart: Promise<void> = Promise.resolve()
+  ): ZLinkActorHandoffPrefixAdmission {
     // The seal-era ingress hold returns to the source queue on a precommit
     // abort. Rejection stays reserved for a source Actor whose dispatch is
     // gone, because held packets then have no queue left to return to.
-    const replay = this.sourceHandoffReplay(actor, state);
-    if (replay === undefined) {
+    const queue = this.sourceHandoffPrefixQueue(actor, state);
+    if (queue === undefined) {
       this.options.actorHandoff.cancel(actor.context.actorId);
-      return;
+      return { terminal: Promise.resolve() };
     }
-    await this.options.actorHandoff.releaseCanceled(actor.context.actorId, replay);
+    return this.options.actorHandoff.admitCanceledPrefix(
+        actor.context.actorId,
+        queue,
+        this.options.prepareApplicationJob,
+        replayStart
+    );
   }
 
-  private sourceHandoffReplay(
+  private admitDeferredSourcePrefix(
+    actor: ZLinkActor,
+    state: ZLinkActorRuntimeState,
+    operationId: string,
+    replayStart: Promise<void> = Promise.resolve()
+  ): ZLinkActorHandoffPrefixAdmission {
+    const queue = this.sourceHandoffPrefixQueue(actor, state);
+    if (queue === undefined) {
+      this.options.actorHandoff.cancel(actor.context.actorId);
+      return { terminal: Promise.resolve() };
+    }
+    return this.options.actorHandoff.admitDeferredPrefix(
+      actor.context.actorId,
+      operationId,
+      queue,
+      this.options.prepareApplicationJob,
+      replayStart
+    );
+  }
+
+  private async observeHandoffReplay(release: Promise<void>): Promise<void> {
+    try {
+      await release;
+    } catch (error) {
+      // Release drains every held record before rejecting. Lifecycle cleanup
+      // must continue, while the existing runtime task boundary retains the
+      // one-way/invariant failure for diagnostics.
+      try {
+        this.options.reportPostCommitError?.(error);
+      } catch {
+        // Diagnostics cannot interrupt the relocation terminal lifecycle.
+      }
+    }
+  }
+
+  private sourceHandoffPrefixQueue(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState
-  ): ZLinkActorHandoffDispatch | undefined {
+  ): ZLinkActorHandoffPrefixQueue | undefined {
     const sourceSpotId = state.spotId;
     const manager = this.options.spotManager();
     if (sourceSpotId === undefined || manager === undefined) {
       return undefined;
     }
-    return (
-      parts,
-      returnResponse,
-      remoteBoundSessionTarget,
-      fallbackActorRef
-    ) => manager.dispatchRoutedActorPacket(
+    return drain => manager.admitRoutedActorPacketPrefix(
       sourceSpotId,
       actor.context.actorId,
-      parts,
-      returnResponse,
-      remoteBoundSessionTarget,
-      fallbackActorRef
+      drain
     );
   }
 
@@ -723,23 +776,41 @@ export class ZLinkActorTransferRuntime {
           phase = 'rolledBack';
           relocationMetric?.complete('aborted');
           this.coreSourceLeaves.delete(actor.context.actorId);
-          await this.cancelSourceActorMove(actor, state, deferredOperationId);
-          await this.restoreSourceActor(actor, sourceSpotId);
-          if (sealId !== undefined) {
-            this.beginBoundSessionSealAbort(actor, state);
+          const replayGate = createHandoffReplayGate();
+          try {
+            await this.cancelSourceActorMove(
+              actor,
+              state,
+              deferredOperationId,
+              replayGate.start
+            );
+            await this.restoreSourceActor(actor, sourceSpotId);
+            if (sealId !== undefined) {
+              await this.observeBoundSessionSealAbort(actor, state);
+            }
+          } finally {
+            replayGate.open();
           }
         }
       };
     } catch (error) {
       relocationMetric?.complete('failed');
+      const replayGate = createHandoffReplayGate();
       try {
-        await this.cancelSourceActorMove(actor, state, deferredOperationId);
+        await this.cancelSourceActorMove(
+          actor,
+          state,
+          deferredOperationId,
+          replayGate.start
+        );
         if (sourceLeaveStarted) await this.restoreSourceActor(actor, sourceSpotId);
         if (sealId !== undefined) {
-          this.beginBoundSessionSealAbort(actor, state);
+          await this.observeBoundSessionSealAbort(actor, state);
         }
       } catch (rollbackError) {
         throw new AggregateError([error, rollbackError], 'Actor source leave and rollback both failed.');
+      } finally {
+        replayGate.open();
       }
       throw error;
     }
@@ -820,40 +891,70 @@ export class ZLinkActorTransferRuntime {
         rollback: async () => {
           if (terminal !== 'prepared') return;
           terminal = 'rolledBack';
-          if (manageMembership) {
-            await this.cancelSourceActorMove(actor, state);
-          } else {
-            try {
-              await this.releaseCanceledHandoff(actor, state);
-            } finally {
-              state.endMove();
+          const replayGate = createHandoffReplayGate();
+          try {
+            if (manageMembership) {
+              await this.cancelSourceActorMove(
+                actor,
+                state,
+                undefined,
+                replayGate.start
+              );
+            } else {
+              try {
+                const admitted = this.admitCanceledSourcePrefix(
+                  actor,
+                  state,
+                  replayGate.start
+                );
+                void this.observeHandoffReplay(admitted.terminal);
+              } finally {
+                state.endMove();
+              }
             }
-          }
-          if (sealId !== undefined) {
-            this.beginBoundSessionSealAbort(actor, state);
+            if (sealId !== undefined) {
+              await this.observeBoundSessionSealAbort(actor, state);
+            }
+          } finally {
+            replayGate.open();
           }
         }
       };
     } catch (error) {
       let sourceRestored = false;
-      if (manageMembership) {
-        try {
-          await this.cancelSourceActorMove(actor, state);
-          sourceRestored = true;
-        } catch {}
-      } else {
-        try {
-          await this.releaseCanceledHandoff(actor, state);
-          sourceRestored = true;
-        } catch {
-          // The Session owner keeps the seal until timeout when the source
-          // queue could not be restored.
-        } finally {
-          state.endMove();
+      const replayGate = createHandoffReplayGate();
+      try {
+        if (manageMembership) {
+          try {
+            await this.cancelSourceActorMove(
+              actor,
+              state,
+              undefined,
+              replayGate.start
+            );
+            sourceRestored = true;
+          } catch {}
+        } else {
+          try {
+            const admitted = this.admitCanceledSourcePrefix(
+              actor,
+              state,
+              replayGate.start
+            );
+            void this.observeHandoffReplay(admitted.terminal);
+            sourceRestored = true;
+          } catch {
+            // The Session owner keeps the seal until timeout when the source
+            // queue could not be restored.
+          } finally {
+            state.endMove();
+          }
         }
-      }
-      if (sourceRestored && sealId !== undefined) {
-        this.beginBoundSessionSealAbort(actor, state);
+        if (sourceRestored && sealId !== undefined) {
+          await this.observeBoundSessionSealAbort(actor, state);
+        }
+      } finally {
+        replayGate.open();
       }
       throw error;
     }
@@ -1036,18 +1137,6 @@ export class ZLinkActorTransferRuntime {
     };
   }
 
-  private beginBoundSessionSealAbort(
-    actor: ZLinkActor,
-    state: ZLinkActorRuntimeState
-  ): void {
-    const target = preferredRemoteBoundSessionTarget(
-      state.remoteBoundSessionTarget,
-      state.boundSessionTransferTarget
-    );
-    void this.abortBoundSessionRouteSeal(actor, state, target)
-      .catch(error => this.options.reportPostCommitError?.(error));
-  }
-
   private async abortBoundSessionRouteSeal(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
@@ -1095,6 +1184,21 @@ export class ZLinkActorTransferRuntime {
         route,
         this.options.shutdownSignal?.()
     );
+  }
+
+  private async observeBoundSessionSealAbort(
+    actor: ZLinkActor,
+    state: ZLinkActorRuntimeState
+  ): Promise<void> {
+    try {
+      await this.abortBoundSessionRouteSeal(actor, state);
+    } catch (error) {
+      try {
+        this.options.reportPostCommitError?.(error);
+      } catch {
+        // Diagnostics cannot replace the relocation failure terminal.
+      }
+    }
   }
 
   private beginCoreSourceLeave(actorId: string): {

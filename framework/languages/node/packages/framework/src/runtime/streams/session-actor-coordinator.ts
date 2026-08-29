@@ -117,7 +117,7 @@ export class ZLinkSessionActorCoordinator {
       }
     }
     const authorityFence = await this.resolveAuthorityFence(actorRef, signal);
-    await this.bindNativeActor(context, actorRef, signal);
+    await this.bindNativeActor(context, actorRef, authorityFence, signal);
 
     const bindingToken = reuseActor?.bindingToken ?? createBindingToken();
     const boundActorRef = withBindingGeneration(
@@ -440,6 +440,7 @@ export class ZLinkSessionActorCoordinator {
   private async bindNativeActor(
     context: DefaultZLinkSessionContext,
     actorRef: ActorRef,
+    authorityFence: ZLinkActorSessionAuthorityFence | undefined,
     signal?: AbortSignal
   ): Promise<void> {
     if (!(context.stream instanceof ZLinkManagedStream)) {
@@ -450,7 +451,8 @@ export class ZLinkSessionActorCoordinator {
         actorRef,
         this.options.actorBindTimeoutMs ?? 2000,
         signal,
-        context.actorBindingReplacedHandler
+        context.actorBindingReplacedHandler,
+        authorityFence
       );
     } catch (error) {
       if (error instanceof ZLinkFrameworkException) {

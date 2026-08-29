@@ -40,6 +40,8 @@ import type {
 import { ZLinkDispatchErrorReporter } from '../channels';
 import {
   ZLinkSpotActorHandlerRegistryRuntime,
+  type ZLinkActorHandoffPrefixAdmission,
+  type ZLinkActorHandoffPrefixRecord,
   type ZLinkRemoteBoundSessionTarget
 } from '../actors';
 import { ZLinkWorkerRuntime } from '../workers';
@@ -831,6 +833,38 @@ export class ZLinkSpotActivationLifecycle {
       fallbackActorRef,
       requestTerminal,
       messageFollowOrigin
+    );
+  }
+
+  /** @internal Dispatches a held Actor record after its handoff owner releases it. */
+  dispatchActorPacketDirect(
+    activation: ZLinkSpotActivation,
+    actorId: string,
+    parts: readonly Message[],
+    returnResponse = false,
+    remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
+    fallbackActorRef?: ActorRef
+  ): Promise<unknown> {
+    return this.actorAdmission.dispatchActorPacketDirect(
+      activation,
+      actorId,
+      parts,
+      returnResponse,
+      remoteBoundSessionTarget,
+      fallbackActorRef
+    );
+  }
+
+  /** @internal Atomically restores one durable Actor packet prefix. */
+  admitActorPacketPrefix(
+    activation: ZLinkSpotActivation,
+    actorId: string,
+    records: readonly ZLinkActorHandoffPrefixRecord[]
+  ): ZLinkActorHandoffPrefixAdmission {
+    return this.actorAdmission.admitActorPacketPrefix(
+      activation,
+      actorId,
+      records
     );
   }
 

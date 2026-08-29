@@ -12,6 +12,7 @@ import {
 } from '../foundation/message-follow-suppression-registry';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
+import { releaseApplicationJobPermitForDurableHandoff } from '../application-jobs/application-job-queue-scope';
 import {
   decodeActorRequestDeadlineUnixMs,
   decodeStreamHeader
@@ -100,10 +101,61 @@ export type ZLinkActorHandoffDispatch = (
   fallbackActorRef?: ActorRef
 ) => Promise<unknown>;
 
+export type ZLinkActorHandoffReplayAdmission = <T>(
+  operation: () => Promise<T>
+) => Promise<T>;
+
+export interface ZLinkActorHandoffPreparedReplayAdmission {
+  run<T>(operation: () => Promise<T>): Promise<T>;
+  cancel(): void;
+}
+
+export type ZLinkActorHandoffReplayPreparation = (
+  signal: AbortSignal
+) => Promise<ZLinkActorHandoffPreparedReplayAdmission>;
+
+export interface ZLinkActorHandoffPrefixAdmission {
+  /** Completes after every child callback reaches its real terminal. */
+  readonly terminal: Promise<void>;
+}
+
+export interface ZLinkActorHandoffPrefixRecord {
+  readonly drain: (dispatch: ZLinkActorHandoffDispatch) => Promise<void>;
+  readonly preparation?: {
+    prepare(signal: AbortSignal): Promise<void>;
+    cancel(): void;
+  };
+  readonly payloadBytes: number;
+}
+
+/**
+ * Atomically installs one non-executing durable prefix in an Actor FIFO.
+ * Invoking the function is the queue-admission linearization point; a failure
+ * to admit must throw synchronously.
+ *
+ * @internal
+ */
+export type ZLinkActorHandoffPrefixQueue = (
+  records: readonly ZLinkActorHandoffPrefixRecord[]
+) => ZLinkActorHandoffPrefixAdmission;
+
 interface PendingPacket {
   readonly packet: ZLinkActorHandoffPacket;
   readonly resolve?: (value: unknown) => void;
   readonly reject?: (reason: unknown) => void;
+}
+
+interface ActivePrefixRelease {
+  readonly queue: ZLinkActorHandoffPrefixQueue;
+  readonly preparation?: ZLinkActorHandoffReplayPreparation;
+  readonly start: Promise<void>;
+  startOpen: boolean;
+  cursor: number;
+  inFlight: number;
+  readonly errors: unknown[];
+  readonly terminal: Promise<void>;
+  resolve(): void;
+  reject(reason: unknown): void;
 }
 
 interface ReplySourceEvidence {
@@ -137,7 +189,7 @@ interface ActiveHandoff {
   readonly oldNodeRidHex?: string;
   readonly sourceEvidence: ReplySourceEvidence;
   readonly sourceOwner: ZLinkActorMessageFollowOwnerFence;
-  phase: 'provisional' | 'relocating';
+  phase: 'provisional' | 'releasing' | 'relocating';
   readonly operationId?: string;
   replay?: ZLinkActorHandoffDispatch;
   connectionBoundSealed: boolean;
@@ -145,6 +197,8 @@ interface ActiveHandoff {
   nextIndex: number;
   snapshotIndex: number;
   pendingBytes: number;
+  releaseTask?: Promise<void>;
+  prefixRelease?: ActivePrefixRelease;
 }
 
 interface MessageFollowRoute {
@@ -359,61 +413,354 @@ export class ZLinkActorHandoffCoordinator {
   async releaseDeferred(
     actorId: string,
     operationId: string,
-    dispatch?: ZLinkActorHandoffDispatch
+    dispatch?: ZLinkActorHandoffDispatch,
+    admission?: ZLinkActorHandoffReplayAdmission
   ): Promise<void> {
     const handoff = this.active.get(actorId);
     if (handoff === undefined) return;
     if (handoff.operationId !== operationId) {
       throw new Error(`Actor '${actorId}' packet handoff belongs to another operation.`);
     }
-    this.active.delete(actorId);
-    await this.replayReleasedBacklog(actorId, handoff, dispatch ?? handoff.replay);
+    await this.releaseHandoff(
+      actorId,
+      handoff,
+      dispatch ?? handoff.replay,
+      admission
+    );
   }
 
-  async releaseCanceled(actorId: string, dispatch: ZLinkActorHandoffDispatch): Promise<void> {
+  async releaseCanceled(
+    actorId: string,
+    dispatch: ZLinkActorHandoffDispatch,
+    admission?: ZLinkActorHandoffReplayAdmission
+  ): Promise<void> {
     const handoff = this.active.get(actorId);
     if (handoff === undefined) return;
-    this.active.delete(actorId);
-    await this.replayReleasedBacklog(actorId, handoff, dispatch);
+    await this.releaseHandoff(actorId, handoff, dispatch, admission);
+  }
+
+  /**
+   * Restores a deferred hold as one durable FIFO prefix. The returned
+   * admission means every held record is owned by the source/target Actor
+   * queue, not that any handler has run.
+   *
+   * @internal
+   */
+  admitDeferredPrefix(
+    actorId: string,
+    operationId: string,
+    queue: ZLinkActorHandoffPrefixQueue,
+    preparation?: ZLinkActorHandoffReplayPreparation,
+    start: Promise<void> = Promise.resolve()
+  ): ZLinkActorHandoffPrefixAdmission {
+    const handoff = this.active.get(actorId);
+    if (handoff === undefined) return { terminal: Promise.resolve() };
+    if (handoff.operationId !== operationId) {
+      throw new Error(`Actor '${actorId}' packet handoff belongs to another operation.`);
+    }
+    return this.admitHandoffPrefix(actorId, handoff, queue, preparation, start);
+  }
+
+  /** @internal Restores a canceled relocation hold as one Actor FIFO prefix. */
+  admitCanceledPrefix(
+    actorId: string,
+    queue: ZLinkActorHandoffPrefixQueue,
+    preparation?: ZLinkActorHandoffReplayPreparation,
+    start: Promise<void> = Promise.resolve()
+  ): ZLinkActorHandoffPrefixAdmission {
+    const handoff = this.active.get(actorId);
+    if (handoff === undefined) return { terminal: Promise.resolve() };
+    return this.admitHandoffPrefix(actorId, handoff, queue, preparation, start);
+  }
+
+  private admitHandoffPrefix(
+    actorId: string,
+    handoff: ActiveHandoff,
+    queue: ZLinkActorHandoffPrefixQueue,
+    preparation: ZLinkActorHandoffReplayPreparation | undefined,
+    start: Promise<void>
+  ): ZLinkActorHandoffPrefixAdmission {
+    if (handoff.releaseTask !== undefined) {
+      return { terminal: handoff.releaseTask };
+    }
+    handoff.phase = 'releasing';
+    let resolveTerminal!: () => void;
+    let rejectTerminal!: (reason: unknown) => void;
+    const terminal = new Promise<void>((resolve, reject) => {
+      resolveTerminal = resolve;
+      rejectTerminal = reject;
+    });
+    const release: ActivePrefixRelease = {
+      queue,
+      preparation,
+      start,
+      startOpen: false,
+      cursor: 0,
+      inFlight: 0,
+      errors: [],
+      terminal,
+      resolve: resolveTerminal,
+      reject: rejectTerminal
+    };
+    handoff.prefixRelease = release;
+    handoff.releaseTask = terminal;
+    void start.then(
+      () => {
+        release.startOpen = true;
+        this.finishPrefixReleaseIfIdle(actorId, handoff, release);
+      },
+      error => {
+        release.startOpen = true;
+        if (handoff.pending.length === 0) release.errors.push(error);
+        this.finishPrefixReleaseIfIdle(actorId, handoff, release);
+      }
+    );
+    try {
+      this.admitPendingPrefix(actorId, handoff, release);
+    } catch (error) {
+      // The synchronous caller receives the admission error directly. Observe
+      // the shared terminal as well so this path cannot create an unhandled
+      // rejection before the relocation rollback reports the original error.
+      void terminal.catch(() => undefined);
+      this.finishPrefixReleaseIfIdle(actorId, handoff, release);
+      throw error;
+    }
+    return { terminal };
+  }
+
+  private admitPendingPrefix(
+    actorId: string,
+    handoff: ActiveHandoff,
+    release: ActivePrefixRelease
+  ): void {
+    if (release.cursor >= handoff.pending.length) return;
+    const begin = release.cursor;
+    const end = handoff.pending.length;
+    const pending = handoff.pending.slice(begin, end);
+    let admitted: ZLinkActorHandoffPrefixAdmission;
+    try {
+      admitted = release.queue(pending.map(record =>
+        this.createPrefixRecord(record, release)));
+    } catch (error) {
+      this.failUnqueuedPrefix(handoff, release, error);
+      throw error;
+    }
+    release.cursor = end;
+    release.inFlight += 1;
+    void admitted.terminal.then(
+      () => this.completePrefixBatch(actorId, handoff, release),
+      error => {
+        release.errors.push(error);
+        this.completePrefixBatch(actorId, handoff, release);
+      }
+    );
+  }
+
+  private createPrefixRecord(
+    pending: PendingPacket,
+    release: ActivePrefixRelease
+  ): ZLinkActorHandoffPrefixRecord {
+    let prepared: ZLinkActorHandoffPreparedReplayAdmission | undefined;
+    const cancel = (): void => {
+      prepared?.cancel();
+      prepared = undefined;
+    };
+    return {
+      payloadBytes: packetBytes(pending.packet),
+      preparation: {
+        prepare: async signal => {
+          try {
+            await waitForHandoffReplayStart(release.start, signal);
+            if (release.preparation !== undefined) {
+              const next = await release.preparation(signal);
+              if (signal.aborted) {
+                next.cancel();
+                throw signal.reason;
+              }
+              prepared = next;
+            }
+          } catch (error) {
+            if (!signal.aborted) this.failReleasedPending(pending, error);
+            throw error;
+          }
+        },
+        cancel
+      },
+      drain: async replay => {
+        const admission = prepared === undefined
+          ? undefined
+          : <T>(operation: () => Promise<T>) => prepared!.run(operation);
+        try {
+          await this.replayReleasedPending(pending, replay, admission);
+        } finally {
+          cancel();
+        }
+      }
+    };
+  }
+
+  private completePrefixBatch(
+    actorId: string,
+    handoff: ActiveHandoff,
+    release: ActivePrefixRelease
+  ): void {
+    release.inFlight -= 1;
+    if (release.inFlight === 0 && release.cursor < handoff.pending.length) {
+      try {
+        this.admitPendingPrefix(actorId, handoff, release);
+      } catch {
+        // admitPendingPrefix recorded the exact error and rejected every
+        // request that never reached the Actor FIFO.
+      }
+    }
+    this.finishPrefixReleaseIfIdle(actorId, handoff, release);
+  }
+
+  private finishPrefixReleaseIfIdle(
+    actorId: string,
+    handoff: ActiveHandoff,
+    release: ActivePrefixRelease
+  ): void {
+    if (!release.startOpen
+        || release.inFlight !== 0
+        || release.cursor !== handoff.pending.length) return;
+    if (handoff.prefixRelease === release) handoff.prefixRelease = undefined;
+    if (this.active.get(actorId) === handoff) this.active.delete(actorId);
+    if (release.errors.length === 0) {
+      release.resolve();
+    } else if (release.errors.length === 1) {
+      release.reject(release.errors[0]);
+    } else {
+      release.reject(new AggregateError(
+        release.errors,
+        `Actor '${actorId}' durable prefix replay failed.`
+      ));
+    }
+  }
+
+  private failUnqueuedPrefix(
+    handoff: ActiveHandoff,
+    release: ActivePrefixRelease,
+    error: unknown
+  ): void {
+    release.errors.push(error);
+    for (let index = release.cursor; index < handoff.pending.length; index += 1) {
+      this.failReleasedPending(handoff.pending[index]!, error);
+    }
+    release.cursor = handoff.pending.length;
+  }
+
+  private async releaseHandoff(
+    actorId: string,
+    handoff: ActiveHandoff,
+    replay: ZLinkActorHandoffDispatch | undefined,
+    admission?: ZLinkActorHandoffReplayAdmission
+  ): Promise<void> {
+    if (handoff.releaseTask !== undefined) {
+      await handoff.releaseTask;
+      return;
+    }
+    // Keep the hold installed while each record obtains a fresh application
+    // permit. Arrivals appended during an awaited replay remain behind the
+    // frozen prefix, and the final active-map removal is atomic with observing
+    // the drained tail. A shared task makes duplicate release callbacks join
+    // the same drain instead of replaying a record twice.
+    handoff.phase = 'releasing';
+    const releaseTask = Promise.resolve().then(
+      () => this.replayReleasedBacklog(actorId, handoff, replay, admission)
+    );
+    handoff.releaseTask = releaseTask;
+    await releaseTask;
   }
 
   private async replayReleasedBacklog(
     actorId: string,
     handoff: ActiveHandoff,
-    replay: ZLinkActorHandoffDispatch | undefined
+    replay: ZLinkActorHandoffDispatch | undefined,
+    admission?: ZLinkActorHandoffReplayAdmission
   ): Promise<void> {
-    if (handoff.pending.length === 0) return;
-    if (replay === undefined) {
-      const error = new Error(`Actor '${actorId}' provisional packet handoff has no replay target.`);
-      for (const pending of handoff.pending) {
-        if (pending.packet.source !== undefined) {
-          this.removeReplyRoute(pending.packet.source.replyRouteId);
+    try {
+      if (handoff.pending.length === 0) return;
+      if (replay === undefined) {
+        const error = new Error(`Actor '${actorId}' provisional packet handoff has no replay target.`);
+        for (const pending of handoff.pending) {
+          if (pending.packet.source !== undefined) {
+            this.removeReplyRoute(pending.packet.source.replyRouteId);
+          }
+          pending.reject?.(error);
         }
-        pending.reject?.(error);
+        throw error;
       }
-      throw error;
+      let cursor = 0;
+      const oneWayErrors: unknown[] = [];
+      while (cursor < handoff.pending.length) {
+        const pending = handoff.pending[cursor++];
+        try {
+          await this.replayReleasedPending(pending, replay, admission);
+        } catch (error) {
+          oneWayErrors.push(error);
+        }
+      }
+      if (oneWayErrors.length === 1) throw oneWayErrors[0];
+      if (oneWayErrors.length > 1) {
+        throw new AggregateError(oneWayErrors, `Actor '${actorId}' handoff replay failed.`);
+      }
+    } finally {
+      if (this.active.get(actorId) === handoff) {
+        this.active.delete(actorId);
+      }
     }
+  }
+
+  private async replayReleasedPending(
+    pending: PendingPacket,
+    replay: ZLinkActorHandoffDispatch,
+    admission?: ZLinkActorHandoffReplayAdmission
+  ): Promise<void> {
     const results = await replayActorHandoffBacklog(
-      handoff.pending.map((pending) => pending.packet),
-      replay
+      [pending.packet],
+      (parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) => {
+        const operation = () => replay(
+          parts,
+          returnResponse,
+          remoteBoundSessionTarget,
+          fallbackActorRef
+        );
+        return admission === undefined ? operation() : admission(operation);
+      }
     );
-    const byIndex = new Map(results.map((result) => [result.index, result]));
-    for (const pending of handoff.pending) {
-      if (pending.packet.source !== undefined) {
-        this.removeReplyRoute(pending.packet.source.replyRouteId);
-      }
-      const result = byIndex.get(pending.packet.index);
-      if (result?.ok === true) {
-        pending.resolve?.(result.response);
-      } else {
-        pending.reject?.(new Error(result?.error ?? 'Actor provisional packet replay failed.'));
-      }
+    if (pending.packet.source !== undefined) {
+      this.removeReplyRoute(pending.packet.source.replyRouteId);
     }
+    const result = results[0]!;
+    if (result.ok === true) {
+      pending.resolve?.(result.response);
+      return;
+    }
+    const error = result.errorKind === undefined
+      ? new Error(result.error ?? 'Actor provisional packet replay failed.')
+      : createInternalFrameworkException(
+          result.errorKind,
+          result.error ?? 'Actor provisional packet replay failed.'
+        );
+    if (pending.reject !== undefined) {
+      pending.reject(error);
+      return;
+    }
+    throw error;
+  }
+
+  private failReleasedPending(pending: PendingPacket, error: unknown): void {
+    if (pending.packet.source !== undefined) {
+      this.removeReplyRoute(pending.packet.source.replyRouteId);
+    }
+    pending.reject?.(error);
   }
 
   cancel(actorId: string): void {
     const handoff = this.active.get(actorId);
     if (handoff === undefined) return;
+    if (handoff.phase === 'releasing') return;
     this.active.delete(actorId);
     const error = new Error(`Actor '${actorId}' transfer was canceled.`);
     for (const pending of handoff.pending) {
@@ -479,9 +826,21 @@ export class ZLinkActorHandoffCoordinator {
       }
       if (!returnResponse) {
         handoff.pending.push({ packet });
+        // The durable handoff now owns this record. Return the ingress permit
+        // before waiting for a later replay, which must acquire its own fresh
+        // application-job permit.
+        releaseApplicationJobPermitForDurableHandoff();
+        if (handoff.prefixRelease !== undefined) {
+          try {
+            this.admitPendingPrefix(actorId, handoff, handoff.prefixRelease);
+          } catch (error) {
+            this.finishPrefixReleaseIfIdle(actorId, handoff, handoff.prefixRelease);
+            return Promise.reject(error);
+          }
+        }
         return Promise.resolve(undefined);
       }
-      return new Promise((resolve, reject) => {
+      const result = new Promise((resolve, reject) => {
         const source = this.captureRequestSource(
           handoff.sourceEvidence,
           context.replyRouteId
@@ -506,6 +865,17 @@ export class ZLinkActorHandoffCoordinator {
         this.replyRoutes.set(source.replyRouteId, route);
         handoff.pending.push({ packet: requestPacket, resolve, reject });
       });
+      releaseApplicationJobPermitForDurableHandoff();
+      if (handoff.prefixRelease !== undefined) {
+        try {
+          this.admitPendingPrefix(actorId, handoff, handoff.prefixRelease);
+        } catch {
+          // failUnqueuedPrefix rejected this request with the exact queue
+          // admission error and finish below closes the shared release.
+          this.finishPrefixReleaseIfIdle(actorId, handoff, handoff.prefixRelease);
+        }
+      }
+      return result;
     }
 
     const followRoute = this.findMessageFollowRoute(actorId, incomingContext);
@@ -1431,6 +1801,23 @@ async function awaitBeforeDeadline<T>(
     ]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function waitForHandoffReplayStart(
+  start: Promise<void>,
+  signal: AbortSignal
+): Promise<void> {
+  if (signal.aborted) throw signal.reason;
+  let abort!: () => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+  });
+  try {
+    await Promise.race([start, aborted]);
+  } finally {
+    signal.removeEventListener('abort', abort);
   }
 }
 

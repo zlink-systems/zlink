@@ -59,6 +59,12 @@ export {
   decodeHandoffPacket,
   type ZLinkActorHandoffPacket,
   type ZLinkActorHandoffDispatch,
+  type ZLinkActorHandoffPrefixAdmission,
+  type ZLinkActorHandoffPrefixQueue,
+  type ZLinkActorHandoffPrefixRecord,
+  type ZLinkActorHandoffPreparedReplayAdmission,
+  type ZLinkActorHandoffReplayAdmission,
+  type ZLinkActorHandoffReplayPreparation,
   type ZLinkActorHandoffResult
 } from './actor-handoff';
 export {

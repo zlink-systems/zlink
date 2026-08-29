@@ -22,6 +22,7 @@ import type {
   ReceiveBatch,
   ReceiveRecord,
   ServiceSpot,
+  StreamSessionActorAuthorityFence,
   StreamSessionService
 } from '../../foundation/service-runtime-contracts';
 import {
@@ -1935,7 +1936,8 @@ class RawStreamSessionService implements StreamSessionService {
       actorId: string,
       retiredSession: ServiceRetiredBoundSessionRouteFence,
       actor: ServiceActorRef
-    ) => void
+    ) => void,
+    actorAuthority?: StreamSessionActorAuthorityFence
   ): MeshOperationId {
     this.requireStarted();
     const sessionKey = String(sessionRid);
@@ -1948,7 +1950,8 @@ class RawStreamSessionService implements StreamSessionService {
         timeoutMs,
         (targetSessionRid, payloadFrame) => this.deliver(targetSessionRid, payloadFrame),
         onBindingReplaced,
-        serviceSessionBindingIngressPortIfRegistered(this)
+        serviceSessionBindingIngressPortIfRegistered(this),
+        actorAuthority
       )
     );
   }

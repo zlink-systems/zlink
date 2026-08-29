@@ -3,6 +3,7 @@ import { ZLinkActorSerialExecutor } from '../actors';
 import type { ZLinkExecutionBarrier } from '../execution';
 import type {
   ZLinkSerialSchedulerOptions,
+  ZLinkSerialWorkPreparation,
   ZLinkSerialWorkOptions
 } from '../execution/serial-execution-queue';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
@@ -53,6 +54,30 @@ export class ZLinkSpotSerialExecutor {
     return this.actorExecutor(actorId).execute(
       () => operation(this.actorSerial(actorId)),
       workOptions
+    );
+  }
+
+  /** @internal Restores a durable Actor FIFO prefix without starting it. */
+  admitActorDurablePrefix(
+    actorId: string,
+    records: readonly {
+      readonly operation: (
+        executeChild: <TChild>(
+          child: (serial: ZLinkSpotSerialTurnExecutor) => Promise<TChild> | TChild
+        ) => Promise<TChild>
+      ) => Promise<void>;
+      readonly preparation?: ZLinkSerialWorkPreparation;
+      readonly workOptions?: ZLinkSerialWorkOptions;
+    }[]
+  ): readonly Promise<void>[] {
+    const serial = this.actorSerial(actorId);
+    return this.actorExecutor(actorId).admitDurablePrefix(
+      records.map(record => ({
+        operation: executeChild =>
+          record.operation(child => executeChild(() => child(serial))),
+        preparation: record.preparation,
+        workOptions: record.workOptions
+      }))
     );
   }
 

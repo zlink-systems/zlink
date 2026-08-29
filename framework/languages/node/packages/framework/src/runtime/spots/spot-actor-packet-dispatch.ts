@@ -21,12 +21,14 @@ import { flowIfEnabled } from '../diagnostics';
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import type { ZLinkRemoteBoundSessionTarget } from '../actors';
 import {
+  actorMessageFollowContext,
   ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET,
   ZLinkSpotActorDispatcher,
   ZLinkSpotActorHandlerRegistryRuntime
 } from '../actors';
 import type { ZLinkDispatchErrorReporter } from '../channels';
 import {
+  decodeActorRequestDeadlineUnixMs,
   decodeStreamHeader,
   messageToBytes,
   streamCodecContentType,
@@ -38,6 +40,7 @@ import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import type { ZLinkSerialWorkOptions } from '../execution/serial-execution-queue';
 import { zlinkMetadataByteLength, zlinkSerialWorkOptions } from '../execution/serial-work-size';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
+import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
 
 export interface ZLinkActorResponseOptions {
   readonly metadata: ReadonlyMap<string, string>;
@@ -164,8 +167,12 @@ export class ZLinkSpotActorPacketDispatch {
     //  drives both the decode and the flow-context install.
     const flowEnabled = this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true;
     let header: ReturnType<typeof decodeStreamHeader>;
+    let requestDeadlineUnixMs: number | undefined;
     try {
       header = decodeStreamHeader(messageToBytes(parts[0]), flowEnabled);
+      requestDeadlineUnixMs = header.kind === ZLinkStreamMessageKind.Request
+        ? decodeActorRequestDeadlineUnixMs(messageToBytes(parts[0]))
+        : undefined;
     } catch (error) {
       this.reportInvalidFrame(actorId, ZLinkDispatchMessageKind.ActorSend, error);
       throw error;
@@ -188,7 +195,14 @@ export class ZLinkSpotActorPacketDispatch {
       ) {
         return undefined;
       }
-      if (remoteBoundSessionTarget !== undefined) {
+      if (
+        remoteBoundSessionTarget !== undefined
+        && actorMessageFollowContext(fallbackActorRef) === undefined
+      ) {
+        // A replayed handoff/Message Follow packet keeps its captured Session
+        // route solely for that packet's response. It cannot republish the
+        // predecessor route over a binding already confirmed by a later Actor
+        // owner turn.
         this.options.onRemoteBoundSessionTarget?.(actorId, remoteBoundSessionTarget);
       }
       const routed = await this.options.routeBeforeLocal?.(
@@ -228,6 +242,7 @@ export class ZLinkSpotActorPacketDispatch {
         remoteBoundSessionTarget,
         fallbackActorRef,
         requestTerminal,
+        requestDeadlineUnixMs,
         zlinkSerialWorkOptions(
           parts[1].data().byteLength,
           zlinkMetadataByteLength(header.metadata)
@@ -394,6 +409,7 @@ export class ZLinkSpotActorPacketDispatch {
     fallbackBoundSessionTarget: ZLinkRemoteBoundSessionTarget | undefined,
     fallbackActorRef: ActorRef | undefined,
     requestTerminal: ZLinkActorRequestTerminal | undefined,
+    requestDeadlineUnixMs: number | undefined,
     workOptions: ZLinkSerialWorkOptions
   ): Promise<unknown> {
     const spot = typeof this.options.spot === 'function'
@@ -412,12 +428,28 @@ export class ZLinkSpotActorPacketDispatch {
         header,
         messageKind
       ),
-      onHandlerStart: () => this.trace(
-        ZLinkMessageFlowOutcome.Dispatched,
-        actorId,
-        header,
-        messageKind
-      )
+      onHandlerStart: () => {
+        // A transferred backlog is returned to the Actor queue as one FIFO
+        // prefix. Check the request deadline when its owner turn actually
+        // starts, not when that prefix is admitted.
+        if (
+          messageKind === ZLinkDispatchMessageKind.ActorRequest
+          && requestDeadlineUnixMs !== undefined
+          && Date.now() >= requestDeadlineUnixMs
+        ) {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+            `Actor request '${actorId}' expired before handler admission.`
+          );
+        }
+        releaseApplicationJobPermitBeforeHandler();
+        this.trace(
+          ZLinkMessageFlowOutcome.Dispatched,
+          actorId,
+          header,
+          messageKind
+        );
+      }
     });
     try {
       if (header.kind === ZLinkStreamMessageKind.Send) {

@@ -418,7 +418,9 @@ export class ServiceStatefulRegistry {
     if (
       current !== undefined
       && current.sessionOwnerNodeRid === binding.sessionOwnerNodeRid
-      && current.sessionRid === binding.sessionRid
+      && current.sessionOwnerNodeGeneration === binding.sessionOwnerNodeGeneration
+      && current.sessionOwnerId === binding.sessionOwnerId
+      && current.sessionOwnerLeaseGeneration === binding.sessionOwnerLeaseGeneration
       && current.bindingGeneration >= binding.bindingGeneration
     ) {
       throw new ServiceStaleGenerationError('binding', binding.actor.actorId);
