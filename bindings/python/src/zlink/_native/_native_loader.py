@@ -51,7 +51,7 @@ _register_windows_dll_directories()
 def _require_supported_platform():
     if SUPPORTED_PLATFORM is None:
         raise OSError(
-            "zlink Python Core 0.14.1 supports Linux x86_64 and Windows x86_64"
+            "zlink Python Core 0.14.2 supports Linux x86_64 and Windows x86_64"
         )
 
 

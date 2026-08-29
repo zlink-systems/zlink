@@ -16,8 +16,8 @@ import (
 
 func TestRuntimeVersionIsAvailable(t *testing.T) {
 	version := zlink.RuntimeVersion()
-	if version.Major != 0 || version.Minor != 14 || version.Patch != 1 {
-		t.Fatalf("RuntimeVersion() = %d.%d.%d, want 0.14.1", version.Major, version.Minor, version.Patch)
+	if version.Major != 0 || version.Minor != 14 || version.Patch != 2 {
+		t.Fatalf("RuntimeVersion() = %d.%d.%d, want 0.14.2", version.Major, version.Minor, version.Patch)
 	}
 }
 

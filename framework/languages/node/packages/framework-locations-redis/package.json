@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@zlink-systems/framework": "0.10.0",
-    "@zlink-systems/zlink": "0.14.1",
+    "@zlink-systems/zlink": "0.14.2",
     "redis": "^6.1.0"
   }
 }
