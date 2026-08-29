@@ -188,6 +188,54 @@ final class ZLinkSessionActorBindingContractTest {
         assertTrue(runtime.bound().isEmpty());
     }
 
+    @Test
+    void actorIngressIgnoresStaleGateProjectionForCurrentBinding()
+        throws Exception {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        ZLinkSessionActor actor = runtime.bind(
+            new ActorRef("actor-1", 7, MESH, NODE_A))
+            .toCompletableFuture().join();
+        corruptIngressGateProjection(runtime, 70, BINDING_GENERATION + 1);
+
+        relay(actor, "projection-mismatch").toCompletableFuture().join();
+
+        assertEquals("actor-1:projection-mismatch", stream.relays.getLast());
+    }
+
+    @Test
+    void boundSessionSendUsesOnlySourceThreeAndExpectedBinding() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(
+            stream,
+            authoritySpotNode(Map.of(
+                NODE_A, new ActorAuthority(3, 9, 4))));
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A))
+            .toCompletableFuture().join();
+        var payload = outboundPayload("projection-independent");
+
+        assertTrue(runtime.acceptBoundSessionSend(
+            NODE_A, 3, boundSend(NODE_A, 3, 9, 400), payload));
+        assertEquals(List.of("projection-independent"), stream.boundPushes);
+    }
+
+    @Test
+    void command42DoesNotRejudgeActorOrSessionAuthorityMirrors() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(
+            stream,
+            authoritySpotNode(Map.of(
+                NODE_A, new ActorAuthority(30, 90, 40))));
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A))
+            .toCompletableFuture().join();
+        var command = seal(relocation(), 7, NODE_A, 9);
+
+        var reply = runtime.applyRelocationSealCommand(command)
+            .toCompletableFuture().join();
+
+        assertTrue(reply.echoes(command));
+    }
+
 
     @Test
     void command42EchoesTheExactFenceAndCommand44IsOneWay() {
@@ -232,6 +280,42 @@ final class ZLinkSessionActorBindingContractTest {
         assertEquals("actor-1:held", stream.relays.getLast());
         runtime.applyRelocationRouteCommand(abort(relocation))
             .toCompletableFuture().join();
+    }
+
+    @Test
+    void command44CommitDoesNotRejudgeSourceAuthorityMirror() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        ZLinkSessionActor actor = runtime.bind(
+            new ActorRef("actor-1", 7, MESH, NODE_A))
+            .toCompletableFuture().join();
+        var relocation = relocation();
+        runtime.applyRelocationSealCommand(seal(relocation, 7, NODE_A, 9))
+            .toCompletableFuture().join();
+
+        runtime.applyRelocationRouteCommand(route(relocation, 8, 10))
+            .toCompletableFuture().join();
+
+        assertEquals(NODE_B, actor.ref().nodeRid());
+    }
+
+    @Test
+    void command44AbortUsesMatchingSealIdentityNotAuthorityMirror() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        ZLinkSessionActor actor = runtime.bind(
+            new ActorRef("actor-1", 7, MESH, NODE_A))
+            .toCompletableFuture().join();
+        var relocation = relocation();
+        runtime.applyRelocationSealCommand(seal(relocation, 7, NODE_A, 9))
+            .toCompletableFuture().join();
+        CompletionStage<Void> held = relay(actor, "held-authority-mismatch");
+
+        runtime.applyRelocationRouteCommand(abort(relocation, 1))
+            .toCompletableFuture().join();
+
+        held.toCompletableFuture().join();
+        assertEquals("actor-1:held-authority-mismatch", stream.relays.getLast());
     }
 
     @Test
@@ -327,6 +411,13 @@ final class ZLinkSessionActorBindingContractTest {
 
     private static ZLinkServiceM6BWireCodec.SessionRelocationRoute route(
         ZLinkServiceM6BWireCodec.RelocationIdentity relocation) {
+        return route(relocation, 9, 10);
+    }
+
+    private static ZLinkServiceM6BWireCodec.SessionRelocationRoute route(
+        ZLinkServiceM6BWireCodec.RelocationIdentity relocation,
+        long previousAuthorityOwnerGeneration,
+        long currentAuthorityOwnerGeneration) {
         return new ZLinkServiceM6BWireCodec.SessionRelocationRoute(
             relocation,
             new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
@@ -337,11 +428,20 @@ final class ZLinkSessionActorBindingContractTest {
                 NODE_A, 3, "session-owner", 4, SESSION,
                 BINDING_GENERATION),
             ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.COMMIT,
-            9, 10, NODE_B, 4);
+            previousAuthorityOwnerGeneration,
+            currentAuthorityOwnerGeneration,
+            NODE_B,
+            4);
     }
 
     private static ZLinkServiceM6BWireCodec.SessionRelocationRoute abort(
         ZLinkServiceM6BWireCodec.RelocationIdentity relocation) {
+        return abort(relocation, 9);
+    }
+
+    private static ZLinkServiceM6BWireCodec.SessionRelocationRoute abort(
+        ZLinkServiceM6BWireCodec.RelocationIdentity relocation,
+        long currentAuthorityOwnerGeneration) {
         return new ZLinkServiceM6BWireCodec.SessionRelocationRoute(
             relocation,
             new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
@@ -352,7 +452,7 @@ final class ZLinkSessionActorBindingContractTest {
                 NODE_A, 3, "session-owner", 4, SESSION,
                 BINDING_GENERATION),
             ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT,
-            0, 9, null, 0);
+            0, currentAuthorityOwnerGeneration, null, 0);
     }
 
     private static CompletionStage<Void> relay(ZLinkSessionActor actor) {
@@ -386,6 +486,37 @@ final class ZLinkSessionActorBindingContractTest {
             null,
             true,
             ZLinkStreamCodec.RAW);
+    }
+
+    private static ZLinkSessionActorsRuntime runtime(
+        FakeStream stream,
+        ZLinkInternalSpotNode spotNode) {
+        return new ZLinkSessionActorsRuntime(
+            spotNode,
+            stream,
+            SESSION,
+            null,
+            new RawSerializer(),
+            ignored -> true,
+            null,
+            true,
+            ZLinkStreamCodec.RAW);
+    }
+
+    private static void corruptIngressGateProjection(
+        ZLinkSessionActorsRuntime runtime,
+        long objectGeneration,
+        long bindingGeneration) throws Exception {
+        Field gatesField = ZLinkSessionActorsRuntime.class
+            .getDeclaredField("ingressGates");
+        gatesField.setAccessible(true);
+        Object gate = ((Map<?, ?>) gatesField.get(runtime)).get("actor-1");
+        Field objectField = gate.getClass().getDeclaredField("objectGeneration");
+        objectField.setAccessible(true);
+        objectField.setLong(gate, objectGeneration);
+        Field bindingField = gate.getClass().getDeclaredField("bindingGeneration");
+        bindingField.setAccessible(true);
+        bindingField.setLong(gate, bindingGeneration);
     }
 
     private static ZLinkSessionActorsRuntime runtime(

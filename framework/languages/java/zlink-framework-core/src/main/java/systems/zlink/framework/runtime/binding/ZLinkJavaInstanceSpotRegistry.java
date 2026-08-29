@@ -67,22 +67,12 @@ final class ZLinkJavaInstanceSpotRegistry {
         }
         CompletableFuture<Activation> current = activations.get(spotId);
         if (current != null) {
-            return current.thenCompose(activation ->
-                activation.spot().lifecycleGeneration() == objectGeneration
-                    ? CompletableFuture.completedFuture(activation)
-                    : CompletableFuture.failedFuture(
-                        new IllegalStateException(
-                            "Instance Spot object generation is stale")));
+            return current;
         }
         CompletableFuture<Activation> candidate = new CompletableFuture<>();
         current = activations.putIfAbsent(spotId, candidate);
         if (current != null) {
-            return current.thenCompose(activation ->
-                activation.spot().lifecycleGeneration() == objectGeneration
-                    ? CompletableFuture.completedFuture(activation)
-                    : CompletableFuture.failedFuture(
-                        new IllegalStateException(
-                            "Instance Spot object generation is stale")));
+            return current;
         }
         try {
             ZLinkBackendSpot spot =

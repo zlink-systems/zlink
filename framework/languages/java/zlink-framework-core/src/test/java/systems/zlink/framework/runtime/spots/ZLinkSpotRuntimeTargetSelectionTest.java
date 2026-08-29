@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
@@ -33,6 +34,9 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
+import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
+import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseMissing;
@@ -78,6 +82,35 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
                 candidates, Set.of());
 
         assertEquals(candidates, selected);
+    }
+
+    @Test
+    void instanceRouteStalenessIgnoresObjectGeneration() {
+        var authority = new ZLinkServiceAuthorityPayloadCodec
+            .InstanceSpotAuthority(
+                ZLinkServiceAuthorityPayloadCodec.State.READY,
+                ZONE_TYPE,
+                "zone-1",
+                "owner-1",
+                7,
+                "mesh",
+                CONNECTED,
+                11);
+        var staleGenerationAddress = new SpotTransportAddress(
+            "router",
+            CONNECTED,
+            "zone-1",
+            999,
+            11,
+            13,
+            7,
+            systems.zlink.framework.spots.ZLinkSpotKind.INSTANCE);
+
+        assertFalse(ZLinkSpotRuntime.isStaleInstanceRoute(
+            authority,
+            ZLinkPlacementAllocationState.ACTIVE,
+            13,
+            staleGenerationAddress));
     }
 
     @Test

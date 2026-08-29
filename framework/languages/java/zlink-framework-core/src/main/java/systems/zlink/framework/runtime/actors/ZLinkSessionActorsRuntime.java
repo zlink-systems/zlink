@@ -843,9 +843,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             }
             StoredBindingRoute route = bindingRoutes.get(actor.actorId());
             IngressGate gate = ingressGates.get(actor.actorId());
-            if (route == null || gate == null
-                || gate.objectGeneration != route.objectGeneration()
-                || gate.bindingGeneration != route.bindingGeneration()) {
+            if (route == null || gate == null) {
                 return IngressAdmissionState.failed(
                     new ZLinkConfigurationException(
                         "Session ingress binding state is unavailable: "
@@ -1283,10 +1281,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         var target = command.actor();
         String actorId = target.actor().actorId();
         StoredBindingRoute route = bindingRoutes.get(actorId);
-        IngressGate gate = ingressGates.get(actorId);
         return route != null
-            && gate != null
-            && gate.seal == null
             && route.actorId().equals(actorId)
             && route.objectGeneration() == target.actor().generation()
             && route.nodeRid().equals(sourceNodeRid)
@@ -1295,13 +1290,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             && route.nodeGeneration() == target.targetNodeGeneration()
             && route.authorityOwnerGeneration()
                 == target.authorityOwnerGeneration()
-            && (route.ownerLeaseGeneration() == 0
-                || route.ownerLeaseGeneration()
-                    == target.ownerLeaseGeneration())
             && route.bindingGeneration()
-                == command.expectedBindingGeneration()
-            && gate.objectGeneration == route.objectGeneration()
-            && gate.bindingGeneration == route.bindingGeneration();
+                == command.expectedBindingGeneration();
     }
 
     private boolean deliverCurrentBoundSessionSendLocked(
@@ -1399,11 +1389,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         boolean continueDrain) {
     }
 
-    //  Production bindings compare the full Actor and Session owner fences
-    //  against the raw SpotNode's current node, authority, and lease view.
-    //  Constructors without a SpotNode exist for isolated backend tests; in
-    //  that case command 42 pins the previously unknown generations before
-    //  the ingress gate becomes sealed.
     private boolean sealFenceMatches(
         ZLinkServiceM6BWireCodec.SessionRelocationSeal command,
         StoredBindingRoute observed) {
@@ -1414,49 +1399,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         boolean storedRouteMatches = observed.bindingGeneration()
                 == command.session().bindingGeneration()
             && observed.objectGeneration() == actor.actor().generation()
-            && observed.nodeRid().equals(actor.actor().nodeRid())
-            && (observed.authorityOwnerGeneration() == 0
-                || observed.authorityOwnerGeneration()
-                    == actor.authorityOwnerGeneration())
-            && (observed.nodeGeneration() == 0
-                || observed.nodeGeneration() == actor.targetNodeGeneration())
-            && (observed.ownerLeaseGeneration() == 0
-                || observed.ownerLeaseGeneration()
-                    == actor.ownerLeaseGeneration());
-        if (!storedRouteMatches || spotNode == null) {
-            return storedRouteMatches;
-        }
-        long actorNodeGeneration = spotNode.actorNodeGeneration(actor.actor());
-        long actorAuthority =
-            spotNode.actorAuthorityOwnerGeneration(actor.actor());
-        long actorLease =
-            spotNode.actorAuthorityOwnerLeaseGeneration(actor.actor());
-        long localNodeGeneration = spotNode.localNodeGeneration();
-        long localOwnerLease = spotNode.localAuthorityLeaseGeneration();
-        String localOwnerId = spotNode.localAuthorityOwnerId();
-        var session = command.session();
-        // actorNodeGeneration/localNodeGeneration are node
-        // lifecycle-generation opaque equality tokens (.NET ulong, spec
-        // 01-glossary "Lifecycle generation"): full range, only zero is
-        // unassigned, so `> 0` wrongly treats a legitimate negative-as-long
-        // value as unset. actorAuthority/actorLease/localOwnerLease are
-        // spec-bounded to `1..long.MaxValue`/positive `long`
-        // (AuthorityOwnerGeneration/OwnerLeaseGeneration), so `> 0` is
-        // correct for them.
-        return actorNodeGeneration != 0
-            && actorAuthority > 0
-            && actorLease > 0
-            && localNodeGeneration != 0
-            && localOwnerLease > 0
-            && localOwnerId != null
-            && !localOwnerId.isBlank()
-            && actorNodeGeneration == actor.targetNodeGeneration()
-            && actorAuthority == actor.authorityOwnerGeneration()
-            && actorLease == actor.ownerLeaseGeneration()
-            && spotNode.routingId().equals(session.nodeRid())
-            && localNodeGeneration == session.nodeGeneration()
-            && localOwnerId.equals(session.ownerId())
-            && localOwnerLease == session.ownerLeaseGeneration();
+            && observed.nodeRid().equals(actor.actor().nodeRid());
+        return storedRouteMatches;
     }
 
     //  Evicts one terminal so a new seal can be recorded: a spent one first,
@@ -2101,8 +2045,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             if (terminal == null || terminal.consumed()
                 || !terminal.completion().isDone()
                 || !sealMatchesRoute(terminal.seal(), command)
-                || terminal.seal().actor().authorityOwnerGeneration()
-                    != command.currentAuthorityOwnerGeneration()
                 || gate == null
                 || !command.relocation().equals(gate.seal)) {
                 LOGGER.warning(staleFenceDiagnostic(command, null));
@@ -2274,15 +2216,14 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             // `<= 0` sentinel wrongly rejects a legitimate negative-as-long
             // value. objectGeneration/sourceAuthorityOwnerGeneration/
             // bindingGeneration/targetAuthorityOwnerGeneration are
-            // spec-bounded to `1..long.MaxValue`, so `<= 0`/ordered compare
-            // is correct for them.
+            // spec-bounded to `1..long.MaxValue`, so `<= 0` is valid presence
+            // validation; it does not establish ordering between projections.
             if (actorId == null || actorId.isBlank()
                 || objectGeneration <= 0
                 || targetNodeGeneration == 0
                 || sourceAuthorityOwnerGeneration <= 0
                 || bindingGeneration <= 0
-                || targetAuthorityOwnerGeneration
-                    <= sourceAuthorityOwnerGeneration) {
+                || targetAuthorityOwnerGeneration <= 0) {
                 throw new IllegalArgumentException(
                     "relocation binding-route generations are invalid");
             }
@@ -2305,9 +2246,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             return actorId.equals(update.actorId())
                 && objectGeneration == update.objectGeneration()
                 && nodeRid.equals(update.sourceNodeRid())
-                && bindingGeneration == update.bindingGeneration()
-                && authorityOwnerGeneration
-                    == update.sourceAuthorityOwnerGeneration();
+                && bindingGeneration == update.bindingGeneration();
         }
 
         StoredBindingRoute toTarget(

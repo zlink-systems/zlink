@@ -270,7 +270,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     }
 
     @Test
-    void spotSendRejectsStaleGenerationBeforeDispatch() {
+    void spotSendUsesCurrentReadySpotAcrossGenerationChange() {
         try (var context = Zlink.createContext();
              var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
             RoutingId nodeRid = RoutingId.from("jvm-m6b-node");
@@ -280,16 +280,14 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             ZLinkBackendSpot source = node.spotNode().createSpot(sourceRid.toString());
             ZLinkBackendSpot target = node.spotNode().createSpot(targetRid.toString());
 
-            try (Message stale = Message.from("stale")) {
-                assertThrows(
-                    CompletionException.class,
-                    () -> source.sendToSpot(
-                            nodeRid,
-                            targetRid.toString(),
-                            target.lifecycleGeneration() + 1,
-                            List.of(stale))
-                        .toCompletableFuture()
-                        .join());
+            try (Message stale = Message.from("stale-address")) {
+                source.sendToSpot(
+                        nodeRid,
+                        targetRid.toString(),
+                        target.lifecycleGeneration() + 1,
+                        List.of(stale))
+                    .toCompletableFuture()
+                    .join();
             }
             try (Message current = Message.from("current")) {
                 source.sendToSpot(
@@ -299,6 +297,12 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                         List.of(current))
                     .toCompletableFuture()
                     .join();
+            }
+            try (var received = target.recvRoute(ZLinkBackendRecvMode.DONT_WAIT)) {
+                assertNotNull(received);
+                assertEquals(
+                    "stale-address",
+                    received.parts().getFirst().toUtf8String());
             }
             try (var received = target.recvRoute(ZLinkBackendRecvMode.DONT_WAIT)) {
                 assertNotNull(received);
@@ -1220,6 +1224,30 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             }
             assertEquals(2, handlerCalls.get());
 
+            long staleGeneration = target.lifecycleGeneration() + 1;
+            source.rememberSpotAuthority(
+                leftRid,
+                targetRid.toString(),
+                staleGeneration,
+                77,
+                1);
+            try (Message message = Message.from("remote-stale-address")) {
+                reply = source.requestToSpot(
+                        leftRid,
+                        targetRid.toString(),
+                        staleGeneration,
+                        List.of(message),
+                        Duration.ofSeconds(2))
+                    .toCompletableFuture();
+            }
+            try (ZLinkBackendReceived received =
+                     reply.get(2, TimeUnit.SECONDS)) {
+                assertEquals(
+                    "remote-reply",
+                    received.parts().getFirst().toUtf8String());
+            }
+            assertEquals(3, handlerCalls.get());
+
             left.setPeerAuthorityResolver(
                 (meshName, candidateRid, candidateGeneration) ->
                     CompletableFuture.completedFuture(
@@ -1248,7 +1276,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     ZLinkBackendRequestResult.CONFLICT,
                     received.result());
             }
-            assertEquals(2, handlerCalls.get());
+            assertEquals(3, handlerCalls.get());
         }
     }
 
@@ -1301,14 +1329,16 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             } finally {
                 reply.forEach(Message::close);
             }
-            assertFalse(node.spotNode().sendToActor(
-                new systems.zlink.framework.runtime.internal.backend
-                    .ZLinkBackendActorRef(
-                        nodeRid,
-                        actor.actorId(),
-                        actor.generation() + 1),
-                List.of(),
-                SendFlags.DONT_WAIT));
+            try (Message staleAddress = Message.from("stale-address")) {
+                assertTrue(node.spotNode().sendToActor(
+                    new systems.zlink.framework.runtime.internal.backend
+                        .ZLinkBackendActorRef(
+                            nodeRid,
+                            actor.actorId(),
+                            actor.generation() + 1),
+                    List.of(staleAddress),
+                    SendFlags.DONT_WAIT));
+            }
         }
     }
 
@@ -1479,9 +1509,12 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             } finally {
                 reply.forEach(Message::close);
             }
+            ZLinkBackendActorRef staleAddress = new ZLinkBackendActorRef(
+                leftRid, actor.actorId(), actor.generation() + 1);
+            right.spotNode().rememberActorAuthority(staleAddress, 89, 1);
             try (Message request = Message.from("remote-actor-progress")) {
                 reply = right.spotNode().requestToActor(
-                    actor,
+                    staleAddress,
                     List.of(request),
                     SendFlags.DONT_WAIT,
                     Duration.ofSeconds(2)).toCompletableFuture()
@@ -1682,11 +1715,11 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 leftRid,
                 route.targetNodeGeneration(),
                 spotId,
-                route.objectGeneration(),
+                route.objectGeneration() - 1,
                 route.ownerId(),
-                route.authorityOwnerGeneration() + 1,
-                route.leaseGeneration(),
-                route.storeVersion());
+                route.authorityOwnerGeneration() - 1,
+                route.leaseGeneration() - 1,
+                "store-2");
             try (Message packet = Message.from("Packet");
                  Message payload = Message.from("stale")) {
                 right.sendInstanceSpot(
@@ -1695,53 +1728,21 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     .toCompletableFuture()
                     .get(2, TimeUnit.SECONDS);
             }
-            Thread.sleep(20);
-            assertEquals(
-                null,
-                activated.recvRoute(ZLinkBackendRecvMode.DONT_WAIT));
+            var staleDeadline = System.nanoTime()
+                + Duration.ofSeconds(2).toNanos();
+            var reused = activated.recvRoute(ZLinkBackendRecvMode.DONT_WAIT);
+            while (reused == null && System.nanoTime() < staleDeadline) {
+                Thread.sleep(1);
+                reused = activated.recvRoute(ZLinkBackendRecvMode.DONT_WAIT);
+            }
+            assertNotNull(reused);
+            try (var reusedDelivery = reused) {
+                assertEquals(
+                    "stale",
+                    reusedDelivery.parts().getLast().toUtf8String());
+            }
+            assertEquals(41, activated.lifecycleGeneration());
         }
-    }
-
-    @Test
-    void instanceAuthorityReplacementRequiresAForwardFence() {
-        RoutingId nodeRid = RoutingId.from("jvm-m6b-instance-fence-node");
-        var current = new ZLinkServiceM6BWireCodec.InstanceRouteFence(
-            nodeRid,
-            3,
-            "instance-fence-spot",
-            7,
-            "owner-a",
-            11,
-            5,
-            "41");
-        var recreated = new ZLinkServiceM6BWireCodec.InstanceRouteFence(
-            nodeRid,
-            3,
-            "instance-fence-spot",
-            8,
-            "owner-a",
-            12,
-            6,
-            "42");
-        var forged = new ZLinkServiceM6BWireCodec.InstanceRouteFence(
-            nodeRid,
-            3,
-            "instance-fence-spot",
-            7,
-            "owner-a",
-            12,
-            5,
-            "41");
-
-        assertTrue(
-            ZLinkJavaRawSpotNode.isNewerInstanceAuthorityFence(
-                recreated, current));
-        assertFalse(
-            ZLinkJavaRawSpotNode.isNewerInstanceAuthorityFence(
-                current, recreated));
-        assertFalse(
-            ZLinkJavaRawSpotNode.isNewerInstanceAuthorityFence(
-                forged, current));
     }
 
     @Test
