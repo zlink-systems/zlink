@@ -195,7 +195,7 @@ void test_request_reply_frame_buffer_spills_after_eight_owned_frames ()
     zlink_msg_t *inline_data = NULL;
 
     for (size_t i = 0; i < 9; ++i) {
-        frames.push_back (zlink_msg_t ());
+        frames.append_uninitialized ();
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&frames.back (), 80 + i));
         memset (zlink_msg_data (&frames.back ()), static_cast<int> ('a' + i),
                 zlink_msg_size (&frames.back ()));
@@ -265,8 +265,7 @@ void test_recv_sequence_buffers_two_parts_inline_and_rolls_back_oom ()
     memcpy (source_rid.data, "rid", source_rid.size);
     state->recv.transport_pair_id = 41;
     state->recv.transport_pair_generation = 42;
-    const size_t impossible_part_count =
-      state->recv.buffered_parts.max_size () + 1;
+    const size_t impossible_part_count = std::numeric_limits<size_t>::max ();
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
       -1, stage_recv_sequence (
