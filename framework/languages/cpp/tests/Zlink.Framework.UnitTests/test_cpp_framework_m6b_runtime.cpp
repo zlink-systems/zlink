@@ -3557,18 +3557,85 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
 
     (void) target->dispatch_ready (dispatch);
     assert (dispatched == 2);
-    assert (target->transport ().mailbox ().pending_messages (
-              mesh::service_mailbox_domain_t::application)
-            == 0);
+    assert (
+      target->transport ().mailbox ().pending_messages (mesh::service_mailbox_domain_t::application)
+      == 0);
+}
+
+void verify_logical_multicast_continues_after_one_target_failure ()
+{
+    auto source = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      mesh::raw_mesh_node_options_t{descriptor ("multicast-source")}, "entry", {"framework.spot"}});
+    auto target_descriptor = descriptor ("z-multicast-target");
+    target_descriptor.channels = {{"framework.spot", 100}};
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{std::move (target_descriptor)}});
+    auto entry = source->entry_spot ();
+    source->start ();
+    target->start ();
+
+    const auto target_status = target->status ();
+    const auto source_status = source->status ();
+    assert (target->connect_peer (source_status.local_endpoint (), source_status.routing_id ()));
+
+    const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
+                                   std::vector<zlink::message_t>) {};
+    const auto connect_deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
+    while ((!source->transport ().topology ().peer (target_status.routing_id ().to_bytes ())
+            || !target->transport ().topology ().peer (source_status.routing_id ().to_bytes ()))
+           && mesh::service_liveness_registry_t::clock_t::now () < connect_deadline) {
+        (void) source->dispatch_ready (noop_dispatch);
+        (void) target->dispatch_ready (noop_dispatch);
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (source->transport ().topology ().peer (target_status.routing_id ().to_bytes ()));
+
+    auto unavailable = descriptor ("a-unavailable-target");
+    unavailable.state = mesh::service_node_state_t::serving;
+    unavailable.channels = {{"framework.spot", 100}};
+    assert (source->transport ().admit_peer (unavailable, bytes ("unavailable-connection"),
+                                             mesh::service_liveness_registry_t::clock_t::now ())
+            == mesh::peer_admission_result_t::admitted);
+    const auto fanout_targets = source->transport ().topology ().peers ();
+    assert (fanout_targets.size () >= 2);
+    assert (fanout_targets.front ().descriptor.node_routing_id == bytes ("a-unavailable-target"));
+
+    bool tail_failed = false;
+    try {
+        await_task (entry.publish_tail ({zlink::message_t::from (std::string ("payload"))}));
+    }
+    catch (const zlink::framework::framework_exception_t &) {
+        tail_failed = true;
+    }
+    assert (tail_failed);
+
+    const auto receive_deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
+    while (
+      target->transport ().mailbox ().pending_messages (mesh::service_mailbox_domain_t::application)
+        == 0
+      && mesh::service_liveness_registry_t::clock_t::now () < receive_deadline) {
+        const auto pumped = target->transport ()
+                              .pump_one (mesh::service_liveness_registry_t::clock_t::now ())
+                              .result ()
+                              .value ();
+        assert (pumped != mesh::raw_mesh_pump_result_t::protocol_error);
+        if (pumped == mesh::raw_mesh_pump_result_t::no_data)
+            std::this_thread::sleep_for (1ms);
+    }
+    assert (
+      target->transport ().mailbox ().pending_messages (mesh::service_mailbox_domain_t::application)
+      == 1);
+
+    source->close ();
+    target->close ();
 }
 
 void verify_local_application_enqueue_wakes_dispatch_wait ()
 {
     auto host = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{
-        mesh::raw_mesh_node_options_t{
-          descriptor ("local-dispatch-wake")},
-        "entry", {"framework.spot"}});
+      host::host_options_t{mesh::raw_mesh_node_options_t{descriptor ("local-dispatch-wake")},
+                           "entry",
+                           {"framework.spot"}});
     auto entry = host->entry_spot ();
     host->start ();
 
@@ -6803,6 +6870,7 @@ int main ()
     verify_terminal_journal_preserves_outstanding_entries ();
     verify_unbounded_actor_handoff_backlog ();
     verify_public_host_dispatches_one_application_record_per_turn ();
+    verify_logical_multicast_continues_after_one_target_failure ();
     verify_local_application_enqueue_wakes_dispatch_wait ();
     verify_root_location_session_seal_timeout_is_startup_snapshot ();
     verify_same_node_session_seal_waits_for_active_ingress ();

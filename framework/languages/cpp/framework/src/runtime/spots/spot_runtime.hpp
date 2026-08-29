@@ -2611,10 +2611,13 @@ class spot_node_runtime_t
                                              std::string transfer_id,
                                              bool reuse_active_actor_queue,
                                              std::function<bool ()> stop_requested);
-    void deliver_actor_join_completion_async (actor_ref_t actor_ref,
-                                              actor_join_completion_t completion,
-                                              std::optional<spot_id_t> source_spot_id,
-                                              std::function<void (result_t<void>)> completed);
+    void deliver_actor_join_completion_async (
+      actor_ref_t actor_ref,
+      actor_join_completion_t completion,
+      std::optional<spot_id_t> source_spot_id,
+      std::function<void (result_t<void>)> completed,
+      std::function<void (result_t<void>, std::function<void (result_t<void>)>)> settle_delivery =
+        {});
     void enqueue_actor_handoff_replay (const actor_ref_t &actor_ref,
                                        std::vector<handoff_packet_t> backlog,
                                        service_provider_t &services,

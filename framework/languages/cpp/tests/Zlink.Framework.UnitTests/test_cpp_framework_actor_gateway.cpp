@@ -4293,13 +4293,19 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
     actor_gateway_runtime_t gateway (state);
     const auto actor = test_actor_ref ("join-completion-node", "game.actor", "join-player", 7);
     auto delivery = std::make_shared<task_completion_source_t<void>> ();
+    std::atomic_int delivery_calls{0};
     std::atomic_bool delivery_started{false};
+    std::atomic_bool next_delivery_started{false};
     if (!gateway.bind_session_sink (
           actor,
-          [delivery, &delivery_started] (std::string, stream_codec_t,
-                                         const zlink::message_t &) -> task_t<void> {
-              delivery_started.store (true, std::memory_order_release);
-              co_await delivery->task ();
+          [delivery, &delivery_calls, &delivery_started, &next_delivery_started] (
+            std::string, stream_codec_t, const zlink::message_t &) -> task_t<void> {
+              if (delivery_calls.fetch_add (1, std::memory_order_acq_rel) == 0) {
+                  delivery_started.store (true, std::memory_order_release);
+                  co_await delivery->task ();
+              } else {
+                  next_delivery_started.store (true, std::memory_order_release);
+              }
               co_return;
           })) {
         return 1;
@@ -4314,14 +4320,24 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
     std::mutex mutex;
     std::condition_variable changed;
     std::optional<result_t<void>> terminal;
-    gateway.settle_join_completion_delivery_fence (actor, fence, result_t<void>::success (),
-                                                   [&] (result_t<void> result) {
-                                                       {
-                                                           std::lock_guard lock (mutex);
-                                                           terminal.emplace (std::move (result));
-                                                       }
-                                                       changed.notify_all ();
-                                                   });
+    std::atomic<int> terminal_calls{0};
+    gateway.settle_join_completion_delivery_fence (
+      actor, fence, result_t<void>::success (), [&] (result_t<void> result) {
+          terminal_calls.fetch_add (1, std::memory_order_relaxed);
+          {
+              std::lock_guard lock (mutex);
+              terminal.emplace (std::move (result));
+          }
+          changed.notify_all ();
+          throw std::runtime_error ("delivery settlement observer failed");
+      });
+    const auto delivery_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
+    while (!delivery_started.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < delivery_deadline) {
+        std::this_thread::yield ();
+    }
+    if (!delivery_started.load (std::memory_order_acquire))
+        return 4;
     {
         std::unique_lock lock (mutex);
         if (changed.wait_for (lock, std::chrono::milliseconds (25),
@@ -4329,17 +4345,47 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
             return 3;
         }
     }
-    if (!delivery_started.load (std::memory_order_acquire))
-        return 4;
-    delivery->complete (result_t<void>::success ());
+    auto next_submitted = gateway.actor_context (actor)
+                            .bound_session ()
+                            .send (std::string ("after-settlement-observer"))
+                            .submit ();
+    if (!next_submitted.result () || next_delivery_started.load (std::memory_order_acquire)) {
+        return 5;
+    }
+    delivery->complete (
+      result_t<void>::failure (framework_error_kind_t::unavailable, "join callback push failed"));
     {
         std::unique_lock lock (mutex);
         if (!changed.wait_for (lock, std::chrono::seconds (1),
                                [&] { return terminal.has_value (); })) {
-            return 5;
+            return 6;
         }
     }
-    return *terminal ? 0 : 6;
+    const auto next_delivery_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (1);
+    while (!next_delivery_started.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < next_delivery_deadline) {
+        std::this_thread::yield ();
+    }
+    if (!next_delivery_started.load (std::memory_order_acquire))
+        return 7;
+    if (*terminal || terminal->error_kind () != framework_error_kind_t::unavailable
+        || terminal_calls.load (std::memory_order_relaxed) != 1) {
+        return 8;
+    }
+
+    const auto next_fence = gateway.begin_join_completion_delivery_fence (actor);
+    if (next_fence == fence)
+        return 9;
+    std::atomic<int> next_terminal_calls{0};
+    bool next_succeeded = false;
+    gateway.settle_join_completion_delivery_fence (
+      actor, next_fence, result_t<void>::success (), [&] (result_t<void> result) {
+          next_succeeded = static_cast<bool> (result);
+          next_terminal_calls.fetch_add (1, std::memory_order_relaxed);
+          throw std::runtime_error ("immediate settlement observer failed");
+      });
+    return next_succeeded && next_terminal_calls.load (std::memory_order_relaxed) == 1 ? 0 : 10;
 }
 
 int main ()

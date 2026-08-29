@@ -4089,6 +4089,7 @@ class actor_cutover_probe_t final : public zlink::framework::actor_t
             target_completions.fetch_add (1, std::memory_order_release);
             target_completion_entered.store (true, std::memory_order_release);
             co_await target_completion_gate->task ();
+            target_completion_finished.store (true, std::memory_order_release);
         }
         else {
             source_operation_high.store (
@@ -4109,7 +4110,10 @@ class actor_cutover_probe_t final : public zlink::framework::actor_t
         target_operation_high.store (0, std::memory_order_release);
         target_operation_low.store (0, std::memory_order_release);
         target_completion_entered.store (false, std::memory_order_release);
+        target_completion_finished.store (false, std::memory_order_release);
         target_joined.store (false, std::memory_order_release);
+        submit_bound_push_on_join.store (false, std::memory_order_release);
+        joined_bound_push_submitted.store (false, std::memory_order_release);
         source_leave_entered.store (false, std::memory_order_release);
         source_leave_before_target_joined.store (false, std::memory_order_release);
         source_leave_calls.store (0, std::memory_order_release);
@@ -4127,7 +4131,10 @@ class actor_cutover_probe_t final : public zlink::framework::actor_t
     static inline std::atomic_uint64_t target_operation_high{0};
     static inline std::atomic_uint64_t target_operation_low{0};
     static inline std::atomic_bool target_completion_entered{false};
+    static inline std::atomic_bool target_completion_finished{false};
     static inline std::atomic_bool target_joined{false};
+    static inline std::atomic_bool submit_bound_push_on_join{false};
+    static inline std::atomic_bool joined_bound_push_submitted{false};
     static inline std::atomic_bool source_leave_entered{false};
     static inline std::atomic_bool source_leave_before_target_joined{false};
     static inline std::atomic_int source_leave_calls{0};
@@ -4205,11 +4212,19 @@ class actor_cutover_probe_spot_t final
     {
         co_return zlink::framework::spot_actor_join_result_t::accept ();
     }
-    zlink::framework::task_t<void>
-    on_actor_joined (actor_cutover_probe_t &) override
+    zlink::framework::task_t<void> on_actor_joined (actor_cutover_probe_t &actor) override
     {
-        actor_cutover_probe_t::target_joined.store (
-          true, std::memory_order_release);
+        actor_cutover_probe_t::target_joined.store (true, std::memory_order_release);
+        if (actor.target ()
+            && actor_cutover_probe_t::submit_bound_push_on_join.load (std::memory_order_acquire)) {
+            const auto submitted = actor.context ()
+                                     .bound_session ()
+                                     .send (std::string ("target-joined"))
+                                     .submit ()
+                                     .result ();
+            actor_cutover_probe_t::joined_bound_push_submitted.store (static_cast<bool> (submitted),
+                                                                      std::memory_order_release);
+        }
         co_return;
     }
     zlink::framework::task_t<void>
@@ -4276,74 +4291,80 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     factory.actor_type = std::type_index (typeid (int));
     factory.create_instance = [] (std::string) { return std::make_shared<int> (7); };
     factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
-    auto join_completion =
-      std::make_shared<detail::task_completion_source_t<void>> ();
+    auto join_completion = std::make_shared<detail::task_completion_source_t<void>> ();
     std::atomic_bool join_completion_entered{false};
     std::atomic_int join_completion_calls{0};
     std::atomic_uint64_t join_completion_operation_high{0};
     std::atomic_uint64_t join_completion_operation_low{0};
-    factory.on_join_completed =
-      [join_completion, &join_completion_entered, &join_completion_calls,
-       &join_completion_operation_high, &join_completion_operation_low] (
-        void *, actor_join_completion_outcome_t outcome,
-        std::uint64_t operation_high, std::uint64_t operation_low,
-        const actor_ref_t *,
-        const std::optional<message_t> &, framework_error_kind_t, bool)
-        -> task_t<void> {
-          if (outcome != actor_join_completion_outcome_t::accepted)
-              throw std::runtime_error ("deferred completion was not accepted");
-          ++join_completion_calls;
-          join_completion_operation_high.store (
-            operation_high, std::memory_order_release);
-          join_completion_operation_low.store (
-            operation_low, std::memory_order_release);
-          join_completion_entered.store (true, std::memory_order_release);
-          co_await join_completion->task ();
-      };
+    factory.on_join_completed = [join_completion, &join_completion_entered, &join_completion_calls,
+                                 &join_completion_operation_high, &join_completion_operation_low] (
+                                  void *, actor_join_completion_outcome_t outcome,
+                                  std::uint64_t operation_high, std::uint64_t operation_low,
+                                  const actor_ref_t *, const std::optional<message_t> &,
+                                  framework_error_kind_t, bool) -> task_t<void> {
+        if (outcome != actor_join_completion_outcome_t::accepted)
+            throw std::runtime_error ("deferred completion was not accepted");
+        ++join_completion_calls;
+        join_completion_operation_high.store (operation_high, std::memory_order_release);
+        join_completion_operation_low.store (operation_low, std::memory_order_release);
+        join_completion_entered.store (true, std::memory_order_release);
+        co_await join_completion->task ();
+    };
     node->actor_factories.emplace ("player", std::move (factory));
+    const auto actor =
+      actor_ref_access_t::make (node_rid_t::from_string ("source-node"), "player", "actor-c2", 7);
+    const auto committed_actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("actor-finalize-node"), "player", "actor-c2", 7);
+    actor_gateway_runtime_t gateway;
+    gateway.bind_serializers (serializers);
+    auto joined_bound_delivery = std::make_shared<detail::task_completion_source_t<void>> ();
+    std::atomic_bool joined_bound_delivery_started{false};
+    std::atomic_bool joined_bound_push_submitted{false};
     spot_actor_admission_callbacks_t callbacks;
     std::atomic_int actor_joined_calls{0};
     std::atomic_bool replay_before_joined{false};
     callbacks.join = [] (void *, std::string_view, const zlink::message_t &,
                          serializer_registry_t &) {
-        return spot_actor_join_result_t::accept (
-          message_t::from (std::string ("accepted")));
+        return spot_actor_join_result_t::accept (message_t::from (std::string ("accepted")));
     };
-    callbacks.on_actor_joined = [&actor_joined_calls] (void *, void *) -> task_t<void> {
-        ++actor_joined_calls;
+    callbacks.on_actor_joined = [&actor_joined_calls, &gateway, committed_actor,
+                                 &joined_bound_push_submitted] (void *, void *) -> task_t<void> {
+        if (actor_joined_calls.fetch_add (1, std::memory_order_acq_rel) == 0) {
+            const auto submitted = gateway.actor_context (committed_actor)
+                                     .bound_session ()
+                                     .send (std::string ("joined-before-completion"))
+                                     .submit ()
+                                     .result ();
+            joined_bound_push_submitted.store (static_cast<bool> (submitted),
+                                               std::memory_order_release);
+        }
         co_return;
     };
     target->actor_admissions.emplace (std::type_index (typeid (int)), std::move (callbacks));
 
     spot_node_runtime_t owner (node);
-    auto native = std::make_shared<runtime::host::public_host_runtime_t> (
-      runtime::host::host_options_t{
-        .mesh = {
-          .descriptor = {
-            .mesh_name = "actor-finalize-mesh",
-            .node_routing_id =
-              zlink::routing_id_t::from ("actor-finalize-node").to_bytes (),
-            .lifecycle_generation = 1,
-            .descriptor_revision = 1,
-            .advertised_endpoint = "tcp://127.0.0.1:0"}},
+    auto native =
+      std::make_shared<runtime::host::public_host_runtime_t> (runtime::host::host_options_t{
+        .mesh = {.descriptor = {.mesh_name = "actor-finalize-mesh",
+                                .node_routing_id =
+                                  zlink::routing_id_t::from ("actor-finalize-node").to_bytes (),
+                                .lifecycle_generation = 1,
+                                .descriptor_revision = 1,
+                                .advertised_endpoint = "tcp://127.0.0.1:0"}},
         .object_stable_types = {"framework.spot"}});
     native->start ();
     owner.attach_native_node (native);
     auto authority = std::make_shared<actor_cutover_authority_t> ();
     owner.bind_relocation_authority (authority);
-    const auto actor = actor_ref_access_t::make (
-      node_rid_t::from_string ("source-node"), "player", "actor-c2", 7);
     // The private cutover path still enters the same Store-fenced admission
     // boundary as canonical actorJoin(28).  Model its source Authority row
     // rather than reviving the retired local actor-type cache.
     auto store = std::make_shared<wire_actor_join_authority_store_t> ();
-    const auto set_source_authority = [store] (
-      const actor_ref_t &source_actor,
-      std::uint64_t authority_owner_generation) {
+    const auto set_source_authority = [store] (const actor_ref_t &source_actor,
+                                               std::uint64_t authority_owner_generation) {
         store->snapshot = authority_snapshot_t{
           .store_version = "actor-cutover-v1",
-          .payload = runtime::encode_actor_authority_payload (
-            source_actor, "source-spot", 1),
+          .payload = runtime::encode_actor_authority_payload (source_actor, "source-spot", 1),
           .object_generation = source_actor.object_generation (),
           .authority_owner_generation = authority_owner_generation,
           .owner = location_owner_token_t{"source-owner", 29},
@@ -4355,8 +4376,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
                                     .node_rid = node_rid_t::from_string (
                                       std::string (source_actor.node_rid ().value ())),
                                     .node_lifecycle_generation = 1,
-                                    .owner = location_owner_token_t{
-                                      "source-owner", 29}}}};
+                                    .owner = location_owner_token_t{"source-owner", 29}}}};
     };
     set_source_authority (actor, 19);
     service_collection_t services;
@@ -4367,31 +4387,32 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
       service_lifetime_t::singleton);
     auto provider = services.build_provider ();
     owner.bind_service_provider (provider);
-    actor_gateway_runtime_t gateway;
-    auto session = gateway.manager ();
-    session_actor_manager_access_t::attach (session, stream_t{});
-    if (!session.bind (actor).submit ().result ()) {
+    const auto bound = gateway.bind_session_sink (
+      actor,
+      [joined_bound_delivery, &joined_bound_delivery_started] (
+        std::string, stream_codec_t, const zlink::message_t &) -> task_t<void> {
+          joined_bound_delivery_started.store (true, std::memory_order_release);
+          co_await joined_bound_delivery->task ();
+      });
+    if (!bound) {
         return false;
     }
     std::atomic_int replayed{0};
     std::atomic_bool successor_join_reserved{false};
-    auto first_replay =
-      std::make_shared<detail::task_completion_source_t<void>> ();
+    auto first_replay = std::make_shared<detail::task_completion_source_t<void>> ();
     std::atomic_bool first_replay_entered{false};
     std::mutex delivery_order_mutex;
     std::vector<std::string> delivery_order;
-    target->handlers.push_back (spot_handler_descriptor_t{
-      spot_handler_kind_t::actor_send, "BacklogPacket", "",
-      std::type_index (typeid (int)), std::type_index (typeid (int)),
-      std::type_index (typeid (int)), std::type_index (typeid (void))});
+    target->handlers.push_back (
+      spot_handler_descriptor_t{spot_handler_kind_t::actor_send, "BacklogPacket", "",
+                                std::type_index (typeid (int)), std::type_index (typeid (int)),
+                                std::type_index (typeid (int)), std::type_index (typeid (void))});
     target->handler_invokers.push_back (
-      [&owner, actor, &replayed, &successor_join_reserved,
-       &actor_joined_calls, &replay_before_joined,
-       first_replay, &first_replay_entered,
-       &delivery_order_mutex, &delivery_order] (
-        void *, void *, service_provider_t &, serializer_registry_t &,
-        const zlink::message_t &, const spot_inbound_message_t &metadata)
-        -> task_t<zlink::message_t> {
+      [&owner, actor, &replayed, &successor_join_reserved, &actor_joined_calls,
+       &replay_before_joined, first_replay, &first_replay_entered, &delivery_order_mutex,
+       &delivery_order] (void *, void *, service_provider_t &, serializer_registry_t &,
+                         const zlink::message_t &,
+                         const spot_inbound_message_t &metadata) -> task_t<zlink::message_t> {
           const auto sequence = metadata.find ("sequence");
           if (!sequence)
               throw std::runtime_error ("handoff replay sequence is missing");
@@ -4408,8 +4429,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
           }
           if (*sequence == "B1") {
               auto reserved = owner.reserve_actor_join_barrier (actor);
-              successor_join_reserved.store (
-                static_cast<bool> (reserved), std::memory_order_release);
+              successor_join_reserved.store (static_cast<bool> (reserved),
+                                             std::memory_order_release);
               if (reserved)
                   reserved.value ()->cancel ();
           }
@@ -4477,40 +4498,51 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
       header, cutover, serializers);
     spot_route_internal_dispatcher_t dispatcher (
       owner, gateway, route_client_t{}, serializers);
-    if (!dispatcher.can_handle_send (
-          spot_actor_commit_route_request_t::packet_name)) {
+    if (!dispatcher.can_handle_send (spot_actor_commit_route_request_t::packet_name)) {
         return false;
     }
     const auto submitted = dispatcher.dispatch_send (
-      route_received_packet_t{
-        zlink::routing_id_t::from ("source-node"), 1, parts},
-      provider);
+      route_received_packet_t{zlink::routing_id_t::from ("source-node"), 1, parts}, provider);
     const auto join_completion_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (1);
     while (!join_completion_entered.load (std::memory_order_acquire)
            && std::chrono::steady_clock::now () < join_completion_deadline) {
         std::this_thread::yield ();
     }
-    if (!submitted
-        || !join_completion_entered.load (std::memory_order_acquire)
+    while (!joined_bound_delivery_started.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < join_completion_deadline) {
+        std::this_thread::yield ();
+    }
+    if (!submitted || !join_completion_entered.load (std::memory_order_acquire)
+        || !joined_bound_push_submitted.load (std::memory_order_acquire)
+        || !joined_bound_delivery_started.load (std::memory_order_acquire)
         || actor_joined_calls.load (std::memory_order_acquire) != 1
         || replayed.load (std::memory_order_acquire) != 0
         || !node->actor_transfer_coordinator.blocks_dispatch (key)) {
-        std::cerr << "actor cutover dispatch diagnostic submitted="
-                  << static_cast<bool> (submitted)
-                  << " error="
-                  << (submitted.error () ? submitted.error ()->what () : "<none>")
+        std::cerr << "actor cutover dispatch diagnostic submitted=" << static_cast<bool> (submitted)
+                  << " error=" << (submitted.error () ? submitted.error ()->what () : "<none>")
                   << " completion-entered=" << join_completion_entered.load ()
-                  << " joined=" << actor_joined_calls.load ()
-                  << " replayed=" << replayed.load ()
-                  << " blocked="
-                  << node->actor_transfer_coordinator.blocks_dispatch (key)
-                  << '\n';
+                  << " bound-submitted=" << joined_bound_push_submitted.load ()
+                  << " bound-started=" << joined_bound_delivery_started.load ()
+                  << " joined=" << actor_joined_calls.load () << " replayed=" << replayed.load ()
+                  << " blocked=" << node->actor_transfer_coordinator.blocks_dispatch (key) << '\n';
+        joined_bound_delivery->complete (result_t<void>::success ());
         return false;
     }
     join_completion->complete (result_t<void>::success ());
-    const auto replay_deadline =
-      std::chrono::steady_clock::now () + std::chrono::seconds (1);
+    const auto bound_delivery_observation_deadline =
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (100);
+    while (!first_replay_entered.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < bound_delivery_observation_deadline) {
+        std::this_thread::yield ();
+    }
+    const auto completion_waited_for_joined_bound_delivery =
+      !first_replay_entered.load (std::memory_order_acquire)
+      && node->actor_transfer_coordinator.blocks_dispatch (key);
+    joined_bound_delivery->complete (result_t<void>::success ());
+    if (!completion_waited_for_joined_bound_delivery)
+        return false;
+    const auto replay_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
     while (!first_replay_entered.load (std::memory_order_acquire)
            && std::chrono::steady_clock::now () < replay_deadline) {
         std::this_thread::yield ();
@@ -4518,10 +4550,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     if (!first_replay_entered.load (std::memory_order_acquire))
         return false;
     first_replay->complete (result_t<void>::success ());
-    const auto finalized_deadline =
-      std::chrono::steady_clock::now () + std::chrono::seconds (2);
-    while ((!owner.completed_remote_actor_commit (
-              transfer_id, actor, target->spot_id)
+    const auto finalized_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while ((!owner.completed_remote_actor_commit (transfer_id, actor, target->spot_id)
             || replayed.load (std::memory_order_acquire) != 3)
            && std::chrono::steady_clock::now () < finalized_deadline) {
         std::this_thread::yield ();
@@ -4531,24 +4561,22 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         std::lock_guard lock (delivery_order_mutex);
         observed_delivery_order = delivery_order;
     }
-    if (node->actor_transfer_coordinator.blocks_dispatch (key)
-        || replayed.load () != 3
+    if (node->actor_transfer_coordinator.blocks_dispatch (key) || replayed.load () != 3
         || replay_before_joined.load (std::memory_order_acquire)
         || !join_completion_entered.load (std::memory_order_acquire)
         || join_completion_calls.load () != 1
         || join_completion_operation_high.load (std::memory_order_acquire) != 11
         || join_completion_operation_low.load (std::memory_order_acquire) != 13
         || actor_joined_calls.load (std::memory_order_acquire) != 1
+        || !completion_waited_for_joined_bound_delivery
         || !first_replay_entered.load (std::memory_order_acquire)
         || !successor_join_reserved.load (std::memory_order_acquire)
-        || observed_delivery_order
-             != std::vector<std::string>{"B1", "B2", "D1"}) {
+        || observed_delivery_order != std::vector<std::string>{"B1", "B2", "D1"}) {
         std::cerr << "actor cutover replay diagnostic blocked="
                   << node->actor_transfer_coordinator.blocks_dispatch (key)
                   << " replayed=" << replayed.load ()
                   << " completion-calls=" << join_completion_calls.load ()
-                  << " joined=" << actor_joined_calls.load ()
-                  << " order=";
+                  << " joined=" << actor_joined_calls.load () << " order=";
         for (const auto &item : observed_delivery_order)
             std::cerr << item << ',';
         std::cerr << '\n';
@@ -4559,31 +4587,91 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     }
     // A duplicate internal finalize cannot reopen a completed target or
     // dispatch its retained backlog twice.
-    const auto duplicate = owner.finalize_remote_actor_to_spot (
-      transfer_id, actor, target->spot_id, provider, nullptr,
-        std::nullopt);
-    if (duplicate || node->actor_transfer_coordinator.blocks_dispatch (key)
-        || replayed.load () != 3
+    const auto duplicate = owner.finalize_remote_actor_to_spot (transfer_id, actor, target->spot_id,
+                                                                provider, nullptr, std::nullopt);
+    if (duplicate || node->actor_transfer_coordinator.blocks_dispatch (key) || replayed.load () != 3
         || !owner.completed_remote_actor_commit (transfer_id, actor, target->spot_id)) {
         return false;
     }
 
+    // The combined internal commit path must defer OnActorJoined into the same
+    // fenced finalizer instead of reopening the pre-callback delivery window.
+    const auto combined_actor = actor_ref_access_t::make (node_rid_t::from_string ("source-node"),
+                                                          "player", "actor-combined", 7);
+    const auto combined_committed_actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("actor-finalize-node"), "player", "actor-combined", 7);
+    const std::string combined_transfer_id = "transfer-combined";
+    set_source_authority (combined_actor, 39);
+    const auto combined_admitted = owner.admit_remote_actor_to_spot (
+      combined_transfer_id, combined_actor, spot_id_t ("source-spot"), target->spot_id,
+      zlink::message_t::from (std::string ("prepare")), 31, 33, 39, 1, 29);
+    auto combined_bound_delivery = std::make_shared<detail::task_completion_source_t<void>> ();
+    std::atomic_bool combined_bound_delivery_started{false};
+    const auto combined_bound = gateway.bind_session_sink (
+      combined_actor,
+      [combined_bound_delivery, &combined_bound_delivery_started] (
+        std::string, stream_codec_t, const zlink::message_t &) -> task_t<void> {
+          combined_bound_delivery_started.store (true, std::memory_order_release);
+          co_await combined_bound_delivery->task ();
+      });
+    target->actor_admissions.at (std::type_index (typeid (int))).on_actor_joined =
+      [&actor_joined_calls, &gateway, combined_committed_actor] (void *, void *) -> task_t<void> {
+        actor_joined_calls.fetch_add (1, std::memory_order_release);
+        const auto submitted = gateway.actor_context (combined_committed_actor)
+                                 .bound_session ()
+                                 .send (std::string ("combined-joined"))
+                                 .submit ()
+                                 .result ();
+        if (!submitted)
+            throw std::runtime_error ("combined Join bound push was not submitted");
+        co_return;
+    };
+    if (!combined_admitted || !combined_admitted.value ().accepted || !combined_bound)
+        return false;
+    auto combined = std::async (std::launch::async, [&] {
+        return owner.commit_remote_actor_to_spot (
+          combined_transfer_id, combined_actor, target->spot_id, zlink::message_t{},
+          gateway.actor_context (combined_actor), {}, &provider);
+    });
+    const auto combined_delivery_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (1);
+    while (!combined_bound_delivery_started.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < combined_delivery_deadline) {
+        std::this_thread::yield ();
+    }
+    const auto combined_waited_for_delivery =
+      combined_bound_delivery_started.load (std::memory_order_acquire)
+      && combined.wait_for (std::chrono::milliseconds (100)) != std::future_status::ready;
+    combined_bound_delivery->complete (result_t<void>::success ());
+    const auto combined_finished =
+      combined.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
+    const auto combined_result = combined_finished
+                                   ? combined.get ()
+                                   : result_t<actor_join_reply_t>::failure (
+                                       framework_error_kind_t::deadline_exceeded,
+                                       "combined Actor commit did not finish after bound delivery");
+    target->actor_admissions.at (std::type_index (typeid (int))).on_actor_joined =
+      [&actor_joined_calls] (void *, void *) -> task_t<void> {
+        actor_joined_calls.fetch_add (1, std::memory_order_release);
+        co_return;
+    };
+    if (!combined_waited_for_delivery || !combined_result)
+        return false;
+
     // If the deadline wins while the replay owner is still queued, no Join
     // completion, location publication or completed admission may escape.
-    const auto queued_actor = actor_ref_access_t::make (
-      node_rid_t::from_string ("source-node"), "player", "actor-c3", 7);
+    const auto queued_actor =
+      actor_ref_access_t::make (node_rid_t::from_string ("source-node"), "player", "actor-c3", 7);
     const std::string queued_transfer_id = "transfer-c3";
     const std::string queued_key = "player:actor-c3";
     set_source_authority (queued_actor, 29);
     const auto queued_admitted = owner.admit_remote_actor_to_spot (
-      queued_transfer_id, queued_actor, spot_id_t ("source-spot"),
-      target->spot_id, zlink::message_t::from (std::string ("prepare")),
-      21, 23, 29, 1, 29);
+      queued_transfer_id, queued_actor, spot_id_t ("source-spot"), target->spot_id,
+      zlink::message_t::from (std::string ("prepare")), 21, 23, 29, 1, 29);
     const auto queued_prepared = owner.prepare_remote_actor_to_spot (
       queued_transfer_id, queued_actor, target->spot_id, zlink::message_t{},
       actor_gateway_runtime_t{}.actor_context (queued_actor), true);
-    if (!queued_admitted || !queued_admitted.value ().accepted
-        || !queued_prepared) {
+    if (!queued_admitted || !queued_admitted.value ().accepted || !queued_prepared) {
         return false;
     }
 
@@ -4591,11 +4679,9 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     queued_options.application_message_capacity = 2;
     queued_options.application_byte_capacity =
       2 * runtime::serial_execution_queue_t::fixed_work_byte_cost;
-    auto queued_actor_queue =
-      std::make_shared<runtime::serial_execution_queue_t> (
-        *node->worker_executor, queued_options,
-        runtime::serial_execution_queue_t::error_handler_t{},
-        runtime::serial_lane_policy_t::actor_delivery ());
+    auto queued_actor_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *node->worker_executor, queued_options, runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::actor_delivery ());
     target->spot_serial_executor->replace_actor_queue (queued_key, queued_actor_queue);
     std::mutex queued_gate;
     std::condition_variable queued_changed;
@@ -5509,37 +5595,53 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
       actor_reserved->fence.object_generation,
       actor_reserved->fence.authority_owner_generation, 1s);
     if (source_spot.state != spot_create_state_t::created
-        || target_spot.state != spot_create_state_t::created
-        || !created_actor) {
+        || target_spot.state != spot_create_state_t::created || !created_actor) {
         std::cerr << "cutover production setup: application materialization failed\n";
         source.stop ();
         target.stop ();
         return false;
     }
     const auto actor = created_actor.value ();
+    auto bound_delivery_gate = std::make_shared<detail::task_completion_source_t<void>> ();
+    std::atomic_bool bound_delivery_started{false};
+    std::atomic_int bound_delivery_calls{0};
+    auto &binding_gateway = location_provider.get_required<actor_gateway_runtime_t> ();
+    binding_gateway.bind_serializers (serializers);
+    const auto bound = binding_gateway.bind_session_sink (
+      actor,
+      [bound_delivery_gate, &bound_delivery_started, &bound_delivery_calls] (
+        std::string, stream_codec_t, const zlink::message_t &) -> task_t<void> {
+          bound_delivery_calls.fetch_add (1, std::memory_order_release);
+          bound_delivery_started.store (true, std::memory_order_release);
+          co_await bound_delivery_gate->task ();
+      });
+    if (!bound) {
+        std::cerr << "cutover production setup: bound Session sink failed\n";
+        source.stop ();
+        target.stop ();
+        return false;
+    }
+    actor_cutover_probe_t::submit_bound_push_on_join.store (true, std::memory_order_release);
     actor_gateway_runtime_t source_actor_gateway;
     {
-        std::lock_guard<std::recursive_mutex> lock (
-          source_state->spot_state->mutex);
+        std::lock_guard<std::recursive_mutex> lock (source_state->spot_state->mutex);
         source_state->spot_state->actor_instances.insert_or_assign (
           "actor.cutover.probe:actor-cutover-probe",
-          std::make_shared<actor_cutover_probe_t> (
-            source_actor_gateway.actor_context (actor), false));
+          std::make_shared<actor_cutover_probe_t> (source_actor_gateway.actor_context (actor),
+                                                   false));
     }
-    auto source_actor_object = source.native_node ().objects ().find (
-      stateful::object_kind_t::actor, "actor-cutover-probe");
+    auto source_actor_object =
+      source.native_node ().objects ().find (stateful::object_kind_t::actor, "actor-cutover-probe");
     auto source_spot_object = source.native_node ().objects ().find (
-      stateful::object_kind_t::user_spot,
-      source_native_spot.spot_id ());
+      stateful::object_kind_t::user_spot, source_native_spot.spot_id ());
     if (!source_actor_object || !source_spot_object) {
         std::cerr << "cutover production setup: Core object lookup failed\n";
         source.stop ();
         target.stop ();
         return false;
     }
-    const auto [join_error, join] =
-      source.native_node ().objects ().begin_membership_move (
-        *source_actor_object, *source_spot_object);
+    const auto [join_error, join] = source.native_node ().objects ().begin_membership_move (
+      *source_actor_object, *source_spot_object);
     const auto [commit_error, joined_actor] =
       source.native_node ().objects ().commit_membership_move (join);
     if (join_error != stateful::stateful_error_t::none
@@ -5549,17 +5651,17 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
         target.stop ();
         return false;
     }
-    source_spots.record_actor_spot (
-      actor, spot_id_t (source_native_spot.spot_id ()));
+    source_spots.record_actor_spot (actor, spot_id_t (source_native_spot.spot_id ()));
 
-    const auto actor_committed_value = locations->commit (
-      {actor_reserve.key, actor_reserved->fence,
-       runtime::encode_actor_authority_payload (
-         actor, source_native_spot.spot_id (),
-         source_native_spot.status ().lifecycle_generation ())})
-      .result ().value ();
-    if (!std::holds_alternative<object_committed_t> (
-          actor_committed_value)) {
+    const auto actor_committed_value =
+      locations
+        ->commit ({actor_reserve.key, actor_reserved->fence,
+                   runtime::encode_actor_authority_payload (
+                     actor, source_native_spot.spot_id (),
+                     source_native_spot.status ().lifecycle_generation ())})
+        .result ()
+        .value ();
+    if (!std::holds_alternative<object_committed_t> (actor_committed_value)) {
         std::cerr << "cutover production setup: authority commit failed\n";
         source.stop ();
         target.stop ();
@@ -5575,127 +5677,126 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
     // application_mesh->send_to_node.
     target_spots.on_actor_leave_notification (
       [&target] (const zlink::routing_id_t &node_rid,
-                std::vector<zlink::message_t> parts) -> task_t<zlink::submit_result_t> {
+                 std::vector<zlink::message_t> parts) -> task_t<zlink::submit_result_t> {
           co_return co_await target.send_to_node (node_rid, parts);
       });
     auto source_provider = location_provider;
     auto target_provider = location_provider;
     const auto dispatch_source = [&] {
         while (!stop_dispatch.load (std::memory_order_acquire)) {
-            (void) source.dispatch_ready (
-              [&] (const host::ready_record_t &owner,
-                   const host::receive_record_t &record,
-                   std::vector<zlink::message_t> parts) {
-                  (void) source_spots.dispatch_mesh_record (
-                    owner, record, parts, source_provider, serializers);
-              });
+            (void) source.dispatch_ready ([&] (const host::ready_record_t &owner,
+                                               const host::receive_record_t &record,
+                                               std::vector<zlink::message_t> parts) {
+                (void) source_spots.dispatch_mesh_record (owner, record, parts, source_provider,
+                                                          serializers);
+            });
             std::this_thread::sleep_for (1ms);
         }
     };
     const auto dispatch_target = [&] {
         while (!stop_dispatch.load (std::memory_order_acquire)) {
-            (void) target.dispatch_ready (
-              [&] (const host::ready_record_t &owner,
-                   const host::receive_record_t &record,
-                   std::vector<zlink::message_t> parts) {
-                  (void) target_spots.dispatch_mesh_record (
-                    owner, record, parts, target_provider, serializers);
-              });
+            (void) target.dispatch_ready ([&] (const host::ready_record_t &owner,
+                                               const host::receive_record_t &record,
+                                               std::vector<zlink::message_t> parts) {
+                (void) target_spots.dispatch_mesh_record (owner, record, parts, target_provider,
+                                                          serializers);
+            });
             std::this_thread::sleep_for (1ms);
         }
     };
     std::thread source_dispatch (dispatch_source);
     std::thread target_dispatch (dispatch_target);
-    const auto source_lifecycle_generation =
-      source.status ().lifecycle_generation ();
+    const auto source_lifecycle_generation = source.status ().lifecycle_generation ();
     const runtime::spot_address_t target_address{
       .mesh_name = "actor-cutover-mesh",
       .node_rid = target.status ().routing_id (),
       .spot_id = target_native_spot.spot_id (),
       .spot_generation = target_spot_reserved->fence.object_generation,
       .object_generation = target_spot_reserved->fence.object_generation,
-      .authority_owner_generation =
-        target_spot_reserved->fence.authority_owner_generation,
+      .authority_owner_generation = target_spot_reserved->fence.authority_owner_generation,
       .owner = target_owner,
       .node_generation = target.status ().lifecycle_generation ()};
     source.observe_spot_authority (
-      target_address.node_rid, target_address.spot_id,
-      target_address.object_generation, target_address.node_generation,
-      target_address.authority_owner_generation,
+      target_address.node_rid, target_address.spot_id, target_address.object_generation,
+      target_address.node_generation, target_address.authority_owner_generation,
       static_cast<std::uint64_t> (target_address.owner.lease_generation));
     auto joined = std::async (std::launch::async, [&] {
-        return std::move (source.join_application_actor_to_spot (
-          actor, target_address, zlink::message_t{}, 5s)).result ();
+        return std::move (source.join_application_actor_to_spot (actor, target_address,
+                                                                 zlink::message_t{}, 5s))
+          .result ();
     });
-    const auto source_leave_deadline =
-      std::chrono::steady_clock::now () + 2s;
-    while (!actor_cutover_probe_t::source_leave_entered.load (
-             std::memory_order_acquire)
+    const auto source_leave_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!actor_cutover_probe_t::source_leave_entered.load (std::memory_order_acquire)
            && std::chrono::steady_clock::now () < source_leave_deadline) {
         std::this_thread::sleep_for (1ms);
     }
     const auto source_leave_started =
-      actor_cutover_probe_t::source_leave_entered.load (
-        std::memory_order_acquire);
+      actor_cutover_probe_t::source_leave_entered.load (std::memory_order_acquire);
     const auto returned_while_source_leave_blocked =
       joined.wait_for (250ms) == std::future_status::ready;
-    const auto target_completion_deadline =
-      std::chrono::steady_clock::now () + 250ms;
-    while (!actor_cutover_probe_t::target_completion_entered.load (
-             std::memory_order_acquire)
-           && std::chrono::steady_clock::now ()
-                < target_completion_deadline) {
+    const auto target_completion_deadline = std::chrono::steady_clock::now () + 250ms;
+    while (!actor_cutover_probe_t::target_completion_entered.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < target_completion_deadline) {
         std::this_thread::sleep_for (1ms);
     }
     const auto target_completion_started_while_source_leave_blocked =
-      actor_cutover_probe_t::target_completion_entered.load (
-        std::memory_order_acquire);
-    actor_cutover_probe_t::source_leave_gate->complete (
-      result_t<void>::success ());
+      actor_cutover_probe_t::target_completion_entered.load (std::memory_order_acquire);
+    actor_cutover_probe_t::source_leave_gate->complete (result_t<void>::success ());
     const auto returned_before_target_completion =
       joined.wait_for (2s) == std::future_status::ready;
-    const auto target_completion_after_leave_deadline =
-      std::chrono::steady_clock::now () + 2s;
-    while (!actor_cutover_probe_t::target_completion_entered.load (
-             std::memory_order_acquire)
-           && std::chrono::steady_clock::now ()
-                < target_completion_after_leave_deadline) {
+    const auto target_completion_after_leave_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!actor_cutover_probe_t::target_completion_entered.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < target_completion_after_leave_deadline) {
         std::this_thread::sleep_for (1ms);
     }
     const auto target_completion_started =
-      actor_cutover_probe_t::target_completion_entered.load (
-        std::memory_order_acquire);
+      actor_cutover_probe_t::target_completion_entered.load (std::memory_order_acquire);
     result_t<actor_join_reply_t> joined_result =
       returned_before_target_completion
         ? joined.get ()
-        : result_t<actor_join_reply_t>::failure (
-            framework_error_kind_t::deadline_exceeded,
-            "cutover source awaited target completion");
+        : result_t<actor_join_reply_t>::failure (framework_error_kind_t::deadline_exceeded,
+                                                 "cutover source awaited target completion");
     bool target_actor_authority_matches_committed_store = false;
     if (joined_result) {
-        const auto target_actor = target.native_node ().resolve_actor (
-          joined_result.value ().actor);
-        const auto committed_authority = authority->read (
-          stateful::object_kind_t::actor,
-          std::string (joined_result.value ().actor.actor_id ().value ()));
+        const auto target_actor =
+          target.native_node ().resolve_actor (joined_result.value ().actor);
+        const auto committed_authority =
+          authority->read (stateful::object_kind_t::actor,
+                           std::string (joined_result.value ().actor.actor_id ().value ()));
         target_actor_authority_matches_committed_store =
-          target_actor && committed_authority
-          && committed_authority->target == *target_actor;
+          target_actor && committed_authority && committed_authority->target == *target_actor;
     }
     const auto source_completions_before_release =
-      actor_cutover_probe_t::source_completions.load (
-        std::memory_order_acquire);
-    actor_cutover_probe_t::target_completion_gate->complete (
-      result_t<void>::success ());
+      actor_cutover_probe_t::source_completions.load (std::memory_order_acquire);
+    actor_cutover_probe_t::target_completion_gate->complete (result_t<void>::success ());
+    const auto completion_finished_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!actor_cutover_probe_t::target_completion_finished.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < completion_finished_deadline) {
+        std::this_thread::sleep_for (1ms);
+    }
+    const auto bound_delivery_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!bound_delivery_started.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < bound_delivery_deadline) {
+        std::this_thread::sleep_for (1ms);
+    }
+    const auto unfenced_settlement_deadline = std::chrono::steady_clock::now () + 100ms;
+    while (target_state->spot_state->actor_transfer_coordinator.phase (
+             "actor.cutover.probe:actor-cutover-probe")
+           && std::chrono::steady_clock::now () < unfenced_settlement_deadline) {
+        std::this_thread::sleep_for (1ms);
+    }
+    const auto completion_waited_for_bound_delivery =
+      target_state->spot_state->actor_transfer_coordinator
+        .phase ("actor.cutover.probe:actor-cutover-probe")
+        .has_value ();
+    bound_delivery_gate->complete (result_t<void>::success ());
+    actor_cutover_probe_t::submit_bound_push_on_join.store (false, std::memory_order_release);
     const auto target_completed =
-      actor_cutover_probe_t::target_completions.load (
-        std::memory_order_acquire) == 1;
+      actor_cutover_probe_t::target_completions.load (std::memory_order_acquire) == 1;
     const auto target_operation_high =
-      actor_cutover_probe_t::target_operation_high.load (
-        std::memory_order_acquire);
+      actor_cutover_probe_t::target_operation_high.load (std::memory_order_acquire);
     const auto target_operation_low =
-      actor_cutover_probe_t::target_operation_low.load (
-        std::memory_order_acquire);
+      actor_cutover_probe_t::target_operation_low.load (std::memory_order_acquire);
 
     /* The relocated-in Actor exists in the target public host but was never
      * inserted into mesh_node_runtime_t's create-time _actors map.  A later
@@ -5703,41 +5804,37 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
      * the ordinary local membership lane instead of returning NotFound. */
     bool relocated_actor_local_rejoin_passed = false;
     if (joined_result) {
-        const auto move_closed_deadline =
-          std::chrono::steady_clock::now () + 2s;
+        const auto move_closed_deadline = std::chrono::steady_clock::now () + 2s;
         while (target_state->spot_state->actor_transfer_coordinator.phase (
                  "actor.cutover.probe:actor-cutover-probe")
-                 && std::chrono::steady_clock::now () < move_closed_deadline) {
+               && std::chrono::steady_clock::now () < move_closed_deadline) {
             std::this_thread::sleep_for (1ms);
         }
-        const auto local_spot =
-          target_spots.create_spot ("actor.cutover.spot");
-        auto local_native_spot = target.get_or_create_spot (
-          std::string (local_spot.spot_id));
-        const auto local_spot_generation =
-          local_native_spot.status ().lifecycle_generation ();
-        const runtime::spot_address_t local_address{
-          .mesh_name = "actor-cutover-mesh",
-          .node_rid = target.status ().routing_id (),
-          .spot_id = local_native_spot.spot_id (),
-          .spot_generation = local_spot_generation,
-          .object_generation = local_spot_generation,
-          .authority_owner_generation = 1,
-          .owner = target_owner,
-          .node_generation = target.status ().lifecycle_generation ()};
+        const auto local_spot = target_spots.create_spot ("actor.cutover.spot");
+        auto local_native_spot = target.get_or_create_spot (std::string (local_spot.spot_id));
+        const auto local_spot_generation = local_native_spot.status ().lifecycle_generation ();
+        const runtime::spot_address_t local_address{.mesh_name = "actor-cutover-mesh",
+                                                    .node_rid = target.status ().routing_id (),
+                                                    .spot_id = local_native_spot.spot_id (),
+                                                    .spot_generation = local_spot_generation,
+                                                    .object_generation = local_spot_generation,
+                                                    .authority_owner_generation = 1,
+                                                    .owner = target_owner,
+                                                    .node_generation =
+                                                      target.status ().lifecycle_generation ()};
         auto local_join = std::async (std::launch::async, [&] {
-            return std::move (target.join_application_actor_to_spot (
-              joined_result.value ().actor, local_address,
-              zlink::message_t{}, 2s)).result ();
+            return std::move (target.join_application_actor_to_spot (joined_result.value ().actor,
+                                                                     local_address,
+                                                                     zlink::message_t{}, 2s))
+              .result ();
         });
         if (local_join.wait_for (2s) == std::future_status::ready) {
             const auto local_result = local_join.get ();
             const auto current_spot = local_result
-              ? target_spots.actor_spot (local_result.value ().actor)
-              : std::optional<spot_id_t>{};
+                                        ? target_spots.actor_spot (local_result.value ().actor)
+                                        : std::optional<spot_id_t>{};
             relocated_actor_local_rejoin_passed =
-              local_result && local_result.value ().result_code == 0
-              && current_spot
+              local_result && local_result.value ().result_code == 0 && current_spot
               && *current_spot == local_native_spot.spot_id ();
         }
     }
@@ -5749,30 +5846,26 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
     if (!returned_before_target_completion)
         (void) joined.get ();
 
-    const auto passed = target_context_authority_differs_from_committed_store
-      && joined_result && joined_result.value ().result_code == 0
-      && target_actor_authority_matches_committed_store
-      && relocated_actor_local_rejoin_passed
-      && source_leave_started && returned_while_source_leave_blocked
-      && target_completion_started_while_source_leave_blocked
-      && !actor_cutover_probe_t::source_leave_before_target_joined.load (
-           std::memory_order_acquire)
-      && actor_cutover_probe_t::source_leave_calls.load (
-           std::memory_order_acquire) == 1
+    const auto passed =
+      target_context_authority_differs_from_committed_store && joined_result
+      && joined_result.value ().result_code == 0 && target_actor_authority_matches_committed_store
+      && relocated_actor_local_rejoin_passed && source_leave_started
+      && returned_while_source_leave_blocked && target_completion_started_while_source_leave_blocked
+      && !actor_cutover_probe_t::source_leave_before_target_joined.load (std::memory_order_acquire)
+      && actor_cutover_probe_t::source_leave_calls.load (std::memory_order_acquire) == 1
       && target_completion_started && target_completed
-      && source_completions_before_release == 0
-      && actor_cutover_probe_t::source_completions.load (
-           std::memory_order_acquire) == 0
-      && actor_cutover_probe_t::target_completions.load (
-           std::memory_order_acquire) == 2
-      && actor_cutover_probe_t::failed_completions.load (
-           std::memory_order_acquire) == 0
+      && actor_cutover_probe_t::target_completion_finished.load (std::memory_order_acquire)
+      && actor_cutover_probe_t::joined_bound_push_submitted.load (std::memory_order_acquire)
+      && bound_delivery_started.load (std::memory_order_acquire)
+      && bound_delivery_calls.load (std::memory_order_acquire) == 1
+      && completion_waited_for_bound_delivery && source_completions_before_release == 0
+      && actor_cutover_probe_t::source_completions.load (std::memory_order_acquire) == 0
+      && actor_cutover_probe_t::target_completions.load (std::memory_order_acquire) == 2
+      && actor_cutover_probe_t::failed_completions.load (std::memory_order_acquire) == 0
       && target_operation_high != 0 && target_operation_low != 0
       && target_operation_high == source_lifecycle_generation
-      && actor_cutover_probe_t::source_operation_high.load (
-           std::memory_order_acquire) == 0
-      && actor_cutover_probe_t::source_operation_low.load (
-           std::memory_order_acquire) == 0;
+      && actor_cutover_probe_t::source_operation_high.load (std::memory_order_acquire) == 0
+      && actor_cutover_probe_t::source_operation_low.load (std::memory_order_acquire) == 0;
     if (!passed) {
         std::cerr << "cutover production diagnostic returned="
                   << returned_before_target_completion

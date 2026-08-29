@@ -21,6 +21,7 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -896,15 +897,24 @@ task_t<void> spot_handle_t::publish_tail (const std::vector<zlink::message_t> &p
     }
     const auto targets = _host->transport ().topology ().peers ();
     const auto encoded = _host->encode_application (parts, metadata);
+    std::exception_ptr first_failure;
     for (const auto &target : targets) {
-        const auto submitted = co_await _host->transport ().send_to_node_result (
-          target.descriptor.node_routing_id, encoded);
-        if (submitted != zlink::submit_result_t::ok) {
-            throw framework_exception_t (
-              runtime::messaging::map_submit_result_error_kind (submitted),
-              "logical multicast physical fanout was not admitted");
+        try {
+            const auto submitted = co_await _host->transport ().send_to_node_result (
+              target.descriptor.node_routing_id, encoded);
+            if (submitted != zlink::submit_result_t::ok && !first_failure) {
+                first_failure = std::make_exception_ptr (framework_exception_t (
+                  runtime::messaging::map_submit_result_error_kind (submitted),
+                  "logical multicast physical fanout was not admitted"));
+            }
+        }
+        catch (...) {
+            if (!first_failure)
+                first_failure = std::current_exception ();
         }
     }
+    if (first_failure)
+        std::rethrow_exception (first_failure);
     co_return;
 }
 
