@@ -94,15 +94,31 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
         route_shard_count = 64
     };
 
+    struct route_entry_t
+    {
+        route_entry_t () : pipe (NULL), pair_id (0), pair_generation (0) {}
+        explicit route_entry_t (zlink::pipe_t *pipe_) :
+            pipe (pipe_), pair_id (0), pair_generation (0)
+        {
+        }
+
+        zlink::pipe_t *pipe;
+        uint64_t pair_id;
+        uint64_t pair_generation;
+    };
+
     struct route_shard_t
     {
-        typedef std::map<uint32_t, zlink::pipe_t *> routes_t;
+        typedef std::map<uint32_t, route_entry_t> routes_t;
 
         fast_mutex_t sync;
         routes_t routes;
     };
 
     route_shard_t &route_shard_for (uint32_t routing_id_);
+    void publish_route (uint32_t routing_id_,
+                        zlink::pipe_t *pipe_,
+                        bool replace_existing_);
     void identify_peer (pipe_t *pipe_, bool locally_initiated_);
     uint32_t ensure_dispatch_routing_id (pipe_t *pipe_);
     void maybe_emit_connect_event (pipe_t *pipe_, uint32_t routing_id_value_ = 0);

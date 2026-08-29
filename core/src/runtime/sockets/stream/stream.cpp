@@ -26,28 +26,6 @@ const int stream_batch_size_min = zlink::stream_batch_policy::minimum_send_batch
 // to split at the exact payload boundary.
 const int stream_batch_read_headroom = zlink::stream_batch_policy::read_headroom_bytes ();
 
-struct stream_exact_identity_key_t
-{
-    stream_exact_identity_key_t (const zlink::stream_t *socket_, uint32_t rid_) : socket (socket_), rid (rid_) {}
-    bool operator< (const stream_exact_identity_key_t &other_) const
-    {
-        return socket != other_.socket ? socket < other_.socket : rid < other_.rid;
-    }
-    const zlink::stream_t *socket;
-    uint32_t rid;
-};
-
-struct stream_exact_identity_t
-{
-    stream_exact_identity_t () : pair_id (0), pair_generation (0) {}
-    stream_exact_identity_t (uint64_t pair_id_, uint64_t pair_generation_) : pair_id (pair_id_), pair_generation (pair_generation_) {}
-    uint64_t pair_id;
-    uint64_t pair_generation;
-};
-
-std::mutex stream_exact_identities_sync;
-std::map<stream_exact_identity_key_t, stream_exact_identity_t> stream_exact_identities;
-
 bool is_stream_control_event (const unsigned char *payload_, size_t size_)
 {
     LIBZLINK_UNUSED (payload_);
@@ -207,16 +185,6 @@ zlink::stream_t::stream_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
 
 zlink::stream_t::~stream_t ()
 {
-    {
-        std::lock_guard<std::mutex> lock (stream_exact_identities_sync);
-        for (std::map<stream_exact_identity_key_t, stream_exact_identity_t>::iterator it =
-               stream_exact_identities.begin (); it != stream_exact_identities.end ();) {
-            if (it->first.socket == this)
-                stream_exact_identities.erase (it++);
-            else
-                ++it;
-        }
-    }
     _prefetched_id.close ();
     _prefetched_msg.close ();
 }
@@ -224,6 +192,41 @@ zlink::stream_t::~stream_t ()
 zlink::stream_t::route_shard_t &zlink::stream_t::route_shard_for (uint32_t routing_id_)
 {
     return _route_shards[routing_id_ % route_shard_count];
+}
+
+void zlink::stream_t::publish_route (uint32_t routing_id_,
+                                     pipe_t *pipe_,
+                                     bool replace_existing_)
+{
+    zlink_assert (routing_id_ != 0);
+    zlink_assert (pipe_);
+
+    uint64_t pair_id = 0;
+    uint64_t pair_generation = 0;
+    const bool have_identity =
+      stream_exact_target_identity (pipe_, &pair_id, &pair_generation);
+
+    route_shard_t &shard = route_shard_for (routing_id_);
+    scoped_fast_lock_t shard_lock (shard.sync);
+    route_shard_t::routes_t::iterator route = shard.routes.find (routing_id_);
+    if (route == shard.routes.end ()) {
+        route = shard.routes.insert (
+          std::make_pair (routing_id_, route_entry_t (pipe_))).first;
+    } else if (route->second.pipe != pipe_) {
+        if (!replace_existing_)
+            return;
+        route->second = route_entry_t (pipe_);
+    }
+
+    // The route owns the last valid exact-target identity. The engine clears
+    // the pipe's live connection id before pipe termination, so this snapshot
+    // is what lets termination fail only records reserved for this connection.
+    if (have_identity
+        && (route->second.pair_id != pair_id
+            || route->second.pair_generation != pair_generation)) {
+        route->second.pair_id = pair_id;
+        route->second.pair_generation = pair_generation;
+    }
 }
 
 void zlink::stream_t::peer_routing_ids (std::vector<zlink_routing_id_t> *out_)
@@ -305,31 +308,25 @@ void zlink::stream_t::xpipe_terminated (pipe_t *pipe_)
 
     if (server_routing_id != 0) {
         route_shard_t &shard = route_shard_for (server_routing_id);
-        scoped_fast_lock_t shard_lock (shard.sync);
-        route_shard_t::routes_t::iterator it = shard.routes.find (server_routing_id);
-        if (it != shard.routes.end () && it->second == pipe_) {
-            stream_exact_identity_t identity;
-            bool have_identity = false;
-            {
-                std::lock_guard<std::mutex> identity_lock (stream_exact_identities_sync);
-                std::map<stream_exact_identity_key_t, stream_exact_identity_t>::iterator found =
-                  stream_exact_identities.find (stream_exact_identity_key_t (this, server_routing_id));
-                if (found != stream_exact_identities.end ()) {
-                    identity = found->second;
-                    stream_exact_identities.erase (found);
-                    have_identity = true;
-                }
+        uint64_t pair_id = 0;
+        uint64_t pair_generation = 0;
+        {
+            scoped_fast_lock_t shard_lock (shard.sync);
+            route_shard_t::routes_t::iterator it =
+              shard.routes.find (server_routing_id);
+            if (it != shard.routes.end () && it->second.pipe == pipe_) {
+                pair_id = it->second.pair_id;
+                pair_generation = it->second.pair_generation;
+                shard.routes.erase (it);
             }
-            if (have_identity) {
-                zlink_routing_id_t rid;
-                memset (&rid, 0, sizeof (rid));
-                rid.size = sizeof (uint32_t);
-                put_uint32 (rid.data, server_routing_id);
-                fail_send_pending_for_target (&rid, identity.pair_id,
-                                               identity.pair_generation,
-                                               ENOTCONN);
-            }
-            shard.routes.erase (it);
+        }
+        if (pair_id != 0 && pair_generation != 0) {
+            zlink_routing_id_t rid;
+            memset (&rid, 0, sizeof (rid));
+            rid.size = sizeof (uint32_t);
+            put_uint32 (rid.data, server_routing_id);
+            fail_send_pending_for_target (&rid, pair_id, pair_generation,
+                                           ENOTCONN);
         }
     }
     erase_out_pipe (pipe_);
@@ -350,12 +347,12 @@ int zlink::stream_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
     {
         scoped_fast_lock_t shard_lock (shard.sync);
         route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
-        if (it != shard.routes.end () && it->second) {
+        if (it != shard.routes.end () && it->second.pipe) {
             // STREAM close must preserve frames that were accepted before
             // the disconnect request. The peer receives the pipe delimiter
             // only after those frames, which enables protocol-level closing
             // notifications without a timing workaround.
-            it->second->terminate (true);
+            it->second.pipe->terminate (true);
             terminated = true;
         }
     }
@@ -383,12 +380,12 @@ int zlink::stream_t::xsend (
         scoped_fast_lock_t shard_lock (shard.sync);
 
         route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
-        if (it == shard.routes.end () || !it->second) {
+        if (it == shard.routes.end () || !it->second.pipe) {
             errno = EHOSTUNREACH;
             return -1;
         }
 
-        pipe_t *out = it->second;
+        pipe_t *out = it->second.pipe;
         if (msg_->size () == 0) {
             out->terminate (false);
         } else {
@@ -427,12 +424,12 @@ int zlink::stream_t::xsend (
             route_shard_t &shard = route_shard_for (routing_id);
             scoped_fast_lock_t shard_lock (shard.sync);
             route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
-            if (it == shard.routes.end () || !it->second) {
+            if (it == shard.routes.end () || !it->second.pipe) {
                 errno = EHOSTUNREACH;
                 return -1;
             }
 
-            _current_out = it->second;
+            _current_out = it->second.pipe;
             const pipe_message_admission_t write_admission =
               _current_out->check_write_admission ();
             if (write_admission != pipe_message_admission_ready) {
@@ -523,11 +520,11 @@ int zlink::stream_t::xsend_routed (
     route_shard_t &shard = route_shard_for (routing_id);
     scoped_fast_lock_t shard_lock (shard.sync);
     route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
-    if (it == shard.routes.end () || !it->second) {
+    if (it == shard.routes.end () || !it->second.pipe) {
         errno = EHOSTUNREACH;
         return -1;
     }
-    pipe_t *out = it->second;
+    pipe_t *out = it->second.pipe;
     uint64_t pair_id = 0;
     uint64_t pair_generation = 0;
     if (expected_transport_pair_id_ == 0
@@ -572,7 +569,7 @@ int zlink::stream_t::xselect_routed_submit_target (
     route_shard_t &shard = route_shard_for (routing_id);
     scoped_fast_lock_t shard_lock (shard.sync);
     route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
-    if (it == shard.routes.end () || !it->second) {
+    if (it == shard.routes.end () || !it->second.pipe) {
         errno = EHOSTUNREACH;
         return -1;
     }
@@ -580,7 +577,7 @@ int zlink::stream_t::xselect_routed_submit_target (
                                 router_rid_or_null_->size,
                                 &target_out_->peer_rid);
     if (!stream_exact_target_identity (
-          it->second, &target_out_->transport_pair_id,
+          it->second.pipe, &target_out_->transport_pair_id,
           &target_out_->transport_pair_generation)) {
         errno = EHOSTUNREACH;
         return -1;
@@ -744,36 +741,17 @@ int zlink::stream_t::xstream_dispatch_msg (msg_t *msg_, pipe_t *pipe_)
 
     if (!steady_state_pipe_route) {
         pipe_t *dispatch_out = pipe_->get_peer () ? pipe_->get_peer () : pipe_;
-        route_shard_t &shard = route_shard_for (routing_id_value);
-        scoped_fast_lock_t shard_lock (shard.sync);
-        if (shard.routes.find (routing_id_value) == shard.routes.end ())
-            shard.routes[routing_id_value] = dispatch_out;
+        publish_route (routing_id_value, dispatch_out, false);
 
         maybe_emit_connect_event (pipe_, routing_id_value);
-    }
-
-    {
-        route_shard_t &shard = route_shard_for (routing_id_value);
-        scoped_fast_lock_t shard_lock (shard.sync);
-        route_shard_t::routes_t::iterator route =
-          shard.routes.find (routing_id_value);
-        uint64_t pair_id = 0;
-        uint64_t pair_generation = 0;
-        if (route != shard.routes.end ()
-            && stream_exact_target_identity (
-              route->second, &pair_id, &pair_generation))
-            {
-                std::lock_guard<std::mutex> identity_lock (stream_exact_identities_sync);
-                stream_exact_identities[stream_exact_identity_key_t (this, routing_id_value)] =
-                  stream_exact_identity_t (pair_id, pair_generation);
-            }
     }
 
     // For a raw TCP accept the transport connection id becomes available as
     // the engine reaches dispatch. If a routed admission handler was armed
     // before that point, publish its initial writable edge now rather than
     // requiring an artificial HWM recovery.
-    if (pipe_->check_write_admission () == pipe_message_admission_ready)
+    if (send_complete_handler_active ()
+        && pipe_->check_write_admission () == pipe_message_admission_ready)
         notify_send_pending_writable (pipe_);
 
     zlink_routing_id_t rid;
@@ -843,6 +821,34 @@ int zlink::stream_t::stream_dispatch_packet_msg_from_io (const zlink_routing_id_
     const unsigned char *payload = static_cast<const unsigned char *> (msg_->data ());
     const size_t payload_size = msg_->size ();
     size_t offset = 0;
+    const auto packet_exceeds_message_limit = [&] (size_t header_size_, size_t body_size_) {
+        if (options.maxmsgsize <= 0)
+            return false;
+
+        const size_t limit = static_cast<size_t> (options.maxmsgsize);
+        return header_size_ > limit || body_size_ > limit
+               || header_size_ > limit - body_size_;
+    };
+    const auto fail_packet_dispatch = [&] (int failure_errno_) {
+        state.reset ();
+        reset_dispatched_msg (msg_);
+        if (pipe_) {
+            event_disconnected (pipe_->get_endpoint_pair (), EMSGSIZE,
+                                rid_ ? rid_->data : NULL, rid_ ? rid_->size : 0);
+            pipe_->terminate (false);
+        }
+        errno = failure_errno_;
+        return -1;
+    };
+    const auto dispatch_packet_parts = [&] (msg_t *header_, msg_t *body_) {
+        _dispatch_inflight.fetch_add (1, std::memory_order_acq_rel);
+        handler (public_handle (), rid_, reinterpret_cast<zlink_msg_t *> (header_),
+                 reinterpret_cast<zlink_msg_t *> (body_),
+                 _dispatch_packet_handler_userdata.load (std::memory_order_acquire));
+        reset_dispatched_msg (header_);
+        reset_dispatched_msg (body_);
+        _dispatch_inflight.fetch_sub (1, std::memory_order_acq_rel);
+    };
     const auto dispatch_completed_packet = [&] () {
         msg_t header_out;
         msg_t body_out;
@@ -856,17 +862,53 @@ int zlink::stream_t::stream_dispatch_packet_msg_from_io (const zlink_routing_id_
         errno_assert (body_move_rc == 0);
 
         state.reset ();
-
-        _dispatch_inflight.fetch_add (1, std::memory_order_acq_rel);
-        handler (public_handle (), rid_, reinterpret_cast<zlink_msg_t *> (&header_out),
-                 reinterpret_cast<zlink_msg_t *> (&body_out),
-                 _dispatch_packet_handler_userdata.load (std::memory_order_acquire));
-        reset_dispatched_msg (&header_out);
-        reset_dispatched_msg (&body_out);
-        _dispatch_inflight.fetch_sub (1, std::memory_order_acq_rel);
+        dispatch_packet_parts (&header_out, &body_out);
     };
 
     while (offset < payload_size) {
+        // A normal STREAM read commonly contains one or more complete application
+        // packets. Keep those packets as ownership views over the decoder buffer;
+        // only fragmented packets need the pipe-owned assembly buffers below.
+        if (state.stage == pipe_t::stream_packet_state_t::prefix_stage
+            && state.prefix_used == 0) {
+            const size_t available = payload_size - offset;
+            if (available >= sizeof (state.prefix)) {
+                const size_t header_size = static_cast<size_t> (get_uint16 (payload + offset));
+                const size_t body_size =
+                  static_cast<size_t> (get_uint32 (payload + offset + 2));
+
+                if (packet_exceeds_message_limit (header_size, body_size))
+                    return fail_packet_dispatch (EMSGSIZE);
+
+                const size_t after_prefix = available - sizeof (state.prefix);
+                if (header_size <= after_prefix) {
+                    const size_t after_header = after_prefix - header_size;
+                    if (body_size <= after_header) {
+                        msg_t header_out;
+                        msg_t body_out;
+                        const int header_init_rc = header_out.init ();
+                        errno_assert (header_init_rc == 0);
+                        const int body_init_rc = body_out.init ();
+                        errno_assert (body_init_rc == 0);
+
+                        const size_t header_offset = offset + sizeof (state.prefix);
+                        const size_t body_offset = header_offset + header_size;
+                        if (header_out.init_view (*msg_, header_offset, header_size) != 0
+                            || body_out.init_view (*msg_, body_offset, body_size) != 0) {
+                            const int saved_errno = errno;
+                            reset_dispatched_msg (&header_out);
+                            reset_dispatched_msg (&body_out);
+                            return fail_packet_dispatch (saved_errno);
+                        }
+
+                        offset = body_offset + body_size;
+                        dispatch_packet_parts (&header_out, &body_out);
+                        continue;
+                    }
+                }
+            }
+        }
+
         if (state.stage == pipe_t::stream_packet_state_t::prefix_stage) {
             const size_t remaining_prefix = sizeof (state.prefix) - state.prefix_used;
             const size_t to_copy =
@@ -883,32 +925,13 @@ int zlink::stream_t::stream_dispatch_packet_msg_from_io (const zlink_routing_id_
             state.header_size = static_cast<size_t> (get_uint16 (state.prefix));
             state.body_size = static_cast<size_t> (get_uint32 (state.prefix + 2));
 
-            if (options.maxmsgsize > 0) {
-                const size_t limit = static_cast<size_t> (options.maxmsgsize);
-                if (state.header_size > limit || state.body_size > limit
-                    || state.header_size > limit - state.body_size) {
-                    state.reset ();
-                    reset_dispatched_msg (msg_);
-                    if (pipe_) {
-                        event_disconnected (pipe_->get_endpoint_pair (), EMSGSIZE,
-                                            rid_ ? rid_->data : NULL, rid_ ? rid_->size : 0);
-                        pipe_->terminate (false);
-                    }
-                    errno = EMSGSIZE;
-                    return -1;
-                }
-            }
+            if (packet_exceeds_message_limit (state.header_size, state.body_size))
+                return fail_packet_dispatch (EMSGSIZE);
 
             if (state.header.init_size (state.header_size) != 0
                 || state.body.init_size (state.body_size) != 0) {
-                state.reset ();
-                reset_dispatched_msg (msg_);
-                if (pipe_) {
-                    event_disconnected (pipe_->get_endpoint_pair (), EMSGSIZE,
-                                        rid_ ? rid_->data : NULL, rid_ ? rid_->size : 0);
-                    pipe_->terminate (false);
-                }
-                return -1;
+                const int saved_errno = errno;
+                return fail_packet_dispatch (saved_errno);
             }
 
             state.header_used = 0;
@@ -1015,17 +1038,7 @@ void zlink::stream_t::identify_peer (pipe_t *pipe_, bool locally_initiated_)
         peer->set_server_socket_routing_id (routing_id_value);
     }
 
-    route_shard_t &shard = route_shard_for (routing_id_value);
-    scoped_fast_lock_t shard_lock (shard.sync);
-    shard.routes[routing_id_value] = pipe_;
-    uint64_t pair_id = 0;
-    uint64_t pair_generation = 0;
-    if (stream_exact_target_identity (pipe_, &pair_id, &pair_generation))
-        {
-            std::lock_guard<std::mutex> identity_lock (stream_exact_identities_sync);
-            stream_exact_identities[stream_exact_identity_key_t (this, routing_id_value)] =
-              stream_exact_identity_t (pair_id, pair_generation);
-        }
+    publish_route (routing_id_value, pipe_, true);
 
     if (!has_out_pipe (routing_id))
         add_out_pipe (ZLINK_MOVE (routing_id), pipe_, locally_initiated_);

@@ -85,19 +85,20 @@ int zlink::stream_t::stream_dispatch_send_to_route (uint32_t routing_id_,
             route_shard_t &shard = route_shard_for (routing_id_);
             scoped_fast_lock_t shard_lock (shard.sync);
             route_shard_t::routes_t::iterator it = shard.routes.find (routing_id_);
-            if (it == shard.routes.end () || !it->second) {
+            if (it == shard.routes.end () || !it->second.pipe) {
                 errno = EHOSTUNREACH;
                 return -1;
             }
 
             if (msg_->size () == 0) {
-                it->second->terminate (false);
+                it->second.pipe->terminate (false);
                 const int init_rc = msg_->init ();
                 errno_assert (init_rc == 0);
                 return 1;
             }
 
-            if (it->second->write_single_message_and_flush_no_recursive_hwm_check (msg_)) {
+            if (it->second.pipe->write_single_message_and_flush_no_recursive_hwm_check (
+                  msg_)) {
                 const int init_rc = msg_->init ();
                 errno_assert (init_rc == 0);
                 return 1;
