@@ -4555,7 +4555,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     const auto session_id =
                       zlink::routing_id_t::from (route.session_routing_id).to_hex ();
                     stateful::stream_route_admission_t admission;
-                    std::optional<stateful::stream_binding_t> previous_binding;
                     if (route.route.action == protocol::session_relocation_route_action_t::commit) {
                         const auto current = _sessions.current_binding (route.actor.actor_id);
                         if (!current) {
@@ -4568,17 +4567,28 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                           route.actor.object_generation,
                           route.route.target_authority_owner_generation, target_node.to_string (),
                           route.route.target_node_generation);
-                        previous_binding = current;
                         auto target = current->actor;
                         target.node_id = target_node.to_string ();
                         target.authority_owner_generation =
                           route.route.target_authority_owner_generation;
+                        stateful::stream_session_registry_t::route_terminal_commit_t
+                          commit_projection;
+                        if (bound_session_operations.commit_relocation_route) {
+                            commit_projection =
+                              [&route, &bound_session_operations, previous = *current] (
+                                const stateful::stream_route_admission_t &committed) {
+                                  return committed.binding
+                                         && bound_session_operations.commit_relocation_route (
+                                           route, previous, *committed.binding);
+                              };
+                        }
                         admission = _sessions.commit_remote_route (
                           session_id, route.binding_generation, route.actor.actor_id,
                           route.actor.object_generation,
                           route.route.previous_authority_owner_generation, std::move (target),
                           route.route.target_node_generation,
-                          target_proof ? target_proof->tenure.owner_lease_generation : 0);
+                          target_proof ? target_proof->tenure.owner_lease_generation : 0,
+                          std::move (commit_projection));
                     } else {
                         admission = _sessions.acknowledge_remote_abort (
                           session_id, route.binding_generation, route.actor.actor_id,
@@ -4597,15 +4607,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                               sealed->second.consumed = true;
                       })
                       .get ();
-                    if (route.route.action == protocol::session_relocation_route_action_t::commit
-                        && previous_binding && bound_session_operations.commit_relocation_route) {
-                        try {
-                            (void) bound_session_operations.commit_relocation_route (
-                              route, *previous_binding, *admission.binding);
-                        }
-                        catch (...) {
-                        }
-                    }
                     for (auto &settle : admission.retained_outbound) {
                         if (!settle)
                             continue;
@@ -5631,12 +5632,17 @@ bool public_host_runtime_t::dispatch_bound_session_send (
       && current->target_node_generation == tenure.target_node_generation
       && current->owner_lease_generation == 0;
     if (!current_tenure && provisional_current_tenure) {
-        const auto gateway_confirmed =
-          !operations.confirm_remote_tenure || operations.confirm_remote_tenure (record);
-        const auto session_confirmed =
-          gateway_confirmed && _sessions.confirm_remote_tenure (tenure);
-        if (!gateway_confirmed || !session_confirmed)
+        /* The Session registry owns the binding. The Actor gateway is only a
+         * delivery projection and may legitimately trail command 44, so its
+         * confirmation cannot veto owner settlement. */
+        if (!_sessions.confirm_remote_tenure (tenure))
             return false;
+        try {
+            if (operations.confirm_remote_tenure)
+                (void) operations.confirm_remote_tenure (record);
+        }
+        catch (...) {
+        }
         current_tenure = true;
     }
     if (!current_tenure && !proof) {

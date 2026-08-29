@@ -46,6 +46,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -1448,6 +1449,121 @@ void verify_bound_session_rejects_mismatched_store_fence ()
       host::classify_bound_session_bind_admission (
         same_node_bound_session_route (), std::nullopt, true)
       == host::bound_session_bind_admission_t::stale_route);
+}
+
+void verify_bound_session_push_uses_session_registry_when_gateway_projection_rejects ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto session_owner = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        descriptor ("projection-session-owner")}});
+    const auto source_node = zlink::routing_id_t::from ("projection-actor-owner");
+    const stateful::object_ref_t previous{
+      stateful::object_kind_t::actor,
+      "projection-actor", 7, 11, "m6b-mesh", "projection-old-node"};
+    const auto connection = session_owner->sessions ().open ("projection-session");
+    const auto [bind_error, binding] = session_owner->sessions ().bind_remote (
+      connection, previous, 13, 17);
+    assert (bind_error == stateful::stateful_error_t::none);
+    const auto sealed = session_owner->sessions ().seal_remote_route (
+      connection.connection_id, binding.binding_generation, previous, 13, 17);
+    assert (sealed.error == stateful::stateful_error_t::none);
+    auto target = previous;
+    target.node_id = source_node.to_string ();
+    ++target.authority_owner_generation;
+    const auto committed = session_owner->sessions ().commit_remote_route (
+      connection.connection_id, binding.binding_generation, previous.key,
+      previous.object_generation, previous.authority_owner_generation, target, 19, 0);
+    assert (committed.error == stateful::stateful_error_t::none);
+    assert (committed.binding && committed.binding->owner_lease_generation == 0);
+
+    auto gateway_state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (gateway_state);
+    std::atomic_int gateway_confirmations{0};
+    std::atomic_int deliveries{0};
+    const auto previous_actor = actor_ref_access_t::make (
+      node_rid_t::from_string (previous.node_id), {}, previous.key, previous.object_generation);
+    assert (gateway.bind_session_sink (
+      previous_actor,
+      [&deliveries] (std::string, stream_codec_t, const zlink::message_t &) {
+          deliveries.fetch_add (1, std::memory_order_acq_rel);
+          return task_t<void> (result_t<void>::success ());
+      }));
+    assert (gateway.record_bound_session_route (
+      previous_actor, session_owner->status ().routing_id (),
+      zlink::routing_id_t::from (connection.connection_id),
+      session_owner->status ().lifecycle_generation (),
+      previous.authority_owner_generation, 17, binding.binding_generation, 0, 0));
+
+    session_owner->configure_bound_session_operations (
+      host::bound_session_operations_t{
+        .bind = [] (const protocol::bound_session_bind_t &, const zlink::routing_id_t &,
+                    std::uint64_t) { return host::bound_session_bind_operation_result_t{}; },
+        .send = [] (const protocol::bound_session_send_t &, std::vector<zlink::message_t>) {
+            return stateful::stateful_error_t::conflict;
+        },
+        .replaced = [] (const protocol::bound_session_replaced_t &) {},
+        .commit_relocation_route = [] (const protocol::session_relocation_route_t &,
+                                       const stateful::stream_binding_t &,
+                                       const stateful::stream_binding_t &) { return false; },
+        .prepare_relocation_target_route = [] (const protocol::session_relocation_route_t &,
+                                                std::uint64_t) { return true; },
+        .confirm_remote_tenure = [gateway, &gateway_confirmations] (
+                                   const protocol::bound_session_send_t &send) mutable {
+            gateway_confirmations.fetch_add (1, std::memory_order_acq_rel);
+            return gateway.confirm_session_remote_tenure (send);
+        },
+        .capture_send = [gateway] (const protocol::bound_session_send_t &send) mutable
+          -> std::optional<host::bound_session_operations_t::delivery_capability_t> {
+            const auto actor = actor_ref_access_t::make (
+              node_rid_t::from_string (
+                zlink::routing_id_t::from (send.actor.target_node_routing_id).to_string ()),
+              {}, send.actor.actor_id, send.actor.object_generation);
+            auto admitted = gateway.admit_bound_session_delivery (
+              actor, send.expected_binding_generation);
+            if (!admitted)
+                return std::nullopt;
+            return [admitted = std::move (*admitted)] (
+                     std::vector<zlink::message_t> parts) mutable {
+                if (parts.size () != 1)
+                    return stateful::stateful_error_t::invalid;
+                const auto delivered = admitted (
+                  "ProjectionPush", stream_codec_t::message_pack, parts.front ());
+                return delivered ? stateful::stateful_error_t::none
+                                 : stateful::stateful_error_t::conflict;
+            };
+        }});
+
+    const protocol::bound_session_send_t send{
+      protocol::actor_route_fence_t{
+        target.key, target.object_generation, source_node.to_bytes (), 19,
+        target.authority_owner_generation, 23},
+      binding.binding_generation};
+    const protocol::application_payload_t application{
+      std::string (protocol::framework_multipart_packet_name),
+      std::string (protocol::framework_multipart_content_type),
+      {0, 0, 0, 1, 0, 0, 0, 2, 0x7b, 0x7d}};
+    assert (session_owner->transport ().mailbox ().try_enqueue (
+      mesh::service_mailbox_record_t{
+        "bound-session:" + target.key,
+        mesh::service_mailbox_domain_t::application,
+        {protocol::encode_bound_session_send (send),
+         protocol::encode_application_payload (application)},
+        source_node.to_bytes (), std::nullopt, std::nullopt, 19}));
+    const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
+                                   std::vector<zlink::message_t>) {};
+    assert (session_owner->dispatch_ready (noop_dispatch).result ().value () == 1);
+    const auto current = session_owner->sessions ().current_binding (target.key);
+    const auto lagging_projection = gateway.bound_session_route (previous_actor);
+    assert (gateway_confirmations.load (std::memory_order_acquire) == 1);
+    assert (deliveries.load (std::memory_order_acquire) == 1);
+    assert (current && current->owner_lease_generation == 23);
+    assert (lagging_projection
+            && lagging_projection->authority_owner_generation
+                 == previous.authority_owner_generation
+            && lagging_projection->owner_lease_generation == 17);
 }
 
 class memory_relocation_repository_t final :
@@ -2900,13 +3016,33 @@ void verify_session_route_defers_target_lease_to_first_bound_push ()
     auto target = source;
     target.node_id = "node-b";
     ++target.authority_owner_generation;
+    bool projection_hook_called = false;
+    bool projection_owns_registry_lane = false;
+    bool registry_reentry_rejected = false;
     const auto committed = sessions.commit_remote_route (
-      connection.connection_id, binding.binding_generation,
-      source.key, source.object_generation,
-      source.authority_owner_generation, target, 19, 0);
+      connection.connection_id, binding.binding_generation, source.key, source.object_generation,
+      source.authority_owner_generation, target, 19, 0,
+      [&] (const stateful::stream_route_admission_t &projected) {
+          projection_hook_called = true;
+          assert (projected.binding);
+          assert (projected.binding->owner_lease_generation == 0);
+          projection_owns_registry_lane =
+            zlink::framework::runtime::state_lane_t::current () != nullptr;
+          try {
+              (void) sessions.current_binding (source.key);
+          }
+          catch (const std::logic_error &) {
+              registry_reentry_rejected = true;
+          }
+          return false;
+      });
     assert (committed.error == stateful::stateful_error_t::none);
     assert (committed.binding);
     assert (committed.binding->owner_lease_generation == 0);
+    assert (projection_hook_called);
+    assert (projection_owns_registry_lane);
+    assert (registry_reentry_rejected);
+    assert (sessions.current_binding (source.key) == committed.binding);
     assert (!sessions.remote_route_sealed (source.key));
 
     const stateful::stream_remote_tenure_t first_push{
@@ -6641,6 +6777,7 @@ int main ()
     verify_same_node_bound_session_accepts_current_store_fence ();
     verify_bound_session_waits_for_current_local_actor_materialization ();
     verify_bound_session_rejects_mismatched_store_fence ();
+    verify_bound_session_push_uses_session_registry_when_gateway_projection_rejects ();
     verify_spot_id_contract ();
     verify_spot_route_fence_admission_precedes_body_decode ();
     verify_public_host_route_cache_stops_at_owner_admission_deadline ();

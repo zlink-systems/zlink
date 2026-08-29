@@ -1054,7 +1054,19 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
     const auto session_owner = zlink::routing_id_t::from (std::string ("session-owner"));
     const auto session_rid = zlink::routing_id_t::from (std::string ("session-rid"));
     std::atomic_int sends{0};
+    std::atomic_bool saw_stale_target{false};
     std::string sent_node;
+    dispatch_options_t trace_options;
+    trace_options.message_flow (message_flow_log_mode_t::detailed);
+    dispatch_options_access_t::set_observer_for_tests (
+      trace_options, [&] (const message_flow_event_t &event) {
+          if (event.outcome == message_flow_outcome_t::dropped
+              && event.reason == message_flow_reason_t::stale_target
+              && event.detail_stage == std::optional<std::string> ("route_fence")) {
+              saw_stale_target.store (true, std::memory_order_release);
+          }
+      });
+    gateway.set_dispatch (std::move (trace_options));
     gateway.on_bound_session_send (
       [&sends, &sent_node] (const actor_ref_t &actor, std::uint64_t binding_generation,
                             const stream_header_t &,
@@ -1071,6 +1083,8 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
                                              1)) {
         return 1;
     }
+    const auto staged_source_sink = state->sync (
+      [&] { return state->bound_session_sinks.at ("relocation-prewarm"); });
 
     const protocol::session_relocation_route_t route{
       .sender_role = protocol::relocation_role_t::target,
@@ -1098,6 +1112,17 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
     if (!prewarmed_route_matches)
         return 3;
 
+    const auto staged_push =
+      (*staged_source_sink) ("RelocationStagedPush", stream_codec_t::message_pack,
+                             zlink::message_t::from ("staged"))
+        .result ();
+    if (!staged_push || sends.load (std::memory_order_acquire) != 1
+        || sent_node != "target-node") {
+        return 4;
+    }
+    sends.store (0, std::memory_order_release);
+    sent_node.clear ();
+
     const protocol::actor_route_fence_t target_fence{"relocation-prewarm",
                                                      7,
                                                      route.route.target_node_routing_id,
@@ -1106,14 +1131,14 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
                                                      37};
     if (!gateway.admit_session_relay (target, session_owner, session_rid, 23, 25, &target_fence)
         || !gateway.prepare_session_relocation_target_route (route, 37)) {
-        return 4;
+        return 5;
     }
     const auto prewarmed_sequence_is_admitted = state->sync ([&] {
         const auto &prepared = *state->actors_by_id.at ("relocation-prewarm").bound_session_route;
         return prepared.session_sequence == 25 && !prepared.session_sequence_baseline_unknown;
     });
     if (!prewarmed_sequence_is_admitted)
-        return 5;
+        return 6;
 
     const auto submitted = gateway.actor_context (target)
                              .bound_session ()
@@ -1126,13 +1151,24 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
         std::this_thread::yield ();
     }
     if (!submitted || sends.load () != 1 || sent_node != "target-node")
-        return 6;
+        return 7;
 
     auto stale = route;
     stale.route.previous_authority_owner_generation = 16;
     stale.route.target_authority_owner_generation = 30;
     if (gateway.prepare_session_relocation_target_route (stale, 41))
-        return 7;
+        return 8;
+
+    auto replacement = *gateway.bound_session_route (target);
+    ++replacement.binding_generation;
+    if (!gateway.record_bound_session_route_transition (target, replacement))
+        return 9;
+    const auto stale_binding_push =
+      (*staged_source_sink) ("StaleBindingPush", stream_codec_t::message_pack,
+                             zlink::message_t::from ("stale"))
+        .result ();
+    if (stale_binding_push || !saw_stale_target.load (std::memory_order_acquire))
+        return 10;
 
     auto fresh_state = std::make_shared<actor_gateway_state_t> ();
     fresh_state->serializers = &serializers;
@@ -1143,7 +1179,7 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
         co_return result_t<void>::success ();
     });
     if (!fresh_gateway.prepare_session_relocation_target_route (route, 37))
-        return 8;
+        return 11;
     const auto fresh_route_is_prewarmed = fresh_state->sync ([&] {
         const auto found = fresh_state->actors_by_id.find ("relocation-prewarm");
         return found != fresh_state->actors_by_id.end () && found->second.bound
@@ -1159,7 +1195,7 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
                && fresh_state->bound_session_sinks.contains ("relocation-prewarm");
     });
     if (!fresh_route_is_prewarmed)
-        return 9;
+        return 12;
     return 0;
 }
 

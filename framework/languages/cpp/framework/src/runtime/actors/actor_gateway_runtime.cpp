@@ -1865,6 +1865,14 @@ namespace zlink::framework::detail
 namespace
 {
 
+bool same_bound_session_binding_identity (const actor_bound_session_route_t &left,
+                                          const actor_bound_session_route_t &right) noexcept
+{
+    return left.session_rid == right.session_rid
+           && left.binding_generation == right.binding_generation
+           && left.binding_token == right.binding_token;
+}
+
 bool same_physical_bound_session (const actor_bound_session_route_t &left,
                                   const actor_bound_session_route_t &right)
 {
@@ -1908,29 +1916,14 @@ make_session_owner_sink (std::weak_ptr<actor_gateway_state_t> weak_state,
                 framework_error_kind_t::shutting_down, "bound Session route owner was released"));
           }
           actor_gateway_state_t::bound_session_sender_t sender;
+          auto current_actor = staged_actor;
           std::uint64_t binding_generation = 0;
-          const auto sender_snapshot = state->sync ([&]
-            () -> std::optional<std::pair<actor_gateway_state_t::bound_session_sender_t,
-                                          std::uint64_t>> {
+          const auto sender_snapshot = state->sync ([&] {
               const auto found = state->actors_by_id.find (actor_id);
-              //  The fence guards against the route being REPLACED between
-              //  staging and send. Relay progress (session_sequence and its
-              //  baseline flag) advances on the same route while it stays
-              //  current, so identity/authority fields alone participate.
-              const auto same_route_fence = [] (const actor_bound_session_route_t &live,
-                                                const actor_bound_session_route_t &staged) {
-                  return live.node_rid.to_bytes () == staged.node_rid.to_bytes ()
-                         && live.session_rid == staged.session_rid
-                         && live.object_generation == staged.object_generation
-                         && live.node_generation == staged.node_generation
-                         && live.authority_owner_generation == staged.authority_owner_generation
-                         && live.owner_lease_generation == staged.owner_lease_generation
-                         && live.binding_generation == staged.binding_generation
-                         && live.binding_token == staged.binding_token;
-              };
               if (found == state->actors_by_id.end () || !found->second.bound
                   || found->second.disconnected || !found->second.bound_session_route
-                  || !same_route_fence (*found->second.bound_session_route, staged_route)) {
+                  || !same_bound_session_binding_identity (*found->second.bound_session_route,
+                                                           staged_route)) {
                   //  spec 26 Detailed diagnostics: name the exact reason a
                   //  bound-session push was refused so a silent drop at the
                   //  application layer stays attributable.
@@ -1965,19 +1958,21 @@ make_session_owner_sink (std::weak_ptr<actor_gateway_state_t> weak_state,
                                 event.reason = message_flow_reason_t::stale_target;
                                 return event;
                             });
-                  return std::nullopt;
+                  return false;
               }
+              /* The staged route proves only the binding identity. Owner and
+               * Actor lifecycle fields can advance while that binding remains
+               * current, so transmission consumes the live registry record. */
               sender = state->bound_session_sender;
+              current_actor = found->second.ref;
               binding_generation = found->second.bound_session_route->binding_generation;
-              return std::make_pair (sender, binding_generation);
+              return true;
           });
           if (!sender_snapshot) {
               return task_t<void> (result_t<void>::failure (
                 framework_error_kind_t::not_configured,
                 "bound Session route fence changed before send"));
           }
-          sender = std::move (sender_snapshot->first);
-          binding_generation = sender_snapshot->second;
           if (!sender) {
               return task_t<void> (
                 result_t<void>::failure (framework_error_kind_t::not_configured,
@@ -1987,7 +1982,7 @@ make_session_owner_sink (std::weak_ptr<actor_gateway_state_t> weak_state,
               const stream_header_t header (stream_message_kind_t::send, codec,
                                             stream_header_flags_t::none, std::nullopt,
                                             std::move (packet_name));
-              auto sent = sender (staged_actor, binding_generation, header, payload);
+              auto sent = sender (current_actor, binding_generation, header, payload);
               return [] (task_t<result_t<void>> pending) -> task_t<void> {
                   const auto result = co_await pending;
                   if (!result) {

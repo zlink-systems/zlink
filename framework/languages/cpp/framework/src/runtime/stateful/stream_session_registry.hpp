@@ -179,8 +179,10 @@ class stream_session_registry_t
     std::vector<stream_retained_outbound_t>
     discard_retained_outbound (const std::string &actor_id, std::uint64_t binding_generation);
     std::vector<stream_retained_outbound_t> take_all_retained_outbound ();
-    /* Internal projection hook. The aggregate commits before this hook runs,
-     * and hook failure cannot veto or roll back the committed route. */
+    /* Internal projection hook. commit_remote_route runs it after the
+     * aggregate commits but before the state lane publishes that aggregate to
+     * readers. It must not re-enter this registry; hook failure cannot veto or
+     * roll back the committed route. */
     using route_terminal_commit_t = std::function<bool (const stream_route_admission_t &)>;
     stream_route_admission_t commit_remote_route (const std::string &connection_id,
                                                   std::uint64_t binding_generation,

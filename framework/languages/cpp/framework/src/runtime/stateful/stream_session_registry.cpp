@@ -826,8 +826,8 @@ stream_session_registry_t::commit_remote_route (const std::string &connection_id
       _lane
         .run ([this, &connection_id, binding_generation, &actor_id, object_generation,
                previous_authority_owner_generation, target = std::move (target),
-               target_node_generation,
-               target_owner_lease_generation] () mutable -> stream_route_admission_t {
+               target_node_generation, target_owner_lease_generation,
+               &commit_terminal] () mutable -> stream_route_admission_t {
             const auto connection = _connections.find (connection_id);
             auto *aggregate = current_aggregate_unlocked (actor_id);
             if (connection == _connections.end () || aggregate == nullptr
@@ -873,17 +873,23 @@ stream_session_registry_t::commit_remote_route (const std::string &connection_id
             stream_route_admission_t admission{stateful_error_t::none, next, last_sequence,
                                                std::move (retained)};
             notify_changed ();
+            /* The registry binding and its Actor-gateway projection are one
+             * publication boundary. In particular, a boundSessionSend(36)
+             * must not observe the target tenure committed above before the
+             * gateway has advanced to that same route.
+             *
+             * This internal callback must not re-enter this registry. It is
+             * non-veto: projection failure neither rolls back nor hides the
+             * committed binding once this lane turn completes. */
+            try {
+                if (commit_terminal)
+                    (void) commit_terminal (admission);
+            }
+            catch (...) {
+            }
             return admission;
         })
         .get ();
-    if (admission.error != stateful_error_t::none)
-        return admission;
-    try {
-        if (commit_terminal)
-            (void) commit_terminal (admission);
-    }
-    catch (...) {
-    }
     return admission;
 }
 
