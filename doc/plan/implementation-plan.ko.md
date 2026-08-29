@@ -145,7 +145,9 @@ bindings 0.14.0 전환 완료(릴리스·로컬 패키지·참조 모두). 아�
 | 이월 등재(갱신) | java SerialExecutionQueueTest flake 발현율 상승 · dotnet 동적 flags 2곳 공개 async 표면 개정(사용자 안건) · GameQuest 권위문서 DisableRelocation vs java·kotlin recreateOnRelocation 계약 갭(사용자 안건) |
 | 스펙 경량 계약 재작성(감독관) → 사용자 리뷰 → origin의 B안 절 대체 커밋 | 대기 |
 | 로컬 레이스 수정 재적용 → 원 결함 해소 | **완료** `cd92311156` — 스펙 확정(`eb36244d16`: B안 절 제거+binding 완료·인지 두 선형화점 명문화, 사용자 지시) 위에 레이스 3건 수렴. **TTT 14/15**(잔여=등재 teardown flake)·게이트 45/45·5종 OK. **4언어×6샘플 전부 그린 달성, push 완료** |
-| ZoneWorld (cpp·jvm·node·dotnet, codex sol ultra) | **착수** — 4언어 재실증 병렬 실행 중(Z1 cpp split-brain·Z2 dotnet mesh admission 기존 등재분 포함 지문 수집) |
+| ZoneWorld (cpp·jvm·node·dotnet, codex sol ultra) | **진행 중** — 재실증 지문: cpp ZoneBorderEvent multicast fanout 미승인+connector timeout · dotnet ZW-A3·B7·B8 · node maintenance 위치 미반영 · jvm ZW-B7·E1·E2. jvm E1·E2 해소 `3b03935b72`(샘플 결함 2건 — resident identity·stale 콘솔 broadcast), **ZW-B7 잔존(dotnet·jvm 공통)** 2라운드 진행 |
+| ZoneWorld 완료 후 마감 (2026-08-29 사용자 지정) | 대기 — ① 4언어 ZoneWorld 반복 실증 그린 확정 ② 커밋·push ③ **tag `seven-samples-green-v1`** ④ 플랜·이월 목록 정리 |
+| **남은 lock/동기 경계 정리** (2026-08-29 사용자 지정, ZoneWorld 마감 후) | 대기 — §9-③ 호환 경계 회수 캠페인: dotnet `AwaitStateLane` 664곳·cpp state-lane `.get()` 브리지(부록 A 방식 재계수 후 회수 우선순위표 적용 — 원격 Actor 11~13회→5~6회 목표) · java binding wrapper 유지 30곳 재검토(단일 owner 계약 성립 여부) · dotnet relocation C2 잔여(06 §6 유형 ③ callback 재설계) · 작업자 codex sol ultra, 동작 보존/리팩토링 커밋 분리 |
 
 ---
 
