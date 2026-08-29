@@ -28,7 +28,7 @@ final class ZLinkJavaDealerSocket
     @Override public synchronized void connect(String endpoint) { socket.connect(endpoint); }
     @Override public synchronized void disconnect(String endpoint) { socket.disconnect(endpoint); }
     @Override public void setChannelName(String channelName) { ZLinkJavaSocketSupport.validateChannelName(channelName); }
-    @Override public synchronized void setReceiveFlowState(ReceiveFlowState state) {
+    @Override public void setReceiveFlowState(ReceiveFlowState state) {
         socket.options().receiveFlowState(state);
     }
     @Override public boolean waitForReadable(Duration timeout) {

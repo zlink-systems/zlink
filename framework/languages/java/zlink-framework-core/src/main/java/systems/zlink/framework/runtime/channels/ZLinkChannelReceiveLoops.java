@@ -55,6 +55,7 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
                         break;
                     }
                     try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+                        assertReceiveOwner();
                         ZLinkBackendReceived received = router.recv(
                             ZLinkBackendRecvMode.DONT_WAIT);
                         if (received == null) {
@@ -93,6 +94,7 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
                         break;
                     }
                     try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+                        assertReceiveOwner();
                         ZLinkBackendTopicMessage received = subscriber.subscribe(
                             ZLinkBackendRecvMode.DONT_WAIT);
                         if (received == null) {
@@ -136,6 +138,7 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
                     try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
                         ZLinkBackendReceived received;
                         synchronized (socketLock.get()) {
+                            assertReceiveOwner();
                             received = router.recv(ZLinkBackendRecvMode.DONT_WAIT);
                         }
                         if (received == null) {
@@ -167,7 +170,20 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
     }
 
     void awaitTermination() {
-        ZLinkChannelRuntime.awaitTerminated(executor);
+        boolean interrupted = false;
+        while (!executor.isTerminated()) {
+            try {
+                executor.awaitTermination(
+                    Long.MAX_VALUE,
+                    java.util.concurrent.TimeUnit.NANOSECONDS);
+            } catch (InterruptedException interruption) {
+                interrupted = true;
+                executor.shutdownNow();
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private void start(ReceiveLoop loop) {
@@ -176,6 +192,7 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
 
     private abstract class ReceiveLoop implements Runnable {
         private final Consumer<Throwable> reportFailure;
+        private Thread ownerThread;
 
         private ReceiveLoop(Consumer<Throwable> reportFailure) {
             this.reportFailure = reportFailure;
@@ -183,6 +200,11 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
 
         @Override
         public final void run() {
+            if (ownerThread != null) {
+                throw new IllegalStateException(
+                    "socket receive loop already has an owner thread");
+            }
+            ownerThread = Thread.currentThread();
             while (running.getAsBoolean() && !isClosed()) {
                 try {
                     if (!receiveAndDispatch()) {
@@ -197,6 +219,13 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
                     }
                     reportFailure.accept(error);
                 }
+            }
+        }
+
+        final void assertReceiveOwner() {
+            if (Thread.currentThread() != ownerThread) {
+                throw new IllegalStateException(
+                    "socket receive must run on its receive-loop owner thread");
             }
         }
 
