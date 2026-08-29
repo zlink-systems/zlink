@@ -9,8 +9,8 @@ zlink_cpp_sample_prepare_build() {
   # canonical package versions before each sample build so a stale cache
   # cannot silently select a second build provenance.
   BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-$cpp_root/build}"
-  local cpp_version="0.14.5"
-  local core_version="0.14.5"
+  local cpp_version="0.14.6"
+  local core_version="0.14.6"
   local dependency_prefix=""
   local toolchain_file=""
   local build_type="Release"
