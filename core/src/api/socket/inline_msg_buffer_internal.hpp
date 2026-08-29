@@ -22,7 +22,8 @@ namespace socket_internal
 template <size_t InlineCapacity> class inline_msg_buffer_t
 {
   public:
-    inline_msg_buffer_t () : _data (_inline), _size (0), _capacity (InlineCapacity)
+    inline_msg_buffer_t () :
+        _data (_inline_storage), _size (0), _capacity (InlineCapacity)
     {
         static_assert (InlineCapacity > 0, "inline message capacity must be positive");
         static_assert (std::is_trivially_copyable<zlink_msg_t>::value,
@@ -31,7 +32,7 @@ template <size_t InlineCapacity> class inline_msg_buffer_t
 
     ~inline_msg_buffer_t ()
     {
-        if (_data != _inline)
+        if (_data != _inline_storage)
             delete[] _data;
     }
 
@@ -42,7 +43,7 @@ template <size_t InlineCapacity> class inline_msg_buffer_t
 
         zlink_msg_t *const replacement = new zlink_msg_t[capacity_];
         std::copy (_data, _data + _size, replacement);
-        if (_data != _inline)
+        if (_data != _inline_storage)
             delete[] _data;
         _data = replacement;
         _capacity = capacity_;
@@ -90,7 +91,7 @@ template <size_t InlineCapacity> class inline_msg_buffer_t
     const zlink_msg_t &operator[] (size_t index_) const { return _data[index_]; }
 
   private:
-    zlink_msg_t _inline[InlineCapacity];
+    zlink_msg_t _inline_storage[InlineCapacity];
     zlink_msg_t *_data;
     size_t _size;
     size_t _capacity;
