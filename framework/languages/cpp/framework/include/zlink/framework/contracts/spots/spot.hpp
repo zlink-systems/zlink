@@ -53,6 +53,7 @@ namespace detail
 class spot_node_builder_state_t;
 class spot_context_state_t;
 class spot_context_access_t;
+class actor_dispatch_admission_token_t;
 struct mesh_node_builder_state_t;
 void drain_spot_node_executors (spot_node_builder_state_t &node);
 void cancel_spot_node_dispatch_queues (spot_node_builder_state_t &node);
@@ -1170,6 +1171,7 @@ class spot_context_t
     friend class detail::spot_node_runtime_t;
     friend class detail::timer_runtime_t;
     friend class detail::spot_context_access_t;
+    friend class detail::actor_dispatch_admission_token_t;
 
     spot_context_t ();
     explicit spot_context_t (std::shared_ptr<detail::spot_context_state_t> state);
@@ -1692,7 +1694,8 @@ class spot_handler_registry_t
                    std::function<void ()> before_application_handler = {},
                    std::function<void ()> after_application_admission = {},
                    std::function<void ()> transfer_owner_reservation = {},
-                   std::size_t transferred_owner_byte_cost = 0) const;
+                   std::size_t transferred_owner_byte_cost = 0,
+                   std::function<void ()> application_admission_terminal = {}) const;
 
     void register_actor_admission_erased (std::type_index actor_type,
                                           detail::spot_actor_admission_callbacks_t callbacks);

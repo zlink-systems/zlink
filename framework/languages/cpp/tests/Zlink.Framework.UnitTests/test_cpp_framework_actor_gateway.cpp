@@ -4213,10 +4213,19 @@ int remote_actor_join_resolves_store_type_and_reports_typed_terminals ()
 
 } // namespace
 
-/* async-execution-policy §1.3: the session Actor relay waiter is bounded —
- * when the FIFO is full a new relay completes immediately with
- * DeadlineExceeded and is never submitted later. */
-int parked_request_reply_case (const std::string &requester_rid)
+enum class parked_request_case_t
+{
+    replay,
+    pending_capacity_full
+};
+
+/* Actor requests parked during relocation retain their original reply route.
+ * The same production dispatch fixture also pins the bounded pending-reply
+ * admission: a fresh request cannot enter the backlog when all 1024 reply
+ * reservations are already owned. */
+int parked_request_reply_case (
+  const std::string &requester_rid,
+  parked_request_case_t test_case = parked_request_case_t::replay)
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -4285,9 +4294,36 @@ int parked_request_reply_case (const std::string &requester_rid)
     // The transfer is open when the request arrives: it must park.
     if (!node->actor_transfer_coordinator.try_begin_local (key))
         return 1;
+    spot_node_runtime_t spots (node);
+
+    constexpr std::size_t pending_handoff_capacity = 1024;
+    const auto capacity_sentinel_source =
+      zlink::routing_id_t::from ("pending-capacity-holder").to_hex ();
+    if (test_case == parked_request_case_t::pending_capacity_full) {
+        const auto sentinel_deadline =
+          std::chrono::steady_clock::now () + std::chrono::hours (1);
+        const auto filled = node->lane.run ([&] {
+            for (std::uint64_t index = 1; index <= pending_handoff_capacity; ++index) {
+                const spot_node_builder_state_t::pending_handoff_request_key_t sentinel_key{
+                  capacity_sentinel_source, 900, index, {}};
+                const auto [_, inserted] = node->pending_handoff_requests.emplace (
+                  sentinel_key,
+                  spot_node_builder_state_t::pending_handoff_request_t{
+                    actor, {}, 10'000 + index, {}, {}, sentinel_deadline});
+                if (!inserted)
+                    return false;
+            }
+            return node->pending_handoff_requests.size () == pending_handoff_capacity;
+        }).get ();
+        if (!filled) {
+            spots.fail_remote_actor_transfer (actor, false, std::nullopt);
+            return 9;
+        }
+    }
 
     std::mutex reply_mutex;
     std::vector<zlink::message_t> reply_parts;
+    std::atomic_int reply_calls{0};
     const auto reply_host = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
       .mesh = {.descriptor = {.mesh_name = "parked-replay",
                               .node_routing_id =
@@ -4301,10 +4337,11 @@ int parked_request_reply_case (const std::string &requester_rid)
     record.source_node_rid = zlink::routing_id_t::from (requester_rid);
     record.reply_route_id = 57;
     record.reply_token.host = reply_host;
-    record.reply_token.local_reply = [&reply_mutex,
-                                      &reply_parts] (const std::vector<zlink::message_t> &parts) {
+    record.reply_token.local_reply = [&reply_mutex, &reply_parts,
+                                      &reply_calls] (const std::vector<zlink::message_t> &parts) {
         const std::lock_guard lock (reply_mutex);
         reply_parts = parts;
+        reply_calls.fetch_add (1, std::memory_order_release);
         return true;
     };
     // Deliberately NO record.actor_route: the requester attached no fence.
@@ -4323,8 +4360,70 @@ int parked_request_reply_case (const std::string &requester_rid)
       zlink::message_t::from (std::string ("ping")));
     auto request_parts = std::move (encoded).take_items ();
 
-    spot_node_runtime_t spots (node);
     (void) spots.dispatch_mesh_record (owner, record, request_parts, provider, serializers);
+
+    if (test_case == parked_request_case_t::pending_capacity_full) {
+        const auto reply_deadline =
+          std::chrono::steady_clock::now () + std::chrono::seconds (2);
+        while (reply_calls.load (std::memory_order_acquire) == 0
+               && std::chrono::steady_clock::now () < reply_deadline) {
+            std::this_thread::yield ();
+        }
+        node->worker_executor->drain ();
+
+        std::vector<zlink::message_t> delivered;
+        {
+            const std::lock_guard lock (reply_mutex);
+            delivered = reply_parts;
+        }
+        bool capacity_reply = false;
+        if (!delivered.empty ()) {
+            const auto reply_header =
+              codec.decode_header (messaging::message_parts_t (std::move (delivered)));
+            capacity_reply =
+              reply_header
+              && reply_header.value ().kind == messaging::message_kind_t::error
+              && reply_header.value ().error_code.value_or ("") == "capacity_exceeded"
+              && reply_header.value ().correlation_id == "parked-request-1";
+        }
+
+        const auto phase = node->actor_transfer_coordinator.phase (key);
+        const auto backlog = node->actor_transfer_coordinator.take_backlog (key);
+        const auto token_state = node->lane.run ([&] {
+            bool sentinels_preserved =
+              node->pending_handoff_requests.size () == pending_handoff_capacity;
+            for (std::uint64_t index = 1;
+                 sentinels_preserved && index <= pending_handoff_capacity; ++index) {
+                const spot_node_builder_state_t::pending_handoff_request_key_t sentinel_key{
+                  capacity_sentinel_source, 900, index, {}};
+                const auto found = node->pending_handoff_requests.find (sentinel_key);
+                sentinels_preserved = found != node->pending_handoff_requests.end ()
+                                      && found->second.reply_route_id == 10'000 + index;
+            }
+            return std::pair{
+              sentinels_preserved, !node->actor_pending_requests.contains (key)};
+        }).get ();
+        const auto handler_was_skipped =
+          !handler_ran.load (std::memory_order_acquire);
+        const auto callback_rolled_back = !spot->has_active_callback ();
+
+        spots.fail_remote_actor_transfer (actor, false, std::nullopt);
+        node->worker_executor->drain ();
+
+        if (reply_calls.load (std::memory_order_acquire) != 1)
+            return 10;
+        if (!capacity_reply)
+            return 11;
+        if (!handler_was_skipped)
+            return 12;
+        if (!phase || *phase != actor_move_phase_t::local || !backlog.empty ())
+            return 13;
+        if (!token_state.first)
+            return 14;
+        if (!token_state.second || !callback_rolled_back)
+            return 15;
+        return 0;
+    }
 
     // The request must park (not dispatch) and the pending handoff entry
     // that owns the original reply token must be recorded despite the
@@ -4395,6 +4494,12 @@ int parked_request_without_route_fence_receives_reply_after_replay ()
 {
     // Requester local to the parking node (the SF-F2 shape).
     return parked_request_reply_case ("actor-a");
+}
+
+int pending_handoff_capacity_rejects_before_backlog_and_handler ()
+{
+    return parked_request_reply_case (
+      "actor-a", parked_request_case_t::pending_capacity_full);
 }
 
 int same_operation_from_distinct_source_lifecycles_has_distinct_pending_terminal ()
@@ -4746,6 +4851,11 @@ int main ()
           remote_actor_join_resolves_store_type_and_reports_typed_terminals ();
         store_resolution != 0) {
         return 390 + store_resolution;
+    }
+    if (const auto pending_capacity =
+          pending_handoff_capacity_rejects_before_backlog_and_handler ();
+        pending_capacity != 0) {
+        return 385 + pending_capacity;
     }
     if (const auto parked_reply = parked_request_without_route_fence_receives_reply_after_replay ();
         parked_reply != 0) {

@@ -183,6 +183,14 @@ handoff_append_result_t actor_transfer_coordinator_t::try_append_backlog (
   handoff_packet_t packet)
 {
     return _lane.run ([&, this] {
+    return try_append_backlog_unlocked (actor_key, std::move (packet));
+    }).get ();
+}
+
+handoff_append_result_t actor_transfer_coordinator_t::try_append_backlog_unlocked (
+  const std::string &actor_key,
+  handoff_packet_t packet)
+{
     const auto moving = _moves.find (actor_key);
     if (moving == _moves.end ()) {
         return handoff_append_result_t::not_moving;
@@ -224,7 +232,6 @@ handoff_append_result_t actor_transfer_coordinator_t::try_append_backlog (
     auto &backlog = _backlogs[actor_key];
     backlog.push_back (std::move (packet));
     return handoff_append_result_t::appended;
-    }).get ();
 }
 
 bool actor_transfer_coordinator_t::stage_commit_backlog (
@@ -362,13 +369,42 @@ actor_transfer_dispatch_state_snapshot_t actor_transfer_coordinator_t::project_d
   const runtime::protocol::actor_route_fence_t *source_fence) const
 {
     return _lane.run ([&, this] {
-        actor_transfer_dispatch_state_snapshot_t snapshot;
-        snapshot.matches_message_follow_source =
-          source_fence != nullptr
-          && matches_message_follow_source_unlocked (actor_key, *source_fence,
-                                                     std::chrono::steady_clock::now ());
-        snapshot.transfer_in_progress = _moves.contains (actor_key);
-        return snapshot;
+        return project_dispatch_state_unlocked (actor_key, source_fence,
+                                                std::chrono::steady_clock::now ());
+    }).get ();
+}
+
+actor_transfer_dispatch_state_snapshot_t
+actor_transfer_coordinator_t::project_dispatch_state_unlocked (
+  const std::string &actor_key,
+  const runtime::protocol::actor_route_fence_t *source_fence,
+  std::chrono::steady_clock::time_point now) const
+{
+    actor_transfer_dispatch_state_snapshot_t snapshot;
+    snapshot.matches_message_follow_source =
+      source_fence != nullptr
+      && matches_message_follow_source_unlocked (actor_key, *source_fence, now);
+    snapshot.transfer_in_progress = _moves.contains (actor_key);
+    return snapshot;
+}
+
+actor_transfer_packet_admission_t actor_transfer_coordinator_t::admit_dispatch_packet (
+  const std::string &actor_key,
+  const runtime::protocol::actor_route_fence_t *source_fence,
+  bool targets_current_authority,
+  handoff_packet_t packet)
+{
+    return _lane.run ([&, this] {
+    const auto projected = project_dispatch_state_unlocked (
+      actor_key, source_fence, std::chrono::steady_clock::now ());
+    const bool targets_committed_source =
+      !targets_current_authority && projected.matches_message_follow_source;
+    const auto append_result =
+      targets_committed_source
+        ? handoff_append_result_t::not_moving
+        : try_append_backlog_unlocked (actor_key, std::move (packet));
+    return actor_transfer_packet_admission_t{projected.matches_message_follow_source,
+                                             projected.transfer_in_progress, append_result};
     }).get ();
 }
 
