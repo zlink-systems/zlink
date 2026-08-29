@@ -268,6 +268,16 @@ capture itself is not deferred past the return.
 introduced.** Propagate an async signature only when the internal callers are already
 asynchronous and the observable contract does not change.
 
+**Dynamic control surfaces (runtime-changeable flags, diagnostics levels, and the like) are
+provided as dual surfaces.** This mirrors the bindings completion-surface policy (the binding
+async-coroutine-policy spec — operations classified ASYNC still offer a sync terminal
+alongside): the async surface is canonical, and the sync surface is a single minimal bridge
+over it satisfying the three conditions above. The sync surface is **only for use outside
+framework-owned execution contexts** (handlers, lanes, turns, completion callbacks) — its
+audience is configuration time, operational tooling, and tests. Inside framework execution
+contexts, use the async surface. No language provides only one of the two surfaces, so the
+languages do not diverge.
+
 ## 6. Structuring So Reentrancy Cannot Arise
 
 Reentrancy does not happen by accident. It arises structurally in three places, and each place

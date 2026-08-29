@@ -254,6 +254,14 @@ Task<Reservation> Reserve_WRONG(key)
 **공개 계약이 동기면 state lane 도입만을 이유로 비동기로 바꾸지 않는다.** 내부 호출자가
 이미 비동기이고 관측 계약이 변하지 않을 때만 async signature를 전파한다.
 
+**동적 제어 표면(실행 중 변경 가능한 flag·진단 레벨 등)은 dual 표면으로 제공한다.**
+bindings의 완료 표면 정책(binding 스펙 async-coroutine-policy — ASYNC 분류 operation에도
+sync terminal을 나란히 제공)과 같은 모형이다: async 표면이 정본이고, sync 표면은 그 위의
+최소 bridge 1개(위 세 조건 충족)로 제공한다. sync 표면은 **framework가 소유한 실행
+문맥(handler·lane·turn·완료 callback) 밖 전용**이며 — 설정 시점, 운영 도구, 테스트가
+그 대상이다. framework 실행 문맥 안에서는 async 표면을 쓴다. 언어별로 한쪽 표면만
+제공해 발산하지 않는다.
+
 ## 6. 재진입을 만들지 않는 구조
 
 재진입은 우연히 생기지 않는다. 세 가지 자리에서 구조적으로 생기며, 각 자리에 정해진
