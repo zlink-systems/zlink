@@ -11,7 +11,9 @@ final class ZLinkFrameworkRegistrationTest {
     void messageFollowDurationDefaultsToCommonContract() {
         var registration = new ZLinkFrameworkRegistration();
 
-        assertEquals(Duration.ofSeconds(30), registration.messageFollowDuration());
+        assertEquals(
+            Duration.ofSeconds(30),
+            registration.locations().options().messageFollowDuration());
     }
 
 }

@@ -3,6 +3,7 @@ import java.nio.charset.StandardCharsets;
 import java.lang.reflect.Proxy;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -36,6 +37,8 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSu
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntimeTestAccess;
@@ -210,6 +213,32 @@ final class EntrySpotActorDispatchTests {
                 backend.entrySpot.spotId());
             sourceRuntime.setMessageFollowNoticeSender(
                 (target, notice) -> CompletableFuture.completedFuture(null));
+
+            AtomicInteger generationFailures = new AtomicInteger();
+            AtomicReference<Throwable> generationFailure =
+                new AtomicReference<>();
+            assertTrue(relayMessageFollow(
+                sourceRuntime,
+                new ZLinkBackendActorRef(
+                    sourceRuntime.currentRef(sourceSendActor).nodeRid(),
+                    "follow-send-actor",
+                    sourceRuntime.currentRef(sourceSendActor).generation() + 1),
+                false,
+                0,
+                100,
+                200,
+                "follow-send",
+                SERIALIZER.serialize(new ProbeRequest("generation")).bytes(),
+                new byte[] {1},
+                new AtomicInteger(),
+                generationFailures,
+                generationFailure));
+            assertEquals(1, generationFailures.get());
+            assertEquals(
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                assertInstanceOf(
+                    ZLinkFrameworkException.class,
+                    generationFailure.get()).kind());
 
             byte[] sendPayload = SERIALIZER.serialize(
                 new ProbeRequest("follow-send")).bytes();

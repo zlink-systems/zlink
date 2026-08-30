@@ -2079,23 +2079,28 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         return true;
     }
 
-    boolean forwardRelocationActor(
+    CompletionStage<List<Message>> forwardMessageFollowActor(
         ZLinkServiceM6BWireCodec.ActorMessage stale,
         ZLinkServiceM6BWireCodec.ActorRouteFence target,
-        List<Message> parts,
-        Consumer<List<Message>> reply,
-        Consumer<Throwable> failure) {
+        List<Message> parts) {
         Objects.requireNonNull(stale, "stale");
         Objects.requireNonNull(target, "target");
         Objects.requireNonNull(parts, "parts");
-        Consumer<Throwable> onFailure = failure == null
-            ? ignored -> { }
-            : failure;
         if (stale.messageFollowHopCount()
-                >= ZLinkServiceMessageFollowWireCodec.MAX_HOP_COUNT
-            || !readyRelocationPeer(target.actor().nodeRid(),
+                >= ZLinkServiceMessageFollowWireCodec.MAX_HOP_COUNT) {
+            parts.forEach(Message::close);
+            return CompletableFuture.failedFuture(
+                new systems.zlink.framework.errors.ZLinkFrameworkException(
+                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "Message Follow hop limit exceeded"));
+        }
+        if (!readyRelocationPeer(target.actor().nodeRid(),
                 target.targetNodeGeneration())) {
-            return false;
+            parts.forEach(Message::close);
+            return CompletableFuture.failedFuture(
+                new systems.zlink.framework.errors.ZLinkFrameworkException(
+                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "Message Follow target route is unavailable"));
         }
         ZLinkBackendActorRef sourceActor = stale.sourceActor() == null
             ? null
@@ -2115,29 +2120,51 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 target,
                 stale.boundSession()),
             wire.encodeApplicationPayload(applicationPayload(parts)));
+        CompletionStage<List<Message>> forwarded;
         if (stale.request()) {
-            port.request(
+            forwarded = port.request(
                     requireStarted(),
                     target.actor().nodeRid(),
                     frames,
                     Duration.ofSeconds(30))
-                .whenComplete((replyFrames, requestFailure) ->
-                    forwardRelocationReply(
-                        stale.correlation(),
-                        requestResult(requestFailure),
-                        replyFrames == null ? List.of() : replyFrames,
-                        reply,
-                        onFailure));
+                .thenApply(replyFrames -> decodeForwardedActorReply(
+                    stale.correlation(), replyFrames));
         } else {
-            port.send(requireStarted(), target.actor().nodeRid(), frames)
-                .whenComplete((ignored, sendFailure) -> {
-                    if (sendFailure != null) {
-                        onFailure.accept(unwrap(sendFailure));
-                    }
-                });
+            forwarded = port.send(
+                    requireStarted(), target.actor().nodeRid(), frames)
+                .thenApply(ignored -> List.of());
         }
         parts.forEach(Message::close);
-        return true;
+        return forwarded;
+    }
+
+    private List<Message> decodeForwardedActorReply(
+        long correlation,
+        List<byte[]> replyFrames) {
+        if (replyFrames == null || replyFrames.isEmpty()
+            || replyFrames.size() > 2) {
+            throw new IllegalArgumentException(
+                "invalid Message Follow reply frame count");
+        }
+        ZLinkServiceM6AWireCodec.Reply replyHeader =
+            wire.decodeReplyHeader(replyFrames.getFirst());
+        if (replyHeader.correlation() != correlation) {
+            throw new systems.zlink.framework.errors.ZLinkFrameworkException(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "Message Follow reply correlation does not match");
+        }
+        if ((replyHeader.terminalResult() == 0)
+            != (replyFrames.size() == 2)) {
+            throw new IllegalArgumentException(
+                "Message Follow reply terminal differs");
+        }
+        if (replyHeader.terminalResult() != 0) {
+            throw new ZLinkRelayedReplyTerminalException(
+                replyHeader.terminalResult(), replyHeader.failureCode());
+        }
+        return replyFrames.size() < 2
+            ? List.of()
+            : decodeApplicationMessages(replyFrames.get(1));
     }
 
     private boolean readyRelocationPeer(

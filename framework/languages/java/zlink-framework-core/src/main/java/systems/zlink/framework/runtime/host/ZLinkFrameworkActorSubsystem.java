@@ -105,7 +105,7 @@ final class ZLinkFrameworkActorSubsystem {
                 actorFactories,
                 transferAdapters,
                 registration.defaultRequestTimeout(),
-                registration.messageFollowDuration(),
+                registration.locations().options().messageFollowDuration(),
                 registration.locations().options(),
                 serializer,
                 runtimeHandlers,

@@ -108,9 +108,6 @@ final class ZLinkJavaRawSpotNode
     private final Map<ZLinkServiceM6BWireCodec.SpotRouteFence,
         ZLinkServiceM6BWireCodec.SpotRouteFence> relocationSpotForwards =
             new ConcurrentHashMap<>();
-    private final Map<ZLinkServiceM6BWireCodec.ActorRouteFence,
-        ZLinkServiceM6BWireCodec.ActorRouteFence> relocationActorForwards =
-            new ConcurrentHashMap<>();
 
     ZLinkJavaRawSpotNode(ZLinkJavaRawMeshNode owner) {
         this.owner = owner;
@@ -242,41 +239,11 @@ final class ZLinkJavaRawSpotNode
     }
 
     @Override
-    public void installRelocationActorForward(
-        ZLinkServiceM6BWireCodec.ActorRouteFence source,
+    public CompletionStage<List<Message>> forwardMessageFollowActor(
+        ZLinkServiceM6BWireCodec.ActorMessage stale,
         ZLinkServiceM6BWireCodec.ActorRouteFence target,
-        Duration retention) {
-        Objects.requireNonNull(source, "source");
-        Objects.requireNonNull(target, "target");
-        Objects.requireNonNull(retention, "retention");
-        if (retention.isNegative() || retention.isZero()) {
-            throw new IllegalArgumentException(
-                "relocation forward retention must be positive");
-        }
-        relocationActorForwards.compute(source, (ignored, previous) -> {
-            if (previous == null || previous.equals(target)) {
-                return target;
-            }
-            boolean sameCommittedTarget =
-                previous.actor().equals(target.actor())
-                    && previous.targetNodeGeneration()
-                        == target.targetNodeGeneration()
-                    && previous.ownerLeaseGeneration()
-                        == target.ownerLeaseGeneration();
-            if (!sameCommittedTarget
-                || target.authorityOwnerGeneration()
-                    <= previous.authorityOwnerGeneration()) {
-                throw new IllegalStateException(
-                    "relocation forward source already has another target");
-            }
-            // The provider allocates AuthorityOwnerGeneration from a global
-            // monotonic sequence, so the source's provisional +1 fence must
-            // be refreshed with the generation returned by the target CAS.
-            return target;
-        });
-        CompletableFuture.delayedExecutor(
-                retention.toMillis(), TimeUnit.MILLISECONDS)
-            .execute(() -> relocationActorForwards.remove(source, target));
+        List<Message> parts) {
+        return owner.forwardMessageFollowActor(stale, target, parts);
     }
 
     private static <T> void installRelocationForward(
@@ -1897,20 +1864,6 @@ final class ZLinkJavaRawSpotNode
             terminalRelease.run();
             return true;
         }
-        ZLinkServiceM6BWireCodec.ActorRouteFence forwarded =
-            relocationActorForwards.get(header.target());
-        if (forwarded != null) {
-            boolean accepted = owner.forwardRelocationActor(
-                header,
-                forwarded,
-                parts,
-                reply,
-                failure);
-            if (accepted) {
-                terminalRelease.run();
-            }
-            return accepted;
-        }
         ZLinkInternalSpotNode.MessageFollowRelayHandler relay =
             messageFollowRelayHandler;
         if (relay != null) {
@@ -2036,7 +1989,8 @@ final class ZLinkJavaRawSpotNode
         ZLinkBackendActorReceived.RelocationRedirect relocationRedirect =
             parts.size() == 2
                 ? (headerFrame, payloadFrame) -> redirectRelocatedActor(
-                    header, headerFrame, payloadFrame, reply, failure)
+                    source, header, acceptedJournalRecord, contentType,
+                    headerFrame, payloadFrame, reply, failure)
                 : null;
         AtomicInteger remainingTerminals = new AtomicInteger(parts.size());
         Runnable partTerminal = () -> {
@@ -2088,14 +2042,17 @@ final class ZLinkJavaRawSpotNode
      * (routing :244 forbids re-submitting the operation here).
      */
     private boolean redirectRelocatedActor(
+        ZLinkInternalMeshNode.PeerAuthorityFence source,
         ZLinkServiceM6BWireCodec.ActorMessage header,
+        Supplier<byte[]> acceptedJournalRecord,
+        String contentType,
         Message headerFrame,
         Message payloadFrame,
         Consumer<List<Message>> reply,
         Consumer<Throwable> failure) {
-        ZLinkServiceM6BWireCodec.ActorRouteFence forwarded =
-            relocationActorForwards.get(header.target());
-        if (forwarded == null) {
+        ZLinkInternalSpotNode.MessageFollowRelayHandler relay =
+            messageFollowRelayHandler;
+        if (relay == null) {
             return false;
         }
         List<Message> parts = new ArrayList<>(2);
@@ -2103,8 +2060,16 @@ final class ZLinkJavaRawSpotNode
         parts.add(Message.from(payloadFrame));
         boolean accepted;
         try {
-            accepted = owner.forwardRelocationActor(
-                header, forwarded, parts, reply, failure);
+            accepted = relay.handle(
+                source.sourceNodeRid(),
+                source.sourceNodeGeneration(),
+                header,
+                acceptedJournalRecord.get(),
+                parts,
+                contentType,
+                reply,
+                failure,
+                () -> { });
         } catch (RuntimeException error) {
             parts.forEach(Message::close);
             throw error;

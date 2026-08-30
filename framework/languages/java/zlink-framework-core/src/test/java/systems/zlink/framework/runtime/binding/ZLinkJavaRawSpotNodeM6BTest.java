@@ -500,8 +500,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 target.lifecycleGeneration(),
                 12,
                 5);
-            source.spotNode().installRelocationActorForward(
-                sourceRoute, targetRoute, Duration.ofMinutes(1));
+            installActorFollow(source.spotNode(), sourceRoute, targetRoute);
             var sourceSpotRoute = new ZLinkServiceM6BWireCodec.SpotRouteFence(
                 "moving-spot",
                 17,
@@ -783,8 +782,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 var redirect = header.relocationRedirect();
                 assertNotNull(redirect,
                     "the mesh ingress must install a post-cut re-route hook");
-                source.spotNode().installRelocationActorForward(
-                    sourceRoute, targetRoute, Duration.ofMinutes(1));
+                installActorFollow(
+                    source.spotNode(), sourceRoute, targetRoute);
                 redirectCalls.incrementAndGet();
                 redirected.set(redirect.redirect(
                     header.message(), payload.message()));
@@ -2833,6 +2832,39 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 "test-source-owner",
                                 1))
                         : Optional.empty()));
+    }
+
+    private static void installActorFollow(
+        ZLinkInternalSpotNode source,
+        ZLinkServiceM6BWireCodec.ActorRouteFence sourceRoute,
+        ZLinkServiceM6BWireCodec.ActorRouteFence targetRoute) {
+        source.setMessageFollowRelayHandler((
+            sourceNodeRid,
+            sourceNodeGeneration,
+            header,
+            acceptedJournalRecord,
+            parts,
+            contentType,
+            reply,
+            failure,
+            terminalRelease) -> {
+                if (!sourceRoute.equals(header.target())) {
+                    return false;
+                }
+                source.forwardMessageFollowActor(header, targetRoute, parts)
+                    .whenComplete((replies, relayFailure) -> {
+                        try {
+                            if (relayFailure != null) {
+                                failure.accept(relayFailure);
+                            } else if (!replies.isEmpty()) {
+                                reply.accept(replies);
+                            }
+                        } finally {
+                            terminalRelease.run();
+                        }
+                    });
+                return true;
+            });
     }
 
     private static void awaitOutstandingApplicationLease(

@@ -2036,7 +2036,8 @@ public final class ZLinkSpotRuntime
         return serializer;
     }
     Duration relocationForwardRetention() {
-        return frameworkRegistration.messageFollowDuration();
+        return frameworkRegistration.locations().options()
+            .messageFollowDuration();
     }
 
     private static RuntimeException closeRuntimeComponent(
