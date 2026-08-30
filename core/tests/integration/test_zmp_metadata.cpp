@@ -1227,13 +1227,15 @@ void test_stale_completion_lane_cannot_complete_reconnected_request ()
     fd_t old_application = connect_socket (endpoint, AF_INET, IPPROTO_TCP);
     fd_t old_completion = connect_socket (endpoint, AF_INET, IPPROTO_TCP);
     set_recv_timeout (old_application, 2000);
+    set_recv_timeout (old_completion, 2000);
     TEST_ASSERT_TRUE (
       send_paired_dealer_handshake (
         old_application, peer_name, 73, 1, 0, ZLINK_SOCKET_ROUTER));
     TEST_ASSERT_TRUE (
       send_paired_dealer_handshake (
         old_completion, peer_name, 73, 1, 1, ZLINK_SOCKET_ROUTER));
-    msleep (SETTLE_TIME * 20);
+    TEST_ASSERT_TRUE (wait_for_raw_ready (old_application));
+    TEST_ASSERT_TRUE (wait_for_raw_ready (old_completion));
 
     zlink_msg_t first_request;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&first_request, 1));
@@ -1251,13 +1253,15 @@ void test_stale_completion_lane_cannot_complete_reconnected_request ()
     fd_t new_application = connect_socket (endpoint, AF_INET, IPPROTO_TCP);
     fd_t new_completion = connect_socket (endpoint, AF_INET, IPPROTO_TCP);
     set_recv_timeout (new_application, 2000);
+    set_recv_timeout (new_completion, 2000);
     TEST_ASSERT_TRUE (
       send_paired_dealer_handshake (
         new_application, peer_name, 73, 2, 0, ZLINK_SOCKET_ROUTER));
     TEST_ASSERT_TRUE (
       send_paired_dealer_handshake (
         new_completion, peer_name, 73, 2, 1, ZLINK_SOCKET_ROUTER));
-    msleep (SETTLE_TIME * 20);
+    TEST_ASSERT_TRUE (wait_for_raw_ready (new_application));
+    TEST_ASSERT_TRUE (wait_for_raw_ready (new_completion));
 
     zlink_msg_t second_request;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&second_request, 1));

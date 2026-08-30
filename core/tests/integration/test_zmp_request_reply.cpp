@@ -3572,14 +3572,9 @@ void test_router_exact_request_to_dealer_completes_on_async_owner ()
           lock, std::chrono::seconds (2),
           [&wait_probe] { return wait_probe.entered; });
     }
-    size_t idle_reply_target_slots = std::numeric_limits<size_t>::max ();
     std::shared_ptr<zlink::socket_reqrep_internal::socket_request_reply_state_t>
       dealer_request_state =
         zlink::socket_reqrep_internal::find_request_reply_state (dealer_handle);
-    if (dealer_request_state) {
-        std::lock_guard<std::mutex> state_lock (dealer_request_state->mutex);
-        idle_reply_target_slots = dealer_request_state->reply_target_slots;
-    }
 
     completion_owner_probe_t probe;
     zlink_msg_t request_head;
@@ -3610,8 +3605,7 @@ void test_router_exact_request_to_dealer_completes_on_async_owner ()
     TEST_ASSERT_TRUE_MESSAGE (
       receiver_waiting,
       "blocking DEALER receive did not enter the async-owner progress wait");
-    TEST_ASSERT_NOT_NULL (dealer_request_state.get ());
-    TEST_ASSERT_EQUAL_UINT64 (0, idle_reply_target_slots);
+    TEST_ASSERT_NULL (dealer_request_state.get ());
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, request_head_result);
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, request_tail_result);
     TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, receive_head_result);

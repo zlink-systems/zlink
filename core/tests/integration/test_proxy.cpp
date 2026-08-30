@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
 
@@ -59,11 +60,13 @@ void *g_clients_pkts_out = NULL;
 void *g_workers_pkts_out = NULL;
 void *control_context = NULL;
 bool g_test_context_active = false;
+std::atomic<int> g_clients_ready (0);
 
 void setUp ()
 {
     setup_test_context ();
     g_test_context_active = true;
+    g_clients_ready.store (0, std::memory_order_release);
     zlink::test_reset_proxy_state ();
 }
 
@@ -76,6 +79,7 @@ void tearDown ()
         teardown_test_context ();
         g_test_context_active = false;
     }
+    g_clients_ready.store (0, std::memory_order_release);
 }
 
 static void metadata_proxy_task (void *arg_)
@@ -224,6 +228,7 @@ static void client_task (void *db_)
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (client, ZLINK_OPT_LINGER, &linger, sizeof (linger)));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, my_endpoint));
+    g_clients_ready.fetch_add (1, std::memory_order_release);
 
     zlink_pollitem_t items[] = {{client, 0, ZLINK_POLLIN, 0}, {control, 0, ZLINK_POLLIN, 0}};
     int request_nbr = 0;
@@ -443,6 +448,15 @@ void test_proxy ()
         threads[i] = zlink_thread_start (&client_task, &databags[i]);
     }
     threads[QT_CLIENTS] = zlink_thread_start (&server_task, NULL);
+
+    const std::chrono::steady_clock::time_point ready_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (10);
+    while (g_clients_ready.load (std::memory_order_acquire) != QT_CLIENTS
+           && std::chrono::steady_clock::now () < ready_deadline)
+        msleep (1);
+    TEST_ASSERT_EQUAL_INT (
+      QT_CLIENTS, g_clients_ready.load (std::memory_order_acquire));
+
     msleep (500); // Run for 500 ms then quit
 
     if (is_verbose)
