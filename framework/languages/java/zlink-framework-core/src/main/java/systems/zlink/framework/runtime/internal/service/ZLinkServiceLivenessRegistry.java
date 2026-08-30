@@ -99,6 +99,7 @@ public final class ZLinkServiceLivenessRegistry {
                 false,
                 false,
                 false,
+                false,
                 false));
     }
 
@@ -146,6 +147,8 @@ public final class ZLinkServiceLivenessRegistry {
             || state.validationPending) {
             return false;
         }
+        state.validationPreviouslyReady =
+            state.validationPreviouslyReady || state.ready;
         state.validationPending = true;
         state.ready = false;
         if (state.outstandingProbe == 0) {
@@ -233,8 +236,44 @@ public final class ZLinkServiceLivenessRegistry {
             state.deadlineNanos = addExact(nowNanos, peerTimeoutNanos);
             state.nextProbeNanos = addExact(nowNanos, probeIntervalNanos);
             state.ready = !selectedPair || validation || state.ready;
+            if (validation) {
+                state.validationPreviouslyReady = false;
+            }
         }
         return true;
+    }
+
+    /**
+     * Returns one immutable view of the exact connection's liveness state.
+     * Validation is distinct from bootstrap/not-ready so a bound-session caller
+     * can keep using a route that was ready before a replacement candidate
+     * appeared without weakening the general readiness gate.
+     */
+    public PeerStateSnapshot peerStateSnapshot(
+        RoutingId nodeRoutingId,
+        String connectionId) {
+        requireConnection(nodeRoutingId, connectionId);
+        return inStateLane(() -> peerStateSnapshotCore(
+            nodeRoutingId, connectionId));
+    }
+
+    private PeerStateSnapshot peerStateSnapshotCore(
+        RoutingId nodeRoutingId,
+        String connectionId) {
+        PeerState state = peers.get(nodeRoutingId);
+        Readiness readiness;
+        if (state == null || !state.connectionId.equals(connectionId)) {
+            readiness = Readiness.NOT_READY;
+        } else if (state.ready) {
+            readiness = Readiness.READY;
+        } else if (state.validationPreviouslyReady
+            && (state.validationPending || state.outstandingValidation)) {
+            readiness = Readiness.VALIDATING_PREVIOUSLY_READY;
+        } else {
+            readiness = Readiness.NOT_READY;
+        }
+        return new PeerStateSnapshot(
+            nodeRoutingId, connectionId, readiness);
     }
 
     public boolean isReady(
@@ -331,6 +370,18 @@ public final class ZLinkServiceLivenessRegistry {
         List<RoutingId> timedOutNodes) {
     }
 
+    public enum Readiness {
+        READY,
+        VALIDATING_PREVIOUSLY_READY,
+        NOT_READY
+    }
+
+    public record PeerStateSnapshot(
+        RoutingId nodeRoutingId,
+        String connectionId,
+        Readiness readiness) {
+    }
+
     private static final class PeerState {
         private final String connectionId;
         private long deadlineNanos;
@@ -341,6 +392,7 @@ public final class ZLinkServiceLivenessRegistry {
         private boolean bootstrapComplete;
         private boolean ready;
         private boolean validationPending;
+        private boolean validationPreviouslyReady;
 
         private PeerState(
             String connectionId,
@@ -351,7 +403,8 @@ public final class ZLinkServiceLivenessRegistry {
             boolean outstandingValidation,
             boolean bootstrapComplete,
             boolean ready,
-            boolean validationPending) {
+            boolean validationPending,
+            boolean validationPreviouslyReady) {
             this.connectionId = connectionId;
             this.deadlineNanos = deadlineNanos;
             this.nextProbeNanos = nextProbeNanos;
@@ -361,6 +414,7 @@ public final class ZLinkServiceLivenessRegistry {
             this.bootstrapComplete = bootstrapComplete;
             this.ready = ready;
             this.validationPending = validationPending;
+            this.validationPreviouslyReady = validationPreviouslyReady;
         }
     }
 }

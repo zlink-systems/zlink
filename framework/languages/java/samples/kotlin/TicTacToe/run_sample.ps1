@@ -207,11 +207,24 @@ try {
     $clientBin = Join-Path $SampleDir "Client/build/install/Client/bin/Client"
     if ($IsWindows) { $clientBin = "$clientBin.bat" }
     $clientLog = Join-Path $LogDir "client.log"
-    & $clientBin --api-url "http://127.0.0.1:$ApiAHttpPort" *> $clientLog
-    if ($LASTEXITCODE -ne 0) {
-        & $clientBin --api-url "http://127.0.0.1:$ApiAHttpPort" *> $clientLog
-        if ($LASTEXITCODE -ne 0) { throw "Client run failed." }
+    $clientErrorLog = Join-Path $LogDir "client.err.log"
+    $lifecycleCompletionFile = Join-Path $RunDir "lifecycle-complete"
+    $clientProcess = Start-Process -FilePath $clientBin `
+        -ArgumentList @(
+            "--api-url", "http://127.0.0.1:$ApiAHttpPort",
+            "--lifecycle-completion-file", "`"$lifecycleCompletionFile`"") `
+        -WorkingDirectory $SampleDir -NoNewWindow `
+        -RedirectStandardOutput $clientLog -RedirectStandardError $clientErrorLog -PassThru
+    $Processes.Add($clientProcess)
+    $PlayLogs = Join-Path $LogDir "play-*.log"
+    Wait-LogCount $PlayLogs "tictactoe-lifecycle actor-bound actor=player-x" 1
+    foreach ($ActorId in @("player-x", "player-o")) {
+        Wait-LogCount $PlayLogs "tictactoe-lifecycle leave-completed actor=$ActorId" 1
+        Wait-LogCount $PlayLogs "tictactoe-lifecycle actor-destroy-complete actor=$ActorId" 1
     }
+    New-Item -ItemType File -Path $lifecycleCompletionFile | Out-Null
+    $clientProcess.WaitForExit()
+    if ($clientProcess.ExitCode -ne 0) { throw "Client run failed." }
     Wait-LogCount $clientLog "observer-connected endpoint=tcp://127.0.0.1:$PlayBStreamPort" 1
     Wait-LogCount $clientLog "observer-subscription=verified subscribed=true" 1
     Wait-LogCount $clientLog "observer-win-milestone=verified actor=player-x wins=100" 1
@@ -219,12 +232,6 @@ try {
         throw "Reconnected full game state marker was not found."
     }
     Wait-LogCount $clientLog "tictactoe=completed" 1
-    $PlayLogs = Join-Path $LogDir "play-*.log"
-    Wait-LogCount $PlayLogs "tictactoe-lifecycle actor-bound actor=player-x" 1
-    foreach ($ActorId in @("player-x", "player-o")) {
-        Wait-LogCount $PlayLogs "tictactoe-lifecycle leave-completed actor=$ActorId" 1
-        Wait-LogCount $PlayLogs "tictactoe-lifecycle actor-destroy-complete actor=$ActorId" 1
-    }
     Wait-LogCount $PlayLogs "tictactoe-lifecycle actor-destroy-complete actor=observer" 0
     if (-not (Select-String -Path (Join-Path $LogDir "*.log") -Pattern "zlink flow: event_id=zlink.message_flow" -SimpleMatch -Quiet -ErrorAction SilentlyContinue)) {
         throw "Message flow evidence was not found."

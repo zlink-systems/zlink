@@ -237,24 +237,32 @@ try {
     Wait-LogCount (Join-Path $LogDir "api-a.log") "tictactoe-ready kind=spot-route node=api-a mesh=tictactoe" 1
     Wait-LogCount (Join-Path $LogDir "api-b.log") "tictactoe-ready kind=spot-route node=api-b mesh=tictactoe" 1
 
-    $clientLog = Join-Path $LogDir "client.log"
-    & $ClientBin --api-http-endpoint $ApiAHttpEndpoint *> $clientLog
-    if ($LASTEXITCODE -ne 0) {
-        Print-Logs
-        exit $LASTEXITCODE
-    }
+    $LifecycleCompletionFile = Join-Path $LogDir "lifecycle-complete"
+    Start-Server "client" $ClientBin @(
+        "--api-http-endpoint", $ApiAHttpEndpoint,
+        "--lifecycle-completion-file", "`"$LifecycleCompletionFile`"")
+    $ClientProcess = $Processes[$Processes.Count - 1]
 
-    Wait-LogCount $clientLog "observer-connected endpoint=$PlayBStreamEndpoint" 1
-    Wait-LogCount $clientLog "observer-subscription=verified subscribed=true" 1
-    Wait-LogCount $clientLog "observer-win-milestone=verified actor=player-x wins=100" 1
-    Wait-LogCount $clientLog "reconnected-game-state=verified actor=player-x room=" 1
-    Wait-LogCount $clientLog "tictactoe=completed" 1
+    $clientLog = Join-Path $LogDir "client.log"
     $playLogs = Join-Path $LogDir "play-*.log"
     Wait-LogCount $playLogs "tictactoe-lifecycle actor-bound actor=player-x" 1
     Wait-LogCount $playLogs "tictactoe-lifecycle leave-completed actor=player-x" 1
     Wait-LogCount $playLogs "tictactoe-lifecycle leave-completed actor=player-o" 1
     Wait-LogCount $playLogs "tictactoe-lifecycle actor-destroy-complete actor=player-x" 1
     Wait-LogCount $playLogs "tictactoe-lifecycle actor-destroy-complete actor=player-o" 1
+    New-Item -ItemType File -Path $LifecycleCompletionFile | Out-Null
+
+    if (-not $ClientProcess.WaitForExit(30000)) {
+        throw "TicTacToe client did not exit after lifecycle completion."
+    }
+    if ($ClientProcess.ExitCode -ne 0) {
+        throw "TicTacToe client exited with status $($ClientProcess.ExitCode)."
+    }
+    Wait-LogCount $clientLog "observer-connected endpoint=$PlayBStreamEndpoint" 1
+    Wait-LogCount $clientLog "observer-subscription=verified subscribed=true" 1
+    Wait-LogCount $clientLog "observer-win-milestone=verified actor=player-x wins=100" 1
+    Wait-LogCount $clientLog "reconnected-game-state=verified actor=player-x room=" 1
+    Wait-LogCount $clientLog "tictactoe=completed" 1
     Wait-LogCount $playLogs "tictactoe-lifecycle actor-destroy-complete actor=observer" 0
     if (-not (Select-String -Path (Join-Path $env:TICTACTOE_LOG_DIR "*.log") -Pattern "packet=LeaveGameMsg" -Quiet)) {
         throw "TicTacToe C++ sample logs did not contain LeaveGameMsg evidence."

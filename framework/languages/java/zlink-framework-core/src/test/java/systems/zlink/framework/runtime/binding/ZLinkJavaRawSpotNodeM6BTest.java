@@ -12,6 +12,8 @@ import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -51,6 +53,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResul
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchEvent;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalAsyncSpotDispatchHandler;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
@@ -60,6 +63,17 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 final class ZLinkJavaRawSpotNodeM6BTest {
+    @Test
+    void boundSessionLivenessSnapshotAllowsPreviouslyReadyValidationOnly() {
+        assertTrue(ZLinkJavaRawMeshNode.boundSessionLivenessAllows(
+            ZLinkServiceLivenessRegistry.Readiness.READY));
+        assertTrue(ZLinkJavaRawMeshNode.boundSessionLivenessAllows(
+            ZLinkServiceLivenessRegistry.Readiness
+                .VALIDATING_PREVIOUSLY_READY));
+        assertFalse(ZLinkJavaRawMeshNode.boundSessionLivenessAllows(
+            ZLinkServiceLivenessRegistry.Readiness.NOT_READY));
+    }
+
     @Test
     void serviceDescriptorStaysPreparingUntilHostMarksReady()
         throws Exception {
@@ -87,11 +101,12 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             target.markServiceReady();
             long deadline =
                 System.nanoTime() + Duration.ofSeconds(2).toNanos();
-            while (source.selectPlacementTarget().isEmpty()
-                && System.nanoTime() < deadline) {
+            Optional<RoutingId> placement = source.selectPlacementTarget();
+            while (placement.isEmpty() && System.nanoTime() < deadline) {
                 Thread.sleep(1);
+                placement = source.selectPlacementTarget();
             }
-            assertEquals(targetRid, source.selectPlacementTarget().orElseThrow());
+            assertEquals(targetRid, placement.orElseThrow());
         }
     }
 
@@ -385,41 +400,51 @@ final class ZLinkJavaRawSpotNodeM6BTest {
         }
     }
 
-    private static void awaitAdmitted(ZLinkJavaRawMeshNode node)
+    private static MeshPeerEntry awaitAdmitted(ZLinkJavaRawMeshNode node)
         throws InterruptedException {
         long deadline =
             System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (node.peers().stream().noneMatch(
-                peer -> peer.state()
-                    == systems.zlink.framework.runtime.internal.binding.spot
-                        .MeshPeerState.ADMITTED)
-            && System.nanoTime() < deadline) {
+        while (System.nanoTime() < deadline) {
+            Optional<MeshPeerEntry> matched = node.peers().stream()
+                .filter(peer -> peer.state() == MeshPeerState.ADMITTED)
+                .findFirst();
+            if (matched.isPresent()) {
+                return matched.orElseThrow();
+            }
             Thread.sleep(1);
         }
-        assertTrue(node.peers().stream().anyMatch(
-            peer -> peer.state()
-                == systems.zlink.framework.runtime.internal.binding.spot
-                            .MeshPeerState.ADMITTED));
+        throw new AssertionError("ADMITTED peer was not observed");
     }
 
-    private static void awaitAdmitted(
+    private static MeshPeerEntry awaitAdmitted(
         ZLinkJavaRawMeshNode node,
         RoutingId peerRoutingId) throws InterruptedException {
         long deadline =
             System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (node.peers().stream().noneMatch(
-                peer -> peer.routingId().equals(peerRoutingId)
-                    && peer.state()
-                        == systems.zlink.framework.runtime.internal.binding.spot
-                            .MeshPeerState.ADMITTED)
-            && System.nanoTime() < deadline) {
+        while (System.nanoTime() < deadline) {
+            Optional<MeshPeerEntry> matched = node.peers().stream()
+                .filter(peer -> peer.routingId().equals(peerRoutingId)
+                    && peer.state() == MeshPeerState.ADMITTED)
+                .findFirst();
+            if (matched.isPresent()) {
+                return matched.orElseThrow();
+            }
             Thread.sleep(1);
         }
-        assertTrue(node.peers().stream().anyMatch(
-            peer -> peer.routingId().equals(peerRoutingId)
-                && peer.state()
-                    == systems.zlink.framework.runtime.internal.binding.spot
-                        .MeshPeerState.ADMITTED));
+        throw new AssertionError(
+            "ADMITTED peer was not observed: " + peerRoutingId);
+    }
+
+    private static RoutingId awaitPlacementTarget(
+        ZLinkJavaRawMeshNode node) throws InterruptedException {
+        long deadline =
+            System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        Optional<RoutingId> placement = node.selectPlacementTarget();
+        while (placement.isEmpty() && System.nanoTime() < deadline) {
+            Thread.sleep(1);
+            placement = node.selectPlacementTarget();
+        }
+        return placement.orElseThrow();
     }
 
     @Test
@@ -1598,19 +1623,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             right.spotNode().rememberActorAuthority(
                 actor, 89, 1);
 
-            long deadline =
-                System.nanoTime() + Duration.ofSeconds(2).toNanos();
-            while (right.peers().stream().noneMatch(
-                peer -> peer.state()
-                    == systems.zlink.framework.runtime.internal.binding.spot
-                        .MeshPeerState.ADMITTED)
-                && System.nanoTime() < deadline) {
-                Thread.sleep(1);
-            }
-            assertTrue(right.peers().stream().anyMatch(
-                peer -> peer.state()
-                    == systems.zlink.framework.runtime.internal.binding.spot
-                        .MeshPeerState.ADMITTED));
+            awaitAdmitted(right);
 
             CompletionStage<List<Message>> firstRequest;
             try (Message request = Message.from("remote-actor-request")) {
@@ -1693,24 +1706,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 "jvm-m6b-multicast-target");
             remote.setSubscription("orders");
 
-            long deadline =
-                System.nanoTime() + Duration.ofSeconds(2).toNanos();
-            while (right.peers().stream().noneMatch(
-                    peer -> peer.routingId().equals(leftRid)
-                        && peer.state()
-                            == systems.zlink.framework.runtime.internal.binding.spot
-                                .MeshPeerState.ADMITTED)
-                && System.nanoTime() < deadline) {
-                Thread.sleep(1);
-            }
-            assertTrue(right.peers().stream().anyMatch(
-                peer -> peer.routingId().equals(leftRid)
-                    && peer.state()
-                        == systems.zlink.framework.runtime.internal.binding.spot
-                            .MeshPeerState.ADMITTED));
-            assertEquals(
-                leftRid,
-                right.selectPlacementTarget().orElseThrow());
+            awaitAdmitted(right, leftRid);
+            assertEquals(leftRid, awaitPlacementTarget(right));
 
             var source = (ZLinkJavaRawSpot) right.spotNode().createSpot(
                 "jvm-m6b-multicast-source");
@@ -1726,7 +1723,10 @@ final class ZLinkJavaRawSpotNodeM6BTest {
 
             ZLinkBackendTopicMessage
                 received = null;
-            while (received == null && System.nanoTime() < deadline) {
+            long receiveDeadline =
+                System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            while (received == null
+                && System.nanoTime() < receiveDeadline) {
                 received = remote.subscribe(
                     ZLinkBackendRecvMode.DONT_WAIT);
                 if (received == null) {
@@ -1748,13 +1748,15 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             left.setPlacementWeight(0);
             long placementUpdateDeadline =
                 System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            Optional<RoutingId> placement;
             do {
-                if (right.selectPlacementTarget().isPresent()) {
+                placement = right.selectPlacementTarget();
+                if (placement.isPresent()) {
                     Thread.sleep(1);
                 }
-            } while (right.selectPlacementTarget().isPresent()
+            } while (placement.isPresent()
                 && System.nanoTime() < placementUpdateDeadline);
-            assertTrue(right.selectPlacementTarget().isEmpty());
+            assertTrue(placement.isEmpty());
         }
     }
 
@@ -1779,21 +1781,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             right.start();
             right.connectPeer(endpoint, leftRid);
 
-            long deadline =
-                System.nanoTime() + Duration.ofSeconds(2).toNanos();
-            while (right.peers().stream().noneMatch(
-                    peer -> peer.routingId().equals(leftRid)
-                        && peer.state()
-                            == systems.zlink.framework.runtime.internal.binding.spot
-                                .MeshPeerState.ADMITTED)
-                && System.nanoTime() < deadline) {
-                Thread.sleep(1);
-            }
-            assertTrue(right.peers().stream().anyMatch(
-                peer -> peer.routingId().equals(leftRid)
-                    && peer.state()
-                        == systems.zlink.framework.runtime.internal.binding.spot
-                            .MeshPeerState.ADMITTED));
+            awaitAdmitted(right, leftRid);
 
             ZLinkJavaRawSpotNode target =
                 (ZLinkJavaRawSpotNode) left.spotNode();
@@ -1822,7 +1810,10 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             }
 
             ZLinkBackendSpot activated = null;
-            while (activated == null && System.nanoTime() < deadline) {
+            long activationDeadline =
+                System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            while (activated == null
+                && System.nanoTime() < activationDeadline) {
                 activated = target.localSpot(spotId);
                 if (activated == null) {
                     Thread.sleep(1);
@@ -2883,12 +2874,13 @@ final class ZLinkJavaRawSpotNodeM6BTest {
         systems.zlink.contracts.core.Context context,
         long expected) throws InterruptedException {
         long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (context.coreHwmBudgetSnapshot()
-            .outstandingApplicationLeaseCount() != expected
-            && System.nanoTime() < deadline) {
+        long outstanding = context.coreHwmBudgetSnapshot()
+            .outstandingApplicationLeaseCount();
+        while (outstanding != expected && System.nanoTime() < deadline) {
             Thread.sleep(1);
+            outstanding = context.coreHwmBudgetSnapshot()
+                .outstandingApplicationLeaseCount();
         }
-        assertEquals(expected, context.coreHwmBudgetSnapshot()
-            .outstandingApplicationLeaseCount());
+        assertEquals(expected, outstanding);
     }
 }

@@ -18,6 +18,7 @@ struct tictactoe_client_options_t
     }
 
     std::string api_http_endpoint;
+    std::string lifecycle_completion_file;
     std::string game_name = "tictactoe-game";
     std::string x_actor_id = sample_names_t::x_actor_id;
     std::string o_actor_id = sample_names_t::o_actor_id;

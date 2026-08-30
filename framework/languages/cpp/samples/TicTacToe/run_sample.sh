@@ -371,24 +371,36 @@ wait_route_ready() {
 wait_route_ready "tictactoe-play-a"
 wait_route_ready "tictactoe-play-b"
 
+LIFECYCLE_COMPLETION_FILE="$RUN_DIR/lifecycle-complete"
 "$CLIENT_BIN" --api-http-endpoint "$API_A_HTTP_ENDPOINT" \
-  >"$LOG_DIR/client.stdout.log" 2>"$LOG_DIR/client.trace.log" || {
+  --lifecycle-completion-file "$LIFECYCLE_COMPLETION_FILE" \
+  >"$LOG_DIR/client.stdout.log" 2>"$LOG_DIR/client.trace.log" &
+CLIENT_PID=$!
+PIDS+=("$CLIENT_PID")
+
+wait_log_count 1 "tictactoe-lifecycle actor-bound actor=player-x" "$LOG_DIR"/play-*.stdout.log
+wait_log_count 1 "tictactoe-lifecycle leave-completed actor=player-x" "$LOG_DIR"/play-*.stdout.log
+wait_log_count 1 "tictactoe-lifecycle leave-completed actor=player-o" "$LOG_DIR"/play-*.stdout.log
+wait_log_count 1 "tictactoe-lifecycle actor-destroy-complete actor=player-x" "$LOG_DIR"/play-*.stdout.log
+wait_log_count 1 "tictactoe-lifecycle actor-destroy-complete actor=player-o" "$LOG_DIR"/play-*.stdout.log
+: >"$LIFECYCLE_COMPLETION_FILE"
+
+set +e
+wait "$CLIENT_PID"
+CLIENT_STATUS=$?
+set -e
+if [[ "$CLIENT_STATUS" -ne 0 ]]; then
   for log in "$LOG_DIR"/*.log; do
     [[ -f "$log" ]] && cat "$log" >&2
   done
-  exit 1
-}
+  exit "$CLIENT_STATUS"
+fi
 
 wait_log_count 1 "observer-connected endpoint=${PLAY_B_STREAM_ENDPOINT}" "$LOG_DIR/client.stdout.log"
 wait_log_count 1 "observer-subscription=verified subscribed=true" "$LOG_DIR/client.stdout.log"
 wait_log_count 1 "observer-win-milestone=verified actor=player-x wins=100" "$LOG_DIR/client.stdout.log"
 wait_log_count 1 "reconnected-game-state=verified actor=player-x room=" "$LOG_DIR/client.stdout.log"
 wait_log_count 1 "tictactoe=completed" "$LOG_DIR/client.stdout.log"
-wait_log_count 1 "tictactoe-lifecycle actor-bound actor=player-x" "$LOG_DIR"/play-*.stdout.log
-wait_log_count 1 "tictactoe-lifecycle leave-completed actor=player-x" "$LOG_DIR"/play-*.stdout.log
-wait_log_count 1 "tictactoe-lifecycle leave-completed actor=player-o" "$LOG_DIR"/play-*.stdout.log
-wait_log_count 1 "tictactoe-lifecycle actor-destroy-complete actor=player-x" "$LOG_DIR"/play-*.stdout.log
-wait_log_count 1 "tictactoe-lifecycle actor-destroy-complete actor=player-o" "$LOG_DIR"/play-*.stdout.log
 wait_log_count 0 "tictactoe-lifecycle actor-destroy-complete actor=observer" "$LOG_DIR"/play-*.stdout.log
 grep -Rq "packet=LeaveGameMsg" "$FLOW_LOG_DIR"
 grep -Rq "message flow" "$FLOW_LOG_DIR"

@@ -224,9 +224,21 @@ wait_route_ready() {
 wait_route_ready "tictactoe-play-a"
 wait_route_ready "tictactoe-play-b"
 
-"$(app_bin Client Client)" --api-url "http://127.0.0.1:${api_a_http_port}" >"${log_dir}/client.log" 2>&1
+lifecycle_completion_file="${run_dir}/lifecycle-complete"
+"$(app_bin Client Client)" \
+  --api-url "http://127.0.0.1:${api_a_http_port}" \
+  --lifecycle-completion-file "${lifecycle_completion_file}" \
+  >"${log_dir}/client.log" 2>&1 &
+client_pid="$!"
+pids+=("${client_pid}")
+
+for evidence in "tictactoe-lifecycle actor-bound actor=player-x" "tictactoe-lifecycle leave-completed actor=player-x" "tictactoe-lifecycle leave-completed actor=player-o" "tictactoe-lifecycle actor-destroy-complete actor=player-x" "tictactoe-lifecycle actor-destroy-complete actor=player-o"; do wait_log_count 1 "${evidence}" "${log_dir}"/play-*.log; done
+touch "${lifecycle_completion_file}"
+if ! wait "${client_pid}"; then
+  echo "TicTacToe client failed." >&2
+  exit 1
+fi
 
 for evidence in "observer-connected endpoint=tcp://127.0.0.1:${play_b_stream_port}" "observer-subscription=verified subscribed=true" "observer-win-milestone=verified actor=player-x wins=100" "reconnected-game-state=verified actor=player-x room=" "tictactoe=completed"; do wait_log_count 1 "${evidence}" "${log_dir}/client.log"; done
-for evidence in "tictactoe-lifecycle actor-bound actor=player-x" "tictactoe-lifecycle leave-completed actor=player-x" "tictactoe-lifecycle leave-completed actor=player-o" "tictactoe-lifecycle actor-destroy-complete actor=player-x" "tictactoe-lifecycle actor-destroy-complete actor=player-o"; do wait_log_count 1 "${evidence}" "${log_dir}"/play-*.log; done
 wait_log_count 0 "tictactoe-lifecycle actor-destroy-complete actor=observer" "${log_dir}"/play-*.log
 echo "tictactoe-placement=completed"

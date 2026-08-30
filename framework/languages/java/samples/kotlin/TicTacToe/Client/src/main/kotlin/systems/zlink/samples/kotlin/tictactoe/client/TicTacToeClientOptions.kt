@@ -6,6 +6,7 @@ data class TicTacToeClientOptions(
     val xActorId: String,
     val oActorId: String,
     val observerActorId: String,
+    val lifecycleCompletionFile: String,
 ) {
     companion object {
         fun createDefault(): TicTacToeClientOptions =
@@ -15,6 +16,7 @@ data class TicTacToeClientOptions(
                 xActorId = TicTacToeSampleDefaults.XActorId,
                 oActorId = TicTacToeSampleDefaults.OActorId,
                 observerActorId = TicTacToeSampleDefaults.ObserverActorId,
+                lifecycleCompletionFile = "",
             )
     }
 }

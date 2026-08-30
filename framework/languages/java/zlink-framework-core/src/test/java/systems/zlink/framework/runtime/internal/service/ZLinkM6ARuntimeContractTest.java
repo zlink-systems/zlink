@@ -437,6 +437,9 @@ final class ZLinkM6ARuntimeContractTest {
         assertFalse(initial.selectedPair());
         assertTrue(liveness.acknowledge(
             peer, "pipe", initial.probeId(), now + 1));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness.READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
 
         assertTrue(liveness.requestValidationProbe(
             peer, "pipe", now + 2));
@@ -444,12 +447,53 @@ final class ZLinkM6ARuntimeContractTest {
             peer, "stale-pipe", now + 2));
         assertFalse(liveness.requestValidationProbe(
             peer, "pipe", now + 2));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness
+                .VALIDATING_PREVIOUSLY_READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
         var validation = liveness.tick(now + 2).probes().getFirst();
         assertTrue(validation.selectedPair());
         assertFalse(liveness.isReady(peer, "pipe"));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness
+                .VALIDATING_PREVIOUSLY_READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
         assertTrue(liveness.acknowledge(
             peer, "pipe", validation.probeId(), now + 3));
         assertTrue(liveness.isReady(peer, "pipe"));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness.READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
+    }
+
+    @Test
+    void previouslyReadyValidationExpiresAtTheExistingPeerDeadline() {
+        var liveness = new ZLinkServiceLivenessRegistry(
+            Duration.ofSeconds(5), Duration.ofSeconds(15));
+        RoutingId peer = RoutingId.from("peer-revalidate-timeout");
+        long now = 100;
+
+        liveness.admit(peer, "pipe", now);
+        assertTrue(liveness.requestProbe(peer, "pipe", now));
+        var bootstrap = liveness.tick(now).probes().getFirst();
+        long readyAt = now + 1;
+        assertTrue(liveness.acknowledge(
+            peer, "pipe", bootstrap.probeId(), readyAt));
+        assertTrue(liveness.requestValidationProbe(
+            peer, "pipe", readyAt + 1));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness
+                .VALIDATING_PREVIOUSLY_READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
+
+        assertEquals(
+            List.of(peer),
+            liveness.tick(
+                readyAt + Duration.ofSeconds(15).toNanos())
+                .timedOutNodes());
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness.NOT_READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
     }
 
     @Test
@@ -467,9 +511,15 @@ final class ZLinkM6ARuntimeContractTest {
             peer, "pipe", now + 1));
         assertFalse(liveness.requestValidationProbe(
             peer, "pipe", now + 1));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness.NOT_READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
         assertTrue(liveness.acknowledge(
             peer, "pipe", bootstrap.probeId(), now + 2));
         assertFalse(liveness.isReady(peer, "pipe"));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness.NOT_READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
 
         var validation = liveness.tick(now + 2).probes().getFirst();
         assertTrue(validation.selectedPair());
@@ -477,6 +527,9 @@ final class ZLinkM6ARuntimeContractTest {
         assertTrue(liveness.acknowledge(
             peer, "pipe", validation.probeId(), now + 3));
         assertTrue(liveness.isReady(peer, "pipe"));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness.READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
     }
 
     @Test
@@ -497,9 +550,17 @@ final class ZLinkM6ARuntimeContractTest {
         assertTrue(liveness.requestValidationProbe(
             peer, "pipe", periodicAt + 1));
         assertFalse(liveness.isReady(peer, "pipe"));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness
+                .VALIDATING_PREVIOUSLY_READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
         assertTrue(liveness.acknowledge(
             peer, "pipe", periodic.probeId(), periodicAt + 2));
         assertFalse(liveness.isReady(peer, "pipe"));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness
+                .VALIDATING_PREVIOUSLY_READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
 
         var validation = liveness.tick(periodicAt + 2)
             .probes()
@@ -509,6 +570,9 @@ final class ZLinkM6ARuntimeContractTest {
         assertTrue(liveness.acknowledge(
             peer, "pipe", validation.probeId(), periodicAt + 3));
         assertTrue(liveness.isReady(peer, "pipe"));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness.READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
     }
 
     @Test

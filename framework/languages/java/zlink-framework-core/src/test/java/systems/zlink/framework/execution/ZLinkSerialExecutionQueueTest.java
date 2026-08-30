@@ -344,7 +344,8 @@ final class ZLinkSerialExecutionQueueTest {
     }
 
     @Test
-    void lifecycleOwnerReservationIsSeparateAndStillBounded() {
+    void lifecycleOwnerReservationIsSeparateAndStillBounded()
+        throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue(
             null,
             ZLinkExecutionLanePolicy.generic(),
@@ -356,15 +357,22 @@ final class ZLinkSerialExecutionQueueTest {
             2,
             Duration.ofSeconds(1));
         CompletableFuture<Void> active = new CompletableFuture<>();
-        queue.enqueue(() -> active);
+        CompletableFuture<Void> activeStarted = new CompletableFuture<>();
+        queue.enqueue(() -> {
+            activeStarted.complete(null);
+            return active;
+        });
+        activeStarted.get(3, TimeUnit.SECONDS);
 
-        assertFalse(queue.enqueueBarrierNext(
+        CompletableFuture<Void> firstBarrier = queue.enqueueBarrierNext(
             () -> CompletableFuture.completedFuture(null))
-            .toCompletableFuture().isCompletedExceptionally());
+            .toCompletableFuture();
+        assertFalse(firstBarrier.isCompletedExceptionally());
         assertTrue(queue.enqueueBarrierNext(
             () -> CompletableFuture.completedFuture(null))
             .toCompletableFuture().isCompletedExceptionally());
         active.complete(null);
+        firstBarrier.get(3, TimeUnit.SECONDS);
     }
 
     @Test
@@ -911,7 +919,7 @@ final class ZLinkSerialExecutionQueueTest {
         assertFalse(sealed.get(3, TimeUnit.SECONDS));
         remote.complete(null);
         dispatch.get(3, TimeUnit.SECONDS);
-        queue.enqueue(() -> CompletableFuture.completedFuture(null))
+        queue.awaitQuiescence()
             .toCompletableFuture()
             .get(3, TimeUnit.SECONDS);
         assertTrue(queue.trySealRelocation().isPresent());

@@ -1,6 +1,8 @@
 package systems.zlink.samples.tictactoe.client;
 
 import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -271,12 +273,13 @@ public final class TicTacToeClientScenario {
                 + reconnectedAuth.player().actorId()
                 + " room=" + game.roomId());
 
-            // LeaveGameMsg is one-way. The runners wait for the separate
-            // leave and Entry Spot destroy lifecycle evidence.
+            // LeaveGameMsg is one-way. Keep the connectors open until the runner
+            // confirms the separate leave and Entry Spot destroy lifecycle evidence.
             reconnectedHost.send(new LeaveGameMsg(game.roomId()))
                 .submit().toCompletableFuture().join();
             guest.send(new LeaveGameMsg(game.roomId()))
                 .submit().toCompletableFuture().join();
+            waitForLifecycleCompletion(options.lifecycleCompletionFile());
         } finally {
             if (!hostClosed) {
                 host.close().submit().toCompletableFuture().join();
@@ -287,6 +290,22 @@ public final class TicTacToeClientScenario {
             guest.close().submit().toCompletableFuture().join();
             observer.close().submit().toCompletableFuture().join();
         }
+    }
+
+    private static void waitForLifecycleCompletion(String completionFile) throws Exception {
+        if (completionFile.isBlank()) {
+            return;
+        }
+
+        Path releaseFile = Path.of(completionFile).toAbsolutePath().normalize();
+        long deadlineNanos = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+        while (System.nanoTime() < deadlineNanos) {
+            if (Files.exists(releaseFile)) {
+                return;
+            }
+            Thread.sleep(100);
+        }
+        throw new IllegalStateException("Timed out waiting for runner lifecycle completion.");
     }
 
     private static ZLinkStreamConnector playerConnector(String endpoint, String role) {
