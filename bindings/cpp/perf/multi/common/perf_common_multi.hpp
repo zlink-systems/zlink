@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <climits>
 #include <cstdint>
@@ -17,6 +18,8 @@ namespace perf
 {
 namespace multi
 {
+
+inline constexpr int default_send_drain_timeout_ms = 1000;
 
 struct multi_bench_settings_t
 {
@@ -32,6 +35,7 @@ struct multi_bench_settings_t
     int duration_seconds;
     int client_poll_timeout_ms;
     int connect_ready_timeout_ms;
+    int send_drain_timeout_ms;
     int sndtimeo_ms;
     int rcvtimeo_ms;
     uint64_t monitor_hwm;
@@ -55,6 +59,18 @@ inline int parse_positive_env (const char *name, int default_value)
     if (parsed > INT_MAX)
         return INT_MAX;
     return static_cast<int> (parsed);
+}
+
+inline std::chrono::milliseconds remaining_bounded_timeout (
+  const std::chrono::steady_clock::time_point &deadline)
+{
+    const auto now = std::chrono::steady_clock::now ();
+    if (now >= deadline)
+        return std::chrono::milliseconds::zero ();
+
+    const auto remaining =
+      std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now);
+    return std::chrono::milliseconds (std::max<int64_t> (1, remaining.count ()));
 }
 
 inline uint64_t parse_positive_uint64_env (const char *name, uint64_t default_value)
@@ -210,6 +226,9 @@ inline multi_bench_settings_t resolve_multi_bench_settings ()
     out.client_poll_timeout_ms = 0;
     out.connect_ready_timeout_ms =
       std::max (0, parse_positive_env ("PERF_MULTI_CONNECT_READY_TIMEOUT_MS", 10000));
+    out.send_drain_timeout_ms = std::max (
+      1, parse_positive_env ("PERF_MULTI_SEND_DRAIN_TIMEOUT_MS",
+                             default_send_drain_timeout_ms));
     out.sndtimeo_ms = std::max (0, parse_positive_env ("PERF_MULTI_SNDTIMEO_MS", 200));
     out.rcvtimeo_ms = std::max (0, parse_positive_env ("PERF_MULTI_RCVTIMEO_MS", 200));
     out.monitor_hwm =

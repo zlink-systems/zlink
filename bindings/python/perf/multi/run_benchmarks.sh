@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 has_transports=0
 show_help=0
+unsupported_build_option=""
 for arg in "$@"; do
     case "$arg" in
         -h|--help)
@@ -12,10 +13,22 @@ for arg in "$@"; do
             ;;
         --transports|--transports=*)
             has_transports=1
-            break
+            ;;
+        --build-dir|--build-dir=*)
+            unsupported_build_option="--build-dir"
+            ;;
+        --clean-build)
+            unsupported_build_option="--clean-build"
             ;;
     esac
 done
+
+if [[ $show_help -eq 0 && -n "${unsupported_build_option}" ]]; then
+    echo "Error: ${unsupported_build_option} is not supported by Python perf." >&2
+    echo "Python perf uses the source-tree package and a prebuilt in-place native extension." >&2
+    echo "Build it explicitly with 'python3 setup.py build_ext --inplace --force' in bindings/python." >&2
+    exit 2
+fi
 
 CORE_VERSION_OPTION=""
 PART_COUNT="${PERF_PART_COUNT:-2}"

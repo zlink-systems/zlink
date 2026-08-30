@@ -226,7 +226,9 @@ function runReqRepReplier(router) {
                 || (count === 2 && received.parts[1].data().length !== 0)) {
                 throw new Error('request has an invalid measurement part layout');
             }
-            appendMeasurement(received.reply(), Buffer.from(received.parts[0].data())).submit();
+            // The public reply terminal consumes the received Message on success;
+            // keep it native instead of materializing a Buffer copy.
+            appendMeasurement(received.reply(), received.parts[0]).submit();
             received.close();
         }
     }

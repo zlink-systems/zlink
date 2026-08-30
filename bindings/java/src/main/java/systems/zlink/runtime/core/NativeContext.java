@@ -19,6 +19,7 @@ import systems.zlink.contracts.sockets.SubSocket;
 import systems.zlink.contracts.sockets.XPubSocket;
 import systems.zlink.contracts.sockets.XSubSocket;
 import systems.zlink.runtime.nativeapi.InternalAccess;
+import systems.zlink.runtime.nativeapi.CompletionDispatcher;
 import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeHelpers;
@@ -32,6 +33,7 @@ import java.util.List;
 
 final class NativeContext implements Context {
     private final ContextOptions options;
+    private final CompletionDispatcher completionDispatcher;
     private MemorySegment handle;
 
     static {
@@ -39,6 +41,11 @@ final class NativeContext implements Context {
             @Override
             public MemorySegment handle(Context context) {
                 return ((NativeContext) context).handle();
+            }
+
+            @Override
+            public CompletionDispatcher completionDispatcher(Context context) {
+                return ((NativeContext) context).completionDispatcher;
             }
 
             @Override
@@ -97,6 +104,8 @@ final class NativeContext implements Context {
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
         }
         this.options = new ContextOptions(this);
+        this.completionDispatcher = new CompletionDispatcher(
+            "zlink-send-completion");
         long runtimeMemoryLimit = Runtime.getRuntime().maxMemory();
         if (runtimeMemoryLimit > 0) {
             setUInt64Option(
@@ -273,6 +282,7 @@ final class NativeContext implements Context {
         NativeErrno.retryWhileInterrupted(() -> Native.ctxTerm(handle),
             rc -> rc != 0);
         handle = MemorySegment.NULL;
+        completionDispatcher.close();
     }
 
     private void setOption(ContextOption option, int value) {

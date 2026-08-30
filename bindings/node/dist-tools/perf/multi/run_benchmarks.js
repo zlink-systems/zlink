@@ -23,7 +23,9 @@ Measure current zlink Node multi-pattern performance.
 Options:
   -h, --help            Show this help.
   --pattern NAME        Pattern list (comma-separated) or ALL.
-  --build-dir PATH      Accepted for policy compatibility.
+  --build-dir PATH      Unsupported: Node artifacts use fixed package paths.
+  --reuse-build         Reuse existing fixed Node outputs; skip rebuild.
+  --clean-build         Remove TypeScript and native build outputs, then rebuild.
   --results-dir PATH    Override result root directory.
   --results-tag NAME    Optional tag in saved result filename.
   --output PATH         Tee final rendered output to a file.
@@ -32,6 +34,9 @@ Options:
   --msg-sizes LIST      Comma-separated sizes.
   --transports LIST     Comma-separated transports (default: policy transport set).
   --clients N           Override number of client sockets per pattern (default: 100).
+  --io-threads N        Set both server/client I/O threads (default: 4).
+  --server-io-threads N Override server I/O threads (default: 4).
+  --client-io-threads N Override client I/O threads (default: 4).
   --hwm N               Override PERF_MULTI_HWM (default baseline: auto-HWM).
   --send-hwm N          Override PERF_MULTI_SNDHWM.
   --recv-hwm N          Override PERF_MULTI_RCVHWM.

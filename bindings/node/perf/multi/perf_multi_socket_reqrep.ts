@@ -15,17 +15,12 @@ const {
 } = require('../common/perf_metrics');
 const { configureTlsClient } = require('../common/perf_tls');
 const {
+  appendMeasurement,
   applyContextPolicy,
   applySocketPolicy,
   emitMultiSocketHwmDetail,
   waitForConnectionReady
 } = require('./perf_multi_runtime');
-
-function appendMeasurement(op, payload) {
-  op = op.message(payload);
-  if (process.env.PERF_PART_COUNT !== '1') op = op.message(Buffer.alloc(0));
-  return op;
-}
 
 function measurementPayload(parts) {
   const count = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
@@ -110,6 +105,10 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
           payload = Buffer.from(payloadTemplates[index]);
           const currentSeq = seq;
           seq += 1n;
+          // A REQ/REP socket may own several concurrent logical requests, so
+          // each request keeps its own first Buffer for exact pre-admission
+          // retries. appendMeasurement shares only the immutable empty tail;
+          // adding a second record array here would increase allocation.
           stampPayload(payload, {
             phase: 1, runId, msgSize: options.msgSize, seq: currentSeq
           });

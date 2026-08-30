@@ -21,6 +21,7 @@ const {
   applyContextPolicy,
   applySocketPolicy,
   emitMultiSocketHwmDetail,
+  measurementParts,
   measurementPayload,
   pollEvents,
   pollEventHas,
@@ -32,6 +33,7 @@ const {
 } = require('./perf_multi_runtime');
 
 const SERVER_ROUTING_ID = zlink.RoutingId.from(Buffer.from('SERVER', 'ascii'));
+const ASYNC_PROGRESS_BATCH = 64;
 
 function resolveRoutedPattern(pattern, family) {
   const base = `MULTI_${family}`;
@@ -54,9 +56,13 @@ function sendPayload(socket, routerClient, payload) {
     : sendRouted(socket, payload);
 }
 
-async function sendServerReply(router, routingId, parts) {
+async function sendServerReply(received) {
   try {
-    await sendRouted(router, routingId, parts);
+    let reply = received.send();
+    for (const part of received.parts) {
+      reply = reply.message(part);
+    }
+    await reply.submit();
     return true;
   } catch (error) {
     if (error instanceof zlink.SubmitError
@@ -68,11 +74,107 @@ async function sendServerReply(router, routingId, parts) {
   }
 }
 
+async function runRoutedSendSendRounds({
+  sockets,
+  payloads,
+  measurementRecords,
+  routerClient,
+  msgSize,
+  runId,
+  activeStopNs,
+  sendDrainStopNs,
+  submit = sendPayload,
+  drainReplies = async () => {},
+  yieldTurn = sleepImmediate,
+  nowNs = currentEpochNs
+}) {
+  let seq = 1n;
+  let nextSocket = 0;
+  let pendingCount = 0;
+  let failure = null;
+  const available = sockets.map(() => true);
+
+  const submitOne = (index) => {
+    available[index] = false;
+    pendingCount += 1;
+    let admission;
+    try {
+      admission = submit(
+        sockets[index], routerClient, measurementRecords[index]
+      );
+    } catch (error) {
+      available[index] = true;
+      pendingCount -= 1;
+      failure ??= error;
+      return;
+    }
+
+    Promise.resolve(admission).then(
+      () => {
+        available[index] = true;
+        pendingCount -= 1;
+      },
+      (error) => {
+        available[index] = true;
+        pendingCount -= 1;
+        failure ??= error;
+      }
+    );
+  };
+
+  while (!failure && nowNs() < activeStopNs) {
+    const sendStart = nextSocket;
+    for (let offset = 0; offset < sockets.length; offset += 1) {
+      if (nowNs() >= activeStopNs || failure) break;
+      const index = (sendStart + offset) % sockets.length;
+      if (!available[index]) continue;
+
+      const currentSeq = seq;
+      seq += 1n;
+      stampPayload(payloads[index], {
+        phase: 1, runId, msgSize, seq: currentSeq
+      });
+      // A socket owns one stable record until its own public admission
+      // settles. A pending route does not gate another socket's next submit.
+      submitOne(index);
+    }
+    if (sockets.length > 0) {
+      nextSocket = (sendStart + 1) % sockets.length;
+    }
+
+    // Receive progress is independent of any one admission Promise. It also
+    // lets echoed traffic release Core HWM pressure for pending routes.
+    await drainReplies();
+    await yieldTurn();
+  }
+
+  // The active deadline stops new records. Keep receive/completion progress
+  // alive only for admissions already owned by Core.
+  while (pendingCount > 0 && nowNs() < sendDrainStopNs) {
+    await drainReplies();
+    await yieldTurn();
+  }
+
+  if (failure) throw failure;
+  if (pendingCount > 0) {
+    throw new Error('multi routed send admission drain timed out');
+  }
+
+  return { sent: seq - 1n };
+}
+
+function trackPendingReplyTask(pendingTasks, task, reportFailure) {
+  pendingTasks.add(task);
+  task.catch(reportFailure)
+    .finally(() => pendingTasks.delete(task));
+}
+
 async function runRoutedSendSendClient({ options, pattern, routerClient }) {
   const ctx = zlink.createContext();
   applyContextPolicy(ctx, 'client', pattern);
   const sockets = [];
   const payloads = [];
+  const measurementRecords = [];
   const replies = [];
   const poller = zlink.createPoller();
   const pollBuffer = zlink.createPollEvents(Math.max(1, options.clients));
@@ -92,7 +194,9 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
         socket.setRoutingId(zlink.RoutingId.from(Buffer.from(`CLIENT-${i}`, 'ascii')));
       }
       sockets.push(socket);
-      payloads.push(createPayload(options.msgSize));
+      const payload = createPayload(options.msgSize);
+      payloads.push(payload);
+      measurementRecords.push(measurementParts(payload));
       replies.push(new zlink.Received());
     }
 
@@ -128,46 +232,8 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
       activeStopNs,
       roundTrip: true
     });
-    let seq = 1n;
-    const sendTasks = sockets.map(async (socket, index) => {
-      while (currentEpochNs() < activeStopNs) {
-        const currentSeq = seq;
-        seq += 1n;
-        stampPayload(payloads[index], {
-          phase: 1, runId, msgSize: options.msgSize, seq: currentSeq
-        });
-        await sendPayload(socket, routerClient, payloads[index]);
-        // Inline admission resolves in the microtask queue. Yield to the next
-        // event-loop turn so receive readiness and native completions progress
-        // concurrently with this socket's next logical send.
-        await sleepImmediate();
-      }
-    });
-    let sendsDone = false;
-    let sendFailure = null;
-    const sendsCompletion = Promise.all(sendTasks).then(
-      () => { sendsDone = true; },
-      (error) => {
-        sendFailure = error;
-        sendsDone = true;
-      }
-    );
-    const sendDrainMs = Math.max(1,
-      Number(process.env.PERF_MULTI_SEND_DRAIN_TIMEOUT_MS ?? 1000));
-    const sendDrainStopNs = activeStopNs + BigInt(Math.floor(sendDrainMs * 1_000_000));
-
-    while (currentEpochNs() < activeStopNs
-        || (!sendsDone && currentEpochNs() < sendDrainStopNs)) {
-      if (sendFailure) throw sendFailure;
-      const nowNs = currentEpochNs();
-      const waitStopNs = nowNs < activeStopNs ? activeStopNs : sendDrainStopNs;
-      const remainingMs = Math.ceil(Number(waitStopNs - nowNs) / 1_000_000);
-      if (remainingMs <= 0) {
-        break;
-      }
-      // The public send Promise is the completion wake for this event-loop
-      // turn.  Poll receive readiness without a timer so Promise admission is
-      // never advanced by a periodic 1-10 ms progress pump.
+    let repliesSinceYield = 0;
+    const drainReadyReplies = async () => {
       const readyCount = poller.wait(pollBuffer, 0);
       for (let offset = 0; offset < readyCount; offset += 1) {
         const index = pollBuffer.slot(offset);
@@ -178,25 +244,37 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
         if (pollEventHas(event, POLLIN)) {
           while (recvNoWaitInto(sockets[index], replies[index])) {
             const reply = replies[index];
-            try {
-              const payload = measurementPayload(reply.parts);
-              if (!payload) throw new Error('invalid multipart echo reply');
-              collector.recordPayload(payload.data(), currentEpochNs());
-            } finally {
-              reply.close();
-              replies[index] = new zlink.Received();
+            const payload = measurementPayload(reply.parts);
+            if (!payload) throw new Error('invalid multipart echo reply');
+            collector.recordPayload(payload.data(), currentEpochNs());
+            repliesSinceYield += 1;
+            if (repliesSinceYield === ASYNC_PROGRESS_BATCH) {
+              repliesSinceYield = 0;
+              // Refill closes the previous owned parts. Keep the stable
+              // per-socket Received wrapper and yield once per bounded batch.
+              await sleepImmediate();
             }
-            await sleepImmediate();
           }
         }
       }
-      await sleepImmediate();
-    }
-    if (!sendsDone) {
-      throw new Error('multi routed send admission drain timed out');
-    }
-    await sendsCompletion;
-    if (sendFailure) throw sendFailure;
+    };
+    const sendDrainMs = Math.max(1,
+      Number(process.env.PERF_MULTI_SEND_DRAIN_TIMEOUT_MS ?? 1000));
+    const sendDrainStopNs = activeStopNs + BigInt(Math.floor(sendDrainMs * 1_000_000));
+
+    await runRoutedSendSendRounds({
+      sockets,
+      payloads,
+      measurementRecords,
+      routerClient,
+      msgSize: options.msgSize,
+      runId,
+      activeStopNs,
+      sendDrainStopNs,
+      drainReplies: drainReadyReplies
+    });
+
+    await drainReadyReplies();
 
     const result = await collector.finish();
     for (const metricLine of summarizeMetrics(
@@ -231,9 +309,10 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
   applyContextPolicy(ctx, 'server', pattern);
   const router = zlink.createRouterSocket(ctx);
   const poller = zlink.createPoller();
-  let received = new zlink.Received();
+  const received = new zlink.Received();
   const pendingTasks = new Set();
   let sendFailure = null;
+  let replyBatchCount = 0;
   let pollBuffer = null;
   let rl = null;
 
@@ -275,40 +354,44 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
       const ready = waitPollerOne(poller, pollBuffer, 0);
       if (ready && pollEventHas(ready, POLLIN)) {
         while (router.recv(received, zlink.RecvFlags.DontWait)) {
-          try {
-            if (!received.routingId) {
-              throw new Error('routed echo received without routing id');
-            }
-            const expectedParts = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
-            if (received.parts.length !== expectedParts
-                || (expectedParts === 2 && received.parts[1].data().length !== 0)) {
-              const partSizes = received.parts.map((part) => part.data().length).join(',');
-              throw new Error(
-                `invalid multipart echo request: expected=${expectedParts}, sizes=${partSizes}`
-              );
-            }
-            // Snapshot only the application parts before releasing this
-            // receive envelope. routingId remains transport metadata and is
-            // never echoed as an application frame.
-            const task = sendServerReply(
-              router,
-              zlink.RoutingId.from(received.routingId.toBytes()),
-              received.parts.map((part) => Buffer.from(part.data()))
-            );
-            pendingTasks.add(task);
-            task.catch((error) => { sendFailure = error; })
-              .finally(() => pendingTasks.delete(task));
-          } finally {
-            received.close();
-            received = new zlink.Received();
+          if (!received.routingId) {
+            throw new Error('routed echo received without routing id');
           }
-          await sleepImmediate();
+          const expectedParts = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+          if (received.parts.length !== expectedParts
+              || (expectedParts === 2 && received.parts[1].data().length !== 0)) {
+            const partSizes = received.parts.map((part) => part.data().length).join(',');
+            throw new Error(
+              `invalid multipart echo request: expected=${expectedParts}, sizes=${partSizes}`
+            );
+          }
+          // Received.send captures this source route and moves the owned
+          // application parts into Core before returning its Promise. The
+          // reusable envelope can therefore be refilled without copying the
+          // routing id or payload buffers while the completion is pending.
+          // A rejected submit can leave its parts in this envelope; the next
+          // recv refill (or final close) releases them.
+          const task = sendServerReply(received);
+          trackPendingReplyTask(
+            pendingTasks,
+            task,
+            (error) => { sendFailure ??= error; }
+          );
+          replyBatchCount += 1;
+          if (replyBatchCount === ASYNC_PROGRESS_BATCH) {
+            replyBatchCount = 0;
+            // Let Promise continuations reap settled tasks without imposing an
+            // application reply window; Core owns admission backpressure.
+            await sleepImmediate();
+            if (sendFailure) throw sendFailure;
+          }
         }
       }
       await sleepImmediate();
       if (sendFailure) throw sendFailure;
     }
     await Promise.all(pendingTasks);
+    if (sendFailure) throw sendFailure;
   } finally {
     rl?.close();
     received.close();
@@ -321,6 +404,8 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
 
 module.exports = {
   resolveRoutedPattern,
+  runRoutedSendSendRounds,
   runRoutedSendSendClient,
-  runRoutedSendSendServer
+  runRoutedSendSendServer,
+  trackPendingReplyTask
 };

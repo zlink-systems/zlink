@@ -20,7 +20,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -56,9 +55,9 @@ final class PerfMultiRouterRouter {
         }
     }
 
-    // One context owns all N sockets. Public CompletionStage send chains
-    // handle admission independently while this thread owns only POLLIN
-    // dispatch and metric collection.
+    // One context owns all N sockets. One coordinator thread submits each
+    // public async admission fairly and owns POLLIN dispatch; completion
+    // callbacks only publish that a socket may participate in a later round.
     static PerfUtil.Result runClient(PerfUtil.Config config) {
         PerfUtil.Metrics metrics = new PerfUtil.Metrics(config);
         int clientCount = Math.max(1, config.clients());
@@ -114,7 +113,7 @@ final class PerfMultiRouterRouter {
 
     // One receive poll set multiplexes all client sockets. Send backpressure
     // remains Core-owned by each public async terminal and never enters this
-    // poller's event mask.
+    // poller's event mask or gates on an echo reply.
     private static void runRouterRouterClientLoop(List<RouterSocket> clients,
                                                   PerfUtil.Config config,
                                                   int durationSeconds,
@@ -133,31 +132,10 @@ final class PerfMultiRouterRouter {
                 socketsAsBase, PollEventFlags.POLLIN)) {
             long activeEnd = System.nanoTime()
                 + (long) durationSeconds * 1_000_000_000L;
-            List<CompletionStage<Void>> sendLoops = new ArrayList<>(n);
-            CompletableFuture<Void> startGate = new CompletableFuture<>();
-            for (RouterSocket client : clients) {
-                sendLoops.add(PerfMultiAsyncSendLoop.start(activeEnd, startGate,
-                    () -> sendPayload(client, msgSize, activeEnd)));
-            }
-            startGate.complete(null);
-            while (System.nanoTime() < activeEnd) {
-                int pollTimeoutMs = Math.min(50,
-                    remainingTimeoutMs(activeEnd));
-                if (pollTimeoutMs <= 0) {
-                    break;
-                }
-                int readyCount = pollSet.poll(pollTimeoutMs);
-                for (int readyOffset = 0; readyOffset < readyCount;
-                     readyOffset++) {
-                    int idx = pollSet.readyIndexAt(readyOffset);
-                    if (pollSet.readyHasEventAt(readyOffset,
-                            PollEventFlags.POLLIN)) {
-                        drainReplies(clients.get(idx), msgSize, metrics,
-                            replyBuffer, activeEnd);
-                    }
-                }
-            }
-            PerfMultiAsyncSendLoop.awaitAll(sendLoops,
+            PerfMultiRoutedSendCoordinator.run(n, activeEnd, pollSet,
+                index -> sendPayload(clients.get(index), msgSize, activeEnd),
+                index -> drainReplies(clients.get(index), msgSize, metrics,
+                    replyBuffer, activeEnd),
                 Duration.ofSeconds(durationSeconds + 5L),
                 "multi router/router async sends");
             replyBuffer.close();
@@ -190,15 +168,6 @@ final class PerfMultiRouterRouter {
                     receivedNanoTime);
             }
         }
-    }
-
-    private static int remainingTimeoutMs(long deadline) {
-        long remainingNs = deadline - System.nanoTime();
-        if (remainingNs <= 0) {
-            return 0;
-        }
-        return (int) Math.min(Integer.MAX_VALUE,
-            (remainingNs + 999_999L) / 1_000_000L);
     }
 
     private static CompletionStage<Void> sendPayload(RouterSocket client,

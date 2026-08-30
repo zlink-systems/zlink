@@ -108,6 +108,42 @@ test('dealer recv reuses Received from plain payload to replyable request', asyn
     router.close();
     ctx.close();
 });
+
+test('received reply forwards a multipart request frame and consumes it only on success', async () => {
+  const ctx = zlink.createContext();
+  const router = zlink.createRouterSocket(ctx);
+  const dealer = zlink.createDealerSocket(ctx);
+  const dealerRid = zlink.RoutingId.from(Buffer.from('reply-forward-client'));
+
+  router.bind('inproc://received-reply-forward-message');
+  dealer.setRoutingId(dealerRid);
+  dealer.connect('inproc://received-reply-forward-message');
+
+  const pendingReply = router.request(dealerRid)
+    .message('request-head')
+    .message('request-body')
+    .timeout(2_000)
+    .submit();
+  const received = new zlink.Received();
+  assert.equal(dealer.recv(received), true);
+  const payload = received.parts[0];
+  await received.reply().message(payload).message(Buffer.alloc(0)).submit();
+  assert.equal(payload.size(), 0,
+    'successful reply must consume the forwarded received Message');
+
+  const replyParts = await pendingReply;
+  try {
+    assert.equal(replyParts.length, 2);
+    assert.equal(replyParts[0].getString(), 'request-head');
+    assert.equal(replyParts[1].size(), 0);
+  } finally {
+    replyParts.forEach((part) => part.close());
+    received.close();
+    dealer.close();
+    router.close();
+    ctx.close();
+  }
+});
 test('router forwards an unread received Message from managed storage', async () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);

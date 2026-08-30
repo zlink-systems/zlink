@@ -131,7 +131,7 @@ PATTERN="ALL"
 DURATION="5"
 PART_COUNT="${PERF_PART_COUNT:-2}"
 MSG_SIZES=""
-TRANSPORTS="${PERF_TRANSPORTS:-}"
+TRANSPORTS="${PERF_TRANSPORTS:-tcp,tls,ws,wss}"
 RUNS="1"
 SMOKE=0
 CLIENTS=""
@@ -328,10 +328,11 @@ Options:
   --duration N
   --part-count N          Application frame count per measured message (1 or 2; default: 2).
   --msg-sizes LIST
-  --transports LIST
+  --transports LIST       Comma-separated transports (default: tcp,tls,ws,wss).
+                          Explicit ipc remains available for RR SENDSEND diagnostics.
   --runs N
   --smoke
-  --clients N
+  --clients N             Client sockets for every pattern (default: 100).
   --results-dir PATH
   --results-tag NAME
   --output PATH
@@ -357,6 +358,7 @@ Options:
   --pattern-transition-ms N
   --server-ready-timeout-ms N
   --connect-ready-timeout-ms N
+                          Connection-ready timeout in milliseconds (default: 10000).
   --monitor-hwm-bytes N
   --server-shutdown-timeout-ms N
   --server-bind-port N
@@ -749,10 +751,12 @@ fi
 pattern_transports() {
   case "$1" in
     MULTI_ROUTER_ROUTER_SENDSEND)
-      if [[ "${PLATFORM}" == "windows" ]]; then
-        echo "tcp tls ws wss"
-      else
+      # IPC is diagnostics-only: keep it available when explicitly requested,
+      # but never add it to the policy default matrix.
+      if [[ "${PLATFORM}" != "windows" ]] && transport_enabled "ipc"; then
         echo "tcp tls ws wss ipc"
+      else
+        echo "tcp tls ws wss"
       fi
       ;;
 	MULTI_STREAM|MULTI_PUBSUB|MULTI_DEALER_DEALER|MULTI_DEALER_ROUTER_SENDSEND)
@@ -841,7 +845,7 @@ elif [[ -n "${PERF_MULTI_CLIENTS:-}" ]]; then
 elif [[ -n "${PERF_CLIENTS:-}" ]]; then
   CLIENTS_DISPLAY="${PERF_CLIENTS}"
 else
-  CLIENTS_DISPLAY="auto (default=${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}, stream=${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-10000}})"
+  CLIENTS_DISPLAY="auto (default=${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}, stream=${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}})"
 fi
 
 effective_or_auto() {
@@ -919,7 +923,7 @@ emit_effective_options_multi() {
   echo "- fail_fast: ${PERF_FAIL_FAST:-0}"
   echo "- clients: ${CLIENTS_DISPLAY}"
   echo "- default_clients: ${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}"
-  echo "- default_stream_clients: ${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-10000}}"
+  echo "- default_stream_clients: ${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}}"
   echo "- server_io_threads: $(effective_multi_server_io_threads)"
   echo "- client_io_threads: $(effective_multi_client_io_threads)"
   echo "- go_gomaxprocs: ${GOMAXPROCS:-unset}"
@@ -939,7 +943,7 @@ emit_effective_options_multi() {
   echo "- sndtimeo_ms: ${SNDTIMEO_MS:-${PERF_MULTI_SNDTIMEO_MS:-200}}"
   echo "- rcvtimeo_ms: ${RCVTIMEO_MS:-${PERF_MULTI_RCVTIMEO_MS:-200}}"
   echo "- connect_concurrency: ${CONNECT_CONCURRENCY:-128 (default)}"
-  echo "- connect_ready_timeout_ms: ${CONNECT_READY_TIMEOUT_MS:-${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-1000}}}"
+  echo "- connect_ready_timeout_ms: ${CONNECT_READY_TIMEOUT_MS:-${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-10000}}}"
   echo "- monitor_hwm_bytes: ${MONITOR_HWM_BYTES:-${PERF_MULTI_MONITOR_HWM_BYTES:-${PERF_MONITOR_HWM_BYTES:-4096000}}}"
   echo "- server_ready_timeout_ms: ${SERVER_READY_TIMEOUT_MS:-${PERF_MULTI_SERVER_READY_TIMEOUT_MS:-${PERF_SERVER_READY_TIMEOUT_MS:-10000}}}"
   echo "- server_shutdown_timeout_ms: ${SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}}}"
@@ -1351,7 +1355,7 @@ for pattern_index in "${!PATTERNS[@]}"; do
   fi
   if [[ -z "${resolved_clients}" ]]; then
     if [[ "${pattern}" == "MULTI_STREAM" ]]; then
-      resolved_clients="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-10000}}"
+      resolved_clients="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}}"
     else
       resolved_clients="${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}"
     fi

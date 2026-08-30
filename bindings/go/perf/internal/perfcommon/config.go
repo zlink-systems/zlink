@@ -45,11 +45,7 @@ func LoadMultiConfig(pattern, transport string, msgSize, duration int, clients i
 	}
 	resolvedClients := clients
 	if resolvedClients <= 0 {
-		defaultClients := 100
-		if resolvedPattern == "MULTI_STREAM" {
-			defaultClients = 10000
-		}
-		resolvedClients = resolvePositiveEnv("PERF_MULTI_CLIENTS", defaultClients)
+		resolvedClients = resolvePositiveEnv("PERF_MULTI_CLIENTS", 100)
 	}
 	cfg := MultiConfig{
 		Pattern:   resolvedPattern,

@@ -95,7 +95,6 @@ class router_router_client_bench_t
         _monitors (),
         _socket_states (),
         _poller (),
-        _poll_events (),
         _run_id (1U),
         _seq (1),
         _server_id ("SERVER"),
@@ -106,7 +105,6 @@ class router_router_client_bench_t
         _holders.reserve (_settings.clients);
         _monitors.reserve (_settings.clients);
         _socket_states.reserve (_settings.clients);
-        _poll_events.reserve (_settings.clients);
 
         _phase_cfg.active_seconds = std::max (1, _settings.duration_seconds);
     }
@@ -176,8 +174,11 @@ class router_router_client_bench_t
                 socket_state_t &slot = _socket_states.back ();
                 slot.payload_size = payload_size;
                 slot.request_buffer.assign (payload_size, k_payload_fill);
-                _poller.add (sock, zlink::poll_event_flag_t::pollin,
-                             _socket_states.size () - 1);
+                _poller.add (
+                  sock,
+                  zlink::poll_event_flag_t::pollin
+                    | zlink::poll_event_flag_t::pollcompletion,
+                  _socket_states.size () - 1);
             }
 
             const bool ready =
@@ -203,7 +204,8 @@ class router_router_client_bench_t
         }
     }
 
-    perf::async_task_t<bool> run_sender (socket_state_t &state,
+    perf::async_task_t<bool> run_sender (perf::application_ready_queue_t &ready_queue,
+                                         socket_state_t &state,
                                          perf_metric::phase_t phase,
                                          std::chrono::steady_clock::time_point deadline)
     {
@@ -211,6 +213,9 @@ class router_router_client_bench_t
         if (!state.sock || request_buffer.empty ())
             co_return false;
         while (std::chrono::steady_clock::now () < deadline) {
+            co_await ready_queue.schedule ();
+            if (std::chrono::steady_clock::now () >= deadline)
+                break;
             const uint64_t seq = _seq.fetch_add (1, std::memory_order_relaxed);
             if (!perf_metric::stamp_payload (
                   request_buffer.data (), state.payload_size, _run_id, phase, _msg_size, seq,
@@ -226,7 +231,8 @@ class router_router_client_bench_t
                     co_await std::move (state.sock->send (_server_rid).message (request))
                       .message (tail).async ();
                 } else {
-                    co_await std::move (state.sock->send (_server_rid)).message (request).async ();
+                    co_await std::move (state.sock->send (_server_rid)).message (request)
+                      .async ();
                 }
             }
             catch (const zlink::submit_error_t &err) {
@@ -295,74 +301,80 @@ class router_router_client_bench_t
         try {
             perf::multi::bench_latency_sampler_t latency;
             unsigned long long count = 0;
-            // PERF_MULTI_TEST_POLICY § 1.3.1: round-trip echo window is bounded
-            // purely by an application clock (steady_clock deadline) plus a -1
-            // (signal-driven) poll wait; no poller timer object is used. Matches
-            // the C reference run_echo_window_round_robin
-            // (bindings/c/perf/multi/common/perf_multi_client_helpers.hpp:901-1075).
+            // PERF_MULTI_TEST_POLICY § 1.3.1: the application deadline bounds an
+            // otherwise signal-driven wait. POLLIN and public async completion
+            // share this poller, so no periodic wakeup fallback is required.
             const auto deadline =
               std::chrono::steady_clock::now () + std::chrono::seconds (seconds);
+            const auto drain_deadline =
+              deadline + std::chrono::milliseconds (_settings.send_drain_timeout_ms);
 
+            perf::application_poller_coordinator_t coordinator (
+              _poller, _socket_states.size ());
             std::vector<perf::async_task_t<bool>> senders;
             senders.reserve (_socket_states.size ());
             for (size_t i = 0; i < _socket_states.size (); ++i)
-                senders.emplace_back (run_sender (_socket_states[i], phase, deadline));
+                senders.emplace_back (
+                  run_sender (coordinator.ready_queue (), _socket_states[i], phase,
+                              deadline));
 
-            while (std::chrono::steady_clock::now () < deadline) {
-                if (_poll_events.size () < _socket_states.size ())
-                    _poll_events.resize (_socket_states.size ());
-                const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
-                  deadline - std::chrono::steady_clock::now ());
-                const auto wait = std::chrono::milliseconds (std::max<int64_t> (
-                  1, std::min<int64_t> (50, remaining.count ())));
-                const size_t ready_count = _poller.wait (
-                  _poll_events.data (), _poll_events.size (), wait);
-                if (ready_count == 0)
-                    continue;
-
+            const auto dispatch_ready =
+              [this, phase, deadline, lat_out, &latency, &count] (
+                const zlink::poll_event_t *events_, size_t ready_count) {
                 for (size_t i = 0; i < ready_count; ++i) {
-                    const size_t slot_index = _poll_events[i].slot;
+                    const size_t slot_index = events_[i].slot;
                     if (slot_index >= _socket_states.size ())
                         continue;
                     socket_state_t &state = _socket_states[slot_index];
-                    const short revents = static_cast<short> (_poll_events[i].revents);
-
-                    if ((revents & static_cast<short> (zlink::poll_event_flag_t::pollin)) != 0)
-                    for (;;) {
-                        perf_metric::header_t header{};
-                        const int recv_rc = recv_reply (state, &header);
-                        if (recv_rc < 0) {
-                            const int err = errno;
-                            if (err == EAGAIN)
-                                break;
-                            if (err == EINTR)
-                                continue;
-                            debug_log ("active recv failed errno=" + std::to_string (err));
-                            co_return false;
-                        }
-                        if (recv_rc != 0) {
-                            debug_log ("active recv ignored rc=" + std::to_string (recv_rc));
-                            continue;
-                        }
-                        if (std::chrono::steady_clock::now () >= deadline)
-                            break;
-                        if (perf_metric::is_expected (header, _run_id, phase, _msg_size)) {
-                            ++count;
-                            if (lat_out && phase == perf_metric::phase_active) {
-                                const int64_t now_ns = perf_metric::now_ns ();
-                                if (header.sent_ts_ns > 0 && now_ns >= header.sent_ts_ns) {
-                                    const double latency_ns =
-                                      static_cast<double> (now_ns - header.sent_ts_ns) * 0.5;
-                                    latency.add (latency_ns);
-                                }
+                    // POLLCOMPLETION is a callback-dispatch wake only. Payload
+                    // receive is driven exclusively by POLLIN readiness.
+                    if (perf::poll_event_has (events_[i].revents,
+                                              zlink::poll_event_flag_t::pollin)) {
+                        for (;;) {
+                            perf_metric::header_t header{};
+                            const int recv_rc = recv_reply (state, &header);
+                            if (recv_rc < 0) {
+                                const int err = errno;
+                                if (err == EAGAIN)
+                                    break;
+                                if (err == EINTR)
+                                    continue;
+                                debug_log ("active recv failed errno="
+                                           + std::to_string (err));
+                                return false;
                             }
-                        } else {
-                            debug_log ("active header mismatch");
+                            if (recv_rc != 0) {
+                                debug_log ("active recv ignored rc="
+                                           + std::to_string (recv_rc));
+                                continue;
+                            }
+                            if (std::chrono::steady_clock::now () >= deadline)
+                                break;
+                            if (perf_metric::is_expected (header, _run_id, phase,
+                                                          _msg_size)) {
+                                ++count;
+                                if (lat_out && phase == perf_metric::phase_active) {
+                                    const int64_t now_ns = perf_metric::now_ns ();
+                                    if (header.sent_ts_ns > 0
+                                        && now_ns >= header.sent_ts_ns) {
+                                        const double latency_ns =
+                                          static_cast<double> (
+                                            now_ns - header.sent_ts_ns)
+                                          * 0.5;
+                                        latency.add (latency_ns);
+                                    }
+                                }
+                            } else {
+                                debug_log ("active header mismatch");
+                            }
                         }
                     }
-
                 }
-            }
+                return true;
+            };
+            if (!coordinator.run_until_senders_drained (
+                  deadline, drain_deadline, senders, dispatch_ready))
+                co_return false;
 
             for (size_t i = 0; i < senders.size (); ++i) {
                 if (!co_await std::move (senders[i]))
@@ -403,7 +415,6 @@ class router_router_client_bench_t
     std::vector<perf::multi::connect_monitor_t> _monitors;
     std::vector<socket_state_t> _socket_states;
     zlink::poller_t _poller;
-    std::vector<zlink::poll_event_t> _poll_events;
 
     const uint32_t _run_id;
     std::atomic<uint64_t> _seq;

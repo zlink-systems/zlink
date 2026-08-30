@@ -70,6 +70,28 @@ func TestLoadMultiConfigCanonicalizesSendSendAliases(t *testing.T) {
 	}
 }
 
+func TestLoadMultiConfigDefaultsEveryPatternToOneHundredClients(t *testing.T) {
+	t.Setenv("PERF_MULTI_CLIENTS", "")
+
+	for _, pattern := range []string{"MULTI_DEALER_DEALER", "MULTI_STREAM"} {
+		t.Run(pattern, func(t *testing.T) {
+			got := LoadMultiConfig(pattern, "tcp", MetricHeaderSize, 1, 0).Clients
+			if got != 100 {
+				t.Fatalf("default clients = %d, want 100", got)
+			}
+		})
+	}
+}
+
+func TestMultiReadyTimeoutDefaultsToTenSeconds(t *testing.T) {
+	t.Setenv("PERF_MULTI_CONNECT_READY_TIMEOUT_MS", "")
+	t.Setenv("PERF_CONNECT_READY_TIMEOUT_MS", "")
+
+	if got := MultiReadyTimeout(); got != 10*time.Second {
+		t.Fatalf("multi ready timeout = %s, want 10s", got)
+	}
+}
+
 func TestNewMultiStatsHonorsZeroLatencySampleCap(t *testing.T) {
 	const envName = "PERF_MULTI_LATENCY_SAMPLE_CAP"
 	previous, hadPrevious := os.LookupEnv(envName)

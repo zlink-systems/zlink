@@ -10,14 +10,28 @@ operation bound surfaces immediately for application policy.
 """
 
 import asyncio
+import ctypes
+import errno
 import inspect
 import socket
 import struct
 import threading
 import time
 import uuid
+from types import SimpleNamespace
+from unittest.mock import patch
 
+import pytest
 import zlink
+from zlink._native.ffi import (
+    ZLINK_SEND_ADMITTED,
+    ZLINK_SEND_TERMINAL,
+    ZLINK_SEND_TIMED_OUT,
+    ZlinkMsg,
+    ZlinkSendAsyncOptions,
+    ZlinkSendCompleteEvent,
+)
+from zlink._runtime.messaging import routed_async as routed_async_runtime
 
 
 def _endpoint(label):
@@ -34,6 +48,188 @@ def _tcp_endpoint():
     port = probe.getsockname()[1]
     probe.close()
     return port, f"tcp://127.0.0.1:{port}"
+
+
+class _SendAsyncStub:
+    def __init__(
+        self,
+        *,
+        op_id,
+        before_return=None,
+        terminal_errno=0,
+        before_return_hook=None,
+    ):
+        self.op_id = op_id
+        self.before_return = before_return
+        self.terminal_errno = terminal_errno
+        self.before_return_hook = before_return_hook
+        self.handler = None
+        self.token = None
+        self.cancelled = []
+
+    def zlink_send_complete_handler(self, _handle, handler, _userdata):
+        self.handler = handler
+        return int(zlink.HandlerResult.OK)
+
+    def zlink_send_async(
+        self, _handle, _parts, _part_count, options_ptr, op_id_out
+    ):
+        options = ctypes.cast(
+            options_ptr, ctypes.POINTER(ZlinkSendAsyncOptions)
+        ).contents
+        self.token = int(options.userdata)
+        if self.before_return is not None:
+            self.complete(self.before_return, self.terminal_errno)
+        if self.before_return_hook is not None:
+            self.before_return_hook()
+        ctypes.cast(op_id_out, ctypes.POINTER(ctypes.c_uint64)).contents.value = (
+            self.op_id
+        )
+        return int(zlink.SubmitResult.OK)
+
+    def zlink_send_async_cancel(self, _handle, op_id):
+        self.cancelled.append(int(getattr(op_id, "value", op_id)))
+        self.complete(ZLINK_SEND_TERMINAL, errno.ECANCELED)
+        return int(zlink.SubmitResult.OK)
+
+    def complete(self, result=ZLINK_SEND_ADMITTED, terminal_errno=0):
+        event = ZlinkSendCompleteEvent()
+        event.op_id = self.op_id
+        event.userdata = ctypes.c_void_p(self.token)
+        event.result = result
+        event.terminal_errno = terminal_errno
+        self.handler(None, ctypes.pointer(event), None)
+
+
+def _patch_send_runtime(native):
+    return (
+        patch.object(routed_async_runtime, "lib", return_value=native),
+        patch.object(
+            routed_async_runtime,
+            "_materialize_native_parts",
+            return_value=[ZlinkMsg()],
+        ),
+    )
+
+
+def test_immediate_async_send_does_not_allocate_a_future():
+    async def scenario():
+        native = _SendAsyncStub(op_id=0)
+        lib_patch, parts_patch = _patch_send_runtime(native)
+        with lib_patch, parts_patch:
+            owner = routed_async_runtime.SendCompletionOwner(
+                SimpleNamespace(_handle=ctypes.c_void_p(1))
+            )
+            loop = asyncio.get_running_loop()
+            with patch.object(
+                loop, "create_future", wraps=loop.create_future
+            ) as create_future:
+                assert await owner.submit(b"inline") is None
+                create_future.assert_not_called()
+            assert owner._pending == {}
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("result", "terminal_errno", "expected_result"),
+    [
+        (ZLINK_SEND_ADMITTED, 0, None),
+        (ZLINK_SEND_TIMED_OUT, 0, zlink.SubmitResult.BACKPRESSURED),
+        (ZLINK_SEND_TERMINAL, errno.ECANCELED, zlink.SubmitResult.TERMINATED),
+    ],
+)
+def test_async_send_callback_before_submit_return_is_preserved(
+    result, terminal_errno, expected_result
+):
+    async def scenario():
+        native = _SendAsyncStub(
+            op_id=17,
+            before_return=result,
+            terminal_errno=terminal_errno,
+        )
+        lib_patch, parts_patch = _patch_send_runtime(native)
+        with lib_patch, parts_patch:
+            owner = routed_async_runtime.SendCompletionOwner(
+                SimpleNamespace(_handle=ctypes.c_void_p(2))
+            )
+            if expected_result is None:
+                assert await owner.submit(b"early-success") is None
+            else:
+                with pytest.raises(zlink.SubmitError) as raised:
+                    await owner.submit(b"early-error")
+                assert raised.value.result == expected_result
+            assert owner._pending == {}
+
+    asyncio.run(scenario())
+
+
+def test_delayed_async_send_completes_from_callback_thread():
+    async def scenario():
+        native = _SendAsyncStub(op_id=23)
+        lib_patch, parts_patch = _patch_send_runtime(native)
+        with lib_patch, parts_patch:
+            owner = routed_async_runtime.SendCompletionOwner(
+                SimpleNamespace(_handle=ctypes.c_void_p(3))
+            )
+            pending = asyncio.create_task(owner.submit(b"delayed"))
+            await asyncio.sleep(0)
+            assert not pending.done()
+
+            callback_thread = threading.Thread(target=native.complete)
+            callback_thread.start()
+            callback_thread.join()
+
+            assert await asyncio.wait_for(pending, 1) is None
+            assert owner._pending == {}
+
+    asyncio.run(scenario())
+
+
+def test_lazy_async_send_future_keeps_cancel_and_late_callback_exactly_once():
+    async def scenario():
+        native = _SendAsyncStub(op_id=29)
+        lib_patch, parts_patch = _patch_send_runtime(native)
+        with lib_patch, parts_patch:
+            owner = routed_async_runtime.SendCompletionOwner(
+                SimpleNamespace(_handle=ctypes.c_void_p(4))
+            )
+            pending = asyncio.create_task(owner.submit(b"cancel"))
+            await asyncio.sleep(0)
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+            await asyncio.sleep(0)
+
+            assert native.cancelled == [29]
+            assert owner._pending == {}
+            # Core can race a duplicate/late terminal notification with
+            # cancellation; the consumed token makes it a no-op.
+            native.complete(ZLINK_SEND_TERMINAL, errno.ECANCELED)
+            await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+
+
+def test_close_drain_before_op_id_publication_completes_lazy_future_once():
+    async def scenario():
+        native = _SendAsyncStub(op_id=31)
+        lib_patch, parts_patch = _patch_send_runtime(native)
+        with lib_patch, parts_patch:
+            owner = routed_async_runtime.SendCompletionOwner(
+                SimpleNamespace(_handle=ctypes.c_void_p(5))
+            )
+            native.before_return_hook = owner.drain_pending
+
+            with pytest.raises(zlink.SubmitError) as raised:
+                await owner.submit(b"close-race")
+            assert raised.value.result == zlink.SubmitResult.TERMINATED
+            assert owner._pending == {}
+
+            native.complete(ZLINK_SEND_TERMINAL, errno.ECANCELED)
+            await asyncio.sleep(0)
+
+    asyncio.run(scenario())
 
 
 async def _send_when_connected(socket, payload, routing_id=None):

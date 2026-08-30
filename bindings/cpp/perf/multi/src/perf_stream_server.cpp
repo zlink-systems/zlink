@@ -52,12 +52,36 @@ struct stream_handler_context_t
     std::condition_variable queue_cv;
     std::deque<queued_packet_t> pending_packets;
     bool accepting_packets{true};
+    std::atomic<bool> draining{false};
     std::atomic<unsigned long long> handlers_in_flight{0};
     std::atomic<unsigned long long> sends_in_flight{0};
     std::atomic<bool> failed{false};
     std::atomic<bool> drain_timed_out{false};
 
     stream_handler_context_t () : server (NULL) {}
+
+    void begin_drain ()
+    {
+        {
+            std::lock_guard<std::mutex> lock (queue_mutex);
+            accepting_packets = false;
+            draining.store (true, std::memory_order_release);
+        }
+        // Wake a dispatcher that is waiting for either the queue to close or
+        // its last already-admitted send to reach a terminal state.
+        queue_cv.notify_all ();
+    }
+
+    void complete_send ()
+    {
+        sends_in_flight.fetch_sub (1, std::memory_order_acq_rel);
+        // During the active phase the dispatcher never waits for send
+        // terminals: enqueue_packet() wakes it for new work. Draining is the
+        // only lifecycle state that waits on this count, so avoid a contended
+        // condition-variable broadcast for every active completion.
+        if (draining.load (std::memory_order_acquire))
+            queue_cv.notify_all ();
+    }
 };
 
 struct handler_guard_t
@@ -149,11 +173,7 @@ inline void debug_send_failure (int err_)
 
 void close_packet_queue (const std::shared_ptr<stream_handler_context_t> &ctx_)
 {
-    {
-        std::lock_guard<std::mutex> lock (ctx_->queue_mutex);
-        ctx_->accepting_packets = false;
-    }
-    ctx_->queue_cv.notify_all ();
+    ctx_->begin_drain ();
 }
 
 bool enqueue_packet (const std::shared_ptr<stream_handler_context_t> &ctx_,
@@ -200,8 +220,7 @@ perf::detached_async_task_t send_packet_async (
         close_packet_queue (ctx_);
         request_stop ();
     }
-    ctx_->sends_in_flight.fetch_sub (1, std::memory_order_acq_rel);
-    ctx_->queue_cv.notify_all ();
+    ctx_->complete_send ();
 }
 
 void handle_packet (const std::shared_ptr<stream_handler_context_t> &ctx_,

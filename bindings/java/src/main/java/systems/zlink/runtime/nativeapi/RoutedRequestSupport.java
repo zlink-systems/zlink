@@ -14,6 +14,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -30,9 +31,13 @@ public final class RoutedRequestSupport implements AutoCloseable {
     private final Arena callbackArena = Arena.ofShared();
     private final MemorySegment replyCallback;
     private final AtomicLong nextRequestId = new AtomicLong(1L);
-    private final ConcurrentMap<Long, PendingReply> pending =
+    private final ConcurrentMap<Object, CompletableFuture<List<Message>>> pending =
         new ConcurrentHashMap<>();
+    private final ThreadLocal<RequestIdLookup> requestIdLookup =
+        ThreadLocal.withInitial(RequestIdLookup::new);
     private final CallbackLifecycle callbackLifecycle;
+    private final ArrayBlockingQueue<MemorySegment> replySnapshots =
+        new ArrayBlockingQueue<>(8);
 
     public RoutedRequestSupport(CallbackLifecycle callbackLifecycle) {
         this.callbackLifecycle = Objects.requireNonNull(callbackLifecycle,
@@ -64,23 +69,23 @@ public final class RoutedRequestSupport implements AutoCloseable {
 
     public void registerRoutedPending(
             long requestId, CompletableFuture<List<Message>> future) {
-        pending.put(requestId, new PendingReply(future));
+        pending.put(requestId, future);
     }
 
     public void removeRoutedPending(long requestId) {
-        pending.remove(requestId);
+        removePending(requestId);
     }
 
     /** Removes and fails one pending request, used by socket close. */
     public boolean completePendingExceptionally(long requestId,
                                                 Throwable failure) {
-        PendingReply reply = pending.remove(requestId);
-        if (reply == null) {
+        CompletableFuture<List<Message>> future = removePending(requestId);
+        if (future == null) {
             return false;
         }
         callbackLifecycle.enter();
         try {
-            reply.future().completeExceptionally(failure);
+            future.completeExceptionally(failure);
         } finally {
             callbackLifecycle.exit();
         }
@@ -104,8 +109,8 @@ public final class RoutedRequestSupport implements AutoCloseable {
                                      long partCount,
                                      MemorySegment userdata) {
         long requestId = userdata == null ? 0L : userdata.address();
-        PendingReply replyState = pending.remove(requestId);
-        if (replyState == null) {
+        CompletableFuture<List<Message>> future = removePending(requestId);
+        if (future == null) {
             closeParts(parts, partCount);
             return;
         }
@@ -116,33 +121,74 @@ public final class RoutedRequestSupport implements AutoCloseable {
             if (result != RequestResult.OK.value()) {
                 ZlinkRequestException failure = new ZlinkRequestException(
                     requestResult(result), result);
-                completion = () -> replyState.future().completeExceptionally(
-                    failure);
+                completion = () -> future.completeExceptionally(failure);
                 rejectedCompletion = completion;
             } else {
-                Message[] frames =
-                    InternalAccess.messageFromOwnedMessageVectorShared(
-                        parts, partCount);
-                List<Message> reply = frames.length == 0
-                    ? List.of() : Arrays.asList(frames);
-                completion = () -> {
-                    if (!replyState.future().complete(reply)) {
-                        Message.closeAll(frames);
+                if (partCount == 2L
+                    && NativeRequestBridge.snapshotPairAvailable()) {
+                    MemorySegment snapshot = acquireReplySnapshot();
+                    if (NativeRequestBridge.snapshotPair(parts, snapshot)
+                        != 0) {
+                        recycleReplySnapshot(snapshot);
+                        throw new ZlinkRequestException(
+                            RequestResult.INTERNAL_ERROR, Native.errno());
                     }
-                };
-                rejectedCompletion = () -> {
-                    try {
-                        Message.closeAll(frames);
-                    } finally {
-                        replyState.future().completeExceptionally(
-                            new ZlinkRequestException(RequestResult.TERMINATED,
-                                NativeErrno.ECANCELED));
+                    completion = () -> completeSnapshotPair(future, snapshot);
+                    rejectedCompletion = () -> {
+                        try {
+                            NativeMessage.multipartClose(snapshot, 2L);
+                            recycleReplySnapshot(snapshot);
+                        } finally {
+                            future.completeExceptionally(
+                                new ZlinkRequestException(
+                                    RequestResult.TERMINATED,
+                                    NativeErrno.ECANCELED));
+                        }
+                    };
+                } else {
+                    List<Message> reply;
+                    if (partCount == 2L) {
+                        Message first = InternalAccess
+                            .messageFromOwnedMessageVectorPartShared(parts,
+                                true);
+                        try {
+                            MemorySegment secondAddress =
+                                MemorySegment.ofAddress(parts.address()
+                                    + NativeLayouts.MESSAGE_LAYOUT.byteSize());
+                            Message second = InternalAccess
+                                .messageFromOwnedMessageVectorPartShared(
+                                    secondAddress, false);
+                            reply = List.of(first, second);
+                        } catch (Throwable failure) {
+                            first.close();
+                            throw failure;
+                        }
+                    } else {
+                        Message[] frames = InternalAccess
+                            .messageFromOwnedMessageVectorShared(parts,
+                                partCount);
+                        reply = frames.length == 0
+                            ? List.of() : Arrays.asList(frames);
                     }
-                };
+                    completion = () -> {
+                        if (!future.complete(reply)) {
+                            Message.closeAll(reply);
+                        }
+                    };
+                    rejectedCompletion = () -> {
+                        try {
+                            Message.closeAll(reply);
+                        } finally {
+                            future.completeExceptionally(
+                                new ZlinkRequestException(
+                                    RequestResult.TERMINATED,
+                                    NativeErrno.ECANCELED));
+                        }
+                    };
+                }
             }
         } catch (Throwable failure) {
-            completion = () -> replyState.future().completeExceptionally(
-                failure);
+            completion = () -> future.completeExceptionally(failure);
             rejectedCompletion = completion;
         } finally {
             closeParts(parts, partCount);
@@ -167,6 +213,45 @@ public final class RoutedRequestSupport implements AutoCloseable {
         }
     }
 
+    private void completeSnapshotPair(
+            CompletableFuture<List<Message>> future,
+            MemorySegment snapshot) {
+        Message first = null;
+        Message second = null;
+        try {
+            first = InternalAccess.messageFromOwnedMessageVectorPartShared(
+                snapshot, true);
+            second = InternalAccess.messageFromOwnedMessageVectorPartShared(
+                snapshot.asSlice(NativeLayouts.MESSAGE_LAYOUT.byteSize()),
+                false);
+            List<Message> reply = List.of(first, second);
+            if (!future.complete(reply)) {
+                Message.closeAll(reply);
+            }
+        } catch (Throwable failure) {
+            if (first != null) {
+                first.close();
+            }
+            if (second != null) {
+                second.close();
+            }
+            future.completeExceptionally(failure);
+        } finally {
+            NativeMessage.multipartClose(snapshot, 2L);
+            recycleReplySnapshot(snapshot);
+        }
+    }
+
+    private MemorySegment acquireReplySnapshot() {
+        MemorySegment snapshot = replySnapshots.poll();
+        return snapshot != null ? snapshot : callbackArena.allocate(
+            NativeLayouts.MESSAGE_LAYOUT, 2L);
+    }
+
+    private void recycleReplySnapshot(MemorySegment snapshot) {
+        replySnapshots.offer(snapshot);
+    }
+
     private static RequestResult requestResult(int value) {
         try {
             return RequestResult.fromValue(value);
@@ -175,10 +260,17 @@ public final class RoutedRequestSupport implements AutoCloseable {
         }
     }
 
+    private CompletableFuture<List<Message>> removePending(long requestId) {
+        RequestIdLookup lookup = requestIdLookup.get();
+        lookup.value = requestId;
+        return pending.remove(lookup);
+    }
+
     public void close(Throwable failure) {
         Objects.requireNonNull(failure, "failure");
-        pending.forEach((requestId, reply) ->
-            completePendingExceptionally(requestId, failure));
+        pending.forEach((requestId, future) ->
+            completePendingExceptionally(((Long) requestId).longValue(),
+                failure));
         RuntimeResources.closeArena(callbackArena);
     }
 
@@ -197,6 +289,19 @@ public final class RoutedRequestSupport implements AutoCloseable {
         void dispatch(Runnable completion);
     }
 
-    private record PendingReply(CompletableFuture<List<Message>> future) {
+    /** Allocation-free lookup key for the Long keys retained by pending. */
+    private static final class RequestIdLookup {
+        private long value;
+
+        @Override
+        public int hashCode() {
+            return Long.hashCode(value);
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof Long key && key.longValue() == value;
+        }
     }
+
 }

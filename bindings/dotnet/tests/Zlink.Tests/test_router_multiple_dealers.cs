@@ -102,6 +102,58 @@ public sealed class test_router_multiple_dealers
     }
 
     [Fact]
+    public async Task received_send_async_transfers_multipart_and_reuses_envelope()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var ctx = Zlink.CreateContext();
+        using var router = ctx.CreateRouterSocket();
+        using var dealer = ctx.CreateDealerSocket();
+
+        dealer.SetRoutingId(CoreTestSupport.RoutingIdUtf8("D1"));
+        router.Options.ReceiveTimeout = TimeSpan.FromSeconds(2);
+        string endpoint = CoreTestSupport.NewEndpoint("inproc",
+            "received-send-async-multipart");
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+        Thread.Sleep(100);
+
+        using Message payload = Message.From("first");
+        using Message tail = Message.Allocate(0);
+        await dealer.Send().Message(payload).Message(tail).Async()
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        using var received = Received.Create();
+        Assert.True(router.Recv(received));
+        IReadOnlyList<Message> forwardedParts = received.Parts;
+        Assert.Collection(forwardedParts,
+            part => Assert.Equal("first", part.GetString()),
+            part => Assert.Equal(0, part.Size));
+
+        Task reply = received.Send().Messages(forwardedParts).Async();
+        Assert.All(forwardedParts, part =>
+            Assert.Throws<ObjectDisposedException>(() => _ = part.Size));
+        await reply.WaitAsync(TimeSpan.FromSeconds(2));
+
+        using Received echoed = CoreTestSupport.ReceiveMessageWithTimeout(dealer,
+            2000);
+        Assert.Collection(echoed.Parts,
+            part => Assert.Equal("first", part.GetString()),
+            part => Assert.Equal(0, part.Size));
+
+        using Message nextPayload = Message.From("second");
+        using Message nextTail = Message.Allocate(0);
+        await dealer.Send().Message(nextPayload).Message(nextTail).Async()
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(router.Recv(received));
+        Assert.Collection(received.Parts,
+            part => Assert.Equal("second", part.GetString()),
+            part => Assert.Equal(0, part.Size));
+    }
+
+    [Fact]
     public async Task routed_direct_send_and_recv_part_roundtrip()
     {
         if (!CoreTestSupport.IsNativeAvailable())

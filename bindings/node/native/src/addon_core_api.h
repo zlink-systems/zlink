@@ -32,6 +32,7 @@ napi_value socket_close (napi_env env, napi_callback_info info);
 napi_value test_begin_held_routed_multipart (napi_env env, napi_callback_info info);
 napi_value test_end_held_routed_multipart (napi_env env, napi_callback_info info);
 napi_value test_run_send_close_stress (napi_env env, napi_callback_info info);
+napi_value test_send_completion_operation_path (napi_env env, napi_callback_info info);
 napi_value socket_send_completion_handler (napi_env env, napi_callback_info info);
 napi_value socket_request_completion_handler (napi_env env, napi_callback_info info);
 napi_value socket_bind (napi_env env, napi_callback_info info);

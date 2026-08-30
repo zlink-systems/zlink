@@ -48,8 +48,9 @@ required by the perf policy and execution guide.
   failures remain `fail`
 
 The suite uses the recv path only. Server and client context I/O threads
-default to `4` for Python multi perf, matching the current C multi baseline
-resource profile.
+default to `1` for Python multi perf to avoid native callback threads
+contending on the GIL. Set `--io-threads 4` or `PERF_IO_THREADS=4` for an
+explicit C-baseline resource comparison.
 
 `MULTI_STREAM` uses the shared core `perf_stream_client`. Python passes a
 stream completion wait to that client so the slower public Python stream server

@@ -9,11 +9,24 @@ const POLLIN = 1;
 const POLLOUT = 2;
 const { emitMultiSocketHwmDetail } = require('./perf_multi_auto_hwm');
 const { resolveMultiMonitorHwm } = require('./perf_multi_common');
+// Buffer inputs are copied into a zlink_msg_t during the public native call.
+// A zero-length tail therefore has no mutable payload ownership to transfer
+// and can be shared by every prebuilt measurement record in this process.
+const EMPTY_MEASUREMENT_PART = Buffer.alloc(0);
 function measurementPartCount() {
     return process.env.PERF_PART_COUNT === '1' ? 1 : 2;
 }
 function measurementParts(payload) {
-    return measurementPartCount() === 1 ? [payload] : [payload, Buffer.alloc(0)];
+    return measurementPartCount() === 1
+        ? [payload]
+        : [payload, EMPTY_MEASUREMENT_PART];
+}
+function appendMeasurement(op, payload) {
+    op = op.message(payload);
+    if (measurementPartCount() === 2) {
+        op = op.message(EMPTY_MEASUREMENT_PART);
+    }
+    return op;
 }
 function measurementPayload(parts) {
     if (!Array.isArray(parts) || parts.length !== measurementPartCount())
@@ -187,9 +200,16 @@ async function sendRouted(socket, ...args) {
     const routed = args.length >= 2 && args[0] instanceof zlink.RoutingId;
     const payload = routed ? args[1] : args[0];
     let op = routed ? socket.send(args[0]) : socket.send();
-    const parts = Array.isArray(payload) ? payload : measurementParts(payload);
-    for (const part of parts)
-        op = op.message(part);
+    if (Array.isArray(payload)) {
+        for (const part of payload)
+            op = op.message(part);
+    }
+    else {
+        // Keep the scalar compatibility path allocation-free. Multi perf hot
+        // loops pass prebuilt arrays, while one-off callers still get the policy
+        // part count without allocating [payload, Buffer.alloc(0)] per send.
+        op = appendMeasurement(op, payload);
+    }
     await op.submit();
 }
 // PERF_MULTI_TEST_POLICY § 1.3.1: emit the wire-level stop token once at
@@ -204,9 +224,13 @@ async function sendStopTokenOnce(_socket, sendFn) {
 function trySocketPublish(socket, topic, payload) {
     try {
         let op = socket.publish(topic);
-        const parts = Array.isArray(payload) ? payload : measurementParts(payload);
-        for (const part of parts) {
-            op = op.message(part);
+        if (Array.isArray(payload)) {
+            for (const part of payload) {
+                op = op.message(part);
+            }
+        }
+        else {
+            op = appendMeasurement(op, payload);
         }
         op.submit();
         return true;
@@ -289,6 +313,7 @@ module.exports = {
     sendStopTokenOnce,
     sendRouted,
     trySocketPublish,
+    appendMeasurement,
     measurementParts,
     measurementPayload,
     waitForRunnerStart,

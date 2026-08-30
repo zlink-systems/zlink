@@ -13,6 +13,7 @@ internal static class PerfMultiRouterRouterClient
         int sndTimeoutMs = ResolveMultiSndTimeoutMs(options);
         int rcvTimeoutMs = ResolveMultiRcvTimeoutMs(options);
         int readyTimeoutMs = ResolveMultiConnectReadyTimeoutMs(options);
+        int sendDrainTimeoutMs = ResolveMultiSendDrainTimeoutMs();
         ulong monitorHwmBytes = ResolveMultiMonitorHwmBytes();
         int latencySampleCap = ResolveMultiLatencySampleCap(options);
         int clientCount = ResolveMultiClients(options);
@@ -70,7 +71,7 @@ internal static class PerfMultiRouterRouterClient
             {
                 result = await RunMultiRouterRouterClientLoop(pollManager,
                     slots, size, latencySampleCap, durationSeconds,
-                    readyTimeoutMs).ConfigureAwait(false);
+                    sendDrainTimeoutMs).ConfigureAwait(false);
             }
             finally
             {
@@ -125,9 +126,8 @@ internal static class PerfMultiRouterRouterClient
         long latencyCount)>
         RunMultiRouterRouterClientLoop(PollManager pollManager,
             RouterRouterClientSlot[] slots, int msgSize, int latencySampleCap,
-            int durationSeconds, int readyTimeoutMs)
+            int durationSeconds, int sendDrainTimeoutMs)
     {
-        _ = readyTimeoutMs;
         const uint runId = 1;
         var latSamples = new List<double>(latencySampleCap);
         long seq = 0;
@@ -140,47 +140,48 @@ internal static class PerfMultiRouterRouterClient
         long benchStartTicks = Stopwatch.GetTimestamp();
         long benchDeadlineTicks = benchStartTicks
             + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
-
-        async Task SendLoopAsync(RouterRouterClientSlot slot)
-        {
-            // Async admission can complete inline while Core has credit. Yield
-            // once before the send loop so constructing the sender Tasks cannot
-            // consume the whole active window before the receive poll starts.
-            await Task.Yield();
-            while (Stopwatch.GetTimestamp() < benchDeadlineTicks)
-            {
-                ulong currentSeq = unchecked((ulong)Interlocked.Increment(ref seq));
-                StampMetricHeader(slot.Payload.AsSpan(), runId, PerfPhase.Active,
-                    msgSize, currentSeq, EpochNs());
-                using Message message = Message.Allocate(slot.Payload.Length);
-                slot.Payload.AsSpan().CopyTo(message.AsSpan());
-                try
-                {
-                    await PerfSocketIo.SendMeasurementAsync(slot.Socket,
-                        slot.ServerRoutingId, message, SendFlags.None)
-                        .ConfigureAwait(false);
-                }
-                catch (ZlinkSubmitException ex)
-                    when (ex.Result == ZlinkSubmitException.ErrorCode.NotConnected
-                          || ex.Result == ZlinkSubmitException.ErrorCode.NotFound)
-                {
-                }
-            }
-        }
-
-        var sendTasks = new Task[slots.Length];
-        for (int i = 0; i < slots.Length; i++)
-            sendTasks[i] = SendLoopAsync(slots[i]);
+        int roundStart = 0;
+        var admissionSignal = new PerfMultiAdmissionSignal();
 
         while (Stopwatch.GetTimestamp() < benchDeadlineTicks)
         {
-            int pollTimeoutMs = Math.Min(50, RemainingMilliseconds(benchDeadlineTicks));
-            if (pollTimeoutMs <= 0)
-                break;
+            // One active async runtime advances every socket once per round.
+            // A socket can submit again only after its prior public async
+            // admission completes; echoed replies are drained independently
+            // below and never gate the next send.
+            bool submittedAny = false;
+            int start = roundStart;
+            for (int attempts = 0; attempts < slots.Length; attempts++)
+            {
+                if (Stopwatch.GetTimestamp() >= benchDeadlineTicks)
+                    break;
+
+                int slotIndex = (start + attempts) % slots.Length;
+                RouterRouterClientSlot slot = slots[slotIndex];
+                if (!TryCompletePendingAdmission(slot))
+                    continue;
+
+                ulong currentSeq = unchecked((ulong)++seq);
+                StampMetricHeader(slot.Payload.AsSpan(), runId,
+                    PerfPhase.Active, msgSize, currentSeq, EpochNs());
+                StartAdmission(slot, admissionSignal);
+                submittedAny = true;
+            }
+            if (slots.Length > 0)
+                roundStart = (start + 1) % slots.Length;
+
+            // POLLIN never owns the admission wait. Drain ready replies only;
+            // if no work progressed, wait on an actual admission completion.
             int readyCount = PollSocketEvents(pollManager, sockets, eventMasks,
-                pollTimeoutMs);
+                0);
             if (readyCount <= 0)
             {
+                if (!submittedAny && HasPendingAdmissions(slots))
+                {
+                    if (!await admissionSignal.WaitAsync(benchDeadlineTicks)
+                            .ConfigureAwait(false))
+                        break;
+                }
                 continue;
             }
 
@@ -191,7 +192,8 @@ internal static class PerfMultiRouterRouterClient
                     runId, PerfPhase.Active, metrics,
                     activeDeadlineTicks: benchDeadlineTicks);
         }
-        await Task.WhenAll(sendTasks).ConfigureAwait(false);
+        await DrainPendingAdmissions(slots, sendDrainTimeoutMs)
+            .ConfigureAwait(false);
 
         long benchEndTicks = Stopwatch.GetTimestamp();
         double elapsedSeconds = (benchEndTicks - benchStartTicks)
@@ -209,6 +211,102 @@ internal static class PerfMultiRouterRouterClient
 
         return (throughput, latencyNs, latencyP95Ns, latencyP99Ns,
             metrics.MeasureCount, metrics.SampleSeen);
+    }
+
+    private static void StartAdmission(RouterRouterClientSlot slot,
+        PerfMultiAdmissionSignal admissionSignal)
+    {
+        Message message = Message.Allocate(slot.Payload.Length);
+        slot.Payload.AsSpan().CopyTo(message.AsSpan());
+        try
+        {
+            Task admission = PerfSocketIo.SendMeasurementAsync(slot.Socket,
+                slot.ServerRoutingId, message, SendFlags.None);
+            if (admission.IsCompletedSuccessfully)
+            {
+                message.Dispose();
+                return;
+            }
+
+            Task tracked = AwaitRouterAdmissionAndDisposeAsync(admission,
+                message);
+            if (!tracked.IsCompletedSuccessfully)
+            {
+                slot.PendingAdmission = tracked;
+                admissionSignal.Track(tracked);
+            }
+        }
+        catch (ZlinkSubmitException ex) when (IsStaleRoute(ex))
+        {
+            message.Dispose();
+        }
+        catch
+        {
+            message.Dispose();
+            throw;
+        }
+    }
+
+    private static bool TryCompletePendingAdmission(
+        RouterRouterClientSlot slot)
+    {
+        Task? admission = slot.PendingAdmission;
+        if (admission == null)
+            return true;
+        if (!admission.IsCompleted)
+            return false;
+
+        slot.PendingAdmission = null;
+        admission.GetAwaiter().GetResult();
+        return true;
+    }
+
+    private static bool HasPendingAdmissions(RouterRouterClientSlot[] slots)
+    {
+        for (int i = 0; i < slots.Length; i++)
+            if (slots[i].PendingAdmission != null)
+                return true;
+        return false;
+    }
+
+    private static async Task DrainPendingAdmissions(
+        RouterRouterClientSlot[] slots, int timeoutMs)
+    {
+        var pending = new List<Task>(slots.Length);
+        for (int i = 0; i < slots.Length; i++)
+        {
+            Task? admission = slots[i].PendingAdmission;
+            if (admission != null)
+                pending.Add(admission);
+        }
+
+        await PerfMultiAdmissionDrain.WaitAsync(pending, timeoutMs)
+            .ConfigureAwait(false);
+
+        for (int i = 0; i < slots.Length; i++)
+            slots[i].PendingAdmission = null;
+    }
+
+    private static async Task AwaitRouterAdmissionAndDisposeAsync(
+        Task admission, Message message)
+    {
+        try
+        {
+            await admission.ConfigureAwait(false);
+        }
+        catch (ZlinkSubmitException ex) when (IsStaleRoute(ex))
+        {
+        }
+        finally
+        {
+            message.Dispose();
+        }
+    }
+
+    private static bool IsStaleRoute(ZlinkSubmitException error)
+    {
+        return error.Result == ZlinkSubmitException.ErrorCode.NotConnected
+               || error.Result == ZlinkSubmitException.ErrorCode.NotFound;
     }
 
     private static void HandleClientEvent(
@@ -284,19 +382,6 @@ internal static class PerfMultiRouterRouterClient
         return sockets;
     }
 
-    private static int RemainingMilliseconds(long deadlineTicks)
-    {
-        long nowTicks = Stopwatch.GetTimestamp();
-        if (deadlineTicks <= nowTicks)
-            return 0;
-
-        double remainingMs = (deadlineTicks - nowTicks) * 1000.0
-            / Stopwatch.Frequency;
-        if (remainingMs >= int.MaxValue)
-            return int.MaxValue;
-        return (int)Math.Ceiling(remainingMs);
-    }
-
     private sealed class RouterRouterClientSlot
     {
         internal RouterRouterClientSlot(ISocket socket, RoutingId serverRoutingId,
@@ -313,6 +398,9 @@ internal static class PerfMultiRouterRouterClient
         internal byte[] Payload { get; }
         // Caller-provided storage reused across every recv on this slot.
         internal Received ReusableReceived { get; }
+        // At most one public async admission may own this socket's next record.
+        // Echo receipt never participates in this state.
+        internal Task? PendingAdmission { get; set; }
     }
 
     private sealed class RouterRouterMetrics

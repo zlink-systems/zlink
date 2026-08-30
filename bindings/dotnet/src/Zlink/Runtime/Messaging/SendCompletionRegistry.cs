@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+using System.Buffers;
 using System.Runtime.InteropServices;
 using Systems.Zlink.Runtime.Native;
 
@@ -80,69 +81,73 @@ internal sealed class SendCompletionRegistry
 
         Message[]? copied = null;
         var source = NativeMessageParts.AsSpan(parts, ref copied);
-        var native = new ZlinkMsg[source.Length];
+        ZlinkMsg[]? rentedNative = null;
+        var native = source.Length <= NativeMessageParts.StackPartLimit
+            ? stackalloc ZlinkMsg[source.Length]
+            : rentedNative = ArrayPool<ZlinkMsg>.Shared.Rent(source.Length);
+        native = native[..source.Length];
         var built = 0;
         try
         {
-            NativeMessageParts.MoveToNative(source, native, nameof(parts),
-                ref built);
-        }
-        catch
-        {
-            NativeMessageParts.RestoreManaged(source, native, 0, built);
-            throw;
-        }
-
-        int rc;
-        ulong opId;
-        PendingSend? pending = null;
-        GCHandle operationRoot = default;
-        try
-        {
-            pending = new PendingSend(cancellationToken);
-            operationRoot = GCHandle.Alloc(pending, GCHandleType.Normal);
-            fixed (ZlinkMsg* nativeParts = native)
+            try
             {
-                var options = new ZlinkSendAsyncOptions
-                {
-                    StructSize = (uint)sizeof(ZlinkSendAsyncOptions),
-                    // The per-operation deadline is a Core-side option. The
-                    // binding owns no deadline timer of its own.
-                    TimeoutMs = 0,
-                    Userdata = GCHandle.ToIntPtr(operationRoot),
-                    Target = hasTarget ? &target : null
-                };
-                rc = NativeMethods.zlink_send_async(_handle, nativeParts,
-                    (nuint)native.Length, &options, out opId);
+                NativeMessageParts.MoveToNative(source, native, nameof(parts),
+                    ref built);
             }
-        }
-        catch
-        {
-            if (operationRoot.IsAllocated)
+            catch
+            {
+                NativeMessageParts.RestoreManaged(source, native, 0, built);
+                throw;
+            }
+
+            int rc;
+            ulong opId;
+            PendingSend? pending = null;
+            GCHandle operationRoot = default;
+            try
+            {
+                pending = new PendingSend(cancellationToken);
+                operationRoot = GCHandle.Alloc(pending, GCHandleType.Normal);
+                fixed (ZlinkMsg* nativeParts = native)
+                {
+                    var options = new ZlinkSendAsyncOptions
+                    {
+                        StructSize = (uint)sizeof(ZlinkSendAsyncOptions),
+                        TimeoutMs = 0,
+                        Userdata = GCHandle.ToIntPtr(operationRoot),
+                        Target = hasTarget ? &target : null
+                    };
+                    rc = NativeMethods.zlink_send_async(_handle, nativeParts,
+                        (nuint)native.Length, &options, out opId);
+                }
+            }
+            catch
+            {
+                if (operationRoot.IsAllocated)
+                    operationRoot.Free();
+                NativeMessageParts.RestoreManaged(source, native, 0, built);
+                throw;
+            }
+
+            if (rc != (int)SubmitResult.Ok)
+            {
                 operationRoot.Free();
-            NativeMessageParts.RestoreManaged(source, native, 0, built);
-            throw;
+                NativeMessageParts.RestoreManaged(source, native, 0, built);
+                throw ZlinkException.CreateSubmitException((SubmitResult)rc);
+            }
+            if (opId == 0)
+            {
+                operationRoot.Free();
+                return Task.CompletedTask;
+            }
+            pending!.AttachCancellation(this, opId);
+            return pending.Task;
         }
-
-        if (rc != (int)SubmitResult.Ok)
+        finally
         {
-            // No completion runs unless the submit returned OK, so the record
-            // and its GC root are still owned here.
-            operationRoot.Free();
-            NativeMessageParts.RestoreManaged(source, native, 0, built);
-            throw ZlinkException.CreateSubmitException((SubmitResult)rc);
+            if (rentedNative != null)
+                ArrayPool<ZlinkMsg>.Shared.Return(rentedNative);
         }
-
-        // Ownership of every part has moved to Core. opId == 0 is the
-        // immediate-admission disposition and deliberately has no callback.
-        if (opId == 0)
-        {
-            operationRoot.Free();
-            return Task.CompletedTask;
-        }
-
-        pending!.AttachCancellation(this, opId);
-        return pending.Task;
     }
 
     // Single-part hot path: use one stack native handle. The managed pending
@@ -322,8 +327,12 @@ internal sealed class SendCompletionRegistry
     {
         private readonly CancellationToken _cancellationToken;
 
-        private readonly TaskCompletionSource _completion = new(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        // Core reports immediate admission as opId == 0 and never calls the
+        // completion handler for it. Keep the completion lazy so that common
+        // path pays only for the userdata anchor, not for a Task that is never
+        // observed. A pending completion can race SendAsync returning, so both
+        // the callback and Task getter publish through the same atomic slot.
+        private TaskCompletionSource? _completion;
 
         private CancellationTokenRegistration _registration;
         private int _completionStarted;
@@ -333,7 +342,7 @@ internal sealed class SendCompletionRegistry
             _cancellationToken = cancellationToken;
         }
 
-        internal Task Task => _completion.Task;
+        internal Task Task => GetOrCreateCompletion().Task;
         internal bool IsCompleted => Volatile.Read(ref _completionStarted) != 0;
 
         internal void AttachCancellation(SendCompletionRegistry owner, ulong opId)
@@ -364,25 +373,39 @@ internal sealed class SendCompletionRegistry
             // disposing wait would deadlock against itself there.
             _registration.Unregister();
 
+            var completion = GetOrCreateCompletion();
+
             switch (result)
             {
                 case ZlinkSendCompleteResult.Admitted:
-                    _completion.TrySetResult();
+                    completion.TrySetResult();
                     return;
                 case ZlinkSendCompleteResult.TimedOut:
-                    _completion.TrySetException(new ZlinkSubmitException(
+                    completion.TrySetException(new ZlinkSubmitException(
                         SubmitResult.Backpressured,
                         (int)ErrorCode.ETimedOut));
                     return;
                 default:
                     if (terminalErrno == ECanceled
                         && _cancellationToken.IsCancellationRequested)
-                        _completion.TrySetCanceled(_cancellationToken);
+                        completion.TrySetCanceled(_cancellationToken);
                     else
-                        _completion.TrySetException(
+                        completion.TrySetException(
                             MapTerminal(terminalErrno));
                     return;
             }
+        }
+
+        private TaskCompletionSource GetOrCreateCompletion()
+        {
+            var completion = Volatile.Read(ref _completion);
+            if (completion != null)
+                return completion;
+
+            var created = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            return Interlocked.CompareExchange(ref _completion, created, null)
+                   ?? created;
         }
     }
 }

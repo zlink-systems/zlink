@@ -17,9 +17,11 @@ import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.runtime.nativeapi.MessagePartsBuffer;
+import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
+import systems.zlink.runtime.nativeapi.NativeRequestBridge;
 import systems.zlink.runtime.nativeapi.RoutedRequestSupport;
 import systems.zlink.runtime.nativeapi.RequestReplySupport;
 
@@ -71,18 +73,58 @@ final class CoreRequestSupport implements AutoCloseable {
         CompletableFuture<List<Message>> future = new CompletableFuture<>();
         requests.registerRoutedPending(requestId, future);
 
+        int timeoutMs = RequestReplySupport.toTimeoutInt(
+            RequestReplySupport.timeoutMillis(timeout));
+        if (sourceParts.size() == 2 && NativeRequestBridge.available()) {
+            int result;
+            int consumed = 0;
+            int resultErrno = 0;
+            try {
+                long outcome = NativeRequestBridge.submitTwo(dealer,
+                    socket.handle(), target,
+                    InternalAccess.messageNativeHandle(sourceParts.get(0)),
+                    InternalAccess.messageNativeHandle(sourceParts.get(1)),
+                    flags.value(), timeoutMs, requests.replyCallback(),
+                    requestId);
+                consumed = (int) (outcome >>> 32);
+                result = (int) outcome;
+                if (result != SubmitResult.OK.value()) {
+                    resultErrno = Native.errno();
+                }
+            } catch (RuntimeException | Error failure) {
+                requests.removeRoutedPending(requestId);
+                throw failure;
+            }
+            if (consumed > 0) {
+                InternalAccess.messageMarkTransferred(sourceParts.get(0));
+            }
+            if (consumed > 1) {
+                InternalAccess.messageMarkTransferred(sourceParts.get(1));
+            }
+            if (result != SubmitResult.OK.value()) {
+                requests.removeRoutedPending(requestId);
+                ZlinkSubmitException failure = new ZlinkSubmitException(
+                    submitResult(result), resultErrno);
+                if (throwAdmissionFailure) {
+                    throw failure;
+                }
+                future.completeExceptionally(failure);
+                return future;
+            }
+            return future;
+        }
+
         MessagePartsBuffer materializer = new MessagePartsBuffer();
         for (Message part : sourceParts) {
             materializer.add(part);
         }
-        int timeoutMs = RequestReplySupport.toTimeoutInt(
-            RequestReplySupport.timeoutMillis(timeout));
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment nativeParts = materializer.copyToNativeArray(arena);
-            MemorySegment nativeRid = target.asSlice(0,
-                NativeLayouts.ROUTING_ID_LAYOUT.byteSize());
+            MemorySegment nativeRid = dealer ? MemorySegment.NULL
+                : target.asSlice(0, NativeLayouts.ROUTING_ID_LAYOUT.byteSize());
             long stride = NativeLayouts.MESSAGE_LAYOUT.byteSize();
             int result;
+            int resultErrno = 0;
             try {
                 try {
                     result = SubmitResult.OK.value();
@@ -92,17 +134,26 @@ final class CoreRequestSupport implements AutoCloseable {
                         MemorySegment nativePart = nativeParts.asSlice(
                             index * stride, stride);
                         int rc = dealer
-                            ? Native.dealerRequestTransportPairPart(
-                                socket.handle(), target, nativePart,
-                                flags.value(),
-                                partFlag,
-                                partFlag == Native.PART_FINAL ? timeoutMs : 0,
-                                partFlag == Native.PART_FINAL
-                                    ? requests.replyCallback()
-                                    : MemorySegment.NULL,
-                                partFlag == Native.PART_FINAL
-                                    ? RoutedRequestSupport.userData(requestId)
-                                    : MemorySegment.NULL)
+                            ? target.equals(MemorySegment.NULL)
+                                ? Native.dealerRequestPart(socket.handle(),
+                                    nativePart, flags.value(), partFlag,
+                                    partFlag == Native.PART_FINAL ? timeoutMs : 0,
+                                    partFlag == Native.PART_FINAL
+                                        ? requests.replyCallback()
+                                        : MemorySegment.NULL,
+                                    partFlag == Native.PART_FINAL
+                                        ? RoutedRequestSupport.userData(requestId)
+                                        : MemorySegment.NULL)
+                                : Native.dealerRequestTransportPairPart(
+                                    socket.handle(), target, nativePart,
+                                    flags.value(), partFlag,
+                                    partFlag == Native.PART_FINAL ? timeoutMs : 0,
+                                    partFlag == Native.PART_FINAL
+                                        ? requests.replyCallback()
+                                        : MemorySegment.NULL,
+                                    partFlag == Native.PART_FINAL
+                                        ? RoutedRequestSupport.userData(requestId)
+                                        : MemorySegment.NULL)
                             : Native.routerRequestTransportPairPart(
                                 socket.handle(), nativeRid,
                                 target.get(ValueLayout.JAVA_LONG,
@@ -119,6 +170,7 @@ final class CoreRequestSupport implements AutoCloseable {
                                     : MemorySegment.NULL);
                         if (rc != SubmitResult.OK.value()) {
                             result = rc;
+                            resultErrno = Native.errno();
                             break;
                         }
                     }
@@ -136,10 +188,9 @@ final class CoreRequestSupport implements AutoCloseable {
                 throw failure;
             }
             if (result != SubmitResult.OK.value()) {
-                int errno = Native.errno();
                 requests.removeRoutedPending(requestId);
                 ZlinkSubmitException failure = new ZlinkSubmitException(
-                    submitResult(result), errno);
+                    submitResult(result), resultErrno);
                 if (throwAdmissionFailure) {
                     throw failure;
                 }

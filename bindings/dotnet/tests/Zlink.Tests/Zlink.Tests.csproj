@@ -17,4 +17,12 @@
   <ItemGroup>
     <ProjectReference Include="../../src/Zlink/Zlink.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- Compile the exact perf coordinator primitive into the test assembly so
+         its wake-up races can be tested without exposing a benchmark-internal
+         type through the binding's public surface. -->
+    <Compile Include="../../perf/multi/Zlink.BindingBench.Multi/src/PerfMultiAdmissionSignal.cs"
+             Link="Perf/PerfMultiAdmissionSignal.cs" />
+  </ItemGroup>
 </Project>

@@ -9,18 +9,13 @@ import type {
 
 export interface NativeSendCompletionEvent {
   token: bigint;
-  opId: bigint;
   result: number;
   terminalErrno: number;
-  peerRid: Buffer;
-  transportPairId: bigint;
-  transportPairGeneration: bigint;
 }
 
 export interface NativeSendSubmitResult {
   result: number;
   nativeErrno: number;
-  opId: bigint;
   inlineCompletion?: NativeSendCompletionEvent;
 }
 

@@ -94,9 +94,27 @@ function forbiddenPackageExports(exportsValue) {
     strict_1.default.ok(socketBinding.includes('socketSendCompletionHandler'));
     strict_1.default.ok(socketBinding.includes('socketSendAsync'));
     strict_1.default.ok(sendCompletion.includes('new Map<bigint, PendingSend>()'));
+    strict_1.default.ok(nativeBridge.includes('struct send_completion_js_payload_t'));
+    strict_1.default.ok(nativeBridge.includes('std::unique_ptr<send_completion_js_payload_t> payload'));
+    strict_1.default.ok(nativeBridge.includes('tsfn, payload.get (), napi_tsfn_nonblocking'));
+    strict_1.default.ok(nativeBridge.includes('payload->completion = operation->completion'));
+    strict_1.default.ok(nativeBridge.includes('send_completion_delivery_accounting_t accounting'));
+    strict_1.default.ok(nativeBridge.indexOf('send_completion_delivery_accounting_t accounting')
+        < nativeBridge.indexOf('if (!env || !js_callback || !payload)'));
     strict_1.default.equal(nativeBridge.includes('send_ready'), false);
     strict_1.default.equal(nativeBridge.includes('routed_send_ready'), false);
     strict_1.default.equal(socketBinding.includes('sendReady'), false);
+});
+(0, node_test_1.default)('native multipart replies use inline staging without changing rejection ownership', () => {
+    const nativeBridge = node_fs_1.default.readFileSync(node_path_1.default.resolve(__dirname, '../../native/src/addon_core.cc'), 'utf8');
+    for (const symbol of ['napi_value dealer_reply', 'napi_value router_reply']) {
+        const start = nativeBridge.indexOf(symbol);
+        strict_1.default.ok(start >= 0, symbol);
+        const body = nativeBridge.slice(start, nativeBridge.indexOf('\nnapi_value ', start + symbol.length));
+        strict_1.default.ok(body.includes('small_msg_storage_t parts'), `${symbol} inline storage`);
+        strict_1.default.ok(body.includes('parts.release ()'), `${symbol} must not double-close rejected slots`);
+        strict_1.default.equal(body.includes('std::vector<zlink_msg_t> parts'), false, `${symbol} must not allocate a vector for multipart replies`);
+    }
 });
 (0, node_test_1.default)('bindings samples stay on the Core 0.13.1 raw socket boundary', () => {
     const sampleRoots = [

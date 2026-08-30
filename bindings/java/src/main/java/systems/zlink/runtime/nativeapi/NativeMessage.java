@@ -17,6 +17,10 @@ public final class NativeMessage {
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
     private static final MethodHandle MH_MSG_INIT_SIZE = NativeSymbols.downcallCritical("zlink_msg_init_size",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
+    private static final MethodHandle MH_MSG_INIT_SIZE_DATA_ADDRESS =
+        NativeSymbols.downcallOptional("zlink_java_msg_init_size_data_addr",
+            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.ADDRESS,
+                ValueLayout.JAVA_LONG));
     private static final MethodHandle MH_MSG_CLOSE = NativeSymbols.downcallCritical("zlink_msg_close",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
     private static final MethodHandle MH_MSG_MOVE = NativeSymbols.downcallCritical("zlink_msg_move",
@@ -56,6 +60,20 @@ public final class NativeMessage {
             return (int) MH_MSG_INIT_SIZE.invokeExact(msg, (long) size);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_msg_init_size failed", t);
+        }
+    }
+
+    public static long messageInitSizeDataAddress(MemorySegment msg,
+                                                  int size) {
+        if (MH_MSG_INIT_SIZE_DATA_ADDRESS == null) {
+            return -1L;
+        }
+        try {
+            return (long) MH_MSG_INIT_SIZE_DATA_ADDRESS.invokeExact(msg,
+                (long) size);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_java_msg_init_size_data_addr failed", t);
         }
     }
 

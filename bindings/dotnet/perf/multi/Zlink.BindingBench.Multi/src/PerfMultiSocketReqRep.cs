@@ -86,12 +86,12 @@ internal static class PerfMultiSocketReqRep
         {
             if (!TryReceiveBlocking(server, received))
                 continue;
-            if (!ReplyReceived(received, stop.Token))
+            if (!ReplyReceived(received))
                 return 2;
             while (!stop.IsCancellationRequested
                    && TryReceiveNoWait(server, received))
             {
-                if (!ReplyReceived(received, stop.Token))
+                if (!ReplyReceived(received))
                     return 2;
             }
         }
@@ -388,8 +388,7 @@ internal static class PerfMultiSocketReqRep
         return (Volatile.Read(ref completed), samples, sampleSeen, sampleSum);
     }
 
-    private static bool ReplyReceived(Received received,
-        CancellationToken stopToken)
+    private static bool ReplyReceived(Received received)
     {
         if (!PerfSocketIo.TryMeasurementPayload(received.Parts,
                 out Message payloadPart))
@@ -418,8 +417,20 @@ internal static class PerfMultiSocketReqRep
                 received.Reply().Message(reply).Submit();
             }
         }
-        catch (ZlinkSubmitException)
+        catch (ZlinkSubmitException ex) when (IsStaleRoute(ex))
         {
+            // The client owns benchmark completion and may close immediately
+            // after printing its result. A request already received by this
+            // server can therefore lose its route during graceful teardown.
+            return true;
+        }
+        catch (ZlinkSubmitException ex)
+        {
+            if (s_debugEnabled)
+            {
+                Console.Error.WriteLine(
+                    $"socket_reqrep_server: reply failed result={ex.Result} errno={ex.NativeErrno}: {ex.Message}");
+            }
             return false;
         }
         if (s_debugEnabled)
@@ -427,7 +438,13 @@ internal static class PerfMultiSocketReqRep
             DebugLogLimited(ref s_debugServerReplyLogs,
                 $"socket_reqrep_server: replied size={payloadSize} seq={requestSeq}");
         }
-        return !stopToken.IsCancellationRequested;
+        return true;
+    }
+
+    private static bool IsStaleRoute(ZlinkSubmitException error)
+    {
+        return error.Result == ZlinkSubmitException.ErrorCode.NotConnected
+            || error.Result == ZlinkSubmitException.ErrorCode.NotFound;
     }
 
     private static bool TryReceiveBlocking(IRouterSocket receiver, Received result)

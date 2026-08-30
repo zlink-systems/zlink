@@ -56,6 +56,7 @@ from .message_materializer import Message
 from .native_parts import _materialize_native_parts
 
 _ETERM = 156384765
+_SEND_PENDING = object()
 
 
 def _finish_future(future, value, is_error):
@@ -105,13 +106,20 @@ class _SendOperation:
     anchor never closes native parts itself.
     """
 
-    __slots__ = ("token", "loop", "future", "op_id")
+    __slots__ = ("token", "loop", "future", "op_id", "completion")
 
     def __init__(self, token, loop):
         self.token = token
         self.loop = loop
-        self.future = loop.create_future()
+        # Most sends are admitted inline (`op_id == 0`) and never receive a
+        # completion callback. Allocate an asyncio Future only after Core
+        # returns a non-zero op id and the callback is still pending.
+        self.future = None
         self.op_id = None
+        # Core may invoke the callback before `zlink_send_async` returns its
+        # non-zero op id. The callback records the terminal value here for
+        # the event-loop thread to consume directly.
+        self.completion = _SEND_PENDING
 
 
 class SendCompletionOwner:
@@ -147,7 +155,15 @@ class SendCompletionOwner:
         with self._lock:
             pending = list(self._pending.values())
             self._pending.clear()
-        return pending
+            ready = []
+            for op in pending:
+                op.completion = SubmitError(
+                    SubmitResult.TERMINATED, errno.ECANCELED
+                )
+                if op.future is not None:
+                    ready.append((op.loop, op.future, op.completion))
+        for loop, future, error in ready:
+            _schedule_future(loop, future, error, is_error=True)
 
     def _on_complete(self, _subject, event_ptr, _userdata):
         if not event_ptr:
@@ -156,18 +172,29 @@ class SendCompletionOwner:
         token = ctypes.cast(event.userdata, ctypes.c_void_p).value
         with self._lock:
             op = self._pending.pop(token, None) if token is not None else None
-        if op is None:
-            return
-        result = int(event.result)
-        if result == ZLINK_SEND_ADMITTED:
-            _schedule_future(op.loop, op.future, None)
-            return
-        if result == ZLINK_SEND_TIMED_OUT:
-            error = SubmitError(SubmitResult.BACKPRESSURED, errno.ETIMEDOUT)
-        else:
-            native_errno = int(event.terminal_errno)
-            error = SubmitError(_terminal_submit_result(native_errno), native_errno)
-        _schedule_future(op.loop, op.future, error, is_error=True)
+            if op is None:
+                return
+            result = int(event.result)
+            if result == ZLINK_SEND_ADMITTED:
+                op.completion = None
+            elif result == ZLINK_SEND_TIMED_OUT:
+                op.completion = SubmitError(
+                    SubmitResult.BACKPRESSURED, errno.ETIMEDOUT
+                )
+            else:
+                native_errno = int(event.terminal_errno)
+                op.completion = SubmitError(
+                    _terminal_submit_result(native_errno), native_errno
+                )
+            future = op.future
+            completion = op.completion
+        if future is not None:
+            _schedule_future(
+                op.loop,
+                future,
+                completion,
+                is_error=completion is not None,
+            )
 
     async def submit(self, payload, *, target=None, timeout_ms=0):
         loop = asyncio.get_running_loop()
@@ -213,9 +240,19 @@ class SendCompletionOwner:
             return None
 
         with self._lock:
-            pending_op = self._pending.get(token)
-            if pending_op is not None:
-                pending_op.op_id = op_id_out.value
+            op.op_id = op_id_out.value
+            completion = op.completion
+            if completion is _SEND_PENDING:
+                op.future = loop.create_future()
+
+        # If Core completed on another thread before `zlink_send_async`
+        # returned, the callback recorded its result because no Future
+        # existed yet. Consume it directly; only a still-pending operation
+        # needs an awaitable allocation.
+        if completion is not _SEND_PENDING:
+            if completion is not None:
+                raise completion
+            return None
 
         try:
             await op.future
@@ -510,20 +547,10 @@ class RoutedSendOwner:
         with self._state_lock:
             completions = list(self._request_completions.values())
             self._request_completions.clear()
-        pending_sends = self._send_completion.drain_pending()
+        self._send_completion.drain_pending()
         for completion in completions:
             completion.resolve(
                 error=RequestError(RequestResult.TERMINATED, errno.ECANCELED)
-            )
-        # Each pending send already transferred message ownership to Core at
-        # submit time (see `_SendOperation`); only the awaitable needs a
-        # terminal result here.
-        for op in pending_sends:
-            _schedule_future(
-                op.loop,
-                op.future,
-                SubmitError(SubmitResult.TERMINATED, errno.ECANCELED),
-                is_error=True,
             )
 
 

@@ -6,7 +6,7 @@ const zlink = require('@zlink-systems/zlink');
 const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const { isStopTokenParts } = require('../perf_stop_token');
-const { POLLIN, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, measurementPayload, waitPollerOne } = require('./perf_multi_runtime');
+const { POLLIN, appendMeasurement, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, measurementPayload, waitPollerOne } = require('./perf_multi_runtime');
 const { resolveRoutedPattern, runRoutedSendSendServer } = require('./perf_multi_routed_sendsend');
 const PATTERN = 'MULTI_ROUTER_ROUTER_REQREP';
 function receiveAndReply(router, received) {
@@ -29,10 +29,9 @@ function receiveAndReply(router, received) {
             if (received.requestSeq === null) {
                 throw new Error('request/reply server received payload without request sequence');
             }
-            let reply = received.reply().message(Buffer.from(payload.data()));
-            if (process.env.PERF_PART_COUNT !== '1')
-                reply = reply.message(Buffer.alloc(0));
-            reply.submit();
+      // A successful public reply consumes this received native Message.
+      // Forward it directly rather than materializing a Buffer copy first.
+      appendMeasurement(received.reply(), payload).submit();
         }
         finally {
             received.close();

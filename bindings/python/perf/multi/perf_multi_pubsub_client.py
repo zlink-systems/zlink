@@ -13,6 +13,7 @@ from perf_multi_common import (
     configure_multi_tls_client,
     LatencySampler,
     parse_client_args,
+    PERF_MULTI_AUX_POLL_WAIT_MS,
     perf_client_context,
     resolve_multi_monitor_hwm_bytes,
     print_result_lines,
@@ -75,7 +76,11 @@ def main(argv=None):
                     if now >= active_deadline:
                         break
                     remaining_ms = max(1, int((active_deadline - now) * 1000))
-                    ready_count = safe_poll(poller, poll_events, min(100, remaining_ms))
+                    ready_count = safe_poll(
+                        poller,
+                        poll_events,
+                        min(PERF_MULTI_AUX_POLL_WAIT_MS, remaining_ms),
+                    )
                     if not ready_count:
                         continue
                     for offset in range(ready_count):

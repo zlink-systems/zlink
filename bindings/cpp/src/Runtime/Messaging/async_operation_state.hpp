@@ -465,6 +465,27 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
             _cancel = std::move (cancel_);
     }
 
+    // A Core callback receives only a raw userdata pointer. Keep this state
+    // alive until Core invokes the terminal callback or submission is
+    // rejected, without allocating a second ownership bridge.
+    void retain_for_core (std::shared_ptr<async_operation_state_t> self_)
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        if (!_terminal)
+            _core_lifetime = std::move (self_);
+    }
+
+    void release_from_core () noexcept
+    {
+        // Keep the self-reference alive through the unlock. It may be the
+        // final reference when the public result was abandoned concurrently.
+        std::shared_ptr<async_operation_state_t> keep_alive;
+        {
+            std::lock_guard<std::mutex> lock (_mutex);
+            keep_alive = std::move (_core_lifetime);
+        }
+    }
+
     bool complete () noexcept { return finish (nullptr); }
 
     bool fail (std::exception_ptr failure_) noexcept
@@ -492,34 +513,39 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
     }
 
     // Immediate admission completes before a consumer is registered and never
-    // reaches this function. A suspended void operation was Core-pending, so
-    // its callback must hand the continuation outside Core's completion scope
-    // before the coroutine can submit its next operation.
+    // reaches this function. A promise scheduler is itself the handoff out of
+    // Core's completion scope: invoke it before the callback returns, but leave
+    // execution of the continuation to that scheduler. Besides avoiding an
+    // unnecessary dispatcher hop, this gives poller-owned completion dispatch
+    // a strict callback -> scheduler-enqueue -> poller-return ordering. Without
+    // that ordering an application can consume POLLCOMPLETION, observe its
+    // ready queue as empty, and block in the next poll while the global
+    // dispatcher is still preparing the enqueue.
     static void resume (std::shared_ptr<async_resume_slot_t> continuation_,
                         async_continuation_scheduler_t scheduler_) noexcept
     {
         if (!continuation_)
             return;
         auto work = [continuation_] { continuation_->resume (); };
-        dispatch_async_continuation (
-          [work = std::move (work), scheduler = std::move (scheduler_)] () mutable {
-              if (!scheduler) {
-                  work ();
-                  return;
-              }
-              try {
-                  scheduler (work);
-              }
-              catch (...) {
-                  work ();
-              }
-          });
+        if (scheduler_) {
+            try {
+                scheduler_ (work);
+                return;
+            }
+            catch (...) {
+                // Scheduler hooks must throw before accepting work. Preserve
+                // the no-inline-resume safety contract even for a rejecting
+                // foreign scheduler by falling back to the shared dispatcher.
+            }
+        }
+        dispatch_async_continuation (std::move (work));
     }
 
     mutable std::mutex _mutex;
     std::exception_ptr _failure;
     cancel_fn_t _cancel;
     std::shared_ptr<async_resume_slot_t> _continuation;
+    std::shared_ptr<async_operation_state_t> _core_lifetime;
     async_continuation_scheduler_t _scheduler;
     bool _terminal = false;
     bool _consumed = false;

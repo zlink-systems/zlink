@@ -58,7 +58,7 @@ NORMALIZE_TIMESTAMPS_SH="${ROOT_DIR}/core/tools/normalize_build_timestamps.sh"
 MAKE_BIN="$(command -v gmake || command -v make)"
 PERF_COMPARISON_SCRIPT="${ROOT_DIR}/bindings/cpp/perf/multi/run_comparison.py"
 PATTERNS="DEALER_DEALER,DEALER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,ROUTER_ROUTER_SENDSEND,ROUTER_ROUTER_REQREP,PUBSUB,STREAM"
-TRANSPORTS="tcp,tls,ws,wss,ipc"
+TRANSPORTS="tcp,tls,ws,wss"
 DEFAULT_MULTI_MSG_SIZES="64,256,1024,4096,65536,131072"
 PART_COUNT="${PERF_PART_COUNT:-2}"
 IFS=',' read -r -a PATTERN_LIST <<< "${PATTERNS}"
@@ -230,7 +230,7 @@ Default PATTERN is:
   DEALER_DEALER,DEALER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,ROUTER_ROUTER_SENDSEND,ROUTER_ROUTER_REQREP,PUBSUB,STREAM
 This script invokes the shared comparison runner directly.
 By default, multi-bench uses ready -> active with a 5s duration window.
-By default, multi-bench uses transports: tcp,tls,ws,wss,ipc (can be overridden with --transports).
+By default, multi-bench uses transports: tcp,tls,ws,wss (can be overridden with --transports).
 Policy contract:
   - benchmark binaries execute one pattern/transport/size/run case only
   - this runner owns pattern/transport/size iteration, cooldown, aggregation,
@@ -240,7 +240,8 @@ Options:
   --pattern NAME         Benchmark pattern (default: all patterns above).
                          Alias: streams => STREAM
   --help                 Show this help.
-  --reuse-build          Reuse configuration and incrementally rebuild selected targets.
+  --reuse-build          Reuse existing configuration and benchmark binaries as-is.
+                         Skip both configure and build; fail if an artifact is missing.
   --clean-build          Remove build directory and do a clean build.
   --results-dir PATH     Override results root directory.
   --results-tag NAME     Optional tag appended to the results filename.
@@ -260,7 +261,7 @@ Options:
                          override it with PERF_MULTI_STREAM_MSG_SIZES.
   --transports LIST      Comma-separated transports.
   --duration N           Optional override for multi duration seconds (default 5).
-  --clients N            Override number of client sockets per pattern (default: 100, stream=10000).
+  --clients N            Override number of client sockets per pattern (default: 100).
   --hwm N                Debug-only override PERF_MULTI_HWM.
                          Requires PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES=1.
   --send-hwm N           Debug-only override PERF_MULTI_SNDHWM (fallback: --hwm).
@@ -312,6 +313,107 @@ Notes:
   - by default the current workspace Core (core/build) is used; pass --core-version
     to fetch and use a released Core runtime instead.
 USAGE
+}
+
+required_multi_reuse_artifacts() {
+  local selected_patterns=("${PATTERN_LIST[@]}")
+  if [[ "${#EXPLICIT_PATTERNS[@]}" -gt 0 ]]; then
+    selected_patterns=("${EXPLICIT_PATTERNS[@]}")
+  fi
+
+  local pattern=""
+  for pattern in "${selected_patterns[@]}"; do
+    pattern="$(printf '%s' "${pattern}" | tr '[:lower:]' '[:upper:]')"
+    pattern="${pattern#MULTI_}"
+    case "${pattern}" in
+      DEALER_DEALER)
+        printf '%s|%s\n' \
+          "cpp_comp_src_dealer_dealer_server" \
+          "${CPP_PERF_DIR}/multi/build/cpp_comp_src_dealer_dealer_server"
+        printf '%s|%s\n' \
+          "cpp_comp_src_dealer_dealer_client" \
+          "${CPP_PERF_DIR}/multi/build/cpp_comp_src_dealer_dealer_client"
+        ;;
+      DEALER_ROUTER|DEALER_ROUTER_SENDSEND)
+        printf '%s|%s\n' \
+          "cpp_comp_src_dealer_router_server" \
+          "${CPP_PERF_DIR}/multi/build/cpp_comp_src_dealer_router_server"
+        printf '%s|%s\n' \
+          "cpp_comp_src_dealer_router_client" \
+          "${CPP_PERF_DIR}/multi/build/cpp_comp_src_dealer_router_client"
+        ;;
+      DEALER_ROUTER_REQREP)
+        printf '%s|%s\n' \
+          "cpp_comp_src_dealer_router_reqrep_server" \
+          "${CPP_PERF_DIR}/multi/build/cpp_comp_src_dealer_router_reqrep_server"
+        printf '%s|%s\n' \
+          "cpp_comp_src_dealer_router_reqrep_client" \
+          "${CPP_PERF_DIR}/multi/build/cpp_comp_src_dealer_router_reqrep_client"
+        ;;
+      ROUTER_ROUTER|ROUTER_ROUTER_SENDSEND)
+        printf '%s|%s\n' \
+          "cpp_comp_src_router_router_server" \
+          "${CPP_PERF_DIR}/multi/build/cpp_comp_src_router_router_server"
+        printf '%s|%s\n' \
+          "cpp_comp_src_router_router_client" \
+          "${CPP_PERF_DIR}/multi/build/cpp_comp_src_router_router_client"
+        ;;
+      ROUTER_ROUTER_REQREP)
+        printf '%s|%s\n' \
+          "cpp_comp_src_router_router_reqrep_server" \
+          "${CPP_PERF_DIR}/multi/build/cpp_comp_src_router_router_reqrep_server"
+        printf '%s|%s\n' \
+          "cpp_comp_src_router_router_reqrep_client" \
+          "${CPP_PERF_DIR}/multi/build/cpp_comp_src_router_router_reqrep_client"
+        ;;
+      PUBSUB)
+        printf '%s|%s\n' \
+          "cpp_comp_src_pubsub_server" \
+          "${CPP_PERF_DIR}/multi/build/cpp_comp_src_pubsub_server"
+        printf '%s|%s\n' \
+          "cpp_comp_src_pubsub_client" \
+          "${CPP_PERF_DIR}/multi/build/cpp_comp_src_pubsub_client"
+        ;;
+      STREAM|STREAMS)
+        printf '%s|%s\n' \
+          "cpp_comp_src_stream_server" \
+          "${CPP_PERF_DIR}/multi/build/cpp_comp_src_stream_server"
+        printf '%s|%s\n' \
+          "perf_stream_client" \
+          "${ROOT_DIR}/bindings/c/build/perf/perf_stream_client"
+        ;;
+    esac
+  done
+}
+
+ensure_multi_reuse_artifacts() {
+  local cache_path="${OFFICIAL_BUILD_DIR}/CMakeCache.txt"
+  if [[ ! -f "${cache_path}" ]]; then
+    echo "Error: --reuse-build requires an existing configured build: ${cache_path}" >&2
+    return 1
+  fi
+
+  local artifact_name=""
+  local artifact_path=""
+  local candidate_path=""
+  local missing=0
+  while IFS='|' read -r artifact_name artifact_path; do
+    [[ -n "${artifact_name}" && -n "${artifact_path}" ]] || continue
+    candidate_path="${artifact_path}"
+    if [[ "${IS_WINDOWS}" -eq 1 && -f "${artifact_path}.exe" ]]; then
+      candidate_path="${artifact_path}.exe"
+    fi
+    if [[ ! -x "${candidate_path}" ]]; then
+      echo "Error: --reuse-build required artifact is missing or not executable: ${artifact_name}" >&2
+      echo "  expected: ${candidate_path}" >&2
+      missing=1
+    fi
+  done < <(required_multi_reuse_artifacts)
+
+  if [[ "${missing}" -ne 0 ]]; then
+    echo "Re-run without --reuse-build to configure and build the required artifacts." >&2
+    return 1
+  fi
 }
 
 resolve_pattern_connect_concurrency() {
@@ -864,10 +966,7 @@ fi
 
 case "${BUILD_MODE}" in
   reuse)
-    if [[ ! -d "${OFFICIAL_BUILD_DIR}" ]]; then
-      echo "Error: --reuse-build requires an existing build directory: ${OFFICIAL_BUILD_DIR}" >&2
-      exit 1
-    fi
+    ensure_multi_reuse_artifacts
     echo "Reusing build directory: ${OFFICIAL_BUILD_DIR}"
     ;;
   clean)
@@ -960,32 +1059,6 @@ if [[ "${BUILD_MODE}" != "reuse" ]]; then
   fi
 fi
 
-# Reuse keeps the configured build tree, but it must not reuse binaries that
-# predate binding or perf source changes. Incremental CMake builds only stale
-# targets and never rebuilds the released Core runtime.
-if [[ "${BUILD_MODE}" == "reuse" ]]; then
-  CPP_MULTI_TARGETS=(
-    cpp_comp_src_dealer_dealer_server
-    cpp_comp_src_dealer_dealer_client
-    cpp_comp_src_dealer_router_server
-    cpp_comp_src_dealer_router_client
-    cpp_comp_src_dealer_router_reqrep_server
-    cpp_comp_src_dealer_router_reqrep_client
-    cpp_comp_src_router_router_server
-    cpp_comp_src_router_router_client
-    cpp_comp_src_router_router_reqrep_server
-    cpp_comp_src_router_router_reqrep_client
-    cpp_comp_src_pubsub_server
-    cpp_comp_src_pubsub_client
-    cpp_comp_src_stream_server
-  )
-  if [[ "${IS_WINDOWS}" -eq 1 ]]; then
-    cmake --build "${OFFICIAL_BUILD_DIR}" --config Release --target "${CPP_MULTI_TARGETS[@]}"
-  else
-    bash "${NORMALIZE_TIMESTAMPS_SH}" "${OFFICIAL_BUILD_DIR}"
-    cmake --build "${OFFICIAL_BUILD_DIR}" --target "${CPP_MULTI_TARGETS[@]}"
-  fi
-fi
 ensure_cpp_core_build_runtime_enabled "${OFFICIAL_BUILD_DIR}"
 
 prepare_cpp_runtime_dir() {

@@ -20,6 +20,7 @@ import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.runtime.nativeapi.MessagePartsBuffer;
 import java.time.Duration;
+import java.util.AbstractList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletionException;
@@ -337,14 +338,17 @@ public final class MessageOperations {
         }
     }
 
-    private static final class RequestBuilder
+    private static final class RequestBuilder extends AbstractList<Message>
       implements RequestOperation, RequestSubmitOperation {
+        private static final Duration DEFAULT_TIMEOUT =
+            Duration.ofMillis(DEFAULT_TIMEOUT_MS);
         private final RequestAsyncInvoker asyncInvoker;
         private final RequestSyncInvoker syncInvoker;
         private Message singlePart;
+        private Message secondPart;
         private MessagePartsBuffer parts;
         private int partCount;
-        private Duration timeout = Duration.ofMillis(DEFAULT_TIMEOUT_MS);
+        private Duration timeout = DEFAULT_TIMEOUT;
         private boolean submitted;
 
         private RequestBuilder(RequestAsyncInvoker asyncInvoker,
@@ -413,11 +417,13 @@ public final class MessageOperations {
             Objects.requireNonNull(part, "part");
             if (partCount == 0) {
                 singlePart = part;
+            } else if (partCount == 1) {
+                secondPart = part;
             } else {
                 if (parts == null) {
                     parts = new MessagePartsBuffer();
                     parts.add(singlePart);
-                    singlePart = null;
+                    parts.add(secondPart);
                 }
                 parts.add(part);
             }
@@ -432,7 +438,26 @@ public final class MessageOperations {
         }
 
         private List<Message> requestParts() {
-            return partCount == 1 ? List.of(singlePart) : parts.asList();
+            return parts == null ? this : parts.asList();
+        }
+
+        @Override
+        public Message get(int index) {
+            if (parts != null) {
+                return parts.get(index);
+            }
+            if (index == 0 && partCount > 0) {
+                return singlePart;
+            }
+            if (index == 1 && partCount > 1) {
+                return secondPart;
+            }
+            throw new IndexOutOfBoundsException(index);
+        }
+
+        @Override
+        public int size() {
+            return partCount;
         }
 
         private void ensureNotSubmitted() {

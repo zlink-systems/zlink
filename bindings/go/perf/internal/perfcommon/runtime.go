@@ -134,7 +134,7 @@ func SingleReadyTimeout() time.Duration {
 }
 
 func MultiReadyTimeout() time.Duration {
-	return durationFromEnv("PERF_MULTI_CONNECT_READY_TIMEOUT_MS", durationFromEnv("PERF_CONNECT_READY_TIMEOUT_MS", time.Second))
+	return durationFromEnv("PERF_MULTI_CONNECT_READY_TIMEOUT_MS", durationFromEnv("PERF_CONNECT_READY_TIMEOUT_MS", 10*time.Second))
 }
 
 func NewSocketPoller(socket zlink.SocketTarget, events zlink.PollEventFlag) *zlink.Poller {

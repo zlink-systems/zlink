@@ -28,6 +28,201 @@ namespace
 static const size_t k_stream_slot_count = 8;
 static const size_t k_socket_monitor_handler_slot_count = 8;
 static const int32_t k_stream_dispatch_len32be = 1;
+static const size_t k_inline_message_part_count = 8;
+
+// Most public records contain one or two parts. Keep those native staging
+// messages in the N-API call frame and allocate only for an uncommon larger
+// multipart record. This storage never closes messages implicitly: callers
+// must either close() the still-owned staging records or release() them after
+// Core has consumed every slot.
+class small_msg_storage_t
+{
+  public:
+    small_msg_storage_t () : heap_size_ (0), heap_capacity_ (0), stack_size_ (0) {}
+
+    bool prepare (napi_env env, size_t count)
+    {
+        release ();
+        if (count <= k_inline_message_part_count) {
+            stack_size_ = count;
+            return true;
+        }
+        if (count > std::numeric_limits<size_t>::max () / sizeof (zlink_msg_t)) {
+            napi_throw_error (env, NULL, "message parts allocation failed");
+            return false;
+        }
+        heap_.reset (new (std::nothrow) zlink_msg_t[count]);
+        if (!heap_) {
+            napi_throw_error (env, NULL, "message parts allocation failed");
+            return false;
+        }
+        heap_size_ = count;
+        heap_capacity_ = count;
+        return true;
+    }
+
+    bool append_move (zlink_msg_t *part)
+    {
+        if (!part)
+            return false;
+        if (!heap_ && stack_size_ < k_inline_message_part_count) {
+            zlink_msg_t *slot = &stack_[stack_size_];
+            if (zlink_msg_init (slot) != 0)
+                return false;
+            if (zlink_msg_move (slot, part) != 0) {
+                zlink_msg_close (slot);
+                return false;
+            }
+            ++stack_size_;
+            return true;
+        }
+
+        if (!heap_) {
+            const size_t capacity = k_inline_message_part_count * 2;
+            std::unique_ptr<zlink_msg_t[]> candidate (
+              new (std::nothrow) zlink_msg_t[capacity]);
+            if (!candidate)
+                return false;
+            for (size_t index = 0; index < stack_size_; ++index) {
+                if (zlink_msg_init (&candidate[index]) != 0) {
+                    for (size_t built = 0; built < index; ++built)
+                        zlink_msg_close (&candidate[built]);
+                    for (size_t remaining = index; remaining < stack_size_; ++remaining)
+                        zlink_msg_close (&stack_[remaining]);
+                    stack_size_ = 0;
+                    return false;
+                }
+                if (zlink_msg_move (&candidate[index], &stack_[index]) != 0) {
+                    for (size_t built = 0; built <= index; ++built)
+                        zlink_msg_close (&candidate[built]);
+                    for (size_t remaining = index; remaining < stack_size_; ++remaining)
+                        zlink_msg_close (&stack_[remaining]);
+                    stack_size_ = 0;
+                    return false;
+                }
+            }
+            heap_size_ = stack_size_;
+            heap_capacity_ = capacity;
+            stack_size_ = 0;
+            heap_ = std::move (candidate);
+        }
+
+        if (heap_size_ == heap_capacity_) {
+            if (heap_capacity_ > std::numeric_limits<size_t>::max () / 2
+                || heap_capacity_ * 2
+                     > std::numeric_limits<size_t>::max () / sizeof (zlink_msg_t))
+                return false;
+            const size_t capacity = heap_capacity_ * 2;
+            std::unique_ptr<zlink_msg_t[]> candidate (
+              new (std::nothrow) zlink_msg_t[capacity]);
+            if (!candidate)
+                return false;
+            for (size_t index = 0; index < heap_size_; ++index) {
+                if (zlink_msg_init (&candidate[index]) != 0) {
+                    for (size_t built = 0; built < index; ++built)
+                        zlink_msg_close (&candidate[built]);
+                    for (size_t remaining = index; remaining < heap_size_; ++remaining)
+                        zlink_msg_close (&heap_[remaining]);
+                    heap_.reset ();
+                    heap_size_ = 0;
+                    heap_capacity_ = 0;
+                    return false;
+                }
+                if (zlink_msg_move (&candidate[index], &heap_[index]) != 0) {
+                    for (size_t built = 0; built <= index; ++built)
+                        zlink_msg_close (&candidate[built]);
+                    for (size_t remaining = index; remaining < heap_size_; ++remaining)
+                        zlink_msg_close (&heap_[remaining]);
+                    heap_.reset ();
+                    heap_size_ = 0;
+                    heap_capacity_ = 0;
+                    return false;
+                }
+            }
+            heap_ = std::move (candidate);
+            heap_capacity_ = capacity;
+        }
+
+        if (zlink_msg_init (&heap_[heap_size_]) != 0)
+            return false;
+        if (zlink_msg_move (&heap_[heap_size_], part) != 0) {
+            zlink_msg_close (&heap_[heap_size_]);
+            return false;
+        }
+        ++heap_size_;
+        return true;
+    }
+
+    zlink_msg_t *data () { return heap_ ? heap_.get () : stack_; }
+    const zlink_msg_t *data () const { return heap_ ? heap_.get () : stack_; }
+    size_t size () const { return heap_ ? heap_size_ : stack_size_; }
+    zlink_msg_t &operator[] (size_t index) { return data ()[index]; }
+
+    void close ()
+    {
+        if (size () > 0)
+            zlink_multipart_close (data (), size ());
+        release ();
+    }
+
+    void release ()
+    {
+        heap_.reset ();
+        heap_size_ = 0;
+        heap_capacity_ = 0;
+        stack_size_ = 0;
+    }
+
+  private:
+    zlink_msg_t stack_[k_inline_message_part_count];
+    std::unique_ptr<zlink_msg_t[]> heap_;
+    size_t heap_size_;
+    size_t heap_capacity_;
+    size_t stack_size_;
+};
+
+inline int collect_recv_parts (void *socket,
+                               zlink_msg_t *first_part,
+                               zlink_part_flag_t has_more,
+                               small_msg_storage_t *parts)
+{
+    if (!parts) {
+        if (first_part)
+            zlink_msg_close (first_part);
+        errno = EFAULT;
+        return ZLINK_RECV_INTERNAL_ERROR;
+    }
+    if (!parts->append_move (first_part)) {
+        if (first_part)
+            zlink_msg_close (first_part);
+        errno = ENOMEM;
+        return ZLINK_RECV_INTERNAL_ERROR;
+    }
+    while (has_more) {
+        const zlink_routing_id_t *source_rid = NULL;
+        zlink_msg_t next_part;
+        if (zlink_msg_init (&next_part) != 0) {
+            parts->close ();
+            return ZLINK_RECV_INTERNAL_ERROR;
+        }
+        zlink_part_flag_t more = ZLINK_PART_FINAL;
+        const int rc = zlink_recv_part (
+          socket, &source_rid, &next_part, &more, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc != ZLINK_RECV_OK) {
+            zlink_msg_close (&next_part);
+            parts->close ();
+            return rc;
+        }
+        if (!parts->append_move (&next_part)) {
+            zlink_msg_close (&next_part);
+            parts->close ();
+            errno = ENOMEM;
+            return ZLINK_RECV_INTERNAL_ERROR;
+        }
+        has_more = more;
+    }
+    return ZLINK_RECV_OK;
+}
 
 struct stream_js_payload_t
 {
@@ -105,31 +300,66 @@ struct send_completion_state_t
     uint64_t js_thread_outstanding;
 };
 
+struct send_completion_value_t
+{
+    // JavaScript correlates Promise state with its binding token. Keep Core's
+    // operation and route metadata native instead of copying it per completion.
+    send_completion_value_t () : result (ZLINK_SEND_ADMITTED), terminal_errno (0) {}
+
+    void assign (const zlink_send_complete_event_t &event_)
+    {
+        result = event_.result;
+        terminal_errno = event_.terminal_errno;
+    }
+
+    zlink_send_complete_result_t result;
+    int terminal_errno;
+};
+
 struct send_async_operation_t
 {
     send_async_operation_t (send_completion_state_t *state_, uint64_t token_)
         : state (state_), token (token_), submit_returned (false), completed (false)
     {
-        memset (&event, 0, sizeof (event));
     }
 
     send_completion_state_t *state;
     uint64_t token;
     bool submit_returned;
     bool completed;
-    zlink_send_complete_event_t event;
+    send_completion_value_t completion;
     std::mutex mutex;
 };
 
 struct send_completion_js_payload_t
 {
-    send_completion_js_payload_t () : token (0)
-    {
-        memset (&event, 0, sizeof (event));
-    }
+    send_completion_js_payload_t () : token (0) {}
 
     uint64_t token;
-    zlink_send_complete_event_t event;
+    send_completion_value_t completion;
+};
+
+struct send_completion_delivery_accounting_t
+{
+    send_completion_delivery_accounting_t (napi_env env_,
+                                           send_completion_state_t *state_)
+        : env (env_), state (state_)
+    {
+    }
+
+    ~send_completion_delivery_accounting_t ()
+    {
+        // Runs on the JavaScript thread. Socket close may already have reset
+        // the counter and released its event-loop reference; in that case the
+        // queued terminal callback owns only its compact delivery payload.
+        if (!env || !state || state->js_thread_outstanding == 0)
+            return;
+        if (--state->js_thread_outstanding == 0 && state->tsfn)
+            (void) napi_unref_threadsafe_function (env, state->tsfn);
+    }
+
+    napi_env env;
+    send_completion_state_t *state;
 };
 
 struct held_routed_multipart_test_t
@@ -639,7 +869,8 @@ int dealer_reply_parts (void *dealer,
 napi_value create_recv_message_value (napi_env env,
                                       const zlink_routing_id_t &routing_id,
                                       zlink_msg_t *parts,
-                                      size_t part_count)
+                                      size_t part_count,
+                                      napi_value routing_id_storage = NULL)
 {
     napi_value obj;
     napi_create_object (env, &obj);
@@ -656,7 +887,8 @@ napi_value create_recv_message_value (napi_env env,
             return NULL;
         napi_set_named_property (env, obj, "data", data);
         if (routing_id.size > 0) {
-            napi_value rid = create_routing_id_value (env, routing_id);
+            napi_value rid = create_routing_id_value_reusing (
+              env, routing_id, routing_id_storage);
             napi_set_named_property (env, obj, "routingId", rid);
         }
         return obj;
@@ -671,7 +903,8 @@ napi_value create_recv_message_value (napi_env env,
 
     napi_set_named_property (env, obj, "parts", parts_array);
     if (routing_id.size > 0) {
-        napi_value rid = create_routing_id_value (env, routing_id);
+        napi_value rid = create_routing_id_value_reusing (
+          env, routing_id, routing_id_storage);
         napi_set_named_property (env, obj, "routingId", rid);
     }
     return obj;
@@ -706,12 +939,8 @@ napi_value create_router_recv_message_value (napi_env env,
         // the single part while this recv call is already across the N-API
         // boundary instead of returning a frame handle and crossing again
         // from Message.data(). Multipart keeps its existing representation.
-        obj = create_recv_message_value (env, routing_id, parts, part_count);
-        if (obj && routing_id.size > 0 && routing_id_storage != NULL) {
-            napi_value rid = create_routing_id_value_reusing (
-              env, routing_id, routing_id_storage);
-            napi_set_named_property (env, obj, "routingId", rid);
-        }
+        obj = create_recv_message_value (
+          env, routing_id, parts, part_count, routing_id_storage);
     }
     if (!obj)
         return NULL;
@@ -769,8 +998,8 @@ int router_recv_message_value (napi_env env,
         return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
     }
 
-    std::vector<zlink_msg_t> parts;
-    if (!append_msg_move (&parts, &first_part)) {
+    small_msg_storage_t parts;
+    if (!parts.append_move (&first_part)) {
         zlink_msg_close (&first_part);
         errno = ENOMEM;
         return ZLINK_RECV_INTERNAL_ERROR;
@@ -780,7 +1009,7 @@ int router_recv_message_value (napi_env env,
         uint64_t next_request_seq = 0;
         zlink_msg_t next_part;
         if (zlink_msg_init (&next_part) != 0) {
-            close_msg_vector (parts);
+            parts.close ();
             return ZLINK_RECV_INTERNAL_ERROR;
         }
         zlink_part_flag_t more = ZLINK_PART_FINAL;
@@ -789,12 +1018,12 @@ int router_recv_message_value (napi_env env,
           ZLINK_RECV_FLAGS_DONTWAIT);
         if (next_rc != ZLINK_RECV_OK) {
             zlink_msg_close (&next_part);
-            close_msg_vector (parts);
+            parts.close ();
             return next_rc;
         }
-        if (!append_msg_move (&parts, &next_part)) {
+        if (!parts.append_move (&next_part)) {
             zlink_msg_close (&next_part);
-            close_msg_vector (parts);
+            parts.close ();
             errno = ENOMEM;
             return ZLINK_RECV_INTERNAL_ERROR;
         }
@@ -804,7 +1033,7 @@ int router_recv_message_value (napi_env env,
     *out = create_router_recv_message_value (
       env, peer_rid, request_seq, transport_pair_id, transport_pair_generation,
       parts.data (), parts.size (), prefer_managed_single_part, routing_id_storage);
-    close_msg_vector (parts);
+    parts.close ();
     return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
 }
 
@@ -1166,6 +1395,19 @@ void send_completion_tsfn_finalize (napi_env env,
     delete state;
 }
 
+napi_value create_send_completion_event (napi_env env,
+                                         uint64_t token,
+                                         const send_completion_value_t &completion)
+{
+    napi_value event;
+    if (napi_create_object (env, &event) != napi_ok)
+        return NULL;
+    set_uint64_bigint_property (env, event, "token", token);
+    set_int64_property (env, event, "result", completion.result);
+    set_int64_property (env, event, "terminalErrno", completion.terminal_errno);
+    return event;
+}
+
 void send_completion_tsfn_call_js (napi_env env,
                                    napi_value js_callback,
                                    void *context,
@@ -1173,38 +1415,21 @@ void send_completion_tsfn_call_js (napi_env env,
 {
     std::unique_ptr<send_completion_js_payload_t> payload (
       static_cast<send_completion_js_payload_t *> (data));
+    send_completion_delivery_accounting_t accounting (
+      env, static_cast<send_completion_state_t *> (context));
     if (!env || !js_callback || !payload)
         return;
 
-    napi_value event;
-    if (napi_create_object (env, &event) != napi_ok)
+    napi_value event =
+      create_send_completion_event (
+        env, payload->token, payload->completion);
+    if (!event)
         return;
-    set_uint64_bigint_property (env, event, "token", payload->token);
-    set_uint64_bigint_property (env, event, "opId", payload->event.op_id);
-    set_int64_property (env, event, "result", payload->event.result);
-    set_int64_property (env, event, "terminalErrno", payload->event.terminal_errno);
-
-    napi_value peer_rid = create_routing_id_value (env, payload->event.peer_rid);
-    napi_set_named_property (env, event, "peerRid", peer_rid);
-    set_uint64_bigint_property (
-      env, event, "transportPairId", payload->event.transport_pair_id);
-    set_uint64_bigint_property (
-      env, event, "transportPairGeneration",
-      payload->event.transport_pair_generation);
 
     napi_value this_arg;
     napi_value ignored;
     napi_get_undefined (env, &this_arg);
     (void) napi_call_function (env, this_arg, js_callback, 1, &event, &ignored);
-
-    //  This runs on the JavaScript thread, so the counter needs no lock. The
-    //  completion is delivered, so the operation no longer has to hold the
-    //  event loop open.
-    send_completion_state_t *state =
-      static_cast<send_completion_state_t *> (context);
-    if (state && state->js_thread_outstanding > 0
-        && --state->js_thread_outstanding == 0)
-        (void) napi_unref_threadsafe_function (env, state->tsfn);
 }
 
 void send_completion_callback (void *subject,
@@ -1224,17 +1449,18 @@ void send_completion_callback (void *subject,
     {
         std::lock_guard<std::mutex> lock (operation->mutex);
         if (!operation->submit_returned) {
-            operation->event = *event;
+            operation->completion.assign (*event);
             operation->completed = true;
             return;
         }
+        operation->completion.assign (*event);
     }
 
     std::unique_ptr<send_completion_js_payload_t> payload (
       new (std::nothrow) send_completion_js_payload_t ());
     if (payload) {
         payload->token = operation->token;
-        payload->event = *event;
+        payload->completion = operation->completion;
     }
     send_completion_state_t *state = operation->state;
     napi_threadsafe_function tsfn = state ? state->tsfn : NULL;
@@ -1423,6 +1649,15 @@ static void close_built_msg_vector (std::vector<zlink_msg_t> *parts, size_t buil
     parts->clear ();
 }
 
+static void close_built_msg_storage (small_msg_storage_t *parts, size_t built)
+{
+    if (!parts)
+        return;
+    for (size_t index = 0; index < built; ++index)
+        zlink_msg_close (&(*parts)[index]);
+    parts->release ();
+}
+
 bool build_msg_vector (napi_env env, napi_value arr, std::vector<zlink_msg_t> *out)
 {
     uint32_t len = 0;
@@ -1460,6 +1695,48 @@ bool build_msg_vector_or_single (napi_env env, napi_value value, std::vector<zli
     out->resize (1);
     if (!init_msg_from_value (env, value, &(*out)[0])) {
         out->clear ();
+        return false;
+    }
+    return true;
+}
+
+bool build_msg_vector (napi_env env, napi_value arr, small_msg_storage_t *out)
+{
+    uint32_t len = 0;
+    if (napi_get_array_length (env, arr, &len) != napi_ok) {
+        napi_throw_type_error (env, NULL, "parts must be an array");
+        return false;
+    }
+    if (!out->prepare (env, len))
+        return false;
+    size_t built = 0;
+    for (uint32_t index = 0; index < len; ++index) {
+        napi_value value;
+        if (napi_get_element (env, arr, index, &value) != napi_ok) {
+            close_built_msg_storage (out, built);
+            napi_throw_type_error (env, NULL, "parts element read failed");
+            return false;
+        }
+        if (!init_msg_from_value (env, value, &(*out)[index])) {
+            close_built_msg_storage (out, built);
+            return false;
+        }
+        ++built;
+    }
+    return true;
+}
+
+bool build_msg_vector_or_single (
+  napi_env env, napi_value value, small_msg_storage_t *out)
+{
+    bool is_array = false;
+    if (napi_is_array (env, value, &is_array) == napi_ok && is_array)
+        return build_msg_vector (env, value, out);
+
+    if (!out->prepare (env, 1))
+        return false;
+    if (!init_msg_from_value (env, value, &(*out)[0])) {
+        out->release ();
         return false;
     }
     return true;
@@ -2317,6 +2594,139 @@ napi_value test_end_held_routed_multipart (napi_env env, napi_callback_info info
     return out;
 }
 
+napi_value test_send_completion_operation_path (napi_env env,
+                                                 napi_callback_info info)
+{
+    enum
+    {
+        test_direct_inline = 0,
+        test_early_inline = 1,
+        test_non_inline = 2,
+        test_enqueue_failure = 3
+    };
+
+    napi_value argv[2];
+    size_t argc = 2;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    int32_t mode = -1;
+    napi_valuetype handler_type = napi_undefined;
+    if (argc < 1 || napi_get_value_int32 (env, argv[0], &mode) != napi_ok
+        || mode < test_direct_inline || mode > test_enqueue_failure) {
+        napi_throw_type_error (env, NULL,
+                               "send completion test mode is invalid");
+        return NULL;
+    }
+    if (mode >= test_non_inline) {
+        if (argc < 2
+            || napi_typeof (env, argv[1], &handler_type) != napi_ok
+            || handler_type != napi_function) {
+            napi_throw_type_error (env, NULL,
+                                   "send completion test handler is invalid");
+            return NULL;
+        }
+    }
+
+    static const uint64_t test_token = 42;
+    if (mode <= test_early_inline) {
+        std::unique_ptr<send_async_operation_t> operation (
+          new (std::nothrow) send_async_operation_t (NULL, test_token));
+        if (!operation) {
+            napi_throw_error (env, NULL,
+                              "send completion test operation allocation failed");
+            return NULL;
+        }
+        if (mode == test_early_inline) {
+            zlink_send_complete_event_t completion;
+            memset (&completion, 0, sizeof (completion));
+            completion.userdata = operation.get ();
+            completion.result = ZLINK_SEND_ADMITTED;
+            send_completion_callback (NULL, &completion, NULL);
+            std::lock_guard<std::mutex> lock (operation->mutex);
+            operation->submit_returned = true;
+            if (!operation->completed) {
+                napi_throw_error (env, NULL,
+                                  "early completion was not retained");
+                return NULL;
+            }
+        }
+        return create_send_completion_event (
+          env, operation->token, operation->completion);
+    }
+
+    send_completion_state_t *state =
+      new (std::nothrow) send_completion_state_t ();
+    send_async_operation_t *operation = state
+      ? new (std::nothrow) send_async_operation_t (state, test_token) : NULL;
+    if (!state || !operation) {
+        delete operation;
+        delete state;
+        napi_throw_error (env, NULL,
+                          "send completion test state allocation failed");
+        return NULL;
+    }
+    state->env = env;
+
+    napi_value resource_name;
+    napi_create_string_utf8 (
+      env, "zlink-send-completion-test", NAPI_AUTO_LENGTH, &resource_name);
+    const size_t max_queue_size = mode == test_enqueue_failure ? 1 : 0;
+    if (napi_create_threadsafe_function (
+          env, argv[1], NULL, resource_name, max_queue_size, 1, state,
+          send_completion_tsfn_finalize, state, send_completion_tsfn_call_js,
+          &state->tsfn) != napi_ok) {
+        delete operation;
+        delete state;
+        napi_throw_error (env, NULL,
+                          "send completion test callback queue setup failed");
+        return NULL;
+    }
+    (void) napi_unref_threadsafe_function (env, state->tsfn);
+
+    {
+        std::lock_guard<std::mutex> lock (operation->mutex);
+        operation->submit_returned = true;
+    }
+    zlink_send_complete_event_t completion;
+    memset (&completion, 0, sizeof (completion));
+    completion.userdata = operation;
+    completion.result = ZLINK_SEND_ADMITTED;
+
+    napi_threadsafe_function tsfn = state->tsfn;
+    if (mode == test_enqueue_failure) {
+        send_completion_js_payload_t *queued =
+          new (std::nothrow) send_completion_js_payload_t ();
+        if (queued)
+            queued->token = test_token - 1;
+        if (!queued
+            || napi_call_threadsafe_function (
+                 tsfn, queued, napi_tsfn_nonblocking) != napi_ok) {
+            delete queued;
+            delete operation;
+            (void) napi_release_threadsafe_function (
+              tsfn, napi_tsfn_abort);
+            napi_throw_error (env, NULL,
+                              "send completion test queue setup failed");
+            return NULL;
+        }
+    }
+    send_completion_callback (NULL, &completion, NULL);
+
+    state->js_thread_outstanding =
+      mode == test_enqueue_failure ? 2 : 1;
+    if (state->js_thread_outstanding > 0)
+        (void) napi_ref_threadsafe_function (env, tsfn);
+    if (mode == test_enqueue_failure
+        && state->js_thread_outstanding > 0) {
+        state->js_thread_outstanding = 0;
+        (void) napi_unref_threadsafe_function (env, tsfn);
+    }
+    (void) napi_release_threadsafe_function (tsfn, napi_tsfn_release);
+
+    napi_value out;
+    napi_get_undefined (env, &out);
+    return out;
+}
+
 napi_value test_run_send_close_stress (napi_env env, napi_callback_info info)
 {
     napi_value argv[2];
@@ -2664,6 +3074,9 @@ napi_value socket_send_parts (napi_env env, napi_callback_info info)
         return throw_submit_error (env, "sendParts failed", rc);
     }
     consume_native_message_value (env, argv[1]);
+    // send_parts consumed the native slots; vector destruction must not try
+    // to close them, and clear only releases vector bookkeeping.
+    parts.clear ();
 
     napi_value out;
     napi_create_int32 (env, static_cast<int32_t> (total), &out);
@@ -2672,32 +3085,12 @@ napi_value socket_send_parts (napi_env env, napi_callback_info info)
 
 static napi_value create_send_submit_result (napi_env env,
                                              int result,
-                                             int native_errno,
-                                             uint64_t op_id)
+                                             int native_errno)
 {
     napi_value out;
     napi_create_object (env, &out);
     set_int64_property (env, out, "result", result);
     set_int64_property (env, out, "nativeErrno", native_errno);
-    set_uint64_bigint_property (env, out, "opId", op_id);
-    return out;
-}
-
-static napi_value create_inline_send_completion (napi_env env,
-                                                 uint64_t token,
-                                                 const zlink_send_complete_event_t &event)
-{
-    napi_value out;
-    napi_create_object (env, &out);
-    set_uint64_bigint_property (env, out, "token", token);
-    set_uint64_bigint_property (env, out, "opId", event.op_id);
-    set_int64_property (env, out, "result", event.result);
-    set_int64_property (env, out, "terminalErrno", event.terminal_errno);
-    napi_value peer_rid = create_routing_id_value (env, event.peer_rid);
-    napi_set_named_property (env, out, "peerRid", peer_rid);
-    set_uint64_bigint_property (env, out, "transportPairId", event.transport_pair_id);
-    set_uint64_bigint_property (
-      env, out, "transportPairGeneration", event.transport_pair_generation);
     return out;
 }
 
@@ -2746,20 +3139,19 @@ napi_value socket_send_async (napi_env env, napi_callback_info info)
         const int target_result =
           zlink_select_routed_submit_target (socket, &routing_id, &target);
         if (target_result != ZLINK_SUBMIT_OK) {
-            return create_send_submit_result (
-              env, target_result, zlink_errno (), 0);
+            return create_send_submit_result (env, target_result, zlink_errno ());
         }
         target_ptr = &target;
     }
 
-    std::vector<zlink_msg_t> parts;
+    small_msg_storage_t parts;
     if (!build_msg_vector_or_single (env, argv[1], &parts))
         return NULL;
 
     send_async_operation_t *operation =
       new (std::nothrow) send_async_operation_t (state, token);
     if (!operation) {
-        close_msg_vector (parts);
+        parts.close ();
         napi_throw_error (env, NULL, "send operation allocation failed");
         return NULL;
     }
@@ -2775,33 +3167,30 @@ napi_value socket_send_async (napi_env env, napi_callback_info info)
       socket, parts.data (), parts.size (), &options, &op_id);
     if (result != ZLINK_SUBMIT_OK) {
         const int native_errno = zlink_errno ();
-        close_msg_vector (parts);
+        parts.close ();
         delete operation;
-        return create_send_submit_result (env, result, native_errno, 0);
+        return create_send_submit_result (env, result, native_errno);
     }
     // Keep the Message ownership transition identical to the synchronous
     // send path: detach any previously exposed writable Buffer view while
     // leaving Core's copied/admitted record independent of the wrapper.
     consume_native_message_value (env, argv[1]);
-    parts.clear ();
+    parts.release ();
 
     bool inline_completed = false;
-    zlink_send_complete_event_t inline_event;
-    memset (&inline_event, 0, sizeof (inline_event));
+    send_completion_value_t inline_completion;
     if (op_id == 0) {
         // Core admitted the record directly and intentionally emits no
         // completion callback. Return the completion in the submit result so
         // JavaScript resolves the Promise without a TSFN hop.
         operation->submit_returned = true;
         inline_completed = true;
-        inline_event.userdata = operation;
-        inline_event.result = ZLINK_SEND_ADMITTED;
     } else {
         std::lock_guard<std::mutex> lock (operation->mutex);
         operation->submit_returned = true;
         inline_completed = operation->completed;
         if (inline_completed)
-            inline_event = operation->event;
+            inline_completion = operation->completion;
     }
 
     if (!inline_completed && state->js_thread_outstanding++ == 0) {
@@ -2810,10 +3199,10 @@ napi_value socket_send_async (napi_env env, napi_callback_info info)
         //  0 -> 1 transition cannot race its own release.
         (void) napi_ref_threadsafe_function (env, state->tsfn);
     }
-    napi_value out = create_send_submit_result (env, result, 0, op_id);
+    napi_value out = create_send_submit_result (env, result, 0);
     if (inline_completed) {
-        napi_value completion =
-          create_inline_send_completion (env, token, inline_event);
+        napi_value completion = create_send_completion_event (
+          env, token, inline_completion);
         napi_set_named_property (env, out, "inlineCompletion", completion);
         delete operation;
     }
@@ -2853,13 +3242,14 @@ static int dealer_request_parts (void *dealer,
 static int router_request_parts (void *router,
                                  const zlink_routing_id_t *peer_rid,
                                  const zlink_routed_submit_target_t *target,
-                                 std::vector<zlink_msg_t> *parts,
+                                 zlink_msg_t *parts,
+                                 size_t part_count,
                                  uint32_t timeout_ms,
                                  zlink_send_flags_t flags,
                                  request_js_state_t *state)
 {
     return submit_msg_parts (
-      parts->data (), parts->size (),
+      parts, part_count,
       [router, peer_rid, target, timeout_ms, flags, state] (
         zlink_msg_t *part, zlink_part_flag_t part_flag, bool is_final) {
           if (target) {
@@ -2984,7 +3374,7 @@ napi_value router_request (napi_env env, napi_callback_info info)
         target_ptr = &target;
     }
 
-    std::vector<zlink_msg_t> parts;
+    small_msg_storage_t parts;
     if (!build_msg_vector_or_single (env, argv[2], &parts))
         return NULL;
     bool direct_callback = false;
@@ -2993,16 +3383,17 @@ napi_value router_request (napi_env env, napi_callback_info info)
     request_js_state_t *state = create_core_request_js_state (
       env, router, token, direct_callback);
     if (!state) {
-        close_msg_vector (parts);
+        parts.close ();
         return NULL;
     }
     int32_t flags = ZLINK_SEND_FLAGS_DONTWAIT;
     if (argc >= 8)
         napi_get_value_int32 (env, argv[7], &flags);
     const int result = router_request_parts (
-      router, &peer_rid, target_ptr, &parts,
+      router, &peer_rid, target_ptr, parts.data (), parts.size (),
       static_cast<uint32_t> (timeout_ms), static_cast<zlink_send_flags_t> (flags), state);
-    parts.clear ();
+    // Core consumed every staged slot on either admission or rejection.
+    parts.release ();
     const int native_errno = result == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
     if (result == ZLINK_SUBMIT_OK)
         consume_native_message_value (env, argv[2]);
@@ -3535,8 +3926,8 @@ int dealer_recv_message_value (napi_env env,
         *out = create_recv_message_value (env, empty_routing_id, &first_part, 1);
         zlink_msg_close (&first_part);
     } else {
-        std::vector<zlink_msg_t> parts;
-        if (!append_msg_move (&parts, &first_part)) {
+        small_msg_storage_t parts;
+        if (!parts.append_move (&first_part)) {
             zlink_msg_close (&first_part);
             errno = ENOMEM;
             return ZLINK_RECV_INTERNAL_ERROR;
@@ -3545,7 +3936,7 @@ int dealer_recv_message_value (napi_env env,
         while (has_more != ZLINK_PART_FINAL) {
             zlink_msg_t next_part;
             if (zlink_msg_init (&next_part) != 0) {
-                close_msg_vector (parts);
+                parts.close ();
                 return ZLINK_RECV_INTERNAL_ERROR;
             }
             uint8_t next_message_type = ZLINK_DEALER_MESSAGE_RAW;
@@ -3556,18 +3947,18 @@ int dealer_recv_message_value (napi_env env,
               ZLINK_RECV_FLAGS_DONTWAIT);
             if (next_rc != ZLINK_RECV_OK) {
                 zlink_msg_close (&next_part);
-                close_msg_vector (parts);
+                parts.close ();
                 return next_rc;
             }
             if (next_message_type != message_type || next_request_seq != request_seq) {
                 zlink_msg_close (&next_part);
-                close_msg_vector (parts);
+                parts.close ();
                 errno = EPROTO;
                 return ZLINK_RECV_INTERNAL_ERROR;
             }
-            if (!append_msg_move (&parts, &next_part)) {
+            if (!parts.append_move (&next_part)) {
                 zlink_msg_close (&next_part);
-                close_msg_vector (parts);
+                parts.close ();
                 errno = ENOMEM;
                 return ZLINK_RECV_INTERNAL_ERROR;
             }
@@ -3576,7 +3967,7 @@ int dealer_recv_message_value (napi_env env,
 
         *out = create_recv_message_value (
           env, empty_routing_id, parts.data (), parts.size ());
-        close_msg_vector (parts);
+        parts.close ();
     }
 
     if (!*out)
@@ -3687,7 +4078,7 @@ napi_value dealer_reply (napi_env env, napi_callback_info info)
         return NULL;
     }
 
-    std::vector<zlink_msg_t> parts;
+    small_msg_storage_t parts;
     zlink_msg_t single_part;
     bool use_single_part = false;
     bool is_array = false;
@@ -3702,8 +4093,13 @@ napi_value dealer_reply (napi_env env, napi_callback_info info)
     const int rc = dealer_reply_parts (
       dealer, request_seq, use_single_part ? &single_part : parts.data (),
       use_single_part ? 1 : parts.size ());
-    if (rc != ZLINK_SUBMIT_OK)
+    if (rc != ZLINK_SUBMIT_OK) {
+        // submit_msg_parts consumed/closed every staging slot on rejection;
+        // release only storage metadata so no slot is closed twice.
+        parts.release ();
         return throw_submit_error (env, "dealerReply failed", rc);
+    }
+    parts.release ();
     consume_native_message_value (env, argv[2]);
     napi_value ok;
     napi_get_undefined (env, &ok);
@@ -4196,7 +4592,7 @@ napi_value router_reply (napi_env env, napi_callback_info info)
         napi_throw_type_error (env, NULL, "requestSeq must be uint64");
         return NULL;
     }
-    std::vector<zlink_msg_t> parts;
+    small_msg_storage_t parts;
     zlink_msg_t single_part;
     bool use_single_part = false;
     bool is_array = false;
@@ -4212,8 +4608,12 @@ napi_value router_reply (napi_env env, napi_callback_info info)
                                  use_single_part ? &single_part : parts.data (),
                                  use_single_part ? 1 : parts.size ());
     if (rc != ZLINK_SUBMIT_OK) {
+        // submit_msg_parts consumed/closed every staging slot on rejection;
+        // release only storage metadata so no slot is closed twice.
+        parts.release ();
         return throw_submit_error (env, "routerReply failed", rc);
     }
+    parts.release ();
     consume_native_message_value (env, argv[3]);
     napi_value ok;
     napi_get_undefined (env, &ok);

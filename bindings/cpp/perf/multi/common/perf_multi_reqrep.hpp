@@ -10,6 +10,7 @@
 #include <atomic>
 #include <csignal>
 #include <condition_variable>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <type_traits>
@@ -72,8 +73,8 @@ enum class logical_admission_t
 
 struct logical_request_t
 {
-    explicit logical_request_t (size_t payload_size_) :
-        payload (payload_size_, 'q'),
+    logical_request_t () :
+        payload (),
         admission (logical_admission_t::launching)
     {
     }
@@ -82,21 +83,87 @@ struct logical_request_t
     std::atomic<logical_admission_t> admission;
 };
 
+struct bind_application_ready_queue_t
+{
+    perf::application_ready_queue_t &ready_queue;
+
+    bool await_ready () const noexcept { return false; }
+
+    template <typename TPromise>
+    bool await_suspend (std::coroutine_handle<TPromise> continuation_) const noexcept
+    {
+        continuation_.promise ().zlink_bind_continuation_scheduler (ready_queue);
+        return false;
+    }
+
+    void await_resume () const noexcept {}
+};
+
 template <typename SocketT> struct client_slot_t
 {
     client_slot_t () :
         socket (),
-        payload (),
-        pending (),
+        logical (),
+        pre_admission_pending (false),
         next_seq (1)
     {
     }
 
     std::unique_ptr<SocketT> socket;
-    std::vector<char> payload;
-    std::shared_ptr<logical_request_t> pending;
+    logical_request_t logical;
+    bool pre_admission_pending;
     uint64_t next_seq;
 };
+
+// This is an exceptional teardown path only.  A successfully accepted Core
+// close resolves every admitted request through its terminal reply callback;
+// keep the application queue alive until those callbacks have resumed and
+// destroyed the detached request coroutines.  Returning after a bounded wait
+// would leave the continuations with no queue owner.
+template <typename SocketT>
+inline void close_requesters_and_drain (
+  std::vector<std::unique_ptr<client_slot_t<SocketT>>> &slots_,
+  perf::application_ready_queue_t &ready_queue_,
+  const std::shared_ptr<client_completion_state_t> &completion_)
+{
+    for (const std::unique_ptr<client_slot_t<SocketT>> &slot : slots_) {
+        if (!slot || !slot->socket)
+            continue;
+
+        while (slot->socket->valid ()) {
+            try {
+                slot->socket->close ();
+            }
+            catch (const zlink::close_error_t &err) {
+                if (err.result () == zlink::close_result_t::shutdown
+                    && !slot->socket->valid ())
+                    break;
+                if (err.result () != zlink::close_result_t::busy)
+                    // Core did not accept close, so it has not promised a
+                    // terminal callback for each live detached coroutine.
+                    // Destroying the queue in that state is unsafe.
+                    std::terminate ();
+
+                // A callback/API that entered before close admission is still
+                // active.  Service the application handoff and retry; there
+                // is deliberately no global teardown deadline.
+                (void) ready_queue_.wait_and_run_ready_round_until (
+                  std::chrono::steady_clock::now () + std::chrono::milliseconds (1));
+            }
+            catch (...) {
+                // Same fail-closed policy as a non-busy close result.
+                std::terminate ();
+            }
+        }
+    }
+
+    // Close has synchronously handed every accepted request its terminal
+    // result.  This loop is quiescence, not a reply-timeout wait: it drains
+    // only the finite continuation handoffs already owned by this queue.
+    while (completion_->outstanding.load (std::memory_order_acquire) != 0) {
+        (void) ready_queue_.run_ready_round ();
+    }
+}
 
 template <typename SocketT> class client_bench_t
 {
@@ -117,6 +184,7 @@ template <typename SocketT> class client_bench_t
         _ctx (),
         _slots (),
         _monitors (),
+        _ready_queue (),
         _completion (std::make_shared<client_completion_state_t> (msg_size_))
     {
     }
@@ -149,30 +217,32 @@ template <typename SocketT> class client_bench_t
             }
             if (_completion->fatal.load (std::memory_order_acquire))
                 break;
-            if (!admitted && std::chrono::steady_clock::now () < deadline) {
-                const unsigned long long epoch =
-                  _completion->change_epoch.load (std::memory_order_acquire);
+            if (admitted) {
+                (void) _ready_queue.run_ready_round ();
+            } else if (std::chrono::steady_clock::now () < deadline) {
                 const auto wake_deadline = std::min (
                   deadline, std::chrono::steady_clock::now ()
                               + std::chrono::milliseconds (50));
-                std::unique_lock<std::mutex> lock (_completion->change_mutex);
-                _completion->changed.wait_until (lock, wake_deadline, [&] {
-                    return _completion->fatal.load (std::memory_order_acquire)
-                           || _completion->change_epoch.load (
-                                std::memory_order_acquire)
-                                != epoch;
-                });
+                (void) _ready_queue.wait_and_run_ready_round_until (
+                  wake_deadline);
             }
         }
 
         const auto drain_deadline =
           std::chrono::steady_clock::now () + std::chrono::milliseconds (
                                                 std::max (1000, _settings.rcvtimeo_ms * 4));
-        {
-            std::unique_lock<std::mutex> lock (_completion->change_mutex);
-            _completion->changed.wait_until (lock, drain_deadline, [&] {
-                return _completion->outstanding.load (std::memory_order_acquire) == 0;
-            });
+        while (_completion->outstanding.load (std::memory_order_acquire) != 0
+               && std::chrono::steady_clock::now () < drain_deadline) {
+            (void) _ready_queue.wait_and_run_ready_round_until (
+              drain_deadline);
+        }
+
+        if (_completion->outstanding.load (std::memory_order_acquire) != 0) {
+            // Do not let a bounded benchmark drain tear down the queue below
+            // suspended detached request coroutines.  The normal successful
+            // measurement path above remains unchanged.
+            close_requesters_and_drain (_slots, _ready_queue, _completion);
+            return false;
         }
 
         const unsigned long long completed =
@@ -213,7 +283,7 @@ template <typename SocketT> class client_bench_t
                                            _monitors.back ()))
                     return false;
                 slot->socket->connect (_endpoint);
-                slot->payload.assign (payload_size, 'q');
+                slot->logical.payload.assign (payload_size, 'q');
                 _slots.push_back (std::move (slot));
             }
             const bool ready = wait_connect_ready_all (_monitors, _settings.connect_ready_timeout_ms);
@@ -231,26 +301,26 @@ template <typename SocketT> class client_bench_t
     bool launch_request (client_slot_t<SocketT> &slot_, bool &admitted_)
     {
         admitted_ = false;
-        if (!slot_.pending) {
-            slot_.pending = std::make_shared<logical_request_t> (slot_.payload.size ());
+        if (!slot_.pre_admission_pending) {
             const uint64_t sent_ns = perf_metric::now_ns ();
             if (!perf_metric::stamp_payload (
-                  slot_.pending->payload.data (), slot_.pending->payload.size (),
+                  slot_.logical.payload.data (), slot_.logical.payload.size (),
                   _completion->run_id, perf_metric::phase_active, _msg_size,
                   slot_.next_seq, sent_ns))
                 return false;
+            slot_.pre_admission_pending = true;
         }
 
-        slot_.pending->admission.store (logical_admission_t::launching,
-                                        std::memory_order_release);
-        submit_async_request (*slot_.socket, _target_rid, slot_.pending,
+        slot_.logical.admission.store (logical_admission_t::launching,
+                                       std::memory_order_release);
+        submit_async_request (_ready_queue, *slot_.socket, _target_rid, &slot_.logical,
                               std::chrono::milliseconds (
                                 std::max (1, _settings.rcvtimeo_ms)),
                               _completion);
-        switch (slot_.pending->admission.load (std::memory_order_acquire)) {
+        switch (slot_.logical.admission.load (std::memory_order_acquire)) {
             case logical_admission_t::admitted:
                 ++slot_.next_seq;
-                slot_.pending.reset ();
+                slot_.pre_admission_pending = false;
                 admitted_ = true;
                 return true;
             case logical_admission_t::retry:
@@ -329,12 +399,13 @@ template <typename SocketT> class client_bench_t
     }
 
     static perf::detached_async_task_t submit_async_request (
-      SocketT &socket_, const zlink::routing_id_t &target_rid_,
-      std::shared_ptr<logical_request_t> logical_,
+      perf::application_ready_queue_t &ready_queue_, SocketT &socket_,
+      const zlink::routing_id_t &target_rid_,
+      logical_request_t *logical_,
       std::chrono::milliseconds timeout_,
       std::shared_ptr<client_completion_state_t> completion_)
     {
-        bool admitted = false;
+        co_await bind_application_ready_queue_t{ready_queue_};
         try {
             zlink::message_t request = zlink::message_t::from (
               std::as_bytes (std::span<const char> (
@@ -346,30 +417,43 @@ template <typename SocketT> class client_bench_t
                 signal_change (completion_);
                 co_return;
             }
-            auto operation = begin_request (socket_, target_rid_, std::move (request), timeout_);
-            admitted = true;
+            std::optional<zlink::async_result_t<std::vector<zlink::message_t>>> operation;
+            operation.emplace (
+              begin_request (socket_, target_rid_, std::move (request), timeout_));
             completion_->outstanding.fetch_add (1, std::memory_order_release);
             logical_->admission.store (logical_admission_t::admitted,
                                         std::memory_order_release);
             signal_change (completion_);
-            std::vector<zlink::message_t> reply = co_await std::move (operation);
-            observe_reply (completion_, reply);
+            // Post-admission: operation owns the submitted request. This
+            // coroutine must not read the reusable slot/logical buffer again.
+            try {
+                std::vector<zlink::message_t> reply = co_await std::move (*operation);
+                observe_reply (completion_, reply);
+            }
+            catch (const zlink::request_error_t &err) {
+                if (err.result () != zlink::request_result_t::timed_out)
+                    completion_->fatal.store (true, std::memory_order_release);
+            }
+            catch (...) {
+                completion_->fatal.store (true, std::memory_order_release);
+            }
+            completion_->outstanding.fetch_sub (1, std::memory_order_release);
+            signal_change (completion_);
+            co_return;
         }
         catch (const zlink::request_error_t &err) {
-            if (!admitted && err.result () == zlink::request_result_t::timed_out) {
+            if (err.result () == zlink::request_result_t::timed_out) {
                 logical_->admission.store (logical_admission_t::retry,
                                             std::memory_order_release);
-            } else if (err.result () != zlink::request_result_t::timed_out) {
-                if (!admitted)
-                    logical_->admission.store (logical_admission_t::fatal,
-                                                std::memory_order_release);
+            } else {
+                logical_->admission.store (logical_admission_t::fatal,
+                                            std::memory_order_release);
                 completion_->fatal.store (true, std::memory_order_release);
             }
         }
         catch (const zlink::submit_error_t &err) {
-            if (!admitted
-                && (err.result () == zlink::submit_result_t::backpressured
-                    || transient (err.internal_errno ()))) {
+            if (err.result () == zlink::submit_result_t::backpressured
+                || transient (err.internal_errno ())) {
                 logical_->admission.store (logical_admission_t::retry,
                                             std::memory_order_release);
             } else {
@@ -379,7 +463,7 @@ template <typename SocketT> class client_bench_t
             }
         }
         catch (const zlink::binding_error_t &err) {
-            if (!admitted && transient (err.internal_errno ())) {
+            if (transient (err.internal_errno ())) {
                 logical_->admission.store (logical_admission_t::retry,
                                             std::memory_order_release);
             } else {
@@ -393,8 +477,6 @@ template <typename SocketT> class client_bench_t
                                         std::memory_order_release);
             completion_->fatal.store (true, std::memory_order_release);
         }
-        if (admitted)
-            completion_->outstanding.fetch_sub (1, std::memory_order_release);
         signal_change (completion_);
     }
 
@@ -408,6 +490,7 @@ template <typename SocketT> class client_bench_t
     ctx_guard_t _ctx;
     std::vector<std::unique_ptr<client_slot_t<SocketT>>> _slots;
     std::vector<connect_monitor_t> _monitors;
+    perf::application_ready_queue_t _ready_queue;
     std::shared_ptr<client_completion_state_t> _completion;
 };
 

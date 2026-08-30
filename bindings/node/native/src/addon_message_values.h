@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstring>
 #include <new>
+#include <vector>
 
 // A Message owns this frame. Its Buffer is only a JavaScript view of the
 // zlink_msg_t storage; it is never the owning payload allocation.
@@ -23,14 +24,57 @@ struct native_message_frame_handle_t
     native_message_frame_t *frame;
 };
 
+class native_message_frame_pool_t
+{
+  public:
+    native_message_frame_pool_t () { frames_.reserve (64); }
+
+    ~native_message_frame_pool_t ()
+    {
+        for (size_t index = 0; index < frames_.size (); ++index)
+            delete frames_[index];
+    }
+
+    native_message_frame_t *acquire ()
+    {
+        if (frames_.empty ())
+            return new (std::nothrow) native_message_frame_t ();
+        native_message_frame_t *frame = frames_.back ();
+        frames_.pop_back ();
+        frame->references.store (1, std::memory_order_relaxed);
+        return frame;
+    }
+
+    void recycle (native_message_frame_t *frame)
+    {
+        // Routed single-part receive creates one frame per message. N-API
+        // receive and finalizers run on the owning JS thread, so a bounded
+        // thread-local reserve removes allocator traffic without a lock.
+        if (frames_.size () < 64) {
+            frames_.push_back (frame);
+            return;
+        }
+        delete frame;
+    }
+
+  private:
+    std::vector<native_message_frame_t *> frames_;
+};
+
+inline native_message_frame_pool_t &native_message_frame_pool ()
+{
+    static thread_local native_message_frame_pool_t pool;
+    return pool;
+}
+
 inline native_message_frame_t *acquire_native_message_frame ()
 {
-    return new (std::nothrow) native_message_frame_t ();
+    return native_message_frame_pool ().acquire ();
 }
 
 inline void recycle_native_message_frame (native_message_frame_t *frame)
 {
-    delete frame;
+    native_message_frame_pool ().recycle (frame);
 }
 
 inline void retain_native_message_frame (native_message_frame_t *frame)

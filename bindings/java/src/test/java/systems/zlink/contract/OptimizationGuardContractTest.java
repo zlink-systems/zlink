@@ -313,6 +313,53 @@ final class OptimizationGuardContractTest {
     }
 
     @Test
+    void sendCompletionWorkerIsContextOwnedInsteadOfSocketOwned()
+        throws IOException {
+        Path runtimeRoot = MAIN_SOURCE.resolve(Path.of(
+            "systems", "zlink", "runtime"));
+        String registry = Files.readString(runtimeRoot.resolve(Path.of(
+            "sockets", "SendCompletionRegistry.java")),
+            StandardCharsets.UTF_8);
+        String socketRuntime = Files.readString(runtimeRoot.resolve(Path.of(
+            "sockets", "NativeSocketRuntime.java")),
+            StandardCharsets.UTF_8);
+        String context = Files.readString(runtimeRoot.resolve(Path.of(
+            "core", "NativeContext.java")), StandardCharsets.UTF_8);
+        String dispatcher = Files.readString(runtimeRoot.resolve(Path.of(
+            "nativeapi", "CompletionDispatcher.java")),
+            StandardCharsets.UTF_8);
+
+        assertFalse(registry.contains("ExecutorService"),
+            "a socket registry must not own a completion executor");
+        assertFalse(registry.contains("daemonSingleThreadExecutor"),
+            "a socket registry must not create a platform worker");
+        assertTrue(dispatcher.contains("MAX_CONTEXT_WORKERS = 16"),
+            "a context completion pool must have a fixed worker cap");
+        assertTrue(dispatcher.contains("Executors.newFixedThreadPool"),
+            "completion workers must be shared by the context");
+        assertFalse(dispatcher.contains("CompletionLane[]"),
+            "socket lanes must not be static worker stripes");
+        assertTrue(dispatcher.contains("return new CompletionLane(this)"),
+            "each socket must own only a lightweight serial lane");
+        assertTrue(registry.contains(
+            "completionLane.dispatch(() -> completeAbandoned(abandoned))"),
+            "socket-close completions must retain serial lane ordering");
+        assertTrue(socketRuntime.contains(
+            "InternalAccess.contextCompletionDispatcher(ctx)"),
+            "normal sockets must use their context dispatcher");
+        assertTrue(socketRuntime.contains(
+            "borrowed raw socket handles are not supported"),
+            "raw callback lifetime requires owned native handles");
+        assertTrue(socketRuntime.contains("dispatcher.acquireLane()"),
+            "each socket must borrow a bounded context-owned lane");
+        assertTrue(context.contains(
+            "private final CompletionDispatcher completionDispatcher"),
+            "the context must own completion dispatch lifetime");
+        assertTrue(context.contains("completionDispatcher.close()"),
+            "context close must release completion dispatch resources");
+    }
+
+    @Test
     void nativeSocketDescriptorsStayRuntimePrivate() throws IOException {
         Path contractInternalSockets = MAIN_SOURCE.resolve(Path.of(
             "systems", "zlink", "contracts", "internal", "sockets"));

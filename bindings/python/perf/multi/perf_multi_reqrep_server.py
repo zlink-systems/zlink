@@ -9,10 +9,33 @@ from perf_multi_common import (
     configure_multi_tls_server,
     measurement_part_count,
     parse_server_args,
+    PERF_MULTI_AUX_POLL_WAIT_MS,
     perf_server_context,
     recv_nonblocking,
     safe_poll,
 )
+
+
+def submit_reqrep_reply(request, parts):
+    """Submit one HWM-free raw reply, draining only a vanished route.
+
+    Core owns multipart staging and rollback. Its raw reply terminal cannot
+    report admission backpressure or an admission timeout, so retrying a
+    public builder here would invent a readiness/retry contract that raw reply
+    does not have. A peer disappearing before commit is an expected terminal
+    drain; every other result is a benchmark failure.
+    """
+
+    try:
+        request.reply().messages(*parts).submit()
+        return True
+    except zlink.SubmitError as exc:
+        if exc.result in {
+            zlink.SubmitResult.NOT_CONNECTED,
+            zlink.SubmitResult.NOT_FOUND,
+        }:
+            return False
+        raise
 
 
 def run_reqrep_server(argv, *, endpoint_token, routed_server):
@@ -43,7 +66,9 @@ def run_reqrep_server(argv, *, endpoint_token, routed_server):
                 poll_events = zlink.create_poll_events(1)
                 received = zlink.create_received()
                 while not stop.is_set():
-                    ready_count = safe_poll(poller, poll_events, 5)
+                    ready_count = safe_poll(
+                        poller, poll_events, PERF_MULTI_AUX_POLL_WAIT_MS
+                    )
                     for offset in range(ready_count):
                         if poll_events.slot(offset) != 0 or not (
                             poll_events.revents(offset)
@@ -71,17 +96,7 @@ def run_reqrep_server(argv, *, endpoint_token, routed_server):
                                     raise RuntimeError(
                                         "request is missing routing correlation metadata"
                                     )
-                                try:
-                                    # Raw request reply is sync-only in the
-                                    # public Python contract. The blocking
-                                    # terminal owns Core/HWM admission.
-                                    request.reply().messages(*parts).submit()
-                                except zlink.SubmitError as exc:
-                                    if exc.result not in {
-                                        zlink.SubmitResult.NOT_CONNECTED,
-                                        zlink.SubmitResult.NOT_FOUND,
-                                    }:
-                                        raise
+                                submit_reqrep_reply(request, parts)
 
 
 __all__ = ["run_reqrep_server"]

@@ -56,6 +56,24 @@ if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
 fi
 export PERF_PART_COUNT="${PART_COUNT}"
 
+REUSE_BUILD=0
+CLEAN_BUILD=0
+for arg in "$@"; do
+  case "${arg}" in
+    --build-dir|--build-dir=*)
+      echo "Error: --build-dir is not supported by the Node perf runner because TypeScript and native artifacts use fixed package paths (dist, dist-tools, build/Release, and prebuilds/<platform>-<arch>)." >&2
+      exit 1
+      ;;
+    --reuse-build) REUSE_BUILD=1 ;;
+    --clean-build) CLEAN_BUILD=1 ;;
+  esac
+done
+
+if [ "${REUSE_BUILD}" -eq 1 ] && [ "${CLEAN_BUILD}" -eq 1 ]; then
+  echo "Error: --reuse-build and --clean-build are mutually exclusive." >&2
+  exit 1
+fi
+
 # Use the current workspace Core by default. An explicit --core-version selects
 # the downloaded release package for that version instead.
 if [[ -n "${CORE_VERSION_OPTION}" ]]; then
@@ -91,29 +109,34 @@ if [ "$NODE_MAJOR" -lt 22 ]; then
   exit 1
 fi
 
-REUSE_BUILD=0
-CLEAN_BUILD=0
-for arg in "$@"; do
-  case "${arg}" in
-    --reuse-build) REUSE_BUILD=1 ;;
-    --clean-build) CLEAN_BUILD=1 ;;
-  esac
-done
-
-if [ "${REUSE_BUILD}" -eq 1 ] && [ "${CLEAN_BUILD}" -eq 1 ]; then
-  echo "Error: --reuse-build and --clean-build are mutually exclusive." >&2
-  exit 1
-fi
-
 if [ "${CLEAN_BUILD}" -eq 1 ]; then
-  rm -rf "$ROOT_DIR/dist-tools"
+  rm -rf "$ROOT_DIR/dist" "$ROOT_DIR/dist-tools" "$ROOT_DIR/build"
 fi
 
 if [ "${REUSE_BUILD}" -eq 0 ]; then
-  npm run build
-elif [ ! -f "$ROOT_DIR/dist-tools/perf/single/run_benchmarks.js" ]; then
-  echo "Error: --reuse-build requested but dist-tools output is missing." >&2
-  exit 1
+  npm run build:incremental
+  npm run rebuild-native
+else
+  MISSING_BUILD_ARTIFACTS=()
+  for artifact in \
+    "dist/index.js" \
+    "dist-tools/perf/single/run_benchmarks.js"; do
+    if [ ! -f "$ROOT_DIR/$artifact" ]; then
+      MISSING_BUILD_ARTIFACTS+=("$artifact")
+    fi
+  done
+  PREBUILD_PLATFORM="$(node -p '`${process.platform}-${process.arch}`')"
+  if [ ! -f "$ROOT_DIR/build/Release/zlink.node" ] \
+      && [ ! -f "$ROOT_DIR/prebuilds/$PREBUILD_PLATFORM/zlink.node" ]; then
+    MISSING_BUILD_ARTIFACTS+=(
+      "build/Release/zlink.node or prebuilds/$PREBUILD_PLATFORM/zlink.node"
+    )
+  fi
+  if [ "${#MISSING_BUILD_ARTIFACTS[@]}" -ne 0 ]; then
+    echo "Error: --reuse-build requested but required Node perf output is missing:" >&2
+    printf '  - %s\n' "${MISSING_BUILD_ARTIFACTS[@]}" >&2
+    exit 1
+  fi
 fi
 
 if [ ! -f "$CORE_RUNTIME" ]; then

@@ -88,6 +88,88 @@ public sealed class test_optimization_guard
     }
 
     [Fact]
+    public void perf_measurement_async_helpers_keep_completed_task_fast_path()
+    {
+        string path = Path.Combine(BindingRoot(), "perf", "common",
+            "Zlink.BindingBench.Common", "PerfSocketIo.cs");
+        string source = File.ReadAllText(path);
+
+        Assert.Equal(4, Regex.Matches(source,
+            @"public static Task SendMeasurementAsync\(").Count);
+        Assert.DoesNotContain("async Task<int> SendMeasurementAsync", source,
+            StringComparison.Ordinal);
+        Assert.Contains("if (!submit.IsCompletedSuccessfully)", source,
+            StringComparison.Ordinal);
+        Assert.Contains("return Task.CompletedTask;", source,
+            StringComparison.Ordinal);
+        Assert.Contains("AwaitMeasurementSendAsync(submit, tail, ownedMessage)",
+            source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void routed_multi_clients_use_fair_async_admission_rounds()
+    {
+        string sourceRoot = Path.Combine(BindingRoot(), "perf", "multi",
+            "Zlink.BindingBench.Multi", "src");
+        string[] clients =
+        {
+            "PerfMultiDealerRouterClient.cs",
+            "PerfMultiRouterRouterClient.cs"
+        };
+
+        foreach (string client in clients)
+        {
+            string source = File.ReadAllText(Path.Combine(sourceRoot, client));
+            int round = source.IndexOf("int roundStart = 0;",
+                StringComparison.Ordinal);
+            Assert.True(round >= 0, client);
+
+            int poll = source.IndexOf("PollSocketEvents(", round,
+                StringComparison.Ordinal);
+            Assert.True(poll > round, client);
+
+            int receiveDrain = source.IndexOf("HandleClientEvent(", poll,
+                StringComparison.Ordinal);
+
+            Assert.True(receiveDrain > poll, client);
+            Assert.Contains(
+                "for (int attempts = 0; attempts < slots.Length; attempts++)",
+                source, StringComparison.Ordinal);
+            Assert.Contains("if (!TryCompletePendingAdmission(slot))", source,
+                StringComparison.Ordinal);
+            Assert.Contains("slot.PendingAdmission =", source,
+                StringComparison.Ordinal);
+            Assert.Contains("admissionSignal.Track(tracked)", source,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "await admissionSignal.WaitAsync(benchDeadlineTicks)", source,
+                StringComparison.Ordinal);
+            Assert.Matches(
+                @"PollSocketEvents\(pollManager,\s*sockets,\s*eventMasks,\s*0\)",
+                source);
+            Assert.DoesNotContain("Math.Min(50, remainingMs)", source,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("await Task.Yield()", source,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("SendLoopAsync", source,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("new Task[slots.Length]", source,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("WaitingForReply", source,
+                StringComparison.Ordinal);
+        }
+
+        string signal = File.ReadAllText(Path.Combine(sourceRoot,
+            "PerfMultiAdmissionSignal.cs"));
+        Assert.Contains("UnsafeOnCompleted(_signalAction)", signal,
+            StringComparison.Ordinal);
+        Assert.Contains("TaskCreationOptions.RunContinuationsAsynchronously",
+            signal, StringComparison.Ordinal);
+        Assert.DoesNotContain("Task.Delay", signal,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void internal_runtime_namespaces_stay_under_runtime()
     {
         string source = ReadZlinkSource();

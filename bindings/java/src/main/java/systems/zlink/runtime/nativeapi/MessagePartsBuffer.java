@@ -5,54 +5,66 @@ package systems.zlink.runtime.nativeapi;
 import systems.zlink.contracts.messaging.Message;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-public final class MessagePartsBuffer {
+public final class MessagePartsBuffer extends AbstractList<Message> {
     private Message singlePart;
+    private Message secondPart;
     private ArrayList<Message> parts;
-    private List<Message> view;
 
-    public void add(Message part) {
+    @Override
+    public boolean add(Message part) {
         Objects.requireNonNull(part, "part");
-        view = null;
         if (parts != null) {
             parts.add(part);
-            return;
+            return true;
         }
         if (singlePart == null) {
             singlePart = part;
-            return;
+            return true;
+        }
+        if (secondPart == null) {
+            secondPart = part;
+            return true;
         }
         parts = new ArrayList<>(4);
         parts.add(singlePart);
+        parts.add(secondPart);
         parts.add(part);
         singlePart = null;
+        secondPart = null;
+        return true;
     }
 
     public boolean isEmpty() {
-        return singlePart == null && (parts == null || parts.isEmpty());
+        return size() == 0;
     }
 
+    @Override
     public int size() {
-        return parts != null ? parts.size() : singlePart == null ? 0 : 1;
+        if (parts != null)
+            return parts.size();
+        if (secondPart != null)
+            return 2;
+        return singlePart == null ? 0 : 1;
     }
 
+    @Override
     public Message get(int index) {
         if (parts != null)
             return parts.get(index);
         if (index == 0 && singlePart != null)
             return singlePart;
+        if (index == 1 && secondPart != null)
+            return secondPart;
         throw new IndexOutOfBoundsException(index);
     }
 
     public List<Message> asList() {
-        if (parts != null)
-            return parts;
-        if (view == null)
-            view = singlePart == null ? List.of() : List.of(singlePart);
-        return view;
+        return this;
     }
 
     public MemorySegment copyToNativeArray(Arena arena) {

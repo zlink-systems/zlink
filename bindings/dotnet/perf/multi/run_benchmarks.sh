@@ -9,9 +9,23 @@ PROJECT="${DOTNET_DIR}/perf/multi/Zlink.BindingBench.Multi/Zlink.BindingBench.Mu
 PROJECT_DIR="${DOTNET_DIR}/perf/multi/Zlink.BindingBench.Multi"
 REPO_DIR="$(cd "${DOTNET_DIR}/../.." && pwd)"
 CORE_VERSION_OPTION=""
+REUSE_BUILD=0
+CLEAN_BUILD=0
 SCRIPT_ARGUMENTS=("$@")
 for ((argument_index = 0; argument_index < ${#SCRIPT_ARGUMENTS[@]}; ++argument_index)); do
   case "${SCRIPT_ARGUMENTS[argument_index]}" in
+    --build-dir|--build-dir=*)
+      echo "Error: --build-dir is not supported by the .NET multi perf runner because MSBuild and runtime probing use the fixed project bin/obj layout." >&2
+      exit 1
+      ;;
+    --reuse-build)
+      REUSE_BUILD=1
+      continue
+      ;;
+    --clean-build)
+      CLEAN_BUILD=1
+      continue
+      ;;
     --core-version)
       if (( argument_index + 1 >= ${#SCRIPT_ARGUMENTS[@]} )); then
         echo "Error: --core-version requires a version." >&2
@@ -37,6 +51,11 @@ for ((argument_index = 0; argument_index < ${#SCRIPT_ARGUMENTS[@]}; ++argument_i
   fi
   CORE_VERSION_OPTION="${requested_core_version}"
 done
+
+if [[ "${REUSE_BUILD}" -eq 1 && "${CLEAN_BUILD}" -eq 1 ]]; then
+  echo "--reuse-build and --clean-build are mutually exclusive." >&2
+  exit 1
+fi
 
 # Use the current workspace Core by default. An explicit --core-version selects
 # the downloaded release package for that version instead.
@@ -79,9 +98,6 @@ PATTERN_TRANSITION_MS="${PERF_MULTI_PATTERN_TRANSITION_MS:-3000}"
 RESULTS_TAG=""
 CONFIGURATION="${PERF_CONFIGURATION:-Release}"
 REPORT=""
-REUSE_BUILD=0
-CLEAN_BUILD=0
-BUILD_DIR=""
 OUTPUT_PATH=""
 PIN_CPU=0
 COMMON_IO_THREADS="${PERF_IO_THREADS:-}"
@@ -186,9 +202,9 @@ Options:
   --transports LIST     Transport list override (default: tcp,tls,ws,wss).
   --clients N           Client socket count (default: 100).
   --runs N              Iterations per configuration (default: 1).
-  --build-dir PATH      Accepted for policy compatibility.
-  --reuse-build         Reuse existing build output.
-  --clean-build         Remove project bin/obj before build.
+  --build-dir PATH      Unsupported: .NET perf uses fixed project bin/obj paths.
+  --reuse-build         Reuse existing Release perf/STREAM outputs; skip builds.
+  --clean-build         Remove fixed project bin/obj, then build current sources.
   --output PATH         Tee report output to PATH.
   --pin-cpu             Pin benchmark processes to CPU 1 on Linux.
   --io-threads N        Set both server/client io threads.
@@ -236,6 +252,24 @@ ensure_build_output() {
   dotnet build "${PROJECT}" -c "${CONFIGURATION}" >/dev/null
 }
 
+validate_reuse_outputs() {
+  if [[ "${REUSE_BUILD}" -ne 1 ]]; then
+    return
+  fi
+
+  if ! resolve_perf_binary "${PROJECT_DIR}" "Zlink.BindingBench.Multi" >/dev/null; then
+    echo "Error: --reuse-build requested but .NET multi ${CONFIGURATION} perf output is missing under ${PROJECT_DIR}/bin/${CONFIGURATION}/net8.0." >&2
+    echo "Run without --reuse-build to build the fixed project output." >&2
+    exit 1
+  fi
+
+  if [[ ",${PATTERN}," == *,MULTI_STREAM,* && ! -x "${STREAM_CLIENT}" ]]; then
+    echo "Error: --reuse-build requested but the shared STREAM client is missing or not executable: ${STREAM_CLIENT}" >&2
+    echo "Run without --reuse-build to build the shared STREAM client." >&2
+    exit 1
+  fi
+}
+
 prepare_core_runtime() {
   if [[ ! -f "${CORE_LIB}" ]]; then
     echo "core runtime not found: ${CORE_LIB}" >&2
@@ -257,6 +291,11 @@ prepare_core_runtime() {
 ensure_stream_client() {
   if [[ -x "${STREAM_CLIENT}" ]]; then
     return
+  fi
+
+  if [[ "${REUSE_BUILD}" -eq 1 ]]; then
+    echo "Error: --reuse-build requested but the shared STREAM client is missing or not executable: ${STREAM_CLIENT}" >&2
+    exit 1
   fi
 
   cmake -S "${REPO_DIR}/bindings/c" -B "${STREAM_BUILD_DIR}" \
@@ -1054,11 +1093,6 @@ while [[ $# -gt 0 ]]; do
       CLIENTS="${2:-}"
       shift
       ;;
-    --build-dir)
-      require_arg "$1" "${2:-}"
-      BUILD_DIR="${2:-}"
-      shift
-      ;;
     --reuse-build)
       REUSE_BUILD=1
       ;;
@@ -1220,11 +1254,6 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-if [[ "${REUSE_BUILD}" -eq 1 && "${CLEAN_BUILD}" -eq 1 ]]; then
-  echo "--reuse-build and --clean-build are mutually exclusive." >&2
-  exit 1
-fi
-
 validate_uint "--duration" "${DURATION}"
 validate_uint "--runs" "${RUNS}"
 if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
@@ -1304,6 +1333,7 @@ if [[ ! "${TRANSPORTS}" =~ ^[a-z]+(,[a-z]+)*$ ]]; then
 fi
 
 PATTERN="$(normalize_multi_pattern_csv "${PATTERN}")"
+validate_reuse_outputs
 EFFECTIVE_MSG_SIZES_DISPLAY="$(effective_msg_sizes_display "${PATTERN}" "${MSG_SIZES}")"
 EFFECTIVE_CLIENTS_DISPLAY="$(effective_clients_display "${PATTERN}" "${CLIENTS}")"
 if [[ -n "${SERVER_IO_THREADS}" ]]; then

@@ -16,11 +16,11 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import systems.zlink.contracts.errors.ErrorCategory;
 import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
@@ -28,7 +28,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.internal.DurationConversions;
 import systems.zlink.runtime.nativeapi.InternalAccess;
-import systems.zlink.runtime.nativeapi.MessagePartsBuffer;
+import systems.zlink.runtime.nativeapi.CompletionDispatcher;
 import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
@@ -44,21 +44,35 @@ import systems.zlink.runtime.nativeapi.RuntimeResources;
  * thread.
  */
 final class SendCompletionRegistry implements AutoCloseable {
+    private static final int CACHED_PART_CAPACITY = 4;
+    private static final long FAST_TOKEN = 1L;
+    private static final MemorySegment FAST_USERDATA =
+        MemorySegment.ofAddress(FAST_TOKEN);
+    private static final CompletionStage<Void> COMPLETED_STAGE =
+        CompletableFuture.completedStage(null);
     private static final Linker LINKER = Linker.nativeLinker();
     private static final FunctionDescriptor CALLBACK_DESCRIPTOR =
         FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS,
             ValueLayout.ADDRESS);
+    private static final ThreadLocal<SubmitScratch> SUBMIT_SCRATCH =
+        ThreadLocal.withInitial(SubmitScratch::new);
     private final NativeSocketRuntime socket;
-    private final AtomicLong nextToken = new AtomicLong(1L);
-    private final ConcurrentMap<Long, Pending> pending =
+    private final AtomicLong nextToken = new AtomicLong(FAST_TOKEN + 1L);
+    private final AtomicReference<Pending> fastPending =
+        new AtomicReference<>();
+    private final ConcurrentMap<Long, Pending> overflowPending =
         new ConcurrentHashMap<>();
-    private final ExecutorService completionExecutor =
-        RuntimeResources.daemonSingleThreadExecutor("zlink-send-completion");
+    private final ArrayBlockingQueue<Pending> pendingPool =
+        new ArrayBlockingQueue<>(32);
+    private final CompletionDispatcher.CompletionLane completionLane;
     private final Arena callbackArena = Arena.ofShared();
     private final MemorySegment callback;
 
-    SendCompletionRegistry(NativeSocketRuntime socket) {
+    SendCompletionRegistry(NativeSocketRuntime socket,
+                           CompletionDispatcher.CompletionLane completionLane) {
         this.socket = Objects.requireNonNull(socket, "socket");
+        this.completionLane = Objects.requireNonNull(completionLane,
+            "completionLane");
         try {
             callback = LINKER.upcallStub(callbackHandle(), CALLBACK_DESCRIPTOR,
                 callbackArena);
@@ -69,7 +83,6 @@ final class SendCompletionRegistry implements AutoCloseable {
             }
         } catch (Throwable failure) {
             RuntimeResources.closeArena(callbackArena);
-            RuntimeResources.shutdownExecutor(completionExecutor);
             if (failure instanceof RuntimeException runtimeFailure) {
                 throw runtimeFailure;
             }
@@ -82,81 +95,143 @@ final class SendCompletionRegistry implements AutoCloseable {
                                  Duration timeout,
                                  MemorySegment target) {
         Objects.requireNonNull(sourceParts, "sourceParts");
-        if (sourceParts.isEmpty()) {
+        int partCount = sourceParts.size();
+        if (partCount == 0) {
             throw new IllegalArgumentException("parts must not be empty");
         }
-        for (int i = 0; i < sourceParts.size(); i++) {
-            Objects.requireNonNull(sourceParts.get(i), "parts[" + i + "]");
+        for (int i = 0; i < partCount; i++) {
+            Objects.requireNonNull(sourceParts.get(i),
+                "parts[" + i + "]");
         }
         if (timeout != null && timeout.isNegative()) {
             throw new IllegalArgumentException("timeout must not be negative");
         }
 
-        MessagePartsBuffer materializer = new MessagePartsBuffer();
-        for (Message part : sourceParts) {
-            materializer.add(part);
-        }
+        Pending operation = acquirePending();
 
-        long token = nextToken();
-        Pending operation = new Pending(token);
-        PendingFuture future = new PendingFuture(operation);
-        operation.future = future;
-
-        pending.put(token, operation);
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment nativeParts = materializer.transferToNativeArray(arena);
-            MemorySegment options = arena.allocate(
-                NativeLayouts.SEND_ASYNC_OPTIONS_LAYOUT);
-            options.set(ValueLayout.JAVA_INT,
-                NativeLayouts.SEND_ASYNC_OPTIONS_STRUCT_SIZE_OFFSET,
-                (int) NativeLayouts.SEND_ASYNC_OPTIONS_LAYOUT.byteSize());
-            options.set(ValueLayout.JAVA_INT,
-                NativeLayouts.SEND_ASYNC_OPTIONS_TIMEOUT_MS_OFFSET,
-                DurationConversions.timeoutMillisOrZero(timeout));
-            options.set(ValueLayout.ADDRESS,
-                NativeLayouts.SEND_ASYNC_OPTIONS_USERDATA_OFFSET,
-                MemorySegment.ofAddress(token));
-            options.set(ValueLayout.ADDRESS,
-                NativeLayouts.SEND_ASYNC_OPTIONS_TARGET_OFFSET,
-                target == null ? MemorySegment.NULL : target);
-            MemorySegment opIdOut = arena.allocate(ValueLayout.JAVA_LONG);
-            opIdOut.set(ValueLayout.JAVA_LONG, 0L, 0L);
-
-            int result;
+        SubmitScratch scratch = partCount <= CACHED_PART_CAPACITY
+            ? SUBMIT_SCRATCH.get() : null;
+        if (scratch != null && scratch.tryAcquire()) {
             try {
-                result = Native.sendAsync(socket.handle(), nativeParts,
-                    sourceParts.size(), options, opIdOut);
-            } catch (Throwable failure) {
-                pending.remove(token, operation);
-                materializer.restoreFromNativeArray(nativeParts,
-                    sourceParts.size());
-                throw failure;
+                return submitWithStorage(sourceParts, partCount, timeout, target,
+                    operation, scratch.options,
+                    scratch.opIdOut, scratch.nativeParts, scratch);
+            } finally {
+                scratch.release();
             }
-            if (result != SubmitResult.OK.value()) {
-                pending.remove(token, operation);
-                materializer.restoreFromNativeArray(nativeParts,
-                    sourceParts.size());
-                throw submitFailure(result, Native.errno());
-            }
-
-            operation.opId = opIdOut.get(ValueLayout.JAVA_LONG, 0L);
-            if (operation.opId == 0L) {
-                // Core admitted the record synchronously and deliberately
-                // does not emit a completion callback for this operation.
-                if (pending.remove(token, operation)) {
-                    future.complete(null);
-                }
-            } else if (future.isCancelled()
-                       && pending.get(token) == operation) {
-                cancel(operation);
+        } else {
+            try (Arena arena = Arena.ofConfined()) {
+                return submitWithStorage(sourceParts, partCount, timeout, target,
+                    operation,
+                    arena.allocate(NativeLayouts.SEND_ASYNC_OPTIONS_LAYOUT),
+                    arena.allocate(ValueLayout.JAVA_LONG),
+                    arena.allocate(NativeLayouts.MESSAGE_LAYOUT, partCount),
+                    null);
             }
         }
-        return future;
+    }
+
+    private CompletionStage<Void> submitWithStorage(
+            List<Message> sourceParts,
+            int partCount,
+            Duration timeout,
+            MemorySegment target,
+            Pending operation,
+            MemorySegment options,
+            MemorySegment opIdOut,
+            MemorySegment nativeParts,
+            SubmitScratch scratch) {
+        options.set(ValueLayout.JAVA_INT,
+            NativeLayouts.SEND_ASYNC_OPTIONS_STRUCT_SIZE_OFFSET,
+            (int) NativeLayouts.SEND_ASYNC_OPTIONS_LAYOUT.byteSize());
+        options.set(ValueLayout.JAVA_INT,
+            NativeLayouts.SEND_ASYNC_OPTIONS_TIMEOUT_MS_OFFSET,
+            DurationConversions.timeoutMillisOrZero(timeout));
+        options.set(ValueLayout.ADDRESS,
+            NativeLayouts.SEND_ASYNC_OPTIONS_TARGET_OFFSET,
+            target == null ? MemorySegment.NULL : target);
+        opIdOut.set(ValueLayout.JAVA_LONG, 0L, 0L);
+        transferToNativeArray(sourceParts, nativeParts, partCount, scratch);
+
+        // Register immediately before the Core call. This preserves the
+        // inline-completion guarantee while keeping preparation failures out
+        // of the pending table.
+        registerPending(operation);
+        options.set(ValueLayout.ADDRESS,
+            NativeLayouts.SEND_ASYNC_OPTIONS_USERDATA_OFFSET,
+            operation.fastSlot
+                ? FAST_USERDATA : MemorySegment.ofAddress(operation.token));
+
+        int result;
+        try {
+            result = Native.sendAsync(socket.handle(), nativeParts,
+                partCount, options, opIdOut);
+        } catch (Throwable failure) {
+            removePending(operation);
+            restoreFromNativeArray(sourceParts, nativeParts, partCount);
+            recyclePending(operation);
+            throw failure;
+        }
+        if (result != SubmitResult.OK.value()) {
+            int errno = Native.errno();
+            removePending(operation);
+            restoreFromNativeArray(sourceParts, nativeParts, partCount);
+            recyclePending(operation);
+            throw submitFailure(result, errno);
+        }
+
+        operation.opId = opIdOut.get(ValueLayout.JAVA_LONG, 0L);
+        if (operation.opId == 0L) {
+            // Core admitted the record synchronously and deliberately does
+            // not emit a completion callback for this operation.
+            if (removePending(operation)) {
+                recyclePending(operation);
+                return COMPLETED_STAGE;
+            }
+        }
+        return operation.attachFuture();
+    }
+
+    private static void transferToNativeArray(
+            List<Message> parts,
+            MemorySegment nativeParts,
+            int partCount,
+            SubmitScratch scratch) {
+        long stride = NativeLayouts.MESSAGE_LAYOUT.byteSize();
+        int moved = 0;
+        try {
+            for (int i = 0; i < partCount; i++) {
+                InternalAccess.messageTransferTo(parts.get(i),
+                    scratch == null
+                        ? nativeParts.asSlice(i * stride, stride)
+                        : scratch.part(i));
+                moved++;
+            }
+        } catch (RuntimeException | Error failure) {
+            restoreFromNativeArray(parts, nativeParts, moved);
+            throw failure;
+        }
+    }
+
+    private static void restoreFromNativeArray(
+            List<Message> parts,
+            MemorySegment nativeParts,
+            int count) {
+        if (nativeParts == MemorySegment.NULL || count <= 0) {
+            return;
+        }
+        int bounded = Math.min(count, parts.size());
+        long stride = NativeLayouts.MESSAGE_LAYOUT.byteSize();
+        for (int i = 0; i < bounded; i++) {
+            InternalAccess.messageRestoreFromNative(parts.get(i),
+                nativeParts.asSlice(i * stride, stride), i + 1 < bounded,
+                null);
+        }
     }
 
     private void cancel(Pending operation) {
         long opId = operation.opId;
-        if (opId == 0L || pending.get(operation.token) != operation) {
+        if (opId == 0L || !isPending(operation)) {
             return;
         }
         try {
@@ -178,7 +253,7 @@ final class SendCompletionRegistry implements AutoCloseable {
             MemorySegment userdata = event.get(ValueLayout.ADDRESS,
                 NativeLayouts.SEND_COMPLETE_USERDATA_OFFSET);
             long token = userdata == null ? 0L : userdata.address();
-            Pending operation = pending.remove(token);
+            Pending operation = removePending(token);
             if (operation == null) {
                 return;
             }
@@ -186,33 +261,19 @@ final class SendCompletionRegistry implements AutoCloseable {
                 NativeLayouts.SEND_COMPLETE_RESULT_OFFSET);
             int errno = event.get(ValueLayout.JAVA_INT,
                 NativeLayouts.SEND_COMPLETE_ERRNO_OFFSET);
-            try {
-                completionExecutor.execute(() -> complete(operation, result,
-                    errno));
-            } catch (RejectedExecutionException failure) {
-                operation.future.completeExceptionally(
-                    new ZlinkSubmitException(SubmitResult.TERMINATED,
-                        NativeErrno.ECANCELED));
-            }
+            completionLane.dispatch(() -> complete(operation, result,
+                errno));
         } catch (Throwable ignored) {
             // A foreign callback must never unwind through the Core boundary.
         }
     }
 
-    private static void complete(Pending operation, int result, int errno) {
-        if (result == 0) {
-            operation.future.complete(null);
-        } else {
-            operation.future.completeExceptionally(
-                new ZlinkSubmitException(SubmitResult.NOT_ADMITTED,
-                    result == 201 && errno == 0
-                        ? NativeErrno.ETIMEDOUT : errno));
-        }
+    private void complete(Pending operation, int result, int errno) {
+        operation.publish(result, errno);
     }
 
     void dispatchCompletion(Runnable completion) {
-        Objects.requireNonNull(completion, "completion");
-        completionExecutor.execute(completion);
+        completionLane.dispatch(completion);
     }
 
     @Override
@@ -221,26 +282,68 @@ final class SendCompletionRegistry implements AutoCloseable {
         // rejects any submit that has not entered yet. Such submitters remove
         // their own pending entry when that rejection is returned.
         List<Pending> abandoned = new ArrayList<>();
-        pending.forEach((token, operation) -> {
-            if (pending.remove(token, operation)) {
+        Pending fast = fastPending.getAndSet(null);
+        if (fast != null) {
+            abandoned.add(fast);
+        }
+        overflowPending.forEach((token, operation) -> {
+            if (overflowPending.remove(token, operation)) {
                 abandoned.add(operation);
             }
         });
-        for (Pending operation : abandoned) {
-            operation.future.completeExceptionally(
-                new ZlinkSubmitException(SubmitResult.TERMINATED,
-                    NativeErrno.ECANCELED));
+        if (!abandoned.isEmpty()) {
+            // Preserve the socket's completion order during teardown. Core
+            // callbacks already queued on this lane must complete before the
+            // operations abandoned by native socket close.
+            completionLane.dispatch(() -> completeAbandoned(abandoned));
         }
         RuntimeResources.closeArena(callbackArena);
-        RuntimeResources.shutdownExecutor(completionExecutor);
+    }
+
+    private static void completeAbandoned(List<Pending> abandoned) {
+        for (Pending operation : abandoned) {
+            operation.publish(SubmitResult.TERMINATED.value(),
+                NativeErrno.ECANCELED);
+        }
     }
 
     private long nextToken() {
         long token;
         do {
             token = nextToken.getAndIncrement();
-        } while (token == 0L);
+        } while (token == 0L || token == FAST_TOKEN);
         return token;
+    }
+
+    private void registerPending(Pending operation) {
+        operation.token = FAST_TOKEN;
+        operation.fastSlot = true;
+        if (fastPending.compareAndSet(null, operation)) {
+            return;
+        }
+        operation.token = nextToken();
+        operation.fastSlot = false;
+        overflowPending.put(operation.token, operation);
+    }
+
+    private boolean isPending(Pending operation) {
+        return operation.fastSlot
+            ? fastPending.get() == operation
+            : overflowPending.get(operation.token) == operation;
+    }
+
+    private boolean removePending(Pending operation) {
+        return operation.fastSlot
+            ? fastPending.compareAndSet(operation, null)
+            : overflowPending.remove(operation.token, operation);
+    }
+
+    private Pending removePending(long token) {
+        Pending fast = fastPending.get();
+        if (fast != null && fast.token == token) {
+            return fastPending.compareAndSet(fast, null) ? fast : null;
+        }
+        return overflowPending.remove(token);
     }
 
     private static ZlinkSubmitException submitFailure(int result, int errno) {
@@ -251,6 +354,20 @@ final class SendCompletionRegistry implements AutoCloseable {
             return (ZlinkSubmitException) ZlinkException.fromErrno(
                 ErrorCategory.SUBMIT, errno);
         }
+    }
+
+    private Pending acquirePending() {
+        Pending operation = pendingPool.poll();
+        if (operation == null) {
+            operation = new Pending();
+        } else {
+            operation.reset();
+        }
+        return operation;
+    }
+
+    private void recyclePending(Pending operation) {
+        pendingPool.offer(operation);
     }
 
     private MethodHandle callbackHandle() {
@@ -282,13 +399,114 @@ final class SendCompletionRegistry implements AutoCloseable {
         }
     }
 
-    private static final class Pending {
-        private final long token;
+    private final class Pending {
+        private long token;
+        private boolean fastSlot;
         private volatile long opId;
-        private CompletableFuture<Void> future;
+        private PendingFuture future;
+        private int terminalResult = Integer.MIN_VALUE;
+        private int terminalErrno;
 
-        private Pending(long token) {
-            this.token = token;
+        private Pending() {
+        }
+
+        private PendingFuture attachFuture() {
+            PendingFuture attached;
+            int result;
+            int errno;
+            synchronized (this) {
+                if (future != null) {
+                    return future;
+                }
+                attached = new PendingFuture(this);
+                future = attached;
+                result = terminalResult;
+                errno = terminalErrno;
+            }
+            if (result != Integer.MIN_VALUE) {
+                completeFuture(attached, result, errno);
+                recyclePending(this);
+            }
+            return attached;
+        }
+
+        private void publish(int result, int errno) {
+            PendingFuture attached;
+            synchronized (this) {
+                if (terminalResult != Integer.MIN_VALUE) {
+                    return;
+                }
+                terminalResult = result;
+                terminalErrno = errno;
+                attached = future;
+            }
+            if (attached != null) {
+                completeFuture(attached, result, errno);
+                recyclePending(this);
+            }
+        }
+
+        private void reset() {
+            token = 0L;
+            fastSlot = false;
+            opId = 0L;
+            future = null;
+            terminalResult = Integer.MIN_VALUE;
+            terminalErrno = 0;
+        }
+    }
+
+    private static void completeFuture(PendingFuture future, int result,
+                                       int errno) {
+        if (result == 0) {
+            future.complete(null);
+        } else {
+            future.completeExceptionally(
+                new ZlinkSubmitException(
+                    result == SubmitResult.TERMINATED.value()
+                        ? SubmitResult.TERMINATED
+                        : SubmitResult.NOT_ADMITTED,
+                    result == 201 && errno == 0
+                        ? NativeErrno.ETIMEDOUT : errno));
+        }
+    }
+
+    /** Per-caller reusable native submit structures for common multipart sends. */
+    private static final class SubmitScratch {
+        private final Arena arena = Arena.ofAuto();
+        private final MemorySegment options = arena.allocate(
+            NativeLayouts.SEND_ASYNC_OPTIONS_LAYOUT);
+        private final MemorySegment opIdOut = arena.allocate(
+            ValueLayout.JAVA_LONG);
+        private final MemorySegment nativeParts = arena.allocate(
+            NativeLayouts.MESSAGE_LAYOUT, CACHED_PART_CAPACITY);
+        private final MemorySegment[] partSlices = createPartSlices();
+        private boolean inUse;
+
+        boolean tryAcquire() {
+            if (inUse) {
+                return false;
+            }
+            inUse = true;
+            return true;
+        }
+
+        MemorySegment part(int index) {
+            return partSlices[index];
+        }
+
+        void release() {
+            inUse = false;
+        }
+
+        private MemorySegment[] createPartSlices() {
+            MemorySegment[] slices =
+                new MemorySegment[CACHED_PART_CAPACITY];
+            long stride = NativeLayouts.MESSAGE_LAYOUT.byteSize();
+            for (int i = 0; i < slices.length; i++) {
+                slices[i] = nativeParts.asSlice(i * stride, stride);
+            }
+            return slices;
         }
     }
 }

@@ -138,6 +138,8 @@ void define_core_exports (napi_env env, napi_value exports)
           ZLINK_METHOD ("testBeginHeldRoutedMultipart", test_begin_held_routed_multipart),
           ZLINK_METHOD ("testEndHeldRoutedMultipart", test_end_held_routed_multipart),
           ZLINK_METHOD ("testRunSendCloseStress", test_run_send_close_stress),
+          ZLINK_METHOD ("testSendCompletionOperationPath",
+                        test_send_completion_operation_path),
         };
         define_exports (
           env, exports, test_descs, sizeof (test_descs) / sizeof (*test_descs));

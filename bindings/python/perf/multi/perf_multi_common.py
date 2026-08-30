@@ -3,6 +3,7 @@ import asyncio
 import os
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 PERF_DIR = Path(__file__).resolve().parent.parent
@@ -52,15 +53,88 @@ from perf_metrics import (
 
 
 TOPIC = b"bench"
-PYTHON_MULTI_DEFAULT_IO_THREADS = 4
+PYTHON_MULTI_DEFAULT_IO_THREADS = 1
+PERF_MULTI_AUX_POLL_WAIT_MS = 100
+RELAY_SCHEDULER_QUANTUM = 32
+
+
+class RelaySchedulerQuantum:
+    """Bound cooperative scheduling latency without limiting admissions."""
+
+    __slots__ = ("_processed", "quantum")
+
+    def __init__(self, quantum=RELAY_SCHEDULER_QUANTUM):
+        if quantum <= 0:
+            raise ValueError("relay scheduler quantum must be positive")
+        self.quantum = quantum
+        self._processed = 0
+
+    def received(self):
+        self._processed += 1
+        if self._processed < self.quantum:
+            return False
+        self._processed = 0
+        return True
+
+    def reset(self):
+        self._processed = 0
+
+
+@contextmanager
+def scoped_relay_eager_task_factory(loop=None):
+    """Use Python 3.12 eager task start only within the relay hot loop."""
+
+    loop = asyncio.get_running_loop() if loop is None else loop
+    previous_factory = loop.get_task_factory()
+    eager_factory = getattr(asyncio, "eager_task_factory", None)
+    if eager_factory is not None:
+        loop.set_task_factory(eager_factory)
+    try:
+        yield eager_factory is not None
+    finally:
+        if eager_factory is not None:
+            loop.set_task_factory(previous_factory)
+
+
+def make_relay_send_done_callback(pending_tasks, send_errors):
+    """Create one completion classifier shared by every relay reply task."""
+
+    zlink_mod = _require_zlink()
+    ignored_results = {
+        zlink_mod.SubmitResult.NOT_CONNECTED,
+        zlink_mod.SubmitResult.NOT_FOUND,
+    }
+
+    def on_send_done(task):
+        pending_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if isinstance(exc, zlink_mod.SubmitError) and exc.result in ignored_results:
+            return
+        if exc is not None:
+            send_errors.append(exc)
+
+    return on_send_done
+
+
+def track_relay_send_task(task, pending_tasks, on_send_done):
+    """Track only genuinely pending tasks; classify eager completions inline."""
+
+    if task.done():
+        on_send_done(task)
+        return False
+    pending_tasks.add(task)
+    task.add_done_callback(on_send_done)
+    return True
 
 
 def received_has_stop_token(received):
-    for part in received:
-        data = part.data
-        if len(data) == len(STOP_TOKEN) and data == STOP_TOKEN:
-            return True
-    return False
+    parts = received.parts
+    if len(parts) != 1:
+        return False
+    data = parts[0].data
+    return len(data) == len(STOP_TOKEN) and data == STOP_TOKEN
 
 
 def received_metric_payload(received, *, expected_size=None):
@@ -304,7 +378,13 @@ def measurement_parts(payload):
 
 
 async def send_routed(
-    sock, payload, *, routing_id=None, measurement=True, method="send"
+    sock,
+    payload,
+    *,
+    routing_id=None,
+    measurement=True,
+    method="send",
+    _yield_after_submit=True,
 ):
     while True:
         try:
@@ -319,9 +399,12 @@ async def send_routed(
             await op.submit()
             # Core may admit inline (op_id == 0), in which case awaiting the
             # public terminal does not suspend this coroutine. Always yield
-            # one turn so concurrent send loops and receive progress cannot
-            # be starved for the entire active phase.
-            await asyncio.sleep(0)
+            # one turn for continuous send loops so receive progress cannot
+            # be starved for the entire active phase. One-shot routed echo
+            # tasks already have a scheduling yield at their creation site
+            # and opt out to avoid yielding twice for one reply.
+            if _yield_after_submit:
+                await asyncio.sleep(0)
             return True
         except _submit_error_type() as exc:
             if exc.result != _submit_backpressured_result():

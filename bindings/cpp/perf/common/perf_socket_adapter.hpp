@@ -6,11 +6,17 @@
 
 #include <zlink.hpp>
 
+#include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <condition_variable>
 #include <coroutine>
 #include <cstring>
+#include <deque>
+#include <exception>
 #include <functional>
+#include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -23,6 +29,243 @@ namespace perf
 {
 
 using namespace zlink;
+
+inline bool poll_event_has (poll_event_flag_t events_,
+                            poll_event_flag_t expected_) noexcept
+{
+    return (static_cast<short> (events_) & static_cast<short> (expected_)) != 0;
+}
+
+// Single application-thread scheduler for multi perf coroutines. Producers may
+// enqueue public-async continuations from Core's completion context, but only
+// the application thread drains them. A drain processes the queue snapshot it
+// observed at the start, so a coroutine that yields again cannot monopolize the
+// same round ahead of the other sockets.
+class application_ready_queue_t
+{
+  private:
+    struct remote_state_t
+    {
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::deque<std::function<void ()>> pending;
+    };
+
+  public:
+    application_ready_queue_t () :
+        _remote (std::make_shared<remote_state_t> ()),
+        _ready ()
+    {
+    }
+
+    application_ready_queue_t (const application_ready_queue_t &) = delete;
+    application_ready_queue_t &operator= (const application_ready_queue_t &) = delete;
+
+    class schedule_awaiter_t
+    {
+      public:
+        explicit schedule_awaiter_t (application_ready_queue_t &queue_) noexcept :
+            _queue (queue_)
+        {
+        }
+
+        bool await_ready () const noexcept { return false; }
+
+        template <typename TPromise>
+        void await_suspend (std::coroutine_handle<TPromise> continuation_)
+        {
+            if constexpr (requires (TPromise &promise_) {
+                              promise_.zlink_bind_continuation_scheduler (_queue);
+                          }) {
+                continuation_.promise ().zlink_bind_continuation_scheduler (_queue);
+            }
+            _queue.enqueue (continuation_);
+        }
+
+        void await_resume () const noexcept {}
+
+      private:
+        application_ready_queue_t &_queue;
+    };
+
+    schedule_awaiter_t schedule () noexcept { return schedule_awaiter_t (*this); }
+
+    std::function<void (std::function<void ()>)> continuation_scheduler ()
+    {
+        const std::shared_ptr<remote_state_t> remote = _remote;
+        return [remote] (std::function<void ()> callback_) noexcept {
+            try {
+                enqueue_remote (remote, std::move (callback_));
+            }
+            catch (...) {
+                // Falling back to inline continuation execution would violate
+                // the application-thread invariant and can race _ready. Queue
+                // allocation failure is not recoverable without breaking that
+                // ownership contract.
+                std::terminate ();
+            }
+        };
+    }
+
+    size_t run_ready_round (
+      size_t maximum_ = std::numeric_limits<size_t>::max ())
+    {
+        const size_t local_round = std::min (maximum_, _ready.size ());
+        _remote_batch.clear ();
+        {
+            std::lock_guard<std::mutex> lock (_remote->mutex);
+            const size_t remote_round = std::min (maximum_ - local_round,
+                                                  _remote->pending.size ());
+            _remote_batch.reserve (remote_round);
+            for (size_t i = 0; i < remote_round; ++i) {
+                _remote_batch.emplace_back (std::move (_remote->pending.front ()));
+                _remote->pending.pop_front ();
+            }
+        }
+        return run_snapshot (local_round, _remote_batch.size ());
+    }
+
+    size_t wait_and_run_ready_round (
+      size_t maximum_ = std::numeric_limits<size_t>::max ())
+    {
+        if (_ready.empty ()) {
+            std::unique_lock<std::mutex> lock (_remote->mutex);
+            _remote->changed.wait (
+              lock, [this] { return !_remote->pending.empty (); });
+        }
+        return run_ready_round (maximum_);
+    }
+
+    template <typename TClock, typename TDuration>
+    size_t wait_and_run_ready_round_until (
+      const std::chrono::time_point<TClock, TDuration> &deadline_,
+      size_t maximum_ = std::numeric_limits<size_t>::max ())
+    {
+        if (_ready.empty ()) {
+            std::unique_lock<std::mutex> lock (_remote->mutex);
+            (void) _remote->changed.wait_until (
+              lock, deadline_, [this] { return !_remote->pending.empty (); });
+        }
+        return run_ready_round (maximum_);
+    }
+
+  private:
+    void enqueue (std::coroutine_handle<> continuation_)
+    {
+        // schedule() is reached only by the application thread: initially by
+        // eager task creation, then after this queue dispatches either an
+        // inline-admission yield or a public async completion.
+        _ready.push_back (continuation_);
+    }
+
+    static void enqueue_remote (const std::shared_ptr<remote_state_t> &remote_,
+                                std::function<void ()> callback_)
+    {
+        {
+            std::lock_guard<std::mutex> lock (remote_->mutex);
+            remote_->pending.emplace_back (std::move (callback_));
+        }
+        remote_->changed.notify_one ();
+    }
+
+    size_t run_snapshot (size_t local_round_, size_t remote_round_)
+    {
+        size_t ran = 0;
+        while (ran < local_round_) {
+            if (_ready.empty ())
+                break;
+            const std::coroutine_handle<> continuation = _ready.front ();
+            _ready.pop_front ();
+            if (continuation)
+                continuation.resume ();
+            ++ran;
+        }
+
+        size_t remote_ran = 0;
+        while (remote_ran < remote_round_) {
+            std::function<void ()> &callback = _remote_batch[remote_ran];
+            if (callback)
+                callback ();
+            ++remote_ran;
+            ++ran;
+        }
+        return ran;
+    }
+
+    std::shared_ptr<remote_state_t> _remote;
+    std::deque<std::coroutine_handle<>> _ready;
+    std::vector<std::function<void ()>> _remote_batch;
+};
+
+// Owns the one application ready queue and the poll/dispatch ordering for a
+// routed multi-perf phase. Every registered socket must include
+// POLLCOMPLETION. The C++ async state hands a promise scheduler its continuation
+// before the Core completion callback (and therefore poller_wait) returns. Thus
+// a completion consumed by one wait is already visible in _ready before the
+// next round can decide to block; the queue notification never has to wake a
+// poller that has already consumed its corresponding completion event.
+class application_poller_coordinator_t
+{
+  public:
+    application_poller_coordinator_t (poller_t &poller_, size_t source_count_) :
+        _poller (poller_),
+        _source_count (source_count_),
+        _ready (),
+        _events (source_count_)
+    {
+    }
+
+    application_poller_coordinator_t (const application_poller_coordinator_t &) = delete;
+    application_poller_coordinator_t &operator= (
+      const application_poller_coordinator_t &) = delete;
+
+    application_ready_queue_t &ready_queue () noexcept { return _ready; }
+
+    template <typename TTask, typename TDispatch>
+    bool run_until_senders_drained (
+      const std::chrono::steady_clock::time_point &active_deadline_,
+      const std::chrono::steady_clock::time_point &drain_deadline_,
+      const std::vector<TTask> &senders_,
+      TDispatch &&dispatch_)
+    {
+        const auto all_senders_done = [&senders_] {
+            return std::all_of (
+              senders_.begin (), senders_.end (),
+              [] (const TTask &sender_) { return sender_.done (); });
+        };
+
+        for (;;) {
+            const size_t resumed = _ready.run_ready_round (_source_count);
+            const auto now = std::chrono::steady_clock::now ();
+            if (now >= active_deadline_ && all_senders_done ())
+                return true;
+            if (now >= drain_deadline_)
+                return false;
+
+            const auto wait_deadline =
+              now < active_deadline_ ? active_deadline_ : drain_deadline_;
+            const auto remaining = wait_deadline - now;
+            const auto remaining_ms =
+              std::chrono::duration_cast<std::chrono::milliseconds> (remaining);
+            const std::chrono::milliseconds wait =
+              resumed != 0
+                ? std::chrono::milliseconds::zero ()
+                : std::chrono::milliseconds (
+                    std::max<int64_t> (1, remaining_ms.count ()));
+            const size_t ready_count =
+              _poller.wait (_events.data (), _events.size (), wait);
+            if (ready_count != 0
+                && !dispatch_ (_events.data (), ready_count))
+                return false;
+        }
+    }
+
+  private:
+    poller_t &_poller;
+    const size_t _source_count;
+    application_ready_queue_t _ready;
+    std::vector<poll_event_t> _events;
+};
 
 // Small owning coroutine used by the perf harness. Operations stay awaitable
 // all the way through a scenario; get() is reserved for the process runner
@@ -60,11 +303,24 @@ template <typename T> class async_task_t
         void return_value (T value_) { value.emplace (std::move (value_)); }
         void unhandled_exception () noexcept { failure = std::current_exception (); }
 
+        void zlink_bind_continuation_scheduler (application_ready_queue_t &queue_) noexcept
+        {
+            ready_queue = &queue_;
+        }
+
+        std::function<void (std::function<void ()>)>
+        zlink_continuation_scheduler ()
+        {
+            return ready_queue ? ready_queue->continuation_scheduler ()
+                               : std::function<void (std::function<void ()>)> ();
+        }
+
         std::mutex mutex;
         std::condition_variable changed;
         std::optional<T> value;
         std::exception_ptr failure;
         std::coroutine_handle<> continuation;
+        application_ready_queue_t *ready_queue = NULL;
         bool done = false;
     };
 
@@ -83,6 +339,14 @@ template <typename T> class async_task_t
     async_task_t (const async_task_t &) = delete;
     async_task_t &operator= (const async_task_t &) = delete;
     ~async_task_t () { reset (); }
+
+    bool done () const noexcept
+    {
+        if (!_handle)
+            return true;
+        std::lock_guard<std::mutex> lock (_handle.promise ().mutex);
+        return _handle.promise ().done;
+    }
 
     T get ()
     {
@@ -189,10 +453,23 @@ template <> class async_task_t<void>
         void return_void () noexcept {}
         void unhandled_exception () noexcept { failure = std::current_exception (); }
 
+        void zlink_bind_continuation_scheduler (application_ready_queue_t &queue_) noexcept
+        {
+            ready_queue = &queue_;
+        }
+
+        std::function<void (std::function<void ()>)>
+        zlink_continuation_scheduler ()
+        {
+            return ready_queue ? ready_queue->continuation_scheduler ()
+                               : std::function<void (std::function<void ()>)> ();
+        }
+
         std::mutex mutex;
         std::condition_variable changed;
         std::exception_ptr failure;
         std::coroutine_handle<> continuation;
+        application_ready_queue_t *ready_queue = NULL;
         bool done = false;
     };
 
@@ -211,6 +488,14 @@ template <> class async_task_t<void>
     async_task_t (const async_task_t &) = delete;
     async_task_t &operator= (const async_task_t &) = delete;
     ~async_task_t () { reset (); }
+
+    bool done () const noexcept
+    {
+        if (!_handle)
+            return true;
+        std::lock_guard<std::mutex> lock (_handle.promise ().mutex);
+        return _handle.promise ().done;
+    }
 
     void get ()
     {
@@ -292,6 +577,21 @@ class detached_async_task_t
         std::suspend_never final_suspend () noexcept { return {}; }
         void return_void () noexcept {}
         void unhandled_exception () noexcept { std::terminate (); }
+
+        void zlink_bind_continuation_scheduler (
+          application_ready_queue_t &queue_) noexcept
+        {
+            ready_queue = &queue_;
+        }
+
+        std::function<void (std::function<void ()>)>
+        zlink_continuation_scheduler ()
+        {
+            return ready_queue ? ready_queue->continuation_scheduler ()
+                               : std::function<void (std::function<void ()>)> ();
+        }
+
+        application_ready_queue_t *ready_queue = NULL;
     };
 };
 

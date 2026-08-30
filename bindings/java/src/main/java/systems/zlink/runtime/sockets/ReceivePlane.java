@@ -68,6 +68,7 @@ final class ReceivePlane {
 
         ArrayList<Message> parts = null;
         Message firstPart = null;
+        Message secondPart = null;
         try {
             RecvScratch scratch = socket.recvScratch();
             firstPart = recvDealerPartOrNull(scratch, flags,
@@ -86,9 +87,24 @@ final class ReceivePlane {
                 return true;
             }
 
+            secondPart = recvDealerPartOrNull(scratch, flags, false);
+            if (secondPart == null)
+                throw new ZlinkRecvException(RecvResult.NO_DATA,
+                    NativeErrno.EAGAIN);
+            if (!secondPart.more()) {
+                RECEIVED_ACCESS.populateRoutedTwoParts(result, null,
+                    firstPart, secondPart, requestSequence,
+                    hasRequestSequence, null, null);
+                firstPart = null;
+                secondPart = null;
+                return true;
+            }
+
             parts = new ArrayList<>(4);
             parts.add(firstPart);
+            parts.add(secondPart);
             firstPart = null;
+            secondPart = null;
             while (parts.get(parts.size() - 1).more()) {
                 Message next = recvDealerPartOrNull(scratch, flags, false);
                 if (next == null)
@@ -112,6 +128,12 @@ final class ReceivePlane {
             if (firstPart != null) {
                 try {
                     firstPart.close();
+                } catch (RuntimeException ignored) {
+                }
+            }
+            if (secondPart != null) {
+                try {
+                    secondPart.close();
                 } catch (RuntimeException ignored) {
                 }
             }

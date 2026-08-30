@@ -24,18 +24,13 @@ const ECANCELED = 125;
 
 interface NativeSendCompletionEvent {
   readonly token: bigint;
-  readonly opId: bigint;
   readonly result: number;
   readonly terminalErrno: number;
-  readonly peerRid: Buffer;
-  readonly transportPairId: bigint;
-  readonly transportPairGeneration: bigint;
 }
 
 interface NativeSendSubmitResult {
   readonly result: number;
   readonly nativeErrno: number;
-  readonly opId: bigint;
   readonly inlineCompletion?: NativeSendCompletionEvent;
 }
 

@@ -1,8 +1,10 @@
 import asyncio
+import os
 import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,14 +19,37 @@ from perf_metrics import (
     result_metrics,
     stamp_payload,
 )
-from perf_multi_common import benchmark_endpoint, send_routed
+from perf_multi_common import (
+    PERF_MULTI_AUX_POLL_WAIT_MS,
+    PYTHON_MULTI_DEFAULT_IO_THREADS,
+    RELAY_SCHEDULER_QUANTUM,
+    RelaySchedulerQuantum,
+    STOP_TOKEN,
+    benchmark_endpoint,
+    make_relay_send_done_callback,
+    received_has_stop_token,
+    scoped_relay_eager_task_factory,
+    send_routed,
+    track_relay_send_task,
+)
+from perf_multi_dealer_dealer_server import (
+    dealer_dealer_active_poll_timeout_ms,
+)
 from perf_multi_reqrep_client import request_with_admission_retry
+from perf_multi_reqrep_server import submit_reqrep_reply
 from run_benchmarks import (
     DEFAULT_PATTERNS,
     POLICY_TRANSPORTS,
+    _build_options,
+    _clients_for_pattern,
+    _ensure_stream_client,
     _normalize_pattern,
+    _options_clients_display,
     _parse_patterns,
+    _require_binding_runtime,
     _result_pattern,
+    _validate_python_build_options,
+    parse_args,
     pattern_direction,
 )
 
@@ -32,6 +57,268 @@ import zlink
 
 
 class PerfMultiRunnerTests(unittest.TestCase):
+    def test_multi_clients_default_to_one_hundred_for_every_pattern(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(_clients_for_pattern("DEALER_DEALER", None), "100")
+            self.assertEqual(_clients_for_pattern("STREAM", None), "100")
+            clients = _options_clients_display(list(DEFAULT_PATTERNS), None)
+            self.assertEqual(clients, "100 (stream=100)")
+            options = _build_options(
+                parse_args([]),
+                list(DEFAULT_PATTERNS),
+                list(POLICY_TRANSPORTS),
+                [],
+                clients,
+                {"PERF_MULTI_MONITOR_HWM": "100000"},
+            )
+            self.assertEqual(options["default_clients"], "100")
+            self.assertEqual(options["default_stream_clients"], "100")
+
+    def test_python_runner_rejects_build_options_it_does_not_own(self):
+        for argv, option in (
+            (["--build-dir", "/tmp/python-perf"], "--build-dir"),
+            (["--clean-build"], "--clean-build"),
+        ):
+            with self.subTest(option=option):
+                with self.assertRaisesRegex(SystemExit, option):
+                    _validate_python_build_options(parse_args(argv))
+
+    def test_python_runner_accepts_reuse_as_validation_only(self):
+        args = parse_args(["--reuse-build"])
+        _validate_python_build_options(args)
+        self.assertTrue(args.reuse_build)
+
+    def test_python_runner_requires_source_tree_inplace_binding(self):
+        _require_binding_runtime()
+
+    def test_python_runner_reuse_never_builds_missing_stream_client(self):
+        with mock.patch.object(Path, "exists", return_value=False):
+            with mock.patch("run_benchmarks.subprocess.run") as build:
+                with self.assertRaisesRegex(SystemExit, "--reuse-build"):
+                    _ensure_stream_client(reuse_build=True)
+        build.assert_not_called()
+
+    def test_python_multi_defaults_to_one_io_thread(self):
+        self.assertEqual(PYTHON_MULTI_DEFAULT_IO_THREADS, 1)
+
+    def test_dealer_dealer_stop_token_has_raw_message_shape(self):
+        class Part:
+            def __init__(self, data):
+                self.data = data
+
+        class Received:
+            parts = [Part(STOP_TOKEN)]
+
+            def __iter__(self):
+                return iter(self.parts)
+
+        self.assertTrue(received_has_stop_token(Received()))
+
+        Received.parts = [Part(STOP_TOKEN), Part(b"")]
+        self.assertFalse(received_has_stop_token(Received()))
+
+    def test_multi_aux_poll_wait_matches_canonical_interval(self):
+        self.assertEqual(PERF_MULTI_AUX_POLL_WAIT_MS, 100)
+
+    def test_relay_scheduler_quantum_is_a_yield_interval(self):
+        self.assertEqual(RELAY_SCHEDULER_QUANTUM, 32)
+        scheduler = RelaySchedulerQuantum()
+
+        self.assertFalse(any(scheduler.received() for _ in range(31)))
+        self.assertTrue(scheduler.received())
+        self.assertFalse(scheduler.received())
+        scheduler.reset()
+        self.assertFalse(any(scheduler.received() for _ in range(31)))
+        self.assertTrue(scheduler.received())
+
+    def test_relay_eager_task_factory_restores_previous_factory(self):
+        previous_factory = object()
+        eager_factory = object()
+
+        class Loop:
+            def __init__(self):
+                self.factory = previous_factory
+
+            def get_task_factory(self):
+                return self.factory
+
+            def set_task_factory(self, factory):
+                self.factory = factory
+
+        loop = Loop()
+        with mock.patch.object(
+            asyncio, "eager_task_factory", eager_factory, create=True
+        ):
+            with self.assertRaisesRegex(RuntimeError, "restore"):
+                with scoped_relay_eager_task_factory(loop) as eager_enabled:
+                    self.assertTrue(eager_enabled)
+                    self.assertIs(loop.factory, eager_factory)
+                    raise RuntimeError("restore")
+
+        self.assertIs(loop.factory, previous_factory)
+
+    def test_relay_task_factory_falls_back_without_python_312_eager_api(self):
+        previous_factory = object()
+
+        class Loop:
+            def __init__(self):
+                self.factory = previous_factory
+
+            def get_task_factory(self):
+                return self.factory
+
+            def set_task_factory(self, factory):
+                self.factory = factory
+
+        loop = Loop()
+        with mock.patch.object(asyncio, "eager_task_factory", None, create=True):
+            with scoped_relay_eager_task_factory(loop) as eager_enabled:
+                self.assertFalse(eager_enabled)
+                self.assertIs(loop.factory, previous_factory)
+
+        self.assertIs(loop.factory, previous_factory)
+
+    @unittest.skipUnless(
+        hasattr(asyncio, "eager_task_factory"), "requires Python 3.12 eager tasks"
+    )
+    def test_relay_eager_tasks_classify_done_pending_and_error_paths(self):
+        async def scenario():
+            pending_tasks = set()
+            send_errors = []
+            on_send_done = make_relay_send_done_callback(
+                pending_tasks, send_errors
+            )
+
+            async def complete_inline():
+                return None
+
+            gate = asyncio.Event()
+
+            async def complete_later():
+                await gate.wait()
+
+            async def ignored_error():
+                raise zlink.SubmitError(zlink.SubmitResult.NOT_FOUND, 2)
+
+            expected_error = RuntimeError("relay failure")
+
+            async def visible_error():
+                raise expected_error
+
+            with scoped_relay_eager_task_factory() as eager_enabled:
+                self.assertTrue(eager_enabled)
+
+                inline_task = asyncio.create_task(complete_inline())
+                self.assertTrue(inline_task.done())
+                self.assertFalse(
+                    track_relay_send_task(
+                        inline_task, pending_tasks, on_send_done
+                    )
+                )
+
+                ignored_task = asyncio.create_task(ignored_error())
+                self.assertTrue(ignored_task.done())
+                self.assertFalse(
+                    track_relay_send_task(
+                        ignored_task, pending_tasks, on_send_done
+                    )
+                )
+
+                error_task = asyncio.create_task(visible_error())
+                self.assertTrue(error_task.done())
+                self.assertFalse(
+                    track_relay_send_task(
+                        error_task, pending_tasks, on_send_done
+                    )
+                )
+
+                pending_task = asyncio.create_task(complete_later())
+                self.assertFalse(pending_task.done())
+                self.assertTrue(
+                    track_relay_send_task(
+                        pending_task, pending_tasks, on_send_done
+                    )
+                )
+                self.assertEqual(pending_tasks, {pending_task})
+                gate.set()
+                await pending_task
+                await asyncio.sleep(0)
+
+            self.assertFalse(pending_tasks)
+            self.assertEqual(send_errors, [expected_error])
+
+        asyncio.run(scenario())
+
+    def test_dealer_dealer_poll_becomes_bounded_only_after_stop_token(self):
+        active_deadline = 12.5
+
+        self.assertEqual(
+            dealer_dealer_active_poll_timeout_ms(
+                False, active_deadline, now=12.0
+            ),
+            -1,
+        )
+        self.assertEqual(
+            dealer_dealer_active_poll_timeout_ms(
+                True, active_deadline, now=12.0
+            ),
+            500,
+        )
+
+    def test_reqrep_reply_drains_vanished_route_without_retry(self):
+        class ReplyOperation:
+            def __init__(self, owner):
+                self.owner = owner
+
+            def messages(self, *parts):
+                self.owner.parts = parts
+                return self
+
+            def submit(self):
+                self.owner.attempts += 1
+                raise zlink.SubmitError(
+                    zlink.SubmitResult.NOT_CONNECTED, 107
+                )
+
+        class Request:
+            def __init__(self):
+                self.attempts = 0
+                self.parts = ()
+
+            def reply(self):
+                return ReplyOperation(self)
+
+        request = Request()
+        self.assertFalse(submit_reqrep_reply(request, (b"payload", b"")))
+        self.assertEqual(request.attempts, 1)
+        self.assertEqual(request.parts, (b"payload", b""))
+
+    def test_reqrep_reply_does_not_invent_backpressure_retry(self):
+        class ReplyOperation:
+            def __init__(self, owner):
+                self.owner = owner
+
+            def messages(self, *parts):
+                return self
+
+            def submit(self):
+                self.owner.attempts += 1
+                raise zlink.SubmitError(
+                    zlink.SubmitResult.BACKPRESSURED, 110
+                )
+
+        class Request:
+            def __init__(self):
+                self.attempts = 0
+
+            def reply(self):
+                return ReplyOperation(self)
+
+        request = Request()
+        with self.assertRaises(zlink.SubmitError):
+            submit_reqrep_reply(request, (b"payload", b""))
+        self.assertEqual(request.attempts, 1)
+
     def test_request_rebuilds_same_logical_multipart_after_backpressure(self):
         reply = object()
 
@@ -141,6 +428,80 @@ class PerfMultiRunnerTests(unittest.TestCase):
 
         asyncio.run(scenario())
         self.assertEqual(events, ["submit", "receive-progress", "send-done"])
+
+    def test_one_shot_routed_reply_can_skip_duplicate_success_yield(self):
+        events = []
+
+        class SendOperation:
+            def messages(self, *parts):
+                return self
+
+            async def submit(self):
+                events.append("submit")
+
+        class Socket:
+            def send(self):
+                return SendOperation()
+
+        async def scenario():
+            async def send_once():
+                await send_routed(
+                    Socket(), b"payload", _yield_after_submit=False
+                )
+                events.append("send-done")
+
+            async def receive_progress():
+                events.append("receive-progress")
+
+            await asyncio.gather(send_once(), receive_progress())
+
+        asyncio.run(scenario())
+        self.assertEqual(events, ["submit", "send-done", "receive-progress"])
+
+    def test_one_shot_routed_reply_keeps_backpressure_retry_yield(self):
+        events = []
+
+        class SendOperation:
+            def __init__(self, owner):
+                self.owner = owner
+
+            def messages(self, *parts):
+                return self
+
+            async def submit(self):
+                self.owner.attempts += 1
+                events.append(f"submit-{self.owner.attempts}")
+                if self.owner.attempts == 1:
+                    raise zlink.SubmitError(
+                        zlink.SubmitResult.BACKPRESSURED, 11
+                    )
+
+        class Socket:
+            def __init__(self):
+                self.attempts = 0
+
+            def send(self):
+                return SendOperation(self)
+
+        async def scenario():
+            socket = Socket()
+
+            async def send_once():
+                await send_routed(
+                    socket, b"payload", _yield_after_submit=False
+                )
+                events.append("send-done")
+
+            async def receive_progress():
+                events.append("receive-progress")
+
+            await asyncio.gather(send_once(), receive_progress())
+
+        asyncio.run(scenario())
+        self.assertEqual(
+            events,
+            ["submit-1", "receive-progress", "submit-2", "send-done"],
+        )
 
     def test_active_message_latency_validates_and_decodes_once(self):
         payload = stamp_payload(new_payload(64), phase=1, run_id=7, seq=11)

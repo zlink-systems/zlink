@@ -6,7 +6,7 @@ const zlink = require('@zlink-systems/zlink');
 const { createPayload, createRunId, stampPayload } = require('../common/perf_metrics');
 const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, trySocketPublish } = require('./perf_multi_runtime');
+const { POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, measurementParts, pollEvents, trySocketPublish } = require('./perf_multi_runtime');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 const TOPIC = 'bench';
 async function main() {
@@ -15,6 +15,7 @@ async function main() {
     applyContextPolicy(ctx, 'server', 'MULTI_PUBSUB');
     const pub = zlink.createPubSocket(ctx);
     const payload = createPayload(options.msgSize);
+    const measurementRecord = measurementParts(payload);
     const poller = zlink.createPoller();
     const pollBuffer = zlink.createPollEvents(1);
     let rl = null;
@@ -42,7 +43,7 @@ async function main() {
             let seq = 1n;
             while (process.hrtime.bigint() < activeStopNs) {
                 stampPayload(payload, { phase: 1, runId, msgSize: options.msgSize, seq });
-                while (!trySocketPublish(pub, TOPIC, payload)) {
+                while (!trySocketPublish(pub, TOPIC, measurementRecord)) {
                     // C recreates the consumed outbound message after a POLLOUT wakeup
                     // and retries the same stamped payload. The public Node publish
                     // builder already creates a fresh native message for each call.

@@ -9,6 +9,7 @@ const { parseMultiArgs } = require('./perf_multi_common');
 const { isStopTokenParts } = require('../perf_stop_token');
 const {
   POLLIN,
+  appendMeasurement,
   applyContextPolicy,
   applySocketPolicy,
   emitMultiSocketHwmDetail,
@@ -43,9 +44,9 @@ function receiveAndReply(router, received) {
       if (received.requestSeq === null) {
         throw new Error('request/reply server received payload without request sequence');
       }
-      let reply = received.reply().message(Buffer.from(payload.data()));
-      if (process.env.PERF_PART_COUNT !== '1') reply = reply.message(Buffer.alloc(0));
-      reply.submit();
+      // A successful public reply consumes this received native Message.
+      // Forward it directly rather than materializing a Buffer copy first.
+      appendMeasurement(received.reply(), payload).submit();
     } finally {
       received.close();
     }

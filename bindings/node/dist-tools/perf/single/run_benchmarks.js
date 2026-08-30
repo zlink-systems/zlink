@@ -31,7 +31,9 @@ Measure current zlink Node single-pattern performance.
 Options:
   -h, --help            Show this help.
   --pattern NAME        Pattern list (comma-separated) or ALL.
-  --build-dir PATH      Accepted for policy compatibility.
+  --build-dir PATH      Unsupported: Node artifacts use fixed package paths.
+  --reuse-build         Reuse existing fixed Node outputs; skip rebuild.
+  --clean-build         Remove TypeScript and native build outputs, then rebuild.
   --results-dir PATH    Override result root directory.
   --results-tag NAME    Optional tag in saved result filename.
   --output PATH         Tee final rendered output to a file.

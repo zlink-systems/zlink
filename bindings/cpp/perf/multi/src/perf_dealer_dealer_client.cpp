@@ -18,7 +18,6 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
-#include <thread>
 #include <vector>
 
 namespace
@@ -91,13 +90,6 @@ struct socket_state_t
     socket_state_t () : sock (NULL), payload_size (0) {}
 };
 
-enum stop_token_status_t
-{
-    stop_token_sent = 0,
-    stop_token_retry = 1,
-    stop_token_fatal = 2
-};
-
 class dealer_dealer_client_bench_t
 {
   public:
@@ -140,10 +132,6 @@ class dealer_dealer_client_bench_t
         if (!co_await run_phase (perf_metric::phase_active,
                                  std::chrono::seconds (_phase_cfg.active_seconds),
                                  &_result.active_count))
-            co_return false;
-
-        // Signal active-phase end after all async admissions have completed.
-        if (!co_await send_stop_tokens ())
             co_return false;
 
         std::cout << "CLIENT_DONE," << _msg_size << std::endl;
@@ -214,10 +202,11 @@ class dealer_dealer_client_bench_t
         }
     }
 
-    perf::async_task_t<bool> run_sender (socket_state_t &state,
+    perf::async_task_t<bool> run_sender (perf::application_ready_queue_t &ready_queue,
+                                         socket_state_t &state,
                                          perf_metric::phase_t phase,
                                          std::chrono::steady_clock::time_point deadline,
-                                         std::atomic<unsigned long long> &count)
+                                         unsigned long long &count)
     {
         if (!state.sock)
             co_return false;
@@ -225,6 +214,13 @@ class dealer_dealer_client_bench_t
         const size_t payload_size = state.payload_size;
         if (payload_size == 0)
             co_return false;
+
+        // async_task_t is eager. Register every sender with the shared
+        // application-thread scheduler once; after that, an immediately
+        // admitted public async send may submit the next message directly.
+        // A genuinely pending send still suspends and resumes through this
+        // queue, so Core backpressure remains the fairness boundary.
+        co_await ready_queue.schedule ();
         while (std::chrono::steady_clock::now () < deadline) {
             zlink::message_t payload;
             payload.init (payload_size);
@@ -240,9 +236,11 @@ class dealer_dealer_client_bench_t
                     co_await std::move (state.sock->send ().message (payload)).message (tail)
                       .async ();
                 } else {
-                    co_await std::move (state.sock->send ()).message (payload).async ();
+                    co_await std::move (state.sock->send ()).message (payload)
+                      .async ();
                 }
-                count.fetch_add (1, std::memory_order_relaxed);
+                if (std::chrono::steady_clock::now () < deadline)
+                    ++count;
             }
             catch (const zlink::submit_error_t &err) {
                 if (err.internal_errno () == EINTR)
@@ -250,50 +248,6 @@ class dealer_dealer_client_bench_t
                 co_return false;
             }
         }
-        co_return true;
-    }
-
-    perf::async_task_t<stop_token_status_t> try_send_stop_token (socket_state_t &state)
-    {
-        if (!state.sock)
-            co_return stop_token_fatal;
-        const size_t token_size = std::strlen (perf::multi::k_stop_token);
-        zlink::message_t part = zlink::message_t::from (
-          std::as_bytes (std::span<const char> (perf::multi::k_stop_token, token_size)));
-        if (!part.valid ())
-            co_return stop_token_fatal;
-
-        try {
-            co_await std::move (state.sock->send ()).message (part).async ();
-            co_return stop_token_sent;
-        }
-        catch (const zlink::submit_error_t &error_) {
-            const int err = error_.internal_errno ();
-            debug_log ("stop token submit failed errno=" + std::to_string (err));
-            if (err != EINTR && err != EAGAIN && err != EWOULDBLOCK && err != ETIMEDOUT)
-                co_return stop_token_fatal;
-            co_return stop_token_retry;
-        }
-
-        co_return stop_token_fatal;
-    }
-
-    perf::async_task_t<bool> send_stop_tokens ()
-    {
-        for (size_t i = 0; i < _socket_states.size (); ++i) {
-            while (!g_stop_requested.load (std::memory_order_acquire)) {
-                const stop_token_status_t status =
-                  co_await try_send_stop_token (_socket_states[i]);
-                if (status == stop_token_sent)
-                    break;
-                if (status == stop_token_fatal)
-                    co_return false;
-                std::this_thread::yield ();
-            }
-            if (g_stop_requested.load (std::memory_order_acquire))
-                co_return true;
-        }
-
         co_return true;
     }
 
@@ -310,18 +264,79 @@ class dealer_dealer_client_bench_t
         if (_socket_states.empty ())
             co_return false;
 
-        std::atomic<unsigned long long> count (0);
+        // Every sender continuation runs through ready_queue on this application
+        // thread, so this phase counter has a single writer.
+        unsigned long long count = 0;
         const auto deadline = std::chrono::steady_clock::now () + duration;
+        const auto drain_deadline =
+          deadline + std::chrono::milliseconds (_settings.send_drain_timeout_ms);
+        perf::application_ready_queue_t ready_queue;
         std::vector<perf::async_task_t<bool>> senders;
         senders.reserve (_socket_states.size ());
         for (size_t i = 0; i < _socket_states.size (); ++i)
-            senders.emplace_back (run_sender (_socket_states[i], phase, deadline, count));
+            senders.emplace_back (
+              run_sender (ready_queue, _socket_states[i], phase, deadline, count));
+
+        const auto all_senders_done = [&senders] {
+            return std::all_of (senders.begin (), senders.end (),
+                                [] (const perf::async_task_t<bool> &sender_) {
+                                    return sender_.done ();
+                                });
+        };
+        while (std::chrono::steady_clock::now () < deadline) {
+            (void) ready_queue.wait_and_run_ready_round_until (
+              deadline, _socket_states.size ());
+        }
+        while (!all_senders_done ()) {
+            // Run the local deadline-check snapshot before considering abort.
+            // That leaves only public-async suspended operations to cancel if
+            // the bounded drain expires; no queued raw coroutine handle is
+            // destroyed behind application_ready_queue_t's back.
+            if (ready_queue.run_ready_round (_socket_states.size ()) != 0)
+                continue;
+            if (std::chrono::steady_clock::now () >= drain_deadline)
+                co_return false;
+            (void) ready_queue.wait_and_run_ready_round_until (
+              drain_deadline, _socket_states.size ());
+        }
+
         for (size_t i = 0; i < senders.size (); ++i) {
             if (!co_await std::move (senders[i]))
                 co_return false;
         }
+
+        // Keep stop-token sends on the same application runtime. A pending
+        // public completion otherwise resumes in Core's callback context, where
+        // submitting the next socket's token is rejected with EDEADLK.
+        std::vector<perf::async_task_t<bool>> stop_senders;
+        stop_senders.reserve (_socket_states.size ());
+        for (size_t i = 0; i < _socket_states.size (); ++i)
+            stop_senders.emplace_back (
+              perf::multi::send_stop_token_until_admitted (
+                ready_queue, _socket_states[i].sock, g_stop_requested));
+
+        const auto all_stops_done = [&stop_senders] {
+            return std::all_of (stop_senders.begin (), stop_senders.end (),
+                                [] (const perf::async_task_t<bool> &sender_) {
+                                    return sender_.done ();
+                                });
+        };
+        while (!all_stops_done ()) {
+            if (ready_queue.run_ready_round (_socket_states.size ()) != 0)
+                continue;
+            // Stop-token admission intentionally ignores the active/drain
+            // deadlines. Block until Core completes at least one pending send;
+            // the comparison runner owns the external failure timeout.
+            (void) ready_queue.wait_and_run_ready_round (
+              _socket_states.size ());
+        }
+        for (size_t i = 0; i < stop_senders.size (); ++i) {
+            if (!co_await std::move (stop_senders[i]))
+                co_return false;
+        }
+
         if (count_out)
-            *count_out = count.load (std::memory_order_relaxed);
+            *count_out = count;
         co_return true;
     }
 

@@ -21,7 +21,6 @@ import systems.zlink.perf.PerfUtil;
 import java.util.ArrayList;
 import java.time.Duration;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 final class PerfMultiDealerDealer {
@@ -182,15 +181,10 @@ final class PerfMultiDealerDealer {
             PerfControl.awaitStart(config.size(), "dealer/dealer client");
             long activeEnd = System.nanoTime()
                 + config.durationSeconds() * 1_000_000_000L;
-            List<CompletionStage<Void>> sendLoops = new ArrayList<>(
-                clients.size());
-            CompletableFuture<Void> startGate = new CompletableFuture<>();
-            for (DealerSocket client : clients) {
-                sendLoops.add(PerfMultiAsyncSendLoop.start(activeEnd, startGate,
-                    () -> sendOneActive(client, config.size(), activeEnd)));
-            }
-            startGate.complete(null);
-            PerfMultiAsyncSendLoop.awaitAll(sendLoops,
+            PerfMultiRoutedSendCoordinator.runAdmissions(clients.size(),
+                activeEnd,
+                index -> sendOneActive(clients.get(index), config.size(),
+                    activeEnd),
                 Duration.ofSeconds(config.durationSeconds() + 5L),
                 "multi dealer/dealer async sends");
             // C parity: send one wire-level stop token on every client socket

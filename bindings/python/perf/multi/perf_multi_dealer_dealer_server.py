@@ -5,7 +5,6 @@ import time
 import zlink
 
 from perf_multi_common import (
-    STOP_TOKEN,
     active_message_latency_ns,
     apply_multi_socket_options,
     benchmark_endpoint,
@@ -17,9 +16,19 @@ from perf_multi_common import (
     perf_server_context,
     resolve_multi_monitor_hwm_bytes,
     result_metrics,
+    received_has_stop_token,
     received_metric_payload,
     safe_poll,
 )
+
+
+def dealer_dealer_active_poll_timeout_ms(
+    stop_token_seen, active_deadline, *, now=None
+):
+    if not stop_token_seen:
+        return -1
+    current = time.perf_counter() if now is None else now
+    return max(1, int((active_deadline - current) * 1000))
 
 
 def main(argv=None):
@@ -61,6 +70,7 @@ def main(argv=None):
                     active_deadline = time.perf_counter() + active_duration_s
                     latency_sampler = LatencySampler()
                     count = 0
+                    stop_token_seen = False
                     recv_storage = zlink.create_received()
                     recv_into = dealer.recv_into
                     recv_flags = zlink.RecvFlags.DONT_WAIT
@@ -69,19 +79,20 @@ def main(argv=None):
                         # C receive_one_message + drain_non_blocking_messages:
                         # every matched header counts; latency excludes
                         # clock-skew (latency_ns_from_message returns None).
-                        nonlocal count
+                        nonlocal count, stop_token_seen
                         while True:
                             if not recv_into(recv_storage, flags=recv_flags):
                                 return
                             with recv_storage:
                                 if not recv_storage.parts:
                                     continue
+                                if received_has_stop_token(recv_storage):
+                                    stop_token_seen = True
+                                    continue
                                 data = received_metric_payload(
                                     recv_storage, expected_size=args.msg_size
                                 )
                                 if not data:
-                                    continue
-                                if len(data) == len(STOP_TOKEN) and data == STOP_TOKEN:
                                     continue
                                 active, latency = active_message_latency_ns(
                                     data,
@@ -97,12 +108,21 @@ def main(argv=None):
                                     latency_sampler.add(latency)
 
                     while not stop_event.is_set():
-                        remaining_ms = int(
-                            (active_deadline - time.perf_counter()) * 1000
-                        )
-                        if remaining_ms <= 0:
+                        now = time.perf_counter()
+                        if now >= active_deadline:
                             break
-                        ready_count = safe_poll(poller, poll_events, max(1, remaining_ms))
+                        # Match the C receiver: readiness is signal-driven
+                        # until a valid wire stop token is consumed. Only
+                        # then may the remaining active interval bound an
+                        # otherwise empty wait.
+                        poll_timeout_ms = dealer_dealer_active_poll_timeout_ms(
+                            stop_token_seen,
+                            active_deadline,
+                            now=now,
+                        )
+                        ready_count = safe_poll(
+                            poller, poll_events, poll_timeout_ms
+                        )
                         if ready_count:
                             for offset in range(ready_count):
                                 if poll_events.revents(offset) & int(

@@ -1,11 +1,17 @@
 //! Multi perf common utilities.
 
+use std::collections::VecDeque;
 use std::fs;
 use std::future::Future;
 use std::io;
+use std::marker::PhantomData;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::rc::Rc;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::task::{Context as TaskContext, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -23,6 +29,7 @@ pub const PHASE_COOLDOWN: u8 = 2;
 pub const MAGIC: u32 = 0x5A4C_4E4B; // "ZLNK"
 pub const BENCHMARK_RUN_ID: u32 = 1;
 const DEFAULT_MULTI_MONITOR_HWM_BYTES: u64 = 4_096_000;
+const DEFAULT_MULTI_CONNECT_READY_TIMEOUT_MS: usize = 10_000;
 
 struct ThreadWake(Thread);
 
@@ -65,59 +72,210 @@ pub fn block_on_all<F: Future>(futures: Vec<F>) -> Vec<F::Output> {
     outputs
 }
 
+#[derive(Clone, Copy)]
+struct ReadyTask {
+    slot: usize,
+    generation: u64,
+}
+
+struct ConcurrentReadyState {
+    queue: Mutex<VecDeque<ReadyTask>>,
+    owner: Thread,
+}
+
+struct ConcurrentTaskWake {
+    ready: Arc<ConcurrentReadyState>,
+    slot: usize,
+    generation: u64,
+    queued: AtomicBool,
+}
+
+impl ConcurrentTaskWake {
+    fn schedule(&self) {
+        if self.queued.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.ready
+            .queue
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push_back(ReadyTask {
+                slot: self.slot,
+                generation: self.generation,
+            });
+        self.ready.owner.unpark();
+    }
+}
+
+impl Wake for ConcurrentTaskWake {
+    fn wake(self: Arc<Self>) {
+        self.schedule();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.schedule();
+    }
+}
+
+struct ConcurrentTask<F: Future> {
+    future: Pin<Box<F>>,
+    wake: Arc<ConcurrentTaskWake>,
+}
+
+struct ConcurrentTaskSlot<F: Future> {
+    task: Option<ConcurrentTask<F>>,
+    generation: u64,
+    free_position: Option<usize>,
+}
+
 pub struct ConcurrentTasks<F: Future> {
-    tasks: Vec<Option<Pin<Box<F>>>>,
-    waker: Waker,
+    slots: Vec<ConcurrentTaskSlot<F>>,
+    free_slots: Vec<usize>,
+    ready: Arc<ConcurrentReadyState>,
+    local_ready: VecDeque<ReadyTask>,
+    pending: usize,
+    // Futures are polled and slot ownership is mutated only by the creating
+    // application thread. Wakers may enqueue ready indexes from Core threads.
+    _single_thread: PhantomData<Rc<()>>,
 }
 
 impl<F: Future> ConcurrentTasks<F> {
     pub fn new(slots: usize) -> Self {
+        let mut task_slots: Vec<_> = (0..slots)
+            .map(|_| ConcurrentTaskSlot {
+                task: None,
+                generation: 0,
+                free_position: None,
+            })
+            .collect();
+        let mut free_slots = Vec::with_capacity(slots);
+        for slot in (0..slots).rev() {
+            task_slots[slot].free_position = Some(free_slots.len());
+            free_slots.push(slot);
+        }
         Self {
-            tasks: (0..slots).map(|_| None).collect(),
-            waker: Waker::from(Arc::new(ThreadWake(thread::current()))),
+            slots: task_slots,
+            free_slots,
+            ready: Arc::new(ConcurrentReadyState {
+                queue: Mutex::new(VecDeque::new()),
+                owner: thread::current(),
+            }),
+            local_ready: VecDeque::new(),
+            pending: 0,
+            _single_thread: PhantomData,
         }
     }
 
     pub fn insert(&mut self, slot: usize, future: F) {
-        assert!(self.tasks[slot].is_none(), "task slot is already occupied");
-        self.tasks[slot] = Some(Box::pin(future));
+        assert!(slot < self.slots.len(), "task slot is out of range");
+        assert!(
+            self.slots[slot].task.is_none(),
+            "task slot is already occupied"
+        );
+        self.remove_free_slot(slot);
+        self.install(slot, future);
     }
 
     pub fn push(&mut self, future: F) -> usize {
-        if let Some(slot) = self.tasks.iter().position(Option::is_none) {
-            self.insert(slot, future);
+        let slot = if let Some(slot) = self.free_slots.pop() {
+            self.slots[slot].free_position = None;
             slot
         } else {
-            self.tasks.push(Some(Box::pin(future)));
-            self.tasks.len() - 1
-        }
+            self.slots.push(ConcurrentTaskSlot {
+                task: None,
+                generation: 0,
+                free_position: None,
+            });
+            self.slots.len() - 1
+        };
+        self.install(slot, future);
+        slot
     }
 
     pub fn poll_ready(&mut self) -> Vec<(usize, F::Output)> {
-        let mut context = TaskContext::from_waker(&self.waker);
-        let mut ready = Vec::new();
-        for (slot, task) in self.tasks.iter_mut().enumerate() {
-            let Some(future) = task.as_mut() else {
+        // Poll only the indexes that were newly inserted or explicitly woken
+        // before this turn. A self-wake during poll remains queued for the next
+        // turn, preventing one always-ready Future from monopolizing the loop.
+        let mut scheduled = std::mem::take(&mut self.local_ready);
+        {
+            let mut ready_queue = self
+                .ready
+                .queue
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            scheduled.append(&mut ready_queue);
+        }
+        let mut completed = Vec::new();
+        while let Some(ready_task) = scheduled.pop_front() {
+            if ready_task.slot >= self.slots.len()
+                || self.slots[ready_task.slot].generation != ready_task.generation
+            {
+                continue;
+            }
+            let Some(task) = self.slots[ready_task.slot].task.as_mut() else {
                 continue;
             };
-            if let Poll::Ready(output) = future.as_mut().poll(&mut context) {
-                *task = None;
-                ready.push((slot, output));
+
+            task.wake.queued.store(false, Ordering::Release);
+            let waker = Waker::from(Arc::clone(&task.wake));
+            let mut context = TaskContext::from_waker(&waker);
+            if let Poll::Ready(output) = task.future.as_mut().poll(&mut context) {
+                self.slots[ready_task.slot].task = None;
+                self.release_slot(ready_task.slot);
+                completed.push((ready_task.slot, output));
             }
         }
-        ready
+        completed
     }
 
     pub fn is_pending(&self, slot: usize) -> bool {
-        self.tasks[slot].is_some()
+        self.slots[slot].task.is_some()
     }
 
     pub fn any_pending(&self) -> bool {
-        self.tasks.iter().any(Option::is_some)
+        self.pending != 0
     }
 
     pub fn wait_for_wake(&self, timeout: Duration) {
         thread::park_timeout(timeout);
+    }
+
+    fn install(&mut self, slot: usize, future: F) {
+        let generation = self.slots[slot].generation.wrapping_add(1);
+        self.slots[slot].generation = generation;
+        let wake = Arc::new(ConcurrentTaskWake {
+            ready: Arc::clone(&self.ready),
+            slot,
+            generation,
+            queued: AtomicBool::new(true),
+        });
+        self.slots[slot].task = Some(ConcurrentTask {
+            future: Box::pin(future),
+            wake: Arc::clone(&wake),
+        });
+        self.pending += 1;
+        self.local_ready.push_back(ReadyTask { slot, generation });
+    }
+
+    fn remove_free_slot(&mut self, slot: usize) {
+        let position = self.slots[slot]
+            .free_position
+            .take()
+            .expect("free task slot is missing from the free list");
+        let removed = self.free_slots.swap_remove(position);
+        debug_assert_eq!(removed, slot);
+        if position < self.free_slots.len() {
+            let moved = self.free_slots[position];
+            self.slots[moved].free_position = Some(position);
+        }
+    }
+
+    fn release_slot(&mut self, slot: usize) {
+        debug_assert!(self.slots[slot].task.is_none());
+        debug_assert!(self.slots[slot].free_position.is_none());
+        self.slots[slot].free_position = Some(self.free_slots.len());
+        self.free_slots.push(slot);
+        self.pending -= 1;
     }
 }
 
@@ -895,7 +1053,7 @@ pub fn resolve_multi_connect_ready_timeout() -> Duration {
     Duration::from_millis(env_or_multi(
         "PERF_MULTI_CONNECT_READY_TIMEOUT_MS",
         "PERF_CONNECT_READY_TIMEOUT_MS",
-        1_000,
+        DEFAULT_MULTI_CONNECT_READY_TIMEOUT_MS,
     ) as u64)
 }
 
@@ -1048,6 +1206,268 @@ pub fn wait_for_stop_stdin() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Barrier;
+    use std::sync::atomic::AtomicUsize;
+
+    struct ManualFutureState {
+        output: usize,
+        ready: AtomicBool,
+        polls: AtomicUsize,
+        drops: AtomicUsize,
+        waker: Mutex<Option<Waker>>,
+    }
+
+    impl ManualFutureState {
+        fn new(output: usize) -> Arc<Self> {
+            Arc::new(Self {
+                output,
+                ready: AtomicBool::new(false),
+                polls: AtomicUsize::new(0),
+                drops: AtomicUsize::new(0),
+                waker: Mutex::new(None),
+            })
+        }
+
+        fn complete(&self) {
+            self.ready.store(true, Ordering::Release);
+            if let Some(waker) = self
+                .waker
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_ref()
+                .cloned()
+            {
+                waker.wake_by_ref();
+            }
+        }
+
+        fn stored_waker(&self) -> Waker {
+            self.waker
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_ref()
+                .expect("future was not polled")
+                .clone()
+        }
+    }
+
+    struct ManualFuture {
+        state: Arc<ManualFutureState>,
+    }
+
+    impl ManualFuture {
+        fn new(state: Arc<ManualFutureState>) -> Self {
+            Self { state }
+        }
+    }
+
+    impl Future for ManualFuture {
+        type Output = usize;
+
+        fn poll(self: Pin<&mut Self>, context: &mut TaskContext<'_>) -> Poll<Self::Output> {
+            self.state.polls.fetch_add(1, Ordering::Relaxed);
+            if self.state.ready.load(Ordering::Acquire) {
+                Poll::Ready(self.state.output)
+            } else {
+                *self
+                    .state
+                    .waker
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                    Some(context.waker().clone());
+                Poll::Pending
+            }
+        }
+    }
+
+    impl Drop for ManualFuture {
+        fn drop(&mut self) {
+            self.state.drops.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    struct SelfWakeFuture {
+        output: usize,
+        polls: Arc<AtomicUsize>,
+    }
+
+    impl Future for SelfWakeFuture {
+        type Output = usize;
+
+        fn poll(self: Pin<&mut Self>, context: &mut TaskContext<'_>) -> Poll<Self::Output> {
+            if self.polls.fetch_add(1, Ordering::Relaxed) == 0 {
+                context.waker().wake_by_ref();
+                Poll::Pending
+            } else {
+                Poll::Ready(self.output)
+            }
+        }
+    }
+
+    struct BoundaryWakeState {
+        ready: AtomicBool,
+        polls: AtomicUsize,
+        waker: Mutex<Option<Waker>>,
+        start_wake: Barrier,
+        wake_finished: Barrier,
+    }
+
+    impl BoundaryWakeState {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                ready: AtomicBool::new(false),
+                polls: AtomicUsize::new(0),
+                waker: Mutex::new(None),
+                start_wake: Barrier::new(2),
+                wake_finished: Barrier::new(2),
+            })
+        }
+
+        fn stored_waker(&self) -> Waker {
+            self.waker
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_ref()
+                .expect("future was not polled")
+                .clone()
+        }
+    }
+
+    struct BoundaryWakeFuture {
+        state: Arc<BoundaryWakeState>,
+    }
+
+    impl Future for BoundaryWakeFuture {
+        type Output = usize;
+
+        fn poll(self: Pin<&mut Self>, context: &mut TaskContext<'_>) -> Poll<Self::Output> {
+            let poll = self.state.polls.fetch_add(1, Ordering::Relaxed) + 1;
+            *self
+                .state
+                .waker
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(context.waker().clone());
+
+            if poll == 2 {
+                self.state.start_wake.wait();
+                self.state.wake_finished.wait();
+            }
+
+            if self.state.ready.load(Ordering::Acquire) {
+                Poll::Ready(7)
+            } else {
+                Poll::Pending
+            }
+        }
+    }
+
+    #[test]
+    fn concurrent_tasks_preserve_self_wake_from_pending_poll() {
+        let polls = Arc::new(AtomicUsize::new(0));
+        let mut tasks = ConcurrentTasks::new(0);
+        let slot = tasks.push(SelfWakeFuture {
+            output: 11,
+            polls: Arc::clone(&polls),
+        });
+
+        assert!(tasks.poll_ready().is_empty());
+        assert_eq!(polls.load(Ordering::Relaxed), 1);
+        assert_eq!(tasks.poll_ready(), vec![(slot, 11)]);
+        assert_eq!(polls.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn concurrent_tasks_preserve_thread_wake_across_poll_boundary() {
+        let state = BoundaryWakeState::new();
+        let mut tasks = ConcurrentTasks::new(0);
+        let slot = tasks.push(BoundaryWakeFuture {
+            state: Arc::clone(&state),
+        });
+
+        assert!(tasks.poll_ready().is_empty());
+        let worker_waker = state.stored_waker();
+        worker_waker.wake_by_ref();
+
+        let worker_state = Arc::clone(&state);
+        let worker = thread::spawn(move || {
+            worker_state.start_wake.wait();
+            worker_waker.wake_by_ref();
+            worker_state.wake_finished.wait();
+        });
+
+        assert!(tasks.poll_ready().is_empty());
+        assert_eq!(state.polls.load(Ordering::Relaxed), 2);
+        state.ready.store(true, Ordering::Release);
+        assert_eq!(tasks.poll_ready(), vec![(slot, 7)]);
+        worker.join().expect("wake worker panicked");
+    }
+
+    #[test]
+    fn concurrent_tasks_poll_only_new_or_woken_slots() {
+        let first = ManualFutureState::new(10);
+        let second = ManualFutureState::new(20);
+        let mut tasks = ConcurrentTasks::new(0);
+        let first_slot = tasks.push(ManualFuture::new(Arc::clone(&first)));
+        let second_slot = tasks.push(ManualFuture::new(Arc::clone(&second)));
+
+        assert!(tasks.poll_ready().is_empty());
+        assert_eq!(first.polls.load(Ordering::Relaxed), 1);
+        assert_eq!(second.polls.load(Ordering::Relaxed), 1);
+        assert!(tasks.poll_ready().is_empty());
+        assert_eq!(first.polls.load(Ordering::Relaxed), 1);
+        assert_eq!(second.polls.load(Ordering::Relaxed), 1);
+
+        second.complete();
+        second.stored_waker().wake_by_ref();
+        assert_eq!(tasks.poll_ready(), vec![(second_slot, 20)]);
+        assert_eq!(first.polls.load(Ordering::Relaxed), 1);
+        assert_eq!(second.polls.load(Ordering::Relaxed), 2);
+        assert!(tasks.is_pending(first_slot));
+        assert!(!tasks.is_pending(second_slot));
+    }
+
+    #[test]
+    fn concurrent_tasks_reuse_slots_and_ignore_stale_wakes() {
+        let first = ManualFutureState::new(1);
+        let mut tasks = ConcurrentTasks::new(0);
+        let slot = tasks.push(ManualFuture::new(Arc::clone(&first)));
+        assert!(tasks.poll_ready().is_empty());
+        let stale_waker = first.stored_waker();
+        first.complete();
+        assert_eq!(tasks.poll_ready(), vec![(slot, 1)]);
+
+        let second = ManualFutureState::new(2);
+        assert_eq!(tasks.push(ManualFuture::new(Arc::clone(&second))), slot);
+        assert!(tasks.poll_ready().is_empty());
+        assert_eq!(second.polls.load(Ordering::Relaxed), 1);
+
+        stale_waker.wake_by_ref();
+        assert!(tasks.poll_ready().is_empty());
+        assert_eq!(second.polls.load(Ordering::Relaxed), 1);
+
+        second.complete();
+        assert_eq!(tasks.poll_ready(), vec![(slot, 2)]);
+    }
+
+    #[test]
+    fn concurrent_tasks_drop_completed_and_cancelled_futures_once() {
+        let completed = ManualFutureState::new(1);
+        completed.ready.store(true, Ordering::Release);
+        let cancelled = ManualFutureState::new(2);
+
+        {
+            let mut tasks = ConcurrentTasks::new(2);
+            tasks.insert(1, ManualFuture::new(Arc::clone(&completed)));
+            assert_eq!(tasks.push(ManualFuture::new(Arc::clone(&cancelled))), 0);
+            assert_eq!(tasks.poll_ready().len(), 1);
+            assert_eq!(completed.drops.load(Ordering::Relaxed), 1);
+            assert_eq!(cancelled.drops.load(Ordering::Relaxed), 0);
+            assert!(tasks.any_pending());
+        }
+
+        assert_eq!(completed.drops.load(Ordering::Relaxed), 1);
+        assert_eq!(cancelled.drops.load(Ordering::Relaxed), 1);
+    }
 
     fn active_payload(sent_ts_ns: i64) -> Vec<u8> {
         let mut payload = vec![0u8; 64];
@@ -1182,5 +1602,10 @@ mod tests {
             67_890
         );
         assert_eq!(resolve_nonnegative_u64(Some("invalid"), None, 99), 99);
+    }
+
+    #[test]
+    fn connect_ready_timeout_default_matches_multi_policy() {
+        assert_eq!(DEFAULT_MULTI_CONNECT_READY_TIMEOUT_MS, 10_000);
     }
 }

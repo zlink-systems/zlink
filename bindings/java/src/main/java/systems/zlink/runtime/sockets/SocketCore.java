@@ -31,6 +31,7 @@ import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
 import systems.zlink.runtime.nativeapi.NativeMessage;
 import systems.zlink.runtime.nativeapi.RuntimeResources;
+import systems.zlink.runtime.nativeapi.CompletionDispatcher;
 
 final class SocketCore {
     private static final FunctionDescriptor FD_RECV_CALLBACK =
@@ -76,14 +77,15 @@ final class SocketCore {
       new SocketCallbackSupport(this);
     private Arena receiveCallbackArena;
     private Arena streamPacketCallbackArena;
-    SocketCore(NativeSocketRuntime socket) {
+    SocketCore(NativeSocketRuntime socket,
+               CompletionDispatcher.CompletionLane completionLane) {
         this.socket = socket;
         SocketType type = socket.socketTypeHint();
         this.sendCompletions = type == SocketType.PAIR
             || type == SocketType.DEALER
             || type == SocketType.ROUTER
             || type == SocketType.STREAM
-            ? new SendCompletionRegistry(socket) : null;
+            ? new SendCompletionRegistry(socket, completionLane) : null;
     }
 
     void bind(String endpoint) {

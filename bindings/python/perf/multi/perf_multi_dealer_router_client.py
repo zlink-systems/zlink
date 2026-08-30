@@ -153,7 +153,10 @@ async def main(argv=None):
                                         received += 1
                                         if latency is not None:
                                             latency_sampler.add(latency / 2.0)
-                                await asyncio.sleep(0)
+                        # Drain every reply that is already ready before
+                        # yielding to the per-socket send loops. Yielding once
+                        # per message gives this single receive coordinator
+                        # only one turn for every full round of send tasks.
                         await asyncio.sleep(0)
                     if not send_completion.done():
                         send_completion.cancel()

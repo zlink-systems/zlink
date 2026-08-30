@@ -10,6 +10,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
+import java.util.concurrent.ArrayBlockingQueue;
 import sun.misc.Unsafe;
 
 /**
@@ -36,7 +37,7 @@ public final class Message implements AutoCloseable {
     private static final ContractAccess.NativeMessageAccess NATIVE_ACCESS;
 
     private final Object scope;
-    private final long ownedMsgSlotAddress;
+    private final NativeMessageSlot ownedMsgSlot;
     private final Object msg;
     private final boolean wrapperPoolEligible;
     private final long wrapperPoolOwnerThreadId;
@@ -164,7 +165,7 @@ public final class Message implements AutoCloseable {
 
     private Message(Object scope, boolean raw) {
         this.scope = Objects.requireNonNull(scope, "scope");
-        this.ownedMsgSlotAddress = 0L;
+        this.ownedMsgSlot = null;
         this.msg = ContractAccess.nativeMessageAllocate(scope);
         this.wrapperPoolEligible = false;
         this.wrapperPoolOwnerThreadId = 0L;
@@ -178,7 +179,7 @@ public final class Message implements AutoCloseable {
 
     private Message(Object adoptedMsg) {
         this.scope = null;
-        this.ownedMsgSlotAddress = 0L;
+        this.ownedMsgSlot = null;
         this.msg = Objects.requireNonNull(adoptedMsg, "adoptedMsg");
         this.wrapperPoolEligible = false;
         this.wrapperPoolOwnerThreadId = 0L;
@@ -189,15 +190,16 @@ public final class Message implements AutoCloseable {
         cachePayload((int) ContractAccess.nativeMessageSize(adoptedMsg));
     }
 
-    private Message(long ownedMsgSlotAddress) {
-        this(ownedMsgSlotAddress, false);
+    private Message(NativeMessageSlot ownedMsgSlot) {
+        this(ownedMsgSlot, false);
     }
 
-    private Message(long ownedMsgSlotAddress, boolean wrapperPoolEligible) {
+    private Message(NativeMessageSlot ownedMsgSlot,
+                    boolean wrapperPoolEligible) {
         this.scope = null;
-        this.ownedMsgSlotAddress = ownedMsgSlotAddress;
-        this.msg = ContractAccess.nativeMessageHandleFromAddress(
-            ownedMsgSlotAddress);
+        this.ownedMsgSlot = Objects.requireNonNull(ownedMsgSlot,
+            "ownedMsgSlot");
+        this.msg = ownedMsgSlot.handle;
         this.wrapperPoolEligible = wrapperPoolEligible;
         this.wrapperPoolOwnerThreadId = wrapperPoolEligible
             ? Thread.currentThread().threadId() : 0L;
@@ -249,15 +251,29 @@ public final class Message implements AutoCloseable {
         this(true);
         if (size < 0)
             throw new IllegalArgumentException("size must be >= 0");
-        int rc = ContractAccess.nativeMessageInitSize(msg, size);
-        if (rc != 0) {
+        long initializedAddress = size == 0 ? -1L
+            : ContractAccess.nativeMessageInitSizeDataAddress(msg, size);
+        if (initializedAddress < 0L) {
+            int rc = ContractAccess.nativeMessageInitSize(msg, size);
+            if (rc != 0) {
+                releaseOwnedResources();
+                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            }
+        } else if (initializedAddress == 0L) {
             releaseOwnedResources();
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            throw ZlinkException.fromLastError(
+                systems.zlink.contracts.errors.ErrorCategory.CONFIG);
         }
         valid = true;
         recvArmed = false;
         more = false;
-        cachePayload(size);
+        if (initializedAddress > 0L) {
+            cachedSize = size;
+            cachedAddress = initializedAddress;
+            cachedReadOnlyDataBuffer = null;
+        } else {
+            cachePayload(size);
+        }
     }
 
     public static Message allocate(int size) {
@@ -296,8 +312,7 @@ public final class Message implements AutoCloseable {
 
     /** Moves this message into a new owned message instance. */
     Message move() {
-        if (closed || !valid)
-            throw new IllegalStateException("message is closed");
+        requireValidNativeOwnership();
         Message target = new Message(true);
         boolean moreFlag = more;
         int size = cachedSize;
@@ -347,6 +362,7 @@ public final class Message implements AutoCloseable {
 
     static Message sharedFrom(Message source) {
         Objects.requireNonNull(source, "source");
+        source.requireValidNativeOwnership();
         Message msg = new Message(ContractAccess.nativeMessageOpenSharedScope(),
             true);
         int rc = ContractAccess.nativeMessageInit(msg.msg);
@@ -444,6 +460,7 @@ public final class Message implements AutoCloseable {
     }
 
     public int refCount() {
+        requireValidNativeOwnership();
         return ContractAccess.nativeMessageRefCount(msg);
     }
 
@@ -462,6 +479,7 @@ public final class Message implements AutoCloseable {
     }
 
     Object nativeHandle() {
+        requireValidNativeOwnership();
         return msg;
     }
 
@@ -663,7 +681,7 @@ public final class Message implements AutoCloseable {
      * method before filling and sending the same {@code Message} instance again.
      */
     void reset(int size) {
-        if (scope == null && ownedMsgSlotAddress == 0L)
+        if (scope == null && ownedMsgSlot == null)
             throw new IllegalStateException("message is not reusable");
         if (size < 0)
             throw new IllegalArgumentException("size must be >= 0");
@@ -766,6 +784,7 @@ public final class Message implements AutoCloseable {
     }
 
     void copyTo(Object destination) {
+        requireValidNativeOwnership();
         int rc = ContractAccess.nativeMessageInit(destination);
         if (rc != 0)
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
@@ -780,6 +799,7 @@ public final class Message implements AutoCloseable {
     }
 
     void moveTo(Object destination) {
+        requireValidNativeOwnership();
         int rc = ContractAccess.nativeMessageMove(destination, msg);
         if (rc != 0)
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
@@ -789,6 +809,7 @@ public final class Message implements AutoCloseable {
     }
 
     void transferTo(Object destination) {
+        requireValidNativeOwnership();
         int rc = ContractAccess.nativeMessageInit(destination);
         if (rc != 0)
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
@@ -815,7 +836,7 @@ public final class Message implements AutoCloseable {
     }
 
     void resetForReuse() {
-        if (scope == null && ownedMsgSlotAddress == 0L)
+        if (scope == null && ownedMsgSlot == null)
             throw new IllegalStateException("message is not reusable");
         if (closed || (scope != null
             && !ContractAccess.nativeMessageScopeAlive(scope)))
@@ -836,7 +857,7 @@ public final class Message implements AutoCloseable {
     }
 
     boolean isReusable() {
-        return !closed && (ownedMsgSlotAddress != 0
+        return !closed && (ownedMsgSlot != null
             || (scope != null && ContractAccess.nativeMessageScopeAlive(scope)));
     }
 
@@ -887,6 +908,18 @@ public final class Message implements AutoCloseable {
     public static void closeAll(Iterable<? extends Message> parts) {
         if (parts == null)
             return;
+        if (parts instanceof java.util.List<? extends Message> list) {
+            for (int index = 0; index < list.size(); index++) {
+                Message part = list.get(index);
+                if (part != null && part.isReusable()) {
+                    try {
+                        part.close();
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+            }
+            return;
+        }
         for (Message part : parts) {
             if (part != null && part.isReusable()) {
                 try {
@@ -898,11 +931,12 @@ public final class Message implements AutoCloseable {
     }
 
     Object handle() {
-        return msg;
+        return nativeHandle();
     }
 
     int moveInto(Message target, boolean moreFlag) {
         Objects.requireNonNull(target, "target");
+        requireValidNativeOwnership();
         target.prepareForReceive();
         int rc = ContractAccess.nativeMessageMove(target.msg, msg);
         if (rc != 0)
@@ -969,7 +1003,7 @@ public final class Message implements AutoCloseable {
     }
 
     private void retireWrapperSlot() {
-        UNSAFE.freeMemory(ownedMsgSlotAddress);
+        MessageSlotPool.release(ownedMsgSlot);
         closed = true;
     }
 
@@ -997,17 +1031,20 @@ public final class Message implements AutoCloseable {
     private void releaseOwnedResources() {
         if (scope != null && ContractAccess.nativeMessageScopeAlive(scope)) {
             ContractAccess.nativeMessageCloseScope(scope);
-        } else if (ownedMsgSlotAddress != 0L) {
-            UNSAFE.freeMemory(ownedMsgSlotAddress);
+        } else if (ownedMsgSlot != null) {
+            MessageSlotPool.release(ownedMsgSlot);
         }
         closed = true;
     }
 
-    private static long allocateOwnedMsgSlot() {
-        long address = UNSAFE.allocateMemory(
-            NATIVE_MESSAGE_LAYOUT_SIZE);
-        UNSAFE.setMemory(address, NATIVE_MESSAGE_LAYOUT_SIZE, (byte) 0);
-        return address;
+    private static NativeMessageSlot allocateOwnedMsgSlot() {
+        return MessageSlotPool.acquire();
+    }
+
+    private void requireValidNativeOwnership() {
+        if (!valid || closed) {
+            throw new IllegalStateException("message is closed");
+        }
     }
 
     private static void validateRange(int total, int offset, int length, String name) {
@@ -1039,6 +1076,92 @@ public final class Message implements AutoCloseable {
                 throw new IllegalStateException(
                     "Unable to access sun.misc.Unsafe", ex);
             }
+        }
+    }
+
+    /**
+     * Bounded cache for the native message header storage owned by Java
+     * Message instances. The native frame itself is always closed before a
+     * slot is returned, so reuse changes only allocation cost and does not
+     * retain payload ownership. Same-thread returns stay thread-local and
+     * synchronization-free. A bounded shared fallback returns slots that are
+     * closed by an asynchronous completion worker to their next allocating
+     * thread instead of repeatedly allocating native memory.
+     */
+    private static final class MessageSlotPool {
+        private static final ThreadLocal<Pool> POOL =
+            ThreadLocal.withInitial(Pool::new);
+        private static final int SHARED_CAPACITY = 4096;
+        private static final ArrayBlockingQueue<NativeMessageSlot> SHARED =
+            new ArrayBlockingQueue<>(SHARED_CAPACITY);
+
+        private MessageSlotPool() {
+        }
+
+        static NativeMessageSlot acquire() {
+            NativeMessageSlot slot = POOL.get().acquire();
+            if (slot == null) {
+                slot = SHARED.poll();
+            }
+            if (slot == null) {
+                long address = UNSAFE.allocateMemory(
+                    NATIVE_MESSAGE_LAYOUT_SIZE);
+                UNSAFE.setMemory(address, NATIVE_MESSAGE_LAYOUT_SIZE,
+                    (byte) 0);
+                slot = new NativeMessageSlot(address);
+            }
+            slot.ownerThreadId = Thread.currentThread().threadId();
+            return slot;
+        }
+
+        static void release(NativeMessageSlot slot) {
+            if (slot == null) {
+                return;
+            }
+            if (slot.ownerThreadId == Thread.currentThread().threadId()
+                && POOL.get().release(slot)) {
+                return;
+            }
+            if (SHARED.offer(slot)) {
+                return;
+            }
+            UNSAFE.freeMemory(slot.address);
+        }
+
+        private static final class Pool {
+            private static final int CAPACITY = 32;
+            private final NativeMessageSlot[] slots =
+                new NativeMessageSlot[CAPACITY];
+            private int count;
+
+            NativeMessageSlot acquire() {
+                if (count > 0) {
+                    NativeMessageSlot slot = slots[--count];
+                    slots[count] = null;
+                    return slot;
+                }
+                return null;
+            }
+
+            boolean release(NativeMessageSlot slot) {
+                if (count < CAPACITY) {
+                    slots[count++] = slot;
+                    return true;
+                }
+                return false;
+            }
+        }
+    }
+
+    private static final class NativeMessageSlot {
+        private final long address;
+        private final Object handle;
+        private long ownerThreadId;
+
+        private NativeMessageSlot(long address) {
+            this.address = address;
+            this.handle = ContractAccess.nativeMessageHandleFromAddress(
+                address);
         }
     }
 

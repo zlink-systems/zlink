@@ -53,6 +53,7 @@ public final class InternalAccess {
 
     public interface ContextAccess {
         MemorySegment handle(Context context);
+        CompletionDispatcher completionDispatcher(Context context);
         void setOption(Context context, ContextOption option, int value);
         void setOptionData(Context context, ContextOption option, String value);
         int getOption(Context context, ContextOption option);
@@ -119,6 +120,11 @@ public final class InternalAccess {
 
     public static MemorySegment contextHandle(Context context) {
         return contextAccess().handle(context);
+    }
+
+    public static CompletionDispatcher contextCompletionDispatcher(
+            Context context) {
+        return contextAccess().completionDispatcher(context);
     }
 
     public static SocketMonitor monitorSocket(MemorySegment handle,
@@ -295,6 +301,12 @@ public final class InternalAccess {
       MemorySegment partsAddr) {
         return ContractAccess.nativeMessageMaterializeSingleVectorShared(
             partsAddr);
+    }
+
+    public static Message messageFromOwnedMessageVectorPartShared(
+      MemorySegment partAddr, boolean hasMore) {
+        return ContractAccess.nativeMessageMaterializeVectorPartShared(
+            partAddr, hasMore);
     }
 
     public static Message messageFromOwnedNative(MemorySegment nativeMsg) {

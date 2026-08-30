@@ -112,9 +112,39 @@ test('Node async surfaces use Core completion callbacks and have no readiness ad
   assert.ok(socketBinding.includes('socketSendCompletionHandler'));
   assert.ok(socketBinding.includes('socketSendAsync'));
   assert.ok(sendCompletion.includes('new Map<bigint, PendingSend>()'));
+  assert.ok(nativeBridge.includes('struct send_completion_js_payload_t'));
+  assert.ok(nativeBridge.includes(
+    'std::unique_ptr<send_completion_js_payload_t> payload'
+  ));
+  assert.ok(nativeBridge.includes(
+    'tsfn, payload.get (), napi_tsfn_nonblocking'
+  ));
+  assert.ok(nativeBridge.includes(
+    'payload->completion = operation->completion'
+  ));
+  assert.ok(nativeBridge.includes(
+    'send_completion_delivery_accounting_t accounting'
+  ));
+  assert.ok(nativeBridge.indexOf('send_completion_delivery_accounting_t accounting')
+    < nativeBridge.indexOf('if (!env || !js_callback || !payload)'));
   assert.equal(nativeBridge.includes('send_ready'), false);
   assert.equal(nativeBridge.includes('routed_send_ready'), false);
   assert.equal(socketBinding.includes('sendReady'), false);
+});
+
+test('native multipart replies use inline staging without changing rejection ownership', () => {
+  const nativeBridge = fs.readFileSync(
+    path.resolve(__dirname, '../../native/src/addon_core.cc'), 'utf8'
+  );
+  for (const symbol of ['napi_value dealer_reply', 'napi_value router_reply']) {
+    const start = nativeBridge.indexOf(symbol);
+    assert.ok(start >= 0, symbol);
+    const body = nativeBridge.slice(start, nativeBridge.indexOf('\nnapi_value ', start + symbol.length));
+    assert.ok(body.includes('small_msg_storage_t parts'), `${symbol} inline storage`);
+    assert.ok(body.includes('parts.release ()'), `${symbol} must not double-close rejected slots`);
+    assert.equal(body.includes('std::vector<zlink_msg_t> parts'), false,
+      `${symbol} must not allocate a vector for multipart replies`);
+  }
 });
 
 test('bindings samples stay on the Core 0.13.1 raw socket boundary', () => {

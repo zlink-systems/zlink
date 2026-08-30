@@ -120,6 +120,36 @@ int main ()
 
     assert (all.find ("std::this_thread::sleep_for") == std::string::npos);
 
+    const std::string send_operations = read_file (
+      cpp_root / "src" / "Runtime" / "Messaging" / "send_operations.cpp");
+    assert (send_operations.find ("send_completion_anchor_t") == std::string::npos);
+    assert (send_operations.find ("completion->retain_for_core (completion)")
+            != std::string::npos);
+    const std::size_t immediate = send_operations.find ("if (op_id == 0)");
+    const std::size_t retain = send_operations.find (
+      "completion->retain_for_core (completion)");
+    const std::size_t submit = send_operations.find (
+      "async_result_t<void> submit_send_async");
+    assert (immediate != std::string::npos && retain != std::string::npos
+            && submit != std::string::npos && retain > immediate);
+    assert (send_operations.find ("completion->release_from_core ()")
+            < submit);
+
+    const std::string stream_server = read_file (
+      cpp_root / "perf" / "multi" / "src" / "perf_stream_server.cpp");
+    const std::size_t begin_drain = stream_server.find ("void begin_drain ()");
+    const std::size_t complete_send = stream_server.find ("void complete_send ()");
+    const std::size_t enqueue = stream_server.find ("bool enqueue_packet");
+    const std::size_t send_async = stream_server.find ("send_packet_async");
+    const std::size_t handle_packet = stream_server.find ("void handle_packet", send_async);
+    assert (begin_drain != std::string::npos && complete_send != std::string::npos
+            && send_async != std::string::npos && handle_packet != std::string::npos
+            && stream_server.find ("draining.store (true", begin_drain) != std::string::npos
+            && stream_server.find ("draining.load", complete_send) != std::string::npos
+            && stream_server.find ("ctx_->complete_send ();", enqueue) != std::string::npos
+            && stream_server.substr (send_async, handle_packet - send_async).find (
+                 "ctx_->queue_cv.notify_all ()") == std::string::npos);
+
     assert_public_contract_includes_only (cpp_root / "samples");
     assert_public_contract_includes_only (cpp_root / "perf");
     return 0;

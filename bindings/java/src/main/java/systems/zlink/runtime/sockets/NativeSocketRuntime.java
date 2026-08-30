@@ -24,6 +24,7 @@ import systems.zlink.contracts.errors.CloseResult;
 import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.runtime.nativeapi.InternalAccess;
+import systems.zlink.runtime.nativeapi.CompletionDispatcher;
 import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeHelpers;
@@ -52,6 +53,7 @@ final class NativeSocketRuntime implements AutoCloseable {
     private final NettySocketPlane nettyPlane;
     private final SocketSendPlane sendPlane;
     private final SocketOptionSupport optionSupport;
+    private final CompletionDispatcher ownedCompletionDispatcher;
     private MemorySegment handle;
     private final boolean own;
     private final SocketType socketTypeHint;
@@ -94,7 +96,16 @@ final class NativeSocketRuntime implements AutoCloseable {
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
         this.own = true;
         this.socketTypeHint = type;
-        this.socketCore = new SocketCore(this);
+        this.ownedCompletionDispatcher = null;
+        try {
+            CompletionDispatcher dispatcher =
+                InternalAccess.contextCompletionDispatcher(ctx);
+            this.socketCore = new SocketCore(this, dispatcher.acquireLane());
+        } catch (RuntimeException | Error failure) {
+            Native.close(handle);
+            handle = MemorySegment.NULL;
+            throw failure;
+        }
         this.topicPlane = new TopicPlane(this);
         this.receivePlane = new ReceivePlane(this);
         this.nettyPlane = new NettySocketPlane(this);
@@ -103,10 +114,26 @@ final class NativeSocketRuntime implements AutoCloseable {
     }
 
     NativeSocketRuntime(MemorySegment handle, boolean own, SocketType socketTypeHint) {
+        if (!own) {
+            throw new IllegalArgumentException(
+                "borrowed raw socket handles are not supported");
+        }
         this.handle = handle;
         this.own = own;
         this.socketTypeHint = socketTypeHint;
-        this.socketCore = new SocketCore(this);
+        CompletionDispatcher dispatcher = new CompletionDispatcher(
+            "zlink-send-completion", 1);
+        this.ownedCompletionDispatcher = dispatcher;
+        try {
+            this.socketCore = new SocketCore(this, dispatcher.acquireLane());
+        } catch (RuntimeException | Error failure) {
+            dispatcher.close();
+            if (own && handle != null && handle.address() != 0L) {
+                Native.close(handle);
+                this.handle = MemorySegment.NULL;
+            }
+            throw failure;
+        }
         this.topicPlane = new TopicPlane(this);
         this.receivePlane = new ReceivePlane(this);
         this.nettyPlane = new NettySocketPlane(this);
@@ -338,6 +365,10 @@ final class NativeSocketRuntime implements AutoCloseable {
             throw new IllegalArgumentException(
                 "transport pair identity must be non-zero");
         }
+        if (socketTypeHint == SocketType.DEALER && !exact) {
+            return support.submit(parts, timeout, MemorySegment.NULL,
+                systems.zlink.contracts.sockets.SendFlags.DONT_WAIT, false);
+        }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment target = exact
                 ? allocateExactTarget(arena, routingId, transportPairId,
@@ -366,6 +397,10 @@ final class NativeSocketRuntime implements AutoCloseable {
         if (exact && (transportPairId == 0L || transportPairGeneration == 0L)) {
             throw new IllegalArgumentException(
                 "transport pair identity must be non-zero");
+        }
+        if (socketTypeHint == SocketType.DEALER && !exact) {
+            return support.submit(parts, timeout, MemorySegment.NULL, flags,
+                true);
         }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment target = exact
@@ -741,11 +776,27 @@ final class NativeSocketRuntime implements AutoCloseable {
                         Native.errno());
                 }
             }
-            socketCore.closeCommonState();
+            // Native close has ended handle ownership. Publish the local
+            // closed state before queued completion continuations can run.
             handle = MemorySegment.NULL;
+            try {
+                socketCore.closeCommonState();
+            } finally {
+                closeOwnedCompletionDispatcher();
+            }
             return;
         }
-        socketCore.closeCommonState();
+        try {
+            socketCore.closeCommonState();
+        } finally {
+            closeOwnedCompletionDispatcher();
+        }
+    }
+
+    private void closeOwnedCompletionDispatcher() {
+        if (ownedCompletionDispatcher != null) {
+            ownedCompletionDispatcher.close();
+        }
     }
 
     @SuppressWarnings("unchecked")

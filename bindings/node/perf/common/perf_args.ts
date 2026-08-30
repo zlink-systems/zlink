@@ -177,14 +177,15 @@ function parseCommonArgs(argv, defaults) {
       options.clients = Number(argv[i + 1]);
       options.clientsExplicit = true;
       i += 1;
-    } else if (
-      arg === '--build-dir'
-      || arg === '--reuse-build'
-      || arg === '--clean-build'
-      ) {
-      if (arg === '--build-dir' && argv[i + 1] && !argv[i + 1].startsWith('--')) {
-        i += 1;
-      }
+    } else if (arg === '--build-dir' || arg.startsWith('--build-dir=')) {
+      throw new Error(
+        '--build-dir is not supported by the Node perf runner because its '
+        + 'TypeScript and native artifacts use fixed package paths '
+        + '(dist, dist-tools, build/Release, and prebuilds/<platform>-<arch>)'
+      );
+    } else if (arg === '--reuse-build' || arg === '--clean-build') {
+      // The official shell runner owns these modes and forwards the flags so
+      // the TypeScript argument contract remains common across bindings.
     } else if (arg === '--help' || arg === '-h') {
       options.helpRequested = true;
     } else {

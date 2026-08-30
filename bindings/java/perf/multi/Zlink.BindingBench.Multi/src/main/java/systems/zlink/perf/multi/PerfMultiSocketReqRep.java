@@ -162,7 +162,7 @@ final class PerfMultiSocketReqRep {
             + config.durationSeconds() * 1_000_000_000L;
         int requestTimeoutMs = resolveRequestTimeoutMs();
         Duration timeout = Duration.ofMillis(requestTimeoutMs);
-        byte[][] pendingPayloads = new byte[clients.size()][];
+        boolean[] pendingPayloads = new boolean[clients.size()];
         java.util.function.BiConsumer<List<Message>, Throwable> completion =
             (parts, error) -> {
             try {
@@ -193,25 +193,29 @@ final class PerfMultiSocketReqRep {
         // Request completion targets are registered with POLLCOMPLETION
         // alone. Submission continues until the public request terminal
         // reports backpressure; replies never gate the next request.
-        try (PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(
-                clients, PollEventFlags.POLLCOMPLETION)) {
+        try (RequestPayloadTemplates payloadTemplates =
+                 new RequestPayloadTemplates(config.size(), clients.size());
+             PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(
+                 clients, PollEventFlags.POLLCOMPLETION)) {
             while (System.nanoTime() < activeEnd && failure.get() == null) {
                 boolean progress = false;
                 for (int i = 0; i < clients.size(); i++) {
                     if (System.nanoTime() >= activeEnd) {
                         break;
                     }
-                    if (pendingPayloads[i] == null) {
-                        pendingPayloads[i] = newLogicalPayload(config.size());
+                    if (!pendingPayloads[i]) {
+                        payloadTemplates.prepare(i, (byte) PerfUtil.PHASE_ACTIVE,
+                            System.nanoTime());
+                        pendingPayloads[i] = true;
                     }
                     // Each accepted request owns its own CompletionStage.
                     // Keep submitting round-robin until Core reports
                     // admission backpressure; replies do not gate later
                     // request tasks.
                     if (submit(clients.get(i), routedClients,
-                            pendingPayloads[i], timeout,
+                            payloadTemplates.copyForSubmit(i), timeout,
                             outstanding, completion)) {
-                        pendingPayloads[i] = null;
+                        pendingPayloads[i] = false;
                         progress = true;
                     }
                 }
@@ -252,20 +256,13 @@ final class PerfMultiSocketReqRep {
         }
     }
 
-    private static byte[] newLogicalPayload(int msgSize) {
-        try (Message payload = PerfUtil.payload(msgSize,
-                 (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime())) {
-            return payload.toByteArray();
-        }
-    }
-
     private static boolean submit(Socket client, boolean routedClients,
-                                  byte[] logicalPayload, Duration timeout,
+                                  Message payload, Duration timeout,
                                   AtomicLong outstanding,
                                   java.util.function.BiConsumer<List<Message>,
                                       Throwable> completion) {
         CompletionStage<List<Message>> stage;
-        try (Message payload = Message.from(logicalPayload);
+        try (payload;
              Message tail = PerfUtil.measurementPartCount() == 2
                  ? PerfUtil.measurementTail() : null) {
             if (routedClients) {
@@ -311,10 +308,42 @@ final class PerfMultiSocketReqRep {
             }
         }
         outstanding.incrementAndGet();
-        stage.whenComplete((parts, error) -> {
-            completion.accept(parts, error);
-        });
+        stage.whenComplete(completion);
         return true;
+    }
+
+    /**
+     * One native template per requester preserves a pre-admission logical
+     * payload across retries. Request submission copies the source parts into
+     * Core-owned storage before returning, so its temporary clone is released
+     * independently of reply completion; this is not an inflight window.
+     */
+    private static final class RequestPayloadTemplates implements AutoCloseable {
+        private final Message[] templates;
+
+        private RequestPayloadTemplates(int size, int clientCount) {
+            templates = new Message[clientCount];
+            for (int index = 0; index < clientCount; index++) {
+                templates[index] = PerfUtil.payloadTemplate(size);
+            }
+        }
+
+        private void prepare(int index, byte phase, long sentNanoTime) {
+            PerfUtil.writePayload(templates[index], templates[index].size(),
+                phase, sentNanoTime);
+        }
+
+        private Message copyForSubmit(int index) {
+            // CoreRequestSupport copies source parts before it returns. A
+            // clone must therefore be independently owned, never shared with
+            // a subsequent retry or template rewrite.
+            return Message.from(templates[index]);
+        }
+
+        @Override
+        public void close() {
+            Message.closeAll(templates);
+        }
     }
 
     private static boolean isExpectedRequestFailure(Throwable error) {

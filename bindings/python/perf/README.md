@@ -76,8 +76,9 @@ runtimes that report `protocol not supported`, are reported as
 `UNSUPPORTED,current,...`; other failures remain `fail`.
 
 The multi runner exposes the same common CLI surface plus `--clients`.
-Python multi defaults server and client context I/O threads to `4`, matching
-the current C multi baseline resource profile.
+Python multi defaults server and client context I/O threads to `1` to avoid
+native callback threads contending on the GIL. Use `--io-threads 4` or
+`PERF_IO_THREADS=4` for an explicit C-baseline resource comparison.
 
 Patterns:
 

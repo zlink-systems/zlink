@@ -39,7 +39,8 @@
   "scripts": {
     "install": "node scripts/install.js",
     "clean": "node scripts/clean.js",
-    "build": "npm run clean && tsc -p tsconfig.json && node scripts/generate_esm_wrapper.js && tsc -p tsconfig.tools.json && node scripts/link_dist_tools.js",
+    "build": "npm run clean && npm run build:incremental",
+    "build:incremental": "tsc -p tsconfig.json && node scripts/generate_esm_wrapper.js && tsc -p tsconfig.tools.json && node scripts/link_dist_tools.js",
     "verify:prebuilds": "node scripts/verify_prebuilds.js",
     "rebuild-native": "./scripts/rebuild_native.sh",
     "perf:single": "./perf/single/run_benchmarks.sh",

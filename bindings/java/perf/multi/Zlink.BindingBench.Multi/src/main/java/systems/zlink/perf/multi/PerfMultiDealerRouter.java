@@ -18,7 +18,6 @@ import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -128,30 +127,10 @@ final class PerfMultiDealerRouter {
                 socketsAsBase, PollEventFlags.POLLIN)) {
             long activeEnd = System.nanoTime()
                 + (long) config.durationSeconds() * 1_000_000_000L;
-            List<CompletionStage<Void>> sendLoops = new ArrayList<>(n);
-            CompletableFuture<Void> startGate = new CompletableFuture<>();
-            for (DealerSocket client : clients) {
-                sendLoops.add(PerfMultiAsyncSendLoop.start(activeEnd, startGate,
-                    () -> sendPayload(client, msgSize, activeEnd)));
-            }
-            startGate.complete(null);
-            while (System.nanoTime() < activeEnd) {
-                int pollTimeoutMs = Math.min(50,
-                    remainingTimeoutMs(activeEnd));
-                if (pollTimeoutMs <= 0) {
-                    break;
-                }
-                int readyCount = pollSet.poll(pollTimeoutMs);
-                for (int readyOffset = 0; readyOffset < readyCount; readyOffset++) {
-                    int idx = pollSet.readyIndexAt(readyOffset);
-                    if (pollSet.readyHasEventAt(readyOffset,
-                            PollEventFlags.POLLIN)) {
-                        drainReplies(clients.get(idx), msgSize, metrics,
-                            replyBuffer, activeEnd);
-                    }
-                }
-            }
-            PerfMultiAsyncSendLoop.awaitAll(sendLoops,
+            PerfMultiRoutedSendCoordinator.run(n, activeEnd, pollSet,
+                index -> sendPayload(clients.get(index), msgSize, activeEnd),
+                index -> drainReplies(clients.get(index), msgSize, metrics,
+                    replyBuffer, activeEnd),
                 Duration.ofSeconds(config.durationSeconds() + 5L),
                 "multi dealer/router async sends");
             replyBuffer.close();
@@ -196,15 +175,6 @@ final class PerfMultiDealerRouter {
                     receivedNanoTime);
             }
         }
-    }
-
-    private static int remainingTimeoutMs(long deadline) {
-        long remainingNs = deadline - System.nanoTime();
-        if (remainingNs <= 0) {
-            return 0;
-        }
-        return (int) Math.min(Integer.MAX_VALUE,
-            (remainingNs + 999_999L) / 1_000_000L);
     }
 
 }

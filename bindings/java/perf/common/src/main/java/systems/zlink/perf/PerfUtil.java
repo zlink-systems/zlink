@@ -30,9 +30,11 @@ public final class PerfUtil {
     public static final int PHASE_ACTIVE = 1;
     public static final int PHASE_COOLDOWN = 2;
     public static final int HEADER_SIZE = 29;
+    private static final int MEASUREMENT_PART_COUNT =
+        "1".equals(System.getenv("PERF_PART_COUNT")) ? 1 : 2;
 
     public static int measurementPartCount() {
-        return "1".equals(System.getenv("PERF_PART_COUNT")) ? 1 : 2;
+        return MEASUREMENT_PART_COUNT;
     }
 
     public static Message measurementTail() {

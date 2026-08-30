@@ -26,6 +26,8 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
       this::sendReceivedSingle;
     private final ContractAccess.RoutedMultipartSendInvoker receivedMultipartSender =
       this::sendReceivedMultipart;
+    private final ContractAccess.RoutedReplyInvoker receivedReplySender =
+      this::submitReceivedReply;
 
     NativeRouterSocket(Context ctx) {
         super(ctx, SocketType.ROUTER);
@@ -97,6 +99,12 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
         return sendInternal(ContractAccess.routingIdFromTrusted(routingIdBytes),
             parts, flags);
     }
+    private void submitReceivedReply(byte[] routingIdBytes,
+                                     long requestSequence,
+                                     List<Message> parts) {
+        NativeRouterRequestSupport.reply(this, routingIdBytes,
+            requestSequence, parts);
+    }
     /** Receives into caller-provided storage. */
     public boolean recv(Received result, RecvFlags flags) {
         java.util.Objects.requireNonNull(result, "result");
@@ -118,6 +126,8 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
         if (ContractAccess.receivedHasRoutingIdBytes(result)) {
             ContractAccess.receivedSetRoutedSenders(result,
                 receivedSingleSender, receivedMultipartSender);
+            ContractAccess.receivedSetRoutedReplySender(result,
+                receivedReplySender);
             return;
         }
         RoutingId nodeRid = result.getRoutingId().orElse(null);

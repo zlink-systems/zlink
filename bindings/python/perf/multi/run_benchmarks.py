@@ -40,7 +40,7 @@ WINDOWS_STREAM_CLIENT_BIN = (
 )
 
 
-def _ensure_stream_client():
+def _ensure_stream_client(*, reuse_build=False):
     configured = os.environ.get("PERF_STREAM_CLIENT_BIN")
     candidates = []
     if configured:
@@ -51,6 +51,11 @@ def _ensure_stream_client():
     for candidate in candidates:
         if candidate.exists() and (os.name == "nt" or os.access(candidate, os.X_OK)):
             return candidate
+    if reuse_build:
+        raise SystemExit(
+            "--reuse-build requires an existing executable STREAM client; "
+            f"checked: {', '.join(str(candidate) for candidate in candidates)}"
+        )
     if os.name == "nt":
         raise SystemExit(
             "Windows MULTI_STREAM requires the native C perf_stream_client.exe. "
@@ -62,7 +67,11 @@ def _ensure_stream_client():
         capture_output=True,
         text=True,
     )
-    return STREAM_CLIENT_BIN
+    if STREAM_CLIENT_BIN.exists() and os.access(STREAM_CLIENT_BIN, os.X_OK):
+        return STREAM_CLIENT_BIN
+    raise SystemExit(
+        f"STREAM client build completed without the required executable: {STREAM_CLIENT_BIN}"
+    )
 DEFAULT_PATTERNS = (
     "DEALER_DEALER",
     "DEALER_ROUTER",
@@ -91,25 +100,73 @@ RUNNABLE_TRANSPORTS = POLICY_TRANSPORTS
 
 def _require_binding_runtime():
     src_path = str(DEFAULT_PYTHONPATH.resolve())
-    if src_path not in sys.path:
-        sys.path.insert(0, src_path)
-    import zlink
+    if src_path in sys.path:
+        sys.path.remove(src_path)
+    sys.path.insert(0, src_path)
 
     try:
+        import zlink
+        from zlink._native import _zlink_native
+
+        package_root = (DEFAULT_PYTHONPATH / "zlink").resolve()
+        extension_source = package_root / "_native" / "_zlink_native.c"
+        module_path = Path(zlink.__file__).resolve()
+        extension_path = Path(_zlink_native.__file__).resolve()
+        if not module_path.is_relative_to(package_root):
+            raise RuntimeError(f"zlink was imported outside the source package: {module_path}")
+        if not extension_path.is_relative_to(package_root / "_native"):
+            raise RuntimeError(
+                f"zlink native extension was imported outside the source package: {extension_path}"
+            )
+        if not extension_path.is_file():
+            raise RuntimeError(f"zlink native extension is missing: {extension_path}")
+        if not extension_source.is_file():
+            raise RuntimeError(f"zlink native extension source is missing: {extension_source}")
+        if extension_source.stat().st_mtime_ns > extension_path.stat().st_mtime_ns:
+            raise RuntimeError(
+                f"zlink native extension is older than its source: {extension_path}"
+            )
         zlink.version()
     except Exception as exc:
         raise SystemExit(
-            "Python binding runtime is required for official perf runs. "
+            "The current source-tree Python binding and its in-place native extension "
+            f"are required for official perf runs ({exc}). "
             "Run `python3 setup.py build_ext --inplace --force` in bindings/python."
         ) from exc
+
+
+def _validate_python_build_options(args):
+    if args.build_dir:
+        raise SystemExit(
+            "--build-dir is not supported by Python perf; the runner uses "
+            "bindings/python/src and its in-place native extension."
+        )
+    if args.clean_build:
+        raise SystemExit(
+            "--clean-build is not supported by Python perf because this runner does not "
+            "own Python binding build outputs. Rebuild explicitly with "
+            "`python3 setup.py build_ext --inplace --force` in bindings/python."
+        )
 
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(prog="run_benchmarks_multi.sh")
     parser.add_argument("--pattern", default="ALL")
-    parser.add_argument("--build-dir", default="")
-    parser.add_argument("--reuse-build", action="store_true")
-    parser.add_argument("--clean-build", action="store_true")
+    parser.add_argument(
+        "--build-dir",
+        default="",
+        help="unsupported: Python perf uses the source-tree in-place extension",
+    )
+    parser.add_argument(
+        "--reuse-build",
+        action="store_true",
+        help="validate and reuse the existing in-place extension without building",
+    )
+    parser.add_argument(
+        "--clean-build",
+        action="store_true",
+        help="unsupported: this runner does not own Python binding build outputs",
+    )
     parser.add_argument(
         "--duration",
         default=os.environ.get("PERF_MULTI_DURATION_SECONDS", "5"),
@@ -117,7 +174,11 @@ def parse_args(argv):
     parser.add_argument("--msg-sizes", default="")
     parser.add_argument("--transports", default="")
     parser.add_argument("--runs", default="1")
-    parser.add_argument("--clients", default=None)
+    parser.add_argument(
+        "--clients",
+        default=None,
+        help="client sockets for every pattern (default: 100)",
+    )
     parser.add_argument("--results-dir", default="")
     parser.add_argument("--results-tag", default="")
     parser.add_argument("--output", default="")
@@ -310,7 +371,7 @@ def _selected_configs(patterns, transports, requested_msg_sizes):
 def _default_clients(patterns):
     if patterns and all(pattern == "STREAM" for pattern in patterns):
         return os.environ.get("PERF_MULTI_DEFAULT_STREAM_CLIENTS") or os.environ.get(
-            "PERF_STREAM_DEFAULT_CLIENTS", "10000"
+            "PERF_STREAM_DEFAULT_CLIENTS", "100"
         )
     return "policy-default"
 
@@ -325,7 +386,7 @@ def _options_clients_display(patterns, cli_value):
         "PERF_DEFAULT_CLIENTS", "100"
     )
     default_stream_clients = os.environ.get("PERF_MULTI_DEFAULT_STREAM_CLIENTS") or os.environ.get(
-        "PERF_STREAM_DEFAULT_CLIENTS", "10000"
+        "PERF_STREAM_DEFAULT_CLIENTS", "100"
     )
     if patterns and all(pattern == "STREAM" for pattern in patterns):
         return default_stream_clients
@@ -342,7 +403,7 @@ def _clients_for_pattern(pattern, cli_value):
         return env_value
     if pattern == "STREAM":
         return os.environ.get("PERF_MULTI_DEFAULT_STREAM_CLIENTS") or os.environ.get(
-            "PERF_STREAM_DEFAULT_CLIENTS", "10000"
+            "PERF_STREAM_DEFAULT_CLIENTS", "100"
         )
     return os.environ.get("PERF_MULTI_DEFAULT_CLIENTS") or os.environ.get(
         "PERF_DEFAULT_CLIENTS", "100"
@@ -765,7 +826,7 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
             # runner: --pattern MULTI_STREAM so RESULT lines match the
             # Python runner parser. Server teardown remains owned by the
             # runner's control channel after the client exits.
-            stream_client_bin = _ensure_stream_client()
+            stream_client_bin = _ensure_stream_client(reuse_build=args.reuse_build)
             stream_clients = clients
             non_tcp_max = os.environ.get("PERF_STREAM_NON_TCP_CLIENTS_MAX") or os.environ.get(
                 "PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX", "10000"
@@ -980,7 +1041,7 @@ def _build_options(args, patterns, transports, requested_msg_sizes, clients, env
         "default_clients": os.environ.get("PERF_MULTI_DEFAULT_CLIENTS")
         or os.environ.get("PERF_DEFAULT_CLIENTS", "100"),
         "default_stream_clients": os.environ.get("PERF_MULTI_DEFAULT_STREAM_CLIENTS")
-        or os.environ.get("PERF_STREAM_DEFAULT_CLIENTS", "10000"),
+        or os.environ.get("PERF_STREAM_DEFAULT_CLIENTS", "100"),
         "server_io_threads": _effective_role_io_threads(args, "server"),
         "client_io_threads": _effective_role_io_threads(args, "client"),
         "hwm": hwm,
@@ -1056,10 +1117,13 @@ def _meta_lines(args, clients, runtime_info):
 def main(argv=None):
     start_time = time.perf_counter()
     args = parse_args(argv or sys.argv[1:])
+    _validate_python_build_options(args)
     _require_binding_runtime()
     if args.pin_cpu and not pin_current_process_cpu0():
         print("warning: cpu pinning requested but could not pin to cpu 0", file=sys.stderr)
     patterns = _parse_patterns(args.pattern)
+    if args.reuse_build and "STREAM" in patterns:
+        _ensure_stream_client(reuse_build=True)
     transports = _parse_transports(args.transports)
     requested_msg_sizes = _requested_msg_sizes(args)
     clients = _options_clients_display(patterns, args.clients)

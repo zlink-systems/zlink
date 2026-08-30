@@ -532,6 +532,24 @@ void test_send_async_cancel_and_drop ()
     }
 }
 
+void test_send_async_drop_remains_safe_through_core_terminal ()
+{
+    if (!small_hwm_contract_gate_enabled ())
+        return;
+    small_hwm_pair_fixture_t fixture ("cpp-send-async-drop-terminal");
+    fixture.fill_until_backpressured ();
+
+    {
+        zlink::message_t payload = make_request_message ("send-async-drop-terminal");
+        auto dropped = fixture.sender.send ().message (payload).async ();
+        // Dropping the result requests cancellation, but Core can still race
+        // to its terminal callback after the public owner has gone away.
+        assert (!payload.valid ());
+    }
+    fixture.sender.close ();
+    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+}
+
 void test_send_async_close_fails_pending_operation ()
 {
     if (!small_hwm_contract_gate_enabled ())
@@ -1670,6 +1688,7 @@ int main ()
     test_send_async_pending_completes_after_drain ();
     test_send_async_timeout_surfaces_timed_out ();
     test_send_async_cancel_and_drop ();
+    test_send_async_drop_remains_safe_through_core_terminal ();
     test_send_async_close_fails_pending_operation ();
     test_request_blocking_submit_returns_reply ();
     test_request_blocking_submit_times_out ();

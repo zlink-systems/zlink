@@ -44,6 +44,7 @@ public final class Received implements AutoCloseable {
     private BiFunction<Message, SendFlags, Boolean> singleSendSender;
     private ContractAccess.RoutedSingleSendInvoker routedSingleSendSender;
     private ContractAccess.RoutedMultipartSendInvoker routedMultipartSendSender;
+    private ContractAccess.RoutedReplyInvoker routedReplySender;
     private byte[] routingIdBytes;
     private Runnable onTerminalState;
     private ArrayList<Message> realizedParts;
@@ -134,6 +135,21 @@ public final class Received implements AutoCloseable {
             }
 
             @Override
+            public void populateRoutedTwoParts(Received received,
+                                               byte[] routingIdBytes,
+                                               Message firstPart,
+                                               Message secondPart,
+                                               long requestSequence,
+                                               boolean hasRequestSequence,
+                                               BiConsumer<List<Message>,
+                                                   SendFlags> replySender,
+                                               Runnable onTerminalState) {
+                received.populateRoutedTwoParts(routingIdBytes, firstPart,
+                    secondPart, requestSequence, hasRequestSequence,
+                    replySender, onTerminalState);
+            }
+
+            @Override
             public void forceMaterialize(Received received) {
                 received.forceMaterialize();
             }
@@ -163,6 +179,13 @@ public final class Received implements AutoCloseable {
               ContractAccess.RoutedSingleSendInvoker singleSender,
               ContractAccess.RoutedMultipartSendInvoker multipartSender) {
                 received.setRoutedSenders(singleSender, multipartSender);
+            }
+
+            @Override
+            public void setRoutedReplySender(
+              Received received,
+              ContractAccess.RoutedReplyInvoker replySender) {
+                received.setRoutedReplySender(replySender);
             }
 
             @Override
@@ -201,6 +224,7 @@ public final class Received implements AutoCloseable {
         this.singleSendSender = null;
         this.routedSingleSendSender = null;
         this.routedMultipartSendSender = null;
+        this.routedReplySender = null;
         this.routingIdBytes = null;
         this.onTerminalState = null;
         this.realizedParts = null;
@@ -271,12 +295,65 @@ public final class Received implements AutoCloseable {
         this.singleSendSender = null;
         this.routedSingleSendSender = null;
         this.routedMultipartSendSender = null;
+        this.routedReplySender = null;
         this.onTerminalState = onTerminalState;
         if (this.realizedParts == null) {
             this.realizedParts = new ArrayList<>(1);
         }
         this.realizedParts.add(singlePart);
         this.partsView = null;
+    }
+
+    /** Fill caller-owned receive storage directly for the common 2-part case. */
+    void populateRoutedTwoParts(byte[] routingIdBytes,
+                                Message firstPart,
+                                Message secondPart,
+                                long requestSequence,
+                                boolean hasRequestSequence,
+                                BiConsumer<List<Message>, SendFlags> replySender,
+                                Runnable onTerminalState) {
+        Objects.requireNonNull(firstPart, "firstPart");
+        Objects.requireNonNull(secondPart, "secondPart");
+
+        ArrayList<Message> storage = realizedParts;
+        realizedParts = null;
+        partsView = null;
+        if (storage != null) {
+            for (int i = 0; i < storage.size(); i++) {
+                Message previous = storage.get(i);
+                if (previous != null) {
+                    try {
+                        previous.closeFromOwner();
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+            }
+            storage.clear();
+        }
+        ContractAccess.ReceivedPartCursor pendingCursor = cursor;
+        cursor = null;
+        closeCursorQuietly(pendingCursor);
+
+        closed = false;
+        routingId = null;
+        this.routingIdBytes = routingIdBytes;
+        this.requestSequence = requestSequence;
+        this.hasRequestSequence = hasRequestSequence;
+        transportPairId = 0L;
+        transportPairGeneration = 0L;
+        this.replySender = replySender;
+        sendSender = null;
+        singleSendSender = null;
+        routedSingleSendSender = null;
+        routedMultipartSendSender = null;
+        routedReplySender = null;
+        this.onTerminalState = onTerminalState;
+        if (storage == null) {
+            storage = new ArrayList<>(2);
+        }
+        storage.add(firstPart);
+        storage.add(secondPart);
+        realizedParts = storage;
     }
 
     private boolean isReusablePlainSinglePartState() {
@@ -290,6 +367,7 @@ public final class Received implements AutoCloseable {
             && singleSendSender == null
             && routedSingleSendSender == null
             && routedMultipartSendSender == null
+            && routedReplySender == null
             && onTerminalState == null
             && cursor == null
             && realizedParts != null
@@ -320,6 +398,7 @@ public final class Received implements AutoCloseable {
         this.singleSendSender = source.singleSendSender;
         this.routedSingleSendSender = source.routedSingleSendSender;
         this.routedMultipartSendSender = source.routedMultipartSendSender;
+        this.routedReplySender = source.routedReplySender;
         this.routingIdBytes = source.routingIdBytes;
         this.onTerminalState = source.onTerminalState;
         this.realizedParts = source.realizedParts;
@@ -337,6 +416,7 @@ public final class Received implements AutoCloseable {
         source.singleSendSender = null;
         source.routedSingleSendSender = null;
         source.routedMultipartSendSender = null;
+        source.routedReplySender = null;
         source.routingIdBytes = null;
         source.onTerminalState = null;
         source.realizedParts = null;
@@ -593,12 +673,19 @@ public final class Received implements AutoCloseable {
     }
 
     private void submitReply(List<Message> parts, SendFlags flags) {
-        if (!hasRequestSequence || replySender == null) {
+        Objects.requireNonNull(flags, "flags");
+        if (!hasRequestSequence
+            || (replySender == null && routedReplySender == null)) {
             throw new ZlinkSubmitException(SubmitResult.INVALID_STATE);
         }
         try {
+            if (routedReplySender != null && routingIdBytes != null) {
+                routedReplySender.submit(routingIdBytes, requestSequence,
+                    Objects.requireNonNull(parts, "parts"));
+                return;
+            }
             replySender.accept(Objects.requireNonNull(parts, "parts"),
-                Objects.requireNonNull(flags, "flags"));
+                flags);
         } catch (IllegalStateException ex) {
             throw new ZlinkSubmitException(SubmitResult.TERMINATED);
         }
@@ -635,6 +722,11 @@ public final class Received implements AutoCloseable {
       ContractAccess.RoutedMultipartSendInvoker multipartSender) {
         this.routedSingleSendSender = singleSender;
         this.routedMultipartSendSender = multipartSender;
+    }
+
+    void setRoutedReplySender(
+      ContractAccess.RoutedReplyInvoker replySender) {
+        this.routedReplySender = replySender;
     }
 
     private final class SendBuilder implements SendOperation, SendSubmitOperation {
@@ -806,7 +898,11 @@ public final class Received implements AutoCloseable {
             if (n == 1) {
                 singleToClose = realizedParts.get(0);
             } else if (n > 1) {
-                toClose = new ArrayList<>(realizedParts);
+                // Detach the owned storage before invoking Message.close().
+                // The list is already private to this Received, so copying
+                // every multipart receive only adds an array and list
+                // allocation without strengthening the ownership boundary.
+                toClose = realizedParts;
             }
             realizedParts = null;
         }

@@ -118,9 +118,9 @@ fn main() {
                 Some(Instant::now() + Duration::from_millis(settings.send_timeout_ms.max(1)));
         }
 
-        // Consume at most one receive event per turn, then poll every pending
-        // send Future. A continuously busy packet callback must not starve
-        // Core admission/completion progress for already queued echoes.
+        // Consume at most one receive event per turn, then poll newly installed
+        // or woken send Futures. A continuously busy packet callback must not
+        // starve Core admission/completion progress for already queued echoes.
         let mut queue_empty = false;
         let event = if let Some(event) = prefetched_event.take() {
             Some(event)

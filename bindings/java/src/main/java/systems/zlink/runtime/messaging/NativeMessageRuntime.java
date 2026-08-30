@@ -76,6 +76,12 @@ final class NativeMessageRuntime {
             }
 
             @Override
+            public long initSizeDataAddress(Object msg, int size) {
+                return NativeMessage.messageInitSizeDataAddress(
+                    (MemorySegment) msg, size);
+            }
+
+            @Override
             public int close(Object msg) {
                 return NativeMessageRuntime.close((MemorySegment) msg);
             }
@@ -131,6 +137,13 @@ final class NativeMessageRuntime {
             public Message materializeSingleVectorShared(Object parts) {
                 return NativeMessageRuntime.materializeSingleVectorShared(
                     (MemorySegment) parts);
+            }
+
+            @Override
+            public Message materializeVectorPartShared(Object part,
+                                                       boolean hasMore) {
+                return NativeMessageRuntime.materializeVectorPartShared(
+                    (MemorySegment) part, hasMore);
             }
 
             @Override
@@ -280,22 +293,24 @@ final class NativeMessageRuntime {
     }
 
     static Message materializeSingleVectorShared(MemorySegment partsAddr) {
+        return materializeVectorPartShared(partsAddr, false);
+    }
+
+    static Message materializeVectorPartShared(MemorySegment partsAddr,
+                                               boolean hasMore) {
         if (partsAddr == null || partsAddr.address() == 0) {
             throw new IllegalArgumentException("message vector is empty");
         }
-        long messageSize = layoutSize();
-        MemorySegment source = MemorySegment.ofAddress(partsAddr.address())
-            .reinterpret(messageSize);
         Message message = ContractAccess.messagePrepareVectorTarget(null);
         boolean moved = false;
         try {
             int rc = move((MemorySegment) ContractAccess.messageNativeHandle(message),
-                source);
+                partsAddr);
             if (rc != 0) {
                 throw ZlinkException.fromLastError(
                     systems.zlink.contracts.errors.ErrorCategory.CONFIG);
             }
-            ContractAccess.messageFinishVectorMove(message, false);
+            ContractAccess.messageFinishVectorMove(message, hasMore);
             moved = true;
             return message;
         } finally {

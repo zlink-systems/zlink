@@ -309,66 +309,82 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
                 // intermediate Received object.
                 byte[] nodeRidBytes =
                     NativeRoutingIds.readBytesOut(sourceNodeRidOut);
-                RoutingId nodeRid = requestSequence == 0L
-                    ? null : RoutingId.from(nodeRidBytes);
                 firstPartConsumed = true;
                 ContractAccess.receivedPopulateRoutedSinglePart(target,
                     nodeRidBytes, firstPart, requestSequence,
-                    requestSequence != 0L,
-                    replySender(nodeRid, requestSequence), null);
+                    requestSequence != 0L, null, null);
                 return true;
             }
 
-            // Cold path (multipart or request-seq): fall back to the
-            // allocate-and-adopt implementation so surface semantics stay
-            // identical for non-echo routed recv shapes (request-reply,
-            // multipart envelopes).
-            firstPartConsumed = continueFallbackAdopt(target, firstPart, hasMore,
-                requestSequence, scratch, flags);
-            return true;
+            Message secondPart = InternalAccess.messageAcquireReceive();
+            boolean secondPartConsumed = false;
+            try {
+                while (true) {
+                    int nextRc = routerRecvPart(sourceNodeRidOut, requestSeqOut,
+                        InternalAccess.messageNativeHandle(secondPart),
+                        hasMoreOut, flags.value());
+                    if (nextRc == 0) {
+                        break;
+                    }
+                    int errno = Native.errno();
+                    if (errno == NativeErrno.EINTR) {
+                        continue;
+                    }
+                    throw new ZlinkRecvException(RecvResult.fromValue(nextRc),
+                        errno);
+                }
+                boolean secondHasMore = hasMoreOut.get(
+                    ValueLayout.JAVA_INT, 0) != 0;
+                InternalAccess.messageFinishReceive(secondPart, secondHasMore);
+                if (!secondHasMore) {
+                    byte[] nodeRidBytes =
+                        NativeRoutingIds.readBytesOut(sourceNodeRidOut);
+                    firstPartConsumed = true;
+                    secondPartConsumed = true;
+                    ContractAccess.receivedPopulateRoutedTwoParts(target,
+                        nodeRidBytes, firstPart, secondPart, requestSequence,
+                        requestSequence != 0L, null, null);
+                    return true;
+                }
+
+                // Three-or-more parts are uncommon. Preserve the existing
+                // allocate-and-adopt path after retaining the two parts that
+                // have already been consumed from Core.
+                ArrayList<Message> parts = new ArrayList<>();
+                parts.add(firstPart);
+                parts.add(secondPart);
+                Message[] partsArray = recvRemainingMultipartParts(parts,
+                    scratch, flags);
+                Received fresh;
+                if (requestSequence == 0L) {
+                    byte[] nodeRidBytes =
+                        NativeRoutingIds.readBytesOut(sourceNodeRidOut);
+                    fresh = InternalAccess.received(nodeRidBytes, partsArray,
+                        true, 0L, false, null, null);
+                } else {
+                    RoutingId nodeRid =
+                        NativeRoutingIds.readOut(sourceNodeRidOut);
+                    fresh = InternalAccess.received(nodeRid, partsArray, true,
+                        requestSequence, true,
+                        replySender(nodeRid, requestSequence), null);
+                }
+                firstPartConsumed = true;
+                secondPartConsumed = true;
+                ContractAccess.receivedAdoptFrom(target, fresh);
+                return true;
+            } finally {
+                if (!secondPartConsumed) {
+                    try {
+                        secondPart.close();
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+            }
         } finally {
             if (!firstPartConsumed) {
                 try { firstPart.close(); } catch (RuntimeException ignored) {}
             }
         }
-    }
-
-    private boolean continueFallbackAdopt(Received target, Message firstPart,
-                                          boolean hasMore, long requestSequence,
-                                          RecvOutScratch scratch, RecvFlags flags) {
-        // Reconstruct a fresh Received via the existing constructors for the
-        // multipart / request-seq case, then adoptFrom into the target.
-        MemorySegment sourceNodeRidOut = scratch.sourceNodeRidOut;
-        MemorySegment requestSeqOut = scratch.requestSeqOut;
-        MemorySegment hasMoreOut = scratch.hasMoreOut;
-        Received fresh;
-        if (!hasMore) {
-            RoutingId nodeRid = NativeRoutingIds.readOut(sourceNodeRidOut);
-            fresh = InternalAccess.receivedLazy(nodeRid, firstPart,
-                null, requestSequence, true,
-                replySender(nodeRid, requestSequence),
-                null);
-        } else {
-            ArrayList<Message> parts = new ArrayList<>();
-            parts.add(firstPart);
-            Message[] partsArray = recvRemainingMultipartParts(parts, scratch,
-                flags);
-            if (requestSequence == 0L) {
-                byte[] nodeRidBytes =
-                    NativeRoutingIds.readBytesOut(sourceNodeRidOut);
-                fresh = InternalAccess.received(nodeRidBytes, partsArray,
-                    true, 0L, false, null, null);
-            } else {
-                RoutingId nodeRid =
-                    NativeRoutingIds.readOut(sourceNodeRidOut);
-                fresh = InternalAccess.received(nodeRid, partsArray,
-                    true, requestSequence, true,
-                    replySender(nodeRid, requestSequence),
-                    null);
-            }
-        }
-        ContractAccess.receivedAdoptFrom(target, fresh);
-        return true;
     }
 
     private Received recvDirect(RecvFlags flags) {

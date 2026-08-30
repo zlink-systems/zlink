@@ -17,11 +17,24 @@ import java.util.List;
 final class NativeDealerSocket extends NativeSocketBase implements DealerSocket {
     private final DealerSocketOptions options = ContractAccess.dealerSocketOptions(this);
     private final CoreRequestSupport requestSupport;
+    private final MessageOperations.RoutedSendInvoker asyncSendInvoker =
+        (parts, timeout) -> runtime().sendAsync(parts, timeout);
+    private final MessageOperations.SyncSendInvoker syncSendInvoker =
+        (parts, flags) -> runtime().send(parts,
+            SendFlag.fromValue(flags.value()));
+    private final MessageOperations.RequestAsyncInvoker asyncRequestInvoker;
+    private final MessageOperations.RequestSyncInvoker syncRequestInvoker;
 
     NativeDealerSocket(Context ctx) {
         super(ctx, SocketType.DEALER);
         try {
             requestSupport = new CoreRequestSupport(runtime(), true);
+            asyncRequestInvoker = (parts, timeout) ->
+                runtime().requestAsync(requestSupport, null, 0L, 0L, parts,
+                    timeout);
+            syncRequestInvoker = (parts, timeout, flags) ->
+                runtime().requestSync(requestSupport, null, 0L, 0L, parts,
+                    timeout, flags);
         } catch (RuntimeException error) {
             try {
                 runtime().close();
@@ -42,10 +55,8 @@ final class NativeDealerSocket extends NativeSocketBase implements DealerSocket 
     public RoutingId getRoutingId() { return runtime().getRoutingId(); }
 
     public RoutedSendOperation send() {
-        return MessageOperations.routedSend((parts, timeout) ->
-            runtime().sendAsync(parts, timeout),
-            (parts, flags) -> runtime().send(parts,
-                SendFlag.fromValue(flags.value())));
+        return MessageOperations.routedSend(asyncSendInvoker,
+            syncSendInvoker);
     }
     SendResult sendNoWaitResult(Message part) {
         return runtime().sendNoWaitResult(part);
@@ -69,11 +80,8 @@ final class NativeDealerSocket extends NativeSocketBase implements DealerSocket 
         return runtime().recvInto(result, ReceiveFlag.fromValue(flags.value()));
     }
     public RequestOperation request() {
-        return MessageOperations.request((parts, timeout) ->
-            runtime().requestAsync(requestSupport, null, 0L, 0L, parts,
-                timeout),
-            (parts, timeout, flags) -> runtime().requestSync(requestSupport,
-                null, 0L, 0L, parts, timeout, flags));
+        return MessageOperations.request(asyncRequestInvoker,
+            syncRequestInvoker);
     }
     @Override
     public void close() {

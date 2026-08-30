@@ -39,6 +39,12 @@ final class NativeSymbols {
           .orElseGet(() -> missingDowncall(name, fd));
     }
 
+    static MethodHandle downcallOptional(String name, FunctionDescriptor fd) {
+        return LOOKUP.find(name)
+            .map(symbol -> LINKER.downcallHandle(symbol, fd))
+            .orElse(null);
+    }
+
 
     static MethodHandle downcallAny(String[] names, FunctionDescriptor fd) {
         for (String name : names) {

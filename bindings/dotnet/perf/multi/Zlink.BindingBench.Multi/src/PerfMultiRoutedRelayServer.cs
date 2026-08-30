@@ -1,29 +1,30 @@
 using System;
 using System.Collections.Generic;
-using System.Threading;
 using System.Threading.Tasks;
 using Systems.Zlink;
 using static PerfRunner;
 
 internal static class PerfMultiRoutedRelayServer
 {
+    private const int ReplyReapInterval = 64;
+
     internal static async Task<int> RunAsync(IRouterSocket server,
         PollManager pollManager, int pollTimeoutMs, int drainTimeoutMs)
     {
         var sockets = new[] { (ISocket)server };
         var eventMasks = new[] { SocketPollIn };
-        var replies = new List<Task<bool>>();
-        var state = new RelayState();
+        var replies = new List<Task>();
         using var receivedBuffer = Received.Create();
 
         bool stop = false;
         bool success = true;
+        int relayedSinceReap = 0;
         int failureObservationPollMs = pollTimeoutMs < 0
             ? 200
             : pollTimeoutMs;
-        while (!stop && success && !state.Failed)
+        while (!stop && success)
         {
-            if (!await RemoveCompletedRepliesAsync(replies).ConfigureAwait(false))
+            if (!RemoveCompletedReplies(replies))
             {
                 success = false;
                 break;
@@ -43,36 +44,40 @@ internal static class PerfMultiRoutedRelayServer
             if ((readyMask & PollEventFlags.PollIn) == 0)
                 continue;
 
-            while (!state.Failed && TryRecvNoWait(server, receivedBuffer))
+            while (success && TryRecvNoWait(server, receivedBuffer))
             {
-                if (receivedBuffer.Parts.Count == 1
+                IReadOnlyList<Message> parts = receivedBuffer.Parts;
+                if (parts.Count == 1
                     && IsStopTokenPayload(receivedBuffer.FirstPart()
                         .AsReadOnlySpan()))
                 {
                     stop = true;
                     break;
                 }
-                if (!PerfSocketIo.TryMeasurementPayload(
-                        receivedBuffer.Parts, out Message bodyMessage))
+                if (!PerfSocketIo.TryMeasurementPayload(parts, out _))
                 {
                     continue;
                 }
 
-                RoutingId? maybeRoutingId = receivedBuffer.RoutingId;
-                if (maybeRoutingId == null)
+                if (!TrySubmitReply(receivedBuffer, parts, replies))
                 {
                     success = false;
                     break;
                 }
 
-                replies.Add(SendReplyAsync(server, maybeRoutingId.Value,
-                    bodyMessage.Copy(), state));
+                relayedSinceReap++;
+                if (relayedSinceReap < ReplyReapInterval)
+                    continue;
+
+                relayedSinceReap = 0;
+                if (!RemoveCompletedReplies(replies))
+                    success = false;
             }
         }
 
         if (replies.Count > 0)
         {
-            Task<bool[]> drain = Task.WhenAll(replies);
+            Task drain = Task.WhenAll(replies);
             Task completed = await Task.WhenAny(drain,
                 Task.Delay(Math.Max(1, drainTimeoutMs))).ConfigureAwait(false);
             if (!ReferenceEquals(completed, drain))
@@ -80,19 +85,81 @@ internal static class PerfMultiRoutedRelayServer
                 DebugFailure("async reply drain timed out", null);
                 return 2;
             }
-            foreach (bool replySuccess in await drain.ConfigureAwait(false))
-                success &= replySuccess;
+
+            try
+            {
+                await drain.ConfigureAwait(false);
+            }
+            catch
+            {
+                // Observe each terminal below so stale routes remain non-fatal
+                // while every other completion failure is reported precisely.
+            }
+            success &= RemoveCompletedReplies(replies);
         }
-        return success && !state.Failed ? 0 : 2;
+        return success ? 0 : 2;
     }
 
-    private static async Task<bool> SendReplyAsync(IRouterSocket server,
-        RoutingId routingId, Message message, RelayState state)
+    private static bool TrySubmitReply(Received received,
+        IReadOnlyList<Message> parts, List<Task> replies)
+    {
+        Task reply;
+        try
+        {
+            // Transfer the original routed envelope parts to Core. Async()
+            // consumes the parts before returning on a successful submit, so
+            // the same Received can immediately be reused by the next Recv.
+            reply = received.Send().Messages(parts).Async();
+        }
+        catch (ZlinkSubmitException ex) when (IsStaleRoute(ex))
+        {
+            // The source disconnected after its request was received.
+            return true;
+        }
+        catch (Exception ex)
+        {
+            DebugFailure("async reply send", ex);
+            return false;
+        }
+
+        if (reply.IsCompletedSuccessfully)
+            return true;
+        if (reply.IsCompleted)
+            return ObserveCompletedReply(reply);
+
+        replies.Add(reply);
+        return true;
+    }
+
+    private static bool RemoveCompletedReplies(List<Task> replies)
+    {
+        bool result = true;
+        int retained = 0;
+        int count = replies.Count;
+        for (int i = 0; i < count; i++)
+        {
+            Task reply = replies[i];
+            if (reply.IsCompleted)
+            {
+                result &= ObserveCompletedReply(reply);
+                continue;
+            }
+
+            if (retained != i)
+                replies[retained] = reply;
+            retained++;
+        }
+
+        if (retained < count)
+            replies.RemoveRange(retained, count - retained);
+        return result;
+    }
+
+    private static bool ObserveCompletedReply(Task reply)
     {
         try
         {
-            await PerfSocketIo.SendMeasurementAsync(server, routingId, message)
-                .ConfigureAwait(false);
+            reply.GetAwaiter().GetResult();
             return true;
         }
         catch (ZlinkSubmitException ex) when (IsStaleRoute(ex))
@@ -103,28 +170,8 @@ internal static class PerfMultiRoutedRelayServer
         catch (Exception ex)
         {
             DebugFailure("async reply send", ex);
-            state.Fail();
             return false;
         }
-        finally
-        {
-            message.Dispose();
-        }
-    }
-
-    private static async Task<bool> RemoveCompletedRepliesAsync(
-        List<Task<bool>> replies)
-    {
-        bool result = true;
-        for (int i = replies.Count - 1; i >= 0; --i)
-        {
-            Task<bool> reply = replies[i];
-            if (!reply.IsCompleted)
-                continue;
-            replies.RemoveAt(i);
-            result &= await reply.ConfigureAwait(false);
-        }
-        return result;
     }
 
     private static bool TryRecvNoWait(IRouterSocket socket, Received result)
@@ -153,15 +200,4 @@ internal static class PerfMultiRoutedRelayServer
                 $"MULTI_ROUTED_RELAY {operation} failed");
     }
 
-    private sealed class RelayState
-    {
-        private int _failed;
-
-        internal bool Failed => Volatile.Read(ref _failed) != 0;
-
-        internal void Fail()
-        {
-            Interlocked.Exchange(ref _failed, 1);
-        }
-    }
 }

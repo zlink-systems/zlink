@@ -809,20 +809,22 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.1 C++
 
 - perf 경로: `bindings/cpp/perf`
-- Multi 상태: `미측정`
-- 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
+- Multi 상태: `TCP/WSS 1024B 최종 r5 측정 완료, DD 개선 후보 r3 확인·최종 r5 대기`
+- paired report: C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260830_022104_final-0146-c-baseline-r5.txt`, C++ `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260830_040436_final-0146-cpp-optimized-r5.txt`
+- 조건: Core 0.14.6(`22e608ccdc`), Release/LTO, duration 5초, runs 5, clients 100, I/O threads 4, TCP/WSS, 1024B, 두 report 모두 `status: complete`.
+- async send completion은 Core가 nonzero operation id를 반환한 경우에만 self-reference를 유지한다. callback이 없는 즉시 완료 경로에서 상태 mutex 왕복을 생략한 r3는 직전 후보보다 TCP 8.6%, WSS 4.9% 개선됐다. `perf_cpp_multi_linux_20260830_090317_cpp-retain-pending-only-r3.txt`
 
 #### 9.1.1 Multi suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 보류(71.10%; 후보 r3) | 미측정 | 미측정 | 미측정 | 처리량 C++/C 578.3/813.4 Kmsg/s, 평균 지연 0.254/0.939 ms(0.270x). nonzero operation에만 completion self-reference를 유지하는 후보이며 최종 r5 대기. `perf_cpp_multi_linux_20260830_090317_cpp-retain-pending-only-r3.txt` |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 통과(85.18%) | 미측정 | 미측정 | 미측정 | 처리량 C++/C 176.8/207.5 Kops/s, 평균 지연 1.143/0.838 ms(1.364x). |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 보류(107.98%; 지연 2.507x) | 미측정 | 미측정 | 미측정 | 처리량 C++/C 88.8/82.2 Kops/s, 평균 지연 1.449/0.578 ms. 공개 async queue/teardown 개선 후 지연 상한 미달. |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 통과(88.68%) | 미측정 | 미측정 | 미측정 | 처리량 C++/C 141.2/159.3 Kops/s, 평균 지연 1.460/0.885 ms(1.650x). |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 보류(122.79%; 지연 2.380x) | 미측정 | 미측정 | 미측정 | 처리량 C++/C 112.4/91.5 Kops/s, 평균 지연 1.159/0.487 ms. 공개 async queue/teardown 개선 후 지연 상한 미달. |
+| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 보류(78.60%) | 미측정 | 미측정 | 미측정 | 처리량 C++/C 600.8/764.4 Kmsg/s, 평균 지연 1315.997/1042.517 ms(1.262x). |
+| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 보류(17.66%) | 해당 없음 | 미측정 | 해당 없음 | 처리량 C++/C 21.4/121.3 Kops/s, 평균 지연 1070.086/626.407 ms(1.708x). STREAM 전용 구조 검토와 no-go A/B 완료. |
 | `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -830,13 +832,13 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 보류(76.81%; 후보 r3) | 미측정 | 미측정 | 미측정 | 처리량 C++/C 515.1/670.6 Kmsg/s, 평균 지연 2.020/3.146 ms(0.642x). nonzero operation에만 completion self-reference를 유지하는 후보이며 최종 r5 대기. `perf_cpp_multi_linux_20260830_090317_cpp-retain-pending-only-r3.txt` |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 통과(90.52%) | 미측정 | 미측정 | 미측정 | 처리량 C++/C 129.4/143.0 Kops/s, 평균 지연 5.437/4.586 ms(1.186x). |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 보류(104.71%; 지연 3.221x) | 미측정 | 미측정 | 미측정 | 처리량 C++/C 90.0/85.9 Kops/s, 평균 지연 5.678/1.763 ms. 공개 async queue/teardown 개선 후 지연 상한 미달. |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 보류(82.20%) | 미측정 | 미측정 | 미측정 | 처리량 C++/C 136.1/165.6 Kops/s, 평균 지연 5.130/3.536 ms(1.451x). 자체 개선 후 중앙값 목표 85% 미달, 잔여 안전 후보 없음. |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 보류(86.75%; 지연 8.549x) | 미측정 | 미측정 | 미측정 | 처리량 C++/C 75.1/86.6 Kops/s, 평균 지연 14.499/1.696 ms. 공개 async queue/teardown 개선 후 지연 상한 미달. |
+| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 보류(87.96%) | 미측정 | 미측정 | 미측정 | 처리량 C++/C 416.1/473.1 Kmsg/s, 평균 지연 1028.827/922.309 ms(1.115x). 중앙값 목표 95% 미달, 잔여 안전 후보 없음. |
+| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 보류(101.50%; 지연 3.166x) | 해당 없음 | 미측정 | 해당 없음 | 처리량 C++/C 152.5/150.2 Kops/s, 평균 지연 34.044/10.754 ms. STREAM 전용 구조 검토와 no-go A/B 완료. |
 | `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -848,20 +850,23 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.2 .NET
 
 - perf 경로: `bindings/dotnet/perf`
-- Multi 상태: `미측정`
-- 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
+- Multi 상태: `TCP/WSS 1024B 최종 r5 및 현재 tree 후보 r3 완료, 목표 미달 hot path 추가 검토 중`
+- paired report: C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260830_022104_final-0146-c-baseline-r5.txt`, .NET `bindings/dotnet/perf/results/multi/report/perf_dotnet_multi_linux_20260830_051028_final-0146-dotnet-r5.txt`
+- 조건: Core 0.14.6(`22e608ccdc`), Release/LTO, duration 5초, runs 5, clients 100, I/O threads 4, TCP/WSS, 1024B, 70/70 성공, 두 report 모두 `status: complete`.
+- 측정 중 발견한 REQ/REP 종료 직후 stale route(`NotConnected`) 경합은 정상 teardown으로 처리하도록 수정했고 최종 20개 REQ/REP case에서 재발하지 않았다. direct 2-part native submit 후보는 별도 3회 A/B에서 SENDSEND TCP -14~-16%, REQ/REP -8~-41% 회귀해 제거했다.
+- 작은 multipart native header는 stack에 두고 큰 배열만 `ArrayPool<ZlinkMsg>`에서 빌리며, Core가 pending operation을 만든 경우에만 completion을 생성하는 현재 tree 후보를 전체 r3로 확인했다. 42/42 case가 완료됐고 STREAM과 PUBSUB WSS는 개선됐지만 회차 변동과 perf fairness 변경이 함께 있어 library 변경의 독립 A/B는 남아 있다. `perf_dotnet_multi_linux_20260830_090635_effective-optimizations-r3.txt`
 
 #### 9.2.1 Multi suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미달(29.74%; 후보 r3, 지연 105.101x) | 미측정 | 미측정 | 미측정 | 처리량 .NET/C 241.9/813.4 Kmsg/s, 평균 지연 98.690/0.939 ms. `perf_dotnet_multi_linux_20260830_090635_effective-optimizations-r3.txt` |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미달(35.87%; 후보 r3, 지연 1.632x) | 미측정 | 미측정 | 미측정 | 처리량 .NET/C 74.4/207.5 Kops/s, 평균 지연 1.368/0.838 ms. 같은 report. |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미달(63.73%; 후보 r3, 지연 41.913x) | 미측정 | 미측정 | 미측정 | 처리량 .NET/C 52.4/82.2 Kops/s, 평균 지연 24.226/0.578 ms. 같은 report. |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미달(53.98%; 후보 r3, 지연 1.408x) | 미측정 | 미측정 | 미측정 | 처리량 .NET/C 86.0/159.3 Kops/s, 평균 지연 1.246/0.885 ms. 같은 report. |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미달(54.93%; 후보 r3, 지연 76.189x) | 미측정 | 미측정 | 미측정 | 처리량 .NET/C 50.3/91.5 Kops/s, 평균 지연 37.104/0.487 ms. 같은 report. |
+| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미달(36.74%; 후보 r3, 지연 1.784x) | 미측정 | 미측정 | 미측정 | 처리량 .NET/C 280.8/764.4 Kmsg/s, 평균 지연 1859.573/1042.517 ms. 같은 report. |
+| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 통과(80.54%; 후보 r3, 지연 1.481x) | 해당 없음 | 미측정 | 해당 없음 | 처리량 .NET/C 97.7/121.3 Kops/s, 평균 지연 927.765/626.407 ms. 같은 report. 최종 r5 대기. |
 | `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -869,13 +874,13 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미달(36.89%; 후보 r3, 지연 51.017x) | 미측정 | 미측정 | 미측정 | 처리량 .NET/C 247.4/670.6 Kmsg/s, 평균 지연 160.499/3.146 ms. 같은 report. |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미달(54.15%; 후보 r3, 지연 0.855x) | 미측정 | 미측정 | 미측정 | 처리량 .NET/C 77.4/143.0 Kops/s, 평균 지연 3.921/4.586 ms. 같은 report. |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미달(69.98%; 후보 r3, 지연 9.152x) | 미측정 | 미측정 | 미측정 | 처리량 .NET/C 60.1/85.9 Kops/s, 평균 지연 16.135/1.763 ms. 같은 report. |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미달(53.35%; 후보 r3, 지연 0.950x) | 미측정 | 미측정 | 미측정 | 처리량 .NET/C 88.3/165.6 Kops/s, 평균 지연 3.360/3.536 ms. 같은 report. |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미달(73.24%; 후보 r3, 지연 8.249x) | 미측정 | 미측정 | 미측정 | 처리량 .NET/C 63.4/86.6 Kops/s, 평균 지연 13.991/1.696 ms. 같은 report. |
+| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미달(52.19%; 후보 r3, 지연 0.362x) | 미측정 | 미측정 | 미측정 | 처리량 .NET/C 246.9/473.1 Kmsg/s, 평균 지연 333.898/922.309 ms. 같은 report. |
+| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 통과(86.65%; 후보 r3, 지연 7.617x) | 해당 없음 | 미측정 | 해당 없음 | 처리량 .NET/C 130.2/150.2 Kops/s, 평균 지연 81.914/10.754 ms. 같은 report. 처리량은 통과했지만 지연 상한은 미달이며 최종 r5 대기. |
 | `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -887,20 +892,29 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.3 Java
 
 - perf 경로: `bindings/java/perf`
-- Multi 상태: `미측정`
-- 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
+- Multi 상태: `TCP/WSS 1024B 전체 pattern 개선 후보 최종 r5 완료, 목표 미달 경로 후속 검토 중`
+- paired report: C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260830_022104_final-0146-c-baseline-r5.txt`, Java `bindings/java/perf/results/multi/report/perf_java_multi_linux_20260830_044718_baseline-0146-java-r5.txt`
+- 조건: Core 0.14.6(`22e608ccdc`), Release/LTO, duration 5초, runs 5, clients 100, I/O threads 4, TCP/WSS, 1024B. 최종 후보 report `perf_java_multi_linux_20260830_091609_effective-optimizations-final-r5.txt`는 14/14 case와 350/350 result line이 모두 완료됐다.
+- `MULTI_DEALER_DEALER` 소켓별 pending 객체 캐시 후보는 TCP 504.9 Kmsg/s, WSS 459.9 Kmsg/s로 직전 후보 대비 각각 -2.2%, +3.0%여서 일관된 이득이 없다고 판단해 기각했다. `perf_java_multi_linux_20260830_062646_pending-cache-dd-r3.txt`
+- hot path의 `PERF_PART_COUNT` 환경 조회를 시작 시 1회로 고정하고, FFM native message 배열 slice를 재사용했다. fast-token 후보까지 적용한 최신 r3는 TCP 526.6 Kmsg/s, WSS 474.8 Kmsg/s이며 WSS는 최소 목표 70%에 근접했다. `perf_java_multi_linux_20260830_063431_fast-token-dd-r3.txt`
+- `MULTI_DEALER_ROUTER_REQREP`는 Java client+C server 분리 진단에서도 TCP 35.6 Kops/s로 C+C 101.6 Kops/s의 35.0%에 머물러 client 요청 경로가 주 병목임을 확인했다. completion batch 16, poll 반환 후 inline completion, atomic fast pending table, socket-local synchronized pending table, worker 64개 후보는 처리량 또는 지연이 악화되어 모두 기각했다.
+- 공통 2-part 요청은 binding 전용 native bridge로 두 Core part 호출을 한 FFM 경계로 묶었다. source native message를 직접 넘기고 성공한 part 수를 Java로 반환해 generic part 경로와 같은 부분 성공 ownership을 보존한다. 초기 copy bridge의 on/off paired r3는 TCP 29.4/29.6 Kops/s로 동일했고 WSS 51.8/39.3 Kops/s였으며, direct-source 후보도 TCP 처리량은 노이즈 범위였다. reply callback의 `Message[] + Arrays.asList` 제거 구조는 이후 deferred snapshot으로 대체했다. `perf_java_multi_linux_20260830_071914_native-two-part-request-bridge-dr-reqrep-r3.txt`, `perf_java_multi_linux_20260830_072238_paired-bridge-disabled-dr-reqrep-r3.txt`, `perf_java_multi_linux_20260830_082907_direct-request-sources-r3.txt`
+- 기본 DEALER request가 C perf와 달리 매 요청마다 exact transport-pair를 선택하던 의미 불일치를 수정해 `zlink_dealer_request_part` 경로로 복구했다. 명시적 exact request와 ROUTER request는 기존 exact-target 경로를 유지한다. 또한 callback depth 진입이 callback handle 생성 스레드에 잘못 남던 회귀를 실제 callback 본문으로 복구해 blocking API의 순서 의존 오판정을 제거했다.
+- reply native message header는 poll/callback 스레드에서 할당되고 completion worker에서 닫히므로 기존 thread-local slot pool로 돌아가지 않았다. 같은 스레드 반환은 기존 무동기화 풀을 유지하고 교차 스레드 반환만 bounded shared pool로 회수했다. r3 후보는 TCP 36.1 Kops/s, WSS 53.0 Kops/s이며 TCP는 직전 34.3 Kops/s 대비 5.2% 개선됐다. `perf_java_multi_linux_20260830_074236_dealer-standard-request-r3.txt`, `perf_java_multi_linux_20260830_074704_cross-thread-msg-slot-pool-r3.txt`
+- Core reply callback에서 public `Message`를 생성하던 작업을 native message pair snapshot으로 넘기고 completion worker에서 materialize하도록 변경했다. callback/poller의 FFM segment 생성 비용이 제거되어 paired r3에서 TCP 43.7 Kops/s, WSS 54.3 Kops/s까지 개선됐다. `perf_c_multi_linux_20260830_075822_paired-java-current-r3.txt`, `perf_java_multi_linux_20260830_081036_pooled-deferred-reply-r3.txt`
+- 불필요한 동기화 제거 때 함께 사라졌던 send terminal 내부 상태 재사용을 socket-local bounded pool로 복원했다. public `CompletionStage`는 재사용하지 않고 완전히 종료된 내부 `Pending`만 회수한다. RR SENDSEND TCP 단독 r3는 113.8→136.0 Kops/s(+19.5%), WSS는 86.7→96.5 Kops/s(+11.3%)로 개선됐다. 이미 완료된 stage의 `toCompletableFuture()` fast path는 TCP 63.7 Kops/s로 회귀해 제거했다.
 
 #### 9.3.1 Multi suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미달(64.64%; 최종 r5, 지연 0.273x) | 미측정 | 미측정 | 미측정 | 처리량 Java/C 525.7/813.4 Kmsg/s, 평균 지연 0.256/0.939 ms. 환경 조회·native slice 반복 할당 제거 및 실제 pending에만 future를 만드는 구조 적용. `perf_java_multi_linux_20260830_091609_effective-optimizations-final-r5.txt` |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미달(58.30%; 최종 r5, 지연 401.749x) | 미측정 | 미측정 | 미측정 | 내부 send terminal `Pending` 상태 pool 적용 후 처리량 Java/C 121.0/207.5 Kops/s, 평균 지연 336.666/0.838 ms. `perf_java_multi_linux_20260830_091609_effective-optimizations-final-r5.txt` |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 통과(52.14%; 최종 r5, 지연 2.536x) | 미측정 | 미측정 | 미측정 | 처리량 Java/C 42.9/82.2 Kops/s, 평균 지연 1.466/0.578 ms. reply materialization을 callback에서 completion worker로 이관한 pooled native snapshot 경로다. `perf_java_multi_linux_20260830_091609_effective-optimizations-final-r5.txt` |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미달(59.57%; 최종 r5, 지연 98.440x) | 미측정 | 미측정 | 미측정 | 내부 send terminal `Pending` 상태 pool 적용 후 처리량 Java/C 94.9/159.3 Kops/s, 평균 지연 87.119/0.885 ms. r3 단독 최고치는 최종 중앙값으로 재현되지 않았다. `perf_java_multi_linux_20260830_091609_effective-optimizations-final-r5.txt` |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미달(24.11%; 최종 r5, 지연 4.002x) | 미측정 | 미측정 | 미측정 | 처리량 Java/C 22.1/91.5 Kops/s, 평균 지연 1.949/0.487 ms. r3 개선값을 재현하지 못해 TCP request 경로 후속 진단이 필요하다. `perf_java_multi_linux_20260830_091609_effective-optimizations-final-r5.txt` |
+| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 통과(86.55%; 최종 r5, 지연 1.148x) | 미측정 | 미측정 | 미측정 | 처리량 Java/C 661.6/764.4 Kmsg/s, 평균 지연 1196.375/1042.517 ms. `perf_java_multi_linux_20260830_091609_effective-optimizations-final-r5.txt` |
+| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 통과(94.28%; 최종 r5, 지연 1.508x) | 해당 없음 | 미측정 | 해당 없음 | 처리량 Java/C 114.3/121.3 Kops/s, 평균 지연 944.567/626.407 ms. `perf_java_multi_linux_20260830_091609_effective-optimizations-final-r5.txt` |
 | `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -908,13 +922,13 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미달(50.13%; 최종 r5, 지연 1.634x) | 미측정 | 미측정 | 미측정 | 처리량 Java/C 336.2/670.6 Kmsg/s, 평균 지연 5.140/3.146 ms. 반복값 187.0~444.7 Kmsg/s로 변동이 커 기존 r3 통과값을 재현하지 못했다. `perf_java_multi_linux_20260830_091609_effective-optimizations-final-r5.txt` |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미달(49.84%; 최종 r5, 지연 87.690x) | 미측정 | 미측정 | 미측정 | 내부 send terminal `Pending` 상태 pool 적용 후 처리량 Java/C 71.3/143.0 Kops/s, 평균 지연 402.145/4.586 ms. `perf_java_multi_linux_20260830_091609_effective-optimizations-final-r5.txt` |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 통과(65.52%; 최종 r5, 지연 1.532x) | 미측정 | 미측정 | 미측정 | 처리량 Java/C 56.3/85.9 Kops/s, 평균 지연 2.701/1.763 ms. reply materialization을 callback에서 completion worker로 이관한 pooled native snapshot 경로다. `perf_java_multi_linux_20260830_091609_effective-optimizations-final-r5.txt` |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미달(49.29%; 최종 r5, 지연 54.723x) | 미측정 | 미측정 | 미측정 | 내부 send terminal `Pending` 상태 pool 적용 후 처리량 Java/C 81.6/165.6 Kops/s, 평균 지연 193.502/3.536 ms. `perf_java_multi_linux_20260830_091609_effective-optimizations-final-r5.txt` |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 통과(61.36%; 최종 r5, 지연 1.300x) | 미측정 | 미측정 | 미측정 | 처리량 Java/C 53.2/86.6 Kops/s, 평균 지연 2.205/1.696 ms. `perf_java_multi_linux_20260830_091609_effective-optimizations-final-r5.txt` |
+| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미달(55.76%; 최종 r5, 지연 1.897x) | 미측정 | 미측정 | 미측정 | 처리량 Java/C 263.8/473.1 Kmsg/s, 평균 지연 1749.818/922.309 ms. WSS PUBSUB hot path 추가 검토가 필요하다. `perf_java_multi_linux_20260830_091609_effective-optimizations-final-r5.txt` |
+| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 통과(101.53%; 최종 r5, 지연 9.776x) | 해당 없음 | 미측정 | 해당 없음 | 처리량 Java/C 152.5/150.2 Kops/s, 평균 지연 105.132/10.754 ms. 처리량은 통과했지만 지연 상한은 미달이다. `perf_java_multi_linux_20260830_091609_effective-optimizations-final-r5.txt` |
 | `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -926,31 +940,39 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.4 Node
 
 - perf 경로: `bindings/node/perf`
-- Multi 상태: `미측정`
-- 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
+- Multi 상태: `TCP/WSS 1024B 전체 pattern 후보 r3 측정 완료, 추가 개선·최종 r5 대기`
+- 2-part echo server의 `Message → Buffer → Message` 왕복 복사를 제거하고 received native `Message`를 public reply builder에 직접 전달했다. native dealer/router reply staging도 heap `std::vector` 대신 2-part inline storage를 사용하며 성공·실패 ownership contract 13개가 통과했다. `perf_node_multi_linux_20260830_085548_direct-reply-small-storage-r3.txt`
 
 #### 9.4.1 Multi suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미달(8.54%; 후보 r3, 지연 0.613x) | 미측정 | 미측정 | 미측정 | 처리량 Node/C 69.4/813.4 Kmsg/s, 평균 지연 0.576/0.939 ms. 세 회차 중 한 회차가 9.5 Kmsg/s로 흔들려 추가 r5 확인이 필요하다. `perf_node_multi_linux_20260830_090206_current-remaining-r3.txt` |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미달(18.37%; 후보 r3, 지연 375.847x) | 미측정 | 미측정 | 미측정 | 처리량 Node/C 38.1/207.5 Kops/s, 평균 지연 314.960/0.838 ms. 최소 처리량과 지연 목표가 모두 미달이다. `perf_node_multi_linux_20260830_090206_current-remaining-r3.txt` |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미달(48.02%; 후보 r3, 지연 18.972x) | 미측정 | 미측정 | 미측정 | 처리량 Node/C 39.5/82.2 Kops/s, 평균 지연 10.966/0.578 ms. 처리량 최소 30%는 통과했지만 TCP 지연 상한 5배를 초과한다. `perf_node_multi_linux_20260830_085548_direct-reply-small-storage-r3.txt` |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미달(20.19%; 후보 r3, 지연 274.825x) | 미측정 | 미측정 | 미측정 | 처리량 Node/C 32.2/159.3 Kops/s, 평균 지연 243.220/0.885 ms. 최소 처리량과 지연 목표가 모두 미달이다. `perf_node_multi_linux_20260830_090206_current-remaining-r3.txt` |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미달(42.12%; 후보 r3, 지연 19.384x) | 미측정 | 미측정 | 미측정 | 처리량 Node/C 38.5/91.5 Kops/s, 평균 지연 9.440/0.487 ms. 처리량 최소 30%는 통과했지만 TCP 지연 상한 5배를 초과한다. `perf_node_multi_linux_20260830_085548_direct-reply-small-storage-r3.txt` |
+| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미달(21.33%; 후보 r3, 지연 0.067x) | 미측정 | 미측정 | 미측정 | 처리량 Node/C 163.0/764.4 Kmsg/s, 평균 지연 69.468/1042.517 ms. 최소 처리량 목표가 미달이다. `perf_node_multi_linux_20260830_090206_current-remaining-r3.txt` |
+| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미달(8.04%; 후보 r3, 지연 1.693x) | 해당 없음 | 미측정 | 해당 없음 | 처리량 Node/C 9.7/121.3 Kops/s, 평균 지연 1060.713/626.407 ms. STREAM 전용 callback·TSFN 경로 조사가 필요하다. `perf_node_multi_linux_20260830_090206_current-remaining-r3.txt` |
 | `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미달(16.30%; 후보 r3, 지연 0.496x) | 미측정 | 미측정 | 미측정 | 처리량 Node/C 109.3/670.6 Kmsg/s, 평균 지연 1.559/3.146 ms. 최소 처리량 목표가 미달이다. `perf_node_multi_linux_20260830_090206_current-remaining-r3.txt` |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미달(26.83%; 후보 r3, 지연 77.356x) | 미측정 | 미측정 | 미측정 | 처리량 Node/C 38.4/143.0 Kops/s, 평균 지연 354.756/4.586 ms. 최소 처리량과 지연 목표가 모두 미달이다. `perf_node_multi_linux_20260830_090206_current-remaining-r3.txt` |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 통과(47.34%; 후보 r3, 지연 4.139x) | 미측정 | 미측정 | 미측정 | 처리량 Node/C 40.7/85.9 Kops/s, 평균 지연 7.297/1.763 ms. 처리량 최소 30%와 Node 지연 상한 5배를 통과했으며 최종 r5 대기. `perf_node_multi_linux_20260830_085548_direct-reply-small-storage-r3.txt` |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미달(16.94%; 후보 r3, 지연 83.145x) | 미측정 | 미측정 | 미측정 | 처리량 Node/C 28.0/165.6 Kops/s, 평균 지연 294.002/3.536 ms. 최소 처리량과 지연 목표가 모두 미달이다. `perf_node_multi_linux_20260830_090206_current-remaining-r3.txt` |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 통과(44.48%; 후보 r3, 지연 4.692x) | 미측정 | 미측정 | 미측정 | 처리량 Node/C 38.5/86.6 Kops/s, 평균 지연 7.958/1.696 ms. 처리량 최소 30%와 Node 지연 상한 5배를 통과했으며 최종 r5 대기. `perf_node_multi_linux_20260830_085548_direct-reply-small-storage-r3.txt` |
+| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미달(28.28%; 후보 r3, 지연 0.255x) | 미측정 | 미측정 | 미측정 | 처리량 Node/C 133.8/473.1 Kmsg/s, 평균 지연 235.195/922.309 ms. 최소 처리량 목표가 미달이다. `perf_node_multi_linux_20260830_090206_current-remaining-r3.txt` |
+| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미달(7.21%; 후보 r3, 지연 98.751x) | 해당 없음 | 미측정 | 해당 없음 | 처리량 Node/C 10.8/150.2 Kops/s, 평균 지연 1061.936/10.754 ms. STREAM 전용 callback·TSFN 경로 조사가 필요하다. `perf_node_multi_linux_20260830_090206_current-remaining-r3.txt` |
 | `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
 

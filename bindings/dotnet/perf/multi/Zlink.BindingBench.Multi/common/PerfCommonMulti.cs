@@ -49,6 +49,11 @@ internal static partial class PerfRunner
         return options.ConnectReadyTimeoutMs;
     }
 
+    internal static int ResolveMultiSendDrainTimeoutMs()
+    {
+        return PerfEnv.ReadPositive("PERF_MULTI_SEND_DRAIN_TIMEOUT_MS", 1000);
+    }
+
     internal static ulong ResolveMultiMonitorHwmBytes()
     {
         return PerfEnv.ReadUInt64("PERF_MULTI_MONITOR_HWM",

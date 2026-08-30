@@ -138,6 +138,12 @@ public final class ContractAccess {
                        SendFlags flags);
     }
 
+    @FunctionalInterface
+    public interface RoutedReplyInvoker {
+        void submit(byte[] routingIdBytes, long requestSequence,
+                    List<Message> messages);
+    }
+
     public interface ReceivedAccess {
         Received create(RoutingId routingId, Message[] parts);
 
@@ -183,6 +189,16 @@ public final class ContractAccess {
                                           replySender,
                                       Runnable onTerminalState);
 
+        void populateRoutedTwoParts(Received received,
+                                    byte[] routingIdBytes,
+                                    Message firstPart,
+                                    Message secondPart,
+                                    long requestSequence,
+                                    boolean hasRequestSequence,
+                                    BiConsumer<List<Message>, SendFlags>
+                                        replySender,
+                                    Runnable onTerminalState);
+
         void forceMaterialize(Received received);
 
         List<Message> takeParts(Received received);
@@ -196,6 +212,9 @@ public final class ContractAccess {
         void setRoutedSenders(Received received,
                               RoutedSingleSendInvoker singleSender,
                               RoutedMultipartSendInvoker multipartSender);
+
+        void setRoutedReplySender(Received received,
+                                  RoutedReplyInvoker replySender);
 
         boolean hasRoutingIdBytes(Received received);
 
@@ -292,6 +311,8 @@ public final class ContractAccess {
 
         int initSize(Object msg, int size);
 
+        long initSizeDataAddress(Object msg, int size);
+
         int close(Object msg);
 
         int move(Object destination, Object source);
@@ -313,6 +334,8 @@ public final class ContractAccess {
         Message[] materializeVectorShared(Object parts, long count);
 
         Message materializeSingleVectorShared(Object parts);
+
+        Message materializeVectorPartShared(Object part, boolean hasMore);
 
         Message adoptOwnedMessage(Object nativeMsg);
 
@@ -632,6 +655,12 @@ public final class ContractAccess {
             multipartSender);
     }
 
+    public static void receivedSetRoutedReplySender(
+      Received received,
+      RoutedReplyInvoker replySender) {
+        receivedAccess().setRoutedReplySender(received, replySender);
+    }
+
     public static boolean receivedHasRoutingIdBytes(Received received) {
         return receivedAccess().hasRoutingIdBytes(received);
     }
@@ -658,6 +687,20 @@ public final class ContractAccess {
       Runnable onTerminalState) {
         receivedAccess().populateRoutedSinglePart(received, routingIdBytes,
             singlePart, requestSequence, hasRequestSequence,
+            replySender, onTerminalState);
+    }
+
+    public static void receivedPopulateRoutedTwoParts(
+      Received received,
+      byte[] routingIdBytes,
+      Message firstPart,
+      Message secondPart,
+      long requestSequence,
+      boolean hasRequestSequence,
+      BiConsumer<List<Message>, SendFlags> replySender,
+      Runnable onTerminalState) {
+        receivedAccess().populateRoutedTwoParts(received, routingIdBytes,
+            firstPart, secondPart, requestSequence, hasRequestSequence,
             replySender, onTerminalState);
     }
 
@@ -812,6 +855,10 @@ public final class ContractAccess {
         return nativeMessageAccess().initSize(msg, size);
     }
 
+    public static long nativeMessageInitSizeDataAddress(Object msg, int size) {
+        return nativeMessageAccess().initSizeDataAddress(msg, size);
+    }
+
     public static int nativeMessageClose(Object msg) {
         return nativeMessageAccess().close(msg);
     }
@@ -855,6 +902,12 @@ public final class ContractAccess {
     public static Message nativeMessageMaterializeSingleVectorShared(
         Object parts) {
         return nativeMessageAccess().materializeSingleVectorShared(parts);
+    }
+
+    public static Message nativeMessageMaterializeVectorPartShared(
+        Object part, boolean hasMore) {
+        return nativeMessageAccess().materializeVectorPartShared(part,
+            hasMore);
     }
 
     public static Message nativeMessageAdoptOwned(Object nativeMsg) {

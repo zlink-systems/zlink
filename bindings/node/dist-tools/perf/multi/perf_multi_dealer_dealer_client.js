@@ -3,10 +3,10 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const readline = require('node:readline');
 const zlink = require('@zlink-systems/zlink');
-const { currentEpochNs, createPayload, stampPayload, } = require('../common/perf_metrics');
+const { currentEpochNs, createPayload, sleepImmediate, stampPayload, } = require('../common/perf_metrics');
 const { configureTlsClient } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, sendRouted, waitForConnectionReady } = require('./perf_multi_runtime');
+const { applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, measurementParts, sendRouted, waitForConnectionReady } = require('./perf_multi_runtime');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 // MULTI_DEALER_DEALER client == SENDER (one DEALER socket per client).
 //
@@ -23,6 +23,67 @@ const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 // Handshake (PERF_MULTI § 1.5 / line 201): server READY,<endpoint> then
 // client spawn; client prints CLIENT_READY,<size>; runner sends
 // START,<size> to BOTH; sender runs the send window after START.
+async function runDealerDealerSendRounds({ dealers, payloads, msgSize, activeStopNs, runId = 1, maxTurns = Number.POSITIVE_INFINITY, submit = sendRouted, yieldTurn = sleepImmediate }) {
+    let seq = 1n;
+    let turns = 0;
+    let nextSocket = 0;
+    let pendingCount = 0;
+    let failure = null;
+    const available = dealers.map(() => true);
+    // Each socket owns one stable JS measurement record. The first Buffer is
+    // stamped only while that socket has no admission in flight; the empty
+    // second part is the process-wide immutable-length tail.
+    const records = payloads.map((payload) => measurementParts(payload));
+    const submitOne = (index) => {
+        available[index] = false;
+        pendingCount += 1;
+        let admission;
+        try {
+            admission = submit(dealers[index], records[index]);
+        }
+        catch (error) {
+            pendingCount -= 1;
+            failure = error;
+            return;
+        }
+        Promise.resolve(admission).then(() => { available[index] = true; pendingCount -= 1; }, (error) => { failure = error; pendingCount -= 1; });
+    };
+    while (turns < maxTurns && currentEpochNs() < activeStopNs) {
+        for (let offset = 0; offset < dealers.length; offset += 1) {
+            if (currentEpochNs() >= activeStopNs)
+                break;
+            const index = (nextSocket + offset) % dealers.length;
+            if (!available[index])
+                continue;
+            const currentSeq = seq;
+            seq += 1n;
+            stampPayload(payloads[index], {
+                phase: 1, runId, msgSize, seq: currentSeq
+            });
+            // Keep exactly one public async admission per socket. Completion only
+            // republishes availability; it must not gate another socket's submit.
+            submitOne(index);
+            if (failure)
+                throw failure;
+        }
+        nextSocket = (nextSocket + 1) % dealers.length;
+        turns += 1;
+        // Inline completions resume as microtasks. A real event-loop turn keeps
+        // TSFN completion and I/O delivery progressing while a backpressured
+        // socket remains pending independently of its peers.
+        await yieldTurn();
+        if (failure)
+            throw failure;
+    }
+    // The active deadline stops new payloads. Finish only the admissions that
+    // Core already owns before emitting each socket's wire-level stop token.
+    while (pendingCount > 0) {
+        await yieldTurn();
+        if (failure)
+            throw failure;
+    }
+    return { turns, sent: seq - 1n };
+}
 async function main() {
     const options = parseMultiArgs(process.argv.slice(2));
     const ctx = zlink.createContext();
@@ -56,18 +117,13 @@ async function main() {
         }
         const payloads = dealers.map(() => createPayload(options.msgSize));
         const activeStopNs = currentEpochNs() + BigInt(Math.floor(options.duration * 1_000_000_000));
-        let seq = 1n;
-        await Promise.all(dealers.map(async (dealer, index) => {
-            while (currentEpochNs() < activeStopNs) {
-                const currentSeq = seq;
-                seq += 1n;
-                stampPayload(payloads[index], {
-                    phase: 1, runId: 1, msgSize: options.msgSize, seq: currentSeq
-                });
-                await sendRouted(dealer, payloads[index]);
-            }
-            await sendRouted(dealer, [STOP_TOKEN_BYTES]);
-        }));
+        await runDealerDealerSendRounds({
+            dealers,
+            payloads,
+            msgSize: options.msgSize,
+            activeStopNs
+        });
+        await Promise.all(dealers.map((dealer) => sendRouted(dealer, [STOP_TOKEN_BYTES])));
         console.log(`CLIENT_DONE,${options.msgSize}`);
     }
     finally {
@@ -78,7 +134,10 @@ async function main() {
         ctx.close();
     }
 }
-main().catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-});
+module.exports = { runDealerDealerSendRounds };
+if (require.main === module) {
+    main().catch((error) => {
+        console.error(error);
+        process.exitCode = 1;
+    });
+}
