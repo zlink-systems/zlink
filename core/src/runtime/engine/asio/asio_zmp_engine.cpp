@@ -369,7 +369,7 @@ bool zlink::asio_zmp_engine_t::handshake ()
     // pipe metadata; injecting the frame there makes the completion parser
     // treat it as a malformed reply and tear down an otherwise ready pair.
     if (_options.recv_routing_id
-        && _options.transport_lane == transport_lane_application) {
+        && _negotiated_transport_lane == transport_lane_application) {
         msg_t routing_id;
         const int rc = routing_id.init_size (_peer_routing_id_size);
         errno_assert (rc == 0);
