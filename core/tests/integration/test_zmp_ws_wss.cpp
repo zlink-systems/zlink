@@ -334,11 +334,10 @@ void wait_for_ws_disconnect (websocket_stream_t *client_,
         client_->async_read (
           record,
           [&] (const boost::system::error_code &ec,
-               std::size_t bytes_transferred) {
+              std::size_t bytes_transferred) {
               if (ec) {
                   disconnected = true;
-                  boost::system::error_code ignored;
-                  deadline.cancel (ignored);
+                  deadline.cancel ();
                   return;
               }
               record.consume (bytes_transferred);
