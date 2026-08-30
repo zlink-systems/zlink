@@ -38,6 +38,14 @@ bool should_run_request_reply_test (const char *name_)
     return !selected || !*selected || strcmp (selected, name_) == 0;
 }
 
+void process_socket_commands_through_public_api (void *socket_)
+{
+    int events = 0;
+    size_t events_size = sizeof (events);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (socket_, ZLINK_OPT_EVENTS, &events, &events_size));
+}
+
 struct reply_probe_t
 {
     std::mutex mutex;
@@ -2409,6 +2417,7 @@ void test_router_reply_completion_backpressure_recovers_over_tcp ()
         TEST_ASSERT_FALSE_MESSAGE (probe.payload_mismatch,
                                    "a completion payload did not match its request");
     }
+    TEST_ASSERT_GREATER_THAN_UINT64 (0, backpressure_hits);
 
     (void) zlink_poller_remove (poller, router);
     (void) zlink_poller_remove (poller, dealer);
@@ -5172,7 +5181,7 @@ void test_dealer_disconnect_forgets_reply_token_before_pipe_deallocation ()
     test_context_socket_close_zero_linger (client);
     bool target_forgotten = false;
     for (int attempt = 0; attempt < 1000 && !target_forgotten; ++attempt) {
-        (void) as_socket_handle (server).socket->process_commands (0, false);
+        process_socket_commands_through_public_api (server);
         {
             std::lock_guard<std::mutex> lock (server_state->mutex);
             target_forgotten = server_state->dealer_reply_targets.empty ()
@@ -5225,8 +5234,7 @@ void test_dealer_disconnect_forgets_reply_token_before_pipe_deallocation ()
         target_forgotten = false;
         for (int attempt = 0; attempt < 1000 && !target_forgotten;
              ++attempt) {
-            (void) as_socket_handle (server).socket->process_commands (0,
-                                                                       false);
+            process_socket_commands_through_public_api (server);
             {
                 std::lock_guard<std::mutex> lock (server_state->mutex);
                 target_forgotten =
@@ -5331,7 +5339,7 @@ void test_router_disconnect_forgets_reply_target_before_pipe_deallocation ()
     test_context_socket_close_zero_linger (client);
     bool target_forgotten = false;
     for (int attempt = 0; attempt < 1000 && !target_forgotten; ++attempt) {
-        (void) as_socket_handle (router).socket->process_commands (0, false);
+        process_socket_commands_through_public_api (router);
         {
             std::lock_guard<std::mutex> lock (router_state->mutex);
             target_forgotten = router_state->router_reply_targets.empty ()
