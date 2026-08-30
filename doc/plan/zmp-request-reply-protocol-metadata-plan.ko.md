@@ -699,6 +699,19 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
 - **Single-part fast path는 metadata를 인식한다.** `MORE`가 없는 data는 기존 terminal 경로로
   진행하고, request·reply는 multipart buffer를 만들기 전에 필요한 target 또는 completion
   상태로 바로 연결한다.
+- **Typed DEALER의 single-part 수신은 caller의 terminal 출력에 바로 쓴다.** 유효한 caller
+  message slot이 있으면 multipart staging과 추가 move 없이 기존 direct receive 경로로 내보낸다.
+- **동기 callback과 receive admission은 바깥 호출의 소유자를 차용한다.** tracked send의 pipe
+  observer와 한 record를 받는 admission callback은 호출이 반환하기 전에 끝나므로, socket handle과
+  request/reply state의 retain/release atomic 연산을 record마다 추가하지 않는다.
+- **ROUTER receive는 실제 routing ID만 보관·복사한다.** 수신 함수가 이미 초기화하는 output을
+  전체 zero-fill하지 않고, TLS output을 직접 사용한 경우에는 자신에게 다시 복사하지 않는다.
+- **Multipart completion은 연결 ID를 한 번 snapshot한다.** 하나의 logical reply를 구성하는 모든
+  part는 completion write 전에 읽은 같은 transport connection ID를 사용한다.
+- **Public receive의 metadata 정리는 application part 수와 무관하게 수행한다.** Decoder와
+  socket assembler가 continuation의 request/reply metadata를 먼저 거부하므로 public boundary는
+  첫 application part만 지운다. Raw STREAM처럼 같은 검증을 거치지 않는 경로는 기존 per-part
+  방어를 유지한다.
 - **Ordinary data는 request record를 만들지 않는다.** 첫 part의 kind가 `data`이면 새
   reply-target·pending entry나 request metadata sidecar를 만들지 않는다. Concurrent raw
   receive와 request가 공유하는 기존 socket state와 ownership transition은 이번 작업에서
@@ -722,6 +735,12 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
   수렴한 뒤 생성·include·공개 ABI 참조가 없던 legacy `asio_ws_engine_t`와 CMake source 항목을
   삭제한다. 같은 wire 계약의 production owner를 하나로 줄이고 불필요한 compile·binary 비용을
   없앤다.
+- **Pipe 수명 판단은 쓰임새가 아닌 상태를 이름으로 표현한다.** request/reply target 이외의
+  attach·dispatch·flow 처리도 같은 lifecycle predicate를 사용하고, 비어 있는 anonymous
+  namespace는 제거해 transport 수명 책임을 pipe owner에 남긴다.
+- **Proxy는 지원되는 poller 경로 하나만 소유한다.** `ZLINK_HAVE_POLLER == 1`인 지원 build에서
+  compile되지 않는 legacy `zlink_poll()` fallback을 제거하고, 내부 transport writability를
+  사용하는 implementation만 유지한다.
 
 ### 8.2 내부 확인 조건
 
@@ -735,6 +754,21 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
   기록하며, getter와 encoder는 `none`일 때 나머지 overlay byte를 읽지 않는다.
 - Header builder는 caller가 제공한 최대 16바이트 고정 buffer만 사용하고 payload pointer와
   scatter/gather 경계를 유지한다.
+- Typed DEALER의 유효한 terminal output slot으로 single-part를 받으면 multipart staging이나
+  추가 message move 없이 그 slot이 결과가 된다.
+- Tracked request send와 typed receive admission의 동기 observer/callback은 바깥 socket handle과
+  request/reply state를 차용하며, observer가 반환한 뒤에는 그 차용 참조를 보관하지 않는다.
+- ROUTER direct receive는 routing ID output 전체를 미리 zero-fill하지 않고, TLS routing ID를
+  직접 쓴 결과를 TLS 자신에게 다시 복사하지 않는다.
+- Multipart completion의 각 part에는 completion 시작 때 snapshot한 하나의 transport connection
+  ID가 기록된다.
+- PAIR·DEALER·ROUTER·XSUB assembler와 ZMP decoder는 첫 application part 뒤의 request/reply
+  metadata를 public export 전에 거부하고, public boundary는 첫 part만 O(1)로 정리한다. Raw
+  STREAM의 public receive는 모든 part를 계속 정리한다.
+- Attach·dispatch·flow 처리의 pipe lifecycle 검사는 같은 상태 predicate를 사용하며, 삭제한
+  anonymous namespace를 참조하는 production source가 없다.
+- Production proxy source에는 `ZLINK_HAVE_POLLER`의 compile-time 분기와 public
+  `zlink_poll(POLLOUT)` fallback이 남지 않는다.
 - Decoder에는 transport message의 decoded frame 수를 세는 상태가 없고, Asio ZMP engine이
   authoritative WS·WSS boundary 전까지만 frame publication을 보류한다.
 - WS·WSS transport의 stream과 read boundary state는 같은 connection-generation aggregate에
@@ -749,7 +783,8 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
 ### 8.3 별도 성능 작업
 
 다음 항목은 결과가 workload와 transport에 따라 달라지므로 이번 구현 범위에서 바꾸거나
-측정하지 않는다.
+측정하지 않는다. §8.1의 비용 제거는 throughput·latency의 측정된 개선을 주장하지 않으며,
+buffer capacity, HWM과 queue policy를 조정하지 않는다.
 
 - Pending map·mutex, timeout scheduler, completion queue와 callback 최적화
 - Generic DEALER receive의 request-state·mutex ownership transition과 kind-aware admission 재설계
