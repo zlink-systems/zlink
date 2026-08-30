@@ -729,6 +729,9 @@ void test_flow_frame_cannot_complete_a_truncated_reply ()
       as_socket (router)->completion_pipe_for_transport_pair (
         target.transport_pair_id, target.transport_pair_generation);
     TEST_ASSERT_NOT_NULL (router_completion);
+    TEST_ASSERT_FALSE_MESSAGE (
+      router_completion->check_read (),
+      "Completion lane retained an Application routing-id preamble");
 
     zlink::msg_t reply_head;
     TEST_ASSERT_EQUAL_INT (0, reply_head.init_size (4));
