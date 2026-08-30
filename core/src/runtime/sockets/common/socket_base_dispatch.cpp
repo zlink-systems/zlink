@@ -580,6 +580,12 @@ void zlink::socket_base_t::send_local_peer_weight (pipe_t *pipe_)
 {
     if (!pipe_)
         return;
+    //  Peer weight controls application-lane scheduling only. Completion is
+    //  reserved for replies and receive-flow control; unlike a network
+    //  session, an inproc completion pipe has no command interceptor.
+    if (pipe_->get_transport_pair_id () != 0
+        && pipe_->get_transport_lane () == transport_lane_completion)
+        return;
 
     msg_t msg;
     if (msg.init () != 0)

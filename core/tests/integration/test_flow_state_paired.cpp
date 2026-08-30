@@ -663,10 +663,11 @@ void test_generation_change_resets_the_epoch_sequence ()
 // request must not complete successfully from that truncated reply.
 struct reply_capture_t
 {
-    reply_capture_t () : invoked (false), result (ZLINK_REQUEST_OK) {}
+    reply_capture_t () : invoked (false), calls (0), result (ZLINK_REQUEST_OK) {}
 
     std::mutex mutex;
     bool invoked;
+    unsigned int calls;
     zlink_request_result_t result;
 };
 
@@ -679,6 +680,7 @@ void capture_reply_result (zlink_request_result_t result_,
     {
         std::lock_guard<std::mutex> lock (capture->mutex);
         capture->invoked = true;
+        ++capture->calls;
         capture->result = result_;
     }
     zlink_multipart_close (parts_, part_count_);
@@ -1234,6 +1236,85 @@ void test_flow_frame_before_reply_is_consumed_on_a_local_pair ()
     fixture.teardown ();
 }
 
+//  Peer-weight advertisements affect only Application scheduling. Inproc has
+//  no session command interceptor, so a Completion-lane WEIGHT would otherwise
+//  be read as an invalid completion record and tear down the pair.
+void test_peer_weight_change_does_not_write_the_completion_pipe ()
+{
+    paired_fixture_t fixture;
+    fixture.setup (0, "peer_weight_completion_lane");
+
+    const int weight = 37;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_router_option (fixture.router, ZLINK_ROUTER_OPT_WEIGHT,
+                               &weight, sizeof (weight)));
+
+    zlink::pipe_t *dealer_completion =
+      as_socket (fixture.dealer)
+        ->completion_pipe_for_transport_pair (fixture.pair_id,
+                                              fixture.pair_generation);
+    TEST_ASSERT_NOT_NULL (dealer_completion);
+    TEST_ASSERT_FALSE (dealer_completion->check_read ());
+
+    reply_capture_t capture;
+    zlink_msg_t request;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&request, 4));
+    memcpy (zlink_msg_data (&request), "ping", 4);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request (fixture.dealer, &request, 1,
+                            &capture_reply_result, &capture, 0, 1500));
+
+    const zlink_routing_id_t *peer_rid = NULL;
+    uint64_t request_seq = 0;
+    zlink_msg_t *parts = NULL;
+    size_t part_count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_router_recv (fixture.router, &peer_rid, &request_seq, &parts,
+                         &part_count, 0));
+    TEST_ASSERT_NOT_NULL (peer_rid);
+    TEST_ASSERT_TRUE (request_seq != 0);
+    const zlink_routing_id_t reply_rid = *peer_rid;
+    zlink_multipart_close (parts, part_count);
+
+    zlink_msg_t reply;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&reply, 4));
+    memcpy (zlink_msg_data (&reply), "pong", 4);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_router_reply (fixture.router, &reply_rid, request_seq, &reply, 1));
+
+    bool completed = false;
+    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (4000);
+    while (!deadline_expired (deadline)) {
+        uint32_t events = 0;
+        (void) as_socket (fixture.dealer)
+          ->get_events (ZLINK_POLLCOMPLETION, &events);
+        (void) as_socket (fixture.dealer)->process_submit_commands ();
+        {
+            std::lock_guard<std::mutex> lock (capture.mutex);
+            completed = capture.invoked;
+        }
+        if (completed)
+            break;
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (completed);
+    {
+        std::lock_guard<std::mutex> lock (capture.mutex);
+        TEST_ASSERT_EQUAL_UINT (1, capture.calls);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, capture.result);
+    }
+    TEST_ASSERT_NOT_NULL (
+      as_socket (fixture.dealer)
+        ->completion_pipe_for_transport_pair (fixture.pair_id,
+                                              fixture.pair_generation));
+
+    fixture.teardown ();
+}
+
 //  Review finding 5. Pair id and generation are the same on both lanes of a
 //  pair, so they cannot on their own tell a completion-lane frame from an
 //  application-lane one. A FLOWSTATE that arrives on the application lane must
@@ -1528,6 +1609,7 @@ int main ()
     RUN_TEST (test_resume_rereads_credit_published_before_the_waiter_was_armed);
     RUN_TEST (test_router_peer_state_reports_remote_pause);
     RUN_TEST (test_flow_frame_before_reply_is_consumed_on_a_local_pair);
+    RUN_TEST (test_peer_weight_change_does_not_write_the_completion_pipe);
     RUN_TEST (test_flow_frame_on_the_application_lane_is_rejected);
     RUN_TEST (test_router_routing_id_part_holds_message_atomicity_across_pause);
     RUN_TEST (test_resume_while_hwm_full_still_recovers_through_byte_credit);
