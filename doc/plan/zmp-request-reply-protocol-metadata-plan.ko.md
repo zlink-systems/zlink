@@ -573,7 +573,9 @@ Long group message도 같은 수명 test를 통과해야 다음 단계로 진행
 8. Inproc copy·move가 encoder·decoder 없이 같은 metadata를 보존하는지 확인한다.
 9. Paired passive endpoint는 peer READY를 검증한 뒤 자기 READY의 transport write까지
    완료해야 socket-side lane readiness와 pair admission을 공개한다. WS·WSS의 다음 message
-   read 상태는 이미 검증한 READY boundary를 다시 판정하는 근거로 사용하지 않는다.
+   read 상태는 이미 검증한 READY boundary를 다시 판정하는 근거로 사용하지 않는다. Handshake
+   control output은 async write completion으로 이 barrier를 재개하며, speculative write fast
+   path는 handshake가 끝난 뒤 application data에만 적용한다.
 
 일반 data golden test는 byte 3이 `0x00`인 기존 8바이트 결과를 유지해야 한다. 모든 encoder가
 같은 request-reply golden byte를 만들어야 한다.
@@ -632,6 +634,8 @@ progress lane을 중계하지 않는 경계를 기록한다. Binding 계약에�
    - VSM·LMSG·CMSG·ZCLMSG의 init, copy, move, adopt, close, view와 external storage
    - Group과 request metadata의 상호 배타 및 long-group refcount
    - `add_refs`·`rm_refs`, 여러 pipe fan-out 실패와 inline capacity를 넘는 relocation 뒤 수명
+   - Public poller가 primary mailbox signal을 먼저 소비해도 이미 publish된 command가 command
+     pipe에서 유실되지 않음
 2. `unittest_zmp_decoder`
    - 8바이트 data header와 16바이트 request-reply header
    - Sequence extension을 1~7바이트 위치마다 나눈 입력과 base·extension을 합친 입력
@@ -649,12 +653,18 @@ progress lane을 중계하지 않는 경계를 기록한다. Binding 계약에�
    - 일반 data header builder가 request 전용 allocation이나 sidecar를 만들지 않음
 4. `test_zmp_request_reply`와 `test_zmp_request_reply_router_recv_surface`
    - §11의 application payload, request 완료, ownership과 kind 처리 요구를 나누어 소유한다.
+   - Async mailbox가 input activation을 적용한 뒤 public receive progress와 socket poller wake를
+     publish하는지, DEALER reply가 target checkout 전에 queued disconnect를 반영하는지 확인한다.
 5. `test_proxy`와 binding contract suite
    - §11의 raw proxy와 C++ ownership 요구를 기존 public contract test에 추가한다.
 6. `test_zmp_metadata` raw wire fixture
    - §11의 ZMP wire·오류와 frame 수 요구를 소유한다.
+   - 같은 2-part payload를 SENDSEND와 REQREP으로 각각 보내 두 경우 모두 application frame이
+     정확히 2개이며 legacy envelope frame이 없음을 확인한다.
 7. `test_zmp_ws_wss`, `test_asio_ws`와 TLS·inproc integration target
    - 지원하는 build feature마다 §11의 transport별 관찰 결과를 같은 fixture로 실행한다.
+   - Passive paired READY write 완료와 socket pair admission 사이를 test-only gate로 고정해,
+     gate 전 ready count `0`·pair 미승인과 해제 뒤 ready count `1`·pair 승인을 확인한다.
    - WS·WSS raw fixture는 text HELLO, text data와 fragmented text data가 payload를 공개하지
      않고 연결을 종료하는지 확인한다.
    - ZMP integration은 binary message 하나에 frame이 없거나 둘 이상인 입력을 거부하는지,
@@ -667,8 +677,10 @@ progress lane을 중계하지 않는 경계를 기록한다. Binding 계약에�
 ### 7.2 GitHub Actions
 
 Core는 로컬에서 build하지 않는다. 사용자가 commit과 push를 지시한 뒤 해당 commit SHA를
-대상으로 `.github/workflows/build.yml`의 `workflow_dispatch`를 실행한다. Linux x64 job이
-Core test를 실행하고 만든 `libzlink-linux-x64` artifact만 후속 검증에 사용한다.
+대상으로 `.github/workflows/build.yml`의 `workflow_dispatch`를 실행한다. Linux x64·ARM64와
+macOS x64·ARM64 job은 각 build script가 허용하는 Core test를 실행하고, Windows x64·ARM64
+job은 `BUILD_TESTS=OFF` compile·link와 artifact 생성을 검증한다. 여섯 platform artifact가 같은
+run에서 생성돼야 한다.
 
 검증 기록에는 workflow run ID, branch, commit SHA와 artifact 이름을 남긴다. 다른 commit의
 artifact나 release asset을 대신 사용하지 않는다. Core build, ZMP unit test,
@@ -744,11 +756,26 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
 - **Proxy는 지원되는 poller 경로 하나만 소유한다.** `ZLINK_HAVE_POLLER == 1`인 지원 build에서
   compile되지 않는 legacy `zlink_poll()` fallback을 제거하고, 내부 transport writability를
   사용하는 implementation만 유지한다.
-- **Request-reply submit은 command가 있을 때만 throttle을 우회한다.** Mailbox writer가
+- **Request-reply submit은 command가 있을 때만 mailbox를 확인한다.** Mailbox writer가
   inactive receiver를 깨우는 command batch에 atomic pending hint를 함께 publish한다. Direct
   submit의 commit point는 이 hint가 있을 때 queued bind·flow-state·activate-write를 즉시
-  drain하고, hint가 없는 일반 reply 경로는 기존 timestamp throttle을 유지해 매 reply의
-  nonblocking mailbox syscall을 피한다. Command가 없는 단순 signal은 hint를 만들지 않는다.
+  drain하고, hint가 없는 일반 reply 경로는 timestamp 조회와 nonblocking mailbox syscall을
+  모두 건너뛴다. Command가 없는 단순 signal은 hint를 만들지 않는다.
+- **Async receive ownership은 input transition에만 progress를 공개한다.** Blocking public receive는
+  mailbox descriptor와 경쟁하지 않고 별도 progress epoch를 기다린다. `attach_pipe`·
+  `read_activated`·`pipe_terminated`가 자기 input transition과 같은 receive lock 안에서 epoch를
+  올리며, 무관한 async command batch에는 추가 wake를 만들지 않는다. Socket-specific dispatcher는
+  frame 추출 구간에서만 receive lock을 소유하고 application callback까지 바깥 recursive lock을
+  끌고 가지 않는다.
+- **Async owner와 public poller는 wake 책임을 분리한다.** Mailbox receive는 command pipe를
+  authoritative source로 먼저 확인해 poller가 primary signal을 소비한 경주에서도 command를
+  처리한다. Poller는 logical state를 읽기 전에 이전 primary edge를 drain하고, async owner는
+  실제로 primary fd를 요청한 poller가 있을 때만 적용 완료 edge를 다시 보낸다. 따라서 무관한
+  command 뒤 descriptor가 계속 readable인 busy loop와 poller가 없는 socket의 signal syscall을
+  함께 제거한다.
+- **Socket close는 paired reconnect를 먼저 닫는다.** Endpoint runtime이 보유한 shared pair
+  state의 reconnect를 pipe termination 전에 비활성화해, 한 lane의 종료 callback이 이미 닫히는
+  endpoint를 다시 dial하는 불필요한 session·connector 생성을 막는다.
 
 ### 8.2 내부 확인 조건
 
@@ -778,8 +805,13 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
 - Production proxy source에는 `ZLINK_HAVE_POLLER`의 compile-time 분기와 public
   `zlink_poll(POLLOUT)` fallback이 남지 않는다.
 - Direct request-reply submit의 mailbox commit point는 pending-command hint가 있을 때만
-  throttle을 우회한다. Hint는 실제 command wake와 함께 publish되고 drain 전에 소비되며,
-  command 없는 signal이나 일반 reply마다 mailbox receive syscall을 만들지 않는다.
+  command를 drain한다. Hint는 실제 command wake와 함께 publish되고 drain 전에 소비되며,
+  command 없는 signal이나 일반 reply마다 timestamp 조회와 mailbox receive syscall을 만들지 않는다.
+- Async command owner가 input activation을 처리하면 receive progress epoch가 증가하고, public
+  poller가 primary signal을 먼저 drain한 경우에도 command pipe의 command가 처리된다. Async
+  owner가 없는 기존 descriptor pollset은 poller별 signaler 등록 비용을 추가하지 않는다.
+- Socket termination은 paired pipe를 종료하기 전에 endpoint runtime의 reconnect state를 모두
+  비활성화한다.
 - Decoder에는 transport message의 decoded frame 수를 세는 상태가 없고, Asio ZMP engine이
   authoritative WS·WSS boundary 전까지만 frame publication을 보류한다.
 - WS·WSS transport의 stream과 read boundary state는 같은 connection-generation aggregate에
@@ -792,7 +824,9 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
   통과한다.
 - Paired passive endpoint의 READY write가 완료되기 전에는 socket-side ready count와 pair
   admission이 증가하지 않고, write 완료 뒤 정확히 한 번 증가한다. 이미 검증한 WS·WSS READY
-  input boundary는 write-completion handshake 재진입에서 다시 검증하지 않는다.
+  input boundary는 write-completion handshake 재진입에서 다시 검증하지 않는다. Handshake
+  control output은 speculative write로 completion callback을 우회하지 않으며, application
+  data의 speculative write fast path는 유지한다.
 
 ### 8.3 별도 성능 작업
 
