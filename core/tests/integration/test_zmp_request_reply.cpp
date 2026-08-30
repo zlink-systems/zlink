@@ -1044,9 +1044,11 @@ void test_generic_dealer_receive_clears_request_reply_metadata ()
           payload.c_str (), part_to_string_and_close (&received).c_str ());
     }
 
-    const socket_handle_t receiver_handle = as_socket_handle (receiver);
-    TEST_ASSERT_NOT_NULL (receiver_handle.socket);
-    TEST_ASSERT_FALSE (receiver_handle.socket->has_request_reply_state ());
+    {
+        const socket_handle_t receiver_handle = as_socket_handle (receiver);
+        TEST_ASSERT_NOT_NULL (receiver_handle.socket);
+        TEST_ASSERT_FALSE (receiver_handle.socket->has_request_reply_state ());
+    }
 
     zlink_msg_t request;
     zlink_msg_init (&request);
@@ -1175,16 +1177,18 @@ void test_dealer_receive_rejects_request_reply_metadata_after_first_part ()
         }
         TEST_ASSERT_EQUAL_INT (EPROTO, observed_errno);
 
-        const socket_handle_t receiver_handle = as_socket_handle (receiver);
-        if (receiver_handle.socket->has_request_reply_state ()) {
-            const std::shared_ptr<
-              zlink::socket_reqrep_internal::socket_request_reply_state_t>
-              state = receiver_handle.socket->request_reply_state ();
-            std::lock_guard<std::mutex> lock (state->mutex);
-            TEST_ASSERT_TRUE (state->dealer_reply_targets.empty ());
-            TEST_ASSERT_EQUAL_UINT64 (0, state->reply_target_slots);
-            TEST_ASSERT_EQUAL_UINT64 (0, state->reply_target_reservations);
-            TEST_ASSERT_EQUAL_UINT64 (0, state->reply_target_checkouts);
+        {
+            const socket_handle_t receiver_handle = as_socket_handle (receiver);
+            if (receiver_handle.socket->has_request_reply_state ()) {
+                const std::shared_ptr<
+                  zlink::socket_reqrep_internal::socket_request_reply_state_t>
+                  state = receiver_handle.socket->request_reply_state ();
+                std::lock_guard<std::mutex> lock (state->mutex);
+                TEST_ASSERT_TRUE (state->dealer_reply_targets.empty ());
+                TEST_ASSERT_EQUAL_UINT64 (0, state->reply_target_slots);
+                TEST_ASSERT_EQUAL_UINT64 (0, state->reply_target_reservations);
+                TEST_ASSERT_EQUAL_UINT64 (0, state->reply_target_checkouts);
+            }
         }
 
         test_context_socket_close_zero_linger (sender);
@@ -1221,7 +1225,7 @@ void test_source_pipe_pin_failure_preserves_receive_ownership_without_targets ()
                 send_internal_request_multipart_message (
                   sender, 1000 + part_count, part_count);
 
-            const socket_handle_t receiver_handle =
+            socket_handle_t receiver_handle =
               as_socket_handle (receiver);
             TEST_ASSERT_NOT_NULL (receiver_handle.socket);
             receiver_handle.socket->test_fail_next_recv_pipe_pin ();
@@ -1264,6 +1268,7 @@ void test_source_pipe_pin_failure_preserves_receive_ownership_without_targets ()
                 TEST_ASSERT_TRUE (state->router_reply_targets.empty ());
             }
 
+            receiver_handle = socket_handle_t ();
             test_context_socket_close_zero_linger (sender);
             test_context_socket_close_zero_linger (receiver);
         }
@@ -1287,7 +1292,7 @@ void test_source_pipe_pin_failure_preserves_receive_ownership_without_targets ()
             send_internal_request_multipart_message (
               sender, 2000 + part_count, part_count);
 
-        const socket_handle_t receiver_handle = as_socket_handle (receiver);
+        socket_handle_t receiver_handle = as_socket_handle (receiver);
         receiver_handle.socket->test_fail_next_recv_pipe_pin ();
         for (size_t i = 0; i < part_count; ++i) {
             zlink_msg_t output;
@@ -1310,6 +1315,7 @@ void test_source_pipe_pin_failure_preserves_receive_ownership_without_targets ()
             TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&output));
         }
         TEST_ASSERT_FALSE (receiver_handle.socket->has_request_reply_state ());
+        receiver_handle = socket_handle_t ();
         test_context_socket_close_zero_linger (sender);
         test_context_socket_close_zero_linger (receiver);
     }

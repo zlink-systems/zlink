@@ -708,6 +708,7 @@ void test_router_recv_part_v2_snapshots_pair_before_source_pin_failure ()
         }
 
         TEST_ASSERT_FALSE (router_handle.socket->has_request_reply_state ());
+        router_handle = socket_handle_t ();
         test_context_socket_close_zero_linger (dealer);
         test_context_socket_close_zero_linger (router);
     }

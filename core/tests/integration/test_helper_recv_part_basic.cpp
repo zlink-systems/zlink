@@ -495,6 +495,13 @@ void test_filtered_subscribe_still_rejects_request_metadata_in_record_tail ()
     void *sub = test_context_socket (ZLINK_SOCKET_SUB);
     TEST_ASSERT_NOT_NULL (pub);
     TEST_ASSERT_NOT_NULL (sub);
+    // Deliver a topic that does not match the SUB-side filter so xhas_in()
+    // must drain and structurally validate the complete record.  Keep the SUB
+    // itself non-inverted: only the publisher-side distribution is inverted.
+    const int invert = 1;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (pub, ZLINK_OPT_INVERT_MATCHING, &invert,
+                        sizeof (invert)));
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_bind (pub, "inproc://filtered-subscribe-later-kind"));
     TEST_ASSERT_SUCCESS_ERRNO (

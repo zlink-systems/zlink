@@ -129,6 +129,10 @@ class xsub_t : public socket_base_t
     // Physical part index of the next exposed publication frame. Index 0 is
     // the topic and index 1 is the first caller-visible payload.
     size_t _recv_part_index;
+    // A filtered-message probe can discover a malformed continuation before
+    // the caller enters xrecv(). Preserve that result for one public receive
+    // instead of translating the now-empty queue into EAGAIN.
+    bool _recv_protocol_error_pending;
 
     //  If true, subscribe and cancel messages are processed for the rest
     //  of multipart message.

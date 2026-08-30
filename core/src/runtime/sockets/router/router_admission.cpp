@@ -119,7 +119,12 @@ pipe_t *router_t::find_transport_pair_pipe (
 bool router_t::emit_transport_pair_ready (pipe_t *pipe_)
 {
     if (!pipe_ || pipe_->get_transport_pair_id () == 0
-        || pipe_->get_transport_lane () != transport_lane_application)
+        || pipe_->get_transport_lane () != transport_lane_application
+        // Every caller, including the session-side endpoint refresh, shares
+        // this data-plane gate. Pair-table admission alone is not readiness:
+        // the route must still have had its transport write hold released.
+        || !transport_pair_application_ready (pipe_)
+        || !pipe_->transport_pair_writes_released ())
         return false;
 
     const blob_t *routing_id = NULL;
@@ -296,19 +301,11 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_, bool lo
     pipe_->set_router_socket_routing_id (routing_id_);
     add_out_pipe (ZLINK_MOVE (routing_id_), pipe_, locally_initiated_);
     cache_completion_pipe_routing_id (pipe_);
-    if (pipe_->get_transport_pair_id () != 0
-        && pipe_->get_transport_lane () == transport_lane_application
-        && completion_pipe_for_transport_pair (
-             pipe_->get_transport_pair_id (),
-             pipe_->get_transport_pair_generation ())) {
-        endpoint_uri_pair_t endpoint_pair = pipe_->get_endpoint_pair ();
-        endpoint_pair.connection_id = pipe_->get_transport_connection_id ();
-        const blob_t &peer_routing_id = pipe_->get_routing_id ();
-        event_connection_ready_changed (
-          endpoint_pair, peer_routing_id.data (), peer_routing_id.size (),
-          transport_lane_application, pipe_->get_transport_pair_id (),
-          pipe_->get_transport_pair_generation ());
-    }
+    // When Application is the second lane, pair-table admission precedes
+    // xattach_pipe() and this stays suppressed until the common attach path
+    // releases the write hold. A route adopted later sees that released hold
+    // and publishes the complementary edge here.
+    (void) emit_transport_pair_ready (pipe_);
     if (router_debug_enabled ()) {
         char rid_text[160];
         format_blob_routing_id_debug (pipe_->get_routing_id (), rid_text, sizeof (rid_text));

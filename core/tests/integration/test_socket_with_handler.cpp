@@ -69,7 +69,7 @@ void test_raw_socket_receive_callback_contracts ()
     TEST_ASSERT_EQUAL_INT (ENOTSUP, zlink_errno ());
     TEST_ASSERT_EQUAL_INT (ZLINK_HANDLER_NOT_SUPPORTED,
                            zlink_recv_handler (router, &discard_stream_message, NULL));
-    TEST_ASSERT_EQUAL_INT (EOPNOTSUPP, zlink_errno ());
+    TEST_ASSERT_EQUAL_INT (ENOTSUP, zlink_errno ());
     TEST_ASSERT_SUCCESS_ERRNO (zlink_recv_handler (stream_recv, &discard_stream_message, NULL));
     TEST_ASSERT_EQUAL_INT (ZLINK_HANDLER_NOT_SUPPORTED,
                            zlink_recv_handler (sub, &discard_stream_message, NULL));

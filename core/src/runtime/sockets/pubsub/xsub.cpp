@@ -74,6 +74,7 @@ zlink::xsub_t::xsub_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     _more_send (false),
     _more_recv (false),
     _recv_part_index (0),
+    _recv_protocol_error_pending (false),
     _process_subscribe (false),
     _has_empty_subscription (false),
     _dispatch_active (false),
@@ -339,6 +340,12 @@ bool zlink::xsub_t::xhas_out ()
 
 int zlink::xsub_t::xrecv (msg_t *msg_)
 {
+    if (_recv_protocol_error_pending) {
+        _recv_protocol_error_pending = false;
+        errno = EPROTO;
+        return -1;
+    }
+
     //  If there's already a message prepared by a previous call to zlink_poll,
     //  return it straight ahead.
     if (_has_message) {
@@ -440,6 +447,9 @@ int zlink::xsub_t::xrecv (msg_t *msg_)
 
 bool zlink::xsub_t::xhas_in ()
 {
+    if (_recv_protocol_error_pending)
+        return true;
+
     //  There are subsequent parts of the partly-read message available.
     if (_more_recv)
         return true;
@@ -487,6 +497,11 @@ bool zlink::xsub_t::xhas_in ()
             errno_assert (close_rc == 0);
             const int init_rc = _message.init ();
             errno_assert (init_rc == 0);
+            if (saved_errno == EPROTO) {
+                _recv_protocol_error_pending = true;
+                errno = saved_errno;
+                return true;
+            }
             errno = saved_errno;
             return false;
         }

@@ -250,6 +250,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     // until the pair is validated.
     void hold_writes_until_transport_pair_ready ();
     bool release_writes_for_transport_pair ();
+    bool transport_pair_writes_released () const;
 
     //  Remote receive-flow state, carried by the paired completion lane. It is
     //  an independent send blocker: it never touches the byte HWM counters and

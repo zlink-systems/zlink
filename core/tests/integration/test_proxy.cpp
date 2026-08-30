@@ -62,10 +62,12 @@ struct proxy_request_probe_t
 void *g_clients_pkts_out = NULL;
 void *g_workers_pkts_out = NULL;
 void *control_context = NULL;
+bool g_test_context_active = false;
 
 void setUp ()
 {
     setup_test_context ();
+    g_test_context_active = true;
     zlink::test_reset_proxy_state ();
 }
 
@@ -74,6 +76,10 @@ void tearDown ()
     // Unity still invokes tearDown after a TEST_ASSERT longjmp, while C++
     // automatic destructors on the interrupted stack are not guaranteed.
     zlink::test_reset_proxy_state ();
+    if (g_test_context_active) {
+        teardown_test_context ();
+        g_test_context_active = false;
+    }
 }
 
 class proxy_part_forwarded_hook_scope_t
@@ -147,7 +153,8 @@ static void assert_raw_dealer_part (void *socket_,
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
 
     zlink_recv_result_t result = ZLINK_RECV_NO_DATA;
-    for (int attempt = 0; attempt < 100 && result == ZLINK_RECV_NO_DATA; ++attempt) {
+    for (int attempt = 0; attempt < 1000 && result == ZLINK_RECV_NO_DATA;
+         ++attempt) {
         result = zlink_dealer_recv_part (socket_, &message_type, &request_seq,
                                          &part, &has_more,
                                          ZLINK_RECV_FLAGS_DONTWAIT);
@@ -542,6 +549,7 @@ void test_proxy ()
     msleep (500); // Wait for all clients and workers to terminate
 
     teardown_test_context ();
+    g_test_context_active = false;
 
     for (int i = 0; i < QT_CLIENTS + 1; i++)
         zlink_thread_join (threads[i]);

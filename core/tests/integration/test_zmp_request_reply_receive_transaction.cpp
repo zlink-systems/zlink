@@ -290,7 +290,7 @@ void run_two_reader_record_test (int receiver_type_)
     send_request_record (sender, 101, "first");
     send_request_record (sender, 102, "second");
 
-    const socket_handle_t handle = as_socket_handle (receiver);
+    socket_handle_t handle = as_socket_handle (receiver);
     receive_record_gate_t gate;
     handle.socket->test_set_receive_record_hooks (
       &pause_after_first_record_frame, &observe_record_contention, &gate);
@@ -341,6 +341,7 @@ void run_two_reader_record_test (int receiver_type_)
         TEST_ASSERT_EQUAL_UINT64 (0, second.sequence);
     }
 
+    handle = socket_handle_t ();
     test_context_socket_close_zero_linger (sender);
     test_context_socket_close_zero_linger (receiver);
 }
@@ -355,7 +356,7 @@ void test_router_record_fences_mailbox_read_activation ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     TEST_ASSERT_NOT_NULL (router);
-    const socket_handle_t handle = as_socket_handle (router);
+    socket_handle_t handle = as_socket_handle (router);
 
     zlink::object_t *parents[2] = {handle.socket, handle.socket};
     zlink::pipe_t *first_pipe[2] = {NULL, NULL};
@@ -452,6 +453,7 @@ void test_router_record_fences_mailbox_read_activation ()
     assert_two_part_record (activated, "command-second");
     TEST_ASSERT_EQUAL_UINT64 (302, activated.sequence);
 
+    handle = socket_handle_t ();
     test_context_socket_close_zero_linger (router);
 }
 
@@ -467,7 +469,7 @@ void test_router_capacity_reservation_is_atomic_and_non_consuming ()
       zlink_connect (sender, "inproc://router-record-capacity-reservation"));
     msleep (SETTLE_TIME);
 
-    const socket_handle_t handle = as_socket_handle (router);
+    socket_handle_t handle = as_socket_handle (router);
     const std::shared_ptr<
       zlink::socket_reqrep_internal::socket_request_reply_state_t> state =
       zlink::socket_reqrep_internal::find_or_create_request_reply_state (handle);
@@ -529,6 +531,7 @@ void test_router_capacity_reservation_is_atomic_and_non_consuming ()
     assert_two_part_record (remaining, "capacity-second");
     TEST_ASSERT_EQUAL_UINT64 (202, remaining.sequence);
 
+    handle = socket_handle_t ();
     test_context_socket_close_zero_linger (sender);
     test_context_socket_close_zero_linger (router);
 }
@@ -540,7 +543,7 @@ void test_empty_typed_receive_rolls_back_capacity_attempt ()
          ++i) {
         void *receiver = test_context_socket (receiver_types[i]);
         TEST_ASSERT_NOT_NULL (receiver);
-        const socket_handle_t handle = as_socket_handle (receiver);
+        socket_handle_t handle = as_socket_handle (receiver);
         const std::shared_ptr<
           zlink::socket_reqrep_internal::socket_request_reply_state_t> state =
           zlink::socket_reqrep_internal::find_or_create_request_reply_state (
@@ -575,6 +578,7 @@ void test_empty_typed_receive_rolls_back_capacity_attempt ()
             std::lock_guard<std::mutex> lock (state->mutex);
             state->reply_target_slots = 0;
         }
+        handle = socket_handle_t ();
         test_context_socket_close_zero_linger (receiver);
     }
 }

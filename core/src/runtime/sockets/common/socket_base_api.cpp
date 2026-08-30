@@ -290,8 +290,6 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
             static_cast<mailbox_t *> (_mailbox)->signal ();
         }
     }
-    if (ready_application && socket_type () == ZLINK_CORE_SOCKET_ROUTER)
-        emit_transport_pair_ready (ready_application);
     if (ready_application && ready_completion)
         cache_completion_pipe_routing_id (ready_application);
     //  A pair that has just become ready - including a reconnected one - gets
@@ -368,7 +366,14 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         // a distinct admission transition and must wake that exact target too.
         notify_send_pending_writable (ready_application);
     }
-    if (ready_application && socket_type () != ZLINK_CORE_SOCKET_ROUTER) {
+    if (ready_application && socket_type () == ZLINK_CORE_SOCKET_ROUTER) {
+        // ROUTER readiness is a public data-plane edge, not merely pair-table
+        // admission. Publish it only after the application lane's transport
+        // hold has been released and xwrite_activated() has made the route
+        // selectable. Otherwise a consumer can observe CONNECTION_READY and
+        // immediately receive ECONNREFUSED on the same admitted connection.
+        emit_transport_pair_ready (ready_application);
+    } else if (ready_application) {
         // A Router may still be waiting for RID adoption after pair
         // validation. Publish here only when the Application pipe already
         // has its peer RID; router_t::adopt_peer_routing_id publishes the

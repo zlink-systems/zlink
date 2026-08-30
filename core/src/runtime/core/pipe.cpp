@@ -1433,6 +1433,12 @@ bool zlink::pipe_t::release_writes_for_transport_pair ()
     return !remote_flow_blocked_unlocked ();
 }
 
+bool zlink::pipe_t::transport_pair_writes_released () const
+{
+    scoped_fast_lock_t lock (_out_sync);
+    return !_transport_pair_write_held;
+}
+
 bool zlink::pipe_t::remote_flow_paused () const
 {
     scoped_fast_lock_t lock (_out_sync);
