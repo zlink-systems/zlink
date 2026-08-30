@@ -10,9 +10,9 @@ namespace zlink
 {
 namespace socket_reqrep_internal
 {
-// A normal request/reply record is four control frames plus one or two
-// payload frames. Keep that aggregate in the receiving call; only unusually
-// large multipart records need dynamic storage.
+// Keep common application multiparts inline while a typed receive or
+// completion lane collects one logical message. Only unusually large
+// application multiparts need dynamic storage.
 const size_t inline_request_reply_frame_capacity = 8;
 typedef zlink::socket_internal::inline_msg_buffer_t<inline_request_reply_frame_capacity>
   request_reply_frame_buffer_t;
@@ -24,7 +24,8 @@ inline void close_request_reply_frame_buffer (
         return;
 
     if (!frames_->empty ())
-        zlink::request_reply::close_built_parts (frames_->data (), frames_->size ());
+        zlink::request_reply::consume_send_frames_from (
+          frames_->data (), 0, frames_->size ());
     frames_->clear ();
 }
 }

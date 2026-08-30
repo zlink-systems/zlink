@@ -19,43 +19,74 @@ router_recv_metadata_tls_t &router_recv_metadata_tls ()
 
 namespace
 {
-void complete_reply_from_transport (
+enum completion_message_result_t
+{
+    completion_message_accepted,
+    completion_message_protocol_error
+};
+
+completion_message_result_t complete_reply_from_transport (
   socket_request_reply_state_t *state_,
   uint64_t transport_pair_id_,
   uint64_t transport_pair_generation_,
   zlink_msg_t *parts_,
   size_t part_count_)
 {
-    zlink::request_reply::parsed_envelope_t envelope;
-    if (!state_ || !zlink::request_reply::parse_envelope (parts_, part_count_, &envelope)
-        || envelope.message_type == zlink::request_reply::request_type) {
+    if (!parts_ || part_count_ == 0)
+        return completion_message_protocol_error;
+
+    uint8_t message_type = zlink::zmp_kind_data;
+    uint64_t request_sequence = 0;
+    if (!zlink::request_reply::read_request_reply_metadata (
+          &parts_[0], &message_type, &request_sequence)
+        || request_sequence == 0
+        || (message_type != zlink::request_reply::reply_type
+            && message_type != zlink::request_reply::error_reply_type)) {
         zlink::request_reply::close_request_reply_parts (parts_, part_count_);
-        return;
+        return completion_message_protocol_error;
+    }
+    for (size_t i = 1; i < part_count_; ++i) {
+        uint8_t later_kind = zlink::zmp_kind_data;
+        uint64_t later_sequence = 0;
+        if (zlink::request_reply::read_request_reply_metadata (
+              &parts_[i], &later_kind, &later_sequence)) {
+            zlink::request_reply::close_request_reply_parts (
+              parts_, part_count_);
+            return completion_message_protocol_error;
+        }
+    }
+
+    // The sequence is now owned by the pending lookup. Callback-visible
+    // payload must not retain transport metadata.
+    zlink::request_reply::clear_request_reply_metadata (&parts_[0]);
+    if (!state_) {
+        zlink::request_reply::close_request_reply_parts (parts_, part_count_);
+        return completion_message_accepted;
     }
 
     zlink::socket_callback_scope_t callback_scope (state_->socket);
     if (!callback_scope.acquired ()) {
         zlink::request_reply::close_request_reply_parts (parts_, part_count_);
-        return;
+        return completion_message_accepted;
     }
 
     pending_request_t pending;
     {
         std::lock_guard<std::mutex> lock (state_->mutex);
         if (!take_pending_reply_from_transport_locked (
-              state_, envelope.request_seq, transport_pair_id_,
+              state_, request_sequence, transport_pair_id_,
               transport_pair_generation_, &pending)) {
             zlink::request_reply::close_request_reply_parts (parts_, part_count_);
-            return;
+            return completion_message_accepted;
         }
     }
     zlink::request_timeout::cancel (pending.timeout_task);
 
     int callback_errno = 0;
-    zlink_msg_t *callback_parts = envelope.payload_parts;
-    size_t callback_part_count = envelope.payload_part_count;
+    zlink_msg_t *callback_parts = parts_;
+    size_t callback_part_count = part_count_;
     if (zlink::request_reply::decode_reply_completion (
-          envelope.message_type, envelope.payload_parts, envelope.payload_part_count,
+          message_type, parts_, part_count_,
           &callback_errno, &callback_parts, &callback_part_count)
         != 0) {
         callback_errno = EPROTO;
@@ -68,7 +99,26 @@ void complete_reply_from_transport (
       callback_part_count, pending.userdata);
     zlink::request_completion::release_reservation (&state_->completion);
     state_->socket->notify_request_completion ();
-    zlink::request_reply::close_request_reply_parts (parts_, part_count_);
+
+    // Callback-visible message ownership transfers to the callback.  Do not
+    // close those elements again after it returns: a conforming callback has
+    // already closed, moved, or adopted each one.  ERROR_REPLY keeps its
+    // leading errno frame inside Core, while a malformed completion exposes no
+    // payload and therefore leaves every element Core-owned.
+    size_t callback_begin = part_count_;
+    size_t callback_end = part_count_;
+    if (callback_parts && callback_part_count > 0) {
+        callback_begin = static_cast<size_t> (callback_parts - parts_);
+        callback_end = callback_begin + callback_part_count;
+        zlink_assert (callback_begin <= part_count_);
+        zlink_assert (callback_end <= part_count_);
+    }
+    for (size_t i = 0; i < part_count_; ++i) {
+        if (i >= callback_begin && i < callback_end)
+            continue;
+        zlink::request_reply::consume_send_frame (&parts_[i]);
+    }
+    return completion_message_accepted;
 }
 
 void discard_completion_message_tail (zlink::pipe_t *pipe_, bool more_)
@@ -103,7 +153,8 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
         // completions do not allocate once the common part capacity is warm.
         parts.clear ();
         bool complete = false;
-        bool malformed = false;
+        bool flow_state_consumed = false;
+        bool allocation_failed = false;
         while (!complete) {
             zlink::msg_t frame;
             const int init_rc = frame.init ();
@@ -111,38 +162,43 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
             if (!pipe_->read (&frame)) {
                 const int close_rc = frame.close ();
                 errno_assert (close_rc == 0);
+                const bool truncated_message = !parts.empty ();
                 close_request_reply_frame_buffer (&parts);
+                if (truncated_message)
+                    pipe_->terminate (false);
                 return;
             }
 
             const unsigned char frame_flags = frame.flags ();
             const bool more = (frame_flags & zlink::msg_t::more) != 0;
 
-            //  Core-internal flow state never reaches the reply dispatcher and
-            //  never becomes an application part. On a local (inproc) pair the
-            //  frame is queued on the completion pipe instead of being
-            //  intercepted by a session, so it is classified here as well - at
-            //  any position, because a frame that is not where it belongs must
-            //  still never be delivered.
-            //
-            //  Ordinary reply parts are not command frames, and this is the
-            //  per-part path of every completion, so the command-flag test
-            //  stays inline and only a command frame pays for the call.
-            if ((frame_flags & zlink::msg_t::command) != 0
-                && socket_->consume_receive_flow_state_frame (pipe_, frame)) {
+            // Core-internal flow state is a standalone completion-lane frame.
+            // It is handled only at a message boundary, before application
+            // kind dispatch. A command in the middle of a reply is a protocol
+            // error and must not truncate that reply into a valid completion.
+            if ((frame_flags & zlink::msg_t::command) != 0) {
+                if (parts.empty ()
+                    && socket_->consume_receive_flow_state_frame (
+                         pipe_, frame)) {
+                    const int close_rc = frame.close ();
+                    errno_assert (close_rc == 0);
+                    if (more) {
+                        discard_completion_message_tail (pipe_, true);
+                        close_request_reply_frame_buffer (&parts);
+                        pipe_->terminate (false);
+                        return;
+                    }
+                    flow_state_consumed = true;
+                    complete = true;
+                    continue;
+                }
+
                 const int close_rc = frame.close ();
                 errno_assert (close_rc == 0);
-                if (!more && !parts.empty ()) {
-                    //  The frame stood where this message's final part should
-                    //  have been. The accumulated parts are a truncated
-                    //  message, and parse_envelope does not look at more-flags,
-                    //  so letting them through would complete an outstanding
-                    //  request with a reply that was never sent. End the
-                    //  message and reject it instead.
-                    complete = true;
-                    malformed = true;
-                }
-                continue;
+                discard_completion_message_tail (pipe_, more);
+                close_request_reply_frame_buffer (&parts);
+                pipe_->terminate (false);
+                return;
             }
 
             try {
@@ -152,7 +208,7 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
                 errno_assert (close_rc == 0);
                 discard_completion_message_tail (pipe_, more);
                 complete = true;
-                malformed = true;
+                allocation_failed = true;
                 break;
             }
             zlink_msg_init (&parts.back ());
@@ -162,14 +218,21 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
             complete = !more;
         }
 
-        if (!state || malformed) {
+        if (flow_state_consumed)
+            continue;
+        if (allocation_failed) {
             close_request_reply_frame_buffer (&parts);
             continue;
         }
 
-        complete_reply_from_transport (
-          state.get (), pipe_->get_transport_pair_id (),
-          pipe_->get_transport_pair_generation (), &parts[0], parts.size ());
+        if (complete_reply_from_transport (
+              state.get (), pipe_->get_transport_pair_id (),
+              pipe_->get_transport_pair_generation (), &parts[0],
+              parts.size ())
+            == completion_message_protocol_error) {
+            pipe_->terminate (false);
+            return;
+        }
     }
 }
 

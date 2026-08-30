@@ -971,8 +971,7 @@ set(transport-ws-sources
     src/runtime/transports/ws/ws_address.cpp
     src/runtime/transports/ws/ws_transport.cpp
     src/runtime/transports/ws/asio_ws_listener.cpp
-    src/runtime/transports/ws/asio_ws_connecter.cpp
-    src/runtime/transports/ws/asio_ws_engine.cpp)
+    src/runtime/transports/ws/asio_ws_connecter.cpp)
 
 set(transport-tls-sources
     src/runtime/transports/tls/wss_address.cpp

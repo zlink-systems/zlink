@@ -120,6 +120,16 @@ class asio_engine_t : public i_engine
     socket_base_t *socket () { return _connection_facade.socket; }
     i_asio_transport *transport () { return _transport_adapter.transport.get (); }
     bool is_handshaking () const { return _connection_facade.handshaking; }
+    bool transport_has_message_boundaries () const;
+    bool zmp_transport_has_message_boundaries () const;
+    enum transport_decoded_message_stage_t : unsigned char
+    {
+        transport_message_not_staged,
+        transport_handshake_message_staged,
+        transport_application_message_staged
+    };
+    void stage_transport_decoded_message (
+      transport_decoded_message_stage_t stage_);
 
     const options_t _options;
 
@@ -129,6 +139,12 @@ class asio_engine_t : public i_engine
     i_decoder *_decoder;
     //  True when _inpos/_insize refer to data read into the decoder buffer.
     bool _input_in_decoder_buffer;
+    //  HELLO is parsed before the framed decoder exists. Keep a separately
+    //  staged handshake frame when its bytes finish before the transport
+    //  record boundary (for example, an empty final WS continuation).
+    bool _transport_handshake_frame_staged;
+    bool _transport_message_complete_pending;
+    transport_decoded_message_stage_t _transport_decoded_message_stage;
 
     unsigned char *_outpos;
     size_t _outsize;
@@ -191,6 +207,9 @@ class asio_engine_t : public i_engine
   private:
     //  Process incoming data after async read completes
     bool process_input ();
+    bool finalize_transport_message_if_ready (
+      bool *handshake_message_processed_ = NULL);
+    bool reject_transport_message ();
 
     //  Fill output buffer and start async write
     void process_output ();

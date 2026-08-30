@@ -617,7 +617,7 @@ ctest --test-dir core/build --output-on-failure
 | 우선순위 | 상태 | 영역 | 목표 | 성능 주의점 | 관련 파일 | 검증 증거 | 메모 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | 완료 | `services/spot` subject option/query owner | `spot_subject_query.cpp`에서 option owner를 분리해 service option/query API가 subscription/routing/TLS 허브를 함께 알지 않게 정리 | control-path 중심이지만 pub/sub poller socket access와 composite handle admission 순서를 유지해야 한다 | `core/src/services/spot/spot_subject_option.cpp`, `core/src/services/spot/spot_subject_query.cpp`, `core/src/services/spot/spot_subject_subscription_internal.hpp`, `core/tests/unittest/unittest_spot_subject_access.cpp` | `cmake --build core/build -j"$(nproc)" --target unittest_spot_subject_access`, `ctest --test-dir core/build --output-on-failure -R unittest_spot_subject_access` | 대표 시나리오대로 option owner TU를 분리했고, subscription aggregation helper는 internal header로만 노출해 query/subscription owner와 admission 순서를 유지했다. |
-| 2 | 완료 | `engine/transport` large-file owner review | `asio_engine.cpp`, `asio_ws_engine.cpp`를 다시 읽고 giant owner로 승격될 실제 잔여 허브만 남긴다 | handshake/stream fast-path 비용 증가 금지 | `core/src/engine/asio/asio_engine.cpp`, `core/src/transports/ws/asio_ws_engine.cpp` | `ctest --test-dir core/build --output-on-failure -R '^test_stream_fastpath$'`, `ctest --test-dir core/build --output-on-failure -R '^test_spot_pubsub_scenario_peer_wss$'` | 현재 코드는 `asio_engine_t`가 transport-common async runtime/stream tuning owner, `asio_ws_engine_t`가 ws+wss handshake와 ZMP-over-WebSocket wire execution owner로 읽힌다. 지금 바로 자르면 handshake/read/write/timer 지식이 더 새어나와 shallow split이 될 가능성이 커서 giant owner로 재승격하지 않았다. |
+| 2 | 완료 | `engine/transport` large-file owner review | WS·WSS ZMP wire execution owner를 generic Asio ZMP engine 하나로 수렴하고 compile-only 중복 구현을 제거한다 | raw STREAM fast path와 설치 ABI를 바꾸지 않고 connection allocation·async refcount·compile·binary 비용을 줄인다 | `core/CMakeLists.txt`, `core/src/runtime/engine/asio/asio_engine.cpp`, `core/src/runtime/engine/asio/asio_zmp_engine.cpp`, `core/src/runtime/transports/{ws,tls}/*transport*`, 삭제된 `core/src/runtime/transports/ws/asio_ws_engine.{hpp,cpp}` | repo-wide constructor·factory·include·public-header·export 정적 확인, `test_asio_ws`, `test_zmp_ws_wss`, GitHub Actions `build.yml` | WS·WSS factory는 generic `asio_zmp_engine_t`만 생성한다. 참조 없이 빌드되던 legacy private engine을 제거했고, stream·boundary state를 한 connection generation으로 묶었다. ZMP exact-boundary policy는 raw STREAM에 적용하지 않는다. |
 | 3 | 진행중 | 종료 전 반복 리뷰 + final gate 준비 | `4.2` 반복 리뷰 2회, 전체 테스트, 필요 시 final perf/stress gate까지 이어서 실제 미적용 항목이 없는지 확정 | 이번 실행에서 `core/` 실코드 변경이 있었으므로 종료 후보가 되면 full perf gate가 필요하다 | `core/src/`, `core/tests/`, `core/perf/`, `core/tools/refactor/core-system-posd-performance-first-ralph-guide.ko.md` | 진행 중 | 반복 리뷰 2회 연속 무허브, 전체 테스트 green, final perf/stress gate까지 끝나기 전에는 종료로 닫지 않는다. |
 
 ## 9. 각 iteration의 체크리스트
@@ -720,9 +720,11 @@ ctest --test-dir core/build --output-on-failure
    - 대표 시나리오였던 spot subject common/pub/sub option 추가는 giant query TU가 아니라 option owner TU + tests에서 닫히게 됐다.
    - 검증 증거: `cmake --build core/build -j"$(nproc)" --target unittest_spot_subject_access`, `ctest --test-dir core/build --output-on-failure -R unittest_spot_subject_access`.
 9. engine/transport large-file owner 리뷰
-   - `asio_engine.cpp`, `asio_ws_engine.cpp`와 실제 large file 중 owner 설명이 약한 축만 선별해 정리한다.
-   - 현재 코드 기준으로 `asio_engine_t`는 transport-common async runtime, handshake, timer, stream fast-path tuning owner이고 `asio_ws_engine_t`는 ws/wss handshake와 ZMP-over-WebSocket wire execution owner로 읽힌다.
-   - `test_stream_fastpath`, `test_spot_pubsub_scenario_peer_wss` targeted smoke 재검증까지 다시 green이므로 지금은 giant owner로 재승격하지 않는다.
+   - `asio_engine.cpp`, `asio_zmp_engine.cpp`와 실제 large file 중 owner 설명이 약한 축만 선별해 정리한다.
+   - 현재 코드 기준으로 `asio_engine_t`는 transport-common async runtime, handshake, timer, stream fast-path tuning owner이고, `asio_zmp_engine_t`는 TCP·IPC·TLS·WS·WSS의 ZMP wire execution owner다.
+   - WS·WSS factory가 generic engine으로 수렴한 뒤에도 참조 없이 compile되던 legacy `asio_ws_engine_t`는 제거했다. 이로써 같은 wire 계약을 수정하는 production owner를 하나로 줄였다.
+   - WS·WSS stream과 read-boundary state는 connection-generation aggregate 하나가 소유한다. ZMP exact-boundary staging은 generic engine 안에서도 ZMP socket 경로에만 적용해 raw STREAM의 fragmented receive와 gather fallback을 유지한다.
+   - `test_stream_fastpath`, `test_asio_ws`, `test_zmp_ws_wss`, `test_spot_pubsub_scenario_peer_wss`와 GitHub Actions build gate로 공통 engine 및 WS·WSS integration을 검증한다.
    - 다음 첫 미완료 항목은 종료 전 반복 리뷰 2회와 final gate다.
 
 적용 규칙:

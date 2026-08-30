@@ -474,10 +474,13 @@ int zlink::socket_base_t::xsend (msg_t *,
 
 int zlink::socket_base_t::xsend_pipe (
   msg_t *msg_, pipe_t **pipe_out_,
-  pipe_message_admission_t *admission_out_)
+  pipe_message_admission_t *admission_out_,
+  pipe_write_observer_fn observer_, void *observer_userdata_)
 {
     if (pipe_out_)
         *pipe_out_ = NULL;
+    LIBZLINK_UNUSED (observer_);
+    LIBZLINK_UNUSED (observer_userdata_);
     return xsend (msg_, admission_out_);
 }
 
@@ -488,7 +491,9 @@ int zlink::socket_base_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                                        pipe_t **pipe_out_,
                                        uint64_t expected_transport_pair_id_,
                                        uint64_t expected_transport_pair_generation_,
-                                       pipe_message_admission_t *admission_out_)
+                                       pipe_message_admission_t *admission_out_,
+                                       pipe_write_observer_fn observer_,
+                                       void *observer_userdata_)
 {
     LIBZLINK_UNUSED (target_rid_);
     LIBZLINK_UNUSED (msg_);
@@ -499,6 +504,8 @@ int zlink::socket_base_t::xsend_routed (const zlink_routing_id_t *target_rid_,
     LIBZLINK_UNUSED (expected_connection_id_);
     LIBZLINK_UNUSED (expected_transport_pair_id_);
     LIBZLINK_UNUSED (expected_transport_pair_generation_);
+    LIBZLINK_UNUSED (observer_);
+    LIBZLINK_UNUSED (observer_userdata_);
     if (admission_out_)
         *admission_out_ = pipe_message_admission_invalid;
     errno = ENOTSUP;

@@ -10,7 +10,6 @@
 #include "core/recv_internal.hpp"
 #include "api/socket/socket_api_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
-#include "api/socket/socket_request_reply_runtime_io_helpers.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "sockets/internal/fq.hpp"
 #include "sockets/router/router.hpp"
@@ -857,9 +856,8 @@ void run_router_multipart_pipe_termination_does_not_join_next_peer_record (
             followup_rc = zlink::recv_followup_msg_socket_wait (
               router, &followup, 0);
         } else {
-            followup_rc =
-              zlink::socket_reqrep_internal::recv_router_followup_frame (
-                router, &followup);
+            followup_rc = router->recv (
+              reinterpret_cast<zlink::msg_t *> (&followup), ZLINK_DONTWAIT);
         }
         TEST_ASSERT_EQUAL_INT (-1, followup_rc);
         TEST_ASSERT_EQUAL_INT (read_false_abort_ ? ECONNABORTED : EAGAIN,

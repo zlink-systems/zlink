@@ -6,6 +6,7 @@
 #include <map>
 #include <vector>
 
+#include "core/pipe.hpp"
 #include "utils/array.hpp"
 
 namespace zlink
@@ -47,7 +48,9 @@ class lb_t
     //  Sends the first frame to an already selected exact pipe. Multipart
     //  continuation then follows the ordinary _weighted_multipart_pipe fence.
     int sendpipe_to (pipe_t *pipe_, msg_t *msg_,
-                     pipe_message_admission_t *admission_out_ = NULL);
+                     pipe_message_admission_t *admission_out_ = NULL,
+                     pipe_write_observer_fn observer_ = NULL,
+                     void *observer_userdata_ = NULL);
 
     int send (msg_t *msg_,
               pipe_message_admission_t *admission_out_ = NULL);
@@ -57,7 +60,9 @@ class lb_t
     //  unset if the rest of a multipart message to a terminated pipe is
     //  being dropped. For the first frame, this will never happen.
     int sendpipe (msg_t *msg_, pipe_t **pipe_,
-                  pipe_message_admission_t *admission_out_ = NULL);
+                  pipe_message_admission_t *admission_out_ = NULL,
+                  pipe_write_observer_fn observer_ = NULL,
+                  void *observer_userdata_ = NULL);
 
     //  Removes an unfinished multipart message and resets send sequencing.
     void rollback ();

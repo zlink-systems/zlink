@@ -4,6 +4,8 @@
 #define __ZLINK_ROUTER_HPP_INCLUDED__
 
 #include <map>
+#include <mutex>
+#include <set>
 #include <vector>
 
 #include "sockets/common/socket_base.hpp"
@@ -38,7 +40,9 @@ class router_t : public routing_socket_base_t
                pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
     int xsend_pipe (
       zlink::msg_t *msg_, zlink::pipe_t **pipe_out_,
-      pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
+      pipe_message_admission_t *admission_out_ = NULL,
+      pipe_write_observer_fn observer_ = NULL,
+      void *observer_userdata_ = NULL) ZLINK_OVERRIDE;
     int xsend_routed (const zlink_routing_id_t *target_rid_,
                       zlink::msg_t *msg_,
                       uint64_t *connection_id_out_,
@@ -46,11 +50,15 @@ class router_t : public routing_socket_base_t
                       zlink::pipe_t **pipe_out_,
                       uint64_t expected_transport_pair_id_ = 0,
                       uint64_t expected_transport_pair_generation_ = 0,
-                      pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
+                      pipe_message_admission_t *admission_out_ = NULL,
+                      pipe_write_observer_fn observer_ = NULL,
+                      void *observer_userdata_ = NULL) ZLINK_OVERRIDE;
     int xselect_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_) ZLINK_OVERRIDE;
     int xrecv (zlink::msg_t *msg_) ZLINK_OVERRIDE;
+    int xrecv_pipe (zlink::msg_t *msg_,
+                    zlink::pipe_t **pipe_out_) ZLINK_OVERRIDE;
     int xrecv_routed (zlink::msg_t *msg_,
                       zlink_routing_id_t *source_rid_out_,
                       uint64_t *connection_id_out_,
@@ -59,6 +67,7 @@ class router_t : public routing_socket_base_t
     bool xhas_out () ZLINK_OVERRIDE;
     void xread_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xpipe_terminated (zlink::pipe_t *pipe_) ZLINK_FINAL;
+    void xsocket_msg_pipe_terminated (zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
     int xsocket_msg_dispatch (zlink::msg_t *msg_, zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
     int xterm_peer_rid (const zlink_routing_id_t *peer_rid_) ZLINK_OVERRIDE
     {
@@ -73,6 +82,10 @@ class router_t : public routing_socket_base_t
     int xrollback () ZLINK_OVERRIDE;
 
   private:
+    int send_with_observer (zlink::msg_t *msg_,
+                            pipe_message_admission_t *admission_out_,
+                            pipe_write_observer_fn observer_,
+                            void *observer_userdata_);
     //  Receive peer id and update lookup map
     bool identify_peer (pipe_t *pipe_, bool locally_initiated_);
     bool adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_, bool locally_initiated_);
@@ -144,11 +157,18 @@ class router_t : public routing_socket_base_t
     // If true, the router will reassign an identity upon encountering a
     // name collision. The selected pipe takes the identity.
     bool _handover;
+    // Direct session dispatch can promote an anonymous pipe into the FQ while
+    // the socket mailbox terminates another endpoint under receive ownership.
+    // This narrow fence protects only that attach/remove transition; handler
+    // callbacks never run while it is held.
+    mutable std::mutex _dispatch_route_lifecycle_mu;
     std::vector<zlink_msg_t> _dispatch_parts;
     std::map<pipe_t *, std::vector<zlink_msg_t>> _dispatch_parts_by_pipe;
     std::map<pipe_t *, zlink_routing_id_t> _dispatch_source_rids;
+    std::set<pipe_t *> _dispatch_malformed_pipes;
     zlink_routing_id_t _dispatch_source_rid;
     bool _dispatch_source_rid_valid;
+    bool _dispatch_malformed_without_pipe;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (router_t)
 };

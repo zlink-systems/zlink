@@ -24,6 +24,14 @@
 namespace zlink
 {
 class pipe_t;
+enum pipe_write_observer_phase_t
+{
+    pipe_write_observer_prepare,
+    pipe_write_observer_commit,
+    pipe_write_observer_finish
+};
+typedef bool (*pipe_write_observer_fn) (
+  pipe_t *pipe_, void *userdata_, pipe_write_observer_phase_t phase_);
 
 enum pipe_write_status_t
 {
@@ -259,6 +267,15 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  byte-HWM admission is still checked while the part is recorded.
     bool write_owner_started_message (
       const msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL);
+    //  Request correlation must be visible after this exact candidate has
+    //  accepted the message but before the first application frame is made
+    //  observable. The prepare phase owns the request-state lock before the
+    //  pipe lock is acquired; commit and the optional final flush then happen
+    //  under that same pipe lock so termination cannot pass between them.
+    bool write_owner_started_message_observed (
+      const msg_t *msg_, pipe_write_observer_fn observer_,
+      void *observer_userdata_,
+      pipe_message_admission_t *admission_out_ = NULL);
     //  Applies an absolute remote state on the pipe's own thread and reports
     //  whether the caller must publish the write-activated edge. Callers that
     //  already run on that thread use this directly, so the state is in effect
@@ -334,6 +351,10 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Fast path for a single non-routing-id message that is always flushed.
     bool write_single_message_and_flush_no_recursive_hwm_check (
       const msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL);
+    bool write_message_observed (
+      const msg_t *msg_, pipe_write_observer_fn observer_,
+      void *observer_userdata_,
+      pipe_message_admission_t *admission_out_ = NULL);
 
 
     //  Remove unfinished parts of the outbound message from the pipe.
@@ -405,9 +426,19 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool retain_lifetime_ref ();
     void release_lifetime_ref ();
     bool has_completed_termination () const;
+    //  Completion-lane drains can run outside the socket receive mutex. They
+    //  retain the inbound queue separately so process_pipe_term_ack() can
+    //  report socket termination immediately while deferring queue deletion
+    //  until the last in-flight reader exits.
+    bool retain_inbound_read_ref ();
+    void release_inbound_read_ref ();
+    //  A request/reply target may be published only while the application
+    //  pipe is still active. Callers hold a lifetime ref while checking this.
+    bool active_for_reply_target () const;
 
   private:
     friend class ctx_physical_queue_registry_t;
+    friend class socket_base_t;
 
     //  Type of the underlying lock-free pipe.
     typedef ypipe_base_t<msg_t> upipe_t;
@@ -495,6 +526,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     void set_peer (pipe_t *peer_);
     pipe_t *detach_peer_link ();
     void retire_physical_queue_endpoints ();
+    void cleanup_inbound_pipe ();
 
     //  Destructor is private. Pipe objects destroy themselves.
     ~pipe_t () ZLINK_OVERRIDE;
@@ -634,6 +666,10 @@ class pipe_t ZLINK_FINAL : public object_t,
     };
 
     lifetime_state_t _lifetime;
+    lifetime_state_t _inbound_read_lifetime;
+    // Intrusive, allocation-free link used while socket-message teardown is
+    // deferred beyond the outer receive-command critical section.
+    pipe_t *_deferred_socket_msg_termination_next;
 
     //  Returns true if the message is delimiter; false otherwise.
     static bool is_delimiter (const msg_t &msg_);

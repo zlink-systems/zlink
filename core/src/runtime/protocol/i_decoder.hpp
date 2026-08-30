@@ -27,6 +27,22 @@ class i_decoder
     virtual int decode (const unsigned char *data_, size_t size_, size_t &processed_) = 0;
 
     virtual msg_t *msg () = 0;
+
+    //  Notify a framed decoder that its underlying byte stream ended. Stream
+    //  decoders that do not need finalization keep the default no-op behavior.
+    virtual int stream_end () { return 0; }
+
+    //  Notify a framed decoder that one message-oriented transport record
+    //  ended. This validates that the codec is between frames. The transport
+    //  engine owns record cardinality because it stages the decoded frame
+    //  until the authoritative boundary; a short read is never a boundary.
+    virtual int transport_message_complete () { return 0; }
+
+    //  Abort the current message-oriented transport record. Framed decoders
+    //  use this to discard a decoded-but-not-yet-published message and any
+    //  admission reservation when the record contains trailing data or ends
+    //  before its authoritative boundary.
+    virtual void transport_message_invalid () {}
 };
 }
 

@@ -650,11 +650,9 @@ void test_generation_change_resets_the_epoch_sequence ()
     fixture.teardown ();
 }
 
-//  Round 2, R4. A consumed flow frame that terminates a message must not let
-//  the parts it terminated be parsed as a normal reply. parse_envelope only
-//  looks at the four control parts and does not validate more-flags, so a
-//  message cut short by a misplaced FLOWSTATE would otherwise complete an
-//  outstanding request successfully with an empty payload.
+// A flow frame is valid only between completion messages. If it appears after
+// a reply part carrying MORE, the pair is malformed and the outstanding
+// request must not complete successfully from that truncated reply.
 struct reply_capture_t
 {
     reply_capture_t () : invoked (false), result (ZLINK_REQUEST_OK) {}
@@ -724,21 +722,16 @@ void test_flow_frame_cannot_complete_a_truncated_reply ()
         target.transport_pair_id, target.transport_pair_generation);
     TEST_ASSERT_NOT_NULL (router_completion);
 
-    //  A well-formed reply envelope for the outstanding request, then a
-    //  FLOWSTATE in place of its final part.
-    zlink_msg_t control[zlink::request_reply::control_part_count];
-    for (size_t i = 0; i < zlink::request_reply::control_part_count; ++i)
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&control[i]));
+    zlink::msg_t reply_head;
+    TEST_ASSERT_EQUAL_INT (0, reply_head.init_size (4));
+    memcpy (reply_head.data (), "part", 4);
     TEST_ASSERT_EQUAL_INT (
-      0, zlink::request_reply::init_envelope_control_parts (
-           control, zlink::request_reply::reply_type, request_seq));
-    for (size_t i = 0; i < zlink::request_reply::control_part_count; ++i) {
-        zlink::msg_t *msg = reinterpret_cast<zlink::msg_t *> (&control[i]);
-        msg->set_flags (zlink::msg_t::more);
-        TEST_ASSERT_TRUE (router_completion->write (msg));
-        TEST_ASSERT_EQUAL_INT (0, msg->init ());
-        TEST_ASSERT_EQUAL_INT (0, msg->close ());
-    }
+      0, reply_head.set_request_reply_metadata (
+           zlink::request_reply::reply_type, request_seq));
+    reply_head.set_flags (zlink::msg_t::more);
+    TEST_ASSERT_TRUE (router_completion->write (&reply_head));
+    TEST_ASSERT_EQUAL_INT (0, reply_head.init ());
+    TEST_ASSERT_EQUAL_INT (0, reply_head.close ());
 
     zlink::flow_state::frame_t frame;
     frame.version = zlink::flow_state::frame_protocol_version;
@@ -753,7 +746,7 @@ void test_flow_frame_cannot_complete_a_truncated_reply ()
     TEST_ASSERT_EQUAL_INT (0, flow.init ());
     TEST_ASSERT_EQUAL_INT (0, flow.close ());
 
-    //  Drive the client's completion drain. The truncated envelope must never
+    //  Drive the client's completion drain. The truncated reply must never
     //  be reported as a successful reply.
     for (int i = 0; i < 400; ++i) {
         uint32_t events = 0;
@@ -771,10 +764,22 @@ void test_flow_frame_cannot_complete_a_truncated_reply ()
             TEST_ASSERT_TRUE (capture.result != ZLINK_REQUEST_OK);
     }
 
-    //  The frame itself stays Core-internal and is still applied.
-    TEST_ASSERT_TRUE (wait_for_pipe_pause (dealer, target.transport_pair_id,
-                                           target.transport_pair_generation,
-                                           true));
+    // A misplaced flow frame is not applied. The malformed completion pair is
+    // removed instead, and its sibling teardown supplies the normal
+    // disconnect result for any still-pending request.
+    bool old_pair_removed = false;
+    const std::chrono::steady_clock::time_point removal_deadline =
+      deadline_in_ms (4000);
+    while (!deadline_expired (removal_deadline)) {
+        (void) as_socket (dealer)->process_submit_commands ();
+        if (!as_socket (dealer)->completion_pipe_for_transport_pair (
+              target.transport_pair_id, target.transport_pair_generation)) {
+            old_pair_removed = true;
+            break;
+        }
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (old_pair_removed);
 
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
@@ -1126,33 +1131,40 @@ void test_router_peer_state_reports_remote_pause ()
     test_context_socket_close_zero_linger (router);
 }
 
-//  Review finding 6. On a local pair the flow frame is queued on the completion
-//  pipe instead of being intercepted by a session, so the completion drain has
-//  to classify it. Classifying only a standalone first part let a FLOWSTATE
-//  that follows the reply-envelope control parts be stored as reply payload -
-//  which both hides the state and hands the frame to the application.
-void test_flow_frame_after_envelope_parts_is_still_consumed_on_a_local_pair ()
+// On a local pair the flow frame is queued on the completion pipe instead of
+// being intercepted by a session. A standalone flow frame is consumed before
+// the next reply kind is dispatched, and both effects remain observable.
+void test_flow_frame_before_reply_is_consumed_on_a_local_pair ()
 {
     paired_fixture_t fixture;
     fixture.setup (0, "flow_state_misplaced_frame");
+
+    reply_capture_t capture;
+    zlink_msg_t request_part;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&request_part, 4));
+    memcpy (zlink_msg_data (&request_part), "ping", 4);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request (fixture.dealer, &request_part, 1,
+                            &capture_reply_result, &capture, 0, 1500));
+
+    const zlink_routing_id_t *peer_rid = NULL;
+    uint64_t request_seq = 0;
+    zlink_msg_t *parts = NULL;
+    size_t part_count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_router_recv (fixture.router, &peer_rid, &request_seq, &parts,
+                         &part_count, 0));
+    TEST_ASSERT_NOT_NULL (peer_rid);
+    TEST_ASSERT_TRUE (request_seq != 0);
+    zlink_multipart_close (parts, part_count);
 
     zlink::pipe_t *router_completion =
       as_socket (fixture.router)
         ->completion_pipe_for_transport_pair (fixture.pair_id,
                                               fixture.pair_generation);
     TEST_ASSERT_NOT_NULL (router_completion);
-
-    //  Four leading parts, exactly as many as a reply envelope carries, then
-    //  the flow frame as the terminating part.
-    for (int i = 0; i < 4; ++i) {
-        zlink::msg_t part;
-        TEST_ASSERT_EQUAL_INT (0, part.init_size (4));
-        memcpy (part.data (), "ctrl", 4);
-        part.set_flags (zlink::msg_t::more);
-        TEST_ASSERT_TRUE (router_completion->write (&part));
-        TEST_ASSERT_EQUAL_INT (0, part.init ());
-        TEST_ASSERT_EQUAL_INT (0, part.close ());
-    }
 
     zlink::flow_state::frame_t frame;
     frame.version = zlink::flow_state::frame_protocol_version;
@@ -1167,7 +1179,18 @@ void test_flow_frame_after_envelope_parts_is_still_consumed_on_a_local_pair ()
     TEST_ASSERT_EQUAL_INT (0, flow.init ());
     TEST_ASSERT_EQUAL_INT (0, flow.close ());
 
+    zlink::msg_t reply;
+    TEST_ASSERT_EQUAL_INT (0, reply.init_size (4));
+    memcpy (reply.data (), "pong", 4);
+    TEST_ASSERT_EQUAL_INT (
+      0, reply.set_request_reply_metadata (
+           zlink::request_reply::reply_type, request_seq));
+    TEST_ASSERT_TRUE (router_completion->write_and_flush (&reply));
+    TEST_ASSERT_EQUAL_INT (0, reply.init ());
+    TEST_ASSERT_EQUAL_INT (0, reply.close ());
+
     bool applied = false;
+    bool completed = false;
     const std::chrono::steady_clock::time_point deadline = deadline_in_ms (4000);
     while (!deadline_expired (deadline)) {
         uint32_t events = 0;
@@ -1177,11 +1200,21 @@ void test_flow_frame_after_envelope_parts_is_still_consumed_on_a_local_pair ()
         if (as_socket (fixture.dealer)->application_pipe_remote_flow_paused (
               fixture.pair_id, fixture.pair_generation)) {
             applied = true;
-            break;
         }
+        {
+            std::lock_guard<std::mutex> lock (capture.mutex);
+            completed = capture.invoked;
+        }
+        if (applied && completed)
+            break;
         msleep (1);
     }
     TEST_ASSERT_TRUE (applied);
+    TEST_ASSERT_TRUE (completed);
+    {
+        std::lock_guard<std::mutex> lock (capture.mutex);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, capture.result);
+    }
 
     fixture.teardown ();
 }
@@ -1479,7 +1512,7 @@ int main ()
     RUN_TEST (test_flow_frame_before_registration_is_promoted_after_validation);
     RUN_TEST (test_resume_rereads_credit_published_before_the_waiter_was_armed);
     RUN_TEST (test_router_peer_state_reports_remote_pause);
-    RUN_TEST (test_flow_frame_after_envelope_parts_is_still_consumed_on_a_local_pair);
+    RUN_TEST (test_flow_frame_before_reply_is_consumed_on_a_local_pair);
     RUN_TEST (test_flow_frame_on_the_application_lane_is_rejected);
     RUN_TEST (test_router_routing_id_part_holds_message_atomicity_across_pause);
     RUN_TEST (test_resume_while_hwm_full_still_recovers_through_byte_credit);

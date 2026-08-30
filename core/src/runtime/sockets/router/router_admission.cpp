@@ -325,6 +325,8 @@ void router_t::promote_anonymous_pipe_for_dispatch (pipe_t *pipe_)
     if (!pipe_)
         return;
 
+    // The caller owns _dispatch_route_lifecycle_mu across route adoption and
+    // FQ publication so termination cannot observe a half-promoted endpoint.
     const std::map<pipe_t *, bool>::iterator it = _anonymous_pipes.find (pipe_);
     if (it == _anonymous_pipes.end ())
         return;

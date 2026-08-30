@@ -12,6 +12,7 @@
 #include <array>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "engine/asio/i_asio_transport.hpp"
 
@@ -65,6 +66,17 @@ class ws_transport_t : public i_asio_transport
                           completion_handler_t handler) ZLINK_OVERRIDE;
 
     std::size_t read_some (std::uint8_t *buffer, std::size_t len) ZLINK_OVERRIDE;
+    bool has_message_boundaries () const ZLINK_OVERRIDE { return true; }
+    bool read_message_complete () const ZLINK_OVERRIDE
+    {
+        return _connection
+               && _connection->read_message_state.is_complete ();
+    }
+    bool read_message_binary () const ZLINK_OVERRIDE
+    {
+        return !_connection
+               || _connection->read_message_state.is_binary ();
+    }
 
     void async_write_some (const unsigned char *buffer,
                            std::size_t buffer_size,
@@ -97,10 +109,25 @@ class ws_transport_t : public i_asio_transport
     //  WebSocket stream type (over TCP socket, no compression for simplicity)
     typedef boost::beast::websocket::stream<boost::asio::ip::tcp::socket> ws_stream_t;
 
+    struct connection_generation_t
+    {
+        explicit connection_generation_t (
+          boost::asio::ip::tcp::socket &&socket_) :
+            stream (std::move (socket_)), handshake_complete (false)
+        {
+        }
+
+        ws_stream_t stream;
+        asio_transport_read_message_state_t read_message_state;
+        bool handshake_complete;
+    };
+
     std::string _path;
     std::string _host;
-    std::shared_ptr<ws_stream_t> _ws_stream;
-    bool _handshake_complete;
+    //  The Beast stream and boundary snapshot are one connection generation.
+    //  Async callbacks retain this aggregate after close() without a second
+    //  allocation or reference-count operation.
+    std::shared_ptr<connection_generation_t> _connection;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (ws_transport_t)
 };

@@ -73,6 +73,7 @@ zlink::xsub_t::xsub_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     _has_message (false),
     _more_send (false),
     _more_recv (false),
+    _recv_part_index (0),
     _process_subscribe (false),
     _has_empty_subscription (false),
     _dispatch_active (false),
@@ -82,7 +83,8 @@ zlink::xsub_t::xsub_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     _dispatch_pending (false),
     _dispatch_draining (false),
     _dispatch_parts (),
-    _socket_dispatch_drop_message (false),
+    _socket_dispatch_states (),
+    _socket_dispatch_without_pipe (),
     _delivery_ready_count (0)
 {
     options.type = ZLINK_CORE_SOCKET_XSUB;
@@ -96,7 +98,7 @@ zlink::xsub_t::xsub_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     const int rc = _message.init ();
     errno_assert (rc == 0);
     _dispatch_parts.reserve (2);
-    _socket_dispatch_parts.reserve (2);
+    _socket_dispatch_without_pipe.parts.reserve (2);
 }
 
 bool zlink::xsub_t::compute_delivery_ready_state () const
@@ -132,7 +134,12 @@ uint32_t zlink::xsub_t::monitor_ready_count () const
 zlink::xsub_t::~xsub_t ()
 {
     close_dispatch_frames (&_dispatch_parts);
-    close_socket_msg_parts (&_socket_dispatch_parts);
+    for (std::map<pipe_t *, socket_dispatch_state_t>::iterator it =
+           _socket_dispatch_states.begin ();
+         it != _socket_dispatch_states.end (); ++it)
+        close_socket_msg_parts (&it->second.parts);
+    _socket_dispatch_states.clear ();
+    close_socket_msg_parts (&_socket_dispatch_without_pipe.parts);
     const int rc = _message.close ();
     errno_assert (rc == 0);
 }
@@ -154,9 +161,12 @@ void zlink::xsub_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool lo
 
     zlink_assert (pipe_);
     _fq.attach (pipe_);
-    if (_dispatch_active.load (std::memory_order_acquire)) {
-        pipe_->check_read ();
+    if (_dispatch_active.load (std::memory_order_acquire)
+        || socket_msg_dispatch_active ()) {
+        const bool ready = pipe_->check_read ();
         _fq.deactivate (pipe_);
+        if (ready && socket_msg_dispatch_active ())
+            defer_socket_msg_dispatch ();
     }
     _dist.attach (pipe_);
 
@@ -176,7 +186,9 @@ void zlink::xsub_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool lo
 void zlink::xsub_t::xread_activated (pipe_t *pipe_)
 {
     _fq.activated (pipe_);
-    if (_dispatch_active.load (std::memory_order_acquire))
+    if (socket_msg_dispatch_active ())
+        defer_socket_msg_dispatch ();
+    else if (_dispatch_active.load (std::memory_order_acquire))
         (void) dispatch_ready_messages_serialized ();
 }
 
@@ -194,6 +206,17 @@ void zlink::xsub_t::xpipe_terminated (pipe_t *pipe_)
     _fq.pipe_terminated (pipe_);
     _dist.pipe_terminated (pipe_);
     refresh_delivery_ready_state (endpoint_pair);
+}
+
+void zlink::xsub_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
+{
+    std::lock_guard<std::mutex> state_lock (_socket_dispatch_state_mu);
+    std::map<pipe_t *, socket_dispatch_state_t>::iterator dispatch_it =
+      _socket_dispatch_states.find (pipe_);
+    if (dispatch_it != _socket_dispatch_states.end ()) {
+        close_socket_msg_parts (&dispatch_it->second.parts);
+        _socket_dispatch_states.erase (dispatch_it);
+    }
 }
 
 void zlink::xsub_t::xhiccuped (pipe_t *pipe_)
@@ -316,7 +339,6 @@ bool zlink::xsub_t::xhas_out ()
 
 int zlink::xsub_t::xrecv (msg_t *msg_)
 {
-
     //  If there's already a message prepared by a previous call to zlink_poll,
     //  return it straight ahead.
     if (_has_message) {
@@ -324,6 +346,8 @@ int zlink::xsub_t::xrecv (msg_t *msg_)
         errno_assert (rc == 0);
         _has_message = false;
         _more_recv = (msg_->flags () & msg_t::more) != 0;
+        _recv_part_index = _more_recv ? 1 : 0;
+        msg_->reset_request_reply_metadata ();
         return 0;
     }
 
@@ -341,6 +365,7 @@ int zlink::xsub_t::xrecv (msg_t *msg_)
         if (rc != 0) {
             if (errno == ECONNABORTED) {
                 _more_recv = false;
+                _recv_part_index = 0;
                 if (!continuing_exposed_message)
                     continue;
             }
@@ -350,24 +375,60 @@ int zlink::xsub_t::xrecv (msg_t *msg_)
         //  Check whether the message matches at least one subscription.
         //  Non-initial parts of the message are passed
         const bool first_part = !_more_recv;
+        const size_t part_index = first_part ? 0 : _recv_part_index;
+        unsigned char request_reply_kind = 0;
+        uint64_t request_reply_sequence = 0;
+        if (part_index > 0
+            && msg_->get_request_reply_metadata (
+              &request_reply_kind, &request_reply_sequence)) {
+            pipe_t *const malformed_pipe =
+              pipe && pipe->retain_lifetime_ref () ? pipe : NULL;
+            bool more = (msg_->flags () & msg_t::more) != 0;
+            while (more) {
+                rc = _fq.recvpipe (msg_, &pipe);
+                if (rc != 0)
+                    break;
+                more = (msg_->flags () & msg_t::more) != 0;
+            }
+            if (malformed_pipe) {
+                malformed_pipe->terminate (false);
+                malformed_pipe->release_lifetime_ref ();
+            }
+            const int close_rc = msg_->close ();
+            errno_assert (close_rc == 0);
+            const int init_rc = msg_->init ();
+            errno_assert (init_rc == 0);
+            _more_recv = false;
+            _recv_part_index = 0;
+            errno = EPROTO;
+            return -1;
+        }
         if (_more_recv || !options.filter || match (msg_)) {
             _more_recv = (msg_->flags () & msg_t::more) != 0;
+            _recv_part_index = _more_recv ? part_index + 1 : 0;
             if (first_part && recv_source_rid_capture_requested ())
                 store_last_recv_source_rid (pipe);
+            msg_->reset_request_reply_metadata ();
             return 0;
         }
 
-        //  Message doesn't match. Pop any remaining parts of the message
-        //  from the pipe.
-        while (msg_->flags () & msg_t::more) {
-            rc = _fq.recvpipe (msg_, &pipe);
-            if (rc != 0) {
-                if (errno == ECONNABORTED) {
-                    _more_recv = false;
-                    break;
-                }
-                return -1;
+        // Structural validation is independent of subscription matching: an
+        // inproc-only malformed record must be rejected just like a decoded
+        // network record, even when its topic would otherwise be discarded.
+        rc = discard_filtered_message (msg_, pipe);
+        if (rc != 0) {
+            if (errno == ECONNABORTED) {
+                _more_recv = false;
+                _recv_part_index = 0;
+                continue;
             }
+            const int saved_errno = errno;
+            const int close_rc = msg_->close ();
+            errno_assert (close_rc == 0);
+            const int init_rc = msg_->init ();
+            errno_assert (init_rc == 0);
+            errno = saved_errno;
+            return -1;
         }
         ++skipped_non_matching;
         if (unlikely (skipped_non_matching >= xsub_non_matching_skip_budget)) {
@@ -401,6 +462,7 @@ bool zlink::xsub_t::xhas_in ()
         if (rc != 0) {
             if (errno == ECONNABORTED) {
                 _more_recv = false;
+                _recv_part_index = 0;
                 continue;
             }
             errno_assert (errno == EAGAIN);
@@ -413,18 +475,20 @@ bool zlink::xsub_t::xhas_in ()
             return true;
         }
 
-        //  Message doesn't match. Pop any remaining parts of the message
-        //  from the pipe.
-        while (_message.flags () & msg_t::more) {
-            rc = _fq.recvpipe (&_message, &pipe);
-            if (rc != 0) {
-                if (errno == ECONNABORTED) {
-                    _more_recv = false;
-                    break;
-                }
-                errno_assert (errno == EAGAIN);
-                return false;
+        rc = discard_filtered_message (&_message, pipe);
+        if (rc != 0) {
+            if (errno == ECONNABORTED) {
+                _more_recv = false;
+                _recv_part_index = 0;
+                continue;
             }
+            const int saved_errno = errno;
+            const int close_rc = _message.close ();
+            errno_assert (close_rc == 0);
+            const int init_rc = _message.init ();
+            errno_assert (init_rc == 0);
+            errno = saved_errno;
+            return false;
         }
 
         ++skipped_non_matching;
@@ -433,10 +497,85 @@ bool zlink::xsub_t::xhas_in ()
     }
 }
 
+int zlink::xsub_t::discard_filtered_message (msg_t *msg_, pipe_t *pipe_)
+{
+    pipe_t *const source_pipe =
+      pipe_ && pipe_->retain_lifetime_ref () ? pipe_ : NULL;
+    bool malformed = false;
+    int rc = 0;
+    while ((msg_->flags () & msg_t::more) != 0) {
+        rc = _fq.recvpipe (msg_, &pipe_);
+        if (rc != 0)
+            break;
+        unsigned char request_reply_kind = 0;
+        uint64_t request_reply_sequence = 0;
+        if (msg_->get_request_reply_metadata (
+              &request_reply_kind, &request_reply_sequence))
+            malformed = true;
+    }
+
+    if (malformed && source_pipe)
+        source_pipe->terminate (false);
+    if (source_pipe)
+        source_pipe->release_lifetime_ref ();
+    if (malformed) {
+        errno = EPROTO;
+        return -1;
+    }
+    return rc;
+}
+
 void zlink::xsub_t::xdispatch_io ()
 {
+    if (socket_msg_dispatch_active ()) {
+        socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
+        for (;;) {
+            msg_t msg;
+            const int init_rc = msg.init ();
+            errno_assert (init_rc == 0);
+
+            pipe_t *pipe = NULL;
+            int recv_rc = 0;
+            {
+                scoped_lock_t receive_lock (receive_runtime ().sync);
+                recv_rc = _fq.recvpipe (&msg, &pipe);
+                if (recv_rc == 0 && pipe && !pipe->retain_lifetime_ref ())
+                    pipe = NULL;
+            }
+            if (recv_rc != 0) {
+                const int saved_errno = errno;
+                const int close_rc = msg.close ();
+                errno_assert (close_rc == 0);
+                if (saved_errno == ECONNABORTED)
+                    continue;
+                errno = saved_errno;
+                break;
+            }
+            if (!pipe) {
+                const int close_rc = msg.close ();
+                errno_assert (close_rc == 0);
+                continue;
+            }
+
+            const int dispatch_rc = socket_msg_dispatch_from_io (&msg, pipe);
+            const int saved_errno = errno;
+            pipe->release_lifetime_ref ();
+            const int close_rc = msg.close ();
+            errno_assert (close_rc == 0);
+            errno = saved_errno;
+            if (dispatch_rc <= 0)
+                break;
+        }
+        return;
+    }
+
     if (_dispatch_active.load (std::memory_order_acquire))
         (void) dispatch_ready_messages_serialized ();
+}
+
+void zlink::xsub_t::xarm_socket_msg_dispatch ()
+{
+    _fq.arm_dispatch ();
 }
 
 int zlink::xsub_t::dispatch_ready_messages_serialized ()
@@ -483,54 +622,24 @@ int zlink::xsub_t::dispatch_ready_messages_serialized ()
 int zlink::xsub_t::dispatch_ready_messages ()
 {
     while (_dispatch_active.load (std::memory_order_acquire)) {
-        msg_t msg;
-        const int init_rc = msg.init ();
-        errno_assert (init_rc == 0);
-        pipe_t *pipe = NULL;
-
+        zlink_routing_id_t source_rid;
         int rc = 0;
-        bool record_aborted = false;
-        while (true) {
-            rc = _fq.recvpipe (&msg, &pipe);
-            if (rc != 0) {
-                if (errno == ECONNABORTED) {
-                    record_aborted = true;
-                    rc = 0;
-                }
-                break;
-            }
-
-            if (!options.filter || match (&msg))
-                break;
-
-            while (msg.flags () & msg_t::more) {
-                rc = _fq.recvpipe (&msg, &pipe);
-                if (rc != 0) {
-                    if (errno == ECONNABORTED) {
-                        record_aborted = true;
-                        rc = 0;
-                        break;
-                    }
-                    break;
-                }
-            }
-            if (rc != 0 || record_aborted)
-                break;
+        {
+            // Consume and validate one complete publication while FQ state is
+            // exclusively owned. The callback sees only the detached local
+            // vector after this scope releases receive.sync.
+            scoped_lock_t receive_lock (receive_runtime ().sync);
+            rc = receive_dispatch_message (&source_rid);
         }
-        if (record_aborted) {
-            const int close_rc = msg.close ();
-            errno_assert (close_rc == 0);
+        if (rc > 0)
             continue;
-        }
         if (rc != 0) {
-            const int close_rc = msg.close ();
-            errno_assert (close_rc == 0);
             if (errno == EAGAIN)
                 return 0;
             return -1;
         }
 
-        const int dispatch_rc = dispatch_message (&msg, pipe);
+        const int dispatch_rc = dispatch_message (source_rid);
         if (dispatch_rc != 0)
             return dispatch_rc;
     }
@@ -538,32 +647,119 @@ int zlink::xsub_t::dispatch_ready_messages ()
     return 0;
 }
 
-int zlink::xsub_t::dispatch_message (msg_t *msg_, pipe_t *pipe_)
+int zlink::xsub_t::receive_dispatch_message (
+  zlink_routing_id_t *source_rid_out_)
 {
-    if (!msg_) {
+    if (!source_rid_out_) {
         errno = EINVAL;
         return -1;
     }
 
     close_dispatch_frames (&_dispatch_parts);
+    source_rid_out_->size = 0;
+
+    msg_t msg;
+    const int init_rc = msg.init ();
+    errno_assert (init_rc == 0);
+    pipe_t *source_pipe = NULL;
+
+    for (;;) {
+        pipe_t *pipe = NULL;
+        const int recv_rc = _fq.recvpipe (&msg, &pipe);
+        if (recv_rc != 0) {
+            const int saved_errno = errno;
+            const int close_rc = msg.close ();
+            errno_assert (close_rc == 0);
+            if (saved_errno == ECONNABORTED)
+                return 1;
+            errno = saved_errno;
+            return -1;
+        }
+        if (!options.filter || match (&msg)) {
+            source_pipe = pipe;
+            break;
+        }
+
+        const int discard_rc = discard_filtered_message (&msg, pipe);
+        if (discard_rc != 0) {
+            const int saved_errno = errno;
+            const int close_rc = msg.close ();
+            errno_assert (close_rc == 0);
+            if (saved_errno == ECONNABORTED)
+                return 1;
+            errno = saved_errno;
+            return -1;
+        }
+    }
+
     while (true) {
-        store_socket_msg_part (&_dispatch_parts, msg_);
+        store_socket_msg_part (&_dispatch_parts, &msg);
         msg_t *stored_msg =
           reinterpret_cast<msg_t *> (&_dispatch_parts[_dispatch_parts.size () - 1]);
+
+        unsigned char request_reply_kind = 0;
+        uint64_t request_reply_sequence = 0;
+        if (_dispatch_parts.size () > 1
+            && stored_msg->get_request_reply_metadata (
+              &request_reply_kind, &request_reply_sequence)) {
+            pipe_t *const malformed_pipe =
+              source_pipe && source_pipe->retain_lifetime_ref ()
+                ? source_pipe
+                : NULL;
+            bool more = (stored_msg->flags () & msg_t::more) != 0;
+            while (more) {
+                const int next_init_rc = msg.init ();
+                errno_assert (next_init_rc == 0);
+                pipe_t *tail_pipe = NULL;
+                if (_fq.recvpipe (&msg, &tail_pipe) != 0)
+                    break;
+                more = (msg.flags () & msg_t::more) != 0;
+                const int close_rc = msg.close ();
+                errno_assert (close_rc == 0);
+            }
+            if (malformed_pipe) {
+                malformed_pipe->terminate (false);
+                malformed_pipe->release_lifetime_ref ();
+            }
+            close_dispatch_frames (&_dispatch_parts);
+            if (msg.check ()) {
+                const int close_rc = msg.close ();
+                errno_assert (close_rc == 0);
+            }
+            errno = EPROTO;
+            return -1;
+        }
 
         if ((stored_msg->flags () & msg_t::more) == 0)
             break;
 
-        const int next_init_rc = msg_->init ();
+        const int next_init_rc = msg.init ();
         errno_assert (next_init_rc == 0);
-        if (_fq.recvpipe (msg_, &pipe_) != 0) {
+        pipe_t *tail_pipe = NULL;
+        if (_fq.recvpipe (&msg, &tail_pipe) != 0) {
             const int saved_errno = errno;
             close_dispatch_frames (&_dispatch_parts);
+            const int close_rc = msg.close ();
+            errno_assert (close_rc == 0);
             if (saved_errno == ECONNABORTED)
-                return 0;
+                return 1;
             errno = saved_errno;
             return -1;
         }
+    }
+
+    resolve_socket_msg_source_rid (source_pipe, source_rid_out_);
+    const int close_rc = msg.close ();
+    errno_assert (close_rc == 0);
+    return 0;
+}
+
+int zlink::xsub_t::dispatch_message (
+  const zlink_routing_id_t &source_rid_)
+{
+    if (_dispatch_parts.empty ()) {
+        errno = EINVAL;
+        return -1;
     }
 
     sub_io_handler_fn callback = _dispatch_callback.load (std::memory_order_acquire);
@@ -588,12 +784,12 @@ int zlink::xsub_t::dispatch_message (msg_t *msg_, pipe_t *pipe_)
     const zlink_msg_t *payload =
       _dispatch_parts.size () > 1 ? &_dispatch_parts[1] : static_cast<zlink_msg_t *> (NULL);
     const size_t payload_count = _dispatch_parts.size () - 1;
-    zlink_routing_id_t source_rid;
-    resolve_socket_msg_source_rid (pipe_, &source_rid);
-
+    for (size_t i = 1; i < _dispatch_parts.size (); ++i)
+        reinterpret_cast<msg_t *> (&_dispatch_parts[i])
+          ->reset_request_reply_metadata ();
     {
         const zlink::xsub_dispatch_context_t dispatch_scope (this);
-        callback (&source_rid, topic_data, topic_size, const_cast<zlink_msg_t *> (payload),
+        callback (&source_rid_, topic_data, topic_size, const_cast<zlink_msg_t *> (payload),
                   payload_count, userdata);
     }
 
@@ -612,31 +808,93 @@ int zlink::xsub_t::xsocket_msg_dispatch (msg_t *msg_, pipe_t *pipe_)
         return 0;
 
     const bool final_part = (msg_->flags () & msg_t::more) == 0;
+    std::vector<zlink_msg_t> completed_parts;
+    bool record_complete = false;
+    bool terminate_malformed = false;
+    {
+        // Session I/O dispatch is serialized frame-by-frame, while pipe
+        // termination can execute under the independent receive lock. Keep
+        // assembly ownership in its own short critical section and never hold
+        // it while terminating a pipe or invoking application code.
+        std::lock_guard<std::mutex> state_lock (
+          _socket_dispatch_state_mu);
+        socket_dispatch_state_t *state =
+          pipe_ ? &_socket_dispatch_states[pipe_]
+                : &_socket_dispatch_without_pipe;
 
-    if (_socket_dispatch_parts.empty () && !_socket_dispatch_drop_message)
-        _socket_dispatch_drop_message = !match (msg_);
+        if (state->part_index == 0) {
+            close_socket_msg_parts (&state->parts);
+            state->drop_message = !match (msg_);
+        }
 
-    if (_socket_dispatch_drop_message) {
-        if (final_part)
-            _socket_dispatch_drop_message = false;
-        return 1;
+        unsigned char request_reply_kind = 0;
+        uint64_t request_reply_sequence = 0;
+        if (state->part_index > 0
+            && msg_->get_request_reply_metadata (
+              &request_reply_kind, &request_reply_sequence)) {
+            close_socket_msg_parts (&state->parts);
+            msg_->reset_request_reply_metadata ();
+            terminate_malformed = true;
+            if (final_part) {
+                if (pipe_)
+                    _socket_dispatch_states.erase (pipe_);
+                else
+                    _socket_dispatch_without_pipe =
+                      socket_dispatch_state_t ();
+            } else {
+                state->drop_message = true;
+                ++state->part_index;
+            }
+        } else if (state->drop_message) {
+            msg_->reset_request_reply_metadata ();
+            if (final_part) {
+                if (pipe_)
+                    _socket_dispatch_states.erase (pipe_);
+                else
+                    _socket_dispatch_without_pipe =
+                      socket_dispatch_state_t ();
+            } else {
+                ++state->part_index;
+            }
+        } else {
+            store_socket_msg_part (&state->parts, msg_);
+            if (!final_part) {
+                ++state->part_index;
+            } else {
+                completed_parts.swap (state->parts);
+                record_complete = true;
+                if (pipe_)
+                    _socket_dispatch_states.erase (pipe_);
+                else
+                    _socket_dispatch_without_pipe =
+                      socket_dispatch_state_t ();
+            }
+        }
     }
 
-    store_socket_msg_part (&_socket_dispatch_parts, msg_);
-    if (!final_part)
+    if (terminate_malformed) {
+        pipe_t *const malformed_pipe =
+          pipe_ && pipe_->retain_lifetime_ref () ? pipe_ : NULL;
+        if (malformed_pipe) {
+            malformed_pipe->terminate (false);
+            malformed_pipe->release_lifetime_ref ();
+        }
+        return 1;
+    }
+    if (!record_complete)
         return 1;
 
     zlink_socket_msg_handler_fn handler = socket_msg_handler ();
     if (!handler) {
-        close_socket_msg_parts (&_socket_dispatch_parts);
+        close_socket_msg_parts (&completed_parts);
         return 1;
     }
 
     zlink_routing_id_t source_rid;
     resolve_socket_msg_source_rid (pipe_, &source_rid);
-    invoke_socket_msg_handler (handler, &source_rid, &_socket_dispatch_parts[0],
-                               _socket_dispatch_parts.size ());
-    _socket_dispatch_parts.clear ();
+    invoke_socket_msg_handler (handler, &source_rid, &completed_parts[0],
+                               completed_parts.size ());
+    completed_parts.clear ();
     return 1;
 }
 

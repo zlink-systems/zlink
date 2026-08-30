@@ -278,6 +278,8 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _delay (true),
     _connection_ready_event_emitted (false),
     _lifetime (),
+    _inbound_read_lifetime (),
+    _deferred_socket_msg_termination_next (NULL),
     _conflate (conflate_),
     _session_pipe (session_pipe_),
     _session_io_writer (session_io_writer_),
@@ -438,9 +440,29 @@ void zlink::pipe_t::release_lifetime_ref ()
         zlink::release_heap_owned (this);
 }
 
+bool zlink::pipe_t::retain_inbound_read_ref ()
+{
+    return _inbound_read_lifetime.retain ();
+}
+
+void zlink::pipe_t::release_inbound_read_ref ()
+{
+    const lifetime_state_t::transition_t transition =
+      _inbound_read_lifetime.release ();
+    zlink_assert (transition != lifetime_state_t::transition_invalid);
+    if (transition == lifetime_state_t::transition_delete_owner)
+        cleanup_inbound_pipe ();
+}
+
 bool zlink::pipe_t::has_completed_termination () const
 {
     return _lifetime.terminal ();
+}
+
+bool zlink::pipe_t::active_for_reply_target () const
+{
+    scoped_fast_lock_t lock (_out_sync);
+    return _state == active;
 }
 
 void zlink::pipe_t::set_event_sink (i_pipe_events *sink_)
@@ -1239,6 +1261,77 @@ bool zlink::pipe_t::write_owner_started_message (
     return true;
 }
 
+bool zlink::pipe_t::write_owner_started_message_observed (
+  const msg_t *msg_, pipe_write_observer_fn observer_,
+  void *observer_userdata_, pipe_message_admission_t *admission_out_)
+{
+    if (!observer_) {
+        errno = EFAULT;
+        return false;
+    }
+    if (!observer_ (this, observer_userdata_,
+                    pipe_write_observer_prepare)) {
+        errno = ECANCELED;
+        if (admission_out_)
+            *admission_out_ = pipe_message_admission_invalid;
+        return false;
+    }
+    if (!retain_lifetime_ref ()) {
+        (void) observer_ (this, observer_userdata_,
+                          pipe_write_observer_finish);
+        errno = EHOSTUNREACH;
+        if (admission_out_)
+            *admission_out_ = pipe_message_admission_inactive;
+        return false;
+    }
+
+    bool written = false;
+    bool committed = false;
+    {
+        scoped_fast_lock_t lock (_out_sync);
+        const bool reuse_start_admission = _out_owner_message_start_pending;
+        _out_owner_message_start_pending = false;
+
+        if (reuse_start_admission) {
+            if (_state != active) {
+                if (admission_out_)
+                    *admission_out_ = pipe_message_admission_inactive;
+            } else if (_transport_pair_write_held) {
+                if (admission_out_)
+                    *admission_out_ = pipe_message_admission_transport_wait;
+            } else {
+                written = true;
+            }
+        } else {
+            written = write_state_ready_unlocked (admission_out_)
+                      && hwm_credit_ready_unlocked (admission_out_);
+        }
+
+        const bool more = (msg_->flags () & msg_t::more) != 0;
+        if (written)
+            written = write_message_unlocked (msg_, true, true,
+                                               admission_out_);
+        if (written) {
+            committed = observer_ (this, observer_userdata_,
+                                   pipe_write_observer_commit);
+            zlink_assert (committed);
+            if (committed && !more)
+                flush_unlocked ();
+        }
+    }
+
+    (void) observer_ (this, observer_userdata_, pipe_write_observer_finish);
+    release_lifetime_ref ();
+    if (written && !committed) {
+        terminate (false);
+        errno = EPROTO;
+        if (admission_out_)
+            *admission_out_ = pipe_message_admission_invalid;
+        return false;
+    }
+    return written;
+}
+
 bool zlink::pipe_t::remote_flow_blocks_next_message () const
 {
     scoped_fast_lock_t lock (_out_sync);
@@ -1683,6 +1776,63 @@ bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
     return true;
 }
 
+bool zlink::pipe_t::write_message_observed (
+  const msg_t *msg_, pipe_write_observer_fn observer_,
+  void *observer_userdata_, pipe_message_admission_t *admission_out_)
+{
+    if (!observer_ || !msg_) {
+        errno = EINVAL;
+        if (admission_out_)
+            *admission_out_ = pipe_message_admission_invalid;
+        return false;
+    }
+    if (!observer_ (this, observer_userdata_,
+                    pipe_write_observer_prepare)) {
+        errno = ECANCELED;
+        if (admission_out_)
+            *admission_out_ = pipe_message_admission_invalid;
+        return false;
+    }
+    if (!retain_lifetime_ref ()) {
+        (void) observer_ (this, observer_userdata_,
+                          pipe_write_observer_finish);
+        errno = EHOSTUNREACH;
+        if (admission_out_)
+            *admission_out_ = pipe_message_admission_inactive;
+        return false;
+    }
+
+    bool written = false;
+    bool committed = false;
+    {
+        scoped_fast_lock_t lock (_out_sync);
+        written = write_state_ready_unlocked (admission_out_)
+                  && hwm_credit_ready_unlocked (admission_out_);
+        const bool more = (msg_->flags () & msg_t::more) != 0;
+        if (written)
+            written = write_message_unlocked (msg_, true, more,
+                                               admission_out_);
+        if (written) {
+            committed = observer_ (this, observer_userdata_,
+                                   pipe_write_observer_commit);
+            zlink_assert (committed);
+            if (committed && !more)
+                flush_unlocked ();
+        }
+    }
+
+    (void) observer_ (this, observer_userdata_, pipe_write_observer_finish);
+    release_lifetime_ref ();
+    if (written && !committed) {
+        terminate (false);
+        errno = EPROTO;
+        if (admission_out_)
+            *admission_out_ = pipe_message_admission_invalid;
+        return false;
+    }
+    return written;
+}
+
 void zlink::pipe_t::rollback ()
 {
     scoped_optional_fast_lock_t lock (&_out_sync);
@@ -1924,15 +2074,37 @@ void zlink::pipe_t::process_pipe_term_ack ()
     zlink_assert (_sink);
     _sink->pipe_terminated (this);
 
-    //  We'll deallocate the inbound pipe, the peer will deallocate the outbound
-    //  pipe (which is an inbound pipe from its point of view).
-    //  First, delete all the unread messages in the pipe. We have to do it by
-    //  hand because msg_t doesn't have automatic destructor. Then deallocate
-    //  the ypipe itself.
+    // A Completion reader can still be outside the socket receive mutex after
+    // pipe_terminated() returns. Mark the inbound queue terminal now and
+    // delete it only when no retained reader can dereference it. This state is
+    // independent of the object lifetime reference: the latter pins `this`,
+    // while this one pins `_in_pipe` and its physical-queue endpoints.
+    const lifetime_state_t::transition_t inbound_transition =
+      _inbound_read_lifetime.complete_termination ();
+    zlink_assert (inbound_transition != lifetime_state_t::transition_invalid);
+    if (inbound_transition == lifetime_state_t::transition_delete_owner)
+        cleanup_inbound_pipe ();
 
+    //  Pipe objects are always heap-allocated and reference-counted by protocol
+    //  state transitions, so termination ack is the canonical final release.
+    const lifetime_state_t::transition_t transition =
+      _lifetime.complete_termination ();
+    zlink_assert (transition != lifetime_state_t::transition_invalid);
+    if (transition == lifetime_state_t::transition_delete_owner)
+        zlink::release_heap_owned (this);
+}
+
+void zlink::pipe_t::cleanup_inbound_pipe ()
+{
+    upipe_t *const inbound = _in_pipe;
+    if (!inbound)
+        return;
+
+    // We own the terminal transition of _inbound_read_lifetime, so no new
+    // reader can enter and the last retained reader has already left.
     if (!_conflate) {
         msg_t msg;
-        while (_in_pipe->read (&msg)) {
+        while (inbound->read (&msg)) {
             if (!msg.is_delimiter () && _registry_accounting)
                 get_ctx ()->_physical_queue_registry.release_committed_frame (
                   _in_physical_queue, frame_accounted_bytes (&msg),
@@ -1942,18 +2114,9 @@ void zlink::pipe_t::process_pipe_term_ack ()
         }
     }
 
-    release_discarded_pipe_accounting (_in_pipe, _in_physical_queue);
-
+    release_discarded_pipe_accounting (inbound, _in_physical_queue);
     LIBZLINK_DELETE (_in_pipe);
     retire_physical_queue_endpoints ();
-
-    //  Pipe objects are always heap-allocated and reference-counted by protocol
-    //  state transitions, so termination ack is the canonical final release.
-    const lifetime_state_t::transition_t transition =
-      _lifetime.complete_termination ();
-    zlink_assert (transition != lifetime_state_t::transition_invalid);
-    if (transition == lifetime_state_t::transition_delete_owner)
-        zlink::release_heap_owned (this);
 }
 
 void zlink::pipe_t::process_pipe_hwm (uint64_t inhwm_, uint64_t outhwm_)

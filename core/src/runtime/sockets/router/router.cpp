@@ -151,7 +151,8 @@ zlink::router_t::router_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     _mandatory (true),
     _probe_router (false),
     _handover (options.rid_duplicate_policy == ZLINK_RID_DUPLICATE_HANDOVER),
-    _dispatch_source_rid_valid (false)
+    _dispatch_source_rid_valid (false),
+    _dispatch_malformed_without_pipe (false)
 {
     options.type = ZLINK_CORE_SOCKET_ROUTER;
     options.out_batch_size = router_transport_write_batch_size;
@@ -252,9 +253,51 @@ int zlink::router_t::xgetsockopt (int option_, void *optval_, size_t *optvallen_
 
 void zlink::router_t::xpipe_terminated (pipe_t *pipe_)
 {
-    socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
-    const blob_t &terminated_routing_id =
-      pipe_->get_routing_id ();
+    std::lock_guard<std::mutex> route_lifecycle_lock (
+      _dispatch_route_lifecycle_mu);
+    // Receive-side ownership is released before socket-message teardown takes
+    // its dispatch fence. Keep only FQ/current-record state in this phase.
+    if (pipe_ == _current_in) {
+        // A prefetched frame still belongs to the terminating pipe. It must
+        // not be presented with metadata from the next active pipe.
+        if (_prefetched && !_routing_id_sent) {
+            int rc = _prefetched_id.close ();
+            errno_assert (rc == 0);
+            rc = _prefetched_id.init ();
+            errno_assert (rc == 0);
+            rc = _prefetched_msg.close ();
+            errno_assert (rc == 0);
+            rc = _prefetched_msg.init ();
+            errno_assert (rc == 0);
+            _prefetched = false;
+        }
+        if (!_prefetched)
+            _routing_id_sent = false;
+        _current_in = NULL;
+        _terminate_current_in = false;
+        _more_in = false;
+    }
+    _fq.pipe_terminated (pipe_);
+}
+
+void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
+{
+    _dispatch_malformed_pipes.erase (pipe_);
+    _dispatch_source_rids.erase (pipe_);
+    std::map<pipe_t *, std::vector<zlink_msg_t>>::iterator parts_it =
+      _dispatch_parts_by_pipe.find (pipe_);
+    if (parts_it != _dispatch_parts_by_pipe.end ()) {
+        close_socket_msg_parts (&parts_it->second);
+        _dispatch_parts_by_pipe.erase (parts_it);
+    }
+
+    std::lock_guard<std::mutex> route_lifecycle_lock (
+      _dispatch_route_lifecycle_mu);
+    // Direct network dispatch can register an anonymous ROUTER route on a
+    // session thread. Route teardown therefore shares this post-receive
+    // dispatch fence as well; otherwise termination can race that registration
+    // or leave a late partial record keyed by a dead endpoint.
+    const blob_t &terminated_routing_id = pipe_->get_routing_id ();
     const std::map<pipe_t *, blob_t>::iterator terminated_standby =
       _standby_pipes.find (pipe_);
     const bool was_standby = terminated_standby != _standby_pipes.end ();
@@ -263,14 +306,12 @@ void zlink::router_t::xpipe_terminated (pipe_t *pipe_)
         copy_routing_id_from_bytes (
           terminated_standby->second.data (), terminated_standby->second.size (),
           &public_rid);
-        // Handover gives a standby pipe an internal routing id. Its terminal
-        // edge must still close admission parked on the public RID capability
-        // that selected this exact pair.
         fail_send_pending_for_target (
-           &public_rid, pipe_->get_transport_pair_id (),
-           pipe_->get_transport_pair_generation (), ENOTCONN);
+          &public_rid, pipe_->get_transport_pair_id (),
+          pipe_->get_transport_pair_generation (), ENOTCONN);
         _standby_pipes.erase (terminated_standby);
     }
+
     pipe_t *standby_to_promote = NULL;
     blob_t standby_routing_id;
     if (!was_standby) {
@@ -289,60 +330,35 @@ void zlink::router_t::xpipe_terminated (pipe_t *pipe_)
             break;
         }
     }
+
     if (router_debug_enabled ()) {
         char rid_text[160];
-        format_blob_routing_id_debug (pipe_->get_routing_id (), rid_text, sizeof (rid_text));
-        fprintf (stderr, "router xpipe_terminated: pipe=%p rid=%s anonymous=%d\n",
+        format_blob_routing_id_debug (pipe_->get_routing_id (), rid_text,
+                                      sizeof (rid_text));
+        fprintf (stderr,
+                 "router xpipe_terminated: pipe=%p rid=%s anonymous=%d\n",
                  static_cast<void *> (pipe_), rid_text,
                  _anonymous_pipes.count (pipe_) != 0 ? 1 : 0);
     }
     if (0 == _anonymous_pipes.erase (pipe_)) {
         erase_out_pipe (pipe_);
-        _dispatch_source_rids.erase (pipe_);
-        std::map<pipe_t *, std::vector<zlink_msg_t>>::iterator parts_it =
-          _dispatch_parts_by_pipe.find (pipe_);
-        if (parts_it != _dispatch_parts_by_pipe.end ()) {
-            close_socket_msg_parts (&parts_it->second);
-            _dispatch_parts_by_pipe.erase (parts_it);
-        }
-        if (pipe_ == _current_in) {
-            // A prefetched frame still belongs to the terminating pipe. It
-            // must not be presented with metadata from the next active pipe.
-            if (_prefetched && !_routing_id_sent) {
-                int rc = _prefetched_id.close ();
-                errno_assert (rc == 0);
-                rc = _prefetched_id.init ();
-                errno_assert (rc == 0);
-                rc = _prefetched_msg.close ();
-                errno_assert (rc == 0);
-                rc = _prefetched_msg.init ();
-                errno_assert (rc == 0);
-                _prefetched = false;
-            }
-            if (!_prefetched)
-                _routing_id_sent = false;
-            _current_in = NULL;
-            _terminate_current_in = false;
-            _more_in = false;
-        }
-        _fq.pipe_terminated (pipe_);
         pipe_->rollback ();
         if (pipe_ == _current_out) {
             _current_out = NULL;
             _current_out_connection_id = 0;
         }
     }
+
     if (standby_to_promote) {
         const out_pipe_t *const standby_out =
           lookup_out_pipe (standby_to_promote->get_routing_id ());
         zlink_assert (standby_out);
-        const bool locally_initiated =
-          standby_out->locally_initiated;
+        const bool locally_initiated = standby_out->locally_initiated;
         erase_out_pipe (standby_to_promote);
         standby_to_promote->set_router_socket_routing_id (
           standby_routing_id);
-        add_out_pipe (ZLINK_MOVE (standby_routing_id),
-                      standby_to_promote, locally_initiated);
+        add_out_pipe (ZLINK_MOVE (standby_routing_id), standby_to_promote,
+                      locally_initiated);
     }
 }
 
@@ -362,7 +378,24 @@ int zlink::router_t::xsocket_msg_dispatch (msg_t *msg_, pipe_t *pipe_)
 
     pipe_t *source_pipe = pipe_ ? pipe_ : current_socket_msg_dispatch_pipe ();
 
+    const bool final_part = (msg_->flags () & msg_t::more) == 0;
+    const bool dropping_malformed =
+      source_pipe ? _dispatch_malformed_pipes.count (source_pipe) != 0
+                  : _dispatch_malformed_without_pipe;
+    if (dropping_malformed) {
+        msg_->reset_request_reply_metadata ();
+        if (final_part) {
+            if (source_pipe)
+                _dispatch_malformed_pipes.erase (source_pipe);
+            else
+                _dispatch_malformed_without_pipe = false;
+        }
+        return 1;
+    }
+
     if (msg_->is_routing_id ()) {
+        std::lock_guard<std::mutex> route_lifecycle_lock (
+          _dispatch_route_lifecycle_mu);
         pipe_t *socket_pipe = source_pipe;
         if (socket_pipe && _anonymous_pipes.count (socket_pipe) == 0
             && lookup_out_pipe (socket_pipe->get_routing_id ()) == NULL) {
@@ -403,6 +436,35 @@ int zlink::router_t::xsocket_msg_dispatch (msg_t *msg_, pipe_t *pipe_)
 
     std::vector<zlink_msg_t> *dispatch_parts = source_pipe ? &_dispatch_parts_by_pipe[source_pipe]
                                                            : &_dispatch_parts;
+    unsigned char request_reply_kind = 0;
+    uint64_t request_reply_sequence = 0;
+    if (!dispatch_parts->empty ()
+        && msg_->get_request_reply_metadata (
+          &request_reply_kind, &request_reply_sequence)) {
+        close_socket_msg_parts (dispatch_parts);
+        if (source_pipe) {
+            _dispatch_parts_by_pipe.erase (source_pipe);
+            _dispatch_source_rids.erase (source_pipe);
+        } else {
+            _dispatch_source_rid.size = 0;
+            _dispatch_source_rid_valid = false;
+        }
+        if (!final_part) {
+            if (source_pipe)
+                _dispatch_malformed_pipes.insert (source_pipe);
+            else
+                _dispatch_malformed_without_pipe = true;
+        }
+        msg_->reset_request_reply_metadata ();
+        pipe_t *const malformed_pipe =
+          source_pipe && source_pipe->retain_lifetime_ref () ? source_pipe : NULL;
+        if (malformed_pipe) {
+            malformed_pipe->terminate (false);
+            malformed_pipe->release_lifetime_ref ();
+        }
+        return 1;
+    }
+
     store_socket_msg_part (dispatch_parts, msg_);
     if ((reinterpret_cast<msg_t *> (&dispatch_parts->back ())->flags () & msg_t::more) != 0) {
         return 1;
@@ -437,7 +499,6 @@ int zlink::router_t::xsocket_msg_dispatch (msg_t *msg_, pipe_t *pipe_)
 
 void zlink::router_t::xarm_socket_msg_dispatch ()
 {
-    socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
     _fq.arm_dispatch ();
 }
 

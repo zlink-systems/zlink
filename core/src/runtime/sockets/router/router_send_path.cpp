@@ -50,13 +50,20 @@ void format_routing_id_debug (const zlink_routing_id_t *rid_, char *buf_, size_t
 int zlink::router_t::xsend (
   msg_t *msg_, pipe_message_admission_t *admission_out_)
 {
+    return send_with_observer (msg_, admission_out_, NULL, NULL);
+}
+
+int zlink::router_t::send_with_observer (
+  msg_t *msg_, pipe_message_admission_t *admission_out_,
+  pipe_write_observer_fn observer_, void *observer_userdata_)
+{
     if (admission_out_)
         *admission_out_ = pipe_message_admission_invalid;
     // Public send enters this path through socket_public_send_scope_t. Do not
     // add lock_socket_msg_dispatch() here: routed echo hot paths call
     // router send for every small message, and a second socket-level mutex
-    // serializes those sends. Pipe teardown still updates router pipe state
-    // under lock_socket_msg_dispatch() in xpipe_terminated().
+    // serializes those sends. Socket-message assembly teardown is fenced
+    // separately after receive-side pipe removal.
 
     if (!_more_out) {
         zlink_assert (!_current_out);
@@ -140,13 +147,25 @@ int zlink::router_t::xsend (
           _current_out_connection_id);
         pipe_message_admission_t write_admission =
           pipe_message_admission_invalid;
-        const bool ok = _current_out->write_owner_started_message (
-          msg_, &write_admission);
+        const bool ok =
+          observer_
+            ? _current_out->write_owner_started_message_observed (
+                msg_, observer_, observer_userdata_, &write_admission)
+            : _current_out->write_owner_started_message (
+                msg_, &write_admission);
         if (router_debug_enabled ())
             fprintf (stderr, "router xsend write: pipe=%p ok=%d more=%d\\n",
                      static_cast<void *> (_current_out), ok ? 1 : 0,
                      _more_out ? 1 : 0);
         if (unlikely (!ok)) {
+            if (observer_ && errno == ECANCELED
+                && write_admission == pipe_message_admission_invalid) {
+                _current_out->rollback ();
+                _current_out = NULL;
+                _current_out_connection_id = 0;
+                _more_out = false;
+                return -1;
+            }
             // The first multipart frame can pass the readiness check and a
             // later frame can encounter HWM. Preserve that as capacity
             // pressure; only an inactive pipe is unreachable.
@@ -199,11 +218,13 @@ int zlink::router_t::xsend (
 
 int zlink::router_t::xsend_pipe (
   msg_t *msg_, pipe_t **pipe_out_,
-  pipe_message_admission_t *admission_out_)
+  pipe_message_admission_t *admission_out_,
+  pipe_write_observer_fn observer_, void *observer_userdata_)
 {
     if (pipe_out_)
         *pipe_out_ = NULL;
-    const int rc = xsend (msg_, admission_out_);
+    const int rc = send_with_observer (msg_, admission_out_, observer_,
+                                       observer_userdata_);
     if (rc == 0 && pipe_out_ && _current_out)
         *pipe_out_ = _current_out;
     return rc;
@@ -216,7 +237,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
   pipe_t **pipe_out_,
   uint64_t expected_transport_pair_id_,
   uint64_t expected_transport_pair_generation_,
-  pipe_message_admission_t *admission_out_)
+  pipe_message_admission_t *admission_out_,
+  pipe_write_observer_fn observer_, void *observer_userdata_)
 {
     zlink_assert (!_more_out);
     zlink_assert (!_current_out);
@@ -375,11 +397,25 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
           _current_out_connection_id);
         pipe_message_admission_t write_admission =
           pipe_message_admission_invalid;
-        const bool ok = _more_out
-                          ? _current_out->write (msg_, &write_admission)
-                          : _current_out->write_single_message_and_flush_no_recursive_hwm_check (
+        const bool ok =
+          observer_
+            ? _current_out->write_message_observed (
+                msg_, observer_, observer_userdata_, &write_admission)
+            : _more_out ? _current_out->write (msg_, &write_admission)
+                        : _current_out
+                            ->write_single_message_and_flush_no_recursive_hwm_check (
                               msg_, &write_admission);
         if (unlikely (!ok)) {
+            if (observer_ && errno == ECANCELED
+                && write_admission == pipe_message_admission_invalid) {
+                _current_out->rollback ();
+                _current_out = NULL;
+                _current_out_connection_id = 0;
+                if (connection_id_out_)
+                    *connection_id_out_ = 0;
+                _more_out = false;
+                return -1;
+            }
             // A routed multipart send can reach HWM after its first frame.
             // Keep the admitted route and report backpressure until write
             // activation returns credit.

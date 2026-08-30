@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <type_traits>
 #include <vector>
 
 #include "utils/config.hpp"
@@ -162,6 +163,12 @@ class msg_t
     const char *group () const;
     int set_group (const char *group_);
     int set_group (const char *, size_t length_);
+    bool has_long_group () const;
+
+    int set_request_reply_metadata (unsigned char kind_, uint64_t sequence_);
+    bool get_request_reply_metadata (unsigned char *kind_out_,
+                                     uint64_t *sequence_out_) const;
+    void reset_request_reply_metadata ();
 
     //  After calling this function you can copy the message in POD-style
     //  refs_ times. No need to call copy.
@@ -177,13 +184,14 @@ class msg_t
     //  rather than being reference-counted.
     enum
     {
-        msg_t_size = 64
+        msg_t_size = 64,
+        auxiliary_size = 16
     };
     enum
     {
         validity_signature_size = 4,
         max_vsm_size = msg_t_size
-                       - (3 + validity_signature_size + 16
+                       - (3 + validity_signature_size + auxiliary_size
                           + sizeof (uint32_t) + sizeof (uint64_t))
     };
     enum
@@ -224,11 +232,15 @@ class msg_t
 
     void mark_valid (type_t type_);
     void invalidate ();
+    void initialize_auxiliary ();
+    void clear_auxiliary ();
 
-    enum group_type_t
+    enum auxiliary_type_t : unsigned char
     {
-        group_type_short,
-        group_type_long
+        auxiliary_none,
+        auxiliary_group_short,
+        auxiliary_group_long,
+        auxiliary_request_reply
     };
 
     struct long_group_t
@@ -237,20 +249,34 @@ class msg_t
         atomic_counter_t refcnt;
     };
 
-    union group_t
+    union message_auxiliary_t
     {
-        unsigned char type;
+        unsigned char bytes[auxiliary_size];
         struct
         {
             unsigned char type;
             char group[15];
-        } sgroup;
+        } group_short;
         struct
         {
             unsigned char type;
             long_group_t *content;
-        } lgroup;
+        } group_long;
+        struct
+        {
+            unsigned char type;
+            unsigned char kind;
+            unsigned char reserved[6];
+            uint64_t sequence;
+        } request_reply;
     };
+
+    static_assert (sizeof (message_auxiliary_t) == auxiliary_size,
+                   "msg_t auxiliary storage must remain 16 bytes");
+    static_assert (std::is_trivially_copyable<message_auxiliary_t>::value,
+                   "msg_t auxiliary storage must support raw relocation");
+    static_assert (offsetof (message_auxiliary_t, request_reply.sequence) == 8,
+                   "request-reply sequence must start at auxiliary byte 8");
 
     //  Note that fields shared between different message types are not
     //  moved to the parent class (msg_t). This way we get tighter packing
@@ -263,13 +289,13 @@ class msg_t
             unsigned char unused[msg_t_size
                                  - (validity_signature_size + 2
                                     + sizeof (uint32_t) + sizeof (uint64_t)
-                                    + sizeof (group_t))];
+                                    + sizeof (message_auxiliary_t))];
             unsigned char validity_signature[validity_signature_size];
             unsigned char type;
             unsigned char flags;
             uint32_t routing_id;
             uint64_t transport_connection_id;
-            group_t group;
+            message_auxiliary_t auxiliary;
         } base;
         struct
         {
@@ -280,7 +306,7 @@ class msg_t
             unsigned char flags;
             uint32_t routing_id;
             uint64_t transport_connection_id;
-            group_t group;
+            message_auxiliary_t auxiliary;
         } vsm;
         struct
         {
@@ -289,13 +315,13 @@ class msg_t
               unused[msg_t_size
                      - (sizeof (content_t *) + validity_signature_size + 2
                         + sizeof (uint32_t)
-                        + sizeof (uint64_t) + sizeof (group_t))];
+                        + sizeof (uint64_t) + sizeof (message_auxiliary_t))];
             unsigned char validity_signature[validity_signature_size];
             unsigned char type;
             unsigned char flags;
             uint32_t routing_id;
             uint64_t transport_connection_id;
-            group_t group;
+            message_auxiliary_t auxiliary;
         } lmsg;
         struct
         {
@@ -304,13 +330,13 @@ class msg_t
               unused[msg_t_size
                      - (sizeof (content_t *) + validity_signature_size + 2
                         + sizeof (uint32_t)
-                        + sizeof (uint64_t) + sizeof (group_t))];
+                        + sizeof (uint64_t) + sizeof (message_auxiliary_t))];
             unsigned char validity_signature[validity_signature_size];
             unsigned char type;
             unsigned char flags;
             uint32_t routing_id;
             uint64_t transport_connection_id;
-            group_t group;
+            message_auxiliary_t auxiliary;
         } zclmsg;
         struct
         {
@@ -320,29 +346,36 @@ class msg_t
                                  - (sizeof (void *) + sizeof (size_t)
                                     + validity_signature_size + 2
                                     + sizeof (uint32_t) + sizeof (uint64_t)
-                                    + sizeof (group_t))];
+                                    + sizeof (message_auxiliary_t))];
             unsigned char validity_signature[validity_signature_size];
             unsigned char type;
             unsigned char flags;
             uint32_t routing_id;
             uint64_t transport_connection_id;
-            group_t group;
+            message_auxiliary_t auxiliary;
         } cmsg;
         struct
         {
             unsigned char unused[msg_t_size
                                  - (validity_signature_size + 2
                                     + sizeof (uint32_t) + sizeof (uint64_t)
-                                    + sizeof (group_t))];
+                                    + sizeof (message_auxiliary_t))];
             unsigned char validity_signature[validity_signature_size];
             unsigned char type;
             unsigned char flags;
             uint32_t routing_id;
             uint64_t transport_connection_id;
-            group_t group;
+            message_auxiliary_t auxiliary;
         } delimiter;
     } _u;
 };
+
+static_assert (sizeof (msg_t) == msg_t::msg_t_size,
+               "msg_t public representation must remain 64 bytes");
+static_assert (msg_t::max_vsm_size == 29,
+               "msg_t inline payload capacity must remain 29 bytes");
+static_assert (std::is_trivially_copyable<msg_t>::value,
+               "msg_t must support existing raw relocation paths");
 
 inline int close_and_return (zlink::msg_t *msg_, int echo_)
 {

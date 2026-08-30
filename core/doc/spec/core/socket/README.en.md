@@ -258,7 +258,7 @@ typedef enum zlink_request_result_t
     ZLINK_REQUEST_TIMED_OUT       = 101,   // No reply arrived within the configured time
     ZLINK_REQUEST_NOT_FOUND       = 102,   // The target was absent and the request completed with an error reply
     ZLINK_REQUEST_TERMINATED      = 103,   // Context or socket ended before a terminal reply (ETERM or ESHUTDOWN)
-    ZLINK_REQUEST_PROTOCOL_ERROR  = 104,   // The reply envelope or error-reply payload was malformed
+    ZLINK_REQUEST_PROTOCOL_ERROR  = 104,   // The reply metadata or error-reply payload was malformed
     ZLINK_REQUEST_INTERNAL_ERROR  = 105,   // Completion failed without a more specific public bucket
     ZLINK_REQUEST_REJECTED        = 106,   // The target explicitly rejected the request
     ZLINK_REQUEST_CONFLICT        = 107,   // The request conflicts with current routing or operation state
@@ -387,8 +387,13 @@ This callback reports asynchronous request-reply completion. It runs when a
 reply arrives or the request times out. On timeout, `result_` is
 `ZLINK_REQUEST_TIMED_OUT` and `parts_` is NULL. On success, `result_` is
 `ZLINK_REQUEST_OK` and ownership of every message part transfers to the
-callback. `result_` is not a submit failure; it is the request-completion
-outcome expressed as a `zlink_request_result_t` value. This callback is an
+callback. For a valid wire error reply, `result_` is the non-OK value mapped
+from the first 4-byte Big Endian errno, and `parts_` contains the payload after
+the errno part; ownership of those messages also transfers to the callback. If
+the error reply has no errno part, its size is not 4 bytes, or its value is
+`0`, `result_` is `ZLINK_REQUEST_PROTOCOL_ERROR` and `part_count_` is `0`.
+`result_` is not a submit failure; it is the request-completion outcome
+expressed as a `zlink_request_result_t` value. This callback is an
 async-operation completion notification, not data-plane receive, and is used
 only by the request APIs of `DEALER` and `ROUTER`.
 
@@ -1378,6 +1383,9 @@ callback invocation. Each item maps to one unit test.
 - On request timeout, `zlink_reply_handler_fn` receives
   `ZLINK_REQUEST_TIMED_OUT` in `result_` and NULL in `parts_`. On success, it
   receives `ZLINK_REQUEST_OK`, and part ownership transfers to the callback.
+- A valid wire error reply delivers a mapped non-OK result and the payload after
+  the errno part to the callback. A malformed errno part delivers
+  `ZLINK_REQUEST_PROTOCOL_ERROR` and a part count of `0`.
 - A failed submit does not invoke the handler. After `ZLINK_SUBMIT_OK`, the
   handler is invoked exactly once with a reply or terminal result.
 
@@ -1387,3 +1395,7 @@ callback invocation. Each item maps to one unit test.
 - A socket type without a completion lane returns
   `ZLINK_CONFIG_NOT_SUPPORTED` and preserves its existing byte HWM and
   transport backpressure.
+
+<!-- zlink-nav:start -->
+[Core Spec Index](../README.en.md) | [Previous: Runtime Boundary](../08-runtime-boundary.en.md) | [Next: PAIR](01-pair.en.md)
+<!-- zlink-nav:end -->

@@ -21,6 +21,44 @@ bool same_pair_peer_identity (const zlink::pipe_t *first_, const zlink::pipe_t *
     return first.size () > 0 && first.size () == second.size ()
            && memcmp (first.data (), second.data (), first.size ()) == 0;
 }
+
+class distinct_pipe_lifetime_refs_t
+{
+  public:
+    explicit distinct_pipe_lifetime_refs_t (zlink::pipe_t *already_owned_) :
+        _already_owned (already_owned_), _count (0)
+    {
+        memset (_pipes, 0, sizeof (_pipes));
+    }
+
+    ~distinct_pipe_lifetime_refs_t ()
+    {
+        for (size_t i = 0; i < _count; ++i)
+            _pipes[i]->release_lifetime_ref ();
+    }
+
+    bool retain (zlink::pipe_t *pipe_)
+    {
+        if (!pipe_ || pipe_ == _already_owned)
+            return true;
+        for (size_t i = 0; i < _count; ++i) {
+            if (_pipes[i] == pipe_)
+                return true;
+        }
+        if (_count == sizeof (_pipes) / sizeof (_pipes[0])
+            || !pipe_->retain_lifetime_ref ())
+            return false;
+        _pipes[_count++] = pipe_;
+        return true;
+    }
+
+  private:
+    zlink::pipe_t *_already_owned;
+    zlink::pipe_t *_pipes[4];
+    size_t _count;
+
+    ZLINK_NON_COPYABLE_NOR_MOVABLE (distinct_pipe_lifetime_refs_t)
+};
 }
 
 void zlink::socket_base_t::finish_close_handoff (int handoff_timeout_ms_)
@@ -160,6 +198,7 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     pipe_t *ready_application = NULL;
     pipe_t *ready_completion = NULL;
     pipe_t *pair_application = NULL;
+    distinct_pipe_lifetime_refs_t pair_pipe_refs (pipe_);
     //  A rejected pair is torn down after the table is unlocked: terminate()
     //  reaches other objects and must not run under this mutex.
     pipe_t *reject_pipes[3] = {NULL, NULL, NULL};
@@ -210,8 +249,21 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         //  the pins once terminate() has run below. reject_pipes[0] is the
         //  pipe being attached and is owned by this call, so it needs no pin.
         for (size_t i = 1; i < 3; ++i) {
-            if (reject_pipes[i] && !reject_pipes[i]->retain_lifetime_ref ())
+            if (reject_pipes[i] && !pair_pipe_refs.retain (reject_pipes[i]))
                 reject_pipes[i] = NULL;
+        }
+        if (!reject_pipes[0]) {
+            if (pair_application
+                && !pair_pipe_refs.retain (pair_application)) {
+                pair_application = NULL;
+                attach_application = false;
+            }
+            if (ready_application
+                && !pair_pipe_refs.retain (ready_application))
+                ready_application = NULL;
+            if (ready_completion
+                && !pair_pipe_refs.retain (ready_completion))
+                ready_completion = NULL;
         }
     }
 
@@ -219,13 +271,6 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         for (size_t i = 0; i < 3; ++i) {
             if (reject_pipes[i])
                 reject_pipes[i]->terminate (false);
-        }
-        //  A failed retain above left the slot NULL, which is behaviourally
-        //  identical: that lane already completed its own termination and
-        //  terminate() would have returned immediately.
-        for (size_t i = 1; i < 3; ++i) {
-            if (reject_pipes[i])
-                reject_pipes[i]->release_lifetime_ref ();
         }
         return;
     }
@@ -281,13 +326,16 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
             if (it->second.ready)
                 promote_pending_flow_state_locked (it->second);
             if (it->second.remote_flow_seen && it->second.application) {
-                flow_edge_pipe = it->second.application;
-                flow_epoch = it->second.remote_flow_epoch;
-                publish_flow_edge = flow_edge_pipe->apply_remote_flow_state (
-                  it->second.remote_flow_paused
-                    ? static_cast<unsigned char> (1)
-                    : static_cast<unsigned char> (0),
-                  flow_epoch, &flow_transition, &flow_actual_writable);
+                pipe_t *const candidate = it->second.application;
+                if (pair_pipe_refs.retain (candidate)) {
+                    flow_edge_pipe = candidate;
+                    flow_epoch = it->second.remote_flow_epoch;
+                    publish_flow_edge = flow_edge_pipe->apply_remote_flow_state (
+                      it->second.remote_flow_paused
+                        ? static_cast<unsigned char> (1)
+                        : static_cast<unsigned char> (0),
+                      flow_epoch, &flow_transition, &flow_actual_writable);
+                }
             }
         }
         if (ready_application)
@@ -336,17 +384,8 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
               transport_lane_application, pair_key.first, pair_key.second);
     }
     if (ready_completion) {
-        if (ready_completion->check_read ()) {
-            if (completion_drain_permitted ())
-                socket_reqrep_internal::process_completion_pipe (
-                  this, ready_completion);
-            else {
-                scoped_lock_t lock (_transport_pairs_sync);
-                if (_ready_completion_pair_set.insert (pair_key).second)
-                    _ready_completion_pairs.push_back (pair_key);
-                notify_request_completion ();
-            }
-        }
+        if (ready_completion->check_read ())
+            read_activated (ready_completion);
         if (ready_application && ready_application->check_read ()) {
             receive_runtime_t &receive = receive_runtime ();
             scoped_lock_t receive_lock (receive.sync);
@@ -357,17 +396,13 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         bool pair_ready = false;
         {
             scoped_lock_t lock (_transport_pairs_sync);
-            pair_ready = _transport_pairs[pair_key].ready;
+            const transport_pairs_t::const_iterator it =
+              _transport_pairs.find (pair_key);
+            pair_ready = it != _transport_pairs.end () && it->second.ready
+                         && it->second.completion == pipe_;
         }
         if (pair_ready && pipe_->check_read ()) {
-            if (completion_drain_permitted ())
-                socket_reqrep_internal::process_completion_pipe (this, pipe_);
-            else {
-                scoped_lock_t lock (_transport_pairs_sync);
-                if (_ready_completion_pair_set.insert (pair_key).second)
-                    _ready_completion_pairs.push_back (pair_key);
-                notify_request_completion ();
-            }
+            read_activated (pipe_);
         }
     }
     if (get_ctx ()) {
@@ -776,75 +811,142 @@ bool zlink::socket_base_t::completion_drain_permitted () const
 
 void zlink::socket_base_t::process_ready_completion_pipes ()
 {
-    //  Claim the pipes first and drain them with the table unlocked: draining
-    //  runs the application's reply handler, which may call back into this
-    //  socket.
-    std::vector<transport_pair_key_t> claimed;
-    {
-        scoped_lock_t lock (_transport_pairs_sync);
-        while (!_ready_completion_pairs.empty ()) {
-            const transport_pair_key_t key = _ready_completion_pairs.front ();
-            _ready_completion_pairs.pop_front ();
-            _ready_completion_pair_set.erase (key);
-            transport_pairs_t::iterator it = _transport_pairs.find (key);
-            if (it == _transport_pairs.end () || !it->second.ready
-                || !it->second.completion || it->second.draining)
-                continue;
-            it->second.draining = true;
-            claimed.push_back (key);
-        }
-    }
-
-    for (size_t i = 0; i < claimed.size (); ++i) {
+    //  Drain one claimed pipe at a time with the table unlocked: draining runs
+    //  the application's reply handler, which may call back into this socket.
+    //  The iterative form also avoids an allocation after a pipe was pinned.
+    while (true) {
+        transport_pair_key_t key (0, 0);
         pipe_t *completion = NULL;
         {
             scoped_lock_t lock (_transport_pairs_sync);
-            transport_pairs_t::const_iterator it = _transport_pairs.find (claimed[i]);
-            if (it != _transport_pairs.end ())
+            while (!_ready_completion_pairs.empty () && !completion) {
+                key = _ready_completion_pairs.front ();
+                _ready_completion_pairs.pop_front ();
+                _ready_completion_pair_set.erase (key);
+                transport_pairs_t::iterator it = _transport_pairs.find (key);
+                if (it == _transport_pairs.end () || !it->second.ready
+                    || !it->second.completion || it->second.draining)
+                    continue;
+                // Retain while the table slot still proves liveness. The slot
+                // can be cleared and the pipe deallocated on a second mailbox
+                // executor as soon as this mutex is released.
+                if (!it->second.completion->retain_lifetime_ref ())
+                    continue;
+                if (!it->second.completion->retain_inbound_read_ref ()) {
+                    it->second.completion->release_lifetime_ref ();
+                    continue;
+                }
+                it->second.draining = true;
                 completion = it->second.completion;
+            }
         }
-        if (completion && completion->check_read ())
-            socket_reqrep_internal::process_completion_pipe (this, completion);
-        scoped_lock_t lock (_transport_pairs_sync);
-        transport_pairs_t::iterator it = _transport_pairs.find (claimed[i]);
-        if (it != _transport_pairs.end ())
-            it->second.draining = false;
+        if (!completion)
+            return;
+        drain_claimed_completion_pipe (key.first, key.second, completion);
+        completion->release_inbound_read_ref ();
+        completion->release_lifetime_ref ();
     }
+}
+
+bool zlink::socket_base_t::finish_completion_pipe_drain (
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
+  pipe_t *completion_pipe_)
+{
+    if (!completion_pipe_)
+        return false;
+
+    const transport_pair_key_t pair_key (transport_pair_id_,
+                                         transport_pair_generation_);
+    bool exact_pair = false;
+    {
+        scoped_lock_t lock (_transport_pairs_sync);
+        transport_pairs_t::iterator it = _transport_pairs.find (pair_key);
+        if (it != _transport_pairs.end () && it->second.ready
+            && it->second.completion == completion_pipe_
+            && it->second.draining) {
+            //  Publish the idle state before checking the pipe. An activation
+            //  after this point can claim or queue the pair itself; an
+            //  activation that arrived while draining was true is recovered
+            //  by the check_read below.
+            it->second.draining = false;
+            exact_pair = true;
+        }
+    }
+    if (!exact_pair || !completion_pipe_->check_read ())
+        return false;
+
+    //  Never call pipe methods while holding the table mutex. Revalidate the
+    //  slot after check_read and claim it only if another completion owner did
+    //  not get there first.
+    scoped_lock_t lock (_transport_pairs_sync);
+    transport_pairs_t::iterator it = _transport_pairs.find (pair_key);
+    if (it == _transport_pairs.end () || !it->second.ready
+        || it->second.completion != completion_pipe_
+        || it->second.draining)
+        return false;
+    it->second.draining = true;
+    return true;
+}
+
+void zlink::socket_base_t::drain_claimed_completion_pipe (
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
+  pipe_t *completion_pipe_)
+{
+    do {
+        socket_reqrep_internal::process_completion_pipe (this,
+                                                         completion_pipe_);
+    } while (finish_completion_pipe_drain (
+      transport_pair_id_, transport_pair_generation_, completion_pipe_));
 }
 
 void zlink::socket_base_t::read_activated (pipe_t *pipe_)
 {
     if (pipe_ && pipe_->get_transport_pair_id () != 0
         && pipe_->get_transport_lane () == transport_lane_completion) {
+        const bool can_drain = completion_drain_permitted ();
         bool claimed = false;
+        bool queued = false;
+        pipe_t *retained_completion = NULL;
         const transport_pair_key_t pair_key (pipe_->get_transport_pair_id (),
                                              pipe_->get_transport_pair_generation ());
         {
             scoped_lock_t lock (_transport_pairs_sync);
             transport_pairs_t::iterator it = _transport_pairs.find (pair_key);
             if (it != _transport_pairs.end () && it->second.ready
+                && it->second.completion == pipe_
                 && !it->second.draining) {
                 claimed = true;
-                if (completion_drain_permitted ())
-                    it->second.draining = true;
+                if (can_drain) {
+                    const bool lifetime_retained =
+                      pipe_->retain_lifetime_ref ();
+                    if (lifetime_retained
+                        && pipe_->retain_inbound_read_ref ()) {
+                        retained_completion = pipe_;
+                        it->second.draining = true;
+                    } else {
+                        if (lifetime_retained)
+                            pipe_->release_lifetime_ref ();
+                        claimed = false;
+                    }
+                } else if (_ready_completion_pair_set.insert (pair_key).second) {
+                    _ready_completion_pairs.push_back (pair_key);
+                    queued = true;
+                }
             }
         }
         if (!claimed)
             return;
-        if (!completion_drain_permitted ()) {
+        if (!can_drain) {
             //  No owner is draining on this thread. Record the readiness so the
             //  completion owner wakes up and drains the pipe itself.
-            scoped_lock_t lock (_transport_pairs_sync);
-            if (_ready_completion_pair_set.insert (pair_key).second)
-                _ready_completion_pairs.push_back (pair_key);
-            notify_request_completion ();
+            if (queued)
+                notify_request_completion ();
             return;
         }
-        socket_reqrep_internal::process_completion_pipe (this, pipe_);
-        scoped_lock_t lock (_transport_pairs_sync);
-        transport_pairs_t::iterator it = _transport_pairs.find (pair_key);
-        if (it != _transport_pairs.end ())
-            it->second.draining = false;
+        drain_claimed_completion_pipe (pair_key.first, pair_key.second,
+                                       retained_completion);
+        retained_completion->release_inbound_read_ref ();
+        retained_completion->release_lifetime_ref ();
         return;
     }
     if (pipe_ && pipe_->get_transport_pair_id () != 0) {
@@ -970,13 +1072,31 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
     if (!completion && application_attached) {
         fail_send_pending_for_pipe (pipe_, ENOTCONN);
         receive_runtime_t &receive = receive_runtime ();
-        scoped_lock_t receive_lock (receive.sync);
-        xpipe_terminated (pipe_);
-        notify_receive_progress_locked ();
+        {
+            scoped_lock_t receive_lock (receive.sync);
+            xpipe_terminated (pipe_);
+            notify_receive_progress_locked ();
+        }
     }
-    if (!completion)
+    if (!completion
+        && (options.type == ZLINK_CORE_SOCKET_PAIR
+            || options.type == ZLINK_CORE_SOCKET_DEALER
+            || options.type == ZLINK_CORE_SOCKET_ROUTER
+            || options.type == ZLINK_CORE_SOCKET_SUB
+            || options.type == ZLINK_CORE_SOCKET_XSUB)) {
+        // process_commands() owns an outer receive scope around this callback.
+        // Retain the pipe and defer assembly/routing teardown until that scope
+        // is fully gone; direct I/O sees the non-active tombstone immediately.
+        // STREAM and the remaining socket families keep their teardown wholly
+        // in xpipe_terminated() and must not retain an unused queue node.
+        defer_socket_msg_pipe_termination (pipe_);
+    }
+    if (!completion) {
+        socket_reqrep_internal::forget_dealer_reply_targets_for_pipe (
+          request_reply_state (), pipe_);
         socket_reqrep_internal::forget_router_reply_targets_for_pipe (
           request_reply_state (), pipe_);
+    }
     endpoint_runtime ().inprocs.erase_pipe (pipe_);
 
     uint32_t ready_count = 0;
@@ -1119,6 +1239,22 @@ zlink::pipe_t *zlink::socket_base_t::completion_pipe_for_transport_pair (
     return it == _transport_pairs.end () || !it->second.ready
              ? NULL
              : it->second.completion;
+}
+
+zlink::pipe_t *zlink::socket_base_t::retain_completion_pipe_for_transport_pair (
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_) const
+{
+    if (transport_pair_id_ == 0 || transport_pair_generation_ == 0)
+        return NULL;
+    scoped_lock_t lock (_transport_pairs_sync);
+    const transport_pair_key_t key (transport_pair_id_,
+                                    transport_pair_generation_);
+    transport_pairs_t::const_iterator it = _transport_pairs.find (key);
+    if (it == _transport_pairs.end () || !it->second.ready)
+        return NULL;
+    pipe_t *const completion = it->second.completion;
+    return completion && completion->retain_lifetime_ref () ? completion
+                                                             : NULL;
 }
 
 void zlink::socket_base_t::cache_completion_pipe_routing_id (

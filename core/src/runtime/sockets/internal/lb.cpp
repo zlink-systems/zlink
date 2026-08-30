@@ -252,7 +252,8 @@ zlink::pipe_t *zlink::lb_t::find_connected_pipe (
 }
 
 int zlink::lb_t::sendpipe_to (
-  pipe_t *pipe_, msg_t *msg_, pipe_message_admission_t *admission_out_)
+  pipe_t *pipe_, msg_t *msg_, pipe_message_admission_t *admission_out_,
+  pipe_write_observer_fn observer_, void *observer_userdata_)
 {
     if (admission_out_)
         *admission_out_ = pipe_message_admission_invalid;
@@ -290,12 +291,19 @@ int zlink::lb_t::sendpipe_to (
     const bool more = (msg_->flags () & msg_t::more) != 0;
     pipe_message_admission_t write_admission =
       pipe_message_admission_invalid;
-    const bool ok = more ? pipe_->write (msg_, &write_admission)
-                         : pipe_->write_single_message_and_flush_no_recursive_hwm_check (
-                             msg_, &write_admission);
+    const bool ok =
+      observer_
+        ? pipe_->write_message_observed (
+            msg_, observer_, observer_userdata_, &write_admission)
+        : more ? pipe_->write (msg_, &write_admission)
+               : pipe_->write_single_message_and_flush_no_recursive_hwm_check (
+                   msg_, &write_admission);
     if (!ok) {
         if (admission_out_)
             *admission_out_ = write_admission;
+        if (observer_ && errno == ECANCELED
+            && write_admission == pipe_message_admission_invalid)
+            return -1;
         if (write_admission != pipe_message_admission_too_large) {
             deactivate (pipe_);
             errno = write_admission == pipe_message_admission_hwm_full
@@ -402,7 +410,8 @@ int zlink::lb_t::send (
 
 int zlink::lb_t::sendpipe (
   msg_t *msg_, pipe_t **pipe_,
-  pipe_message_admission_t *admission_out_)
+  pipe_message_admission_t *admission_out_,
+  pipe_write_observer_fn observer_, void *observer_userdata_)
 {
     if (admission_out_)
         *admission_out_ = pipe_message_admission_ready;
@@ -417,6 +426,14 @@ int zlink::lb_t::sendpipe (
         rc = msg_->init ();
         errno_assert (rc == 0);
         return 0;
+    }
+
+    // Correlation is published only on the first physical application frame.
+    // Continuations already have a committed route and must not run a second
+    // observer transaction.
+    if (observer_ && _more) {
+        errno = EINVAL;
+        return -1;
     }
 
     if (_more && _weighted_multipart_pipe) {
@@ -456,12 +473,19 @@ int zlink::lb_t::sendpipe (
         const bool more = (msg_->flags () & msg_t::more) != 0;
         pipe_message_admission_t write_admission =
           pipe_message_admission_invalid;
-        const bool ok = more ? pipe->write (msg_, &write_admission)
-                             : pipe->write_single_message_and_flush_no_recursive_hwm_check (
-                                 msg_, &write_admission);
+        const bool ok =
+          observer_
+            ? pipe->write_message_observed (
+                msg_, observer_, observer_userdata_, &write_admission)
+            : more ? pipe->write (msg_, &write_admission)
+                   : pipe->write_single_message_and_flush_no_recursive_hwm_check (
+                       msg_, &write_admission);
         if (!ok) {
             if (admission_out_)
                 *admission_out_ = write_admission;
+            if (observer_ && errno == ECANCELED
+                && write_admission == pipe_message_admission_invalid)
+                return -1;
             if (_more) {
                 pipe->rollback ();
                 _weighted_multipart_pipe = NULL;
@@ -505,9 +529,14 @@ int zlink::lb_t::sendpipe (
             const bool more = (msg_->flags () & msg_t::more) != 0;
             pipe_message_admission_t write_admission =
               pipe_message_admission_invalid;
-            const bool ok = more ? pipe->write (msg_, &write_admission)
-                                 : pipe->write_single_message_and_flush_no_recursive_hwm_check (
-                                     msg_, &write_admission);
+            const bool ok =
+              observer_
+                ? pipe->write_message_observed (
+                    msg_, observer_, observer_userdata_, &write_admission)
+                : more ? pipe->write (msg_, &write_admission)
+                       : pipe
+                           ->write_single_message_and_flush_no_recursive_hwm_check (
+                             msg_, &write_admission);
             if (ok) {
                 //  Running values move only for a write that happened, so a
                 //  retried selection never applies the same step twice.
@@ -519,6 +548,13 @@ int zlink::lb_t::sendpipe (
                 const int rc = msg_->init ();
                 errno_assert (rc == 0);
                 return 0;
+            }
+
+            if (observer_ && errno == ECANCELED
+                && write_admission == pipe_message_admission_invalid) {
+                if (admission_out_)
+                    *admission_out_ = write_admission;
+                return -1;
             }
 
             //  An oversized message is rejected by every candidate, so trying

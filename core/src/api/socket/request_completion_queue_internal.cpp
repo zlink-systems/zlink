@@ -6,7 +6,7 @@
 
 #include "api/socket/request_completion_queue_internal.hpp"
 
-#include "api/socket/request_reply_protocol_internal.hpp"
+#include "api/message/request_result_internal.hpp"
 #include "sockets/common/socket_base.hpp"
 
 namespace
@@ -218,8 +218,9 @@ void zlink::request_completion::invoke_callback (void *owner_handle_,
                                                  void *userdata_)
 {
     const request_completion_callback_scope_t scope (owner_handle_);
-    zlink::request_reply::complete_reply_callback (
-      handler_, errnum_, parts_, part_count_, userdata_);
+    if (handler_)
+        handler_ (zlink::request_result_internal::from_errno (errnum_),
+                  parts_, part_count_, userdata_);
 }
 
 namespace

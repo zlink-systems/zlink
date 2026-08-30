@@ -14,7 +14,9 @@ namespace
 }
 
 zlink::dealer_t::dealer_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
-    socket_base_t (parent_, tid_, sid_), _probe_router (false)
+    socket_base_t (parent_, tid_, sid_),
+    _probe_router (false),
+    _dispatch_malformed_without_pipe (false)
 {
     options.type = ZLINK_CORE_SOCKET_DEALER;
     options.can_send_hello_msg = true;
@@ -33,7 +35,8 @@ zlink::dealer_t::~dealer_t ()
 
 int zlink::dealer_t::sendpipe_to (
   pipe_t *pipe_, msg_t *msg_, int flags_,
-  pipe_message_admission_t *admission_out_)
+  pipe_message_admission_t *admission_out_,
+  pipe_write_observer_fn observer_, void *observer_userdata_)
 {
     if (!pipe_ || !msg_ || !msg_->check ()) {
         errno = EFAULT;
@@ -42,7 +45,8 @@ int zlink::dealer_t::sendpipe_to (
     msg_->reset_flags (msg_t::more);
     if ((flags_ & ZLINK_SNDMORE) != 0)
         msg_->set_flags (msg_t::more);
-    return _lb.sendpipe_to (pipe_, msg_, admission_out_);
+    return _lb.sendpipe_to (pipe_, msg_, admission_out_, observer_,
+                            observer_userdata_);
 }
 
 void zlink::dealer_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool locally_initiated_)
@@ -67,13 +71,12 @@ void zlink::dealer_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
         errno_assert (rc == 0);
     }
 
-    {
-        socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
-        _fq.attach (pipe_);
-        if (socket_msg_dispatch_active ()) {
-            pipe_->check_read ();
-            _fq.deactivate (pipe_);
-        }
+    _fq.attach (pipe_);
+    if (socket_msg_dispatch_active ()) {
+        const bool ready = pipe_->check_read ();
+        _fq.deactivate (pipe_);
+        if (ready)
+            defer_socket_msg_dispatch ();
     }
     _lb.attach (pipe_);
     if (local_peer_weight () != 100)
@@ -125,9 +128,11 @@ int zlink::dealer_t::xsend (
 
 int zlink::dealer_t::xsend_pipe (
   msg_t *msg_, pipe_t **pipe_out_,
-  pipe_message_admission_t *admission_out_)
+  pipe_message_admission_t *admission_out_,
+  pipe_write_observer_fn observer_, void *observer_userdata_)
 {
-    return sendpipe (msg_, pipe_out_, admission_out_);
+    return sendpipe (msg_, pipe_out_, admission_out_, observer_,
+                     observer_userdata_);
 }
 
 int zlink::dealer_t::xsend_routed (
@@ -135,7 +140,8 @@ int zlink::dealer_t::xsend_routed (
   uint64_t *connection_id_out_, uint64_t expected_connection_id_,
   pipe_t **pipe_out_, uint64_t expected_transport_pair_id_,
   uint64_t expected_transport_pair_generation_,
-  pipe_message_admission_t *admission_out_)
+  pipe_message_admission_t *admission_out_,
+  pipe_write_observer_fn observer_, void *observer_userdata_)
 {
     if (admission_out_)
         *admission_out_ = pipe_message_admission_invalid;
@@ -170,7 +176,7 @@ int zlink::dealer_t::xsend_routed (
     return sendpipe_to (
       pipe, msg_,
       (msg_->flags () & msg_t::more) != 0 ? ZLINK_SNDMORE : 0,
-      admission_out_);
+      admission_out_, observer_, observer_userdata_);
 }
 
 int zlink::dealer_t::xselect_routed_submit_target (
@@ -232,15 +238,9 @@ int zlink::dealer_t::xrollback ()
 
 void zlink::dealer_t::xread_activated (pipe_t *pipe_)
 {
-    socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
     _fq.activated (pipe_);
-    if (!socket_msg_dispatch_active ())
-        return;
-    zlink::drain_socket_dispatch_loop (
-      [this] (msg_t *msg_, pipe_t **pipe_out_) { return recvpipe (msg_, pipe_out_); },
-      [this] (msg_t *msg_, pipe_t *pipe_) {
-          return socket_msg_dispatch_from_io (msg_, pipe_);
-      });
+    if (socket_msg_dispatch_active ())
+        defer_socket_msg_dispatch ();
 }
 
 void zlink::dealer_t::xwrite_activated (pipe_t *pipe_)
@@ -250,21 +250,28 @@ void zlink::dealer_t::xwrite_activated (pipe_t *pipe_)
 
 void zlink::dealer_t::xpipe_terminated (pipe_t *pipe_)
 {
+    _fq.pipe_terminated (pipe_);
+    _lb.pipe_terminated (pipe_);
+}
+
+void zlink::dealer_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
+{
+    _dispatch_malformed_pipes.erase (pipe_);
     std::map<pipe_t *, std::vector<zlink_msg_t>>::iterator parts_it =
       _dispatch_parts_by_pipe.find (pipe_);
     if (parts_it != _dispatch_parts_by_pipe.end ()) {
         close_socket_msg_parts (&parts_it->second);
         _dispatch_parts_by_pipe.erase (parts_it);
     }
-    _fq.pipe_terminated (pipe_);
-    _lb.pipe_terminated (pipe_);
 }
 
 int zlink::dealer_t::sendpipe (
   msg_t *msg_, pipe_t **pipe_,
-  pipe_message_admission_t *admission_out_)
+  pipe_message_admission_t *admission_out_,
+  pipe_write_observer_fn observer_, void *observer_userdata_)
 {
-    return _lb.sendpipe (msg_, pipe_, admission_out_);
+    return _lb.sendpipe (msg_, pipe_, admission_out_, observer_,
+                         observer_userdata_);
 }
 
 int zlink::dealer_t::recvpipe (msg_t *msg_, pipe_t **pipe_)
@@ -277,8 +284,47 @@ int zlink::dealer_t::xsocket_msg_dispatch (msg_t *msg_, pipe_t *pipe_)
     if (!socket_msg_dispatch_active ())
         return 0;
 
+    const bool final_part = (msg_->flags () & msg_t::more) == 0;
+    const bool dropping_malformed =
+      pipe_ ? _dispatch_malformed_pipes.count (pipe_) != 0
+            : _dispatch_malformed_without_pipe;
+    if (dropping_malformed) {
+        msg_->reset_request_reply_metadata ();
+        if (final_part) {
+            if (pipe_)
+                _dispatch_malformed_pipes.erase (pipe_);
+            else
+                _dispatch_malformed_without_pipe = false;
+        }
+        return 1;
+    }
+
     std::vector<zlink_msg_t> *dispatch_parts = pipe_ ? &_dispatch_parts_by_pipe[pipe_]
                                                       : &_dispatch_parts;
+    unsigned char request_reply_kind = 0;
+    uint64_t request_reply_sequence = 0;
+    if (!dispatch_parts->empty ()
+        && msg_->get_request_reply_metadata (
+          &request_reply_kind, &request_reply_sequence)) {
+        close_socket_msg_parts (dispatch_parts);
+        if (pipe_)
+            _dispatch_parts_by_pipe.erase (pipe_);
+        if (!final_part) {
+            if (pipe_)
+                _dispatch_malformed_pipes.insert (pipe_);
+            else
+                _dispatch_malformed_without_pipe = true;
+        }
+        msg_->reset_request_reply_metadata ();
+        pipe_t *const malformed_pipe =
+          pipe_ && pipe_->retain_lifetime_ref () ? pipe_ : NULL;
+        if (malformed_pipe) {
+            malformed_pipe->terminate (false);
+            malformed_pipe->release_lifetime_ref ();
+        }
+        return 1;
+    }
+
     store_socket_msg_part (dispatch_parts, msg_);
     if ((reinterpret_cast<msg_t *> (&dispatch_parts->back ())->flags () & msg_t::more) != 0) {
         return 1;
@@ -304,7 +350,6 @@ int zlink::dealer_t::xsocket_msg_dispatch (msg_t *msg_, pipe_t *pipe_)
 
 void zlink::dealer_t::xarm_socket_msg_dispatch ()
 {
-    socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
     _fq.arm_dispatch ();
 }
 
@@ -313,11 +358,48 @@ void zlink::dealer_t::xdispatch_io ()
     socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
     if (!socket_msg_dispatch_active ())
         return;
-    zlink::drain_socket_dispatch_loop (
-      [this] (msg_t *msg_, pipe_t **pipe_out_) { return recvpipe (msg_, pipe_out_); },
-      [this] (msg_t *msg_, pipe_t *pipe_) {
-          return socket_msg_dispatch_from_io (msg_, pipe_);
-      });
+
+    for (;;) {
+        msg_t msg;
+        const int init_rc = msg.init ();
+        errno_assert (init_rc == 0);
+
+        pipe_t *pipe = NULL;
+        int recv_rc = 0;
+        {
+            // Extract one frame while receive-side FQ mutation is fenced, but
+            // never carry this lock into assembly or application callback.
+            scoped_lock_t receive_lock (receive_runtime ().sync);
+            recv_rc = recvpipe (&msg, &pipe);
+            if (recv_rc == 0 && pipe && !pipe->retain_lifetime_ref ())
+                pipe = NULL;
+        }
+
+        if (recv_rc != 0) {
+            const int saved_errno = errno;
+            const int close_rc = msg.close ();
+            errno_assert (close_rc == 0);
+            if (saved_errno == ECONNABORTED)
+                continue;
+            errno = saved_errno;
+            break;
+        }
+
+        if (!pipe) {
+            const int close_rc = msg.close ();
+            errno_assert (close_rc == 0);
+            continue;
+        }
+
+        const int dispatch_rc = socket_msg_dispatch_from_io (&msg, pipe);
+        const int saved_errno = errno;
+        pipe->release_lifetime_ref ();
+        const int close_rc = msg.close ();
+        errno_assert (close_rc == 0);
+        errno = saved_errno;
+        if (dispatch_rc <= 0)
+            break;
+    }
 }
 
 int zlink::dealer_t::apply_peer_weight (pipe_t *pipe_, uint32_t weight_)

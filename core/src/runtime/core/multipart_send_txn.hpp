@@ -4,12 +4,12 @@
 #define __ZLINK_CORE_MULTIPART_SEND_TXN_HPP_INCLUDED__
 
 #include <zlink.h>
+#include "core/pipe.hpp"
 
 namespace zlink
 {
 class socket_base_t;
-class pipe_t;
-typedef void (*multipart_pipe_selected_fn) (pipe_t *pipe_, void *userdata_);
+typedef pipe_write_observer_fn multipart_pipe_selected_fn;
 
 int logical_multipart_send (socket_base_t *socket_,
                             zlink_msg_t *parts_,

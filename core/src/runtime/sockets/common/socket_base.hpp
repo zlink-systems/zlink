@@ -239,7 +239,9 @@ class socket_base_t : public own_t,
                      int flags_,
                      socket_public_send_scope_t &scope_,
                      zlink::pipe_t **pipe_out_ = NULL,
-                     bool report_multipart_abort_ = false);
+                     bool report_multipart_abort_ = false,
+                     pipe_write_observer_fn observer_ = NULL,
+                     void *observer_userdata_ = NULL);
     int send_routed (const zlink_routing_id_t *target_rid_, zlink::msg_t *msg_, int flags_);
     int send_routed_complete_record (const zlink_routing_id_t *target_rid_,
                                      zlink::msg_t *msg_,
@@ -261,7 +263,9 @@ class socket_base_t : public own_t,
                             zlink::pipe_t **pipe_out_ = NULL,
                             uint64_t expected_transport_pair_id_ = 0,
                             uint64_t expected_transport_pair_generation_ = 0,
-                            bool report_multipart_abort_ = false);
+                            bool report_multipart_abort_ = false,
+                            pipe_write_observer_fn observer_ = NULL,
+                            void *observer_userdata_ = NULL);
     int select_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_);
@@ -361,6 +365,7 @@ class socket_base_t : public own_t,
     //  reachable without performing 2^64 state changes.
     void test_set_local_receive_flow_epoch (uint64_t epoch_);
     uint64_t test_local_receive_flow_epoch () const;
+    void test_fail_next_recv_pipe_pin ();
 #endif
     bool begin_public_send_scope (
       bool force_sync_, std::optional<socket_public_send_scope_t> *scope_out_);
@@ -371,12 +376,23 @@ class socket_base_t : public own_t,
     int rollback_scoped (socket_public_send_scope_t &scope_);
     int recv (zlink::msg_t *msg_, int flags_,
               bool *multipart_aborted_out_ = NULL);
-    int recv_pipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_out_, int flags_);
+    int recv_pipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_out_, int flags_,
+                   bool pin_pipe_out_ = false,
+                   zlink::socket_receive_record_scope_t *record_scope_ = NULL);
     int recv_routed (zlink::msg_t *msg_,
                      zlink_routing_id_t *source_rid_out_,
                      int flags_,
                      uint64_t *connection_id_out_ = NULL,
-                     zlink::pipe_t **source_pipe_out_ = NULL);
+                     zlink::pipe_t **source_pipe_out_ = NULL,
+                     bool pin_source_pipe_out_ = false,
+                     uint64_t *transport_pair_id_out_ = NULL,
+                     uint64_t *transport_pair_generation_out_ = NULL,
+                     zlink::socket_receive_record_scope_t *record_scope_ = NULL);
+    // Reads a continuation while record_scope_ retains the receive owner
+    // acquired by recv_pipe()/recv_routed(). Multipart callers release the
+    // scope only after the complete record has been assembled and published.
+    int recv_record_continuation (
+      zlink::msg_t *msg_, zlink::socket_receive_record_scope_t &record_scope_);
     //  These three return a pipe whose lifetime is PINNED: they take a
     //  lifetime ref while the transport-pair table is locked, because the
     //  table slot is the only thing that proves the pipe is still alive and
@@ -386,14 +402,14 @@ class socket_base_t : public own_t,
     pipe_t *completion_pipe_for_application (pipe_t *application_pipe_) const;
     pipe_t *application_pipe_for_completion (pipe_t *completion_pipe_) const;
     pipe_t *completion_pipe_for_peer (const zlink_routing_id_t *peer_rid_) const;
-    //  NOT YET pinned, only because router_admission.cpp uses it as a plain
-    //  predicate and would leak a pin. Its other caller,
-    //  send_completion_frames_for_transport_pair (), DOES dereference the
-    //  result after the table is unlocked - the same shape as the bug fixed
-    //  above - so this accessor still needs the pin plus a matching release
-    //  at the router_admission call site.
+    //  Borrowed predicate view. Do not dereference the result after another
+    //  executor can process pipe termination.
     pipe_t *completion_pipe_for_transport_pair (uint64_t transport_pair_id_,
                                                 uint64_t transport_pair_generation_) const;
+    //  Pinned transport-pair lookup for callers that dereference the result.
+    //  The caller releases the returned pipe exactly once.
+    pipe_t *retain_completion_pipe_for_transport_pair (
+      uint64_t transport_pair_id_, uint64_t transport_pair_generation_) const;
     void cache_completion_pipe_routing_id (pipe_t *application_pipe_);
     //  Request/reply submit entries write to transport pipes directly instead
     //  of going through send()/recv(). They still have to drain pending socket
@@ -449,6 +465,15 @@ class socket_base_t : public own_t,
     //  owned drain points, because a pipe that was made readable while no
     //  owner was draining does not report readiness again.
     void process_ready_completion_pipes ();
+    //  Finish one Completion-pipe drain without losing an activation that
+    //  raced the final empty read. Returns true when this owner reclaimed the
+    //  exact pair and must drain it again.
+    bool finish_completion_pipe_drain (uint64_t transport_pair_id_,
+                                       uint64_t transport_pair_generation_,
+                                       zlink::pipe_t *completion_pipe_);
+    void drain_claimed_completion_pipe (uint64_t transport_pair_id_,
+                                        uint64_t transport_pair_generation_,
+                                        zlink::pipe_t *completion_pipe_);
     void resume_completion_processing_if_needed ();
     void notify_request_completion ();
     int drain_request_completions ();
@@ -663,7 +688,9 @@ class socket_base_t : public own_t,
       pipe_message_admission_t *admission_out_ = NULL);
     virtual int xsend_pipe (
       zlink::msg_t *msg_, zlink::pipe_t **pipe_out_,
-      pipe_message_admission_t *admission_out_ = NULL);
+      pipe_message_admission_t *admission_out_ = NULL,
+      pipe_write_observer_fn observer_ = NULL,
+      void *observer_userdata_ = NULL);
     virtual int xsend_routed (const zlink_routing_id_t *target_rid_,
                               zlink::msg_t *msg_,
                               uint64_t *connection_id_out_,
@@ -671,7 +698,9 @@ class socket_base_t : public own_t,
                               zlink::pipe_t **pipe_out_,
                               uint64_t expected_transport_pair_id_ = 0,
                               uint64_t expected_transport_pair_generation_ = 0,
-                              pipe_message_admission_t *admission_out_ = NULL);
+                              pipe_message_admission_t *admission_out_ = NULL,
+                              pipe_write_observer_fn observer_ = NULL,
+                              void *observer_userdata_ = NULL);
     virtual int xselect_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_);
@@ -690,6 +719,7 @@ class socket_base_t : public own_t,
     int xterm_transport_pair (uint64_t transport_pair_id_,
                               uint64_t transport_pair_generation_);
     virtual int xsocket_msg_dispatch (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
+    virtual void xsocket_msg_pipe_terminated (zlink::pipe_t *pipe_);
     virtual int xstream_dispatch_msg (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
     virtual int xpeer_command (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
     virtual void xlocal_peer_weight_changed ();
@@ -762,7 +792,9 @@ class socket_base_t : public own_t,
                      zlink::socket_receive_runtime_t::mode_t mode_,
                      zlink::pipe_t **pipe_out_,
                      zlink_routing_id_t *source_rid_out_,
-                     uint64_t *connection_id_out_);
+                     uint64_t *connection_id_out_,
+                     bool pin_pipe_out_ = false,
+                     zlink::socket_receive_record_scope_t *record_scope_ = NULL);
     typedef std::unique_lock<std::recursive_mutex> socket_msg_dispatch_lock_t;
     socket_msg_dispatch_lock_t lock_socket_msg_dispatch ()
     {
@@ -776,6 +808,10 @@ class socket_base_t : public own_t,
             lock.lock ();
         return lock;
     }
+    // xread_activated() runs under receive ownership. It may publish FQ
+    // readiness, but must defer any application callback until that ownership
+    // has been released by the command/API boundary.
+    void defer_socket_msg_dispatch ();
     //  A pipe became writable again: nudge the admit loop for that target.
     void notify_send_pending_writable (pipe_t *pipe_);
     //  A route ended: fail every pending record bound to that exact target.
@@ -820,7 +856,9 @@ class socket_base_t : public own_t,
                                 uint64_t expected_transport_pair_id_ = 0,
                                 uint64_t expected_transport_pair_generation_ = 0,
                                 bool record_context_admission_ = true,
-                                bool commands_already_processed_ = false);
+                                bool commands_already_processed_ = false,
+                                pipe_write_observer_fn observer_ = NULL,
+                                void *observer_userdata_ = NULL);
 
     enum
     {
@@ -971,6 +1009,11 @@ class socket_base_t : public own_t,
                                       uint64_t *async_mailbox_drains_out_);
     void test_set_receive_wait_hook (receive_runtime_t::wait_hook_fn hook_,
                                      void *userdata_);
+    void test_set_receive_record_hooks (
+      receive_runtime_t::record_hook_fn acquired_hook_,
+      receive_runtime_t::record_hook_fn contention_hook_, void *userdata_);
+    void test_set_receive_command_sync_probe_hook (
+      receive_runtime_t::command_sync_probe_hook_fn hook_, void *userdata_);
     void test_set_send_pending_gate_release_hook (
       socket_send_pending_runtime_t::gate_release_hook_fn hook_,
       void *userdata_);
@@ -1018,6 +1061,9 @@ class socket_base_t : public own_t,
     static socket_base_t *current_async_mailbox_dispatch_socket ();
     void defer_close_handoff_from_async_owner ();
     void finish_deferred_close_after_async_quiesced ();
+    void defer_socket_msg_pipe_termination (pipe_t *pipe_);
+    void process_deferred_socket_msg_pipe_terminations ();
+    void process_deferred_socket_msg_dispatch ();
 
     //  Handlers for incoming commands.
     void process_stop () ZLINK_FINAL;

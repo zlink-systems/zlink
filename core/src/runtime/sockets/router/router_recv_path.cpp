@@ -67,6 +67,8 @@ void zlink::router_t::copy_router_pipe_source_rid (pipe_t *pipe_,
     if (!pipe_)
         return;
 
+    std::lock_guard<std::mutex> route_lifecycle_lock (
+      _dispatch_route_lifecycle_mu);
     //  A reciprocal duplicate keeps its physical pipe under an internal
     //  standby ID, while the application-facing peer identity remains the
     //  original node routing ID. Request replies still retain source_pipe,
@@ -108,7 +110,8 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
         errno_assert (rc == 0);
     }
 
-    socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
+    std::lock_guard<std::mutex> route_lifecycle_lock (
+      _dispatch_route_lifecycle_mu);
     const bool routing_id_ok = identify_peer (pipe_, locally_initiated_);
     if (router_debug_enabled ()) {
         fprintf (stderr, "router xattach_pipe: pipe=%p local=%d routing_id_ok=%d lane=%d pair=%llu/%llu\n",
@@ -120,9 +123,12 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
     }
     if (routing_id_ok) {
         _fq.attach (pipe_);
-        (void) pipe_->check_read ();
-        if (socket_msg_dispatch_active ())
+        const bool ready = pipe_->check_read ();
+        if (socket_msg_dispatch_active ()) {
             _fq.deactivate (pipe_);
+            if (ready)
+                defer_socket_msg_dispatch ();
+        }
         if (local_peer_weight () != 100)
             send_local_peer_weight (pipe_);
     } else {
@@ -133,9 +139,12 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
         if (out_pipe && (out_pipe->pipe == pipe_ || out_pipe->pipe == peer)) {
             _anonymous_pipes.erase (pipe_);
             _fq.attach (pipe_);
-            (void) pipe_->check_read ();
-            if (socket_msg_dispatch_active ())
+            const bool ready = pipe_->check_read ();
+            if (socket_msg_dispatch_active ()) {
                 _fq.deactivate (pipe_);
+                if (ready)
+                    defer_socket_msg_dispatch ();
+            }
         } else {
             _anonymous_pipes[pipe_] = locally_initiated_;
         }
@@ -144,7 +153,9 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
 
 void zlink::router_t::xread_activated (pipe_t *pipe_)
 {
-    socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
+    bool dispatch_ready = false;
+    std::lock_guard<std::mutex> route_lifecycle_lock (
+      _dispatch_route_lifecycle_mu);
     const std::map<pipe_t *, bool>::iterator it = _anonymous_pipes.find (pipe_);
     if (router_debug_enabled ()) {
         char rid_text[160];
@@ -170,28 +181,9 @@ void zlink::router_t::xread_activated (pipe_t *pipe_)
         }
     }
 
-    if (!socket_msg_dispatch_active ())
-        return;
-
-    msg_t msg;
-    const int init_rc = msg.init ();
-    errno_assert (init_rc == 0);
-
-    pipe_t *dispatch_pipe = NULL;
-    while (true) {
-        const int recv_rc = _fq.recvpipe (&msg, &dispatch_pipe);
-        if (recv_rc != 0) {
-            if (errno == ECONNABORTED)
-                continue;
-            break;
-        }
-        const int dispatch_rc = xsocket_msg_dispatch (&msg, dispatch_pipe);
-        if (dispatch_rc <= 0)
-            break;
-    }
-
-    const int close_rc = msg.close ();
-    errno_assert (close_rc == 0);
+    dispatch_ready = socket_msg_dispatch_active ();
+    if (dispatch_ready)
+        defer_socket_msg_dispatch ();
 }
 
 void zlink::router_t::reset_current_in_after_multipart_abort ()
@@ -204,8 +196,16 @@ void zlink::router_t::reset_current_in_after_multipart_abort ()
 
 int zlink::router_t::xrecv (msg_t *msg_)
 {
-    socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
+    return xrecv_pipe (msg_, NULL);
+}
+
+int zlink::router_t::xrecv_pipe (msg_t *msg_, pipe_t **pipe_out_)
+{
+    if (pipe_out_)
+        *pipe_out_ = NULL;
     if (_prefetched) {
+        if (pipe_out_)
+            *pipe_out_ = _current_in;
         if (!_routing_id_sent) {
             const int rc = msg_->move (_prefetched_id);
             errno_assert (rc == 0);
@@ -239,6 +239,8 @@ int zlink::router_t::xrecv (msg_t *msg_)
     }
 
     zlink_assert (pipe != NULL);
+    if (pipe_out_)
+        *pipe_out_ = _more_in ? _current_in : pipe;
 
     if (_more_in) {
         _more_in = (msg_->flags () & msg_t::more) != 0;
@@ -272,7 +274,6 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
                                   uint64_t *connection_id_out_,
                                   pipe_t **source_pipe_out_)
 {
-    socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
     if (connection_id_out_)
         *connection_id_out_ = 0;
     if (source_pipe_out_)
@@ -342,18 +343,55 @@ void zlink::router_t::xdispatch_io ()
     socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
     if (!socket_msg_dispatch_active ())
         return;
-    zlink::drain_socket_dispatch_loop (
-      [this] (msg_t *msg_, pipe_t **pipe_out_) { return _fq.recvpipe (msg_, pipe_out_); },
-      [this] (msg_t *msg_, pipe_t *pipe_) { return xsocket_msg_dispatch (msg_, pipe_); });
+
+    for (;;) {
+        msg_t msg;
+        const int init_rc = msg.init ();
+        errno_assert (init_rc == 0);
+
+        pipe_t *pipe = NULL;
+        int recv_rc = 0;
+        {
+            // FQ/current receive state belongs to receive.sync. Keep only a
+            // pinned source identity after extraction, then invoke callbacks
+            // with no receive-side lock held.
+            scoped_lock_t receive_lock (receive_runtime ().sync);
+            recv_rc = _fq.recvpipe (&msg, &pipe);
+            if (recv_rc == 0 && pipe && !pipe->retain_lifetime_ref ())
+                pipe = NULL;
+        }
+
+        if (recv_rc != 0) {
+            const int saved_errno = errno;
+            const int close_rc = msg.close ();
+            errno_assert (close_rc == 0);
+            if (saved_errno == ECONNABORTED)
+                continue;
+            errno = saved_errno;
+            break;
+        }
+
+        if (!pipe) {
+            const int close_rc = msg.close ();
+            errno_assert (close_rc == 0);
+            continue;
+        }
+
+        const int dispatch_rc = socket_msg_dispatch_from_io (&msg, pipe);
+        const int saved_errno = errno;
+        pipe->release_lifetime_ref ();
+        const int close_rc = msg.close ();
+        errno_assert (close_rc == 0);
+        errno = saved_errno;
+        if (dispatch_rc <= 0)
+            break;
+    }
 }
 
 bool zlink::router_t::xhas_in ()
 {
-    socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
     if (socket_msg_dispatch_active ()) {
-        zlink::drain_socket_dispatch_loop (
-          [this] (msg_t *msg_, pipe_t **pipe_out_) { return _fq.recvpipe (msg_, pipe_out_); },
-          [this] (msg_t *msg_, pipe_t *pipe_) { return xsocket_msg_dispatch (msg_, pipe_); });
+        defer_socket_msg_dispatch ();
         return false;
     }
 

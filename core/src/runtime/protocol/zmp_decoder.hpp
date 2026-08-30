@@ -33,16 +33,34 @@ class zmp_decoder_t ZLINK_FINAL
     int retry_frame_admission ();
     void **frame_reservation_slot ();
     void discard_frame_reservation ();
+    int stream_end () ZLINK_OVERRIDE;
+    int transport_message_complete () ZLINK_OVERRIDE;
+    void transport_message_invalid () ZLINK_OVERRIDE;
 
   private:
     int header_ready (unsigned char const *read_from_);
+    int sequence_ready (unsigned char const *read_from_);
     int body_ready (unsigned char const *read_from_);
 
     int size_ready (uint32_t size_, unsigned char const *read_from_);
+    int validate_header_and_admit (unsigned char const *read_from_);
+    void complete_frame ();
+    int fail_protocol (uint8_t error_code_);
     void release_frame_reservation ();
 
-    unsigned char _tmpbuf[zmp_header_size];
+    enum frame_stage_t
+    {
+        reading_base_header,
+        reading_sequence_extension,
+        waiting_frame_admission,
+        reading_payload
+    };
+
+    unsigned char _tmpbuf[zmp_request_reply_header_size];
     unsigned char _msg_flags;
+    unsigned char _wire_flags;
+    unsigned char _wire_kind;
+    uint64_t _request_sequence;
     uint8_t _error_code;
     msg_t _in_progress;
     const uint32_t _max_msg_size_effective;
@@ -53,6 +71,9 @@ class zmp_decoder_t ZLINK_FINAL
     uint32_t _pending_msg_size;
     const unsigned char *_pending_read_from;
     bool _allocation_backpressured;
+    bool _application_multipart_in_progress;
+    bool _next_application_multipart_in_progress;
+    frame_stage_t _frame_stage;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (zmp_decoder_t)
 };

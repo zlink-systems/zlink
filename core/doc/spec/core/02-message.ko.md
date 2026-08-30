@@ -429,9 +429,10 @@ buffered part를 close하고 helper state를 초기화한다.
 
 ### Request/reply
 
-request control part와 application payload는 한 transaction으로 전송된다. receive 경로는
-control part를 검증하고 제거한 뒤 request sequence와 peer routing ID를 typed metadata로
-반환한다.
+Request·reply kind와 sequence는 첫 application part의 내부 metadata로 transaction과 함께
+이동한다. Pipe와 queue는 이를 보존하고, typed receive 경로는 reply에 필요한 sequence 또는
+local token과 routing context를 message 밖의 별도 상태·output으로 옮긴 뒤 public message에서 metadata를 제거한다. Application payload 앞에
+request-reply protocol part를 추가하지 않는다.
 
 ## 8. 구현 및 contract test 검증 요구
 
@@ -466,3 +467,7 @@ control part를 검증하고 제거한 뒤 request sequence와 peer routing ID�
 
 **공통 반환 규약**
 - `zlink_config_result_t`를 반환하는 각 `zlink_msg_*` 함수는 성공 시 `ZLINK_CONFIG_OK`, 실패 시 `zlink_config_result_t` 값을 반환하며 `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
+
+<!-- zlink-nav:start -->
+[Core 스펙 목차](README.ko.md) | [이전: Context](01-context.ko.md) | [다음: Errors](03-errors.ko.md)
+<!-- zlink-nav:end -->

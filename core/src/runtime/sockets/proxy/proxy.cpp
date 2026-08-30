@@ -17,6 +17,43 @@
 #include "sockets/common/socket_base.hpp"
 #include "utils/err.hpp"
 
+#ifdef ZLINK_BUILD_TESTS
+namespace
+{
+std::atomic<zlink::proxy_part_forwarded_hook_fn> g_proxy_part_forwarded_hook (
+  NULL);
+std::atomic<void *> g_proxy_part_forwarded_hook_userdata (NULL);
+std::atomic<bool> g_fail_next_proxy_destination_send (false);
+}
+
+void zlink::test_set_proxy_part_forwarded_hook (
+  proxy_part_forwarded_hook_fn hook_, void *userdata_)
+{
+    if (!hook_) {
+        g_proxy_part_forwarded_hook.store (NULL, std::memory_order_release);
+        g_proxy_part_forwarded_hook_userdata.store (NULL,
+                                                     std::memory_order_release);
+        return;
+    }
+    g_proxy_part_forwarded_hook_userdata.store (userdata_,
+                                                 std::memory_order_release);
+    g_proxy_part_forwarded_hook.store (hook_, std::memory_order_release);
+}
+
+void zlink::test_fail_next_proxy_destination_send ()
+{
+    g_fail_next_proxy_destination_send.store (true,
+                                               std::memory_order_release);
+}
+
+void zlink::test_reset_proxy_state ()
+{
+    test_set_proxy_part_forwarded_hook (NULL, NULL);
+    g_fail_next_proxy_destination_send.store (false,
+                                               std::memory_order_release);
+}
+#endif
+
 #ifdef ZLINK_HAVE_POLLER
 
 #include "core/socket_poller.hpp"
@@ -55,13 +92,85 @@ static int capture (class zlink::socket_base_t *capture_, zlink::msg_t *msg_, in
         if (unlikely (rc < 0))
             return -1;
         rc = ctrl.copy (*msg_);
-        if (unlikely (rc < 0))
+        if (unlikely (rc < 0)) {
+            const int saved_errno = errno;
+            (void) ctrl.close ();
+            errno = saved_errno;
             return -1;
+        }
         rc = capture_->send (&ctrl, more_ ? ZLINK_SNDMORE : 0);
+        const int saved_errno = errno;
+        (void) ctrl.close ();
+        errno = saved_errno;
         if (unlikely (rc < 0))
             return -1;
     }
     return 0;
+}
+
+class proxy_source_pipe_pin_t
+{
+  public:
+    explicit proxy_source_pipe_pin_t (zlink::pipe_t *pipe_) : _pipe (pipe_) {}
+    ~proxy_source_pipe_pin_t ()
+    {
+        if (_pipe)
+            _pipe->release_lifetime_ref ();
+    }
+
+    zlink::pipe_t *get () const { return _pipe; }
+
+  private:
+    zlink::pipe_t *_pipe;
+};
+
+static void reset_proxy_receive_message (zlink::msg_t *msg_)
+{
+    if (msg_->check ()) {
+        const int close_rc = msg_->close ();
+        errno_assert (close_rc == 0);
+    }
+    const int init_rc = msg_->init ();
+    errno_assert (init_rc == 0);
+}
+
+static void rollback_proxy_record (zlink::socket_base_t *to_,
+                                   zlink::socket_base_t *capture_,
+                                   zlink::msg_t *msg_)
+{
+    // Both destinations are owned by this proxy loop. rollback() is a no-op
+    // when a destination has not accepted a MORE frame, so use one cleanup for
+    // every failed exit rather than trying to reconstruct which of capture/to
+    // won the most recent write.
+    (void) to_->rollback ();
+    if (capture_)
+        (void) capture_->rollback ();
+    reset_proxy_receive_message (msg_);
+}
+
+static void reject_proxy_record (zlink::socket_base_t *from_,
+                                 zlink::socket_base_t *to_,
+                                 zlink::socket_base_t *capture_,
+                                 zlink::msg_t *msg_,
+                                 zlink::pipe_t *source_pipe_,
+                                 bool current_has_more_)
+{
+    bool more = current_has_more_;
+    while (more) {
+        zlink::pipe_t *tail_pipe = NULL;
+        const int recv_rc = from_->recv_pipe (
+          msg_, &tail_pipe, ZLINK_DONTWAIT, true);
+        proxy_source_pipe_pin_t tail_pin (tail_pipe);
+        if (recv_rc != 0)
+            break;
+        more = (msg_->flags () & zlink::msg_t::more) != 0;
+    }
+
+    // Earlier MORE frames are not visible until the record commits. Remove
+    // them from both output transactions before terminating the bad source.
+    rollback_proxy_record (to_, capture_, msg_);
+    if (source_pipe_)
+        source_pipe_->terminate (false);
 }
 
 static int forward (class zlink::socket_base_t *from_,
@@ -72,25 +181,80 @@ static int forward (class zlink::socket_base_t *from_,
     // Forward a burst of messages
     for (unsigned int i = 0; i < zlink::proxy_burst_size; i++) {
         // Forward all the parts of one message
+        bool first_proxy_frame = true;
+        size_t application_part_index = 0;
         while (true) {
-            int rc = from_->recv (msg_, ZLINK_DONTWAIT);
+            zlink::pipe_t *source_pipe = NULL;
+            int rc = from_->recv_pipe (
+              msg_, &source_pipe, ZLINK_DONTWAIT, true);
+            proxy_source_pipe_pin_t source_pin (source_pipe);
             if (rc < 0) {
-                if (likely (errno == EAGAIN && i > 0))
+                const int saved_errno = errno;
+                rollback_proxy_record (to_, capture_, msg_);
+                errno = saved_errno;
+                if (likely (saved_errno == EAGAIN && i > 0))
                     return 0; // End of burst
 
                 return -1;
             }
 
             const bool more = (msg_->flags () & zlink::msg_t::more) != 0;
+            const bool router_identity_preamble =
+              first_proxy_frame
+              && from_->socket_type () == ZLINK_CORE_SOCKET_ROUTER;
+            unsigned char request_reply_kind = 0;
+            uint64_t request_reply_sequence = 0;
+            const bool has_request_reply_metadata =
+              msg_->get_request_reply_metadata (
+                &request_reply_kind, &request_reply_sequence);
+            if (!router_identity_preamble && application_part_index > 0
+                && has_request_reply_metadata) {
+                reject_proxy_record (from_, to_, capture_, msg_,
+                                     source_pin.get (), more);
+                errno = EPROTO;
+                return -1;
+            }
+
+            // Proxy and capture are public raw-message boundaries. Preserve
+            // application bytes and multipart flags, but never forward the
+            // internal request/reply kind or sequence to either output.
+            msg_->reset_request_reply_metadata ();
+
+            if (!router_identity_preamble)
+                ++application_part_index;
+            first_proxy_frame = false;
 
             //  Copy message to capture socket if any
             rc = capture (capture_, msg_, more);
-            if (unlikely (rc < 0))
+            if (unlikely (rc < 0)) {
+                const int saved_errno = errno;
+                rollback_proxy_record (to_, capture_, msg_);
+                errno = saved_errno;
                 return -1;
+            }
 
-            rc = to_->send (msg_, more ? ZLINK_SNDMORE : 0);
-            if (unlikely (rc < 0))
+#ifdef ZLINK_BUILD_TESTS
+            if (g_fail_next_proxy_destination_send.exchange (
+                  false, std::memory_order_acq_rel)) {
+                errno = EAGAIN;
+                rc = -1;
+            } else
+#endif
+                rc = to_->send (msg_, more ? ZLINK_SNDMORE : 0);
+            if (unlikely (rc < 0)) {
+                const int saved_errno = errno;
+                rollback_proxy_record (to_, capture_, msg_);
+                errno = saved_errno;
                 return -1;
+            }
+#ifdef ZLINK_BUILD_TESTS
+            zlink::proxy_part_forwarded_hook_fn forwarded_hook =
+              g_proxy_part_forwarded_hook.load (std::memory_order_acquire);
+            if (forwarded_hook)
+                forwarded_hook (
+                  g_proxy_part_forwarded_hook_userdata.load (
+                    std::memory_order_acquire));
+#endif
             if (more == 0)
                 break;
         }

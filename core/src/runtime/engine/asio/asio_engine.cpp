@@ -144,6 +144,9 @@ zlink::asio_engine_t::asio_engine_t (fd_t fd_,
     _insize (0),
     _decoder (NULL),
     _input_in_decoder_buffer (false),
+    _transport_handshake_frame_staged (false),
+    _transport_message_complete_pending (false),
+    _transport_decoded_message_stage (transport_message_not_staged),
     _outpos (NULL),
     _outsize (0),
     _encoder (NULL),
@@ -408,6 +411,28 @@ bool zlink::asio_engine_t::build_gather_header (const msg_t &msg_,
     return false;
 }
 
+bool zlink::asio_engine_t::transport_has_message_boundaries () const
+{
+    return _transport_adapter.transport
+           && _transport_adapter.transport->has_message_boundaries ();
+}
+
+bool zlink::asio_engine_t::zmp_transport_has_message_boundaries () const
+{
+    return _options.type != ZLINK_CORE_SOCKET_STREAM
+           && transport_has_message_boundaries ();
+}
+
+void zlink::asio_engine_t::stage_transport_decoded_message (
+  transport_decoded_message_stage_t stage_)
+{
+    zlink_assert (zmp_transport_has_message_boundaries ());
+    zlink_assert (stage_ != transport_message_not_staged);
+    zlink_assert (_transport_decoded_message_stage
+                  == transport_message_not_staged);
+    _transport_decoded_message_stage = stage_;
+}
+
 size_t zlink::asio_engine_t::select_handshake_read_buffer ()
 {
     //  During handshake, use the internal buffer (allocated on first use).
@@ -422,9 +447,13 @@ void zlink::asio_engine_t::start_async_read ()
     //  For non-stream sockets keep classic flow-control semantics:
     //  once input is stopped, do not arm new reads until restart_input().
     //  Stream sockets keep proactor-style buffering under backpressure.
+    const bool message_transport =
+      _transport_adapter.transport
+      && _transport_adapter.transport->has_message_boundaries ();
     if (_pipeline.read_pending || _pipeline.io_error
         || (_input_stop_reason != input_running
-            && _options.type != ZLINK_CORE_SOCKET_STREAM))
+            && (_options.type != ZLINK_CORE_SOCKET_STREAM
+                || message_transport)))
         return;
 
     ENGINE_DBG ("start_async_read: insize=%zu", _insize);
@@ -550,12 +579,76 @@ bool zlink::asio_engine_t::speculative_read ()
     _pipeline.last_read_request_size = read_size;
 
     errno = 0;
+    const bool decoder_active_at_read_start = _decoder != NULL;
     const std::size_t bytes = _transport_adapter.transport->read_some (
       reinterpret_cast<std::uint8_t *> (_pipeline.read_buffer_ptr), read_size);
+    const bool transport_message_complete =
+      _transport_adapter.transport->read_message_complete ();
+    if (zmp_transport_has_message_boundaries ()
+        && transport_message_complete
+        && !_transport_adapter.transport->read_message_binary ()) {
+        errno = EPROTO;
+        error (protocol_error);
+        return true;
+    }
+    if (decoder_active_at_read_start
+        && zmp_transport_has_message_boundaries ()
+        && transport_message_complete)
+        _transport_message_complete_pending = true;
 
     if (bytes == 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK)
             return false;
+        if (transport_has_message_boundaries () && errno == 0
+            && !transport_message_complete)
+            return false;
+        if (!decoder_active_at_read_start
+            && _transport_handshake_frame_staged
+            && !transport_message_complete) {
+            errno = EPROTO;
+            error (protocol_error);
+            return true;
+        }
+        if (!decoder_active_at_read_start && transport_message_complete
+            && _connection_facade.handshaking) {
+            if (!_transport_handshake_frame_staged) {
+                errno = EPROTO;
+                error (protocol_error);
+                return true;
+            }
+            if (!process_input () && _connection_facade.terminating)
+                return true;
+            if (_transport_handshake_frame_staged || _decoder == NULL) {
+                errno = EPROTO;
+                error (protocol_error);
+                return true;
+            }
+            if (_outsize > 0)
+                start_async_write ();
+            start_async_read ();
+            return true;
+        }
+        if (_transport_decoded_message_stage != transport_message_not_staged
+            && !transport_message_complete) {
+            (void) reject_transport_message ();
+            return true;
+        }
+        bool handshake_message_processed = false;
+        if (!finalize_transport_message_if_ready (
+              &handshake_message_processed))
+            return true;
+        if (handshake_message_processed && !process_input ()
+            && (!_connection_facade.handshaking || errno != EAGAIN))
+            return true;
+        if (transport_message_complete) {
+            if (_outsize > 0)
+                start_async_write ();
+            return true;
+        }
+        if (decoder_active_at_read_start && _decoder->stream_end () != 0) {
+            error (protocol_error);
+            return true;
+        }
         //  Treat EOF or other errors as connection error.
         error (connection_error);
         return true;
@@ -580,12 +673,28 @@ bool zlink::asio_engine_t::speculative_read ()
     }
     _input_in_decoder_buffer = (_decoder != NULL);
 
+    if (_transport_decoded_message_stage != transport_message_not_staged) {
+        (void) reject_transport_message ();
+        return true;
+    }
+
     if (!process_input ()) {
         if (_connection_facade.handshaking && errno == EAGAIN) {
+            bool handshake_message_processed = false;
+            if (!finalize_transport_message_if_ready (
+                  &handshake_message_processed))
+                return true;
+            if (handshake_message_processed && !process_input ()
+                && (!_connection_facade.handshaking || errno != EAGAIN))
+                return true;
             if (_outsize > 0)
                 start_async_write ();
         }
+        return true;
     }
+
+    if (!finalize_transport_message_if_ready ())
+        return true;
 
     return true;
 }
@@ -712,11 +821,18 @@ void zlink::asio_engine_t::start_async_write ()
 bool zlink::asio_engine_t::prepare_gather_output ()
 {
     const bool stream_mode = _options.type == ZLINK_CORE_SOCKET_STREAM;
-    const bool gather_enabled = asio_gather_write_on || (stream_mode && asio_stream_gather_on);
+    const bool message_transport =
+      zmp_transport_has_message_boundaries ();
+    const bool gather_enabled =
+      message_transport || asio_gather_write_on
+      || (stream_mode && asio_stream_gather_on);
 
     if (!gather_enabled)
         return false;
-    if (!_transport_adapter.transport || !_connection_fastpath_policy.gather_write_enabled ())
+    if (!_transport_adapter.transport
+        || !_transport_adapter.transport->supports_gather_write ()
+        || (!message_transport
+            && !_connection_fastpath_policy.gather_write_enabled ()))
         return false;
     if (_encoder == NULL || _connection_facade.handshaking)
         return false;
@@ -742,7 +858,8 @@ bool zlink::asio_engine_t::prepare_gather_output ()
     const size_t threshold = stream_mode ? asio_stream_gather_threshold : asio_gather_threshold;
     const bool tiny_stream_gather =
       stream_mode && body_size > 0 && body_size <= asio_stream_tiny_gather_threshold;
-    if (!tiny_stream_gather && body_size > 0 && body_size < threshold) {
+    if (!message_transport && !tiny_stream_gather && body_size > 0
+        && body_size < threshold) {
         _encoder->load_msg (&_pipeline.tx_msg);
         return false;
     }
@@ -750,6 +867,21 @@ bool zlink::asio_engine_t::prepare_gather_output ()
     size_t header_size = 0;
     if (!build_gather_header (_pipeline.tx_msg, _pipeline.gather_header,
                               sizeof (_pipeline.gather_header), header_size)) {
+        if (message_transport) {
+            // A message-boundary transport must emit exactly one encoded ZMP
+            // frame per transport message. Feeding a rejected frame into the
+            // batching encoder can consume it without output and then place a
+            // later frame in this WebSocket message. End the connection at the
+            // invalid frame instead of crossing that boundary.
+            const int saved_errno = errno ? errno : EPROTO;
+            const int close_rc = _pipeline.tx_msg.close ();
+            errno_assert (close_rc == 0);
+            const int init_rc = _pipeline.tx_msg.init ();
+            errno_assert (init_rc == 0);
+            errno = saved_errno;
+            error (protocol_error);
+            return true;
+        }
         _encoder->load_msg (&_pipeline.tx_msg);
         return false;
     }
@@ -887,15 +1019,98 @@ void zlink::asio_engine_t::on_read_complete (const boost::system::error_code &ec
     if (!_connection_facade.plugged)
         return;
 
+    const bool decoder_active_at_read_start =
+      _decoder != NULL;
+    const bool transport_message_complete =
+      _transport_adapter.transport
+      && _transport_adapter.transport->read_message_complete ();
+
     if (ec) {
         if (ec == boost::asio::error::operation_aborted)
             return;
+        if (!decoder_active_at_read_start
+            && _transport_handshake_frame_staged) {
+            errno = EPROTO;
+            error (protocol_error);
+            return;
+        }
+        if (decoder_active_at_read_start
+            && _transport_decoded_message_stage
+                 != transport_message_not_staged) {
+            (void) reject_transport_message ();
+            return;
+        }
+        if (decoder_active_at_read_start && _decoder->stream_end () != 0) {
+            error (protocol_error);
+            return;
+        }
         error (connection_error);
         return;
     }
 
+    // ZMP over WebSocket is binary-only. The transport snapshots got_binary()
+    // before invoking this completion, so reject text before HELLO parsing or
+    // decoder input can publish any otherwise-valid bytes.
+    if (zmp_transport_has_message_boundaries ()
+        && transport_message_complete
+        && !_transport_adapter.transport->read_message_binary ()) {
+        errno = EPROTO;
+        error (protocol_error);
+        return;
+    }
+
+    if (decoder_active_at_read_start
+        && zmp_transport_has_message_boundaries ()
+        && transport_message_complete)
+        _transport_message_complete_pending = true;
+
     if (bytes_transferred == 0) {
-        //  Connection closed by peer
+        if (transport_has_message_boundaries ()
+            && !transport_message_complete) {
+            start_async_read ();
+            return;
+        }
+        if (!decoder_active_at_read_start && transport_message_complete
+            && _connection_facade.handshaking) {
+            if (!_transport_handshake_frame_staged) {
+                errno = EPROTO;
+                error (protocol_error);
+                return;
+            }
+            if (!process_input () && _connection_facade.terminating)
+                return;
+            if (_transport_handshake_frame_staged || _decoder == NULL) {
+                errno = EPROTO;
+                error (protocol_error);
+                return;
+            }
+            if (_outsize > 0)
+                start_async_write ();
+            start_async_read ();
+            return;
+        }
+        if (_transport_decoded_message_stage != transport_message_not_staged
+            && !transport_message_complete) {
+            (void) reject_transport_message ();
+            return;
+        }
+        bool handshake_message_processed = false;
+        if (!finalize_transport_message_if_ready (
+              &handshake_message_processed))
+            return;
+        if (handshake_message_processed && !process_input ()
+            && (!_connection_facade.handshaking || errno != EAGAIN))
+            return;
+        if (transport_message_complete) {
+            if (_outsize > 0)
+                start_async_write ();
+            start_async_read ();
+            return;
+        }
+        if (decoder_active_at_read_start && _decoder->stream_end () != 0) {
+            error (protocol_error);
+            return;
+        }
         error (connection_error);
         return;
     }
@@ -903,7 +1118,11 @@ void zlink::asio_engine_t::on_read_complete (const boost::system::error_code &ec
     //  During backpressure, STREAM keeps proactor-style buffering, while
     //  non-stream keeps bytes in decoder buffer and waits for restart_input().
     if (_input_stop_reason != input_running) {
-        if (_options.type != ZLINK_CORE_SOCKET_STREAM) {
+        const bool message_transport =
+          _transport_adapter.transport
+          && _transport_adapter.transport->has_message_boundaries ();
+        if (_options.type != ZLINK_CORE_SOCKET_STREAM
+            || message_transport) {
             if (_decoder && _insize > 0) {
                 const size_t partial_size = _insize;
                 _insize = partial_size + bytes_transferred;
@@ -961,10 +1180,22 @@ void zlink::asio_engine_t::on_read_complete (const boost::system::error_code &ec
     }
     _input_in_decoder_buffer = (_decoder != NULL);
 
+    if (_transport_decoded_message_stage != transport_message_not_staged) {
+        (void) reject_transport_message ();
+        return;
+    }
+
     //  Process received data
     if (!process_input ()) {
         //  If handshaking and need more data (EAGAIN), continue I/O
         if (_connection_facade.handshaking && errno == EAGAIN) {
+            bool handshake_message_processed = false;
+            if (!finalize_transport_message_if_ready (
+                  &handshake_message_processed))
+                return;
+            if (handshake_message_processed && !process_input ()
+                && (!_connection_facade.handshaking || errno != EAGAIN))
+                return;
             //  Send any output that was built during greeting processing
             if (_outsize > 0)
                 start_async_write ();
@@ -973,12 +1204,92 @@ void zlink::asio_engine_t::on_read_complete (const boost::system::error_code &ec
         return;
     }
 
+    if (!finalize_transport_message_if_ready ())
+        return;
+
     //  Drain a bounded amount of immediately available STREAM data before
     //  re-arming async read. This reduces callback churn on small frames.
     if (_pipeline.in_read_drain)
         return;
 
     maybe_drain_stream_reads ();
+}
+
+bool zlink::asio_engine_t::reject_transport_message ()
+{
+    _transport_message_complete_pending = false;
+    _transport_decoded_message_stage = transport_message_not_staged;
+    _insize = 0;
+    if (_decoder)
+        _decoder->transport_message_invalid ();
+    errno = EPROTO;
+    error (protocol_error);
+    return false;
+}
+
+bool zlink::asio_engine_t::finalize_transport_message_if_ready (
+  bool *handshake_message_processed_)
+{
+    if (handshake_message_processed_)
+        *handshake_message_processed_ = false;
+
+    if (_input_stop_reason != input_running)
+        return true;
+
+    //  Once a frame is staged, any further payload byte belongs to the same
+    //  transport record and makes the one-record/one-frame contract invalid.
+    if (_transport_decoded_message_stage != transport_message_not_staged
+        && _insize != 0)
+        return reject_transport_message ();
+
+    if (!_transport_message_complete_pending)
+        return true;
+
+    if (_insize != 0)
+        return reject_transport_message ();
+
+    _transport_message_complete_pending = false;
+    if (_decoder && _decoder->transport_message_complete () != 0) {
+        _transport_decoded_message_stage = transport_message_not_staged;
+        error (protocol_error);
+        return false;
+    }
+
+    if (_transport_decoded_message_stage == transport_message_not_staged)
+        return reject_transport_message ();
+
+    const bool handshake_message =
+      _transport_decoded_message_stage == transport_handshake_message_staged;
+    _transport_decoded_message_stage = transport_message_not_staged;
+
+    int rc;
+    if (handshake_message) {
+        if ((_decoder->msg ()->flags () & msg_t::command) == 0) {
+            errno = EPROTO;
+            rc = -1;
+        } else {
+            rc = process_command_message (_decoder->msg ());
+        }
+    } else {
+        rc = (this->*_process_msg) (_decoder->msg ());
+    }
+
+    if (rc == -1) {
+        if (!handshake_message && errno == EAGAIN) {
+            stop_input_for_current_backpressure ();
+            _connection_facade.session->flush ();
+            return true;
+        }
+        errno = EPROTO;
+        error (protocol_error);
+        return false;
+    }
+
+    if (!handshake_message)
+        _connection_facade.session->flush ();
+    if (handshake_message_processed_)
+        *handshake_message_processed_ = handshake_message;
+    return true;
 }
 
 void zlink::asio_engine_t::maybe_drain_stream_reads ()
@@ -1182,6 +1493,12 @@ bool zlink::asio_engine_t::process_input ()
 
         if (rc == 0 || rc == -1)
             break;
+        if (zmp_transport_has_message_boundaries ()) {
+            stage_transport_decoded_message (
+              transport_application_message_staged);
+            rc = 0;
+            break;
+        }
         rc = (this->*_process_msg) (_decoder->msg ());
         ENGINE_DBG ("process_input: process_msg returned rc=%d", rc);
         if (rc == -1)
@@ -1469,8 +1786,13 @@ bool zlink::asio_engine_t::restart_input_internal ()
         if (admission_rc == -1)
             return errno == EAGAIN;
         _input_stop_reason = input_running;
-        if (admission_rc == 1)
-            rc = (this->*_process_msg) (_decoder->msg ());
+        if (admission_rc == 1) {
+            if (zmp_transport_has_message_boundaries ())
+                stage_transport_decoded_message (
+                  transport_application_message_staged);
+            else
+                rc = (this->*_process_msg) (_decoder->msg ());
+        }
     } else {
         //  Retry the previously decoded message rejected by the session pipe.
         rc = (this->*_process_msg) (_decoder->msg ());
@@ -1489,7 +1811,9 @@ bool zlink::asio_engine_t::restart_input_internal ()
     }
 
     //  Process any remaining data in the current input buffer
-    while (_insize > 0) {
+    while (_insize > 0
+           && _transport_decoded_message_stage
+                == transport_message_not_staged) {
         size_t processed = 0;
         unsigned char *decode_buf = _inpos;
         size_t decode_size = _insize;
@@ -1507,6 +1831,12 @@ bool zlink::asio_engine_t::restart_input_internal ()
         _insize -= processed;
         if (rc == 0 || rc == -1)
             break;
+        if (zmp_transport_has_message_boundaries ()) {
+            stage_transport_decoded_message (
+              transport_application_message_staged);
+            rc = 0;
+            break;
+        }
         rc = (this->*_process_msg) (_decoder->msg ());
         if (rc == -1)
             break;
@@ -1697,6 +2027,9 @@ bool zlink::asio_engine_t::restart_input_internal ()
     //  All pending data processed successfully - NOW safe to clear flag
     _input_stop_reason = input_running;
     _connection_facade.session->flush ();
+
+    if (!finalize_transport_message_if_ready ())
+        return false;
 
     ENGINE_DBG ("restart_input: completed, input resumed");
 

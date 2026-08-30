@@ -355,13 +355,13 @@ transport·internal failure 순서로 하나를 반환한다. 성공한 함수�
 | `ZLINK_REQUEST_TERMINATED` | `ETERM`, `ESHUTDOWN` | owner lifecycle 종료 |
 | `ZLINK_REQUEST_PROTOCOL_ERROR` | `EPROTO`, `ENOCOMPATPROTO` | malformed 또는 호환되지 않는 reply |
 | `ZLINK_REQUEST_INTERNAL_ERROR` | 보존된 errno | 다른 terminal 분류가 없는 내부 실패 |
-| `ZLINK_REQUEST_REJECTED` | `EACCES`, `ECANCELED` | peer 또는 admission 거절 |
+| `ZLINK_REQUEST_REJECTED` | `EACCES`, `ECONNREFUSED`, `ECANCELED` | peer 또는 admission 거절 |
 | `ZLINK_REQUEST_CONFLICT` | `EEXIST`, `ESTALE` | request correlation 또는 generation 충돌 |
 | `ZLINK_REQUEST_BUSY` | `EBUSY` | active request lifecycle 존재 |
 | `ZLINK_REQUEST_NOT_CONNECTED` | `ENOTCONN`, `EHOSTUNREACH` | terminal route 단절 |
 | `ZLINK_REQUEST_INVALID_ARGUMENT` | `EINVAL`, `EFAULT` | asynchronous validation 실패 |
-| `ZLINK_REQUEST_INVALID_STATE` | `ESTALE`, `EALREADY`, `ESHUTDOWN` | terminal request state 오류 |
-| `ZLINK_REQUEST_NOT_SUPPORTED` | `ENOTSUP` | operation 미지원 |
+| `ZLINK_REQUEST_INVALID_STATE` | `EFSM`, `EALREADY` | terminal request state 오류 |
+| `ZLINK_REQUEST_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | operation 미지원 |
 | `ZLINK_REQUEST_BACKPRESSURED` | `EAGAIN`, `ENOBUFS` | non-blocking admission 또는 reservation 실패 |
 
 Request submit 성공 뒤에는 operation ID마다 terminal result를 정확히 한 번 reply callback으로 전달한다.
@@ -540,6 +540,7 @@ Hierarchy)를, 전체 enum 목록은 위의 [Result와 errno 대응](#result와-
 **Submit과 request completion**
 - Handshake가 완료되지 않은 peer를 향한 submit은 `ZLINK_SUBMIT_NOT_ADMITTED`다.
 - Request submit이 성공하면 operation ID마다 terminal result(`zlink_request_result_t`)가 정확히 한 번 reply callback으로 전달된다.
+- Peer가 유효한 error reply의 첫 4 byte part로 [Request completion result](#3-request-completion-result)의 errno를 보내면 `zlink_reply_handler_fn`은 같은 행의 `zlink_request_result_t`를 받고, 표에 없는 nonzero errno를 보내면 `ZLINK_REQUEST_INTERNAL_ERROR`를 받는다.
 
 **Receive와 handler**
 - Raw subscription receive에서 topic buffer capacity가 0이거나 필요한 길이보다 작으면 `ZLINK_RECV_BUFFER_TOO_SMALL`이며, 필요한 topic 길이만 기록하고 queued topic·payload와 다른 output은 변경하지 않는다 — caller가 충분한 buffer로 재시도할 수 있다.
@@ -554,3 +555,7 @@ Hierarchy)를, 전체 enum 목록은 위의 [Result와 errno 대응](#result와-
 - `zlink_version()`은 세 non-NULL output pointer에 major, minor, patch 값을 기록한다. `NULL` 전달은 미정의다.
 - `zlink_strerror()`는 모든 thread에서 호출할 수 있고 zlink 확장 errno에 대해 non-NULL 설명 문자열을 반환한다. caller는 pointer를 해제·수정하지 않으며, 문자열을 보관해야 하면 즉시 복사한다.
 - `zlink_errno()`와 `zlink_version()`은 여러 thread에서 동시에 호출해도 안전하다.
+
+<!-- zlink-nav:start -->
+[Core 스펙 목차](README.ko.md) | [이전: Message](02-message.ko.md) | [다음: Events](04-events.ko.md)
+<!-- zlink-nav:end -->

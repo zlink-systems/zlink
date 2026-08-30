@@ -132,6 +132,8 @@ template <typename T, typename A = c_single_allocator> class decoder_base_t : pu
 
     A &get_allocator () { return _allocator; }
 
+    std::size_t bytes_left_in_step () const { return _to_read; }
+
   private:
     //  Next step. If set to NULL, it means that associated data stream
     //  is dead. Note that there can be still data in the process in such

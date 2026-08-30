@@ -45,28 +45,134 @@ int zlink::socket_base_t::socket_msg_dispatch_from_io (msg_t *msg_, pipe_t *pipe
     if (!socket_msg_dispatch_active ())
         return 0;
 
+    int rc = 0;
     if (options.type == ZLINK_CORE_SOCKET_STREAM) {
-        socket_msg_dispatch_context_t context (NULL, pipe_, NULL, NULL);
-        return xsocket_msg_dispatch (msg_, pipe_);
+        {
+            socket_msg_dispatch_context_t context (NULL, pipe_, NULL, NULL);
+            rc = xsocket_msg_dispatch (msg_, pipe_);
+        }
+    } else {
+        std::lock_guard<std::recursive_mutex> dispatch_lock (
+          dispatch_runtime ().socket_msg_dispatch_sync);
+        if (socket_msg_dispatch_active ()) {
+            // A session can retain the socket endpoint just before termination
+            // wins. Recheck liveness under the same dispatch-order fence used
+            // by deferred assembly teardown so a late frame cannot recreate
+            // state after that teardown.
+            if (pipe_ && !pipe_->active_for_reply_target ())
+                rc = 1;
+            else {
+                socket_msg_dispatch_context_t context (NULL, pipe_, NULL, NULL);
+                rc = xsocket_msg_dispatch (msg_, pipe_);
+            }
+        }
+    }
+    // A callback can re-enter command processing and observe pipe termination.
+    // Its teardown is skipped while the callback context is live, then safely
+    // reclaimed here after the dispatch lock and callback-owned parts are gone.
+    process_deferred_socket_msg_pipe_terminations ();
+    return rc;
+}
+
+void zlink::socket_base_t::defer_socket_msg_dispatch ()
+{
+    dispatch_runtime ().deferred_socket_msg_dispatch_pending.store (
+      true, std::memory_order_release);
+}
+
+void zlink::socket_base_t::defer_socket_msg_pipe_termination (pipe_t *pipe_)
+{
+    if (!pipe_ || !pipe_->retain_lifetime_ref ())
+        return;
+
+    dispatch_bridge_t &dispatch = dispatch_runtime ();
+    scoped_lock_t lock (dispatch.deferred_socket_msg_termination_sync);
+    zlink_assert (!pipe_->_deferred_socket_msg_termination_next);
+    if (dispatch.deferred_socket_msg_termination_tail)
+        dispatch.deferred_socket_msg_termination_tail
+          ->_deferred_socket_msg_termination_next = pipe_;
+    else
+        dispatch.deferred_socket_msg_termination_head = pipe_;
+    dispatch.deferred_socket_msg_termination_tail = pipe_;
+}
+
+void zlink::socket_base_t::process_deferred_socket_msg_pipe_terminations ()
+{
+    // Recursive command processing from a handler must not destroy the vector
+    // backing that handler's callback arguments. The outer direct-dispatch
+    // entry retries immediately after the callback returns.
+    if (current_socket_msg_dispatch_socket () == this)
+        return;
+
+    for (;;) {
+        pipe_t *pipe = NULL;
+        dispatch_bridge_t &dispatch = dispatch_runtime ();
+        {
+            scoped_lock_t queue_lock (
+              dispatch.deferred_socket_msg_termination_sync);
+            pipe = dispatch.deferred_socket_msg_termination_head;
+            if (!pipe)
+                break;
+            dispatch.deferred_socket_msg_termination_head =
+              pipe->_deferred_socket_msg_termination_next;
+            if (!dispatch.deferred_socket_msg_termination_head)
+                dispatch.deferred_socket_msg_termination_tail = NULL;
+            pipe->_deferred_socket_msg_termination_next = NULL;
+        }
+
+        {
+            std::lock_guard<std::recursive_mutex> dispatch_lock (
+              dispatch.socket_msg_dispatch_sync);
+            xsocket_msg_pipe_terminated (pipe);
+        }
+        pipe->release_lifetime_ref ();
     }
 
-    std::lock_guard<std::recursive_mutex> dispatch_lock (
-      dispatch_runtime ().socket_msg_dispatch_sync);
-    if (!socket_msg_dispatch_active ())
-        return 0;
-    socket_msg_dispatch_context_t context (NULL, pipe_, NULL, NULL);
-    return xsocket_msg_dispatch (msg_, pipe_);
+    process_deferred_socket_msg_dispatch ();
+}
+
+void zlink::socket_base_t::process_deferred_socket_msg_dispatch ()
+{
+    if (current_socket_msg_dispatch_socket () == this)
+        return;
+
+    socket_dispatch_bridge_t &dispatch = dispatch_runtime ();
+    while (dispatch.deferred_socket_msg_dispatch_pending.exchange (
+      false, std::memory_order_acq_rel)) {
+        {
+            std::lock_guard<std::recursive_mutex> dispatch_lock (
+              dispatch.socket_msg_dispatch_sync);
+            if (socket_msg_dispatch_active ())
+                xdispatch_io ();
+        }
+
+        // A callback may have re-entered command processing and queued pipe
+        // teardown. It was intentionally skipped while the callback context
+        // was live; reclaim it before dispatching another queued record.
+        process_deferred_socket_msg_pipe_terminations ();
+    }
 }
 
 int zlink::socket_base_t::peer_command_from_io (msg_t *msg_, pipe_t *pipe_)
 {
+    // This entry always receives the session endpoint. Snapshot and retain its
+    // socket peer before taking the dispatch fence; detach_peer_link() may run
+    // concurrently on the socket mailbox executor.
+    pipe_t *const socket_pipe = pipe_ ? pipe_->retain_peer_snapshot () : NULL;
+    if (pipe_ && !socket_pipe)
+        return 1;
     std::lock_guard<std::recursive_mutex> dispatch_lock (
       dispatch_runtime ().socket_msg_dispatch_sync);
-    pipe_t *socket_pipe = pipe_;
-    pipe_t *const peer = socket_pipe ? socket_pipe->get_peer () : NULL;
-    if (peer)
-        socket_pipe = peer;
-    return xpeer_command (msg_, socket_pipe);
+    if (socket_pipe && !socket_pipe->active_for_reply_target ()) {
+        socket_pipe->release_lifetime_ref ();
+        return 1;
+    }
+    const int rc = xpeer_command (msg_, socket_pipe);
+    const int saved_errno = errno;
+    if (socket_pipe)
+        socket_pipe->release_lifetime_ref ();
+    errno = saved_errno;
+    return rc;
 }
 
 int zlink::socket_base_t::ensure_completion_processing ()
@@ -185,16 +291,14 @@ int zlink::socket_base_t::socket_msg_dispatch_stop ()
 
 void zlink::socket_base_t::socket_msg_dispatch_drain_pending ()
 {
-    if (!socket_msg_dispatch_active ())
-        return;
-
-    scoped_lock_t receive_lock (receive_runtime ().sync);
-    std::lock_guard<std::recursive_mutex> dispatch_lock (
-      dispatch_runtime ().socket_msg_dispatch_sync);
-    if (socket_msg_dispatch_active ()) {
+    {
+        scoped_lock_t receive_lock (receive_runtime ().sync);
+        if (!socket_msg_dispatch_active ())
+            return;
         xarm_socket_msg_dispatch ();
-        xdispatch_io ();
+        defer_socket_msg_dispatch ();
     }
+    process_deferred_socket_msg_pipe_terminations ();
 }
 
 bool zlink::socket_base_t::socket_msg_dispatch_active () const
@@ -255,6 +359,12 @@ void zlink::socket_base_t::invoke_socket_msg_handler (zlink_socket_msg_handler_f
         }
         return;
     }
+    // Socket-message handlers are a public raw receive boundary. Request/reply
+    // metadata remains Core-internal even when the first application frame is
+    // otherwise valid raw payload.
+    for (size_t i = 0; i < part_count_; ++i)
+        reinterpret_cast<msg_t *> (&parts_[i])
+          ->reset_request_reply_metadata ();
     socket_msg_dispatch_context_t context (this, socket_msg_dispatch_context_t::current_pipe (),
                                            socket_msg_handler_subject (), source_rid_);
     handler_ (source_rid_, parts_, part_count_, socket_msg_handler_userdata ());
@@ -419,6 +529,11 @@ int zlink::socket_base_t::xsocket_msg_dispatch (msg_t *msg_, pipe_t *pipe_)
     LIBZLINK_UNUSED (msg_);
     LIBZLINK_UNUSED (pipe_);
     return 0;
+}
+
+void zlink::socket_base_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
+{
+    LIBZLINK_UNUSED (pipe_);
 }
 
 int zlink::socket_base_t::xstream_dispatch_msg (msg_t *msg_, pipe_t *pipe_)

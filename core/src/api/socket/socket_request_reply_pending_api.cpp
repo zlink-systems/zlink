@@ -193,19 +193,6 @@ bool reqrep::erase_socket_pending_request (
     return false;
 }
 
-void reqrep::record_socket_pending_transport_pair (
-  const std::shared_ptr<reqrep::socket_request_reply_state_t> &state_,
-  const reqrep::pending_request_identity_t &identity_,
-  zlink::pipe_t *transport_pair_pipe_)
-{
-    if (!state_ || !transport_pair_pipe_)
-        return;
-
-    (void) reqrep::record_socket_pending_transport_pair_identity (
-      state_, identity_, transport_pair_pipe_->get_transport_pair_id (),
-      transport_pair_pipe_->get_transport_pair_generation ());
-}
-
 bool reqrep::record_socket_pending_transport_pair_identity (
   const std::shared_ptr<reqrep::socket_request_reply_state_t> &state_,
   const reqrep::pending_request_identity_t &identity_,

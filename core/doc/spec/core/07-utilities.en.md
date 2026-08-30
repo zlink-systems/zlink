@@ -447,6 +447,16 @@ All three handles are borrowed. The function neither closes nor owns them. The
 proxy receives message frames and forwards them to the opposite socket without
 returning frame pointers to the application.
 
+The proxy forwards only raw multipart messages on the application lane. Even if a received message
+has an internal ZMP request-reply kind and sequence, the proxy removes them before sending the
+message to the opposite socket and to `capture_`. Both destinations therefore receive the same
+application part count, order, and bytes, while a frame sent back to the wire has the ordinary data
+kind.
+
+The proxy does not bridge pending state or reply targets on the completion progress lane. This API
+does not transparently complete a request across a proxy, and the proxy neither creates
+request-reply metadata nor forwards completion callbacks.
+
 **Returns:** `ZLINK_CONFIG_OK` when the proxy ends normally, or a
 `zlink_config_result_t` error otherwise. If a required handle is `NULL` or
 is not a raw socket, the result is `ZLINK_CONFIG_INVALID_HANDLE`.
@@ -597,6 +607,8 @@ values and errno, and callback invocations). Each item maps to one unit test.
   `ZLINK_CONFIG_OK` when it ends normally.
 - The supplied handles are borrowed—the caller still owns them after the proxy
   ends, and the function does not close them.
+- When a raw fixture with request, reply, or error-reply kind is sent through the proxy, the opposite socket and a non-NULL capture socket receive the same application multipart as an ordinary message; sending it back to the raw wire produces the data kind.
+- Because the proxy does not bridge the completion progress lane, a reply on its far side does not automatically complete the original request.
 
 **Sleep and thread**
 
@@ -615,3 +627,7 @@ values and errno, and callback invocations). Each item maps to one unit test.
   `zlink_handler_result_t`) returns the corresponding OK value on success and
   a result value on failure, while `zlink_errno()` preserves the internal
   errno for diagnostics.
+
+<!-- zlink-nav:start -->
+[Core Spec Index](README.en.md) | [Previous: Monitoring](06-monitoring.en.md) | [Next: Runtime Boundary](08-runtime-boundary.en.md)
+<!-- zlink-nav:end -->

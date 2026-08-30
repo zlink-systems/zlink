@@ -168,6 +168,20 @@ int zlink::socket_base_t::process_commands (int timeout_, bool throttle_)
               options.type == ZLINK_CORE_SOCKET_PAIR
               && (cmd.type == command_t::bind
                   || cmd.type == command_t::pipe_term_ack);
+#ifdef ZLINK_BUILD_TESTS
+            receive_runtime_t::command_sync_probe_hook_fn sync_probe =
+              receive.command_sync_probe_hook.load (std::memory_order_acquire);
+            if (sync_probe) {
+                const bool acquired = receive.sync.try_lock ();
+                if (acquired)
+                    receive.sync.unlock ();
+                sync_probe (
+                  receive.command_sync_probe_userdata.load (
+                    std::memory_order_acquire),
+                  static_cast<int> (cmd.type),
+                  !acquired);
+            }
+#endif
             if (async_executor
                 && (direct_send_needs_public_api_sync ()
                     || pair_pipe_lifetime_command)) {
@@ -179,6 +193,11 @@ int zlink::socket_base_t::process_commands (int timeout_, bool throttle_)
                 scoped_lock_t receive_owner (receive.sync);
                 cmd.destination->process_command (cmd);
             }
+            // Pipe termination callbacks defer socket-message assembly/routing
+            // cleanup because the command itself runs under receive.sync. The
+            // local scope above is gone here, so waiting for a direct handler
+            // cannot invert receive and dispatch locks.
+            process_deferred_socket_msg_pipe_terminations ();
             processed_command = true;
         }
         rc = _mailbox->recv (&cmd, 0);
@@ -229,6 +248,33 @@ void zlink::socket_base_t::test_set_receive_wait_hook (
     scoped_lock_t receive_lock (receive.sync);
     receive.wait_hook = hook_;
     receive.wait_hook_userdata = userdata_;
+}
+
+void zlink::socket_base_t::test_set_receive_record_hooks (
+  receive_runtime_t::record_hook_fn acquired_hook_,
+  receive_runtime_t::record_hook_fn contention_hook_, void *userdata_)
+{
+    receive_runtime_t &receive = receive_runtime ();
+    scoped_lock_t receive_lock (receive.sync);
+    receive.record_hook_userdata.store (userdata_, std::memory_order_release);
+    receive.record_acquired_hook.store (acquired_hook_,
+                                        std::memory_order_release);
+    receive.record_contention_hook.store (contention_hook_,
+                                          std::memory_order_release);
+}
+
+void zlink::socket_base_t::test_set_receive_command_sync_probe_hook (
+  receive_runtime_t::command_sync_probe_hook_fn hook_, void *userdata_)
+{
+    receive_runtime_t &receive = receive_runtime ();
+    if (!hook_)
+        receive.command_sync_probe_hook.store (NULL,
+                                               std::memory_order_release);
+    receive.command_sync_probe_userdata.store (userdata_,
+                                               std::memory_order_release);
+    if (hook_)
+        receive.command_sync_probe_hook.store (hook_,
+                                               std::memory_order_release);
 }
 #endif
 
@@ -461,7 +507,16 @@ void zlink::socket_base_t::process_async_mailbox ()
             return;
         }
         if (lifecycle_coordinator ().is_async_mailbox_active ()) {
-            {
+            if (socket_msg_dispatch_active ()) {
+                // Raw socket-message xread_activated() publishes dispatch
+                // work while it owns receive-side state. Drain only after that
+                // ownership is gone; its callback may re-enter recv/send.
+                defer_socket_msg_dispatch ();
+                process_deferred_socket_msg_pipe_terminations ();
+            } else {
+                // SUB/XPUB and the remaining established async consumers own
+                // their socket-specific xdispatch_io semantics independently
+                // of the raw socket-message bridge.
                 scoped_lock_t receive_lock (receive_runtime ().sync);
                 xdispatch_io ();
             }

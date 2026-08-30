@@ -247,7 +247,7 @@ typedef enum zlink_request_result_t
     ZLINK_REQUEST_TIMED_OUT       = 101,   // 설정된 시간 안에 reply가 도착하지 않음
     ZLINK_REQUEST_NOT_FOUND       = 102,   // 대상이 없어 error reply로 완료됨
     ZLINK_REQUEST_TERMINATED      = 103,   // terminal reply 전에 Context 또는 socket이 종료됨 (ETERM 또는 ESHUTDOWN)
-    ZLINK_REQUEST_PROTOCOL_ERROR  = 104,   // reply envelope 또는 error reply payload가 잘못됨
+    ZLINK_REQUEST_PROTOCOL_ERROR  = 104,   // reply metadata 또는 error reply payload가 잘못됨
     ZLINK_REQUEST_INTERNAL_ERROR  = 105,   // 더 세분화된 public bucket 없이 request completion이 실패함
     ZLINK_REQUEST_REJECTED        = 106,   // target이 request를 명시적으로 거부함
     ZLINK_REQUEST_CONFLICT        = 107,   // request가 현재 routing 또는 operation 상태와 충돌함
@@ -373,10 +373,13 @@ typedef void (*zlink_reply_handler_fn) (
 비동기 request-reply 완료 callback이다. 응답이 도착하거나 요청이 timeout되면
 호출된다. timeout 시 `result_`는 `ZLINK_REQUEST_TIMED_OUT`이고 `parts_`는
 NULL이다. 성공 시 `result_`는 `ZLINK_REQUEST_OK`이고 모든 message part의
-소유권이 callback으로 이전된다. `result_`는 submit 실패가 아니라
-`zlink_request_result_t` 값으로 request completion 결과를 나타낸다. 이
-callback은 data-plane receive가 아니라 async operation completion 통지 축이며,
-`DEALER`/`ROUTER`의 request API에서만 사용된다.
+소유권이 callback으로 이전된다. 유효한 wire error reply이면 `result_`는 첫 4 byte Big Endian
+errno를 매핑한 non-OK 값이고, `parts_`는 errno part 뒤의 payload이며 그 message 소유권도
+callback으로 이전된다. Error reply의 errno part가 없거나 크기가 4 byte가 아니거나 값이 `0`이면
+`result_`는 `ZLINK_REQUEST_PROTOCOL_ERROR`이고 `part_count_`는 `0`이다. `result_`는 submit
+실패가 아니라 `zlink_request_result_t` 값으로 request completion 결과를 나타낸다. 이 callback은
+data-plane receive가 아니라 async operation completion 통지 축이며, `DEALER`/`ROUTER`의
+request API에서만 사용된다.
 
 socket 하나에서 callback이 끝나지 않은 request는 최대 65,536건이다. Core는
 request를 전송하기 전에 completion slot을 예약한다. slot이 없으면 submit 결과는
@@ -1251,8 +1254,13 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 **request completion**
 - socket 하나의 미완료 request가 65,536건에 도달하면 다음 submit은 `ZLINK_SUBMIT_BACKPRESSURED`와 `EAGAIN`이다.
 - request timeout 시 `zlink_reply_handler_fn`의 `result_`는 `ZLINK_REQUEST_TIMED_OUT`이고 `parts_`는 NULL이며, 성공 시 `ZLINK_REQUEST_OK`와 함께 part 소유권이 callback으로 이전된다.
+- 유효한 wire error reply는 errno를 매핑한 non-OK result와 errno part 뒤의 payload를 callback에 전달하며, 잘못된 errno part는 `ZLINK_REQUEST_PROTOCOL_ERROR`와 part 수 `0`을 전달한다.
 - submit이 실패하면 handler는 호출되지 않고, `ZLINK_SUBMIT_OK` 뒤에는 reply 또는 terminal 결과로 정확히 한 번 호출된다.
 
 **receive-flow 상태**
 - 현재 상태를 다시 설정하는 `zlink_socket_set_receive_flow_state`는 성공하고 새로 보내는 것이 없다.
 - completion lane이 없는 socket 유형은 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하며 기존 byte HWM과 transport backpressure를 유지한다.
+
+<!-- zlink-nav:start -->
+[Core 스펙 목차](../README.ko.md) | [이전: Runtime 경계](../08-runtime-boundary.ko.md) | [다음: PAIR](01-pair.ko.md)
+<!-- zlink-nav:end -->

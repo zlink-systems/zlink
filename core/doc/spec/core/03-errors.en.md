@@ -372,13 +372,13 @@ Each socket document defines input ownership and socket-specific detailed condit
 | `ZLINK_REQUEST_TERMINATED` | `ETERM`, `ESHUTDOWN` | Owner lifecycle ended |
 | `ZLINK_REQUEST_PROTOCOL_ERROR` | `EPROTO`, `ENOCOMPATPROTO` | Malformed or incompatible reply |
 | `ZLINK_REQUEST_INTERNAL_ERROR` | preserved errno | Internal failure without another terminal category |
-| `ZLINK_REQUEST_REJECTED` | `EACCES`, `ECANCELED` | Peer or admission rejection |
+| `ZLINK_REQUEST_REJECTED` | `EACCES`, `ECONNREFUSED`, `ECANCELED` | Peer or admission rejection |
 | `ZLINK_REQUEST_CONFLICT` | `EEXIST`, `ESTALE` | Request correlation or generation conflict |
 | `ZLINK_REQUEST_BUSY` | `EBUSY` | An active request lifecycle exists |
 | `ZLINK_REQUEST_NOT_CONNECTED` | `ENOTCONN`, `EHOSTUNREACH` | Terminal route is disconnected |
 | `ZLINK_REQUEST_INVALID_ARGUMENT` | `EINVAL`, `EFAULT` | Asynchronous validation failure |
-| `ZLINK_REQUEST_INVALID_STATE` | `ESTALE`, `EALREADY`, `ESHUTDOWN` | Terminal request state error |
-| `ZLINK_REQUEST_NOT_SUPPORTED` | `ENOTSUP` | Unsupported operation |
+| `ZLINK_REQUEST_INVALID_STATE` | `EFSM`, `EALREADY` | Terminal request state error |
+| `ZLINK_REQUEST_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | Unsupported operation |
 | `ZLINK_REQUEST_BACKPRESSURED` | `EAGAIN`, `ENOBUFS` | Nonblocking admission or reservation failed |
 
 After a successful request submit, exactly one terminal result is delivered to the reply
@@ -580,6 +580,10 @@ and `zlink_version()`. Each item maps to one unit test.
   `ZLINK_SUBMIT_NOT_ADMITTED`.
 - After a successful request submit, exactly one terminal result
   (`zlink_request_result_t`) is delivered to the reply callback for each operation ID.
+- When a peer sends an errno from [Request completion result](#3-request-completion-result)
+  in the first 4-byte part of a valid error reply, `zlink_reply_handler_fn` receives the
+  `zlink_request_result_t` from the same row. An unlisted nonzero errno produces
+  `ZLINK_REQUEST_INTERNAL_ERROR`.
 
 **Receive and handler**
 
@@ -610,3 +614,7 @@ and `zlink_version()`. Each item maps to one unit test.
   copies the string immediately if it must be retained.
 - `zlink_errno()` and `zlink_version()` are safe to call concurrently from multiple
   threads.
+
+<!-- zlink-nav:start -->
+[Core Spec Index](README.en.md) | [Previous: Message](02-message.en.md) | [Next: Events](04-events.en.md)
+<!-- zlink-nav:end -->

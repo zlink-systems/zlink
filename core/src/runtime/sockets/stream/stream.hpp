@@ -50,7 +50,9 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
                       zlink::pipe_t **pipe_out_,
                       uint64_t expected_transport_pair_id_ = 0,
                       uint64_t expected_transport_pair_generation_ = 0,
-                      pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
+                      pipe_message_admission_t *admission_out_ = NULL,
+                      pipe_write_observer_fn observer_ = NULL,
+                      void *observer_userdata_ = NULL) ZLINK_OVERRIDE;
     int xselect_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_) ZLINK_OVERRIDE;

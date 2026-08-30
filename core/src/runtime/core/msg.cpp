@@ -111,6 +111,24 @@ void zlink::msg_t::invalidate ()
     _u.base.type = 0;
 }
 
+void zlink::msg_t::initialize_auxiliary ()
+{
+    _u.base.auxiliary.bytes[0] = auxiliary_none;
+}
+
+void zlink::msg_t::clear_auxiliary ()
+{
+    if (_u.base.auxiliary.bytes[0] == auxiliary_group_long) {
+        long_group_t *content = _u.base.auxiliary.group_long.content;
+        zlink_assert (content);
+        if (!content->refcnt.sub (1)) {
+            content->refcnt.~atomic_counter_t ();
+            free (content);
+        }
+    }
+    initialize_auxiliary ();
+}
+
 int zlink::msg_t::init (
   void *data_, size_t size_, msg_free_fn *ffn_, void *hint_, content_t *content_)
 {
@@ -134,8 +152,7 @@ int zlink::msg_t::init ()
     invalidate ();
     _u.vsm.flags = 0;
     _u.vsm.size = 0;
-    _u.vsm.group.sgroup.group[0] = '\0';
-    _u.vsm.group.type = group_type_short;
+    initialize_auxiliary ();
     _u.vsm.routing_id = 0;
     _u.vsm.transport_connection_id = 0;
     mark_valid (type_vsm);
@@ -148,15 +165,13 @@ int zlink::msg_t::init_size (size_t size_)
     if (size_ <= max_vsm_size) {
         _u.vsm.flags = 0;
         _u.vsm.size = static_cast<unsigned char> (size_);
-        _u.vsm.group.sgroup.group[0] = '\0';
-        _u.vsm.group.type = group_type_short;
+        initialize_auxiliary ();
         _u.vsm.routing_id = 0;
         _u.vsm.transport_connection_id = 0;
         mark_valid (type_vsm);
     } else {
         _u.lmsg.flags = 0;
-        _u.lmsg.group.sgroup.group[0] = '\0';
-        _u.lmsg.group.type = group_type_short;
+        initialize_auxiliary ();
         _u.lmsg.routing_id = 0;
         _u.lmsg.transport_connection_id = 0;
         _u.lmsg.content = NULL;
@@ -315,8 +330,7 @@ int zlink::msg_t::init_external_storage (
 
     invalidate ();
     _u.zclmsg.flags = 0;
-    _u.zclmsg.group.sgroup.group[0] = '\0';
-    _u.zclmsg.group.type = group_type_short;
+    initialize_auxiliary ();
     _u.zclmsg.routing_id = 0;
     _u.zclmsg.transport_connection_id = 0;
 
@@ -344,15 +358,13 @@ int zlink::msg_t::init_data (void *data_, size_t size_, msg_free_fn *ffn_, void 
         _u.cmsg.flags = 0;
         _u.cmsg.data = data_;
         _u.cmsg.size = size_;
-        _u.cmsg.group.sgroup.group[0] = '\0';
-        _u.cmsg.group.type = group_type_short;
+        initialize_auxiliary ();
         _u.cmsg.routing_id = 0;
         _u.cmsg.transport_connection_id = 0;
         mark_valid (type_cmsg);
     } else {
         _u.lmsg.flags = 0;
-        _u.lmsg.group.sgroup.group[0] = '\0';
-        _u.lmsg.group.type = group_type_short;
+        initialize_auxiliary ();
         _u.lmsg.routing_id = 0;
         _u.lmsg.transport_connection_id = 0;
         _u.lmsg.content = static_cast<content_t *> (malloc (sizeof (content_t)));
@@ -375,8 +387,7 @@ int zlink::msg_t::init_delimiter ()
 {
     invalidate ();
     _u.delimiter.flags = 0;
-    _u.delimiter.group.sgroup.group[0] = '\0';
-    _u.delimiter.group.type = group_type_short;
+    initialize_auxiliary ();
     _u.delimiter.routing_id = 0;
     _u.delimiter.transport_connection_id = 0;
     mark_valid (type_delimiter);
@@ -387,8 +398,7 @@ int zlink::msg_t::init_join ()
 {
     invalidate ();
     _u.base.flags = 0;
-    _u.base.group.sgroup.group[0] = '\0';
-    _u.base.group.type = group_type_short;
+    initialize_auxiliary ();
     _u.base.routing_id = 0;
     _u.base.transport_connection_id = 0;
     mark_valid (type_join);
@@ -399,8 +409,7 @@ int zlink::msg_t::init_leave ()
 {
     invalidate ();
     _u.base.flags = 0;
-    _u.base.group.sgroup.group[0] = '\0';
-    _u.base.group.type = group_type_short;
+    initialize_auxiliary ();
     _u.base.routing_id = 0;
     _u.base.transport_connection_id = 0;
     mark_valid (type_leave);
@@ -478,15 +487,7 @@ int zlink::msg_t::close ()
         }
     }
 
-    if (_u.base.group.type == group_type_long) {
-        if (!_u.base.group.lgroup.content->refcnt.sub (1)) {
-            //  We used "placement new" operator to initialize the reference
-            //  counter so we call the destructor explicitly now.
-            _u.base.group.lgroup.content->refcnt.~atomic_counter_t ();
-
-            free (_u.base.group.lgroup.content);
-        }
-    }
+    clear_auxiliary ();
 
     //  Make the message invalid.
     invalidate ();
@@ -544,8 +545,8 @@ int zlink::msg_t::copy (msg_t &src_)
         }
     }
 
-    if (src_._u.base.group.type == group_type_long)
-        src_._u.base.group.lgroup.content->refcnt.add (1);
+    if (src_.has_long_group ())
+        src_._u.base.auxiliary.group_long.content->refcnt.add (1);
 
     *this = src_;
 
@@ -726,8 +727,13 @@ void zlink::msg_t::add_refs (int refs_)
     if (!refs_)
         return;
 
-    //  VSMs, CMSGS and delimiters can be copied straight away. The only
-    //  message type that needs special care are long messages.
+    //  Auxiliary ownership follows every POD-style message copy, regardless
+    //  of whether the payload itself is reference-counted.
+    if (has_long_group ())
+        _u.base.auxiliary.group_long.content->refcnt.add (refs_);
+
+    //  VSMs, CMSGs and delimiters have no shared payload ownership. LMSG and
+    //  zero-copy payloads require their existing reference accounting too.
     if (_u.base.type == type_lmsg || is_zcmsg ()) {
         if (_u.base.flags & msg_t::shared)
             refcnt ()->add (refs_);
@@ -746,15 +752,26 @@ bool zlink::msg_t::rm_refs (int refs_)
     if (!refs_)
         return true;
 
-    //  If there's only one reference close the message.
-    if ((_u.base.type != type_zclmsg && _u.base.type != type_lmsg)
-        || !(_u.base.flags & msg_t::shared)) {
+    const bool refcounted_payload =
+      _u.base.type == type_zclmsg || _u.base.type == type_lmsg;
+
+    //  A non-shared payload has only the reference represented by this
+    //  message. close() releases that payload and its auxiliary together.
+    if (refcounted_payload && !(_u.base.flags & msg_t::shared)) {
         close ();
         return false;
     }
 
-    //  The only message type that needs special care are long and zcopy messages.
-    if (_u.base.type == type_lmsg && !_u.lmsg.content->refcnt.sub (refs_)) {
+    //  Messages without a reference-counted payload still need the long-group
+    //  counter when distributor/queue copies were made bitwise.
+    if (!refcounted_payload && !has_long_group ()) {
+        close ();
+        return false;
+    }
+
+    bool payload_alive = true;
+    if (_u.base.type == type_lmsg
+        && !_u.lmsg.content->refcnt.sub (refs_)) {
         //  We used "placement new" operator to initialize the reference
         //  counter so we call the destructor explicitly now.
         _u.lmsg.content->refcnt.~atomic_counter_t ();
@@ -762,12 +779,14 @@ bool zlink::msg_t::rm_refs (int refs_)
         if (_u.lmsg.content->ffn)
             _u.lmsg.content->ffn (_u.lmsg.content->data, _u.lmsg.content->hint);
         free (_u.lmsg.content);
-
-        return false;
+        payload_alive = false;
     }
 
     if (is_zcmsg () && !_u.zclmsg.content->refcnt.sub (refs_)) {
-        // storage for rfcnt is provided externally
+        //  init_external_storage() placement-constructs this counter even
+        //  though its storage belongs to the caller. Destroy it before the
+        //  release callback can recycle that storage.
+        _u.zclmsg.content->refcnt.~atomic_counter_t ();
         msg_free_fn *ffn = _u.zclmsg.content->ffn;
         const bool pooled_slice_content = ffn == &msg_t::call_dec_ref_on_slice;
         if (ffn) {
@@ -775,11 +794,21 @@ bool zlink::msg_t::rm_refs (int refs_)
             if (pooled_slice_content)
                 release_slice_content (_u.zclmsg.content);
         }
-
-        return false;
+        payload_alive = false;
     }
 
-    return true;
+    bool auxiliary_alive = true;
+    if (has_long_group ()) {
+        long_group_t *content = _u.base.auxiliary.group_long.content;
+        if (!content->refcnt.sub (refs_)) {
+            content->refcnt.~atomic_counter_t ();
+            free (content);
+            initialize_auxiliary ();
+            auxiliary_alive = false;
+        }
+    }
+
+    return payload_alive && auxiliary_alive;
 }
 
 uint32_t zlink::msg_t::get_routing_id () const
@@ -815,9 +844,14 @@ void zlink::msg_t::set_transport_connection_id (uint64_t connection_id_)
 
 const char *zlink::msg_t::group () const
 {
-    if (_u.base.group.type == group_type_long)
-        return _u.base.group.lgroup.content->group;
-    return _u.base.group.sgroup.group;
+    if (_u.base.auxiliary.bytes[0] == auxiliary_group_long) {
+        const long_group_t *content =
+          _u.base.auxiliary.group_long.content;
+        return content ? content->group : "";
+    }
+    if (_u.base.auxiliary.bytes[0] == auxiliary_group_short)
+        return _u.base.auxiliary.group_short.group;
+    return "";
 }
 
 int zlink::msg_t::set_group (const char *group_)
@@ -834,20 +868,88 @@ int zlink::msg_t::set_group (const char *group_, size_t length_)
         return -1;
     }
 
+    if (_u.base.auxiliary.bytes[0] == auxiliary_request_reply) {
+        errno = EINVAL;
+        return -1;
+    }
+
     if (length_ > 14) {
-        _u.base.group.lgroup.type = group_type_long;
-        _u.base.group.lgroup.content = (long_group_t *) malloc (sizeof (long_group_t));
-        assert (_u.base.group.lgroup.content);
-        new (&_u.base.group.lgroup.content->refcnt) zlink::atomic_counter_t ();
-        _u.base.group.lgroup.content->refcnt.set (1);
-        strncpy (_u.base.group.lgroup.content->group, group_, length_);
-        _u.base.group.lgroup.content->group[length_] = '\0';
+        long_group_t *content =
+          static_cast<long_group_t *> (malloc (sizeof (long_group_t)));
+        if (!content) {
+            errno = ENOMEM;
+            return -1;
+        }
+        memcpy (content->group, group_, length_);
+        content->group[length_] = '\0';
+        new (&content->refcnt) zlink::atomic_counter_t (1);
+
+        clear_auxiliary ();
+        _u.base.auxiliary.group_long.type = auxiliary_group_long;
+        _u.base.auxiliary.group_long.content = content;
     } else {
-        strncpy (_u.base.group.sgroup.group, group_, length_);
-        _u.base.group.sgroup.group[length_] = '\0';
+        char short_group[15];
+        if (length_)
+            memcpy (short_group, group_, length_);
+        short_group[length_] = '\0';
+
+        clear_auxiliary ();
+        _u.base.auxiliary.group_short.type = auxiliary_group_short;
+        memcpy (_u.base.auxiliary.group_short.group, short_group, length_ + 1);
     }
 
     return 0;
+}
+
+bool zlink::msg_t::has_long_group () const
+{
+    return _u.base.auxiliary.bytes[0] == auxiliary_group_long;
+}
+
+int zlink::msg_t::set_request_reply_metadata (unsigned char kind_,
+                                               uint64_t sequence_)
+{
+    if (kind_ == 0 || sequence_ == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (_u.base.auxiliary.bytes[0] == auxiliary_group_long
+        || (_u.base.auxiliary.bytes[0] == auxiliary_group_short
+            && _u.base.auxiliary.group_short.group[0] != '\0')) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    initialize_auxiliary ();
+    _u.base.auxiliary.request_reply.type = auxiliary_request_reply;
+    _u.base.auxiliary.request_reply.kind = kind_;
+    _u.base.auxiliary.request_reply.sequence = sequence_;
+    return 0;
+}
+
+bool zlink::msg_t::get_request_reply_metadata (
+  unsigned char *kind_out_, uint64_t *sequence_out_) const
+{
+    if (kind_out_)
+        *kind_out_ = 0;
+    if (sequence_out_)
+        *sequence_out_ = 0;
+
+    if (_u.base.auxiliary.bytes[0] != auxiliary_request_reply)
+        return false;
+
+    if (kind_out_)
+        *kind_out_ = _u.base.auxiliary.request_reply.kind;
+    if (sequence_out_)
+        *sequence_out_ = _u.base.auxiliary.request_reply.sequence;
+    return true;
+}
+
+void zlink::msg_t::reset_request_reply_metadata ()
+{
+    if (_u.base.auxiliary.bytes[0] == auxiliary_request_reply)
+        initialize_auxiliary ();
 }
 
 zlink::atomic_counter_t *zlink::msg_t::refcnt ()

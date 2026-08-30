@@ -27,17 +27,23 @@ class pair_t ZLINK_FINAL : public socket_base_t
                pipe_message_admission_t *admission_out_ = NULL);
     int xrollback () ZLINK_OVERRIDE;
     int xrecv (zlink::msg_t *msg_);
+    int xrecv_pipe (zlink::msg_t *msg_,
+                    zlink::pipe_t **pipe_out_) ZLINK_OVERRIDE;
     bool xhas_in ();
     bool xhas_out ();
     void xread_activated (zlink::pipe_t *pipe_);
     void xwrite_activated (zlink::pipe_t *pipe_);
     void xpipe_terminated (zlink::pipe_t *pipe_);
     int xsocket_msg_dispatch (zlink::msg_t *msg_, zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
+    void xsocket_msg_pipe_terminated (zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
     void xdispatch_io () ZLINK_OVERRIDE;
 
   private:
     zlink::pipe_t *_pipe;
+    size_t _recv_part_index;
     std::vector<zlink_msg_t> _dispatch_parts;
+    zlink::pipe_t *_dispatch_pipe;
+    bool _dispatch_malformed;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (pair_t)
 };
