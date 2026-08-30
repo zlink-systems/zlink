@@ -706,7 +706,8 @@ int zlink::socket_base_t::get_events_internal (int events_, uint32_t *out_)
     return 0;
 }
 
-int zlink::socket_base_t::get_events_for_poller (int events_, uint32_t *out_)
+int zlink::socket_base_t::get_events_for_poller (int events_, uint32_t *out_,
+                                                 bool transport_output_)
 {
     socket_public_api_scope_t admission (lifecycle_coordinator ());
     if (!admission.acquired ()) {
@@ -714,7 +715,19 @@ int zlink::socket_base_t::get_events_for_poller (int events_, uint32_t *out_)
             *out_ = ZLINK_POLLERR;
         return 0;
     }
-    return get_events_internal (events_, out_);
+
+    const int public_events =
+      transport_output_ ? events_ & ~ZLINK_POLLOUT : events_;
+    const int rc = get_events_internal (public_events, out_);
+    if (rc != 0)
+        return rc;
+    // Apply queued activate-write/flow-resume commands before sampling the
+    // physical route. Their mailbox notification is the transport poller's
+    // wake edge on every supported platform.
+    if (transport_output_ && (events_ & ZLINK_POLLOUT)
+        && transport_has_out ())
+        *out_ |= ZLINK_POLLOUT;
+    return 0;
 }
 
 int zlink::socket_base_t::drain_request_completions ()

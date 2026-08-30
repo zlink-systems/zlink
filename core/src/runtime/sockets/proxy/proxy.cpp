@@ -287,12 +287,18 @@ int zlink::proxy (class socket_base_t *frontend_,
     //  Don't allocate these pollers from stack because they will take more than 900 kB of stack!
     //  On Windows this blows up default stack of 1 MB and aborts the program.
     //  I wanted to use std::shared_ptr here as the best solution but that requires C++11...
+    const zlink::socket_poller_t::output_readiness_t proxy_output_readiness =
+      zlink::socket_poller_t::transport_output_readiness;
+    //  Poll for everything.
     zlink::socket_poller_t *poller_all =
-      new (std::nothrow) zlink::socket_poller_t; //  Poll for everything.
+      new (std::nothrow) zlink::socket_poller_t (
+        proxy_output_readiness);
     zlink::socket_poller_t *poller_in = new (std::nothrow) zlink::
       socket_poller_t; //  Poll only 'ZLINK_POLLIN' on all sockets. Initial blocking poll in loop.
+    //  All except 'ZLINK_POLLIN' on 'frontend_'.
     zlink::socket_poller_t *poller_receive_blocked =
-      new (std::nothrow) zlink::socket_poller_t; //  All except 'ZLINK_POLLIN' on 'frontend_'.
+      new (std::nothrow) zlink::socket_poller_t (
+        proxy_output_readiness);
 
     //  If frontend_==backend_ 'poller_send_blocked' and 'poller_receive_blocked' are the same, 'ZLINK_POLLIN' is ignored.
     //  In that case 'poller_send_blocked' is not used. We need only 'poller_receive_blocked'.
@@ -307,14 +313,22 @@ int zlink::proxy (class socket_base_t *frontend_,
       NULL; //  Only 'ZLINK_POLLIN' and 'ZLINK_POLLOUT' on 'backend_'.
 
     if (frontend_ != backend_) {
+        //  All except 'ZLINK_POLLIN' on 'backend_'.
         poller_send_blocked =
-          new (std::nothrow) zlink::socket_poller_t; //  All except 'ZLINK_POLLIN' on 'backend_'.
+          new (std::nothrow) zlink::socket_poller_t (
+            proxy_output_readiness);
+        //  All except 'ZLINK_POLLIN' on both 'frontend_' and 'backend_'.
         poller_both_blocked = new (std::nothrow)
-          zlink::socket_poller_t; //  All except 'ZLINK_POLLIN' on both 'frontend_' and 'backend_'.
+          zlink::socket_poller_t (
+            proxy_output_readiness);
+        //  Only 'ZLINK_POLLIN' and 'ZLINK_POLLOUT' on 'frontend_'.
         poller_frontend_only = new (std::nothrow)
-          zlink::socket_poller_t; //  Only 'ZLINK_POLLIN' and 'ZLINK_POLLOUT' on 'frontend_'.
+          zlink::socket_poller_t (
+            proxy_output_readiness);
+        //  Only 'ZLINK_POLLIN' and 'ZLINK_POLLOUT' on 'backend_'.
         poller_backend_only = new (std::nothrow)
-          zlink::socket_poller_t; //  Only 'ZLINK_POLLIN' and 'ZLINK_POLLOUT' on 'backend_'.
+          zlink::socket_poller_t (
+            proxy_output_readiness);
         frontend_equal_to_backend = false;
     } else
         frontend_equal_to_backend = true;

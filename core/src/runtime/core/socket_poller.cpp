@@ -21,8 +21,10 @@ static It find_if2 (It b_, It e_, const T &value, Pred pred)
     return b_;
 }
 
-zlink::socket_poller_t::socket_poller_t () :
-    _tag (0xCAFEBABE)
+zlink::socket_poller_t::socket_poller_t (
+  output_readiness_t output_readiness_) :
+    _tag (0xCAFEBABE),
+    _output_readiness (output_readiness_)
 #if defined ZLINK_HAVE_WINDOWS
     ,
     _windows_signaler (true),
@@ -530,7 +532,10 @@ int zlink::socket_poller_t::collect_socket_event (item_t &item_, event_t *event_
         return 0;
 
     uint32_t events;
-    if (item_.socket->get_events_for_poller (item_.events, &events) == -1) {
+    if (item_.socket->get_events_for_poller (
+          item_.events, &events,
+          _output_readiness == transport_output_readiness)
+        == -1) {
         return -1;
     }
 

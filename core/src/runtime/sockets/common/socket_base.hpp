@@ -841,7 +841,8 @@ class socket_base_t : public own_t,
       const std::shared_ptr<physical_queue_record_t> &queue_,
       bool writer_) const;
 
-    int get_events_for_poller (int events_, uint32_t *out_);
+    int get_events_for_poller (int events_, uint32_t *out_,
+                               bool transport_output_);
 
     // Direct public send currently shares one scope between single-part and
     // logical multipart wrappers. Keep the admission/sync decision and the
