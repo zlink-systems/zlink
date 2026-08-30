@@ -1174,6 +1174,55 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
+    public async Task Server_drain_accepts_peer_disconnect_after_closing_frame()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        ZLinkFrameworkRuntime runtime = null!;
+        var services = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(_ => runtime);
+
+        await using var provider = services.BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        var socket = new TestStreamSocket
+        {
+            BlockSend = true,
+            DisconnectFailure = new InvalidOperationException(
+                "peer already disconnected")
+        };
+        var session = await ZLinkStreamSessionRuntime.CreateAsync(
+            provider,
+            socket,
+            RoutingId.From("server-drain-peer-close"),
+            typeof(DrainRaceSession),
+            static _ => { },
+            "test",
+            TimeProvider.System);
+
+        try
+        {
+            var drain = session.CloseForDrainAsync(CancellationToken.None).AsTask();
+            var frame = await socket.SentFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var closing = DecodeStreamHeader(frame);
+            Assert.Equal(ZlinkStreamMessageKind.Control, closing.Kind);
+            Assert.Equal("session-closing", closing.Name);
+
+            session.EnqueueDisconnected(new ZLinkStreamError(
+                ZLinkStreamSessionError.TransportError,
+                "peer closed after server drain"));
+            socket.AllowSend.TrySetResult();
+
+            Assert.True(await drain.WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.Equal(0, socket.DisconnectCount);
+        }
+        finally
+        {
+            socket.AllowSend.TrySetResult();
+            await session.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task Rejected_terminal_disposal_and_force_close_share_one_transport_close()
     {
         var registration = new ZLinkFrameworkRegistration();
@@ -1551,6 +1600,22 @@ public sealed class StreamSessionForcedCleanupTests
             lifetime.CleanupCompleted.TrySetResult();
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class DrainRaceSession(
+        IZLinkSessionContext context) : IZLinkSession
+    {
+        public IZLinkSessionContext Context { get; } = context;
+
+        public ValueTask OnConnectedAsync(CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnErrorAsync(
+            ZLinkStreamError error,
+            CancellationToken cancellationToken) => ValueTask.CompletedTask;
     }
 
     private sealed class RejectedTerminalLifetime
@@ -2035,7 +2100,14 @@ public sealed class StreamSessionForcedCleanupTests
         public TaskCompletionSource<byte[]> SentFrame { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public bool BlockSend { get; init; }
+
+        public TaskCompletionSource AllowSend { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public bool BlockSendAsync { get; init; }
+
+        public Exception? DisconnectFailure { get; init; }
 
         public TaskCompletionSource SendAsyncStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2166,6 +2238,7 @@ public sealed class StreamSessionForcedCleanupTests
         public bool Send(RoutingId routingId, Message payload, SendFlags flags)
         {
             SentFrame.TrySetResult(payload.ToArray());
+            if (BlockSend) AllowSend.Task.GetAwaiter().GetResult();
             return true;
         }
 
@@ -2200,6 +2273,10 @@ public sealed class StreamSessionForcedCleanupTests
             DisconnectCount++;
             DisconnectStarted.TrySetResult();
             if (BlockDisconnect) AllowDisconnect.Task.GetAwaiter().GetResult();
+            if (DisconnectFailure is not null)
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                    .Capture(DisconnectFailure)
+                    .Throw();
         }
 
         public ValueTask BindActorAsync(

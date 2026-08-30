@@ -954,6 +954,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             || actorState.NativeActorRef is not { } sourceRef
             || sourceRef.Generation != message.ActorGeneration)
             return;
+        var sourceActivation = actorState.LiveActivation;
         var store = Registration.Locations.ResolveStore()
                     ?? throw new ZLinkConfigurationException(
                         "Actor source leave requires an Authority Store.");
@@ -999,8 +1000,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
                 $"Actor '{message.ActorId}' source leave target fence is stale.");
-        if (actorState.LiveActivation is { } previousActivation)
-            await previousActivation.NotifyActorLeftAfterCommittedMembershipAsync(
+        if (sourceActivation is not null)
+            await sourceActivation.TryNotifyActorLeftAfterCommittedMembershipAsync(
                     actor,
                     cancellationToken)
                 .ConfigureAwait(false);

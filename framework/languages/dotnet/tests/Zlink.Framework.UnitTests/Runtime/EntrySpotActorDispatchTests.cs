@@ -2493,6 +2493,232 @@ public sealed partial class EntrySpotActorDispatchTests
                     targetNodeGeneration));
     }
 
+    // Regression for 4c8036a494 (B1-dotnet 과잉 검증 제거), which deleted the
+    // ZLinkSessionOutboundAdmissionKind.Retained branch on both
+    // ZLinkActorBoundSessionCoordinator call sites. Per
+    // 04-session/02-session-actor-binding.ko.md §8.1, a Retained admission is
+    // an *acceptance* (the aggregate holds the frame until route commit) and
+    // must never be reported as a failed/not-found submit. This test pins
+    // an actor outbound push whose tenure is stale against the sealed table
+    // route: AdmitOutboundAsync must retain it, the async entry point must
+    // report Submitted (not TargetNotFound), hard-cap overload must preserve
+    // Backpressured, and held frames must reach the session's stream once the
+    // relocation route commits.
+    [Fact]
+    public async Task ActorBoundSessionOutboundSendDuringRelocationSealPreservesAdmissionOutcomesAsync()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            includeActorFactory: false);
+        try
+        {
+            var sessionRid = RoutingId.From("session-outbound-retained-async");
+            var sourceNode = RoutingId.From("source-actor-node-outbound-async");
+            var stream = new RetainedOutboundCapturingStream(sessionRid);
+            var context = new ZLinkSessionContext(
+                runtime,
+                stream,
+                new RelaySessionHandlerRegistry(),
+                static () => ValueTask.CompletedTask,
+                static _ => ValueTask.CompletedTask);
+            const string actorId = "actor-outbound-retained-async";
+            const string bindingToken = "binding-outbound-retained-async";
+            var bound = new ZLinkSessionActor(
+                context,
+                actorId,
+                sessionRid,
+                bindingToken);
+            _ = runtime.BindSessionActor(
+                actorId,
+                context,
+                bindingToken,
+                bound,
+                bindingGeneration: 6,
+                route: ZLinkSessionBindingRoute.Create(
+                    new ActorRef(actorId, 5, "entry", sourceNode),
+                    "entry",
+                    targetNodeGeneration: 2,
+                    authorityOwnerGeneration: 11,
+                    ownerLeaseGeneration: 17),
+                sessionOwnerNodeGeneration: 1,
+                sessionOwnerNodeRid: node.RoutingId,
+                sessionOwnerId: "session-owner",
+                sessionOwnerLeaseGeneration: 8);
+
+            // The actor-side outbound snapshot already carries the
+            // AuthorityOwnerGeneration the relocation target will commit to
+            // (99). Until the seal commits, the table's Route still says 11,
+            // so AdmitOutboundAsync must not match Immediate — it must
+            // Retain.
+            _ = runtime.BindActorSession(
+                actorId,
+                sessionNodeRid: node.RoutingId,
+                sessionRid: sessionRid,
+                bindingToken: bindingToken,
+                bindingGeneration: 6,
+                objectGeneration: 5,
+                authorityOwnerGeneration: 99,
+                meshName: "entry",
+                targetNodeGeneration: 2,
+                ownerLeaseGeneration: 17,
+                sessionOwnerNodeGeneration: 1,
+                sessionOwnerId: "session-owner",
+                sessionOwnerLeaseGeneration: 8);
+
+            Assert.True(runtime.TryGetSessionActorBinding(
+                actorId,
+                bindingToken,
+                out var sourceBinding));
+            var seal = new ZLinkServiceWireCodec.SessionRelocationSealRecord(
+                new ZLinkServiceWireCodec.RelocationWireId(9, 1),
+                new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+                    "coordinator",
+                    17,
+                    sourceNode,
+                    2,
+                    "store-9-1"),
+                1,
+                new ZLinkServiceWireCodec.SessionActorRouteFenceRecord(
+                    new ZLinkServiceWireCodec.SessionActorIdentityRecord(
+                        sourceBinding.ActorRef.ActorId,
+                        sourceBinding.ObjectGeneration),
+                    sourceBinding.Route.Ref.NodeRid,
+                    sourceBinding.TargetNodeGeneration,
+                    sourceBinding.AuthorityOwnerGeneration,
+                    sourceBinding.OwnerLeaseGeneration),
+                new ZLinkServiceWireCodec.SessionOwnerFenceRecord(
+                    sourceBinding.SessionOwnerNodeRid,
+                    sourceBinding.SessionOwnerNodeGeneration,
+                    sourceBinding.SessionOwnerId,
+                    sourceBinding.SessionOwnerLeaseGeneration,
+                    sourceBinding.ActorRef.SessionRid,
+                    sourceBinding.BindingGeneration));
+            _ = await runtime.SealCanonicalSessionActorRouteAsync(
+                seal,
+                CancellationToken.None);
+
+            var sendBody = Encoding.UTF8.GetBytes("outbound-retained-body-async");
+            using var payload = Message.From(sendBody);
+
+            var submitResult = await runtime.SendActorBoundSessionIfCurrentAsync(
+                actorId,
+                bindingToken,
+                new[] { payload },
+                CancellationToken.None);
+
+            //  This is the exact regression: before the fix, Retained fell
+            //  through to `_ => ZLinkOneWaySubmitStatus.TargetNotFound`,
+            //  silently dropping the push instead of holding it.
+            Assert.Equal(
+                ZLinkOneWaySubmitStatus.Submitted,
+                submitResult.Status);
+            // Not delivered yet: the frame is held until the seal commits.
+            Assert.Empty(stream.Writes);
+
+            // The retained queue is bounded at 4,096 frames. Fill the rest of
+            // that production queue, then prove the hard-overload admission
+            // remains Backpressured instead of falling through to
+            // TargetNotFound.
+            const int retainedOutboundCapacity = 4_096;
+            for (var retained = 1; retained < retainedOutboundCapacity; retained++)
+            {
+                using var retainedPayload = Message.From(sendBody);
+                var retainedResult = await runtime.SendActorBoundSessionIfCurrentAsync(
+                    actorId,
+                    bindingToken,
+                    new[] { retainedPayload },
+                    CancellationToken.None);
+                Assert.Equal(
+                    ZLinkOneWaySubmitStatus.Submitted,
+                    retainedResult.Status);
+            }
+
+            using (var overflowPayload = Message.From(sendBody))
+            {
+                var overflowResult = await runtime.SendActorBoundSessionIfCurrentAsync(
+                    actorId,
+                    bindingToken,
+                    new[] { overflowPayload },
+                    CancellationToken.None);
+                Assert.Equal(
+                    ZLinkOneWaySubmitStatus.Backpressured,
+                    overflowResult.Status);
+            }
+            Assert.Empty(stream.Writes);
+
+            var targetNode = RoutingId.From("target-actor-node-outbound-async");
+            var commit = new ZLinkServiceWireCodec.SessionRelocationRouteRecord(
+                seal.RelocationId,
+                seal.Coordinator,
+                2,
+                seal.Actor.Actor,
+                seal.Session,
+                ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Commit(
+                    seal.Actor.AuthorityOwnerGeneration,
+                    99,
+                    targetNode,
+                    2));
+            Assert.True(
+                runtime.RouteCanonicalSessionActor(
+                    commit,
+                    new ZLinkSessionRelocationAuthenticatedRoute(
+                        targetNode,
+                        2,
+                        "entry",
+                        99,
+                        101)));
+
+            Assert.Equal(retainedOutboundCapacity, stream.Writes.Count);
+            Assert.All(stream.Writes, written => Assert.Equal(sendBody, written));
+
+            // The adjacent Immediate path has the same contract: a local
+            // stream write refusal is Backpressured, not TargetNotFound.
+            stream.AcceptWrites = false;
+            using var refusedPayload = Message.From(sendBody);
+            var refusedResult = await runtime.SendActorBoundSessionIfCurrentAsync(
+                actorId,
+                bindingToken,
+                new[] { refusedPayload },
+                CancellationToken.None);
+            Assert.Equal(
+                ZLinkOneWaySubmitStatus.Backpressured,
+                refusedResult.Status);
+            Assert.Equal(retainedOutboundCapacity, stream.Writes.Count);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private sealed class RetainedOutboundCapturingStream(RoutingId routingId)
+        : IZLinkStream
+    {
+        public string SessionId { get; } = routingId.ToHex();
+
+        public RoutingId? RoutingId { get; } = routingId;
+
+        public string? LocalAddr => null;
+
+        public string? RemoteAddr => null;
+
+        public List<byte[]> Writes { get; } = [];
+
+        public bool AcceptWrites { get; set; } = true;
+
+        public bool Write(
+            ZLinkMessage payload,
+            SendFlags flags = SendFlags.None)
+        {
+            if (!AcceptWrites) return false;
+            Writes.Add(payload.Decode<byte[]>());
+            return true;
+        }
+
+        public ValueTask CloseAsync() => ValueTask.CompletedTask;
+    }
+
     [Fact]
     public async Task RetriedRemoteReplyAfterAckLossDeliversExactlyOnceToTheSession()
     {
@@ -3838,6 +4064,80 @@ public sealed partial class EntrySpotActorDispatchTests
             [standalone, member]);
 
         Assert.Equal([standalone], inventory);
+        await activation.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task CommittedSourceLeaveClaimsUserSpotMembershipOnceBeforeActorRetirement()
+    {
+        var services = new ServiceCollection().BuildServiceProvider();
+        var registration = new ZLinkFrameworkRegistration();
+        var runtime = new ZLinkFrameworkRuntime(
+            services,
+            new ThrowingBackendAdapterFactory(),
+            registration,
+            new ZLinkHandlerRegistry([]),
+            new ZLinkHandlerDispatcher(
+                services.GetRequiredService<IServiceScopeFactory>(),
+                registration));
+        var activation = new ZLinkUserSpotActivation(
+            runtime,
+            services.CreateAsyncScope(),
+            new CapturingSpot(),
+            "retired-source-membership",
+            RoutingId.From("source-node"),
+            "source-node",
+            "channel",
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(1),
+            ZLinkUserSpotExecutionMode.PerActor);
+        var spot = new SourceLeaveProbeSpot(activation);
+        activation.AttachSpot(spot);
+        await activation.BindDescriptorsAsync(CancellationToken.None);
+        var sourceRef = new ZLinkBackendActorRef(
+            RoutingId.From("source-node"),
+            "retired-source-actor",
+            1);
+        var actor = RegisterProbeActor(runtime, sourceRef);
+        var actorState = runtime.GetOrCreateActorState(sourceRef.ActorId);
+        activation.StageRelocatedPerActorMember(actor, actorState);
+        activation.PublishRelocatedPerActorMember(actor, actorState);
+
+        await activation.TryNotifyActorLeftAfterCommittedMembershipAsync(
+            actor,
+            CancellationToken.None);
+        await activation.TryNotifyActorLeftAfterCommittedMembershipAsync(
+            actor,
+            CancellationToken.None);
+
+        Assert.Equal(0, activation.JoinedActorCount);
+        Assert.Equal(1, spot.LeaveCount);
+        Assert.Same(activation, actorState.LiveActivation);
+
+        var targetRef = new ZLinkBackendActorRef(
+            RoutingId.From("target-node"),
+            sourceRef.ActorId,
+            sourceRef.Generation);
+        actorState.BindNativeActorRef(targetRef);
+        actorState.Handoff.BeginCapture();
+        _ = actorState.Handoff.CutoverCaptureToMessageFollow(
+            0,
+            sourceRef,
+            targetRef,
+            "entry",
+            sourceNodeGeneration: 1,
+            targetNodeGeneration: 2,
+            sourceAuthorityOwnerGeneration: 1,
+            targetAuthorityOwnerGeneration: 2,
+            sourceOwnerLeaseGeneration: 1,
+            targetOwnerLeaseGeneration: 2);
+        actorState.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
+        actorState.RetireMigratedActorInstance(sourceRef);
+
+        Assert.Null(actorState.Actor);
+        Assert.Null(actorState.LiveActivation);
+        Assert.Equal(0, activation.JoinedActorCount);
+        Assert.Equal(1, spot.LeaveCount);
         await activation.DisposeAsync();
     }
 
@@ -8823,6 +9123,33 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             cleanupCancellationToken.ThrowIfCancellationRequested();
             ClosingInvoked.TrySetResult(closing.Reason);
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class SourceLeaveProbeSpot(
+        IZLinkSpotContext context) : IZLinkSpot<ProbeActor>
+    {
+        public IZLinkSpotContext Context { get; } = context;
+
+        internal int LeaveCount { get; private set; }
+
+        public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
+            string actorId,
+            ZLinkMessage request,
+            CancellationToken cancellationToken) =>
+            ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
+
+        public ValueTask OnJoinedActorAsync(
+            ProbeActor actor,
+            CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnLeaveActorAsync(
+            ProbeActor actor,
+            CancellationToken cancellationToken)
+        {
+            LeaveCount++;
             return ValueTask.CompletedTask;
         }
     }

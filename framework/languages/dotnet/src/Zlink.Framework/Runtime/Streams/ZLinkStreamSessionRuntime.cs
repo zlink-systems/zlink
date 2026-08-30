@@ -402,7 +402,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     public void EnqueueDisconnected(ZLinkStreamError error)
     {
-        TryScheduleTerminal("transport_error", () => MarkDisconnectedAsync(error));
+        TryScheduleTerminal(
+            "transport_error",
+            () => MarkDisconnectedAsync(error),
+            recordTransportClosedOnTerminalCollision: true);
     }
 
     public async ValueTask CloseAsync()
@@ -862,11 +865,23 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             timer.Dispose();
     }
 
-    private bool TryScheduleTerminal(string reason, Func<ValueTask> finalWork)
+    private bool TryScheduleTerminal(
+        string reason,
+        Func<ValueTask> finalWork,
+        bool recordTransportClosedOnTerminalCollision = false)
     {
         var (scheduled, rejected) = AwaitStateLane(_lane.RunAsync(() =>
         {
-            if (_terminalClose is not null) return (Scheduled: false, Rejected: false);
+            if (_terminalClose is not null)
+            {
+                // A monitor disconnect remains authoritative transport evidence
+                // when another terminal path already owns finalization. Record it
+                // in the same state-lane turn that observes the collision so the
+                // owner does not race a redundant transport disconnect.
+                if (recordTransportClosedOnTerminalCollision)
+                    _transportClosed.TrySetResult(true);
+                return (Scheduled: false, Rejected: false);
+            }
 
             _terminalClose = new TerminalClose(reason, DisposeOwnsClose: false);
             if (EnqueueTerminalOutsideStateLane(finalWork))

@@ -448,6 +448,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         CancellationToken cancellationToken)
     {
         var sourceSpotId = ResolveSourceSpotId(sourceAuthority);
+        var sourceActivation = actorState.LiveActivation;
 
         var admissionDeadline = absoluteDeadline;
         var sourceNode = runtime.GetSpotNodeRuntime(actorRef.NodeRid);
@@ -981,6 +982,8 @@ internal sealed class ZLinkActorRemoteJoiner(
                     else
                         sourceCleanupCancellation.CancelAfter(sourceCleanupRemaining);
                     await ReconcileCommittedSourceHandoffAsync(
+                            actor,
+                            sourceActivation,
                             actorState,
                             actorRef,
                             resultActorRef,
@@ -1184,6 +1187,8 @@ internal sealed class ZLinkActorRemoteJoiner(
     }
 
     private async ValueTask ReconcileCommittedSourceHandoffAsync(
+        IZLinkActor actor,
+        ZLinkSpotActivation? sourceActivation,
         ZLinkActorRuntimeState actorState,
         ZLinkBackendActorRef sourceActorRef,
         ZLinkBackendActorRef targetActorRef,
@@ -1193,6 +1198,8 @@ internal sealed class ZLinkActorRemoteJoiner(
         if (ZLinkBoundSessionDispatchScope.TryDefer(
             actorState.ActorId,
             ct => ReconcileCommittedSourceHandoffCoreAsync(
+                    actor,
+                    sourceActivation,
                     actorState,
                     sourceActorRef,
                     targetActorRef,
@@ -1201,6 +1208,8 @@ internal sealed class ZLinkActorRemoteJoiner(
             return;
 
         await ReconcileCommittedSourceHandoffCoreAsync(
+                actor,
+                sourceActivation,
                 actorState,
                 sourceActorRef,
                 targetActorRef,
@@ -1210,6 +1219,8 @@ internal sealed class ZLinkActorRemoteJoiner(
     }
 
     private async ValueTask ReconcileCommittedSourceHandoffCoreAsync(
+        IZLinkActor actor,
+        ZLinkSpotActivation? sourceActivation,
         ZLinkActorRuntimeState actorState,
         ZLinkBackendActorRef sourceActorRef,
         ZLinkBackendActorRef targetActorRef,
@@ -1222,6 +1233,12 @@ internal sealed class ZLinkActorRemoteJoiner(
                 {
                     if (!migrationApplied)
                     {
+                        if (sourceActivation is not null)
+                            await ReconcileCommittedSourceLeaveAsync(
+                                    actor,
+                                    sourceActivation,
+                                    token)
+                                .ConfigureAwait(false);
                         await ApplyRemoteActorMigrationCoreAsync(
                                 actorState,
                                 targetActorRef,
@@ -1244,11 +1261,13 @@ internal sealed class ZLinkActorRemoteJoiner(
 
     private async ValueTask ReconcileCommittedSourceLeaveAsync(
         IZLinkActor actor,
-        ZLinkActorRuntimeState actorState,
+        ZLinkSpotActivation sourceActivation,
         CancellationToken cancellationToken)
     {
         await ZLinkReconciliationRunner.RunAsync(
-                token => NotifySourceActorLeftAsync(actor, actorState, token),
+                token => sourceActivation.TryNotifyActorLeftAfterCommittedMembershipAsync(
+                    actor,
+                    token),
                 exception => ReportCommittedHandoffFailure(
                     "actor-source-leave",
                     exception),
@@ -1488,27 +1507,15 @@ internal sealed class ZLinkActorRemoteJoiner(
         CancellationToken cancellationToken)
     {
         actorState.BindNativeActorRef(targetActorRef);
-        actorState.InvalidateContext();
+        // Source Context identity remains readable through the source leave
+        // callback. Fence new operations now, but retain the exact source
+        // activation until FinalizeMigratedSourceAsync retires both together.
+        actorState.FenceRuntimeGeneration();
         await ReconcileActorLocationAfterMoveAsync(
                 actorState,
                 sourceAuthoritySnapshot,
                 cancellationToken)
             .ConfigureAwait(false);
-    }
-
-    private async ValueTask NotifySourceActorLeftAsync(
-        IZLinkActor actor,
-        ZLinkActorRuntimeState actorState,
-        CancellationToken cancellationToken)
-    {
-        if (actorState.LiveActivation is { } previousActivation)
-            await previousActivation.NotifyActorLeftAfterCommittedMembershipAsync(
-                    actor,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        else
-            await runtime.NotifyEntrySpotActorLeftAsync(actor, cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
     }
 
     private async ValueTask ReconcileActorLocationAfterMoveAsync(

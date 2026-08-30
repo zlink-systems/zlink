@@ -889,6 +889,10 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                     ZLinkSessionOutboundAdmissionKind.Immediate
                         => admission.Capability!.Settle(deliver: true)
                            == ZLinkSessionOutboundDelivery.Delivered,
+                    // 04-session/02-session-actor-binding §8.1: relocation seal
+                    // 중 도착한 message는 aggregate가 보관했다가 route 전환 뒤
+                    // 제출한다. 보관(Retained)은 수락이므로 실패로 접지 않는다.
+                    ZLinkSessionOutboundAdmissionKind.Retained => true,
                     _ => false
                 };
             }
@@ -1007,9 +1011,20 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             var status = admission.Kind switch
             {
                 ZLinkSessionOutboundAdmissionKind.Immediate
-                    when admission.Capability!.Settle(deliver: true)
-                         == ZLinkSessionOutboundDelivery.Delivered
+                    => admission.Capability!.Settle(deliver: true) switch
+                    {
+                        ZLinkSessionOutboundDelivery.Delivered
+                            => ZLinkOneWaySubmitStatus.Submitted,
+                        ZLinkSessionOutboundDelivery.Backpressured
+                            => ZLinkOneWaySubmitStatus.Backpressured,
+                        _ => ZLinkOneWaySubmitStatus.TargetNotFound
+                    },
+                // 04-session/02-session-actor-binding §8.1: seal 중 보관된
+                // message는 route 전환 시 제출된다 — 제출 완료로 보고한다.
+                ZLinkSessionOutboundAdmissionKind.Retained
                     => ZLinkOneWaySubmitStatus.Submitted,
+                ZLinkSessionOutboundAdmissionKind.Backpressured
+                    => ZLinkOneWaySubmitStatus.Backpressured,
                 _ => ZLinkOneWaySubmitStatus.TargetNotFound
             };
             return new ZLinkOneWaySubmitResult(status);
