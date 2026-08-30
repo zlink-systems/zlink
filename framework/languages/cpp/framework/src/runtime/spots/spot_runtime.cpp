@@ -4960,6 +4960,18 @@ class actor_dispatch_admission_token_t final :
     struct phase_snapshot_t
     {
         std::optional<runtime::protocol::actor_route_fence_t> authority_fence;
+        struct warm_materialization_t
+        {
+            spot_node_builder_state_t::actor_factory_registration_t factory;
+            spot_id_t found_location;
+            std::shared_ptr<void> actor_instance;
+            std::shared_ptr<spot_context_state_t> context_state;
+            std::shared_ptr<void> spot_instance;
+            std::string mesh_name;
+            std::uint64_t current_generation = 0;
+            bool dispatch_on_spot_serial = true;
+        };
+        std::optional<warm_materialization_t> warm_materialization;
     };
 
     actor_dispatch_admission_token_t (
@@ -4999,10 +5011,10 @@ class actor_dispatch_admission_token_t final :
         _pending_handoff = std::move (pending);
     }
 
-    result_t<phase_snapshot_t> acquire_dispatch_phase (bool request)
+    result_t<phase_snapshot_t> acquire_dispatch_phase (const actor_ref_t &actor_ref, bool request)
     {
         try {
-            return _state->lane.run ([this, request] {
+            return _state->lane.run ([this, &actor_ref, request] {
                 if (_state->retiring_actor_keys.contains (_actor_key)) {
                     return result_t<phase_snapshot_t>::failure (
                       framework_error_kind_t::not_found, "actor destruction is pending");
@@ -5025,6 +5037,42 @@ class actor_dispatch_admission_token_t final :
                         if (!inherited) {
                             return detail::propagate_failure<phase_snapshot_t> (
                               inherited, "actor spot lifecycle admission failed");
+                        }
+
+                        const auto actor_type = std::string (
+                          ::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref));
+                        const auto found_factory = _state->actor_factories.find (actor_type);
+                        const auto found_instance = _state->actor_instances.find (_actor_key);
+                        if (found_factory != _state->actor_factories.end ()
+                            && found_instance != _state->actor_instances.end ()
+                            && found_instance->second) {
+                            auto warm = phase_snapshot_t::warm_materialization_t{};
+                            warm.factory = found_factory->second;
+                            warm.found_location = found_location->second;
+                            warm.actor_instance = found_instance->second;
+                            warm.context_state = found_context->second._state;
+                            warm.spot_instance = warm.context_state->spot_instance;
+                            warm.mesh_name = warm.context_state->mesh_name;
+                            const auto found_generation =
+                              _state->actor_generations.find (_actor_key);
+                            warm.current_generation =
+                              found_generation != _state->actor_generations.end ()
+                                ? found_generation->second
+                                : actor_ref.object_generation ();
+                            if (_state->snapshot.entry_spot_name) {
+                                const auto entry_id = _state->spot_ids_by_name.find (
+                                  *_state->snapshot.entry_spot_name);
+                                warm.dispatch_on_spot_serial =
+                                  entry_id == _state->spot_ids_by_name.end ()
+                                  || entry_id->second != warm.found_location;
+                            }
+                            if (warm.context_state->execution_mode
+                                == user_spot_execution_mode_t::per_actor) {
+                                warm.dispatch_on_spot_serial = false;
+                            }
+                            detail::record_actor_instance_index_unlocked (
+                              *_state, actor_ref, warm.actor_instance.get ());
+                            snapshot.warm_materialization.emplace (std::move (warm));
                         }
                     }
                 }
@@ -10634,14 +10682,17 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
     // those post-commit arrivals in the source backlog lets a continuous
     // producer prevent finish_move_replay() from ever observing it empty.
     std::optional<runtime::protocol::actor_route_fence_t> phase_authority_fence;
+    std::optional<actor_dispatch_admission_token_t::phase_snapshot_t::warm_materialization_t>
+      warm_materialization;
     if (admission_token) {
         const auto phase = admission_token->acquire_dispatch_phase (
-          message_kind == stream_message_kind_t::request);
+          actor_ref, message_kind == stream_message_kind_t::request);
         if (!phase) {
             co_return detail::propagate_failure<std::optional<zlink::message_t>> (
               phase, "actor dispatch admission failed");
         }
         phase_authority_fence = phase.value ().authority_fence;
+        warm_materialization = std::move (phase.value ().warm_materialization);
     }
     bool targets_current_authority = admitted_message_follow_target == nullptr;
     if (admitted_message_follow_target != nullptr) {
@@ -10861,46 +10912,73 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         std::string actor_mesh_name;
         std::optional<result_t<actor_dispatch_plan_t>> dispatch;
     };
-    auto materialized = _state->lane.run ([&] () -> result_t<actor_state_snapshot_t> {
-        const auto actor_type_key =
-          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref));
-        const auto found_factory = _state->actor_factories.find (actor_type_key);
-        if (found_factory == _state->actor_factories.end ()) {
-            return result_t<actor_state_snapshot_t>::failure (
-              framework_error_kind_t::not_found, "actor factory is not registered");
+    auto materialized = [&] () -> result_t<actor_state_snapshot_t> {
+        if (warm_materialization) {
+            auto warm = std::move (*warm_materialization);
+            actor_dispatch_plan_t dispatch;
+            dispatch.current_spot_id = warm.found_location;
+            dispatch.current_generation = warm.current_generation;
+            const auto current_actor_node_rid =
+              actor_ref.node_rid ().empty () ? detail::effective_spot_node_rid (_state->snapshot)
+                                             : std::string (actor_ref.node_rid ().value ());
+            dispatch.current_actor_ref = ::zlink::framework::detail::actor_ref_access_t::make (
+              node_rid_t::from_string (current_actor_node_rid),
+              std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
+              std::string (actor_ref.actor_id ().value ()), dispatch.current_generation);
+            dispatch.context_state = std::move (warm.context_state);
+            dispatch.spot_instance = std::move (warm.spot_instance);
+            dispatch.mesh_name = std::move (warm.mesh_name);
+            dispatch.dispatch_on_spot_serial = warm.dispatch_on_spot_serial;
+
+            actor_state_snapshot_t plan;
+            plan.factory = std::move (warm.factory);
+            plan.found_location = std::move (warm.found_location);
+            plan.actor_instance = std::move (warm.actor_instance);
+            plan.dispatch.emplace (result_t<actor_dispatch_plan_t>::success (std::move (dispatch)));
+            return result_t<actor_state_snapshot_t>::success (std::move (plan));
         }
 
-        actor_state_snapshot_t plan;
-        plan.factory = found_factory->second;
-        const auto found_location = _state->actor_spot_ids.find (key);
-        if (found_location != _state->actor_spot_ids.end ()) {
-            plan.found_location = found_location->second;
-        } else if (_state->destroyed_actor_keys.contains (key)) {
-            return result_t<actor_state_snapshot_t>::failure (
-              framework_error_kind_t::not_found, "actor has been destroyed");
-        }
-
-        const auto found_instance = _state->actor_instances.find (key);
-        if (found_instance != _state->actor_instances.end () && found_instance->second) {
-            plan.actor_instance = found_instance->second;
-            detail::record_actor_instance_index_unlocked (*_state, actor_ref,
-                                                          plan.actor_instance.get ());
-            if (plan.found_location) {
-                plan.dispatch = project_actor_dispatch_state (plan.found_location);
+        return _state->lane.run ([&] () -> result_t<actor_state_snapshot_t> {
+            const auto actor_type_key =
+              std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref));
+            const auto found_factory = _state->actor_factories.find (actor_type_key);
+            if (found_factory == _state->actor_factories.end ()) {
+                return result_t<actor_state_snapshot_t>::failure (
+                  framework_error_kind_t::not_found, "actor factory is not registered");
             }
-        } else if (plan.factory.create_context_instance) {
-            plan.actor_mesh_name = _state->snapshot.name;
-            if (plan.found_location) {
-                const auto actor_spot_context =
-                  _state->spot_contexts_by_id.find (std::string (*plan.found_location));
-                if (actor_spot_context != _state->spot_contexts_by_id.end ()
-                    && actor_spot_context->second._state) {
-                    plan.actor_mesh_name = actor_spot_context->second._state->mesh_name;
+
+            actor_state_snapshot_t plan;
+            plan.factory = found_factory->second;
+            const auto found_location = _state->actor_spot_ids.find (key);
+            if (found_location != _state->actor_spot_ids.end ()) {
+                plan.found_location = found_location->second;
+            } else if (_state->destroyed_actor_keys.contains (key)) {
+                return result_t<actor_state_snapshot_t>::failure (
+                  framework_error_kind_t::not_found, "actor has been destroyed");
+            }
+
+            const auto found_instance = _state->actor_instances.find (key);
+            if (found_instance != _state->actor_instances.end () && found_instance->second) {
+                plan.actor_instance = found_instance->second;
+                detail::record_actor_instance_index_unlocked (*_state, actor_ref,
+                                                              plan.actor_instance.get ());
+                if (plan.found_location) {
+                    plan.dispatch = project_actor_dispatch_state (plan.found_location);
+                }
+            } else if (plan.factory.create_context_instance) {
+                plan.actor_mesh_name = _state->snapshot.name;
+                if (plan.found_location) {
+                    const auto actor_spot_context =
+                      _state->spot_contexts_by_id.find (std::string (*plan.found_location));
+                    if (actor_spot_context != _state->spot_contexts_by_id.end ()
+                        && actor_spot_context->second._state) {
+                        plan.actor_mesh_name = actor_spot_context->second._state->mesh_name;
+                    }
                 }
             }
-        }
-        return result_t<actor_state_snapshot_t>::success (std::move (plan));
-    }).get ();
+            return result_t<actor_state_snapshot_t>::success (std::move (plan));
+        }).get ();
+    }();
     if (!materialized) {
         co_return detail::propagate_failure<std::optional<zlink::message_t>> (
           materialized, "actor materialization failed");
