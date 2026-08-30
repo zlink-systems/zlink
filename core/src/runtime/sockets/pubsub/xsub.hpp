@@ -28,6 +28,8 @@ class io_thread_t;
 
 class xsub_t : public socket_base_t
 {
+    friend class session_termination_test_access_t;
+
   public:
     struct subscription_descriptor_t
     {
@@ -90,6 +92,8 @@ class xsub_t : public socket_base_t
     int dispatch_ready_messages_serialized ();
     int receive_dispatch_message (zlink_routing_id_t *source_rid_out_);
     int dispatch_message (const zlink_routing_id_t &source_rid_);
+    int dispatch_single_socket_message (zlink::msg_t *msg_,
+                                        zlink::pipe_t *pipe_);
     int discard_filtered_message (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
     void notify_dispatch_stopped ();
     void refresh_delivery_ready_state (const endpoint_uri_pair_t &endpoint_uri_pair_);
@@ -155,7 +159,9 @@ class xsub_t : public socket_base_t
     std::map<zlink::pipe_t *, socket_dispatch_state_t>
       _socket_dispatch_states;
     socket_dispatch_state_t _socket_dispatch_without_pipe;
-    std::mutex _socket_dispatch_state_mu;
+#ifdef ZLINK_BUILD_TESTS
+    size_t _socket_dispatch_state_creations;
+#endif
     std::atomic<uint32_t> _delivery_ready_count;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (xsub_t)

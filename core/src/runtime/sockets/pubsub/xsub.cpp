@@ -86,6 +86,9 @@ zlink::xsub_t::xsub_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     _dispatch_parts (),
     _socket_dispatch_states (),
     _socket_dispatch_without_pipe (),
+#ifdef ZLINK_BUILD_TESTS
+    _socket_dispatch_state_creations (0),
+#endif
     _delivery_ready_count (0)
 {
     options.type = ZLINK_CORE_SOCKET_XSUB;
@@ -211,7 +214,6 @@ void zlink::xsub_t::xpipe_terminated (pipe_t *pipe_)
 
 void zlink::xsub_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
 {
-    std::lock_guard<std::mutex> state_lock (_socket_dispatch_state_mu);
     std::map<pipe_t *, socket_dispatch_state_t>::iterator dispatch_it =
       _socket_dispatch_states.find (pipe_);
     if (dispatch_it != _socket_dispatch_states.end ()) {
@@ -415,7 +417,8 @@ int zlink::xsub_t::xrecv (msg_t *msg_)
             _recv_part_index = _more_recv ? part_index + 1 : 0;
             if (first_part && recv_source_rid_capture_requested ())
                 store_last_recv_source_rid (pipe);
-            msg_->reset_request_reply_metadata ();
+            if (first_part)
+                msg_->reset_request_reply_metadata ();
             return 0;
         }
 
@@ -819,6 +822,37 @@ int zlink::xsub_t::dispatch_message (
     return 0;
 }
 
+int zlink::xsub_t::dispatch_single_socket_message (msg_t *msg_, pipe_t *pipe_)
+{
+    if (!match (msg_)) {
+        msg_->reset_request_reply_metadata ();
+        return 1;
+    }
+
+    zlink_socket_msg_handler_fn handler = socket_msg_handler ();
+    if (!handler) {
+        msg_->reset_request_reply_metadata ();
+        return 1;
+    }
+
+    // The handler owns its input handle, while the session dispatcher still
+    // owns msg_ and closes it after this call. Move into one stack slot so the
+    // common one-part publication needs neither a per-pipe map node nor vector
+    // storage and both ownership contracts remain unchanged.
+    msg_t completed_part;
+    const int init_rc = completed_part.init ();
+    errno_assert (init_rc == 0);
+    const int move_rc = completed_part.move (*msg_);
+    errno_assert (move_rc == 0);
+
+    zlink_routing_id_t source_rid;
+    resolve_socket_msg_source_rid (pipe_, &source_rid);
+    invoke_socket_msg_handler (
+      handler, &source_rid,
+      reinterpret_cast<zlink_msg_t *> (&completed_part), 1);
+    return 1;
+}
+
 int zlink::xsub_t::xsocket_msg_dispatch (msg_t *msg_, pipe_t *pipe_)
 {
     if (!socket_msg_dispatch_active ())
@@ -828,64 +862,72 @@ int zlink::xsub_t::xsocket_msg_dispatch (msg_t *msg_, pipe_t *pipe_)
     std::vector<zlink_msg_t> completed_parts;
     bool record_complete = false;
     bool terminate_malformed = false;
-    {
-        // Session I/O dispatch is serialized frame-by-frame, while pipe
-        // termination can execute under the independent receive lock. Keep
-        // assembly ownership in its own short critical section and never hold
-        // it while terminating a pipe or invoking application code.
-        std::lock_guard<std::mutex> state_lock (
-          _socket_dispatch_state_mu);
-        socket_dispatch_state_t *state =
-          pipe_ ? &_socket_dispatch_states[pipe_]
-                : &_socket_dispatch_without_pipe;
-
-        if (state->part_index == 0) {
-            close_socket_msg_parts (&state->parts);
-            state->drop_message = !match (msg_);
+    socket_dispatch_state_t *state = NULL;
+    if (pipe_) {
+        std::map<pipe_t *, socket_dispatch_state_t>::iterator state_it =
+          _socket_dispatch_states.find (pipe_);
+        if (state_it == _socket_dispatch_states.end ()) {
+            if (final_part)
+                return dispatch_single_socket_message (msg_, pipe_);
+            state_it = _socket_dispatch_states
+                         .insert (std::make_pair (
+                           pipe_, socket_dispatch_state_t ()))
+                         .first;
+#ifdef ZLINK_BUILD_TESTS
+            ++_socket_dispatch_state_creations;
+#endif
         }
+        state = &state_it->second;
+    } else {
+        state = &_socket_dispatch_without_pipe;
+        if (state->part_index == 0 && final_part)
+            return dispatch_single_socket_message (msg_, pipe_);
+    }
 
-        unsigned char request_reply_kind = 0;
-        uint64_t request_reply_sequence = 0;
-        if (state->part_index > 0
-            && msg_->get_request_reply_metadata (
-              &request_reply_kind, &request_reply_sequence)) {
-            close_socket_msg_parts (&state->parts);
-            msg_->reset_request_reply_metadata ();
-            terminate_malformed = true;
-            if (final_part) {
-                if (pipe_)
-                    _socket_dispatch_states.erase (pipe_);
-                else
-                    _socket_dispatch_without_pipe =
-                      socket_dispatch_state_t ();
-            } else {
-                state->drop_message = true;
-                ++state->part_index;
-            }
-        } else if (state->drop_message) {
-            msg_->reset_request_reply_metadata ();
-            if (final_part) {
-                if (pipe_)
-                    _socket_dispatch_states.erase (pipe_);
-                else
-                    _socket_dispatch_without_pipe =
-                      socket_dispatch_state_t ();
-            } else {
-                ++state->part_index;
-            }
+    // socket_msg_dispatch_from_io(), deferred dispatch, and pipe-state cleanup
+    // all hold socket_msg_dispatch_sync. That base fence is the single owner of
+    // this per-pipe assembly state, including callback re-entry and teardown.
+    if (state->part_index == 0) {
+        close_socket_msg_parts (&state->parts);
+        state->drop_message = !match (msg_);
+    }
+
+    unsigned char request_reply_kind = 0;
+    uint64_t request_reply_sequence = 0;
+    if (state->part_index > 0
+        && msg_->get_request_reply_metadata (
+          &request_reply_kind, &request_reply_sequence)) {
+        close_socket_msg_parts (&state->parts);
+        terminate_malformed = true;
+        if (final_part) {
+            if (pipe_)
+                _socket_dispatch_states.erase (pipe_);
+            else
+                _socket_dispatch_without_pipe = socket_dispatch_state_t ();
         } else {
-            store_socket_msg_part (&state->parts, msg_);
-            if (!final_part) {
-                ++state->part_index;
-            } else {
-                completed_parts.swap (state->parts);
-                record_complete = true;
-                if (pipe_)
-                    _socket_dispatch_states.erase (pipe_);
-                else
-                    _socket_dispatch_without_pipe =
-                      socket_dispatch_state_t ();
-            }
+            state->drop_message = true;
+            ++state->part_index;
+        }
+    } else if (state->drop_message) {
+        if (final_part) {
+            if (pipe_)
+                _socket_dispatch_states.erase (pipe_);
+            else
+                _socket_dispatch_without_pipe = socket_dispatch_state_t ();
+        } else {
+            ++state->part_index;
+        }
+    } else {
+        store_socket_msg_part (&state->parts, msg_);
+        if (!final_part) {
+            ++state->part_index;
+        } else {
+            completed_parts.swap (state->parts);
+            record_complete = true;
+            if (pipe_)
+                _socket_dispatch_states.erase (pipe_);
+            else
+                _socket_dispatch_without_pipe = socket_dispatch_state_t ();
         }
     }
 

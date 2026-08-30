@@ -23,12 +23,16 @@ namespace
 {
 struct pending_pair_observer_t
 {
-    pending_pair_observer_t () : state (NULL), identity (NULL) {}
+    pending_pair_observer_t () : state (NULL), identity (NULL), pending (NULL) {}
 
     // Pipe write observers finish before the tracked send returns. Borrow the
     // caller's owner instead of adding shared_ptr atomics to every request.
     const std::shared_ptr<reqrep::socket_request_reply_state_t> *state;
     const reqrep::pending_request_identity_t *identity;
+    // The publication lock stays held from prepare through finish. The map
+    // entry therefore cannot be erased or invalidated before commit, so keep
+    // the resolved entry instead of hashing the same sequence twice.
+    reqrep::pending_request_t *pending;
     std::unique_lock<std::mutex> publication_lock;
 };
 
@@ -46,9 +50,10 @@ bool publish_pending_pair_before_flush (
       observer->state->get ();
 
     if (phase_ == zlink::pipe_write_observer_prepare) {
+        observer->pending = NULL;
         observer->publication_lock =
           std::unique_lock<std::mutex> (state->mutex);
-        const std::unordered_map<uint64_t, reqrep::pending_request_t>::const_iterator
+        std::unordered_map<uint64_t, reqrep::pending_request_t>::iterator
           pending = state->pending_requests.find (
             observer->identity->request_seq);
         if (state->closing
@@ -57,25 +62,22 @@ bool publish_pending_pair_before_flush (
             observer->publication_lock.unlock ();
             return false;
         }
+        observer->pending = &pending->second;
         return true;
     }
 
     if (phase_ == zlink::pipe_write_observer_commit) {
-        if (!pipe_ || !observer->publication_lock.owns_lock ())
+        if (!pipe_ || !observer->pending
+            || !observer->publication_lock.owns_lock ())
             return false;
-        std::unordered_map<uint64_t, reqrep::pending_request_t>::iterator
-          pending = state->pending_requests.find (
-            observer->identity->request_seq);
-        if (pending == state->pending_requests.end ()
-            || !(pending->second.identity == *observer->identity))
-            return false;
-        pending->second.transport_pair_id = pipe_->get_transport_pair_id ();
-        pending->second.transport_pair_generation =
+        observer->pending->transport_pair_id = pipe_->get_transport_pair_id ();
+        observer->pending->transport_pair_generation =
           pipe_->get_transport_pair_generation ();
-        return pending->second.transport_pair_id != 0
-               && pending->second.transport_pair_generation != 0;
+        return observer->pending->transport_pair_id != 0
+               && observer->pending->transport_pair_generation != 0;
     }
 
+    observer->pending = NULL;
     if (observer->publication_lock.owns_lock ())
         observer->publication_lock.unlock ();
     return true;

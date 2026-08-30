@@ -139,9 +139,10 @@ int zlink::pair_t::xrecv_pipe (msg_t *msg_, pipe_t **pipe_out_)
         return -1;
     }
 
+    const bool first_part = _recv_part_index == 0;
     unsigned char request_reply_kind = 0;
     uint64_t request_reply_sequence = 0;
-    if (_recv_part_index > 0
+    if (!first_part
         && msg_->get_request_reply_metadata (
           &request_reply_kind, &request_reply_sequence)) {
         pipe_t *const malformed_pipe =
@@ -171,7 +172,8 @@ int zlink::pair_t::xrecv_pipe (msg_t *msg_, pipe_t **pipe_out_)
 
     const bool more = (msg_->flags () & msg_t::more) != 0;
     _recv_part_index = more ? _recv_part_index + 1 : 0;
-    msg_->reset_request_reply_metadata ();
+    if (first_part)
+        msg_->reset_request_reply_metadata ();
     return 0;
 }
 

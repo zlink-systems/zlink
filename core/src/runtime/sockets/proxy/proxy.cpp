@@ -194,7 +194,8 @@ static int forward (class zlink::socket_base_t *from_,
             // Proxy and capture are public raw-message boundaries. Preserve
             // application bytes and multipart flags, but never forward the
             // internal request/reply kind or sequence to either output.
-            msg_->reset_request_reply_metadata ();
+            if (router_identity_preamble || application_part_index == 0)
+                msg_->reset_request_reply_metadata ();
 
             if (!router_identity_preamble)
                 ++application_part_index;

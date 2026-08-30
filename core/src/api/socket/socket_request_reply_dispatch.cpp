@@ -29,31 +29,16 @@ completion_message_result_t complete_reply_from_transport (
   socket_request_reply_state_t *state_,
   uint64_t transport_pair_id_,
   uint64_t transport_pair_generation_,
+  uint8_t message_type_,
+  uint64_t request_sequence_,
   zlink_msg_t *parts_,
   size_t part_count_)
 {
-    if (!parts_ || part_count_ == 0)
-        return completion_message_protocol_error;
-
-    uint8_t message_type = zlink::zmp_kind_data;
-    uint64_t request_sequence = 0;
-    if (!zlink::request_reply::read_request_reply_metadata (
-          &parts_[0], &message_type, &request_sequence)
-        || request_sequence == 0
-        || (message_type != zlink::request_reply::reply_type
-            && message_type != zlink::request_reply::error_reply_type)) {
+    if (!parts_ || part_count_ == 0 || request_sequence_ == 0
+        || (message_type_ != zlink::request_reply::reply_type
+            && message_type_ != zlink::request_reply::error_reply_type)) {
         zlink::request_reply::close_request_reply_parts (parts_, part_count_);
         return completion_message_protocol_error;
-    }
-    for (size_t i = 1; i < part_count_; ++i) {
-        uint8_t later_kind = zlink::zmp_kind_data;
-        uint64_t later_sequence = 0;
-        if (zlink::request_reply::read_request_reply_metadata (
-              &parts_[i], &later_kind, &later_sequence)) {
-            zlink::request_reply::close_request_reply_parts (
-              parts_, part_count_);
-            return completion_message_protocol_error;
-        }
     }
 
     // The sequence is now owned by the pending lookup. Callback-visible
@@ -74,7 +59,7 @@ completion_message_result_t complete_reply_from_transport (
     {
         std::lock_guard<std::mutex> lock (state_->mutex);
         if (!take_pending_reply_from_transport_locked (
-              state_, request_sequence, transport_pair_id_,
+              state_, request_sequence_, transport_pair_id_,
               transport_pair_generation_, &pending)) {
             zlink::request_reply::close_request_reply_parts (parts_, part_count_);
             return completion_message_accepted;
@@ -86,7 +71,7 @@ completion_message_result_t complete_reply_from_transport (
     zlink_msg_t *callback_parts = parts_;
     size_t callback_part_count = part_count_;
     if (zlink::request_reply::decode_reply_completion (
-          message_type, parts_, part_count_,
+          message_type_, parts_, part_count_,
           &callback_errno, &callback_parts, &callback_part_count)
         != 0) {
         callback_errno = EPROTO;
@@ -158,7 +143,10 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
         parts.clear ();
         bool complete = false;
         bool flow_state_consumed = false;
+        bool completion_delivered_directly = false;
         bool allocation_failed = false;
+        uint8_t message_type = zlink::zmp_kind_data;
+        uint64_t request_sequence = 0;
         while (!complete) {
             zlink::msg_t frame;
             const int init_rc = frame.init ();
@@ -205,6 +193,50 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
                 return;
             }
 
+            if (parts.empty ()) {
+                if (!zlink::request_reply::read_request_reply_metadata (
+                      reinterpret_cast<const zlink_msg_t *> (&frame),
+                      &message_type, &request_sequence)
+                    || request_sequence == 0
+                    || (message_type != zlink::request_reply::reply_type
+                        && message_type != zlink::request_reply::error_reply_type)) {
+                    const int close_rc = frame.close ();
+                    errno_assert (close_rc == 0);
+                    discard_completion_message_tail (pipe_, more);
+                    close_request_reply_frame_buffer (&parts);
+                    pipe_->terminate (false);
+                    return;
+                }
+
+                if (!more) {
+                    if (complete_reply_from_transport (
+                          state.get (), pipe_->get_transport_pair_id (),
+                          pipe_->get_transport_pair_generation (),
+                          message_type, request_sequence,
+                          reinterpret_cast<zlink_msg_t *> (&frame), 1)
+                        == completion_message_protocol_error) {
+                        pipe_->terminate (false);
+                        return;
+                    }
+                    completion_delivered_directly = true;
+                    complete = true;
+                    continue;
+                }
+            } else {
+                uint8_t later_kind = zlink::zmp_kind_data;
+                uint64_t later_sequence = 0;
+                if (zlink::request_reply::read_request_reply_metadata (
+                      reinterpret_cast<const zlink_msg_t *> (&frame),
+                      &later_kind, &later_sequence)) {
+                    const int close_rc = frame.close ();
+                    errno_assert (close_rc == 0);
+                    discard_completion_message_tail (pipe_, more);
+                    close_request_reply_frame_buffer (&parts);
+                    pipe_->terminate (false);
+                    return;
+                }
+            }
+
             try {
                 parts.append_uninitialized ();
             } catch (...) {
@@ -224,6 +256,8 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
 
         if (flow_state_consumed)
             continue;
+        if (completion_delivered_directly)
+            continue;
         if (allocation_failed) {
             close_request_reply_frame_buffer (&parts);
             continue;
@@ -231,7 +265,8 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
 
         if (complete_reply_from_transport (
               state.get (), pipe_->get_transport_pair_id (),
-              pipe_->get_transport_pair_generation (), &parts[0],
+              pipe_->get_transport_pair_generation (), message_type,
+              request_sequence, &parts[0],
               parts.size ())
             == completion_message_protocol_error) {
             pipe_->terminate (false);

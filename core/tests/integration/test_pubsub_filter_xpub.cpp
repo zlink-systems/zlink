@@ -61,6 +61,13 @@ class session_termination_test_access_t
           socket_->dispatch_runtime ().socket_msg_dispatch_sync);
         return socket_->xsocket_msg_dispatch (msg_, pipe_);
     }
+
+    static size_t xsub_dispatch_state_creations (xsub_t *socket_)
+    {
+        std::lock_guard<std::recursive_mutex> lock (
+          socket_->dispatch_runtime ().socket_msg_dispatch_sync);
+        return socket_->_socket_dispatch_state_creations;
+    }
 };
 }
 
@@ -343,9 +350,16 @@ void test_xsub_socket_dispatch_keeps_interleaved_publishers_separate ()
     // Session I/O dispatch is frame-granular. Keep A's multipart record open,
     // complete B's one-part record (whose valid first frame carries internal
     // request metadata), then finish A. Per-pipe assembly must neither splice
-    // the records nor mistake B's first frame for A's continuation.
+    // the records nor mistake B's first frame for A's continuation. B must use
+    // the one-part path without creating a transient multipart state.
     dispatch_socket_msg_part (xsub, pipe_a[0], "topic-A", true);
+    TEST_ASSERT_EQUAL_UINT64 (
+      1, zlink::session_termination_test_access_t::
+           xsub_dispatch_state_creations (xsub));
     dispatch_socket_msg_part (xsub, pipe_b[0], "topic-B", false, true);
+    TEST_ASSERT_EQUAL_UINT64 (
+      1, zlink::session_termination_test_access_t::
+           xsub_dispatch_state_creations (xsub));
     dispatch_socket_msg_part (xsub, pipe_a[0], "payload-A", false);
 
     TEST_ASSERT_FALSE (probe.metadata_leaked);
