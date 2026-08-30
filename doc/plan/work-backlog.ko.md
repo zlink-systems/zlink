@@ -29,7 +29,7 @@
 | # | 트랙 | 대기 사유 |
 |---|---|---|
 | C1 | bindings 0.14.x uplift 정례화 | core 성능·버그 작업 진행 중(0.14.6 반영 완료 상태). 다음 버전 확정 시: 로컬 패키지 빌드 → 4언어 게이트 → ZW 스모크. **주의**: 0.14.5는 Linux x64 릴리스 CI 실패로 아티팩트 404(0.14.6에서 해소) — 릴리스 파이프라인 실패 시 cpp 샘플은 provenance 고정 때문에 전면 차단됨 |
-| C2 | dotnet ZW 간헐 (~1/3) | D1·G3-restart·F4 산발, 0.14.1/0.14.2 교차로 버전 무관 확인. 발현 지속 시 진단 라운드(증거: scratchpad zw-evidence/) |
+| ~~C2~~ | ~~dotnet ZW 간헐 (~1/3)~~ | **종결(2026-08-31)** `507371aae9`+`f02d6bcc8e` — 근본 원인: 동일 RID 재연결(handover/crash replacement) 중 terminal reply의 물리 pair 오귀속 유실(flow 실증: 상태 변경 커밋 후 corr replied 부재→재시도 즉시 성공). binding에 recv_part_v2 transport-pair 메타데이터 노출 + framework physical-pair epoch fence. ZW 6/6+2/2 연속 그린, framework 1935/1935. 잔여 [의심]: retired-pair tombstone 무한 보존(메모리), multipart pair 미노출(core 후속), relocation 1s cutover fallback 경합 1회 관측 |
 | C3 | cpp channel_messaging flake | 관찰 지속(최근 연속 통과) |
 
 ## D. 종결 기록 (이번 주기)
