@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.binding;
 import java.nio.ByteBuffer;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.IntStream;
 
@@ -39,6 +40,7 @@ import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.framework.runtime.internal.binding.spot.RecordKind;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.RequestResult;
+import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
@@ -56,6 +58,59 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
 final class ZLinkJavaRawMeshNodeM6ATest {
+    @Test
+    void routeRejectionsAreDefinitiveSelectedPairLivenessFailures() {
+        assertTrue(ZLinkJavaRawMeshNode.isDefinitiveLivenessRouteFailure(
+            new CompletionException(
+                new systems.zlink.contracts.errors.ZlinkSubmitException(
+                    SubmitResult.NOT_CONNECTED))));
+        assertTrue(ZLinkJavaRawMeshNode.isDefinitiveLivenessRouteFailure(
+            new systems.zlink.contracts.errors.ZlinkSubmitException(
+                SubmitResult.NOT_ADMITTED, 113)));
+        assertTrue(ZLinkJavaRawMeshNode.isDefinitiveLivenessRouteFailure(
+            new systems.zlink.contracts.errors.ZlinkSubmitException(
+                SubmitResult.NOT_ADMITTED, 10057)));
+        assertFalse(ZLinkJavaRawMeshNode.isDefinitiveLivenessRouteFailure(
+            new systems.zlink.contracts.errors.ZlinkSubmitException(
+                SubmitResult.BACKPRESSURED)));
+        assertFalse(ZLinkJavaRawMeshNode.isDefinitiveLivenessRouteFailure(
+            new systems.zlink.contracts.errors.ZlinkSubmitException(
+                SubmitResult.NOT_ADMITTED, 110)));
+        assertFalse(ZLinkJavaRawMeshNode.isDefinitiveLivenessRouteFailure(
+            new systems.zlink.contracts.errors.ZlinkSubmitException(
+                SubmitResult.NOT_ADMITTED, 11)));
+        assertFalse(ZLinkJavaRawMeshNode.isDefinitiveLivenessRouteFailure(
+            new systems.zlink.contracts.errors.ZlinkSubmitException(
+                SubmitResult.NOT_ADMITTED, 0)));
+        assertFalse(ZLinkJavaRawMeshNode.isDefinitiveLivenessRouteFailure(
+            new IllegalStateException("transient")));
+        assertFalse(ZLinkJavaRawMeshNode.isDefinitiveLivenessRouteFailure(
+            null));
+    }
+
+    @Test
+    void failedExactProbeDemotesOnlyTheMatchingCurrentRoute() {
+        var failedPair = new ZLinkJavaRawMeshNode.TransportPair(41, 7);
+        var replacementPair = new ZLinkJavaRawMeshNode.TransportPair(42, 8);
+
+        assertTrue(ZLinkJavaRawMeshNode
+            .failedLivenessProbeMatchesCurrentRoute(
+                "old", failedPair, "old", "old",
+                failedPair, failedPair));
+        assertFalse(ZLinkJavaRawMeshNode
+            .failedLivenessProbeMatchesCurrentRoute(
+                "old", failedPair, "replacement", "replacement",
+                failedPair, failedPair));
+        assertFalse(ZLinkJavaRawMeshNode
+            .failedLivenessProbeMatchesCurrentRoute(
+                "old", failedPair, "old", "old",
+                replacementPair, failedPair));
+        assertFalse(ZLinkJavaRawMeshNode
+            .failedLivenessProbeMatchesCurrentRoute(
+                "old", failedPair, "old", "old",
+                failedPair, replacementPair));
+    }
+
     @Test
     void readyPeerRequiresTheSelectedApplicationTransportPair() {
         var selected = new ZLinkJavaRawMeshNode.TransportPair(41, 7);
@@ -111,6 +166,35 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     : systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                 framework.kind());
         }
+    }
+
+    @Test
+    void oneWayAdapterDistinguishesRouteLossFromAdmissionTimeout() {
+        var routeLoss = assertThrows(
+            ExecutionException.class,
+            () -> ZLinkOneWayCalls.adaptOneWay(
+                CompletableFuture.failedFuture(
+                    new systems.zlink.contracts.errors.ZlinkSubmitException(
+                        SubmitResult.NOT_ADMITTED, 113)))
+                .toCompletableFuture()
+                .get());
+        assertEquals(
+            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+            ((systems.zlink.framework.errors.ZLinkFrameworkException)
+                routeLoss.getCause()).kind());
+
+        var admissionTimeout = assertThrows(
+            ExecutionException.class,
+            () -> ZLinkOneWayCalls.adaptOneWay(
+                CompletableFuture.failedFuture(
+                    new systems.zlink.contracts.errors.ZlinkSubmitException(
+                        SubmitResult.NOT_ADMITTED, 110)))
+                .toCompletableFuture()
+                .get());
+        assertEquals(
+            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+            ((systems.zlink.framework.errors.ZLinkFrameworkException)
+                admissionTimeout.getCause()).kind());
     }
 
     @Test

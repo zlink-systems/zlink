@@ -195,6 +195,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         new ZLinkServiceOperationRegistry(deadlines);
     private final ConcurrentLinkedQueue<MonitorEvent>
         monitorEvents = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<FailedLivenessProbe>
+        failedLivenessProbes = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<PeerCloseRequest>
         pendingPeerCloseRequests = new ConcurrentLinkedQueue<>();
     private final Map<RoutingId, String> connectionIds =
@@ -4360,6 +4362,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 long now = System.nanoTime();
                 drainMonitorEvents();
                 drainPeerCloseRequests();
+                drainFailedLivenessProbes();
                 announceExpectedPeers(now);
                 tickLiveness(now);
                 Optional<ZLinkJavaRawServicePort.Inbound> inbound;
@@ -6633,6 +6636,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             if (admitted
                 == ZLinkServiceTopologyRegistry.AdmissionResult
                     .DUPLICATE_REJECTED) {
+                if (currentPeer != null) {
+                    // A new physical candidate can be the first observable
+                    // evidence that the remote endpoint replaced a route
+                    // whose DISCONNECTED monitor edge was lost. Revalidate
+                    // the selected pair now instead of letting an unrelated
+                    // RID-routed ACK keep that zombie ready until timeout.
+                    liveness.requestValidationProbe(
+                        inbound.source(),
+                        currentPeer.connectionId(),
+                        System.nanoTime());
+                }
                 streamTrace(STREAM_TRACE ? "duplicate-admission-reject source="
                     + inbound.source()
                     + " connection=" + connectionId
@@ -6848,13 +6862,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             ZLinkServiceTopologyRegistry.Peer peer =
                 topology.peer(inbound.source()).orElseThrow();
             TransportPair inboundPair = transportPair(inbound);
-            // Anti-laundering: an ack must not refresh the admitted
+            // Anti-laundering: an ACK must not refresh the admitted
             // connection when its frame demonstrably traveled on a pair
-            // OWNED BY A DIFFERENT connection of the same peer. Pair ids
-            // differ per transport lane, so comparing against the single
-            // recorded "selected" pair rejects legitimate control-lane
-            // liveness and starves readiness; only a positive ownership
-            // mismatch is a laundering signal.
+            // owned by a different connection. Application and completion
+            // lanes share pair identity; pairless legacy receive cannot prove
+            // physical ownership and is fenced by connection/probe id only.
             if (inboundPair != null) {
                 String owning = topology.peers().stream()
                     .filter(candidate -> selectedTransportPair(candidate)
@@ -6906,7 +6918,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                     peer.connectionId(),
                     probeId,
                     System.nanoTime());
-                if (acknowledged && !wasReady) {
+                if (acknowledged
+                    && !wasReady
+                    && liveness.isReady(
+                        inbound.source(), peer.connectionId())) {
                     LOGGER.info("ZLINK_FRAMEWORK_PEER_READY mesh=" + meshName
                         + " peer=" + inbound.source());
                 }
@@ -6971,6 +6986,28 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                             ignored ->
                                 new ConcurrentLinkedQueue<>())
                         .add(registeredId);
+                }
+                TransportPair candidatePair = event.transportLane() == 0
+                        && event.transportPairId() != 0
+                        && event.transportPairGeneration() != 0
+                    ? new TransportPair(
+                        event.transportPairId(),
+                        event.transportPairGeneration())
+                    : null;
+                if (admitted != null
+                    && !admitted.connectionId().equals(registeredId)
+                    && candidatePair != null
+                    && selectedTransportPair(admitted)
+                        .filter(candidatePair::equals)
+                        .isEmpty()) {
+                    // The old pair can have lost its disconnect edge while a
+                    // replacement candidate is already usable. Pull its next
+                    // exact validation forward before a RID ACK can conceal
+                    // that stale selected route.
+                    liveness.requestValidationProbe(
+                        peerRid,
+                        admitted.connectionId(),
+                        System.nanoTime());
                 }
                 nextAnnouncementNanos.put(peer.orElseThrow(), 0L);
             } else if (event.event() == MonitorEventType.DISCONNECTED
@@ -7198,34 +7235,136 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     private void tickLiveness(long nowNanos) {
         ZLinkServiceLivenessRegistry.Tick tick = liveness.tick(nowNanos);
         for (ZLinkServiceLivenessRegistry.Probe probe : tick.probes()) {
+            TransportPair pair = transportPairs.get(probe.connectionId());
+            TransportPair applicationPair =
+                transportPairFor(probe.nodeRoutingId());
+            if (!Objects.equals(pair, applicationPair)) {
+                // The tick belongs to an admission snapshot that has already
+                // crossed a pair transition. Sending it on either the old or
+                // new route could let an ACK refresh the wrong connection.
+                streamTrace(STREAM_TRACE
+                    ? "liveness-send-skipped target=" + probe.nodeRoutingId()
+                        + " connection=" + probe.connectionId()
+                        + " connectionPair=" + transportPairSummary(pair)
+                        + " applicationPair="
+                        + transportPairSummary(applicationPair)
+                    : null);
+                continue;
+            }
+            // The first readiness probe can run before the selected exact
+            // route accepts application submissions, so it uses the RID.
+            // Periodic and replacement-validation probes use the selected
+            // application pair represented by this connection snapshot.
+            TransportPair probePair = probe.selectedPair() ? pair : null;
             try {
-                // RID-addressed: the probe rides whatever lane/pair the
-                // native route currently uses; pinning to the recorded
-                // admission pair mis-lanes the control probe when pair ids
-                // differ per transport lane.
+                // Probe the same selected application pair whose health this
+                // admission represents. A RID-addressed probe can ride a
+                // replacement physical connection and keep a stale selected
+                // pair ready even though every exact application submit to
+                // that pair is already NOT_CONNECTED.
                 sendLiveness(
                         probe.nodeRoutingId(),
-                        null,
+                        probePair,
                         encodeLiveness(
                             ServiceWireConstants.COMMAND_LIVENESS_PROBE,
                             probe.probeId()))
-                    .whenComplete((ignored, failure) -> streamTrace(STREAM_TRACE ?
-                        "liveness-send target=" + probe.nodeRoutingId()
+                    .whenComplete((ignored, failure) -> {
+                        streamTrace(STREAM_TRACE ? "liveness-send target="
+                            + probe.nodeRoutingId()
                             + " connection=" + probe.connectionId()
+                            + " pair=" + transportPairSummary(probePair)
                             + " probe=" + probe.probeId()
-                            + " result="
-                            + (failure == null ? "accepted" : "failed") : null));
-            } catch (RuntimeException ignored) {
+                            + " result=" + submitFailureSummary(failure)
+                            : null);
+                        recordFailedLivenessProbe(
+                            probe, probePair, failure);
+                    });
+            } catch (RuntimeException failure) {
                 streamTrace(STREAM_TRACE ? "liveness-send-failed target="
                     + probe.nodeRoutingId()
                     + " connection=" + probe.connectionId()
-                    + " error=" + ignored.getClass().getSimpleName()
-                    + ":" + String.valueOf(ignored.getMessage()) : null);
+                    + " pair=" + transportPairSummary(probePair)
+                    + " result=" + submitFailureSummary(failure) : null);
+                recordFailedLivenessProbe(probe, probePair, failure);
                 // The liveness timeout owns peer eviction. A transient send
                 // failure must not stop the service receive pump.
             }
         }
         tick.timedOutNodes().forEach(this::disconnectAdmitted);
+    }
+
+    private void recordFailedLivenessProbe(
+        ZLinkServiceLivenessRegistry.Probe probe,
+        TransportPair pair,
+        Throwable failure) {
+        if (pair != null && isDefinitiveLivenessRouteFailure(failure)) {
+            failedLivenessProbes.add(new FailedLivenessProbe(
+                probe.nodeRoutingId(),
+                probe.connectionId(),
+                pair));
+        }
+    }
+
+    private void drainFailedLivenessProbes() {
+        FailedLivenessProbe failed;
+        while ((failed = failedLivenessProbes.poll()) != null) {
+            ZLinkServiceTopologyRegistry.Peer current = topology
+                .peer(failed.peer())
+                .orElse(null);
+            if (current == null
+                || !failedLivenessProbeMatchesCurrentRoute(
+                    failed.connectionId(),
+                    failed.pair(),
+                    current.connectionId(),
+                    connectionIds.get(failed.peer()),
+                    transportPairs.get(failed.connectionId()),
+                    applicationTransportPairs.get(failed.peer()))) {
+                continue;
+            }
+            streamTrace(STREAM_TRACE
+                ? "liveness-route-disconnected peer=" + failed.peer()
+                    + " connection=" + failed.connectionId()
+                    + " pair=" + transportPairSummary(failed.pair())
+                : null);
+            applicationTransportPairs.remove(failed.peer(), failed.pair());
+            disconnectAdmitted(failed.peer(), failed.connectionId());
+            nextAnnouncementNanos.put(failed.peer(), 0L);
+        }
+    }
+
+    static boolean isDefinitiveLivenessRouteFailure(Throwable failure) {
+        if (failure == null) {
+            return false;
+        }
+        Throwable current = unwrap(failure);
+        if (!(current instanceof ZlinkSubmitException submit)) {
+            return false;
+        }
+        if (submit.getResult() == SubmitResult.NOT_CONNECTED) {
+            return true;
+        }
+        if (submit.getResult() != SubmitResult.NOT_ADMITTED) {
+            return false;
+        }
+        // Async binding terminals collapse several failures to NOT_ADMITTED;
+        // only portable route-loss errno values justify immediate demotion.
+        return switch (submit.getNativeErrno()) {
+            case 107, 111, 113, 10057, 10061, 10065 -> true;
+            default -> false;
+        };
+    }
+
+    static boolean failedLivenessProbeMatchesCurrentRoute(
+        String failedConnectionId,
+        TransportPair failedPair,
+        String topologyConnectionId,
+        String registeredConnectionId,
+        TransportPair connectionPair,
+        TransportPair applicationPair) {
+        return Objects.equals(failedConnectionId, topologyConnectionId)
+            && Objects.equals(failedConnectionId, registeredConnectionId)
+            && Objects.equals(failedPair, connectionPair)
+            && Objects.equals(failedPair, applicationPair);
     }
 
     private CompletionStage<Void> sendLiveness(
@@ -7708,6 +7847,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     }
 
     record TransportPair(long id, long generation) {
+    }
+
+    private record FailedLivenessProbe(
+        RoutingId peer,
+        String connectionId,
+        TransportPair pair) {
     }
 
     private record PeerCloseRequest(

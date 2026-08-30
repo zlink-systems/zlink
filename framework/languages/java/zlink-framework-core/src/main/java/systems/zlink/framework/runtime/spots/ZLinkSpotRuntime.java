@@ -4249,13 +4249,16 @@ public final class ZLinkSpotRuntime
         ZLinkInstanceSpotActivation activation) {
         String spotId = activation.context.spotId();
         traceInstanceLifecycle(STREAM_TRACE ? "close-authority-start spot=" + spotId : null);
+        // A Missing authority record is permission for a new cold activation.
+        // Retire the local generation before publishing that permission so a
+        // request racing explicit close cannot reuse this sealed activation.
+        instanceSpotActivations.remove(spotId, activation);
+        activation.closeResources();
         return releaseInstanceSpotAuthority(activation)
             .thenApply(closed -> {
                 traceInstanceLifecycle(STREAM_TRACE ?
                     "close-authority-result spot=" + spotId
                         + " closed=" + closed : null);
-                instanceSpotActivations.remove(spotId, activation);
-                activation.closeResources();
                 ZLinkInternalMeshNode routeNode = routeMeshNodesByName.get(
                     activation.context.meshName());
                 if (routeNode != null) {

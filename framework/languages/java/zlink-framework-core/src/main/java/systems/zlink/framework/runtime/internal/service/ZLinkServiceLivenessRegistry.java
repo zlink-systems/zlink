@@ -95,6 +95,10 @@ public final class ZLinkServiceLivenessRegistry {
                 addExact(nowNanos, peerTimeoutNanos),
                 addExact(nowNanos, probeIntervalNanos),
                 0,
+                false,
+                false,
+                false,
+                false,
                 false));
     }
 
@@ -120,6 +124,34 @@ public final class ZLinkServiceLivenessRegistry {
             return false;
         }
         state.nextProbeNanos = Math.min(state.nextProbeNanos, nowNanos);
+        return true;
+    }
+
+    /** Schedules prompt pair revalidation after a physical candidate appears. */
+    public boolean requestValidationProbe(
+        RoutingId nodeRoutingId,
+        String connectionId,
+        long nowNanos) {
+        return inStateLane(() -> requestValidationProbeCore(
+            nodeRoutingId, connectionId, nowNanos));
+    }
+
+    private boolean requestValidationProbeCore(
+        RoutingId nodeRoutingId,
+        String connectionId,
+        long nowNanos) {
+        PeerState state = peers.get(nodeRoutingId);
+        if (state == null
+            || !state.connectionId.equals(connectionId)
+            || state.validationPending) {
+            return false;
+        }
+        state.validationPending = true;
+        state.ready = false;
+        if (state.outstandingProbe == 0) {
+            state.nextProbeNanos = Math.min(
+                state.nextProbeNanos, nowNanos);
+        }
         return true;
     }
 
@@ -158,7 +190,8 @@ public final class ZLinkServiceLivenessRegistry {
             || probeId == 0) {
             return Optional.empty();
         }
-        return Optional.of(new Probe(nodeRoutingId, connectionId, probeId));
+        return Optional.of(new Probe(
+            nodeRoutingId, connectionId, probeId, false));
     }
 
     public boolean acknowledge(
@@ -182,10 +215,25 @@ public final class ZLinkServiceLivenessRegistry {
             || probeId == 0) {
             return false;
         }
+        boolean selectedPair = state.outstandingSelectedPair;
+        boolean validation = state.outstandingValidation;
         state.outstandingProbe = 0;
-        state.deadlineNanos = addExact(nowNanos, peerTimeoutNanos);
-        state.nextProbeNanos = addExact(nowNanos, probeIntervalNanos);
-        state.ready = true;
+        state.outstandingSelectedPair = false;
+        state.outstandingValidation = false;
+        if (!selectedPair) {
+            state.bootstrapComplete = true;
+        }
+        if (state.validationPending) {
+            // This probe began before the replacement signal (or was the RID
+            // bootstrap), so its ACK cannot satisfy the requested pair check.
+            // Do not let it extend the deadline; issue a fresh exact probe.
+            state.nextProbeNanos = nowNanos;
+            state.ready = false;
+        } else {
+            state.deadlineNanos = addExact(nowNanos, peerTimeoutNanos);
+            state.nextProbeNanos = addExact(nowNanos, probeIntervalNanos);
+            state.ready = !selectedPair || validation || state.ready;
+        }
         return true;
     }
 
@@ -222,12 +270,22 @@ public final class ZLinkServiceLivenessRegistry {
             }
             if (state.outstandingProbe == 0) {
                 state.outstandingProbe = allocateProbeId();
+                state.outstandingSelectedPair = state.bootstrapComplete;
+                state.outstandingValidation =
+                    state.validationPending
+                        && state.outstandingSelectedPair;
+                if (state.outstandingValidation) {
+                    state.validationPending = false;
+                }
             }
             state.nextProbeNanos = addExact(
                 nowNanos,
                 state.ready ? probeIntervalNanos : notReadyProbeRetryNanos);
             probes.add(new Probe(
-                entry.getKey(), state.connectionId, state.outstandingProbe));
+                entry.getKey(),
+                state.connectionId,
+                state.outstandingProbe,
+                state.outstandingSelectedPair));
         }
         timedOut.forEach(peers::remove);
         return new Tick(List.copyOf(probes), List.copyOf(timedOut));
@@ -264,7 +322,8 @@ public final class ZLinkServiceLivenessRegistry {
     public record Probe(
         RoutingId nodeRoutingId,
         String connectionId,
-        long probeId) {
+        long probeId,
+        boolean selectedPair) {
     }
 
     public record Tick(
@@ -277,19 +336,31 @@ public final class ZLinkServiceLivenessRegistry {
         private long deadlineNanos;
         private long nextProbeNanos;
         private long outstandingProbe;
+        private boolean outstandingSelectedPair;
+        private boolean outstandingValidation;
+        private boolean bootstrapComplete;
         private boolean ready;
+        private boolean validationPending;
 
         private PeerState(
             String connectionId,
             long deadlineNanos,
             long nextProbeNanos,
             long outstandingProbe,
-            boolean ready) {
+            boolean outstandingSelectedPair,
+            boolean outstandingValidation,
+            boolean bootstrapComplete,
+            boolean ready,
+            boolean validationPending) {
             this.connectionId = connectionId;
             this.deadlineNanos = deadlineNanos;
             this.nextProbeNanos = nextProbeNanos;
             this.outstandingProbe = outstandingProbe;
+            this.outstandingSelectedPair = outstandingSelectedPair;
+            this.outstandingValidation = outstandingValidation;
+            this.bootstrapComplete = bootstrapComplete;
             this.ready = ready;
+            this.validationPending = validationPending;
         }
     }
 }

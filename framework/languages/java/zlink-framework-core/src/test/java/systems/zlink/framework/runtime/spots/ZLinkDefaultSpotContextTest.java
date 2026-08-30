@@ -332,12 +332,15 @@ final class ZLinkDefaultSpotContextTest {
             DefaultSpotContext context = host.userContext(
                 ZLinkUserSpotExecutionMode.SPOT_WIDE);
             CompletableFuture<Void> firstRelease = new CompletableFuture<>();
+            CompletableFuture<Void> firstStarted = new CompletableFuture<>();
             List<String> order = new CopyOnWriteArrayList<>();
 
             CompletionStage<Void> first = context.enqueueDispatch(() -> {
                 order.add("first");
+                firstStarted.complete(null);
                 return firstRelease;
             });
+            firstStarted.get(2, TimeUnit.SECONDS);
             CompletionStage<Void> lifecycle = context.enqueueLifecycle(() -> {
                 order.add("lifecycle");
                 return CompletableFuture.completedFuture(null);

@@ -753,7 +753,7 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
-    void spotRouterNodeSendTerminatesOnBackendNotConnectedWithoutFrameworkRetry() {
+    void spotRouterNodeSendCompletesUnavailableWithoutFrameworkRetry() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
@@ -772,9 +772,9 @@ final class ZLinkChannelRuntimeTest {
                         new TestRequest("hello"))
                     .submit().toCompletableFuture().join());
 
-            ZlinkSubmitException terminal = assertInstanceOf(
-                ZlinkSubmitException.class, failure.getCause());
-            assertEquals(SubmitResult.NOT_CONNECTED, terminal.getResult());
+            ZLinkFrameworkException terminal = assertInstanceOf(
+                ZLinkFrameworkException.class, failure.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, terminal.kind());
             assertEquals(1, backend.spotNode.entrySpot.sendAttempts);
             assertEquals(SendFlags.NONE, backend.spotNode.entrySpot.lastSendFlags);
             assertEquals(1L, backend.spotNode.entrySpot.lastSpotGeneration);
@@ -866,6 +866,7 @@ final class ZLinkChannelRuntimeTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+        AtomicInteger sendActivationAttempts = new AtomicInteger();
         AtomicInteger activationAttempts = new AtomicInteger();
         SpotTransportAddressResolver resolver = spotId ->
             CompletableFuture.failedFuture(new ZLinkFrameworkException(
@@ -886,6 +887,7 @@ final class ZLinkChannelRuntimeTest {
                     Optional<String> packetName,
                     String contentType,
                     Map<String, String> metadata) {
+                    sendActivationAttempts.incrementAndGet();
                     return CompletableFuture.completedFuture(null);
                 }
 
@@ -907,6 +909,16 @@ final class ZLinkChannelRuntimeTest {
                 }
             });
 
+            CompletionException sendFailure = assertThrows(
+                CompletionException.class,
+                () -> runtime.sendToSpot(
+                        "room-spot",
+                        new TestRequest("hello"))
+                    .instanceSpot("room")
+                    .inMesh("play.route")
+                    .submit()
+                    .toCompletableFuture()
+                    .join());
             CompletionException failure = assertThrows(
                 CompletionException.class,
                 () -> runtime.requestToSpot(
@@ -920,9 +932,90 @@ final class ZLinkChannelRuntimeTest {
 
             assertEquals(
                 ZLinkFrameworkErrorKind.UNAVAILABLE,
+                assertInstanceOf(
+                    ZLinkFrameworkException.class,
+                    sendFailure.getCause()).kind());
+            assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
                 assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            assertEquals(0, sendActivationAttempts.get());
             assertEquals(0, activationAttempts.get());
+            assertEquals(0, backend.spotNode.entrySpot.sendAttempts);
             assertEquals(0, backend.spotNode.entrySpot.requestAttempts);
+        }
+    }
+
+    @Test
+    void instanceSpotSendMapsLostReadyOwnerRouteWithoutColdActivation() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.setDefaultRequestTimeout(Duration.ofMillis(300));
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+        backend.spotNode.entrySpot.sendFailuresRemaining = 1;
+        backend.spotNode.entrySpot.sendFailureResult = SubmitResult.NOT_ADMITTED;
+        backend.spotNode.entrySpot.sendFailureErrno = 113;
+        AtomicInteger activationAttempts = new AtomicInteger();
+        SpotTransportAddressResolver resolver = spotId ->
+            CompletableFuture.completedFuture(Optional.of(
+                new SpotTransportAddress(
+                    "play.route",
+                    RoutingId.from("lost-owner"),
+                    spotId,
+                    17L,
+                    23L,
+                    29L,
+                    31L,
+                    ZLinkSpotKind.INSTANCE)));
+        try (ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
+            backend,
+            options.registration(),
+            new ZLinkJsonMessageSerializer(), handlers(resolver))) {
+            runtime.registerSpotRouterNode("play.route", backend.spotNode);
+            runtime.registerInstanceSpotCallRuntime(new ZLinkInstanceSpotCallRuntime() {
+                @Override
+                public CompletionStage<Void> send(
+                    String spotId,
+                    String stableType,
+                    String meshName,
+                    Message payload,
+                    Optional<String> packetName,
+                    String contentType,
+                    Map<String, String> metadata) {
+                    activationAttempts.incrementAndGet();
+                    return CompletableFuture.completedFuture(null);
+                }
+
+                @Override
+                public CompletionStage<List<Message>> request(
+                    String spotId,
+                    String stableType,
+                    String meshName,
+                    Message payload,
+                    Optional<String> packetName,
+                    String contentType,
+                    Map<String, String> metadata,
+                    Duration timeout) {
+                    throw new AssertionError("request activation is not expected");
+                }
+            });
+
+            CompletionException failure = assertThrows(
+                CompletionException.class,
+                () -> runtime.sendToSpot(
+                        "room-spot",
+                        new TestRequest("hello"))
+                    .instanceSpot("room")
+                    .inMesh("play.route")
+                    .submit()
+                    .toCompletableFuture()
+                    .join());
+
+            assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                assertInstanceOf(
+                    ZLinkFrameworkException.class,
+                    failure.getCause()).kind());
+            assertEquals(1, backend.spotNode.entrySpot.sendAttempts);
+            assertEquals(0, activationAttempts.get());
         }
     }
 
@@ -2216,6 +2309,7 @@ final class ZLinkChannelRuntimeTest {
         int sendAttempts;
         int sendFailuresRemaining;
         SubmitResult sendFailureResult = SubmitResult.BACKPRESSURED;
+        int sendFailureErrno;
         SendFlags lastSendFlags;
         int requestAttempts;
         int requestFailuresRemaining;
@@ -2264,7 +2358,9 @@ final class ZLinkChannelRuntimeTest {
             if (sendFailuresRemaining > 0) {
                 sendFailuresRemaining--;
                 return CompletableFuture.failedFuture(
-                    new ZlinkSubmitException(sendFailureResult));
+                    new ZlinkSubmitException(
+                        sendFailureResult,
+                        sendFailureErrno));
             }
             return CompletableFuture.completedFuture(null);
         }

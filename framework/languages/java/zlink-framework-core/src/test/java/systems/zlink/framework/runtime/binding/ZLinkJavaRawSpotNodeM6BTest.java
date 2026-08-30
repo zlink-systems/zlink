@@ -399,7 +399,27 @@ final class ZLinkJavaRawSpotNodeM6BTest {
         assertTrue(node.peers().stream().anyMatch(
             peer -> peer.state()
                 == systems.zlink.framework.runtime.internal.binding.spot
-                    .MeshPeerState.ADMITTED));
+                            .MeshPeerState.ADMITTED));
+    }
+
+    private static void awaitAdmitted(
+        ZLinkJavaRawMeshNode node,
+        RoutingId peerRoutingId) throws InterruptedException {
+        long deadline =
+            System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        while (node.peers().stream().noneMatch(
+                peer -> peer.routingId().equals(peerRoutingId)
+                    && peer.state()
+                        == systems.zlink.framework.runtime.internal.binding.spot
+                            .MeshPeerState.ADMITTED)
+            && System.nanoTime() < deadline) {
+            Thread.sleep(1);
+        }
+        assertTrue(node.peers().stream().anyMatch(
+            peer -> peer.routingId().equals(peerRoutingId)
+                && peer.state()
+                    == systems.zlink.framework.runtime.internal.binding.spot
+                        .MeshPeerState.ADMITTED));
     }
 
     @Test
@@ -2561,21 +2581,13 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             actorNode.spotNode().rememberActorAuthority(actor, 73, 1);
             sessionNode.spotNode().rememberActorAuthority(actor, 73, 1);
 
+            awaitAdmitted(sessionNode, actorNodeRid);
+            // The first bound push below travels in the reverse direction.
+            // Admission is directional, so the session->actor readiness used
+            // for bind does not prove actor->session submission is ready.
+            awaitAdmitted(actorNode, sessionNodeRid);
             long deadline =
                 System.nanoTime() + Duration.ofSeconds(2).toNanos();
-            while (sessionNode.peers().stream().noneMatch(
-                    peer -> peer.routingId().equals(actorNodeRid)
-                        && peer.state()
-                            == systems.zlink.framework.runtime.internal.binding.spot
-                                .MeshPeerState.ADMITTED)
-                && System.nanoTime() < deadline) {
-                Thread.sleep(1);
-            }
-            assertTrue(sessionNode.peers().stream().anyMatch(
-                peer -> peer.routingId().equals(actorNodeRid)
-                    && peer.state()
-                        == systems.zlink.framework.runtime.internal.binding.spot
-                            .MeshPeerState.ADMITTED));
 
             stream.startSessionService();
             ZLinkBackendStreamSocket ownerStream =
