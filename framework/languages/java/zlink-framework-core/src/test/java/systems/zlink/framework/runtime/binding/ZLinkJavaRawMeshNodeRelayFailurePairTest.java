@@ -59,6 +59,22 @@ final class ZLinkJavaRawMeshNodeRelayFailurePairTest {
     }
 
     @Test
+    void actorDispatchCapacityAndRejectionKeepTheirFrameworkKinds() {
+        assertArrayEquals(
+            new int[] {106, 18},
+            ZLinkJavaRawMeshNode.relayedFailurePair(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
+                    "application queue is full")));
+        assertArrayEquals(
+            new int[] {106, 15},
+            ZLinkJavaRawMeshNode.relayedFailurePair(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.REJECTED,
+                    "actor dispatch admission is closed")));
+    }
+
+    @Test
     void canonicalActorJoinKeepsStoreFailureTerminalKinds() {
         assertArrayEquals(new int[] {102, 14},
             ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(

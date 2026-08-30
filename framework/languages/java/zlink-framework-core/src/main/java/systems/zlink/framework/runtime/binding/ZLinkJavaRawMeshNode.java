@@ -2184,6 +2184,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         if (relayFailure instanceof ZLinkRelayedReplyTerminalException relayed) {
             return new int[] {relayed.terminalResult, relayed.failureCode};
         }
+        if (relayFailure instanceof ZLinkFrameworkException framework) {
+            return switch (framework.kind()) {
+                case CAPACITY_EXCEEDED -> new int[] {106, 18};
+                case REJECTED -> new int[] {106, 15};
+                default -> new int[] {105, 17};
+            };
+        }
         if (relayFailure instanceof ZlinkRequestException transport
             && ServiceWireConstants.validTerminalFailure(
                 transport.getResult().value(), 0)) {

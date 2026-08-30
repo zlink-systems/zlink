@@ -5,6 +5,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import systems.zlink.framework.actors.ActorRef;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
@@ -41,6 +43,7 @@ import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleEventKind;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
@@ -49,6 +52,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchEvent;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalAsyncSpotDispatchHandler;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
@@ -817,6 +821,120 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             Thread.sleep(200);
             assertEquals(0, callerFailures.get(),
                 "a redirected arrival must not also raise a stale terminal");
+        }
+    }
+
+    @Test
+    void capacityRejectedActorIngressReportsOneTerminalWithoutSilentDrop()
+        throws Exception {
+        assertActorDispatchFailureTerminal(new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
+            "application queue is full"));
+    }
+
+    @Test
+    void closedActorIngressReportsOneTerminalWithoutSilentDrop()
+        throws Exception {
+        assertActorDispatchFailureTerminal(
+            new IllegalStateException("target Spot is closed"));
+    }
+
+    private static void assertActorDispatchFailureTerminal(
+        RuntimeException dispatchFailure) throws Exception {
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId nodeRid = RoutingId.from(
+                "jvm-actor-dispatch-failure-" + System.nanoTime());
+            RoutingId callerRid = RoutingId.from(
+                "jvm-actor-dispatch-caller-" + System.nanoTime());
+            node.setRoutingId(nodeRid);
+            node.setBind("inproc://jvm-actor-dispatch-failure-"
+                + System.nanoTime());
+            node.start();
+
+            ZLinkJavaRawSpotNode spots =
+                (ZLinkJavaRawSpotNode) node.spotNode();
+            ZLinkBackendActorRef actor;
+            try (Message create = Message.from("create")) {
+                actor = spots.createActor("dispatch-failure-actor", create);
+            }
+            spots.rememberActorAuthority(actor, 11, 3);
+            spots.entrySpot().onDispatchEvent(
+                new ZLinkInternalAsyncSpotDispatchHandler() {
+                    @Override
+                    public CompletionStage<Void> handleAsync(
+                        systems.zlink.framework.runtime.internal.backend
+                            .ZLinkBackendSpotDispatchInfo info) {
+                        info.actorMessages().forEach(
+                            ZLinkBackendActorReceived::close);
+                        return CompletableFuture.failedFuture(dispatchFailure);
+                    }
+                });
+
+            var route = new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                actor, node.lifecycleGeneration(), 11, 3);
+            var header = new ZLinkServiceM6BWireCodec.ActorMessage(
+                true, 0, 91L, null, route);
+            AtomicInteger failures = new AtomicInteger();
+            AtomicInteger replies = new AtomicInteger();
+            CompletableFuture<Throwable> terminal = new CompletableFuture<>();
+            List<Message> remoteParts = List.of(
+                Message.from("header"), Message.from("payload"));
+            assertTrue(spots.enqueueRemoteActor(
+                new ZLinkInternalMeshNode.PeerAuthorityFence(
+                    callerRid, 7, "caller-owner", 5),
+                header,
+                () -> new byte[] {1},
+                remoteParts,
+                null,
+                replyParts -> {
+                    replies.incrementAndGet();
+                    replyParts.forEach(Message::close);
+                },
+                failure -> {
+                    failures.incrementAndGet();
+                    terminal.complete(failure);
+                }));
+
+            assertEquals(dispatchFailure,
+                terminal.get(1, TimeUnit.SECONDS));
+            Thread.sleep(50);
+            assertEquals(1, failures.get());
+            assertEquals(0, replies.get());
+
+            try (Message lateReply = Message.from("late")) {
+                spots.replyActorNoBind(
+                    actor, callerRid, null, 1, 1, List.of(lateReply));
+            }
+            assertEquals(0, replies.get(),
+                "a failed request must remove its pending reply route");
+
+            AtomicInteger localTerminals = new AtomicInteger();
+            CompletionStage<Void> local;
+            try (Message payload = Message.from("local-send")) {
+                local = spots.sendToActorAsync(actor, List.of(payload));
+            }
+            ExecutionException localFailure = assertThrows(
+                ExecutionException.class,
+                () -> local.whenComplete((ignored, failure) ->
+                        localTerminals.incrementAndGet())
+                    .toCompletableFuture().get(1, TimeUnit.SECONDS));
+            assertEquals(dispatchFailure, localFailure.getCause());
+            assertEquals(1, localTerminals.get());
+
+            CompletionStage<List<Message>> localRequest;
+            try (Message payload = Message.from("local-request")) {
+                localRequest = spots.requestToActor(
+                    actor,
+                    List.of(payload),
+                    SendFlags.DONT_WAIT,
+                    Duration.ofSeconds(1));
+            }
+            ExecutionException requestFailure = assertThrows(
+                ExecutionException.class,
+                () -> localRequest.toCompletableFuture()
+                    .get(1, TimeUnit.SECONDS));
+            assertEquals(dispatchFailure, requestFailure.getCause());
         }
     }
 
