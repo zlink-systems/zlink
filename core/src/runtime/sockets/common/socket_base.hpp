@@ -412,10 +412,11 @@ class socket_base_t : public own_t,
       uint64_t transport_pair_id_, uint64_t transport_pair_generation_) const;
     void cache_completion_pipe_routing_id (pipe_t *application_pipe_);
     //  Request/reply submit entries write to transport pipes directly instead
-    //  of going through send()/recv(). They still have to drain pending socket
-    //  commands (throttled, exactly like the send() entry does); otherwise a
-    //  backpressured completion pipe never observes the peer's activate-write
-    //  command and every submit retry fails with EAGAIN.
+    //  of going through send()/recv(). They have to drain pending socket
+    //  commands when the mailbox reports a pending batch; otherwise a queued
+    //  bind, flow-state transition or activate-write can remain unapplied
+    //  across the direct transport operation with no later public call to make
+    //  progress. An empty mailbox keeps the normal hot-path throttle.
     int process_submit_commands ();
     int close ();
     int close (int handoff_timeout_ms_);
@@ -647,10 +648,6 @@ class socket_base_t : public own_t,
     void clear_part_helper_state ();
 
     bool is_ctx_terminated () const;
-
-    //  Re-evaluate a paired route after the transport engine installs its
-    //  concrete endpoint and connection identity.
-    void notify_transport_pair_ready (zlink::pipe_t *pipe_);
 
   protected:
     socket_base_t (zlink::ctx_t *parent_, uint32_t tid_, int sid_);
@@ -982,8 +979,11 @@ class socket_base_t : public own_t,
     //  Processes commands sent to this socket (if any). If timeout is -1,
     //  returns only after at least one command was processed.
     //  If throttle argument is true, commands are processed at most once
-    //  in a predefined time period.
-    int process_commands (int timeout_, bool throttle_);
+    //  in a predefined time period. force_if_command_pending bypasses only a
+    //  throttled skip backed by a mailbox command hint.
+    int process_commands (int timeout_,
+                          bool throttle_,
+                          bool force_if_command_pending_ = false);
     bool try_inc_mailbox_ref ();
     void inc_mailbox_ref ();
     void dec_mailbox_ref ();

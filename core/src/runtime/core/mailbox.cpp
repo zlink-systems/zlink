@@ -18,6 +18,7 @@ zlink::mailbox_t::mailbox_t ()
     _handler_arg = NULL;
     _pre_post = NULL;
     _scheduled.store (false, std::memory_order_release);
+    _command_pending_hint.store (false, std::memory_order_release);
     _primary_signaler_required.store (false, std::memory_order_release);
 }
 
@@ -45,6 +46,9 @@ void zlink::mailbox_t::send (const command_t &cmd_)
     const bool ok = _cpipe.flush ();
     bool send_primary_signaler = true;
     if (!ok) {
+        //  Publish the command before its wakeup. Commands appended while the
+        //  receiver is active are consumed by that drain and need no hint.
+        _command_pending_hint.store (true, std::memory_order_release);
         // Signal all registered signalers for ZLINK_INTERNAL_OPT_FD support
         for (std::vector<signaler_t *>::iterator it = _signalers.begin (), end = _signalers.end ();
              it != end; ++it) {
@@ -61,6 +65,13 @@ void zlink::mailbox_t::send (const command_t &cmd_)
         schedule_if_needed_unlocked ();
     }
     _sync.unlock ();
+}
+
+bool zlink::mailbox_t::take_command_pending_hint ()
+{
+    if (!_command_pending_hint.load (std::memory_order_acquire))
+        return false;
+    return _command_pending_hint.exchange (false, std::memory_order_acq_rel);
 }
 
 void zlink::mailbox_t::signal ()

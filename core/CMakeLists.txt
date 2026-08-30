@@ -1265,6 +1265,16 @@ else()
         "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/libzlink.vers")
       set_property(TARGET libzlink APPEND PROPERTY
         LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/libzlink.vers")
+    elseif(APPLE)
+      # Mach-O has no ELF version script. Compile all unannotated symbols as
+      # hidden instead; the formal C API already carries ZLINK_EXPORT and
+      # therefore remains default-visible. Apply this to the object library
+      # as well as the direct-source Xcode target.
+      set_target_properties(
+        objects libzlink
+        PROPERTIES C_VISIBILITY_PRESET hidden
+                   CXX_VISIBILITY_PRESET hidden
+                   VISIBILITY_INLINES_HIDDEN YES)
     endif()
     if(ZLINK_BUILD_FRAMEWORK)
       set_target_properties(

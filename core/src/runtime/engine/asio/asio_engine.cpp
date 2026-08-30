@@ -1409,9 +1409,13 @@ void zlink::asio_engine_t::on_write_complete (const boost::system::error_code &e
         return;
     }
 
-    //  If still handshaking and there's nothing more to write, just return.
-    if (_connection_facade.handshaking && _outsize == 0)
-        return;
+    //  A protocol may require its final handshake output to drain before it
+    //  can publish readiness. Resume the handshake from the write completion
+    //  that satisfies that barrier.
+    if (_connection_facade.handshaking && _outsize == 0) {
+        if (!process_input () || _connection_facade.handshaking)
+            return;
+    }
 
     //  Continue writing if more data available.
     //  For STREAM/TCP, prefer speculative loop from completion callback

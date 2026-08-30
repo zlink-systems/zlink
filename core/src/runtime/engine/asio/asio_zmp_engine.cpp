@@ -279,20 +279,36 @@ bool zlink::asio_zmp_engine_t::handshake ()
         _input_in_decoder_buffer = false;
     }
 
-    if (!process_handshake_input ())
-        return false;
-
     if (!_ready_received) {
-        errno = EAGAIN;
-        return false;
+        if (!process_handshake_input ())
+            return false;
+
+        if (!_ready_received) {
+            errno = EAGAIN;
+            return false;
+        }
+
+        //  Validate a message-oriented READY record once, while its completed
+        //  input boundary is still current. A passive paired handshake can
+        //  resume later from its READY write completion after the transport
+        //  has already armed the next input record.
+        if (transport () && transport ()->has_message_boundaries ()
+            && (!transport ()->read_message_complete () || _insize != 0)) {
+            set_last_error (zmp_error_frame_incomplete,
+                            "ready transport boundary invalid");
+            errno = EPROTO;
+            error (protocol_error);
+            return false;
+        }
     }
 
-    if (transport () && transport ()->has_message_boundaries ()
-        && (!transport ()->read_message_complete () || _insize != 0)) {
-        set_last_error (zmp_error_frame_incomplete,
-                        "ready transport boundary invalid");
-        errno = EPROTO;
-        error (protocol_error);
+    //  A passive paired endpoint derives its READY reply from peer metadata.
+    //  Do not publish local pair admission until that reply has left the
+    //  transport output buffer; otherwise the peer can observe readiness and
+    //  send or close while this lane is still wire-incomplete.
+    if (paired_transport () && !_options.transport_pair_initiator
+        && (!_ready_sent || _deferred_ready_pending || _outsize != 0)) {
+        errno = EAGAIN;
         return false;
     }
 
@@ -331,14 +347,11 @@ bool zlink::asio_zmp_engine_t::handshake ()
     if (!paired_transport ()) {
         socket ()->event_connection_ready_changed (
           _endpoint_uri_pair, _peer_routing_id, _peer_routing_id_size);
-    } else if (socket ()->socket_type () != ZLINK_CORE_SOCKET_ROUTER) {
-        socket ()->event_transport_pair_lane_ready (
-          _endpoint_uri_pair, _peer_routing_id, _peer_routing_id_size,
-          _negotiated_transport_lane, _negotiated_transport_pair_id,
-          _negotiated_transport_pair_generation);
     }
-    // Router readiness is published after its Framework RID route is
-    // registered by router_t::adopt_peer_routing_id.
+    // Paired readiness is published by socket-side pair admission after both
+    // lanes are attached and the Application write hold is released.  A wire
+    // READY only completes this physical lane and is not yet a public
+    // data-plane readiness edge.
 
     if (_output_stopped)
         restart_output ();

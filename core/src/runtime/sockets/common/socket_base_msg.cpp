@@ -561,6 +561,14 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
             dispatch_runtime ().clear_send_recovery_pending ();
             break;
         }
+        if (errno != EAGAIN && is_submit_retry_errno (errno)
+            && socket_has_manual_connect_endpoints ()
+            && xsubmit_retry_allowed (target_rid_, errno)) {
+            // Pair admission can advance one mailbox command at a time.  A
+            // later retry may therefore observe a newly attached but not yet
+            // admitted lane and must keep waiting just like the first try.
+            errno = EAGAIN;
+        }
         if (!hold_sync_during_retry)
             send_scope.release_sync_for_retry ();
         if (unlikely (errno != EAGAIN)) {

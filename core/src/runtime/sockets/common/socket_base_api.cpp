@@ -1337,8 +1337,3 @@ bool zlink::socket_base_t::is_ctx_terminated () const
 {
     return _ctx_terminated.load (std::memory_order_acquire);
 }
-
-void zlink::socket_base_t::notify_transport_pair_ready (pipe_t *pipe_)
-{
-    (void) emit_transport_pair_ready (pipe_);
-}

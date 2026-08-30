@@ -37,6 +37,9 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     void send (const command_t &cmd_);
     void signal ();
     int recv (command_t *cmd_, int timeout_);
+    //  Returns true once for a command batch that woke an inactive receiver.
+    //  Callers use this only as a fast-path hint; recv() remains authoritative.
+    bool take_command_pending_hint ();
 
     bool valid () const;
 
@@ -89,6 +92,7 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     void *_handler_arg;
     mailbox_pre_post_t _pre_post;
     std::atomic<bool> _scheduled;
+    std::atomic<bool> _command_pending_hint;
 
     //  Signalers for ZLINK_INTERNAL_OPT_FD support
     std::vector<signaler_t *> _signalers;

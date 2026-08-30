@@ -89,7 +89,8 @@ void zlink::socket_base_t::start_reaping (poller_t *poller_)
     check_destroy ();
 }
 
-int zlink::socket_base_t::process_commands (int timeout_, bool throttle_)
+int zlink::socket_base_t::process_commands (
+  int timeout_, bool throttle_, bool force_if_command_pending_)
 {
     receive_runtime_t &receive = receive_runtime ();
     const bool async_executor = current_async_mailbox_dispatch_socket () == this;
@@ -117,7 +118,9 @@ int zlink::socket_base_t::process_commands (int timeout_, bool throttle_)
         return 0;
     }
 
-    if (timeout_ == 0) {
+    mailbox_t *const mailbox = static_cast<mailbox_t *> (_mailbox);
+    bool took_command_pending_hint = false;
+    if (timeout_ == 0 && throttle_) {
         //  If we are asked not to wait, check whether we haven't processed
         //  commands recently, so that we can throttle the new commands.
 
@@ -130,9 +133,18 @@ int zlink::socket_base_t::process_commands (int timeout_, bool throttle_)
         //  depending on CPU speed: It's ~1ms on 3GHz CPU, ~2ms on 1.5GHz CPU
         //  etc. The optimisation makes sense only on platforms where getting
         //  a timestamp is a very cheap operation (tens of nanoseconds).
-        if (tsc && throttle_ && command_runtime ().should_skip_throttled_command_poll (tsc))
+        const bool should_skip =
+          tsc && command_runtime ().should_skip_throttled_command_poll (tsc);
+        if (should_skip && force_if_command_pending_)
+            took_command_pending_hint = mailbox->take_command_pending_hint ();
+        if (should_skip && !took_command_pending_hint)
             return 0;
     }
+
+    //  Clear a consumed wake hint before draining. A concurrent enqueue either
+    //  joins this drain or publishes a new hint for the next commit point.
+    if (!took_command_pending_hint)
+        (void) mailbox->take_command_pending_hint ();
 
 #ifdef ZLINK_BUILD_TESTS
     if (async_executor)
@@ -143,7 +155,7 @@ int zlink::socket_base_t::process_commands (int timeout_, bool throttle_)
 
     //  Check whether there are any commands pending for this thread.
     command_t cmd;
-    int rc = _mailbox->recv (&cmd, timeout_);
+    int rc = mailbox->recv (&cmd, timeout_);
 
     if (rc != 0 && errno == EINTR)
         return -1;
@@ -200,7 +212,7 @@ int zlink::socket_base_t::process_commands (int timeout_, bool throttle_)
             process_deferred_socket_msg_pipe_terminations ();
             processed_command = true;
         }
-        rc = _mailbox->recv (&cmd, 0);
+        rc = mailbox->recv (&cmd, 0);
     }
 
     // A public socket poller owns a secondary signaler. Publish readiness only
@@ -221,7 +233,10 @@ int zlink::socket_base_t::process_commands (int timeout_, bool throttle_)
 
 int zlink::socket_base_t::process_submit_commands ()
 {
-    return process_commands (0, true);
+    //  This is an explicit commit point before direct transport access. Bypass
+    //  a throttled skip only when send() published an actual command batch;
+    //  the common no-command reply path remains syscall-free.
+    return process_commands (0, true, true);
 }
 
 #ifdef ZLINK_BUILD_TESTS

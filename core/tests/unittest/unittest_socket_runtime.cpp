@@ -323,6 +323,27 @@ void test_socket_lifecycle_coordinator_completes_deferred_close_without_async_ma
     TEST_ASSERT_FALSE (coordinator.is_async_quiesce_pending ());
 }
 
+void test_mailbox_pending_hint_distinguishes_commands_from_plain_signals ()
+{
+    zlink::mailbox_t mailbox;
+    zlink::command_t command;
+    memset (&command, 0, sizeof (command));
+    command.type = zlink::command_t::stop;
+
+    TEST_ASSERT_FALSE (mailbox.take_command_pending_hint ());
+    mailbox.signal ();
+    TEST_ASSERT_FALSE (mailbox.take_command_pending_hint ());
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (-1, mailbox.recv (&command, 0));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+
+    mailbox.send (command);
+    TEST_ASSERT_TRUE (mailbox.take_command_pending_hint ());
+    TEST_ASSERT_FALSE (mailbox.take_command_pending_hint ());
+    TEST_ASSERT_EQUAL_INT (0, mailbox.recv (&command, 0));
+    TEST_ASSERT_EQUAL_INT (zlink::command_t::stop, command.type);
+}
+
 void test_socket_lifecycle_coordinator_handoff_waits_pending_async_quiesce ()
 {
     zlink::socket_lifecycle_coordinator_t coordinator;
@@ -632,6 +653,7 @@ int main (int argc, char **argv)
     RUN_TEST (
       test_socket_lifecycle_coordinator_atomically_seals_or_acquires_mailbox_ref);
     RUN_TEST (test_socket_lifecycle_coordinator_completes_deferred_close_without_async_mailbox);
+    RUN_TEST (test_mailbox_pending_hint_distinguishes_commands_from_plain_signals);
     RUN_TEST (test_socket_lifecycle_coordinator_handoff_waits_pending_async_quiesce);
     RUN_TEST (test_socket_lifecycle_coordinator_claims_deferred_close_once);
     RUN_TEST (test_socket_public_api_scope_releases_inflight_admission);
