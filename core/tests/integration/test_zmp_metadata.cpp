@@ -395,10 +395,11 @@ uint64_t assert_raw_two_part_application_record (
       fd_, &first_flags, &first_kind, &first_sequence, &first_body));
     TEST_ASSERT_EQUAL_HEX8 (zlink::zmp_flag_more, first_flags);
     TEST_ASSERT_EQUAL_HEX8 (first_kind_, first_kind);
-    if (first_kind_ == zlink::zmp_kind_request && expected_sequence_ == 0)
+    if (first_kind_ == zlink::zmp_kind_request && expected_sequence_ == 0) {
         TEST_ASSERT_TRUE (first_sequence != 0);
-    else
+    } else {
         TEST_ASSERT_EQUAL_UINT64 (expected_sequence_, first_sequence);
+    }
     TEST_ASSERT_EQUAL_UINT64 (first_payload_size_, first_body.size ());
     TEST_ASSERT_EQUAL_MEMORY (first_payload_, &first_body[0],
                               first_body.size ());
