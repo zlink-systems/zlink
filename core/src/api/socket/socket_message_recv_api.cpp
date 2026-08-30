@@ -240,10 +240,19 @@ int zlink_socket_recv_handle_internal (const socket_handle_t &handle_,
 {
     const int rc = recv_socket_parts (
       handle_, source_rid_out_, parts_out_, part_count_out_, flags_);
-    if (rc == 0 && parts_out_ && part_count_out_ && *parts_out_) {
-        for (size_t i = 0; i < *part_count_out_; ++i)
+    if (rc == 0 && parts_out_ && part_count_out_ && *parts_out_
+        && *part_count_out_ != 0) {
+        // PAIR and DEALER reject request/reply metadata on continuation
+        // frames before export. STREAM deliberately exposes raw inproc
+        // frames, so retain its defensive per-frame sanitization.
+        if (socket_type (handle_) == ZLINK_CORE_SOCKET_STREAM) {
+            for (size_t i = 0; i < *part_count_out_; ++i)
+                zlink::request_reply::clear_request_reply_metadata (
+                  &(*parts_out_)[i]);
+        } else {
             zlink::request_reply::clear_request_reply_metadata (
-              &(*parts_out_)[i]);
+              &(*parts_out_)[0]);
+        }
     }
     return rc;
 }
@@ -363,10 +372,10 @@ extern "C" int zlink_socket_subscribe_recv_internal (void *socket_,
     const int rc = recv_socket_subscribe_parts (
       handle, source_rid_out_, parts_out_, part_count_out_, topic_id_out_,
       topic_id_len_out_, flags_);
-    if (rc == 0 && parts_out_ && part_count_out_ && *parts_out_) {
-        for (size_t i = 0; i < *part_count_out_; ++i)
-            zlink::request_reply::clear_request_reply_metadata (
-              &(*parts_out_)[i]);
-    }
+    if (rc == 0 && parts_out_ && part_count_out_ && *parts_out_
+        && *part_count_out_ != 0)
+        // XSUB rejects metadata after the topic frame, before any payload is
+        // exported. Keep the first public payload boundary explicit.
+        zlink::request_reply::clear_request_reply_metadata (&(*parts_out_)[0]);
     return rc;
 }

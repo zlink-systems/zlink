@@ -34,7 +34,9 @@ void export_router_recv_part_metadata_view (const zlink_routing_id_t *source_nod
                                             uint64_t *transport_pair_generation_out_ = NULL)
 {
     router_recv_part_metadata_tls_t &metadata = router_recv_part_metadata_tls ();
-    zlink::part_helper_internal::copy_routing_id (source_node_rid_, &metadata.source_node_rid);
+    if (source_node_rid_ != &metadata.source_node_rid)
+        zlink::part_helper_internal::copy_routing_id (
+          source_node_rid_, &metadata.source_node_rid);
     const reqrep::router_recv_metadata_tls_t &source_metadata =
       reqrep::router_recv_metadata_tls ();
     metadata.transport_pair_id = source_metadata.transport_pair_id;
@@ -419,10 +421,13 @@ zlink_recv_result_t zlink_dealer_recv_part (void *dealer_,
 
     auto recv_dealer_parts_once = [&] (uint8_t *message_type_out, uint64_t *request_seq_out,
                                        zlink_msg_t **parts_out,
-                                       size_t *part_count_out) -> zlink_recv_result_t {
+                                       size_t *part_count_out,
+                                       zlink_msg_t *terminal_part_out,
+                                       bool *terminal_part_returned_out) -> zlink_recv_result_t {
         return reqrep::recv_dealer_message_direct (
                  handle, state, true, message_type_out, request_seq_out,
-                 parts_out, part_count_out, static_cast<int> (flags_))
+                 parts_out, part_count_out, static_cast<int> (flags_),
+                 terminal_part_out, terminal_part_returned_out)
                  == 0
                ? ZLINK_RECV_OK
                : zlink::recv_result_internal::from_errno (errno);
@@ -433,10 +438,20 @@ zlink_recv_result_t zlink_dealer_recv_part (void *dealer_,
         uint64_t request_seq = 0;
         zlink_msg_t *parts = NULL;
         size_t part_count = 0;
+        bool terminal_part_returned = false;
         const zlink_recv_result_t recv_rc =
-          recv_dealer_parts_once (&message_type, &request_seq, &parts, &part_count);
+          recv_dealer_parts_once (&message_type, &request_seq, &parts,
+                                  &part_count, part_out_,
+                                  &terminal_part_returned);
         if (recv_rc != ZLINK_RECV_OK)
             return zlink::recv_result_internal::from_errno (errno);
+
+        if (terminal_part_returned) {
+            *message_type_out_ = message_type;
+            *request_seq_out_ = request_seq;
+            *has_more_out_ = ZLINK_PART_FINAL;
+            return ZLINK_RECV_OK;
+        }
 
         if (!parts || part_count == 0) {
             revoke_dealer_receive_publication (handle, request_seq);
@@ -514,11 +529,22 @@ zlink_recv_result_t zlink_dealer_recv_part (void *dealer_,
         uint64_t request_seq = 0;
         zlink_msg_t *parts = NULL;
         size_t part_count = 0;
+        bool terminal_part_returned = false;
         const zlink_recv_result_t recv_rc =
-          recv_dealer_parts_once (&message_type, &request_seq, &parts, &part_count);
+          recv_dealer_parts_once (&message_type, &request_seq, &parts,
+                                  &part_count, part_out_,
+                                  &terminal_part_returned);
         if (recv_rc != ZLINK_RECV_OK) {
             zlink::part_helper_internal::abort_recv_step (helper_state);
             return zlink::recv_result_internal::from_errno (errno);
+        }
+        if (terminal_part_returned) {
+            *message_type_out_ = message_type;
+            *request_seq_out_ = request_seq;
+            *has_more_out_ = ZLINK_PART_FINAL;
+            zlink::part_helper_internal::complete_recv_step (
+              helper_state, *has_more_out_);
+            return ZLINK_RECV_OK;
         }
         if (!parts || part_count == 0) {
             revoke_dealer_receive_publication (handle, request_seq);

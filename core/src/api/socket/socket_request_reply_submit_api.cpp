@@ -23,9 +23,11 @@ namespace
 {
 struct pending_pair_observer_t
 {
-    pending_pair_observer_t () : identity (NULL) {}
+    pending_pair_observer_t () : state (NULL), identity (NULL) {}
 
-    std::shared_ptr<reqrep::socket_request_reply_state_t> state;
+    // Pipe write observers finish before the tracked send returns. Borrow the
+    // caller's owner instead of adding shared_ptr atomics to every request.
+    const std::shared_ptr<reqrep::socket_request_reply_state_t> *state;
     const reqrep::pending_request_identity_t *identity;
     std::unique_lock<std::mutex> publication_lock;
 };
@@ -36,17 +38,21 @@ bool publish_pending_pair_before_flush (
 {
     pending_pair_observer_t *observer =
       static_cast<pending_pair_observer_t *> (userdata_);
-    if (!observer || !observer->state || !observer->identity)
+    if (!observer || !observer->state || !*observer->state
+        || !observer->identity)
         return false;
+
+    reqrep::socket_request_reply_state_t *const state =
+      observer->state->get ();
 
     if (phase_ == zlink::pipe_write_observer_prepare) {
         observer->publication_lock =
-          std::unique_lock<std::mutex> (observer->state->mutex);
+          std::unique_lock<std::mutex> (state->mutex);
         const std::unordered_map<uint64_t, reqrep::pending_request_t>::const_iterator
-          pending = observer->state->pending_requests.find (
+          pending = state->pending_requests.find (
             observer->identity->request_seq);
-        if (observer->state->closing
-            || pending == observer->state->pending_requests.end ()
+        if (state->closing
+            || pending == state->pending_requests.end ()
             || !(pending->second.identity == *observer->identity)) {
             observer->publication_lock.unlock ();
             return false;
@@ -58,9 +64,9 @@ bool publish_pending_pair_before_flush (
         if (!pipe_ || !observer->publication_lock.owns_lock ())
             return false;
         std::unordered_map<uint64_t, reqrep::pending_request_t>::iterator
-          pending = observer->state->pending_requests.find (
+          pending = state->pending_requests.find (
             observer->identity->request_seq);
-        if (pending == observer->state->pending_requests.end ()
+        if (pending == state->pending_requests.end ()
             || !(pending->second.identity == *observer->identity))
             return false;
         pending->second.transport_pair_id = pipe_->get_transport_pair_id ();
@@ -309,7 +315,7 @@ zlink_submit_result_t request_part_common (
         }
 
         pending_pair_observer_t pair_observer;
-        pair_observer.state = request_state;
+        pair_observer.state = &request_state;
         pair_observer.identity = &pending_token.identity;
         const int send_rc =
           peer_rid_
@@ -391,7 +397,7 @@ zlink_submit_result_t request_part_common (
     }
 
     pending_pair_observer_t pair_observer;
-    pair_observer.state = request_state;
+    pair_observer.state = &request_state;
     pair_observer.identity = &pending_token.identity;
     bool physical_first_part = true;
     bool pending_pair_recorded = false;

@@ -366,7 +366,6 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
             zlink_msg_close (&first_payload);
             return zlink::recv_result_internal::from_errno (errno);
         }
-        zlink::request_reply::clear_request_reply_metadata (&first_payload);
 
         const bool first_payload_has_more =
           (reinterpret_cast<const zlink::msg_t *> (&first_payload)->flags ()
@@ -426,7 +425,6 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
                 errno = saved_errno;
                 return zlink::recv_result_internal::from_errno (errno);
             }
-            zlink::request_reply::clear_request_reply_metadata (&slot);
 
             payload_has_more =
               (reinterpret_cast<const zlink::msg_t *> (&slot)->flags () & zlink::msg_t::more) != 0;
@@ -499,6 +497,9 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
         zlink::part_helper_internal::abort_recv_step (helper_state);
         return zlink::recv_result_internal::from_errno (errno);
     }
+    // Buffered payloads remain internal until this point. XSUB has already
+    // rejected continuation metadata, so clear only the part crossing the
+    // public boundary instead of every buffered part twice.
     zlink::request_reply::clear_request_reply_metadata (part_out_);
     if (source_rid_out_)
         *source_rid_out_ = NULL;

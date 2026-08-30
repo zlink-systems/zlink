@@ -104,7 +104,7 @@ struct reply_target_receive_admission_t
       const socket_handle_t &handle_,
       std::shared_ptr<socket_request_reply_state_t> *state_out_,
       reply_target_reservation_t *reservation_, bool enabled_) :
-        handle (handle_),
+        handle (&handle_),
         state_out (state_out_),
         reservation (reservation_),
         enabled (enabled_)
@@ -115,7 +115,7 @@ struct reply_target_receive_admission_t
     {
         reply_target_receive_admission_t *self =
           static_cast<reply_target_receive_admission_t *> (userdata_);
-        if (!self || !self->enabled || !self->state_out
+        if (!self || !self->enabled || !self->handle || !self->state_out
             || !self->reservation)
             return 0;
         if (self->reservation->active ())
@@ -124,7 +124,7 @@ struct reply_target_receive_admission_t
         // Re-read the bridge only after this receive attempt owns the socket.
         // A competing first typed reader may have installed the state while
         // this call waited for the prior whole-record transaction to finish.
-        *self->state_out = find_request_reply_state (self->handle);
+        *self->state_out = find_request_reply_state (*self->handle);
         if (!*self->state_out)
             return 0;
 
@@ -140,7 +140,9 @@ struct reply_target_receive_admission_t
             self->reservation->release ();
     }
 
-    socket_handle_t handle;
+    // Admission callbacks run synchronously inside the enclosing receive, so
+    // borrowing avoids a public-handle retain/release on every record.
+    const socket_handle_t *handle;
     std::shared_ptr<socket_request_reply_state_t> *state_out;
     reply_target_reservation_t *reservation;
     bool enabled;
@@ -800,7 +802,6 @@ int recv_router_message_direct (const socket_handle_t &handle_,
     zlink_routing_id_t *const source_rid =
       terminal_source_storage_ ? terminal_source_storage_
                                : &metadata.source_rid;
-    memset (source_rid, 0, sizeof (*source_rid));
     zlink::pipe_t *source_pipe = NULL;
     const int first_recv_rc = handle_.socket->recv_routed (
       &current, source_rid, flags_, NULL, &source_pipe, true,
@@ -888,7 +889,7 @@ int recv_router_message_direct (const socket_handle_t &handle_,
             std::lock_guard<std::mutex> lock (state->mutex);
             if (state->closing)
                 publish_error = ETERM;
-            else if (!source_pipe->active_for_reply_target ())
+            else if (!source_pipe->is_lifecycle_active ())
                 publish_error = ECONNABORTED;
             else {
                 router_reply_target_t target;
@@ -1065,7 +1066,7 @@ int recv_dealer_message_direct (
             std::lock_guard<std::mutex> lock (request_state->mutex);
             if (request_state->closing)
                 publish_error = ETERM;
-            else if (!source_pipe->active_for_reply_target ())
+            else if (!source_pipe->is_lifecycle_active ())
                 publish_error = ECONNABORTED;
             else {
                 exported_seq =
@@ -1261,6 +1262,10 @@ int send_completion_staged_frames (zlink::socket_base_t *socket_,
 
     int rc = 0;
     const size_t total_part_count = staged_part_count_ + 1;
+    // Every part in one logical reply belongs to the same transport
+    // connection, even if the pipe's identity changes during teardown.
+    const uint64_t transport_connection_id =
+      completion->get_transport_connection_id ();
     for (size_t i = 0; i < total_part_count; ++i) {
         zlink_msg_t *part =
           i < staged_part_count_ ? &staged_parts_[i] : final_part_;
@@ -1269,8 +1274,7 @@ int send_completion_staged_frames (zlink::socket_base_t *socket_,
             msg->set_flags (zlink::msg_t::more);
         else
             msg->reset_flags (zlink::msg_t::more);
-        msg->set_transport_connection_id (
-          completion->get_transport_connection_id ());
+        msg->set_transport_connection_id (transport_connection_id);
         const bool written =
           i + 1 < total_part_count ? completion->write (msg)
                                    : completion->write_and_flush (msg);

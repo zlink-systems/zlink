@@ -799,9 +799,11 @@ int zlink::xsub_t::dispatch_message (
     const zlink_msg_t *payload =
       _dispatch_parts.size () > 1 ? &_dispatch_parts[1] : static_cast<zlink_msg_t *> (NULL);
     const size_t payload_count = _dispatch_parts.size () - 1;
-    for (size_t i = 1; i < _dispatch_parts.size (); ++i)
-        reinterpret_cast<msg_t *> (&_dispatch_parts[i])
-          ->reset_request_reply_metadata ();
+    // receive_dispatch_message rejects metadata after the topic frame. Keep
+    // the callback boundary explicit without revisiting every payload part.
+    if (payload_count != 0)
+        reinterpret_cast<msg_t *> (
+          &_dispatch_parts[1])->reset_request_reply_metadata ();
     {
         const zlink::xsub_dispatch_context_t dispatch_scope (this);
         callback (&source_rid_, topic_data, topic_size, const_cast<zlink_msg_t *> (payload),
