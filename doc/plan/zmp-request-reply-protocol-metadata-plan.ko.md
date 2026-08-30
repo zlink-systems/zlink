@@ -690,6 +690,23 @@ workflow에 sanitizer나 protocol 전용 job이 있으면 함께 확인한다.
 이번 계획의 완료 조건에는 throughput·latency benchmark 실행을 넣지 않는다. §8의 구조적
 변경을 functional·white-box test로 확인하고 실제 성능 수치 비교는 별도 성능 작업에서 수행한다.
 
+**검증 기록 — 2026-08-31**
+
+- Workflow는 `Build libzlink Core Libraries`의
+  [run 33339911090](https://github.com/zlink-systems/zlink/actions/runs/33339911090)이며,
+  branch는 `feature/zmp-request-reply-metadata`, 검증한 code commit은
+  `c5846afa65928e319b5b5adb14024cf25cc51467`이다.
+- Linux x64·ARM64와 macOS x64·ARM64는 각 build script가 허용한 Core test를 실행했고 build와
+  test가 성공했다. Windows x64·ARM64는 `BUILD_TESTS=OFF`로 compile·link했고 artifact 생성에
+  성공했다.
+- 같은 run에서 `libzlink-linux-x64`, `libzlink-linux-arm64`, `libzlink-macos-x64`,
+  `libzlink-macos-arm64`, `libzlink-windows-x64`, `libzlink-windows-arm64`와 `checksums`
+  artifact를 생성했고 `Verify Build Artifacts`가 성공했다.
+- `Create Release`는 branch가 release tag 조건을 만족하지 않아 skip됐다. Release, tag와
+  version 변경은 실행하지 않았다.
+- Throughput·latency benchmark는 실행하지 않았다. §8의 비용 제거는 source inspection과
+  functional·white-box test로만 확인했다.
+
 ## 8. 구조적 성능 개선과 측정 경계
 
 이번 작업에는 protocol envelope를 없애면 실행할 필요가 사라지는 처리만 함께 제거한다.
@@ -713,20 +730,25 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
   payload copy를 추가하지 않는다.
 - **Single-part fast path는 metadata를 인식한다.** `MORE`가 없는 data는 기존 terminal 경로로
   진행하고, request·reply는 multipart buffer를 만들기 전에 필요한 target 또는 completion
-  상태로 바로 연결한다.
+  상태로 바로 연결한다. Completion drain은 single-part reply와 error reply를 stack frame에서
+  검증해 completion으로 넘기며 `request_reply_frame_buffer_t` slot의 append·init·move를
+  만들지 않는다.
 - **Typed DEALER의 single-part 수신은 caller의 terminal 출력에 바로 쓴다.** 유효한 caller
   message slot이 있으면 multipart staging과 추가 move 없이 기존 direct receive 경로로 내보낸다.
 - **동기 callback과 receive admission은 바깥 호출의 소유자를 차용한다.** tracked send의 pipe
   observer와 한 record를 받는 admission callback은 호출이 반환하기 전에 끝나므로, socket handle과
-  request/reply state의 retain/release atomic 연산을 record마다 추가하지 않는다.
+  request/reply state의 retain/release atomic 연산을 record마다 추가하지 않는다. Request pipe
+  observer는 prepare에서 state lock 아래 찾은 pending entry를 commit까지 차용해 같은 sequence의
+  hash lookup과 identity 비교를 반복하지 않는다.
 - **ROUTER receive는 실제 routing ID만 보관·복사한다.** 수신 함수가 이미 초기화하는 output을
   전체 zero-fill하지 않고, TLS output을 직접 사용한 경우에는 자신에게 다시 복사하지 않는다.
 - **Multipart completion은 연결 ID를 한 번 snapshot한다.** 하나의 logical reply를 구성하는 모든
   part는 completion write 전에 읽은 같은 transport connection ID를 사용한다.
 - **Public receive의 metadata 정리는 application part 수와 무관하게 수행한다.** Decoder와
   socket assembler가 continuation의 request/reply metadata를 먼저 거부하므로 public boundary는
-  첫 application part만 지운다. Raw STREAM처럼 같은 검증을 거치지 않는 경로는 기존 per-part
-  방어를 유지한다.
+  첫 application part만 지운다. PAIR·XSUB·proxy는 continuation 검사 결과를 재사용해 이미
+  metadata가 없다고 확인한 part의 tag를 다시 reset하지 않는다. Raw STREAM처럼 같은 검증을
+  거치지 않는 경로는 기존 per-part 방어를 유지한다.
 - **Ordinary data는 request record를 만들지 않는다.** 첫 part의 kind가 `data`이면 새
   reply-target·pending entry나 request metadata sidecar를 만들지 않는다. Concurrent raw
   receive와 request가 공유하는 기존 socket state와 ownership transition은 이번 작업에서
@@ -756,7 +778,11 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
 - **Proxy는 지원되는 poller 경로 하나만 소유한다.** `ZLINK_HAVE_POLLER == 1`인 지원 build에서
   compile되지 않는 legacy `zlink_poll()` fallback을 제거하고, 내부 transport writability를
   사용하는 implementation만 유지한다.
-- **Request-reply submit은 command가 있을 때만 mailbox를 확인한다.** Mailbox writer가
+- **XSUB single-part socket dispatch는 multipart assembly를 만들지 않는다.** 해당 pipe에 열린
+  multipart가 없으면 stack message 하나로 handler ownership을 넘겨 per-pipe map node와 vector
+  allocation을 피한다. Interleaved multipart state의 유일한 동기화 owner는 공통
+  `socket_msg_dispatch_sync` fence이며 XSUB 전용 중복 mutex는 두지 않는다.
+- **Direct reply submit은 command가 있을 때만 mailbox를 확인한다.** Mailbox writer가
   inactive receiver를 깨우는 command batch에 atomic pending hint를 함께 publish한다. Direct
   submit의 commit point는 이 hint가 있을 때 queued bind·flow-state·activate-write를 즉시
   drain하고, hint가 없는 일반 reply 경로는 timestamp 조회와 nonblocking mailbox syscall을
@@ -776,6 +802,19 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
 - **Socket close는 paired reconnect를 먼저 닫는다.** Endpoint runtime이 보유한 shared pair
   state의 reconnect를 pipe termination 전에 비활성화해, 한 lane의 종료 callback이 이미 닫히는
   endpoint를 다시 dial하는 불필요한 session·connector 생성을 막는다.
+- **Completion lane에는 synthetic routing-id frame을 만들지 않는다.** READY에서 검증한 peer
+  identity는 pipe metadata로 보관하고 Application lane의 ROUTER preamble에만 사용한다. 따라서
+  paired connection마다 Completion lane 경로에서 synthetic routing-id frame에 필요했던 `msg_t`
+  초기화·identity 복사·queue write를 제거하고, 해당 frame의 activation 경로를 없앤다.
+  Completion owner가 payload가 아닌 frame을 꺼내 protocol error로 pair를 종료하고 reconnect가
+  새 pair를 만드는 경로도 함께 없어진다.
+- **Peer weight는 Application lane에만 알린다.** Weight는 Application scheduling 정보이므로
+  paired Completion pipe에는 쓰지 않는다. Weight를 변경할 때마다 Completion lane에 중복되던
+  `msg_t` 초기화·command encode·pipe write와 그 이후의 queue·transport 처리를 만들지 않는다.
+  Inproc에서는 command interceptor가 없는 Completion owner가 WEIGHT를 invalid record로 처리해
+  pair를 종료하고 reconnect하는 경로도 없어진다. 이 변경은 §9에 기록한 기존 peer-weight 초기
+  전달 유실과 inproc에서 Application data가 노출되는 문제를 우회하지 않으며 Completion lane
+  정리만 소유한다.
 
 ### 8.2 내부 확인 조건
 
@@ -793,18 +832,27 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
   추가 message move 없이 그 slot이 결과가 된다.
 - Tracked request send와 typed receive admission의 동기 observer/callback은 바깥 socket handle과
   request/reply state를 차용하며, observer가 반환한 뒤에는 그 차용 참조를 보관하지 않는다.
+- Tracked request의 pipe observer는 prepare부터 finish까지 request state lock을 유지하고 prepare에서
+  찾은 pending entry를 commit에서 직접 갱신하며, 같은 sequence를 pending map에서 다시 찾지 않는다.
 - ROUTER direct receive는 routing ID output 전체를 미리 zero-fill하지 않고, TLS routing ID를
   직접 쓴 결과를 TLS 자신에게 다시 복사하지 않는다.
 - Multipart completion의 각 part에는 completion 시작 때 snapshot한 하나의 transport connection
   ID가 기록된다.
 - PAIR·DEALER·ROUTER·XSUB assembler와 ZMP decoder는 첫 application part 뒤의 request/reply
   metadata를 public export 전에 거부하고, public boundary는 첫 part만 O(1)로 정리한다. Raw
-  STREAM의 public receive는 모든 part를 계속 정리한다.
+  STREAM의 public receive는 모든 part를 계속 정리한다. PAIR·XSUB·proxy continuation 경로에는
+  metadata 부재를 확인한 뒤 같은 tag를 다시 reset하는 호출이 없다.
+- Completion drain은 single-part reply와 error reply를 `request_reply_frame_buffer_t`에 넣지 않고
+  stack frame에서 직접 완료한다. Multipart continuation metadata는 assembly 중 한 번 검증하며,
+  completion 직전에 전체 part를 다시 순회하지 않는다.
 - Attach·dispatch·flow 처리의 pipe lifecycle 검사는 같은 상태 predicate를 사용하며, 삭제한
   anonymous namespace를 참조하는 production source가 없다.
 - Production proxy source에는 `ZLINK_HAVE_POLLER`의 compile-time 분기와 public
   `zlink_poll(POLLOUT)` fallback이 남지 않는다.
-- Direct request-reply submit의 mailbox commit point는 pending-command hint가 있을 때만
+- XSUB socket-message dispatch는 해당 pipe의 열린 multipart state가 없는 single-part record에
+  per-pipe assembly state를 만들지 않는다. XSUB assembly에는 공통 dispatch fence와 중복되는
+  별도 state mutex가 없다.
+- Direct reply submit의 mailbox commit point는 pending-command hint가 있을 때만
   command를 drain한다. Hint는 실제 command wake와 함께 publish되고 drain 전에 소비되며,
   command 없는 signal이나 일반 reply마다 timestamp 조회와 mailbox receive syscall을 만들지 않는다.
 - Async command owner가 input activation을 처리하면 receive progress epoch가 증가하고, public
@@ -812,6 +860,10 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
   owner가 없는 기존 descriptor pollset은 poller별 signaler 등록 비용을 추가하지 않는다.
 - Socket termination은 paired pipe를 종료하기 전에 endpoint runtime의 reconnect state를 모두
   비활성화한다.
+- Inproc과 network paired transport의 Completion pipe는 READY 뒤 synthetic routing-id frame 없이
+  시작하며, 입력이 있으면 첫 record는 reply·error reply 또는 receive-flow control이다.
+- `send_local_peer_weight()`는 paired Completion pipe에 WEIGHT를 쓰지 않는다. Dynamic weight
+  변경 뒤에도 Completion pipe는 reply·error reply·receive-flow control이 올 때까지 비어 있다.
 - Decoder에는 transport message의 decoded frame 수를 세는 상태가 없고, Asio ZMP engine이
   authoritative WS·WSS boundary 전까지만 frame publication을 보류한다.
 - WS·WSS transport의 stream과 read boundary state는 같은 connection-generation aggregate에
@@ -869,6 +921,9 @@ revision, payload part 수, 성공·timeout·error 수와 반복별 throughput·
 - 보호 문서를 수정해야 하지만 해당 경로의 승인이 없다.
 - GitHub Actions artifact가 아닌 로컬 Core build가 필요하다.
 - 기존 pending, timeout이나 completion 계약을 바꿔야 wire 변경이 가능하다.
+- Paired peer-weight의 기존 초기 전달 유실과 inproc Application data 노출을 고치려면
+  Completion lane 확장이 아닌 별도 owner-thread control delivery와 pair-ready resync 설계가
+  필요하다. 이 문제는 request-reply metadata 전환의 회귀가 아니므로 이번 변경에서 우회하지 않는다.
 
 ## 10. 별도 세션 작업 지시문
 
@@ -944,6 +999,12 @@ decoder 상태와 allocation 제거처럼 내부 구조로만 확인할 조건�
   결과로 각각 한 번 완료된다.
 - Network와 inproc completion progress lane에 유효한 receive-flow control을 보낸 뒤 정상
   reply를 보내면 pair가 종료되지 않고 원래 request callback이 한 번 완료된다.
+- Network paired connection에서 첫 request 전에 completion poller를 등록해도 pair가 종료되지
+  않으며, 이어지는 request와 reply가 각각 한 번 전달된다.
+- Inproc pair에서 application request를 받은 뒤 reply나 receive-flow control을 쓰기 전까지
+  Completion pipe에는 읽을 수 있는 synthetic routing-id record가 없다.
+- Inproc pair가 ready 상태가 된 뒤 peer weight를 변경해도 Completion pipe에 record가 추가되지
+  않고 pair가 유지되며, 이어지는 request와 reply가 각각 한 번 완료된다.
 - Raw fixture가 request·reply kind를 `zlink_proxy`에 보내면 반대편과 capture socket은 같은
   application multipart를 받고, 그 message를 raw wire로 다시 읽으면 kind는 `data`다.
 

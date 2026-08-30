@@ -176,12 +176,20 @@ connections.
 | Lane | Traffic carried |
 |---|---|
 | Application | Ordinary application messages and requests |
-| Completion | Replies that complete requests already sent |
+| Completion | Replies that complete requests already sent and receive-flow control |
 
 The READY frame on each connection contains `Zlink-Pair-Id`, `Zlink-Pair-Generation`, and
 `Zlink-Lane`. Pair ID and generation are unsigned 64-bit big-endian values. Lane is one byte:
 Application is `0`, and Completion is `1`. All three properties must be present together.
 The pair ID, generation, and peer routing identity must all match across the two connections.
+
+The `Routing-Id` in READY is metadata used to verify that both connections belong to the same
+peer. The runtime exposes the synthetic routing-ID preamble used by a ROUTER to select that peer
+only on the Application lane. The Completion lane carries neither this preamble nor ordinary
+`data` records. If the Completion lane carries a record after READY, the first record must be a
+reply, error reply, or receive-flow control record.
+Peer-weight advertisements control Application-lane scheduling and are sent only on the
+Application lane. They are not Completion-lane records.
 
 Application writes wait until both lanes have completed validation. Data received from an
 earlier generation is not attached to the new pair. A protocol error, identity mismatch,
@@ -411,6 +419,12 @@ item maps to one test.
 - FIFO ordering is observed only within each lane; no ordering is guaranteed between lanes.
 - Completion replies are processed even while Application ingress is stopped by
   backpressure.
+- Registering a completion poller before the first request on a network paired connection does not
+  terminate the pair; the following request and reply are each delivered once.
+- After an Application request is received on an inproc pair, the Completion pipe has no readable
+  synthetic routing-ID record before a reply or receive-flow control record is written.
+- Changing a peer weight after an inproc pair is ready does not add a Completion-lane record or
+  terminate the pair; the following request and reply are each delivered once.
 
 **Request-reply and decode validation**
 

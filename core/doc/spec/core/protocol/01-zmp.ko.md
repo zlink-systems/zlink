@@ -172,13 +172,21 @@ connection을 사용한다.
 | Lane | 전달하는 traffic |
 |---|---|
 | Application | 일반 application message와 request |
-| Completion | 이미 보낸 request를 완료하는 reply |
+| Completion | 이미 보낸 request를 완료하는 reply와 receive-flow control |
 
 두 connection의 READY frame에는 `Zlink-Pair-Id`, `Zlink-Pair-Generation`,
 `Zlink-Lane`이 들어간다. Pair ID와 generation은 unsigned 64-bit big-endian 값이다.
 Lane은 한 byte이며 Application은 `0`, Completion은 `1`이다. 세 property는 항상
 함께 있어야 한다. 두 connection의 pair ID, generation과 peer routing identity가
 모두 일치해야 한다.
+
+READY의 `Routing-Id`는 두 connection이 같은 peer에 속하는지 검증하는 metadata다. Runtime은
+ROUTER가 peer를 선택하는 synthetic routing-id preamble을 Application lane에만 제공한다.
+Completion lane은 이 preamble과 ordinary `data` record를 전달하지 않는다. READY 뒤
+Completion lane에 record가 들어오면 첫 record는 reply, error reply 또는 receive-flow
+control이어야 한다.
+Peer-weight advertisement는 Application lane scheduling만 제어하며 Application lane에만
+보낸다. Peer-weight advertisement는 Completion-lane record가 아니다.
 
 Application write는 두 lane의 검증이 끝날 때까지 대기한다. 이전 generation에서
 수신한 data를 새 pair에 연결하지 않는다. 한 lane에서 protocol error, identity
@@ -372,6 +380,12 @@ callback 결과로 확인한다. 각 항목은 test 하나로 이어진다.
 - reconnect하면 새 generation이 만들어지고, 두 lane을 다시 검증한 뒤 Application write가 재개된다.
 - FIFO 순서는 각 lane 안에서만 관찰되며, 두 lane 사이의 순서는 보장되지 않는다.
 - Application ingress가 backpressure로 중단된 동안에도 Completion reply가 처리된다.
+- Network paired connection에 첫 request를 보내기 전에 completion poller를 등록해도 pair가 종료되지
+  않으며, 이어지는 request와 reply가 각각 한 번 전달된다.
+- Inproc pair에서 application request를 받은 뒤 reply나 receive-flow control을 쓰기 전까지
+  Completion pipe에는 읽을 수 있는 synthetic routing-id record가 없다.
+- Inproc pair가 ready 상태가 된 뒤 peer weight를 변경해도 Completion-lane record가 추가되거나
+  pair가 종료되지 않으며, 이어지는 request와 reply가 각각 한 번 전달된다.
 
 **Request-reply와 decode 검증**
 - Ordinary send와 request에 같은 multipart를 넘기면 수신 application은 같은 part 수, 순서와 byte를 관찰한다.
