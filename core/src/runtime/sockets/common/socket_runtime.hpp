@@ -143,6 +143,7 @@ struct socket_endpoint_runtime_t
     bool has_attached_pipes () const;
     pipe_t *attached_pipe (size_t index_);
     const pipe_t *attached_pipe (size_t index_) const;
+    void disable_transport_pair_reconnects ();
 
     void store_last_recv_source_rid (const zlink_routing_id_t *source_rid_);
     void clear_last_recv_source_rid ();

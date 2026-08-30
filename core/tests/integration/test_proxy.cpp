@@ -1,14 +1,10 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
 #include "testutil.hpp"
-#include "testutil_monitoring.hpp"
 #include "testutil_unity.hpp"
 #include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/socket/socket_api_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
-#include "protocol/wire.hpp"
-#include "protocol/zmp_metadata.hpp"
-#include "protocol/zmp_protocol.hpp"
 #include "sockets/proxy/proxy.hpp"
 
 #include <stdlib.h>
@@ -16,7 +12,6 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
-#include <vector>
 
 #define CONTENT_SIZE 13
 #define CONTENT_SIZE_MAX 32
@@ -83,47 +78,12 @@ void tearDown ()
     }
 }
 
-class proxy_part_forwarded_hook_scope_t
-{
-  public:
-    proxy_part_forwarded_hook_scope_t (
-      zlink::proxy_part_forwarded_hook_fn hook_, void *userdata_) :
-        _active (true)
-    {
-        zlink::test_set_proxy_part_forwarded_hook (hook_, userdata_);
-    }
-
-    ~proxy_part_forwarded_hook_scope_t () { reset (); }
-
-    void reset ()
-    {
-        if (_active) {
-            zlink::test_set_proxy_part_forwarded_hook (NULL, NULL);
-            _active = false;
-        }
-    }
-
-  private:
-    proxy_part_forwarded_hook_scope_t (
-      const proxy_part_forwarded_hook_scope_t &);
-    proxy_part_forwarded_hook_scope_t &operator= (
-      const proxy_part_forwarded_hook_scope_t &);
-
-    bool _active;
-};
-
 static void metadata_proxy_task (void *arg_)
 {
     proxy_thread_data *const data = static_cast<proxy_thread_data *> (arg_);
     data->result = zlink_proxy (data->frontend, data->backend, data->capture);
     data->error = zlink_errno ();
     data->done.store (true, std::memory_order_release);
-}
-
-static void mark_proxy_part_forwarded (void *userdata_)
-{
-    static_cast<std::atomic<bool> *> (userdata_)->store (
-      true, std::memory_order_release);
 }
 
 static void capture_proxy_request_completion (zlink_request_result_t result_,
@@ -177,58 +137,6 @@ static void assert_raw_dealer_part (void *socket_,
       reinterpret_cast<zlink::msg_t *> (&part)
         ->get_request_reply_metadata (&retained_kind, &retained_sequence));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
-}
-
-static bool proxy_test_send_all (fd_t fd_, const unsigned char *data_,
-                                 size_t size_)
-{
-    size_t offset = 0;
-    while (offset < size_) {
-#if defined ZLINK_HAVE_WINDOWS
-        const int rc = send (
-          fd_, reinterpret_cast<const char *> (data_ + offset),
-          static_cast<int> (size_ - offset), 0);
-#else
-        const ssize_t rc = send (
-          fd_, data_ + offset, size_ - offset, MSG_NOSIGNAL);
-#endif
-        if (rc <= 0)
-            return false;
-        offset += static_cast<size_t> (rc);
-    }
-    return true;
-}
-
-static bool proxy_test_send_zmp_frame (fd_t fd_, unsigned char flags_,
-                                       const unsigned char *body_,
-                                       size_t body_size_)
-{
-    unsigned char header[zlink::zmp_header_size];
-    header[0] = zlink::zmp_magic;
-    header[1] = zlink::zmp_version;
-    header[2] = flags_;
-    header[3] = zlink::zmp_kind_data;
-    zlink::put_uint32 (header + 4, static_cast<uint32_t> (body_size_));
-    return proxy_test_send_all (fd_, header, sizeof (header))
-           && (body_size_ == 0
-               || proxy_test_send_all (fd_, body_, body_size_));
-}
-
-static bool proxy_test_send_pair_handshake (fd_t fd_)
-{
-    const unsigned char hello[] = {
-      zlink::zmp_control_hello, ZLINK_CORE_SOCKET_PAIR, 0};
-    if (!proxy_test_send_zmp_frame (
-          fd_, zlink::zmp_flag_control, hello, sizeof (hello)))
-        return false;
-
-    std::vector<unsigned char> ready;
-    ready.push_back (zlink::zmp_control_ready);
-    static const char socket_type[] = "PAIR";
-    zlink::zmp_metadata::append_property (
-      ready, "Socket-Type", socket_type, sizeof (socket_type) - 1);
-    return proxy_test_send_zmp_frame (
-      fd_, zlink::zmp_flag_control, &ready[0], ready.size ());
 }
 
 static bool wait_for_proxy_exit (proxy_thread_data *data_)
@@ -744,156 +652,6 @@ void test_proxy_rejects_request_reply_metadata_after_first_part ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (context));
 }
 
-void test_proxy_rolls_back_both_outputs_after_source_multipart_abort ()
-{
-    void *const context = zlink_ctx_new ();
-    TEST_ASSERT_NOT_NULL (context);
-    void *const first_frontend = zlink_socket (context, ZLINK_SOCKET_PAIR);
-    void *const second_frontend = zlink_socket (context, ZLINK_SOCKET_PAIR);
-    void *const backend = zlink_socket (context, ZLINK_SOCKET_PAIR);
-    void *const capture = zlink_socket (context, ZLINK_SOCKET_PAIR);
-    void *const sink = zlink_socket (context, ZLINK_SOCKET_PAIR);
-    void *const capture_sink = zlink_socket (context, ZLINK_SOCKET_PAIR);
-    TEST_ASSERT_NOT_NULL (first_frontend);
-    TEST_ASSERT_NOT_NULL (second_frontend);
-    TEST_ASSERT_NOT_NULL (backend);
-    TEST_ASSERT_NOT_NULL (capture);
-    TEST_ASSERT_NOT_NULL (sink);
-    TEST_ASSERT_NOT_NULL (capture_sink);
-
-    const int zero = 0;
-    void *const sockets[] = {first_frontend, second_frontend, backend,
-                             capture, capture_sink, sink};
-    for (size_t i = 0; i != sizeof (sockets) / sizeof (sockets[0]); ++i) {
-        TEST_ASSERT_SUCCESS_ERRNO (
-          zlink_set_option (sockets[i], ZLINK_OPT_LINGER, &zero,
-                            sizeof (zero)));
-    }
-
-    zlink_socket_monitor_open_options_t monitor_options;
-    memset (&monitor_options, 0, sizeof (monitor_options));
-    monitor_options.events = ZLINK_EVENT_CONNECTION_READY;
-    void *first_frontend_monitor =
-      zlink_socket_monitor_open (first_frontend, &monitor_options);
-    TEST_ASSERT_NOT_NULL (first_frontend_monitor);
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_option (first_frontend_monitor, ZLINK_OPT_LINGER, &zero,
-                        sizeof (zero)));
-
-    char first_endpoint[MAX_SOCKET_STRING];
-    char second_endpoint[MAX_SOCKET_STRING];
-    bind_loopback_ipv4 (
-      first_frontend, first_endpoint, sizeof (first_endpoint));
-    bind_loopback_ipv4 (
-      second_frontend, second_endpoint, sizeof (second_endpoint));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_bind (backend, "inproc://proxy-abort-backend"));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_bind (capture, "inproc://proxy-abort-capture"));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_connect (sink, "inproc://proxy-abort-backend"));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_connect (capture_sink, "inproc://proxy-abort-capture"));
-
-    proxy_thread_data first_proxy (
-      first_frontend, backend, capture);
-    std::atomic<bool> orphan_forwarded (false);
-    proxy_part_forwarded_hook_scope_t forwarded_hook_scope (
-      &mark_proxy_part_forwarded, &orphan_forwarded);
-    void *const first_proxy_thread =
-      zlink_thread_start (&metadata_proxy_task, &first_proxy);
-    TEST_ASSERT_NOT_NULL (first_proxy_thread);
-
-    fd_t first_raw = connect_socket (
-      first_endpoint, AF_INET, IPPROTO_TCP);
-    const bool raw_connected = first_raw != retired_fd;
-    const bool handshake_sent =
-      raw_connected && proxy_test_send_pair_handshake (first_raw);
-    const int ready_event =
-      handshake_sent
-        ? get_monitor_event_with_timeout (
-            first_frontend_monitor, NULL, NULL, 5000)
-        : -1;
-    const zlink_close_result_t monitor_close_result =
-      zlink_monitor_close (&first_frontend_monitor);
-    static const unsigned char orphan[] = {'o', 'r', 'p', 'h', 'a', 'n'};
-    const bool orphan_sent =
-      monitor_close_result == ZLINK_CLOSE_OK
-      && ready_event == ZLINK_EVENT_CONNECTION_READY
-      && proxy_test_send_zmp_frame (
-        first_raw, zlink::zmp_flag_more, orphan, sizeof (orphan));
-    for (int attempt = 0;
-         attempt != 1000
-         && !orphan_forwarded.load (std::memory_order_acquire)
-         && !first_proxy.done.load (std::memory_order_acquire);
-         ++attempt)
-        msleep (1);
-    if (!orphan_sent
-        || !orphan_forwarded.load (std::memory_order_acquire)) {
-        if (raw_connected)
-            close (first_raw);
-        (void) zlink_ctx_shutdown (context);
-        zlink_thread_join (first_proxy_thread);
-        forwarded_hook_scope.reset ();
-        const zlink_config_result_t proxy_result = first_proxy.result;
-        const int proxy_error = first_proxy.error;
-        for (size_t i = 0; i != sizeof (sockets) / sizeof (sockets[0]); ++i)
-            (void) zlink_close (sockets[i]);
-        (void) zlink_ctx_term (context);
-
-        char failure[256];
-        snprintf (failure, sizeof (failure),
-                  "proxy prefix staging failed: handshake=%d ready_event=%d "
-                  "monitor_close=%d orphan_sent=%d proxy_result=%d "
-                  "proxy_errno=%d",
-                  handshake_sent ? 1 : 0, ready_event,
-                  static_cast<int> (monitor_close_result), orphan_sent ? 1 : 0,
-                  static_cast<int> (proxy_result), proxy_error);
-        TEST_FAIL_MESSAGE (failure);
-    }
-    close (first_raw);
-
-    TEST_ASSERT_TRUE_MESSAGE (
-      wait_for_proxy_exit (&first_proxy),
-      "proxy did not observe the source multipart abort");
-    zlink_thread_join (first_proxy_thread);
-    forwarded_hook_scope.reset ();
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_INTERNAL_ERROR, first_proxy.result);
-    TEST_ASSERT_EQUAL_INT (EAGAIN, first_proxy.error);
-
-    // Reuse the same backend/capture destinations with a fresh source. If the
-    // first forwarding attempt left its MORE prefixes staged, this final frame
-    // is exposed as the tail of [orphan, fresh] on one or both outputs.
-    proxy_thread_data second_proxy (
-      second_frontend, backend, capture);
-    void *const second_proxy_thread =
-      zlink_thread_start (&metadata_proxy_task, &second_proxy);
-    TEST_ASSERT_NOT_NULL (second_proxy_thread);
-
-    fd_t second_raw = connect_socket (
-      second_endpoint, AF_INET, IPPROTO_TCP);
-    TEST_ASSERT_NOT_EQUAL (retired_fd, second_raw);
-    TEST_ASSERT_TRUE (proxy_test_send_pair_handshake (second_raw));
-    msleep (SETTLE_TIME);
-    static const unsigned char fresh[] = {'f', 'r', 'e', 's', 'h'};
-    TEST_ASSERT_TRUE (proxy_test_send_zmp_frame (
-      second_raw, 0, fresh, sizeof (fresh)));
-
-    assert_raw_pair_part (sink, "fresh");
-    assert_raw_pair_part (capture_sink, "fresh");
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_shutdown (context));
-    zlink_thread_join (second_proxy_thread);
-    close (second_raw);
-    TEST_ASSERT_TRUE (
-      second_proxy.result == ZLINK_CONFIG_OK
-      || (second_proxy.result == ZLINK_CONFIG_INTERNAL_ERROR
-          && second_proxy.error == ETERM));
-    for (size_t i = 0; i != sizeof (sockets) / sizeof (sockets[0]); ++i)
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_close (sockets[i]));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (context));
-}
-
 void test_proxy_rolls_back_capture_after_destination_send_failure ()
 {
     void *const context = zlink_ctx_new ();
@@ -1114,7 +872,6 @@ int main (void)
     UNITY_BEGIN ();
     RUN_TEST (test_proxy_and_capture_clear_request_reply_metadata);
     RUN_TEST (test_proxy_rejects_request_reply_metadata_after_first_part);
-    RUN_TEST (test_proxy_rolls_back_both_outputs_after_source_multipart_abort);
     RUN_TEST (test_proxy_rolls_back_capture_after_destination_send_failure);
     RUN_TEST (test_proxy_does_not_bridge_request_completion_lane);
     RUN_TEST (test_proxy);

@@ -88,6 +88,14 @@ void zlink::mailbox_t::signal ()
 
 int zlink::mailbox_t::recv (command_t *cmd_, int timeout_)
 {
+    //  An async command owner and a public socket poller can observe the same
+    //  primary descriptor. Consult the command pipe first so a poller that
+    //  consumed the wake cannot strand an already-published command.
+    if (!_active && _cpipe.check_read ()) {
+        (void) _signaler.recv_failable ();
+        _active = true;
+    }
+
     if (!_active) {
         signaler_t *shared_signaler = NULL;
         _sync.lock ();
@@ -142,6 +150,13 @@ int zlink::mailbox_t::recv (command_t *cmd_, int timeout_)
     _active = false;
     errno = EAGAIN;
     return -1;
+}
+
+void zlink::mailbox_t::drain_primary_signaler ()
+{
+    while (_signaler.recv_failable () == 0) {
+    }
+    errno_assert (errno == EAGAIN);
 }
 
 bool zlink::mailbox_t::valid () const
@@ -237,7 +252,10 @@ void zlink::mailbox_t::remove_signaler (signaler_t *signaler_)
 void zlink::mailbox_t::rearm_primary_signaler ()
 {
     _sync.lock ();
-    _signaler.send ();
+    //  This edge exists only for callers that obtained the primary fd. Avoid
+    //  a signaler syscall for async-owned sockets that have no public poller.
+    if (_primary_signaler_required.load (std::memory_order_acquire))
+        _signaler.send ();
     _sync.unlock ();
 }
 

@@ -5304,6 +5304,93 @@ void test_dealer_disconnect_forgets_reply_token_before_pipe_deallocation ()
     test_context_socket_close_zero_linger (server);
 }
 
+void test_dealer_reply_drains_queued_disconnect_before_target_checkout ()
+{
+    const char *endpoint =
+      "inproc://dealer-reply-drains-queued-disconnect";
+    void *server = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *client = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (server);
+    TEST_ASSERT_NOT_NULL (client);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
+    msleep (SETTLE_TIME);
+
+    send_internal_request_message (client, 750);
+    uint8_t message_type = 0xff;
+    uint64_t request_token = 0;
+    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    zlink_msg_t request;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&request));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      recv_dealer_part_with_retry (server, &message_type, &request_token,
+                                   &request, &has_more));
+    TEST_ASSERT_EQUAL_UINT8 (ZLINK_DEALER_MESSAGE_REQUEST, message_type);
+    TEST_ASSERT_TRUE (request_token != 0);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&request));
+
+    const socket_handle_t server_handle = as_socket_handle (server);
+    TEST_ASSERT_NOT_NULL (server_handle.socket);
+    const std::shared_ptr<
+      zlink::socket_reqrep_internal::socket_request_reply_state_t>
+      server_state = zlink::socket_reqrep_internal::find_request_reply_state (
+        server_handle);
+    TEST_ASSERT_NOT_NULL (server_state.get ());
+
+    // Disconnect queues pipe_term on the server. Let the server acknowledge
+    // it, then let the client queue the reciprocal pipe_term_ack. Do not touch
+    // the server mailbox again before the direct reply commit point.
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_disconnect (client, endpoint));
+    process_socket_commands_through_public_api (server);
+    process_socket_commands_through_public_api (client);
+
+    {
+        std::lock_guard<std::mutex> lock (server_state->mutex);
+        const std::unordered_map<
+          uint64_t,
+          zlink::socket_reqrep_internal::dealer_reply_target_t>::const_iterator
+          target = server_state->dealer_reply_targets.find (request_token);
+        TEST_ASSERT_TRUE (target != server_state->dealer_reply_targets.end ());
+        TEST_ASSERT_NOT_NULL (target->second.pipe);
+        TEST_ASSERT_FALSE (target->second.checked_out);
+        TEST_ASSERT_EQUAL_UINT64 (1, server_state->reply_target_slots);
+        TEST_ASSERT_EQUAL_UINT64 (0, server_state->reply_target_checkouts);
+    }
+
+    uint64_t public_mailbox_drains_before = 0;
+    server_handle.socket->test_receive_owner_snapshot (
+      NULL, &public_mailbox_drains_before, NULL);
+
+    zlink_msg_t reply;
+    init_string_part (&reply, "reply-after-queued-disconnect");
+    errno = 0;
+    const zlink_submit_result_t submit = zlink_dealer_reply_part (
+      server, request_token, &reply, ZLINK_PART_FINAL);
+    const int submit_errno = errno;
+
+    uint64_t public_mailbox_drains_after = 0;
+    server_handle.socket->test_receive_owner_snapshot (
+      NULL, &public_mailbox_drains_after, NULL);
+    TEST_ASSERT_TRUE (public_mailbox_drains_after
+                      > public_mailbox_drains_before);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_NOT_FOUND, submit);
+    TEST_ASSERT_EQUAL_INT (ENOENT, submit_errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&reply));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&reply));
+
+    {
+        std::lock_guard<std::mutex> lock (server_state->mutex);
+        TEST_ASSERT_TRUE (server_state->dealer_reply_targets.empty ());
+        TEST_ASSERT_EQUAL_UINT64 (0, server_state->reply_target_slots);
+        TEST_ASSERT_EQUAL_UINT64 (0, server_state->reply_target_checkouts);
+    }
+
+    test_context_socket_close_zero_linger (client);
+    test_context_socket_close_zero_linger (server);
+}
+
 void test_router_disconnect_forgets_reply_target_before_pipe_deallocation ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
@@ -5541,6 +5628,7 @@ int main ()
     RUN_SELECTED (test_dealer_request_uses_socket_default_timeout_when_reply_is_missing);
     RUN_SELECTED (test_reply_timeout_does_not_turn_failed_request_admission_into_success);
     RUN_SELECTED (test_dealer_disconnect_forgets_reply_token_before_pipe_deallocation);
+    RUN_SELECTED (test_dealer_reply_drains_queued_disconnect_before_target_checkout);
     RUN_SELECTED (test_router_disconnect_forgets_reply_target_before_pipe_deallocation);
     RUN_SELECTED (test_router_reply_target_slots_are_bounded_and_released);
     RUN_SELECTED (test_request_reply_process_exits_cleanly_after_round_trip);

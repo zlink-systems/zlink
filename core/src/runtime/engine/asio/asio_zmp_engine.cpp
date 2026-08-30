@@ -22,6 +22,33 @@
 #include <algorithm>
 #include <limits.h>
 #include <string.h>
+#ifdef ZLINK_BUILD_TESTS
+#include <atomic>
+
+namespace
+{
+std::atomic<zlink::zmp_passive_ready_write_drained_test_hook_fn>
+  passive_ready_write_drained_test_hook (NULL);
+std::atomic<void *> passive_ready_write_drained_test_hook_userdata (NULL);
+}
+
+void zlink::test_set_zmp_passive_ready_write_drained_hook (
+  zmp_passive_ready_write_drained_test_hook_fn hook_, void *userdata_)
+{
+    if (!hook_) {
+        passive_ready_write_drained_test_hook.store (NULL,
+                                                     std::memory_order_release);
+        passive_ready_write_drained_test_hook_userdata.store (
+          NULL, std::memory_order_release);
+        return;
+    }
+
+    passive_ready_write_drained_test_hook_userdata.store (
+      userdata_, std::memory_order_release);
+    passive_ready_write_drained_test_hook.store (hook_,
+                                                 std::memory_order_release);
+}
+#endif
 
 zlink::asio_zmp_engine_t::asio_zmp_engine_t (fd_t fd_,
                                              const options_t &options_,
@@ -313,6 +340,21 @@ bool zlink::asio_zmp_engine_t::handshake ()
     }
 
     if (_has_handshake_stage) {
+#ifdef ZLINK_BUILD_TESTS
+        if (paired_transport () && !_options.transport_pair_initiator
+            && _ready_received && _ready_sent && !_deferred_ready_pending
+            && _outsize == 0) {
+            const zmp_passive_ready_write_drained_test_hook_fn hook =
+              passive_ready_write_drained_test_hook.load (
+                std::memory_order_acquire);
+            if (hook) {
+                hook (_negotiated_transport_pair_id,
+                      _negotiated_transport_pair_generation,
+                      passive_ready_write_drained_test_hook_userdata.load (
+                        std::memory_order_acquire));
+            }
+        }
+#endif
         session ()->set_peer_routing_id (_peer_routing_id, _peer_routing_id_size);
         session ()->engine_ready ();
         session ()->configure_zmp_decoder (

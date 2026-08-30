@@ -203,6 +203,14 @@ uint32_t zlink::socket_base_t::monitor_ready_count () const
     return monitor_runtime ().ready_count ();
 }
 
+#ifdef ZLINK_BUILD_TESTS
+uint32_t zlink::socket_base_t::test_monitor_ready_count () const
+{
+    scoped_lock_t lock (monitor_runtime ().sync);
+    return monitor_runtime ().ready_count ();
+}
+#endif
+
 bool zlink::socket_base_t::has_attached_pipes () const
 {
     scoped_lock_t lock (monitor_runtime ().sync);

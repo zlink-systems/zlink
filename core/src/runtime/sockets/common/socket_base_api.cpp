@@ -718,6 +718,15 @@ int zlink::socket_base_t::get_events_for_poller (int events_, uint32_t *out_,
 
     const int public_events =
       transport_output_ ? events_ & ~ZLINK_POLLOUT : events_;
+
+    //  The async owner is scheduled from the command pipe and never waits on
+    //  this descriptor. Retire the poller's previous edge before sampling the
+    //  logical state. A concurrent command then either becomes visible to the
+    //  sample or publishes a fresh post-commit edge, so neither a permanent
+    //  readable/busy loop nor a lost wake is possible.
+    if (async_mailbox_owns_commands ())
+        static_cast<mailbox_t *> (_mailbox)->drain_primary_signaler ();
+
     const int rc = get_events_internal (public_events, out_);
     if (rc != 0)
         return rc;
@@ -727,6 +736,7 @@ int zlink::socket_base_t::get_events_for_poller (int events_, uint32_t *out_,
     if (transport_output_ && (events_ & ZLINK_POLLOUT)
         && transport_has_out ())
         *out_ |= ZLINK_POLLOUT;
+
     return 0;
 }
 

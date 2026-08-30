@@ -378,6 +378,71 @@ bool read_next_application_frame (fd_t fd_,
     return false;
 }
 
+uint64_t assert_raw_two_part_application_record (
+  fd_t fd_,
+  unsigned char first_kind_,
+  uint64_t expected_sequence_,
+  const unsigned char *first_payload_,
+  size_t first_payload_size_,
+  const unsigned char *second_payload_,
+  size_t second_payload_size_)
+{
+    unsigned char first_flags = 0;
+    unsigned char first_kind = 0xff;
+    uint64_t first_sequence = UINT64_MAX;
+    std::vector<unsigned char> first_body;
+    TEST_ASSERT_TRUE (read_next_application_frame (
+      fd_, &first_flags, &first_kind, &first_sequence, &first_body));
+    TEST_ASSERT_EQUAL_HEX8 (zlink::zmp_flag_more, first_flags);
+    TEST_ASSERT_EQUAL_HEX8 (first_kind_, first_kind);
+    if (first_kind_ == zlink::zmp_kind_request && expected_sequence_ == 0)
+        TEST_ASSERT_TRUE (first_sequence != 0);
+    else
+        TEST_ASSERT_EQUAL_UINT64 (expected_sequence_, first_sequence);
+    TEST_ASSERT_EQUAL_UINT64 (first_payload_size_, first_body.size ());
+    TEST_ASSERT_EQUAL_MEMORY (first_payload_, &first_body[0],
+                              first_body.size ());
+
+    unsigned char second_flags = 0;
+    unsigned char second_kind = 0xff;
+    uint64_t second_sequence = UINT64_MAX;
+    std::vector<unsigned char> second_body;
+    TEST_ASSERT_TRUE (read_next_application_frame (
+      fd_, &second_flags, &second_kind, &second_sequence, &second_body));
+    TEST_ASSERT_EQUAL_HEX8 (0, second_flags);
+    TEST_ASSERT_EQUAL_HEX8 (zlink::zmp_kind_data, second_kind);
+    TEST_ASSERT_EQUAL_UINT64 (0, second_sequence);
+    TEST_ASSERT_EQUAL_UINT64 (second_payload_size_, second_body.size ());
+    TEST_ASSERT_EQUAL_MEMORY (second_payload_, &second_body[0],
+                              second_body.size ());
+
+    //  Exactly two application parts must produce exactly two wire frames.
+    set_recv_timeout (fd_, 100);
+    unsigned char extra_flags = 0;
+    unsigned char extra_kind = 0xff;
+    uint64_t extra_sequence = UINT64_MAX;
+    std::vector<unsigned char> extra_body;
+    TEST_ASSERT_FALSE (read_next_application_frame (
+      fd_, &extra_flags, &extra_kind, &extra_sequence, &extra_body));
+    set_recv_timeout (fd_, 2000);
+    return first_sequence;
+}
+
+void init_two_part_application_record (
+  zlink_msg_t parts_[2],
+  const unsigned char *first_payload_,
+  size_t first_payload_size_,
+  const unsigned char *second_payload_,
+  size_t second_payload_size_)
+{
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_msg_init_size (&parts_[0], first_payload_size_));
+    memcpy (zlink_msg_data (&parts_[0]), first_payload_, first_payload_size_);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_msg_init_size (&parts_[1], second_payload_size_));
+    memcpy (zlink_msg_data (&parts_[1]), second_payload_, second_payload_size_);
+}
+
 void assert_pair_has_no_raw_payload (void *server_)
 {
     unsigned char payload[32];
@@ -635,7 +700,7 @@ void test_raw_wire_fragmented_base_extension_and_payload_delivers_once ()
     test_context_socket_close_zero_linger (server);
 }
 
-void test_raw_wire_public_multipart_request_has_two_application_frames ()
+void test_raw_wire_sendsend_and_reqrep_match_multipart_frame_count ()
 {
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
     char endpoint[MAX_SOCKET_STRING];
@@ -653,69 +718,107 @@ void test_raw_wire_public_multipart_request_has_two_application_frames ()
     TEST_ASSERT_TRUE (wait_for_raw_ready (application));
     TEST_ASSERT_TRUE (wait_for_raw_ready (completion));
 
-    static const char first_payload[] = "first";
-    static const char second_payload[] = "second";
+    static const unsigned char first_payload[] = {'f', 'i', 'r', 's', 't'};
+    static const unsigned char second_payload[] = {'s', 'e', 'c', 'o', 'n', 'd'};
+
+    zlink_msg_t ordinary[2];
+    init_two_part_application_record (
+      ordinary, first_payload, sizeof (first_payload), second_payload,
+      sizeof (second_payload));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_part (dealer, &ordinary[0], ZLINK_SEND_FLAGS_NONE,
+                       ZLINK_PART_MORE));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_part (dealer, &ordinary[1], ZLINK_SEND_FLAGS_NONE,
+                       ZLINK_PART_FINAL));
+    TEST_ASSERT_EQUAL_UINT64 (
+      0, assert_raw_two_part_application_record (
+           application, zlink::zmp_kind_data, 0, first_payload,
+           sizeof (first_payload), second_payload, sizeof (second_payload)));
+
     zlink_msg_t request[2];
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_msg_init_size (&request[0], sizeof (first_payload) - 1));
-    memcpy (zlink_msg_data (&request[0]), first_payload,
-            sizeof (first_payload) - 1);
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_msg_init_size (&request[1], sizeof (second_payload) - 1));
-    memcpy (zlink_msg_data (&request[1]), second_payload,
-            sizeof (second_payload) - 1);
+    init_two_part_application_record (
+      request, first_payload, sizeof (first_payload), second_payload,
+      sizeof (second_payload));
     reply_probe_t probe;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_dealer_request (dealer, request, 2, &capture_reply, &probe,
                             ZLINK_SEND_FLAGS_NONE, 5000));
 
-    unsigned char first_flags = 0;
-    unsigned char first_kind = 0;
-    uint64_t request_sequence = 0;
-    std::vector<unsigned char> first_body;
-    TEST_ASSERT_TRUE (read_next_application_frame (
-      application, &first_flags, &first_kind, &request_sequence,
-      &first_body));
-    TEST_ASSERT_EQUAL_HEX8 (zlink::zmp_flag_more, first_flags);
-    TEST_ASSERT_EQUAL_HEX8 (zlink::zmp_kind_request, first_kind);
-    TEST_ASSERT_TRUE (request_sequence != 0);
-    TEST_ASSERT_EQUAL_UINT64 (sizeof (first_payload) - 1,
-                              first_body.size ());
-    TEST_ASSERT_EQUAL_MEMORY (first_payload, &first_body[0],
-                              first_body.size ());
+    const uint64_t request_sequence = assert_raw_two_part_application_record (
+      application, zlink::zmp_kind_request, 0, first_payload,
+      sizeof (first_payload), second_payload, sizeof (second_payload));
 
-    unsigned char second_flags = 0;
-    unsigned char second_kind = 0xff;
-    uint64_t second_sequence = UINT64_MAX;
-    std::vector<unsigned char> second_body;
-    TEST_ASSERT_TRUE (read_next_application_frame (
-      application, &second_flags, &second_kind, &second_sequence,
-      &second_body));
-    TEST_ASSERT_EQUAL_HEX8 (0, second_flags);
-    TEST_ASSERT_EQUAL_HEX8 (zlink::zmp_kind_data, second_kind);
-    TEST_ASSERT_EQUAL_UINT64 (0, second_sequence);
-    TEST_ASSERT_EQUAL_UINT64 (sizeof (second_payload) - 1,
-                              second_body.size ());
-    TEST_ASSERT_EQUAL_MEMORY (second_payload, &second_body[0],
-                              second_body.size ());
-
-    //  The two application parts above are the complete wire frame set; the
-    //  old request envelope must not add protocol data frames.
-    set_recv_timeout (application, 100);
-    unsigned char extra_flags = 0;
-    unsigned char extra_kind = 0;
-    uint64_t extra_sequence = 0;
-    std::vector<unsigned char> extra_body;
-    TEST_ASSERT_FALSE (read_next_application_frame (
-      application, &extra_flags, &extra_kind, &extra_sequence, &extra_body));
-
-    static const unsigned char reply_payload[] = {'o', 'k'};
-    TEST_ASSERT_TRUE (send_zmp_request_reply_frame (
-      completion, zlink::zmp_kind_reply, request_sequence, reply_payload,
-      sizeof (reply_payload)));
+    std::vector<unsigned char> raw_reply = make_zmp_wire_frame (
+      zlink::zmp_flag_more, zlink::zmp_kind_reply, request_sequence,
+      first_payload, sizeof (first_payload));
+    append_wire_frame (&raw_reply, make_zmp_wire_frame (
+      0, zlink::zmp_kind_data, 0, second_payload, sizeof (second_payload)));
+    TEST_ASSERT_TRUE (
+      send_all (completion, &raw_reply[0], raw_reply.size ()));
     TEST_ASSERT_TRUE (wait_for_calls (&probe, 1));
     TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, probe.result);
+
+    const uint64_t raw_request_sequence = UINT64_C (0x1122334455667788);
+    std::vector<unsigned char> raw_request = make_zmp_wire_frame (
+      zlink::zmp_flag_more, zlink::zmp_kind_request, raw_request_sequence,
+      first_payload, sizeof (first_payload));
+    append_wire_frame (&raw_request, make_zmp_wire_frame (
+      0, zlink::zmp_kind_data, 0, second_payload, sizeof (second_payload)));
+    TEST_ASSERT_TRUE (
+      send_all (application, &raw_request[0], raw_request.size ()));
+
+    uint64_t reply_token = 0;
+    for (size_t i = 0; i != 2; ++i) {
+        uint8_t message_type = ZLINK_DEALER_MESSAGE_RAW;
+        uint64_t received_token = 0;
+        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+        zlink_msg_t received;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&received));
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_RECV_OK,
+          zlink_dealer_recv_part (dealer, &message_type, &received_token,
+                                  &received, &has_more,
+                                  ZLINK_RECV_FLAGS_NONE));
+        TEST_ASSERT_EQUAL_UINT8 (ZLINK_DEALER_MESSAGE_REQUEST, message_type);
+        TEST_ASSERT_TRUE (received_token != 0);
+        if (i == 0)
+            reply_token = received_token;
+        else
+            TEST_ASSERT_EQUAL_UINT64 (reply_token, received_token);
+        TEST_ASSERT_EQUAL_INT (i == 0 ? ZLINK_PART_MORE : ZLINK_PART_FINAL,
+                               has_more);
+        const unsigned char *expected_payload =
+          i == 0 ? first_payload : second_payload;
+        const size_t expected_size =
+          i == 0 ? sizeof (first_payload) : sizeof (second_payload);
+        TEST_ASSERT_EQUAL_UINT64 (expected_size, zlink_msg_size (&received));
+        TEST_ASSERT_EQUAL_MEMORY (expected_payload,
+                                  zlink_msg_data (&received), expected_size);
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&received));
+    }
+
+    zlink_msg_t reply[2];
+    init_two_part_application_record (
+      reply, first_payload, sizeof (first_payload), second_payload,
+      sizeof (second_payload));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_reply_part (dealer, reply_token, &reply[0],
+                               ZLINK_PART_MORE));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_reply_part (dealer, reply_token, &reply[1],
+                               ZLINK_PART_FINAL));
+    TEST_ASSERT_EQUAL_UINT64 (
+      raw_request_sequence,
+      assert_raw_two_part_application_record (
+        completion, zlink::zmp_kind_reply, raw_request_sequence,
+        first_payload, sizeof (first_payload), second_payload,
+        sizeof (second_payload)));
 
     close (completion);
     close (application);
@@ -1342,7 +1445,7 @@ int main (void)
 
     RUN_TEST (test_raw_wire_ordinary_data_uses_eight_byte_kind_zero_header);
     RUN_TEST (test_raw_wire_fragmented_base_extension_and_payload_delivers_once);
-    RUN_TEST (test_raw_wire_public_multipart_request_has_two_application_frames);
+    RUN_TEST (test_raw_wire_sendsend_and_reqrep_match_multipart_frame_count);
     RUN_TEST (test_raw_wire_public_router_reply_keeps_kind_and_sequence);
     RUN_TEST (test_raw_wire_rejects_incomplete_and_malformed_frames_without_payload);
     RUN_TEST (test_zmp_error_invalid_hello);

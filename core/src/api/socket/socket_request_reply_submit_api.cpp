@@ -766,6 +766,17 @@ zlink_submit_result_t zlink_dealer_reply_part (void *dealer_,
         return ZLINK_SUBMIT_INVALID_ARGUMENT;
     }
 
+    //  DEALER replies bypass send()/recv() just like ROUTER replies. Apply a
+    //  queued pair-state transition or termination before selecting the
+    //  retained target; the no-command path remains mailbox-free.
+    if (handle.socket->process_submit_commands () != 0) {
+        const int saved_errno = errno;
+        zlink::part_helper_internal::abort_send_step (state);
+        zlink::part_helper_internal::consume_send_part (part_);
+        errno = saved_errno;
+        return zlink::submit_result_internal::from_errno (saved_errno);
+    }
+
     reqrep::dealer_reply_target_t target;
     if (reqrep::take_dealer_reply_target (request_state, request_seq_, &target) != 0) {
         const int saved_errno = errno;

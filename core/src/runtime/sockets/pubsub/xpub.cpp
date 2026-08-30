@@ -479,6 +479,11 @@ void zlink::xpub_t::xdispatch_io ()
     if (!_dispatch_active.load (std::memory_order_acquire))
         return;
 
+    // xdispatch_io() is the receive-ownership boundary for every socket type.
+    // XPUB keeps its pending subscription queues under the same lock that its
+    // command callbacks use; unlike the message dispatchers it invokes no
+    // application callback while this lock is held.
+    scoped_lock_t receive_lock (receive_sync ());
     while (_dispatch_active.load (std::memory_order_acquire)) {
         const int rc = dispatch_ready_messages ();
         if (rc != 0)

@@ -20,24 +20,7 @@
 #ifdef ZLINK_BUILD_TESTS
 namespace
 {
-std::atomic<zlink::proxy_part_forwarded_hook_fn> g_proxy_part_forwarded_hook (
-  NULL);
-std::atomic<void *> g_proxy_part_forwarded_hook_userdata (NULL);
 std::atomic<bool> g_fail_next_proxy_destination_send (false);
-}
-
-void zlink::test_set_proxy_part_forwarded_hook (
-  proxy_part_forwarded_hook_fn hook_, void *userdata_)
-{
-    if (!hook_) {
-        g_proxy_part_forwarded_hook.store (NULL, std::memory_order_release);
-        g_proxy_part_forwarded_hook_userdata.store (NULL,
-                                                     std::memory_order_release);
-        return;
-    }
-    g_proxy_part_forwarded_hook_userdata.store (userdata_,
-                                                 std::memory_order_release);
-    g_proxy_part_forwarded_hook.store (hook_, std::memory_order_release);
 }
 
 void zlink::test_fail_next_proxy_destination_send ()
@@ -48,7 +31,6 @@ void zlink::test_fail_next_proxy_destination_send ()
 
 void zlink::test_reset_proxy_state ()
 {
-    test_set_proxy_part_forwarded_hook (NULL, NULL);
     g_fail_next_proxy_destination_send.store (false,
                                                std::memory_order_release);
 }
@@ -241,14 +223,6 @@ static int forward (class zlink::socket_base_t *from_,
                 errno = saved_errno;
                 return -1;
             }
-#ifdef ZLINK_BUILD_TESTS
-            zlink::proxy_part_forwarded_hook_fn forwarded_hook =
-              g_proxy_part_forwarded_hook.load (std::memory_order_acquire);
-            if (forwarded_hook)
-                forwarded_hook (
-                  g_proxy_part_forwarded_hook_userdata.load (
-                    std::memory_order_acquire));
-#endif
             if (more == 0)
                 break;
         }

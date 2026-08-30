@@ -766,7 +766,12 @@ void zlink::asio_engine_t::start_async_write ()
     }
 
     //  Try a synchronous write first when supported (libzlink-like path).
-    if (_connection_fastpath_policy.speculative_write_enabled ()) {
+    //  Handshake output must complete through on_write_complete(): some
+    //  protocols publish readiness only after their final response drains.
+    //  Completing that response inline would strand the handshake with no
+    //  later callback to resume process_input().
+    if (!_connection_facade.handshaking
+        && _connection_fastpath_policy.speculative_write_enabled ()) {
         const std::size_t bytes = _transport_adapter.transport->write_some (
           reinterpret_cast<const std::uint8_t *> (_outpos), _outsize);
         if (bytes == 0) {
@@ -1348,9 +1353,12 @@ void zlink::asio_engine_t::on_write_complete (const boost::system::error_code &e
     if (ec) {
         if (ec == boost::asio::error::operation_aborted)
             return;
-        //  IO error - stop writing but continue reading to detect connection close
-        _pipeline.io_error = true;
+        //  A failed transport write is already a terminal connection result.
+        //  Merely suppressing later reads can strand the engine without a
+        //  session error or DISCONNECTED edge, especially while READY drains.
+        errno = ec.value ();
         finish_gather_output ();
+        error (connection_error);
         return;
     }
 
@@ -1582,6 +1590,14 @@ void zlink::asio_engine_t::speculative_write ()
     //  Guard: Don't write during I/O errors
     if (_pipeline.io_error)
         return;
+
+    //  Handshake completion can depend on observing the final control write
+    //  completion. Keep that state machine on the async path regardless of
+    //  which caller attempted the speculative fast path.
+    if (_connection_facade.handshaking) {
+        start_async_write ();
+        return;
+    }
 
     //  Try gather path first for large messages.
     if (prepare_gather_output ())

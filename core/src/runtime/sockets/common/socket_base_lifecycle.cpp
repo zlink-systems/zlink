@@ -120,6 +120,14 @@ int zlink::socket_base_t::process_commands (
 
     mailbox_t *const mailbox = static_cast<mailbox_t *> (_mailbox);
     bool took_command_pending_hint = false;
+    if (timeout_ == 0 && throttle_ && force_if_command_pending_) {
+        //  Direct request-reply commit points need a command drain only when a
+        //  sender woke an inactive mailbox. Keep their ordinary no-command
+        //  path free of both rdtsc and signaler work.
+        took_command_pending_hint = mailbox->take_command_pending_hint ();
+        if (!took_command_pending_hint)
+            return 0;
+    }
     if (timeout_ == 0 && throttle_) {
         //  If we are asked not to wait, check whether we haven't processed
         //  commands recently, so that we can throttle the new commands.
@@ -135,8 +143,6 @@ int zlink::socket_base_t::process_commands (
         //  a timestamp is a very cheap operation (tens of nanoseconds).
         const bool should_skip =
           tsc && command_runtime ().should_skip_throttled_command_poll (tsc);
-        if (should_skip && force_if_command_pending_)
-            took_command_pending_hint = mailbox->take_command_pending_hint ();
         if (should_skip && !took_command_pending_hint)
             return 0;
     }
@@ -399,6 +405,11 @@ void zlink::socket_base_t::process_bind (pipe_t *pipe_)
 
 void zlink::socket_base_t::process_term (int linger_)
 {
+    //  Closing the socket ends every paired transport. Disable reconnect
+    //  before either lane's pipe termination can reach session recovery and
+    //  recreate an endpoint that the socket is already tearing down.
+    endpoint_runtime ().disable_transport_pair_reconnects ();
+
     //  Unregister all inproc endpoints associated with this socket.
     //  Doing this we make sure that no new pipes from other sockets (inproc)
     //  will be initiated.
@@ -529,10 +540,10 @@ void zlink::socket_base_t::process_async_mailbox ()
                 defer_socket_msg_dispatch ();
                 process_deferred_socket_msg_pipe_terminations ();
             } else {
-                // SUB/XPUB and the remaining established async consumers own
-                // their socket-specific xdispatch_io semantics independently
-                // of the raw socket-message bridge.
-                scoped_lock_t receive_lock (receive_runtime ().sync);
+                // Every socket-specific dispatcher owns the receive lock only
+                // while it extracts a frame. An outer recursive lock here
+                // would silently retain receive ownership across application
+                // callbacks and defeat that ownership boundary.
                 xdispatch_io ();
             }
             //  This executor consumed the mailbox's primary notification
