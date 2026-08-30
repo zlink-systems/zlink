@@ -7,6 +7,7 @@
 #include "api/socket/socket_api_internal.hpp"
 #include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
+#include "core/command.hpp"
 #include "core/multipart_send_txn.hpp"
 
 #include <atomic>
@@ -134,6 +135,39 @@ struct receive_wait_owner_probe_t
 
     receive_wait_owner_probe_t () : entered (false) {}
 };
+
+struct async_input_command_probe_t
+{
+    async_input_command_probe_t () : activate_read_seen (false) {}
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool activate_read_seen;
+};
+
+void capture_async_input_command (void *userdata_, int command_type_, bool)
+{
+    async_input_command_probe_t *probe =
+      static_cast<async_input_command_probe_t *> (userdata_);
+    if (!probe
+        || command_type_ != static_cast<int> (zlink::command_t::activate_read))
+        return;
+
+    {
+        std::lock_guard<std::mutex> lock (probe->mutex);
+        probe->activate_read_seen = true;
+    }
+    probe->cv.notify_all ();
+}
+
+bool wait_for_async_input_command (async_input_command_probe_t *probe_,
+                                   int timeout_ms_)
+{
+    std::unique_lock<std::mutex> lock (probe_->mutex);
+    return probe_->cv.wait_for (
+      lock, std::chrono::milliseconds (timeout_ms_),
+      [probe_] () { return probe_->activate_read_seen; });
+}
 
 struct routed_self_close_probe_t
 {
@@ -2480,6 +2514,18 @@ void test_socket_poller_wakes_after_async_owner_applies_input ()
         msleep (1);
     }
 
+    socket_handle_t router_handle = as_socket_handle (router);
+    TEST_ASSERT_NOT_NULL (router_handle.socket);
+    const std::chrono::steady_clock::time_point pair_ready_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (3);
+    while (!router_handle.socket->test_pair_is_ready (
+      target.transport_pair_id, target.transport_pair_generation)) {
+        TEST_ASSERT_TRUE_MESSAGE (
+          std::chrono::steady_clock::now () < pair_ready_deadline,
+          "ROUTER transport pair did not become ready");
+        msleep (1);
+    }
+
     void *poller = zlink_poller_new ();
     void *timer = zlink_timer_new ();
     TEST_ASSERT_NOT_NULL (poller);
@@ -2494,8 +2540,9 @@ void test_socket_poller_wakes_after_async_owner_applies_input ()
     TEST_ASSERT_EQUAL_INT (
       0, zlink_poller_wait (poller, &event, 1, 0, NULL));
 
-    socket_handle_t router_handle = as_socket_handle (router);
-    TEST_ASSERT_NOT_NULL (router_handle.socket);
+    async_input_command_probe_t command_probe;
+    router_handle.socket->test_set_receive_command_sync_probe_hook (
+      &capture_async_input_command, &command_probe);
     uint64_t epoch_before = 0;
     uint64_t public_drains_before = 0;
     uint64_t async_drains_before = 0;
@@ -2527,20 +2574,18 @@ void test_socket_poller_wakes_after_async_owner_applies_input ()
         ZLINK_PART_FINAL);
     poll_thread.join ();
 
+    const bool activate_read_seen =
+      wait_for_async_input_command (&command_probe, 3000);
+
     uint64_t epoch_after = 0;
     uint64_t public_drains_after = 0;
     uint64_t async_drains_after = 0;
     router_handle.socket->test_receive_owner_snapshot (
       &epoch_after, &public_drains_after, &async_drains_after);
+    router_handle.socket->test_set_receive_command_sync_probe_hook (NULL,
+                                                                    NULL);
 
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, send_result);
-    TEST_ASSERT_TRUE_MESSAGE (
-      async_drains_after > async_drains_before,
-      "async mailbox owner did not process the input activation");
-    TEST_ASSERT_EQUAL_UINT64 (public_drains_before, public_drains_after);
-    TEST_ASSERT_TRUE_MESSAGE (
-      epoch_after > epoch_before,
-      "async mailbox owner did not publish receive progress");
     TEST_ASSERT_EQUAL_INT (1, poll_result);
     TEST_ASSERT_EQUAL_INT (ZLINK_POLLER_SOURCE_SOCKET, event.source_kind);
     TEST_ASSERT_EQUAL_PTR (router, event.socket);
@@ -2548,6 +2593,16 @@ void test_socket_poller_wakes_after_async_owner_applies_input ()
     TEST_ASSERT_TRUE_MESSAGE (
       poll_elapsed_ms >= 0 && poll_elapsed_ms < 1000,
       "socket poller slept until its timeout after async input progress");
+    TEST_ASSERT_TRUE_MESSAGE (
+      activate_read_seen,
+      "input activate_read command did not reach the async mailbox owner");
+    TEST_ASSERT_TRUE_MESSAGE (
+      async_drains_after > async_drains_before,
+      "async mailbox owner did not process the input activation");
+    TEST_ASSERT_EQUAL_UINT64 (public_drains_before, public_drains_after);
+    TEST_ASSERT_TRUE_MESSAGE (
+      epoch_after > epoch_before,
+      "async mailbox owner did not publish receive progress");
 
     const zlink_routing_id_t *source_rid = NULL;
     uint64_t request_seq = 0;
