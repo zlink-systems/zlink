@@ -205,7 +205,7 @@ public sealed class LocationRuntimeQueryTests
     }
 
     [Fact]
-    public async Task Actor_Resolve_Drops_Views_Older_Than_An_Observed_Membership_Epoch()
+    public async Task Actor_Resolve_Accepts_Views_Without_An_Observed_Membership_Epoch_Floor()
     {
         var time = new ManualTimeProvider();
         var store = new ZLinkInMemoryLocationStore(time);
@@ -232,14 +232,14 @@ public sealed class LocationRuntimeQueryTests
         var first = await resolvers.ResolveActorRowAsync(key);
         Assert.Equal(2UL, first!.MembershipEpoch);
 
-        // The lagging read must not roll the runtime's view backwards.
+        // A prior observation is not authority for rejecting a later store read.
         time.Advance(TimeSpan.FromTicks(1));
         var second = await resolvers.ResolveActorRowAsync(key);
-        Assert.Null(second);
+        Assert.Equal(1UL, second!.MembershipEpoch);
     }
 
     [Fact]
-    public async Task Topology_And_Service_Summaries_Drop_Older_Descriptor_Revisions()
+    public async Task Topology_And_Service_Summaries_Accept_Each_Descriptor_Read()
     {
         var time = new ManualTimeProvider();
         var store = new ZLinkInMemoryLocationStore(time);
@@ -263,7 +263,7 @@ public sealed class LocationRuntimeQueryTests
             new ZLinkLocationServiceSummaryFilter());
 
         Assert.Single(topology.Items);
-        Assert.Empty(summaries.Items);
+        Assert.Single(summaries.Items);
     }
 
     [Fact]

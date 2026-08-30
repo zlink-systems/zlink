@@ -348,16 +348,16 @@ public sealed class LocationResolverTests
         Assert.Equal(OwnerB, resolved.OwnerId);
         Assert.Equal(10UL, resolved.LifecycleGeneration);
 
-        // Once the successor is accepted, a delayed predecessor row must not
-        // move the observed incarnation back to its retired owner.
+        // A live row is authoritative even when a prior read observed another
+        // owner for the same key.
         var observed = new ZLinkObservedLocationGenerations();
         Assert.True(observed.AcceptDescriptor(predecessor));
         Assert.True(observed.AcceptDescriptor(successor));
-        Assert.False(observed.AcceptDescriptor(predecessor));
+        Assert.True(observed.AcceptDescriptor(predecessor));
     }
 
     [Fact]
-    public async Task MeshNode_List_Rereads_When_A_Local_Revision_Update_Races_The_Snapshot()
+    public async Task MeshNode_List_Accepts_The_Current_Live_Snapshot_Without_A_Revision_Floor()
     {
         var time = new ManualTimeProvider();
         var inner = new ZLinkInMemoryLocationStore(time);
@@ -394,8 +394,8 @@ public sealed class LocationResolverTests
         var live = await resolvers.ListLiveMeshNodesAsync("play");
 
         var row = Assert.Single(live);
-        Assert.Equal(2UL, row.DescriptorRevision);
-        Assert.Equal(2, store.ListCalls);
+        Assert.Equal(1UL, row.DescriptorRevision);
+        Assert.Equal(1, store.ListCalls);
     }
 
     [Fact]
@@ -1055,7 +1055,7 @@ public sealed class LocationResolverTests
     }
 
     [Fact]
-    public async Task Older_Membership_Epoch_From_A_Lagging_Replica_Is_Never_A_Success()
+    public async Task Live_Actor_Row_Is_Not_Vetoed_By_A_Previous_Membership_Epoch()
     {
         await Task.Yield();
         var observed = new ZLinkObservedLocationGenerations();
@@ -1066,7 +1066,7 @@ public sealed class LocationResolverTests
         var epoch1 = epoch2 with { MembershipEpoch = 1 };
 
         Assert.True(observed.AcceptActor(epoch2));
-        Assert.False(observed.AcceptActor(epoch1));
+        Assert.True(observed.AcceptActor(epoch1));
         Assert.True(observed.AcceptActor(epoch2));
     }
 

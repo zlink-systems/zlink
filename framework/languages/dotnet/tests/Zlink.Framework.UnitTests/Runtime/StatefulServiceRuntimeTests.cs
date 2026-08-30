@@ -1398,7 +1398,7 @@ public sealed class StatefulServiceRuntimeTests
     }
 
     [Fact]
-    public async Task InstanceStyleSpotKeepsOneGenerationAndRejectsStaleFence()
+    public async Task InstanceStyleSpotDirectMessageUsesCurrentGeneration()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = NewNode(context, "instance-node");
@@ -1411,7 +1411,7 @@ public sealed class StatefulServiceRuntimeTests
 
         using var payload = Message.From(new byte[] { 7 });
         Assert.Equal(
-            SubmitResult.InvalidState,
+            SubmitResult.Ok,
             first.SendToSpot(
                 node.RoutingId,
                 spotId,

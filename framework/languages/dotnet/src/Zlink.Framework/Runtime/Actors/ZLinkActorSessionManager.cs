@@ -37,12 +37,11 @@ internal sealed partial class ZLinkActorSessionManager(
 
     internal ZLinkActorRuntimeState[] SnapshotStates() => _actorSessions.Snapshot();
 
-    internal bool IsCurrentLocalActorRef(ZLinkBackendActorRef actor) =>
+    internal bool IsCurrentLocalActor(ZLinkBackendActorRef actor) =>
         _actorSessions.TryGet(
             ZLinkActorId.FromBoundary(actor.ActorId, nameof(actor)),
             out var state)
-        && state.Actor is not null
-        && state.NativeActorRef == actor;
+        && state.Actor is not null;
 
     public async ValueTask<CreateActorResult> CreateAndBindActorAsync(
         string actorId,

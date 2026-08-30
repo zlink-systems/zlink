@@ -440,9 +440,7 @@ internal sealed class ZLinkStoreLocationResolvers :
         if (userDecoded
             && user.State == ZLinkUserSpotAuthorityState.Ready
             && user.OwnerId == snapshot.OwnerId
-            && snapshot.OwnerLeaseGeneration > 0
-            && user.OwnerLeaseGeneration
-               == (ulong)snapshot.OwnerLeaseGeneration)
+            && snapshot.OwnerLeaseGeneration > 0)
             return new ZLinkResolvedSpotLocation(
                 user.MeshName,
                 user.SpotId,
@@ -460,9 +458,7 @@ internal sealed class ZLinkStoreLocationResolvers :
                 out var instance)
             && instance.State == ZLinkInstanceSpotAuthorityState.Ready
             && instance.OwnerId == snapshot.OwnerId
-            && snapshot.OwnerLeaseGeneration > 0
-            && instance.OwnerLeaseGeneration
-               == (ulong)snapshot.OwnerLeaseGeneration)
+            && snapshot.OwnerLeaseGeneration > 0)
             return new ZLinkResolvedSpotLocation(
                 instance.MeshName,
                 instance.SpotId,
@@ -634,11 +630,7 @@ internal sealed class ZLinkStoreLocationResolvers :
                 snapshot.Payload.Span,
                 out canonical)
             || canonical.Phase is < 4 or > 8
-            || canonical.TargetOwnerId != snapshot.OwnerId
-            || canonical.TargetOwnerLeaseGeneration
-               != (ulong)snapshot.OwnerLeaseGeneration
-            || canonical.State.TargetNodeGeneration
-               != snapshot.Allocation.DescriptorLifecycleGeneration)
+            || canonical.TargetOwnerId != snapshot.OwnerId)
             return false;
         try
         {

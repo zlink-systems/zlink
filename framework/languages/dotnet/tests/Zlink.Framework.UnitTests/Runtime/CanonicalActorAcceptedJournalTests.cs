@@ -98,14 +98,14 @@ public sealed class CanonicalActorAcceptedJournalTests
     }
 
     [Fact]
-    public void Bound_session_one_way_round_trip_preserves_same_generation_and_sequence()
+    public void Bound_session_one_way_round_trip_allows_a_lagging_actor_generation_copy()
     {
         var source = SourceFence("session-owner", 41);
         var target = new ZLinkBackendActorRef(
             RoutingId.From("target-node"), "actor-1", 17);
         var bound = new ZLinkActorBoundSessionHandoffFence(
             target.ActorId,
-            target.Generation,
+            target.Generation - 1,
             RoutingId.From("session-1"),
             "binding-token",
             43,
@@ -137,6 +137,7 @@ public sealed class CanonicalActorAcceptedJournalTests
         Assert.True(ZLinkRelocationEnvelopeCodec
             .TryValidateCanonicalFrozenRecord(encoded));
         Assert.Equal(bound, decoded.Frame.BoundSessionSource);
+        Assert.NotEqual(bound.ActorGeneration, decoded.TargetActor.Generation);
         Assert.Equal(target.Generation, decoded.TargetActor.Generation);
         Assert.Equal(new MeshOperationId(53, 59),
             decoded.Frame.RouteContext.OperationId);

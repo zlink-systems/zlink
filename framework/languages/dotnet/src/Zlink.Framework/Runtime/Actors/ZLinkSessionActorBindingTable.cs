@@ -230,15 +230,10 @@ internal readonly record struct ZLinkSessionOutboundTenure(
     ulong SessionOwnerNodeGeneration,
     RoutingId SessionRid);
 
-internal readonly record struct ZLinkSessionOutboundTenureProof(
-    ZLinkSessionOutboundTenure Tenure,
-    string OwnerId);
-
 internal enum ZLinkSessionOutboundAdmissionKind
 {
     Immediate,
     Retained,
-    ProofRequired,
     NoBinding,
     WrongSession,
     Backpressured
@@ -311,7 +306,7 @@ internal sealed class ZLinkSessionActorBindingTable
     private readonly Dictionary<ZLinkSessionBindingKey, ZLinkSessionBindingEntry> _entries = new();
     private readonly Dictionary<ZLinkSessionBindingKey, ZLinkSessionBindingTombstone>
         _tombstones = new();
-    private readonly Dictionary<ZLinkSessionBindingKey, SessionBindingOutboundState>
+    private readonly Dictionary<ZLinkSessionBindingKey, Queue<RetainedOutbound>>
         _outbound = new();
     private readonly Dictionary<ZLinkSessionBindingKey, CanonicalSealTimeoutState>
         _canonicalSealTimeouts = new();
@@ -456,7 +451,7 @@ internal sealed class ZLinkSessionActorBindingTable
         }
 
         List<ZLinkSessionBindingEntry> timedOut = [];
-        List<ZLinkSessionOutboundCapability> retained = [];
+        List<RetainedOutbound> retained = [];
         var ownsTimeout = false;
         await _lane.RunAsync(() =>
         {
@@ -499,7 +494,7 @@ internal sealed class ZLinkSessionActorBindingTable
             entry.DrainSignal?.TrySetResult();
             entry.RouteAvailableSignal?.TrySetResult();
         }
-        SettleOutbound(retained, deliver: false);
+        SettleOutbound(retained, route: null);
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
             $"session_relocation_seal_timeout "
             + $"actor={key.ActorId.Value} "
@@ -519,7 +514,6 @@ internal sealed class ZLinkSessionActorBindingTable
 
     internal ValueTask<ZLinkSessionOutboundAdmission> AdmitOutboundAsync(
         ZLinkSessionOutboundTenure tenure,
-        ZLinkSessionOutboundTenureProof? firstProof,
         byte[] frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
@@ -541,142 +535,31 @@ internal sealed class ZLinkSessionActorBindingTable
             var capability = new ZLinkSessionOutboundCapability(
                 entry.Context,
                 frame);
-            if (MatchesOutboundTenure(entry.Route, tenure)
-                || MatchesLegacyProvisionalTenure(entry, tenure))
-                return new ZLinkSessionOutboundAdmission(
-                    ZLinkSessionOutboundAdmissionKind.Immediate,
-                    capability);
-
-            var unresolvedRelocatedTenure =
-                entry.OwnerLeaseGeneration == 0
-                && entry.ObjectGeneration == tenure.ObjectGeneration
-                && entry.AuthorityOwnerGeneration
-                == tenure.AuthorityOwnerGeneration
-                && entry.TargetNodeGeneration == tenure.TargetNodeGeneration
-                && entry.Route.Ref.NodeRid == tenure.TargetNodeRid
-                && string.Equals(
-                    entry.MeshName,
-                    tenure.MeshName,
-                    StringComparison.Ordinal);
-            if (unresolvedRelocatedTenure)
+            if (MatchesOutboundTenure(entry.Route, tenure))
             {
-                if (firstProof is not { } relocationProof
-                    || relocationProof.Tenure != tenure
-                    || string.IsNullOrWhiteSpace(relocationProof.OwnerId)
-                    || !ZLinkSessionBindingRoute.TryCreate(
-                        entry.Route.Ref,
-                        entry.MeshName,
-                        entry.TargetNodeGeneration,
-                        entry.AuthorityOwnerGeneration,
-                        tenure.OwnerLeaseGeneration,
-                        out var provenRoute))
-                    return new ZLinkSessionOutboundAdmission(
-                        ZLinkSessionOutboundAdmissionKind.ProofRequired);
-                _entries[key] = entry with { Route = provenRoute };
                 return new ZLinkSessionOutboundAdmission(
                     ZLinkSessionOutboundAdmissionKind.Immediate,
                     capability);
             }
-
-            if (tenure.AuthorityOwnerGeneration
-                    <= entry.AuthorityOwnerGeneration
+            if (entry.CanonicalRelocationSeal is null
                 || tenure.TargetNodeRid.IsEmpty
                 || tenure.TargetNodeGeneration == 0
-                || tenure.OwnerLeaseGeneration == 0
-                || string.IsNullOrWhiteSpace(tenure.MeshName))
+                || tenure.AuthorityOwnerGeneration == 0)
                 return new ZLinkSessionOutboundAdmission(
                     ZLinkSessionOutboundAdmissionKind.WrongSession);
-
-            if (!_outbound.TryGetValue(key, out var outbound))
+            if (!_outbound.TryGetValue(key, out var retained))
             {
-                if (firstProof is not { } candidate
-                    || candidate.Tenure != tenure
-                    || string.IsNullOrWhiteSpace(candidate.OwnerId))
-                    return new ZLinkSessionOutboundAdmission(
-                        ZLinkSessionOutboundAdmissionKind.ProofRequired);
-                outbound = new SessionBindingOutboundState();
-                outbound.PendingTenureProof = candidate;
-                _outbound.Add(key, outbound);
+                retained = new Queue<RetainedOutbound>();
+                _outbound.Add(key, retained);
             }
-            else if (outbound.PendingTenureProof is not { } acceptedProof)
-            {
-                if (firstProof is not { } candidate
-                    || candidate.Tenure != tenure
-                    || string.IsNullOrWhiteSpace(candidate.OwnerId))
-                    return new ZLinkSessionOutboundAdmission(
-                        ZLinkSessionOutboundAdmissionKind.ProofRequired);
-                outbound.PendingTenureProof = candidate;
-            }
-            else if (acceptedProof.Tenure != tenure)
-            {
-                return new ZLinkSessionOutboundAdmission(
-                    ZLinkSessionOutboundAdmissionKind.WrongSession);
-            }
-
-            if (outbound.Retained.Count >= _maxRetainedOutbound)
+            if (retained.Count >= _maxRetainedOutbound)
                 return new ZLinkSessionOutboundAdmission(
                     ZLinkSessionOutboundAdmissionKind.Backpressured);
-            outbound.Retained.Enqueue(capability);
+            retained.Enqueue(new RetainedOutbound(tenure, capability));
             return new ZLinkSessionOutboundAdmission(
                 ZLinkSessionOutboundAdmissionKind.Retained,
                 capability);
         });
-    }
-
-    internal ValueTask<ZLinkSessionOutboundTenureProof?>
-        GetMemoizedOutboundProofAsync(
-            ZLinkSessionOutboundTenure tenure) =>
-        _lane.RunAsync<ZLinkSessionOutboundTenureProof?>(() =>
-        {
-            var key = ZLinkSessionBindingKey.FromBoundary(
-                tenure.ActorId,
-                tenure.BindingToken);
-            if (_entries.TryGetValue(key, out var entry)
-                && MatchesPhysicalSession(entry, tenure)
-                && _outbound.TryGetValue(key, out var outbound)
-                && outbound.PendingTenureProof is { } accepted
-                && accepted.Tenure == tenure)
-            {
-                return accepted;
-            }
-            return null;
-        });
-
-    private static bool MatchesCanonicalOutboundProof(
-        ZLinkSessionBindingEntry entry,
-        ZLinkSessionBindingKey key,
-        ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
-        ZLinkSessionRelocationAuthenticatedRoute authenticatedCandidate,
-        ZLinkSessionOutboundTenureProof proof)
-    {
-        var tenure = proof.Tenure;
-        return MatchesPhysicalSession(entry, tenure)
-               && string.Equals(
-                   tenure.BindingToken,
-                   key.BindingToken,
-                   StringComparison.Ordinal)
-               && tenure.ActorId == route.Actor.ActorId
-               && tenure.ObjectGeneration == route.Actor.ObjectGeneration
-               && tenure.BindingGeneration == route.Session.BindingGeneration
-               && tenure.SessionOwnerNodeGeneration
-               == route.Session.SessionOwnerNodeGeneration
-               && tenure.SessionRid == route.Session.SessionRid
-               && tenure.TargetNodeRid == route.Route.TargetNodeRid
-               && tenure.TargetNodeRid == authenticatedCandidate.NodeRid
-               && tenure.TargetNodeGeneration
-               == route.Route.TargetNodeGeneration
-               && tenure.TargetNodeGeneration
-               == authenticatedCandidate.NodeGeneration
-               && tenure.AuthorityOwnerGeneration
-               == route.Route.TargetAuthorityOwnerGeneration
-               && tenure.AuthorityOwnerGeneration
-               == authenticatedCandidate.AuthorityOwnerGeneration
-               && tenure.OwnerLeaseGeneration > 0
-               && string.Equals(
-                   tenure.MeshName,
-                   authenticatedCandidate.MeshName,
-                   StringComparison.Ordinal)
-               && !string.IsNullOrWhiteSpace(proof.OwnerId);
     }
 
     private static bool MatchesPhysicalSession(
@@ -692,53 +575,31 @@ internal sealed class ZLinkSessionActorBindingTable
     private static bool MatchesOutboundTenure(
         ZLinkSessionBindingRoute route,
         ZLinkSessionOutboundTenure tenure) =>
-        route.MatchesFence(
-            tenure.ActorId,
-            tenure.ObjectGeneration,
-            tenure.AuthorityOwnerGeneration,
-            ZLinkMeshName.FromBoundary(
-                tenure.MeshName,
-                nameof(tenure.MeshName)),
-            tenure.TargetNodeGeneration,
-            tenure.OwnerLeaseGeneration)
-        && route.Ref.NodeRid == tenure.TargetNodeRid;
+        string.Equals(route.Ref.ActorId, tenure.ActorId, StringComparison.Ordinal)
+        && route.Ref.ObjectGeneration == tenure.ObjectGeneration
+        && route.AuthorityOwnerGeneration == tenure.AuthorityOwnerGeneration
+        && route.TargetNodeGeneration == tenure.TargetNodeGeneration;
 
-    private static bool MatchesLegacyProvisionalTenure(
-        ZLinkSessionBindingEntry entry,
-        ZLinkSessionOutboundTenure tenure) =>
-        entry.RelocationHandoffId is not null
-        && entry.ObjectGeneration == tenure.ObjectGeneration
-        && (entry.AuthorityOwnerGeneration
-                != tenure.AuthorityOwnerGeneration
-            || entry.TargetNodeGeneration != tenure.TargetNodeGeneration
-            || entry.OwnerLeaseGeneration != tenure.OwnerLeaseGeneration);
-
-    private List<ZLinkSessionOutboundCapability> RemoveOutbound(
-        ZLinkSessionBindingKey key)
+    private List<RetainedOutbound> RemoveOutbound(ZLinkSessionBindingKey key)
     {
         if (!_outbound.Remove(key, out var outbound))
             return [];
-        var retained = new List<ZLinkSessionOutboundCapability>(
-            outbound.Retained.Count);
-        while (outbound.Retained.TryDequeue(out var capability))
-            retained.Add(capability);
-        return retained;
+        return [.. outbound];
     }
 
     private static void SettleOutbound(
-        IEnumerable<ZLinkSessionOutboundCapability> retained,
-        bool deliver)
+        IEnumerable<RetainedOutbound> retained,
+        ZLinkSessionBindingRoute? route)
     {
-        foreach (var capability in retained)
-            capability.Settle(deliver);
+        foreach (var item in retained)
+            item.Capability.Settle(
+                route is { } current
+                && MatchesOutboundTenure(current, item.Tenure));
     }
 
-    private sealed class SessionBindingOutboundState
-    {
-        internal ZLinkSessionOutboundTenureProof? PendingTenureProof
-            { get; set; }
-        internal Queue<ZLinkSessionOutboundCapability> Retained { get; } = new();
-    }
+    private readonly record struct RetainedOutbound(
+        ZLinkSessionOutboundTenure Tenure,
+        ZLinkSessionOutboundCapability Capability);
 
     public ValueTask<ZLinkSessionBindingEntry[]> BindAsync(
         ZLinkActorId actorId,
@@ -785,7 +646,7 @@ internal sealed class ZLinkSessionActorBindingTable
                     entry.BindingToken);
                 CancelCanonicalSealTimeout(replacedKey);
                 _entries.Remove(replacedKey);
-                SettleOutbound(RemoveOutbound(replacedKey), deliver: false);
+                SettleOutbound(RemoveOutbound(replacedKey), route: null);
                 entry.DrainSignal?.TrySetResult();
                 entry.RouteAvailableSignal?.TrySetResult();
             }
@@ -862,7 +723,7 @@ internal sealed class ZLinkSessionActorBindingTable
             {
                 CancelCanonicalSealTimeout(key);
                 _entries.Remove(key);
-                SettleOutbound(RemoveOutbound(key), deliver: false);
+                SettleOutbound(RemoveOutbound(key), route: null);
                 entry.DrainSignal?.TrySetResult();
                 entry.RouteAvailableSignal?.TrySetResult();
             }
@@ -1058,8 +919,8 @@ internal sealed class ZLinkSessionActorBindingTable
             ZLinkSessionRelocationAuthenticatedRoute authenticatedRoute)
     {
         TaskCompletionSource? routeAvailableSignal = null;
-        List<ZLinkSessionOutboundCapability> retained = [];
-        var deliverRetained = false;
+        List<RetainedOutbound> retained = [];
+        ZLinkSessionBindingRoute? retainedRoute = null;
         var routed = await _lane.RunAsync(() =>
         {
             if (_timedOutCanonicalSeals.Contains(
@@ -1123,17 +984,6 @@ internal sealed class ZLinkSessionActorBindingTable
                     request.Route.TargetNodeRid);
                 var targetOwnerLeaseGeneration =
                     authenticatedRoute.OwnerLeaseGeneration;
-                if (targetOwnerLeaseGeneration == 0
-                    && _outbound.TryGetValue(key, out var provenOutbound)
-                    && provenOutbound.PendingTenureProof is { } proven
-                    && MatchesCanonicalOutboundProof(
-                        entry,
-                        key,
-                        request,
-                        authenticatedRoute,
-                        proven))
-                    targetOwnerLeaseGeneration =
-                        proven.Tenure.OwnerLeaseGeneration;
                 if (!ZLinkSessionBindingRoute.TryCreateRelocated(
                         targetActor,
                         authenticatedRoute.MeshName,
@@ -1153,24 +1003,8 @@ internal sealed class ZLinkSessionActorBindingTable
                     DrainSignal = null,
                     RouteAvailableSignal = null
                 };
-                if (_outbound.TryGetValue(key, out var outbound))
-                {
-                    var targetTenure = new ZLinkSessionOutboundTenure(
-                        request.Actor.ActorId,
-                        request.Actor.ObjectGeneration,
-                        authenticatedRoute.MeshName,
-                        request.Route.TargetNodeRid,
-                        request.Route.TargetNodeGeneration,
-                        request.Route.TargetAuthorityOwnerGeneration,
-                        targetOwnerLeaseGeneration,
-                        entry.BindingToken,
-                        entry.BindingGeneration,
-                        entry.SessionOwnerNodeGeneration,
-                        entry.ActorRef.SessionRid);
-                    deliverRetained = outbound.PendingTenureProof is { } proof
-                                      && proof.Tenure == targetTenure;
-                    retained = RemoveOutbound(key);
-                }
+                retained = RemoveOutbound(key);
+                retainedRoute = targetRoute;
             }
             else
             {
@@ -1199,14 +1033,15 @@ internal sealed class ZLinkSessionActorBindingTable
                     RouteAvailableSignal = null
                 };
                 retained = RemoveOutbound(key);
+                retainedRoute = entry.Route;
             }
             routeAvailableSignal = entry.RouteAvailableSignal;
             return true;
         }).ConfigureAwait(false);
         if (!routed)
             return false;
+        SettleOutbound(retained, retainedRoute);
         routeAvailableSignal?.TrySetResult();
-        SettleOutbound(retained, deliverRetained);
         return true;
     }
 
@@ -1280,15 +1115,11 @@ internal sealed class ZLinkSessionActorBindingTable
     private static bool MatchesCanonicalActorRoute(
         ZLinkSessionBindingEntry entry,
         ZLinkServiceWireCodec.SessionActorRouteFenceRecord actor) =>
-        entry.ObjectGeneration == actor.Actor.ObjectGeneration
-        && string.Equals(
+        string.Equals(
             entry.ActorRef.ActorId,
             actor.Actor.ActorId,
             StringComparison.Ordinal)
-        && entry.Route.Ref.NodeRid == actor.TargetNodeRid
-        && entry.TargetNodeGeneration == actor.TargetNodeGeneration
-        && entry.AuthorityOwnerGeneration == actor.AuthorityOwnerGeneration
-        && entry.OwnerLeaseGeneration == actor.OwnerLeaseGeneration;
+        && entry.ObjectGeneration == actor.Actor.ObjectGeneration;
 
     public async ValueTask<ZLinkSessionRouteSealResult> SealRouteAsync(
         ZLinkSessionRouteSeal request,
@@ -1727,7 +1558,7 @@ internal sealed class ZLinkSessionActorBindingTable
             {
                 CancelCanonicalSealTimeout(key);
                 _entries.Remove(key);
-                SettleOutbound(RemoveOutbound(key), deliver: false);
+                SettleOutbound(RemoveOutbound(key), route: null);
                 existing.DrainSignal?.TrySetResult();
                 existing.RouteAvailableSignal?.TrySetResult();
             }
@@ -1875,8 +1706,8 @@ internal sealed class ZLinkSessionActorBindingTable
                 entry.DrainSignal?.TrySetResult();
                 entry.RouteAvailableSignal?.TrySetResult();
             }
-            foreach (var outbound in _outbound.Values)
-                SettleOutbound(outbound.Retained, deliver: false);
+            foreach (var retained in _outbound.Values.SelectMany(static value => value))
+                retained.Capability.Settle(deliver: false);
             _outbound.Clear();
             _entries.Clear();
             _tombstones.Clear();

@@ -1743,6 +1743,98 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task RemoteSessionBindPublication_IgnoresOwnerLeaseChange()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            RegisterProbeActor(runtime, actorRef);
+            const ulong authorityGeneration = 41;
+            node.SetLocalActorAuthorityFence(actorRef, authorityGeneration, 51);
+            node.AfterLocalActorAuthorityRead = (read, actor) =>
+            {
+                if (read == 1)
+                    node.SetLocalActorAuthorityFence(actor, authorityGeneration, 52);
+            };
+            var sessionNode = RoutingId.From("session-node-bind-publication");
+            node.AdmittedMeshPeers.Add(new MeshNodePeer(
+                1, MeshPeerSource.Discovery, MeshPeerState.Admitted,
+                sessionNode, 61, 1, "inproc://session-node-bind-publication",
+                1, 0, 1));
+            var request = new ZLinkRemoteSessionBindRequest(
+                actorRef.ActorId,
+                actorRef.NodeRid.ToBytes().ToArray(),
+                sessionNode.ToBytes().ToArray(),
+                RoutingId.From("session-bind-publication").ToBytes().ToArray(),
+                "binding-token",
+                1,
+                actorRef.Generation,
+                "entry",
+                61,
+                0,
+                SessionOwnerId: "session-owner",
+                SessionOwnerLeaseGeneration: 71);
+
+            var response = await runtime.BindRemoteBoundSessionRouteAsync(
+                request, sessionNode, CancellationToken.None);
+
+            Assert.True(response.Acknowledged);
+            Assert.Equal(authorityGeneration, response.AuthorityOwnerGeneration);
+            Assert.Equal(51UL, response.OwnerLeaseGeneration);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task RemoteSessionBindPublication_StillRejectsAuthorityChange()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            RegisterProbeActor(runtime, actorRef);
+            node.SetLocalActorAuthorityFence(actorRef, 41, 51);
+            node.AfterLocalActorAuthorityRead = (read, actor) =>
+            {
+                if (read == 1)
+                    node.SetLocalActorAuthorityFence(actor, 42, 52);
+            };
+            var sessionNode = RoutingId.From("session-node-bind-authority");
+            node.AdmittedMeshPeers.Add(new MeshNodePeer(
+                1, MeshPeerSource.Discovery, MeshPeerState.Admitted,
+                sessionNode, 61, 1, "inproc://session-node-bind-authority",
+                1, 0, 1));
+            var request = new ZLinkRemoteSessionBindRequest(
+                actorRef.ActorId,
+                actorRef.NodeRid.ToBytes().ToArray(),
+                sessionNode.ToBytes().ToArray(),
+                RoutingId.From("session-bind-authority").ToBytes().ToArray(),
+                "binding-token",
+                1,
+                actorRef.Generation,
+                "entry",
+                61,
+                0,
+                SessionOwnerId: "session-owner",
+                SessionOwnerLeaseGeneration: 71);
+
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                runtime.BindRemoteBoundSessionRouteAsync(
+                    request, sessionNode, CancellationToken.None).AsTask());
+
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task MovingActorRemoteDirectRequest_PreservesAuthenticatedSourceFenceDuringCapture()
     {
         var node = new CapturingSpotNode();
@@ -1786,7 +1878,7 @@ public sealed partial class EntrySpotActorDispatchTests
 
             await runtime.DispatchRemoteActorFrameAsync(
                 actorRef.ActorId,
-                actorRef.Generation,
+                actorRef.Generation + 1,
                 actorRef.NodeRid,
                 targetNodeGeneration: 1,
                 authorityGeneration,
@@ -1882,7 +1974,7 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public async Task RemoteActorFrame_StaleBoundSession_AnswersRequestsAndDropsOneWayFrames()
+    public async Task RemoteActorFrame_BoundSessionWithoutRouteLease_UsesBindingFenceForStaleHandling()
     {
         var node = new CapturingSpotNode();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
@@ -1974,7 +2066,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actorRef.NodeRid,
                 targetNodeGeneration: 1,
                 authorityOwnerGeneration: 3,
-                ownerLeaseGeneration: 4,
+                ownerLeaseGeneration: 0,
                 authenticatedRelayNodeRid: relayNode,
                 relayNodeRid: relayNode,
                 relayNodeGeneration: 1,
@@ -2009,7 +2101,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actorRef.NodeRid,
                 targetNodeGeneration: 1,
                 authorityOwnerGeneration: 3,
-                ownerLeaseGeneration: 4,
+                ownerLeaseGeneration: 0,
                 authenticatedRelayNodeRid: relayNode,
                 relayNodeRid: relayNode,
                 relayNodeGeneration: 1,
@@ -10082,6 +10174,11 @@ public sealed partial class EntrySpotActorDispatchTests
                 authorityOwnerGeneration,
                 ownerLeaseGeneration);
 
+        public Action<int, ZLinkBackendActorRef>? AfterLocalActorAuthorityRead
+            { get; set; }
+
+        private int _localActorAuthorityReadCount;
+
         public bool TryGetLocalActorAuthority(
             ZLinkBackendActorRef actor,
             out ulong authorityOwnerGeneration,
@@ -10091,6 +10188,9 @@ public sealed partial class EntrySpotActorDispatchTests
             {
                 authorityOwnerGeneration = authority.Authority;
                 ownerLeaseGeneration = authority.Lease;
+                AfterLocalActorAuthorityRead?.Invoke(
+                    Interlocked.Increment(ref _localActorAuthorityReadCount),
+                    actor);
                 return authorityOwnerGeneration != 0 && ownerLeaseGeneration != 0;
             }
             authorityOwnerGeneration = 0;

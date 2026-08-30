@@ -3448,8 +3448,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     request,
                     targetNodeRid,
                     currentNodeGeneration,
-                    authorityOwnerGeneration,
-                    ownerLeaseGeneration);
+                    authorityOwnerGeneration);
                 _actorBoundSessionCoordinator.PublishActorSessionReplacement(
                     request.ActorId,
                     replacement);
@@ -3528,8 +3527,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkRemoteSessionBindRequest request,
         RoutingId targetNodeRid,
         ulong targetNodeGeneration,
-        ulong authorityOwnerGeneration,
-        ulong ownerLeaseGeneration)
+        ulong authorityOwnerGeneration)
     {
         var nodeRuntime = GetSpotNodeRuntime(targetNodeRid);
         var node = nodeRuntime.Node;
@@ -3553,9 +3551,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             || !authorityReader.TryGetLocalActorAuthority(
                 actorRef,
                 out var currentAuthorityOwnerGeneration,
-                out var currentOwnerLeaseGeneration)
-            || currentAuthorityOwnerGeneration != authorityOwnerGeneration
-            || currentOwnerLeaseGeneration != ownerLeaseGeneration)
+                out _)
+            || currentAuthorityOwnerGeneration != authorityOwnerGeneration)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"Actor '{request.ActorId}' changed authority before session binding publication.",
@@ -4303,7 +4300,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZlinkStreamHeader header,
         Message payload)
     {
-        if (!_actorSessionManager.IsCurrentLocalActorRef(actor)) return false;
+        if (!_actorSessionManager.IsCurrentLocalActor(actor)) return false;
         return TryRunDetached(
             "local-actor-client-send",
             async cancellationToken =>
@@ -4372,9 +4369,13 @@ internal sealed partial class ZLinkFrameworkRuntime
             $"remote_frame_dispatch actor={actorId} "
             + $"node_gen={targetNode.MeshStatus().LifecycleGeneration}/{targetNodeGeneration} "
             + $"authority_gen={authorityOwnerGeneration} lease_gen={ownerLeaseGeneration}");
+        var hasBoundSessionFence =
+            ZLinkActorBoundSessionHandoffMetadata.TryDecode(
+                applicationMetadata,
+                out var boundSessionFence);
         if (targetNode.MeshStatus().LifecycleGeneration != targetNodeGeneration
             || authorityOwnerGeneration == 0
-            || ownerLeaseGeneration == 0)
+            || (!hasBoundSessionFence && ownerLeaseGeneration == 0))
         {
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
@@ -4394,14 +4395,13 @@ internal sealed partial class ZLinkFrameworkRuntime
                 $"Actor '{actorId}' relay peer identity is stale.");
         }
         var state = GetOrCreateActorState(actorId);
-        var actorRef = new ZLinkBackendActorRef(
+        var incomingActorRef = new ZLinkBackendActorRef(
             targetNodeRid,
             actorId,
             actorGeneration);
-        var hasBoundSessionFence =
-            ZLinkActorBoundSessionHandoffMetadata.TryDecode(
-                applicationMetadata,
-                out var boundSessionFence);
+        var actorRef = hasBoundSessionFence
+            ? incomingActorRef
+            : state.NativeActorRef ?? incomingActorRef;
         var routeContext = new ZLinkBackendActorRouteContext(
             operationId,
             messageFollowHopCount,
@@ -4435,7 +4435,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
         else if (!hasBoundSessionFence
                  || boundSessionFence.ActorId != actorId
-                 || boundSessionFence.ActorGeneration != actorGeneration
                  || boundSessionFence.SessionRid != sourceSessionRid
                  || messageFollowHopCount != 0
                  || ((replyRequestId != 0 || replyFlags != 0)
@@ -4452,18 +4451,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                  || !ZLinkActorBoundSessionRelay.MatchesRelaySource(
                      session,
                      sourceNodeRid,
-                     sourceSessionRid)
-                 || session.ObjectGeneration != actorGeneration
-                 || !string.Equals(
-                     session.MeshName.Value,
-                     ResolveSpotNodeMeshName(GetSpotNodeRuntime(targetNodeRid)),
-                     StringComparison.Ordinal)
-                 || session.TargetNodeGeneration != targetNodeGeneration
-                 || session.AuthorityOwnerGeneration != authorityOwnerGeneration
-                 || session.OwnerLeaseGeneration != ownerLeaseGeneration)
+                     sourceSessionRid))
         {
-            //  Nine fields decide this and the frame is gone either way, so
-            //  name what the relay claimed against what the binding holds.
             //  A replaced incarnation never comes back, so this is NotFound
             //  (DoNotRetry) rather than Unavailable (RetryAfterBackoff).
             var staleIdentity = new ZLinkFrameworkException(

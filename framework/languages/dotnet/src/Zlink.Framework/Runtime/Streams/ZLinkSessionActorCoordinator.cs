@@ -773,7 +773,6 @@ internal sealed class ZLinkSessionActorCoordinator(
             actorRef.BindingToken,
             out var binding);
         if (!found
-            || !ReferenceEquals(binding.ActorRef, actorRef)
             || binding.Context.RoutingId is null)
         {
             //  Returning quietly here is indistinguishable from a disconnect

@@ -1200,7 +1200,7 @@ public sealed class SessionActorCoordinatorTests
     }
 
     [Fact]
-    public async Task Sealed_Route_Allows_Target_Push_When_Target_Authority_Generation_Is_Lower()
+    public async Task Push_Ignores_Derived_Route_Copies_But_Still_Fences_Authority_Generation()
     {
         var runtime = CreateRuntime();
         var stream = new TestStream(RoutingId.From("session-route-lower"));
@@ -1258,7 +1258,8 @@ public sealed class SessionActorCoordinatorTests
             [4, 5, 6],
             wrongTargetNode,
             CancellationToken.None);
-        Assert.Empty(stream.Writes);
+        Assert.Single(stream.Writes);
+        Assert.Equal(new byte[] { 4, 5, 6 }, stream.Writes[0].Payload);
 
         await runtime.DeliverRemoteSessionPushAsync(
             relay,
@@ -1267,7 +1268,7 @@ public sealed class SessionActorCoordinatorTests
             CancellationToken.None);
 
         Assert.Single(stream.Writes);
-        Assert.Equal(new byte[] { 1, 2, 3 }, stream.Writes[0].Payload);
+        Assert.Equal(new byte[] { 4, 5, 6 }, stream.Writes[0].Payload);
 
         var target = new ActorRef(
             source.ActorId,
@@ -1294,8 +1295,9 @@ public sealed class SessionActorCoordinatorTests
                 target));
         Assert.True(commit.Acknowledged);
 
-        // The target route is installed before Unseal. The in-flight target
-        // push can still carry the source-side fence and must not be dropped.
+        // The target route is installed before Unseal. A push that still carries
+        // the source authority generation remains fenced even when its derived
+        // route copies are otherwise ignored.
         var preCommitIdentity = relay with
         {
             AuthorityOwnerGeneration = identity.AuthorityOwnerGeneration,
@@ -1308,8 +1310,8 @@ public sealed class SessionActorCoordinatorTests
             targetNode,
             CancellationToken.None);
 
-        Assert.Equal(2, stream.Writes.Count);
-        Assert.Equal(new byte[] { 7, 8, 9 }, stream.Writes[1].Payload);
+        Assert.Single(stream.Writes);
+        Assert.Equal(new byte[] { 4, 5, 6 }, stream.Writes[0].Payload);
     }
 
     [Theory]
@@ -1583,10 +1585,10 @@ public sealed class SessionActorCoordinatorTests
         var targetTenure = new ZLinkSessionOutboundTenure(
             route.Ref.ActorId,
             route.Ref.ObjectGeneration,
-            route.MeshName.Value,
+            "lagging-derived-mesh-copy",
             RoutingId.From("actor-node-seal-target"),
-            route.TargetNodeGeneration + 1,
-            route.AuthorityOwnerGeneration + 1,
+            route.TargetNodeGeneration,
+            route.AuthorityOwnerGeneration,
             route.OwnerLeaseGeneration + 1,
             actor.BindingToken,
             BindingGeneration: 5,
@@ -1594,16 +1596,22 @@ public sealed class SessionActorCoordinatorTests
             sessionRid);
         var admission = await table.AdmitOutboundAsync(
             targetTenure,
-            new ZLinkSessionOutboundTenureProof(
-                targetTenure,
-                "target-owner"),
             [1, 2, 3]);
         Assert.Equal(
-            ZLinkSessionOutboundAdmissionKind.Retained,
+            ZLinkSessionOutboundAdmissionKind.Immediate,
             admission.Kind);
-        var retained = Assert.IsType<ZLinkSessionOutboundCapability>(
+        var admitted = Assert.IsType<ZLinkSessionOutboundCapability>(
             admission.Capability);
-        Assert.False(retained.Completion.IsCompleted);
+        Assert.Equal(
+            ZLinkSessionOutboundDelivery.Delivered,
+            admitted.Settle(deliver: true));
+        Assert.Equal(new byte[] { 1, 2, 3 }, stream.Writes.Single().Payload);
+        var staleBinding = await table.AdmitOutboundAsync(
+            targetTenure with { BindingGeneration = 6 },
+            [4, 5, 6]);
+        Assert.Equal(
+            ZLinkSessionOutboundAdmissionKind.WrongSession,
+            staleBinding.Kind);
 
         var seal = new ZLinkServiceWireCodec.SessionRelocationSealRecord(
             new ZLinkServiceWireCodec.RelocationWireId(101, 109),
@@ -1618,10 +1626,10 @@ public sealed class SessionActorCoordinatorTests
                 new ZLinkServiceWireCodec.SessionActorIdentityRecord(
                     route.Ref.ActorId,
                     route.Ref.ObjectGeneration),
-                route.Ref.NodeRid,
-                route.TargetNodeGeneration,
-                route.AuthorityOwnerGeneration,
-                route.OwnerLeaseGeneration),
+                RoutingId.From("lagging-actor-route-copy"),
+                route.TargetNodeGeneration + 1,
+                route.AuthorityOwnerGeneration + 1,
+                route.OwnerLeaseGeneration + 1),
             new ZLinkServiceWireCodec.SessionOwnerFenceRecord(
                 sessionOwnerRid,
                 7,
@@ -1642,7 +1650,6 @@ public sealed class SessionActorCoordinatorTests
         await Task.Yield();
         Assert.Equal(0, Volatile.Read(ref closeCount));
         Assert.False(routeWait.IsCompleted);
-        Assert.False(retained.Completion.IsCompleted);
         Assert.NotNull(await table.GetBindingAsync(
             route.Ref.ActorId,
             actor.BindingToken));
@@ -1651,9 +1658,6 @@ public sealed class SessionActorCoordinatorTests
         await closed.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
         Assert.Equal(1, Volatile.Read(ref closeCount));
-        Assert.Equal(
-            ZLinkSessionOutboundDelivery.Discarded,
-            await retained.Completion.WaitAsync(TimeSpan.FromSeconds(1)));
         Assert.True(await routeWait.WaitAsync(TimeSpan.FromSeconds(1)));
         Assert.Null(await table.GetBindingAsync(
             route.Ref.ActorId,

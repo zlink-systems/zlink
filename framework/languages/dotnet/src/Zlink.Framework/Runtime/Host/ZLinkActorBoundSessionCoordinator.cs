@@ -7,7 +7,6 @@ namespace Zlink.Framework.Runtime.Host;
 
 internal sealed class ZLinkActorBoundSessionCoordinator
 {
-    private const int MaxConcurrentOutboundProofs = 4_096;
     private readonly ZLinkActorBoundSessionRegistry _boundSessions;
     private readonly ZLinkSessionActorBindingTable _sessionBindings;
     private readonly ZLinkRemoteRelayFrameAssembler _remoteFrames;
@@ -15,16 +14,11 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     private readonly Dictionary<RemoteRequestKey, PendingRemoteRequest>
         _pendingRemoteRequests = new();
     private readonly ZLinkStateLane _lane = new();
-    private readonly Dictionary<ZLinkSessionOutboundTenure,
-        PendingOutboundProof> _pendingOutboundProofs = new();
     private readonly Func<string, ZLinkActorRuntimeState> _getState;
     private readonly Func<IZLinkBackendSpotNode?> _getNode;
     private readonly Func<string, IZLinkBackendSpotNode?> _getNodeForMesh;
     private readonly ZLinkFrameworkRegistration _registration;
     private readonly Func<CancellationToken> _getShutdownToken;
-    private readonly Func<IZLinkLocationRepository?> _resolveAuthorityStore;
-    private CancellationTokenSource _canonicalRouteApplicationCancellation;
-    private long _applicationEpoch = 1;
     private bool _applicationEpochOpen = true;
     private long _bindingGeneration;
 
@@ -34,7 +28,6 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         Func<string, IZLinkBackendSpotNode?> getNodeForMesh,
         ZLinkFrameworkRegistration registration,
         Func<CancellationToken> getShutdownToken,
-        Func<IZLinkLocationRepository?>? resolveAuthorityStore = null,
         ILoggerFactory? loggerFactory = null)
     {
         _getState = getState;
@@ -42,9 +35,6 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         _getNodeForMesh = getNodeForMesh;
         _registration = registration;
         _getShutdownToken = getShutdownToken;
-        _resolveAuthorityStore = resolveAuthorityStore
-                                 ?? registration.Locations.ResolveStore;
-        _canonicalRouteApplicationCancellation = new CancellationTokenSource();
         _sessionBindings = new ZLinkSessionActorBindingTable(
             registration.DefaultRequestTimeout + registration.DefaultRequestTimeout,
             registration.Locations.SessionRelocationSealTimeoutAtStartup,
@@ -147,197 +137,9 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             sessionRid);
         var admission = await _sessionBindings.AdmitOutboundAsync(
                 tenure,
-                firstProof: null,
                 frame)
             .ConfigureAwait(false);
-        if (admission.Kind == ZLinkSessionOutboundAdmissionKind.ProofRequired)
-        {
-            var proofLease = await ResolveOutboundProofAsync(
-                    tenure,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            await proofLease.Pending.WaitForTurnAsync(proofLease.Ticket)
-                .ConfigureAwait(false);
-            try
-            {
-                admission = await _sessionBindings.AdmitOutboundAsync(
-                        tenure,
-                        proofLease.Proof,
-                        frame)
-                    .ConfigureAwait(false);
-            }
-            finally
-            {
-                ReleaseOutboundProofLease(proofLease);
-            }
-        }
         return admission;
-    }
-
-    private async ValueTask<OutboundProofLease>
-        ResolveOutboundProofAsync(
-            ZLinkSessionOutboundTenure tenure,
-            CancellationToken cancellationToken)
-    {
-        if (await _sessionBindings.GetMemoizedOutboundProofAsync(tenure)
-                .ConfigureAwait(false) is { } memoized)
-            return new OutboundProofLease(
-                memoized,
-                PendingOutboundProof.Completed,
-                0);
-
-        var resolution = await _lane.RunAsync(() =>
-        {
-            PendingOutboundProof pending;
-            var ownsResolution = false;
-            if (!_applicationEpochOpen)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    "Session outbound proof generation is resetting.",
-                    ZLinkRetryAdvice.RetryAfterBackoff);
-            if (_pendingOutboundProofs.TryGetValue(tenure, out pending!))
-            {
-                if (pending.Epoch != _applicationEpoch)
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Unavailable,
-                        "Session outbound proof belongs to a closed generation.",
-                        ZLinkRetryAdvice.RetryAfterBackoff);
-            }
-            else
-            {
-                if (_pendingOutboundProofs.Count >= MaxConcurrentOutboundProofs)
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Rejected,
-                        "Concurrent session outbound proof capacity is exhausted.",
-                        ZLinkRetryAdvice.RetryAfterBackoff);
-                pending = new PendingOutboundProof(
-                    _applicationEpoch,
-                    _canonicalRouteApplicationCancellation.Token);
-                _pendingOutboundProofs.Add(tenure, pending);
-                ownsResolution = true;
-            }
-            var ticket = pending.RegisterTicket();
-            return (Pending: pending, OwnsResolution: ownsResolution, Ticket: ticket);
-        }).ConfigureAwait(false);
-
-        if (resolution.OwnsResolution)
-            await ResolveOutboundProofOwnerAsync(tenure, resolution.Pending)
-                .ConfigureAwait(false);
-        var proof = await resolution.Pending.Completion.Task.ConfigureAwait(false);
-        return new OutboundProofLease(proof, resolution.Pending, resolution.Ticket);
-    }
-
-    private void ReleaseOutboundProofLease(OutboundProofLease lease)
-    {
-        if (ReferenceEquals(lease.Pending, PendingOutboundProof.Completed))
-            return;
-        lease.Pending.CompleteTurn(lease.Ticket);
-        RunState(() =>
-        {
-            if (lease.Pending.IsDrained
-                && _pendingOutboundProofs.TryGetValue(
-                    lease.Proof.Tenure,
-                    out var current)
-                && ReferenceEquals(current, lease.Pending))
-                _pendingOutboundProofs.Remove(lease.Proof.Tenure);
-        });
-    }
-
-    private async ValueTask ResolveOutboundProofOwnerAsync(
-        ZLinkSessionOutboundTenure tenure,
-        PendingOutboundProof pending)
-    {
-        try
-        {
-            var store = _resolveAuthorityStore()
-                        ?? throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.Unavailable,
-                            "Remote session outbound tenure proof requires a Location Store.",
-                            ZLinkRetryAdvice.RetryAfterBackoff);
-            var authorityRead = await store.ReadAuthorityAsync(
-                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(
-                        tenure.ActorId),
-                    pending.CancellationToken)
-                .ConfigureAwait(false);
-            if (authorityRead is not ZLinkAuthorityReadResult.Found found)
-                throw new InvalidDataException(
-                    "Session outbound tenure does not match current Actor authority.");
-            var actorAuthorityPayload = found.Snapshot.Payload;
-            if (ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                    actorAuthorityPayload.Span,
-                    out var canonical))
-                actorAuthorityPayload = canonical.SteadyAuthorityPayload;
-            if (found.Snapshot.ObjectGeneration
-                   != tenure.ObjectGeneration
-                || found.Snapshot.AuthorityOwnerGeneration
-                   != tenure.AuthorityOwnerGeneration
-                || found.Snapshot.OwnerLeaseGeneration <= 0
-                || checked((ulong)found.Snapshot.OwnerLeaseGeneration)
-                   != tenure.OwnerLeaseGeneration
-                || found.Snapshot.Allocation.ObjectKind
-                   != ZLinkPlacementObjectKind.Actor
-                || found.Snapshot.Allocation.Descriptor.Rid
-                   != tenure.TargetNodeRid
-                || !string.Equals(
-                    found.Snapshot.Allocation.Descriptor.MeshName,
-                    tenure.MeshName,
-                    StringComparison.Ordinal)
-                || found.Snapshot.Allocation.DescriptorLifecycleGeneration
-                   != tenure.TargetNodeGeneration
-                || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                    actorAuthorityPayload.Span,
-                    out var authority)
-                || authority.State != ZLinkActorAuthorityState.Ready
-                || !string.Equals(
-                    authority.ActorId,
-                    tenure.ActorId,
-                    StringComparison.Ordinal)
-                || !string.Equals(
-                    authority.OwnerId,
-                    found.Snapshot.OwnerId,
-                    StringComparison.Ordinal)
-                || authority.OwnerLeaseGeneration
-                   != tenure.OwnerLeaseGeneration
-                || !string.Equals(
-                    authority.MeshName,
-                    tenure.MeshName,
-                    StringComparison.Ordinal)
-                || authority.NodeRid != tenure.TargetNodeRid
-                || authority.NodeGeneration
-                   != tenure.TargetNodeGeneration)
-                throw new InvalidDataException(
-                    "Session outbound tenure does not match current Actor authority.");
-            var proof = new ZLinkSessionOutboundTenureProof(
-                tenure,
-                found.Snapshot.OwnerId);
-
-            await _lane.RunAsync(() =>
-            {
-                if (pending.Retired
-                    || !_applicationEpochOpen
-                    || pending.Epoch != _applicationEpoch
-                    || !_pendingOutboundProofs.TryGetValue(
-                        tenure,
-                        out var current)
-                    || !ReferenceEquals(current, pending))
-                    return;
-                pending.Completion.TrySetResult(proof);
-            }).ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            await _lane.RunAsync(() =>
-            {
-                if (pending.Retired)
-                    return;
-                if (_pendingOutboundProofs.TryGetValue(
-                        tenure,
-                        out var current)
-                    && ReferenceEquals(current, pending))
-                    _pendingOutboundProofs.Remove(tenure);
-                pending.Completion.TrySetException(exception);
-            }).ConfigureAwait(false);
-        }
     }
 
     private static async ValueTask<RemotePushDelivery>
@@ -345,23 +147,19 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             ZLinkSessionOutboundAdmission admission,
             CancellationToken cancellationToken)
     {
-        switch (admission.Kind)
+        return admission.Kind switch
         {
-            case ZLinkSessionOutboundAdmissionKind.Immediate:
-                return MapOutboundDelivery(
-                    admission.Capability!.Settle(deliver: true));
-            case ZLinkSessionOutboundAdmissionKind.Retained:
-                return MapOutboundDelivery(
-                    await admission.Capability!.Completion
-                        .WaitAsync(cancellationToken)
-                        .ConfigureAwait(false));
-            case ZLinkSessionOutboundAdmissionKind.Backpressured:
-                return RemotePushDelivery.Backpressured;
-            case ZLinkSessionOutboundAdmissionKind.NoBinding:
-                return RemotePushDelivery.NoBinding;
-            default:
-                return RemotePushDelivery.WrongSession;
-        }
+            ZLinkSessionOutboundAdmissionKind.Immediate => MapOutboundDelivery(
+                admission.Capability!.Settle(deliver: true)),
+            ZLinkSessionOutboundAdmissionKind.Retained => MapOutboundDelivery(
+                await admission.Capability!.Completion
+                    .WaitAsync(cancellationToken)
+                    .ConfigureAwait(false)),
+            ZLinkSessionOutboundAdmissionKind.Backpressured
+                => RemotePushDelivery.Backpressured,
+            ZLinkSessionOutboundAdmissionKind.NoBinding => RemotePushDelivery.NoBinding,
+            _ => RemotePushDelivery.WrongSession
+        };
     }
 
     private static RemotePushDelivery MapOutboundDelivery(
@@ -479,18 +277,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                     _sessionBindings.GetContextByActorIdAsync(actorId)) is not null
                 ? RemotePushDelivery.WrongSession
                 : RemotePushDelivery.NoBinding;
-        if (!ReferenceEquals(entry.Context, expected.Context)
-            || !ReferenceEquals(entry.ActorRef, expected.ActorRef)
-            || entry.ObjectGeneration != expected.ObjectGeneration
+        if (entry.ObjectGeneration != expected.ObjectGeneration
             || entry.BindingGeneration != expected.BindingGeneration
-            || entry.SessionOwnerNodeRid != expected.SessionOwnerNodeRid
-            || entry.SessionOwnerNodeGeneration != expected.SessionOwnerNodeGeneration
-            || !string.Equals(
-                entry.SessionOwnerId,
-                expected.SessionOwnerId,
-                StringComparison.Ordinal)
-            || entry.SessionOwnerLeaseGeneration
-            != expected.SessionOwnerLeaseGeneration
             || entry.Context.RoutingId != expected.Context.RoutingId)
             return RemotePushDelivery.WrongSession;
 
@@ -990,33 +778,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
 
     public void ResetGeneration()
     {
-        var reset = RunState(() =>
-        {
-            _applicationEpochOpen = false;
-            _applicationEpoch = checked(_applicationEpoch + 1);
-            var outboundProofs = _pendingOutboundProofs.Values.ToArray();
-            foreach (var proof in outboundProofs)
-                proof.Retired = true;
-            _pendingOutboundProofs.Clear();
-            return (OutboundProofs: outboundProofs,
-                RouteApplicationCancellation: _canonicalRouteApplicationCancellation);
-        });
-        Exception? routeCancellationFailure = null;
-        try
-        {
-            reset.RouteApplicationCancellation.Cancel();
-        }
-        catch (Exception exception)
-        {
-            routeCancellationFailure = exception;
-        }
-        finally
-        {
-            foreach (var proof in reset.OutboundProofs)
-                proof.Completion.TrySetCanceled(
-                    reset.RouteApplicationCancellation.Token);
-            reset.RouteApplicationCancellation.Dispose();
-        }
+        RunState(() => _applicationEpochOpen = false);
 
         var pending = RunState(() =>
         {
@@ -1038,14 +800,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         Interlocked.Exchange(ref _bindingGeneration, 0);
         RunState(() =>
         {
-            _canonicalRouteApplicationCancellation =
-                new CancellationTokenSource();
             _applicationEpochOpen = true;
         });
-        if (routeCancellationFailure is not null)
-            throw new AggregateException(
-                "Session route proof cancellation failed during generation reset.",
-                routeCancellationFailure);
     }
 
     private sealed class PendingRemoteRequest(
@@ -1070,82 +826,6 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         ulong ObjectGeneration,
         string BindingToken,
         ulong RequestId);
-
-    private sealed class PendingOutboundProof(
-        long epoch,
-        CancellationToken cancellationToken)
-    {
-        private readonly ZLinkStateLane _lane = new();
-        private readonly Dictionary<long, TaskCompletionSource> _turns = [];
-        private long _nextTicket;
-        private long _servingTicket;
-
-        internal static PendingOutboundProof Completed { get; } =
-            new(0, CancellationToken.None);
-        internal long Epoch { get; } = epoch;
-        internal CancellationToken CancellationToken { get; } =
-            cancellationToken;
-        internal TaskCompletionSource<ZLinkSessionOutboundTenureProof>
-            Completion { get; } = new(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-        internal bool Retired { get; set; }
-
-        internal long RegisterTicket()
-        {
-            return AwaitStateLane(_lane.RunAsync(() => _nextTicket++));
-        }
-
-        internal Task WaitForTurnAsync(long ticket)
-        {
-            return AwaitStateLane(_lane.RunAsync(() =>
-            {
-                if (ticket == _servingTicket)
-                    return Task.CompletedTask;
-                if (!_turns.TryGetValue(ticket, out var turn))
-                {
-                    turn = new TaskCompletionSource(
-                        TaskCreationOptions.RunContinuationsAsynchronously);
-                    _turns.Add(ticket, turn);
-                }
-                return turn.Task;
-            }));
-        }
-
-        internal void CompleteTurn(long ticket)
-        {
-            TaskCompletionSource? next = null;
-            AwaitStateLane(_lane.RunAsync(() =>
-            {
-                if (ticket != _servingTicket)
-                    throw new InvalidOperationException(
-                        "Session outbound proof tickets completed out of order.");
-                _servingTicket++;
-                if (_turns.Remove(_servingTicket, out var waiting))
-                    next = waiting;
-            }));
-            next?.TrySetResult();
-        }
-
-        internal bool IsDrained
-        {
-            get
-            {
-                return AwaitStateLane(
-                    _lane.RunAsync(() => _servingTicket == _nextTicket));
-            }
-        }
-
-        private static T AwaitStateLane<T>(ValueTask<T> operation) =>
-            operation.GetAwaiter().GetResult();
-
-        private static void AwaitStateLane(ValueTask operation) =>
-            operation.GetAwaiter().GetResult();
-    }
-
-    private readonly record struct OutboundProofLease(
-        ZLinkSessionOutboundTenureProof Proof,
-        PendingOutboundProof Pending,
-        long Ticket);
 
     internal sealed class RemoteReplyClaim(
         Func<byte[], RemotePushDelivery> deliver,
@@ -1203,16 +883,12 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 var admission = AwaitStateLane(
                     _sessionBindings.AdmitOutboundAsync(
                         tenure,
-                        new ZLinkSessionOutboundTenureProof(
-                            tenure,
-                            targetNodeRid.Value.ToHex()),
                         ConcatParts(parts)));
                 return admission.Kind switch
                 {
                     ZLinkSessionOutboundAdmissionKind.Immediate
                         => admission.Capability!.Settle(deliver: true)
                            == ZLinkSessionOutboundDelivery.Delivered,
-                    ZLinkSessionOutboundAdmissionKind.Retained => true,
                     _ => false
                 };
             }
@@ -1326,9 +1002,6 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 session.SessionRid);
             var admission = await _sessionBindings.AdmitOutboundAsync(
                     tenure,
-                    new ZLinkSessionOutboundTenureProof(
-                        tenure,
-                        targetNodeRid.Value.ToHex()),
                     ConcatParts(parts))
                 .ConfigureAwait(false);
             var status = admission.Kind switch
@@ -1337,10 +1010,6 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                     when admission.Capability!.Settle(deliver: true)
                          == ZLinkSessionOutboundDelivery.Delivered
                     => ZLinkOneWaySubmitStatus.Submitted,
-                ZLinkSessionOutboundAdmissionKind.Retained
-                    => ZLinkOneWaySubmitStatus.Submitted,
-                ZLinkSessionOutboundAdmissionKind.Backpressured
-                    => ZLinkOneWaySubmitStatus.Backpressured,
                 _ => ZLinkOneWaySubmitStatus.TargetNotFound
             };
             return new ZLinkOneWaySubmitResult(status);

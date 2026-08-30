@@ -64,7 +64,6 @@ internal static class ZLinkCanonicalActorAcceptedJournal
             if (boundSession is { } bound)
             {
                 if (bound.ActorId != targetActor.ActorId
-                    || bound.ActorGeneration != targetActor.Generation
                     || bound.SessionRid.IsEmpty
                     || string.IsNullOrWhiteSpace(bound.BindingToken)
                     || bound.BindingGeneration == 0

@@ -970,6 +970,23 @@ public sealed class RelocationBehaviorConformanceTests
                 TimeSpan.FromSeconds(1));
             await transport.SessionRouteCompleted.Task.WaitAsync(
                 TimeSpan.FromSeconds(1));
+            var submittedPush = Assert.IsType<ZLinkRemoteSessionPushRelay>(
+                transport.RemoteSessionPush);
+            var appliedRoute = Assert.IsType<
+                ZLinkServiceWireCodec.SessionRelocationRouteRecord>(
+                transport.SessionRoute);
+            Assert.Equal(
+                appliedRoute.Actor.ObjectGeneration,
+                submittedPush.ObjectGeneration);
+            Assert.Equal(
+                appliedRoute.Route.TargetNodeGeneration,
+                submittedPush.TargetNodeGeneration);
+            Assert.Equal(
+                appliedRoute.Route.TargetAuthorityOwnerGeneration,
+                submittedPush.AuthorityOwnerGeneration);
+            Assert.Equal(
+                appliedRoute.Session.BindingGeneration,
+                submittedPush.BindingGeneration);
             var delivery = await Task.WhenAny(
                     stream.FirstWrite.Task,
                     sourceFailure.Task)

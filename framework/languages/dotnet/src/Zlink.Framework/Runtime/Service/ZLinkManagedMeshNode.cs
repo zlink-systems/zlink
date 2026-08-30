@@ -2197,8 +2197,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _observedSpotAuthorities[
             new ObservedSpotAuthorityKey(
                 targetNodeRid,
-                targetSpotId,
-                objectGeneration)] = new ObservedAuthority(
+                targetSpotId)] = new ObservedAuthority(
                     targetNodeGeneration,
                     authorityOwnerGeneration,
                     ownerLeaseGeneration);
@@ -2223,8 +2222,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _observedActorAuthorities[
             new ObservedActorAuthorityKey(
                 actor.NodeRid,
-                actor.ActorId,
-                actor.ObjectGeneration)] = new ObservedAuthority(
+                actor.ActorId)] = new ObservedAuthority(
                     targetNodeGeneration,
                     authorityOwnerGeneration,
                     ownerLeaseGeneration);
@@ -2258,8 +2256,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (!_observedSpotAuthorities.TryGetValue(
                 new ObservedSpotAuthorityKey(
                     request.TargetNodeRid,
-                    request.TargetSpotId,
-                    request.TargetSpotGeneration),
+                    request.TargetSpotId),
                 out var observed)
             || observed.TargetNodeGeneration != request.TargetNodeGeneration
             || observed.AuthorityOwnerGeneration
@@ -3355,7 +3352,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (!TryGetActor(actorRef, out var remoteActor)
                 || !_observedSpotAuthorities.TryGetValue(
                     new ObservedSpotAuthorityKey(
-                        targetNodeRid, targetSpotId, targetSpotGeneration),
+                        targetNodeRid, targetSpotId),
                     out var targetAuthority))
             {
                 CompleteManagedOperation(operation, RequestResult.NotFound, 0,
@@ -3835,7 +3832,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var peer = RequireDirectPeer(targetRid);
         if (spotGeneration == 0
             || !_observedSpotAuthorities.TryGetValue(
-                new ObservedSpotAuthorityKey(targetRid, spotId, spotGeneration),
+                new ObservedSpotAuthorityKey(targetRid, spotId),
                 out authority))
             throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotFound);
         if (peer.LifecycleGeneration != authority.TargetNodeGeneration)
@@ -3904,14 +3901,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ZLinkSpotId.FromBoundary(targetSpotId, nameof(targetSpotId)),
                 out var spot))
             return SubmitResult.NotFound;
-        if (targetSpotGeneration != 0
-            && spot.LifecycleGeneration != targetSpotGeneration)
-            return SubmitResult.InvalidState;
         var hasLocalAuthority = _observedSpotAuthorities.TryGetValue(
                 new ObservedSpotAuthorityKey(
                     targetNodeRid,
-                    targetSpotId,
-                    targetSpotGeneration),
+                    targetSpotId),
                 out var localAuthority);
         if (hasLocalAuthority
             && (localAuthority.TargetNodeGeneration != _lifecycleGeneration
@@ -4017,8 +4010,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         else if (!_observedSpotAuthorities.TryGetValue(
                      new ObservedSpotAuthorityKey(
                          targetNodeRid,
-                         targetSpotId,
-                         targetSpotGeneration),
+                         targetSpotId),
                      out authority))
         {
             return SubmitResult.NotFound;
@@ -4068,7 +4060,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var peer = RequireDirectPeer(actorRef.NodeRid);
         if (!_observedActorAuthorities.TryGetValue(
                 new ObservedActorAuthorityKey(
-                    actorRef.NodeRid, actorRef.ActorId, actorRef.ObjectGeneration),
+                    actorRef.NodeRid, actorRef.ActorId),
                 out var authority)
             || peer.LifecycleGeneration != authority.TargetNodeGeneration)
             throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotFound);
@@ -4118,8 +4110,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (!_observedActorAuthorities.TryGetValue(
                     new ObservedActorAuthorityKey(
                         actorRef.NodeRid,
-                        actorRef.ActorId,
-                        actorRef.ObjectGeneration),
+                        actorRef.ActorId),
                 out var authority)
                 || peer.LifecycleGeneration != authority.TargetNodeGeneration)
                 return SubmitResult.NotFound;
@@ -4148,13 +4139,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 default,
                 request ? operation : null);
         }
-        if (!TryGetActor(actorRef, out var actor))
+        if (!_actors.TryGetValue(
+                ZLinkActorId.FromBoundary(actorRef.ActorId, nameof(actorRef)),
+                out var actor)
+            || actor.Ref.NodeRid != actorRef.NodeRid
+            || actor.Draining)
             return SubmitResult.NotFound;
         var hasLocalAuthority = _observedActorAuthorities.TryGetValue(
                 new ObservedActorAuthorityKey(
                     actorRef.NodeRid,
-                    actorRef.ActorId,
-                    actorRef.ObjectGeneration),
+                    actorRef.ActorId),
                 out var localAuthority);
         if (hasLocalAuthority
             && (localAuthority.TargetNodeGeneration != _lifecycleGeneration
@@ -6932,8 +6926,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var localOwnerLeaseGeneration = checked((ulong)Volatile.Read(
                 ref _localOwnerLeaseGeneration));
             if (!hasTargetSpot
-                || spot!.LifecycleGeneration != stateful.TargetSpotGeneration
-                || spot.AuthorityOwnerGeneration
+                || spot!.AuthorityOwnerGeneration
                     != stateful.AuthorityOwnerGeneration
                 || stateful.OwnerLeaseGeneration != localOwnerLeaseGeneration)
             {
@@ -6974,9 +6967,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         else
         {
-            var actorPresent = TryGetActor(stateful.TargetActor, out var actor);
+            var actorPresent = _actors.TryGetValue(
+                    ZLinkActorId.FromBoundary(
+                        stateful.TargetActor.ActorId,
+                        nameof(stateful.TargetActor)),
+                    out var actor)
+                && actor!.Ref.NodeRid == stateful.TargetActor.NodeRid
+                && !actor.Draining;
             if (!actorPresent
-                || actor.AuthorityOwnerGeneration
+                || actor!.AuthorityOwnerGeneration
                     != stateful.AuthorityOwnerGeneration
                 || stateful.OwnerLeaseGeneration
                     != checked((ulong)Volatile.Read(
@@ -11610,13 +11609,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private readonly record struct ObservedSpotAuthorityKey(
         RoutingId NodeRid,
-        string SpotId,
-        ulong ObjectGeneration);
+        string SpotId);
 
     private readonly record struct ObservedActorAuthorityKey(
         RoutingId NodeRid,
-        string ActorId,
-        ulong ObjectGeneration);
+        string ActorId);
 
     private readonly record struct ObservedAuthority(
         ulong TargetNodeGeneration,
