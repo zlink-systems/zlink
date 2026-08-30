@@ -571,6 +571,9 @@ Long group message도 같은 수명 test를 통과해야 다음 단계로 진행
 6. Extension fragmentation, backpressure 재시도와 reservation 반납 동작을 추가한다.
 7. TCP·IPC·TLS·WS·WSS의 고정 header buffer와 scatter/gather 경로를 확인한다.
 8. Inproc copy·move가 encoder·decoder 없이 같은 metadata를 보존하는지 확인한다.
+9. Paired passive endpoint는 peer READY를 검증한 뒤 자기 READY의 transport write까지
+   완료해야 socket-side lane readiness와 pair admission을 공개한다. WS·WSS의 다음 message
+   read 상태는 이미 검증한 READY boundary를 다시 판정하는 근거로 사용하지 않는다.
 
 일반 data golden test는 byte 3이 `0x00`인 기존 8바이트 결과를 유지해야 한다. 모든 encoder가
 같은 request-reply golden byte를 만들어야 한다.
@@ -741,6 +744,11 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
 - **Proxy는 지원되는 poller 경로 하나만 소유한다.** `ZLINK_HAVE_POLLER == 1`인 지원 build에서
   compile되지 않는 legacy `zlink_poll()` fallback을 제거하고, 내부 transport writability를
   사용하는 implementation만 유지한다.
+- **Request-reply submit은 command가 있을 때만 throttle을 우회한다.** Mailbox writer가
+  inactive receiver를 깨우는 command batch에 atomic pending hint를 함께 publish한다. Direct
+  submit의 commit point는 이 hint가 있을 때 queued bind·flow-state·activate-write를 즉시
+  drain하고, hint가 없는 일반 reply 경로는 기존 timestamp throttle을 유지해 매 reply의
+  nonblocking mailbox syscall을 피한다. Command가 없는 단순 signal은 hint를 만들지 않는다.
 
 ### 8.2 내부 확인 조건
 
@@ -769,6 +777,9 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
   anonymous namespace를 참조하는 production source가 없다.
 - Production proxy source에는 `ZLINK_HAVE_POLLER`의 compile-time 분기와 public
   `zlink_poll(POLLOUT)` fallback이 남지 않는다.
+- Direct request-reply submit의 mailbox commit point는 pending-command hint가 있을 때만
+  throttle을 우회한다. Hint는 실제 command wake와 함께 publish되고 drain 전에 소비되며,
+  command 없는 signal이나 일반 reply마다 mailbox receive syscall을 만들지 않는다.
 - Decoder에는 transport message의 decoded frame 수를 세는 상태가 없고, Asio ZMP engine이
   authoritative WS·WSS boundary 전까지만 frame publication을 보류한다.
 - WS·WSS transport의 stream과 read boundary state는 같은 connection-generation aggregate에
@@ -779,6 +790,9 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
   `asio_ws_engine_t` 참조가 없고 WS·WSS ZMP wire test는 generic Asio ZMP engine을 통과한다.
 - §4.1의 auxiliary·`msg_t`·VSM static assertion과 decoder fragmentation·backpressure test가
   통과한다.
+- Paired passive endpoint의 READY write가 완료되기 전에는 socket-side ready count와 pair
+  admission이 증가하지 않고, write 완료 뒤 정확히 한 번 증가한다. 이미 검증한 WS·WSS READY
+  input boundary는 write-completion handshake 재진입에서 다시 검증하지 않는다.
 
 ### 8.3 별도 성능 작업
 

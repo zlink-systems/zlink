@@ -126,8 +126,10 @@ following FLAGS combinations also produce `EPROTO`.
 When a connection is established, the active side sends HELLO and READY in one outbound
 buffer on a stream transport. On WS and WSS, which preserve message boundaries, each frame
 occupies its own binary message. The passive side of a paired DEALER·ROUTER transport first
-sends only HELLO, then sends its own READY after receiving the peer's READY. Both sides begin
-exchanging data after receiving the peer's HELLO and READY.
+sends only HELLO, then sends its own READY after receiving the peer's READY. The passive side
+publishes local connection readiness and pair admission only after the transport write of that
+READY completes successfully. A failed READY write fails the handshake without publishing
+readiness. The active side begins exchanging data only after receiving the passive READY.
 
 ```mermaid
 sequenceDiagram
@@ -138,7 +140,8 @@ sequenceDiagram
     P->>A: HELLO
     Note over P: Receive and validate peer READY
     P->>A: READY
-    Note over A,P: Begin data exchange after both receive peer HELLO/READY
+    Note over P: Publish local readiness after READY write completes
+    Note over A: Begin data exchange after validating passive READY
 ```
 
 **HELLO frame**: consists, in order, of the control type (1 byte), socket type (1 byte),
@@ -381,6 +384,8 @@ item maps to one test.
 - The active side sends HELLO and READY in one outbound buffer on a stream transport and as
   two binary messages on WS or WSS. The passive side of a paired DEALER·ROUTER transport
   first sends HELLO, then sends its own READY after receiving the peer's READY.
+- The paired passive side does not publish local readiness or pair admission before its READY
+  transport write completes. A failed write fails the handshake without publishing readiness.
 - Each metadata property after READY control type `0x04` follows the layout
   `[name length:u8][name bytes][value length:u32 BE][value bytes]`.
 - When `ZLINK_OPT_ZMP_METADATA` has its default value (disabled), there are no metadata

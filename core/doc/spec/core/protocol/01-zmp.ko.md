@@ -122,8 +122,10 @@ kind는 `CONTROL`, `IDENTITY`, `SUBSCRIBE` 또는 `CANCEL`과 함께 사용할 �
 연결이 만들어지면 active 쪽은 stream transport에서 HELLO와 READY frame을 한 outbound
 buffer로 보낸다. Message 경계가 있는 WS·WSS에서는 두 frame을 각각 하나의 binary message로
 보낸다. Paired DEALER·ROUTER transport의 passive 쪽은 HELLO만 먼저 보내고, peer READY를
-수신한 뒤 자기 READY를 보낸다. 양쪽 모두 peer의 HELLO와 READY를 수신한 뒤 데이터 교환을
-시작한다.
+수신한 뒤 자기 READY를 보낸다. Passive 쪽은 이 READY의 transport write가 성공적으로
+완료된 뒤에만 local connection readiness와 pair admission을 공개한다. READY write가
+실패하면 handshake를 실패로 끝내며 readiness를 공개하지 않는다. Active 쪽은 passive
+READY를 수신한 뒤에만 data 교환을 시작한다.
 
 ```mermaid
 sequenceDiagram
@@ -134,7 +136,8 @@ sequenceDiagram
     P->>A: HELLO
     Note over P: peer READY 수신·검증
     P->>A: READY
-    Note over A,P: 양쪽이 peer HELLO/READY 수신 후 데이터 교환 시작
+    Note over P: READY write 완료 후 local readiness 공개
+    Note over A: passive READY 수신·검증 후 data 교환 시작
 ```
 
 **HELLO frame**: control type(1 byte), socket type(1 byte),
@@ -355,6 +358,7 @@ callback 결과로 확인한다. 각 항목은 test 하나로 이어진다.
 
 **Handshake**
 - Active 쪽은 stream transport에서 HELLO와 READY를 한 outbound buffer로 보내고, WS·WSS에서는 두 binary message로 보낸다. Paired DEALER·ROUTER transport의 passive 쪽은 HELLO를 먼저 보낸 뒤 peer READY 수신 후 자기 READY를 보낸다.
+- Paired passive 쪽은 자기 READY의 transport write가 완료되기 전에 local readiness나 pair admission을 공개하지 않는다. Write가 실패하면 readiness 없이 handshake가 실패한다.
 - READY control type `0x04` 뒤의 각 metadata property는 `[name length:u8][name bytes][value length:u32 BE][value bytes]` 배치를 따른다.
 - `ZLINK_OPT_ZMP_METADATA`가 기본값(비활성)이면 metadata property가 없고, 활성화하면 `Socket-Type`과 8 byte big-endian `Zlink-Max-Message-Size`가 추가된다. `Routing-Id`는 DEALER·ROUTER READY에만 추가된다.
 - paired DEALER·ROUTER transport의 READY에는 이 option과 관계없이 `Socket-Type`·`Routing-Id` metadata와 pair property가 항상 있다.
