@@ -369,7 +369,7 @@ void zlink::dealer_t::xdispatch_io ()
         {
             // Extract one frame while receive-side FQ mutation is fenced, but
             // never carry this lock into assembly or application callback.
-            scoped_lock_t receive_lock (receive_runtime ().sync);
+            scoped_lock_t receive_lock (receive_sync ());
             recv_rc = recvpipe (&msg, &pipe);
             if (recv_rc == 0 && pipe && !pipe->retain_lifetime_ref ())
                 pipe = NULL;

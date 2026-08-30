@@ -107,29 +107,6 @@ bool take_dispatch_source_rid (std::map<zlink::pipe_t *, zlink_routing_id_t> *so
     return true;
 }
 
-void copy_router_pipe_source_rid (zlink::pipe_t *pipe_, zlink_routing_id_t *out_)
-{
-    if (!out_) {
-        return;
-    }
-
-    out_->size = 0;
-    if (!pipe_)
-        return;
-
-    const zlink::blob_t &routing_id = pipe_->get_routing_id ();
-    if (routing_id.size () > 0) {
-        zlink::copy_routing_id_from_bytes (routing_id.data (), routing_id.size (), out_);
-        return;
-    }
-
-    zlink::pipe_t *peer = pipe_->get_peer ();
-    if (!peer)
-        return;
-
-    const zlink::blob_t &peer_routing_id = peer->get_routing_id ();
-    zlink::copy_routing_id_from_bytes (peer_routing_id.data (), peer_routing_id.size (), out_);
-}
 }
 
 static bool router_debug_enabled ()

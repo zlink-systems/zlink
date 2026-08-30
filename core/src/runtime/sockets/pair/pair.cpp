@@ -263,7 +263,7 @@ void zlink::pair_t::xdispatch_io ()
             // PAIR has no FQ wrapper, but its SPSC queue still has exactly one
             // reader. Extract each frame under receive ownership, retain only
             // the source identity, then release before invoking user code.
-            scoped_lock_t receive_lock (receive_runtime ().sync);
+            scoped_lock_t receive_lock (receive_sync ());
             pipe = _pipe;
             if (pipe && pipe->retain_lifetime_ref ()) {
                 received = pipe->read (&msg);

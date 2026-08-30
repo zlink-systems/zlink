@@ -355,7 +355,7 @@ void zlink::router_t::xdispatch_io ()
             // FQ/current receive state belongs to receive.sync. Keep only a
             // pinned source identity after extraction, then invoke callbacks
             // with no receive-side lock held.
-            scoped_lock_t receive_lock (receive_runtime ().sync);
+            scoped_lock_t receive_lock (receive_sync ());
             recv_rc = _fq.recvpipe (&msg, &pipe);
             if (recv_rc == 0 && pipe && !pipe->retain_lifetime_ref ())
                 pipe = NULL;

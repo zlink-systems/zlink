@@ -808,6 +808,9 @@ class socket_base_t : public own_t,
             lock.lock ();
         return lock;
     }
+    // Concrete receive algorithms may fence their socket-specific queue state,
+    // but the receive runtime and its ownership protocol remain base-owned.
+    mutex_t &receive_sync () { return receive_runtime ().sync; }
     // xread_activated() runs under receive ownership. It may publish FQ
     // readiness, but must defer any application callback until that ownership
     // has been released by the command/API boundary.

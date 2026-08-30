@@ -537,7 +537,7 @@ void zlink::xsub_t::xdispatch_io ()
             pipe_t *pipe = NULL;
             int recv_rc = 0;
             {
-                scoped_lock_t receive_lock (receive_runtime ().sync);
+                scoped_lock_t receive_lock (receive_sync ());
                 recv_rc = _fq.recvpipe (&msg, &pipe);
                 if (recv_rc == 0 && pipe && !pipe->retain_lifetime_ref ())
                     pipe = NULL;
@@ -628,7 +628,7 @@ int zlink::xsub_t::dispatch_ready_messages ()
             // Consume and validate one complete publication while FQ state is
             // exclusively owned. The callback sees only the detached local
             // vector after this scope releases receive.sync.
-            scoped_lock_t receive_lock (receive_runtime ().sync);
+            scoped_lock_t receive_lock (receive_sync ());
             rc = receive_dispatch_message (&source_rid);
         }
         if (rc > 0)
