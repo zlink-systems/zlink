@@ -347,6 +347,109 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation,
+      ClosingOwnerTerminalInvalidatesBeforeNextColdActivation)
+{
+    namespace messaging = zlink::framework::runtime::messaging;
+
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::zlink_builder_t builder;
+    auto runtime = zlink::framework::detail::channel_runtime_t::from (
+      builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    resolver_t resolver;
+    resolver.addresses.insert_or_assign (
+      "player-alice", zlink::framework::runtime::spot_address_t{
+                        "gamequest", zlink::routing_id_t::from ("quest-mission"),
+                        "player-alice", 7});
+    runtime.bind_spot_address_resolver (resolver);
+
+    std::atomic_int cold_activations{0};
+    runtime.bind_instance_spot_activator (
+      [] (const auto &, const auto &, const auto &, auto, auto,
+          const auto &)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
+          co_return zlink::framework::result_t<void>::failure (
+            zlink::framework::framework_error_kind_t::internal_failure,
+            "unused one-way activation");
+      },
+      [&serializers, &cold_activations] (
+        const zlink::framework::spot_id_t &spot_id,
+        const zlink::framework::detail::spot_activation_intent_t &intent,
+        std::string, std::type_index, auto, std::chrono::milliseconds, auto)
+        -> zlink::framework::task_t<zlink::message_t> {
+          EXPECT_EQ ("player-alice", std::string (spot_id));
+          EXPECT_EQ (std::optional<std::string> ("gamequest"), intent.mesh_name);
+          EXPECT_EQ (std::optional<std::string> ("player-quest"),
+                     intent.stable_type);
+          ++cold_activations;
+          /* Models OnInitialize replaying the durable event stream before the
+           * activation-owned first request is dispatched. */
+          co_return zlink::framework::result_t<zlink::message_t>::success (
+            zlink::framework::detail::encoded_payload_to_raw (
+              serializers.get<reply_t> ().serialize (reply_t{3})));
+      });
+
+    messaging::envelope_codec_t envelopes;
+    zlink::framework::detail::channel_reply_writer_t replies;
+    std::atomic_int direct_requests{0};
+    runtime.bind_spot_mesh_transport (
+      "gamequest",
+      [] (const auto &, const auto &, std::uint64_t, auto)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
+          co_return zlink::framework::result_t<void>::failure (
+            zlink::framework::framework_error_kind_t::internal_failure,
+            "unused direct send");
+      },
+      [&direct_requests, &envelopes, &replies] (
+        const zlink::routing_id_t &, const std::string &, std::uint64_t,
+        messaging::message_parts_t parts, std::chrono::milliseconds)
+        -> zlink::framework::task_t<
+          zlink::framework::result_t<messaging::message_parts_t>> {
+          ++direct_requests;
+          const auto request_header = envelopes.decode_header (parts);
+          if (!request_header) {
+              co_return zlink::framework::result_t<
+                messaging::message_parts_t>::failure (
+                zlink::framework::framework_error_kind_t::protocol_error,
+                "request header decode failed");
+          }
+          const auto error_header = replies.create_error_header (
+            "gamequest", request_header.value (),
+            zlink::framework::detail::make_framework_origin_exception (
+              zlink::framework::framework_error_kind_t::shutting_down,
+              "spot serial queue is closed or stopping"));
+          co_return zlink::framework::result_t<
+            messaging::message_parts_t>::success (
+            replies.reply_raw_envelope (error_header,
+                                        zlink::message_t::from ("")));
+      });
+
+    auto client = builder.route_client (serializers);
+    const auto stale = client.request_to_spot ("player-alice", request_t{1})
+                         .instance_spot ("player-quest")
+                         .in_mesh ("gamequest")
+                         .submit<reply_t> ()
+                         .result ();
+    ASSERT_FALSE (stale);
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::shutting_down,
+               stale.error_kind ());
+    EXPECT_EQ (1, direct_requests.load ());
+    EXPECT_EQ (0, cold_activations.load ());
+    EXPECT_FALSE (resolver.addresses.contains ("player-alice"));
+
+    const auto rehydrated = client.request_to_spot ("player-alice", request_t{2})
+                              .instance_spot ("player-quest")
+                              .in_mesh ("gamequest")
+                              .submit<reply_t> ()
+                              .result ();
+    ASSERT_TRUE (rehydrated);
+    EXPECT_EQ (3, rehydrated.value ().value);
+    EXPECT_EQ (1, direct_requests.load ());
+    EXPECT_EQ (1, cold_activations.load ());
+    EXPECT_EQ (2, resolver.reads.load ());
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation,
       RetiredOwnerRequestCompletesWithUnavailableTerminal)
 {
     namespace host = zlink::framework::runtime::host;

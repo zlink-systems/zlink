@@ -48,8 +48,10 @@ class work_latch_t
     void arrive ()
     {
         std::lock_guard lock (_mutex);
-        if (_remaining != 0 && --_remaining == 0)
+        if (_remaining != 0) {
+            --_remaining;
             _changed.notify_all ();
+        }
     }
 
     bool wait_for (std::chrono::milliseconds timeout)
@@ -57,6 +59,15 @@ class work_latch_t
         std::unique_lock lock (_mutex);
         return _changed.wait_for (lock, timeout,
                                   [&] { return _remaining == 0; });
+    }
+
+    bool wait_until_at_most (
+      std::size_t remaining,
+      std::chrono::steady_clock::time_point deadline)
+    {
+        std::unique_lock lock (_mutex);
+        return _changed.wait_until (
+          lock, deadline, [&] { return _remaining <= remaining; });
     }
 
   private:
@@ -769,6 +780,8 @@ int main ()
         work_latch_t deadline_workers_finished (worker_count);
         std::vector<zlink::framework::task_t<void>> deadline_workers;
         deadline_workers.reserve (worker_count);
+        const auto deadline_workers_start_deadline =
+          std::chrono::steady_clock::now () + std::chrono::seconds (2);
         for (std::size_t index = 0; index < worker_count; ++index) {
             zlink::framework::publish_call_t occupied (
               [&] (const zlink::framework::publish_call_t::metadata_map_t &) {
@@ -780,14 +793,21 @@ int main ()
                   return zlink::framework::result_t<void>::success ();
               });
             deadline_workers.push_back (occupied.submit ());
-        }
-        if (!deadline_workers_started.wait_for (std::chrono::seconds (2))) {
-            {
-                std::lock_guard lock (multicast_gate_mutex);
-                release_deadline_workers = true;
+            /* The previous phase's handler-finished latch fires immediately
+             * before the executor returns its slot. Admit this phase one
+             * confirmed worker at a time so a still-returning slot cannot turn
+             * the burst into handoff/overflow jobs. The original two-second
+             * budget remains shared by the whole phase. */
+            if (!deadline_workers_started.wait_until_at_most (
+                  worker_count - index - 1,
+                  deadline_workers_start_deadline)) {
+                {
+                    std::lock_guard lock (multicast_gate_mutex);
+                    release_deadline_workers = true;
+                }
+                multicast_gate_changed.notify_all ();
+                return 86;
             }
-            multicast_gate_changed.notify_all ();
-            return 86;
         }
 
         std::atomic_int expired_handoff_calls{0};
