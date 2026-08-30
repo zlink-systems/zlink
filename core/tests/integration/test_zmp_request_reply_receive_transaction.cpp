@@ -7,6 +7,7 @@
 #include "api/socket/socket_api_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "core/command.hpp"
+#include "core/ctx.hpp"
 #include "core/msg.hpp"
 #include "core/pipe.hpp"
 #include "sockets/common/socket_base.hpp"
@@ -453,8 +454,22 @@ void test_router_record_fences_mailbox_read_activation ()
     assert_two_part_record (activated, "command-second");
     TEST_ASSERT_EQUAL_UINT64 (302, activated.sequence);
 
+    // Complete both sides of the synthetic pipe lifecycle while the stack
+    // event sinks are still alive. zlink_close() is asynchronous; returning
+    // first would let context teardown call a destroyed sink.
+    activated_pipe[0]->terminate (false);
+    activated_pipe[1]->terminate (false);
+    first_pipe[0]->terminate (false);
+    first_pipe[1]->terminate (false);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::session_termination_test_access_t::process_socket_commands (
+        handle.socket));
     handle = socket_handle_t ();
     test_context_socket_close_zero_linger (router);
+    zlink::ctx_t *ctx =
+      static_cast<zlink::ctx_t *> (get_test_context ());
+    TEST_ASSERT_SUCCESS_ERRNO (
+      ctx->wait_for_socket_count_at_most (0, 5000));
 }
 
 void test_router_capacity_reservation_is_atomic_and_non_consuming ()

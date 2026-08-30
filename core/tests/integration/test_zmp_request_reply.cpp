@@ -1724,6 +1724,14 @@ void run_blocking_dealer_receive_ownership_transition (bool use_dealer_receive_)
     msleep (SETTLE_TIME);
 
     const zlink_routing_id_t dealer_rid = get_routing_id_value (dealer);
+    socket_handle_t handle = as_socket_handle (dealer);
+    TEST_ASSERT_NOT_NULL (handle.socket);
+    uint64_t public_mailbox_drains_before = 0;
+    handle.socket->test_receive_owner_snapshot (
+      NULL, &public_mailbox_drains_before, NULL);
+    receive_wait_owner_probe_t wait_probe;
+    handle.socket->test_set_receive_wait_hook (
+      &capture_receive_wait_owner, &wait_probe);
     std::atomic<bool> recv_started (false);
     zlink_recv_result_t recv_result = ZLINK_RECV_INTERNAL_ERROR;
     uint8_t received_message_type = 0xff;
@@ -1757,20 +1765,27 @@ void run_blocking_dealer_receive_ownership_transition (bool use_dealer_receive_)
     while (!recv_started.load (std::memory_order_acquire))
         std::this_thread::yield ();
 
-    socket_handle_t handle = as_socket_handle (dealer);
-    std::shared_ptr<zlink::socket_reqrep_internal::socket_request_reply_state_t> state;
-    bool direct_receive_ready = false;
+    bool transport_receive_waiting = false;
     const auto receive_deadline =
       std::chrono::steady_clock::now () + std::chrono::milliseconds (3000);
     while (std::chrono::steady_clock::now () < receive_deadline) {
-        state = zlink::socket_reqrep_internal::find_request_reply_state (handle);
-        if (state)
-            direct_receive_ready = true;
-        if (direct_receive_ready)
+        uint64_t public_mailbox_drains = 0;
+        handle.socket->test_receive_owner_snapshot (
+          NULL, &public_mailbox_drains, NULL);
+        bool async_wait_entered = false;
+        {
+            std::lock_guard<std::mutex> lock (wait_probe.mutex);
+            async_wait_entered = wait_probe.entered;
+        }
+        transport_receive_waiting =
+          public_mailbox_drains > public_mailbox_drains_before
+          || async_wait_entered;
+        if (transport_receive_waiting)
             break;
         msleep (1);
     }
-    handle = socket_handle_t ();
+    const bool request_state_absent_before_request =
+      !zlink::socket_reqrep_internal::find_request_reply_state (handle);
 
     zlink_msg_t request;
     zlink_msg_init (&request);
@@ -1792,12 +1807,16 @@ void run_blocking_dealer_receive_ownership_transition (bool use_dealer_receive_)
                            ZLINK_PART_FINAL));
 
     recv_thread.join ();
+    handle.socket->test_set_receive_wait_hook (NULL, NULL);
     send_captured_reply (router, &handler_probe, "reply-after-transition");
     TEST_ASSERT_TRUE (wait_for_reply (&reply_probe));
 
     TEST_ASSERT_TRUE_MESSAGE (
-      direct_receive_ready,
-      "blocking DEALER receive created an internal payload queue");
+      transport_receive_waiting,
+      "blocking DEALER receive did not enter a transport wait");
+    TEST_ASSERT_TRUE_MESSAGE (
+      request_state_absent_before_request,
+      "blocking DEALER receive eagerly created request/reply state");
     TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, recv_result);
     TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, received_has_more);
     TEST_ASSERT_EQUAL_STRING ("unsolicited-during-transition", received_payload.c_str ());
@@ -1808,6 +1827,7 @@ void run_blocking_dealer_receive_ownership_transition (bool use_dealer_receive_)
         TEST_ASSERT_TRUE (generic_source_was_null);
     }
 
+    handle = socket_handle_t ();
     close_test_socket_after_reply_callback (dealer);
     test_context_socket_close_zero_linger (router);
 }
@@ -2238,11 +2258,11 @@ void test_dealer_to_router_request_reply_over_tls ()
 #endif
 }
 
-//  Regression for the completion-lane credit recovery defect: replies bypass
-//  send()/recv(), so the reply submit entry itself must drain pending socket
-//  commands. Before the fix the router kept ZLINK_SUBMIT_BACKPRESSURED forever
-//  because the completion pipe's activate-write command was never processed.
-namespace completion_backpressure
+//  A completion lane is exempt from application HWM admission. Exercise a
+//  sustained TCP burst without depending on incidental kernel-buffer
+//  backpressure, while still proving that any transient retry completes and
+//  preserves the payload and connection identity.
+namespace burst_completion
 {
 const size_t payload_bytes = 8192;
 const size_t batch_size = 8;
@@ -2310,39 +2330,30 @@ bool deadline_passed (const std::chrono::steady_clock::time_point &deadline_)
 }
 }
 
-void test_router_reply_completion_backpressure_recovers_over_tcp ()
+void test_router_reply_burst_completion_remains_correct_over_tcp ()
 {
-    using namespace completion_backpressure;
+    using namespace burst_completion;
 
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (router);
     TEST_ASSERT_NOT_NULL (dealer);
 
-    //  A small reply-lane byte HWM makes a burst of replies cross HWM and LWM
-    //  on every cycle. Requests keep the default capacity.
-    const uint64_t reply_lane_hwm = 4 * payload_bytes;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (router, ZLINK_OPT_SNDHWM, &reply_lane_hwm,
-                                                 sizeof (reply_lane_hwm)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (dealer, ZLINK_OPT_RCVHWM, &reply_lane_hwm,
-                                                 sizeof (reply_lane_hwm)));
-
     char endpoint[MAX_SOCKET_STRING];
     bind_loopback_ipv4 (router, endpoint, sizeof (endpoint));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer, "bp-dealer", 9));
+    const char dealer_rid[] = "burst-dealer";
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_routing_id (dealer, dealer_rid, sizeof (dealer_rid) - 1));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
     msleep (SETTLE_TIME * 10);
 
-    //  1. The completion poller is registered before the first request.
+    //  The completion poller is registered before the first request.
     void *poller = zlink_poller_new ();
     TEST_ASSERT_NOT_NULL (poller);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK, zlink_poller_add (poller, dealer, NULL, ZLINK_POLLCOMPLETION));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK, zlink_poller_add (poller, router, NULL, ZLINK_POLLOUT));
 
     probe_t probe;
-    size_t backpressure_hits = 0;
     uint32_t ordinal = 0;
     const std::chrono::steady_clock::time_point test_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (30);
@@ -2365,33 +2376,25 @@ void test_router_reply_completion_backpressure_recovers_over_tcp ()
                                                           &parts, &part_count, 0));
             TEST_ASSERT_EQUAL_UINT64 (1, part_count);
 
-            //  2. The reply reuses the payload message received on the
-            //     application connection. 7. That message still carries the
-            //     application connection ID, so this also pins the completion
-            //     connection ID rewrite: without it the reply is discarded as
-            //     stale and the completion below never arrives.
+            //  The reply reuses the payload received on the application
+            //  connection. Its connection ID must be rewritten for the
+            //  completion lane or the requester will discard the reply.
             zlink_routing_id_t reply_rid = *peer_rid;
             zlink_submit_result_t rc = zlink_router_reply_part (
               router, &reply_rid, request_seq, &parts[0], ZLINK_PART_FINAL);
             zlink_multipart_close (parts, part_count);
 
-            //  The submit entry consumed the message either way, so a retry
-            //  rebuilds an equivalent payload instead of reusing it.
+            //  The submit entry consumes the message either way. A transient
+            //  retry therefore rebuilds an equivalent payload.
             while (rc != ZLINK_SUBMIT_OK) {
-                //  6. Only backpressure is acceptable here.
+                //  Only transient backpressure is retryable here.
                 TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_BACKPRESSURED, rc);
-                ++backpressure_hits;
-                //  5. Consuming completions on the requester returns credit to
-                //     the router's completion pipe.
                 zlink_poller_event_t event;
                 (void) zlink_poller_wait (poller, &event, 1, 10, NULL);
                 TEST_ASSERT_FALSE_MESSAGE (
                   deadline_passed (test_deadline),
-                  "router reply never recovered from completion backpressure");
+                  "router reply did not recover during the completion burst");
 
-                //  The readiness hint that used to gate this retry is gone.
-                //  Draining completions above is what actually returns credit,
-                //  so the retry is driven by that drain instead.
                 zlink_msg_t retry_part;
                 fill_payload (&retry_part, ordinal_of_request (cycle, i));
                 rc = zlink_router_reply_part (router, &reply_rid, request_seq, &retry_part,
@@ -2399,8 +2402,8 @@ void test_router_reply_completion_backpressure_recovers_over_tcp ()
             }
         }
 
-        //  3./4. Drain this cycle's completions before the next burst so the
-        //  completion lane crosses HWM and LWM again on every cycle.
+        //  Drain this cycle before the next burst, keeping each cycle's
+        //  completion and payload checks bounded.
         const size_t expected = (cycle + 1) * batch_size;
         for (;;) {
             {
@@ -2423,9 +2426,6 @@ void test_router_reply_completion_backpressure_recovers_over_tcp ()
         TEST_ASSERT_FALSE_MESSAGE (probe.payload_mismatch,
                                    "a completion payload did not match its request");
     }
-    TEST_ASSERT_GREATER_THAN_UINT64 (0, backpressure_hits);
-
-    (void) zlink_poller_remove (poller, router);
     (void) zlink_poller_remove (poller, dealer);
     (void) zlink_poller_destroy (&poller);
     test_context_socket_close_zero_linger (dealer);
@@ -5503,7 +5503,7 @@ int main ()
     RUN_SELECTED (test_dealer_to_router_request_reply_over_tcp_with_explicit_routing_id);
     RUN_SELECTED (test_dealer_to_router_request_reply_over_ipc);
     RUN_SELECTED (test_dealer_to_router_request_reply_over_tls);
-    RUN_SELECTED (test_router_reply_completion_backpressure_recovers_over_tcp);
+    RUN_SELECTED (test_router_reply_burst_completion_remains_correct_over_tcp);
     RUN_SELECTED (test_router_poller_combines_input_and_completion_ownership);
     RUN_SELECTED (test_socket_poller_wakes_after_async_owner_applies_input);
     RUN_SELECTED (test_completion_poller_exclusively_owns_routed_async_completion);

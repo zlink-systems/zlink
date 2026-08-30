@@ -31,6 +31,14 @@ zlink::socket_base_t *as_socket (void *socket_)
     return handle.socket;
 }
 
+void process_socket_commands_through_public_api (void *socket_)
+{
+    int events = 0;
+    size_t events_size = sizeof (events);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (socket_, ZLINK_OPT_EVENTS, &events, &events_size));
+}
+
 bool deadline_expired (const std::chrono::steady_clock::time_point &deadline_)
 {
     return std::chrono::steady_clock::now () >= deadline_;
@@ -771,7 +779,11 @@ void test_flow_frame_cannot_complete_a_truncated_reply ()
     const std::chrono::steady_clock::time_point removal_deadline =
       deadline_in_ms (4000);
     while (!deadline_expired (removal_deadline)) {
-        (void) as_socket (dealer)->process_submit_commands ();
+        // Inproc termination is a two-socket command handshake. Progress both
+        // public endpoints so the peer's term request and the local ack are
+        // applied before checking that the malformed pair was removed.
+        process_socket_commands_through_public_api (dealer);
+        process_socket_commands_through_public_api (router);
         if (!as_socket (dealer)->completion_pipe_for_transport_pair (
               target.transport_pair_id, target.transport_pair_generation)) {
             old_pair_removed = true;
