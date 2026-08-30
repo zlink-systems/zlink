@@ -34,6 +34,8 @@ public sealed partial class Received : IDisposable
         _sendHandler = null;
         _sendKernel = null;
         _sendRoutingIdSnapshot = default;
+        _transportPairId = 0;
+        _transportPairGeneration = 0;
         MessageType = ReceivedMessageType.Raw;
         _closed = false;
     }
@@ -71,10 +73,14 @@ public sealed partial class Received : IDisposable
         ReceivedReplyHandler? replyHandler,
         ReceivedSendHandler? sendHandler = null,
         ReceivedSendSingleHandler? sendSingleHandler = null,
-        SocketKernel? sendKernel = null)
+        SocketKernel? sendKernel = null,
+        ulong transportPairId = 0,
+        ulong transportPairGeneration = 0)
     {
         _singlePart = singlePart;
         _routingIdSnapshot = routingId;
+        _transportPairId = transportPairId;
+        _transportPairGeneration = transportPairGeneration;
         MessageType = requestSeq.HasValue || replyHandler is not null
             ? ReceivedMessageType.Request
             : ReceivedMessageType.Raw;
@@ -89,10 +95,14 @@ public sealed partial class Received : IDisposable
         ReceivedReplyHandler? replyHandler,
         ReceivedSendHandler? sendHandler = null,
         ReceivedSendSingleHandler? sendSingleHandler = null,
-        SocketKernel? sendKernel = null)
+        SocketKernel? sendKernel = null,
+        ulong transportPairId = 0,
+        ulong transportPairGeneration = 0)
     {
         _parts = parts;
         _routingIdSnapshot = routingId;
+        _transportPairId = transportPairId;
+        _transportPairGeneration = transportPairGeneration;
         MessageType = requestSeq.HasValue || replyHandler is not null
             ? ReceivedMessageType.Request
             : ReceivedMessageType.Raw;

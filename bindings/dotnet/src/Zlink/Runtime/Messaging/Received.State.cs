@@ -16,6 +16,8 @@ public sealed partial class Received
     private RoutingIdSnapshot _sendRoutingIdSnapshot;
     private ReceivedSendSingleHandler? _sendSingleHandler;
     private Message? _singlePart;
+    private ulong _transportPairGeneration;
+    private ulong _transportPairId;
 
     private Received()
     {

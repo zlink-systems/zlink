@@ -88,16 +88,20 @@ internal sealed partial class SocketKernel
 
     private bool ReceiveRoutedParts(int flags,
         out RoutingIdSnapshot routingId,
-        out ulong requestSeq, out Message? singlePart,
+        out ulong requestSeq, out ulong transportPairId,
+        out ulong transportPairGeneration, out Message? singlePart,
         out MultipartMessageCollection? parts,
         bool allowNoData = false)
     {
         routingId = default;
         requestSeq = 0;
+        transportPairId = 0;
+        transportPairGeneration = 0;
         singlePart = null;
         parts = null;
         if (_policy.UsesRouterRoutedReceiveEnvelope)
             return ReceiveRouterParts(flags, out routingId, out requestSeq,
+                out transportPairId, out transportPairGeneration,
                 out singlePart, out parts, allowNoData);
 
         var nativeParts = Array.Empty<ZlinkMsg>();
@@ -169,7 +173,8 @@ internal sealed partial class SocketKernel
 
     private bool ReceiveRouterParts(int flags,
         out RoutingIdSnapshot routingId,
-        out ulong requestSeq, out Message? singlePart,
+        out ulong requestSeq, out ulong transportPairId,
+        out ulong transportPairGeneration, out Message? singlePart,
         out MultipartMessageCollection? parts,
         bool allowNoData)
     {
@@ -177,6 +182,8 @@ internal sealed partial class SocketKernel
         var nativePartCount = 0;
         routingId = default;
         requestSeq = 0;
+        transportPairId = 0;
+        transportPairGeneration = 0;
         singlePart = null;
         parts = null;
         try
@@ -193,13 +200,19 @@ internal sealed partial class SocketKernel
                 {
                     IntPtr sourceNodeRid;
                     ulong receivedRequestSeq;
+                    ulong receivedTransportPairId;
+                    ulong receivedTransportPairGeneration;
                     int hasMore;
                     var rc = (flags & DontWaitFlag) != 0
-                        ? NativeMethods.zlink_router_recv_part_nowait(Handle,
+                        ? NativeMethods.zlink_router_recv_part_v2_nowait(Handle,
                             out sourceNodeRid, out receivedRequestSeq,
+                            out receivedTransportPairId,
+                            out receivedTransportPairGeneration,
                             ref part, out hasMore, flags)
-                        : NativeMethods.zlink_router_recv_part(Handle,
+                        : NativeMethods.zlink_router_recv_part_v2(Handle,
                             out sourceNodeRid, out receivedRequestSeq,
+                            out receivedTransportPairId,
+                            out receivedTransportPairGeneration,
                             ref part, out hasMore, flags);
                     if (rc != 0)
                     {
@@ -216,6 +229,9 @@ internal sealed partial class SocketKernel
                     {
                         routingId = RoutingIdSnapshot.FromPointer(sourceNodeRid);
                         requestSeq = receivedRequestSeq;
+                        transportPairId = receivedTransportPairId;
+                        transportPairGeneration =
+                            receivedTransportPairGeneration;
                     }
 
                     if (hasMore == 0 && nativePartCount == 0)
@@ -244,6 +260,12 @@ internal sealed partial class SocketKernel
 
             parts = MultipartMessageCollection.FromNativeParts(nativeParts,
                 nativePartCount);
+            // Core 0.14.6 does not export the staged multipart pair through
+            // recv_part_v2. Its thread-local fallback can be zero or belong
+            // to another receive, so the public exact-or-zero contract must
+            // not expose that value as an exact source identity.
+            transportPairId = 0;
+            transportPairGeneration = 0;
             return true;
         }
         catch

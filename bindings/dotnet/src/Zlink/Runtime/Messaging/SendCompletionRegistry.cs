@@ -60,7 +60,8 @@ internal sealed class SendCompletionRegistry
     ///     completed by the Core completion callback.
     /// </summary>
     internal unsafe Task SendAsync(RoutingId? routerRoutingId,
-        IReadOnlyList<Message> parts, CancellationToken cancellationToken)
+        IReadOnlyList<Message> parts, CancellationToken cancellationToken,
+        ulong transportPairId = 0, ulong transportPairGeneration = 0)
     {
         RequestReplySupport.EnsureParts(parts, nameof(parts));
         if (_socketType == SocketType.Stream && parts.Count != 1)
@@ -76,7 +77,10 @@ internal sealed class SendCompletionRegistry
         // before submit. DEALER passes NULL and Core commits one selection.
         var hasTarget = _socketType is SocketType.Router or SocketType.Stream;
         var target = hasTarget
-            ? SelectTarget(routerRoutingId)
+            ? SelectTarget(
+                routerRoutingId,
+                transportPairId,
+                transportPairGeneration)
             : default;
 
         Message[]? copied = null;
@@ -154,7 +158,8 @@ internal sealed class SendCompletionRegistry
     // state is passed to Core as userdata so an inline completion can resolve
     // it even before zlink_send_async returns.
     internal unsafe Task SendSingleAsync(RoutingId? routerRoutingId,
-        Message part, CancellationToken cancellationToken)
+        Message part, CancellationToken cancellationToken,
+        ulong transportPairId = 0, ulong transportPairGeneration = 0)
     {
         if (cancellationToken.IsCancellationRequested)
             return Task.FromCanceled(cancellationToken);
@@ -166,6 +171,11 @@ internal sealed class SendCompletionRegistry
             if (!routerRoutingId.HasValue)
                 throw new ArgumentNullException(nameof(routerRoutingId));
             target.PeerRoutingId = routerRoutingId.Value.ToNative();
+            if ((transportPairId == 0) != (transportPairGeneration == 0))
+                throw new ArgumentException(
+                    "A routed transport pair requires both id and generation.");
+            target.TransportPairId = transportPairId;
+            target.TransportPairGeneration = transportPairGeneration;
         }
         ZlinkMsg native = default;
         part.MoveTo(ref native);
@@ -262,8 +272,13 @@ internal sealed class SendCompletionRegistry
     }
 
     private unsafe ZlinkRoutedSubmitTarget SelectTarget(
-        RoutingId? routerRoutingId)
+        RoutingId? routerRoutingId,
+        ulong transportPairId = 0,
+        ulong transportPairGeneration = 0)
     {
+        if ((transportPairId == 0) != (transportPairGeneration == 0))
+            throw new ArgumentException(
+                "A routed transport pair requires both id and generation.");
         ZlinkRoutingId nativeRoutingId = default;
         var routingIdPointer = IntPtr.Zero;
         if (routerRoutingId.HasValue)
@@ -272,11 +287,22 @@ internal sealed class SendCompletionRegistry
             routingIdPointer = (IntPtr)(&nativeRoutingId);
         }
 
-        var rc = NativeMethods.zlink_select_routed_submit_target(_handle,
-            routingIdPointer, out var target);
-        if (rc != (int)SubmitResult.Ok)
-            throw ZlinkException.CreateSubmitException((SubmitResult)rc);
-        return target;
+        if (transportPairId == 0)
+        {
+            var rc = NativeMethods.zlink_select_routed_submit_target(_handle,
+                routingIdPointer, out var selected);
+            if (rc != (int)SubmitResult.Ok)
+                throw ZlinkException.CreateSubmitException((SubmitResult)rc);
+            return selected;
+        }
+        if (!routerRoutingId.HasValue)
+            throw new ArgumentNullException(nameof(routerRoutingId));
+        return new ZlinkRoutedSubmitTarget
+        {
+            PeerRoutingId = nativeRoutingId,
+            TransportPairId = transportPairId,
+            TransportPairGeneration = transportPairGeneration
+        };
     }
 
     private unsafe void OnNativeSendComplete(IntPtr subject,

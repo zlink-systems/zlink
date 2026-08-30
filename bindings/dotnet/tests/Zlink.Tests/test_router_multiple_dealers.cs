@@ -154,6 +154,154 @@ public sealed class test_router_multiple_dealers
     }
 
     [Fact]
+    public async Task received_send_async_does_not_reselect_after_same_rid_handover()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var ctx = Zlink.CreateContext();
+        using var router = ctx.CreateRouterSocket();
+        using var first = ctx.CreateDealerSocket();
+        using var replacement = ctx.CreateDealerSocket();
+
+        RoutingId sourceRid = CoreTestSupport.RoutingIdUtf8("same-source");
+        first.SetRoutingId(sourceRid);
+        replacement.SetRoutingId(sourceRid);
+        router.Options.Handover = true;
+        router.Options.ReceiveTimeout = TimeSpan.FromSeconds(2);
+        string endpoint = CoreTestSupport.NewEndpoint("inproc",
+            "received-send-exact-handover");
+        router.Bind(endpoint);
+        first.Connect(endpoint);
+        Thread.Sleep(100);
+
+        using Message firstPayload = Message.From("first");
+        await first.Send().Message(firstPayload).Async()
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        using var captured = Received.Create();
+        Assert.True(router.Recv(captured));
+        Assert.NotEqual(0UL, captured.TransportPairId);
+        Assert.NotEqual(0UL, captured.TransportPairGeneration);
+        RoutedSendOperation capturedSend = captured.Send();
+
+        replacement.Connect(endpoint);
+        Thread.Sleep(100);
+        using Message replacementPayload = Message.From("replacement");
+        await replacement.Send().Message(replacementPayload).Async()
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        using var replacementReceived = Received.Create();
+        Assert.True(router.Recv(replacementReceived));
+        Assert.Equal("replacement",
+            replacementReceived.SinglePartOrThrow().GetString());
+
+        // Reuse clears the mutable Received instance. The operation above must
+        // retain the source route snapshot captured before the handover.
+        Assert.False(router.Recv(captured, RecvFlags.DontWait));
+        using Message exactReply = Message.From("first-only");
+        var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(() =>
+            capturedSend.Message(exactReply).Async());
+        Assert.Equal(ZlinkSubmitException.ErrorCode.NotFound, failure.Result);
+
+        using var firstUnexpected = Received.Create();
+        Assert.False(first.Recv(firstUnexpected, RecvFlags.DontWait));
+        using var unexpected = Received.Create();
+        Assert.False(replacement.Recv(unexpected, RecvFlags.DontWait));
+    }
+
+    [Fact]
+    public async Task request_received_send_async_uses_captured_source_context()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var ctx = Zlink.CreateContext();
+        using var router = ctx.CreateRouterSocket();
+        using var dealer = ctx.CreateDealerSocket();
+        string endpoint = CoreTestSupport.NewEndpoint("inproc",
+            "request-received-send-source");
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+        Thread.Sleep(100);
+
+        using Message request = Message.From("request");
+        Task<IReadOnlyList<Message>> completion = dealer.Request()
+            .Message(request)
+            .Timeout(TimeSpan.FromSeconds(2))
+            .Async();
+        using var received = Received.Create();
+        Assert.True(router.Recv(received));
+        Assert.Equal(ReceivedMessageType.Request, received.MessageType);
+        Assert.NotEqual(0UL, received.TransportPairId);
+
+        using Message sideMessage = Message.From("source-send");
+        await received.Send().Message(sideMessage).Async()
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal("source-send",
+            CoreTestSupport.ReceiveUtf8WithTimeout(dealer, 2000));
+
+        using Message reply = Message.From("reply");
+        received.Reply().Message(reply).Submit();
+        IReadOnlyList<Message> response = await completion.WaitAsync(
+            TimeSpan.FromSeconds(2));
+        Assert.Equal("reply", Assert.Single(response).GetString());
+        Zlink.MultipartClose(response);
+    }
+
+    [Fact]
+    public async Task router_received_preserves_transport_pair_and_resets_on_reuse()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var ctx = Zlink.CreateContext();
+        using var router = ctx.CreateRouterSocket();
+        using var dealer = ctx.CreateDealerSocket();
+
+        dealer.SetRoutingId(CoreTestSupport.RoutingIdUtf8("pair-source"));
+        router.Options.ReceiveTimeout = TimeSpan.FromSeconds(2);
+        string endpoint = CoreTestSupport.NewEndpoint("inproc",
+            "router-received-transport-pair");
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+        Thread.Sleep(100);
+
+        using Message first = Message.From("first");
+        await dealer.Send().Message(first).Async()
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        using var received = Received.Create();
+        Assert.True(router.Recv(received));
+        Assert.Equal("first", received.SinglePartOrThrow().GetString());
+        Assert.NotEqual(0UL, received.TransportPairId);
+        Assert.NotEqual(0UL, received.TransportPairGeneration);
+
+        using Message next = Message.From("next");
+        await dealer.Send().Message(next).Async()
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(CoreTestSupport.WaitUntil(
+            () => router.Recv(received, RecvFlags.DontWait), 2000));
+        Assert.Equal("next", received.SinglePartOrThrow().GetString());
+        Assert.NotEqual(0UL, received.TransportPairId);
+        Assert.NotEqual(0UL, received.TransportPairGeneration);
+
+        using Message multipartHead = Message.From("multipart");
+        using Message multipartTail = Message.From("tail");
+        await dealer.Send().Message(multipartHead).Message(multipartTail).Async()
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(CoreTestSupport.WaitUntil(
+            () => router.Recv(received, RecvFlags.DontWait), 2000));
+        Assert.Collection(received.Parts,
+            part => Assert.Equal("multipart", part.GetString()),
+            part => Assert.Equal("tail", part.GetString()));
+        Assert.Equal(0UL, received.TransportPairId);
+        Assert.Equal(0UL, received.TransportPairGeneration);
+
+        Assert.False(router.Recv(received, RecvFlags.DontWait));
+        Assert.Equal(0UL, received.TransportPairId);
+        Assert.Equal(0UL, received.TransportPairGeneration);
+    }
+
+    [Fact]
     public async Task routed_direct_send_and_recv_part_roundtrip()
     {
         if (!CoreTestSupport.IsNativeAvailable())
