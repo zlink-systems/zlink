@@ -749,6 +749,12 @@ int zlink::socket_base_t::recv_common (
               msg_, source_rid_out_, connection_id_out_, pipe_out_);
         else
             rc = xrecv (msg_);
+        // Socket-specific readers may expose the pipe they attempted before
+        // discovering that no frame was available. The public helper only
+        // transfers a lifetime pin with a consumed frame, so never let a
+        // failure path look pinned to its caller.
+        if (rc != 0 && pipe_out_)
+            *pipe_out_ = NULL;
         bool pin_failed = false;
 #ifdef ZLINK_BUILD_TESTS
         if (rc == 0 && pin_pipe_out_ && pipe_out_ && *pipe_out_
@@ -879,6 +885,8 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
     const auto recv_once = [&] () -> int {
         const int rc = xrecv_routed (msg_, source_rid_out_, connection_id_out_,
                                      source_pipe_out_);
+        if (rc != 0 && source_pipe_out_)
+            *source_pipe_out_ = NULL;
         if (rc == 0 && source_pipe_out_ && *source_pipe_out_) {
             if (transport_pair_id_out_)
                 *transport_pair_id_out_ =
