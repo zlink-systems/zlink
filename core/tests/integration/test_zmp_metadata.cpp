@@ -87,6 +87,8 @@ recv_status_t recv_all (fd_t fd_, unsigned char *buf_, size_t size_)
         if (rc < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK)
                 return recv_timeout;
+            if (errno == ECONNRESET)
+                return recv_closed;
             return recv_error;
         }
 #endif
@@ -324,9 +326,10 @@ bool wait_for_raw_ready (fd_t fd_)
     return false;
 }
 
-bool wait_for_raw_close (fd_t fd_)
+bool wait_for_raw_close (fd_t fd_, bool timeout_is_set_ = false)
 {
-    set_recv_timeout (fd_, 100);
+    if (!timeout_is_set_)
+        set_recv_timeout (fd_, 100);
     for (size_t attempt = 0; attempt < 30; ++attempt) {
         unsigned char flags = 0;
         std::vector<unsigned char> body;
@@ -519,6 +522,8 @@ void assert_paired_handshake_not_dispatchable (
     fd_t completion = connect_socket (endpoint, AF_INET, IPPROTO_TCP);
     TEST_ASSERT_NOT_EQUAL (retired_fd, application);
     TEST_ASSERT_NOT_EQUAL (retired_fd, completion);
+    set_recv_timeout (application, 100);
+    set_recv_timeout (completion, 100);
     TEST_ASSERT_TRUE (send_paired_dealer_handshake (
       application, application_routing_id_, application_pair_id_,
       application_generation_, application_lane_));
@@ -528,8 +533,8 @@ void assert_paired_handshake_not_dispatchable (
 
     // Pair admission must reject mismatched handshake metadata before either
     // connection needs application traffic to populate mutable routing state.
-    TEST_ASSERT_TRUE (wait_for_raw_close (application));
-    TEST_ASSERT_TRUE (wait_for_raw_close (completion));
+    TEST_ASSERT_TRUE (wait_for_raw_close (application, true));
+    TEST_ASSERT_TRUE (wait_for_raw_close (completion, true));
 
     zlink_msg_t msg;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
