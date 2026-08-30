@@ -91,16 +91,13 @@ static const char kPerfPubsubTopic[] = "bench";
 
 struct connect_monitor_state_t
 {
-    connect_monitor_state_t () :
-        connection_ready_count (0), accepted_count (0), connected_count (0), error_code (0)
+    connect_monitor_state_t () : connection_ready_count (0), error_code (0)
     {
     }
 
     std::mutex sync;
     std::condition_variable cv;
     size_t connection_ready_count;
-    size_t accepted_count;
-    size_t connected_count;
     int error_code;
 };
 
@@ -409,14 +406,6 @@ void perf_like_connect_monitor_handler (const zlink_monitor_event_t *event_, voi
                 ++state->connection_ready_count;
                 break;
 
-            case ZLINK_EVENT_ACCEPTED:
-                ++state->accepted_count;
-                break;
-
-            case ZLINK_EVENT_CONNECTED:
-                ++state->connected_count;
-                break;
-
             case ZLINK_EVENT_BIND_FAILED:
             case ZLINK_EVENT_ACCEPT_FAILED:
             case ZLINK_EVENT_CLOSE_FAILED:
@@ -440,8 +429,7 @@ size_t connect_ready_count (const connect_monitor_state_t *state_)
 {
     if (!state_)
         return 0;
-    return std::max (std::max (state_->connection_ready_count, state_->accepted_count),
-                     state_->connected_count);
+    return state_->connection_ready_count;
 }
 
 bool open_perf_like_connect_monitor (void *socket_, connect_monitor_t *out_)
@@ -455,8 +443,8 @@ bool open_perf_like_connect_monitor (void *socket_, connect_monitor_t *out_)
 
     zlink_socket_monitor_open_options_t opts;
     memset (&opts, 0, sizeof (opts));
-    opts.events = ZLINK_EVENT_CONNECTION_READY | ZLINK_EVENT_CONNECTED | ZLINK_EVENT_ACCEPTED
-                  | ZLINK_EVENT_BIND_FAILED | ZLINK_EVENT_ACCEPT_FAILED | ZLINK_EVENT_CLOSE_FAILED
+    opts.events = ZLINK_EVENT_CONNECTION_READY | ZLINK_EVENT_BIND_FAILED
+                  | ZLINK_EVENT_ACCEPT_FAILED | ZLINK_EVENT_CLOSE_FAILED
                   | ZLINK_EVENT_HANDSHAKE_FAILED_NO_DETAIL | ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL
                   | ZLINK_EVENT_HANDSHAKE_FAILED_AUTH;
     void *monitor = zlink_socket_monitor_open (socket_, &opts);
