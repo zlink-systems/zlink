@@ -28,15 +28,11 @@ internal sealed class ZLinkMeshPeer(
     internal IReadOnlyDictionary<string, uint> Channels { get; set; } =
         new Dictionary<string, uint>(StringComparer.Ordinal);
     internal ZLinkServiceWireCodec.AdmissionRecord? Admission { get; set; }
-    // A native request reply token is scoped to the transport that delivered
-    // its request. A replacement inbound Hello retires the prior epoch before
-    // its late disconnect monitor event can be processed.
+    // Native request reply tokens are scoped to the exact paired transport
+    // that delivered the request. The logical RID can survive a ROUTER
+    // handover, so it is not a physical-connection fence.
+    internal ZLinkTransportPairIdentity TransportPair { get; set; }
     internal ZLinkNativeReplyPeerEpoch NativeReplyEpoch { get; set; } = new();
-    // The public monitor event does not expose Core's physical connection
-    // identity. After a replacement Hello, one subsequently observed close
-    // can therefore belong to the retired transport even if it is delivered
-    // after the new Hello. Do not let that ambiguous close kill the new epoch.
-    internal bool NativeReplyEpochHasRetiredDisconnect { get; set; }
     internal MeshPeerState State { get; set; } = MeshPeerState.Configured;
     internal bool Admitted { get; set; }
     internal ZLinkServiceLiveness? Liveness { get; set; }
@@ -63,11 +59,35 @@ internal sealed class ZLinkMeshPeer(
         };
 }
 
+internal readonly record struct ZLinkTransportPairIdentity(
+    ulong Id,
+    ulong Generation)
+{
+    internal bool IsValid => Id != 0 && Generation != 0;
+}
+
 internal sealed class ZLinkNativeReplyPeerEpoch
 {
     private int _invalidated;
 
+    internal ZLinkNativeReplyPeerEpoch(
+        ZLinkTransportPairIdentity transportPair = default)
+    {
+        TransportPair = transportPair;
+    }
+
+    internal ZLinkTransportPairIdentity TransportPair { get; private set; }
     internal bool IsValid => Volatile.Read(ref _invalidated) == 0;
+
+    internal bool TryAttach(ZLinkTransportPairIdentity transportPair)
+    {
+        if (!transportPair.IsValid)
+            return false;
+        if (TransportPair.IsValid)
+            return TransportPair == transportPair;
+        TransportPair = transportPair;
+        return true;
+    }
 
     internal void Invalidate() => Interlocked.Exchange(ref _invalidated, 1);
 }
