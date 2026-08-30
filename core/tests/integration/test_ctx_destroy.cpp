@@ -602,6 +602,73 @@ void test_engine_less_session_releases_socket_term_ack_with_pending_message ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx_handle));
 }
 
+void test_terminating_lane_cannot_complete_delayed_pair_admission ()
+{
+    void *ctx_handle = zlink_ctx_new ();
+    TEST_ASSERT_NOT_NULL (ctx_handle);
+    void *socket_handle = zlink_socket (ctx_handle, ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_NOT_NULL (socket_handle);
+
+    socket_handle_t public_handle = as_socket_handle (socket_handle);
+    zlink::socket_base_t *socket = public_handle.socket;
+    public_handle = socket_handle_t ();
+
+    zlink::object_t *parents[2] = {socket, socket};
+    zlink::pipe_t *application[2] = {NULL, NULL};
+    zlink::pipe_t *completion[2] = {NULL, NULL};
+    const uint64_t hwms[2] = {1, 1};
+    const bool conflates[2] = {false, false};
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, application, hwms, conflates, true,
+                       zlink::transport_lane_application));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, completion, hwms, conflates, true,
+                       zlink::transport_lane_completion));
+
+    const uint64_t pair_id = 1;
+    const uint64_t generation = 1;
+    application[0]->set_transport_pair (
+      zlink::transport_lane_application, pair_id, generation);
+    application[1]->set_transport_pair (
+      zlink::transport_lane_application, pair_id, generation);
+    completion[0]->set_transport_pair (
+      zlink::transport_lane_completion, pair_id, generation);
+    completion[1]->set_transport_pair (
+      zlink::transport_lane_completion, pair_id, generation);
+    const unsigned char peer_identity = 0x2a;
+    application[0]->set_transport_peer_identity (&peer_identity, 1);
+    completion[0]->set_transport_peer_identity (&peer_identity, 1);
+    application[0]->hold_writes_until_transport_pair_ready ();
+
+    passive_pipe_sink_t application_peer_sink;
+    passive_pipe_sink_t completion_peer_sink;
+    application[1]->set_event_sink (&application_peer_sink);
+    completion[1]->set_event_sink (&completion_peer_sink);
+
+    zlink::session_termination_test_access_t::attach_socket_pipe (
+      socket, application[0]);
+    application[0]->terminate (false);
+    TEST_ASSERT_FALSE (application[0]->active_for_reply_target ());
+    TEST_ASSERT_FALSE (application[0]->has_completed_termination ());
+
+    // The Completion bind was already queued when Application termination
+    // started. Object lifetime alone must not let the delayed bind publish a
+    // Ready pair backed by the inactive Application lane.
+    zlink::session_termination_test_access_t::attach_socket_pipe (
+      socket, completion[0]);
+    TEST_ASSERT_FALSE (
+      socket->transport_pair_application_ready (application[0]));
+
+    zlink::session_termination_test_access_t::process_socket_commands (socket);
+    TEST_ASSERT_EQUAL_INT (1, application_peer_sink.completion_count);
+    TEST_ASSERT_EQUAL_INT (1, completion_peer_sink.completion_count);
+    TEST_ASSERT_TRUE (zlink::session_termination_test_access_t::
+                        attached_pipe_connection_ids_are_live (socket, 0));
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_close (socket_handle));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx_handle));
+}
+
 void test_reciprocal_pipe_ack_is_queued_before_local_completion ()
 {
     void *ctx_handle = zlink_ctx_new ();
@@ -1091,6 +1158,7 @@ int main (void)
     RUN_TEST (test_ctx_term_rearms_reaper_when_last_socket_closes_during_restart);
     RUN_TEST (test_pending_inproc_disconnect_releases_socket_before_context_term);
     RUN_TEST (test_engine_less_session_releases_socket_term_ack_with_pending_message);
+    RUN_TEST (test_terminating_lane_cannot_complete_delayed_pair_admission);
     RUN_TEST (test_reciprocal_pipe_ack_is_queued_before_local_completion);
     RUN_TEST (test_concurrent_pipe_acks_detach_pair_once);
     RUN_TEST (test_retained_peer_snapshot_outlives_concurrent_pipe_acks);
