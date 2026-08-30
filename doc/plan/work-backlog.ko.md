@@ -18,8 +18,8 @@
 
 | # | 트랙 | 선행 | 내용 |
 |---|---|---|---|
-| B1 | 과잉 검증 일괄 제거 라운드 | — | **node 완료** `b38b0fd66e`(4곳 제거, 1곳 [의심] 이월) · **dotnet(22)·java(10계열)·cpp(14) 진행 중**(sol medium ×3). 각 언어 게이트+ZW 재실증 |
-| B2 | cpp 7번째 wait 재설계 | A1 | B-2 fence가 자리 잡으면 warm materialization 재검증의 존치/이관 재판정(send 7→6 가능성) — 단독 판단 금지, fence 설계와 함께 |
+| ~~B1~~ | ~~과잉 검증 일괄 제거~~ | **완료** | node `b38b0fd66e`(4) · java `3f4fb099ba`(10계열) · cpp `4a26163ff9`(14 — C4 정산 복원 재구현) · dotnet `4c8036a494`(21 — 초과 변경 3건 이분 수정). 합계 ~49곳 제거, 전 언어 게이트+ZW 재실증 그린 |
+| B2 | cpp 7번째 wait 재판정 | **진행 중**(sol medium) | B-2 fence가 자리 잡으면 warm materialization 재검증의 존치/이관 재판정(send 7→6 가능성) — 단독 판단 금지, fence 설계와 함께 |
 | B3 | 감사 [의심] 미분류 정리 | A4·B1 | dotnet 386곳·cpp 662곳 콜드/핫 정밀 분류(선택적 — B1이 상당 부분 흡수 예상) |
 | B4 | java Message Follow fallback 부재 | 판정 필요 | A2 발견[H]: java 프로덕션은 소스측 relocation 이후 전달을 forward+retention 타이머에만 의존(MF API는 테스트 전용) — dotnet(_sourceHoldFrames+MF 전환)과 **언어 발산**. 발산→스펙 상세화 규율 대상 |
 | B5 | java enqueueRemoteActor 기타 실패 묵살 | A2 후 | A2 발견[M]: relocation 외 dispatch 실패(capacity·admission closed·Spot closed)는 여전히 반환 stage 묵살 — 별개 결함, terminal 보고 경로 필요 |
