@@ -364,7 +364,12 @@ bool zlink::asio_zmp_engine_t::handshake ()
         session ()->set_peer_routing_id (_peer_routing_id, _peer_routing_id_size);
     }
 
-    if (_options.recv_routing_id) {
+    // ROUTER's synthetic peer-identity frame belongs to the Application
+    // stream. A paired Completion lane already carries the peer identity as
+    // pipe metadata; injecting the frame there makes the completion parser
+    // treat it as a malformed reply and tear down an otherwise ready pair.
+    if (_options.recv_routing_id
+        && _options.transport_lane == transport_lane_application) {
         msg_t routing_id;
         const int rc = routing_id.init_size (_peer_routing_id_size);
         errno_assert (rc == 0);
