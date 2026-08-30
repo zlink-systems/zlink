@@ -59,7 +59,7 @@ int zlink::socket_base_t::socket_msg_dispatch_from_io (msg_t *msg_, pipe_t *pipe
             // wins. Recheck liveness under the same dispatch-order fence used
             // by deferred assembly teardown so a late frame cannot recreate
             // state after that teardown.
-            if (pipe_ && !pipe_->active_for_reply_target ())
+            if (pipe_ && !pipe_->is_lifecycle_active ())
                 rc = 1;
             else {
                 socket_msg_dispatch_context_t context (NULL, pipe_, NULL, NULL);
@@ -163,7 +163,7 @@ int zlink::socket_base_t::peer_command_from_io (msg_t *msg_, pipe_t *pipe_)
         return 1;
     std::lock_guard<std::recursive_mutex> dispatch_lock (
       dispatch_runtime ().socket_msg_dispatch_sync);
-    if (socket_pipe && !socket_pipe->active_for_reply_target ()) {
+    if (socket_pipe && !socket_pipe->is_lifecycle_active ()) {
         socket_pipe->release_lifetime_ref ();
         return 1;
     }
@@ -359,12 +359,11 @@ void zlink::socket_base_t::invoke_socket_msg_handler (zlink_socket_msg_handler_f
         }
         return;
     }
-    // Socket-message handlers are a public raw receive boundary. Request/reply
-    // metadata remains Core-internal even when the first application frame is
-    // otherwise valid raw payload.
-    for (size_t i = 0; i < part_count_; ++i)
-        reinterpret_cast<msg_t *> (&parts_[i])
-          ->reset_request_reply_metadata ();
+    // Socket-message handlers are a public raw receive boundary. Their
+    // assemblers reject request/reply metadata on continuation frames, so
+    // sanitize only the first application frame that can carry it.
+    if (part_count_ != 0)
+        reinterpret_cast<msg_t *> (&parts_[0])->reset_request_reply_metadata ();
     socket_msg_dispatch_context_t context (this, socket_msg_dispatch_context_t::current_pipe (),
                                            socket_msg_handler_subject (), source_rid_);
     handler_ (source_rid_, parts_, part_count_, socket_msg_handler_userdata ());

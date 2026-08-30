@@ -648,7 +648,7 @@ void test_terminating_lane_cannot_complete_delayed_pair_admission ()
     zlink::session_termination_test_access_t::attach_socket_pipe (
       socket, application[0]);
     application[0]->terminate (false);
-    TEST_ASSERT_FALSE (application[0]->active_for_reply_target ());
+    TEST_ASSERT_FALSE (application[0]->is_lifecycle_active ());
     TEST_ASSERT_FALSE (application[0]->has_completed_termination ());
 
     // The Completion bind was already queued when Application termination

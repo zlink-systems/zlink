@@ -459,7 +459,7 @@ bool zlink::pipe_t::has_completed_termination () const
     return _lifetime.terminal ();
 }
 
-bool zlink::pipe_t::active_for_reply_target () const
+bool zlink::pipe_t::is_lifecycle_active () const
 {
     scoped_fast_lock_t lock (_out_sync);
     return _state == active;

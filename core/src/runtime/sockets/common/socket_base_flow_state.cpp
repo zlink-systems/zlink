@@ -225,7 +225,7 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
         // Recheck liveness while holding it before operator[] can create a
         // pre-attach record; if termination starts afterwards, its cleanup is
         // ordered after this update and removes the record again.
-        if (!completion_pipe_->active_for_reply_target ())
+        if (!completion_pipe_->is_lifecycle_active ())
             return true;
         //  The transport I/O thread can decode the frame before this socket's
         //  mailbox has admitted the same physical connection. Create the pair

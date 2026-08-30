@@ -186,7 +186,7 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     // A bind command retains the pipe until dispatch, but termination can
     // already have made it unusable before that command reaches the socket.
     // Keep such a delayed bind out of both the socket and pair admission.
-    if (!pipe_->active_for_reply_target ())
+    if (!pipe_->is_lifecycle_active ())
         return;
     const bool already_attached = endpoint_runtime ().attached_pipes.contains (pipe_);
     if (!already_attached) {
@@ -237,8 +237,8 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
                 // is queued. A retained object is still alive, but it is not
                 // an admissible transport; never publish a pair assembled
                 // from an inactive lane.
-                if (!pair.application->active_for_reply_target ()
-                    || !pair.completion->active_for_reply_target ()
+                if (!pair.application->is_lifecycle_active ()
+                    || !pair.completion->is_lifecycle_active ()
                     || !same_pair_peer_identity (pair.application,
                                                  pair.completion)) {
                     reject_pipes[0] = pipe_;

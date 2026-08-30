@@ -435,7 +435,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     void release_inbound_read_ref ();
     //  A request/reply target may be published only while the application
     //  pipe is still active. Callers hold a lifetime ref while checking this.
-    bool active_for_reply_target () const;
+    bool is_lifecycle_active () const;
 
   private:
     friend class ctx_physical_queue_registry_t;

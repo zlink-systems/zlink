@@ -3,7 +3,7 @@
 #include "utils/precompiled.hpp"
 
 #include <stddef.h>
-#include "core/poller.hpp"
+#include "core/socket_poller.hpp"
 #include "sockets/proxy/proxy.hpp"
 #include "utils/likely.hpp"
 #include "core/msg.hpp"
@@ -54,10 +54,6 @@ void zlink::test_reset_proxy_state ()
 }
 #endif
 
-#ifdef ZLINK_HAVE_POLLER
-
-#include "core/socket_poller.hpp"
-
 //  Macros for repetitive code.
 
 //  PROXY_CLEANUP() must not be used before these variables are initialized.
@@ -80,8 +76,6 @@ void zlink::test_reset_proxy_state ()
             return close_and_return (&msg, -1);                                                    \
         }                                                                                          \
     } while (false)
-
-#endif //  ZLINK_HAVE_POLLER
 
 static int capture (class zlink::socket_base_t *capture_, zlink::msg_t *msg_, int more_ = 0)
 {
@@ -263,7 +257,6 @@ static int forward (class zlink::socket_base_t *from_,
     return 0;
 }
 
-#ifdef ZLINK_HAVE_POLLER
 int zlink::proxy (class socket_base_t *frontend_,
                   class socket_base_t *backend_,
                   class socket_base_t *capture_)
@@ -496,57 +489,3 @@ int zlink::proxy (class socket_base_t *frontend_,
         }
     }
 }
-
-#else //  ZLINK_HAVE_POLLER
-
-int zlink::proxy (class socket_base_t *frontend_,
-                  class socket_base_t *backend_,
-                  class socket_base_t *capture_)
-{
-    msg_t msg;
-    int rc = msg.init ();
-    if (rc != 0)
-        return -1;
-
-    //  The algorithm below assumes ratio of requests and replies processed
-    //  under full load to be 1:1.
-
-    zlink_pollitem_t items[] = {{frontend_, 0, ZLINK_POLLIN, 0},
-                                {backend_, 0, ZLINK_POLLIN, 0}};
-
-    zlink_pollitem_t itemsout[] = {{frontend_, 0, ZLINK_POLLOUT, 0},
-                                   {backend_, 0, ZLINK_POLLOUT, 0}};
-
-    while (true) {
-        //  Wait while there are either requests or replies to process.
-        rc = zlink_poll (&items[0], 2, -1, NULL);
-        if (unlikely (rc < 0))
-            return close_and_return (&msg, -1);
-
-        //  Get the pollout separately because when combining this with pollin it maxes the CPU
-        //  because pollout shall most of the time return directly.
-        //  POLLOUT is only checked when frontend and backend sockets are not the same.
-        if (frontend_ != backend_) {
-            rc = zlink_poll (&itemsout[0], 2, 0, NULL);
-            if (unlikely (rc < 0)) {
-                return close_and_return (&msg, -1);
-            }
-        }
-
-        if (items[0].revents & ZLINK_POLLIN
-            && (frontend_ == backend_ || itemsout[1].revents & ZLINK_POLLOUT)) {
-            rc = forward (frontend_, backend_, capture_, &msg);
-            if (unlikely (rc < 0))
-                return close_and_return (&msg, -1);
-        }
-        //  Process a reply
-        if (frontend_ != backend_ && items[1].revents & ZLINK_POLLIN
-            && itemsout[0].revents & ZLINK_POLLOUT) {
-            rc = forward (backend_, frontend_, capture_, &msg);
-            if (unlikely (rc < 0))
-                return close_and_return (&msg, -1);
-        }
-    }
-}
-
-#endif //  ZLINK_HAVE_POLLER

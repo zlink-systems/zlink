@@ -9,10 +9,6 @@
 #include "utils/err.hpp"
 #include "core/msg.hpp"
 
-namespace
-{
-}
-
 zlink::dealer_t::dealer_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     socket_base_t (parent_, tid_, sid_),
     _probe_router (false),
