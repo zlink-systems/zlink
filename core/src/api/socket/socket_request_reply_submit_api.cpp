@@ -654,11 +654,12 @@ zlink_submit_result_t zlink_router_reply_part (void *router_,
     zlink_msg_t *first_payload = state->send.buffered_parts.empty ()
                                   ? part_
                                   : &state->send.buffered_parts[0];
-    if (message_has_group (first_payload)
+    const bool first_payload_has_group = message_has_group (first_payload);
+    if (first_payload_has_group
         || attach_request_reply_metadata (
              first_payload, zlink::request_reply::reply_type, request_seq_)
              != 0) {
-        const int saved_errno = message_has_group (first_payload) ? EINVAL : errno;
+        const int saved_errno = first_payload_has_group ? EINVAL : errno;
         zlink::part_helper_internal::abort_send_step (state);
         zlink::part_helper_internal::consume_send_part (part_);
         errno = saved_errno;

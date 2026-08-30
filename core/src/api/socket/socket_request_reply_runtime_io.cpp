@@ -928,7 +928,10 @@ int recv_router_message_direct (const socket_handle_t &handle_,
         }
     }
 
-    metadata.source_rid = *source_rid;
+    // The ordinary receive path already writes directly into the TLS slot.
+    // Copy only when the zero-copy terminal path supplied separate storage.
+    if (source_rid != &metadata.source_rid)
+        metadata.source_rid = *source_rid;
     *source_node_rid_out_ = terminal_source_storage_ && !first_has_more
                               ? source_rid
                               : &metadata.source_rid;

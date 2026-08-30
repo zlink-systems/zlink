@@ -113,6 +113,10 @@ completion_message_result_t complete_reply_from_transport (
         zlink_assert (callback_begin <= part_count_);
         zlink_assert (callback_end <= part_count_);
     }
+    // A normal reply transfers every part to the callback. Avoid walking the
+    // whole multipart only to skip every element on the steady-state path.
+    if (callback_begin == 0 && callback_end == part_count_)
+        return completion_message_accepted;
     for (size_t i = 0; i < part_count_; ++i) {
         if (i >= callback_begin && i < callback_end)
             continue;
