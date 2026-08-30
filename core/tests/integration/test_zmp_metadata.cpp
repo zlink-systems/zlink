@@ -7,6 +7,7 @@
 #include "protocol/zmp_metadata.hpp"
 #include "protocol/zmp_protocol.hpp"
 #include "api/message/request_result_internal.hpp"
+#include "api/socket/socket_api_internal.hpp"
 #include "api/socket/request_reply_protocol_internal.hpp"
 
 #include <algorithm>
@@ -322,6 +323,31 @@ bool wait_for_raw_ready (fd_t fd_)
         if ((flags & zlink::zmp_flag_control) != 0 && !body.empty ()
             && body[0] == zlink::zmp_control_ready)
             return true;
+    }
+    return false;
+}
+
+bool wait_for_transport_pair_admission (void *socket_,
+                                        uint64_t pair_id_,
+                                        uint64_t generation_)
+{
+    socket_handle_t handle = as_socket_handle (socket_);
+    if (!handle.socket)
+        return false;
+
+    // Receiving both wire READY frames does not imply that the socket thread
+    // has applied their pair-admission commands yet. A snapshot drains those
+    // commands before the exact generation is inspected.
+    const int poll_step_ms = 5;
+    const int poll_attempts = 5000 / poll_step_ms;
+    for (int attempt = 0; attempt <= poll_attempts; ++attempt) {
+        zlink_monitor_status_t snapshot;
+        if (handle.socket->monitor_snapshot (&snapshot) != 0)
+            return false;
+        if (handle.socket->test_pair_is_ready (pair_id_, generation_))
+            return true;
+        if (attempt != poll_attempts)
+            msleep (poll_step_ms);
     }
     return false;
 }
@@ -718,6 +744,8 @@ void test_raw_wire_sendsend_and_reqrep_match_multipart_frame_count ()
       completion, "raw-router", 901, 1, 1, ZLINK_CORE_SOCKET_ROUTER));
     TEST_ASSERT_TRUE (wait_for_raw_ready (application));
     TEST_ASSERT_TRUE (wait_for_raw_ready (completion));
+    TEST_ASSERT_TRUE (
+      wait_for_transport_pair_admission (dealer, 901, 1));
 
     static const unsigned char first_payload[] = {'f', 'i', 'r', 's', 't'};
     static const unsigned char second_payload[] = {'s', 'e', 'c', 'o', 'n', 'd'};
@@ -843,6 +871,8 @@ void test_raw_wire_public_router_reply_keeps_kind_and_sequence ()
       completion, "raw-dealer", 902, 1, 1, ZLINK_CORE_SOCKET_DEALER));
     TEST_ASSERT_TRUE (wait_for_raw_ready (application));
     TEST_ASSERT_TRUE (wait_for_raw_ready (completion));
+    TEST_ASSERT_TRUE (
+      wait_for_transport_pair_admission (router, 902, 1));
 
     static const unsigned char request_payload[] = {'a', 's', 'k'};
     const uint64_t request_sequence = UINT64_C (0x0102030405060708);
@@ -1236,6 +1266,8 @@ void test_stale_completion_lane_cannot_complete_reconnected_request ()
         old_completion, peer_name, 73, 1, 1, ZLINK_SOCKET_ROUTER));
     TEST_ASSERT_TRUE (wait_for_raw_ready (old_application));
     TEST_ASSERT_TRUE (wait_for_raw_ready (old_completion));
+    TEST_ASSERT_TRUE (
+      wait_for_transport_pair_admission (server, 73, 1));
 
     zlink_msg_t first_request;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&first_request, 1));
@@ -1262,6 +1294,8 @@ void test_stale_completion_lane_cannot_complete_reconnected_request ()
         new_completion, peer_name, 73, 2, 1, ZLINK_SOCKET_ROUTER));
     TEST_ASSERT_TRUE (wait_for_raw_ready (new_application));
     TEST_ASSERT_TRUE (wait_for_raw_ready (new_completion));
+    TEST_ASSERT_TRUE (
+      wait_for_transport_pair_admission (server, 73, 2));
 
     zlink_msg_t second_request;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&second_request, 1));
@@ -1315,6 +1349,8 @@ void test_completion_lane_rejects_data_and_request_kinds_without_completing_them
           ZLINK_CORE_SOCKET_ROUTER));
         TEST_ASSERT_TRUE (wait_for_raw_ready (application));
         TEST_ASSERT_TRUE (wait_for_raw_ready (completion));
+        TEST_ASSERT_TRUE (wait_for_transport_pair_admission (
+          server, 950 + kind_index, 1));
 
         zlink_msg_t request;
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&request, 1));
@@ -1374,6 +1410,8 @@ void run_raw_error_reply_case (uint64_t pair_id_,
       ZLINK_CORE_SOCKET_ROUTER));
     TEST_ASSERT_TRUE (wait_for_raw_ready (application));
     TEST_ASSERT_TRUE (wait_for_raw_ready (completion));
+    TEST_ASSERT_TRUE (
+      wait_for_transport_pair_admission (server, pair_id_, 1));
 
     zlink_msg_t request;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&request, 1));
