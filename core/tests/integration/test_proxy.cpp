@@ -60,12 +60,16 @@ void *g_clients_pkts_out = NULL;
 void *g_workers_pkts_out = NULL;
 void *control_context = NULL;
 bool g_test_context_active = false;
+std::atomic<bool> g_server_endpoints_ready (false);
+std::atomic<int> g_endpoint_clients_connected (0);
 std::atomic<int> g_clients_ready (0);
 
 void setUp ()
 {
     setup_test_context ();
     g_test_context_active = true;
+    g_server_endpoints_ready.store (false, std::memory_order_release);
+    g_endpoint_clients_connected.store (0, std::memory_order_release);
     g_clients_ready.store (0, std::memory_order_release);
     zlink::test_reset_proxy_state ();
 }
@@ -79,6 +83,8 @@ void tearDown ()
         teardown_test_context ();
         g_test_context_active = false;
     }
+    g_server_endpoints_ready.store (false, std::memory_order_release);
+    g_endpoint_clients_connected.store (0, std::memory_order_release);
     g_clients_ready.store (0, std::memory_order_release);
 }
 
@@ -199,9 +205,14 @@ static void client_task (void *db_)
     int linger = 0;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (endpoint, ZLINK_OPT_LINGER, &linger, sizeof (linger)));
+    const int endpoint_timeout = 10000;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (endpoint, ZLINK_OPT_RCVTIMEO, &endpoint_timeout,
+                        sizeof (endpoint_timeout)));
     char endpoint_source[256];
     snprintf (endpoint_source, 256 * sizeof (char), "inproc://endpoint%d", databag->id);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (endpoint, endpoint_source));
+    g_endpoint_clients_connected.fetch_add (1, std::memory_order_release);
     char *my_endpoint = s_recv (endpoint);
     TEST_ASSERT_NOT_NULL (my_endpoint);
 
@@ -320,7 +331,7 @@ void server_task (void * /*unused_*/)
 
     // Launch pool of worker threads, precise number is not critical
     int thread_nbr;
-    void *threads[5];
+    void *threads[QT_WORKERS];
     for (thread_nbr = 0; thread_nbr < QT_WORKERS; thread_nbr++)
         threads[thread_nbr] = zlink_thread_start (&server_worker, NULL);
 
@@ -332,9 +343,27 @@ void server_task (void * /*unused_*/)
         TEST_ASSERT_NOT_NULL (endpoint_receivers[i]);
         TEST_ASSERT_SUCCESS_ERRNO (
           zlink_set_option (endpoint_receivers[i], ZLINK_OPT_LINGER, &linger, sizeof (linger)));
+        const int endpoint_timeout = 10000;
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_option (endpoint_receivers[i], ZLINK_OPT_SNDTIMEO,
+                            &endpoint_timeout, sizeof (endpoint_timeout)));
         snprintf (endpoint_source, 256 * sizeof (char), "inproc://endpoint%d", i);
         TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (endpoint_receivers[i], endpoint_source));
     }
+
+    // Publish the bound endpoint sockets before clients are launched. Clients
+    // then publish their completed inproc connects before this thread sends,
+    // so neither side depends on the one-second default socket timeout.
+    g_server_endpoints_ready.store (true, std::memory_order_release);
+    const std::chrono::steady_clock::time_point endpoint_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (10);
+    while (g_endpoint_clients_connected.load (std::memory_order_acquire)
+             != QT_CLIENTS
+           && std::chrono::steady_clock::now () < endpoint_deadline)
+        msleep (1);
+    TEST_ASSERT_EQUAL_INT (
+      QT_CLIENTS,
+      g_endpoint_clients_connected.load (std::memory_order_acquire));
 
     for (int i = 0; i < QT_CLIENTS; ++i) {
         send_string_expect_success (endpoint_receivers[i], my_endpoint, 0);
@@ -442,12 +471,21 @@ void test_proxy ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (control, "inproc://control"));
 
     void *threads[QT_CLIENTS + 1];
-    struct thread_data databags[QT_CLIENTS + 1];
+    struct thread_data databags[QT_CLIENTS];
+    threads[QT_CLIENTS] = zlink_thread_start (&server_task, NULL);
+
+    const std::chrono::steady_clock::time_point endpoints_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (10);
+    while (!g_server_endpoints_ready.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < endpoints_deadline)
+        msleep (1);
+    TEST_ASSERT_TRUE (
+      g_server_endpoints_ready.load (std::memory_order_acquire));
+
     for (int i = 0; i < QT_CLIENTS; i++) {
         databags[i].id = i;
         threads[i] = zlink_thread_start (&client_task, &databags[i]);
     }
-    threads[QT_CLIENTS] = zlink_thread_start (&server_task, NULL);
 
     const std::chrono::steady_clock::time_point ready_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (10);

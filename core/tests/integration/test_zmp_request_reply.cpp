@@ -3793,7 +3793,7 @@ void test_out_of_order_replies_match_original_request ()
     test_context_socket_close_zero_linger (server_router);
 }
 
-void test_extra_reply_is_dropped_after_first_completion ()
+void test_extra_reply_is_rejected_after_first_completion ()
 {
     void *server_router = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *client_router = test_context_socket (ZLINK_SOCKET_ROUTER);
@@ -3834,7 +3834,17 @@ void test_extra_reply_is_dropped_after_first_completion ()
     send_captured_reply (server_router, &handler_probe, "reply-first");
 
     TEST_ASSERT_TRUE (wait_for_reply_count (&reply_probe, 1));
-    send_captured_reply (server_router, &handler_probe, "reply-second");
+    zlink_msg_t extra_reply;
+    zlink_msg_init (&extra_reply);
+    init_string_part (&extra_reply, "reply-second");
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_NOT_CONNECTED,
+      zlink_router_reply (server_router, &handler_probe.peer_rid_value,
+                          handler_probe.request_seq, &extra_reply, 1));
+    TEST_ASSERT_EQUAL_INT (ENOTCONN, errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&extra_reply));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&extra_reply));
     msleep (SETTLE_TIME * 2);
 
     {
@@ -5380,60 +5390,64 @@ void test_dealer_reply_drains_queued_disconnect_before_target_checkout ()
     TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&request));
 
-    const socket_handle_t server_handle = as_socket_handle (server);
-    TEST_ASSERT_NOT_NULL (server_handle.socket);
-    const std::shared_ptr<
-      zlink::socket_reqrep_internal::socket_request_reply_state_t>
-      server_state = zlink::socket_reqrep_internal::find_request_reply_state (
-        server_handle);
-    TEST_ASSERT_NOT_NULL (server_state.get ());
-
-    // Disconnect queues pipe_term on the server. Let the server acknowledge
-    // it, then let the client queue the reciprocal pipe_term_ack. Do not touch
-    // the server mailbox again before the direct reply commit point.
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_disconnect (client, endpoint));
-    process_socket_commands_through_public_api (server);
-    process_socket_commands_through_public_api (client);
-
+    // Keep the white-box public-handle pin inside this inspection scope. Close
+    // requires its own pin to be the sole remaining public-handle owner.
     {
-        std::lock_guard<std::mutex> lock (server_state->mutex);
-        const std::unordered_map<
-          uint64_t,
-          zlink::socket_reqrep_internal::dealer_reply_target_t>::const_iterator
-          target = server_state->dealer_reply_targets.find (request_token);
-        TEST_ASSERT_TRUE (target != server_state->dealer_reply_targets.end ());
-        TEST_ASSERT_NOT_NULL (target->second.pipe);
-        TEST_ASSERT_FALSE (target->second.checked_out);
-        TEST_ASSERT_EQUAL_UINT64 (1, server_state->reply_target_slots);
-        TEST_ASSERT_EQUAL_UINT64 (0, server_state->reply_target_checkouts);
-    }
+        const socket_handle_t server_handle = as_socket_handle (server);
+        TEST_ASSERT_NOT_NULL (server_handle.socket);
+        const std::shared_ptr<
+          zlink::socket_reqrep_internal::socket_request_reply_state_t>
+          server_state = zlink::socket_reqrep_internal::find_request_reply_state (
+            server_handle);
+        TEST_ASSERT_NOT_NULL (server_state.get ());
 
-    uint64_t public_mailbox_drains_before = 0;
-    server_handle.socket->test_receive_owner_snapshot (
-      NULL, &public_mailbox_drains_before, NULL);
+        // Disconnect queues pipe_term on the server. Let the server acknowledge
+        // it, then let the client queue the reciprocal pipe_term_ack. Do not touch
+        // the server mailbox again before the direct reply commit point.
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_disconnect (client, endpoint));
+        process_socket_commands_through_public_api (server);
+        process_socket_commands_through_public_api (client);
 
-    zlink_msg_t reply;
-    init_string_part (&reply, "reply-after-queued-disconnect");
-    errno = 0;
-    const zlink_submit_result_t submit = zlink_dealer_reply_part (
-      server, request_token, &reply, ZLINK_PART_FINAL);
-    const int submit_errno = errno;
+        {
+            std::lock_guard<std::mutex> lock (server_state->mutex);
+            const std::unordered_map<
+              uint64_t,
+              zlink::socket_reqrep_internal::dealer_reply_target_t>::const_iterator
+              target = server_state->dealer_reply_targets.find (request_token);
+            TEST_ASSERT_TRUE (target != server_state->dealer_reply_targets.end ());
+            TEST_ASSERT_NOT_NULL (target->second.pipe);
+            TEST_ASSERT_FALSE (target->second.checked_out);
+            TEST_ASSERT_EQUAL_UINT64 (1, server_state->reply_target_slots);
+            TEST_ASSERT_EQUAL_UINT64 (0, server_state->reply_target_checkouts);
+        }
 
-    uint64_t public_mailbox_drains_after = 0;
-    server_handle.socket->test_receive_owner_snapshot (
-      NULL, &public_mailbox_drains_after, NULL);
-    TEST_ASSERT_TRUE (public_mailbox_drains_after
-                      > public_mailbox_drains_before);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_NOT_FOUND, submit);
-    TEST_ASSERT_EQUAL_INT (ENOENT, submit_errno);
-    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&reply));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&reply));
+        uint64_t public_mailbox_drains_before = 0;
+        server_handle.socket->test_receive_owner_snapshot (
+          NULL, &public_mailbox_drains_before, NULL);
 
-    {
-        std::lock_guard<std::mutex> lock (server_state->mutex);
-        TEST_ASSERT_TRUE (server_state->dealer_reply_targets.empty ());
-        TEST_ASSERT_EQUAL_UINT64 (0, server_state->reply_target_slots);
-        TEST_ASSERT_EQUAL_UINT64 (0, server_state->reply_target_checkouts);
+        zlink_msg_t reply;
+        init_string_part (&reply, "reply-after-queued-disconnect");
+        errno = 0;
+        const zlink_submit_result_t submit = zlink_dealer_reply_part (
+          server, request_token, &reply, ZLINK_PART_FINAL);
+        const int submit_errno = errno;
+
+        uint64_t public_mailbox_drains_after = 0;
+        server_handle.socket->test_receive_owner_snapshot (
+          NULL, &public_mailbox_drains_after, NULL);
+        TEST_ASSERT_TRUE (public_mailbox_drains_after
+                          > public_mailbox_drains_before);
+        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_NOT_FOUND, submit);
+        TEST_ASSERT_EQUAL_INT (ENOENT, submit_errno);
+        TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&reply));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&reply));
+
+        {
+            std::lock_guard<std::mutex> lock (server_state->mutex);
+            TEST_ASSERT_TRUE (server_state->dealer_reply_targets.empty ());
+            TEST_ASSERT_EQUAL_UINT64 (0, server_state->reply_target_slots);
+            TEST_ASSERT_EQUAL_UINT64 (0, server_state->reply_target_checkouts);
+        }
     }
 
     test_context_socket_close_zero_linger (client);
@@ -5657,7 +5671,7 @@ int main ()
     RUN_SELECTED (test_router_exact_request_to_dealer_completes_on_async_owner);
     RUN_SELECTED (test_multiple_in_flight_requests_complete_independently);
     RUN_SELECTED (test_out_of_order_replies_match_original_request);
-    RUN_SELECTED (test_extra_reply_is_dropped_after_first_completion);
+    RUN_SELECTED (test_extra_reply_is_rejected_after_first_completion);
     RUN_SELECTED (test_dealer_to_dealer_reply_routes_to_source_peer_and_closes);
     RUN_SELECTED (test_dealer_to_dealer_multipart_reply_preserves_large_first_part);
     RUN_SELECTED (test_dealer_multipart_request_preserves_pending_cookie);
