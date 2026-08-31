@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "DeliveryDispatch — 배차 시스템",
+    "subtitle": "고객·배송원 각자 STREAM · courier actor 배차",
+    "output": "14-delivery.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 5, "gapX": 70, "gapY": 96, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "CU", "type": "frontend", "label": "고객 client", "row": 0, "col": 0 },
+    { "id": "CG", "type": "backend", "label": "CustomerGateway", "sublabel": "customer actor", "row": 2, "col": 0 },
+    { "id": "D", "type": "external", "label": "Dispatch", "sublabel": "HTTP 접수 · 배차 worker", "row": 0, "col": 1 },
+    { "id": "T", "type": "external", "label": "Tracking", "sublabel": "상태 기록", "row": 2, "col": 1 },
+    { "id": "CN", "type": "backend", "label": "CourierActorNode ×2", "sublabel": "courier actor", "row": 1, "col": 2 },
+    { "id": "CS", "type": "external", "label": "CourierSession", "sublabel": "연결 종단", "row": 1, "col": 3 },
+    { "id": "CO", "type": "frontend", "label": "배송원 client", "row": 1, "col": 4 }
+  ],
+  "connections": [
+    { "from": "CU", "to": "D", "label": "HTTP 배송 생성", "variant": "default", "labelDy": -34 },
+    { "from": "CU", "to": "CG", "label": "STREAM 상태", "variant": "emphasis", "labelDy": 70 },
+    { "from": "D", "to": "T", "label": "상태 event", "variant": "default", "labelDy": 70 },
+    { "from": "T", "to": "CG", "label": "고객 알림", "variant": "default" },
+    { "from": "D", "to": "CN", "label": "제안 · 재배정", "variant": "default" },
+    { "from": "CS", "to": "CN", "label": "session bind", "variant": "dashed", "fromSide": "top", "toSide": "top" },
+    { "from": "CN", "to": "CS", "label": "bound session push", "variant": "default", "fromSide": "bottom", "toSide": "bottom" },
+    { "from": "CO", "to": "CS", "label": "STREAM", "variant": "emphasis" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "외부 경계 = 웹 기술",
+      "items": [
+        "고객: HTTP로 배송 생성(Dispatch), STREAM으로 상태 수신 — 고객 actor(CustomerGateway) ↔ 고객 client 양방향",
+        "배송원: CourierSession과 STREAM 연결 (양방향)"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "배차 · 알림",
+      "items": [
+        "Dispatch worker가 courier actor(CourierActorNode ×2)에 제안·재배정",
+        "CourierSession이 courier actor에 session bind(점선), actor는 bound session으로 push",
+        "상태 event는 Dispatch→Tracking→CustomerGateway로 흘러 고객에게 알림"
+      ]
+    }
+  ]
+}

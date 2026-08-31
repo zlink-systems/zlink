@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ShoppingMall — 무손실 event sourcing",
+    "subtitle": "OrderId owner Spot · 조율 계층 없이 순차 코드",
+    "output": "14-shoppingmall.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 4, "gapX": 100, "gapY": 96, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C", "type": "frontend", "label": "web client", "row": 1, "col": 0 },
+    { "id": "API", "type": "external", "label": "CommerceApi", "sublabel": "HTTP 종단 · 검증 · 조회", "row": 1, "col": 1 },
+    { "id": "SP", "type": "backend", "label": "OrderWorkflowSpot", "sublabel": "주문 하나당 하나", "row": 1, "col": 2 },
+    { "id": "ES", "type": "database", "label": "이벤트 스트림", "row": 0, "col": 3 },
+    { "id": "RS", "type": "database", "label": "조회 모델", "row": 2, "col": 3 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "OrderWorkflow node ×2", "wraps": ["SP"] }
+  ],
+  "connections": [
+    { "from": "C", "to": "API", "label": "주문 시작 · 조회", "variant": "default", "labelDy": -40 },
+    { "from": "API", "to": "SP", "label": "OrderId를 주소로 Spot 메시지", "variant": "emphasis", "labelDy": -48 },
+    { "from": "SP", "to": "ES", "label": "append · replay", "variant": "default" },
+    { "from": "SP", "to": "RS", "label": "갱신", "variant": "default" },
+    { "from": "API", "to": "RS", "label": "조회", "variant": "default", "fromSide": "bottom", "toSide": "left" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "owner Spot 처리",
+      "items": [
+        "web client → CommerceApi가 HTTP 종단·검증·조회",
+        "CommerceApi가 OrderId를 주소로 Spot 메시지 (emphasis) — 주문 하나당 OrderWorkflowSpot 하나",
+        "OrderWorkflow node는 ×2로 띄우고, 그 위에 주문별 Spot이 산다"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "event sourcing (CQRS)",
+      "items": [
+        "Spot이 이벤트 스트림에 append·replay, 조회 모델 갱신",
+        "CommerceApi는 조회 모델을 직접 조회 — 조율 계층 없이 순차 코드로 재시도·중단 안전"
+      ]
+    }
+  ]
+}

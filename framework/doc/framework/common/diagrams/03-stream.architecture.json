@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "stream — 외부 client 연결",
+    "subtitle": "연결 1개 = session 객체 1개, session이 actor로 relay",
+    "output": "03-stream.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 110, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C", "type": "frontend", "label": "client", "sublabel": "모바일·게임", "row": 0, "col": 0 },
+    { "id": "SE", "type": "external", "label": "session", "sublabel": "연결 1개=객체 1개", "row": 0, "col": 1 },
+    { "id": "A", "type": "backend", "label": "actor", "row": 0, "col": 2 }
+  ],
+  "connections": [
+    { "from": "C", "to": "SE", "variant": "default", "label": "연결·heartbeat" },
+    { "from": "SE", "to": "A", "variant": "default", "label": "packet relay" },
+    { "from": "A", "to": "SE", "variant": "dashed", "label": "push", "fromSide": "bottom", "toSide": "bottom" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "연결 지향 양방향 채널",
+      "items": [
+        "client는 session과 heartbeat로 관리되는 양방향 연결을 맺는다 — 연결 하나가 서버 측 session 객체 하나에 대응한다.",
+        "session은 들어온 메시지를 bind된 actor로 packet relay하고, actor가 보내는 push는 그 session을 통해 client로 나간다(점선)."
+      ]
+    }
+  ]
+}

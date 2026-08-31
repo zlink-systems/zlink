@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "L7 분배 — 요청 하나하나를 나눈다",
+    "subtitle": "client 요청을 L7 분배기(mesh sidecar / client-side LB)가 매 요청 server A·B·C로",
+    "output": "17-l7-distribute.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 110, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C2", "type": "frontend", "label": "client", "row": 1, "col": 0 },
+    { "id": "L7", "type": "external", "label": "L7 분배", "sublabel": "sidecar / LB", "row": 1, "col": 1 },
+    { "id": "A2", "type": "frontend", "label": "server A", "row": 0, "col": 2 },
+    { "id": "B2", "type": "frontend", "label": "server B", "row": 1, "col": 2 },
+    { "id": "D2", "type": "frontend", "label": "server C", "row": 2, "col": 2 }
+  ],
+  "connections": [
+    { "from": "C2", "to": "L7", "variant": "default", "label": "매 요청 분배" },
+    { "from": "L7", "to": "A2", "variant": "default", "label": "req" },
+    { "from": "L7", "to": "B2", "variant": "default", "label": "req" },
+    { "from": "L7", "to": "D2", "variant": "default", "label": "req" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "L7 분배기",
+      "items": [
+        "라벨 전문: \"L7 분배: mesh sidecar 또는 client-side LB\". 연결이 아니라 요청 하나하나를 보고 나눈다.",
+        "client 요청을 L7 분배기가 매 요청마다 server A·B·C로 나눈다 — mesh sidecar나 client-side LB가 이 역할을 한다."
+      ]
+    }
+  ]
+}

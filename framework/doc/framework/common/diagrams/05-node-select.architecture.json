@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "round-robin 분산 · 노드 추가 자동 반영",
+    "subtitle": "요청이 노드 A·B로 분산(요청 3은 다시 A) · 새 노드 C는 store row로 자동 반영",
+    "output": "05-node-select.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 2, "gapX": 150, "gapY": 78, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C", "type": "frontend", "label": "호출 노드", "sublabel": "channel client", "row": 1, "col": 0 },
+    { "id": "A", "type": "backend", "label": "처리 노드 A", "sublabel": ":5600", "row": 0, "col": 1 },
+    { "id": "B", "type": "backend", "label": "처리 노드 B", "sublabel": ":5601", "row": 1, "col": 1 },
+    { "id": "D", "type": "backend", "label": "처리 노드 C", "sublabel": ":5602", "row": 2, "col": 1 }
+  ],
+  "connections": [
+    { "from": "C", "to": "A", "label": "요청 1", "variant": "default" },
+    { "from": "C", "to": "A", "label": "요청 3 (다시 A)", "variant": "default", "fromSide": "top", "toSide": "left" },
+    { "from": "C", "to": "B", "label": "요청 2", "variant": "default" },
+    { "from": "C", "to": "D", "label": "노드 추가 → store row 자동", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "round-robin과 자동 반영",
+      "items": [
+        "연결된 서버 weight가 같으면 새 요청은 균등하게 round-robin으로 분배된다 — 요청 1 → A, 요청 2 → B, 요청 3 → 다시 A.",
+        "새 노드 C(:5602)를 추가하면 location store의 descriptor row로 자동 반영되어, 호출자를 다시 시작하지 않아도 후보에 들어온다(점선)."
+      ]
+    }
+  ]
+}

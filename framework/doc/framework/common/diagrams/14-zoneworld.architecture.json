@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ZoneWorld — zone 분할과 운영 관제",
+    "subtitle": "게임 화면은 Gateway→zone Spot · 관제 화면은 Ops fanout",
+    "output": "14-zoneworld.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 3, "gapX": 110, "gapY": 92, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "BG", "type": "frontend", "label": "게임 화면", "sublabel": "브라우저", "row": 0, "col": 1 },
+    { "id": "GW", "type": "external", "label": "Gateway", "sublabel": "연결 종단 · actor relay", "row": 1, "col": 1 },
+    { "id": "Z1", "type": "backend", "label": "A — zone Spot", "sublabel": "player actor", "row": 2, "col": 0 },
+    { "id": "Z2", "type": "backend", "label": "B — zone Spot", "sublabel": "player actor", "row": 2, "col": 2 },
+    { "id": "OPS", "type": "external", "label": "Ops", "sublabel": "runtime event · fanout", "row": 3, "col": 1 },
+    { "id": "BO", "type": "frontend", "label": "관제 화면", "sublabel": "브라우저", "row": 4, "col": 1 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "ZoneNode 2대", "wraps": ["Z1", "Z2"] }
+  ],
+  "connections": [
+    { "from": "BG", "to": "GW", "label": "STREAM", "variant": "default", "labelDy": 40 },
+    { "from": "GW", "to": "Z1", "label": "actor relay · push", "variant": "default", "toSide": "top", "labelDx": -18 },
+    { "from": "GW", "to": "Z2", "variant": "default", "toSide": "top" },
+    { "from": "Z1", "to": "Z2", "label": "경계 동기화 · relocation", "variant": "emphasis" },
+    { "from": "OPS", "to": "Z1", "label": "공지 · 점검 fanout", "variant": "default", "toSide": "bottom", "labelDx": -18 },
+    { "from": "OPS", "to": "Z2", "variant": "default", "toSide": "bottom" },
+    { "from": "Z1", "to": "OPS", "label": "Spot event 보고", "variant": "default", "fromSide": "bottom", "toSide": "left", "labelDx": -14 },
+    { "from": "BO", "to": "OPS", "label": "STREAM", "variant": "default", "labelDy": -40 }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "두 표면",
+      "items": [
+        "게임 화면: 브라우저 → Gateway → zone Spot·player actor (actor relay·push)",
+        "관제 화면: 브라우저 → Ops (runtime event 수집·fanout 발행)",
+        "zone A ↔ zone B는 경계 동기화 (양방향) — owner가 다르면 relocation, client 연결은 유지"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "fanout · 보고",
+      "items": [
+        "region은 원본 subgraph ZoneNode ×2 (zone 노드 2대: A·B)",
+        "원본 mermaid는 Ops→ZoneNode 묶음(region) 전체로 fanout — 발행자가 노드 목록을 갖지 않는다. 여기선 Z1·Z2 각각으로 그린다(공지·점검 변경 fanout)",
+        "zone Spot은 자기 event를 Ops로 보고 (runtime event)"
+      ]
+    }
+  ]
+}

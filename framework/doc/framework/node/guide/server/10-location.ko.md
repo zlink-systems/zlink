@@ -27,12 +27,8 @@ title: "10. Location — 자동 연결과 Object 위치 · Node/TypeScript"
 Location Store는 MeshNode descriptor와 Actor·Spot의 현재 owner를 저장한다. Framework는 이 정보를
 사용해 peer를 자동으로 연결하고 논리 ID를 현재 owner로 전달한다.
 
-```mermaid
-flowchart LR
-    S["Object Server"] -->|"descriptor and owner"| L[("Location Store")]
-    C["Object Client"] -->|"read current location"| L
-    C -->|"message"| S
-```
+<iframe class="zlink-diagram" src="/common/diagrams/10-location.html" title="Location — 위치 등록과 조회" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/10-location.html" target="_blank">↗ 크게 보기</a></p>
 
 Store는 위치를 찾을 때만 사용한다. 실제 application message는 선택한 MeshNode로 직접 전송한다.
 
@@ -201,3 +197,7 @@ Location Store에서 current owner를 확인하고 이동 중에는 Message Foll
 - 정식 계약: [Location runtime](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md)
 - 자동 연결이 없는 수동 연결: [05-channel-messaging §6](05-channel-messaging.ko.md#6-연결-제어)
 - Host relocate와 drain 관측: [12-operations](12-operations.ko.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

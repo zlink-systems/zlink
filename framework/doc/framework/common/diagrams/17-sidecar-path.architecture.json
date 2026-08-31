@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "사이드카 경로 — Envoy local → Envoy remote 두 홉",
+    "subtitle": "order-service 호출이 두 사이드카 프록시를 거쳐 payment-service에 닿고 응답은 역경로",
+    "output": "17-sidecar-path.html",
+    "column_fit": "spread",
+    "viewBox": [1040, 640],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "A", "type": "frontend", "label": "order-service" },
+    { "id": "SA", "type": "external", "label": "Envoy local" },
+    { "id": "SB", "type": "external", "label": "Envoy remote" },
+    { "id": "B", "type": "frontend", "label": "payment-service" }
+  ],
+  "messages": [
+    { "from": "A", "to": "SA", "y": 160, "label": "gRPC Charge", "variant": "default" },
+    { "from": "SA", "to": "SB", "y": 208, "label": "mTLS HTTP/2", "variant": "default", "note": "위치 조회 + L7 LB 후 mTLS HTTP/2" },
+    { "from": "SB", "to": "B", "y": 256, "label": "forward", "variant": "default" },
+    { "from": "B", "to": "A", "y": 304, "label": "reply", "variant": "return", "note": "sidecar 역경로로 되돌아옴" }
+  ],
+  "cards": [
+    {
+      "dot": "slate",
+      "title": "두 사이드카 홉",
+      "items": [
+        "order-service 호출이 Envoy local → Envoy remote 두 사이드카 프록시를 거쳐 payment-service에 도달한다.",
+        "SA→SB 구간 전문: \"위치 조회 + L7 LB 후 mTLS HTTP/2\". 응답은 sidecar 역경로로 order-service에 되돌아온다."
+      ]
+    }
+  ]
+}

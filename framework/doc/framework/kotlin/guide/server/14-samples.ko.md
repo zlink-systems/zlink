@@ -59,28 +59,8 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · Kotlin"
 조회**는 아니다. Managed language에서는 handler도 scan 없이 구성 코드에서 직접 등록하는 유일한
 sample이다. C++은 모든 sample에서 handler를 직접 등록하지만, 수동 연결은 TicTacToe에서만 사용한다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  C["client"]:::client
-  A1["Api A"]
-  A2["Api B"]
-  P1["Play A<br/>session · actor · room Spot"]:::server
-  P2["Play B<br/>session · actor · room Spot"]:::server
-  LS[("Location Store")]:::store
-  C -->|"HTTP 방 생성"| A1
-  C -.-> A2
-  A1 -->|"room User Spot 생성"| P1
-  A2 -.-> P2
-  C ==>|"STREAM 직접 연결"| P1
-  C ==> P2
-  P1 <-->|"수동 peer · milestone Logical Multicast"| P2
-  P1 -.->|"room·actor 위치 조회"| LS
-  P2 -.-> LS
-  classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-  classDef store fill:#fff3e0,stroke:#e65100,color:#bf360c
-```
+<iframe class="zlink-diagram" src="/common/diagrams/14-tictactoe.html" title="TicTacToe 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-tictactoe.html" target="_blank">↗ 크게 보기</a></p>
 
 별도 Session 서버가 없어 각 `Play`가 stream session·actor·Entry Spot·room Spot을 함께
 소유한다. client는 `Api`에서 받은 Play endpoint 목록으로 Play에 직접 연결한다. 승수가
@@ -104,30 +84,8 @@ location store 자동 연결이 하나의 흐름 안에서 차례로 나온다.
 진행은 방을 소유한 서버가 처리한다. 다른 장르를 만들더라도 역할 분리와 연결 구조는 이
 모양에서 크게 벗어나지 않으므로, 새 서비스의 출발점으로 삼기 좋다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  C["client"]:::client
-  S["Session ×2<br/>연결 종단 · actor bind"]
-  A["Api ×2<br/>인증 · 매칭 요청"]
-  M["Matchmaking<br/>Matchmaker Instance Spot"]:::server
-  P["Play ×2<br/>player actor · room User Spot"]:::server
-  R[("Redis<br/>대기방 예약")]:::store
-  LS[("Location Store")]:::store
-  C <==>|"STREAM 연결 1개"| S
-  S -->|"인증·매칭 요청"| A
-  A -->|"level bucket 매칭"| M
-  M --> R
-  A -->|"room GetOrCreate"| P
-  S -->|"packet relay"| P
-  P -->|"bound session push"| S
-  S -.-> LS
-  A -.-> LS
-  P -.->|"peer 자동 연결"| LS
-  classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-  classDef store fill:#fff3e0,stroke:#e65100,color:#bf360c
-```
+<iframe class="zlink-diagram" src="/common/diagrams/14-bingo.html" title="Bingo 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-bingo.html" target="_blank">↗ 크게 보기</a></p>
 
 `Session`은 client 연결과 actor bind를, `Play`는 player actor와 room User
 Spot을, `Api`는 인증과 매칭 요청을, `Matchmaking`은 level별 Matchmaker Instance Spot을
@@ -170,26 +128,8 @@ leave되기 때문이다. 상담원 actor 하나로는 대화 세 건에 동시�
 **연결은 하나인데 actor는 여러 개다.** 상담원 client는 stream 연결 하나만 유지하고, 그
 session에 roster actor와 대화별 conversation actor를 함께 bind한다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  AC["상담원 client"]:::client <-->|"stream 연결 1개"| SE["session"]
-  SE -.->|bind| RA(("roster<br/>actor")):::actor
-  SE -.->|bind| A1(("conversation<br/>actor A")):::actor
-  SE -.->|bind| A2(("conversation<br/>actor B")):::actor
-  subgraph SPA["conversation Spot A"]
-    A1
-    C1(("고객 A")):::actor
-  end
-  subgraph SPB["conversation Spot B"]
-    A2
-    C2(("고객 B")):::actor
-  end
-  classDef actor fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-  style SPA fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-  style SPB fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/14-supportchat.html" title="SupportChat 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-supportchat.html" target="_blank">↗ 크게 보기</a></p>
 
 들어오는 방향은 **`ConversationId`를 stream 메시지의 metadata에 실어** 구분한다. Session
 서버는 metadata만 읽어 대상 actor를 고르고 **payload는 해석하지 않는다.** 덕분에 접속
@@ -216,27 +156,8 @@ session이 bind되어 대화 상태가 그대로 이어지고, 일정 시간 메
 framework의 어느 기능에 대응되는지** 보여 주는 것이다. 택시 호출, 현장 출동, 방문 서비스도
 같은 구조다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  CU["고객 client"]:::client
-  CO["배송원 client"]:::client
-  D["Dispatch<br/>HTTP 접수 · 배차 worker"]
-  CS["CourierSession<br/>연결 종단"]
-  CN["CourierActorNode ×2<br/>courier actor"]:::server
-  T["Tracking<br/>상태 기록"]
-  CG["CustomerGateway<br/>customer actor"]:::server
-  CU -->|"HTTP 배송 생성"| D
-  CU <==>|"STREAM 상태 수신"| CG
-  CO <==>|"STREAM"| CS
-  D -->|"제안 · 재배정"| CN
-  CS -.->|"session bind"| CN
-  CN -->|"bound session push"| CS
-  D -->|"상태 event"| T
-  T -->|"고객 알림"| CG
-  classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-```
+<iframe class="zlink-diagram" src="/common/diagrams/14-delivery.html" title="DeliveryDispatch 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-delivery.html" target="_blank">↗ 크게 보기</a></p>
 
 외부 경계는 그대로 웹 기술을 쓴다. 고객은 HTTP로 배송을 만들고 stream으로 상태를 받는다.
 바뀌는 것은 그 안쪽이다 — session map이나 socket registry를 직접 두는 대신 고객 actor에
@@ -253,26 +174,8 @@ actor route가 맡는다. client 시나리오는 정상 배차와 timeout 재배
 진행하며 실패하면 보상한다. 바깥 HTTP는 `CommerceApi`가 종단하고 주문 상태는 직접 바꾸지
 않는다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  C["web client"]:::client
-  API["CommerceApi<br/>HTTP 종단 · 검증 · 조회"]
-  subgraph OW["OrderWorkflow node ×2"]
-    SP["OrderWorkflowSpot<br/>주문 하나당 하나"]:::server
-  end
-  ES[("이벤트 스트림")]:::store
-  RS[("조회 모델")]:::store
-  C -->|"주문 시작 · 상태 조회"| API
-  API ==>|"OrderId를 주소로 Spot 메시지"| SP
-  SP -->|"append · replay"| ES
-  SP -->|"갱신"| RS
-  API -->|"조회"| RS
-  classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-  classDef store fill:#fff3e0,stroke:#e65100,color:#bf360c
-  style OW fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/14-shoppingmall.html" title="ShoppingMall 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-shoppingmall.html" target="_blank">↗ 크게 보기</a></p>
 
 이 샘플에서 owner Spot의 이득은 처리량이 아니다. **재시도와 중단에 안전한 다단계 처리를
 saga 오케스트레이터·조율 상태·스케줄러·outbox 같은 별도 조율 계층 없이 순차 코드로 쓴다는
@@ -292,25 +195,8 @@ client가 "퀘스트를 깼으니 보상을 달라"고 말하게 두면 조작�
 전부 `PlayerId` owner Spot에서 일어난다. 같은 player의 이벤트는 owner 하나가 순서대로
 처리하고, 진행 상황은 projection을 통해 연결로 push된다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  C["game client"]:::client
-  SS["Session Server<br/>session actor · 판정 전 검증"]
-  SP["PlayerQuestSpot<br/>player 하나당 하나"]:::server
-  ES[("quest 이벤트")]:::store
-  RM[("조회 모델")]:::store
-  GS[("gameplay 사실<br/>보정 원천")]:::store
-  C <==>|"WebSocket"| SS
-  SS ==>|"PlayerId로 owner routing"| SP
-  SP -->|"append · replay"| ES
-  SP -->|"갱신"| RM
-  SP -.->|"reset·보정 조회"| GS
-  SP -->|"bound session push"| SS
-  classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-  classDef store fill:#fff3e0,stroke:#e65100,color:#bf360c
-```
+<iframe class="zlink-diagram" src="/common/diagrams/14-gamequest.html" title="GameQuest 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-gamequest.html" target="_blank">↗ 크게 보기</a></p>
 
 ShoppingMall과 나란히 놓으면 선택 기준이 드러난다. 게임 진행은 꼬여도 재동기화라는
 안전밸브가 있어 **유실을 허용하는 대신 실시간성을 얻는다.** 그래서 이전 owner 차단이나
@@ -331,28 +217,8 @@ Location Store와 framework가 정한다. 플레이어가 경계를 넘으면 ac
 join하고, owner가 다르면 relocation이 일어나지만 client 연결은 유지된다. bound session이
 없는 봇 actor도 Spot timer로 같은 경계 이동을 한다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart TD
-  BG["브라우저 · 게임 화면"]:::client
-  BO["브라우저 · 관제 화면"]:::client
-  GW["Gateway<br/>연결 종단 · actor relay"]
-  OPS["Ops<br/>runtime event 수집 · fanout 발행"]
-  subgraph ZN["ZoneNode ×2"]
-    Z1["A — zone Spot · player actor"]:::server
-    Z2["B — zone Spot · player actor"]:::server
-  end
-  BG -->|"STREAM"| GW
-  BO -->|"STREAM"| OPS
-  GW -->|"actor relay · push"| Z1
-  GW --> Z2
-  Z1 <==>|"경계 동기화 · owner가 다르면 relocation"| Z2
-  OPS -->|"공지 · 점검 변경 fanout"| ZN
-  Z1 -->|"Spot event 보고"| OPS
-  classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-  style ZN fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/14-zoneworld.html" title="ZoneWorld 샘플 토폴로지" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-zoneworld.html" target="_blank">↗ 크게 보기</a></p>
 
 이 샘플의 교육 목표는 **"여러 노드에 무언가를 한다"가 상황마다 다른 표면을 요구한다**는
 것이다.
@@ -397,3 +263,7 @@ ZLINK_SAMPLE_LANGUAGES=kotlin \
 - 언어별 샘플 디렉터리 구성: 각 언어 샘플 루트의 `README`
 - 기능별 사용법: [05-channel-messaging](05-channel-messaging.ko.md) ~
   [12-operations](12-operations.ko.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>
