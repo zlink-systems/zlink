@@ -24,9 +24,9 @@ int zlink::socket_base_t::set_peer_weight (uint32_t weight_)
 
     {
         socket_public_api_lock_scope_t guard (lifecycle);
-        if (_local_peer_weight == weight_)
+        if (_local_peer_weight.load (std::memory_order_relaxed) == weight_)
             return 0;
-        _local_peer_weight = weight_;
+        _local_peer_weight.store (weight_, std::memory_order_relaxed);
         options.peer_weight = static_cast<int> (weight_);
         xlocal_peer_weight_changed ();
     }
@@ -51,13 +51,13 @@ int zlink::socket_base_t::get_peer_weight (uint32_t *weight_out_) const
     }
 
     socket_public_api_lock_scope_t guard (lifecycle);
-    *weight_out_ = _local_peer_weight;
+    *weight_out_ = _local_peer_weight.load (std::memory_order_relaxed);
     return 0;
 }
 
 uint32_t zlink::socket_base_t::local_peer_weight () const
 {
-    return _local_peer_weight;
+    return _local_peer_weight.load (std::memory_order_relaxed);
 }
 
 int zlink::socket_base_t::close ()

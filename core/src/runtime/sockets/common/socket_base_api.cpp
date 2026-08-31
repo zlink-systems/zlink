@@ -499,8 +499,10 @@ int zlink::socket_base_t::setsockopt (int option_, const void *optval_, size_t o
             if (option_ == ZLINK_INTERNAL_OPT_PEER_WEIGHT) {
                 const uint32_t weight =
                   static_cast<uint32_t> (options.peer_weight);
-                if (_local_peer_weight != weight) {
-                    _local_peer_weight = weight;
+                if (_local_peer_weight.load (std::memory_order_relaxed)
+                    != weight) {
+                    _local_peer_weight.store (weight,
+                                              std::memory_order_relaxed);
                     xlocal_peer_weight_changed ();
                 }
             }

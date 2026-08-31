@@ -3718,6 +3718,252 @@ void test_multiple_in_flight_requests_complete_independently ()
     test_context_socket_close_zero_linger (server_router);
 }
 
+void test_same_rid_handover_colliding_wire_sequences_keep_exact_reply_targets ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer_a = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *dealer_b = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (router);
+    TEST_ASSERT_NOT_NULL (dealer_a);
+    TEST_ASSERT_NOT_NULL (dealer_b);
+
+    const int handover = ZLINK_RID_DUPLICATE_HANDOVER;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (router, ZLINK_OPT_RID_DUPLICATE_POLICY, &handover,
+                        sizeof (handover)));
+    set_routing_id_text (dealer_a, "duplicate-peer");
+    set_routing_id_text (dealer_b, "duplicate-peer");
+
+    const char endpoint[] = "inproc://zmp-router-same-rid-sequence-collision";
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (router, endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer_a, endpoint));
+    msleep (SETTLE_TIME);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer_b, endpoint));
+    // Let HANDOVER retain dealer A as standby before both physical peers
+    // allocate their first (wire sequence 1) request.
+    msleep (SETTLE_TIME * 2);
+
+    reply_probe_t reply_a;
+    reply_probe_t reply_b;
+    reply_a.progress_handle = dealer_a;
+    reply_b.progress_handle = dealer_b;
+    zlink_msg_t request_a;
+    zlink_msg_t request_b;
+    init_string_part (&request_a, "from-a");
+    init_string_part (&request_b, "from-b");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request (dealer_a, &request_a, 1, &capture_reply,
+                            &reply_a, ZLINK_SEND_FLAGS_NONE, 3000));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request (dealer_b, &request_b, 1, &capture_reply,
+                            &reply_b, ZLINK_SEND_FLAGS_NONE, 3000));
+
+    multi_request_probe_t received;
+    recv_router_request_into_event (router, &received);
+    recv_router_request_into_event (router, &received);
+
+    request_event_t from_a;
+    request_event_t from_b;
+    request_event_t first_received;
+    request_event_t second_received;
+    {
+        std::lock_guard<std::mutex> lock (received.mutex);
+        TEST_ASSERT_EQUAL_UINT64 (2, received.events.size ());
+        first_received = received.events[0];
+        second_received = received.events[1];
+        for (size_t i = 0; i < received.events.size (); ++i) {
+            if (received.events[i].request_payload == "from-a")
+                from_a = received.events[i];
+            else if (received.events[i].request_payload == "from-b")
+                from_b = received.events[i];
+            else
+                TEST_FAIL_MESSAGE ("unexpected duplicate-peer request payload");
+        }
+    }
+    TEST_ASSERT_TRUE (from_a.request_seq != 0);
+    TEST_ASSERT_TRUE (from_b.request_seq != 0);
+    TEST_ASSERT_TRUE (from_a.request_seq != from_b.request_seq);
+    TEST_ASSERT_TRUE (from_a.request_seq == 1 || from_b.request_seq == 1);
+    TEST_ASSERT_EQUAL_STRING ("duplicate-peer", from_a.peer_rid.c_str ());
+    TEST_ASSERT_EQUAL_STRING ("duplicate-peer", from_b.peer_rid.c_str ());
+
+    const std::shared_ptr<
+      zlink::socket_reqrep_internal::socket_request_reply_state_t>
+      state = zlink::socket_reqrep_internal::find_request_reply_state (
+        as_socket_handle (router));
+    TEST_ASSERT_NOT_NULL (state.get ());
+    {
+        zlink::socket_reqrep_internal::pending_key_t key_a;
+        key_a.peer_rid = from_a.peer_rid;
+        key_a.request_seq = from_a.request_seq;
+        zlink::socket_reqrep_internal::pending_key_t key_b;
+        key_b.peer_rid = from_b.peer_rid;
+        key_b.request_seq = from_b.request_seq;
+
+        std::lock_guard<std::mutex> lock (state->mutex);
+        const auto target_a = state->router_reply_targets.find (key_a);
+        const auto target_b = state->router_reply_targets.find (key_b);
+        TEST_ASSERT_TRUE (target_a != state->router_reply_targets.end ());
+        TEST_ASSERT_TRUE (target_b != state->router_reply_targets.end ());
+        TEST_ASSERT_EQUAL_UINT64 (1, target_a->second.wire_request_seq);
+        TEST_ASSERT_EQUAL_UINT64 (1, target_b->second.wire_request_seq);
+        TEST_ASSERT_TRUE (target_a->second.pipe != target_b->second.pipe);
+        TEST_ASSERT_TRUE (
+          target_a->second.transport_pair_id
+            != target_b->second.transport_pair_id
+          || target_a->second.transport_pair_generation
+               != target_b->second.transport_pair_generation);
+        TEST_ASSERT_EQUAL_UINT64 (1, state->router_reply_aliases.size ());
+    }
+
+    // Reply in reverse receive order. RID and wire sequence are identical,
+    // so only the opaque token can select the exact source pipe.
+    send_router_reply_to_event (
+      router, second_received,
+      second_received.request_payload == "from-a" ? "reply-a" : "reply-b");
+    send_router_reply_to_event (
+      router, first_received,
+      first_received.request_payload == "from-a" ? "reply-a" : "reply-b");
+    {
+        std::lock_guard<std::mutex> lock (state->mutex);
+        TEST_ASSERT_TRUE (state->router_reply_targets.empty ());
+        TEST_ASSERT_TRUE (state->router_reply_aliases.empty ());
+    }
+    TEST_ASSERT_TRUE (wait_for_reply (&reply_a));
+    TEST_ASSERT_TRUE (wait_for_reply (&reply_b));
+    {
+        std::lock_guard<std::mutex> lock (reply_a.mutex);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, reply_a.result);
+        TEST_ASSERT_EQUAL_STRING ("reply-a", reply_a.payload.c_str ());
+    }
+    {
+        std::lock_guard<std::mutex> lock (reply_b.mutex);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, reply_b.result);
+        TEST_ASSERT_EQUAL_STRING ("reply-b", reply_b.payload.c_str ());
+    }
+
+    close_test_socket_after_reply_callback (dealer_a);
+    close_test_socket_after_reply_callback (dealer_b);
+    test_context_socket_close_zero_linger (router);
+}
+
+void test_same_physical_peer_duplicate_wire_sequence_is_protocol_error ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer_a = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *dealer_b = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (router);
+    TEST_ASSERT_NOT_NULL (dealer_a);
+    TEST_ASSERT_NOT_NULL (dealer_b);
+
+    const int handover = ZLINK_RID_DUPLICATE_HANDOVER;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (router, ZLINK_OPT_RID_DUPLICATE_POLICY, &handover,
+                        sizeof (handover)));
+    set_routing_id_text (dealer_a, "duplicate-sequence-peer");
+    set_routing_id_text (dealer_b, "duplicate-sequence-peer");
+
+    const char endpoint[] = "inproc://zmp-router-same-source-sequence-duplicate";
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (router, endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer_a, endpoint));
+    msleep (SETTLE_TIME);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer_b, endpoint));
+    msleep (SETTLE_TIME * 2);
+
+    reply_probe_t reply_a;
+    reply_probe_t reply_b;
+    reply_a.progress_handle = dealer_a;
+    reply_b.progress_handle = dealer_b;
+    zlink_msg_t request_a;
+    zlink_msg_t request_b;
+    init_string_part (&request_a, "from-a");
+    init_string_part (&request_b, "from-b");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request (dealer_a, &request_a, 1, &capture_reply,
+                            &reply_a, ZLINK_SEND_FLAGS_NONE, 3000));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request (dealer_b, &request_b, 1, &capture_reply,
+                            &reply_b, ZLINK_SEND_FLAGS_NONE, 3000));
+
+    multi_request_probe_t received;
+    recv_router_request_into_event (router, &received);
+    recv_router_request_into_event (router, &received);
+    request_event_t from_a;
+    request_event_t from_b;
+    {
+        std::lock_guard<std::mutex> lock (received.mutex);
+        TEST_ASSERT_EQUAL_UINT64 (2, received.events.size ());
+        for (size_t i = 0; i < received.events.size (); ++i) {
+            if (received.events[i].request_payload == "from-a")
+                from_a = received.events[i];
+            else if (received.events[i].request_payload == "from-b")
+                from_b = received.events[i];
+            else
+                TEST_FAIL_MESSAGE ("unexpected same-source duplicate payload");
+        }
+    }
+
+    const request_event_t natural =
+      from_a.request_seq == 1 ? from_a : from_b;
+    const request_event_t alias =
+      from_a.request_seq == 1 ? from_b : from_a;
+    void *const alias_dealer =
+      alias.request_payload == "from-a" ? dealer_a : dealer_b;
+    reply_probe_t *const natural_reply =
+      natural.request_payload == "from-a" ? &reply_a : &reply_b;
+
+    const std::shared_ptr<
+      zlink::socket_reqrep_internal::socket_request_reply_state_t>
+      state = zlink::socket_reqrep_internal::find_request_reply_state (
+        as_socket_handle (router));
+    TEST_ASSERT_NOT_NULL (state.get ());
+    {
+        std::lock_guard<std::mutex> lock (state->mutex);
+        TEST_ASSERT_EQUAL_UINT64 (2, state->router_reply_targets.size ());
+        TEST_ASSERT_EQUAL_UINT64 (1, state->router_reply_aliases.size ());
+    }
+
+    send_router_reply_to_event (router, natural, "natural-reply");
+    TEST_ASSERT_TRUE (wait_for_reply (natural_reply));
+    {
+        std::lock_guard<std::mutex> lock (state->mutex);
+        TEST_ASSERT_EQUAL_UINT64 (1, state->router_reply_targets.size ());
+        TEST_ASSERT_EQUAL_UINT64 (1, state->router_reply_aliases.size ());
+    }
+
+    // The natural token is now free, but the same physical source still owns
+    // an aliased wire sequence 1. Reusing it must not bypass duplicate
+    // detection merely because the natural primary-map key disappeared.
+    send_internal_request_message (alias_dealer, 1);
+    const zlink_routing_id_t *source_rid = NULL;
+    uint64_t request_token = 0;
+    zlink_msg_t *parts = NULL;
+    size_t part_count = 0;
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_INTERNAL_ERROR,
+      zlink_router_recv (router, &source_rid, &request_token, &parts,
+                         &part_count, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (EPROTO, errno);
+
+    {
+        std::lock_guard<std::mutex> lock (state->mutex);
+        TEST_ASSERT_EQUAL_UINT64 (3, state->router_next_reply_token);
+        TEST_ASSERT_TRUE (state->router_reply_targets.size () <= 1);
+        TEST_ASSERT_TRUE (state->router_reply_aliases.size () <= 1);
+    }
+
+    test_context_socket_close_zero_linger (dealer_a);
+    test_context_socket_close_zero_linger (dealer_b);
+    test_context_socket_close_zero_linger (router);
+}
+
 void test_out_of_order_replies_match_original_request ()
 {
     void *server_router = test_context_socket (ZLINK_SOCKET_ROUTER);
@@ -5671,6 +5917,10 @@ int main ()
     RUN_SELECTED (test_connect_only_router_requester_receives_reply);
     RUN_SELECTED (test_router_exact_request_to_dealer_completes_on_async_owner);
     RUN_SELECTED (test_multiple_in_flight_requests_complete_independently);
+    RUN_SELECTED (
+      test_same_rid_handover_colliding_wire_sequences_keep_exact_reply_targets);
+    RUN_SELECTED (
+      test_same_physical_peer_duplicate_wire_sequence_is_protocol_error);
     RUN_SELECTED (test_out_of_order_replies_match_original_request);
     RUN_SELECTED (test_extra_reply_is_rejected_after_first_completion);
     RUN_SELECTED (test_dealer_to_dealer_reply_routes_to_source_peer_and_closes);

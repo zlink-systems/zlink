@@ -16,10 +16,12 @@
 #include "../../src/runtime/sockets/router/router.hpp"
 #include "testutil_monitoring.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <string.h>
 #include <string>
+#include <thread>
 
 SETUP_TEARDOWN_TESTCONTEXT
 
@@ -1513,6 +1515,60 @@ void test_inproc_peer_weight_is_owner_control_in_both_directions ()
     fixture.teardown ();
 }
 
+//  Public option writes and socket-thread route/dispatch reads intentionally
+//  use different synchronization domains. Exercise that boundary repeatedly;
+//  this is also a focused TSAN regression for the policy scalar itself.
+void test_peer_weight_update_is_safe_for_async_readers ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    std::atomic<bool> start (false);
+    std::atomic<bool> stop (false);
+    std::atomic<bool> invalid_value_seen (false);
+    std::atomic<uint64_t> read_count (0);
+
+    std::thread reader ([&] {
+        while (!start.load (std::memory_order_acquire))
+            std::this_thread::yield ();
+        while (!stop.load (std::memory_order_acquire)) {
+            const uint32_t weight = as_socket (router)->local_peer_weight ();
+            if (weight != 0 && weight != 37 && weight != 100)
+                invalid_value_seen.store (true, std::memory_order_relaxed);
+            read_count.fetch_add (1, std::memory_order_relaxed);
+        }
+    });
+
+    start.store (true, std::memory_order_release);
+    while (read_count.load (std::memory_order_relaxed) == 0)
+        std::this_thread::yield ();
+    bool update_failed = false;
+    for (int i = 0; i != 4096; ++i) {
+        const int weight = (i & 1) ? 37 : 0;
+        if (zlink_set_router_option (router, ZLINK_ROUTER_OPT_WEIGHT, &weight,
+                                     sizeof (weight))
+            != ZLINK_CONFIG_OK) {
+            update_failed = true;
+            break;
+        }
+        if ((i & 63) == 0)
+            std::this_thread::yield ();
+    }
+    const int final_weight = 37;
+    if (zlink_set_router_option (router, ZLINK_ROUTER_OPT_WEIGHT,
+                                 &final_weight, sizeof (final_weight))
+        != ZLINK_CONFIG_OK)
+        update_failed = true;
+    stop.store (true, std::memory_order_release);
+    reader.join ();
+
+    TEST_ASSERT_FALSE (update_failed);
+    TEST_ASSERT_FALSE (invalid_value_seen.load (std::memory_order_relaxed));
+    TEST_ASSERT_GREATER_THAN_UINT64 (0,
+                                     read_count.load (
+                                       std::memory_order_relaxed));
+    TEST_ASSERT_EQUAL_UINT32 (37, as_socket (router)->local_peer_weight ());
+    test_context_socket_close_zero_linger (router);
+}
+
 void test_network_peer_weight_keeps_wire_control_and_exact_pair_state ()
 {
     paired_fixture_t fixture;
@@ -1863,6 +1919,7 @@ int main ()
     RUN_TEST (test_flow_frame_before_reply_is_consumed_on_a_local_pair);
     RUN_TEST (test_peer_weight_change_does_not_write_the_completion_pipe);
     RUN_TEST (test_inproc_peer_weight_is_owner_control_in_both_directions);
+    RUN_TEST (test_peer_weight_update_is_safe_for_async_readers);
     RUN_TEST (test_network_peer_weight_keeps_wire_control_and_exact_pair_state);
     RUN_TEST (test_flow_frame_on_the_application_lane_is_rejected);
     RUN_TEST (test_router_routing_id_part_holds_message_atomicity_across_pause);

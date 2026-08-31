@@ -182,6 +182,50 @@ static inline int ensure_reply_target_receive_reservation (
     return -1;
 }
 
+typedef std::unordered_map<pending_key_t, router_reply_target_t,
+                           pending_key_hash_t>
+  router_reply_target_map_t;
+
+static router_reply_alias_key_t router_reply_alias_key (
+    const router_reply_target_t &target_)
+{
+    router_reply_alias_key_t key;
+    key.pipe = target_.source_pipe_identity;
+    key.transport_pair_id = target_.transport_pair_id;
+    key.transport_pair_generation = target_.transport_pair_generation;
+    key.wire_request_seq = target_.wire_request_seq;
+    return key;
+}
+
+static router_reply_target_map_t::iterator erase_router_reply_target_locked (
+  socket_request_reply_state_t *state_,
+  router_reply_target_map_t::iterator target_)
+{
+    zlink_assert (state_);
+    zlink_assert (target_ != state_->router_reply_targets.end ());
+    if (target_->first.request_seq != target_->second.wire_request_seq) {
+        const router_reply_alias_key_t alias_key =
+          router_reply_alias_key (target_->second);
+        const std::unordered_map<router_reply_alias_key_t, uint64_t,
+                                 router_reply_alias_key_hash_t>::iterator alias =
+          state_->router_reply_aliases.find (alias_key);
+        zlink_assert (alias != state_->router_reply_aliases.end ());
+        if (alias != state_->router_reply_aliases.end ()) {
+            zlink_assert (alias->second == target_->first.request_seq);
+            state_->router_reply_aliases.erase (alias);
+        }
+    }
+    return state_->router_reply_targets.erase (target_);
+}
+
+void clear_router_reply_targets_locked (socket_request_reply_state_t *state_)
+{
+    if (!state_)
+        return;
+    state_->router_reply_targets.clear ();
+    state_->router_reply_aliases.clear ();
+}
+
 class reply_target_publish_guard_t
 {
   public:
@@ -200,13 +244,12 @@ class reply_target_publish_guard_t
         std::lock_guard<std::mutex> lock (_state->mutex);
         bool erased = false;
         if (_router_key) {
-            std::unordered_map<pending_key_t, router_reply_target_t,
-                               pending_key_hash_t>::iterator it =
+            router_reply_target_map_t::iterator it =
               _state->router_reply_targets.find (*_router_key);
             if (it != _state->router_reply_targets.end ()) {
                 zlink_assert (!it->second.checked_out);
                 if (!it->second.checked_out) {
-                    _state->router_reply_targets.erase (it);
+                    erase_router_reply_target_locked (_state.get (), it);
                     erased = true;
                 }
             }
@@ -425,6 +468,48 @@ uint64_t allocate_dealer_reply_token (socket_request_reply_state_t *state_)
     return 0;
 }
 
+static uint64_t allocate_router_reply_token_locked (
+  socket_request_reply_state_t *state_, pending_key_t *key_)
+{
+    if (!state_ || !key_) {
+        errno = EFAULT;
+        return 0;
+    }
+
+    // The table is bounded, so one more probe than its maximum live size is
+    // enough to find a free nonzero socket-local token even after wrap.
+    for (size_t i = 0; i <= max_reply_target_slots; ++i) {
+        const uint64_t token = state_->router_next_reply_token++;
+        if (state_->router_next_reply_token == 0)
+            state_->router_next_reply_token = 1;
+        if (token == 0)
+            continue;
+        key_->request_seq = token;
+        if (state_->router_reply_targets.count (*key_) == 0)
+            return token;
+    }
+    key_->request_seq = 0;
+    errno = EAGAIN;
+    return 0;
+}
+
+static bool router_wire_target_matches_source (
+  const pending_key_t &stored_key_, const router_reply_target_t &target_,
+  const pending_key_t &incoming_key_,
+  uint64_t wire_request_seq_, zlink::pipe_t *source_pipe_,
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_)
+{
+    return source_pipe_ && wire_request_seq_ != 0
+           && stored_key_.peer_rid == incoming_key_.peer_rid
+           && target_.wire_request_seq == wire_request_seq_
+           && target_.pipe
+           && target_.source_pipe_identity == source_pipe_
+           && target_.transport_pair_id == transport_pair_id_
+           && target_.transport_pair_generation
+                == transport_pair_generation_
+           && target_.pipe->is_lifecycle_active ();
+}
+
 int take_dealer_reply_target (const std::shared_ptr<socket_request_reply_state_t> &state_,
                               uint64_t request_token_,
                               dealer_reply_target_t *target_out_)
@@ -558,27 +643,33 @@ void forget_dealer_reply_targets_for_pipe (
 bool take_router_reply_target (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   const pending_key_t &key_,
-  zlink::pipe_t **application_pipe_out_)
+  router_reply_target_t *target_out_)
 {
-    if (application_pipe_out_)
-        *application_pipe_out_ = NULL;
-    if (!state_ || !application_pipe_out_)
+    if (!state_ || !target_out_)
         return false;
 
     std::lock_guard<std::mutex> lock (state_->mutex);
-    std::unordered_map<pending_key_t, router_reply_target_t,
-                       pending_key_hash_t>::iterator it =
+    router_reply_target_map_t::iterator it =
       state_->router_reply_targets.find (key_);
     if (it == state_->router_reply_targets.end () || it->second.checked_out
-        || !it->second.pipe)
+        || !it->second.pipe || it->second.wire_request_seq == 0)
         return false;
-    if (!it->second.pipe->retain_lifetime_ref ()) {
-        state_->router_reply_targets.erase (it);
+    if (it->second.pipe->get_transport_pair_id ()
+          != it->second.transport_pair_id
+        || it->second.pipe->get_transport_pair_generation ()
+             != it->second.transport_pair_generation) {
+        erase_router_reply_target_locked (state_.get (), it);
         zlink_assert (state_->reply_target_slots > 0);
         --state_->reply_target_slots;
         return false;
     }
-    *application_pipe_out_ = it->second.pipe;
+    if (!it->second.pipe->retain_lifetime_ref ()) {
+        erase_router_reply_target_locked (state_.get (), it);
+        zlink_assert (state_->reply_target_slots > 0);
+        --state_->reply_target_slots;
+        return false;
+    }
+    *target_out_ = it->second;
     it->second.checked_out = true;
     zlink_assert (state_->reply_target_slots > 0);
     ++state_->reply_target_checkouts;
@@ -594,15 +685,14 @@ void restore_router_reply_target (
     std::lock_guard<std::mutex> lock (state_->mutex);
     zlink_assert (state_->reply_target_checkouts > 0);
     --state_->reply_target_checkouts;
-    std::unordered_map<pending_key_t, router_reply_target_t,
-                       pending_key_hash_t>::iterator it =
+    router_reply_target_map_t::iterator it =
       state_->router_reply_targets.find (key_);
     if (state_->closing || it == state_->router_reply_targets.end ()
         || !it->second.pipe) {
         zlink_assert (state_->closing || it != state_->router_reply_targets.end ());
         zlink_assert (state_->reply_target_slots > 0);
         if (it != state_->router_reply_targets.end ())
-            state_->router_reply_targets.erase (it);
+            erase_router_reply_target_locked (state_.get (), it);
         --state_->reply_target_slots;
         return;
     }
@@ -620,12 +710,11 @@ void commit_router_reply_target (
     std::lock_guard<std::mutex> lock (state_->mutex);
     zlink_assert (state_->reply_target_checkouts > 0);
     zlink_assert (state_->reply_target_slots > 0);
-    std::unordered_map<pending_key_t, router_reply_target_t,
-                       pending_key_hash_t>::iterator it =
+    router_reply_target_map_t::iterator it =
       state_->router_reply_targets.find (key_);
     if (it != state_->router_reply_targets.end ()) {
         zlink_assert (it->second.checked_out);
-        state_->router_reply_targets.erase (it);
+        erase_router_reply_target_locked (state_.get (), it);
     } else
         zlink_assert (state_->closing);
     --state_->reply_target_checkouts;
@@ -645,8 +734,7 @@ void revoke_router_reply_target (const socket_handle_t &handle_,
         return;
 
     std::lock_guard<std::mutex> lock (state->mutex);
-    for (std::unordered_map<pending_key_t, router_reply_target_t,
-                            pending_key_hash_t>::iterator it =
+    for (router_reply_target_map_t::iterator it =
            state->router_reply_targets.begin ();
          it != state->router_reply_targets.end (); ++it) {
         if (it->first.request_seq != request_seq_
@@ -659,7 +747,7 @@ void revoke_router_reply_target (const socket_handle_t &handle_,
         zlink_assert (!it->second.checked_out);
         if (it->second.checked_out)
             return;
-        state->router_reply_targets.erase (it);
+        erase_router_reply_target_locked (state.get (), it);
         zlink_assert (state->reply_target_slots > 0);
         --state->reply_target_slots;
         return;
@@ -674,8 +762,7 @@ void forget_router_reply_targets_for_pipe (
         return;
     std::lock_guard<std::mutex> lock (state_->mutex);
     size_t erased = 0;
-    for (std::unordered_map<pending_key_t, router_reply_target_t,
-                            pending_key_hash_t>::iterator it =
+    for (router_reply_target_map_t::iterator it =
            state_->router_reply_targets.begin ();
          it != state_->router_reply_targets.end ();) {
         if (it->second.pipe == application_pipe_) {
@@ -686,7 +773,7 @@ void forget_router_reply_targets_for_pipe (
                 it->second.pipe = NULL;
                 ++it;
             } else {
-                it = state_->router_reply_targets.erase (it);
+                it = erase_router_reply_target_locked (state_.get (), it);
                 ++erased;
             }
         } else
@@ -865,6 +952,10 @@ int recv_router_message_direct (const socket_handle_t &handle_,
             errno = ENOMEM;
             return -1;
         }
+        // Preserve the wire sequence as the common-case public token. Only a
+        // live collision for the same public peer ID receives an opaque local
+        // alias; the exact wire sequence remains on its target for reply
+        // encoding.
         published_reply_key.request_seq = wire_sequence;
     }
 
@@ -894,21 +985,90 @@ int recv_router_message_direct (const socket_handle_t &handle_,
             else {
                 router_reply_target_t target;
                 target.pipe = source_pipe;
+                target.source_pipe_identity = source_pipe;
+                target.wire_request_seq = wire_sequence;
+                target.transport_pair_id = metadata.transport_pair_id;
+                target.transport_pair_generation =
+                  metadata.transport_pair_generation;
                 bool inserted = false;
-                try {
-                    inserted = state->router_reply_targets.emplace (
-                      published_reply_key, target).second;
-                } catch (...) {
-                    publish_error = ENOMEM;
-                }
-                if (!publish_error && !inserted) {
+                bool alias_index_inserted = false;
+                router_reply_target_map_t::iterator natural_target =
+                  state->router_reply_targets.end ();
+                const router_reply_alias_key_t alias_key =
+                  router_reply_alias_key (target);
+                const bool alias_source_duplicate =
+                  !state->router_reply_aliases.empty ()
+                  && state->router_reply_aliases.count (alias_key) != 0;
+                if (alias_source_duplicate) {
                     publish_error = EPROTO;
                     duplicate_sequence = true;
                 }
+                if (!publish_error) {
+                    try {
+                        const std::pair<
+                          router_reply_target_map_t::iterator,
+                          bool>
+                          natural_insert =
+                            state->router_reply_targets.emplace (
+                              published_reply_key, target);
+                        natural_target = natural_insert.first;
+                        inserted = natural_insert.second;
+                    } catch (...) {
+                        publish_error = ENOMEM;
+                    }
+                }
+                if (!publish_error && !inserted) {
+                    if (router_wire_target_matches_source (
+                          natural_target->first, natural_target->second,
+                          published_reply_key, wire_sequence, source_pipe,
+                          metadata.transport_pair_id,
+                          metadata.transport_pair_generation)) {
+                        publish_error = EPROTO;
+                        duplicate_sequence = true;
+                    } else if (allocate_router_reply_token_locked (
+                                 state.get (), &published_reply_key)
+                               == 0) {
+                        publish_error = errno;
+                    }
+                    if (!publish_error) {
+                        try {
+                            const std::pair<
+                              std::unordered_map<
+                                router_reply_alias_key_t, uint64_t,
+                                router_reply_alias_key_hash_t>::iterator,
+                              bool>
+                              alias_insert =
+                                state->router_reply_aliases.emplace (
+                                  alias_key,
+                                  published_reply_key.request_seq);
+                            alias_index_inserted = alias_insert.second;
+                        } catch (...) {
+                            publish_error = ENOMEM;
+                        }
+                        if (!publish_error && !alias_index_inserted)
+                            publish_error = EPROTO;
+                    }
+                    if (!publish_error) {
+                        try {
+                            inserted = state->router_reply_targets.emplace (
+                              published_reply_key, target).second;
+                        } catch (...) {
+                            publish_error = ENOMEM;
+                        }
+                    }
+                }
+                if (!inserted && alias_index_inserted)
+                    state->router_reply_aliases.erase (alias_key);
+                if (!publish_error && !inserted)
+                    publish_error = EAGAIN;
                 if (!publish_error
                     && !reply_target_reservation.commit_locked ()) {
                     publish_error = errno;
-                    state->router_reply_targets.erase (published_reply_key);
+                    router_reply_target_map_t::iterator published =
+                      state->router_reply_targets.find (published_reply_key);
+                    if (published != state->router_reply_targets.end ())
+                        erase_router_reply_target_locked (state.get (),
+                                                          published);
                 }
                 if (!publish_error)
                     published_reply_guard.arm_router (
@@ -936,7 +1096,7 @@ int recv_router_message_direct (const socket_handle_t &handle_,
     *source_node_rid_out_ = terminal_source_storage_ && !first_has_more
                               ? source_rid
                               : &metadata.source_rid;
-    *request_seq_out_ = is_request ? wire_sequence : 0;
+    *request_seq_out_ = is_request ? published_reply_key.request_seq : 0;
 
     int export_rc = 0;
     if (!first_has_more) {
@@ -1197,9 +1357,9 @@ int send_request_reply_message (const socket_handle_t &handle_,
         return -1;
     }
 
-    zlink::pipe_t *application_pipe = NULL;
+    router_reply_target_t target;
     if (!take_router_reply_target (
-          reply_state, reply_key, &application_pipe)) {
+          reply_state, reply_key, &target)) {
         zlink::request_reply::consume_send_frames_from (
           staged_parts_, 0, staged_part_count_);
         zlink::request_reply::consume_send_frame (final_part_);
@@ -1207,19 +1367,36 @@ int send_request_reply_message (const socket_handle_t &handle_,
         return -1;
     }
 
+    zlink_msg_t *const first_payload =
+      staged_part_count_ != 0 ? &staged_parts_[0] : final_part_;
+    zlink::msg_t *const first_message =
+      reinterpret_cast<zlink::msg_t *> (first_payload);
+    if (first_message->set_request_reply_metadata (
+          zlink::request_reply::reply_type, target.wire_request_seq)
+        != 0) {
+        const int saved_errno = errno;
+        restore_router_reply_target (reply_state, reply_key);
+        target.pipe->release_lifetime_ref ();
+        zlink::request_reply::consume_send_frames_from (
+          staged_parts_, 0, staged_part_count_);
+        zlink::request_reply::consume_send_frame (final_part_);
+        errno = saved_errno;
+        return -1;
+    }
+
     const int rc = send_completion_staged_frames (
-      handle_.socket, application_pipe, peer_rid_, staged_parts_,
+      handle_.socket, target.pipe, peer_rid_, staged_parts_,
       staged_part_count_, final_part_);
     if (rc != 0) {
         const int saved_errno = errno;
         restore_router_reply_target (reply_state, reply_key);
-        application_pipe->release_lifetime_ref ();
+        target.pipe->release_lifetime_ref ();
         errno = saved_errno;
         return -1;
     }
 
     commit_router_reply_target (reply_state, reply_key);
-    application_pipe->release_lifetime_ref ();
+    target.pipe->release_lifetime_ref ();
     errno = 0;
     return 0;
 }

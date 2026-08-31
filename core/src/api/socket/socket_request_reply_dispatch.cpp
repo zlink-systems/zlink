@@ -352,7 +352,7 @@ int drain_close_request_reply_socket (const socket_handle_t &handle_)
     {
         std::lock_guard<std::mutex> lock (state->mutex);
         state->dealer_reply_targets.clear ();
-        state->router_reply_targets.clear ();
+        clear_router_reply_targets_locked (state.get ());
         state->reply_target_slots =
           state->reply_target_reservations + state->reply_target_checkouts;
     }
@@ -386,7 +386,7 @@ void cleanup_request_reply_socket (const socket_handle_t &handle_)
             std::lock_guard<std::mutex> state_lock (state->mutex);
             state->closing = true;
             state->dealer_reply_targets.clear ();
-            state->router_reply_targets.clear ();
+            clear_router_reply_targets_locked (state.get ());
             state->reply_target_slots =
               state->reply_target_reservations + state->reply_target_checkouts;
             zlink::request_completion::close (&state->completion);

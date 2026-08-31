@@ -1181,7 +1181,12 @@ class socket_base_t : public own_t,
     std::atomic<uint64_t> _flow_resume_applied_total;
     std::atomic<uint64_t> _flow_state_stale_total;
     std::atomic<uint64_t> _flow_last_pause_duration_ms;
-    uint32_t _local_peer_weight;
+    //  Public option updates are serialized by the socket API lock, while
+    //  asynchronous route adoption and dispatch read the current policy
+    //  without that lock. The value is independent of the option snapshot;
+    //  relaxed atomic access removes that cross-thread data race while the
+    //  existing locks continue to order each update's delivery side effects.
+    std::atomic<uint32_t> _local_peer_weight;
     typedef std::pair<uint64_t, uint64_t> transport_pair_key_t;
     typedef std::map<transport_pair_key_t, transport_pair_pipes_t> transport_pairs_t;
     //  Owner of the transport pair table. Pair admission, readiness, teardown
