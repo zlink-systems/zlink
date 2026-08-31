@@ -103,6 +103,9 @@ jobs:
             --target test_zmp_metadata test_asio_ws
           $testBin = (Resolve-Path "build-win-x64-test-config\bin\Release").Path
           $opensslBin = Join-Path $env:OPENSSL_ROOT_DIR "bin"
+          Get-ChildItem $opensslBin -Filter "*.dll" | ForEach-Object {
+            Copy-Item $_.FullName $testBin -Force
+          }
           $env:PATH = "$testBin;$opensslBin;$env:PATH"
           ctest --test-dir build-win-x64-test-config -C Release `
             --output-on-failure `
