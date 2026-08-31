@@ -101,6 +101,9 @@ jobs:
             -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT_DIR"
           cmake --build build-win-x64-test-config --config Release `
             --target test_zmp_metadata test_asio_ws
+          $testBin = (Resolve-Path "build-win-x64-test-config\bin\Release").Path
+          $opensslBin = Join-Path $env:OPENSSL_ROOT_DIR "bin"
+          $env:PATH = "$testBin;$opensslBin;$env:PATH"
           ctest --test-dir build-win-x64-test-config -C Release `
             --output-on-failure `
             -R '^(test_zmp_metadata|test_asio_ws)$'
