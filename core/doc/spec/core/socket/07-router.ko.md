@@ -39,15 +39,24 @@ ROUTER receive API는 [DEALER](06-dealer.ko.md)의 `zlink_dealer_message_type_t`
 | record | `source_node_rid_out_` | `request_seq_out_` |
 |---|---|---:|
 | 일반 raw multipart | 송신 peer의 routing ID | `0` |
-| 수신 request | 송신 peer의 routing ID | 0이 아닌 reply sequence |
+| 수신 request | 송신 peer의 routing ID | 0이 아닌 opaque reply token |
 
 `zlink_router_request_part()`로 시작한 request의 reply와 terminal failure는 receive record로
 반환하지 않고 `zlink_reply_handler_fn` completion으로만 전달된다.
 
 Core는 ZMP header에서 복원한 request kind와 wire sequence를 첫 payload part에 내부 값으로
 보존한다. `zlink_router_recv_part()`와 `_v2()`는 request kind만 reply 가능한 record로 해석하고,
-source routing ID·source pipe와 wire sequence를 함께 저장한다. 같은 routing ID의 duplicate나
-standby connection이 있어도 reply는 request를 전달한 바로 그 source pipe로 돌아간다.
+source routing ID·exact source pipe·pair identity와 원래 wire sequence를 reply target으로 저장한다.
+`request_seq_out_`의 0이 아닌 값은 wire sequence 자체가 아니라 source routing ID와 함께 쓰는
+socket-local opaque reply token이다. 충돌이 없으면 Core가 wire sequence 값을 그대로 token으로
+반환할 수 있다. 같은 routing ID의 서로 다른 physical source가 같은 live wire sequence를 보내면
+Core는 한쪽에 alias token을 반환한다. 같은 physical source가 live wire sequence를 중복해서 보내면
+`EPROTO`로 그 pair를 종료한다.
+
+Application은 reply에서 받은 RID와 token을 변경하지 않고 사용한다. Core는 `(source RID, token)`으로
+저장한 target을 찾아 original wire sequence를 reply header에 다시 기록하고, request를 전달한 바로
+그 source pipe와 pair로 reply를 보낸다. 따라서 같은 RID의 duplicate·standby connection, reverse
+reply와 out-of-order reply도 다른 physical source의 request를 완료하지 않는다.
 
 Typed receive에 reply나 error reply가 도착하면 `EPROTO`로 pair를 종료하고 payload를 반환하지
 않는다. `zlink_router_recv_part()`와 `_v2()`가 data나 request payload를 application에 넘길
@@ -56,8 +65,8 @@ ordinary data가 된다. 공통 `zlink_recv_part()`는 ROUTER receive를 지원�
 
 `source_node_rid_out_`은 Core가 소유한 thread-local view다. 호출자는 이를 해제하지 않으며, 다음 raw
 receive 호출 뒤에도 보관해야 하면 값을 복사한다. 같은 thread에서 다음 receive 호출을 시작하면 앞서
-반환된 view는 더 이상 유효하지 않다. 한 multipart record의 모든 part에는 같은 routing ID와 request
-sequence가 반환된다.
+반환된 view는 더 이상 유효하지 않다. 한 multipart record의 모든 part에는 같은 routing ID와 opaque
+reply token이 반환된다.
 
 ## 3. Part sequence와 소유권
 
@@ -310,7 +319,7 @@ exact-target 후속 operation에 이 snapshot을 다른 pair로 재선택하지 
 [§2](#2-raw-receive-record-구분)의 output 조합으로 판단한다.
 
 반환한 payload에는 internal request metadata가 없다. Multipart request의 첫 part에서 얻은
-routing ID, pair identity와 request sequence는 같은 record의 나머지 part에 반복해서 반환하되,
+routing ID, pair identity와 opaque reply token은 같은 record의 나머지 part에 반복해서 반환하되,
 message 자체에는 보존하지 않는다.
 
 ## 9. Raw reply submit
@@ -325,12 +334,12 @@ ZLINK_EXPORT zlink_submit_result_t zlink_router_reply_part(
 ```
 
 `zlink_router_recv_part()`로 받은 request에 reply part를 보낸다. `peer_rid_`와 0이 아닌
-`request_seq_`는 수신 record가 반환한 값을 그대로 사용한다. 여러 part로 reply할 때 모든 호출에서
-같은 두 값을 사용한다. `ZLINK_PART_FINAL`이 성공하면 reply가 완료된다.
+`request_seq_`는 수신 record가 반환한 RID와 opaque reply token을 그대로 사용한다. 여러 part로
+reply할 때 모든 호출에서 같은 두 값을 사용한다. `ZLINK_PART_FINAL`이 성공하면 reply가 완료된다.
 
-Core는 첫 reply payload의 ZMP header에 reply kind와 `request_seq_`를 기록한다. Public API가
-sequence를 payload part로 추가하지 않으므로 peer의 completion callback은 application이 넘긴
-part만 받는다.
+Core는 `(peer_rid_, request_seq_)`로 target을 찾고, 첫 reply payload의 ZMP header에는 target에
+저장한 original wire sequence와 reply kind를 기록한다. Public API가 sequence를 payload part로
+추가하지 않으므로 peer의 completion callback은 application이 넘긴 part만 받는다.
 
 Raw reply와 error reply는 terminal reply의 진행만 담당하고 HWM admission에서 빠지는 별도
 경로인 [completion progress lane](../glossary.ko.md#completion-progress-lane)에 한 번만
@@ -446,8 +455,8 @@ test 하나로 이어진다.
   승격하면 그 standby가 마지막으로 받은 값을 사용한다.
 
 **Record 구분과 receive**
-- 일반 raw record는 `request_seq_out_ == 0`, 수신 request는 0이 아닌 reply sequence를 반환한다.
-- 한 multipart record의 모든 part에 같은 routing ID와 request sequence가 반환되고, `zlink_router_recv_part_v2()`는 같은 record의 모든 part에 동일한 pair ID·generation을 추가로 반환한다.
+- 일반 raw record는 `request_seq_out_ == 0`, 수신 request는 0이 아닌 opaque reply token을 반환한다. Token은 일반적으로 wire sequence 값과 같을 수 있지만 그 일치는 계약이 아니다.
+- 한 multipart record의 모든 part에 같은 routing ID와 opaque reply token이 반환되고, `zlink_router_recv_part_v2()`는 같은 record의 모든 part에 동일한 pair ID·generation을 추가로 반환한다.
 - `zlink_router_request_part()`로 시작한 request의 reply와 terminal failure는 receive record로 반환되지 않고 `zlink_reply_handler_fn`으로 전달된다.
 - non-blocking receive에 받을 record가 없으면 `ZLINK_RECV_NO_DATA`와 `EAGAIN`이다.
 - receive 성공 시 part 소유권이 호출자에게 이동해 `zlink_msg_close()` 한 번으로 해제하고, 실패 시 소유권은 이동하지 않는다.
@@ -455,14 +464,15 @@ test 하나로 이어진다.
 - `zlink_router_recv_part()`와 `_v2()`에 reply나 error reply가 도착하면 payload를 반환하지 않고 `EPROTO`로 pair를 종료한다.
 - `zlink_router_recv_part()`와 `_v2()`가 반환한 data 또는 request payload를 raw send에 다시 사용해도 request-reply 의미가 나타나지 않는다.
 - 공통 `zlink_recv_part()`에 ROUTER를 넘기면 지원하지 않는 receive surface로 거부한다.
-- Explicit RID와 duplicate·standby peer가 있는 ROUTER가 request를 받으면, request를 보낸 peer connection에서만 reply가 관찰되고 원래 request 하나만 완료되며 같은 RID의 다른 peer는 reply를 받지 않는다.
+- 같은 RID의 서로 다른 physical source가 같은 live wire sequence request를 보내면 ROUTER는 서로 다른 opaque reply token을 반환한다. Reverse·out-of-order reply도 각 token이 저장한 exact source pipe·pair와 original wire sequence를 사용해 원래 request 하나만 완료한다.
+- 같은 physical source가 live wire sequence를 중복해 보내면 ROUTER는 `EPROTO`로 그 pair를 종료하고 duplicate request를 application receive에 전달하지 않는다.
 
 **Part sequence**
 - send API는 성공·실패 모두에서 `part_` 내용을 소비하고 길이 0인 초기화 상태로 둔다 — 실패 후에도 같은 `part_`로 재전송할 수 없다.
 - 열린 sequence의 중간 또는 마지막 submit이 실패하면 peer에는 그 record의 어떤 part도 보이지 않고, 다음 submit은 새 record의 첫 part로 시작한다.
 - 실패한 request submit은 request sequence를 만들지 않고 handler도 호출하지 않는다.
 - reply sequence가 실패해도 reply token과 peer RID 조합은 성공한 `ZLINK_PART_FINAL`이나 request lifecycle 종료 전까지 유효하며, 보관한 전체 reply를 첫 part부터 다시 제출할 수 있다.
-- Request나 reply의 첫 part에 non-empty group이 있으면 `ZLINK_SUBMIT_INVALID_ARGUMENT`와 `EINVAL`이며 입력 part는 소비되고 peer에는 그 record의 part가 전달되지 않는다. 실패한 request의 handler는 호출되지 않으며, 실패한 reply는 같은 source routing ID와 request sequence로 group이 없는 payload를 다시 제출할 수 있다.
+- Request나 reply의 첫 part에 non-empty group이 있으면 `ZLINK_SUBMIT_INVALID_ARGUMENT`와 `EINVAL`이며 입력 part는 소비되고 peer에는 그 record의 part가 전달되지 않는다. 실패한 request의 handler는 호출되지 않으며, 실패한 reply는 같은 source routing ID와 opaque reply token으로 group이 없는 payload를 다시 제출할 수 있다.
 
 **Directed·exact submit**
 - `zlink_send_part_rid()`는 request sequence나 completion handler를 만들지 않는다.
@@ -477,7 +487,7 @@ test 하나로 이어진다.
 - exact request submit이 실패하면 handler가 호출되지 않고, 이후 그 request에 대한 어떤 completion도 전달되지 않는다.
 
 **Reply와 completion lane**
-- `zlink_router_reply_part()`는 수신 record가 반환한 `peer_rid_`·`request_seq_`를 그대로 사용하며, `ZLINK_PART_FINAL`이 성공하면 reply가 완료된다.
+- `zlink_router_reply_part()`는 수신 record가 반환한 `peer_rid_`·opaque `request_seq_` token을 그대로 사용한다. Core는 그 token의 exact source pipe·pair에 original wire sequence를 다시 기록하며, `ZLINK_PART_FINAL`이 성공하면 reply가 완료된다.
 - raw reply와 error reply는 completion lane capacity를 이유로 `ZLINK_SUBMIT_BACKPRESSURED`를 반환하지 않으며, 연결·lifecycle·argument·state·allocation failure는 호출 시점의 해당 `zlink_submit_result_t`로 즉시 끝난다. 대상 경로가 없으면(대상 completion pipe 미발견, 또는 커밋 도중 대상 소멸) `errno == ENOTCONN`과 함께 `ZLINK_SUBMIT_NOT_CONNECTED`를 반환하며, 이는 backpressure가 아니므로 `ZLINK_POLLOUT`으로 재시도가 가능해지지 않는다.
 - Completion progress lane의 reply나 error reply는 일치하는 public request completion을 한 번 호출하고, data나 request는 callback payload로 전달하지 않은 채 `EPROTO`로 pair를 종료한다.
 

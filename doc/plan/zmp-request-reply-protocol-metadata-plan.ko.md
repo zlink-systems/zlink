@@ -289,13 +289,13 @@ control을 기존 순서대로 먼저 처리한다. Special frame의 byte 3이 `
 completion `data` 오류 경로로 보내지 않는다.
 
 첫 application part를 받은 socket runtime은 kind를 다음 경로 중 하나에서만 해석한다.
-Application에 message를 반환하기 전에는 필요한 sequence와 reply target을 별도 runtime
+Application에 message를 반환하기 전에는 필요한 original wire sequence와 reply target을 별도 runtime
 상태로 옮기고, 첫 payload part의 내부 request metadata를 지운다.
 
 | Kind | `zlink_dealer_recv_part`·`zlink_router_recv_part(_v2)` | Request completion progress lane | `zlink_recv_part`와 그 밖의 public receive | 내부 pipe·queue |
 |---|---|---|---|---|
 | `data` | Ordinary message로 payload를 전달한다. | `EPROTO`로 pair를 종료하며 이 frame으로 request를 완료하지 않는다. | 내부 metadata가 없는 payload를 ordinary message로 전달한다. | Message와 multipart 경계를 그대로 전달한다. |
-| `request` | Source pipe와 wire sequence를 reply target으로 등록하고 아래 규칙의 sequence 또는 token과 payload를 반환한다. | `EPROTO`로 pair를 종료하며 이 frame으로 pending request를 완료하지 않는다. | Reply target을 등록하지 않고 metadata를 지운 payload를 ordinary message로 전달한다. | Kind와 sequence를 보존해 다음 ZMP encoder가 같은 request를 전달하게 한다. |
+| `request` | Source pipe·pair와 original wire sequence를 reply target으로 등록하고 아래 규칙의 opaque reply token과 payload를 반환한다. | `EPROTO`로 pair를 종료하며 이 frame으로 pending request를 완료하지 않는다. | Reply target을 등록하지 않고 metadata를 지운 payload를 ordinary message로 전달한다. | Kind와 sequence를 보존해 다음 ZMP encoder가 같은 request를 전달하게 한다. |
 | `reply` | `EPROTO`로 pair를 종료하고 payload를 application receive에 반환하지 않는다. | Sequence에 해당하는 pending request 하나를 payload로 완료한다. | Reply 의미를 노출하지 않고 metadata를 지운 payload를 ordinary message로 전달한다. | Kind와 sequence를 보존해 다음 ZMP encoder가 같은 reply를 전달하게 한다. |
 | `error_reply` | `EPROTO`로 pair를 종료하고 payload를 application receive에 반환하지 않는다. | 기존 errno payload를 해석해 sequence에 해당하는 pending request 하나를 오류로 완료한다. | Error reply 의미를 노출하지 않고 metadata를 지운 payload를 ordinary message로 전달한다. | Kind와 sequence를 보존해 다음 ZMP encoder가 같은 error reply를 전달하게 한다. |
 
@@ -312,12 +312,16 @@ Application에 message를 반환하기 전에는 필요한 sequence와 reply tar
   reply로 처리하지 않는다. Pair teardown은 이미 pending인 request를 기존 disconnect 결과로
   각각 한 번 완료할 수 있다.
 
-ROUTER request receive는 wire sequence를 source RID와 함께 반환한다. DEALER request receive는
-wire sequence를 public token으로 직접 노출하지 않는다. DEALER는 수신마다 0이 아닌 local reply
-token을 만들고 `(source pipe, wire sequence)`를 저장해 token을 반환한다. Application이 그
-token으로 `zlink_dealer_reply_part`를 호출하면 runtime은 저장한 source pipe로 원래 wire
-sequence를 encode한다. 서로 다른 source pipe가 같은 wire sequence를 보내도 local token이
-충돌하지 않아야 한다.
+ROUTER와 DEALER request receive는 모두 wire sequence를 public 값으로 직접 노출하지 않는다.
+DEALER는 local opaque reply token과 `(source pipe, original wire sequence)` mapping을 유지한다.
+ROUTER는 source RID·exact source pipe·pair identity·original wire sequence를 저장하고 0이 아닌
+opaque reply token을 반환한다. 충돌이 없으면 ROUTER는 wire sequence 값을 token으로 재사용할 수
+있다. 그러나 같은 source RID의 서로 다른 physical source가 같은 live wire sequence를 보내면
+한쪽에는 socket-local alias token을 반환한다. 같은 physical source가 live wire sequence를
+중복해서 보내면 ROUTER는 `EPROTO`로 그 pair를 종료한다. Application이
+`zlink_router_reply_part()`에 RID와 token을 그대로 넘기면 runtime은 저장한 exact source pipe·pair를
+선택하고 original wire sequence를 reply header에 다시 기록한다. 따라서 reverse·out-of-order reply도
+원래 source request 하나만 완료한다.
 
 `error_reply`는 이번 작업에서 receive-only wire kind다. 첫 application part는 0이 아닌 errno를
 담은 4바이트 big-endian 값이다. Core C completion callback에는 이 part를 제외한 나머지 payload와
@@ -497,9 +501,10 @@ Binding source ownership은
 consumption·rollback 의미는 바꾸지 않는다.
 
 Routed와 non-routed request·reply는 같은 first-part 규칙을 사용한다. ROUTER는 받은 source
-RID와 source pipe를 wire sequence와 함께 reply target으로 보존하고, duplicate·standby peer가
-있어도 reply를 request를 받은 바로 그 pipe로 보낸다. DEALER는 §3.6의 local reply token과
-`(source pipe, wire sequence)` mapping을 유지한다.
+RID·exact source pipe·pair identity·original wire sequence를 opaque reply token에 연결해 보존한다.
+DEALER는 local reply token과 `(source pipe, original wire sequence)` mapping을 유지한다. 같은 RID의
+duplicate·standby peer가 있어도 ROUTER reply는 token이 가리키는 바로 그 pipe로 보내고 reply
+header에는 original wire sequence를 기록한다.
 
 ### 4.4 수신과 completion 처리
 
@@ -511,10 +516,11 @@ Payload의 앞부분을 읽는 `parse_envelope()`와 protocol part를 건너뛰�
   receive-flow control과 session special frame은 기존 handler가 소비한 뒤에만 application
   data kind를 판별한다.
 - **Terminal frame fast path보다 kind 판별을 먼저 실행한다.** `MORE`가 없는 single-part와
-  zero-byte request도 sequence와 source pipe를 reply target으로 등록한 뒤 application
-  payload를 반환해야 한다.
-- **Public export 직전에 request metadata를 지운다.** Request receive 결과에는 sequence를
-  별도 field로 옮기고, completion에는 pending entry lookup이 끝난 뒤 payload만 넘긴다. Direct
+  zero-byte request도 original wire sequence와 source pipe·pair를 opaque reply token에 연결한 뒤
+  application payload를 반환해야 한다.
+- **Public export 직전에 request metadata를 지운다.** ROUTER·DEALER request receive 결과에는
+  opaque reply token을 별도 field로 옮기고, completion에는 pending entry lookup이 끝난 뒤 payload만
+  넘긴다. Direct
   receive, callback과 TLS view 중 어느 경로에서도 public `Message`가 내부 kind나 sequence를
   보존하지 않는다.
 - **Typed receive만 reply target을 등록한다.** `zlink_recv_part(DEALER)`와 그 밖의 raw public
@@ -612,8 +618,8 @@ Long group message도 같은 수명 test를 통과해야 다음 단계로 진행
    정리하고 pending·reply target을 만들지 않는다.
 6. Terminal first frame을 포함한 수신 경로의 payload parsing을 내부 metadata 판별로 바꾼다.
 7. 기존 special·receive-flow control을 먼저 처리한 뒤 §3.6의 typed receive·raw
-   receive·completion progress lane 정책을 적용한다. Sequence와 source pipe를 옮긴 뒤 public
-   export 전에 metadata를 지운다.
+   receive·completion progress lane 정책을 적용한다. Original wire sequence와 exact source
+   pipe·pair를 opaque reply token에 연결한 뒤 public export 전에 metadata를 지운다.
 8. Pipe·queue forwarding은 metadata를 보존하고 `zlink_proxy`·capture 송신 전에는 metadata를
    지운다. Completion progress lane bridge는 추가하지 않는다.
 9. Error reply decoding은 raw fixture로 유지하되 새 producer나 public sender를 만들지 않는다.
@@ -1061,13 +1067,14 @@ decoder 상태와 allocation 제거처럼 내부 구조로만 확인할 조건�
 
 **Request와 reply 완료**
 
-- ROUTER가 request를 받으면 0이 아닌 wire sequence와 payload를 반환하고, 같은 sequence로
-  보낸 reply가 원래 request 하나를 완료한다.
-- DEALER가 request를 받으면 0이 아닌 local reply token과 payload를 반환하고, 그 token으로
-  보낸 reply가 저장된 source pipe에 원래 wire sequence로 전달돼 원래 request 하나를
-  완료한다.
-- 서로 다른 source pipe 두 개가 같은 wire sequence로 DEALER에 request를 보내면 서로 다른
-  local reply token이 반환되고 각 token의 reply가 해당 source request만 완료한다.
+- ROUTER가 request를 받으면 0이 아닌 opaque reply token과 payload를 반환한다. Token은 충돌이
+  없을 때 wire sequence와 같은 값일 수 있으나 Application은 그 일치를 가정하지 않는다. DEALER는
+  local opaque reply token과 payload를 반환한다.
+- 같은 RID의 서로 다른 physical source 두 개가 같은 live wire sequence로 ROUTER에 request를
+  보내면 서로 다른 opaque reply token이 반환된다. 각 token의 reply는 저장된 exact source
+  pipe·pair에 original wire sequence로 전달돼 해당 source request만 완료한다.
+- 같은 physical source가 live wire sequence를 중복해 보내면 ROUTER는 `EPROTO`로 그 pair를
+  종료하고 duplicate request를 Application에 전달하지 않는다.
 - Raw fixture가 `error_reply` kind, 0이 아닌 sequence와 첫 payload part의 0이 아닌 4바이트
   big-endian errno를 보내면 Core C callback이 해당 errno를 매핑한 `zlink_request_result_t`와
   나머지 application payload를 받는다. 첫 part가 없거나 크기·값이 잘못되면 callback은
@@ -1075,8 +1082,9 @@ decoder 상태와 allocation 제거처럼 내부 구조로만 확인할 조건�
   두 경우의 non-OK payload를 공개하지 않고 해당 언어의 error 경로로 완료한다.
 - 같은 sequence의 reply가 중복되거나 timeout·disconnect와 경쟁하면 먼저 확정된 terminal
   결과 하나만 application에 전달된다.
-- Explicit RID와 duplicate·standby peer가 있는 ROUTER가 request를 받으면 reply가 같은
-  sequence와 request를 전달한 source pipe로 돌아가 원래 request 하나만 완료한다.
+- Explicit RID와 duplicate·standby peer가 있는 ROUTER가 request를 받으면 reverse·out-of-order
+  reply도 opaque token이 저장한 source pipe·pair와 original wire sequence로 돌아가 원래 request
+  하나만 완료한다.
 - C part submit이 성공하거나 실패하면 입력 message는 길이 0인 초기화 상태이며, 다시
   초기화해 raw send에 사용하면 request metadata가 나타나지 않는다.
 - C++ request builder의 native submit이 실패해 `submit_error_t`를 던지면 public
@@ -1086,7 +1094,7 @@ decoder 상태와 allocation 제거처럼 내부 구조로만 확인할 조건�
 **Kind와 처리 경로**
 
 - `zlink_dealer_recv_part`와 `zlink_router_recv_part(_v2)`에 `data`를 보내면 ordinary payload가
-  전달되고, `request`를 보내면 §3.6의 local token 또는 wire sequence와 payload가 전달된다.
+  전달되고, `request`를 보내면 §3.6의 opaque reply token과 payload가 전달된다.
 - `zlink_dealer_recv_part`와 `zlink_router_recv_part(_v2)`에 `reply` 또는 `error_reply`를 보내면
   pair가 protocol 오류로 종료되고 typed receive에는 payload가 전달되지 않는다.
 - `zlink_recv_part(DEALER)`에 request·reply·error reply kind를 보내면 reply target이나 local

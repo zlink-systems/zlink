@@ -41,7 +41,7 @@ from a request record that requires a reply.
 | Record | `source_node_rid_out_` | `request_seq_out_` |
 |---|---|---:|
 | Ordinary raw multipart | Sending peer's routing ID | `0` |
-| Received request | Sending peer's routing ID | Nonzero reply sequence |
+| Received request | Sending peer's routing ID | Nonzero opaque reply token |
 
 Replies and terminal failures for a request started with `zlink_router_request_part()` are not
 returned as receive records. They are delivered only through the `zlink_reply_handler_fn`
@@ -49,9 +49,18 @@ completion.
 
 Core preserves the request kind and wire sequence decoded from the ZMP header as internal values on
 the first payload part. `zlink_router_recv_part()` and `_v2()` interpret only a request kind as a
-reply-capable record and store its source routing ID, source pipe, and wire sequence together. Even
-with duplicate or standby connections for the same routing ID, the reply returns over the exact
-source pipe that delivered the request.
+reply-capable record and store its source routing ID, exact source pipe, pair identity, and original
+wire sequence as a reply target. A nonzero `request_seq_out_` is a socket-local opaque reply token
+used with the source routing ID, not the wire sequence itself. Without a collision, Core may return
+the wire-sequence value as the token. When different physical sources with the same routing ID send
+the same live wire sequence, Core returns an alias token for one of them. If the same physical source
+reuses a live wire sequence, Core terminates that pair with `EPROTO`.
+
+The application uses the returned RID and token unchanged for a reply. Core finds the saved target
+by `(source RID, token)`, re-stamps the original wire sequence into the reply header, and sends the
+reply through the exact source pipe and pair that delivered the request. Thus duplicate or standby
+connections with the same RID, reverse replies, and out-of-order replies cannot complete a request
+from another physical source.
 
 A reply or error reply received through a typed surface terminates the pair with `EPROTO` and
 returns no payload. Before `zlink_router_recv_part()` or `_v2()` hands a data or request payload to
@@ -61,7 +70,7 @@ produces ordinary data. The common `zlink_recv_part()` surface does not support 
 `source_node_rid_out_` is a thread-local view owned by Core. The caller does not release it and
 copies the value if it must be retained after the next raw receive call. Starting the next receive
 call on the same thread invalidates the previously returned view. Every part of one multipart
-record returns the same routing ID and request sequence.
+record returns the same routing ID and opaque reply token.
 
 ## 3. Part sequences and ownership
 
@@ -321,8 +330,8 @@ operation without reselecting another pair. `ZLINK_PART_FINAL` completes the rec
 sequence. Use the output combinations in [section 2](#2-raw-receive-record-classification) to
 determine whether a reply is required.
 
-The returned payload has no internal request metadata. The routing ID, pair identity, and request
-sequence obtained from the first part of a multipart request are repeated for every remaining part
+The returned payload has no internal request metadata. The routing ID, pair identity, and opaque
+reply token obtained from the first part of a multipart request are repeated for every remaining part
 of the same record, but are not retained in the message itself.
 
 ## 9. Raw reply submit
@@ -337,13 +346,13 @@ ZLINK_EXPORT zlink_submit_result_t zlink_router_reply_part(
 ```
 
 This sends a reply part for a request returned by `zlink_router_recv_part()`. `peer_rid_` and the
-nonzero `request_seq_` use the values returned by that receive record without modification. A
-multipart reply uses the same two values for every call. A successful `ZLINK_PART_FINAL` completes
-the reply.
+nonzero `request_seq_` use the RID and opaque reply token returned by that receive record without
+modification. A multipart reply uses the same two values for every call. A successful
+`ZLINK_PART_FINAL` completes the reply.
 
-Core writes the reply kind and `request_seq_` into the first reply payload's ZMP header. Because the
-public API adds no sequence payload part, the peer's completion callback receives only the parts
-supplied by the application.
+Core finds the target by `(peer_rid_, request_seq_)` and writes the target's original wire sequence
+and reply kind into the first reply payload's ZMP header. Because the public API adds no sequence
+payload part, the peer's completion callback receives only the parts supplied by the application.
 
 Raw replies and error replies are submitted exactly once on the [completion progress
 lane](../glossary.en.md#completion-progress-lane), a separate path that handles only terminal-reply
@@ -471,8 +480,8 @@ and reply functions; ROUTER option set and get; return values and errno; the
   Promoting an active standby uses the value that standby most recently received.
 
 **Record classification and receive**
-- An ordinary raw record returns `request_seq_out_ == 0`; a received request returns a nonzero reply sequence.
-- Every part of one multipart record returns the same routing ID and request sequence, and `zlink_router_recv_part_v2()` additionally returns the same pair ID and generation for every part of that record.
+- An ordinary raw record returns `request_seq_out_ == 0`; a received request returns a nonzero opaque reply token. The token may normally equal the wire sequence, but that equality is not a contract.
+- Every part of one multipart record returns the same routing ID and opaque reply token, and `zlink_router_recv_part_v2()` additionally returns the same pair ID and generation for every part of that record.
 - Replies and terminal failures for a request started with `zlink_router_request_part()` are not returned as receive records and are delivered through `zlink_reply_handler_fn`.
 - A non-blocking receive with no record available returns `ZLINK_RECV_NO_DATA` and `EAGAIN`.
 - On successful receive, ownership of the part moves to the caller, which releases it with exactly one `zlink_msg_close()`; on failure, ownership does not move.
@@ -480,14 +489,15 @@ and reply functions; ROUTER option set and get; return values and errno; the
 - A reply or error reply received through `zlink_router_recv_part()` or `_v2()` returns no payload and terminates the pair with `EPROTO`.
 - Raw-sending a data or request payload returned by `zlink_router_recv_part()` or `_v2()` does not restore request-reply semantics.
 - Passing a ROUTER to the common `zlink_recv_part()` surface is rejected as unsupported.
-- With an explicit RID and duplicate or standby peers, a reply is observed only on the peer connection that sent the request, completes only the original request, and is not delivered to another peer with the same RID.
+- When different physical sources with the same RID send requests carrying the same live wire sequence, ROUTER returns distinct opaque reply tokens. Reverse or out-of-order replies use each token's saved exact source pipe, pair, and original wire sequence, so they complete only their original request.
+- If the same physical source reuses a live wire sequence, ROUTER terminates that pair with `EPROTO` and does not deliver the duplicate request to application receive.
 
 **Part sequences**
 - A send API consumes the content of `part_` on both success and failure and leaves it as an initialized zero-length message; the same `part_` cannot be resubmitted after failure.
 - If an intermediate or final submit in an open sequence fails, no part of that record becomes visible to the peer, and the next submit starts the first part of a new record.
 - A failed request submit creates no request sequence and invokes no handler.
 - After a reply-sequence failure, the reply-token and peer-RID pair remains valid until a successful `ZLINK_PART_FINAL` or the end of the request lifecycle, and a retained complete reply can be resubmitted from its first part.
-- A non-empty group on the first request or reply part yields `ZLINK_SUBMIT_INVALID_ARGUMENT` and `EINVAL`; the input part is consumed and the peer receives no part of that record. A failed request does not invoke its handler, and a failed reply can be submitted again with group-free payload using the same source routing ID and request sequence.
+- A non-empty group on the first request or reply part yields `ZLINK_SUBMIT_INVALID_ARGUMENT` and `EINVAL`; the input part is consumed and the peer receives no part of that record. A failed request does not invoke its handler, and a failed reply can be submitted again with group-free payload using the same source routing ID and opaque reply token.
 
 **Directed and exact submit**
 - `zlink_send_part_rid()` creates no request sequence or completion handler.
@@ -502,7 +512,7 @@ and reply functions; ROUTER option set and get; return values and errno; the
 - If an exact request submit fails, the handler is not invoked, and no subsequent completion for that request is delivered.
 
 **Replies and the completion lane**
-- `zlink_router_reply_part()` uses the `peer_rid_` and `request_seq_` returned by the receive record without modification, and a successful `ZLINK_PART_FINAL` completes the reply.
+- `zlink_router_reply_part()` uses the `peer_rid_` and opaque `request_seq_` token returned by the receive record without modification. Core re-stamps the original wire sequence onto that token's exact source pipe and pair, and a successful `ZLINK_PART_FINAL` completes the reply.
 - Raw replies and error replies do not return `ZLINK_SUBMIT_BACKPRESSURED` because of completion-lane capacity; connection, lifecycle, argument, state, and allocation failures terminate immediately with the corresponding `zlink_submit_result_t` at the call. When there is no target route (no completion pipe found, or the target disappears mid-commit), the call returns `ZLINK_SUBMIT_NOT_CONNECTED` with `errno == ENOTCONN`; this is not backpressure, so `ZLINK_POLLOUT` does not make a retry viable.
 - A reply or error reply on the completion progress lane invokes the matching public request completion once; data or a request terminates the pair with `EPROTO` without being delivered as callback payload.
 
