@@ -2975,7 +2975,7 @@ void test_completion_poller_exclusively_owns_routed_async_completion ()
         }
     }
 
-    test_context_socket_close_zero_linger (dealer);
+    close_test_socket_after_reply_callback (dealer);
     test_context_socket_close_zero_linger (router);
 }
 
