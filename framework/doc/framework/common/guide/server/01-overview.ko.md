@@ -564,10 +564,11 @@ flowchart LR
 
 ### 기존 웹 서비스의 실시간 기능 추가
 
-**왜 복잡도가 올라가는가.** 대규모 웹 서비스의 표준 구성 — Spring/`ASP.NET Core` +
-Redis(캐시) + Kafka(이벤트) + LB/K8s — 은 **stateless 요청/응답**에 최적화되어
-있다. 여기에 채팅·알림·주문 추적 같은 실시간 기능을 추가하는 순간 이 전제들이
-하나씩 안 맞으면서 복잡도가 올라간다.
+**왜 복잡도가 올라가는가.** **배달 주문 앱**을 떠올려 보자 — 주문 넣기·조회는 평범한
+HTTP 요청/응답이지만, "준비 중 → 배달 출발 → 곧 도착" 상태는 앱을 새로고침하지 않아도
+실시간으로 밀어줘야 한다. 대규모 웹 서비스의 표준 구성 — Spring/`ASP.NET Core` +
+Redis(캐시) + Kafka(이벤트) + LB/K8s — 은 **stateless 요청/응답**에 최적화되어 있어서,
+이런 실시간 기능을 추가하는 순간 전제들이 하나씩 안 맞으면서 복잡도가 올라간다.
 
 - **연결이 상태가 된다.** HTTP 요청은 아무 인스턴스가 받아도 되지만, WebSocket
   연결은 특정 인스턴스에 설정되어 있다. 그래서 연결을 고정하는 sticky LB가 생기고,
@@ -590,8 +591,8 @@ Redis(캐시) + Kafka(이벤트) + LB/K8s — 은 **stateless 요청/응답**에
 | 브로커 경유 실시간 전달 | **channel·fanout** — 서버 간 전달과 fan-out을 transport가 직접 | [05](05-channel-messaging.ko.md) |
 | "누가 어디 연결돼 있지" 관리 | **actor binding + location store** — 재접속 이전성과 위치 조회를 framework가 소유 | [08](08-actor-session.ko.md)·[10](10-location.ko.md) |
 
-같은 시스템 — 웹 API + 실시간 기능(채팅·주문 추적) — 을 두 방식으로 그리면 차이가
-그림에서 바로 보인다.
+같은 배달 주문 앱 — HTTP 주문 처리 + 실시간 배달 상태 push — 을 두 방식으로 그리면
+차이가 그림에서 바로 보인다.
 
 **기존 방식** — 실시간 기능을 위한 구성 요소(주황)가 본체만큼 추가된다.
 
@@ -600,23 +601,22 @@ Redis(캐시) + Kafka(이벤트) + LB/K8s — 은 **stateless 요청/응답**에
 flowchart LR
     Client["클라이언트 앱"]
     LB["L7 LB / gateway"]:::infra
-    Api["API 서버들 ×N<br/>(ASP.NET Core, stateless)"]:::app
-    Dom["도메인 서버들 ×N<br/>(gRPC server)"]:::app
-    SD["service discovery<br/>(xDS / Consul)"]:::infra
     SLB["sticky LB"]:::extra
-    WS["WebSocket 서버 ×N"]:::extra
-    RP["Redis pub/sub<br/>(실시간 fan-out 경유)"]:::extra
-    RL["Redis 분산 락<br/>(주문·대화 순서 보장)"]:::extra
+    WS["WebSocket 서버 ×N<br/>(고객 연결만 보유, 로직 없음)"]:::extra
+    A["앱 서버 A<br/>(주문·조회 처리)"]:::app
+    B["앱 서버 B<br/>(주문 #123 배달 상태 변경)"]:::app
+    RP["Redis pub/sub"]:::extra
+    RL["Redis 분산 락"]:::extra
 
-    Client -- "HTTP" --> LB --> Api
-    Api -- "gRPC + mesh sidecar" --> Dom
-    Api -.->|"위치 조회"| SD
-    Dom -.->|"등록"| SD
-    Client -- "실시간 연결" --> SLB --> WS
-    WS <--> RP
-    RP <--> Api
-    Api -.-> RL
-    Dom -.-> RL
+    Client -- "HTTP (주문·조회)" --> LB
+    LB --> A
+    LB --> B
+    Client <-->|"실시간 연결"| SLB
+    SLB <--> WS
+    B -- "고객이 어느 WS인지 몰라 배달 상태 방송" --> RP
+    RP -- "구독 → 보유한 WS가 push" --> WS
+    A -.->|"같은 주문 동시 접근 → 직렬화"| RL
+    B -.-> RL
 
     classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
     classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
@@ -631,24 +631,24 @@ location store 하나가 남는다.
 flowchart LR
     Client2["클라이언트 앱"]
     LB2["L7 LB / gateway<br/>(HTTP는 그대로)"]:::infra
-    Api2["API 서버들 ×N<br/>ASP.NET Core + ZLink<br/>route client"]:::app
-    Dom2["도메인 서버들 ×N<br/>ASP.NET Core + ZLink<br/>SPOT(주문·대화) · STREAM"]:::spot
+    App2["앱 서버 ×N<br/>API + ZLink<br/>Instance Spot(주문 하나 직렬 소유)<br/>— 분산 락 불필요"]:::spot
+    Sess2["Session 서버 ×N<br/>WebSocket 지원 · 고객 세션 보유<br/>(host relocation 단위 → 무중단 패치)"]:::app
     Store["location store<br/>(descriptor rows)"]:::infra
 
-    Client2 -- "HTTP" --> LB2 --> Api2
-    Client2 -- "STREAM 직접 접속" --> Dom2
-    Api2 -- "channel request/send (직접)" --> Dom2
-    Api2 -.->|"주소 해석"| Store
-    Dom2 -.->|"등록"| Store
+    Client2 -- "HTTP (주문·조회)" --> LB2 --> App2
+    Client2 <-->|"WebSocket"| Sess2
+    App2 <-->|"요청 relay · 배달 상태 push — channel 직접 (브로커·LB 없이)"| Sess2
+    App2 -.->|"주소 해석"| Store
+    Sess2 -.->|"세션 등록"| Store
 
     classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
     classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
     classDef spot fill:#e8f5e9,stroke:#2e7d32,stroke-width:4px,color:#1b5e20
 ```
 
-sticky LB, WebSocket 서버, pub/sub 경유, 분산 락, mesh/discovery — 다섯 조각이
-**location store 하나**로 줄었다. 서버 간 호출과 실시간 전달은 전부 runtime끼리
-직접 이어진다.
+sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 세 조각이 사라진다. 순서는
+**Instance Spot**이, 실시간 연결은 shell 서버 대신 **Session 서버**(STREAM)가, 서버 간
+전달은 **runtime 직접 연결**이 맡는다. 새로 두는 인프라는 **location store 하나**뿐이다.
 
 **기존 스택을 대체하는 것이 아니다.** Kafka는 내구성 있는 이벤트 스트림으로, Redis는
 캐시/영속 보조로 양쪽 그림 모두에 그대로 남는다(그래서 그림에서 뺐다). ZLink가

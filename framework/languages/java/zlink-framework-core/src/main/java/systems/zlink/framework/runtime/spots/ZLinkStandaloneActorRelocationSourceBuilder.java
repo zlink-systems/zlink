@@ -971,7 +971,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     throw new IllegalStateException(
                         "Actor relocation target owner generation is invalid");
                 }
-                installRelocationForward(targetAuthorityOwnerGeneration);
+                actors.refreshRelocationMessageFollow(
+                    sourceRoute(), targetRoute(targetAuthorityOwnerGeneration));
                 return null;
             });
         }
@@ -1039,16 +1040,14 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         private void installExpectedRelocationForward() {
             long targetOwnerGeneration = Math.addExact(
                 owned.snapshot().authorityOwnerGeneration(), 1);
-            installRelocationForward(targetOwnerGeneration);
+            actors.stageRelocationMessageFollow(
+                sourceRoute(), targetRoute(targetOwnerGeneration));
             bindCommittedReplies(Map.of(
                 owned.authorityKey(), targetOwnerGeneration));
         }
 
-        private void installRelocationForward(
-            long targetAuthorityGeneration) {
-            relocationReplies.nodeByRid(stageRequest.sourceNodeRid())
-                .installRelocationActorForward(
-                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+        private ZLinkServiceM6BWireCodec.ActorRouteFence sourceRoute() {
+            return new ZLinkServiceM6BWireCodec.ActorRouteFence(
                     new systems.zlink.framework.runtime.internal.backend
                         .ZLinkBackendActorRef(
                             stageRequest.sourceNodeRid(),
@@ -1056,8 +1055,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                             owned.snapshot().objectGeneration()),
                     stageRequest.sourceNodeGeneration(),
                     owned.snapshot().authorityOwnerGeneration(),
-                    owned.snapshot().ownerLeaseGeneration()),
-                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                    owned.snapshot().ownerLeaseGeneration());
+        }
+
+        private ZLinkServiceM6BWireCodec.ActorRouteFence targetRoute(
+            long targetAuthorityGeneration) {
+            return new ZLinkServiceM6BWireCodec.ActorRouteFence(
                     new systems.zlink.framework.runtime.internal.backend
                         .ZLinkBackendActorRef(
                             stageRequest.targetNodeRid(),
@@ -1065,8 +1068,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                             owned.snapshot().objectGeneration()),
                     stageRequest.targetNodeGeneration(),
                     targetAuthorityGeneration,
-                    stageRequest.targetOwnerLeaseGeneration()),
-                relocationReplies.relocationForwardRetention());
+                    stageRequest.targetOwnerLeaseGeneration());
         }
 
         private void bindCommittedReplies(
@@ -1098,6 +1100,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                             "Actor relocation source queue is not durably committed");
                     }
                     committed = true;
+                    actors.commitRelocationMessageFollow(sourceRoute());
                     return relocationCommit;
                 });
             retained.complete();
@@ -1155,6 +1158,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             }
             return abortSessionRoute(sessionSealer, sealedSessionRoute)
                 .thenRun(() -> {
+                    actors.abortRelocationMessageFollow(sourceRoute());
                     boolean restored = relocationCommit == null
                         ? actors.abortActorRelocation(owned.actorId(), seal)
                         : relocationCommit.abort();

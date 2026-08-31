@@ -80,7 +80,11 @@ public final class ZLinkOneWayCalls {
             Throwable cause = unwrap(error);
             if (cause instanceof ZlinkSubmitException submit) {
                 CompletionStage<Void> mapped = switch (submit.getResult()) {
-                    case BACKPRESSURED, NOT_ADMITTED -> oneWayStatus(BACKPRESSURED);
+                    case BACKPRESSURED -> oneWayStatus(BACKPRESSURED);
+                    case NOT_ADMITTED -> oneWayStatus(
+                        isRouteUnavailableErrno(submit.getNativeErrno())
+                            ? ROUTE_NOT_CONNECTED
+                            : BACKPRESSURED);
                     case NOT_CONNECTED -> oneWayStatus(ROUTE_NOT_CONNECTED);
                     case NOT_FOUND -> oneWayStatus(TARGET_NOT_FOUND);
                     case TERMINATED -> oneWayStatus(SHUTDOWN);
@@ -95,6 +99,17 @@ public final class ZLinkOneWayCalls {
             result.completeExceptionally(cause);
         });
         return result;
+    }
+
+    private static boolean isRouteUnavailableErrno(int nativeErrno) {
+        // Async binding terminals can collapse an exact-route transport loss
+        // to NOT_ADMITTED. Preserve queue admission failures as
+        // DeadlineExceeded, but surface portable route-loss errno values as
+        // Unavailable.
+        return switch (nativeErrno) {
+            case 101, 107, 111, 113, 10051, 10057, 10061, 10065 -> true;
+            default -> false;
+        };
     }
 
     private static Throwable unwrap(Throwable error) {

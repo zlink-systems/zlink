@@ -115,6 +115,34 @@ final class ZLinkActorSessionCoordinator {
         return actors == null ? Optional.empty() : actors.localActor(actorId);
     }
 
+    void stageRelocationMessageFollow(
+        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+            .ActorRouteFence source,
+        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+            .ActorRouteFence target) {
+        requireActors().stageRelocationMessageFollow(source, target);
+    }
+
+    void commitRelocationMessageFollow(
+        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+            .ActorRouteFence source) {
+        requireActors().commitRelocationMessageFollow(source);
+    }
+
+    void refreshRelocationMessageFollow(
+        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+            .ActorRouteFence source,
+        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+            .ActorRouteFence target) {
+        requireActors().refreshRelocationMessageFollow(source, target);
+    }
+
+    void abortRelocationMessageFollow(
+        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+            .ActorRouteFence source) {
+        requireActors().abortRelocationMessageFollow(source);
+    }
+
     String actorType(String actorId) {
         ZLinkActor actor = localActor(actorId).orElseThrow(() ->
             new ZLinkFrameworkException(

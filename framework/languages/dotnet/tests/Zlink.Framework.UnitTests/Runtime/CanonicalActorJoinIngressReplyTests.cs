@@ -510,13 +510,13 @@ public sealed class CanonicalActorJoinIngressReplyTests
         var attemptsAtDiscard = Volatile.Read(ref attempts);
         await runtime.ReconnectAsync();
         Assert.Equal(
-            SubmitResult.Backpressured,
+            SubmitResult.Terminated,
             staleIngress.ReplyTerminal(
                 RequestResult.InternalError,
                 (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
-        Assert.Equal(attemptsAtDiscard + 1, Volatile.Read(ref attempts));
+        Assert.Equal(attemptsAtDiscard, Volatile.Read(ref attempts));
         await Task.Delay(150);
-        Assert.Equal(attemptsAtDiscard + 1, Volatile.Read(ref attempts));
+        Assert.Equal(attemptsAtDiscard, Volatile.Read(ref attempts));
         Assert.Equal(
             SubmitResult.InvalidState,
             pendingIngress.ReplyJoin(
@@ -525,7 +525,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
     }
 
     [Fact]
-    public async Task CanonicalActorJoinRequest_HandoverHelloBeforePriorDisconnect_DiscardsOnlyPriorReplyEpoch()
+    public async Task CanonicalActorJoinRequest_HandoverKeepsPriorReplyEpochUntilExactDisconnect()
     {
         var attempts = 0;
         var allowSubmit = 0;
@@ -557,12 +557,23 @@ public sealed class CanonicalActorJoinIngressReplyTests
         var protocolErrors = monitor.Status().ProtocolErrors;
         await runtime.HandoverAsync();
         await WaitUntilAsync(() =>
+            Volatile.Read(ref attempts) > 1);
+        Assert.Equal(protocolErrors, monitor.Status().ProtocolErrors);
+        Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
+
+        await runtime.SendPriorHelloAsync();
+        await WaitUntilAsync(() =>
             monitor.Status().ProtocolErrors > protocolErrors);
-        var attemptsAfterHandover = Volatile.Read(ref attempts);
+        var protocolErrorsAfterStaleHello = monitor.Status().ProtocolErrors;
+        Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
 
         await runtime.DisconnectPriorSourceAsync();
+        await WaitUntilAsync(() =>
+            monitor.Status().ProtocolErrors > protocolErrorsAfterStaleHello);
+        var attemptsAfterDisconnect = Volatile.Read(ref attempts);
         await Task.Delay(150);
-        Assert.Equal(attemptsAfterHandover, Volatile.Read(ref attempts));
+        Assert.Equal(attemptsAfterDisconnect, Volatile.Read(ref attempts));
+        Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
 
         Volatile.Write(ref allowSubmit, 1);
         var replacementRequest = staleRequest with { Correlation = 57 };
@@ -590,6 +601,104 @@ public sealed class CanonicalActorJoinIngressReplyTests
         {
             ZLinkMessageParts.DisposeAll(replacementReply);
         }
+    }
+
+    [Fact]
+    public async Task CanonicalActorJoinRequest_IdempotentHelloThenDisconnect_RemovesAdmittedPeerPromptly()
+    {
+        await using var runtime = await ConnectedRuntime.CreateAsync(_ =>
+            SubmitResult.Ok);
+
+        Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
+        await runtime.SendIdempotentHelloAsync();
+        Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
+
+        await runtime.DisconnectSourceAsync();
+        await WaitUntilAsync(() =>
+            runtime.Target.Status().AdmittedPeerCount == 0);
+    }
+
+    [Fact]
+    public async Task RouteAdmission_PriorHelloThenExactDisconnect_DoesNotReplaceCurrentPeer()
+    {
+        await using var runtime = await ConnectedRuntime.CreateAsync(_ =>
+            SubmitResult.Ok);
+
+        for (var iteration = 0; iteration < 6; iteration++)
+        {
+            await runtime.HandoverAsync();
+            await runtime.SendPriorHelloAndDisconnectAsync();
+
+            // The old Hello may either be rejected or be discarded with its
+            // closing transport. In both cases it must never steal the logical
+            // RID: the current pair still has to receive its exact Admit reply.
+            await Task.Delay(50);
+            await runtime.SendIdempotentHelloAsync();
+            Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
+        }
+    }
+
+    [Fact]
+    public async Task RouteAdmission_HandoverStartsFreshLivenessDeadline()
+    {
+        await using var runtime = await ConnectedRuntime.CreateAsync(_ =>
+            SubmitResult.Ok);
+
+        await Task.Delay(ZLinkServiceLiveness.PeerTimeout - TimeSpan.FromSeconds(2));
+        await runtime.HandoverAsync();
+        await Task.Delay(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
+    }
+
+    [Fact]
+    public async Task RouterMonitor_HandoverReportsExactTransportPairIdentity()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var router = context.CreateRouterSocket();
+        router.Options.Handover = true;
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceRid = RoutingId.From($"monitor-source-{suffix}");
+        router.SetRoutingId(RoutingId.From($"monitor-target-{suffix}"));
+        var endpoint = AllocateTcpEndpoint();
+        router.Bind(endpoint);
+        using var monitor = router.MonitorOpen(
+            SocketEvent.ConnectionReady | SocketEvent.Disconnected);
+
+        await using var first = context.CreateDealerSocket();
+        first.SetRoutingId(sourceRid);
+        first.Connect(endpoint);
+        var firstReady = await ReceiveMonitorEventAsync(
+            monitor,
+            MonitorEventType.ConnectionReady);
+        Assert.Equal(sourceRid, firstReady.RoutingId);
+        Assert.True(firstReady.Flags.HasFlag(
+            MonitorEventFlags.ConnectionReadyEdge));
+        Assert.NotEqual(0UL, firstReady.TransportPairId);
+        Assert.NotEqual(0UL, firstReady.TransportPairGeneration);
+
+        await using var replacement = context.CreateDealerSocket();
+        replacement.SetRoutingId(sourceRid);
+        replacement.Connect(endpoint);
+        var replacementReady = await ReceiveMonitorEventAsync(
+            monitor,
+            MonitorEventType.ConnectionReady);
+        Assert.Equal(sourceRid, replacementReady.RoutingId);
+        Assert.True(replacementReady.Flags.HasFlag(
+            MonitorEventFlags.ConnectionReadyEdge));
+        Assert.NotEqual(
+            (firstReady.TransportPairId, firstReady.TransportPairGeneration),
+            (replacementReady.TransportPairId,
+                replacementReady.TransportPairGeneration));
+
+        await first.DisposeAsync();
+        var disconnected = await ReceiveMonitorEventAsync(
+            monitor,
+            MonitorEventType.Disconnected);
+        Assert.Equal(firstReady.TransportPairId, disconnected.TransportPairId);
+        Assert.Equal(
+            firstReady.TransportPairGeneration,
+            disconnected.TransportPairGeneration);
     }
 
     [Fact]
@@ -937,6 +1046,21 @@ public sealed class CanonicalActorJoinIngressReplyTests
         throw new TimeoutException("Route admission reply was not received.");
     }
 
+    private static async Task<MonitorEvent> ReceiveMonitorEventAsync(
+        ISocketMonitor monitor,
+        MonitorEventType expected)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (DateTime.UtcNow < deadline)
+        {
+            var value = monitor.Recv(RecvFlags.DontWait);
+            if (value?.Event == expected)
+                return value;
+            await Task.Delay(10);
+        }
+        throw new TimeoutException($"Monitor event '{expected}' was not received.");
+    }
+
     private static async Task SendHelloAsync(
         IDealerSocket source,
         string sourceEndpoint)
@@ -1010,6 +1134,12 @@ public sealed class CanonicalActorJoinIngressReplyTests
 
         internal ValueTask DisconnectSourceAsync() => Source.DisposeAsync();
 
+        internal async Task SendIdempotentHelloAsync()
+        {
+            await SendHelloAsync(Source, SourceEndpoint);
+            using var admission = await ReceiveAsync(Source);
+        }
+
         internal async Task ReconnectAsync()
         {
             var replacement = Context.CreateDealerSocket();
@@ -1029,6 +1159,28 @@ public sealed class CanonicalActorJoinIngressReplyTests
             using var admission = await ReceiveAsync(replacement);
             PriorSource = Source;
             Source = replacement;
+        }
+
+        internal Task SendPriorHelloAsync()
+        {
+            if (PriorSource is not { } prior)
+                throw new InvalidOperationException("No prior source is available.");
+            return SendHelloAsync(prior, SourceEndpoint);
+        }
+
+        internal async Task SendPriorHelloAndDisconnectAsync()
+        {
+            if (PriorSource is not { } prior)
+                throw new InvalidOperationException("No prior source is available.");
+            PriorSource = null;
+            try
+            {
+                await SendHelloAsync(prior, SourceEndpoint);
+            }
+            finally
+            {
+                await prior.DisposeAsync();
+            }
         }
 
         internal async ValueTask DisconnectPriorSourceAsync()

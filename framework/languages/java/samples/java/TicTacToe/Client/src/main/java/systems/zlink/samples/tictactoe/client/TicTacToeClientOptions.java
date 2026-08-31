@@ -5,13 +5,15 @@ public record TicTacToeClientOptions(
     String gameName,
     String xActorId,
     String oActorId,
-    String observerActorId) {
+    String observerActorId,
+    String lifecycleCompletionFile) {
     public static TicTacToeClientOptions createDefault() {
         return new TicTacToeClientOptions(
             TicTacToeSampleDefaults.ApiUrl,
             TicTacToeSampleDefaults.GameName,
             TicTacToeSampleDefaults.XActorId,
             TicTacToeSampleDefaults.OActorId,
-            TicTacToeSampleDefaults.ObserverActorId);
+            TicTacToeSampleDefaults.ObserverActorId,
+            "");
     }
 }

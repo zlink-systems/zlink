@@ -9,6 +9,8 @@ object TicTacToeClientArguments {
             xActorId = readOption(args, "--x-actor-id") ?: defaults.xActorId,
             oActorId = readOption(args, "--o-actor-id") ?: defaults.oActorId,
             observerActorId = readOption(args, "--observer-actor-id") ?: defaults.observerActorId,
+            lifecycleCompletionFile =
+                readOption(args, "--lifecycle-completion-file") ?: defaults.lifecycleCompletionFile,
         )
     }
 

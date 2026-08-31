@@ -785,6 +785,8 @@ final class ZLinkStreamRuntimeIngressTest {
             ZLinkStreamRuntime runtime = start(stream, 0);
             runtimes.add(runtime);
 
+            TestSession session = awaitSession();
+            assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
             expireSessionForLiveness(runtime, expiredTimestampField);
             runtime.closeAsync().toCompletableFuture().join();
 

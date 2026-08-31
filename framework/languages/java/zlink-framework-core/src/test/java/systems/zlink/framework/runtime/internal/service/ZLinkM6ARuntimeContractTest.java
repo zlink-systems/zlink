@@ -425,6 +425,157 @@ final class ZLinkM6ARuntimeContractTest {
     }
 
     @Test
+    void readyConnectionCanBeRevalidatedImmediately() {
+        var liveness = new ZLinkServiceLivenessRegistry(
+            Duration.ofSeconds(5), Duration.ofSeconds(15));
+        RoutingId peer = RoutingId.from("peer-revalidate");
+        long now = 100;
+
+        liveness.admit(peer, "pipe", now);
+        assertTrue(liveness.requestProbe(peer, "pipe", now));
+        var initial = liveness.tick(now).probes().getFirst();
+        assertFalse(initial.selectedPair());
+        assertTrue(liveness.acknowledge(
+            peer, "pipe", initial.probeId(), now + 1));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness.READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
+
+        assertTrue(liveness.requestValidationProbe(
+            peer, "pipe", now + 2));
+        assertFalse(liveness.requestValidationProbe(
+            peer, "stale-pipe", now + 2));
+        assertFalse(liveness.requestValidationProbe(
+            peer, "pipe", now + 2));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness
+                .VALIDATING_PREVIOUSLY_READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
+        var validation = liveness.tick(now + 2).probes().getFirst();
+        assertTrue(validation.selectedPair());
+        assertFalse(liveness.isReady(peer, "pipe"));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness
+                .VALIDATING_PREVIOUSLY_READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
+        assertTrue(liveness.acknowledge(
+            peer, "pipe", validation.probeId(), now + 3));
+        assertTrue(liveness.isReady(peer, "pipe"));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness.READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
+    }
+
+    @Test
+    void previouslyReadyValidationExpiresAtTheExistingPeerDeadline() {
+        var liveness = new ZLinkServiceLivenessRegistry(
+            Duration.ofSeconds(5), Duration.ofSeconds(15));
+        RoutingId peer = RoutingId.from("peer-revalidate-timeout");
+        long now = 100;
+
+        liveness.admit(peer, "pipe", now);
+        assertTrue(liveness.requestProbe(peer, "pipe", now));
+        var bootstrap = liveness.tick(now).probes().getFirst();
+        long readyAt = now + 1;
+        assertTrue(liveness.acknowledge(
+            peer, "pipe", bootstrap.probeId(), readyAt));
+        assertTrue(liveness.requestValidationProbe(
+            peer, "pipe", readyAt + 1));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness
+                .VALIDATING_PREVIOUSLY_READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
+
+        assertEquals(
+            List.of(peer),
+            liveness.tick(
+                readyAt + Duration.ofSeconds(15).toNanos())
+                .timedOutNodes());
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness.NOT_READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
+    }
+
+    @Test
+    void validationDuringBootstrapRunsAsAnExactProbeAfterTheAck() {
+        var liveness = new ZLinkServiceLivenessRegistry(
+            Duration.ofSeconds(5), Duration.ofSeconds(15));
+        RoutingId peer = RoutingId.from("peer-bootstrap-revalidate");
+        long now = 100;
+
+        liveness.admit(peer, "pipe", now);
+        assertTrue(liveness.requestProbe(peer, "pipe", now));
+        var bootstrap = liveness.tick(now).probes().getFirst();
+        assertFalse(bootstrap.selectedPair());
+        assertTrue(liveness.requestValidationProbe(
+            peer, "pipe", now + 1));
+        assertFalse(liveness.requestValidationProbe(
+            peer, "pipe", now + 1));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness.NOT_READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
+        assertTrue(liveness.acknowledge(
+            peer, "pipe", bootstrap.probeId(), now + 2));
+        assertFalse(liveness.isReady(peer, "pipe"));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness.NOT_READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
+
+        var validation = liveness.tick(now + 2).probes().getFirst();
+        assertTrue(validation.selectedPair());
+        assertNotEquals(bootstrap.probeId(), validation.probeId());
+        assertTrue(liveness.acknowledge(
+            peer, "pipe", validation.probeId(), now + 3));
+        assertTrue(liveness.isReady(peer, "pipe"));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness.READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
+    }
+
+    @Test
+    void validationDuringAnExactProbeRunsAgainAfterItsAck() {
+        var liveness = new ZLinkServiceLivenessRegistry(
+            Duration.ofSeconds(5), Duration.ofSeconds(15));
+        RoutingId peer = RoutingId.from("peer-periodic-revalidate");
+        long now = 100;
+
+        liveness.admit(peer, "pipe", now);
+        assertTrue(liveness.requestProbe(peer, "pipe", now));
+        var bootstrap = liveness.tick(now).probes().getFirst();
+        assertTrue(liveness.acknowledge(
+            peer, "pipe", bootstrap.probeId(), now + 1));
+        long periodicAt = now + 1 + Duration.ofSeconds(5).toNanos();
+        var periodic = liveness.tick(periodicAt).probes().getFirst();
+        assertTrue(periodic.selectedPair());
+        assertTrue(liveness.requestValidationProbe(
+            peer, "pipe", periodicAt + 1));
+        assertFalse(liveness.isReady(peer, "pipe"));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness
+                .VALIDATING_PREVIOUSLY_READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
+        assertTrue(liveness.acknowledge(
+            peer, "pipe", periodic.probeId(), periodicAt + 2));
+        assertFalse(liveness.isReady(peer, "pipe"));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness
+                .VALIDATING_PREVIOUSLY_READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
+
+        var validation = liveness.tick(periodicAt + 2)
+            .probes()
+            .getFirst();
+        assertTrue(validation.selectedPair());
+        assertNotEquals(periodic.probeId(), validation.probeId());
+        assertTrue(liveness.acknowledge(
+            peer, "pipe", validation.probeId(), periodicAt + 3));
+        assertTrue(liveness.isReady(peer, "pipe"));
+        assertEquals(
+            ZLinkServiceLivenessRegistry.Readiness.READY,
+            liveness.peerStateSnapshot(peer, "pipe").readiness());
+    }
+
+    @Test
     void oldConnectionAckCannotReadyOrRenewAReplacementConnection() {
         var liveness = new ZLinkServiceLivenessRegistry(
             Duration.ofSeconds(5), Duration.ofSeconds(15));

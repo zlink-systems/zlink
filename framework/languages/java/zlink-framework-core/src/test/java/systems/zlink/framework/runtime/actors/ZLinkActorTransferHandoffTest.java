@@ -27,6 +27,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
@@ -136,6 +137,95 @@ final class ZLinkActorTransferHandoffTest {
         assertTrue(removed.await(1, TimeUnit.SECONDS));
         assertEquals(0, handoff.messageFollowSourceCount());
         handoff.close();
+    }
+
+    @Test
+    void relocationFollowDurationStartsOnlyWhenTargetCommitIsObserved()
+        throws Exception {
+        ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
+        var source = route("node-a", 11, 3);
+        var target = route("node-b", 12, 5);
+        handoff.stageRelocationRoute(source, target, rawRoute(target));
+
+        Thread.sleep(60);
+        assertTrue(handoff.messageFollowSource(source).isPresent(),
+            "pre-commit capture time must not consume Message Follow duration");
+        var committedTarget = route("node-b", 12, 8);
+        handoff.refreshRelocationRoute(
+            source, committedTarget, rawRoute(committedTarget));
+
+        handoff.commitRelocationRoute(source, Duration.ofMillis(25));
+        assertEquals(committedTarget,
+            handoff.messageFollowSource(source).orElseThrow().targetRoute(),
+            "commit must retain the authority generation returned by target CAS");
+        long deadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+        while (handoff.messageFollowSource(source).isPresent()
+            && System.nanoTime() < deadline) {
+            Thread.sleep(1);
+        }
+        assertTrue(handoff.messageFollowSource(source).isEmpty());
+        handoff.close();
+    }
+
+    @Test
+    void zeroDurationCommitsRelocationWithoutCreatingFollowRoute() {
+        ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
+        var source = route("node-a", 11, 3);
+        var target = route("node-b", 12, 5);
+        handoff.stageRelocationRoute(source, target, rawRoute(target));
+
+        handoff.commitRelocationRoute(source, Duration.ZERO);
+
+        assertTrue(handoff.messageFollowSource(source).isEmpty());
+        assertEquals(0, handoff.messageFollowSourceCount());
+        handoff.close();
+    }
+
+    @Test
+    void oldTenureExpiryCannotRemoveReinstalledActorRoute() throws Exception {
+        ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
+        var firstSource = route("node-a", 11, 3);
+        var firstTarget = route("node-b", 12, 5);
+        var secondSource = route("node-b", 13, 7);
+        var secondTarget = route("node-a", 14, 9);
+        handoff.stageRelocationRoute(
+            firstSource, firstTarget, rawRoute(firstTarget));
+        handoff.commitRelocationRoute(firstSource, Duration.ofMillis(25));
+        handoff.stageRelocationRoute(
+            secondSource, secondTarget, rawRoute(secondTarget));
+        handoff.commitRelocationRoute(secondSource, Duration.ofMinutes(1));
+
+        Thread.sleep(60);
+        assertTrue(handoff.messageFollowSource(firstSource).isEmpty());
+        assertTrue(handoff.messageFollowSource(secondSource).isPresent());
+        assertEquals(1, handoff.messageFollowSourceCount());
+        handoff.close();
+    }
+
+    @Test
+    void multiHopRelocationChainRetainsEachExactSourceTargetTenure() {
+        ZLinkActorTransferHandoff firstOwner =
+            new ZLinkActorTransferHandoff();
+        ZLinkActorTransferHandoff secondOwner =
+            new ZLinkActorTransferHandoff();
+        var routeA = route("node-a", 11, 3);
+        var routeB = route("node-b", 12, 5);
+        var routeC = route("node-c", 13, 7);
+        firstOwner.stageRelocationRoute(routeA, routeB, rawRoute(routeB));
+        firstOwner.commitRelocationRoute(routeA, Duration.ofMinutes(1));
+        secondOwner.stageRelocationRoute(routeB, routeC, rawRoute(routeC));
+        secondOwner.commitRelocationRoute(routeB, Duration.ofMinutes(1));
+
+        assertEquals(
+            routeB,
+            firstOwner.messageFollowSource(routeA).orElseThrow()
+                .targetRoute());
+        assertEquals(
+            routeC,
+            secondOwner.messageFollowSource(routeB).orElseThrow()
+                .targetRoute());
+        firstOwner.close();
+        secondOwner.close();
     }
 
     @Test
@@ -454,5 +544,25 @@ final class ZLinkActorTransferHandoffTest {
 
     private static ZLinkBackendActorRef ref(String node, long generation) {
         return new ZLinkBackendActorRef(RoutingId.from(node), "actor", generation);
+    }
+
+    private static ZLinkServiceMessageFollowWireCodec.ActorRoute route(
+        String node,
+        long authorityGeneration,
+        long leaseGeneration) {
+        return new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+            "actor", 7, RoutingId.from(node), authorityGeneration,
+            authorityGeneration, leaseGeneration);
+    }
+
+    private static ZLinkServiceM6BWireCodec.ActorRouteFence rawRoute(
+        ZLinkServiceMessageFollowWireCodec.ActorRoute route) {
+        return new ZLinkServiceM6BWireCodec.ActorRouteFence(
+            new ZLinkBackendActorRef(
+                route.targetNodeRid(), route.actorId(),
+                route.objectGeneration()),
+            route.targetNodeGeneration(),
+            route.authorityOwnerGeneration(),
+            route.ownerLeaseGeneration());
     }
 }

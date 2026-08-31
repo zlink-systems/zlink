@@ -86,13 +86,18 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             "raw Spot relocation forwarding is unavailable");
     }
 
-    /** Redirects one exact stale Actor route through the existing wire. */
-    default void installRelocationActorForward(
-        ZLinkServiceM6BWireCodec.ActorRouteFence source,
+    /**
+     * Relays one exact stale Actor operation through the route selected by the
+     * Message Follow owner. The implementation preserves the original raw
+     * operation envelope and completes with the original reply frames.
+     */
+    default CompletionStage<List<Message>> forwardMessageFollowActor(
+        ZLinkServiceM6BWireCodec.ActorMessage stale,
         ZLinkServiceM6BWireCodec.ActorRouteFence target,
-        Duration retention) {
-        throw new UnsupportedOperationException(
-            "raw Actor relocation forwarding is unavailable");
+        List<Message> parts) {
+        return CompletableFuture.failedFuture(
+            new UnsupportedOperationException(
+                "raw Actor Message Follow forwarding is unavailable"));
     }
 
     default Optional<CompletionStage<Integer>> submitLocalNodeSend(

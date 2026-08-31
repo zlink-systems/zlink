@@ -847,14 +847,9 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
     private static void setMessageFollowDuration(
         DefaultZLinkFrameworkOptions options,
         Duration retention) {
-        try {
-            Field field = options.registration().getClass()
-                .getDeclaredField("messageFollowDuration");
-            field.setAccessible(true);
-            field.set(options.registration(), retention);
-        } catch (ReflectiveOperationException failure) {
-            throw new AssertionError(failure);
-        }
+        var locationOptions = options.registration().locations().options();
+        locationOptions.setRouteCacheMaxAge(Duration.ZERO);
+        locationOptions.setMessageFollowDuration(retention);
     }
 
     private static Object defaultValue(Class<?> type) {

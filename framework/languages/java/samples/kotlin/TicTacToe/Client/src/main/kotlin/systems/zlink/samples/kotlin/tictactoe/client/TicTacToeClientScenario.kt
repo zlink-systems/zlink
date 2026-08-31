@@ -1,10 +1,13 @@
 package systems.zlink.samples.kotlin.tictactoe.client
 
 import java.net.URI
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Duration
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import systems.zlink.stream.connector.ZLinkStreamJson
 import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.awaitReply
@@ -238,10 +241,11 @@ class TicTacToeClientScenario {
                     "room=${game.roomId}",
             )
 
-            // LeaveGameMsg remains one-way. The runners wait for the separate
-            // leave and Entry Spot destroy lifecycle evidence.
+            // LeaveGameMsg remains one-way. Keep the connectors open until the runner
+            // confirms the separate leave and Entry Spot destroy lifecycle evidence.
             freshHostStream.send(LeaveGameMsg(game.roomId)).await()
             guestStream.send(LeaveGameMsg(game.roomId)).await()
+            waitForLifecycleCompletion(options.lifecycleCompletionFile)
         } finally {
             if (!hostClosed) {
                 hostStream.close().await()
@@ -271,6 +275,22 @@ class TicTacToeClientScenario {
                 ZLinkStreamJson.codec(),
             ),
         ).kotlin()
+
+    private suspend fun waitForLifecycleCompletion(completionFile: String) {
+        if (completionFile.isBlank()) {
+            return
+        }
+
+        val releaseFile = Path.of(completionFile).toAbsolutePath().normalize()
+        val deadlineNanos = System.nanoTime() + Duration.ofSeconds(60).toNanos()
+        while (System.nanoTime() < deadlineNanos) {
+            if (Files.exists(releaseFile)) {
+                return
+            }
+            delay(100)
+        }
+        error("Timed out waiting for runner lifecycle completion.")
+    }
 }
 
 private fun ensure(condition: Boolean) {

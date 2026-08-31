@@ -513,6 +513,30 @@ internal abstract partial class ZLinkSpotActivation
                 cancellationToken);
     }
 
+    internal ValueTask TryNotifyActorLeftAfterCommittedMembershipAsync(
+        IZLinkActor actor,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        if (ExecutionMode == ZLinkUserSpotExecutionMode.PerActor
+            && PerActorShellRelocationPlan is not null)
+            return _serial.ExecuteActorAsync(
+                actor.Context.ActorId,
+                static (activation, state, ct) =>
+                    activation.TryNotifyActorLeftAfterCommittedMembershipCoreAsync(
+                        state,
+                        ct),
+                actor,
+                cancellationToken);
+        return ReferenceEquals(ZLinkSpotAmbientContext.CurrentOrDefault, this)
+            ? TryNotifyActorLeftAfterCommittedMembershipCoreAsync(actor, cancellationToken)
+            : ExecuteSerializedAsync(
+                static (activation, state, ct) =>
+                    activation.TryNotifyActorLeftAfterCommittedMembershipCoreAsync(state, ct),
+                actor,
+                cancellationToken);
+    }
+
     private async ValueTask CommitActorJoinCoreAsync(
         IZLinkActor actor,
         CancellationToken cancellationToken,
@@ -734,6 +758,36 @@ internal abstract partial class ZLinkSpotActivation
         CancellationToken cancellationToken)
     {
         _actors.RemoveIfCurrent(actor);
+        await CompleteActorLeftAfterCommittedMembershipCoreAsync(
+                actor,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async ValueTask TryNotifyActorLeftAfterCommittedMembershipCoreAsync(
+        IZLinkActor actor,
+        CancellationToken cancellationToken)
+    {
+        if (!_actors.RemoveIfCurrent(actor)) return;
+        // Cross-node source leave races source retirement. Keep the source
+        // activation/context attached through the callback so a duplicate
+        // one-way delivery still resolves to this User Spot; the committed
+        // source cleanup clears both atomically when it retires the actor.
+        SignalPerActorMembersDrainedIfNeeded();
+        if (_actorHandlers is not null
+            && _actorHandlers.TryResolveLeft(actor.GetType(), out var descriptor)
+            && descriptor is not null)
+            await HandlerInvoker.InvokeActorLifecycleAsync(
+                    descriptor,
+                    actor,
+                    cancellationToken)
+                .ConfigureAwait(false);
+    }
+
+    private async ValueTask CompleteActorLeftAfterCommittedMembershipCoreAsync(
+        IZLinkActor actor,
+        CancellationToken cancellationToken)
+    {
         var actorState = _runtime.GetOrCreateActorState(actor.Context.ActorId);
         actorState.LeaveSpotIfCurrent(this);
         SignalPerActorMembersDrainedIfNeeded();

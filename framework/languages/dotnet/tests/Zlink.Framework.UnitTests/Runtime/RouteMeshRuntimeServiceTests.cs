@@ -10,6 +10,94 @@ namespace Zlink.Framework.UnitTests;
 public sealed class RouteMeshRuntimeServiceTests
 {
     [Fact]
+    public void Topology_Monitor_Does_Not_Queue_DataPlane_Traffic_Ahead_Of_Peer_Changes()
+    {
+        using var monitor = new RawMeshMonitor(
+            ZLinkRouteMeshRuntimeService.TopologyMonitorEvents);
+        var peerRid = RoutingId.From("aa-observed-peer");
+
+        for (var index = 0; index < 10_000; index++)
+        {
+            monitor.Publish(
+                MeshMonitorEventKind.MessageSubmitted,
+                MeshNodeState.Started);
+            monitor.Publish(
+                MeshMonitorEventKind.OperationCompleted,
+                MeshNodeState.Started);
+            monitor.Publish(
+                MeshMonitorEventKind.Backpressured,
+                MeshNodeState.Started);
+        }
+        monitor.Publish(
+            MeshMonitorEventKind.PeerAdmitted,
+            MeshNodeState.Started,
+            peerRid);
+
+        var topologyEvent = Assert.IsType<MeshMonitorEvent>(
+            monitor.Recv(RecvFlags.DontWait));
+        Assert.Equal(MeshMonitorEventKind.PeerAdmitted, topologyEvent.Kind);
+        Assert.Equal(peerRid, topologyEvent.PeerRid);
+        Assert.Null(monitor.Recv(RecvFlags.DontWait));
+    }
+
+    [Fact]
+    public async Task ObserveAsync_Converges_When_Peer_Is_Admitted_After_Subscription()
+    {
+        var targetRid = RoutingId.From("zz-observed-late-peer");
+        var targetEndpoint = RuntimeFixture.ReserveTcpEndpoint();
+        await using var target = await RuntimeFixture.StartAsync(
+            ZLinkMeshNodeObjectRole.Server,
+            listenEndpoint: targetEndpoint,
+            registerServerChannel: true,
+            routingId: targetRid);
+        await using var source = await RuntimeFixture.StartManualAsync(
+            ZLinkMeshNodeObjectRole.Server,
+            targetRid,
+            targetEndpoint,
+            registerServerChannel: true);
+        await WaitForStatusAsync(
+            source.Runtime,
+            status => status.Peers.Any(peer =>
+                peer.NodeRid == targetRid
+                && peer.State == ZLinkPeerState.Ready));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var observer = source.Runtime
+            .ObserveAsync(RuntimeFixture.MeshName, timeout.Token)
+            .GetAsyncEnumerator(timeout.Token);
+
+        Assert.True(await observer.MoveNextAsync());
+        Assert.Contains(
+            observer.Current.Status.Peers,
+            peer => peer.NodeRid == targetRid
+                    && peer.State == ZLinkPeerState.Ready);
+
+        await target.StopAsync();
+        var disconnected = await MoveUntilAsync(
+            observer,
+            status => status.Status.Peers.Any(peer =>
+                peer.NodeRid == targetRid
+                && peer.State != ZLinkPeerState.Ready));
+
+        await using var replacement = await RuntimeFixture.StartAsync(
+            ZLinkMeshNodeObjectRole.Server,
+            listenEndpoint: targetEndpoint,
+            registerServerChannel: true,
+            routingId: targetRid);
+        var ready = await MoveUntilAsync(
+            observer,
+            status => status.Status.Peers.Any(peer =>
+                peer.NodeRid == targetRid
+                && peer.State == ZLinkPeerState.Ready));
+
+        Assert.True(ready.Status.Sequence > disconnected.Status.Sequence);
+        Assert.True(ready.Status.IsReady);
+        Assert.Contains(
+            ready.Status.Peers,
+            peer => peer.NodeRid == targetRid
+                    && peer.State == ZLinkPeerState.Ready);
+    }
+
+    [Fact]
     public async Task Missing_Required_Descriptor_Peer_Degrades_Topology()
     {
         await using var fixture = await RuntimeFixture.StartAsync(
@@ -605,7 +693,8 @@ public sealed class RouteMeshRuntimeServiceTests
             string? listenEndpoint = null,
             int placementWeight = 100,
             bool registerServerChannel = false,
-            int channelWeight = 100)
+            int channelWeight = 100,
+            RoutingId? routingId = null)
         {
             listenEndpoint ??= $"inproc://route-runtime-{Guid.NewGuid():N}";
             var services = new ServiceCollection();
@@ -614,8 +703,11 @@ public sealed class RouteMeshRuntimeServiceTests
                 options.UseTestLocationStore();
                 var node = options.AddRouteMesh(MeshName)
                     .Listen(listenEndpoint)
-                    .SetRoutingIdPrefix(routingIdPrefix)
                     .SetPlacementWeight(placementWeight);
+                if (routingId is { } exactRoutingId)
+                    node.SetRoutingId(exactRoutingId);
+                else
+                    node.SetRoutingIdPrefix(routingIdPrefix);
                 if (registerServerChannel)
                     node.Channel(MeshName).Server().SetWeight(channelWeight);
                 if (objectRole == ZLinkMeshNodeObjectRole.Client)

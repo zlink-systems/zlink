@@ -13,6 +13,7 @@ int main (int argc, char **argv)
 
     try {
         tictactoe_client_options_t options{load_sample_topology (argc, argv)};
+        options.lifecycle_completion_file = load_lifecycle_completion_file (argc, argv);
         if (!tictactoe_client_scenario_t{}.run (options)) { return 1; }
         std::cout << "tictactoe=completed\n";
         return 0;

@@ -1074,6 +1074,7 @@ public final class ZLinkSerialExecutionQueue {
         ZLinkFlowContext.State flow,
         ZLinkApplicationJobContext.QueuedOwnership applicationJobOwnership) {
         CompletableFuture<Void> gate = new CompletableFuture<>();
+        CompletableFuture<Void> invocationReturned = new CompletableFuture<>();
         try {
             executor.execute(() -> {
                 ZLinkSerialExecutionQueue previous = CURRENT.get();
@@ -1126,13 +1127,19 @@ public final class ZLinkSerialExecutionQueue {
                     } else {
                         CURRENT_RELEASE_DEFERRED.set(previousDeferred);
                     }
+                    invocationReturned.complete(null);
                 }
             });
         } catch (RuntimeException rejected) {
             result.completeExceptionally(rejected);
             gate.complete(null);
+            invocationReturned.complete(null);
         }
-        return gate;
+        // A Yield may release the logical turn while operation.get() is still
+        // assembling dependent stages. Keep the physical drain entry until
+        // that invocation has returned, otherwise a completed managed stage
+        // can run a late dependent inline outside its continuation turn.
+        return CompletableFuture.allOf(gate, invocationReturned);
     }
 
     public static <T> CompletionStage<T> manageCurrent(CompletionStage<T> stage) {

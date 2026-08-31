@@ -309,13 +309,13 @@ internal sealed class RoutedAsyncSendOperation : RoutedSendOperation,
 internal sealed class ReceivedSendOperationImpl : RoutedSendOperation,
     RoutedSendSubmitOperation
 {
-    private readonly Received _received;
+    private readonly ReceivedSendContext _context;
     private OperationMessageBuffer _parts;
     private OperationSubmissionGuard _submission;
 
-    internal ReceivedSendOperationImpl(Received received)
+    internal ReceivedSendOperationImpl(ReceivedSendContext context)
     {
-        _received = received;
+        _context = context;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -332,8 +332,8 @@ internal sealed class ReceivedSendOperationImpl : RoutedSendOperation,
         EnsureReady();
         _submission.MarkSubmittedAfterValidation();
         bool sent = _parts.IsSingle
-            ? _received.SendCore(_parts.Single, flags)
-            : _received.SendCore(_parts.Parts, flags);
+            ? _context.SendCore(_parts.Single, flags)
+            : _context.SendCore(_parts.Parts, flags);
         if (!sent)
             throw new ZlinkSubmitException(SubmitResult.Backpressured,
                 (int)ErrorCode.EAgain);
@@ -344,7 +344,7 @@ internal sealed class ReceivedSendOperationImpl : RoutedSendOperation,
     {
         EnsureReady();
         _submission.MarkSubmittedAfterValidation();
-        return _received.SendAsyncCore(_parts, ct);
+        return _context.SendAsyncCore(_parts, ct);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

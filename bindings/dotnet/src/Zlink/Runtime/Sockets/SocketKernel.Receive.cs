@@ -191,12 +191,13 @@ internal sealed partial class SocketKernel
     {
         var allowNoData = (flags & DontWaitFlag) != 0;
         if (!ReceiveRoutedParts(flags, out var routingId, out var requestSeq,
+                out var transportPairId, out var transportPairGeneration,
                 out var singlePart, out var parts, allowNoData))
             return false;
         try
         {
             PopulateRoutedReceivedInto(result, singlePart, parts, routingId,
-                requestSeq);
+                requestSeq, transportPairId, transportPairGeneration);
             return true;
         }
         catch
@@ -217,16 +218,21 @@ internal sealed partial class SocketKernel
 
     private void PopulateRoutedReceivedInto(Received result,
         Message? singlePart, MultipartMessageCollection? parts,
-        RoutingIdSnapshot routingId, ulong requestSeq)
+        RoutingIdSnapshot routingId, ulong requestSeq,
+        ulong transportPairId, ulong transportPairGeneration)
     {
         if (requestSeq == 0)
         {
             if (singlePart != null)
                 result.PopulateRoutedSinglePart(singlePart, routingId,
-                    null, null, sendKernel: this);
+                    null, null, sendKernel: this,
+                    transportPairId: transportPairId,
+                    transportPairGeneration: transportPairGeneration);
             else
                 result.PopulateRoutedMultipart(parts!, routingId,
-                    null, null, sendKernel: this);
+                    null, null, sendKernel: this,
+                    transportPairId: transportPairId,
+                    transportPairGeneration: transportPairGeneration);
             return;
         }
 
@@ -250,10 +256,16 @@ internal sealed partial class SocketKernel
         if (singlePart != null)
             result.PopulateRoutedSinglePart(singlePart, routingId,
                 requestSeq, replyHandler, CreateRoutedSendHandler(routingId),
-                CreateRoutedSendSingleHandler(routingId));
+                CreateRoutedSendSingleHandler(routingId),
+                sendKernel: this,
+                transportPairId: transportPairId,
+                transportPairGeneration: transportPairGeneration);
         else
             result.PopulateRoutedMultipart(parts!, routingId,
                 requestSeq, replyHandler, CreateRoutedSendHandler(routingId),
-                CreateRoutedSendSingleHandler(routingId));
+                CreateRoutedSendSingleHandler(routingId),
+                sendKernel: this,
+                transportPairId: transportPairId,
+                transportPairGeneration: transportPairGeneration);
     }
 }

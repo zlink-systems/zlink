@@ -1303,6 +1303,60 @@ TEST (CppFrameworkSampleParity, TicTacToeClientGateChecksCommonContractFields)
     }
 }
 
+TEST (CppFrameworkSampleParity, TicTacToeRunnerReleasesClientAfterLeaveLifecycleEvidence)
+{
+    const auto root = cpp_language_root () / "samples/TicTacToe";
+    const auto client = read_file (root / "Client/tictactoe_client_scenario.hpp");
+    const auto shell_runner = read_file (root / "run_sample.sh");
+    const auto powershell_runner = read_file (root / "run_sample.ps1");
+
+    const auto host_leave =
+      client.find ("reconnected_client.send (reconnected_leave_request).submit ();");
+    const auto guest_leave = client.find ("client2.send (client2_leave_request).submit ();");
+    const auto client_wait =
+      client.find ("if (!options.lifecycle_completion_file.empty ())");
+    const auto client_close = client.find ("co_await reconnected_client.close ().async ();");
+    ASSERT_NE (host_leave, std::string::npos);
+    ASSERT_NE (guest_leave, std::string::npos);
+    ASSERT_NE (client_wait, std::string::npos);
+    ASSERT_NE (client_close, std::string::npos);
+    EXPECT_LT (host_leave, client_wait);
+    EXPECT_LT (guest_leave, client_wait);
+    EXPECT_LT (client_wait, client_close);
+
+    const auto shell_release = shell_runner.find (": >\"$LIFECYCLE_COMPLETION_FILE\"");
+    const auto shell_client_wait = shell_runner.find ("wait \"$CLIENT_PID\"");
+    ASSERT_NE (shell_release, std::string::npos);
+    ASSERT_NE (shell_client_wait, std::string::npos);
+    for (const auto *evidence : {
+           "wait_log_count 1 \"tictactoe-lifecycle leave-completed actor=player-x\"",
+           "wait_log_count 1 \"tictactoe-lifecycle leave-completed actor=player-o\"",
+           "wait_log_count 1 \"tictactoe-lifecycle actor-destroy-complete actor=player-x\"",
+           "wait_log_count 1 \"tictactoe-lifecycle actor-destroy-complete actor=player-o\""}) {
+        const auto evidence_wait = shell_runner.find (evidence);
+        ASSERT_NE (evidence_wait, std::string::npos) << evidence;
+        EXPECT_LT (evidence_wait, shell_release) << evidence;
+    }
+    EXPECT_LT (shell_release, shell_client_wait);
+
+    const auto powershell_release = powershell_runner.find (
+      "New-Item -ItemType File -Path $LifecycleCompletionFile");
+    const auto powershell_client_wait =
+      powershell_runner.find ("$ClientProcess.WaitForExit(30000)");
+    ASSERT_NE (powershell_release, std::string::npos);
+    ASSERT_NE (powershell_client_wait, std::string::npos);
+    for (const auto *evidence : {
+           "Wait-LogCount $playLogs \"tictactoe-lifecycle leave-completed actor=player-x\"",
+           "Wait-LogCount $playLogs \"tictactoe-lifecycle leave-completed actor=player-o\"",
+           "Wait-LogCount $playLogs \"tictactoe-lifecycle actor-destroy-complete actor=player-x\"",
+           "Wait-LogCount $playLogs \"tictactoe-lifecycle actor-destroy-complete actor=player-o\""}) {
+        const auto evidence_wait = powershell_runner.find (evidence);
+        ASSERT_NE (evidence_wait, std::string::npos) << evidence;
+        EXPECT_LT (evidence_wait, powershell_release) << evidence;
+    }
+    EXPECT_LT (powershell_release, powershell_client_wait);
+}
+
 TEST (CppFrameworkSampleParity, DeliveryDispatchClientGateChecksStatusArrivalOrder)
 {
     const auto client =

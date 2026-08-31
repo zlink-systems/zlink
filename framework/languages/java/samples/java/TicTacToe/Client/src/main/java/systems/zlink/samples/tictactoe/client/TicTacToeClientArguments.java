@@ -11,7 +11,8 @@ public final class TicTacToeClientArguments {
             readOption(args, "--game-name", defaults.gameName()),
             readOption(args, "--x-actor-id", defaults.xActorId()),
             readOption(args, "--o-actor-id", defaults.oActorId()),
-            readOption(args, "--observer-actor-id", defaults.observerActorId()));
+            readOption(args, "--observer-actor-id", defaults.observerActorId()),
+            readOption(args, "--lifecycle-completion-file", defaults.lifecycleCompletionFile()));
     }
 
     private static String readOption(

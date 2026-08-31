@@ -28,15 +28,16 @@ internal sealed class ZLinkSpotActorMembership
         return _actorsById.TryGetValue(actorId, out actor);
     }
 
-    public void RemoveIfCurrent(IZLinkActor actor)
+    public bool RemoveIfCurrent(IZLinkActor actor)
     {
         var actorId = ZLinkActorId.FromBoundary(
             actor.Context.ActorId,
             nameof(actor));
         if (_actorsById.TryGetValue(actorId, out var existing)
             && ReferenceEquals(existing, actor))
-            ((ICollection<KeyValuePair<ZLinkActorId, IZLinkActor>>)_actorsById).Remove(
+            return ((ICollection<KeyValuePair<ZLinkActorId, IZLinkActor>>)_actorsById).Remove(
                 new KeyValuePair<ZLinkActorId, IZLinkActor>(actorId, actor));
+        return false;
     }
 
     public IReadOnlyList<IZLinkActor> Snapshot()

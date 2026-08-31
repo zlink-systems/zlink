@@ -19,20 +19,22 @@
 | # | 트랙 | 선행 | 내용 |
 |---|---|---|---|
 | ~~B1~~ | ~~과잉 검증 일괄 제거~~ | **완료** | node `b38b0fd66e`(4) · java `3f4fb099ba`(10계열) · cpp `4a26163ff9`(14 — C4 정산 복원 재구현) · dotnet `4c8036a494`(21 — 초과 변경 3건 이분 수정). 합계 ~49곳 제거, 전 언어 게이트+ZW 재실증 그린 |
-| B2 | cpp 7번째 wait 재판정 | **진행 중**(sol medium) | B-2 fence가 자리 잡으면 warm materialization 재검증의 존치/이관 재판정(send 7→6 가능성) — 단독 판단 금지, fence 설계와 함께 |
-| B3 | 감사 [의심] 미분류 정리 | A4·B1 | dotnet 386곳·cpp 662곳 콜드/핫 정밀 분류(선택적 — B1이 상당 부분 흡수 예상) |
-| B4 | java Message Follow 수렴 구현 | **판정 완료 → 구현 대기(B5 후)** — `java-message-follow-verdict.ko.md`: raw forward는 MF 계약 부분 구현(결함 5: commit 전 timer·고정 30초 필드·command50 미송신·오류 평탄화·재설치 race), (a) 기존 MF 스택 통합 채택, 중대형 | A2 발견[H]: java 프로덕션은 소스측 relocation 이후 전달을 forward+retention 타이머에만 의존(MF API는 테스트 전용) — dotnet(_sourceHoldFrames+MF 전환)과 **언어 발산**. 발산→스펙 상세화 규율 대상 |
-| B5 | java enqueueRemoteActor 기타 실패 묵살 | A2 후 | A2 발견[M]: relocation 외 dispatch 실패(capacity·admission closed·Spot closed)는 여전히 반환 stage 묵살 — 별개 결함, terminal 보고 경로 필요 |
+| ~~B2~~ | ~~cpp 7번째 wait~~ | **완료** `4e7839149b` | warm projection을 admission token turn으로 이관 — **send/request 7→6**(보장 승계표 완비), 게이트 45/45·ZW 5/5 |
+| ~~B3~~ | ~~감사 [의심] 미분류 정리~~ | **종결 판정(2026-08-30 감독관)** | 판정 경로의 과잉은 A4 감사가 전수 분류·B1이 제거 완료. 잔여 미분류는 §5가 정당화하는 콜드 bridge 인벤토리로 기능·성능 실익 없음 — 정밀 분류는 향후 성능 감사 필요 시 재개 |
+| ~~B4~~ | ~~java MF 수렴 구현~~ | **완료** `bfd4fe44e1`(rebase 후 dabdaf98cc로 push) — ZLinkActorTransferHandoff 단일 owner, raw forward 축 제거, 완료 조건 8/8, ZW java 5/5·kotlin 2/2. **4언어 통합 MF 모델 수렴 종결** | A2 발견[H]: java 프로덕션은 소스측 relocation 이후 전달을 forward+retention 타이머에만 의존(MF API는 테스트 전용) — dotnet(_sourceHoldFrames+MF 전환)과 **언어 발산**. 발산→스펙 상세화 규율 대상 |
+| ~~B5~~ | ~~java dispatch 실패 묵살~~ | **완료** `8c77bbfa01` — 전 실패를 원인 kind 보존 terminal로 표면화 |
 
 ## C. 외부/판정 대기
 
 | # | 트랙 | 대기 사유 |
 |---|---|---|
 | C1 | bindings 0.14.x uplift 정례화 | core 성능·버그 작업 진행 중(0.14.6 반영 완료 상태). 다음 버전 확정 시: 로컬 패키지 빌드 → 4언어 게이트 → ZW 스모크. **주의**: 0.14.5는 Linux x64 릴리스 CI 실패로 아티팩트 404(0.14.6에서 해소) — 릴리스 파이프라인 실패 시 cpp 샘플은 provenance 고정 때문에 전면 차단됨 |
-| C2 | dotnet ZW 간헐 (~1/3) | D1·G3-restart·F4 산발, 0.14.1/0.14.2 교차로 버전 무관 확인. 발현 지속 시 진단 라운드(증거: scratchpad zw-evidence/) |
+| ~~C2~~ | ~~dotnet ZW 간헐 (~1/3)~~ | **종결(2026-08-31)** `507371aae9`+`f02d6bcc8e` — 근본 원인: 동일 RID 재연결(handover/crash replacement) 중 terminal reply의 물리 pair 오귀속 유실(flow 실증: 상태 변경 커밋 후 corr replied 부재→재시도 즉시 성공). binding에 recv_part_v2 transport-pair 메타데이터 노출 + framework physical-pair epoch fence. ZW 6/6+2/2 연속 그린, framework 1935/1935. 잔여 [의심]: retired-pair tombstone 무한 보존(메모리), multipart pair 미노출(core 후속), relocation 1s cutover fallback 경합 1회 관측 |
 | C3 | cpp channel_messaging flake | 관찰 지속(최근 연속 통과) |
 
 ## D. 종결 기록 (이번 주기)
+
+**백로그 A·B 전 트랙 완주(2026-08-30)** — 핫패스 최종: cpp **6/6**(시작 17/19), dotnet **12/13**(시작 19/20), java hot wrapper **3**(시작 7). 과잉 검증 ~49곳 제거(4언어), 잠재 결함 처치: cpp B-2 fence·java post-cut drop·java 실패 묵살·dotnet reset 창·java MF 계약 결함 5종. C1~C3만 외부/관찰 대기로 존속.
 
 - ZoneWorld 4언어 종결 — tag `seven-samples-green-v1` (4bad5ac979)
 - core/bindings 0.14.2 감사 이슈 없음 — tag `core-bindings-0.14.2-audited`; 이후 0.14.6 로컬 반영·cpp 게이트 45/45

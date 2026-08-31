@@ -1652,6 +1652,96 @@ public sealed class StatefulServiceRuntimeTests
     }
 
     [Fact]
+    public async Task RemoteActorRequest_RetriesPreservedNativeReplyAfterBackpressure()
+    {
+        var replyAttempts = 0;
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = NewNode(context, "stateful-reply-source");
+        await using var target = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            nativeTerminalReplySubmitOverride: reply =>
+            {
+                if (Interlocked.Increment(ref replyAttempts) == 1)
+                    return SubmitResult.Backpressured;
+                reply.Submit();
+                return SubmitResult.Ok;
+            });
+        target.SetRoutingId(RoutingId.From("stateful-reply-target"));
+        source.SetLocalOwnerLeaseGeneration(17);
+        target.SetLocalOwnerLeaseGeneration(17);
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceEndpoint = $"inproc://stateful-reply-source-{suffix}";
+        var targetEndpoint = $"inproc://stateful-reply-target-{suffix}";
+        source.SetBind(sourceEndpoint);
+        target.SetBind(targetEndpoint);
+        source.ConnectPeer(targetEndpoint, target.RoutingId);
+        source.Start();
+        target.Start();
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1
+            && target.Status().AdmittedPeerCount == 1);
+
+        var actor = target.CreateActor("stateful-reply-actor");
+        DrainAndDispose(target);
+        Assert.True(target.TryGetActorAuthority(
+            actor,
+            out var authorityOwnerGeneration,
+            out var ownerLeaseGeneration));
+        source.ObserveActorAuthority(
+            actor,
+            target.Status().LifecycleGeneration,
+            authorityOwnerGeneration,
+            ownerLeaseGeneration);
+
+        using var payload = Message.From(new byte[] { 19 });
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.RequestToActor(
+                actor,
+                [payload],
+                out var operation,
+                TimeSpan.FromSeconds(3)));
+        await WaitUntilAsync(() =>
+        {
+            using var ready = new MeshReadyBatch();
+            target.DrainReady(
+                MeshReadyDomains.Application,
+                ready,
+                RecvFlags.DontWait);
+            return ready.Count == 1;
+        });
+        using (var requestReady = new MeshReadyBatch())
+        {
+            target.DrainReady(
+                MeshReadyDomains.Application,
+                requestReady,
+                RecvFlags.DontWait);
+            using var requestClaim = requestReady.TakeClaim(0);
+            using var requestBatch = new MeshReceiveBatch();
+            Assert.True(requestClaim.Receive(requestBatch, RecvFlags.DontWait));
+            Assert.Equal(MeshRecordKind.ActorRequest, requestBatch[0].Kind);
+            Assert.Equal(
+                SubmitResult.Backpressured,
+                requestBatch[0].Reply(Array.Empty<Message>()));
+        }
+
+        await WaitUntilAsync(() =>
+            Volatile.Read(ref replyAttempts) == 2
+            && source.Status().PendingInfrastructureMessages > 0);
+        var completions = DrainRecords(source);
+        Assert.Single(
+            completions.Where(record =>
+                record.Kind == MeshRecordKind.Completion
+                && record.OperationId == operation));
+        await Task.Delay(100);
+        Assert.DoesNotContain(
+            DrainRecords(source),
+            record => record.Kind == MeshRecordKind.Completion
+                      && record.OperationId == operation);
+    }
+
+    [Fact]
     public async Task RelocatedActorReplyCompletesTheOriginalRemoteCallerExactlyOnce()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();

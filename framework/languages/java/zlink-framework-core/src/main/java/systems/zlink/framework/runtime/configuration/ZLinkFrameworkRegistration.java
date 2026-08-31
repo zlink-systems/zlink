@@ -54,7 +54,6 @@ public final class ZLinkFrameworkRegistration {
     private Duration defaultRequestTimeout = Duration.ofSeconds(30);
     private Duration sessionReplacementCallbackTimeout =
         Duration.ofMillis(30_000);
-    private Duration messageFollowDuration = Duration.ofSeconds(30);
     private ZLinkRelocationStore relocationStore;
     private long applicationVersion;
     private String maintenanceWave;
@@ -74,10 +73,6 @@ public final class ZLinkFrameworkRegistration {
     void setSessionReplacementCallbackTimeout(
         Duration sessionReplacementCallbackTimeout) {
         this.sessionReplacementCallbackTimeout = sessionReplacementCallbackTimeout;
-    }
-
-    public Duration messageFollowDuration() {
-        return messageFollowDuration;
     }
 
     public long applicationVersion() {

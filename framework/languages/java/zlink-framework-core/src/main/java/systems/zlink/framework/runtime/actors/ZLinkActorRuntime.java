@@ -2109,6 +2109,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute) {
         Objects.requireNonNull(targetAddress, "targetAddress");
         Objects.requireNonNull(targetRoute, "targetRoute");
+        if (messageFollowDuration.isZero()) {
+            return;
+        }
         ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute =
             localMessageFollowSourceRoute(sourceActorRef);
         handoff.retain(
@@ -2116,6 +2119,31 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             targetAddress, sourceRoute, targetRoute, messageFollowDuration,
             this::removeMessageFollowSource);
         traceRetainedMessageFollowSource(actor, sourceActorRef);
+    }
+
+    public void stageRelocationMessageFollow(
+        ZLinkServiceM6BWireCodec.ActorRouteFence source,
+        ZLinkServiceM6BWireCodec.ActorRouteFence target) {
+        handoff.stageRelocationRoute(
+            messageFollowRoute(source), messageFollowRoute(target), target);
+    }
+
+    public void commitRelocationMessageFollow(
+        ZLinkServiceM6BWireCodec.ActorRouteFence source) {
+        handoff.commitRelocationRoute(
+            messageFollowRoute(source), messageFollowDuration);
+    }
+
+    public void refreshRelocationMessageFollow(
+        ZLinkServiceM6BWireCodec.ActorRouteFence source,
+        ZLinkServiceM6BWireCodec.ActorRouteFence target) {
+        handoff.refreshRelocationRoute(
+            messageFollowRoute(source), messageFollowRoute(target), target);
+    }
+
+    public void abortRelocationMessageFollow(
+        ZLinkServiceM6BWireCodec.ActorRouteFence source) {
+        handoff.abortRelocationRoute(messageFollowRoute(source));
     }
 
     CompletionStage<Optional<ZLinkStoreLocationResolvers.ActorRoute>>
@@ -3480,9 +3508,35 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute =
             messageFollowSourceRoute(header);
         ZLinkActorTransferHandoff.MessageFollowSource followSource =
-            handoff.messageFollowSource(staleActor.actorId()).orElse(null);
-        if (followSource == null
-            || !followSource.sourceActorRef().equals(staleActor)) {
+            handoff.messageFollowSource(sourceRoute).orElse(null);
+        if (followSource == null) {
+            ZLinkActorTransferHandoff.MessageFollowSource sameActor =
+                handoff.messageFollowSource(staleActor.actorId()).orElse(null);
+            if (sameActor != null
+                && sameActor.sourceActorRef().generation()
+                    != staleActor.generation()) {
+                return rejectRetainedMessageFollowIngress(
+                    parts,
+                    failure,
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "Message Follow object generation does not match",
+                    terminalRelease);
+            }
+            // A retained A->B tenure may coexist with a newly adopted A route
+            // after B->A.  A same-generation exact miss belongs to normal
+            // local ingress only when its complete authority fence is current;
+            // the old tenure must not shadow that route.
+            if (isCurrentLocalRoute(header.target())) {
+                return false;
+            }
+            if (sameActor != null) {
+                return rejectRetainedMessageFollowIngress(
+                    parts,
+                    failure,
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "Message Follow source fence is unavailable or stale",
+                    terminalRelease);
+            }
             return false;
         }
         if (!followSource.matchesSourceRoute(sourceRoute)
@@ -3492,8 +3546,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             return rejectRetainedMessageFollowIngress(
                 parts,
                 failure,
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
                 "Message Follow source fence is unavailable or stale",
                 terminalRelease);
+        }
+        if (followSource.rawTargetRoute() != null) {
+            return relayRawMessageFollow(
+                sourceNodeRid, sourceNodeGeneration, header, sourceRoute,
+                followSource, parts, reply, failure, terminalRelease);
         }
         ZLinkStreamHeader streamHeader;
         try {
@@ -3506,6 +3566,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 return rejectRetainedMessageFollowIngress(
                     parts,
                     failure,
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
                     "Message Follow request fence is invalid",
                     terminalRelease);
             }
@@ -3513,6 +3574,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             return rejectRetainedMessageFollowIngress(
                 parts,
                 failure,
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
                 "Message Follow stream header is invalid",
                 terminalRelease);
         }
@@ -3524,6 +3586,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             return rejectRetainedMessageFollowIngress(
                 parts,
                 failure,
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
                 "Message Follow payload is invalid",
                 terminalRelease);
         }
@@ -3613,13 +3676,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     private static boolean rejectRetainedMessageFollowIngress(
         List<Message> parts,
         Consumer<Throwable> failure,
+        ZLinkFrameworkErrorKind kind,
         String message,
         Runnable terminalRelease) {
         try {
             if (failure != null) {
                 try {
                     failure.accept(new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        kind,
                         message));
                 } catch (RuntimeException ignored) {
                     // The retained source still owns and rejects the packet.
@@ -3629,6 +3693,77 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             parts.forEach(Message::close);
             terminalRelease.run();
         }
+        return true;
+    }
+
+    private boolean relayRawMessageFollow(
+        RoutingId sourceNodeRid,
+        long sourceNodeGeneration,
+        ZLinkServiceM6BWireCodec.ActorMessage header,
+        ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute,
+        ZLinkActorTransferHandoff.MessageFollowSource followSource,
+        List<Message> parts,
+        Consumer<List<Message>> reply,
+        Consumer<Throwable> failure,
+        Runnable terminalRelease) {
+        Consumer<Throwable> onFailure = failure == null
+            ? ignored -> { }
+            : failure;
+        if (header.messageFollowHopCount() + 1
+            > ZLinkServiceMessageFollowWireCodec.MAX_HOP_COUNT) {
+            return rejectRetainedMessageFollowIngress(
+                parts, failure, ZLinkFrameworkErrorKind.UNAVAILABLE,
+                "Message Follow hop limit exceeded", terminalRelease);
+        }
+        if (messageFollowRoute(followSource.rawTargetRoute())
+            .equals(sourceRoute)) {
+            return rejectRetainedMessageFollowIngress(
+                parts, failure, ZLinkFrameworkErrorKind.UNAVAILABLE,
+                "Message Follow loop detected", terminalRelease);
+        }
+        Optional<ZLinkMessageFollowSuppressionRegistry.Claim> noticeClaim =
+            !followSource.committed() || messageFollowNoticeSender == null
+                ? Optional.empty()
+                : followSource.beginMessageFollowNotice(sourceRoute);
+        long payloadBytes = parts.stream().mapToLong(Message::size).sum();
+        handoff.followWithQueueSnapshot(
+                followSource,
+                header.target().actor().generation(),
+                payloadBytes,
+                () -> spotNode.forwardMessageFollowActor(
+                    header, followSource.rawTargetRoute(), parts))
+            .whenComplete((result, relayFailure) -> {
+                try {
+                    if (relayFailure != null) {
+                        noticeClaim.ifPresent(
+                            followSource::abortMessageFollowNotice);
+                        onFailure.accept(unwrapCompletionFailure(relayFailure));
+                        return;
+                    }
+                    List<Message> replies = result.value();
+                    if (!replies.isEmpty()) {
+                        if (reply != null) {
+                            reply.accept(replies);
+                        } else {
+                            replies.forEach(Message::close);
+                        }
+                    }
+                    if (noticeClaim.isPresent()) {
+                        sendMessageFollowNotice(
+                            messageFollowNoticeSender,
+                            sourceNodeRid,
+                            header,
+                            followSource,
+                            sourceRoute,
+                            followSource.targetRoute(),
+                            result.queue(),
+                            sourceNodeGeneration,
+                            noticeClaim.orElseThrow());
+                    }
+                } finally {
+                    terminalRelease.run();
+                }
+            });
         return true;
     }
 
@@ -3733,6 +3868,31 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             staleHeader.target().targetNodeGeneration(),
             staleHeader.target().authorityOwnerGeneration(),
             staleHeader.target().ownerLeaseGeneration());
+    }
+
+    private static ZLinkServiceMessageFollowWireCodec.ActorRoute
+        messageFollowRoute(ZLinkServiceM6BWireCodec.ActorRouteFence route) {
+        return new ZLinkServiceMessageFollowWireCodec.ActorRoute(
+            route.actor().actorId(),
+            route.actor().generation(),
+            route.actor().nodeRid(),
+            route.targetNodeGeneration(),
+            route.authorityOwnerGeneration(),
+            route.ownerLeaseGeneration());
+    }
+
+    private boolean isCurrentLocalRoute(
+        ZLinkServiceM6BWireCodec.ActorRouteFence route) {
+        Optional<ZLinkActor> local = localActor(route.actor().actorId());
+        if (local.isEmpty() || !currentRef(local.orElseThrow()).equals(route.actor())) {
+            return false;
+        }
+        return spotNode.actorNodeGeneration(route.actor())
+                == route.targetNodeGeneration()
+            && spotNode.actorAuthorityOwnerGeneration(route.actor())
+                == route.authorityOwnerGeneration()
+            && spotNode.actorAuthorityOwnerLeaseGeneration(route.actor())
+                == route.ownerLeaseGeneration();
     }
 
     private ZLinkServiceMessageFollowWireCodec.ActorRoute

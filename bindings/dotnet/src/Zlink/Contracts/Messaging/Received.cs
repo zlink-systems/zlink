@@ -58,6 +58,18 @@ public sealed partial class Received : IDisposable
     public ulong? RequestSeq => _metadata?.RequestSeq;
 
     /// <summary>
+    ///     Gets the exact transport pair id that delivered a Router envelope,
+    ///     or zero when the receive path does not provide one.
+    /// </summary>
+    public ulong TransportPairId => _transportPairId;
+
+    /// <summary>
+    ///     Gets the generation of <see cref="TransportPairId" />, or zero when
+    ///     the receive path does not provide a transport pair identity.
+    /// </summary>
+    public ulong TransportPairGeneration => _transportPairGeneration;
+
+    /// <summary>
     ///     Gets the envelope kind.
     /// </summary>
     public ReceivedMessageType MessageType { get; private set; } =
@@ -131,6 +143,6 @@ public sealed partial class Received : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public RoutedSendOperation Send()
     {
-        return new ReceivedSendOperationImpl(this);
+        return new ReceivedSendOperationImpl(CaptureSendContext());
     }
 }

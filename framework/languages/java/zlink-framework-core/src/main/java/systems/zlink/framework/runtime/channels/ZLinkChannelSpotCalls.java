@@ -221,7 +221,7 @@ final class RouteSpotSendCall
                 .ZLinkFlowContext.current();
             ZLinkInstanceSpotCallRuntime activation = instanceSpots == null
                 ? null : instanceSpots.get();
-            return SpotCallAddresses.resolve(resolver, target).handle((address, failure) ->
+            CompletionStage<Void> stage = SpotCallAddresses.resolve(resolver, target).handle((address, failure) ->
                 systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.call(
                     operationFlow,
                     () -> {
@@ -237,6 +237,7 @@ final class RouteSpotSendCall
                             target, stableType, selectedMesh, payload,
                             packetName, contentType, metadata.values());
                     })).thenCompose(Function.identity());
+            return ZLinkOneWayCalls.adaptOneWay(stage);
         }
     }
 

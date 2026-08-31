@@ -11,9 +11,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 #define ensure(condition) require_condition ((condition), #condition)
 
@@ -431,6 +433,9 @@ class tictactoe_client_scenario_t
             const auto client2_leave_request = leave_game_msg_t{room.room_id};
             client2.send (client2_leave_request).submit ();
 
+            if (!options.lifecycle_completion_file.empty ()) {
+                wait_for_lifecycle_completion (options.lifecycle_completion_file);
+            }
             co_await reconnected_client.close ().async ();
             co_await client2.close ().async ();
             co_await observer.close ().async ();
@@ -464,6 +469,18 @@ class tictactoe_client_scenario_t
     }
 
     static void trace (const char *step) { std::cerr << "tictactoe step: " << step << '\n'; }
+
+    static void wait_for_lifecycle_completion (const std::string &completion_file)
+    {
+        ensure (!completion_file.empty ());
+        for (int attempt = 0; attempt < 300; ++attempt) {
+            if (std::filesystem::exists (completion_file)) {
+                return;
+            }
+            std::this_thread::sleep_for (std::chrono::milliseconds (100));
+        }
+        throw std::runtime_error ("timed out waiting for runner lifecycle completion");
+    }
 
     static void use_json_codec (zlink::stream_connector::connector_t &connector)
     {

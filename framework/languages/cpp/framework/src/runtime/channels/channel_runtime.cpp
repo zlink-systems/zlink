@@ -2120,7 +2120,8 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
       address->spot_generation, packet_name, message_type, std::move (encode_payload), metadata);
     if (!submitted
         && (submitted.error_kind () == framework_error_kind_t::not_found
-            || submitted.error_kind () == framework_error_kind_t::unavailable)) {
+            || submitted.error_kind () == framework_error_kind_t::unavailable
+            || submitted.error_kind () == framework_error_kind_t::shutting_down)) {
         state->runtime->spot_resolver->invalidate_spot_address (target);
     }
     co_return submitted;
@@ -2180,12 +2181,16 @@ task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_message_er
     catch (const framework_exception_t &error) {
         /* Stale-route judgement: a remote error reply is a stale-route signal
          * only when the framework produced it (zlink.origin=framework marker,
-         * carried here as error_origin_t::framework). An application
-         * handler's not_found/unavailable must not invalidate the cached
-         * route. Local failures (unspecified origin) keep invalidating as
-         * before. */
+         * carried here as error_origin_t::framework). ShuttingDown also
+         * retires a resolved address: an explicit Spot close can seal its
+         * serial queue before authority deletion reaches Missing. The failed
+         * operation stays terminal; only a later call re-resolves. An
+         * application's not_found/unavailable/shutting_down must not
+         * invalidate the cached route. Local failures (unspecified origin)
+         * keep invalidating as before. */
         if ((error.kind () == framework_error_kind_t::not_found
-             || error.kind () == framework_error_kind_t::unavailable)
+             || error.kind () == framework_error_kind_t::unavailable
+             || error.kind () == framework_error_kind_t::shutting_down)
             && detail::error_origin (error) != detail::error_origin_t::application) {
             state->runtime->spot_resolver->invalidate_spot_address (target);
         }
