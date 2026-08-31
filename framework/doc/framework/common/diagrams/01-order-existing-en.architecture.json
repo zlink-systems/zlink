@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Order processing — existing approach",
+    "subtitle": "The Kafka log owns ordering on the order-processing path",
+    "output": "01-order-existing-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      40,
+      150
+    ],
+    "cols": 5,
+    "gapX": 84,
+    "gapY": 90,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "Client app",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "lb",
+      "type": "external",
+      "label": "L7 LB / gateway",
+      "sublabel": "K8s Ingress",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "api",
+      "type": "frontend",
+      "label": "API servers ×N",
+      "sublabel": "stateless",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "rm",
+      "type": "database",
+      "label": "read model",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "cache",
+      "type": "messagebus",
+      "label": "cache",
+      "sublabel": "avoid repeated reads",
+      "row": 1,
+      "col": 3
+    },
+    {
+      "id": "log",
+      "type": "messagebus",
+      "label": "Kafka log",
+      "sublabel": "OrderId key partition",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "cg",
+      "type": "messagebus",
+      "label": "order consumers ×N",
+      "sublabel": "consumer group · offset",
+      "row": 2,
+      "col": 2
+    },
+    {
+      "id": "svc",
+      "type": "messagebus",
+      "label": "inter-server LB",
+      "sublabel": "K8s Service · discovery",
+      "row": 2,
+      "col": 3
+    },
+    {
+      "id": "inv",
+      "type": "frontend",
+      "label": "inventory/payment",
+      "row": 2,
+      "col": 4,
+      "sublabel": "services ×N"
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "Order state DB",
+      "row": 3,
+      "col": 2
+    },
+    {
+      "id": "job",
+      "type": "messagebus",
+      "label": "resync job",
+      "row": 3,
+      "col": 0
+    }
+  ],
+  "connections": [
+    {
+      "from": "client",
+      "to": "lb",
+      "label": "order · query HTTP",
+      "variant": "emphasis",
+      "labelDy": 22
+    },
+    {
+      "from": "lb",
+      "to": "api",
+      "variant": "default"
+    },
+    {
+      "from": "api",
+      "to": "log",
+      "label": "event append",
+      "variant": "emphasis",
+      "labelDy": -20
+    },
+    {
+      "from": "log",
+      "to": "cg",
+      "label": "ordered partition",
+      "variant": "emphasis",
+      "labelDy": -24
+    },
+    {
+      "from": "cg",
+      "to": "rm",
+      "label": "update",
+      "variant": "default",
+      "labelDy": -14
+    },
+    {
+      "from": "cg",
+      "to": "cache",
+      "variant": "dashed"
+    },
+    {
+      "from": "cg",
+      "to": "svc",
+      "label": "inv · pay call",
+      "variant": "default",
+      "labelDy": 24
+    },
+    {
+      "from": "svc",
+      "to": "inv",
+      "variant": "default"
+    },
+    {
+      "from": "cg",
+      "to": "db",
+      "label": "load-modify-store",
+      "variant": "default",
+      "labelDy": 22
+    },
+    {
+      "from": "job",
+      "to": "db",
+      "label": "reconcile",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "orange",
+      "title": "The pieces added just for ordering",
+      "items": [
+        "The Kafka log owns ordering on the order-processing path (OrderId key partition)",
+        "Consumers: consumer group · offset · rebalance + version check · dedupe",
+        "Inter-server calls route through a K8s Service · service-discovery LB",
+        "Queries hit a read model (cache avoids repeated reads), corrected by lag monitoring · a resync job"
+      ]
+    }
+  ]
+}

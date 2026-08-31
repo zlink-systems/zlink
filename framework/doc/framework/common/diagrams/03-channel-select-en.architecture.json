@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "channel — calling by name (select-one)",
+    "subtitle": "The caller passes only ChannelName; select-one picks one node",
+    "output": "03-channel-select-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 96,
+    "gapY": 82,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "caller",
+      "type": "frontend",
+      "label": "caller",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "SEL",
+      "type": "messagebus",
+      "label": "select-one",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "N1",
+      "type": "backend",
+      "label": "node 1",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "N2",
+      "type": "backend",
+      "label": "node 2",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "N3",
+      "type": "backend",
+      "label": "node 3",
+      "row": 2,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "channel: orders",
+      "wraps": [
+        "N1",
+        "N2",
+        "N3"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "caller",
+      "to": "SEL",
+      "variant": "default",
+      "label": "ChannelName"
+    },
+    {
+      "from": "SEL",
+      "to": "N2",
+      "variant": "emphasis",
+      "label": "selected node"
+    },
+    {
+      "from": "SEL",
+      "to": "N1",
+      "variant": "dashed"
+    },
+    {
+      "from": "SEL",
+      "to": "N3",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Calling by name",
+      "items": [
+        "The caller passes only the channel name (\"ChannelName: orders\"); select-one picks one node able to receive the request (node 2) and delivers to it — \"the node this call selected\" (bold arrow).",
+        "The unselected node 1 and node 3 remain candidates (dashed). The caller doesn't need to know which node was selected."
+      ]
+    }
+  ]
+}

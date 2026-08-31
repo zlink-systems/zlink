@@ -139,8 +139,8 @@ of the Object Servers that registered that type, and issues a globally unique `S
 
 ### 3.1 Execution Flow
 
-<iframe class="zlink-diagram" src="/common/diagrams/02-create-room.en.html" title="The flow of creating one room — Create Room" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/02-create-room.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/02-create-room-en.html" title="The flow of creating one room — Create Room" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/02-create-room-en.html" target="_blank">↗ View larger</a></p>
 
 The API code never carries the Play node's `NodeRid` or endpoint. The same creation code is
 used even as Play nodes are added or replaced.

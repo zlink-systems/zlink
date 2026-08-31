@@ -38,8 +38,8 @@ Channel messaging is the framework's most fundamental axis. It covers these inte
 > application never handles these directly** (the framework auto-maps them by channel
 > kind).
 
-<iframe class="zlink-diagram" src="/common/diagrams/05-messaging-kinds.en.html" title="Three call kinds — Request · Send · Publish" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/05-messaging-kinds.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/05-messaging-kinds-en.html" title="Three call kinds — Request · Send · Publish" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-messaging-kinds-en.html" target="_blank">↗ View larger</a></p>
 
 ## 0. Use As A gRPC Replacement
 
@@ -127,8 +127,8 @@ route mesh channel just adds a name on top of that socket.
 You connect to the mesh with one MeshNode socket, and the channel name is the logical
 grouping on top of it that decides "who receives this request."
 
-<iframe class="zlink-diagram" src="/common/diagrams/05-route-mesh.en.html" title="Route mesh channel — one connection, channels are names on top" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/05-route-mesh.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/05-route-mesh-en.html" title="Route mesh channel — one connection, channels are names on top" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-route-mesh-en.html" target="_blank">↗ View larger</a></p>
 
 The boxes are groups tied together by name, not sockets. Calling `orders` has select-one
 pick one of A1/A2 inside that box, and registering ten more channels doesn't add any
@@ -150,8 +150,8 @@ substitute for each other.**
 Using only manual endpoints means you don't need a location store. **If auto-discovery is
 enabled and there's no store, startup fails before the listener binds.**
 
-<iframe class="zlink-diagram" src="/common/diagrams/05-clientserver.en.html" title="ClientServer channel — an independent runtime per channel" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/05-clientserver.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/05-clientserver-en.html" title="ClientServer channel — an independent runtime per channel" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-clientserver-en.html" target="_blank">↗ View larger</a></p>
 
 `auth` and `report` don't share connection targets or lifetimes. Even if the same process Z
 participates in both channels, each channel runtime manages its connection to Z separately.
@@ -197,8 +197,8 @@ Conversely, a **fanout channel** (called **Classic fanout** in the spec) opens a
 independent pair of PUB/SUB sockets by itself. Regardless of Spot or MeshNode, one
 publisher delivers to every connected subscriber.
 
-<iframe class="zlink-diagram" src="/common/diagrams/05-publish-fanout.en.html" title="Classic fanout — one publisher to every connected subscriber" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/05-publish-fanout.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/05-publish-fanout-en.html" title="Classic fanout — one publisher to every connected subscriber" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-publish-fanout-en.html" target="_blank">↗ View larger</a></p>
 
 For both, **publish completing doesn't guarantee delivery.** A publish call completing
 means the send was locally accepted for transport, not confirmation that a subscriber
@@ -383,8 +383,8 @@ A channel handler runs in a per-channel asynchronous receive loop. When a handle
 wait point, only that flow of execution pauses -- the thread returns to the pool to handle
 other work.
 
-<iframe class="zlink-diagram" src="/common/diagrams/05-async-handler.en.html" title="Async handler — the worker handles other work while suspended" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/05-async-handler.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/05-async-handler-en.html" title="Async handler — the worker handles other work while suspended" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-async-handler-en.html" target="_blank">↗ View larger</a></p>
 
 So without callbacks, **code that reads top to bottom** lets a handful of workers handle
 huge numbers of concurrent requests. Blocking with `.Result` keeps that thread occupied, so
@@ -717,8 +717,8 @@ the server with the larger value is picked proportionally more often. `0` means 
 connection but exclude it from new-request candidates," and `100` is the default, normal
 serving value.
 
-<iframe class="zlink-diagram" src="/common/diagrams/05-drain-weight.en.html" title="Operational drain / restore — peer weight picks the target" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/05-drain-weight.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/05-drain-weight-en.html" title="Operational drain / restore — peer weight picks the target" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-drain-weight-en.html" target="_blank">↗ View larger</a></p>
 
 ```cpp
 // An operational admin path. "orders" is the registered ChannelName.
@@ -865,8 +865,8 @@ caller.peer_connections ().connect ("tcp://10.30.1.10:5601");
 options.add_route_mesh ("media").listen (0).channel_name ("image.resize").client ();
 ```
 
-<iframe class="zlink-diagram" src="/common/diagrams/05-node-select.en.html" title="Round-robin distribution · adding a node reflected automatically" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/05-node-select.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/05-node-select-en.html" title="Round-robin distribution · adding a node reflected automatically" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-node-select-en.html" target="_blank">↗ View larger</a></p>
 
 If a specific entity (order ID, user ID) always needs to be handled by the same execution
 unit, use a Spot or Actor instead of a channel ([06-spot](06-spot.en.md)).
@@ -926,8 +926,8 @@ A business message uses the target's logical address.
 The Framework picks the current owner and an eligible node, so the application doesn't hold
 onto a Node RID.
 
-<iframe class="zlink-diagram" src="/common/diagrams/05-addressing.en.html" title="Addressing — operations vs application" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/05-addressing.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/05-addressing-en.html" title="Addressing — operations vs application" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-addressing-en.html" target="_blank">↗ View larger</a></p>
 
 The tie-in with SPOT continues in [06-spot](06-spot.en.md).
 

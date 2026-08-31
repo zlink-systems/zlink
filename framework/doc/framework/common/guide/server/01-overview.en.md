@@ -150,8 +150,8 @@ roughly four patterns. Boxes like login/auth, gateway, and DB cache show up repe
 matter which pattern — but since there's no common framework backing them, a team picks its
 genre's pattern and rebuilds that structure from the socket up.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-arch-existing.en.html" title="Game backend patterns — existing approach" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-arch-existing.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/01-arch-existing-en.html" title="Game backend patterns — existing approach" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-arch-existing-en.html" target="_blank">↗ View larger</a></p>
 
 - **① Zone-sharding.** The world is split into geographic regions, one server (node) owns
   each region, and when a character crosses a boundary the simulation hands off to the
@@ -212,8 +212,8 @@ There's no need to rebuild from the socket for each one.
 Where the "existing approaches" diagram above split into four, here's how each approach
 assembles with ZLink, in the same spots.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-arch-zlink.en.html" title="Game backend patterns — ZLink approach" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-arch-zlink.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/01-arch-zlink-en.html" title="Game backend patterns — ZLink approach" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-arch-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 Green (bold border) is the SPOT-family primitive. This is exactly where it contrasts with
 the "existing approaches" diagram above — each approach used to need its own infrastructure
@@ -429,14 +429,14 @@ execution unit.
 
 **The existing approach** — lock acquire/release makes a round trip on every request.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing.en.html" title="Guild state change — existing approach" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-guild-existing.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing-en.html" title="Guild state change — existing approach" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-guild-existing-en.html" target="_blank">↗ View larger</a></p>
 
 **The ZLink approach** — the lock disappears, and the guild id itself becomes the spot
 address the request will arrive at.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink.en.html" title="Guild state change — ZLink approach" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-guild-zlink.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink-en.html" title="Guild state change — ZLink approach" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-guild-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 A request for the same guild always passes through the same GuildSpot's queue, so the second
 request is only processed once the first finishes — it's not that another request is blocked
@@ -536,14 +536,14 @@ shows the difference right in the picture.
 **The existing approach** — the components for the real-time feature (orange) add up to as
 much as the main body.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing.en.html" title="Existing approach — web service + real-time" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-delivery-existing.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing-en.html" title="Existing approach — web service + real-time" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-delivery-existing-en.html" target="_blank">↗ View larger</a></p>
 
 **The ZLink approach** — every orange piece disappears, leaving one location store that
 provides node/actor/spot location information.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink.en.html" title="ZLink approach — web service + real-time" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-delivery-zlink.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink-en.html" title="ZLink approach — web service + real-time" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-delivery-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 Sticky LB, WebSocket server, pub/sub detour, distributed lock, mesh/discovery — five pieces
 shrink down to **one location store.** Inter-server calls and real-time delivery all connect
@@ -672,16 +672,16 @@ pieces right in the picture.
 **The existing approach** — the pipeline pieces for ordered processing (orange) add up to as
 much as the main body.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-order-existing.en.html" title="Order processing — existing approach" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-order-existing.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/01-order-existing-en.html" title="Order processing — existing approach" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-order-existing-en.html" target="_blank">↗ View larger</a></p>
 
 **The ZLink approach** — this doesn't replace Kafka. **On the order-processing path**, the
 pipeline pieces (orange) disappear, and Kafka stays in its natural role (gray) — propagating
 confirmed facts to independent systems and preserving events that need replay, as a durable
 log.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-order-zlink.en.html" title="Order processing — ZLink approach" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-order-zlink.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/01-order-zlink-en.html" title="Order processing — ZLink approach" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-order-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 The key thing across the two pictures is that Kafka's color changes. Kafka (orange), which
 used to own ordering **inside** the processing path, moves **outside** the processing path
@@ -1309,8 +1309,8 @@ Every option settable at each surface, with its default, is collected in
 
 === "C#/.NET"
 
-    <iframe class="zlink-diagram" src="/common/diagrams/01-lang-dotnet.en.html" title="ZLink layers — .NET" loading="lazy" style="width:100%;border:0"></iframe>
-    <p><a href="/common/diagrams/01-lang-dotnet.en.html" target="_blank">↗ View larger</a></p>
+    <iframe class="zlink-diagram" src="/common/diagrams/01-lang-dotnet-en.html" title="ZLink layers — .NET" loading="lazy" style="width:100%;border:0"></iframe>
+    <p><a href="/common/diagrams/01-lang-dotnet-en.html" target="_blank">↗ View larger</a></p>
 
     | Axis | What the user sees | Guide chapter |
     | --- | --- | --- |
@@ -1324,8 +1324,8 @@ Every option settable at each surface, with its default, is collected in
 
 === "C++"
 
-    <iframe class="zlink-diagram" src="/common/diagrams/01-lang-cpp.en.html" title="ZLink layers — C++" loading="lazy" style="width:100%;border:0"></iframe>
-    <p><a href="/common/diagrams/01-lang-cpp.en.html" target="_blank">↗ View larger</a></p>
+    <iframe class="zlink-diagram" src="/common/diagrams/01-lang-cpp-en.html" title="ZLink layers — C++" loading="lazy" style="width:100%;border:0"></iframe>
+    <p><a href="/common/diagrams/01-lang-cpp-en.html" target="_blank">↗ View larger</a></p>
 
     | Axis | What the user sees | Guide chapter |
     | --- | --- | --- |
@@ -1339,8 +1339,8 @@ Every option settable at each surface, with its default, is collected in
 
 === "Java"
 
-    <iframe class="zlink-diagram" src="/common/diagrams/01-lang-java.en.html" title="ZLink layers — Java" loading="lazy" style="width:100%;border:0"></iframe>
-    <p><a href="/common/diagrams/01-lang-java.en.html" target="_blank">↗ View larger</a></p>
+    <iframe class="zlink-diagram" src="/common/diagrams/01-lang-java-en.html" title="ZLink layers — Java" loading="lazy" style="width:100%;border:0"></iframe>
+    <p><a href="/common/diagrams/01-lang-java-en.html" target="_blank">↗ View larger</a></p>
 
     | Axis | What the user sees | Guide chapter |
     | --- | --- | --- |
@@ -1354,8 +1354,8 @@ Every option settable at each surface, with its default, is collected in
 
 === "Kotlin"
 
-    <iframe class="zlink-diagram" src="/common/diagrams/01-lang-kotlin.en.html" title="ZLink layers — Kotlin" loading="lazy" style="width:100%;border:0"></iframe>
-    <p><a href="/common/diagrams/01-lang-kotlin.en.html" target="_blank">↗ View larger</a></p>
+    <iframe class="zlink-diagram" src="/common/diagrams/01-lang-kotlin-en.html" title="ZLink layers — Kotlin" loading="lazy" style="width:100%;border:0"></iframe>
+    <p><a href="/common/diagrams/01-lang-kotlin-en.html" target="_blank">↗ View larger</a></p>
 
     | Axis | What the user sees | Guide chapter |
     | --- | --- | --- |
@@ -1369,8 +1369,8 @@ Every option settable at each surface, with its default, is collected in
 
 === "Node/TypeScript"
 
-    <iframe class="zlink-diagram" src="/common/diagrams/01-lang-node.en.html" title="ZLink layers — Node/TypeScript" loading="lazy" style="width:100%;border:0"></iframe>
-    <p><a href="/common/diagrams/01-lang-node.en.html" target="_blank">↗ View larger</a></p>
+    <iframe class="zlink-diagram" src="/common/diagrams/01-lang-node-en.html" title="ZLink layers — Node/TypeScript" loading="lazy" style="width:100%;border:0"></iframe>
+    <p><a href="/common/diagrams/01-lang-node-en.html" target="_blank">↗ View larger</a></p>
 
     | Axis | What the user sees | Guide chapter |
     | --- | --- | --- |
@@ -1387,8 +1387,8 @@ Every option settable at each surface, with its default, is collected in
 An example showing how each feature fits together. Each feature's own chapter zooms into
 part of this map.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-topology.en.html" title="Overall topology" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/01-topology.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/01-topology-en.html" title="Overall topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-topology-en.html" target="_blank">↗ View larger</a></p>
 
 - **Entry server** — receives an external request over ASP.NET Core HTTP and delegates to
   the domain server.

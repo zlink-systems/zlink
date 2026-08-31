@@ -57,8 +57,8 @@ Sending a message by `ChannelName` has the framework pick one of the nodes curre
 receive the request at that moment and deliver to it — this selection is called
 **select-one**.
 
-<iframe class="zlink-diagram" src="/common/diagrams/03-channel-select.en.html" title="channel — calling by name (select-one)" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/03-channel-select.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/03-channel-select-en.html" title="channel — calling by name (select-one)" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-channel-select-en.html" target="_blank">↗ View larger</a></p>
 
 If three nodes own the same `orders` channel, one of them is selected per call. The caller
 doesn't know — and doesn't need to know — which node was selected.
@@ -115,8 +115,8 @@ though, and the node where that spot actually lives receives the message and han
 that spot to process. Which node that is gets found by the framework through the same
 location transparency [seen earlier](#1-channel--a-connection-between-servers).
 
-<iframe class="zlink-diagram" src="/common/diagrams/03-spot-queue.en.html" title="spot — owns state, processes in order" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/03-spot-queue.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/03-spot-queue-en.html" title="spot — owns state, processes in order" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-spot-queue-en.html" target="_blank">↗ View larger</a></p>
 
 A spot registers on the MeshNode's **Object role**. It's a separate surface from the same
 MeshNode's Channel role.
@@ -133,8 +133,8 @@ ID is always handled by the same instance. An actor always belongs to some spot,
 binds to an external client connection continues in the
 [next section](#4-stream--external-client-connections).
 
-<iframe class="zlink-diagram" src="/common/diagrams/03-actor-route.en.html" title="actor — identified by id" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/03-actor-route.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/03-actor-route-en.html" title="actor — identified by id" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-actor-route-en.html" target="_blank">↗ View larger</a></p>
 
 Details in [07-actor-spot](07-actor-spot.en.md).
 
@@ -151,8 +151,8 @@ stops handling messages that arrive over that connection itself, relaying them t
 actor instead. The reverse direction works the same way — a push the actor sends goes out to
 the client through the session bound to that actor.
 
-<iframe class="zlink-diagram" src="/common/diagrams/03-stream.en.html" title="stream — external client connection" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/03-stream.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/03-stream-en.html" title="stream — external client connection" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-stream-en.html" target="_blank">↗ View larger</a></p>
 
 So **the node that accepts the connection and the node that runs domain logic can be split.**
 Even if the session lives on a gateway node and the actor lives on a different node, the
@@ -176,8 +176,8 @@ that lives on a different node, the moment the join is accepted the actor moves 
 carrying its state and pending work along with it. This is a move the application triggers by
 request.
 
-<iframe class="zlink-diagram" src="/common/diagrams/03-relocation.en.html" title="relocation — an actor joins a spot on another node" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/03-relocation.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/03-relocation-en.html" title="relocation — an actor joins a spot on another node" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-relocation-en.html" target="_blank">↗ View larger</a></p>
 
 The only thing the join call specifies is the **spot id `room-42`** — there's no argument
 that names a target node. The framework looks up which node currently holds that spot in the
@@ -190,8 +190,8 @@ operator moves the spots and actors on one host to another host. The framework h
 even without the application requesting individual joins, and once it's done, the original
 host can be shut down.
 
-<iframe class="zlink-diagram" src="/common/diagrams/03-host-relocate.en.html" title="host relocate — moving spot and actors as a whole" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/03-host-relocate.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/03-host-relocate-en.html" title="host relocate — moving spot and actors as a whole" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-host-relocate-en.html" target="_blank">↗ View larger</a></p>
 
 A server holding state can't just be taken down because of that state, so maintenance or a
 deployment usually means dropping the connection and making clients wait. Host Relocate keeps

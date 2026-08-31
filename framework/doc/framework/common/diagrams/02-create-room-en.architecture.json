@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "The flow of creating one room — Create Room",
+    "subtitle": "The API reserves and creates a Spot, then returns RoomId (= SpotId)",
+    "output": "02-create-room-en.html",
+    "column_fit": "spread",
+    "viewBox": [
+      1040,
+      640
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "participants": [
+    {
+      "id": "Client",
+      "type": "frontend",
+      "label": "HTTP client"
+    },
+    {
+      "id": "Api",
+      "type": "frontend",
+      "label": "API server"
+    },
+    {
+      "id": "Store",
+      "type": "external",
+      "label": "Location Store"
+    },
+    {
+      "id": "Play",
+      "type": "backend",
+      "label": "Selected Play node"
+    },
+    {
+      "id": "Spot",
+      "type": "backend",
+      "label": "Game Spot"
+    }
+  ],
+  "messages": [
+    {
+      "from": "Client",
+      "to": "Api",
+      "y": 160,
+      "label": "POST /games",
+      "variant": "default"
+    },
+    {
+      "from": "Api",
+      "to": "Store",
+      "y": 208,
+      "label": "Reserve a new Spot",
+      "variant": "default"
+    },
+    {
+      "from": "Store",
+      "to": "Api",
+      "y": 256,
+      "label": "SpotId and selected owner",
+      "variant": "return"
+    },
+    {
+      "from": "Api",
+      "to": "Play",
+      "y": 304,
+      "label": "Create Spot with initial request",
+      "variant": "default"
+    },
+    {
+      "from": "Play",
+      "to": "Spot",
+      "y": 352,
+      "label": "Construct and initialize",
+      "variant": "default"
+    },
+    {
+      "from": "Spot",
+      "to": "Play",
+      "y": 400,
+      "label": "Accept",
+      "variant": "return"
+    },
+    {
+      "from": "Play",
+      "to": "Api",
+      "y": 448,
+      "label": "Spot ready",
+      "variant": "return"
+    },
+    {
+      "from": "Api",
+      "to": "Client",
+      "y": 496,
+      "label": "RoomId = SpotId",
+      "variant": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Reservation and placement",
+      "items": [
+        "The API doesn't pick a specific Play node. The Location Store reserves a new Spot and returns a globally unique SpotId and the selected owner.",
+        "The API tells the selected Play node to create the Spot along with the initial request — Create Spot with initial request."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Creation and response",
+      "items": [
+        "The Play node constructs and initializes the Game Spot, and once the Spot returns Accept it is ready.",
+        "The API returns RoomId = SpotId to the client."
+      ]
+    }
+  ]
+}

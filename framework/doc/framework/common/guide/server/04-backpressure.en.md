@@ -40,8 +40,8 @@ first instruction. A handler that has started and is awaiting asynchronous I/O t
 not reacquire the queue permit. A framework-side owner keeps the record payload valid until its
 required terminal, but it does not continue to occupy Core HWM budget.
 
-<iframe class="zlink-diagram" src="/common/diagrams/04-flow.en.html" title="Backpressure path — send to receive, replies dashed" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/04-flow.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/04-flow-en.html" title="Backpressure path — send to receive, replies dashed" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/04-flow-en.html" target="_blank">↗ View larger</a></p>
 
 When the application job queue reaches its limit, every ordinary ingress record other than a
 terminal reply/error completion identifiable before receive waits cancellably for a permit

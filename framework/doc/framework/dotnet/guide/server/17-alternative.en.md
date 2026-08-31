@@ -163,8 +163,8 @@ infrastructure.
 L7 distribution splits work by looking at each individual request, not the connection — a
 mesh sidecar or client-side LB plays this role.
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-l7-distribute.en.html" title="L7 distribution — split request by request" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/17-l7-distribute.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/17-l7-distribute-en.html" title="L7 distribution — split request by request" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-l7-distribute-en.html" target="_blank">↗ View larger</a></p>
 
 In other words, "using gRPC" really means running **gRPC + an L7 LB (usually a mesh) +
 service-location lookup + an event broker + a proto pipeline** together.
@@ -222,11 +222,11 @@ policy, you keep them as-is.
 
 ### 5.3 The Path One Call Takes
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-sidecar-path.en.html" title="Sidecar path — Envoy local to Envoy remote, two hops" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/17-sidecar-path.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/17-sidecar-path-en.html" title="Sidecar path — Envoy local to Envoy remote, two hops" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-sidecar-path-en.html" target="_blank">↗ View larger</a></p>
 
-<iframe class="zlink-diagram" src="/common/diagrams/17-channel-path.en.html" title="channel path — direct call, no sidecar" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/17-channel-path.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/17-channel-path-en.html" title="channel path — direct call, no sidecar" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-channel-path-en.html" target="_blank">↗ View larger</a></p>
 
 ### 5.4 Summary Of What Collapses
 

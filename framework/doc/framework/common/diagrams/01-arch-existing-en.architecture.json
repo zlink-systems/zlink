@@ -1,0 +1,226 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Game backend patterns — existing approach",
+    "subtitle": "zone-sharding · lobby+room · matchmaker+dedicated · distributed actor service",
+    "output": "01-arch-existing-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      170
+    ],
+    "cols": 4,
+    "gapX": 70,
+    "gapY": 78,
+    "cellW": 120,
+    "cellH": 58
+  },
+  "components": [
+    {
+      "id": "c1",
+      "type": "external",
+      "label": "client",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "gw",
+      "type": "frontend",
+      "label": "gateway",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "z1",
+      "type": "backend",
+      "label": "zone server A",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "z2",
+      "type": "backend",
+      "label": "zone server B",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "c2",
+      "type": "external",
+      "label": "client",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "lo",
+      "type": "frontend",
+      "label": "lobby / matching",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "r1",
+      "type": "backend",
+      "label": "room servers",
+      "sublabel": "per-room state",
+      "row": 2,
+      "col": 2
+    },
+    {
+      "id": "c3",
+      "type": "external",
+      "label": "client",
+      "row": 3,
+      "col": 0
+    },
+    {
+      "id": "mm",
+      "type": "frontend",
+      "label": "matchmaker",
+      "sublabel": "ticket queue",
+      "row": 3,
+      "col": 1
+    },
+    {
+      "id": "fl",
+      "type": "backend",
+      "label": "dedicated fleet",
+      "sublabel": "process per match",
+      "row": 3,
+      "col": 2
+    },
+    {
+      "id": "c4",
+      "type": "external",
+      "label": "client",
+      "row": 4,
+      "col": 0
+    },
+    {
+      "id": "ap",
+      "type": "frontend",
+      "label": "API server",
+      "sublabel": "stateless front-end",
+      "row": 4,
+      "col": 1
+    },
+    {
+      "id": "ac",
+      "type": "backend",
+      "label": "actor cluster",
+      "sublabel": "location-transparent",
+      "row": 4,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "① Zone-sharded — MMORPG",
+      "wraps": [
+        "c1",
+        "gw",
+        "z1",
+        "z2"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "② Lobby + room — casual · board games",
+      "wraps": [
+        "c2",
+        "lo",
+        "r1"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "③ Matchmaker + dedicated — session-based",
+      "wraps": [
+        "c3",
+        "mm",
+        "fl"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "④ Distributed actor service — meta · social",
+      "wraps": [
+        "c4",
+        "ap",
+        "ac"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "c1",
+      "to": "gw",
+      "variant": "default"
+    },
+    {
+      "from": "gw",
+      "to": "z1",
+      "variant": "default"
+    },
+    {
+      "from": "gw",
+      "to": "z2",
+      "variant": "default",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "from": "z1",
+      "to": "z2",
+      "variant": "dashed"
+    },
+    {
+      "from": "c2",
+      "to": "lo",
+      "variant": "default"
+    },
+    {
+      "from": "lo",
+      "to": "r1",
+      "variant": "default"
+    },
+    {
+      "from": "c3",
+      "to": "mm",
+      "variant": "default"
+    },
+    {
+      "from": "mm",
+      "to": "fl",
+      "variant": "default"
+    },
+    {
+      "from": "c4",
+      "to": "ap",
+      "variant": "default"
+    },
+    {
+      "from": "ap",
+      "to": "ac",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "slate",
+      "title": "All four — you build the state-ownership point yourself",
+      "items": [
+        "① The zone server owns region state; on a boundary cross, servers hand off with their own protocol",
+        "② Room servers own per-room state · ③ the matchmaker assigns a dedicated process per match from a ticket queue",
+        "④ The actor cluster owns per-player/guild state (location-transparent across nodes)"
+      ]
+    }
+  ]
+}

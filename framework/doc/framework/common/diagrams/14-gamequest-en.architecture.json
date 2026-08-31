@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "GameQuest — player owner Spot processing",
+    "subtitle": "PlayerId owner routing · event sourcing · gameplay correction",
+    "output": "14-gamequest-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      160
+    ],
+    "cols": 4,
+    "gapX": 92,
+    "gapY": 84,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "game client",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "SS",
+      "type": "external",
+      "label": "Session Server",
+      "sublabel": "session actor · pre-validate",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "SP",
+      "type": "backend",
+      "label": "PlayerQuestSpot",
+      "sublabel": "one per player",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "ES",
+      "type": "database",
+      "label": "quest events",
+      "row": 0,
+      "col": 3
+    },
+    {
+      "id": "RM",
+      "type": "database",
+      "label": "read model",
+      "row": 1,
+      "col": 3
+    },
+    {
+      "id": "GS",
+      "type": "database",
+      "label": "gameplay facts",
+      "sublabel": "source for correction",
+      "row": 2,
+      "col": 3
+    }
+  ],
+  "connections": [
+    {
+      "from": "C",
+      "to": "SS",
+      "label": "WebSocket",
+      "variant": "emphasis"
+    },
+    {
+      "from": "SS",
+      "to": "SP",
+      "label": "PlayerId owner routing",
+      "variant": "emphasis",
+      "labelDy": -48
+    },
+    {
+      "from": "SP",
+      "to": "SS",
+      "label": "bound session push",
+      "variant": "default",
+      "fromSide": "bottom",
+      "toSide": "bottom"
+    },
+    {
+      "from": "SP",
+      "to": "ES",
+      "label": "append · replay",
+      "variant": "default"
+    },
+    {
+      "from": "SP",
+      "to": "RM",
+      "label": "update",
+      "variant": "default"
+    },
+    {
+      "from": "SP",
+      "to": "GS",
+      "label": "reset · correction query",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "owner processing",
+      "items": [
+        "game client ↔ Session Server is one bidirectional WebSocket connection (emphasis) — the session actor validates events before the owner Spot judges them",
+        "Session Server routes by PlayerId to the owner → the same player's events are processed in order by one owner Spot"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "event sourcing + correction",
+      "items": [
+        "appends·replays quest events, updates the read model, pushes progress to the bound session",
+        "reset·correction query against gameplay facts as the source (dashed) — loss is absorbed by snapshot-based correction"
+      ]
+    }
+  ]
+}

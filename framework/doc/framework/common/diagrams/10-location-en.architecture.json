@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Location — Registering And Looking Up Location",
+    "subtitle": "Server registers descriptor and owner in the Store · Client reads the location and sends the message directly",
+    "output": "10-location-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 120,
+    "gapY": 96,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "Object Client",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "S",
+      "type": "frontend",
+      "label": "Object Server",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "L",
+      "type": "external",
+      "label": "Location Store",
+      "row": 1,
+      "col": 1
+    }
+  ],
+  "connections": [
+    {
+      "from": "C",
+      "to": "S",
+      "variant": "default",
+      "label": "message"
+    },
+    {
+      "from": "C",
+      "to": "L",
+      "variant": "default",
+      "label": "read current location"
+    },
+    {
+      "from": "S",
+      "to": "L",
+      "variant": "default",
+      "label": "descriptor and owner"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "slate",
+      "title": "Location Store (infra)",
+      "items": [
+        "The Object Server registers its own descriptor and current owner in the Location Store.",
+        "The Object Client reads the current location from the Location Store and picks the target MeshNode.",
+        "The Store is used only to find location — the actual application message is sent directly to the selected MeshNode."
+      ]
+    }
+  ]
+}

@@ -156,8 +156,8 @@ decided by the Spot kind and its execution mode.
 | User Spot `PerActor` | Serializes separately per Actor and per Spot lane. Different lanes can run concurrently | Each Actor owns its own. Put state shared across lanes in external storage |
 | Instance Spot | Serializes the Spot queue's direct handlers and timer. There's no Actor queue | The Spot instance owns it |
 
-<iframe class="zlink-diagram" src="/common/diagrams/06-spot.en.html" title="The Spot execution model — concurrency scope" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/06-spot.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/06-spot-en.html" title="The Spot execution model — concurrency scope" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/06-spot-en.html" target="_blank">↗ View larger</a></p>
 
 The default is **`SpotWide`**, and most cases use this mode. Because every callback for that
 Spot is serialized through one common gate, the Spot instance and its member Actors can

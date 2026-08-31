@@ -213,8 +213,8 @@ so it commits together. An Entry Spot's and a `PerActor` User Spot's Actors are 
 independent unit, so they move Actor by Actor, and in this case the Spot instance is a shell
 that doesn't carry state.
 
-<iframe class="zlink-diagram" src="/common/diagrams/12-relocation.en.html" title="Relocation move unit per execution mode" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/12-relocation.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/12-relocation-en.html" title="Relocation move unit per execution mode" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/12-relocation-en.html" target="_blank">↗ View larger</a></p>
 
 So a `PerActor` User Spot's factory can only use `RecreateOnRelocation()` as its relocation
 approach. Each member Actor's factory decides its own policy separately. An Instance Spot has
@@ -405,8 +405,8 @@ The Framework runtime is tied to the host's start/stop as its **lifecycle servic
 channel/SPOT/STREAM runtime is created based on the roles registered at startup, and cleaned
 up at shutdown.
 
-<iframe class="zlink-diagram" src="/common/diagrams/12-lifecycle.en.html" title="Host lifecycle — configure, serving, stopping" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/12-lifecycle.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/12-lifecycle-en.html" title="Host lifecycle — configure, serving, stopping" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/12-lifecycle-en.html" target="_blank">↗ View larger</a></p>
 
 - **Configuration phase** — finish every declaration before `app.Run()`. A bad configuration
   is rejected as an exception at host startup.

@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Sidecar path — Envoy local → Envoy remote, two hops",
+    "subtitle": "An order-service call reaches payment-service through two sidecar proxies, and the reply returns along the reverse path",
+    "output": "17-sidecar-path-en.html",
+    "column_fit": "spread",
+    "viewBox": [
+      1040,
+      640
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "participants": [
+    {
+      "id": "A",
+      "type": "frontend",
+      "label": "order-service"
+    },
+    {
+      "id": "SA",
+      "type": "external",
+      "label": "Envoy local"
+    },
+    {
+      "id": "SB",
+      "type": "external",
+      "label": "Envoy remote"
+    },
+    {
+      "id": "B",
+      "type": "frontend",
+      "label": "payment-service"
+    }
+  ],
+  "messages": [
+    {
+      "from": "A",
+      "to": "SA",
+      "y": 160,
+      "label": "gRPC Charge",
+      "variant": "default"
+    },
+    {
+      "from": "SA",
+      "to": "SB",
+      "y": 208,
+      "label": "mTLS HTTP/2",
+      "variant": "default",
+      "note": "location lookup + L7 LB, then mTLS HTTP/2"
+    },
+    {
+      "from": "SB",
+      "to": "B",
+      "y": 256,
+      "label": "forward",
+      "variant": "default"
+    },
+    {
+      "from": "B",
+      "to": "A",
+      "y": 304,
+      "label": "reply",
+      "variant": "return",
+      "note": "sidecar return path"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "slate",
+      "title": "Two sidecar hops",
+      "items": [
+        "The order-service call reaches payment-service through the Envoy local → Envoy remote sidecar proxies.",
+        "SA→SB full label: \"location lookup + L7 LB, then mTLS HTTP/2\". The reply returns to order-service along the sidecar return path."
+      ]
+    }
+  ]
+}

@@ -29,8 +29,8 @@ The Location Store stores the MeshNode descriptor and the current owner of each 
 The Framework uses this information to auto-connect peers and deliver by logical ID to the
 current owner.
 
-<iframe class="zlink-diagram" src="/common/diagrams/10-location.en.html" title="Location — Registering And Looking Up Location" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/10-location.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/10-location-en.html" title="Location — Registering And Looking Up Location" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/10-location-en.html" target="_blank">↗ View larger</a></p>
 
 The Store is used only to find location. The actual application message is sent directly to
 the selected MeshNode.

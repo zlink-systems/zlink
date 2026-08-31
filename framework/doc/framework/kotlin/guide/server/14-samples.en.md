@@ -65,8 +65,8 @@ not **object location lookup.** In managed languages, it's also the only sample 
 handlers directly in configuration code without scanning. C++ registers handlers directly in
 every sample, but uses manual connections only in TicTacToe.
 
-<iframe class="zlink-diagram" src="/common/diagrams/14-tictactoe.en.html" title="TicTacToe sample topology" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/14-tictactoe.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/14-tictactoe-en.html" title="TicTacToe sample topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-tictactoe-en.html" target="_blank">↗ View larger</a></p>
 
 With no separate Session server, each `Play` owns the stream session, actor, Entry Spot, and
 room Spot together. The client connects directly to a Play from the list of Play endpoints
@@ -95,8 +95,8 @@ processed by the server that owns the room. Even building a different genre, the
 and connection shape rarely stray far from this, so it's a good starting point for a new
 service.
 
-<iframe class="zlink-diagram" src="/common/diagrams/14-bingo.en.html" title="Bingo sample topology" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/14-bingo.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/14-bingo-en.html" title="Bingo sample topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-bingo-en.html" target="_blank">↗ View larger</a></p>
 
 `Session` owns the client connection and actor binding; `Play` owns the player actor and the
 room User Spot; `Api` handles auth and matching requests; `Matchmaking` owns a Matchmaker
@@ -143,8 +143,8 @@ So the agent side splits its actor into two kinds.
 **One connection, but several actors.** The agent client keeps only one stream connection,
 and that session has the roster actor and each per-conversation actor bound to it together.
 
-<iframe class="zlink-diagram" src="/common/diagrams/14-supportchat.en.html" title="SupportChat sample topology" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/14-supportchat.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/14-supportchat-en.html" title="SupportChat sample topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-supportchat-en.html" target="_blank">↗ View larger</a></p>
 
 The inbound direction is disambiguated by **carrying `ConversationId` in the stream
 message's metadata.** The Session server reads only the metadata to pick the target actor
@@ -173,8 +173,8 @@ business rules — it's showing **which framework feature the common requirement
 request, pick a fulfiller, deliver to a specific user's connection, retry on no response"
 maps to.** Ride-hailing, field dispatch, and on-site service requests share the same shape.
 
-<iframe class="zlink-diagram" src="/common/diagrams/14-delivery.en.html" title="DeliveryDispatch sample topology" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/14-delivery.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/14-delivery-en.html" title="DeliveryDispatch sample topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-delivery-en.html" target="_blank">↗ View larger</a></p>
 
 The external boundary uses ordinary web technology as-is. The customer creates a delivery
 over HTTP and receives status over a stream. What changes is what's inside — instead of
@@ -193,8 +193,8 @@ One order is owned by an `OrderWorkflow` owner Spot, which runs reserve-inventor
 payment → confirm, and compensates on failure. The outer HTTP boundary is terminated by
 `CommerceApi`, which never changes order state directly.
 
-<iframe class="zlink-diagram" src="/common/diagrams/14-shoppingmall.en.html" title="ShoppingMall sample topology" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/14-shoppingmall.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/14-shoppingmall-en.html" title="ShoppingMall sample topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-shoppingmall-en.html" target="_blank">↗ View larger</a></p>
 
 The payoff of an owner Spot in this sample isn't throughput. The key point is **writing a
 multi-step process that's safe under retry and interruption as sequential code, with no
@@ -218,8 +218,8 @@ cheating, so all judging and reward decisions happen inside the `PlayerId` owner
 owner processes the same player's events in order, and progress is pushed to the connection
 through a projection.
 
-<iframe class="zlink-diagram" src="/common/diagrams/14-gamequest.en.html" title="GameQuest sample topology" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/14-gamequest.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/14-gamequest-en.html" title="GameQuest sample topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-gamequest-en.html" target="_blank">↗ View larger</a></p>
 
 Placed next to ShoppingMall, the decision criteria become clear. Game progress can tolerate
 getting tangled because there's a resync safety valve, so **it trades loss tolerance for
@@ -243,8 +243,8 @@ boundary, their actor joins the adjacent zone Spot, and if the owner differs, re
 happens — but the client connection stays intact. A bot actor with no bound session makes
 the same boundary crossing on a Spot timer.
 
-<iframe class="zlink-diagram" src="/common/diagrams/14-zoneworld.en.html" title="ZoneWorld sample topology" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/14-zoneworld.en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/14-zoneworld-en.html" title="ZoneWorld sample topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-zoneworld-en.html" target="_blank">↗ View larger</a></p>
 
 This sample's teaching point is that **"doing something across multiple nodes" calls for a
 different surface depending on the situation.**
