@@ -41,16 +41,19 @@
    `ARCHIFY_DIR`로 지정한다.
 2. **playwright** — 임의 작업 디렉터리에서 `npm i playwright@1.62.1` 후 `npx playwright install chromium`
    (캐시가 있으면 no-op).
-3. **실행 규칙** — `build-diagram.mjs`가 `import 'playwright'` 하므로 **playwright가 resolve되는
-   디렉터리에서 실행**한다(위에서 npm 설치한 디렉터리, 또는 `NODE_PATH`로 지정). 출력 경로는 반드시
-   **절대경로**.
+3. **실행 규칙** — `build-diagram.mjs`가 `import 'playwright'` 하는데, **ESM은 cwd·`NODE_PATH`가 아니라
+   스크립트 파일 위치에서 `node_modules`를 탐색**한다. 따라서 스크립트를 playwright가 설치된 env 디렉터리로
+   **복사**한 뒤 거기서 실행한다(cwd만 바꾸거나 `NODE_PATH`를 주면 `ERR_MODULE_NOT_FOUND`). 입출력은 **절대경로**.
    ```sh
-   export ARCHIFY_DIR=<archify-clone>/archify
+   SETUP=<scratch>/diagram-env            # archify 클론과 npm playwright가 있는 디렉터리
+   cp $REPO/scripts/diagrams/*.mjs $SETUP/ # ← 핵심: 스크립트를 env로 복사(수정 금지, 복사본만 실행)
+   export ARCHIFY_DIR=$SETUP/archify/archify
    REPO=/home/hep7/project/zlink
    D=$REPO/framework/doc/framework/common/diagrams
-   node $REPO/scripts/diagrams/build-diagram.mjs architecture "$D/<name>.architecture.json" "$D/<name>.html"
-   node $REPO/scripts/diagrams/shot.mjs      "file://$D/<name>.html" /tmp/l.png 1010 700
-   node $REPO/scripts/diagrams/shot-dark.mjs "file://$D/<name>.html" /tmp/d.png 1010 700   # 라이트·다크 둘 다
+   cd $SETUP && node $SETUP/build-diagram.mjs architecture "$D/<name>.architecture.json" "$D/<name>.html"
+   #   sequence 블록이면 첫 인자를 sequence 로.
+   node $SETUP/shot.mjs      "file://$D/<name>.html" /tmp/l.png 1010 700
+   node $SETUP/shot-dark.mjs "file://$D/<name>.html" /tmp/d.png 1010 700   # 라이트·다크 둘 다
    ```
 4. **사이트로 확인** — `cd $REPO/doc/site && python3 scripts/generate_language_guides.py && mkdocs build
    -d <scratch-site>` 후 `python3 -m http.server`로 서빙, `/ko/cpp/guide/server/<name>/`에서 확인. **doc/site는
@@ -140,7 +143,7 @@ Claude가 각 파일에 대해 확인한다. 하나라도 실패면 반려.
 
 - [ ] **내용 대조** — mermaid의 모든 노드·라벨·연결·색 의미가 반영. 축약분은 카드에 있는가.
 - [ ] **교차 0** — 스크린샷으로 눈으로 센다(validator 통과로 갈음 금지).
-- [ ] **×N 스택** — 삽입 개수(`grep -c 'style="fill:none"'`)와 **라이트·다크 둘 다** 가시성.
+- [ ] **×N 스택** — 삽입 개수(`grep -o 'style="fill:none" stroke-width="2.2"' <file> | wc -l`; `grep -c`는 과소집계)와 **라이트·다크 둘 다** 가시성.
 - [ ] **색 의미** — 주황=오버헤드 / 초록=Spot / 파랑=app / 회색=infra / 보라=DB.
 - [ ] **크롬·범례 없음**, root-absolute 임베드, 높이 스크립트 1개.
 - [ ] **sequence** — sequence 다이어그램은 참여자·메시지·순서가 정확한가.
