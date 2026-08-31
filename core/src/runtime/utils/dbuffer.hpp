@@ -135,6 +135,13 @@ template <> class dbuffer_t<msg_t>
         return (*fn_) (*_front);
     }
 
+    bool probe_with_context (bool (*fn_) (const msg_t &, void *),
+                             void *userdata_)
+    {
+        scoped_lock_t lock (_sync);
+        return _has_msg && (*fn_) (*_front, userdata_);
+    }
+
     void discard_accounting (uint64_t (*accounted_bytes_) (const msg_t &),
                              bool (*counted_message_) (const msg_t &),
                              uint64_t *discarded_bytes_,

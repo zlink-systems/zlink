@@ -242,6 +242,32 @@ struct blocking_callback_probe_t
     blocking_callback_probe_t () : entered (false), release (false) {}
 };
 
+enum reply_ownership_action_t
+{
+    reply_ownership_leave_untouched,
+    reply_ownership_close,
+    reply_ownership_move
+};
+
+struct reply_ownership_probe_t
+{
+    explicit reply_ownership_probe_t (reply_ownership_action_t action_) :
+        done (false), result (ZLINK_REQUEST_PROTOCOL_ERROR), callback_count (0),
+        action (action_)
+    {
+        zlink_msg_init (&moved);
+    }
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool done;
+    zlink_request_result_t result;
+    size_t callback_count;
+    reply_ownership_action_t action;
+    std::string payload;
+    zlink_msg_t moved;
+};
+
 void capture_reply (zlink_request_result_t result_,
                     zlink_msg_t *parts_,
                     size_t part_count_,
@@ -333,6 +359,41 @@ void block_reply_until_released (zlink_request_result_t,
     probe->entered = true;
     probe->cv.notify_all ();
     probe->cv.wait (lock, [probe] { return probe->release; });
+}
+
+void count_reply_payload_free (void *, void *hint_)
+{
+    static_cast<std::atomic<int> *> (hint_)->fetch_add (
+      1, std::memory_order_release);
+}
+
+void capture_reply_ownership (zlink_request_result_t result_,
+                              zlink_msg_t *parts_,
+                              size_t part_count_,
+                              void *userdata_)
+{
+    reply_ownership_probe_t *probe =
+      static_cast<reply_ownership_probe_t *> (userdata_);
+    TEST_ASSERT_NOT_NULL (probe);
+    TEST_ASSERT_EQUAL_UINT64 (1, part_count_);
+
+    const std::string payload (
+      static_cast<const char *> (zlink_msg_data (&parts_[0])),
+      zlink_msg_size (&parts_[0]));
+    if (probe->action == reply_ownership_close) {
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&parts_[0]));
+    } else if (probe->action == reply_ownership_move) {
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_move (&probe->moved, &parts_[0]));
+    }
+
+    {
+        std::lock_guard<std::mutex> lock (probe->mutex);
+        probe->done = true;
+        probe->result = result_;
+        ++probe->callback_count;
+        probe->payload = payload;
+    }
+    probe->cv.notify_all ();
 }
 
 void send_raw_request_frame (void *dealer_,
@@ -541,6 +602,35 @@ bool wait_for_reply_count (reply_probe_t *probe_, size_t expected_count_)
     }
 
     return false;
+}
+
+bool wait_for_reply_ownership (reply_ownership_probe_t *probe_,
+                               void *progress_handle_)
+{
+    const auto deadline =
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (SETTLE_TIME * 20);
+    while (std::chrono::steady_clock::now () < deadline) {
+        {
+            std::unique_lock<std::mutex> lock (probe_->mutex);
+            if (probe_->cv.wait_for (lock, std::chrono::milliseconds (10),
+                                     [probe_] () { return probe_->done; }))
+                return true;
+        }
+        (void) drain_completion_via_poller (progress_handle_);
+    }
+    return false;
+}
+
+bool wait_for_free_count (const std::atomic<int> &free_count_, int expected_)
+{
+    const auto deadline =
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (SETTLE_TIME * 20);
+    while (std::chrono::steady_clock::now () < deadline) {
+        if (free_count_.load (std::memory_order_acquire) == expected_)
+            return true;
+        msleep (1);
+    }
+    return free_count_.load (std::memory_order_acquire) == expected_;
 }
 
 zlink_close_result_t close_after_reply_callback (void *socket_)
@@ -952,6 +1042,80 @@ void test_dealer_to_router_request_reply_basic ()
         TEST_ASSERT_EQUAL_STRING_LEN ("router-reply", reply_probe.payload.c_str (),
                                       reply_probe.payload.size ());
     }
+
+    close_test_socket_after_reply_callback (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
+void run_reply_callback_ownership_case (void *router_,
+                                        void *dealer_,
+                                        reply_ownership_action_t action_)
+{
+    zlink_msg_t request_part;
+    zlink_msg_init (&request_part);
+    init_string_part (&request_part, "ownership-request");
+
+    reply_ownership_probe_t reply_probe (action_);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_dealer_request (dealer_, &request_part, 1,
+                            &capture_reply_ownership, &reply_probe, 0, 3000));
+
+    request_handler_probe_t handler_probe;
+    recv_router_request_into_probe (router_, &handler_probe);
+
+    char reply_payload[] = "ownership-reply";
+    std::atomic<int> free_count (0);
+    zlink_msg_t reply_part;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_msg_init_data (&reply_part, reply_payload,
+                           sizeof (reply_payload) - 1,
+                           &count_reply_payload_free, &free_count));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_router_reply (router_, &handler_probe.peer_rid_value,
+                          handler_probe.request_seq, &reply_part, 1));
+
+    TEST_ASSERT_TRUE (wait_for_reply_ownership (&reply_probe, dealer_));
+    {
+        std::lock_guard<std::mutex> lock (reply_probe.mutex);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, reply_probe.result);
+        TEST_ASSERT_EQUAL_UINT64 (1, reply_probe.callback_count);
+        TEST_ASSERT_EQUAL_STRING_LEN (
+          reply_payload, reply_probe.payload.c_str (), reply_probe.payload.size ());
+    }
+
+    if (action_ == reply_ownership_move) {
+        TEST_ASSERT_EQUAL_INT (0, free_count.load (std::memory_order_acquire));
+        TEST_ASSERT_EQUAL_STRING_LEN (
+          reply_payload,
+          static_cast<const char *> (zlink_msg_data (&reply_probe.moved)),
+          zlink_msg_size (&reply_probe.moved));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&reply_probe.moved));
+    } else {
+        TEST_ASSERT_TRUE (wait_for_free_count (free_count, 1));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&reply_probe.moved));
+    }
+
+    TEST_ASSERT_TRUE (wait_for_free_count (free_count, 1));
+    TEST_ASSERT_EQUAL_INT (1, free_count.load (std::memory_order_acquire));
+}
+
+void test_reply_callback_cleanup_preserves_ownership_actions ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (router);
+    TEST_ASSERT_NOT_NULL (dealer);
+
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://zmp-reply-callback-ownership"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://zmp-reply-callback-ownership"));
+    msleep (SETTLE_TIME);
+
+    run_reply_callback_ownership_case (
+      router, dealer, reply_ownership_leave_untouched);
+    run_reply_callback_ownership_case (router, dealer, reply_ownership_close);
+    run_reply_callback_ownership_case (router, dealer, reply_ownership_move);
 
     close_test_socket_after_reply_callback (dealer);
     test_context_socket_close_zero_linger (router);
@@ -5881,6 +6045,7 @@ int main ()
     RUN_SELECTED (test_reserved_zmp_kind_is_not_request_reply);
     RUN_SELECTED (test_reply_callback_rejects_sync_and_async_submit_on_all_sockets);
     RUN_SELECTED (test_dealer_to_router_request_reply_basic);
+    RUN_SELECTED (test_reply_callback_cleanup_preserves_ownership_actions);
     RUN_SELECTED (test_dealer_receives_unsolicited_message_after_request_reply);
     RUN_SELECTED (test_generic_dealer_receive_clears_request_reply_metadata);
     RUN_SELECTED (test_dealer_receive_rejects_request_reply_metadata_after_first_part);

@@ -123,9 +123,9 @@ following FLAGS combinations also produce `EPROTO`.
 
 ## 4. Handshake
 
-When a connection is established, the active side sends HELLO and READY in one outbound
-buffer on a stream transport. On WS and WSS, which preserve message boundaries, each frame
-occupies its own binary message. The passive side of a paired DEALER·ROUTER transport first
+When a connection is established, the active side sends a HELLO frame followed by a READY
+frame. How a transport divides that byte sequence across writes or RFC 6455 binary messages
+does not affect ZMP frame ordering. The passive side of a paired DEALER·ROUTER transport first
 sends only HELLO, then sends its own READY after receiving the peer's READY. The passive side
 publishes local connection readiness and pair admission only after the transport write of that
 READY completes successfully. A failed READY write fails the handshake without publishing
@@ -136,7 +136,8 @@ sequenceDiagram
     participant A as Active peer
     participant P as Passive peer
 
-    A->>P: HELLO + READY (one stream buffer; two WS/WSS messages)
+    A->>P: HELLO
+    A->>P: READY
     P->>A: HELLO
     Note over P: Receive and validate peer READY
     P->>A: READY
@@ -315,9 +316,10 @@ extension.
 - A request-reply kind is not combined with `CONTROL`, `IDENTITY`, `SUBSCRIBE`, or `CANCEL`.
 - A request-reply kind or special frame does not appear after the first frame of an
   application multipart.
-- The base header, sequence extension, and declared payload all finish before stream EOF.
+- The base header, sequence extension, and declared payload all finish before connection EOF.
 
-Splitting the base header or sequence extension across transport reads is not an error.
+Splitting the base header or sequence extension across transport reads or WS/WSS binary
+messages is not an error.
 
 Body-size validation distinguishes Application and CONTROL frames.
 
@@ -347,13 +349,16 @@ pending requests retain the established disconnect result when the pair is torn 
 TCP, IPC, and TLS send the same ZMP header and payload bytes as a continuous stream. The
 base header, sequence extension, and payload may be split across reads.
 
-WS and WSS place exactly one ZMP frame in each RFC 6455 binary message. The 16-byte header
-of a request-reply frame and its application payload must be in the same binary message. A
-binary message that ends inside the base header, sequence extension, or payload, or contains
-two ZMP frames, produces `EPROTO`. HELLO and READY also occupy separate binary messages on a
-message transport. A text message is not a ZMP frame even when its payload contains valid
-HELLO, READY, or data-frame bytes; the peer terminates the connection with `EPROTO` before
-ZMP parsing.
+WS and WSS likewise carry the payloads of RFC 6455 binary messages as one ordered ZMP byte
+sequence. A binary-message boundary is not a ZMP-frame boundary. One binary message may
+contain part of a ZMP frame, one complete frame, multiple complete frames, or the remainder
+of one frame followed by the beginning of the next. The decoder recovers frame boundaries
+from the common header and declared payload size. When a binary message ends mid-frame,
+decoding continues with bytes from the next binary message; only a frame left incomplete at
+connection EOF produces `EPROTO`. An empty binary message adds no ZMP bytes, delivers no frame,
+and is not treated as connection EOF. A text message is excluded from the ZMP byte sequence
+even when its payload contains valid HELLO, READY, or data-frame bytes; the peer terminates
+the connection with `EPROTO` before ZMP parsing.
 
 Inproc bypasses the wire codec, but its pipes and queues preserve the same internal
 metadata. Public receive and completion expose the same payload, sequence, and metadata
@@ -444,10 +449,18 @@ replies, and delivery of error replies.
 
 ### WebSocket implementation
 
-The WebSocket framing implementation passes both the message-completion state and the binary
-opcode of the initial data frame reported by Beast through the transport adapter to the
-decoder. A short read is not treated as a message boundary, and a text opcode is rejected
-before HELLO parsing or data-frame decoding.
+The WebSocket transport adapter snapshots the opcode of the message to which each read
+belongs and passes it with binary payload bytes to the decoder in receive order. It neither
+ends a ZMP frame nor delays frame publication at message completion. The decoder may produce
+no frame or one or more frames from one transport read, and it retains base-header,
+extension, and payload state across short reads and RFC 6455 message boundaries. A text
+opcode is rejected before HELLO parsing or data-frame decoding.
+
+The sending encoder collects currently available ZMP bytes in its output buffer up to the
+existing `out_batch_size` bound and submits that bounded batch with one Beast binary write.
+It does not wait for future traffic merely to fill the batch and does not change ZMP-frame
+bytes, ordering, or application multipart boundaries. This avoids starting a Beast async
+write and, on WSS, TLS processing for every ZMP frame.
 
 ## 10. Implementation and contract-test verification requirements
 
@@ -469,9 +482,10 @@ item maps to one test.
 
 **Handshake**
 
-- The active side sends HELLO and READY in one outbound buffer on a stream transport and as
-  two binary messages on WS or WSS. The passive side of a paired DEALER·ROUTER transport
-  first sends HELLO, then sends its own READY after receiving the peer's READY.
+- The active side sends a READY frame after HELLO without an intervening application frame.
+  The peer processes the same HELLO and READY in order whether their bytes occupy one WS/WSS
+  binary message or are split across multiple binary messages. The passive side of a paired
+  DEALER·ROUTER transport first sends HELLO, then sends its own READY after receiving the peer's READY.
 - The paired passive side does not publish local readiness or pair admission before its READY
   transport write completes. A failed write fails the handshake without publishing readiness.
 - Each metadata property after READY control type `0x04` follows the layout
@@ -560,8 +574,12 @@ item maps to one test.
 **Transport and frame count**
 
 - TCP, IPC, TLS, WS, and WSS place request-reply kind and sequence at the same byte offsets.
-- One RFC 6455 binary message on WS or WSS contains exactly one ZMP frame; a message ending
-  mid-frame or containing two frames produces `EPROTO`.
+- On WS and WSS, placing a binary-message boundary inside the base header, sequence extension,
+  or payload and sending the remaining bytes in the next binary message delivers one ZMP frame.
+- Placing two or more complete ZMP frames consecutively in one WS or WSS binary message makes
+  the decoder deliver each frame once and in order.
+- Sending an empty WS or WSS binary message delivers no payload or frame, and the connection
+  continues processing the next ZMP bytes.
 - Sending valid HELLO or data-frame bytes in a WS or WSS text message publishes no payload
   and makes the peer terminate the connection with `EPROTO`. A fragmented text message
   retains its initial opcode and produces the same result.

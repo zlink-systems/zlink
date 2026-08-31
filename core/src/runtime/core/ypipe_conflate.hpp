@@ -100,6 +100,11 @@ template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T
     //  The pipe mustn't be empty or the function crashes.
     bool probe (bool (*fn_) (const T &)) { return dbuffer.probe (fn_); }
 
+    bool probe_with_context (bool (*fn_) (const T &, void *), void *userdata_)
+    {
+        return dbuffer.probe_with_context (fn_, userdata_);
+    }
+
   protected:
     dbuffer_t<T> dbuffer;
     bool reader_awake;

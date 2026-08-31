@@ -71,7 +71,9 @@ class router_t : public routing_socket_base_t
     int xrecv_routed (zlink::msg_t *msg_,
                       zlink_routing_id_t *source_rid_out_,
                       uint64_t *connection_id_out_,
-                      zlink::pipe_t **source_pipe_out_ = NULL) ZLINK_OVERRIDE;
+                      zlink::pipe_t **source_pipe_out_ = NULL,
+                      pipe_t::read_admission_fn *admission_ = NULL,
+                      void *admission_userdata_ = NULL) ZLINK_OVERRIDE;
     bool xhas_in () ZLINK_OVERRIDE;
     bool xhas_out () ZLINK_OVERRIDE;
     void xread_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;

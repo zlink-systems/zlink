@@ -378,6 +378,9 @@ class socket_base_t : public own_t,
     uint64_t test_local_receive_flow_epoch () const;
     void test_fail_next_recv_pipe_pin ();
 #endif
+    // Pins an inbound source pipe while preserving the receive-path test
+    // failpoint used to prove that no reply target escapes an unowned source.
+    bool retain_received_source_pipe_ref (pipe_t *pipe_) const;
     bool begin_public_send_scope (
       bool force_sync_, std::optional<socket_public_send_scope_t> *scope_out_);
     std::unique_ptr<socket_public_send_scope_t> begin_complete_send_scope (bool force_sync_);
@@ -398,7 +401,9 @@ class socket_base_t : public own_t,
                      bool pin_source_pipe_out_ = false,
                      uint64_t *transport_pair_id_out_ = NULL,
                      uint64_t *transport_pair_generation_out_ = NULL,
-                     zlink::socket_receive_record_scope_t *record_scope_ = NULL);
+                     zlink::socket_receive_record_scope_t *record_scope_ = NULL,
+                     pipe_t::read_admission_fn *admission_ = NULL,
+                     void *admission_userdata_ = NULL);
     // Reads a continuation while record_scope_ retains the receive owner
     // acquired by recv_pipe()/recv_routed(). Multipart callers release the
     // scope only after the complete record has been assembled and published.
@@ -745,7 +750,9 @@ class socket_base_t : public own_t,
     virtual int xrecv_routed (zlink::msg_t *msg_,
                               zlink_routing_id_t *source_rid_out_,
                               uint64_t *connection_id_out_,
-                              zlink::pipe_t **source_pipe_out_ = NULL);
+                              zlink::pipe_t **source_pipe_out_ = NULL,
+                              pipe_t::read_admission_fn *admission_ = NULL,
+                              void *admission_userdata_ = NULL);
     virtual int xterm_peer_rid (const zlink_routing_id_t *peer_rid_);
     int xterm_transport_pair (uint64_t transport_pair_id_,
                               uint64_t transport_pair_generation_);

@@ -62,7 +62,8 @@ template <typename Receive>
 int receive_once_guarded (zlink::socket_receive_runtime_t &runtime_,
                           const Receive &receive_,
                           uint64_t *observed_epoch_out_,
-                          zlink::socket_receive_record_scope_t *record_scope_ = NULL)
+                          zlink::socket_receive_record_scope_t *record_scope_ = NULL,
+                          bool defer_record_scope_ = false)
 {
     // The normal public-recv path does not share its socket with an async
     // mailbox owner.  The runtime owns the handoff when that changes.
@@ -70,22 +71,35 @@ int receive_once_guarded (zlink::socket_receive_runtime_t &runtime_,
         // A whole-record receive also fences mailbox commands, whose
         // receive-side mutations already run under this sync. Ordinary
         // single-frame receive keeps the lock-free public fast path.
-        if (record_scope_)
+        if (record_scope_ && !defer_record_scope_)
             runtime_.sync.lock ();
         if (observed_epoch_out_)
             *observed_epoch_out_ = runtime_.progress_epoch;
-        if (record_scope_ && record_scope_->prepare_receive_attempt () != 0) {
+        if (record_scope_ && !defer_record_scope_
+            && record_scope_->prepare_receive_attempt () != 0) {
             runtime_.sync.unlock ();
             runtime_.release_public_receive_lease ();
             return -1;
         }
+        bool sync_held = !defer_record_scope_ && record_scope_;
+        if (record_scope_ && defer_record_scope_)
+            record_scope_->begin_deferred_attempt (&runtime_, &sync_held);
         const int rc = receive_ ();
-        if (rc == 0 && record_scope_)
+        if (record_scope_ && defer_record_scope_)
+            record_scope_->end_deferred_attempt ();
+        if (record_scope_ && defer_record_scope_ && record_scope_->owns (&runtime_)) {
+            if (rc != 0) {
+                record_scope_->rollback_receive_attempt ();
+                record_scope_->release ();
+            }
+            return rc;
+        }
+        if (rc == 0 && record_scope_ && !defer_record_scope_)
             record_scope_->adopt_public_owner (&runtime_);
         else {
-            if (record_scope_)
+            if (record_scope_ && !defer_record_scope_)
                 record_scope_->rollback_receive_attempt ();
-            if (record_scope_)
+            if (record_scope_ && sync_held)
                 runtime_.sync.unlock ();
             runtime_.release_public_receive_lease ();
         }
@@ -95,17 +109,31 @@ int receive_once_guarded (zlink::socket_receive_runtime_t &runtime_,
     runtime_.sync.lock ();
     if (observed_epoch_out_)
         *observed_epoch_out_ = runtime_.progress_epoch;
-    if (record_scope_ && record_scope_->prepare_receive_attempt () != 0) {
+    if (record_scope_ && !defer_record_scope_
+        && record_scope_->prepare_receive_attempt () != 0) {
         runtime_.sync.unlock ();
         return -1;
     }
+    bool sync_held = true;
+    if (record_scope_ && defer_record_scope_)
+        record_scope_->begin_deferred_attempt (&runtime_, &sync_held);
     const int rc = receive_ ();
-    if (rc == 0 && record_scope_)
+    if (record_scope_ && defer_record_scope_)
+        record_scope_->end_deferred_attempt ();
+    if (record_scope_ && defer_record_scope_ && record_scope_->owns (&runtime_)) {
+        if (rc != 0) {
+            record_scope_->rollback_receive_attempt ();
+            record_scope_->release ();
+        }
+        return rc;
+    }
+    if (rc == 0 && record_scope_ && !defer_record_scope_)
         record_scope_->adopt_async_sync (&runtime_);
     else {
-        if (record_scope_)
+        if (record_scope_ && !defer_record_scope_)
             record_scope_->rollback_receive_attempt ();
-        runtime_.sync.unlock ();
+        if (sync_held)
+            runtime_.sync.unlock ();
     }
     return rc;
 }
@@ -133,6 +161,17 @@ void zlink::socket_base_t::test_fail_next_recv_pipe_pin ()
     g_fail_next_recv_pipe_pin.store (true, std::memory_order_release);
 }
 #endif
+
+bool zlink::socket_base_t::retain_received_source_pipe_ref (pipe_t *pipe_) const
+{
+    if (!pipe_)
+        return false;
+#ifdef ZLINK_BUILD_TESTS
+    if (consume_recv_pipe_pin_failpoint ())
+        return false;
+#endif
+    return pipe_->retain_lifetime_ref ();
+}
 
 int zlink::socket_base_t::send (msg_t *msg_, int flags_)
 {
@@ -893,7 +932,9 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
                                       bool pin_source_pipe_out_,
                                       uint64_t *transport_pair_id_out_,
                                       uint64_t *transport_pair_generation_out_,
-                                      socket_receive_record_scope_t *record_scope_)
+                                      socket_receive_record_scope_t *record_scope_,
+                                      pipe_t::read_admission_fn *admission_,
+                                      void *admission_userdata_)
 {
     if (source_rid_out_)
         source_rid_out_->size = 0;
@@ -922,7 +963,8 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
 
     const auto recv_once = [&] () -> int {
         const int rc = xrecv_routed (msg_, source_rid_out_, connection_id_out_,
-                                     source_pipe_out_);
+                                     source_pipe_out_, admission_,
+                                     admission_userdata_);
         if (rc != 0 && source_pipe_out_)
             *source_pipe_out_ = NULL;
         if (rc == 0 && source_pipe_out_ && *source_pipe_out_) {
@@ -941,7 +983,8 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
 #endif
         if (rc == 0 && pin_source_pipe_out_ && source_pipe_out_
             && *source_pipe_out_
-            && (pin_failed || !(*source_pipe_out_)->retain_lifetime_ref ())) {
+            && (pin_failed || !retain_received_source_pipe_ref (
+                                 *source_pipe_out_))) {
             *source_pipe_out_ = NULL;
             // Do not turn a consumed frame into an unowned failure result.
             // The request/reply reader handles a null live-source reference;
@@ -953,7 +996,7 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
     };
     uint64_t observed_epoch = 0;
     int rc = receive_once_guarded (receive_runtime (), recv_once,
-                                   &observed_epoch, record_scope_);
+                                   &observed_epoch, record_scope_, admission_ != NULL);
     if (record_scope_ && record_scope_->admission_failed ())
         return -1;
     if (unlikely (receive_multipart_abort_as_no_data (rc, NULL)))
@@ -970,7 +1013,7 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
             return -1;
         command_runtime ().reset_recv_ticks ();
         rc = receive_once_guarded (receive_runtime (), recv_once,
-                                   &observed_epoch, record_scope_);
+                                   &observed_epoch, record_scope_, admission_ != NULL);
         if (record_scope_ && record_scope_->admission_failed ())
             return -1;
         if (unlikely (receive_multipart_abort_as_no_data (rc, NULL)))
@@ -993,7 +1036,7 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
         if (unlikely (progress_rc != 0))
             return -1;
         rc = receive_once_guarded (receive_runtime (), recv_once,
-                                   &observed_epoch, record_scope_);
+                                   &observed_epoch, record_scope_, admission_ != NULL);
         if (record_scope_ && record_scope_->admission_failed ())
             return -1;
         if (unlikely (receive_multipart_abort_as_no_data (rc, NULL)))

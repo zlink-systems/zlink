@@ -236,6 +236,17 @@ class pipe_t ZLINK_FINAL : public object_t,
 
     //  Reads a message to the underlying pipe.
     bool read (msg_t *msg_);
+    typedef int (read_admission_fn) (pipe_t *pipe_, const msg_t &msg_,
+                                     void *userdata_);
+    enum
+    {
+        read_admission_reject_consume = -2
+    };
+    //  Evaluates admission against the next non-credential frame before it is
+    //  removed from the queue. A rejection leaves that frame queued.
+    bool read_with_admission (msg_t *msg_, read_admission_fn *admission_,
+                              void *userdata_, bool *admission_failed_out_,
+                              bool *admission_consumed_out_);
     int reserve_inbound_decoder_frame (
       uint64_t payload_bytes_, unsigned char msg_flags_, bool track_multipart_,
       decoder_frame_reservation_t *reservation_storage_,
@@ -533,7 +544,10 @@ class pipe_t ZLINK_FINAL : public object_t,
                                              uint64_t *committed_out_) const;
     void publish_session_outbound_accounting_unlocked (
       bool provisional_changed_);
-    bool read_internal (msg_t *msg_);
+    bool read_internal (msg_t *msg_, read_admission_fn *admission_ = NULL,
+                        void *userdata_ = NULL,
+                        bool *admission_failed_out_ = NULL,
+                        bool *admission_consumed_out_ = NULL);
     void refresh_inbound_lwm_from_physical_queue ();
 
     //  Constructor is private. Pipe can only be created using

@@ -119,9 +119,9 @@ kind는 `CONTROL`, `IDENTITY`, `SUBSCRIBE` 또는 `CANCEL`과 함께 사용할 �
 
 ## 4. Handshake
 
-연결이 만들어지면 active 쪽은 stream transport에서 HELLO와 READY frame을 한 outbound
-buffer로 보낸다. Message 경계가 있는 WS·WSS에서는 두 frame을 각각 하나의 binary message로
-보낸다. Paired DEALER·ROUTER transport의 passive 쪽은 HELLO만 먼저 보내고, peer READY를
+연결이 만들어지면 active 쪽은 HELLO frame 뒤에 READY frame을 연속해서 보낸다. Transport가
+이 byte 열을 여러 write나 RFC 6455 binary message로 나누는 방법은 ZMP frame 순서에 영향을
+주지 않는다. Paired DEALER·ROUTER transport의 passive 쪽은 HELLO만 먼저 보내고, peer READY를
 수신한 뒤 자기 READY를 보낸다. Passive 쪽은 이 READY의 transport write가 성공적으로
 완료된 뒤에만 local connection readiness와 pair admission을 공개한다. READY write가
 실패하면 handshake를 실패로 끝내며 readiness를 공개하지 않는다. Active 쪽은 passive
@@ -132,7 +132,8 @@ sequenceDiagram
     participant A as Active peer
     participant P as Passive peer
 
-    A->>P: HELLO + READY (stream은 한 buffer, WS·WSS는 message 둘)
+    A->>P: HELLO
+    A->>P: READY
     P->>A: HELLO
     Note over P: peer READY 수신·검증
     P->>A: READY
@@ -305,9 +306,10 @@ transport `routing_id`와 request-reply 주소는 같은 값이 아니다.
 - Request-reply kind의 sequence가 `0`이 아니다.
 - Request-reply kind에 `CONTROL`, `IDENTITY`, `SUBSCRIBE` 또는 `CANCEL`이 없다.
 - Application multipart의 둘째 frame부터 request-reply kind나 special frame이 나타나지 않는다.
-- Stream EOF 전에 base header, sequence extension과 선언한 payload가 모두 끝난다.
+- Connection EOF 전에 base header, sequence extension과 선언한 payload가 모두 끝난다.
 
-Base header나 sequence extension이 여러 transport read로 나뉘는 것은 오류가 아니다.
+Base header나 sequence extension이 여러 transport read 또는 WS·WSS binary message로 나뉘는
+것은 오류가 아니다.
 
 Body 크기 검증은 Application frame과 CONTROL frame을 구분한다.
 
@@ -336,12 +338,15 @@ disconnect 결과를 받는 규칙은 유지한다.
 TCP, IPC와 TLS는 같은 ZMP header와 payload byte를 연속된 stream으로 보낸다. Base header,
 sequence extension과 payload는 여러 read로 나뉠 수 있다.
 
-WS와 WSS는 RFC 6455 binary message 하나에 정확히 ZMP frame 하나를 넣는다. Request-reply
-frame의 16 byte header와 application payload는 같은 binary message에 있어야 한다. Binary
-message가 base header, sequence extension 또는 payload 중간에서 끝나거나 ZMP frame 둘을
-포함하면 `EPROTO`다. HELLO와 READY도 message transport에서는 각각 하나의 binary message를
-차지한다. Text message는 payload가 유효한 HELLO, READY 또는 data frame byte와 같아도
-ZMP frame이 아니며 peer는 ZMP parsing 전에 `EPROTO`로 연결을 종료한다.
+WS와 WSS도 RFC 6455 binary message의 payload를 순서가 유지되는 ZMP byte 열로 전달한다.
+Binary message 경계는 ZMP frame 경계가 아니다. Binary message 하나는 ZMP frame의 일부,
+완전한 frame 하나, 여러 완전한 frame, 또는 앞 frame의 나머지와 다음 frame의 시작을 포함할
+수 있다. Decoder는 공통 header와 선언한 payload 크기로 frame 경계를 복원한다. Binary
+message가 frame 중간에서 끝나도 다음 binary message의 byte로 계속 처리하며, connection EOF까지
+완성되지 않은 frame만 `EPROTO`다. Payload가 비어 있는 binary message는 ZMP byte를 추가하거나
+frame을 전달하지 않으며 connection EOF로 처리하지 않는다. Text message는 payload가 유효한
+HELLO, READY 또는 data frame byte와 같아도 ZMP byte 열에 포함하지 않으며, peer는 ZMP parsing
+전에 `EPROTO`로 연결을 종료한다.
 
 Inproc은 wire codec을 거치지 않지만 pipe와 queue가 같은 internal metadata를 보존한다. Public
 receive와 completion에서 관찰하는 payload, sequence와 metadata 제거 결과는 network transport와
@@ -423,9 +428,16 @@ Inbound request의 reply target은 public receive 역할에 따라 다르게 보
 
 ### WebSocket 구현
 
-WebSocket framing 구현은 Beast가 보고하는 message 완료 상태와 최초 data frame의 binary
-opcode를 transport adapter에서 decoder까지 함께 전달한다. Short read는 message 경계로
-추측하지 않으며 text opcode는 HELLO parsing이나 data frame decode 전에 거부한다.
+WebSocket transport adapter는 각 read가 속한 message의 opcode와 binary payload byte를 함께
+확정해 decoder에 수신 순서대로 넘긴다. Message 완료 상태로 ZMP frame을 끝내거나 frame 공개를
+보류하지 않는다. Decoder는 한 transport read에서 frame을 만들지 않거나 하나 이상 만들 수 있으며,
+short read와 RFC 6455 message 경계에 관계없이 base header·extension·payload 상태를 유지한다.
+Text opcode는 HELLO parsing이나 data frame decode 전에 거부한다.
+
+송신 encoder는 현재 준비된 ZMP byte를 기존 `out_batch_size` 상한까지 output buffer에 모으고,
+그 bounded batch를 Beast binary write 한 번으로 제출한다. Batch를 채우려고 아직 준비되지 않은
+traffic을 기다리지 않으며, ZMP frame byte·순서와 application multipart 경계를 바꾸지 않는다.
+이 구조는 ZMP frame마다 Beast async write와 WSS의 TLS 처리를 시작하는 비용을 없앤다.
 
 ## 10. 구현 및 contract test 검증 요구
 
@@ -439,7 +451,7 @@ callback 결과로 확인한다. 각 항목은 test 하나로 이어진다.
 - FLAGS bit 5~7, `CONTROL | IDENTITY`, `CONTROL | MORE`, `SUBSCRIBE | CANCEL`, SUBSCRIBE/CANCEL과 다른 flag의 조합을 수신하면 decoder가 `EPROTO`로 거부한다.
 
 **Handshake**
-- Active 쪽은 stream transport에서 HELLO와 READY를 한 outbound buffer로 보내고, WS·WSS에서는 두 binary message로 보낸다. Paired DEALER·ROUTER transport의 passive 쪽은 HELLO를 먼저 보낸 뒤 peer READY 수신 후 자기 READY를 보낸다.
+- Active 쪽은 HELLO frame 뒤에 READY frame을 보내며 그 사이에 application frame을 넣지 않는다. 같은 byte 열을 WS·WSS binary message 하나에 넣거나 여러 binary message로 나눠도 peer가 같은 HELLO와 READY를 순서대로 처리한다. Paired DEALER·ROUTER transport의 passive 쪽은 HELLO를 먼저 보낸 뒤 peer READY 수신 후 자기 READY를 보낸다.
 - Paired passive 쪽은 자기 READY의 transport write가 완료되기 전에 local readiness나 pair admission을 공개하지 않는다. Write가 실패하면 readiness 없이 handshake가 실패한다.
 - READY control type `0x04` 뒤의 각 metadata property는 `[name length:u8][name bytes][value length:u32 BE][value bytes]` 배치를 따른다.
 - `ZLINK_OPT_ZMP_METADATA`가 기본값(비활성)이면 metadata property가 없고, 활성화하면 `Socket-Type`과 8 byte big-endian `Zlink-Max-Message-Size`가 추가된다. `Routing-Id`는 DEALER·ROUTER READY에만 추가된다.
@@ -501,7 +513,9 @@ callback 결과로 확인한다. 각 항목은 test 하나로 이어진다.
 
 **Transport와 frame 수**
 - TCP, IPC, TLS, WS와 WSS에서 request-reply의 kind와 sequence가 같은 byte 위치에 나타난다.
-- WS와 WSS의 RFC 6455 binary message 하나는 정확히 ZMP frame 하나를 포함하며, frame 중간에서 끝나거나 frame 둘을 포함한 message는 `EPROTO`다.
+- WS와 WSS에서 base header, sequence extension 또는 payload 중간에 binary message 경계를 두고 나머지를 다음 binary message로 보내면 ZMP frame 하나가 전달된다.
+- WS와 WSS의 binary message 하나에 완전한 ZMP frame을 둘 이상 연속해서 보내면 decoder가 각 frame을 순서대로 한 번씩 전달한다.
+- WS와 WSS에서 빈 binary message를 보내면 payload나 frame이 전달되지 않고 connection은 다음 ZMP byte를 계속 처리한다.
 - 유효한 HELLO 또는 data frame byte를 WS·WSS text message로 보내면 payload가 공개되지 않고
   peer가 `EPROTO`로 연결을 종료한다. Fragmented text message도 최초 opcode를 유지해 같은
   결과를 낸다.

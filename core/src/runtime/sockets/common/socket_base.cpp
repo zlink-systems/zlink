@@ -529,8 +529,12 @@ int zlink::socket_base_t::xrecv_pipe (msg_t *msg_, pipe_t **pipe_out_)
 int zlink::socket_base_t::xrecv_routed (msg_t *msg_,
                                        zlink_routing_id_t *source_rid_out_,
                                        uint64_t *connection_id_out_,
-                                       pipe_t **source_pipe_out_)
+                                       pipe_t **source_pipe_out_,
+                                       pipe_t::read_admission_fn *admission_,
+                                       void *admission_userdata_)
 {
+    LIBZLINK_UNUSED (admission_);
+    LIBZLINK_UNUSED (admission_userdata_);
     if (source_rid_out_)
         source_rid_out_->size = 0;
     if (connection_id_out_)

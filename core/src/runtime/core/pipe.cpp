@@ -902,10 +902,51 @@ bool zlink::pipe_t::read (msg_t *msg_)
     return read_internal (msg_);
 }
 
-bool zlink::pipe_t::read_internal (msg_t *msg_)
+bool zlink::pipe_t::read_with_admission (msg_t *msg_,
+                                         read_admission_fn *admission_,
+                                         void *userdata_,
+                                         bool *admission_failed_out_,
+                                         bool *admission_consumed_out_)
+{
+    return read_internal (msg_, admission_, userdata_, admission_failed_out_,
+                          admission_consumed_out_);
+}
+
+namespace
+{
+struct pipe_read_admission_probe_t
+{
+    zlink::pipe_t *pipe;
+    zlink::pipe_t::read_admission_fn *admission;
+    void *userdata;
+    int result;
+};
+
+bool invoke_pipe_read_admission (const zlink::msg_t &msg_, void *userdata_)
+{
+    pipe_read_admission_probe_t *const probe =
+      static_cast<pipe_read_admission_probe_t *> (userdata_);
+    probe->result = probe->admission (probe->pipe, msg_, probe->userdata);
+    return probe->result == 0;
+}
+
+bool is_credential_frame (const zlink::msg_t &msg_)
+{
+    return msg_.is_credential ();
+}
+}
+
+bool zlink::pipe_t::read_internal (msg_t *msg_, read_admission_fn *admission_,
+                                    void *userdata_,
+                                    bool *admission_failed_out_,
+                                    bool *admission_consumed_out_)
 {
     if (unlikely (_state != active && _state != waiting_for_delimiter))
         return false;
+    if (admission_failed_out_)
+        *admission_failed_out_ = false;
+    if (admission_consumed_out_)
+        *admission_consumed_out_ = false;
     if (unlikely (!_in_active)) {
         if (!_in_pipe->check_read ())
             return false;
@@ -913,6 +954,32 @@ bool zlink::pipe_t::read_internal (msg_t *msg_)
     }
 
     while (true) {
+        // Credential frames are private pipe bookkeeping and must be consumed
+        // before exposing the next application frame to admission.
+        if (admission_ && !_in_pipe->probe (&is_credential_frame)) {
+            pipe_read_admission_probe_t probe = {this, admission_, userdata_, 0};
+            if (!_in_pipe->probe_with_context (&invoke_pipe_read_admission,
+                                               &probe)) {
+                if (probe.result != 0 && admission_failed_out_)
+                    *admission_failed_out_ = true;
+                // A negative two is a terminal admission error (for example
+                // lazy state allocation). Consume this record so its existing
+                // failure semantics remain distinct from EAGAIN capacity
+                // rejection, which must leave the frame queued.
+                if (probe.result == read_admission_reject_consume) {
+                    if (!_in_pipe->read (msg_)) {
+                        _in_active = false;
+                        return false;
+                    }
+                    if (admission_consumed_out_)
+                        *admission_consumed_out_ = true;
+                    return true;
+                }
+                if (probe.result == 0)
+                    _in_active = false;
+                return false;
+            }
+        }
         if (!_in_pipe->read (msg_)) {
             _in_active = false;
             return false;

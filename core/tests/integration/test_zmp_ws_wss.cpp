@@ -133,15 +133,18 @@ void exercise_request_reply (void *router_,
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer_, endpoint_));
     msleep (SETTLE_TIME * 5);
 
-    zlink_msg_t request;
+    zlink_msg_t request[2];
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_msg_init_size (&request, strlen (request_payload_)));
-    memcpy (zlink_msg_data (&request), request_payload_,
+      zlink_msg_init_size (&request[0], strlen (request_payload_)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_msg_init_size (&request[1], 12));
+    memcpy (zlink_msg_data (&request[0]), request_payload_,
             strlen (request_payload_));
+    memcpy (zlink_msg_data (&request[1]), "request-tail", 12);
     request_reply_probe_t probe;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_dealer_request (dealer_, &request, 1, &capture_request_reply,
+      zlink_dealer_request (dealer_, request, 2, &capture_request_reply,
                             &probe, ZLINK_SEND_FLAGS_NONE, 5000));
 
     const zlink_routing_id_t *source_rid = NULL;
@@ -154,29 +157,36 @@ void exercise_request_reply (void *router_,
                          &part_count, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_NOT_NULL (source_rid);
     TEST_ASSERT_TRUE (request_seq != 0);
-    TEST_ASSERT_EQUAL_UINT64 (1, part_count);
+    TEST_ASSERT_EQUAL_UINT64 (2, part_count);
     TEST_ASSERT_EQUAL_STRING_LEN (
       request_payload_, static_cast<const char *> (zlink_msg_data (&parts[0])),
       strlen (request_payload_));
+    TEST_ASSERT_EQUAL_STRING_LEN (
+      "request-tail", static_cast<const char *> (zlink_msg_data (&parts[1])),
+      12);
     unsigned char retained_kind = 0;
     uint64_t retained_sequence = 0;
-    TEST_ASSERT_FALSE (
-      reinterpret_cast<zlink::msg_t *> (&parts[0])
-        ->get_request_reply_metadata (&retained_kind, &retained_sequence));
+    for (size_t i = 0; i != part_count; ++i)
+        TEST_ASSERT_FALSE (
+          reinterpret_cast<zlink::msg_t *> (&parts[i])
+            ->get_request_reply_metadata (&retained_kind, &retained_sequence));
     zlink_multipart_close (parts, part_count);
 
-    zlink_msg_t reply;
+    zlink_msg_t reply[2];
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_msg_init_size (&reply, strlen (reply_payload_)));
-    memcpy (zlink_msg_data (&reply), reply_payload_, strlen (reply_payload_));
+      zlink_msg_init_size (&reply[0], strlen (reply_payload_)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_msg_init_size (&reply[1], 10));
+    memcpy (zlink_msg_data (&reply[0]), reply_payload_, strlen (reply_payload_));
+    memcpy (zlink_msg_data (&reply[1]), "reply-tail", 10);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_router_reply (router_, source_rid, request_seq, &reply, 1));
+      zlink_router_reply (router_, source_rid, request_seq, reply, 2));
 
     wait_for_request_reply (dealer_, &probe);
     std::lock_guard<std::mutex> lock (probe.mutex);
     TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, probe.result);
-    TEST_ASSERT_EQUAL_UINT64 (1, probe.part_count);
+    TEST_ASSERT_EQUAL_UINT64 (2, probe.part_count);
     TEST_ASSERT_EQUAL_STRING (reply_payload_, probe.payload.c_str ());
     TEST_ASSERT_FALSE (probe.metadata_present);
 }
@@ -235,15 +245,13 @@ void raw_ws_zmp_handshake (websocket_stream_t *client_)
       0, client_->write_some (true, net::const_buffer (), ec));
     TEST_ASSERT_FALSE_MESSAGE (ec.failed (), ec.message ().c_str ());
 
-    //  Drain the server HELLO and READY records. This also ensures that the
-    //  asynchronous server handshake has made forward progress before the
-    //  application-record assertions below.
-    for (size_t i = 0; i != 2; ++i) {
-        beast::flat_buffer record;
-        client_->read (record, ec);
-        TEST_ASSERT_FALSE_MESSAGE (ec.failed (), ec.message ().c_str ());
-        TEST_ASSERT_TRUE (client_->got_binary ());
-    }
+    // HELLO and READY are adjacent ZMP frames in one bounded binary carrier
+    // record. Draining it also proves the asynchronous server handshake made
+    // forward progress before the application-byte assertions below.
+    beast::flat_buffer record;
+    client_->read (record, ec);
+    TEST_ASSERT_FALSE_MESSAGE (ec.failed (), ec.message ().c_str ());
+    TEST_ASSERT_TRUE (client_->got_binary ());
 }
 
 void assert_pair_has_no_message (void *server_, int duration_ms_)
@@ -480,7 +488,7 @@ void test_zmp_ws_request_reply ()
 }
 
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO
-void test_zmp_ws_record_publishes_only_after_exact_boundary ()
+void test_zmp_ws_binary_record_is_a_byte_carrier ()
 {
     void *server = test_context_socket (ZLINK_SOCKET_PAIR);
     TEST_ASSERT_NOT_NULL (server);
@@ -508,45 +516,50 @@ void test_zmp_ws_record_publishes_only_after_exact_boundary ()
     client.handshake ("127.0.0.1:" + port_text, "/");
     raw_ws_zmp_handshake (&client);
 
+    boost::system::error_code ec;
+    TEST_ASSERT_EQUAL_UINT64 (
+      0, client.write (net::const_buffer (), ec));
+    TEST_ASSERT_FALSE_MESSAGE (ec.failed (), ec.message ().c_str ());
+    assert_pair_has_no_message (server, 50);
+
     const char staged_payload[] = "staged";
     const std::vector<unsigned char> staged =
       make_zmp_data_frame (staged_payload);
-    boost::system::error_code ec;
     TEST_ASSERT_EQUAL_UINT64 (
       staged.size (),
       client.write_some (false, net::buffer (staged), ec));
     TEST_ASSERT_FALSE_MESSAGE (ec.failed (), ec.message ().c_str ());
 
-    //  The ZMP frame is complete, but its WebSocket record is not. It must not
-    //  be visible to the PAIR socket until the authoritative record boundary.
-    assert_pair_has_no_message (server, 100);
-
-    TEST_ASSERT_EQUAL_UINT64 (
-      0, client.write_some (false, net::const_buffer (), ec));
-    TEST_ASSERT_FALSE_MESSAGE (ec.failed (), ec.message ().c_str ());
-    assert_pair_has_no_message (server, 50);
+    // WebSocket fragmentation is transport-only. A complete ZMP frame is
+    // publishable without waiting for the carrier record's FIN bit.
+    recv_pair_message_with_timeout (server, staged_payload);
 
     TEST_ASSERT_EQUAL_UINT64 (
       0, client.write_some (true, net::const_buffer (), ec));
     TEST_ASSERT_FALSE_MESSAGE (ec.failed (), ec.message ().c_str ());
-    recv_pair_message_with_timeout (server, staged_payload);
 
     const std::vector<unsigned char> first = make_zmp_data_frame ("first");
     const std::vector<unsigned char> second = make_zmp_data_frame ("second");
-    std::vector<unsigned char> invalid_record;
-    invalid_record.reserve (first.size () + 3);
-    invalid_record.insert (invalid_record.end (), first.begin (), first.end ());
-    invalid_record.insert (invalid_record.end (), second.begin (),
-                           second.begin () + 3);
+    const size_t split = first.size () / 2;
     TEST_ASSERT_EQUAL_UINT64 (
-      invalid_record.size (), client.write (net::buffer (invalid_record), ec));
+      split, client.write (net::buffer (&first[0], split), ec));
     TEST_ASSERT_FALSE_MESSAGE (ec.failed (), ec.message ().c_str ());
+    assert_pair_has_no_message (server, 50);
+    TEST_ASSERT_EQUAL_UINT64 (
+      first.size () - split,
+      client.write (net::buffer (&first[split], first.size () - split), ec));
+    TEST_ASSERT_FALSE_MESSAGE (ec.failed (), ec.message ().c_str ());
+    recv_pair_message_with_timeout (server, "first");
 
-    //  A complete first frame followed by even a partial second frame makes
-    //  the whole record invalid. The staged first frame must not escape, and
-    //  the engine must close the peer on EPROTO.
-    assert_pair_has_no_message (server, 250);
-    wait_for_ws_disconnect (&client, &client_io);
+    std::vector<unsigned char> batch;
+    batch.reserve (first.size () + second.size ());
+    batch.insert (batch.end (), first.begin (), first.end ());
+    batch.insert (batch.end (), second.begin (), second.end ());
+    TEST_ASSERT_EQUAL_UINT64 (
+      batch.size (), client.write (net::buffer (batch), ec));
+    TEST_ASSERT_FALSE_MESSAGE (ec.failed (), ec.message ().c_str ());
+    recv_pair_message_with_timeout (server, "first");
+    recv_pair_message_with_timeout (server, "second");
 
     boost::system::error_code ignored;
     client.next_layer ().close (ignored);
@@ -754,7 +767,7 @@ int main (void)
     RUN_TEST (test_zmp_ws_pair_message);
     RUN_TEST (test_zmp_ws_request_reply);
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO
-    RUN_TEST (test_zmp_ws_record_publishes_only_after_exact_boundary);
+    RUN_TEST (test_zmp_ws_binary_record_is_a_byte_carrier);
     RUN_TEST (test_zmp_ws_rejects_text_hello_data_and_fragmented_data);
 #endif
 #if defined ZLINK_HAVE_WSS

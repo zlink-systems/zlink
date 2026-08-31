@@ -16,28 +16,18 @@
 namespace zlink
 {
 
-class asio_transport_read_message_state_t
+class asio_transport_read_opcode_state_t
 {
   public:
-    asio_transport_read_message_state_t () : complete (false), binary (true) {}
+    asio_transport_read_opcode_state_t () : binary (true) {}
 
-    void reset ()
-    {
-        complete = false;
-        binary = true;
-    }
+    void reset () { binary = true; }
 
-    void finish (bool complete_, bool binary_)
-    {
-        complete = complete_;
-        binary = binary_;
-    }
+    void finish (bool binary_) { binary = binary_; }
 
-    bool is_complete () const { return complete; }
     bool is_binary () const { return binary; }
 
   private:
-    bool complete;
     bool binary;
 };
 
@@ -107,14 +97,12 @@ class i_asio_transport
     //  speculative hot-path drains from completion handlers.
     virtual bool supports_speculative_read () const { return false; }
 
-    //  Message-oriented transports expose their authoritative receive
-    //  boundary separately from byte count. A short read is never a message
-    //  boundary for stream transports.
+    // Message-oriented transports remain byte carriers for protocol codecs,
+    // but expose their framing capability so binary-only protocols can reject
+    // a text opcode before decoding any payload bytes.
     virtual bool has_message_boundaries () const { return false; }
-    virtual bool read_message_complete () const { return false; }
-    // WebSocket transports snapshot the opcode together with the boundary
-    // result before invoking the read completion. Byte-stream transports are
-    // binary by definition.
+    // WebSocket transports snapshot the opcode before invoking the read
+    // completion. Byte-stream transports are binary by definition.
     virtual bool read_message_binary () const { return true; }
 
     //  Start async write operation.

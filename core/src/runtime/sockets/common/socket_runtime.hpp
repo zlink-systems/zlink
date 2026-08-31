@@ -408,6 +408,53 @@ class socket_receive_record_scope_t
         return -1;
     }
 
+    // Deferred admission lets a routed receiver inspect the queued first
+    // application frame before paying whole-record ownership.  The callback
+    // invokes acquire_before_frame() while its receive attempt is active.
+    void begin_deferred_attempt (socket_receive_runtime_t *runtime_,
+                                 bool *sync_held_)
+    {
+        zlink_assert (_owner == owner_none);
+        _attempt_runtime = runtime_;
+        _attempt_sync_held = sync_held_;
+    }
+
+    void end_deferred_attempt ()
+    {
+        _attempt_runtime = NULL;
+        _attempt_sync_held = NULL;
+    }
+
+    int acquire_before_frame ()
+    {
+        if (!_attempt_runtime || !_attempt_sync_held) {
+            errno = EFAULT;
+            return -1;
+        }
+
+        const bool sync_was_held = *_attempt_sync_held;
+        if (!sync_was_held) {
+            _attempt_runtime->sync.lock ();
+            *_attempt_sync_held = true;
+        }
+        if (prepare_receive_attempt () != 0) {
+            if (!sync_was_held) {
+                _attempt_runtime->sync.unlock ();
+                *_attempt_sync_held = false;
+            }
+            return -1;
+        }
+        _runtime = _attempt_runtime;
+        _owner = sync_was_held ? owner_async_sync : owner_public;
+#ifdef ZLINK_BUILD_TESTS
+        socket_receive_runtime_t::record_hook_fn hook =
+          _runtime->record_acquired_hook.load (std::memory_order_acquire);
+        if (hook)
+            hook (_runtime->record_hook_userdata.load (std::memory_order_acquire));
+#endif
+        return 0;
+    }
+
     bool admission_failed () const { return _admission_failed; }
 
     void rollback_receive_attempt ()
@@ -481,6 +528,8 @@ class socket_receive_record_scope_t
     admission_rollback_fn _admission_rollback;
     void *_admission_userdata;
     bool _admission_failed;
+    socket_receive_runtime_t *_attempt_runtime = NULL;
+    bool *_attempt_sync_held = NULL;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (socket_receive_record_scope_t)
 };

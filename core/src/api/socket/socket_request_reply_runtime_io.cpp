@@ -107,7 +107,8 @@ struct reply_target_receive_admission_t
         handle (&handle_),
         state_out (state_out_),
         reservation (reservation_),
-        enabled (enabled_)
+        enabled (enabled_),
+        incoming_request (false)
     {
     }
 
@@ -115,7 +116,7 @@ struct reply_target_receive_admission_t
     {
         reply_target_receive_admission_t *self =
           static_cast<reply_target_receive_admission_t *> (userdata_);
-        if (!self || !self->enabled || !self->handle || !self->state_out
+        if (!self || !self->enabled || !self->incoming_request || !self->handle || !self->state_out
             || !self->reservation)
             return 0;
         if (self->reservation->active ())
@@ -124,9 +125,17 @@ struct reply_target_receive_admission_t
         // Re-read the bridge only after this receive attempt owns the socket.
         // A competing first typed reader may have installed the state while
         // this call waited for the prior whole-record transaction to finish.
-        *self->state_out = find_request_reply_state (*self->handle);
-        if (!*self->state_out)
-            return 0;
+        try {
+#ifdef ZLINK_BUILD_TESTS
+            if (!*self->state_out)
+                test_throw_request_reply_allocation_failpoint (
+                  request_reply_allocation_lazy_state_create);
+#endif
+            *self->state_out = find_or_create_request_reply_state (*self->handle);
+        } catch (...) {
+            errno = ENOMEM;
+            return -1;
+        }
 
         self->reservation->bind (*self->state_out);
         return self->reservation->acquire () ? 0 : -1;
@@ -146,6 +155,12 @@ struct reply_target_receive_admission_t
     std::shared_ptr<socket_request_reply_state_t> *state_out;
     reply_target_reservation_t *reservation;
     bool enabled;
+    bool incoming_request;
+
+    void set_incoming_request (bool incoming_request_)
+    {
+        incoming_request = incoming_request_;
+    }
 };
 
 static inline int ensure_reply_target_receive_reservation (
@@ -314,6 +329,88 @@ class received_pipe_pin_t
 
   private:
     zlink::pipe_t *_pipe;
+};
+
+// Runs while pipe_t still owns the queued first application frame. Only
+// metadata and multipart records need whole-record ownership; raw terminal
+// frames remain on the lock-free public receive path.
+class routed_receive_pre_admission_t
+{
+  public:
+    routed_receive_pre_admission_t (
+      zlink::socket_receive_record_scope_t *scope_,
+      reply_target_receive_admission_t *admission_, zlink::socket_base_t *socket_) :
+        _scope (scope_), _admission (admission_), _socket (socket_),
+        _pinned_pipe (NULL)
+    {
+    }
+
+    ~routed_receive_pre_admission_t ()
+    {
+        if (_pinned_pipe)
+            _pinned_pipe->release_lifetime_ref ();
+    }
+
+    static int admit (zlink::pipe_t *pipe_, const zlink::msg_t &msg_,
+                      void *userdata_)
+    {
+        routed_receive_pre_admission_t *const self =
+          static_cast<routed_receive_pre_admission_t *> (userdata_);
+        if (msg_.is_routing_id ())
+            return 0;
+        uint8_t message_type = zlink::zmp_kind_data;
+        uint64_t sequence = 0;
+        const bool has_metadata =
+          zlink::request_reply::read_request_reply_metadata (
+            reinterpret_cast<const zlink_msg_t *> (&msg_), &message_type,
+            &sequence);
+        const bool is_request = has_metadata
+                                && message_type
+                                     == zlink::request_reply::request_type
+                                && sequence != 0;
+        const bool needs_record = has_metadata
+                                  || (msg_.flags () & zlink::msg_t::more) != 0;
+        if (!needs_record)
+            return 0;
+
+        // Raw multipart still needs the socket-wide record fence, but it does
+        // not retain a source pointer after this call. Metadata can publish a
+        // reply target and therefore keeps the source-pipe lifetime pin.
+        if (has_metadata) {
+            if (!pipe_ || !self->_socket
+                || !self->_socket->retain_received_source_pipe_ref (pipe_)) {
+                errno = EPROTO;
+                return -1;
+            }
+            self->_pinned_pipe = pipe_;
+        }
+        self->_admission->set_incoming_request (is_request);
+        if (self->_scope->acquire_before_frame () != 0) {
+            if (self->_pinned_pipe) {
+                self->_pinned_pipe->release_lifetime_ref ();
+                self->_pinned_pipe = NULL;
+            }
+            return errno == ENOMEM
+                     ? zlink::pipe_t::read_admission_reject_consume
+                     : -1;
+        }
+        return 0;
+    }
+
+    zlink::pipe_t *release_pinned_pipe ()
+    {
+        zlink::pipe_t *const result = _pinned_pipe;
+        _pinned_pipe = NULL;
+        return result;
+    }
+
+  private:
+    zlink::socket_receive_record_scope_t *_scope;
+    reply_target_receive_admission_t *_admission;
+    zlink::socket_base_t *_socket;
+    zlink::pipe_t *_pinned_pipe;
+
+    ZLINK_NON_COPYABLE_NOR_MOVABLE (routed_receive_pre_admission_t)
 };
 
 static void discard_received_message_tail (
@@ -868,6 +965,9 @@ int recv_router_message_direct (const socket_handle_t &handle_,
     receive_record_scope.set_admission (
       &reply_target_receive_admission_t::prepare,
       &reply_target_receive_admission_t::rollback, &receive_admission);
+    routed_receive_pre_admission_t pre_admission (&receive_record_scope,
+                                                   &receive_admission,
+                                                   handle_.socket);
 
     // Part receive APIs accept an uninitialised output slot. Only use the
     // zero-copy terminal path when that slot is already a valid msg_t;
@@ -891,10 +991,11 @@ int recv_router_message_direct (const socket_handle_t &handle_,
                                : &metadata.source_rid;
     zlink::pipe_t *source_pipe = NULL;
     const int first_recv_rc = handle_.socket->recv_routed (
-      &current, source_rid, flags_, NULL, &source_pipe, true,
+      &current, source_rid, flags_, NULL, &source_pipe, false,
       &metadata.transport_pair_id, &metadata.transport_pair_generation,
-      &receive_record_scope);
-    received_pipe_pin_t source_pipe_pin (source_pipe);
+      &receive_record_scope, &routed_receive_pre_admission_t::admit,
+      &pre_admission);
+    received_pipe_pin_t source_pipe_pin (pre_admission.release_pinned_pipe ());
     if (first_recv_rc != 0)
         return -1;
 

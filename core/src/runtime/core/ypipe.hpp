@@ -148,6 +148,15 @@ template <typename T, int N> class ypipe_t ZLINK_FINAL : public ypipe_base_t<T>
         return (*fn_) (_queue.front ());
     }
 
+    bool probe_with_context (bool (*fn_) (const T &, void *), void *userdata_)
+    {
+        const bool rc = check_read ();
+        if (!rc)
+            return false;
+
+        return (*fn_) (_queue.front (), userdata_);
+    }
+
   protected:
     //  Allocation-efficient queue to store pipe items.
     //  Front of the queue points to the first prefetched item, back of

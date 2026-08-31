@@ -85,28 +85,13 @@ completion_message_result_t complete_reply_from_transport (
     zlink::request_completion::release_reservation (&state_->completion);
     state_->socket->notify_request_completion ();
 
-    // Callback-visible message ownership transfers to the callback.  Do not
-    // close those elements again after it returns: a conforming callback has
-    // already closed, moved, or adopted each one.  ERROR_REPLY keeps its
-    // leading errno frame inside Core, while a malformed completion exposes no
-    // payload and therefore leaves every element Core-owned.
-    size_t callback_begin = part_count_;
-    size_t callback_end = part_count_;
-    if (callback_parts && callback_part_count > 0) {
-        callback_begin = static_cast<size_t> (callback_parts - parts_);
-        callback_end = callback_begin + callback_part_count;
-        zlink_assert (callback_begin <= part_count_);
-        zlink_assert (callback_end <= part_count_);
-    }
-    // A normal reply transfers every part to the callback. Avoid walking the
-    // whole multipart only to skip every element on the steady-state path.
-    if (callback_begin == 0 && callback_end == part_count_)
-        return completion_message_accepted;
-    for (size_t i = 0; i < part_count_; ++i) {
-        if (i >= callback_begin && i < callback_end)
-            continue;
-        zlink::request_reply::consume_send_frame (&parts_[i]);
-    }
+    // Callback-visible message ownership transfers to the callback. A
+    // conforming callback closes or moves every exposed part before returning.
+    // Defensively consume any slot that is still valid afterwards:
+    // close leaves an invalid slot, move leaves a valid empty source, and an
+    // untouched slot still owns the received storage. This preserves callback
+    // ownership while preventing legacy callbacks from leaking every reply.
+    zlink::request_reply::consume_send_frames_from (parts_, 0, part_count_);
     return completion_message_accepted;
 }
 

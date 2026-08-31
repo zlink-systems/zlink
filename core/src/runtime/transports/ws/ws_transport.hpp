@@ -67,11 +67,6 @@ class ws_transport_t : public i_asio_transport
 
     std::size_t read_some (std::uint8_t *buffer, std::size_t len) ZLINK_OVERRIDE;
     bool has_message_boundaries () const ZLINK_OVERRIDE { return true; }
-    bool read_message_complete () const ZLINK_OVERRIDE
-    {
-        return _connection
-               && _connection->read_message_state.is_complete ();
-    }
     bool read_message_binary () const ZLINK_OVERRIDE
     {
         return !_connection
@@ -118,7 +113,7 @@ class ws_transport_t : public i_asio_transport
         }
 
         ws_stream_t stream;
-        asio_transport_read_message_state_t read_message_state;
+        asio_transport_read_opcode_state_t read_message_state;
         bool handshake_complete;
     };
 

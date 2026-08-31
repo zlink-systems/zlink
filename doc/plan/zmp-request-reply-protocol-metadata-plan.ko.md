@@ -269,7 +269,9 @@ Decoder는 payload memory를 확보하거나 HWM 수용 여부를 판단하기 �
 | Request-reply kind의 sequence가 `0`이다. | `EPROTO`로 frame을 거부한다. | Pending request를 만들거나 찾지 않는다. |
 | Stream read가 sequence extension 1~7바이트에서 끝났다. | 다음 byte를 기다린다. | 읽은 extension byte와 decoder 상태를 유지한다. |
 | Connection EOF까지 base header, sequence extension 또는 선언한 payload가 완성되지 않았다. | `EPROTO`로 connection 오류를 보고한다. | 부분 message와 frame reservation을 남기지 않는다. |
-| WS binary message가 정확히 한 ZMP frame을 완성한 지점이 아닌 곳에서 끝났다. | `EPROTO`로 connection 오류를 보고한다. | 부분·추가 frame과 reservation을 남기지 않는다. |
+| WS·WSS binary message가 base header, sequence extension 또는 payload 중간에서 끝났다. | 다음 binary message의 byte를 기다린다. | 읽은 frame byte와 decoder 상태를 유지한다. |
+| WS·WSS binary message 하나에 ZMP frame이 둘 이상 연속해서 들어 있다. | Header와 payload 크기로 각 frame을 분리해 순서대로 처리한다. | 완료한 frame마다 reservation과 submission을 각각 한 번 확정한다. |
+| WS·WSS binary message의 payload가 비어 있다. | ZMP byte나 frame을 만들지 않고 다음 binary message를 기다린다. | Connection과 진행 중 decoder 상태를 유지한다. |
 | Request-reply kind가 multipart 중간에 나타난다. | `EPROTO`로 frame을 거부한다. | 진행 중 multipart를 정상 message로 제출하지 않는다. |
 | Request-reply kind가 `CONTROL`, `IDENTITY`, `SUBSCRIBE` 또는 `CANCEL`과 함께 나타난다. | `EPROTO`로 frame을 거부한다. | 이 frame의 payload를 handler나 reply completion에 전달하지 않는다. |
 | Multipart 도중 `IDENTITY`, `CONTROL`, `SUBSCRIBE` 또는 `CANCEL` frame이 나타난다. | `EPROTO`로 frame을 거부한다. | 서로 다른 message의 frame을 합치지 않는다. |
@@ -277,9 +279,10 @@ Decoder는 payload memory를 확보하거나 HWM 수용 여부를 판단하기 �
 Protocol 오류로 pair가 종료되면 이 frame 자체는 request를 성공 또는 error reply로 완료하지
 않는다. 이미 pending인 request는 기존 disconnect terminal 결과로 각각 한 번 완료될 수 있다.
 
-TCP, IPC, TLS, WS와 WSS는 같은 ZMP byte 배치를 사용한다. WebSocket에서는 ZMP extension과
-application payload가 같은 RFC 6455 binary message 안에 들어간다. Inproc은 wire codec을
-거치지 않지만 같은 `msg_t` metadata와 socket runtime 판별 규칙을 따른다.
+TCP, IPC, TLS, WS와 WSS는 같은 ZMP byte 배치를 사용한다. WebSocket binary message는 이
+byte 열을 운반하며 ZMP frame 경계를 정하지 않는다. 한 frame을 여러 binary message로 나누거나
+여러 frame을 한 binary message에 넣어도 decoder가 header와 payload 크기로 frame을 복원한다.
+Inproc은 wire codec을 거치지 않지만 같은 `msg_t` metadata와 socket runtime 판별 규칙을 따른다.
 
 ### 3.6 Message kind와 처리 경로
 
@@ -452,12 +455,11 @@ Decoder는 frame 하나를 다음 상태 순서로 처리한다.
 6. **Submission** — payload를 socket runtime에 제출한 뒤 frame과 multipart 상태를 다음
    frame에 맞게 초기화한다.
 
-- **Fragmentation은 frame 오류가 아니다.** Base header와 extension이 한 read에 함께 오거나
-  base header·extension·payload가 여러 read로 나뉘어도 같은 frame으로 완성한다. Short read를
-  WS message 경계로 추측하지 않는다. WS·WSS transport는 Beast의 message-complete 상태를 async와
-  speculative read 모두에서 `i_asio_transport`→Asio ZMP engine→decoder로 전달한다. Decoder의
-  finalization hook은 stream EOF에서 incomplete base·extension·payload를 거부하고, WS message
-  완료 시점에는 정확히 한 frame이 제출됐는지 확인한다.
+- **Transport fragmentation은 frame 오류가 아니다.** Base header와 extension이 한 read에 함께
+  오거나 base header·extension·payload가 여러 read 또는 WS·WSS binary message로 나뉘어도 같은
+  frame으로 완성한다. RFC 6455 message 완료 상태는 ZMP frame을 끝내지 않는다. Decoder는 header와
+  payload 크기로 frame을 구분하고 한 read에서 frame을 만들지 않거나 하나 이상 만들 수 있다.
+  Connection EOF에서 incomplete base·extension·payload만 거부한다.
 - **Backpressure 재시도는 header를 다시 읽지 않는다.** `retry_frame_admission()`은 flags,
   kind, sequence, payload 크기와 body 시작 cursor를 보존하고, 재시도 뒤 payload만 읽는다.
   Frame reservation callback은 성공한 frame당 한 번만 확정하며 검증, allocation 또는
@@ -588,17 +590,18 @@ Long group message도 같은 수명 test를 통과해야 다음 단계로 진행
 2. 일반 data에는 8바이트 header, request-reply 첫 frame에는 16바이트 header를 만든다.
 3. Decoder를 base-header, extension-read, validation, admission, payload와 submission 상태로
    나누고 EOF의 incomplete extension 정리를 추가한다.
-4. WS·WSS transport의 message-complete 상태와 최초 data frame opcode를 Asio ZMP engine과
-   decoder까지 전달해 binary message의 base·extension·payload와 정확한 frame 제출 경계를
-   검증하고 text message는 ZMP parsing 전에 거부한다.
+4. WS·WSS transport는 각 read가 속한 message의 opcode와 binary payload byte를 함께 확정해
+   decoder에 수신 순서대로 전달한다. RFC 6455 message 경계를 ZMP frame 경계로 전달하지 않으며
+   text message는 ZMP parsing 전에 거부한다.
 5. Kind, sequence, flags와 multipart 위치를 검증한 뒤 application payload 크기로 HWM 수용
    여부를 판단한다.
 6. Extension fragmentation, backpressure 재시도와 reservation 반납 동작을 추가한다.
-7. TCP·IPC·TLS·WS·WSS의 고정 header buffer와 scatter/gather 경로를 확인한다.
+7. TCP·IPC·TLS·WS·WSS의 고정 header buffer와 scatter/gather 경로를 확인한다. WS·WSS는 현재
+   준비된 연속 ZMP byte를 `out_batch_size` 이내에서 모아 Beast binary write 한 번으로 보낸다.
 8. Inproc copy·move가 encoder·decoder 없이 같은 metadata를 보존하는지 확인한다.
 9. Paired passive endpoint는 peer READY를 검증한 뒤 자기 READY의 transport write까지
-   완료해야 socket-side lane readiness와 pair admission을 공개한다. WS·WSS의 다음 message
-   read 상태는 이미 검증한 READY boundary를 다시 판정하는 근거로 사용하지 않는다. Handshake
+   완료해야 socket-side lane readiness와 pair admission을 공개한다. Write completion으로
+   handshake를 재개할 때 이미 소비하고 검증한 READY byte를 다시 처리하지 않는다. Handshake
    control output은 async write completion으로 이 barrier를 재개하며, speculative write fast
    path는 handshake가 끝난 뒤 application data에만 적용한다.
 
@@ -705,9 +708,10 @@ progress lane을 중계하지 않는 경계를 기록한다. Binding 계약에�
      gate 전 ready count `0`·pair 미승인과 해제 뒤 ready count `1`·pair 승인을 확인한다.
    - WS·WSS raw fixture는 text HELLO, text data와 fragmented text data가 payload를 공개하지
      않고 연결을 종료하는지 확인한다.
-   - ZMP integration은 binary message 하나에 frame이 없거나 둘 이상인 입력을 거부하는지,
-     raw STREAM integration은 fragmented message와 gather threshold 이상의 routed send를 기존
-     byte-stream 의미로 처리하는지 확인한다.
+   - ZMP integration은 frame 하나를 여러 binary message로 나눈 입력, 여러 frame을 binary
+     message 하나에 넣은 입력과 빈 binary message를 순서대로 처리하는지 확인한다. Raw STREAM
+     integration은 fragmented message와 gather threshold 이상의 routed send를 기존 byte-stream
+     의미로 처리한다.
 8. `test_flow_state_paired`, `test_router_multiple_dealers`와 `test_backpressure_matrix`
    - Network와 inproc pair의 양쪽에 bind·connect 전 서로 다른 weight를 설정하고, pair-ready 뒤
      상대 scheduler가 `0`을 포함한 정확한 절대값을 적용하는지 확인한다.
@@ -745,9 +749,11 @@ artifact나 release asset을 대신 사용하지 않는다. Core build, ZMP unit
 request-reply integration test와 TCP·IPC·TLS·WS·WSS 및 inproc contract가 모두 성공해야 한다. 해당
 workflow에 sanitizer나 protocol 전용 job이 있으면 함께 확인한다.
 
-완료 전에 §8.3의 같은 local Release Core로 C single·multi 성능 측정을 실행한다. 이 측정은
-구조적 비용 제거가 실제 workload에서 퇴행하지 않는지 관찰하는 기록이며, 특정 개선율을
-합격 기준으로 두지 않는다.
+완료 전에 §8.3의 같은 local Release Core로 C single·multi 성능 측정을 실행한다. Perf source,
+workload와 실행 option은 그대로 두고 Core revision만 바꿔 비교한다. 같은 pattern·transport의
+0.14.6 대비 throughput 저하가 5% 이상이면 Core 회귀로 판정하고 release를 진행하지 않는다.
+같은 REQREP pattern에서는 WSS와 TLS의 throughput 비율도 비교한다. 이 비율이 0.14.6의
+WSS/TLS 비율보다 상대적으로 5% 이상 낮아지면 WSS에만 생긴 회귀로 판정한다.
 
 **검증 기록 — 2026-08-31**
 
@@ -768,7 +774,8 @@ workflow에 sanitizer나 protocol 전용 job이 있으면 함께 확인한다.
 ## 8. 구조적 성능 개선과 측정 경계
 
 이번 작업에는 protocol envelope 제거와 paired control ownership 정리로 실행할 필요가 사라지는
-처리만 함께 제거한다.
+처리를 제거하고, WS·WSS가 ZMP frame마다 Beast write를 시작하지 않도록 bounded encoder batching을
+적용한다.
 Throughput·latency 수치의 개선 폭은 보장하지 않는다. §8.3 측정은 실제 결과를 기록하되 workload와
 transport에 따른 편차를 구조적 계약으로 바꾸지 않는다.
 
@@ -787,6 +794,11 @@ transport에 따른 편차를 구조적 계약으로 바꾸지 않는다.
 - **Header는 고정 buffer에서 한 번 조립한다.** Ordinary data는 8바이트, request-reply 첫
   frame은 16바이트를 기존 scatter/gather entry에 연결하며 header용 allocation, `vector`와
   payload copy를 추가하지 않는다.
+- **WS·WSS는 준비된 ZMP byte를 bounded batch로 보낸다.** Encoder가 현재 준비된 frame byte를
+  기존 `out_batch_size` 이내에서 연속 output buffer에 모으고 Beast binary write 한 번으로
+  제출한다. Batch를 채우려고 아직 준비되지 않은 traffic을 기다리지 않으며 frame byte·순서와
+  application multipart 경계는 바꾸지 않는다. 이로써 frame마다 async write와 WSS TLS 처리를
+  시작하는 비용을 없앤다.
 - **Ordinary data는 8 byte header로 유지한다.** `KIND == 0x00`에는 sequence extension이나
   request/reply 상태가 없고, request·reply의 첫 frame만 16 byte header와 sequence를 사용한다.
 - **Single-part fast path는 metadata를 인식한다.** `MORE`가 없는 data는 기존 terminal 경로로
@@ -817,14 +829,13 @@ transport에 따른 편차를 구조적 계약으로 바꾸지 않는다.
 - **Request metadata는 16바이트 inline auxiliary에 둔다.** Sidecar allocation이나 별도 queue
   element를 만들지 않고 일반 data encode에는 tag 확인 한 번만 추가한다. Auxiliary가 없는
   message의 init·reset은 tag만 `none`으로 바꾸며 비활성 overlay 전체를 초기화하지 않는다.
-- **Decoder의 transport-independent frame count를 제거한다.** Decoder는 base header, sequence
-  extension과 payload가 끝났는지만 검증한다. WS·WSS의 binary message당 정확히 한 frame이라는
-  cardinality는 실제 transport boundary에서 decoded message를 staging하는 Asio ZMP engine이
-  소유한다. 따라서 TCP·IPC·TLS의 모든 frame에 WS 전용 counter 증가와 분기를 추가하지 않는다.
-- **WS·WSS connection generation을 한 allocation으로 소유한다.** Beast stream과 read boundary
-  snapshot을 같은 shared owner에 두어 연결마다 별도 boundary-state allocation을 만들지 않고,
-  async read callback도 generation reference를 한 번만 증감한다. Close 뒤 callback은 자신이
-  시작된 stream과 boundary state를 함께 보존한다.
+- **Decoder가 모든 network transport의 ZMP framing을 소유한다.** WS·WSS binary message는
+  순서가 유지되는 byte carrier이며 message 완료 상태로 frame 수를 세거나 decoded frame 공개를
+  보류하지 않는다. Decoder는 base header와 payload 크기로 경계를 복원하므로 TCP·IPC·TLS와
+  WS·WSS가 같은 fragmentation 상태와 검증 경로를 사용한다.
+- **WS·WSS connection generation을 한 allocation으로 소유한다.** Beast stream과 read별 opcode
+  상태를 같은 shared owner에 두고 async read callback도 generation reference를 한 번만 증감한다.
+  Close 뒤 callback은 자신이 시작된 stream과 opcode state를 함께 보존한다.
 - **Raw STREAM에는 ZMP boundary 정책을 적용하지 않는다.** Message boundary를 노출하는 WS·WSS
   transport라도 `asio_raw_engine_t`는 binary-only 검사, ZMP frame staging과 강제 ZMP gather를
   거치지 않는다. 큰 routed send는 기존 raw encoder fallback을 사용하고 fragmented WebSocket
@@ -903,6 +914,9 @@ Peer weight의 성능 개선은 상시 `msg_t` 보관, application queue 처리�
   기록하며, getter와 encoder는 `none`일 때 나머지 overlay byte를 읽지 않는다.
 - Header builder는 caller가 제공한 최대 16바이트 고정 buffer만 사용하고 payload pointer와
   scatter/gather 경계를 유지한다.
+- WS·WSS output은 현재 준비된 연속 ZMP byte를 기존 `out_batch_size`보다 크게 만들지 않고 한
+  Beast binary write로 제출한다. Batch를 채우려고 아직 준비되지 않은 traffic을 기다리지 않으며,
+  여러 frame이 같은 batch에 들어가도 raw wire의 frame byte와 순서가 바뀌지 않는다.
 - Typed DEALER의 유효한 terminal output slot으로 single-part를 받으면 multipart staging이나
   추가 message move 없이 그 slot이 결과가 된다.
 - Tracked request send와 typed receive admission의 동기 observer/callback은 바깥 socket handle과
@@ -965,10 +979,11 @@ Peer weight의 성능 개선은 상시 `msg_t` 보관, application queue 처리�
   현재 설정값을 다시 전달한다.
 - `PEER_WEIGHT_CHANGED` event의 `value`는 적용한 정확한 새 값이며 transport lane, pair ID와
   generation은 값을 적용한 paired Application pipe와 같다.
-- Decoder에는 transport message의 decoded frame 수를 세는 상태가 없고, Asio ZMP engine이
-  authoritative WS·WSS boundary 전까지만 frame publication을 보류한다.
-- WS·WSS transport의 stream과 read boundary state는 같은 connection-generation aggregate에
-  있으며 async read callback은 그 owner 하나만 capture한다.
+- Decoder와 Asio ZMP engine에는 RFC 6455 message별 decoded frame 수, frame staging 또는
+  message-complete finalization 상태가 없다. Decoder가 연속 binary payload byte에서 ZMP frame을
+  복원해 완료되는 즉시 제출한다.
+- WS·WSS transport의 stream과 read별 opcode state는 같은 connection-generation aggregate에 있으며
+  async read callback은 그 owner 하나만 capture한다.
 - Raw STREAM/WS·WSS는 ZMP boundary staging이나 invalid ZMP gather 종료 분기로 들어가지 않고,
   fragmented receive와 gather threshold 이상의 routed send를 기존 raw 경로로 처리한다.
 - Repository의 production factory, include, 설치 header와 export에는 삭제한
@@ -976,15 +991,15 @@ Peer weight의 성능 개선은 상시 `msg_t` 보관, application queue 처리�
 - §4.1의 auxiliary·`msg_t`·VSM static assertion과 decoder fragmentation·backpressure test가
   통과한다.
 - Paired passive endpoint의 READY write가 완료되기 전에는 socket-side ready count와 pair
-  admission이 증가하지 않고, write 완료 뒤 정확히 한 번 증가한다. 이미 검증한 WS·WSS READY
-  input boundary는 write-completion handshake 재진입에서 다시 검증하지 않는다. Handshake
-  control output은 speculative write로 completion callback을 우회하지 않으며, application
-  data의 speculative write fast path는 유지한다.
+  admission이 증가하지 않고, write 완료 뒤 정확히 한 번 증가한다. 이미 소비하고 검증한 READY
+  byte는 write-completion handshake 재진입에서 다시 처리하지 않는다. Handshake control output은
+  speculative write로 completion callback을 우회하지 않으며, application data의 speculative
+  write fast path는 유지한다.
 
 ### 8.3 성능 측정 계약
 
-이번 구현에서는 다음 정책을 바꾸지 않는다. §8.1의 비용 제거를 검증하기 위해 측정하되, 측정값을
-근거로 buffer capacity, HWM이나 queue policy를 함께 조정하지 않는다.
+Perf 구현과 workload는 바꾸지 않고 같은 C single·multi runner를 사용한다. Core revision만
+교체해 §8.1의 비용 제거를 검증하며, 측정값을 맞추려고 HWM이나 queue policy를 조정하지 않는다.
 
 - Pending map·mutex, timeout scheduler, completion queue와 callback 최적화
 - Generic DEALER receive의 request-state·mutex ownership transition과 kind-aware admission 재설계
@@ -994,7 +1009,7 @@ Peer weight의 성능 개선은 상시 `msg_t` 보관, application queue 처리�
 - Asio transport의 message-boundary capability 조회를 engine에 cache하는 변경. 측정 없이
   capability의 두 번째 source of truth를 추가하지 않는다.
 - C++ native view·container와 .NET descriptor·`ArrayPool` 최적화
-- Gather threshold, batch 크기, HWM과 queue 정책 변경
+- HWM과 queue 정책 변경
 
 측정은 같은 local Release Core revision과 다음 조건을 사용한다.
 
@@ -1007,10 +1022,12 @@ Peer weight의 성능 개선은 상시 `msg_t` 보관, application queue 처리�
 5. 각 조합을 세 번 이상 실행하고 throughput·latency의 중앙값을 사용한다.
 
 검증 기록에는 Core revision, payload part 수, transport, 반복 수, 성공·timeout·error 수, 반복별
-throughput·latency와 중앙값을 남긴다. 측정 실행과 기록은 완료 조건이지만 특정 개선율은 합격
-기준이 아니다.
+throughput·latency와 중앙값을 남긴다. 합격 판정은 서로 다른 pattern의 수치를 나누지 않는다.
+같은 pattern·transport를 0.14.6과 수정 Core에서 비교하며 throughput 저하가 5% 이상이면
+release를 막는 Core 결함으로 처리한다. 같은 REQREP pattern의 WSS와 TLS도 함께 비교하며,
+WSS/TLS throughput 비율이 0.14.6의 비율보다 상대적으로 5% 이상 낮아지면 release를 막는다.
 
-#### 측정 기록 — 2026-08-31
+#### 수정 전 회귀 측정 기록 — 2026-08-31
 
 - Core revision은 `4d14b906a9ebd1f0b3ffcb6367818ed3257d50e8`이고 dirty 상태가 아닌
   local Release `core/build/lib/libzlink.so.0.14.6`을 사용했다.
@@ -1045,28 +1062,22 @@ case 요약은 success 8, fail·skip·unsupported 0이었다. 이 값은 benchma
 
 현재 runner는 REQREP callback에서 성공한 reply만 throughput·latency 표본에 넣고 개별 request의
 timeout·error 수를 출력하지 않는다. 따라서 이 측정의 request-level timeout·error 수는 알 수
-없다. 특히 multi WSS는 request timeout이 200ms이고 latency는 RTT의 절반으로 기록한다. 측정된
-p99 98.092~99.651ms는 실제 RTT 196.184~199.302ms에 해당하므로 timeout 경계에서 잘린
-`timeout-censored` 참고값이다.
+없다. 이 한계는 timeout 원인을 추가로 확인할 근거지만, 같은 REQREP pattern에서 WSS throughput이
+다른 network transport보다 비정상적으로 낮은 결과를 합격으로 바꾸는 근거가 아니다.
 
 Single SENDSEND는 application message 한 방향을 Kmsg/s로 세지만 REQREP는 같은 payload의 request와
 reply 두 방향을 한 Kops/s로 센다. 따라서 raw operation 비율만 비교하면 왕복 자체를 protocol
 overhead로 잘못 계산한다. 두 방향 byte 기준 REQREP/SENDSEND bandwidth 비율은 WSS
 102.8%·104.0%, TCP 59.5%·63.0%다.
 
-Multi SENDSEND는 queue를 깊게 채워 WSS에서 mean 461.957~502.432ms와 p99
-1410.084~1480.099ms의 backlog를 허용했다. REQREP는 pending·completion·timeout 경계를 유지하며
-mean 61.161~61.921ms와 p99 99.649~99.651ms를 기록했다. 따라서 WSS의 16.5%·18.9% throughput
-비율은 같은 latency operating point의 protocol overhead 비교가 아니다. TCP multi의 같은 echo
-workload에서는 REQREP가 SENDSEND throughput의 62.1%·71.7%였지만, multi 측정 도구가 여러
-socket의 submit과 callback accounting을 공유 mutex로 직렬화하는 비용도 포함한다. 이 측정만으로
-개선 전 대비 향상률을 주장하지 않는다.
-
-새 ZMP metadata 경로에는 payload copy나 선형 탐색이 남지 않았으므로 release를 막는 명백한
-hot-path 결함은 없다. §8.1의 frame·copy·allocation 제거 외 pending scheduler·callback 구조를
-바꾸는 최적화는 별도 성능 작업의 profiling 대상으로 남긴다. 그 작업에서는 SENDSEND와 REQREP에
-같은 in-flight window를 적용하고 request의 OK·TIMED_OUT·ERROR 수를 따로 출력해야 한다. Timeout만
-늘리면 SENDSEND처럼 queue latency가 커져 같은 조건의 비교가 되지 않는다.
+Multi REQREP에서 WSS는 같은 pattern의 TCP 142.949·139.233 Kops/s에 비해
+15.519·17.022 Kops/s에 그쳐 release 기준을 크게 벗어난 Core 회귀다. Perf source와 workload는
+바뀌지 않았고 Core만 변경됐으므로 runner의 queue latency나 서로 다른 pattern의 accounting으로
+이 차이를 정상화하지 않는다. 원인은 WS·WSS에서 RFC 6455 binary message 하나를 ZMP frame 하나로
+강제해 application part마다 Beast async write와 WSS TLS 처리를 시작한 Core framing 경로다.
+RFC 6455 binary message를 byte carrier로 되돌리고 §8.1의 bounded encoder batching을 적용한 뒤,
+같은 명령과 option으로 같은 REQREP pattern의 transport를 다시 측정해야 한다. 위 표는 수정 전 실패
+증거이며 최종 성능 결과가 아니다.
 
 ## 9. 작업 중단 조건
 
@@ -1078,7 +1089,7 @@ hot-path 결함은 없다. §8.1의 frame·copy·allocation 제거 외 pending s
 - 일반 data frame마다 새 request metadata allocation이나 reply-target·pending entry가 생긴다.
 - Data header 생성 경로를 합칠 수 없어 transport마다 wire byte 조립을 중복해야 한다.
 - TCP, IPC, TLS, WS와 WSS가 서로 다른 request metadata 배치를 요구한다.
-- WS·WSS transport가 binary message 완료 경계를 decoder에 전달할 수 없다.
+- WS·WSS에서 RFC 6455 message 경계를 ZMP frame 경계로 사용해야만 decode할 수 있다.
 - Transparent request-reply proxy를 지원하려면 completion progress lane bridge나 새 public
   계약이 필요하다.
 - Core가 Framework metadata codec을 참조해야 한다.
@@ -1203,7 +1214,7 @@ decoder 상태와 allocation 제거처럼 내부 구조로만 확인할 조건�
   바꾸지 않는다. `=0`은 성공하며 getter는 `0`이다.
 - PUB와 SUB는 `ZLINK_OPT_CONFLATE=1` 설정과 getter `1`을 계속 지원한다.
 - 이 경계는 같은 DEALER Application pipe의 application record와 internal protocol control 중
-  하나를 frame-level replacement로 유실하는 부분 지원을 만들지 않는다.
+  하나를 ZMP frame 단위 replacement로 유실하는 부분 지원을 만들지 않는다.
 
 **ZMP wire와 오류**
 
@@ -1228,10 +1239,11 @@ decoder 상태와 allocation 제거처럼 내부 구조로만 확인할 조건�
   0이 아닌 big-endian sequence가 있고, payload size는 application payload byte 수와 같다.
 - Multipart request-reply의 둘째 frame부터 raw wire kind가 `0x00`이며 `MORE`가 application
   part 경계를 정확히 나타낸다.
-- Base header, sequence extension과 payload를 여러 read로 나누어 보낸 뒤 나머지를 보내면
-  request가 한 번 전달된다. 이들 중 하나를 끝내지 않은 채 connection을 끝내거나 정확히 한
-  ZMP frame 경계가 아닌 위치에서 WS binary message를 끝내면 payload가 전달되지 않고 protocol
-  오류로 connection이 종료된다.
+- Base header, sequence extension과 payload를 여러 read 또는 WS·WSS binary message로 나누어
+  보낸 뒤 나머지를 보내면 request가 한 번 전달된다. WS·WSS binary message 하나에 ZMP frame을
+  둘 이상 연속해서 보내도 각 frame이 순서대로 한 번 전달된다. 빈 binary message는 frame을
+  전달하거나 connection을 끝내지 않는다. Base header, extension 또는 payload를 끝내지 않은 채
+  connection을 끝내면 payload가 전달되지 않고 protocol 오류로 connection이 종료된다.
 - 유효한 HELLO 또는 data frame byte를 WS·WSS text message로 보내면 ZMP parsing 전에 protocol
   오류로 연결이 종료되고 payload가 전달되지 않는다. Fragmented text data도 최초 opcode를
   유지해 같은 결과를 낸다.
