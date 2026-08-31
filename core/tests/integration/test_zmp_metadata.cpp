@@ -102,6 +102,8 @@ recv_status_t recv_all (fd_t fd_, unsigned char *buf_, size_t size_)
             const int err = WSAGetLastError ();
             if (err == WSAETIMEDOUT)
                 return recv_timeout;
+            if (err == WSAECONNRESET)
+                return recv_closed;
             return recv_error;
         }
 #else
