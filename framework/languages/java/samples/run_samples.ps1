@@ -4,7 +4,7 @@ $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$RootDir/redis-common.ps1"
 $JavaRoot = Split-Path -Parent $RootDir
-$CoreLib = Join-Path $JavaRoot "../../../.artifacts/wsl/install/zlink-core/0.14.6/lib/libzlink.so"
+$CoreLib = Join-Path $JavaRoot "../../../.artifacts/wsl/install/zlink-core/0.15.0/lib/libzlink.so"
 $ManifestPath = Join-Path $RootDir "sample-manifest.env"
 if (Test-Path $CoreLib) {
     $env:ZLINK_LIBRARY_PATH = $CoreLib

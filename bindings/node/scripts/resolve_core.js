@@ -36,7 +36,7 @@ if (coreSource === 'local') {
   const configured = process.env.ZLINK_CORE_INSTALL_PREFIX
     || process.env.ZLINK_CORE_PACKAGE_PREFIX;
   if (!configured || !path.isAbsolute(configured)) {
-    fail('ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core 0.14.6 package prefix');
+    fail('ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core 0.15.0 package prefix');
   }
 
   prefix = fs.realpathSync(configured);
@@ -48,7 +48,7 @@ if (coreSource === 'local') {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   if (manifest.package !== 'zlink-core' || !/^\d+\.\d+\.\d+$/.test(manifest.version || '')
       || Number(manifest.abiMajor) !== 0) {
-    fail(`Installed Core package must have 0.14.6 provenance: ${manifestPath}`);
+    fail(`Installed Core package must have 0.15.0 provenance: ${manifestPath}`);
   }
   includeDir = path.join(prefix, 'include');
   libraryDirs = [path.join(prefix, 'lib'), path.join(prefix, 'lib64')];

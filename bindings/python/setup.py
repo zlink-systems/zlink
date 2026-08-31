@@ -21,7 +21,7 @@ def _supported_platform() -> str:
     if sys.platform == "win32" and machine in {"x86_64", "amd64"}:
         return "windows-x86_64"
     raise RuntimeError(
-        "zlink Python Core 0.14.6 supports Linux x86_64 and Windows x86_64"
+        "zlink Python Core 0.15.0 supports Linux x86_64 and Windows x86_64"
     )
 
 

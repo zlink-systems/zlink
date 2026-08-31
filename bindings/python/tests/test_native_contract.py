@@ -153,7 +153,7 @@ def test_package_platform_policy_is_explicit_for_supported_native_targets():
         assert {
             "linux-x86_64/libzlink.so",
             "linux-x86_64/libzlink.so.0",
-            "linux-x86_64/libzlink.so.0.14.6",
+            "linux-x86_64/libzlink.so.0.15.0",
         }.issubset(payloads)
 
 
