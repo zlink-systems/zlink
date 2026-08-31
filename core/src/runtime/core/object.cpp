@@ -22,6 +22,7 @@ zlink::pipe_t *pipe_command_destination (const zlink::command_t &cmd_)
         case zlink::command_t::activate_read:
         case zlink::command_t::activate_write:
         case zlink::command_t::flow_state:
+        case zlink::command_t::peer_weight:
         case zlink::command_t::hiccup:
         case zlink::command_t::pipe_term:
         case zlink::command_t::pipe_term_ack:
@@ -76,6 +77,11 @@ void zlink::object_t::process_command (const command_t &cmd_)
         case command_t::flow_state:
             process_flow_state (cmd_.args.flow_state.state,
                                 cmd_.args.flow_state.epoch);
+            break;
+
+        case command_t::peer_weight:
+            process_peer_weight (cmd_.args.peer_weight.weight,
+                                 cmd_.args.peer_weight.connection_id);
             break;
 
         case command_t::send_pending:
@@ -329,6 +335,20 @@ void zlink::object_t::send_flow_state (pipe_t *destination_,
     send_pipe_command (destination_, cmd, false);
 }
 
+bool zlink::object_t::send_peer_weight (pipe_t *destination_,
+                                        uint32_t weight_,
+                                        uint64_t connection_id_)
+{
+    command_t cmd;
+    cmd.type = command_t::peer_weight;
+    cmd.args.peer_weight.connection_id = connection_id_;
+    cmd.args.peer_weight.weight = weight_;
+    //  The destination pipe and its scheduler belong to the peer socket's
+    //  owner. Even when both sockets share a thread id, keep this behind the
+    //  mailbox boundary: the public option setter is not that owner.
+    return send_pipe_command (destination_, cmd, false);
+}
+
 void zlink::object_t::send_hiccup (pipe_t *destination_, void *pipe_,
                                    uint64_t generation_)
 {
@@ -468,6 +488,11 @@ void zlink::object_t::process_activate_write (uint64_t, uint64_t, uint64_t)
 }
 
 void zlink::object_t::process_flow_state (unsigned char, uint64_t)
+{
+    zlink_assert (false);
+}
+
+void zlink::object_t::process_peer_weight (uint32_t, uint64_t)
 {
     zlink_assert (false);
 }

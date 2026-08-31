@@ -49,11 +49,11 @@ zlink::lb_t::~lb_t ()
     zlink_assert (_pipes.empty ());
 }
 
-void zlink::lb_t::attach (pipe_t *pipe_)
+void zlink::lb_t::attach (pipe_t *pipe_, uint32_t initial_weight_)
 {
     _pipes.push_back (pipe_);
     pipe_entry_t entry;
-    entry.weight = 100;
+    entry.weight = std::min (initial_weight_, max_peer_weight);
     entry.running_value = 0;
     entry.attach_seq = _attach_seq++;
     _entries[pipe_] = entry;
@@ -69,8 +69,10 @@ void zlink::lb_t::pipe_terminated (pipe_t *pipe_)
     //  have disconnected, we have to drop the remainder of the message.
     if (index == _current && _more)
         _dropping = true;
-    if (pipe_ == _weighted_multipart_pipe && _more)
+    if (pipe_ == _weighted_multipart_pipe && _more) {
         _dropping = true;
+        _weighted_multipart_pipe = NULL;
+    }
 
     //  Remove the pipe from the list; adjust number of active pipes
     //  accordingly.
@@ -126,11 +128,9 @@ void zlink::lb_t::set_weight (pipe_t *pipe_, uint32_t weight_)
 
     const pipes_t::size_type index = _pipes.index (pipe_);
     if (weight_ == 0) {
-        if (index == _current && _more)
-            _dropping = true;
-        if (pipe_ == _weighted_multipart_pipe && _more)
-            _dropping = true;
-
+        // Weight is a message-selection policy. An already selected multipart
+        // stays pinned to its exact pipe through FINAL; only later messages
+        // observe the zero-weight deactivation.
         if (index < _active) {
             _active--;
             _pipes.swap (index, _active);
@@ -176,6 +176,19 @@ bool zlink::lb_t::contains (pipe_t *pipe_) const
     }
     return false;
 }
+
+#ifdef ZLINK_BUILD_TESTS
+size_t zlink::lb_t::test_weight_count (uint32_t weight_) const
+{
+    size_t count = 0;
+    for (entries_t::const_iterator it = _entries.begin ();
+         it != _entries.end (); ++it) {
+        if (it->second.weight == weight_)
+            ++count;
+    }
+    return count;
+}
+#endif
 
 int zlink::lb_t::select_connected_pipe (pipe_t **pipe_out_,
                                         connected_pipe_filter_fn filter_,
@@ -507,6 +520,7 @@ int zlink::lb_t::sendpipe (
             *pipe_ = pipe;
 
         _more = more;
+        _weighted_multipart_pipe = more ? pipe : NULL;
 
         const int rc = msg_->init ();
         errno_assert (rc == 0);

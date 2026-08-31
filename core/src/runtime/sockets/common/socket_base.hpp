@@ -100,6 +100,7 @@ struct transport_pair_pipes_t
         completion_validated (false),
         ready (false),
         draining (false),
+        local_peer_weight_advertised (100),
         remote_flow_seen (false),
         remote_flow_paused (false),
         remote_flow_pause_accounted (false),
@@ -117,6 +118,10 @@ struct transport_pair_pipes_t
     //  Set while a thread consumes this pair's Completion pipe. The pipe has a
     //  single-consumer queue, so two owners must not read it at once.
     bool draining;
+    //  Local peer-weight is absolute. Each new physical pair starts from the
+    //  scheduler default and publishes a non-default value exactly once after
+    //  readiness; later changes update this record only after delivery.
+    uint32_t local_peer_weight_advertised;
     //  Last remote receive-flow state accepted for this pair. The state is
     //  absolute, so a repeated value is idempotent and a frame whose epoch does
     //  not advance is ignored. The pair key already carries the connection
@@ -265,7 +270,10 @@ class socket_base_t : public own_t,
                             uint64_t expected_transport_pair_generation_ = 0,
                             bool report_multipart_abort_ = false,
                             pipe_write_observer_fn observer_ = NULL,
-                            void *observer_userdata_ = NULL);
+                            void *observer_userdata_ = NULL,
+                            routed_send_attempt_identity_t
+                              *attempt_identity_out_ = NULL,
+                            uint64_t expected_route_incarnation_id_ = 0);
     int select_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_);
@@ -314,6 +322,7 @@ class socket_base_t : public own_t,
 #ifdef ZLINK_BUILD_TESTS
     //  Test-only synchronized snapshot of the socket monitor readiness set.
     uint32_t test_monitor_ready_count () const;
+    static uint64_t test_local_peer_weight_send_attempt_count ();
     //  Test-only observation and injection for the completion-lane flow state.
     //  These compile out of the shipped runtime, so nothing here is reachable
     //  from a hot path.
@@ -544,6 +553,7 @@ class socket_base_t : public own_t,
     void flow_pause_released_on_termination (pipe_t *pipe_);
     void flow_state_applied (pipe_t *pipe_, bool paused_, uint64_t epoch_,
                              bool actual_writable_) ZLINK_FINAL;
+    void peer_weight_received (pipe_t *pipe_, uint32_t weight_) ZLINK_FINAL;
 
     int monitor (const char *endpoint_,
                  uint64_t events_,
@@ -699,10 +709,32 @@ class socket_base_t : public own_t,
                               uint64_t expected_transport_pair_generation_ = 0,
                               pipe_message_admission_t *admission_out_ = NULL,
                               pipe_write_observer_fn observer_ = NULL,
-                              void *observer_userdata_ = NULL);
+                              void *observer_userdata_ = NULL,
+                              routed_send_attempt_identity_t
+                                *attempt_identity_out_ = NULL,
+                              uint64_t expected_route_incarnation_id_ = 0);
     virtual int xselect_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_);
+    virtual int xselect_routed_submit_target_internal (
+      const zlink_routing_id_t *router_rid_or_null_,
+      zlink_routed_submit_target_t *target_out_,
+      uint64_t *transport_connection_id_out_,
+      uint64_t *route_incarnation_id_out_);
+    // ROUTER can replace a route from direct I/O dispatch while send_async is
+    // between physical EAGAIN and pending publication. Concrete sockets that
+    // have such a route fence validate and publish under that fence followed by
+    // send_pending_runtime::sync. No path may take those locks in reverse.
+    virtual std::mutex *send_pending_target_mutex () const
+    {
+        return NULL;
+    }
+    virtual bool xsend_pending_target_current_locked (
+      const routed_send_target_key_t &target_) const
+    {
+        LIBZLINK_UNUSED (target_);
+        return true;
+    }
     virtual bool xsubmit_retry_allowed (const zlink_routing_id_t *target_rid_, int err_) const;
     virtual int xrollback ();
 
@@ -723,6 +755,14 @@ class socket_base_t : public own_t,
     virtual int xpeer_command (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
     virtual void xlocal_peer_weight_changed ();
     virtual int apply_peer_weight (zlink::pipe_t *pipe_, uint32_t weight_);
+    virtual void initialize_peer_weight (zlink::pipe_t *pipe_,
+                                         uint32_t weight_);
+    void initialize_recorded_peer_weight (zlink::pipe_t *pipe_);
+    // Caller holds pipe_->transport_sync() until the scheduler publishes the
+    // returned value. This keeps reconnect generation changes ordered before
+    // route/LB visibility without taking route locks in the inverse order.
+    bool recorded_peer_weight_ready_locked (zlink::pipe_t *pipe_,
+                                            uint32_t *weight_out_) const;
     virtual void xarm_socket_msg_dispatch ();
     virtual void xdispatch_io ();
     virtual uint32_t monitor_ready_count () const;
@@ -743,10 +783,10 @@ class socket_base_t : public own_t,
                                     size_t part_count_);
     static void store_socket_msg_part (std::vector<zlink_msg_t> *parts_,
                                        zlink::msg_t *msg_);
-    static int init_peer_weight_command (zlink::msg_t *msg_, uint32_t weight_);
-    static bool decode_peer_weight_command (const zlink::msg_t &msg_, uint32_t *weight_out_);
+    int accept_peer_weight (pipe_t *pipe_, uint32_t weight_);
+    bool deliver_local_peer_weight (pipe_t *pipe_, uint32_t weight_);
     void broadcast_local_peer_weight ();
-    void send_local_peer_weight (pipe_t *pipe_);
+    bool send_local_peer_weight (pipe_t *pipe_);
 
     //  Completion-lane flow state. The frame is Core internal: it is written on
     //  the completion lane as a command frame and consumed by the peer's Core,
@@ -821,11 +861,13 @@ class socket_base_t : public own_t,
     void fail_send_pending_for_target (const zlink_routing_id_t *peer_rid_,
                                        uint64_t transport_pair_id_,
                                        uint64_t transport_pair_generation_,
-                                       int terminal_errno_);
+                                       int terminal_errno_,
+                                       uint64_t route_incarnation_id_ = 0);
     void emit_socket_monitor_value_event (uint64_t event_,
                                           uint64_t value_,
                                           const endpoint_uri_pair_t &endpoint_uri_pair_);
-    void emit_peer_weight_changed (pipe_t *pipe_, uint32_t weight_);
+    void emit_peer_weight_changed (pipe_t *pipe_, uint32_t weight_,
+                                   const blob_t *public_routing_id_ = NULL);
     void snapshot_attached_pipes (std::vector<pipe_t *> *out_);
     bool has_attached_pipes () const;
 
@@ -847,7 +889,6 @@ class socket_base_t : public own_t,
     // logical multipart wrappers. Keep the admission/sync decision and the
     // blocking retry runner behind one internal boundary so future structural
     // candidates can change them independently.
-    bool direct_send_needs_public_api_sync () const;
     int send_direct_with_retry (const zlink_routing_id_t *target_rid_,
                                 zlink::msg_t *msg_,
                                 int flags_,
@@ -861,7 +902,10 @@ class socket_base_t : public own_t,
                                 bool record_context_admission_ = true,
                                 bool commands_already_processed_ = false,
                                 pipe_write_observer_fn observer_ = NULL,
-                                void *observer_userdata_ = NULL);
+                                void *observer_userdata_ = NULL,
+                                routed_send_attempt_identity_t
+                                  *attempt_identity_out_ = NULL,
+                                uint64_t expected_route_incarnation_id_ = 0);
 
     enum
     {
@@ -1026,6 +1070,9 @@ class socket_base_t : public own_t,
     void test_set_send_inline_fallback_hook (
       socket_send_pending_runtime_t::inline_fallback_hook_fn hook_,
       void *userdata_);
+    void test_set_send_target_failure_progress_hook (
+      socket_send_pending_runtime_t::target_failure_progress_hook_fn hook_,
+      void *userdata_);
     void test_set_send_deadline_enqueue_hook (
       socket_send_pending_runtime_t::deadline_enqueue_hook_fn hook_,
       void *userdata_);
@@ -1042,6 +1089,11 @@ class socket_base_t : public own_t,
     //  Claim/finish helpers used by the admit loop.
     bool claim_send_pending_head (send_pending_record_t **out_);
     int try_admit_send_pending (send_pending_record_t *record_);
+    int select_routed_submit_target_internal (
+      const zlink_routing_id_t *router_rid_or_null_,
+      zlink_routed_submit_target_t *target_out_,
+      uint64_t *transport_connection_id_out_,
+      uint64_t *route_incarnation_id_out_);
     int try_admit_send_parts (zlink_msg_t *parts_,
                               size_t part_count_,
                               const routed_send_target_key_t &target_,
@@ -1172,7 +1224,8 @@ class routing_socket_base_t : public socket_base_t
         uint32_t weight;
     };
 
-    void add_out_pipe (blob_t routing_id_, pipe_t *pipe_, bool locally_initiated_);
+    void add_out_pipe (blob_t routing_id_, pipe_t *pipe_,
+                       bool locally_initiated_, uint32_t initial_weight_ = 100);
     bool has_out_pipe (const blob_t &routing_id_) const;
     out_pipe_t *lookup_out_pipe (const blob_t &routing_id_);
     const out_pipe_t *lookup_out_pipe (const blob_t &routing_id_) const;
@@ -1185,6 +1238,13 @@ class routing_socket_base_t : public socket_base_t
     bool has_writable_weighted_out_pipes () const;
     bool xsubmit_retry_allowed (const zlink_routing_id_t *target_rid_,
                                 int err_) const ZLINK_OVERRIDE;
+    // ROUTER mutates routes from direct I/O dispatch and supplies a lifecycle
+    // fence. STREAM remains owner-serialized and returns no mutex, avoiding a
+    // partial lock policy on its independent routing path.
+    virtual std::mutex *route_lifecycle_mutex () const
+    {
+        return NULL;
+    }
     template <typename Func> bool any_of_out_pipes (Func func_)
     {
         bool res = false;

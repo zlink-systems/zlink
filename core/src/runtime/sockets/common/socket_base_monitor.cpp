@@ -655,16 +655,20 @@ void zlink::socket_base_t::emit_socket_monitor_value_event (
     event (endpoint_uri_pair_, NULL, 0, values, 1, event_);
 }
 
-void zlink::socket_base_t::emit_peer_weight_changed (pipe_t *pipe_, uint32_t weight_)
+void zlink::socket_base_t::emit_peer_weight_changed (
+  pipe_t *pipe_, uint32_t weight_, const blob_t *public_routing_id_)
 {
     if (!pipe_)
         return;
 
-    const blob_t &routing_id = pipe_->get_routing_id ();
+    const blob_t &routing_id =
+      public_routing_id_ ? *public_routing_id_ : pipe_->get_routing_id ();
     const unsigned char *routing_id_data = routing_id.size () > 0 ? routing_id.data () : NULL;
     uint64_t values[1] = {static_cast<uint64_t> (weight_)};
     event (pipe_->get_endpoint_pair (), routing_id_data, routing_id.size (), values, 1,
-           ZLINK_EVENT_PEER_WEIGHT_CHANGED);
+           ZLINK_EVENT_PEER_WEIGHT_CHANGED, 0, pipe_->get_transport_lane (),
+           pipe_->get_transport_pair_id (),
+           pipe_->get_transport_pair_generation ());
 }
 
 void zlink::socket_base_t::event (const endpoint_uri_pair_t &endpoint_uri_pair_,

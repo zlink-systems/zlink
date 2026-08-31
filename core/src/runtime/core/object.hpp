@@ -80,6 +80,9 @@ class object_t
     void send_flow_state (zlink::pipe_t *destination_,
                           unsigned char state_,
                           uint64_t epoch_);
+    bool send_peer_weight (zlink::pipe_t *destination_,
+                           uint32_t weight_,
+                           uint64_t connection_id_);
     void send_hiccup (zlink::pipe_t *destination_, void *pipe_, uint64_t generation_);
     void send_pipe_term (zlink::pipe_t *destination_);
     bool send_pipe_term_ack (zlink::pipe_t *destination_);
@@ -106,6 +109,8 @@ class object_t
                                          uint64_t msgs_read_,
                                          uint64_t bytes_read_);
     virtual void process_flow_state (unsigned char state_, uint64_t epoch_);
+    virtual void process_peer_weight (uint32_t weight_,
+                                      uint64_t connection_id_);
     virtual void process_send_pending_timeout (uint64_t op_id_);
     virtual void process_hiccup (void *pipe_, uint64_t generation_);
     virtual void process_pipe_term ();

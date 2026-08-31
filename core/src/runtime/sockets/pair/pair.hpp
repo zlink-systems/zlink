@@ -47,6 +47,12 @@ class pair_t ZLINK_FINAL : public socket_base_t
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (pair_t)
 };
+
+#ifdef ZLINK_BUILD_TESTS
+typedef void (*pair_xsend_gate_hook_fn) (void *userdata_);
+void test_set_pair_xsend_gate_hook (pair_xsend_gate_hook_fn hook_,
+                                    void *userdata_);
+#endif
 }
 
 #endif

@@ -358,7 +358,8 @@ struct socket_receive_runtime_t
     std::atomic<void *> record_hook_userdata;
     typedef void (*command_sync_probe_hook_fn) (void *userdata_,
                                                 int command_type_,
-                                                bool sync_was_busy_);
+                                                bool receive_sync_was_busy_,
+                                                bool public_api_sync_owned_);
     std::atomic<command_sync_probe_hook_fn> command_sync_probe_hook;
     std::atomic<void *> command_sync_probe_userdata;
 #endif
@@ -484,18 +485,56 @@ class socket_receive_record_scope_t
     ZLINK_NON_COPYABLE_NOR_MOVABLE (socket_receive_record_scope_t)
 };
 
+// Immutable physical route selected for one routed write attempt. This value
+// survives an EAGAIN result; unlike pipe_t*, it does not borrow the selected
+// pipe's lifetime while an async submit prepares its pending key.
+struct routed_send_attempt_identity_t
+{
+    routed_send_attempt_identity_t () :
+        transport_pair_id (0),
+        transport_pair_generation (0),
+        transport_connection_id (0),
+        route_incarnation_id (0)
+    {
+    }
+
+    void reset ()
+    {
+        transport_pair_id = 0;
+        transport_pair_generation = 0;
+        transport_connection_id = 0;
+        route_incarnation_id = 0;
+    }
+
+    uint64_t transport_pair_id;
+    uint64_t transport_pair_generation;
+    // Mutable engine generation observed by this one physical attempt. It is
+    // retained for wire/message stamping decisions, not as the identity of an
+    // unpaired ROUTER pending queue across reconnect.
+    uint64_t transport_connection_id;
+    // Set only for an unpaired ROUTER attempt.
+    uint64_t route_incarnation_id;
+};
+
 struct routed_send_target_key_t
 {
-    routed_send_target_key_t () : transport_pair_id (0), transport_pair_generation (0) {}
+    routed_send_target_key_t () :
+        transport_pair_id (0),
+        transport_pair_generation (0),
+        route_incarnation_id (0)
+    {
+    }
     routed_send_target_key_t (const void *routing_id_,
                               size_t routing_id_size_,
                               uint64_t transport_pair_id_,
-                              uint64_t transport_pair_generation_) :
+                              uint64_t transport_pair_generation_,
+                              uint64_t route_incarnation_id_ = 0) :
         peer_rid (routing_id_ && routing_id_size_
                     ? std::string (static_cast<const char *> (routing_id_), routing_id_size_)
                     : std::string ()),
         transport_pair_id (transport_pair_id_),
-        transport_pair_generation (transport_pair_generation_)
+        transport_pair_generation (transport_pair_generation_),
+        route_incarnation_id (route_incarnation_id_)
     {
     }
 
@@ -505,12 +544,18 @@ struct routed_send_target_key_t
             return peer_rid < other_.peer_rid;
         if (transport_pair_id != other_.transport_pair_id)
             return transport_pair_id < other_.transport_pair_id;
-        return transport_pair_generation < other_.transport_pair_generation;
+        if (transport_pair_generation != other_.transport_pair_generation)
+            return transport_pair_generation < other_.transport_pair_generation;
+        return route_incarnation_id < other_.route_incarnation_id;
     }
 
     std::string peer_rid;
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
+    // Immutable identity of one physical unpaired ROUTER pipepair. It is
+    // independent of the mutable network connection id, so an engine reset
+    // cannot orphan pending work and a replacement pipe cannot consume it.
+    uint64_t route_incarnation_id;
 };
 
 //  One pending asynchronous send record. Core owns every part in `parts`
@@ -582,6 +627,8 @@ struct socket_send_pending_runtime_t
         , gate_release_hook (NULL), gate_release_hook_userdata (NULL),
         gate_release_hook_generation (0), gate_release_hook_active (0),
         inline_fallback_hook (NULL), inline_fallback_hook_userdata (NULL),
+        target_failure_progress_hook (NULL),
+        target_failure_progress_hook_userdata (NULL),
         deadline_enqueue_hook (NULL), deadline_enqueue_hook_userdata (NULL),
         fail_after_queue_push (false)
 #endif
@@ -600,8 +647,9 @@ struct socket_send_pending_runtime_t
     //  even for a completion resolved before the submitting call returns.
     std::atomic<uint32_t> public_async_depth;
     zlink_send_op_id_t next_op_id;
-    //  Plain sockets use the default-constructed key; routed sockets key by
-    //  peer rid + transport pair identity + generation.
+    //  Plain sockets use the default-constructed key. Paired routed sockets
+    //  key by peer rid + transport pair identity/generation; an unpaired
+    //  ROUTER uses peer rid + its immutable physical route incarnation.
     std::map<routed_send_target_key_t, std::deque<send_pending_record_t *> >
       queues;
     //  Reserves per-target ordering while a submitter attempts the direct
@@ -640,6 +688,9 @@ struct socket_send_pending_runtime_t
     typedef void (*inline_fallback_hook_fn) (void *userdata_);
     inline_fallback_hook_fn inline_fallback_hook;
     void *inline_fallback_hook_userdata;
+    typedef void (*target_failure_progress_hook_fn) (void *userdata_);
+    target_failure_progress_hook_fn target_failure_progress_hook;
+    void *target_failure_progress_hook_userdata;
     typedef void (*deadline_enqueue_hook_fn) (void *userdata_);
     deadline_enqueue_hook_fn deadline_enqueue_hook;
     void *deadline_enqueue_hook_userdata;
@@ -703,7 +754,8 @@ class socket_lifecycle_coordinator_t
         async_quiesce_pending (false),
         async_processing_done (true),
         async_processing_started (false),
-        async_quiesce_completed (false)
+        async_quiesce_completed (false),
+        _previous_thread_public_api_sync_owner (NULL)
     {
     }
 
@@ -730,6 +782,7 @@ class socket_lifecycle_coordinator_t
     bool begin_close_or_fail_busy (bool from_self_callback_);
     bool public_close_requested () const;
     bool public_api_sync_held () const;
+    bool public_api_sync_owned_by_current_thread () const;
     void lock_public_api_sync ();
     void unlock_public_api_sync ();
     void unlock_public_api_sync_and_leave ();
@@ -779,6 +832,14 @@ class socket_lifecycle_coordinator_t
     std::atomic<bool> async_quiesce_completed;
     mutex_t async_done_mu;
     condition_variable_t async_done_cv;
+
+  private:
+    void mark_public_api_sync_owned ();
+    void unmark_public_api_sync_owned ();
+
+    static thread_local socket_lifecycle_coordinator_t
+      *_current_thread_public_api_sync_owner;
+    socket_lifecycle_coordinator_t *_previous_thread_public_api_sync_owner;
 };
 
 class socket_callback_scope_t
@@ -819,10 +880,12 @@ class socket_public_api_scope_t
 class socket_public_api_lock_scope_t
 {
   public:
-    explicit socket_public_api_lock_scope_t (socket_lifecycle_coordinator_t &coordinator_) :
-        _coordinator (&coordinator_), _locked (true)
+    explicit socket_public_api_lock_scope_t (
+      socket_lifecycle_coordinator_t &coordinator_, bool lock_ = true) :
+        _coordinator (&coordinator_), _locked (lock_)
     {
-        _coordinator->lock_public_api_sync ();
+        if (_locked)
+            _coordinator->lock_public_api_sync ();
     }
 
     ~socket_public_api_lock_scope_t ()

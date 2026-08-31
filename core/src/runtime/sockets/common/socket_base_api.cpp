@@ -348,9 +348,15 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
                 }
             }
         }
-        if (ready_application)
-            transport_write_released =
-              ready_application->release_writes_for_transport_pair ();
+    }
+    // Install a cached pre-ready absolute policy while the Application pipe
+    // is still held. This is initial scheduler state, so it is monitor-silent;
+    // later owner commands publish only real dynamic transitions. The helper
+    // takes transport-generation before any derived route lock.
+    if (ready_application) {
+        initialize_recorded_peer_weight (ready_application);
+        transport_write_released =
+          ready_application->release_writes_for_transport_pair ();
     }
     //  Publishing an edge calls back into the socket and cannot run under the
     //  table mutex, so a state accepted in between can leave this edge
@@ -371,6 +377,10 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     if (publish_flow_edge)
         write_activated (flow_edge_pipe);
     if (transport_write_released) {
+        //  xattach_pipe() deliberately attempts no speculative paired
+        //  control write: the Application lane was still held then. This is
+        //  the one local-policy readiness resync for the current generation.
+        (void) send_local_peer_weight (ready_application);
         write_activated (ready_application);
         // A routed async submit can already be parked on transport_wait when
         // the Application/Completion pair becomes Ready. HWM recovery emits
@@ -487,8 +497,12 @@ int zlink::socket_base_t::setsockopt (int option_, const void *optval_, size_t o
                 _manual_rcvhwm = true;
 
             if (option_ == ZLINK_INTERNAL_OPT_PEER_WEIGHT) {
-                _local_peer_weight = static_cast<uint32_t> (options.peer_weight);
-                xlocal_peer_weight_changed ();
+                const uint32_t weight =
+                  static_cast<uint32_t> (options.peer_weight);
+                if (_local_peer_weight != weight) {
+                    _local_peer_weight = weight;
+                    xlocal_peer_weight_changed ();
+                }
             }
         }
         update_pipe_options (option_);

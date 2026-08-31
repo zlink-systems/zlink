@@ -188,6 +188,16 @@ void zlink::socket_base_t::test_set_send_inline_fallback_hook (
     pending.inline_fallback_hook_userdata = userdata_;
 }
 
+void zlink::socket_base_t::test_set_send_target_failure_progress_hook (
+  socket_send_pending_runtime_t::target_failure_progress_hook_fn hook_,
+  void *userdata_)
+{
+    socket_send_pending_runtime_t &pending = send_pending_runtime ();
+    scoped_lock_t lock (pending.sync);
+    pending.target_failure_progress_hook = hook_;
+    pending.target_failure_progress_hook_userdata = userdata_;
+}
+
 void zlink::socket_base_t::test_set_send_deadline_enqueue_hook (
   socket_send_pending_runtime_t::deadline_enqueue_hook_fn hook_,
   void *userdata_)
@@ -492,10 +502,12 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
             const int rc =
               routed_start
                 ? send_direct_with_retry (
-                    &rid, msg, flags, scope, NULL, 0, false,
+                    &rid, msg, flags, scope, NULL,
+                    0, false,
                     attempted_pipe_out_, target_.transport_pair_id,
                     target_.transport_pair_generation, true,
-                    commands_already_processed_)
+                    commands_already_processed_, NULL, NULL, NULL,
+                    target_.route_incarnation_id)
                 : send_direct_with_retry (
                     NULL, msg, flags, scope, NULL, 0, false, NULL, 0, 0,
                     true, commands_already_processed_);
@@ -857,12 +869,13 @@ void zlink::socket_base_t::notify_incremental_send_released ()
 
 void zlink::socket_base_t::fail_send_pending_for_target (
   const zlink_routing_id_t *peer_rid_, uint64_t transport_pair_id_,
-  uint64_t transport_pair_generation_, int terminal_errno_)
+  uint64_t transport_pair_generation_, int terminal_errno_,
+  uint64_t route_incarnation_id_)
 {
     const bool pair_default_target =
       options.type == ZLINK_CORE_SOCKET_PAIR && peer_rid_
       && peer_rid_->size == 0 && transport_pair_id_ == 0
-      && transport_pair_generation_ == 0;
+      && transport_pair_generation_ == 0 && route_incarnation_id_ == 0;
     if (!send_complete_handler_active ()
         || (!pair_default_target && !valid_routing_id (peer_rid_)))
         return;
@@ -881,6 +894,8 @@ void zlink::socket_base_t::fail_send_pending_for_target (
                 if (candidate.transport_pair_id != transport_pair_id_
                     || candidate.transport_pair_generation
                          != transport_pair_generation_
+                    || candidate.route_incarnation_id
+                         != route_incarnation_id_
                     || candidate.peer_rid.size () != peer_rid_->size
                     || (peer_rid_->size > 0
                         && memcmp (candidate.peer_rid.data (), peer_rid_->data,
@@ -906,6 +921,20 @@ void zlink::socket_base_t::fail_send_pending_for_target (
             break;
         finish_send_pending (doomed, ZLINK_SEND_TERMINAL, terminal_errno_);
         completed_any = true;
+#ifdef ZLINK_BUILD_TESTS
+        socket_send_pending_runtime_t::target_failure_progress_hook_fn hook =
+          NULL;
+        void *hook_userdata = NULL;
+        {
+            scoped_lock_t lock (pending.sync);
+            hook = pending.target_failure_progress_hook;
+            hook_userdata = pending.target_failure_progress_hook_userdata;
+        }
+        // Deterministically expose the inter-iteration publication window. The
+        // hook runs without pending/route locks, matching a concurrent submit.
+        if (hook)
+            hook (hook_userdata);
+#endif
     }
     if (completed_any)
         dispatch_send_completions_if_local ();
@@ -935,12 +964,15 @@ void zlink::socket_base_t::fail_send_pending_for_pipe (pipe_t *pipe_,
 
     uint64_t pair_id = pipe_->get_transport_pair_id ();
     uint64_t pair_generation = pipe_->get_transport_pair_generation ();
+    uint64_t route_incarnation_id = 0;
     //  STREAM peers do not negotiate a completion lane, so their stable
     //  transport connection id is the exact target identity - the same
     //  substitution STREAM select and STREAM exact submit use.
     if (options.type == ZLINK_CORE_SOCKET_STREAM && pair_id == 0) {
         pair_id = pipe_->get_transport_connection_id ();
         pair_generation = pair_id == 0 ? 0 : 1;
+    } else if (options.type == ZLINK_CORE_SOCKET_ROUTER && pair_id == 0) {
+        route_incarnation_id = pipe_->get_route_incarnation_id ();
     }
     zlink_routing_id_t peer_rid;
     memset (&peer_rid, 0, sizeof (peer_rid));
@@ -948,7 +980,7 @@ void zlink::socket_base_t::fail_send_pending_for_pipe (pipe_t *pipe_,
         copy_routing_id_from_bytes (routing_id.data (), routing_id.size (),
                                     &peer_rid);
     fail_send_pending_for_target (&peer_rid, pair_id, pair_generation,
-                                  terminal_errno_);
+                                  terminal_errno_, route_incarnation_id);
 }
 
 //  close / ctx term: fail fast. LINGER covers bytes already admitted to a

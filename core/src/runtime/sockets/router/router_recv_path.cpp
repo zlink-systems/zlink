@@ -68,7 +68,7 @@ void zlink::router_t::copy_router_pipe_source_rid (pipe_t *pipe_,
         return;
 
     std::lock_guard<std::mutex> route_lifecycle_lock (
-      _dispatch_route_lifecycle_mu);
+      _out_pipes_sync);
     //  A reciprocal duplicate keeps its physical pipe under an internal
     //  standby ID, while the application-facing peer identity remains the
     //  original node routing ID. Request replies still retain source_pipe,
@@ -79,15 +79,11 @@ void zlink::router_t::copy_router_pipe_source_rid (pipe_t *pipe_,
       standby != _standby_pipes.end () ? &standby->second : &pipe_->get_routing_id ();
     if (routing_id->size () > 0) {
         copy_routing_id_from_bytes (routing_id->data (), routing_id->size (), out_);
-        return;
     }
-
-    pipe_t *peer = pipe_->get_peer ();
-    if (!peer)
-        return;
-
-    const blob_t &peer_routing_id = peer->get_routing_id ();
-    copy_routing_id_from_bytes (peer_routing_id.data (), peer_routing_id.size (), out_);
+    // Only registered ROUTER scheduler endpoints reach the receive path. An
+    // empty local route is therefore not repaired by dereferencing the peer:
+    // the peer link has a separate lifetime domain and is not protected by the
+    // ROUTER route fence.
 }
 
 void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool locally_initiated_)
@@ -96,7 +92,13 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
 
     zlink_assert (pipe_);
 
-    if (_probe_router) {
+    bool probe_router = false;
+    {
+        std::lock_guard<std::mutex> route_lifecycle_lock (
+          _out_pipes_sync);
+        probe_router = _probe_router;
+    }
+    if (probe_router) {
         msg_t probe_msg;
         int rc = probe_msg.init ();
         errno_assert (rc == 0);
@@ -110,35 +112,26 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
         errno_assert (rc == 0);
     }
 
-    std::lock_guard<std::mutex> route_lifecycle_lock (
-      _dispatch_route_lifecycle_mu);
-    const bool routing_id_ok = identify_peer (pipe_, locally_initiated_);
-    if (router_debug_enabled ()) {
-        fprintf (stderr, "router xattach_pipe: pipe=%p local=%d routing_id_ok=%d lane=%d pair=%llu/%llu\n",
-                 static_cast<void *> (pipe_), locally_initiated_ ? 1 : 0,
-                 routing_id_ok ? 1 : 0,
-                 static_cast<int> (pipe_->get_transport_lane ()),
-                 static_cast<unsigned long long> (pipe_->get_transport_pair_id ()),
-                 static_cast<unsigned long long> (pipe_->get_transport_pair_generation ()));
-    }
-    if (routing_id_ok) {
-        _fq.attach (pipe_);
-        const bool ready = pipe_->check_read ();
-        if (socket_msg_dispatch_active ()) {
-            _fq.deactivate (pipe_);
-            if (ready)
-                defer_socket_msg_dispatch ();
+    bool scheduler_registered = false;
+    route_adoption_actions_t adoption_actions;
+    {
+        scoped_fast_lock_t generation_lock (pipe_->transport_sync ());
+        uint32_t initial_weight = 100;
+        (void) recorded_peer_weight_ready_locked (pipe_, &initial_weight);
+        std::lock_guard<std::mutex> route_lifecycle_lock (_out_pipes_sync);
+        const bool routing_id_ok = identify_peer (
+          pipe_, locally_initiated_, &adoption_actions, initial_weight);
+        if (router_debug_enabled ()) {
+            fprintf (stderr, "router xattach_pipe: pipe=%p local=%d routing_id_ok=%d lane=%d pair=%llu/%llu\n",
+                     static_cast<void *> (pipe_), locally_initiated_ ? 1 : 0,
+                     routing_id_ok ? 1 : 0,
+                     static_cast<int> (pipe_->get_transport_lane ()),
+                     static_cast<unsigned long long> (pipe_->get_transport_pair_id ()),
+                     static_cast<unsigned long long> (pipe_->get_transport_pair_generation ()));
         }
-        if (local_peer_weight () != 100)
-            send_local_peer_weight (pipe_);
-    } else {
-        const blob_t &routing_id = pipe_->get_routing_id ();
-        const out_pipe_t *const out_pipe =
-          routing_id.size () > 0 ? lookup_out_pipe (routing_id) : NULL;
-        pipe_t *const peer = pipe_->get_peer ();
-        if (out_pipe && (out_pipe->pipe == pipe_ || out_pipe->pipe == peer)) {
-            _anonymous_pipes.erase (pipe_);
+        if (routing_id_ok) {
             _fq.attach (pipe_);
+            scheduler_registered = true;
             const bool ready = pipe_->check_read ();
             if (socket_msg_dispatch_active ()) {
                 _fq.deactivate (pipe_);
@@ -146,44 +139,82 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
                     defer_socket_msg_dispatch ();
             }
         } else {
-            _anonymous_pipes[pipe_] = locally_initiated_;
+            const blob_t &routing_id = pipe_->get_routing_id ();
+            const out_pipe_t *const out_pipe =
+              routing_id.size () > 0 ? lookup_out_pipe (routing_id) : NULL;
+            if (out_pipe && out_pipe->pipe == pipe_) {
+                _anonymous_pipes.erase (pipe_);
+                _fq.attach (pipe_);
+                scheduler_registered = true;
+                const bool ready = pipe_->check_read ();
+                if (socket_msg_dispatch_active ()) {
+                    _fq.deactivate (pipe_);
+                    if (ready)
+                        defer_socket_msg_dispatch ();
+                }
+            } else {
+                _anonymous_pipes[pipe_] = locally_initiated_;
+            }
         }
+    }
+    finish_route_adoption (pipe_, &adoption_actions);
+    if (scheduler_registered) {
+        if (local_peer_weight () != 100)
+            (void) send_local_peer_weight (pipe_);
+        (void) emit_transport_pair_ready (pipe_);
     }
 }
 
 void zlink::router_t::xread_activated (pipe_t *pipe_)
 {
     bool dispatch_ready = false;
-    std::lock_guard<std::mutex> route_lifecycle_lock (
-      _dispatch_route_lifecycle_mu);
-    const std::map<pipe_t *, bool>::iterator it = _anonymous_pipes.find (pipe_);
-    if (router_debug_enabled ()) {
-        char rid_text[160];
-        format_blob_routing_id_debug (pipe_->get_routing_id (), rid_text, sizeof (rid_text));
-        fprintf (stderr, "router xread_activated: pipe=%p anonymous=%d pipe_rid=%s lane=%d pair=%llu/%llu\n",
-                 static_cast<void *> (pipe_), it != _anonymous_pipes.end () ? 1 : 0, rid_text,
-                 static_cast<int> (pipe_->get_transport_lane ()),
-                 static_cast<unsigned long long> (pipe_->get_transport_pair_id ()),
-                 static_cast<unsigned long long> (pipe_->get_transport_pair_generation ()));
-    }
-    if (it == _anonymous_pipes.end ())
-        _fq.activated (pipe_);
-    else {
-        const bool routing_id_ok = identify_peer (pipe_, it->second);
+    bool route_adopted = false;
+    route_adoption_actions_t adoption_actions;
+    {
+        scoped_fast_lock_t generation_lock (pipe_->transport_sync ());
+        uint32_t initial_weight = 100;
+        (void) recorded_peer_weight_ready_locked (pipe_, &initial_weight);
+        std::lock_guard<std::mutex> route_lifecycle_lock (_out_pipes_sync);
+        const std::map<pipe_t *, bool>::iterator it =
+          _anonymous_pipes.find (pipe_);
         if (router_debug_enabled ()) {
-            fprintf (stderr, "router xread_activated identify_peer: pipe=%p ok=%d\n",
-                     static_cast<void *> (pipe_), routing_id_ok ? 1 : 0);
+            char rid_text[160];
+            format_blob_routing_id_debug (pipe_->get_routing_id (), rid_text,
+                                          sizeof (rid_text));
+            fprintf (stderr, "router xread_activated: pipe=%p anonymous=%d pipe_rid=%s lane=%d pair=%llu/%llu\n",
+                     static_cast<void *> (pipe_),
+                     it != _anonymous_pipes.end () ? 1 : 0, rid_text,
+                     static_cast<int> (pipe_->get_transport_lane ()),
+                     static_cast<unsigned long long> (pipe_->get_transport_pair_id ()),
+                     static_cast<unsigned long long> (pipe_->get_transport_pair_generation ()));
         }
-        if (routing_id_ok) {
-            _anonymous_pipes.erase (it);
-            _fq.attach (pipe_);
-            (void) pipe_->check_read ();
+        if (it == _anonymous_pipes.end ()) {
+            _fq.activated (pipe_);
+        } else {
+            const bool routing_id_ok = identify_peer (
+              pipe_, it->second, &adoption_actions, initial_weight);
+            if (router_debug_enabled ()) {
+                fprintf (stderr, "router xread_activated identify_peer: pipe=%p ok=%d\n",
+                         static_cast<void *> (pipe_), routing_id_ok ? 1 : 0);
+            }
+            if (routing_id_ok) {
+                _anonymous_pipes.erase (it);
+                _fq.attach (pipe_);
+                (void) pipe_->check_read ();
+                route_adopted = true;
+            }
         }
-    }
 
-    dispatch_ready = socket_msg_dispatch_active ();
-    if (dispatch_ready)
-        defer_socket_msg_dispatch ();
+        dispatch_ready = socket_msg_dispatch_active ();
+        if (dispatch_ready)
+            defer_socket_msg_dispatch ();
+    }
+    finish_route_adoption (pipe_, &adoption_actions);
+    if (route_adopted) {
+        if (local_peer_weight () != 100)
+            (void) send_local_peer_weight (pipe_);
+        (void) emit_transport_pair_ready (pipe_);
+    }
 }
 
 void zlink::router_t::reset_current_in_after_multipart_abort ()
@@ -426,6 +457,8 @@ bool zlink::router_t::xhas_in ()
 
 int zlink::router_t::get_peer_state (const void *routing_id_, size_t routing_id_size_) const
 {
+    std::lock_guard<std::mutex> route_lifecycle_lock (
+      _out_pipes_sync);
     int res = 0;
 
     const blob_t routing_id_blob (static_cast<unsigned char *> (const_cast<void *> (routing_id_)),

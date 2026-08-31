@@ -33,6 +33,9 @@ zlink::routing_socket_base_t::~routing_socket_base_t ()
 
 int zlink::routing_socket_base_t::xsetsockopt (int option_, const void *optval_, size_t optvallen_)
 {
+    std::unique_lock<std::mutex> route_lifecycle_lock;
+    if (std::mutex *const sync = route_lifecycle_mutex ())
+        route_lifecycle_lock = std::unique_lock<std::mutex> (*sync);
     switch (option_) {
         case ZLINK_INTERNAL_OPT_CONNECT_ROUTING_ID:
             if (!optval_ || optvallen_ == 0) {
@@ -49,6 +52,9 @@ int zlink::routing_socket_base_t::xsetsockopt (int option_, const void *optval_,
 
 void zlink::routing_socket_base_t::xwrite_activated (pipe_t *pipe_)
 {
+    std::unique_lock<std::mutex> route_lifecycle_lock;
+    if (std::mutex *const sync = route_lifecycle_mutex ())
+        route_lifecycle_lock = std::unique_lock<std::mutex> (*sync);
     const out_pipe_index_t::iterator index_it = _out_pipe_index.find (pipe_);
     // ROUTER keeps a duplicate peer in the anonymous set when handover is
     // disabled. A paired transport can release that pipe's initial write hold
@@ -72,9 +78,11 @@ bool zlink::routing_socket_base_t::connect_routing_id_is_set () const
 
 void zlink::routing_socket_base_t::add_out_pipe (blob_t routing_id_,
                                                  pipe_t *pipe_,
-                                                 bool locally_initiated_)
+                                                 bool locally_initiated_,
+                                                 uint32_t initial_weight_)
 {
-    const out_pipe_t outpipe = {pipe_, true, locally_initiated_, 100};
+    const uint32_t weight = std::min (initial_weight_, max_peer_weight);
+    const out_pipe_t outpipe = {pipe_, true, locally_initiated_, weight};
     if (locally_initiated_)
         _submit_retry_local_rids.insert (blob_t (routing_id_.data (), routing_id_.size ()));
     const std::pair<out_pipes_t::iterator, bool> insert_res =
@@ -82,7 +90,8 @@ void zlink::routing_socket_base_t::add_out_pipe (blob_t routing_id_,
     const bool ok = insert_res.second;
     zlink_assert (ok);
     _out_pipe_index[pipe_] = insert_res.first;
-    ++_writable_weighted_out_pipes;
+    if (weight != 0)
+        ++_writable_weighted_out_pipes;
 }
 
 bool zlink::routing_socket_base_t::has_out_pipe (const blob_t &routing_id_) const
@@ -152,16 +161,27 @@ int zlink::routing_socket_base_t::terminate_out_pipe_by_routing_id (
         return -1;
     }
 
-    blob_t routing_id (peer_rid_->data, peer_rid_->size);
-    _submit_retry_local_rids.erase (routing_id);
-    out_pipe_t *outpipe = lookup_out_pipe (routing_id);
-    if (!outpipe || !outpipe->pipe) {
-        errno = ENOENT;
-        return -1;
+    pipe_t *target = NULL;
+    {
+        std::unique_lock<std::mutex> route_lifecycle_lock;
+        if (std::mutex *const sync = route_lifecycle_mutex ())
+            route_lifecycle_lock = std::unique_lock<std::mutex> (*sync);
+        blob_t routing_id (peer_rid_->data, peer_rid_->size);
+        _submit_retry_local_rids.erase (routing_id);
+        out_pipe_t *outpipe = lookup_out_pipe (routing_id);
+        if (!outpipe || !outpipe->pipe
+            || !outpipe->pipe->retain_lifetime_ref ()) {
+            errno = ENOENT;
+            return -1;
+        }
+        target = outpipe->pipe;
     }
 
-    fail_send_pending_for_pipe (outpipe->pipe, ENOTCONN);
-    outpipe->pipe->terminate (false);
+    // Completion dispatch can invoke user code. Route-table state and its
+    // lifecycle fence must be fully released before that callback boundary.
+    fail_send_pending_for_pipe (target, ENOTCONN);
+    target->terminate (false);
+    target->release_lifetime_ref ();
     return 0;
 }
 
@@ -221,6 +241,9 @@ bool zlink::routing_socket_base_t::has_writable_weighted_out_pipes () const
 bool zlink::routing_socket_base_t::xsubmit_retry_allowed (const zlink_routing_id_t *target_rid_,
                                                           int err_) const
 {
+    std::unique_lock<std::mutex> route_lifecycle_lock;
+    if (std::mutex *const sync = route_lifecycle_mutex ())
+        route_lifecycle_lock = std::unique_lock<std::mutex> (*sync);
     if (!target_rid_ || !is_routing_submit_retry_errno (err_))
         return true;
 

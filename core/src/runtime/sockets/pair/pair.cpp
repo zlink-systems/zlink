@@ -7,6 +7,24 @@
 #include "core/pipe.hpp"
 #include "core/msg.hpp"
 
+#ifdef ZLINK_BUILD_TESTS
+namespace
+{
+std::atomic<zlink::pair_xsend_gate_hook_fn> g_pair_xsend_gate_hook (NULL);
+std::atomic<void *> g_pair_xsend_gate_userdata (NULL);
+}
+
+void zlink::test_set_pair_xsend_gate_hook (pair_xsend_gate_hook_fn hook_,
+                                           void *userdata_)
+{
+    if (!hook_)
+        g_pair_xsend_gate_hook.store (NULL, std::memory_order_release);
+    g_pair_xsend_gate_userdata.store (userdata_, std::memory_order_release);
+    if (hook_)
+        g_pair_xsend_gate_hook.store (hook_, std::memory_order_release);
+}
+#endif
+
 zlink::pair_t::pair_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     socket_base_t (parent_, tid_, sid_),
     _pipe (NULL),
@@ -79,6 +97,13 @@ int zlink::pair_t::xsend (
 {
     if (admission_out_)
         *admission_out_ = pipe_message_admission_invalid;
+#ifdef ZLINK_BUILD_TESTS
+    const pair_xsend_gate_hook_fn gate_hook =
+      g_pair_xsend_gate_hook.load (std::memory_order_acquire);
+    if (gate_hook)
+        gate_hook (g_pair_xsend_gate_userdata.load (
+          std::memory_order_acquire));
+#endif
     const bool more = (msg_->flags () & msg_t::more) != 0;
     pipe_message_admission_t admission = pipe_message_admission_inactive;
     const bool ok = _pipe

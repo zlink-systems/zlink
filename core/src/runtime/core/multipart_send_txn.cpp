@@ -13,9 +13,8 @@ struct multipart_send_facade_t
 {
     static socket_public_send_scope_t make_scope (socket_base_t *socket_, bool force_sync_)
     {
-        return socket_public_send_scope_t (socket_->lifecycle_coordinator (),
-                                           force_sync_
-                                             || socket_->direct_send_needs_public_api_sync (),
+        LIBZLINK_UNUSED (force_sync_);
+        return socket_public_send_scope_t (socket_->lifecycle_coordinator (), true,
                                            socket_send_admission_complete);
     }
 

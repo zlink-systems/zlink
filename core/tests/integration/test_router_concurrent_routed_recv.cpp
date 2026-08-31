@@ -34,14 +34,35 @@ class session_termination_test_access_t
         socket_->attach_pipe (pipe_);
     }
 
-    static bool dispatch_mutex_is_held_by_another_thread (socket_base_t *socket_)
+    static bool receive_mutex_is_held_by_another_thread (socket_base_t *socket_)
     {
-        std::recursive_mutex &sync =
-          socket_->dispatch_runtime ().socket_msg_dispatch_sync;
+        mutex_t &sync = socket_->receive_runtime ().sync;
         if (!sync.try_lock ())
             return true;
         sync.unlock ();
         return false;
+    }
+
+    static int recv_router_with_receive_lock (
+      router_t *router_, msg_t *msg_, bool routed_recv_,
+      zlink_routing_id_t *source_rid_out_)
+    {
+        // Async receive dispatch and its public receive fallback enter the
+        // concrete ROUTER reader through this base-owned lock domain.
+        scoped_lock_t receive_lock (router_->receive_runtime ().sync);
+        return routed_recv_
+                 ? router_->xrecv_routed (msg_, source_rid_out_, NULL)
+                 : router_->xrecv (msg_);
+    }
+
+    static void terminate_router_pipe_with_receive_lock (socket_base_t *socket_,
+                                                         pipe_t *pipe_)
+    {
+        // Mirror socket_base_t::pipe_terminated's receive-side phase without
+        // pretending that this synthetic pipe has completed its full physical
+        // termination lifecycle.
+        scoped_lock_t receive_lock (socket_->receive_runtime ().sync);
+        socket_->xpipe_terminated (pipe_);
     }
 
     static void reset_pipe_inbound_queue (pipe_t *pipe_)
@@ -100,7 +121,7 @@ struct fq_recv_termination_gate_t
         cancel_recv (false),
         termination_started (false),
         termination_done (false),
-        dispatch_mutex_held (false)
+        receive_mutex_held (false)
     {
     }
 
@@ -113,7 +134,7 @@ struct fq_recv_termination_gate_t
     bool cancel_recv;
     bool termination_started;
     bool termination_done;
-    bool dispatch_mutex_held;
+    bool receive_mutex_held;
 };
 
 struct direct_recv_result_t
@@ -670,10 +691,9 @@ void run_router_recv_serializes_fq_with_pipe_termination (bool routed_recv_)
             return;
         }
 
-        recv_result.rc = routed_recv_
-                           ? router->xrecv_routed (
-                               &msg, &recv_result.source_rid, NULL)
-                           : router->xrecv (&msg);
+        recv_result.rc = zlink::session_termination_test_access_t::
+          recv_router_with_receive_lock (
+            router, &msg, routed_recv_, &recv_result.source_rid);
         recv_result.errno_value = recv_result.rc == 0 ? 0 : errno;
         if (recv_result.rc == 0) {
             recv_result.flags = msg.flags ();
@@ -691,17 +711,18 @@ void run_router_recv_serializes_fq_with_pipe_termination (bool routed_recv_)
     }
 
     std::thread termination_thread ([router, &gate, pipe = pipes[0]] {
-        const bool dispatch_mutex_held =
+        const bool receive_mutex_held =
           zlink::session_termination_test_access_t::
-            dispatch_mutex_is_held_by_another_thread (router);
+            receive_mutex_is_held_by_another_thread (router);
         {
             std::lock_guard<std::mutex> lock (gate.sync);
-            gate.dispatch_mutex_held = dispatch_mutex_held;
+            gate.receive_mutex_held = receive_mutex_held;
             gate.termination_started = true;
         }
         gate.cv.notify_all ();
 
-        router->xpipe_terminated (pipe);
+        zlink::session_termination_test_access_t::
+          terminate_router_pipe_with_receive_lock (router, pipe);
 
         {
             std::lock_guard<std::mutex> lock (gate.sync);
@@ -710,16 +731,16 @@ void run_router_recv_serializes_fq_with_pipe_termination (bool routed_recv_)
         gate.cv.notify_all ();
     });
 
-    bool dispatch_mutex_held = false;
+    bool receive_mutex_held = false;
     {
         std::unique_lock<std::mutex> lock (gate.sync);
         gate.cv.wait (lock, [&gate] { return gate.termination_started; });
-        dispatch_mutex_held = gate.dispatch_mutex_held;
+        receive_mutex_held = gate.receive_mutex_held;
 
         // On the old unlocked recv path, termination can complete while recv
         // is paused inside fq_t. Cancel that recv after observing the forbidden
         // overlap so the RED result is an assertion rather than use-after-free.
-        if (!dispatch_mutex_held) {
+        if (!receive_mutex_held) {
             gate.cv.wait (lock, [&gate] { return gate.termination_done; });
             gate.cancel_recv = true;
         }
@@ -731,7 +752,7 @@ void run_router_recv_serializes_fq_with_pipe_termination (bool routed_recv_)
     termination_thread.join ();
     zlink::fq_t::set_recv_test_hook (NULL, NULL);
 
-    if (dispatch_mutex_held) {
+    if (receive_mutex_held) {
         TEST_ASSERT_EQUAL_INT (0, recv_result.rc);
         TEST_ASSERT_EQUAL_INT (0, recv_result.errno_value);
         if (routed_recv_) {
@@ -763,7 +784,7 @@ void run_router_recv_serializes_fq_with_pipe_termination (bool routed_recv_)
       static_cast<zlink::ctx_t *> (get_test_context ());
     TEST_ASSERT_SUCCESS_ERRNO (ctx->wait_for_socket_count_at_most (0, 5000));
     TEST_ASSERT_TRUE_MESSAGE (
-      dispatch_mutex_held,
+      receive_mutex_held,
       "ROUTER recv did not hold the FQ termination lock domain");
 }
 

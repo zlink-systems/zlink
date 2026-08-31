@@ -139,8 +139,7 @@ int zlink::socket_base_t::send (msg_t *msg_, int flags_)
     // Hot path: every public single-part send pays this steady-state cost.
     // Keep lifecycle/backpressure logic correct, but avoid thickening the
     // success path with new work that is not contract-critical.
-    socket_public_send_scope_t send_scope (lifecycle_coordinator (),
-                                           direct_send_needs_public_api_sync ());
+    socket_public_send_scope_t send_scope (lifecycle_coordinator (), true);
     if (!send_scope.acquired ())
         return -1;
 
@@ -234,6 +233,36 @@ int zlink::socket_base_t::select_routed_submit_target (
     return xselect_routed_submit_target (router_rid_or_null_, target_out_);
 }
 
+int zlink::socket_base_t::select_routed_submit_target_internal (
+  const zlink_routing_id_t *router_rid_or_null_,
+  zlink_routed_submit_target_t *target_out_,
+  uint64_t *transport_connection_id_out_,
+  uint64_t *route_incarnation_id_out_)
+{
+    if (!target_out_ || !transport_connection_id_out_
+        || !route_incarnation_id_out_) {
+        errno = EFAULT;
+        return -1;
+    }
+    memset (target_out_, 0, sizeof (*target_out_));
+    *transport_connection_id_out_ = 0;
+    *route_incarnation_id_out_ = 0;
+
+    socket_public_send_scope_t send_scope (lifecycle_coordinator (), true);
+    if (!send_scope.acquired ())
+        return -1;
+    if (unlikely (_ctx_terminated)) {
+        errno = ETERM;
+        return -1;
+    }
+    if (process_commands (0, true) != 0)
+        return -1;
+
+    return xselect_routed_submit_target_internal (
+      router_rid_or_null_, target_out_, transport_connection_id_out_,
+      route_incarnation_id_out_);
+}
+
 int zlink::socket_base_t::send_routed_scoped (const zlink_routing_id_t *target_rid_,
                                               msg_t *msg_,
                                               int flags_,
@@ -245,7 +274,11 @@ int zlink::socket_base_t::send_routed_scoped (const zlink_routing_id_t *target_r
                                               uint64_t expected_transport_pair_generation_,
                                               bool report_multipart_abort_,
                                               pipe_write_observer_fn observer_,
-                                              void *observer_userdata_)
+                                              void *observer_userdata_,
+                                              routed_send_attempt_identity_t
+                                                *attempt_identity_out_,
+                                              uint64_t
+                                                expected_route_incarnation_id_)
 {
     if (unlikely (!target_rid_)) {
         errno = EFAULT;
@@ -256,7 +289,8 @@ int zlink::socket_base_t::send_routed_scoped (const zlink_routing_id_t *target_r
       target_rid_, msg_, flags_, send_scope, connection_id_out_,
       expected_connection_id_, report_multipart_abort_, pipe_out_, expected_transport_pair_id_,
       expected_transport_pair_generation_, true, false, observer_,
-      observer_userdata_);
+      observer_userdata_, attempt_identity_out_,
+      expected_route_incarnation_id_);
 }
 
 bool zlink::socket_base_t::begin_public_send_scope (
@@ -267,13 +301,10 @@ bool zlink::socket_base_t::begin_public_send_scope (
         return false;
     }
 
-    // Incremental multipart owns pipe-local staged state across public calls.
-    // PAIR normally omits the socket sync on complete-record sends, but this
-    // lease must serialize its active/cleanup rollback with async pipe
-    // termination just like every other multipart-capable socket.
-    const bool needs_sync = force_sync_ || direct_send_needs_public_api_sync ()
-                            || options.type == ZLINK_CORE_SOCKET_PAIR;
-    scope_out_->emplace (lifecycle_coordinator (), needs_sync,
+    LIBZLINK_UNUSED (force_sync_);
+    // Incremental multipart owns pipe-local staged state across public calls;
+    // every socket send also fences socket-owned pipe selection/lifetime.
+    scope_out_->emplace (lifecycle_coordinator (), true,
                          socket_send_admission_multipart);
     if (!(*scope_out_)->acquired ()) {
         scope_out_->reset ();
@@ -285,10 +316,10 @@ bool zlink::socket_base_t::begin_public_send_scope (
 std::unique_ptr<zlink::socket_public_send_scope_t>
 zlink::socket_base_t::begin_complete_send_scope (bool force_sync_)
 {
-    const bool needs_sync = force_sync_ || direct_send_needs_public_api_sync ();
+    LIBZLINK_UNUSED (force_sync_);
     std::unique_ptr<socket_public_send_scope_t> send_scope (
       new (std::nothrow) socket_public_send_scope_t (
-        lifecycle_coordinator (), needs_sync,
+        lifecycle_coordinator (), true,
         socket_send_admission_complete));
     if (!send_scope) {
         errno = ENOMEM;
@@ -313,11 +344,6 @@ zlink::socket_base_t::begin_public_api_scope ()
     return scope;
 }
 
-bool zlink::socket_base_t::direct_send_needs_public_api_sync () const
-{
-    return options.type != ZLINK_CORE_SOCKET_PAIR;
-}
-
 bool zlink::socket_base_t::xsubmit_retry_allowed (const zlink_routing_id_t *target_rid_,
                                                   int err_) const
 {
@@ -339,13 +365,19 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                                   bool record_context_admission_,
                                                   bool commands_already_processed_,
                                                   pipe_write_observer_fn observer_,
-                                                  void *observer_userdata_)
+                                                  void *observer_userdata_,
+                                                  routed_send_attempt_identity_t
+                                                    *attempt_identity_out_,
+                                                  uint64_t
+                                                    expected_route_incarnation_id_)
 {
     zlink_assert (send_scope.acquired ());
     if (connection_id_out_)
         *connection_id_out_ = 0;
     if (pipe_out_)
         *pipe_out_ = NULL;
+    if (attempt_identity_out_)
+        attempt_identity_out_->reset ();
 
     if (unlikely (_ctx_terminated)) {
         errno = ETERM;
@@ -408,7 +440,9 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                expected_connection_id_, pipe_out_,
                                expected_transport_pair_id_,
                                expected_transport_pair_generation_,
-                               &first_admission, observer_, observer_userdata_)
+                               &first_admission, observer_, observer_userdata_,
+                               attempt_identity_out_,
+                               expected_route_incarnation_id_)
                : xsend_pipe (msg_, pipe_out_, &first_admission, observer_,
                              observer_userdata_);
     if (record_context_admission_ && rc != 0
@@ -480,7 +514,9 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                        expected_connection_id_, pipe_out_,
                                        expected_transport_pair_id_,
                                        expected_transport_pair_generation_, NULL,
-                                       observer_, observer_userdata_)
+                                       observer_, observer_userdata_,
+                                       attempt_identity_out_,
+                                       expected_route_incarnation_id_)
                        : xsend_pipe (msg_, pipe_out_, NULL, observer_,
                                      observer_userdata_);
             if (unlikely (rc == -2))
@@ -552,7 +588,9 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                expected_connection_id_, pipe_out_,
                                expected_transport_pair_id_,
                                expected_transport_pair_generation_, NULL,
-                               observer_, observer_userdata_)
+                               observer_, observer_userdata_,
+                               attempt_identity_out_,
+                               expected_route_incarnation_id_)
                : xsend_pipe (msg_, pipe_out_, NULL, observer_,
                              observer_userdata_);
         if (unlikely (rc == -2))

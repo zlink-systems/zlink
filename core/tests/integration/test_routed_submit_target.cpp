@@ -4,6 +4,9 @@
 #include "testutil_unity.hpp"
 #include "api/socket/socket_api_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
+#include "core/object.hpp"
+#include "core/pipe.hpp"
+#include "sockets/router/router.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -19,8 +22,228 @@
 
 SETUP_TEARDOWN_TESTCONTEXT
 
+namespace zlink
+{
+class session_termination_test_access_t
+{
+  public:
+    static void attach_socket_pipe (socket_base_t *socket_, pipe_t *pipe_)
+    {
+        socket_->attach_pipe (pipe_);
+    }
+
+    static void install_socket_msg_handler (
+      socket_base_t *socket_, zlink_socket_msg_handler_fn handler_,
+      void *userdata_)
+    {
+        std::lock_guard<std::recursive_mutex> lock (
+          socket_->dispatch_runtime ().socket_msg_dispatch_sync);
+        socket_->dispatch_runtime ().socket_msg_handler_userdata.store (
+          userdata_, std::memory_order_release);
+        socket_->dispatch_runtime ().socket_msg_handler.store (
+          handler_, std::memory_order_release);
+    }
+
+    static void clear_socket_msg_handler (socket_base_t *socket_)
+    {
+        std::lock_guard<std::recursive_mutex> lock (
+          socket_->dispatch_runtime ().socket_msg_dispatch_sync);
+        socket_->dispatch_runtime ().socket_msg_handler.store (
+          NULL, std::memory_order_release);
+        socket_->dispatch_runtime ().socket_msg_handler_userdata.store (
+          NULL, std::memory_order_release);
+    }
+};
+}
+
 namespace
 {
+class passive_pipe_sink_t : public zlink::i_pipe_events
+{
+  public:
+    void read_activated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+    void write_activated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+    void hiccuped (zlink::pipe_t *) ZLINK_OVERRIDE {}
+    void pipe_peer_terminated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+    void pipe_terminated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+};
+
+struct target_failure_pause_t
+{
+    target_failure_pause_t () : entered (false), release (false) {}
+
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool entered;
+    bool release;
+};
+
+void pause_target_failure_after_one_record (void *userdata_)
+{
+    target_failure_pause_t *pause =
+      static_cast<target_failure_pause_t *> (userdata_);
+    if (!pause)
+        return;
+    std::unique_lock<std::mutex> lock (pause->mutex);
+    pause->entered = true;
+    pause->changed.notify_all ();
+    pause->changed.wait (lock, [pause] { return pause->release; });
+}
+
+struct async_completion_observation_t
+{
+    void *tag;
+    zlink_send_complete_result_t result;
+    int terminal_errno;
+};
+
+struct async_completion_probe_t
+{
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::vector<async_completion_observation_t> observations;
+};
+
+void capture_async_completion (void *,
+                               const zlink_send_complete_event_t *event_,
+                               void *userdata_)
+{
+    async_completion_probe_t *probe =
+      static_cast<async_completion_probe_t *> (userdata_);
+    if (!probe || !event_)
+        return;
+    {
+        std::lock_guard<std::mutex> lock (probe->mutex);
+        const async_completion_observation_t observation = {
+          event_->userdata, event_->result, event_->terminal_errno};
+        probe->observations.push_back (observation);
+    }
+    probe->changed.notify_all ();
+}
+
+bool wait_for_async_completion (async_completion_probe_t *probe_, void *tag_,
+                                zlink_send_complete_result_t result_,
+                                int terminal_errno_, int timeout_ms_ = 3000)
+{
+    std::unique_lock<std::mutex> lock (probe_->mutex);
+    return probe_->changed.wait_for (
+      lock, std::chrono::milliseconds (timeout_ms_), [&] {
+          for (std::vector<async_completion_observation_t>::const_iterator it =
+                 probe_->observations.begin ();
+               it != probe_->observations.end (); ++it) {
+              if (it->tag == tag_ && it->result == result_
+                  && it->terminal_errno == terminal_errno_)
+                  return true;
+          }
+          return false;
+      });
+}
+
+bool has_async_completion (async_completion_probe_t *probe_, void *tag_)
+{
+    std::lock_guard<std::mutex> lock (probe_->mutex);
+    for (std::vector<async_completion_observation_t>::const_iterator it =
+           probe_->observations.begin ();
+         it != probe_->observations.end (); ++it) {
+        if (it->tag == tag_)
+            return true;
+    }
+    return false;
+}
+
+void discard_socket_msg_record (const zlink_routing_id_t *,
+                                zlink_msg_t *parts_, size_t part_count_, void *)
+{
+    for (size_t i = 0; i < part_count_; ++i)
+        (void) zlink_msg_close (&parts_[i]);
+}
+
+void init_routing_id_frame (zlink::msg_t *msg_, const char *routing_id_)
+{
+    TEST_ASSERT_SUCCESS_ERRNO (msg_->init_size (strlen (routing_id_)));
+    memcpy (msg_->data (), routing_id_, strlen (routing_id_));
+    msg_->set_flags (zlink::msg_t::routing_id);
+}
+
+void fill_pipe_once (zlink::pipe_t *pipe_, const char *payload_)
+{
+    zlink::msg_t msg;
+    TEST_ASSERT_SUCCESS_ERRNO (msg.init_size (strlen (payload_)));
+    memcpy (msg.data (), payload_, strlen (payload_));
+    zlink::pipe_message_admission_t admission =
+      zlink::pipe_message_admission_invalid;
+    TEST_ASSERT_TRUE (
+      pipe_->write_single_message_and_flush_no_recursive_hwm_check (
+        &msg, &admission));
+    TEST_ASSERT_EQUAL_INT (zlink::pipe_message_admission_ready, admission);
+    TEST_ASSERT_SUCCESS_ERRNO (msg.close ());
+}
+
+std::string read_pipe_record (zlink::pipe_t *pipe_)
+{
+    zlink::msg_t msg;
+    TEST_ASSERT_SUCCESS_ERRNO (msg.init ());
+    TEST_ASSERT_TRUE (pipe_->read (&msg));
+    const std::string payload (static_cast<const char *> (msg.data ()),
+                               msg.size ());
+    TEST_ASSERT_SUCCESS_ERRNO (msg.close ());
+    return payload;
+}
+
+struct retained_test_pipe_pair_t
+{
+    retained_test_pipe_pair_t ()
+    {
+        pipes[0] = NULL;
+        pipes[1] = NULL;
+    }
+    zlink::pipe_t *pipes[2];
+};
+
+retained_test_pipe_pair_t make_unpaired_router_pipe (
+  zlink::router_t *router_, passive_pipe_sink_t *peer_sink_, uint64_t hwm_)
+{
+    retained_test_pipe_pair_t pair;
+    zlink::object_t *parents[2] = {router_, router_};
+    const uint64_t hwms[2] = {hwm_, hwm_};
+    const bool conflates[2] = {false, false};
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pair.pipes, hwms, conflates));
+    TEST_ASSERT_TRUE (pair.pipes[0]->retain_lifetime_ref ());
+    TEST_ASSERT_TRUE (pair.pipes[1]->retain_lifetime_ref ());
+    pair.pipes[1]->set_event_sink (peer_sink_);
+    zlink::session_termination_test_access_t::attach_socket_pipe (
+      router_, pair.pipes[0]);
+    return pair;
+}
+
+void terminate_test_pipe_pair (retained_test_pipe_pair_t *pair_)
+{
+    for (size_t i = 0; i < 2; ++i) {
+        if (!pair_->pipes[i])
+            continue;
+        if (!pair_->pipes[i]->has_completed_termination ())
+            pair_->pipes[i]->terminate (false);
+    }
+}
+
+bool test_pipe_pair_terminated (const retained_test_pipe_pair_t &pair_)
+{
+    return pair_.pipes[0] && pair_.pipes[1]
+           && pair_.pipes[0]->has_completed_termination ()
+           && pair_.pipes[1]->has_completed_termination ();
+}
+
+void release_test_pipe_pair (retained_test_pipe_pair_t *pair_)
+{
+    for (size_t i = 0; i < 2; ++i) {
+        if (!pair_->pipes[i])
+            continue;
+        pair_->pipes[i]->release_lifetime_ref ();
+        pair_->pipes[i] = NULL;
+    }
+}
+
 struct routed_terminal_probe_t
 {
     routed_terminal_probe_t () : seen (false), expected_pair_id (0),
@@ -769,6 +992,25 @@ void test_router_exact_target_is_invalid_after_same_rid_handover ()
         || target_b.transport_pair_generation
              != target_a.transport_pair_generation,
       "same-RID replacement did not publish a new exact target");
+
+    // Handover keeps the displaced physical pipe alive as standby, but its
+    // old public exact target is already terminal. Route adoption must wake
+    // and fail that pending operation without waiting for pipe teardown or
+    // its deadline.
+    {
+        std::unique_lock<std::mutex> lock (terminal.mutex);
+        TEST_ASSERT_TRUE_MESSAGE (
+          terminal.changed.wait_for (
+            lock, std::chrono::seconds (3),
+            [&terminal] { return terminal.seen; }),
+          "same-RID handover did not promptly fail the displaced exact target");
+        TEST_ASSERT_EQUAL_UINT64 (target_a.transport_pair_id,
+                                  terminal.pair_id);
+        TEST_ASSERT_EQUAL_UINT64 (target_a.transport_pair_generation,
+                                  terminal.pair_generation);
+        TEST_ASSERT_EQUAL_INT (ENOTCONN, terminal.terminal_errno);
+    }
+
     // Hold a different complete-record admission across the exact FINAL call.
     // A complete FINAL must serialize on the socket sync and then evaluate the
     // stale target. Treating it as the start of an incremental multipart send
@@ -846,23 +1088,6 @@ void test_router_exact_target_is_invalid_after_same_rid_handover ()
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, exact_final.close_rc);
 
     dealer_a = test_context_socket_close_zero_linger (dealer_a);
-    {
-        std::unique_lock<std::mutex> lock (terminal.mutex);
-        TEST_ASSERT_TRUE_MESSAGE (
-          terminal.changed.wait_for (
-            lock, std::chrono::seconds (3),
-            [&terminal] { return terminal.seen; }),
-          "superseded exact target teardown did not report failure");
-        TEST_ASSERT_EQUAL_UINT64 (target_a.transport_pair_id,
-                                  terminal.pair_id);
-        TEST_ASSERT_EQUAL_UINT64 (target_a.transport_pair_generation,
-                                  terminal.pair_generation);
-        //  Whether the admit attempt or pipe termination notices the
-        //  superseded pair first decides the cause; both mean "this exact
-        //  route is gone".
-        TEST_ASSERT_TRUE (terminal.terminal_errno == ENOTCONN
-                          || terminal.terminal_errno == EHOSTUNREACH);
-    }
 
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
@@ -871,6 +1096,349 @@ void test_router_exact_target_is_invalid_after_same_rid_handover ()
 
     test_context_socket_close_zero_linger (dealer_b);
     test_context_socket_close_zero_linger (router);
+}
+
+void test_unpaired_router_incarnation_survives_reconnect_and_handover ()
+{
+    void *router_handle = test_context_socket (ZLINK_SOCKET_ROUTER);
+    socket_handle_t router_pin = as_socket_handle (router_handle);
+    TEST_ASSERT_NOT_NULL (router_pin.socket);
+    zlink::router_t *const router =
+      static_cast<zlink::router_t *> (router_pin.socket);
+
+    const int handover = ZLINK_RID_DUPLICATE_HANDOVER;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (router_handle, ZLINK_OPT_RID_DUPLICATE_POLICY,
+                        &handover, sizeof (handover)));
+    const int mandatory = 1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_router_option (router_handle, ZLINK_ROUTER_OPT_MANDATORY,
+                               &mandatory, sizeof (mandatory)));
+    async_completion_probe_t completions;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_send_complete_handler (router_handle, &capture_async_completion,
+                                   &completions));
+    zlink::session_termination_test_access_t::install_socket_msg_handler (
+      router, &discard_socket_msg_record, NULL);
+
+    const char fill_payload[] = "12345678";
+    const uint64_t hwm = sizeof (zlink::msg_t) + sizeof (fill_payload) - 1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (router_handle, ZLINK_OPT_SNDHWM, &hwm,
+                        sizeof (hwm)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (router_handle, ZLINK_OPT_RCVHWM, &hwm,
+                        sizeof (hwm)));
+    passive_pipe_sink_t peer_a_sink;
+    passive_pipe_sink_t peer_b_sink;
+    passive_pipe_sink_t peer_c_sink;
+    retained_test_pipe_pair_t pair_a =
+      make_unpaired_router_pipe (router, &peer_a_sink, hwm);
+    retained_test_pipe_pair_t pair_b =
+      make_unpaired_router_pipe (router, &peer_b_sink, hwm);
+    const uint64_t route_incarnation_a =
+      pair_a.pipes[0]->get_route_incarnation_id ();
+    const uint64_t route_incarnation_b =
+      pair_b.pipes[0]->get_route_incarnation_id ();
+    TEST_ASSERT_NOT_EQUAL (0, route_incarnation_a);
+    TEST_ASSERT_NOT_EQUAL (0, route_incarnation_b);
+    TEST_ASSERT_NOT_EQUAL (route_incarnation_a, route_incarnation_b);
+
+    zlink::msg_t identity_a;
+    init_routing_id_frame (&identity_a, "D");
+    TEST_ASSERT_EQUAL_INT (
+      1, router->socket_msg_dispatch_from_io (&identity_a, pair_a.pipes[0]));
+    TEST_ASSERT_SUCCESS_ERRNO (identity_a.close ());
+    fill_pipe_once (pair_a.pipes[0], fill_payload);
+    fill_pipe_once (pair_b.pipes[0], fill_payload);
+    TEST_ASSERT_EQUAL_INT (
+      zlink::pipe_message_admission_hwm_full,
+      pair_a.pipes[0]->check_write_admission ());
+    TEST_ASSERT_EQUAL_INT (
+      zlink::pipe_message_admission_hwm_full,
+      pair_b.pipes[0]->check_write_admission ());
+
+    zlink_routed_submit_target_t rid_only;
+    memset (&rid_only, 0, sizeof (rid_only));
+    rid_only.peer_rid = make_rid ("D");
+    int same_pipe_tag = 0;
+    int published_old_tag = 0;
+    int late_old_tag = 0;
+    int queued_old_tag = 0;
+    int new_tag = 0;
+
+    // A reconnect mutates the network generation on the same physical pipe.
+    // Pending FIFO ownership follows the immutable route incarnation instead,
+    // so resetting C1 to zero and publishing C2 must not stale-reject it.
+    zlink_msg_t same_pipe_part;
+    init_part (&same_pipe_part, "same-C2!", 8);
+    zlink_send_async_options_t same_pipe_options;
+    memset (&same_pipe_options, 0, sizeof (same_pipe_options));
+    same_pipe_options.struct_size = sizeof (same_pipe_options);
+    same_pipe_options.userdata = &same_pipe_tag;
+    same_pipe_options.target = &rid_only;
+    zlink_send_op_id_t same_pipe_op = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_async (router_handle, &same_pipe_part, 1,
+                        &same_pipe_options, &same_pipe_op));
+    TEST_ASSERT_TRUE (same_pipe_op != 0);
+    const uint64_t original_connection_id =
+      pair_a.pipes[0]->get_transport_connection_id ();
+    const uint64_t reconnect_connection_id = zlink::allocate_connection_id ();
+    TEST_ASSERT_NOT_EQUAL (0, original_connection_id);
+    TEST_ASSERT_NOT_EQUAL (0, reconnect_connection_id);
+    TEST_ASSERT_NOT_EQUAL (original_connection_id, reconnect_connection_id);
+    pair_a.pipes[0]->set_transport_connection_id (0);
+    pair_a.pipes[0]->set_transport_connection_id (reconnect_connection_id);
+    TEST_ASSERT_EQUAL_UINT64 (
+      route_incarnation_a,
+      pair_a.pipes[0]->get_route_incarnation_id ());
+    TEST_ASSERT_EQUAL_STRING (fill_payload,
+                              read_pipe_record (pair_a.pipes[1]).c_str ());
+    TEST_ASSERT_TRUE (wait_for_async_completion (
+      &completions, &same_pipe_tag, ZLINK_SEND_ADMITTED, 0));
+    TEST_ASSERT_EQUAL_STRING ("same-C2!",
+                              read_pipe_record (pair_a.pipes[1]).c_str ());
+    fill_pipe_once (pair_a.pipes[0], fill_payload);
+    TEST_ASSERT_EQUAL_INT (
+      zlink::pipe_message_admission_hwm_full,
+      pair_a.pipes[0]->check_write_admission ());
+
+    // Window 1: the old physical attempt has observed EAGAIN, but has not yet
+    // published its pending record. Handover must be allowed to finish its
+    // empty failure scan; the later publication then validates under the route
+    // fence and resolves terminal instead of becoming permanently stranded.
+    target_failure_pause_t inline_pause;
+    router->test_set_send_inline_fallback_hook (
+      &pause_target_failure_after_one_record, &inline_pause);
+    struct submit_observation_t
+    {
+        submit_observation_t () :
+            init_rc (ZLINK_CONFIG_INTERNAL_ERROR),
+            result (ZLINK_SUBMIT_INTERNAL_ERROR),
+            err (0),
+            op_id (0)
+        {
+        }
+        int init_rc;
+        zlink_submit_result_t result;
+        int err;
+        zlink_send_op_id_t op_id;
+    };
+    std::promise<submit_observation_t> late_submit_promise;
+    std::future<submit_observation_t> late_submit =
+      late_submit_promise.get_future ();
+    submit_observation_t published_old_result;
+    std::thread late_submitter ([&] {
+        submit_observation_t observed;
+        zlink_msg_t part;
+        observed.init_rc = zlink_msg_init_size (&part, 8);
+        if (observed.init_rc == ZLINK_CONFIG_OK) {
+            memcpy (zlink_msg_data (&part), "late-old", 8);
+            zlink_send_async_options_t options;
+            memset (&options, 0, sizeof (options));
+            options.struct_size = sizeof (options);
+            options.userdata = &late_old_tag;
+            options.target = &rid_only;
+            observed.result = zlink_send_async (
+              router_handle, &part, 1, &options, &observed.op_id);
+            observed.err = zlink_errno ();
+            if (observed.result != ZLINK_SUBMIT_OK)
+                (void) zlink_msg_close (&part);
+        }
+        late_submit_promise.set_value (observed);
+    });
+
+    bool inline_entered = false;
+    {
+        std::unique_lock<std::mutex> lock (inline_pause.mutex);
+        inline_entered = inline_pause.changed.wait_for (
+          lock, std::chrono::seconds (3),
+          [&inline_pause] { return inline_pause.entered; });
+    }
+    int identity_b_rc = -1;
+    if (inline_entered) {
+        // Publish a second A operation while the first one is paused before
+        // map insertion. This record is the original reset regression: it is
+        // already keyed by A's incarnation when the mutable C1 becomes zero.
+        zlink_msg_t published_old_part;
+        published_old_result.init_rc =
+          zlink_msg_init_size (&published_old_part, 8);
+        if (published_old_result.init_rc == ZLINK_CONFIG_OK) {
+            memcpy (zlink_msg_data (&published_old_part), "map-old!", 8);
+            zlink_send_async_options_t published_old_options;
+            memset (&published_old_options, 0,
+                    sizeof (published_old_options));
+            published_old_options.struct_size =
+              sizeof (published_old_options);
+            published_old_options.userdata = &published_old_tag;
+            published_old_options.target = &rid_only;
+            published_old_result.result = zlink_send_async (
+              router_handle, &published_old_part, 1,
+              &published_old_options, &published_old_result.op_id);
+            published_old_result.err = zlink_errno ();
+            if (published_old_result.result != ZLINK_SUBMIT_OK)
+                (void) zlink_msg_close (&published_old_part);
+        }
+        // engine_error resets the mutable connection generation before route
+        // replacement. The old pending key must still be found by A's stable
+        // route incarnation and fail promptly rather than waiting forever.
+        pair_a.pipes[0]->set_transport_connection_id (0);
+        zlink::msg_t identity_b;
+        if (identity_b.init_size (1) == 0) {
+            memcpy (identity_b.data (), "D", 1);
+            identity_b.set_flags (zlink::msg_t::routing_id);
+            identity_b_rc = router->socket_msg_dispatch_from_io (
+              &identity_b, pair_b.pipes[0]);
+            (void) identity_b.close ();
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock (inline_pause.mutex);
+        inline_pause.release = true;
+    }
+    inline_pause.changed.notify_all ();
+    late_submitter.join ();
+    router->test_set_send_inline_fallback_hook (NULL, NULL);
+    const submit_observation_t late_result = late_submit.get ();
+    TEST_ASSERT_TRUE_MESSAGE (
+      inline_entered, "old inline fallback did not reach the publication gap");
+    TEST_ASSERT_EQUAL_INT (1, identity_b_rc);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, late_result.init_rc);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, late_result.result);
+    TEST_ASSERT_TRUE (late_result.op_id != 0);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, published_old_result.init_rc);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, published_old_result.result);
+    TEST_ASSERT_TRUE (published_old_result.op_id != 0);
+    TEST_ASSERT_TRUE (wait_for_async_completion (
+      &completions, &published_old_tag, ZLINK_SEND_TERMINAL, ENOTCONN));
+    TEST_ASSERT_TRUE (wait_for_async_completion (
+      &completions, &late_old_tag, ZLINK_SEND_TERMINAL, ENOTCONN));
+
+    // Park one normally published record on B. C then replaces the same public
+    // RID. The failure loop pauses after removing B's record so a new C record
+    // can publish in the exact inter-iteration ABA window.
+    zlink_msg_t queued_old_part;
+    init_part (&queued_old_part, "queue-old", 8);
+    zlink_send_async_options_t queued_old_options;
+    memset (&queued_old_options, 0, sizeof (queued_old_options));
+    queued_old_options.struct_size = sizeof (queued_old_options);
+    queued_old_options.userdata = &queued_old_tag;
+    queued_old_options.target = &rid_only;
+    zlink_send_op_id_t queued_old_op = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_async (router_handle, &queued_old_part, 1,
+                        &queued_old_options, &queued_old_op));
+    TEST_ASSERT_TRUE (queued_old_op != 0);
+
+    retained_test_pipe_pair_t pair_c =
+      make_unpaired_router_pipe (router, &peer_c_sink, hwm);
+    TEST_ASSERT_NOT_EQUAL (
+      route_incarnation_a,
+      pair_c.pipes[0]->get_route_incarnation_id ());
+    TEST_ASSERT_NOT_EQUAL (
+      route_incarnation_b,
+      pair_c.pipes[0]->get_route_incarnation_id ());
+    fill_pipe_once (pair_c.pipes[0], fill_payload);
+    target_failure_pause_t failure_pause;
+    router->test_set_send_target_failure_progress_hook (
+      &pause_target_failure_after_one_record, &failure_pause);
+    std::atomic<int> identity_c_init_rc (-1);
+    std::atomic<int> identity_c_dispatch_rc (-1);
+    std::thread handover_thread ([&] {
+        zlink::msg_t identity_c;
+        const int init_rc = identity_c.init_size (1);
+        identity_c_init_rc.store (init_rc, std::memory_order_release);
+        if (init_rc == 0) {
+            memcpy (identity_c.data (), "D", 1);
+            identity_c.set_flags (zlink::msg_t::routing_id);
+            identity_c_dispatch_rc.store (
+              router->socket_msg_dispatch_from_io (
+                &identity_c, pair_c.pipes[0]),
+              std::memory_order_release);
+            (void) identity_c.close ();
+        }
+    });
+
+    bool failure_entered = false;
+    {
+        std::unique_lock<std::mutex> lock (failure_pause.mutex);
+        failure_entered = failure_pause.changed.wait_for (
+          lock, std::chrono::seconds (3),
+          [&failure_pause] { return failure_pause.entered; });
+    }
+
+    zlink_submit_result_t new_submit_result = ZLINK_SUBMIT_INTERNAL_ERROR;
+    zlink_send_op_id_t new_op = 0;
+    if (failure_entered) {
+        zlink_msg_t new_part;
+        const int init_rc = zlink_msg_init_size (&new_part, 8);
+        if (init_rc == ZLINK_CONFIG_OK) {
+            memcpy (zlink_msg_data (&new_part), "new-live", 8);
+            zlink_send_async_options_t new_options;
+            memset (&new_options, 0, sizeof (new_options));
+            new_options.struct_size = sizeof (new_options);
+            new_options.userdata = &new_tag;
+            new_options.target = &rid_only;
+            new_submit_result = zlink_send_async (
+              router_handle, &new_part, 1, &new_options, &new_op);
+            if (new_submit_result != ZLINK_SUBMIT_OK)
+                (void) zlink_msg_close (&new_part);
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock (failure_pause.mutex);
+        failure_pause.release = true;
+    }
+    failure_pause.changed.notify_all ();
+    handover_thread.join ();
+    router->test_set_send_target_failure_progress_hook (NULL, NULL);
+
+    TEST_ASSERT_TRUE_MESSAGE (
+      failure_entered, "handover failure loop did not reach the ABA gap");
+    TEST_ASSERT_EQUAL_INT (
+      0, identity_c_init_rc.load (std::memory_order_acquire));
+    TEST_ASSERT_EQUAL_INT (
+      1, identity_c_dispatch_rc.load (std::memory_order_acquire));
+    TEST_ASSERT_EQUAL_INT_MESSAGE (
+      ZLINK_SUBMIT_OK, new_submit_result,
+      "new physical route submit was rejected in the handover gap");
+    TEST_ASSERT_TRUE (new_op != 0);
+    TEST_ASSERT_TRUE (wait_for_async_completion (
+      &completions, &queued_old_tag, ZLINK_SEND_TERMINAL, ENOTCONN));
+    msleep (50);
+    TEST_ASSERT_FALSE_MESSAGE (
+      has_async_completion (&completions, &new_tag),
+      "old {RID,0,0} failure scan consumed replacement-route pending work");
+
+    TEST_ASSERT_EQUAL_STRING (fill_payload,
+                              read_pipe_record (pair_c.pipes[1]).c_str ());
+    TEST_ASSERT_TRUE (wait_for_async_completion (
+      &completions, &new_tag, ZLINK_SEND_ADMITTED, 0));
+    TEST_ASSERT_EQUAL_STRING ("new-live",
+                              read_pipe_record (pair_c.pipes[1]).c_str ());
+
+    zlink::session_termination_test_access_t::clear_socket_msg_handler (router);
+    terminate_test_pipe_pair (&pair_c);
+    terminate_test_pipe_pair (&pair_b);
+    terminate_test_pipe_pair (&pair_a);
+    TEST_ASSERT_TRUE (zlink_test_wait_until (5000, [&] {
+        return test_pipe_pair_terminated (pair_a)
+               && test_pipe_pair_terminated (pair_b)
+               && test_pipe_pair_terminated (pair_c);
+    }));
+    release_test_pipe_pair (&pair_c);
+    release_test_pipe_pair (&pair_b);
+    release_test_pipe_pair (&pair_a);
+    router_pin = socket_handle_t ();
+    test_context_socket_close_zero_linger (router_handle);
 }
 
 void test_router_exact_target_survives_unrelated_peer_churn ()
@@ -1127,6 +1695,8 @@ int main ()
       test_router_selects_exact_target_and_rejects_stale_generation);
     RUN_TEST (test_stable_router_route_never_returns_enoent_under_concurrent_send);
     RUN_TEST (test_router_exact_target_is_invalid_after_same_rid_handover);
+    RUN_TEST (
+      test_unpaired_router_incarnation_survives_reconnect_and_handover);
     RUN_TEST (
       test_router_exact_target_survives_unrelated_peer_churn);
     RUN_TEST (test_dealer_exact_target_keeps_blocked_a_isolated_from_b);

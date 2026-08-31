@@ -628,15 +628,20 @@ int zlink::stream_t::xsend_routed (
   pipe_t **pipe_out_, uint64_t expected_transport_pair_id_,
   uint64_t expected_transport_pair_generation_,
   pipe_message_admission_t *admission_out_,
-  pipe_write_observer_fn observer_, void *observer_userdata_)
+  pipe_write_observer_fn observer_, void *observer_userdata_,
+  routed_send_attempt_identity_t *attempt_identity_out_,
+  uint64_t expected_route_incarnation_id_)
 {
     LIBZLINK_UNUSED (expected_connection_id_);
     LIBZLINK_UNUSED (observer_);
     LIBZLINK_UNUSED (observer_userdata_);
+    LIBZLINK_UNUSED (expected_route_incarnation_id_);
     if (connection_id_out_)
         *connection_id_out_ = 0;
     if (pipe_out_)
         *pipe_out_ = NULL;
+    if (attempt_identity_out_)
+        attempt_identity_out_->reset ();
     if (admission_out_)
         *admission_out_ = pipe_message_admission_invalid;
     if (!target_rid_ || target_rid_->size != sizeof (uint32_t)
@@ -663,6 +668,12 @@ int zlink::stream_t::xsend_routed (
         || pair_generation != expected_transport_pair_generation_) {
         errno = EHOSTUNREACH;
         return -1;
+    }
+    if (attempt_identity_out_) {
+        attempt_identity_out_->transport_pair_id = pair_id;
+        attempt_identity_out_->transport_pair_generation = pair_generation;
+        attempt_identity_out_->transport_connection_id =
+          out->get_transport_connection_id ();
     }
     if (msg_->size () == 0) {
         out->terminate (false);
@@ -861,7 +872,7 @@ int zlink::stream_t::xstream_dispatch_msg (msg_t *msg_, pipe_t *pipe_)
     // callback replacement, parser reset, and termination cleanup. A final
     // peer detach happens before xpipe_terminated waits on this gate, so a
     // dispatch that enters afterwards must not publish or invoke a callback.
-    scoped_fast_lock_t dispatch_lock (pipe_->stream_dispatch_sync ());
+    scoped_fast_lock_t dispatch_lock (pipe_->transport_sync ());
     if (pipe_->stream_route_closed () || !pipe_->get_peer ())
         return 1;
 
@@ -1204,7 +1215,7 @@ bool zlink::stream_t::identify_peer (pipe_t *pipe_, bool locally_initiated_)
     uint32_t routing_id_value = 0;
     bool published = false;
     {
-        scoped_fast_lock_t transport_gate (pipe_->stream_dispatch_sync ());
+        scoped_fast_lock_t transport_gate (pipe_->transport_sync ());
         if (pipe_->stream_route_closed ())
             return false;
         peer = pipe_->retain_peer_snapshot ();

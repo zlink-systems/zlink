@@ -11,9 +11,15 @@ namespace
 static uint32_t compute_effective_max (int64_t maxmsgsize_)
 {
     uint64_t limit = zlink::zmp_max_body_size;
-    if (maxmsgsize_ >= 0 && static_cast<uint64_t> (maxmsgsize_) < limit)
+    if (maxmsgsize_ > 0 && static_cast<uint64_t> (maxmsgsize_) < limit)
         limit = static_cast<uint64_t> (maxmsgsize_);
     return static_cast<uint32_t> (limit);
+}
+
+static uint64_t compute_application_message_max (int64_t maxmsgsize_)
+{
+    return maxmsgsize_ > 0 ? static_cast<uint64_t> (maxmsgsize_)
+                           : UINT64_MAX;
 }
 
 static const unsigned char zmp_flag_sub_or_cancel =
@@ -28,6 +34,8 @@ zlink::zmp_decoder_t::zmp_decoder_t (size_t bufsize_, int64_t maxmsgsize_) :
     _request_sequence (0),
     _error_code (0),
     _max_msg_size_effective (compute_effective_max (maxmsgsize_)),
+    _max_application_message_size (
+      compute_application_message_max (maxmsgsize_)),
     _frame_admission_handler (NULL),
     _frame_reservation_release_handler (NULL),
     _frame_admission_subject (NULL),
@@ -37,6 +45,8 @@ zlink::zmp_decoder_t::zmp_decoder_t (size_t bufsize_, int64_t maxmsgsize_) :
     _allocation_backpressured (false),
     _application_multipart_in_progress (false),
     _next_application_multipart_in_progress (false),
+    _application_multipart_payload_size (0),
+    _next_application_multipart_payload_size (0),
     _frame_stage (reading_base_header)
 {
     int rc = _in_progress.init ();
@@ -188,10 +198,36 @@ int zlink::zmp_decoder_t::validate_header_and_admit (
 
 int zlink::zmp_decoder_t::size_ready (uint32_t msg_size_, unsigned char const *read_from_)
 {
-    if (unlikely (msg_size_ > _max_msg_size_effective)) {
+    const uint32_t frame_limit =
+      (_msg_flags & msg_t::command) != 0
+        ? zmp_max_control_body_size
+        : _max_msg_size_effective;
+    if (unlikely (msg_size_ > frame_limit)) {
         _error_code = zmp_error_body_too_large;
         errno = EMSGSIZE;
         return -1;
+    }
+
+    _next_application_multipart_payload_size =
+      _application_multipart_payload_size;
+    if (!zmp_is_special_frame (_wire_flags)) {
+        if (unlikely (
+              msg_size_
+              > UINT64_MAX - _application_multipart_payload_size)) {
+            _error_code = zmp_error_body_too_large;
+            errno = EMSGSIZE;
+            return -1;
+        }
+        const uint64_t candidate_payload_size =
+          _application_multipart_payload_size + msg_size_;
+        if (unlikely (candidate_payload_size
+                      > _max_application_message_size)) {
+            _error_code = zmp_error_body_too_large;
+            errno = EMSGSIZE;
+            return -1;
+        }
+        _next_application_multipart_payload_size =
+          (_wire_flags & zmp_flag_more) != 0 ? candidate_payload_size : 0;
     }
 
     if (unlikely (msg_size_ != static_cast<size_t> (msg_size_))) {
@@ -209,6 +245,12 @@ int zlink::zmp_decoder_t::size_ready (uint32_t msg_size_, unsigned char const *r
             _pending_msg_size = msg_size_;
             _pending_read_from = read_from_;
             _allocation_backpressured = true;
+        } else {
+            _pending_msg_size = 0;
+            _pending_read_from = NULL;
+            _allocation_backpressured = false;
+            if (errno == EMSGSIZE)
+                _error_code = zmp_error_body_too_large;
         }
         return -1;
     }
@@ -286,6 +328,8 @@ void zlink::zmp_decoder_t::complete_frame ()
 {
     _application_multipart_in_progress =
       _next_application_multipart_in_progress;
+    _application_multipart_payload_size =
+      _next_application_multipart_payload_size;
     _frame_stage = reading_base_header;
     next_step (_tmpbuf, zmp_header_size, &zmp_decoder_t::header_ready);
 }

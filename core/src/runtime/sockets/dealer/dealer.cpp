@@ -45,6 +45,13 @@ int zlink::dealer_t::sendpipe_to (
                             observer_userdata_);
 }
 
+bool zlink::dealer_t::routed_submit_candidate (pipe_t *pipe_, void *userdata_)
+{
+    dealer_t *const dealer = static_cast<dealer_t *> (userdata_);
+    return dealer && pipe_ && pipe_->get_routing_id ().size () != 0
+           && dealer->transport_pair_application_ready (pipe_);
+}
+
 void zlink::dealer_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool locally_initiated_)
 {
     LIBZLINK_UNUSED (subscribe_to_all_);
@@ -74,9 +81,16 @@ void zlink::dealer_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
         if (ready)
             defer_socket_msg_dispatch ();
     }
-    _lb.attach (pipe_);
+    {
+        scoped_fast_lock_t generation_lock (pipe_->transport_sync ());
+        uint32_t initial_weight = 100;
+        (void) recorded_peer_weight_ready_locked (pipe_, &initial_weight);
+        _lb.attach (pipe_, initial_weight);
+    }
+    // Paired pipes remain held here and publish from the one pair-ready resync;
+    // unpaired network/inproc pipes publish at their normal attach boundary.
     if (local_peer_weight () != 100)
-        send_local_peer_weight (pipe_);
+        (void) send_local_peer_weight (pipe_);
 }
 
 int zlink::dealer_t::xsetsockopt (int option_, const void *optval_, size_t optvallen_)
@@ -87,6 +101,16 @@ int zlink::dealer_t::xsetsockopt (int option_, const void *optval_, size_t optva
         memcpy (&value, optval_, sizeof (int));
 
     switch (option_) {
+        case ZLINK_INTERNAL_OPT_CONFLATE:
+            // DEALER exchanges protocol control frames on the same pipe as
+            // application records.  Frame-level conflation cannot preserve
+            // both, so enabling it is deliberately unsupported.
+            if (is_int && value == 1) {
+                errno = ENOTSUP;
+                return -1;
+            }
+            break;
+
         case ZLINK_INTERNAL_OPT_PROBE_ROUTER:
             if (is_int && value >= 0) {
                 _probe_router = (value != 0);
@@ -137,14 +161,19 @@ int zlink::dealer_t::xsend_routed (
   pipe_t **pipe_out_, uint64_t expected_transport_pair_id_,
   uint64_t expected_transport_pair_generation_,
   pipe_message_admission_t *admission_out_,
-  pipe_write_observer_fn observer_, void *observer_userdata_)
+  pipe_write_observer_fn observer_, void *observer_userdata_,
+  routed_send_attempt_identity_t *attempt_identity_out_,
+  uint64_t expected_route_incarnation_id_)
 {
+    LIBZLINK_UNUSED (expected_route_incarnation_id_);
     if (admission_out_)
         *admission_out_ = pipe_message_admission_invalid;
     if (connection_id_out_)
         *connection_id_out_ = 0;
     if (pipe_out_)
         *pipe_out_ = NULL;
+    if (attempt_identity_out_)
+        attempt_identity_out_->reset ();
     if (!target_rid_ || expected_transport_pair_id_ == 0
         || expected_transport_pair_generation_ == 0) {
         errno = ENOTSUP;
@@ -169,6 +198,13 @@ int zlink::dealer_t::xsend_routed (
         *connection_id_out_ = connection_id;
     if (pipe_out_)
         *pipe_out_ = pipe;
+    if (attempt_identity_out_) {
+        attempt_identity_out_->transport_pair_id =
+          pipe->get_transport_pair_id ();
+        attempt_identity_out_->transport_pair_generation =
+          pipe->get_transport_pair_generation ();
+        attempt_identity_out_->transport_connection_id = connection_id;
+    }
     return sendpipe_to (
       pipe, msg_,
       (msg_->flags () & msg_t::more) != 0 ? ZLINK_SNDMORE : 0,
@@ -186,13 +222,7 @@ int zlink::dealer_t::xselect_routed_submit_target (
 
     pipe_t *selected = NULL;
     const int rc = _lb.select_connected_pipe (
-      &selected,
-      [] (pipe_t *pipe_, void *userdata_) -> bool {
-          dealer_t *dealer = static_cast<dealer_t *> (userdata_);
-          return dealer && pipe_ && pipe_->get_routing_id ().size () != 0
-                 && dealer->transport_pair_application_ready (pipe_);
-      },
-      this);
+      &selected, &dealer_t::routed_submit_candidate, this);
     if (rc != 0)
         return -1;
 
@@ -400,13 +430,39 @@ void zlink::dealer_t::xdispatch_io ()
 
 int zlink::dealer_t::apply_peer_weight (pipe_t *pipe_, uint32_t weight_)
 {
-    if (!pipe_)
+    // An owner command may precede socket admission. The exact pipe already
+    // retains the generation-tagged value; only a registered scheduler entry
+    // may mutate selection or publish a monitor event. xattach replays the
+    // cache after _lb.attach.
+    if (!pipe_ || !_lb.contains (pipe_))
         return 1;
 
     const bool changed = _lb.weight (pipe_) != weight_;
     _lb.set_weight (pipe_, weight_);
     if (!changed)
         return 1;
+    // A weight transition is an admission edge for an exact pending send.
+    // Mailbox redrive lets zero reach normal terminal ECONNREFUSED handling and
+    // lets a newly positive target retry without an unrelated HWM activation.
+    notify_send_pending_writable (pipe_);
     emit_peer_weight_changed (pipe_, weight_);
     return 1;
 }
+
+void zlink::dealer_t::initialize_peer_weight (pipe_t *pipe_, uint32_t weight_)
+{
+    if (pipe_ && _lb.contains (pipe_))
+        _lb.set_weight (pipe_, weight_);
+}
+
+#ifdef ZLINK_BUILD_TESTS
+uint32_t zlink::dealer_t::test_peer_weight (pipe_t *pipe_) const
+{
+    return _lb.weight (pipe_);
+}
+
+size_t zlink::dealer_t::test_peer_weight_count (uint32_t weight_) const
+{
+    return _lb.test_weight_count (weight_);
+}
+#endif

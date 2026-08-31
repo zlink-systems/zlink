@@ -145,7 +145,8 @@ struct async_input_command_probe_t
     bool activate_read_seen;
 };
 
-void capture_async_input_command (void *userdata_, int command_type_, bool)
+void capture_async_input_command (void *userdata_, int command_type_, bool,
+                                  bool)
 {
     async_input_command_probe_t *probe =
       static_cast<async_input_command_probe_t *> (userdata_);

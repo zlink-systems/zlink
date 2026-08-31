@@ -1455,15 +1455,107 @@ endif()
 # -----------------------------------------------------------------------------
 # tests
 
+# BUILD_TESTS is the legacy generic option, while ZLINK_BUILD_TESTS is the
+# namespaced option used by package consumers. Keep both cache entries in sync
+# without making either spelling ineffective on a later configure.
+set(_zlink_build_tests_input_defined FALSE)
+if(DEFINED ZLINK_BUILD_TESTS)
+  set(_zlink_build_tests_input_defined TRUE)
+endif()
+set(_build_tests_input_defined FALSE)
+if(DEFINED BUILD_TESTS)
+  set(_build_tests_input_defined TRUE)
+endif()
+
 if(${CMAKE_VERSION} VERSION_LESS 3.12.3)
   option(BUILD_TESTS "Whether or not to build the tests" OFF)
 else()
   option(BUILD_TESTS "Whether or not to build the tests" ON)
 endif()
 
+if(NOT DEFINED ZLINK_BUILD_TESTS)
+  set(ZLINK_BUILD_TESTS ${BUILD_TESTS})
+endif()
+
+if(BUILD_TESTS)
+  set(_build_tests_value ON)
+else()
+  set(_build_tests_value OFF)
+endif()
+if(ZLINK_BUILD_TESTS)
+  set(_zlink_build_tests_value ON)
+else()
+  set(_zlink_build_tests_value OFF)
+endif()
+
+if(DEFINED _ZLINK_BUILD_TESTS_LAST_SYNCED)
+  if(_ZLINK_BUILD_TESTS_LAST_SYNCED)
+    set(_zlink_build_tests_last_value ON)
+  else()
+    set(_zlink_build_tests_last_value OFF)
+  endif()
+
+  set(_build_tests_changed FALSE)
+  if(NOT _build_tests_value STREQUAL _zlink_build_tests_last_value)
+    set(_build_tests_changed TRUE)
+  endif()
+  set(_zlink_build_tests_changed FALSE)
+  if(NOT _zlink_build_tests_value STREQUAL _zlink_build_tests_last_value)
+    set(_zlink_build_tests_changed TRUE)
+  endif()
+
+  if(_build_tests_changed AND _zlink_build_tests_changed)
+    if(NOT _build_tests_value STREQUAL _zlink_build_tests_value)
+      message(
+        FATAL_ERROR
+          "BUILD_TESTS and ZLINK_BUILD_TESTS changed to conflicting values. "
+          "Set both options to the same value.")
+    endif()
+    set(_zlink_build_tests_effective ${_build_tests_value})
+  elseif(_build_tests_changed)
+    set(_zlink_build_tests_effective ${_build_tests_value})
+  elseif(_zlink_build_tests_changed)
+    set(_zlink_build_tests_effective ${_zlink_build_tests_value})
+  else()
+    set(_zlink_build_tests_effective ${_zlink_build_tests_last_value})
+  endif()
+else()
+  if(_build_tests_input_defined AND _zlink_build_tests_input_defined
+     AND NOT _build_tests_value STREQUAL _zlink_build_tests_value)
+    message(
+      FATAL_ERROR
+        "BUILD_TESTS and ZLINK_BUILD_TESTS have conflicting initial values. "
+        "Set both options to the same value.")
+  elseif(_zlink_build_tests_input_defined)
+    set(_zlink_build_tests_effective ${_zlink_build_tests_value})
+  else()
+    set(_zlink_build_tests_effective ${_build_tests_value})
+  endif()
+endif()
+
+set(BUILD_TESTS
+    ${_zlink_build_tests_effective}
+    CACHE BOOL "Whether or not to build the tests" FORCE)
 set(ZLINK_BUILD_TESTS
-    ${BUILD_TESTS}
-    CACHE BOOL "Build the tests for Zlink")
+    ${_zlink_build_tests_effective}
+    CACHE BOOL "Build the tests for Zlink" FORCE)
+set(_ZLINK_BUILD_TESTS_LAST_SYNCED
+    ${_zlink_build_tests_effective}
+    CACHE INTERNAL "Last synchronized Core test-build option" FORCE)
+
+# Cache writes do not replace normal variables supplied by a parent project.
+set(BUILD_TESTS ${_zlink_build_tests_effective})
+set(ZLINK_BUILD_TESTS ${_zlink_build_tests_effective})
+
+if(ZLINK_BUILD_TESTS AND (NOT BUILD_SHARED OR NOT BUILD_STATIC))
+  message(
+    FATAL_ERROR
+      "Core tests require BUILD_SHARED=ON and BUILD_STATIC=ON. Private C++ and "
+      "test-only checks link the static library without expanding the shared ABI, "
+      "while the public-surface contract inspects the shared library exports. "
+      "Enable both library targets, or disable tests with BUILD_TESTS=OFF and "
+      "ZLINK_BUILD_TESTS=OFF.")
+endif()
 
 if(ZLINK_BUILD_TESTS)
   add_compile_definitions(ZLINK_BUILD_TESTS=1)

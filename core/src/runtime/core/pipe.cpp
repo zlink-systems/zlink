@@ -8,12 +8,15 @@
 #include "utils/macros.hpp"
 #include "core/pipe.hpp"
 #include "core/ctx.hpp"
+#include "protocol/zmp_peer_weight.hpp"
 #include "utils/err.hpp"
 #include "utils/debug_log.hpp"
 #include "utils/heap_owner.hpp"
 
 namespace
 {
+const uint32_t pending_peer_weight_unset = UINT32_MAX;
+
 #ifdef ZLINK_BUILD_TESTS
 std::atomic<int> g_stream_packet_allocation_failpoint (
   zlink::stream_packet_allocation_none);
@@ -96,9 +99,15 @@ int zlink::pipepair (object_t *parents_[2],
     //  one here. A session-backed route remains unbound until its engine is
     //  ready. Messages queued before that first binding keep id 0 and belong
     //  to the first transport; later nonzero ids still isolate reconnects.
+    const uint64_t initial_connection_id =
+      session_pipe_ ? 0 : allocate_connection_id ();
+    const uint64_t route_incarnation_id =
+      initial_connection_id != 0 ? initial_connection_id
+                                 : allocate_connection_id ();
+    zlink_assert (route_incarnation_id != 0);
     const std::shared_ptr<transport_lifetime_t> transport_lifetime =
       std::make_shared<transport_lifetime_t> (
-        session_pipe_ ? 0 : allocate_connection_id ());
+        initial_connection_id, route_incarnation_id);
 
     pipes_[0] = new (std::nothrow)
       pipe_t (parents_[0], upipe1, upipe2, hwms_[1], hwms_[0], conflate_[0],
@@ -290,7 +299,10 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _registry_accounting (registry_accounting_),
     _transport_pair_id (0),
     _transport_pair_generation (0),
-    _locally_initiated (false)
+    _locally_initiated (false),
+    _peer_weight_connection_id (UINT64_MAX),
+    _peer_weight (UINT32_MAX),
+    _pending_peer_weight (pending_peer_weight_unset)
 {
     _disconnect_msg.init ();
 }
@@ -514,6 +526,11 @@ zlink::pipe_t *zlink::pipe_t::retain_peer_snapshot () const
     return retain_peer_snapshot_unlocked ();
 }
 
+bool zlink::pipe_t::is_session_pipe () const
+{
+    return _session_pipe;
+}
+
 zlink::pipe_t *zlink::pipe_t::retain_peer_snapshot_unlocked () const
 {
     pipe_t *const peer = get_peer ();
@@ -567,6 +584,46 @@ uint64_t zlink::pipe_t::get_bytes_written () const
 uint64_t zlink::pipe_t::get_bytes_read () const
 {
     return _published_bytes_read.load (std::memory_order_relaxed);
+}
+
+void zlink::pipe_t::record_peer_weight (uint64_t connection_id_,
+                                        uint32_t weight_)
+{
+    _peer_weight.store (weight_, std::memory_order_release);
+    _peer_weight_connection_id.store (connection_id_,
+                                      std::memory_order_release);
+}
+
+bool zlink::pipe_t::record_peer_weight_if_current (uint64_t connection_id_,
+                                                   uint32_t weight_)
+{
+    scoped_fast_lock_t generation_lock (_transport_lifetime->transport_sync);
+    if (weight_ > max_peer_weight
+        || _transport_lane != transport_lane_application
+        || (_transport_pair_id != 0 && connection_id_ == 0)
+        || get_transport_connection_id () != connection_id_
+        || !is_lifecycle_active ())
+        return false;
+    record_peer_weight (connection_id_, weight_);
+    return true;
+}
+
+bool zlink::pipe_t::peer_weight (uint32_t *weight_out_,
+                                 uint64_t *connection_id_out_) const
+{
+    const uint64_t connection_id =
+      _peer_weight_connection_id.load (std::memory_order_acquire);
+    if (connection_id == UINT64_MAX
+        || connection_id != get_transport_connection_id ())
+        return false;
+    const uint32_t weight = _peer_weight.load (std::memory_order_acquire);
+    if (weight == UINT32_MAX)
+        return false;
+    if (weight_out_)
+        *weight_out_ = weight;
+    if (connection_id_out_)
+        *connection_id_out_ = connection_id;
+    return true;
 }
 
 uint64_t zlink::pipe_t::get_snd_pending_msgs () const
@@ -781,20 +838,20 @@ const zlink::pipe_t::stream_packet_state_t &zlink::pipe_t::stream_packet_state (
     return _transport_lifetime->stream_packet_state;
 }
 
-zlink::fast_mutex_t &zlink::pipe_t::stream_dispatch_sync ()
+zlink::fast_mutex_t &zlink::pipe_t::transport_sync ()
 {
-    return _transport_lifetime->stream_dispatch_sync;
+    return _transport_lifetime->transport_sync;
 }
 
 void zlink::pipe_t::reset_stream_packet_state ()
 {
-    scoped_fast_lock_t lock (_transport_lifetime->stream_dispatch_sync);
+    scoped_fast_lock_t lock (_transport_lifetime->transport_sync);
     _transport_lifetime->stream_packet_state.reset ();
 }
 
 void zlink::pipe_t::close_stream_route ()
 {
-    scoped_fast_lock_t lock (_transport_lifetime->stream_dispatch_sync);
+    scoped_fast_lock_t lock (_transport_lifetime->transport_sync);
     _transport_lifetime->stream_route_closed.store (
       true, std::memory_order_release);
     _transport_lifetime->stream_packet_state.reset ();
@@ -1487,6 +1544,7 @@ uint64_t zlink::pipe_t::test_apply_lwm_hint (uint64_t hwm_, uint64_t lwm_,
 {
     return apply_lwm_hint (hwm_, lwm_, lwm_hint_);
 }
+
 #endif
 
 bool zlink::pipe_t::take_flow_resume_recovery ()
@@ -1510,6 +1568,28 @@ void zlink::pipe_t::process_flow_state (unsigned char state_, uint64_t epoch_)
           actual_writable);
     if (notify)
         _sink->write_activated (this);
+}
+
+void zlink::pipe_t::process_peer_weight (uint32_t weight_,
+                                         uint64_t connection_id_)
+{
+    scoped_fast_lock_t generation_lock (_transport_lifetime->transport_sync);
+    //  The command retains this exact endpoint until processing completes.
+    //  Its immutable transport identity prevents a delayed command from an
+    //  old generation (or a recycled connection) changing a replacement.
+    if (weight_ > max_peer_weight
+        || _transport_lane != transport_lane_application
+        || (_transport_pair_id != 0 && connection_id_ == 0)
+        || get_transport_connection_id () != connection_id_
+        || !is_lifecycle_active ())
+        return;
+
+    // The exact pipe owns the latest value even before bind/xattach installs
+    // its socket sink. A later scheduler attachment reads the same generation-
+    // scoped record, so owner-command ordering cannot lose pre-admission state.
+    record_peer_weight (connection_id_, weight_);
+    if (_sink)
+        _sink->peer_weight_received (this, weight_);
 }
 
 bool zlink::pipe_t::apply_remote_flow_state (
@@ -1652,6 +1732,86 @@ bool zlink::pipe_t::write_transport_probe_and_flush (const msg_t *msg_)
         return false;
     flush_unlocked ();
     return true;
+}
+
+bool zlink::pipe_t::stage_peer_control_unlocked (uint32_t weight_)
+{
+    if (weight_ > max_peer_weight)
+        return false;
+    _pending_peer_weight = weight_;
+    return true;
+}
+
+bool zlink::pipe_t::append_pending_peer_control_unlocked ()
+{
+    if (_pending_peer_weight == pending_peer_weight_unset)
+        return true;
+    if (_out_incomplete_bytes != 0 || _out_incomplete_payload_bytes != 0)
+        return false;
+    if (_state != active || _transport_pair_write_held || !_out_pipe)
+        return false;
+
+    msg_t command;
+    const int init_rc = command.init ();
+    errno_assert (init_rc == 0);
+    const int frame_rc =
+      zmp_peer_weight::init_command (&command, _pending_peer_weight);
+    if (frame_rc != 0) {
+        const int close_rc = command.close ();
+        errno_assert (close_rc == 0);
+        return false;
+    }
+    // Session pull drops a nonzero stamp from a retired transport generation.
+    command.set_transport_connection_id (get_transport_connection_id ());
+
+    const uint64_t control_bytes = frame_accounted_bytes (&command);
+    _out_pipe->write (command, false);
+    _bytes_written =
+      control_bytes == UINT64_MAX
+          || UINT64_MAX - _bytes_written < control_bytes
+        ? UINT64_MAX
+        : _bytes_written + control_bytes;
+    if (_msgs_written != UINT64_MAX)
+        ++_msgs_written;
+    const int reset_rc = command.init ();
+    errno_assert (reset_rc == 0);
+    _pending_peer_weight = pending_peer_weight_unset;
+    publish_session_outbound_accounting_unlocked (false);
+    return true;
+}
+
+bool zlink::pipe_t::flush_pending_peer_control_unlocked ()
+{
+    const bool had_pending = _pending_peer_weight != pending_peer_weight_unset;
+    if (!append_pending_peer_control_unlocked ())
+        return false;
+    if (!had_pending)
+        return true;
+    flush_unlocked ();
+    return true;
+}
+
+bool zlink::pipe_t::write_peer_weight_control_and_flush (uint32_t weight_)
+{
+    if (weight_ > max_peer_weight
+        || _transport_lane != transport_lane_application || !_session_pipe
+        || _registry_accounting) {
+        errno = EINVAL;
+        return false;
+    }
+
+    scoped_fast_lock_t lock (_out_sync);
+    if (_state != active || _transport_pair_write_held)
+        return false;
+    // A ypipe terminal write advances its commit boundary over every preceding
+    // MORE frame. Keep the latest absolute policy command off the ypipe while
+    // an Application multipart is open; final commit or rollback appends it at
+    // the next real boundary.
+    if (_out_incomplete_bytes != 0 || _out_incomplete_payload_bytes != 0)
+        return stage_peer_control_unlocked (weight_);
+    if (!stage_peer_control_unlocked (weight_))
+        return false;
+    return flush_pending_peer_control_unlocked ();
 }
 
 bool zlink::pipe_t::write_and_flush (
@@ -1952,6 +2112,10 @@ void zlink::pipe_t::process_hiccup (void *pipe_, uint64_t generation_)
         _out_owner_message_started = false;
         _out_owner_message_start_pending = false;
         _decoder_multipart_started_empty = false;
+        // A deferred command belongs to the discarded transport generation.
+        // The session owner resynchronizes the current absolute policy after
+        // publishing the replacement connection id.
+        _pending_peer_weight = pending_peer_weight_unset;
         if (incomplete_bytes > 0 && _registry_accounting)
             get_ctx ()->_physical_queue_registry.rollback_provisional (
               _out_physical_queue, incomplete_bytes);
@@ -2136,7 +2300,7 @@ void zlink::pipe_t::set_nodelay ()
     _delay = false;
 
     if (_state == waiting_for_delimiter) {
-        rollback_unlocked ();
+        rollback_unlocked (false);
         _out_pipe = NULL;
         (void) send_pipe_term_ack (get_peer ());
         _state = term_ack_sent;
@@ -2170,7 +2334,7 @@ void zlink::pipe_t::terminate (bool delay_)
     //  'terminate'. We can act as if all the pending messages were read.
     else if (_state == waiting_for_delimiter && !_delay) {
         //  Drop any unfinished outbound messages.
-        rollback_unlocked ();
+        rollback_unlocked (false);
         _out_pipe = NULL;
         (void) send_pipe_term_ack (get_peer ());
         _state = term_ack_sent;
@@ -2195,7 +2359,7 @@ void zlink::pipe_t::terminate (bool delay_)
 
     if (_out_pipe) {
         //  Drop any unfinished outbound messages.
-        rollback_unlocked ();
+        rollback_unlocked (false);
 
         //  Write the delimiter into the pipe. Note that watermarks are not
         //  checked; thus the delimiter can be written even when the pipe is full.
@@ -2260,7 +2424,7 @@ void zlink::pipe_t::process_delimiter ()
     if (_state == active)
         _state = delimiter_received;
     else {
-        rollback_unlocked ();
+        rollback_unlocked (false);
         _out_pipe = NULL;
         (void) send_pipe_term_ack (get_peer ());
         _state = term_ack_sent;
@@ -2472,9 +2636,13 @@ const zlink::endpoint_uri_pair_t &zlink::pipe_t::get_endpoint_pair () const
 
 void zlink::pipe_t::set_transport_connection_id (uint64_t connection_id_)
 {
-    if (_transport_lifetime)
+    if (_transport_lifetime) {
+        scoped_fast_lock_t generation_lock (_transport_lifetime->transport_sync);
         _transport_lifetime->connection_id.store (
           connection_id_, std::memory_order_release);
+        _endpoint_pair.connection_id = connection_id_;
+        return;
+    }
     _endpoint_pair.connection_id = connection_id_;
 }
 
@@ -2484,6 +2652,12 @@ uint64_t zlink::pipe_t::get_transport_connection_id () const
              ? _transport_lifetime->connection_id.load (
                  std::memory_order_acquire)
              : _endpoint_pair.connection_id.load ();
+}
+
+uint64_t zlink::pipe_t::get_route_incarnation_id () const
+{
+    zlink_assert (_transport_lifetime);
+    return _transport_lifetime->route_incarnation_id;
 }
 
 void zlink::pipe_t::set_transport_pair (transport_lane_t lane_,
@@ -2534,7 +2708,7 @@ void zlink::pipe_t::send_disconnect_msg ()
     scoped_fast_lock_t lock (_out_sync);
     if (_disconnect_msg.size () > 0 && _out_pipe) {
         // Rollback any incomplete message in the pipe, and push the disconnect message.
-        rollback_unlocked ();
+        rollback_unlocked (false);
 
         const bool written = write_message_unlocked (&_disconnect_msg, false);
         zlink_assert (written);
@@ -2818,6 +2992,8 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
         *admission_out_ = pipe_message_admission_ready;
     publish_session_outbound_accounting_unlocked (
       more || incomplete_before != 0);
+    if (commits_bytes && _pending_peer_weight != pending_peer_weight_unset)
+        (void) append_pending_peer_control_unlocked ();
     return true;
 }
 
@@ -2960,7 +3136,7 @@ void zlink::pipe_t::publish_session_outbound_accounting_unlocked (
           _out_incomplete_bytes, std::memory_order_release);
 }
 
-void zlink::pipe_t::rollback_unlocked ()
+void zlink::pipe_t::rollback_unlocked (bool publish_peer_control_)
 {
     //  Remove incomplete message from the outbound pipe.
     msg_t msg;
@@ -2983,6 +3159,17 @@ void zlink::pipe_t::rollback_unlocked ()
     _out_owner_message_started = false;
     _out_owner_message_start_pending = false;
     publish_session_outbound_accounting_unlocked (true);
+    if (_pending_peer_weight != pending_peer_weight_unset) {
+        // A public Application rollback keeps the latest absolute policy
+        // command and publishes it at the now-clean message boundary.
+        // Termination/disconnect rollbacks must not leak control into a
+        // retiring generation; its normal reconnect/pair-ready resync owns
+        // publication on the replacement transport.
+        if (publish_peer_control_ && _state == active)
+            (void) flush_pending_peer_control_unlocked ();
+        else
+            _pending_peer_weight = pending_peer_weight_unset;
+    }
 }
 
 void zlink::pipe_t::flush_unlocked ()

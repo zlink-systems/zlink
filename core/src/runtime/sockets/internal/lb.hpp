@@ -24,13 +24,16 @@ class lb_t
     lb_t ();
     ~lb_t ();
 
-    void attach (pipe_t *pipe_);
+    void attach (pipe_t *pipe_, uint32_t initial_weight_ = 100);
     void activated (pipe_t *pipe_);
     void pipe_terminated (pipe_t *pipe_);
     void set_weight (pipe_t *pipe_, uint32_t weight_);
     uint32_t weight (pipe_t *pipe_) const;
     bool has_positive_weight_pipe () const;
     bool contains (pipe_t *pipe_) const;
+#ifdef ZLINK_BUILD_TESTS
+    size_t test_weight_count (uint32_t weight_) const;
+#endif
 
     //  Commits one weighted choice across every connected positive-weight
     //  pipe, including pipes that are temporarily inactive because of HWM.

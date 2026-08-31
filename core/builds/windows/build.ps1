@@ -112,10 +112,13 @@ $ROOT_DIR_ABS = $RepoRoot
 
 Push-Location $BUILD_DIR
 try {
-    # Determine BUILD_TESTS flag
+    # Core tests use private helpers through the static library. Keep normal
+    # packaging shared-only, but add the static target whenever tests run.
     $BUILD_TESTS_FLAG = "OFF"
+    $BUILD_STATIC_FLAG = "OFF"
     if ($RunTests -eq "ON") {
         $BUILD_TESTS_FLAG = "ON"
+        $BUILD_STATIC_FLAG = "ON"
     }
 
     # Configure build
@@ -142,7 +145,7 @@ try {
         -DCMAKE_BUILD_TYPE="$BuildType" `
         -DCMAKE_POLICY_VERSION_MINIMUM="3.5" `
         -DBUILD_SHARED=ON `
-        -DBUILD_STATIC=OFF `
+        -DBUILD_STATIC="$BUILD_STATIC_FLAG" `
         -DBUILD_TESTS="$BUILD_TESTS_FLAG" `
         -DZLINK_CXX_STANDARD=17 `
         -DBUILD_BENCHMARKS=OFF `

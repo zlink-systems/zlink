@@ -16,6 +16,11 @@ const size_t zmp_request_sequence_size = 8;
 const size_t zmp_request_reply_header_size =
   zmp_header_size + zmp_request_sequence_size;
 const uint64_t zmp_max_body_size = 0xffffffffULL;
+// CONTROL frames bypass the negotiated Application payload limit, but retain
+// a small independent allocation bound. This covers READY metadata and all
+// current post-handshake commands (WEIGHT/FLOWSTATE) without turning CONTROL
+// into a max-message-size bypass for arbitrary peer allocations.
+const uint32_t zmp_max_control_body_size = 4096;
 
 //  DATA frame kinds. Request-reply kinds carry one 64-bit big-endian
 //  sequence extension immediately after the common 8-byte header.

@@ -16,6 +16,12 @@ zlink::socket_base_t *&async_mailbox_dispatch_socket_tls ()
     static thread_local zlink::socket_base_t *socket = NULL;
     return socket;
 }
+
+bool is_pair_pipe_lifetime_command (const zlink::command_t &cmd_)
+{
+    return cmd_.type == zlink::command_t::bind
+           || cmd_.type == zlink::command_t::pipe_term_ack;
+}
 }
 
 void zlink::socket_base_t::reaper_mailbox_handler (void *arg_)
@@ -93,148 +99,201 @@ int zlink::socket_base_t::process_commands (
   int timeout_, bool throttle_, bool force_if_command_pending_)
 {
     receive_runtime_t &receive = receive_runtime ();
-    const bool async_executor = current_async_mailbox_dispatch_socket () == this;
-    // Once the mailbox handoff begins, the async executor is the sole command
-    // progress owner.  A public socket path may already hold a socket-specific
-    // API mutex, so it must not wait for the async executor while that executor
-    // can re-enter the same socket during command dispatch.
-    if (async_mailbox_owns_commands () && !async_executor) {
-        if (_ctx_terminated) {
-            errno = ETERM;
-            return -1;
-        }
-        return 0;
-    }
-
-    scoped_lock_t command_owner (receive.command_owner_sync);
-    // Close the handoff race between the lock-free owner check above and
-    // acquiring the command scope.  The pending handoff bit remains set until
-    // the async owner has been installed.
-    if (async_mailbox_owns_commands () && !async_executor) {
-        if (_ctx_terminated) {
-            errno = ETERM;
-            return -1;
-        }
-        return 0;
-    }
-
+    socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
     mailbox_t *const mailbox = static_cast<mailbox_t *> (_mailbox);
-    bool took_command_pending_hint = false;
-    if (timeout_ == 0 && throttle_ && force_if_command_pending_) {
-        //  Direct request-reply commit points need a command drain only when a
-        //  sender woke an inactive mailbox. Keep their ordinary no-command
-        //  path free of both rdtsc and signaler work.
-        took_command_pending_hint = mailbox->take_command_pending_hint ();
-        if (!took_command_pending_hint)
-            return 0;
-    }
-    if (timeout_ == 0 && throttle_) {
-        //  If we are asked not to wait, check whether we haven't processed
-        //  commands recently, so that we can throttle the new commands.
+    const bool async_executor = current_async_mailbox_dispatch_socket () == this;
+    const uint64_t wait_deadline =
+      timeout_ > 0 ? _clock.now_ms () + static_cast<uint64_t> (timeout_) : 0;
+    bool pair_pipe_lifetime_sync_required = false;
+    bool woke_since_last_claim = false;
 
-        //  Get the CPU's tick counter. If 0, the counter is not available.
-        const uint64_t tsc = zlink::clock_t::rdtsc ();
-
-        //  Optimised version of command processing - it doesn't have to check
-        //  for incoming commands each time. It does so only if certain time
-        //  elapsed since last command processing. Command delay varies
-        //  depending on CPU speed: It's ~1ms on 3GHz CPU, ~2ms on 1.5GHz CPU
-        //  etc. The optimisation makes sense only on platforms where getting
-        //  a timestamp is a very cheap operation (tens of nanoseconds).
-        const bool should_skip =
-          tsc && command_runtime ().should_skip_throttled_command_poll (tsc);
-        if (should_skip && !took_command_pending_hint)
-            return 0;
-    }
-
-    //  Clear a consumed wake hint before draining. A concurrent enqueue either
-    //  joins this drain or publishes a new hint for the next commit point.
-    if (!took_command_pending_hint)
-        (void) mailbox->take_command_pending_hint ();
-
-#ifdef ZLINK_BUILD_TESTS
-    if (async_executor)
-        receive.async_mailbox_drains.fetch_add (1, std::memory_order_relaxed);
-    else
-        receive.public_mailbox_drains.fetch_add (1, std::memory_order_relaxed);
-#endif
-
-    //  Check whether there are any commands pending for this thread.
-    command_t cmd;
-    int rc = mailbox->recv (&cmd, timeout_);
-
-    if (rc != 0 && errno == EINTR)
-        return -1;
-
-    //  Process all available commands.
-    bool processed_command = false;
-    while (rc == 0 || errno == EINTR) {
-        if (rc == 0) {
-            // Pipe commands mutate inbound state before reaching the socket
-            // sink. When the mailbox runs on an I/O thread, it can also attach
-            // or detach a pipe while a public send uses socket-specific
-            // distribution state (for example DEALER's load balancer).
-            // Serialize socket-owned send-state mutation with active and
-            // close-time multipart rollback. Non-PAIR send state is touched by
-            // several command types and keeps the existing broad guard. PAIR
-            // owns only one raw pipe pointer: bind publishes it and a
-            // termination acknowledgement clears/deallocates it. Guard those
-            // two mutation commands unconditionally rather than checking a
-            // multipart marker, which would leave a check-then-admit race. The
-            // frequent PAIR activation/pending commands remain lock-free.
-            const bool pair_pipe_lifetime_command =
-              options.type == ZLINK_CORE_SOCKET_PAIR
-              && (cmd.type == command_t::bind
-                  || cmd.type == command_t::pipe_term_ack);
-#ifdef ZLINK_BUILD_TESTS
-            receive_runtime_t::command_sync_probe_hook_fn sync_probe =
-              receive.command_sync_probe_hook.load (std::memory_order_acquire);
-            if (sync_probe) {
-                const bool acquired = receive.sync.try_lock ();
-                if (acquired)
-                    receive.sync.unlock ();
-                sync_probe (
-                  receive.command_sync_probe_userdata.load (
-                    std::memory_order_acquire),
-                  static_cast<int> (cmd.type),
-                  !acquired);
+    while (true) {
+        // Once the mailbox handoff begins, the async executor is the sole
+        // command progress owner. A public path must not wait for that owner
+        // while it can re-enter this socket during command dispatch.
+        if (async_mailbox_owns_commands () && !async_executor) {
+            if (_ctx_terminated) {
+                errno = ETERM;
+                return -1;
             }
-#endif
-            if (async_executor
-                && (direct_send_needs_public_api_sync ()
-                    || pair_pipe_lifetime_command)) {
-                socket_public_api_lock_scope_t api_owner (
-                  lifecycle_coordinator ());
-                scoped_lock_t receive_owner (receive.sync);
-                cmd.destination->process_command (cmd);
-            } else {
-                scoped_lock_t receive_owner (receive.sync);
-                cmd.destination->process_command (cmd);
-            }
-            // Pipe termination callbacks defer socket-message assembly/routing
-            // cleanup because the command itself runs under receive.sync. The
-            // local scope above is gone here, so waiting for a direct handler
-            // cannot invert receive and dispatch locks.
-            process_deferred_socket_msg_pipe_terminations ();
-            processed_command = true;
+            return 0;
         }
-        rc = mailbox->recv (&cmd, 0);
+
+        bool processed_command = false;
+        bool retry_pair_pipe_lifetime_with_sync = false;
+        {
+            // Socket commands can mutate non-PAIR distribution state used by
+            // concurrent sends. The exact calling thread, rather than the
+            // process-wide held bit, decides whether this scope must acquire
+            // public API synchronization. PAIR activation commands remain
+            // lock-free; a front bind/termination transition is probed under
+            // command ownership and retried in API -> command-owner order.
+            const bool pair_sync_for_this_claim =
+              pair_pipe_lifetime_sync_required;
+            pair_pipe_lifetime_sync_required = false;
+            // Once start_reaping() installs the reaper poller, public close
+            // cleanup and async quiescence are complete and no send can resume.
+            // A parked marker may still leave a stale raw bit, so the reaper
+            // must not wait on it. Before that ownership boundary, including
+            // async close handoff, command mutation still fences close-time
+            // multipart rollback with the ordinary lifecycle sync.
+            const bool reaper_owns_closed_socket =
+              lifecycle.public_close_requested ()
+              && lifecycle.reaper_poller () != NULL;
+            const bool command_path_needs_public_api_sync =
+              !reaper_owns_closed_socket
+              && ((options.type != ZLINK_CORE_SOCKET_PAIR)
+                  || pair_sync_for_this_claim);
+            const bool acquire_public_api_sync =
+              command_path_needs_public_api_sync
+              && !lifecycle.public_api_sync_owned_by_current_thread ();
+            socket_public_api_lock_scope_t api_owner (
+              lifecycle, acquire_public_api_sync);
+            scoped_lock_t command_owner (receive.command_owner_sync);
+
+            // Close the handoff race between the lock-free owner check above
+            // and acquiring the command scope. The pending bit remains set
+            // until the async owner has been installed.
+            if (async_mailbox_owns_commands () && !async_executor) {
+                if (_ctx_terminated) {
+                    errno = ETERM;
+                    return -1;
+                }
+                return 0;
+            }
+
+            bool took_command_pending_hint = false;
+            if (!pair_sync_for_this_claim && timeout_ == 0 && throttle_
+                && force_if_command_pending_) {
+                // Direct request-reply commit points need a command drain only
+                // when a sender woke an inactive mailbox.
+                took_command_pending_hint =
+                  mailbox->take_command_pending_hint ();
+                if (!took_command_pending_hint)
+                    return 0;
+            }
+            if (!pair_sync_for_this_claim && timeout_ == 0 && throttle_) {
+                const uint64_t tsc = zlink::clock_t::rdtsc ();
+                const bool should_skip =
+                  tsc
+                  && command_runtime ().should_skip_throttled_command_poll (
+                    tsc);
+                if (should_skip && !took_command_pending_hint)
+                    return 0;
+            }
+
+            // Clear a consumed wake hint before draining. A concurrent enqueue
+            // either joins this drain or publishes a hint for the next commit.
+            if (!took_command_pending_hint)
+                (void) mailbox->take_command_pending_hint ();
+
+            command_t cmd;
+            const bool probe_pair_lifetime_command =
+              options.type == ZLINK_CORE_SOCKET_PAIR
+              && !reaper_owns_closed_socket
+              && !lifecycle.public_api_sync_owned_by_current_thread ();
+            const auto recv_next_command = [&] (command_t *cmd_out_) {
+                if (probe_pair_lifetime_command) {
+                    const mailbox_t::command_probe_result_t probe =
+                      mailbox->probe_command (&is_pair_pipe_lifetime_command);
+                    if (probe == mailbox_t::command_probe_empty) {
+                        errno = EAGAIN;
+                        return -1;
+                    }
+                    if (probe == mailbox_t::command_probe_match) {
+                        retry_pair_pipe_lifetime_with_sync = true;
+                        errno = EAGAIN;
+                        return -1;
+                    }
+                }
+                return mailbox->recv (cmd_out_, 0);
+            };
+
+#ifdef ZLINK_BUILD_TESTS
+            if (async_executor)
+                receive.async_mailbox_drains.fetch_add (
+                  1, std::memory_order_relaxed);
+            else
+                receive.public_mailbox_drains.fetch_add (
+                  1, std::memory_order_relaxed);
+#endif
+
+            int rc = recv_next_command (&cmd);
+            if (rc != 0 && errno == EINTR)
+                return -1;
+
+            while (rc == 0 || errno == EINTR) {
+                if (rc == 0) {
+#ifdef ZLINK_BUILD_TESTS
+                    receive_runtime_t::command_sync_probe_hook_fn sync_probe =
+                      receive.command_sync_probe_hook.load (
+                        std::memory_order_acquire);
+                    if (sync_probe) {
+                        const bool acquired = receive.sync.try_lock ();
+                        if (acquired)
+                            receive.sync.unlock ();
+                        sync_probe (
+                          receive.command_sync_probe_userdata.load (
+                            std::memory_order_acquire),
+                          static_cast<int> (cmd.type), !acquired,
+                          lifecycle.public_api_sync_owned_by_current_thread ());
+                    }
+#endif
+                    {
+                        scoped_lock_t receive_owner (receive.sync);
+                        cmd.destination->process_command (cmd);
+                    }
+                    // Pipe termination callbacks defer assembly/routing
+                    // cleanup until the command's receive scope is gone.
+                    process_deferred_socket_msg_pipe_terminations ();
+                    processed_command = true;
+                }
+                rc = recv_next_command (&cmd);
+            }
+
+            // Publish readiness only after the command owner applied every
+            // state transition in this batch.
+            if (processed_command)
+                mailbox->signal_pollers ();
+
+            zlink_assert (errno == EAGAIN);
+            if (_ctx_terminated) {
+                errno = ETERM;
+                return -1;
+            }
+            if (!retry_pair_pipe_lifetime_with_sync
+                && (processed_command || woke_since_last_claim
+                    || timeout_ == 0))
+                return 0;
+        }
+
+        if (retry_pair_pipe_lifetime_with_sync) {
+            pair_pipe_lifetime_sync_required = true;
+            continue;
+        }
+
+        // Blocking recv must not retain public API synchronization while it
+        // sleeps. A notification is only a hint; the next loop claims the
+        // command under API -> command-owner -> receive lock order.
+        int wait_timeout = timeout_;
+        if (timeout_ > 0) {
+            const uint64_t now = _clock.now_ms ();
+            if (now >= wait_deadline)
+                return 0;
+            wait_timeout = static_cast<int> (wait_deadline - now);
+        }
+        if (mailbox->wait_for_command_signal (wait_timeout) != 0) {
+            if (errno == EINTR)
+                return -1;
+            zlink_assert (errno == EAGAIN);
+            return 0;
+        }
+        // signal() is also a commandless progress edge (for example a newly
+        // writable attach). Preserve recv(timeout)'s legacy behavior: one
+        // empty claim after this wake returns to the caller so it can retry
+        // its socket operation instead of sleeping again indefinitely.
+        woke_since_last_claim = true;
     }
-
-    // A public socket poller owns a secondary signaler. Publish readiness only
-    // after the async command owner has applied the state transition so the
-    // poller cannot consume the command wake before has_in()/has_out() changes.
-    if (processed_command)
-        static_cast<mailbox_t *> (_mailbox)->signal_pollers ();
-
-    zlink_assert (errno == EAGAIN);
-
-    if (_ctx_terminated) {
-        errno = ETERM;
-        return -1;
-    }
-
-    return 0;
 }
 
 int zlink::socket_base_t::process_submit_commands ()

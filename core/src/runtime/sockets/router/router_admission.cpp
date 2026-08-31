@@ -56,6 +56,35 @@ int router_t::xselect_routed_submit_target (
   const zlink_routing_id_t *router_rid_or_null_,
   zlink_routed_submit_target_t *target_out_)
 {
+    std::lock_guard<std::mutex> route_lifecycle_lock (
+      _out_pipes_sync);
+    return select_routed_submit_target_locked (
+      router_rid_or_null_, target_out_, NULL, NULL, false);
+}
+
+int router_t::xselect_routed_submit_target_internal (
+  const zlink_routing_id_t *router_rid_or_null_,
+  zlink_routed_submit_target_t *target_out_,
+  uint64_t *transport_connection_id_out_,
+  uint64_t *route_incarnation_id_out_)
+{
+    std::lock_guard<std::mutex> route_lifecycle_lock (
+      _out_pipes_sync);
+    return select_routed_submit_target_locked (
+      router_rid_or_null_, target_out_, transport_connection_id_out_,
+      route_incarnation_id_out_, true);
+}
+
+int router_t::select_routed_submit_target_locked (
+  const zlink_routing_id_t *router_rid_or_null_,
+  zlink_routed_submit_target_t *target_out_,
+  uint64_t *transport_connection_id_out_,
+  uint64_t *route_incarnation_id_out_, bool allow_unpaired_) const
+{
+    if (transport_connection_id_out_)
+        *transport_connection_id_out_ = 0;
+    if (route_incarnation_id_out_)
+        *route_incarnation_id_out_ = 0;
     if (!valid_routing_id (router_rid_or_null_) || !target_out_) {
         errno = EINVAL;
         return -1;
@@ -65,8 +94,7 @@ int router_t::xselect_routed_submit_target (
       const_cast<unsigned char *> (router_rid_or_null_->data),
       router_rid_or_null_->size, reference_tag_t ());
     const out_pipe_t *out_pipe = lookup_out_pipe (routing_id);
-    if (!out_pipe || !out_pipe->pipe
-        || !transport_pair_application_ready (out_pipe->pipe)) {
+    if (!out_pipe || !out_pipe->pipe) {
         errno = EHOSTUNREACH;
         return -1;
     }
@@ -75,14 +103,64 @@ int router_t::xselect_routed_submit_target (
         return -1;
     }
 
+    pipe_t *const pipe = out_pipe->pipe;
+    const uint64_t pair_id = pipe->get_transport_pair_id ();
+    const uint64_t pair_generation =
+      pipe->get_transport_pair_generation ();
+    if (pair_id != 0) {
+        if (pair_generation == 0
+            || !transport_pair_application_ready (pipe)) {
+            errno = EHOSTUNREACH;
+            return -1;
+        }
+    } else {
+        const uint64_t connection_id =
+          pipe->get_transport_connection_id ();
+        if (!allow_unpaired_ || !transport_connection_id_out_
+            || !route_incarnation_id_out_
+            || connection_id == 0 || !pipe->is_lifecycle_active ()) {
+            errno = EHOSTUNREACH;
+            return -1;
+        }
+        *transport_connection_id_out_ = connection_id;
+        *route_incarnation_id_out_ = pipe->get_route_incarnation_id ();
+    }
+
     copy_routing_id_from_bytes (router_rid_or_null_->data,
                                 router_rid_or_null_->size,
                                 &target_out_->peer_rid);
-    target_out_->transport_pair_id =
-      out_pipe->pipe->get_transport_pair_id ();
-    target_out_->transport_pair_generation =
-      out_pipe->pipe->get_transport_pair_generation ();
+    target_out_->transport_pair_id = pair_id;
+    target_out_->transport_pair_generation = pair_generation;
     return 0;
+}
+
+bool router_t::xsend_pending_target_current_locked (
+  const routed_send_target_key_t &target_) const
+{
+    if (target_.peer_rid.empty ())
+        return false;
+    const blob_t routing_id (
+      const_cast<unsigned char *> (
+        reinterpret_cast<const unsigned char *> (target_.peer_rid.data ())),
+      target_.peer_rid.size (), reference_tag_t ());
+    const out_pipe_t *const current = lookup_out_pipe (routing_id);
+    if (!current || !current->pipe)
+        return false;
+
+    pipe_t *const pipe = current->pipe;
+    if (target_.transport_pair_id != 0
+        || target_.transport_pair_generation != 0) {
+        return target_.route_incarnation_id == 0
+               && pipe->get_transport_pair_id ()
+                    == target_.transport_pair_id
+               && pipe->get_transport_pair_generation ()
+                    == target_.transport_pair_generation;
+    }
+    return target_.route_incarnation_id != 0
+           && pipe->get_transport_pair_id () == 0
+           && pipe->get_transport_pair_generation () == 0
+           && pipe->get_route_incarnation_id ()
+                == target_.route_incarnation_id;
 }
 
 pipe_t *router_t::find_transport_pair_pipe (
@@ -118,40 +196,56 @@ pipe_t *router_t::find_transport_pair_pipe (
 
 bool router_t::emit_transport_pair_ready (pipe_t *pipe_)
 {
-    if (!pipe_ || pipe_->get_transport_pair_id () == 0
-        || pipe_->get_transport_lane () != transport_lane_application
-        // Every caller, including the session-side endpoint refresh, shares
-        // this data-plane gate. Pair-table admission alone is not readiness:
-        // the route must still have had its transport write hold released.
-        || !transport_pair_application_ready (pipe_)
-        || !pipe_->transport_pair_writes_released ())
-        return false;
+    endpoint_uri_pair_t endpoint_pair;
+    blob_t public_routing_id;
+    uint64_t pair_id = 0;
+    uint64_t pair_generation = 0;
+    {
+        std::lock_guard<std::mutex> route_lifecycle_lock (
+          _out_pipes_sync);
+        if (!pipe_ || pipe_->get_transport_pair_id () == 0
+            || pipe_->get_transport_lane () != transport_lane_application
+            // Every caller, including the session-side endpoint refresh,
+            // shares this data-plane gate. Pair-table admission alone is not
+            // readiness: route adoption and write release must both be done.
+            || !transport_pair_application_ready (pipe_)
+            || !pipe_->transport_pair_writes_released ())
+            return false;
 
-    const blob_t *routing_id = NULL;
-    const blob_t &pipe_routing_id = pipe_->get_routing_id ();
-    const out_pipe_t *current =
-      pipe_routing_id.size () > 0 ? lookup_out_pipe (pipe_routing_id) : NULL;
-    if (current && current->pipe == pipe_)
-        routing_id = &pipe_routing_id;
-    else {
-        const std::map<pipe_t *, blob_t>::const_iterator standby =
-          _standby_pipes.find (pipe_);
-        if (standby != _standby_pipes.end () && standby->second.size () > 0)
-            routing_id = &standby->second;
+        const blob_t *routing_id = NULL;
+        const blob_t &pipe_routing_id = pipe_->get_routing_id ();
+        const out_pipe_t *current =
+          pipe_routing_id.size () > 0 ? lookup_out_pipe (pipe_routing_id)
+                                      : NULL;
+        if (current && current->pipe == pipe_)
+            routing_id = &pipe_routing_id;
+        else {
+            const std::map<pipe_t *, blob_t>::const_iterator standby =
+              _standby_pipes.find (pipe_);
+            if (standby != _standby_pipes.end ()
+                && standby->second.size () > 0)
+                routing_id = &standby->second;
+        }
+        if (!routing_id)
+            return false;
+
+        public_routing_id =
+          blob_t (routing_id->data (), routing_id->size ());
+        endpoint_pair = pipe_->get_endpoint_pair ();
+        endpoint_pair.connection_id =
+          pipe_->get_transport_connection_id ();
+        pair_id = pipe_->get_transport_pair_id ();
+        pair_generation = pipe_->get_transport_pair_generation ();
     }
-    if (!routing_id)
-        return false;
-
-    endpoint_uri_pair_t endpoint_pair = pipe_->get_endpoint_pair ();
-    endpoint_pair.connection_id = pipe_->get_transport_connection_id ();
     event_connection_ready_changed (
-      endpoint_pair, routing_id->data (), routing_id->size (),
-      transport_lane_application, pipe_->get_transport_pair_id (),
-      pipe_->get_transport_pair_generation ());
+      endpoint_pair, public_routing_id.data (), public_routing_id.size (),
+      transport_lane_application, pair_id, pair_generation);
     return true;
 }
 
-bool router_t::identify_peer (pipe_t *pipe_, bool locally_initiated_)
+bool router_t::identify_peer (pipe_t *pipe_, bool locally_initiated_,
+                              route_adoption_actions_t *actions_,
+                              uint32_t initial_weight_)
 {
     msg_t msg;
     blob_t routing_id;
@@ -184,14 +278,16 @@ bool router_t::identify_peer (pipe_t *pipe_, bool locally_initiated_)
         }
     }
 
-    return adopt_peer_routing_id (pipe_, ZLINK_MOVE (routing_id), locally_initiated_);
+    return adopt_peer_routing_id (pipe_, ZLINK_MOVE (routing_id),
+                                  locally_initiated_, actions_,
+                                  initial_weight_);
 }
 
 bool router_t::duplicate_pipe_should_replace (const out_pipe_t &existing_outpipe_,
                                               const blob_t &routing_id_,
                                               bool locally_initiated_) const
 {
-    if (!existing_outpipe_.active || existing_outpipe_.weight == 0)
+    if (!existing_outpipe_.active)
         return true;
 
     // A reconnect created by the same side supersedes the older route. The
@@ -222,7 +318,10 @@ bool router_t::duplicate_pipe_should_replace (const out_pipe_t &existing_outpipe
     return locally_initiated_ == locally_initiated_pipe_wins;
 }
 
-bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_, bool locally_initiated_)
+bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
+                                      bool locally_initiated_,
+                                      route_adoption_actions_t *actions_,
+                                      uint32_t initial_weight_)
 {
     const out_pipe_t *const existing_outpipe = lookup_out_pipe (routing_id_);
     if (existing_outpipe) {
@@ -257,7 +356,7 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_, bool lo
               standby_routing_id);
             add_out_pipe (
               ZLINK_MOVE (standby_routing_id), pipe_,
-              locally_initiated_);
+              locally_initiated_, initial_weight_);
             _standby_pipes.ZLINK_MAP_INSERT_OR_EMPLACE (
               pipe_, ZLINK_MOVE (original_routing_id));
             return true;
@@ -280,9 +379,26 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_, bool lo
 
         pipe_t *const old_pipe = existing_outpipe->pipe;
         const bool old_locally_initiated = existing_outpipe->locally_initiated;
+        const uint32_t old_peer_weight = existing_outpipe->weight;
+        if (actions_) {
+            actions_->fail_replaced_target = true;
+            actions_->replaced_public_routing_id = blob_t (
+              routing_id_.data (), routing_id_.size ());
+            actions_->replaced_pair_id = old_pipe->get_transport_pair_id ();
+            actions_->replaced_pair_generation =
+              old_pipe->get_transport_pair_generation ();
+            if (actions_->replaced_pair_id == 0
+                && actions_->replaced_pair_generation == 0)
+                actions_->replaced_route_incarnation_id =
+                  old_pipe->get_route_incarnation_id ();
+        }
         erase_out_pipe (old_pipe);
         old_pipe->set_router_socket_routing_id (new_routing_id);
         add_out_pipe (ZLINK_MOVE (new_routing_id), old_pipe, old_locally_initiated);
+        out_pipe_t *const demoted =
+          lookup_out_pipe (old_pipe->get_routing_id ());
+        zlink_assert (demoted && demoted->pipe == old_pipe);
+        update_out_pipe_weight (demoted, old_peer_weight);
         const bool paired_same_direction_reconnect =
           _handover && paired_application
           && old_locally_initiated == locally_initiated_;
@@ -293,28 +409,52 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_, bool lo
               old_pipe, ZLINK_MOVE (original_routing_id));
         } else if (old_pipe == _current_in) {
             _terminate_current_in = true;
-        } else {
-            old_pipe->terminate (true);
-        }
+        } else if (actions_ && old_pipe->retain_lifetime_ref ())
+            actions_->terminate_pipe = old_pipe;
     }
 
     pipe_->set_router_socket_routing_id (routing_id_);
-    add_out_pipe (ZLINK_MOVE (routing_id_), pipe_, locally_initiated_);
-    cache_completion_pipe_routing_id (pipe_);
-    // When Application is the second lane, pair-table admission precedes
-    // xattach_pipe() and this stays suppressed until the common attach path
-    // releases the write hold. A route adopted later sees that released hold
-    // and publishes the complementary edge here.
-    (void) emit_transport_pair_ready (pipe_);
+    add_out_pipe (ZLINK_MOVE (routing_id_), pipe_, locally_initiated_,
+                  initial_weight_);
+    if (actions_)
+        actions_->cache_completion = true;
     if (router_debug_enabled ()) {
         char rid_text[160];
         format_blob_routing_id_debug (pipe_->get_routing_id (), rid_text, sizeof (rid_text));
         fprintf (stderr, "router identify_peer: add out pipe rid=%s\n", rid_text);
     }
-    if (local_peer_weight () != 100)
-        send_local_peer_weight (pipe_);
-
     return true;
+}
+
+void router_t::finish_route_adoption (pipe_t *adopted_pipe_,
+                                      route_adoption_actions_t *actions_)
+{
+    if (!actions_)
+        return;
+    if (actions_->terminate_pipe) {
+        actions_->terminate_pipe->terminate (true);
+        actions_->terminate_pipe->release_lifetime_ref ();
+        actions_->terminate_pipe = NULL;
+    }
+    if (actions_->cache_completion) {
+        cache_completion_pipe_routing_id (adopted_pipe_);
+        actions_->cache_completion = false;
+    }
+    // Pending failure can synchronously dispatch user completion code. Keep it
+    // last so callback re-entry or close cannot invalidate an adopted pipe
+    // still needed by the other post-lock actions above.
+    if (actions_->fail_replaced_target) {
+        zlink_routing_id_t old_target;
+        copy_routing_id_from_bytes (
+          actions_->replaced_public_routing_id.data (),
+          actions_->replaced_public_routing_id.size (), &old_target);
+        actions_->fail_replaced_target = false;
+        actions_->replaced_public_routing_id.clear ();
+        fail_send_pending_for_target (
+          &old_target, actions_->replaced_pair_id,
+          actions_->replaced_pair_generation, ENOTCONN,
+          actions_->replaced_route_incarnation_id);
+    }
 }
 
 void router_t::promote_anonymous_pipe_for_dispatch (pipe_t *pipe_)
@@ -322,7 +462,7 @@ void router_t::promote_anonymous_pipe_for_dispatch (pipe_t *pipe_)
     if (!pipe_)
         return;
 
-    // The caller owns _dispatch_route_lifecycle_mu across route adoption and
+    // The caller owns _out_pipes_sync across route adoption and
     // FQ publication so termination cannot observe a half-promoted endpoint.
     const std::map<pipe_t *, bool>::iterator it = _anonymous_pipes.find (pipe_);
     if (it == _anonymous_pipes.end ())
@@ -341,15 +481,51 @@ int router_t::apply_peer_weight (pipe_t *pipe_, uint32_t weight_)
     if (!pipe_)
         return 1;
 
-    const blob_t &routing_id = pipe_->get_routing_id ();
-    out_pipe_t *out_pipe = lookup_out_pipe (routing_id);
-    if (!out_pipe || out_pipe->pipe != pipe_)
-        return 1;
-    if (out_pipe->weight == weight_)
-        return 1;
+    blob_t public_routing_id;
+    {
+        std::lock_guard<std::mutex> route_lifecycle_lock (
+          _out_pipes_sync);
+        const blob_t &routing_id = pipe_->get_routing_id ();
+        out_pipe_t *out_pipe = lookup_out_pipe (routing_id);
+        if (!out_pipe || out_pipe->pipe != pipe_
+            || out_pipe->weight == weight_)
+            return 1;
 
-    update_out_pipe_weight (out_pipe, weight_);
-    emit_peer_weight_changed (pipe_, weight_);
+        update_out_pipe_weight (out_pipe, weight_);
+        const std::map<pipe_t *, blob_t>::const_iterator standby =
+          _standby_pipes.find (pipe_);
+        const blob_t &event_routing_id =
+          standby != _standby_pipes.end () ? standby->second : routing_id;
+        public_routing_id = blob_t (
+          event_routing_id.data (), event_routing_id.size ());
+    }
+    notify_send_pending_writable (pipe_);
+    // Monitor enqueueing has its own synchronization. Never call it while the
+    // I/O/owner route-lifecycle fence is held.
+    emit_peer_weight_changed (pipe_, weight_, &public_routing_id);
     return 1;
 }
+
+void router_t::initialize_peer_weight (pipe_t *pipe_, uint32_t weight_)
+{
+    if (!pipe_)
+        return;
+    std::lock_guard<std::mutex> route_lifecycle_lock (_out_pipes_sync);
+    const blob_t &routing_id = pipe_->get_routing_id ();
+    out_pipe_t *const out_pipe = lookup_out_pipe (routing_id);
+    if (out_pipe && out_pipe->pipe == pipe_ && out_pipe->weight != weight_)
+        update_out_pipe_weight (out_pipe, weight_);
+}
+
+#ifdef ZLINK_BUILD_TESTS
+uint32_t router_t::test_peer_weight (pipe_t *pipe_) const
+{
+    if (!pipe_)
+        return 0;
+    std::lock_guard<std::mutex> route_lifecycle_lock (
+      _out_pipes_sync);
+    const out_pipe_t *const out_pipe = lookup_out_pipe (pipe_->get_routing_id ());
+    return out_pipe && out_pipe->pipe == pipe_ ? out_pipe->weight : 0;
+}
+#endif
 }

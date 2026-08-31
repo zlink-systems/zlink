@@ -266,30 +266,16 @@ set(TESTUTIL_SOURCES
   testutil_unity.cpp
   testutil_unity.hpp)
 
-if(BUILD_STATIC)
-  add_library(testutil-static STATIC ${TESTUTIL_SOURCES})
-  target_link_libraries(testutil-static libzlink-static ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} unity)
-endif()
+# Shared library builds export only the public zlink_* C API (Windows DLL
+# exports and the Linux version script agree on this), so Core tests link the
+# static library to reach private helper symbols without expanding the ABI.
+add_library(testutil-static STATIC ${TESTUTIL_SOURCES})
+target_link_libraries(
+  testutil-static
+  libzlink-static ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} unity)
+set(TESTUTIL_LIB testutil-static)
 
-if(BUILD_SHARED)
-  add_library(testutil STATIC ${TESTUTIL_SOURCES})
-  target_link_libraries(testutil libzlink ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} unity)
-endif()
-
-if(BUILD_STATIC)
-  # Shared library builds export only the public zlink_* C API (Windows DLL
-  # exports and the Linux version script agree on this), so tests that reach
-  # private helper symbols must link the static library instead.
-  set(TESTUTIL_LIB testutil-static)
-else()
-  set(TESTUTIL_LIB testutil)
-endif()
-
-if(BUILD_STATIC)
-  add_subdirectory(unittest)
-else()
-  message(WARNING "Not building unit tests, since BUILD_STATIC is not enabled")
-endif()
+add_subdirectory(unittest)
 
 if(MSVC_VERSION LESS 1700)
   set_source_files_properties("${ZLINK_CORE_SOURCE_DIR}/external/unity/unity.c" PROPERTIES LANGUAGE CXX)
@@ -441,15 +427,9 @@ add_executable(
   test_pub_monitor_close_full_mask
   ${INTEGRATION_TEST_ROOT}/test_pub_monitor_close_full_mask.c)
 set_target_properties(test_pub_monitor_close_full_mask PROPERTIES LINKER_LANGUAGE CXX)
-if(BUILD_STATIC)
-  target_link_libraries(
-    test_pub_monitor_close_full_mask
-    libzlink-static ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
-else()
-  target_link_libraries(
-    test_pub_monitor_close_full_mask
-    libzlink ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
-endif()
+target_link_libraries(
+  test_pub_monitor_close_full_mask
+  libzlink-static ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
 add_test(NAME test_pub_monitor_close_full_mask COMMAND test_pub_monitor_close_full_mask)
 set_tests_properties(test_pub_monitor_close_full_mask PROPERTIES TIMEOUT 10 SKIP_RETURN_CODE 77)
 if(WIN32)

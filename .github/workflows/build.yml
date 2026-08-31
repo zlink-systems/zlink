@@ -86,6 +86,25 @@ jobs:
             }
           }
 
+      - name: Verify Windows test configuration
+        shell: pwsh
+        run: |
+          cmake -S core -B build-win-x64-test-config `
+            -G "Visual Studio 17 2022" `
+            -A x64 `
+            -DBUILD_SHARED=ON `
+            -DBUILD_STATIC=ON `
+            -DBUILD_TESTS=ON `
+            -DBUILD_BENCHMARKS=OFF `
+            -DZLINK_CXX_STANDARD=17 `
+            -DWITH_TLS=ON `
+            -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT_DIR"
+          cmake --build build-win-x64-test-config --config Release `
+            --target test_zmp_metadata test_asio_ws
+          ctest --test-dir build-win-x64-test-config -C Release `
+            --output-on-failure `
+            -R '^(test_zmp_metadata|test_asio_ws)$'
+
       - name: Build libzlink
         shell: pwsh
         run: |
@@ -242,6 +261,35 @@ jobs:
         run: |
           chmod +x ./core/builds/linux/build.sh
           ./core/builds/linux/build.sh x64 "ON"
+
+      - name: Verify WebSocket build without TLS
+        run: |
+          cmake -S core -B build-linux-x64-no-tls \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED=ON \
+            -DBUILD_STATIC=ON \
+            -DBUILD_TESTS=ON \
+            -DBUILD_BENCHMARKS=OFF \
+            -DWITH_DOCS=OFF \
+            -DWITH_TLS=OFF
+          cmake --build build-linux-x64-no-tls --parallel \
+            --target libzlink test_capabilities test_asio_ws
+          if ldd build-linux-x64-no-tls/lib/libzlink.so | grep -E 'lib(ssl|crypto)'; then
+            echo "TLS-disabled libzlink unexpectedly links OpenSSL" >&2
+            exit 1
+          fi
+          ctest --test-dir build-linux-x64-no-tls --output-on-failure \
+            -R '^(test_capabilities|test_asio_ws)$'
+          cmake -S core -B build-linux-x64-static-only-no-tls \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED=OFF \
+            -DBUILD_STATIC=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_BENCHMARKS=OFF \
+            -DWITH_DOCS=OFF \
+            -DWITH_TLS=OFF
+          cmake --build build-linux-x64-static-only-no-tls --parallel \
+            --target libzlink-static
 
       - name: Verify build output
         run: test -f core/dist/linux-x64/libzlink.so

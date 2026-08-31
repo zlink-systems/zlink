@@ -12,6 +12,9 @@
 #include "../../src/runtime/core/pipe.hpp"
 #include "../../src/api/socket/request_reply_protocol_internal.hpp"
 #include "../../src/runtime/sockets/common/socket_base.hpp"
+#include "../../src/runtime/sockets/dealer/dealer.hpp"
+#include "../../src/runtime/sockets/router/router.hpp"
+#include "testutil_monitoring.hpp"
 
 #include <chrono>
 #include <mutex>
@@ -58,12 +61,21 @@ struct paired_fixture_t
         memset (endpoint, 0, sizeof (endpoint));
     }
 
-    void setup (uint64_t dealer_sndhwm_ = 0, const char *inproc_name_ = NULL)
+    void setup (uint64_t dealer_sndhwm_ = 0,
+                const char *inproc_name_ = NULL,
+                int router_weight_ = 100,
+                int dealer_weight_ = 100)
     {
         const int zero = 0;
         router = test_context_socket (ZLINK_SOCKET_ROUTER);
         TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
           router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+        if (router_weight_ != 100)
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_CONFIG_OK,
+              zlink_set_router_option (router, ZLINK_ROUTER_OPT_WEIGHT,
+                                       &router_weight_,
+                                       sizeof (router_weight_)));
         if (inproc_name_) {
             //  An inproc pair puts the peer's read cursor under the test's
             //  control: byte credit moves only when the ROUTER application
@@ -77,6 +89,12 @@ struct paired_fixture_t
         dealer = test_context_socket (ZLINK_SOCKET_DEALER);
         TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
           dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+        if (dealer_weight_ != 100)
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_CONFIG_OK,
+              zlink_set_dealer_option (dealer, ZLINK_DEALER_OPT_WEIGHT,
+                                       &dealer_weight_,
+                                       sizeof (dealer_weight_)));
         if (dealer_sndhwm_ != 0)
             TEST_ASSERT_SUCCESS_ERRNO (
               zlink_set_option (dealer, ZLINK_OPT_SNDHWM, &dealer_sndhwm_,
@@ -105,6 +123,30 @@ struct paired_fixture_t
             if (as_socket (dealer)->select_routed_submit_target (NULL, &target)
                   == 0
                 && target.transport_pair_id != 0) {
+                pair_id = target.transport_pair_id;
+                pair_generation = target.transport_pair_generation;
+                return true;
+            }
+            msleep (1);
+        }
+        return false;
+    }
+
+    bool resolve_reconnected_dealer_target (uint64_t old_pair_id_,
+                                             uint64_t old_generation_)
+    {
+        zlink_routed_submit_target_t target;
+        memset (&target, 0, sizeof (target));
+        const std::chrono::steady_clock::time_point deadline =
+          deadline_in_ms (4000);
+        while (!deadline_expired (deadline)) {
+            process_socket_commands_through_public_api (dealer);
+            process_socket_commands_through_public_api (router);
+            if (as_socket (dealer)->select_routed_submit_target (NULL, &target)
+                  == 0
+                && target.transport_pair_id != 0
+                && (target.transport_pair_id != old_pair_id_
+                    || target.transport_pair_generation != old_generation_)) {
                 pair_id = target.transport_pair_id;
                 pair_generation = target.transport_pair_generation;
                 return true;
@@ -175,6 +217,37 @@ struct paired_fixture_t
     uint64_t pair_id;
     uint64_t pair_generation;
 };
+
+bool wait_for_paired_peer_weights (paired_fixture_t *fixture_,
+                                   uint32_t dealer_weight_,
+                                   uint32_t router_weight_)
+{
+    if (!fixture_)
+        return false;
+    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (3000);
+    while (!deadline_expired (deadline)) {
+        process_socket_commands_through_public_api (fixture_->dealer);
+        process_socket_commands_through_public_api (fixture_->router);
+        zlink::pipe_t *const dealer_application =
+          as_socket (fixture_->dealer)
+            ->test_pair_pipe (fixture_->pair_id, fixture_->pair_generation,
+                              false);
+        zlink::pipe_t *const router_application =
+          as_socket (fixture_->router)
+            ->test_pair_pipe (fixture_->pair_id, fixture_->pair_generation,
+                              false);
+        if (dealer_application && router_application
+            && static_cast<zlink::dealer_t *> (as_socket (fixture_->dealer))
+                   ->test_peer_weight (dealer_application)
+                 == dealer_weight_
+            && static_cast<zlink::router_t *> (as_socket (fixture_->router))
+                   ->test_peer_weight (router_application)
+                 == router_weight_)
+            return true;
+        msleep (1);
+    }
+    return false;
+}
 
 bool dealer_send_nonblocking (void *dealer_, const char *payload_, int flags_)
 {
@@ -1315,6 +1388,185 @@ void test_peer_weight_change_does_not_write_the_completion_pipe ()
     fixture.teardown ();
 }
 
+void test_inproc_peer_weight_is_owner_control_in_both_directions ()
+{
+    paired_fixture_t fixture;
+    fixture.setup (0, "peer_weight_owner_control", 37, 0);
+
+    //  Values configured before bind/connect are replayed once the exact pair
+    //  is ready. Zero is policy, not absence of policy.
+    TEST_ASSERT_TRUE (wait_for_paired_peer_weights (&fixture, 37, 0));
+
+    //  Drain the receive scheduler before observing the steady-state path.
+    //  Each subsequent message reactivates the ROUTER pipe, but an already
+    //  adopted route must not retry pair-ready/peer-weight publication.
+    char raw[32];
+    TEST_ASSERT_EQUAL_INT (-1, zlink_recv (fixture.router, raw, sizeof (raw),
+                                           ZLINK_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    const uint64_t send_attempts_before =
+      zlink::socket_base_t::test_local_peer_weight_send_attempt_count ();
+    for (int i = 0; i != 8; ++i) {
+        send_string_expect_success (fixture.dealer, "steady", 0);
+        char rid[256];
+        const int rid_size = zlink_recv (fixture.router, rid, sizeof (rid), 0);
+        TEST_ASSERT_GREATER_THAN_INT (0, rid_size);
+        TEST_ASSERT_EQUAL_MEMORY (fixture.peer_rid.data (), rid,
+                                  fixture.peer_rid.size ());
+        recv_string_expect_success (fixture.router, "steady", 0);
+        TEST_ASSERT_EQUAL_INT (-1, zlink_recv (fixture.router, raw,
+                                               sizeof (raw), ZLINK_DONTWAIT));
+        TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    }
+    process_socket_commands_through_public_api (fixture.dealer);
+    process_socket_commands_through_public_api (fixture.router);
+    TEST_ASSERT_EQUAL_UINT64 (
+      send_attempts_before,
+      zlink::socket_base_t::test_local_peer_weight_send_attempt_count ());
+
+    test_monitor_probe_t dealer_probe;
+    test_monitor_probe_t router_probe;
+    void *dealer_monitor = open_test_monitor_probe (
+      fixture.dealer, ZLINK_EVENT_PEER_WEIGHT_CHANGED, &dealer_probe);
+    void *router_monitor = open_test_monitor_probe (
+      fixture.router, ZLINK_EVENT_PEER_WEIGHT_CHANGED, &router_probe);
+
+    const int router_weight = 0;
+    const int dealer_weight = 83;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_router_option (fixture.router, ZLINK_ROUTER_OPT_WEIGHT,
+                               &router_weight, sizeof (router_weight)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_dealer_option (fixture.dealer, ZLINK_DEALER_OPT_WEIGHT,
+                               &dealer_weight, sizeof (dealer_weight)));
+    TEST_ASSERT_TRUE (wait_for_paired_peer_weights (
+      &fixture, static_cast<uint32_t> (router_weight),
+      static_cast<uint32_t> (dealer_weight)));
+
+    TEST_ASSERT_TRUE (test_monitor_probe_wait_count (&dealer_probe, 1, 3000));
+    TEST_ASSERT_TRUE (test_monitor_probe_wait_count (&router_probe, 1, 3000));
+    const zlink_monitor_event_t dealer_event =
+      test_monitor_probe_record_at (&dealer_probe, 0);
+    const zlink_monitor_event_t router_event =
+      test_monitor_probe_record_at (&router_probe, 0);
+    TEST_ASSERT_EQUAL_UINT64 (ZLINK_EVENT_PEER_WEIGHT_CHANGED,
+                              dealer_event.event);
+    TEST_ASSERT_EQUAL_UINT64 (static_cast<uint64_t> (router_weight),
+                              dealer_event.value);
+    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_id,
+                              dealer_event.transport_pair_id);
+    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_generation,
+                              dealer_event.transport_pair_generation);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            dealer_event.transport_lane);
+    TEST_ASSERT_EQUAL_UINT64 (ZLINK_EVENT_PEER_WEIGHT_CHANGED,
+                              router_event.event);
+    TEST_ASSERT_EQUAL_UINT64 (static_cast<uint64_t> (dealer_weight),
+                              router_event.value);
+    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_id,
+                              router_event.transport_pair_id);
+    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_generation,
+                              router_event.transport_pair_generation);
+
+    // Absolute policy is deduplicated at the sender and again at the
+    // scheduler boundary. Reapplying the same values creates neither a wire
+    // command nor a duplicate monitor transition.
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_router_option (fixture.router, ZLINK_ROUTER_OPT_WEIGHT,
+                               &router_weight, sizeof (router_weight)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_dealer_option (fixture.dealer, ZLINK_DEALER_OPT_WEIGHT,
+                               &dealer_weight, sizeof (dealer_weight)));
+    process_socket_commands_through_public_api (fixture.dealer);
+    process_socket_commands_through_public_api (fixture.router);
+    TEST_ASSERT_TRUE (
+      test_monitor_probe_wait_no_additional (&dealer_probe, 1, 200));
+    TEST_ASSERT_TRUE (
+      test_monitor_probe_wait_no_additional (&router_probe, 1, 200));
+
+    //  Neither internal delivery path can create an application record.
+    TEST_ASSERT_EQUAL_INT (-1, zlink_recv (fixture.dealer, raw, sizeof (raw),
+                                           ZLINK_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    TEST_ASSERT_EQUAL_INT (-1, zlink_recv (fixture.router, raw, sizeof (raw),
+                                           ZLINK_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    zlink::pipe_t *dealer_completion =
+      as_socket (fixture.dealer)
+        ->completion_pipe_for_transport_pair (fixture.pair_id,
+                                              fixture.pair_generation);
+    zlink::pipe_t *router_completion =
+      as_socket (fixture.router)
+        ->completion_pipe_for_transport_pair (fixture.pair_id,
+                                              fixture.pair_generation);
+    TEST_ASSERT_NOT_NULL (dealer_completion);
+    TEST_ASSERT_NOT_NULL (router_completion);
+    TEST_ASSERT_FALSE (dealer_completion->check_read ());
+    TEST_ASSERT_FALSE (router_completion->check_read ());
+
+    close_test_monitor_probe (&router_monitor, &router_probe);
+    close_test_monitor_probe (&dealer_monitor, &dealer_probe);
+    fixture.teardown ();
+}
+
+void test_network_peer_weight_keeps_wire_control_and_exact_pair_state ()
+{
+    paired_fixture_t fixture;
+    fixture.setup (0, NULL, 23, 0);
+    TEST_ASSERT_TRUE (wait_for_paired_peer_weights (&fixture, 23, 0));
+
+    const int router_weight = 71;
+    const int dealer_weight = 19;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_router_option (fixture.router, ZLINK_ROUTER_OPT_WEIGHT,
+                               &router_weight, sizeof (router_weight)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_dealer_option (fixture.dealer, ZLINK_DEALER_OPT_WEIGHT,
+                               &dealer_weight, sizeof (dealer_weight)));
+    TEST_ASSERT_TRUE (wait_for_paired_peer_weights (
+      &fixture, static_cast<uint32_t> (router_weight),
+      static_cast<uint32_t> (dealer_weight)));
+
+    // This case reconnects before the old inbound route has necessarily
+    // retired. Select the contract that admits that same-RID overlap; the
+    // default duplicate-reject policy intentionally leaves the replacement
+    // pair outside the ROUTER scheduler.
+    const int handover = ZLINK_RID_DUPLICATE_HANDOVER;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      fixture.router, ZLINK_OPT_RID_DUPLICATE_POLICY, &handover,
+      sizeof (handover)));
+    const uint64_t old_pair_id = fixture.pair_id;
+    const uint64_t old_generation = fixture.pair_generation;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_disconnect (fixture.dealer, fixture.endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (fixture.dealer, fixture.endpoint));
+    TEST_ASSERT_TRUE (fixture.resolve_reconnected_dealer_target (
+      old_pair_id, old_generation));
+    TEST_ASSERT_TRUE (wait_for_paired_peer_weights (
+      &fixture, static_cast<uint32_t> (router_weight),
+      static_cast<uint32_t> (dealer_weight)));
+
+    zlink::pipe_t *dealer_completion =
+      as_socket (fixture.dealer)
+        ->completion_pipe_for_transport_pair (fixture.pair_id,
+                                              fixture.pair_generation);
+    zlink::pipe_t *router_completion =
+      as_socket (fixture.router)
+        ->completion_pipe_for_transport_pair (fixture.pair_id,
+                                              fixture.pair_generation);
+    TEST_ASSERT_NOT_NULL (dealer_completion);
+    TEST_ASSERT_NOT_NULL (router_completion);
+    TEST_ASSERT_FALSE (dealer_completion->check_read ());
+    TEST_ASSERT_FALSE (router_completion->check_read ());
+    fixture.teardown ();
+}
+
 //  Review finding 5. Pair id and generation are the same on both lanes of a
 //  pair, so they cannot on their own tell a completion-lane frame from an
 //  application-lane one. A FLOWSTATE that arrives on the application lane must
@@ -1610,6 +1862,8 @@ int main ()
     RUN_TEST (test_router_peer_state_reports_remote_pause);
     RUN_TEST (test_flow_frame_before_reply_is_consumed_on_a_local_pair);
     RUN_TEST (test_peer_weight_change_does_not_write_the_completion_pipe);
+    RUN_TEST (test_inproc_peer_weight_is_owner_control_in_both_directions);
+    RUN_TEST (test_network_peer_weight_keeps_wire_control_and_exact_pair_state);
     RUN_TEST (test_flow_frame_on_the_application_lane_is_rejected);
     RUN_TEST (test_router_routing_id_part_holds_message_atomicity_across_pause);
     RUN_TEST (test_resume_while_hwm_full_still_recovers_through_byte_credit);

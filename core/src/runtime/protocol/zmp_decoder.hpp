@@ -64,6 +64,7 @@ class zmp_decoder_t ZLINK_FINAL
     uint8_t _error_code;
     msg_t _in_progress;
     const uint32_t _max_msg_size_effective;
+    const uint64_t _max_application_message_size;
     frame_admission_handler_t _frame_admission_handler;
     frame_reservation_release_handler_t _frame_reservation_release_handler;
     void *_frame_admission_subject;
@@ -73,6 +74,8 @@ class zmp_decoder_t ZLINK_FINAL
     bool _allocation_backpressured;
     bool _application_multipart_in_progress;
     bool _next_application_multipart_in_progress;
+    uint64_t _application_multipart_payload_size;
+    uint64_t _next_application_multipart_payload_size;
     frame_stage_t _frame_stage;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (zmp_decoder_t)

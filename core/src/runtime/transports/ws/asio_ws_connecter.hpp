@@ -98,7 +98,9 @@ class asio_ws_connecter_t ZLINK_FINAL : public own_t, public io_object_t
     //  WebSocket-specific data
     std::string _host;
     std::string _path;
+#if defined ZLINK_HAVE_WSS
     std::string _tls_hostname;
+#endif
     bool _secure;
 
     //  State flags

@@ -48,7 +48,12 @@ void public_api_sync_backoff (unsigned int attempt_)
     }
     std::this_thread::sleep_for (std::chrono::microseconds (100));
 }
+
 }
+
+thread_local zlink::socket_lifecycle_coordinator_t *
+  zlink::socket_lifecycle_coordinator_t::_current_thread_public_api_sync_owner =
+    NULL;
 
 bool zlink::socket_lifecycle_coordinator_t::enter_public_api ()
 {
@@ -85,6 +90,7 @@ bool zlink::socket_lifecycle_coordinator_t::enter_public_api_and_lock_sync ()
     if (public_api_state.compare_exchange_strong (expected, 1u | public_api_sync_bit,
                                                   std::memory_order_acq_rel,
                                                   std::memory_order_acquire)) {
+        mark_public_api_sync_owned ();
         return true;
     }
 
@@ -156,8 +162,12 @@ bool zlink::socket_lifecycle_coordinator_t::enter_public_send (
         if (public_api_state.compare_exchange_weak (
               old, desired, std::memory_order_acq_rel,
               std::memory_order_acquire)) {
-            if (needs_sync_ && !take_sync_in_admission)
-                lock_public_api_sync ();
+            if (needs_sync_) {
+                if (take_sync_in_admission)
+                    mark_public_api_sync_owned ();
+                else
+                    lock_public_api_sync ();
+            }
             if (sync_locked_out_)
                 *sync_locked_out_ = needs_sync_;
             return true;
@@ -173,6 +183,9 @@ void zlink::socket_lifecycle_coordinator_t::leave_public_send (
                                  : public_api_complete_unit;
     if (sync_locked_)
         delta += public_api_sync_bit;
+
+    if (sync_locked_)
+        unmark_public_api_sync_owned ();
 
     const uint64_t old = public_api_state.fetch_sub (
       delta, std::memory_order_acq_rel);
@@ -191,6 +204,9 @@ void zlink::socket_lifecycle_coordinator_t::suspend_public_multipart_send (
     uint64_t delta = 1;
     if (sync_locked_)
         delta += public_api_sync_bit;
+
+    if (sync_locked_)
+        unmark_public_api_sync_owned ();
 
     const uint64_t old = public_api_state.fetch_sub (
       delta, std::memory_order_acq_rel);
@@ -236,8 +252,12 @@ bool zlink::socket_lifecycle_coordinator_t::resume_public_multipart_send (
         if (public_api_state.compare_exchange_weak (
               old, desired, std::memory_order_acq_rel,
               std::memory_order_acquire)) {
-            if (needs_sync_ && !take_sync_in_admission)
-                lock_public_api_sync ();
+            if (needs_sync_) {
+                if (take_sync_in_admission)
+                    mark_public_api_sync_owned ();
+                else
+                    lock_public_api_sync ();
+            }
             if (sync_locked_out_)
                 *sync_locked_out_ = needs_sync_;
             return true;
@@ -251,6 +271,9 @@ void zlink::socket_lifecycle_coordinator_t::release_public_multipart_marker (
     uint64_t delta = public_api_multipart_bit;
     if (sync_locked_)
         delta += public_api_sync_bit;
+
+    if (sync_locked_)
+        unmark_public_api_sync_owned ();
 
     const uint64_t old = public_api_state.fetch_sub (
       delta, std::memory_order_acq_rel);
@@ -346,6 +369,33 @@ bool zlink::socket_lifecycle_coordinator_t::public_api_sync_held () const
     return (public_api_state.load (std::memory_order_acquire) & public_api_sync_bit) != 0;
 }
 
+bool zlink::socket_lifecycle_coordinator_t::public_api_sync_owned_by_current_thread () const
+{
+    for (const socket_lifecycle_coordinator_t *owner =
+           _current_thread_public_api_sync_owner;
+         owner; owner = owner->_previous_thread_public_api_sync_owner) {
+        if (owner == this)
+            return true;
+    }
+    return false;
+}
+
+void zlink::socket_lifecycle_coordinator_t::mark_public_api_sync_owned ()
+{
+    zlink_assert (!public_api_sync_owned_by_current_thread ());
+    _previous_thread_public_api_sync_owner =
+      _current_thread_public_api_sync_owner;
+    _current_thread_public_api_sync_owner = this;
+}
+
+void zlink::socket_lifecycle_coordinator_t::unmark_public_api_sync_owned ()
+{
+    zlink_assert (_current_thread_public_api_sync_owner == this);
+    _current_thread_public_api_sync_owner =
+      _previous_thread_public_api_sync_owner;
+    _previous_thread_public_api_sync_owner = NULL;
+}
+
 void zlink::socket_lifecycle_coordinator_t::lock_public_api_sync ()
 {
     unsigned int attempt = 0;
@@ -355,6 +405,7 @@ void zlink::socket_lifecycle_coordinator_t::lock_public_api_sync ()
             const uint64_t desired = old | public_api_sync_bit;
             if (public_api_state.compare_exchange_weak (old, desired, std::memory_order_acquire,
                                                         std::memory_order_acquire)) {
+                mark_public_api_sync_owned ();
                 return;
             }
             continue;
@@ -369,6 +420,7 @@ void zlink::socket_lifecycle_coordinator_t::lock_public_api_sync ()
 
 void zlink::socket_lifecycle_coordinator_t::unlock_public_api_sync ()
 {
+    unmark_public_api_sync_owned ();
     const uint64_t old =
       public_api_state.fetch_and (~public_api_sync_bit, std::memory_order_release);
     zlink_assert ((old & public_api_sync_bit) != 0);
@@ -376,6 +428,7 @@ void zlink::socket_lifecycle_coordinator_t::unlock_public_api_sync ()
 
 void zlink::socket_lifecycle_coordinator_t::unlock_public_api_sync_and_leave ()
 {
+    unmark_public_api_sync_owned ();
     const uint64_t old =
       public_api_state.fetch_sub (public_api_sync_bit | 1u, std::memory_order_acq_rel);
     zlink_assert ((old & public_api_sync_bit) != 0);
