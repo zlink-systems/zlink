@@ -57,22 +57,8 @@ Sending a message by `ChannelName` has the framework pick one of the nodes curre
 receive the request at that moment and deliver to it — this selection is called
 **select-one**.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    C["caller"]:::client -->|"ChannelName: orders"| SEL{{"select-one"}}
-    subgraph ORD["channel: orders"]
-      direction TB
-      N1["node 1"]:::server
-      N2["node 2"]:::server
-      N3["node 3"]:::server
-    end
-    SEL ==>|"node this call selected"| N2
-    SEL -.-> N1
-    SEL -.-> N3
-    classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-    classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-```
+<iframe class="zlink-diagram" src="/common/diagrams/03-channel-select.en.html" title="channel — calling by name (select-one)" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-channel-select.en.html" target="_blank">↗ View larger</a></p>
 
 If three nodes own the same `orders` channel, one of them is selected per call. The caller
 doesn't know — and doesn't need to know — which node was selected.
@@ -130,15 +116,8 @@ though, and the node where that spot actually lives receives the message and han
 that spot to process. Which node that is gets found by the framework through the same
 location transparency [seen earlier](#1-channel--a-connection-between-servers).
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  R1["request · room-42"] --> Q["Spot queue"]
-  R2["request · room-42"] --> Q
-  T["timer"] --> Q
-  Q --> S["room-42 Spot<br/>owns state directly"]:::spot
-  classDef spot fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-```
+<iframe class="zlink-diagram" src="/common/diagrams/03-spot-queue.en.html" title="spot — owns state, processes in order" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-spot-queue.en.html" target="_blank">↗ View larger</a></p>
 
 A spot registers on the MeshNode's **Object role**. It's a separate surface from the same
 MeshNode's Channel role.
@@ -155,15 +134,8 @@ ID is always handled by the same instance. An actor always belongs to some spot,
 binds to an external client connection continues in the
 [next section](#4-stream--external-client-connections).
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-graph LR
-    S1["msg · id=42"] --> RT{"actor id<br/>routing"}
-    S2["msg · id=42"] --> RT
-    S3["msg · id=7"] --> RT
-    RT -->|id=42| A42["actor 42<br/>(same instance)"]
-    RT -->|id=7| A7["actor 7"]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/03-actor-route.en.html" title="actor — identified by id" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-actor-route.en.html" target="_blank">↗ View larger</a></p>
 
 Details in [07-actor-spot](07-actor-spot.en.md).
 
@@ -180,15 +152,8 @@ stops handling messages that arrive over that connection itself, relaying them t
 actor instead. The reverse direction works the same way — a push the actor sends goes out to
 the client through the session bound to that actor.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  C["mobile/game<br/>client"]:::client <-->|"connection<br/>(heartbeat managed)"| SE["session<br/>1 connection = 1 object"]
-  SE -->|"packet relay"| A(("actor")):::actor
-  A -.->|"push"| SE
-  classDef actor fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-```
+<iframe class="zlink-diagram" src="/common/diagrams/03-stream.en.html" title="stream — external client connection" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-stream.en.html" target="_blank">↗ View larger</a></p>
 
 So **the node that accepts the connection and the node that runs domain logic can be split.**
 Even if the session lives on a gateway node and the actor lives on a different node, the
@@ -212,30 +177,8 @@ that lives on a different node, the moment the join is accepted the actor moves 
 carrying its state and pending work along with it. This is a move the application triggers by
 request.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  subgraph NA["node A"]
-    direction TB
-    subgraph EA["Entry Spot"]
-      P(("actor P")):::moving
-    end
-  end
-  subgraph NB["node B"]
-    direction TB
-    subgraph RB["User Spot &quot;room-42&quot;"]
-      Q(("actor Q")):::actor
-      R(("actor R")):::actor
-    end
-  end
-  P ==>|"JoinSpot(&quot;room-42&quot;)<br/>moves along with state/pending work"| RB
-  classDef actor fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-  classDef moving fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#bf360c
-  style NA fill:#eceff1,stroke:#546e7a,stroke-width:2px,color:#000000
-  style NB fill:#eceff1,stroke:#546e7a,stroke-width:2px,color:#000000
-  style EA fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-  style RB fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/03-relocation.en.html" title="relocation — an actor joins a spot on another node" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-relocation.en.html" target="_blank">↗ View larger</a></p>
 
 The only thing the join call specifies is the **spot id `room-42`** — there's no argument
 that names a target node. The framework looks up which node currently holds that spot in the
@@ -248,43 +191,8 @@ operator moves the spots and actors on one host to another host. The framework h
 even without the application requesting individual joins, and once it's done, the original
 host can be shut down.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart TB
-  C["client · another service<br/>request target: &quot;room-42&quot;"]:::client
-  subgraph NA["node A — target for maintenance/update"]
-    direction TB
-    subgraph SA1["User Spot &quot;room-42&quot;"]
-      A1(("actor P")):::moving
-      A2(("actor Q")):::moving
-    end
-    subgraph SA2["User Spot &quot;room-77&quot;"]
-      A3(("actor R")):::moving
-    end
-  end
-  subgraph NB["node B — service continues"]
-    direction TB
-    subgraph SB1["User Spot &quot;room-42&quot;"]
-      B1(("actor P")):::actor
-      B2(("actor Q")):::actor
-    end
-    subgraph SB2["User Spot &quot;room-77&quot;"]
-      B3(("actor R")):::actor
-    end
-  end
-  NA ==>|"Host Relocate — moves the spot and its actors as a whole"| NB
-  C -.->|"before the move"| SA1
-  C ==>|"same spot id even after the move"| SB1
-  classDef actor fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-  classDef moving fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#bf360c
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-  style NA fill:#eceff1,stroke:#546e7a,stroke-width:2px,color:#000000
-  style NB fill:#eceff1,stroke:#546e7a,stroke-width:2px,color:#000000
-  style SA1 fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-  style SA2 fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-  style SB1 fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-  style SB2 fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/03-host-relocate.en.html" title="host relocate — moving spot and actors as a whole" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-host-relocate.en.html" target="_blank">↗ View larger</a></p>
 
 A server holding state can't just be taken down because of that state, so maintenance or a
 deployment usually means dropping the connection and making clients wait. Host Relocate keeps
@@ -393,3 +301,7 @@ Policy for an edge exposed directly to the internet is owned by whatever sits in
 - The full interface/attribute/context set:
   [per-language handler interface contracts](../../../common/spec/server/languages/README.en.md)
 - A sample to pick when you want to see it as runnable code: [14-samples](14-samples.en.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

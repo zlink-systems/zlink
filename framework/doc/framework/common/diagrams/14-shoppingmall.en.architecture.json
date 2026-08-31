@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ShoppingMall — lossless event sourcing",
+    "subtitle": "OrderId owner Spot · sequential code with no orchestration layer",
+    "output": "14-shoppingmall.en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 4, "gapX": 100, "gapY": 96, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C", "type": "frontend", "label": "web client", "row": 1, "col": 0 },
+    { "id": "API", "type": "external", "label": "CommerceApi", "sublabel": "HTTP · validate · query", "row": 1, "col": 1 },
+    { "id": "SP", "type": "backend", "label": "OrderWorkflowSpot", "sublabel": "one per order", "row": 1, "col": 2 },
+    { "id": "ES", "type": "database", "label": "event stream", "row": 0, "col": 3 },
+    { "id": "RS", "type": "database", "label": "read model", "row": 2, "col": 3 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "OrderWorkflow node ×2", "wraps": ["SP"] }
+  ],
+  "connections": [
+    { "from": "C", "to": "API", "label": "start order · query status", "variant": "default", "labelDy": -40 },
+    { "from": "API", "to": "SP", "label": "Spot message addressed by OrderId", "variant": "emphasis", "labelDy": -48 },
+    { "from": "SP", "to": "ES", "label": "append · replay", "variant": "default" },
+    { "from": "SP", "to": "RS", "label": "update", "variant": "default" },
+    { "from": "API", "to": "RS", "label": "query", "variant": "default", "fromSide": "bottom", "toSide": "left" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "owner Spot processing",
+      "items": [
+        "web client → CommerceApi handles HTTP endpoint·validation·queries",
+        "CommerceApi sends a Spot message addressed by OrderId (emphasis) — one OrderWorkflowSpot per order",
+        "the OrderWorkflow node runs ×2, with a per-order Spot living on top"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "event sourcing (CQRS)",
+      "items": [
+        "the Spot appends·replays to the event stream and updates the read model",
+        "CommerceApi queries the read model directly — sequential code that's safe under retry and interruption, with no orchestration layer"
+      ]
+    }
+  ]
+}

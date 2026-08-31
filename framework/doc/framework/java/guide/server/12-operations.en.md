@@ -212,32 +212,8 @@ so it commits together. An Entry Spot's and a `PerActor` User Spot's Actors are 
 independent unit, so they move Actor by Actor, and in this case the Spot instance is a shell
 that doesn't carry state.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  subgraph AGG["SpotWide User Spot — moves as one aggregate"]
-    direction TB
-    subgraph AG1["User Spot &quot;room-42&quot;"]
-      G1(("actor P")):::unit
-      G2(("actor Q")):::unit
-    end
-  end
-  subgraph PER["Entry Spot · PerActor User Spot — moves Actor by Actor"]
-    direction TB
-    subgraph PS1["Spot shell"]
-      U1(("actor R")):::unit
-      U2(("actor S")):::unit
-    end
-  end
-  AG1 ==>|"1 commit<br/>Spot state + member Actors"| AGGT["target node"]
-  U1 ==>|"commit"| PERT["target node"]
-  U2 ==>|"commit"| PERT
-  classDef unit fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-  style AGG fill:#eceff1,stroke:#546e7a,stroke-width:2px,color:#000000
-  style PER fill:#eceff1,stroke:#546e7a,stroke-width:2px,color:#000000
-  style AG1 fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-  style PS1 fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/12-relocation.en.html" title="Relocation move unit per execution mode" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/12-relocation.en.html" target="_blank">↗ View larger</a></p>
 
 So a `PerActor` User Spot's factory can only use `RecreateOnRelocation()` as its relocation
 approach. Each member Actor's factory decides its own policy separately. An Instance Spot has
@@ -426,21 +402,8 @@ The Framework runtime is tied to the host's start/stop as its **lifecycle servic
 channel/SPOT/STREAM runtime is created based on the roles registered at startup, and cleaned
 up at shutdown.
 
-```mermaid
-stateDiagram-v2
-    direction LR
-    state "Configuration phase" as configure
-    state "Serving" as serving
-    state "Stopping" as stopping
-    [*] --> configure: WebApplication.CreateBuilder()
-    configure: Services / AddZLinkFramework
-    configure: channel / SPOT / stream / registry
-    configure --> serving: app.Run()
-    serving: channel/SPOT/stream dispatch
-    serving --> stopping: host shutdown
-    stopping: hosted service stop → runtime cleanup
-    stopping --> [*]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/12-lifecycle.en.html" title="Host lifecycle — configure, serving, stopping" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/12-lifecycle.en.html" target="_blank">↗ View larger</a></p>
 
 - **Configuration phase** — finish every declaration before `app.Run()`. A bad configuration
   is rejected as an exception at host startup.
@@ -482,3 +445,7 @@ the `zlink.host.*` instruments from §1.
 - Status observation and diagnostics: the [11. Monitoring](11-monitoring.en.md)
 - The Spot where the application decides the relocation boundary:
   [06-spot §7](06-spot.en.md#7-signaling-when-relocation-may-begin)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Guild state change — existing approach",
+    "subtitle": "Serializes concurrent access with a per-guild-id distributed lock",
+    "output": "01-guild-existing.en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      40,
+      150
+    ],
+    "cols": 4,
+    "gapX": 96,
+    "gapY": 88,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "Client app",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "lb",
+      "type": "external",
+      "label": "L7 LB / gateway",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "api",
+      "type": "frontend",
+      "label": "API servers ×N",
+      "sublabel": "stateless",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "lock",
+      "type": "messagebus",
+      "label": "Redis lock",
+      "sublabel": "per-guild-id",
+      "row": 2,
+      "col": 2
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "Guild state DB",
+      "row": 3,
+      "col": 1
+    }
+  ],
+  "connections": [
+    {
+      "from": "client",
+      "to": "lb",
+      "label": "join · donate, etc. over HTTP",
+      "variant": "emphasis",
+      "labelDy": 24
+    },
+    {
+      "from": "lb",
+      "to": "api",
+      "variant": "default"
+    },
+    {
+      "from": "api",
+      "to": "lock",
+      "label": "① acquire lock / ③ release",
+      "variant": "emphasis"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "② load-modify-store",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "orange",
+      "title": "Serialize with a distributed lock",
+      "items": [
+        "① acquire lock → ② load-modify-store → ③ release lock",
+        "Several API servers can touch the same guild at once, so a per-guild-id lock is needed"
+      ]
+    }
+  ]
+}

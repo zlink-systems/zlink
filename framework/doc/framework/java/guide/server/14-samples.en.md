@@ -65,28 +65,8 @@ not **object location lookup.** In managed languages, it's also the only sample 
 handlers directly in configuration code without scanning. C++ registers handlers directly in
 every sample, but uses manual connections only in TicTacToe.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  C["client"]:::client
-  A1["Api A"]
-  A2["Api B"]
-  P1["Play A<br/>session · actor · room Spot"]:::server
-  P2["Play B<br/>session · actor · room Spot"]:::server
-  LS[("Location Store")]:::store
-  C -->|"HTTP create room"| A1
-  C -.-> A2
-  A1 -->|"create room User Spot"| P1
-  A2 -.-> P2
-  C ==>|"STREAM direct connect"| P1
-  C ==> P2
-  P1 <-->|"manual peer · milestone Logical Multicast"| P2
-  P1 -.->|"room/actor location lookup"| LS
-  P2 -.-> LS
-  classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-  classDef store fill:#fff3e0,stroke:#e65100,color:#bf360c
-```
+<iframe class="zlink-diagram" src="/common/diagrams/14-tictactoe.en.html" title="TicTacToe sample topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-tictactoe.en.html" target="_blank">↗ View larger</a></p>
 
 With no separate Session server, each `Play` owns the stream session, actor, Entry Spot, and
 room Spot together. The client connects directly to a Play from the list of Play endpoints
@@ -115,30 +95,8 @@ processed by the server that owns the room. Even building a different genre, the
 and connection shape rarely stray far from this, so it's a good starting point for a new
 service.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  C["client"]:::client
-  S["Session ×2<br/>connection endpoint · actor bind"]
-  A["Api ×2<br/>auth · matching requests"]
-  M["Matchmaking<br/>Matchmaker Instance Spot"]:::server
-  P["Play ×2<br/>player actor · room User Spot"]:::server
-  R[("Redis<br/>waiting-room reservation")]:::store
-  LS[("Location Store")]:::store
-  C <==>|"1 STREAM connection"| S
-  S -->|"auth/matching request"| A
-  A -->|"level bucket matching"| M
-  M --> R
-  A -->|"room GetOrCreate"| P
-  S -->|"packet relay"| P
-  P -->|"bound session push"| S
-  S -.-> LS
-  A -.-> LS
-  P -.->|"peer auto-connect"| LS
-  classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-  classDef store fill:#fff3e0,stroke:#e65100,color:#bf360c
-```
+<iframe class="zlink-diagram" src="/common/diagrams/14-bingo.en.html" title="Bingo sample topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-bingo.en.html" target="_blank">↗ View larger</a></p>
 
 `Session` owns the client connection and actor binding; `Play` owns the player actor and the
 room User Spot; `Api` handles auth and matching requests; `Matchmaking` owns a Matchmaker
@@ -185,26 +143,8 @@ So the agent side splits its actor into two kinds.
 **One connection, but several actors.** The agent client keeps only one stream connection,
 and that session has the roster actor and each per-conversation actor bound to it together.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  AC["agent client"]:::client <-->|"1 stream connection"| SE["session"]
-  SE -.->|bind| RA(("roster<br/>actor")):::actor
-  SE -.->|bind| A1(("conversation<br/>actor A")):::actor
-  SE -.->|bind| A2(("conversation<br/>actor B")):::actor
-  subgraph SPA["conversation Spot A"]
-    A1
-    C1(("customer A")):::actor
-  end
-  subgraph SPB["conversation Spot B"]
-    A2
-    C2(("customer B")):::actor
-  end
-  classDef actor fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-  style SPA fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-  style SPB fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/14-supportchat.en.html" title="SupportChat sample topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-supportchat.en.html" target="_blank">↗ View larger</a></p>
 
 The inbound direction is disambiguated by **carrying `ConversationId` in the stream
 message's metadata.** The Session server reads only the metadata to pick the target actor
@@ -233,27 +173,8 @@ business rules — it's showing **which framework feature the common requirement
 request, pick a fulfiller, deliver to a specific user's connection, retry on no response"
 maps to.** Ride-hailing, field dispatch, and on-site service requests share the same shape.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  CU["customer client"]:::client
-  CO["courier client"]:::client
-  D["Dispatch<br/>HTTP intake · dispatch worker"]
-  CS["CourierSession<br/>connection endpoint"]
-  CN["CourierActorNode ×2<br/>courier actor"]:::server
-  T["Tracking<br/>status recording"]
-  CG["CustomerGateway<br/>customer actor"]:::server
-  CU -->|"HTTP create delivery"| D
-  CU <==>|"STREAM status updates"| CG
-  CO <==>|"STREAM"| CS
-  D -->|"offer · reassign"| CN
-  CS -.->|"session bind"| CN
-  CN -->|"bound session push"| CS
-  D -->|"status event"| T
-  T -->|"customer notification"| CG
-  classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-```
+<iframe class="zlink-diagram" src="/common/diagrams/14-delivery.en.html" title="DeliveryDispatch sample topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-delivery.en.html" target="_blank">↗ View larger</a></p>
 
 The external boundary uses ordinary web technology as-is. The customer creates a delivery
 over HTTP and receives status over a stream. What changes is what's inside — instead of
@@ -272,26 +193,8 @@ One order is owned by an `OrderWorkflow` owner Spot, which runs reserve-inventor
 payment → confirm, and compensates on failure. The outer HTTP boundary is terminated by
 `CommerceApi`, which never changes order state directly.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  C["web client"]:::client
-  API["CommerceApi<br/>HTTP endpoint · validation · queries"]
-  subgraph OW["OrderWorkflow node ×2"]
-    SP["OrderWorkflowSpot<br/>one per order"]:::server
-  end
-  ES[("event stream")]:::store
-  RS[("read model")]:::store
-  C -->|"start order · query status"| API
-  API ==>|"Spot message addressed by OrderId"| SP
-  SP -->|"append · replay"| ES
-  SP -->|"update"| RS
-  API -->|"query"| RS
-  classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-  classDef store fill:#fff3e0,stroke:#e65100,color:#bf360c
-  style OW fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/14-shoppingmall.en.html" title="ShoppingMall sample topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-shoppingmall.en.html" target="_blank">↗ View larger</a></p>
 
 The payoff of an owner Spot in this sample isn't throughput. The key point is **writing a
 multi-step process that's safe under retry and interruption as sequential code, with no
@@ -315,25 +218,8 @@ cheating, so all judging and reward decisions happen inside the `PlayerId` owner
 owner processes the same player's events in order, and progress is pushed to the connection
 through a projection.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  C["game client"]:::client
-  SS["Session Server<br/>session actor · pre-judgment validation"]
-  SP["PlayerQuestSpot<br/>one per player"]:::server
-  ES[("quest events")]:::store
-  RM[("read model")]:::store
-  GS[("gameplay facts<br/>source for correction")]:::store
-  C <==>|"WebSocket"| SS
-  SS ==>|"owner routing by PlayerId"| SP
-  SP -->|"append · replay"| ES
-  SP -->|"update"| RM
-  SP -.->|"reset/correction query"| GS
-  SP -->|"bound session push"| SS
-  classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-  classDef store fill:#fff3e0,stroke:#e65100,color:#bf360c
-```
+<iframe class="zlink-diagram" src="/common/diagrams/14-gamequest.en.html" title="GameQuest sample topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-gamequest.en.html" target="_blank">↗ View larger</a></p>
 
 Placed next to ShoppingMall, the decision criteria become clear. Game progress can tolerate
 getting tangled because there's a resync safety valve, so **it trades loss tolerance for
@@ -357,28 +243,8 @@ boundary, their actor joins the adjacent zone Spot, and if the owner differs, re
 happens — but the client connection stays intact. A bot actor with no bound session makes
 the same boundary crossing on a Spot timer.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart TD
-  BG["browser · game screen"]:::client
-  BO["browser · ops screen"]:::client
-  GW["Gateway<br/>connection endpoint · actor relay"]
-  OPS["Ops<br/>runtime event collection · fanout publish"]
-  subgraph ZN["ZoneNode ×2"]
-    Z1["A — zone Spot · player actor"]:::server
-    Z2["B — zone Spot · player actor"]:::server
-  end
-  BG -->|"STREAM"| GW
-  BO -->|"STREAM"| OPS
-  GW -->|"actor relay · push"| Z1
-  GW --> Z2
-  Z1 <==>|"boundary sync · relocation if owner differs"| Z2
-  OPS -->|"announcement · maintenance-mode change fanout"| ZN
-  Z1 -->|"Spot event report"| OPS
-  classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-  style ZN fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/14-zoneworld.en.html" title="ZoneWorld sample topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/14-zoneworld.en.html" target="_blank">↗ View larger</a></p>
 
 This sample's teaching point is that **"doing something across multiple nodes" calls for a
 different surface depending on the situation.**
@@ -427,3 +293,7 @@ To run only ZoneWorld, invoke `ZoneWorld/run_sample.sh` from that language's sam
 - Per-language sample directory layout: the `README` at each language's sample root
 - Per-feature usage: [05-channel-messaging](05-channel-messaging.en.md) through
   [12-operations](12-operations.en.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

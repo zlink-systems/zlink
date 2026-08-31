@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ZoneWorld — zone sharding and ops control",
+    "subtitle": "game screen via Gateway→zone Spot · ops screen via Ops fanout",
+    "output": "14-zoneworld.en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 3, "gapX": 110, "gapY": 92, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "BG", "type": "frontend", "label": "game screen", "sublabel": "browser", "row": 0, "col": 1 },
+    { "id": "GW", "type": "external", "label": "Gateway", "sublabel": "endpoint · actor relay", "row": 1, "col": 1 },
+    { "id": "Z1", "type": "backend", "label": "A — zone Spot", "sublabel": "player actor", "row": 2, "col": 0 },
+    { "id": "Z2", "type": "backend", "label": "B — zone Spot", "sublabel": "player actor", "row": 2, "col": 2 },
+    { "id": "OPS", "type": "external", "label": "Ops", "sublabel": "runtime event · fanout", "row": 3, "col": 1 },
+    { "id": "BO", "type": "frontend", "label": "ops screen", "sublabel": "browser", "row": 4, "col": 1 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "ZoneNode — 2 nodes", "wraps": ["Z1", "Z2"] }
+  ],
+  "connections": [
+    { "from": "BG", "to": "GW", "label": "STREAM", "variant": "default", "labelDy": 40 },
+    { "from": "GW", "to": "Z1", "label": "actor relay · push", "variant": "default", "toSide": "top", "labelDx": -18 },
+    { "from": "GW", "to": "Z2", "variant": "default", "toSide": "top" },
+    { "from": "Z1", "to": "Z2", "label": "boundary sync · relocation", "variant": "emphasis" },
+    { "from": "OPS", "to": "Z1", "label": "announcement · maintenance fanout", "variant": "default", "toSide": "bottom", "labelDx": -18 },
+    { "from": "OPS", "to": "Z2", "variant": "default", "toSide": "bottom" },
+    { "from": "Z1", "to": "OPS", "label": "Spot event report", "variant": "default", "fromSide": "bottom", "toSide": "left", "labelDx": -14 },
+    { "from": "BO", "to": "OPS", "label": "STREAM", "variant": "default", "labelDy": -40 }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Two surfaces",
+      "items": [
+        "game screen: browser → Gateway → zone Spot·player actor (actor relay·push)",
+        "ops screen: browser → Ops (runtime event collection·fanout publish)",
+        "zone A ↔ zone B is boundary sync (bidirectional) — relocation if the owner differs, the client connection stays intact"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "fanout · reporting",
+      "items": [
+        "the region is the original subgraph ZoneNode ×2 (2 zone nodes: A·B)",
+        "the original mermaid fans out to the whole ZoneNode group (region) — the publisher never holds a node list; here it is drawn to Z1·Z2 each (announcement · maintenance-mode change fanout)",
+        "the zone Spot reports its own events to Ops (runtime event)"
+      ]
+    }
+  ]
+}

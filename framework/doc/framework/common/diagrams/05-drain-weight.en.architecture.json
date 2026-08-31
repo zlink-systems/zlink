@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Operational drain / restore — peer weight picks the target",
+    "subtitle": "Weight 100 more often · 50 less · 0 excluded from new-request candidates (connection and handler stay)",
+    "output": "05-drain-weight.en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 4, "gapX": 90, "gapY": 70, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "R", "type": "frontend", "label": "channel runtime", "sublabel": "picks new-request target", "row": 2, "col": 0 },
+    { "id": "AR", "type": "backend", "label": "runtime", "sublabel": "Weight = 100", "row": 0, "col": 2 },
+    { "id": "AH", "type": "backend", "label": "typed handler", "row": 0, "col": 3 },
+    { "id": "BR", "type": "backend", "label": "runtime", "sublabel": "Weight = 50", "row": 2, "col": 2 },
+    { "id": "BH", "type": "backend", "label": "typed handler", "row": 2, "col": 3 },
+    { "id": "DR", "type": "backend", "label": "runtime", "sublabel": "Weight = 0 · drain", "row": 4, "col": 2 },
+    { "id": "DH", "type": "backend", "label": "typed handler", "row": 4, "col": 3 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "client application", "wraps": ["R"] },
+    { "kind": "region", "label": "server A", "wraps": ["AR", "AH"] },
+    { "kind": "region", "label": "server B", "wraps": ["BR", "BH"] },
+    { "kind": "region", "label": "server C", "wraps": ["DR", "DH"] }
+  ],
+  "connections": [
+    { "from": "R", "to": "AR", "label": "picked more often", "variant": "emphasis" },
+    { "from": "R", "to": "BR", "label": "picked less often", "variant": "default" },
+    { "from": "R", "to": "DR", "label": "excluded from new-request candidates", "variant": "dashed" },
+    { "from": "AR", "to": "AH", "variant": "default" },
+    { "from": "BR", "to": "BH", "variant": "default" },
+    { "from": "DR", "to": "DH", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Peer weight (Weight)",
+      "items": [
+        "The client runtime consults Weight to pick a new-request target — it picks server A (100) more often and server B (50) less often.",
+        "Weight = 0 (drain) only excludes it from new-request candidates — it doesn't close the serving socket, in-flight requests finish to the end, and the typed handler and descriptor row stay (graceful drain). 100 restores normal serving."
+      ]
+    }
+  ]
+}

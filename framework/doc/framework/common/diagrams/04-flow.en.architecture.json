@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Backpressure path — send to receive, replies dashed",
+    "subtitle": "Serial flow from sending handler to receiving handler · the Completion connection returns terminal reply·error",
+    "output": "04-flow.en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 6, "gapX": 46, "gapY": 96, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "H1", "type": "frontend", "label": "sending handler", "sublabel": "SendToChannel(...)", "row": 0, "col": 0 },
+    { "id": "SQ", "type": "messagebus", "label": "Core send queue", "sublabel": "accounted-byte HWM", "row": 0, "col": 1 },
+    { "id": "AC", "type": "external", "label": "Application", "sublabel": "connection", "row": 0, "col": 2 },
+    { "id": "RQ", "type": "messagebus", "label": "Core receive queue", "sublabel": "accounted-byte HWM", "row": 0, "col": 3 },
+    { "id": "BUD", "type": "database", "label": "App job queue", "sublabel": "reserved + queued permits", "row": 0, "col": 4 },
+    { "id": "H2", "type": "frontend", "label": "receiving handler", "row": 0, "col": 5 },
+    { "id": "CC", "type": "external", "label": "Completion", "sublabel": "connection", "row": 1, "col": 2 }
+  ],
+  "connections": [
+    { "from": "H1", "to": "SQ", "variant": "default" },
+    { "from": "SQ", "to": "AC", "variant": "default" },
+    { "from": "AC", "to": "RQ", "variant": "default" },
+    { "from": "RQ", "to": "BUD", "variant": "default" },
+    { "from": "BUD", "to": "H2", "variant": "default" },
+    { "from": "H2", "to": "CC", "variant": "dashed", "label": "terminal reply·error", "fromSide": "bottom", "toSide": "right" },
+    { "from": "CC", "to": "H1", "variant": "dashed", "fromSide": "left", "toSide": "bottom" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Serial flow (solid)",
+      "items": [
+        "Runs in order: sending handler → Core ordinary send queue → Application connection → Core ordinary receive queue → application job queue → receiving handler.",
+        "The Core send/receive queues cap bytes with the accounted-byte HWM, and the application job queue caps the number of jobs waiting for a handler with reserved + queued permits."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Return path (dashed)",
+      "items": [
+        "The receiving handler returns terminal reply·error over the Completion connection (dashed), and the Completion connection leads back to the sending handler.",
+        "The Completion connection keeps reading even while application receiving is stopped, so an in-flight request finishes. The Application connection carries ordinary messages·requests plus Framework control (heartbeat·topology·relocation·SendReady kind 12)."
+      ]
+    }
+  ]
+}

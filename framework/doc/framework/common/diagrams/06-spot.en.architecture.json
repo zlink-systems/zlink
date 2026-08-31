@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "The Spot execution model — concurrency scope",
+    "subtitle": "SpotWide funnels into one common gate · Entry and PerActor keep a separate lane each",
+    "output": "06-spot.en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 96, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "P1", "type": "external", "label": "direct packet", "sublabel": "timer", "row": 0, "col": 0 },
+    { "id": "SQ1", "type": "external", "label": "Spot queue", "row": 0, "col": 1 },
+    { "id": "A1", "type": "external", "label": "Actor A payload", "row": 1, "col": 0 },
+    { "id": "AQ1", "type": "external", "label": "Actor A queue", "row": 1, "col": 1 },
+    { "id": "G1", "type": "backend", "label": "common gate", "sublabel": "runs only one callback", "row": 1, "col": 2 },
+    { "id": "B1", "type": "external", "label": "Actor B payload", "row": 2, "col": 0 },
+    { "id": "BQ1", "type": "external", "label": "Actor B queue", "row": 2, "col": 1 },
+
+    { "id": "P2", "type": "external", "label": "direct packet", "sublabel": "timer", "row": 3, "col": 0 },
+    { "id": "SQ2", "type": "external", "label": "Spot queue", "row": 3, "col": 1 },
+    { "id": "R2", "type": "external", "label": "runs", "row": 3, "col": 2 },
+    { "id": "A2", "type": "external", "label": "Actor A payload", "row": 4, "col": 0 },
+    { "id": "AQ2", "type": "external", "label": "Actor A queue", "row": 4, "col": 1 },
+    { "id": "R2A", "type": "external", "label": "runs", "row": 4, "col": 2 },
+    { "id": "B2", "type": "external", "label": "Actor B payload", "row": 5, "col": 0 },
+    { "id": "BQ2", "type": "external", "label": "Actor B queue", "row": 5, "col": 1 },
+    { "id": "R2B", "type": "external", "label": "runs", "row": 5, "col": 2 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "User Spot — SpotWide (default)", "wraps": ["P1", "SQ1", "A1", "AQ1", "G1", "B1", "BQ1"] },
+    { "kind": "region", "label": "Entry Spot · User Spot PerActor", "wraps": ["P2", "SQ2", "R2", "A2", "AQ2", "R2A", "B2", "BQ2", "R2B"] }
+  ],
+  "connections": [
+    { "from": "P1", "to": "SQ1", "variant": "default" },
+    { "from": "A1", "to": "AQ1", "variant": "default" },
+    { "from": "B1", "to": "BQ1", "variant": "default" },
+    { "from": "SQ1", "to": "G1", "variant": "emphasis" },
+    { "from": "AQ1", "to": "G1", "variant": "emphasis" },
+    { "from": "BQ1", "to": "G1", "variant": "emphasis" },
+
+    { "from": "P2", "to": "SQ2", "variant": "default" },
+    { "from": "SQ2", "to": "R2", "variant": "default" },
+    { "from": "A2", "to": "AQ2", "variant": "default" },
+    { "from": "AQ2", "to": "R2A", "variant": "default" },
+    { "from": "B2", "to": "BQ2", "variant": "default" },
+    { "from": "BQ2", "to": "R2B", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "SpotWide (default)",
+      "items": [
+        "Spot queue, Actor A queue, and Actor B queue all funnel into one common gate — only one callback runs"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Entry Spot · User Spot PerActor",
+      "items": [
+        "The Spot queue and each Actor's queue run independently, each on its own lane — different lanes run concurrently"
+      ]
+    }
+  ]
+}

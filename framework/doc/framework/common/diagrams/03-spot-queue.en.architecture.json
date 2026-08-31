@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "spot — owns state, processes in order",
+    "subtitle": "Requests and a timer converge on one queue; the Spot processes them in order",
+    "output": "03-spot-queue.en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 96, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "R1", "type": "external", "label": "request", "sublabel": "room-42", "row": 0, "col": 0 },
+    { "id": "R2", "type": "external", "label": "request", "sublabel": "room-42", "row": 1, "col": 0 },
+    { "id": "T", "type": "external", "label": "timer", "row": 2, "col": 0 },
+    { "id": "Q", "type": "external", "label": "Spot queue", "row": 1, "col": 1 },
+    { "id": "S", "type": "backend", "label": "room-42 Spot", "sublabel": "owns state directly", "row": 1, "col": 2 }
+  ],
+  "connections": [
+    { "from": "R1", "to": "Q", "variant": "default" },
+    { "from": "R2", "to": "Q", "variant": "default" },
+    { "from": "T", "to": "Q", "variant": "default" },
+    { "from": "Q", "to": "S", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "slate",
+      "title": "One line, one at a time",
+      "items": [
+        "Several requests for the same room-42 and a timer converge on one Spot queue, and the room-42 Spot processes them in order (serially).",
+        "It owns state directly as one object alive in memory, so two requests never touch the same state at once — no lock is needed."
+      ]
+    }
+  ]
+}

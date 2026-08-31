@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "L7 distribution — split request by request",
+    "subtitle": "An L7 distributor (mesh sidecar / client-side LB) splits client requests to server A·B·C per request",
+    "output": "17-l7-distribute.en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 110, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C2", "type": "frontend", "label": "client", "row": 1, "col": 0 },
+    { "id": "L7", "type": "external", "label": "L7 distribution", "sublabel": "sidecar / LB", "row": 1, "col": 1 },
+    { "id": "A2", "type": "frontend", "label": "server A", "row": 0, "col": 2 },
+    { "id": "B2", "type": "frontend", "label": "server B", "row": 1, "col": 2 },
+    { "id": "D2", "type": "frontend", "label": "server C", "row": 2, "col": 2 }
+  ],
+  "connections": [
+    { "from": "C2", "to": "L7", "variant": "default", "label": "per request" },
+    { "from": "L7", "to": "A2", "variant": "default", "label": "req" },
+    { "from": "L7", "to": "B2", "variant": "default", "label": "req" },
+    { "from": "L7", "to": "D2", "variant": "default", "label": "req" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "L7 distributor",
+      "items": [
+        "Full label: \"L7 distribution: mesh sidecar or client-side LB\". It splits work by looking at each individual request, not the connection.",
+        "The L7 distributor splits client requests to server A·B·C request by request — a mesh sidecar or client-side LB plays this role."
+      ]
+    }
+  ]
+}

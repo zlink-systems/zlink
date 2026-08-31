@@ -139,23 +139,8 @@ of the Object Servers that registered that type, and issues a globally unique `S
 
 ### 3.1 Execution Flow
 
-```mermaid
-sequenceDiagram
-    participant Client as HTTP client
-    participant Api as API server
-    participant Store as Location Store
-    participant Play as Selected Play node
-    participant Spot as Game Spot
-
-    Client->>Api: POST /games
-    Api->>Store: Reserve a new Spot
-    Store-->>Api: SpotId and selected owner
-    Api->>Play: Create Spot with initial request
-    Play->>Spot: Construct and initialize
-    Spot-->>Play: Accept
-    Play-->>Api: Spot ready
-    Api-->>Client: RoomId = SpotId
-```
+<iframe class="zlink-diagram" src="/common/diagrams/02-create-room.en.html" title="The flow of creating one room — Create Room" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/02-create-room.en.html" target="_blank">↗ View larger</a></p>
 
 The API code never carries the Play node's `NodeRid` or endpoint. The same creation code is
 used even as Play nodes are added or replaced.
@@ -324,3 +309,7 @@ The next chapters each explain the role of the channel, Spot, Actor, Stream, and
 Store used here.
 
 ---
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

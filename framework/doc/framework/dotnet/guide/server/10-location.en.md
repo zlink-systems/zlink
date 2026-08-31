@@ -29,12 +29,8 @@ The Location Store stores the MeshNode descriptor and the current owner of each 
 The Framework uses this information to auto-connect peers and deliver by logical ID to the
 current owner.
 
-```mermaid
-flowchart LR
-    S["Object Server"] -->|"descriptor and owner"| L[("Location Store")]
-    C["Object Client"] -->|"read current location"| L
-    C -->|"message"| S
-```
+<iframe class="zlink-diagram" src="/common/diagrams/10-location.en.html" title="Location — Registering And Looking Up Location" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/10-location.en.html" target="_blank">↗ View larger</a></p>
 
 The Store is used only to find location. The actual application message is sent directly to
 the selected MeshNode.
@@ -246,3 +242,7 @@ generation.
 - Manual connection without auto-connect:
   [05-channel-messaging §6](05-channel-messaging.en.md#6-connection-control)
 - Host relocate and drain observability: [12-operations](12-operations.en.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>
