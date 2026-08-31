@@ -157,7 +157,8 @@ properties follow it consecutively, with each property laid out as follows.
 
 Enabling `ZLINK_OPT_ZMP_METADATA` adds `Socket-Type` and, only when the socket type is DEALER
 or ROUTER, also adds `Routing-Id`. A READY that uses metadata always includes
-`Zlink-Max-Message-Size`, whose value is an 8-byte unsigned 64-bit big-endian integer. This
+`Zlink-Max-Message-Size`, whose value is an 8-byte unsigned 64-bit big-endian integer. A value of
+`0` means that no positive Application maximum is configured. This
 option is disabled by default. However, a paired DEALER·ROUTER transport always adds metadata
 and the pair properties from [§4.1](#41-request-reply-transport-pair), regardless of this
 option.
@@ -188,8 +189,42 @@ peer. The runtime exposes the synthetic routing-ID preamble used by a ROUTER to 
 only on the Application lane. The Completion lane carries neither this preamble nor ordinary
 `data` records. If the Completion lane carries a record after READY, the first record must be a
 reply, error reply, or receive-flow control record.
-Peer-weight advertisements control Application-lane scheduling and are sent only on the
-Application lane. They are not Completion-lane records.
+
+Peer-weight advertisements control only peer selection on the Application lane. A network
+transport sends an absolute value in `0..10000` as a ZMP `WEIGHT` command on the Application
+connection. Inproc delivers the same value as Core control to the owner thread of the peer's
+Application pipe. Core consumes both paths, so neither appears as application data on a public
+receive or creates a record on the Completion lane.
+
+A network `WEIGHT` command uses the `CONTROL` flag and `KIND == 0x00` in the 8-byte base header,
+with a payload size of 10. Its payload has the following byte order and carries neither multipart
+`MORE` nor a request sequence.
+
+```text
+[ASCII "WEIGHT":6][weight:u32 BE]
+```
+
+Application size limits do not apply to this CONTROL body. The receiving runtime first applies the
+independent CONTROL limit in [§7](#7-decode-validation), then validates the WEIGHT type.
+
+A body identified as `WEIGHT` but not exactly 10 bytes, or carrying a value above `10000`, is
+consumed and ignored. It does not terminate the connection, change scheduler state, emit
+`PEER_WEIGHT_CHANGED`, or appear on public receive.
+
+Forbidden flag combinations and a CONTROL body above the independent limit remain structural
+protocol errors.
+
+A weight configured before bind or connect is synchronized with the peer scheduler only after the
+paired Application pipe is ready. A dynamic change also applies the new absolute value, including
+`0`, in both directions. If the value equals the last value advertised for the pair, Core does not
+create another command. After reconnect, the Application pipe of the new paired generation
+re-advertises the current configured value when it becomes pair-ready.
+
+A network `WEIGHT` command may bypass application HWM and remote PAUSE. It does not bypass the
+pair-ready hold or the atomic boundary of an Application multipart. While an Application multipart
+is open, the sender retains only the latest weight as fixed `uint32` state. After FINAL commits the
+multipart, or after rollback removes it, the sender appends and publishes that latest command only
+as the next record at the resulting message boundary.
 
 Application writes wait until both lanes have completed validation. Data received from an
 earlier generation is not attached to the new pair. A protocol error, identity mismatch,
@@ -284,6 +319,25 @@ extension.
 
 Splitting the base header or sequence extension across transport reads is not an error.
 
+Body-size validation distinguishes Application and CONTROL frames.
+
+1. A positive `ZLINK_OPT_MAXMSGSIZE` limits each inbound Application part body. For a non-special
+   Application record, it also limits the sum of all part bodies in that record. The value `0` is
+   unlimited: it adds no option-derived per-part or record-aggregate limit. The advertised
+   `Zlink-Max-Message-Size` communicates that Application limit to the peer for outbound admission.
+2. A CONTROL body bypasses those Application limits and is checked against an independent fixed
+   upper bound of 4096 bytes before body storage or Application HWM admission.
+3. A CONTROL body within that bound is then checked by its control type. Existing READY and
+   FLOWSTATE controls and the fixed 10-byte WEIGHT therefore continue to work when the Application
+   maximum is smaller than their body.
+
+Even when each part is within the limit, a non-special Application multipart whose cumulative body
+exceeds the limit fails with `BODY_TOO_LARGE` (`0x04`) and delivers no payload to a handler or public
+receive. A declared 4097-byte CONTROL body also fails with `BODY_TOO_LARGE` (`0x04`). This is a
+protocol rejection, not an unlimited control allocation path, and the body is not delivered to an
+Application receive. Type-specific controls can define a narrower consume-and-ignore rule, as WEIGHT
+does in §4, without weakening the structural header and 4096-byte checks.
+
 A validation failure terminates the pair with `EPROTO` and does not deliver the frame to a
 handler or reply completion. The frame itself does not complete a pending request; existing
 pending requests retain the established disconnect result when the pair is torn down.
@@ -326,10 +380,12 @@ and payload pointer. Only the first request-reply frame adds the sequence extens
 scatter/gather entry. Header creation adds neither a heap buffer nor a payload copy.
 
 Before allocating application payload storage or reserving queue capacity, the decoder
-accumulates and validates the complete base header and sequence extension. When a header is
-split across transport reads, it retains the bytes and state and continues on the next read.
-After validation it performs HWM admission using the application payload size, and an
-admission retry after backpressure does not reread the header.
+accumulates and validates the complete base header and sequence extension. When a positive
+`ZLINK_OPT_MAXMSGSIZE` is configured, it checks the current Application part size and, for a
+non-special Application frame, also checks the accumulated multipart body. The value `0` adds no
+limit to either check. When a header is split across transport reads, it retains the bytes and state
+and continues on the next read. After validation it performs HWM admission using the current
+application payload size, and an admission retry after backpressure does not reread the header.
 
 The decoder then advances through validation, admission, payload, and submission states.
 After it restores metadata on the first application message, the socket runtime performs
@@ -345,6 +401,30 @@ The reply payload moves directly from the Completion pipe to the registered call
 not retained in a hidden PAIR receive queue or a second completion payload deque. Only a
 small payloadless callback metadata queue is maintained for terminal callbacks such as
 timeout and shutdown. This queue is not a transport lane or a wire record.
+
+### Peer-weight control
+
+The exact receiving Application pipe owns the latest absolute remote weight. Scheduler mutation and
+the `PEER_WEIGHT_CHANGED` monitor event occur only on its owner thread; no pair-table pending slot
+owns the value.
+
+Delivery proceeds in this order.
+
+1. A network session decodes a ZMP `WEIGHT` command, or an inproc sender passes a typed `uint32`
+   weight, and targets the peer's exact Application pipe owner.
+2. The owner command retains that pipe and captures the physical connection ID for which the value
+   was received.
+3. Command processing verifies the exact pipe's active lifetime, Application lane, and current
+   match with the captured connection ID before recording the value on that pipe.
+4. When the same pipe becomes ready and is attached as a selectable route, the scheduler reads and
+   applies its recorded value.
+5. An actual applied change emits `PEER_WEIGHT_CHANGED`. The event `value` is the new weight, its
+   lane is Application, and its pair ID and generation identify the pipe to which it was applied.
+
+Termination or a connection-ID mismatch discards only that exact pipe's stale command. A pipe that
+remains as a duplicate standby retains its own latest value, so it applies if that same pipe is
+selected later. This guarantee does not make the broader claim that every standby or replacement
+route discards previously recorded state.
 
 ### Pending and reply-target keys
 
@@ -419,12 +499,38 @@ item maps to one test.
 - FIFO ordering is observed only within each lane; no ordering is guaranteed between lanes.
 - Completion replies are processed even while Application ingress is stopped by
   backpressure.
+- A network peer-weight advertisement is an Application-lane frame with `CONTROL`,
+  `KIND == 0x00`, and payload size `10`; its payload follows
+  `[ASCII "WEIGHT":6][weight:u32 BE]`.
+- Setting a positive `ZLINK_OPT_MAXMSGSIZE` below 10 bytes does not block READY, FLOWSTATE, or the
+  fixed 10-byte WEIGHT CONTROL, but an Application body above the configured maximum remains rejected.
+- `ZLINK_OPT_MAXMSGSIZE=0` adds no option-derived limit to an Application part or a non-special
+  multipart aggregate. The wire's 32-bit payload-size range and the 4096-byte CONTROL limit still
+  apply.
+- A non-special Application multipart is delivered only when every part and the sum of all part
+  bodies are within `ZLINK_OPT_MAXMSGSIZE`. If its cumulative body exceeds that limit, the pair
+  terminates with `BODY_TOO_LARGE` (`0x04`) and no payload reaches a handler or public receive.
+- A 4096-byte CONTROL reaches type-specific validation, while a declared 4097-byte CONTROL is
+  rejected as `BODY_TOO_LARGE` (`0x04`) and produces no Application record.
+- A body identified as WEIGHT but having a size other than 10 or a value above `10000` is consumed
+  without disconnecting the pair, changing scheduler state, emitting `PEER_WEIGHT_CHANGED`, or
+  producing a public receive record.
+- If weights change more than once while an Application multipart is open, the peer receives that
+  multipart without an interleaved control record and receives only the latest `WEIGHT` command at
+  the next message boundary after FINAL commit or rollback.
 - Registering a completion poller before the first request on a network paired connection does not
   terminate the pair; the following request and reply are each delivered once.
 - After an Application request is received on an inproc pair, the Completion pipe has no readable
   synthetic routing-ID record before a reply or receive-flow control record is written.
-- Changing a peer weight after an inproc pair is ready does not add a Completion-lane record or
-  terminate the pair; the following request and reply are each delivered once.
+- On network and inproc pairs, weights configured on both sides before bind or connect are applied
+  with their exact values to the peer scheduler after the paired Application pipe becomes ready;
+  `0` is applied as a value.
+- Dynamically changing peer weights in both directions after a network or inproc pair is ready
+  produces `PEER_WEIGHT_CHANGED` with the new value and that Application lane's pair ID and
+  generation, while no weight record appears on public receive or the Completion pipe.
+- Setting the same value again does not duplicate a peer scheduling-state change or monitor event.
+- After reconnect, public peer selection and monitoring reflect the current weight on the new
+  generation. Promoting an active standby uses the value that standby most recently received.
 
 **Request-reply and decode validation**
 

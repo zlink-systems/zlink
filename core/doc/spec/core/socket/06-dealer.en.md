@@ -82,8 +82,9 @@ sequenceDiagram
 
 ## 3. Outbound peer selection
 
-The following rules determine which peer receives a round-robin or weighted send. The weight is set
-with `ZLINK_DEALER_OPT_WEIGHT` in [§8 DEALER options](#8-dealer-options).
+The following rules determine which peer receives a round-robin or weighted send. The weight is the
+absolute value that each peer advertises through its own `ZLINK_DEALER_OPT_WEIGHT` or
+`ZLINK_ROUTER_OPT_WEIGHT`. [§8](#8-dealer-options) defines the DEALER option.
 
 A candidate is a connected outbound peer whose advertised weight is positive. A peer with weight
 `0` is excluded from the candidate set. If every known peer has weight `0`, a submit may fail with
@@ -106,12 +107,18 @@ single run. With weights `100` and `300`, the repeating order is `second, first,
 three consecutive sends to the heavier peer followed by one send to the lighter peer. With enough
 messages, the selection frequency matches the configured ratio.
 
-The selection procedure applies only to a message that a peer actually accepts. If the selected
-candidate cannot accept the write because it has no write capacity, it is excluded as a candidate
-for that message, and the procedure applies to the peer that accepts the message instead. This
-failure does not change the configured weight, and the peer returns to the candidate set when it
-reports write capacity again. A message rejected for exceeding a size limit is not retried against
-another candidate, because every candidate would reject it for the same reason.
+For an ordinary `zlink_send_part()` or `zlink_dealer_request_part()` that has not committed an exact
+target, the selection procedure applies only to the message that a peer accepts. If the selected
+candidate has no write capacity, it is excluded for that attempt and the procedure applies to the
+peer that accepts the message instead. This fallback does not change the configured weight, and the
+peer returns to the candidate set when it reports write capacity again. A message rejected for
+exceeding a size limit is not retried against another candidate, because every candidate would
+reject it for the same reason.
+
+Exact routed selection has a different commit boundary. `zlink_select_routed_submit_target()` and
+DEALER `zlink_send_async()` commit one weighted step across every connected positive-weight
+Application pipe, including an HWM-blocked pipe. The selected exact pipe remains the pending key;
+HWM makes the operation wait for that pipe and does not reroute it to another candidate.
 
 The identifier in step 2 is the peer routing ID, compared as a byte string. An absent routing ID is
 an empty byte string, so it sorts before every non-empty identifier. Peers with the same identifier,
@@ -130,6 +137,11 @@ configured ratio. A new connection starts at `0`, and a disconnected peer discar
 with the connection. A peer excluded only temporarily because of [backpressure](../glossary.en.md#backpressure)
 or weight `0` retains its accumulator and continues from that value when it becomes a candidate
 again.
+
+Peer selection is fixed for one Application message. If the selected pipe's remote weight changes
+to `0` after the first part of a multipart has been accepted, all remaining parts through
+`ZLINK_PART_FINAL` use that same pipe. Weight `0` excludes the pipe only when the next message is
+selected.
 
 ## 4. Part sequences and ownership
 
@@ -272,6 +284,41 @@ that are not DEALER-specific use `zlink_set_option()` and `zlink_get_option()`.
 
 A weight outside `0..10000` is rejected and is not clamped. Values in `0..100` retain the meaning
 they had before the range was widened.
+
+The common [`ZLINK_OPT_CONFLATE` contract](README.en.md#conflation) does not allow DEALER to enable
+frame-level conflation. Setting `1` returns `ZLINK_CONFIG_NOT_SUPPORTED` with `ENOTSUP`; setting `0`
+succeeds as a no-op, and the getter returns `0`.
+
+`ZLINK_DEALER_OPT_WEIGHT` is the absolute value that a peer uses when selecting this DEALER as an
+outbound candidate. DEALER and ROUTER advertise their own values independently, so each direction
+uses the value advertised by the other socket.
+
+The public weight result follows this order.
+
+1. A value set before bind or connect applies after the paired Application pipe becomes ready.
+2. A dynamic change applies the new absolute value, including `0`, to the peer scheduler.
+3. An actual change emits `PEER_WEIGHT_CHANGED` with the value and the paired Application pipe's
+   lane, pair ID, and generation. Repeating the same value emits no additional event.
+4. Reconnect applies the current configured value to the new generation.
+
+The network wire, inproc delivery, CONTROL size boundary, multipart deferral, and exact-pipe
+lifetime and stale-delivery ownership are defined by the
+[ZMP transport-pair](../protocol/01-zmp.en.md#41-request-reply-transport-pair),
+[decode](../protocol/01-zmp.en.md#7-decode-validation), and
+[peer-weight owner](../protocol/01-zmp.en.md#peer-weight-control) contracts. Neither transport path
+creates a weight record on public receive or the Completion lane.
+
+If the applied value becomes `0` after a multipart has selected a pipe, that message completes
+through FINAL on the same pipe. The next message selection excludes it.
+
+An actual remote-weight change re-evaluates a pending `zlink_send_async()` operation for its exact
+pipe. If the weight becomes `0` before the message begins, the completion is `ZLINK_SEND_TERMINAL`
+with `terminal_errno == ECONNREFUSED`; a change from `0` to a positive value permits retry without
+another write-activation event.
+
+An active duplicate keeps its own latest value while standby and uses it if that same pipe is
+selected later. Setting the Application maximum below 10 bytes does not prevent pair readiness,
+FLOWSTATE, or WEIGHT delivery; malformed CONTROL behavior remains owned by ZMP.
 
 ## 9. Functions
 
@@ -445,6 +492,32 @@ and the [Monitoring](../06-monitoring.en.md) status snapshot. Each item maps to 
 - When `zlink_get_dealer_option()` succeeds, `*optvallen_` is updated to the number of bytes actually written.
 - When `ZLINK_DEALER_OPT_PROBE` is set to a positive value, the peer can observe the connection and routing ID through an empty raw message when the connection is established, and the getter returns `0` or `1`.
 - When the final request part is submitted with `timeout_ms_ == 0`, the `ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS` value (default `5000`) is used as the timeout.
+- On DEALER, setting `ZLINK_OPT_CONFLATE` to `1` returns `ZLINK_CONFIG_NOT_SUPPORTED` with
+  `ENOTSUP`; setting `0` succeeds, and the getter returns `0`.
+
+**Peer-weight delivery**
+
+- If different weights are configured on a DEALER and its peer ROUTER before bind or connect, each
+  scheduler uses the peer's exact value after the pair becomes ready, and a peer with value `0` is
+  excluded from outbound candidates.
+- Dynamically changing both weights after a network or inproc pair is ready produces
+  `PEER_WEIGHT_CHANGED` with the new weight in `value`; the event transport lane, pair ID, and
+  generation match the paired Application pipe to which the value was applied.
+- Setting or synchronizing weight adds no application record to public receive or the Completion
+  lane, and setting the same value again produces no duplicate monitor event.
+- Changing weight more than once while an Application multipart is open preserves the peer-visible
+  multipart as one atomic record, and only the latest value is reflected after FINAL or rollback.
+- If a pipe's remote weight becomes `0` after the first part of an Application multipart is
+  accepted, the same pipe carries every remaining part through FINAL and is excluded starting with
+  the next message selection.
+- A remote-weight change re-evaluates a pending `zlink_send_async()` operation for its exact pipe:
+  if the weight becomes `0` before the message begins, the completion is `ZLINK_SEND_TERMINAL` with
+  `terminal_errno == ECONNREFUSED`; a change from `0` to a positive value permits retry without
+  another write-activation event.
+- Setting an Application maximum below 10 bytes does not prevent pair readiness, FLOWSTATE, or
+  weight changes observed through peer selection and monitoring.
+- After reconnect, peer selection and monitoring reflect the current weight on the new generation.
+  Promoting an active standby uses the value that standby most recently received.
 
 **Outbound peer selection**
 
@@ -454,6 +527,9 @@ and the [Monitoring](../06-monitoring.en.md) status snapshot. Each item maps to 
 - Two processes configured with the same peers and weights produce the same selection order when their candidate identifiers are distinct.
 - A reconnected peer starts again with accumulator `0` and retains its previous sorting position.
 - A peer that cannot accept a message because it has no write capacity is excluded only for that message and continues from its retained accumulator when it reports capacity again.
+- `zlink_select_routed_submit_target()` and DEALER `zlink_send_async()` include an HWM-blocked
+  positive-weight pipe in the weighted step, commit the selected exact pending key, and do not
+  reroute that operation while it waits for exact-pipe readiness.
 
 **Part sequences and ownership**
 

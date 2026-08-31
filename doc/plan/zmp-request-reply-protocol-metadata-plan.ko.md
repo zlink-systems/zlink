@@ -189,6 +189,23 @@ Payload size는 sequence extension을 제외한 application payload byte 수다.
 `sizeof(msg_t)`를 기준으로 계산한다. Header 자체의 byte 수를 application payload 제한에
 더하지 않는다.
 
+`ZLINK_OPT_MAXMSGSIZE`와 READY의 `Zlink-Max-Message-Size`는 Application body 제한이다.
+양수 값만 이 제한을 설정한다. 값 `0`은 무제한을 뜻하므로 decoder가 option에서 온 part별·record
+합산 상한을 적용하지 않는다. Wire의 32-bit `PAYLOAD SIZE` field가 표현하는 part 크기와 CONTROL의
+독립 상한은 계속 적용한다.
+Non-special Application record에서는 각 part의 body와 모든 part body의 합이 모두 이 제한을
+넘을 수 없다. Decoder는 현재 part를 위한 storage·HWM reservation을 만들거나 handler에
+전달하기 전에 이 두 조건을 확인한다. 따라서 part마다 제한 안이어도 multipart 전체 payload가
+제한을 넘으면 record를 거부한다.
+
+ZMP CONTROL은 이 제한을 우회하지만 독립된 고정 상한 4096 byte를 적용하고, 그 안에서 다시
+control type별 크기·값을 검증한다. 4097 byte CONTROL은 `BODY_TOO_LARGE`(`0x04`)로 protocol
+거부한다. 따라서 작은 Application 최대값 때문에 READY·FLOWSTATE·WEIGHT가 깨지지 않으면서도
+CONTROL을 무제한 allocation 우회로로 만들지 않는다.
+
+`WEIGHT`로 식별했지만 정확히 10 byte가 아니거나 값이 `10000`보다 크면 FLOWSTATE와 같이
+consume·ignore한다. Connection, scheduler·monitor 상태와 public receive는 바꾸지 않는다.
+
 ### 3.3 Multipart의 kind 위치
 
 Request-reply kind와 sequence는 multipart의 첫 application data frame에만 기록한다.
@@ -422,8 +439,10 @@ Decoder는 frame 하나를 다음 상태 순서로 처리한다.
 2. **Extension read** — request-reply kind이면 같은 고정 buffer에 sequence 8바이트를 더
    모은다. Stream read가 1~7바이트에서 끝나면 오류로 만들지 않고 다음 read를 기다린다.
 3. **Header validation** — kind, flags, 0이 아닌 sequence와 multipart 위치를 모두 검증한다.
-4. **Frame admission** — application payload 크기만으로 max-message-size와 HWM 수용 여부를
-   확인한다.
+4. **Frame admission** — Decoder는 현재 Application part의 payload를 양수
+   `ZLINK_OPT_MAXMSGSIZE`와 비교하고, non-special Application record에는 multipart에 누적한
+   payload도 함께 비교한 뒤 현재 part의 payload 크기로 HWM 수용 여부를 확인한다. 값 `0`은 이
+   option 비교를 생략한다. 이 검사는 payload storage와 HWM reservation보다 먼저 수행한다.
 5. **Payload read** — 수용한 `msg_t`의 payload storage를 기존 zero-copy read target으로
    사용하고 내부 kind와 sequence를 기록한다.
 6. **Submission** — payload를 socket runtime에 제출한 뒤 frame과 multipart 상태를 다음
@@ -645,6 +664,14 @@ progress lane을 중계하지 않는 경계를 기록한다. Binding 계약에�
    - 마지막 frame 뒤 상태 초기화
    - 검증 실패 시 reservation 반납
    - Extension 뒤 backpressure 재시도에서 payload만 읽고 admission이 한 번 성공함
+   - Application 최대값보다 큰 READY·FLOWSTATE·WEIGHT CONTROL은 type별 검증까지 진행되고,
+     4096 byte CONTROL은 허용 상한 안이며 4097 byte CONTROL은
+     `BODY_TOO_LARGE`(`0x04`)로 거부됨
+   - Non-special Application multipart는 각 part가 최대값 안이어도 누적 payload가 최대값을
+     넘는 현재 part에서 `BODY_TOO_LARGE`로 거부되고, storage·reservation·handler 전달이
+     발생하지 않음
+   - `ZLINK_OPT_MAXMSGSIZE=0`이면 option에서 온 part별·multipart 합산 상한이 없고, 양수
+     값만 그 비교를 시작함
 3. `unittest_zmp_contract_edges`
    - payload size에서 extension 제외
    - 최대 payload와 overflow
@@ -661,6 +688,11 @@ progress lane을 중계하지 않는 경계를 기록한다. Binding 계약에�
    - §11의 ZMP wire·오류와 frame 수 요구를 소유한다.
    - 같은 2-part payload를 SENDSEND와 REQREP으로 각각 보내 두 경우 모두 application frame이
      정확히 2개이며 legacy envelope frame이 없음을 확인한다.
+   - Network peer-weight advertisement가 Application lane에서 `CONTROL`, `KIND == 0x00`, payload
+     size `10`과 `[ASCII "WEIGHT":6][weight:u32 BE]` payload를 사용하는지 확인한다.
+   - Application 최대값이 10 byte보다 작아도 READY·FLOWSTATE·WEIGHT가 처리되고, 4097 byte
+     CONTROL은 `BODY_TOO_LARGE`이며, wrong-size·out-of-range WEIGHT는 disconnect·scheduler/event
+     변경·public 전달 없이 consume되는지 확인한다.
 7. `test_zmp_ws_wss`, `test_asio_ws`와 TLS·inproc integration target
    - 지원하는 build feature마다 §11의 transport별 관찰 결과를 같은 fixture로 실행한다.
    - Passive paired READY write 완료와 socket pair admission 사이를 test-only gate로 고정해,
@@ -670,14 +702,34 @@ progress lane을 중계하지 않는 경계를 기록한다. Binding 계약에�
    - ZMP integration은 binary message 하나에 frame이 없거나 둘 이상인 입력을 거부하는지,
      raw STREAM integration은 fragmented message와 gather threshold 이상의 routed send를 기존
      byte-stream 의미로 처리하는지 확인한다.
+8. `test_flow_state_paired`, `test_router_multiple_dealers`와 `test_backpressure_matrix`
+   - Network와 inproc pair의 양쪽에 bind·connect 전 서로 다른 weight를 설정하고, pair-ready 뒤
+     상대 scheduler가 `0`을 포함한 정확한 절대값을 적용하는지 확인한다.
+   - Ready 뒤 양방향 dynamic 변경과 같은 값 재설정을 실행해 monitor event의 값과 Application
+     lane pair metadata를 확인한다. Reconnect는 새 paired generation의 Application pipe가
+     pair-ready가 된 뒤 현재 설정 weight를 다시 알리는지 확인한다.
+   - Network Application multipart 중 여러 weight 변경은 multipart를 나누지 않고 가장 최근 값
+     하나만 FINAL commit 또는 rollback 뒤 다음 message 경계에 게시하는지 확인한다.
+   - Multipart의 첫 part 뒤 remote weight가 `0`이 되어도 같은 exact pipe에서 FINAL까지 완료하고
+     다음 message 선택부터 그 pipe를 제외하는지 확인한다.
+   - Remote weight가 실제로 바뀌면 exact pending `zlink_send_async()`를 다시 평가한다. Message
+     시작 전에 weight가 `0`이 되면 `ZLINK_SEND_TERMINAL`과 `terminal_errno == ECONNREFUSED`로
+     완료하고, `0`에서 양수로 바뀌면 별도 write-activation 없이 재시도하는지 확인한다.
+   - 종료됐거나 command에 캡처된 해당 물리 연결 ID가 현재 값과 다른 exact pipe의 owner command는
+     거부하고, active standby로 남은 같은 pipe는 자기 최신 remote weight를 유지해 나중에
+     선택될 때 적용하는지 확인한다.
+   - Inproc owner-thread Core control과 network ZMP `WEIGHT` command가 public Application data나
+     Completion-lane record를 만들지 않는지 확인한다.
+   - DEALER의 `ZLINK_OPT_CONFLATE=1`은 `ZLINK_CONFIG_NOT_SUPPORTED`·`ENOTSUP`, `=0`은 성공,
+     getter는 `0`인지 확인한다. PUB·SUB는 활성화와 getter `1`을 그대로 유지한다.
 
 기존 raw request helper가 application part 네 개로 envelope를 만들면 ZMP header fixture로
 바꾼다. Test를 통과시키기 위해 기대 결과를 낮추지 않는다.
 
 ### 7.2 GitHub Actions
 
-Core는 로컬에서 build하지 않는다. 사용자가 commit과 push를 지시한 뒤 해당 commit SHA를
-대상으로 `.github/workflows/build.yml`의 `workflow_dispatch`를 실행한다. Linux x64·ARM64와
+Functional release gate는 사용자가 commit과 push를 지시한 뒤 해당 commit SHA를 대상으로
+`.github/workflows/build.yml`의 `workflow_dispatch`를 실행한다. Linux x64·ARM64와
 macOS x64·ARM64 job은 각 build script가 허용하는 Core test를 실행하고, Windows x64·ARM64
 job은 `BUILD_TESTS=OFF` compile·link와 artifact 생성을 검증한다. 여섯 platform artifact가 같은
 run에서 생성돼야 한다.
@@ -687,8 +739,9 @@ artifact나 release asset을 대신 사용하지 않는다. Core build, ZMP unit
 request-reply integration test와 TCP·IPC·TLS·WS·WSS 및 inproc contract가 모두 성공해야 한다. 해당
 workflow에 sanitizer나 protocol 전용 job이 있으면 함께 확인한다.
 
-이번 계획의 완료 조건에는 throughput·latency benchmark 실행을 넣지 않는다. §8의 구조적
-변경을 functional·white-box test로 확인하고 실제 성능 수치 비교는 별도 성능 작업에서 수행한다.
+완료 전에 §8.3의 같은 local Release Core로 C single·multi 성능 측정을 실행한다. 이 측정은
+구조적 비용 제거가 실제 workload에서 퇴행하지 않는지 관찰하는 기록이며, 특정 개선율을
+합격 기준으로 두지 않는다.
 
 **검증 기록 — 2026-08-31**
 
@@ -704,14 +757,14 @@ workflow에 sanitizer나 protocol 전용 job이 있으면 함께 확인한다.
   artifact를 생성했고 `Verify Build Artifacts`가 성공했다.
 - `Create Release`는 branch가 release tag 조건을 만족하지 않아 skip됐다. Release, tag와
   version 변경은 실행하지 않았다.
-- Throughput·latency benchmark는 실행하지 않았다. §8의 비용 제거는 source inspection과
-  functional·white-box test로만 확인했다.
+- 최종 local Release snapshot의 성능 측정 조건과 결과는 workflow 기록과 분리해 §8.3에 남긴다.
 
 ## 8. 구조적 성능 개선과 측정 경계
 
-이번 작업에는 protocol envelope를 없애면 실행할 필요가 사라지는 처리만 함께 제거한다.
-Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark 실행과 수치 판정은 별도 성능
-작업이 소유한다.
+이번 작업에는 protocol envelope 제거와 paired control ownership 정리로 실행할 필요가 사라지는
+처리만 함께 제거한다.
+Throughput·latency 수치의 개선 폭은 보장하지 않는다. §8.3 측정은 실제 결과를 기록하되 workload와
+transport에 따른 편차를 구조적 계약으로 바꾸지 않는다.
 
 ### 8.1 함께 구현하는 비용 제거
 
@@ -728,6 +781,8 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
 - **Header는 고정 buffer에서 한 번 조립한다.** Ordinary data는 8바이트, request-reply 첫
   frame은 16바이트를 기존 scatter/gather entry에 연결하며 header용 allocation, `vector`와
   payload copy를 추가하지 않는다.
+- **Ordinary data는 8 byte header로 유지한다.** `KIND == 0x00`에는 sequence extension이나
+  request/reply 상태가 없고, request·reply의 첫 frame만 16 byte header와 sequence를 사용한다.
 - **Single-part fast path는 metadata를 인식한다.** `MORE`가 없는 data는 기존 terminal 경로로
   진행하고, request·reply는 multipart buffer를 만들기 전에 필요한 target 또는 completion
   상태로 바로 연결한다. Completion drain은 single-part reply와 error reply를 stack frame에서
@@ -793,6 +848,9 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
   올리며, 무관한 async command batch에는 추가 wake를 만들지 않는다. Socket-specific dispatcher는
   frame 추출 구간에서만 receive lock을 소유하고 application callback까지 바깥 recursive lock을
   끌고 가지 않는다.
+- **동시성 수정은 기존 public API sync를 재사용한다.** Option 변경과 route lifecycle 갱신은 이미
+  있는 socket API synchronization을 공유하고, LB의 message 선택 hot path에는 새 mutex를 넣지
+  않는다. Blocking receive는 대기하는 동안 public API sync를 보유하지 않는다.
 - **Async owner와 public poller는 wake 책임을 분리한다.** Mailbox receive는 command pipe를
   authoritative source로 먼저 확인해 poller가 primary signal을 소비한 경주에서도 command를
   처리한다. Poller는 logical state를 읽기 전에 이전 primary edge를 drain하고, async owner는
@@ -808,13 +866,24 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
   초기화·identity 복사·queue write를 제거하고, 해당 frame의 activation 경로를 없앤다.
   Completion owner가 payload가 아닌 frame을 꺼내 protocol error로 pair를 종료하고 reconnect가
   새 pair를 만드는 경로도 함께 없어진다.
-- **Peer weight는 Application lane에만 알린다.** Weight는 Application scheduling 정보이므로
-  paired Completion pipe에는 쓰지 않는다. Weight를 변경할 때마다 Completion lane에 중복되던
-  `msg_t` 초기화·command encode·pipe write와 그 이후의 queue·transport 처리를 만들지 않는다.
-  Inproc에서는 command interceptor가 없는 Completion owner가 WEIGHT를 invalid record로 처리해
-  pair를 종료하고 reconnect하는 경로도 없어진다. 이 변경은 §9에 기록한 기존 peer-weight 초기
-  전달 유실과 inproc에서 Application data가 노출되는 문제를 우회하지 않으며 Completion lane
-  정리만 소유한다.
+- **Peer weight는 Application control 경로 하나만 사용한다.** Weight는 Application scheduling
+  정보이므로 paired Completion pipe에는 쓰지 않는다. Weight 변경마다 Completion lane에
+  중복되던 `msg_t` 초기화·command encode·pipe write와 그 이후 queue·transport 처리를 만들지
+  않는다. Inproc은 peer Application pipe의 owner mailbox로 Core control을 직접 전달하므로
+  application queue로 보낼 `msg_t` 초기화·encode, queue enqueue와 receive 분류도 만들지 않는다.
+- **Outbound weight 전달은 typed `uint32` pipe API를 사용한다.** 호출부가 `msg_t`를 먼저
+  초기화·encode한 뒤 pipe가 다시 decode하고 command를 재생성하는 중복을 없앤다. 실제 변경마다
+  message 경계의 소유 지점에서 command를 한 번만 생성·encode한다.
+- **새 paired generation은 pair-ready 뒤 현재 weight를 다시 알린다.** 재연결 중인 pair의
+  Application pipe가 write hold를 해제할 때만 현재 설정값을 전달하므로, unpaired reconnect에
+  별도 WEIGHT command·분기·test 경로를 두지 않는다.
+- **열린 Application multipart에는 control `msg_t`를 계속 보관하지 않는다.** Network weight가
+  multipart 중 바뀌면 가장 최근 절대값 하나만 고정된 `uint32` 상태로 유지한다. FINAL commit
+  또는 rollback 뒤 다음 message 경계에서 command를 새로 만들어 append·publish하므로 control
+  message의 lifetime을 multipart 전체로 늘리지 않는다.
+
+Peer weight의 성능 개선은 상시 `msg_t` 보관, application queue 처리와 Completion lane 중복이
+사라지는 구조 변화만 설명한다. Throughput·latency 개선 폭은 주장하지 않는다.
 
 ### 8.2 내부 확인 조건
 
@@ -858,12 +927,38 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
 - Async command owner가 input activation을 처리하면 receive progress epoch가 증가하고, public
   poller가 primary signal을 먼저 drain한 경우에도 command pipe의 command가 처리된다. Async
   owner가 없는 기존 descriptor pollset은 poller별 signaler 등록 비용을 추가하지 않는다.
+- Option 변경과 route lifecycle 갱신은 기존 socket public API sync로 직렬화하며, LB 선택
+  hot path에는 새 mutex가 없다. Blocking receive가 progress를 기다리는 동안 public API sync는
+  비어 있어 다른 허용 API가 진행할 수 있다.
 - Socket termination은 paired pipe를 종료하기 전에 endpoint runtime의 reconnect state를 모두
   비활성화한다.
 - Inproc과 network paired transport의 Completion pipe는 READY 뒤 synthetic routing-id frame 없이
   시작하며, 입력이 있으면 첫 record는 reply·error reply 또는 receive-flow control이다.
 - `send_local_peer_weight()`는 paired Completion pipe에 WEIGHT를 쓰지 않는다. Dynamic weight
   변경 뒤에도 Completion pipe는 reply·error reply·receive-flow control이 올 때까지 비어 있다.
+- Outbound 호출부는 weight를 typed `uint32`로 pipe에 넘기고, pipe는 허용된 message 경계에서
+  `msg_t` 초기화와 command encode를 한 번만 수행한다. 호출부의 선행 encode와 pipe의
+  decode·재생성 경로는 남지 않는다.
+- 새 paired generation은 새 Application pipe가 pair-ready가 되어 write hold를 해제한 뒤 현재
+  설정 weight를 한 번 다시 알린다. Unpaired reconnect를 위한 WEIGHT command나 test 경로는 없다.
+- Paired weight는 Application pipe가 scheduler에 연결되고 pair-ready hold가 해제된 뒤에만
+  전달한다. Network는 session이 소비하는 ZMP `WEIGHT` command, inproc은 peer pipe의 owner
+  mailbox가 소비하는 Core control을 사용하며 public receive queue에는 weight record가 없다.
+- Weight owner command는 lifetime을 retain한 exact Application pipe를 대상으로 connection ID를
+  전달한다. 처리할 때 그 pipe의 Application lane과 active lifetime이 유효하고, command에
+  캡처된 해당 물리 연결 ID가 현재 값과 일치해야 한다. 수신한 최신 절대값은 pair table의 pending
+  slot이 아니라 exact Application pipe에 기록하며, scheduler는 바로 그 pipe가 ready 상태로
+  attach될 때 값을 읽는다. Active standby도 같은 pipe의 값을 유지한다.
+- Network Application multipart가 열려 있으면 weight command를 pipe에 쓰지 않고 가장 최근
+  `uint32` 값만 보관한다. FINAL이 commit되거나 multipart가 rollback된 뒤 다음 message 경계에서
+  그 값의 command 하나를 append하고 publish한다. 이 control은 application HWM과 remote PAUSE를
+  우회하지만 pair-ready hold와 한 multipart의 part 사이에 다른 record를 넣지 않는 규칙은
+  우회하지 않는다.
+- Pair별 last-advertised 값은 성공한 전달 뒤에만 갱신한다. 같은 값을 다시 설정하면 command,
+  scheduler mutation과 `PEER_WEIGHT_CHANGED` event를 만들지 않고, reconnect의 새 generation에는
+  현재 설정값을 다시 전달한다.
+- `PEER_WEIGHT_CHANGED` event의 `value`는 적용한 정확한 새 값이며 transport lane, pair ID와
+  generation은 값을 적용한 paired Application pipe와 같다.
 - Decoder에는 transport message의 decoded frame 수를 세는 상태가 없고, Asio ZMP engine이
   authoritative WS·WSS boundary 전까지만 frame publication을 보류한다.
 - WS·WSS transport의 stream과 read boundary state는 같은 connection-generation aggregate에
@@ -880,11 +975,10 @@ Throughput·latency 수치의 개선 폭은 보장하지 않으며, benchmark �
   control output은 speculative write로 completion callback을 우회하지 않으며, application
   data의 speculative write fast path는 유지한다.
 
-### 8.3 별도 성능 작업
+### 8.3 성능 측정 계약
 
-다음 항목은 결과가 workload와 transport에 따라 달라지므로 이번 구현 범위에서 바꾸거나
-측정하지 않는다. §8.1의 비용 제거는 throughput·latency의 측정된 개선을 주장하지 않으며,
-buffer capacity, HWM과 queue policy를 조정하지 않는다.
+이번 구현에서는 다음 정책을 바꾸지 않는다. §8.1의 비용 제거를 검증하기 위해 측정하되, 측정값을
+근거로 buffer capacity, HWM이나 queue policy를 함께 조정하지 않는다.
 
 - Pending map·mutex, timeout scheduler, completion queue와 callback 최적화
 - Generic DEALER receive의 request-state·mutex ownership transition과 kind-aware admission 재설계
@@ -895,12 +989,20 @@ buffer capacity, HWM과 queue policy를 조정하지 않는다.
   capability의 두 번째 source of truth를 추가하지 않는다.
 - C++ native view·container와 .NET descriptor·`ArrayPool` 최적화
 - Gather threshold, batch 크기, HWM과 queue 정책 변경
-- C Multi throughput·latency 반복 실행과 baseline 비교
 
-후속 성능 작업은 SENDSEND와 REQREP 모두 `[1024-byte payload][empty]` 두 part를 사용하도록
-`PERF_PART_COUNT=2`를 명시하고, 같은 Release Core revision에서 TCP·WSS를 비교한다. Core
-revision, payload part 수, 성공·timeout·error 수와 반복별 throughput·latency를 결과에 함께
-기록한다. 이 측정 결과는 이번 protocol 변경의 완료 gate가 아니다.
+측정은 같은 local Release Core revision과 다음 조건을 사용한다.
+
+1. Payload는 `[1024-byte payload][empty]`이고 `PERF_PART_COUNT=2`다.
+2. Transport는 우선 TCP와 WSS를 사용한다.
+3. C single은 `DEALER_ROUTER`, `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER`,
+   `ROUTER_ROUTER_REQREP`을 비교한다.
+4. C multi는 `DEALER_ROUTER_SENDSEND`, `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER_SENDSEND`,
+   `ROUTER_ROUTER_REQREP`을 비교한다.
+5. 각 조합을 세 번 이상 실행하고 throughput·latency의 중앙값을 사용한다.
+
+검증 기록에는 Core revision, payload part 수, transport, 반복 수, 성공·timeout·error 수, 반복별
+throughput·latency와 중앙값을 남긴다. 측정 실행과 기록은 완료 조건이지만 특정 개선율은 합격
+기준이 아니다.
 
 ## 9. 작업 중단 조건
 
@@ -919,11 +1021,7 @@ revision, payload part 수, 성공·timeout·error 수와 반복별 throughput·
 - Public message metadata API가 필요하다.
 - 구버전 fallback, 제품 version 상승이나 release 작업이 필요하다.
 - 보호 문서를 수정해야 하지만 해당 경로의 승인이 없다.
-- GitHub Actions artifact가 아닌 로컬 Core build가 필요하다.
 - 기존 pending, timeout이나 completion 계약을 바꿔야 wire 변경이 가능하다.
-- Paired peer-weight의 기존 초기 전달 유실과 inproc Application data 노출을 고치려면
-  Completion lane 확장이 아닌 별도 owner-thread control delivery와 pair-ready resync 설계가
-  필요하다. 이 문제는 request-reply metadata 전환의 회귀가 아니므로 이번 변경에서 우회하지 않는다.
 
 ## 10. 별도 세션 작업 지시문
 
@@ -936,9 +1034,9 @@ revision, payload part 수, 성공·timeout·error 수와 반복별 throughput·
 > version을 유지하고 모든 peer를 같은 revision으로 함께 전환해. Compatibility fallback이나
 > public metadata API를 만들지 마. Public receive와 raw proxy·capture 송신 전에 metadata를
 > 지우되 socket 내부 pipe·queue에는 보존하고, envelope message·combined buffer·protocol part
-> skip과 ordinary data의 새 request record 생성을 제거해. 실제 throughput·latency benchmark는
-> §8.2의 구조 조건만 검증해. Core는 로컬에서 build하지 말고, 보호 문서는 정확한 경로와 범위를
-> 승인받은 뒤 수정해.
+> skip과 ordinary data의 새 request record 생성을 제거해. §8.2의 구조 조건을 검증하고 §8.3의
+> 같은 local Release Core 조건으로 C single·multi 성능을 측정해. 보호 문서는 정확한 경로와
+> 범위를 승인받은 뒤 수정해.
 
 ## 11. 구현 및 contract test 검증 요구
 
@@ -954,7 +1052,8 @@ decoder 상태와 allocation 제거처럼 내부 구조로만 확인할 조건�
   request-reply를 완료하면 handler와 completion callback이 application이 넘긴 part만
   관찰한다.
 - Protocol id, version, message type과 sequence 모양의 네 part를 ordinary send로 보내면
-  DEALER와 ROUTER receive가 sequence `0`인 raw message로 payload 전체를 그대로 전달한다.
+  DEALER와 ROUTER receive가 request metadata가 없는 `data` message로 payload 전체를 그대로
+  전달하고, typed receive 결과의 sequence는 `0`이다.
 - 이전 protocol signature와 같은 byte로 시작하는 request payload도 변경 없이 handler에
   전달된다.
 - Request receive 결과나 reply callback에서 받은 payload를 raw send에 다시 사용하면 peer가
@@ -1003,15 +1102,62 @@ decoder 상태와 allocation 제거처럼 내부 구조로만 확인할 조건�
   않으며, 이어지는 request와 reply가 각각 한 번 전달된다.
 - Inproc pair에서 application request를 받은 뒤 reply나 receive-flow control을 쓰기 전까지
   Completion pipe에는 읽을 수 있는 synthetic routing-id record가 없다.
-- Inproc pair가 ready 상태가 된 뒤 peer weight를 변경해도 Completion pipe에 record가 추가되지
-  않고 pair가 유지되며, 이어지는 request와 reply가 각각 한 번 완료된다.
 - Raw fixture가 request·reply kind를 `zlink_proxy`에 보내면 반대편과 capture socket은 같은
   application multipart를 받고, 그 message를 raw wire로 다시 읽으면 kind는 `data`다.
+
+**Peer weight control**
+
+- Network와 inproc pair의 양쪽에 bind·connect 전에 서로 다른 weight를 설정하면 paired
+  Application pipe가 ready 된 뒤 상대 scheduler에 각각 정확한 값이 적용된다. `0`도 값으로
+  적용되어 해당 peer가 outbound 후보에서 제외된다.
+- Pair가 ready 된 뒤 DEALER와 ROUTER weight를 양방향으로 바꾸면 각 scheduler가 새 절대값을
+  적용하고 `PEER_WEIGHT_CHANGED` event가 그 값과 해당 Application lane의 pair ID·generation을
+  제공한다.
+- Network의 ZMP `WEIGHT` command와 inproc의 owner-thread Core control은 public receive와
+  Completion pipe에 application record를 만들지 않는다. Weight 변경 뒤에도 정상 request와
+  reply는 각각 한 번 완료된다.
+- 같은 값을 다시 설정하면 scheduler state와 monitor event가 중복 변경되지 않는다.
+- Network Application multipart가 열린 동안 weight를 여러 번 바꾸면 application part 사이에
+  control record가 나타나지 않고, FINAL commit 또는 rollback 뒤 다음 message 경계에서 가장 최근
+  `WEIGHT` command 하나만 관찰된다.
+- Multipart의 첫 part 뒤 remote weight가 `0`이 되어도 같은 exact pipe에서 FINAL까지 완료하고,
+  다음 message 선택부터 그 pipe가 제외된다.
+- Remote weight가 실제로 바뀌면 그 exact pipe의 pending `zlink_send_async()`를 다시 평가한다.
+  Message 시작 전에 weight가 `0`이 되면 `ZLINK_SEND_TERMINAL`과
+  `terminal_errno == ECONNREFUSED`로 완료하고, `0`에서 양수로 바뀌면 별도 write-activation 없이
+  재시도할 수 있다.
+- Reconnect 뒤 현재 weight는 새 generation에 적용된다. 늦은 owner command는 대상 exact pipe가
+  종료됐거나 command에 캡처된 해당 물리 연결 ID와 현재 값이 다를 때 scheduler state와 monitor
+  event를 바꾸지 않는다. Active standby로 남은 pipe는 자기 최신 remote weight를 유지하고
+  나중에 같은 pipe가 선택될 때 그 값을 적용한다.
+
+**CONFLATE 호환 경계**
+
+- DEALER에서 `ZLINK_OPT_CONFLATE=1`은 `ZLINK_CONFIG_NOT_SUPPORTED`와 `ENOTSUP`이고 상태를
+  바꾸지 않는다. `=0`은 성공하며 getter는 `0`이다.
+- PUB와 SUB는 `ZLINK_OPT_CONFLATE=1` 설정과 getter `1`을 계속 지원한다.
+- 이 경계는 같은 DEALER Application pipe의 application record와 internal protocol control 중
+  하나를 frame-level replacement로 유실하는 부분 지원을 만들지 않는다.
 
 **ZMP wire와 오류**
 
 - 일반 data를 raw wire로 읽으면 8바이트 header의 kind가 `0x00`이고 application payload가
   바로 뒤에 온다.
+- Network peer-weight advertisement를 raw wire로 읽으면 Application lane의 8바이트 header에
+  `CONTROL`, `KIND == 0x00`, payload size `10`이 있고 payload는
+  `[ASCII "WEIGHT":6][weight:u32 BE]`다. Completion lane에는 같은 frame이 나타나지 않는다.
+- 양수 `ZLINK_OPT_MAXMSGSIZE`가 10 byte보다 작아도 READY·FLOWSTATE와 고정 10 byte WEIGHT
+  CONTROL은 처리되고, 설정값보다 큰 Application body는 계속 거부된다. 4096 byte CONTROL은
+  type별 검증에 도달하며 4097 byte CONTROL은 `BODY_TOO_LARGE`(`0x04`)로 거부된다.
+- `ZLINK_OPT_MAXMSGSIZE=0`은 Application part와 non-special multipart 합에 option 상한을
+  적용하지 않는다. 양수 값만 이 상한을 설정하며, wire의 32-bit payload-size 범위와 CONTROL
+  4096 byte 상한은 그대로 적용한다.
+- Non-special Application multipart는 각 part와 모든 part body 합이 `ZLINK_OPT_MAXMSGSIZE` 안일
+  때만 전달된다. 각 part가 제한 안이어도 누적 body가 제한을 넘으면 `BODY_TOO_LARGE`(`0x04`)로
+  pair가 종료되고 handler와 public receive에 payload가 나타나지 않는다.
+- WEIGHT로 식별했지만 body가 10 byte가 아니거나 값이 `10000`보다 크면 connection을 끊거나
+  scheduler state·monitor event·public receive를 바꾸지 않고 consume한다. 금지된 flag 조합은
+  계속 protocol 오류다.
 - Public request와 reply의 첫 frame을 raw wire로 읽으면 16바이트 header에 해당 kind와
   0이 아닌 big-endian sequence가 있고, payload size는 application payload byte 수와 같다.
 - Multipart request-reply의 둘째 frame부터 raw wire kind가 `0x00`이며 `MORE`가 application

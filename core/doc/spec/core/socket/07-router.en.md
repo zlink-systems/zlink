@@ -151,6 +151,37 @@ success, it is updated to the number of bytes written. [HWM](../glossary.en.md#h
 for queue storage, and reconnect and timeout options that are not ROUTER-specific use
 `zlink_set_option()` and `zlink_get_option()`.
 
+`ZLINK_ROUTER_OPT_WEIGHT` is the absolute value that a peer uses when selecting this ROUTER as an
+outbound candidate. ROUTER and DEALER advertise their own values independently, so each direction
+uses the value advertised by the other socket.
+
+The public weight result follows this order.
+
+1. A value set before bind or connect applies after the paired Application pipe becomes ready.
+2. A dynamic change applies the new absolute value, including `0`, to the peer scheduler.
+3. An actual change emits `PEER_WEIGHT_CHANGED` with the value and the paired Application pipe's
+   lane, pair ID, and generation. Repeating the same value emits no additional event.
+4. Reconnect applies the current configured value to the new generation.
+
+The network wire, inproc delivery, CONTROL size boundary, multipart deferral, and exact-pipe
+lifetime and stale-delivery ownership are defined by the
+[ZMP transport-pair](../protocol/01-zmp.en.md#41-request-reply-transport-pair),
+[decode](../protocol/01-zmp.en.md#7-decode-validation), and
+[peer-weight owner](../protocol/01-zmp.en.md#peer-weight-control) contracts. Neither transport path
+creates a weight record on public receive or the Completion lane.
+
+If the applied value becomes `0` after a multipart has selected a pipe, that message completes
+through FINAL on the same pipe. The next message selection excludes it.
+
+An actual remote-weight change re-evaluates a pending `zlink_send_async()` operation for its exact
+pipe. If the weight becomes `0` before the message begins, the completion is `ZLINK_SEND_TERMINAL`
+with `terminal_errno == ECONNREFUSED`; a change from `0` to a positive value permits retry without
+another write-activation event.
+
+An active duplicate keeps its own latest value while standby and uses it if that same pipe is
+selected later. Setting the Application maximum below 10 bytes does not prevent pair readiness,
+FLOWSTATE, or WEIGHT delivery; malformed CONTROL behavior remains owned by ZMP.
+
 ## 6. Directed raw send
 
 ```c
@@ -414,6 +445,30 @@ and reply functions; ROUTER option set and get; return values and errno; the
 - When `ZLINK_ROUTER_OPT_MANDATORY` is positive, a directed submit to a routing ID without a connected pipe fails with `ZLINK_SUBMIT_NOT_CONNECTED`, and the getter returns `0` or `1`.
 - When `ZLINK_ROUTER_OPT_PROBE` is positive, an empty raw message is sent when a connection is established so that the peer can observe the connection and routing ID, and the getter returns `0` or `1`.
 - Setting `ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID` before connect identifies the pipe created by the next `zlink_connect()` by that local alias.
+
+**Peer-weight delivery**
+
+- If different weights are configured on a ROUTER and its peer DEALER before bind or connect, each
+  scheduler uses the peer's exact value after the pair becomes ready, and a peer with value `0` is
+  excluded from outbound candidates.
+- Dynamically changing both weights after a network or inproc pair is ready produces
+  `PEER_WEIGHT_CHANGED` with the new weight in `value`; the event transport lane, pair ID, and
+  generation match the paired Application pipe to which the value was applied.
+- Setting or synchronizing weight adds no application record to public receive or the Completion
+  lane, and setting the same value again produces no duplicate monitor event.
+- Changing weight more than once while an Application multipart is open preserves the peer-visible
+  multipart as one atomic record, and only the latest value is reflected after FINAL or rollback.
+- If a pipe's remote weight becomes `0` after the first part of an Application multipart is
+  accepted, the same pipe carries every remaining part through FINAL and is excluded starting with
+  the next message selection.
+- A remote-weight change re-evaluates a pending `zlink_send_async()` operation for its exact pipe:
+  if the weight becomes `0` before the message begins, the completion is `ZLINK_SEND_TERMINAL` with
+  `terminal_errno == ECONNREFUSED`; a change from `0` to a positive value permits retry without
+  another write-activation event.
+- Setting an Application maximum below 10 bytes does not prevent pair readiness, FLOWSTATE, or
+  weight changes observed through peer selection and monitoring.
+- After reconnect, peer selection and monitoring reflect the current weight on the new generation.
+  Promoting an active standby uses the value that standby most recently received.
 
 **Record classification and receive**
 - An ordinary raw record returns `request_seq_out_ == 0`; a received request returns a nonzero reply sequence.

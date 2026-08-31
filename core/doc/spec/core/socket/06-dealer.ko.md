@@ -81,8 +81,9 @@ sequenceDiagram
 
 ## 3. Outbound peer 선택
 
-순환·가중치 송신이 어느 peer로 가는지는 다음 규칙이 정한다. 가중치는
-[§8 DEALER option](#8-dealer-option)의 `ZLINK_DEALER_OPT_WEIGHT`로 설정한다.
+순환·가중치 송신이 어느 peer로 가는지는 다음 규칙이 정한다. 가중치는 각 peer가 자기 socket의
+`ZLINK_DEALER_OPT_WEIGHT` 또는 `ZLINK_ROUTER_OPT_WEIGHT`로 알린 절대값이다. DEALER option은
+[§8](#8-dealer-option)이 정의한다.
 
 후보는 양수 가중치를 알린 연결된 outbound peer다. 가중치가 `0`인 peer는 후보에서 제외한다.
 알려진 peer의 가중치가 모두 `0`이면 submit은 `ZLINK_SUBMIT_NOT_ADMITTED`로 실패할 수 있다.
@@ -104,11 +105,17 @@ sequenceDiagram
 연속 보낸 뒤 가벼운 peer에 한 번 보내는 순서가 아니다. message가 충분히 쌓이면 선택 빈도가
 설정한 비율과 일치한다.
 
-선택 절차는 peer가 실제로 받은 message에만 적용한다. 고른 후보가 쓰기 여유가 없어 받지
-못하면 그 message에 한해 후보에서 빠지고, 절차는 대신 받아들인 peer에 적용한다. 이 실패는
-설정한 가중치를 바꾸지 않으며, 그 peer는 쓰기 여유를 다시 알리면 후보로 돌아온다. 크기 제한을
-넘어 거부된 message는 다른 후보로 다시 시도하지 않는다. 어느 후보든 같은 이유로 거부하기
-때문이다.
+Exact target을 아직 확정하지 않은 ordinary `zlink_send_part()` 또는
+`zlink_dealer_request_part()`에서는 peer가 받아들인 message에만 선택 절차를 적용한다. 고른
+후보가 쓰기 여유가 없으면 그 시도에 한해 후보에서 빠지고, 절차는 대신 받아들인 peer에 적용된다.
+이 fallback은 설정한 가중치를 바꾸지 않으며, 그 peer는 쓰기 여유를 다시 알리면 후보로 돌아온다.
+크기 제한을 넘어 거부된 message는 어느 후보든 같은 이유로 거부하므로 다른 후보로 다시 시도하지
+않는다.
+
+Exact routed selection의 commit 경계는 다르다. `zlink_select_routed_submit_target()`과 DEALER의
+`zlink_send_async()`는 HWM으로 막힌 pipe를 포함해 연결됐고 가중치가 양수인 모든 Application
+pipe를 대상으로 weighted step 하나를 확정한다. 선택한 exact pipe는 pending key로 유지된다.
+HWM이면 그 pipe를 기다리며 다른 후보로 reroute하지 않는다.
 
 2단계의 식별자는 peer routing ID이며 byte 열로 비교한다. routing ID가 없으면 빈 byte 열이므로
 비어 있지 않은 모든 식별자보다 앞선다. 식별자가 같은 peer는, routing ID가 모두 없는 경우를
@@ -124,6 +131,10 @@ process 안에서는 결정적이지만 process 사이에서는 재현되지 않
 `0`에서 시작하고, 연결이 끊긴 peer는 연결과 함께 누적값을 버린다. 수신 측이 따라오지 못해
 제출이 제한되는 [backpressure](../glossary.ko.md#backpressure)나 가중치 `0` 때문에
 일시적으로만 빠진 peer는 누적값을 유지하며, 다시 후보가 되면 그 값에서 이어간다.
+
+Peer 선택은 Application message 하나 동안 고정된다. Multipart의 첫 part를 받은 뒤 선택한
+pipe의 remote weight가 `0`으로 바뀌어도 `ZLINK_PART_FINAL`까지 남은 part를 같은 pipe로 보낸다.
+가중치 `0`은 다음 message를 선택할 때부터 그 pipe를 제외한다.
 
 ## 4. Part sequence와 소유권
 
@@ -258,6 +269,39 @@ typedef enum zlink_dealer_option_t {
 
 `0..10000` 밖의 가중치는 거부하며 clamp하지 않는다. `0..100` 값의 의미는 범위를 넓히기 전과
 같다.
+
+공통 [`ZLINK_OPT_CONFLATE` 계약](README.ko.md#conflation)은 DEALER의 frame 단위 conflation
+활성화를 허용하지 않는다. `1` 설정은 `ZLINK_CONFIG_NOT_SUPPORTED`와 `ENOTSUP`이고, `0`은
+no-op으로 성공하며 getter는 `0`을 반환한다.
+
+`ZLINK_DEALER_OPT_WEIGHT`는 이 DEALER를 peer가 outbound 후보로 선택할 때 사용할 절대값이다.
+DEALER와 ROUTER는 자기 값을 독립적으로 알리므로 각 방향은 상대 socket이 알린 값을 사용한다.
+
+공개 weight 결과는 다음 순서를 따른다.
+
+1. Bind·connect 전에 설정한 값은 paired Application pipe가 ready 된 뒤 적용된다.
+2. Dynamic 변경은 `0`을 포함한 새 절대값을 peer scheduler에 적용한다.
+3. 실제 값이 바뀌면 `PEER_WEIGHT_CHANGED`가 값과 paired Application pipe의 lane·pair ID·generation을
+   제공한다. 같은 값을 반복 설정하면 event를 추가로 만들지 않는다.
+4. Reconnect 뒤에는 현재 설정값을 새 generation에 적용한다.
+
+Network wire, inproc 전달, CONTROL 크기 경계, multipart defer와 exact-pipe lifetime·stale 전달
+소유권은 [ZMP transport pair](../protocol/01-zmp.ko.md#41-request-reply-transport-pair),
+[decode](../protocol/01-zmp.ko.md#7-decode-유효성-검사),
+[peer-weight owner](../protocol/01-zmp.ko.md#peer-weight-control) 계약이 정의한다. 어느 transport
+경로도 public receive나 Completion lane에 weight record를 만들지 않는다.
+
+Multipart가 pipe를 선택한 뒤 적용값이 `0`이 되어도 그 message는 같은 pipe에서 FINAL까지
+완료한다. 다음 message 선택부터 그 pipe를 제외한다.
+
+Remote weight가 실제로 바뀌면 exact pipe의 보류된 `zlink_send_async()` 작업을 다시 평가한다.
+Message 시작 전에 weight가 `0`이 되면 completion은 `ZLINK_SEND_TERMINAL`이고
+`terminal_errno == ECONNREFUSED`다. `0`에서 양수로 바뀌면 다른 write-activation event 없이
+재시도할 수 있다.
+
+Active duplicate는 standby 동안 자기 최신 값을 보관하고 나중에 같은 pipe가 선택되면 사용한다.
+Application 최대값을 10 byte보다 작게 설정해도 pair readiness·FLOWSTATE·WEIGHT 전달은 막히지
+않으며, 잘못된 CONTROL의 동작은 ZMP가 소유한다.
 
 ## 9. 함수
 
@@ -429,6 +473,29 @@ snapshot)만으로 다음을 확인한다. 각 항목은 test 하나로 이어�
 - `zlink_get_dealer_option()`이 성공하면 `*optvallen_`이 실제로 쓴 byte 수로 갱신된다.
 - `ZLINK_DEALER_OPT_PROBE`를 양수로 설정하면 연결을 설정할 때 peer가 빈 raw message로 연결과 routing ID를 관찰할 수 있고, getter는 `0` 또는 `1`을 반환한다.
 - request 마지막 part를 `timeout_ms_ == 0`으로 제출하면 `ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS`의 값(기본 `5000`)이 timeout으로 쓰인다.
+- DEALER에서 `ZLINK_OPT_CONFLATE=1`은 `ZLINK_CONFIG_NOT_SUPPORTED`와 `ENOTSUP`이고, `0` 설정은
+  성공하며 getter는 `0`을 반환한다.
+
+**Peer weight 전달**
+- Bind·connect 전에 DEALER와 상대 ROUTER의 weight를 서로 다른 값으로 설정하면 pair가 ready 된
+  뒤 양쪽 scheduler가 상대의 정확한 값을 사용하며, `0`인 peer는 outbound 후보에서 제외된다.
+- Network와 inproc pair가 ready 된 뒤 양쪽 weight를 동적으로 바꾸면 monitor의
+  `PEER_WEIGHT_CHANGED`가 새 값을 `value`로 제공하고, event의 transport lane·pair ID·generation은
+  값을 적용한 paired Application pipe와 같다.
+- Weight를 설정하거나 동기화해도 public receive와 Completion lane에는 application record가
+  추가되지 않으며, 같은 값을 다시 설정해도 monitor event가 중복 발생하지 않는다.
+- Application multipart가 열린 동안 weight를 여러 번 바꿔도 peer에는 multipart가 atomic record
+  하나로 보이며, FINAL 또는 rollback 뒤에는 가장 최근 값만 반영된다.
+- Application multipart의 첫 part를 받은 뒤 pipe의 remote weight가 `0`이 되어도 같은 pipe가
+  FINAL까지 남은 part를 전달하고, 다음 message 선택부터 제외된다.
+- Remote weight 변경은 exact pipe의 보류된 `zlink_send_async()` 작업을 다시 평가한다. Message
+  시작 전에 weight가 `0`이 되면 completion은 `ZLINK_SEND_TERMINAL`이고
+  `terminal_errno == ECONNREFUSED`다. `0`에서 양수로 바뀌면 다른 write-activation event 없이
+  재시도할 수 있다.
+- Application 최대값을 10 byte보다 작게 설정해도 pair readiness·FLOWSTATE와 peer 선택·monitor로
+  관찰하는 weight 변경은 막히지 않는다.
+- Reconnect 뒤 peer 선택과 monitor는 새 generation의 현재 weight를 반영한다. Active standby를
+  승격하면 그 standby가 마지막으로 받은 값을 사용한다.
 
 **Outbound peer 선택**
 - 가중치가 `100`과 `300`인 두 peer에 반복 송신하면 선택 순서가 `두 번째, 첫 번째, 두 번째, 두 번째`의 반복이다.
@@ -437,6 +504,9 @@ snapshot)만으로 다음을 확인한다. 각 항목은 test 하나로 이어�
 - 같은 peer와 같은 가중치로 설정하고 후보 식별자가 서로 다른 두 process는 같은 선택 순서를 낸다.
 - 재연결한 peer는 누적값 `0`에서 다시 시작하고 정렬 위치는 이전과 같다.
 - 쓰기 여유가 없어 message를 받지 못한 peer는 그 message에 한해서만 후보에서 빠지고, 여유를 다시 알리면 유지된 누적값에서 이어간다.
+- `zlink_select_routed_submit_target()`과 DEALER의 `zlink_send_async()`는 HWM으로 막힌 양수 가중치
+  pipe도 weighted step에 포함하고 선택한 exact pending key를 확정하며, exact pipe readiness를
+  기다리는 동안 그 operation을 reroute하지 않는다.
 
 **Part sequence와 소유권**
 - send API는 성공과 실패 모두에서 `part_`를 소비하고 길이 0인 초기화 상태로 둔다 — 호출 후 같은 `part_`로 전송 전 payload를 다시 읽거나 재전송할 수 없다.

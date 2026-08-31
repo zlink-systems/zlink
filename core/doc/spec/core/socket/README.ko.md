@@ -416,7 +416,7 @@ typedef enum zlink_option_t {
   ZLINK_OPT_RECONNECT_IVL             = 0x300B,  // 초기 재연결 간격 (ms, int)
   ZLINK_OPT_BACKLOG                   = 0x300C,  // listener backlog (int)
   ZLINK_OPT_RECONNECT_IVL_MAX         = 0x300D,  // 최대 재연결 간격 (ms, int; 0=IVL만 사용)
-  ZLINK_OPT_MAXMSGSIZE                = 0x300E,  // 최대 인바운드 message 크기 (int64_t; -1=무제한)
+  ZLINK_OPT_MAXMSGSIZE                = 0x300E,  // 최대 인바운드 message 크기 (int64_t; 양수=상한, 0 이하=무제한, 기본값 -1)
   ZLINK_OPT_SNDHWM                    = 0x300F,  // directional send pipe의 accounted byte HWM (uint64_t; 기본값 4,096,000, 0=무제한)
   ZLINK_OPT_RCVHWM                    = 0x3010,  // directional receive pipe의 accounted byte HWM (uint64_t; 기본값 4,096,000, 0=무제한)
   ZLINK_OPT_MULTICAST_HOPS            = 0x3011,  // multicast TTL (int)
@@ -429,7 +429,7 @@ typedef enum zlink_option_t {
   ZLINK_OPT_TCP_KEEPALIVE_INTVL       = 0x3018,  // TCP_KEEPINTVL (초, int; -1=OS 기본값)
   ZLINK_OPT_IMMEDIATE                 = 0x3019,  // 완료된 연결에만 message queue 사용 (int)
   ZLINK_OPT_IPV6                      = 0x301A,  // socket에서 IPv6 활성화 (int; 0=off, 양수=on, getter는 0/1 반환)
-  ZLINK_OPT_CONFLATE                  = 0x301B,  // topic당 최신 message만 유지 (int)
+  ZLINK_OPT_CONFLATE                  = 0x301B,  // PUB/SUB에서 topic당 최신 message만 유지 (int; DEALER는 활성화 불가)
   ZLINK_OPT_TOS                       = 0x301C,  // IP Type-of-Service 값 (int)
   ZLINK_OPT_HANDSHAKE_IVL             = 0x301D,  // ZMTP handshake timeout (ms, int)
   ZLINK_OPT_BLOCKY                    = 0x301E,  // socket option API가 지원하지 않는 식별자 — 아래 설명 참조
@@ -464,6 +464,16 @@ raw socket과 discovery에 적용된다.
 `zlink_set_option()`/`zlink_get_option()`은 `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`을
 반환하며, context 종료 동작은 `ZLINK_CTX_OPT_BLOCKY`로 설정한다 (`int`, 0=off, 양수=on,
 getter는 0/1 반환).
+
+#### Conflation
+
+`ZLINK_OPT_CONFLATE`는 PUB와 SUB에서 계속 활성화할 수 있고 getter가 `1`을 반환한다. DEALER에서
+`1`을 설정하면 `ZLINK_CONFIG_NOT_SUPPORTED`와 `ENOTSUP`이고, `0` 설정은 no-op으로 성공하며
+getter는 `0`을 반환한다.
+
+DEALER는 같은 Application pipe로 Application record와 내부 protocol control을 전달한다.
+Frame 단위 conflation은 두 종류를 함께 보존할 수 없어 최신 Application record 또는 필요한
+control 중 하나를 유실할 수 있다. 따라서 DEALER는 부분적인 conflation을 제공하지 않는다.
 
 #### Transport/Buffer
 
@@ -1219,6 +1229,8 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 - `ZLINK_OPT_SNDHWM`·`ZLINK_OPT_RCVHWM`은 set·get 모두 정확히 `sizeof(uint64_t)` 크기만 받는다. 4-byte를 포함한 그 밖의 크기는 값을 잘라 쓰거나 일부만 채우지 않고 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로 실패하며, get 성공 시 `*optvallen_`은 `sizeof(uint64_t)`를 유지한다.
 - 제거된 socket option 값 `0x3034`는 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로 실패한다.
 - `ZLINK_OPT_BLOCKY`를 `zlink_set_option()`/`zlink_get_option()`에 주면 `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`이다.
+- DEALER에서 `ZLINK_OPT_CONFLATE=1`은 `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`이고, `0` 설정은
+  성공하며 getter는 계속 `0`이다. PUB와 SUB는 `1`을 받아들이고 getter도 `1`을 반환한다.
 - 알 수 없는 옵션, 범위 밖 값, 잘못된 byte-count 크기는 `EINVAL`, 종료된 context는 `ETERM`이다.
 
 **HWM admission** ([Transport/Buffer](#transportbuffer) 참조)

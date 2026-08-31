@@ -435,7 +435,7 @@ typedef enum zlink_option_t {
   ZLINK_OPT_RECONNECT_IVL             = 0x300B,  // Initial reconnect interval (ms, int)
   ZLINK_OPT_BACKLOG                   = 0x300C,  // Listener backlog (int)
   ZLINK_OPT_RECONNECT_IVL_MAX         = 0x300D,  // Maximum reconnect interval (ms, int; 0=use IVL only)
-  ZLINK_OPT_MAXMSGSIZE                = 0x300E,  // Maximum inbound message size (int64_t; -1=unlimited)
+  ZLINK_OPT_MAXMSGSIZE                = 0x300E,  // Maximum inbound message size (int64_t; positive=limit, nonpositive=unlimited, default -1)
   ZLINK_OPT_SNDHWM                    = 0x300F,  // Accounted-byte HWM for a directional send pipe (uint64_t; default 4,096,000, 0=unlimited)
   ZLINK_OPT_RCVHWM                    = 0x3010,  // Accounted-byte HWM for a directional receive pipe (uint64_t; default 4,096,000, 0=unlimited)
   ZLINK_OPT_MULTICAST_HOPS            = 0x3011,  // Multicast TTL (int)
@@ -448,7 +448,7 @@ typedef enum zlink_option_t {
   ZLINK_OPT_TCP_KEEPALIVE_INTVL       = 0x3018,  // TCP_KEEPINTVL (seconds, int; -1=OS default)
   ZLINK_OPT_IMMEDIATE                 = 0x3019,  // Queue messages only to completed connections (int)
   ZLINK_OPT_IPV6                      = 0x301A,  // Enable IPv6 on the socket (int; 0=off, positive=on, getter returns 0/1)
-  ZLINK_OPT_CONFLATE                  = 0x301B,  // Keep only the latest message per topic (int)
+  ZLINK_OPT_CONFLATE                  = 0x301B,  // PUB/SUB keep only the latest message per topic (int; DEALER cannot enable it)
   ZLINK_OPT_TOS                       = 0x301C,  // IP Type-of-Service value (int)
   ZLINK_OPT_HANDSHAKE_IVL             = 0x301D,  // ZMTP handshake timeout (ms, int)
   ZLINK_OPT_BLOCKY                    = 0x301E,  // Identifier unsupported by the socket option API; see below
@@ -484,6 +484,16 @@ apply to raw sockets and discovery.
 `ZLINK_CONFIG_NOT_SUPPORTED` / `ENOTSUP`. Configure context-termination
 behavior with `ZLINK_CTX_OPT_BLOCKY` (`int`; 0=off, positive=on, getter returns
 0/1).
+
+#### Conflation
+
+`ZLINK_OPT_CONFLATE` remains enabled and queryable as `1` on PUB and SUB. On DEALER, setting it to
+`1` returns `ZLINK_CONFIG_NOT_SUPPORTED` with `ENOTSUP`, setting it to `0` succeeds as a no-op, and
+the getter returns `0`.
+
+DEALER carries Application records and internal protocol controls on the same Application pipe.
+Frame-level conflation cannot preserve both classes: replacing one frame can lose either the latest
+Application record or a required control. DEALER therefore does not provide partial conflation.
 
 #### Transport/Buffer
 
@@ -1299,6 +1309,8 @@ callback invocation. Each item maps to one unit test.
   `ZLINK_CONFIG_INVALID_ARGUMENT` and `EINVAL`.
 - Passing `ZLINK_OPT_BLOCKY` to `zlink_set_option()` or `zlink_get_option()`
   produces `ZLINK_CONFIG_NOT_SUPPORTED` / `ENOTSUP`.
+- On DEALER, `ZLINK_OPT_CONFLATE=1` produces `ZLINK_CONFIG_NOT_SUPPORTED` / `ENOTSUP`, setting `0`
+  succeeds, and the getter remains `0`. PUB and SUB accept `1` and return `1` from the getter.
 - An unknown option, out-of-range value, or invalid byte-count size produces
   `EINVAL`; a terminated Context produces `ETERM`.
 

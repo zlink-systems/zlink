@@ -144,6 +144,35 @@ ZLINK_EXPORT zlink_config_result_t zlink_get_router_option(
 쓴 byte 수로 갱신된다. ROUTER 전용이 아닌 [HWM](../glossary.ko.md#hwm)(queue 보관 byte 상한),
 reconnect와 timeout option은 `zlink_set_option()`과 `zlink_get_option()`을 사용한다.
 
+`ZLINK_ROUTER_OPT_WEIGHT`는 이 ROUTER를 peer가 outbound 후보로 선택할 때 사용할 절대값이다.
+ROUTER와 DEALER는 자기 값을 독립적으로 알리므로 각 방향은 상대 socket이 알린 값을 사용한다.
+
+공개 weight 결과는 다음 순서를 따른다.
+
+1. Bind·connect 전에 설정한 값은 paired Application pipe가 ready 된 뒤 적용된다.
+2. Dynamic 변경은 `0`을 포함한 새 절대값을 peer scheduler에 적용한다.
+3. 실제 값이 바뀌면 `PEER_WEIGHT_CHANGED`가 값과 paired Application pipe의 lane·pair ID·generation을
+   제공한다. 같은 값을 반복 설정하면 event를 추가로 만들지 않는다.
+4. Reconnect 뒤에는 현재 설정값을 새 generation에 적용한다.
+
+Network wire, inproc 전달, CONTROL 크기 경계, multipart defer와 exact-pipe lifetime·stale 전달
+소유권은 [ZMP transport pair](../protocol/01-zmp.ko.md#41-request-reply-transport-pair),
+[decode](../protocol/01-zmp.ko.md#7-decode-유효성-검사),
+[peer-weight owner](../protocol/01-zmp.ko.md#peer-weight-control) 계약이 정의한다. 어느 transport
+경로도 public receive나 Completion lane에 weight record를 만들지 않는다.
+
+Multipart가 pipe를 선택한 뒤 적용값이 `0`이 되어도 그 message는 같은 pipe에서 FINAL까지
+완료한다. 다음 message 선택부터 그 pipe를 제외한다.
+
+Remote weight가 실제로 바뀌면 exact pipe의 보류된 `zlink_send_async()` 작업을 다시 평가한다.
+Message 시작 전에 weight가 `0`이 되면 completion은 `ZLINK_SEND_TERMINAL`이고
+`terminal_errno == ECONNREFUSED`다. `0`에서 양수로 바뀌면 다른 write-activation event 없이
+재시도할 수 있다.
+
+Active duplicate는 standby 동안 자기 최신 값을 보관하고 나중에 같은 pipe가 선택되면 사용한다.
+Application 최대값을 10 byte보다 작게 설정해도 pair readiness·FLOWSTATE·WEIGHT 전달은 막히지
+않으며, 잘못된 CONTROL의 동작은 ZMP가 소유한다.
+
 ## 6. Directed raw send
 
 ```c
@@ -394,6 +423,27 @@ test 하나로 이어진다.
 - `ZLINK_ROUTER_OPT_MANDATORY`가 양수이면 연결된 pipe가 없는 routing ID의 directed submit이 `ZLINK_SUBMIT_NOT_CONNECTED`로 실패하고, getter는 `0` 또는 `1`을 반환한다.
 - `ZLINK_ROUTER_OPT_PROBE`가 양수이면 연결을 설정할 때 빈 raw message가 전송되어 peer가 연결과 routing ID를 관찰할 수 있고, getter는 `0` 또는 `1`을 반환한다.
 - `ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID`를 connect 전에 설정하면 다음 `zlink_connect()`로 만든 pipe를 그 local alias로 식별한다.
+
+**Peer weight 전달**
+- Bind·connect 전에 ROUTER와 상대 DEALER의 weight를 서로 다른 값으로 설정하면 pair가 ready 된
+  뒤 양쪽 scheduler가 상대의 정확한 값을 사용하며, `0`인 peer는 outbound 후보에서 제외된다.
+- Network와 inproc pair가 ready 된 뒤 양쪽 weight를 동적으로 바꾸면 monitor의
+  `PEER_WEIGHT_CHANGED`가 새 값을 `value`로 제공하고, event의 transport lane·pair ID·generation은
+  값을 적용한 paired Application pipe와 같다.
+- Weight를 설정하거나 동기화해도 public receive와 Completion lane에는 application record가
+  추가되지 않으며, 같은 값을 다시 설정해도 monitor event가 중복 발생하지 않는다.
+- Application multipart가 열린 동안 weight를 여러 번 바꿔도 peer에는 multipart가 atomic record
+  하나로 보이며, FINAL 또는 rollback 뒤에는 가장 최근 값만 반영된다.
+- Application multipart의 첫 part를 받은 뒤 pipe의 remote weight가 `0`이 되어도 같은 pipe가
+  FINAL까지 남은 part를 전달하고, 다음 message 선택부터 제외된다.
+- Remote weight 변경은 exact pipe의 보류된 `zlink_send_async()` 작업을 다시 평가한다. Message
+  시작 전에 weight가 `0`이 되면 completion은 `ZLINK_SEND_TERMINAL`이고
+  `terminal_errno == ECONNREFUSED`다. `0`에서 양수로 바뀌면 다른 write-activation event 없이
+  재시도할 수 있다.
+- Application 최대값을 10 byte보다 작게 설정해도 pair readiness·FLOWSTATE와 peer 선택·monitor로
+  관찰하는 weight 변경은 막히지 않는다.
+- Reconnect 뒤 peer 선택과 monitor는 새 generation의 현재 weight를 반영한다. Active standby를
+  승격하면 그 standby가 마지막으로 받은 값을 사용한다.
 
 **Record 구분과 receive**
 - 일반 raw record는 `request_seq_out_ == 0`, 수신 request는 0이 아닌 reply sequence를 반환한다.

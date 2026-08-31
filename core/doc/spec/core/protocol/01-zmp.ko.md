@@ -153,7 +153,8 @@ transport peer를 식별하는 byte 열이다.
 
 `ZLINK_OPT_ZMP_METADATA`를 활성화하면 `Socket-Type`을 추가하고, socket type이
 DEALER 또는 ROUTER일 때만 `Routing-Id`도 추가한다. Metadata를 사용하는 READY에는
-`Zlink-Max-Message-Size`를 항상 추가하며, 값은 unsigned 64-bit big-endian 8 byte다.
+`Zlink-Max-Message-Size`를 항상 추가하며, 값은 unsigned 64-bit big-endian 8 byte다. 값 `0`은
+양수 Application maximum이 없음을 뜻한다.
 이 option의 기본값은 비활성화다. 다만 paired DEALER·ROUTER transport는 이 option과
 관계없이 metadata와 [§4.1](#41-request-reply-transport-pair)의 pair property를 항상
 추가한다.
@@ -185,8 +186,39 @@ ROUTER가 peer를 선택하는 synthetic routing-id preamble을 Application lane
 Completion lane은 이 preamble과 ordinary `data` record를 전달하지 않는다. READY 뒤
 Completion lane에 record가 들어오면 첫 record는 reply, error reply 또는 receive-flow
 control이어야 한다.
-Peer-weight advertisement는 Application lane scheduling만 제어하며 Application lane에만
-보낸다. Peer-weight advertisement는 Completion-lane record가 아니다.
+
+Peer-weight advertisement는 Application lane의 peer 선택만 제어한다. Network transport는
+Application connection의 ZMP `WEIGHT` command로 절대값 `0..10000`을 보내고, inproc은 상대
+Application pipe의 owner thread에 Core control로 같은 값을 전달한다. 두 경로 모두 Core가
+소비하므로 public receive에 application data로 나타나지 않으며 Completion lane에는 record를
+만들지 않는다.
+
+Network `WEIGHT` command는 8 byte base header에서 `CONTROL` flag와 `KIND == 0x00`을 사용하며
+payload size는 10이다. Payload는 다음 byte 순서이고 multipart `MORE`나 request sequence는 없다.
+
+```text
+[ASCII "WEIGHT":6][weight:u32 BE]
+```
+
+Application 크기 제한은 이 CONTROL body에 적용하지 않는다. 수신 runtime은 먼저
+[§7](#7-decode-유효성-검사)의 독립 CONTROL 상한을 적용한 뒤 WEIGHT type을 검증한다.
+
+`WEIGHT`로 식별했지만 body가 정확히 10 byte가 아니거나 값이 `10000`보다 크면 consume하고
+무시한다. 이 경우 connection을 끊거나 scheduler 상태와 `PEER_WEIGHT_CHANGED`를 바꾸지 않으며
+public receive에도 나타나지 않는다.
+
+금지된 flag 조합과 독립 상한을 넘은 CONTROL body는 계속 구조적인 protocol 오류다.
+
+Bind나 connect 전에 설정한 weight는 paired Application pipe가 준비된 뒤에만 상대 scheduler와
+동기화한다. Dynamic 변경도 양방향에서 `0`을 포함한 새 절대값을 적용한다. 같은 pair에 마지막으로
+알린 값과 같으면 command를 다시 만들지 않는다. Reconnect 뒤 새 paired generation의 Application
+pipe가 pair-ready가 되면 현재 설정값을 그 pipe로 다시 알린다.
+
+Network `WEIGHT` command는 application HWM과 remote PAUSE를 우회할 수 있다. 그러나 pair-ready
+hold와 한 Application multipart의 part 사이에 다른 record를 넣지 않는 atomic 경계는 우회하지
+않는다. Application multipart가 열린 동안 sender는 가장 최근 weight 하나만 고정된 `uint32`
+상태로 보관한다. FINAL이 multipart를 commit하거나 rollback이 multipart를 제거한 뒤, 그 결과로
+생긴 다음 message 경계에서만 가장 최근 command를 append하고 publish한다.
 
 Application write는 두 lane의 검증이 끝날 때까지 대기한다. 이전 generation에서
 수신한 data를 새 pair에 연결하지 않는다. 한 lane에서 protocol error, identity
@@ -277,6 +309,24 @@ transport `routing_id`와 request-reply 주소는 같은 값이 아니다.
 
 Base header나 sequence extension이 여러 transport read로 나뉘는 것은 오류가 아니다.
 
+Body 크기 검증은 Application frame과 CONTROL frame을 구분한다.
+
+1. 양수 `ZLINK_OPT_MAXMSGSIZE`는 inbound Application의 각 part body를 제한한다. Non-special
+   Application record에는 record 전체 part body 합도 같은 제한을 적용한다. 값 `0`은 option에서
+   온 part별·record 합산 상한이 없는 무제한 값이다. READY에 알린 `Zlink-Max-Message-Size`는
+   peer가 outbound admission에 사용할 이 Application 제한을 전달한다.
+2. CONTROL body는 Application 제한을 우회하며, body storage나 Application HWM admission 전에
+   독립된 고정 상한 4096 byte를 적용한다.
+3. 이 상한 안의 CONTROL body에는 이어서 control type별 검증을 적용한다. 따라서 Application
+   최대값이 body보다 작아도 기존 READY·FLOWSTATE와 고정 10 byte WEIGHT가 계속 동작한다.
+
+각 part가 제한 안이어도 non-special Application multipart의 누적 body가 제한을 넘으면 그
+record는 `BODY_TOO_LARGE`(`0x04`)로 실패하며 payload를 handler나 public receive에 전달하지
+않는다. 4097 byte로 선언한 CONTROL body도 `BODY_TOO_LARGE`(`0x04`)로 실패한다. 이는 control용
+무제한 allocation 경로가 아니라 protocol 거부이며, body를 Application receive에 전달하지 않는다.
+WEIGHT가 §4에서 정의한 더 좁은 consume-and-ignore 규칙처럼 control type별 실패 경계를 둘 수
+있지만 구조적 header 검증과 4096 byte 상한은 약화하지 않는다.
+
 검증 실패는 `EPROTO`로 pair를 종료하고 해당 frame을 handler나 reply completion에 전달하지
 않는다. 이 frame 자체가 pending request를 완료하지 않으며, pair 종료로 기존 pending request가
 disconnect 결과를 받는 규칙은 유지한다.
@@ -316,9 +366,11 @@ request-reply 첫 frame만 sequence extension을 scatter/gather entry에 추가�
 heap buffer나 payload copy를 만들지 않는다.
 
 Decoder는 application payload storage와 queue 수용 공간을 확보하기 전에 base header와 sequence
-extension을 끝까지 모으고 검증한다. Header가 여러 transport read로 나뉘면 읽은 byte와 상태를
-유지해 다음 read에서 계속한다. 검증 뒤 application payload 크기로 HWM admission을 수행하며,
-backpressure 뒤 재시도할 때 header를 다시 읽지 않는다.
+extension을 끝까지 모으고 검증한다. 양수 `ZLINK_OPT_MAXMSGSIZE`가 설정됐으면 Decoder는 현재
+Application part 크기를 먼저 확인하고, non-special Application frame이면 multipart에 누적한 body
+크기도 확인한다. 값 `0`은 이 option 검사에 상한을 만들지 않는다. Header가 여러 transport read로
+나뉘면 읽은 byte와 상태를 유지해 다음 read에서 계속한다. 검증 뒤 현재 application payload 크기로
+HWM admission을 수행하며, backpressure 뒤 재시도할 때 header를 다시 읽지 않는다.
 
 Decoder는 validation, admission, payload와 submission 상태를 차례로 진행한다. 첫 application
 message에 metadata를 복원한 뒤 socket runtime이 다음처럼 처리한다.
@@ -331,6 +383,28 @@ Reply payload는 Completion pipe에서 등록 callback으로 바로 이동한다
 receive queue나 두 번째 completion payload deque에 보관하지 않는다. Timeout,
 shutdown과 같은 terminal callback에는 payload가 없는 작은 callback metadata queue만
 유지한다. 이 queue는 transport lane이나 wire record가 아니다.
+
+### Peer-weight control
+
+수신한 exact Application pipe가 상대의 최신 절대 weight를 소유한다. Scheduler mutation과
+`PEER_WEIGHT_CHANGED` monitor event는 그 pipe의 owner thread에서만 처리하며, pair table의
+pending slot은 값을 소유하지 않는다.
+
+전달은 다음 순서로 진행된다.
+
+1. Network session은 ZMP `WEIGHT` command를 decode하고, inproc sender는 typed `uint32` weight를
+   넘겨 상대 exact Application pipe owner를 대상으로 지정한다.
+2. Owner command는 그 pipe를 retain하고 값을 받은 해당 물리 연결 ID를 캡처한다.
+3. Command 처리 시 exact pipe의 active lifetime, Application lane과 캡처한 연결 ID가 현재 값과
+   같은지 검증한 뒤 값을 그 pipe에 기록한다.
+4. 같은 pipe가 ready 상태가 되고 선택 가능한 route로 attach되면 scheduler가 기록값을 읽어
+   적용한다.
+5. 실제 적용값이 바뀌면 `PEER_WEIGHT_CHANGED`를 만든다. Event의 `value`는 새 weight이고 lane은
+   Application이며 pair ID와 generation은 값을 적용한 pipe를 식별한다.
+
+Pipe 종료나 connection ID 불일치는 바로 그 exact pipe의 stale command만 폐기한다. Duplicate
+standby로 남은 pipe는 자기 최신 값을 유지하므로 나중에 같은 pipe가 선택되면 그 값을 적용한다.
+이 보장은 모든 standby나 교체 route가 이전에 기록한 상태를 버린다고 확대하지 않는다.
 
 ### Pending과 reply-target key
 
@@ -380,12 +454,34 @@ callback 결과로 확인한다. 각 항목은 test 하나로 이어진다.
 - reconnect하면 새 generation이 만들어지고, 두 lane을 다시 검증한 뒤 Application write가 재개된다.
 - FIFO 순서는 각 lane 안에서만 관찰되며, 두 lane 사이의 순서는 보장되지 않는다.
 - Application ingress가 backpressure로 중단된 동안에도 Completion reply가 처리된다.
+- Network peer-weight advertisement는 `CONTROL`, `KIND == 0x00`, payload size `10`인
+  Application-lane frame이며 payload가 `[ASCII "WEIGHT":6][weight:u32 BE]` 배치를 따른다.
+- 양수 `ZLINK_OPT_MAXMSGSIZE`를 10 byte보다 작게 설정해도 READY, FLOWSTATE와 고정 10 byte
+  WEIGHT CONTROL은 막히지 않으며, 설정값을 넘은 Application body는 계속 거부된다.
+- `ZLINK_OPT_MAXMSGSIZE=0`은 Application part와 non-special multipart 합에 option 상한을
+  적용하지 않는다. Wire의 32-bit payload-size 범위와 CONTROL 4096 byte 상한은 그대로 적용한다.
+- Non-special Application multipart는 각 part와 모든 part body 합이 `ZLINK_OPT_MAXMSGSIZE` 안일
+  때만 전달된다. 누적 body가 제한을 넘으면 `BODY_TOO_LARGE`(`0x04`)로 pair가 종료되고 handler나
+  public receive에 payload가 나타나지 않는다.
+- 4096 byte CONTROL은 type별 검증 단계에 도달하고, 4097 byte로 선언한 CONTROL은
+  `BODY_TOO_LARGE`(`0x04`)로 거부하며 Application record를 만들지 않는다.
+- WEIGHT로 식별했지만 크기가 10이 아니거나 값이 `10000`보다 크면 pair를 끊거나 scheduler
+  상태·`PEER_WEIGHT_CHANGED`를 바꾸거나 public receive record를 만들지 않고 consume한다.
+- Application multipart가 열린 동안 weight를 여러 번 바꾸면 peer는 중간 control record 없이
+  원래 multipart를 받고, FINAL commit 또는 rollback 뒤 다음 message 경계에서 가장 최근
+  `WEIGHT` command 하나만 받는다.
 - Network paired connection에 첫 request를 보내기 전에 completion poller를 등록해도 pair가 종료되지
   않으며, 이어지는 request와 reply가 각각 한 번 전달된다.
 - Inproc pair에서 application request를 받은 뒤 reply나 receive-flow control을 쓰기 전까지
   Completion pipe에는 읽을 수 있는 synthetic routing-id record가 없다.
-- Inproc pair가 ready 상태가 된 뒤 peer weight를 변경해도 Completion-lane record가 추가되거나
-  pair가 종료되지 않으며, 이어지는 request와 reply가 각각 한 번 전달된다.
+- Network와 inproc pair에서 bind·connect 전에 설정한 양쪽 weight는 paired Application pipe가
+  ready 된 뒤 상대 scheduler에 정확한 값으로 적용되며, `0`도 값으로 적용된다.
+- Network와 inproc pair가 ready 된 뒤 양쪽 peer weight를 동적으로 바꾸면
+  `PEER_WEIGHT_CHANGED`가 새 값과 해당 Application lane의 pair ID·generation을 제공하고,
+  public receive와 Completion pipe에는 weight record가 나타나지 않는다.
+- 같은 값을 다시 설정하면 peer scheduling state와 monitor event가 중복 변경되지 않는다.
+- Reconnect 뒤 public peer 선택과 monitor는 새 generation의 현재 weight를 반영한다. Active
+  standby를 승격하면 그 standby가 마지막으로 받은 값을 사용한다.
 
 **Request-reply와 decode 검증**
 - Ordinary send와 request에 같은 multipart를 넘기면 수신 application은 같은 part 수, 순서와 byte를 관찰한다.
