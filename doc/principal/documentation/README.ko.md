@@ -11,6 +11,7 @@
 | [E2E 시나리오 문서 작성 가이드](e2e-scenario-writing-guide.ko.md) | Framework 공통 E2E의 배포 조건, scenario와 검증 기준을 쓸 때 읽는다. |
 | [샘플 문서 작성 가이드](sample-writing-guide.ko.md) | Framework 공통 sample의 업무 흐름, 역할, message 계약과 실행 기준을 쓸 때 읽는다. |
 | [레퍼런스 문서 작성 가이드](reference-writing-guide.ko.md) | 진입점 호출 하나를 완결하는 데 필요한 정보만 모으는 레퍼런스 문서를 쓸 때 읽는다. |
+| [다이어그램 작성·변환 가이드](diagram-authoring-guide.ko.md) | 가이드 문서의 mermaid 다이어그램을 깔끔한 SVG로 변환하거나 새로 그릴 때 읽는다. 색 의미 보존, 선 교차 제거, 크기 통일, ×N 표기, 임베드 절차. |
 
 **문서의 관계.** 원칙이 상위이고, 각 작성 가이드가 문서 종류별 절차를 더한다. 스펙은 한 주제의
 공개 계약과 그 구현을 정확히 서술하고, 사용자 가이드는 독자가 기능을 선택하고 사용하게 돕는다. E2E 문서는

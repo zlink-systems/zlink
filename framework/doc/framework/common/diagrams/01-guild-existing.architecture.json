@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "길드 상태 변경 — 기존 방식",
+    "subtitle": "길드 id별 분산 락으로 동시 접근을 직렬화한다",
+    "output": "01-guild-existing.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [40, 150], "cols": 4, "gapX": 96, "gapY": 88, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "client", "type": "external", "label": "클라이언트 앱", "row": 0, "col": 0 },
+    { "id": "lb", "type": "external", "label": "L7 LB / gateway", "row": 1, "col": 0 },
+    { "id": "api", "type": "frontend", "label": "API 서버들 ×N", "sublabel": "stateless", "row": 2, "col": 0 },
+    { "id": "lock", "type": "messagebus", "label": "Redis 분산 락", "sublabel": "길드 id별 lock", "row": 2, "col": 2 },
+    { "id": "db", "type": "database", "label": "길드 상태 DB", "row": 3, "col": 1 }
+  ],
+  "connections": [
+    { "from": "client", "to": "lb", "label": "가입·기부 등 HTTP", "variant": "emphasis", "labelDy": 24 },
+    { "from": "lb", "to": "api", "variant": "default" },
+    { "from": "api", "to": "lock", "label": "① lock 획득 / ③ 해제", "variant": "emphasis" },
+    { "from": "api", "to": "db", "label": "② load-modify-store", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "orange",
+      "title": "분산 락으로 직렬화",
+      "items": [
+        "① lock 획득 → ② load-modify-store → ③ lock 해제",
+        "같은 길드를 여러 API 서버가 동시에 만질 수 있어 길드 id별 lock이 필요"
+      ]
+    }
+  ]
+}

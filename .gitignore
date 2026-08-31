@@ -113,6 +113,8 @@ libunity.a
 *.html
 # mkdocs custom_dir 포크 파일 — 생성물이 아니라 커밋 대상인 소스다.
 !doc/site/overrides/**/*.html
+# guide 다이어그램(archify 렌더 SVG) — 사이트가 서빙하는 소스다.
+!framework/doc/framework/common/diagrams/*.html
 *.pdf
 *.ps
 *~

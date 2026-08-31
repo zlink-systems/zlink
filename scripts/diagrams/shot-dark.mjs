@@ -1,0 +1,10 @@
+import { chromium } from 'playwright';
+const [url, out, w, h] = process.argv.slice(2);
+const b = await chromium.launch();
+const ctx = await b.newContext({ colorScheme: 'dark' });
+const p = await ctx.newPage();
+await p.setViewportSize({ width: +w||1000, height: +h||700 });
+await p.goto(url, { waitUntil: 'load' });
+await p.waitForTimeout(1000);
+await p.screenshot({ path: out });
+await b.close(); console.log('dark shot', out);

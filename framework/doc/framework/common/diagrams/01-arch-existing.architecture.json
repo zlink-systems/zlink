@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "게임 백엔드 4가지 유형 — 기존 방식",
+    "subtitle": "zone 분할 · lobby+room · matchmaker+dedicated · 분산 actor 서비스",
+    "output": "01-arch-existing.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 170], "cols": 4, "gapX": 70, "gapY": 78, "cellW": 120, "cellH": 58 },
+  "components": [
+    { "id": "c1", "type": "external", "label": "client", "row": 0, "col": 0 },
+    { "id": "gw", "type": "frontend", "label": "gateway", "row": 0, "col": 1 },
+    { "id": "z1", "type": "backend", "label": "zone 서버 A", "row": 0, "col": 2 },
+    { "id": "z2", "type": "backend", "label": "zone 서버 B", "row": 1, "col": 2 },
+
+    { "id": "c2", "type": "external", "label": "client", "row": 2, "col": 0 },
+    { "id": "lo", "type": "frontend", "label": "lobby / 매칭", "row": 2, "col": 1 },
+    { "id": "r1", "type": "backend", "label": "room 서버들", "sublabel": "방 단위 상태", "row": 2, "col": 2 },
+
+    { "id": "c3", "type": "external", "label": "client", "row": 3, "col": 0 },
+    { "id": "mm", "type": "frontend", "label": "matchmaker", "sublabel": "ticket 큐", "row": 3, "col": 1 },
+    { "id": "fl", "type": "backend", "label": "dedicated fleet", "sublabel": "판마다 프로세스 할당", "row": 3, "col": 2 },
+
+    { "id": "c4", "type": "external", "label": "client", "row": 4, "col": 0 },
+    { "id": "ap", "type": "frontend", "label": "API 서버", "sublabel": "stateless front-end", "row": 4, "col": 1 },
+    { "id": "ac", "type": "backend", "label": "actor 클러스터", "sublabel": "노드 간 위치 투명", "row": 4, "col": 2 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "① zone 분할형 — MMORPG", "wraps": ["c1", "gw", "z1", "z2"] },
+    { "kind": "region", "label": "② lobby + room형 — 캐주얼·보드게임", "wraps": ["c2", "lo", "r1"] },
+    { "kind": "region", "label": "③ matchmaker + dedicated형 — 세션 기반", "wraps": ["c3", "mm", "fl"] },
+    { "kind": "region", "label": "④ 분산 actor 서비스형 — 메타·소셜", "wraps": ["c4", "ap", "ac"] }
+  ],
+  "connections": [
+    { "from": "c1", "to": "gw", "variant": "default" },
+    { "from": "gw", "to": "z1", "variant": "default" },
+    { "from": "gw", "to": "z2", "variant": "default", "fromSide": "bottom", "toSide": "left" },
+    { "from": "z1", "to": "z2", "variant": "dashed" },
+    { "from": "c2", "to": "lo", "variant": "default" },
+    { "from": "lo", "to": "r1", "variant": "default" },
+    { "from": "c3", "to": "mm", "variant": "default" },
+    { "from": "mm", "to": "fl", "variant": "default" },
+    { "from": "c4", "to": "ap", "variant": "default" },
+    { "from": "ap", "to": "ac", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "slate",
+      "title": "네 유형 공통 — 상태 소유 지점을 직접 만든다",
+      "items": [
+        "① zone 서버가 구역 상태 보유, 경계 넘으면 서버끼리 자체 프로토콜로 넘겨줌",
+        "② room 서버가 방 단위 상태 보유 · ③ matchmaker가 ticket 큐로 판마다 dedicated 프로세스 할당",
+        "④ actor 클러스터가 플레이어·길드 단위 상태 보유(노드 간 위치 투명)"
+      ]
+    }
+  ]
+}
