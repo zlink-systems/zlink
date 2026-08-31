@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "주문 처리 — 기존 방식",
+    "subtitle": "Kafka log가 주문 처리 경로의 순서를 담당한다",
+    "output": "01-order-existing.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [40, 150], "cols": 5, "gapX": 84, "gapY": 90, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "client", "type": "external", "label": "클라이언트 앱", "row": 0, "col": 0 },
+    { "id": "lb", "type": "external", "label": "L7 LB / gateway", "sublabel": "K8s Ingress", "row": 1, "col": 0 },
+    { "id": "api", "type": "frontend", "label": "API 서버들 ×N", "sublabel": "stateless", "row": 2, "col": 0 },
+    { "id": "rm", "type": "database", "label": "조회용 read model", "row": 1, "col": 2 },
+    { "id": "cache", "type": "messagebus", "label": "캐시", "sublabel": "반복 읽기 회피", "row": 1, "col": 3 },
+    { "id": "log", "type": "messagebus", "label": "Kafka log", "sublabel": "OrderId key partition", "row": 2, "col": 1 },
+    { "id": "cg", "type": "messagebus", "label": "주문 처리 소비자 ×N", "sublabel": "consumer group · offset", "row": 2, "col": 2 },
+    { "id": "svc", "type": "messagebus", "label": "서버 간 호출 LB", "sublabel": "K8s Service · discovery", "row": 2, "col": 3 },
+    { "id": "inv", "type": "frontend", "label": "재고·결제 서비스 ×N", "row": 2, "col": 4 },
+    { "id": "db", "type": "database", "label": "주문 상태 DB", "row": 3, "col": 2 },
+    { "id": "job", "type": "messagebus", "label": "재동기화 잡", "row": 3, "col": 0 }
+  ],
+  "connections": [
+    { "from": "client", "to": "lb", "label": "주문·조회 HTTP", "variant": "emphasis", "labelDy": 22 },
+    { "from": "lb", "to": "api", "variant": "default" },
+    { "from": "api", "to": "log", "label": "event append", "variant": "emphasis", "labelDy": -20 },
+    { "from": "log", "to": "cg", "label": "순서 partition", "variant": "emphasis", "labelDy": -24 },
+    { "from": "cg", "to": "rm", "label": "갱신", "variant": "default", "labelDy": -14 },
+    { "from": "cg", "to": "cache", "variant": "dashed" },
+    { "from": "cg", "to": "svc", "label": "재고·결제 호출", "variant": "default", "labelDy": 24 },
+    { "from": "svc", "to": "inv", "variant": "default" },
+    { "from": "cg", "to": "db", "label": "load-modify-store", "variant": "default", "labelDy": 22 },
+    { "from": "job", "to": "db", "label": "보정", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "orange",
+      "title": "순서를 위해 붙는 조각들",
+      "items": [
+        "Kafka log가 주문 처리 경로의 순서를 담당(OrderId key partition)",
+        "소비자: consumer group·offset·rebalance + version check·dedupe",
+        "서버 간 호출은 K8s Service·service discovery LB 경유",
+        "조회는 read model에서(캐시로 반복 읽기 회피), lag 모니터링·재동기화 잡으로 보정"
+      ]
+    }
+  ]
+}

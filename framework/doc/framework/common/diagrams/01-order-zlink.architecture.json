@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "주문 처리 — ZLink 방식",
+    "subtitle": "OrderWorkflowSpot이 OrderId owner로 직렬 실행",
+    "output": "01-order-zlink.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [40, 150], "cols": 4, "gapX": 88, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "client", "type": "external", "label": "클라이언트 앱", "row": 0, "col": 1 },
+    { "id": "log", "type": "external", "label": "Kafka log", "sublabel": "외부 전파·replay 보존", "row": 0, "col": 2 },
+    { "id": "ext", "type": "external", "label": "정산·분석·타 팀", "sublabel": "독립 소비자들", "row": 0, "col": 3 },
+    { "id": "lb", "type": "external", "label": "L7 LB / gateway", "sublabel": "K8s Ingress", "row": 1, "col": 1 },
+    { "id": "api", "type": "frontend", "label": "API 서버들 ×N", "sublabel": "route client", "row": 2, "col": 1 },
+    { "id": "spot", "type": "backend", "label": "OrderWorkflow ×N", "sublabel": "OrderId owner · 직렬 실행", "row": 2, "col": 2 },
+    { "id": "inv", "type": "frontend", "label": "재고·결제 ×N", "sublabel": "ZLink channel member", "row": 2, "col": 3 },
+    { "id": "store", "type": "external", "label": "location store", "sublabel": "descriptor rows", "row": 3, "col": 2 },
+    { "id": "db", "type": "database", "label": "주문 상태 DB", "row": 3, "col": 3 }
+  ],
+  "connections": [
+    { "from": "client", "to": "lb", "label": "주문·조회 HTTP", "variant": "emphasis", "labelDy": 22 },
+    { "from": "lb", "to": "api", "variant": "default" },
+    { "from": "api", "to": "spot", "label": "owner routing by OrderId", "variant": "emphasis", "labelDy": -22 },
+    { "from": "spot", "to": "inv", "label": "channel 직접 호출", "variant": "emphasis", "labelDy": -22 },
+    { "from": "spot", "to": "log", "label": "확정 사실 발행", "variant": "default" },
+    { "from": "log", "to": "ext", "variant": "default" },
+    { "from": "spot", "to": "db", "label": "저장", "variant": "default" },
+    { "from": "api", "to": "store", "label": "주소 해석", "variant": "dashed" },
+    { "from": "spot", "to": "store", "variant": "dashed" },
+    { "from": "inv", "to": "store", "label": "등록", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "ZLink 방식",
+      "items": [
+        "OrderWorkflowSpot이 OrderId owner로 직렬 실행 · hot state 보유",
+        "재고·결제는 channel name으로 직접 호출(ZLink channel member) — 재고 확보·결제 승인",
+        "Kafka는 대체 아님 — 남는 역할: 외부 시스템 전파 · replay용 보존(정산·분석·타 팀이 독립 소비)",
+        "조회는 DB에서, 주소는 location store가 소유(주소 해석·등록)"
+      ]
+    }
+  ]
+}

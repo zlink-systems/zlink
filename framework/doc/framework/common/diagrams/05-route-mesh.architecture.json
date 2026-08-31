@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "route mesh channel — 연결은 한 번, channel은 그 위의 이름",
+    "subtitle": "node B는 MeshNode 소켓 하나로 orders·billing 두 channel의 노드에 닿는다",
+    "output": "05-route-mesh.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 110, "gapY": 70, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "A1", "type": "backend", "label": "node A1", "row": 0, "col": 0 },
+    { "id": "A2", "type": "backend", "label": "node A2", "row": 0, "col": 2 },
+    { "id": "B", "type": "frontend", "label": "node B", "sublabel": "MeshNode 소켓 1개", "row": 2, "col": 1 },
+    { "id": "C1", "type": "backend", "label": "node C1", "row": 4, "col": 0 },
+    { "id": "C2", "type": "backend", "label": "node C2", "row": 4, "col": 2 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "channel: orders", "wraps": ["A1", "A2"] },
+    { "kind": "region", "label": "channel: billing", "wraps": ["C1", "C2"] }
+  ],
+  "connections": [
+    { "from": "B", "to": "A1", "variant": "emphasis" },
+    { "from": "B", "to": "A2", "variant": "emphasis" },
+    { "from": "B", "to": "C1", "variant": "emphasis" },
+    { "from": "B", "to": "C2", "variant": "emphasis" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "MeshNode 소켓 1개, 그 위의 channel 이름",
+      "items": [
+        "node B는 orders Client·billing Client를 한 MeshNode 소켓으로 공유한다 — 네 연결(A1·A2·C1·C2)이 모두 그 소켓 하나 위에 있고, 각 연결은 양방향(request·응답)이다.",
+        "상자는 소켓이 아니라 이름으로 묶인 그룹이다. orders를 호출하면 select-one이 A1·A2 중 하나를 고르고, channel을 더 등록해도 B의 소켓은 늘지 않는다."
+      ]
+    }
+  ]
+}

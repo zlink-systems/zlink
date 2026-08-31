@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "운영 drain / restore — peer 가중치로 대상 선택",
+    "subtitle": "Weight 100은 자주 · 50은 덜 · 0은 새 요청 후보 제외(연결·handler는 유지)",
+    "output": "05-drain-weight.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 4, "gapX": 90, "gapY": 70, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "R", "type": "frontend", "label": "channel runtime", "sublabel": "새 요청 대상 선택", "row": 2, "col": 0 },
+    { "id": "AR", "type": "backend", "label": "runtime", "sublabel": "Weight = 100", "row": 0, "col": 2 },
+    { "id": "AH", "type": "backend", "label": "typed handler", "row": 0, "col": 3 },
+    { "id": "BR", "type": "backend", "label": "runtime", "sublabel": "Weight = 50", "row": 2, "col": 2 },
+    { "id": "BH", "type": "backend", "label": "typed handler", "row": 2, "col": 3 },
+    { "id": "DR", "type": "backend", "label": "runtime", "sublabel": "Weight = 0 · drain", "row": 4, "col": 2 },
+    { "id": "DH", "type": "backend", "label": "typed handler", "row": 4, "col": 3 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "client application", "wraps": ["R"] },
+    { "kind": "region", "label": "server A", "wraps": ["AR", "AH"] },
+    { "kind": "region", "label": "server B", "wraps": ["BR", "BH"] },
+    { "kind": "region", "label": "server C", "wraps": ["DR", "DH"] }
+  ],
+  "connections": [
+    { "from": "R", "to": "AR", "label": "더 자주 선택", "variant": "emphasis" },
+    { "from": "R", "to": "BR", "label": "덜 자주 선택", "variant": "default" },
+    { "from": "R", "to": "DR", "label": "새 요청 후보 제외", "variant": "dashed" },
+    { "from": "AR", "to": "AH", "variant": "default" },
+    { "from": "BR", "to": "BH", "variant": "default" },
+    { "from": "DR", "to": "DH", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "peer 가중치 (Weight)",
+      "items": [
+        "client runtime이 Weight를 참고해 새 요청 대상을 고른다 — server A(100)를 자주, server B(50)를 덜 자주 선택한다.",
+        "Weight = 0(drain)은 새 요청 후보에서만 제외한다 — serving socket을 닫지 않고, in-flight 요청은 끝까지 처리하며 typed handler와 descriptor row는 그대로 남는다(graceful drain). 100이 정상 serving 복귀."
+      ]
+    }
+  ]
+}

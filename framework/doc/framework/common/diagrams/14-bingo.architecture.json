@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Bingo — 통상 온라인 게임 서버 구성",
+    "subtitle": "접속 gateway · 인증/매칭 · 룸 서버로 분리",
+    "output": "14-bingo.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 5, "gapX": 80, "gapY": 92, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "P", "type": "backend", "label": "Play ×2", "sublabel": "player actor · room Spot", "row": 0, "col": 2 },
+    { "id": "LS", "type": "external", "label": "Location Store", "row": 1, "col": 2 },
+    { "id": "R", "type": "database", "label": "Redis", "sublabel": "대기방 예약", "row": 1, "col": 4 },
+    { "id": "C", "type": "frontend", "label": "client", "row": 2, "col": 0 },
+    { "id": "S", "type": "external", "label": "Session ×2", "sublabel": "연결 종단 · actor bind", "row": 2, "col": 1 },
+    { "id": "A", "type": "external", "label": "Api ×2", "sublabel": "인증 · 매칭 요청", "row": 2, "col": 3 },
+    { "id": "M", "type": "backend", "label": "Matchmaking", "sublabel": "Matchmaker Instance Spot", "row": 2, "col": 4 }
+  ],
+  "connections": [
+    { "from": "C", "to": "S", "label": "STREAM 연결 1개", "variant": "emphasis" },
+    { "from": "S", "to": "A", "label": "인증 · 매칭 요청", "variant": "default", "labelDy": 40 },
+    { "from": "A", "to": "M", "label": "level bucket 매칭", "variant": "default", "labelDy": -40 },
+    { "from": "M", "to": "R", "variant": "default" },
+    { "from": "S", "to": "P", "label": "packet relay", "variant": "default", "labelDx": -18 },
+    { "from": "P", "to": "S", "label": "session push", "variant": "default", "labelDx": 18, "fromSide": "left", "toSide": "top" },
+    { "from": "A", "to": "P", "label": "room GetOrCreate", "variant": "default", "labelDx": 18 },
+    { "from": "S", "to": "LS", "variant": "dashed" },
+    { "from": "A", "to": "LS", "variant": "dashed" },
+    { "from": "P", "to": "LS", "label": "peer 자동 연결", "variant": "dashed", "labelDx": 48, "labelDy": 34 }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "gateway 구성",
+      "items": [
+        "client ↔ Session은 STREAM 연결 하나 (양방향, emphasis) — client는 Session 하나만 유지",
+        "Session·Api·Play는 각각 ×2로 scale-out, 서버 간 연결은 Location Store가 해석",
+        "Session→Api 매칭 요청 → Api가 level bucket으로 Matchmaker Instance Spot 매칭"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "매칭 · 룸 · push",
+      "items": [
+        "Matchmaker Instance Spot이 Redis로 대기방 예약을 원자적으로 결정",
+        "Api가 room GetOrCreate → Session이 packet relay, Play가 bound session으로 push",
+        "player actor와 room Spot이 다른 Play에 있어도 framework가 remote Spot join, 위치는 LS 자동 연결(점선)"
+      ]
+    }
+  ]
+}

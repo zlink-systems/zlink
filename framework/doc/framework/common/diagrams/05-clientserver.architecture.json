@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ClientServer channel — channel별 독립 runtime",
+    "subtitle": "process X가 auth·report에 각각 연결 · 연결은 client가 시작",
+    "output": "05-clientserver.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 110, "gapY": 70, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "Y1", "type": "backend", "label": "process Y", "row": 0, "col": 0 },
+    { "id": "Z1", "type": "backend", "label": "process Z", "row": 0, "col": 2 },
+    { "id": "X", "type": "frontend", "label": "process X", "sublabel": "channel별 runtime", "row": 2, "col": 1 },
+    { "id": "Z2", "type": "backend", "label": "process Z", "row": 4, "col": 0 },
+    { "id": "W2", "type": "backend", "label": "process W", "row": 4, "col": 2 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "channel: auth", "wraps": ["Y1", "Z1"] },
+    { "kind": "region", "label": "channel: report", "wraps": ["Z2", "W2"] }
+  ],
+  "connections": [
+    { "from": "X", "to": "Y1", "label": "auth", "variant": "default" },
+    { "from": "X", "to": "Z1", "label": "auth", "variant": "default" },
+    { "from": "X", "to": "Z2", "label": "report", "variant": "default" },
+    { "from": "X", "to": "W2", "label": "report", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "channel별 독립 runtime",
+      "items": [
+        "process X는 auth Client·report Client를 두고, channel마다 독립 runtime을 만들어 auth connection·report connection을 따로 관리한다.",
+        "auth와 report는 연결 대상과 수명을 공유하지 않는다. 같은 process Z가 양쪽 channel에 모두 참여해도(Z1·Z2) 각 channel runtime이 Z와의 연결을 따로 관리한다."
+      ]
+    }
+  ]
+}

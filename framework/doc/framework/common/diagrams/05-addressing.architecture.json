@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "주소 지정 — 운영 vs 애플리케이션",
+    "subtitle": "operations는 target node rid로 직접 · application은 논리 id로 Framework routing",
+    "output": "05-addressing.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 2, "gapX": 170, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "O", "type": "frontend", "label": "operations", "row": 0, "col": 0 },
+    { "id": "N", "type": "external", "label": "managed node", "row": 0, "col": 1 },
+    { "id": "A", "type": "frontend", "label": "application", "row": 1, "col": 0 },
+    { "id": "F", "type": "messagebus", "label": "Framework routing", "row": 1, "col": 1 }
+  ],
+  "connections": [
+    { "from": "O", "to": "N", "label": "target node rid", "variant": "default" },
+    { "from": "A", "to": "F", "label": "actor·spot·channel id", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "두 독립 흐름",
+      "items": [
+        "operations는 target node rid로 managed node를 직접 지정한다 — 상태 점검·운영 명령처럼 그 노드 자체가 대상일 때.",
+        "application은 actor id · spot id · channel 같은 논리 id를 주고 Framework routing이 현재 owner와 eligible node를 고른다 — application은 Node RID를 보관하지 않는다."
+      ]
+    }
+  ]
+}

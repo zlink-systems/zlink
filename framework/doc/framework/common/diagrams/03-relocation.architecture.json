@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "relocation — actor가 다른 node의 spot에 join",
+    "subtitle": "actor P가 state·대기 작업을 갖고 node B의 User Spot room-42로 이동",
+    "output": "03-relocation.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 96, "gapY": 96, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "P", "type": "messagebus", "label": "actor P", "sublabel": "이동 중", "row": 0, "col": 1 },
+    { "id": "Q", "type": "backend", "label": "actor Q", "row": 2, "col": 0 },
+    { "id": "RB", "type": "backend", "label": "User Spot", "sublabel": "room-42", "row": 2, "col": 1 },
+    { "id": "R", "type": "backend", "label": "actor R", "row": 2, "col": 2 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "node A — Entry Spot", "wraps": ["P"] },
+    { "kind": "region", "label": "node B", "wraps": ["Q", "RB", "R"] }
+  ],
+  "connections": [
+    { "from": "P", "to": "RB", "variant": "emphasis", "label": "JoinSpot(room-42)", "labelDy": 30 },
+    { "from": "Q", "to": "RB", "variant": "default" },
+    { "from": "R", "to": "RB", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "application이 요청하는 이동 (JoinSpot)",
+      "items": [
+        "node A의 Entry Spot에 있던 actor P가 JoinSpot(\"room-42\")를 호출하면, state와 대기 중인 작업을 그대로 들고 node B의 User Spot \"room-42\"로 옮겨간다(굵은 화살표).",
+        "이동이 끝나면 actor P는 그 spot에 이미 있던 actor Q·R와 같은 실행 규칙을 따른다. 호출은 spot id \"room-42\"만 지정하고 대상 node는 framework가 찾는다."
+      ]
+    }
+  ]
+}

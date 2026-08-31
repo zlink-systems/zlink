@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "방 하나를 만드는 흐름 — Create Room",
+    "subtitle": "API가 Spot을 예약·생성하고 RoomId(=SpotId)를 돌려준다",
+    "output": "02-create-room.html",
+    "column_fit": "spread",
+    "viewBox": [1040, 640],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "Client", "type": "frontend", "label": "HTTP client" },
+    { "id": "Api", "type": "frontend", "label": "API server" },
+    { "id": "Store", "type": "external", "label": "Location Store" },
+    { "id": "Play", "type": "backend", "label": "Selected Play node" },
+    { "id": "Spot", "type": "backend", "label": "Game Spot" }
+  ],
+  "messages": [
+    { "from": "Client", "to": "Api", "y": 160, "label": "POST /games", "variant": "default" },
+    { "from": "Api", "to": "Store", "y": 208, "label": "Reserve a new Spot", "variant": "default" },
+    { "from": "Store", "to": "Api", "y": 256, "label": "SpotId and selected owner", "variant": "return" },
+    { "from": "Api", "to": "Play", "y": 304, "label": "Create Spot with initial request", "variant": "default" },
+    { "from": "Play", "to": "Spot", "y": 352, "label": "Construct and initialize", "variant": "default" },
+    { "from": "Spot", "to": "Play", "y": 400, "label": "Accept", "variant": "return" },
+    { "from": "Play", "to": "Api", "y": 448, "label": "Spot ready", "variant": "return" },
+    { "from": "Api", "to": "Client", "y": 496, "label": "RoomId = SpotId", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "예약과 배치",
+      "items": [
+        "API는 특정 Play node를 고르지 않는다. Location Store가 새 Spot을 예약해 전역 유일 SpotId와 선택된 owner를 돌려준다.",
+        "API는 선택된 Play node에 초기 요청과 함께 Spot 생성을 지시한다 — Create Spot with initial request."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "생성과 응답",
+      "items": [
+        "Play node가 Game Spot을 생성·초기화(Construct and initialize)하고, Spot이 Accept하면 준비 완료.",
+        "API는 클라이언트에 RoomId = SpotId를 돌려준다."
+      ]
+    }
+  ]
+}

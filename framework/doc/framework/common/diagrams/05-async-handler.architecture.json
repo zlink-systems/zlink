@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "비동기 핸들러 — suspend 중 워커가 다른 일을 처리",
+    "subtitle": "H1이 await로 스레드를 놓는 동안 워커가 H2를 먼저 실행하고, 응답이 오면 H1이 resume",
+    "output": "05-async-handler.html",
+    "column_fit": "spread",
+    "viewBox": [1040, 680],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "W", "type": "messagebus", "label": "worker 스레드" },
+    { "id": "H1", "type": "backend", "label": "핸들러 A", "sublabel": "async" },
+    { "id": "CH", "type": "external", "label": "Play 채널" },
+    { "id": "H2", "type": "backend", "label": "핸들러 B", "sublabel": "async" }
+  ],
+  "messages": [
+    { "from": "W", "to": "H1", "y": 160, "label": "HandleAsync() 실행", "variant": "default" },
+    { "from": "H1", "to": "CH", "y": 220, "label": "await Request(...) → suspend, 스레드 반납", "variant": "default" },
+    { "from": "W", "to": "H2", "y": 300, "label": "워커는 즉시 다음 일로 — HandleAsync() 실행", "variant": "default" },
+    { "from": "H2", "to": "W", "y": 360, "label": "return (완료)", "variant": "return" },
+    { "from": "CH", "to": "H1", "y": 420, "label": "응답 도착 → resume", "variant": "return" },
+    { "from": "H1", "to": "W", "y": 480, "label": "return (완료)", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "논블로킹 인터리빙",
+      "items": [
+        "H1이 await Request 지점에서 suspend되면 그 실행 흐름만 멈추고 스레드는 풀로 돌아간다 — 스레드 점유 없음.",
+        "워커는 즉시 다음 일(H2)을 집어 실행하고, H2는 H1의 응답이 오기 전에 먼저 완료된다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "resume",
+      "items": [
+        "Play 채널의 응답이 도착하면 H1이 그 자리에서 resume해 return한다.",
+        "그래서 worker 몇 개가 콜백 없이 위에서 아래로 읽히는 코드로 수많은 동시 요청을 처리한다. .Result로 막으면 스레드가 계속 점유되므로 핸들러 안에서 금지."
+      ]
+    }
+  ]
+}

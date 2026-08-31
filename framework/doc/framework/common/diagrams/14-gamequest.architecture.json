@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "GameQuest — player owner Spot 처리",
+    "subtitle": "PlayerId owner routing · event sourcing · gameplay 보정",
+    "output": "14-gamequest.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 4, "gapX": 92, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C", "type": "frontend", "label": "game client", "row": 1, "col": 0 },
+    { "id": "SS", "type": "external", "label": "Session Server", "sublabel": "session actor · 판정 전 검증", "row": 1, "col": 1 },
+    { "id": "SP", "type": "backend", "label": "PlayerQuestSpot", "sublabel": "player 하나당 하나", "row": 1, "col": 2 },
+    { "id": "ES", "type": "database", "label": "quest 이벤트", "row": 0, "col": 3 },
+    { "id": "RM", "type": "database", "label": "조회 모델", "row": 1, "col": 3 },
+    { "id": "GS", "type": "database", "label": "gameplay 사실", "sublabel": "보정 원천", "row": 2, "col": 3 }
+  ],
+  "connections": [
+    { "from": "C", "to": "SS", "label": "WebSocket", "variant": "emphasis" },
+    { "from": "SS", "to": "SP", "label": "PlayerId owner routing", "variant": "emphasis", "labelDy": -48 },
+    { "from": "SP", "to": "SS", "label": "bound session push", "variant": "default", "fromSide": "bottom", "toSide": "bottom" },
+    { "from": "SP", "to": "ES", "label": "append · replay", "variant": "default" },
+    { "from": "SP", "to": "RM", "label": "갱신", "variant": "default" },
+    { "from": "SP", "to": "GS", "label": "reset · 보정 조회", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "owner 처리",
+      "items": [
+        "game client ↔ Session Server는 WebSocket 양방향 연결 하나 (emphasis)",
+        "Session Server가 PlayerId로 owner routing → 같은 player 이벤트는 owner Spot 하나가 순서대로 처리"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "event sourcing + 보정",
+      "items": [
+        "quest 이벤트에 append·replay, 조회 모델 갱신, 진행 상황은 bound session으로 push",
+        "gameplay 사실을 원천으로 reset·보정 조회 (점선) — 유실은 snapshot 보정으로 흡수"
+      ]
+    }
+  ]
+}

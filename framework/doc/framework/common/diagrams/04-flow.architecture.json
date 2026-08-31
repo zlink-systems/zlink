@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Backpressure 경로 — 송신에서 수신까지, 응답은 점선으로",
+    "subtitle": "송신 handler에서 수신 handler까지 직렬로 흐르고 · Completion 연결이 terminal reply·error를 되돌린다",
+    "output": "04-flow.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 6, "gapX": 46, "gapY": 96, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "H1", "type": "frontend", "label": "보내는 handler", "sublabel": "SendToChannel(...)", "row": 0, "col": 0 },
+    { "id": "SQ", "type": "messagebus", "label": "Core 송신 queue", "sublabel": "accounted byte HWM", "row": 0, "col": 1 },
+    { "id": "AC", "type": "external", "label": "Application 연결", "row": 0, "col": 2 },
+    { "id": "RQ", "type": "messagebus", "label": "Core 수신 queue", "sublabel": "accounted byte HWM", "row": 0, "col": 3 },
+    { "id": "BUD", "type": "database", "label": "App job queue", "sublabel": "reserved + queued permit", "row": 0, "col": 4 },
+    { "id": "H2", "type": "frontend", "label": "받는 handler", "row": 0, "col": 5 },
+    { "id": "CC", "type": "external", "label": "Completion 연결", "row": 1, "col": 2 }
+  ],
+  "connections": [
+    { "from": "H1", "to": "SQ", "variant": "default" },
+    { "from": "SQ", "to": "AC", "variant": "default" },
+    { "from": "AC", "to": "RQ", "variant": "default" },
+    { "from": "RQ", "to": "BUD", "variant": "default" },
+    { "from": "BUD", "to": "H2", "variant": "default" },
+    { "from": "H2", "to": "CC", "variant": "dashed", "label": "terminal reply·error", "fromSide": "bottom", "toSide": "right" },
+    { "from": "CC", "to": "H1", "variant": "dashed", "fromSide": "left", "toSide": "bottom" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "직렬 흐름 (실선)",
+      "items": [
+        "보내는 handler → Core ordinary 송신 queue → Application 연결 → Core ordinary 수신 queue → Application job queue → 받는 handler 순서로 이어진다.",
+        "Core 송신·수신 queue는 accounted byte HWM으로 byte를 제한하고, Application job queue는 reserved + queued permit으로 handler 대기 job 수를 제한한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "되돌이 경로 (점선)",
+      "items": [
+        "받는 handler는 terminal reply·error를 Completion 연결로 점선으로 되돌리고, Completion 연결이 다시 보내는 handler로 이어진다.",
+        "Completion 연결은 application 수신이 멈춘 동안에도 계속 읽으므로 진행 중이던 request가 완료된다. Application 연결은 일반 message·request와 Framework control(heartbeat·topology·relocation·SendReady kind 12)을 나른다."
+      ]
+    }
+  ]
+}
