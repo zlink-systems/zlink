@@ -813,8 +813,16 @@ transport에 따른 편차를 구조적 계약으로 바꾸지 않는다.
   request/reply state의 retain/release atomic 연산을 record마다 추가하지 않는다. Request pipe
   observer는 prepare에서 state lock 아래 찾은 pending entry를 commit까지 차용해 같은 sequence의
   hash lookup과 identity 비교를 반복하지 않는다.
+- **일반 ROUTER 송신은 route map mutex를 짧은 pipe write와 실패 rollback까지 유지한다.**
+  Observer가 없는 일반 송신은 이 mutex를 선택한 pipe의 수명 보호로 사용하므로 part마다
+  `retain_lifetime_ref()`와 `release_lifetime_ref()`의 atomic CAS를 실행하지 않는다. Observer가
+  request/reply 상태를 확인하는 송신은 pipe를 pin한 뒤 route mutex를 풀고 observer와 write를
+  실행하는 기존 경계를 유지한다.
 - **ROUTER receive는 실제 routing ID만 보관·복사한다.** 수신 함수가 이미 초기화하는 output을
   전체 zero-fill하지 않고, TLS output을 직접 사용한 경우에는 자신에게 다시 복사하지 않는다.
+- **ROUTER staged receive는 part와 그 part의 metadata를 helper mutex 한 번으로 가져온다.**
+  Staged part, source RID, request sequence와 transport pair ID·generation을 한 helper call에서
+  함께 읽어 별도 metadata export마다 mutex를 다시 획득하지 않는다.
 - **Multipart completion은 연결 ID를 한 번 snapshot한다.** 하나의 logical reply를 구성하는 모든
   part는 completion write 전에 읽은 같은 transport connection ID를 사용한다.
 - **Public receive의 metadata 정리는 application part 수와 무관하게 수행한다.** Decoder와
@@ -826,6 +834,27 @@ transport에 따른 편차를 구조적 계약으로 바꾸지 않는다.
   reply-target·pending entry나 request metadata sidecar를 만들지 않는다. Concurrent raw
   receive와 request가 공유하는 기존 socket state와 ownership transition은 이번 작업에서
   우회하지 않는다.
+- **Queue는 다음 frame 판정과 조건부 pop을 `read_if` 한 번에서 끝낸다.** Normal queue와
+  conflate queue 모두 비어 있음, front 유지, front 소비를 같은 결과로 구분한다. Admission
+  callback의 `-1`은 판정한 front를 유지하고, 성공과 `-2`는 바로 그 front를 소비한다. Callback이
+  설정한 errno는 반환 직후 보존해 queue 연산이 끝난 뒤 실패 결과와 함께 복원한다. 별도 probe와
+  read 사이에 writer가 판정 대상을 바꾸는 경로를 만들지 않는다.
+- **일반 raw terminal SENDSEND는 record admission 없이 dequeue한다.** 다음 application frame에
+  `MORE`가 있거나 request/reply metadata가 있을 때만 dequeue 전에 record admission을 실행한다.
+  Routing ID·credential·delimiter 같은 private frame은 이 판단 대상에서 제외하고 기존
+  private-frame 처리로 넘긴다. 따라서 metadata가 없는 terminal raw record는 nullable callback
+  호출과 admission 판정 비용을 부담하지 않는다.
+- **Delimiter 판정과 소비도 하나의 queue 연산으로 묶는다.** Normal·conflate queue의 read와
+  termination 경로는 검사한 delimiter와 소비한 frame이 항상 같아야 하며, 검사 뒤 별도 pop을
+  실행하지 않는다.
+- **Admission이 거부한 record를 소비하면 queue charge와 message 수명을 함께 정리한다.** Pipe는
+  dequeue한 첫 frame을 일반 소비와 같이 physical charge와 inbound accounting에 반영한다. FQ는
+  1024-byte LMSG를 포함한 첫 frame부터 multipart final tail까지 각 frame을 `close()`한 뒤
+  output을 다시 초기화한다. 실패 당시 errno를 복원하고 같은 source의 다음 record와 fairness
+  위치는 바꾸지 않는다.
+- **Prefetched record의 `-2`도 logical record 전체를 폐기한다.** Single-part는 prefetched
+  application frame을 닫고, multipart는 final tail까지 같은 source에서 소비해 각 frame을 닫는다.
+  Prefetched routing ID와 현재 record 상태만 정리하고 뒤의 record는 다음 receive를 위해 보존한다.
 - **Request metadata는 16바이트 inline auxiliary에 둔다.** Sidecar allocation이나 별도 queue
   element를 만들지 않고 일반 data encode에는 tag 확인 한 번만 추가한다. Auxiliary가 없는
   message의 init·reset은 tag만 `none`으로 바꾸며 비활성 overlay 전체를 초기화하지 않는다.
@@ -923,8 +952,14 @@ Peer weight의 성능 개선은 상시 `msg_t` 보관, application queue 처리�
   request/reply state를 차용하며, observer가 반환한 뒤에는 그 차용 참조를 보관하지 않는다.
 - Tracked request의 pipe observer는 prepare부터 finish까지 request state lock을 유지하고 prepare에서
   찾은 pending entry를 commit에서 직접 갱신하며, 같은 sequence를 pending map에서 다시 찾지 않는다.
+- Observer가 없는 ROUTER 송신은 route map mutex를 pipe write와 실패 rollback까지 유지하고
+  part별 pipe lifetime retain·release를 호출하지 않는다. Observer가 있는 request/reply 송신은
+  pipe lifetime을 retain한 뒤 route mutex를 풀고 observer와 write를 실행한다.
 - ROUTER direct receive는 routing ID output 전체를 미리 zero-fill하지 않고, TLS routing ID를
   직접 쓴 결과를 TLS 자신에게 다시 복사하지 않는다.
+- ROUTER staged receive는 part, source RID, request sequence와 transport pair ID·generation을
+  `handle_state_t` mutex 한 번 안에서 가져오며, part를 꺼낸 뒤 metadata별 export lock을 다시
+  획득하는 경로가 없다.
 - Multipart completion의 각 part에는 completion 시작 때 snapshot한 하나의 transport connection
   ID가 기록된다.
 - PAIR·DEALER·ROUTER·XSUB assembler와 ZMP decoder는 첫 application part 뒤의 request/reply
@@ -934,6 +969,23 @@ Peer weight의 성능 개선은 상시 `msg_t` 보관, application queue 처리�
 - Completion drain은 single-part reply와 error reply를 `request_reply_frame_buffer_t`에 넣지 않고
   stack frame에서 직접 완료한다. Multipart continuation metadata는 assembly 중 한 번 검증하며,
   completion 직전에 전체 part를 다시 순회하지 않는다.
+- Normal·conflate queue의 `read_if`는 같은 front에 대해 비어 있음·유지·소비를 한 번에 결정한다.
+  Record admission `-1`은 frame을 유지하고 `-2`는 frame을 소비하며, 실패 반환은 callback errno를
+  보존한다. 판정과 pop 사이에 별도 queue read가 없다.
+- FQ·pipe의 request-aware receive는 queue의 다음 non-private frame을 분류한다. Metadata가 없는
+  terminal raw frame은 admission callback 없이 dequeue하고, `MORE` 또는 request/reply metadata가
+  있는 frame만 callback을 실행한다. Routing ID·credential·delimiter는 application record
+  admission으로 분류하지 않는다.
+- Normal·conflate queue의 delimiter read와 pipe termination은 delimiter 검사와 조건부 소비를
+  같은 `read_if` 호출에서 수행한다. 검사한 frame과 실제로 소비한 frame이 달라지는 interleaving이
+  없다.
+- Record admission이 `reject-consume`을 반환하면 pipe는 pop한 첫 frame의 physical charge를
+  반환하고 inbound byte·message counter를 일반 read와 같은 방식으로 갱신한다. FQ는 처음 소비한
+  single-part LMSG와 multipart의 모든 tail을 각각 `close()`한 뒤 output을 초기화하며, 반환 errno,
+  현재 source와 다음 record의 round-robin 위치를 보존한다.
+- ROUTER prefetched admission이 `-2`를 반환하면 single-part와 multipart final tail까지 현재
+  logical record의 모든 application frame과 prefetched routing ID를 닫는다. 실패 errno와 다음
+  record를 보존하고, 폐기한 record의 prefetched·current-source 상태만 초기화한다.
 - Attach·dispatch·flow 처리의 pipe lifecycle 검사는 같은 상태 predicate를 사용하며, 삭제한
   anonymous namespace를 참조하는 production source가 없다.
 - Production proxy source에는 `ZLINK_HAVE_POLLER`의 compile-time 분기와 public
@@ -1000,6 +1052,8 @@ Peer weight의 성능 개선은 상시 `msg_t` 보관, application queue 처리�
 
 Perf 구현과 workload는 바꾸지 않고 같은 C single·multi runner를 사용한다. Core revision만
 교체해 §8.1의 비용 제거를 검증하며, 측정값을 맞추려고 HWM이나 queue policy를 조정하지 않는다.
+최종 회귀 판정은 1024-byte payload의 같은 pattern·transport끼리 0.14.6과 수정 Core를 비교한다.
+수정 Core의 throughput이 0.14.6보다 5% 이상 낮으면 성능 회귀다.
 
 - Pending map·mutex, timeout scheduler, completion queue와 callback 최적화
 - Generic DEALER receive의 request-state·mutex ownership transition과 kind-aware admission 재설계
@@ -1014,11 +1068,12 @@ Perf 구현과 workload는 바꾸지 않고 같은 C single·multi runner를 사
 측정은 같은 local Release Core revision과 다음 조건을 사용한다.
 
 1. Payload는 `[1024-byte payload][empty]`이고 `PERF_PART_COUNT=2`다.
-2. Transport는 우선 TCP와 WSS를 사용한다.
-3. C single은 `DEALER_ROUTER`, `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER`,
+2. 원인 분리 측정은 우선 TCP와 WSS를 사용하고 inproc·IPC hot path를 추가로 확인한다. 최종
+   network 회귀 확인은 TCP·TLS·WS·WSS를 같은 조건으로 비교한다.
+3. C single은 `DEALER_DEALER`, `DEALER_ROUTER`, `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER`,
    `ROUTER_ROUTER_REQREP`을 비교한다.
-4. C multi는 `DEALER_ROUTER_SENDSEND`, `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER_SENDSEND`,
-   `ROUTER_ROUTER_REQREP`을 비교한다.
+4. C multi는 `DEALER_DEALER`, `DEALER_ROUTER_SENDSEND`, `DEALER_ROUTER_REQREP`,
+   `ROUTER_ROUTER_SENDSEND`, `ROUTER_ROUTER_REQREP`, `PUBSUB`을 비교한다.
 5. 각 조합을 세 번 이상 실행하고 throughput·latency의 중앙값을 사용한다.
 
 검증 기록에는 Core revision, payload part 수, transport, 반복 수, 성공·timeout·error 수, 반복별
@@ -1078,6 +1133,50 @@ Multi REQREP에서 WSS는 같은 pattern의 TCP 142.949·139.233 Kops/s에 비�
 RFC 6455 binary message를 byte carrier로 되돌리고 §8.1의 bounded encoder batching을 적용한 뒤,
 같은 명령과 option으로 같은 REQREP pattern의 transport를 다시 측정해야 한다. 위 표는 수정 전 실패
 증거이며 최종 성능 결과가 아니다.
+
+#### 최종 회귀 확인 기록 — 2026-09-01
+
+아래 값은 1024-byte C single·multi runner에서 같은 pattern·transport를 0.14.6과 비교한 최종
+결과다. 변화율은 `(수정 Core / 0.14.6 - 1) * 100`이고, raw throughput pair가 확인된 항목은
+`0.14.6 -> 수정 Core` 순서로 기록한다. 변화율만 확인된 항목의 raw 값은 역산하지 않는다. WSS의
+두 raw pair는 진단 중간값이 아니라 current와 0.14.6을 같은 측정 묶음에서 비교한 paired-order
+최종값이다.
+
+Network multi 결과는 다음과 같다. `MULTI_ROUTER_ROUTER_SENDSEND`의 TCP·TLS·WS·WSS와
+`MULTI_PUBSUB`·WSS가 모두 -5% 회귀 기준 안이다.
+
+| Pattern | Transport | 기록한 throughput 비교 | 수정 Core 변화율 | 판정 |
+|---|---|---|---:|---|
+| `MULTI_ROUTER_ROUTER_SENDSEND` | TCP | 같은 runner·조건의 0.14.6과 비교 | -0.40% | -5% 회귀 기준 안이다. |
+| `MULTI_ROUTER_ROUTER_SENDSEND` | TLS | 같은 runner·조건의 0.14.6과 비교 | -2.69% | -5% 회귀 기준 안이다. |
+| `MULTI_ROUTER_ROUTER_SENDSEND` | WS | 같은 runner·조건의 0.14.6과 비교 | +5.59% | 회귀가 아니다. |
+| `MULTI_ROUTER_ROUTER_SENDSEND` | WSS | 190286.6 -> 199824.0 | +5.01% | 회귀가 아니다. |
+| `MULTI_PUBSUB` | WSS | 450864.0 -> 495376.4 | +9.87% | 회귀가 아니다. |
+
+Single hot-path 결과도 모두 -5% 회귀 기준 안이다.
+
+| Pattern | Transport | 기록한 throughput 비교 | 수정 Core 변화율 | 판정 |
+|---|---|---|---:|---|
+| `ROUTER_ROUTER` | inproc | 891402.4 -> 854861.8 | -4.10% | -5% 회귀 기준 안이다. |
+| `ROUTER_ROUTER` | IPC | 818702.0 -> 797928.4 | -2.54% | -5% 회귀 기준 안이다. |
+| `DEALER_ROUTER` | TCP | 같은 runner·조건의 0.14.6과 비교 | -0.48% | -5% 회귀 기준 안이다. |
+| `DEALER_ROUTER` | inproc | 같은 runner·조건의 0.14.6과 비교 | -1.62% | -5% 회귀 기준 안이다. |
+| `DEALER_DEALER` | WS | 같은 runner·조건의 0.14.6과 비교 | -2.71% | -5% 회귀 기준 안이다. |
+| `DEALER_DEALER` | IPC | 같은 runner·조건의 0.14.6과 비교 | +2.67% | 회귀가 아니다. |
+
+Multi IPC 결과도 모두 -5% 회귀 기준 안이다.
+
+| Pattern | 기록한 throughput 비교 | 수정 Core 변화율 | 판정 |
+|---|---|---:|---|
+| `MULTI_DEALER_DEALER` | 같은 runner·조건의 0.14.6과 비교 | +2.69% | 회귀가 아니다. |
+| `MULTI_DEALER_ROUTER_SENDSEND` | 같은 runner·조건의 0.14.6과 비교 | +2.93% | 회귀가 아니다. |
+| `MULTI_ROUTER_ROUTER_SENDSEND` | 같은 runner·조건의 0.14.6과 비교 | -3.47% | -5% 회귀 기준 안이다. |
+| `MULTI_DEALER_ROUTER_REQREP` | 같은 runner·조건의 0.14.6과 비교 | +9.73% | 회귀가 아니다. |
+| `MULTI_ROUTER_ROUTER_REQREP` | 같은 runner·조건의 0.14.6과 비교 | +11.30% | 회귀가 아니다. |
+| `MULTI_PUBSUB` | 같은 runner·조건의 0.14.6과 비교 | -1.64% | -5% 회귀 기준 안이다. |
+
+이 기록은 표에 적은 single·multi 조합의 판정이며, 적지 않은 pattern·transport까지 검증됐다는
+뜻은 아니다.
 
 ## 9. 작업 중단 조건
 

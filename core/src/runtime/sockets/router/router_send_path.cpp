@@ -147,7 +147,13 @@ int zlink::router_t::send_with_observer (
 
     if (_current_out) {
         pipe_t *const write_pipe = _current_out;
-        if (!write_pipe->retain_lifetime_ref ()) {
+        // Ordinary sends keep the route fence through the short pipe write.
+        // That makes the routing-table entry itself the lifetime guard and
+        // avoids a pair of lifetime CAS operations for every message part.
+        // Observer-backed request/reply sends must release the route fence
+        // before invoking the observer, so they retain the explicit pin.
+        const bool release_route_for_write = observer_ != NULL;
+        if (release_route_for_write && !write_pipe->retain_lifetime_ref ()) {
             _current_out = NULL;
             _current_out_connection_id = 0;
             _more_out = false;
@@ -159,14 +165,14 @@ int zlink::router_t::send_with_observer (
         pipe_message_admission_t write_admission =
           pipe_message_admission_invalid;
         // A terminal frame does not need _current_out after this point. Clear
-        // it while the route table is still protected, then keep only the
-        // lifetime pin across the pipe write. This avoids re-locking the
-        // route table on the normal successful terminal-write path.
+        // it while the route table is still protected. Observer-backed sends
+        // then keep only the lifetime pin; ordinary sends retain this fence.
         if (!next_more_out && _current_out == write_pipe) {
             _current_out = NULL;
             _current_out_connection_id = 0;
         }
-        route_lifecycle_lock.unlock ();
+        if (release_route_for_write)
+            route_lifecycle_lock.unlock ();
         const bool ok =
           observer_
             ? write_pipe->write_owner_started_message_observed (
@@ -184,7 +190,8 @@ int zlink::router_t::send_with_observer (
             // Route teardown can run while the pipe write is in flight.
             // Re-acquire only on failure, where the routing entry may need
             // to be revalidated and marked inactive.
-            route_lifecycle_lock.lock ();
+            if (release_route_for_write)
+                route_lifecycle_lock.lock ();
         }
         if (unlikely (!ok)) {
             if (observer_ && errno == ECANCELED
@@ -195,7 +202,8 @@ int zlink::router_t::send_with_observer (
                 }
                 _more_out = false;
                 route_lifecycle_lock.unlock ();
-                write_pipe->release_lifetime_ref ();
+                if (release_route_for_write)
+                    write_pipe->release_lifetime_ref ();
                 return -1;
             }
             // The first multipart frame can pass the readiness check and a
@@ -231,7 +239,8 @@ int zlink::router_t::send_with_observer (
                 // would start a different record, so report the multipart
                 // abort distinctly to the scoped public send path.
                 route_lifecycle_lock.unlock ();
-                write_pipe->release_lifetime_ref ();
+                if (release_route_for_write)
+                    write_pipe->release_lifetime_ref ();
                 return -2;
             }
             const int rc = msg_->close ();
@@ -239,7 +248,8 @@ int zlink::router_t::send_with_observer (
         }
         if (unlikely (!ok))
             route_lifecycle_lock.unlock ();
-        write_pipe->release_lifetime_ref ();
+        if (release_route_for_write)
+            write_pipe->release_lifetime_ref ();
     } else {
         if (router_debug_enabled ()) {
             fprintf (stderr, "router xsend: no current out, drop size=%zu\n", msg_->size ());
@@ -478,7 +488,11 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
     if (_current_out) {
         pipe_t *const write_pipe = _current_out;
         const bool write_more = _more_out;
-        if (!write_pipe->retain_lifetime_ref ()) {
+        // See send_with_observer(): ordinary routed sends keep the route
+        // fence as their lifetime guard, while observer-backed request/reply
+        // sends retain a pin before dropping that fence.
+        const bool release_route_for_write = observer_ != NULL;
+        if (release_route_for_write && !write_pipe->retain_lifetime_ref ()) {
             _current_out = NULL;
             _current_out_connection_id = 0;
             if (connection_id_out_)
@@ -500,15 +514,16 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
           _current_out_connection_id);
         pipe_message_admission_t write_admission =
           pipe_message_admission_invalid;
-        // The lifetime pin keeps write_pipe valid after releasing the route
-        // table lock. A terminal routed send has no later continuation, so
-        // clear the selected route state before the write and avoid the old
-        // success-path re-lock.
+        // A terminal routed send has no later continuation, so clear the
+        // selected route state before the write. Observer-backed sends keep
+        // the pipe valid with their lifetime pin; ordinary sends retain the
+        // route fence.
         if (!write_more && _current_out == write_pipe) {
             _current_out = NULL;
             _current_out_connection_id = 0;
         }
-        route_lifecycle_lock.unlock ();
+        if (release_route_for_write)
+            route_lifecycle_lock.unlock ();
         const bool ok =
           observer_
             ? write_pipe->write_message_observed (
@@ -522,7 +537,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
             write_pipe->rollback ();
             errno = write_errno;
             // Only the failure path needs routing-table revalidation.
-            route_lifecycle_lock.lock ();
+            if (release_route_for_write)
+                route_lifecycle_lock.lock ();
         }
         if (unlikely (!ok)) {
             if (observer_ && errno == ECANCELED
@@ -537,7 +553,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                     *pipe_out_ = NULL;
                 _more_out = false;
                 route_lifecycle_lock.unlock ();
-                write_pipe->release_lifetime_ref ();
+                if (release_route_for_write)
+                    write_pipe->release_lifetime_ref ();
                 return -1;
             }
             // A routed multipart send can reach HWM after its first frame.
@@ -577,7 +594,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                 // was staged by this call. Report an ordinary failure and let
                 // the caller apply its submit-retry policy.
                 route_lifecycle_lock.unlock ();
-                write_pipe->release_lifetime_ref ();
+                if (release_route_for_write)
+                    write_pipe->release_lifetime_ref ();
                 return -1;
             }
             const int rc = msg_->close ();
@@ -585,7 +603,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         }
         if (unlikely (!ok))
             route_lifecycle_lock.unlock ();
-        write_pipe->release_lifetime_ref ();
+        if (release_route_for_write)
+            write_pipe->release_lifetime_ref ();
     } else {
         const int rc = msg_->close ();
         errno_assert (rc == 0);

@@ -249,11 +249,15 @@ class pipe_t ZLINK_FINAL : public object_t,
     {
         read_admission_reject_consume = -2
     };
-    //  Evaluates admission against the next non-credential frame before it is
-    //  removed from the queue. A rejection leaves that frame queued.
-    bool read_with_admission (msg_t *msg_, read_admission_fn *admission_,
-                              void *userdata_, bool *admission_failed_out_,
-                              bool *admission_consumed_out_);
+    //  Returns true when the frame starts a record that must acquire receive
+    //  admission before it leaves the queue. Raw terminal and private
+    //  bookkeeping frames remain on the ordinary dequeue path.
+    static bool requires_record_admission (const msg_t &msg_);
+    //  Evaluates whole-record admission before removing metadata-bearing or
+    //  multipart frames. A capacity rejection leaves the first frame queued.
+    bool read_with_record_admission (
+      msg_t *msg_, read_admission_fn *admission_, void *userdata_,
+      bool *admission_failed_out_, bool *admission_consumed_out_);
     int reserve_inbound_decoder_frame (
       uint64_t payload_bytes_, unsigned char msg_flags_, bool track_multipart_,
       decoder_frame_reservation_t *reservation_storage_,
@@ -554,10 +558,10 @@ class pipe_t ZLINK_FINAL : public object_t,
                                              uint64_t *committed_out_) const;
     void publish_session_outbound_accounting_unlocked (
       bool provisional_changed_);
-    bool read_internal (msg_t *msg_, read_admission_fn *admission_ = NULL,
-                        void *userdata_ = NULL,
-                        bool *admission_failed_out_ = NULL,
-                        bool *admission_consumed_out_ = NULL);
+    template <bool WithAdmission>
+    bool read_internal (msg_t *msg_, read_admission_fn *admission_,
+                        void *userdata_, bool *admission_failed_out_,
+                        bool *admission_consumed_out_);
     void refresh_inbound_lwm_from_physical_queue ();
 
     //  Constructor is private. Pipe can only be created using
@@ -733,9 +737,6 @@ class pipe_t ZLINK_FINAL : public object_t,
     // Intrusive, allocation-free link used while socket-message teardown is
     // deferred beyond the outer receive-command critical section.
     pipe_t *_deferred_socket_msg_termination_next;
-
-    //  Returns true if the message is delimiter; false otherwise.
-    static bool is_delimiter (const msg_t &msg_);
 
     //  Computes appropriate low watermark from the given high watermark.
     static uint64_t compute_lwm (uint64_t hwm_);

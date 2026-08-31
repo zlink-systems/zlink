@@ -34,6 +34,11 @@ void pipe_debug_log (
              identifier_ && *identifier_ ? identifier_ : "<none>");
     fflush (stderr);
 }
+
+bool consume_if_delimiter (const zlink::msg_t &msg_, void *)
+{
+    return msg_.is_delimiter ();
+}
 }
 #include <ctime>
 
@@ -885,18 +890,16 @@ bool zlink::pipe_t::check_read ()
         _in_active = true;
     }
 
-    //  Check if there's an item in the pipe.
-    if (!_in_pipe->check_read ()) {
+    // Inspect and consume a delimiter in one queue operation. In particular,
+    // a conflate writer cannot replace the inspected frame before it is read.
+    msg_t delimiter;
+    const ypipe_read_result_t delimiter_result =
+      _in_pipe->read_if (&delimiter, &consume_if_delimiter, NULL);
+    if (delimiter_result == ypipe_read_empty) {
         _in_active = false;
         return false;
     }
-
-    //  If the next item in the pipe is message delimiter,
-    //  initiate termination process.
-    if (_in_pipe->probe (is_delimiter)) {
-        msg_t msg;
-        const bool ok = _in_pipe->read (&msg);
-        zlink_assert (ok);
+    if (delimiter_result == ypipe_read_consumed) {
         process_delimiter ();
         return false;
     }
@@ -906,17 +909,27 @@ bool zlink::pipe_t::check_read ()
 
 bool zlink::pipe_t::read (msg_t *msg_)
 {
-    return read_internal (msg_);
+    return read_internal<false> (msg_, NULL, NULL, NULL, NULL);
 }
 
-bool zlink::pipe_t::read_with_admission (msg_t *msg_,
-                                         read_admission_fn *admission_,
-                                         void *userdata_,
-                                         bool *admission_failed_out_,
-                                         bool *admission_consumed_out_)
+bool zlink::pipe_t::requires_record_admission (const msg_t &msg_)
 {
-    return read_internal (msg_, admission_, userdata_, admission_failed_out_,
-                          admission_consumed_out_);
+    const bool candidate = (msg_.flags () & msg_t::more) != 0
+                           || msg_.get_request_reply_metadata (NULL, NULL);
+    if (!candidate)
+        return false;
+
+    return !msg_.is_credential () && !msg_.is_routing_id ()
+           && !msg_.is_delimiter ();
+}
+
+bool zlink::pipe_t::read_with_record_admission (
+  msg_t *msg_, read_admission_fn *admission_, void *userdata_,
+  bool *admission_failed_out_, bool *admission_consumed_out_)
+{
+    return read_internal<true> (msg_, admission_, userdata_,
+                                admission_failed_out_,
+                                admission_consumed_out_);
 }
 
 namespace
@@ -927,33 +940,39 @@ struct pipe_read_admission_probe_t
     zlink::pipe_t::read_admission_fn *admission;
     void *userdata;
     int result;
+    int error_number;
 };
 
-bool invoke_pipe_read_admission (const zlink::msg_t &msg_, void *userdata_)
+bool invoke_pipe_record_admission (const zlink::msg_t &msg_, void *userdata_)
 {
     pipe_read_admission_probe_t *const probe =
       static_cast<pipe_read_admission_probe_t *> (userdata_);
+    if (!zlink::pipe_t::requires_record_admission (msg_)) {
+        probe->result = 0;
+        return true;
+    }
     probe->result = probe->admission (probe->pipe, msg_, probe->userdata);
-    return probe->result == 0;
-}
-
-bool is_credential_frame (const zlink::msg_t &msg_)
-{
-    return msg_.is_credential ();
+    probe->error_number = errno;
+    return probe->result == 0
+           || probe->result == zlink::pipe_t::read_admission_reject_consume;
 }
 }
 
-bool zlink::pipe_t::read_internal (msg_t *msg_, read_admission_fn *admission_,
-                                    void *userdata_,
-                                    bool *admission_failed_out_,
-                                    bool *admission_consumed_out_)
+template <bool WithAdmission>
+bool zlink::pipe_t::read_internal (msg_t *msg_,
+                                   read_admission_fn *admission_,
+                                   void *userdata_,
+                                   bool *admission_failed_out_,
+                                   bool *admission_consumed_out_)
 {
     if (unlikely (_state != active && _state != waiting_for_delimiter))
         return false;
-    if (admission_failed_out_)
-        *admission_failed_out_ = false;
-    if (admission_consumed_out_)
-        *admission_consumed_out_ = false;
+    if (WithAdmission) {
+        if (admission_failed_out_)
+            *admission_failed_out_ = false;
+        if (admission_consumed_out_)
+            *admission_consumed_out_ = false;
+    }
     if (unlikely (!_in_active)) {
         if (!_in_pipe->check_read ())
             return false;
@@ -961,33 +980,44 @@ bool zlink::pipe_t::read_internal (msg_t *msg_, read_admission_fn *admission_,
     }
 
     while (true) {
-        // Credential frames are private pipe bookkeeping and must be consumed
-        // before exposing the next application frame to admission.
-        if (admission_ && !_in_pipe->probe (&is_credential_frame)) {
-            pipe_read_admission_probe_t probe = {this, admission_, userdata_, 0};
-            if (!_in_pipe->probe_with_context (&invoke_pipe_read_admission,
-                                               &probe)) {
+        // Raw terminal and private bookkeeping frames do not need a
+        // whole-record lease. Classify and conditionally dequeue them in the
+        // same queue operation that runs admission for record starts.
+        if (WithAdmission && admission_) {
+            pipe_read_admission_probe_t probe = {this, admission_, userdata_, 0,
+                                                 errno};
+            const ypipe_read_result_t read_result =
+              _in_pipe->read_if (msg_, &invoke_pipe_record_admission, &probe);
+            if (read_result != ypipe_read_consumed) {
                 if (probe.result != 0 && admission_failed_out_)
                     *admission_failed_out_ = true;
-                // A negative two is a terminal admission error (for example
-                // lazy state allocation). Consume this record so its existing
-                // failure semantics remain distinct from EAGAIN capacity
-                // rejection, which must leave the frame queued.
-                if (probe.result == read_admission_reject_consume) {
-                    if (!_in_pipe->read (msg_)) {
-                        _in_active = false;
-                        return false;
-                    }
-                    if (admission_consumed_out_)
-                        *admission_consumed_out_ = true;
-                    return true;
-                }
-                if (probe.result == 0)
+                if (read_result == ypipe_read_empty)
                     _in_active = false;
+                errno = probe.error_number;
                 return false;
             }
-        }
-        if (!_in_pipe->read (msg_)) {
+            if (probe.result == read_admission_reject_consume) {
+                // A negative two is a terminal admission error (for example
+                // lazy state allocation). The conditional queue read consumed
+                // it atomically with the admission decision, unlike EAGAIN
+                // capacity rejection, which leaves the frame queued.
+                const int saved_errno = probe.error_number;
+                if (_registry_accounting) {
+                    const uint64_t frame_bytes = frame_accounted_bytes (msg_);
+                    const uint64_t counted_messages =
+                      counted_pending_message_ref (*msg_);
+                    get_ctx ()->_physical_queue_registry.release_committed_frame (
+                      _in_physical_queue, frame_bytes, counted_messages);
+                }
+                account_inbound_frame (msg_);
+                if (admission_failed_out_)
+                    *admission_failed_out_ = true;
+                if (admission_consumed_out_)
+                    *admission_consumed_out_ = true;
+                errno = saved_errno;
+                return true;
+            }
+        } else if (!_in_pipe->read (msg_)) {
             _in_active = false;
             return false;
         }
@@ -2363,10 +2393,12 @@ void zlink::pipe_t::process_pipe_term ()
     //  Otherwise we'll hang up in waiting_for_delimiter state till all
     //  pending messages are read.
     if (_state == active) {
-        bool pending_to_read = _in_pipe && _in_pipe->check_read ();
-        if (pending_to_read && _in_pipe->probe (is_delimiter)) {
-            msg_t msg;
-            pending_to_read = _in_pipe->read (&msg) ? false : _in_pipe && _in_pipe->check_read ();
+        bool pending_to_read = false;
+        if (_in_pipe) {
+            msg_t delimiter;
+            const ypipe_read_result_t delimiter_result =
+              _in_pipe->read_if (&delimiter, &consume_if_delimiter, NULL);
+            pending_to_read = delimiter_result == ypipe_read_rejected;
         }
 
         if (_delay && pending_to_read)
@@ -2565,11 +2597,6 @@ void zlink::pipe_t::terminate (bool delay_)
         flush_unlocked ();
     }
     pipe_debug_log (this, "terminate-end", _state, _delay, _endpoint_pair.identifier ().c_str ());
-}
-
-bool zlink::pipe_t::is_delimiter (const msg_t &msg_)
-{
-    return msg_.is_delimiter ();
 }
 
 uint64_t zlink::pipe_t::compute_lwm (uint64_t hwm_)

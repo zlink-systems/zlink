@@ -366,6 +366,38 @@ int zlink::part_helper_internal::take_recv_part (const std::shared_ptr<handle_st
     return take_recv_part (&state_->recv, part_out_, has_more_out_);
 }
 
+int zlink::part_helper_internal::take_recv_part (
+  const std::shared_ptr<handle_state_t> &state_,
+  zlink_msg_t *part_out_,
+  zlink_part_flag_t *has_more_out_,
+  const zlink_routing_id_t **source_node_rid_out_,
+  uint64_t *request_seq_out_,
+  uint64_t *transport_pair_id_out_,
+  uint64_t *transport_pair_generation_out_)
+{
+    if (!state_) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    std::lock_guard<std::mutex> lock (state_->mutex);
+    if (take_recv_part (&state_->recv, part_out_, has_more_out_) != 0)
+        return -1;
+    if (source_node_rid_out_) {
+        *source_node_rid_out_ = state_->recv.return_source_rid_as_null
+                                  ? NULL
+                                  : &state_->recv.source_node_rid;
+    }
+    if (request_seq_out_)
+        *request_seq_out_ = state_->recv.request_seq;
+    if (transport_pair_id_out_)
+        *transport_pair_id_out_ = state_->recv.transport_pair_id;
+    if (transport_pair_generation_out_)
+        *transport_pair_generation_out_ =
+          state_->recv.transport_pair_generation;
+    return 0;
+}
+
 void zlink::part_helper_internal::export_recv_metadata (
   const std::shared_ptr<handle_state_t> &state_,
   const zlink_routing_id_t **source_node_rid_out_,
@@ -381,20 +413,6 @@ void zlink::part_helper_internal::export_recv_metadata (
     }
     if (request_seq_out_)
         *request_seq_out_ = state_->recv.request_seq;
-}
-
-void zlink::part_helper_internal::export_recv_transport_pair (
-  const std::shared_ptr<handle_state_t> &state_,
-  uint64_t *transport_pair_id_out_,
-  uint64_t *transport_pair_generation_out_)
-{
-    if (!state_)
-        return;
-    std::lock_guard<std::mutex> lock (state_->mutex);
-    if (transport_pair_id_out_)
-        *transport_pair_id_out_ = state_->recv.transport_pair_id;
-    if (transport_pair_generation_out_)
-        *transport_pair_generation_out_ = state_->recv.transport_pair_generation;
 }
 
 void zlink::part_helper_internal::reset_send_sequence (send_sequence_state_t *state_)

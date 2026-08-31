@@ -53,12 +53,17 @@ void export_router_recv_part_metadata_view (const zlink_routing_id_t *source_nod
         *transport_pair_generation_out_ = metadata.transport_pair_generation;
 }
 
-void export_staged_router_transport_pair_view (
-  const std::shared_ptr<zlink::part_helper_internal::handle_state_t> &state_)
+int take_staged_router_recv_part (
+  const std::shared_ptr<zlink::part_helper_internal::handle_state_t> &state_,
+  zlink_msg_t *part_out_,
+  zlink_part_flag_t *has_more_out_,
+  const zlink_routing_id_t **source_node_rid_out_,
+  uint64_t *request_seq_out_)
 {
     router_recv_part_metadata_tls_t &metadata = router_recv_part_metadata_tls ();
-    zlink::part_helper_internal::export_recv_transport_pair (
-      state_, &metadata.transport_pair_id,
+    return zlink::part_helper_internal::take_recv_part (
+      state_, part_out_, has_more_out_, source_node_rid_out_, request_seq_out_,
+      &metadata.transport_pair_id,
       &metadata.transport_pair_generation);
 }
 
@@ -254,16 +259,15 @@ zlink_recv_result_t zlink_router_recv_part (void *router_,
             errno = EPROTO;
             return zlink::recv_result_internal::from_errno (errno);
         }
-        if (zlink::part_helper_internal::take_recv_part (helper_state, part_out_, has_more_out_)
+        if (take_staged_router_recv_part (
+              helper_state, part_out_, has_more_out_, source_node_rid_out_,
+              request_seq_out_)
             != 0) {
             revoke_router_receive_publication (handle, source_node_rid,
                                                request_seq);
             zlink::part_helper_internal::abort_recv_step (helper_state);
             return zlink::recv_result_internal::from_errno (errno);
         }
-        zlink::part_helper_internal::export_recv_metadata (helper_state, source_node_rid_out_,
-                                                           request_seq_out_);
-        export_staged_router_transport_pair_view (helper_state);
         zlink::part_helper_internal::complete_recv_step (helper_state, *has_more_out_);
         return ZLINK_RECV_OK;
     }
@@ -344,7 +348,9 @@ zlink_recv_result_t zlink_router_recv_part (void *router_,
             errno = EPROTO;
             return zlink::recv_result_internal::from_errno (errno);
         }
-        if (zlink::part_helper_internal::take_recv_part (helper_state, part_out_, has_more_out_)
+        if (take_staged_router_recv_part (
+              helper_state, part_out_, has_more_out_, source_node_rid_out_,
+              request_seq_out_)
             != 0) {
             revoke_router_receive_publication (handle, source_node_rid,
                                                request_seq);
@@ -352,7 +358,9 @@ zlink_recv_result_t zlink_router_recv_part (void *router_,
             return zlink::recv_result_internal::from_errno (errno);
         }
     } else {
-        if (zlink::part_helper_internal::take_recv_part (helper_state, part_out_, has_more_out_)
+        if (take_staged_router_recv_part (
+              helper_state, part_out_, has_more_out_, source_node_rid_out_,
+              request_seq_out_)
             != 0) {
             revoke_staged_router_receive_publication (handle, helper_state);
             zlink::part_helper_internal::abort_recv_step (helper_state);
@@ -360,9 +368,6 @@ zlink_recv_result_t zlink_router_recv_part (void *router_,
         }
     }
 
-    zlink::part_helper_internal::export_recv_metadata (helper_state, source_node_rid_out_,
-                                                       request_seq_out_);
-    export_staged_router_transport_pair_view (helper_state);
     zlink::part_helper_internal::complete_recv_step (helper_state, *has_more_out_);
     return ZLINK_RECV_OK;
 }

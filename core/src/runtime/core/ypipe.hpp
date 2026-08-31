@@ -148,13 +148,17 @@ template <typename T, int N> class ypipe_t ZLINK_FINAL : public ypipe_base_t<T>
         return (*fn_) (_queue.front ());
     }
 
-    bool probe_with_context (bool (*fn_) (const T &, void *), void *userdata_)
+    ypipe_read_result_t
+    read_if (T *value_, bool (*fn_) (const T &, void *), void *userdata_)
     {
-        const bool rc = check_read ();
-        if (!rc)
-            return false;
+        if (!check_read ())
+            return ypipe_read_empty;
+        if (!(*fn_) (_queue.front (), userdata_))
+            return ypipe_read_rejected;
 
-        return (*fn_) (_queue.front (), userdata_);
+        *value_ = _queue.front ();
+        _queue.pop ();
+        return ypipe_read_consumed;
     }
 
   protected:

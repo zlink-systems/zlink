@@ -217,8 +217,10 @@ class router_t : public routing_socket_base_t
     // name collision. The selected pipe takes the identity.
     bool _handover;
     // Direct session dispatch can adopt a route while public API and mailbox
-    // paths inspect it. Keep this ordinary (non-recursive) and never publish
-    // callbacks, monitor events, or pipe writes while it is held.
+    // paths inspect it. Keep this ordinary (non-recursive). Callbacks, monitor
+    // events, and observer-backed writes stay outside it; an ordinary pipe
+    // write may retain it as the pipe lifetime fence because pipe termination
+    // publishes sink callbacks only after dropping the pipe outbound lock.
     mutable std::mutex _out_pipes_sync;
     std::vector<zlink_msg_t> _dispatch_parts;
     std::map<pipe_t *, std::vector<zlink_msg_t>> _dispatch_parts_by_pipe;

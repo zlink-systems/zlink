@@ -315,10 +315,63 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
         // A generic receive may have prefetched this frame before the routed
         // API asks for it. It is no longer in the pipe queue, but admission
         // still runs before this routed call exposes it to the caller.
-        if (admission_ && (!_current_in
-                           || admission_ (_current_in, _prefetched_msg,
-                                          admission_userdata_) != 0))
-            return -1;
+        if (admission_
+            && pipe_t::requires_record_admission (_prefetched_msg)) {
+            const int admission_result =
+              _current_in
+                ? admission_ (_current_in, _prefetched_msg,
+                              admission_userdata_)
+                : -1;
+            if (admission_result != 0) {
+                const int saved_errno = errno;
+                if (admission_result
+                    == pipe_t::read_admission_reject_consume) {
+                    bool more =
+                      (_prefetched_msg.flags () & msg_t::more) != 0;
+                    int rc = _prefetched_msg.close ();
+                    errno_assert (rc == 0);
+                    rc = _prefetched_msg.init ();
+                    errno_assert (rc == 0);
+                    _prefetched = false;
+
+                    while (more) {
+                        msg_t discarded;
+                        rc = discarded.init ();
+                        errno_assert (rc == 0);
+                        pipe_t *discarded_pipe = NULL;
+                        rc = _fq.recvpipe (&discarded, &discarded_pipe);
+                        if (rc != 0) {
+                            rc = discarded.close ();
+                            errno_assert (rc == 0);
+                            break;
+                        }
+                        more = (discarded.flags () & msg_t::more) != 0;
+                        rc = discarded.close ();
+                        errno_assert (rc == 0);
+                    }
+
+                    rc = _prefetched_id.close ();
+                    errno_assert (rc == 0);
+                    rc = _prefetched_id.init ();
+                    errno_assert (rc == 0);
+                    _routing_id_sent = false;
+                    _more_in = false;
+                    if (_terminate_current_in && _current_in) {
+                        _current_in->terminate (true);
+                        _terminate_current_in = false;
+                    }
+                    _current_in = NULL;
+                }
+                errno = saved_errno;
+                return -1;
+            }
+        }
+        if (!_routing_id_sent) {
+            const int close_rc = _prefetched_id.close ();
+            errno_assert (close_rc == 0);
+            const int init_rc = _prefetched_id.init ();
+            errno_assert (init_rc == 0);
+        }
         if (source_rid_out_)
             copy_router_pipe_source_rid (_current_in, source_rid_out_);
         if (connection_id_out_ && _current_in)
@@ -344,11 +397,11 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
     }
 
     pipe_t *pipe = NULL;
-    int rc = admission_ ? _fq.recvpipe_with_admission (
+    int rc = admission_ ? _fq.recvpipe_with_record_admission (
                             msg_, &pipe, admission_, admission_userdata_)
                         : _fq.recvpipe (msg_, &pipe);
     while (rc == 0 && msg_->is_routing_id ())
-        rc = admission_ ? _fq.recvpipe_with_admission (
+        rc = admission_ ? _fq.recvpipe_with_record_admission (
                             msg_, &pipe, admission_, admission_userdata_)
                         : _fq.recvpipe (msg_, &pipe);
     if (rc != 0) {

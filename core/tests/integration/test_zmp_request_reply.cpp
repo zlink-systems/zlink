@@ -4792,32 +4792,55 @@ void test_router_lazy_state_failure_discards_record_tail ()
       zlink_connect (dealer, "inproc://zmp-router-lazy-state-oom"));
     msleep (SETTLE_TIME);
 
-    zlink_msg_t failed_head;
-    init_string_part (&failed_head, "failed-head");
-    TEST_ASSERT_SUCCESS_ERRNO (
-      reinterpret_cast<zlink::msg_t *> (&failed_head)
-        ->set_request_reply_metadata (
-          zlink::request_reply::request_type, 77));
+    // Consume the ROUTER's initial routing-id frame before taking the queue
+    // accounting baseline. Ordinary data must not create lazy request state.
+    send_raw_request_frame (dealer, "warmup", 6, ZLINK_PART_FINAL);
+    const zlink_routing_id_t *source_rid = NULL;
+    uint64_t request_seq = 0;
+    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    zlink_msg_t part;
+    zlink_msg_init (&part);
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (dealer, &failed_head, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_MORE));
-    send_raw_request_frame (dealer, "failed-tail", 11, ZLINK_PART_FINAL);
-    send_raw_request_frame (dealer, "record-after-oom", 16,
-                            ZLINK_PART_FINAL);
+      ZLINK_RECV_OK,
+      zlink_router_recv_part (router, &source_rid, &request_seq, &part,
+                              &has_more, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_STRING ("warmup", msg_to_string (&part).c_str ());
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
 
+    const uint64_t accounting_baseline =
+      read_request_reply_hwm_snapshot ().current_accounted_bytes;
     {
         const socket_handle_t router_handle = as_socket_handle (router);
         TEST_ASSERT_NOT_NULL (router_handle.socket);
         TEST_ASSERT_FALSE (router_handle.socket->has_request_reply_state ());
     }
+
+    // A consumed terminal LMSG must be closed even though admission failed.
+    std::vector<unsigned char> failed_single_payload (1024, 's');
+    std::atomic<int> failed_single_release_count (0);
+    zlink_msg_t failed_single;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_data (
+      &failed_single, &failed_single_payload[0], failed_single_payload.size (),
+      &count_reply_payload_free, &failed_single_release_count));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      reinterpret_cast<zlink::msg_t *> (&failed_single)
+        ->set_request_reply_metadata (
+          zlink::request_reply::request_type, 77));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_part (dealer, &failed_single, ZLINK_SEND_FLAGS_NONE,
+                       ZLINK_PART_FINAL));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&failed_single));
+    send_raw_request_frame (dealer, "record-after-single-oom", 23,
+                            ZLINK_PART_FINAL);
+    TEST_ASSERT_TRUE (
+      read_request_reply_hwm_snapshot ().current_accounted_bytes
+      > accounting_baseline);
+
     zlink::socket_reqrep_internal::test_set_request_reply_allocation_failpoint (
       zlink::socket_reqrep_internal::request_reply_allocation_lazy_state_create);
-
-    const zlink_routing_id_t *source_rid = NULL;
-    uint64_t request_seq = 0;
-    zlink_part_flag_t has_more = ZLINK_PART_MORE;
-    zlink_msg_t part;
     zlink_msg_init (&part);
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
@@ -4826,6 +4849,7 @@ void test_router_lazy_state_failure_discards_record_tail ()
                               &has_more, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+    TEST_ASSERT_TRUE (wait_for_free_count (failed_single_release_count, 1));
 
     zlink_msg_init (&part);
     TEST_ASSERT_EQUAL_INT (
@@ -4835,9 +4859,78 @@ void test_router_lazy_state_failure_discards_record_tail ()
     TEST_ASSERT_NOT_NULL (source_rid);
     TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
     TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
-    TEST_ASSERT_EQUAL_STRING ("record-after-oom",
+    TEST_ASSERT_EQUAL_STRING ("record-after-single-oom",
                               msg_to_string (&part).c_str ());
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+    TEST_ASSERT_EQUAL_UINT64 (
+      accounting_baseline,
+      read_request_reply_hwm_snapshot ().current_accounted_bytes);
+
+    // A multipart rejection closes both the initially consumed LMSG and the
+    // final tail while leaving the next record available on the same source.
+    std::vector<unsigned char> failed_head_payload (1024, 'h');
+    std::vector<unsigned char> failed_tail_payload (1536, 't');
+    std::atomic<int> failed_multipart_release_count (0);
+    zlink_msg_t failed_head;
+    zlink_msg_t failed_tail;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_data (
+      &failed_head, &failed_head_payload[0], failed_head_payload.size (),
+      &count_reply_payload_free, &failed_multipart_release_count));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_data (
+      &failed_tail, &failed_tail_payload[0], failed_tail_payload.size (),
+      &count_reply_payload_free, &failed_multipart_release_count));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      reinterpret_cast<zlink::msg_t *> (&failed_head)
+        ->set_request_reply_metadata (
+          zlink::request_reply::request_type, 78));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_part (dealer, &failed_head, ZLINK_SEND_FLAGS_NONE,
+                       ZLINK_PART_MORE));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_part (dealer, &failed_tail, ZLINK_SEND_FLAGS_NONE,
+                       ZLINK_PART_FINAL));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&failed_head));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&failed_tail));
+    send_raw_request_frame (dealer, "record-after-multipart-oom", 26,
+                            ZLINK_PART_FINAL);
+    TEST_ASSERT_TRUE (
+      read_request_reply_hwm_snapshot ().current_accounted_bytes
+      > accounting_baseline);
+
+    {
+        const socket_handle_t router_handle = as_socket_handle (router);
+        TEST_ASSERT_NOT_NULL (router_handle.socket);
+        TEST_ASSERT_FALSE (router_handle.socket->has_request_reply_state ());
+    }
+    zlink::socket_reqrep_internal::test_set_request_reply_allocation_failpoint (
+      zlink::socket_reqrep_internal::request_reply_allocation_lazy_state_create);
+    zlink_msg_init (&part);
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_INTERNAL_ERROR,
+      zlink_router_recv_part (router, &source_rid, &request_seq, &part,
+                              &has_more, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+    TEST_ASSERT_TRUE (
+      wait_for_free_count (failed_multipart_release_count, 2));
+
+    zlink_msg_init (&part);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_router_recv_part (router, &source_rid, &request_seq, &part,
+                              &has_more, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_NOT_NULL (source_rid);
+    TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_STRING ("record-after-multipart-oom",
+                              msg_to_string (&part).c_str ());
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+    TEST_ASSERT_EQUAL_UINT64 (
+      accounting_baseline,
+      read_request_reply_hwm_snapshot ().current_accounted_bytes);
 
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);

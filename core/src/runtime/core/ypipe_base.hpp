@@ -19,6 +19,13 @@ struct ypipe_replacement_accounting_t
     uint64_t complete_messages;
 };
 
+enum ypipe_read_result_t
+{
+    ypipe_read_empty,
+    ypipe_read_rejected,
+    ypipe_read_consumed
+};
+
 // ypipe_base abstracts ypipe and ypipe_conflate specific
 // classes, one is selected according to a the conflate
 // socket option
@@ -56,8 +63,8 @@ template <typename T> class ypipe_base_t
     virtual bool check_read () = 0;
     virtual bool read (T *value_) = 0;
     virtual bool probe (bool (*fn_) (const T &)) = 0;
-    virtual bool probe_with_context (bool (*fn_) (const T &, void *),
-                                     void *userdata_) = 0;
+    virtual ypipe_read_result_t
+    read_if (T *value_, bool (*fn_) (const T &, void *), void *userdata_) = 0;
 };
 }
 

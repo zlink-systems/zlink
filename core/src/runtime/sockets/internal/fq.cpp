@@ -180,19 +180,20 @@ int zlink::fq_t::recv (msg_t *msg_)
 
 int zlink::fq_t::recvpipe (msg_t *msg_, pipe_t **pipe_)
 {
-    return recvpipe_internal (msg_, pipe_);
+    return recvpipe_internal<false> (msg_, pipe_, NULL, NULL);
 }
 
-int zlink::fq_t::recvpipe_with_admission (msg_t *msg_, pipe_t **pipe_,
-                                           pipe_t::read_admission_fn *admission_,
-                                           void *userdata_)
+int zlink::fq_t::recvpipe_with_record_admission (
+  msg_t *msg_, pipe_t **pipe_, pipe_t::read_admission_fn *admission_,
+  void *userdata_)
 {
-    return recvpipe_internal (msg_, pipe_, admission_, userdata_);
+    return recvpipe_internal<true> (msg_, pipe_, admission_, userdata_);
 }
 
-int zlink::fq_t::recvpipe_internal (msg_t *msg_, pipe_t **pipe_,
-                                     pipe_t::read_admission_fn *admission_,
-                                     void *userdata_)
+template <bool WithAdmission>
+int zlink::fq_t::recvpipe_internal (
+  msg_t *msg_, pipe_t **pipe_, pipe_t::read_admission_fn *admission_,
+  void *userdata_)
 {
     normalize_state ();
 
@@ -236,28 +237,32 @@ int zlink::fq_t::recvpipe_internal (msg_t *msg_, pipe_t **pipe_,
 #endif
         bool admission_failed = false;
         bool admission_consumed = false;
-        const bool fetched = admission_
-                               ? current_pipe->read_with_admission (
-                                   msg_, admission_, userdata_, &admission_failed,
-                                   &admission_consumed)
-                               : current_pipe->read (msg_);
+        const bool fetched =
+          WithAdmission
+            ? current_pipe->read_with_record_admission (
+                msg_, admission_, userdata_, &admission_failed,
+                &admission_consumed)
+            : current_pipe->read (msg_);
 
-        if (admission_failed) {
+        if (WithAdmission && admission_failed) {
             const int saved_errno = errno;
             if (admission_consumed) {
-                bool more = (msg_->flags () & msg_t::more) != 0;
-                while (more) {
+                while (true) {
+                    const bool more =
+                      (msg_->flags () & msg_t::more) != 0;
                     rc = msg_->close ();
                     errno_assert (rc == 0);
                     rc = msg_->init ();
                     errno_assert (rc == 0);
+                    if (!more)
+                        break;
                     if (!current_pipe->read (msg_))
                         break;
-                    more = (msg_->flags () & msg_t::more) != 0;
                 }
+            } else {
+                rc = msg_->init ();
+                errno_assert (rc == 0);
             }
-            rc = msg_->init ();
-            errno_assert (rc == 0);
             errno = saved_errno;
             return -1;
         }

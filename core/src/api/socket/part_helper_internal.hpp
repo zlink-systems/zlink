@@ -154,12 +154,16 @@ int take_recv_part (recv_sequence_state_t *recv_,
 int take_recv_part (const std::shared_ptr<handle_state_t> &state_,
                     zlink_msg_t *part_out_,
                     zlink_part_flag_t *has_more_out_);
+int take_recv_part (const std::shared_ptr<handle_state_t> &state_,
+                    zlink_msg_t *part_out_,
+                    zlink_part_flag_t *has_more_out_,
+                    const zlink_routing_id_t **source_node_rid_out_,
+                    uint64_t *request_seq_out_,
+                    uint64_t *transport_pair_id_out_,
+                    uint64_t *transport_pair_generation_out_);
 void export_recv_metadata (const std::shared_ptr<handle_state_t> &state_,
                            const zlink_routing_id_t **source_node_rid_out_,
                            uint64_t *request_seq_out_);
-void export_recv_transport_pair (const std::shared_ptr<handle_state_t> &state_,
-                                  uint64_t *transport_pair_id_out_,
-                                  uint64_t *transport_pair_generation_out_);
 void reset_send_sequence (send_sequence_state_t *state_);
 void reset_recv_sequence (recv_sequence_state_t *state_);
 int prepare_send_step (void *handle_,

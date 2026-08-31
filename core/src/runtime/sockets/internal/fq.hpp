@@ -31,9 +31,9 @@ class fq_t
 
     int recv (msg_t *msg_);
     int recvpipe (msg_t *msg_, pipe_t **pipe_);
-    int recvpipe_with_admission (msg_t *msg_, pipe_t **pipe_,
-                                 pipe_t::read_admission_fn *admission_,
-                                 void *userdata_);
+    int recvpipe_with_record_admission (
+      msg_t *msg_, pipe_t **pipe_, pipe_t::read_admission_fn *admission_,
+      void *userdata_);
     bool has_in ();
 
 #ifdef ZLINK_BUILD_TESTS
@@ -44,9 +44,10 @@ class fq_t
 
   private:
     bool try_get_pipe_index (pipe_t *pipe_, pipes_t::size_type *index_out_);
+    template <bool WithAdmission>
     int recvpipe_internal (msg_t *msg_, pipe_t **pipe_,
-                           pipe_t::read_admission_fn *admission_ = NULL,
-                           void *userdata_ = NULL);
+                           pipe_t::read_admission_fn *admission_,
+                           void *userdata_);
     void normalize_state ();
     pipes_t _pipes;
 

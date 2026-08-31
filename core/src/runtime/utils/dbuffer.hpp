@@ -8,6 +8,7 @@
 
 #include "utils/mutex.hpp"
 #include "core/msg.hpp"
+#include "core/ypipe_base.hpp"
 
 namespace zlink
 {
@@ -135,11 +136,23 @@ template <> class dbuffer_t<msg_t>
         return (*fn_) (*_front);
     }
 
-    bool probe_with_context (bool (*fn_) (const msg_t &, void *),
-                             void *userdata_)
+    ypipe_read_result_t
+    read_if (msg_t *value_, bool (*fn_) (const msg_t &, void *), void *userdata_)
     {
+        if (!value_)
+            return ypipe_read_rejected;
+
         scoped_lock_t lock (_sync);
-        return _has_msg && (*fn_) (*_front, userdata_);
+        if (!_has_msg)
+            return ypipe_read_empty;
+        if (!(*fn_) (*_front, userdata_))
+            return ypipe_read_rejected;
+
+        zlink_assert (_front->check ());
+        *value_ = *_front;
+        _front->init (); // avoid double free
+        _has_msg = false;
+        return ypipe_read_consumed;
     }
 
     void discard_accounting (uint64_t (*accounted_bytes_) (const msg_t &),

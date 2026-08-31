@@ -8,6 +8,7 @@
 #include "core/msg.hpp"
 #include "core/pipe.hpp"
 #include "core/recv_internal.hpp"
+#include "protocol/zmp_protocol.hpp"
 #include "api/socket/socket_api_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "sockets/common/socket_base.hpp"
@@ -148,6 +149,21 @@ struct direct_recv_result_t
     std::string payload;
 };
 
+struct prefetched_reject_consume_probe_t
+{
+    prefetched_reject_consume_probe_t () :
+        expected_pipe (NULL), callback_count (0), expected_pipe_seen (false),
+        more_seen (false), metadata_seen (false)
+    {
+    }
+
+    zlink::pipe_t *expected_pipe;
+    int callback_count;
+    bool expected_pipe_seen;
+    bool more_seen;
+    bool metadata_seen;
+};
+
 class passive_pipe_sink_t : public zlink::i_pipe_events
 {
   public:
@@ -200,6 +216,44 @@ void write_internal_pipe_part (zlink::pipe_t *pipe_,
     TEST_ASSERT_TRUE (pipe_->write (&msg));
     pipe_->flush ();
     TEST_ASSERT_SUCCESS_ERRNO (msg.close ());
+}
+
+void write_internal_admitted_pipe_part (zlink::pipe_t *pipe_,
+                                        const char *payload_,
+                                        bool more_,
+                                        uint64_t request_sequence_)
+{
+    zlink::msg_t msg;
+    const size_t size = std::strlen (payload_);
+    TEST_ASSERT_SUCCESS_ERRNO (msg.init_size (size));
+    memcpy (msg.data (), payload_, size);
+    if (more_)
+        msg.set_flags (zlink::msg_t::more);
+    if (request_sequence_ != 0)
+        TEST_ASSERT_SUCCESS_ERRNO (msg.set_request_reply_metadata (
+          zlink::zmp_kind_request, request_sequence_));
+    TEST_ASSERT_TRUE (pipe_->write (&msg));
+    pipe_->flush ();
+    TEST_ASSERT_SUCCESS_ERRNO (msg.close ());
+}
+
+int reject_prefetched_record_and_consume (zlink::pipe_t *pipe_,
+                                          const zlink::msg_t &msg_,
+                                          void *userdata_)
+{
+    prefetched_reject_consume_probe_t *const probe =
+      static_cast<prefetched_reject_consume_probe_t *> (userdata_);
+    if (!probe) {
+        errno = EFAULT;
+        return zlink::pipe_t::read_admission_reject_consume;
+    }
+
+    ++probe->callback_count;
+    probe->expected_pipe_seen = pipe_ == probe->expected_pipe;
+    probe->more_seen = (msg_.flags () & zlink::msg_t::more) != 0;
+    probe->metadata_seen = msg_.get_request_reply_metadata (NULL, NULL);
+    errno = ENOMEM;
+    return zlink::pipe_t::read_admission_reject_consume;
 }
 
 void set_socket_timeouts (void *socket_)
@@ -946,6 +1000,109 @@ void test_router_empty_pinned_pipe_aborts_multipart_before_next_peer_record ()
       true, false, true);
 }
 
+void run_router_prefetched_reject_consume_discards_record (bool multipart_)
+{
+    void *router_handle =
+      zlink_socket (get_test_context (), ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_NOT_NULL (router_handle);
+
+    socket_handle_t router_pin = as_socket_handle (router_handle);
+    TEST_ASSERT_NOT_NULL (router_pin.socket);
+    zlink::router_t *const router =
+      static_cast<zlink::router_t *> (router_pin.socket);
+    zlink::object_t *parents[2] = {router, router};
+    zlink::pipe_t *pipes[2] = {NULL, NULL};
+    const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
+    const bool conflates[2] = {false, false};
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflates, true));
+
+    passive_pipe_sink_t peer_sink;
+    pipes[1]->set_event_sink (&peer_sink);
+
+    const char *const peer_id =
+      multipart_ ? "prefetched-multipart" : "prefetched-single";
+    write_internal_pipe_message (pipes[1], peer_id, true);
+    if (multipart_) {
+        // MORE alone requires whole-record admission. Keep this record raw so
+        // the test also proves that consuming its prefetched head drains the
+        // raw tail rather than exposing it as a new record.
+        write_internal_admitted_pipe_part (
+          pipes[1], "rejected-multipart-head", true, 0);
+        write_internal_admitted_pipe_part (
+          pipes[1], "rejected-multipart-tail", false, 0);
+    } else {
+        // A terminal frame requires admission only when it carries request /
+        // reply metadata.
+        write_internal_admitted_pipe_part (
+          pipes[1], "rejected-single", false, 101);
+    }
+    write_internal_admitted_pipe_part (
+      pipes[1], "record-after-reject-consume", false, 0);
+    zlink::session_termination_test_access_t::attach_socket_pipe (
+      router, pipes[0]);
+
+    // Match the readiness/poller path: xhas_in removes the first application
+    // frame from the pipe and stores it in ROUTER::_prefetched_msg.
+    TEST_ASSERT_TRUE (router->xhas_in ());
+
+    prefetched_reject_consume_probe_t probe;
+    probe.expected_pipe = pipes[0];
+    zlink::msg_t rejected;
+    TEST_ASSERT_SUCCESS_ERRNO (rejected.init ());
+    zlink_routing_id_t rejected_source;
+    memset (&rejected_source, 0, sizeof (rejected_source));
+    zlink::pipe_t *rejected_source_pipe = NULL;
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      -1, router->xrecv_routed (
+            &rejected, &rejected_source, NULL, &rejected_source_pipe,
+            &reject_prefetched_record_and_consume, &probe));
+    TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
+    TEST_ASSERT_EQUAL_INT (1, probe.callback_count);
+    TEST_ASSERT_TRUE (probe.expected_pipe_seen);
+    TEST_ASSERT_EQUAL (multipart_, probe.more_seen);
+    TEST_ASSERT_EQUAL (!multipart_, probe.metadata_seen);
+    TEST_ASSERT_NULL (rejected_source_pipe);
+    TEST_ASSERT_EQUAL_UINT64 (0, rejected.size ());
+    TEST_ASSERT_SUCCESS_ERRNO (rejected.close ());
+
+    // The rejected single frame, or every frame of the rejected multipart
+    // record, must be gone. A second readiness prefetch must therefore land on
+    // the following independent record.
+    TEST_ASSERT_TRUE (router->xhas_in ());
+    zlink::msg_t next;
+    TEST_ASSERT_SUCCESS_ERRNO (next.init ());
+    zlink_routing_id_t next_source;
+    memset (&next_source, 0, sizeof (next_source));
+    zlink::pipe_t *next_source_pipe = NULL;
+    TEST_ASSERT_SUCCESS_ERRNO (router->xrecv_routed (
+      &next, &next_source, NULL, &next_source_pipe));
+    TEST_ASSERT_EQUAL_PTR (pipes[0], next_source_pipe);
+    TEST_ASSERT_EQUAL_UINT (std::strlen (peer_id), next_source.size);
+    TEST_ASSERT_EQUAL_MEMORY (peer_id, next_source.data, next_source.size);
+    TEST_ASSERT_EQUAL_UINT (
+      std::strlen ("record-after-reject-consume"), next.size ());
+    TEST_ASSERT_EQUAL_MEMORY (
+      "record-after-reject-consume", next.data (), next.size ());
+    TEST_ASSERT_FALSE ((next.flags () & zlink::msg_t::more) != 0);
+    TEST_ASSERT_EQUAL_INT (1, probe.callback_count);
+    TEST_ASSERT_SUCCESS_ERRNO (next.close ());
+
+    router_pin = socket_handle_t ();
+    close_zero_linger (router_handle);
+    zlink::ctx_t *const ctx =
+      static_cast<zlink::ctx_t *> (get_test_context ());
+    TEST_ASSERT_SUCCESS_ERRNO (
+      ctx->wait_for_socket_count_at_most (0, 5000));
+}
+
+void test_router_prefetched_reject_consume_discards_single_and_multipart_records ()
+{
+    run_router_prefetched_reject_consume_discards_record (false);
+    run_router_prefetched_reject_consume_discards_record (true);
+}
+
 int main ()
 {
     setup_test_environment ();
@@ -963,5 +1120,7 @@ int main ()
       test_router_blocking_followup_does_not_retry_across_aborted_record);
     RUN_TEST (
       test_router_empty_pinned_pipe_aborts_multipart_before_next_peer_record);
+    RUN_TEST (
+      test_router_prefetched_reject_consume_discards_single_and_multipart_records);
     return UNITY_END ();
 }
