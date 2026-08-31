@@ -130,39 +130,8 @@ correlation은 framework가 처리한다.
 등장하지만 — 그걸 받쳐 주는 공통 프레임워크는 없어서, 팀은 자기 장르의 방식을
 골라 그 구조를 소켓부터 다시 만든다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart TB
-  subgraph row1[" "]
-    direction LR
-    subgraph mmo["① zone 분할형 — MMORPG"]
-      direction LR
-      C1["client"] --> GW["gateway"] --> Z1["zone 서버 A"]
-      GW --> Z2["zone 서버 B"]
-      Z1 <-.->|"경계 넘으면 서로 넘겨줌<br/>(자체 프로토콜)"| Z2
-    end
-    subgraph rm["② lobby + room형 — 캐주얼·MO·보드게임"]
-      direction LR
-      C2["client"] --> LO["lobby / 매칭"] --> R1["room 서버들<br/>(방 단위 상태)"]
-    end
-    mmo ~~~ rm
-  end
-  subgraph row2[" "]
-    direction LR
-    subgraph ded["③ matchmaker + dedicated형 — 세션 기반"]
-      direction LR
-      C3["client"] --> MM["matchmaker<br/>(ticket 큐)"] --> FL["dedicated 서버 fleet<br/>(판마다 프로세스 할당)"]
-    end
-    subgraph act["④ 분산 actor 서비스형 — 메타·소셜 백엔드"]
-      direction LR
-      C4["client"] --> AP["API 서버<br/>(stateless front-end)"] --> AC["actor 클러스터<br/>(플레이어·길드 단위 상태,<br/>노드 간 위치 투명)"]
-    end
-    ded ~~~ act
-  end
-  row1 ~~~ row2
-  style row1 fill:none,stroke:none
-  style row2 fill:none,stroke:none
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-arch-existing.html" title="게임 백엔드 4가지 유형 — 기존 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-arch-existing.html" target="_blank">↗ 크게 보기</a></p>
 
 - **① zone 분할.** 월드를 지리적 구역으로 나눠 구역마다 서버(노드)가
   담당하고, 캐릭터가 경계를 넘으면 시뮬레이션을 인접 구역 서버로 넘긴다. 대규모
@@ -213,41 +182,8 @@ flowchart TB
 
 위 "기존 방식" 4분할 그림과 같은 자리에서, ZLink로는 각 방식이 이렇게 조립된다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart TB
-  subgraph zrow1[" "]
-    direction LR
-    subgraph zmmo["① zone 분할 — ZLink"]
-      direction LR
-      ZC1["client"] --> ZGW1["API 서버<br/>(route client)"] --> ZRM1["zone 서버 A<br/>(RouteMesh 노드)"]
-      ZGW1 --> ZRM2["zone 서버 B<br/>(RouteMesh 노드)"]
-      ZRM1 <-.->|"경계 넘으면<br/>actor 크로스노드 relocation"| ZRM2
-    end
-    subgraph zrm["② lobby + room — ZLink"]
-      direction LR
-      ZC2["client"] --> ZES["Entry Spot<br/>(입장·매칭)"] --> ZRS["room spot<br/>(GetOrCreate)"]:::spot
-    end
-    zmmo ~~~ zrm
-  end
-  subgraph zrow2[" "]
-    direction LR
-    subgraph zded["③ matchmaker + dedicated — ZLink"]
-      direction LR
-      ZC3["client"] --> ZMM["channel handler<br/>(매칭)"] --> ZRS2["room spot<br/>(GetOrCreate)"]:::spot
-      ZC3 -.->|"매칭 후 STREAM 직접 접속"| ZRS2
-    end
-    subgraph zact["④ actor 서비스 — ZLink"]
-      direction LR
-      ZC4["client"] --> ZAPI4["API 서버"] --> ZIS["Instance Spot<br/>(엔티티 id, cold activation)"]:::spot
-    end
-    zded ~~~ zact
-  end
-  zrow1 ~~~ zrow2
-  style zrow1 fill:none,stroke:none
-  style zrow2 fill:none,stroke:none
-  classDef spot fill:#e8f5e9,stroke:#2e7d32,stroke-width:4px,color:#1b5e20
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-arch-zlink.html" title="게임 백엔드 4가지 유형 — ZLink 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-arch-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
 초록(굵은 테두리)이 SPOT 계열 primitive다. 위 "기존 방식" 그림과 대조되는 지점은
 바로 여기다 — 기존에는 방식마다 인프라(전용 fleet orchestrator, sticky routing,
@@ -460,47 +396,13 @@ ZLink는 이 중 **연결·세션(STREAM), room·상태 단위(SPOT), 서버 간
 
 **기존 방식** — 락 획득·해제가 매 요청마다 왕복한다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    Client["클라이언트 앱"]
-    LB["L7 LB / gateway"]:::infra
-    Api["API 서버들 ×N<br/>(stateless)"]:::app
-    Lock["Redis 분산 락<br/>(길드 id별 lock)"]:::extra
-    DB[("길드 상태 DB")]:::infra
-
-    Client -- "가입·기부 등 HTTP" --> LB --> Api
-    Api -- "① lock 획득" --> Lock
-    Api -- "② load-modify-store" --> DB
-    Api -- "③ lock 해제" --> Lock
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-    classDef extra fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#bf360c
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing.html" title="길드 상태 변경 — 기존 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-guild-existing.html" target="_blank">↗ 크게 보기</a></p>
 
 **ZLink 방식** — 락이 사라지고, 길드 id가 곧 그 요청이 도착할 spot 주소가 된다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    Client2["클라이언트 앱"]
-    LB2["L7 LB / gateway"]:::infra
-    Api2["API 서버들 ×N<br/>ASP.NET Core + ZLink<br/>route client"]:::app
-    Guild["GuildSpot ×길드 수<br/>(Instance Spot)<br/>길드id owner · 직렬 실행"]:::spot
-    DB2[("길드 상태 DB")]:::infra
-    Store["location store<br/>(descriptor rows)"]:::infra
-
-    Client2 -- "가입·기부 등 HTTP" --> LB2 --> Api2
-    Api2 -- "owner routing by 길드id (직접)" --> Guild
-    Guild -- "업무 규칙에 맞는 시점에 저장" --> DB2
-    Api2 -.->|"주소 해석"| Store
-    Guild -.->|"등록"| Store
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-    classDef spot fill:#e8f5e9,stroke:#2e7d32,stroke-width:4px,color:#1b5e20
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink.html" title="길드 상태 변경 — ZLink 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-guild-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
 같은 길드로 온 요청은 항상 같은 GuildSpot의 큐를 통과하므로, 두 번째 요청은 첫
 번째가 끝난 뒤에야 처리된다 — 락을 잡고 있는 시간만큼 다른 요청이 막히는 게 아니라,
@@ -596,55 +498,14 @@ Redis(캐시) + Kafka(이벤트) + LB/K8s — 은 **stateless 요청/응답**에
 
 **기존 방식** — 실시간 기능을 위한 구성 요소(주황)가 본체만큼 추가된다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    Client["클라이언트 앱"]
-    LB["L7 LB / gateway"]:::infra
-    SLB["sticky LB"]:::extra
-    WS["WebSocket 서버 ×N<br/>(고객 연결만 보유, 로직 없음)"]:::extra
-    A["앱 서버 A<br/>(주문·조회 처리)"]:::app
-    B["앱 서버 B<br/>(주문 #123 배달 상태 변경)"]:::app
-    RP["Redis pub/sub"]:::extra
-    RL["Redis 분산 락"]:::extra
-
-    Client -- "HTTP (주문·조회)" --> LB
-    LB --> A
-    LB --> B
-    Client <-->|"실시간 연결"| SLB
-    SLB <--> WS
-    B -- "고객이 어느 WS인지 몰라 배달 상태 방송" --> RP
-    RP -- "구독 → 보유한 WS가 push" --> WS
-    A -.->|"같은 주문 동시 접근 → 직렬화"| RL
-    B -.-> RL
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-    classDef extra fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#bf360c
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing.html" title="기존 방식 — 배달 주문 앱" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-delivery-existing.html" target="_blank">↗ 크게 보기</a></p>
 
 **ZLink 방식** — 주황 조각이 전부 사라지고, node·actor·spot 위치정보를 제공하는
 location store 하나가 남는다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    Client2["클라이언트 앱"]
-    LB2["L7 LB / gateway<br/>(HTTP는 그대로)"]:::infra
-    App2["앱 서버 ×N<br/>API + ZLink<br/>Instance Spot(주문 하나 직렬 소유)<br/>— 분산 락 불필요"]:::spot
-    Sess2["Session 서버 ×N<br/>WebSocket 지원 · 고객 세션 보유<br/>(host relocation 단위 → 무중단 패치)"]:::app
-    Store["location store<br/>(descriptor rows)"]:::infra
-
-    Client2 -- "HTTP (주문·조회)" --> LB2 --> App2
-    Client2 <-->|"WebSocket"| Sess2
-    App2 <-->|"요청 relay · 배달 상태 push — channel 직접 (브로커·LB 없이)"| Sess2
-    App2 -.->|"주소 해석"| Store
-    Sess2 -.->|"세션 등록"| Store
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-    classDef spot fill:#e8f5e9,stroke:#2e7d32,stroke-width:4px,color:#1b5e20
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink.html" title="ZLink 방식 — 배달 주문 앱" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-delivery-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
 sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 세 조각이 사라진다. 순서는
 **Instance Spot**이, 실시간 연결은 shell 서버 대신 **Session 서버**(STREAM)가, 서버 간
@@ -765,71 +626,15 @@ stateful stream processor(Kafka Streams/Flink)로 상태를 소비자 곁에 두
 
 **기존 방식** — 순서 처리를 위한 파이프라인 조각(주황)이 본체만큼 추가된다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    Client["클라이언트 앱"]
-    LB["L7 LB / gateway<br/>(K8s Ingress)"]:::infra
-    Api["API 서버들 ×N<br/>(stateless)"]:::app
-    LOG["Kafka log — 주문 처리 경로의 순서 담당<br/>(OrderId key partition)"]:::extra
-    CG["주문 처리 소비자 ×N<br/>consumer group · offset · rebalance<br/>version check · dedupe"]:::extra
-    SVC["서버 간 호출용 LB<br/>(K8s Service · service discovery)"]:::extra
-    INV["재고 · 결제 서비스들 ×N"]:::app
-    CACHE["캐시<br/>(반복 읽기 회피)"]:::extra
-    DB[("주문 상태 DB")]:::infra
-    RM[("조회용 read model")]:::extra
-    JOB["lag 모니터링 ·<br/>재동기화 잡"]:::extra
-
-    Client -- "주문 HTTP" --> LB --> Api
-    Api -- "event append" --> LOG
-    LOG -- "같은 OrderId는 같은 partition" --> CG
-    CG -- "이벤트마다 load-modify-store" --> DB
-    CG <-.-> CACHE
-    CACHE -.miss.-> DB
-    CG -- "재고 확보 · 결제 승인<br/>(HTTP/gRPC)" --> SVC --> INV
-    CG -- "갱신" --> RM
-    Client -- "조회 HTTP" --> LB
-    Api -.-> RM
-    JOB -.보정.-> DB
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-    classDef extra fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#bf360c
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-order-existing.html" title="주문 처리 — 기존 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-order-existing.html" target="_blank">↗ 크게 보기</a></p>
 
 **ZLink 방식** — Kafka를 대체하는 것이 아니다. **주문 처리 경로에서** 파이프라인
 조각(주황)이 사라지고, Kafka는 자기 본연의 자리 — 확정된 사실을 독립 시스템들에
 전파하고 replay가 필요한 이벤트를 보존하는 durable log — 로 남는다(회색).
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    Client2["클라이언트 앱"]
-    LB2["L7 LB / gateway<br/>(K8s Ingress — HTTP 진입은 그대로)"]:::infra
-    Api2["API 서버들 ×N<br/>ASP.NET Core + ZLink<br/>route client"]:::app
-    Spot["OrderWorkflow 서버들 ×N<br/>OrderWorkflowSpot<br/>(OrderId owner · 직렬 실행 · hot state)"]:::spot
-    INV2["재고 · 결제 서비스들 ×N<br/>(ZLink channel member)"]:::app
-    DB2[("주문 상태 DB")]:::infra
-    LOG2[("Kafka log — 남는 역할:<br/>외부 시스템 전파 · replay용 보존")]:::infra
-    EXT["정산 · 분석 · 타 팀 시스템<br/>(독립 소비자들)"]:::infra
-    Store["location store<br/>(descriptor rows)"]:::infra
-
-    Client2 -- "주문 HTTP" --> LB2 --> Api2
-    Api2 -- "owner routing by OrderId (직접)" --> Spot
-    Spot -- "channel name으로 호출 (직접)<br/>재고 확보 · 결제 승인" --> INV2
-    Spot -- "업무 규칙에 맞는 시점에 저장" --> DB2
-    Spot -- "확정 사실 발행" --> LOG2
-    LOG2 --> EXT
-    Client2 -- "조회 HTTP" --> LB2
-    Api2 -.조회.-> DB2
-    Api2 -.->|"주소 해석"| Store
-    Spot -.->|"주소 해석"| Store
-    INV2 -.->|등록| Store
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-    classDef spot fill:#e8f5e9,stroke:#2e7d32,stroke-width:4px,color:#1b5e20
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-order-zlink.html" title="주문 처리 — ZLink 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-order-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
 두 그림에서 Kafka의 색이 바뀐 것이 핵심이다. 처리 경로 **안에서** 순서를 담당하던
 Kafka(주황)가 처리 경로 **밖으로** 나가 전파·보존만 맡는다(회색). 그러면서 순서
@@ -1450,15 +1255,8 @@ connection도 자동으로 새로 연결되거나 정리된다 — 설정 파일
 
 === "C#/.NET"
 
-    ```mermaid
-    flowchart LR
-      App[ASP.NET Core 앱] --> FW[ZLink Framework]
-      FW --> CM[channel messaging<br/>request · send]
-      FW --> PS[PUB / SUB<br/>event fan-out]
-      FW --> SP[SPOT<br/>room·stage·zone·actor]
-      FW --> ST[STREAM<br/>외부 client connector]
-      CM & PS & SP & ST --> ZB[zlink .NET 바인딩]
-    ```
+    <iframe class="zlink-diagram" src="/common/diagrams/01-lang-dotnet.html" title="ZLink 계층 — .NET" loading="lazy" style="width:100%;border:0"></iframe>
+    <p><a href="/common/diagrams/01-lang-dotnet.html" target="_blank">↗ 크게 보기</a></p>
 
     | 축 | 사용자에게 보이는 것 | 가이드 챕터 |
     | --- | --- | --- |
@@ -1472,15 +1270,8 @@ connection도 자동으로 새로 연결되거나 정리된다 — 설정 파일
 
 === "C++"
 
-    ```mermaid
-    flowchart LR
-      App[C++ 앱] --> FW[ZLink Framework]
-      FW --> CM[channel messaging<br/>request · send]
-      FW --> PS[PUB / SUB<br/>event fan-out]
-      FW --> SP[SPOT<br/>room·stage·zone·actor]
-      FW --> ST[STREAM<br/>외부 client connector]
-      CM & PS & SP & ST --> ZB[zlink C++ 바인딩]
-    ```
+    <iframe class="zlink-diagram" src="/common/diagrams/01-lang-cpp.html" title="ZLink 계층 — C++" loading="lazy" style="width:100%;border:0"></iframe>
+    <p><a href="/common/diagrams/01-lang-cpp.html" target="_blank">↗ 크게 보기</a></p>
 
     | 축 | 사용자에게 보이는 것 | 가이드 챕터 |
     | --- | --- | --- |
@@ -1494,15 +1285,8 @@ connection도 자동으로 새로 연결되거나 정리된다 — 설정 파일
 
 === "Java"
 
-    ```mermaid
-    flowchart LR
-      App[Spring Boot 앱] --> FW[ZLink Framework]
-      FW --> CM[channel messaging<br/>request · send]
-      FW --> PS[PUB / SUB<br/>event fan-out]
-      FW --> SP[SPOT<br/>room·stage·zone·actor]
-      FW --> ST[STREAM<br/>외부 client connector]
-      CM & PS & SP & ST --> ZB[zlink Spring Boot 바인딩]
-    ```
+    <iframe class="zlink-diagram" src="/common/diagrams/01-lang-java.html" title="ZLink 계층 — Spring Boot" loading="lazy" style="width:100%;border:0"></iframe>
+    <p><a href="/common/diagrams/01-lang-java.html" target="_blank">↗ 크게 보기</a></p>
 
     | 축 | 사용자에게 보이는 것 | 가이드 챕터 |
     | --- | --- | --- |
@@ -1516,15 +1300,8 @@ connection도 자동으로 새로 연결되거나 정리된다 — 설정 파일
 
 === "Kotlin"
 
-    ```mermaid
-    flowchart LR
-      App[Spring Boot 앱] --> FW[ZLink Framework]
-      FW --> CM[channel messaging<br/>request · send]
-      FW --> PS[PUB / SUB<br/>event fan-out]
-      FW --> SP[SPOT<br/>room·stage·zone·actor]
-      FW --> ST[STREAM<br/>외부 client connector]
-      CM & PS & SP & ST --> ZB[zlink Spring Boot 바인딩]
-    ```
+    <iframe class="zlink-diagram" src="/common/diagrams/01-lang-kotlin.html" title="ZLink 계층 — Spring Boot" loading="lazy" style="width:100%;border:0"></iframe>
+    <p><a href="/common/diagrams/01-lang-kotlin.html" target="_blank">↗ 크게 보기</a></p>
 
     | 축 | 사용자에게 보이는 것 | 가이드 챕터 |
     | --- | --- | --- |
@@ -1538,15 +1315,8 @@ connection도 자동으로 새로 연결되거나 정리된다 — 설정 파일
 
 === "Node/TypeScript"
 
-    ```mermaid
-    flowchart LR
-      App[NestJS 앱] --> FW[ZLink Framework]
-      FW --> CM[channel messaging<br/>request · send]
-      FW --> PS[PUB / SUB<br/>event fan-out]
-      FW --> SP[SPOT<br/>room·stage·zone·actor]
-      FW --> ST[STREAM<br/>외부 client connector]
-      CM & PS & SP & ST --> ZB[zlink NestJS 바인딩]
-    ```
+    <iframe class="zlink-diagram" src="/common/diagrams/01-lang-node.html" title="ZLink 계층 — NestJS" loading="lazy" style="width:100%;border:0"></iframe>
+    <p><a href="/common/diagrams/01-lang-node.html" target="_blank">↗ 크게 보기</a></p>
 
     | 축 | 사용자에게 보이는 것 | 가이드 챕터 |
     | --- | --- | --- |
@@ -1562,36 +1332,8 @@ connection도 자동으로 새로 연결되거나 정리된다 — 설정 파일
 
 각 기능이 어떻게 맞물리는지 보여주는 예시다. 이 지도를 각 기능 장이 확대해 들어간다.
 
-```mermaid
-flowchart LR
-    Client["클라이언트 앱"]
-    subgraph Api["진입 서버 (예: Api)"]
-        HTTP["ASP.NET Core HTTP<br/>POST /games"]:::infra
-        ApiC["route client"]:::channel
-    end
-    subgraph Core["도메인 서버 (예: Play)"]
-        CoreS["MeshNode channel member"]:::channel
-        SpotN["SPOT node<br/>(entry + room spots)"]:::spot
-        StreamN["stream node"]:::stream
-        ActorG["session relay"]:::actor
-    end
-    Store["Location store<br/>(descriptor rows)"]:::infra
-
-    Client -- "1 HTTP 요청" --> HTTP
-    HTTP --> ApiC
-    ApiC -- "2 channel request" --> CoreS
-    CoreS --> SpotN
-    Client -- "3 stream 실시간 접속" --> StreamN
-    StreamN -- "relay" --> ActorG --> SpotN
-    ApiC -.->|"주소 해석"| Store
-    CoreS -.->|등록| Store
-
-    classDef channel fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef spot fill:#e8f5e9,stroke:#2e7d32,color:#000000
-    classDef actor fill:#fff8e1,stroke:#f9a825,color:#000000
-    classDef stream fill:#f3e5f5,stroke:#6a1b9a,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-topology.html" title="전체 topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 - **진입 서버** - ASP.NET Core HTTP로 외부 요청을 받아 domain 서버에 위임한다.
 - **도메인 서버** - MeshNode channel membership + SPOT(상태 단위) + session relay + stream node.
@@ -1825,3 +1567,6 @@ ZLink의 용도를 구체적인 업무 흐름으로 확인할 때는 [공통 샘
     - [Node.js exact interface 목차](../../../common/spec/server/languages/node/interfaces/README.ko.md) — 정식 계약
 
     ---
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}function a(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(a,t);});window.addEventListener("resize",function(){setTimeout(a,150);});})();
+</script>

@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ZLink 방식 — 배달 주문 앱",
+    "subtitle": "서버 간은 channel 직접 · location store는 주소 해석(discovery)만",
+    "output": "01-delivery-zlink.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 2,
+    "gapX": 150,
+    "gapY": 88,
+    "cellW": 150,
+    "cellH": 78
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "클라이언트 앱",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "lb",
+      "type": "frontend",
+      "label": "L7 LB / gateway",
+      "sublabel": "HTTP는 그대로",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "app",
+      "type": "backend",
+      "label": "앱 서버 ×N",
+      "sublabel": "API + ZLink · Instance Spot",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "sess",
+      "type": "backend",
+      "label": "Session 서버 ×N",
+      "sublabel": "WebSocket · 세션 보유",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "store",
+      "type": "external",
+      "label": "location store",
+      "sublabel": "주소 해석용 (discovery)",
+      "row": 3,
+      "col": 0
+    }
+  ],
+  "connections": [
+    {
+      "from": "client",
+      "to": "lb",
+      "label": "HTTP (주문·조회)",
+      "variant": "emphasis",
+      "labelDy": 26
+    },
+    {
+      "from": "lb",
+      "to": "app",
+      "variant": "default"
+    },
+    {
+      "from": "client",
+      "to": "sess",
+      "label": "WebSocket",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "top"
+    },
+    {
+      "from": "sess",
+      "to": "app",
+      "label": "요청 relay (channel)",
+      "variant": "emphasis",
+      "fromSide": "left",
+      "toSide": "right",
+      "labelDy": -14
+    },
+    {
+      "from": "app",
+      "to": "sess",
+      "label": "배달 상태 push (channel)",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelDy": 16
+    },
+    {
+      "from": "app",
+      "to": "store",
+      "label": "주소 해석",
+      "variant": "dashed",
+      "labelDy": 26
+    },
+    {
+      "from": "sess",
+      "to": "store",
+      "label": "등록",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "right"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "서버 간 messaging (핵심)",
+      "items": [
+        "앱 서버 ↔ Session 서버: 요청 relay와 배달 상태 push를 channel 직접(브로커·LB 없이)",
+        "앱 서버: Instance Spot이 주문 하나를 직렬 소유 — 분산 락 불필요",
+        "Session 서버: WebSocket으로 고객 세션 보유, host relocation 단위 → 무중단 패치"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "location store = discovery만",
+      "items": [
+        "주소 해석·등록(어느 노드에 있는지)만 담당 — 데이터/메시지 경로가 아니다",
+        "그래서 연결이 점선(control plane)"
+      ]
+    }
+  ]
+}

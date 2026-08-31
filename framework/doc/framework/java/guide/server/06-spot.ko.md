@@ -158,26 +158,8 @@ mode가 정한다.
 | User Spot `PerActor` | Actor별, Spot lane별로 각각 직렬화한다. 서로 다른 lane은 동시에 실행할 수 있다 | Actor가 각자 소유한다. lane 사이에 공유하는 상태는 외부 저장소에 둔다 |
 | Instance Spot | Spot queue의 direct handler와 timer를 직렬화한다. Actor queue가 없다 | Spot instance가 소유한다 |
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  subgraph SW["User Spot — SpotWide (기본)"]
-    direction LR
-    P1["direct packet<br/>timer"] --> SQ1["Spot queue"]
-    A1["Actor A payload"] --> AQ1["Actor A queue"]
-    B1["Actor B payload"] --> BQ1["Actor B queue"]
-    SQ1 --> G1{{"공통 gate<br/>callback 하나만 실행"}}
-    AQ1 --> G1
-    BQ1 --> G1
-  end
-  subgraph PA["Entry Spot · User Spot PerActor"]
-    direction LR
-    P2["direct packet<br/>timer"] --> SQ2["Spot queue"] --> R2["실행"]
-    A2["Actor A payload"] --> AQ2["Actor A queue"] --> R2A["실행"]
-    B2["Actor B payload"] --> BQ2["Actor B queue"] --> R2B["실행"]
-  end
-  SW ~~~ PA
-```
+<iframe class="zlink-diagram" src="/common/diagrams/06-spot.html" title="Spot 실행 모델 — SpotWide vs PerActor" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/06-spot.html" target="_blank">↗ 크게 보기</a></p>
 
 기본값은 **`SpotWide`**이며 대부분의 경우 이 mode를 사용한다. 해당 Spot의 모든
 callback을 공통 gate 하나로 직렬화하므로, Spot instance와 member Actor가 같은 상태를
@@ -839,3 +821,7 @@ public CompletionStage<Void> onRelocationReadyCompleted(
 - Actor 생성과 Spot 이동: [Actor & Spot 호스팅](07-actor-spot.ko.md)
 - Session binding: [Session Actor Dispatch](08-actor-session.ko.md)
 - Location Store 설정: [Location](10-location.ko.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

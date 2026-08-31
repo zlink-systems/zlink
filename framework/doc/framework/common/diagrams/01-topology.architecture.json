@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "전체 topology",
+    "subtitle": "진입 서버 · 도메인 서버 · location store",
+    "output": "01-topology.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 4, "gapX": 86, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "client", "type": "external", "label": "클라이언트 앱", "row": 1, "col": 0 },
+    { "id": "http", "type": "external", "label": "ASP.NET Core HTTP", "sublabel": "POST /games", "row": 0, "col": 1 },
+    { "id": "apic", "type": "frontend", "label": "route client", "row": 1, "col": 1 },
+    { "id": "cores", "type": "frontend", "label": "MeshNode", "sublabel": "channel member", "row": 1, "col": 2 },
+    { "id": "spotn", "type": "backend", "label": "SPOT node", "sublabel": "entry + room spots", "row": 1, "col": 3 },
+    { "id": "streamn", "type": "database", "label": "stream node", "row": 2, "col": 2 },
+    { "id": "actorg", "type": "messagebus", "label": "session relay", "row": 2, "col": 3 },
+    { "id": "store", "type": "external", "label": "Location store", "sublabel": "descriptor rows", "row": 3, "col": 1 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "진입 서버 (예: Api)", "wraps": ["http", "apic"] },
+    { "kind": "region", "label": "도메인 서버 (예: Play)", "wraps": ["cores", "spotn", "streamn", "actorg"] }
+  ],
+  "connections": [
+    { "from": "client", "to": "http", "label": "1 HTTP 요청", "variant": "emphasis" },
+    { "from": "http", "to": "apic", "variant": "default" },
+    { "from": "apic", "to": "cores", "label": "2 channel request", "variant": "emphasis", "labelDy": -22 },
+    { "from": "cores", "to": "spotn", "variant": "default" },
+    { "from": "client", "to": "streamn", "label": "3 stream 실시간 접속", "variant": "emphasis" },
+    { "from": "streamn", "to": "actorg", "label": "relay", "variant": "default" },
+    { "from": "actorg", "to": "spotn", "variant": "default" },
+    { "from": "apic", "to": "store", "label": "주소 해석", "variant": "dashed", "labelDy": 22 },
+    { "from": "cores", "to": "store", "label": "등록", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "구성",
+      "items": [
+        "진입 서버: ASP.NET Core HTTP로 외부 요청을 받아 domain 서버에 위임",
+        "도메인 서버: MeshNode channel membership + SPOT + session relay + stream node",
+        "클라이언트 앱: HTTP로 요청, stream으로 실시간 상태 수신"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Location store = discovery만",
+      "items": ["서버 주소 정보만 관리 — 점선은 store 조회로 endpoint를 찾는 연결(데이터 경로 아님)"]
+    }
+  ]
+}

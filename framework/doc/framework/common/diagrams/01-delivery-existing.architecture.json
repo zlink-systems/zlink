@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "기존 방식 — 배달 주문 앱",
+    "subtitle": "실시간 기능을 위한 구성 요소(주황)가 본체만큼 추가된다",
+    "output": "01-delivery-existing.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [40, 150], "cols": 4, "gapX": 78, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "client", "type": "external", "label": "클라이언트 앱", "row": 0, "col": 1 },
+    { "id": "lb", "type": "external", "label": "L7 LB / gateway", "row": 1, "col": 1 },
+    { "id": "slb", "type": "messagebus", "label": "sticky LB", "row": 1, "col": 3 },
+    { "id": "appA", "type": "frontend", "label": "앱 서버 A", "sublabel": "주문·조회 처리", "row": 2, "col": 1 },
+    { "id": "appB", "type": "frontend", "label": "앱 서버 B", "sublabel": "주문 #123 배달 상태 변경", "row": 2, "col": 2 },
+    { "id": "ws", "type": "messagebus", "label": "WebSocket 서버 ×N", "sublabel": "고객 연결만 보유, 로직 없음", "row": 2, "col": 3 },
+    { "id": "rl", "type": "messagebus", "label": "Redis 분산 락", "row": 3, "col": 1 },
+    { "id": "rp", "type": "messagebus", "label": "Redis pub/sub", "row": 3, "col": 3 }
+  ],
+  "connections": [
+    { "from": "client", "to": "lb", "label": "HTTP (주문·조회)", "variant": "emphasis", "labelDy": 24 },
+    { "from": "client", "to": "slb", "label": "실시간 연결", "variant": "emphasis" },
+    { "from": "lb", "to": "appA", "variant": "default" },
+    { "from": "lb", "to": "appB", "variant": "default" },
+    { "from": "appB", "to": "rp", "label": "배달 상태 방송", "variant": "emphasis" },
+    { "from": "rp", "to": "ws", "label": "구독→push", "variant": "default" },
+    { "from": "slb", "to": "ws", "variant": "default" },
+    { "from": "appA", "to": "rl", "label": "직렬화", "variant": "dashed", "labelDy": 22 },
+    { "from": "appB", "to": "rl", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "orange",
+      "title": "실시간 때문에 붙는 주황 조각들",
+      "items": [
+        "sticky LB + WebSocket 서버: 고객 연결만 보유(로직 없음)",
+        "Redis pub/sub: 고객이 어느 WS인지 몰라 배달 상태 방송 → 구독한 WS가 push",
+        "Redis 분산 락: 같은 주문을 여러 서버가 동시 접근 → 직렬화"
+      ]
+    }
+  ]
+}
