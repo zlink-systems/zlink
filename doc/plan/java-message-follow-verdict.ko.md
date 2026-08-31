@@ -17,24 +17,24 @@ Routing은 commit 뒤 이전 owner의 행동을 직접 규정합니다.
 > “이전 owner는 commit된 source→target Message Follow route가 있을 때만 같은 operation을 current owner로 relay한다.”
 
 또한 exact fence, 최대 8홉, 무상한 route queue, original operation/payload/reply route 보존, 만료·loop·generation mismatch 결과까지 정합니다.  
-[08-routing.ko.md:192](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/03-spot-actor/08-routing.ko.md:192), [08-routing.ko.md:199](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/03-spot-actor/08-routing.ko.md:199), [08-routing.ko.md:209](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/03-spot-actor/08-routing.ko.md:209)
+[08-routing.ko.md:192](../../framework/doc/framework/common/spec/server/03-spot-actor/08-routing.ko.md#25-이전-owner-route에-도착한-message), [08-routing.ko.md:199](../../framework/doc/framework/common/spec/server/03-spot-actor/08-routing.ko.md#25-이전-owner-route에-도착한-message), [08-routing.ko.md:209](../../framework/doc/framework/common/spec/server/03-spot-actor/08-routing.ko.md#25-이전-owner-route에-도착한-message)
 
 가장 결정적인 조문은 relocation spec입니다.
 
 > “이 경로가 없으면 이동한 Actor에 연결된 session은 이동 자체가 성공해도 조용히 끊긴다. 따라서 Message Follow는 선택적인 성능 최적화가 아니다.”
 
-[04-relocation-flow.ko.md:584](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/05-location-relocation/04-relocation-flow.ko.md:584), [04-relocation-flow.ko.md:593](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/05-location-relocation/04-relocation-flow.ko.md:593)
+[04-relocation-flow.ko.md:584](../../framework/doc/framework/common/spec/server/05-location-relocation/04-relocation-flow.ko.md#10-message-follow와-정리), [04-relocation-flow.ko.md:593](../../framework/doc/framework/common/spec/server/05-location-relocation/04-relocation-flow.ko.md#10-message-follow와-정리)
 
 Source도 owner 변경 전에는 temporary queue, 변경 뒤에는 Message Follow로 전달해야 합니다.  
-[04-relocation-flow.ko.md:257](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/05-location-relocation/04-relocation-flow.ko.md:257)
+[04-relocation-flow.ko.md:257](../../framework/doc/framework/common/spec/server/05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)
 
 ### 허용되는 예외
 
 `MessageFollowDuration=0`은 명시적으로 Message Follow를 끕니다. 양수이면 route cache가 MF보다 최소 5초 먼저 만료돼야 합니다.  
-[08-routing.ko.md:204](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/03-spot-actor/08-routing.ko.md:204)
+[08-routing.ko.md:204](../../framework/doc/framework/common/spec/server/03-spot-actor/08-routing.ko.md#25-이전-owner-route에-도착한-message)
 
 만료 뒤 도착한 message가 `Unavailable`로 끝나는 것은 의도된 계약입니다.  
-[05-spot-actor-membership.ko.md:832](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md:832), [02-glossary.ko.md:663](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/00-foundation/02-glossary.ko.md:663)
+[05-spot-actor-membership.ko.md:832](../../framework/doc/framework/common/spec/server/03-spot-actor/05-spot-actor-membership.ko.md#9-message-follow), [02-glossary.ko.md:663](../../framework/doc/framework/common/spec/server/00-foundation/02-glossary.ko.md#message-follow)
 
 따라서 결론은 다음과 같습니다.
 
@@ -54,21 +54,21 @@ rg -n "beginRemoteMove|retainMessageFollowSource|finishRemoteMoveBacklog|takeRem
   framework/languages/java --glob '!**/build/**' --glob '!**/.gradle/**'
 ```
 
-결과는 `src/main`의 네 method 정의와 test 호출뿐입니다. 즉 production relocation은 [ZLinkActorRuntime.java:1801](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/actors/ZLinkActorRuntime.java:1801), [ZLinkActorRuntime.java:1881](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/actors/ZLinkActorRuntime.java:1881), [ZLinkActorRuntime.java:2104](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/actors/ZLinkActorRuntime.java:2104)의 explicit MF stack을 연결하지 않습니다.
+결과는 `src/main`의 네 method 정의와 test 호출뿐입니다. 즉 production relocation은 [ZLinkActorRuntime.java:1801](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/actors/ZLinkActorRuntime.java#L1801), [ZLinkActorRuntime.java:1881](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/actors/ZLinkActorRuntime.java#L1881), [ZLinkActorRuntime.java:2104](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/actors/ZLinkActorRuntime.java#L2104)의 explicit MF stack을 연결하지 않습니다.
 
 대신 다음 경로를 사용합니다.
 
 1. Target 준비 중, 아직 commit 전 `installExpectedRelocationForward()` 실행  
-   [ZLinkStandaloneActorRelocationSourceBuilder.java:979](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/spots/ZLinkStandaloneActorRelocationSourceBuilder.java:979), [ZLinkStandaloneActorRelocationSourceBuilder.java:1039](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/spots/ZLinkStandaloneActorRelocationSourceBuilder.java:1039)
+   [ZLinkStandaloneActorRelocationSourceBuilder.java:979](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/spots/ZLinkStandaloneActorRelocationSourceBuilder.java#L979), [ZLinkStandaloneActorRelocationSourceBuilder.java:1039](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/spots/ZLinkStandaloneActorRelocationSourceBuilder.java#L1039)
 
 2. Exact source fence→target fence를 map에 넣고 그 시점부터 retention timer 시작  
-   [ZLinkJavaRawSpotNode.java:245](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawSpotNode.java:245)
+   [ZLinkJavaRawSpotNode.java:245](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawSpotNode.java#L245)
 
 3. 늦은 ingress는 이 map을 explicit MF handler보다 먼저 조회  
-   [ZLinkJavaRawSpotNode.java:1892](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawSpotNode.java:1892)
+   [ZLinkJavaRawSpotNode.java:1892](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawSpotNode.java#L1892)
 
 4. Operation/correlation/payload/bound session을 다시 encode하고 hop을 1 증가시켜 target으로 전달  
-   [ZLinkJavaRawMeshNode.java:2082](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java:2082), [ZLinkJavaRawMeshNode.java:2106](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java:2106)
+   [ZLinkJavaRawMeshNode.java:2082](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java#L2082), [ZLinkJavaRawMeshNode.java:2106](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java#L2106)
 
 ### 시나리오 판정
 
@@ -90,24 +90,24 @@ rg -n "beginRemoteMove|retainMessageFollowSource|finishRemoteMoveBacklog|takeRem
 - commit 직전 old route를 갱신한 sender cache는 계속 유효할 수 있으므로 `t0+32s` 도착은 스펙상 relay돼야 하지만 Java에서는 forward가 이미 없습니다.
 
 재설치도 완전한 해결이 아닙니다. 동일 target 값이면 이전 timer의 `remove(source, target)`가 새 등록과 동등한 value까지 제거할 수 있습니다.  
-[ZLinkJavaRawSpotNode.java:256](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawSpotNode.java:256), [ZLinkJavaRawSpotNode.java:277](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawSpotNode.java:277)
+[ZLinkJavaRawSpotNode.java:256](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawSpotNode.java#L256), [ZLinkJavaRawSpotNode.java:277](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawSpotNode.java#L277)
 
 구성 발산도 명확합니다. Public option은 0 이상을 허용하지만, raw forward가 읽는 `ZLinkFrameworkRegistration.messageFollowDuration`은 별도 30초 field이고 setter/복사 경로가 없습니다.  
-[ZLinkLocationOptions.java:95](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/locations/ZLinkLocationOptions.java:95), [ZLinkFrameworkRegistration.java:54](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/configuration/ZLinkFrameworkRegistration.java:54), [ZLinkSpotRuntime.java:2038](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/spots/ZLinkSpotRuntime.java:2038)
+[ZLinkLocationOptions.java:95](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/locations/ZLinkLocationOptions.java#L95), [ZLinkFrameworkRegistration.java:54](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/configuration/ZLinkFrameworkRegistration.java#L54), [ZLinkSpotRuntime.java:2038](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/spots/ZLinkSpotRuntime.java#L2038)
 
 Raw path에는 command 50 송신도 없습니다. 반면 explicit MF path는 notification과 suppression을 구현하지만 production relocation이 source를 retain하지 않아 도달하지 않습니다. Routing은 relay 사실을 sender에게 알려 cache를 갱신하도록 요구합니다.  
-[08-routing.ko.md:266](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/03-spot-actor/08-routing.ko.md:266), [08-routing.ko.md:271](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/03-spot-actor/08-routing.ko.md:271)
+[08-routing.ko.md:266](../../framework/doc/framework/common/spec/server/03-spot-actor/08-routing.ko.md#25-이전-owner-route에-도착한-message), [08-routing.ko.md:271](../../framework/doc/framework/common/spec/server/03-spot-actor/08-routing.ko.md#25-이전-owner-route에-도착한-message)
 
 마지막으로 forward miss는 inbound에서 `102+1`로 답합니다. 이는 generation mismatch도 `InvalidOperation`이 아니라 generic unavailable 쪽으로 평탄화합니다.  
-[ZLinkJavaRawMeshNode.java:6239](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java:6239)
+[ZLinkJavaRawMeshNode.java:6239](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNode.java#L6239)
 
 ## 3. 4언어 대조
 
 | 언어 | production 모델 | Commit/MF 전환 | 판정 |
 |---|---|---|---|
-| .NET | `_sourceHoldFrames`를 handoff boundary에 포함하고 explicit `ZLinkActorMessageFollowRoute`로 전환 | `CutoverCaptureToMessageFollow` 뒤 committed authority를 확인하고 `CommitMessageFollow(duration)`에서 수명 시작 | 통합 MF 모델. [ZLinkActorHandoffState.cs:1055](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkActorHandoffState.cs:1055), [ZLinkActorHandoffState.cs:1078](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkActorHandoffState.cs:1078), [ZLinkActorHandoffState.cs:1157](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkActorHandoffState.cs:1157) |
-| C++ | `actor_transfer_coordinator`가 backlog와 fenced MF route, suppression, hop/accounting을 함께 소유 | `complete_remote_actor_transfer`에서 `now + message_follow_duration`으로 활성화 | 통합 MF 모델. [spot_runtime.cpp:8764](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp:8764), [actor_transfer_coordinator.cpp:303](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/spots/actor_transfer_coordinator.cpp:303), [actor_transfer_coordinator.cpp:490](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/spots/actor_transfer_coordinator.cpp:490) |
-| Node | `ZLinkActorHandoffCoordinator.complete()`가 exact owner fence로 route를 설치하고 tail queue·operation/reply context를 보존 | `complete()` 시점에 `Date.now()+duration`, hop/operation queue와 command 50 통지 연결 | 통합 MF 모델. [actor-handoff.ts:1014](/home/hep7/project/zlink/framework/languages/node/packages/framework/src/runtime/actors/actor-handoff.ts:1014), [actor-handoff.ts:1210](/home/hep7/project/zlink/framework/languages/node/packages/framework/src/runtime/actors/actor-handoff.ts:1210), [actor-handoff.ts:1452](/home/hep7/project/zlink/framework/languages/node/packages/framework/src/runtime/actors/actor-handoff.ts:1452), [index.ts:522](/home/hep7/project/zlink/framework/languages/node/packages/framework/src/runtime/host/index.ts:522) |
+| .NET | `_sourceHoldFrames`를 handoff boundary에 포함하고 explicit `ZLinkActorMessageFollowRoute`로 전환 | `CutoverCaptureToMessageFollow` 뒤 committed authority를 확인하고 `CommitMessageFollow(duration)`에서 수명 시작 | 통합 MF 모델. [ZLinkActorHandoffState.cs:1055](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkActorHandoffState.cs#L1055), [ZLinkActorHandoffState.cs:1078](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkActorHandoffState.cs#L1078), [ZLinkActorHandoffState.cs:1157](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkActorHandoffState.cs#L1157) |
+| C++ | `actor_transfer_coordinator`가 backlog와 fenced MF route, suppression, hop/accounting을 함께 소유 | `complete_remote_actor_transfer`에서 `now + message_follow_duration`으로 활성화 | 통합 MF 모델. [spot_runtime.cpp:8764](../../framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp#L8764), [actor_transfer_coordinator.cpp:303](../../framework/languages/cpp/framework/src/runtime/spots/actor_transfer_coordinator.cpp#L303), [actor_transfer_coordinator.cpp:490](../../framework/languages/cpp/framework/src/runtime/spots/actor_transfer_coordinator.cpp#L490) |
+| Node | `ZLinkActorHandoffCoordinator.complete()`가 exact owner fence로 route를 설치하고 tail queue·operation/reply context를 보존 | `complete()` 시점에 `Date.now()+duration`, hop/operation queue와 command 50 통지 연결 | 통합 MF 모델. [actor-handoff.ts:1014](../../framework/languages/node/packages/framework/src/runtime/actors/actor-handoff.ts#L1014), [actor-handoff.ts:1210](../../framework/languages/node/packages/framework/src/runtime/actors/actor-handoff.ts#L1210), [actor-handoff.ts:1452](../../framework/languages/node/packages/framework/src/runtime/actors/actor-handoff.ts#L1452), [index.ts:522](../../framework/languages/node/packages/framework/src/runtime/host/index.ts#L522) |
 | Java | explicit MF stack은 존재하지만 production relocation은 별도 raw `relocationActorForwards`를 우선 사용 | Forward를 commit 전 설치하고 별도 timer로 제거. Public duration과 command 50 경로가 연결되지 않음 | **부분 MF/병렬 구현, NOT-CLEAN** |
 
 ## 4. 제안

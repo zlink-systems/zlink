@@ -17,17 +17,17 @@
 | C++ 현재 wire 분기 | 승인 후 즉시 public completion | completion ID 일부만 | 없음 — JSON의 relocation chain을 건너뜀 |
 | .NET 현재 JSON | 승인 reply 자체가 target reservation lease | token·payload reservation·target fence·handoffId | `ZLinkActorRemoteJoiner` |
 
-Node는 canonical 전송 전 새 `relocationId`를 만들고, pending operation의 transfer ID를 local map에 보존합니다. canonical 전송이 선택돼도 local map에는 그 ID가 남으며, 뒤이어 host relocation runtime이 같은 ID로 relocation을 실행합니다. [actor-local-native-join.ts](/home/hep7/project/zlink/framework/languages/node/packages/framework/src/runtime/actors/actor-local-native-join.ts:350), [service-stateful-runtime.ts](/home/hep7/project/zlink/framework/languages/node/packages/framework/src/runtime/foundation/service-stateful-runtime.ts:4246), [service-relocation-host-runtime.ts](/home/hep7/project/zlink/framework/languages/node/packages/framework/src/runtime/host/service-relocation-host-runtime.ts:393)
+Node는 canonical 전송 전 새 `relocationId`를 만들고, pending operation의 transfer ID를 local map에 보존합니다. canonical 전송이 선택돼도 local map에는 그 ID가 남으며, 뒤이어 host relocation runtime이 같은 ID로 relocation을 실행합니다. [actor-local-native-join.ts](../../../framework/languages/node/packages/framework/src/runtime/actors/actor-local-native-join.ts#L350), [service-stateful-runtime.ts](../../../framework/languages/node/packages/framework/src/runtime/foundation/service-stateful-runtime.ts#L4246), [service-relocation-host-runtime.ts](../../../framework/languages/node/packages/framework/src/runtime/host/service-relocation-host-runtime.ts#L393)
 
-중요하게도 Node target의 canonical admission은 private transfer request를 만들지 않습니다. canonical control은 Store resolver만 통과하고, later relocation stage가 별도 `relocationId`로 target state를 조립·commit합니다. 즉 canonical reply가 reservation token을 돌려주지 않아도 됩니다. [index.ts](/home/hep7/project/zlink/framework/languages/node/packages/framework/src/runtime/spots/index.ts:1835), [index.ts](/home/hep7/project/zlink/framework/languages/node/packages/framework/src/runtime/spots/index.ts:1850)
+중요하게도 Node target의 canonical admission은 private transfer request를 만들지 않습니다. canonical control은 Store resolver만 통과하고, later relocation stage가 별도 `relocationId`로 target state를 조립·commit합니다. 즉 canonical reply가 reservation token을 돌려주지 않아도 됩니다. [index.ts](../../../framework/languages/node/packages/framework/src/runtime/spots/index.ts#L1835), [index.ts](../../../framework/languages/node/packages/framework/src/runtime/spots/index.ts#L1850)
 
-Java도 동일합니다. source는 canonical request 전에 UUID transfer ID를 만들고, accepted reply 뒤 `Goal`에 transfer ID, operation ID, source actor/type, target fences, active-turn seal, application reply, chunk cap을 담아 relocation port로 넘깁니다. [ZLinkActorSpotJoinCall.java](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/actors/ZLinkActorSpotJoinCall.java:617), [ZLinkActorSpotJoinCall.java](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/actors/ZLinkActorSpotJoinCall.java:817)
+Java도 동일합니다. source는 canonical request 전에 UUID transfer ID를 만들고, accepted reply 뒤 `Goal`에 transfer ID, operation ID, source actor/type, target fences, active-turn seal, application reply, chunk cap을 담아 relocation port로 넘깁니다. [ZLinkActorSpotJoinCall.java](../../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/actors/ZLinkActorSpotJoinCall.java#L617), [ZLinkActorSpotJoinCall.java](../../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/actors/ZLinkActorSpotJoinCall.java#L817)
 
-Java target도 canonical admission을 `"canonical:<correlation>"`라는 local placeholder로 표현할 뿐, 명시적으로 private pending-transfer record를 만들지 않습니다. 따라서 target reservation의 identity는 28 reply가 아니라 뒤따르는 canonical relocation state/prepare에서 확정됩니다. [ZLinkSpotRuntime.java](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/spots/ZLinkSpotRuntime.java:3604), [ZLinkActorSpotAdmission.java](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/spots/ZLinkActorSpotAdmission.java:407)
+Java target도 canonical admission을 `"canonical:<correlation>"`라는 local placeholder로 표현할 뿐, 명시적으로 private pending-transfer record를 만들지 않습니다. 따라서 target reservation의 identity는 28 reply가 아니라 뒤따르는 canonical relocation state/prepare에서 확정됩니다. [ZLinkSpotRuntime.java](../../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/spots/ZLinkSpotRuntime.java#L3604), [ZLinkActorSpotAdmission.java](../../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/spots/ZLinkActorSpotAdmission.java#L407)
 
 ### 2. .NET: 현재 admission reply의 정확한 요구와 canonical tail의 차이
 
-.NET의 `handoffId`는 source에서 먼저 생성됩니다. canonical 전송으로 바뀌어도 이것은 그대로 language-internal relocation identity여야 합니다. [ZLinkActorRemoteJoiner.cs](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Host/ZLinkActorRemoteJoiner.cs:146)
+.NET의 `handoffId`는 source에서 먼저 생성됩니다. canonical 전송으로 바뀌어도 이것은 그대로 language-internal relocation identity여야 합니다. [ZLinkActorRemoteJoiner.cs](../../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Host/ZLinkActorRemoteJoiner.cs#L146)
 
 현재 private admission reply에서 검증·사용하는 값은 다음과 같습니다.
 
@@ -45,7 +45,7 @@ Java target도 canonical admission을 `"canonical:<correlation>"`라는 local pl
 | completion operation ID | recovery와 eventual public completion identity | 없음, source-local이어야 함 |
 | bound-session accepted high-water | actor state의 bound-session state를 seal/route할 때 사용 | admission reply가 아닌 actor state에서 옴 |
 
-현재 .NET은 accept 직후 token, predicted payload equality, target node/spot/authority generation을 모두 검사하고 `ZLinkActorRelocationReservation`을 만듭니다. [ZLinkActorRemoteJoiner.cs](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Host/ZLinkActorRemoteJoiner.cs:524), [ZLinkRemoteActorJoinPackets.cs](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkRemoteActorJoinPackets.cs:694)
+현재 .NET은 accept 직후 token, predicted payload equality, target node/spot/authority generation을 모두 검사하고 `ZLinkActorRelocationReservation`을 만듭니다. [ZLinkActorRemoteJoiner.cs](../../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Host/ZLinkActorRemoteJoiner.cs#L524), [ZLinkRemoteActorJoinPackets.cs](../../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkRemoteActorJoinPackets.cs#L694)
 
 그 reservation은 두 역할을 섞고 있습니다.
 
@@ -54,7 +54,7 @@ Java target도 canonical admission을 `"canonical:<correlation>"`라는 local pl
 
 첫 역할은 canonical 28로 직접 대체할 수 없습니다. 둘째 역할은 canonical tail의 `spot`, `membershipEpoch`, `receiveChunkLimitBytes`와 source가 이미 가진 fresh target authority snapshot으로 재구성할 수 있습니다. `membershipEpoch`은 commit 완료 증거가 아니라 승인 시 제안된 membership 값으로 취급해야 합니다.
 
-canonical tail은 accepted case에 `spot`, `membershipEpoch`, `receiveChunkLimitBytes`만 둡니다. reservation token, payload budget, target node/owner generations, transfer ID, completion identity는 의도적으로 없습니다. [service-wire-v1.schema.json](/home/hep7/project/zlink/framework/runtime/protocol/service-wire-v1.schema.json:2239)
+canonical tail은 accepted case에 `spot`, `membershipEpoch`, `receiveChunkLimitBytes`만 둡니다. reservation token, payload budget, target node/owner generations, transfer ID, completion identity는 의도적으로 없습니다. [service-wire-v1.schema.json](../../../framework/runtime/protocol/service-wire-v1.schema.json#L2239)
 
 ### 3. C++가 canonical send에서 깨지는 정확한 지점
 
@@ -65,17 +65,17 @@ canonical tail은 accepted case에 `spot`, `membershipEpoch`, `receiveChunkLimit
 3. target `actor_transfer_coordinator`가 transfer ID 아래에 source/target spot, deadline, completion IDs, app reply를 parked admission으로 저장한다.
 4. source가 seal → `transfer_actor_out` → prepare → finalize/cutover → Core commit → target route publication → completion delivery를 수행한다.
 
-근거는 [mesh_node_runtime.cpp](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp:2407), [spot_runtime.cpp](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp:6003), [actor_transfer_coordinator.hpp](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/spots/actor_transfer_coordinator.hpp:34), [mesh_node_runtime.cpp](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp:2755)입니다.
+근거는 [mesh_node_runtime.cpp](../../../framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp#L2407), [spot_runtime.cpp](../../../framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp#L6003), [actor_transfer_coordinator.hpp](../../../framework/languages/cpp/framework/src/runtime/spots/actor_transfer_coordinator.hpp#L34), [mesh_node_runtime.cpp](../../../framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp#L2755)입니다.
 
-canonical wire branch는 completion IDs를 만들고 canonical request를 보낸 뒤, accepted tail을 받으면 receive chunk limit을 기록하고 곧바로 `deliver_remote_actor_join()`을 호출합니다. `seal_remote_application_actor_join()`와 이후 prepare/finalize chain으로 들어가지 않습니다. [mesh_node_runtime.cpp](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp:2583), [mesh_node_runtime.cpp](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp:2639)
+canonical wire branch는 completion IDs를 만들고 canonical request를 보낸 뒤, accepted tail을 받으면 receive chunk limit을 기록하고 곧바로 `deliver_remote_actor_join()`을 호출합니다. `seal_remote_application_actor_join()`와 이후 prepare/finalize chain으로 들어가지 않습니다. [mesh_node_runtime.cpp](../../../framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp#L2583), [mesh_node_runtime.cpp](../../../framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp#L2639)
 
 따라서 Bingo/TicTacToe 회귀의 직접 원인은 “deep completion delivery 실패”가 아니라 다음 세 가지 state 분리입니다.
 
 - source `s->transfer_id`, source spot generation, source authority snapshot, deadline, seal state가 JSON 경로처럼 초기화·소비되지 않는다.
-- target은 canonical correlation으로 파생한 `wire-actor-join:<source rid>:<source generation>:<correlation>` ID 아래 admission을 실제로 park한다. source는 그 identity를 알거나 후속 prepare에 사용하지 않는다. [mesh_node_runtime.cpp](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp:517)
-- target parked admission은 completion identity exact match를 요구한다. canonical receiver가 저장하는 `{source node generation, correlation}`와 source가 JSON 방식으로 만든 `{mesh hash, counter}`는 다르다. 그러므로 단순히 canonical send 뒤 JSON prepare를 이어도 target prepare identity가 맞지 않는다. [spot_runtime.cpp](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp:6089)
+- target은 canonical correlation으로 파생한 `wire-actor-join:<source rid>:<source generation>:<correlation>` ID 아래 admission을 실제로 park한다. source는 그 identity를 알거나 후속 prepare에 사용하지 않는다. [mesh_node_runtime.cpp](../../../framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp#L517)
+- target parked admission은 completion identity exact match를 요구한다. canonical receiver가 저장하는 `{source node generation, correlation}`와 source가 JSON 방식으로 만든 `{mesh hash, counter}`는 다르다. 그러므로 단순히 canonical send 뒤 JSON prepare를 이어도 target prepare identity가 맞지 않는다. [spot_runtime.cpp](../../../framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp#L6089)
 
-또한 현재 HEAD에서는 canonical receiver의 cold target stable-type 조회는 authority row fallback으로 보완돼 있습니다. 과거 revert 설명의 “stable type을 못 찾는다”는 부분은 현 상태의 주 원인이 아닙니다. 실제 남은 핵심은 sender/target reservation identity와 completion identity의 통합입니다. [mesh_node_runtime.cpp](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp:457)
+또한 현재 HEAD에서는 canonical receiver의 cold target stable-type 조회는 authority row fallback으로 보완돼 있습니다. 과거 revert 설명의 “stable type을 못 찾는다”는 부분은 현 상태의 주 원인이 아닙니다. 실제 남은 핵심은 sender/target reservation identity와 completion identity의 통합입니다. [mesh_node_runtime.cpp](../../../framework/languages/cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp#L457)
 
 ### 4. 통합 설계: `CanonicalActorJoinAttempt` language-internal seam
 

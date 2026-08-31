@@ -44,7 +44,7 @@ multi-role/capacity → H3 cross-lang → H4 config-10 base → H5 SpotWide/PerA
 | SF-G1 | Actor/Spot/stable-type slot을 atomic reserve; capacity failure는 `CapacityExceeded`, factory failure는 slot 반환 | B | Actor+User Spot factories, concurrent create driver, capacity matrix |
 | SF-G2 | population 0은 unlimited, activation concurrency만 factory active count 제한; Entry Spot 비집계 | B | activation gate fixture, public concurrency configuration, active-count evidence |
 
-`SF-C5/C5A`는 새 API가 아닙니다. 4언어 모두 이미 public operational query를 규정합니다: C++ `location_runtime_query_t`, .NET `IZLinkLocationRuntimeQuery`, Java `ZLinkLocationRuntimeQuery`, Node `ZLinkLocationRuntimeQuery`. 각각 exact lookup, bounded `listObjectLocations`, `Creating/Ready/Unavailable`, partial-page 없는 Store failure를 포함합니다. [C++]( /home/hep7/project/zlink/framework/doc/framework/common/spec/server/languages/cpp/interfaces/07-location-store.ko.md:389) [.NET]( /home/hep7/project/zlink/framework/doc/framework/common/spec/server/languages/dotnet/interfaces/08-location-maintenance.ko.md:162) [Java]( /home/hep7/project/zlink/framework/doc/framework/common/spec/server/languages/java/interfaces/location-maintenance.ko.md:258) [Node]( /home/hep7/project/zlink/framework/doc/framework/common/spec/server/languages/node/interfaces/03-location-observability.ko.md:58)
+`SF-C5/C5A`는 새 API가 아닙니다. 4언어 모두 이미 public operational query를 규정합니다: C++ `location_runtime_query_t`, .NET `IZLinkLocationRuntimeQuery`, Java `ZLinkLocationRuntimeQuery`, Node `ZLinkLocationRuntimeQuery`. 각각 exact lookup, bounded `listObjectLocations`, `Creating/Ready/Unavailable`, partial-page 없는 Store failure를 포함합니다. [C++](../../../framework/doc/framework/common/spec/server/languages/cpp/interfaces/07-location-store.ko.md#5-운영-query) [.NET](../../../framework/doc/framework/common/spec/server/languages/dotnet/interfaces/08-location-maintenance.ko.md#3-readiness와-운영-query) [Java](../../../framework/doc/framework/common/spec/server/languages/java/interfaces/location-maintenance.ko.md#운영-조회) [Node](../../../framework/doc/framework/common/spec/server/languages/node/interfaces/03-location-observability.ko.md#2-location-운영-조회)
 
 ## Config 10: Track E/G/H/I 선행 조건
 
@@ -113,11 +113,11 @@ ST-G2/G6/G2와 관련된 설정 surface도 이미 계약에 있습니다. 4언�
 
 ## SF-C3 런타임 결함
 
-문제 위치는 Node의 [`raw-service-mesh-runtime.ts`](/home/hep7/project/zlink/framework/languages/node/packages/framework/src/runtime/foundation/raw-service-mesh-runtime.ts:989) 입니다.
+문제 위치는 Node의 [`raw-service-mesh-runtime.ts`](../../../framework/languages/node/packages/framework/src/runtime/foundation/raw-service-mesh-runtime.ts#L989) 입니다.
 
 - 기존 same-RID peer가 liveness-ready이면 새 physical candidate를 `disconnectUnexpectedMonitorPair()`로 즉시 폐기합니다.
 - replacement의 descriptor/lifecycle generation을 확인하는 `topology.admit()`까지 도달하지 못하므로, discovery가 이미 replacement lifecycle을 가리켜도 current ready peer로 승격될 수 없습니다.
-- 반대로 late old process 재개를 안전하게 막을 올바른 fence는 이미 존재합니다. expected lifecycle을 검증하는 admission 경로와, admitted 뒤 previous physical pair를 정확히 제거하는 경로입니다. [`raw-service-mesh-runtime.ts`](/home/hep7/project/zlink/framework/languages/node/packages/framework/src/runtime/foundation/raw-service-mesh-runtime.ts:1250) [`service-topology-registry.ts`](/home/hep7/project/zlink/framework/languages/node/packages/framework/src/runtime/foundation/service-topology-registry.ts:111)
+- 반대로 late old process 재개를 안전하게 막을 올바른 fence는 이미 존재합니다. expected lifecycle을 검증하는 admission 경로와, admitted 뒤 previous physical pair를 정확히 제거하는 경로입니다. [`raw-service-mesh-runtime.ts`](../../../framework/languages/node/packages/framework/src/runtime/foundation/raw-service-mesh-runtime.ts#L1250) [`service-topology-registry.ts`](../../../framework/languages/node/packages/framework/src/runtime/foundation/service-topology-registry.ts#L111)
 
 수정 방향은 다음과 같습니다.
 
@@ -127,7 +127,7 @@ ST-G2/G6/G2와 관련된 설정 surface도 이미 계약에 있습니다. 4언�
 4. 그 뒤에만 old `transportPairId + transportPairGeneration`을 정확히 종료합니다.
 5. old process가 재개해 보내는 late Hello/READY는 replacement descriptor와 lifecycle이 맞지 않아 reject하고, 현재 replacement의 connection/liveness를 절대 건드리지 않아야 합니다.
 
-이는 “같은 RID, 다른 lifecycle generation은 새 process 실행”으로 다루고, replacement는 current discovery descriptor의 RID·identity·generation fence를 사용해야 한다는 계약에 직접 부합합니다. [Transport liveness](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/29-transport-liveness.ko.md:199) [Reconnect](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/29-transport-liveness.ko.md:245) [SF-C3](/home/hep7/project/zlink/framework/doc/framework/common/e2e/config-6-store-failure-recovery.ko.md:175)
+이는 “같은 RID, 다른 lifecycle generation은 새 process 실행”으로 다루고, replacement는 current discovery descriptor의 RID·identity·generation fence를 사용해야 한다는 계약에 직접 부합합니다. [Transport liveness](../../../framework/doc/framework/common/spec/server/archive/29-transport-liveness.ko.md#5-ready와-장애-판정) [Reconnect](../../../framework/doc/framework/common/spec/server/archive/29-transport-liveness.ko.md#6-connection-loss와-reconnect) [SF-C3](../../../framework/doc/framework/common/e2e/config-6-store-failure-recovery.ko.md#sf-c3-이전-owner-lifecycle이-replacement를-바꾸지-못한다)
 
 파일은 수정하지 않았고, 기존 untracked 변경도 건드리지 않았습니다.
 

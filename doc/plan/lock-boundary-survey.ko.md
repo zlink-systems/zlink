@@ -5,12 +5,12 @@
 
 조사 결과, 단순 bridge 삭제만으로 회수 가능한 범위는 작습니다. C++의 같은 phase 조회 통합이 가장 큰 동작 보존 후보이고, .NET 원격 Actor 경로·Java wrapper·relocation callback은 대부분 owner 또는 placeholder를 다시 설계해야 합니다.
 
-기준은 [계획 §0.6](/home/hep7/project/zlink/doc/plan/implementation-plan.ko.md:150), [§9-③](/home/hep7/project/zlink/doc/plan/implementation-plan.ko.md:397), [부록 A](/home/hep7/project/zlink/doc/plan/implementation-plan.ko.md:407)와 다음 계약입니다.
+기준은 [계획 §0.6](implementation-plan.ko.md#06-후속-캠페인--boundsessionsend-전달-보장-b안-폐기경량-계약-재설계-2026-08-29), [§9-③](implementation-plan.ko.md#9-미결--착수-전에-정해야-하는-것), [부록 A](implementation-plan.ko.md#9-미결--착수-전에-정해야-하는-것)와 다음 계약입니다.
 
-- C2 상태는 하나의 state lane이 소유합니다. [스펙 06 §4](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md:93)
-- 공개 동기 bridge는 스펙의 세 조건을 모두 충족해야 합니다. [스펙 06 §5](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md:212)
-- 외부 callback은 turn A claim → lane 밖 callback → turn B 정산으로 나눕니다. [스펙 06 §6 유형 ③](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md:310)
-- 한 메시지의 조회는 한 turn의 immutable snapshot으로 묶습니다. [스펙 07 §7](/home/hep7/project/zlink/framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md:493)
+- C2 상태는 하나의 state lane이 소유합니다. [스펙 06 §4](../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#4-상태-분류와-판별-기준)
+- 공개 동기 bridge는 스펙의 세 조건을 모두 충족해야 합니다. [스펙 06 §5](../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#완료-신호와-블로킹-호환-경계)
+- 외부 callback은 turn A claim → lane 밖 callback → turn B 정산으로 나눕니다. [스펙 06 §6 유형 ③](../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md#6-재진입을-만들지-않는-구조)
+- 한 메시지의 조회는 한 turn의 immutable snapshot으로 묶습니다. [스펙 07 §7](../../framework/doc/framework/common/spec/server/01-execution/07-serial-executor-layers.ko.md#7-상태-조회의-turn-경계)
 
 ## 언어별 계수
 
@@ -51,12 +51,12 @@
 
 | 분류 | 수 | 대표 근거 |
 |---|---:|---|
-| (a) 원격 Actor 정상 수신 hot path | **16** | [Mesh pump](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Backend/DotNet/ZLinkMeshDispatchPump.cs:174), [AJQ](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Dispatch/ZLinkApplicationJobQueue.cs:233), [Handoff](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkActorHandoffState.cs:347) |
-| (b) 명백한 init/stop/dispose/relocation | **142** | [Actor handoff lifecycle](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkActorHandoffState.cs:975), [Spot retire](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkSpotRetireTransport.cs:2623) |
+| (a) 원격 Actor 정상 수신 hot path | **16** | [Mesh pump](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Backend/DotNet/ZLinkMeshDispatchPump.cs#L174), [AJQ](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Dispatch/ZLinkApplicationJobQueue.cs#L233), [Handoff](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkActorHandoffState.cs#L347) |
+| (b) 명백한 init/stop/dispose/relocation | **142** | [Actor handoff lifecycle](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkActorHandoffState.cs#L975), [Spot retire](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkSpotRetireTransport.cs#L2623) |
 | (c) 공개 동기 계약의 최소 bridge | **6** | `Connect`/`Disconnect`/`ListConnections` 3곳, `IsDisposed`, Fanout/ClientServer `GetStatus` |
 | (d) 기타·혼합 `[의심]` | **386** | 일반 runtime, stream, channel, service helper |
 
-공개 동기 표면에 귀속되는 bridge는 8곳이지만, [EndpointConnections의 실패 rollback](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Configuration/ZLinkEndpointConnections.cs:36) 두 곳은 외곽 공개 계약 자체가 요구하는 최소 bridge가 아닙니다. 따라서 엄격한 `(c)`는 6이며, 두 rollback bridge는 `(d)` 회수 후보로 돌렸습니다.
+공개 동기 표면에 귀속되는 bridge는 8곳이지만, [EndpointConnections의 실패 rollback](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Configuration/ZLinkEndpointConnections.cs#L36) 두 곳은 외곽 공개 계약 자체가 요구하는 최소 bridge가 아닙니다. 따라서 엄격한 `(c)`는 6이며, 두 rollback bridge는 `(d)` 회수 후보로 돌렸습니다.
 
 ### 원격 Actor 1회당 동적 횟수
 
@@ -89,7 +89,7 @@ request 전용 bridge는 이 구간에 없습니다.
 - Handoff 5회 → ingress projection·capture claim 통합: **-3~-4**, arrival ordering 때문에 의미 리팩터링 필요.
 - Spot claim과 Actor lane lookup 통합: **-1**, relocation barrier와 lazy queue 생성을 같은 turn에서 처리.
 - `RuntimeTaskRunner`가 lane 안에서 supervisor의 다른 lane을 기다리는 구조: **-1**, `[의심-H]`; 단일 admission owner가 필요합니다.
-- [ScopedHandlerInstanceOwner](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Handlers/ZLinkScopedHandlerInstanceOwner.cs:25)는 lane 안에서 DI 생성자를 호출합니다. **조건부 -1**, 재진입 위험도 함께 해소해야 합니다.
+- [ScopedHandlerInstanceOwner](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Handlers/ZLinkScopedHandlerInstanceOwner.cs#L25)는 lane 안에서 DI 생성자를 호출합니다. **조건부 -1**, 재진입 위험도 함께 해소해야 합니다.
 - AJQ acquire/queued/release는 서로 다른 permit 전이입니다. 단순 통합 대상이 아닙니다.
 
 ---
@@ -108,7 +108,7 @@ Effective 계수는 다음을 포함합니다.
 
 - `state_lane_t::run(...).get()` 1,009곳
 - 분리형 `future = run(...); future.get()` test 2곳
-- [actor_gateway_state_t::sync](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/actors/actor_gateway_runtime.hpp:184) 정의를 실제 호출 100곳으로 치환
+- [actor_gateway_state_t::sync](../../framework/languages/cpp/framework/src/runtime/actors/actor_gateway_runtime.hpp#L184) 정의를 실제 호출 100곳으로 치환
 
 계획의 과거 456 산출 범위가 남아 있지 않습니다. 따라서 비교는 다음처럼 범위를 나누어야 합니다.
 
@@ -127,7 +127,7 @@ Effective 계수는 다음을 포함합니다.
 | (c) 공개 동기 계약상 불가피함이 입증된 곳 | **0** |
 | (d) 기타 runtime/message 경로 `[의심]` | **662** |
 
-상위 파일은 [spot_runtime.cpp](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp:13030) 243, `public_host_runtime.cpp` 115, `mesh_node_runtime.cpp` 72, `raw_client_server_owner.cpp` 57, `stateful_object_runtime.cpp` 56, `raw_mesh_node_owner.cpp` 47, [actor_transfer_coordinator.cpp](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/spots/actor_transfer_coordinator.cpp:609) 45입니다.
+상위 파일은 [spot_runtime.cpp](../../framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp#L13030) 243, `public_host_runtime.cpp` 115, `mesh_node_runtime.cpp` 72, `raw_client_server_owner.cpp` 57, `stateful_object_runtime.cpp` 56, `raw_mesh_node_owner.cpp` 47, [actor_transfer_coordinator.cpp](../../framework/languages/cpp/framework/src/runtime/spots/actor_transfer_coordinator.cpp#L609) 45입니다.
 
 ### 원격 Actor 1회당 동적 횟수
 
@@ -135,11 +135,11 @@ Effective 계수는 다음을 포함합니다.
 
 | phase | send | request | 대표 위치 |
 |---|---:|---:|---|
-| host/coordinator·dispatch admission | 10 | 11 | [host precheck](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp:6094), [Actor projection](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp:13030), [gateway context](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/actors/actor_gateway_runtime.cpp:2255) |
-| relay/fence/backlog admission | 5 | 5 | [retiring/fence](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp:10240), [second fence](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp:10352) |
-| warm materialization·dispatch projection | 1 | 1 | [spot_runtime.cpp:10554](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp:10554) |
-| request bookkeeping | 0 | 1 | [spot_runtime.cpp:10829](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp:10829) |
-| callback admission | 1 | 1 | [spot_runtime.cpp:4111](/home/hep7/project/zlink/framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp:4111) |
+| host/coordinator·dispatch admission | 10 | 11 | [host precheck](../../framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp#L6094), [Actor projection](../../framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp#L13030), [gateway context](../../framework/languages/cpp/framework/src/runtime/actors/actor_gateway_runtime.cpp#L2255) |
+| relay/fence/backlog admission | 5 | 5 | [retiring/fence](../../framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp#L10240), [second fence](../../framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp#L10352) |
+| warm materialization·dispatch projection | 1 | 1 | [spot_runtime.cpp:10554](../../framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp#L10554) |
+| request bookkeeping | 0 | 1 | [spot_runtime.cpp:10829](../../framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp#L10829) |
+| callback admission | 1 | 1 | [spot_runtime.cpp:4111](../../framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp#L4111) |
 | 합계 | **17** | **19** | |
 
 부록 A의 11/13보다 6회 많지만, 현재 직접 wait는 오히려 2회 줄었습니다. 과거 조사에서 coordinator/gateway 내부의 hidden wait 8회를 전개하지 않았기 때문에 생긴 차이입니다.
@@ -157,7 +157,7 @@ Effective 계수는 다음을 포함합니다.
 
 같은 phase의 projection만 합치면 **17/19 → 10/12**입니다. Gateway, callback, request bookkeeping까지 바꾸어도 약 **8/8**입니다. 목표 5~6에는 node/coordinator ownership 또는 admission token 통합이 필요합니다.
 
-두 번째 authority fence는 제거 후보가 아닙니다. [계획의 유지 판정](/home/hep7/project/zlink/doc/plan/implementation-plan.ko.md:98)과 현재 liveness 설명이 일치합니다.
+두 번째 authority fence는 제거 후보가 아닙니다. [계획의 유지 판정](implementation-plan.ko.md#05-진행표--새-세션이-이-표를-갱신한다)과 현재 liveness 설명이 일치합니다.
 
 ---
 
@@ -171,46 +171,46 @@ Wrapper monitor는 native call 진입만 직렬화합니다. async send/request 
 
 | 위치 | operation | 직접 위임 | 근거 |
 |---|---|---|---|
-| [D:27](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaDealerSocket.java:27) | bind | 아니오 | production caller 부재는 owner 계약이 아님 |
-| [D:28](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaDealerSocket.java:28) | connect | 아니오 | public/manual/location/reconnect producer 병존 |
-| [D:29](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaDealerSocket.java:29) | disconnect | 아니오 | public 호출과 liveness reconnect가 공유 |
-| [D:31](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaDealerSocket.java:31) | receiveFlow | `[의심]` | `applyLock`과 close join은 있으나 send/recv/connect와의 동시성 계약이 없음 |
-| [D:39](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaDealerSocket.java:39) | send | 아니오 | application과 liveness/control submit 공유 |
-| [D:44](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaDealerSocket.java:44) | request | 아니오 | application, manual admission, location monitor 공유 |
-| [D:52](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaDealerSocket.java:52) | recv | 아니오 | receive loop는 하나지만 reconnect/close owner와 결합되지 않음 |
-| [D:62](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaDealerSocket.java:62) | close | 아니오 | submit, monitor, reconnect와 teardown 경합 |
+| [D:27](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaDealerSocket.java#L27) | bind | 아니오 | production caller 부재는 owner 계약이 아님 |
+| [D:28](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaDealerSocket.java#L28) | connect | 아니오 | public/manual/location/reconnect producer 병존 |
+| [D:29](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaDealerSocket.java#L29) | disconnect | 아니오 | public 호출과 liveness reconnect가 공유 |
+| [D:31](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaDealerSocket.java#L31) | receiveFlow | `[의심]` | `applyLock`과 close join은 있으나 send/recv/connect와의 동시성 계약이 없음 |
+| [D:39](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaDealerSocket.java#L39) | send | 아니오 | application과 liveness/control submit 공유 |
+| [D:44](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaDealerSocket.java#L44) | request | 아니오 | application, manual admission, location monitor 공유 |
+| [D:52](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaDealerSocket.java#L52) | recv | 아니오 | receive loop는 하나지만 reconnect/close owner와 결합되지 않음 |
+| [D:62](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaDealerSocket.java#L62) | close | 아니오 | submit, monitor, reconnect와 teardown 경합 |
 
 ### Router
 
 | 위치 | operation | 직접 위임 | 근거 |
 |---|---|---|---|
-| [R:28](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:28) | bind | 아니오 | bind 전에 flow/public topology에 노출 |
-| [R:29](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:29) | connect | 아니오 | public endpoint와 background auto-connect 병존 |
-| [R:30](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:30) | disconnect | 아니오 | public/background producer 병존 |
-| [R:32](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:32) | receiveFlow | `[의심]` | Dealer와 같은 단일 setter 후보이나 교차-operation 계약 부재 |
-| [R:36](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:36) | connect RID | 아니오 | auto-connect gate가 public connect를 덮지 않음 |
-| [R:37](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:37) | probe | 아니오 | RID/probe/connect transaction owner가 불완전 |
-| [R:38](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:38) | max size get | 아니오 | public/receive/descriptor producer 공유 |
-| [R:39](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:39) | max size set | 아니오 | bootstrap 뒤에도 public mutation 가능 |
-| [R:40](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:40) | weight get | 아니오 | public read와 descriptor projection 병존 |
-| [R:41](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:41) | weight set | 아니오 | bootstrap와 public setter 병존 |
-| [R:42](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:42) | last endpoint | 아니오 | active socket/close와 공유, owner assertion 없음 |
-| [R:48](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:48) | recv | 아니오 | receive producer는 하나지만 topology/flow/close가 같은 raw object 공유 |
-| [R:58](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:58) | send | 아니오 | application과 control/liveness submit 병존 |
-| [R:65](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:65) | request | 아니오 | application/internal request producer 병존 |
-| [R:76](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:76) | reply | 아니오 | 여러 handler completion thread와 wrapper 우회 reply 존재 |
-| [R:80](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:80) | disconnect peer | 아니오 | receive rejection과 scheduled liveness 공유 |
-| [R:84](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java:84) | close | 아니오 | retained option과 이미 시작된 reply를 금지하는 join 없음 |
+| [R:28](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L28) | bind | 아니오 | bind 전에 flow/public topology에 노출 |
+| [R:29](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L29) | connect | 아니오 | public endpoint와 background auto-connect 병존 |
+| [R:30](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L30) | disconnect | 아니오 | public/background producer 병존 |
+| [R:32](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L32) | receiveFlow | `[의심]` | Dealer와 같은 단일 setter 후보이나 교차-operation 계약 부재 |
+| [R:36](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L36) | connect RID | 아니오 | auto-connect gate가 public connect를 덮지 않음 |
+| [R:37](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L37) | probe | 아니오 | RID/probe/connect transaction owner가 불완전 |
+| [R:38](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L38) | max size get | 아니오 | public/receive/descriptor producer 공유 |
+| [R:39](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L39) | max size set | 아니오 | bootstrap 뒤에도 public mutation 가능 |
+| [R:40](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L40) | weight get | 아니오 | public read와 descriptor projection 병존 |
+| [R:41](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L41) | weight set | 아니오 | bootstrap와 public setter 병존 |
+| [R:42](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L42) | last endpoint | 아니오 | active socket/close와 공유, owner assertion 없음 |
+| [R:48](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L48) | recv | 아니오 | receive producer는 하나지만 topology/flow/close가 같은 raw object 공유 |
+| [R:58](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L58) | send | 아니오 | application과 control/liveness submit 병존 |
+| [R:65](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L65) | request | 아니오 | application/internal request producer 병존 |
+| [R:76](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L76) | reply | 아니오 | 여러 handler completion thread와 wrapper 우회 reply 존재 |
+| [R:80](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L80) | disconnect peer | 아니오 | receive rejection과 scheduled liveness 공유 |
+| [R:84](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRouterSocket.java#L84) | close | 아니오 | retained option과 이미 시작된 reply를 금지하는 join 없음 |
 
 ### Subscriber
 
 | 위치 | operation | 직접 위임 | 근거 |
 |---|---|---|---|
-| [S:23](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaSubscriberSocket.java:23) | bind | 아니오 | caller 부재만으로 owner를 증명할 수 없음 |
-| [S:24](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaSubscriberSocket.java:24) | connect | 아니오 | public request와 location reconciler 공유 |
-| [S:25](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaSubscriberSocket.java:25) | disconnect | 아니오 | manual/location teardown 병존 |
-| [S:33](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaSubscriberSocket.java:33) | subscribe | 아니오 | admitted receive tick과 monitor-driven close의 join 부재 |
-| [S:44](/home/hep7/project/zlink/framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaSubscriberSocket.java:44) | close | 아니오 | tick, monitor, stop/expiry producer 병존 |
+| [S:23](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaSubscriberSocket.java#L23) | bind | 아니오 | caller 부재만으로 owner를 증명할 수 없음 |
+| [S:24](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaSubscriberSocket.java#L24) | connect | 아니오 | public request와 location reconciler 공유 |
+| [S:25](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaSubscriberSocket.java#L25) | disconnect | 아니오 | manual/location teardown 병존 |
+| [S:33](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaSubscriberSocket.java#L33) | subscribe | 아니오 | admitted receive tick과 monitor-driven close의 join 부재 |
+| [S:44](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaSubscriberSocket.java#L44) | close | 아니오 | tick, monitor, stop/expiry producer 병존 |
 
 Application-message hot wrapper는 Dealer send/request, Router recv/send/request/reply, Subscriber subscribe의 7곳입니다.
 
@@ -222,21 +222,21 @@ Application-message hot wrapper는 Dealer send/request, Router recv/send/request
 
 - `_barrierGate|barrierGate|BarrierGate`: 저장소 전체 **0건**
 - `RunBarrierState`: 정의·forwarder를 제외한 semantic caller **16곳**
-- Spot admission open은 이미 turn A → callback outside → turn B입니다: [turn A](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkSpotSerialExecutor.cs:911), [callback](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkSpotSerialExecutor.cs:933), [turn B](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkSpotSerialExecutor.cs:1200).
+- Spot admission open은 이미 turn A → callback outside → turn B입니다: [turn A](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkSpotSerialExecutor.cs#L911), [callback](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkSpotSerialExecutor.cs#L933), [turn B](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkSpotSerialExecutor.cs#L1200).
 - Canonical replay reservation, join prewarm, retire abort cleanup도 이미 유형 ③ 구조입니다.
 
-따라서 [계획 102행](/home/hep7/project/zlink/doc/plan/implementation-plan.ko.md:102)의 “16곳 이월”은 현재 코드와 맞지 않고, [108행](/home/hep7/project/zlink/doc/plan/implementation-plan.ko.md:108)이 현재 상태와 일치합니다. `[의심-doc]`입니다.
+따라서 [계획 102행](implementation-plan.ko.md#05-진행표--새-세션이-이-표를-갱신한다)의 “16곳 이월”은 현재 코드와 맞지 않고, [108행](implementation-plan.ko.md#05-진행표--새-세션이-이-표를-갱신한다)이 현재 상태와 일치합니다. `[의심-doc]`입니다.
 
 현재 재설계 대상은 다음과 같습니다.
 
 | 심각도 | 대상 | callback/effect 위치 | 현재 구조와 필요한 변경 |
 |---|---|---|---|
-| H | Handoff `prepareCapture` | [정의·호출](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkActorHandoffState.cs:342), callers: `ZLinkActorHandoffIngress:64,172`, `ZLinkActorInboundPipeline:313,475` | callback이 Handoff lane 안에서 다른 lane과 runtime 등록에 진입. arrival/capacity placeholder → callback outside → commit/failure 정산 필요 |
-| H | Handoff Cancel/Dispose/lease | [token Dispose](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkActorHandoffState.cs:65), `:975`, `:1059`, `:1790`, `:1871` | `Cancel`/`Dispose`가 동기 callback을 실행할 수 있음. turn A에서 handle을 떼고 밖에서 정리한 뒤 identity 재검증 필요 |
+| H | Handoff `prepareCapture` | [정의·호출](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkActorHandoffState.cs#L342), callers: `ZLinkActorHandoffIngress:64,172`, `ZLinkActorInboundPipeline:313,475` | callback이 Handoff lane 안에서 다른 lane과 runtime 등록에 진입. arrival/capacity placeholder → callback outside → commit/failure 정산 필요 |
+| H | Handoff Cancel/Dispose/lease | [token Dispose](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkActorHandoffState.cs#L65), `:975`, `:1059`, `:1790`, `:1871` | `Cancel`/`Dispose`가 동기 callback을 실행할 수 있음. turn A에서 handle을 떼고 밖에서 정리한 뒤 identity 재검증 필요 |
 | M | Handoff diagnostic listener | `HandoffState:151,163,317,362,440,517,665,938,1077,1161,1855` | 외부 `Action<string>` 11곳이 lane 안에서 실행. non-throwing 계약이 없으므로 예외 의미는 `[의심]` |
-| H | Standalone `AttemptSlot.RunAsync` | [lane이 외부 async 전체를 await](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Host/ZLinkStandaloneActorRelocationRuntime.cs:2998), callers `:1040,1070,1129,1344,2362,2488,2547` | store I/O, rollback, 다른 Handoff lane을 turn 전체에서 기다림. attempt generation placeholder와 turn B CAS 정산 필요 |
-| H | async serial seal reservation | [callback under `_admissionGate`](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Execution/ZLinkSerialExecutionQueue.cs:1130), production callback [timer freeze](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkSpotActivationExecution.cs:1194) | queue monitor 안에서 외부 timer owner 호출. queue-boundary placeholder 뒤 callback outside, 결과를 seal에 정산해야 함 |
-| L·`[의심]` | sync serial seal `admit` | [admit under `_admissionGate`](/home/hep7/project/zlink/framework/languages/dotnet/src/Zlink.Framework/Runtime/Execution/ZLinkSerialExecutionQueue.cs:493) | 유형 ③ 위반 형태이나 callback overload의 production caller는 찾지 못함. test와 latent internal API는 존재 |
+| H | Standalone `AttemptSlot.RunAsync` | [lane이 외부 async 전체를 await](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Host/ZLinkStandaloneActorRelocationRuntime.cs#L2998), callers `:1040,1070,1129,1344,2362,2488,2547` | store I/O, rollback, 다른 Handoff lane을 turn 전체에서 기다림. attempt generation placeholder와 turn B CAS 정산 필요 |
+| H | async serial seal reservation | [callback under `_admissionGate`](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Execution/ZLinkSerialExecutionQueue.cs#L1130), production callback [timer freeze](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Spots/ZLinkSpotActivationExecution.cs#L1194) | queue monitor 안에서 외부 timer owner 호출. queue-boundary placeholder 뒤 callback outside, 결과를 seal에 정산해야 함 |
+| L·`[의심]` | sync serial seal `admit` | [admit under `_admissionGate`](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Execution/ZLinkSerialExecutionQueue.cs#L493) | 유형 ③ 위반 형태이나 callback overload의 production caller는 찾지 못함. test와 latent internal API는 존재 |
 
 ---
 

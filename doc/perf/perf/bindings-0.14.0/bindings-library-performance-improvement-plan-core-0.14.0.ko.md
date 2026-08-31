@@ -664,7 +664,7 @@ transport 세부 정보, perf 전용 option을 노출하지 않는다. 새 helpe
 - **계약을 완화해 목표를 맞추지 않는다.** test를 통과시키려고 assert를 완화하거나
   timeout을 늘려 회피하지 않는다.
 - spec 변경 의견과 public interface 변경 의견은
-  [`spec-and-interface-change-proposals.ko.md`](spec-and-interface-change-proposals.ko.md)에 누적한다.
+  [`spec-and-interface-change-proposals.ko.md`](../bindings-0.13.2/spec-and-interface-change-proposals.ko.md)에 누적한다.
 
 ### 7-1-5. spec 변경에서 비롯된 코드 수정
 
