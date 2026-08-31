@@ -10,11 +10,20 @@
 
 이 문서 하나로 새 세션이 이어받을 수 있게, 현재 상태를 여기 고정한다(진행하며 갱신할 것).
 
-- **브랜치:** `docs/archify-diagrams-pilot` (main 아님). 아직 **미커밋** — 아래 산출물이 모두
-  워킹트리에 있다. 새 세션은 시작 시 `git status`로 브랜치·워킹트리를 먼저 확인한다.
-- **완료:** `01-overview.ko.md`(14개), `06-spot.ko.md`(1개). 다이어그램 에셋은
-  `framework/doc/framework/common/diagrams/<name>.architecture.json`(+`.html`). 현재 15개.
-- **남은 대상:** §3의 **8개 파일, 29개** mermaid.
+- **브랜치:** `docs/archify-diagrams-pilot` (main 아님).
+- **완료(ko 전체):** 9개 파일 30개 mermaid 전부 archify SVG로 변환·임베드 완료
+  (`01-overview` 14 · `02-getting-started` 1(sequence) · `03-concepts` 6 · `04-backpressure` 1 ·
+  `05-channel-messaging` 8(sequence 1 포함) · `06-spot` 1 · `10-location` 1 · `12-operations` 2(생명주기 1) ·
+  `14-samples` 7 · `17-alternative` 3(sequence 2)). 다이어그램 에셋 44개
+  (`framework/doc/framework/common/diagrams/<name>.architecture.json`+`.html`). **공통폭 1010 통일**,
+  라이트·다크 전수 육안검사(교차 0·색 의미·×N 스택), `mkdocs build` 무오류(내 변경 신규 경고 0),
+  5개 언어 가이드 `generate_language_guides.py`로 재생성. **커밋 완료.**
+- **정본 판정 3건(이 세션 확정):** ① sequence는 archify `sequence` 타입(86px 라벨 초과는
+  `column_fit:"spread"`+`meta.viewBox`로 라벨 보존) ② stateDiagram-v2(12 생명주기)는 architecture
+  선형 흐름 ③ 나란한/중첩 subgraph(12·03 relocation)는 세로 region 스택 + 내부 정체성은 라벨/카드 보존.
+  color 판정: Location Store=`external`(회색), 실제 데이터 스토어(Redis·이벤트스트림·조회모델)=`database`(보라).
+- **남은 후속(§7 마지막):** **영문판 `.en.md` 변환**(영어 라벨 → 별도 diagram 에셋 필요, 이 세션 범위 밖).
+  archify sequence의 `messages[].note`는 이 빌드에서 렌더 안 됨 → note 내용은 라벨/카드로 보존(기지 한계).
 - **도구:** `scripts/diagrams/`(`build-diagram.mjs`·`pad-viewbox.mjs`·`shot.mjs`·`shot-dark.mjs`·
   `shot-region.mjs` + README). `build-diagram.mjs`는 `ARCHIFY_DIR` 환경변수가 필요하다.
 - **규칙 SSOT:** [`doc/principal/documentation/diagram-authoring-guide.ko.md`](../principal/documentation/diagram-authoring-guide.ko.md).
@@ -138,12 +147,12 @@ Claude가 각 파일에 대해 확인한다. 하나라도 실패면 반려.
 
 ## 7. 전역 완료 체크리스트
 
-- [ ] 9개 파일 30개 mermaid 전부 변환·임베드, 각 파일 §6 게이트 통과.
-- [ ] 최종 **공통폭 재통일**(01-overview 포함 전 다이어그램 동일 배율).
-- [ ] 사이트 빌드(`generate_language_guides.py` → `mkdocs build`) 무오류, 라이트·다크 확인.
-- [ ] 파일별 mermaid 잔여 0(`grep -c '```mermaid'`).
-- [ ] 커밋(도구·가이드·계획 + 변환 결과). doc/site는 **스테이징 금지**(커밋 전 cached 대조).
-- [ ] 완료 후 **영문판(.en.md)** 변환으로 이관.
+- [x] 9개 파일 30개 mermaid 전부 변환·임베드, 각 파일 §6 게이트 통과.
+- [x] 최종 **공통폭 재통일**(공통폭 1010; 신규 29개를 통일, 기존 01/06과 동일 배율).
+- [x] 사이트 빌드(`generate_language_guides.py` → `mkdocs build`) 무오류(내 변경 신규 경고 0), 라이트·다크 확인.
+- [x] 파일별 mermaid 잔여 0(`grep -c '```mermaid'`).
+- [x] 커밋(변환 결과 + 언어별 재생성 + 계획). doc/site는 **미변경**(cached 대조 완료).
+- [ ] 완료 후 **영문판(.en.md)** 변환으로 이관. ← **남은 후속(다음 세션)**.
 
 ## 8. 리스크·주의
 

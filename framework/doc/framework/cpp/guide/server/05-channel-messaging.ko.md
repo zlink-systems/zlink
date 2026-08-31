@@ -35,14 +35,8 @@ channel messaging은 framework의 가장 기본 축이다. 다음 상호작용�
 > 괄호 안 `DEALER → ROUTER`·`PUB / SUB`는 하부 소켓 종류로, **어플리케이션이 직접 다루지
 > 않는다**(framework가 channel 종류에 따라 자동 매핑).
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  CL["호출하는 쪽<br/>route client / fanout client"]
-  CL -->|"Request: 응답이 필요"| H1["server handler → 응답 돌려줌"]
-  CL -->|"Send: 응답 없는 단방향"| H2["server handler (응답 없음)"]
-  CL -->|"Publish(topic): 여러 곳에"| SUB["구독자 1 · 2 · ... · N"]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/05-messaging-kinds.html" title="세 가지 호출 종류 — Request · Send · Publish" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-messaging-kinds.html" target="_blank">↗ 크게 보기</a></p>
 
 ## 0. gRPC를 대체하는 용도
 
@@ -126,27 +120,8 @@ transport를 따로 여는 독립 연결 단위**다.
 MeshNode 소켓 하나로 mesh에 연결하고, channel 이름은 그 위에서 "이 요청을 누가
 받는가"를 가르는 논리 묶음이다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  subgraph ORD["channel: orders"]
-    direction TB
-    A1["node A1"]:::server
-    A2["node A2"]:::server
-  end
-  B["node B<br/>orders Client<br/>billing Client<br/>MeshNode 소켓 1개"]:::client
-  subgraph BIL["channel: billing"]
-    direction TB
-    C1["node C1"]:::server
-    C2["node C2"]:::server
-  end
-  B <-->|"MeshNode 소켓"| A1
-  B <-->|"MeshNode 소켓"| A2
-  B <-->|"MeshNode 소켓"| C1
-  B <-->|"MeshNode 소켓"| C2
-  classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-```
+<iframe class="zlink-diagram" src="/common/diagrams/05-route-mesh.html" title="route mesh channel — 연결은 한 번, channel은 그 위의 이름" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-route-mesh.html" target="_blank">↗ 크게 보기</a></p>
 
 상자는 소켓이 아니라 이름으로 묶인 그룹이다. `orders`를 호출하면 select-one이 그 상자
 안의 A1·A2 중 하나를 고르고, channel을 열 개 더 등록해도 node B의 소켓은 늘지 않는다.
@@ -166,27 +141,8 @@ membership · Spot·Actor 위치가 들어가지 않는다. 반대로 MeshNode�
 수동 endpoint만 쓰면 location store가 없어도 된다. **자동 탐색을 켰는데 store가 없으면
 listener를 bind하기 전에 시작이 실패한다.**
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  subgraph AUTH["channel: auth"]
-    direction TB
-    Y1["process Y"]:::server
-    Z1["process Z"]:::server
-  end
-  X["process X<br/>auth Client<br/>report Client<br/>channel별 runtime"]:::client
-  subgraph REP["channel: report"]
-    direction TB
-    Z2["process Z"]:::server
-    W2["process W"]:::server
-  end
-  X -->|"auth connection"| Y1
-  X -->|"auth connection"| Z1
-  X -->|"report connection"| Z2
-  X -->|"report connection"| W2
-  classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-```
+<iframe class="zlink-diagram" src="/common/diagrams/05-clientserver.html" title="ClientServer channel — channel별 독립 runtime" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-clientserver.html" target="_blank">↗ 크게 보기</a></p>
 
 `auth`와 `report`는 연결 대상과 수명을 서로 공유하지 않는다. 같은 process Z가 양쪽
 channel에 모두 참여해도 각 channel runtime이 Z와의 연결을 따로 관리한다.
@@ -230,13 +186,8 @@ Spot 밖에서 발행해야 하면 spot publisher client를 주입받아 같은 
 소켓 쌍을 연다. Spot이나 MeshNode와 무관하게 발행자 하나가 연결된 구독자 전원에게
 전달한다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-graph LR
-    P["publisher"] --> S1["subscriber A"]
-    P --> S2["subscriber B"]
-    P --> S3["subscriber C"]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/05-publish-fanout.html" title="Classic fanout — 발행자 하나가 연결된 구독자 전원에게" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-publish-fanout.html" target="_blank">↗ 크게 보기</a></p>
 
 둘 다 **발행 완료가 전달을 보장하지는 않는다.** 발행 호출이 완료됐다는 것은 전송
 준비가 로컬에서 접수됐다는 의미이며, 구독자가 그 이벤트를 처리했다는 확인이 아니다.
@@ -415,28 +366,8 @@ task_t<create_game_reply_t> handle (const create_game_request_t &request)
 Channel handler는 channel별 비동기 수신 루프에서 실행된다. Handler가 대기 지점에 도달하면
 그 실행 흐름만 멈추고 스레드는 풀로 돌아가 다른 일을 처리한다.
 
-```mermaid
-sequenceDiagram
-    participant W as worker 스레드
-    participant H1 as 핸들러 A (async)
-    participant CH as Play 채널
-    participant H2 as 핸들러 B (async)
-
-    W->>H1: HandleAsync() 실행
-    activate H1
-    H1->>CH: await Request(...).Async()
-    deactivate H1
-    Note over H1: suspend — 응답 대기 (스레드 점유 없음)
-    Note over W: 워커는 즉시 다음 일로
-    W->>H2: HandleAsync() 실행
-    activate H2
-    H2-->>W: return (완료)
-    deactivate H2
-    CH-->>H1: 응답 도착 → resume
-    activate H1
-    H1-->>W: return (완료)
-    deactivate H1
-```
+<iframe class="zlink-diagram" src="/common/diagrams/05-async-handler.html" title="비동기 핸들러 — suspend 중 워커가 다른 일을 처리" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-async-handler.html" target="_blank">↗ 크게 보기</a></p>
 
 그래서 콜백 없이 **위에서 아래로 읽히는 코드**로 worker 몇 개가 수많은 동시 요청을
 처리한다. `.Result`로 막으면 그 스레드가 계속 점유되므로 핸들러 안에서 금지한다.
@@ -745,31 +676,8 @@ weight가 모두 같으면 새 요청은 균등하게 round-robin으로 분배�
 다르면 더 큰 값을 가진 서버가 그 비율만큼 더 자주 선택된다. `0`은 "연결은 유지하지만
 새 요청 후보에서는 제외"라는 뜻이고, `100`은 기본 정상 serving 값이다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    subgraph C ["client application"]
-        R["ZLink channel runtime<br/>새 요청 대상 선택"]
-    end
-
-    subgraph A ["server A"]
-        AR["runtime<br/>Weight = 100"]
-        AH["typed handler"]
-    end
-    subgraph B ["server B"]
-        BR["runtime<br/>Weight = 50"]
-        BH["typed handler"]
-    end
-    subgraph D ["server C"]
-        DR["runtime<br/>Weight = 0<br/>drain"]
-        DH["typed handler"]
-    end
-
-    R -->|"더 자주 선택"| AR --> AH
-    R -->|"덜 자주 선택"| BR --> BH
-    R -. "새 요청 후보 제외" .-> DR
-    DR --> DH
-```
+<iframe class="zlink-diagram" src="/common/diagrams/05-drain-weight.html" title="운영 drain / restore — peer 가중치로 대상 선택" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-drain-weight.html" target="_blank">↗ 크게 보기</a></p>
 
 ```cpp
 // 운영 admin 경로. "orders"는 등록한 ChannelName이다.
@@ -905,14 +813,8 @@ caller.peer_connections ().connect ("tcp://10.30.1.10:5601");
 options.add_route_mesh ("media").listen (0).channel_name ("image.resize").client ();
 ```
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-graph LR
-    C["호출 노드<br/>channel client"] -->|"요청 1"| A["처리 노드 A<br/>:5600"]
-    C -->|"요청 2"| B["처리 노드 B<br/>:5601"]
-    C -->|"요청 3 (다시 A)"| A
-    C -.->|"노드 추가 시<br/>store row 자동 반영"| D["처리 노드 C<br/>:5602"]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/05-node-select.html" title="round-robin 분산 · 노드 추가 자동 반영" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-node-select.html" target="_blank">↗ 크게 보기</a></p>
 
 특정 엔티티(주문 ID·사용자 ID)를 늘 같은 실행 단위가 처리해야 하면 channel이 아니라
 Spot이나 actor를 사용한다([06-spot](06-spot.ko.md)).
@@ -971,12 +873,8 @@ class node_status_handler_t
 
 Framework가 현재 owner와 eligible node를 선택하므로 application은 Node RID를 보관하지 않는다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-graph LR
-    O["operations"] -->|"target node rid"| N["managed node"]
-    A["application"] -->|"actor id / spot id / channel"| F["Framework routing"]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/05-addressing.html" title="주소 지정 — 운영 vs 애플리케이션" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-addressing.html" target="_blank">↗ 크게 보기</a></p>
 
 SPOT과의 결합은 [06-spot](06-spot.ko.md)에서 이어진다.
 
@@ -1034,3 +932,7 @@ int main (int argc, char **argv)
   [언어별 topology 공개 계약](../../../common/spec/server/languages/README.ko.md)
 - 전체 시나리오: [공통 샘플](../../../common/sample/README.ko.md)
 - 다음 축: [06-spot](06-spot.ko.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

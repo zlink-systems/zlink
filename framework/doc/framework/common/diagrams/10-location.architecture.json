@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Location — 위치 등록과 조회",
+    "subtitle": "Server는 descriptor·owner를 Store에 등록 · Client는 위치를 읽어 직접 message",
+    "output": "10-location.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 120, "gapY": 96, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C", "type": "frontend", "label": "Object Client", "row": 0, "col": 0 },
+    { "id": "S", "type": "frontend", "label": "Object Server", "row": 0, "col": 2 },
+    { "id": "L", "type": "external", "label": "Location Store", "row": 1, "col": 1 }
+  ],
+  "connections": [
+    { "from": "C", "to": "S", "variant": "default", "label": "message" },
+    { "from": "C", "to": "L", "variant": "default", "label": "read current location" },
+    { "from": "S", "to": "L", "variant": "default", "label": "descriptor and owner" }
+  ],
+  "cards": [
+    {
+      "dot": "slate",
+      "title": "Location Store (infra)",
+      "items": [
+        "Object Server는 자기 descriptor와 현재 owner를 Location Store에 등록한다.",
+        "Object Client는 Location Store에서 현재 위치를 읽어 대상 MeshNode를 고른다.",
+        "Store는 위치를 찾을 때만 쓴다 — 실제 application message는 선택한 MeshNode로 직접 전송한다."
+      ]
+    }
+  ]
+}

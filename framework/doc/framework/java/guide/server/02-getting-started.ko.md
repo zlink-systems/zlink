@@ -134,23 +134,8 @@ type과 최초 설정만 넘긴다. Framework가 해당 type을 등록한 Object
 
 ### 3.1 실행 흐름
 
-```mermaid
-sequenceDiagram
-    participant Client as HTTP client
-    participant Api as API server
-    participant Store as Location Store
-    participant Play as Selected Play node
-    participant Spot as Game Spot
-
-    Client->>Api: POST /games
-    Api->>Store: Reserve a new Spot
-    Store-->>Api: SpotId and selected owner
-    Api->>Play: Create Spot with initial request
-    Play->>Spot: Construct and initialize
-    Spot-->>Play: Accept
-    Play-->>Api: Spot ready
-    Api-->>Client: RoomId = SpotId
-```
+<iframe class="zlink-diagram" src="/common/diagrams/02-create-room.html" title="방 하나를 만드는 흐름 — Create Room" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/02-create-room.html" target="_blank">↗ 크게 보기</a></p>
 
 API 코드에는 Play node의 `NodeRid`나 endpoint가 들어가지 않는다. Play node가
 추가되거나 교체되어도 같은 생성 코드를 사용한다.
@@ -319,3 +304,7 @@ endpoint에 연결한 참가자들이 같은 방에 join하고, 게임 메시지
 각각 설명한다.
 
 ---
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

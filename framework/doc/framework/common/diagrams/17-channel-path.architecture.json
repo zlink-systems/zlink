@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "channel 경로 — 사이드카 없이 직접 호출",
+    "subtitle": "order-service가 RequestToChannel로 payment-service를 직접 부르고 framework가 peer 분배",
+    "output": "17-channel-path.html",
+    "column_fit": "spread",
+    "viewBox": [660, 640],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "A", "type": "frontend", "label": "order-service" },
+    { "id": "B", "type": "frontend", "label": "payment-service" }
+  ],
+  "messages": [
+    { "from": "A", "to": "B", "y": 160, "label": "RequestToChannel(...)", "variant": "default", "note": "channel 위치는 location store row로 해결됨" },
+    { "from": "B", "to": "A", "y": 208, "label": "reply", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "직접 호출",
+      "items": [
+        "호출 전문: RequestToChannel(commerce, payments, Charge) — framework가 peer 분배.",
+        "사이드카 없이 order-service가 payment-service를 직접 부른다. 위치는 location store row로 해결되고, framework가 peer를 분배한다."
+      ]
+    }
+  ]
+}

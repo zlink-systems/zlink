@@ -212,32 +212,8 @@ rollback하지 않고 target recovery를 계속하며 deadline을 넘기면 `For
 commit한다. Entry Spot과 `PerActor` User Spot은 Actor가 각각 독립된 단위이므로 Actor별로
 이전하며, 이때 Spot instance는 state를 옮기지 않는 shell이다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  subgraph AGG["SpotWide User Spot — aggregate 하나로 이전"]
-    direction TB
-    subgraph AG1["User Spot &quot;room-42&quot;"]
-      G1(("actor P")):::unit
-      G2(("actor Q")):::unit
-    end
-  end
-  subgraph PER["Entry Spot · PerActor User Spot — Actor별로 이전"]
-    direction TB
-    subgraph PS1["Spot shell"]
-      U1(("actor R")):::unit
-      U2(("actor S")):::unit
-    end
-  end
-  AG1 ==>|"commit 1회<br/>Spot state + member Actor"| AGGT["target node"]
-  U1 ==>|"commit"| PERT["target node"]
-  U2 ==>|"commit"| PERT
-  classDef unit fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-  style AGG fill:#eceff1,stroke:#546e7a,stroke-width:2px,color:#000000
-  style PER fill:#eceff1,stroke:#546e7a,stroke-width:2px,color:#000000
-  style AG1 fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-  style PS1 fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/12-relocation.html" title="execution mode별 relocation 이전 단위 — SpotWide vs PerActor" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/12-relocation.html" target="_blank">↗ 크게 보기</a></p>
 
 따라서 `PerActor` User Spot의 factory relocation 방식은 `RecreateOnRelocation()`만
 사용할 수 있다. Member Actor의 policy는 각 Actor factory가 따로 정한다. Instance Spot은
@@ -614,21 +590,8 @@ Framework runtime은 host의 **수명주기 서비스**로 시작·종료에 묶
 channel·SPOT·STREAM runtime은 startup에서 등록한 역할을 보고 생성되어 shutdown에서
 정리된다.
 
-```mermaid
-stateDiagram-v2
-    direction LR
-    state "구성 단계" as configure
-    state "서비스 중" as serving
-    state "종료" as stopping
-    [*] --> configure: WebApplication.CreateBuilder()
-    configure: Services / AddZLinkFramework
-    configure: channel / SPOT / stream / registry
-    configure --> serving: app.Run()
-    serving: channel·SPOT·stream dispatch
-    serving --> stopping: host shutdown
-    stopping: hosted service stop → runtime 정리
-    stopping --> [*]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/12-lifecycle.html" title="Host lifecycle — 구성·서비스·종료" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/12-lifecycle.html" target="_blank">↗ 크게 보기</a></p>
 
 - **구성 단계** — `app.Run()` 전에 모든 선언을 끝낸다. 잘못된 구성은 host
   startup에서 예외로 거부된다.
@@ -718,3 +681,7 @@ stopped · error)을 그대로 관측한다. 표기는 언어를 따른다. Stat
 - 정식 계약: [Host relocation 전체 흐름](../../../common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md) · [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)
 - 상태 관측과 진단: `11. Monitoring` 장
 - relocation 경계를 application이 정하는 Spot: [06-spot §7](06-spot.ko.md#7-relocation을-시작해도-되는-시점-알리기)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

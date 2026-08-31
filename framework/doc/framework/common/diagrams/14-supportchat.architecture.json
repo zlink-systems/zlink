@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "SupportChat — 연결 하나, actor 여럿",
+    "subtitle": "상담원 session 하나에 roster · conversation actor bind",
+    "output": "14-supportchat.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 4, "gapX": 96, "gapY": 120, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "AC", "type": "frontend", "label": "상담원 client", "row": 1, "col": 0 },
+    { "id": "SE", "type": "external", "label": "session", "row": 1, "col": 1 },
+    { "id": "RA", "type": "backend", "label": "roster actor", "row": 0, "col": 2 },
+    { "id": "A1", "type": "backend", "label": "conversation", "sublabel": "actor A", "row": 1, "col": 2 },
+    { "id": "C1", "type": "backend", "label": "고객 A", "row": 1, "col": 3 },
+    { "id": "A2", "type": "backend", "label": "conversation", "sublabel": "actor B", "row": 2, "col": 2 },
+    { "id": "C2", "type": "backend", "label": "고객 B", "row": 2, "col": 3 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "conversation Spot A", "wraps": ["A1", "C1"] },
+    { "kind": "region", "label": "conversation Spot B", "wraps": ["A2", "C2"] }
+  ],
+  "connections": [
+    { "from": "AC", "to": "SE", "label": "stream 연결 1개", "variant": "default" },
+    { "from": "SE", "to": "RA", "label": "bind", "variant": "dashed" },
+    { "from": "SE", "to": "A1", "label": "bind", "variant": "dashed" },
+    { "from": "SE", "to": "A2", "label": "bind", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "연결 하나, actor 여럿",
+      "items": [
+        "상담원 client ↔ session은 stream 연결 하나 (양방향)",
+        "그 session에 roster actor(Entry Spot) + 대화별 conversation actor를 함께 bind (점선)",
+        "roster·conversation·고객 노드는 원본에서 원(circle) actor — 여기선 박스로 그린다"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "conversation Spot",
+      "items": [
+        "각 conversation Spot에 상담원측 conversation actor와 고객 actor가 함께 속한다",
+        "고객 A·B는 자기 대화의 참여자 — 각 Spot 안에만 있고 별도 연결선은 없다"
+      ]
+    }
+  ]
+}

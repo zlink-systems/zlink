@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "세 가지 호출 종류 — Request · Send · Publish",
+    "subtitle": "응답 있는 1:1 · 응답 없는 단방향 · 여러 구독자로 fan-out",
+    "output": "05-messaging-kinds.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 2, "gapX": 150, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "CL", "type": "frontend", "label": "호출하는 쪽", "sublabel": "route·fanout client", "row": 1, "col": 0 },
+    { "id": "H1", "type": "backend", "label": "server handler", "sublabel": "응답 돌려줌", "row": 0, "col": 1 },
+    { "id": "H2", "type": "backend", "label": "server handler", "sublabel": "응답 없음", "row": 1, "col": 1 },
+    { "id": "SUB", "type": "backend", "label": "구독자 ×N", "sublabel": "1 · 2 · … · N", "row": 2, "col": 1 }
+  ],
+  "connections": [
+    { "from": "CL", "to": "H1", "label": "Request", "variant": "default" },
+    { "from": "CL", "to": "H2", "label": "Send", "variant": "default" },
+    { "from": "CL", "to": "SUB", "label": "Publish(topic)", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Request / Send / Publish",
+      "items": [
+        "Request: 응답이 필요한 1:1 호출 — server handler가 응답을 돌려준다.",
+        "Send: 응답 없는 단방향 명령 — server handler가 처리만 하고 응답이 없다.",
+        "Publish(topic): 여러 곳에 fan-out — 구독자 1 · 2 · … · N 전원이 받는다."
+      ]
+    }
+  ]
+}

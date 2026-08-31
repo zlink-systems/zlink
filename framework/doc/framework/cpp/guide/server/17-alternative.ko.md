@@ -148,14 +148,8 @@ gRPC 자체의 성능은 우수하다. 문제는 이런 류의 서비스를 **"�
 L7 분배는 연결이 아니라 요청 하나하나를 보고 나누는 방식이다 — mesh sidecar나
 client-side LB가 이 역할을 한다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  C2["client"] -->|"요청 하나하나를 분배"| L7["L7 분배: mesh sidecar 또는 client-side LB"]
-  L7 -->|"req"| A2["server A"]
-  L7 -->|"req"| B2["server B"]
-  L7 -->|"req"| D2["server C"]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/17-l7-distribute.html" title="L7 분배 — 요청 하나하나를 나눈다" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-l7-distribute.html" target="_blank">↗ 크게 보기</a></p>
 
 즉 "gRPC를 쓴다"는 실제로 **gRPC + L7 LB(보통 mesh) + 서비스 위치 조회 + event broker +
 proto 파이프라인**을 함께 운영한다는 뜻이다.
@@ -212,28 +206,11 @@ location store 한 겹으로 들어온다. broker와 WS edge는 요구가 단순
 
 ### 5.3 한 번의 호출이 지나는 경로
 
-```mermaid
-sequenceDiagram
-  autonumber
-  participant A as order-service
-  participant SA as Envoy local
-  participant SB as Envoy remote
-  participant B as payment-service
-  A->>SA: gRPC Charge
-  SA->>SB: 위치 조회 + L7 LB 후 mTLS HTTP/2
-  SB->>B: forward
-  B-->>A: reply (sidecar 역경로)
-```
+<iframe class="zlink-diagram" src="/common/diagrams/17-sidecar-path.html" title="사이드카 경로 — Envoy local → Envoy remote 두 홉" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-sidecar-path.html" target="_blank">↗ 크게 보기</a></p>
 
-```mermaid
-sequenceDiagram
-  autonumber
-  participant A as order-service
-  participant B as payment-service
-  Note over A: channel 위치는 location store row로 해결됨
-  A->>B: RequestToChannel(commerce, payments, Charge) — framework가 peer 분배
-  B-->>A: reply
-```
+<iframe class="zlink-diagram" src="/common/diagrams/17-channel-path.html" title="channel 경로 — 사이드카 없이 직접 호출" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-channel-path.html" target="_blank">↗ 크게 보기</a></p>
 
 ### 5.4 접히는 항목 요약
 
@@ -385,3 +362,7 @@ v4.3.5에서 출발했기 때문이다. `http-client`는 각 플랫폼의 통상
 - [Scaling Microservices: Lessons from Netflix, Uber, Amazon, and Spotify](https://www.netguru.com/blog/scaling-microservices)
 - [Orleans overview (Microsoft Learn)](https://learn.microsoft.com/en-us/dotnet/orleans/overview)
 - [Akka License Change의 영향 (Coralogix)](https://coralogix.com/blog/akka-license-change/)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

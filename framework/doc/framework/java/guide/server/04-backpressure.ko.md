@@ -50,26 +50,8 @@ Core queue가 application record를 binding·Framework에 넘기면 그 record�
 permit을 다시 점유하지 않는다. Record payload는 필요한 terminal까지 Framework 쪽 owner가
 유지하지만 Core HWM budget을 계속 점유하지 않는다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    H1["보내는 handler<br/>SendToChannel(...)"]:::app
-    SQ["Core ordinary 송신 queue<br/>accounted byte HWM"]:::queue
-    AC(["Application 연결"]):::net
-    RQ["Core ordinary 수신 queue<br/>accounted byte HWM"]:::queue
-    BUD["Application job queue<br/>reserved + queued permit"]:::budget
-    H2["받는 handler"]:::app
-    CC(["Completion 연결"]):::net
-
-    H1 --> SQ --> AC --> RQ --> BUD --> H2
-    H2 -. "terminal reply · error" .-> CC
-    CC -.-> H1
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-    classDef queue fill:#fff3e0,stroke:#e65100,color:#bf360c
-    classDef budget fill:#f3e5f5,stroke:#6a1b9a,color:#4a148c
-    classDef net fill:#eceff1,stroke:#546e7a,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/04-flow.html" title="Backpressure 경로 — 송신에서 수신까지, 응답은 점선으로" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/04-flow.html" target="_blank">↗ 크게 보기</a></p>
 
 Application job queue 상한에 도달하면 receive 전에 terminal reply·error completion으로 식별할 수 있는
 record를 제외한 ordinary ingress는 새 receive·claim 전에 permit을 cancellable하게 기다린다. 이미
@@ -426,3 +408,7 @@ status와 reset 의미는 [runtime monitoring](../../../common/spec/server/06-ob
 - 소켓 설정 표면: [언어별 topology 공개 계약](../../../common/spec/server/languages/README.ko.md)
 - socket option의 byte 단위 계약: [core guide의 socket option](https://zlink-systems.github.io/zlink/ko/guide/12-socket-options/)
 - 다음 축: [05-channel-messaging](05-channel-messaging.ko.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

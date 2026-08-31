@@ -37,22 +37,8 @@ framework가 찾아서 전달한다. 이렇게 **대상이 어디 있는지 호�
 `ChannelName`으로 메시지를 전송하면 framework가 그 순간 요청을 받을 수 있는 node 중
 하나를 선택해 전달한다 — 이 선택을 **select-one**이라 한다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    C["caller"]:::client -->|"ChannelName: orders"| SEL{{"select-one"}}
-    subgraph ORD["channel: orders"]
-      direction TB
-      N1["node 1"]:::server
-      N2["node 2"]:::server
-      N3["node 3"]:::server
-    end
-    SEL ==>|"이번 호출이 선택한 node"| N2
-    SEL -.-> N1
-    SEL -.-> N3
-    classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-    classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-```
+<iframe class="zlink-diagram" src="/common/diagrams/03-channel-select.html" title="channel — 이름으로 부르기 (select-one)" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-channel-select.html" target="_blank">↗ 크게 보기</a></p>
 
 같은 `orders` channel을 맡은 node가 셋이면 호출마다 그중 하나가 선택된다. 호출자는
 어느 node가 선택됐는지 알지 못하고, 알 필요도 없다.
@@ -153,15 +139,8 @@ id로 주소를 지정한다는 점이 channel과 다르다. `"orders"` channel�
 spot이 존재하는 node가 메시지를 받아 그 spot에게 전달해 처리하도록 한다. 그 node가
 어디인지는 [앞에서 본](#1-channel--서버-간-연결) 위치 투명성 그대로 framework가 찾는다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  R1["요청 · room-42"] --> Q["Spot queue"]
-  R2["요청 · room-42"] --> Q
-  T["timer"] --> Q
-  Q --> S["room-42 Spot<br/>상태를 직접 소유"]:::spot
-  classDef spot fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-```
+<iframe class="zlink-diagram" src="/common/diagrams/03-spot-queue.html" title="spot — 상태 소유·순서 처리" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-spot-queue.html" target="_blank">↗ 크게 보기</a></p>
 
 spot은 MeshNode의 **Object role**에 등록한다. 같은 MeshNode의 Channel role과는
 별개 표면이다.
@@ -176,15 +155,8 @@ actor는 **ID로 식별되는 상태 보유 객체**다. 같은 ID로 온 메시
 인스턴스가 처리한다. actor는 항상 어떤 spot에 속하며, 외부 client 연결과 묶는 방법은
 [다음 절](#4-stream--외부-client-연결)에서 이어진다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-graph LR
-    S1["msg · id=42"] --> RT{"actor id<br/>라우팅"}
-    S2["msg · id=42"] --> RT
-    S3["msg · id=7"] --> RT
-    RT -->|id=42| A42["actor 42<br/>(같은 인스턴스)"]
-    RT -->|id=7| A7["actor 7"]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/03-actor-route.html" title="actor — id로 식별" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-actor-route.html" target="_blank">↗ 크게 보기</a></p>
 
 상세는 [07-actor-spot](07-actor-spot.ko.md).
 
@@ -199,15 +171,8 @@ session을 [actor](#3-actor--id로-식별되는-상태-객체)에 **bind**하면
 메시지를 session이 직접 처리하지 않고 bind된 actor로 relay한다. 반대 방향도 같아서
 actor가 보내는 push는 그 actor에 bind된 session을 통해 client로 나간다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  C["모바일·게임<br/>client"]:::client <-->|"연결<br/>(heartbeat 관리)"| SE["session<br/>연결 1개 = 객체 1개"]
-  SE -->|"packet relay"| A(("actor")):::actor
-  A -.->|"push"| SE
-  classDef actor fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-```
+<iframe class="zlink-diagram" src="/common/diagrams/03-stream.html" title="stream — 외부 client 연결" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-stream.html" target="_blank">↗ 크게 보기</a></p>
 
 그래서 **연결을 받는 node와 도메인 로직을 실행하는 node를 나눌 수 있다.** session은
 gateway node에 두고 actor는 다른 node에 두어도, relay 경로는 framework가 유지한다.
@@ -229,30 +194,8 @@ actor는 spot에 속하고, spot은 node에 속한다. relocation은 이 소속 
 그 spot이 다른 node에 있으면, join이 받아들여지는 순간 actor가 상태와 대기 중인 작업을
 그대로 들고 그 node로 옮겨간다. application이 요청해서 일어나는 이동이다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  subgraph NA["node A"]
-    direction TB
-    subgraph EA["Entry Spot"]
-      P(("actor P")):::moving
-    end
-  end
-  subgraph NB["node B"]
-    direction TB
-    subgraph RB["User Spot &quot;room-42&quot;"]
-      Q(("actor Q")):::actor
-      R(("actor R")):::actor
-    end
-  end
-  P ==>|"JoinSpot(&quot;room-42&quot;)<br/>state·대기 작업과 함께 이동"| RB
-  classDef actor fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-  classDef moving fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#bf360c
-  style NA fill:#eceff1,stroke:#546e7a,stroke-width:2px,color:#000000
-  style NB fill:#eceff1,stroke:#546e7a,stroke-width:2px,color:#000000
-  style EA fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-  style RB fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/03-relocation.html" title="relocation — actor가 다른 node의 spot에 join" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-relocation.html" target="_blank">↗ 크게 보기</a></p>
 
 join 호출이 지정하는 것은 **`room-42`라는 spot id뿐**이고, 대상 node를 지정하는 인자는
 없다. 그 spot을 지금 어느 node가 가지고 있는지는 framework가 location store에서 찾아
@@ -264,43 +207,8 @@ actor P를 그 node로 옮긴다. 그래서 node A와 node B라는 이름은 app
 옮긴다. application이 개별 join을 요청하지 않아도 framework가 처리하며, 완료된 뒤
 원래 host를 종료할 수 있다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart TB
-  C["client · 다른 서비스<br/>요청 대상: &quot;room-42&quot;"]:::client
-  subgraph NA["node A — 점검·업데이트 대상"]
-    direction TB
-    subgraph SA1["User Spot &quot;room-42&quot;"]
-      A1(("actor P")):::moving
-      A2(("actor Q")):::moving
-    end
-    subgraph SA2["User Spot &quot;room-77&quot;"]
-      A3(("actor R")):::moving
-    end
-  end
-  subgraph NB["node B — 서비스 계속"]
-    direction TB
-    subgraph SB1["User Spot &quot;room-42&quot;"]
-      B1(("actor P")):::actor
-      B2(("actor Q")):::actor
-    end
-    subgraph SB2["User Spot &quot;room-77&quot;"]
-      B3(("actor R")):::actor
-    end
-  end
-  NA ==>|"Host Relocate — spot과 소속 actor를 통째로 이전"| NB
-  C -.->|"이전 전"| SA1
-  C ==>|"이전 후에도 같은 spot id"| SB1
-  classDef actor fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-  classDef moving fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#bf360c
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-  style NA fill:#eceff1,stroke:#546e7a,stroke-width:2px,color:#000000
-  style NB fill:#eceff1,stroke:#546e7a,stroke-width:2px,color:#000000
-  style SA1 fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-  style SA2 fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-  style SB1 fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-  style SB2 fill:#ffffff,stroke:#1565c0,stroke-width:2px,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/03-host-relocate.html" title="host relocate — spot과 actor를 통째로 이전" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/03-host-relocate.html" target="_blank">↗ 크게 보기</a></p>
 
 상태를 들고 있는 서버는 그 상태 때문에 함부로 내릴 수 없어서, 점검이나 배포를 하려면
 연결을 끊고 기다리게 만드는 것이 보통이다. Host
@@ -399,3 +307,7 @@ edge의 정책은 그 앞단이 소유한다.
 - 등록 지점과 계층 구조: `01. Overview` 장
 - 전체 인터페이스/attribute/context: [언어별 handler 인터페이스 계약](../../../common/spec/server/languages/README.ko.md)
 - 실행 코드로 보고 싶을 때 고를 샘플: [14-samples](14-samples.ko.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

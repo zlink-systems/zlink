@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "execution mode별 relocation 이전 단위",
+    "subtitle": "SpotWide는 aggregate 1회 commit · PerActor는 Actor별 commit",
+    "output": "12-relocation.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 96, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "SW_P", "type": "backend", "label": "actor P", "row": 0, "col": 0 },
+    { "id": "SW_AGG", "type": "backend", "label": "User Spot", "sublabel": "room-42", "row": 1, "col": 1 },
+    { "id": "SW_Q", "type": "backend", "label": "actor Q", "row": 2, "col": 0 },
+    { "id": "SW_T", "type": "external", "label": "target node", "row": 1, "col": 2 },
+
+    { "id": "PA_R", "type": "backend", "label": "actor R", "row": 3, "col": 1 },
+    { "id": "PA_T", "type": "external", "label": "target node", "row": 4, "col": 2 },
+    { "id": "PA_S", "type": "backend", "label": "actor S", "row": 5, "col": 1 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "SpotWide User Spot — aggregate 하나로 이전 (room-42)", "wraps": ["SW_P", "SW_AGG", "SW_Q", "SW_T"] },
+    { "kind": "region", "label": "Entry Spot · PerActor — Actor별로 이전 (Spot shell)", "wraps": ["PA_R", "PA_S", "PA_T"] }
+  ],
+  "connections": [
+    { "from": "SW_P", "to": "SW_AGG", "variant": "default" },
+    { "from": "SW_Q", "to": "SW_AGG", "variant": "default" },
+    { "from": "SW_AGG", "to": "SW_T", "variant": "emphasis", "label": "commit 1회" },
+
+    { "from": "PA_R", "to": "PA_T", "variant": "emphasis", "label": "commit", "labelDy": -14 },
+    { "from": "PA_S", "to": "PA_T", "variant": "emphasis", "label": "commit", "labelDy": 14 }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "SpotWide User Spot — commit 1회",
+      "items": [
+        "User Spot \"room-42\" 전체(Spot state + member Actor P·Q)가 하나의 aggregate commit으로 target node에 통째로 이전된다 — 화살표 하나."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Entry Spot · PerActor — Actor별 commit",
+      "items": [
+        "Spot shell의 Actor R·S가 각자 따로 commit해 target node로 이전된다 — 화살표 둘. Spot instance는 state를 옮기지 않는 shell이다."
+      ]
+    }
+  ]
+}

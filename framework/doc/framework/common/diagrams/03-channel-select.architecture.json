@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "channel — 이름으로 부르기 (select-one)",
+    "subtitle": "caller가 ChannelName만 넘기면 select-one이 node 하나를 고른다",
+    "output": "03-channel-select.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 96, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "caller", "type": "frontend", "label": "caller", "row": 1, "col": 0 },
+    { "id": "SEL", "type": "messagebus", "label": "select-one", "row": 1, "col": 1 },
+    { "id": "N1", "type": "backend", "label": "node 1", "row": 0, "col": 2 },
+    { "id": "N2", "type": "backend", "label": "node 2", "row": 1, "col": 2 },
+    { "id": "N3", "type": "backend", "label": "node 3", "row": 2, "col": 2 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "channel: orders", "wraps": ["N1", "N2", "N3"] }
+  ],
+  "connections": [
+    { "from": "caller", "to": "SEL", "variant": "default", "label": "ChannelName" },
+    { "from": "SEL", "to": "N2", "variant": "emphasis", "label": "선택한 node" },
+    { "from": "SEL", "to": "N1", "variant": "dashed" },
+    { "from": "SEL", "to": "N3", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "이름으로 부르기",
+      "items": [
+        "caller가 channel 이름(\"ChannelName: orders\")만 넘기면 select-one이 요청을 받을 수 있는 node 중 하나(node 2)를 골라 전달한다 — \"이번 호출이 선택한 node\"(굵은 화살표).",
+        "선택되지 않은 node 1·node 3은 후보로 남는다(점선). 호출자는 어느 node가 선택됐는지 알 필요가 없다."
+      ]
+    }
+  ]
+}

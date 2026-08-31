@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "TicTacToe — 가장 작은 실시간 게임 서버",
+    "subtitle": "수동 peer 연결 · client가 Play에 직접 STREAM",
+    "output": "14-tictactoe.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 4, "gapX": 96, "gapY": 96, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C", "type": "frontend", "label": "client", "row": 1, "col": 0 },
+    { "id": "A1", "type": "external", "label": "Api A", "row": 0, "col": 1 },
+    { "id": "A2", "type": "external", "label": "Api B", "row": 2, "col": 1 },
+    { "id": "P1", "type": "backend", "label": "Play A", "sublabel": "session · actor · room", "row": 0, "col": 2 },
+    { "id": "P2", "type": "backend", "label": "Play B", "sublabel": "session · actor · room", "row": 2, "col": 2 },
+    { "id": "LS", "type": "external", "label": "Location Store", "row": 1, "col": 3 }
+  ],
+  "connections": [
+    { "from": "C", "to": "A1", "label": "HTTP 방 생성", "variant": "default" },
+    { "from": "C", "to": "A2", "variant": "dashed" },
+    { "from": "A1", "to": "P1", "label": "room Spot 생성", "variant": "default" },
+    { "from": "A2", "to": "P2", "variant": "dashed" },
+    { "from": "C", "to": "P1", "label": "STREAM 직접 연결", "variant": "emphasis", "fromSide": "top", "toSide": "top" },
+    { "from": "C", "to": "P2", "variant": "emphasis", "fromSide": "bottom", "toSide": "bottom" },
+    { "from": "P1", "to": "P2", "label": "수동 peer · milestone LM", "variant": "default", "labelDy": 40 },
+    { "from": "P1", "to": "LS", "label": "위치 조회", "variant": "dashed" },
+    { "from": "P2", "to": "LS", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "연결 흐름",
+      "items": [
+        "별도 Session 서버 없이 각 Play가 stream session · actor · Entry Spot · room Spot을 함께 소유",
+        "client가 Api로 HTTP 방 생성 → Api가 Play에 room User Spot 생성",
+        "client는 Api에서 받은 Play endpoint로 각 Play에 STREAM 직접 연결 (emphasis)",
+        "Api B / Play B로 가는 점선은 대안 경로 · 두 번째 대국자 몫"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "peer · 위치",
+      "items": [
+        "Play A ↔ Play B는 수동 peer 연결 (양방향) — 승수 milestone을 Logical Multicast로 publish",
+        "room·actor 위치는 Location Store 조회 (점선) — node 사이 연결만 수동, object 위치는 store가 해석"
+      ]
+    }
+  ]
+}

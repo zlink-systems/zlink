@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "actor — id로 식별",
+    "subtitle": "같은 id는 같은 actor 인스턴스로, 다른 id는 다른 actor로",
+    "output": "03-actor-route.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 96, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "S1", "type": "external", "label": "msg", "sublabel": "id=42", "row": 0, "col": 0 },
+    { "id": "S2", "type": "external", "label": "msg", "sublabel": "id=42", "row": 1, "col": 0 },
+    { "id": "S3", "type": "external", "label": "msg", "sublabel": "id=7", "row": 2, "col": 0 },
+    { "id": "RT", "type": "messagebus", "label": "actor id", "sublabel": "라우팅", "row": 1, "col": 1 },
+    { "id": "A42", "type": "backend", "label": "actor 42", "sublabel": "같은 인스턴스", "row": 0, "col": 2 },
+    { "id": "A7", "type": "backend", "label": "actor 7", "row": 2, "col": 2 }
+  ],
+  "connections": [
+    { "from": "S1", "to": "RT", "variant": "default" },
+    { "from": "S2", "to": "RT", "variant": "default" },
+    { "from": "S3", "to": "RT", "variant": "default" },
+    { "from": "RT", "to": "A42", "variant": "default", "label": "id=42" },
+    { "from": "RT", "to": "A7", "variant": "default", "label": "id=7" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "id로 식별되는 상태 객체",
+      "items": [
+        "같은 id=42로 온 msg는 늘 같은 actor 42 인스턴스가 처리한다.",
+        "다른 id=7로 온 msg는 별개의 actor 7로 라우팅된다 — id가 곧 대상 인스턴스다."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Host lifecycle — 구성·서비스·종료",
+    "subtitle": "framework runtime은 host 수명주기 서비스로 시작·종료에 묶인다",
+    "output": "12-lifecycle.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 5, "gapX": 84, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "start", "type": "external", "label": "시작", "row": 0, "col": 0 },
+    { "id": "configure", "type": "frontend", "label": "구성 단계", "sublabel": "AddZLinkFramework", "row": 0, "col": 1 },
+    { "id": "serving", "type": "frontend", "label": "서비스 중", "sublabel": "channel·SPOT·stream", "row": 0, "col": 2 },
+    { "id": "stopping", "type": "frontend", "label": "종료", "sublabel": "runtime 정리", "row": 0, "col": 3 },
+    { "id": "end", "type": "external", "label": "종료점", "row": 0, "col": 4 }
+  ],
+  "boundaries": [],
+  "connections": [
+    { "from": "start", "to": "configure", "variant": "default", "label": "CreateBuilder()" },
+    { "from": "configure", "to": "serving", "variant": "default", "label": "app.Run()" },
+    { "from": "serving", "to": "stopping", "variant": "default", "label": "host shutdown" },
+    { "from": "stopping", "to": "end", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "구성 단계",
+      "items": [
+        "Services / AddZLinkFramework, channel / SPOT / stream / registry를 app.Run() 전에 선언한다. 잘못된 구성은 host startup에서 예외로 거부된다."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "서비스 중",
+      "items": [
+        "channel·SPOT·stream dispatch가 도는 구간."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "종료",
+      "items": [
+        "host shutdown 신호가 오면 hosted service stop → runtime 정리 순으로 내려간다."
+      ]
+    }
+  ]
+}
