@@ -445,9 +445,11 @@ the sequence is interrupted, it closes the buffered part and resets the helper s
 
 ### Request/reply
 
-The request control part and application payload are sent in one transaction. The receive path
-validates and removes the control part, then returns the request sequence and peer routing ID as
-typed metadata.
+The request or reply kind and sequence travel with the first application part as internal
+metadata in the same transaction. Pipes and queues preserve that metadata. The typed receive path
+moves the sequence or local token and routing context needed for a reply into separate state and
+outputs, then removes the metadata
+from the public message. No request-reply protocol part is added before the application payload.
 
 ## 8. Implementation and contract test verification requirements
 
@@ -500,3 +502,7 @@ Verify the following only through the public surface: the `zlink_msg_*` and
 - Each `zlink_msg_*` function returning `zlink_config_result_t` returns `ZLINK_CONFIG_OK` on
   success and a `zlink_config_result_t` value on failure. `zlink_errno()` retains the detailed
   internal errno for diagnostics.
+
+<!-- zlink-nav:start -->
+[Core Spec Index](README.en.md) | [Previous: Context](01-context.en.md) | [Next: Errors](03-errors.en.md)
+<!-- zlink-nav:end -->

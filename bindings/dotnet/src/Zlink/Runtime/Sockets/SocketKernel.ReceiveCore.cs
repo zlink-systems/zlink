@@ -260,12 +260,6 @@ internal sealed partial class SocketKernel
 
             parts = MultipartMessageCollection.FromNativeParts(nativeParts,
                 nativePartCount);
-            // Core 0.14.6 does not export the staged multipart pair through
-            // recv_part_v2. Its thread-local fallback can be zero or belong
-            // to another receive, so the public exact-or-zero contract must
-            // not expose that value as an exact source identity.
-            transportPairId = 0;
-            transportPairGeneration = 0;
             return true;
         }
         catch

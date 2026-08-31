@@ -589,8 +589,8 @@ The following conditions must always hold:
 - A binding must not expose part-by-part receive as a public binding
   API, such as `RecvPart`, `RecvRoutedPart`, `SubscribePart`,
   `recv_part`, `recv_routed_part`, or `subscribe_part`. The binding
-  runtime absorbs the part loop, `has_more`, and per-part envelope
-  metadata into an aggregate result storage internally.
+  runtime absorbs the part loop, `has_more`, request sequence, and reply
+  context into an aggregate result storage internally.
 - A document under `doc/spec/bindings/` does not document the helper
   substrate signature itself as a public contract.
 - The helper substrate is treated only as a foundation layer for
@@ -599,6 +599,23 @@ The following conditions must always hold:
 In other words, the bindings policy documents are governed not by "what
 the helper looks like" but by "what public contract a binding user
 ultimately sees."
+
+### Request-Reply Protocol Metadata Boundary
+
+A binding passes only application payload to the request and reply `*_part` APIs. Core owns the ZMP
+kind, wire sequence, and header extension, so a binding neither constructs a protocol envelope nor
+header nor adds one as a payload part. If an application supplies N multipart request or reply
+parts, its handler and completion also observe exactly N application parts.
+
+In a language where a binding creates a native copy or view from a public `Message`, request-reply
+metadata is attached only to that Core-consumed native message. A binding must not write metadata
+to the public source or allow a failed submit's source to regain a request-reply kind when reused
+for raw send. Whether the source is preserved or consumed continues to follow that language's
+existing ownership contract.
+
+Public receive and request completion aggregate only payload after Core removes the internal
+metadata. A binding neither reads ZMP kind from a raw message nor exposes it as a public metadata
+field.
 
 ## `*_part` Substrate Usage Requirement (Required)
 
@@ -1319,9 +1336,9 @@ convention.
   framework. This rule is not about making an example look shorter — it's
   a sample contract that keeps a user from mistaking an unnecessary
   option for standard usage.
-- A helper that directly builds a request/reply protocol envelope does
+- A helper that directly builds request/reply ZMP header metadata does
   not belong on the public binding surface. An API such as
-  `requestFrame(...)` exposes the request sequence and frame layout to
+  `requestFrame(...)` exposes the wire sequence and frame layout to
   the caller, so it must stay a runtime/internal helper.
 - A reply must start from the received request context. The public
   binding API offers only a surface that reveals a reply-capable
@@ -1977,7 +1994,7 @@ Every data-path function (`send`, `recv`, `request`, `reply`,
    - Applies to: C++, Java, .NET, Node, Python.
    - Returns a result, or void, on success.
    - Throws an exception on failure.
-   - The exception carries an `int code` (in the 0–706 range) so the
+   - The exception carries an `int code` (in the 0–709 range) so the
      caller can distinguish the failure cause.
    - Failures allowed by an operation's contract, including
      `BACKPRESSURED`, `NOT_CONNECTED`, and `NOT_FOUND`, are delivered as
@@ -2068,7 +2085,8 @@ Every data-path function (`send`, `recv`, `request`, `reply`,
 #### Error Codes
 
 - The C API returns a per-function typed result enum.
-- Every enum value is unique across the 0–706 range.
+- Every enum shares the success value `0`; nonzero values are unique across enums in the
+  1–709 range.
 - A binding includes this code in its per-language error type's `int
   code` (an exception object for exception languages, a return error
   value for return-based languages).
@@ -3387,10 +3405,15 @@ Each binding must expose these APIs as a per-language typed surface.
 > See `cpp/`, `java/`, `dotnet/`, `node/`, `python/`, `go/`, `rust/` for
 > per-language interface signatures and usage examples.
 
+The [Core ZMP specification](../../../core/doc/spec/core/protocol/01-zmp.en.md) owns the exact
+byte layout and validation for request-reply kinds, sequences, and ZMP headers. This section
+owns the binding contract that preserves application payload part count and ownership while
+keeping internal metadata out of the public surface.
+
 #### Design Principles
 
-- Request-reply is handled through the ZMP protocol envelope. It does
-  not use a scheme that attaches a request marker to `zlink_msg_t`.
+- Request-reply is carried by ZMP header metadata on the first application
+  part. No public `zlink_msg_t` marker API or protocol payload part is used.
 - Dispatch, the pending map, timeout, and reply matching are all handled
   in the core C API. A binding does not reimplement this logic.
 - Core provides a callback-based async model. A binding can layer a
@@ -3453,8 +3476,13 @@ typedef void (*zlink_reply_handler_fn)(
 
 ```
 
-The `parts` delivered to a callback is a borrowed view. It's valid only
-until the callback returns. Copy it to keep it beyond that.
+On `ZLINK_REQUEST_OK`, ownership of every message in `parts` transfers to
+the callback. The callback releases each message exactly once or moves it
+into binding-owned message objects before returning. The `parts` array itself
+is valid only until the callback returns. For a valid wire error reply, the
+Core C callback also receives ownership of the messages after the errno part
+and a non-OK `zlink_request_result_t` mapped from that errno. A higher-level
+binding releases those messages and exposes only its language-specific error path.
 
 **Socket API:**
 
@@ -3480,12 +3508,11 @@ zlink_submit_result_t zlink_router_reply_part(void *router,
 
 zlink_recv_result_t zlink_router_recv_part(void *router,
     const zlink_routing_id_t **source_node_rid_out,
-    const zlink_routing_id_t **source_spot_rid_out,
     uint64_t *request_seq_out, zlink_msg_t *part_out,
     zlink_part_flag_t *has_more_out, zlink_recv_flags_t flags);
 ```
 
-**SPOT API:**
+**SPOT service-layer operation names (binding-level concepts):**
 
 ```c
 zlink_submit_result_t zlink_spot_send_channel_part(void *spot, ...);
@@ -3504,7 +3531,8 @@ zlink_recv_result_t zlink_spot_recv_part(void *spot, ...);
 zlink_handler_result_t zlink_spot_dispatch_event_handler(void *spot, ...);
 ```
 
-See `core/include/zlink.h` for the full signatures.
+The list above describes operation names at the binding/service layer; it is not a list of Core C
+function declarations. See `core/include/zlink.h` for the actual Core C request-reply signatures.
 
 #### Receive Dispatch Model
 
@@ -3513,15 +3541,15 @@ dispatch owner.
 
 - `request_seq = 0` means an ordinary message.
 - `request_seq != 0` means a request-reply message.
-- Core matches by `source_node_rid + request_seq` in the pending map.
+- Core locates a pending completion by the socket-issued `request_seq` and applies only a reply
+  whose transport pair ID and generation match the registered request.
 - A reply that fails to match (a stray/late reply) is dropped.
-- ROUTER uses the typed surface `zlink_router_recv_part()` instead of
-  the generic `zlink_recv_part()`. Calling the generic
-  `zlink_recv_part()` returns `EOPNOTSUPP`.
-- ROUTER's routed receive plane is a **single surface**. Both ordinary
-  ROUTER traffic and spot-origin routed traffic are received through the
-  one `zlink_router_recv_part()`. A `NULL` `source_spot_rid` means
-  ordinary ROUTER traffic; a filled-in one means spot-origin traffic.
+- A reply-capable ROUTER record is received through the typed
+  `zlink_router_recv_part()` surface. Calling generic `zlink_recv_part()`
+  for a ROUTER is rejected with `EOPNOTSUPP`.
+- ROUTER's raw request-reply receive plane is a **single surface**. This C
+  API returns only `source_node_rid` and `request_seq`; SPOT-specific routing
+  context is owned by a separate service-layer API.
 
 #### Request API Variants
 
@@ -3543,11 +3571,11 @@ builder policy does not apply to the C ABI.
 #### SPOT Request-Reply
 
 The same request-reply protocol is used on top of SPOT direct delivery.
-It's layered as `SPOT routed envelope -> request-reply envelope ->
-payload`. A SPOT reply is also sent with the peer's address +
-request_seq, without a ctx. Multiple requests can be outstanding
-concurrently on the same Spot. A high-level request's completion ends
-with the first reply.
+After SPOT routed control, the ZMP header of the first application payload carries the
+request-reply kind and sequence; no request-reply-specific payload part is added. A SPOT reply is
+also sent with the peer's address + request_seq, without a ctx. Multiple requests can be
+outstanding concurrently on the same Spot. A high-level request's completion ends with the first
+reply.
 
 #### Timeout
 
@@ -3572,17 +3600,24 @@ with the first reply.
 
 #### Wire Format
 
+The ZMP wire values below cite the contract in the
+[Core ZMP specification](../../../core/doc/spec/core/protocol/01-zmp.en.md). A binding neither
+constructs nor interprets them directly.
+
 - `request_seq` is an unsigned 64-bit integer (8 bytes, network byte
   order).
-- The starting value is `1`. `0` is reserved to mean an ordinary
-  message.
+- The starting value is `1`. An ordinary data frame has no sequence
+  extension.
 - On overflow, it wraps to `1`. A value that collides with an
   outstanding one is skipped.
-- The envelope has 4 control parts: protocol id, version, message type,
-  request_seq.
-- When combined with SPOT routed, it's 8 SPOT control parts + 4
-  request-reply control parts + payload.
-- A binding does not parse the envelope directly. Core handles it.
+- Ordinary data uses kind `0x00` in an 8-byte ZMP header. The first
+  application frame of a request, reply, or error reply uses a 16-byte
+  header containing the kind and an 8-byte Big Endian sequence.
+- From the second application frame of a multipart record, the kind is
+  ordinary data, and the payload part count equals the count supplied by
+  the binding.
+- A binding neither constructs nor parses ZMP header metadata. Core
+  handles it.
 
 #### Return Type
 
@@ -3604,9 +3639,10 @@ with the first reply.
 
 - Message ownership on a `request()`/`reply()` call follows the existing
   send contract.
-- The `parts` delivered to a request callback is a borrowed view.
-  Invalid after the callback returns. A binding copies it and delivers a
-  per-language list type or `Vec<Message>`.
+- On successful request completion, ownership of every callback message part
+  transfers to the binding callback. The binding moves or adopts each part
+  into the per-language list and releases each native message exactly once;
+  the native `parts` array itself is invalid after the callback returns.
 - On socket close, core rejects every outstanding request in the pending
   map with a `ZLINK_REQUEST_TERMINATED` callback.
 
@@ -3615,6 +3651,9 @@ with the first reply.
 - The callback is called exactly once. On success it's delivered as
   `result = OK` plus reply parts; on failure, `result != OK` plus an
   empty/null/Err path.
+- Even when the Core C callback receives payload after a valid wire error
+  reply's errno part, a binding releases it and does not expose it as public
+  success payload.
 - The core callback signature:
   `void(zlink_request_result_t result_, zlink_msg_t *parts_, size_t part_count_, void *userdata_)`
 - Per-language patterns (inheriting the per-function `RequestError`):
@@ -4082,17 +4121,14 @@ zlink_recv_result_t zlink_spot_recv_actor_lifecycle(void *spot, ...);
 ```c
 zlink_recv_result_t zlink_router_recv_part(void *router,
     const zlink_routing_id_t **source_node_rid_out,
-    const zlink_routing_id_t **source_spot_rid_out,
     uint64_t *request_seq_out,
     zlink_msg_t *part_out, zlink_part_flag_t *has_more_out,
     zlink_recv_flags_t flags);
 ```
 
-- ROUTER's routed receive is a single plane. Both ordinary ROUTER
-  traffic and spot-origin routed traffic are received through one recv.
-- `source_spot_rid == NULL` means ordinary ROUTER traffic (reply uses
-  `zlink_router_reply_part`). A filled-in `source_spot_rid` means
-  spot-origin traffic (reply uses `zlink_router_reply_spot_part`).
+- ROUTER's raw request-reply receive is a single plane. This C API returns
+  only `source_node_rid` and `request_seq`; SPOT-specific routing context is
+  owned by a separate service-layer API.
 - `request_seq == 0` means fire-and-forget. `request_seq != 0` means a
   request.
 - A binding does not separately expose a ROUTER data-plane callback
@@ -4575,7 +4611,7 @@ its per-language error type, so a caller can distinguish the cause.
 
 Codes split into two layers.
 
-1. **Public result enum codes (0–706)** — the return enum value of a
+1. **Public result enum codes (0–709)** — the return enum value of a
    public C API function. A binding faces these directly and must
    expose them as a per-language error type. See
    [core/errno-map.md](https://zlink-systems.github.io/zlink/spec/core/04-errno-map/)
@@ -4622,16 +4658,17 @@ submission to the HWM-free completion lane and never returns `BACKPRESSURED`.
 | 0 | `OK` | `0` | successfully received the reply payload |
 | 101 | `TIMED_OUT` | `ETIMEDOUT` | reply did not arrive within `timeout_ms` |
 | 102 | `NOT_FOUND` | `ENOENT` | target not found; completed with an error reply |
-| 103 | `TERMINATED` | `ETERM` | (reserved) an explicit termination completion path |
-| 104 | `PROTOCOL_ERROR` | `EPROTO` | the reply envelope or error reply payload is corrupt |
-| 105 | `INTERNAL_ERROR` | `EPROTO`, and so on | an internal request failure (see `zlink_errno()` for detail) |
-| 106 | `REJECTED` | `EACCES`, `ECONNREFUSED` | the target explicitly rejected the request |
-| 107 | `CONFLICT` | `ESTALE` | a conflict on the request target or state |
+| 103 | `TERMINATED` | `ETERM`, `ESHUTDOWN` | the owner lifecycle ended |
+| 104 | `PROTOCOL_ERROR` | `EPROTO`, `ENOCOMPATPROTO` | the reply metadata or error-reply payload is malformed or incompatible |
+| 105 | `INTERNAL_ERROR` | `EIO`, unclassified errno | an internal request failure without another public bucket |
+| 106 | `REJECTED` | `EACCES`, `ECONNREFUSED`, `ECANCELED` | the target or admission path rejected the request |
+| 107 | `CONFLICT` | `ESTALE`, `EEXIST` | a conflict on the request target or state |
 | 108 | `BUSY` | `EBUSY` | the request-processing path is temporarily busy |
 | 109 | `NOT_CONNECTED` | `ENOTCONN`, `EHOSTUNREACH` | the target peer/path is not connected |
-| 110 | `INVALID_ARGUMENT` | `EINVAL`, `EFAULT` | a request argument or envelope error |
-| 111 | `INVALID_STATE` | `EFSM` | the handle state cannot accept a request |
+| 110 | `INVALID_ARGUMENT` | `EINVAL`, `EFAULT` | a request argument or metadata error |
+| 111 | `INVALID_STATE` | `EFSM`, `EALREADY` | the handle state cannot accept a request |
 | 112 | `NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | request is not supported on this target |
+| 113 | `BACKPRESSURED` | `EAGAIN`, `ENOBUFS` | the request-processing path cannot proceed because capacity is unavailable |
 
 ##### `zlink_recv_result_t` (recv, subscribe, subscription event, monitor recv, timer recv)
 
@@ -4644,6 +4681,8 @@ submission to the HWM-free completion lane and never returns `BACKPRESSURED`.
 | 204 | `INVALID_HANDLE` | `EFAULT` | a NULL / invalid handle |
 | 205 | `NOT_SUPPORTED` | `ENOTSUP` | recv is not supported on this socket type |
 | 206 | `INTERNAL_ERROR` | `EPROTO`, and so on | an internal recv failure (see `zlink_errno()` for detail) |
+| 207 | `BUFFER_TOO_SMALL` | `ENOBUFS` | caller output capacity is insufficient |
+| 208 | `INVALID_STATE` | `EINVAL`, `ESTALE`, `ESHUTDOWN` | receive lifecycle state error |
 
 ##### `zlink_handler_result_t` (handler registration)
 
@@ -4690,6 +4729,7 @@ submission to the HWM-free completion lane and never returns `BACKPRESSURED`.
 | 605 | `NOT_FOUND` | `ENOENT` | the endpoint or peer routing id does not exist |
 | 606 | `CONFLICT` | `EADDRINUSE` | the peer routing id conflicts with two or more pipes |
 | 607 | `BUSY` | `EBUSY` | the lifecycle owner rejected a manual change |
+| 608 | `AUTH_FAILED` | `EACCES` | transport peer authentication failed |
 
 ##### `zlink_config_result_t` (option set/get, message lifecycle, snapshot, poller mutation, proxy, timer config)
 
@@ -4702,16 +4742,19 @@ submission to the HWM-free completion lane and never returns `BACKPRESSURED`.
 | 704 | `INTERNAL_ERROR` | `EPROTO`, and so on | an internal config failure (see `zlink_errno()` for detail) |
 | 705 | `INVALID_STATE` | `EBUSY`, `ESHUTDOWN` | the lifecycle state rejects the config |
 | 706 | `NOT_FOUND` | `ENOENT` | the local lookup target does not exist |
+| 707 | `CONFLICT` | `EEXIST` | duplicate identity, endpoint, or registration value |
+| 708 | `BUFFER_TOO_SMALL` | `ENOBUFS` | caller output capacity is insufficient; no partial output |
+| 709 | `BUSY` | `EBUSY` | the same mutable object is used concurrently |
 
 ##### Non-OK Value Total
 
-- **59** non-OK codes in total (submit 13 + request 12 + recv 6 +
-  handler 6 + close 4 + bind 5 + connect 7 + config 6 = 59). The value
-  ranges are: 1–13, 101–112, 201–206, 301–306, 401–404, 501–505,
-  601–607, 701–706.
+- **66** non-OK codes in total (submit 13 + request 13 + recv 8 +
+  handler 6 + close 4 + bind 5 + connect 8 + config 9 = 66). The value
+  ranges are: 1–13, 101–113, 201–208, 301–306, 401–404, 501–505,
+  601–608, 701–709.
 - Because the value ranges don't overlap across enums, a single `int`
   uniquely identifies the code.
-- A binding must provide a per-language error representation for all 59
+- A binding must provide a per-language error representation for all 66
   values. If one is missing, the caller has no way to distinguish that
   cause.
 
@@ -4764,7 +4807,7 @@ does not collide with POSIX errno.
 
 #### Per-Language ErrorCode Mapping
 
-Each binding maps the Public Result Enum Catalog's 59 non-OK codes onto
+Each binding maps the Public Result Enum Catalog's 66 non-OK codes onto
 a per-language enum/constant, providing type-safe branching.
 
 | Language | Handling | ErrorCode type | Access |
@@ -4779,7 +4822,7 @@ a per-language enum/constant, providing type-safe branching.
 | Rust | return (`Result`) | a unified `ErrorCode` enum variant | `ZlinkError.code()` |
 
 - Each variant of the unified enum maps 1:1 to one of the Public Result
-  Enum Catalog's 59 values. A binding can either keep the original C
+  Enum Catalog's 66 values. A binding can either keep the original C
   enum split (submit / recv / handler / close / bind / connect / config
   / request), or unify it into a single enum per language idiom. Either
   style must **express every value without omission**.
@@ -4799,20 +4842,17 @@ Hierarchy: **`RequestError`** (request completion) and **`SubmitError`**
 
 Error codes split into two layers.
 
-**Wire error reply codes** — a protocol-level error reply the peer
-sends. Only 3 errno values are usable on the wire: `ENOENT`,
-`EOPNOTSUPP`, `EINVAL`.
+**Wire error reply codes** — the first application part of a protocol-level error reply from a
+peer contains a nonzero errno as a 4-byte Big Endian value. Core normalizes it to
+`zlink_request_result_t`; no separate public binding sender constructs this header or errno part.
+An unknown nonzero value normalizes to `INTERNAL_ERROR`. An absent part, a size other than 4 bytes,
+or a zero value normalizes to `PROTOCOL_ERROR`.
 
-**API/completion codes** — the errno core delivers to the callback:
-
-| errno | When it occurs |
-|-------|----------|
-| `ENOENT` | the target peer/spot could not be found (wire or local) |
-| `EOPNOTSUPP` | a peer-kind mismatch, or not supported |
-| `EINVAL` | an invalid parameter |
-| `ETIMEDOUT` | the reply wait exceeded the timeout |
-| `EPROTO` | envelope parse failure, or an invalid remote reply |
-| `EBUSY` | a receive-surface conflict (duplicate handler registration) |
+**API/completion normalization** — Before invoking the callback, Core maps an internal or
+wire errno to the `zlink_request_result_t` defined by
+[Request completion result in Core Errors](../../../core/doc/spec/core/03-errors.en.md#3-request-completion-result).
+A binding converts that result to its language-specific `RequestError` and does not redefine
+the errno classification.
 
 **Request errors (`RequestError`):**
 
@@ -5772,7 +5812,7 @@ The perf policy is managed across every language in a shared way, in
    - `RecvPart`, `RecvRoutedPart`, `SubscribePart`, or a per-language
      equivalent name, does not exist in the public API. Part-by-part
      receive exists only as a runtime/internal substrate.
-   - A helper that exposes the protocol envelope as-is, such as
+   - A helper that exposes request-reply ZMP header metadata as-is, such as
      `requestFrame(...)`, does not exist on the public surface.
    - A reply helper that doesn't fit DEALER's send capability, such as
      `dealer.reply(requestToken, parts)`, does not exist on the public
@@ -6075,3 +6115,29 @@ bridge.
 The old C API that attaches a router channel peer directly to SpotNode
 is not part of the public contract. A framework adapter must not use
 that path in a new implementation.
+
+## Implementation and contract-test verification requirements
+
+The following requirements are verified only through each language binding's public
+request/reply surface, public message ownership, and per-language error values. Each item
+maps to one contract test.
+
+**Payload and metadata boundary**
+
+- Passing the same application multipart through a binding request and reply produces the
+  same part count, order, and bytes at the peer application; neither protocol parts nor ZMP
+  metadata appear in the public payload.
+- Even when a valid peer error reply contains payload after the errno part, public completion
+  exposes only the language-specific error and no reply payload.
+
+**Ownership and error mapping**
+
+- If a C++ native request submit fails with `submit_error_t`, the public `message_t` remains
+  with the caller, and raw-sending it does not produce a request-reply kind.
+- When a peer sends a valid wire error reply with errno `EAGAIN` or `ENOBUFS`, public request
+  completion produces the binding's `BACKPRESSURED` error, and all 66 non-OK values in the
+  Public Result Enum Catalog remain distinguishable.
+
+<!-- bindings-nav:start -->
+[Spec index](README.en.md)
+<!-- bindings-nav:end -->

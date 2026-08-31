@@ -10,6 +10,7 @@
 #include "core/ctx_physical_queue_registry.hpp"
 #include <atomic>
 #include <condition_variable>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -27,6 +28,8 @@ class io_thread_t;
 
 class xsub_t : public socket_base_t
 {
+    friend class session_termination_test_access_t;
+
   public:
     struct subscription_descriptor_t
     {
@@ -58,12 +61,27 @@ class xsub_t : public socket_base_t
     int sub_dispatch_stop () ZLINK_OVERRIDE;
     bool sub_dispatch_active () const ZLINK_OVERRIDE;
     int xsocket_msg_dispatch (zlink::msg_t *msg_, zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
+    void xarm_socket_msg_dispatch () ZLINK_OVERRIDE;
     void xwrite_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xhiccuped (pipe_t *pipe_) ZLINK_FINAL;
     void xpipe_terminated (zlink::pipe_t *pipe_) ZLINK_FINAL;
+    void xsocket_msg_pipe_terminated (zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
     uint32_t monitor_ready_count () const ZLINK_OVERRIDE;
 
   private:
+    struct socket_dispatch_state_t
+    {
+        socket_dispatch_state_t () :
+            drop_message (false),
+            part_index (0)
+        {
+        }
+
+        std::vector<zlink_msg_t> parts;
+        bool drop_message;
+        size_t part_index;
+    };
+
     //  Check whether the message matches at least one subscription.
     bool match (zlink::msg_t *msg_);
 
@@ -72,7 +90,11 @@ class xsub_t : public socket_base_t
     static void send_subscription (unsigned char *data_, size_t size_, void *arg_);
     int dispatch_ready_messages ();
     int dispatch_ready_messages_serialized ();
-    int dispatch_message (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
+    int receive_dispatch_message (zlink_routing_id_t *source_rid_out_);
+    int dispatch_message (const zlink_routing_id_t &source_rid_);
+    int dispatch_single_socket_message (zlink::msg_t *msg_,
+                                        zlink::pipe_t *pipe_);
+    int discard_filtered_message (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
     void notify_dispatch_stopped ();
     void refresh_delivery_ready_state (const endpoint_uri_pair_t &endpoint_uri_pair_);
     uint32_t compute_delivery_ready_count () const;
@@ -108,6 +130,13 @@ class xsub_t : public socket_base_t
     //  If true, part of a multipart message was already received, but
     //  there are following parts still waiting.
     bool _more_recv;
+    // Physical part index of the next exposed publication frame. Index 0 is
+    // the topic and index 1 is the first caller-visible payload.
+    size_t _recv_part_index;
+    // A filtered-message probe can discover a malformed continuation before
+    // the caller enters xrecv(). Preserve that result for one public receive
+    // instead of translating the now-empty queue into EAGAIN.
+    bool _recv_protocol_error_pending;
 
     //  If true, subscribe and cancel messages are processed for the rest
     //  of multipart message.
@@ -127,8 +156,12 @@ class xsub_t : public socket_base_t
     mutable std::mutex _dispatch_inflight_mu;
     std::condition_variable _dispatch_inflight_cv;
     std::vector<zlink_msg_t> _dispatch_parts;
-    std::vector<zlink_msg_t> _socket_dispatch_parts;
-    bool _socket_dispatch_drop_message;
+    std::map<zlink::pipe_t *, socket_dispatch_state_t>
+      _socket_dispatch_states;
+    socket_dispatch_state_t _socket_dispatch_without_pipe;
+#ifdef ZLINK_BUILD_TESTS
+    size_t _socket_dispatch_state_creations;
+#endif
     std::atomic<uint32_t> _delivery_ready_count;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (xsub_t)

@@ -20,7 +20,7 @@ if [ $BUILD_TYPE = "default" ]; then
         cmake "$CORE_ROOT" \
             -DCMAKE_INSTALL_PREFIX="${BUILD_PREFIX}" \
             -DBUILD_TESTS=ON \
-            -DBUILD_STATIC=OFF &&
+            -DBUILD_STATIC=ON &&
         cmake --build . --verbose -j5 &&
         ctest --output-on-failure
     ) || exit 1

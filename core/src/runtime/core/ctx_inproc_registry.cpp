@@ -225,7 +225,15 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
 {
     pending_connection_.bind_pipe->set_tid (bind_socket_->get_tid ());
 
-    if (!bind_options_.recv_routing_id) {
+    const bool completion =
+      pending_connection_.connect_pipe->get_transport_pair_id () != 0
+      && pending_connection_.connect_pipe->get_transport_lane ()
+           == transport_lane_completion;
+
+    // Pending inproc Application connections stage one routing-id frame
+    // before the bind socket is known. Completion lanes deliberately stage no
+    // such frame, so neither consume nor publish an identity on that lane.
+    if (!completion && !bind_options_.recv_routing_id) {
         msg_t msg;
         const bool ok = pending_connection_.bind_pipe->read (&msg);
         zlink_assert (ok);
@@ -258,10 +266,6 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
           sizeof (connect_instance));
     }
 
-    const bool completion =
-      pending_connection_.connect_pipe->get_transport_pair_id () != 0
-      && pending_connection_.connect_pipe->get_transport_lane ()
-           == transport_lane_completion;
     if (!completion) {
         ctx_t *const ctx = bind_socket_->get_ctx ();
         ctx->record_auto_hwm_endpoint_policy (
@@ -312,7 +316,8 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
         bind_socket_->emit_inproc_connection_ready (pending_connection_.bind_pipe);
     }
 
-    if (pending_connection_.endpoint.options.recv_routing_id
+    if (!completion
+        && pending_connection_.endpoint.options.recv_routing_id
         && pending_connection_.endpoint.socket->check_tag ()) {
         send_routing_id (pending_connection_.bind_pipe, bind_options_);
     }

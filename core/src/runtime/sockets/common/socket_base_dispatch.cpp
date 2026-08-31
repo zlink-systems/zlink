@@ -2,6 +2,8 @@
 
 #include "utils/precompiled.hpp"
 
+#include "protocol/zmp_peer_weight.hpp"
+
 #include "core/c_api_copy_internal.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "sockets/common/socket_dispatch_context.hpp"
@@ -11,6 +13,10 @@
 
 namespace
 {
+#ifdef ZLINK_BUILD_TESTS
+std::atomic<uint64_t> g_local_peer_weight_send_attempt_count (0);
+#endif
+
 static void copy_routing_id (zlink_routing_id_t *out_, const zlink::blob_t &routing_id_)
 {
     zlink::copy_routing_id_from_bytes (routing_id_.data (), routing_id_.size (), out_);
@@ -45,28 +51,134 @@ int zlink::socket_base_t::socket_msg_dispatch_from_io (msg_t *msg_, pipe_t *pipe
     if (!socket_msg_dispatch_active ())
         return 0;
 
+    int rc = 0;
     if (options.type == ZLINK_CORE_SOCKET_STREAM) {
-        socket_msg_dispatch_context_t context (NULL, pipe_, NULL, NULL);
-        return xsocket_msg_dispatch (msg_, pipe_);
+        {
+            socket_msg_dispatch_context_t context (NULL, pipe_, NULL, NULL);
+            rc = xsocket_msg_dispatch (msg_, pipe_);
+        }
+    } else {
+        std::lock_guard<std::recursive_mutex> dispatch_lock (
+          dispatch_runtime ().socket_msg_dispatch_sync);
+        if (socket_msg_dispatch_active ()) {
+            // A session can retain the socket endpoint just before termination
+            // wins. Recheck liveness under the same dispatch-order fence used
+            // by deferred assembly teardown so a late frame cannot recreate
+            // state after that teardown.
+            if (pipe_ && !pipe_->is_lifecycle_active ())
+                rc = 1;
+            else {
+                socket_msg_dispatch_context_t context (NULL, pipe_, NULL, NULL);
+                rc = xsocket_msg_dispatch (msg_, pipe_);
+            }
+        }
+    }
+    // A callback can re-enter command processing and observe pipe termination.
+    // Its teardown is skipped while the callback context is live, then safely
+    // reclaimed here after the dispatch lock and callback-owned parts are gone.
+    process_deferred_socket_msg_pipe_terminations ();
+    return rc;
+}
+
+void zlink::socket_base_t::defer_socket_msg_dispatch ()
+{
+    dispatch_runtime ().deferred_socket_msg_dispatch_pending.store (
+      true, std::memory_order_release);
+}
+
+void zlink::socket_base_t::defer_socket_msg_pipe_termination (pipe_t *pipe_)
+{
+    if (!pipe_ || !pipe_->retain_lifetime_ref ())
+        return;
+
+    dispatch_bridge_t &dispatch = dispatch_runtime ();
+    scoped_lock_t lock (dispatch.deferred_socket_msg_termination_sync);
+    zlink_assert (!pipe_->_deferred_socket_msg_termination_next);
+    if (dispatch.deferred_socket_msg_termination_tail)
+        dispatch.deferred_socket_msg_termination_tail
+          ->_deferred_socket_msg_termination_next = pipe_;
+    else
+        dispatch.deferred_socket_msg_termination_head = pipe_;
+    dispatch.deferred_socket_msg_termination_tail = pipe_;
+}
+
+void zlink::socket_base_t::process_deferred_socket_msg_pipe_terminations ()
+{
+    // Recursive command processing from a handler must not destroy the vector
+    // backing that handler's callback arguments. The outer direct-dispatch
+    // entry retries immediately after the callback returns.
+    if (current_socket_msg_dispatch_socket () == this)
+        return;
+
+    for (;;) {
+        pipe_t *pipe = NULL;
+        dispatch_bridge_t &dispatch = dispatch_runtime ();
+        {
+            scoped_lock_t queue_lock (
+              dispatch.deferred_socket_msg_termination_sync);
+            pipe = dispatch.deferred_socket_msg_termination_head;
+            if (!pipe)
+                break;
+            dispatch.deferred_socket_msg_termination_head =
+              pipe->_deferred_socket_msg_termination_next;
+            if (!dispatch.deferred_socket_msg_termination_head)
+                dispatch.deferred_socket_msg_termination_tail = NULL;
+            pipe->_deferred_socket_msg_termination_next = NULL;
+        }
+
+        {
+            std::lock_guard<std::recursive_mutex> dispatch_lock (
+              dispatch.socket_msg_dispatch_sync);
+            xsocket_msg_pipe_terminated (pipe);
+        }
+        pipe->release_lifetime_ref ();
     }
 
-    std::lock_guard<std::recursive_mutex> dispatch_lock (
-      dispatch_runtime ().socket_msg_dispatch_sync);
-    if (!socket_msg_dispatch_active ())
-        return 0;
-    socket_msg_dispatch_context_t context (NULL, pipe_, NULL, NULL);
-    return xsocket_msg_dispatch (msg_, pipe_);
+    process_deferred_socket_msg_dispatch ();
+}
+
+void zlink::socket_base_t::process_deferred_socket_msg_dispatch ()
+{
+    if (current_socket_msg_dispatch_socket () == this)
+        return;
+
+    socket_dispatch_bridge_t &dispatch = dispatch_runtime ();
+    while (dispatch.deferred_socket_msg_dispatch_pending.exchange (
+      false, std::memory_order_acq_rel)) {
+        {
+            std::lock_guard<std::recursive_mutex> dispatch_lock (
+              dispatch.socket_msg_dispatch_sync);
+            if (socket_msg_dispatch_active ())
+                xdispatch_io ();
+        }
+
+        // A callback may have re-entered command processing and queued pipe
+        // teardown. It was intentionally skipped while the callback context
+        // was live; reclaim it before dispatching another queued record.
+        process_deferred_socket_msg_pipe_terminations ();
+    }
 }
 
 int zlink::socket_base_t::peer_command_from_io (msg_t *msg_, pipe_t *pipe_)
 {
+    // This entry always receives the session endpoint. Snapshot and retain its
+    // socket peer before taking the dispatch fence; detach_peer_link() may run
+    // concurrently on the socket mailbox executor.
+    pipe_t *const socket_pipe = pipe_ ? pipe_->retain_peer_snapshot () : NULL;
+    if (pipe_ && !socket_pipe)
+        return 1;
     std::lock_guard<std::recursive_mutex> dispatch_lock (
       dispatch_runtime ().socket_msg_dispatch_sync);
-    pipe_t *socket_pipe = pipe_;
-    pipe_t *const peer = socket_pipe ? socket_pipe->get_peer () : NULL;
-    if (peer)
-        socket_pipe = peer;
-    return xpeer_command (msg_, socket_pipe);
+    if (socket_pipe && !socket_pipe->is_lifecycle_active ()) {
+        socket_pipe->release_lifetime_ref ();
+        return 1;
+    }
+    const int rc = xpeer_command (msg_, socket_pipe);
+    const int saved_errno = errno;
+    if (socket_pipe)
+        socket_pipe->release_lifetime_ref ();
+    errno = saved_errno;
+    return rc;
 }
 
 int zlink::socket_base_t::ensure_completion_processing ()
@@ -185,16 +297,14 @@ int zlink::socket_base_t::socket_msg_dispatch_stop ()
 
 void zlink::socket_base_t::socket_msg_dispatch_drain_pending ()
 {
-    if (!socket_msg_dispatch_active ())
-        return;
-
-    scoped_lock_t receive_lock (receive_runtime ().sync);
-    std::lock_guard<std::recursive_mutex> dispatch_lock (
-      dispatch_runtime ().socket_msg_dispatch_sync);
-    if (socket_msg_dispatch_active ()) {
+    {
+        scoped_lock_t receive_lock (receive_runtime ().sync);
+        if (!socket_msg_dispatch_active ())
+            return;
         xarm_socket_msg_dispatch ();
-        xdispatch_io ();
+        defer_socket_msg_dispatch ();
     }
+    process_deferred_socket_msg_pipe_terminations ();
 }
 
 bool zlink::socket_base_t::socket_msg_dispatch_active () const
@@ -255,6 +365,11 @@ void zlink::socket_base_t::invoke_socket_msg_handler (zlink_socket_msg_handler_f
         }
         return;
     }
+    // Socket-message handlers are a public raw receive boundary. Their
+    // assemblers reject request/reply metadata on continuation frames, so
+    // sanitize only the first application frame that can carry it.
+    if (part_count_ != 0)
+        reinterpret_cast<msg_t *> (&parts_[0])->reset_request_reply_metadata ();
     socket_msg_dispatch_context_t context (this, socket_msg_dispatch_context_t::current_pipe (),
                                            socket_msg_handler_subject (), source_rid_);
     handler_ (source_rid_, parts_, part_count_, socket_msg_handler_userdata ());
@@ -421,6 +536,11 @@ int zlink::socket_base_t::xsocket_msg_dispatch (msg_t *msg_, pipe_t *pipe_)
     return 0;
 }
 
+void zlink::socket_base_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
+{
+    LIBZLINK_UNUSED (pipe_);
+}
+
 int zlink::socket_base_t::xstream_dispatch_msg (msg_t *msg_, pipe_t *pipe_)
 {
     LIBZLINK_UNUSED (msg_);
@@ -437,9 +557,67 @@ int zlink::socket_base_t::xpeer_command (msg_t *msg_, pipe_t *pipe_)
         return 1;
 
     uint32_t weight = 100;
-    if (!decode_peer_weight_command (*msg_, &weight))
+    const zmp_peer_weight::decode_result_t decoded =
+      zmp_peer_weight::decode_command (*msg_, &weight);
+    if (decoded == zmp_peer_weight::decode_not_weight_command)
         return 0;
-    return apply_peer_weight (pipe_, weight);
+    // Recognized but malformed/out-of-policy WEIGHT remains an internal
+    // no-op. The transport stays usable and the frame can never surface as
+    // Application data, matching FLOWSTATE command ownership.
+    if (decoded != zmp_peer_weight::decode_ok || weight > max_peer_weight)
+        return 1;
+    if (!pipe_)
+        return 1;
+    const uint64_t connection_id = pipe_->get_transport_connection_id ();
+    // Cache at the physical decode boundary before a following direct RID can
+    // publish this route. The owner command remains the only dynamic scheduler
+    // mutation path; this record only supplies its generation-tagged initial
+    // value to a not-yet-visible scheduler entry.
+    if (!pipe_->record_peer_weight_if_current (connection_id, weight))
+        return 1;
+    //  Network decoding runs on an I/O thread. Reuse the same exact-pipe
+    //  owner command as inproc so every scheduler mutation, pending-state
+    //  promotion and monitor event is serialized by the socket mailbox.
+    (void) send_peer_weight (
+      pipe_, weight, connection_id);
+    return 1;
+}
+
+void zlink::socket_base_t::peer_weight_received (pipe_t *pipe_,
+                                                 uint32_t weight_)
+{
+    (void) accept_peer_weight (pipe_, weight_);
+}
+
+int zlink::socket_base_t::accept_peer_weight (pipe_t *pipe_, uint32_t weight_)
+{
+    if (!pipe_ || weight_ > max_peer_weight
+        || pipe_->get_transport_lane () != transport_lane_application)
+        return 1;
+
+    const uint64_t pair_id = pipe_->get_transport_pair_id ();
+    const uint64_t pair_generation =
+      pipe_->get_transport_pair_generation ();
+    const uint64_t source_connection_id =
+      pipe_->get_transport_connection_id ();
+    if (pair_id != 0
+        && (pair_generation == 0 || source_connection_id == 0))
+        return 1;
+
+    if (pair_id == 0)
+        return apply_peer_weight (pipe_, weight_);
+
+    bool apply_now = false;
+    {
+        scoped_lock_t pair_lock (_transport_pairs_sync);
+        const transport_pair_key_t key (pair_id, pair_generation);
+        const transport_pairs_t::const_iterator it =
+          _transport_pairs.find (key);
+        apply_now = it != _transport_pairs.end () && it->second.ready
+                    && it->second.application == pipe_
+                    && pipe_->is_lifecycle_active ();
+    }
+    return apply_now ? apply_peer_weight (pipe_, weight_) : 1;
 }
 
 void zlink::socket_base_t::xlocal_peer_weight_changed ()
@@ -454,32 +632,124 @@ int zlink::socket_base_t::apply_peer_weight (pipe_t *pipe_, uint32_t weight_)
     return 1;
 }
 
+bool zlink::socket_base_t::recorded_peer_weight_ready_locked (
+  pipe_t *pipe_, uint32_t *weight_out_) const
+{
+    if (!pipe_ || pipe_->get_transport_lane () != transport_lane_application)
+        return false;
+
+    const uint64_t pair_id = pipe_->get_transport_pair_id ();
+    if (pair_id != 0) {
+        const uint64_t generation =
+          pipe_->get_transport_pair_generation ();
+        scoped_lock_t pair_lock (_transport_pairs_sync);
+        const transport_pairs_t::const_iterator it =
+          _transport_pairs.find (transport_pair_key_t (pair_id, generation));
+        if (generation == 0 || it == _transport_pairs.end ()
+            || !it->second.ready || it->second.application != pipe_
+            || !pipe_->is_lifecycle_active ())
+            return false;
+    }
+
+    uint32_t weight = 100;
+    if (!pipe_->peer_weight (&weight))
+        return false;
+    if (weight_out_)
+        *weight_out_ = weight;
+    return true;
+}
+
+void zlink::socket_base_t::initialize_recorded_peer_weight (pipe_t *pipe_)
+{
+    if (!pipe_)
+        return;
+    scoped_fast_lock_t generation_lock (pipe_->transport_sync ());
+    uint32_t weight = 100;
+    if (recorded_peer_weight_ready_locked (pipe_, &weight))
+        initialize_peer_weight (pipe_, weight);
+}
+
+void zlink::socket_base_t::initialize_peer_weight (pipe_t *pipe_,
+                                                   uint32_t weight_)
+{
+    LIBZLINK_UNUSED (pipe_);
+    LIBZLINK_UNUSED (weight_);
+}
+
 void zlink::socket_base_t::broadcast_local_peer_weight ()
 {
     std::vector<pipe_t *> pipes;
     snapshot_attached_pipes (&pipes);
     for (size_t i = 0; i < pipes.size (); ++i)
-        send_local_peer_weight (pipes[i]);
+        (void) send_local_peer_weight (pipes[i]);
 }
 
-void zlink::socket_base_t::send_local_peer_weight (pipe_t *pipe_)
+bool zlink::socket_base_t::deliver_local_peer_weight (pipe_t *pipe_,
+                                                      uint32_t weight_)
 {
-    if (!pipe_)
-        return;
+    if (!pipe_ || !pipe_->is_lifecycle_active ())
+        return false;
 
-    msg_t msg;
-    if (msg.init () != 0)
-        return;
-    if (init_peer_weight_command (&msg, local_peer_weight ()) != 0) {
-        const int close_rc = msg.close ();
-        errno_assert (close_rc == 0);
-        return;
+    //  A session consumes ZMP command frames before application delivery.
+    //  Inproc has no session, so deliver the same absolute policy through the
+    //  peer pipe's owner mailbox instead of writing application data.
+    if (!pipe_->is_session_pipe ()) {
+        pipe_t *const peer = pipe_->retain_peer_snapshot ();
+        if (!peer)
+            return false;
+        const bool sent = send_peer_weight (
+          peer, weight_, pipe_->get_transport_connection_id ());
+        peer->release_lifetime_ref ();
+        return sent;
     }
-    const int rc = pipe_->write_and_flush (&msg);
-    LIBZLINK_UNUSED (rc);
-    const int close_rc = msg.close ();
-    errno_assert (close_rc == 0);
+
+    return pipe_->write_peer_weight_control_and_flush (weight_);
 }
+
+bool zlink::socket_base_t::send_local_peer_weight (pipe_t *pipe_)
+{
+#ifdef ZLINK_BUILD_TESTS
+    g_local_peer_weight_send_attempt_count.fetch_add (
+      1, std::memory_order_relaxed);
+#endif
+    if (!pipe_ || pipe_->get_transport_lane () != transport_lane_application)
+        return false;
+
+    const uint64_t pair_id = pipe_->get_transport_pair_id ();
+    if (pair_id == 0)
+        return deliver_local_peer_weight (pipe_, local_peer_weight ());
+
+    const uint64_t pair_generation =
+      pipe_->get_transport_pair_generation ();
+    if (pair_generation == 0)
+        return false;
+    scoped_lock_t pair_lock (_transport_pairs_sync);
+    const transport_pair_key_t key (pair_id, pair_generation);
+    const transport_pairs_t::iterator it = _transport_pairs.find (key);
+    if (it == _transport_pairs.end () || !it->second.ready
+        || it->second.application != pipe_
+        || !pipe_->transport_pair_writes_released ())
+        return false;
+    const uint32_t weight = local_peer_weight ();
+    if (it->second.local_peer_weight_advertised == weight)
+        return true;
+
+    //  Holding the pair policy record across enqueue/write serializes a
+    //  pair-ready resync with a concurrent dynamic option update. The delivery
+    //  helpers take only pipe/ctx locks and never re-enter this pair table.
+    if (!deliver_local_peer_weight (pipe_, weight))
+        return false;
+    it->second.local_peer_weight_advertised = weight;
+    return true;
+}
+
+#ifdef ZLINK_BUILD_TESTS
+uint64_t zlink::socket_base_t::test_local_peer_weight_send_attempt_count ()
+{
+    return g_local_peer_weight_send_attempt_count.load (
+      std::memory_order_acquire);
+}
+#endif
 
 void zlink::socket_base_t::xdispatch_io ()
 {

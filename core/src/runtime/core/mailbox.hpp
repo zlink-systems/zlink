@@ -8,6 +8,7 @@
 #include "utils/config.hpp"
 #include "core/command.hpp"
 #include "core/ypipe.hpp"
+#include "utils/condition_variable.hpp"
 #include "utils/mutex.hpp"
 #include "core/i_mailbox.hpp"
 #include "core/signaler.hpp"
@@ -30,6 +31,13 @@ namespace zlink
 class mailbox_t ZLINK_FINAL : public i_mailbox
 {
   public:
+    enum command_probe_result_t
+    {
+        command_probe_empty,
+        command_probe_other,
+        command_probe_match
+    };
+
     mailbox_t ();
     ~mailbox_t ();
 
@@ -37,6 +45,21 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     void send (const command_t &cmd_);
     void signal ();
     int recv (command_t *cmd_, int timeout_);
+    //  Classifies the next command without removing it. Only the serialized
+    //  command owner may call this receiver-side operation.
+    command_probe_result_t probe_command (
+      bool (*predicate_) (const command_t &));
+    //  Waits for a command-owner notification without consuming a poller's
+    //  possibly shared signaler. The command owner must still call recv().
+    int wait_for_command_signal (int timeout_);
+    //  Returns true once for a command batch that woke an inactive receiver.
+    //  Callers use this only as a fast-path hint; recv() remains authoritative.
+    bool take_command_pending_hint ();
+    //  A public poller may consume the primary notification while an async
+    //  command owner applies the corresponding socket state. The command pipe
+    //  remains authoritative even if that notification is consumed before
+    //  the async owner enters recv().
+    void drain_primary_signaler ();
 
     bool valid () const;
 
@@ -60,6 +83,10 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     //  mailbox's fd still wake. See socket_base_t::process_async_mailbox.
     void rearm_primary_signaler ();
     void clear_signalers ();
+
+#ifdef ZLINK_BUILD_TESTS
+    uint32_t test_command_waiter_count ();
+#endif
 
 #ifdef HAVE_FORK
     // close the file descriptors in the signaller. This is used in a forked
@@ -89,6 +116,17 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     void *_handler_arg;
     mailbox_pre_post_t _pre_post;
     std::atomic<bool> _scheduled;
+    std::atomic<bool> _command_pending_hint;
+
+    //  A blocking command owner cannot wait on a secondary poller signaler:
+    //  secondary signalers can be shared, and their readiness can remain set
+    //  until the poller consumes it. Keep this slow-path wakeup private to the
+    //  mailbox. All fields below are protected by _sync. send() only touches
+    //  the epoch/CV when a registered waiter actually needs a wakeup.
+    condition_variable_t _command_wait_cv;
+    uint64_t _command_wait_epoch;
+    uint32_t _command_waiters;
+    bool _command_wait_signal_pending;
 
     //  Signalers for ZLINK_INTERNAL_OPT_FD support
     std::vector<signaler_t *> _signalers;

@@ -65,11 +65,11 @@ B/C의 대표 및 정확한 ID 묶음은 다음과 같습니다.
 
 ## relocation 캠페인과 F의 경계
 
-캠페인 계획은 F를 “168건, 14개 문서”로 적지만, 현재 H 항목과 실질적으로 겹칩니다. [`relocation-campaign-checklist.ko.md:833`](/home/hep7/project/zlink/doc/plan/relocation-campaign-checklist.ko.md:833)
+캠페인 계획은 F를 “168건, 14개 문서”로 적지만, 현재 H 항목과 실질적으로 겹칩니다. [`relocation-campaign-checklist.ko.md:833`](relocation-campaign-checklist.ko.md#e-확정-후속-단계-사용자-승격-2026-08-19--완료-조건-포함-c-완료-후-착수)
 
-- **Config 6의 16건**은 H-7의 “미구현 14 SF”와 정확히 맞고, `SF-F7/F11`은 캠페인 Track F에서 이미 손댄 뒤 의도적으로 남은 하위 variant입니다. H-7 근거는 [`계획:969`](/home/hep7/project/zlink/doc/plan/relocation-campaign-checklist.ko.md:969)입니다.
+- **Config 6의 16건**은 H-7의 “미구현 14 SF”와 정확히 맞고, `SF-F7/F11`은 캠페인 Track F에서 이미 손댄 뒤 의도적으로 남은 하위 variant입니다. H-7 근거는 [`계획:969`](relocation-campaign-checklist.ko.md#h-후속-트랙-전면-착수-사용자-지시-2026-08-20--후속으로-표시된-것도-리스트업하고-모두-진행)입니다.
 - **Config 10의 24건**은 relocation 전용입니다.
-  - `ST-C4`는 H-1 소유입니다. [`계획:934`](/home/hep7/project/zlink/doc/plan/relocation-campaign-checklist.ko.md:934)
+  - `ST-C4`는 H-1 소유입니다. [`계획:934`](relocation-campaign-checklist.ko.md#h-후속-트랙-전면-착수-사용자-지시-2026-08-20--후속으로-표시된-것도-리스트업하고-모두-진행)
   - E/G/H/I 묶음 22개는 H-8과 대응합니다.
   - `ST-F3A`는 현재 H-1/H-8 어느 쪽에도 명시 배정되지 않은 relocation-adjacent orphan입니다.
 - H-8은 “28개”라고 쓰지만, 공통 문서의 E/G/H/I ID는 정상 `ST-E1`을 빼면 **22개**입니다. 6개 차이와 `ST-F3A`의 소유권은 F 착수 전에 정정해야 합니다.
@@ -119,7 +119,7 @@ tokens used
 
 ## Gate 및 현재 결과
 
-CTest 등록은 [`CMakeLists.txt`](/home/hep7/project/zlink/framework/languages/cpp/CMakeLists.txt:1284)의 `test_cpp_framework_common_e2e_inventory`이며, `framework-contract;framework-e2e` 레이블입니다. 실제 검사는 [`verify_common_inventory.sh`](/home/hep7/project/zlink/framework/languages/cpp/e2e/verify_common_inventory.sh:57)에서 다음을 확인합니다.
+CTest 등록은 [`CMakeLists.txt`](../../../framework/languages/cpp/CMakeLists.txt#L1284)의 `test_cpp_framework_common_e2e_inventory`이며, `framework-contract;framework-e2e` 레이블입니다. 실제 검사는 [`verify_common_inventory.sh`](../../../framework/languages/cpp/e2e/verify_common_inventory.sh#L57)에서 다음을 확인합니다.
 
 - 14개 공통 config의 EN/KO scenario-ID parity
 - C++ feature-map의 ID 존재
@@ -128,7 +128,7 @@ CTest 등록은 [`CMakeLists.txt`](/home/hep7/project/zlink/framework/languages/
 
 현 HEAD에서 직접 실행 결과는 공통 시나리오 **361개**, feature-map ID 누락 **94**, source 누락 **122**, 불완전 상태 **60**, predicate 실패 합계 **276**입니다. EN/KO pair 및 ID parity 오류는 없었습니다.
 
-중요한 gate 결함도 하나 있습니다. 정규식이 영어 상태값 `partial`을 검사하지 않아 [`SpotActorTransfer/feature-map.ko.md:47`](/home/hep7/project/zlink/framework/languages/cpp/e2e/SpotActorTransfer/feature-map.ko.md:47)의 `ST-H4`를 누락합니다. 따라서 “168”은 완전한 상태 인벤토리가 아닙니다.
+중요한 gate 결함도 하나 있습니다. 정규식이 영어 상태값 `partial`을 검사하지 않아 [`SpotActorTransfer/feature-map.ko.md:47`](../../../framework/languages/cpp/e2e/SpotActorTransfer/feature-map.ko.md#c-spotactortransfer-e2e-feature-map)의 `ST-H4`를 누락합니다. 따라서 “168”은 완전한 상태 인벤토리가 아닙니다.
 
 ## 14-config 상세 인벤토리
 
@@ -183,11 +183,11 @@ B/C의 대표 및 정확한 ID 묶음은 다음과 같습니다.
 
 ## relocation 캠페인과 F의 경계
 
-캠페인 계획은 F를 “168건, 14개 문서”로 적지만, 현재 H 항목과 실질적으로 겹칩니다. [`relocation-campaign-checklist.ko.md:833`](/home/hep7/project/zlink/doc/plan/relocation-campaign-checklist.ko.md:833)
+캠페인 계획은 F를 “168건, 14개 문서”로 적지만, 현재 H 항목과 실질적으로 겹칩니다. [`relocation-campaign-checklist.ko.md:833`](relocation-campaign-checklist.ko.md#e-확정-후속-단계-사용자-승격-2026-08-19--완료-조건-포함-c-완료-후-착수)
 
-- **Config 6의 16건**은 H-7의 “미구현 14 SF”와 정확히 맞고, `SF-F7/F11`은 캠페인 Track F에서 이미 손댄 뒤 의도적으로 남은 하위 variant입니다. H-7 근거는 [`계획:969`](/home/hep7/project/zlink/doc/plan/relocation-campaign-checklist.ko.md:969)입니다.
+- **Config 6의 16건**은 H-7의 “미구현 14 SF”와 정확히 맞고, `SF-F7/F11`은 캠페인 Track F에서 이미 손댄 뒤 의도적으로 남은 하위 variant입니다. H-7 근거는 [`계획:969`](relocation-campaign-checklist.ko.md#h-후속-트랙-전면-착수-사용자-지시-2026-08-20--후속으로-표시된-것도-리스트업하고-모두-진행)입니다.
 - **Config 10의 24건**은 relocation 전용입니다.
-  - `ST-C4`는 H-1 소유입니다. [`계획:934`](/home/hep7/project/zlink/doc/plan/relocation-campaign-checklist.ko.md:934)
+  - `ST-C4`는 H-1 소유입니다. [`계획:934`](relocation-campaign-checklist.ko.md#h-후속-트랙-전면-착수-사용자-지시-2026-08-20--후속으로-표시된-것도-리스트업하고-모두-진행)
   - E/G/H/I 묶음 22개는 H-8과 대응합니다.
   - `ST-F3A`는 현재 H-1/H-8 어느 쪽에도 명시 배정되지 않은 relocation-adjacent orphan입니다.
 - H-8은 “28개”라고 쓰지만, 공통 문서의 E/G/H/I ID는 정상 `ST-E1`을 빼면 **22개**입니다. 6개 차이와 `ST-F3A`의 소유권은 F 착수 전에 정정해야 합니다.

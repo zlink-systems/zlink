@@ -99,6 +99,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_helper_interleave
   ${INTEGRATION_TEST_ROOT}/test_helper_more_bad_send
   ${INTEGRATION_TEST_ROOT}/test_helper_request_sequence_failure
+  ${INTEGRATION_TEST_ROOT}/test_proxy
   ${INTEGRATION_TEST_ROOT}/test_pubsub
   ${INTEGRATION_TEST_ROOT}/test_reconnect_ivl
   ${INTEGRATION_TEST_ROOT}/test_reconnect_options
@@ -112,6 +113,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_router_multiple_dealers
   ${INTEGRATION_TEST_ROOT}/test_probe_router
   ${INTEGRATION_TEST_ROOT}/test_zmp_request_reply
+  ${INTEGRATION_TEST_ROOT}/test_zmp_request_reply_receive_transaction
   ${INTEGRATION_TEST_ROOT}/test_zmp_request_reply_router_recv_surface
   ${INTEGRATION_TEST_ROOT}/test_router_concurrent_routed_recv
   ${INTEGRATION_TEST_ROOT}/test_router_mandatory_hwm
@@ -121,6 +123,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_send_async_multipart
   ${INTEGRATION_TEST_ROOT}/test_send_async_tls_admit
   ${INTEGRATION_TEST_ROOT}/test_zmp_metadata
+  ${INTEGRATION_TEST_ROOT}/test_zmp_ws_wss
   ${INTEGRATION_TEST_ROOT}/test_stream_socket
   ${INTEGRATION_TEST_ROOT}/test_stream_threadsafe
   ${INTEGRATION_TEST_ROOT}/test_stream_send_blocking_wakeup
@@ -263,30 +266,16 @@ set(TESTUTIL_SOURCES
   testutil_unity.cpp
   testutil_unity.hpp)
 
-if(BUILD_STATIC)
-  add_library(testutil-static STATIC ${TESTUTIL_SOURCES})
-  target_link_libraries(testutil-static libzlink-static ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} unity)
-endif()
+# Shared library builds export only the public zlink_* C API (Windows DLL
+# exports and the Linux version script agree on this), so Core tests link the
+# static library to reach private helper symbols without expanding the ABI.
+add_library(testutil-static STATIC ${TESTUTIL_SOURCES})
+target_link_libraries(
+  testutil-static
+  libzlink-static ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} unity)
+set(TESTUTIL_LIB testutil-static)
 
-if(BUILD_SHARED)
-  add_library(testutil STATIC ${TESTUTIL_SOURCES})
-  target_link_libraries(testutil libzlink ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} unity)
-endif()
-
-if(BUILD_STATIC)
-  # Shared library builds export only the public zlink_* C API (Windows DLL
-  # exports and the Linux version script agree on this), so tests that reach
-  # private helper symbols must link the static library instead.
-  set(TESTUTIL_LIB testutil-static)
-else()
-  set(TESTUTIL_LIB testutil)
-endif()
-
-if(BUILD_STATIC)
-  add_subdirectory(unittest)
-else()
-  message(WARNING "Not building unit tests, since BUILD_STATIC is not enabled")
-endif()
+add_subdirectory(unittest)
 
 if(MSVC_VERSION LESS 1700)
   set_source_files_properties("${ZLINK_CORE_SOURCE_DIR}/external/unity/unity.c" PROPERTIES LANGUAGE CXX)
@@ -392,6 +381,24 @@ foreach(test_source ${tests})
         PROPERTIES
           TIMEOUT 60)
     endif()
+    if(${test} STREQUAL "test_zmp_request_reply_receive_transaction")
+      set_tests_properties(
+        ${test}
+        PROPERTIES
+          TIMEOUT 30)
+    endif()
+    if(${test} STREQUAL "test_proxy")
+      set_tests_properties(
+        ${test}
+        PROPERTIES
+          TIMEOUT 30)
+    endif()
+    if(${test} STREQUAL "test_asio_ws")
+      set_tests_properties(
+        ${test}
+        PROPERTIES
+          TIMEOUT 60)
+    endif()
     if(${test} STREQUAL "test_multi_stream_benchmark_process")
       set_tests_properties(${test} PROPERTIES TIMEOUT 120)
     endif()
@@ -420,15 +427,9 @@ add_executable(
   test_pub_monitor_close_full_mask
   ${INTEGRATION_TEST_ROOT}/test_pub_monitor_close_full_mask.c)
 set_target_properties(test_pub_monitor_close_full_mask PROPERTIES LINKER_LANGUAGE CXX)
-if(BUILD_STATIC)
-  target_link_libraries(
-    test_pub_monitor_close_full_mask
-    libzlink-static ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
-else()
-  target_link_libraries(
-    test_pub_monitor_close_full_mask
-    libzlink ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
-endif()
+target_link_libraries(
+  test_pub_monitor_close_full_mask
+  libzlink-static ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
 add_test(NAME test_pub_monitor_close_full_mask COMMAND test_pub_monitor_close_full_mask)
 set_tests_properties(test_pub_monitor_close_full_mask PROPERTIES TIMEOUT 10 SKIP_RETURN_CODE 77)
 if(WIN32)
@@ -509,6 +510,10 @@ endif()
 if(TARGET test_send_async_tls_admit)
   # Three cases, each with its own TLS handshake plus a 10s completion budget.
   set_tests_properties(test_send_async_tls_admit PROPERTIES TIMEOUT 90)
+endif()
+if(TARGET test_zmp_ws_wss)
+  # The target covers WS and, when enabled, two additional TLS/WSS handshakes.
+  set_tests_properties(test_zmp_ws_wss PROPERTIES TIMEOUT 60)
 endif()
 if(TARGET test_xpub_nodrop)
   set_tests_properties(test_xpub_nodrop PROPERTIES TIMEOUT 45)
@@ -936,9 +941,7 @@ set(UNREGISTERED_TEST_ALLOWLIST
     test_pair_ipc
     test_pair_tcp
     test_pair_send_blocking_wakeup
-    test_proxy
     test_pub_invert_matching
-    test_pubsub_filter_xpub
     test_pubsub_inproc_alternating
     test_router_auto_id_format
     test_router_handover
@@ -960,8 +963,6 @@ set(UNREGISTERED_TEST_ALLOWLIST
     test_xpub_topic
     test_xpub_verbose
     test_xpub_welcome_msg
-    test_zmp_metadata
-    test_zmp_ws_wss
     test_z85_decode_fuzzer)
 
 zlink_warn_unregistered_tests(

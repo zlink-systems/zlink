@@ -7,9 +7,9 @@
 #include "engine/asio/asio_raw_engine.hpp"
 #include "engine/asio/asio_zmp_engine.hpp"
 #include "engine/asio/asio_poller.hpp"
-#include "transports/tls/ssl_context_helper.hpp"
 #include "transports/ws/ws_transport.hpp"
 #if defined ZLINK_HAVE_WSS
+#include "transports/tls/ssl_context_helper.hpp"
 #include "transports/tls/wss_transport.hpp"
 #include "transports/tls/wss_address.hpp"
 #endif
@@ -218,7 +218,9 @@ void zlink::asio_ws_connecter_t::start_connecting ()
 
     //  Store WebSocket-specific data for engine creation
     const std::string host = ws_addr->host ();
+#if defined ZLINK_HAVE_WSS
     _tls_hostname = !options.tls_hostname.empty () ? options.tls_hostname : host;
+#endif
     if (host.find (':') != std::string::npos)
         _host = "[" + host + "]:" + std::to_string (ws_addr->port ());
     else

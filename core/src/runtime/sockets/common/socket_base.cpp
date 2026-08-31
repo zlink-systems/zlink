@@ -24,9 +24,6 @@
 
 namespace
 {
-const char peer_weight_cmd_name[] = "WEIGHT";
-const size_t peer_weight_cmd_name_size = sizeof (peer_weight_cmd_name) - 1;
-
 static void generate_default_routing_id (unsigned char out_[16])
 {
     zlink::generate_random_bytes (out_, 16);
@@ -383,55 +380,6 @@ void zlink::socket_base_t::store_socket_msg_part (std::vector<zlink_msg_t> *part
     parts_->push_back (stored);
 }
 
-int zlink::socket_base_t::init_peer_weight_command (zlink::msg_t *msg_, uint32_t weight_)
-{
-    if (!msg_) {
-        errno = EFAULT;
-        return -1;
-    }
-
-    const int rc = msg_->init_size (peer_weight_cmd_name_size + 4);
-    if (rc != 0)
-        return -1;
-
-    memcpy (msg_->data (), peer_weight_cmd_name, peer_weight_cmd_name_size);
-    unsigned char *payload =
-      static_cast<unsigned char *> (msg_->data ()) + peer_weight_cmd_name_size;
-    payload[0] = static_cast<unsigned char> ((weight_ >> 24) & 0xffu);
-    payload[1] = static_cast<unsigned char> ((weight_ >> 16) & 0xffu);
-    payload[2] = static_cast<unsigned char> ((weight_ >> 8) & 0xffu);
-    payload[3] = static_cast<unsigned char> (weight_ & 0xffu);
-    msg_->set_flags (zlink::msg_t::command);
-    return 0;
-}
-
-bool zlink::socket_base_t::decode_peer_weight_command (const zlink::msg_t &msg_,
-                                                       uint32_t *weight_out_)
-{
-    if (!(msg_.flags () & zlink::msg_t::command))
-        return false;
-    if (msg_.size () != peer_weight_cmd_name_size + 4)
-        return false;
-    if (memcmp (const_cast<zlink::msg_t &> (msg_).data (), peer_weight_cmd_name,
-                peer_weight_cmd_name_size)
-        != 0) {
-        return false;
-    }
-
-    const unsigned char *payload =
-      static_cast<unsigned char *> (const_cast<zlink::msg_t &> (msg_).data ())
-      + peer_weight_cmd_name_size;
-    const uint32_t weight =
-      (static_cast<uint32_t> (payload[0]) << 24) | (static_cast<uint32_t> (payload[1]) << 16)
-      | (static_cast<uint32_t> (payload[2]) << 8) | static_cast<uint32_t> (payload[3]);
-    if (weight > max_peer_weight)
-        return false;
-
-    if (weight_out_)
-        *weight_out_ = weight;
-    return true;
-}
-
 void zlink::socket_base_t::stop ()
 {
     //  Publish termination before queueing the administrative command. A
@@ -474,10 +422,13 @@ int zlink::socket_base_t::xsend (msg_t *,
 
 int zlink::socket_base_t::xsend_pipe (
   msg_t *msg_, pipe_t **pipe_out_,
-  pipe_message_admission_t *admission_out_)
+  pipe_message_admission_t *admission_out_,
+  pipe_write_observer_fn observer_, void *observer_userdata_)
 {
     if (pipe_out_)
         *pipe_out_ = NULL;
+    LIBZLINK_UNUSED (observer_);
+    LIBZLINK_UNUSED (observer_userdata_);
     return xsend (msg_, admission_out_);
 }
 
@@ -488,7 +439,12 @@ int zlink::socket_base_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                                        pipe_t **pipe_out_,
                                        uint64_t expected_transport_pair_id_,
                                        uint64_t expected_transport_pair_generation_,
-                                       pipe_message_admission_t *admission_out_)
+                                       pipe_message_admission_t *admission_out_,
+                                       pipe_write_observer_fn observer_,
+                                       void *observer_userdata_,
+                                       routed_send_attempt_identity_t
+                                         *attempt_identity_out_,
+                                       uint64_t expected_route_incarnation_id_)
 {
     LIBZLINK_UNUSED (target_rid_);
     LIBZLINK_UNUSED (msg_);
@@ -496,9 +452,14 @@ int zlink::socket_base_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         *connection_id_out_ = 0;
     if (pipe_out_)
         *pipe_out_ = NULL;
+    if (attempt_identity_out_)
+        attempt_identity_out_->reset ();
     LIBZLINK_UNUSED (expected_connection_id_);
     LIBZLINK_UNUSED (expected_transport_pair_id_);
     LIBZLINK_UNUSED (expected_transport_pair_generation_);
+    LIBZLINK_UNUSED (expected_route_incarnation_id_);
+    LIBZLINK_UNUSED (observer_);
+    LIBZLINK_UNUSED (observer_userdata_);
     if (admission_out_)
         *admission_out_ = pipe_message_admission_invalid;
     errno = ENOTSUP;
@@ -513,6 +474,19 @@ int zlink::socket_base_t::xselect_routed_submit_target (
     LIBZLINK_UNUSED (target_out_);
     errno = ENOTSUP;
     return -1;
+}
+
+int zlink::socket_base_t::xselect_routed_submit_target_internal (
+  const zlink_routing_id_t *router_rid_or_null_,
+  zlink_routed_submit_target_t *target_out_,
+  uint64_t *transport_connection_id_out_,
+  uint64_t *route_incarnation_id_out_)
+{
+    if (transport_connection_id_out_)
+        *transport_connection_id_out_ = 0;
+    if (route_incarnation_id_out_)
+        *route_incarnation_id_out_ = 0;
+    return xselect_routed_submit_target (router_rid_or_null_, target_out_);
 }
 
 int zlink::socket_base_t::xrollback ()

@@ -226,15 +226,23 @@ def main():
     check_packaging_metadata(root, failures)
 
     if lib.exists():
+        nm_args = (["nm", "-g", "-U", str(lib)]
+                   if sys.platform == "darwin"
+                   else ["nm", "-D", "--defined-only", str(lib)])
         nm = subprocess.run(
-            ["nm", "-D", "--defined-only", str(lib)],
+            nm_args,
             capture_output=True, text=True, check=True,
         )
-        exports = {
-            line.split()[-1]
-            for line in nm.stdout.splitlines()
-            if line.split() and line.split()[-1].startswith("zlink_")
-        }
+        exports = set()
+        for line in nm.stdout.splitlines():
+            fields = line.split()
+            if not fields:
+                continue
+            symbol = fields[-1]
+            if sys.platform == "darwin" and symbol.startswith("_"):
+                symbol = symbol[1:]
+            if symbol.startswith("zlink_"):
+                exports.add(symbol)
         missing_exports = formal["FUNC"] - exports
         extra_exports = exports - formal["FUNC"]
         if missing_exports:

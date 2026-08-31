@@ -6,6 +6,7 @@
 #include <map>
 #include <vector>
 
+#include "core/pipe.hpp"
 #include "utils/array.hpp"
 
 namespace zlink
@@ -23,13 +24,16 @@ class lb_t
     lb_t ();
     ~lb_t ();
 
-    void attach (pipe_t *pipe_);
+    void attach (pipe_t *pipe_, uint32_t initial_weight_ = 100);
     void activated (pipe_t *pipe_);
     void pipe_terminated (pipe_t *pipe_);
     void set_weight (pipe_t *pipe_, uint32_t weight_);
     uint32_t weight (pipe_t *pipe_) const;
     bool has_positive_weight_pipe () const;
     bool contains (pipe_t *pipe_) const;
+#ifdef ZLINK_BUILD_TESTS
+    size_t test_weight_count (uint32_t weight_) const;
+#endif
 
     //  Commits one weighted choice across every connected positive-weight
     //  pipe, including pipes that are temporarily inactive because of HWM.
@@ -47,7 +51,9 @@ class lb_t
     //  Sends the first frame to an already selected exact pipe. Multipart
     //  continuation then follows the ordinary _weighted_multipart_pipe fence.
     int sendpipe_to (pipe_t *pipe_, msg_t *msg_,
-                     pipe_message_admission_t *admission_out_ = NULL);
+                     pipe_message_admission_t *admission_out_ = NULL,
+                     pipe_write_observer_fn observer_ = NULL,
+                     void *observer_userdata_ = NULL);
 
     int send (msg_t *msg_,
               pipe_message_admission_t *admission_out_ = NULL);
@@ -57,7 +63,9 @@ class lb_t
     //  unset if the rest of a multipart message to a terminated pipe is
     //  being dropped. For the first frame, this will never happen.
     int sendpipe (msg_t *msg_, pipe_t **pipe_,
-                  pipe_message_admission_t *admission_out_ = NULL);
+                  pipe_message_admission_t *admission_out_ = NULL,
+                  pipe_write_observer_fn observer_ = NULL,
+                  void *observer_userdata_ = NULL);
 
     //  Removes an unfinished multipart message and resets send sequencing.
     void rollback ();

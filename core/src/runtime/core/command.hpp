@@ -33,6 +33,7 @@ struct command_t
         activate_read,
         activate_write,
         flow_state,
+        peer_weight,
         send_pending,
         send_pending_timeout,
         request_completion,
@@ -111,6 +112,15 @@ struct command_t
             uint64_t epoch;
             unsigned char state;
         } flow_state;
+
+        //  Delivers peer scheduling policy to one socket-owned pipe endpoint.
+        //  Inproc sends it directly; a network session queues it after
+        //  consuming the corresponding ZMP command frame.
+        struct
+        {
+            uint64_t connection_id;
+            uint32_t weight;
+        } peer_weight;
 
         //  Wakes the socket's async mailbox owner so it re-runs the
         //  asynchronous send admit loop. The command carries no payload; the

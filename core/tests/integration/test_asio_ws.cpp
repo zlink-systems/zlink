@@ -705,8 +705,12 @@ void test_zlink_ws_stream_packet_handler_routed_send ()
         std::lock_guard<std::mutex> lock (g_ws_stream_probe_mutex);
         rid = g_ws_stream_probe_rid;
     }
-    const std::string first_body (192, 'n');
-    const std::string second_body (192, 'r');
+    //  Keep both raw STREAM messages above the default gather threshold.
+    //  asio_raw_engine_t has no ZMP header, so build_gather_header(false)
+    //  must fall back to the raw encoder instead of treating WS framing as a
+    //  ZMP protocol error.
+    const std::string first_body (128 * 1024, 'n');
+    const std::string second_body (128 * 1024, 'r');
     const std::vector<unsigned char> first = ws_stream_packet ("notify", first_body.c_str ());
     const std::vector<unsigned char> second =
       ws_stream_packet ("response", second_body.c_str ());
@@ -1011,6 +1015,39 @@ void test_zlink_wss_stream_fragmented_partial_read ()
     write_fragmented_ws_message (client, request);
     wait_for_ws_stream_probe ("fragmented WSS STREAM packet timed out");
     assert_ws_stream_probe_payload (header, body);
+
+    zlink_routing_id_t rid;
+    {
+        std::lock_guard<std::mutex> lock (g_ws_stream_probe_mutex);
+        rid = g_ws_stream_probe_rid;
+    }
+    const std::string response_body = patterned_ws_stream_body (128 * 1024, 31);
+    const std::vector<unsigned char> response =
+      ws_stream_packet ("wss-response", response_body.c_str ());
+    std::atomic<int> send_result (ZLINK_SUBMIT_INTERNAL_ERROR);
+    std::thread service_thread ([&] () {
+        zlink_msg_t response_message;
+        if (zlink_msg_init_size (&response_message, response.size ()) != 0)
+            return;
+        memcpy (zlink_msg_data (&response_message), &response[0],
+                response.size ());
+        send_result.store (
+          zlink_send_part_rid (
+            server, &rid, &response_message, ZLINK_SEND_FLAGS_NONE,
+            ZLINK_PART_FINAL),
+          std::memory_order_release);
+    });
+    service_thread.join ();
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK, send_result.load (std::memory_order_acquire));
+
+    beast::flat_buffer received;
+    client.read (received);
+    const std::string received_bytes =
+      beast::buffers_to_string (received.data ());
+    TEST_ASSERT_EQUAL_UINT64 (response.size (), received_bytes.size ());
+    TEST_ASSERT_EQUAL_MEMORY (
+      &response[0], received_bytes.data (), response.size ());
 
     boost::system::error_code ignored;
     client.close (websocket::close_code::normal, ignored);

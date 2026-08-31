@@ -9,31 +9,6 @@
 
 static void record_monitor_probe_event (const zlink_monitor_event_t *event_, void *userdata_);
 
-namespace
-{
-std::mutex g_active_monitor_probe_sync;
-test_monitor_probe_t *g_active_monitor_probe = NULL;
-
-void activate_test_monitor_probe (test_monitor_probe_t *probe_)
-{
-    std::lock_guard<std::mutex> lock (g_active_monitor_probe_sync);
-    g_active_monitor_probe = probe_;
-}
-
-void deactivate_test_monitor_probe (test_monitor_probe_t *probe_)
-{
-    std::lock_guard<std::mutex> lock (g_active_monitor_probe_sync);
-    if (g_active_monitor_probe == probe_)
-        g_active_monitor_probe = NULL;
-}
-
-void record_active_test_monitor_event (const zlink_monitor_event_t *event_, void *)
-{
-    std::lock_guard<std::mutex> lock (g_active_monitor_probe_sync);
-    record_monitor_probe_event (event_, g_active_monitor_probe);
-}
-}
-
 static int wait_monitor_readable (void *monitor_, int flags_, long timeout_ms_)
 {
     if ((flags_ & ZLINK_DONTWAIT) != 0)
@@ -330,20 +305,19 @@ void *open_test_monitor_probe (void *socket_,
                                zlink_socket_monitor_event_mask_t events_,
                                test_monitor_probe_t *probe_)
 {
-    activate_test_monitor_probe (probe_);
     zlink_socket_monitor_open_options_t opts;
     memset (&opts, 0, sizeof (opts));
     opts.events = events_;
     void *monitor = zlink_socket_monitor_open (socket_, &opts);
     TEST_ASSERT_NOT_NULL (monitor);
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_socket_monitor_handler (monitor, &record_active_test_monitor_event, NULL));
+      zlink_socket_monitor_handler (monitor, &record_monitor_probe_event,
+                                    probe_));
     return monitor;
 }
 
-void close_test_monitor_probe (void **monitor_p_, test_monitor_probe_t *probe_)
+void close_test_monitor_probe (void **monitor_p_, test_monitor_probe_t *)
 {
-    deactivate_test_monitor_probe (probe_);
     if (!monitor_p_ || !*monitor_p_)
         return;
 

@@ -168,13 +168,19 @@ void zlink::dist_t::distribute (msg_t *msg_)
     // matching pipe. Avoid the generic distributor loop, refcount churn, and
     // repeated pipe index lookups in that narrow case.
     if (_matching == 1 && _active == 1 && _eligible == 1) {
-        (void) write_at (0, msg_);
+        if (!write_at (0, msg_)) {
+            const int close_rc = msg_->close ();
+            errno_assert (close_rc == 0);
+        }
         const int rc = msg_->init ();
         errno_assert (rc == 0);
         return;
     }
 
-    if (msg_->is_vsm ()) {
+    //  VSM payloads can normally be copied without reference accounting. A
+    //  long group lives in the shared auxiliary overlay, however, and must
+    //  follow the same add_refs/rm_refs fan-out path as a long payload.
+    if (msg_->is_vsm () && !msg_->has_long_group ()) {
         for (pipes_t::size_type i = 0; i < _matching;) {
             if (!write_at (i, msg_)) {
                 //  Use same index again because entry will have been removed.

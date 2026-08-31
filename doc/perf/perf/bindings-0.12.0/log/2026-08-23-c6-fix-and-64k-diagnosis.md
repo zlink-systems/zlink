@@ -40,12 +40,12 @@
 
 ### 2.1 메커니즘
 
-[`message_access_t::move_to_native()`](/home/hep7hep7/project/zlink/bindings/cpp/src/Runtime/Native/message_access.hpp:67)
+[`message_access_t::move_to_native()`](../../../../../bindings/cpp/src/Runtime/Native/message_access.hpp#L67)
 는 native frame을 밖으로 내보내면서 source의 `_valid`와 `_has_payload`를 모두
 `false`로 만든다. 이것은 올바르다.
 
 반대 방향이 문제였다.
-[`native_message_parts.hpp`](/home/hep7hep7/project/zlink/bindings/cpp/src/Runtime/Native/native_message_parts.hpp)
+[`native_message_parts.hpp`](../../../../../bindings/cpp/src/Runtime/Native/native_message_parts.hpp)
 의 복구·materialization helper들은 `message_t::init()`(역시 `_has_payload=false`로
 만든다) 뒤에 `zlink_msg_move()`로 native payload를 집어넣지만 **`_has_payload`를
 다시 `true`로 되돌리지 않았다.**
@@ -64,7 +64,7 @@
 ### 2.2 왜 위험한가
 
 C4가 `_has_payload`를 receive fast path의 **분기 선택자**로 쓴다
-([`detail.hpp:94`](/home/hep7hep7/project/zlink/bindings/cpp/src/Runtime/Sockets/detail.hpp:94)).
+([`detail.hpp:94`](../../../../../bindings/cpp/src/Runtime/Sockets/detail.hpp#L94)).
 
 ```
 if (part_out_.valid () && !has_payload (part_out_)) {

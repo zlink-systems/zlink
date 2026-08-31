@@ -3,11 +3,11 @@
 #include "utils/precompiled.hpp"
 #include "protocol/zmp_encoder.hpp"
 #include "core/msg.hpp"
-#include "protocol/wire.hpp"
+#include "protocol/zmp_data_header.hpp"
 
-#include <limits>
-
-zlink::zmp_encoder_t::zmp_encoder_t (size_t bufsize_) : encoder_base_t<zmp_encoder_t> (bufsize_)
+zlink::zmp_encoder_t::zmp_encoder_t (size_t bufsize_) :
+    encoder_base_t<zmp_encoder_t> (bufsize_),
+    _application_multipart_in_progress (false)
 {
     next_step (NULL, 0, &zmp_encoder_t::header_ready, true);
 }
@@ -19,39 +19,41 @@ zlink::zmp_encoder_t::~zmp_encoder_t ()
 void zlink::zmp_encoder_t::header_ready ()
 {
     const msg_t *msg = in_progress ();
-    const size_t size = msg->size ();
-    if (size > static_cast<size_t> (std::numeric_limits<uint32_t>::max ())) {
-        // ZMP v1 has one fixed 32-bit payload length. Consume the rejected
-        // frame without emitting a truncated header/body pair.
-        errno = EMSGSIZE;
+    size_t header_size = 0;
+    if (!build_header (*msg, _tmp_buf, sizeof (_tmp_buf), header_size)) {
+        //  Consume a rejected frame without emitting a partial header/body.
         next_step (NULL, 0, &zmp_encoder_t::header_ready, true);
         return;
     }
-    const unsigned char msg_flags = msg->flags ();
 
-    unsigned char flags = 0;
-    if (msg_flags != 0) {
-        if (msg_flags & msg_t::more)
-            flags |= zmp_flag_more;
-        if (msg_flags & msg_t::command)
-            flags |= zmp_flag_control;
-        if (msg_flags & msg_t::routing_id)
-            flags |= zmp_flag_identity;
+    next_step (_tmp_buf, header_size, &zmp_encoder_t::body_ready, false);
+}
 
-        const unsigned char cmd_type = msg_flags & CMD_TYPE_MASK;
-        if (cmd_type == msg_t::subscribe)
-            flags |= zmp_flag_subscribe;
-        else if (cmd_type == msg_t::cancel)
-            flags |= zmp_flag_cancel;
+bool zlink::zmp_encoder_t::build_header (const msg_t &msg_,
+                                         unsigned char *buffer_,
+                                         size_t buffer_size_,
+                                         size_t &header_size_)
+{
+    const unsigned char special_flags =
+      msg_t::command | msg_t::routing_id | msg_t::subscribe | msg_t::cancel;
+    const bool special_frame = (msg_.flags () & special_flags) != 0;
+
+    bool has_request_reply = false;
+    if (!build_zmp_data_header (msg_, buffer_, buffer_size_, header_size_,
+                                has_request_reply))
+        return false;
+
+    if (_application_multipart_in_progress
+        && (special_frame || has_request_reply)) {
+        header_size_ = 0;
+        errno = EINVAL;
+        return false;
     }
 
-    _tmp_buf[0] = zmp_magic;
-    _tmp_buf[1] = zmp_version;
-    _tmp_buf[2] = flags;
-    _tmp_buf[3] = 0;
-    put_uint32 (_tmp_buf + 4, static_cast<uint32_t> (size));
-
-    next_step (_tmp_buf, zmp_header_size, &zmp_encoder_t::body_ready, false);
+    if (!special_frame)
+        _application_multipart_in_progress =
+          (msg_.flags () & msg_t::more) != 0;
+    return true;
 }
 
 void zlink::zmp_encoder_t::body_ready ()

@@ -4,6 +4,9 @@
 #include "testutil_monitoring.hpp"
 #include "testutil_unity.hpp"
 
+#include "../../../src/runtime/engine/asio/asio_zmp_engine.hpp"
+#include "../../../src/runtime/sockets/common/socket_base.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -32,8 +35,90 @@ struct raw_delivery_probe_t
     char parts[4][64];
 };
 
+struct passive_ready_write_drain_gate_t
+{
+    passive_ready_write_drain_gate_t () :
+        released (false),
+        arrivals (0),
+        pair_id (0),
+        pair_generation (0),
+        identity_consistent (true)
+    {
+    }
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool released;
+    unsigned int arrivals;
+    uint64_t pair_id;
+    uint64_t pair_generation;
+    bool identity_consistent;
+};
+
 raw_delivery_probe_t *g_raw_delivery_probe_a = NULL;
 raw_delivery_probe_t *g_raw_delivery_probe_b = NULL;
+passive_ready_write_drain_gate_t g_passive_ready_write_drain_gate;
+
+zlink::socket_base_t *as_internal_socket (void *socket_)
+{
+    socket_handle_t handle = as_socket_handle (socket_);
+    return handle.socket;
+}
+
+void pause_passive_ready_after_write_drain (uint64_t pair_id_,
+                                            uint64_t pair_generation_,
+                                            void *userdata_)
+{
+    passive_ready_write_drain_gate_t *gate =
+      static_cast<passive_ready_write_drain_gate_t *> (userdata_);
+    if (!gate)
+        return;
+
+    std::unique_lock<std::mutex> lock (gate->mutex);
+    if (gate->arrivals == 0) {
+        gate->pair_id = pair_id_;
+        gate->pair_generation = pair_generation_;
+    } else if (gate->pair_id != pair_id_
+               || gate->pair_generation != pair_generation_) {
+        gate->identity_consistent = false;
+    }
+    ++gate->arrivals;
+    gate->cv.notify_all ();
+
+    //  A bounded wait keeps a failed assertion or interrupted test from
+    //  stranding the engine thread until the process-wide CTest timeout.
+    gate->cv.wait_for (lock, std::chrono::seconds (8),
+                       [gate] () { return gate->released; });
+}
+
+void reset_passive_ready_write_drain_gate ()
+{
+    std::lock_guard<std::mutex> lock (g_passive_ready_write_drain_gate.mutex);
+    g_passive_ready_write_drain_gate.released = false;
+    g_passive_ready_write_drain_gate.arrivals = 0;
+    g_passive_ready_write_drain_gate.pair_id = 0;
+    g_passive_ready_write_drain_gate.pair_generation = 0;
+    g_passive_ready_write_drain_gate.identity_consistent = true;
+}
+
+bool wait_for_passive_ready_write_drain (int timeout_ms_)
+{
+    std::unique_lock<std::mutex> lock (g_passive_ready_write_drain_gate.mutex);
+    return g_passive_ready_write_drain_gate.cv.wait_for (
+      lock, std::chrono::milliseconds (timeout_ms_), [] () {
+          return g_passive_ready_write_drain_gate.arrivals > 0;
+      });
+}
+
+void release_passive_ready_write_drain_gate ()
+{
+    {
+        std::lock_guard<std::mutex> lock (
+          g_passive_ready_write_drain_gate.mutex);
+        g_passive_ready_write_drain_gate.released = true;
+    }
+    g_passive_ready_write_drain_gate.cv.notify_all ();
+}
 
 void close_raw_delivery_parts (raw_delivery_probe_t *probe_,
                                zlink_msg_t *parts_,
@@ -370,6 +455,103 @@ void test_monitor_open_and_connection_ready ()
     test_context_socket_close_zero_linger (server);
 }
 
+void test_passive_paired_ready_waits_for_ready_reply_write_drain ()
+{
+    void *server = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *client = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (server);
+    TEST_ASSERT_NOT_NULL (client);
+
+    set_zero_linger (server);
+    set_zero_linger (client);
+
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (server, endpoint, sizeof endpoint);
+    void *monitor = open_raw_monitor (
+      server, ZLINK_EVENT_CONNECTION_READY | ZLINK_EVENT_DISCONNECTED);
+
+    zlink::socket_base_t *const internal_server = as_internal_socket (server);
+    TEST_ASSERT_NOT_NULL (internal_server);
+
+    reset_passive_ready_write_drain_gate ();
+    zlink::test_set_zmp_passive_ready_write_drained_hook (
+      &pause_passive_ready_after_write_drain,
+      &g_passive_ready_write_drain_gate);
+
+    //  Do not assert while the hook can own an I/O thread. Every exit below
+    //  first releases and removes the gate, then reports the captured result.
+    const int connect_rc = zlink_connect (client, endpoint);
+    const bool drain_reached =
+      connect_rc == 0 && wait_for_passive_ready_write_drain (5000);
+
+    uint64_t pair_id = 0;
+    uint64_t pair_generation = 0;
+    bool identity_consistent = false;
+    {
+        std::lock_guard<std::mutex> lock (
+          g_passive_ready_write_drain_gate.mutex);
+        pair_id = g_passive_ready_write_drain_gate.pair_id;
+        pair_generation =
+          g_passive_ready_write_drain_gate.pair_generation;
+    }
+
+    const uint32_t ready_count_before =
+      internal_server->test_monitor_ready_count ();
+    const bool pair_ready_before =
+      pair_id != 0 && pair_generation != 0
+      && internal_server->test_pair_is_ready (pair_id, pair_generation);
+
+    release_passive_ready_write_drain_gate ();
+
+    zlink_monitor_event_t ready_event;
+    memset (&ready_event, 0, sizeof (ready_event));
+    const bool ready_seen =
+      connect_rc == 0
+      && wait_for_event (monitor, ZLINK_EVENT_CONNECTION_READY,
+                         &ready_event);
+    const uint32_t ready_count_after =
+      internal_server->test_monitor_ready_count ();
+    const bool pair_ready_after =
+      pair_id != 0 && pair_generation != 0
+      && internal_server->test_pair_is_ready (pair_id, pair_generation);
+
+    unsigned int drain_arrivals = 0;
+    {
+        std::lock_guard<std::mutex> lock (
+          g_passive_ready_write_drain_gate.mutex);
+        drain_arrivals = g_passive_ready_write_drain_gate.arrivals;
+        identity_consistent =
+          g_passive_ready_write_drain_gate.identity_consistent;
+    }
+    zlink::test_set_zmp_passive_ready_write_drained_hook (NULL, NULL);
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
+    test_context_socket_close_zero_linger (client);
+    test_context_socket_close_zero_linger (server);
+
+    TEST_ASSERT_EQUAL_INT (0, connect_rc);
+    TEST_ASSERT_TRUE (drain_reached);
+    TEST_ASSERT_TRUE (pair_id != 0);
+    TEST_ASSERT_TRUE (pair_generation != 0);
+    TEST_ASSERT_EQUAL_UINT (2, drain_arrivals);
+    TEST_ASSERT_TRUE (identity_consistent);
+    TEST_ASSERT_EQUAL_UINT32 (0, ready_count_before);
+    TEST_ASSERT_FALSE (pair_ready_before);
+
+    TEST_ASSERT_TRUE (ready_seen);
+    TEST_ASSERT_EQUAL_UINT32 (1, ready_count_after);
+    TEST_ASSERT_TRUE (pair_ready_after);
+    TEST_ASSERT_EQUAL_UINT64 (1, ready_event.value);
+    TEST_ASSERT_EQUAL_UINT64 (pair_id, ready_event.transport_pair_id);
+    TEST_ASSERT_EQUAL_UINT64 (pair_generation,
+                              ready_event.transport_pair_generation);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            ready_event.transport_lane);
+    TEST_ASSERT_TRUE (
+      (ready_event.flags & ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE)
+      != 0);
+}
+
 void test_pair_monitor_ready_implies_first_bidirectional_delivery ()
 {
     void *ctx = zlink_ctx_new ();
@@ -587,6 +769,7 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (test_auto_routing_id_generation);
     RUN_TEST (test_monitor_open_and_connection_ready);
+    RUN_TEST (test_passive_paired_ready_waits_for_ready_reply_write_drain);
     RUN_TEST (test_pair_monitor_ready_implies_first_bidirectional_delivery);
     RUN_TEST (test_dealer_router_monitor_ready_implies_first_bidirectional_delivery);
     RUN_TEST (test_peer_enumeration);

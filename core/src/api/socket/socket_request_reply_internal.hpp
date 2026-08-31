@@ -95,7 +95,28 @@ struct router_reply_target_t
     router_reply_target_t ();
 
     zlink::pipe_t *pipe;
+    zlink::pipe_t *source_pipe_identity;
+    uint64_t wire_request_seq;
+    uint64_t transport_pair_id;
+    uint64_t transport_pair_generation;
     bool checked_out;
+};
+
+struct router_reply_alias_key_t
+{
+    router_reply_alias_key_t ();
+
+    zlink::pipe_t *pipe;
+    uint64_t transport_pair_id;
+    uint64_t transport_pair_generation;
+    uint64_t wire_request_seq;
+
+    bool operator== (const router_reply_alias_key_t &other_) const;
+};
+
+struct router_reply_alias_key_hash_t
+{
+    size_t operator() (const router_reply_alias_key_t &key_) const;
 };
 
 struct socket_request_reply_state_t : public zlink::request_reply_runtime::sequence_state_t
@@ -113,10 +134,14 @@ struct socket_request_reply_state_t : public zlink::request_reply_runtime::seque
     std::unordered_map<uint64_t, dealer_reply_target_t> dealer_reply_targets;
     std::unordered_map<pending_key_t, router_reply_target_t, pending_key_hash_t>
       router_reply_targets;
+    std::unordered_map<router_reply_alias_key_t, uint64_t,
+                       router_reply_alias_key_hash_t>
+      router_reply_aliases;
     size_t reply_target_slots;
     size_t reply_target_reservations;
     size_t reply_target_checkouts;
     uint64_t dealer_next_reply_token;
+    uint64_t router_next_reply_token;
     bool closing;
     zlink::request_completion::queue_state_t completion;
 };
@@ -130,7 +155,6 @@ struct router_recv_metadata_tls_t
 
 router_recv_metadata_tls_t &router_recv_metadata_tls ();
 
-int validate_request_parts (zlink_msg_t *parts_, size_t part_count_);
 uint64_t allocate_dealer_reply_token (socket_request_reply_state_t *state_);
 int recv_router_message_direct (const socket_handle_t &handle_,
                                 const zlink_routing_id_t **source_node_rid_out_,
@@ -143,6 +167,7 @@ int recv_router_message_direct (const socket_handle_t &handle_,
                                 zlink_routing_id_t *terminal_source_storage_ = NULL);
 int recv_dealer_message_direct (const socket_handle_t &handle_,
                                 const std::shared_ptr<socket_request_reply_state_t> &state_,
+                                bool typed_receive_,
                                 uint8_t *message_type_out_,
                                 uint64_t *request_seq_out_,
                                 zlink_msg_t **parts_out_,
@@ -158,36 +183,42 @@ void restore_dealer_reply_target (const std::shared_ptr<socket_request_reply_sta
 void commit_dealer_reply_target (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   uint64_t request_token_);
+void revoke_dealer_reply_target (const socket_handle_t &handle_,
+                                 uint64_t request_token_);
+void forget_dealer_reply_targets_for_pipe (
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  zlink::pipe_t *application_pipe_);
 bool take_router_reply_target (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   const pending_key_t &key_,
-  zlink::pipe_t **application_pipe_out_);
+  router_reply_target_t *target_out_);
 void restore_router_reply_target (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   const pending_key_t &key_);
 void commit_router_reply_target (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   const pending_key_t &key_);
+void revoke_router_reply_target (const socket_handle_t &handle_,
+                                 const zlink_routing_id_t *peer_rid_,
+                                 uint64_t request_seq_);
 void forget_router_reply_targets_for_pipe (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   zlink::pipe_t *application_pipe_);
+void clear_router_reply_targets_locked (socket_request_reply_state_t *state_);
 int send_request_reply_message (const socket_handle_t &handle_,
                                 const zlink_routing_id_t *peer_rid_,
-                                zlink_msg_t *parts_,
-                                size_t part_count_,
+                                zlink_msg_t *staged_parts_,
+                                size_t staged_part_count_,
+                                zlink_msg_t *final_part_,
                                 zlink_send_flags_t flags_,
                                 uint8_t message_type_,
                                 uint64_t request_seq_);
-int send_completion_frames (zlink::socket_base_t *socket_,
-                            zlink::pipe_t *application_pipe_,
-                            const zlink_routing_id_t *peer_rid_,
-                            zlink_msg_t *parts_,
-                            size_t part_count_);
-int send_completion_frames_for_transport_pair (zlink::socket_base_t *socket_,
-                                                uint64_t transport_pair_id_,
-                                                uint64_t transport_pair_generation_,
-                                                zlink_msg_t *parts_,
-                                                size_t part_count_);
+int send_completion_staged_frames (zlink::socket_base_t *socket_,
+                                   zlink::pipe_t *application_pipe_,
+                                   const zlink_routing_id_t *peer_rid_,
+                                   zlink_msg_t *staged_parts_,
+                                   size_t staged_part_count_,
+                                   zlink_msg_t *final_part_);
 std::shared_ptr<socket_request_reply_state_t>
 find_or_create_request_reply_state (const socket_handle_t &handle_);
 std::shared_ptr<socket_request_reply_state_t>
@@ -257,14 +288,12 @@ enum request_reply_allocation_failpoint_t
 {
     request_reply_allocation_none = 0,
     request_reply_allocation_stage_payload,
-    request_reply_allocation_dealer_combined,
-    request_reply_allocation_router_payload,
-    request_reply_allocation_runtime_combined,
     request_reply_allocation_reply_key,
     request_reply_allocation_pending_insert,
     request_reply_allocation_lazy_state_create,
     request_reply_allocation_receive_spill,
-    request_reply_allocation_payload_export
+    request_reply_allocation_payload_export,
+    request_reply_allocation_receive_part_stage
 };
 
 typedef void (*request_reply_timeout_after_remove_hook_fn) (void *userdata_);

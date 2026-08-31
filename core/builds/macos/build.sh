@@ -68,8 +68,13 @@ CMAKE_ARCH_FLAGS="-DCMAKE_OSX_ARCHITECTURES=$ARCH"
 
 # Determine BUILD_TESTS flag
 BUILD_TESTS_FLAG="OFF"
+BUILD_STATIC_FLAG="OFF"
 if [ "$RUN_TESTS" = "ON" ]; then
     BUILD_TESTS_FLAG="ON"
+    # Internal contract tests use private Core helpers. Build the static target
+    # so those tests do not depend on symbols intentionally hidden from the
+    # distributable dylib.
+    BUILD_STATIC_FLAG="ON"
 fi
 
 # Configure build
@@ -91,7 +96,7 @@ cmake "$LIBZLINK_SRC_ABS" \
     -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DBUILD_SHARED=ON \
-    -DBUILD_STATIC=OFF \
+    -DBUILD_STATIC="$BUILD_STATIC_FLAG" \
     -DBUILD_TESTS="$BUILD_TESTS_FLAG" \
     -DZLINK_CXX_STANDARD=17 \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \

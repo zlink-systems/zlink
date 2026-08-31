@@ -16,6 +16,7 @@
 #include <array>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "engine/asio/i_asio_transport.hpp"
 
@@ -73,6 +74,17 @@ class wss_transport_t : public i_asio_transport
                           completion_handler_t handler) ZLINK_OVERRIDE;
 
     std::size_t read_some (std::uint8_t *buffer, std::size_t len) ZLINK_OVERRIDE;
+    bool has_message_boundaries () const ZLINK_OVERRIDE { return true; }
+    bool read_message_complete () const ZLINK_OVERRIDE
+    {
+        return _connection
+               && _connection->read_message_state.is_complete ();
+    }
+    bool read_message_binary () const ZLINK_OVERRIDE
+    {
+        return !_connection
+               || _connection->read_message_state.is_binary ();
+    }
 
     void async_write_some (const unsigned char *buffer,
                            std::size_t buffer_size,
@@ -110,18 +122,37 @@ class wss_transport_t : public i_asio_transport
     //  WebSocket stream over SSL
     typedef boost::beast::websocket::stream<ssl_stream_t> wss_stream_t;
 
+    struct connection_generation_t
+    {
+        explicit connection_generation_t (ssl_stream_t &&stream_) :
+            stream (std::move (stream_)),
+            ssl_handshake_complete (false),
+            ws_handshake_complete (false),
+            handshake_type (client)
+        {
+        }
+
+        wss_stream_t stream;
+        asio_transport_read_message_state_t read_message_state;
+        bool ssl_handshake_complete;
+        bool ws_handshake_complete;
+        int handshake_type;
+    };
+
     boost::asio::ssl::context &_ssl_ctx;
     std::string _path;
     std::string _host;
-    std::shared_ptr<wss_stream_t> _wss_stream;
-    bool _ssl_handshake_complete;
-    bool _ws_handshake_complete;
-    int _handshake_type;
+    //  TLS, Beast, handshake, and boundary state share one connection
+    //  generation. Async callbacks retain this aggregate after close().
+    std::shared_ptr<connection_generation_t> _connection;
     std::string _tls_hostname;
 
     //  Internal handshake continuation
-    void continue_ws_handshake (const std::shared_ptr<wss_stream_t> &stream,
-                                completion_handler_t handler);
+    static void continue_ws_handshake (
+      std::shared_ptr<connection_generation_t> connection_,
+      const std::string &host_,
+      const std::string &path_,
+      completion_handler_t handler_);
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (wss_transport_t)
 };

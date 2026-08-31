@@ -1495,6 +1495,7 @@ void test_single_part_request_failure_returns_lvalue ()
 
     const std::string payload_text = "single:lvalue";
     bool reported = false;
+    std::optional<zlink::message_t> failed_payload;
     for (int attempt = 0; attempt < 64 && !reported; ++attempt) {
         fixture.fill_until_backpressured ();
         zlink::message_t payload = make_request_message (payload_text);
@@ -1511,8 +1512,30 @@ void test_single_part_request_failure_returns_lvalue ()
             assert (error.internal_errno () == EAGAIN);
         }
         assert_part_intact (payload, payload_text);
+        failed_payload.emplace (std::move (payload));
     }
     assert (reported);
+    assert (failed_payload.has_value ());
+
+    // Request metadata is attached only to Core's borrowed native copy. The
+    // caller-owned message restored after failure must remain an ordinary
+    // message when it is later submitted through the raw send surface.
+    zlink::dealer_socket_t raw_dealer (fixture.ctx);
+    zlink::router_socket_t raw_router (fixture.ctx);
+    raw_dealer.set_routing_id (
+      zlink::routing_id_t::from ("failed-request-raw-dealer"));
+    const std::string endpoint =
+      zlink_cpp_contract::unique_inproc ("failed-request-raw-resend");
+    raw_router.bind (endpoint);
+    raw_dealer.connect (endpoint);
+    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+
+    raw_dealer.send ().message (*failed_payload).submit ();
+    zlink::received_t received;
+    assert (raw_router.recv (received) == 0);
+    assert (!received.request_seq ().has_value ());
+    assert (received.parts ().size () == 1u);
+    assert (received.first_part ().to_string () == payload_text);
 }
 
 // Later-error path: Core rejects the part sequence after the state handed its

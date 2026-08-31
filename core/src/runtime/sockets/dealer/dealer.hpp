@@ -8,6 +8,7 @@
 #include "sockets/internal/fq.hpp"
 #include "sockets/internal/lb.hpp"
 #include <map>
+#include <set>
 #include <vector>
 
 namespace zlink
@@ -26,7 +27,13 @@ class dealer_t : public socket_base_t
 
     int sendpipe_to (
       zlink::pipe_t *pipe_, zlink::msg_t *msg_, int flags_,
-      pipe_message_admission_t *admission_out_ = NULL);
+      pipe_message_admission_t *admission_out_ = NULL,
+      pipe_write_observer_fn observer_ = NULL,
+      void *observer_userdata_ = NULL);
+#ifdef ZLINK_BUILD_TESTS
+    uint32_t test_peer_weight (zlink::pipe_t *pipe_) const;
+    size_t test_peer_weight_count (uint32_t weight_) const;
+#endif
 
   protected:
     //  Overrides of functions from socket_base_t.
@@ -39,7 +46,9 @@ class dealer_t : public socket_base_t
                pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
     int xsend_pipe (
       zlink::msg_t *msg_, zlink::pipe_t **pipe_out_,
-      pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
+      pipe_message_admission_t *admission_out_ = NULL,
+      pipe_write_observer_fn observer_ = NULL,
+      void *observer_userdata_ = NULL) ZLINK_OVERRIDE;
     int xsend_routed (const zlink_routing_id_t *target_rid_,
                       zlink::msg_t *msg_,
                       uint64_t *connection_id_out_,
@@ -47,7 +56,13 @@ class dealer_t : public socket_base_t
                       zlink::pipe_t **pipe_out_,
                       uint64_t expected_transport_pair_id_ = 0,
                       uint64_t expected_transport_pair_generation_ = 0,
-                      pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
+                      pipe_message_admission_t *admission_out_ = NULL,
+                      pipe_write_observer_fn observer_ = NULL,
+                      void *observer_userdata_ = NULL,
+                      routed_send_attempt_identity_t
+                        *attempt_identity_out_ = NULL,
+                      uint64_t expected_route_incarnation_id_ = 0)
+      ZLINK_OVERRIDE;
     int xselect_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_) ZLINK_OVERRIDE;
@@ -59,17 +74,23 @@ class dealer_t : public socket_base_t
     void xread_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xwrite_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xpipe_terminated (zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
+    void xsocket_msg_pipe_terminated (zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
     int xsocket_msg_dispatch (zlink::msg_t *msg_, zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
     void xarm_socket_msg_dispatch () ZLINK_OVERRIDE;
     void xdispatch_io () ZLINK_OVERRIDE;
 
     //  Send and recv - knowing which pipe was used.
     int sendpipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_,
-                  pipe_message_admission_t *admission_out_ = NULL);
+                  pipe_message_admission_t *admission_out_ = NULL,
+                  pipe_write_observer_fn observer_ = NULL,
+                  void *observer_userdata_ = NULL);
     int recvpipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_);
 
   private:
+    static bool routed_submit_candidate (pipe_t *pipe_, void *userdata_);
     int apply_peer_weight (pipe_t *pipe_, uint32_t weight_) ZLINK_OVERRIDE;
+    void initialize_peer_weight (pipe_t *pipe_,
+                                 uint32_t weight_) ZLINK_OVERRIDE;
 
     //  Messages are fair-queued from inbound pipes. And load-balanced to
     //  the outbound pipes.
@@ -80,6 +101,8 @@ class dealer_t : public socket_base_t
     bool _probe_router;
     std::vector<zlink_msg_t> _dispatch_parts;
     std::map<zlink::pipe_t *, std::vector<zlink_msg_t>> _dispatch_parts_by_pipe;
+    std::set<zlink::pipe_t *> _dispatch_malformed_pipes;
+    bool _dispatch_malformed_without_pipe;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (dealer_t)
 };

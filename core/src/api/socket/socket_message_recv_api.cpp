@@ -7,6 +7,8 @@
 
 #include "api/socket/socket_api_internal.hpp"
 #include "api/socket/socket_message_api_internal.hpp"
+#include "api/socket/request_reply_protocol_internal.hpp"
+#include "api/socket/socket_request_reply_internal.hpp"
 #include "core/msg.hpp"
 #include "core/c_api_copy_internal.hpp"
 #include "core/recv_internal.hpp"
@@ -132,6 +134,22 @@ int recv_socket_parts (const socket_handle_t &handle_,
         return -1;
     }
 
+    // DEALER raw receive still applies record-structure validation: only the
+    // first application part may carry a request/reply kind. The direct raw
+    // request/reply reader clears a first-part kind without creating a reply
+    // token, and rejects a later kind consistently with the wire decoder.
+    if (type == ZLINK_CORE_SOCKET_DEALER) {
+        reset_routing_id_output (source_rid_out_);
+        uint8_t message_type = ZLINK_DEALER_MESSAGE_RAW;
+        uint64_t request_seq = 0;
+        const std::shared_ptr<
+          zlink::socket_reqrep_internal::socket_request_reply_state_t>
+          no_request_state;
+        return zlink::socket_reqrep_internal::recv_dealer_message_direct (
+          handle_, no_request_state, false, &message_type, &request_seq,
+          parts_out_, part_count_out_, static_cast<int> (flags_));
+    }
+
     const bool routed_router_payload = type == ZLINK_CORE_SOCKET_ROUTER && source_rid_out_ != NULL;
     const bool strip_recv_routing_id = type == ZLINK_CORE_SOCKET_STREAM || routed_router_payload;
     const bool direct_public_recv_fast =
@@ -220,7 +238,23 @@ int zlink_socket_recv_handle_internal (const socket_handle_t &handle_,
                                        size_t *part_count_out_,
                                        zlink_send_flags_t flags_)
 {
-    return recv_socket_parts (handle_, source_rid_out_, parts_out_, part_count_out_, flags_);
+    const int rc = recv_socket_parts (
+      handle_, source_rid_out_, parts_out_, part_count_out_, flags_);
+    if (rc == 0 && parts_out_ && part_count_out_ && *parts_out_
+        && *part_count_out_ != 0) {
+        // PAIR and DEALER reject request/reply metadata on continuation
+        // frames before export. STREAM deliberately exposes raw inproc
+        // frames, so retain its defensive per-frame sanitization.
+        if (socket_type (handle_) == ZLINK_CORE_SOCKET_STREAM) {
+            for (size_t i = 0; i < *part_count_out_; ++i)
+                zlink::request_reply::clear_request_reply_metadata (
+                  &(*parts_out_)[i]);
+        } else {
+            zlink::request_reply::clear_request_reply_metadata (
+              &(*parts_out_)[0]);
+        }
+    }
+    return rc;
 }
 
 extern "C" int zlink_socket_xpub_recv_internal (void *socket_,
@@ -335,6 +369,13 @@ extern "C" int zlink_socket_subscribe_recv_internal (void *socket_,
     socket_handle_t handle = as_socket_handle (socket_);
     if (!handle.socket)
         return -1;
-    return recv_socket_subscribe_parts (handle, source_rid_out_, parts_out_, part_count_out_,
-                                        topic_id_out_, topic_id_len_out_, flags_);
+    const int rc = recv_socket_subscribe_parts (
+      handle, source_rid_out_, parts_out_, part_count_out_, topic_id_out_,
+      topic_id_len_out_, flags_);
+    if (rc == 0 && parts_out_ && part_count_out_ && *parts_out_
+        && *part_count_out_ != 0)
+        // XSUB rejects metadata after the topic frame, before any payload is
+        // exported. Keep the first public payload boundary explicit.
+        zlink::request_reply::clear_request_reply_metadata (&(*parts_out_)[0]);
+    return rc;
 }

@@ -61,10 +61,7 @@ wss_transport_t::wss_transport_t (boost::asio::ssl::context &ssl_ctx,
                                   const std::string &host) :
     _ssl_ctx (ssl_ctx),
     _path (path),
-    _host (host),
-    _ssl_handshake_complete (false),
-    _ws_handshake_complete (false),
-    _handshake_type (client)
+    _host (host)
 {
 }
 
@@ -99,9 +96,11 @@ bool wss_transport_t::open (boost::asio::io_context &io_context, fd_t fd)
     //  Create SSL stream wrapping the socket
     ssl_stream_t ssl_stream (std::move (socket), _ssl_ctx);
 
-    //  Create WebSocket stream wrapping the SSL stream
+    //  Create one owner for the TLS/WebSocket stream and its authoritative
+    //  handshake and read-boundary state.
     try {
-        _wss_stream = std::make_shared<wss_stream_t> (std::move (ssl_stream));
+        _connection = std::make_shared<connection_generation_t> (
+          std::move (ssl_stream));
     }
     catch (const std::bad_alloc &) {
         ASIO_GLOBAL_ERROR ("wss_transport stream allocation failed");
@@ -110,13 +109,10 @@ bool wss_transport_t::open (boost::asio::io_context &io_context, fd_t fd)
 
     //  Configure WebSocket options
     //  Use binary mode for ZLINK messages
-    _wss_stream->binary (true);
-    _wss_stream->auto_fragment (false);
-    _wss_stream->write_buffer_bytes (wss_write_buffer_bytes ());
-    _wss_stream->read_message_max (wss_read_message_max ());
-
-    _ssl_handshake_complete = false;
-    _ws_handshake_complete = false;
+    _connection->stream.binary (true);
+    _connection->stream.auto_fragment (false);
+    _connection->stream.write_buffer_bytes (wss_write_buffer_bytes ());
+    _connection->stream.read_message_max (wss_read_message_max ());
 
     ASIO_DBG_WSS ("opened with path=%s, host=%s", _path.c_str (), _host.c_str ());
     return true;
@@ -124,43 +120,43 @@ bool wss_transport_t::open (boost::asio::io_context &io_context, fd_t fd)
 
 bool wss_transport_t::is_open () const
 {
-    return _wss_stream && _wss_stream->next_layer ().next_layer ().is_open ();
+    return _connection
+           && _connection->stream.next_layer ().next_layer ().is_open ();
 }
 
 void wss_transport_t::close ()
 {
-    std::shared_ptr<wss_stream_t> stream = _wss_stream;
-    _wss_stream.reset ();
+    std::shared_ptr<connection_generation_t> connection =
+      std::move (_connection);
 
-    if (stream) {
+    if (connection) {
         boost::system::error_code ec;
-        stream->next_layer ().next_layer ().cancel (ec);
+        connection->stream.next_layer ().next_layer ().cancel (ec);
 
         //  Avoid blocking WebSocket/SSL shutdown; just close the TCP layer.
-        stream->next_layer ().next_layer ().shutdown (boost::asio::ip::tcp::socket::shutdown_both,
-                                                      ec);
-        stream->next_layer ().next_layer ().close (ec);
+        connection->stream.next_layer ().next_layer ().shutdown (
+          boost::asio::ip::tcp::socket::shutdown_both, ec);
+        connection->stream.next_layer ().next_layer ().close (ec);
+        connection->read_message_state.reset ();
     }
-
-    _ssl_handshake_complete = false;
-    _ws_handshake_complete = false;
 }
 
 void wss_transport_t::async_read_some (unsigned char *buffer,
                                        std::size_t buffer_size,
                                        completion_handler_t handler)
 {
-    std::shared_ptr<wss_stream_t> stream = _wss_stream;
-    if (!stream || !_ws_handshake_complete) {
+    std::shared_ptr<connection_generation_t> connection = _connection;
+    if (!connection || !connection->ws_handshake_complete) {
         if (handler) {
             handler (boost::asio::error::not_connected, 0);
         }
         return;
     }
 
+    connection->read_message_state.reset ();
     if (buffer_size == 0) {
         if (handler) {
-            boost::asio::post (stream->get_executor (),
+            boost::asio::post (connection->stream.get_executor (),
                                [handler = std::move (handler)] () {
                                    handler (boost::system::error_code (), 0);
                                });
@@ -171,10 +167,14 @@ void wss_transport_t::async_read_some (unsigned char *buffer,
     //  The engine owns this writable input buffer (normally the decoder buffer)
     //  until completion. Beast can therefore place WebSocket payload directly
     //  into it while retaining fragmented-message state inside the stream.
-    stream->async_read_some (
+    connection_generation_t *const generation = connection.get ();
+    generation->stream.async_read_some (
       boost::asio::buffer (buffer, buffer_size),
-      [stream, handler = std::move (handler)] (const boost::system::error_code &ec,
-                                               std::size_t bytes_transferred) {
+      [connection = std::move (connection), handler = std::move (handler)] (
+        const boost::system::error_code &ec, std::size_t bytes_transferred) {
+          connection->read_message_state.finish (
+            !ec && connection->stream.is_message_done (),
+            !ec ? connection->stream.got_binary () : true);
           if (ec)
               ASIO_DBG ("WSS", "read failed: %s", ec.message ().c_str ());
           if (handler)
@@ -184,19 +184,23 @@ void wss_transport_t::async_read_some (unsigned char *buffer,
 
 std::size_t wss_transport_t::read_some (std::uint8_t *buffer, std::size_t len)
 {
+    connection_generation_t *const connection = _connection.get ();
+    if (connection)
+        connection->read_message_state.reset ();
     if (len == 0) {
         errno = 0;
         return 0;
     }
 
-    std::shared_ptr<wss_stream_t> stream = _wss_stream;
-    if (!stream || !_ssl_handshake_complete || !_ws_handshake_complete) {
+    if (!connection || !connection->ssl_handshake_complete
+        || !connection->ws_handshake_complete) {
         errno = ENOTCONN;
         return 0;
     }
 
     boost::system::error_code ec;
-    const std::size_t bytes_read = stream->read_some (boost::asio::buffer (buffer, len), ec);
+    const std::size_t bytes_read =
+      connection->stream.read_some (boost::asio::buffer (buffer, len), ec);
 
     if (ec) {
         if (ec == boost::asio::error::would_block || ec == boost::asio::error::try_again) {
@@ -223,6 +227,8 @@ std::size_t wss_transport_t::read_some (std::uint8_t *buffer, std::size_t len)
         return 0;
     }
 
+    connection->read_message_state.finish (
+      connection->stream.is_message_done (), connection->stream.got_binary ());
     errno = 0;
     return bytes_read;
 }
@@ -231,8 +237,8 @@ void wss_transport_t::async_write_some (const unsigned char *buffer,
                                         std::size_t buffer_size,
                                         completion_handler_t handler)
 {
-    std::shared_ptr<wss_stream_t> stream = _wss_stream;
-    if (!stream || !_ws_handshake_complete) {
+    std::shared_ptr<connection_generation_t> connection = _connection;
+    if (!connection || !connection->ws_handshake_complete) {
         if (handler) {
             handler (boost::asio::error::not_connected, 0);
         }
@@ -240,10 +246,12 @@ void wss_transport_t::async_write_some (const unsigned char *buffer,
     }
 
     //  WebSocket writes are frame-based
-    stream->async_write (
+    connection_generation_t *const generation = connection.get ();
+    generation->stream.async_write (
       boost::asio::buffer (buffer, buffer_size),
-      [stream, handler = std::move (handler)] (const boost::system::error_code &ec,
-                                               std::size_t bytes_transferred) {
+      [connection = std::move (connection), handler = std::move (handler)] (
+        const boost::system::error_code &ec,
+        std::size_t bytes_transferred) {
           ASIO_DBG ("WSS", "write complete: ec=%s, bytes=%zu", ec.message ().c_str (),
                     bytes_transferred);
           if (handler) {
@@ -258,8 +266,8 @@ void wss_transport_t::async_writev (const unsigned char *header,
                                     std::size_t body_size,
                                     completion_handler_t handler)
 {
-    std::shared_ptr<wss_stream_t> stream = _wss_stream;
-    if (!stream || !_ws_handshake_complete) {
+    std::shared_ptr<connection_generation_t> connection = _connection;
+    if (!connection || !connection->ws_handshake_complete) {
         if (handler) {
             handler (boost::asio::error::not_connected, 0);
         }
@@ -269,16 +277,18 @@ void wss_transport_t::async_writev (const unsigned char *header,
     std::array<boost::asio::const_buffer, 2> buffers = {boost::asio::buffer (header, header_size),
                                                         boost::asio::buffer (body, body_size)};
 
-    stream->async_write (buffers,
-                         [stream, handler = std::move (handler)] (
-                           const boost::system::error_code &ec,
-                           std::size_t bytes_transferred) {
+    connection_generation_t *const generation = connection.get ();
+    generation->stream.async_write (
+      buffers,
+      [connection = std::move (connection), handler = std::move (handler)] (
+        const boost::system::error_code &ec,
+        std::size_t bytes_transferred) {
         ASIO_DBG ("WSS", "writev complete: ec=%s, bytes=%zu", ec.message ().c_str (),
                   bytes_transferred);
         if (handler) {
             handler (ec, bytes_transferred);
         }
-    });
+      });
 }
 
 std::size_t wss_transport_t::write_some (const std::uint8_t *data, std::size_t len)
@@ -288,13 +298,13 @@ std::size_t wss_transport_t::write_some (const std::uint8_t *data, std::size_t l
     }
 
     //  Check transport state - both SSL and WebSocket handshakes must be complete
-    std::shared_ptr<wss_stream_t> stream = _wss_stream;
-    if (!stream || !_ws_handshake_complete) {
+    connection_generation_t *const connection = _connection.get ();
+    if (!connection || !connection->ws_handshake_complete) {
         errno = ENOTCONN;
         return 0;
     }
 
-    if (!stream->next_layer ().next_layer ().is_open ()) {
+    if (!connection->stream.next_layer ().next_layer ().is_open ()) {
         errno = EBADF;
         return 0;
     }
@@ -318,7 +328,8 @@ std::size_t wss_transport_t::write_some (const std::uint8_t *data, std::size_t l
 
     //  Use write() to send complete frame (not write_some which is not
     //  available for WebSocket in Beast)
-    bytes_written = stream->write (boost::asio::buffer (data, len), ec);
+    bytes_written =
+      connection->stream.write (boost::asio::buffer (data, len), ec);
 
     if (ec) {
         //  Handle would_block case
@@ -358,15 +369,15 @@ std::size_t wss_transport_t::write_some (const std::uint8_t *data, std::size_t l
 
 void wss_transport_t::async_handshake (int handshake_type, completion_handler_t handler)
 {
-    std::shared_ptr<wss_stream_t> stream = _wss_stream;
-    if (!stream) {
+    std::shared_ptr<connection_generation_t> connection = _connection;
+    if (!connection) {
         if (handler) {
             handler (boost::asio::error::not_connected, 0);
         }
         return;
     }
 
-    _handshake_type = handshake_type;
+    connection->handshake_type = handshake_type;
 
     ASIO_DBG_WSS ("starting SSL handshake, type=%s", handshake_type == 0 ? "client" : "server");
 
@@ -375,8 +386,9 @@ void wss_transport_t::async_handshake (int handshake_type, completion_handler_t 
                                                   : boost::asio::ssl::stream_base::server;
 
     if (handshake_type == client && !_tls_hostname.empty ()) {
-        if (!SSL_set_tlsext_host_name (stream->next_layer ().native_handle (),
-                                       _tls_hostname.c_str ())) {
+        if (!SSL_set_tlsext_host_name (
+              connection->stream.next_layer ().native_handle (),
+              _tls_hostname.c_str ())) {
             if (handler) {
                 handler (boost::asio::error::invalid_argument, 0);
             }
@@ -384,46 +396,57 @@ void wss_transport_t::async_handshake (int handshake_type, completion_handler_t 
         }
     }
 
-    stream->next_layer ().async_handshake (
+    const std::string host = _host;
+    const std::string path = _path;
+    connection_generation_t *const generation = connection.get ();
+    generation->stream.next_layer ().async_handshake (
       ssl_hs_type,
-      [this, stream,
-       handler = std::move (handler)] (const boost::system::error_code &ec) mutable {
+      [connection = std::move (connection), host, path,
+       handler = std::move (handler)] (
+        const boost::system::error_code &ec) mutable {
           if (ec) {
-              ASIO_DBG_WSS ("SSL handshake failed: %s", ec.message ().c_str ());
+              ASIO_DBG ("WSS", "SSL handshake failed: %s",
+                        ec.message ().c_str ());
               if (handler) {
                   handler (ec, 0);
               }
               return;
           }
 
-          _ssl_handshake_complete = true;
-          ASIO_DBG_WSS ("SSL handshake complete, continuing with WebSocket");
+          connection->ssl_handshake_complete = true;
+          ASIO_DBG ("WSS", "SSL handshake complete, continuing with WebSocket");
 
           //  Now do WebSocket handshake
-          continue_ws_handshake (stream, std::move (handler));
+          wss_transport_t::continue_ws_handshake (
+            std::move (connection), host, path, std::move (handler));
       });
 }
 
-void wss_transport_t::continue_ws_handshake (const std::shared_ptr<wss_stream_t> &stream,
-                                             completion_handler_t handler)
+void wss_transport_t::continue_ws_handshake (
+  std::shared_ptr<connection_generation_t> connection,
+  const std::string &host,
+  const std::string &path,
+  completion_handler_t handler)
 {
-    if (!stream) {
+    if (!connection) {
         if (handler)
             handler (boost::asio::error::not_connected, 0);
         return;
     }
 
-    if (_handshake_type == client) {
+    if (connection->handshake_type == client) {
         //  Client-side WebSocket handshake
-        stream->async_handshake (
-          _host, _path,
-          [this, stream,
-           handler = std::move (handler)] (const boost::system::error_code &ec) {
+        connection_generation_t *const generation = connection.get ();
+        generation->stream.async_handshake (
+          host, path,
+          [connection = std::move (connection), handler = std::move (handler)] (
+            const boost::system::error_code &ec) {
               if (!ec) {
-                  _ws_handshake_complete = true;
-                  ASIO_DBG_WSS ("WebSocket client handshake complete");
+                  connection->ws_handshake_complete = true;
+                  ASIO_DBG ("WSS", "WebSocket client handshake complete");
               } else {
-                  ASIO_DBG_WSS ("WebSocket client handshake failed: %s", ec.message ().c_str ());
+                  ASIO_DBG ("WSS", "WebSocket client handshake failed: %s",
+                            ec.message ().c_str ());
               }
               if (handler) {
                   handler (ec, 0);
@@ -431,14 +454,16 @@ void wss_transport_t::continue_ws_handshake (const std::shared_ptr<wss_stream_t>
           });
     } else {
         //  Server-side WebSocket handshake
-        stream->async_accept (
-          [this, stream,
-           handler = std::move (handler)] (const boost::system::error_code &ec) {
+        connection_generation_t *const generation = connection.get ();
+        generation->stream.async_accept (
+          [connection = std::move (connection), handler = std::move (handler)] (
+            const boost::system::error_code &ec) {
             if (!ec) {
-                _ws_handshake_complete = true;
-                ASIO_DBG_WSS ("WebSocket server handshake complete");
+                connection->ws_handshake_complete = true;
+                ASIO_DBG ("WSS", "WebSocket server handshake complete");
             } else {
-                ASIO_DBG_WSS ("WebSocket server handshake failed: %s", ec.message ().c_str ());
+                ASIO_DBG ("WSS", "WebSocket server handshake failed: %s",
+                          ec.message ().c_str ());
             }
             if (handler) {
                 handler (ec, 0);

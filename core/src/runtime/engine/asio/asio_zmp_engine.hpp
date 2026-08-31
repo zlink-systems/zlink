@@ -12,6 +12,18 @@
 
 namespace zlink
 {
+#ifdef ZLINK_BUILD_TESTS
+//  Pauses a passive paired engine after its READY reply has drained, while
+//  session/socket pair admission is still forbidden. The callback runs on the
+//  engine I/O thread; tests must release it before clearing the hook.
+typedef void (*zmp_passive_ready_write_drained_test_hook_fn) (
+  uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_,
+  void *userdata_);
+void test_set_zmp_passive_ready_write_drained_hook (
+  zmp_passive_ready_write_drained_test_hook_fn hook_, void *userdata_);
+#endif
+
 class asio_zmp_engine_t ZLINK_FINAL : public asio_engine_t
 {
   public:

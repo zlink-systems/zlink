@@ -7,8 +7,10 @@
 #include "core/pipe.hpp"
 #include "sockets/internal/dist.hpp"
 #include "sockets/internal/lb.hpp"
+#include "sockets/dealer/dealer.hpp"
 
 #include <unity.h>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -302,6 +304,270 @@ void test_weighted_dealer_preserves_peer_weight_after_backpressure ()
     close_sync_socket (dealer);
 }
 
+int recv_one_weighted_router_index (void *router1_, void *router2_)
+{
+    char buffer[32];
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (3);
+    while (std::chrono::steady_clock::now () < deadline) {
+        void *routers[] = {router1_, router2_};
+        for (size_t i = 0; i < 2; ++i) {
+            const int rid_size =
+              zlink_recv (routers[i], buffer, sizeof (buffer), ZLINK_DONTWAIT);
+            if (rid_size < 0)
+                continue;
+            TEST_ASSERT_GREATER_THAN_INT (0, rid_size);
+            TEST_ASSERT_EQUAL_INT (
+              1, zlink_recv (routers[i], buffer, sizeof (buffer), 0));
+            TEST_ASSERT_EQUAL_MEMORY ("x", buffer, 1);
+            return static_cast<int> (i);
+        }
+        msleep (1);
+    }
+    return -1;
+}
+
+void process_socket_control_commands (void *socket_)
+{
+    int events = 0;
+    size_t events_size = sizeof (events);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (socket_, ZLINK_OPT_EVENTS, &events, &events_size));
+}
+
+bool wait_for_unpaired_peer_weights (void *dealer_, void *router1_,
+                                     void *router2_, uint32_t first_,
+                                     uint32_t second_)
+{
+    zlink::dealer_t *const dealer = static_cast<zlink::dealer_t *> (
+      as_socket_handle (dealer_).socket);
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (3);
+    while (std::chrono::steady_clock::now () < deadline) {
+        process_socket_control_commands (router1_);
+        process_socket_control_commands (router2_);
+        process_socket_control_commands (dealer_);
+        if (dealer->test_peer_weight_count (first_) == 1
+            && dealer->test_peer_weight_count (second_) == 1)
+            return true;
+        msleep (1);
+    }
+    return false;
+}
+
+void test_unpaired_inproc_peer_weight_is_not_application_data ()
+{
+    void *dealer = create_sync_socket (ZLINK_SOCKET_DEALER);
+    void *router1 = create_sync_socket (ZLINK_SOCKET_ROUTER);
+    void *router2 = create_sync_socket (ZLINK_SOCKET_ROUTER);
+    const int weight1 = 1;
+    const int weight2 = 3;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_router_option (router1, ZLINK_ROUTER_OPT_WEIGHT, &weight1,
+                               sizeof (weight1)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_router_option (router2, ZLINK_ROUTER_OPT_WEIGHT, &weight2,
+                               sizeof (weight2)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router1, "inproc://weighted-owner-control-1"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router2, "inproc://weighted-owner-control-2"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://weighted-owner-control-1"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://weighted-owner-control-2"));
+
+    TEST_ASSERT_TRUE (
+      wait_for_unpaired_peer_weights (dealer, router1, router2, 1, 3));
+    char raw[32];
+    TEST_ASSERT_EQUAL_INT (
+      -1, zlink_recv (dealer, raw, sizeof (raw), ZLINK_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+
+    int counts[2] = {0, 0};
+    for (int i = 0; i < 40; ++i) {
+        send_string_expect_success (dealer, "x", 0);
+        const int selected = recv_one_weighted_router_index (router1, router2);
+        TEST_ASSERT_TRUE (selected == 0 || selected == 1);
+        ++counts[selected];
+    }
+    TEST_ASSERT_EQUAL_INT (10, counts[0]);
+    TEST_ASSERT_EQUAL_INT (30, counts[1]);
+
+    //  Zero removes one peer from selection immediately. The update still
+    //  travels only as an owner command, so a raw receive remains empty.
+    const int zero = 0;
+    const int one = 1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_router_option (router1, ZLINK_ROUTER_OPT_WEIGHT, &zero,
+                               sizeof (zero)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_router_option (router2, ZLINK_ROUTER_OPT_WEIGHT, &one,
+                               sizeof (one)));
+    TEST_ASSERT_TRUE (
+      wait_for_unpaired_peer_weights (dealer, router1, router2, 0, 1));
+    for (int i = 0; i < 12; ++i) {
+        send_string_expect_success (dealer, "x", 0);
+        TEST_ASSERT_EQUAL_INT (
+          1, recv_one_weighted_router_index (router1, router2));
+    }
+    TEST_ASSERT_EQUAL_INT (
+      -1, zlink_recv (dealer, raw, sizeof (raw), ZLINK_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+
+    close_sync_socket (router2);
+    close_sync_socket (router1);
+    close_sync_socket (dealer);
+}
+
+void test_peer_control_does_not_complete_open_application_multipart ()
+{
+    void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (
+      as_socket_handle (owner_handle).socket);
+    zlink::object_t *parents[] = {owner, owner};
+    const uint64_t hwms[] = {4096, 4096};
+    const bool conflate[] = {false, false};
+    zlink::pipe_t *pipes[2];
+    TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (
+      parents, pipes, hwms, conflate, true,
+      zlink::transport_lane_application, zlink::auto_hwm_role_none, false,
+      zlink::physical_queue_class_application, 0));
+    pipes[0]->set_max_message_bytes (12);
+
+    pipe_cleanup_sink_t cleanup_sink;
+    pipes[0]->set_event_sink (&cleanup_sink);
+    pipes[1]->set_event_sink (&cleanup_sink);
+
+    zlink::msg_t first;
+    TEST_ASSERT_SUCCESS_ERRNO (first.init_size (6));
+    memset (first.data (), 'a', first.size ());
+    first.set_flags (zlink::msg_t::more);
+    TEST_ASSERT_TRUE (pipes[0]->write (&first));
+
+    static const unsigned char weight_command[] = {
+      'W', 'E', 'I', 'G', 'H', 'T', 0, 0, 0, 7};
+    TEST_ASSERT_TRUE (pipes[0]->write_peer_weight_control_and_flush (7));
+
+    const uint64_t control_bytes =
+      sizeof (zlink::msg_t) + sizeof (weight_command);
+    TEST_ASSERT_EQUAL_UINT64 (0, pipes[0]->get_msgs_written ());
+    TEST_ASSERT_EQUAL_UINT64 (0, pipes[0]->get_bytes_written ());
+
+    zlink::msg_t received;
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    // A terminal control must not move ypipe's commit boundary over an open
+    // Application multipart. Neither the prefix nor WEIGHT is visible yet.
+    TEST_ASSERT_FALSE (pipes[1]->check_read ());
+    TEST_ASSERT_FALSE (pipes[1]->read (&received));
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    TEST_ASSERT_EQUAL_UINT64 (0, pipes[1]->get_msgs_read ());
+    TEST_ASSERT_EQUAL_UINT64 (0, pipes[1]->get_bytes_read ());
+
+    zlink::msg_t final;
+    TEST_ASSERT_SUCCESS_ERRNO (final.init_size (6));
+    memset (final.data (), 'b', final.size ());
+    TEST_ASSERT_TRUE (pipes[0]->write_and_flush (&final));
+
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    TEST_ASSERT_TRUE ((received.flags () & zlink::msg_t::more) != 0);
+    TEST_ASSERT_EQUAL_UINT64 (6, received.size ());
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    TEST_ASSERT_EQUAL_UINT64 (0, pipes[1]->get_msgs_read ());
+    TEST_ASSERT_EQUAL_UINT64 (0, pipes[1]->get_bytes_read ());
+
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    TEST_ASSERT_FALSE ((received.flags ()
+                        & (zlink::msg_t::more | zlink::msg_t::command))
+                       != 0);
+    TEST_ASSERT_EQUAL_UINT64 (6, received.size ());
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    TEST_ASSERT_EQUAL_UINT64 (1, pipes[1]->get_msgs_read ());
+
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    TEST_ASSERT_TRUE ((received.flags () & zlink::msg_t::command) != 0);
+    TEST_ASSERT_EQUAL_MEMORY (
+      weight_command, received.data (), sizeof (weight_command));
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    TEST_ASSERT_FALSE (pipes[1]->check_read ());
+
+    const uint64_t application_bytes =
+      2 * sizeof (zlink::msg_t) + first.size () + final.size ();
+    TEST_ASSERT_EQUAL_UINT64 (2, pipes[0]->get_msgs_written ());
+    TEST_ASSERT_EQUAL_UINT64 (
+      control_bytes + application_bytes, pipes[0]->get_bytes_written ());
+    TEST_ASSERT_EQUAL_UINT64 (2, pipes[1]->get_msgs_read ());
+    TEST_ASSERT_EQUAL_UINT64 (
+      control_bytes + application_bytes, pipes[1]->get_bytes_read ());
+
+    // Rollback removes the unpublished Application prefix, then publishes the
+    // deferred absolute control at a standalone boundary. A later fresh record
+    // must not inherit any bytes or MORE state from the rolled-back prefix.
+    zlink::msg_t rolled_back_prefix;
+    TEST_ASSERT_SUCCESS_ERRNO (rolled_back_prefix.init_size (4));
+    memset (rolled_back_prefix.data (), 'x', rolled_back_prefix.size ());
+    rolled_back_prefix.set_flags (zlink::msg_t::more);
+    TEST_ASSERT_TRUE (pipes[0]->write (&rolled_back_prefix));
+    TEST_ASSERT_TRUE (pipes[0]->write_peer_weight_control_and_flush (9));
+    TEST_ASSERT_FALSE (pipes[1]->check_read ());
+    pipes[0]->rollback ();
+
+    static const unsigned char rollback_weight_command[] = {
+      'W', 'E', 'I', 'G', 'H', 'T', 0, 0, 0, 9};
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    TEST_ASSERT_TRUE ((received.flags () & zlink::msg_t::command) != 0);
+    TEST_ASSERT_EQUAL_MEMORY (rollback_weight_command, received.data (),
+                              sizeof (rollback_weight_command));
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+
+    zlink::msg_t fresh;
+    TEST_ASSERT_SUCCESS_ERRNO (fresh.init_size (3));
+    memcpy (fresh.data (), "new", fresh.size ());
+    TEST_ASSERT_TRUE (pipes[0]->write_and_flush (&fresh));
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    TEST_ASSERT_FALSE ((received.flags ()
+                        & (zlink::msg_t::more | zlink::msg_t::command))
+                       != 0);
+    TEST_ASSERT_EQUAL_MEMORY ("new", received.data (), fresh.size ());
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    TEST_ASSERT_FALSE (pipes[1]->check_read ());
+
+    // MAXMSGSIZE is Application admission. A fixed, validated internal WEIGHT
+    // still crosses the same session pipe when the Application limit is one.
+    pipes[0]->set_max_message_bytes (1);
+    TEST_ASSERT_TRUE (pipes[0]->write_peer_weight_control_and_flush (11));
+    static const unsigned char small_limit_weight_command[] = {
+      'W', 'E', 'I', 'G', 'H', 'T', 0, 0, 0, 11};
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    TEST_ASSERT_EQUAL_MEMORY (small_limit_weight_command, received.data (),
+                              sizeof (small_limit_weight_command));
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+
+    TEST_ASSERT_SUCCESS_ERRNO (first.close ());
+    TEST_ASSERT_SUCCESS_ERRNO (final.close ());
+    TEST_ASSERT_SUCCESS_ERRNO (rolled_back_prefix.close ());
+    TEST_ASSERT_SUCCESS_ERRNO (fresh.close ());
+    pipes[0]->terminate (false);
+    pipes[1]->terminate (false);
+    int events = 0;
+    size_t events_size = sizeof (events);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (owner_handle, ZLINK_OPT_EVENTS, &events,
+                        &events_size));
+    TEST_ASSERT_EQUAL_INT (2, cleanup_sink.terminated_count);
+    close_sync_socket (owner_handle);
+}
+
 void test_weighted_lb_reactivation_keeps_configured_weight ()
 {
     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
@@ -357,6 +623,99 @@ void test_weighted_lb_reactivation_keeps_configured_weight ()
     // Removing a pipe from lb_t drops only the scheduler reference. Complete
     // the normal peer handshake so command references and both ypipes are
     // released by the same protocol used by runtime-owned pipes.
+    first_pair[0]->terminate (false);
+    first_pair[1]->terminate (false);
+    second_pair[0]->terminate (false);
+    second_pair[1]->terminate (false);
+    int events = 0;
+    size_t events_size = sizeof (events);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (owner_handle, ZLINK_OPT_EVENTS, &events, &events_size));
+    TEST_ASSERT_EQUAL_INT (4, cleanup_sink.terminated_count);
+    close_sync_socket (owner_handle);
+}
+
+void test_weight_zero_between_parts_preserves_selected_message ()
+{
+    void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (
+      as_socket_handle (owner_handle).socket);
+    zlink::object_t *parents[] = {owner, owner};
+    const uint64_t hwms[] = {4096, 4096};
+    const bool conflate[] = {false, false};
+    zlink::pipe_t *first_pair[2];
+    zlink::pipe_t *second_pair[2];
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, first_pair, hwms, conflate));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, second_pair, hwms, conflate));
+
+    pipe_cleanup_sink_t cleanup_sink;
+    first_pair[0]->set_event_sink (&cleanup_sink);
+    first_pair[1]->set_event_sink (&cleanup_sink);
+    second_pair[0]->set_event_sink (&cleanup_sink);
+    second_pair[1]->set_event_sink (&cleanup_sink);
+
+    zlink::lb_t lb;
+    lb.attach (first_pair[0]);
+    lb.attach (second_pair[0]);
+
+    zlink::msg_t prefix;
+    TEST_ASSERT_SUCCESS_ERRNO (prefix.init_size (1));
+    *static_cast<unsigned char *> (prefix.data ()) = 0x41;
+    prefix.set_flags (zlink::msg_t::more);
+    zlink::pipe_t *selected = NULL;
+    TEST_ASSERT_SUCCESS_ERRNO (lb.sendpipe (&prefix, &selected));
+    TEST_ASSERT_NOT_NULL (selected);
+
+    // The absolute policy change affects the next message. It must not turn
+    // an already accepted prefix into a dropped/corrupt partial record.
+    lb.set_weight (selected, 0);
+    zlink::msg_t final;
+    TEST_ASSERT_SUCCESS_ERRNO (final.init_size (1));
+    *static_cast<unsigned char *> (final.data ()) = 0x42;
+    zlink::pipe_t *final_selected = NULL;
+    TEST_ASSERT_SUCCESS_ERRNO (lb.sendpipe (&final, &final_selected));
+    TEST_ASSERT_EQUAL_PTR (selected, final_selected);
+
+    zlink::pipe_t *selected_reader =
+      selected == first_pair[0] ? first_pair[1] : second_pair[1];
+    zlink::pipe_t *other_writer =
+      selected == first_pair[0] ? second_pair[0] : first_pair[0];
+    zlink::pipe_t *other_reader =
+      selected == first_pair[0] ? second_pair[1] : first_pair[1];
+    zlink::msg_t received;
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (selected_reader->read (&received));
+    TEST_ASSERT_TRUE ((received.flags () & zlink::msg_t::more) != 0);
+    TEST_ASSERT_EQUAL_UINT8 (
+      0x41, *static_cast<unsigned char *> (received.data ()));
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (selected_reader->read (&received));
+    TEST_ASSERT_FALSE ((received.flags () & zlink::msg_t::more) != 0);
+    TEST_ASSERT_EQUAL_UINT8 (
+      0x42, *static_cast<unsigned char *> (received.data ()));
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    TEST_ASSERT_FALSE (selected_reader->check_read ());
+
+    zlink::msg_t next;
+    TEST_ASSERT_SUCCESS_ERRNO (next.init_size (1));
+    *static_cast<unsigned char *> (next.data ()) = 0x43;
+    zlink::pipe_t *next_selected = NULL;
+    TEST_ASSERT_SUCCESS_ERRNO (lb.sendpipe (&next, &next_selected));
+    TEST_ASSERT_EQUAL_PTR (other_writer, next_selected);
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (other_reader->read (&received));
+    TEST_ASSERT_EQUAL_UINT8 (
+      0x43, *static_cast<unsigned char *> (received.data ()));
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+
+    TEST_ASSERT_SUCCESS_ERRNO (prefix.close ());
+    TEST_ASSERT_SUCCESS_ERRNO (final.close ());
+    TEST_ASSERT_SUCCESS_ERRNO (next.close ());
+    lb.pipe_terminated (first_pair[0]);
+    lb.pipe_terminated (second_pair[0]);
     first_pair[0]->terminate (false);
     first_pair[1]->terminate (false);
     second_pair[0]->terminate (false);
@@ -1145,6 +1504,37 @@ void test_equal_weights_alternate_through_the_same_procedure ()
     harness.teardown (lb);
 }
 
+void test_routed_target_selection_commits_once_before_exact_submit ()
+{
+    zlink::lb_t lb;
+    weighted_selection_harness_t harness;
+    zlink::pipe_t *a = harness.add_peer (lb, "A", 100);
+    zlink::pipe_t *b = harness.add_peer (lb, "B", 100);
+
+    // Routed target selection is the weighted commit boundary even though it
+    // does not reserve pipe credit. Consecutive async snapshots therefore
+    // alternate before either exact payload is submitted.
+    zlink::pipe_t *first = NULL;
+    zlink::pipe_t *second = NULL;
+    TEST_ASSERT_SUCCESS_ERRNO (lb.select_connected_pipe (&first));
+    TEST_ASSERT_SUCCESS_ERRNO (lb.select_connected_pipe (&second));
+    TEST_ASSERT_EQUAL_PTR (a, first);
+    TEST_ASSERT_EQUAL_PTR (b, second);
+
+    // Exact submit consumes the already chosen target, not another scheduler
+    // step. Abandoning the second snapshot and submitting the first must leave
+    // the next selection at A; a second commit in sendpipe_to would choose B.
+    zlink::msg_t message;
+    TEST_ASSERT_SUCCESS_ERRNO (message.init_size (1));
+    TEST_ASSERT_SUCCESS_ERRNO (lb.sendpipe_to (first, &message));
+    zlink::pipe_t *third = NULL;
+    TEST_ASSERT_SUCCESS_ERRNO (lb.select_connected_pipe (&third));
+    TEST_ASSERT_EQUAL_PTR (a, third);
+    TEST_ASSERT_SUCCESS_ERRNO (message.close ());
+
+    harness.teardown (lb);
+}
+
 void test_weighted_selection_ignores_attach_order ()
 {
     zlink::lb_t lb;
@@ -1242,7 +1632,11 @@ int main ()
     RUN_TEST (test_router_multiple_dealers_ipc);
     RUN_TEST (test_router_multiple_dealers_inproc);
     RUN_TEST (test_weighted_dealer_preserves_peer_weight_after_backpressure);
+    RUN_TEST (test_unpaired_inproc_peer_weight_is_not_application_data);
+    RUN_TEST (
+      test_peer_control_does_not_complete_open_application_multipart);
     RUN_TEST (test_weighted_lb_reactivation_keeps_configured_weight);
+    RUN_TEST (test_weight_zero_between_parts_preserves_selected_message);
     RUN_TEST (test_single_pipe_lb_rolls_back_byte_hwm_rejected_multipart);
     RUN_TEST (test_single_pipe_dist_rolls_back_byte_hwm_rejected_multipart);
     RUN_TEST (test_pipe_rejects_multipart_before_partial_bytes_exceed_hwm);
@@ -1255,6 +1649,8 @@ int main ()
     RUN_TEST (test_conflate_replacement_releases_physical_queue_charge);
     RUN_TEST (test_weighted_selection_spreads_consecutive_picks);
     RUN_TEST (test_equal_weights_alternate_through_the_same_procedure);
+    RUN_TEST (
+      test_routed_target_selection_commits_once_before_exact_submit);
     RUN_TEST (test_weighted_selection_ignores_attach_order);
     RUN_TEST (test_weighted_selection_keeps_ratio_across_pipe_changes);
     RUN_TEST (test_weighted_selection_converges_to_wide_range_ratio);

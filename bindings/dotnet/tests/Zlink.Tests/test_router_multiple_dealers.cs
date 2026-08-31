@@ -274,6 +274,8 @@ public sealed class test_router_multiple_dealers
         Assert.Equal("first", received.SinglePartOrThrow().GetString());
         Assert.NotEqual(0UL, received.TransportPairId);
         Assert.NotEqual(0UL, received.TransportPairGeneration);
+        ulong expectedPairId = received.TransportPairId;
+        ulong expectedPairGeneration = received.TransportPairGeneration;
 
         using Message next = Message.From("next");
         await dealer.Send().Message(next).Async()
@@ -281,8 +283,8 @@ public sealed class test_router_multiple_dealers
         Assert.True(CoreTestSupport.WaitUntil(
             () => router.Recv(received, RecvFlags.DontWait), 2000));
         Assert.Equal("next", received.SinglePartOrThrow().GetString());
-        Assert.NotEqual(0UL, received.TransportPairId);
-        Assert.NotEqual(0UL, received.TransportPairGeneration);
+        Assert.Equal(expectedPairId, received.TransportPairId);
+        Assert.Equal(expectedPairGeneration, received.TransportPairGeneration);
 
         using Message multipartHead = Message.From("multipart");
         using Message multipartTail = Message.From("tail");
@@ -293,8 +295,8 @@ public sealed class test_router_multiple_dealers
         Assert.Collection(received.Parts,
             part => Assert.Equal("multipart", part.GetString()),
             part => Assert.Equal("tail", part.GetString()));
-        Assert.Equal(0UL, received.TransportPairId);
-        Assert.Equal(0UL, received.TransportPairGeneration);
+        Assert.Equal(expectedPairId, received.TransportPairId);
+        Assert.Equal(expectedPairGeneration, received.TransportPairGeneration);
 
         Assert.False(router.Recv(received, RecvFlags.DontWait));
         Assert.Equal(0UL, received.TransportPairId);

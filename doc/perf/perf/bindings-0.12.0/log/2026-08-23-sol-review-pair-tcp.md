@@ -12,7 +12,7 @@
 - C3의 `first_rid_native_cache` invariant는 현재 사용 경로에서는 유지되지만, 이제 presence flag에 전적으로 의존합니다.
 - 90% aggregate를 회복할 근거가 있는 안전한 2차 성능 후보는 현재 확인되지 않았습니다. 먼저 64KiB release profile로 binding-only 비용인지 분리해야 합니다.
 
-공식 결과는 [공식 paired log](/home/hep7hep7/project/zlink/doc/perf/perf/bindings-0.12.0/log/2026-08-23-cpp-pair-tcp-official.md:168)에 기록된 값과 일치합니다.
+공식 결과는 [공식 paired log](2026-08-23-cpp-pair-tcp-official.md#4-median-대표값-요약과-cc-비율)에 기록된 값과 일치합니다.
 
 ## 현재 hot path
 
@@ -20,10 +20,10 @@
 
 PAIR builder 경로는 다음과 같습니다.
 
-1. [`pair_socket_t::send()`](/home/hep7hep7/project/zlink/bindings/cpp/src/Runtime/Sockets/pair.cpp:17)
+1. [`pair_socket_t::send()`](../../../../../bindings/cpp/src/Runtime/Sockets/pair.cpp#L17)
 2. TLS `operation_state_t` pool에서 state 획득
 3. `.message(msg)`에서 raw single-part는 caller message 포인터를 보관
-4. [`submit_raw_send_state()`](/home/hep7hep7/project/zlink/bindings/cpp/src/Runtime/Messaging/operation_submit.hpp:28)
+4. [`submit_raw_send_state()`](../../../../../bindings/cpp/src/Runtime/Messaging/operation_submit.hpp#L28)
 5. callback lifetime 확인, `socket_closed` 확인, `outbound_record_attempt_mutex` 획득
 6. `zlink_send_part()` 호출
 7. 성공 시 `mark_sent()`로 message를 consumed/invalid 상태로 변경
@@ -33,7 +33,7 @@ PAIR builder 경로는 다음과 같습니다.
 
 ### Receive
 
-PAIR receive는 [`recv_single_part_message()`](/home/hep7hep7/project/zlink/bindings/cpp/src/Runtime/Sockets/detail.hpp:85)로 들어갑니다.
+PAIR receive는 [`recv_single_part_message()`](../../../../../bindings/cpp/src/Runtime/Sockets/detail.hpp#L85)로 들어갑니다.
 
 - 새 기본 `message_t`는 valid한 empty native frame이며 `_has_payload=false`입니다.
 - C4 fast path는 이 경우 guard 생성, `init()` 재확인, save/restore를 건너뛰고 직접 `zlink_recv_part()`를 호출합니다.
@@ -44,7 +44,7 @@ C4에서 `zlink_msg_size()`를 완전히 제거하는 것은 안전하지 않습
 
 ## 65536B cliff 해석
 
-현재 [`message.cpp`](/home/hep7hep7/project/zlink/bindings/cpp/src/Runtime/Messaging/message.cpp:100)는 다음 정책을 갖고 있습니다.
+현재 [`message.cpp`](../../../../../bindings/cpp/src/Runtime/Messaging/message.cpp#L100)는 다음 정책을 갖고 있습니다.
 
 - 정책 범위: 128KiB–1MiB
 - 실제 `use_large_message_pool`: `false`
@@ -69,7 +69,7 @@ C4에서 `zlink_msg_size()`를 완전히 제거하는 것은 안전하지 않습
 성능 후보라기보다 **선행 수정이 필요한 correctness 후보**입니다.
 
 - 메커니즘: `zlink_msg_move()`로 native payload를 `message_t`에 넣는 모든 내부 helper가 `_has_payload`를 갱신하도록 중앙화합니다.
-- 문제 위치: [`native_message_parts.hpp`](/home/hep7hep7/project/zlink/bindings/cpp/src/Runtime/Native/native_message_parts.hpp:79)
+- 문제 위치: [`native_message_parts.hpp`](../../../../../bindings/cpp/src/Runtime/Native/native_message_parts.hpp#L79)
   - `restore_part_from_native()`
   - `restore_parts_from_native()`
   - `assign_parts_from_native()`
@@ -119,7 +119,7 @@ C4에서 `zlink_msg_size()`를 완전히 제거하는 것은 안전하지 않습
 
 ### 3. C9 — pool 하한을 64KiB로 확장
 
-현재 [`message.cpp`](/home/hep7hep7/project/zlink/bindings/cpp/src/Runtime/Messaging/message.cpp:102)의 기존 pool을 64KiB부터 활성화하는 후보입니다.
+현재 [`message.cpp`](../../../../../bindings/cpp/src/Runtime/Messaging/message.cpp#L102)의 기존 pool을 64KiB부터 활성화하는 후보입니다.
 
 - 메커니즘: native `zlink_msg_init_size()` 대신 pooled external buffer와 release callback 사용
 - 대상: 정확히 65536B 및 128/256KiB 경계
@@ -138,7 +138,7 @@ C4에서 `zlink_msg_size()`를 완전히 제거하는 것은 안전하지 않습
   - 64/256/1024/65536/131072/262144B throughput·latency뿐 아니라 page fault, allocation count, mutex contention 기록
   - 65536B만 개선되고 128/256KiB 또는 latency가 악화되면 즉시 폐기
 
-판정: **계약상 가능할 수 있으나 성능상 no-go**입니다. 계획서도 C++ large-message pool 재도입과 pool A/B를 후보에서 제외하고 있습니다([plan](/home/hep7hep7/project/zlink/doc/perf/perf/bindings-0.12.0/bindings-library-performance-improvement-plan-core-0.12.0.ko.md:562)). 과거 64KiB floor A/B도 65536/131072B latency 개선을 보이지 않아 폐기되었습니다.
+판정: **계약상 가능할 수 있으나 성능상 no-go**입니다. 계획서도 C++ large-message pool 재도입과 pool A/B를 후보에서 제외하고 있습니다([plan](../bindings-library-performance-improvement-plan-core-0.12.0.ko.md#76-개선-코드-커밋과-푸시)). 과거 64KiB floor A/B도 65536/131072B latency 개선을 보이지 않아 폐기되었습니다.
 
 ### 4. C10 — receive 성공 후 `zlink_msg_size()` 제거
 
@@ -161,7 +161,7 @@ C2는 코드상 동등성을 주장할 수 없습니다.
 3. 두 번째 `socket_closed` 확인
 4. native send
 
-[`socket_t::close()`](/home/hep7hep7/project/zlink/bindings/cpp/src/Runtime/Sockets/socket.cpp:139)는 같은 mutex 안에서 closed flag를 세우고 native close를 수행합니다. 따라서 현재 gate는 단순 mutex가 아니라 “send attempt와 close의 lifecycle 선형화 지점”입니다.
+[`socket_t::close()`](../../../../../bindings/cpp/src/Runtime/Sockets/socket.cpp#L139)는 같은 mutex 안에서 closed flag를 세우고 native close를 수행합니다. 따라서 현재 gate는 단순 mutex가 아니라 “send attempt와 close의 lifecycle 선형화 지점”입니다.
 
 gate를 제거하면 다음 순서가 가능해집니다.
 
@@ -173,7 +173,7 @@ send: zlink_send_part() 진입
 
 이때 native 결과는 `ETERM`, `ESHUTDOWN`, 기타 invalid-handle 오류 또는 운 좋게 accepted send가 될 수 있습니다. 현재 builder 경로는 binding-side closed check에서 `invalid_state/EINVAL`을 반환하고, admission 경로는 별도로 `terminated/ETERM`을 반환합니다. 따라서 오류 종류와 관측 시점 모두 보존되지 않습니다.
 
-Core도 close와 admitted API에 stricter lifecycle gate를 요구합니다([Core socket API](/home/hep7hep7/project/zlink/core/include/zlink/socket/api.h:186)). 결론은 **C2 no-go 유지**입니다.
+Core도 close와 admitted API에 stricter lifecycle gate를 요구합니다([Core socket API](../../../../../core/include/zlink/socket/api.h#L186)). 결론은 **C2 no-go 유지**입니다.
 
 ## C1~C5 defect review
 
@@ -216,7 +216,7 @@ T1: raw callback pointer의 mutex/atomic 역참조
 
 가장 중요한 결함입니다.
 
-[`message_access_t::move_to_native()`](/home/hep7hep7/project/zlink/bindings/cpp/src/Runtime/Native/message_access.hpp:67)는 source `_has_payload=false`를 설정합니다. 이후 [`restore_part_from_native()`](/home/hep7hep7/project/zlink/bindings/cpp/src/Runtime/Native/native_message_parts.hpp:79)가 `init()`으로 empty message를 만든 뒤 native payload를 move하지만 `_has_payload=true`로 되돌리지 않습니다.
+[`message_access_t::move_to_native()`](../../../../../bindings/cpp/src/Runtime/Native/message_access.hpp#L67)는 source `_has_payload=false`를 설정합니다. 이후 [`restore_part_from_native()`](../../../../../bindings/cpp/src/Runtime/Native/native_message_parts.hpp#L79)가 `init()`으로 empty message를 만든 뒤 native payload를 move하지만 `_has_payload=true`로 되돌리지 않습니다.
 
 결과적으로 native payload는 존재하지만 binding metadata는 empty가 됩니다. 이후 C4 fast path가 이를 empty message로 오인해 receive 실패 시 기존 payload를 close할 수 있습니다.
 

@@ -167,6 +167,8 @@ int zlink::socket_base_t::send_async_submit (
             || options.type == ZLINK_CORE_SOCKET_STREAM
             || options.type == ZLINK_CORE_SOCKET_DEALER) {
             zlink_routed_submit_target_t resolved;
+            uint64_t resolved_connection_id = 0;
+            uint64_t resolved_route_incarnation_id = 0;
             memset (&resolved, 0, sizeof (resolved));
             if (options_->target) {
                 resolved = *options_->target;
@@ -189,7 +191,10 @@ int zlink::socket_base_t::send_async_submit (
                         if (process_commands (0, true) != 0)
                             return -1;
                         const zlink_routing_id_t requested_rid = resolved.peer_rid;
-                        if (xselect_routed_submit_target (&requested_rid, &resolved)
+                        if (xselect_routed_submit_target_internal (
+                              &requested_rid, &resolved,
+                              &resolved_connection_id,
+                              &resolved_route_incarnation_id)
                             != 0)
                             return -1;
                     }
@@ -204,10 +209,15 @@ int zlink::socket_base_t::send_async_submit (
                 if (xselect_routed_submit_target (NULL, &resolved) != 0)
                     return -1;
             }
+            const bool resolved_pair = resolved.transport_pair_id != 0
+                                       && resolved.transport_pair_generation != 0;
+            const bool resolved_unpaired = resolved.transport_pair_id == 0
+                                           && resolved.transport_pair_generation == 0
+                                           && resolved_connection_id != 0
+                                           && resolved_route_incarnation_id != 0;
             if (!valid_routing_id (&resolved.peer_rid)
-                || (!deferred_target_select
-                    && (resolved.transport_pair_id == 0
-                        || resolved.transport_pair_generation == 0))) {
+                || (!deferred_target_select && !resolved_pair
+                    && !resolved_unpaired)) {
                 errno = EINVAL;
                 return -1;
             }
@@ -215,7 +225,8 @@ int zlink::socket_base_t::send_async_submit (
                 target = routed_send_target_key_t (
                   resolved.peer_rid.data, resolved.peer_rid.size,
                   resolved.transport_pair_id,
-                  resolved.transport_pair_generation);
+                  resolved.transport_pair_generation,
+                  resolved_unpaired ? resolved_route_incarnation_id : 0);
             else
                 target = routed_send_target_key_t (
                   resolved.peer_rid.data, resolved.peer_rid.size, 0, 0);
@@ -297,15 +308,23 @@ int zlink::socket_base_t::send_async_submit (
     if (deferred_target_select && !attempt_inline) {
         zlink_routed_submit_target_t resolved;
         zlink_routing_id_t requested_rid;
+        uint64_t resolved_connection_id = 0;
+        uint64_t resolved_route_incarnation_id = 0;
         memset (&resolved, 0, sizeof (resolved));
         memset (&requested_rid, 0, sizeof (requested_rid));
         requested_rid = options_->target->peer_rid;
-        if (select_routed_submit_target (&requested_rid, &resolved) != 0)
+        if (select_routed_submit_target_internal (
+              &requested_rid, &resolved, &resolved_connection_id,
+              &resolved_route_incarnation_id)
+            != 0)
             return -1;
         try {
             target = routed_send_target_key_t (
               resolved.peer_rid.data, resolved.peer_rid.size,
-              resolved.transport_pair_id, resolved.transport_pair_generation);
+              resolved.transport_pair_id, resolved.transport_pair_generation,
+              resolved.transport_pair_id == 0
+                ? resolved_route_incarnation_id
+                : 0);
         } catch (...) {
             errno = ENOMEM;
             return -1;
@@ -358,7 +377,7 @@ int zlink::socket_base_t::send_async_submit (
             return -1;
         }
         inline_record_owns_copies = true;
-        pipe_t *attempted_pipe = NULL;
+        routed_send_attempt_identity_t attempted_identity;
         socket_public_send_scope_t physical_admission (
           lifecycle, true, socket_send_admission_complete);
         int inline_rc = -1;
@@ -369,7 +388,8 @@ int zlink::socket_base_t::send_async_submit (
                               reinterpret_cast<msg_t *> (
                                 inline_record->parts.data ()),
                               ZLINK_DONTWAIT, physical_admission, NULL, 0,
-                              &attempted_pipe)
+                              NULL, 0, 0, false, NULL, NULL,
+                              &attempted_identity)
                           : try_admit_send_parts_scoped (
                               inline_record->parts.data (),
                               inline_record->parts.size (), target,
@@ -381,10 +401,6 @@ int zlink::socket_base_t::send_async_submit (
             errno = EAGAIN;
         }
         const int inline_errno = errno;
-        const uint64_t attempted_pair_id =
-          attempted_pipe ? attempted_pipe->get_transport_pair_id () : 0;
-        const uint64_t attempted_pair_generation =
-          attempted_pipe ? attempted_pipe->get_transport_pair_generation () : 0;
         physical_admission.unlock_sync ();
         if (inline_rc == 0) {
             pending.admission_gate.store (false, std::memory_order_release);
@@ -407,7 +423,15 @@ int zlink::socket_base_t::send_async_submit (
         }
 
         if (deferred_target_select) {
-            if (!attempted_pipe) {
+            const bool attempted_pair =
+              attempted_identity.transport_pair_id != 0
+              && attempted_identity.transport_pair_generation != 0;
+            const bool attempted_unpaired =
+              attempted_identity.transport_pair_id == 0
+              && attempted_identity.transport_pair_generation == 0
+              && attempted_identity.transport_connection_id != 0
+              && attempted_identity.route_incarnation_id != 0;
+            if (!attempted_pair && !attempted_unpaired) {
                 pending.admission_gate.store (false,
                                               std::memory_order_release);
                 {
@@ -422,8 +446,12 @@ int zlink::socket_base_t::send_async_submit (
             try {
                 target = routed_send_target_key_t (
                   options_->target->peer_rid.data,
-                  options_->target->peer_rid.size, attempted_pair_id,
-                  attempted_pair_generation);
+                  options_->target->peer_rid.size,
+                  attempted_identity.transport_pair_id,
+                  attempted_identity.transport_pair_generation,
+                  attempted_unpaired
+                    ? attempted_identity.route_incarnation_id
+                    : 0);
             } catch (...) {
                 pending.admission_gate.store (false,
                                               std::memory_order_release);
@@ -488,11 +516,25 @@ int zlink::socket_base_t::send_async_submit (
     //  Reserve queue capacity only after the pending record is completely
     //  prepared. This keeps allocation failure outside the synchronized
     //  runtime state and makes rejection leave caller ownership intact.
+    std::unique_lock<std::mutex> target_publication_lock;
+    if (has_target) {
+        if (std::mutex *const sync = send_pending_target_mutex ())
+            target_publication_lock = std::unique_lock<std::mutex> (*sync);
+    }
     if (pending_reject_errno == 0) {
         scoped_lock_t lock (pending.sync);
         if (inline_terminal_errno == 0 && pending.failing) {
             pending_reject_errno = ESHUTDOWN;
         } else {
+            // Route replacement and pending publication form one ordered step.
+            // If the physical attempt belonged to a route already retired by
+            // direct I/O handover, accept it as a terminal async operation
+            // instead of publishing work that no later detach can identify.
+            if (inline_terminal_errno == 0 && has_target
+                && !xsend_pending_target_current_locked (record->target)) {
+                inline_terminal_errno = ENOTCONN;
+                record->claimed = true;
+            }
             //  Async admission waits by default, matching the former
             //  binding-owned queues. A non-zero option is an explicit
             //  application overload policy; zero means unlimited and normal
@@ -582,6 +624,8 @@ int zlink::socket_base_t::send_async_submit (
         if (attempt_inline)
             pending.inline_attempts.erase (inline_reservation_key);
     }
+    if (target_publication_lock.owns_lock ())
+        target_publication_lock.unlock ();
 
     if (attempt_inline) {
         {

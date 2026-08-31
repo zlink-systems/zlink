@@ -3,7 +3,7 @@
 #include "utils/precompiled.hpp"
 
 #include <stddef.h>
-#include "core/poller.hpp"
+#include "core/socket_poller.hpp"
 #include "sockets/proxy/proxy.hpp"
 #include "utils/likely.hpp"
 #include "core/msg.hpp"
@@ -17,9 +17,24 @@
 #include "sockets/common/socket_base.hpp"
 #include "utils/err.hpp"
 
-#ifdef ZLINK_HAVE_POLLER
+#ifdef ZLINK_BUILD_TESTS
+namespace
+{
+std::atomic<bool> g_fail_next_proxy_destination_send (false);
+}
 
-#include "core/socket_poller.hpp"
+void zlink::test_fail_next_proxy_destination_send ()
+{
+    g_fail_next_proxy_destination_send.store (true,
+                                               std::memory_order_release);
+}
+
+void zlink::test_reset_proxy_state ()
+{
+    g_fail_next_proxy_destination_send.store (false,
+                                               std::memory_order_release);
+}
+#endif
 
 //  Macros for repetitive code.
 
@@ -44,8 +59,6 @@
         }                                                                                          \
     } while (false)
 
-#endif //  ZLINK_HAVE_POLLER
-
 static int capture (class zlink::socket_base_t *capture_, zlink::msg_t *msg_, int more_ = 0)
 {
     //  Copy message to capture socket if any
@@ -55,13 +68,85 @@ static int capture (class zlink::socket_base_t *capture_, zlink::msg_t *msg_, in
         if (unlikely (rc < 0))
             return -1;
         rc = ctrl.copy (*msg_);
-        if (unlikely (rc < 0))
+        if (unlikely (rc < 0)) {
+            const int saved_errno = errno;
+            (void) ctrl.close ();
+            errno = saved_errno;
             return -1;
+        }
         rc = capture_->send (&ctrl, more_ ? ZLINK_SNDMORE : 0);
+        const int saved_errno = errno;
+        (void) ctrl.close ();
+        errno = saved_errno;
         if (unlikely (rc < 0))
             return -1;
     }
     return 0;
+}
+
+class proxy_source_pipe_pin_t
+{
+  public:
+    explicit proxy_source_pipe_pin_t (zlink::pipe_t *pipe_) : _pipe (pipe_) {}
+    ~proxy_source_pipe_pin_t ()
+    {
+        if (_pipe)
+            _pipe->release_lifetime_ref ();
+    }
+
+    zlink::pipe_t *get () const { return _pipe; }
+
+  private:
+    zlink::pipe_t *_pipe;
+};
+
+static void reset_proxy_receive_message (zlink::msg_t *msg_)
+{
+    if (msg_->check ()) {
+        const int close_rc = msg_->close ();
+        errno_assert (close_rc == 0);
+    }
+    const int init_rc = msg_->init ();
+    errno_assert (init_rc == 0);
+}
+
+static void rollback_proxy_record (zlink::socket_base_t *to_,
+                                   zlink::socket_base_t *capture_,
+                                   zlink::msg_t *msg_)
+{
+    // Both destinations are owned by this proxy loop. rollback() is a no-op
+    // when a destination has not accepted a MORE frame, so use one cleanup for
+    // every failed exit rather than trying to reconstruct which of capture/to
+    // won the most recent write.
+    (void) to_->rollback ();
+    if (capture_)
+        (void) capture_->rollback ();
+    reset_proxy_receive_message (msg_);
+}
+
+static void reject_proxy_record (zlink::socket_base_t *from_,
+                                 zlink::socket_base_t *to_,
+                                 zlink::socket_base_t *capture_,
+                                 zlink::msg_t *msg_,
+                                 zlink::pipe_t *source_pipe_,
+                                 bool current_has_more_)
+{
+    bool more = current_has_more_;
+    while (more) {
+        zlink::pipe_t *tail_pipe = NULL;
+        const int recv_rc = from_->recv_pipe (
+          msg_, &tail_pipe, ZLINK_DONTWAIT, true);
+        proxy_source_pipe_pin_t tail_pin (tail_pipe);
+        if (recv_rc != 0)
+            break;
+        more = (msg_->flags () & zlink::msg_t::more) != 0;
+    }
+
+    // Earlier MORE frames are not visible until the record commits. Remove
+    // them from both output transactions before terminating the bad source.
+    rollback_proxy_record (to_, capture_, msg_);
+    if (source_pipe_)
+        source_pipe_->terminate (false);
 }
 
 static int forward (class zlink::socket_base_t *from_,
@@ -72,25 +157,73 @@ static int forward (class zlink::socket_base_t *from_,
     // Forward a burst of messages
     for (unsigned int i = 0; i < zlink::proxy_burst_size; i++) {
         // Forward all the parts of one message
+        bool first_proxy_frame = true;
+        size_t application_part_index = 0;
         while (true) {
-            int rc = from_->recv (msg_, ZLINK_DONTWAIT);
+            zlink::pipe_t *source_pipe = NULL;
+            int rc = from_->recv_pipe (
+              msg_, &source_pipe, ZLINK_DONTWAIT, true);
+            proxy_source_pipe_pin_t source_pin (source_pipe);
             if (rc < 0) {
-                if (likely (errno == EAGAIN && i > 0))
+                const int saved_errno = errno;
+                rollback_proxy_record (to_, capture_, msg_);
+                errno = saved_errno;
+                if (likely (saved_errno == EAGAIN && i > 0))
                     return 0; // End of burst
 
                 return -1;
             }
 
             const bool more = (msg_->flags () & zlink::msg_t::more) != 0;
+            const bool router_identity_preamble =
+              first_proxy_frame
+              && from_->socket_type () == ZLINK_CORE_SOCKET_ROUTER;
+            unsigned char request_reply_kind = 0;
+            uint64_t request_reply_sequence = 0;
+            const bool has_request_reply_metadata =
+              msg_->get_request_reply_metadata (
+                &request_reply_kind, &request_reply_sequence);
+            if (!router_identity_preamble && application_part_index > 0
+                && has_request_reply_metadata) {
+                reject_proxy_record (from_, to_, capture_, msg_,
+                                     source_pin.get (), more);
+                errno = EPROTO;
+                return -1;
+            }
+
+            // Proxy and capture are public raw-message boundaries. Preserve
+            // application bytes and multipart flags, but never forward the
+            // internal request/reply kind or sequence to either output.
+            if (router_identity_preamble || application_part_index == 0)
+                msg_->reset_request_reply_metadata ();
+
+            if (!router_identity_preamble)
+                ++application_part_index;
+            first_proxy_frame = false;
 
             //  Copy message to capture socket if any
             rc = capture (capture_, msg_, more);
-            if (unlikely (rc < 0))
+            if (unlikely (rc < 0)) {
+                const int saved_errno = errno;
+                rollback_proxy_record (to_, capture_, msg_);
+                errno = saved_errno;
                 return -1;
+            }
 
-            rc = to_->send (msg_, more ? ZLINK_SNDMORE : 0);
-            if (unlikely (rc < 0))
+#ifdef ZLINK_BUILD_TESTS
+            if (g_fail_next_proxy_destination_send.exchange (
+                  false, std::memory_order_acq_rel)) {
+                errno = EAGAIN;
+                rc = -1;
+            } else
+#endif
+                rc = to_->send (msg_, more ? ZLINK_SNDMORE : 0);
+            if (unlikely (rc < 0)) {
+                const int saved_errno = errno;
+                rollback_proxy_record (to_, capture_, msg_);
+                errno = saved_errno;
                 return -1;
+            }
             if (more == 0)
                 break;
         }
@@ -99,7 +232,6 @@ static int forward (class zlink::socket_base_t *from_,
     return 0;
 }
 
-#ifdef ZLINK_HAVE_POLLER
 int zlink::proxy (class socket_base_t *frontend_,
                   class socket_base_t *backend_,
                   class socket_base_t *capture_)
@@ -123,12 +255,18 @@ int zlink::proxy (class socket_base_t *frontend_,
     //  Don't allocate these pollers from stack because they will take more than 900 kB of stack!
     //  On Windows this blows up default stack of 1 MB and aborts the program.
     //  I wanted to use std::shared_ptr here as the best solution but that requires C++11...
+    const zlink::socket_poller_t::output_readiness_t proxy_output_readiness =
+      zlink::socket_poller_t::transport_output_readiness;
+    //  Poll for everything.
     zlink::socket_poller_t *poller_all =
-      new (std::nothrow) zlink::socket_poller_t; //  Poll for everything.
+      new (std::nothrow) zlink::socket_poller_t (
+        proxy_output_readiness);
     zlink::socket_poller_t *poller_in = new (std::nothrow) zlink::
       socket_poller_t; //  Poll only 'ZLINK_POLLIN' on all sockets. Initial blocking poll in loop.
+    //  All except 'ZLINK_POLLIN' on 'frontend_'.
     zlink::socket_poller_t *poller_receive_blocked =
-      new (std::nothrow) zlink::socket_poller_t; //  All except 'ZLINK_POLLIN' on 'frontend_'.
+      new (std::nothrow) zlink::socket_poller_t (
+        proxy_output_readiness);
 
     //  If frontend_==backend_ 'poller_send_blocked' and 'poller_receive_blocked' are the same, 'ZLINK_POLLIN' is ignored.
     //  In that case 'poller_send_blocked' is not used. We need only 'poller_receive_blocked'.
@@ -143,14 +281,22 @@ int zlink::proxy (class socket_base_t *frontend_,
       NULL; //  Only 'ZLINK_POLLIN' and 'ZLINK_POLLOUT' on 'backend_'.
 
     if (frontend_ != backend_) {
+        //  All except 'ZLINK_POLLIN' on 'backend_'.
         poller_send_blocked =
-          new (std::nothrow) zlink::socket_poller_t; //  All except 'ZLINK_POLLIN' on 'backend_'.
+          new (std::nothrow) zlink::socket_poller_t (
+            proxy_output_readiness);
+        //  All except 'ZLINK_POLLIN' on both 'frontend_' and 'backend_'.
         poller_both_blocked = new (std::nothrow)
-          zlink::socket_poller_t; //  All except 'ZLINK_POLLIN' on both 'frontend_' and 'backend_'.
+          zlink::socket_poller_t (
+            proxy_output_readiness);
+        //  Only 'ZLINK_POLLIN' and 'ZLINK_POLLOUT' on 'frontend_'.
         poller_frontend_only = new (std::nothrow)
-          zlink::socket_poller_t; //  Only 'ZLINK_POLLIN' and 'ZLINK_POLLOUT' on 'frontend_'.
+          zlink::socket_poller_t (
+            proxy_output_readiness);
+        //  Only 'ZLINK_POLLIN' and 'ZLINK_POLLOUT' on 'backend_'.
         poller_backend_only = new (std::nothrow)
-          zlink::socket_poller_t; //  Only 'ZLINK_POLLIN' and 'ZLINK_POLLOUT' on 'backend_'.
+          zlink::socket_poller_t (
+            proxy_output_readiness);
         frontend_equal_to_backend = false;
     } else
         frontend_equal_to_backend = true;
@@ -318,57 +464,3 @@ int zlink::proxy (class socket_base_t *frontend_,
         }
     }
 }
-
-#else //  ZLINK_HAVE_POLLER
-
-int zlink::proxy (class socket_base_t *frontend_,
-                  class socket_base_t *backend_,
-                  class socket_base_t *capture_)
-{
-    msg_t msg;
-    int rc = msg.init ();
-    if (rc != 0)
-        return -1;
-
-    //  The algorithm below assumes ratio of requests and replies processed
-    //  under full load to be 1:1.
-
-    zlink_pollitem_t items[] = {{frontend_, 0, ZLINK_POLLIN, 0},
-                                {backend_, 0, ZLINK_POLLIN, 0}};
-
-    zlink_pollitem_t itemsout[] = {{frontend_, 0, ZLINK_POLLOUT, 0},
-                                   {backend_, 0, ZLINK_POLLOUT, 0}};
-
-    while (true) {
-        //  Wait while there are either requests or replies to process.
-        rc = zlink_poll (&items[0], 2, -1, NULL);
-        if (unlikely (rc < 0))
-            return close_and_return (&msg, -1);
-
-        //  Get the pollout separately because when combining this with pollin it maxes the CPU
-        //  because pollout shall most of the time return directly.
-        //  POLLOUT is only checked when frontend and backend sockets are not the same.
-        if (frontend_ != backend_) {
-            rc = zlink_poll (&itemsout[0], 2, 0, NULL);
-            if (unlikely (rc < 0)) {
-                return close_and_return (&msg, -1);
-            }
-        }
-
-        if (items[0].revents & ZLINK_POLLIN
-            && (frontend_ == backend_ || itemsout[1].revents & ZLINK_POLLOUT)) {
-            rc = forward (frontend_, backend_, capture_, &msg);
-            if (unlikely (rc < 0))
-                return close_and_return (&msg, -1);
-        }
-        //  Process a reply
-        if (frontend_ != backend_ && items[1].revents & ZLINK_POLLIN
-            && itemsout[0].revents & ZLINK_POLLOUT) {
-            rc = forward (backend_, frontend_, capture_, &msg);
-            if (unlikely (rc < 0))
-                return close_and_return (&msg, -1);
-        }
-    }
-}
-
-#endif //  ZLINK_HAVE_POLLER

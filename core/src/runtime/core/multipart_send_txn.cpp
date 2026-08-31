@@ -13,9 +13,8 @@ struct multipart_send_facade_t
 {
     static socket_public_send_scope_t make_scope (socket_base_t *socket_, bool force_sync_)
     {
-        return socket_public_send_scope_t (socket_->lifecycle_coordinator (),
-                                           force_sync_
-                                             || socket_->direct_send_needs_public_api_sync (),
+        LIBZLINK_UNUSED (force_sync_);
+        return socket_public_send_scope_t (socket_->lifecycle_coordinator (), true,
                                            socket_send_admission_complete);
     }
 
@@ -23,10 +22,13 @@ struct multipart_send_facade_t
                             msg_t *msg_,
                             int flags_,
                             socket_public_send_scope_t &scope_,
-                            pipe_t **pipe_out_ = NULL)
+                            pipe_t **pipe_out_ = NULL,
+                            multipart_pipe_selected_fn observer_ = NULL,
+                            void *observer_userdata_ = NULL)
     {
-        return socket_->send_direct_with_retry (
-          NULL, msg_, flags_, scope_, NULL, 0, true, pipe_out_);
+        return socket_->send_scoped (
+          msg_, flags_, scope_, pipe_out_, true, observer_,
+          observer_userdata_);
     }
 
     static int rollback_scoped (socket_base_t *socket_, socket_public_send_scope_t &scope_)
@@ -79,7 +81,9 @@ static int send_frames_once (zlink::socket_base_t *socket_,
         if (zlink::multipart_send_facade_t::send_scoped (
               socket_, reinterpret_cast<zlink::msg_t *> (&parts_[i]),
               (more ? ZLINK_SNDMORE : 0) | flags_, scope_,
-              application_pipe_out_ && i == 0 ? &selected_pipe : NULL)
+              application_pipe_out_ && i == 0 ? &selected_pipe : NULL,
+              selected_fn_ && i == 0 ? selected_fn_ : NULL,
+              selected_fn_ && i == 0 ? selected_userdata_ : NULL)
             != 0) {
             const int err = errno;
             if (started)
@@ -90,8 +94,6 @@ static int send_frames_once (zlink::socket_base_t *socket_,
         }
         if (application_pipe_out_ && i == 0)
             *application_pipe_out_ = selected_pipe;
-        if (selected_fn_ && i == 0)
-            selected_fn_ (selected_pipe, selected_userdata_);
         started = more;
     }
 

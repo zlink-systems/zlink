@@ -500,7 +500,7 @@ core를 호출하는 방식은 달라서는 안 된다.
   않는다.
 - `RecvPart`, `RecvRoutedPart`, `SubscribePart`, `recv_part`,
   `recv_routed_part`, `subscribe_part`처럼 part 단위 수신을 public binding
-  API로 노출하지 않는다. part loop, `has_more`, part별 envelope metadata는
+  API로 노출하지 않는다. Part loop, `has_more`, request sequence와 reply context는
   binding runtime 내부에서 aggregate 결과 저장소로 흡수한다.
 - `doc/spec/bindings/` 문서는 helper substrate 시그니처 자체를 public contract로
   문서화하지 않는다.
@@ -508,6 +508,21 @@ core를 호출하는 방식은 달라서는 안 된다.
 
 즉 bindings 정책 문서의 기준은 "helper가 어떻게 생겼는가"가 아니라,
 "binding 사용자가 최종적으로 어떤 public contract를 보게 되는가"이다.
+
+### Request-reply protocol metadata 경계
+
+Binding은 request·reply `*_part` API에 application payload만 전달한다. ZMP kind, wire
+sequence와 header extension은 Core가 소유하므로 binding이 protocol envelope나 header를 만들거나
+payload part로 추가하지 않는다. Request와 reply에 multipart N개를 넘기면 handler와 completion도
+application part N개만 관찰한다.
+
+Binding이 public `Message`에서 native copy나 view를 만드는 언어에서는 Core가 소비할 그 native
+message에만 request-reply metadata가 연결된다. Public source에 metadata를 쓰거나, 실패한 submit의
+source를 raw send했을 때 request-reply kind가 다시 나타나게 해서는 안 된다. Source를 보존하는지
+소비하는지는 각 언어의 기존 ownership 계약을 그대로 따른다.
+
+Public receive와 request completion은 Core가 내부 metadata를 제거한 payload만 aggregate한다.
+Binding은 raw message에서 ZMP kind를 읽거나 이를 public metadata field로 노출하지 않는다.
 
 ## `*_part` Substrate 사용 의무 (Required)
 
@@ -1118,8 +1133,8 @@ attach 표면**에서 동일한 패턴으로 노출한다. 이름은 언어 관�
   framework에 설정된 기본 timeout과 다른 값을 요구할 때만 사용한다. 이 규칙은
   예제를 짧게 보이게 하려는 규칙이 아니라, 사용자가 불필요한 옵션을 표준 사용법으로
   오해하지 않게 하기 위한 샘플 계약이다.
-- request/reply protocol envelope을 직접 만드는 helper는 public binding 표면에
-  두지 않는다. `requestFrame(...)` 같은 API는 request sequence와 frame layout을
+- request/reply ZMP header metadata를 직접 만드는 helper는 public binding 표면에
+  두지 않는다. `requestFrame(...)` 같은 API는 wire sequence와 frame layout을
   caller에게 노출하므로 runtime/internal helper에 머물러야 한다.
 - reply는 수신한 request context에서 시작해야 한다. binding public API는
   `received.reply()` 또는 `router.reply(peerRid, requestSeq)`처럼 reply 가능한
@@ -1677,7 +1692,7 @@ surface 배치는 아래 `Actor Dispatch Policy` 절을 따른다.
    - 대상: C++, Java, .NET, Node, Python.
    - 성공 시 결과를 반환하거나 void 반환한다.
    - 실패 시 예외를 던진다.
-   - 예외에는 `int code` (0–706 범위) 를 포함하여 호출자가 실패 원인을
+   - 예외에는 `int code` (0–709 범위) 를 포함하여 호출자가 실패 원인을
      구분할 수 있게 한다.
    - 각 operation 계약이 허용하는 `BACKPRESSURED`, `NOT_CONNECTED`, `NOT_FOUND`
      등의 실패는 예외로 전달한다. 이들은 반환값이 아니다. 단, raw terminal reply는
@@ -1753,7 +1768,7 @@ surface 배치는 아래 `Actor Dispatch Policy` 절을 따른다.
 #### Error Codes
 
 - C API 는 함수별 typed result enum 을 반환한다.
-- 모든 enum 값은 0–706 범위에서 겹치지 않는다.
+- 성공 값 `0`은 모든 enum이 공유하고, 0이 아닌 값은 1–709 범위에서 enum 간 겹치지 않는다.
 - 바인딩은 이 코드를 언어별 에러 타입의 `int code` 에 포함시킨다
   (exception 언어는 예외 객체, return-based 언어는 반환 에러 값).
 - 전체 enum 정의는
@@ -2948,10 +2963,14 @@ query client, compatibility alias를 현재 API로 노출하면 안 된다.
 > 언어별 인터페이스 시그니처와 사용 예는
 > `cpp/`, `java/`, `dotnet/`, `node/`, `python/`, `go/`, `rust/` 를 참조한다.
 
+Request-reply kind, sequence와 ZMP header의 정확한 byte 배치·검증은
+[Core ZMP 스펙](../../../core/doc/spec/core/protocol/01-zmp.ko.md)이 소유한다. 이 절은 binding이
+application payload part 수와 ownership을 보존하고 내부 metadata를 공개하지 않는 계약을 소유한다.
+
 #### 설계 원칙
 
-- request-reply 는 ZMP protocol envelope 로 처리한다.
-  `zlink_msg_t` 에 request 표시를 붙이는 방식은 사용하지 않는다.
+- Request-reply는 첫 application part의 ZMP header metadata로 전달한다.
+  Public `zlink_msg_t` marker API나 protocol payload part는 사용하지 않는다.
 - dispatch, pending map, timeout, reply 매칭은 core C API 에서 처리한다.
   바인딩은 이 로직을 다시 구현하지 않는다.
 - core 는 callback 기반 비동기 모델을 제공한다.
@@ -3008,8 +3027,12 @@ typedef void (*zlink_reply_handler_fn)(
 
 ```
 
-callback 으로 전달된 `parts` 는 borrowed view 다.
-callback 반환 시점까지만 유효하다. 밖에서 유지하려면 복사한다.
+`ZLINK_REQUEST_OK`이면 `parts`의 모든 message 소유권이 callback으로
+이전된다. callback은 반환하기 전에 각 message를 정확히 한 번 해제하거나
+binding 소유 message 객체로 move/adopt한다. `parts` 배열 자체는 callback
+반환 시점까지만 유효하다. 유효한 wire error reply에서도 Core C callback은 errno part 뒤의
+message 소유권과 errno를 매핑한 non-OK `zlink_request_result_t`를 받는다. 상위 binding은 이
+message를 해제하고 언어별 error 경로만 공개한다.
 
 **Socket API:**
 
@@ -3035,12 +3058,11 @@ zlink_submit_result_t zlink_router_reply_part(void *router,
 
 zlink_recv_result_t zlink_router_recv_part(void *router,
     const zlink_routing_id_t **source_node_rid_out,
-    const zlink_routing_id_t **source_spot_rid_out,
     uint64_t *request_seq_out, zlink_msg_t *part_out,
     zlink_part_flag_t *has_more_out, zlink_recv_flags_t flags);
 ```
 
-**SPOT API:**
+**SPOT service-layer operation 이름 (binding-level 개념):**
 
 ```c
 zlink_submit_result_t zlink_spot_send_channel_part(void *spot, ...);
@@ -3059,7 +3081,9 @@ zlink_recv_result_t zlink_spot_recv_part(void *spot, ...);
 zlink_handler_result_t zlink_spot_dispatch_event_handler(void *spot, ...);
 ```
 
-전체 시그니처는 `core/include/zlink.h` 를 참조한다.
+위 목록은 binding/service layer가 제공할 operation 이름을 설명하는 개념 목록이며 Core C
+함수 선언이 아니다. Core C request-reply 함수의 실제 시그니처는 `core/include/zlink.h`를
+참조한다.
 
 #### 수신 Dispatch 모델
 
@@ -3067,14 +3091,14 @@ core 가 request-reply dispatch 를 처리한다. 바인딩은 dispatch owner �
 
 - `request_seq = 0` 이면 ordinary message.
 - `request_seq != 0` 이면 request-reply message.
-- core 가 pending map 에서 `source_node_rid + request_seq` 로 매칭한다.
+- Core는 socket이 발급한 `request_seq`로 pending completion을 찾고, 등록한 transport pair
+  ID·generation과 일치하는 reply만 적용한다.
 - 매칭 실패한 reply (stray/late reply) 는 drop 한다.
-- ROUTER 는 generic `zlink_recv_part()` 대신 `zlink_router_recv_part()` typed surface 를
-  사용한다. generic `zlink_recv_part()` 호출 시 `EOPNOTSUPP`.
-- ROUTER 의 routed 수신 plane 은 **단일 표면**이다. 일반 ROUTER 트래픽과
-  spot-origin routed 트래픽 모두 `zlink_router_recv_part()` 하나로 받는다.
-  `source_spot_rid` 가 `NULL` 이면 일반 ROUTER 트래픽, 채워져 있으면
-  spot-origin 트래픽이다.
+- Reply 가능한 ROUTER record는 `zlink_router_recv_part()` typed surface로 받는다.
+  ROUTER에 대한 generic `zlink_recv_part()` 호출은 `EOPNOTSUPP`로 거부한다.
+- ROUTER 의 raw request-reply 수신 plane 은 **단일 표면**이다. 이 C API는
+  `source_node_rid`와 `request_seq`만 반환하며 SPOT 전용 routing context는
+  별도 service-layer API가 소유한다.
 
 #### Request API 변형
 
@@ -3092,7 +3116,8 @@ substrate 형태를 유지한다. C ABI에는 wrapper builder 정책을 적용�
 #### SPOT Request-Reply
 
 SPOT 직접 전달 위에서도 같은 request-reply 프로토콜을 사용한다.
-`SPOT routed envelope -> request-reply envelope -> payload` 순서로 싣는다.
+SPOT routed control 뒤 첫 application payload의 ZMP header에 request-reply kind와 sequence를
+싣고, request-reply 전용 payload part는 추가하지 않는다.
 SPOT reply 도 ctx 없이 상대 주소 + request_seq 로 보낸다.
 같은 Spot 에서 여러 request 를 동시에 outstanding 상태로 둘 수 있다.
 high-level request 완료는 첫 reply 1건으로 끝난다.
@@ -3114,12 +3139,17 @@ high-level request 완료는 첫 reply 1건으로 끝난다.
 
 #### Wire format
 
+아래 ZMP wire 값은 [Core ZMP 스펙](../../../core/doc/spec/core/protocol/01-zmp.ko.md)의 계약을
+인용한다. Binding은 이 값을 직접 만들거나 해석하지 않는다.
+
 - `request_seq` 는 부호 없는 64비트 정수 (8바이트, network byte order).
-- 시작값 `1`. `0` 은 ordinary message 예약값.
+- 시작값 `1`. Ordinary data frame에는 sequence extension이 없다.
 - overflow 시 `1` 로 wrap. outstanding 충돌값은 건너뛴다.
-- envelope 은 4개 control part: protocol id, version, message type, request_seq.
-- SPOT routed 조합 시 8개 SPOT control part + 4개 request-reply control part + payload.
-- 바인딩은 envelope 을 직접 파싱하지 않는다. core 가 처리한다.
+- Ordinary data는 8 byte ZMP header의 kind가 `0x00`이다. Request, reply와 error reply의 첫
+  application frame은 kind와 8 byte Big Endian sequence를 포함한 16 byte header를 사용한다.
+- Multipart의 둘째 application frame부터 kind는 ordinary data이고 payload part 수는 binding이
+  전달한 수와 같다.
+- 바인딩은 ZMP header metadata를 직접 만들거나 파싱하지 않는다. Core가 처리한다.
 
 #### 반환 타입
 
@@ -3139,9 +3169,10 @@ high-level request 완료는 첫 reply 1건으로 끝난다.
 #### 소유권
 
 - `request()` / `reply()` 호출 시 메시지 ownership 은 기존 send 계약을 따른다.
-- request callback 으로 전달된 `parts` 는 borrowed view 다.
-  callback 반환 후 무효. 바인딩은 이를 복사해 언어별 리스트 타입 또는
-  `Vec<Message>` 로 전달한다.
+- request가 성공적으로 완료되면 callback의 모든 message part 소유권이
+  binding callback으로 이전된다. binding은 각 part를 언어별 리스트의
+  message 객체로 move/adopt하고 각 native message를 정확히 한 번 해제한다.
+  native `parts` 배열 자체는 callback 반환 후 무효다.
 - 소켓 close 시 core 가 pending map 의 모든 미완료 request 를 `ZLINK_REQUEST_TERMINATED` callback 으로 reject 한다.
 
 #### Callback 계약
@@ -3149,6 +3180,8 @@ high-level request 완료는 첫 reply 1건으로 끝난다.
 - callback 은 정확히 한 번 호출된다.
   성공이면 `result = OK` + reply parts, 실패면 `result != OK` +
   empty/null/Err 경로로 전달된다.
+- Core C callback이 유효한 wire error reply의 errno part 뒤 payload를 받더라도 binding은 이를
+  해제하고 public 성공 payload로 노출하지 않는다.
 - core callback 시그니처: `void(zlink_request_result_t result_, zlink_msg_t *parts_, size_t part_count_, void *userdata_)`
 - 언어별 패턴 (per-function `RequestError` 계승):
   - C++: `std::function<void(request_result_t, std::vector<message_t>)>`
@@ -3565,17 +3598,14 @@ zlink_recv_result_t zlink_spot_recv_actor_lifecycle(void *spot, ...);
 ```c
 zlink_recv_result_t zlink_router_recv_part(void *router,
     const zlink_routing_id_t **source_node_rid_out,
-    const zlink_routing_id_t **source_spot_rid_out,
     uint64_t *request_seq_out,
     zlink_msg_t *part_out, zlink_part_flag_t *has_more_out,
     zlink_recv_flags_t flags);
 ```
 
-- ROUTER 의 routed 수신은 단일 plane 이다. 일반 ROUTER 트래픽과
-  spot-origin routed 트래픽을 하나의 recv 로 받는다.
-- `source_spot_rid == NULL` 이면 일반 ROUTER 트래픽 (reply 는
-  `zlink_router_reply_part` 사용). `source_spot_rid` 가 채워져 있으면
-  spot-origin 트래픽 (reply 는 `zlink_router_reply_spot_part` 사용).
+- ROUTER 의 raw request-reply 수신은 단일 plane 이다. 이 C API는
+  `source_node_rid`와 `request_seq`만 반환하며 SPOT 전용 routing context는
+  별도 service-layer API가 소유한다.
 - `request_seq == 0` 이면 fire-and-forget. `request_seq != 0` 이면 request.
 - 바인딩은 ROUTER data-plane callback install surface 를 별도로 노출하지 않는다.
   request completion callback 은 `request(...)` 경로에서만 유지한다.
@@ -3994,7 +4024,7 @@ zlink 에서 사용하는 코드와 의미. 바인딩은 이 코드를 언어별
 
 코드는 두 계층으로 나뉜다.
 
-1. **Public result enum 코드 (0–706)** — 공개 C API 함수의 반환 enum 값.
+1. **Public result enum 코드 (0–709)** — 공개 C API 함수의 반환 enum 값.
    바인딩이 직접 마주하고 언어별 에러 타입으로 노출해야 하는 값이다.
    전체 정의는 [core/errno-map.md](https://zlink-systems.github.io/zlink/ko/spec/core/04-errno-map/) 참조.
 2. **Internal errno** — `zlink_errno()` 로 조회되는 내부 raw errno.
@@ -4037,16 +4067,17 @@ ROUTER/`Received` reply는 HWM 없는 completion lane에 한 번 제출하므로
 | 0 | `OK` | `0` | reply payload 수신 성공 |
 | 101 | `TIMED_OUT` | `ETIMEDOUT` | `timeout_ms` 내 reply 미도착 |
 | 102 | `NOT_FOUND` | `ENOENT` | 대상 없음, 에러 reply 로 완료 |
-| 103 | `TERMINATED` | `ETERM` | (예약) 명시적 종료 완료 경로 |
-| 104 | `PROTOCOL_ERROR` | `EPROTO` | reply envelope / error reply payload 손상 |
-| 105 | `INTERNAL_ERROR` | `EPROTO` 등 | 내부 request 실패 (상세는 `zlink_errno()`) |
-| 106 | `REJECTED` | `EACCES`, `ECONNREFUSED` | 대상이 request를 명시적으로 거절 |
-| 107 | `CONFLICT` | `ESTALE` | request 대상 또는 상태 충돌 |
+| 103 | `TERMINATED` | `ETERM`, `ESHUTDOWN` | owner lifecycle 종료 |
+| 104 | `PROTOCOL_ERROR` | `EPROTO`, `ENOCOMPATPROTO` | reply metadata 또는 error reply payload가 잘못되거나 호환되지 않음 |
+| 105 | `INTERNAL_ERROR` | `EIO`, 분류되지 않은 errno | 다른 public bucket이 없는 내부 request 실패 |
+| 106 | `REJECTED` | `EACCES`, `ECONNREFUSED`, `ECANCELED` | 대상 또는 admission이 request를 거절 |
+| 107 | `CONFLICT` | `ESTALE`, `EEXIST` | request 대상 또는 상태 충돌 |
 | 108 | `BUSY` | `EBUSY` | request 처리 경로가 일시적으로 바쁨 |
 | 109 | `NOT_CONNECTED` | `ENOTCONN`, `EHOSTUNREACH` | 대상 peer/경로 미연결 |
-| 110 | `INVALID_ARGUMENT` | `EINVAL`, `EFAULT` | request 인자 또는 envelope 오류 |
-| 111 | `INVALID_STATE` | `EFSM` | request를 받을 수 없는 handle 상태 |
+| 110 | `INVALID_ARGUMENT` | `EINVAL`, `EFAULT` | request 인자 또는 metadata 오류 |
+| 111 | `INVALID_STATE` | `EFSM`, `EALREADY` | request를 받을 수 없는 handle 상태 |
 | 112 | `NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | request 미지원 대상 |
+| 113 | `BACKPRESSURED` | `EAGAIN`, `ENOBUFS` | request 처리 경로가 수용 공간 부족으로 진행되지 못함 |
 
 ##### `zlink_recv_result_t` (recv, subscribe, subscription event, monitor recv, timer recv)
 
@@ -4059,6 +4090,8 @@ ROUTER/`Received` reply는 HWM 없는 completion lane에 한 번 제출하므로
 | 204 | `INVALID_HANDLE` | `EFAULT` | NULL / invalid handle |
 | 205 | `NOT_SUPPORTED` | `ENOTSUP` | recv 미지원 소켓 타입 |
 | 206 | `INTERNAL_ERROR` | `EPROTO` 등 | 내부 recv 실패 (상세는 `zlink_errno()`) |
+| 207 | `BUFFER_TOO_SMALL` | `ENOBUFS` | caller output capacity 부족 |
+| 208 | `INVALID_STATE` | `EINVAL`, `ESTALE`, `ESHUTDOWN` | receive lifecycle state 오류 |
 
 ##### `zlink_handler_result_t` (handler 등록)
 
@@ -4105,6 +4138,7 @@ ROUTER/`Received` reply는 HWM 없는 completion lane에 한 번 제출하므로
 | 605 | `NOT_FOUND` | `ENOENT` | endpoint 또는 peer routing id 없음 |
 | 606 | `CONFLICT` | `EADDRINUSE` | peer routing id가 둘 이상의 pipe와 충돌 |
 | 607 | `BUSY` | `EBUSY` | lifecycle owner가 수동 변경을 거절 |
+| 608 | `AUTH_FAILED` | `EACCES` | transport peer 인증 실패 |
 
 ##### `zlink_config_result_t` (option set/get, message lifecycle, snapshot, poller mutation, proxy, timer config)
 
@@ -4117,14 +4151,17 @@ ROUTER/`Received` reply는 HWM 없는 completion lane에 한 번 제출하므로
 | 704 | `INTERNAL_ERROR` | `EPROTO` 등 | 내부 config 실패 (상세는 `zlink_errno()`) |
 | 705 | `INVALID_STATE` | `EBUSY`, `ESHUTDOWN` | lifecycle 상태가 config를 거절 |
 | 706 | `NOT_FOUND` | `ENOENT` | local lookup 대상 없음 |
+| 707 | `CONFLICT` | `EEXIST` | 중복 identity, endpoint 또는 등록 값 |
+| 708 | `BUFFER_TOO_SMALL` | `ENOBUFS` | caller output capacity 부족, partial output 없음 |
+| 709 | `BUSY` | `EBUSY` | 같은 mutable object를 동시에 사용함 |
 
 ##### Non-OK 값 총합
 
-- 총 **59 개** non-OK 코드 (submit 13 + request 12 + recv 6 + handler 6 +
-  close 4 + bind 5 + connect 7 + config 6 = 59). 값 범위:
-  1–13, 101–112, 201–206, 301–306, 401–404, 501–505, 601–607, 701–706.
+- 총 **66 개** non-OK 코드 (submit 13 + request 13 + recv 8 + handler 6 +
+  close 4 + bind 5 + connect 8 + config 9 = 66). 값 범위:
+  1–13, 101–113, 201–208, 301–306, 401–404, 501–505, 601–608, 701–709.
 - 값 범위는 enum 간 겹치지 않으므로 단일 `int` 로 유일하게 구분된다.
-- 바인딩은 59 개 값 모두에 대해 언어별 에러 표현을 제공해야 한다. 누락 시
+- 바인딩은 66 개 값 모두에 대해 언어별 에러 표현을 제공해야 한다. 누락 시
   caller 가 해당 원인을 구분할 방법이 없다.
 
 언어별 enum/상수 매핑 스타일은 아래 `언어별 ErrorCode 매핑` 절을 참조한다.
@@ -4175,7 +4212,7 @@ zlink 고유 오류 코드. POSIX errno 와 충돌하지 않도록 `ZLINK_HAUSNU
 
 #### 언어별 ErrorCode 매핑
 
-각 바인딩은 Public Result Enum 카탈로그의 59 개 non-OK 코드를 언어별
+각 바인딩은 Public Result Enum 카탈로그의 66 개 non-OK 코드를 언어별
 enum/상수로 매핑하여 타입 안전한 분기를 제공한다.
 
 | 언어 | 처리 | ErrorCode 타입 | 접근 방식 |
@@ -4189,7 +4226,7 @@ enum/상수로 매핑하여 타입 안전한 분기를 제공한다.
 | Go | return | 통합 `ErrorCode` typed int 상수 | `ZlinkError.Code()` |
 | Rust | return (`Result`) | 통합 `ErrorCode` enum variant | `ZlinkError.code()` |
 
-- 통합 enum 의 각 variant 는 Public Result Enum 카탈로그의 59 개 값과
+- 통합 enum 의 각 variant 는 Public Result Enum 카탈로그의 66 개 값과
   1:1 대응한다. 원본 C 의 enum 분리 (submit / recv / handler / close /
   bind / connect / config / request) 를 유지하거나, 언어 관용구에 따라
   단일 enum 으로 통합해도 된다. 둘 중 어떤 스타일이든 **값은 누락 없이 모두
@@ -4208,19 +4245,16 @@ request-reply 는 Per-Function Error Type Hierarchy 의 **`RequestError`**
 
 오류 코드는 두 계층으로 나뉜다.
 
-**Wire error reply 코드** — peer 가 보내는 protocol-level error reply.
-wire 에서 사용 가능한 errno 는 3개로 제한된다: `ENOENT`, `EOPNOTSUPP`, `EINVAL`.
+**Wire error reply 코드** — peer가 보내는 protocol-level error reply의 첫 application part는
+0이 아닌 errno를 4 byte Big Endian 값으로 담는다. Core는 이를
+`zlink_request_result_t`로 정규화하며, 별도 public binding sender는 이 header나 errno part를
+직접 만들지 않는다. 알 수 없는 nonzero 값은 `INTERNAL_ERROR`로 정규화하고, part 누락·4 byte가
+아닌 크기·값 `0`은 `PROTOCOL_ERROR`로 정규화한다.
 
-**API/completion 코드** — core 가 callback 에 전달하는 errno:
-
-| errno | 발생 시점 |
-|-------|----------|
-| `ENOENT` | 대상 peer/spot 을 찾지 못함 (wire 또는 local) |
-| `EOPNOTSUPP` | peer 종류 불일치 또는 지원 안 함 |
-| `EINVAL` | 잘못된 파라미터 |
-| `ETIMEDOUT` | reply 대기 중 timeout 초과 |
-| `EPROTO` | envelope parse 실패 또는 잘못된 remote reply |
-| `EBUSY` | 수신 표면 충돌 (handler 중복 등록) |
+**API/completion 정규화** — Core는 internal 또는 wire errno를
+[Core Errors의 Request completion result](../../../core/doc/spec/core/03-errors.ko.md#3-request-completion-result)에
+정의된 `zlink_request_result_t`로 callback 전에 매핑한다. Binding은 이 result를 언어별
+`RequestError`로 바꾸며 errno별 분류를 다시 정의하지 않는다.
 
 **request 오류 (`RequestError`):**
 
@@ -5007,7 +5041,7 @@ perf 정책은 [`doc/perf/PERF_POLICY.md`](../../../doc/perf/PERF_POLICY.md)에�
    - 모든 public 타입이 검증, ownership, shape 규칙 중 하나 이상을 캡슐화한다.
    - `RecvPart`, `RecvRoutedPart`, `SubscribePart` 또는 언어별 동등 이름이
      public API에 없다. part 단위 수신은 runtime/internal substrate로만 존재한다.
-   - `requestFrame(...)`처럼 protocol envelope을 그대로 드러내는 helper가 public
+   - `requestFrame(...)`처럼 request-reply ZMP header metadata를 그대로 드러내는 helper가 public
      표면에 없다.
    - `dealer.reply(requestToken, parts)`처럼 DEALER의 송신 능력과 맞지 않는 reply
      helper가 public 표면에 없다.
@@ -5262,3 +5296,27 @@ compatibility alias를 현재 공개 API로 유지하면 안 된다.
 
 SpotNode에 router channel peer를 직접 붙이는 예전 C API는 공개 계약에 없다.
 framework adapter는 그 경로를 새 구현에 사용하면 안 된다.
+
+## 구현 및 contract test 검증 요구
+
+각 언어 binding의 공개 request·reply 표면, 공개 message ownership과 언어별 error 값만으로
+다음을 확인한다. 각 항목은 contract test 하나로 이어진다.
+
+**Payload와 metadata 경계**
+
+- 같은 application multipart를 binding의 request와 reply에 넘기면 상대 application은 같은
+  part 수, 순서와 byte를 관찰하며 protocol part나 ZMP metadata는 공개 payload에 나타나지 않는다.
+- Peer의 유효한 error reply에 errno part 뒤 payload가 있어도 public completion은 해당 언어의
+  error만 반환하고 reply payload를 노출하지 않는다.
+
+**Ownership과 오류 매핑**
+
+- C++ native request submit이 `submit_error_t`로 실패하면 public `message_t`는 caller에게 남고,
+  이를 raw send에 사용해도 request-reply kind가 나타나지 않는다.
+- Peer가 errno `EAGAIN` 또는 `ENOBUFS`인 유효한 wire error reply를 보내면 public request
+  completion은 `BACKPRESSURED`에 해당하는 error가 되며, Public Result Enum 카탈로그의 non-OK
+  값 66개가 모두 서로 구분된다.
+
+<!-- bindings-nav:start -->
+[스펙 목록](README.ko.md)
+<!-- bindings-nav:end -->

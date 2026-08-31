@@ -4,6 +4,7 @@
 #include "core/mailbox.hpp"
 #include "utils/err.hpp"
 #include "core/signaler.hpp"
+#include "utils/clock.hpp"
 
 #include <boost/asio.hpp>
 #include <algorithm>
@@ -18,6 +19,10 @@ zlink::mailbox_t::mailbox_t ()
     _handler_arg = NULL;
     _pre_post = NULL;
     _scheduled.store (false, std::memory_order_release);
+    _command_pending_hint.store (false, std::memory_order_release);
+    _command_wait_epoch = 0;
+    _command_waiters = 0;
+    _command_wait_signal_pending = false;
     _primary_signaler_required.store (false, std::memory_order_release);
 }
 
@@ -45,6 +50,13 @@ void zlink::mailbox_t::send (const command_t &cmd_)
     const bool ok = _cpipe.flush ();
     bool send_primary_signaler = true;
     if (!ok) {
+        //  Publish the command before its wakeup. Commands appended while the
+        //  receiver is active are consumed by that drain and need no hint.
+        _command_pending_hint.store (true, std::memory_order_release);
+        if (_command_waiters != 0) {
+            ++_command_wait_epoch;
+            _command_wait_cv.broadcast ();
+        }
         // Signal all registered signalers for ZLINK_INTERNAL_OPT_FD support
         for (std::vector<signaler_t *>::iterator it = _signalers.begin (), end = _signalers.end ();
              it != end; ++it) {
@@ -63,9 +75,24 @@ void zlink::mailbox_t::send (const command_t &cmd_)
     _sync.unlock ();
 }
 
+bool zlink::mailbox_t::take_command_pending_hint ()
+{
+    if (!_command_pending_hint.load (std::memory_order_acquire))
+        return false;
+    return _command_pending_hint.exchange (false, std::memory_order_acq_rel);
+}
+
 void zlink::mailbox_t::signal ()
 {
     _sync.lock ();
+    if (_command_waiters != 0) {
+        ++_command_wait_epoch;
+        _command_wait_cv.broadcast ();
+    } else {
+        //  signal() also transfers command ownership without enqueueing a
+        //  command. Preserve one such edge across waiter registration.
+        _command_wait_signal_pending = true;
+    }
     for (std::vector<signaler_t *>::iterator it = _signalers.begin (), end = _signalers.end ();
          it != end; ++it) {
         (*it)->send ();
@@ -77,6 +104,14 @@ void zlink::mailbox_t::signal ()
 
 int zlink::mailbox_t::recv (command_t *cmd_, int timeout_)
 {
+    //  An async command owner and a public socket poller can observe the same
+    //  primary descriptor. Consult the command pipe first so a poller that
+    //  consumed the wake cannot strand an already-published command.
+    if (!_active && _cpipe.check_read ()) {
+        (void) _signaler.recv_failable ();
+        _active = true;
+    }
+
     if (!_active) {
         signaler_t *shared_signaler = NULL;
         _sync.lock ();
@@ -131,6 +166,97 @@ int zlink::mailbox_t::recv (command_t *cmd_, int timeout_)
     _active = false;
     errno = EAGAIN;
     return -1;
+}
+
+zlink::mailbox_t::command_probe_result_t zlink::mailbox_t::probe_command (
+  bool (*predicate_) (const command_t &))
+{
+    zlink_assert (predicate_);
+
+    //  Mirror recv()'s nonblocking receiver-state transition, including the
+    //  primary wake drain. A sender can only append after this probe, so a
+    //  matched front remains the next command until the command owner pops it.
+    if (!_active && _cpipe.check_read ()) {
+        (void) _signaler.recv_failable ();
+        _active = true;
+    }
+    if (!_active)
+        return command_probe_empty;
+    if (!_cpipe.check_read ()) {
+        _active = false;
+        return command_probe_empty;
+    }
+
+    return _cpipe.probe (predicate_) ? command_probe_match
+                                     : command_probe_other;
+}
+
+int zlink::mailbox_t::wait_for_command_signal (int timeout_)
+{
+    clock_t clock;
+    const uint64_t deadline =
+      timeout_ > 0 ? clock.now_ms () + static_cast<uint64_t> (timeout_) : 0;
+
+    _sync.lock ();
+
+    //  send() publishes this hint under the same mutex before deciding
+    //  whether a registered waiter needs a CV wake. This closes the enqueue
+    //  versus waiter-registration race without adding work to active sends.
+    if (_command_pending_hint.load (std::memory_order_acquire)
+        || _command_wait_signal_pending) {
+        _command_wait_signal_pending = false;
+        _sync.unlock ();
+        return 0;
+    }
+    if (timeout_ == 0) {
+        _sync.unlock ();
+        errno = EAGAIN;
+        return -1;
+    }
+
+    const uint64_t observed_epoch = _command_wait_epoch;
+    ++_command_waiters;
+    int rc = 0;
+    while (_command_wait_epoch == observed_epoch
+           && !_command_pending_hint.load (std::memory_order_acquire)
+           && !_command_wait_signal_pending) {
+        int wait_timeout = timeout_;
+        if (timeout_ > 0) {
+            const uint64_t now = clock.now_ms ();
+            if (now >= deadline) {
+                errno = EAGAIN;
+                rc = -1;
+                break;
+            }
+            wait_timeout = static_cast<int> (deadline - now);
+        }
+        rc = _command_wait_cv.wait (&_sync, wait_timeout);
+        if (rc != 0)
+            break;
+    }
+    --_command_waiters;
+    if (rc == 0)
+        _command_wait_signal_pending = false;
+    _sync.unlock ();
+
+    return rc;
+}
+
+#ifdef ZLINK_BUILD_TESTS
+uint32_t zlink::mailbox_t::test_command_waiter_count ()
+{
+    _sync.lock ();
+    const uint32_t waiters = _command_waiters;
+    _sync.unlock ();
+    return waiters;
+}
+#endif
+
+void zlink::mailbox_t::drain_primary_signaler ()
+{
+    while (_signaler.recv_failable () == 0) {
+    }
+    errno_assert (errno == EAGAIN);
 }
 
 bool zlink::mailbox_t::valid () const
@@ -226,7 +352,10 @@ void zlink::mailbox_t::remove_signaler (signaler_t *signaler_)
 void zlink::mailbox_t::rearm_primary_signaler ()
 {
     _sync.lock ();
-    _signaler.send ();
+    //  This edge exists only for callers that obtained the primary fd. Avoid
+    //  a signaler syscall for async-owned sockets that have no public poller.
+    if (_primary_signaler_required.load (std::memory_order_acquire))
+        _signaler.send ();
     _sync.unlock ();
 }
 

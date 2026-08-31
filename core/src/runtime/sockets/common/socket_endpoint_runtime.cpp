@@ -38,6 +38,16 @@ const zlink::pipe_t *zlink::socket_endpoint_runtime_t::attached_pipe (size_t ind
     return attached_pipes[index_];
 }
 
+void zlink::socket_endpoint_runtime_t::disable_transport_pair_reconnects ()
+{
+    for (socket_endpoints_t::iterator it = endpoints.begin (),
+                                      end = endpoints.end ();
+         it != end; ++it) {
+        if (it->second.transport_pair_state)
+            it->second.transport_pair_state->disable_reconnect ();
+    }
+}
+
 void zlink::socket_endpoint_runtime_t::store_last_recv_source_rid (
   const zlink_routing_id_t *source_rid_)
 {

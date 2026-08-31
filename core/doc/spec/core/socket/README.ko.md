@@ -247,7 +247,7 @@ typedef enum zlink_request_result_t
     ZLINK_REQUEST_TIMED_OUT       = 101,   // 설정된 시간 안에 reply가 도착하지 않음
     ZLINK_REQUEST_NOT_FOUND       = 102,   // 대상이 없어 error reply로 완료됨
     ZLINK_REQUEST_TERMINATED      = 103,   // terminal reply 전에 Context 또는 socket이 종료됨 (ETERM 또는 ESHUTDOWN)
-    ZLINK_REQUEST_PROTOCOL_ERROR  = 104,   // reply envelope 또는 error reply payload가 잘못됨
+    ZLINK_REQUEST_PROTOCOL_ERROR  = 104,   // reply metadata 또는 error reply payload가 잘못됨
     ZLINK_REQUEST_INTERNAL_ERROR  = 105,   // 더 세분화된 public bucket 없이 request completion이 실패함
     ZLINK_REQUEST_REJECTED        = 106,   // target이 request를 명시적으로 거부함
     ZLINK_REQUEST_CONFLICT        = 107,   // request가 현재 routing 또는 operation 상태와 충돌함
@@ -373,10 +373,13 @@ typedef void (*zlink_reply_handler_fn) (
 비동기 request-reply 완료 callback이다. 응답이 도착하거나 요청이 timeout되면
 호출된다. timeout 시 `result_`는 `ZLINK_REQUEST_TIMED_OUT`이고 `parts_`는
 NULL이다. 성공 시 `result_`는 `ZLINK_REQUEST_OK`이고 모든 message part의
-소유권이 callback으로 이전된다. `result_`는 submit 실패가 아니라
-`zlink_request_result_t` 값으로 request completion 결과를 나타낸다. 이
-callback은 data-plane receive가 아니라 async operation completion 통지 축이며,
-`DEALER`/`ROUTER`의 request API에서만 사용된다.
+소유권이 callback으로 이전된다. 유효한 wire error reply이면 `result_`는 첫 4 byte Big Endian
+errno를 매핑한 non-OK 값이고, `parts_`는 errno part 뒤의 payload이며 그 message 소유권도
+callback으로 이전된다. Error reply의 errno part가 없거나 크기가 4 byte가 아니거나 값이 `0`이면
+`result_`는 `ZLINK_REQUEST_PROTOCOL_ERROR`이고 `part_count_`는 `0`이다. `result_`는 submit
+실패가 아니라 `zlink_request_result_t` 값으로 request completion 결과를 나타낸다. 이 callback은
+data-plane receive가 아니라 async operation completion 통지 축이며, `DEALER`/`ROUTER`의
+request API에서만 사용된다.
 
 socket 하나에서 callback이 끝나지 않은 request는 최대 65,536건이다. Core는
 request를 전송하기 전에 completion slot을 예약한다. slot이 없으면 submit 결과는
@@ -413,7 +416,7 @@ typedef enum zlink_option_t {
   ZLINK_OPT_RECONNECT_IVL             = 0x300B,  // 초기 재연결 간격 (ms, int)
   ZLINK_OPT_BACKLOG                   = 0x300C,  // listener backlog (int)
   ZLINK_OPT_RECONNECT_IVL_MAX         = 0x300D,  // 최대 재연결 간격 (ms, int; 0=IVL만 사용)
-  ZLINK_OPT_MAXMSGSIZE                = 0x300E,  // 최대 인바운드 message 크기 (int64_t; -1=무제한)
+  ZLINK_OPT_MAXMSGSIZE                = 0x300E,  // 최대 인바운드 message 크기 (int64_t; 양수=상한, 0 이하=무제한, 기본값 -1)
   ZLINK_OPT_SNDHWM                    = 0x300F,  // directional send pipe의 accounted byte HWM (uint64_t; 기본값 4,096,000, 0=무제한)
   ZLINK_OPT_RCVHWM                    = 0x3010,  // directional receive pipe의 accounted byte HWM (uint64_t; 기본값 4,096,000, 0=무제한)
   ZLINK_OPT_MULTICAST_HOPS            = 0x3011,  // multicast TTL (int)
@@ -426,7 +429,7 @@ typedef enum zlink_option_t {
   ZLINK_OPT_TCP_KEEPALIVE_INTVL       = 0x3018,  // TCP_KEEPINTVL (초, int; -1=OS 기본값)
   ZLINK_OPT_IMMEDIATE                 = 0x3019,  // 완료된 연결에만 message queue 사용 (int)
   ZLINK_OPT_IPV6                      = 0x301A,  // socket에서 IPv6 활성화 (int; 0=off, 양수=on, getter는 0/1 반환)
-  ZLINK_OPT_CONFLATE                  = 0x301B,  // topic당 최신 message만 유지 (int)
+  ZLINK_OPT_CONFLATE                  = 0x301B,  // PUB/SUB에서 topic당 최신 message만 유지 (int; DEALER는 활성화 불가)
   ZLINK_OPT_TOS                       = 0x301C,  // IP Type-of-Service 값 (int)
   ZLINK_OPT_HANDSHAKE_IVL             = 0x301D,  // ZMTP handshake timeout (ms, int)
   ZLINK_OPT_BLOCKY                    = 0x301E,  // socket option API가 지원하지 않는 식별자 — 아래 설명 참조
@@ -461,6 +464,16 @@ raw socket과 discovery에 적용된다.
 `zlink_set_option()`/`zlink_get_option()`은 `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`을
 반환하며, context 종료 동작은 `ZLINK_CTX_OPT_BLOCKY`로 설정한다 (`int`, 0=off, 양수=on,
 getter는 0/1 반환).
+
+#### Conflation
+
+`ZLINK_OPT_CONFLATE`는 PUB와 SUB에서 계속 활성화할 수 있고 getter가 `1`을 반환한다. DEALER에서
+`1`을 설정하면 `ZLINK_CONFIG_NOT_SUPPORTED`와 `ENOTSUP`이고, `0` 설정은 no-op으로 성공하며
+getter는 `0`을 반환한다.
+
+DEALER는 같은 Application pipe로 Application record와 내부 protocol control을 전달한다.
+Frame 단위 conflation은 두 종류를 함께 보존할 수 없어 최신 Application record 또는 필요한
+control 중 하나를 유실할 수 있다. 따라서 DEALER는 부분적인 conflation을 제공하지 않는다.
 
 #### Transport/Buffer
 
@@ -1216,6 +1229,8 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 - `ZLINK_OPT_SNDHWM`·`ZLINK_OPT_RCVHWM`은 set·get 모두 정확히 `sizeof(uint64_t)` 크기만 받는다. 4-byte를 포함한 그 밖의 크기는 값을 잘라 쓰거나 일부만 채우지 않고 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로 실패하며, get 성공 시 `*optvallen_`은 `sizeof(uint64_t)`를 유지한다.
 - 제거된 socket option 값 `0x3034`는 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로 실패한다.
 - `ZLINK_OPT_BLOCKY`를 `zlink_set_option()`/`zlink_get_option()`에 주면 `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`이다.
+- DEALER에서 `ZLINK_OPT_CONFLATE=1`은 `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`이고, `0` 설정은
+  성공하며 getter는 계속 `0`이다. PUB와 SUB는 `1`을 받아들이고 getter도 `1`을 반환한다.
 - 알 수 없는 옵션, 범위 밖 값, 잘못된 byte-count 크기는 `EINVAL`, 종료된 context는 `ETERM`이다.
 
 **HWM admission** ([Transport/Buffer](#transportbuffer) 참조)
@@ -1251,8 +1266,13 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 **request completion**
 - socket 하나의 미완료 request가 65,536건에 도달하면 다음 submit은 `ZLINK_SUBMIT_BACKPRESSURED`와 `EAGAIN`이다.
 - request timeout 시 `zlink_reply_handler_fn`의 `result_`는 `ZLINK_REQUEST_TIMED_OUT`이고 `parts_`는 NULL이며, 성공 시 `ZLINK_REQUEST_OK`와 함께 part 소유권이 callback으로 이전된다.
+- 유효한 wire error reply는 errno를 매핑한 non-OK result와 errno part 뒤의 payload를 callback에 전달하며, 잘못된 errno part는 `ZLINK_REQUEST_PROTOCOL_ERROR`와 part 수 `0`을 전달한다.
 - submit이 실패하면 handler는 호출되지 않고, `ZLINK_SUBMIT_OK` 뒤에는 reply 또는 terminal 결과로 정확히 한 번 호출된다.
 
 **receive-flow 상태**
 - 현재 상태를 다시 설정하는 `zlink_socket_set_receive_flow_state`는 성공하고 새로 보내는 것이 없다.
 - completion lane이 없는 socket 유형은 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하며 기존 byte HWM과 transport backpressure를 유지한다.
+
+<!-- zlink-nav:start -->
+[Core 스펙 목차](../README.ko.md) | [이전: Runtime 경계](../08-runtime-boundary.ko.md) | [다음: PAIR](01-pair.ko.md)
+<!-- zlink-nav:end -->

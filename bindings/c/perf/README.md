@@ -4,12 +4,13 @@ This directory contains the standalone C benchmark runner and comparison tools.
 
 ## Core Runtime Rule
 
-`run_benchmarks.sh` and `run_benchmarks_multi.sh` download and verify the Core
-release selected by the repository `VERSION` file. On Windows, the matching
-PowerShell runners use the same release prefix. The normalized prefix is
-cached by `scripts/local-package/core/fetch-release.sh` or
-`scripts/local-package/core/fetch-release.ps1`, so a separate worktree does not
-need a Core source build before running binding performance.
+The Unix shell runners use the current workspace `core/build` runtime by
+default. Pass `--core-version MAJOR.MINOR.PATCH` to download and verify that
+released Core instead. The Windows PowerShell runners select the same local
+mode with `ZLINK_CORE_SOURCE=local`; their default remains the verified release
+package. A downloaded release prefix is cached by
+`scripts/local-package/core/fetch-release.sh` or
+`scripts/local-package/core/fetch-release.ps1`.
 
 ```bash
 ./scripts/local-package/core/fetch-release.sh --version 0.13.1
@@ -17,9 +18,9 @@ need a Core source build before running binding performance.
 ```
 
 Before running benchmarks, the script prints the resolved `libzlink.so` path.
-In the default release mode, source mtime checks and Core auto-build are disabled.
-To benchmark an in-progress Core source tree, set `ZLINK_CORE_SOURCE=local`; that
-mode uses `core/build` and retains the stale-runtime check.
+Local mode rebuilds `core/build` when required and rejects a runtime older than
+`core/src` or `core/include`. Explicit release mode disables source mtime checks
+because it verifies and uses the downloaded package instead.
 
 ## Cross-Binding Handshake Reference
 

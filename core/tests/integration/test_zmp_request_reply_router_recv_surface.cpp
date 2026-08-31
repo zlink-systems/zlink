@@ -2,6 +2,8 @@
 
 #include "../testutil.hpp"
 #include "../testutil_unity.hpp"
+#include "api/socket/socket_api_internal.hpp"
+#include "api/socket/request_reply_protocol_internal.hpp"
 #include <string>
 #include <chrono>
 #include <condition_variable>
@@ -224,6 +226,129 @@ void assert_dealer_request_visible_through_router_recv (bool prime_recv_plane_)
     test_context_socket_close_zero_linger (router);
 }
 
+void test_raw_dealer_message_is_not_promoted_to_router_request ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (router);
+    TEST_ASSERT_NOT_NULL (dealer);
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer, "dealer-raw", 10));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://zmp-router-recv-surface-raw"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://zmp-router-recv-surface-raw"));
+    msleep (SETTLE_TIME);
+
+    zlink_msg_t raw;
+    init_string_part (&raw, "ordinary-data");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_part (dealer, &raw, ZLINK_SEND_FLAGS_NONE,
+                       ZLINK_PART_FINAL));
+
+    const zlink_routing_id_t *source_rid = NULL;
+    uint64_t request_seq = UINT64_MAX;
+    zlink_msg_t *parts = NULL;
+    size_t part_count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_router_recv (router, &source_rid, &request_seq, &parts,
+                         &part_count, ZLINK_RECV_FLAGS_NONE));
+
+    TEST_ASSERT_NOT_NULL (source_rid);
+    TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
+    TEST_ASSERT_EQUAL_UINT64 (1, part_count);
+    TEST_ASSERT_EQUAL_STRING_LEN (
+      "dealer-raw", reinterpret_cast<const char *> (source_rid->data),
+      source_rid->size);
+    TEST_ASSERT_EQUAL_STRING ("ordinary-data",
+                              msg_to_string (&parts[0]).c_str ());
+
+    unsigned char retained_kind = 0xff;
+    uint64_t retained_sequence = UINT64_MAX;
+    TEST_ASSERT_FALSE (
+      reinterpret_cast<zlink::msg_t *> (&parts[0])
+        ->get_request_reply_metadata (&retained_kind, &retained_sequence));
+    zlink_multipart_close (parts, part_count);
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
+void test_router_raw_receive_surfaces_reject_metadata_after_first_part ()
+{
+    for (int aggregate = 0; aggregate <= 1; ++aggregate) {
+        void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+        void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+        TEST_ASSERT_NOT_NULL (router);
+        TEST_ASSERT_NOT_NULL (dealer);
+
+        char endpoint[96];
+        snprintf (endpoint, sizeof (endpoint),
+                  "inproc://zmp-router-later-kind-%d", aggregate);
+        char routing_id[32];
+        snprintf (routing_id, sizeof (routing_id), "router-later-%d",
+                  aggregate);
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_routing_id (dealer, routing_id, strlen (routing_id)));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (router, endpoint));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
+        msleep (SETTLE_TIME);
+
+        zlink_msg_t first;
+        init_string_part (&first, "ordinary-first");
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_SUBMIT_OK,
+          zlink_send_part (dealer, &first, ZLINK_SEND_FLAGS_NONE,
+                           ZLINK_PART_MORE));
+        zlink_msg_t later;
+        init_string_part (&later, "metadata-later");
+        TEST_ASSERT_SUCCESS_ERRNO (
+          reinterpret_cast<zlink::msg_t *> (&later)
+            ->set_request_reply_metadata (
+              zlink::request_reply::reply_type, 700 + aggregate));
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_SUBMIT_OK,
+          zlink_send_part (dealer, &later, ZLINK_SEND_FLAGS_NONE,
+                           ZLINK_PART_FINAL));
+
+        errno = 0;
+        int observed_errno = 0;
+        if (aggregate) {
+            const zlink_routing_id_t *source_rid = NULL;
+            uint64_t request_seq = UINT64_MAX;
+            zlink_msg_t *parts = NULL;
+            size_t part_count = 0;
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_RECV_INTERNAL_ERROR,
+              zlink_router_recv (router, &source_rid, &request_seq, &parts,
+                                 &part_count, ZLINK_RECV_FLAGS_NONE));
+            observed_errno = errno;
+            TEST_ASSERT_NULL (parts);
+            TEST_ASSERT_EQUAL_UINT64 (0, part_count);
+        } else {
+            const zlink_routing_id_t *source_rid = NULL;
+            uint64_t request_seq = UINT64_MAX;
+            zlink_msg_t part;
+            TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
+            zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_RECV_INTERNAL_ERROR,
+              zlink_router_recv_part (
+                router, &source_rid, &request_seq, &part, &has_more,
+                ZLINK_RECV_FLAGS_NONE));
+            observed_errno = errno;
+            TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&part));
+            TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+        }
+        TEST_ASSERT_EQUAL_INT (EPROTO, observed_errno);
+
+        test_context_socket_close_zero_linger (dealer);
+        test_context_socket_close_zero_linger (router);
+    }
+}
+
 void test_dealer_request_is_visible_through_router_recv ()
 {
     assert_dealer_request_visible_through_router_recv (true);
@@ -421,6 +546,173 @@ void test_dealer_request_is_visible_through_router_recv_over_tcp ()
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
 }
+
+void test_router_recv_part_v2_preserves_pair_identity_across_multipart ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (router);
+    TEST_ASSERT_NOT_NULL (dealer);
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer, "dealer-v2", 9));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://zmp-router-recv-v2-multipart"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://zmp-router-recv-v2-multipart"));
+    msleep (SETTLE_TIME);
+
+    const char *const expected_parts[] = {"v2-head", "v2-body", "v2-tail"};
+    zlink_msg_t request_parts[3];
+    for (size_t i = 0; i < 3; ++i) {
+        zlink_msg_init (&request_parts[i]);
+        init_string_part (&request_parts[i], expected_parts[i]);
+    }
+    reply_probe_t reply_probe;
+    reply_probe.progress_handle = dealer;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_request (dealer, request_parts, 3, &capture_reply,
+                            &reply_probe, ZLINK_SEND_FLAGS_NONE, 3000));
+
+    uint64_t record_request_seq = 0;
+    uint64_t record_pair_id = 0;
+    uint64_t record_pair_generation = 0;
+    zlink_routing_id_t reply_rid;
+    memset (&reply_rid, 0, sizeof (reply_rid));
+    for (size_t i = 0; i < 3; ++i) {
+        const zlink_routing_id_t *source_rid = NULL;
+        uint64_t request_seq = 0;
+        uint64_t pair_id = 0;
+        uint64_t pair_generation = 0;
+        zlink_msg_t part;
+        zlink_msg_init (&part);
+        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_RECV_OK,
+          zlink_router_recv_part_v2 (
+            router, &source_rid, &request_seq, &pair_id, &pair_generation,
+            &part, &has_more, ZLINK_RECV_FLAGS_NONE));
+        TEST_ASSERT_NOT_NULL (source_rid);
+        TEST_ASSERT_TRUE (request_seq != 0);
+        TEST_ASSERT_TRUE (pair_id != 0);
+        TEST_ASSERT_TRUE (pair_generation != 0);
+        if (i == 0) {
+            record_request_seq = request_seq;
+            record_pair_id = pair_id;
+            record_pair_generation = pair_generation;
+            reply_rid = *source_rid;
+        } else {
+            TEST_ASSERT_EQUAL_UINT64 (record_request_seq, request_seq);
+            TEST_ASSERT_EQUAL_UINT64 (record_pair_id, pair_id);
+            TEST_ASSERT_EQUAL_UINT64 (record_pair_generation,
+                                      pair_generation);
+        }
+        TEST_ASSERT_EQUAL_STRING_LEN (
+          "dealer-v2", reinterpret_cast<const char *> (source_rid->data),
+          source_rid->size);
+        TEST_ASSERT_EQUAL_STRING (expected_parts[i],
+                                  msg_to_string (&part).c_str ());
+        TEST_ASSERT_EQUAL_INT (i + 1 == 3 ? ZLINK_PART_FINAL
+                                          : ZLINK_PART_MORE,
+                               has_more);
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+    }
+
+    zlink_msg_t reply;
+    init_string_part (&reply, "v2-reply");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_router_reply (router, &reply_rid, record_request_seq, &reply, 1));
+    TEST_ASSERT_TRUE (wait_for_reply (&reply_probe));
+    {
+        std::lock_guard<std::mutex> lock (reply_probe.mutex);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, reply_probe.result);
+        TEST_ASSERT_EQUAL_STRING ("v2-reply", reply_probe.payload.c_str ());
+    }
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
+void test_router_recv_part_v2_snapshots_pair_before_source_pin_failure ()
+{
+    for (size_t part_count = 1; part_count <= 3; part_count += 2) {
+        void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+        void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+        TEST_ASSERT_NOT_NULL (router);
+        TEST_ASSERT_NOT_NULL (dealer);
+
+        char endpoint[96];
+        snprintf (endpoint, sizeof (endpoint),
+                  "inproc://zmp-router-v2-pin-failure-%zu", part_count);
+        char routing_id[32];
+        snprintf (routing_id, sizeof (routing_id), "pin-failure-%zu",
+                  part_count);
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_routing_id (dealer, routing_id, strlen (routing_id)));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (router, endpoint));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
+        msleep (SETTLE_TIME);
+
+        for (size_t i = 0; i < part_count; ++i) {
+            char payload[32];
+            snprintf (payload, sizeof (payload), "ordinary-%zu", i);
+            zlink_msg_t part;
+            init_string_part (&part, payload);
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_SUBMIT_OK,
+              zlink_send_part (
+                dealer, &part, ZLINK_SEND_FLAGS_NONE,
+                i + 1 == part_count ? ZLINK_PART_FINAL : ZLINK_PART_MORE));
+        }
+
+        socket_handle_t router_handle = as_socket_handle (router);
+        TEST_ASSERT_NOT_NULL (router_handle.socket);
+        router_handle.socket->test_fail_next_recv_pipe_pin ();
+
+        uint64_t record_pair_id = 0;
+        uint64_t record_pair_generation = 0;
+        for (size_t i = 0; i < part_count; ++i) {
+            const zlink_routing_id_t *source_rid = NULL;
+            uint64_t request_seq = UINT64_MAX;
+            uint64_t pair_id = 0;
+            uint64_t pair_generation = 0;
+            zlink_msg_t part;
+            TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
+            zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_RECV_OK,
+              zlink_router_recv_part_v2 (
+                router, &source_rid, &request_seq, &pair_id,
+                &pair_generation, &part, &has_more,
+                ZLINK_RECV_FLAGS_NONE));
+            TEST_ASSERT_NOT_NULL (source_rid);
+            TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
+            TEST_ASSERT_TRUE (pair_id != 0);
+            TEST_ASSERT_TRUE (pair_generation != 0);
+            if (i == 0) {
+                record_pair_id = pair_id;
+                record_pair_generation = pair_generation;
+            } else {
+                TEST_ASSERT_EQUAL_UINT64 (record_pair_id, pair_id);
+                TEST_ASSERT_EQUAL_UINT64 (record_pair_generation,
+                                          pair_generation);
+            }
+            char expected[32];
+            snprintf (expected, sizeof (expected), "ordinary-%zu", i);
+            TEST_ASSERT_EQUAL_STRING (expected, msg_to_string (&part).c_str ());
+            TEST_ASSERT_EQUAL_INT (
+              i + 1 == part_count ? ZLINK_PART_FINAL : ZLINK_PART_MORE,
+              has_more);
+            TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+        }
+
+        TEST_ASSERT_FALSE (router_handle.socket->has_request_reply_state ());
+        router_handle = socket_handle_t ();
+        test_context_socket_close_zero_linger (dealer);
+        test_context_socket_close_zero_linger (router);
+    }
+}
 }
 
 int main ()
@@ -430,10 +722,16 @@ int main ()
     setup_test_environment ();
 
     RUN_TEST (test_dealer_request_is_visible_through_router_recv);
+    RUN_TEST (test_raw_dealer_message_is_not_promoted_to_router_request);
+    RUN_TEST (
+      test_router_raw_receive_surfaces_reject_metadata_after_first_part);
     RUN_TEST (test_dealer_request_is_visible_through_router_recv_without_priming);
     RUN_TEST (test_dealer_request_is_visible_through_nonblocking_router_recv_polling);
     RUN_TEST (test_dealer_request_is_visible_through_first_blocking_router_recv);
     RUN_TEST (test_dealer_request_is_visible_through_router_recv_over_tcp);
+    RUN_TEST (test_router_recv_part_v2_preserves_pair_identity_across_multipart);
+    RUN_TEST (
+      test_router_recv_part_v2_snapshots_pair_before_source_pin_failure);
 
     const int rc = UNITY_END ();
     fflush (NULL);

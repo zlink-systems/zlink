@@ -69,8 +69,42 @@ dealer_reply_target_t::dealer_reply_target_t () :
 {
 }
 
-router_reply_target_t::router_reply_target_t () : pipe (NULL), checked_out (false)
+router_reply_target_t::router_reply_target_t () :
+    pipe (NULL),
+    source_pipe_identity (NULL),
+    wire_request_seq (0),
+    transport_pair_id (0),
+    transport_pair_generation (0),
+    checked_out (false)
 {
+}
+
+router_reply_alias_key_t::router_reply_alias_key_t () :
+    pipe (NULL),
+    transport_pair_id (0),
+    transport_pair_generation (0),
+    wire_request_seq (0)
+{
+}
+
+bool router_reply_alias_key_t::operator== (
+  const router_reply_alias_key_t &other_) const
+{
+    return pipe == other_.pipe && transport_pair_id == other_.transport_pair_id
+           && transport_pair_generation == other_.transport_pair_generation
+           && wire_request_seq == other_.wire_request_seq;
+}
+
+size_t router_reply_alias_key_hash_t::operator() (
+  const router_reply_alias_key_t &key_) const
+{
+    size_t seed = std::hash<zlink::pipe_t *> () (key_.pipe);
+    seed = hash_combine (
+      seed, std::hash<uint64_t> () (key_.transport_pair_id));
+    seed = hash_combine (
+      seed, std::hash<uint64_t> () (key_.transport_pair_generation));
+    return hash_combine (
+      seed, std::hash<uint64_t> () (key_.wire_request_seq));
 }
 
 socket_request_reply_state_t::socket_request_reply_state_t (zlink::socket_base_t *socket_,
@@ -82,6 +116,7 @@ socket_request_reply_state_t::socket_request_reply_state_t (zlink::socket_base_t
     reply_target_reservations (0),
     reply_target_checkouts (0),
     dealer_next_reply_token (1),
+    router_next_reply_token (1),
     closing (false)
 {
 }

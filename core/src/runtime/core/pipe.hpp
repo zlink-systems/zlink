@@ -24,6 +24,14 @@
 namespace zlink
 {
 class pipe_t;
+enum pipe_write_observer_phase_t
+{
+    pipe_write_observer_prepare,
+    pipe_write_observer_commit,
+    pipe_write_observer_finish
+};
+typedef bool (*pipe_write_observer_fn) (
+  pipe_t *pipe_, void *userdata_, pipe_write_observer_phase_t phase_);
 
 enum pipe_write_status_t
 {
@@ -56,22 +64,23 @@ enum flow_state_transition_t
 
 struct transport_lifetime_t
 {
-    explicit transport_lifetime_t (uint64_t connection_id_) :
+    transport_lifetime_t (uint64_t connection_id_,
+                          uint64_t route_incarnation_id_) :
         connection_id (connection_id_),
+        route_incarnation_id (route_incarnation_id_),
         stream_routing_id (0),
         stream_route_closed (false),
         stream_connect_event_emitted (false)
     {
     }
     std::atomic<uint64_t> connection_id;
+    const uint64_t route_incarnation_id;
     std::atomic<uint32_t> stream_routing_id;
     std::atomic<bool> stream_route_closed;
     std::atomic<bool> stream_connect_event_emitted;
-    // STREAM parser state and callback serialization belong to the physical
-    // transport, not to either pipe endpoint. The session endpoint remains
-    // alive while an I/O callback runs, so this shared owner keeps the gate
-    // valid when the socket endpoint terminates concurrently.
-    fast_mutex_t stream_dispatch_sync;
+    // Rare physical-transport generation changes and STREAM parser/callback
+    // publication share this gate. Hot connection-id reads remain atomic.
+    fast_mutex_t transport_sync;
     pipe_stream_packet_state_t stream_packet_state;
 };
 
@@ -122,6 +131,15 @@ struct i_pipe_events
         LIBZLINK_UNUSED (epoch_);
         LIBZLINK_UNUSED (actual_writable_);
     }
+
+    //  Delivers one peer-weight control command on the destination pipe's
+    //  owner thread. Socket sinks validate pair identity before mutating their
+    //  scheduler; other pipe owners ignore this control.
+    virtual void peer_weight_received (zlink::pipe_t *pipe_, uint32_t weight_)
+    {
+        LIBZLINK_UNUSED (pipe_);
+        LIBZLINK_UNUSED (weight_);
+    }
 };
 
 //  Note that pipe can be stored in three different arrays.
@@ -171,6 +189,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Returns a lifetime-pinned peer snapshot for control/monitor paths. The
     //  caller must release_lifetime_ref() after its last dereference.
     pipe_t *retain_peer_snapshot () const;
+    bool is_session_pipe () const;
     void set_peer_routing_id (const unsigned char *data_, size_t size_);
     void set_transport_peer_identity (const unsigned char *data_, size_t size_);
     const blob_t &get_transport_peer_identity () const;
@@ -178,6 +197,11 @@ class pipe_t ZLINK_FINAL : public object_t,
     uint64_t get_msgs_read () const;
     uint64_t get_bytes_written () const;
     uint64_t get_bytes_read () const;
+    void record_peer_weight (uint64_t connection_id_, uint32_t weight_);
+    bool record_peer_weight_if_current (uint64_t connection_id_,
+                                        uint32_t weight_);
+    bool peer_weight (uint32_t *weight_out_,
+                      uint64_t *connection_id_out_ = NULL) const;
     uint64_t get_snd_pending_msgs () const;
     uint64_t get_rcv_pending_msgs_approx () const;
     uint64_t get_snd_pending_bytes () const;
@@ -202,7 +226,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     void reset_connection_ready_event_emitted ();
     stream_packet_state_t &stream_packet_state ();
     const stream_packet_state_t &stream_packet_state () const;
-    fast_mutex_t &stream_dispatch_sync ();
+    fast_mutex_t &transport_sync ();
     void reset_stream_packet_state ();
     void close_stream_route ();
     bool stream_route_closed () const;
@@ -242,6 +266,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     // until the pair is validated.
     void hold_writes_until_transport_pair_ready ();
     bool release_writes_for_transport_pair ();
+    bool transport_pair_writes_released () const;
 
     //  Remote receive-flow state, carried by the paired completion lane. It is
     //  an independent send blocker: it never touches the byte HWM counters and
@@ -259,6 +284,15 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  byte-HWM admission is still checked while the part is recorded.
     bool write_owner_started_message (
       const msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL);
+    //  Request correlation must be visible after this exact candidate has
+    //  accepted the message but before the first application frame is made
+    //  observable. The prepare phase owns the request-state lock before the
+    //  pipe lock is acquired; commit and the optional final flush then happen
+    //  under that same pipe lock so termination cannot pass between them.
+    bool write_owner_started_message_observed (
+      const msg_t *msg_, pipe_write_observer_fn observer_,
+      void *observer_userdata_,
+      pipe_message_admission_t *admission_out_ = NULL);
     //  Applies an absolute remote state on the pipe's own thread and reports
     //  whether the caller must publish the write-activated edge. Callers that
     //  already run on that thread use this directly, so the state is in effect
@@ -316,6 +350,13 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool write_routing_id_and_flush (const msg_t *msg_);
     bool write_transport_probe_and_flush (const msg_t *msg_);
 
+    //  Accepts the latest absolute peer-weight command on an Application
+    //  session pipe after pair admission. It writes immediately at a message
+    //  boundary, or stages the weight behind an open multipart and appends it
+    //  only after final commit/rollback. Policy bypasses Application HWM and
+    //  remote PAUSE, but never the pair hold or ypipe commit boundary.
+    bool write_peer_weight_control_and_flush (uint32_t weight_);
+
     //  Writes a message and flushes it downstream under the same pipe lock.
     //  Use this for final single-part send hot paths to avoid paying for
     //  separate write/flush lock acquisitions.
@@ -334,6 +375,10 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Fast path for a single non-routing-id message that is always flushed.
     bool write_single_message_and_flush_no_recursive_hwm_check (
       const msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL);
+    bool write_message_observed (
+      const msg_t *msg_, pipe_write_observer_fn observer_,
+      void *observer_userdata_,
+      pipe_message_admission_t *admission_out_ = NULL);
 
 
     //  Remove unfinished parts of the outbound message from the pipe.
@@ -387,6 +432,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     const endpoint_uri_pair_t &get_endpoint_pair () const;
     void set_transport_connection_id (uint64_t connection_id_);
     uint64_t get_transport_connection_id () const;
+    uint64_t get_route_incarnation_id () const;
     void set_transport_pair (transport_lane_t lane_,
                              uint64_t pair_id_,
                              uint64_t generation_);
@@ -405,9 +451,19 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool retain_lifetime_ref ();
     void release_lifetime_ref ();
     bool has_completed_termination () const;
+    //  Completion-lane drains can run outside the socket receive mutex. They
+    //  retain the inbound queue separately so process_pipe_term_ack() can
+    //  report socket termination immediately while deferring queue deletion
+    //  until the last in-flight reader exits.
+    bool retain_inbound_read_ref ();
+    void release_inbound_read_ref ();
+    //  A request/reply target may be published only while the application
+    //  pipe is still active. Callers hold a lifetime ref while checking this.
+    bool is_lifecycle_active () const;
 
   private:
     friend class ctx_physical_queue_registry_t;
+    friend class socket_base_t;
 
     //  Type of the underlying lock-free pipe.
     typedef ypipe_base_t<msg_t> upipe_t;
@@ -415,6 +471,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Command handlers.
     void process_flow_state (unsigned char state_,
                              uint64_t epoch_) ZLINK_OVERRIDE;
+    void process_peer_weight (uint32_t weight_,
+                              uint64_t connection_id_) ZLINK_OVERRIDE;
     void process_activate_read () ZLINK_OVERRIDE;
     void process_activate_write (uint64_t generation_,
                                  uint64_t msgs_read_,
@@ -447,7 +505,7 @@ class pipe_t ZLINK_FINAL : public object_t,
       pipe_message_admission_t *admission_out_) const;
     bool hwm_credit_ready_unlocked (
       pipe_message_admission_t *admission_out_);
-    void rollback_unlocked ();
+    void rollback_unlocked (bool publish_peer_control_ = true);
     void flush_unlocked ();
     static uint64_t frame_accounted_bytes (const msg_t *msg_);
     static uint64_t committed_frame_accounted_bytes_ref (const msg_t &msg_);
@@ -456,6 +514,9 @@ class pipe_t ZLINK_FINAL : public object_t,
     void release_discarded_pipe_accounting (upipe_t *pipe_,
                                             const std::shared_ptr<physical_queue_record_t> &queue_);
     bool append_outbound_frame_bytes_unlocked (const msg_t *msg_);
+    bool stage_peer_control_unlocked (uint32_t weight_);
+    bool append_pending_peer_control_unlocked ();
+    bool flush_pending_peer_control_unlocked ();
     bool can_commit_bytes_unlocked (uint64_t message_bytes_,
                                     uint64_t payload_bytes_,
                                     bool allow_empty_pipe_exception_) const;
@@ -495,6 +556,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     void set_peer (pipe_t *peer_);
     pipe_t *detach_peer_link ();
     void retire_physical_queue_endpoints ();
+    void cleanup_inbound_pipe ();
 
     //  Destructor is private. Pipe objects destroy themselves.
     ~pipe_t () ZLINK_OVERRIDE;
@@ -634,6 +696,10 @@ class pipe_t ZLINK_FINAL : public object_t,
     };
 
     lifetime_state_t _lifetime;
+    lifetime_state_t _inbound_read_lifetime;
+    // Intrusive, allocation-free link used while socket-message teardown is
+    // deferred beyond the outer receive-command critical section.
+    pipe_t *_deferred_socket_msg_termination_next;
 
     //  Returns true if the message is delimiter; false otherwise.
     static bool is_delimiter (const msg_t &msg_);
@@ -664,9 +730,15 @@ class pipe_t ZLINK_FINAL : public object_t,
     uint64_t _transport_pair_id;
     uint64_t _transport_pair_generation;
     bool _locally_initiated;
+    std::atomic<uint64_t> _peer_weight_connection_id;
+    std::atomic<uint32_t> _peer_weight;
 
     // Disconnect msg
     msg_t _disconnect_msg;
+    // Latest absolute peer weight deferred behind an open Application
+    // multipart. UINT32_MAX means no pending command. Four bytes avoid adding
+    // a msg_t to every pipe; the wire frame is materialised only on append.
+    uint32_t _pending_peer_weight;
     mutable fast_mutex_t _out_sync;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (pipe_t)

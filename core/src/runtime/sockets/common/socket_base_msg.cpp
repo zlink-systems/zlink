@@ -9,10 +9,20 @@
 #include "utils/err.hpp"
 #include "utils/likely.hpp"
 
+#include <atomic>
 #include <limits>
 
 namespace
 {
+#ifdef ZLINK_BUILD_TESTS
+std::atomic<bool> g_fail_next_recv_pipe_pin (false);
+
+bool consume_recv_pipe_pin_failpoint ()
+{
+    return g_fail_next_recv_pipe_pin.exchange (false, std::memory_order_acq_rel);
+}
+#endif
+
 void prepare_direct_send_message (zlink::msg_t *msg_, int flags_)
 {
     msg_->reset_flags (zlink::msg_t::more);
@@ -51,22 +61,53 @@ int submit_retry_wait_ms (int remaining_ms_)
 template <typename Receive>
 int receive_once_guarded (zlink::socket_receive_runtime_t &runtime_,
                           const Receive &receive_,
-                          uint64_t *observed_epoch_out_)
+                          uint64_t *observed_epoch_out_,
+                          zlink::socket_receive_record_scope_t *record_scope_ = NULL)
 {
     // The normal public-recv path does not share its socket with an async
     // mailbox owner.  The runtime owns the handoff when that changes.
     if (runtime_.try_acquire_public_receive_lease ()) {
+        // A whole-record receive also fences mailbox commands, whose
+        // receive-side mutations already run under this sync. Ordinary
+        // single-frame receive keeps the lock-free public fast path.
+        if (record_scope_)
+            runtime_.sync.lock ();
         if (observed_epoch_out_)
             *observed_epoch_out_ = runtime_.progress_epoch;
+        if (record_scope_ && record_scope_->prepare_receive_attempt () != 0) {
+            runtime_.sync.unlock ();
+            runtime_.release_public_receive_lease ();
+            return -1;
+        }
         const int rc = receive_ ();
-        runtime_.release_public_receive_lease ();
+        if (rc == 0 && record_scope_)
+            record_scope_->adopt_public_owner (&runtime_);
+        else {
+            if (record_scope_)
+                record_scope_->rollback_receive_attempt ();
+            if (record_scope_)
+                runtime_.sync.unlock ();
+            runtime_.release_public_receive_lease ();
+        }
         return rc;
     }
 
-    zlink::scoped_lock_t lock (runtime_.sync);
+    runtime_.sync.lock ();
     if (observed_epoch_out_)
         *observed_epoch_out_ = runtime_.progress_epoch;
-    return receive_ ();
+    if (record_scope_ && record_scope_->prepare_receive_attempt () != 0) {
+        runtime_.sync.unlock ();
+        return -1;
+    }
+    const int rc = receive_ ();
+    if (rc == 0 && record_scope_)
+        record_scope_->adopt_async_sync (&runtime_);
+    else {
+        if (record_scope_)
+            record_scope_->rollback_receive_attempt ();
+        runtime_.sync.unlock ();
+    }
+    return rc;
 }
 
 bool receive_multipart_abort_as_no_data (int rc_,
@@ -86,13 +127,19 @@ bool receive_multipart_abort_as_no_data (int rc_,
 }
 }
 
+#ifdef ZLINK_BUILD_TESTS
+void zlink::socket_base_t::test_fail_next_recv_pipe_pin ()
+{
+    g_fail_next_recv_pipe_pin.store (true, std::memory_order_release);
+}
+#endif
+
 int zlink::socket_base_t::send (msg_t *msg_, int flags_)
 {
     // Hot path: every public single-part send pays this steady-state cost.
     // Keep lifecycle/backpressure logic correct, but avoid thickening the
     // success path with new work that is not contract-critical.
-    socket_public_send_scope_t send_scope (lifecycle_coordinator (),
-                                           direct_send_needs_public_api_sync ());
+    socket_public_send_scope_t send_scope (lifecycle_coordinator (), true);
     if (!send_scope.acquired ())
         return -1;
 
@@ -114,10 +161,14 @@ int zlink::socket_base_t::send_scoped (msg_t *msg_,
                                        int flags_,
                                        socket_public_send_scope_t &send_scope,
                                        pipe_t **pipe_out_,
-                                       bool report_multipart_abort_)
+                                       bool report_multipart_abort_,
+                                       pipe_write_observer_fn observer_,
+                                       void *observer_userdata_)
 {
     return send_direct_with_retry (NULL, msg_, flags_, send_scope, NULL, 0,
-                                   report_multipart_abort_, pipe_out_);
+                                   report_multipart_abort_, pipe_out_, 0, 0,
+                                   true, false, observer_,
+                                   observer_userdata_);
 }
 
 int zlink::socket_base_t::send_routed (const zlink_routing_id_t *target_rid_,
@@ -182,6 +233,36 @@ int zlink::socket_base_t::select_routed_submit_target (
     return xselect_routed_submit_target (router_rid_or_null_, target_out_);
 }
 
+int zlink::socket_base_t::select_routed_submit_target_internal (
+  const zlink_routing_id_t *router_rid_or_null_,
+  zlink_routed_submit_target_t *target_out_,
+  uint64_t *transport_connection_id_out_,
+  uint64_t *route_incarnation_id_out_)
+{
+    if (!target_out_ || !transport_connection_id_out_
+        || !route_incarnation_id_out_) {
+        errno = EFAULT;
+        return -1;
+    }
+    memset (target_out_, 0, sizeof (*target_out_));
+    *transport_connection_id_out_ = 0;
+    *route_incarnation_id_out_ = 0;
+
+    socket_public_send_scope_t send_scope (lifecycle_coordinator (), true);
+    if (!send_scope.acquired ())
+        return -1;
+    if (unlikely (_ctx_terminated)) {
+        errno = ETERM;
+        return -1;
+    }
+    if (process_commands (0, true) != 0)
+        return -1;
+
+    return xselect_routed_submit_target_internal (
+      router_rid_or_null_, target_out_, transport_connection_id_out_,
+      route_incarnation_id_out_);
+}
+
 int zlink::socket_base_t::send_routed_scoped (const zlink_routing_id_t *target_rid_,
                                               msg_t *msg_,
                                               int flags_,
@@ -191,7 +272,13 @@ int zlink::socket_base_t::send_routed_scoped (const zlink_routing_id_t *target_r
                                               zlink::pipe_t **pipe_out_,
                                               uint64_t expected_transport_pair_id_,
                                               uint64_t expected_transport_pair_generation_,
-                                              bool report_multipart_abort_)
+                                              bool report_multipart_abort_,
+                                              pipe_write_observer_fn observer_,
+                                              void *observer_userdata_,
+                                              routed_send_attempt_identity_t
+                                                *attempt_identity_out_,
+                                              uint64_t
+                                                expected_route_incarnation_id_)
 {
     if (unlikely (!target_rid_)) {
         errno = EFAULT;
@@ -201,7 +288,9 @@ int zlink::socket_base_t::send_routed_scoped (const zlink_routing_id_t *target_r
     return send_direct_with_retry (
       target_rid_, msg_, flags_, send_scope, connection_id_out_,
       expected_connection_id_, report_multipart_abort_, pipe_out_, expected_transport_pair_id_,
-      expected_transport_pair_generation_);
+      expected_transport_pair_generation_, true, false, observer_,
+      observer_userdata_, attempt_identity_out_,
+      expected_route_incarnation_id_);
 }
 
 bool zlink::socket_base_t::begin_public_send_scope (
@@ -212,13 +301,10 @@ bool zlink::socket_base_t::begin_public_send_scope (
         return false;
     }
 
-    // Incremental multipart owns pipe-local staged state across public calls.
-    // PAIR normally omits the socket sync on complete-record sends, but this
-    // lease must serialize its active/cleanup rollback with async pipe
-    // termination just like every other multipart-capable socket.
-    const bool needs_sync = force_sync_ || direct_send_needs_public_api_sync ()
-                            || options.type == ZLINK_CORE_SOCKET_PAIR;
-    scope_out_->emplace (lifecycle_coordinator (), needs_sync,
+    LIBZLINK_UNUSED (force_sync_);
+    // Incremental multipart owns pipe-local staged state across public calls;
+    // every socket send also fences socket-owned pipe selection/lifetime.
+    scope_out_->emplace (lifecycle_coordinator (), true,
                          socket_send_admission_multipart);
     if (!(*scope_out_)->acquired ()) {
         scope_out_->reset ();
@@ -230,10 +316,10 @@ bool zlink::socket_base_t::begin_public_send_scope (
 std::unique_ptr<zlink::socket_public_send_scope_t>
 zlink::socket_base_t::begin_complete_send_scope (bool force_sync_)
 {
-    const bool needs_sync = force_sync_ || direct_send_needs_public_api_sync ();
+    LIBZLINK_UNUSED (force_sync_);
     std::unique_ptr<socket_public_send_scope_t> send_scope (
       new (std::nothrow) socket_public_send_scope_t (
-        lifecycle_coordinator (), needs_sync,
+        lifecycle_coordinator (), true,
         socket_send_admission_complete));
     if (!send_scope) {
         errno = ENOMEM;
@@ -258,11 +344,6 @@ zlink::socket_base_t::begin_public_api_scope ()
     return scope;
 }
 
-bool zlink::socket_base_t::direct_send_needs_public_api_sync () const
-{
-    return options.type != ZLINK_CORE_SOCKET_PAIR;
-}
-
 bool zlink::socket_base_t::xsubmit_retry_allowed (const zlink_routing_id_t *target_rid_,
                                                   int err_) const
 {
@@ -282,13 +363,21 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                                   uint64_t expected_transport_pair_id_,
                                                   uint64_t expected_transport_pair_generation_,
                                                   bool record_context_admission_,
-                                                  bool commands_already_processed_)
+                                                  bool commands_already_processed_,
+                                                  pipe_write_observer_fn observer_,
+                                                  void *observer_userdata_,
+                                                  routed_send_attempt_identity_t
+                                                    *attempt_identity_out_,
+                                                  uint64_t
+                                                    expected_route_incarnation_id_)
 {
     zlink_assert (send_scope.acquired ());
     if (connection_id_out_)
         *connection_id_out_ = 0;
     if (pipe_out_)
         *pipe_out_ = NULL;
+    if (attempt_identity_out_)
+        attempt_identity_out_->reset ();
 
     if (unlikely (_ctx_terminated)) {
         errno = ETERM;
@@ -351,8 +440,11 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                expected_connection_id_, pipe_out_,
                                expected_transport_pair_id_,
                                expected_transport_pair_generation_,
-                               &first_admission)
-               : xsend_pipe (msg_, pipe_out_, &first_admission);
+                               &first_admission, observer_, observer_userdata_,
+                               attempt_identity_out_,
+                               expected_route_incarnation_id_)
+               : xsend_pipe (msg_, pipe_out_, &first_admission, observer_,
+                             observer_userdata_);
     if (record_context_admission_ && rc != 0
         && first_admission == pipe_message_admission_hwm_full)
         _auto_hwm_send_blocked_attempts.fetch_add (
@@ -421,8 +513,12 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                        ? xsend_routed (target_rid_, msg_, connection_id_out_,
                                        expected_connection_id_, pipe_out_,
                                        expected_transport_pair_id_,
-                                       expected_transport_pair_generation_, NULL)
-                       : xsend_pipe (msg_, pipe_out_, NULL);
+                                       expected_transport_pair_generation_, NULL,
+                                       observer_, observer_userdata_,
+                                       attempt_identity_out_,
+                                       expected_route_incarnation_id_)
+                       : xsend_pipe (msg_, pipe_out_, NULL, observer_,
+                                     observer_userdata_);
             if (unlikely (rc == -2))
                 return finish_multipart_abort ();
             if (rc == 0) {
@@ -491,13 +587,25 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                ? xsend_routed (target_rid_, msg_, connection_id_out_,
                                expected_connection_id_, pipe_out_,
                                expected_transport_pair_id_,
-                               expected_transport_pair_generation_, NULL)
-               : xsend_pipe (msg_, pipe_out_, NULL);
+                               expected_transport_pair_generation_, NULL,
+                               observer_, observer_userdata_,
+                               attempt_identity_out_,
+                               expected_route_incarnation_id_)
+               : xsend_pipe (msg_, pipe_out_, NULL, observer_,
+                             observer_userdata_);
         if (unlikely (rc == -2))
             return finish_multipart_abort ();
         if (rc == 0) {
             dispatch_runtime ().clear_send_recovery_pending ();
             break;
+        }
+        if (errno != EAGAIN && is_submit_retry_errno (errno)
+            && socket_has_manual_connect_endpoints ()
+            && xsubmit_retry_allowed (target_rid_, errno)) {
+            // Pair admission can advance one mailbox command at a time.  A
+            // later retry may therefore observe a newly attached but not yet
+            // admitted lane and must keep waiting just like the first try.
+            errno = EAGAIN;
         }
         if (!hold_sync_during_retry)
             send_scope.release_sync_for_retry ();
@@ -646,7 +754,8 @@ int zlink::socket_base_t::recv_common (
   msg_t *msg_, int flags_,
   receive_runtime_t::mode_t mode_, pipe_t **pipe_out_,
   zlink_routing_id_t *source_rid_out_,
-  uint64_t *connection_id_out_)
+  uint64_t *connection_id_out_, bool pin_pipe_out_,
+  socket_receive_record_scope_t *record_scope_)
 {
     if (pipe_out_)
         *pipe_out_ = NULL;
@@ -670,17 +779,42 @@ int zlink::socket_base_t::recv_common (
     }
 
     const auto recv_once = [&] () -> int {
+        int rc = 0;
         if (mode_ == receive_runtime_t::mode_pipe)
-            return xrecv_pipe (msg_, pipe_out_);
-        if (mode_ == receive_runtime_t::mode_routed)
-            return xrecv_routed (
+            rc = xrecv_pipe (msg_, pipe_out_);
+        else if (mode_ == receive_runtime_t::mode_routed)
+            rc = xrecv_routed (
               msg_, source_rid_out_, connection_id_out_, pipe_out_);
-        return xrecv (msg_);
+        else
+            rc = xrecv (msg_);
+        // Socket-specific readers may expose the pipe they attempted before
+        // discovering that no frame was available. The public helper only
+        // transfers a lifetime pin with a consumed frame, so never let a
+        // failure path look pinned to its caller.
+        if (rc != 0 && pipe_out_)
+            *pipe_out_ = NULL;
+        bool pin_failed = false;
+#ifdef ZLINK_BUILD_TESTS
+        if (rc == 0 && pin_pipe_out_ && pipe_out_ && *pipe_out_
+            && consume_recv_pipe_pin_failpoint ())
+            pin_failed = true;
+#endif
+        if (rc == 0 && pin_pipe_out_ && pipe_out_ && *pipe_out_
+            && (pin_failed || !(*pipe_out_)->retain_lifetime_ref ())) {
+            *pipe_out_ = NULL;
+            // The frame was already consumed. Preserve successful receive
+            // ownership and let the request/reply reader reject a request
+            // without a live source pipe while draining the record tail.
+            return 0;
+        }
+        return rc;
     };
 
     uint64_t observed_epoch = 0;
     int rc = receive_once_guarded (receive_runtime (), recv_once,
-                                   &observed_epoch);
+                                   &observed_epoch, record_scope_);
+    if (record_scope_ && record_scope_->admission_failed ())
+        return -1;
     if (unlikely (receive_multipart_abort_as_no_data (rc, NULL)))
         return -1;
     if (unlikely (rc != 0 && errno != EAGAIN))
@@ -695,7 +829,9 @@ int zlink::socket_base_t::recv_common (
             return -1;
         command_runtime ().reset_recv_ticks ();
         rc = receive_once_guarded (receive_runtime (), recv_once,
-                                   &observed_epoch);
+                                   &observed_epoch, record_scope_);
+        if (record_scope_ && record_scope_->admission_failed ())
+            return -1;
         if (unlikely (receive_multipart_abort_as_no_data (rc, NULL)))
             return -1;
         if (rc < 0)
@@ -716,7 +852,9 @@ int zlink::socket_base_t::recv_common (
         if (unlikely (progress_rc != 0))
             return -1;
         rc = receive_once_guarded (receive_runtime (), recv_once,
-                                   &observed_epoch);
+                                   &observed_epoch, record_scope_);
+        if (record_scope_ && record_scope_->admission_failed ())
+            return -1;
         if (unlikely (receive_multipart_abort_as_no_data (rc, NULL)))
             return -1;
         if (rc == 0) {
@@ -739,17 +877,23 @@ int zlink::socket_base_t::recv_common (
     return 0;
 }
 
-int zlink::socket_base_t::recv_pipe (msg_t *msg_, pipe_t **pipe_out_, int flags_)
+int zlink::socket_base_t::recv_pipe (msg_t *msg_, pipe_t **pipe_out_, int flags_,
+                                     bool pin_pipe_out_,
+                                     socket_receive_record_scope_t *record_scope_)
 {
     return recv_common (msg_, flags_, receive_runtime_t::mode_pipe,
-                        pipe_out_, NULL, NULL);
+                        pipe_out_, NULL, NULL, pin_pipe_out_, record_scope_);
 }
 
 int zlink::socket_base_t::recv_routed (msg_t *msg_,
                                       zlink_routing_id_t *source_rid_out_,
                                       int flags_,
                                       uint64_t *connection_id_out_,
-                                      pipe_t **source_pipe_out_)
+                                      pipe_t **source_pipe_out_,
+                                      bool pin_source_pipe_out_,
+                                      uint64_t *transport_pair_id_out_,
+                                      uint64_t *transport_pair_generation_out_,
+                                      socket_receive_record_scope_t *record_scope_)
 {
     if (source_rid_out_)
         source_rid_out_->size = 0;
@@ -757,6 +901,10 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
         *connection_id_out_ = 0;
     if (source_pipe_out_)
         *source_pipe_out_ = NULL;
+    if (transport_pair_id_out_)
+        *transport_pair_id_out_ = 0;
+    if (transport_pair_generation_out_)
+        *transport_pair_generation_out_ = 0;
     if (unlikely (_ctx_terminated)) {
         errno = ETERM;
         return -1;
@@ -773,12 +921,41 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
     }
 
     const auto recv_once = [&] () -> int {
-        return xrecv_routed (msg_, source_rid_out_, connection_id_out_,
-                             source_pipe_out_);
+        const int rc = xrecv_routed (msg_, source_rid_out_, connection_id_out_,
+                                     source_pipe_out_);
+        if (rc != 0 && source_pipe_out_)
+            *source_pipe_out_ = NULL;
+        if (rc == 0 && source_pipe_out_ && *source_pipe_out_) {
+            if (transport_pair_id_out_)
+                *transport_pair_id_out_ =
+                  (*source_pipe_out_)->get_transport_pair_id ();
+            if (transport_pair_generation_out_)
+                *transport_pair_generation_out_ =
+                  (*source_pipe_out_)->get_transport_pair_generation ();
+        }
+        bool pin_failed = false;
+#ifdef ZLINK_BUILD_TESTS
+        if (rc == 0 && pin_source_pipe_out_ && source_pipe_out_
+            && *source_pipe_out_ && consume_recv_pipe_pin_failpoint ())
+            pin_failed = true;
+#endif
+        if (rc == 0 && pin_source_pipe_out_ && source_pipe_out_
+            && *source_pipe_out_
+            && (pin_failed || !(*source_pipe_out_)->retain_lifetime_ref ())) {
+            *source_pipe_out_ = NULL;
+            // Do not turn a consumed frame into an unowned failure result.
+            // The request/reply reader handles a null live-source reference;
+            // transport-pair identity was copied above while receive ownership
+            // still prevented pipe deallocation.
+            return 0;
+        }
+        return rc;
     };
     uint64_t observed_epoch = 0;
     int rc = receive_once_guarded (receive_runtime (), recv_once,
-                                   &observed_epoch);
+                                   &observed_epoch, record_scope_);
+    if (record_scope_ && record_scope_->admission_failed ())
+        return -1;
     if (unlikely (receive_multipart_abort_as_no_data (rc, NULL)))
         return -1;
     if (unlikely (rc != 0 && errno != EAGAIN))
@@ -793,7 +970,9 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
             return -1;
         command_runtime ().reset_recv_ticks ();
         rc = receive_once_guarded (receive_runtime (), recv_once,
-                                   &observed_epoch);
+                                   &observed_epoch, record_scope_);
+        if (record_scope_ && record_scope_->admission_failed ())
+            return -1;
         if (unlikely (receive_multipart_abort_as_no_data (rc, NULL)))
             return -1;
         if (rc < 0)
@@ -814,7 +993,9 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
         if (unlikely (progress_rc != 0))
             return -1;
         rc = receive_once_guarded (receive_runtime (), recv_once,
-                                   &observed_epoch);
+                                   &observed_epoch, record_scope_);
+        if (record_scope_ && record_scope_->admission_failed ())
+            return -1;
         if (unlikely (receive_multipart_abort_as_no_data (rc, NULL)))
             return -1;
         if (rc == 0) {
@@ -833,6 +1014,28 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
         }
     }
 
+    extract_flags (msg_);
+    return 0;
+}
+
+int zlink::socket_base_t::recv_record_continuation (
+  msg_t *msg_, socket_receive_record_scope_t &record_scope_)
+{
+    if (unlikely (_ctx_terminated)) {
+        errno = ETERM;
+        return -1;
+    }
+    if (unlikely (!msg_ || !msg_->check ())
+        || unlikely (!record_scope_.owns (&receive_runtime ()))) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    const int rc = xrecv (msg_);
+    if (unlikely (receive_multipart_abort_as_no_data (rc, NULL)))
+        return -1;
+    if (rc != 0)
+        return -1;
     extract_flags (msg_);
     return 0;
 }

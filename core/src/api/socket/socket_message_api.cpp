@@ -6,8 +6,9 @@
 #include "api/socket/socket_message_api_internal.hpp"
 #include "api/socket/part_helper_internal.hpp"
 #include "api/message/recv_result_internal.hpp"
+#include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
-#include "api/socket/socket_request_reply_runtime_io_helpers.hpp"
+#include "core/c_api_copy_internal.hpp"
 #include "core/recv_internal.hpp"
 
 namespace
@@ -68,18 +69,10 @@ zlink_recv_result_t zlink_recv_part (void *s_,
 
     const int type = socket_type (handle);
     const bool expose_source_rid = type == ZLINK_CORE_SOCKET_STREAM;
-    std::shared_ptr<zlink::socket_reqrep_internal::socket_request_reply_state_t> request_state;
     const bool dealer_request_surface = type == ZLINK_CORE_SOCKET_DEALER;
-    // A blocking generic DEALER receive participates in the same transport
-    // ownership transition as the typed receive API. Establish the internal
-    // request/reply state before it waits, so a concurrent request remains on
-    // the paired transport rather than creating a separate payload queue.
-    if (dealer_request_surface)
-        request_state = zlink::socket_reqrep_internal::find_or_create_request_reply_state (handle);
-    else if (handle.socket->has_request_reply_state ())
-        request_state = handle.socket->request_reply_state ();
-    if (dealer_request_surface && !request_state)
-        return zlink::recv_result_internal::from_errno (errno);
+    const std::shared_ptr<
+      zlink::socket_reqrep_internal::socket_request_reply_state_t>
+      request_state;
     zlink::socket_base_t *recv_source_socket = handle.socket;
     auto recv_parts_once = [&] (zlink_routing_id_t *source_rid_,
                                 zlink_msg_t **parts_,
@@ -93,8 +86,8 @@ zlink_recv_result_t zlink_recv_part (void *s_,
             if (source_rid_)
                 source_rid_->size = 0;
             return zlink::socket_reqrep_internal::recv_dealer_message_direct (
-              handle, request_state, &message_type, &request_seq, parts_, part_count_,
-              static_cast<int> (recv_flags_), terminal_part_out_,
+              handle, request_state, false, &message_type, &request_seq,
+              parts_, part_count_, static_cast<int> (recv_flags_), terminal_part_out_,
               terminal_part_returned_out_);
         }
         if (terminal_part_returned_out_)
@@ -145,8 +138,8 @@ zlink_recv_result_t zlink_recv_part (void *s_,
 
         if (part_count == 1) {
             zlink_routing_id_t &recv_part_source_rid = recv_part_source_rid_tls ();
-            zlink::socket_reqrep_internal::assign_routing_id_compact (&recv_part_source_rid,
-                                                                       source_rid);
+            zlink::copy_routing_id_from_bytes (
+              source_rid.data, source_rid.size, &recv_part_source_rid);
             if (zlink_msg_move (part_out_, &parts[0]) != 0) {
                 zlink_multipart_close (parts, part_count);
                 errno = EFAULT;
@@ -504,6 +497,10 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
         zlink::part_helper_internal::abort_recv_step (helper_state);
         return zlink::recv_result_internal::from_errno (errno);
     }
+    // Buffered payloads remain internal until this point. XSUB has already
+    // rejected continuation metadata, so clear only the part crossing the
+    // public boundary instead of every buffered part twice.
+    zlink::request_reply::clear_request_reply_metadata (part_out_);
     if (source_rid_out_)
         *source_rid_out_ = NULL;
     zlink::part_helper_internal::complete_recv_step (helper_state, *has_more_out_);

@@ -414,6 +414,15 @@ proxy loop가 끝날 때까지 호출 thread를 block한다.
 세 핸들은 모두 borrowed다. 함수는 핸들을 닫거나 소유하지 않는다. message frame은
 proxy가 수신해 상대 socket으로 전달하며 application에 frame pointer를 반환하지 않는다.
 
+Proxy는 application lane의 raw multipart만 중계한다. 수신 message가 내부 ZMP request-reply
+kind와 sequence를 갖고 있어도 상대 socket과 `capture_`로 보내기 전에 이를 제거한다. 따라서
+양쪽은 같은 application part 수, 순서와 byte를 받지만, 다시 wire로 내보낸 frame의 kind는
+ordinary data다.
+
+Completion progress lane의 pending 상태와 reply target은 proxy가 연결하지 않는다. Request를
+proxy 너머에서 투명하게 완료하는 기능은 이 API의 계약이 아니며, proxy가 request-reply
+metadata를 새로 만들거나 completion callback을 중계하지 않는다.
+
 **반환값:** proxy가 정상적으로 끝나면 `ZLINK_CONFIG_OK`, 그렇지 않으면
 `zlink_config_result_t` 오류. 필수 핸들이 `NULL`이거나 raw socket이 아니면
 `ZLINK_CONFIG_INVALID_HANDLE`이다.
@@ -524,6 +533,8 @@ unit test 하나로 이어진다.
 - non-NULL `capture_`를 주면 전달한 각 message의 사본이 capture socket에 도착한다.
 - proxy는 loop가 끝날 때까지 호출 thread를 block하고, 정상적으로 끝나면 `ZLINK_CONFIG_OK`를 반환한다.
 - 전달한 핸들은 borrowed다 — proxy가 끝난 뒤에도 caller가 핸들을 소유하며 함수가 닫지 않는다.
+- Request, reply 또는 error reply kind의 raw fixture를 proxy에 보내면 상대 socket과 non-NULL capture socket은 같은 application multipart를 ordinary message로 받고, 이를 raw wire로 다시 보내면 kind가 data다.
+- Proxy는 completion progress lane을 중계하지 않으므로 proxy 반대편의 reply가 원래 request completion을 자동으로 완료하지 않는다.
 
 **Sleep과 thread**
 - `zlink_sleep(n)`은 호출 thread를 최소 `n`초 동안 일시 중지한다.
@@ -532,3 +543,7 @@ unit test 하나로 이어진다.
 
 **공통 반환 규약**
 - result type(`zlink_close_result_t`·`zlink_config_result_t`·`zlink_recv_result_t`·`zlink_handler_result_t`)을 반환하는 각 함수는 성공 시 해당 OK 값을, 실패 시 result 값을 반환하며 `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
+
+<!-- zlink-nav:start -->
+[Core 스펙 목차](README.ko.md) | [이전: Monitoring](06-monitoring.ko.md) | [다음: Runtime Boundary](08-runtime-boundary.ko.md)
+<!-- zlink-nav:end -->

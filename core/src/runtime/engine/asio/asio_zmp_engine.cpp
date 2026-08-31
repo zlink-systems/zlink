@@ -20,9 +20,35 @@
 #endif
 
 #include <algorithm>
-#include <limits>
 #include <limits.h>
 #include <string.h>
+#ifdef ZLINK_BUILD_TESTS
+#include <atomic>
+
+namespace
+{
+std::atomic<zlink::zmp_passive_ready_write_drained_test_hook_fn>
+  passive_ready_write_drained_test_hook (NULL);
+std::atomic<void *> passive_ready_write_drained_test_hook_userdata (NULL);
+}
+
+void zlink::test_set_zmp_passive_ready_write_drained_hook (
+  zmp_passive_ready_write_drained_test_hook_fn hook_, void *userdata_)
+{
+    if (!hook_) {
+        passive_ready_write_drained_test_hook.store (NULL,
+                                                     std::memory_order_release);
+        passive_ready_write_drained_test_hook_userdata.store (
+          NULL, std::memory_order_release);
+        return;
+    }
+
+    passive_ready_write_drained_test_hook_userdata.store (
+      userdata_, std::memory_order_release);
+    passive_ready_write_drained_test_hook.store (hook_,
+                                                 std::memory_order_release);
+}
+#endif
 
 zlink::asio_zmp_engine_t::asio_zmp_engine_t (fd_t fd_,
                                              const options_t &options_,
@@ -206,6 +232,16 @@ void zlink::asio_zmp_engine_t::plug_internal ()
         _ready_send.assign (
           _hello_send, _hello_send + _hello_send_size);
         _ready_sent = false;
+    } else if (transport () && transport ()->has_message_boundaries ()) {
+        //  A message-oriented transport record owns exactly one ZMP frame.
+        //  Send HELLO and READY as two records instead of concatenating them.
+        zmp_control::build_hello_frame (
+          _options, _hello_send, sizeof (_hello_send), &_hello_send_size);
+        _ready_send.assign (
+          _hello_send, _hello_send + _hello_send_size);
+        zmp_control::build_ready_frame (_options, _deferred_ready_send);
+        _deferred_ready_pending = true;
+        _ready_sent = false;
     } else {
         zmp_control::build_hello_ready_frames (
           _options, _hello_send, sizeof (_hello_send), &_hello_send_size,
@@ -225,9 +261,31 @@ void zlink::asio_zmp_engine_t::plug_internal ()
 
 bool zlink::asio_zmp_engine_t::handshake ()
 {
+    if (!_hello_received && _transport_handshake_frame_staged) {
+        if (_insize != 0 || !transport ()
+            || !transport ()->read_message_complete ()) {
+            if (_insize != 0) {
+                set_last_error (zmp_error_frame_incomplete,
+                                "hello transport boundary invalid");
+                errno = EPROTO;
+                error (protocol_error);
+            } else {
+                errno = EAGAIN;
+            }
+            return false;
+        }
+
+        _transport_handshake_frame_staged = false;
+        if (!parse_hello (_hello_recv,
+                          zmp_header_size + _hello_body_len))
+            return false;
+        _hello_received = true;
+    }
+
     if (!_hello_received) {
         if (!receive_hello ()) {
-            errno = EAGAIN;
+            if (errno != EPROTO)
+                errno = EAGAIN;
             return false;
         }
     }
@@ -248,15 +306,55 @@ bool zlink::asio_zmp_engine_t::handshake ()
         _input_in_decoder_buffer = false;
     }
 
-    if (!process_handshake_input ())
-        return false;
-
     if (!_ready_received) {
+        if (!process_handshake_input ())
+            return false;
+
+        if (!_ready_received) {
+            errno = EAGAIN;
+            return false;
+        }
+
+        //  Validate a message-oriented READY record once, while its completed
+        //  input boundary is still current. A passive paired handshake can
+        //  resume later from its READY write completion after the transport
+        //  has already armed the next input record.
+        if (transport () && transport ()->has_message_boundaries ()
+            && (!transport ()->read_message_complete () || _insize != 0)) {
+            set_last_error (zmp_error_frame_incomplete,
+                            "ready transport boundary invalid");
+            errno = EPROTO;
+            error (protocol_error);
+            return false;
+        }
+    }
+
+    //  A passive paired endpoint derives its READY reply from peer metadata.
+    //  Do not publish local pair admission until that reply has left the
+    //  transport output buffer; otherwise the peer can observe readiness and
+    //  send or close while this lane is still wire-incomplete.
+    if (paired_transport () && !_options.transport_pair_initiator
+        && (!_ready_sent || _deferred_ready_pending || _outsize != 0)) {
         errno = EAGAIN;
         return false;
     }
 
     if (_has_handshake_stage) {
+#ifdef ZLINK_BUILD_TESTS
+        if (paired_transport () && !_options.transport_pair_initiator
+            && _ready_received && _ready_sent && !_deferred_ready_pending
+            && _outsize == 0) {
+            const zmp_passive_ready_write_drained_test_hook_fn hook =
+              passive_ready_write_drained_test_hook.load (
+                std::memory_order_acquire);
+            if (hook) {
+                hook (_negotiated_transport_pair_id,
+                      _negotiated_transport_pair_generation,
+                      passive_ready_write_drained_test_hook_userdata.load (
+                        std::memory_order_acquire));
+            }
+        }
+#endif
         session ()->set_peer_routing_id (_peer_routing_id, _peer_routing_id_size);
         session ()->engine_ready ();
         session ()->configure_zmp_decoder (
@@ -266,7 +364,12 @@ bool zlink::asio_zmp_engine_t::handshake ()
         session ()->set_peer_routing_id (_peer_routing_id, _peer_routing_id_size);
     }
 
-    if (_options.recv_routing_id) {
+    // ROUTER's synthetic peer-identity frame belongs to the Application
+    // stream. A paired Completion lane already carries the peer identity as
+    // pipe metadata; injecting the frame there makes the completion parser
+    // treat it as a malformed reply and tear down an otherwise ready pair.
+    if (_options.recv_routing_id
+        && _negotiated_transport_lane == transport_lane_application) {
         msg_t routing_id;
         const int rc = routing_id.init_size (_peer_routing_id_size);
         errno_assert (rc == 0);
@@ -291,14 +394,11 @@ bool zlink::asio_zmp_engine_t::handshake ()
     if (!paired_transport ()) {
         socket ()->event_connection_ready_changed (
           _endpoint_uri_pair, _peer_routing_id, _peer_routing_id_size);
-    } else if (socket ()->socket_type () != ZLINK_CORE_SOCKET_ROUTER) {
-        socket ()->event_transport_pair_lane_ready (
-          _endpoint_uri_pair, _peer_routing_id, _peer_routing_id_size,
-          _negotiated_transport_lane, _negotiated_transport_pair_id,
-          _negotiated_transport_pair_generation);
     }
-    // Router readiness is published after its Framework RID route is
-    // registered by router_t::adopt_peer_routing_id.
+    // Paired readiness is published by socket-side pair admission after both
+    // lanes are attached and the Application write hold is released.  A wire
+    // READY only completes this physical lane and is not yet a public
+    // data-plane readiness edge.
 
     if (_output_stopped)
         restart_output ();
@@ -316,11 +416,34 @@ bool zlink::asio_zmp_engine_t::receive_hello ()
         const zmp_control::hello_receive_result_t result =
           zmp_control::receive_hello_bytes (_inpos, _insize, _hello_recv, _hello_header_bytes,
                                             _hello_body_bytes, _hello_body_len);
+        if (transport () && transport ()->has_message_boundaries ()) {
+            const bool boundary = transport ()->read_message_complete ();
+            const bool incomplete_at_boundary =
+              result.status == zmp_control::hello_receive_incomplete
+              && boundary;
+            const bool trailing_payload =
+              result.status == zmp_control::hello_receive_ready
+              && _insize != 0;
+            if (incomplete_at_boundary || trailing_payload) {
+                set_last_error (zmp_error_frame_incomplete,
+                                "hello transport boundary invalid");
+                errno = EPROTO;
+                error (protocol_error);
+                return false;
+            }
+        }
         if (result.status == zmp_control::hello_receive_incomplete)
             return false;
         if (result.status == zmp_control::hello_receive_error) {
             set_last_error (result.error_code, result.error_reason);
             error (protocol_error);
+            return false;
+        }
+
+        if (transport () && transport ()->has_message_boundaries ()
+            && !transport ()->read_message_complete ()) {
+            _transport_handshake_frame_staged = true;
+            errno = EAGAIN;
             return false;
         }
 
@@ -381,6 +504,13 @@ bool zlink::asio_zmp_engine_t::process_handshake_input ()
 
         if (rc == 0 || rc == -1)
             break;
+
+        if (zmp_transport_has_message_boundaries ()) {
+            stage_transport_decoded_message (
+              transport_handshake_message_staged);
+            rc = 0;
+            break;
+        }
 
         msg_t *msg = _decoder->msg ();
         const unsigned char msg_flags = msg->flags ();
@@ -552,40 +682,9 @@ bool zlink::asio_zmp_engine_t::build_gather_header (const msg_t &msg_,
                                                     size_t buffer_size_,
                                                     size_t &header_size_)
 {
-    if (buffer_size_ < zmp_header_size)
-        return false;
-
-    const size_t size = msg_.size ();
-    if (size > static_cast<size_t> (std::numeric_limits<uint32_t>::max ())) {
-        errno = EMSGSIZE;
-        return false;
-    }
-    const unsigned char msg_flags = msg_.flags ();
-
-    unsigned char flags = 0;
-    if (msg_flags != 0) {
-        if (msg_flags & msg_t::more)
-            flags |= zmp_flag_more;
-        if (msg_flags & msg_t::command)
-            flags |= zmp_flag_control;
-        if (msg_flags & msg_t::routing_id)
-            flags |= zmp_flag_identity;
-
-        const unsigned char cmd_type = msg_flags & CMD_TYPE_MASK;
-        if (cmd_type == msg_t::subscribe)
-            flags |= zmp_flag_subscribe;
-        else if (cmd_type == msg_t::cancel)
-            flags |= zmp_flag_cancel;
-    }
-
-    buffer_[0] = zmp_magic;
-    buffer_[1] = zmp_version;
-    buffer_[2] = flags;
-    buffer_[3] = 0;
-    put_uint32 (buffer_ + 4, static_cast<uint32_t> (size));
-
-    header_size_ = zmp_header_size;
-    return true;
+    zlink_assert (_encoder);
+    return static_cast<zmp_encoder_t *> (_encoder)->build_header (
+      msg_, buffer_, buffer_size_, header_size_);
 }
 
 int zlink::asio_zmp_engine_t::push_one_then_decode (msg_t *msg_)

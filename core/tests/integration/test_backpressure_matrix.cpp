@@ -1087,40 +1087,53 @@ void test_pubsub_incomplete_multipart_stops_at_max_message_size ()
     test_context_socket_close_zero_linger (pub);
 }
 
-void test_connect_before_bind_conflate_uses_receiver_max_message_size ()
+void test_dealer_rejects_conflate_without_changing_pubsub ()
 {
-    const char *endpoint = "inproc://conflate_receiver_maxmsg";
+    const int disabled = 0;
     const int conflate = 1;
-    const int64_t receiver_max_message_size = 8192;
-    void *sender = test_context_socket (ZLINK_SOCKET_DEALER);
-    void *receiver = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+
+    int value = -1;
+    size_t value_size = sizeof (value);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (dealer, ZLINK_OPT_CONFLATE, &value, &value_size));
+    TEST_ASSERT_EQUAL_INT (disabled, value);
+
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
-      sender, ZLINK_OPT_CONFLATE, &conflate, sizeof (conflate)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
-      receiver, ZLINK_OPT_MAXMSGSIZE, &receiver_max_message_size,
-      sizeof (receiver_max_message_size)));
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sender, endpoint));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (receiver, endpoint));
-
-    zlink_msg_t oversized;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&oversized, 64u * 1024u));
+      dealer, ZLINK_OPT_CONFLATE, &disabled, sizeof (disabled)));
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_INVALID_ARGUMENT,
-      zlink_send_part (
-        sender, &oversized, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL));
-    TEST_ASSERT_EQUAL_INT (EMSGSIZE, errno);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&oversized));
+      ZLINK_CONFIG_NOT_SUPPORTED,
+      zlink_set_option (
+        dealer, ZLINK_OPT_CONFLATE, &conflate, sizeof (conflate)));
+    TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
 
-    zlink_msg_t valid;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&valid, 1));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (
-        sender, &valid, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL));
+    value = -1;
+    value_size = sizeof (value);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (dealer, ZLINK_OPT_CONFLATE, &value, &value_size));
+    TEST_ASSERT_EQUAL_INT (disabled, value);
+    test_context_socket_close_zero_linger (dealer);
 
-    test_context_socket_close_zero_linger (receiver);
-    test_context_socket_close_zero_linger (sender);
+    void *pub = test_context_socket (ZLINK_SOCKET_PUB);
+    void *sub = test_context_socket (ZLINK_SOCKET_SUB);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (pub, ZLINK_OPT_CONFLATE, &conflate, sizeof (conflate)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (sub, ZLINK_OPT_CONFLATE, &conflate, sizeof (conflate)));
+
+    value = 0;
+    value_size = sizeof (value);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (pub, ZLINK_OPT_CONFLATE, &value, &value_size));
+    TEST_ASSERT_EQUAL_INT (conflate, value);
+    value = 0;
+    value_size = sizeof (value);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (sub, ZLINK_OPT_CONFLATE, &value, &value_size));
+    TEST_ASSERT_EQUAL_INT (conflate, value);
+
+    test_context_socket_close_zero_linger (sub);
+    test_context_socket_close_zero_linger (pub);
 }
 
 static bool should_run_case (const char *name_)
@@ -1147,9 +1160,8 @@ int main (int, char **)
     if (should_run_case ("test_pubsub_incomplete_multipart_stops_at_max_message_size"))
         RUN_TEST (test_pubsub_incomplete_multipart_stops_at_max_message_size);
     if (should_run_case (
-          "test_connect_before_bind_conflate_uses_receiver_max_message_size"))
-        RUN_TEST (
-          test_connect_before_bind_conflate_uses_receiver_max_message_size);
+          "test_dealer_rejects_conflate_without_changing_pubsub"))
+        RUN_TEST (test_dealer_rejects_conflate_without_changing_pubsub);
     const int status = UNITY_END ();
     fflush (NULL);
     return status;

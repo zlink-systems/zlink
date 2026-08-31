@@ -40,48 +40,37 @@ int reqrep::validate_request_send_flags (zlink_send_flags_t flags_)
     return 0;
 }
 
-int reqrep::send_request_frame (zlink::socket_base_t *socket_,
-                                zlink::part_helper_internal::handle_state_t *helper_state_,
-                                const zlink_routing_id_t *peer_rid_,
-                                const void *data_,
-                                size_t size_,
-                                int flags_,
-                                uint64_t transport_pair_id_,
-                                uint64_t transport_pair_generation_,
-                                zlink::pipe_t **application_pipe_out_)
-{
-    zlink::msg_t msg;
-    if (msg.init_size (size_) != 0)
-        return -1;
-    if (size_ > 0 && data_)
-        memcpy (msg.data (), data_, size_);
-
-    const int rc = peer_rid_ ? socket_->send_routed_scoped (
-                                peer_rid_, &msg, flags_,
-                                *helper_state_->send.send_scope, NULL, 0,
-                                application_pipe_out_, transport_pair_id_,
-                                transport_pair_generation_, true)
-                             : socket_->send_scoped (&msg, flags_, *helper_state_->send.send_scope,
-                                                    application_pipe_out_, true);
-    const int saved_errno = errno;
-    (void) msg.close ();
-    errno = saved_errno;
-    return rc;
-}
-
 int reqrep::send_request_payload_part (zlink::socket_base_t *socket_,
                                        zlink::part_helper_internal::handle_state_t *helper_state_,
                                        const zlink_routing_id_t *peer_rid_,
                                        zlink_msg_t *part_,
                                        zlink_send_flags_t flags_,
-                                       zlink_part_flag_t part_flag_)
+                                       zlink_part_flag_t part_flag_,
+                                       bool first_part_,
+                                       uint64_t transport_pair_id_,
+                                       uint64_t transport_pair_generation_,
+                                       zlink::pipe_t **application_pipe_out_,
+                                       zlink::pipe_write_observer_fn observer_,
+                                       void *observer_userdata_)
 {
-    LIBZLINK_UNUSED (peer_rid_);
+    if (!socket_ || !helper_state_ || !part_ || !helper_state_->send.send_scope) {
+        errno = EFAULT;
+        return -1;
+    }
 
-    return socket_->send_scoped (reinterpret_cast<zlink::msg_t *> (part_),
-                                 static_cast<int> (flags_ & ZLINK_DONTWAIT)
-                                   | (part_flag_ == ZLINK_PART_MORE ? ZLINK_SNDMORE : 0),
-                                 *helper_state_->send.send_scope, NULL, true);
+    const int send_flags = static_cast<int> (flags_ & ZLINK_DONTWAIT)
+                           | (part_flag_ == ZLINK_PART_MORE ? ZLINK_SNDMORE : 0);
+    zlink::msg_t *msg = reinterpret_cast<zlink::msg_t *> (part_);
+    if (first_part_ && peer_rid_) {
+        return socket_->send_routed_scoped (
+          peer_rid_, msg, send_flags, *helper_state_->send.send_scope, NULL, 0,
+          application_pipe_out_, transport_pair_id_, transport_pair_generation_,
+          true, observer_, observer_userdata_);
+    }
+    return socket_->send_scoped (
+      msg, send_flags, *helper_state_->send.send_scope,
+      first_part_ ? application_pipe_out_ : NULL, true, observer_,
+      observer_userdata_);
 }
 
 int reqrep::stage_request_payload_part (

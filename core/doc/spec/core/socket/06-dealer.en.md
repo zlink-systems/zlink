@@ -29,6 +29,7 @@ The following documents own the related contracts.
 | Related contract | Defining document |
 |---|---|
 | Socket creation, common options (HWM, reconnect, timeout), and the declaration of `zlink_socket_set_receive_flow_state` | [Socket Common](README.en.md) |
+| Request-reply kinds, sequences, and ZMP header byte layout and validation | [ZMP](../protocol/01-zmp.en.md) |
 | Mapping between each result and `zlink_errno()` | [Errors](../03-errors.en.md#result-and-errno-mapping) |
 | Auto HWM budget calculation and admission | [Auto HWM](../systems/06-auto-hwm.en.md) |
 | Flow statistics in the status snapshot | [Monitoring](../06-monitoring.en.md) |
@@ -38,8 +39,8 @@ The following documents own the related contracts.
 
 DEALER sends and receives in parts. One group of parts from `ZLINK_PART_MORE` through
 `ZLINK_PART_FINAL` is a complete record. There are two kinds of receive record: ordinary raw
-messages without a request/reply envelope, and requests received by this DEALER. The exact numeric
-values are defined by `zlink_dealer_message_type_t` in [§7 Public types](#7-public-types).
+messages and requests received by this DEALER. The exact numeric values are defined by
+`zlink_dealer_message_type_t` in [§7 Public types](#7-public-types).
 
 [`zlink_dealer_recv_part()`](#zlink_dealer_recv_part) returns the record kind and request sequence
 with each payload part. Every part in one multipart record returns the same message type and request
@@ -47,6 +48,18 @@ sequence. Replies and terminal failures for work started through a request API a
 receive records; they are delivered only through the `zlink_reply_handler_fn` completion. Ordinary
 raw messages are sent with [`zlink_send_part()`](#zlink_send_part) and do not create a request
 sequence.
+
+Core preserves the request kind and wire sequence decoded from the ZMP header as internal values on
+the first payload part. Only `zlink_dealer_recv_part()` interprets the request kind: it stores the
+source pipe and wire sequence, then returns a nonzero reply token that is valid only on the same
+socket. Equal wire sequences from different source pipes receive different tokens, and a reply is
+sent back over the stored source pipe using the original wire sequence.
+
+A reply or error reply received through the typed surface terminates the pair with `EPROTO` and
+returns no payload. By contrast, the common raw receive function `zlink_recv_part()` returns
+requests, replies, and error replies as ordinary payload without creating a reply target or token.
+Both receive paths remove the internal kind and sequence before handing a part to the application,
+so sending that part again through a raw send produces ordinary data.
 
 One request proceeds to completion as follows.
 
@@ -69,8 +82,9 @@ sequenceDiagram
 
 ## 3. Outbound peer selection
 
-The following rules determine which peer receives a round-robin or weighted send. The weight is set
-with `ZLINK_DEALER_OPT_WEIGHT` in [§8 DEALER options](#8-dealer-options).
+The following rules determine which peer receives a round-robin or weighted send. The weight is the
+absolute value that each peer advertises through its own `ZLINK_DEALER_OPT_WEIGHT` or
+`ZLINK_ROUTER_OPT_WEIGHT`. [§8](#8-dealer-options) defines the DEALER option.
 
 A candidate is a connected outbound peer whose advertised weight is positive. A peer with weight
 `0` is excluded from the candidate set. If every known peer has weight `0`, a submit may fail with
@@ -93,12 +107,18 @@ single run. With weights `100` and `300`, the repeating order is `second, first,
 three consecutive sends to the heavier peer followed by one send to the lighter peer. With enough
 messages, the selection frequency matches the configured ratio.
 
-The selection procedure applies only to a message that a peer actually accepts. If the selected
-candidate cannot accept the write because it has no write capacity, it is excluded as a candidate
-for that message, and the procedure applies to the peer that accepts the message instead. This
-failure does not change the configured weight, and the peer returns to the candidate set when it
-reports write capacity again. A message rejected for exceeding a size limit is not retried against
-another candidate, because every candidate would reject it for the same reason.
+For an ordinary `zlink_send_part()` or `zlink_dealer_request_part()` that has not committed an exact
+target, the selection procedure applies only to the message that a peer accepts. If the selected
+candidate has no write capacity, it is excluded for that attempt and the procedure applies to the
+peer that accepts the message instead. This fallback does not change the configured weight, and the
+peer returns to the candidate set when it reports write capacity again. A message rejected for
+exceeding a size limit is not retried against another candidate, because every candidate would
+reject it for the same reason.
+
+Exact routed selection has a different commit boundary. `zlink_select_routed_submit_target()` and
+DEALER `zlink_send_async()` commit one weighted step across every connected positive-weight
+Application pipe, including an HWM-blocked pipe. The selected exact pipe remains the pending key;
+HWM makes the operation wait for that pipe and does not reroute it to another candidate.
 
 The identifier in step 2 is the peer routing ID, compared as a byte string. An absent routing ID is
 an empty byte string, so it sorts before every non-empty identifier. Peers with the same identifier,
@@ -118,15 +138,20 @@ with the connection. A peer excluded only temporarily because of [backpressure](
 or weight `0` retains its accumulator and continues from that value when it becomes a candidate
 again.
 
+Peer selection is fixed for one Application message. If the selected pipe's remote weight changes
+to `0` after the first part of a multipart has been accepted, all remaining parts through
+`ZLINK_PART_FINAL` use that same pipe. Weight `0` excludes the pipe only when the next message is
+selected.
+
 ## 4. Part sequences and ownership
 
 `*_part` send calls form one multipart sequence from `ZLINK_PART_MORE` through `ZLINK_PART_FINAL`.
 While a sequence is open, another send helper family cannot be interleaved on the same handle.
 
 When a valid initialized `part_` is passed to a send API, the function consumes its message content
-on both success and failure. Regardless of the call result, the caller therefore cannot read the
-pre-submit payload again or resend the same content. Payload that may need to be resent must be
-retained in a separate message before the call.
+on both success and failure and leaves it as an initialized zero-length message. Regardless of the
+call result, the caller therefore cannot read the pre-submit payload again or resend the same
+content. Payload that may need to be resent must be retained in a separate message before the call.
 
 Each send helper family stages successful intermediate parts as one record until
 `ZLINK_PART_FINAL` succeeds. If an intermediate or final submit in an open sequence fails, Core
@@ -136,6 +161,11 @@ submit starts the first part of a new record. A failed request submit creates no
 does not invoke the handler. If a reply sequence fails, its reply token remains valid until either a
 successful `ZLINK_PART_FINAL` or the end of the request lifecycle, so the caller can resubmit a
 retained complete reply from its first part.
+
+If the first application part of a request or reply has a non-empty message group, Core cannot store
+the internal request metadata in the same area. It rejects the entire submission with
+`ZLINK_SUBMIT_INVALID_ARGUMENT` and `EINVAL`. The supplied C part follows the same consumption rule,
+and no staged part, pending request, or reply target remains.
 
 The `part_out_` passed to a receive API must be an initialized `zlink_msg_t` before the call. On
 success, ownership of the received part moves to the caller, which releases it exactly once with
@@ -206,7 +236,7 @@ The enum numbers in this section and [§8 DEALER options](#8-dealer-options) are
 
 ```c
 typedef enum zlink_dealer_message_type_t {
-  ZLINK_DEALER_MESSAGE_RAW         = 0,  // Ordinary raw multipart message without a request/reply envelope. Request sequence is 0
+  ZLINK_DEALER_MESSAGE_RAW         = 0,  // Ordinary raw multipart message. Request sequence is 0
   ZLINK_DEALER_MESSAGE_REQUEST     = 1   // Request received by this DEALER. Nonzero request sequence is a reply token for zlink_dealer_reply_part()
 } zlink_dealer_message_type_t;
 
@@ -254,6 +284,41 @@ that are not DEALER-specific use `zlink_set_option()` and `zlink_get_option()`.
 
 A weight outside `0..10000` is rejected and is not clamped. Values in `0..100` retain the meaning
 they had before the range was widened.
+
+The common [`ZLINK_OPT_CONFLATE` contract](README.en.md#conflation) does not allow DEALER to enable
+frame-level conflation. Setting `1` returns `ZLINK_CONFIG_NOT_SUPPORTED` with `ENOTSUP`; setting `0`
+succeeds as a no-op, and the getter returns `0`.
+
+`ZLINK_DEALER_OPT_WEIGHT` is the absolute value that a peer uses when selecting this DEALER as an
+outbound candidate. DEALER and ROUTER advertise their own values independently, so each direction
+uses the value advertised by the other socket.
+
+The public weight result follows this order.
+
+1. A value set before bind or connect applies after the paired Application pipe becomes ready.
+2. A dynamic change applies the new absolute value, including `0`, to the peer scheduler.
+3. An actual change emits `PEER_WEIGHT_CHANGED` with the value and the paired Application pipe's
+   lane, pair ID, and generation. Repeating the same value emits no additional event.
+4. Reconnect applies the current configured value to the new generation.
+
+The network wire, inproc delivery, CONTROL size boundary, multipart deferral, and exact-pipe
+lifetime and stale-delivery ownership are defined by the
+[ZMP transport-pair](../protocol/01-zmp.en.md#41-request-reply-transport-pair),
+[decode](../protocol/01-zmp.en.md#7-decode-validation), and
+[peer-weight owner](../protocol/01-zmp.en.md#peer-weight-control) contracts. Neither transport path
+creates a weight record on public receive or the Completion lane.
+
+If the applied value becomes `0` after a multipart has selected a pipe, that message completes
+through FINAL on the same pipe. The next message selection excludes it.
+
+An actual remote-weight change re-evaluates a pending `zlink_send_async()` operation for its exact
+pipe. If the weight becomes `0` before the message begins, the completion is `ZLINK_SEND_TERMINAL`
+with `terminal_errno == ECONNREFUSED`; a change from `0` to a positive value permits retry without
+another write-activation event.
+
+An active duplicate keeps its own latest value while standby and uses it if that same pipe is
+selected later. Setting the Application maximum below 10 bytes does not prevent pair readiness,
+FLOWSTATE, or WEIGHT delivery; malformed CONTROL behavior remains owned by ZMP.
 
 ## 9. Functions
 
@@ -324,8 +389,11 @@ default. `flags_` is `ZLINK_SEND_FLAGS_NONE` or `ZLINK_SEND_FLAGS_DONTWAIT`.
 
 If the final submit returns `ZLINK_SUBMIT_OK`, exactly one completion is delivered to `handler_`. A
 failed submit does not invoke the handler. Ownership of callback `parts_` and every message moves to
-the callback, which releases them exactly once. On timeout and other terminal results,
-`zlink_request_result_t` identifies the result.
+the callback, which releases them exactly once. For a valid error reply, the callback receives the
+parts after the first 4-byte Big Endian errno part and a non-OK `zlink_request_result_t` mapped from
+that errno. If the first error-reply part is absent, is not 4 bytes, or contains `0`, the callback
+receives `ZLINK_REQUEST_PROTOCOL_ERROR` and a part count of `0`. On timeout and other terminal
+results, `zlink_request_result_t` identifies the result.
 
 ---
 
@@ -347,11 +415,12 @@ ZLINK_EXPORT zlink_submit_result_t zlink_dealer_request_transport_pair_part(
 
 Target validation, the multipart fence, and failure rollback match the
 [exact raw submit](#zlink_dealer_send_transport_pair_part). Core registers pending correlation and
-the timeout lifecycle before the request envelope can become visible on the wire. If the final
-submit fails, Core removes the pending entry and completion reservation and does not invoke the
-handler. After a successful submit, a fast reply cannot arrive before correlation registration. A
-binding makes one attempt from the first request part through FINAL under the same short
-socket-local attempt gate as raw send and releases the gate before waiting.
+the timeout lifecycle before the request kind and sequence in the first payload's ZMP header can
+become visible on the wire. If the final submit fails, Core removes the pending entry and completion
+reservation and does not invoke the handler. After a successful submit, a fast reply cannot arrive
+before correlation registration. A binding makes one attempt from the first request part through
+FINAL under the same short socket-local attempt gate as raw send and releases the gate before
+waiting.
 
 ---
 
@@ -395,12 +464,21 @@ ZLINK_EXPORT zlink_submit_result_t zlink_dealer_reply_part(
 `zlink_dealer_recv_part()` on the same socket. A multipart reply uses the same token for every call.
 A successful `ZLINK_PART_FINAL` completes the reply for that token, which cannot then be reused.
 
+The reply token is not the wire sequence. Core resolves the token to the stored source pipe and wire
+sequence, then writes the reply kind and original sequence into the first reply payload's ZMP
+header. The application cannot choose an arbitrary wire sequence or peer route.
+
 Raw replies and error replies are submitted exactly once through the completion progress lane. This
 lane is not subject to application byte HWM, manual HWM, LWM, or Core budget reservation, so this
 function does not return `ZLINK_SUBMIT_BACKPRESSURED` because of that capacity and enters no
 readiness-wait or retry path. Connection, lifecycle, argument, state,
 and allocation failures terminate immediately with the corresponding `zlink_submit_result_t` at
 the call.
+
+The completion progress lane processes valid receive-flow control before application kinds. A
+reply or error reply completes the one pending request identified by its sequence. If data or a
+request arrives on this lane, Core does not invoke a callback with that frame; it terminates the
+pair with `EPROTO`, and each existing pending request completes once with the disconnect result.
 
 ## 10. Implementation and contract-test verification requirements
 
@@ -414,6 +492,32 @@ and the [Monitoring](../06-monitoring.en.md) status snapshot. Each item maps to 
 - When `zlink_get_dealer_option()` succeeds, `*optvallen_` is updated to the number of bytes actually written.
 - When `ZLINK_DEALER_OPT_PROBE` is set to a positive value, the peer can observe the connection and routing ID through an empty raw message when the connection is established, and the getter returns `0` or `1`.
 - When the final request part is submitted with `timeout_ms_ == 0`, the `ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS` value (default `5000`) is used as the timeout.
+- On DEALER, setting `ZLINK_OPT_CONFLATE` to `1` returns `ZLINK_CONFIG_NOT_SUPPORTED` with
+  `ENOTSUP`; setting `0` succeeds, and the getter returns `0`.
+
+**Peer-weight delivery**
+
+- If different weights are configured on a DEALER and its peer ROUTER before bind or connect, each
+  scheduler uses the peer's exact value after the pair becomes ready, and a peer with value `0` is
+  excluded from outbound candidates.
+- Dynamically changing both weights after a network or inproc pair is ready produces
+  `PEER_WEIGHT_CHANGED` with the new weight in `value`; the event transport lane, pair ID, and
+  generation match the paired Application pipe to which the value was applied.
+- Setting or synchronizing weight adds no application record to public receive or the Completion
+  lane, and setting the same value again produces no duplicate monitor event.
+- Changing weight more than once while an Application multipart is open preserves the peer-visible
+  multipart as one atomic record, and only the latest value is reflected after FINAL or rollback.
+- If a pipe's remote weight becomes `0` after the first part of an Application multipart is
+  accepted, the same pipe carries every remaining part through FINAL and is excluded starting with
+  the next message selection.
+- A remote-weight change re-evaluates a pending `zlink_send_async()` operation for its exact pipe:
+  if the weight becomes `0` before the message begins, the completion is `ZLINK_SEND_TERMINAL` with
+  `terminal_errno == ECONNREFUSED`; a change from `0` to a positive value permits retry without
+  another write-activation event.
+- Setting an Application maximum below 10 bytes does not prevent pair readiness, FLOWSTATE, or
+  weight changes observed through peer selection and monitoring.
+- After reconnect, peer selection and monitoring reflect the current weight on the new generation.
+  Promoting an active standby uses the value that standby most recently received.
 
 **Outbound peer selection**
 
@@ -423,14 +527,18 @@ and the [Monitoring](../06-monitoring.en.md) status snapshot. Each item maps to 
 - Two processes configured with the same peers and weights produce the same selection order when their candidate identifiers are distinct.
 - A reconnected peer starts again with accumulator `0` and retains its previous sorting position.
 - A peer that cannot accept a message because it has no write capacity is excluded only for that message and continues from its retained accumulator when it reports capacity again.
+- `zlink_select_routed_submit_target()` and DEALER `zlink_send_async()` include an HWM-blocked
+  positive-weight pipe in the weighted step, commit the selected exact pending key, and do not
+  reroute that operation while it waits for exact-pipe readiness.
 
 **Part sequences and ownership**
 
-- A send API consumes `part_` on both success and failure—the caller cannot read the pre-submit payload again or resend it through the same `part_` after the call.
+- A send API consumes `part_` on both success and failure and leaves it as an initialized zero-length message—the caller cannot read the pre-submit payload again or resend it through the same `part_` after the call.
 - If an intermediate or final submit in an open sequence fails, no part of that record is visible to the peer and the next submit starts the first part of a new record.
 - A failed request submit creates no request sequence and does not invoke the handler.
 - If a reply sequence fails, its reply token remains valid until either a successful `ZLINK_PART_FINAL` or the end of the request lifecycle, and the retained complete reply can be resubmitted from its first part.
 - On receive success, ownership of the part moves to the caller, which releases it exactly once with `zlink_msg_close()`. On failure, ownership does not move.
+- A non-empty group on the first request or reply part yields `ZLINK_SUBMIT_INVALID_ARGUMENT` and `EINVAL`; the input part is consumed and the peer receives no part of that record. A failed request does not invoke its handler, and the token from a failed reply can be submitted again with group-free payload.
 
 **Exact-target submit**
 
@@ -441,19 +549,25 @@ and the [Monitoring](../06-monitoring.en.md) status snapshot. Each item maps to 
 
 - If the final request submit returns `ZLINK_SUBMIT_OK`, exactly one completion is delivered to `handler_`; if the submit fails, the handler is not invoked.
 - Ownership of callback `parts_` and every message moves to the callback, which releases them exactly once.
-- After a successful exact-target request submit, a fast reply cannot arrive before correlation registration—the reply is delivered as a handler completion.
+- Even when a peer replies immediately after a successful exact-target request submit, the reply is delivered exactly once as a handler completion.
 
 **Receive**
 
 - A non-blocking `zlink_dealer_recv_part()` call with no record available returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
 - Every part in one multipart record returns the same message type and request sequence.
 - If `has_more_out_ == ZLINK_PART_MORE`, the next call returns the next part of the same record; `ZLINK_PART_FINAL` completes the record's receive sequence.
+- A request received through `zlink_dealer_recv_part()` returns a nonzero local reply token; equal wire sequences received from different peer connections return different tokens.
+- A reply or error reply received through `zlink_dealer_recv_part()` returns no payload and terminates the pair with `EPROTO`.
+- Receiving a request, reply, or error reply through `zlink_recv_part()` exposes ordinary payload without creating a token. Raw-sending that payload does not restore request-reply semantics, and a later typed request can still be received and replied to after this is repeated.
 
 **Replies and completion lane**
 
 - `zlink_dealer_reply_part()` does not return `ZLINK_SUBMIT_BACKPRESSURED` because of completion lane capacity.
 - A token whose `ZLINK_PART_FINAL` succeeded cannot be reused.
 - Connection, lifecycle, argument, state, and allocation failures terminate immediately with the corresponding `zlink_submit_result_t` at the call.
+- Replying with a DEALER local token makes a reply with the original wire sequence observable on the peer connection that produced the token and completes only the corresponding request.
+- A reply or error reply on the completion progress lane invokes the matching public request completion once; data or a request terminates the pair with `EPROTO` without being delivered as callback payload.
+- A valid error reply delivers a non-OK `zlink_request_result_t` mapped from its errno and the payload after the errno part to the Core C callback. An absent errno part, a part whose size is not 4 bytes, or a zero value completes with `ZLINK_REQUEST_PROTOCOL_ERROR` and a part count of `0`.
 
 **Results and readiness**
 
@@ -468,3 +582,7 @@ and the [Monitoring](../06-monitoring.en.md) status snapshot. Each item maps to 
 - Clearing remote pause does not by itself make the next send succeed. A blocked non-blocking send continues to report `ZLINK_SUBMIT_BACKPRESSURED` with `errno == EAGAIN`.
 - Remote PAUSE takes effect at the next message boundary—a message whose first byte has already reached the pipe or whose first part has already been accepted sends all remaining parts.
 - The [Monitoring](../06-monitoring.en.md) status snapshot exposes the number of peers currently seen as paused, the numbers of applied pause and resume transitions, the number of frames rejected as stale, and the duration of the most recently completed pause.
+
+<!-- zlink-nav:start -->
+[Socket Index](README.en.md) | [Previous: XSUB](05-xsub.en.md) | [Next: ROUTER](07-router.en.md)
+<!-- zlink-nav:end -->

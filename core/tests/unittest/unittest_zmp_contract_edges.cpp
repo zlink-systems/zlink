@@ -11,6 +11,8 @@
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "api/socket/socket_request_reply_pending_internal.hpp"
 #include "protocol/zmp_encoder.hpp"
+#include "protocol/zmp_protocol.hpp"
+#include "protocol/wire.hpp"
 
 #include <chrono>
 #include <condition_variable>
@@ -111,6 +113,92 @@ void test_zmp_encoder_rejects_payload_larger_than_u32 ()
     TEST_ASSERT_SUCCESS_ERRNO (msg.close ());
 }
 
+void test_zmp_encoder_keeps_ordinary_data_header_at_eight_bytes ()
+{
+    zlink::msg_t msg;
+    TEST_ASSERT_SUCCESS_ERRNO (msg.init_buffer ("abc", 3));
+
+    zlink::zmp_encoder_t encoder (64);
+    encoder.load_msg (&msg);
+    unsigned char *encoded = NULL;
+    const size_t encoded_size = encoder.encode (&encoded, 0);
+
+    TEST_ASSERT_EQUAL_UINT64 (zlink::zmp_header_size + 3, encoded_size);
+    TEST_ASSERT_EQUAL_HEX8 (zlink::zmp_magic, encoded[0]);
+    TEST_ASSERT_EQUAL_HEX8 (zlink::zmp_version, encoded[1]);
+    TEST_ASSERT_EQUAL_HEX8 (0, encoded[2]);
+    TEST_ASSERT_EQUAL_HEX8 (zlink::zmp_kind_data, encoded[3]);
+    TEST_ASSERT_EQUAL_UINT32 (3, zlink::get_uint32 (encoded + 4));
+    TEST_ASSERT_EQUAL_MEMORY ("abc", encoded + zlink::zmp_header_size, 3);
+}
+
+void test_zmp_encoder_writes_request_sequence_extension_big_endian ()
+{
+    zlink::msg_t msg;
+    TEST_ASSERT_SUCCESS_ERRNO (msg.init_buffer ("abc", 3));
+    msg.set_flags (zlink::msg_t::more);
+    const uint64_t sequence = UINT64_C (0x0102030405060708);
+    TEST_ASSERT_SUCCESS_ERRNO (msg.set_request_reply_metadata (
+      zlink::zmp_kind_request, sequence));
+
+    zlink::zmp_encoder_t encoder (64);
+    encoder.load_msg (&msg);
+    unsigned char *encoded = NULL;
+    const size_t encoded_size = encoder.encode (&encoded, 0);
+
+    static const unsigned char expected_header[] = {
+      zlink::zmp_magic, zlink::zmp_version, zlink::zmp_flag_more,
+      zlink::zmp_kind_request, 0x00, 0x00, 0x00, 0x03,
+      0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+    TEST_ASSERT_EQUAL_UINT64 (zlink::zmp_request_reply_header_size + 3,
+                              encoded_size);
+    TEST_ASSERT_EQUAL_MEMORY (expected_header, encoded,
+                              sizeof (expected_header));
+    TEST_ASSERT_EQUAL_MEMORY (
+      "abc", encoded + zlink::zmp_request_reply_header_size, 3);
+}
+
+void test_zmp_encoder_rejects_request_metadata_on_special_frame ()
+{
+    zlink::msg_t msg;
+    TEST_ASSERT_SUCCESS_ERRNO (msg.init_size (0));
+    msg.set_flags (zlink::msg_t::routing_id);
+    TEST_ASSERT_SUCCESS_ERRNO (msg.set_request_reply_metadata (
+      zlink::zmp_kind_reply, 1));
+
+    zlink::zmp_encoder_t encoder (64);
+    errno = 0;
+    encoder.load_msg (&msg);
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+    unsigned char *encoded = NULL;
+    TEST_ASSERT_EQUAL_UINT64 (0, encoder.encode (&encoded, 0));
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+}
+
+void test_zmp_encoder_rejects_request_metadata_mid_multipart ()
+{
+    zlink::zmp_encoder_t encoder (64);
+
+    zlink::msg_t first;
+    TEST_ASSERT_SUCCESS_ERRNO (first.init_size (0));
+    first.set_flags (zlink::msg_t::more);
+    encoder.load_msg (&first);
+    unsigned char *encoded = NULL;
+    TEST_ASSERT_EQUAL_UINT64 (zlink::zmp_header_size,
+                              encoder.encode (&encoded, 0));
+
+    zlink::msg_t second;
+    TEST_ASSERT_SUCCESS_ERRNO (second.init_size (0));
+    TEST_ASSERT_SUCCESS_ERRNO (second.set_request_reply_metadata (
+      zlink::zmp_kind_request, 2));
+    errno = 0;
+    encoder.load_msg (&second);
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+    encoded = NULL;
+    TEST_ASSERT_EQUAL_UINT64 (0, encoder.encode (&encoded, 0));
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+}
+
 void test_zmp_socket_send_rejects_oversized_borrowed_payload ()
 {
     if (std::numeric_limits<size_t>::max ()
@@ -162,6 +250,20 @@ void test_error_reply_with_zero_errno_becomes_protocol_error ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&parts[1]));
 }
 
+void test_error_reply_without_errno_part_becomes_protocol_error ()
+{
+    int callback_errno = 0;
+    zlink_msg_t *callback_parts = reinterpret_cast<zlink_msg_t *> (1);
+    size_t callback_part_count = 1;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::request_reply::decode_reply_completion (
+        zlink::request_reply::error_reply_type, NULL, 0, &callback_errno,
+        &callback_parts, &callback_part_count));
+    TEST_ASSERT_EQUAL_INT (EPROTO, callback_errno);
+    TEST_ASSERT_NULL (callback_parts);
+    TEST_ASSERT_EQUAL_UINT64 (0, callback_part_count);
+}
+
 void test_missing_completion_pipe_is_not_connected ()
 {
     void *ctx = zlink_ctx_new ();
@@ -176,8 +278,8 @@ void test_missing_completion_pipe_is_not_connected ()
     memcpy (zlink_msg_data (&frame), "reply", 5);
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
-      -1, zlink::socket_reqrep_internal::send_completion_frames (
-            handle.socket, NULL, NULL, &frame, 1));
+      -1, zlink::socket_reqrep_internal::send_completion_staged_frames (
+            handle.socket, NULL, NULL, NULL, 0, &frame));
     TEST_ASSERT_EQUAL_INT (ENOTCONN, errno);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_NOT_CONNECTED,
@@ -586,8 +688,13 @@ int main ()
     setup_test_environment ();
     UNITY_BEGIN ();
     RUN_TEST (test_zmp_encoder_rejects_payload_larger_than_u32);
+    RUN_TEST (test_zmp_encoder_keeps_ordinary_data_header_at_eight_bytes);
+    RUN_TEST (test_zmp_encoder_writes_request_sequence_extension_big_endian);
+    RUN_TEST (test_zmp_encoder_rejects_request_metadata_on_special_frame);
+    RUN_TEST (test_zmp_encoder_rejects_request_metadata_mid_multipart);
     RUN_TEST (test_zmp_socket_send_rejects_oversized_borrowed_payload);
     RUN_TEST (test_error_reply_with_zero_errno_becomes_protocol_error);
+    RUN_TEST (test_error_reply_without_errno_part_becomes_protocol_error);
     RUN_TEST (test_missing_completion_pipe_is_not_connected);
     RUN_TEST (test_request_reply_frame_buffer_spills_after_eight_owned_frames);
     RUN_TEST (test_recv_sequence_buffers_two_parts_inline_and_rolls_back_oom);

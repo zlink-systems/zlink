@@ -8,6 +8,11 @@ namespace zlink
 int proxy (class socket_base_t *frontend_,
            class socket_base_t *backend_,
            class socket_base_t *capture_);
+
+#ifdef ZLINK_BUILD_TESTS
+void test_fail_next_proxy_destination_send ();
+void test_reset_proxy_state ();
+#endif
 }
 
 #endif

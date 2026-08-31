@@ -32,7 +32,14 @@ namespace zlink
 class socket_poller_t
 {
   public:
-    socket_poller_t ();
+    enum output_readiness_t
+    {
+        public_output_readiness,
+        transport_output_readiness
+    };
+
+    explicit socket_poller_t (
+      output_readiness_t output_readiness_ = public_output_readiness);
     ~socket_poller_t ();
 
     struct event_t
@@ -165,6 +172,11 @@ class socket_poller_t
     //  Used to check whether the object is a socket_poller.
     uint32_t _tag;
 
+    // Public POLLOUT is a backpressure-recovery edge. The in-process proxy
+    // selects physical transport writability because it must not consume a
+    // source record until its destination can accept it.
+    output_readiness_t _output_readiness;
+
 #if defined ZLINK_HAVE_WINDOWS
     // Windows cannot poll the signaler sockets as cheaply as Linux can poll
     // eventfd descriptors. Socket-only pollers use one event shared by all
@@ -195,7 +207,7 @@ class socket_poller_t
     int modify_item_events (items_t::iterator it_, short events_);
     int modify_item_user_data (items_t::iterator it_, void *user_data_);
     int remove_item (items_t::iterator it_);
-    static int collect_socket_event (item_t &item_, event_t *event_);
+    int collect_socket_event (item_t &item_, event_t *event_);
 #if !defined ZLINK_HAVE_WINDOWS
     signaler_t *ensure_socket_signaler ();
     void unregister_socket_signaler ();

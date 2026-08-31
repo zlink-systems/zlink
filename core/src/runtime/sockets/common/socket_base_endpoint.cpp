@@ -245,7 +245,13 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
 
             bool connected_inproc_now = false;
             if (!peer.socket) {
-                send_routing_id (new_pipes[0], options);
+                // The Completion lane carries only ZMP reply/error/flow
+                // records. A synthetic ROUTER identity frame has no
+                // completion owner and is therefore a protocol error, while
+                // the Application lane still needs the normal inproc routing
+                // preamble.
+                if (lane == transport_lane_application)
+                    send_routing_id (new_pipes[0], options);
                 if (paired_transport && lane == transport_lane_application) {
                     new_pipes[0]->hold_writes_until_transport_pair_ready ();
                     new_pipes[1]->hold_writes_until_transport_pair_ready ();
@@ -261,9 +267,11 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
             } else {
                 if (lane_index > 0)
                     peer.socket->inc_seqnum ();
-                if (peer.options.recv_routing_id)
+                if (lane == transport_lane_application
+                    && peer.options.recv_routing_id)
                     send_routing_id (new_pipes[0], options);
-                if (options.recv_routing_id)
+                if (lane == transport_lane_application
+                    && options.recv_routing_id)
                     send_routing_id (new_pipes[1], peer.options);
 
                 new_pipes[0]->set_peer_routing_id (peer.options.routing_id,

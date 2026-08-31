@@ -5559,16 +5559,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             Publish(MeshMonitorEventKind.ProtocolError);
             return false;
         }
-        // Core 0.14.6 stages multipart Router receives but does not export the
-        // staged pair into recv_part_v2. Its TLS fallback can therefore be zero
-        // or stale. Admission records are single-part, so they establish the
-        // exact current pair; multipart work deliberately falls back to that
-        // already-admitted epoch until Core fixes the v2 export.
-        var transportPair = received.Parts.Count == 1
-            ? new ZLinkTransportPairIdentity(
-                received.TransportPairId,
-                received.TransportPairGeneration)
-            : default;
+        var transportPair = new ZLinkTransportPairIdentity(
+            received.TransportPairId,
+            received.TransportPairGeneration);
 
         var head = received.Parts[0].ToArray();
         if (head.Length >= 5
@@ -6106,11 +6099,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 || !peer.Admitted)
                 return null;
             if (!transportPair.IsValid)
-                // Core 0.14.6's multipart v2 receive currently omits the pair
-                // fields. The admission record is single-part and already
-                // attached the exact current pair, so keep that epoch fallback
-                // until Core exports its staged multipart metadata.
-                return peer.NativeReplyEpoch;
+                return null;
             if (peer.TransportPair != transportPair
                 || !_nativeReplyEpochsByTransportPair.TryGetValue(
                     transportPair,

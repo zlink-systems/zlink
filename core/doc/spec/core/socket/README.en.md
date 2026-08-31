@@ -258,7 +258,7 @@ typedef enum zlink_request_result_t
     ZLINK_REQUEST_TIMED_OUT       = 101,   // No reply arrived within the configured time
     ZLINK_REQUEST_NOT_FOUND       = 102,   // The target was absent and the request completed with an error reply
     ZLINK_REQUEST_TERMINATED      = 103,   // Context or socket ended before a terminal reply (ETERM or ESHUTDOWN)
-    ZLINK_REQUEST_PROTOCOL_ERROR  = 104,   // The reply envelope or error-reply payload was malformed
+    ZLINK_REQUEST_PROTOCOL_ERROR  = 104,   // The reply metadata or error-reply payload was malformed
     ZLINK_REQUEST_INTERNAL_ERROR  = 105,   // Completion failed without a more specific public bucket
     ZLINK_REQUEST_REJECTED        = 106,   // The target explicitly rejected the request
     ZLINK_REQUEST_CONFLICT        = 107,   // The request conflicts with current routing or operation state
@@ -387,8 +387,13 @@ This callback reports asynchronous request-reply completion. It runs when a
 reply arrives or the request times out. On timeout, `result_` is
 `ZLINK_REQUEST_TIMED_OUT` and `parts_` is NULL. On success, `result_` is
 `ZLINK_REQUEST_OK` and ownership of every message part transfers to the
-callback. `result_` is not a submit failure; it is the request-completion
-outcome expressed as a `zlink_request_result_t` value. This callback is an
+callback. For a valid wire error reply, `result_` is the non-OK value mapped
+from the first 4-byte Big Endian errno, and `parts_` contains the payload after
+the errno part; ownership of those messages also transfers to the callback. If
+the error reply has no errno part, its size is not 4 bytes, or its value is
+`0`, `result_` is `ZLINK_REQUEST_PROTOCOL_ERROR` and `part_count_` is `0`.
+`result_` is not a submit failure; it is the request-completion outcome
+expressed as a `zlink_request_result_t` value. This callback is an
 async-operation completion notification, not data-plane receive, and is used
 only by the request APIs of `DEALER` and `ROUTER`.
 
@@ -430,7 +435,7 @@ typedef enum zlink_option_t {
   ZLINK_OPT_RECONNECT_IVL             = 0x300B,  // Initial reconnect interval (ms, int)
   ZLINK_OPT_BACKLOG                   = 0x300C,  // Listener backlog (int)
   ZLINK_OPT_RECONNECT_IVL_MAX         = 0x300D,  // Maximum reconnect interval (ms, int; 0=use IVL only)
-  ZLINK_OPT_MAXMSGSIZE                = 0x300E,  // Maximum inbound message size (int64_t; -1=unlimited)
+  ZLINK_OPT_MAXMSGSIZE                = 0x300E,  // Maximum inbound message size (int64_t; positive=limit, nonpositive=unlimited, default -1)
   ZLINK_OPT_SNDHWM                    = 0x300F,  // Accounted-byte HWM for a directional send pipe (uint64_t; default 4,096,000, 0=unlimited)
   ZLINK_OPT_RCVHWM                    = 0x3010,  // Accounted-byte HWM for a directional receive pipe (uint64_t; default 4,096,000, 0=unlimited)
   ZLINK_OPT_MULTICAST_HOPS            = 0x3011,  // Multicast TTL (int)
@@ -443,7 +448,7 @@ typedef enum zlink_option_t {
   ZLINK_OPT_TCP_KEEPALIVE_INTVL       = 0x3018,  // TCP_KEEPINTVL (seconds, int; -1=OS default)
   ZLINK_OPT_IMMEDIATE                 = 0x3019,  // Queue messages only to completed connections (int)
   ZLINK_OPT_IPV6                      = 0x301A,  // Enable IPv6 on the socket (int; 0=off, positive=on, getter returns 0/1)
-  ZLINK_OPT_CONFLATE                  = 0x301B,  // Keep only the latest message per topic (int)
+  ZLINK_OPT_CONFLATE                  = 0x301B,  // PUB/SUB keep only the latest message per topic (int; DEALER cannot enable it)
   ZLINK_OPT_TOS                       = 0x301C,  // IP Type-of-Service value (int)
   ZLINK_OPT_HANDSHAKE_IVL             = 0x301D,  // ZMTP handshake timeout (ms, int)
   ZLINK_OPT_BLOCKY                    = 0x301E,  // Identifier unsupported by the socket option API; see below
@@ -479,6 +484,16 @@ apply to raw sockets and discovery.
 `ZLINK_CONFIG_NOT_SUPPORTED` / `ENOTSUP`. Configure context-termination
 behavior with `ZLINK_CTX_OPT_BLOCKY` (`int`; 0=off, positive=on, getter returns
 0/1).
+
+#### Conflation
+
+`ZLINK_OPT_CONFLATE` remains enabled and queryable as `1` on PUB and SUB. On DEALER, setting it to
+`1` returns `ZLINK_CONFIG_NOT_SUPPORTED` with `ENOTSUP`, setting it to `0` succeeds as a no-op, and
+the getter returns `0`.
+
+DEALER carries Application records and internal protocol controls on the same Application pipe.
+Frame-level conflation cannot preserve both classes: replacing one frame can lose either the latest
+Application record or a required control. DEALER therefore does not provide partial conflation.
 
 #### Transport/Buffer
 
@@ -1294,6 +1309,8 @@ callback invocation. Each item maps to one unit test.
   `ZLINK_CONFIG_INVALID_ARGUMENT` and `EINVAL`.
 - Passing `ZLINK_OPT_BLOCKY` to `zlink_set_option()` or `zlink_get_option()`
   produces `ZLINK_CONFIG_NOT_SUPPORTED` / `ENOTSUP`.
+- On DEALER, `ZLINK_OPT_CONFLATE=1` produces `ZLINK_CONFIG_NOT_SUPPORTED` / `ENOTSUP`, setting `0`
+  succeeds, and the getter remains `0`. PUB and SUB accept `1` and return `1` from the getter.
 - An unknown option, out-of-range value, or invalid byte-count size produces
   `EINVAL`; a terminated Context produces `ETERM`.
 
@@ -1378,6 +1395,9 @@ callback invocation. Each item maps to one unit test.
 - On request timeout, `zlink_reply_handler_fn` receives
   `ZLINK_REQUEST_TIMED_OUT` in `result_` and NULL in `parts_`. On success, it
   receives `ZLINK_REQUEST_OK`, and part ownership transfers to the callback.
+- A valid wire error reply delivers a mapped non-OK result and the payload after
+  the errno part to the callback. A malformed errno part delivers
+  `ZLINK_REQUEST_PROTOCOL_ERROR` and a part count of `0`.
 - A failed submit does not invoke the handler. After `ZLINK_SUBMIT_OK`, the
   handler is invoked exactly once with a reply or terminal result.
 
@@ -1387,3 +1407,7 @@ callback invocation. Each item maps to one unit test.
 - A socket type without a completion lane returns
   `ZLINK_CONFIG_NOT_SUPPORTED` and preserves its existing byte HWM and
   transport backpressure.
+
+<!-- zlink-nav:start -->
+[Core Spec Index](../README.en.md) | [Previous: Runtime Boundary](../08-runtime-boundary.en.md) | [Next: PAIR](01-pair.en.md)
+<!-- zlink-nav:end -->

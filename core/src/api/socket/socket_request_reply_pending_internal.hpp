@@ -15,10 +15,6 @@ int lookup_socket_pending_request (
   pending_request_token_t *token_out_);
 bool erase_socket_pending_request (const std::shared_ptr<socket_request_reply_state_t> &state_,
                                    const pending_request_identity_t &identity_);
-void record_socket_pending_transport_pair (
-  const std::shared_ptr<socket_request_reply_state_t> &state_,
-  const pending_request_identity_t &identity_,
-  zlink::pipe_t *transport_pair_pipe_);
 bool record_socket_pending_transport_pair_identity (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   const pending_request_identity_t &identity_,

@@ -13,6 +13,7 @@ set(unittests
     unittest_zmp_decoder
     unittest_zmp_contract_edges
     unittest_raw_decoder
+    unittest_msg_auxiliary
     unittest_msg_view
     unittest_ctx_runtime
     unittest_socket_runtime
