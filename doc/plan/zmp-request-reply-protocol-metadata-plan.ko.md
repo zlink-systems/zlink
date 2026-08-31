@@ -1010,6 +1010,64 @@ Peer weight의 성능 개선은 상시 `msg_t` 보관, application queue 처리�
 throughput·latency와 중앙값을 남긴다. 측정 실행과 기록은 완료 조건이지만 특정 개선율은 합격
 기준이 아니다.
 
+#### 측정 기록 — 2026-08-31
+
+- Core revision은 `4d14b906a9ebd1f0b3ffcb6367818ed3257d50e8`이고 dirty 상태가 아닌
+  local Release `core/build/lib/libzlink.so.0.14.6`을 사용했다.
+- 환경은 WSL2 Linux x86-64, 16 logical cores이고 payload는 `[1024-byte payload][empty]`,
+  `PERF_PART_COUNT=2`, transport는 TCP·WSS, auto-HWM profile은 `balanced`다. Single은 I/O thread
+  1개, multi는 server·client I/O thread 각 4개와 client 100개를 사용했다.
+- 각 조합을 5초씩 세 번 측정했다. 아래 `a / b / c -> m`은 run 1·2·3과 중앙값 `m`이며,
+  throughput 단위는 Kmsg/s 또는 Kops/s, latency는 active window의 mean ms다.
+
+Single 결과는 다음과 같다.
+
+| Topology | Transport | SENDSEND throughput | SENDSEND latency | REQREP throughput | REQREP latency | REQREP/SENDSEND |
+|---|---|---:|---:|---:|---:|---:|
+| DEALER-ROUTER | TCP | 869.73 / 835.51 / 825.87 -> 835.51 Kmsg/s | 0.615 / 0.647 / 0.650 -> 0.647 | 221.68 / 248.73 / 249.67 -> 248.73 Kops/s | 3.220 / 2.719 / 2.614 -> 2.719 | ops 29.8%, bandwidth 59.5% |
+| DEALER-ROUTER | WSS | 32.86 / 32.89 / 32.66 -> 32.86 Kmsg/s | 13.957 / 13.918 / 14.027 -> 13.957 | 16.51 / 17.09 / 16.89 -> 16.89 Kops/s | 53.470 / 51.911 / 52.038 -> 52.038 | ops 51.4%, bandwidth 102.8% |
+| ROUTER-ROUTER | TCP | 735.72 / 686.21 / 666.10 -> 686.21 Kmsg/s | 10.824 / 9.910 / 11.622 -> 10.824 | 217.54 / 216.15 / 210.76 -> 216.15 Kops/s | 52.177 / 12.889 / 18.409 -> 18.409 | ops 31.5%, bandwidth 63.0% |
+| ROUTER-ROUTER | WSS | 32.06 / 32.23 / 32.14 -> 32.14 Kmsg/s | 14.303 / 14.213 / 14.246 -> 14.246 | 16.71 / 16.71 / 16.52 -> 16.71 Kops/s | 52.601 / 52.986 / 53.399 -> 52.986 | ops 52.0%, bandwidth 104.0% |
+
+Multi 결과는 다음과 같다. 두 pattern 모두 echo operation을 Kops/s로 세므로 throughput 단위는 같다.
+
+| Topology | Transport | SENDSEND throughput | SENDSEND latency | REQREP throughput | REQREP latency | REQREP/SENDSEND throughput |
+|---|---|---:|---:|---:|---:|---:|
+| DEALER-ROUTER | TCP | 241.820 / 229.841 / 230.146 -> 230.146 Kops/s | 0.880 / 0.800 / 0.849 -> 0.849 | 167.424 / 139.664 / 142.949 -> 142.949 Kops/s | 5.296 / 4.613 / 4.166 -> 4.613 | 62.1% |
+| DEALER-ROUTER | WSS | 94.205 / 95.028 / 86.423 -> 94.205 Kops/s | 482.338 / 502.432 / 562.283 -> 502.432 | 16.290 / 8.684 / 15.519 -> 15.519 Kops/s | 59.483 / 61.161 / 62.248 -> 61.161 | 16.5% |
+| ROUTER-ROUTER | TCP | 196.047 / 194.233 / 190.094 -> 194.233 Kops/s | 0.695 / 0.705 / 0.765 -> 0.705 | 145.647 / 139.233 / 137.676 -> 139.233 Kops/s | 4.696 / 3.030 / 3.065 -> 3.065 | 71.7% |
+| ROUTER-ROUTER | WSS | 90.281 / 89.947 / 85.649 -> 89.947 Kops/s | 447.957 / 496.306 / 461.957 -> 461.957 | 9.765 / 17.022 / 20.467 -> 17.022 Kops/s | 61.921 / 71.606 / 48.594 -> 61.921 | 18.9% |
+
+Single과 multi는 각각 8개 조합을 세 번씩, 총 24개 run을 완료했다. 두 runner의 process와
+result-line 검사는 `status: complete`, expected·actual result line `40/40`이었고 multi의
+case 요약은 success 8, fail·skip·unsupported 0이었다. 이 값은 benchmark process와 case가
+완료됐다는 뜻이며 개별 request의 성공·timeout·error 수가 아니다.
+
+현재 runner는 REQREP callback에서 성공한 reply만 throughput·latency 표본에 넣고 개별 request의
+timeout·error 수를 출력하지 않는다. 따라서 이 측정의 request-level timeout·error 수는 알 수
+없다. 특히 multi WSS는 request timeout이 200ms이고 latency는 RTT의 절반으로 기록한다. 측정된
+p99 98.092~99.651ms는 실제 RTT 196.184~199.302ms에 해당하므로 timeout 경계에서 잘린
+`timeout-censored` 참고값이다.
+
+Single SENDSEND는 application message 한 방향을 Kmsg/s로 세지만 REQREP는 같은 payload의 request와
+reply 두 방향을 한 Kops/s로 센다. 따라서 raw operation 비율만 비교하면 왕복 자체를 protocol
+overhead로 잘못 계산한다. 두 방향 byte 기준 REQREP/SENDSEND bandwidth 비율은 WSS
+102.8%·104.0%, TCP 59.5%·63.0%다.
+
+Multi SENDSEND는 queue를 깊게 채워 WSS에서 mean 461.957~502.432ms와 p99
+1410.084~1480.099ms의 backlog를 허용했다. REQREP는 pending·completion·timeout 경계를 유지하며
+mean 61.161~61.921ms와 p99 99.649~99.651ms를 기록했다. 따라서 WSS의 16.5%·18.9% throughput
+비율은 같은 latency operating point의 protocol overhead 비교가 아니다. TCP multi의 같은 echo
+workload에서는 REQREP가 SENDSEND throughput의 62.1%·71.7%였지만, multi 측정 도구가 여러
+socket의 submit과 callback accounting을 공유 mutex로 직렬화하는 비용도 포함한다. 이 측정만으로
+개선 전 대비 향상률을 주장하지 않는다.
+
+새 ZMP metadata 경로에는 payload copy나 선형 탐색이 남지 않았으므로 release를 막는 명백한
+hot-path 결함은 없다. §8.1의 frame·copy·allocation 제거 외 pending scheduler·callback 구조를
+바꾸는 최적화는 별도 성능 작업의 profiling 대상으로 남긴다. 그 작업에서는 SENDSEND와 REQREP에
+같은 in-flight window를 적용하고 request의 OK·TIMED_OUT·ERROR 수를 따로 출력해야 한다. Timeout만
+늘리면 SENDSEND처럼 queue latency가 커져 같은 조건의 비교가 되지 않는다.
+
 ## 9. 작업 중단 조건
 
 다음 상황에서는 우회 구현을 넣지 않고 발견한 source 위치와 필요한 설계 변경을 보고한다.
