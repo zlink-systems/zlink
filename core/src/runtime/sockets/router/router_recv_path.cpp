@@ -303,13 +303,22 @@ int zlink::router_t::xrecv_pipe (msg_t *msg_, pipe_t **pipe_out_)
 int zlink::router_t::xrecv_routed (msg_t *msg_,
                                   zlink_routing_id_t *source_rid_out_,
                                   uint64_t *connection_id_out_,
-                                  pipe_t **source_pipe_out_)
+                                  pipe_t **source_pipe_out_,
+                                  pipe_t::read_admission_fn *admission_,
+                                  void *admission_userdata_)
 {
     if (connection_id_out_)
         *connection_id_out_ = 0;
     if (source_pipe_out_)
         *source_pipe_out_ = NULL;
     if (_prefetched) {
+        // A generic receive may have prefetched this frame before the routed
+        // API asks for it. It is no longer in the pipe queue, but admission
+        // still runs before this routed call exposes it to the caller.
+        if (admission_ && (!_current_in
+                           || admission_ (_current_in, _prefetched_msg,
+                                          admission_userdata_) != 0))
+            return -1;
         if (source_rid_out_)
             copy_router_pipe_source_rid (_current_in, source_rid_out_);
         if (connection_id_out_ && _current_in)
@@ -335,9 +344,13 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
     }
 
     pipe_t *pipe = NULL;
-    int rc = _fq.recvpipe (msg_, &pipe);
+    int rc = admission_ ? _fq.recvpipe_with_admission (
+                            msg_, &pipe, admission_, admission_userdata_)
+                        : _fq.recvpipe (msg_, &pipe);
     while (rc == 0 && msg_->is_routing_id ())
-        rc = _fq.recvpipe (msg_, &pipe);
+        rc = admission_ ? _fq.recvpipe_with_admission (
+                            msg_, &pipe, admission_, admission_userdata_)
+                        : _fq.recvpipe (msg_, &pipe);
     if (rc != 0) {
         if (errno == ECONNABORTED)
             reset_current_in_after_multipart_abort ();

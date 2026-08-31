@@ -34,8 +34,6 @@ class zmp_decoder_t ZLINK_FINAL
     void **frame_reservation_slot ();
     void discard_frame_reservation ();
     int stream_end () ZLINK_OVERRIDE;
-    int transport_message_complete () ZLINK_OVERRIDE;
-    void transport_message_invalid () ZLINK_OVERRIDE;
 
   private:
     int header_ready (unsigned char const *read_from_);

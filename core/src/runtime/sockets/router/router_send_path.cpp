@@ -158,6 +158,14 @@ int zlink::router_t::send_with_observer (
           _current_out_connection_id);
         pipe_message_admission_t write_admission =
           pipe_message_admission_invalid;
+        // A terminal frame does not need _current_out after this point. Clear
+        // it while the route table is still protected, then keep only the
+        // lifetime pin across the pipe write. This avoids re-locking the
+        // route table on the normal successful terminal-write path.
+        if (!next_more_out && _current_out == write_pipe) {
+            _current_out = NULL;
+            _current_out_connection_id = 0;
+        }
         route_lifecycle_lock.unlock ();
         const bool ok =
           observer_
@@ -173,8 +181,11 @@ int zlink::router_t::send_with_observer (
         if (unlikely (!ok)) {
             write_pipe->rollback ();
             errno = write_errno;
+            // Route teardown can run while the pipe write is in flight.
+            // Re-acquire only on failure, where the routing entry may need
+            // to be revalidated and marked inactive.
+            route_lifecycle_lock.lock ();
         }
-        route_lifecycle_lock.lock ();
         if (unlikely (!ok)) {
             if (observer_ && errno == ECANCELED
                 && write_admission == pipe_message_admission_invalid) {
@@ -222,13 +233,10 @@ int zlink::router_t::send_with_observer (
             }
             const int rc = msg_->close ();
             errno_assert (rc == 0);
-        } else if (!next_more_out && _current_out == write_pipe) {
-            _current_out = NULL;
-            _current_out_connection_id = 0;
         }
-        route_lifecycle_lock.unlock ();
+        if (unlikely (!ok))
+            route_lifecycle_lock.unlock ();
         write_pipe->release_lifetime_ref ();
-        route_lifecycle_lock.lock ();
     } else {
         if (router_debug_enabled ()) {
             fprintf (stderr, "router xsend: no current out, drop size=%zu\n", msg_->size ());
@@ -489,6 +497,14 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
           _current_out_connection_id);
         pipe_message_admission_t write_admission =
           pipe_message_admission_invalid;
+        // The lifetime pin keeps write_pipe valid after releasing the route
+        // table lock. A terminal routed send has no later continuation, so
+        // clear the selected route state before the write and avoid the old
+        // success-path re-lock.
+        if (!write_more && _current_out == write_pipe) {
+            _current_out = NULL;
+            _current_out_connection_id = 0;
+        }
         route_lifecycle_lock.unlock ();
         const bool ok =
           observer_
@@ -502,8 +518,9 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         if (unlikely (!ok)) {
             write_pipe->rollback ();
             errno = write_errno;
+            // Only the failure path needs routing-table revalidation.
+            route_lifecycle_lock.lock ();
         }
-        route_lifecycle_lock.lock ();
         if (unlikely (!ok)) {
             if (observer_ && errno == ECANCELED
                 && write_admission == pipe_message_admission_invalid) {
@@ -559,11 +576,9 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
             }
             const int rc = msg_->close ();
             errno_assert (rc == 0);
-        } else if (!write_more && _current_out == write_pipe) {
-            _current_out = NULL;
-            _current_out_connection_id = 0;
         }
-        route_lifecycle_lock.unlock ();
+        if (unlikely (!ok))
+            route_lifecycle_lock.unlock ();
         write_pipe->release_lifetime_ref ();
     } else {
         const int rc = msg_->close ();

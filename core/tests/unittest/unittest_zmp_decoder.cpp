@@ -483,81 +483,9 @@ void test_stream_end_rejects_incomplete_base_extension_and_payload ()
         build_header (frame, zlink::zmp_flag_more, 0);
         size_t processed = 0;
         TEST_ASSERT_EQUAL_INT (1, decoder.decode (frame, sizeof (frame), processed));
-        //  One WS record may validly carry a MORE frame; only ending the
-        //  underlying stream before its terminal application part is invalid.
-        TEST_ASSERT_EQUAL_INT (0, decoder.transport_message_complete ());
         TEST_ASSERT_EQUAL_INT (-1, decoder.stream_end ());
         TEST_ASSERT_EQUAL_INT (EPROTO, errno);
     }
-}
-
-void test_transport_message_boundary_rejects_incomplete_frame ()
-{
-    {
-        zlink::zmp_decoder_t decoder (64, -1);
-        unsigned char frame[zlink::zmp_header_size];
-        build_header (frame, 0, 0);
-        size_t processed = 0;
-        TEST_ASSERT_EQUAL_INT (1, decoder.decode (frame, sizeof (frame), processed));
-        TEST_ASSERT_EQUAL_INT (0, decoder.transport_message_complete ());
-    }
-    {
-        zlink::zmp_decoder_t decoder (64, -1);
-        unsigned char frame[zlink::zmp_header_size];
-        build_header (frame, 0, 0);
-        size_t processed = 0;
-        TEST_ASSERT_EQUAL_INT (0, decoder.decode (frame, 4, processed));
-        TEST_ASSERT_EQUAL_INT (-1, decoder.transport_message_complete ());
-        TEST_ASSERT_EQUAL_INT (EPROTO, errno);
-    }
-}
-
-void test_invalid_transport_boundary_releases_frame_reservation ()
-{
-    zlink::zmp_decoder_t decoder (64, -1);
-    fake_frame_admission_t admission;
-    admission.allow = true;
-    decoder.set_frame_admission_handler (&fake_frame_admission_t::reserve,
-                                         &fake_frame_admission_t::release,
-                                         &admission);
-
-    unsigned char frame[zlink::zmp_header_size + 2];
-    build_header (frame, 0, 4);
-    memcpy (frame + zlink::zmp_header_size, "bo", 2);
-    size_t processed = 0;
-    TEST_ASSERT_EQUAL_INT (0, decoder.decode (frame, sizeof (frame), processed));
-    TEST_ASSERT_EQUAL_PTR (&admission, *decoder.frame_reservation_slot ());
-
-    TEST_ASSERT_EQUAL_INT (-1, decoder.transport_message_complete ());
-    TEST_ASSERT_EQUAL_INT (EPROTO, errno);
-    TEST_ASSERT_NULL (*decoder.frame_reservation_slot ());
-    TEST_ASSERT_EQUAL_INT (1, admission.releases);
-}
-
-void test_invalid_transport_record_discards_completed_staged_frame ()
-{
-    zlink::zmp_decoder_t decoder (64, -1);
-    fake_frame_admission_t admission;
-    admission.allow = true;
-    decoder.set_frame_admission_handler (&fake_frame_admission_t::reserve,
-                                         &fake_frame_admission_t::release,
-                                         &admission);
-
-    unsigned char frame[zlink::zmp_header_size + 4];
-    build_header (frame, 0, 4);
-    memcpy (frame + zlink::zmp_header_size, "body", 4);
-    size_t processed = 0;
-    TEST_ASSERT_EQUAL_INT (1, decoder.decode (frame, sizeof (frame), processed));
-    TEST_ASSERT_EQUAL_UINT64 (sizeof (frame), processed);
-    TEST_ASSERT_EQUAL_PTR (&admission, *decoder.frame_reservation_slot ());
-    TEST_ASSERT_EQUAL_UINT64 (4, decoder.msg ()->size ());
-
-    decoder.transport_message_invalid ();
-
-    TEST_ASSERT_EQUAL_INT (EPROTO, errno);
-    TEST_ASSERT_NULL (*decoder.frame_reservation_slot ());
-    TEST_ASSERT_EQUAL_INT (1, admission.releases);
-    TEST_ASSERT_EQUAL_UINT64 (0, decoder.msg ()->size ());
 }
 
 void test_more_identity_allowed ()
@@ -933,9 +861,6 @@ int main (void)
     RUN_TEST (test_request_admission_retry_preserves_header_state);
     RUN_TEST (test_admission_retry_terminal_failure_clears_backpressure_state);
     RUN_TEST (test_stream_end_rejects_incomplete_base_extension_and_payload);
-    RUN_TEST (test_transport_message_boundary_rejects_incomplete_frame);
-    RUN_TEST (test_invalid_transport_boundary_releases_frame_reservation);
-    RUN_TEST (test_invalid_transport_record_discards_completed_staged_frame);
     RUN_TEST (test_more_identity_allowed);
     RUN_TEST (test_payload_admission_precedes_body_allocation_and_can_retry);
     RUN_TEST (test_admission_retry_consumes_only_current_zero_copy_frame);

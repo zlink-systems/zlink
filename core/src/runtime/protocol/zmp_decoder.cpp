@@ -359,16 +359,3 @@ int zlink::zmp_decoder_t::stream_end ()
         return 0;
     return fail_protocol (zmp_error_frame_incomplete);
 }
-
-int zlink::zmp_decoder_t::transport_message_complete ()
-{
-    if (_frame_stage == reading_base_header
-        && bytes_left_in_step () == zmp_header_size)
-        return 0;
-    return fail_protocol (zmp_error_frame_incomplete);
-}
-
-void zlink::zmp_decoder_t::transport_message_invalid ()
-{
-    (void) fail_protocol (zmp_error_frame_incomplete);
-}

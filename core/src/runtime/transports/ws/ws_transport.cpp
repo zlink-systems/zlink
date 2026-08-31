@@ -167,7 +167,6 @@ void ws_transport_t::async_read_some (unsigned char *buffer,
       [connection = std::move (connection), handler = std::move (handler)] (
         const boost::system::error_code &ec, std::size_t bytes_transferred) {
           connection->read_message_state.finish (
-            !ec && connection->stream.is_message_done (),
             !ec ? connection->stream.got_binary () : true);
           if (ec)
               ASIO_DBG ("WS", "read failed: %s", ec.message ().c_str ());
@@ -216,8 +215,7 @@ std::size_t ws_transport_t::read_some (std::uint8_t *buffer, std::size_t len)
         return 0;
     }
 
-    connection->read_message_state.finish (
-      connection->stream.is_message_done (), connection->stream.got_binary ());
+    connection->read_message_state.finish (connection->stream.got_binary ());
     errno = 0;
     return bytes_read;
 }
