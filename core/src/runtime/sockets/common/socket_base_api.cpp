@@ -1030,11 +1030,16 @@ void zlink::socket_base_t::write_activated (pipe_t *pipe_)
         //  Byte credit and a remote RESUME are independent causes; either one
         //  can be the last cause to clear, and each arms its own wake marker.
         bool credit_recovery = false;
+        bool request_correlation_recovery = false;
         bool flow_recovery = false;
         if (pipe_) {
             credit_recovery = pipe_->take_hwm_credit_recovery ();
+            request_correlation_recovery =
+              pipe_->take_request_correlation_recovery ();
             flow_recovery = pipe_->take_flow_resume_recovery ();
         }
+        if (request_correlation_recovery)
+            dispatch_runtime ().mark_send_recovery_pending ();
         if (credit_recovery || flow_recovery)
             notify_send_pending_writable (pipe_);
     }

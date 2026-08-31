@@ -71,10 +71,11 @@ complete message 한 건을 허용하고, 그 뒤의 write를 중단한다. 끝�
 ### 3.3 Pending request lifecycle state
 
 Pending map entry, callback과 timeout state는 live request 수에 따라 증가하며
-[pending request 수용 한도](06-auto-hwm.ko.md#pending-request-수용)가 physical pair별 logical
-charge를 Application HWM과 128 KiB completion-liveness window로 제한한다. 이 charge는 allocator가
-실제 할당한 byte나 보관 중인 payload byte가 아니며, queue HWM의 current·snapshot 값에 포함되지
-않는다.
+[pending request 수용 한도](06-auto-hwm.ko.md#pending-request-수용)의 physical pair별 32 MiB
+size-weighted work budget과 unresolved request count 한도 16,384가 completion liveness를
+제한한다. Work charge는 실제 allocator byte나 보관 중인 payload byte가 아니며, queue HWM의
+current·snapshot 값에 포함되지 않는다. Application HWM은 queue에 머무르는 frame만 제한하고
+unresolved correlation의 별도 lifecycle 한도로 재사용되지 않는다.
 
 ### 3.4 Completion progress lane
 

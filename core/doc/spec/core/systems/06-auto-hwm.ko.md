@@ -477,22 +477,31 @@ application budget을 나누는 queue 목록에서 제외한다.
 
 ### Pending request 수용
 
-한 request의 lifecycle charge는 모든 Application payload frame의
-`payloadBytes + sizeof(msg_t)` 합이다. Physical transport pair별 한도는 admission 시점에 그
-pair에 적용된 outbound Application HWM과 같은 byte 값이다. Live charge가 0인 pair는 한도보다
-큰 request 한 건을 허용한다. 각 pair는 이 한도와 별도로 completion liveness를 위한 128 KiB
-lifecycle window를 적용한다. HWM `0`은 Application HWM에서 파생한 한도만 비활성화하며 128 KiB
-liveness window는 유지한다. Liveness window가 비어 있으면 그보다 큰 request 한 건을 허용한다.
+한 request의 accounted size `x`는 모든 Application payload frame의
+`payloadBytes + sizeof(msg_t)` 합이다. 각 physical transport pair는 32 MiB의 logical work
+budget과 unresolved request count 한도 16,384를 적용한다. Request의 logical work charge
+`C(x)`는 다음과 같다.
 
-이 한도는 Application queue HWM 회계를 재사용하지 않는다. Lifecycle charge를
-`provisionalCharge`나 `committedQueueCharge`에 더하지 않으며, physical queue current byte,
-writer credit, HWM snapshot과 Core budget reservation을 바꾸지 않는다. HWM 감소는 이미 성공한
-request를 취소하지 않고 다음 admission부터 새 적용값으로 제한한다. 한 pair의 한도 부족은 다른
-pair나 같은 pipe의 ordinary send를 막지 않는다.
+- `x <= 1,024 B`: `C(x) = x`
+- `1,024 B < x <= 32,768 B`: `C(x) = ceil(x^3 / 1,024^2)`
+- `x > 32,768 B`: `C(x) = 32 MiB + 1`
 
-두 byte 한도 중 하나가 부족한 request는 `ZLINK_SUBMIT_BACKPRESSURED`와 `EAGAIN`으로 끝나며
-wire에 part를 공개하지 않고 handler를 호출하지 않는다. Reply, timeout, disconnect와 close가
-두 reservation을 함께 반환하면 exact pipe owner에서 request submit recovery를 다시 깨운다.
+`C(x)`는 completion liveness를 위한 size-weighted admission 단위이며 실제 allocator byte나
+보관 중인 payload byte를 뜻하지 않는다. Live work charge와 unresolved count가 모두 `0`인 pair는
+work budget을 넘는 request 한 건을 허용한다. 그 request가 unresolved인 동안에는 다음 request를
+허용하지 않는다.
+
+Physical Application HWM은 queue에 머무르는 frame만 제한한다. Peer가 request를 dequeue하면
+physical queue charge와 writer credit은 반환되며, unresolved correlation은 그 HWM 값을 별도
+lifecycle 한도로 유지하거나 재사용하지 않는다. 따라서 HWM 변경은 이미 성공한 request의
+correlation admission을 바꾸지 않고, HWM `0`은 physical Application queue 한도만 비활성화한다.
+Work budget과 count 한도는 HWM 값과 관계없이 유지된다.
+
+Work budget 또는 count 한도가 부족한 request는 send flags와 `SNDTIMEO`에 관계없이 즉시
+`ZLINK_SUBMIT_BACKPRESSURED`와 `EAGAIN`으로 끝나며, wire에 part를 공개하지 않고 handler를
+호출하지 않는다. 한 pair의 한도 부족은 다른 pair나 같은 pipe의 ordinary send를 막지 않는다.
+Reply, timeout, disconnect와 close는 work·count reservation을 함께 반환한다. Terminal reply나
+timeout으로 reservation이 반환되면 exact pipe owner에서 request submit recovery를 다시 깨운다.
 
 ### Message 처리 경로의 비용 제한
 
@@ -550,9 +559,10 @@ admission 결과, errno)만으로 관찰할 수 있는 동작이며, 각 항목�
 - payload가 없는 frame도 HWM을 소비한다 — 빈 frame만 반복해 보내도 HWM에서 admission이 막힌다.
 - 빈 queue는 전체 크기를 아는 complete message 1건을 HWM 초과여도 수락하고, 두 번째 oversize는 거부한다.
 - 미리 크기를 모르는 multipart의 `MORE` frame은 HWM 초과 지점부터 막힌다. 다만 빈 queue에서 시작한 multipart의 final frame은 HWM을 넘더라도 수락하며, 이 예외는 중간 `MORE` frame에 적용하지 않는다. Multipart를 폐기한 뒤 snapshot의 `provisional_accounted_bytes`는 0으로 돌아온다.
-- Peer가 request를 dequeue해 physical queue current가 0이어도 pending lifecycle charge는 reply·timeout까지 유지된다. 한도 부족은 `ZLINK_SUBMIT_BACKPRESSURED`·`EAGAIN`이고 snapshot의 physical queue current에는 더해지지 않는다.
-- Live charge가 0인 pair는 한도보다 큰 request 한 건을 허용하며, unresolved 상태의 다음 request는 막힌다. Reply·timeout 뒤 exact pair가 다시 수용하고, 한 pair가 막혀도 다른 pair와 ordinary send는 진행한다.
-- 충분한 Application byte 한도와 HWM `0`에서 모두 64 KiB request 한 건은 성공하고, unresolved 상태의 두 번째 request는 128 KiB liveness window에서 막힌다. 한 건을 완료하면 다음 request가 성공한다.
+- Peer가 request를 dequeue하면 unresolved 상태여도 physical queue current와 writer credit은 반환된다. Pending work·count reservation은 reply·timeout까지 유지되지만 Application HWM 회계나 snapshot의 physical queue current에는 더해지지 않는다. 한도 부족은 send flags와 `SNDTIMEO`에 관계없이 즉시 `ZLINK_SUBMIT_BACKPRESSURED`·`EAGAIN`이다.
+- Live work charge와 unresolved count가 모두 0인 pair는 work budget보다 큰 request 한 건을 허용하며, unresolved 상태의 다음 request는 막힌다. Reply·timeout 뒤 exact pair가 다시 수용하고, 한 pair가 막혀도 다른 pair와 ordinary send는 진행한다.
+- 충분한 Application byte 한도와 HWM `0`에서 모두 64 KiB request 한 건은 성공하고, unresolved 상태의 두 번째 request는 32 MiB work budget에서 막힌다. 한 건을 완료하면 다음 request가 성공한다.
+- Work budget이 남아 있어도 unresolved request 16,384건이 있으면 다음 request는 즉시 막힌다. 한 request가 terminal reply나 timeout으로 완료되면 다음 request가 성공한다.
 
 **credit·dequeue·generation**
 - complete message를 recv하면 Core queue charge가 종료되고 sender가 다시 보낼 수 있다. Application이 payload를 계속 보유해도 snapshot의 `application_accounted_bytes`는 0이다.

@@ -397,9 +397,10 @@ results, `zlink_request_result_t` identifies the result.
 
 The final request submit must also pass the selected pair's
 [pending-request admission limit](../systems/06-auto-hwm.en.md#pending-request-admission). If
-capacity is unavailable, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, publishes no part
-of that request on the wire, and does not invoke the handler. This reason remains distinct from
-physical-queue HWM and does not change ordinary-send admission on the same pipe.
+capacity is unavailable, it immediately returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`
+regardless of send flags or `SNDTIMEO`, publishes no part of that request on the wire, and does not
+invoke the handler. This reason remains distinct from physical-queue HWM and does not change
+ordinary-send admission on the same pipe.
 
 ---
 
@@ -556,7 +557,7 @@ and the [Monitoring](../06-monitoring.en.md) status snapshot. Each item maps to 
 - If the final request submit returns `ZLINK_SUBMIT_OK`, exactly one completion is delivered to `handler_`; if the submit fails, the handler is not invoked.
 - Ownership of callback `parts_` and every message moves to the callback, which releases them exactly once.
 - Even when a peer replies immediately after a successful exact-target request submit, the reply is delivered exactly once as a handler completion.
-- After a pair reaches its pending-request admission limit, the final submit returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` without wire publication or a handler call. Reply or timeout returns capacity and wakes a retry; another pair and ordinary send remain selectable.
+- After a pair reaches its pending-request admission limit, the final submit immediately returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` regardless of send flags or `SNDTIMEO`, without wire publication or a handler call. Reply or timeout returns capacity and wakes a retry; another pair and ordinary send remain selectable.
 
 **Receive**
 

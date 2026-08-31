@@ -494,6 +494,17 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
     }
     if (unlikely (rc == -2))
         return finish_multipart_abort ();
+    if (unlikely (first_admission == pipe_message_admission_request_full)) {
+        // Request-correlation capacity is returned only when the application
+        // drains a terminal reply or timeout completion. A blocking retry here
+        // would keep that same application thread inside submit until SNDTIMEO
+        // and prevent it from making the progress that releases the capacity.
+        // Publish the normal recovery edge, but return backpressure immediately
+        // regardless of the ordinary send flags.
+        arm_send_recovery_after_backpressure ();
+        errno = EAGAIN;
+        return -1;
+    }
     if (errno != EAGAIN && (flags_ & ZLINK_DONTWAIT) == 0
         && options.sndtimeo != 0 && !submit_retry_enabled (options, flags_)
         && is_submit_retry_errno (errno)

@@ -256,9 +256,12 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _remote_flow_epoch (0),
     _remote_flow_pause_started_ms (0),
     _waiting_for_byte_credit (false),
+    _request_correlation_recovery (false),
     _waiting_for_flow_resume (false),
     _hwm (outhwm_),
     _request_correlation_bytes (0),
+    _request_correlation_work (0),
+    _request_correlation_count (0),
     _lwm (compute_lwm (inhwm_)),
     _inhwm (inhwm_),
     _lwm_hint (0),
@@ -1347,25 +1350,38 @@ bool zlink::pipe_t::try_reserve_request_correlation (
 
     const bool overflow =
       UINT64_MAX - _request_correlation_bytes < accounted_bytes_;
-    const bool budget_full =
-      _hwm != 0 && _request_correlation_bytes != 0
-      && (accounted_bytes_ > _hwm
-          || _request_correlation_bytes > _hwm - accounted_bytes_);
-    // Bound work that has left the application queue but still needs the
-    // completion lane. The empty-pair exception admits one larger request.
-    const uint64_t liveness_limit =
-      transport_pair_policy::request_correlation_liveness_bytes;
-    const bool liveness_full =
-      _request_correlation_bytes != 0
-      && (accounted_bytes_ > liveness_limit
-          || _request_correlation_bytes > liveness_limit - accounted_bytes_);
-    if (overflow || budget_full || liveness_full) {
+    // Small requests use their lifecycle bytes directly. Above 1 KiB the
+    // charge grows cubically so a large request cannot create the secure
+    // completion backlog that a byte-linear window permits. The empty-pair
+    // exception still admits one request larger than the work budget.
+    const uint64_t work_charge =
+      transport_pair_policy::request_correlation_work_charge (
+        accounted_bytes_);
+    const uint64_t work_budget =
+      transport_pair_policy::request_correlation_work_budget;
+    const bool work_overflow =
+      UINT64_MAX - _request_correlation_work < work_charge;
+    const bool work_window_empty = _request_correlation_work == 0
+                                   && _request_correlation_count == 0;
+    const bool work_full =
+      !work_window_empty
+      && (work_charge > work_budget
+          || _request_correlation_work > work_budget - work_charge);
+    const bool count_full =
+      _request_correlation_count
+      >= transport_pair_policy::request_correlation_count_budget;
+    // Application HWM bounds frames still resident in the physical queue.
+    // Correlation outlives that queue credit, so this independent work/count
+    // window owns its admission after the peer has dequeued the request.
+    if (overflow || work_overflow || work_full || count_full) {
         _request_correlation_waiting = true;
         errno = ENOBUFS;
         return false;
     }
 
     _request_correlation_bytes += accounted_bytes_;
+    _request_correlation_work += work_charge;
+    ++_request_correlation_count;
     return true;
 }
 
@@ -1378,7 +1394,14 @@ void zlink::pipe_t::release_request_correlation (uint64_t accounted_bytes_)
     {
         scoped_fast_lock_t lock (_out_sync);
         zlink_assert (accounted_bytes_ <= _request_correlation_bytes);
+        const uint64_t work_charge =
+          transport_pair_policy::request_correlation_work_charge (
+            accounted_bytes_);
+        zlink_assert (work_charge <= _request_correlation_work);
+        zlink_assert (_request_correlation_count != 0);
         _request_correlation_bytes -= accounted_bytes_;
+        _request_correlation_work -= work_charge;
+        --_request_correlation_count;
         if (_request_correlation_waiting) {
             _request_correlation_waiting = false;
             _request_correlation_activation_pending = true;
@@ -1611,6 +1634,12 @@ bool zlink::pipe_t::take_hwm_credit_recovery ()
 {
     return _waiting_for_byte_credit.exchange (false,
                                                std::memory_order_acq_rel);
+}
+
+bool zlink::pipe_t::take_request_correlation_recovery ()
+{
+    return _request_correlation_recovery.exchange (
+      false, std::memory_order_acq_rel);
 }
 
 void zlink::pipe_t::hold_writes_until_transport_pair_ready ()
@@ -2203,6 +2232,11 @@ void zlink::pipe_t::process_activate_write (uint64_t generation_,
         // byte-credit generation before the owner processes the command.
         if (_request_correlation_activation_pending) {
             _request_correlation_activation_pending = false;
+            // Preserve the cause until the socket consumes the corresponding
+            // write activation. An ordinary send may have succeeded after the
+            // request was rejected, but that must not consume this wake.
+            _request_correlation_recovery.store (true,
+                                                  std::memory_order_release);
             notify = _state == active && _out_active
                      && !_transport_pair_write_held
                      && !remote_flow_blocked_unlocked ()

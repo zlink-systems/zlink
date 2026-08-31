@@ -32,8 +32,30 @@ void test_completion_socket_buffer_preserves_default_and_caps_explicit_value ()
     TEST_ASSERT_EQUAL_INT (completion_socket_buffer_bytes,
                            completion_socket_buffer (1024 * 1024));
     TEST_ASSERT_EQUAL_UINT64 (
-      128 * 1024,
-      zlink::transport_pair_policy::request_correlation_liveness_bytes);
+      32 * 1024 * 1024,
+      zlink::transport_pair_policy::request_correlation_work_budget);
+    TEST_ASSERT_EQUAL_UINT64 (
+      1024,
+      zlink::transport_pair_policy::request_correlation_work_charge (1024));
+    TEST_ASSERT_EQUAL_UINT64 (
+      65536,
+      zlink::transport_pair_policy::request_correlation_work_charge (4096));
+    TEST_ASSERT_EQUAL_UINT64 (
+      524288,
+      zlink::transport_pair_policy::request_correlation_work_charge (8192));
+    TEST_ASSERT_EQUAL_UINT64 (
+      32 * 1024 * 1024,
+      zlink::transport_pair_policy::request_correlation_work_charge (32768));
+    TEST_ASSERT_EQUAL_UINT64 (
+      32 * 1024 * 1024 + 1,
+      zlink::transport_pair_policy::request_correlation_work_charge (32769));
+    TEST_ASSERT_EQUAL_UINT64 (
+      32 * 1024 * 1024 + 1,
+      zlink::transport_pair_policy::request_correlation_work_charge (
+        UINT64_MAX));
+    TEST_ASSERT_EQUAL_UINT64 (
+      16 * 1024,
+      zlink::transport_pair_policy::request_correlation_count_budget);
 }
 
 struct timeout_barrier_t

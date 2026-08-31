@@ -263,9 +263,10 @@ Error reply의 첫 part가 없거나 크기가 4 byte가 아니거나 값이 `0`
 `ZLINK_REQUEST_PROTOCOL_ERROR`와 part 수 `0`을 전달한다.
 
 마지막 request submit은 선택한 pair의 [pending request 수용 한도](../systems/06-auto-hwm.ko.md#pending-request-수용)에도
-들어가야 한다. 공간이 없으면 `ZLINK_SUBMIT_BACKPRESSURED`와 `EAGAIN`을 반환하고, 그 request의
-어떤 part도 wire에 공개하지 않으며 handler를 호출하지 않는다. 이 사유는 physical queue HWM과
-구분되며 같은 pipe의 ordinary send admission을 바꾸지 않는다.
+들어가야 한다. 공간이 없으면 send flags와 `SNDTIMEO`에 관계없이 즉시
+`ZLINK_SUBMIT_BACKPRESSURED`와 `EAGAIN`을 반환하고, 그 request의 어떤 part도 wire에 공개하지
+않으며 handler를 호출하지 않는다. 이 사유는 physical queue HWM과 구분되며 같은 pipe의
+ordinary send admission을 바꾸지 않는다.
 
 ```mermaid
 sequenceDiagram
@@ -490,7 +491,7 @@ test 하나로 이어진다.
 - callback의 `parts_`와 각 message의 소유권은 callback으로 이동하며 callback이 정확히 한 번 해제한다.
 - 유효한 error reply는 errno를 매핑한 non-OK `zlink_request_result_t`와 errno part 뒤의 payload를 Core C callback에 전달하며, 없거나 크기가 4 byte가 아니거나 값이 `0`인 errno part는 `ZLINK_REQUEST_PROTOCOL_ERROR`와 part 수 `0`으로 완료한다.
 - exact request submit이 실패하면 handler가 호출되지 않고, 이후 그 request에 대한 어떤 completion도 전달되지 않는다.
-- Pair의 pending request 수용 한도에 도달한 마지막 submit은 wire 공개 없이 `ZLINK_SUBMIT_BACKPRESSURED`·`EAGAIN`이고, reply나 timeout 뒤 retry를 깨운다. 다른 exact pair와 ordinary send는 영향받지 않는다.
+- Pair의 pending request 수용 한도에 도달한 마지막 submit은 send flags와 `SNDTIMEO`에 관계없이 즉시, wire 공개 없이 `ZLINK_SUBMIT_BACKPRESSURED`·`EAGAIN`이고, reply나 timeout 뒤 retry를 깨운다. 다른 exact pair와 ordinary send는 영향받지 않는다.
 
 **Reply와 completion lane**
 - `zlink_router_reply_part()`는 수신 record가 반환한 `peer_rid_`·opaque `request_seq_` token을 그대로 사용한다. Core는 그 token의 exact source pipe·pair에 original wire sequence를 다시 기록하며, `ZLINK_PART_FINAL`이 성공하면 reply가 완료된다.

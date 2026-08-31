@@ -274,9 +274,10 @@ receives the parts after the first 4-byte Big Endian errno part and a non-OK
 
 The final request submit must also pass the selected pair's
 [pending-request admission limit](../systems/06-auto-hwm.en.md#pending-request-admission). If
-capacity is unavailable, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, publishes no part
-of that request on the wire, and does not invoke the handler. This reason remains distinct from
-physical-queue HWM and does not change ordinary-send admission on the same pipe.
+capacity is unavailable, it immediately returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`
+regardless of send flags or `SNDTIMEO`, publishes no part of that request on the wire, and does not
+invoke the handler. This reason remains distinct from physical-queue HWM and does not change
+ordinary-send admission on the same pipe.
 
 ```mermaid
 sequenceDiagram
@@ -516,7 +517,7 @@ and reply functions; ROUTER option set and get; return values and errno; the
 - Ownership of the callback's `parts_` and each message moves to the callback, which releases them exactly once.
 - A valid error reply delivers a non-OK `zlink_request_result_t` mapped from its errno and the payload after the errno part to the Core C callback. An absent errno part, a part whose size is not 4 bytes, or a zero value completes with `ZLINK_REQUEST_PROTOCOL_ERROR` and a part count of `0`.
 - If an exact request submit fails, the handler is not invoked, and no subsequent completion for that request is delivered.
-- When a pair reaches its pending-request admission limit, the final submit returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` without wire publication. Reply or timeout returns capacity and wakes a retry; another exact pair and ordinary send remain unaffected.
+- When a pair reaches its pending-request admission limit, the final submit immediately returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` regardless of send flags or `SNDTIMEO`, without wire publication. Reply or timeout returns capacity and wakes a retry; another exact pair and ordinary send remain unaffected.
 
 **Replies and the completion lane**
 - `zlink_router_reply_part()` uses the `peer_rid_` and opaque `request_seq_` token returned by the receive record without modification. Core re-stamps the original wire sequence onto that token's exact source pipe and pair, and a successful `ZLINK_PART_FINAL` completes the reply.

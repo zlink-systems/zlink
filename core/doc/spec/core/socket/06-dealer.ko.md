@@ -379,9 +379,10 @@ Error reply의 첫 part가 없거나 크기가 4 byte가 아니거나 값이 `0`
 `zlink_request_result_t`가 결과를 나타낸다.
 
 마지막 request submit은 선택한 pair의 [pending request 수용 한도](../systems/06-auto-hwm.ko.md#pending-request-수용)에도
-들어가야 한다. 공간이 없으면 `ZLINK_SUBMIT_BACKPRESSURED`와 `EAGAIN`을 반환하고, 그 request의
-어떤 part도 wire에 공개하지 않으며 handler를 호출하지 않는다. 이 사유는 physical queue HWM과
-구분되며 같은 pipe의 ordinary send admission을 바꾸지 않는다.
+들어가야 한다. 공간이 없으면 send flags와 `SNDTIMEO`에 관계없이 즉시
+`ZLINK_SUBMIT_BACKPRESSURED`와 `EAGAIN`을 반환하고, 그 request의 어떤 part도 wire에 공개하지
+않으며 handler를 호출하지 않는다. 이 사유는 physical queue HWM과 구분되며 같은 pipe의
+ordinary send admission을 바꾸지 않는다.
 
 ---
 
@@ -529,7 +530,7 @@ snapshot)만으로 다음을 확인한다. 각 항목은 test 하나로 이어�
 - request 마지막 submit이 `ZLINK_SUBMIT_OK`이면 completion이 정확히 한 번 `handler_`로 전달되고, submit이 실패하면 handler가 호출되지 않는다.
 - callback의 `parts_`와 각 message의 소유권은 callback으로 이동하며 callback이 정확히 한 번 해제한다.
 - exact target request의 submit 직후 peer가 reply해도 reply는 handler completion으로 정확히 한 번 전달된다.
-- Pair의 pending request 수용 한도에 도달한 마지막 submit은 wire 공개와 handler 호출 없이 `ZLINK_SUBMIT_BACKPRESSURED`·`EAGAIN`이고, reply나 timeout 뒤 retry를 깨운다. 다른 pair와 ordinary send는 계속 선택할 수 있다.
+- Pair의 pending request 수용 한도에 도달한 마지막 submit은 send flags와 `SNDTIMEO`에 관계없이 즉시, wire 공개와 handler 호출 없이 `ZLINK_SUBMIT_BACKPRESSURED`·`EAGAIN`이고, reply나 timeout 뒤 retry를 깨운다. 다른 pair와 ordinary send는 계속 선택할 수 있다.
 
 **Receive**
 - non-blocking `zlink_dealer_recv_part()` 호출에 받을 record가 없으면 `ZLINK_RECV_NO_DATA`와 `EAGAIN`을 반환한다.

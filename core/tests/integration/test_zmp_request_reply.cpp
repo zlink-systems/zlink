@@ -15,6 +15,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -5678,7 +5679,7 @@ void test_request_correlation_budget_allows_one_empty_pair_oversize_and_recovers
     TEST_ASSERT_NOT_NULL (router);
     TEST_ASSERT_NOT_NULL (dealer);
 
-    const uint64_t hwm = 64;
+    const uint64_t hwm = 1024 * 1024;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (dealer, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
     TEST_ASSERT_SUCCESS_ERRNO (
@@ -5692,7 +5693,7 @@ void test_request_correlation_budget_allows_one_empty_pair_oversize_and_recovers
     reply_probe_t first_reply;
     first_reply.progress_handle = dealer;
     zlink_msg_t first;
-    init_filled_part (&first, 768, 'a');
+    init_filled_part (&first, 65536, 'a');
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_dealer_request_part (dealer, &first, ZLINK_SEND_FLAGS_DONTWAIT,
@@ -5718,7 +5719,7 @@ void test_request_correlation_budget_allows_one_empty_pair_oversize_and_recovers
     reply_probe_t rejected_reply;
     rejected_reply.progress_handle = dealer;
     zlink_msg_t rejected;
-    init_filled_part (&rejected, 768, 'b');
+    init_filled_part (&rejected, 65536, 'b');
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_BACKPRESSURED,
@@ -5756,7 +5757,7 @@ void test_request_correlation_budget_allows_one_empty_pair_oversize_and_recovers
     reply_probe_t recovered_reply;
     recovered_reply.progress_handle = dealer;
     zlink_msg_t recovered;
-    init_filled_part (&recovered, 768, 'c');
+    init_filled_part (&recovered, 65536, 'c');
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_dealer_request_part (dealer, &recovered,
@@ -5778,8 +5779,8 @@ void test_request_correlation_budget_allows_one_empty_pair_oversize_and_recovers
     test_context_socket_close_zero_linger (router);
 }
 
-void run_request_correlation_liveness_window_case (uint64_t hwm_,
-                                                   const char *endpoint_)
+void run_request_correlation_work_budget_case (uint64_t hwm_,
+                                               const char *endpoint_)
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
@@ -5789,6 +5790,10 @@ void run_request_correlation_liveness_window_case (uint64_t hwm_,
       zlink_set_option (dealer, ZLINK_OPT_SNDHWM, &hwm_, sizeof (hwm_)));
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (router, ZLINK_OPT_RCVHWM, &hwm_, sizeof (hwm_)));
+    const int send_timeout_ms = 500;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_SNDTIMEO, &send_timeout_ms,
+                        sizeof (send_timeout_ms)));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (router, endpoint_));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint_));
     msleep (SETTLE_TIME * 5);
@@ -5811,13 +5816,22 @@ void run_request_correlation_liveness_window_case (uint64_t hwm_,
     zlink_msg_t rejected;
     init_filled_part (&rejected, 65536, 'x');
     errno = 0;
+    const std::chrono::steady_clock::time_point rejected_at =
+      std::chrono::steady_clock::now ();
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_BACKPRESSURED,
       zlink_dealer_request_part (dealer, &rejected,
-                                 ZLINK_SEND_FLAGS_DONTWAIT,
+                                 ZLINK_SEND_FLAGS_NONE,
                                  ZLINK_PART_FINAL, 3000, &capture_reply,
                                  &rejected_reply));
+    const long rejected_elapsed_ms =
+      static_cast<long> (std::chrono::duration_cast<std::chrono::milliseconds> (
+                           std::chrono::steady_clock::now () - rejected_at)
+                           .count ());
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    TEST_ASSERT_TRUE_MESSAGE (
+      rejected_elapsed_ms < 250,
+      "request correlation backpressure must not wait for SNDTIMEO");
 
     send_captured_reply (router, &received_first, "window-release");
     TEST_ASSERT_TRUE (wait_for_reply (&first_reply));
@@ -5845,12 +5859,83 @@ void run_request_correlation_liveness_window_case (uint64_t hwm_,
     test_context_socket_close_zero_linger (router);
 }
 
-void test_request_correlation_liveness_window_applies_with_finite_and_zero_hwm ()
+void test_request_correlation_work_budget_applies_with_finite_and_zero_hwm ()
 {
-    run_request_correlation_liveness_window_case (
+    run_request_correlation_work_budget_case (
       1024 * 1024, "inproc://zmp-request-correlation-liveness-finite");
-    run_request_correlation_liveness_window_case (
+    run_request_correlation_work_budget_case (
       0, "inproc://zmp-request-correlation-liveness-zero");
+}
+
+void test_request_correlation_work_budget_keeps_1024b_pipeline_open ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (router);
+    TEST_ASSERT_NOT_NULL (dealer);
+
+    const uint64_t hwm = 1024 * 1024;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://zmp-request-correlation-1024-pipeline"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer,
+                     "inproc://zmp-request-correlation-1024-pipeline"));
+    msleep (SETTLE_TIME * 5);
+
+    const size_t request_count = 192;
+    std::vector<std::unique_ptr<reply_probe_t> > reply_probes;
+    std::vector<request_event_t> requests;
+    reply_probes.reserve (request_count);
+    requests.reserve (request_count);
+
+    for (size_t i = 0; i != request_count; ++i) {
+        std::unique_ptr<reply_probe_t> reply_probe (new reply_probe_t ());
+        reply_probe->progress_handle = dealer;
+        zlink_msg_t request;
+        init_filled_part (&request, 1024, static_cast<unsigned char> (i));
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_SUBMIT_OK,
+          zlink_dealer_request_part (dealer, &request,
+                                     ZLINK_SEND_FLAGS_DONTWAIT,
+                                     ZLINK_PART_FINAL, 3000, &capture_reply,
+                                     reply_probe.get ()));
+
+        const zlink_routing_id_t *peer_rid = NULL;
+        uint64_t request_seq = 0;
+        zlink_msg_t *parts = NULL;
+        size_t part_count = 0;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_RECV_OK,
+          zlink_router_recv (router, &peer_rid, &request_seq, &parts,
+                             &part_count, ZLINK_RECV_FLAGS_NONE));
+        TEST_ASSERT_NOT_NULL (peer_rid);
+        TEST_ASSERT_TRUE (request_seq != 0);
+        TEST_ASSERT_EQUAL_UINT64 (1, part_count);
+
+        request_event_t event;
+        event.request_seq = request_seq;
+        event.peer_rid_value = *peer_rid;
+        requests.push_back (event);
+        zlink_multipart_close (parts, part_count);
+        reply_probes.push_back (std::move (reply_probe));
+    }
+
+    for (size_t i = 0; i != requests.size (); ++i) {
+        zlink_msg_t reply;
+        init_string_part (&reply, "pipeline-reply");
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_router_reply (router, &requests[i].peer_rid_value,
+                              requests[i].request_seq, &reply, 1));
+    }
+    for (size_t i = 0; i != reply_probes.size (); ++i)
+        TEST_ASSERT_TRUE (wait_for_reply (reply_probes[i].get ()));
+
+    close_test_socket_after_reply_callback (dealer);
+    test_context_socket_close_zero_linger (router);
 }
 
 void test_request_correlation_budget_recovers_after_timeout ()
@@ -5860,7 +5945,7 @@ void test_request_correlation_budget_recovers_after_timeout ()
     TEST_ASSERT_NOT_NULL (router);
     TEST_ASSERT_NOT_NULL (dealer);
 
-    const uint64_t hwm = 1024;
+    const uint64_t hwm = 1024 * 1024;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (dealer, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
     TEST_ASSERT_SUCCESS_ERRNO (
@@ -5874,7 +5959,7 @@ void test_request_correlation_budget_recovers_after_timeout ()
     reply_probe_t timeout_reply;
     timeout_reply.progress_handle = dealer;
     zlink_msg_t first;
-    init_filled_part (&first, 768, 't');
+    init_filled_part (&first, 65536, 't');
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_dealer_request_part (dealer, &first,
@@ -5889,7 +5974,7 @@ void test_request_correlation_budget_recovers_after_timeout ()
     reply_probe_t rejected_reply;
     rejected_reply.progress_handle = dealer;
     zlink_msg_t rejected;
-    init_filled_part (&rejected, 768, 'x');
+    init_filled_part (&rejected, 65536, 'x');
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_BACKPRESSURED,
@@ -5910,7 +5995,7 @@ void test_request_correlation_budget_recovers_after_timeout ()
     reply_probe_t recovered_reply;
     recovered_reply.progress_handle = dealer;
     zlink_msg_t recovered;
-    init_filled_part (&recovered, 768, 'r');
+    init_filled_part (&recovered, 65536, 'r');
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_dealer_request_part (dealer, &recovered,
@@ -5939,7 +6024,7 @@ void test_request_correlation_budget_is_independent_per_pair ()
     TEST_ASSERT_NOT_NULL (router_b);
     TEST_ASSERT_NOT_NULL (dealer);
 
-    const uint64_t hwm = 1024;
+    const uint64_t hwm = 1024 * 1024;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (dealer, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
     TEST_ASSERT_SUCCESS_ERRNO (
@@ -5961,7 +6046,7 @@ void test_request_correlation_budget_is_independent_per_pair ()
     reply_a.progress_handle = dealer;
     reply_b.progress_handle = dealer;
     zlink_msg_t first;
-    init_filled_part (&first, 768, '1');
+    init_filled_part (&first, 65536, '1');
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_dealer_request_part (dealer, &first,
@@ -5991,7 +6076,7 @@ void test_request_correlation_budget_is_independent_per_pair ()
     process_socket_commands_through_public_api (dealer);
 
     zlink_msg_t second;
-    init_filled_part (&second, 768, '2');
+    init_filled_part (&second, 65536, '2');
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_dealer_request_part (dealer, &second,
@@ -6017,7 +6102,7 @@ void test_request_correlation_budget_is_independent_per_pair ()
     reply_probe_t rejected_reply;
     rejected_reply.progress_handle = dealer;
     zlink_msg_t rejected;
-    init_filled_part (&rejected, 768, '3');
+    init_filled_part (&rejected, 65536, '3');
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_BACKPRESSURED,
@@ -6051,11 +6136,15 @@ void test_router_exact_request_full_keeps_route_active ()
     const char dealer_rid_text[] = "request-full-exact-dealer";
     set_routing_id_text (dealer, dealer_rid_text);
     set_routing_id_text (router, "request-full-exact-router");
-    const uint64_t hwm = 64;
+    const uint64_t hwm = 1024 * 1024;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (router, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (dealer, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+    const int send_timeout_ms = 500;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (router, ZLINK_OPT_SNDTIMEO, &send_timeout_ms,
+                        sizeof (send_timeout_ms)));
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_bind (dealer, "inproc://zmp-router-request-full-exact"));
     TEST_ASSERT_SUCCESS_ERRNO (
@@ -6081,7 +6170,7 @@ void test_router_exact_request_full_keeps_route_active ()
     reply_probe_t first_reply;
     first_reply.progress_handle = router;
     zlink_msg_t first;
-    init_filled_part (&first, 768, 'q');
+    init_filled_part (&first, 65536, 'q');
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_router_request_transport_pair_part (
@@ -6107,16 +6196,25 @@ void test_router_exact_request_full_keeps_route_active ()
     reply_probe_t rejected_reply;
     rejected_reply.progress_handle = router;
     zlink_msg_t rejected;
-    init_filled_part (&rejected, 768, 'z');
+    init_filled_part (&rejected, 65536, 'z');
     errno = 0;
+    const std::chrono::steady_clock::time_point rejected_at =
+      std::chrono::steady_clock::now ();
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_BACKPRESSURED,
       zlink_router_request_transport_pair_part (
         router, &dealer_rid, target.transport_pair_id,
         target.transport_pair_generation, &rejected,
-        ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 3000,
+        ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, 3000,
         &capture_reply, &rejected_reply));
+    const long rejected_elapsed_ms =
+      static_cast<long> (std::chrono::duration_cast<std::chrono::milliseconds> (
+                           std::chrono::steady_clock::now () - rejected_at)
+                           .count ());
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    TEST_ASSERT_TRUE_MESSAGE (
+      rejected_elapsed_ms < 250,
+      "exact request correlation backpressure must not wait for SNDTIMEO");
 
     zlink_routed_submit_target_t still_active;
     memset (&still_active, 0, sizeof (still_active));
@@ -6151,6 +6249,15 @@ void test_router_exact_request_full_keeps_route_active ()
       "ordinary-after-request-full",
       part_to_string_and_close (&ordinary_received).c_str ());
 
+    void *poller = zlink_poller_new ();
+    TEST_ASSERT_NOT_NULL (poller);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_poller_add (poller, router, router, ZLINK_POLLOUT));
+    zlink_poller_event_t writable_event;
+    TEST_ASSERT_EQUAL_INT (
+      0, zlink_poller_wait (poller, &writable_event, 1, 0, NULL));
+
     zlink_msg_t reply;
     init_string_part (&reply, "exact-request-full-reply");
     TEST_ASSERT_EQUAL_INT (
@@ -6158,10 +6265,51 @@ void test_router_exact_request_full_keeps_route_active ()
       zlink_dealer_reply_part (dealer, first_sequence, &reply,
                                ZLINK_PART_FINAL));
     TEST_ASSERT_TRUE (wait_for_reply (&first_reply));
+    TEST_ASSERT_EQUAL_INT (
+      1, zlink_poller_wait (poller, &writable_event, 1, 3000, NULL));
+    TEST_ASSERT_EQUAL_PTR (router, writable_event.socket);
+    TEST_ASSERT_TRUE ((writable_event.events & ZLINK_POLLOUT) != 0);
+
+    reply_probe_t recovered_reply;
+    recovered_reply.progress_handle = router;
+    zlink_msg_t recovered;
+    init_filled_part (&recovered, 65536, 'r');
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_router_request_transport_pair_part (
+        router, &dealer_rid, target.transport_pair_id,
+        target.transport_pair_generation, &recovered,
+        ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 3000,
+        &capture_reply, &recovered_reply));
+
+    uint8_t recovered_type = 0xff;
+    uint64_t recovered_sequence = 0;
+    zlink_part_flag_t recovered_more = ZLINK_PART_MORE;
+    zlink_msg_t recovered_received;
+    zlink_msg_init (&recovered_received);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      recv_dealer_part_with_retry (dealer, &recovered_type,
+                                   &recovered_sequence, &recovered_received,
+                                   &recovered_more));
+    TEST_ASSERT_EQUAL_UINT8 (ZLINK_DEALER_MESSAGE_REQUEST, recovered_type);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, recovered_more);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&recovered_received));
+
+    zlink_msg_t recovered_reply_part;
+    init_string_part (&recovered_reply_part, "exact-request-recovered");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_dealer_reply_part (dealer, recovered_sequence,
+                               &recovered_reply_part, ZLINK_PART_FINAL));
+    TEST_ASSERT_TRUE (wait_for_reply (&recovered_reply));
     {
         std::lock_guard<std::mutex> lock (rejected_reply.mutex);
         TEST_ASSERT_EQUAL_UINT64 (0, rejected_reply.callback_count);
     }
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_poller_remove (poller, router));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
 
     close_test_socket_after_reply_callback (router);
     test_context_socket_close_zero_linger (dealer);
@@ -6660,7 +6808,9 @@ int main ()
     RUN_SELECTED (
       test_request_correlation_budget_allows_one_empty_pair_oversize_and_recovers);
     RUN_SELECTED (
-      test_request_correlation_liveness_window_applies_with_finite_and_zero_hwm);
+      test_request_correlation_work_budget_applies_with_finite_and_zero_hwm);
+    RUN_SELECTED (
+      test_request_correlation_work_budget_keeps_1024b_pipeline_open);
     RUN_SELECTED (test_request_correlation_budget_recovers_after_timeout);
     RUN_SELECTED (test_request_correlation_budget_is_independent_per_pair);
     RUN_SELECTED (test_router_exact_request_full_keeps_route_active);

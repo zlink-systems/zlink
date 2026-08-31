@@ -277,6 +277,10 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Consumes the HWM-credit wake marker. Transport-pair activation also
     //  produces write activation, but must not be reported as credit recovery.
     bool take_hwm_credit_recovery ();
+    //  Consumes the request-correlation wake marker. Correlation capacity can
+    //  return after an unrelated ordinary send cleared the socket-wide send
+    //  recovery flag, so the pipe republishes that distinct cause.
+    bool take_request_correlation_recovery ();
 
     // Paired transports expose the Application route before both physical
     // lanes finish their handshake so a blocking send can wait on EAGAIN.
@@ -613,11 +617,14 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  socket-owning thread, never under _out_sync.
     uint64_t _remote_flow_pause_started_ms;
     std::atomic<bool> _waiting_for_byte_credit;
+    std::atomic<bool> _request_correlation_recovery;
     mutable std::atomic<bool> _waiting_for_flow_resume;
 
     //  High watermark for the outbound pipe.
     uint64_t _hwm;
     uint64_t _request_correlation_bytes;
+    uint64_t _request_correlation_work;
+    uint64_t _request_correlation_count;
 
     //  Low watermark for the inbound pipe.
     std::atomic<uint64_t> _lwm;

@@ -73,10 +73,11 @@ exception does not apply to an unfinished multipart message.
 ### 3.3 Pending-request lifecycle state
 
 Pending-map entries, callbacks, and timeout state grow with the number of live requests. The
-[pending-request admission limit](06-auto-hwm.en.md#pending-request-admission) bounds their logical
-charge per physical pair using the Application HWM and a 128 KiB completion-liveness window. This
-charge is neither actual allocator bytes nor retained payload bytes, and it is not included in
-queue-HWM current or snapshot values.
+[pending-request admission limit](06-auto-hwm.en.md#pending-request-admission) uses a per-physical-pair
+32 MiB size-weighted work budget and unresolved-request count limit of 16,384 to bound completion
+liveness. Work charge is neither actual allocator bytes nor retained payload bytes and is not
+included in queue-HWM current or snapshot values. Application HWM limits only frames resident in
+the queue and is not reused as a separate lifecycle limit for unresolved correlation.
 
 ### 3.4 Completion progress lane
 
