@@ -278,7 +278,7 @@ jobs:
             -DBUILD_BENCHMARKS=OFF \
             -DWITH_DOCS=OFF \
             -DWITH_TLS=OFF
-          cmake --build build-linux-x64-no-tls --parallel \
+          cmake --build build-linux-x64-no-tls --parallel 2 \
             --target libzlink test_capabilities test_asio_ws
           if ldd build-linux-x64-no-tls/lib/libzlink.so | grep -E 'lib(ssl|crypto)'; then
             echo "TLS-disabled libzlink unexpectedly links OpenSSL" >&2
@@ -294,7 +294,7 @@ jobs:
             -DBUILD_BENCHMARKS=OFF \
             -DWITH_DOCS=OFF \
             -DWITH_TLS=OFF
-          cmake --build build-linux-x64-static-only-no-tls --parallel \
+          cmake --build build-linux-x64-static-only-no-tls --parallel 2 \
             --target libzlink-static
 
       - name: Verify build output
