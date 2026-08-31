@@ -180,8 +180,9 @@ function insertStacks(html) {
 - [ ] **선 교차를 눈으로 세어 0.** (validator 통과로 갈음하지 않는다.)
 - [ ] mermaid의 노드·라벨·연결이 **빠짐없이** 반영(짧아진 문구는 카드에 있는가).
 - [ ] 색 의미가 mermaid와 일치(주황=오버헤드, 초록=Spot …).
-- [ ] ×N/서버들 박스에 **겹친 사각형이 실제로 보인다** — `grep -c 'style="fill:none"'`로 삽입
-      개수를 확인하고, **라이트와 다크 둘 다** 스크린샷으로 눈으로 확인.
+- [ ] ×N/서버들 박스에 **겹친 사각형이 실제로 보인다** — 삽입 개수는
+      `grep -o 'style="fill:none" stroke-width="2.2"' <file> | wc -l`로 센다(한 줄에 여러 사각형이
+      들어가므로 `grep -c`는 과소집계한다). **라이트와 다크 둘 다** 스크린샷으로 눈으로 확인.
 - [ ] 폭이 공통값. 쌍(기존/ZLink)이 같은 스타일·방향·박스 크기.
 - [ ] 크롬·범례 없음.
 
@@ -214,6 +215,8 @@ function insertStacks(html) {
 | `must NOT have additional properties {"bidir"}` | archify엔 양방향 속성이 없다. 양방향은 엣지 2개로 그리거나(강조 시), 그림에선 단방향+카드 설명으로 갈음. |
 | region이 서로 겹친다는 에러 | 좌우로 인접한 region은 frame이 닿는다 → **세로 스택**으로 바꾼다. |
 | 겹친 사각형이 안 보임 | ① 삽입 정규식이 `<title>`을 안 건너뜀(§6) ② 하드코딩 색이 테마에 묻힘 → `fill:none`+class(§6). |
+| 단수 노드에 ×N 스택이 잘못 들어감 | `build-diagram.mjs`가 **region 라벨의 `×`** 를 멤버 노드 `data-node-context`로 전파해 단수 노드까지 스택함. 우회: region 라벨에서 `×N`을 빼고(예 `ZoneNode ×2`→`ZoneNode 2대`) 원문은 카드에. 근본 수정은 build-diagram의 ×N 판정을 노드 label/sublabel로 한정. |
+| sequence의 `note`가 안 보임 | archify sequence 렌더러가 `messages[].note`/`Note over`를 **렌더하지 않는다**(validate는 통과). suspend/resume·부연은 메시지 **label**로 옮기거나 **카드**에 문장으로 보존. |
 | 다이어그램마다 크기가 다름 | viewBox 폭이 제각각 → `pad-viewbox.mjs`로 공통폭 통일(§7). |
 
 ## 완료 점검
