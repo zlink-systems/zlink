@@ -397,7 +397,7 @@ void zlink::asio_tls_connecter_t::create_engine (fd_t fd_, const std::string &lo
 
 bool zlink::asio_tls_connecter_t::tune_socket (fd_t fd_)
 {
-    const int rc = tune_asio_tcp_socket (fd_, options, false);
+    const int rc = tune_asio_tcp_socket (fd_, options, true);
     return rc == 0;
 }
 

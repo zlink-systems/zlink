@@ -45,6 +45,7 @@ enum pipe_message_admission_t : int
 {
     pipe_message_admission_ready = 0,
     pipe_message_admission_hwm_full,
+    pipe_message_admission_request_full,
     pipe_message_admission_transport_wait,
     pipe_message_admission_too_large,
     pipe_message_admission_inactive,
@@ -212,6 +213,12 @@ class pipe_t ZLINK_FINAL : public object_t,
     const std::shared_ptr<physical_queue_record_t> &out_physical_queue () const;
     uint64_t planned_out_hwm () const;
     uint64_t applied_out_hwm () const;
+    // Request correlation remains live after the application queue releases
+    // its byte credit. Keep that second lifetime bounded per physical route so
+    // a fast request lane cannot indefinitely outrun its completion lane.
+    bool try_reserve_request_correlation (uint64_t accounted_bytes_);
+    void release_request_correlation (uint64_t accounted_bytes_);
+    static uint64_t frame_accounted_bytes (const msg_t *msg_);
     uint64_t planned_in_hwm () const;
     uint64_t applied_in_hwm () const;
     void apply_physical_queue_hwm_plan ();
@@ -518,7 +525,6 @@ class pipe_t ZLINK_FINAL : public object_t,
       pipe_message_admission_t *admission_out_);
     void rollback_unlocked (bool publish_peer_control_ = true);
     void flush_unlocked ();
-    static uint64_t frame_accounted_bytes (const msg_t *msg_);
     static uint64_t committed_frame_accounted_bytes_ref (const msg_t &msg_);
     static bool counted_pending_message_ref (const msg_t &msg_);
     void publish_outbound_frame_unlocked (const msg_t &msg_, bool more_);
@@ -588,6 +594,11 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Remote receive-flow state applied on this pipe's own thread. Guarded by
     //  _out_sync, exactly like _transport_pair_write_held.
     bool _remote_flow_paused;
+    // A request-only admission miss does not remove this pipe from ordinary
+    // send scheduling. It still needs one owner-thread wake when terminal
+    // completion returns correlation capacity.
+    bool _request_correlation_waiting;
+    bool _request_correlation_activation_pending;
     //  Set while the pipe's owner holds an accepted message that has not been
     //  written yet. Guarded by _out_sync with the rest of the outbound state.
     bool _out_owner_message_started;
@@ -606,6 +617,7 @@ class pipe_t ZLINK_FINAL : public object_t,
 
     //  High watermark for the outbound pipe.
     uint64_t _hwm;
+    uint64_t _request_correlation_bytes;
 
     //  Low watermark for the inbound pipe.
     std::atomic<uint64_t> _lwm;

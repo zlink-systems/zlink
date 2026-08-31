@@ -39,8 +39,10 @@ inline size_t header_size ()
 
 inline uint64_t now_ns ()
 {
+    // Measurement windows use steady_clock as well. A wall-clock adjustment
+    // must not shorten a run or discard otherwise valid latency samples.
     return static_cast<uint64_t> (std::chrono::duration_cast<std::chrono::nanoseconds> (
-                                    std::chrono::system_clock::now ().time_since_epoch ())
+                                    std::chrono::steady_clock::now ().time_since_epoch ())
                                     .count ());
 }
 

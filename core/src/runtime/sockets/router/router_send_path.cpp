@@ -205,7 +205,8 @@ int zlink::router_t::send_with_observer (
                 *admission_out_ = write_admission;
             const blob_t &routing_id = write_pipe->get_routing_id ();
             out_pipe_t *current_out_pipe = lookup_out_pipe (routing_id);
-            if (current_out_pipe && current_out_pipe->pipe == write_pipe)
+            if (write_admission != pipe_message_admission_request_full
+                && current_out_pipe && current_out_pipe->pipe == write_pipe)
                 mark_out_pipe_inactive (current_out_pipe);
             if (router_debug_enabled ()) {
                 fprintf (stderr, "router xsend: drop message size=%zu\n", msg_->size ());
@@ -219,6 +220,8 @@ int zlink::router_t::send_with_observer (
                 errno = write_admission == pipe_message_admission_too_large
                           ? EMSGSIZE
                           : write_admission == pipe_message_admission_hwm_full
+                                || write_admission
+                                     == pipe_message_admission_request_full
                                 || write_admission
                                      == pipe_message_admission_transport_wait
                               ? EAGAIN
@@ -544,7 +547,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                 *admission_out_ = write_admission;
             const blob_t &routing_id = write_pipe->get_routing_id ();
             out_pipe_t *current_out_pipe = lookup_out_pipe (routing_id);
-            if (current_out_pipe && current_out_pipe->pipe == write_pipe)
+            if (write_admission != pipe_message_admission_request_full
+                && current_out_pipe && current_out_pipe->pipe == write_pipe)
                 mark_out_pipe_inactive (current_out_pipe);
             if (router_debug_enabled ()) {
                 fprintf (stderr, "router xsend_routed: write failed rid_size=%u\n",
@@ -563,6 +567,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                 errno = write_admission == pipe_message_admission_too_large
                           ? EMSGSIZE
                           : write_admission == pipe_message_admission_hwm_full
+                                || write_admission
+                                     == pipe_message_admission_request_full
                                 || write_admission
                                      == pipe_message_admission_transport_wait
                               ? EAGAIN

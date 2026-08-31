@@ -23,7 +23,15 @@ namespace
 {
 struct pending_pair_observer_t
 {
-    pending_pair_observer_t () : state (NULL), identity (NULL), pending (NULL) {}
+    pending_pair_observer_t () :
+        state (NULL),
+        identity (NULL),
+        pending (NULL),
+        accounted_bytes (0),
+        reserved_pipe (NULL),
+        reservation_committed (false)
+    {
+    }
 
     // Pipe write observers finish before the tracked send returns. Borrow the
     // caller's owner instead of adding shared_ptr atomics to every request.
@@ -33,8 +41,27 @@ struct pending_pair_observer_t
     // entry therefore cannot be erased or invalidated before commit, so keep
     // the resolved entry instead of hashing the same sequence twice.
     reqrep::pending_request_t *pending;
+    uint64_t accounted_bytes;
+    zlink::pipe_t *reserved_pipe;
+    bool reservation_committed;
     std::unique_lock<std::mutex> publication_lock;
 };
+
+uint64_t request_correlation_accounted_bytes (
+  zlink_msg_t *staged_parts_, size_t staged_part_count_, zlink_msg_t *final_part_)
+{
+    uint64_t total = 0;
+    for (size_t i = 0; i <= staged_part_count_; ++i) {
+        zlink_msg_t *const part =
+          i < staged_part_count_ ? &staged_parts_[i] : final_part_;
+        const uint64_t frame = zlink::pipe_t::frame_accounted_bytes (
+          reinterpret_cast<zlink::msg_t *> (part));
+        if (UINT64_MAX - total < frame)
+            return UINT64_MAX;
+        total += frame;
+    }
+    return total == 0 ? 1 : total;
+}
 
 bool publish_pending_pair_before_flush (
   zlink::pipe_t *pipe_, void *userdata_,
@@ -43,14 +70,18 @@ bool publish_pending_pair_before_flush (
     pending_pair_observer_t *observer =
       static_cast<pending_pair_observer_t *> (userdata_);
     if (!observer || !observer->state || !*observer->state
-        || !observer->identity)
+        || !observer->identity) {
+        errno = ECANCELED;
         return false;
+    }
 
     reqrep::socket_request_reply_state_t *const state =
       observer->state->get ();
 
     if (phase_ == zlink::pipe_write_observer_prepare) {
         observer->pending = NULL;
+        observer->reserved_pipe = NULL;
+        observer->reservation_committed = false;
         observer->publication_lock =
           std::unique_lock<std::mutex> (state->mutex);
         std::unordered_map<uint64_t, reqrep::pending_request_t>::iterator
@@ -60,26 +91,57 @@ bool publish_pending_pair_before_flush (
             || pending == state->pending_requests.end ()
             || !(pending->second.identity == *observer->identity)) {
             observer->publication_lock.unlock ();
+            errno = ECANCELED;
+            return false;
+        }
+        if (!pipe_ || !pipe_->retain_lifetime_ref ()) {
+            observer->publication_lock.unlock ();
+            errno = EHOSTUNREACH;
+            return false;
+        }
+        if (!pipe_->try_reserve_request_correlation (
+              observer->accounted_bytes)) {
+            const int saved_errno = errno;
+            pipe_->release_lifetime_ref ();
+            observer->publication_lock.unlock ();
+            errno = saved_errno;
             return false;
         }
         observer->pending = &pending->second;
+        observer->reserved_pipe = pipe_;
         return true;
     }
 
     if (phase_ == zlink::pipe_write_observer_commit) {
         if (!pipe_ || !observer->pending
-            || !observer->publication_lock.owns_lock ())
+            || !observer->publication_lock.owns_lock ()) {
+            errno = ECANCELED;
             return false;
+        }
         observer->pending->transport_pair_id = pipe_->get_transport_pair_id ();
         observer->pending->transport_pair_generation =
           pipe_->get_transport_pair_generation ();
-        return observer->pending->transport_pair_id != 0
-               && observer->pending->transport_pair_generation != 0;
+        const bool valid_pair = observer->pending->transport_pair_id != 0
+                                && observer->pending->transport_pair_generation != 0;
+        if (valid_pair) {
+            observer->pending->correlation.adopt (
+              observer->reserved_pipe, observer->accounted_bytes);
+            observer->reservation_committed = true;
+        }
+        return valid_pair;
     }
 
+    zlink::pipe_t *const uncommitted_pipe =
+      observer->reservation_committed ? NULL : observer->reserved_pipe;
     observer->pending = NULL;
+    observer->reserved_pipe = NULL;
     if (observer->publication_lock.owns_lock ())
         observer->publication_lock.unlock ();
+    if (uncommitted_pipe) {
+        uncommitted_pipe->release_request_correlation (
+          observer->accounted_bytes);
+        uncommitted_pipe->release_lifetime_ref ();
+    }
     return true;
 }
 
@@ -319,6 +381,8 @@ zlink_submit_result_t request_part_common (
         pending_pair_observer_t pair_observer;
         pair_observer.state = &request_state;
         pair_observer.identity = &pending_token.identity;
+        pair_observer.accounted_bytes = request_correlation_accounted_bytes (
+          NULL, 0, part_);
         const int send_rc =
           peer_rid_
             ? zlink::logical_multipart_send_routed_tracked (
@@ -401,22 +465,13 @@ zlink_submit_result_t request_part_common (
     pending_pair_observer_t pair_observer;
     pair_observer.state = &request_state;
     pair_observer.identity = &pending_token.identity;
+    pair_observer.accounted_bytes = request_correlation_accounted_bytes (
+      state->send.buffered_parts.empty ()
+        ? NULL
+        : &state->send.buffered_parts[0],
+      state->send.buffered_parts.size (), part_);
     bool physical_first_part = true;
     bool pending_pair_recorded = false;
-    if (state->send.buffered_parts.empty ()
-        && spec.transport_pair_id != 0
-        && spec.transport_pair_generation != 0) {
-        pending_pair_recorded =
-          reqrep::record_socket_pending_transport_pair_identity (
-            request_state, pending_token.identity, spec.transport_pair_id,
-            spec.transport_pair_generation);
-        if (!pending_pair_recorded) {
-            zlink::part_helper_internal::abort_send_step (state);
-            zlink::part_helper_internal::consume_send_part (part_);
-            errno = 0;
-            return ZLINK_SUBMIT_OK;
-        }
-    }
     for (size_t i = 0; i < state->send.buffered_parts.size (); ++i) {
         const bool observe_first_pipe =
           physical_first_part && !pending_pair_recorded;

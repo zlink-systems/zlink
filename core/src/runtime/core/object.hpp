@@ -75,6 +75,10 @@ class object_t
                               uint64_t generation_,
                               uint64_t msgs_read_,
                               uint64_t bytes_read_);
+    void send_activate_write_deferred (zlink::pipe_t *destination_,
+                                       uint64_t generation_,
+                                       uint64_t msgs_read_,
+                                       uint64_t bytes_read_);
     //  Applies the peer's absolute receive-flow state to one application pipe
     //  on the pipe's own thread.
     void send_flow_state (zlink::pipe_t *destination_,

@@ -321,6 +321,18 @@ void zlink::object_t::send_activate_write (pipe_t *destination_,
     send_pipe_command (destination_, cmd, true);
 }
 
+void zlink::object_t::send_activate_write_deferred (
+  pipe_t *destination_, uint64_t generation_, uint64_t msgs_read_,
+  uint64_t bytes_read_)
+{
+    command_t cmd;
+    cmd.type = command_t::activate_write;
+    cmd.args.activate_write.generation = generation_;
+    cmd.args.activate_write.msgs_read = msgs_read_;
+    cmd.args.activate_write.bytes_read = bytes_read_;
+    send_pipe_command (destination_, cmd, false);
+}
+
 void zlink::object_t::send_flow_state (pipe_t *destination_,
                                        unsigned char state_,
                                        uint64_t epoch_)

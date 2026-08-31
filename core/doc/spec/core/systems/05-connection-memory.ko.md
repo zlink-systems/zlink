@@ -17,8 +17,8 @@ title: "Connection Memory"
 
 각 transport connection은 두 종류의 memory를 사용한다. 하나는 connection을 만들 때
 할당하는 **고정 비용**이며, 구성은 inproc와 socket 기반 transport가 다르다. 다른 하나는
-queue가 보관하는 message storage인 **가변 비용**으로, 고정된 connection 비용이 아니라 각
-frame의 실제 accounted byte와, queue에 유지할 byte를 제한하는 상한인
+queue가 보관하는 message storage와 pending request lifecycle state인 **가변 비용**으로,
+고정된 connection 비용이 아니다. Queue storage는 각 frame의 실제 accounted byte와, queue에 유지할 byte를 제한하는 상한인
 [HWM](../glossary.ko.md#hwm)에 따라 증가한다.
 
 이 문서는 그 두 비용의 구성과, 이를 관찰·측정할 때의 한계를 정의한다. 대상 독자는
@@ -68,6 +68,14 @@ payload와 `sizeof(zlink_msg_t)`를 byte charge로 계산한다. 이 charge는 �
 complete message 한 건을 허용하고, 그 뒤의 write를 중단한다. 끝나지 않은 multipart에는 이
 예외를 적용하지 않는다.
 
+### 3.3 Pending request lifecycle state
+
+Pending map entry, callback과 timeout state는 live request 수에 따라 증가하며
+[pending request 수용 한도](06-auto-hwm.ko.md#pending-request-수용)가 physical pair별 logical
+charge를 Application HWM과 128 KiB completion-liveness window로 제한한다. 이 charge는 allocator가
+실제 할당한 byte나 보관 중인 payload byte가 아니며, queue HWM의 current·snapshot 값에 포함되지
+않는다.
+
 ### 3.4 Completion progress lane
 
 DEALER·ROUTER의 [completion progress lane](../glossary.ko.md#completion-progress-lane)은
@@ -75,6 +83,10 @@ terminal reply와 error reply를 진행시키고, peer 사이의 receive-flow-st
 동기화하는 별도 경로다. 이 lane에는 byte HWM, LWM, manual HWM과 Core budget
 reservation을 적용하지 않는다. Application pipe가 가득 차도 유효한 completion record와
 receive-flow-state frame은 connection이 유지되고 allocation이 성공하면 수용한다.
+
+Completion lane의 `SNDBUF`·`RCVBUF` 기본값 `-1`은 transport 종류와 관계없이 OS 기본값과
+autotuning을 유지한다. Application이 0 이상의 값을 명시하면 completion lane에는 최대 64 KiB로
+제한한 값을 TCP·TLS·WS·WSS의 기반 TCP socket에 동일하게 적용한다.
 
 ## 4. 측정과 한계
 

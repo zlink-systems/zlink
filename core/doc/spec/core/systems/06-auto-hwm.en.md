@@ -353,6 +353,26 @@ Increasing the HWM applies the new value to the current queue generation. When t
 
 Application HWM does not apply to the completion queue through which DEALER and ROUTER advance terminal replies and error replies and synchronize receive-flow-state frames. Monitor queues are also excluded from the queue list used to distribute the application budget.
 
+### Pending-request admission
+
+The lifecycle charge of one request is the sum of `payloadBytes + sizeof(msg_t)` for all
+Application payload frames. The per-physical-transport-pair limit is the byte value of the
+outbound Application HWM applied to that pair at admission time. A pair whose live charge is zero
+admits one request larger than that limit. Independently of this limit, each pair applies a 128 KiB
+lifecycle window for completion liveness. HWM `0` disables only the limit derived from Application
+HWM; the 128 KiB liveness window remains active. An empty liveness window admits one request larger
+than that window.
+
+This limit does not reuse Application-queue HWM accounting. Lifecycle charge is not added to
+`provisionalCharge` or `committedQueueCharge` and does not change physical-queue current bytes,
+writer credit, HWM snapshots, or Core budget reservation. A decreased HWM does not cancel an
+already successful request and constrains subsequent admissions using the newly applied value.
+Capacity exhaustion on one pair does not block another pair or ordinary sends on the same pipe.
+
+A request that lacks capacity under either byte limit returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`,
+publishes no part on the wire, and does not invoke its handler. Reply, timeout, disconnect, and
+close return both reservations together and wake request-submit recovery on the exact pipe owner.
+
 ### Message-Path Cost Limits
 
 The send, receive, and decoder admission paths do not perform the following operations.
@@ -399,6 +419,9 @@ This section collects the items that workers must verify. These behaviors are ob
 - A frame with no payload still consumes HWM—repeatedly sending empty frames eventually blocks admission at the HWM.
 - An empty queue admits one complete message of known total size even above HWM and rejects a second oversize message.
 - An unknown-size multipart blocks further `MORE` frames from the point HWM is exceeded. However, it admits the final frame of a multipart that started on an empty queue even when the frame exceeds HWM, and this exception does not apply to an intermediate `MORE` frame. After the multipart is discarded, the snapshot's `provisional_accounted_bytes` returns to 0.
+- Pending lifecycle charge remains through reply or timeout even after the peer dequeues the request and physical-queue current bytes reach zero. Exhaustion returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and does not add the charge to physical-queue snapshots.
+- A pair with zero live charge admits one request larger than the limit and blocks the next unresolved request. Reply or timeout makes the exact pair admissible again; another pair and ordinary send continue while one pair is full.
+- With either a sufficient Application byte limit or HWM `0`, one 64 KiB request succeeds and a second unresolved request blocks at the 128 KiB liveness window. Completing the first request admits the next request.
 
 **Credit, dequeue, and generation**
 - After receiving a complete message, Core queue charge ends and the sender can send again. The snapshot's `application_accounted_bytes` remains zero even if the application keeps the payload.

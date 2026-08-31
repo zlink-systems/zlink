@@ -447,6 +447,19 @@ An inbound request stores its reply target according to the public receive role.
 owns the completion rules: completion by the first reply, timeout, ignoring duplicate
 replies, and delivery of error replies.
 
+### Pending-request admission limit
+
+Before publishing an outbound request on the wire, Core reserves that request's lifecycle charge
+on the selected physical transport pair. A successful request retains the charge until a reply,
+timeout, disconnect, or socket close terminates the request. Send rollback and each terminal path
+return exactly once only the charge they own. Replacing a pair or reconnecting into a new
+generation does not carry charge from the previous generation into the new pair.
+
+The [Pending-request admission](../systems/06-auto-hwm.en.md#pending-request-admission) section of
+Auto HWM owns the charge calculation and limit. This logical charge bounds the correlation
+lifecycle; it does not mean that Core retains the request payload for that lifetime or extends
+physical-queue HWM accounting.
+
 ### WebSocket implementation
 
 The WebSocket transport adapter snapshots the opcode of the message to which each read

@@ -426,6 +426,18 @@ Inbound request의 reply target은 public receive 역할에 따라 다르게 보
 완료 규칙(첫 reply 완료, timeout, 중복 reply 무시, error reply 전달)은
 [§10 검증 요구](#10-구현-및-contract-test-검증-요구)가 소유한다.
 
+### Pending request 수용 한도
+
+Core는 outbound request를 wire에 공개하기 전에 선택한 physical transport pair에 그 request의
+lifecycle charge를 예약한다. 성공한 request의 charge는 reply, timeout, disconnect 또는 socket
+close가 request를 끝낼 때까지 유지한다. Send rollback과 각 terminal path는 자신이 소유한
+charge를 정확히 한 번 반환한다. Pair 교체나 reconnect로 만든 새 generation은 이전 generation의
+charge를 상속하지 않는다.
+
+Charge 계산과 한도는 [Auto HWM의 Pending request 수용](../systems/06-auto-hwm.ko.md#pending-request-수용)이
+소유한다. 이 logical charge는 correlation lifecycle을 제한하며, Core가 request payload를 그 기간
+동안 보관하거나 physical queue HWM 회계를 연장한다는 뜻이 아니다.
+
 ### WebSocket 구현
 
 WebSocket transport adapter는 각 read가 속한 message의 opcode와 binary payload byte를 함께

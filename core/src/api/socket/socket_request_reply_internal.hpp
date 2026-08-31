@@ -68,11 +68,39 @@ struct pending_request_token_t
     uint32_t resolved_timeout_ms;
 };
 
+struct request_correlation_lease_t
+{
+    request_correlation_lease_t ();
+    ~request_correlation_lease_t ();
+    request_correlation_lease_t (request_correlation_lease_t &&other_) noexcept;
+    request_correlation_lease_t &operator= (
+      request_correlation_lease_t &&other_) noexcept;
+    request_correlation_lease_t (const request_correlation_lease_t &) = delete;
+    request_correlation_lease_t &operator= (
+      const request_correlation_lease_t &) = delete;
+
+    void adopt (zlink::pipe_t *pipe_, uint64_t accounted_bytes_);
+    void release ();
+    zlink::pipe_t *pipe () const;
+    uint64_t accounted_bytes () const;
+
+  private:
+    zlink::pipe_t *_pipe;
+    uint64_t _accounted_bytes;
+};
+
 struct pending_request_t
 {
+    pending_request_t ();
+    pending_request_t (pending_request_t &&) noexcept = default;
+    pending_request_t &operator= (pending_request_t &&) noexcept = default;
+    pending_request_t (const pending_request_t &) = delete;
+    pending_request_t &operator= (const pending_request_t &) = delete;
+
     pending_request_identity_t identity;
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
+    request_correlation_lease_t correlation;
     //  Retained by the lifecycle owner so a resumed multipart send can rebuild
     //  its ephemeral arm token without reinterpreting the current socket policy.
     uint32_t resolved_timeout_ms;
@@ -272,6 +300,7 @@ int arm_socket_pending_request_timeout (
   const pending_request_token_t &token_);
 void queue_socket_pending_timeout_completion (
   const std::shared_ptr<socket_request_reply_state_t> &state_, const pending_request_t &pending_);
+void release_socket_pending_request_correlation (pending_request_t *pending_);
 bool has_pending_request_work (const std::shared_ptr<socket_request_reply_state_t> &state_);
 void fail_disconnected_peer_requests (
   const std::shared_ptr<socket_request_reply_state_t> &state_,

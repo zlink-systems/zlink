@@ -9,6 +9,7 @@
 #include "api/socket/request_completion_queue_internal.hpp"
 #include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
+#include "core/pipe.hpp"
 #include "utils/routing_id.hpp"
 
 namespace zlink
@@ -62,6 +63,78 @@ size_t pending_key_hash_t::operator() (const pending_key_t &key_) const
 {
     size_t seed = std::hash<uint64_t> () (key_.request_seq);
     return hash_combine (seed, std::hash<std::string> () (key_.peer_rid));
+}
+
+request_correlation_lease_t::request_correlation_lease_t () :
+    _pipe (NULL), _accounted_bytes (0)
+{
+}
+
+request_correlation_lease_t::~request_correlation_lease_t ()
+{
+    release ();
+}
+
+request_correlation_lease_t::request_correlation_lease_t (
+  request_correlation_lease_t &&other_) noexcept :
+    _pipe (other_._pipe), _accounted_bytes (other_._accounted_bytes)
+{
+    other_._pipe = NULL;
+    other_._accounted_bytes = 0;
+}
+
+request_correlation_lease_t &request_correlation_lease_t::operator= (
+  request_correlation_lease_t &&other_) noexcept
+{
+    if (this == &other_)
+        return *this;
+    release ();
+    _pipe = other_._pipe;
+    _accounted_bytes = other_._accounted_bytes;
+    other_._pipe = NULL;
+    other_._accounted_bytes = 0;
+    return *this;
+}
+
+void request_correlation_lease_t::adopt (zlink::pipe_t *pipe_,
+                                         uint64_t accounted_bytes_)
+{
+    zlink_assert (!_pipe);
+    zlink_assert (pipe_);
+    zlink_assert (accounted_bytes_ != 0);
+    _pipe = pipe_;
+    _accounted_bytes = accounted_bytes_;
+}
+
+void request_correlation_lease_t::release ()
+{
+    if (!_pipe)
+        return;
+    zlink::pipe_t *const pipe = _pipe;
+    const uint64_t accounted_bytes = _accounted_bytes;
+    _pipe = NULL;
+    _accounted_bytes = 0;
+    pipe->release_request_correlation (accounted_bytes);
+    pipe->release_lifetime_ref ();
+}
+
+zlink::pipe_t *request_correlation_lease_t::pipe () const
+{
+    return _pipe;
+}
+
+uint64_t request_correlation_lease_t::accounted_bytes () const
+{
+    return _accounted_bytes;
+}
+
+pending_request_t::pending_request_t () :
+    transport_pair_id (0),
+    transport_pair_generation (0),
+    resolved_timeout_ms (0),
+    handler (NULL),
+    userdata (NULL)
+{
 }
 
 dealer_reply_target_t::dealer_reply_target_t () :
@@ -215,12 +288,20 @@ void on_socket_request_timeout (void *userdata_)
 
     pending_request_t pending;
     if (remove_socket_pending_request (ctx->state, ctx->identity, &pending)) {
+        release_socket_pending_request_correlation (&pending);
 #ifdef ZLINK_BUILD_TESTS
         invoke_request_reply_timeout_after_remove_hook ();
 #endif
         queue_socket_pending_timeout_completion (ctx->state, pending);
     }
 }
+
+}
+
+void release_socket_pending_request_correlation (pending_request_t *pending_)
+{
+    if (pending_)
+        pending_->correlation.release ();
 }
 
 bool remove_socket_pending_request (const std::shared_ptr<socket_request_reply_state_t> &state_,

@@ -344,7 +344,7 @@ void zlink::asio_ws_listener_t::close ()
 
 int zlink::asio_ws_listener_t::tune_socket (fd_t fd_) const
 {
-    return tune_asio_tcp_socket (fd_, options, false);
+    return tune_asio_tcp_socket (fd_, options, true);
 }
 
 bool zlink::asio_ws_listener_t::apply_accept_filters (fd_t fd_,

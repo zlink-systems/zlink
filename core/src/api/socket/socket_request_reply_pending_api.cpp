@@ -186,6 +186,7 @@ bool reqrep::erase_socket_pending_request (
 
     reqrep::pending_request_t pending;
     if (reqrep::remove_socket_pending_request (state_, identity_, &pending)) {
+        reqrep::release_socket_pending_request_correlation (&pending);
         zlink::request_timeout::cancel (pending.timeout_task);
         zlink::request_completion::release_reservation (&state_->completion);
         return true;
@@ -322,6 +323,7 @@ int reqrep::arm_socket_pending_request_timeout (
             }
         }
         if (removed) {
+            reqrep::release_socket_pending_request_correlation (&pending);
             if (reqrep::queue_reply_completion (
                   state_, pending.handler, pending.userdata, terminal_errno,
                   NULL, 0)

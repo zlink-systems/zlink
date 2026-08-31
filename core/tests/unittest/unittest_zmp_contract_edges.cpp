@@ -10,6 +10,7 @@
 #include "api/socket/socket_api_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "api/socket/socket_request_reply_pending_internal.hpp"
+#include "core/transport_pair_policy.hpp"
 #include "protocol/zmp_encoder.hpp"
 #include "protocol/zmp_protocol.hpp"
 #include "protocol/wire.hpp"
@@ -21,6 +22,20 @@
 
 namespace
 {
+void test_completion_socket_buffer_preserves_default_and_caps_explicit_value ()
+{
+    using zlink::transport_pair_policy::completion_socket_buffer;
+    using zlink::transport_pair_policy::completion_socket_buffer_bytes;
+
+    TEST_ASSERT_EQUAL_INT (-1, completion_socket_buffer (-1));
+    TEST_ASSERT_EQUAL_INT (32768, completion_socket_buffer (32768));
+    TEST_ASSERT_EQUAL_INT (completion_socket_buffer_bytes,
+                           completion_socket_buffer (1024 * 1024));
+    TEST_ASSERT_EQUAL_UINT64 (
+      128 * 1024,
+      zlink::transport_pair_policy::request_correlation_liveness_bytes);
+}
+
 struct timeout_barrier_t
 {
     timeout_barrier_t () : fired (false) {}
@@ -413,8 +428,9 @@ void test_pending_aggregate_wrap_and_stale_cookie_are_fenced ()
     pending_request_t wrap_blocker = pending_request_t ();
     wrap_blocker.identity.request_seq = std::numeric_limits<uint64_t>::max ();
     wrap_blocker.identity.cookie = 1;
+    const pending_request_identity_t wrap_identity = wrap_blocker.identity;
     TEST_ASSERT_SUCCESS_ERRNO (
-      add_socket_pending_request_locked (state.get (), wrap_blocker));
+      add_socket_pending_request_locked (state.get (), std::move (wrap_blocker)));
     state->next_request_seq = std::numeric_limits<uint64_t>::max ();
     TEST_ASSERT_EQUAL_UINT64 (
       1, zlink::request_reply_runtime::allocate_request_sequence (state.get ()));
@@ -422,7 +438,7 @@ void test_pending_aggregate_wrap_and_stale_cookie_are_fenced ()
 
     pending_request_t removed = pending_request_t ();
     TEST_ASSERT_TRUE (remove_socket_pending_request_locked (
-      state.get (), wrap_blocker.identity, &removed));
+      state.get (), wrap_identity, &removed));
 
     pending_request_t old_request = pending_request_t ();
     old_request.identity.request_seq = 1;
@@ -433,7 +449,7 @@ void test_pending_aggregate_wrap_and_stale_cookie_are_fenced ()
     stale_token.identity = old_request.identity;
     stale_token.resolved_timeout_ms = 1000;
     TEST_ASSERT_SUCCESS_ERRNO (
-      add_socket_pending_request_locked (state.get (), old_request));
+      add_socket_pending_request_locked (state.get (), std::move (old_request)));
     TEST_ASSERT_TRUE (
       remove_socket_pending_request_locked (state.get (), stale_token.identity, &removed));
 
@@ -442,8 +458,9 @@ void test_pending_aggregate_wrap_and_stale_cookie_are_fenced ()
     reused_request.identity.cookie = 42;
     reused_request.transport_pair_id = 0;
     reused_request.transport_pair_generation = 0;
+    const pending_request_identity_t reused_identity = reused_request.identity;
     TEST_ASSERT_SUCCESS_ERRNO (
-      add_socket_pending_request_locked (state.get (), reused_request));
+      add_socket_pending_request_locked (state.get (), std::move (reused_request)));
 
     TEST_ASSERT_FALSE (
       remove_socket_pending_request_locked (state.get (), stale_token.identity, &removed));
@@ -455,7 +472,7 @@ void test_pending_aggregate_wrap_and_stale_cookie_are_fenced ()
         const std::unordered_map<uint64_t, pending_request_t>::const_iterator current =
           state->pending_requests.find (stale_token.identity.request_seq);
         TEST_ASSERT_TRUE (current != state->pending_requests.end ());
-        TEST_ASSERT_EQUAL_UINT64 (reused_request.identity.cookie,
+        TEST_ASSERT_EQUAL_UINT64 (reused_identity.cookie,
                                   current->second.identity.cookie);
         TEST_ASSERT_EQUAL_UINT64 (0, current->second.transport_pair_id);
         TEST_ASSERT_FALSE (current->second.timeout_task);
@@ -687,6 +704,8 @@ int main ()
 {
     setup_test_environment ();
     UNITY_BEGIN ();
+    RUN_TEST (
+      test_completion_socket_buffer_preserves_default_and_caps_explicit_value);
     RUN_TEST (test_zmp_encoder_rejects_payload_larger_than_u32);
     RUN_TEST (test_zmp_encoder_keeps_ordinary_data_header_at_eight_bytes);
     RUN_TEST (test_zmp_encoder_writes_request_sequence_extension_big_endian);

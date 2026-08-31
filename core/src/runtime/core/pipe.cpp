@@ -7,6 +7,7 @@
 
 #include "utils/macros.hpp"
 #include "core/pipe.hpp"
+#include "core/transport_pair_policy.hpp"
 #include "core/ctx.hpp"
 #include "protocol/zmp_peer_weight.hpp"
 #include "utils/err.hpp"
@@ -248,6 +249,8 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _out_active (true),
     _transport_pair_write_held (false),
     _remote_flow_paused (false),
+    _request_correlation_waiting (false),
+    _request_correlation_activation_pending (false),
     _out_owner_message_started (false),
     _out_owner_message_start_pending (false),
     _remote_flow_epoch (0),
@@ -255,6 +258,7 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _waiting_for_byte_credit (false),
     _waiting_for_flow_resume (false),
     _hwm (outhwm_),
+    _request_correlation_bytes (0),
     _lwm (compute_lwm (inhwm_)),
     _inhwm (inhwm_),
     _lwm_hint (0),
@@ -1325,6 +1329,71 @@ zlink::pipe_t::write_state_admission_unlocked () const
     return pipe_message_admission_ready;
 }
 
+bool zlink::pipe_t::try_reserve_request_correlation (
+  uint64_t accounted_bytes_)
+{
+    if (accounted_bytes_ == 0)
+        accounted_bytes_ = 1;
+
+    scoped_fast_lock_t lock (_out_sync);
+    if (_state != active) {
+        errno = EHOSTUNREACH;
+        return false;
+    }
+    if (_transport_pair_write_held || remote_flow_blocked_unlocked ()) {
+        errno = EAGAIN;
+        return false;
+    }
+
+    const bool overflow =
+      UINT64_MAX - _request_correlation_bytes < accounted_bytes_;
+    const bool budget_full =
+      _hwm != 0 && _request_correlation_bytes != 0
+      && (accounted_bytes_ > _hwm
+          || _request_correlation_bytes > _hwm - accounted_bytes_);
+    // Bound work that has left the application queue but still needs the
+    // completion lane. The empty-pair exception admits one larger request.
+    const uint64_t liveness_limit =
+      transport_pair_policy::request_correlation_liveness_bytes;
+    const bool liveness_full =
+      _request_correlation_bytes != 0
+      && (accounted_bytes_ > liveness_limit
+          || _request_correlation_bytes > liveness_limit - accounted_bytes_);
+    if (overflow || budget_full || liveness_full) {
+        _request_correlation_waiting = true;
+        errno = ENOBUFS;
+        return false;
+    }
+
+    _request_correlation_bytes += accounted_bytes_;
+    return true;
+}
+
+void zlink::pipe_t::release_request_correlation (uint64_t accounted_bytes_)
+{
+    bool schedule_activation = false;
+    uint64_t generation = 0;
+    uint64_t msgs_read = 0;
+    uint64_t bytes_read = 0;
+    {
+        scoped_fast_lock_t lock (_out_sync);
+        zlink_assert (accounted_bytes_ <= _request_correlation_bytes);
+        _request_correlation_bytes -= accounted_bytes_;
+        if (_request_correlation_waiting) {
+            _request_correlation_waiting = false;
+            _request_correlation_activation_pending = true;
+            generation = _out_generation;
+            msgs_read = _peers_msgs_read;
+            bytes_read = _peers_bytes_read;
+            schedule_activation = true;
+        }
+    }
+    if (schedule_activation)
+        // Completion may run on the timeout scheduler. Always cross the pipe
+        // mailbox so scheduler state is mutated only by the socket owner.
+        send_activate_write_deferred (this, generation, msgs_read, bytes_read);
+}
+
 bool zlink::pipe_t::remote_flow_blocked_unlocked () const
 {
     //  A started message keeps its existing atomicity: the remote PAUSE only
@@ -1395,9 +1464,17 @@ bool zlink::pipe_t::write_owner_started_message_observed (
     }
     if (!observer_ (this, observer_userdata_,
                     pipe_write_observer_prepare)) {
-        errno = ECANCELED;
-        if (admission_out_)
-            *admission_out_ = pipe_message_admission_invalid;
+        const int observer_errno = errno;
+        if (admission_out_) {
+            *admission_out_ = observer_errno == ENOBUFS
+                                ? pipe_message_admission_request_full
+                              : observer_errno == EAGAIN
+                                ? pipe_message_admission_transport_wait
+                              : observer_errno == EHOSTUNREACH
+                                ? pipe_message_admission_inactive
+                                : pipe_message_admission_invalid;
+        }
+        errno = observer_errno == ENOBUFS ? EAGAIN : observer_errno;
         return false;
     }
     if (!retain_lifetime_ref ()) {
@@ -2021,9 +2098,17 @@ bool zlink::pipe_t::write_message_observed (
     }
     if (!observer_ (this, observer_userdata_,
                     pipe_write_observer_prepare)) {
-        errno = ECANCELED;
-        if (admission_out_)
-            *admission_out_ = pipe_message_admission_invalid;
+        const int observer_errno = errno;
+        if (admission_out_) {
+            *admission_out_ = observer_errno == ENOBUFS
+                                ? pipe_message_admission_request_full
+                              : observer_errno == EAGAIN
+                                ? pipe_message_admission_transport_wait
+                              : observer_errno == EHOSTUNREACH
+                                ? pipe_message_admission_inactive
+                                : pipe_message_admission_invalid;
+        }
+        errno = observer_errno == ENOBUFS ? EAGAIN : observer_errno;
         return false;
     }
     if (!retain_lifetime_ref ()) {
@@ -2113,20 +2198,30 @@ void zlink::pipe_t::process_activate_write (uint64_t generation_,
     {
         scoped_fast_lock_t lock (_out_sync);
 
-        if (generation_ != _out_generation)
-            return;
+        // Correlation release uses this command only to cross the owner
+        // mailbox. Its wake remains valid even if a reconnect advanced the
+        // byte-credit generation before the owner processes the command.
+        if (_request_correlation_activation_pending) {
+            _request_correlation_activation_pending = false;
+            notify = _state == active && _out_active
+                     && !_transport_pair_write_held
+                     && !remote_flow_blocked_unlocked ()
+                     && check_hwm_unlocked ();
+        }
 
-        //  Remember the peer's message sequence number.
-        _peers_msgs_read = msgs_read_;
-        _peers_bytes_read = bytes_read_;
+        if (generation_ == _out_generation) {
+            //  Remember the peer's message sequence number.
+            _peers_msgs_read = msgs_read_;
+            _peers_bytes_read = bytes_read_;
 
-        if (!_transport_pair_write_held && !_out_active && _state == active
-            && check_hwm_unlocked ()) {
-            _out_active = true;
-            //  Byte credit removes only the HWM cause. While the peer keeps
-            //  this pipe PAUSED the send-ready edge stays suppressed; the
-            //  resume transition publishes it once every cause is clear.
-            notify = !remote_flow_blocked_unlocked ();
+            if (!_transport_pair_write_held && !_out_active && _state == active
+                && check_hwm_unlocked ()) {
+                _out_active = true;
+                //  Byte credit removes only the HWM cause. While the peer keeps
+                //  this pipe PAUSED the send-ready edge stays suppressed; the
+                //  resume transition publishes it once every cause is clear.
+                notify = !remote_flow_blocked_unlocked ();
+            }
         }
     }
 

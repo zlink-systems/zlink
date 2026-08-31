@@ -17,8 +17,8 @@ title: "Connection Memory"
 
 Each transport connection uses two kinds of memory. One is the **fixed cost** allocated when the
 connection is created. Its components differ between inproc and socket-based transports. The other
-is the **variable cost** of message storage retained by queues. It is not a fixed connection cost;
-it grows with each frame's actual accounted bytes and the
+is the **variable cost** of message storage retained by queues and pending-request lifecycle state.
+It is not a fixed connection cost. Queue storage grows with each frame's actual accounted bytes and the
 [HWM](../glossary.en.md#hwm), which limits the bytes retained in a queue.
 
 This document defines the components of these two costs and the limitations of observing and
@@ -70,6 +70,14 @@ An empty application pipe admits one complete message larger than the HWM, provi
 message does not exceed the socket's maximum message size, and then stops subsequent writes. This
 exception does not apply to an unfinished multipart message.
 
+### 3.3 Pending-request lifecycle state
+
+Pending-map entries, callbacks, and timeout state grow with the number of live requests. The
+[pending-request admission limit](06-auto-hwm.en.md#pending-request-admission) bounds their logical
+charge per physical pair using the Application HWM and a 128 KiB completion-liveness window. This
+charge is neither actual allocator bytes nor retained payload bytes, and it is not included in
+queue-HWM current or snapshot values.
+
 ### 3.4 Completion progress lane
 
 The DEALER/ROUTER [completion progress lane](../glossary.en.md#completion-progress-lane) is a
@@ -77,6 +85,11 @@ separate path that advances terminal replies and error replies and synchronizes 
 frames between peers. Byte HWM, LWM, manual HWM, and Core budget reservation do not apply to this
 lane. Even when an application pipe is full, valid completion records and receive-flow-state frames
 are admitted if the connection remains available and allocation succeeds.
+
+The completion lane preserves the `SNDBUF`/`RCVBUF` default of `-1`, leaving OS defaults and
+autotuning unchanged for every transport. When the application supplies a nonnegative value, Core
+caps it at 64 KiB for the completion lane and applies it consistently to the underlying TCP socket
+for TCP, TLS, WS, and WSS.
 
 ## 4. Measurement and limitations
 

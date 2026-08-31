@@ -317,13 +317,16 @@ int zlink::lb_t::sendpipe_to (
         if (observer_ && errno == ECANCELED
             && write_admission == pipe_message_admission_invalid)
             return -1;
-        if (write_admission != pipe_message_admission_too_large) {
+        if (write_admission != pipe_message_admission_too_large
+            && write_admission != pipe_message_admission_request_full) {
             deactivate (pipe_);
             errno = write_admission == pipe_message_admission_hwm_full
                         || write_admission
                              == pipe_message_admission_transport_wait
                       ? EAGAIN
                       : EHOSTUNREACH;
+        } else if (write_admission == pipe_message_admission_request_full) {
+            errno = EAGAIN;
         }
         return -1;
     }
@@ -508,7 +511,9 @@ int zlink::lb_t::sendpipe (
                     errno = EAGAIN;
                 return -2;
             }
-            if (write_admission != pipe_message_admission_too_large) {
+            if (write_admission == pipe_message_admission_request_full) {
+                errno = EAGAIN;
+            } else if (write_admission != pipe_message_admission_too_large) {
                 _active = 0;
                 mark_selection_dirty ();
                 errno = EAGAIN;
@@ -532,6 +537,7 @@ int zlink::lb_t::sendpipe (
     //  Every first frame runs the same selection procedure. Equal weights are
     //  not a special case: the procedure alternates on its own.
     if (!_more) {
+        std::vector<pipe_t *> request_limited;
         while (_active > 0) {
             uint32_t total_weight = 0;
             const candidate_t *candidate = select_weighted_pipe (&total_weight);
@@ -555,6 +561,10 @@ int zlink::lb_t::sendpipe (
                 //  Running values move only for a write that happened, so a
                 //  retried selection never applies the same step twice.
                 commit_weighted_selection (entry, total_weight);
+                for (std::vector<pipe_t *>::const_iterator it =
+                       request_limited.begin ();
+                     it != request_limited.end (); ++it)
+                    activated (*it);
                 if (pipe_)
                     *pipe_ = pipe;
                 _more = more;
@@ -566,6 +576,10 @@ int zlink::lb_t::sendpipe (
 
             if (observer_ && errno == ECANCELED
                 && write_admission == pipe_message_admission_invalid) {
+                for (std::vector<pipe_t *>::const_iterator it =
+                       request_limited.begin ();
+                     it != request_limited.end (); ++it)
+                    activated (*it);
                 if (admission_out_)
                     *admission_out_ = write_admission;
                 return -1;
@@ -575,9 +589,20 @@ int zlink::lb_t::sendpipe (
             //  the next one would only drop healthy pipes.
             if (write_admission == pipe_message_admission_too_large)
             {
+                for (std::vector<pipe_t *>::const_iterator it =
+                       request_limited.begin ();
+                     it != request_limited.end (); ++it)
+                    activated (*it);
                 if (admission_out_)
                     *admission_out_ = pipe_message_admission_too_large;
                 return -1;
+            }
+
+            if (write_admission == pipe_message_admission_request_full) {
+                request_limited.push_back (pipe);
+                deactivate (pipe);
+                rebuild_selection_order ();
+                continue;
             }
 
             if (admission_out_
@@ -591,8 +616,16 @@ int zlink::lb_t::sendpipe (
             rebuild_selection_order ();
         }
 
-        if (admission_out_ && any_hwm_blocked_pipe ())
-            *admission_out_ = pipe_message_admission_hwm_full;
+        for (std::vector<pipe_t *>::const_iterator it =
+               request_limited.begin ();
+             it != request_limited.end (); ++it)
+            activated (*it);
+        if (admission_out_) {
+            if (!request_limited.empty ())
+                *admission_out_ = pipe_message_admission_request_full;
+            else if (any_hwm_blocked_pipe ())
+                *admission_out_ = pipe_message_admission_hwm_full;
+        }
         errno = has_positive_weight_pipe () ? EAGAIN : ECONNREFUSED;
         return -1;
     }

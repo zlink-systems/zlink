@@ -65,6 +65,7 @@ completion_message_result_t complete_reply_from_transport (
             return completion_message_accepted;
         }
     }
+    release_socket_pending_request_correlation (&pending);
     zlink::request_timeout::cancel (pending.timeout_task);
 
     int callback_errno = 0;
@@ -295,6 +296,7 @@ void fail_disconnected_peer_requests (
         }
         if (!found)
             break;
+        release_socket_pending_request_correlation (&failed);
         zlink::request_timeout::cancel (failed.timeout_task);
         (void) queue_reply_completion (
           state_, failed.handler, failed.userdata, errnum_, NULL, 0);
@@ -327,6 +329,7 @@ int drain_close_request_reply_socket (const socket_handle_t &handle_)
         }
         if (!found)
             break;
+        release_socket_pending_request_correlation (&pending);
         zlink::request_timeout::cancel (pending.timeout_task);
         if (queue_reply_completion (state, pending.handler, pending.userdata,
                                     ETERM, NULL, 0)
@@ -363,6 +366,7 @@ void cleanup_request_reply_socket (const socket_handle_t &handle_)
             }
             if (!found)
                 break;
+            release_socket_pending_request_correlation (&pending);
             zlink::request_timeout::cancel (pending.timeout_task);
             zlink::request_completion::release_reservation (
               &state->completion);
