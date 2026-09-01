@@ -462,7 +462,7 @@ integration + serial-execution state units + auto-connect topology into one.**
 
 ## 3. Surface And Structure
 
-### The Call Unit — MeshName And ChannelName
+### 3.1 The Call Unit — MeshName And ChannelName
 
 An inter-server call in ZLink Framework picks its target by **`MeshName` and
 `ChannelName`.** In the application, you use it like "send a request over the `orders`
@@ -482,7 +482,7 @@ The framework handles what you'd otherwise have written by hand to build one ser
 | Managing server addresses, deciding connections | Tracks the currently active endpoint through the location store |
 | Configuration, logging, monitoring | The framework's built-in config/logging/hosted service |
 
-### The Felt Difficulty Versus The Existing Approach
+### 3.2 The Felt Difficulty Versus The Existing Approach
 
 The difference in the amount of code needed to wire up the same "inter-server
 request/response."
@@ -531,7 +531,7 @@ auto reply = co_await client
 The connection/setup code disappears, leaving a handler and a few lines of channel
 registration.
 
-### Architecture — Layering And Registration Points
+### 3.3 Architecture — Layering And Registration Points
 
 ```text
 +-----------------------------------------------------------+

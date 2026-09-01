@@ -749,7 +749,7 @@ ZLink가 줄이는 것은 "엔티티 단위 순서 처리"만을 위해 log 파�
 
 ## 3. 표면과 구조
 
-### 호출 단위 — MeshName과 ChannelName
+### 3.1 호출 단위 — MeshName과 ChannelName
 
 ZLink Framework의 서버 간 호출은 **`MeshName`과 `ChannelName`**으로 대상을 고른다.
 application에서는 "`services` mesh의 `orders` channel로 요청을 보낸다"처럼 사용한다.
@@ -823,7 +823,7 @@ application에서는 "`services` mesh의 `orders` channel로 요청을 보낸다
     | 서버 주소 관리·연결 결정 | location store를 통해 현재 활성 endpoint 추적 |
     | 설정·로그·모니터링 | NestJS 설정·logging·수명주기와 통합 |
 
-### 기존 방식 대비 체감 난이도
+### 3.2 기존 방식 대비 체감 난이도
 
 같은 "서버 간 요청/응답"을 붙이는 코드량 차이다.
 
@@ -1018,7 +1018,7 @@ application에서는 "`services` mesh의 `orders` channel로 요청을 보낸다
 
 연결·설정 코드가 사라지고 남는 것은 handler와 channel 등록 몇 줄이다.
 
-### 아키텍처 — 계층 구조와 등록 지점
+### 3.3 아키텍처 — 계층 구조와 등록 지점
 
 === "C#/.NET"
 
