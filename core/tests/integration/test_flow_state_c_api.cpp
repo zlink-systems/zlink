@@ -179,11 +179,10 @@ struct paired_fixture_t
     //  lane would, then drains the socket mailbox so the pipe applies it.
     bool inject (uint8_t state_, uint64_t epoch_)
     {
-        return inject_generation (state_, epoch_, pair_generation);
+        return inject_frame (state_, epoch_, true);
     }
 
-    bool inject_generation (uint8_t state_, uint64_t epoch_,
-                            uint64_t frame_generation_, bool drain_ = true)
+    bool inject_frame (uint8_t state_, uint64_t epoch_, bool drain_)
     {
         zlink::pipe_t *completion = as_socket (dealer)->completion_pipe_for_transport_pair (
           pair_id, pair_generation);
@@ -192,13 +191,13 @@ struct paired_fixture_t
         zlink::flow_state::frame_t frame;
         frame.version = zlink::flow_state::frame_protocol_version;
         frame.state = state_;
-        frame.pair_id = pair_id;
-        frame.generation = frame_generation_;
         frame.epoch = epoch_;
 
         zlink::msg_t msg;
         TEST_ASSERT_EQUAL_INT (0, msg.init ());
         TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&msg, frame));
+        msg.set_transport_connection_id (
+          completion->get_transport_connection_id ());
         const bool consumed =
           as_socket (dealer)->consume_receive_flow_state_frame (completion, msg);
         TEST_ASSERT_EQUAL_INT (0, msg.close ());
@@ -235,8 +234,8 @@ zlink_submit_result_t try_send_flow_filler (void *socket_, size_t size_)
     zlink_msg_t part;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init_size (&part, size_));
     memset (zlink_msg_data (&part), 'h', size_);
-    return zlink_send_part (socket_, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                            ZLINK_PART_FINAL);
+    return zlink_send_part (socket_, &part, ZLINK_SEND_FLAGS_NONE,
+                            ZLINK_PART_FINAL, NULL, NULL);
 }
 
 size_t fill_flow_pipe_until_backpressured (void *socket_)
@@ -289,12 +288,12 @@ bool inject_flow_for_target (void *socket_,
     zlink::flow_state::frame_t frame;
     frame.version = zlink::flow_state::frame_protocol_version;
     frame.state = state_;
-    frame.pair_id = target_.transport_pair_id;
-    frame.generation = target_.transport_pair_generation;
     frame.epoch = epoch_;
     zlink::msg_t msg;
     TEST_ASSERT_EQUAL_INT (0, msg.init ());
     TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&msg, frame));
+    msg.set_transport_connection_id (
+      completion->get_transport_connection_id ());
     const bool consumed =
       as_socket (socket_)->consume_receive_flow_state_frame (completion, msg);
     TEST_ASSERT_EQUAL_INT (0, msg.close ());
@@ -479,13 +478,14 @@ void test_pause_and_resume_each_emit_exactly_one_event ()
     TEST_ASSERT_EQUAL_UINT64 (
       static_cast<uint64_t> (ZLINK_EVENT_SEND_FLOW_PAUSED), test_monitor_probe_event_at (&probe, 0));
 
-    //  §6 field list for PAUSED: routing ID, pair ID, generation, epoch.
+    //  The public flow-event identity is routing ID, connection ID and lane;
+    //  `value` is the applied flow epoch.
     const zlink_monitor_event_t paused = test_monitor_probe_record_at (&probe, 0);
     TEST_ASSERT_TRUE (paused.value != 0);
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_id, paused.transport_pair_id);
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_generation,
-                              paused.transport_pair_generation);
     TEST_ASSERT_TRUE (paused.routing_id.size > 0);
+    TEST_ASSERT_TRUE (paused.connection_id != 0);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            paused.transport_lane);
     //  A pause is never writable, so the RESUMED-only flag must be clear.
     TEST_ASSERT_EQUAL_UINT32 (
       0u, paused.flags & ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE);
@@ -504,9 +504,10 @@ void test_pause_and_resume_each_emit_exactly_one_event ()
     //  so the resume really did make it writable and the flag must say so.
     const zlink_monitor_event_t resumed = test_monitor_probe_record_at (&probe, 1);
     TEST_ASSERT_TRUE (resumed.value > paused_epoch);
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_id, resumed.transport_pair_id);
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_generation,
-                              resumed.transport_pair_generation);
+    TEST_ASSERT_TRUE (routing_id_equal (paused.routing_id, resumed.routing_id));
+    TEST_ASSERT_EQUAL_UINT64 (paused.connection_id, resumed.connection_id);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            resumed.transport_lane);
     TEST_ASSERT_EQUAL_UINT32 (
       ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE,
       resumed.flags & ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE);
@@ -540,55 +541,17 @@ void test_duplicate_frame_emits_stale_event ()
     TEST_ASSERT_EQUAL_UINT64 (
       static_cast<uint64_t> (ZLINK_EVENT_FLOW_STATE_STALE), test_monitor_probe_event_at (&probe, 1));
 
-    //  §6 field list for STALE: pair ID plus the generation/epoch context. The
-    //  repeat carried the current generation, so the reason is the epoch and
-    //  `value` is the received epoch that did not advance.
+    //  The repeat is stale by epoch on the same public flow-event identity.
+    const zlink_monitor_event_t paused = test_monitor_probe_record_at (&probe, 0);
     const zlink_monitor_event_t stale = test_monitor_probe_record_at (&probe, 1);
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_id, stale.transport_pair_id);
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_generation,
-                              stale.transport_pair_generation);
+    TEST_ASSERT_TRUE (routing_id_equal (paused.routing_id, stale.routing_id));
+    TEST_ASSERT_EQUAL_UINT64 (paused.connection_id, stale.connection_id);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            stale.transport_lane);
     TEST_ASSERT_EQUAL_UINT32 (
       ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH,
       stale.flags & ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH);
-    TEST_ASSERT_EQUAL_UINT32 (
-      0u, stale.flags & ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION);
     TEST_ASSERT_EQUAL_UINT64 (5, stale.value);
-
-    close_test_monitor_probe (&monitor, &probe);
-    fixture.teardown ();
-}
-
-//  A frame from a previous connection generation is stale for a different
-//  reason, and the event has to say which: the reason flag flips and `value`
-//  becomes the received generation, while the event's own
-//  transport_pair_generation stays the current one.
-void test_stale_generation_event_reports_the_received_generation ()
-{
-    paired_fixture_t fixture;
-    fixture.setup ();
-
-    test_monitor_probe_t probe;
-    void *monitor = open_test_monitor_probe (fixture.dealer, k_flow_events, &probe);
-
-    const uint64_t foreign_generation = fixture.pair_generation + 7;
-    TEST_ASSERT_TRUE (fixture.inject_generation (
-      zlink::flow_state::receive_flow_paused, 9, foreign_generation));
-    TEST_ASSERT_TRUE (test_monitor_probe_wait_count (&probe, 1, 2000));
-    TEST_ASSERT_TRUE (test_monitor_probe_wait_no_additional (&probe, 1, 200));
-
-    TEST_ASSERT_EQUAL_UINT64 (
-      static_cast<uint64_t> (ZLINK_EVENT_FLOW_STATE_STALE),
-      test_monitor_probe_event_at (&probe, 0));
-    const zlink_monitor_event_t stale = test_monitor_probe_record_at (&probe, 0);
-    TEST_ASSERT_EQUAL_UINT32 (
-      ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION,
-      stale.flags & ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION);
-    TEST_ASSERT_EQUAL_UINT32 (
-      0u, stale.flags & ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH);
-    TEST_ASSERT_EQUAL_UINT64 (foreign_generation, stale.value);
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_id, stale.transport_pair_id);
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_generation,
-                              stale.transport_pair_generation);
 
     close_test_monitor_probe (&monitor, &probe);
     fixture.teardown ();
@@ -693,9 +656,9 @@ void test_resumed_routing_id_and_epoch_stale_match_prior_transition ()
     TEST_ASSERT_EQUAL_UINT64 (ZLINK_EVENT_SEND_FLOW_RESUMED, resumed.event);
     TEST_ASSERT_TRUE (resumed.routing_id.size > 0);
     TEST_ASSERT_TRUE (routing_id_equal (paused.routing_id, resumed.routing_id));
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_id, resumed.transport_pair_id);
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_generation,
-                              resumed.transport_pair_generation);
+    TEST_ASSERT_EQUAL_UINT64 (paused.connection_id, resumed.connection_id);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            resumed.transport_lane);
 
     TEST_ASSERT_TRUE (
       fixture.inject (zlink::flow_state::receive_flow_running, 21));
@@ -706,12 +669,11 @@ void test_resumed_routing_id_and_epoch_stale_match_prior_transition ()
     TEST_ASSERT_EQUAL_UINT32 (
       ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH,
       stale.flags & ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH);
-    TEST_ASSERT_EQUAL_UINT32 (
-      0u, stale.flags & ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION);
     TEST_ASSERT_EQUAL_UINT64 (resumed.value, stale.value);
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_id, stale.transport_pair_id);
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_generation,
-                              stale.transport_pair_generation);
+    TEST_ASSERT_TRUE (routing_id_equal (resumed.routing_id, stale.routing_id));
+    TEST_ASSERT_EQUAL_UINT64 (resumed.connection_id, stale.connection_id);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            stale.transport_lane);
 
     close_test_monitor_probe (&monitor, &probe);
     fixture.teardown ();
@@ -721,6 +683,12 @@ void test_resumed_while_hwm_blocked_is_not_writable_and_send_stays_rejected ()
 {
     paired_fixture_t fixture;
     fixture.setup_inproc ("inproc://gap-h3-flow-hwm-resume", 4096);
+    //  Phase 3 DONTWAIT retains an HWM-blocked complete record in the shared
+    //  pending pool.  A zero-timeout NONE submit observes the pipe admission
+    //  predicate directly without conflating it with pending-pool capacity.
+    const int no_wait = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      fixture.dealer, ZLINK_OPT_SNDTIMEO, &no_wait, sizeof (no_wait)));
     const size_t filler_count =
       fill_flow_pipe_until_backpressured (fixture.dealer);
     TEST_ASSERT_TRUE (filler_count > 0);
@@ -886,10 +854,15 @@ void test_shared_monitor_preserves_explicit_commit_order_across_connections ()
       test_monitor_probe_record_at (&probe, 0);
     const zlink_monitor_event_t second =
       test_monitor_probe_record_at (&probe, 1);
-    TEST_ASSERT_EQUAL_UINT64 (target_a.transport_pair_id,
-                              first.transport_pair_id);
-    TEST_ASSERT_EQUAL_UINT64 (target_b.transport_pair_id,
-                              second.transport_pair_id);
+    TEST_ASSERT_TRUE (routing_id_equal (rid_a, first.routing_id));
+    TEST_ASSERT_TRUE (routing_id_equal (rid_b, second.routing_id));
+    TEST_ASSERT_TRUE (first.connection_id != 0);
+    TEST_ASSERT_TRUE (second.connection_id != 0);
+    TEST_ASSERT_NOT_EQUAL (first.connection_id, second.connection_id);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            first.transport_lane);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            second.transport_lane);
     TEST_ASSERT_EQUAL_UINT64 (50, first.value);
     TEST_ASSERT_EQUAL_UINT64 (60, second.value);
 
@@ -927,9 +900,8 @@ void test_pause_applied_by_pair_admission_is_booked ()
     TEST_ASSERT_NOT_NULL (application);
 
     //  Accepted into the record, not yet applied to the pipe.
-    TEST_ASSERT_TRUE (fixture.inject_generation (
-      zlink::flow_state::receive_flow_paused, 11, fixture.pair_generation,
-      false));
+    TEST_ASSERT_TRUE (fixture.inject_frame (
+      zlink::flow_state::receive_flow_paused, 11, false));
     TEST_ASSERT_FALSE (as_socket (fixture.dealer)
                          ->application_pipe_remote_flow_paused (
                            fixture.pair_id, fixture.pair_generation));
@@ -955,7 +927,10 @@ void test_pause_applied_by_pair_admission_is_booked ()
     const zlink_monitor_event_t paused_event =
       test_monitor_probe_record_at (&probe, 0);
     TEST_ASSERT_EQUAL_UINT64 (11, paused_event.value);
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_id, paused_event.transport_pair_id);
+    TEST_ASSERT_TRUE (paused_event.routing_id.size > 0);
+    TEST_ASSERT_TRUE (paused_event.connection_id != 0);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            paused_event.transport_lane);
 
     //  The queued frame command is a no-op now, so nothing is double counted.
     for (int i = 0; i < 50; ++i) {
@@ -1487,7 +1462,6 @@ int main ()
         RUN_TEST (test_close_races_with_set_receive_flow_state);
         RUN_TEST (test_pause_and_resume_each_emit_exactly_one_event);
         RUN_TEST (test_duplicate_frame_emits_stale_event);
-        RUN_TEST (test_stale_generation_event_reports_the_received_generation);
         RUN_TEST (test_data_traffic_emits_no_flow_events);
     }
     RUN_H3_CASE (

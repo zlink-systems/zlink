@@ -317,7 +317,7 @@ void test_dealer_multipart_size_failure_rolls_back_and_preserves_errno ()
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_send_part (sender, &first, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_MORE));
+                       ZLINK_PART_MORE, NULL, NULL));
 
     zlink_msg_t final_part;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&final_part, 3));
@@ -326,7 +326,7 @@ void test_dealer_multipart_size_failure_rolls_back_and_preserves_errno ()
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_INVALID_ARGUMENT,
       zlink_send_part (sender, &final_part, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL));
+                       ZLINK_PART_FINAL, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (EMSGSIZE, errno);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&final_part));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&final_part));
@@ -345,7 +345,7 @@ void test_dealer_multipart_size_failure_rolls_back_and_preserves_errno ()
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_send_part (sender, &fresh, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL));
+                       ZLINK_PART_FINAL, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
       zlink_recv (receiver, NULL, &received, &part_count,
@@ -848,7 +848,9 @@ void test_nonblocking_send_close_race_is_lifetime_safe ()
 
         send_start_gate_t gate;
         std::atomic<bool> stop (false);
-        std::atomic<int> unexpected_result (0);
+        std::atomic<int> message_init_errno (0);
+        std::atomic<uint64_t> unexpected_submit_pair (0);
+        std::atomic<size_t> unconsumed_part_size (0);
         std::vector<std::thread> senders;
         senders.reserve (sender_count);
         for (int sender = 0; sender < sender_count; ++sender) {
@@ -863,16 +865,46 @@ void test_nonblocking_send_close_race_is_lifetime_safe ()
                 while (!stop.load (std::memory_order_acquire)) {
                     zlink_msg_t part;
                     if (zlink_msg_init_size (&part, 64) != ZLINK_CONFIG_OK) {
-                        unexpected_result.store (1, std::memory_order_release);
+                        const int init_errno = zlink_errno ();
+                        const int observed_errno = init_errno != 0
+                                                     ? init_errno
+                                                     : EIO;
+                        int expected_errno = 0;
+                        message_init_errno.compare_exchange_strong (
+                          expected_errno, observed_errno,
+                          std::memory_order_acq_rel,
+                          std::memory_order_acquire);
                         return;
                     }
                     memset (zlink_msg_data (&part), 0x5a, 64);
                     const zlink_submit_result_t rc = zlink_send_part (
-                      socket, &part, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL);
+                      socket, &part, ZLINK_SEND_FLAGS_DONTWAIT,
+                      ZLINK_PART_FINAL, NULL, NULL);
                     const int err = zlink_errno ();
-                    if (rc == ZLINK_SUBMIT_OK || err == EAGAIN || err == ESHUTDOWN)
+                    const size_t remaining_size = zlink_msg_size (&part);
+                    if (remaining_size != 0) {
+                        size_t expected_size = 0;
+                        unconsumed_part_size.compare_exchange_strong (
+                          expected_size, remaining_size,
+                          std::memory_order_acq_rel,
+                          std::memory_order_acquire);
+                        zlink_msg_close (&part);
+                        return;
+                    }
+                    if (rc == ZLINK_SUBMIT_OK
+                        || (rc == ZLINK_SUBMIT_BACKPRESSURED && err == EAGAIN)
+                        || (rc == ZLINK_SUBMIT_TERMINATED
+                            && err == ESHUTDOWN))
                         continue;
-                    unexpected_result.store (1, std::memory_order_release);
+                    const uint64_t observed_pair =
+                      (static_cast<uint64_t> (static_cast<uint32_t> (rc))
+                       << 32)
+                      | static_cast<uint32_t> (err);
+                    uint64_t expected_pair = 0;
+                    unexpected_submit_pair.compare_exchange_strong (
+                      expected_pair, observed_pair,
+                      std::memory_order_acq_rel,
+                      std::memory_order_acquire);
                     return;
                 }
             });
@@ -907,7 +939,13 @@ void test_nonblocking_send_close_race_is_lifetime_safe ()
         for (std::vector<std::thread>::iterator it = senders.begin (); it != senders.end (); ++it)
             it->join ();
 
-        TEST_ASSERT_EQUAL_INT (0, unexpected_result.load (std::memory_order_acquire));
+        TEST_ASSERT_EQUAL_INT (
+          0, message_init_errno.load (std::memory_order_acquire));
+        // High 32 bits are zlink_submit_result_t; low 32 bits are errno.
+        TEST_ASSERT_EQUAL_HEX64 (
+          0, unexpected_submit_pair.load (std::memory_order_acquire));
+        TEST_ASSERT_EQUAL_UINT64 (
+          0, unconsumed_part_size.load (std::memory_order_acquire));
         if (close_rc == ZLINK_CLOSE_OK) {
             test_context_socket_mark_closed (socket);
         } else {

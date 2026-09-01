@@ -78,8 +78,6 @@ int recv_socket_monitor_event_internal (void *monitor_socket_,
                 sizeof (internal_event));
         *event_ = internal_event.event;
         event_->connection_id = internal_event.connection_id;
-        event_->transport_pair_id = internal_event.transport_pair_id;
-        event_->transport_pair_generation = internal_event.transport_pair_generation;
         event_->transport_lane = internal_event.transport_lane;
         event_->flags = internal_event.internal_flags;
         if (connection_id_out_)
@@ -160,7 +158,7 @@ zlink_recv_result_t zlink_socket_monitor_recv (void *monitor_,
                                                zlink_socket_monitor_event_t *out_,
                                                zlink_recv_flags_t flags_)
 {
-    if (require_monitor_recv_model (monitor_) != 0)
+    if (require_monitor_pull_handle (monitor_) != 0)
         return zlink::recv_result_internal::from_errno (errno);
     socket_handle_t handle = as_socket_handle (monitor_);
     if (!handle.socket)
@@ -181,22 +179,21 @@ zlink_config_result_t zlink_monitor_status (void *monitor_, zlink_monitor_status
     if (!handle.socket)
         return zlink::config_result_internal::from_errno (errno);
 
-    //  The pin keeps the registry state alive for the whole snapshot call:
-    //  a concurrent monitor close waits for it before deleting the state.
-    monitor_state_pin_t pin (handle.socket);
-    monitor_handler_state_t *state = pin.get ();
+    //  The pin keeps the monitor/source association alive for the whole
+    //  snapshot call; a concurrent monitor close waits for it.
+    monitor_pull_state_pin_t pin (handle.socket);
+    monitor_pull_state_t *state = pin.get ();
     if (!state) {
         errno = EINVAL;
         return ZLINK_CONFIG_INVALID_ARGUMENT;
     }
 
-    monitor_snapshot_provider_fn provider =
-      state->snapshot_provider.load (std::memory_order_acquire);
     void *subject = state->snapshot_subject.load (std::memory_order_acquire);
-    if (!provider) {
+    if (!subject) {
         errno = ENOTSUP;
         return ZLINK_CONFIG_NOT_SUPPORTED;
     }
 
-    return zlink::config_result_internal::from_rc (provider (subject, out_));
+    return zlink::config_result_internal::from_rc (
+      socket_monitor_snapshot_provider (subject, out_));
 }

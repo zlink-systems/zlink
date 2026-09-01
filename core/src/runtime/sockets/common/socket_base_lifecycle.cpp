@@ -58,25 +58,10 @@ zlink::socket_base_t *zlink::socket_base_t::current_async_mailbox_dispatch_socke
     return async_mailbox_dispatch_socket_tls ();
 }
 
-void zlink::socket_base_t::defer_close_handoff_from_async_owner ()
-{
-    if (lifecycle_coordinator ().is_async_mailbox_active ())
-        stop_async_mailbox_processing ();
-}
-
-void zlink::socket_base_t::finish_deferred_close_after_async_quiesced ()
-{
-    if (!lifecycle_coordinator ().take_deferred_close ())
-        return;
-
-    finish_close_reap ();
-}
-
 void zlink::socket_base_t::start_reaping (poller_t *poller_)
 {
-    //  The mailbox must have exactly one executor owner. A close initiated by
-    //  its own callback cannot wait for that callback here, so the reaper is
-    //  the ownership boundary that waits until the old executor has detached.
+    //  The mailbox must have exactly one executor owner. The reaper is the
+    //  ownership boundary that waits until the old executor has detached.
     if (lifecycle_coordinator ().is_async_quiesce_pending ())
         wait_async_quiesced (-1);
 
@@ -243,7 +228,7 @@ int zlink::socket_base_t::process_commands (
                         scoped_lock_t receive_owner (receive.sync);
                         cmd.destination->process_command (cmd);
                     }
-                    // Pipe termination callbacks defer assembly/routing
+                    // Pipe termination notifications defer routing
                     // cleanup until the command's receive scope is gone.
                     process_deferred_socket_msg_pipe_terminations ();
                     processed_command = true;
@@ -364,7 +349,7 @@ int zlink::socket_base_t::start_async_mailbox_processing (io_thread_t *io_thread
     mailbox_t *mailbox = static_cast<mailbox_t *> (_mailbox);
     // Block new lock-free receive attempts before installing the async owner.
     // A receive that already passed its second check must complete before the
-    // executor can enter xdispatch_io()/command delivery under receive.sync.
+    // executor can enter command delivery under receive.sync.
     receive.require_receive_sync_for_async_owner ();
     receive.async_command_handoff_pending.store (true, std::memory_order_release);
     // Wake the former public owner before waiting for its command scope.  The
@@ -447,6 +432,7 @@ void zlink::socket_base_t::process_stop ()
     //  responsible for calling zlink_close on the socket though!
     _ctx_terminated = true;
     notify_receive_progress ();
+    socket_completion::close (&completion_runtime (), ETERM);
     fail_all_send_pending (ETERM);
 
     scoped_lock_t lock (monitor_runtime ().sync);
@@ -552,7 +538,6 @@ void zlink::socket_base_t::process_async_mailbox ()
     do {
         process_commands (0, false);
         drive_send_pending ();
-        bool completion_poller_owned = false;
         {
             // A public POLLCOMPLETION registration is the sole completion
             // owner while it exists. The gate also fences a 0 -> 1 owner
@@ -563,21 +548,8 @@ void zlink::socket_base_t::process_async_mailbox ()
                 acknowledge_request_completion_notification ();
                 process_ready_completion_pipes ();
                 (void) drain_request_completions ();
-                //  Send completions share the reply completion's dispatch
-                //  owner. A POLLCOMPLETION registration moves both at once,
-                //  which is what makes "same callback, different dispatch
-                //  location" true rather than a second channel.
-                dispatch_send_completions (false);
-            } else
-                completion_poller_owned = true;
+            }
         }
-        // The mailbox worker can win admission after the poller consumed the
-        // command wake and skipped the still-owned admission gate. Re-enter
-        // the common handoff only for the poller-owned branch: it checks the
-        // actual completion queue under the owner gate and publishes a fresh
-        // wake, or dispatches locally if ownership changed in between.
-        if (completion_poller_owned)
-            dispatch_send_completions_if_local ();
         if (lifecycle_coordinator ().is_destroyed ()) {
             if (!lifecycle_coordinator ().is_async_mailbox_active ()) {
                 mailbox_t *mailbox = static_cast<mailbox_t *> (_mailbox);
@@ -586,25 +558,12 @@ void zlink::socket_base_t::process_async_mailbox ()
                 lifecycle_coordinator ().mark_async_processing_stopped (mailbox);
                 receive_runtime ().release_receive_sync_from_async_owner ();
                 notify_receive_progress ();
-                finish_deferred_close_after_async_quiesced ();
             }
             check_destroy ();
             return;
         }
         if (lifecycle_coordinator ().is_async_mailbox_active ()) {
-            if (socket_msg_dispatch_active ()) {
-                // Raw socket-message xread_activated() publishes dispatch
-                // work while it owns receive-side state. Drain only after that
-                // ownership is gone; its callback may re-enter recv/send.
-                defer_socket_msg_dispatch ();
-                process_deferred_socket_msg_pipe_terminations ();
-            } else {
-                // Every socket-specific dispatcher owns the receive lock only
-                // while it extracts a frame. An outer recursive lock here
-                // would silently retain receive ownership across application
-                // callbacks and defeat that ownership boundary.
-                xdispatch_io ();
-            }
+            process_deferred_socket_msg_pipe_terminations ();
             //  This executor consumed the mailbox's primary notification
             //  descriptor while draining commands. A poller that registered
             //  this socket watches that same descriptor, so re-arm it or the
@@ -619,7 +578,6 @@ void zlink::socket_base_t::process_async_mailbox ()
             lifecycle_coordinator ().mark_async_processing_stopped (mailbox);
             receive_runtime ().release_receive_sync_from_async_owner ();
             notify_receive_progress ();
-            finish_deferred_close_after_async_quiesced ();
             return;
         }
     } while (static_cast<mailbox_t *> (_mailbox)->reschedule_if_needed ());

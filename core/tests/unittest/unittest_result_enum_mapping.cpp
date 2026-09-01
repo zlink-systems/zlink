@@ -167,6 +167,8 @@ void test_submit_errno_contract_matrix ()
                            zlink::submit_result_internal::from_errno (ENOBUFS));
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_NOT_ADMITTED,
                            zlink::submit_result_internal::from_errno (EACCES));
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_NOT_ADMITTED,
+                           zlink::submit_result_internal::from_errno (EPROTOTYPE));
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_INVALID_ARGUMENT,
                            zlink::submit_result_internal::from_errno (EMSGSIZE));
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_INVALID_STATE,
@@ -179,6 +181,8 @@ void test_submit_errno_contract_matrix ()
                            zlink::submit_result_internal::from_errno (EPERM));
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_SEQ_EXHAUSTED,
                            zlink::submit_result_internal::from_request_submit_errno (EOVERFLOW));
+    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_REJECTED,
+                           zlink::request_result_internal::from_errno (EPROTOTYPE));
 }
 
 void test_recv_errno_contract_matrix ()

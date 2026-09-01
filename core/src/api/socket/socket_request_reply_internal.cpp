@@ -5,11 +5,10 @@
 #include <atomic>
 #include <memory>
 #include <new>
-
-#include "api/socket/request_completion_queue_internal.hpp"
 #include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "core/pipe.hpp"
+#include "sockets/common/socket_base.hpp"
 #include "utils/routing_id.hpp"
 
 namespace zlink
@@ -26,6 +25,7 @@ size_t hash_combine (size_t seed_, size_t value_)
 #ifdef ZLINK_BUILD_TESTS
 std::atomic<int> g_request_reply_allocation_failpoint (
   request_reply_allocation_none);
+std::atomic<bool> g_request_reply_write_failure_after_prefix (false);
 std::mutex g_request_reply_timeout_hook_mutex;
 request_reply_timeout_after_remove_hook_fn
   g_request_reply_timeout_after_remove_hook = NULL;
@@ -132,8 +132,7 @@ pending_request_t::pending_request_t () :
     transport_pair_id (0),
     transport_pair_generation (0),
     resolved_timeout_ms (0),
-    handler (NULL),
-    userdata (NULL)
+    pull_completion (NULL)
 {
 }
 
@@ -190,81 +189,55 @@ socket_request_reply_state_t::socket_request_reply_state_t (zlink::socket_base_t
     reply_target_checkouts (0),
     dealer_next_reply_token (1),
     router_next_reply_token (1),
+    public_router_reply_active (false),
     closing (false)
 {
+    public_router_reply_key.request_seq = 0;
 }
 
-int ensure_completion_queue_ready (const std::shared_ptr<socket_request_reply_state_t> &state_)
+void release_pending_request_completion (
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  pending_request_t *pending_)
 {
-    if (!state_ || !state_->socket) {
+    if (!state_ || !pending_)
+        return;
+
+    zlink::socket_completion::reservation_t *const reservation =
+      pending_->pull_completion;
+    pending_->pull_completion = NULL;
+    if (reservation)
+        zlink::socket_completion::release (
+          &state_->socket->completion_runtime (), reservation);
+}
+
+int publish_pending_request_completion (
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  pending_request_t *pending_, zlink_request_result_t result_,
+  zlink_msg_t *parts_, size_t part_count_)
+{
+    if (!state_ || !state_->socket || !pending_
+        || !pending_->pull_completion) {
         errno = EFAULT;
         return -1;
     }
+
+    zlink::socket_completion::reservation_t *const reservation =
+      pending_->pull_completion;
+    pending_->pull_completion = NULL;
+    const int rc = zlink::socket_completion::publish_request (
+      &state_->socket->completion_runtime (), reservation, result_, parts_,
+      part_count_);
+    if (rc != 0) {
+        const int saved_errno = errno;
+        zlink::socket_completion::release (
+          &state_->socket->completion_runtime (), reservation);
+        errno = saved_errno;
+        return -1;
+    }
+
+    state_->socket->notify_request_completion ();
     errno = 0;
     return 0;
-}
-
-int queue_reply_completion (const std::shared_ptr<socket_request_reply_state_t> &state_,
-                            zlink_reply_handler_fn handler_,
-                            void *userdata_,
-                            int errnum_,
-                            zlink_msg_t *parts_,
-                            size_t part_count_)
-{
-    if (!state_ || !state_->socket || !state_->socket->get_ctx ()) {
-        errno = EFAULT;
-        return -1;
-    }
-
-    const int rc = zlink::request_completion::enqueue (
-      &state_->completion, state_->socket, handler_, userdata_, errnum_, parts_, part_count_);
-    return rc;
-}
-
-int drain_reply_completions (const std::shared_ptr<socket_request_reply_state_t> &state_,
-                             void *owner_handle_)
-{
-    if (!state_) {
-        errno = EFAULT;
-        return -1;
-    }
-    return zlink::request_completion::drain (&state_->completion, owner_handle_);
-}
-
-int drain_reply_completions_while_closing (
-  const std::shared_ptr<socket_request_reply_state_t> &state_,
-  void *owner_handle_)
-{
-    if (!state_) {
-        errno = EFAULT;
-        return -1;
-    }
-    return zlink::request_completion::drain_while_closing (
-      &state_->completion, owner_handle_);
-}
-
-bool has_pending_reply_completions (const std::shared_ptr<socket_request_reply_state_t> &state_)
-{
-    return state_ ? zlink::request_completion::has_pending (&state_->completion) : false;
-}
-
-void claim_completion_owner (const std::shared_ptr<socket_request_reply_state_t> &state_)
-{
-    if (!state_)
-        return;
-    zlink::request_completion::claim_owner_thread (&state_->completion);
-}
-
-bool current_thread_is_completion_owner (
-  const std::shared_ptr<socket_request_reply_state_t> &state_)
-{
-    return state_ ? zlink::request_completion::current_thread_is_owner (&state_->completion)
-                  : false;
-}
-
-bool in_socket_request_completion_callback (void *socket_)
-{
-    return zlink::request_completion::in_request_completion_callback (socket_);
 }
 
 namespace
@@ -282,17 +255,13 @@ void on_socket_request_timeout (void *userdata_)
     if (!ctx.get () || !ctx->state)
         return;
 
-    zlink::socket_callback_scope_t callback_scope (ctx->state->socket);
-    if (!callback_scope.acquired ())
-        return;
-
     pending_request_t pending;
     if (remove_socket_pending_request (ctx->state, ctx->identity, &pending)) {
         release_socket_pending_request_correlation (&pending);
 #ifdef ZLINK_BUILD_TESTS
         invoke_request_reply_timeout_after_remove_hook ();
 #endif
-        queue_socket_pending_timeout_completion (ctx->state, pending);
+        queue_socket_pending_timeout_completion (ctx->state, &pending);
     }
 }
 
@@ -331,10 +300,13 @@ int schedule_socket_pending_timeout (
 }
 
 void queue_socket_pending_timeout_completion (
-  const std::shared_ptr<socket_request_reply_state_t> &state_, const pending_request_t &pending_)
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  pending_request_t *pending_)
 {
-    (void) queue_reply_completion (state_, pending_.handler, pending_.userdata, ETIMEDOUT, NULL,
-                                   0);
+    if (!pending_)
+        return;
+    (void) publish_pending_request_completion (
+      state_, pending_, ZLINK_REQUEST_TIMED_OUT, NULL, 0);
 }
 
 std::shared_ptr<socket_request_reply_state_t>
@@ -383,6 +355,18 @@ void test_throw_request_reply_allocation_failpoint (
           expected, static_cast<int> (request_reply_allocation_none),
           std::memory_order_acq_rel, std::memory_order_acquire))
         throw std::bad_alloc ();
+}
+
+void test_set_request_reply_write_failure_after_prefix (bool enabled_)
+{
+    g_request_reply_write_failure_after_prefix.store (
+      enabled_, std::memory_order_release);
+}
+
+bool test_take_request_reply_write_failure_after_prefix ()
+{
+    return g_request_reply_write_failure_after_prefix.exchange (
+      false, std::memory_order_acq_rel);
 }
 
 void test_set_request_reply_timeout_after_remove_hook (

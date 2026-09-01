@@ -76,12 +76,11 @@ endif()
 
 set(tests
   ${INTEGRATION_TEST_ROOT}/test_ancillaries
-  ${INTEGRATION_TEST_ROOT}/test_thread_safe_contract_policy
+  ${INTEGRATION_TEST_ROOT}/test_asio_ws
   ${INTEGRATION_TEST_ROOT}/monitoring/test_monitor_enhanced
   ${INTEGRATION_TEST_ROOT}/monitoring/test_monitor_socket_contract
   ${INTEGRATION_TEST_ROOT}/monitoring/test_monitor_perf_contract
   ${INTEGRATION_TEST_ROOT}/monitoring/test_multi_stream_server_reassembly
-  ${INTEGRATION_TEST_ROOT}/test_socket_with_handler
   ${INTEGRATION_TEST_ROOT}/test_connect_resolve
   ${INTEGRATION_TEST_ROOT}/test_capabilities
   ${INTEGRATION_TEST_ROOT}/test_ctx_destroy
@@ -96,9 +95,8 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_helper_send_part_basic
   ${INTEGRATION_TEST_ROOT}/test_helper_recv_part_basic
   ${INTEGRATION_TEST_ROOT}/test_helper_ownership
-  ${INTEGRATION_TEST_ROOT}/test_helper_interleave
   ${INTEGRATION_TEST_ROOT}/test_helper_more_bad_send
-  ${INTEGRATION_TEST_ROOT}/test_helper_request_sequence_failure
+  ${INTEGRATION_TEST_ROOT}/test_helper_interleave
   ${INTEGRATION_TEST_ROOT}/test_proxy
   ${INTEGRATION_TEST_ROOT}/test_pubsub
   ${INTEGRATION_TEST_ROOT}/test_reconnect_ivl
@@ -108,27 +106,25 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_xpub_nodrop
   ${INTEGRATION_TEST_ROOT}/test_timer_poller
   ${INTEGRATION_TEST_ROOT}/test_polling_contract
+  ${INTEGRATION_TEST_ROOT}/test_phase3_completion_contract
+  ${INTEGRATION_TEST_ROOT}/test_phase3_request_reply_contract
+  ${INTEGRATION_TEST_ROOT}/test_zmp_request_reply
   ${INTEGRATION_TEST_ROOT}/test_router_handover
   ${INTEGRATION_TEST_ROOT}/test_router_mandatory
+  ${INTEGRATION_TEST_ROOT}/test_router_mandatory_hwm
   ${INTEGRATION_TEST_ROOT}/test_router_multiple_dealers
   ${INTEGRATION_TEST_ROOT}/test_probe_router
-  ${INTEGRATION_TEST_ROOT}/test_zmp_request_reply
-  ${INTEGRATION_TEST_ROOT}/test_zmp_request_reply_receive_transaction
-  ${INTEGRATION_TEST_ROOT}/test_zmp_request_reply_router_recv_surface
   ${INTEGRATION_TEST_ROOT}/test_router_concurrent_routed_recv
-  ${INTEGRATION_TEST_ROOT}/test_router_mandatory_hwm
+  ${INTEGRATION_TEST_ROOT}/test_zmp_request_reply_receive_transaction
   ${INTEGRATION_TEST_ROOT}/test_flow_state_paired
   ${INTEGRATION_TEST_ROOT}/test_flow_state_c_api
-  ${INTEGRATION_TEST_ROOT}/test_routed_submit_target
-  ${INTEGRATION_TEST_ROOT}/test_send_async_multipart
-  ${INTEGRATION_TEST_ROOT}/test_send_async_tls_admit
   ${INTEGRATION_TEST_ROOT}/test_zmp_metadata
+  ${INTEGRATION_TEST_ROOT}/test_send_async_tls_admit
   ${INTEGRATION_TEST_ROOT}/test_zmp_ws_wss
   ${INTEGRATION_TEST_ROOT}/test_stream_socket
   ${INTEGRATION_TEST_ROOT}/test_stream_threadsafe
   ${INTEGRATION_TEST_ROOT}/test_stream_send_blocking_wakeup
   ${INTEGRATION_TEST_ROOT}/test_stream_fastpath
-  ${INTEGRATION_TEST_ROOT}/test_asio_ws
   ${INTEGRATION_TEST_ROOT}/test_transport_matrix
   ${INTEGRATION_TEST_ROOT}/routing-id/test_router_auto_id_format
   ${INTEGRATION_TEST_ROOT}/routing-id/test_stream_routing_id_size
@@ -351,12 +347,6 @@ foreach(test_source ${tests})
     endif()
 
     set_tests_properties(${test} PROPERTIES TIMEOUT 10)
-    if(${test} STREQUAL "test_zmp_request_reply")
-      set_tests_properties(
-        ${test}
-        PROPERTIES
-          TIMEOUT 180)
-    endif()
     if(${test} STREQUAL "test_router_handover")
       set_tests_properties(
         ${test}
@@ -369,18 +359,6 @@ foreach(test_source ${tests})
         PROPERTIES
           TIMEOUT 120)
     endif()
-    if(${test} STREQUAL "test_routed_submit_target")
-      set_tests_properties(
-        ${test}
-        PROPERTIES
-          TIMEOUT 60)
-    endif()
-    if(${test} STREQUAL "test_zmp_request_reply_router_recv_surface")
-      set_tests_properties(
-        ${test}
-        PROPERTIES
-          TIMEOUT 60)
-    endif()
     if(${test} STREQUAL "test_zmp_request_reply_receive_transaction")
       set_tests_properties(
         ${test}
@@ -392,12 +370,6 @@ foreach(test_source ${tests})
         ${test}
         PROPERTIES
           TIMEOUT 30)
-    endif()
-    if(${test} STREQUAL "test_asio_ws")
-      set_tests_properties(
-        ${test}
-        PROPERTIES
-          TIMEOUT 60)
     endif()
     if(${test} STREQUAL "test_multi_stream_benchmark_process")
       set_tests_properties(${test} PROPERTIES TIMEOUT 120)
@@ -444,14 +416,6 @@ elseif(BUILD_SHARED)
   set_tests_properties(
     test_pub_monitor_close_full_mask
     PROPERTIES ENVIRONMENT "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:libzlink>:$ENV{LD_LIBRARY_PATH}")
-endif()
-
-if(TARGET test_thread_safe_contract_policy)
-  target_compile_definitions(
-    test_thread_safe_contract_policy
-    PRIVATE
-      TEST_ZLINK_HEADER_PATH="${ZLINK_CORE_SOURCE_DIR}/include/zlink.h"
-      TEST_REPO_ROOT="${ZLINK_REPO_ROOT}")
 endif()
 
 if(TARGET test_scenario_stream_client)
@@ -507,9 +471,24 @@ set_tests_properties(test_transport_matrix PROPERTIES TIMEOUT 120)
 set_tests_properties(test_router_concurrent_routed_recv PROPERTIES TIMEOUT 120)
 set_tests_properties(test_zmp_metadata PROPERTIES TIMEOUT 30)
 endif()
+if(TARGET test_phase3_request_reply_contract)
+  set_tests_properties(
+    test_phase3_request_reply_contract
+    PROPERTIES TIMEOUT 180)
+endif()
+if(TARGET test_zmp_request_reply)
+  set_tests_properties(
+    test_zmp_request_reply
+    PROPERTIES
+      TIMEOUT 90
+      RESOURCE_LOCK "${NETWORK_INTEGRATION_RESOURCE_LOCK}")
+endif()
 if(TARGET test_send_async_tls_admit)
-  # Three cases, each with its own TLS handshake plus a 10s completion budget.
-  set_tests_properties(test_send_async_tls_admit PROPERTIES TIMEOUT 90)
+  set_tests_properties(
+    test_send_async_tls_admit
+    PROPERTIES
+      TIMEOUT 90
+      RESOURCE_LOCK "${NETWORK_INTEGRATION_RESOURCE_LOCK}")
 endif()
 if(TARGET test_zmp_ws_wss)
   # The target covers WS and, when enabled, two additional TLS/WSS handshakes.
@@ -520,27 +499,12 @@ if(TARGET test_xpub_nodrop)
 endif()
 
 foreach(h3_contract_test
-        test_gap_h3_pair_contract
         test_gap_h3_pubsub_contract
         test_flow_state_c_api)
   if(TARGET ${h3_contract_test})
     set_tests_properties(${h3_contract_test} PROPERTIES TIMEOUT 30)
   endif()
 endforeach()
-if(TARGET test_zmp_request_reply)
-  set_tests_properties(
-    test_zmp_request_reply
-    PROPERTIES
-      TIMEOUT 180
-      RESOURCE_LOCK "${NETWORK_INTEGRATION_RESOURCE_LOCK}")
-endif()
-if(TARGET test_zmp_request_reply_router_recv_surface)
-  set_tests_properties(
-    test_zmp_request_reply_router_recv_surface
-    PROPERTIES
-      TIMEOUT 60
-      RESOURCE_LOCK "${NETWORK_INTEGRATION_RESOURCE_LOCK}")
-endif()
 if(TARGET test_monitor_socket_contract)
   set_tests_properties(
     test_monitor_socket_contract
@@ -554,12 +518,6 @@ endif()
 if(TARGET test_helper_request_sequence_failure)
   set_tests_properties(
     test_helper_request_sequence_failure
-    PROPERTIES
-      TIMEOUT 120)
-endif()
-if(TARGET test_helper_interleave)
-  set_tests_properties(
-    test_helper_interleave
     PROPERTIES
       TIMEOUT 120)
 endif()
@@ -614,12 +572,6 @@ if(TARGET test_single_pair_benchmark_process)
 endif()
 if(TARGET test_stream_socket)
   set_tests_properties(test_stream_socket PROPERTIES TIMEOUT 60)
-endif()
-if(TARGET test_stream_threadsafe)
-  set_tests_properties(test_stream_threadsafe PROPERTIES TIMEOUT 30)
-endif()
-if(TARGET test_stream_send_blocking_wakeup)
-  set_tests_properties(test_stream_send_blocking_wakeup PROPERTIES TIMEOUT 30)
 endif()
 if(TARGET test_stream_fastpath)
   set_tests_properties(test_stream_fastpath PROPERTIES TIMEOUT 30)
@@ -744,22 +696,26 @@ endfunction()
 
 set(NETWORK_INTEGRATION_RESOURCE_LOCK "zlink-network-integration")
 set(STREAM_SOCKET_REGRESSION_TEST_SPECS
-    test_stream_socket_callback_zero_byte=test_stream_callback_echo_single_zero_byte
-    test_stream_socket_raw_callback_ready_contract=test_stream_raw_callback_ready_precedes_first_payload_contract
-    test_stream_socket_raw_multiclient_ready_regression=test_stream_raw_multiclient_strict_ready_gating_regression
-    test_stream_socket_recv_multiclient_ready_regression=test_stream_recv_multiclient_strict_ready_gating_regression
-    test_stream_socket_raw_multiclient_load=test_stream_raw_multiclient_load_integrity
-    test_stream_socket_raw_multiclient_load_send_complete=test_stream_raw_multiclient_load_integrity_with_send_complete_handler)
+    test_stream_socket_phase3_mode_freeze=test_stream_phase3_mode_freeze_contract
+    test_stream_socket_phase3_packet_pull=test_stream_phase3_packet_pull_contract
+    test_stream_socket_phase3_packet_maxmsgsize=test_stream_phase3_packet_maxmsgsize_contract
+    test_stream_socket_phase3_packet_enqueue_close_race=test_stream_phase3_packet_enqueue_close_race
+    test_stream_socket_recv_multiclient_ready_regression=test_stream_recv_multiclient_strict_ready_gating_regression)
 
 set(STREAM_THREADSAFE_REGRESSION_TEST_SPECS
-    test_stream_threadsafe_callback_handoff=test_stream_callback_handoff_to_worker_thread_send_msg_is_safe
-    test_stream_threadsafe_callback_queue_load=test_stream_callback_queue_handoff_with_send_complete_under_load_is_safe
-    test_stream_threadsafe_recv_queue_load=test_stream_recv_handler_queue_handoff_with_send_complete_under_load_is_safe
-    test_stream_threadsafe_recv_queue_timed_window=test_stream_recv_handler_queue_handoff_with_send_complete_timed_window_drains_cleanly
-    test_stream_threadsafe_send_msg=test_stream_send_msg_is_thread_safe
-    test_stream_threadsafe_runtime_reads=test_stream_runtime_reads_are_safe_during_send
-    test_stream_threadsafe_socket_runtime_reads=test_socket_runtime_reads_are_safe_during_connect_disconnect
-    test_stream_threadsafe_client_churn=test_stream_rapid_client_churn_during_send)
+    test_stream_threadsafe_send_part=test_stream_send_part_rid_is_thread_safe
+    test_stream_threadsafe_high_contention=test_stream_send_part_rid_high_contention_is_thread_safe
+    test_stream_threadsafe_endpoint_reads=test_stream_last_endpoint_read_is_safe_during_send
+    test_stream_threadsafe_event_reads=test_stream_events_read_is_safe_during_send
+    test_stream_threadsafe_runtime_reads=test_stream_runtime_reads_are_safe_during_send)
+
+set(REQUEST_REPLY_RECOVERY_TEST_SPECS
+    test_request_reply_recovery_tcp=test_request_reply_over_tcp_with_explicit_routing_id
+    test_request_reply_recovery_tls=test_request_reply_over_tls_with_explicit_routing_id
+    test_request_reply_recovery_out_of_order=test_out_of_order_replies_match_completion_ids)
+
+set(TLS_ADMISSION_RECOVERY_TEST_SPECS
+    test_tls_admission_during_handshake=test_pending_send_admits_over_tls_during_handshake)
 
 set(BACKPRESSURE_MATRIX_INTEGRATION_TEST_SPECS
     test_backpressure_matrix_single_socket=test_single_socket_backpressure_matrix)
@@ -799,6 +755,24 @@ if(TARGET test_stream_threadsafe)
   set_zlink_network_case_properties(
     STREAM_THREADSAFE_REGRESSION_TEST_NAMES
     45)
+endif()
+if(TARGET test_zmp_request_reply)
+  add_env_case_suite(
+    test_zmp_request_reply
+    REQUEST_REPLY_RECOVERY_TEST_SPECS
+    REQUEST_REPLY_RECOVERY_TEST_NAMES)
+  set_zlink_network_case_properties(
+    REQUEST_REPLY_RECOVERY_TEST_NAMES
+    90)
+endif()
+if(TARGET test_send_async_tls_admit)
+  add_env_case_suite(
+    test_send_async_tls_admit
+    TLS_ADMISSION_RECOVERY_TEST_SPECS
+    TLS_ADMISSION_RECOVERY_TEST_NAMES)
+  set_zlink_network_case_properties(
+    TLS_ADMISSION_RECOVERY_TEST_NAMES
+    90)
 endif()
 if(TARGET test_backpressure_matrix)
   add_env_case_suite(
@@ -882,7 +856,9 @@ set(REGRESSION_SERIAL_TESTS
     test_router_concurrent_routed_recv
     test_transport_matrix
     ${STREAM_SOCKET_REGRESSION_TEST_NAMES}
-    ${STREAM_THREADSAFE_REGRESSION_TEST_NAMES})
+    ${STREAM_THREADSAFE_REGRESSION_TEST_NAMES}
+    ${REQUEST_REPLY_RECOVERY_TEST_NAMES}
+    ${TLS_ADMISSION_RECOVERY_TEST_NAMES})
 if(TARGET test_multi_dealer_dealer_benchmark_process)
   list(APPEND REGRESSION_SERIAL_TESTS test_multi_dealer_dealer_benchmark_process)
 endif()
@@ -944,15 +920,12 @@ set(UNREGISTERED_TEST_ALLOWLIST
     test_pub_invert_matching
     test_pubsub_inproc_alternating
     test_router_auto_id_format
-    test_router_handover
-    test_router_mandatory_hwm
     test_router_multiple_dealers
     test_reconnect_ivl
     test_reconnect_options
     test_socket_options_fuzzer
     test_spec_router
     test_stream_fastpath
-    test_stream_send_blocking_wakeup
     test_stream_socket
     test_sub_forward
     test_system

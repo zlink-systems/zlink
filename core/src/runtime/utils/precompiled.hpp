@@ -28,6 +28,7 @@
 
 // 0MQ definitions and exported functions
 #include "../include/zlink.h"
+#include "sockets/common/routed_submit_target.hpp"
 #include "core/internal_errno.hpp"
 #include "core/internal_defs.hpp"
 

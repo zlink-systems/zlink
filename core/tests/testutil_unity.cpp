@@ -13,43 +13,6 @@
 #include <stdio.h>
 #endif
 
-namespace
-{
-void discard_test_socket_parts (const zlink_routing_id_t *,
-                                zlink_msg_t *parts_,
-                                size_t part_count_,
-                                void *)
-{
-    zlink_multipart_close (parts_, part_count_);
-}
-
-void discard_test_spot_parts (
-  const zlink_routing_id_t *, const char *, size_t, zlink_msg_t *parts_, size_t part_count_, void *)
-{
-    zlink_multipart_close (parts_, part_count_);
-}
-}
-
-int test_attach_discard_handler_for_type (void *socket_, int type_)
-{
-    switch (static_cast<zlink_socket_type_t> (type_)) {
-        case ZLINK_SOCKET_PAIR:
-        case ZLINK_SOCKET_DEALER:
-        case ZLINK_SOCKET_ROUTER:
-        case ZLINK_SOCKET_STREAM:
-            return zlink_recv_handler (socket_, &discard_test_socket_parts, NULL);
-        case ZLINK_SOCKET_SUB:
-        case ZLINK_SOCKET_XSUB:
-            return 0;
-        case ZLINK_SOCKET_XPUB:
-        case ZLINK_SOCKET_PUB:
-            return 0;
-        default:
-            errno = EINVAL;
-            return -1;
-    }
-}
-
 int test_assert_success_message_errno_helper (int rc_,
                                               const char *msg_,
                                               const char *expr_,

@@ -5,8 +5,8 @@
 #include "core/c_api_copy_internal.hpp"
 #include "utils/macros.hpp"
 #include "sockets/router/router.hpp"
-#include "sockets/common/socket_dispatch_loop_internal.hpp"
 #include "core/pipe.hpp"
+#include "protocol/zmp_protocol.hpp"
 #include "utils/err.hpp"
 #include "utils/debug_log.hpp"
 
@@ -20,6 +20,23 @@ const bool router_debug_on = zlink::debug_env_enabled ("ZLINK_ROUTER_DEBUG");
 bool router_debug_enabled ()
 {
     return router_debug_on;
+}
+
+int probe_router_reply_token_admission (zlink::pipe_t *,
+                                        const zlink::msg_t &msg_,
+                                        void *userdata_)
+{
+    zlink::socket_base_t *const socket =
+      static_cast<zlink::socket_base_t *> (userdata_);
+    uint8_t kind = zlink::zmp_kind_data;
+    uint64_t sequence = 0;
+    const bool typed = msg_.get_request_reply_metadata (&kind, &sequence);
+    if (!typed || kind != zlink::zmp_kind_request || sequence == 0)
+        return 0;
+    if (socket && socket->router_reply_receive_slot_available ())
+        return 0;
+    errno = EAGAIN;
+    return -1;
 }
 
 void format_routing_id_debug (const zlink_routing_id_t *rid_, char *buf_, size_t buf_size_)
@@ -132,12 +149,7 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
         if (routing_id_ok) {
             _fq.attach (pipe_);
             scheduler_registered = true;
-            const bool ready = pipe_->check_read ();
-            if (socket_msg_dispatch_active ()) {
-                _fq.deactivate (pipe_);
-                if (ready)
-                    defer_socket_msg_dispatch ();
-            }
+            (void) pipe_->check_read ();
         } else {
             const blob_t &routing_id = pipe_->get_routing_id ();
             const out_pipe_t *const out_pipe =
@@ -146,12 +158,7 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
                 _anonymous_pipes.erase (pipe_);
                 _fq.attach (pipe_);
                 scheduler_registered = true;
-                const bool ready = pipe_->check_read ();
-                if (socket_msg_dispatch_active ()) {
-                    _fq.deactivate (pipe_);
-                    if (ready)
-                        defer_socket_msg_dispatch ();
-                }
+                (void) pipe_->check_read ();
             } else {
                 _anonymous_pipes[pipe_] = locally_initiated_;
             }
@@ -167,7 +174,6 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
 
 void zlink::router_t::xread_activated (pipe_t *pipe_)
 {
-    bool dispatch_ready = false;
     bool route_adopted = false;
     route_adoption_actions_t adoption_actions;
     {
@@ -204,10 +210,6 @@ void zlink::router_t::xread_activated (pipe_t *pipe_)
                 route_adopted = true;
             }
         }
-
-        dispatch_ready = socket_msg_dispatch_active ();
-        if (dispatch_ready)
-            defer_socket_msg_dispatch ();
     }
     finish_route_adoption (pipe_, &adoption_actions);
     if (route_adopted) {
@@ -435,74 +437,24 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
     return 0;
 }
 
-void zlink::router_t::xdispatch_io ()
-{
-    socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
-    if (!socket_msg_dispatch_active ())
-        return;
-
-    for (;;) {
-        msg_t msg;
-        const int init_rc = msg.init ();
-        errno_assert (init_rc == 0);
-
-        pipe_t *pipe = NULL;
-        int recv_rc = 0;
-        {
-            // FQ/current receive state belongs to receive.sync. Keep only a
-            // pinned source identity after extraction, then invoke callbacks
-            // with no receive-side lock held.
-            scoped_lock_t receive_lock (receive_sync ());
-            recv_rc = _fq.recvpipe (&msg, &pipe);
-            if (recv_rc == 0 && pipe && !pipe->retain_lifetime_ref ())
-                pipe = NULL;
-        }
-
-        if (recv_rc != 0) {
-            const int saved_errno = errno;
-            const int close_rc = msg.close ();
-            errno_assert (close_rc == 0);
-            if (saved_errno == ECONNABORTED)
-                continue;
-            errno = saved_errno;
-            break;
-        }
-
-        if (!pipe) {
-            const int close_rc = msg.close ();
-            errno_assert (close_rc == 0);
-            continue;
-        }
-
-        const int dispatch_rc = socket_msg_dispatch_from_io (&msg, pipe);
-        const int saved_errno = errno;
-        pipe->release_lifetime_ref ();
-        const int close_rc = msg.close ();
-        errno_assert (close_rc == 0);
-        errno = saved_errno;
-        if (dispatch_rc <= 0)
-            break;
-    }
-}
-
 bool zlink::router_t::xhas_in ()
 {
-    if (socket_msg_dispatch_active ()) {
-        defer_socket_msg_dispatch ();
-        return false;
-    }
-
     if (_more_in)
         return true;
 
     if (_prefetched)
-        return true;
+        return probe_router_reply_token_admission (
+                 _current_in, _prefetched_msg, this)
+               == 0;
 
     pipe_t *pipe = NULL;
-    int rc = _fq.recvpipe (&_prefetched_msg, &pipe);
+    int rc = _fq.recvpipe_with_record_admission (
+      &_prefetched_msg, &pipe, &probe_router_reply_token_admission, this);
 
-    while (rc == 0 && _prefetched_msg.is_routing_id ())
-        rc = _fq.recvpipe (&_prefetched_msg, &pipe);
+    while (rc == 0 && _prefetched_msg.is_routing_id ()) {
+        rc = _fq.recvpipe_with_record_admission (
+          &_prefetched_msg, &pipe, &probe_router_reply_token_admission, this);
+    }
 
     if (rc != 0)
         return false;
@@ -519,6 +471,11 @@ bool zlink::router_t::xhas_in ()
     _current_in = pipe;
 
     return true;
+}
+
+size_t zlink::router_t::xredrive_reply_token_waiters (size_t max_pipes_)
+{
+    return _fq.redrive_record_admission (max_pipes_);
 }
 
 int zlink::router_t::get_peer_state (const void *routing_id_, size_t routing_id_size_) const

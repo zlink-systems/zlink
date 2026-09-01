@@ -66,6 +66,7 @@ zlink::asio_zmp_engine_t::asio_zmp_engine_t (fd_t fd_,
     _negotiated_transport_pair_id (options_.transport_pair_id),
     _negotiated_transport_pair_generation (
       options_.transport_pair_generation),
+    _peer_socket_type (0),
     _peer_routing_id_size (0),
     _subscription_required (false),
     _last_error_code (0)
@@ -90,6 +91,7 @@ zlink::asio_zmp_engine_t::asio_zmp_engine_t (fd_t fd_,
     _negotiated_transport_pair_id (options_.transport_pair_id),
     _negotiated_transport_pair_generation (
       options_.transport_pair_generation),
+    _peer_socket_type (0),
     _peer_routing_id_size (0),
     _subscription_required (false),
     _last_error_code (0)
@@ -117,6 +119,7 @@ zlink::asio_zmp_engine_t::asio_zmp_engine_t (
     _negotiated_transport_pair_id (options_.transport_pair_id),
     _negotiated_transport_pair_generation (
       options_.transport_pair_generation),
+    _peer_socket_type (0),
     _peer_routing_id_size (0),
     _subscription_required (false),
     _last_error_code (0),
@@ -215,6 +218,14 @@ void zlink::asio_zmp_engine_t::error (error_reason_t reason_)
     if (reason_ == timeout_error || reason_ == protocol_error) {
         const uint8_t code = _last_error_code ? _last_error_code : zmp_error_internal;
         send_error_frame (code, _last_error_reason.c_str ());
+    }
+
+    if (paired_transport () && !_options.transport_pair_initiator
+        && _negotiated_transport_pair_id != 0) {
+        socket ()->release_accepted_transport_pair (
+          _peer_routing_id, _peer_routing_id_size,
+          _negotiated_transport_pair_id,
+          _negotiated_transport_pair_generation);
     }
 
     asio_engine_t::error (reason_);
@@ -343,10 +354,14 @@ bool zlink::asio_zmp_engine_t::handshake ()
         session ()->flush ();
     }
 
-    if (_has_handshake_timer) {
-        cancel_timer (handshake_timer_id);
-        _has_handshake_timer = false;
-    }
+    if (_has_handshake_timer)
+        cancel_handshake_timer ();
+    // A paired lane completing its own wire handshake is not sufficient for
+    // data-plane admission. Reuse the snapshotted HANDSHAKE_IVL as the pair
+    // fence deadline; the expiry callback checks this exact pair generation.
+    if (paired_transport () && _negotiated_transport_pair_id != 0
+        && _negotiated_transport_pair_generation != 0)
+        set_handshake_timer ();
 
     if (!paired_transport ()) {
         socket ()->event_connection_ready_changed (
@@ -365,6 +380,17 @@ bool zlink::asio_zmp_engine_t::handshake ()
     _last_error_code = 0;
     _last_error_reason.clear ();
     return true;
+}
+
+bool zlink::asio_zmp_engine_t::handshake_timer_should_fail ()
+{
+    if (!paired_transport () || _negotiated_transport_pair_id == 0
+        || _negotiated_transport_pair_generation == 0)
+        return true;
+
+    return !socket ()->transport_pair_is_ready (
+      _negotiated_transport_pair_id,
+      _negotiated_transport_pair_generation);
 }
 
 bool zlink::asio_zmp_engine_t::receive_hello ()
@@ -408,6 +434,8 @@ bool zlink::asio_zmp_engine_t::parse_hello (const unsigned char *data_, size_t s
     _peer_routing_id_size = result.identity_len;
     if (result.identity_len > 0)
         memcpy (_peer_routing_id, result.identity, result.identity_len);
+    _peer_socket_type = result.peer_type;
+    session ()->set_peer_socket_type (result.peer_type);
 
     return true;
 }
@@ -485,24 +513,70 @@ int zlink::asio_zmp_engine_t::process_ready_message (msg_t *msg_)
     session ()->set_peer_max_message_bytes (peer_max_message_bytes);
 
     transport_lane_t lane = transport_lane_application;
-    uint64_t pair_id = 0;
-    uint64_t generation = 0;
-    const int pair_rc =
-      zmp_metadata::parse_transport_pair (properties, &lane, &pair_id, &generation);
-    if (pair_rc < 0 || (paired_transport () && pair_rc == 0)
-        || (!paired_transport () && pair_rc != 0)
-        || (pair_rc > 0
-            && session ()->set_peer_transport_pair (lane, pair_id, generation) != 0)) {
+    const int lane_rc =
+      zmp_metadata::parse_transport_lane (properties, &lane);
+    if (lane_rc < 0 || (paired_transport () && lane_rc == 0)
+        || (!paired_transport () && lane_rc != 0)) {
         set_last_error (zmp_error_internal, "transport pair metadata invalid");
         return -1;
     }
-    if (pair_rc > 0) {
+
+    if (lane_rc > 0) {
+        const properties_t::const_iterator socket_type_it =
+          properties.find ("Socket-Type");
+        const properties_t::const_iterator routing_id_it =
+          properties.find ("Routing-Id");
+        const char *const expected_socket_type =
+          zmp_metadata::socket_type_string (_peer_socket_type);
+        if (socket_type_it == properties.end ()
+            || socket_type_it->second != expected_socket_type
+            || routing_id_it == properties.end ()
+            || routing_id_it->second.size () != _peer_routing_id_size
+            || (_peer_routing_id_size != 0
+                && memcmp (routing_id_it->second.data (), _peer_routing_id,
+                           _peer_routing_id_size) != 0)) {
+            set_last_error (zmp_error_internal,
+                            "transport pair routing identity invalid");
+            errno = EPROTO;
+            return -1;
+        }
+
+        uint64_t pair_id = _options.transport_pair_id;
+        uint64_t generation = _options.transport_pair_generation;
+        if (_options.transport_pair_initiator) {
+            if (lane != _options.transport_lane || pair_id == 0
+                || generation == 0) {
+                set_last_error (zmp_error_internal,
+                                "transport pair lane mismatch");
+                errno = EPROTO;
+                return -1;
+            }
+        } else if (socket ()->adopt_accepted_transport_pair (
+                     _peer_routing_id, _peer_routing_id_size,
+                     &pair_id, &generation)
+                   != 0) {
+            set_last_error (zmp_error_internal,
+                            "transport pair identity allocation failed");
+            return -1;
+        }
+
+        if (session ()->set_peer_transport_pair (
+              lane, pair_id, generation)
+            != 0) {
+            if (!_options.transport_pair_initiator)
+                socket ()->release_accepted_transport_pair (
+                  _peer_routing_id, _peer_routing_id_size,
+                  pair_id, generation);
+            set_last_error (zmp_error_internal,
+                            "transport pair identity conflict");
+            return -1;
+        }
         _negotiated_transport_lane = lane;
         _negotiated_transport_pair_id = pair_id;
         _negotiated_transport_pair_generation = generation;
     }
     if (paired_transport () && !_options.transport_pair_initiator)
-        schedule_ready_reply (lane, pair_id, generation);
+        schedule_ready_reply (lane);
 
     return 0;
 }
@@ -514,13 +588,11 @@ bool zlink::asio_zmp_engine_t::paired_transport () const
 }
 
 void zlink::asio_zmp_engine_t::schedule_ready_reply (
-  transport_lane_t lane_, uint64_t pair_id_, uint64_t generation_)
+  transport_lane_t lane_)
 {
     options_t response_options = _options;
     response_options.zmp_metadata = true;
     response_options.transport_lane = lane_;
-    response_options.transport_pair_id = pair_id_;
-    response_options.transport_pair_generation = generation_;
     zmp_control::build_ready_frame (response_options, _deferred_ready_send);
     _deferred_ready_pending = true;
     if (_outsize == 0 && prepare_deferred_handshake_output ())

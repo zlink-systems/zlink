@@ -28,15 +28,15 @@ enum receive_flow_state_t
 //    0       9     command name "FLOWSTATE"
 //    9       1     protocol version
 //    10      1     state (0 RUNNING, 1 PAUSED)
-//    11      8     transport pair id        (big endian)
-//    19      8     connection generation    (big endian)
-//    27      8     flow epoch               (big endian)
+//    11      8     flow epoch               (big endian)
 //
-//  Total frame size is 35 bytes.
+//  The physical connection that delivered the command is the identity fence;
+//  no pair id or connection generation is exposed on the wire.
+//  Total frame size is 19 bytes.
 static const char frame_name[] = "FLOWSTATE";
 static const size_t frame_name_size = sizeof (frame_name) - 1;
 static const uint8_t frame_protocol_version = 1;
-static const size_t frame_body_size = 1 + 1 + 8 + 8 + 8;
+static const size_t frame_body_size = 1 + 1 + 8;
 static const size_t frame_size = frame_name_size + frame_body_size;
 
 struct frame_t
@@ -44,16 +44,12 @@ struct frame_t
     frame_t () :
         version (frame_protocol_version),
         state (receive_flow_running),
-        pair_id (0),
-        generation (0),
         epoch (0)
     {
     }
 
     uint8_t version;
     uint8_t state;
-    uint64_t pair_id;
-    uint64_t generation;
     uint64_t epoch;
 };
 
@@ -109,9 +105,7 @@ static inline int init_frame (msg_t *msg_, const frame_t &frame_)
     memcpy (data, frame_name, frame_name_size);
     data[frame_name_size] = frame_.version;
     data[frame_name_size + 1] = frame_.state;
-    put_uint64_be (data + frame_name_size + 2, frame_.pair_id);
-    put_uint64_be (data + frame_name_size + 10, frame_.generation);
-    put_uint64_be (data + frame_name_size + 18, frame_.epoch);
+    put_uint64_be (data + frame_name_size + 2, frame_.epoch);
     msg_->set_flags (msg_t::command);
     return 0;
 }
@@ -140,11 +134,8 @@ static inline decode_result_t decode_frame (const msg_t &msg_, frame_t *out_)
     frame_t frame;
     frame.version = version;
     frame.state = data[frame_name_size + 1];
-    frame.pair_id = get_uint64_be (data + frame_name_size + 2);
-    frame.generation = get_uint64_be (data + frame_name_size + 10);
-    frame.epoch = get_uint64_be (data + frame_name_size + 18);
-    if (!state_valid (frame.state) || frame.pair_id == 0
-        || frame.generation == 0 || frame.epoch == 0)
+    frame.epoch = get_uint64_be (data + frame_name_size + 2);
+    if (!state_valid (frame.state) || frame.epoch == 0)
         return decode_malformed;
 
     if (out_)

@@ -4,7 +4,6 @@
 #include "core/c_api_copy_internal.hpp"
 #include "utils/macros.hpp"
 #include "sockets/router/router.hpp"
-#include "sockets/common/socket_dispatch_loop_internal.hpp"
 #include "core/pipe.hpp"
 #include "protocol/wire.hpp"
 #include "utils/random.hpp"
@@ -53,60 +52,6 @@ void format_blob_routing_id_debug (const zlink::blob_t &routing_id_, char *buf_,
     format_routing_id_debug (&rid, buf_, buf_size_);
 }
 
-void store_dispatch_source_rid (std::map<zlink::pipe_t *, zlink_routing_id_t> *sources_,
-                                zlink::pipe_t *pipe_,
-                                zlink_routing_id_t *fallback_rid_,
-                                bool *fallback_valid_,
-                                zlink::msg_t *msg_)
-{
-    if (!sources_ || !msg_)
-        return;
-
-    zlink_routing_id_t rid;
-    rid.size = 0;
-
-    const size_t size = msg_->size ();
-    zlink_assert (size <= sizeof (rid.data));
-    rid.size = static_cast<uint8_t> (size);
-    if (size > 0)
-        memcpy (rid.data, msg_->data (), size);
-    if (pipe_) {
-        (*sources_)[pipe_] = rid;
-    } else if (fallback_rid_ && fallback_valid_) {
-        *fallback_rid_ = rid;
-        *fallback_valid_ = true;
-    }
-}
-
-bool take_dispatch_source_rid (std::map<zlink::pipe_t *, zlink_routing_id_t> *sources_,
-                               zlink::pipe_t *pipe_,
-                               zlink_routing_id_t *fallback_rid_,
-                               bool *fallback_valid_,
-                               zlink_routing_id_t *out_)
-{
-    if (!sources_ || !out_)
-        return false;
-
-    if (pipe_) {
-        const std::map<zlink::pipe_t *, zlink_routing_id_t>::iterator it =
-          sources_->find (pipe_);
-        if (it == sources_->end ())
-            return false;
-
-        *out_ = it->second;
-        sources_->erase (it);
-        return true;
-    }
-
-    if (!fallback_rid_ || !fallback_valid_ || !*fallback_valid_)
-        return false;
-
-    *out_ = *fallback_rid_;
-    fallback_rid_->size = 0;
-    *fallback_valid_ = false;
-    return true;
-}
-
 }
 
 static bool router_debug_enabled ()
@@ -127,9 +72,7 @@ zlink::router_t::router_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     _next_integral_routing_id (generate_random ()),
     _mandatory (true),
     _probe_router (false),
-    _handover (options.rid_duplicate_policy == ZLINK_RID_DUPLICATE_HANDOVER),
-    _dispatch_source_rid_valid (false),
-    _dispatch_malformed_without_pipe (false)
+    _handover (options.rid_duplicate_policy == ZLINK_RID_DUPLICATE_HANDOVER)
 {
     options.type = ZLINK_CORE_SOCKET_ROUTER;
     options.out_batch_size = router_transport_write_batch_size;
@@ -145,16 +88,6 @@ zlink::router_t::router_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
 zlink::router_t::~router_t ()
 {
     zlink_assert (_anonymous_pipes.empty ());
-    close_socket_msg_parts (&_dispatch_parts);
-    for (std::map<pipe_t *, std::vector<zlink_msg_t>>::iterator it =
-           _dispatch_parts_by_pipe.begin ();
-         it != _dispatch_parts_by_pipe.end (); ++it) {
-        close_socket_msg_parts (&it->second);
-    }
-    _dispatch_parts_by_pipe.clear ();
-    _dispatch_source_rids.clear ();
-    _dispatch_source_rid.size = 0;
-    _dispatch_source_rid_valid = false;
     _prefetched_id.close ();
     _prefetched_msg.close ();
 }
@@ -281,20 +214,6 @@ void zlink::router_t::xpipe_terminated (pipe_t *pipe_)
 
 void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
 {
-    _dispatch_malformed_pipes.erase (pipe_);
-    _dispatch_source_rids.erase (pipe_);
-    std::map<pipe_t *, std::vector<zlink_msg_t>>::iterator parts_it =
-      _dispatch_parts_by_pipe.find (pipe_);
-    if (parts_it != _dispatch_parts_by_pipe.end ()) {
-        close_socket_msg_parts (&parts_it->second);
-        _dispatch_parts_by_pipe.erase (parts_it);
-    }
-
-    bool fail_standby_pending = false;
-    zlink_routing_id_t failed_public_rid;
-    uint64_t failed_pair_id = 0;
-    uint64_t failed_pair_generation = 0;
-    uint64_t failed_route_incarnation_id = 0;
     bool rollback_outbound = false;
     {
         std::lock_guard<std::mutex> route_lifecycle_lock (
@@ -308,16 +227,6 @@ void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
           _standby_pipes.find (pipe_);
         const bool was_standby = terminated_standby != _standby_pipes.end ();
         if (was_standby) {
-            copy_routing_id_from_bytes (
-              terminated_standby->second.data (),
-              terminated_standby->second.size (), &failed_public_rid);
-            failed_pair_id = pipe_->get_transport_pair_id ();
-            failed_pair_generation =
-              pipe_->get_transport_pair_generation ();
-            if (failed_pair_id == 0 && failed_pair_generation == 0)
-                failed_route_incarnation_id =
-                  pipe_->get_route_incarnation_id ();
-            fail_standby_pending = true;
             _standby_pipes.erase (terminated_standby);
         }
 
@@ -378,162 +287,6 @@ void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
     }
     if (rollback_outbound)
         pipe_->rollback ();
-    if (fail_standby_pending)
-        fail_send_pending_for_target (
-          &failed_public_rid, failed_pair_id, failed_pair_generation,
-          ENOTCONN, failed_route_incarnation_id);
-}
-
-int zlink::router_t::xsocket_msg_dispatch (msg_t *msg_, pipe_t *pipe_)
-{
-    if (!socket_msg_dispatch_active ())
-        return 0;
-
-    if (router_debug_enabled ()) {
-        fprintf (stderr, "router xsocket_msg_dispatch: pipe=%p size=%zu routing_id=%d more=%d "
-                         "handler=%d\n",
-                 static_cast<void *> (pipe_), msg_ ? msg_->size () : 0,
-                 msg_ && msg_->is_routing_id () ? 1 : 0,
-                 msg_ && ((msg_->flags () & msg_t::more) != 0) ? 1 : 0,
-                 socket_msg_handler () ? 1 : 0);
-    }
-
-    pipe_t *source_pipe = pipe_ ? pipe_ : current_socket_msg_dispatch_pipe ();
-
-    const bool final_part = (msg_->flags () & msg_t::more) == 0;
-    const bool dropping_malformed =
-      source_pipe ? _dispatch_malformed_pipes.count (source_pipe) != 0
-                  : _dispatch_malformed_without_pipe;
-    if (dropping_malformed) {
-        msg_->reset_request_reply_metadata ();
-        if (final_part) {
-            if (source_pipe)
-                _dispatch_malformed_pipes.erase (source_pipe);
-            else
-                _dispatch_malformed_without_pipe = false;
-        }
-        return 1;
-    }
-
-    if (msg_->is_routing_id ()) {
-        pipe_t *socket_pipe = source_pipe;
-        route_adoption_actions_t adoption_actions;
-        bool route_adopted = false;
-        {
-            scoped_optional_fast_lock_t generation_lock (
-              socket_pipe ? &socket_pipe->transport_sync () : NULL);
-            uint32_t initial_weight = 100;
-            if (socket_pipe)
-                (void) recorded_peer_weight_ready_locked (
-                  socket_pipe, &initial_weight);
-            std::lock_guard<std::mutex> route_lifecycle_lock (_out_pipes_sync);
-            bool needs_route_registration = false;
-            bool locally_initiated = false;
-            if (socket_pipe) {
-                const std::map<pipe_t *, bool>::const_iterator anonymous =
-                  _anonymous_pipes.find (socket_pipe);
-                if (anonymous != _anonymous_pipes.end ())
-                    locally_initiated = anonymous->second;
-                blob_t routing_id_ref (
-                  const_cast<unsigned char *> (
-                    static_cast<unsigned char *> (msg_->data ())),
-                  msg_->size (), zlink::reference_tag_t ());
-                const out_pipe_t *const existing_outpipe =
-                  lookup_out_pipe (routing_id_ref);
-                needs_route_registration =
-                  anonymous != _anonymous_pipes.end ()
-                  || existing_outpipe == NULL || !existing_outpipe->active;
-            }
-            if (needs_route_registration) {
-                blob_t routing_id (static_cast<unsigned char *> (msg_->data ()),
-                                   msg_->size ());
-                if (adopt_peer_routing_id (
-                      socket_pipe, ZLINK_MOVE (routing_id),
-                      locally_initiated, &adoption_actions,
-                      initial_weight)) {
-                    promote_anonymous_pipe_for_dispatch (socket_pipe);
-                    route_adopted = true;
-                }
-            }
-            store_dispatch_source_rid (
-              &_dispatch_source_rids, source_pipe, &_dispatch_source_rid,
-              &_dispatch_source_rid_valid, msg_);
-        }
-        finish_route_adoption (socket_pipe, &adoption_actions);
-        if (socket_pipe && route_adopted) {
-            if (local_peer_weight () != 100)
-                (void) send_local_peer_weight (socket_pipe);
-            (void) emit_transport_pair_ready (socket_pipe);
-        }
-        return 1;
-    }
-
-    std::vector<zlink_msg_t> *dispatch_parts = source_pipe ? &_dispatch_parts_by_pipe[source_pipe]
-                                                           : &_dispatch_parts;
-    unsigned char request_reply_kind = 0;
-    uint64_t request_reply_sequence = 0;
-    if (!dispatch_parts->empty ()
-        && msg_->get_request_reply_metadata (
-          &request_reply_kind, &request_reply_sequence)) {
-        close_socket_msg_parts (dispatch_parts);
-        if (source_pipe) {
-            _dispatch_parts_by_pipe.erase (source_pipe);
-            _dispatch_source_rids.erase (source_pipe);
-        } else {
-            _dispatch_source_rid.size = 0;
-            _dispatch_source_rid_valid = false;
-        }
-        if (!final_part) {
-            if (source_pipe)
-                _dispatch_malformed_pipes.insert (source_pipe);
-            else
-                _dispatch_malformed_without_pipe = true;
-        }
-        msg_->reset_request_reply_metadata ();
-        pipe_t *const malformed_pipe =
-          source_pipe && source_pipe->retain_lifetime_ref () ? source_pipe : NULL;
-        if (malformed_pipe) {
-            malformed_pipe->terminate (false);
-            malformed_pipe->release_lifetime_ref ();
-        }
-        return 1;
-    }
-
-    store_socket_msg_part (dispatch_parts, msg_);
-    if ((reinterpret_cast<msg_t *> (&dispatch_parts->back ())->flags () & msg_t::more) != 0) {
-        return 1;
-    }
-
-    zlink_socket_msg_handler_fn handler = socket_msg_handler ();
-    if (!handler) {
-        close_socket_msg_parts (dispatch_parts);
-        if (source_pipe)
-            _dispatch_parts_by_pipe.erase (source_pipe);
-        if (source_pipe)
-            _dispatch_source_rids.erase (source_pipe);
-        else {
-            _dispatch_source_rid.size = 0;
-            _dispatch_source_rid_valid = false;
-        }
-        return 1;
-    }
-
-    zlink_routing_id_t source_rid;
-    if (!take_dispatch_source_rid (&_dispatch_source_rids, source_pipe, &_dispatch_source_rid,
-                                   &_dispatch_source_rid_valid, &source_rid))
-        resolve_socket_msg_source_rid (source_pipe, &source_rid);
-
-    invoke_socket_msg_handler (handler, &source_rid, &(*dispatch_parts)[0],
-                               dispatch_parts->size ());
-    dispatch_parts->clear ();
-    if (source_pipe)
-        _dispatch_parts_by_pipe.erase (source_pipe);
-    return 1;
-}
-
-void zlink::router_t::xarm_socket_msg_dispatch ()
-{
-    _fq.arm_dispatch ();
 }
 
 int zlink::router_t::xrollback ()

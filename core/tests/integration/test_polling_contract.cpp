@@ -55,10 +55,14 @@ void test_poller_socket_registration_error_contracts ()
     void *poller = zlink_poller_new ();
     void *pair = test_context_socket (ZLINK_SOCKET_PAIR);
     void *missing = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *stream = test_context_socket (ZLINK_SOCKET_STREAM);
     TEST_ASSERT_NOT_NULL (poller);
     TEST_ASSERT_NOT_NULL (pair);
     TEST_ASSERT_NOT_NULL (missing);
+    TEST_ASSERT_NOT_NULL (dealer);
+    TEST_ASSERT_NOT_NULL (router);
     TEST_ASSERT_NOT_NULL (stream);
 
     TEST_ASSERT_EQUAL_INT (
@@ -76,10 +80,10 @@ void test_poller_socket_registration_error_contracts ()
       ZLINK_CONFIG_NOT_FOUND, zlink_poller_remove (poller, missing));
     TEST_ASSERT_EQUAL_INT (ENOENT, errno);
 
+    // Completion ownership can be added by modify, including as the only bit.
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_INVALID_ARGUMENT,
+      ZLINK_CONFIG_OK,
       zlink_poller_modify (poller, pair, ZLINK_POLLCOMPLETION));
-    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_NOT_SUPPORTED,
       zlink_poller_modify (poller, pair, ZLINK_POLLPRI));
@@ -87,19 +91,35 @@ void test_poller_socket_registration_error_contracts ()
 
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_poller_remove (poller, pair));
 
-    // PAIR and STREAM completion ownership is an established contract; mask
-    // validation must not narrow it back to DEALER/ROUTER only.
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_poller_add (poller, pair, pair, ZLINK_POLLCOMPLETION));
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_poller_remove (poller, pair));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_poller_add (poller, stream, stream, ZLINK_POLLCOMPLETION));
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
-                           zlink_poller_remove (poller, stream));
+    // Every completion-bearing socket accepts the bit through both add and
+    // modify. Removing and restoring only the completion bit must not require
+    // a connected endpoint or an already queued record.
+    void *const completion_sockets[] = {pair, dealer, router, stream};
+    for (size_t i = 0;
+         i != sizeof (completion_sockets) / sizeof (completion_sockets[0]);
+         ++i) {
+        void *const socket = completion_sockets[i];
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_CONFIG_OK,
+          zlink_poller_add (poller, socket, socket, ZLINK_POLLCOMPLETION));
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_CONFIG_OK,
+          zlink_poller_modify (
+            poller, socket,
+            static_cast<short> (ZLINK_POLLIN | ZLINK_POLLCOMPLETION)));
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_CONFIG_OK,
+          zlink_poller_modify (poller, socket, ZLINK_POLLIN));
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_CONFIG_OK,
+          zlink_poller_modify (poller, socket, ZLINK_POLLCOMPLETION));
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                               zlink_poller_remove (poller, socket));
+    }
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
     test_context_socket_close_zero_linger (stream);
+    test_context_socket_close_zero_linger (router);
+    test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (missing);
     test_context_socket_close_zero_linger (pair);
 }

@@ -120,20 +120,37 @@ bool reqrep::take_pending_reply_from_transport_locked (
                                  pending_out_);
 }
 
-bool reqrep::take_disconnected_socket_pending_request_locked (
-  reqrep::socket_request_reply_state_t *state_, uint64_t transport_pair_id_,
-  uint64_t transport_pair_generation_,
+bool reqrep::take_next_socket_pending_request_for_logical_endpoint_locked (
+  reqrep::socket_request_reply_state_t *state_,
+  const std::string &logical_endpoint_,
   reqrep::pending_request_t *pending_out_)
 {
-    if (!state_)
+    if (!state_ || logical_endpoint_.empty ())
         return false;
-
     for (pending_request_map_t::iterator pending =
            state_->pending_requests.begin ();
          pending != state_->pending_requests.end (); ++pending) {
-        if (pending->second.transport_pair_id == transport_pair_id_
-            && pending->second.transport_pair_generation
-                 == transport_pair_generation_)
+        if (pending->second.logical_endpoint == logical_endpoint_)
+            return take_pending_request (&state_->pending_requests, pending,
+                                         pending_out_);
+    }
+    return false;
+}
+
+bool reqrep::take_next_socket_pending_request_for_logical_rid_locked (
+  reqrep::socket_request_reply_state_t *state_,
+  const zlink_routing_id_t *logical_rid_,
+  reqrep::pending_request_t *pending_out_)
+{
+    if (!state_ || !logical_rid_ || logical_rid_->size == 0)
+        return false;
+    for (pending_request_map_t::iterator pending =
+           state_->pending_requests.begin ();
+         pending != state_->pending_requests.end (); ++pending) {
+        if (pending->second.logical_rid.size () == logical_rid_->size
+            && memcmp (pending->second.logical_rid.data (), logical_rid_->data,
+                       logical_rid_->size)
+                 == 0)
             return take_pending_request (&state_->pending_requests, pending,
                                          pending_out_);
     }
@@ -188,7 +205,7 @@ bool reqrep::erase_socket_pending_request (
     if (reqrep::remove_socket_pending_request (state_, identity_, &pending)) {
         reqrep::release_socket_pending_request_correlation (&pending);
         zlink::request_timeout::cancel (pending.timeout_task);
-        zlink::request_completion::release_reservation (&state_->completion);
+        reqrep::release_pending_request_completion (state_, &pending);
         return true;
     }
     return false;
@@ -216,26 +233,34 @@ bool reqrep::record_socket_pending_transport_pair_identity (
     return true;
 }
 
-int reqrep::ensure_socket_pending_request (
-  const socket_handle_t &handle_,
-  uint32_t timeout_ms_,
-  zlink_reply_handler_fn handler_,
-  void *userdata_,
+int reqrep::ensure_socket_pull_pending_request (
+  const socket_handle_t &handle_, uint32_t timeout_ms_,
+  const zlink_routing_id_t *peer_rid_, void *user_context_,
   uint64_t *request_seq_out_,
   std::shared_ptr<reqrep::socket_request_reply_state_t> *state_out_,
-  reqrep::pending_request_token_t *token_out_)
+  reqrep::pending_request_token_t *token_out_,
+  zlink_completion_id_t *completion_id_out_)
 {
-    if (!request_seq_out_ || !state_out_ || !token_out_) {
+    if (!request_seq_out_ || !state_out_ || !token_out_
+        || !completion_id_out_) {
         errno = EFAULT;
         return -1;
     }
+    *request_seq_out_ = 0;
+    *completion_id_out_ = 0;
 
     std::shared_ptr<reqrep::socket_request_reply_state_t> state =
       reqrep::find_or_create_request_reply_state (handle_);
     if (!state || !handle_.socket
         || handle_.socket->ensure_completion_processing () != 0)
         return -1;
-    if (!zlink::request_completion::try_reserve (&state->completion))
+
+    zlink::socket_completion::reservation_t *reservation = NULL;
+    zlink_completion_id_t completion_id = 0;
+    if (zlink::socket_completion::reserve (
+          &handle_.socket->completion_runtime (), ZLINK_COMPLETION_REQUEST,
+          user_context_, peer_rid_, &reservation, &completion_id)
+        != 0)
         return -1;
 
     reqrep::pending_request_identity_t identity;
@@ -254,16 +279,16 @@ int reqrep::ensure_socket_pending_request (
                 identity.request_seq = request_seq;
                 identity.cookie = allocate_pending_cookie_locked (state.get ());
                 pending.identity = identity;
+                if (peer_rid_ && peer_rid_->size != 0)
+                    pending.logical_rid.assign (
+                      reinterpret_cast<const char *> (peer_rid_->data),
+                      peer_rid_->size);
                 pending.transport_pair_id = 0;
                 pending.transport_pair_generation = 0;
                 resolved_timeout_ms = zlink::request_reply::resolve_timeout_ms (
                   timeout_ms_, state->default_timeout_ms);
                 pending.resolved_timeout_ms = resolved_timeout_ms;
-                pending.handler = handler_;
-                pending.userdata = userdata_;
-                // The reply deadline begins only after the request record has
-                // been admitted to a pipe. Correlation itself is registered
-                // first so a fast reply cannot overtake it.
+                pending.pull_completion = reservation;
                 if (reqrep::add_socket_pending_request_locked (
                       state.get (), std::move (pending))
                     != 0)
@@ -276,7 +301,8 @@ int reqrep::ensure_socket_pending_request (
         }
     }
     if (prepare_errno != 0) {
-        zlink::request_completion::release_reservation (&state->completion);
+        zlink::socket_completion::release (
+          &handle_.socket->completion_runtime (), reservation);
         errno = prepare_errno;
         return -1;
     }
@@ -284,6 +310,8 @@ int reqrep::ensure_socket_pending_request (
     *state_out_ = state;
     token_out_->identity = identity;
     token_out_->resolved_timeout_ms = resolved_timeout_ms;
+    *completion_id_out_ = completion_id;
+    errno = 0;
     return 0;
 }
 
@@ -306,7 +334,6 @@ int reqrep::arm_socket_pending_request_timeout (
         // submit failure: the caller's payload has transferred and the peer
         // may receive it. Resolve the admitted request through its normal
         // completion channel instead.
-        const int terminal_errno = errno;
         reqrep::pending_request_t pending;
         bool removed = false;
         {
@@ -324,16 +351,8 @@ int reqrep::arm_socket_pending_request_timeout (
         }
         if (removed) {
             reqrep::release_socket_pending_request_correlation (&pending);
-            if (reqrep::queue_reply_completion (
-                  state_, pending.handler, pending.userdata, terminal_errno,
-                  NULL, 0)
-                != 0) {
-                zlink::request_completion::invoke_callback (
-                  state_->socket, pending.handler, terminal_errno, NULL, 0,
-                  pending.userdata);
-                zlink::request_completion::release_reservation (
-                  &state_->completion);
-            }
+            (void) reqrep::publish_pending_request_completion (
+              state_, &pending, ZLINK_REQUEST_INTERNAL_ERROR, NULL, 0);
         }
         errno = 0;
         return 0;

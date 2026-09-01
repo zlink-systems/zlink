@@ -110,6 +110,7 @@ struct ready_monitor_t
 
     void *monitor;
     ready_monitor_state_t *state;
+    test_monitor_pull_dispatch_t dispatch;
 };
 
 struct fq_recv_termination_gate_t
@@ -321,7 +322,7 @@ bool open_ready_monitor (void *socket_, ready_monitor_t *out_)
         return false;
     }
 
-    if (zlink_socket_monitor_handler (monitor, &monitor_ready_handler, state) != 0) {
+    if (!out_->dispatch.start (monitor, &monitor_ready_handler, state)) {
         (void) zlink_monitor_close (&monitor);
         delete state;
         return false;
@@ -371,6 +372,7 @@ void close_ready_monitor (ready_monitor_t *monitor_)
 {
     if (!monitor_)
         return;
+    monitor_->dispatch.stop ();
     if (monitor_->monitor)
         TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor_->monitor));
     delete monitor_->state;

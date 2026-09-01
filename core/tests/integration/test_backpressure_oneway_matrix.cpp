@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
 #include "testutil.hpp"
+#include "testutil_monitoring.hpp"
 #include "testutil_unity.hpp"
 
 #include <algorithm>
@@ -64,6 +65,7 @@ struct ready_monitor_t
 
     void *monitor;
     ready_monitor_state_t *state;
+    test_monitor_pull_dispatch_t dispatch;
 };
 
 struct drain_gate_t
@@ -246,7 +248,7 @@ static bool open_ready_monitor (void *socket_, ready_monitor_t *out_)
                   | ZLINK_EVENT_CLOSE_FAILED | ZLINK_EVENT_HANDSHAKE_FAILED_NO_DETAIL
                   | ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL | ZLINK_EVENT_HANDSHAKE_FAILED_AUTH;
     void *monitor = zlink_socket_monitor_open (socket_, &opts);
-    if (!monitor || zlink_socket_monitor_handler (monitor, &ready_monitor_handler, state) != 0) {
+    if (!monitor || !out_->dispatch.start (monitor, &ready_monitor_handler, state)) {
         if (monitor)
             (void) zlink_monitor_close (&monitor);
         delete state;
@@ -304,6 +306,7 @@ static void close_ready_monitor (ready_monitor_t *monitor_)
     if (!monitor_)
         return;
 
+    monitor_->dispatch.stop ();
     if (monitor_->monitor)
         TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor_->monitor));
     delete monitor_->state;

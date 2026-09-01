@@ -180,62 +180,6 @@ int zlink::session_base_t::push_msg_internal (msg_t *msg_,
 
     trace_router_session_push (_socket, msg_, session_push_trace_payload);
 
-    if (_socket && _socket->socket_msg_dispatch_active ()) {
-        const unsigned char msg_flags = msg_->flags ();
-        // Session I/O owns one endpoint of the pipe pair, while socket
-        // teardown and every socket-side dispatch map use its peer endpoint.
-        // Canonicalize here, where the direction is known, and retain the peer
-        // through the callback so concurrent termination cannot invalidate the
-        // map key or the exact-pair error target.
-        pipe_t *const socket_pipe =
-          _pipe ? _pipe->retain_peer_snapshot () : NULL;
-        const int dispatch_rc =
-          _pipe && !socket_pipe
-            ? 1 // The socket endpoint detached before publication; drop it.
-            : _socket->socket_msg_dispatch_from_io (msg_, socket_pipe);
-        if (socket_pipe)
-            socket_pipe->release_lifetime_ref ();
-        if (dispatch_rc < 0)
-            return -1;
-        if (dispatch_rc > 0) {
-            if (reservation_ && *reservation_) {
-                release_decoder_frame (this, *reservation_);
-                *reservation_ = NULL;
-            }
-            if (_pipe)
-                _pipe->finish_direct_decoder_frame (msg_flags);
-            const int rc = msg_->close ();
-            errno_assert (rc == 0);
-            return msg_->init ();
-        }
-    }
-
-    if (options.type == ZLINK_CORE_SOCKET_STREAM && _socket && _pipe
-        && _socket->stream_dispatch_active ()) {
-        const unsigned char msg_flags = msg_->flags ();
-        const int dispatch_rc = _socket->stream_dispatch_msg_from_io (msg_, _pipe);
-        if (dispatch_rc < 0)
-            return -1;
-        if (dispatch_rc > 1) {
-            if (reservation_ && *reservation_) {
-                release_decoder_frame (this, *reservation_);
-                *reservation_ = NULL;
-            }
-            _pipe->finish_direct_decoder_frame (msg_flags);
-            return 0;
-        }
-        if (dispatch_rc > 0) {
-            if (reservation_ && *reservation_) {
-                release_decoder_frame (this, *reservation_);
-                *reservation_ = NULL;
-            }
-            _pipe->finish_direct_decoder_frame (msg_flags);
-            const int rc = msg_->close ();
-            errno_assert (rc == 0);
-            return msg_->init ();
-        }
-    }
-
     if (_pipe && reservation_ && *reservation_) {
         decoder_frame_reservation_t *decoder_reservation =
           static_cast<decoder_frame_reservation_t *> (*reservation_);

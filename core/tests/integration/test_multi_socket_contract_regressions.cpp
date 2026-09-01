@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
 #include "testutil.hpp"
+#include "testutil_monitoring.hpp"
 #include "testutil_unity.hpp"
 #include "../../src/runtime/sockets/common/socket_base.hpp"
 
@@ -35,6 +36,7 @@ struct delivery_ready_monitor_t
 
     void *monitor;
     delivery_ready_monitor_state_t *state;
+    test_monitor_pull_dispatch_t dispatch;
 };
 
 struct publish_start_gate_t
@@ -197,7 +199,7 @@ bool open_delivery_ready_monitor (void *socket_, uint64_t events_, delivery_read
         return false;
     }
 
-    if (zlink_socket_monitor_handler (monitor, &delivery_ready_monitor_handler, state) != 0) {
+    if (!out_->dispatch.start (monitor, &delivery_ready_monitor_handler, state)) {
         (void) zlink_monitor_close (&monitor);
         delete state;
         return false;
@@ -205,6 +207,7 @@ bool open_delivery_ready_monitor (void *socket_, uint64_t events_, delivery_read
 
     const int zero = 0;
     if (zlink_set_option (monitor, ZLINK_OPT_LINGER, &zero, sizeof (zero)) != ZLINK_CONFIG_OK) {
+        out_->dispatch.stop ();
         (void) zlink_monitor_close (&monitor);
         delete state;
         return false;
@@ -254,6 +257,7 @@ void close_delivery_ready_monitor (delivery_ready_monitor_t *monitor_)
     monitor_->monitor = NULL;
     monitor_->state = NULL;
 
+    monitor_->dispatch.stop ();
     if (monitor)
         TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
     delete state;

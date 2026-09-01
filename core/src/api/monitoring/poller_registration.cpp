@@ -281,7 +281,7 @@ void release_poller_registration (const poller_registration_t &registration_)
 {
     if (registration_.socket && registration_.owns_completion_processing) {
         static_cast<zlink::socket_base_t *> (registration_.socket)
-          ->release_completion_poller ();
+          ->release_completion_poller (registration_.completion_owner);
     }
     if (registration_.socket && registration_.owns_socket_lifetime) {
         static_cast<zlink::socket_base_t *> (registration_.socket)

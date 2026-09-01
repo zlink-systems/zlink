@@ -64,47 +64,47 @@ inline void clear_request_reply_metadata (zlink_msg_t *part_)
 inline int decode_reply_completion (uint8_t message_type_,
                                     zlink_msg_t *parts_,
                                     size_t part_count_,
-                                    int *callback_errno_out_,
-                                    zlink_msg_t **callback_parts_out_,
-                                    size_t *callback_part_count_out_)
+                                    int *reply_errno_out_,
+                                    zlink_msg_t **reply_parts_out_,
+                                    size_t *reply_part_count_out_)
 {
-    if (!callback_errno_out_ || !callback_parts_out_ || !callback_part_count_out_) {
+    if (!reply_errno_out_ || !reply_parts_out_ || !reply_part_count_out_) {
         errno = EFAULT;
         return -1;
     }
 
-    *callback_errno_out_ = 0;
-    *callback_parts_out_ = parts_;
-    *callback_part_count_out_ = part_count_;
+    *reply_errno_out_ = 0;
+    *reply_parts_out_ = parts_;
+    *reply_part_count_out_ = part_count_;
 
     if (message_type_ != error_reply_type)
         return 0;
 
     if (part_count_ == 0) {
-        *callback_errno_out_ = EPROTO;
-        *callback_parts_out_ = NULL;
-        *callback_part_count_out_ = 0;
+        *reply_errno_out_ = EPROTO;
+        *reply_parts_out_ = NULL;
+        *reply_part_count_out_ = 0;
         return 0;
     }
 
     zlink::msg_t *errno_part = reinterpret_cast<zlink::msg_t *> (&parts_[0]);
     if (!errno_part->check () || errno_part->size () != 4) {
-        *callback_errno_out_ = EPROTO;
-        *callback_parts_out_ = NULL;
-        *callback_part_count_out_ = 0;
+        *reply_errno_out_ = EPROTO;
+        *reply_parts_out_ = NULL;
+        *reply_part_count_out_ = 0;
         return 0;
     }
 
     const unsigned char *errbuf = static_cast<const unsigned char *> (errno_part->data ());
-    *callback_errno_out_ = static_cast<int> (zlink::get_uint32 (errbuf));
-    if (*callback_errno_out_ == 0) {
-        *callback_errno_out_ = EPROTO;
-        *callback_parts_out_ = NULL;
-        *callback_part_count_out_ = 0;
+    *reply_errno_out_ = static_cast<int> (zlink::get_uint32 (errbuf));
+    if (*reply_errno_out_ == 0) {
+        *reply_errno_out_ = EPROTO;
+        *reply_parts_out_ = NULL;
+        *reply_part_count_out_ = 0;
         return 0;
     }
-    *callback_parts_out_ = part_count_ > 1 ? parts_ + 1 : NULL;
-    *callback_part_count_out_ = part_count_ > 0 ? part_count_ - 1 : 0;
+    *reply_parts_out_ = part_count_ > 1 ? parts_ + 1 : NULL;
+    *reply_part_count_out_ = part_count_ > 0 ? part_count_ - 1 : 0;
     return 0;
 }
 

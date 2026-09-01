@@ -136,10 +136,10 @@ void zlink::socket_base_t::write_receive_flow_state_frame (
     flow_state::frame_t frame;
     frame.version = flow_state::frame_protocol_version;
     frame.state = state_;
-    frame.pair_id = completion_pipe_->get_transport_pair_id ();
-    frame.generation = completion_pipe_->get_transport_pair_generation ();
     frame.epoch = epoch_;
-    if (frame.pair_id == 0 || frame.generation == 0 || frame.epoch == 0)
+    if (completion_pipe_->get_transport_pair_id () == 0
+        || completion_pipe_->get_transport_pair_generation () == 0
+        || frame.epoch == 0)
         return;
 
     msg_t msg;
@@ -194,26 +194,28 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
     if (decoded != flow_state::decode_ok || !completion_pipe_)
         return true;
 
-    //  Both lanes of a pair carry the same id and generation, so those two
-    //  fields cannot tell them apart. The lane of the receiving pipe is local
-    //  truth the peer cannot influence: flow state travels on the completion
-    //  lane only, and an application-lane frame is dropped.
+    //  The lane and physical connection of the receiving pipe are local truth
+    //  the peer cannot influence. FLOWSTATE carries no pair identity on the
+    //  wire and is valid only on the completion connection that delivered it.
     if (completion_pipe_->get_transport_lane () != transport_lane_completion)
         return true;
 
     const uint64_t pair_id = completion_pipe_->get_transport_pair_id ();
     const uint64_t generation =
       completion_pipe_->get_transport_pair_generation ();
-    //  A frame that names another pair is not addressed to this pipe at all,
-    //  not a stale replay of something that was.
-    if (pair_id == 0 || generation == 0 || frame.pair_id != pair_id)
+    const uint64_t source_connection_id = msg_.transport_connection_id ();
+    const uint64_t current_connection_id =
+      completion_pipe_->get_transport_connection_id ();
+    if (pair_id == 0 || generation == 0)
         return true;
-    //  A generation other than the one this physical connection carries is a
-    //  late frame from a previous connection to the same pair and is ignored.
-    if (frame.generation != generation) {
-        note_flow_state_stale (true, frame.generation, generation, frame.epoch,
-                               0, pair_id,
-                               completion_pipe_->get_endpoint_pair ());
+    //  A retired physical connection is consumed without a public event. It
+    //  has no current peer identity, but still contributes to the diagnostic
+    //  stale counter.
+    if (source_connection_id == 0
+        || source_connection_id != current_connection_id
+        || !completion_pipe_->is_lifecycle_active ()) {
+        note_flow_state_stale (true, generation, generation, frame.epoch, 0,
+                               pair_id, NULL);
         return true;
     }
 
@@ -235,21 +237,24 @@ bool zlink::socket_base_t::consume_receive_flow_state_frame (
         //  metric, or event.
         transport_pair_pipes_t &pair =
           _transport_pairs[transport_pair_key_t (pair_id, generation)];
-        if (pair.completion && pair.completion != completion_pipe_)
+        if (!completion_pipe_->is_lifecycle_active ()
+            || completion_pipe_->get_transport_connection_id ()
+                 != source_connection_id
+            || (pair.completion && pair.completion != completion_pipe_)) {
+            _flow_state_stale_total.fetch_add (1, std::memory_order_relaxed);
             return true;
+        }
         if (!pair.ready || pair.completion != completion_pipe_) {
-            buffer_pending_flow_state_locked (
-              pair, completion_pipe_->get_transport_connection_id (), paused,
-              frame.epoch);
+            buffer_pending_flow_state_locked (pair, source_connection_id,
+                                              paused, frame.epoch);
             return true;
         }
 
         //  Duplicate or reversed epoch within one generation.
         if (pair.remote_flow_seen && frame.epoch <= pair.remote_flow_epoch) {
-            note_flow_state_stale (false, frame.generation, generation,
+            note_flow_state_stale (false, generation, generation,
                                    frame.epoch, pair.remote_flow_epoch,
-                                   pair_id,
-                                   completion_pipe_->get_endpoint_pair ());
+                                   pair_id, pair.application);
             return true;
         }
         pair.remote_flow_epoch = frame.epoch;
@@ -423,8 +428,9 @@ void zlink::socket_base_t::flow_state_applied (
       !paused_ && actual_writable_
         ? static_cast<uint32_t> (socket_monitor_internal_send_flow_writable)
         : 0u;
-    event (pipe_->get_endpoint_pair (), routing_id_data, routing_id.size (),
-          values, 1,
+    endpoint_uri_pair_t endpoint_pair = pipe_->get_endpoint_pair ();
+    endpoint_pair.connection_id = pipe_->get_transport_connection_id ();
+    event (endpoint_pair, routing_id_data, routing_id.size (), values, 1,
           paused_ ? ZLINK_EVENT_SEND_FLOW_PAUSED : ZLINK_EVENT_SEND_FLOW_RESUMED,
           flags, pipe_->get_transport_lane (), pipe_->get_transport_pair_id (),
           pipe_->get_transport_pair_generation ());
@@ -459,27 +465,26 @@ void zlink::socket_base_t::note_flow_state_stale (
   bool generation_stale_, uint64_t received_generation_,
   uint64_t current_generation_, uint64_t received_epoch_,
   uint64_t current_epoch_, uint64_t pair_id_,
-  const endpoint_uri_pair_t &endpoint_uri_pair_)
+  pipe_t *application_pipe_)
 {
     _flow_state_stale_total.fetch_add (1, std::memory_order_relaxed);
-    //  Two reasons, and each one has exactly one number the operator cannot
-    //  reconstruct. A generation-stale frame belongs to a dead connection, so
-    //  its epoch means nothing and the received generation is what matters;
-    //  the current generation is already a field of this event. An
-    //  epoch-stale frame carries the current generation by definition, so the
-    //  received epoch is what matters; the current epoch is the one the
-    //  preceding PAUSED or RESUMED event reported for this pair. The reason
-    //  flag says which of the two `value` holds, so it is never ambiguous.
-    uint64_t values[4] = {generation_stale_ ? received_generation_
-                                            : received_epoch_,
-                          received_generation_, received_epoch_,
+    //  A frame for another physical connection has no public peer identity.
+    //  It contributes to the diagnostic counter only.
+    if (generation_stale_ || !application_pipe_)
+        return;
+
+    endpoint_uri_pair_t endpoint_pair = application_pipe_->get_endpoint_pair ();
+    endpoint_pair.connection_id =
+      application_pipe_->get_transport_connection_id ();
+    const blob_t &routing_id = application_pipe_->get_routing_id ();
+    const unsigned char *routing_id_data =
+      routing_id.size () > 0 ? routing_id.data () : NULL;
+    uint64_t values[4] = {received_epoch_, received_generation_, received_epoch_,
                           current_epoch_};
-    const uint32_t flags = static_cast<uint32_t> (
-      generation_stale_ ? socket_monitor_internal_flow_state_stale_generation
-                        : socket_monitor_internal_flow_state_stale_epoch);
-    event (endpoint_uri_pair_, NULL, 0, values, 4,
-          ZLINK_EVENT_FLOW_STATE_STALE, flags, transport_lane_completion,
-          pair_id_, current_generation_);
+    event (endpoint_pair, routing_id_data, routing_id.size (), values, 4,
+           ZLINK_EVENT_FLOW_STATE_STALE,
+           socket_monitor_internal_flow_state_stale_epoch,
+           transport_lane_application, pair_id_, current_generation_);
 }
 
 void zlink::socket_base_t::flow_state_metrics (
@@ -523,6 +528,56 @@ zlink::pipe_t *zlink::socket_base_t::test_pair_pipe (
     if (it == _transport_pairs.end ())
         return NULL;
     return completion_lane_ ? it->second.completion : it->second.application;
+}
+
+bool zlink::socket_base_t::test_pair_identity_for_peer (
+  const unsigned char *peer_routing_id_, size_t peer_routing_id_size_,
+  uint64_t *transport_pair_id_out_,
+  uint64_t *transport_pair_generation_out_, bool *ready_out_) const
+{
+    if ((!peer_routing_id_ && peer_routing_id_size_ != 0)
+        || !transport_pair_id_out_
+        || !transport_pair_generation_out_)
+        return false;
+
+    scoped_lock_t lock (_transport_pairs_sync);
+    const transport_pairs_t::const_iterator end = _transport_pairs.end ();
+    transport_pairs_t::const_iterator selected = end;
+    for (transport_pairs_t::const_iterator it = _transport_pairs.begin ();
+         it != end; ++it) {
+        pipe_t *const pipe = it->second.application
+                               ? it->second.application
+                               : it->second.completion;
+        if (!pipe)
+            continue;
+        const blob_t &peer_identity =
+          pipe->get_transport_peer_identity ().size () != 0
+            ? pipe->get_transport_peer_identity ()
+            : pipe->get_routing_id ();
+        if (peer_identity.size () != peer_routing_id_size_
+            || (peer_routing_id_size_ != 0
+                && memcmp (peer_identity.data (), peer_routing_id_,
+                           peer_routing_id_size_) != 0))
+            continue;
+        const bool pair_ready = it->second.ready
+                                && it->second.application
+                                && it->second.completion;
+        if (pair_ready) {
+            selected = it;
+            break;
+        }
+        if (selected == end)
+            selected = it;
+    }
+    if (selected == end)
+        return false;
+    *transport_pair_id_out_ = selected->first.first;
+    *transport_pair_generation_out_ = selected->first.second;
+    if (ready_out_)
+        *ready_out_ = selected->second.ready
+                      && selected->second.application
+                      && selected->second.completion;
+    return true;
 }
 
 bool zlink::socket_base_t::test_application_pipe_flow_probe (
@@ -616,12 +671,19 @@ uint64_t zlink::socket_base_t::test_local_receive_flow_epoch () const
 bool zlink::socket_base_t::test_pair_is_ready (
   uint64_t transport_pair_id_, uint64_t transport_pair_generation_) const
 {
+    return transport_pair_is_ready (transport_pair_id_,
+                                    transport_pair_generation_);
+}
+#endif
+
+bool zlink::socket_base_t::transport_pair_is_ready (
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_) const
+{
     scoped_lock_t lock (_transport_pairs_sync);
     const transport_pairs_t::const_iterator it = _transport_pairs.find (
       transport_pair_key_t (transport_pair_id_, transport_pair_generation_));
     return it != _transport_pairs.end () && it->second.ready;
 }
-#endif
 
 #ifdef ZLINK_BUILD_TESTS
 bool zlink::socket_base_t::test_set_pair_received_flow_state (

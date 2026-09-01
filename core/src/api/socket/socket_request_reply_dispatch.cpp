@@ -4,19 +4,15 @@
 
 #include "api/socket/request_reply_frame_buffer_internal.hpp"
 #include "api/socket/request_reply_protocol_internal.hpp"
+#include "api/message/request_result_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "sockets/common/socket_base.hpp"
+#include "utils/allocator.hpp"
 
 namespace zlink
 {
 namespace socket_reqrep_internal
 {
-router_recv_metadata_tls_t &router_recv_metadata_tls ()
-{
-    static thread_local router_recv_metadata_tls_t metadata;
-    return metadata;
-}
-
 namespace
 {
 enum completion_message_result_t
@@ -25,8 +21,105 @@ enum completion_message_result_t
     completion_message_protocol_error
 };
 
+int move_completion_payload (zlink_msg_t *parts_, size_t start_,
+                             size_t count_, zlink_msg_t **owned_out_)
+{
+    if (!owned_out_ || (!parts_ && count_ != 0)) {
+        errno = EFAULT;
+        return -1;
+    }
+    *owned_out_ = NULL;
+    if (count_ == 0)
+        return 0;
+
+    zlink_msg_t *owned = NULL;
+    try {
+#ifdef ZLINK_BUILD_TESTS
+        test_throw_request_reply_allocation_failpoint (
+          request_reply_allocation_payload_export);
+#endif
+        owned = static_cast<zlink_msg_t *> (
+          zlink::alloc (sizeof (zlink_msg_t) * count_));
+    } catch (...) {
+        owned = NULL;
+    }
+    if (!owned) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    size_t initialized = 0;
+    for (; initialized != count_; ++initialized) {
+        if (zlink_msg_init (&owned[initialized]) != ZLINK_CONFIG_OK)
+            break;
+    }
+    if (initialized != count_) {
+        const int saved_errno = errno;
+        zlink_multipart_close (owned, initialized);
+        zlink::dealloc (owned);
+        errno = saved_errno != 0 ? saved_errno : EIO;
+        return -1;
+    }
+    for (size_t i = 0; i != count_; ++i) {
+        if (zlink_msg_move (&owned[i], &parts_[start_ + i])
+            != ZLINK_CONFIG_OK) {
+            const int saved_errno = errno;
+            zlink_multipart_close (owned, count_);
+            zlink::dealloc (owned);
+            errno = saved_errno != 0 ? saved_errno : EIO;
+            return -1;
+        }
+    }
+    *owned_out_ = owned;
+    return 0;
+}
+
+int publish_pull_reply_completion (
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  pending_request_t *pending_, uint8_t message_type_, zlink_msg_t *parts_,
+  size_t part_count_)
+{
+    zlink_request_result_t result = ZLINK_REQUEST_OK;
+    size_t payload_start = 0;
+    size_t payload_count = part_count_;
+
+    if (message_type_ == zlink::request_reply::error_reply_type) {
+        result = ZLINK_REQUEST_PROTOCOL_ERROR;
+        payload_count = 0;
+        if (part_count_ != 0) {
+            zlink::msg_t *const errno_part =
+              reinterpret_cast<zlink::msg_t *> (&parts_[0]);
+            if (errno_part->check () && errno_part->size () == 4) {
+                const unsigned char *const bytes =
+                  static_cast<const unsigned char *> (errno_part->data ());
+                const int reply_errno =
+                  static_cast<int> (zlink::get_uint32 (bytes));
+                if (reply_errno != 0) {
+                    result = zlink::request_result_internal::from_errno (
+                      reply_errno);
+                    payload_start = 1;
+                    payload_count = part_count_ - 1;
+                }
+            }
+        }
+    }
+
+    zlink_msg_t *owned_payload = NULL;
+    if (payload_count != 0
+        && move_completion_payload (parts_, payload_start, payload_count,
+                                    &owned_payload)
+             != 0) {
+        result = ZLINK_REQUEST_INTERNAL_ERROR;
+        payload_count = 0;
+        owned_payload = NULL;
+    }
+
+    return publish_pending_request_completion (
+      state_, pending_, result, owned_payload, payload_count);
+}
+
 completion_message_result_t complete_reply_from_transport (
-  socket_request_reply_state_t *state_,
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
   uint64_t transport_pair_id_,
   uint64_t transport_pair_generation_,
   uint8_t message_type_,
@@ -49,17 +142,11 @@ completion_message_result_t complete_reply_from_transport (
         return completion_message_accepted;
     }
 
-    zlink::socket_callback_scope_t callback_scope (state_->socket);
-    if (!callback_scope.acquired ()) {
-        zlink::request_reply::close_request_reply_parts (parts_, part_count_);
-        return completion_message_accepted;
-    }
-
     pending_request_t pending;
     {
         std::lock_guard<std::mutex> lock (state_->mutex);
         if (!take_pending_reply_from_transport_locked (
-              state_, request_sequence_, transport_pair_id_,
+              state_.get (), request_sequence_, transport_pair_id_,
               transport_pair_generation_, &pending)) {
             zlink::request_reply::close_request_reply_parts (parts_, part_count_);
             return completion_message_accepted;
@@ -68,32 +155,8 @@ completion_message_result_t complete_reply_from_transport (
     release_socket_pending_request_correlation (&pending);
     zlink::request_timeout::cancel (pending.timeout_task);
 
-    int callback_errno = 0;
-    zlink_msg_t *callback_parts = parts_;
-    size_t callback_part_count = part_count_;
-    if (zlink::request_reply::decode_reply_completion (
-          message_type_, parts_, part_count_,
-          &callback_errno, &callback_parts, &callback_part_count)
-        != 0) {
-        callback_errno = EPROTO;
-        callback_parts = NULL;
-        callback_part_count = 0;
-    }
-    zlink::request_completion::claim_owner_thread (&state_->completion);
-    zlink::request_completion::invoke_callback (
-      state_->socket, pending.handler, callback_errno, callback_parts,
-      callback_part_count, pending.userdata);
-    zlink::request_completion::release_reservation (&state_->completion);
-    // The readable completion lane already scheduled the current completion
-    // owner. This reply has now been delivered directly, so publishing another
-    // wake would only make the next public request process a stale command.
-
-    // Callback-visible message ownership transfers to the callback. A
-    // conforming callback closes or moves every exposed part before returning.
-    // Defensively consume any slot that is still valid afterwards:
-    // close leaves an invalid slot, move leaves a valid empty source, and an
-    // untouched slot still owns the received storage. This preserves callback
-    // ownership while preventing legacy callbacks from leaking every reply.
+    (void) publish_pull_reply_completion (
+      state_, &pending, message_type_, parts_, part_count_);
     zlink::request_reply::consume_send_frames_from (parts_, 0, part_count_);
     return completion_message_accepted;
 }
@@ -198,7 +261,7 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
 
                 if (!more) {
                     if (complete_reply_from_transport (
-                          state.get (), pipe_->get_transport_pair_id (),
+                          state, pipe_->get_transport_pair_id (),
                           pipe_->get_transport_pair_generation (),
                           message_type, request_sequence,
                           reinterpret_cast<zlink_msg_t *> (&frame), 1)
@@ -252,7 +315,7 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
         }
 
         if (complete_reply_from_transport (
-              state.get (), pipe_->get_transport_pair_id (),
+              state, pipe_->get_transport_pair_id (),
               pipe_->get_transport_pair_generation (), message_type,
               request_sequence, &parts[0],
               parts.size ())
@@ -267,42 +330,62 @@ bool has_pending_request_work (const std::shared_ptr<socket_request_reply_state_
 {
     if (!state_)
         return false;
-    if (has_pending_reply_completions (state_))
-        return true;
 
     std::lock_guard<std::mutex> lock (state_->mutex);
     return !state_->pending_requests.empty ();
 }
 
-void fail_disconnected_peer_requests (
+void fail_pending_requests_for_logical_endpoint (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
-  uint64_t transport_pair_id_,
-  uint64_t transport_pair_generation_,
-  const unsigned char *routing_id_,
-  size_t routing_id_size_,
-  int errnum_)
+  const std::string &logical_endpoint_)
 {
-    if (!state_)
+    if (!state_ || logical_endpoint_.empty ())
         return;
 
-    LIBZLINK_UNUSED (routing_id_);
-    LIBZLINK_UNUSED (routing_id_size_);
+    const int saved_errno = errno;
     while (true) {
-        pending_request_t failed;
+        pending_request_t not_found;
         bool found = false;
         {
             std::lock_guard<std::mutex> lock (state_->mutex);
-            found = take_disconnected_socket_pending_request_locked (
-              state_.get (), transport_pair_id_, transport_pair_generation_,
-              &failed);
+            found =
+              take_next_socket_pending_request_for_logical_endpoint_locked (
+                state_.get (), logical_endpoint_, &not_found);
         }
         if (!found)
             break;
-        release_socket_pending_request_correlation (&failed);
-        zlink::request_timeout::cancel (failed.timeout_task);
-        (void) queue_reply_completion (
-          state_, failed.handler, failed.userdata, errnum_, NULL, 0);
+        release_socket_pending_request_correlation (&not_found);
+        zlink::request_timeout::cancel (not_found.timeout_task);
+        (void) publish_pending_request_completion (
+          state_, &not_found, ZLINK_REQUEST_NOT_FOUND, NULL, 0);
     }
+    errno = saved_errno;
+}
+
+void fail_pending_requests_for_logical_rid (
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  const zlink_routing_id_t *logical_rid_)
+{
+    if (!state_ || !logical_rid_ || logical_rid_->size == 0)
+        return;
+
+    const int saved_errno = errno;
+    while (true) {
+        pending_request_t not_found;
+        bool found = false;
+        {
+            std::lock_guard<std::mutex> lock (state_->mutex);
+            found = take_next_socket_pending_request_for_logical_rid_locked (
+              state_.get (), logical_rid_, &not_found);
+        }
+        if (!found)
+            break;
+        release_socket_pending_request_correlation (&not_found);
+        zlink::request_timeout::cancel (not_found.timeout_task);
+        (void) publish_pending_request_completion (
+          state_, &not_found, ZLINK_REQUEST_NOT_FOUND, NULL, 0);
+    }
+    errno = saved_errno;
 }
 
 int drain_close_request_reply_socket (const socket_handle_t &handle_)
@@ -320,6 +403,7 @@ int drain_close_request_reply_socket (const socket_handle_t &handle_)
         std::lock_guard<std::mutex> lock (state->mutex);
         state->closing = true;
     }
+    abandon_public_router_reply_sequence (state);
 
     while (true) {
         pending_request_t pending;
@@ -333,10 +417,9 @@ int drain_close_request_reply_socket (const socket_handle_t &handle_)
             break;
         release_socket_pending_request_correlation (&pending);
         zlink::request_timeout::cancel (pending.timeout_task);
-        if (queue_reply_completion (state, pending.handler, pending.userdata,
-                                    ETERM, NULL, 0)
-            != 0)
-            return -1;
+        // Public close discards unresolved and unread pull records; it is not
+        // a completion-producing drain phase.
+        release_pending_request_completion (state, &pending);
     }
 
     {
@@ -347,7 +430,7 @@ int drain_close_request_reply_socket (const socket_handle_t &handle_)
           state->reply_target_reservations + state->reply_target_checkouts;
     }
 
-    return drain_reply_completions_while_closing (state, handle_.socket);
+    return 0;
 }
 
 void cleanup_request_reply_socket (const socket_handle_t &handle_)
@@ -357,12 +440,16 @@ void cleanup_request_reply_socket (const socket_handle_t &handle_)
 
     std::shared_ptr<socket_request_reply_state_t> state = handle_.socket->request_reply_state ();
     if (state) {
+        {
+            std::lock_guard<std::mutex> state_lock (state->mutex);
+            state->closing = true;
+        }
+        abandon_public_router_reply_sequence (state);
         while (true) {
             pending_request_t pending;
             bool found = false;
             {
                 std::lock_guard<std::mutex> state_lock (state->mutex);
-                state->closing = true;
                 found = take_next_socket_pending_request_locked (state.get (),
                                                                  &pending);
             }
@@ -370,8 +457,7 @@ void cleanup_request_reply_socket (const socket_handle_t &handle_)
                 break;
             release_socket_pending_request_correlation (&pending);
             zlink::request_timeout::cancel (pending.timeout_task);
-            zlink::request_completion::release_reservation (
-              &state->completion);
+            release_pending_request_completion (state, &pending);
         }
         {
             std::lock_guard<std::mutex> state_lock (state->mutex);
@@ -380,7 +466,6 @@ void cleanup_request_reply_socket (const socket_handle_t &handle_)
             clear_router_reply_targets_locked (state.get ());
             state->reply_target_slots =
               state->reply_target_reservations + state->reply_target_checkouts;
-            zlink::request_completion::close (&state->completion);
         }
     }
     handle_.socket->clear_request_reply_state ();

@@ -39,6 +39,7 @@ enum recv_family_t
     recv_family_none = 0,
     recv_family_basic,
     recv_family_subscribe,
+    recv_family_xpub,
     recv_family_router,
     recv_family_dealer
 };
@@ -52,8 +53,6 @@ struct send_sequence_spec_t
     uint32_t timeout_ms;
     uint64_t request_seq;
     uint64_t pending_cookie;
-    zlink_reply_handler_fn handler;
-    void *userdata;
     zlink_routing_id_t rid1;
     zlink_routing_id_t rid2;
     bool has_rid1;
@@ -100,6 +99,7 @@ struct recv_sequence_state_t
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
     uint8_t message_type;
+    int subscribed;
     std::string topic_id;
     recv_part_buffer_t buffered_parts;
     size_t next_part_index;

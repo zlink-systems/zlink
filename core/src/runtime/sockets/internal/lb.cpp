@@ -177,6 +177,31 @@ bool zlink::lb_t::contains (pipe_t *pipe_) const
     return false;
 }
 
+bool zlink::lb_t::has_matching_pipe (connected_pipe_filter_fn filter_,
+                                     void *filter_userdata_) const
+{
+    if (!filter_)
+        return !_entries.empty ();
+    for (entries_t::const_iterator it = _entries.begin ();
+         it != _entries.end (); ++it) {
+        if (it->first && filter_ (it->first, filter_userdata_))
+            return true;
+    }
+    return false;
+}
+
+bool zlink::lb_t::has_positive_matching_pipe (
+  connected_pipe_filter_fn filter_, void *filter_userdata_) const
+{
+    for (entries_t::const_iterator it = _entries.begin ();
+         it != _entries.end (); ++it) {
+        if (it->first && it->second.weight > 0
+            && (!filter_ || filter_ (it->first, filter_userdata_)))
+            return true;
+    }
+    return false;
+}
+
 #ifdef ZLINK_BUILD_TESTS
 size_t zlink::lb_t::test_weight_count (uint32_t weight_) const
 {
@@ -259,6 +284,19 @@ zlink::pipe_t *zlink::lb_t::find_connected_pipe (
         const blob_t &routing_id = pipe->get_routing_id ();
         if (routing_id.size () == peer_rid_size_
             && memcmp (routing_id.data (), peer_rid_, peer_rid_size_) == 0)
+            return pipe;
+    }
+    return NULL;
+}
+
+zlink::pipe_t *zlink::lb_t::find_pipe_by_endpoint (
+  const std::string &endpoint_) const
+{
+    if (endpoint_.empty ())
+        return NULL;
+    for (pipes_t::size_type i = 0; i < _pipes.size (); ++i) {
+        pipe_t *const pipe = _pipes[i];
+        if (pipe && pipe->get_endpoint_pair ().identifier () == endpoint_)
             return pipe;
     }
     return NULL;
@@ -444,10 +482,11 @@ int zlink::lb_t::sendpipe (
         return 0;
     }
 
-    // Correlation is published only on the first physical application frame.
-    // Continuations already have a committed route and must not run a second
-    // observer transaction.
-    if (observer_ && _more) {
+    // A complete-record REQUEST publishes correlation on the final physical
+    // frame, immediately before that frame flushes the already staged prefix.
+    // An observer on an intermediate continuation cannot define such a commit
+    // point and is therefore invalid.
+    if (observer_ && _more && (msg_->flags () & msg_t::more) != 0) {
         errno = EINVAL;
         return -1;
     }
@@ -457,10 +496,13 @@ int zlink::lb_t::sendpipe (
         pipe_message_admission_t write_admission =
           pipe_message_admission_invalid;
         const bool ok =
-          more ? _weighted_multipart_pipe->write (msg_, &write_admission)
-               : _weighted_multipart_pipe
-                   ->write_single_message_and_flush_no_recursive_hwm_check (
-                     msg_, &write_admission);
+          observer_
+            ? _weighted_multipart_pipe->write_message_observed (
+                msg_, observer_, observer_userdata_, &write_admission)
+          : more ? _weighted_multipart_pipe->write (msg_, &write_admission)
+                 : _weighted_multipart_pipe
+                     ->write_single_message_and_flush_no_recursive_hwm_check (
+                       msg_, &write_admission);
         if (!ok) {
             if (admission_out_)
                 *admission_out_ = write_admission;

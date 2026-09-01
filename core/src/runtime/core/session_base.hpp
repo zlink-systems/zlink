@@ -64,6 +64,7 @@ class session_base_t : public own_t, public io_object_t, public i_pipe_events
     socket_base_t *get_socket () const;
     const endpoint_uri_pair_t &get_endpoint () const;
     void set_peer_routing_id (const unsigned char *data_, size_t size_);
+    void set_peer_socket_type (int socket_type_);
     void snapshot_peer_routing_id (blob_t *routing_id_) const;
     transport_lane_t transport_lane () const { return _transport_lane; }
     uint64_t transport_pair_id () const { return _transport_pair_id; }
@@ -145,6 +146,7 @@ class session_base_t : public own_t, public io_object_t, public i_pipe_events
     //  Peer routing id received during handshake before the pipe exists.
     blob_t _pending_peer_routing_id;
     bool _pending_peer_routing_id_valid;
+    int _pending_peer_socket_type;
     uint64_t _peer_max_message_bytes;
     transport_lane_t _transport_lane;
     uint64_t _transport_pair_id;

@@ -8,7 +8,9 @@
 #include "utils/stdint.hpp"
 
 #include <stddef.h>
+#include <atomic>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 //  General, i.e. non-security specific, monitor utilities
@@ -48,11 +50,16 @@ void expect_monitor_event_v2 (void *monitor_,
 
 struct test_monitor_probe_t
 {
+    test_monitor_probe_t () : monitor (NULL), stop (false) {}
+
     std::mutex sync;
     std::vector<uint64_t> events;
     //  Full records, parallel to events, so a test can assert the payload an
     //  operator actually receives and not only the event id.
     std::vector<zlink_monitor_event_t> records;
+    void *monitor;
+    std::atomic<bool> stop;
+    std::thread receiver;
 };
 
 void *open_test_monitor_probe (void *socket_,
@@ -80,5 +87,30 @@ bool wait_monitor_event_routing_id (void *monitor_,
                                     unsigned char *routing_id_out_,
                                     size_t routing_id_size_,
                                     int timeout_ms_);
+
+typedef void (*test_monitor_event_sink_fn) (const zlink_monitor_event_t *, void *);
+
+//  Test-side adapter for scenarios that need a background consumer while
+//  driving another socket. The Core surface exercised here is still the
+//  public pull API; this helper owns and joins its receiver thread.
+class test_monitor_pull_dispatch_t
+{
+  public:
+    test_monitor_pull_dispatch_t ();
+    ~test_monitor_pull_dispatch_t ();
+
+    bool start (void *monitor_, test_monitor_event_sink_fn sink_, void *userdata_);
+    void stop ();
+
+  private:
+    void *monitor;
+    test_monitor_event_sink_fn sink;
+    void *userdata;
+    std::atomic<bool> stop_requested;
+    std::thread receiver;
+
+    test_monitor_pull_dispatch_t (const test_monitor_pull_dispatch_t &);
+    test_monitor_pull_dispatch_t &operator= (const test_monitor_pull_dispatch_t &);
+};
 
 #endif

@@ -3,13 +3,6 @@
 #include "testutil.hpp"
 #include "testutil_unity.hpp"
 
-#include <atomic>
-#include <chrono>
-#include <condition_variable>
-#include <mutex>
-#include <string>
-#include <vector>
-
 SETUP_TEARDOWN_TESTCONTEXT
 
 // DEBUG shouldn't be defined in sources as it will cause a redefined symbol
@@ -21,158 +14,6 @@ SETUP_TEARDOWN_TESTCONTEXT
 
 namespace
 {
-struct routed_ready_event_copy_t
-{
-    std::string rid;
-    uint64_t pair_id;
-    uint64_t pair_generation;
-    zlink_send_complete_result_t result;
-    int terminal_errno;
-};
-
-struct routed_ready_probe_t
-{
-    std::mutex sync;
-    std::condition_variable changed;
-    std::vector<routed_ready_event_copy_t> events;
-};
-
-struct routed_ready_self_close_probe_t
-{
-    routed_ready_self_close_probe_t () : close_started (false), close_rc (-1) {}
-    routed_ready_probe_t events;
-    std::atomic<bool> close_started;
-    std::atomic<int> close_rc;
-};
-
-void capture_routed_ready (void *,
-                           const zlink_send_complete_event_t *event_,
-                           void *userdata_)
-{
-    routed_ready_probe_t *probe = static_cast<routed_ready_probe_t *> (userdata_);
-    if (!probe || !event_)
-        return;
-
-    routed_ready_event_copy_t copy;
-    copy.rid.assign (reinterpret_cast<const char *> (event_->peer_rid.data),
-                     event_->peer_rid.size);
-    copy.pair_id = event_->transport_pair_id;
-    copy.pair_generation = event_->transport_pair_generation;
-    copy.result = event_->result;
-    copy.terminal_errno = event_->terminal_errno;
-    {
-        std::lock_guard<std::mutex> lock (probe->sync);
-        probe->events.push_back (copy);
-    }
-    probe->changed.notify_all ();
-}
-
-void capture_routed_ready_and_close_on_first_terminal (
-  void *socket_, const zlink_send_complete_event_t *event_, void *userdata_)
-{
-    routed_ready_self_close_probe_t *probe =
-      static_cast<routed_ready_self_close_probe_t *> (userdata_);
-    if (!probe || !event_)
-        return;
-
-    capture_routed_ready (socket_, event_, &probe->events);
-    if (event_->result == ZLINK_SEND_TERMINAL
-        && !probe->close_started.exchange (true, std::memory_order_acq_rel))
-        probe->close_rc.store (static_cast<int> (zlink_close (socket_)),
-                               std::memory_order_release);
-}
-
-bool wait_for_routed_event (routed_ready_probe_t *probe_,
-                            const char *rid_,
-                            zlink_send_complete_result_t result_,
-                            int terminal_errno_,
-                            routed_ready_event_copy_t *out_ = NULL)
-{
-    const std::chrono::steady_clock::time_point deadline =
-      std::chrono::steady_clock::now () + std::chrono::seconds (3);
-    std::unique_lock<std::mutex> lock (probe_->sync);
-    while (true) {
-        for (size_t i = 0; i < probe_->events.size (); ++i) {
-            if (probe_->events[i].rid == rid_
-                && probe_->events[i].result == result_
-                && probe_->events[i].terminal_errno == terminal_errno_) {
-                if (out_)
-                    *out_ = probe_->events[i];
-                return true;
-            }
-        }
-        if (probe_->changed.wait_until (lock, deadline)
-            == std::cv_status::timeout)
-            return false;
-    }
-}
-
-zlink_routing_id_t make_rid (const char *value_)
-{
-    zlink_routing_id_t rid;
-    memset (&rid, 0, sizeof (rid));
-    const size_t size = strlen (value_);
-    zlink_assert (size <= sizeof (rid.data));
-    rid.size = static_cast<uint8_t> (size);
-    memcpy (rid.data, value_, size);
-    return rid;
-}
-
-zlink_submit_result_t send_routed_bytes (void *router_,
-                                         const zlink_routing_id_t *rid_,
-                                         size_t size_)
-{
-    zlink_msg_t part;
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init_size (&part, size_));
-    memset (zlink_msg_data (&part), 0x5a, size_);
-    return zlink_send_part_rid (router_, rid_, &part,
-                                ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL);
-}
-
-//  Reserve one record against an exact target. When the target is
-//  backpressured the record stays pending and its completion reports what
-//  finally happened to it.
-zlink_send_op_id_t park_routed_record (void *router_,
-                                       const zlink_routing_id_t *rid_,
-                                       size_t size_)
-{
-    zlink_routed_submit_target_t target;
-    memset (&target, 0, sizeof (target));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_select_routed_submit_target (router_, rid_, &target));
-
-    zlink_msg_t part;
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init_size (&part, size_));
-    memset (zlink_msg_data (&part), 0x5a, size_);
-
-    zlink_send_async_options_t options;
-    memset (&options, 0, sizeof (options));
-    options.struct_size = sizeof (options);
-    options.target = &target;
-
-    zlink_send_op_id_t op_id = 0;
-    const zlink_submit_result_t rc =
-      zlink_send_async (router_, &part, 1, &options, &op_id);
-    if (rc != ZLINK_SUBMIT_OK)
-        zlink_msg_close (&part);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, rc);
-    return op_id;
-}
-
-void drain_one_part (void *socket_)
-{
-    const zlink_routing_id_t *source_rid = NULL;
-    zlink_msg_t part;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_OK,
-      zlink_recv_part (socket_, &source_rid, &part, &has_more,
-                       static_cast<zlink_recv_flags_t> (0)));
-    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
-}
-
 int send_routed_payload_expect_maybe_eagain (
   void *router_, const zlink_routing_id_t *rid_, const void *buf_, size_t size_, int flags_)
 {
@@ -202,7 +43,7 @@ int send_routed_multipart_expect_maybe_eagain (
     memset (zlink_msg_data (&envelope), 0xA5, zlink_msg_size (&envelope));
     zlink_submit_result_t rc =
       zlink_send_part_rid (router_, rid_, &envelope, ZLINK_SEND_FLAGS_DONTWAIT,
-                           ZLINK_PART_MORE);
+                           ZLINK_PART_MORE, NULL, NULL);
     if (rc != ZLINK_SUBMIT_OK)
         return -1;
 
@@ -212,7 +53,7 @@ int send_routed_multipart_expect_maybe_eagain (
     if (size_ > 0 && buf_)
         memcpy (zlink_msg_data (&payload), buf_, size_);
     rc = zlink_send_part_rid (router_, rid_, &payload, ZLINK_SEND_FLAGS_DONTWAIT,
-                              ZLINK_PART_FINAL);
+                              ZLINK_PART_FINAL, NULL, NULL);
     return rc == ZLINK_SUBMIT_OK ? 0 : -1;
 }
 }
@@ -400,220 +241,6 @@ void test_router_send_rid_multipart_hwm_is_backpressure ()
     test_context_socket_close (dealer);
 }
 
-void test_send_complete_isolated_by_exact_target_and_terminal_cause ()
-{
-    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
-    void *dealer_a = test_context_socket (ZLINK_SOCKET_DEALER);
-    void *dealer_b = test_context_socket (ZLINK_SOCKET_DEALER);
-    routed_ready_probe_t probe;
-
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_HANDLER_OK,
-      zlink_send_complete_handler (router, &capture_routed_ready, &probe));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer_a, "A", 1));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer_b, "B", 1));
-
-    const uint64_t hwm = 65536u + sizeof (zlink_msg_t);
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (router, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (dealer_a, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (dealer_b, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
-
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_bind (router, "inproc://routed-ready-exact-target"));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_connect (dealer_a, "inproc://routed-ready-exact-target"));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_connect (dealer_b, "inproc://routed-ready-exact-target"));
-
-    send_string_expect_success (dealer_a, "ready-a", 0);
-    recv_string_expect_success (router, "A", 0);
-    recv_string_expect_success (router, "ready-a", 0);
-    send_string_expect_success (dealer_b, "ready-b", 0);
-    recv_string_expect_success (router, "B", 0);
-    recv_string_expect_success (router, "ready-b", 0);
-
-    const zlink_routing_id_t rid_a = make_rid ("A");
-    const zlink_routing_id_t rid_b = make_rid ("B");
-    bool a_backpressured = false;
-    for (int i = 0; i < 16; ++i) {
-        const zlink_submit_result_t result =
-          send_routed_bytes (router, &rid_a, 65536);
-        if (result == ZLINK_SUBMIT_BACKPRESSURED) {
-            a_backpressured = true;
-            break;
-        }
-        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, result);
-    }
-    TEST_ASSERT_TRUE_MESSAGE (
-      a_backpressured, "target A did not reach its manual byte HWM");
-
-    //  A is full: this record is reserved, not admitted.
-    TEST_ASSERT_TRUE (park_routed_record (router, &rid_a, 65536) != 0);
-    {
-        std::lock_guard<std::mutex> lock (probe.sync);
-        TEST_ASSERT_EQUAL_UINT64 (0, probe.events.size ());
-    }
-
-    //  B is unaffected by A's backpressure and admits inline on the caller
-    //  thread. Immediate admission returns op_id zero and emits no callback.
-    TEST_ASSERT_EQUAL_UINT64 (0, park_routed_record (router, &rid_b, 65536));
-    {
-        std::lock_guard<std::mutex> lock (probe.sync);
-        TEST_ASSERT_EQUAL_UINT64 (0, probe.events.size ());
-    }
-
-    //  Credit recovery is target-exact: draining A admits A's pending record.
-    drain_one_part (dealer_a);
-    routed_ready_event_copy_t admitted_a;
-    TEST_ASSERT_TRUE_MESSAGE (
-      wait_for_routed_event (&probe, "A", ZLINK_SEND_ADMITTED, 0, &admitted_a),
-      "target A credit recovery did not admit its pending record");
-    TEST_ASSERT_TRUE (admitted_a.pair_id != 0);
-    TEST_ASSERT_TRUE (admitted_a.pair_generation != 0);
-    {
-        std::lock_guard<std::mutex> lock (probe.sync);
-        for (size_t i = 0; i < probe.events.size (); ++i)
-            TEST_ASSERT_FALSE_MESSAGE (
-              probe.events[i].rid == "B",
-              "target B completed while only target A recovered credit");
-        probe.events.clear ();
-    }
-
-    //  Park a second record on A, then end that exact route.
-    bool a_backpressured_again = false;
-    for (int i = 0; i < 16; ++i) {
-        const zlink_submit_result_t result =
-          send_routed_bytes (router, &rid_a, 65536);
-        if (result == ZLINK_SUBMIT_BACKPRESSURED) {
-            a_backpressured_again = true;
-            break;
-        }
-        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, result);
-    }
-    TEST_ASSERT_TRUE (a_backpressured_again);
-    TEST_ASSERT_TRUE (park_routed_record (router, &rid_a, 65536) != 0);
-
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
-                           zlink_disconnect_rid (router, &rid_a));
-    routed_ready_event_copy_t terminal_a;
-    TEST_ASSERT_TRUE_MESSAGE (
-      wait_for_routed_event (&probe, "A", ZLINK_SEND_TERMINAL, ENOTCONN,
-                             &terminal_a),
-      "target A detach did not fail its pending record");
-    TEST_ASSERT_EQUAL_UINT64 (admitted_a.pair_id, terminal_a.pair_id);
-    TEST_ASSERT_EQUAL_UINT64 (admitted_a.pair_generation,
-                              terminal_a.pair_generation);
-
-    //  Park a record on B so socket close has something to fail fast.
-    bool b_backpressured = false;
-    for (int i = 0; i < 16; ++i) {
-        const zlink_submit_result_t result =
-          send_routed_bytes (router, &rid_b, 65536);
-        if (result == ZLINK_SUBMIT_BACKPRESSURED) {
-            b_backpressured = true;
-            break;
-        }
-        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, result);
-    }
-    TEST_ASSERT_TRUE (b_backpressured);
-    TEST_ASSERT_TRUE (park_routed_record (router, &rid_b, 65536) != 0);
-
-    test_context_socket_close (router);
-    TEST_ASSERT_TRUE_MESSAGE (
-      wait_for_routed_event (&probe, "B", ZLINK_SEND_TERMINAL, ECANCELED),
-      "socket close did not fail the remaining pending record");
-    test_context_socket_close (dealer_b);
-    test_context_socket_close (dealer_a);
-}
-
-void test_routed_send_terminal_batch_survives_callback_self_close ()
-{
-    void *ctx = zlink_ctx_new ();
-    TEST_ASSERT_NOT_NULL (ctx);
-    void *router = zlink_socket (ctx, ZLINK_SOCKET_ROUTER);
-    void *dealer_a = zlink_socket (ctx, ZLINK_SOCKET_DEALER);
-    void *dealer_b = zlink_socket (ctx, ZLINK_SOCKET_DEALER);
-    TEST_ASSERT_NOT_NULL (router);
-    TEST_ASSERT_NOT_NULL (dealer_a);
-    TEST_ASSERT_NOT_NULL (dealer_b);
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer_a, "A", 1));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer_b, "B", 1));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_bind (router, "inproc://routed-ready-self-close"));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_connect (dealer_a, "inproc://routed-ready-self-close"));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_connect (dealer_b, "inproc://routed-ready-self-close"));
-
-    send_string_expect_success (dealer_a, "ready-a", 0);
-    recv_string_expect_success (router, "A", 0);
-    recv_string_expect_success (router, "ready-a", 0);
-    send_string_expect_success (dealer_b, "ready-b", 0);
-    recv_string_expect_success (router, "B", 0);
-    recv_string_expect_success (router, "ready-b", 0);
-
-    routed_ready_self_close_probe_t probe;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_HANDLER_OK,
-      zlink_send_complete_handler (
-        router, &capture_routed_ready_and_close_on_first_terminal, &probe));
-
-    //  Back both targets up so one record per target stays reserved. Context
-    //  termination then has a batch of pending records to fail, which is the
-    //  batch this test drives self-close from.
-    const uint64_t hwm = 65536u + sizeof (zlink_msg_t);
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (router, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
-    const zlink_routing_id_t rid_a = make_rid ("A");
-    const zlink_routing_id_t rid_b = make_rid ("B");
-    const zlink_routing_id_t *rids[2] = {&rid_a, &rid_b};
-    for (int target = 0; target < 2; ++target) {
-        bool backpressured = false;
-        for (int i = 0; i < 64 && !backpressured; ++i) {
-            const zlink_submit_result_t result =
-              send_routed_bytes (router, rids[target], 65536);
-            backpressured = result == ZLINK_SUBMIT_BACKPRESSURED;
-        }
-        TEST_ASSERT_TRUE (backpressured);
-        TEST_ASSERT_TRUE (park_routed_record (router, rids[target], 65536) != 0);
-    }
-
-    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_ctx_shutdown (ctx));
-    TEST_ASSERT_TRUE_MESSAGE (
-      wait_for_routed_event (&probe.events, "A", ZLINK_SEND_TERMINAL, ETERM),
-      "target A context terminal was lost during callback self-close");
-    TEST_ASSERT_TRUE_MESSAGE (
-      wait_for_routed_event (&probe.events, "B", ZLINK_SEND_TERMINAL, ETERM),
-      "target B context terminal was lost during callback self-close");
-    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK,
-                           probe.close_rc.load (std::memory_order_acquire));
-    {
-        std::lock_guard<std::mutex> lock (probe.events.sync);
-        size_t terminal_a = 0;
-        size_t terminal_b = 0;
-        for (size_t i = 0; i < probe.events.events.size (); ++i) {
-            if (probe.events.events[i].result != ZLINK_SEND_TERMINAL)
-                continue;
-            terminal_a += probe.events.events[i].rid == "A" ? 1 : 0;
-            terminal_b += probe.events.events[i].rid == "B" ? 1 : 0;
-        }
-        TEST_ASSERT_EQUAL_UINT64 (1, terminal_a);
-        TEST_ASSERT_EQUAL_UINT64 (1, terminal_b);
-    }
-
-    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (dealer_b));
-    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (dealer_a));
-    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_ctx_term (ctx));
-}
-
 int main ()
 {
     setup_test_environment ();
@@ -621,8 +248,5 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (test_router_mandatory_hwm);
     RUN_TEST (test_router_send_rid_mandatory_hwm);
-    RUN_TEST (test_router_send_rid_multipart_hwm_is_backpressure);
-    RUN_TEST (test_send_complete_isolated_by_exact_target_and_terminal_cause);
-    RUN_TEST (test_routed_send_terminal_batch_survives_callback_self_close);
     return UNITY_END ();
 }

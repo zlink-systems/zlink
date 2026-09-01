@@ -18,10 +18,6 @@ int zlink::socket_close_ops_t::request_close (socket_base_t *&socket_, int hando
         return 0;
 
     socket_base_t *socket = socket_;
-    if (socket->socket_msg_dispatch_active ())
-        (void) socket->socket_msg_dispatch_stop ();
-    if (socket->sub_dispatch_active ())
-        (void) socket->sub_dispatch_stop ();
     socket->stop ();
     socket->close (handoff_timeout_ms_);
     socket_ = NULL;

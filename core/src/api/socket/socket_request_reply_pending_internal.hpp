@@ -20,13 +20,6 @@ bool record_socket_pending_transport_pair_identity (
   const pending_request_identity_t &identity_,
   uint64_t transport_pair_id_,
   uint64_t transport_pair_generation_);
-int ensure_socket_pending_request (const socket_handle_t &handle_,
-                                   uint32_t timeout_ms_,
-                                   zlink_reply_handler_fn handler_,
-                                   void *userdata_,
-                                   uint64_t *request_seq_out_,
-                                   std::shared_ptr<socket_request_reply_state_t> *state_out_,
-                                   pending_request_token_t *token_out_);
 }
 }
 

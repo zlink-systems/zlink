@@ -6,6 +6,8 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <chrono>
+#include <thread>
 
 static void record_monitor_probe_event (const zlink_monitor_event_t *event_, void *userdata_);
 
@@ -310,16 +312,36 @@ void *open_test_monitor_probe (void *socket_,
     opts.events = events_;
     void *monitor = zlink_socket_monitor_open (socket_, &opts);
     TEST_ASSERT_NOT_NULL (monitor);
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_socket_monitor_handler (monitor, &record_monitor_probe_event,
-                                    probe_));
+    probe_->monitor = monitor;
+    probe_->stop.store (false, std::memory_order_release);
+    probe_->receiver = std::thread ([probe_] {
+        while (!probe_->stop.load (std::memory_order_acquire)) {
+            zlink_monitor_event_t event;
+            const zlink_recv_result_t rc = zlink_socket_monitor_recv (
+              probe_->monitor, &event, ZLINK_RECV_FLAGS_DONTWAIT);
+            if (rc == ZLINK_RECV_OK) {
+                record_monitor_probe_event (&event, probe_);
+                continue;
+            }
+            if (rc != ZLINK_RECV_NO_DATA)
+                break;
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        }
+    });
     return monitor;
 }
 
-void close_test_monitor_probe (void **monitor_p_, test_monitor_probe_t *)
+void close_test_monitor_probe (void **monitor_p_, test_monitor_probe_t *probe_)
 {
     if (!monitor_p_ || !*monitor_p_)
         return;
+
+    if (probe_) {
+        probe_->stop.store (true, std::memory_order_release);
+        if (probe_->receiver.joinable ())
+            probe_->receiver.join ();
+        probe_->monitor = NULL;
+    }
 
     const int zero = 0;
     TEST_ASSERT_SUCCESS_ERRNO (
@@ -360,6 +382,57 @@ bool test_monitor_probe_wait_event_after (test_monitor_probe_t *probe_,
         }
         return false;
     });
+}
+
+test_monitor_pull_dispatch_t::test_monitor_pull_dispatch_t () :
+    monitor (NULL),
+    sink (NULL),
+    userdata (NULL),
+    stop_requested (false)
+{
+}
+
+test_monitor_pull_dispatch_t::~test_monitor_pull_dispatch_t ()
+{
+    stop ();
+}
+
+bool test_monitor_pull_dispatch_t::start (void *monitor_,
+                                          test_monitor_event_sink_fn sink_,
+                                          void *userdata_)
+{
+    if (!monitor_ || !sink_ || receiver.joinable ())
+        return false;
+
+    monitor = monitor_;
+    sink = sink_;
+    userdata = userdata_;
+    stop_requested.store (false, std::memory_order_release);
+    receiver = std::thread ([this] {
+        while (!stop_requested.load (std::memory_order_acquire)) {
+            zlink_monitor_event_t event;
+            const zlink_recv_result_t rc = zlink_socket_monitor_recv (
+              monitor, &event, ZLINK_RECV_FLAGS_DONTWAIT);
+            if (rc == ZLINK_RECV_OK) {
+                sink (&event, userdata);
+                continue;
+            }
+            if (rc != ZLINK_RECV_NO_DATA)
+                break;
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        }
+    });
+    return true;
+}
+
+void test_monitor_pull_dispatch_t::stop ()
+{
+    stop_requested.store (true, std::memory_order_release);
+    if (receiver.joinable ())
+        receiver.join ();
+    monitor = NULL;
+    sink = NULL;
+    userdata = NULL;
 }
 
 bool wait_monitor_event_routing_id (void *monitor_,

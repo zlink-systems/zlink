@@ -664,8 +664,10 @@ void zlink::socket_base_t::emit_peer_weight_changed (
     const blob_t &routing_id =
       public_routing_id_ ? *public_routing_id_ : pipe_->get_routing_id ();
     const unsigned char *routing_id_data = routing_id.size () > 0 ? routing_id.data () : NULL;
+    endpoint_uri_pair_t endpoint_pair = pipe_->get_endpoint_pair ();
+    endpoint_pair.connection_id = pipe_->get_transport_connection_id ();
     uint64_t values[1] = {static_cast<uint64_t> (weight_)};
-    event (pipe_->get_endpoint_pair (), routing_id_data, routing_id.size (), values, 1,
+    event (endpoint_pair, routing_id_data, routing_id.size (), values, 1,
            ZLINK_EVENT_PEER_WEIGHT_CHANGED, 0, pipe_->get_transport_lane (),
            pipe_->get_transport_pair_id (),
            pipe_->get_transport_pair_generation ());
@@ -780,8 +782,6 @@ bool zlink::socket_base_t::dispatch_monitor_event (void *monitor_socket_,
         wire_event.event.value = record_.values[0];
     wire_event.event.routing_id = record_.routing_id;
     wire_event.event.connection_id = record_.endpoint_uri_pair.connection_id;
-    wire_event.event.transport_pair_id = record_.transport_pair_id;
-    wire_event.event.transport_pair_generation = record_.transport_pair_generation;
     wire_event.event.transport_lane = static_cast<uint32_t> (record_.transport_lane);
     wire_event.event.flags = record_.internal_flags;
     wire_event.connection_id = record_.endpoint_uri_pair.connection_id;

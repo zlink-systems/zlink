@@ -79,11 +79,8 @@ int zlink::socket_base_t::close (int handoff_timeout_ms_)
 
 int zlink::socket_base_t::begin_close_handoff ()
 {
-    const bool from_self_callback = socket_send_complete_dispatch_scope_t::dispatching_socket (this);
-    if (!lifecycle_coordinator ().begin_close_or_fail_busy (from_self_callback))
+    if (!lifecycle_coordinator ().begin_close_or_fail_busy ())
         return -1;
-    if (from_self_callback)
-        return 1;
     return 0;
 }
 

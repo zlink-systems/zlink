@@ -794,7 +794,6 @@ set(api-message-sources
 
 set(api-monitoring-sources
     src/api/monitoring/monitor_api.cpp
-    src/api/monitoring/monitor_dispatch_context.cpp
     src/api/monitoring/monitor_query_api.cpp
     src/api/monitoring/monitor_socket_api.cpp
     src/api/monitoring/poller_api.cpp
@@ -807,12 +806,11 @@ set(api-monitoring-sources
 set(api-socket-sources
     src/api/socket/part_helper_api.cpp
     src/api/socket/part_helper_state.cpp
-    src/api/socket/request_completion_queue_internal.cpp
+    src/api/socket/socket_completion_queue_internal.cpp
     src/api/socket/request_timeout_scheduler_internal.cpp
     src/api/socket/socket_message_api.cpp
     src/api/socket/socket_message_recv_api.cpp
     src/api/socket/socket_message_handler_api.cpp
-    src/api/socket/socket_send_async_api.cpp
     src/api/socket/socket_message_send_api.cpp
     src/api/socket/socket_request_reply_dispatch.cpp
     src/api/socket/socket_request_reply_runtime_io.cpp
@@ -887,10 +885,9 @@ set(socket-common-sources
     src/runtime/sockets/common/socket_base_control.cpp
     src/runtime/sockets/common/socket_base_dispatch.cpp
     src/runtime/sockets/common/socket_base_flow_state.cpp
-    src/runtime/sockets/common/socket_dispatch_context.cpp
     src/runtime/sockets/common/socket_dispatch_bridge.cpp
     src/runtime/sockets/common/socket_send_complete.cpp
-    src/runtime/sockets/common/socket_send_async_submit.cpp
+    src/runtime/sockets/common/socket_send_pending_submit.cpp
     src/runtime/sockets/common/socket_command_runtime.cpp
     src/runtime/sockets/common/socket_base_endpoint.cpp
     src/runtime/sockets/common/socket_base_endpoint_factory.cpp
@@ -915,17 +912,14 @@ set(socket-router-sources
 
 set(socket-stream-sources
     src/runtime/sockets/stream/stream.cpp
-    src/runtime/sockets/stream/stream_dispatch_lifecycle.cpp
-    src/runtime/sockets/stream/stream_dispatch_send.cpp
-    src/runtime/sockets/stream/stream_dispatch_context.cpp)
+    src/runtime/sockets/stream/stream_dispatch_lifecycle.cpp)
 
 set(socket-pubsub-sources
     src/runtime/sockets/pubsub/pub.cpp
     src/runtime/sockets/pubsub/sub.cpp
     src/runtime/sockets/pubsub/xpub.cpp
     src/runtime/sockets/pubsub/xsub.cpp
-    src/runtime/sockets/pubsub/xsub_dispatch_lifecycle.cpp
-    src/runtime/sockets/pubsub/xsub_dispatch_context.cpp)
+    )
 
 set(socket-pair-sources
     src/runtime/sockets/pair/pair.cpp)

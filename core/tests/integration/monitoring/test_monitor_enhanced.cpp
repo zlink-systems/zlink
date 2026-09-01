@@ -542,9 +542,7 @@ void test_passive_paired_ready_waits_for_ready_reply_write_drain ()
     TEST_ASSERT_EQUAL_UINT32 (1, ready_count_after);
     TEST_ASSERT_TRUE (pair_ready_after);
     TEST_ASSERT_EQUAL_UINT64 (1, ready_event.value);
-    TEST_ASSERT_EQUAL_UINT64 (pair_id, ready_event.transport_pair_id);
-    TEST_ASSERT_EQUAL_UINT64 (pair_generation,
-                              ready_event.transport_pair_generation);
+    TEST_ASSERT_TRUE (ready_event.connection_id != 0);
     TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
                             ready_event.transport_lane);
     TEST_ASSERT_TRUE (

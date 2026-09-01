@@ -132,7 +132,7 @@ static inline int socket_type (const socket_handle_t &handle_)
 static inline int validate_recv_flags (int flags_)
 {
     if (flags_ != 0 && flags_ != ZLINK_DONTWAIT) {
-        errno = ENOTSUP;
+        errno = EINVAL;
         return -1;
     }
     return 0;

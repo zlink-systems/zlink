@@ -168,9 +168,10 @@ inline send_result_t try_send (queued_message_t &queued_, void *send_socket_)
     if (!send_socket_)
         return send_result_failed;
 
-    const int rc = zlink_send_part_rid (send_socket_, &queued_.routing_id, &queued_.msg,
-                                        ZLINK_DONTWAIT, ZLINK_PART_FINAL);
-    if (rc == 0)
+    const zlink_submit_result_t rc = zlink_send_part_rid (
+      send_socket_, &queued_.routing_id, &queued_.msg, ZLINK_SEND_FLAGS_NONE,
+      ZLINK_PART_FINAL, NULL, NULL);
+    if (rc == ZLINK_SUBMIT_OK)
         return send_result_sent;
 
     const int err = zlink_errno ();
@@ -231,9 +232,10 @@ try_send_packet_now (void *stream_socket_, const zlink_routing_id_t *rid_, zlink
     if (!stream_socket_ || !rid_ || !packet_)
         return send_result_failed;
 
-    const int rc =
-      zlink_send_part_rid (stream_socket_, rid_, packet_, ZLINK_DONTWAIT, ZLINK_PART_FINAL);
-    if (rc == 0)
+    const zlink_submit_result_t rc = zlink_send_part_rid (
+      stream_socket_, rid_, packet_, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
+      NULL, NULL);
+    if (rc == ZLINK_SUBMIT_OK)
         return send_result_sent;
 
     const int err = zlink_errno ();
@@ -384,24 +386,13 @@ inline int run_server_event_loop (session_t *session_,
         if (pending_size (session_) > 0)
             drain_pending (session_);
 
-        if (pending_size (session_) == 0) {
-            const int idle_rc = socket_poll (NULL, 0, aux_poll_wait_ms ());
-            if (idle_rc < 0 && zlink_errno () != EINTR && zlink_errno () != EAGAIN) {
-                if (debug_enabled ()) {
-                    std::cerr << "[multi-stream-server] idle poll failed err=" << zlink_errno ()
-                              << std::endl;
-                }
-                rc = 1;
-                break;
-            }
-            continue;
-        }
-
         zlink_pollitem_t item;
         std::memset (&item, 0, sizeof (item));
         item.socket = server_socket_;
         item.fd = 0;
-        item.events = ZLINK_POLLOUT;
+        item.events = ZLINK_POLLIN;
+        if (pending_size (session_) > 0)
+            item.events = static_cast<short> (item.events | ZLINK_POLLOUT);
         item.revents = 0;
 
         const int poll_rc = socket_poll (&item, 1, aux_poll_wait_ms ());
@@ -414,6 +405,26 @@ inline int run_server_event_loop (session_t *session_,
             }
             rc = 1;
             break;
+        }
+
+        if ((item.revents & ZLINK_POLLIN) != 0) {
+            zlink_msg_t header;
+            zlink_msg_t body;
+            if (zlink_msg_init (&header) != 0 || zlink_msg_init (&body) != 0) {
+                rc = 1;
+                break;
+            }
+            const zlink_routing_id_t *rid = NULL;
+            const zlink_recv_result_t recv_rc = zlink_stream_recv_packet (
+              server_socket_, &rid, &header, &body, ZLINK_RECV_FLAGS_DONTWAIT);
+            if (recv_rc == ZLINK_RECV_OK
+                && !handle_packet_message (session_, server_socket_, rid, &header,
+                                           &body, stop_token_))
+                rc = 1;
+            else if (recv_rc != ZLINK_RECV_OK && recv_rc != ZLINK_RECV_NO_DATA)
+                rc = 1;
+            (void) zlink_msg_close (&header);
+            (void) zlink_msg_close (&body);
         }
 
         if ((item.revents & ZLINK_POLLOUT) != 0)

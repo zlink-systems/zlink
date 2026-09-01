@@ -6,7 +6,6 @@
 
 #include "api/core/close_result_internal.hpp"
 #include "api/core/config_result_internal.hpp"
-#include "api/message/handler_result_internal.hpp"
 #include "api/message/recv_result_internal.hpp"
 #include "api/monitoring/timer_api_internal.hpp"
 
@@ -45,7 +44,7 @@ int timer_handle_acquire_poller_ref (timer_handle_t *timer_)
     }
 
     std::lock_guard<std::mutex> lock (timer_->mutex);
-    if (timer_->handler || timer_->receive_callback_active || timer_->poller_refs > 0) {
+    if (timer_->poller_refs > 0) {
         errno = EBUSY;
         return -1;
     }
@@ -182,15 +181,8 @@ zlink_recv_result_t zlink_timer_recv (void *timer_, uint64_t *fire_count_out_)
     }
 
     std::unique_lock<std::mutex> lock (timer->mutex);
-    if (timer->handler || timer->receive_callback_active) {
-        errno = EBUSY;
-        return ZLINK_RECV_BUSY;
-    }
-
-    timer->recv_in_progress = true;
     while (timer->fired_counts.empty ()) {
         if (!timer->running) {
-            timer->recv_in_progress = false;
             errno = EAGAIN;
             return ZLINK_RECV_NO_DATA;
         }
@@ -201,30 +193,5 @@ zlink_recv_result_t zlink_timer_recv (void *timer_, uint64_t *fire_count_out_)
     timer->fired_counts.pop_front ();
     drain_timer_signal_locked (timer);
     ensure_timer_signal_locked (timer);
-    timer->recv_in_progress = false;
     return ZLINK_RECV_OK;
-}
-
-zlink_handler_result_t
-zlink_timer_handler (void *timer_, zlink_timer_handler_fn handler_, void *userdata_)
-{
-    timer_handle_t *timer = as_timer_handle (timer_);
-    if (!timer) {
-        errno = EFAULT;
-        return ZLINK_HANDLER_INVALID_ARGUMENT;
-    }
-    if (!handler_) {
-        errno = EINVAL;
-        return ZLINK_HANDLER_INVALID_ARGUMENT;
-    }
-
-    std::lock_guard<std::mutex> lock (timer->mutex);
-    if (timer->recv_in_progress || timer->poller_refs > 0 || timer->receive_callback_active) {
-        errno = EBUSY;
-        return ZLINK_HANDLER_BUSY;
-    }
-
-    timer->handler = handler_;
-    timer->handler_userdata = userdata_;
-    return ZLINK_HANDLER_OK;
 }

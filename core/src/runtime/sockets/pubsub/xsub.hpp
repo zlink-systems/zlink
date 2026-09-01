@@ -9,8 +9,6 @@
 #include "sockets/internal/fq.hpp"
 #include "core/ctx_physical_queue_registry.hpp"
 #include <atomic>
-#include <condition_variable>
-#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -55,47 +53,20 @@ class xsub_t : public socket_base_t
     bool xhas_out () ZLINK_OVERRIDE;
     int xrecv (zlink::msg_t *msg_) ZLINK_FINAL;
     bool xhas_in () ZLINK_FINAL;
-    void xdispatch_io () ZLINK_OVERRIDE;
     void xread_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
-    int sub_dispatch_start (sub_io_handler_fn callback_, void *userdata_) ZLINK_OVERRIDE;
-    int sub_dispatch_stop () ZLINK_OVERRIDE;
-    bool sub_dispatch_active () const ZLINK_OVERRIDE;
-    int xsocket_msg_dispatch (zlink::msg_t *msg_, zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
-    void xarm_socket_msg_dispatch () ZLINK_OVERRIDE;
     void xwrite_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xhiccuped (pipe_t *pipe_) ZLINK_FINAL;
     void xpipe_terminated (zlink::pipe_t *pipe_) ZLINK_FINAL;
-    void xsocket_msg_pipe_terminated (zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
     uint32_t monitor_ready_count () const ZLINK_OVERRIDE;
 
   private:
-    struct socket_dispatch_state_t
-    {
-        socket_dispatch_state_t () :
-            drop_message (false),
-            part_index (0)
-        {
-        }
-
-        std::vector<zlink_msg_t> parts;
-        bool drop_message;
-        size_t part_index;
-    };
-
     //  Check whether the message matches at least one subscription.
     bool match (zlink::msg_t *msg_);
 
     //  Function to be applied to the trie to send all the subsciptions
     //  upstream.
     static void send_subscription (unsigned char *data_, size_t size_, void *arg_);
-    int dispatch_ready_messages ();
-    int dispatch_ready_messages_serialized ();
-    int receive_dispatch_message (zlink_routing_id_t *source_rid_out_);
-    int dispatch_message (const zlink_routing_id_t &source_rid_);
-    int dispatch_single_socket_message (zlink::msg_t *msg_,
-                                        zlink::pipe_t *pipe_);
     int discard_filtered_message (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
-    void notify_dispatch_stopped ();
     void refresh_delivery_ready_state (const endpoint_uri_pair_t &endpoint_uri_pair_);
     uint32_t compute_delivery_ready_count () const;
     bool compute_delivery_ready_state () const;
@@ -146,22 +117,6 @@ class xsub_t : public socket_base_t
     //  state every first frame matches, so we can skip trie lookup on recv.
     std::atomic<bool> _has_empty_subscription;
 
-    std::atomic<bool> _dispatch_active;
-    std::atomic<sub_io_handler_fn> _dispatch_callback;
-    std::atomic<void *> _dispatch_userdata;
-    std::atomic<uint32_t> _dispatch_inflight;
-    std::atomic<bool> _dispatch_pending;
-    std::atomic<bool> _dispatch_draining;
-    mutable std::mutex _dispatch_control_mu;
-    mutable std::mutex _dispatch_inflight_mu;
-    std::condition_variable _dispatch_inflight_cv;
-    std::vector<zlink_msg_t> _dispatch_parts;
-    std::map<zlink::pipe_t *, socket_dispatch_state_t>
-      _socket_dispatch_states;
-    socket_dispatch_state_t _socket_dispatch_without_pipe;
-#ifdef ZLINK_BUILD_TESTS
-    size_t _socket_dispatch_state_creations;
-#endif
     std::atomic<uint32_t> _delivery_ready_count;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (xsub_t)

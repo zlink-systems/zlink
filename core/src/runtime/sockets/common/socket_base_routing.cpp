@@ -177,9 +177,6 @@ int zlink::routing_socket_base_t::terminate_out_pipe_by_routing_id (
         target = outpipe->pipe;
     }
 
-    // Completion dispatch can invoke user code. Route-table state and its
-    // lifecycle fence must be fully released before that callback boundary.
-    fail_send_pending_for_pipe (target, ENOTCONN);
     target->terminate (false);
     target->release_lifetime_ref ();
     return 0;

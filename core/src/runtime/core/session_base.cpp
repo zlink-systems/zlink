@@ -78,6 +78,7 @@ zlink::session_base_t::session_base_t (class io_thread_t *io_thread_,
     _socket (socket_),
     _pending_peer_routing_id (),
     _pending_peer_routing_id_valid (false),
+    _pending_peer_socket_type (0),
       _peer_max_message_bytes (0),
       _transport_lane (options_.transport_lane),
       _transport_pair_id (options_.transport_pair_id),
@@ -129,6 +130,15 @@ void zlink::session_base_t::set_peer_routing_id (const unsigned char *data_, siz
         _pending_peer_routing_id.clear ();
         _pending_peer_routing_id_valid = false;
     }
+}
+
+void zlink::session_base_t::set_peer_socket_type (int socket_type_)
+{
+    _pending_peer_socket_type = socket_type_;
+    if (_pipe)
+        _pipe->set_peer_socket_type (socket_type_);
+    if (_socket_pipe && !_socket_pipe_bound)
+        _socket_pipe->set_peer_socket_type (socket_type_);
 }
 
 void zlink::session_base_t::set_peer_max_message_bytes (uint64_t max_message_bytes_)
@@ -384,6 +394,11 @@ void zlink::session_base_t::engine_ready ()
         //  events can use them.
         pipes[0]->set_endpoint_pair (_engine->get_endpoint ());
         pipes[1]->set_endpoint_pair (_engine->get_endpoint ());
+
+        if (_pending_peer_socket_type != 0) {
+            pipes[0]->set_peer_socket_type (_pending_peer_socket_type);
+            pipes[1]->set_peer_socket_type (_pending_peer_socket_type);
+        }
 
         if (_pending_peer_routing_id_valid) {
             // Publish the handshake identity to the session-owned endpoint

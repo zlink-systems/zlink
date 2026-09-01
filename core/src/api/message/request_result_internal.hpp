@@ -53,6 +53,7 @@ inline zlink_request_result_t from_errno (int err_)
         case EACCES:
         case ECONNREFUSED:
         case ECANCELED:
+        case EPROTOTYPE:
             return ZLINK_REQUEST_REJECTED;
         case ESTALE:
         case EEXIST:

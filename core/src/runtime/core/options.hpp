@@ -216,6 +216,10 @@ struct options_t
     //  into the receive path.
     bool stream_notify;
 
+    //  Public STREAM receive family selection. Phase 3 freezes this value at
+    //  the first successful bind/connect and wires PACKET decoding.
+    int stream_recv_mode;
+
     //  TCP keep-alive settings.
     //  Defaults to -1 = do not change socket options
     int tcp_keepalive;

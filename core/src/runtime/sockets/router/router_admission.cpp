@@ -75,6 +75,50 @@ int router_t::xselect_routed_submit_target_internal (
       route_incarnation_id_out_, true);
 }
 
+int router_t::xselect_request_submit_target (
+  const zlink_routing_id_t *router_rid_or_null_,
+  zlink_routed_submit_target_t *target_out_,
+  uint64_t *transport_connection_id_out_,
+  uint64_t *route_incarnation_id_out_,
+  std::string *logical_endpoint_out_)
+{
+    if (logical_endpoint_out_)
+        logical_endpoint_out_->clear ();
+    std::lock_guard<std::mutex> route_lifecycle_lock (_out_pipes_sync);
+    const int rc = select_routed_submit_target_locked (
+      router_rid_or_null_, target_out_, transport_connection_id_out_,
+      route_incarnation_id_out_, true);
+    if (rc != 0) {
+        // Ordinary routed DATA treats an absent or currently unavailable route
+        // as a connection failure.  REQUEST has a narrower public contract:
+        // a RID that is not present in the routing map is a missing target.
+        // Preserve EHOSTUNREACH for an existing-but-unavailable route while
+        // normalizing only the absent-map case to ENOENT.
+        if (errno == EHOSTUNREACH
+            && valid_routing_id (router_rid_or_null_)) {
+            const blob_t routing_id (
+              const_cast<unsigned char *> (router_rid_or_null_->data),
+              router_rid_or_null_->size, reference_tag_t ());
+            const out_pipe_t *const out_pipe = lookup_out_pipe (routing_id);
+            if (!out_pipe || !out_pipe->pipe)
+                errno = ENOENT;
+        }
+        return -1;
+    }
+
+    const blob_t routing_id (
+      const_cast<unsigned char *> (router_rid_or_null_->data),
+      router_rid_or_null_->size, reference_tag_t ());
+    const out_pipe_t *const out_pipe = lookup_out_pipe (routing_id);
+    if (!out_pipe || !out_pipe->pipe
+        || out_pipe->pipe->get_peer_socket_type ()
+             != ZLINK_CORE_SOCKET_ROUTER) {
+        errno = EPROTOTYPE;
+        return -1;
+    }
+    return 0;
+}
+
 int router_t::select_routed_submit_target_locked (
   const zlink_routing_id_t *router_rid_or_null_,
   zlink_routed_submit_target_t *target_out_,
@@ -380,18 +424,6 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
         pipe_t *const old_pipe = existing_outpipe->pipe;
         const bool old_locally_initiated = existing_outpipe->locally_initiated;
         const uint32_t old_peer_weight = existing_outpipe->weight;
-        if (actions_) {
-            actions_->fail_replaced_target = true;
-            actions_->replaced_public_routing_id = blob_t (
-              routing_id_.data (), routing_id_.size ());
-            actions_->replaced_pair_id = old_pipe->get_transport_pair_id ();
-            actions_->replaced_pair_generation =
-              old_pipe->get_transport_pair_generation ();
-            if (actions_->replaced_pair_id == 0
-                && actions_->replaced_pair_generation == 0)
-                actions_->replaced_route_incarnation_id =
-                  old_pipe->get_route_incarnation_id ();
-        }
         erase_out_pipe (old_pipe);
         old_pipe->set_router_socket_routing_id (new_routing_id);
         add_out_pipe (ZLINK_MOVE (new_routing_id), old_pipe, old_locally_initiated);
@@ -439,40 +471,6 @@ void router_t::finish_route_adoption (pipe_t *adopted_pipe_,
     if (actions_->cache_completion) {
         cache_completion_pipe_routing_id (adopted_pipe_);
         actions_->cache_completion = false;
-    }
-    // Pending failure can synchronously dispatch user completion code. Keep it
-    // last so callback re-entry or close cannot invalidate an adopted pipe
-    // still needed by the other post-lock actions above.
-    if (actions_->fail_replaced_target) {
-        zlink_routing_id_t old_target;
-        copy_routing_id_from_bytes (
-          actions_->replaced_public_routing_id.data (),
-          actions_->replaced_public_routing_id.size (), &old_target);
-        actions_->fail_replaced_target = false;
-        actions_->replaced_public_routing_id.clear ();
-        fail_send_pending_for_target (
-          &old_target, actions_->replaced_pair_id,
-          actions_->replaced_pair_generation, ENOTCONN,
-          actions_->replaced_route_incarnation_id);
-    }
-}
-
-void router_t::promote_anonymous_pipe_for_dispatch (pipe_t *pipe_)
-{
-    if (!pipe_)
-        return;
-
-    // The caller owns _out_pipes_sync across route adoption and
-    // FQ publication so termination cannot observe a half-promoted endpoint.
-    const std::map<pipe_t *, bool>::iterator it = _anonymous_pipes.find (pipe_);
-    if (it == _anonymous_pipes.end ())
-        return;
-
-    _anonymous_pipes.erase (it);
-    _fq.attach (pipe_);
-    if (socket_msg_dispatch_active ()) {
-        (void) pipe_->check_read ();
-        _fq.deactivate (pipe_);
     }
 }
 

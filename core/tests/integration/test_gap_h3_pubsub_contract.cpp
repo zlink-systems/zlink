@@ -190,7 +190,7 @@ void test_xsub_public_helpers_forward_upstream_and_retry_without_consuming ()
     test_context_socket_close_zero_linger (xpub);
 }
 
-void test_xpub_recv_tls_buffer_consumption_and_publish_part_contract ()
+void test_xpub_recv_socket_owned_rid_and_retryable_buffer_contract ()
 {
     const char *endpoint_a = "inproc://gap-h3-xpub-a";
     const char *endpoint_b = "inproc://gap-h3-xpub-b";
@@ -221,44 +221,121 @@ void test_xpub_recv_tls_buffer_consumption_and_publish_part_contract ()
     const zlink_routing_id_t *rid_b = NULL;
     expect_xpub_subscription (xpub_b, "topic-b", &rid_b);
     TEST_ASSERT_NOT_NULL (rid_b);
-    TEST_ASSERT_EQUAL_PTR (rid_a, rid_b);
+    TEST_ASSERT_FALSE (rid_a == rid_b);
     TEST_ASSERT_EQUAL_MEMORY ("xsub-B", rid_b->data, 6);
-    TEST_ASSERT_EQUAL_MEMORY ("xsub-B", rid_a->data, 6);
+    TEST_ASSERT_EQUAL_MEMORY ("xsub-A", rid_a->data, 6);
     TEST_ASSERT_EQUAL_MEMORY ("xsub-A", rid_a_copy.data, 6);
 
-    //  Buffer failure reports the required length and consumes this event.
+    char no_event_topic[8] = {'u', 'n', 'c', 'h', 'a', 'n', 'g', 'd'};
+    size_t no_event_len = 77;
+    int no_event_subscribed = 41;
+    const zlink_routing_id_t *no_event_rid =
+      reinterpret_cast<const zlink_routing_id_t *> (0x1);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_NO_DATA,
+      zlink_xpub_recv_part (
+        xpub_a, &no_event_rid, &no_event_subscribed, no_event_topic,
+        sizeof (no_event_topic), &no_event_len,
+        static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    TEST_ASSERT_EQUAL_PTR (
+      reinterpret_cast<const zlink_routing_id_t *> (0x1), no_event_rid);
+    TEST_ASSERT_EQUAL_INT (41, no_event_subscribed);
+    TEST_ASSERT_EQUAL_UINT64 (77, no_event_len);
+    TEST_ASSERT_EQUAL_MEMORY ("unchangd", no_event_topic,
+                              sizeof (no_event_topic));
+    TEST_ASSERT_EQUAL_UINT8 (0, rid_a->size);
+    TEST_ASSERT_EQUAL_MEMORY ("xsub-B", rid_b->data, 6);
+
+    //  Buffer failure reports only the required length and preserves the event.
     const char *long_topic = "topic-too-long";
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
                            zlink_set_subscription (xsub_a, long_topic));
     char small[2] = {'q', 'q'};
     size_t needed = 0;
     int subscribed = -1;
+    const zlink_routing_id_t *failed_rid =
+      reinterpret_cast<const zlink_routing_id_t *> (0x1);
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_INTERNAL_ERROR,
-      recv_xpub_event_eventually (xpub_a, NULL, &subscribed, small,
+      ZLINK_RECV_BUFFER_TOO_SMALL,
+      recv_xpub_event_eventually (xpub_a, &failed_rid, &subscribed, small,
                                   sizeof (small), &needed));
-    TEST_ASSERT_EQUAL_INT (EMSGSIZE, zlink_errno ());
+    TEST_ASSERT_EQUAL_INT (ENOBUFS, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (strlen (long_topic), needed);
     TEST_ASSERT_EQUAL_MEMORY ("qq", small, sizeof (small));
+    TEST_ASSERT_EQUAL_INT (-1, subscribed);
+    TEST_ASSERT_EQUAL_PTR (
+      reinterpret_cast<const zlink_routing_id_t *> (0x1), failed_rid);
+
     char retry[32];
-    needed = sizeof (retry);
+    memset (retry, 'r', sizeof (retry));
+    needed = 0;
+    const zlink_routing_id_t *retry_rid = NULL;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_xpub_recv_part (xpub_a, &retry_rid, &subscribed, retry,
+                            sizeof (retry), &needed,
+                            static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+    TEST_ASSERT_NOT_NULL (retry_rid);
+    TEST_ASSERT_EQUAL_UINT8 (6, retry_rid->size);
+    TEST_ASSERT_EQUAL_MEMORY ("xsub-A", retry_rid->data, 6);
+    TEST_ASSERT_EQUAL_INT (1, subscribed);
+    TEST_ASSERT_EQUAL_UINT64 (strlen (long_topic), needed);
+    TEST_ASSERT_EQUAL_MEMORY (long_topic, retry, needed);
+
+    needed = 91;
+    subscribed = 17;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_NO_DATA,
       zlink_xpub_recv_part (xpub_a, NULL, &subscribed, retry,
                             sizeof (retry), &needed,
                             static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    TEST_ASSERT_EQUAL_UINT64 (91, needed);
+    TEST_ASSERT_EQUAL_INT (17, subscribed);
+    TEST_ASSERT_EQUAL_UINT8 (0, retry_rid->size);
+
+    const char *nonconsumed_topic = "positive-null";
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_subscription (xsub_a, nonconsumed_topic));
+    needed = 123;
+    subscribed = 29;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_INVALID_HANDLE,
+      zlink_xpub_recv_part (xpub_a, NULL, &subscribed, NULL, 1, &needed,
+                            static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+    TEST_ASSERT_EQUAL_INT (EFAULT, zlink_errno ());
+    TEST_ASSERT_EQUAL_UINT64 (123, needed);
+    TEST_ASSERT_EQUAL_INT (29, subscribed);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      recv_xpub_event_eventually (xpub_a, NULL, &subscribed, retry,
+                                  sizeof (retry), &needed));
+    TEST_ASSERT_EQUAL_INT (1, subscribed);
+    TEST_ASSERT_EQUAL_UINT64 (strlen (nonconsumed_topic), needed);
+    TEST_ASSERT_EQUAL_MEMORY (nonconsumed_topic, retry, needed);
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_subscription (xsub_a, ""));
+    needed = 55;
+    subscribed = -1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      recv_xpub_event_eventually (xpub_a, NULL, &subscribed, NULL, 0,
+                                  &needed));
+    TEST_ASSERT_EQUAL_INT (1, subscribed);
+    TEST_ASSERT_EQUAL_UINT64 (0, needed);
 
     errno = 0;
     needed = sizeof (retry);
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_INTERNAL_ERROR,
+      ZLINK_RECV_NOT_SUPPORTED,
       zlink_xpub_recv_part (xsub_a, NULL, &subscribed, retry,
                             sizeof (retry), &needed,
                             static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
-    TEST_ASSERT_EQUAL_INT (EINVAL, zlink_errno ());
+    TEST_ASSERT_EQUAL_INT (ENOTSUP, zlink_errno ());
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_INTERNAL_ERROR,
+      ZLINK_RECV_INVALID_HANDLE,
       zlink_xpub_recv_part (NULL, NULL, &subscribed, retry,
                             sizeof (retry), &needed,
                             static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
@@ -359,7 +436,7 @@ int main ()
     RUN_TEST (
       test_xsub_public_helpers_forward_upstream_and_retry_without_consuming);
     RUN_TEST (
-      test_xpub_recv_tls_buffer_consumption_and_publish_part_contract);
+      test_xpub_recv_socket_owned_rid_and_retryable_buffer_contract);
     const int rc = UNITY_END ();
     fflush (NULL);
     std::_Exit (rc);

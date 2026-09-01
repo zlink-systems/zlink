@@ -366,9 +366,6 @@ int zlink_poller_wait (void *poller_,
         // wait_active prevents registration mutation for the duration of
         // this call, so conversion can inspect the stable registration table
         // without holding operation_sync across socket readiness calls.
-        // get_events_internal() may dispatch a completion callback; holding
-        // this mutex here would deadlock a callback that re-enters the same
-        // poller API.
         int public_count = 0;
         for (int i = 0; i < rc; ++i) {
             const poller_registration_t *registration =

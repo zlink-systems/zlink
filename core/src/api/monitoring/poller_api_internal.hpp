@@ -29,6 +29,7 @@ struct poller_registration_t
         user_data (NULL),
         events (0),
         owns_completion_processing (false),
+        completion_owner (NULL),
         owns_socket_lifetime (false)
     {
     }
@@ -40,6 +41,7 @@ struct poller_registration_t
     void *user_data;
     short events;
     bool owns_completion_processing;
+    void *completion_owner;
     bool owns_socket_lifetime;
 };
 
@@ -108,7 +110,6 @@ int poller_fill_public_event_from_registration (
   const poller_registration_t *registration_,
   const zlink::socket_poller_t::event_t &native_,
   zlink_poller_event_t *event_out_);
-int validate_socket_callback_poller_events (const socket_handle_t &handle_, short events_);
 int validate_socket_poller_event_mask (short events_, bool allow_completion_);
 int validate_fd_poller_event_mask (short events_);
 void release_poller_registration (const poller_registration_t &registration_);

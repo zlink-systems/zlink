@@ -7,6 +7,7 @@
 #include <string>
 
 #include "core/address.hpp"
+#include "core/c_api_copy_internal.hpp"
 #include "core/ctx.hpp"
 #include "core/ctx_inproc_registry.hpp"
 #include "core/endpoint.hpp"
@@ -112,6 +113,12 @@ int zlink::socket_base_t::bind (const char *endpoint_uri_)
         return -1;
     }
 
+    if (options.type == ZLINK_CORE_SOCKET_STREAM
+        && options.stream_recv_mode == ZLINK_STREAM_RECV_MODE_UNSPECIFIED) {
+        errno = EINVAL;
+        return -1;
+    }
+
     int rc = process_commands (0, false);
     if (unlikely (rc != 0))
         return -1;
@@ -150,6 +157,12 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
         return -1;
     }
 
+    if (options.type == ZLINK_CORE_SOCKET_STREAM
+        && options.stream_recv_mode == ZLINK_STREAM_RECV_MODE_UNSPECIFIED) {
+        errno = EINVAL;
+        return -1;
+    }
+
     int rc = process_commands (0, false);
     if (unlikely (rc != 0))
         return -1;
@@ -157,11 +170,6 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
     std::string protocol;
     std::string address;
     if (parse_uri (endpoint_uri_, protocol, address) || check_protocol (protocol)) {
-        return -1;
-    }
-
-    if (options.type == ZLINK_CORE_SOCKET_STREAM) {
-        errno = EOPNOTSUPP;
         return -1;
     }
 
@@ -219,6 +227,15 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
             }
             new_pipes[0]->set_transport_pair (lane, pair_id, pair_generation);
             new_pipes[1]->set_transport_pair (lane, pair_id, pair_generation);
+            // Inproc has no engine/session boundary that would normally
+            // publish endpoint metadata.  Give both pipe halves the same
+            // immutable logical endpoint identity before either half is
+            // attached so pending SEND/REQUEST records can survive a
+            // physical detach and re-key to the reconnect for this endpoint.
+            new_pipes[0]->set_endpoint_pair (
+              make_unconnected_connect_endpoint_pair (endpoint_uri_));
+            new_pipes[1]->set_endpoint_pair (
+              make_unconnected_bind_endpoint_pair (endpoint_uri_));
             if (lane == transport_lane_application && peer.socket) {
                 get_ctx ()->record_auto_hwm_endpoint_policy (
                   make_auto_hwm_queue_policy (
@@ -278,6 +295,8 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
                                                    peer.options.routing_id_size);
                 new_pipes[1]->set_peer_routing_id (options.routing_id,
                                                    options.routing_id_size);
+                new_pipes[0]->set_peer_socket_type (peer.options.type);
+                new_pipes[1]->set_peer_socket_type (options.type);
                 if (paired_transport) {
                     const uintptr_t peer_instance =
                       reinterpret_cast<uintptr_t> (peer.socket);
@@ -540,6 +559,32 @@ int zlink::socket_base_t::term_endpoint_internal (const char *endpoint_uri_)
     }
 
     const std::string endpoint_uri_str = std::string (endpoint_uri_);
+    const auto fail_public_pending_for_endpoint =
+      [this] (const std::string &identifier_) {
+          fail_pull_send_pending_for_logical_endpoint (identifier_, ENOENT);
+          fail_pull_request_pending_for_logical_endpoint (identifier_);
+          xforget_request_route_endpoint (identifier_);
+          if (options.type == ZLINK_CORE_SOCKET_PAIR) {
+              fail_pull_send_pending_for_logical_target (NULL, ENOENT);
+              return;
+          }
+          std::vector<pipe_t *> attached;
+          snapshot_attached_pipes (&attached);
+          for (size_t i = 0; i != attached.size (); ++i) {
+              pipe_t *const pipe = attached[i];
+              if (!pipe
+                  || pipe->get_endpoint_pair ().identifier () != identifier_)
+                  continue;
+              const blob_t &routing_id = pipe->get_routing_id ();
+              if (routing_id.size () == 0)
+                  continue;
+              zlink_routing_id_t rid;
+              memset (&rid, 0, sizeof (rid));
+              copy_routing_id_from_bytes (routing_id.data (),
+                                          routing_id.size (), &rid);
+              fail_pull_send_pending_for_logical_target (&rid, ENOENT);
+          }
+      };
     if (uri_protocol == protocol_name::inproc) {
         //  A connect that is still pending (no binder yet) parks its peer
         //  pipe in the context registry where no socket ever runs the pipe
@@ -550,6 +595,7 @@ int zlink::socket_base_t::term_endpoint_internal (const char *endpoint_uri_)
         //  already started), keep the previous disconnect semantics and fall
         //  through to the local cleanup.
         (void) get_ctx ()->materialize_pending_inproc (endpoint_uri_str, this);
+        fail_public_pending_for_endpoint (endpoint_uri_str);
         const int inproc_rc = unregister_endpoint (endpoint_uri_str, this) == 0
                                 ? 0
                                 : endpoint_runtime ().inprocs.erase_pipes (endpoint_uri_str);
@@ -571,6 +617,8 @@ int zlink::socket_base_t::term_endpoint_internal (const char *endpoint_uri_)
         errno = ENOENT;
         return -1;
     }
+
+    fail_public_pending_for_endpoint (resolved_endpoint_uri);
 
     for (endpoints_t::iterator it = range.first; it != range.second; ++it) {
         //  A disconnect ends the whole pair. Without this the surviving lane's

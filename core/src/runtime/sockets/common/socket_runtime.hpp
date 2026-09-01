@@ -21,15 +21,11 @@
 #include "utils/atomic_counter.hpp"
 #include "utils/condition_variable.hpp"
 #include "utils/mutex.hpp"
+#include "api/socket/socket_completion_queue_internal.hpp"
 #include "zlink.h"
 
 namespace zlink
 {
-namespace request_timeout
-{
-struct task_t;
-}
-
 class io_thread_t;
 class mailbox_t;
 class socket_base_t;
@@ -69,8 +65,6 @@ struct socket_monitor_event_record_t
     uint64_t transport_pair_generation;
     transport_lane_t transport_lane;
 };
-
-typedef void (socket_monitor_worker_idle_fn) (void *);
 
 struct socket_endpoint_pipe_t
 {
@@ -404,13 +398,17 @@ class socket_receive_record_scope_t
             return 0;
         if (_admission (_admission_userdata) == 0)
             return 0;
-        _admission_failed = true;
+        // Capacity EAGAIN is a per-pipe readiness miss. The fair queue may
+        // skip that queued record and admit another source in this same
+        // receive attempt, so it must not poison the whole record scope.
+        if (errno != EAGAIN)
+            _admission_failed = true;
         return -1;
     }
 
     // Deferred admission lets a routed receiver inspect the queued first
-    // application frame before paying whole-record ownership.  The callback
-    // invokes acquire_before_frame() while its receive attempt is active.
+    // application frame before paying whole-record ownership. The admission
+    // hook invokes acquire_before_frame() while its receive attempt is active.
     void begin_deferred_attempt (socket_receive_runtime_t *runtime_,
                                  bool *sync_held_)
     {
@@ -577,10 +575,13 @@ struct routed_send_target_key_t
                               size_t routing_id_size_,
                               uint64_t transport_pair_id_,
                               uint64_t transport_pair_generation_,
-                              uint64_t route_incarnation_id_ = 0) :
+                              uint64_t route_incarnation_id_ = 0,
+                              const std::string &logical_endpoint_ =
+                                std::string ()) :
         peer_rid (routing_id_ && routing_id_size_
                     ? std::string (static_cast<const char *> (routing_id_), routing_id_size_)
                     : std::string ()),
+        logical_endpoint (logical_endpoint_),
         transport_pair_id (transport_pair_id_),
         transport_pair_generation (transport_pair_generation_),
         route_incarnation_id (route_incarnation_id_)
@@ -589,6 +590,8 @@ struct routed_send_target_key_t
 
     bool operator< (const routed_send_target_key_t &other_) const
     {
+        if (logical_endpoint != other_.logical_endpoint)
+            return logical_endpoint < other_.logical_endpoint;
         if (peer_rid != other_.peer_rid)
             return peer_rid < other_.peer_rid;
         if (transport_pair_id != other_.transport_pair_id)
@@ -599,6 +602,10 @@ struct routed_send_target_key_t
     }
 
     std::string peer_rid;
+    // DEALER pins a public operation to the configured endpoint chosen at
+    // FINAL. The peer RID is retained only as the last handshake identity and
+    // completion correlation; it is not the reconnect key.
+    std::string logical_endpoint;
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
     // Immutable identity of one physical unpaired ROUTER pipepair. It is
@@ -607,50 +614,58 @@ struct routed_send_target_key_t
     uint64_t route_incarnation_id;
 };
 
-//  One pending asynchronous send record. Core owns every part in `parts`
-//  from the moment zlink_send_async() returned ZLINK_SUBMIT_OK.
+// Internal REQUEST admission hooks. The resolver runs only after one pending
+// record has won admission or a pre-admission terminal race.
+typedef void (*send_pending_request_resolved_fn) (void *context_,
+                                                  bool admitted_,
+                                                  int terminal_errno_);
+typedef void (*send_pending_request_cleanup_fn) (void *context_);
+
+//  One pending nonblocking SEND/REQUEST admission record. Core owns every
+//  part in `parts` after the public submit returns ZLINK_SUBMIT_OK.
 struct send_pending_record_t
 {
     send_pending_record_t () :
         op_id (0),
-        userdata (NULL),
+        pull_completion (false),
+        request_admission (false),
+        completion_reservation (NULL),
+        admission_observer (NULL),
+        admission_observer_userdata (NULL),
+        request_resolution_context (NULL),
+        request_resolved (NULL),
+        request_cleanup (NULL),
         has_target (false),
         charge_bytes (0),
-        timeout_ms (0),
         claimed (false),
-        deferred_terminal_errno (0),
-        completion_result (ZLINK_SEND_ADMITTED),
-        completion_errno (0),
-        completion_next (NULL)
+        deferred_terminal_errno (0)
     {
     }
 
     zlink_send_op_id_t op_id;
-    void *userdata;
+    bool pull_completion;
+    bool request_admission;
+    socket_completion::reservation_t *completion_reservation;
+    pipe_write_observer_fn admission_observer;
+    void *admission_observer_userdata;
+    void *request_resolution_context;
+    send_pending_request_resolved_fn request_resolved;
+    send_pending_request_cleanup_fn request_cleanup;
     routed_send_target_key_t target;
     bool has_target;
     std::vector<zlink_msg_t> parts;
     uint64_t charge_bytes;
-    uint32_t timeout_ms;
-    //  Set while the admit loop owns this record outside the pending mutex.
-    //  A cancel that arrives in that window reports INVALID_STATE instead of
-    //  racing the physical submit.
+    //  Set while the admit loop owns this record outside the pending mutex so
+    //  a concurrent terminal resolver cannot race the physical submit.
     bool claimed;
     //  Pipe detach can race a physical admission while `claimed` keeps this
     //  record outside the pending mutex. The detach owner publishes its
     //  terminal cause here; the admission owner consumes it before releasing
     //  the claim. Access is serialized by socket_send_pending_runtime_t::sync.
     int deferred_terminal_errno;
-    std::shared_ptr<zlink::request_timeout::task_t> deadline;
-    //  Resolution reuses the already allocated pending record as an
-    //  intrusive completion node. Completion publication after submit
-    //  acceptance therefore performs no allocation.
-    zlink_send_complete_result_t completion_result;
-    int completion_errno;
-    send_pending_record_t *completion_next;
 };
 
-//  Per-target direct-admission reservation. STREAM packet callbacks retain
+//  Per-target direct-admission reservation. STREAM packet sends retain
 //  inactive entries for the lifetime of one exact transport target so the
 //  steady-state echo path does not allocate and free a tree node per packet.
 //  Detach marks an active retained entry for removal by its current owner.
@@ -669,6 +684,22 @@ struct send_inline_attempt_state_t
     int retire_errno;
 };
 
+// A synchronous NONE submit is not a pending record and therefore does not
+// reserve either pending-pool capacity or a completion slot.  It still needs a
+// socket-local fence against an explicit logical-target removal while it has
+// dropped the public send scope to wait for reconnect/progress.  Entries exist
+// only while at least one NONE call is waiting on the key.
+struct send_logical_wait_state_t
+{
+    send_logical_wait_state_t () : epoch (0), terminal_errno (0), waiters (0)
+    {
+    }
+
+    uint64_t epoch;
+    int terminal_errno;
+    uint32_t waiters;
+};
+
 //  Per-socket asynchronous send admission state.
 //
 //  Ordering: records for one target form a FIFO. The admit loop only ever
@@ -678,42 +709,20 @@ struct send_inline_attempt_state_t
 struct socket_send_pending_runtime_t
 {
     socket_send_pending_runtime_t () :
-        handler (NULL),
-        handler_userdata (NULL),
-        handler_installed (false),
         admission_gate (false),
-        public_async_depth (0),
         next_op_id (1),
         pending_msgs (0),
         enqueue_epoch (0),
         redrive_epoch (0),
         pending_bytes (0),
-        completion_head (NULL),
-        completion_tail (NULL),
         failing (false)
-#ifdef ZLINK_BUILD_TESTS
-        , gate_release_hook (NULL), gate_release_hook_userdata (NULL),
-        gate_release_hook_generation (0), gate_release_hook_active (0),
-        inline_fallback_hook (NULL), inline_fallback_hook_userdata (NULL),
-        target_failure_progress_hook (NULL),
-        target_failure_progress_hook_userdata (NULL),
-        deadline_enqueue_hook (NULL), deadline_enqueue_hook_userdata (NULL),
-        fail_after_queue_push (false)
-#endif
     {
     }
 
     mutable mutex_t sync;
-    zlink_send_complete_handler_fn handler;
-    void *handler_userdata;
-    std::atomic<bool> handler_installed;
     //  Serializes physical asynchronous admission. With no queued work the
     //  submitter acquires this atomically and avoids the pending mutex/maps.
     std::atomic<bool> admission_gate;
-    //  Completion dispatch is deferred until the public send_async/cancel
-    //  wrapper releases its handle pin. This makes callback self-close valid
-    //  even for a completion resolved before the submitting call returns.
-    std::atomic<uint32_t> public_async_depth;
     zlink_send_op_id_t next_op_id;
     //  Plain sockets use the default-constructed key. Paired routed sockets
     //  key by peer rid + transport pair identity/generation; an unpaired
@@ -727,6 +736,8 @@ struct socket_send_pending_runtime_t
     //  churn; `active` alone controls ordering exclusion.
     std::map<routed_send_target_key_t, send_inline_attempt_state_t>
       inline_attempts;
+    std::map<routed_send_target_key_t, send_logical_wait_state_t>
+      logical_waits;
     std::map<zlink_send_op_id_t, send_pending_record_t *> by_op;
     std::atomic<uint64_t> pending_msgs;
     //  Incremented after every queue insertion.  The admission driver uses
@@ -740,44 +751,16 @@ struct socket_send_pending_runtime_t
     //  while the current driver still owns admission_gate.
     std::atomic<uint64_t> redrive_epoch;
     uint64_t pending_bytes;
-    send_pending_record_t *completion_head;
-    send_pending_record_t *completion_tail;
     //  Set once close or context termination has failed every pending record.
     //  New submits are refused from that point on.
     bool failing;
-#ifdef ZLINK_BUILD_TESTS
-    typedef void (*gate_release_hook_fn) (void *userdata_);
-    // Test-only gate handoff probes run on the mailbox owner while tests arm
-    // and disarm them from an application thread. Atomics plus the active
-    // counter make disarm a lifetime barrier for stack-owned probe data. The
-    // generation additionally prevents a reader that observed an old hook
-    // from treating a same-function-pointer rearm as that old installation.
-    std::atomic<gate_release_hook_fn> gate_release_hook;
-    std::atomic<void *> gate_release_hook_userdata;
-    std::atomic<uint64_t> gate_release_hook_generation;
-    std::atomic<uint32_t> gate_release_hook_active;
-    typedef void (*inline_fallback_hook_fn) (void *userdata_);
-    inline_fallback_hook_fn inline_fallback_hook;
-    void *inline_fallback_hook_userdata;
-    typedef void (*target_failure_progress_hook_fn) (void *userdata_);
-    target_failure_progress_hook_fn target_failure_progress_hook;
-    void *target_failure_progress_hook_userdata;
-    typedef void (*deadline_enqueue_hook_fn) (void *userdata_);
-    deadline_enqueue_hook_fn deadline_enqueue_hook;
-    void *deadline_enqueue_hook_userdata;
-    bool fail_after_queue_push;
-#endif
 };
 
 struct socket_dispatch_bridge_t
 {
     socket_dispatch_bridge_t () :
-        socket_msg_handler (NULL),
-        socket_msg_handler_subject (NULL),
-        socket_msg_handler_userdata (NULL),
         send_recovery_pending_flag (false),
         send_recovery_ready_flag (false),
-        deferred_socket_msg_dispatch_pending (false),
         deferred_socket_msg_termination_head (NULL),
         deferred_socket_msg_termination_tail (NULL)
     {
@@ -790,19 +773,10 @@ struct socket_dispatch_bridge_t
     bool send_recovery_pending () const;
     bool send_recovery_ready () const;
 
-    std::atomic<zlink_socket_msg_handler_fn> socket_msg_handler;
-    std::atomic<void *> socket_msg_handler_subject;
-    std::atomic<void *> socket_msg_handler_userdata;
     std::atomic<bool> send_recovery_pending_flag;
     std::atomic<bool> send_recovery_ready_flag;
-    // Read activation is delivered while the command executor owns the
-    // receive mutex. Application callbacks must run only after that owner has
-    // released it, otherwise callback re-entry establishes the inverse
-    // dispatch -> receive lock order.
-    std::atomic<bool> deferred_socket_msg_dispatch_pending;
-    std::recursive_mutex socket_msg_dispatch_sync;
     // Pipe termination is reported while the command executor owns the
-    // receive mutex. Assembly/routing cleanup must wait until that outer scope
+    // receive mutex. Routing cleanup must wait until that outer scope
     // is gone, so keep a lifetime-pinned intrusive queue with no allocation
     // failure in the terminal path.
     mutex_t deferred_socket_msg_termination_sync;
@@ -815,8 +789,6 @@ class socket_lifecycle_coordinator_t
   public:
     socket_lifecycle_coordinator_t () :
         public_api_state (0),
-        callback_api_depth (0),
-        close_deferred (false),
         mailbox_ref_state (0),
         destroy_pending (false),
         reaper_poller_value (NULL),
@@ -848,9 +820,7 @@ class socket_lifecycle_coordinator_t
     // Returns true when this release removed the last mailbox/lifetime pin.
     bool release_poller_registration ();
     bool enter_public_api_and_lock_sync ();
-    bool enter_callback_api ();
-    bool leave_callback_api ();
-    bool begin_close_or_fail_busy (bool from_self_callback_);
+    bool begin_close_or_fail_busy ();
     bool public_close_requested () const;
     bool public_api_sync_held () const;
     bool public_api_sync_owned_by_current_thread () const;
@@ -873,8 +843,6 @@ class socket_lifecycle_coordinator_t
     void complete_deferred_close_handoff (mailbox_t *mailbox_,
                                           socket_base_t *socket_,
                                           int timeout_ms_);
-    void clear_deferred_close ();
-    bool take_deferred_close ();
     void mark_destroy_pending ();
     void clear_destroy_pending ();
     bool is_destroy_pending () const;
@@ -890,8 +858,6 @@ class socket_lifecycle_coordinator_t
     bool mailbox_refs_sealed () const;
 
     std::atomic<uint64_t> public_api_state;
-    std::atomic<uint32_t> callback_api_depth;
-    std::atomic<bool> close_deferred;
     std::atomic<uint32_t> mailbox_ref_state;
     std::atomic<bool> destroy_pending;
     poller_t *reaper_poller_value;
@@ -911,20 +877,6 @@ class socket_lifecycle_coordinator_t
     static thread_local socket_lifecycle_coordinator_t
       *_current_thread_public_api_sync_owner;
     socket_lifecycle_coordinator_t *_previous_thread_public_api_sync_owner;
-};
-
-class socket_callback_scope_t
-{
-  public:
-    explicit socket_callback_scope_t (socket_base_t *socket_);
-    ~socket_callback_scope_t ();
-
-    bool acquired () const { return _entered; }
-
-  private:
-    socket_base_t *_socket;
-    socket_lifecycle_coordinator_t *_coordinator;
-    bool _entered;
 };
 
 class socket_public_api_scope_t
@@ -1018,28 +970,6 @@ class socket_public_send_scope_t
     bool _multipart_marker_owned;
 };
 
-//  Marks the calling thread as running inside a Core completion callback for
-//  one socket. Both send-complete and reply callbacks use this global TLS
-//  scope; public submission entry points reject re-entry on any socket with
-//  EDEADLK.
-class socket_send_complete_dispatch_scope_t
-{
-  public:
-    explicit socket_send_complete_dispatch_scope_t (socket_base_t *socket_);
-    ~socket_send_complete_dispatch_scope_t ();
-
-    static socket_base_t *current_socket () { return _dispatch_socket; }
-    static bool dispatching_socket (const socket_base_t *socket_)
-    {
-        return _dispatch_socket == socket_;
-    }
-    static bool dispatching_any () { return _dispatch_socket != NULL; }
-
-  private:
-    inline static thread_local socket_base_t *_dispatch_socket = NULL;
-    socket_base_t *_previous;
-};
-
 struct socket_runtime_t
 {
     socket_endpoint_runtime_t endpoint_runtime;
@@ -1048,6 +978,7 @@ struct socket_runtime_t
     socket_monitor_runtime_t monitor_runtime;
     socket_dispatch_bridge_t dispatch_bridge;
     socket_send_pending_runtime_t send_pending_runtime;
+    socket_completion::queue_state_t completion_runtime;
     socket_lifecycle_coordinator_t lifecycle_coordinator;
 };
 }

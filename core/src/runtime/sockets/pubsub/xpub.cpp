@@ -23,8 +23,6 @@ zlink::xpub_t::xpub_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     _send_last_pipe (false),
     _pending_pipes (),
     _welcome_msg (),
-    _dispatch_active (false),
-    _dispatch_inflight (0),
     _delivery_ready_peer_count (0)
 {
     _last_pipe = NULL;
@@ -183,8 +181,6 @@ void zlink::xpub_t::xread_activated (pipe_t *pipe_)
     if (pipe_)
         refresh_delivery_ready_state (pipe_->get_endpoint_pair ());
 
-    if (_dispatch_active.load (std::memory_order_acquire))
-        dispatch_ready_messages ();
 }
 
 void zlink::xpub_t::xwrite_activated (pipe_t *pipe_)
@@ -472,90 +468,6 @@ int zlink::xpub_t::xrecv (msg_t *msg_)
 bool zlink::xpub_t::xhas_in ()
 {
     return !_pending_data.empty ();
-}
-
-void zlink::xpub_t::xdispatch_io ()
-{
-    if (!_dispatch_active.load (std::memory_order_acquire))
-        return;
-
-    // xdispatch_io() is the receive-ownership boundary for every socket type.
-    // XPUB keeps its pending subscription queues under the same lock that its
-    // command callbacks use; unlike the message dispatchers it invokes no
-    // application callback while this lock is held.
-    scoped_lock_t receive_lock (receive_sync ());
-    while (_dispatch_active.load (std::memory_order_acquire)) {
-        const int rc = dispatch_ready_messages ();
-        if (rc != 0)
-            return;
-        if (!xhas_in ())
-            return;
-    }
-}
-
-int zlink::xpub_t::xpub_dispatch_start ()
-{
-    io_thread_t *io_thread = choose_io_thread (options.affinity);
-    if (!io_thread) {
-        errno = EAGAIN;
-        return -1;
-    }
-
-    std::lock_guard<std::mutex> lk (_dispatch_control_mu);
-    if (_dispatch_active.load (std::memory_order_acquire))
-        return 0;
-
-    retain_async_command_processing ();
-    _dispatch_active.store (true, std::memory_order_release);
-    if (start_async_mailbox_processing (io_thread) != 0) {
-        _dispatch_active.store (false, std::memory_order_release);
-        return -1;
-    }
-    return 0;
-}
-
-bool zlink::xpub_t::xpub_dispatch_active () const
-{
-    return _dispatch_active.load (std::memory_order_acquire);
-}
-
-int zlink::xpub_t::dispatch_ready_messages ()
-{
-    while (_dispatch_active.load (std::memory_order_acquire) && xhas_in ()) {
-        msg_t msg;
-        const int init_rc = msg.init ();
-        errno_assert (init_rc == 0);
-
-        const int rc = xrecv (&msg);
-        if (rc != 0) {
-            const int close_rc = msg.close ();
-            errno_assert (close_rc == 0);
-            return -1;
-        }
-
-        const int dispatch_rc = dispatch_message (&msg);
-        const int close_rc = msg.close ();
-        errno_assert (close_rc == 0);
-        if (dispatch_rc != 0)
-            return dispatch_rc;
-    }
-
-    return 0;
-}
-
-int zlink::xpub_t::dispatch_message (zlink::msg_t *msg_)
-{
-    LIBZLINK_UNUSED (msg_);
-    return 0;
-}
-
-void zlink::xpub_t::notify_dispatch_stopped ()
-{
-    const uint32_t remaining = _dispatch_inflight.fetch_sub (1, std::memory_order_acq_rel) - 1;
-    if (remaining == 0) {
-        std::lock_guard<std::mutex> lk (_dispatch_inflight_mu);
-        _dispatch_inflight_cv.notify_all ();
-    }
 }
 
 void zlink::xpub_t::send_unsubscription (zlink::mtrie_t::prefix_t data_,

@@ -124,6 +124,7 @@ zlink::options_t::options_t () :
     invert_matching (false),
     recv_routing_id (false),
     stream_notify (false),
+    stream_recv_mode (ZLINK_STREAM_RECV_MODE_UNSPECIFIED),
     tcp_keepalive (-1),
     tcp_keepalive_cnt (-1),
     tcp_keepalive_idle (-1),

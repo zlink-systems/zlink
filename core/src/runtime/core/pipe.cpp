@@ -312,6 +312,7 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _transport_pair_id (0),
     _transport_pair_generation (0),
     _locally_initiated (false),
+    _peer_socket_type (0),
     _peer_weight_connection_id (UINT64_MAX),
     _peer_weight (UINT32_MAX),
     _pending_peer_weight (pending_peer_weight_unset)
@@ -557,6 +558,16 @@ void zlink::pipe_t::set_peer_routing_id (const unsigned char *data_, size_t size
     set_router_socket_routing_id (routing_id);
     if (_connected_time == 0)
         _connected_time = static_cast<uint64_t> (time (NULL));
+}
+
+void zlink::pipe_t::set_peer_socket_type (int socket_type_)
+{
+    _peer_socket_type.store (socket_type_, std::memory_order_release);
+}
+
+int zlink::pipe_t::get_peer_socket_type () const
+{
+    return _peer_socket_type.load (std::memory_order_acquire);
 }
 
 void zlink::pipe_t::set_transport_peer_identity (const unsigned char *data_, size_t size_)
@@ -956,6 +967,44 @@ bool invoke_pipe_record_admission (const zlink::msg_t &msg_, void *userdata_)
     return probe->result == 0
            || probe->result == zlink::pipe_t::read_admission_reject_consume;
 }
+
+bool probe_pipe_record_admission (const zlink::msg_t &msg_, void *userdata_)
+{
+    (void) invoke_pipe_record_admission (msg_, userdata_);
+    return false;
+}
+}
+
+bool zlink::pipe_t::check_read_with_record_admission (
+  read_admission_fn *admission_, void *userdata_,
+  bool *admission_failed_out_)
+{
+    if (admission_failed_out_)
+        *admission_failed_out_ = false;
+    if (unlikely (_state != active && _state != waiting_for_delimiter))
+        return false;
+    if (!check_read ())
+        return false;
+    if (!admission_)
+        return true;
+
+    pipe_read_admission_probe_t probe = {this, admission_, userdata_, 0,
+                                         errno};
+    msg_t untouched;
+    const ypipe_read_result_t read_result =
+      _in_pipe->read_if (&untouched, &probe_pipe_record_admission, &probe);
+    zlink_assert (read_result != ypipe_read_consumed);
+    if (read_result == ypipe_read_empty) {
+        _in_active = false;
+        return false;
+    }
+    if (probe.result != 0) {
+        if (admission_failed_out_)
+            *admission_failed_out_ = true;
+        errno = probe.error_number;
+        return false;
+    }
+    return true;
 }
 
 template <bool WithAdmission>

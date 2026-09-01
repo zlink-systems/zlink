@@ -37,16 +37,3 @@ bool zlink::socket_dispatch_bridge_t::send_recovery_ready () const
 {
     return send_recovery_ready_flag.load (std::memory_order_acquire);
 }
-
-zlink::socket_send_complete_dispatch_scope_t::
-  socket_send_complete_dispatch_scope_t (socket_base_t *socket_) :
-    _previous (_dispatch_socket)
-{
-    _dispatch_socket = socket_;
-}
-
-zlink::socket_send_complete_dispatch_scope_t::
-  ~socket_send_complete_dispatch_scope_t ()
-{
-    _dispatch_socket = _previous;
-}

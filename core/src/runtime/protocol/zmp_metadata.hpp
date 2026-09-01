@@ -87,15 +87,10 @@ static inline void add_basic_properties (const options_t &options_,
     append_property (buf_, "Zlink-Max-Message-Size", max_message_size,
                      sizeof (max_message_size));
 
-    if (options_.transport_pair_id != 0) {
-        unsigned char pair_id[8];
-        unsigned char generation[8];
-        put_uint64 (pair_id, options_.transport_pair_id);
-        put_uint64 (generation, options_.transport_pair_generation);
+    if (options_.type == ZLINK_CORE_SOCKET_DEALER
+        || options_.type == ZLINK_CORE_SOCKET_ROUTER) {
         const unsigned char lane =
           options_.transport_lane == transport_lane_completion ? 1u : 0u;
-        append_property (buf_, "Zlink-Pair-Id", pair_id, sizeof (pair_id));
-        append_property (buf_, "Zlink-Pair-Generation", generation, sizeof (generation));
         append_property (buf_, "Zlink-Lane", &lane, sizeof (lane));
     }
 }
@@ -119,23 +114,13 @@ static inline int parse_max_message_size (const properties_t &properties_,
     return 1;
 }
 
-static inline int parse_transport_pair (const properties_t &properties_,
-                                        transport_lane_t *lane_out_,
-                                        uint64_t *pair_id_out_,
-                                        uint64_t *generation_out_)
+static inline int parse_transport_lane (const properties_t &properties_,
+                                        transport_lane_t *lane_out_)
 {
-    const properties_t::const_iterator pair_it = properties_.find ("Zlink-Pair-Id");
-    const properties_t::const_iterator generation_it =
-      properties_.find ("Zlink-Pair-Generation");
     const properties_t::const_iterator lane_it = properties_.find ("Zlink-Lane");
-    const bool any = pair_it != properties_.end ()
-                     || generation_it != properties_.end ()
-                     || lane_it != properties_.end ();
-    if (!any)
+    if (lane_it == properties_.end ())
         return 0;
-    if (pair_it == properties_.end () || pair_it->second.size () != 8
-        || generation_it == properties_.end () || generation_it->second.size () != 8
-        || lane_it == properties_.end () || lane_it->second.size () != 1) {
+    if (lane_it->second.size () != 1) {
         errno = EPROTO;
         return -1;
     }
@@ -148,17 +133,6 @@ static inline int parse_transport_pair (const properties_t &properties_,
     if (lane_out_)
         *lane_out_ =
           lane == 1 ? transport_lane_completion : transport_lane_application;
-    if (pair_id_out_)
-        *pair_id_out_ = get_uint64 (
-          reinterpret_cast<const unsigned char *> (pair_it->second.data ()));
-    if (generation_out_)
-        *generation_out_ = get_uint64 (
-          reinterpret_cast<const unsigned char *> (generation_it->second.data ()));
-    if ((pair_id_out_ && *pair_id_out_ == 0)
-        || (generation_out_ && *generation_out_ == 0)) {
-        errno = EPROTO;
-        return -1;
-    }
     return 1;
 }
 

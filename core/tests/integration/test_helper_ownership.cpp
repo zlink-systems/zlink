@@ -27,10 +27,6 @@ zlink_routing_id_t missing_routing_id ()
     return rid;
 }
 
-void ignore_reply (zlink_request_result_t, zlink_msg_t *, size_t, void *)
-{
-}
-
 void set_errno_on_free (void *, void *hint_)
 {
     ++*static_cast<int *> (hint_);
@@ -50,14 +46,14 @@ void test_send_part_consumes_input_and_requires_reinit_before_reuse ()
     init_part (&part, "first");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (sender, &part, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL));
+      zlink_send_part (sender, &part, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL, NULL, NULL));
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&part));
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&part, 6));
     memcpy (zlink_msg_data (&part), "second", 6);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (sender, &part, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL));
+      zlink_send_part (sender, &part, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL, NULL, NULL));
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&part));
 
     zlink_msg_t *received = NULL;
@@ -87,7 +83,7 @@ void test_rejected_send_part_consumes_current_part ()
     init_part (&first, "first");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (sender, &first, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE));
+      zlink_send_part (sender, &first, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE, NULL, NULL));
 
     zlink_submit_result_t rejected_rc = ZLINK_SUBMIT_OK;
     int rejected_errno = 0;
@@ -101,7 +97,7 @@ void test_rejected_send_part_consumes_current_part ()
         }
         memcpy (zlink_msg_data (&rejected), "rejected", 8);
         rejected_rc = zlink_send_part (sender, &rejected,
-                                       static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL);
+                                       static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL, NULL, NULL);
         rejected_errno = zlink_errno ();
         remaining_size = zlink_msg_size (&rejected);
         if (zlink_msg_close (&rejected) != ZLINK_CONFIG_OK)
@@ -113,7 +109,7 @@ void test_rejected_send_part_consumes_current_part ()
     init_part (&final_part, "final");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (sender, &final_part, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL));
+      zlink_send_part (sender, &final_part, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL, NULL, NULL));
 
     std::printf ("rejected_part_ownership rc=%d errno=%d remaining_size=%zu\n",
                  static_cast<int> (rejected_rc), rejected_errno, remaining_size);
@@ -140,11 +136,13 @@ void test_send_failures_consume_current_part ()
 
     zlink_msg_t invalid_flags;
     init_part (&invalid_flags, "invalid-flags");
+    errno = 0;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_NOT_SUPPORTED,
+      ZLINK_SUBMIT_INVALID_ARGUMENT,
       zlink_send_part (pair, &invalid_flags,
                        static_cast<zlink_send_flags_t> (0x40),
-                       ZLINK_PART_FINAL));
+                       ZLINK_PART_FINAL, NULL, NULL));
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&invalid_flags));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&invalid_flags));
 
@@ -153,7 +151,8 @@ void test_send_failures_consume_current_part ()
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_NOT_CONNECTED,
       zlink_send_part_rid (router, &missing, &missing_route,
-                           ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL));
+                           ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL,
+                           NULL));
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&missing_route));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&missing_route));
 
@@ -178,7 +177,7 @@ void test_unrouted_send_part_rejects_routed_only_socket_families ()
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_NOT_SUPPORTED,
       zlink_send_part (router, &router_part, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL));
+                       ZLINK_PART_FINAL, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&router_part));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&router_part));
@@ -189,7 +188,7 @@ void test_unrouted_send_part_rejects_routed_only_socket_families ()
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_NOT_SUPPORTED,
       zlink_send_part (stream, &stream_part, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL));
+                       ZLINK_PART_FINAL, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&stream_part));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&stream_part));
@@ -209,17 +208,17 @@ void test_same_thread_failure_aborts_non_publish_sequence ()
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_send_part (sender, &head, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_MORE));
+                       ZLINK_PART_MORE, NULL, NULL));
 
     zlink_msg_t rejected;
     init_part (&rejected, "rejected-tail");
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_NOT_SUPPORTED,
+      ZLINK_SUBMIT_INVALID_ARGUMENT,
       zlink_send_part (sender, &rejected,
                        static_cast<zlink_send_flags_t> (0x40),
-                       ZLINK_PART_FINAL));
-    TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
+                       ZLINK_PART_FINAL, NULL, NULL));
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&rejected));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&rejected));
 
@@ -228,7 +227,7 @@ void test_same_thread_failure_aborts_non_publish_sequence ()
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_send_part (sender, &fresh, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL));
+                       ZLINK_PART_FINAL, NULL, NULL));
 
     zlink_msg_t *received = NULL;
     size_t part_count = 0;
@@ -266,11 +265,11 @@ void test_publish_prevalidation_failures_preserve_open_sequence ()
     init_part (&invalid_flags, "invalid-flags");
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_NOT_SUPPORTED,
+      ZLINK_SUBMIT_INVALID_ARGUMENT,
       zlink_publish_part (pub, topic, &invalid_flags,
                           static_cast<zlink_send_flags_t> (0x40),
                           ZLINK_PART_FINAL));
-    TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&invalid_flags));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&invalid_flags));
 
@@ -291,7 +290,7 @@ void test_publish_prevalidation_failures_preserve_open_sequence ()
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_NOT_SUPPORTED,
       zlink_send_part (pub, &different_helper, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL));
+                       ZLINK_PART_FINAL, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&different_helper));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&different_helper));
@@ -348,11 +347,11 @@ void test_consuming_failure_preserves_result_errno_from_free_callback ()
 
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_NOT_SUPPORTED,
+      ZLINK_SUBMIT_INVALID_ARGUMENT,
       zlink_send_part (pair, &part,
                        static_cast<zlink_send_flags_t> (0x40),
-                       ZLINK_PART_FINAL));
-    TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
+                       ZLINK_PART_FINAL, NULL, NULL));
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
     TEST_ASSERT_EQUAL_INT (1, free_count);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&part));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
@@ -366,29 +365,37 @@ void test_request_reply_failures_consume_final_part ()
 
     zlink_msg_t request;
     init_part (&request, "request-payload");
+    zlink_completion_id_t completion_id = UINT64_MAX;
+    errno = 0;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_NOT_CONNECTED,
-      zlink_router_request_part (
-        router, &missing, &request, ZLINK_SEND_FLAGS_DONTWAIT,
-        ZLINK_PART_FINAL, 0, &ignore_reply, NULL));
+      ZLINK_SUBMIT_NOT_FOUND,
+      zlink_request_part (router, &missing, &request,
+                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 0,
+                          NULL, &completion_id));
+    TEST_ASSERT_EQUAL_INT (ENOENT, errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&request));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&request));
 
     zlink_msg_t router_reply;
     init_part (&router_reply, "router-reply");
+    errno = 0;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_NOT_CONNECTED,
-      zlink_router_reply_part (router, &missing, 1, &router_reply,
-                               ZLINK_PART_FINAL));
+      ZLINK_SUBMIT_NOT_FOUND,
+      zlink_reply_part (router, &missing, 1, &router_reply,
+                        ZLINK_PART_FINAL));
+    TEST_ASSERT_EQUAL_INT (ENOENT, errno);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&router_reply));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&router_reply));
 
     zlink_msg_t dealer_reply;
     init_part (&dealer_reply, "dealer-reply");
+    errno = 0;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_NOT_FOUND,
-      zlink_dealer_reply_part (dealer, 1, &dealer_reply,
-                               ZLINK_PART_FINAL));
+      ZLINK_SUBMIT_NOT_SUPPORTED,
+      zlink_reply_part (dealer, &missing, 1, &dealer_reply,
+                        ZLINK_PART_FINAL));
+    TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&dealer_reply));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&dealer_reply));
 }

@@ -23,10 +23,6 @@ void init_part (zlink_msg_t *part_, const char *text_)
     memcpy (zlink_msg_data (part_), text_, strlen (text_));
 }
 
-void ignore_reply (zlink_request_result_t, zlink_msg_t *, size_t, void *)
-{
-}
-
 void init_tagged_part (zlink_msg_t *part_, unsigned char kind_, int round_)
 {
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (part_, 1 + sizeof (round_)));
@@ -121,10 +117,6 @@ bool recv_pair_record_eventually (void *receiver_,
     return false;
 }
 
-void ignore_send_completion (void *, const zlink_send_complete_event_t *, void *)
-{
-}
-
 bool recv_published_record_eventually (
   void *subscriber_, const char *expected_topic_,
   const std::vector<std::string> &expected_parts_, int timeout_ms_ = 3000)
@@ -216,10 +208,10 @@ struct one_call_send_probe_t
 struct paired_close_probe_t
 {
     paired_close_probe_t () : ready (0), go (false), local_done (false),
-                               peer_done (false),
-                               local_result (ZLINK_CLOSE_INTERNAL_ERROR),
-                               peer_result (ZLINK_CLOSE_INTERNAL_ERROR),
-                               local_errno (0), peer_errno (0)
+                              peer_done (false),
+                              local_result (ZLINK_CLOSE_INTERNAL_ERROR),
+                              peer_result (ZLINK_CLOSE_INTERNAL_ERROR),
+                              local_errno (0), peer_errno (0)
     {
     }
 
@@ -300,7 +292,7 @@ void test_complete_record_admission_rejects_new_multipart_sequence ()
         errno = 0;
         rejected_rc = zlink_send_part (sender, &part,
                                        static_cast<zlink_send_flags_t> (0),
-                                       ZLINK_PART_MORE);
+                                       ZLINK_PART_MORE, NULL, NULL);
         rejected_errno = zlink_errno ();
         rejected_remaining_size = zlink_msg_size (&part);
         rejected_close_rc = zlink_msg_close (&part);
@@ -324,13 +316,13 @@ void test_complete_record_admission_rejects_new_multipart_sequence ()
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_send_part (sender, &accepted_more, static_cast<zlink_send_flags_t> (0),
-                       ZLINK_PART_MORE));
+                       ZLINK_PART_MORE, NULL, NULL));
     zlink_msg_t accepted_final;
     init_part (&accepted_final, "accepted-final");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_send_part (sender, &accepted_final, static_cast<zlink_send_flags_t> (0),
-                       ZLINK_PART_FINAL));
+                       ZLINK_PART_FINAL, NULL, NULL));
 
     zlink_msg_t *parts = NULL;
     size_t part_count = 0;
@@ -365,7 +357,7 @@ void test_pair_close_aborts_suspended_multipart_without_exposing_prefix ()
     init_part (&head, "close-prefix");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (sender, &head, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE));
+      zlink_send_part (sender, &head, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, NULL, NULL));
     const bool prefix_hidden_before_close = pair_has_no_record_for (receiver, 25);
 
     // Initialize the cleanup part before close starts. If the implementation
@@ -417,7 +409,7 @@ void test_pair_close_aborts_suspended_multipart_without_exposing_prefix ()
         cleanup_final_sent = true;
         errno = 0;
         cleanup_final_result = zlink_send_part (
-          sender, &cleanup_final, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+          sender, &cleanup_final, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
         cleanup_final_errno = errno;
     }
 
@@ -436,7 +428,7 @@ void test_pair_close_aborts_suspended_multipart_without_exposing_prefix ()
         cleanup_final_sent = true;
         errno = 0;
         cleanup_final_result = zlink_send_part (
-          sender, &cleanup_final, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+          sender, &cleanup_final, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
         cleanup_final_errno = errno;
     }
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&cleanup_final));
@@ -482,7 +474,7 @@ void test_pair_close_aborts_suspended_multipart_without_exposing_prefix ()
     test_context_socket_close_zero_linger (receiver);
 }
 
-void test_pair_async_owner_peer_termination_races_local_multipart_cleanup ()
+void test_pair_peer_termination_races_local_multipart_cleanup ()
 {
     const int rounds = 16;
     bool all_workers_ready = true;
@@ -503,19 +495,16 @@ void test_pair_async_owner_peer_termination_races_local_multipart_cleanup ()
 
         char endpoint[96];
         snprintf (endpoint, sizeof (endpoint),
-                  "inproc://helper-interleave-pair-async-close-%d", round);
+                  "inproc://helper-interleave-pair-close-%d", round);
         TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (receiver, endpoint));
         TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sender, endpoint));
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_HANDLER_OK,
-          zlink_send_complete_handler (sender, &ignore_send_completion, NULL));
 
         zlink_msg_t head;
         init_part (&head, "async-close-prefix");
         TEST_ASSERT_EQUAL_INT (
           ZLINK_SUBMIT_OK,
           zlink_send_part (sender, &head, ZLINK_SEND_FLAGS_NONE,
-                           ZLINK_PART_MORE));
+                           ZLINK_PART_MORE, NULL, NULL));
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&head));
         all_prefixes_hidden =
           pair_has_no_record_for (receiver, 10) && all_prefixes_hidden;
@@ -612,13 +601,13 @@ void test_pair_async_owner_peer_termination_races_local_multipart_cleanup ()
       "PAIR exposed a parked multipart prefix before peer termination");
     TEST_ASSERT_FALSE_MESSAGE (
       rescue_shutdown_needed,
-      "PAIR async-owner termination/cleanup race required context shutdown");
+      "PAIR termination/cleanup race required context shutdown");
     TEST_ASSERT_TRUE_MESSAGE (
       all_closes_completed,
-      "PAIR async-owner termination/cleanup race did not complete both closes");
+      "PAIR termination/cleanup race did not complete both closes");
     TEST_ASSERT_TRUE_MESSAGE (
       all_close_results_ok,
-      "PAIR async-owner termination/cleanup race returned a close error");
+      "PAIR termination/cleanup race returned a close error");
     TEST_ASSERT_EQUAL_INT (rounds, completed_rounds);
 }
 
@@ -750,10 +739,6 @@ void run_pair_one_call_multipart_backpressure_abort_round (int round_)
               "inproc://helper-interleave-pair-retry-final-%d", round_);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (receiver, endpoint));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sender, endpoint));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_HANDLER_OK,
-      zlink_send_complete_handler (sender, &ignore_send_completion, NULL));
-
     // With byte accounting included these sizes produce:
     // filler + prefix <= HWM, but filler + prefix + original FINAL > HWM.
     // PAIR must atomically roll back the staged prefix and return EAGAIN when
@@ -1115,7 +1100,7 @@ void test_pair_whole_multipart_does_not_interleave_concurrent_final_records ()
             memcpy (data + 1, &round, sizeof (round));
             if (zlink_send_part (sender, &part,
                                  static_cast<zlink_send_flags_t> (0),
-                                 ZLINK_PART_FINAL)
+                                 ZLINK_PART_FINAL, NULL, NULL)
                 != ZLINK_SUBMIT_OK)
                 send_errors.fetch_add (1, std::memory_order_relaxed);
             if (zlink_msg_close (&part) != ZLINK_CONFIG_OK)
@@ -1260,7 +1245,7 @@ void test_open_send_part_sequence_rejects_concurrent_single_records ()
         init_tagged_part (&first, 'M', round);
         TEST_ASSERT_EQUAL_INT (
           ZLINK_SUBMIT_OK,
-          zlink_send_part (sender, &first, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE));
+          zlink_send_part (sender, &first, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE, NULL, NULL));
 
         {
             std::lock_guard<std::mutex> lock (mutex);
@@ -1278,7 +1263,7 @@ void test_open_send_part_sequence_rejects_concurrent_single_records ()
         TEST_ASSERT_EQUAL_INT (
           ZLINK_SUBMIT_OK,
           zlink_send_part (sender, &final_part, static_cast<zlink_send_flags_t> (0),
-                           ZLINK_PART_FINAL));
+                           ZLINK_PART_FINAL, NULL, NULL));
     }
 
     receiver_thread.join ();
@@ -1324,13 +1309,16 @@ void test_wrong_send_helper_aborts_open_sequence ()
     init_part (&first, "hello");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (dealer, &first, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE));
+      zlink_send_part (dealer, &first, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE, NULL, NULL));
 
     zlink_msg_t wrong_family;
     init_part (&wrong_family, "request");
+    zlink_completion_id_t ignored_completion_id = 0;
     const zlink_submit_result_t wrong_rc =
-      zlink_dealer_request_part (dealer, &wrong_family, static_cast<zlink_send_flags_t> (0),
-                                 ZLINK_PART_FINAL, 1000, &ignore_reply, NULL);
+      zlink_request_part (dealer, NULL, &wrong_family,
+                          static_cast<zlink_send_flags_t> (0),
+                          ZLINK_PART_FINAL, 1000, NULL,
+                          &ignored_completion_id);
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_INVALID_ARGUMENT, wrong_rc);
     TEST_ASSERT_EQUAL_INT (EINVAL, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&wrong_family));
@@ -1340,7 +1328,7 @@ void test_wrong_send_helper_aborts_open_sequence ()
     init_part (&last, "world");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (dealer, &last, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL));
+      zlink_send_part (dealer, &last, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL, NULL, NULL));
 
     recv_string_expect_success (router, "D1", 0);
     recv_string_expect_success (router, "world", 0);
@@ -1385,12 +1373,14 @@ void test_target_change_aborts_open_routed_sequence ()
     init_part (&first, "frame-a");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK, zlink_send_part_rid (router, &rid1, &first,
-                                            static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE));
+                                            static_cast<zlink_send_flags_t> (0),
+                                            ZLINK_PART_MORE, NULL, NULL));
 
     zlink_msg_t wrong_target;
     init_part (&wrong_target, "frame-b");
     const zlink_submit_result_t wrong_rc = zlink_send_part_rid (
-      router, &rid2, &wrong_target, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE);
+      router, &rid2, &wrong_target, static_cast<zlink_send_flags_t> (0),
+      ZLINK_PART_MORE, NULL, NULL);
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_INVALID_ARGUMENT, wrong_rc);
     TEST_ASSERT_EQUAL_INT (EINVAL, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&wrong_target));
@@ -1400,7 +1390,8 @@ void test_target_change_aborts_open_routed_sequence ()
     init_part (&last, "frame-c");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK, zlink_send_part_rid (router, &rid1, &last,
-                                            static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL));
+                                            static_cast<zlink_send_flags_t> (0),
+                                            ZLINK_PART_FINAL, NULL, NULL));
 
     recv_string_expect_success (dealer1, "frame-c", 0);
 
@@ -1417,7 +1408,7 @@ int main (void)
     RUN_TEST (test_complete_record_admission_rejects_new_multipart_sequence);
     RUN_TEST (test_pair_close_aborts_suspended_multipart_without_exposing_prefix);
     RUN_TEST (
-      test_pair_async_owner_peer_termination_races_local_multipart_cleanup);
+      test_pair_peer_termination_races_local_multipart_cleanup);
     RUN_TEST (test_publish_validation_failure_releases_sync_for_query_before_final);
     RUN_TEST (
       test_pair_one_call_multipart_backpressure_aborts_before_concurrent_final);

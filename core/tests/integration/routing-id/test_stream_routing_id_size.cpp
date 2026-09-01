@@ -7,7 +7,6 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
-#include <atomic>
 
 #if defined(ZLINK_HAVE_WINDOWS)
 #include <winsock2.h>
@@ -20,15 +19,6 @@
 SETUP_TEARDOWN_TESTCONTEXT
 
 static const size_t stream_routing_id_size = 4;
-struct stream_probe_t
-{
-    std::atomic<int> calls;
-    std::atomic<int> rid_size_ok;
-    std::atomic<int> payload_ok;
-    stream_probe_t () : calls (0), rid_size_ok (0), payload_ok (0) {}
-};
-
-static stream_probe_t *g_stream_probe = NULL;
 
 static bool parse_tcp_endpoint (const char *endpoint_, char host_[64], int *port_)
 {
@@ -129,48 +119,17 @@ static void close_raw_fd (int fd_)
 }
 #endif
 
-static int on_stream_packet (const zlink_routing_id_t *rid_, zlink_msg_t *msg_, void *)
-{
-    stream_probe_t *p = g_stream_probe;
-    if (!p || !rid_ || !msg_)
-        return 0;
-
-    p->calls.fetch_add (1, std::memory_order_release);
-    if (rid_->size == stream_routing_id_size)
-        p->rid_size_ok.store (1, std::memory_order_release);
-
-    const unsigned char *payload = static_cast<const unsigned char *> (zlink_msg_data (msg_));
-    const size_t payload_size = zlink_msg_size (msg_);
-    if (payload_size == 1 && payload && payload[0] == 'x')
-        p->payload_ok.store (1, std::memory_order_release);
-    (void) zlink_msg_close (msg_);
-
-    return 0;
-}
-
-static void on_stream_handler (const zlink_routing_id_t *rid_,
-                               zlink_msg_t *parts_,
-                               size_t part_count_,
-                               void *userdata_)
-{
-    if (part_count_ > 0)
-        (void) on_stream_packet (rid_, &parts_[0], userdata_);
-    for (size_t i = 1; i < part_count_; ++i)
-        (void) zlink_msg_close (&parts_[i]);
-}
-
 void test_stream_auto_routing_id_size ()
 {
-    stream_probe_t probe;
-
     void *server = test_context_socket (ZLINK_SOCKET_STREAM);
     TEST_ASSERT_NOT_NULL (server);
 
     const int zero = 0;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
-
-    g_stream_probe = &probe;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_recv_handler (server, &on_stream_handler, NULL));
+    const zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_RAW;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_stream_option (server, ZLINK_STREAM_OPT_RECV_MODE, &mode,
+                               sizeof (mode)));
 
     char endpoint[MAX_SOCKET_STRING];
     bind_loopback_ipv4 (server, endpoint, sizeof endpoint);
@@ -181,8 +140,15 @@ void test_stream_auto_routing_id_size ()
     const char payload[] = "x";
     TEST_ASSERT_EQUAL_INT (0, send_stream_packet (client_fd, payload, sizeof (payload) - 1));
 
-    for (int i = 0; i < 200; ++i) {
-        if (probe.calls.load (std::memory_order_acquire) > 0)
+    const zlink_routing_id_t *rid = NULL;
+    zlink_msg_t received;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&received));
+    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    zlink_recv_result_t recv_result = ZLINK_RECV_NO_DATA;
+    for (int i = 0; i < 200 && recv_result == ZLINK_RECV_NO_DATA; ++i) {
+        recv_result = zlink_recv_part (server, &rid, &received, &has_more,
+                                       ZLINK_RECV_FLAGS_DONTWAIT);
+        if (recv_result != ZLINK_RECV_NO_DATA)
             break;
 #if defined(ZLINK_HAVE_WINDOWS)
         Sleep (10);
@@ -191,12 +157,17 @@ void test_stream_auto_routing_id_size ()
 #endif
     }
 
-    TEST_ASSERT_TRUE (probe.calls.load (std::memory_order_acquire) > 0);
-    TEST_ASSERT_EQUAL_INT (1, probe.rid_size_ok.load (std::memory_order_acquire));
-    TEST_ASSERT_EQUAL_INT (1, probe.payload_ok.load (std::memory_order_acquire));
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, recv_result);
+    TEST_ASSERT_NOT_NULL (rid);
+    TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, rid->size);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    TEST_ASSERT_EQUAL_UINT64 (1, zlink_msg_size (&received));
+    TEST_ASSERT_EQUAL_UINT8 ('x',
+                             *static_cast<unsigned char *> (
+                               zlink_msg_data (&received)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&received));
 
     close_raw_fd (client_fd);
-    g_stream_probe = NULL;
     test_context_socket_close_zero_linger (server);
 }
 

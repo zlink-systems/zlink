@@ -76,6 +76,10 @@ class asio_engine_t : public i_engine
     virtual bool handshake () { return true; }
     virtual void plug_internal () {}
     virtual bool prepare_deferred_handshake_output () { return false; }
+    //  Protocols may extend the handshake deadline to a post-READY fence.
+    //  Return false when the timer fired after that fence was already
+    //  satisfied; the default preserves the ordinary handshake timeout.
+    virtual bool handshake_timer_should_fail () { return true; }
 
     virtual int process_command_message (msg_t *msg_)
     {

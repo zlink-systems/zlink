@@ -88,11 +88,6 @@ void zlink::object_t::process_command (const command_t &cmd_)
         case command_t::request_completion:
             break;
 
-        case command_t::send_pending_timeout:
-            process_send_pending_timeout (
-              cmd_.args.send_pending_timeout.op_id);
-            break;
-
         case command_t::stop:
             process_stop ();
             break;
@@ -505,11 +500,6 @@ void zlink::object_t::process_flow_state (unsigned char, uint64_t)
 }
 
 void zlink::object_t::process_peer_weight (uint32_t, uint64_t)
-{
-    zlink_assert (false);
-}
-
-void zlink::object_t::process_send_pending_timeout (uint64_t)
 {
     zlink_assert (false);
 }

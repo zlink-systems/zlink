@@ -192,6 +192,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     pipe_t *retain_peer_snapshot () const;
     bool is_session_pipe () const;
     void set_peer_routing_id (const unsigned char *data_, size_t size_);
+    void set_peer_socket_type (int socket_type_);
+    int get_peer_socket_type () const;
     void set_transport_peer_identity (const unsigned char *data_, size_t size_);
     const blob_t &get_transport_peer_identity () const;
     uint64_t get_msgs_written () const;
@@ -258,6 +260,13 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool read_with_record_admission (
       msg_t *msg_, read_admission_fn *admission_, void *userdata_,
       bool *admission_failed_out_, bool *admission_consumed_out_);
+    //  Probes the queued head without consuming it. When the head starts a
+    //  record, admission_ decides whether that record is currently
+    //  receivable. This is used by level readiness and fair-queue skipping so
+    //  a capacity-blocked REQUEST cannot make POLLIN lie or stall other pipes.
+    bool check_read_with_record_admission (
+      read_admission_fn *admission_, void *userdata_,
+      bool *admission_failed_out_);
     int reserve_inbound_decoder_frame (
       uint64_t payload_bytes_, unsigned char msg_flags_, bool track_multipart_,
       decoder_frame_reservation_t *reservation_storage_,
@@ -764,6 +773,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     uint64_t _transport_pair_id;
     uint64_t _transport_pair_generation;
     bool _locally_initiated;
+    std::atomic<int> _peer_socket_type;
     std::atomic<uint64_t> _peer_weight_connection_id;
     std::atomic<uint32_t> _peer_weight;
 

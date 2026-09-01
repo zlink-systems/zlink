@@ -26,6 +26,20 @@ int socket_type_of (zlink::socket_base_t *socket_)
     return type;
 }
 
+namespace
+{
+bool pending_option_supported_by (zlink_option_t option_, int socket_type_)
+{
+    if (option_ != ZLINK_OPT_PENDING_MAX_MSGS
+        && option_ != ZLINK_OPT_PENDING_MAX_BYTES)
+        return true;
+    return socket_type_ == ZLINK_CORE_SOCKET_PAIR
+           || socket_type_ == ZLINK_CORE_SOCKET_DEALER
+           || socket_type_ == ZLINK_CORE_SOCKET_ROUTER
+           || socket_type_ == ZLINK_CORE_SOCKET_STREAM;
+}
+}
+
 int set_socket_option_checked (zlink::socket_base_t *socket_,
                                int type_,
                                int expected_a_,
@@ -100,6 +114,11 @@ zlink_set_option (void *handle_, zlink_option_t option_, const void *optval_, si
 
     const zlink::option_target_t target = zlink::resolve_option_target (handle_);
     if (target.kind == zlink::option_target_socket) {
+        if (!pending_option_supported_by (option_,
+                                          socket_type_of (target.socket))) {
+            errno = ENOTSUP;
+            return ZLINK_CONFIG_NOT_SUPPORTED;
+        }
         if (descriptor->unsupported_on_socket) {
             errno = EINVAL;
             return ZLINK_CONFIG_INVALID_ARGUMENT;
@@ -122,6 +141,11 @@ zlink_get_option (void *handle_, zlink_option_t option_, void *optval_, size_t *
 
     const zlink::option_target_t target = zlink::resolve_option_target (handle_);
     if (target.kind == zlink::option_target_socket) {
+        if (!pending_option_supported_by (option_,
+                                          socket_type_of (target.socket))) {
+            errno = ENOTSUP;
+            return ZLINK_CONFIG_NOT_SUPPORTED;
+        }
         if (descriptor->unsupported_on_socket) {
             errno = EINVAL;
             return ZLINK_CONFIG_INVALID_ARGUMENT;

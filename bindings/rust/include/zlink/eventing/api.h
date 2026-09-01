@@ -28,13 +28,6 @@ typedef enum zlink_monitor_transport_lane_e
 #define ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE (1u << 1)
 
 /**
- * Set on ZLINK_EVENT_FLOW_STATE_STALE when the frame named a different
- * connection generation. `value` then carries the received generation, and
- * `transport_pair_generation` carries the current one.
- */
-#define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION (1u << 2)
-
-/**
  * Set on ZLINK_EVENT_FLOW_STATE_STALE when the epoch did not advance inside the
  * current generation. `value` then carries the received epoch; the current
  * epoch is the one reported by the preceding SEND_FLOW_PAUSED or
@@ -51,20 +44,13 @@ typedef struct
     char remote_addr[256];
     /* Process-local identity of the physical transport attempt. */
     uint64_t connection_id;
-    /* Non-zero for a paired Application/Completion transport. */
-    uint64_t transport_pair_id;
-    /* Generation of the paired transport. Zero for an unpaired transport. */
-    uint64_t transport_pair_generation;
     /* One of zlink_monitor_transport_lane_t. */
     uint32_t transport_lane;
     /* Event-specific flags, including ZLINK_MONITOR_EVENT_FLAG_*. */
     uint32_t flags;
 } zlink_monitor_event_t;
 
-typedef void (*zlink_monitor_handler_fn) (const zlink_monitor_event_t *event_, void *userdata_);
-
 typedef zlink_monitor_event_t zlink_socket_monitor_event_t;
-typedef zlink_monitor_handler_fn zlink_socket_monitor_handler_fn;
 
 #define ZLINK_MONITOR_STATUS_ABI_VERSION 4u
 
@@ -74,15 +60,6 @@ typedef struct zlink_socket_monitor_open_options_t
     /* 0 selects the Core default; positive values are exact byte HWM values. */
     uint64_t monitor_hwm_bytes;
 } zlink_socket_monitor_open_options_t;
-
-/**
- * @brief Ignore socket monitor events while keeping a valid handler symbol.
- *
- * Pass this when you want snapshot or direct polling on the returned monitor
- * handle without automatic callback dispatch.
- */
-ZLINK_EXPORT void zlink_monitor_ignore_handler (const zlink_monitor_event_t *event_,
-                                                void *userdata_);
 
 typedef struct zlink_monitor_status_t
 {
@@ -207,9 +184,6 @@ typedef struct zlink_monitor_status_t
 ZLINK_EXPORT void *zlink_socket_monitor_open (void *s_,
                                               const zlink_socket_monitor_open_options_t *options_);
 
-ZLINK_EXPORT zlink_handler_result_t zlink_socket_monitor_handler (
-  void *monitor_, zlink_socket_monitor_handler_fn handler_, void *userdata_);
-
 ZLINK_EXPORT zlink_recv_result_t zlink_socket_monitor_recv (void *monitor_,
                                                             zlink_socket_monitor_event_t *out_,
                                                             zlink_recv_flags_t flags_);
@@ -290,8 +264,6 @@ ZLINK_EXPORT int zlink_poller_wait (void *poller_,
 /*  Timers                                                                    */
 /******************************************************************************/
 
-typedef void (*zlink_timer_handler_fn) (void *timer_, uint64_t fire_count_, void *userdata_);
-
 ZLINK_EXPORT void *zlink_timer_new (void);
 ZLINK_EXPORT zlink_close_result_t zlink_timer_destroy (void **timer_p_);
 ZLINK_EXPORT zlink_config_result_t zlink_timer_start (void *timer_,
@@ -299,10 +271,6 @@ ZLINK_EXPORT zlink_config_result_t zlink_timer_start (void *timer_,
                                                       uint64_t repeat_count_);
 ZLINK_EXPORT zlink_config_result_t zlink_timer_stop (void *timer_);
 ZLINK_EXPORT zlink_recv_result_t zlink_timer_recv (void *timer_, uint64_t *fire_count_out_);
-ZLINK_EXPORT zlink_handler_result_t zlink_timer_handler (void *timer_,
-                                                         zlink_timer_handler_fn handler_,
-                                                         void *userdata_);
-
 #ifdef __cplusplus
 }
 #endif

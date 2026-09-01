@@ -2016,8 +2016,12 @@ void zlink::asio_engine_t::on_timer (int id_, const boost::system::error_code &e
 
     if (id_ == handshake_timer_id) {
         _has_handshake_timer = false;
-        //  handshake timer expired before handshake completed, so engine fail
-        error (timeout_error);
+        //  Most engines use this only for protocol handshake. A paired ZMP
+        //  lane rearms the same timer after its own READY and suppresses the
+        //  expiry only when the socket has admitted both lanes of the exact
+        //  pair generation.
+        if (handshake_timer_should_fail ())
+            error (timeout_error);
     }
 }
 

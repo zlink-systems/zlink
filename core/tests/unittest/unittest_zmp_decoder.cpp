@@ -676,6 +676,9 @@ void test_metadata_add_basic_properties ()
 {
     zlink::options_t options;
     options.type = ZLINK_CORE_SOCKET_ROUTER;
+    options.transport_lane = zlink::transport_lane_completion;
+    options.transport_pair_id = 17;
+    options.transport_pair_generation = 23;
     const char *routing_id = "RID";
     memcpy (options.routing_id, routing_id, 3);
     options.routing_id_size = 3;
@@ -688,6 +691,18 @@ void test_metadata_add_basic_properties ()
     TEST_ASSERT_EQUAL_INT (0, rc);
     TEST_ASSERT_EQUAL_STRING ("ROUTER", out["Socket-Type"].c_str ());
     TEST_ASSERT_EQUAL_STRING ("RID", out["Routing-Id"].c_str ());
+    TEST_ASSERT_EQUAL_UINT64 (0, out.count ("Zlink-Pair-Id"));
+    TEST_ASSERT_EQUAL_UINT64 (0, out.count ("Zlink-Pair-Generation"));
+    TEST_ASSERT_EQUAL_UINT64 (1, out.count ("Zlink-Lane"));
+    TEST_ASSERT_EQUAL_UINT64 (1, out["Zlink-Lane"].size ());
+    TEST_ASSERT_EQUAL_UINT8 (1,
+                             static_cast<unsigned char> (
+                               out["Zlink-Lane"][0]));
+
+    zlink::transport_lane_t lane = zlink::transport_lane_application;
+    TEST_ASSERT_EQUAL_INT (
+      1, zlink::zmp_metadata::parse_transport_lane (out, &lane));
+    TEST_ASSERT_EQUAL_INT (zlink::transport_lane_completion, lane);
 }
 
 void test_shared_message_allocator_size_checks_overflow ()

@@ -11,14 +11,6 @@
 #include "core/address.hpp"
 #include "sockets/proxy/proxy.hpp"
 
-#ifndef ZLINK_INTERNAL_EXPORT
-#if defined _WIN32 && defined DLL_EXPORT && !defined ZLINK_STATIC
-#define ZLINK_INTERNAL_EXPORT __declspec (dllexport)
-#else
-#define ZLINK_INTERNAL_EXPORT
-#endif
-#endif
-
 zlink_bind_result_t zlink_bind (void *s_, const char *addr_)
 {
     socket_handle_t handle = as_socket_handle (s_);
@@ -63,56 +55,6 @@ zlink_connect_result_t zlink_disconnect_rid (void *s_, const zlink_routing_id_t 
     if (!handle.socket)
         return zlink::connect_result_internal::from_errno (errno);
     return zlink::connect_result_internal::from_rc (handle.socket->term_peer_rid (peer_rid_));
-}
-
-zlink_connect_result_t zlink_disconnect_transport_pair (
-  void *s_, uint64_t transport_pair_id_, uint64_t transport_pair_generation_)
-{
-    socket_handle_t handle = as_socket_handle (s_);
-    if (!handle.socket)
-        return zlink::connect_result_internal::from_errno (errno);
-    return zlink::connect_result_internal::from_rc (
-      handle.socket->term_transport_pair (transport_pair_id_, transport_pair_generation_));
-}
-
-int zlink_stream_attach_raw (void *s_, zlink_stream_on_raw_fn on_raw_)
-{
-    socket_handle_t handle = as_socket_handle (s_);
-    if (!handle.socket)
-        return -1;
-    if (!on_raw_) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (!is_stream_type (handle)) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (handle.socket->stream_dispatch_in_callback ()) {
-        errno = EBUSY;
-        return -1;
-    }
-
-    stream_api_lock_t api_lock (handle);
-    return handle.socket->stream_dispatch_start_raw (on_raw_);
-}
-
-ZLINK_INTERNAL_EXPORT int zlink_stream_detach (void *s_)
-{
-    socket_handle_t handle = as_socket_handle (s_);
-    if (!handle.socket)
-        return -1;
-    if (!is_stream_type (handle)) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (handle.socket->stream_dispatch_in_callback ()) {
-        errno = EBUSY;
-        return -1;
-    }
-
-    stream_api_lock_t api_lock (handle);
-    return handle.socket->stream_dispatch_stop ();
 }
 
 zlink_config_result_t zlink_proxy (void *frontend_, void *backend_, void *capture_)

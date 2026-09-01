@@ -28,6 +28,7 @@ inline zlink_submit_result_t from_errno (int err_)
                     return ZLINK_SUBMIT_NOT_CONNECTED;
                 case ECONNREFUSED:
                 case EACCES:
+                case EPROTOTYPE:
                     return ZLINK_SUBMIT_NOT_ADMITTED;
                 case ENOENT:
                     return ZLINK_SUBMIT_NOT_FOUND;

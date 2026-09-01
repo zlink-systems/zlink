@@ -115,7 +115,6 @@ class object_t
     virtual void process_flow_state (unsigned char state_, uint64_t epoch_);
     virtual void process_peer_weight (uint32_t weight_,
                                       uint64_t connection_id_);
-    virtual void process_send_pending_timeout (uint64_t op_id_);
     virtual void process_hiccup (void *pipe_, uint64_t generation_);
     virtual void process_pipe_term ();
     virtual void process_pipe_term_ack ();

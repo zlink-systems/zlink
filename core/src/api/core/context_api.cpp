@@ -93,11 +93,6 @@ int zlink_errno (void)
     return errno;
 }
 
-void zlink_monitor_ignore_handler (const zlink_monitor_event_t *, void *userdata_)
-{
-    LIBZLINK_UNUSED (userdata_);
-}
-
 void *zlink_ctx_new (void)
 {
     if (!zlink::initialize_network ()) {

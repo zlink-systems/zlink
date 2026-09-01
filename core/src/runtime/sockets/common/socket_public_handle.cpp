@@ -87,21 +87,32 @@ void zlink::socket_public_handle_t::release ()
 
 bool zlink::socket_public_handle_t::begin_close ()
 {
-    uint32_t expected = 1;
-    if (_state.compare_exchange_strong (expected, closing_bit | 1u,
-                                        std::memory_order_acq_rel,
-                                        std::memory_order_acquire))
-        return true;
-
-    errno = (expected & closing_bit) != 0 ? ESHUTDOWN : EBUSY;
-    return false;
+    // The close caller owns one pin, but a blocking pull may own another.
+    // Sealing admission must not wait for that pull to release its handle:
+    // close first publishes the lifecycle error that wakes it, and final
+    // destruction remains deferred until every pre-existing pin leaves.
+    uint32_t old = _state.load (std::memory_order_acquire);
+    while (true) {
+        if ((old & (closing_bit | destroy_pending_bit | finalizing_bit))
+            != 0) {
+            errno = ESHUTDOWN;
+            return false;
+        }
+        zlink_assert ((old & ref_mask) != 0);
+        if (_state.compare_exchange_weak (old, old | closing_bit,
+                                          std::memory_order_acq_rel,
+                                          std::memory_order_acquire))
+            return true;
+    }
 }
 
 void zlink::socket_public_handle_t::cancel_close ()
 {
     const uint32_t old = _state.fetch_and (~closing_bit, std::memory_order_release);
     zlink_assert ((old & closing_bit) != 0);
-    zlink_assert ((old & ref_mask) == 1);
+    // Existing calls can still hold pins while close admission is being
+    // attempted. They cannot acquire new pins after closing_bit is visible.
+    zlink_assert ((old & ref_mask) != 0);
     zlink_assert ((old & (destroy_pending_bit | finalizing_bit)) == 0);
 }
 

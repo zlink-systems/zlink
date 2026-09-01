@@ -65,6 +65,12 @@ class router_t : public routing_socket_base_t
       zlink_routed_submit_target_t *target_out_,
       uint64_t *transport_connection_id_out_,
       uint64_t *route_incarnation_id_out_) ZLINK_OVERRIDE;
+    int xselect_request_submit_target (
+      const zlink_routing_id_t *router_rid_or_null_,
+      zlink_routed_submit_target_t *target_out_,
+      uint64_t *transport_connection_id_out_,
+      uint64_t *route_incarnation_id_out_,
+      std::string *logical_endpoint_out_) ZLINK_OVERRIDE;
     int xrecv (zlink::msg_t *msg_) ZLINK_OVERRIDE;
     int xrecv_pipe (zlink::msg_t *msg_,
                     zlink::pipe_t **pipe_out_) ZLINK_OVERRIDE;
@@ -75,17 +81,18 @@ class router_t : public routing_socket_base_t
                       pipe_t::read_admission_fn *admission_ = NULL,
                       void *admission_userdata_ = NULL) ZLINK_OVERRIDE;
     bool xhas_in () ZLINK_OVERRIDE;
+    size_t xredrive_reply_token_waiters (size_t max_pipes_) ZLINK_OVERRIDE;
     bool xhas_out () ZLINK_OVERRIDE;
     void xread_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xpipe_terminated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xsocket_msg_pipe_terminated (zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
-    int xsocket_msg_dispatch (zlink::msg_t *msg_, zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
     int xterm_peer_rid (const zlink_routing_id_t *peer_rid_) ZLINK_OVERRIDE
     {
+        fail_pull_send_pending_for_logical_target (peer_rid_, ENOENT);
+        fail_pull_request_pending_for_logical_target (peer_rid_);
+        revoke_router_reply_targets_for_rid (peer_rid_);
         return terminate_out_pipe_by_routing_id (peer_rid_);
     }
-    void xarm_socket_msg_dispatch () ZLINK_OVERRIDE;
-    void xdispatch_io () ZLINK_OVERRIDE;
     int get_peer_state (const void *routing_id_, size_t routing_id_size_) const ZLINK_FINAL;
 #ifdef ZLINK_BUILD_TESTS
     uint32_t test_peer_weight (zlink::pipe_t *pipe_) const;
@@ -104,20 +111,11 @@ class router_t : public routing_socket_base_t
     {
         route_adoption_actions_t () :
             terminate_pipe (NULL),
-            cache_completion (false),
-            fail_replaced_target (false),
-            replaced_pair_id (0),
-            replaced_pair_generation (0),
-            replaced_route_incarnation_id (0)
+            cache_completion (false)
         {
         }
         pipe_t *terminate_pipe;
         bool cache_completion;
-        bool fail_replaced_target;
-        blob_t replaced_public_routing_id;
-        uint64_t replaced_pair_id;
-        uint64_t replaced_pair_generation;
-        uint64_t replaced_route_incarnation_id;
     };
 
     //  Receive peer id and update lookup map. The caller finishes returned
@@ -137,7 +135,6 @@ class router_t : public routing_socket_base_t
     void copy_router_pipe_source_rid (pipe_t *pipe_,
                                       zlink_routing_id_t *out_) const;
     void reset_current_in_after_multipart_abort ();
-    void promote_anonymous_pipe_for_dispatch (pipe_t *pipe_);
     pipe_t *find_transport_pair_pipe (const zlink_routing_id_t *target_rid_,
                                       uint64_t transport_pair_id_,
                                       uint64_t transport_pair_generation_) const;
@@ -216,19 +213,10 @@ class router_t : public routing_socket_base_t
     // If true, the router will reassign an identity upon encountering a
     // name collision. The selected pipe takes the identity.
     bool _handover;
-    // Direct session dispatch can adopt a route while public API and mailbox
-    // paths inspect it. Keep this ordinary (non-recursive). Callbacks, monitor
-    // events, and observer-backed writes stay outside it; an ordinary pipe
-    // write may retain it as the pipe lifetime fence because pipe termination
-    // publishes sink callbacks only after dropping the pipe outbound lock.
+    // Route lifecycle is shared by public API and mailbox paths. Keep this
+    // ordinary (non-recursive); monitor events and observer-backed writes stay
+    // outside it.
     mutable std::mutex _out_pipes_sync;
-    std::vector<zlink_msg_t> _dispatch_parts;
-    std::map<pipe_t *, std::vector<zlink_msg_t>> _dispatch_parts_by_pipe;
-    std::map<pipe_t *, zlink_routing_id_t> _dispatch_source_rids;
-    std::set<pipe_t *> _dispatch_malformed_pipes;
-    zlink_routing_id_t _dispatch_source_rid;
-    bool _dispatch_source_rid_valid;
-    bool _dispatch_malformed_without_pipe;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (router_t)
 };

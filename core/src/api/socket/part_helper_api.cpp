@@ -66,8 +66,6 @@ zlink::part_helper_internal::send_sequence_spec_t::send_sequence_spec_t () :
     timeout_ms (0),
     request_seq (0),
     pending_cookie (0),
-    handler (NULL),
-    userdata (NULL),
     has_rid1 (false),
     has_rid2 (false),
     has_text1 (false),
@@ -96,6 +94,7 @@ zlink::part_helper_internal::recv_sequence_state_t::recv_sequence_state_t () :
     transport_pair_id (0),
     transport_pair_generation (0),
     message_type (0),
+    subscribed (0),
     next_part_index (0)
 {
     memset (&source_node_rid, 0, sizeof (source_node_rid));
@@ -104,7 +103,7 @@ zlink::part_helper_internal::recv_sequence_state_t::recv_sequence_state_t () :
 int zlink::part_helper_internal::validate_send_flags (zlink_send_flags_t flags_)
 {
     if (flags_ != 0 && flags_ != ZLINK_DONTWAIT) {
-        errno = ENOTSUP;
+        errno = EINVAL;
         return -1;
     }
     return 0;
@@ -190,8 +189,7 @@ bool zlink::part_helper_internal::send_spec_equals (const send_sequence_spec_t &
 {
     if (lhs_.family != rhs_.family || lhs_.flags != rhs_.flags || lhs_.timeout_ms != rhs_.timeout_ms
         || lhs_.request_seq != rhs_.request_seq
-        || lhs_.pending_cookie != rhs_.pending_cookie || lhs_.handler != rhs_.handler
-        || lhs_.userdata != rhs_.userdata || lhs_.has_rid1 != rhs_.has_rid1
+        || lhs_.pending_cookie != rhs_.pending_cookie || lhs_.has_rid1 != rhs_.has_rid1
         || lhs_.has_rid2 != rhs_.has_rid2 || lhs_.has_text1 != rhs_.has_text1
         || lhs_.has_text2 != rhs_.has_text2 || lhs_.request_like != rhs_.request_like
         || lhs_.transport_pair_id != rhs_.transport_pair_id
@@ -457,6 +455,7 @@ void zlink::part_helper_internal::reset_recv_sequence (recv_sequence_state_t *st
     state_->transport_pair_id = 0;
     state_->transport_pair_generation = 0;
     state_->message_type = 0;
+    state_->subscribed = 0;
     state_->topic_id.clear ();
 }
 
@@ -519,8 +518,6 @@ int zlink::part_helper_internal::prepare_send_step (void *handle_,
                 upgraded.timeout_ms = spec_.timeout_ms;
                 upgraded.request_seq = spec_.request_seq;
                 upgraded.pending_cookie = spec_.pending_cookie;
-                upgraded.handler = spec_.handler;
-                upgraded.userdata = spec_.userdata;
                 const bool can_upgrade_staged_request =
                   state->send.spec.request_like && spec_.request_like
                   && state->send.spec.request_seq == 0 && spec_.request_seq != 0
@@ -610,7 +607,7 @@ int zlink::part_helper_internal::prepare_recv_step (
         *first_part_out_ = true;
     } else {
         if (state->recv.family != family_ || state->recv.owner_thread != current_thread) {
-            errno = EINVAL;
+            errno = EBUSY;
             return -1;
         }
         *first_part_out_ = false;

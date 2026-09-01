@@ -47,6 +47,7 @@ class asio_zmp_engine_t ZLINK_FINAL : public asio_engine_t
     bool handshake () ZLINK_OVERRIDE;
     void plug_internal () ZLINK_OVERRIDE;
     void error (error_reason_t reason_) ZLINK_OVERRIDE;
+    bool handshake_timer_should_fail () ZLINK_OVERRIDE;
     int decode_and_push (msg_t *msg_) ZLINK_OVERRIDE;
     int process_command_message (msg_t *msg_) ZLINK_OVERRIDE;
     bool prepare_deferred_handshake_output () ZLINK_OVERRIDE;
@@ -64,9 +65,7 @@ class asio_zmp_engine_t ZLINK_FINAL : public asio_engine_t
     int process_error_message (msg_t *msg_);
     int push_one_then_decode (msg_t *msg_);
     bool paired_transport () const;
-    void schedule_ready_reply (transport_lane_t lane_,
-                               uint64_t pair_id_,
-                               uint64_t generation_);
+    void schedule_ready_reply (transport_lane_t lane_);
     void set_last_error (uint8_t code_, const char *reason_);
     void send_error_frame (uint8_t code_, const char *reason_);
 
@@ -86,6 +85,7 @@ class asio_zmp_engine_t ZLINK_FINAL : public asio_engine_t
     transport_lane_t _negotiated_transport_lane;
     uint64_t _negotiated_transport_pair_id;
     uint64_t _negotiated_transport_pair_generation;
+    int _peer_socket_type;
     unsigned char _peer_routing_id[256];
     size_t _peer_routing_id_size;
 

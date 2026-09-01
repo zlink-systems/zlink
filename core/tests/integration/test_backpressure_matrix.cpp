@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
 #include "testutil.hpp"
+#include "testutil_monitoring.hpp"
 #include "testutil_unity.hpp"
 
 #include <algorithm>
@@ -64,6 +65,7 @@ struct ready_monitor_t
 
     void *monitor;
     ready_monitor_state_t *state;
+    test_monitor_pull_dispatch_t dispatch;
 };
 
 struct drain_gate_t
@@ -245,7 +247,7 @@ static bool open_ready_monitor (void *socket_, ready_monitor_t *out_)
                   | ZLINK_EVENT_CLOSE_FAILED | ZLINK_EVENT_HANDSHAKE_FAILED_NO_DETAIL
                   | ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL | ZLINK_EVENT_HANDSHAKE_FAILED_AUTH;
     void *monitor = zlink_socket_monitor_open (socket_, &opts);
-    if (!monitor || zlink_socket_monitor_handler (monitor, &ready_monitor_handler, state) != 0) {
+    if (!monitor || !out_->dispatch.start (monitor, &ready_monitor_handler, state)) {
         if (monitor)
             (void) zlink_monitor_close (&monitor);
         delete state;
@@ -277,6 +279,7 @@ static void close_ready_monitor (ready_monitor_t *monitor_)
     if (!monitor_)
         return;
 
+    monitor_->dispatch.stop ();
     if (monitor_->monitor)
         TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor_->monitor));
     delete monitor_->state;
@@ -953,7 +956,7 @@ void run_empty_pipe_oversize_bound (int64_t receiver_maxmsgsize_, bool expect_ad
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&msg, oversize_bytes));
     memset (zlink_msg_data (&msg), 'o', oversize_bytes);
     const zlink_submit_result_t rc =
-      zlink_send_part (sender, &msg, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL);
+      zlink_send_part (sender, &msg, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL, NULL);
     if (expect_admitted_) {
         TEST_ASSERT_EQUAL_INT (static_cast<int> (ZLINK_SUBMIT_OK), static_cast<int> (rc));
     } else {
@@ -967,7 +970,7 @@ void run_empty_pipe_oversize_bound (int64_t receiver_maxmsgsize_, bool expect_ad
         TEST_ASSERT_EQUAL_INT (
           ZLINK_SUBMIT_OK,
           zlink_send_part (
-            sender, &valid, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL));
+            sender, &valid, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL, NULL));
     }
 
     test_context_socket_close_zero_linger (sender);
@@ -1008,7 +1011,7 @@ void test_unlimited_hwm_still_enforces_max_message_size ()
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_INVALID_ARGUMENT,
       zlink_send_part (
-        sender, &msg, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL));
+        sender, &msg, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (EMSGSIZE, errno);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
 
@@ -1017,7 +1020,7 @@ void test_unlimited_hwm_still_enforces_max_message_size ()
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_send_part (
-        sender, &valid, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL));
+        sender, &valid, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL, NULL));
 
     test_context_socket_close_zero_linger (sender);
     test_context_socket_close_zero_linger (receiver);

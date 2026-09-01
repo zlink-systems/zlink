@@ -106,6 +106,7 @@ zlink::socket_base_t::socket_base_t (ctx_t *parent_, uint32_t tid_, int sid_) :
     _manual_sndhwm (false),
     _manual_rcvhwm (false),
     _completion_poller_refs (0),
+    _completion_poller_owner (NULL),
     _request_completion_pending (false),
     _auto_hwm_context_plan (),
     _auto_hwm_socket_plan (),
@@ -364,22 +365,6 @@ zlink::i_mailbox *zlink::socket_base_t::get_mailbox () const
     return _mailbox;
 }
 
-void zlink::socket_base_t::store_socket_msg_part (std::vector<zlink_msg_t> *parts_,
-                                                  zlink::msg_t *msg_)
-{
-    if (!parts_ || !msg_)
-        return;
-
-    zlink_msg_t stored;
-    memset (&stored, 0, sizeof (stored));
-    zlink::msg_t *stored_msg = reinterpret_cast<zlink::msg_t *> (&stored);
-    const int init_rc = stored_msg->init ();
-    errno_assert (init_rc == 0);
-    const int move_rc = stored_msg->move (*msg_);
-    errno_assert (move_rc == 0);
-    parts_->push_back (stored);
-}
-
 void zlink::socket_base_t::stop ()
 {
     //  Publish termination before queueing the administrative command. A
@@ -466,6 +451,25 @@ int zlink::socket_base_t::xsend_routed (const zlink_routing_id_t *target_rid_,
     return -1;
 }
 
+int zlink::socket_base_t::xsend_configured_endpoint (
+  const std::string &endpoint_, msg_t *msg_, int flags_, bool request_only_,
+  pipe_t **pipe_out_, pipe_message_admission_t *admission_out_,
+  pipe_write_observer_fn observer_, void *observer_userdata_)
+{
+    LIBZLINK_UNUSED (endpoint_);
+    LIBZLINK_UNUSED (msg_);
+    LIBZLINK_UNUSED (flags_);
+    LIBZLINK_UNUSED (request_only_);
+    LIBZLINK_UNUSED (observer_);
+    LIBZLINK_UNUSED (observer_userdata_);
+    if (pipe_out_)
+        *pipe_out_ = NULL;
+    if (admission_out_)
+        *admission_out_ = pipe_message_admission_invalid;
+    errno = ENOTSUP;
+    return -1;
+}
+
 int zlink::socket_base_t::xselect_routed_submit_target (
   const zlink_routing_id_t *router_rid_or_null_,
   zlink_routed_submit_target_t *target_out_)
@@ -487,6 +491,25 @@ int zlink::socket_base_t::xselect_routed_submit_target_internal (
     if (route_incarnation_id_out_)
         *route_incarnation_id_out_ = 0;
     return xselect_routed_submit_target (router_rid_or_null_, target_out_);
+}
+
+int zlink::socket_base_t::xselect_request_submit_target (
+  const zlink_routing_id_t *router_rid_or_null_,
+  zlink_routed_submit_target_t *target_out_,
+  uint64_t *transport_connection_id_out_,
+  uint64_t *route_incarnation_id_out_,
+  std::string *logical_endpoint_out_)
+{
+    LIBZLINK_UNUSED (router_rid_or_null_);
+    LIBZLINK_UNUSED (target_out_);
+    if (transport_connection_id_out_)
+        *transport_connection_id_out_ = 0;
+    if (route_incarnation_id_out_)
+        *route_incarnation_id_out_ = 0;
+    if (logical_endpoint_out_)
+        logical_endpoint_out_->clear ();
+    errno = ENOTSUP;
+    return -1;
 }
 
 int zlink::socket_base_t::xrollback ()
@@ -548,10 +571,6 @@ int zlink::socket_base_t::xrecv_routed (msg_t *msg_,
     return rc;
 }
 
-
-void zlink::socket_base_t::xarm_socket_msg_dispatch ()
-{
-}
 
 void zlink::socket_base_t::xread_activated (pipe_t *)
 {

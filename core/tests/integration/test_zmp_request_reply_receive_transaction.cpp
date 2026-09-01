@@ -64,11 +64,10 @@ struct receive_record_gate_t
 
 struct receive_result_t
 {
-    receive_result_t () : rc (-1), errnum (0), message_type (0), sequence (0) {}
+    receive_result_t () : rc (-1), errnum (0), sequence (0) {}
 
     int rc;
     int errnum;
-    uint8_t message_type;
     uint64_t sequence;
     std::vector<std::string> parts;
 };
@@ -219,7 +218,7 @@ void send_request_record (void *sender_, uint64_t sequence_,
         TEST_ASSERT_EQUAL_INT (
           ZLINK_SUBMIT_OK,
           zlink_send_part (sender_, &part, ZLINK_SEND_FLAGS_NONE,
-                           i == 0 ? ZLINK_PART_MORE : ZLINK_PART_FINAL));
+                           i == 0 ? ZLINK_PART_MORE : ZLINK_PART_FINAL, NULL, NULL));
         TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
     }
 }
@@ -285,22 +284,6 @@ void receive_router_record (const socket_handle_t &handle_,
         capture_parts (parts, part_count, result_);
 }
 
-void receive_dealer_record (const socket_handle_t &handle_, bool typed_,
-                            receive_result_t *result_)
-{
-    std::shared_ptr<
-      zlink::socket_reqrep_internal::socket_request_reply_state_t> state =
-      zlink::socket_reqrep_internal::find_request_reply_state (handle_);
-    zlink_msg_t *parts = NULL;
-    size_t part_count = 0;
-    result_->rc = zlink::socket_reqrep_internal::recv_dealer_message_direct (
-      handle_, state, typed_, &result_->message_type, &result_->sequence,
-      &parts, &part_count, ZLINK_DONTWAIT);
-    result_->errnum = result_->rc == 0 ? 0 : errno;
-    if (result_->rc == 0)
-        capture_parts (parts, part_count, result_);
-}
-
 void assert_two_part_record (const receive_result_t &result_,
                              const char *prefix_)
 {
@@ -313,16 +296,14 @@ void assert_two_part_record (const receive_result_t &result_,
     TEST_ASSERT_EQUAL_STRING (expected_second.c_str (), result_.parts[1].c_str ());
 }
 
-void run_two_reader_record_test (int receiver_type_)
+void run_two_reader_record_test ()
 {
-    void *receiver = test_context_socket (receiver_type_);
+    void *receiver = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *sender = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (receiver);
     TEST_ASSERT_NOT_NULL (sender);
 
-    const char *endpoint = receiver_type_ == ZLINK_SOCKET_ROUTER
-                             ? "inproc://router-record-receive-transaction"
-                             : "inproc://dealer-record-receive-transaction";
+    const char *endpoint = "inproc://router-record-receive-transaction";
     TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (receiver, endpoint));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sender, endpoint));
     msleep (SETTLE_TIME);
@@ -337,21 +318,14 @@ void run_two_reader_record_test (int receiver_type_)
     receive_result_t first;
     receive_result_t second;
     std::thread first_reader ([&] {
-        if (receiver_type_ == ZLINK_SOCKET_ROUTER)
-            receive_router_record (handle, &first);
-        else
-            receive_dealer_record (handle, true, &first);
+        receive_router_record (handle, &first);
     });
 
     const bool acquired = wait_for_gate_flag (&gate, false);
     std::thread second_reader;
     if (acquired) {
         second_reader = std::thread ([&] {
-            if (receiver_type_ == ZLINK_SOCKET_ROUTER)
-                receive_router_record (handle, &second);
-            else
-                // Force the typed-vs-raw reader boundary on DEALER.
-                receive_dealer_record (handle, false, &second);
+            receive_router_record (handle, &second);
         });
     }
     const bool contended =
@@ -368,27 +342,20 @@ void run_two_reader_record_test (int receiver_type_)
                               "second reader did not contend on record scope");
     assert_two_part_record (first, "first");
     assert_two_part_record (second, "second");
-    if (receiver_type_ == ZLINK_SOCKET_ROUTER) {
-        TEST_ASSERT_EQUAL_UINT64 (101, first.sequence);
-        TEST_ASSERT_EQUAL_UINT64 (102, second.sequence);
-    } else {
-        TEST_ASSERT_EQUAL_UINT8 (ZLINK_DEALER_MESSAGE_REQUEST,
-                                 first.message_type);
-        TEST_ASSERT_TRUE (first.sequence != 0);
-        TEST_ASSERT_EQUAL_UINT8 (ZLINK_DEALER_MESSAGE_RAW,
-                                 second.message_type);
-        TEST_ASSERT_EQUAL_UINT64 (0, second.sequence);
-    }
+    // Public reply tokens are socket-owned opaque capabilities, not the
+    // private wire request sequences supplied by this fixture.
+    TEST_ASSERT_TRUE (first.sequence != 0);
+    TEST_ASSERT_TRUE (second.sequence != 0);
+    TEST_ASSERT_TRUE (first.sequence != second.sequence);
 
     handle = socket_handle_t ();
     test_context_socket_close_zero_linger (sender);
     test_context_socket_close_zero_linger (receiver);
 }
 
-void test_router_and_dealer_hold_whole_record_receive_transaction ()
+void test_router_holds_whole_record_receive_transaction ()
 {
-    run_two_reader_record_test (ZLINK_SOCKET_ROUTER);
-    run_two_reader_record_test (ZLINK_SOCKET_DEALER);
+    run_two_reader_record_test ();
 }
 
 void test_router_record_fences_mailbox_read_activation ()
@@ -491,12 +458,13 @@ void test_router_record_fences_mailbox_read_activation ()
     TEST_ASSERT_EQUAL_INT (0, command_rc);
     TEST_ASSERT_EQUAL_INT (0, command_errno);
     assert_two_part_record (first, "command-first");
-    TEST_ASSERT_EQUAL_UINT64 (301, first.sequence);
+    TEST_ASSERT_TRUE (first.sequence != 0);
 
     receive_result_t activated;
     receive_router_record (handle, &activated);
     assert_two_part_record (activated, "command-second");
-    TEST_ASSERT_EQUAL_UINT64 (302, activated.sequence);
+    TEST_ASSERT_TRUE (activated.sequence != 0);
+    TEST_ASSERT_TRUE (activated.sequence != first.sequence);
 
     // Complete both sides of the synthetic pipe lifecycle while the stack
     // event sinks are still alive. zlink_close() is asynchronous; returning
@@ -693,7 +661,7 @@ void test_pair_commands_only_fence_pipe_lifetime_transitions ()
         init_payload (&part, "pair-sync-gate");
         send_result.store (
           zlink_send_part (pair, &part, ZLINK_SEND_FLAGS_NONE,
-                           ZLINK_PART_FINAL),
+                           ZLINK_PART_FINAL, NULL, NULL),
           std::memory_order_release);
         (void) zlink_msg_close (&part);
     });
@@ -773,7 +741,7 @@ void test_pair_commands_only_fence_pipe_lifetime_transitions ()
         init_payload (&part, "pair-term-sync-gate");
         terminating_send_result.store (
           zlink_send_part (pair, &part, ZLINK_SEND_FLAGS_NONE,
-                           ZLINK_PART_FINAL),
+                           ZLINK_PART_FINAL, NULL, NULL),
           std::memory_order_release);
         (void) zlink_msg_close (&part);
     });
@@ -984,7 +952,7 @@ void test_router_capacity_reservation_is_atomic_and_non_consuming ()
     TEST_ASSERT_TRUE_MESSAGE (contended,
                               "capacity competitor did not wait for record scope");
     assert_two_part_record (first, "capacity-first");
-    TEST_ASSERT_EQUAL_UINT64 (201, first.sequence);
+    TEST_ASSERT_TRUE (first.sequence != 0);
     TEST_ASSERT_EQUAL_INT (-1, rejected.rc);
     TEST_ASSERT_EQUAL_INT (EAGAIN, rejected.errnum);
     TEST_ASSERT_TRUE (rejected.parts.empty ());
@@ -1001,23 +969,24 @@ void test_router_capacity_reservation_is_atomic_and_non_consuming ()
         // was not consumed.
         state->reply_target_slots = state->router_reply_targets.size ();
     }
+    handle.socket->reply_target_slots_released (
+      zlink::socket_reqrep_internal::max_reply_target_slots - 1);
 
     receive_result_t remaining;
     receive_router_record (handle, &remaining);
     assert_two_part_record (remaining, "capacity-second");
-    TEST_ASSERT_EQUAL_UINT64 (202, remaining.sequence);
+    TEST_ASSERT_TRUE (remaining.sequence != 0);
+    TEST_ASSERT_TRUE (remaining.sequence != first.sequence);
 
     handle = socket_handle_t ();
     test_context_socket_close_zero_linger (sender);
     test_context_socket_close_zero_linger (router);
 }
 
-void test_empty_typed_receive_rolls_back_capacity_attempt ()
+void test_empty_router_receive_rolls_back_capacity_attempt ()
 {
-    const int receiver_types[] = {ZLINK_SOCKET_ROUTER, ZLINK_SOCKET_DEALER};
-    for (size_t i = 0; i < sizeof (receiver_types) / sizeof (receiver_types[0]);
-         ++i) {
-        void *receiver = test_context_socket (receiver_types[i]);
+    {
+        void *receiver = test_context_socket (ZLINK_SOCKET_ROUTER);
         TEST_ASSERT_NOT_NULL (receiver);
         socket_handle_t handle = as_socket_handle (receiver);
         const std::shared_ptr<
@@ -1034,10 +1003,7 @@ void test_empty_typed_receive_rolls_back_capacity_attempt ()
         }
 
         receive_result_t result;
-        if (receiver_types[i] == ZLINK_SOCKET_ROUTER)
-            receive_router_record (handle, &result);
-        else
-            receive_dealer_record (handle, true, &result);
+        receive_router_record (handle, &result);
         TEST_ASSERT_EQUAL_INT (-1, result.rc);
         TEST_ASSERT_EQUAL_INT (EAGAIN, result.errnum);
         {
@@ -1064,7 +1030,7 @@ int main ()
 {
     setup_test_environment (30);
     UNITY_BEGIN ();
-    RUN_TEST (test_router_and_dealer_hold_whole_record_receive_transaction);
+    RUN_TEST (test_router_holds_whole_record_receive_transaction);
     RUN_TEST (test_router_record_fences_mailbox_read_activation);
     RUN_TEST (test_blocking_command_wait_ignores_stale_shared_poller_signal);
     RUN_TEST (test_command_wait_preserves_signal_only_edges);
@@ -1072,6 +1038,6 @@ int main ()
     RUN_TEST (test_pair_commands_only_fence_pipe_lifetime_transitions);
     RUN_TEST (test_close_commands_wait_for_parked_multipart_cleanup_sync);
     RUN_TEST (test_router_capacity_reservation_is_atomic_and_non_consuming);
-    RUN_TEST (test_empty_typed_receive_rolls_back_capacity_attempt);
+    RUN_TEST (test_empty_router_receive_rolls_back_capacity_attempt);
     return UNITY_END ();
 }

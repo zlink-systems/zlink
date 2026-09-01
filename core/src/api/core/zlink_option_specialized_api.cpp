@@ -51,6 +51,29 @@ zlink_config_result_t get_socket_only_option (void *handle_,
                                  socket_option_, optval_, optvallen_));
 }
 
+zlink_config_result_t set_probe_option (zlink::socket_base_t *socket_,
+                                        int socket_option_,
+                                        const void *optval_,
+                                        size_t optvallen_)
+{
+    if (!optval_ || optvallen_ != sizeof (int))
+        return invalid_option_argument ();
+
+    int enabled = 0;
+    memcpy (&enabled, optval_, sizeof (enabled));
+    if (enabled < 0)
+        return invalid_option_argument ();
+
+    // A connection probe is emitted from xattach_pipe(). Keep command
+    // progress active after connect so the bind command reaches that owner
+    // even when the application is blocked receiving on the peer socket.
+    if (enabled != 0 && socket_->ensure_async_command_processing () != 0)
+        return zlink::config_result_internal::from_errno (errno);
+
+    return zlink::config_result_internal::from_rc (
+      socket_->setsockopt (socket_option_, optval_, optvallen_));
+}
+
 zlink_config_result_t set_socket_request_timeout (void *handle_,
                                                   int expected_type_,
                                                   const void *optval_,
@@ -102,6 +125,8 @@ zlink_config_result_t zlink_set_router_option (void *handle_,
             errno = EINVAL;
             return ZLINK_CONFIG_INVALID_ARGUMENT;
         }
+        if (option_ == ZLINK_ROUTER_OPT_PROBE)
+            return set_probe_option (socket, socket_option, optval_, optvallen_);
         return zlink::config_result_internal::from_rc (
           socket->setsockopt (socket_option, optval_, optvallen_));
     }
@@ -151,7 +176,17 @@ zlink_config_result_t zlink_set_dealer_option (void *handle_,
     if (socket_option < 0)
         return ZLINK_CONFIG_INVALID_ARGUMENT;
 
-    return set_socket_only_option (handle_, socket_option, ZLINK_CORE_SOCKET_DEALER,
+    if (option_ == ZLINK_DEALER_OPT_PROBE) {
+        socket_handle_t handle = as_socket (handle_);
+        if (!handle.socket)
+            return zlink::config_result_internal::from_errno (errno);
+        if (socket_type_of (handle.socket) != ZLINK_CORE_SOCKET_DEALER)
+            return invalid_option_argument ();
+        return set_probe_option (handle.socket, socket_option, optval_, optvallen_);
+    }
+
+    return set_socket_only_option (handle_, socket_option,
+                                   ZLINK_CORE_SOCKET_DEALER,
                                    ZLINK_CORE_SOCKET_DEALER, optval_, optvallen_);
 }
 

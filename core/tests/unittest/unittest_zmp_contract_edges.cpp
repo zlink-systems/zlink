@@ -8,6 +8,7 @@
 #include "api/socket/request_reply_frame_buffer_internal.hpp"
 #include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/socket/socket_api_internal.hpp"
+#include "api/socket/socket_completion_queue_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "api/socket/socket_request_reply_pending_internal.hpp"
 #include "core/transport_pair_policy.hpp"
@@ -77,15 +78,6 @@ struct blocking_timeout_remove_barrier_t
     bool release;
 };
 
-struct timeout_completion_probe_t
-{
-    timeout_completion_probe_t () : count (0), result (ZLINK_REQUEST_INTERNAL_ERROR) {}
-
-    std::mutex mutex;
-    size_t count;
-    zlink_request_result_t result;
-};
-
 void signal_timeout_barrier (void *userdata_)
 {
     timeout_barrier_t *barrier = static_cast<timeout_barrier_t *> (userdata_);
@@ -104,18 +96,6 @@ void block_after_timeout_pending_remove (void *userdata_)
     barrier->cv.wait (lock, [barrier] { return barrier->release; });
 }
 
-void capture_timeout_completion (zlink_request_result_t result_,
-                                 zlink_msg_t *parts_,
-                                 size_t part_count_,
-                                 void *userdata_)
-{
-    timeout_completion_probe_t *probe =
-      static_cast<timeout_completion_probe_t *> (userdata_);
-    zlink_multipart_close (parts_, part_count_);
-    std::lock_guard<std::mutex> lock (probe->mutex);
-    ++probe->count;
-    probe->result = result_;
-}
 }
 
 void setUp ()
@@ -582,18 +562,24 @@ void test_pending_cookie_wrap_skips_zero ()
     uint64_t request_seq = 0;
     std::shared_ptr<socket_request_reply_state_t> registered_state;
     pending_request_token_t token;
-    TEST_ASSERT_SUCCESS_ERRNO (ensure_socket_pending_request (
-      handle, 1000, NULL, NULL, &request_seq, &registered_state, &token));
+    zlink_completion_id_t completion_id = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (ensure_socket_pull_pending_request (
+      handle, 1000, NULL, NULL, &request_seq, &registered_state, &token,
+      &completion_id));
+    TEST_ASSERT_NOT_EQUAL (0, completion_id);
     TEST_ASSERT_EQUAL_UINT64 (request_seq, token.identity.request_seq);
     TEST_ASSERT_EQUAL_UINT64 (std::numeric_limits<uint64_t>::max (),
                               token.identity.cookie);
     TEST_ASSERT_TRUE (erase_socket_pending_request (state, token.identity));
 
     request_seq = 0;
+    completion_id = 0;
     registered_state.reset ();
     token = pending_request_token_t ();
-    TEST_ASSERT_SUCCESS_ERRNO (ensure_socket_pending_request (
-      handle, 1000, NULL, NULL, &request_seq, &registered_state, &token));
+    TEST_ASSERT_SUCCESS_ERRNO (ensure_socket_pull_pending_request (
+      handle, 1000, NULL, NULL, &request_seq, &registered_state, &token,
+      &completion_id));
+    TEST_ASSERT_NOT_EQUAL (0, completion_id);
     TEST_ASSERT_EQUAL_UINT64 (request_seq, token.identity.request_seq);
     TEST_ASSERT_EQUAL_UINT64 (1, token.identity.cookie);
     {
@@ -628,26 +614,31 @@ void test_pending_insert_failure_releases_completion_reservation ()
     uint64_t request_seq = 0;
     std::shared_ptr<socket_request_reply_state_t> registered_state;
     pending_request_token_t token;
+    zlink_completion_id_t completion_id = 0;
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
-      -1, ensure_socket_pending_request (
+      -1, ensure_socket_pull_pending_request (
             handle, 1000, NULL, NULL, &request_seq, &registered_state,
-            &token));
+            &token, &completion_id));
     TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
     TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
+    TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
     TEST_ASSERT_NULL (registered_state.get ());
     {
         std::lock_guard<std::mutex> lock (state->mutex);
         TEST_ASSERT_TRUE (state->pending_requests.empty ());
     }
-    {
-        std::lock_guard<std::mutex> lock (state->completion.mutex);
-        TEST_ASSERT_EQUAL_UINT64 (0, state->completion.reserved);
-        TEST_ASSERT_NULL (state->completion.reserved_head);
-    }
-    TEST_ASSERT_TRUE (
-      zlink::request_completion::try_reserve (&state->completion));
-    zlink::request_completion::release_reservation (&state->completion);
+    TEST_ASSERT_EQUAL_UINT64 (
+      0, zlink::socket_completion::outstanding (
+           &handle.socket->completion_runtime ()));
+    zlink::socket_completion::reservation_t *reservation = NULL;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink::socket_completion::reserve (
+      &handle.socket->completion_runtime (), ZLINK_COMPLETION_REQUEST, NULL,
+      NULL, &reservation, &completion_id));
+    TEST_ASSERT_NOT_NULL (reservation);
+    TEST_ASSERT_NOT_EQUAL (0, completion_id);
+    zlink::socket_completion::release (&handle.socket->completion_runtime (),
+                                       reservation);
 
     handle = socket_handle_t ();
     state.reset ();
@@ -655,7 +646,7 @@ void test_pending_insert_failure_releases_completion_reservation ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
 }
 
-void test_timeout_remove_holds_socket_lifecycle_barrier_against_close ()
+void test_timeout_remove_can_race_close_without_post_close_delivery ()
 {
     using namespace zlink::socket_reqrep_internal;
     void *ctx = zlink_ctx_new ();
@@ -668,13 +659,14 @@ void test_timeout_remove_holds_socket_lifecycle_barrier_against_close ()
       find_or_create_request_reply_state (handle);
     TEST_ASSERT_NOT_NULL (state.get ());
 
-    timeout_completion_probe_t completion;
     uint64_t request_seq = 0;
     std::shared_ptr<socket_request_reply_state_t> registered_state;
     pending_request_token_t token;
-    TEST_ASSERT_SUCCESS_ERRNO (ensure_socket_pending_request (
-      handle, 20, &capture_timeout_completion, &completion, &request_seq,
-      &registered_state, &token));
+    zlink_completion_id_t completion_id = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (ensure_socket_pull_pending_request (
+      handle, 20, NULL, NULL, &request_seq, &registered_state,
+      &token, &completion_id));
+    TEST_ASSERT_NOT_EQUAL (0, completion_id);
 
     blocking_timeout_remove_barrier_t barrier;
     test_set_request_reply_timeout_after_remove_hook (
@@ -690,8 +682,7 @@ void test_timeout_remove_holds_socket_lifecycle_barrier_against_close ()
     }
 
     errno = 0;
-    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_BUSY, zlink_close (dealer));
-    TEST_ASSERT_EQUAL_INT (EBUSY, errno);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (dealer));
 
     {
         std::lock_guard<std::mutex> lock (barrier.mutex);
@@ -699,27 +690,10 @@ void test_timeout_remove_holds_socket_lifecycle_barrier_against_close ()
     }
     barrier.cv.notify_all ();
 
-    zlink_close_result_t close_rc = ZLINK_CLOSE_BUSY;
-    const std::chrono::steady_clock::time_point deadline =
-      std::chrono::steady_clock::now () + std::chrono::seconds (3);
-    do {
-        close_rc = zlink_close (dealer);
-        if (close_rc == ZLINK_CLOSE_BUSY)
-            msleep (1);
-    } while (close_rc == ZLINK_CLOSE_BUSY
-             && std::chrono::steady_clock::now () < deadline);
-    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, close_rc);
-    test_set_request_reply_timeout_after_remove_hook (NULL, NULL);
-
-    {
-        std::lock_guard<std::mutex> lock (completion.mutex);
-        TEST_ASSERT_EQUAL_UINT64 (1, completion.count);
-        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_TIMED_OUT, completion.result);
-    }
-
     registered_state.reset ();
     state.reset ();
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
+    test_set_request_reply_timeout_after_remove_hook (NULL, NULL);
 }
 
 int main ()
@@ -744,6 +718,6 @@ int main ()
     RUN_TEST (test_suspended_request_multipart_preserves_pending_cookie);
     RUN_TEST (test_pending_cookie_wrap_skips_zero);
     RUN_TEST (test_pending_insert_failure_releases_completion_reservation);
-    RUN_TEST (test_timeout_remove_holds_socket_lifecycle_barrier_against_close);
+    RUN_TEST (test_timeout_remove_can_race_close_without_post_close_delivery);
     return UNITY_END ();
 }

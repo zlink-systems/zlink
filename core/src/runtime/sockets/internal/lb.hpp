@@ -43,10 +43,15 @@ class lb_t
     int select_connected_pipe (pipe_t **pipe_out_,
                                connected_pipe_filter_fn filter_ = NULL,
                                void *filter_userdata_ = NULL);
+    bool has_matching_pipe (connected_pipe_filter_fn filter_,
+                            void *filter_userdata_ = NULL) const;
+    bool has_positive_matching_pipe (connected_pipe_filter_fn filter_,
+                                     void *filter_userdata_ = NULL) const;
     pipe_t *find_connected_pipe (const unsigned char *peer_rid_,
                                  size_t peer_rid_size_,
                                  uint64_t transport_pair_id_,
                                  uint64_t transport_pair_generation_) const;
+    pipe_t *find_pipe_by_endpoint (const std::string &endpoint_) const;
 
     //  Sends the first frame to an already selected exact pipe. Multipart
     //  continuation then follows the ordinary _weighted_multipart_pipe fence.

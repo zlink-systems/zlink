@@ -28,9 +28,7 @@ void zlink::test_set_pair_xsend_gate_hook (pair_xsend_gate_hook_fn hook_,
 zlink::pair_t::pair_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     socket_base_t (parent_, tid_, sid_),
     _pipe (NULL),
-    _recv_part_index (0),
-    _dispatch_pipe (NULL),
-    _dispatch_malformed (false)
+    _recv_part_index (0)
 {
     options.type = ZLINK_CORE_SOCKET_PAIR;
     refresh_auto_hwm_policy ();
@@ -38,7 +36,6 @@ zlink::pair_t::pair_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
 
 zlink::pair_t::~pair_t ()
 {
-    close_socket_msg_parts (&_dispatch_parts);
     zlink_assert (!_pipe);
 }
 
@@ -51,11 +48,9 @@ void zlink::pair_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool lo
 
     //  ZLINK_CORE_SOCKET_PAIR socket can only be connected to a single peer.
     //  The socket rejects any further connection requests.
-    if (_pipe == NULL) {
+    if (_pipe == NULL)
         _pipe = pipe_;
-        if (socket_msg_dispatch_active () && _pipe->check_read ())
-            defer_socket_msg_dispatch ();
-    } else
+    else
         pipe_->terminate (false);
 }
 
@@ -67,23 +62,8 @@ void zlink::pair_t::xpipe_terminated (pipe_t *pipe_)
     }
 }
 
-void zlink::pair_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
-{
-    if (pipe_ != _dispatch_pipe)
-        return;
-    close_socket_msg_parts (&_dispatch_parts);
-    _dispatch_pipe = NULL;
-    _dispatch_malformed = false;
-}
-
 void zlink::pair_t::xread_activated (pipe_t *)
 {
-    // read_activated is delivered while the command executor owns receive
-    // state. Publish callback work now and drain it only after that owner is
-    // released, so callback recv/send re-entry cannot invert receive and
-    // dispatch locks.
-    if (socket_msg_dispatch_active () && _pipe)
-        defer_socket_msg_dispatch ();
 }
 
 void zlink::pair_t::xwrite_activated (pipe_t *)
@@ -216,105 +196,4 @@ bool zlink::pair_t::xhas_out ()
         return false;
 
     return _pipe->check_write ();
-}
-
-int zlink::pair_t::xsocket_msg_dispatch (msg_t *msg_, pipe_t *pipe_)
-{
-    if (!socket_msg_dispatch_active ())
-        return 0;
-
-    const bool final_part = (msg_->flags () & msg_t::more) == 0;
-    if (_dispatch_parts.empty () && !_dispatch_malformed)
-        _dispatch_pipe = pipe_;
-    if (_dispatch_malformed) {
-        msg_->reset_request_reply_metadata ();
-        if (final_part) {
-            _dispatch_malformed = false;
-            _dispatch_pipe = NULL;
-        }
-        return 1;
-    }
-
-    unsigned char request_reply_kind = 0;
-    uint64_t request_reply_sequence = 0;
-    if (!_dispatch_parts.empty ()
-        && msg_->get_request_reply_metadata (
-          &request_reply_kind, &request_reply_sequence)) {
-        close_socket_msg_parts (&_dispatch_parts);
-        _dispatch_malformed = !final_part;
-        if (final_part)
-            _dispatch_pipe = NULL;
-        msg_->reset_request_reply_metadata ();
-        pipe_t *const malformed_pipe =
-          pipe_ && pipe_->retain_lifetime_ref () ? pipe_ : NULL;
-        if (malformed_pipe) {
-            malformed_pipe->terminate (false);
-            malformed_pipe->release_lifetime_ref ();
-        }
-        return 1;
-    }
-
-    store_socket_msg_part (&_dispatch_parts, msg_);
-    if ((reinterpret_cast<msg_t *> (&_dispatch_parts.back ())->flags () & msg_t::more) != 0) {
-        return 1;
-    }
-
-    zlink_socket_msg_handler_fn handler = socket_msg_handler ();
-    if (!handler) {
-        close_socket_msg_parts (&_dispatch_parts);
-        _dispatch_pipe = NULL;
-        return 1;
-    }
-
-    zlink_routing_id_t source_rid;
-    resolve_socket_msg_source_rid (pipe_, &source_rid);
-    invoke_socket_msg_handler (handler, &source_rid, &_dispatch_parts[0], _dispatch_parts.size ());
-    _dispatch_parts.clear ();
-    _dispatch_pipe = NULL;
-    return 1;
-}
-
-void zlink::pair_t::xdispatch_io ()
-{
-    if (!socket_msg_dispatch_active ())
-        return;
-
-    for (;;) {
-        msg_t msg;
-        const int init_rc = msg.init ();
-        errno_assert (init_rc == 0);
-
-        pipe_t *pipe = NULL;
-        bool received = false;
-        {
-            // PAIR has no FQ wrapper, but its SPSC queue still has exactly one
-            // reader. Extract each frame under receive ownership, retain only
-            // the source identity, then release before invoking user code.
-            scoped_lock_t receive_lock (receive_sync ());
-            pipe = _pipe;
-            if (pipe && pipe->retain_lifetime_ref ()) {
-                received = pipe->read (&msg);
-                if (!received) {
-                    pipe->release_lifetime_ref ();
-                    pipe = NULL;
-                }
-            } else
-                pipe = NULL;
-        }
-
-        if (!received) {
-            const int close_rc = msg.close ();
-            errno_assert (close_rc == 0);
-            break;
-        }
-
-        const int dispatch_rc = socket_msg_dispatch_from_io (&msg, pipe);
-        const int saved_errno = errno;
-        pipe->release_lifetime_ref ();
-        const int close_rc = msg.close ();
-        errno_assert (close_rc == 0);
-        errno = saved_errno;
-        if (dispatch_rc <= 0)
-            break;
-    }
 }

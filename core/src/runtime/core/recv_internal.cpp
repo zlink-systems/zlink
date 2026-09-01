@@ -15,41 +15,6 @@
 #include <climits>
 #include <string.h>
 
-namespace
-{
-int validate_direct_recv_mode (zlink::socket_base_t *socket_, int type_)
-{
-    switch (type_) {
-        case ZLINK_CORE_SOCKET_SUB:
-        case ZLINK_CORE_SOCKET_XSUB:
-            if (socket_->sub_dispatch_active ()) {
-                errno = EBUSY;
-                return -1;
-            }
-            break;
-        case ZLINK_CORE_SOCKET_XPUB:
-            if (socket_->xpub_dispatch_active ()) {
-                errno = EBUSY;
-                return -1;
-            }
-            break;
-        case ZLINK_CORE_SOCKET_STREAM:
-            if (socket_->stream_dispatch_active ()) {
-                errno = EBUSY;
-                return -1;
-            }
-            break;
-        default:
-            if (socket_->socket_msg_dispatch_active ()) {
-                errno = EBUSY;
-                return -1;
-            }
-            break;
-    }
-    return 0;
-}
-}
-
 int zlink::recv_msg_socket (socket_base_t *socket_, int type_, zlink_msg_t *msg_, int flags_)
 {
     // Hot path: direct recv-mode entry for single-message public recv. Changes
@@ -59,8 +24,7 @@ int zlink::recv_msg_socket (socket_base_t *socket_, int type_, zlink_msg_t *msg_
         return -1;
     }
 
-    if (validate_direct_recv_mode (socket_, type_) != 0)
-        return -1;
+    LIBZLINK_UNUSED (type_);
 
     const int rc = socket_->recv (reinterpret_cast<msg_t *> (msg_), flags_);
     if (rc < 0)
@@ -89,11 +53,6 @@ int zlink::recv_msg_routed_socket (socket_base_t *socket_,
 {
     if (!socket_ || !msg_) {
         errno = EFAULT;
-        return -1;
-    }
-
-    if (socket_->socket_msg_dispatch_active ()) {
-        errno = EBUSY;
         return -1;
     }
 

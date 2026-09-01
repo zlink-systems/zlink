@@ -42,40 +42,12 @@ zlink_auto_hwm_budget_snapshot_t read_auto_hwm_budget_snapshot ()
 
 enum monitor_mode_t
 {
-    monitor_recv_mode = 0,
-    monitor_callback_mode = 1
+    monitor_recv_mode = 0
 };
 
 enum socket_mode_t
 {
-    socket_recv_mode = 0,
-    socket_callback_mode = 1
-};
-
-struct socket_monitor_probe_t
-{
-    socket_monitor_probe_t () :
-        ready_seen (false),
-        sub_delivery_ready_seen (false),
-        pub_delivery_ready_seen (false),
-        error_seen (false)
-    {
-        memset (&ready_event, 0, sizeof (ready_event));
-        memset (&sub_delivery_ready_event, 0, sizeof (sub_delivery_ready_event));
-        memset (&pub_delivery_ready_event, 0, sizeof (pub_delivery_ready_event));
-        memset (&error_event, 0, sizeof (error_event));
-    }
-
-    std::mutex mutex;
-    std::condition_variable cv;
-    bool ready_seen;
-    bool sub_delivery_ready_seen;
-    bool pub_delivery_ready_seen;
-    bool error_seen;
-    zlink_monitor_event_t ready_event;
-    zlink_monitor_event_t sub_delivery_ready_event;
-    zlink_monitor_event_t pub_delivery_ready_event;
-    zlink_monitor_event_t error_event;
+    socket_recv_mode = 0
 };
 
 struct delivery_ready_value_probe_t
@@ -166,27 +138,6 @@ void init_text_part (zlink_msg_t *part_, const char *text_)
     memcpy (zlink_msg_data (part_), text_, size);
 }
 
-void socket_monitor_handler (const zlink_monitor_event_t *event_, void *userdata_)
-{
-    socket_monitor_probe_t *probe = static_cast<socket_monitor_probe_t *> (userdata_);
-    if (!probe || !event_)
-        return;
-
-    std::lock_guard<std::mutex> lock (probe->mutex);
-    if (event_->event == ZLINK_EVENT_CONNECTION_READY && !probe->ready_seen) {
-        probe->ready_event = *event_;
-        probe->ready_seen = true;
-        probe->sub_delivery_ready_event = *event_;
-        probe->sub_delivery_ready_seen = true;
-        probe->pub_delivery_ready_seen = true;
-    } else if (event_->event == ZLINK_EVENT_MONITOR_STOPPED
-               || event_->event == ZLINK_EVENT_HANDSHAKE_FAILED_NO_DETAIL) {
-        probe->error_event = *event_;
-        probe->error_seen = true;
-    }
-    probe->cv.notify_all ();
-}
-
 void delivery_ready_value_handler (const zlink_monitor_event_t *event_, void *userdata_)
 {
     delivery_ready_value_probe_t *probe = static_cast<delivery_ready_value_probe_t *> (userdata_);
@@ -202,49 +153,6 @@ void delivery_ready_value_handler (const zlink_monitor_event_t *event_, void *us
         probe->error_seen = true;
     }
     probe->cv.notify_all ();
-}
-
-bool wait_for_pubsub_delivery_ready_callback (socket_monitor_probe_t *pub_probe_,
-                                              socket_monitor_probe_t *sub_probe_,
-                                              int timeout_ms_)
-{
-    if (!pub_probe_ || !sub_probe_)
-        return false;
-
-    const auto deadline =
-      std::chrono::steady_clock::now () + std::chrono::milliseconds (timeout_ms_);
-
-    {
-        std::unique_lock<std::mutex> lock (sub_probe_->mutex);
-        if (!sub_probe_->cv.wait_until (lock, deadline, [sub_probe_] () {
-                return sub_probe_->ready_seen || sub_probe_->error_seen;
-            })) {
-            return false;
-        }
-        if (sub_probe_->error_seen || !sub_probe_->ready_seen)
-            return false;
-    }
-
-    {
-        std::unique_lock<std::mutex> lock (pub_probe_->mutex);
-        if (!pub_probe_->cv.wait_until (lock, deadline, [pub_probe_] () {
-                return pub_probe_->ready_seen || pub_probe_->error_seen;
-            })) {
-            return false;
-        }
-        return pub_probe_->ready_seen && !pub_probe_->error_seen;
-    }
-}
-
-bool wait_for_monitor_ready_callback (socket_monitor_probe_t *probe_, int timeout_ms_)
-{
-    if (!probe_)
-        return false;
-
-    std::unique_lock<std::mutex> lock (probe_->mutex);
-    return probe_->cv.wait_for (lock, std::chrono::milliseconds (timeout_ms_),
-                                [probe_] () { return probe_->ready_seen || probe_->error_seen; })
-           && probe_->ready_seen && !probe_->error_seen;
 }
 
 bool wait_for_pub_delivery_ready_value (delivery_ready_value_probe_t *probe_,
@@ -403,24 +311,6 @@ bool wait_for_pubsub_delivery_ready_recv (void *pub_monitor_, void *sub_monitor_
     }
 
     return false;
-}
-
-bool wait_for_monitor_ready_callback_with_routing_id (socket_monitor_probe_t *probe_,
-                                                      int timeout_ms_,
-                                                      unsigned char routing_id_[255],
-                                                      size_t *routing_id_size_)
-{
-    if (!wait_for_monitor_ready_callback (probe_, timeout_ms_))
-        return false;
-
-    if (routing_id_ && routing_id_size_) {
-        *routing_id_size_ = probe_->ready_event.routing_id.size;
-        if (probe_->ready_event.routing_id.size > 0) {
-            memcpy (routing_id_, probe_->ready_event.routing_id.data,
-                    probe_->ready_event.routing_id.size);
-        }
-    }
-    return true;
 }
 
 void pair_server_handler (const zlink_routing_id_t *,
@@ -883,19 +773,13 @@ void run_pair_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t socket_m
     TEST_ASSERT_NOT_NULL (monitor);
     configure_pair_socket (monitor);
 
-    socket_monitor_probe_t monitor_probe;
-    if (monitor_mode_ == monitor_callback_mode) {
-        TEST_ASSERT_SUCCESS_ERRNO (
-          zlink_socket_monitor_handler (monitor, &socket_monitor_handler, &monitor_probe));
-    }
+    (void) monitor_mode_;
 
     char endpoint[MAX_SOCKET_STRING];
     bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
 
-    const bool ready = monitor_mode_ == monitor_recv_mode
-                         ? wait_for_monitor_ready_recv (monitor, 3000)
-                         : wait_for_monitor_ready_callback (&monitor_probe, 3000);
+    const bool ready = wait_for_monitor_ready_recv (monitor, 3000);
     TEST_ASSERT_TRUE (ready);
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_send (client, "ping", 4, 0));
@@ -935,11 +819,7 @@ void run_dealer_router_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t
     TEST_ASSERT_NOT_NULL (monitor);
     configure_pair_socket (monitor);
 
-    socket_monitor_probe_t monitor_probe;
-    if (monitor_mode_ == monitor_callback_mode) {
-        TEST_ASSERT_SUCCESS_ERRNO (
-          zlink_socket_monitor_handler (monitor, &socket_monitor_handler, &monitor_probe));
-    }
+    (void) monitor_mode_;
 
     char endpoint[MAX_SOCKET_STRING];
     bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
@@ -947,11 +827,8 @@ void run_dealer_router_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t
 
     unsigned char routing_id[255];
     size_t routing_id_size = 0;
-    const bool ready = monitor_mode_ == monitor_recv_mode
-                         ? wait_for_monitor_ready_recv_with_activity (monitor, server, 3000,
-                                                                      routing_id, &routing_id_size)
-                         : wait_for_monitor_ready_callback_with_routing_id (
-                             &monitor_probe, 3000, routing_id, &routing_id_size);
+    const bool ready = wait_for_monitor_ready_recv_with_activity (
+      monitor, server, 3000, routing_id, &routing_id_size);
     TEST_ASSERT_TRUE (ready);
     TEST_ASSERT_TRUE (routing_id_size > 0);
 
@@ -1008,11 +885,7 @@ void run_router_router_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t
     TEST_ASSERT_NOT_NULL (monitor);
     configure_pair_socket (monitor);
 
-    socket_monitor_probe_t monitor_probe;
-    if (monitor_mode_ == monitor_callback_mode) {
-        TEST_ASSERT_SUCCESS_ERRNO (
-          zlink_socket_monitor_handler (monitor, &socket_monitor_handler, &monitor_probe));
-    }
+    (void) monitor_mode_;
 
     char endpoint[MAX_SOCKET_STRING];
     bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
@@ -1020,11 +893,8 @@ void run_router_router_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t
 
     unsigned char routing_id[255];
     size_t routing_id_size = 0;
-    const bool ready = monitor_mode_ == monitor_recv_mode
-                         ? wait_for_monitor_ready_recv_with_activity (monitor, server, 3000,
-                                                                      routing_id, &routing_id_size)
-                         : wait_for_monitor_ready_callback_with_routing_id (
-                             &monitor_probe, 3000, routing_id, &routing_id_size);
+    const bool ready = wait_for_monitor_ready_recv_with_activity (
+      monitor, server, 3000, routing_id, &routing_id_size);
     TEST_ASSERT_TRUE (ready);
     TEST_ASSERT_TRUE (routing_id_size > 0);
     TEST_ASSERT_EQUAL_INT (sizeof (client_id) - 1, static_cast<int> (routing_id_size));
@@ -1097,23 +967,14 @@ void run_pubsub_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t socket
     TEST_ASSERT_NOT_NULL (pub_monitor);
     configure_pair_socket (pub_monitor);
 
-    socket_monitor_probe_t sub_monitor_probe;
-    socket_monitor_probe_t pub_monitor_probe;
-    if (monitor_mode_ == monitor_callback_mode) {
-        TEST_ASSERT_SUCCESS_ERRNO (
-          zlink_socket_monitor_handler (sub_monitor, &socket_monitor_handler, &sub_monitor_probe));
-        TEST_ASSERT_SUCCESS_ERRNO (
-          zlink_socket_monitor_handler (pub_monitor, &socket_monitor_handler, &pub_monitor_probe));
-    }
+    (void) monitor_mode_;
 
     char endpoint[MAX_SOCKET_STRING];
     bind_loopback_ipv4 (pub, endpoint, sizeof (endpoint));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sub, endpoint));
 
     const bool ready =
-      monitor_mode_ == monitor_recv_mode
-        ? wait_for_pubsub_delivery_ready_recv (pub_monitor, sub_monitor, 3000)
-        : wait_for_pubsub_delivery_ready_callback (&pub_monitor_probe, &sub_monitor_probe, 3000);
+      wait_for_pubsub_delivery_ready_recv (pub_monitor, sub_monitor, 3000);
     TEST_ASSERT_TRUE (ready);
 
     s_send_seq (pub, "topic", "payload-1", SEQ_END);
@@ -1152,6 +1013,10 @@ void run_stream_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t socket
     void *server = test_context_socket (ZLINK_SOCKET_STREAM);
     TEST_ASSERT_NOT_NULL (server);
     configure_pair_socket (server);
+    zlink_stream_recv_mode_t recv_mode = ZLINK_STREAM_RECV_MODE_RAW;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_stream_option (server, ZLINK_STREAM_OPT_RECV_MODE, &recv_mode,
+                               sizeof (recv_mode)));
 
     zlink_socket_monitor_open_options_t monitor_opts;
     memset (&monitor_opts, 0, sizeof (monitor_opts));
@@ -1160,18 +1025,9 @@ void run_stream_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t socket
     TEST_ASSERT_NOT_NULL (monitor);
     configure_pair_socket (monitor);
 
-    socket_monitor_probe_t monitor_probe;
-    if (monitor_mode_ == monitor_callback_mode) {
-        TEST_ASSERT_SUCCESS_ERRNO (
-          zlink_socket_monitor_handler (monitor, &socket_monitor_handler, &monitor_probe));
-    }
+    (void) monitor_mode_;
 
-    stream_callback_probe_t stream_probe;
-    stream_probe.socket = server;
-    g_stream_probe = &stream_probe;
-    if (socket_mode_ == socket_callback_mode) {
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_recv_handler (server, &stream_handler, NULL));
-    }
+    (void) socket_mode_;
 
     char endpoint[MAX_SOCKET_STRING];
     bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
@@ -1182,45 +1038,22 @@ void run_stream_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t socket
 
     TEST_ASSERT_EQUAL_INT (0, send_stream_packet (client_fd, "cli", 3));
 
-    if (socket_mode_ == socket_recv_mode) {
-        unsigned char routing_id[stream_routing_id_size];
-        size_t routing_id_size = 0;
-        zlink_routing_id_t rid;
-        zlink_msg_t payload;
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&payload));
-        TEST_ASSERT_TRUE (recv_stream_routing_id_and_payload (server, &rid, &payload));
-        const bool ready = monitor_mode_ == monitor_recv_mode
-                             ? wait_for_monitor_ready_recv_with_activity (
-                                 monitor, server, 3000, routing_id, &routing_id_size)
-                             : wait_for_monitor_ready_callback_with_routing_id (
-                                 &monitor_probe, 3000, routing_id, &routing_id_size);
-        TEST_ASSERT_TRUE (ready);
-        TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, routing_id_size);
-        TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, rid.size);
-        TEST_ASSERT_EQUAL_MEMORY (routing_id, rid.data, stream_routing_id_size);
-        TEST_ASSERT_EQUAL_MEMORY ("cli", zlink_msg_data (&payload), 3);
-        TEST_ASSERT_EQUAL_INT (
-          3, TEST_ASSERT_SUCCESS_ERRNO (test_stream_send_single_msg (server, &rid, &payload, 0)));
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&payload));
-    } else {
-        unsigned char routing_id[stream_routing_id_size];
-        size_t routing_id_size = 0;
-        const bool ready =
-          monitor_mode_ == monitor_recv_mode
-            ? (socket_mode_ == socket_recv_mode
-                 ? wait_for_monitor_ready_recv_with_activity (monitor, server, 3000, routing_id,
-                                                              &routing_id_size)
-                 : wait_for_monitor_ready_recv_with_routing_id (monitor, 3000, routing_id,
-                                                                &routing_id_size))
-            : wait_for_monitor_ready_callback_with_routing_id (&monitor_probe, 3000, routing_id,
-                                                               &routing_id_size);
-        TEST_ASSERT_TRUE (ready);
-        TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, routing_id_size);
-        TEST_ASSERT_TRUE (wait_for_stream_callback (&stream_probe, 3000));
-        TEST_ASSERT_EQUAL_MEMORY (routing_id, stream_probe.routing_id, stream_routing_id_size);
-        TEST_ASSERT_EQUAL_STRING ("cli", stream_probe.payload);
-        TEST_ASSERT_TRUE (wait_for_stream_send_ok (&stream_probe, 3000));
-    }
+    unsigned char routing_id[stream_routing_id_size];
+    size_t routing_id_size = 0;
+    zlink_routing_id_t rid;
+    zlink_msg_t payload;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&payload));
+    TEST_ASSERT_TRUE (recv_stream_routing_id_and_payload (server, &rid, &payload));
+    const bool ready = wait_for_monitor_ready_recv_with_activity (
+      monitor, server, 3000, routing_id, &routing_id_size);
+    TEST_ASSERT_TRUE (ready);
+    TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, routing_id_size);
+    TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, rid.size);
+    TEST_ASSERT_EQUAL_MEMORY (routing_id, rid.data, stream_routing_id_size);
+    TEST_ASSERT_EQUAL_MEMORY ("cli", zlink_msg_data (&payload), 3);
+    TEST_ASSERT_EQUAL_INT (
+      3, TEST_ASSERT_SUCCESS_ERRNO (test_stream_send_single_msg (server, &rid, &payload, 0)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&payload));
 
     unsigned char echo_buf[4];
     TEST_ASSERT_EQUAL_INT (0, recv_exact (client_fd, echo_buf, 3));
@@ -1498,39 +1331,9 @@ void test_pair_ready_with_monitor_recv_and_socket_recv ()
     run_pair_ready_matrix (monitor_recv_mode, socket_recv_mode);
 }
 
-void test_pair_ready_with_monitor_recv_and_socket_callback ()
-{
-    run_pair_ready_matrix (monitor_recv_mode, socket_callback_mode);
-}
-
-void test_pair_ready_with_monitor_callback_and_socket_recv ()
-{
-    run_pair_ready_matrix (monitor_callback_mode, socket_recv_mode);
-}
-
-void test_pair_ready_with_monitor_callback_and_socket_callback ()
-{
-    run_pair_ready_matrix (monitor_callback_mode, socket_callback_mode);
-}
-
 void test_dealer_router_ready_with_monitor_recv_and_socket_recv ()
 {
     run_dealer_router_ready_matrix (monitor_recv_mode, socket_recv_mode);
-}
-
-void test_dealer_router_ready_with_monitor_recv_and_socket_callback ()
-{
-    run_dealer_router_ready_matrix (monitor_recv_mode, socket_callback_mode);
-}
-
-void test_dealer_router_ready_with_monitor_callback_and_socket_recv ()
-{
-    run_dealer_router_ready_matrix (monitor_callback_mode, socket_recv_mode);
-}
-
-void test_dealer_router_ready_with_monitor_callback_and_socket_callback ()
-{
-    run_dealer_router_ready_matrix (monitor_callback_mode, socket_callback_mode);
 }
 
 void test_inproc_dealer_router_ready_after_bind ()
@@ -1566,39 +1369,9 @@ void test_router_router_ready_with_monitor_recv_and_socket_recv ()
     run_router_router_ready_matrix (monitor_recv_mode, socket_recv_mode);
 }
 
-void test_router_router_ready_with_monitor_recv_and_socket_callback ()
-{
-    run_router_router_ready_matrix (monitor_recv_mode, socket_callback_mode);
-}
-
-void test_router_router_ready_with_monitor_callback_and_socket_recv ()
-{
-    run_router_router_ready_matrix (monitor_callback_mode, socket_recv_mode);
-}
-
-void test_router_router_ready_with_monitor_callback_and_socket_callback ()
-{
-    run_router_router_ready_matrix (monitor_callback_mode, socket_callback_mode);
-}
-
 void test_pubsub_ready_with_monitor_recv_and_socket_recv ()
 {
     run_pubsub_ready_matrix (monitor_recv_mode, socket_recv_mode);
-}
-
-void test_pubsub_ready_with_monitor_recv_and_socket_callback ()
-{
-    run_pubsub_ready_matrix (monitor_recv_mode, socket_callback_mode);
-}
-
-void test_pubsub_ready_with_monitor_callback_and_socket_recv ()
-{
-    run_pubsub_ready_matrix (monitor_callback_mode, socket_recv_mode);
-}
-
-void test_pubsub_ready_with_monitor_callback_and_socket_callback ()
-{
-    run_pubsub_ready_matrix (monitor_callback_mode, socket_callback_mode);
 }
 
 void test_pubsub_delivery_ready_snapshot_and_reopen_after_ready ()
@@ -1691,8 +1464,9 @@ void test_pubsub_delivery_ready_reaches_1000_subscribers ()
     configure_pair_socket (pub_ready_monitor);
 
     delivery_ready_value_probe_t pub_probe;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_socket_monitor_handler (pub_ready_monitor, &delivery_ready_value_handler, &pub_probe));
+    test_monitor_pull_dispatch_t pub_dispatch;
+    TEST_ASSERT_TRUE (
+      pub_dispatch.start (pub_ready_monitor, &delivery_ready_value_handler, &pub_probe));
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (pub, "tcp://127.0.0.1:*"));
     char endpoint[MAX_SOCKET_STRING];
@@ -1718,6 +1492,7 @@ void test_pubsub_delivery_ready_reaches_1000_subscribers ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_status (pub_ready_monitor, &status));
     TEST_ASSERT_TRUE ((status.state_flags & ZLINK_MONITOR_STATE_READY) != 0);
 
+    pub_dispatch.stop ();
     TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&pub_ready_monitor));
     for (size_t i = 0; i < subs.size (); ++i)
         close_zero_linger (subs[i]);
@@ -1730,96 +1505,6 @@ void test_stream_ready_with_monitor_recv_and_socket_recv ()
     run_stream_ready_matrix (monitor_recv_mode, socket_recv_mode);
 }
 
-void test_stream_ready_with_monitor_recv_and_socket_callback ()
-{
-    run_stream_ready_matrix (monitor_recv_mode, socket_callback_mode);
-}
-
-void test_stream_ready_with_monitor_callback_and_socket_recv ()
-{
-    run_stream_ready_matrix (monitor_callback_mode, socket_recv_mode);
-}
-
-void test_stream_ready_with_monitor_callback_and_socket_callback ()
-{
-    run_stream_ready_matrix (monitor_callback_mode, socket_callback_mode);
-}
-
-namespace
-{
-struct self_close_probe_t
-{
-    self_close_probe_t () : monitor (NULL), callbacks (0), close_rc (-1) {}
-    std::atomic<void *> monitor;
-    std::atomic<int> callbacks;
-    std::atomic<int> close_rc;
-};
-
-void self_close_monitor_handler (const zlink_monitor_event_t *, void *userdata_)
-{
-    self_close_probe_t *probe = static_cast<self_close_probe_t *> (userdata_);
-    probe->callbacks.fetch_add (1, std::memory_order_relaxed);
-    void *monitor = probe->monitor.exchange (NULL, std::memory_order_acq_rel);
-    if (monitor)
-        probe->close_rc.store (static_cast<int> (zlink_monitor_close (&monitor)),
-                               std::memory_order_release);
-}
-}
-
-void test_monitor_handler_attach_with_queued_events_and_self_close ()
-{
-    //  Regression for S5-13-01: attaching a handler arms an immediate
-    //  dispatch task, and with events already queued its first tick races the
-    //  registration commit. A self-close from that first callback must
-    //  observe the completed task identity, remove the dispatch task and tear
-    //  the monitor down exactly once instead of leaving a periodic task that
-    //  reuses freed state.
-    for (int i = 0; i != 10; i++) {
-        void *server = test_context_socket (ZLINK_SOCKET_PAIR);
-        void *client = test_context_socket (ZLINK_SOCKET_PAIR);
-        TEST_ASSERT_NOT_NULL (server);
-        TEST_ASSERT_NOT_NULL (client);
-        configure_pair_socket (server);
-        configure_pair_socket (client);
-
-        zlink_socket_monitor_open_options_t monitor_opts;
-        memset (&monitor_opts, 0, sizeof (monitor_opts));
-        monitor_opts.events = ZLINK_EVENT_ALL;
-        void *monitor = zlink_socket_monitor_open (server, &monitor_opts);
-        TEST_ASSERT_NOT_NULL (monitor);
-        configure_pair_socket (monitor);
-
-        char endpoint[MAX_SOCKET_STRING];
-        bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
-        //  Let listen/accept/ready events queue up before the handler exists.
-        msleep (50);
-
-        self_close_probe_t probe;
-        probe.monitor.store (monitor, std::memory_order_release);
-        TEST_ASSERT_SUCCESS_ERRNO (
-          zlink_socket_monitor_handler (monitor, &self_close_monitor_handler, &probe));
-
-        void *watch = zlink_stopwatch_start ();
-        while (probe.close_rc.load (std::memory_order_acquire) == -1) {
-            msleep (1);
-            TEST_ASSERT_LESS_OR_EQUAL_MESSAGE (
-              3000000UL, zlink_stopwatch_intermediate (watch),
-              "Timeout waiting for the self-closing monitor result");
-        }
-        zlink_stopwatch_stop (watch);
-        TEST_ASSERT_NULL (probe.monitor.load (std::memory_order_acquire));
-        TEST_ASSERT_EQUAL_INT (static_cast<int> (ZLINK_CLOSE_OK),
-                               probe.close_rc.load (std::memory_order_acquire));
-        //  The dispatch task must be gone with the state; give a stray tick
-        //  time to crash before teardown if the regression returns.
-        msleep (50);
-
-        test_context_socket_close_zero_linger (client);
-        test_context_socket_close_zero_linger (server);
-    }
-}
-
 int main ()
 {
     setup_test_environment (120);
@@ -1827,9 +1512,7 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (test_monitor_context_snapshot_tracks_one_pending_event_exactly);
     RUN_TEST (test_pair_ready_with_monitor_recv_and_socket_recv);
-    RUN_TEST (test_pair_ready_with_monitor_recv_and_socket_callback);
     RUN_TEST (test_dealer_router_ready_with_monitor_recv_and_socket_recv);
-    RUN_TEST (test_dealer_router_ready_with_monitor_recv_and_socket_callback);
     RUN_TEST (test_inproc_dealer_router_ready_after_bind);
     RUN_TEST (test_inproc_dealer_router_ready_after_pending_connect);
     RUN_TEST (test_inproc_two_dealers_ready_once_each);
@@ -1840,13 +1523,9 @@ int main ()
 #endif
 #endif
     RUN_TEST (test_router_router_ready_with_monitor_recv_and_socket_recv);
-    RUN_TEST (test_router_router_ready_with_monitor_recv_and_socket_callback);
     RUN_TEST (test_pubsub_ready_with_monitor_recv_and_socket_recv);
-    RUN_TEST (test_pubsub_ready_with_monitor_recv_and_socket_callback);
     RUN_TEST (test_pubsub_delivery_ready_snapshot_and_reopen_after_ready);
     RUN_TEST (test_pubsub_delivery_ready_reaches_1000_subscribers);
     RUN_TEST (test_stream_ready_with_monitor_recv_and_socket_recv);
-    RUN_TEST (test_stream_ready_with_monitor_recv_and_socket_callback);
-    RUN_TEST (test_monitor_handler_attach_with_queued_events_and_self_close);
     return UNITY_END ();
 }

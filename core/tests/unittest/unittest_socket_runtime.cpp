@@ -306,15 +306,13 @@ void test_socket_lifecycle_coordinator_atomically_seals_or_acquires_mailbox_ref 
     }
 }
 
-void test_socket_lifecycle_coordinator_completes_deferred_close_without_async_mailbox ()
+void test_socket_lifecycle_coordinator_completes_close_handoff_without_async_mailbox ()
 {
     zlink::socket_lifecycle_coordinator_t coordinator;
     zlink::mailbox_t mailbox;
 
-    TEST_ASSERT_TRUE (coordinator.enter_callback_api ());
-    TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy (true));
+    TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy ());
     TEST_ASSERT_TRUE (coordinator.public_close_requested ());
-    TEST_ASSERT_TRUE (coordinator.leave_callback_api ());
 
     coordinator.complete_deferred_close_handoff (&mailbox, NULL, 1);
 
@@ -359,15 +357,13 @@ void test_mailbox_command_survives_primary_signaler_drain ()
     TEST_ASSERT_EQUAL_INT (zlink::command_t::stop, command.type);
 }
 
-void test_socket_lifecycle_coordinator_handoff_waits_pending_async_quiesce ()
+void test_socket_lifecycle_coordinator_close_handoff_waits_pending_async_quiesce ()
 {
     zlink::socket_lifecycle_coordinator_t coordinator;
     zlink::mailbox_t mailbox;
 
     coordinator.stop_async_mailbox_processing (&mailbox);
-    TEST_ASSERT_TRUE (coordinator.enter_callback_api ());
-    TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy (true));
-    TEST_ASSERT_TRUE (coordinator.leave_callback_api ());
+    TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy ());
 
     coordinator.complete_deferred_close_handoff (&mailbox, NULL, 1);
 
@@ -382,18 +378,6 @@ void test_socket_lifecycle_coordinator_handoff_waits_pending_async_quiesce ()
     TEST_ASSERT_FALSE (coordinator.is_async_quiesce_pending ());
 }
 
-void test_socket_lifecycle_coordinator_claims_deferred_close_once ()
-{
-    zlink::socket_lifecycle_coordinator_t coordinator;
-
-    TEST_ASSERT_TRUE (coordinator.enter_callback_api ());
-    TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy (true));
-    TEST_ASSERT_TRUE (coordinator.leave_callback_api ());
-
-    TEST_ASSERT_TRUE (coordinator.take_deferred_close ());
-    TEST_ASSERT_FALSE (coordinator.take_deferred_close ());
-}
-
 void test_socket_public_api_scope_releases_inflight_admission ()
 {
     zlink::socket_lifecycle_coordinator_t coordinator;
@@ -402,47 +386,13 @@ void test_socket_public_api_scope_releases_inflight_admission ()
         zlink::socket_public_api_scope_t admission (coordinator);
         TEST_ASSERT_TRUE (admission.acquired ());
         errno = 0;
-        TEST_ASSERT_FALSE (coordinator.begin_close_or_fail_busy (false));
+        TEST_ASSERT_FALSE (coordinator.begin_close_or_fail_busy ());
         TEST_ASSERT_EQUAL_INT (EBUSY, errno);
     }
 
     errno = 0;
-    TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy (false));
+    TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy ());
     TEST_ASSERT_TRUE (coordinator.public_close_requested ());
-}
-
-void test_socket_self_close_rejects_unrelated_inflight_api ()
-{
-    zlink::socket_lifecycle_coordinator_t coordinator;
-
-    TEST_ASSERT_TRUE (coordinator.enter_callback_api ());
-    TEST_ASSERT_TRUE (coordinator.enter_public_api ());
-
-    errno = 0;
-    TEST_ASSERT_FALSE (coordinator.begin_close_or_fail_busy (true));
-    TEST_ASSERT_EQUAL_INT (EBUSY, errno);
-    TEST_ASSERT_FALSE (coordinator.public_close_requested ());
-
-    coordinator.leave_public_api ();
-    TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy (true));
-    TEST_ASSERT_TRUE (coordinator.leave_callback_api ());
-}
-
-void test_socket_self_close_rejects_another_inflight_callback ()
-{
-    zlink::socket_lifecycle_coordinator_t coordinator;
-
-    TEST_ASSERT_TRUE (coordinator.enter_callback_api ());
-    TEST_ASSERT_TRUE (coordinator.enter_callback_api ());
-
-    errno = 0;
-    TEST_ASSERT_FALSE (coordinator.begin_close_or_fail_busy (true));
-    TEST_ASSERT_EQUAL_INT (EBUSY, errno);
-    TEST_ASSERT_FALSE (coordinator.public_close_requested ());
-
-    TEST_ASSERT_FALSE (coordinator.leave_callback_api ());
-    TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy (true));
-    TEST_ASSERT_TRUE (coordinator.leave_callback_api ());
 }
 
 void test_socket_public_api_lock_scope_releases_sync_bit_on_exit ()
@@ -455,59 +405,6 @@ void test_socket_public_api_lock_scope_releases_sync_bit_on_exit ()
         TEST_ASSERT_TRUE (coordinator.public_api_sync_held ());
     }
     TEST_ASSERT_FALSE (coordinator.public_api_sync_held ());
-}
-
-void test_socket_callback_scope_tracks_callback_depth_and_inflight_state ()
-{
-    zlink::socket_lifecycle_coordinator_t coordinator;
-
-    TEST_ASSERT_EQUAL_UINT32 (0u, coordinator.callback_api_depth.load (std::memory_order_acquire));
-    TEST_ASSERT_EQUAL_UINT32 (0u, coordinator.public_api_state.load (std::memory_order_acquire));
-
-    TEST_ASSERT_TRUE (coordinator.enter_callback_api ());
-    TEST_ASSERT_EQUAL_UINT32 (1u,
-                              coordinator.callback_api_depth.load (std::memory_order_acquire));
-    TEST_ASSERT_EQUAL_UINT32 (1u,
-                              coordinator.public_api_state.load (std::memory_order_acquire));
-    TEST_ASSERT_FALSE (coordinator.leave_callback_api ());
-
-    TEST_ASSERT_EQUAL_UINT32 (0u, coordinator.callback_api_depth.load (std::memory_order_acquire));
-    TEST_ASSERT_EQUAL_UINT32 (0u, coordinator.public_api_state.load (std::memory_order_acquire));
-    TEST_ASSERT_FALSE (coordinator.public_close_requested ());
-}
-
-void test_socket_send_complete_dispatch_scope_restores_previous_socket ()
-{
-    zlink::socket_base_t *outer = reinterpret_cast<zlink::socket_base_t *> (0x1);
-    zlink::socket_base_t *inner = reinterpret_cast<zlink::socket_base_t *> (0x2);
-
-    TEST_ASSERT_NULL (zlink::socket_send_complete_dispatch_scope_t::current_socket ());
-    TEST_ASSERT_FALSE (zlink::socket_send_complete_dispatch_scope_t::dispatching_socket (outer));
-
-    {
-        zlink::socket_send_complete_dispatch_scope_t outer_scope (outer);
-        TEST_ASSERT_TRUE (
-          zlink::socket_send_complete_dispatch_scope_t::dispatching_any ());
-        TEST_ASSERT_EQUAL_PTR (outer, zlink::socket_send_complete_dispatch_scope_t::current_socket ());
-        TEST_ASSERT_TRUE (zlink::socket_send_complete_dispatch_scope_t::dispatching_socket (outer));
-
-        {
-            zlink::socket_send_complete_dispatch_scope_t inner_scope (inner);
-            TEST_ASSERT_EQUAL_PTR (inner,
-                                   zlink::socket_send_complete_dispatch_scope_t::current_socket ());
-            TEST_ASSERT_TRUE (
-              zlink::socket_send_complete_dispatch_scope_t::dispatching_socket (inner));
-            TEST_ASSERT_FALSE (
-              zlink::socket_send_complete_dispatch_scope_t::dispatching_socket (outer));
-        }
-
-        TEST_ASSERT_EQUAL_PTR (outer, zlink::socket_send_complete_dispatch_scope_t::current_socket ());
-        TEST_ASSERT_TRUE (zlink::socket_send_complete_dispatch_scope_t::dispatching_socket (outer));
-    }
-
-    TEST_ASSERT_NULL (zlink::socket_send_complete_dispatch_scope_t::current_socket ());
-    TEST_ASSERT_FALSE (
-      zlink::socket_send_complete_dispatch_scope_t::dispatching_any ());
 }
 
 void test_socket_command_runtime_throttles_command_polls_by_tsc_window ()
@@ -571,12 +468,8 @@ void test_socket_send_pending_runtime_starts_empty ()
 
     //  op id 0 is reserved as "no operation", so the first assigned id is 1.
     TEST_ASSERT_EQUAL_UINT64 (1, pending.next_op_id);
-    TEST_ASSERT_NULL (pending.handler);
-    TEST_ASSERT_FALSE (pending.handler_installed.load (std::memory_order_acquire));
     TEST_ASSERT_TRUE (pending.queues.empty ());
     TEST_ASSERT_TRUE (pending.by_op.empty ());
-    TEST_ASSERT_NULL (pending.completion_head);
-    TEST_ASSERT_NULL (pending.completion_tail);
     TEST_ASSERT_EQUAL_UINT64 (0, pending.pending_msgs);
     TEST_ASSERT_EQUAL_UINT64 (0, pending.pending_bytes);
     TEST_ASSERT_FALSE (pending.failing);
@@ -593,13 +486,13 @@ void test_socket_public_send_scope_combines_initial_admission_and_sync ()
         TEST_ASSERT_TRUE (coordinator.public_api_sync_held ());
 
         errno = 0;
-        TEST_ASSERT_FALSE (coordinator.begin_close_or_fail_busy (false));
+        TEST_ASSERT_FALSE (coordinator.begin_close_or_fail_busy ());
         TEST_ASSERT_EQUAL_INT (EBUSY, errno);
     }
 
     TEST_ASSERT_FALSE (coordinator.public_api_sync_held ());
     errno = 0;
-    TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy (false));
+    TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy ());
 }
 
 void test_socket_public_send_scope_unlocks_sync_but_keeps_inflight_admission ()
@@ -616,7 +509,7 @@ void test_socket_public_send_scope_unlocks_sync_but_keeps_inflight_admission ()
         TEST_ASSERT_FALSE (coordinator.public_api_sync_held ());
 
         errno = 0;
-        TEST_ASSERT_FALSE (coordinator.begin_close_or_fail_busy (false));
+        TEST_ASSERT_FALSE (coordinator.begin_close_or_fail_busy ());
         TEST_ASSERT_EQUAL_INT (EBUSY, errno);
 
         send_scope.relock_sync ();
@@ -626,7 +519,7 @@ void test_socket_public_send_scope_unlocks_sync_but_keeps_inflight_admission ()
 
     TEST_ASSERT_FALSE (coordinator.public_api_sync_held ());
     errno = 0;
-    TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy (false));
+    TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy ());
 }
 
 void test_socket_public_send_scope_without_sync_keeps_inflight_admission ()
@@ -641,13 +534,13 @@ void test_socket_public_send_scope_without_sync_keeps_inflight_admission ()
                                   coordinator.public_api_state.load (std::memory_order_acquire));
 
         errno = 0;
-        TEST_ASSERT_FALSE (coordinator.begin_close_or_fail_busy (false));
+        TEST_ASSERT_FALSE (coordinator.begin_close_or_fail_busy ());
         TEST_ASSERT_EQUAL_INT (EBUSY, errno);
     }
 
     TEST_ASSERT_EQUAL_UINT32 (0u, coordinator.public_api_state.load (std::memory_order_acquire));
     errno = 0;
-    TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy (false));
+    TEST_ASSERT_TRUE (coordinator.begin_close_or_fail_busy ());
 }
 }
 
@@ -667,17 +560,12 @@ int main (int argc, char **argv)
     RUN_TEST (test_socket_lifecycle_coordinator_seals_mailbox_refs_at_zero);
     RUN_TEST (
       test_socket_lifecycle_coordinator_atomically_seals_or_acquires_mailbox_ref);
-    RUN_TEST (test_socket_lifecycle_coordinator_completes_deferred_close_without_async_mailbox);
+    RUN_TEST (test_socket_lifecycle_coordinator_completes_close_handoff_without_async_mailbox);
     RUN_TEST (test_mailbox_pending_hint_distinguishes_commands_from_plain_signals);
     RUN_TEST (test_mailbox_command_survives_primary_signaler_drain);
-    RUN_TEST (test_socket_lifecycle_coordinator_handoff_waits_pending_async_quiesce);
-    RUN_TEST (test_socket_lifecycle_coordinator_claims_deferred_close_once);
+    RUN_TEST (test_socket_lifecycle_coordinator_close_handoff_waits_pending_async_quiesce);
     RUN_TEST (test_socket_public_api_scope_releases_inflight_admission);
-    RUN_TEST (test_socket_self_close_rejects_unrelated_inflight_api);
-    RUN_TEST (test_socket_self_close_rejects_another_inflight_callback);
     RUN_TEST (test_socket_public_api_lock_scope_releases_sync_bit_on_exit);
-    RUN_TEST (test_socket_callback_scope_tracks_callback_depth_and_inflight_state);
-    RUN_TEST (test_socket_send_complete_dispatch_scope_restores_previous_socket);
     RUN_TEST (test_socket_command_runtime_throttles_command_polls_by_tsc_window);
     RUN_TEST (test_socket_command_runtime_tracks_recv_ticks_until_reset);
     RUN_TEST (test_socket_dispatch_bridge_tracks_send_recovery_edges);

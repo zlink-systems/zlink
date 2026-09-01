@@ -7,6 +7,8 @@
 
 #include "api/socket/socket_api_internal.hpp"
 #include "api/socket/socket_message_api_internal.hpp"
+#include "api/socket/part_helper_internal.hpp"
+#include "api/message/recv_result_internal.hpp"
 #include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "core/msg.hpp"
@@ -17,12 +19,6 @@
 
 namespace
 {
-zlink_routing_id_t &xpub_recv_source_rid_tls ()
-{
-    static thread_local zlink_routing_id_t rid;
-    return rid;
-}
-
 inline void reset_routing_id_output (zlink_routing_id_t *source_rid_out_)
 {
     if (source_rid_out_)
@@ -61,11 +57,6 @@ int recv_socket_subscribe_parts (const socket_handle_t &handle_,
     const int type = socket_type (handle_);
     if (type != ZLINK_CORE_SOCKET_SUB && type != ZLINK_CORE_SOCKET_XSUB) {
         errno = ENOTSUP;
-        return -1;
-    }
-
-    if (handle_.socket->sub_dispatch_active ()) {
-        errno = EBUSY;
         return -1;
     }
 
@@ -140,7 +131,7 @@ int recv_socket_parts (const socket_handle_t &handle_,
     // token, and rejects a later kind consistently with the wire decoder.
     if (type == ZLINK_CORE_SOCKET_DEALER) {
         reset_routing_id_output (source_rid_out_);
-        uint8_t message_type = ZLINK_DEALER_MESSAGE_RAW;
+        uint8_t message_type = zlink::zmp_kind_data;
         uint64_t request_seq = 0;
         const std::shared_ptr<
           zlink::socket_reqrep_internal::socket_request_reply_state_t>
@@ -160,11 +151,6 @@ int recv_socket_parts (const socket_handle_t &handle_,
         if (zlink::recv_tls_view::begin_with_first_slot (parts_out_, part_count_out_, &first_slot)
             != 0)
             return -1;
-
-        if (handle_.socket->socket_msg_dispatch_active ()) {
-            errno = EBUSY;
-            return -1;
-        }
 
         const int recv_rc = handle_.socket->recv (
           reinterpret_cast<zlink::msg_t *> (first_slot), flags_);
@@ -319,29 +305,140 @@ zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
                                           size_t *topic_id_len_out_,
                                           zlink_recv_flags_t flags_)
 {
-    if (!subscribed_out_ || !topic_id_len_out_) {
+    if (!xpub_) {
         errno = EFAULT;
-        return ZLINK_RECV_INVALID_HANDLE;
+        return zlink::recv_result_internal::from_errno (errno);
     }
-    *topic_id_len_out_ = topic_id_capacity_;
-    zlink_routing_id_t tmp_rid;
-    tmp_rid.size = 0;
-    const int rc =
-      zlink_socket_xpub_recv_internal (xpub_, &tmp_rid, subscribed_out_, topic_id_buf_,
-                                       topic_id_len_out_, static_cast<zlink_send_flags_t> (flags_));
-    if (rc != 0) {
-        const int err = zlink_errno ();
-        if (err == EAGAIN)
-            return ZLINK_RECV_NO_DATA;
-        if (err == ETERM)
-            return ZLINK_RECV_TERMINATED;
-        return ZLINK_RECV_INTERNAL_ERROR;
+
+    socket_handle_t handle = as_socket_handle (xpub_);
+    if (!handle.socket)
+        return zlink::recv_result_internal::from_errno (errno);
+    handle.socket->clear_last_recv_source_rid ();
+
+    if (!subscribed_out_ || !topic_id_len_out_
+        || (topic_id_capacity_ > 0 && !topic_id_buf_)) {
+        errno = EFAULT;
+        return zlink::recv_result_internal::from_errno (errno);
     }
-    if (source_rid_out_) {
-        zlink_routing_id_t &source_rid = xpub_recv_source_rid_tls ();
-        source_rid = tmp_rid;
-        *source_rid_out_ = &source_rid;
+    if (validate_recv_flags (flags_) != 0)
+        return zlink::recv_result_internal::from_errno (errno);
+    if (socket_type (handle) != ZLINK_CORE_SOCKET_XPUB) {
+        errno = ENOTSUP;
+        return zlink::recv_result_internal::from_errno (errno);
     }
+
+    std::shared_ptr<zlink::part_helper_internal::handle_state_t> helper_state =
+      zlink::part_helper_internal::find_socket_state (handle.socket);
+    bool sequence_active = false;
+    if (helper_state) {
+        std::lock_guard<std::mutex> lock (helper_state->mutex);
+        sequence_active = helper_state->recv.active;
+        if (sequence_active
+            && (helper_state->recv.family
+                  != zlink::part_helper_internal::recv_family_xpub
+                || helper_state->recv.owner_thread
+                     != std::this_thread::get_id ())) {
+            errno = EBUSY;
+            return zlink::recv_result_internal::from_errno (errno);
+        }
+    }
+
+    if (!sequence_active) {
+        zlink::scoped_msg_t event;
+        if (zlink::recv_msg_socket (
+              handle.socket, ZLINK_CORE_SOCKET_XPUB, event.get (), flags_)
+            < 0)
+            return zlink::recv_result_internal::from_errno (errno);
+
+        const unsigned char *data = static_cast<const unsigned char *> (
+          zlink_msg_data (event.get ()));
+        const size_t size = zlink_msg_size (event.get ());
+        const size_t topic_len = size > 0 ? size - 1 : 0;
+        const int subscribed = size > 0 && data[0] != 0 ? 1 : 0;
+
+        if (topic_id_capacity_ >= topic_len) {
+            if (topic_len > 0)
+                memcpy (topic_id_buf_, data + 1, topic_len);
+            *topic_id_len_out_ = topic_len;
+            *subscribed_out_ = subscribed;
+            if (source_rid_out_)
+                *source_rid_out_ = handle.socket->last_recv_source_rid_view ();
+            errno = 0;
+            return ZLINK_RECV_OK;
+        }
+
+        if (!helper_state)
+            helper_state =
+              zlink::part_helper_internal::find_or_create_socket_state (
+                handle.socket);
+        if (!helper_state)
+            return zlink::recv_result_internal::from_errno (errno);
+
+        bool first_part = false;
+        zlink::socket_base_t *source_socket = NULL;
+        if (zlink::part_helper_internal::prepare_recv_step (
+              xpub_, zlink::part_helper_internal::recv_family_xpub,
+              handle.socket, &helper_state, &first_part, &source_socket)
+            != 0)
+            return zlink::recv_result_internal::from_errno (errno);
+        if (!first_part) {
+            zlink::part_helper_internal::abort_recv_step (helper_state);
+            errno = EBUSY;
+            return zlink::recv_result_internal::from_errno (errno);
+        }
+
+        try {
+            std::lock_guard<std::mutex> lock (helper_state->mutex);
+            helper_state->recv.topic_id.assign (
+              topic_len == 0
+                ? ""
+                : reinterpret_cast<const char *> (data + 1),
+              topic_len);
+            helper_state->recv.subscribed = subscribed;
+            zlink_routing_id_t source_rid;
+            const bool has_source_rid =
+              handle.socket->copy_last_recv_source_rid (&source_rid);
+            zlink::part_helper_internal::set_recv_metadata (
+              &helper_state->recv, has_source_rid ? &source_rid : NULL, 0);
+        } catch (...) {
+            zlink::part_helper_internal::abort_recv_step (helper_state);
+            errno = ENOMEM;
+            return zlink::recv_result_internal::from_errno (errno);
+        }
+    }
+
+    size_t topic_len = 0;
+    int subscribed = 0;
+    zlink_routing_id_t source_rid;
+    bool has_source_rid = false;
+    {
+        std::lock_guard<std::mutex> lock (helper_state->mutex);
+        topic_len = helper_state->recv.topic_id.size ();
+        if (topic_id_capacity_ < topic_len) {
+            *topic_id_len_out_ = topic_len;
+            errno = ENOBUFS;
+            return zlink::recv_result_internal::from_errno (errno);
+        }
+        if (topic_len > 0)
+            memcpy (topic_id_buf_, helper_state->recv.topic_id.data (),
+                    topic_len);
+        subscribed = helper_state->recv.subscribed;
+        has_source_rid = !helper_state->recv.return_source_rid_as_null;
+        if (has_source_rid)
+            source_rid = helper_state->recv.source_node_rid;
+    }
+
+    if (has_source_rid)
+        handle.socket->store_last_recv_source_rid (&source_rid);
+    *topic_id_len_out_ = topic_len;
+    *subscribed_out_ = subscribed;
+    if (source_rid_out_)
+        *source_rid_out_ = has_source_rid
+                             ? handle.socket->last_recv_source_rid_view ()
+                             : NULL;
+    zlink::part_helper_internal::complete_recv_step (
+      helper_state, ZLINK_PART_FINAL);
+    errno = 0;
     return ZLINK_RECV_OK;
 }
 

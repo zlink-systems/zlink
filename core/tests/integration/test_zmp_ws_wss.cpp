@@ -34,94 +34,6 @@ SETUP_TEARDOWN_TESTCONTEXT
 #if defined ZLINK_HAVE_WS
 namespace
 {
-struct request_reply_probe_t
-{
-    std::mutex mutex;
-    bool done;
-    zlink_request_result_t result;
-    size_t part_count;
-    std::string payload;
-    bool metadata_present;
-
-    request_reply_probe_t () :
-        done (false),
-        result (ZLINK_REQUEST_PROTOCOL_ERROR),
-        part_count (0),
-        metadata_present (false)
-    {
-    }
-};
-
-void capture_request_reply (zlink_request_result_t result_,
-                            zlink_msg_t *parts_,
-                            size_t part_count_,
-                            void *userdata_)
-{
-    request_reply_probe_t *const probe =
-      static_cast<request_reply_probe_t *> (userdata_);
-    unsigned char kind = 0;
-    uint64_t sequence = 0;
-    const bool metadata_present =
-      part_count_ > 0
-      && reinterpret_cast<zlink::msg_t *> (&parts_[0])
-           ->get_request_reply_metadata (&kind, &sequence);
-    const std::string payload =
-      part_count_ > 0
-        ? std::string (
-            static_cast<const char *> (zlink_msg_data (&parts_[0])),
-            zlink_msg_size (&parts_[0]))
-        : std::string ();
-    // Reply parts transfer to the callback. Release them exactly once after
-    // taking the value snapshot used by this transport fixture.
-    zlink_multipart_close (parts_, part_count_);
-
-    std::lock_guard<std::mutex> lock (probe->mutex);
-    probe->done = true;
-    probe->result = result_;
-    probe->part_count = part_count_;
-    probe->payload = payload;
-    probe->metadata_present = metadata_present;
-}
-
-bool request_reply_done (request_reply_probe_t *probe_)
-{
-    std::lock_guard<std::mutex> lock (probe_->mutex);
-    return probe_->done;
-}
-
-void wait_for_request_reply (void *dealer_, request_reply_probe_t *probe_)
-{
-    const std::chrono::steady_clock::time_point deadline =
-      std::chrono::steady_clock::now () + std::chrono::seconds (5);
-    while (!request_reply_done (probe_)
-           && std::chrono::steady_clock::now () < deadline) {
-        const zlink_routing_id_t *source_rid = NULL;
-        zlink_msg_t part;
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
-        const zlink_recv_result_t recv_result =
-          zlink_recv_part (dealer_, &source_rid, &part, &has_more,
-                           ZLINK_RECV_FLAGS_DONTWAIT);
-        if (recv_result == ZLINK_RECV_OK) {
-            TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
-            while (has_more == ZLINK_PART_MORE) {
-                TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
-                TEST_ASSERT_EQUAL_INT (
-                  ZLINK_RECV_OK,
-                  zlink_recv_part (dealer_, &source_rid, &part, &has_more,
-                                   ZLINK_RECV_FLAGS_DONTWAIT));
-                TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
-            }
-        } else {
-            TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, recv_result);
-            TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
-            msleep (1);
-        }
-    }
-    TEST_ASSERT_TRUE_MESSAGE (request_reply_done (probe_),
-                              "timed out waiting for request completion");
-}
-
 void exercise_request_reply (void *router_,
                              void *dealer_,
                              const char *endpoint_,
@@ -141,36 +53,56 @@ void exercise_request_reply (void *router_,
     memcpy (zlink_msg_data (&request[0]), request_payload_,
             strlen (request_payload_));
     memcpy (zlink_msg_data (&request[1]), "request-tail", 12);
-    request_reply_probe_t probe;
+    zlink_completion_id_t request_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_dealer_request (dealer_, request, 2, &capture_request_reply,
-                            &probe, ZLINK_SEND_FLAGS_NONE, 5000));
-
-    const zlink_routing_id_t *source_rid = NULL;
-    uint64_t request_seq = 0;
-    zlink_msg_t *parts = NULL;
-    size_t part_count = 0;
+      zlink_request_part (dealer_, NULL, &request[0],
+                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, 0, NULL,
+                          NULL));
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_OK,
-      zlink_router_recv (router_, &source_rid, &request_seq, &parts,
-                         &part_count, ZLINK_RECV_FLAGS_NONE));
-    TEST_ASSERT_NOT_NULL (source_rid);
-    TEST_ASSERT_TRUE (request_seq != 0);
-    TEST_ASSERT_EQUAL_UINT64 (2, part_count);
-    TEST_ASSERT_EQUAL_STRING_LEN (
-      request_payload_, static_cast<const char *> (zlink_msg_data (&parts[0])),
-      strlen (request_payload_));
-    TEST_ASSERT_EQUAL_STRING_LEN (
-      "request-tail", static_cast<const char *> (zlink_msg_data (&parts[1])),
-      12);
+      ZLINK_SUBMIT_OK,
+      zlink_request_part (dealer_, NULL, &request[1],
+                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, 5000,
+                          NULL, &request_id));
+    TEST_ASSERT_NOT_EQUAL (0, request_id);
+
+    zlink_routing_id_t reply_rid;
+    memset (&reply_rid, 0, sizeof (reply_rid));
+    zlink_reply_token_t reply_token = 0;
     unsigned char retained_kind = 0;
     uint64_t retained_sequence = 0;
-    for (size_t i = 0; i != part_count; ++i)
+    for (size_t i = 0; i != 2; ++i) {
+        const zlink_routing_id_t *source_rid = NULL;
+        zlink_reply_token_t token = 0;
+        zlink_msg_t part;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
+        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_RECV_OK,
+          zlink_router_recv_part (router_, &source_rid, &token, &part,
+                                  &has_more, ZLINK_RECV_FLAGS_NONE));
+        TEST_ASSERT_NOT_NULL (source_rid);
+        TEST_ASSERT_NOT_EQUAL (0, token);
+        if (i == 0) {
+            reply_rid = *source_rid;
+            reply_token = token;
+            TEST_ASSERT_EQUAL_STRING_LEN (
+              request_payload_,
+              static_cast<const char *> (zlink_msg_data (&part)),
+              strlen (request_payload_));
+            TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, has_more);
+        } else {
+            TEST_ASSERT_EQUAL_UINT64 (reply_token, token);
+            TEST_ASSERT_EQUAL_STRING_LEN (
+              "request-tail",
+              static_cast<const char *> (zlink_msg_data (&part)), 12);
+            TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+        }
         TEST_ASSERT_FALSE (
-          reinterpret_cast<zlink::msg_t *> (&parts[i])
+          reinterpret_cast<zlink::msg_t *> (&part)
             ->get_request_reply_metadata (&retained_kind, &retained_sequence));
-    zlink_multipart_close (parts, part_count);
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+    }
 
     zlink_msg_t reply[2];
     TEST_ASSERT_SUCCESS_ERRNO (
@@ -181,14 +113,38 @@ void exercise_request_reply (void *router_,
     memcpy (zlink_msg_data (&reply[1]), "reply-tail", 10);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_router_reply (router_, source_rid, request_seq, reply, 2));
+      zlink_reply_part (router_, &reply_rid, reply_token, &reply[0],
+                        ZLINK_PART_MORE));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_reply_part (router_, &reply_rid, reply_token, &reply[1],
+                        ZLINK_PART_FINAL));
 
-    wait_for_request_reply (dealer_, &probe);
-    std::lock_guard<std::mutex> lock (probe.mutex);
-    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, probe.result);
-    TEST_ASSERT_EQUAL_UINT64 (2, probe.part_count);
-    TEST_ASSERT_EQUAL_STRING (reply_payload_, probe.payload.c_str ());
-    TEST_ASSERT_FALSE (probe.metadata_present);
+    zlink_completion_t completion;
+    memset (&completion, 0, sizeof (completion));
+    completion.struct_size = sizeof (completion);
+    zlink_recv_result_t completion_rc = ZLINK_RECV_NO_DATA;
+    for (int attempt = 0; attempt < 5000
+                          && completion_rc == ZLINK_RECV_NO_DATA;
+         ++attempt) {
+        completion_rc = zlink_completion_recv (
+          dealer_, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (completion_rc == ZLINK_RECV_NO_DATA)
+            msleep (1);
+    }
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, completion_rc);
+    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, completion.kind);
+    TEST_ASSERT_EQUAL_UINT64 (request_id, completion.completion_id);
+    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, completion.request_result);
+    TEST_ASSERT_EQUAL_UINT64 (2, completion.reply_part_count);
+    TEST_ASSERT_EQUAL_STRING_LEN (
+      reply_payload_, static_cast<const char *> (
+                        zlink_msg_data (&completion.reply_parts[0])),
+      strlen (reply_payload_));
+    TEST_ASSERT_FALSE (
+      reinterpret_cast<zlink::msg_t *> (&completion.reply_parts[0])
+        ->get_request_reply_metadata (&retained_kind, &retained_sequence));
+    zlink_completion_close (&completion);
 }
 
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO
@@ -291,19 +247,19 @@ void send_invalid_middle_metadata_record (void *sender_, void *receiver_)
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_send_part (sender_, &first, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_MORE));
+                       ZLINK_PART_MORE, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_send_part (sender_, &invalid_one, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_MORE));
+                       ZLINK_PART_MORE, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_send_part (sender_, &invalid_two, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_MORE));
+                       ZLINK_PART_MORE, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_send_part (sender_, &final, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL));
+                       ZLINK_PART_FINAL, NULL, NULL));
 
     // The first frame has already established encoder multipart state. A
     // batching fallback could discard both invalid continuations, encode the

@@ -19,7 +19,7 @@ set(unittests
     unittest_socket_runtime
     unittest_typed_option
     unittest_public_contract_headers
-    unittest_request_completion_queue
+    unittest_socket_completion_queue
     unittest_request_timeout_scheduler
     unittest_result_enum_mapping
     unittest_auto_hwm_policy

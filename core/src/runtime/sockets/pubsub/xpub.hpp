@@ -5,8 +5,6 @@
 
 #include <deque>
 #include <atomic>
-#include <condition_variable>
-#include <mutex>
 #include <vector>
 
 #include "sockets/common/socket_base.hpp"
@@ -42,9 +40,6 @@ class xpub_t : public socket_base_t
     bool xhas_out () ZLINK_FINAL;
     int xrecv (zlink::msg_t *msg_) ZLINK_OVERRIDE;
     bool xhas_in () ZLINK_OVERRIDE;
-    void xdispatch_io () ZLINK_OVERRIDE;
-    int xpub_dispatch_start () ZLINK_OVERRIDE;
-    bool xpub_dispatch_active () const ZLINK_OVERRIDE;
     void xread_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xwrite_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     int xsetsockopt (int option_, const void *optval_, size_t optvallen_) ZLINK_FINAL;
@@ -116,16 +111,7 @@ class xpub_t : public socket_base_t
     //  applied to the trie, but not yet received by the user.
     std::deque<blob_t> _pending_data;
     std::deque<unsigned char> _pending_flags;
-    std::atomic<bool> _dispatch_active;
-    std::atomic<uint32_t> _dispatch_inflight;
     std::atomic<uint32_t> _delivery_ready_peer_count;
-    mutable std::mutex _dispatch_control_mu;
-    mutable std::mutex _dispatch_inflight_mu;
-    std::condition_variable _dispatch_inflight_cv;
-
-    int dispatch_ready_messages ();
-    int dispatch_message (zlink::msg_t *msg_);
-    void notify_dispatch_stopped ();
     void refresh_delivery_ready_state (const endpoint_uri_pair_t &endpoint_uri_pair_);
     uint32_t compute_delivery_ready_count () const;
     bool compute_delivery_ready_state () const;

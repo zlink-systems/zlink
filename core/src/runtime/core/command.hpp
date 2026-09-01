@@ -35,7 +35,6 @@ struct command_t
         flow_state,
         peer_weight,
         send_pending,
-        send_pending_timeout,
         request_completion,
         hiccup,
         pipe_term,
@@ -128,14 +127,6 @@ struct command_t
         struct
         {
         } send_pending;
-
-        //  Resolves one asynchronous send deadline on the socket mailbox
-        //  owner. The scheduler thread only publishes the operation id and
-        //  never dereferences socket-owned pending state directly.
-        struct
-        {
-            uint64_t op_id;
-        } send_pending_timeout;
 
         //  Schedules completion-pipe/control processing on the socket mailbox
         //  owner. The command carries no payload; the socket-owned queues are

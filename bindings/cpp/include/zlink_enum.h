@@ -106,8 +106,10 @@ typedef enum zlink_option_t
     ZLINK_OPT_SUBMIT_RETRY_MODE = 0x3037,
     ZLINK_OPT_SUBMIT_RETRY_TIMEOUT = 0x3038,
     ZLINK_OPT_SUBMIT_RETRY_ATTEMPTS = 0x3039,
-    ZLINK_OPT_SEND_PENDING_MAX_MSGS = 0x303A,
-    ZLINK_OPT_SEND_PENDING_MAX_BYTES = 0x303B,
+    /* Shared DONTWAIT SEND/REQUEST pending pool. uint64_t; 0 is unlimited.
+     * Supported only by PAIR, DEALER, ROUTER, and STREAM. */
+    ZLINK_OPT_PENDING_MAX_MSGS = 0x303A,
+    ZLINK_OPT_PENDING_MAX_BYTES = 0x303B,
 
     /* Introspection and protocol metadata */
     ZLINK_OPT_FD = 0x3007,
@@ -146,12 +148,6 @@ typedef enum zlink_dealer_option_t
     ZLINK_DEALER_OPT_WEIGHT = 0x3203
 } zlink_dealer_option_t;
 
-typedef enum zlink_dealer_message_type_t
-{
-    ZLINK_DEALER_MESSAGE_RAW = 0,
-    ZLINK_DEALER_MESSAGE_REQUEST = 1
-} zlink_dealer_message_type_t;
-
 typedef enum zlink_pub_option_t
 {
     ZLINK_PUB_OPT_VERBOSE = 0x3301,
@@ -172,8 +168,16 @@ typedef enum zlink_sub_option_t
 
 typedef enum zlink_stream_option_t
 {
-    ZLINK_STREAM_OPT_NOTIFY = 0x3501
+    ZLINK_STREAM_OPT_NOTIFY = 0x3501,
+    ZLINK_STREAM_OPT_RECV_MODE = 0x3502
 } zlink_stream_option_t;
+
+typedef enum zlink_stream_recv_mode_t
+{
+    ZLINK_STREAM_RECV_MODE_UNSPECIFIED = 0,
+    ZLINK_STREAM_RECV_MODE_RAW = 1,
+    ZLINK_STREAM_RECV_MODE_PACKET = 2
+} zlink_stream_recv_mode_t;
 
 /*
  * Receive-flow state for the paired DEALER/ROUTER completion lane

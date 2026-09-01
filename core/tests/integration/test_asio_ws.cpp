@@ -413,45 +413,6 @@ static void teardown_zlink_ctx ()
 
 namespace
 {
-std::mutex g_ws_stream_probe_mutex;
-std::atomic<bool> g_ws_stream_probe_ready (false);
-zlink_routing_id_t g_ws_stream_probe_rid;
-std::vector<unsigned char> g_ws_stream_probe_header;
-std::vector<unsigned char> g_ws_stream_probe_body;
-
-void reset_ws_stream_probe ()
-{
-    std::lock_guard<std::mutex> lock (g_ws_stream_probe_mutex);
-    memset (&g_ws_stream_probe_rid, 0, sizeof (g_ws_stream_probe_rid));
-    g_ws_stream_probe_header.clear ();
-    g_ws_stream_probe_body.clear ();
-    g_ws_stream_probe_ready.store (false, std::memory_order_release);
-}
-
-void ws_stream_packet_handler (void *,
-                               const zlink_routing_id_t *rid_,
-                               zlink_msg_t *header_,
-                               zlink_msg_t *body_,
-                               void *)
-{
-    if (rid_ && header_ && body_) {
-        std::lock_guard<std::mutex> lock (g_ws_stream_probe_mutex);
-        g_ws_stream_probe_rid = *rid_;
-        const unsigned char *header_data =
-          static_cast<const unsigned char *> (zlink_msg_data (header_));
-        const unsigned char *body_data =
-          static_cast<const unsigned char *> (zlink_msg_data (body_));
-        g_ws_stream_probe_header.assign (header_data,
-                                         header_data + zlink_msg_size (header_));
-        g_ws_stream_probe_body.assign (body_data, body_data + zlink_msg_size (body_));
-        g_ws_stream_probe_ready.store (true, std::memory_order_release);
-    }
-    if (header_)
-        zlink_msg_close (header_);
-    if (body_)
-        zlink_msg_close (body_);
-}
-
 std::vector<unsigned char> ws_stream_packet (const char *header_, const char *body_)
 {
     const size_t header_size = strlen (header_);
@@ -506,25 +467,61 @@ void write_fragmented_ws_message (WebSocketStream &client_,
     TEST_ASSERT_EQUAL_UINT64 (message_.size () - final_offset, written);
 }
 
-void wait_for_ws_stream_probe (const char *failure_message_)
+bool pull_ws_stream_packet (void *stream_,
+                            zlink_routing_id_t *rid_out_,
+                            std::vector<unsigned char> *header_out_,
+                            std::vector<unsigned char> *body_out_)
 {
-    for (int waited = 0;
-         waited < 5000 && !g_ws_stream_probe_ready.load (std::memory_order_acquire);
-         waited += 10)
-        msleep (10);
-    TEST_ASSERT_TRUE_MESSAGE (
-      g_ws_stream_probe_ready.load (std::memory_order_acquire), failure_message_);
+    zlink_msg_t header;
+    zlink_msg_t body;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&header));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&body));
+    const zlink_routing_id_t *source_rid = NULL;
+    for (int waited = 0; waited < 5000; waited += 10) {
+        const zlink_recv_result_t rc = zlink_stream_recv_packet (
+          stream_, &source_rid, &header, &body, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc == ZLINK_RECV_NO_DATA) {
+            msleep (10);
+            continue;
+        }
+        if (rc != ZLINK_RECV_OK || !source_rid) {
+            zlink_msg_close (&header);
+            zlink_msg_close (&body);
+            return false;
+        }
+        if (rid_out_)
+            *rid_out_ = *source_rid;
+        if (header_out_) {
+            const unsigned char *data = static_cast<const unsigned char *> (
+              zlink_msg_data (&header));
+            header_out_->assign (data, data + zlink_msg_size (&header));
+        }
+        if (body_out_) {
+            const unsigned char *data = static_cast<const unsigned char *> (
+              zlink_msg_data (&body));
+            body_out_->assign (data, data + zlink_msg_size (&body));
+        }
+        zlink_msg_close (&header);
+        zlink_msg_close (&body);
+        return true;
+    }
+    zlink_msg_close (&header);
+    zlink_msg_close (&body);
+    return false;
 }
 
-void assert_ws_stream_probe_payload (const std::string &header_, const std::string &body_)
+void expect_ws_stream_packet (void *stream_,
+                              const std::string &header_,
+                              const std::string &body_,
+                              zlink_routing_id_t *rid_out_,
+                              const char *failure_message_)
 {
     std::vector<unsigned char> received_header;
     std::vector<unsigned char> received_body;
-    {
-        std::lock_guard<std::mutex> lock (g_ws_stream_probe_mutex);
-        received_header = g_ws_stream_probe_header;
-        received_body = g_ws_stream_probe_body;
-    }
+    TEST_ASSERT_TRUE_MESSAGE (
+      pull_ws_stream_packet (stream_, rid_out_, &received_header,
+                             &received_body),
+      failure_message_);
 
     TEST_ASSERT_EQUAL_UINT64 (header_.size (), received_header.size ());
     TEST_ASSERT_EQUAL_MEMORY (header_.data (), &received_header[0], header_.size ());
@@ -659,22 +656,32 @@ void test_zlink_ws_pair_message ()
     teardown_zlink_ctx ();
 }
 
-//  A STREAM socket with packet dispatch remains writable by routing id from
+//  A STREAM socket with packet pull remains writable by routing id from
 //  socket threads. This is the path used when bound-session ingress
 //  forwards a complete framework frame to a WebSocket client.
-void test_zlink_ws_stream_packet_handler_routed_send ()
+void test_zlink_ws_stream_packet_pull_routed_send ()
 {
     setup_zlink_ctx ();
-    reset_ws_stream_probe ();
 
     void *server = zlink_socket (g_ctx, ZLINK_SOCKET_STREAM);
     TEST_ASSERT_NOT_NULL (server);
     const int zero = 0;
+    const int send_timeout_ms = 3000;
+    const uint64_t send_hwm = 4u * 1024u * 1024u;
+    zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_PACKET;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, "ws://127.0.0.1:*"));
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_stream_packet_handler (server, &ws_stream_packet_handler, NULL));
+      zlink_set_option (server, ZLINK_OPT_SNDHWM, &send_hwm,
+                        sizeof (send_hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_SNDTIMEO, &send_timeout_ms,
+                        sizeof (send_timeout_ms)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_stream_option (server, ZLINK_STREAM_OPT_RECV_MODE, &mode,
+                               sizeof (mode)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, "ws://127.0.0.1:*"));
 
     char endpoint[256];
     size_t endpoint_size = sizeof (endpoint);
@@ -694,17 +701,10 @@ void test_zlink_ws_stream_packet_handler_routed_send ()
 
     const std::vector<unsigned char> request = ws_stream_packet ("request", "body");
     client.write (net::buffer (request));
-    for (int waited = 0;
-         waited < 5000 && !g_ws_stream_probe_ready.load (std::memory_order_acquire);
-         waited += 10)
-        msleep (10);
-    TEST_ASSERT_TRUE (g_ws_stream_probe_ready.load (std::memory_order_acquire));
-
     zlink_routing_id_t rid;
-    {
-        std::lock_guard<std::mutex> lock (g_ws_stream_probe_mutex);
-        rid = g_ws_stream_probe_rid;
-    }
+    memset (&rid, 0, sizeof (rid));
+    expect_ws_stream_packet (server, "request", "body", &rid,
+                             "WS STREAM packet pull timed out");
     //  Keep both raw STREAM messages above the default gather threshold.
     //  asio_raw_engine_t has no ZMP header, so build_gather_header(false)
     //  must fall back to the raw encoder instead of treating WS framing as a
@@ -725,7 +725,8 @@ void test_zlink_ws_stream_packet_handler_routed_send ()
                     messages[i]->size ());
             send_result.store (
               zlink_send_part_rid (
-                server, &rid, &response_message, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL),
+                server, &rid, &response_message, ZLINK_SEND_FLAGS_NONE,
+                ZLINK_PART_FINAL, NULL, NULL),
               std::memory_order_release);
         });
         service_thread.join ();
@@ -754,16 +755,26 @@ void test_zlink_ws_stream_packet_handler_routed_send ()
 void test_zlink_ws_stream_fragmented_partial_read ()
 {
     setup_zlink_ctx ();
-    reset_ws_stream_probe ();
 
     void *server = zlink_socket (g_ctx, ZLINK_SOCKET_STREAM);
     TEST_ASSERT_NOT_NULL (server);
     const int zero = 0;
+    const int send_timeout_ms = 3000;
+    const uint64_t send_hwm = 4u * 1024u * 1024u;
+    zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_PACKET;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, "ws://127.0.0.1:*"));
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_stream_packet_handler (server, &ws_stream_packet_handler, NULL));
+      zlink_set_option (server, ZLINK_OPT_SNDHWM, &send_hwm,
+                        sizeof (send_hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_SNDTIMEO, &send_timeout_ms,
+                        sizeof (send_timeout_ms)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_stream_option (server, ZLINK_STREAM_OPT_RECV_MODE, &mode,
+                               sizeof (mode)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, "ws://127.0.0.1:*"));
 
     char endpoint[256];
     size_t endpoint_size = sizeof (endpoint);
@@ -785,8 +796,8 @@ void test_zlink_ws_stream_fragmented_partial_read ()
     const std::vector<unsigned char> request =
       ws_stream_packet (header.c_str (), body.c_str ());
     write_fragmented_ws_message (client, request);
-    wait_for_ws_stream_probe ("fragmented WS STREAM packet timed out");
-    assert_ws_stream_probe_payload (header, body);
+    expect_ws_stream_packet (server, header, body, NULL,
+                             "fragmented WS STREAM packet pull timed out");
 
     boost::system::error_code ignored;
     client.close (websocket::close_code::normal, ignored);
@@ -972,21 +983,31 @@ void test_zlink_wss_repeated_pending_read_close ()
 void test_zlink_wss_stream_fragmented_partial_read ()
 {
     setup_zlink_ctx ();
-    reset_ws_stream_probe ();
 
     const tls_test_files_t files = make_tls_test_files ();
     void *server = zlink_socket (g_ctx, ZLINK_SOCKET_STREAM);
     TEST_ASSERT_NOT_NULL (server);
     const int zero = 0;
+    const int send_timeout_ms = 3000;
+    const uint64_t send_hwm = 4u * 1024u * 1024u;
+    zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_PACKET;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_SNDHWM, &send_hwm,
+                        sizeof (send_hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_SNDTIMEO, &send_timeout_ms,
+                        sizeof (send_timeout_ms)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_stream_option (server, ZLINK_STREAM_OPT_RECV_MODE, &mode,
+                               sizeof (mode)));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
       server, ZLINK_OPT_TLS_CERT, files.server_cert.c_str (), files.server_cert.size ()));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
       server, ZLINK_OPT_TLS_KEY, files.server_key.c_str (), files.server_key.size ()));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, "wss://127.0.0.1:*"));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_stream_packet_handler (server, &ws_stream_packet_handler, NULL));
 
     char endpoint[256];
     size_t endpoint_size = sizeof (endpoint);
@@ -1013,14 +1034,10 @@ void test_zlink_wss_stream_fragmented_partial_read ()
     const std::vector<unsigned char> request =
       ws_stream_packet (header.c_str (), body.c_str ());
     write_fragmented_ws_message (client, request);
-    wait_for_ws_stream_probe ("fragmented WSS STREAM packet timed out");
-    assert_ws_stream_probe_payload (header, body);
-
     zlink_routing_id_t rid;
-    {
-        std::lock_guard<std::mutex> lock (g_ws_stream_probe_mutex);
-        rid = g_ws_stream_probe_rid;
-    }
+    memset (&rid, 0, sizeof (rid));
+    expect_ws_stream_packet (server, header, body, &rid,
+                             "fragmented WSS STREAM packet pull timed out");
     const std::string response_body = patterned_ws_stream_body (128 * 1024, 31);
     const std::vector<unsigned char> response =
       ws_stream_packet ("wss-response", response_body.c_str ());
@@ -1034,7 +1051,7 @@ void test_zlink_wss_stream_fragmented_partial_read ()
         send_result.store (
           zlink_send_part_rid (
             server, &rid, &response_message, ZLINK_SEND_FLAGS_NONE,
-            ZLINK_PART_FINAL),
+            ZLINK_PART_FINAL, NULL, NULL),
           std::memory_order_release);
     });
     service_thread.join ();
@@ -1101,7 +1118,7 @@ int main ()
     RUN_TEST (test_zlink_ws_bind);
     RUN_TEST (test_zlink_ws_connect);
     RUN_TEST (test_zlink_ws_pair_message);
-    RUN_TEST (test_zlink_ws_stream_packet_handler_routed_send);
+    RUN_TEST (test_zlink_ws_stream_packet_pull_routed_send);
     RUN_TEST (test_zlink_ws_stream_fragmented_partial_read);
     RUN_TEST (test_zlink_ws_pubsub);
     RUN_TEST (test_zlink_ws_with_path);

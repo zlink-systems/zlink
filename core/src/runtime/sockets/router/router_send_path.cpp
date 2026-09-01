@@ -61,11 +61,8 @@ int zlink::router_t::send_with_observer (
       _out_pipes_sync);
     if (admission_out_)
         *admission_out_ = pipe_message_admission_invalid;
-    // Public send enters this path through socket_public_send_scope_t. Do not
-    // add lock_socket_msg_dispatch() here: routed echo hot paths call
-    // router send for every small message, and a second socket-level mutex
-    // serializes those sends. Socket-message assembly teardown is fenced
-    // separately after receive-side pipe removal.
+    // Public send enters this path through socket_public_send_scope_t; route
+    // lifecycle ownership below is the only additional send-side fence.
 
     if (!_more_out) {
         zlink_assert (!_current_out);

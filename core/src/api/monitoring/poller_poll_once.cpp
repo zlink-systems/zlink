@@ -70,11 +70,6 @@ int zlink_poll (zlink_pollitem_t *items_,
                     *error_out_ = zlink::config_result_internal::from_errno (errno);
                 return -1;
             }
-            if (validate_socket_callback_poller_events (handle, items_[i].events) != 0) {
-                if (error_out_)
-                    *error_out_ = ZLINK_CONFIG_INVALID_ARGUMENT;
-                return -1;
-            }
             if (poller.add (handle.socket, index_user_data, items_[i].events) != 0) {
                 if (error_out_)
                     *error_out_ = zlink::config_result_internal::from_errno (errno);

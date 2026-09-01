@@ -168,11 +168,7 @@ struct paired_fixture_t
 
     //  Delivers one hand-built frame to the DEALER exactly as the completion
     //  lane would, then drains the socket mailbox so the pipe applies it.
-    bool inject (uint8_t version_,
-                 uint8_t state_,
-                 uint64_t frame_pair_id_,
-                 uint64_t frame_generation_,
-                 uint64_t epoch_)
+    bool inject (uint8_t version_, uint8_t state_, uint64_t epoch_)
     {
         zlink::pipe_t *completion =
           as_socket (dealer)->completion_pipe_for_transport_pair (
@@ -182,15 +178,37 @@ struct paired_fixture_t
         zlink::flow_state::frame_t frame;
         frame.version = zlink::flow_state::frame_protocol_version;
         frame.state = state_;
-        frame.pair_id = frame_pair_id_;
-        frame.generation = frame_generation_;
         frame.epoch = epoch_;
 
         zlink::msg_t msg;
         TEST_ASSERT_EQUAL_INT (0, msg.init ());
         TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&msg, frame));
+        msg.set_transport_connection_id (
+          completion->get_transport_connection_id ());
         static_cast<unsigned char *> (
           msg.data ())[zlink::flow_state::frame_name_size] = version_;
+        const bool consumed =
+          as_socket (dealer)->consume_receive_flow_state_frame (completion, msg);
+        TEST_ASSERT_EQUAL_INT (0, msg.close ());
+        return consumed;
+    }
+
+    bool inject_from_other_connection (uint8_t state_, uint64_t epoch_)
+    {
+        zlink::pipe_t *completion =
+          as_socket (dealer)->completion_pipe_for_transport_pair (
+            pair_id, pair_generation);
+        TEST_ASSERT_NOT_NULL (completion);
+
+        zlink::flow_state::frame_t frame;
+        frame.state = state_;
+        frame.epoch = epoch_;
+        zlink::msg_t msg;
+        TEST_ASSERT_EQUAL_INT (0, msg.init ());
+        TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&msg, frame));
+        const uint64_t current = completion->get_transport_connection_id ();
+        TEST_ASSERT_TRUE (current != 0);
+        msg.set_transport_connection_id (current == UINT64_MAX ? 1 : current + 1);
         const bool consumed =
           as_socket (dealer)->consume_receive_flow_state_frame (completion, msg);
         TEST_ASSERT_EQUAL_INT (0, msg.close ());
@@ -220,6 +238,31 @@ struct paired_fixture_t
     uint64_t pair_generation;
 };
 
+bool resolve_router_pair_identity (paired_fixture_t *fixture_,
+                                   uint64_t *pair_id_out_,
+                                   uint64_t *generation_out_)
+{
+    if (!fixture_ || !pair_id_out_ || !generation_out_)
+        return false;
+    if (!fixture_->peer_rid.empty ()
+        && as_socket (fixture_->router)->test_pair_identity_for_peer (
+             reinterpret_cast<const unsigned char *> (
+               fixture_->peer_rid.data ()),
+             fixture_->peer_rid.size (), pair_id_out_, generation_out_))
+        return true;
+
+    // Inproc associates both pipe halves at construction and uses the peer
+    // socket instance as its local pairing key, so its two owners retain the
+    // connector's local pair fence.
+    if (as_socket (fixture_->router)->test_pair_pipe (
+          fixture_->pair_id, fixture_->pair_generation, false)) {
+        *pair_id_out_ = fixture_->pair_id;
+        *generation_out_ = fixture_->pair_generation;
+        return true;
+    }
+    return false;
+}
+
 bool wait_for_paired_peer_weights (paired_fixture_t *fixture_,
                                    uint32_t dealer_weight_,
                                    uint32_t router_weight_)
@@ -234,10 +277,13 @@ bool wait_for_paired_peer_weights (paired_fixture_t *fixture_,
           as_socket (fixture_->dealer)
             ->test_pair_pipe (fixture_->pair_id, fixture_->pair_generation,
                               false);
-        zlink::pipe_t *const router_application =
-          as_socket (fixture_->router)
-            ->test_pair_pipe (fixture_->pair_id, fixture_->pair_generation,
-                              false);
+        uint64_t router_pair_id = 0;
+        uint64_t router_generation = 0;
+        zlink::pipe_t *router_application = NULL;
+        if (resolve_router_pair_identity (
+              fixture_, &router_pair_id, &router_generation))
+            router_application = as_socket (fixture_->router)->test_pair_pipe (
+              router_pair_id, router_generation, false);
         if (dealer_application && router_application
             && static_cast<zlink::dealer_t *> (as_socket (fixture_->dealer))
                    ->test_peer_weight (dealer_application)
@@ -403,8 +449,7 @@ void test_local_hwm_and_remote_pause_are_independent ()
     //  Add the remote-PAUSE cause on top of the HWM cause, then remove only
     //  the HWM cause by draining the receiver.
     TEST_ASSERT_TRUE (fixture.inject (
-      zlink::flow_state::frame_protocol_version, k_paused, fixture.pair_id,
-      fixture.pair_generation, 1));
+      zlink::flow_state::frame_protocol_version, k_paused, 1));
     TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (true));
     (void) drain_router (fixture.router);
     msleep (50);
@@ -413,20 +458,17 @@ void test_local_hwm_and_remote_pause_are_independent ()
 
     //  Removing the remote cause as well makes the pipe writable again.
     TEST_ASSERT_TRUE (fixture.inject (
-      zlink::flow_state::frame_protocol_version, k_running, fixture.pair_id,
-      fixture.pair_generation, 2));
+      zlink::flow_state::frame_protocol_version, k_running, 2));
     TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (false));
     TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 5000));
 
     //  Now the other order: fill the HWM again and clear only the remote
     //  cause. The HWM cause still holds the pipe.
     TEST_ASSERT_TRUE (fixture.inject (
-      zlink::flow_state::frame_protocol_version, k_paused, fixture.pair_id,
-      fixture.pair_generation, 3));
+      zlink::flow_state::frame_protocol_version, k_paused, 3));
     TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (true));
     TEST_ASSERT_TRUE (fixture.inject (
-      zlink::flow_state::frame_protocol_version, k_running, fixture.pair_id,
-      fixture.pair_generation, 4));
+      zlink::flow_state::frame_protocol_version, k_running, 4));
     TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (false));
     TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 5000));
 
@@ -443,8 +485,7 @@ void test_pause_mid_multipart_preserves_atomicity ()
     TEST_ASSERT_TRUE (dealer_send_nonblocking (fixture.dealer, "part-one",
                                                ZLINK_SNDMORE));
     TEST_ASSERT_TRUE (fixture.inject (
-      zlink::flow_state::frame_protocol_version, k_paused, fixture.pair_id,
-      fixture.pair_generation, 1));
+      zlink::flow_state::frame_protocol_version, k_paused, 1));
     TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (true));
 
     //  The started message finishes.
@@ -462,37 +503,29 @@ void test_pause_mid_multipart_preserves_atomicity ()
     fixture.teardown ();
 }
 
-//  Duplicate, reversed, foreign-generation and unsupported-version frames are
-//  consumed and ignored without changing the applied state.
+//  Duplicate, reversed and unsupported-version frames are consumed and
+//  ignored without changing the applied state. Physical-connection staleness
+//  is fenced by the receiving pipe rather than a peer-supplied wire field.
 void test_duplicate_and_stale_frames_are_ignored ()
 {
     paired_fixture_t fixture;
     fixture.setup ();
 
     TEST_ASSERT_TRUE (fixture.inject (
-      zlink::flow_state::frame_protocol_version, k_paused, fixture.pair_id,
-      fixture.pair_generation, 5));
+      zlink::flow_state::frame_protocol_version, k_paused, 5));
     TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (true));
 
     //  Same epoch again: idempotent, still PAUSED.
     TEST_ASSERT_TRUE (fixture.inject (
-      zlink::flow_state::frame_protocol_version, k_paused, fixture.pair_id,
-      fixture.pair_generation, 5));
+      zlink::flow_state::frame_protocol_version, k_paused, 5));
     //  Older epoch that would resume: ignored.
     TEST_ASSERT_TRUE (fixture.inject (
-      zlink::flow_state::frame_protocol_version, k_running, fixture.pair_id,
-      fixture.pair_generation, 4));
-    //  Newer epoch on a previous connection generation: ignored.
-    TEST_ASSERT_TRUE (fixture.inject (
-      zlink::flow_state::frame_protocol_version, k_running, fixture.pair_id,
-      fixture.pair_generation - 1, 99));
-    //  Another pair's identity: ignored.
-    TEST_ASSERT_TRUE (fixture.inject (
-      zlink::flow_state::frame_protocol_version, k_running,
-      fixture.pair_id ^ 0x5a5aULL, fixture.pair_generation, 100));
+      zlink::flow_state::frame_protocol_version, k_running, 4));
+    //  A newer epoch recorded by another physical connection is also ignored;
+    //  connection identity is local metadata, not a FLOWSTATE wire field.
+    TEST_ASSERT_TRUE (fixture.inject_from_other_connection (k_running, 99));
     //  Unsupported protocol version: consumed and rejected.
-    TEST_ASSERT_TRUE (fixture.inject (99, k_running, fixture.pair_id,
-                                      fixture.pair_generation, 101));
+    TEST_ASSERT_TRUE (fixture.inject (99, k_running, 101));
 
     (void) as_socket (fixture.dealer)->process_submit_commands ();
     TEST_ASSERT_TRUE (
@@ -502,8 +535,7 @@ void test_duplicate_and_stale_frames_are_ignored ()
 
     //  A frame that really advances the epoch resumes the pipe.
     TEST_ASSERT_TRUE (fixture.inject (
-      zlink::flow_state::frame_protocol_version, k_running, fixture.pair_id,
-      fixture.pair_generation, 102));
+      zlink::flow_state::frame_protocol_version, k_running, 102));
     TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (false));
     TEST_ASSERT_TRUE (wait_for_send_success (fixture.dealer, 5000));
 
@@ -735,30 +767,10 @@ void test_generation_change_resets_the_epoch_sequence ()
 
 // A flow frame is valid only between completion messages. If it appears after
 // a reply part carrying MORE, the pair is malformed and the outstanding
-// request must not complete successfully from that truncated reply.
-struct reply_capture_t
+void init_empty_completion (zlink_completion_t *completion_)
 {
-    reply_capture_t () : invoked (false), calls (0), result (ZLINK_REQUEST_OK) {}
-
-    std::mutex mutex;
-    bool invoked;
-    unsigned int calls;
-    zlink_request_result_t result;
-};
-
-void capture_reply_result (zlink_request_result_t result_,
-                           zlink_msg_t *parts_,
-                           size_t part_count_,
-                           void *userdata_)
-{
-    reply_capture_t *capture = static_cast<reply_capture_t *> (userdata_);
-    {
-        std::lock_guard<std::mutex> lock (capture->mutex);
-        capture->invoked = true;
-        ++capture->calls;
-        capture->result = result_;
-    }
-    zlink_multipart_close (parts_, part_count_);
+    memset (completion_, 0, sizeof (*completion_));
+    completion_->struct_size = sizeof (*completion_);
 }
 
 void test_flow_frame_cannot_complete_a_truncated_reply ()
@@ -776,14 +788,16 @@ void test_flow_frame_cannot_complete_a_truncated_reply ()
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_connect (dealer, "inproc://flow_state_truncated_reply"));
 
-    reply_capture_t capture;
     zlink_msg_t request_part;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&request_part, 4));
     memcpy (zlink_msg_data (&request_part), "ping", 4);
+    zlink_completion_id_t completion_id = 0;
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK,
-                           zlink_dealer_request (dealer, &request_part, 1,
-                                                 &capture_reply_result,
-                                                 &capture, 0, 1500));
+                           zlink_request_part (
+                             dealer, NULL, &request_part,
+                             ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, 1500,
+                             NULL, &completion_id));
+    TEST_ASSERT_TRUE (completion_id != 0);
 
     const zlink_routing_id_t *peer_rid = NULL;
     uint64_t request_seq = 0;
@@ -824,33 +838,32 @@ void test_flow_frame_cannot_complete_a_truncated_reply ()
     zlink::flow_state::frame_t frame;
     frame.version = zlink::flow_state::frame_protocol_version;
     frame.state = k_paused;
-    frame.pair_id = target.transport_pair_id;
-    frame.generation = target.transport_pair_generation;
     frame.epoch = 21;
     zlink::msg_t flow;
     TEST_ASSERT_EQUAL_INT (0, flow.init ());
     TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&flow, frame));
+    flow.set_transport_connection_id (
+      router_completion->get_transport_connection_id ());
     TEST_ASSERT_TRUE (router_completion->write_and_flush (&flow));
     TEST_ASSERT_EQUAL_INT (0, flow.init ());
     TEST_ASSERT_EQUAL_INT (0, flow.close ());
 
     //  Drive the client's completion drain. The truncated reply must never
     //  be reported as a successful reply.
+    zlink_completion_t completion;
+    init_empty_completion (&completion);
     for (int i = 0; i < 400; ++i) {
-        uint32_t events = 0;
-        (void) as_socket (dealer)->get_events (ZLINK_POLLCOMPLETION, &events);
-        {
-            std::lock_guard<std::mutex> lock (capture.mutex);
-            if (capture.invoked)
-                break;
-        }
+        const zlink_recv_result_t recv_rc = zlink_completion_recv (
+          dealer, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (recv_rc == ZLINK_RECV_OK)
+            break;
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, recv_rc);
+        TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
         msleep (1);
     }
-    {
-        std::lock_guard<std::mutex> lock (capture.mutex);
-        if (capture.invoked)
-            TEST_ASSERT_TRUE (capture.result != ZLINK_REQUEST_OK);
-    }
+    if (completion.kind != 0)
+        TEST_ASSERT_TRUE (completion.request_result != ZLINK_REQUEST_OK);
+    zlink_completion_close (&completion);
 
     // A misplaced flow frame is not applied. The malformed completion pair is
     // removed instead, and its sibling teardown supplies the normal
@@ -1231,14 +1244,16 @@ void test_flow_frame_before_reply_is_consumed_on_a_local_pair ()
     paired_fixture_t fixture;
     fixture.setup (0, "flow_state_misplaced_frame");
 
-    reply_capture_t capture;
     zlink_msg_t request_part;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&request_part, 4));
     memcpy (zlink_msg_data (&request_part), "ping", 4);
+    zlink_completion_id_t completion_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_dealer_request (fixture.dealer, &request_part, 1,
-                            &capture_reply_result, &capture, 0, 1500));
+      zlink_request_part (fixture.dealer, NULL, &request_part,
+                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, 1500,
+                          NULL, &completion_id));
+    TEST_ASSERT_TRUE (completion_id != 0);
 
     const zlink_routing_id_t *peer_rid = NULL;
     uint64_t request_seq = 0;
@@ -1261,12 +1276,12 @@ void test_flow_frame_before_reply_is_consumed_on_a_local_pair ()
     zlink::flow_state::frame_t frame;
     frame.version = zlink::flow_state::frame_protocol_version;
     frame.state = k_paused;
-    frame.pair_id = fixture.pair_id;
-    frame.generation = fixture.pair_generation;
     frame.epoch = 11;
     zlink::msg_t flow;
     TEST_ASSERT_EQUAL_INT (0, flow.init ());
     TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&flow, frame));
+    flow.set_transport_connection_id (
+      router_completion->get_transport_connection_id ());
     TEST_ASSERT_TRUE (router_completion->write_and_flush (&flow));
     TEST_ASSERT_EQUAL_INT (0, flow.init ());
     TEST_ASSERT_EQUAL_INT (0, flow.close ());
@@ -1283,19 +1298,21 @@ void test_flow_frame_before_reply_is_consumed_on_a_local_pair ()
 
     bool applied = false;
     bool completed = false;
+    zlink_completion_t completion;
+    init_empty_completion (&completion);
     const std::chrono::steady_clock::time_point deadline = deadline_in_ms (4000);
     while (!deadline_expired (deadline)) {
-        uint32_t events = 0;
-        (void) as_socket (fixture.dealer)
-          ->get_events (ZLINK_POLLCOMPLETION, &events);
-        (void) as_socket (fixture.dealer)->process_submit_commands ();
+        const zlink_recv_result_t recv_rc = zlink_completion_recv (
+          fixture.dealer, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (recv_rc == ZLINK_RECV_OK)
+            completed = true;
+        else {
+            TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, recv_rc);
+            TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+        }
         if (as_socket (fixture.dealer)->application_pipe_remote_flow_paused (
               fixture.pair_id, fixture.pair_generation)) {
             applied = true;
-        }
-        {
-            std::lock_guard<std::mutex> lock (capture.mutex);
-            completed = capture.invoked;
         }
         if (applied && completed)
             break;
@@ -1303,10 +1320,9 @@ void test_flow_frame_before_reply_is_consumed_on_a_local_pair ()
     }
     TEST_ASSERT_TRUE (applied);
     TEST_ASSERT_TRUE (completed);
-    {
-        std::lock_guard<std::mutex> lock (capture.mutex);
-        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, capture.result);
-    }
+    TEST_ASSERT_EQUAL_UINT64 (completion_id, completion.completion_id);
+    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, completion.request_result);
+    zlink_completion_close (&completion);
 
     fixture.teardown ();
 }
@@ -1332,14 +1348,16 @@ void test_peer_weight_change_does_not_write_the_completion_pipe ()
     TEST_ASSERT_NOT_NULL (dealer_completion);
     TEST_ASSERT_FALSE (dealer_completion->check_read ());
 
-    reply_capture_t capture;
     zlink_msg_t request;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&request, 4));
     memcpy (zlink_msg_data (&request), "ping", 4);
+    zlink_completion_id_t completion_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_dealer_request (fixture.dealer, &request, 1,
-                            &capture_reply_result, &capture, 0, 1500));
+      zlink_request_part (fixture.dealer, NULL, &request,
+                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, 1500,
+                          NULL, &completion_id));
+    TEST_ASSERT_TRUE (completion_id != 0);
 
     const zlink_routing_id_t *peer_rid = NULL;
     uint64_t request_seq = 0;
@@ -1359,29 +1377,30 @@ void test_peer_weight_change_does_not_write_the_completion_pipe ()
     memcpy (zlink_msg_data (&reply), "pong", 4);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_router_reply (fixture.router, &reply_rid, request_seq, &reply, 1));
+      zlink_reply_part (fixture.router, &reply_rid, request_seq, &reply,
+                        ZLINK_PART_FINAL));
 
     bool completed = false;
+    zlink_completion_t completion;
+    init_empty_completion (&completion);
     const std::chrono::steady_clock::time_point deadline = deadline_in_ms (4000);
     while (!deadline_expired (deadline)) {
-        uint32_t events = 0;
-        (void) as_socket (fixture.dealer)
-          ->get_events (ZLINK_POLLCOMPLETION, &events);
-        (void) as_socket (fixture.dealer)->process_submit_commands ();
-        {
-            std::lock_guard<std::mutex> lock (capture.mutex);
-            completed = capture.invoked;
+        const zlink_recv_result_t recv_rc = zlink_completion_recv (
+          fixture.dealer, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (recv_rc == ZLINK_RECV_OK)
+            completed = true;
+        else {
+            TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, recv_rc);
+            TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
         }
         if (completed)
             break;
         msleep (1);
     }
     TEST_ASSERT_TRUE (completed);
-    {
-        std::lock_guard<std::mutex> lock (capture.mutex);
-        TEST_ASSERT_EQUAL_UINT (1, capture.calls);
-        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, capture.result);
-    }
+    TEST_ASSERT_EQUAL_UINT64 (completion_id, completion.completion_id);
+    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, completion.request_result);
+    zlink_completion_close (&completion);
     TEST_ASSERT_NOT_NULL (
       as_socket (fixture.dealer)
         ->completion_pipe_for_transport_pair (fixture.pair_id,
@@ -1457,20 +1476,18 @@ void test_inproc_peer_weight_is_owner_control_in_both_directions ()
                               dealer_event.event);
     TEST_ASSERT_EQUAL_UINT64 (static_cast<uint64_t> (router_weight),
                               dealer_event.value);
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_id,
-                              dealer_event.transport_pair_id);
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_generation,
-                              dealer_event.transport_pair_generation);
+    TEST_ASSERT_TRUE (dealer_event.connection_id != 0);
+    TEST_ASSERT_TRUE (dealer_event.routing_id.size > 0);
     TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
                             dealer_event.transport_lane);
     TEST_ASSERT_EQUAL_UINT64 (ZLINK_EVENT_PEER_WEIGHT_CHANGED,
                               router_event.event);
     TEST_ASSERT_EQUAL_UINT64 (static_cast<uint64_t> (dealer_weight),
                               router_event.value);
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_id,
-                              router_event.transport_pair_id);
-    TEST_ASSERT_EQUAL_UINT64 (fixture.pair_generation,
-                              router_event.transport_pair_generation);
+    TEST_ASSERT_TRUE (router_event.connection_id != 0);
+    TEST_ASSERT_TRUE (router_event.routing_id.size > 0);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            router_event.transport_lane);
 
     // Absolute policy is deduplicated at the sender and again at the
     // scheduler boundary. Reapplying the same values creates neither a wire
@@ -1501,10 +1518,14 @@ void test_inproc_peer_weight_is_owner_control_in_both_directions ()
       as_socket (fixture.dealer)
         ->completion_pipe_for_transport_pair (fixture.pair_id,
                                               fixture.pair_generation);
+    uint64_t router_pair_id = 0;
+    uint64_t router_generation = 0;
+    TEST_ASSERT_TRUE (resolve_router_pair_identity (
+      &fixture, &router_pair_id, &router_generation));
     zlink::pipe_t *router_completion =
       as_socket (fixture.router)
-        ->completion_pipe_for_transport_pair (fixture.pair_id,
-                                              fixture.pair_generation);
+        ->completion_pipe_for_transport_pair (router_pair_id,
+                                              router_generation);
     TEST_ASSERT_NOT_NULL (dealer_completion);
     TEST_ASSERT_NOT_NULL (router_completion);
     TEST_ASSERT_FALSE (dealer_completion->check_read ());
@@ -1612,10 +1633,14 @@ void test_network_peer_weight_keeps_wire_control_and_exact_pair_state ()
       as_socket (fixture.dealer)
         ->completion_pipe_for_transport_pair (fixture.pair_id,
                                               fixture.pair_generation);
+    uint64_t router_pair_id = 0;
+    uint64_t router_generation = 0;
+    TEST_ASSERT_TRUE (resolve_router_pair_identity (
+      &fixture, &router_pair_id, &router_generation));
     zlink::pipe_t *router_completion =
       as_socket (fixture.router)
-        ->completion_pipe_for_transport_pair (fixture.pair_id,
-                                              fixture.pair_generation);
+        ->completion_pipe_for_transport_pair (router_pair_id,
+                                              router_generation);
     TEST_ASSERT_NOT_NULL (dealer_completion);
     TEST_ASSERT_NOT_NULL (router_completion);
     TEST_ASSERT_FALSE (dealer_completion->check_read ());
@@ -1642,13 +1667,13 @@ void test_flow_frame_on_the_application_lane_is_rejected ()
     zlink::flow_state::frame_t frame;
     frame.version = zlink::flow_state::frame_protocol_version;
     frame.state = k_paused;
-    frame.pair_id = fixture.pair_id;
-    frame.generation = fixture.pair_generation;
     frame.epoch = 7;
 
     zlink::msg_t msg;
     TEST_ASSERT_EQUAL_INT (0, msg.init ());
     TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&msg, frame));
+    msg.set_transport_connection_id (
+      application->get_transport_connection_id ());
     //  Consumed - it is a flow frame and must never reach another handler -
     //  but not applied.
     TEST_ASSERT_TRUE (
@@ -1669,8 +1694,7 @@ void test_flow_frame_on_the_application_lane_is_rejected ()
     //  The rejected frame must not have consumed the epoch either: the same
     //  epoch arriving on the completion lane is still the real state.
     TEST_ASSERT_TRUE (fixture.inject (
-      zlink::flow_state::frame_protocol_version, k_paused, fixture.pair_id,
-      fixture.pair_generation, 7));
+      zlink::flow_state::frame_protocol_version, k_paused, 7));
     TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (true));
 
     fixture.teardown ();

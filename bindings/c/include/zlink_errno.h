@@ -78,6 +78,12 @@
 #ifndef ESHUTDOWN
 #define ESHUTDOWN (ZLINK_HAUSNUMERO + 22)
 #endif
+#ifndef EPROTOTYPE
+#define EPROTOTYPE (ZLINK_HAUSNUMERO + 23)
+#endif
+#ifndef EOVERFLOW
+#define EOVERFLOW (ZLINK_HAUSNUMERO + 24)
+#endif
 
 #define EFSM (ZLINK_HAUSNUMERO + 51)
 #define ENOCOMPATPROTO (ZLINK_HAUSNUMERO + 52)
@@ -143,7 +149,7 @@ typedef enum zlink_recv_result_t
 {
     ZLINK_RECV_OK = 0,
     ZLINK_RECV_NO_DATA = 201,        /* EAGAIN    — non-blocking, no data available */
-    ZLINK_RECV_BUSY = 202,           /* EBUSY     — handler already attached */
+    ZLINK_RECV_BUSY = 202,           /* EBUSY     — another receive owner is active */
     ZLINK_RECV_TERMINATED = 203,     /* ETERM     — context terminated */
     ZLINK_RECV_INVALID_HANDLE = 204, /* EFAULT    — NULL or invalid handle */
     ZLINK_RECV_NOT_SUPPORTED = 205,  /* ENOTSUP   — unsupported socket type for recv */
@@ -152,17 +158,16 @@ typedef enum zlink_recv_result_t
     ZLINK_RECV_INVALID_STATE = 208     /* EINVAL/ESTALE/ESHUTDOWN — claim or revoke state */
 } zlink_recv_result_t;
 
-/*  Handler registration result (301+).                                      */
-/*  Applies to recv_handler, send_complete_handler, and monitor_handler.    */
+/*  Reserved registration result values (301+).                              */
 typedef enum zlink_handler_result_t
 {
     ZLINK_HANDLER_OK = 0,
-    ZLINK_HANDLER_INVALID_ARGUMENT = 301, /* EINVAL    — NULL handler */
-    ZLINK_HANDLER_BUSY = 302,             /* EBUSY     — handler already attached */
+    ZLINK_HANDLER_INVALID_ARGUMENT = 301, /* EINVAL    — invalid registration */
+    ZLINK_HANDLER_BUSY = 302,             /* EBUSY     — registration already active */
     ZLINK_HANDLER_NOT_SUPPORTED = 303,    /* ENOTSUP   — unsupported subject */
-    ZLINK_HANDLER_DEADLOCK = 304,         /* EDEADLK   — reentrant call (callback-scope only) */
+    ZLINK_HANDLER_DEADLOCK = 304,         /* EDEADLK   — reentrant registration */
     ZLINK_HANDLER_INVALID_HANDLE = 305,   /* EFAULT    — NULL or invalid handle */
-    ZLINK_HANDLER_INTERNAL_ERROR = 306    /* internal errno that has no finer handler bucket */
+    ZLINK_HANDLER_INTERNAL_ERROR = 306    /* internal errno with no finer registration bucket */
 } zlink_handler_result_t;
 
 /*  Close / destroy result (401+).                                           */

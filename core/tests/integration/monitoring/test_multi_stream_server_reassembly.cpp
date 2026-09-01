@@ -178,20 +178,18 @@ void test_multi_stream_server_reassembles_complete_frames_per_connection ()
 {
     void *server = test_context_socket (ZLINK_SOCKET_STREAM);
     TEST_ASSERT_NOT_NULL (server);
+    const zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_PACKET;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_stream_option (server, ZLINK_STREAM_OPT_RECV_MODE, &mode,
+                               sizeof (mode)));
 
     char endpoint[kEndpointSize];
     bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
 
     test_multi_stream::session_t session;
-    test_multi_stream::packet_handler_context_t packet_handler_ctx;
     test_multi_stream::stop_requested ().store (false, std::memory_order_release);
     test_multi_stream::reset_session (&session, server);
-    packet_handler_ctx.session = &session;
-    packet_handler_ctx.stop_token = "STOP";
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_HANDLER_OK,
-      zlink_stream_packet_handler (server, &test_multi_stream::stream_packet_handler_callback,
-                                   &packet_handler_ctx));
     int server_rc = -1;
 
     std::thread server_thread ([&session, server, &server_rc] () {

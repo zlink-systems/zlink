@@ -117,50 +117,8 @@ zlink_close_result_t zlink_close (void *s_)
         return zlink::close_result_internal::from_errno (errno);
     std::shared_ptr<zlink::socket_reqrep_internal::socket_request_reply_state_t>
       request_reply_state = zlink::socket_reqrep_internal::find_request_reply_state (handle);
-    if (zlink::socket_reqrep_internal::in_socket_request_completion_callback (handle.socket)) {
-        errno = EBUSY;
-        return ZLINK_CLOSE_BUSY;
-    }
-    //  The pin keeps the state alive while this close inspects it. It must be
-    //  released before unregister_monitor_handlers: the unregister path waits
-    //  for reader pins to drain before deleting the state.
-    {
-        monitor_state_pin_t monitor_pin (handle.socket);
-        monitor_handler_state_t *monitor_state = monitor_pin.get ();
-        if (monitor_state) {
-            if (zlink::current_monitor_handler_state () == monitor_state) {
-                if (!handle.begin_close ())
-                    return zlink::close_result_internal::from_errno (errno);
-                monitor_state->close_requested.store (true, std::memory_order_release);
-                return ZLINK_CLOSE_OK;
-            }
-
-            const bool monitor_dispatch_detached =
-              !monitor_state->socket_handler.load (std::memory_order_acquire);
-            if (monitor_state->close_requested.load (std::memory_order_acquire)
-                || monitor_state->callback_depth.load (std::memory_order_acquire) > 0) {
-                if (!monitor_dispatch_detached) {
-                    errno = EBUSY;
-                    return ZLINK_CLOSE_BUSY;
-                }
-            }
-        }
-    }
-
-    if (handle.socket->socket_msg_dispatch_active ()
-        && zlink::socket_base_t::current_socket_msg_dispatch_socket ()
-             == handle.socket) {
-        errno = EBUSY;
-        return ZLINK_CLOSE_BUSY;
-    }
-    if (handle.socket->stream_dispatch_in_callback ()) {
-        errno = EBUSY;
-        return ZLINK_CLOSE_BUSY;
-    }
-
-    // Reserve close before unregistering handlers, stopping the socket or
-    // clearing multipart/request state. This atomically rejects an active
-    // callback and prevents a new callback from starting.
+    // Reserve close before stopping the socket or clearing multipart/request
+    // state so new public operations cannot enter during teardown.
     if (!handle.begin_close ())
         return zlink::close_result_internal::from_rc (-1);
     const int close_admission = handle.socket->begin_close_handoff ();
@@ -171,8 +129,8 @@ zlink_close_result_t zlink_close (void *s_)
     const bool deferred_close = close_admission > 0;
 
     {
-        monitor_state_pin_t monitor_pin (handle.socket);
-        monitor_handler_state_t *monitor_state = monitor_pin.get ();
+        monitor_pull_state_pin_t monitor_pin (handle.socket);
+        monitor_pull_state_t *monitor_state = monitor_pin.get ();
         socket_handle_t monitor_source =
           monitor_snapshot_subject_handle (monitor_state);
         if (monitor_source.socket && monitor_source.socket != handle.socket) {
@@ -184,23 +142,17 @@ zlink_close_result_t zlink_close (void *s_)
         }
     }
 
-    unregister_monitor_handlers (handle.socket);
+    unregister_monitor_pull_state (handle.socket);
     zlink::part_helper_internal::cleanup_socket (handle.socket);
 
     if (handle.socket->api_sync_mutex ()) {
-        if (handle.socket->socket_msg_dispatch_active ()) {
-            (void) handle.socket->socket_msg_dispatch_stop ();
-        }
-
         handle.socket->stop ();
         {
-            // Close admission already rejects new public operations.  Hold
-            // the STREAM API mutex only long enough to quiesce an operation
-            // that entered before admission and to stop dispatch.  Async pipe
-            // termination re-enters the same mutex, so it must be released
-            // before complete_close_handoff waits for async quiescence.
+            // Close admission already rejects new public operations. Hold the
+            // STREAM API mutex only long enough to quiesce an operation that
+            // entered before admission. Async pipe termination re-enters the
+            // same mutex, so release it before waiting for async quiescence.
             stream_api_lock_t api_lock (handle);
-            (void) handle.socket->stream_dispatch_stop ();
         }
         const int drain_rc =
           zlink::socket_reqrep_internal::drain_close_request_reply_socket (handle);
@@ -208,9 +160,6 @@ zlink_close_result_t zlink_close (void *s_)
         zlink::socket_reqrep_internal::cleanup_request_reply_socket (handle);
         if (!deferred_close)
             handle.socket->complete_close_handoff ();
-        // The drain API returns the number of callbacks it delivered. Only a
-        // negative value indicates failure; a positive count is successful
-        // close work, not a close error.
         if (drain_rc < 0) {
             errno = drain_errno;
             return zlink::close_result_internal::from_rc (-1);
@@ -218,20 +167,12 @@ zlink_close_result_t zlink_close (void *s_)
         return ZLINK_CLOSE_OK;
     }
 
-    if (handle.socket->socket_msg_dispatch_active ()) {
-        (void) handle.socket->socket_msg_dispatch_stop ();
-    }
-
-    (void) handle.socket->stream_dispatch_stop ();
     const int drain_rc =
       zlink::socket_reqrep_internal::drain_close_request_reply_socket (handle);
     const int drain_errno = errno;
     zlink::socket_reqrep_internal::cleanup_request_reply_socket (handle);
     if (!deferred_close)
         handle.socket->complete_close_handoff ();
-    // The drain API returns the number of callbacks it delivered. Only a
-    // negative value indicates failure; a positive count is successful
-    // close work, not a close error.
     if (drain_rc < 0) {
         errno = drain_errno;
         return zlink::close_result_internal::from_rc (-1);
@@ -257,9 +198,9 @@ zlink_poller_add (void *poller_, void *socket_, void *user_data_, short events_)
     socket_handle_t handle = make_socket_handle (target.socket);
     const int type = socket_type (handle);
     //  A completion registration is valid on any socket that owns a
-    //  completion channel: reply completions (DEALER/ROUTER) or send
-    //  completions (the zlink_send_async socket set). Registering transfers
-    //  dispatch ownership of both to the poller wait thread.
+    //  completion channel: request/reply completions (DEALER/ROUTER) or SEND
+    //  completions (PAIR/DEALER/ROUTER/STREAM). Registration transfers pull
+    //  ownership of both to the poller wait thread.
     const bool has_completion_channel =
       type == ZLINK_CORE_SOCKET_DEALER || type == ZLINK_CORE_SOCKET_ROUTER
       || zlink::socket_type_supports_send_completion (type);
@@ -275,16 +216,24 @@ zlink_poller_add (void *poller_, void *socket_, void *user_data_, short events_)
         errno = EEXIST;
         return ZLINK_CONFIG_CONFLICT;
     }
-    if (validate_socket_callback_poller_events (handle, events_) != 0)
-        return ZLINK_CONFIG_INVALID_ARGUMENT;
     if (poller_add_registration (poller, handle.socket, user_data_, events_, socket_,
                                  poller_subject_none)
         != 0) {
         return zlink::config_result_internal::from_errno (errno);
     }
     if ((events_ & ZLINK_POLLCOMPLETION) != 0 && has_completion_channel) {
-        handle.socket->acquire_completion_poller ();
+        if (!handle.socket->acquire_completion_poller (poller)) {
+            const int acquire_errno = errno;
+            const int registration_index = poller_find_registration_index (
+              poller, socket_, poller_subject_none);
+            if (registration_index >= 0)
+                (void) poller_remove_registration_at (poller,
+                                                       registration_index);
+            errno = acquire_errno;
+            return zlink::config_result_internal::from_errno (errno);
+        }
         poller->registrations.back ().owns_completion_processing = true;
+        poller->registrations.back ().completion_owner = poller;
     }
 
     return ZLINK_CONFIG_OK;
@@ -301,35 +250,46 @@ zlink_config_result_t zlink_poller_modify (void *poller_, void *socket_, short e
         errno = EBUSY;
         return ZLINK_CONFIG_BUSY;
     }
-    //  Completion registrations own the socket's completion processing, which
-    //  is acquired when the registration is added. Modify has no matching
-    //  ownership transfer, so the flag is rejected here and a caller changes
-    //  completion mode by removing and adding the registration.
-    if ((events_ & ZLINK_POLLCOMPLETION) != 0) {
-        errno = EINVAL;
-        return ZLINK_CONFIG_INVALID_ARGUMENT;
-    }
-    if (validate_socket_poller_event_mask (events_, false) != 0)
-        return zlink::config_result_internal::from_errno (errno);
     const zlink::option_target_t target = zlink::resolve_option_target (socket_);
     if (target.kind != zlink::option_target_socket)
         return zlink::config_result_internal::from_errno (errno);
     socket_handle_t handle = make_socket_handle (target.socket);
-    if (validate_socket_callback_poller_events (handle, events_) != 0)
-        return ZLINK_CONFIG_INVALID_ARGUMENT;
+    const int type = socket_type (handle);
+    const bool has_completion_channel =
+      type == ZLINK_CORE_SOCKET_DEALER || type == ZLINK_CORE_SOCKET_ROUTER
+      || zlink::socket_type_supports_send_completion (type);
+    if (validate_socket_poller_event_mask (events_, has_completion_channel)
+        != 0)
+        return zlink::config_result_internal::from_errno (errno);
     const int index =
       poller_find_registration_index (poller, socket_, poller_subject_none);
     if (index < 0) {
         errno = ENOENT;
         return ZLINK_CONFIG_NOT_FOUND;
     }
+    poller_registration_t &registration = poller->registrations[index];
+    const bool had_completion = registration.owns_completion_processing;
+    const bool wants_completion = (events_ & ZLINK_POLLCOMPLETION) != 0;
+    if (wants_completion && !had_completion
+        && !handle.socket->acquire_completion_poller (poller))
+        return zlink::config_result_internal::from_errno (errno);
     if (poller->poller.modify (
           static_cast<zlink::socket_base_t *> (poller->registrations[index].socket),
           events_)
         != 0) {
+        if (wants_completion && !had_completion)
+            handle.socket->release_completion_poller (poller);
         return zlink::config_result_internal::from_errno (errno);
     }
-    poller->registrations[index].events = events_;
+    registration.events = events_;
+    if (wants_completion && !had_completion) {
+        registration.owns_completion_processing = true;
+        registration.completion_owner = poller;
+    } else if (!wants_completion && had_completion) {
+        handle.socket->release_completion_poller (registration.completion_owner);
+        registration.owns_completion_processing = false;
+        registration.completion_owner = NULL;
+    }
     return ZLINK_CONFIG_OK;
 }
 

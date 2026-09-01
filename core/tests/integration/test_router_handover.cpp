@@ -3,94 +3,9 @@
 #include "testutil.hpp"
 #include "testutil_unity.hpp"
 
-#include <atomic>
 #include <cstring>
 
 SETUP_TEARDOWN_TESTCONTEXT
-
-void test_with_handover ()
-{
-    char my_endpoint[MAX_SOCKET_STRING];
-    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
-    bind_loopback_ipv4 (router, my_endpoint, sizeof my_endpoint);
-
-    const int duplicate_policy = ZLINK_RID_DUPLICATE_HANDOVER;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (router, ZLINK_OPT_RID_DUPLICATE_POLICY,
-                                                 &duplicate_policy, sizeof (duplicate_policy)));
-
-    void *dealer_one = test_context_socket (ZLINK_SOCKET_DEALER);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer_one, "X", 1));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer_one, my_endpoint));
-
-    char buffer[255];
-    send_string_expect_success (dealer_one, "Hello", 0);
-    recv_string_expect_success (router, "X", 0);
-    recv_string_expect_success (router, "Hello", 0);
-
-    void *dealer_two = test_context_socket (ZLINK_SOCKET_DEALER);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer_two, "X", 1));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer_two, my_endpoint));
-    send_string_expect_success (dealer_two, "Hello", 0);
-    recv_string_expect_success (router, "X", 0);
-    recv_string_expect_success (router, "Hello", 0);
-
-    send_string_expect_success (router, "X", ZLINK_SNDMORE);
-    send_string_expect_success (router, "Hello", 0);
-
-    const int timeout = SETTLE_TIME;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_option (dealer_one, ZLINK_OPT_RCVTIMEO, &timeout, sizeof timeout));
-    TEST_ASSERT_FAILURE_ERRNO (EAGAIN, zlink_recv (dealer_one, buffer, 255, 0));
-    recv_string_expect_success (dealer_two, "Hello", 0);
-
-    test_context_socket_close (router);
-    test_context_socket_close (dealer_one);
-    test_context_socket_close (dealer_two);
-}
-
-void test_without_handover ()
-{
-    size_t len = MAX_SOCKET_STRING;
-    char my_endpoint[MAX_SOCKET_STRING];
-    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
-    const int duplicate_policy = ZLINK_RID_DUPLICATE_REJECT;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (router, ZLINK_OPT_RID_DUPLICATE_POLICY,
-                                                 &duplicate_policy, sizeof (duplicate_policy)));
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (router, "tcp://127.0.0.1:*"));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_get_option (router, ZLINK_OPT_LAST_ENDPOINT, my_endpoint, &len));
-
-    void *dealer_one = test_context_socket (ZLINK_SOCKET_DEALER);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer_one, "X", 1));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer_one, my_endpoint));
-
-    char buffer[255];
-    send_string_expect_success (dealer_one, "Hello", 0);
-    recv_string_expect_success (router, "X", 0);
-    recv_string_expect_success (router, "Hello", 0);
-
-    void *dealer_two = test_context_socket (ZLINK_SOCKET_DEALER);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer_two, "X", 1));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer_two, my_endpoint));
-    send_string_expect_success (dealer_two, "Hello", 0);
-
-    const int timeout = SETTLE_TIME;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_option (router, ZLINK_OPT_RCVTIMEO, &timeout, sizeof timeout));
-    TEST_ASSERT_FAILURE_ERRNO (EAGAIN, zlink_recv (router, buffer, 255, 0));
-
-    send_string_expect_success (router, "X", ZLINK_SNDMORE);
-    send_string_expect_success (router, "Hello", 0);
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_option (dealer_two, ZLINK_OPT_RCVTIMEO, &timeout, sizeof timeout));
-    TEST_ASSERT_FAILURE_ERRNO (EAGAIN, zlink_recv (dealer_two, buffer, 255, 0));
-    recv_string_expect_success (dealer_one, "Hello", 0);
-
-    test_context_socket_close (router);
-    test_context_socket_close (dealer_one);
-    test_context_socket_close (dealer_two);
-}
 
 namespace
 {
@@ -100,25 +15,17 @@ bool should_run_router_handover_test (const char *name_)
     return !selected || !*selected || strcmp (selected, name_) == 0;
 }
 
-std::atomic<bool> reply_completed (false);
-
-void ignore_reply (zlink_request_result_t, zlink_msg_t *, size_t, void *)
-{
-    reply_completed.store (true);
-}
-
 void set_connect_routing_id (void *router_, const char *routing_id_)
 {
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_router_option (
       router_, ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID, routing_id_, strlen (routing_id_)));
 }
 
-void send_request_to_activate_callback_dispatch (void *client_,
-                                                 void *server_,
-                                                 const char *peer_rid_,
-                                                 const char *expected_source_rid_ = NULL)
+void send_request_to_exercise_completion_path (void *client_,
+                                               void *server_,
+                                               const char *peer_rid_,
+                                               const char *expected_source_rid_ = NULL)
 {
-    reply_completed.store (false);
     zlink_routing_id_t peer_rid;
     memset (&peer_rid, 0, sizeof peer_rid);
     peer_rid.size = static_cast<uint8_t> (strlen (peer_rid_));
@@ -129,18 +36,36 @@ void send_request_to_activate_callback_dispatch (void *client_,
     // of assuming that a fixed settle delay made it visible.
     bool route_ready = false;
     for (int i = 0; i < 100 && !route_ready; ++i) {
-        if (test_stream_send_bytes (
-              client_, &peer_rid, "ready", 5, ZLINK_DONTWAIT)
-            != 5) {
+        zlink_msg_t ready;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&ready, 5));
+        memcpy (zlink_msg_data (&ready), "ready", 5);
+        const zlink_submit_result_t submit = zlink_send_part_rid (
+          client_, &peer_rid, &ready, ZLINK_SEND_FLAGS_NONE,
+          ZLINK_PART_FINAL, NULL, NULL);
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&ready));
+        if (submit != ZLINK_SUBMIT_OK) {
             msleep (10);
             continue;
         }
 
-        char source[255];
-        TEST_ASSERT_GREATER_THAN_INT (
-          0, zlink_recv (server_, source, sizeof source, 0));
-        recv_string_expect_success (server_, "ready", 0);
-        route_ready = true;
+        zlink_msg_t received;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&received));
+        const zlink_routing_id_t *source = NULL;
+        zlink_reply_token_t token = UINT64_MAX;
+        zlink_part_flag_t has_more = ZLINK_PART_MORE;
+        const zlink_recv_result_t recv_rc = zlink_router_recv_part (
+          server_, &source, &token, &received, &has_more,
+          ZLINK_RECV_FLAGS_NONE);
+        if (recv_rc == ZLINK_RECV_OK) {
+            TEST_ASSERT_NOT_NULL (source);
+            TEST_ASSERT_EQUAL_UINT64 (0, token);
+            TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+            TEST_ASSERT_EQUAL_STRING_LEN (
+              "ready", static_cast<const char *> (zlink_msg_data (&received)),
+              5);
+            route_ready = true;
+        }
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&received));
     }
     TEST_ASSERT_TRUE_MESSAGE (
       route_ready, "router route did not become ready for request");
@@ -148,18 +73,24 @@ void send_request_to_activate_callback_dispatch (void *client_,
     zlink_msg_t request;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&request, 4));
     memcpy (zlink_msg_data (&request), "ping", 4);
+    zlink_completion_id_t completion_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_router_request (client_, &peer_rid, &request, 1, &ignore_reply, NULL, 0, 30000));
+      zlink_request_part (client_, &peer_rid, &request, ZLINK_SEND_FLAGS_NONE,
+                          ZLINK_PART_FINAL, 30000, NULL, &completion_id));
+    TEST_ASSERT_NOT_EQUAL (0, completion_id);
 
     const zlink_routing_id_t *source_rid = NULL;
-    uint64_t request_seq = 0;
-    zlink_msg_t *parts = NULL;
-    size_t part_count = 0;
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
-                           zlink_router_recv (server_, &source_rid,
-                                              &request_seq, &parts, &part_count, 0));
-    TEST_ASSERT_EQUAL_UINT64 (1, part_count);
+    zlink_reply_token_t reply_token = 0;
+    zlink_msg_t received;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&received));
+    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_router_recv_part (server_, &source_rid, &reply_token, &received,
+                              &has_more, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_NOT_EQUAL (0, reply_token);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
     if (expected_source_rid_) {
         TEST_ASSERT_NOT_NULL (source_rid);
         TEST_ASSERT_EQUAL_UINT8 (static_cast<uint8_t> (strlen (expected_source_rid_)),
@@ -171,23 +102,31 @@ void send_request_to_activate_callback_dispatch (void *client_,
     zlink_msg_t reply;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&reply, 4));
     memcpy (zlink_msg_data (&reply), "pong", 4);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK,
-                           zlink_router_reply (server_, source_rid, request_seq, &reply, 1));
-    zlink_multipart_close (parts, part_count);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_reply_part (server_, source_rid, reply_token, &reply,
+                        ZLINK_PART_FINAL));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&received));
 
-    const int attempts = 1000;
-    for (int i = 0; i < attempts && !reply_completed.load (); ++i) {
-        const zlink_routing_id_t *ignored_source = NULL;
-        uint64_t ignored_seq = 0;
-        zlink_msg_t *ignored_parts = NULL;
-        size_t ignored_count = 0;
-        if (zlink_router_recv (client_, &ignored_source, &ignored_seq,
-                               &ignored_parts, &ignored_count, ZLINK_DONTWAIT)
-              == ZLINK_RECV_OK)
-            zlink_multipart_close (ignored_parts, ignored_count);
-        msleep (1);
+    zlink_completion_t completion;
+    memset (&completion, 0, sizeof (completion));
+    completion.struct_size = sizeof (completion);
+    zlink_recv_result_t completion_rc = ZLINK_RECV_NO_DATA;
+    for (int i = 0; i < 1000 && completion_rc == ZLINK_RECV_NO_DATA; ++i) {
+        completion_rc = zlink_completion_recv (
+          client_, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (completion_rc == ZLINK_RECV_NO_DATA)
+            msleep (1);
     }
-    TEST_ASSERT_TRUE (reply_completed.load ());
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, completion_rc);
+    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, completion.kind);
+    TEST_ASSERT_EQUAL_UINT64 (completion_id, completion.completion_id);
+    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, completion.request_result);
+    TEST_ASSERT_EQUAL_UINT64 (1, completion.reply_part_count);
+    TEST_ASSERT_EQUAL_STRING_LEN (
+      "pong", static_cast<const char *> (
+                zlink_msg_data (&completion.reply_parts[0])), 4);
+    zlink_completion_close (&completion);
 }
 }
 
@@ -226,7 +165,7 @@ void test_callback_dispatch_same_direction_reconnect_handover ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint_one));
 
     // This installs callback dispatch and records traffic on the original pipe.
-    send_request_to_activate_callback_dispatch (client, server_one, "S");
+    send_request_to_exercise_completion_path (client, server_one, "S");
 
     // A freshly established same-direction pipe with the same routing ID must
     // replace the prior pipe even though the prior pipe has traffic history.
@@ -293,7 +232,7 @@ void test_callback_dispatch_cross_direction_duplicate_converges ()
     set_connect_routing_id (server_one, "Z");
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (server_one, client_endpoint));
 
-    send_request_to_activate_callback_dispatch (client, server_one, "A");
+    send_request_to_exercise_completion_path (client, server_one, "A");
 
     void *server_two = test_context_socket (ZLINK_SOCKET_ROUTER);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (server_two, "A", 1));
@@ -352,7 +291,7 @@ void test_callback_dispatch_cross_direction_duplicate_converges ()
     //  The promoted reciprocal standby still carries the peer's stable node
     //  identity. The routed receive surface must not expose its internal
     //  five-byte standby routing ID to request handlers.
-    send_request_to_activate_callback_dispatch (client, server_two, "A", "Z");
+    send_request_to_exercise_completion_path (client, server_two, "A", "Z");
 
     test_context_socket_close_zero_linger (client);
     test_context_socket_close_zero_linger (server_two);
@@ -397,7 +336,7 @@ void test_repeated_cross_direction_reconnect_uses_current_endpoint ()
         TEST_ASSERT_SUCCESS_ERRNO (
           zlink_connect (client, server_endpoint));
 
-        send_request_to_activate_callback_dispatch (
+        send_request_to_exercise_completion_path (
           client, server, "A");
 
         //  Discovery removes the retired endpoint before the same RID is
@@ -439,8 +378,11 @@ void test_async_handshake_preserves_outgoing_direction ()
     zlink_msg_t unavailable_request;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&unavailable_request, 1));
     *static_cast<unsigned char *> (zlink_msg_data (&unavailable_request)) = 0;
-    (void) zlink_router_request (client, &unavailable_rid, &unavailable_request, 1,
-                                 &ignore_reply, NULL, ZLINK_DONTWAIT, 1);
+    zlink_completion_id_t unavailable_completion_id = 0;
+    (void) zlink_request_part (
+      client, &unavailable_rid, &unavailable_request,
+      ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 1, NULL,
+      &unavailable_completion_id);
 
     // Start the connection before the peer exists so its routing id cannot be
     // available when the locally initiated pipe is first attached.
@@ -458,7 +400,7 @@ void test_async_handshake_preserves_outgoing_direction ()
 
     // No connect routing id is supplied. The client therefore learns S from
     // the asynchronous handshake and must retain that it initiated this pipe.
-    send_request_to_activate_callback_dispatch (client, server_one, "S");
+    send_request_to_exercise_completion_path (client, server_one, "S");
 
     void *server_two = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (server_two, "S", 1));
@@ -502,8 +444,6 @@ int main ()
     } while (false)
 
     UNITY_BEGIN ();
-    RUN_SELECTED (test_with_handover);
-    RUN_SELECTED (test_without_handover);
     RUN_SELECTED (test_callback_dispatch_same_direction_reconnect_handover);
     RUN_SELECTED (test_callback_dispatch_cross_direction_duplicate_converges);
     RUN_SELECTED (test_repeated_cross_direction_reconnect_uses_current_endpoint);

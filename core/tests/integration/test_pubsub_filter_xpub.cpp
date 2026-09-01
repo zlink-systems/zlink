@@ -7,15 +7,11 @@
 #include "core/ctx.hpp"
 #include "core/msg.hpp"
 #include "core/pipe.hpp"
-#include "protocol/zmp_protocol.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "sockets/pubsub/xsub.hpp"
 
 #include <unity.h>
 #include <cstring>
-#include <mutex>
-#include <string>
-#include <vector>
 
 namespace zlink
 {
@@ -32,42 +28,6 @@ class session_termination_test_access_t
         socket_->xpipe_terminated (pipe_);
     }
 
-    static void install_socket_msg_handler (
-      socket_base_t *socket_, zlink_socket_msg_handler_fn handler_,
-      void *userdata_)
-    {
-        std::lock_guard<std::recursive_mutex> lock (
-          socket_->dispatch_runtime ().socket_msg_dispatch_sync);
-        socket_->dispatch_runtime ().socket_msg_handler_userdata.store (
-          userdata_, std::memory_order_release);
-        socket_->dispatch_runtime ().socket_msg_handler.store (
-          handler_, std::memory_order_release);
-    }
-
-    static void clear_socket_msg_handler (socket_base_t *socket_)
-    {
-        std::lock_guard<std::recursive_mutex> lock (
-          socket_->dispatch_runtime ().socket_msg_dispatch_sync);
-        socket_->dispatch_runtime ().socket_msg_handler.store (
-          NULL, std::memory_order_release);
-        socket_->dispatch_runtime ().socket_msg_handler_userdata.store (
-          NULL, std::memory_order_release);
-    }
-
-    static int dispatch_socket_msg_part (socket_base_t *socket_,
-                                         msg_t *msg_, pipe_t *pipe_)
-    {
-        std::lock_guard<std::recursive_mutex> lock (
-          socket_->dispatch_runtime ().socket_msg_dispatch_sync);
-        return socket_->xsocket_msg_dispatch (msg_, pipe_);
-    }
-
-    static size_t xsub_dispatch_state_creations (xsub_t *socket_)
-    {
-        std::lock_guard<std::recursive_mutex> lock (
-          socket_->dispatch_runtime ().socket_msg_dispatch_sync);
-        return socket_->_socket_dispatch_state_creations;
-    }
 };
 }
 
@@ -105,57 +65,6 @@ void write_internal_pipe_part (zlink::pipe_t *pipe_,
         msg.set_flags (zlink::msg_t::more);
     TEST_ASSERT_TRUE (pipe_->write (&msg));
     pipe_->flush ();
-    TEST_ASSERT_SUCCESS_ERRNO (msg.close ());
-}
-
-struct socket_msg_record_probe_t
-{
-    std::vector<std::vector<std::string> > records;
-    bool metadata_leaked;
-
-    socket_msg_record_probe_t () : metadata_leaked (false) {}
-};
-
-void capture_socket_msg_record (const zlink_routing_id_t *,
-                                zlink_msg_t *parts_,
-                                size_t part_count_,
-                                void *userdata_)
-{
-    socket_msg_record_probe_t *probe =
-      static_cast<socket_msg_record_probe_t *> (userdata_);
-    std::vector<std::string> record;
-    for (size_t i = 0; i < part_count_; ++i) {
-        zlink::msg_t *part = reinterpret_cast<zlink::msg_t *> (&parts_[i]);
-        unsigned char kind = 0;
-        uint64_t sequence = 0;
-        probe->metadata_leaked =
-          probe->metadata_leaked
-          || part->get_request_reply_metadata (&kind, &sequence);
-        record.push_back (std::string (
-          static_cast<const char *> (part->data ()), part->size ()));
-        TEST_ASSERT_SUCCESS_ERRNO (part->close ());
-    }
-    probe->records.push_back (record);
-}
-
-void dispatch_socket_msg_part (zlink::socket_base_t *socket_,
-                               zlink::pipe_t *pipe_,
-                               const char *payload_,
-                               bool more_,
-                               bool request_metadata_ = false)
-{
-    zlink::msg_t msg;
-    const size_t payload_size = std::strlen (payload_);
-    TEST_ASSERT_SUCCESS_ERRNO (msg.init_size (payload_size));
-    memcpy (msg.data (), payload_, payload_size);
-    if (more_)
-        msg.set_flags (zlink::msg_t::more);
-    if (request_metadata_)
-        TEST_ASSERT_SUCCESS_ERRNO (msg.set_request_reply_metadata (
-          zlink::zmp_kind_request, UINT64_C (41)));
-    TEST_ASSERT_EQUAL_INT (
-      1, zlink::session_termination_test_access_t::dispatch_socket_msg_part (
-           socket_, &msg, pipe_));
     TEST_ASSERT_SUCCESS_ERRNO (msg.close ());
 }
 
@@ -316,79 +225,6 @@ void test_xsub_multipart_pipe_termination_does_not_join_next_peer_record ()
       ctx->wait_for_socket_count_at_most (0, 5000));
 }
 
-void test_xsub_socket_dispatch_keeps_interleaved_publishers_separate ()
-{
-    void *xsub_handle = create_sync_socket (ZLINK_SOCKET_XSUB);
-    socket_handle_t xsub_pin = as_socket_handle (xsub_handle);
-    TEST_ASSERT_NOT_NULL (xsub_pin.socket);
-    zlink::xsub_t *xsub = static_cast<zlink::xsub_t *> (xsub_pin.socket);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_subscription (xsub_handle, ""));
-
-    zlink::object_t *parents[2] = {xsub, xsub};
-    zlink::pipe_t *pipe_a[2] = {NULL, NULL};
-    zlink::pipe_t *pipe_b[2] = {NULL, NULL};
-    const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
-    const bool conflates[2] = {false, false};
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, pipe_a, hwms, conflates, true));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, pipe_b, hwms, conflates, true));
-
-    passive_pipe_sink_t peer_a_sink;
-    passive_pipe_sink_t peer_b_sink;
-    pipe_a[1]->set_event_sink (&peer_a_sink);
-    pipe_b[1]->set_event_sink (&peer_b_sink);
-    zlink::session_termination_test_access_t::attach_socket_pipe (
-      xsub, pipe_a[0]);
-    zlink::session_termination_test_access_t::attach_socket_pipe (
-      xsub, pipe_b[0]);
-
-    socket_msg_record_probe_t probe;
-    zlink::session_termination_test_access_t::install_socket_msg_handler (
-      xsub, &capture_socket_msg_record, &probe);
-
-    // Session I/O dispatch is frame-granular. Keep A's multipart record open,
-    // complete B's one-part record (whose valid first frame carries internal
-    // request metadata), then finish A. Per-pipe assembly must neither splice
-    // the records nor mistake B's first frame for A's continuation. B must use
-    // the one-part path without creating a transient multipart state.
-    dispatch_socket_msg_part (xsub, pipe_a[0], "topic-A", true);
-    TEST_ASSERT_EQUAL_UINT64 (
-      1, zlink::session_termination_test_access_t::
-           xsub_dispatch_state_creations (xsub));
-    dispatch_socket_msg_part (xsub, pipe_b[0], "topic-B", false, true);
-    TEST_ASSERT_EQUAL_UINT64 (
-      1, zlink::session_termination_test_access_t::
-           xsub_dispatch_state_creations (xsub));
-    dispatch_socket_msg_part (xsub, pipe_a[0], "payload-A", false);
-
-    TEST_ASSERT_FALSE (probe.metadata_leaked);
-    TEST_ASSERT_EQUAL_UINT64 (2, probe.records.size ());
-    TEST_ASSERT_EQUAL_UINT64 (1, probe.records[0].size ());
-    TEST_ASSERT_EQUAL_STRING ("topic-B", probe.records[0][0].c_str ());
-    TEST_ASSERT_EQUAL_UINT64 (2, probe.records[1].size ());
-    TEST_ASSERT_EQUAL_STRING ("topic-A", probe.records[1][0].c_str ());
-    TEST_ASSERT_EQUAL_STRING ("payload-A", probe.records[1][1].c_str ());
-
-    zlink::session_termination_test_access_t::clear_socket_msg_handler (xsub);
-    pipe_a[0]->terminate (false);
-    pipe_a[1]->terminate (false);
-    pipe_b[0]->terminate (false);
-    pipe_b[1]->terminate (false);
-    int events = 0;
-    size_t events_size = sizeof (events);
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_get_option (xsub_handle, ZLINK_OPT_EVENTS, &events,
-                        &events_size));
-
-    xsub_pin = socket_handle_t ();
-    close_sync_socket (xsub_handle);
-    zlink::ctx_t *ctx =
-      static_cast<zlink::ctx_t *> (get_test_context ());
-    TEST_ASSERT_SUCCESS_ERRNO (
-      ctx->wait_for_socket_count_at_most (0, 5000));
-}
-
 int main ()
 {
     setup_test_environment ();
@@ -398,7 +234,5 @@ int main ()
     RUN_TEST (test_pubsub_xpub_xsub_inproc);
     RUN_TEST (
       test_xsub_multipart_pipe_termination_does_not_join_next_peer_record);
-    RUN_TEST (
-      test_xsub_socket_dispatch_keeps_interleaved_publishers_separate);
     return UNITY_END ();
 }

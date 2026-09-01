@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
 #include "testutil.hpp"
+#include "testutil_monitoring.hpp"
 #include "testutil_unity.hpp"
 #include "api/socket/socket_api_internal.hpp"
 #undef MAX_SOCKET_STRING
@@ -80,13 +81,6 @@ inline size_t header_size ()
 static const size_t kPerfMonitorEndpointSize = 256;
 
 std::atomic<unsigned int> g_inproc_endpoint_counter (0);
-std::atomic<int> g_send_complete_self_close_rc (0);
-std::atomic<int> g_send_complete_self_close_errno (0);
-std::atomic<int> g_async_send_complete_self_close_rc (0);
-std::atomic<int> g_async_send_complete_self_close_errno (0);
-std::atomic<long long> g_async_send_complete_self_close_elapsed_ms (0);
-std::atomic<bool> g_async_send_complete_callback_changed_thread (false);
-std::thread::id g_async_send_complete_test_thread;
 static const char kPerfPubsubTopic[] = "bench";
 
 struct connect_monitor_state_t
@@ -107,6 +101,7 @@ struct connect_monitor_t
 
     void *monitor;
     connect_monitor_state_t *state;
+    test_monitor_pull_dispatch_t dispatch;
 };
 
 struct delivery_ready_monitor_state_t
@@ -125,6 +120,7 @@ struct delivery_ready_monitor_t
 
     void *monitor;
     delivery_ready_monitor_state_t *state;
+    test_monitor_pull_dispatch_t dispatch;
 };
 
 struct queue_probe_t
@@ -268,9 +264,8 @@ bool open_perf_like_delivery_ready_monitor (void *socket_,
                   | ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL | ZLINK_EVENT_HANDSHAKE_FAILED_AUTH;
     void *monitor = zlink_socket_monitor_open (socket_, &opts);
     if (!monitor
-        || zlink_socket_monitor_handler (monitor, &perf_pubsub_delivery_ready_monitor_handler,
-                                         state)
-             != 0) {
+        || !out_->dispatch.start (
+          monitor, &perf_pubsub_delivery_ready_monitor_handler, state)) {
         if (monitor)
             (void) zlink_monitor_close (&monitor);
         delete state;
@@ -319,6 +314,7 @@ void close_perf_like_delivery_ready_monitor (delivery_ready_monitor_t *monitor_)
     monitor_->monitor = NULL;
     monitor_->state = NULL;
 
+    monitor_->dispatch.stop ();
     if (monitor)
         TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
     delete state;
@@ -452,7 +448,7 @@ bool open_perf_like_connect_monitor (void *socket_, connect_monitor_t *out_)
         delete state;
         return false;
     }
-    if (zlink_socket_monitor_handler (monitor, &perf_like_connect_monitor_handler, state) != 0) {
+    if (!out_->dispatch.start (monitor, &perf_like_connect_monitor_handler, state)) {
         zlink_monitor_close (&monitor);
         delete state;
         return false;
@@ -460,6 +456,7 @@ bool open_perf_like_connect_monitor (void *socket_, connect_monitor_t *out_)
 
     const int zero = 0;
     if (zlink_set_option (monitor, ZLINK_OPT_LINGER, &zero, sizeof (zero)) != ZLINK_CONFIG_OK) {
+        out_->dispatch.stop ();
         (void) zlink_monitor_close (&monitor);
         delete state;
         return false;
@@ -512,6 +509,7 @@ void close_perf_like_connect_monitor (connect_monitor_t *monitor_)
     monitor_->monitor = NULL;
     monitor_->state = NULL;
 
+    monitor_->dispatch.stop ();
     TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
     delete state;
 }
@@ -530,60 +528,6 @@ void make_unique_inproc_endpoint (char *endpoint_, size_t size_)
     const unsigned int endpoint_id =
       g_inproc_endpoint_counter.fetch_add (1, std::memory_order_acq_rel) + 1;
     snprintf (endpoint_, size_, "inproc://monitor-perf-pair-%u", endpoint_id);
-}
-
-//  Reserve one record on a backpressured socket.
-void park_backpressured_record (void *socket_)
-{
-    zlink_msg_t part;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&part, 65536));
-    memset (zlink_msg_data (&part), 'q', 65536);
-
-    zlink_send_async_options_t options;
-    memset (&options, 0, sizeof (options));
-    options.struct_size = sizeof (options);
-
-    zlink_send_op_id_t op_id = 0;
-    const zlink_submit_result_t rc =
-      zlink_send_async (socket_, &part, 1, &options, &op_id);
-    if (rc != ZLINK_SUBMIT_OK)
-        zlink_msg_close (&part);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, rc);
-    TEST_ASSERT_TRUE (op_id != 0);
-}
-
-void send_complete_self_close_handler (void *subject_,
-                                       const zlink_send_complete_event_t *,
-                                       void *)
-{
-    void *socket = subject_;
-    errno = 0;
-    g_send_complete_self_close_rc.store (zlink_close (socket), std::memory_order_release);
-    g_send_complete_self_close_errno.store (errno, std::memory_order_release);
-}
-
-void async_send_complete_self_close_handler (
-  void *subject_, const zlink_send_complete_event_t *, void *)
-{
-    g_async_send_complete_callback_changed_thread.store (
-      std::this_thread::get_id () != g_async_send_complete_test_thread,
-      std::memory_order_release);
-    const std::chrono::steady_clock::time_point started =
-      std::chrono::steady_clock::now ();
-    errno = 0;
-    g_async_send_complete_self_close_rc.store (zlink_close (subject_),
-                                            std::memory_order_release);
-    g_async_send_complete_self_close_errno.store (errno, std::memory_order_release);
-    const long long elapsed_ms =
-      std::chrono::duration_cast<std::chrono::milliseconds> (
-        std::chrono::steady_clock::now () - started)
-        .count ();
-    g_async_send_complete_self_close_elapsed_ms.store (elapsed_ms,
-                                                    std::memory_order_release);
-}
-
-void ignore_send_complete (void *, const zlink_send_complete_event_t *, void *)
-{
 }
 
 }
@@ -950,7 +894,7 @@ void test_pubsub_perf_like_delivery_ready_preserves_oneway_delivery_recv ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
 }
 
-void test_pubsub_raw_socket_callback_model_is_accepted ()
+void test_pubsub_raw_socket_pull_model_is_accepted ()
 {
     void *ctx = zlink_ctx_new ();
     TEST_ASSERT_NOT_NULL (ctx);
@@ -997,152 +941,6 @@ void test_pubsub_raw_socket_rejects_multipart_send_api ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
 }
 
-void test_send_complete_self_close_blocks_followup_operational_api ()
-{
-    void *ctx = zlink_ctx_new ();
-    TEST_ASSERT_NOT_NULL (ctx);
-
-    void *server = zlink_socket (ctx, ZLINK_SOCKET_PAIR);
-    void *client = zlink_socket (ctx, ZLINK_SOCKET_PAIR);
-    TEST_ASSERT_NOT_NULL (server);
-    TEST_ASSERT_NOT_NULL (client);
-
-    configure_bounded_pair_socket (server, 200);
-    configure_bounded_pair_socket (client, 200);
-
-    char endpoint[128];
-    make_unique_inproc_endpoint (endpoint, sizeof (endpoint));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, endpoint));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
-    g_send_complete_self_close_rc.store (INT_MIN, std::memory_order_release);
-    g_send_complete_self_close_errno.store (0, std::memory_order_release);
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_send_complete_handler (client, &send_complete_self_close_handler,
-                                   NULL));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
-    fill_until_backpressured (client);
-    //  A backpressured target cannot admit the next record, so this one is
-    //  reserved and its completion is what runs the self-close below.
-    park_backpressured_record (client);
-    std::thread drain_thread ([server] {
-        char payload[65536];
-        while (zlink_recv (server, payload, sizeof (payload), 0) >= 0) {
-        }
-    });
-
-    TEST_ASSERT_TRUE (zlink_test_wait_until_step (3000, 10, [] {
-        return g_send_complete_self_close_rc.load (std::memory_order_acquire)
-               != INT_MIN;
-    }));
-    drain_thread.join ();
-    TEST_ASSERT_NOT_EQUAL (INT_MIN,
-                           g_send_complete_self_close_rc.load (std::memory_order_acquire));
-
-    TEST_ASSERT_EQUAL_INT (0, g_send_complete_self_close_rc.load (std::memory_order_acquire));
-
-    errno = 0;
-    TEST_ASSERT_EQUAL_INT (-1, zlink_send (client, "post-close-send", 16, 0));
-    TEST_ASSERT_TRUE (errno == ESHUTDOWN || errno == EFAULT);
-
-    close_socket_zero_linger (server);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_shutdown (ctx));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
-}
-
-void test_async_mailbox_send_complete_self_close_quiesces_before_reap ()
-{
-    void *ctx = zlink_ctx_new ();
-    TEST_ASSERT_NOT_NULL (ctx);
-
-    void *server = zlink_socket (ctx, ZLINK_SOCKET_ROUTER);
-    void *client = zlink_socket (ctx, ZLINK_SOCKET_DEALER);
-    TEST_ASSERT_NOT_NULL (server);
-    TEST_ASSERT_NOT_NULL (client);
-
-    configure_bounded_pair_socket (server, 200);
-    configure_bounded_pair_socket (client, 200);
-
-    char endpoint[128];
-    make_unique_inproc_endpoint (endpoint, sizeof (endpoint));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, endpoint));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
-    msleep (SETTLE_TIME);
-
-    g_async_send_complete_test_thread = std::this_thread::get_id ();
-    g_async_send_complete_self_close_rc.store (INT_MIN, std::memory_order_release);
-    g_async_send_complete_self_close_errno.store (0, std::memory_order_release);
-    g_async_send_complete_self_close_elapsed_ms.store (0, std::memory_order_release);
-    g_async_send_complete_callback_changed_thread.store (false, std::memory_order_release);
-
-    // The completion handler registration itself owns async mailbox progress.
-    // No completion request, receive handler, or caller-side poll is allowed to
-    // bootstrap the callback used below.
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_send_complete_handler (
-        client, &async_send_complete_self_close_handler, NULL));
-
-    fill_until_backpressured (client);
-    //  A backpressured target cannot admit the next record, so this one is
-    //  reserved and its completion is what runs the self-close below.
-    park_backpressured_record (client);
-    std::thread drain_thread ([server] {
-        char payload[65536];
-        while (zlink_recv (server, payload, sizeof (payload), 0) >= 0) {
-        }
-    });
-
-    const bool callback_observed = zlink_test_wait_until_step (3000, 10, [] {
-        return g_async_send_complete_self_close_rc.load (std::memory_order_acquire)
-               != INT_MIN;
-    });
-    drain_thread.join ();
-
-    TEST_ASSERT_TRUE (callback_observed);
-    TEST_ASSERT_TRUE (
-      g_async_send_complete_callback_changed_thread.load (std::memory_order_acquire));
-    TEST_ASSERT_EQUAL_INT (
-      0, g_async_send_complete_self_close_errno.load (std::memory_order_acquire));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CLOSE_OK,
-      g_async_send_complete_self_close_rc.load (std::memory_order_acquire));
-    TEST_ASSERT_LESS_THAN_INT64 (
-      1000, g_async_send_complete_self_close_elapsed_ms.load (std::memory_order_acquire));
-
-    close_socket_zero_linger (server);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_shutdown (ctx));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
-}
-
-void test_send_complete_startup_failure_does_not_publish_handler ()
-{
-    void *ctx = zlink_ctx_new ();
-    TEST_ASSERT_NOT_NULL (ctx);
-
-    // With no I/O executor available, registration must fail before either
-    // callback becomes observable. A later caller must not inherit a
-    // provisional handler from the failed startup attempt.
-    const int io_threads = 0;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_ctx_set (ctx, ZLINK_IO_THREADS, io_threads));
-    void *dealer = zlink_socket (ctx, ZLINK_SOCKET_DEALER);
-    TEST_ASSERT_NOT_NULL (dealer);
-    {
-        const socket_handle_t handle = as_socket_handle (dealer);
-        TEST_ASSERT_NOT_NULL (handle.socket);
-
-        errno = 0;
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_HANDLER_INTERNAL_ERROR,
-          zlink_send_complete_handler (dealer, &ignore_send_complete, NULL));
-        TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
-        TEST_ASSERT_FALSE (handle.socket->send_complete_handler_active ());
-    }
-
-    close_socket_zero_linger (dealer);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_shutdown (ctx));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
-}
-
 int main ()
 {
     setup_test_environment ();
@@ -1154,13 +952,10 @@ int main ()
     RUN_TEST (test_pair_inproc_perf_like_monitor_ready_implies_bidirectional_delivery);
     RUN_TEST (test_pubsub_perf_like_monitor_sockopts_preserve_connect_ready);
     RUN_TEST (test_pubsub_perf_like_delivery_ready_preserves_oneway_delivery_recv);
-    RUN_TEST (test_pubsub_raw_socket_callback_model_is_accepted);
+    RUN_TEST (test_pubsub_raw_socket_pull_model_is_accepted);
     RUN_TEST (test_pubsub_raw_socket_rejects_multipart_send_api);
     RUN_TEST (test_dealer_dealer_perf_like_monitor_sockopts_preserve_connect_ready);
     RUN_TEST (test_dealer_router_perf_like_client_monitor_preserves_bidirectional_delivery);
     RUN_TEST (test_router_router_perf_like_client_monitor_preserves_bidirectional_delivery);
-    RUN_TEST (test_send_complete_self_close_blocks_followup_operational_api);
-    RUN_TEST (test_async_mailbox_send_complete_self_close_quiesces_before_reap);
-    RUN_TEST (test_send_complete_startup_failure_does_not_publish_handler);
     return UNITY_END ();
 }

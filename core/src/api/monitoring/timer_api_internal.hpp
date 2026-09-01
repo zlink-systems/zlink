@@ -29,8 +29,6 @@ struct timer_handle_t
     zlink::signaler_t signaler;
     bool destroyed;
     bool running;
-    bool receive_callback_active;
-    bool recv_in_progress;
     bool stop_requested;
     bool signal_pending;
     int poller_refs;
@@ -42,8 +40,6 @@ struct timer_handle_t
     uint64_t repeat_count;
     uint64_t next_fire_count;
     std::deque<uint64_t> fired_counts;
-    zlink_timer_handler_fn handler;
-    void *handler_userdata;
 };
 
 struct scheduler_state_t

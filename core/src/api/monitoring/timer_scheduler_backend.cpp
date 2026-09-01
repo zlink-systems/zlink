@@ -13,8 +13,6 @@ timer_handle_t::timer_handle_t () :
     scheduler (NULL),
     destroyed (false),
     running (false),
-    receive_callback_active (false),
-    recv_in_progress (false),
     stop_requested (false),
     signal_pending (false),
     poller_refs (0),
@@ -23,9 +21,7 @@ timer_handle_t::timer_handle_t () :
     scheduled_deadline_ns (0),
     interval_ns (0),
     repeat_count (0),
-    next_fire_count (1),
-    handler (NULL),
-    handler_userdata (NULL)
+    next_fire_count (1)
 {
 }
 
@@ -93,8 +89,6 @@ void schedule_timer_locked (timer_handle_t *timer_, uint64_t deadline_ns_)
 
 void scheduler_fire_timer (timer_handle_t *timer_)
 {
-    zlink_timer_handler_fn handler = NULL;
-    void *handler_userdata = NULL;
     uint64_t fire_count = 0;
     bool reschedule = false;
     uint64_t next_deadline_ns = 0;
@@ -105,16 +99,9 @@ void scheduler_fire_timer (timer_handle_t *timer_)
         scheduler = timer_->scheduler;
         if (!timer_->destroyed && timer_->running && !timer_->stop_requested) {
             fire_count = timer_->next_fire_count++;
-            handler = timer_->handler;
-            handler_userdata = timer_->handler_userdata;
-
-            if (handler) {
-                timer_->receive_callback_active = true;
-            } else {
-                timer_->fired_counts.push_back (fire_count);
-                ensure_timer_signal_locked (timer_);
-                timer_->recv_cv.notify_one ();
-            }
+            timer_->fired_counts.push_back (fire_count);
+            ensure_timer_signal_locked (timer_);
+            timer_->recv_cv.notify_one ();
 
             if (timer_->repeat_count > 0) {
                 --timer_->repeat_count;
@@ -129,14 +116,8 @@ void scheduler_fire_timer (timer_handle_t *timer_)
         }
     }
 
-    if (handler)
-        handler (timer_, fire_count, handler_userdata);
-
     std::unique_lock<std::mutex> scheduler_lock (scheduler->mutex);
     std::unique_lock<std::mutex> timer_lock (timer_->mutex);
-    if (handler) {
-        timer_->receive_callback_active = false;
-    }
     if (reschedule && !timer_->destroyed && timer_->running && !timer_->stop_requested) {
         schedule_timer_locked (timer_, next_deadline_ns);
         scheduler->cv.notify_all ();

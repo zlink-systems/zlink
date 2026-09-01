@@ -57,14 +57,6 @@ thread_local zlink::socket_lifecycle_coordinator_t *
 
 bool zlink::socket_lifecycle_coordinator_t::enter_public_api ()
 {
-    // Completion callbacks are application hand-off points, not nested
-    // submission points. This is deliberately a global TLS check: a
-    // callback dispatched by one socket must not submit on another socket.
-    if (socket_send_complete_dispatch_scope_t::dispatching_any ()) {
-        errno = EDEADLK;
-        return false;
-    }
-
     const uint64_t old = public_api_state.fetch_add (1, std::memory_order_acq_rel);
     zlink_assert ((old & public_api_inflight_mask) != public_api_inflight_mask);
     if ((old & public_api_closing_bit) == 0)
@@ -78,14 +70,6 @@ bool zlink::socket_lifecycle_coordinator_t::enter_public_api ()
 
 bool zlink::socket_lifecycle_coordinator_t::enter_public_api_and_lock_sync ()
 {
-    // The uncontended sync fast path must observe the same global completion
-    // dispatch guard as enter_public_api(); otherwise a callback on a
-    // different socket could bypass the guard through its CAS success.
-    if (socket_send_complete_dispatch_scope_t::dispatching_any ()) {
-        errno = EDEADLK;
-        return false;
-    }
-
     uint64_t expected = 0;
     if (public_api_state.compare_exchange_strong (expected, 1u | public_api_sync_bit,
                                                   std::memory_order_acq_rel,
@@ -117,11 +101,6 @@ bool zlink::socket_lifecycle_coordinator_t::enter_public_send (
         *sync_locked_out_ = false;
     if (multipart_active_out_)
         *multipart_active_out_ = false;
-
-    if (socket_send_complete_dispatch_scope_t::dispatching_any ()) {
-        errno = EDEADLK;
-        return false;
-    }
 
     uint64_t old = public_api_state.load (std::memory_order_acquire);
     while (true) {
@@ -223,11 +202,6 @@ bool zlink::socket_lifecycle_coordinator_t::resume_public_multipart_send (
     if (sync_locked_out_)
         *sync_locked_out_ = false;
 
-    if (socket_send_complete_dispatch_scope_t::dispatching_any ()) {
-        errno = EDEADLK;
-        return false;
-    }
-
     uint64_t old = public_api_state.load (std::memory_order_acquire);
     while (true) {
         if ((old & public_api_closing_bit) != 0) {
@@ -300,24 +274,7 @@ bool zlink::socket_lifecycle_coordinator_t::release_poller_registration ()
     return dec_mailbox_ref ();
 }
 
-bool zlink::socket_lifecycle_coordinator_t::enter_callback_api ()
-{
-    if (!enter_public_api ())
-        return false;
-
-    callback_api_depth.fetch_add (1, std::memory_order_acq_rel);
-    return true;
-}
-
-bool zlink::socket_lifecycle_coordinator_t::leave_callback_api ()
-{
-    const uint32_t depth = callback_api_depth.fetch_sub (1, std::memory_order_acq_rel) - 1;
-    leave_public_api ();
-    return depth == 0 && close_deferred.load (std::memory_order_acquire)
-           && public_close_requested ();
-}
-
-bool zlink::socket_lifecycle_coordinator_t::begin_close_or_fail_busy (bool from_self_callback_)
+bool zlink::socket_lifecycle_coordinator_t::begin_close_or_fail_busy ()
 {
     uint64_t old = public_api_state.load (std::memory_order_acquire);
     while (true) {
@@ -327,35 +284,21 @@ bool zlink::socket_lifecycle_coordinator_t::begin_close_or_fail_busy (bool from_
         }
 
         const uint64_t inflight = old & public_api_inflight_mask;
-        if (!from_self_callback_) {
-            if (inflight != 0) {
-                errno = EBUSY;
-                return false;
-            }
-            // An incremental multipart lease can outlive the individual part
-            // call, and the async command owner can hold the raw sync bit
-            // without a public lifecycle token. Neither is an executing public
-            // API. Complete-record admission, however, is always paired with
-            // an in-flight token and must be absent here.
-            zlink_assert ((old & public_api_complete_mask) == 0);
-        } else {
-            // A callback may defer only its own close. Another callback or
-            // public API on any thread keeps the socket busy.
-            const uint32_t callbacks =
-              callback_api_depth.load (std::memory_order_acquire);
-            if (callbacks != 1 || inflight != 1) {
-                errno = EBUSY;
-                return false;
-            }
+        if (inflight != 0) {
+            errno = EBUSY;
+            return false;
         }
+        // An incremental multipart lease can outlive the individual part
+        // call, and the async command owner can hold the raw sync bit without
+        // a public lifecycle token. Neither is an executing public API.
+        // Complete-record admission, however, is always paired with an
+        // in-flight token and must be absent here.
+        zlink_assert ((old & public_api_complete_mask) == 0);
 
         const uint64_t desired = old | public_api_closing_bit;
         if (public_api_state.compare_exchange_weak (old, desired, std::memory_order_acq_rel,
-                                                    std::memory_order_acquire)) {
-            if (from_self_callback_)
-                close_deferred.store (true, std::memory_order_release);
+                                                    std::memory_order_acquire))
             return true;
-        }
     }
 }
 
@@ -433,29 +376,6 @@ void zlink::socket_lifecycle_coordinator_t::unlock_public_api_sync_and_leave ()
       public_api_state.fetch_sub (public_api_sync_bit | 1u, std::memory_order_acq_rel);
     zlink_assert ((old & public_api_sync_bit) != 0);
     zlink_assert ((old & public_api_inflight_mask) > 0);
-}
-
-zlink::socket_callback_scope_t::socket_callback_scope_t (socket_base_t *socket_) :
-    _socket (socket_),
-    _coordinator (socket_ ? &socket_->lifecycle_coordinator () : NULL),
-    _entered (_coordinator && _coordinator->enter_callback_api ())
-{
-}
-
-zlink::socket_callback_scope_t::~socket_callback_scope_t ()
-{
-    if (!_entered)
-        return;
-
-    if (!_coordinator->leave_callback_api () || !_socket)
-        return;
-
-    if (socket_base_t::current_async_mailbox_dispatch_socket () == _socket) {
-        _socket->defer_close_handoff_from_async_owner ();
-        return;
-    }
-
-    _socket->finish_close_handoff ();
 }
 
 zlink::socket_public_send_scope_t::socket_public_send_scope_t (
@@ -713,8 +633,6 @@ bool zlink::socket_lifecycle_coordinator_t::is_async_quiesce_pending () const
 void zlink::socket_lifecycle_coordinator_t::complete_deferred_close_handoff (
   mailbox_t *mailbox_, socket_base_t *socket_, int timeout_ms_)
 {
-    clear_deferred_close ();
-
     if (is_async_mailbox_active ()) {
         stop_async_mailbox_processing (mailbox_);
         // schedule_if_needed() alone cannot close the running-handler race:
@@ -736,16 +654,6 @@ void zlink::socket_lifecycle_coordinator_t::complete_deferred_close_handoff (
 
     if (mailbox_)
         mailbox_->clear_signalers ();
-}
-
-void zlink::socket_lifecycle_coordinator_t::clear_deferred_close ()
-{
-    close_deferred.store (false, std::memory_order_release);
-}
-
-bool zlink::socket_lifecycle_coordinator_t::take_deferred_close ()
-{
-    return close_deferred.exchange (false, std::memory_order_acq_rel);
 }
 
 void zlink::socket_lifecycle_coordinator_t::mark_destroy_pending ()

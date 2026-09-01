@@ -199,7 +199,8 @@ inline domain classify_domain (int err_)
 inline bool is_submit_control_flow (int err_)
 {
     return err_ == EAGAIN || err_ == ETIMEDOUT || err_ == ENOBUFS || err_ == ENOTCONN
-           || err_ == EHOSTUNREACH || err_ == ECONNREFUSED || err_ == EACCES || err_ == ENOENT
+           || err_ == EHOSTUNREACH || err_ == ECONNREFUSED || err_ == EACCES
+           || err_ == EPROTOTYPE || err_ == ENOENT
 #if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
            || err_ == EWOULDBLOCK
 #endif

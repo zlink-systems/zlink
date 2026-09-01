@@ -16,9 +16,6 @@ void init_part (zlink_msg_t *part_, const char *text_)
     memcpy (zlink_msg_data (part_), text_, strlen (text_));
 }
 
-void ignore_reply (zlink_request_result_t, zlink_msg_t *, size_t, void *)
-{
-}
 }
 
 void test_wrong_send_helper_aborts_open_sequence_after_bad_recv_attempt ()
@@ -35,7 +32,7 @@ void test_wrong_send_helper_aborts_open_sequence_after_bad_recv_attempt ()
     init_part (&first, "part-1");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (dealer, &first, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE));
+      zlink_send_part (dealer, &first, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE, NULL, NULL));
 
     zlink_msg_t *recv_parts = NULL;
     size_t recv_count = 0;
@@ -45,11 +42,14 @@ void test_wrong_send_helper_aborts_open_sequence_after_bad_recv_attempt ()
 
     zlink_msg_t wrong_family;
     init_part (&wrong_family, "wrong");
+    zlink_completion_id_t completion_id = UINT64_MAX;
     const zlink_submit_result_t wrong_rc =
-      zlink_dealer_request_part (dealer, &wrong_family, static_cast<zlink_send_flags_t> (0),
-                                 ZLINK_PART_FINAL, 1000, &ignore_reply, NULL);
+      zlink_request_part (dealer, NULL, &wrong_family,
+                          static_cast<zlink_send_flags_t> (0),
+                          ZLINK_PART_FINAL, 1000, NULL, &completion_id);
     TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_INVALID_ARGUMENT, wrong_rc);
     TEST_ASSERT_EQUAL_INT (EINVAL, zlink_errno ());
+    TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&wrong_family));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&wrong_family));
 
@@ -57,7 +57,7 @@ void test_wrong_send_helper_aborts_open_sequence_after_bad_recv_attempt ()
     init_part (&final_part, "part-2");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (dealer, &final_part, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL));
+      zlink_send_part (dealer, &final_part, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL, NULL, NULL));
 
     recv_string_expect_success (router, "D1", 0);
     recv_string_expect_success (router, "part-2", 0);
@@ -66,7 +66,7 @@ void test_wrong_send_helper_aborts_open_sequence_after_bad_recv_attempt ()
     init_part (&next_msg, "after-reset");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (dealer, &next_msg, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL));
+      zlink_send_part (dealer, &next_msg, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL, NULL, NULL));
     recv_string_expect_success (router, "D1", 0);
     recv_string_expect_success (router, "after-reset", 0);
 

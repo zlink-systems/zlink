@@ -2,6 +2,7 @@
 
 #include "utils/precompiled.hpp"
 
+#include <algorithm>
 #include <vector>
 
 #include "sockets/internal/fq.hpp"
@@ -36,6 +37,14 @@ zlink::fq_t::fq_t () :
 zlink::fq_t::~fq_t ()
 {
     zlink_assert (_pipes.empty ());
+    zlink_assert (_record_admission_blocked_set.empty ());
+}
+
+bool zlink::fq_t::record_admission_blocked (pipe_t *pipe_) const
+{
+    return pipe_
+           && _record_admission_blocked_set.find (pipe_)
+                != _record_admission_blocked_set.end ();
 }
 
 bool zlink::fq_t::try_get_pipe_index (pipe_t *pipe_, pipes_t::size_type *index_out_)
@@ -103,6 +112,13 @@ void zlink::fq_t::pipe_terminated (pipe_t *pipe_)
     if (!try_get_pipe_index (pipe_, &index))
         return;
 
+    if (_record_admission_blocked_set.erase (pipe_) != 0) {
+        _record_admission_blocked.erase (
+          std::remove (_record_admission_blocked.begin (),
+                       _record_admission_blocked.end (), pipe_),
+          _record_admission_blocked.end ());
+    }
+
     pipe_t *const current_pipe =
       _active > 0 && _current < _active ? _pipes[_current] : NULL;
     if (_more && pipe_ == current_pipe) {
@@ -139,12 +155,70 @@ void zlink::fq_t::activated (pipe_t *pipe_)
     pipes_t::size_type index = 0;
     if (!try_get_pipe_index (pipe_, &index))
         return;
+    if (record_admission_blocked (pipe_))
+        return;
     if (index < _active)
         return;
 
     //  Move the pipe to the list of active pipes.
     _pipes.swap (index, _active);
     _active++;
+}
+
+bool zlink::fq_t::block_current_for_record_admission ()
+{
+    normalize_state ();
+    if (_active == 0 || _current >= _active)
+        return false;
+
+    pipe_t *const pipe = _pipes[_current];
+    if (!record_admission_blocked (pipe)) {
+        try {
+            const std::pair<std::set<pipe_t *>::iterator, bool> inserted =
+              _record_admission_blocked_set.insert (pipe);
+            if (inserted.second) {
+                try {
+                    _record_admission_blocked.push_back (pipe);
+                } catch (...) {
+                    _record_admission_blocked_set.erase (inserted.first);
+                    errno = ENOMEM;
+                    return false;
+                }
+            }
+        } catch (...) {
+            errno = ENOMEM;
+            return false;
+        }
+    }
+
+    // A ROUTER transport envelope may already have supplied its synthetic
+    // routing-id frame before admission examines the first payload frame.
+    // The payload remains queued when admission is capacity-blocked, so the
+    // next eligible source must start a fresh FQ record instead of inheriting
+    // this source's multipart pin.
+    _more = false;
+    deactivate (pipe);
+    return true;
+}
+
+size_t zlink::fq_t::redrive_record_admission (size_t max_pipes_)
+{
+    size_t redriven = 0;
+    while (redriven < max_pipes_ && !_record_admission_blocked.empty ()) {
+        pipe_t *const pipe = _record_admission_blocked.front ();
+        _record_admission_blocked.pop_front ();
+        if (_record_admission_blocked_set.erase (pipe) == 0)
+            continue;
+
+        pipes_t::size_type index = 0;
+        if (!try_get_pipe_index (pipe, &index))
+            continue;
+        if (!pipe->check_read ())
+            continue;
+        activated (pipe);
+        ++redriven;
+    }
+    return redriven;
 }
 
 void zlink::fq_t::arm_dispatch ()
@@ -263,6 +337,15 @@ int zlink::fq_t::recvpipe_internal (
                 rc = msg_->init ();
                 errno_assert (rc == 0);
             }
+            if (!admission_consumed && saved_errno == EAGAIN) {
+                if (block_current_for_record_admission ()) {
+                    errno = 0;
+                    continue;
+                }
+                // Preserve allocation failure from the paused-pipe registry;
+                // the queued record itself was not consumed.
+                return -1;
+            }
             errno = saved_errno;
             return -1;
         }
@@ -337,6 +420,41 @@ bool zlink::fq_t::has_in ()
             return true;
 
         //  Deactivate the pipe.
+        _active--;
+        _pipes.swap (_current, _active);
+        if (_current == _active)
+            _current = 0;
+    }
+
+    return false;
+}
+
+bool zlink::fq_t::has_in_with_record_admission (
+  pipe_t::read_admission_fn *admission_, void *userdata_)
+{
+    normalize_state ();
+
+    if (_multipart_abort_pending || _more)
+        return true;
+
+    while (_active > 0) {
+        bool admission_failed = false;
+        if (_pipes[_current]->check_read_with_record_admission (
+              admission_, userdata_, &admission_failed))
+            return true;
+
+        const int saved_errno = errno;
+        if (admission_failed && saved_errno == EAGAIN) {
+            if (!block_current_for_record_admission ())
+                return false;
+            errno = 0;
+            continue;
+        }
+        if (admission_failed)
+            // Let the receive path surface non-capacity failures instead of
+            // hiding them as a readiness miss.
+            return true;
+
         _active--;
         _pipes.swap (_current, _active);
         if (_current == _active)

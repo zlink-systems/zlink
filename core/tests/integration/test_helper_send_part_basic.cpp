@@ -79,13 +79,13 @@ void test_send_part_matches_aggregate_wire_shape ()
 
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (sender, &helper0, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE));
+      zlink_send_part (sender, &helper0, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (sender, &helper1, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE));
+      zlink_send_part (sender, &helper1, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (sender, &helper2, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL));
+      zlink_send_part (sender, &helper2, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL, NULL, NULL));
 
     assert_recv_parts (receiver, "alpha", "beta", "gamma");
     test_context_socket_close (sender);
@@ -110,7 +110,7 @@ void test_send_part_single_final_keeps_next_multipart_valid ()
     init_part (&single, "single");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (sender, &single, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL));
+      zlink_send_part (sender, &single, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL, NULL, NULL));
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&single));
     assert_recv_single (receiver, "single");
 
@@ -123,13 +123,13 @@ void test_send_part_single_final_keeps_next_multipart_valid ()
 
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (sender, &helper0, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE));
+      zlink_send_part (sender, &helper0, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (sender, &helper1, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE));
+      zlink_send_part (sender, &helper1, static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE, NULL, NULL));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (sender, &helper2, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL));
+      zlink_send_part (sender, &helper2, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL, NULL, NULL));
     assert_recv_parts (receiver, "after", "single", "final");
     test_context_socket_close (sender);
     test_context_socket_close (receiver);

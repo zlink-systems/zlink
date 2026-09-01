@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
 #include "testutil.hpp"
+#include "testutil_monitoring.hpp"
 #include "testutil_unity.hpp"
 
 #include <chrono>
@@ -37,6 +38,7 @@ struct delivery_ready_monitor_t
 
     void *monitor;
     delivery_ready_state_t *state;
+    test_monitor_pull_dispatch_t dispatch;
 };
 
 struct pubsub_callback_counter_t
@@ -99,7 +101,7 @@ bool open_delivery_ready_monitor (void *socket_, uint64_t event_, delivery_ready
                   | ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL | ZLINK_EVENT_HANDSHAKE_FAILED_AUTH;
     void *monitor = zlink_socket_monitor_open (socket_, &opts);
     if (!monitor
-        || zlink_socket_monitor_handler (monitor, &delivery_ready_monitor_handler, state) != 0) {
+        || !out_->dispatch.start (monitor, &delivery_ready_monitor_handler, state)) {
         if (monitor)
             (void) zlink_monitor_close (&monitor);
         delete state;
@@ -136,6 +138,7 @@ void close_delivery_ready_monitor (delivery_ready_monitor_t *monitor_)
 
     void *monitor = monitor_->monitor;
     delivery_ready_state_t *state = monitor_->state;
+    monitor_->dispatch.stop ();
     if (monitor)
         (void) zlink_monitor_close (&monitor);
     delete state;
