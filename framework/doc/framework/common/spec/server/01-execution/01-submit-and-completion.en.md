@@ -449,7 +449,7 @@ framework-internal path. Core send-completion notification drives the
 completion, so the framework doesn't wrap it in a separate executor or
 offload. The binding terminal names, return types, and flags contract
 themselves are owned by
-[the binding routed-transfer contract and asynchronous completion surface policy](../../../../../../bindings/doc/spec/async-coroutine-policy.en.md)
+[the binding routed-transfer contract and asynchronous completion surface policy](../../../../../../../bindings/doc/spec/async-coroutine-policy.en.md)
 — this section owns only the framework's consumption rule.
 
 The following two cases legitimately use the sync terminal.
@@ -459,7 +459,7 @@ The following two cases legitimately use the sync terminal.
   terminal is the only surface of that contract.
 - **Implementing a public synchronous contract** — the internal
   implementation of a public synchronous surface whose preservation
-  [State Ownership And Lanes §5](06-state-ownership-and-lanes.en.md#completion-guarantees-before-return)
+  [State Ownership And Lanes §5](06-state-ownership-and-lanes.en.md#completion-before-return)
   requires. Waiting at HWM saturation is then an observable property of
   that public contract, not a violation.
 
