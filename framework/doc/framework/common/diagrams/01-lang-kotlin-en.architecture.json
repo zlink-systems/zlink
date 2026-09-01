@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ZLink layers — Kotlin",
+    "subtitle": "app → Framework → 4 axes (channel · pubsub · SPOT · STREAM) → binding",
+    "output": "01-lang-kotlin-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      40,
+      150
+    ],
+    "cols": 4,
+    "gapX": 96,
+    "gapY": 70,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "app",
+      "type": "frontend",
+      "label": "Spring Boot app",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "fw",
+      "type": "backend",
+      "label": "ZLink Framework",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "cm",
+      "type": "backend",
+      "label": "channel messaging",
+      "sublabel": "request · send",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "ps",
+      "type": "messagebus",
+      "label": "PUB / SUB",
+      "sublabel": "event fan-out",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "sp",
+      "type": "backend",
+      "label": "SPOT",
+      "sublabel": "room·stage·zone·actor",
+      "row": 2,
+      "col": 2
+    },
+    {
+      "id": "st",
+      "type": "backend",
+      "label": "STREAM",
+      "sublabel": "external client connector",
+      "row": 3,
+      "col": 2
+    },
+    {
+      "id": "zb",
+      "type": "external",
+      "label": "zlink binding",
+      "sublabel": "Spring Boot",
+      "row": 2,
+      "col": 3
+    }
+  ],
+  "connections": [
+    {
+      "from": "app",
+      "to": "fw",
+      "variant": "emphasis"
+    },
+    {
+      "from": "fw",
+      "to": "cm",
+      "variant": "default"
+    },
+    {
+      "from": "fw",
+      "to": "ps",
+      "variant": "default"
+    },
+    {
+      "from": "fw",
+      "to": "sp",
+      "variant": "default"
+    },
+    {
+      "from": "fw",
+      "to": "st",
+      "variant": "default"
+    },
+    {
+      "from": "cm",
+      "to": "zb",
+      "variant": "default"
+    },
+    {
+      "from": "ps",
+      "to": "zb",
+      "variant": "default"
+    },
+    {
+      "from": "sp",
+      "to": "zb",
+      "variant": "default"
+    },
+    {
+      "from": "st",
+      "to": "zb",
+      "variant": "default"
+    }
+  ]
+}

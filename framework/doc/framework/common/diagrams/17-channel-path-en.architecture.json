@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "channel path — direct call, no sidecar",
+    "subtitle": "order-service calls payment-service directly with RequestToChannel, and the framework distributes the peer",
+    "output": "17-channel-path-en.html",
+    "column_fit": "spread",
+    "viewBox": [
+      660,
+      640
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "participants": [
+    {
+      "id": "A",
+      "type": "frontend",
+      "label": "order-service"
+    },
+    {
+      "id": "B",
+      "type": "frontend",
+      "label": "payment-service"
+    }
+  ],
+  "messages": [
+    {
+      "from": "A",
+      "to": "B",
+      "y": 160,
+      "label": "RequestToChannel(...)",
+      "variant": "default",
+      "note": "channel location resolved via a location-store row"
+    },
+    {
+      "from": "B",
+      "to": "A",
+      "y": 208,
+      "label": "reply",
+      "variant": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Direct call",
+      "items": [
+        "Full call: RequestToChannel(commerce, payments, Charge) — the framework distributes the peer.",
+        "order-service calls payment-service directly, with no sidecar. The location is resolved via a location-store row, and the framework distributes the peer."
+      ]
+    }
+  ]
+}

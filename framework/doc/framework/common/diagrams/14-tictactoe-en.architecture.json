@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "TicTacToe — the smallest real-time game server",
+    "subtitle": "manual peer connection · client STREAMs directly to Play",
+    "output": "14-tictactoe-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      160
+    ],
+    "cols": 4,
+    "gapX": 96,
+    "gapY": 96,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "client",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "A1",
+      "type": "external",
+      "label": "Api A",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "A2",
+      "type": "external",
+      "label": "Api B",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "P1",
+      "type": "backend",
+      "label": "Play A",
+      "sublabel": "session · actor · room",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "P2",
+      "type": "backend",
+      "label": "Play B",
+      "sublabel": "session · actor · room",
+      "row": 2,
+      "col": 2
+    },
+    {
+      "id": "LS",
+      "type": "external",
+      "label": "Location Store",
+      "row": 1,
+      "col": 3
+    }
+  ],
+  "connections": [
+    {
+      "from": "C",
+      "to": "A1",
+      "label": "HTTP create room",
+      "variant": "default"
+    },
+    {
+      "from": "C",
+      "to": "A2",
+      "variant": "dashed"
+    },
+    {
+      "from": "A1",
+      "to": "P1",
+      "label": "create room Spot",
+      "variant": "default"
+    },
+    {
+      "from": "A2",
+      "to": "P2",
+      "variant": "dashed"
+    },
+    {
+      "from": "C",
+      "to": "P1",
+      "label": "STREAM direct connect",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "top"
+    },
+    {
+      "from": "C",
+      "to": "P2",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "bottom"
+    },
+    {
+      "from": "P1",
+      "to": "P2",
+      "label": "manual peer · milestone LM",
+      "variant": "default",
+      "labelDy": 40
+    },
+    {
+      "from": "P1",
+      "to": "LS",
+      "label": "location lookup",
+      "variant": "dashed"
+    },
+    {
+      "from": "P2",
+      "to": "LS",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Connection flow",
+      "items": [
+        "With no separate Session server, each Play owns the stream session · actor · Entry Spot · room Spot together",
+        "client creates a room over HTTP via Api → Api creates a room User Spot on Play",
+        "client connects directly to each Play by STREAM using the Play endpoints it got from Api (emphasis)",
+        "the dashed path to Api B / Play B is the alternate route · the second player's share"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "peer · location",
+      "items": [
+        "Play A ↔ Play B is a manual peer connection (bidirectional) — publishes the win-count milestone by Logical Multicast",
+        "room·actor location is resolved by Location Store lookup (dashed) — only the connection between nodes is manual, object location is resolved by the store"
+      ]
+    }
+  ]
+}

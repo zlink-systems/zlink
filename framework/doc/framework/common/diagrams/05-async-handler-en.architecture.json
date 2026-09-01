@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Async handler — the worker handles other work while suspended",
+    "subtitle": "while H1 gives up the thread on await, the worker runs H2 first, and H1 resumes when the response arrives",
+    "output": "05-async-handler-en.html",
+    "column_fit": "spread",
+    "viewBox": [
+      1040,
+      680
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "participants": [
+    {
+      "id": "W",
+      "type": "messagebus",
+      "label": "worker thread"
+    },
+    {
+      "id": "H1",
+      "type": "backend",
+      "label": "Handler A",
+      "sublabel": "async"
+    },
+    {
+      "id": "CH",
+      "type": "external",
+      "label": "Play channel"
+    },
+    {
+      "id": "H2",
+      "type": "backend",
+      "label": "Handler B",
+      "sublabel": "async"
+    }
+  ],
+  "messages": [
+    {
+      "from": "W",
+      "to": "H1",
+      "y": 160,
+      "label": "run HandleAsync()",
+      "variant": "default"
+    },
+    {
+      "from": "H1",
+      "to": "CH",
+      "y": 220,
+      "label": "await Request(...) → suspend, release thread",
+      "variant": "default"
+    },
+    {
+      "from": "W",
+      "to": "H2",
+      "y": 300,
+      "label": "worker moves to the next work — run HandleAsync()",
+      "variant": "default"
+    },
+    {
+      "from": "H2",
+      "to": "W",
+      "y": 360,
+      "label": "return (done)",
+      "variant": "return"
+    },
+    {
+      "from": "CH",
+      "to": "H1",
+      "y": 420,
+      "label": "response arrives → resume",
+      "variant": "return"
+    },
+    {
+      "from": "H1",
+      "to": "W",
+      "y": 480,
+      "label": "return (done)",
+      "variant": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Non-blocking interleaving",
+      "items": [
+        "When H1 suspends at the await Request point, only that flow of execution pauses and the thread returns to the pool — it holds no thread.",
+        "The worker immediately picks up the next work (H2) and runs it, and H2 finishes before H1's response arrives."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "resume",
+      "items": [
+        "When the Play channel's response arrives, H1 resumes on the spot and returns.",
+        "So a handful of workers handle huge numbers of concurrent requests with code that reads top to bottom, no callbacks. Blocking with .Result keeps the thread occupied, so it's forbidden inside a handler."
+      ]
+    }
+  ]
+}

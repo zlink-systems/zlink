@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Host lifecycle — configure · serving · stopping",
+    "subtitle": "the framework runtime is tied to host start/stop as its lifecycle service",
+    "output": "12-lifecycle-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 5,
+    "gapX": 84,
+    "gapY": 82,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "start",
+      "type": "external",
+      "label": "start",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "configure",
+      "type": "frontend",
+      "label": "Configuration",
+      "sublabel": "AddZLinkFramework",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "serving",
+      "type": "frontend",
+      "label": "Serving",
+      "sublabel": "channel·SPOT·stream",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "stopping",
+      "type": "frontend",
+      "label": "Stopping",
+      "sublabel": "runtime cleanup",
+      "row": 0,
+      "col": 3
+    },
+    {
+      "id": "end",
+      "type": "external",
+      "label": "end",
+      "row": 0,
+      "col": 4
+    }
+  ],
+  "boundaries": [],
+  "connections": [
+    {
+      "from": "start",
+      "to": "configure",
+      "variant": "default",
+      "label": "CreateBuilder()"
+    },
+    {
+      "from": "configure",
+      "to": "serving",
+      "variant": "default",
+      "label": "app.Run()"
+    },
+    {
+      "from": "serving",
+      "to": "stopping",
+      "variant": "default",
+      "label": "host shutdown"
+    },
+    {
+      "from": "stopping",
+      "to": "end",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Configuration phase",
+      "items": [
+        "Declare Services / AddZLinkFramework and channel / SPOT / stream / registry before app.Run(). A bad configuration is rejected as an exception at host startup."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Serving",
+      "items": [
+        "The stretch where channel·SPOT·stream dispatch runs."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Stopping",
+      "items": [
+        "Once the host shutdown signal arrives, it goes down in the order hosted service stop → runtime cleanup."
+      ]
+    }
+  ]
+}

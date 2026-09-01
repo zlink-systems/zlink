@@ -21,14 +21,8 @@ Channel messaging is the framework's most fundamental axis. It covers these inte
 > application never handles these directly** (the framework auto-maps them by channel
 > kind).
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  CL["caller<br/>route client / fanout client"]
-  CL -->|"Request: needs a response"| H1["server handler -> returns a response"]
-  CL -->|"Send: one-way, no response"| H2["server handler (no response)"]
-  CL -->|"Publish(topic): to many"| SUB["subscriber 1 / 2 / ... / N"]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/05-messaging-kinds-en.html" title="Three call kinds — Request · Send · Publish" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-messaging-kinds-en.html" target="_blank">↗ View larger</a></p>
 
 ## 0. Use As A gRPC Replacement
 
@@ -208,27 +202,8 @@ route mesh channel just adds a name on top of that socket.
 You connect to the mesh with one MeshNode socket, and the channel name is the logical
 grouping on top of it that decides "who receives this request."
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  subgraph ORD["channel: orders"]
-    direction TB
-    A1["node A1"]:::server
-    A2["node A2"]:::server
-  end
-  B["node B<br/>orders Client<br/>billing Client<br/>1 MeshNode socket"]:::client
-  subgraph BIL["channel: billing"]
-    direction TB
-    C1["node C1"]:::server
-    C2["node C2"]:::server
-  end
-  B <-->|"MeshNode socket"| A1
-  B <-->|"MeshNode socket"| A2
-  B <-->|"MeshNode socket"| C1
-  B <-->|"MeshNode socket"| C2
-  classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-```
+<iframe class="zlink-diagram" src="/common/diagrams/05-route-mesh-en.html" title="Route mesh channel — one connection, channels are names on top" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-route-mesh-en.html" target="_blank">↗ View larger</a></p>
 
 The boxes are groups tied together by name, not sockets. Calling `orders` has select-one
 pick one of A1/A2 inside that box, and registering ten more channels doesn't add any
@@ -250,27 +225,8 @@ substitute for each other.**
 Using only manual endpoints means you don't need a location store. **If auto-discovery is
 enabled and there's no store, startup fails before the listener binds.**
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  subgraph AUTH["channel: auth"]
-    direction TB
-    Y1["process Y"]:::server
-    Z1["process Z"]:::server
-  end
-  X["process X<br/>auth Client<br/>report Client<br/>runtime per channel"]:::client
-  subgraph REP["channel: report"]
-    direction TB
-    Z2["process Z"]:::server
-    W2["process W"]:::server
-  end
-  X -->|"auth connection"| Y1
-  X -->|"auth connection"| Z1
-  X -->|"report connection"| Z2
-  X -->|"report connection"| W2
-  classDef server fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-```
+<iframe class="zlink-diagram" src="/common/diagrams/05-clientserver-en.html" title="ClientServer channel — an independent runtime per channel" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-clientserver-en.html" target="_blank">↗ View larger</a></p>
 
 `auth` and `report` don't share connection targets or lifetimes. Even if the same process Z
 participates in both channels, each channel runtime manages its connection to Z separately.
@@ -391,13 +347,8 @@ Conversely, a **fanout channel** (called **Classic fanout** in the spec) opens a
 independent pair of PUB/SUB sockets by itself. Regardless of Spot or MeshNode, one
 publisher delivers to every connected subscriber.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-graph LR
-    P["publisher"] --> S1["subscriber A"]
-    P --> S2["subscriber B"]
-    P --> S3["subscriber C"]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/05-publish-fanout-en.html" title="Classic fanout — one publisher to every connected subscriber" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-publish-fanout-en.html" target="_blank">↗ View larger</a></p>
 
 For both, **publish completing doesn't guarantee delivery.** A publish call completing
 means the send was locally accepted for transport, not confirmation that a subscriber
@@ -959,28 +910,8 @@ A channel handler runs in a per-channel asynchronous receive loop. When a handle
 wait point, only that flow of execution pauses -- the thread returns to the pool to handle
 other work.
 
-```mermaid
-sequenceDiagram
-    participant W as worker thread
-    participant H1 as Handler A (async)
-    participant CH as Play channel
-    participant H2 as Handler B (async)
-
-    W->>H1: run HandleAsync()
-    activate H1
-    H1->>CH: await Request(...).Async()
-    deactivate H1
-    Note over H1: suspend -- waiting for response (holds no thread)
-    Note over W: the worker moves to the next work immediately
-    W->>H2: run HandleAsync()
-    activate H2
-    H2-->>W: return (done)
-    deactivate H2
-    CH-->>H1: response arrives -> resume
-    activate H1
-    H1-->>W: return (done)
-    deactivate H1
-```
+<iframe class="zlink-diagram" src="/common/diagrams/05-async-handler-en.html" title="Async handler — the worker handles other work while suspended" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-async-handler-en.html" target="_blank">↗ View larger</a></p>
 
 So without callbacks, **code that reads top to bottom** lets a handful of workers handle
 huge numbers of concurrent requests. Blocking with `.Result` keeps that thread occupied, so
@@ -1773,31 +1704,8 @@ the server with the larger value is picked proportionally more often. `0` means 
 connection but exclude it from new-request candidates," and `100` is the default, normal
 serving value.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    subgraph C ["client application"]
-        R["ZLink channel runtime<br/>picks new-request target"]
-    end
-
-    subgraph A ["server A"]
-        AR["runtime<br/>Weight = 100"]
-        AH["typed handler"]
-    end
-    subgraph B ["server B"]
-        BR["runtime<br/>Weight = 50"]
-        BH["typed handler"]
-    end
-    subgraph D ["server C"]
-        DR["runtime<br/>Weight = 0<br/>drain"]
-        DH["typed handler"]
-    end
-
-    R -->|"picked more often"| AR --> AH
-    R -->|"picked less often"| BR --> BH
-    R -. "excluded from new-request candidates" .-> DR
-    DR --> DH
-```
+<iframe class="zlink-diagram" src="/common/diagrams/05-drain-weight-en.html" title="Operational drain / restore — peer weight picks the target" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-drain-weight-en.html" target="_blank">↗ View larger</a></p>
 
 === "C#/.NET"
 
@@ -2273,14 +2181,8 @@ startup.**
     ```
 
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-graph LR
-    C["calling node<br/>channel client"] -->|"request 1"| A["processing node A<br/>:5600"]
-    C -->|"request 2"| B["processing node B<br/>:5601"]
-    C -->|"request 3 (A again)"| A
-    C -.->|"store row auto-reflected<br/>when a node is added"| D["processing node C<br/>:5602"]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/05-node-select-en.html" title="Round-robin distribution · adding a node reflected automatically" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-node-select-en.html" target="_blank">↗ View larger</a></p>
 
 If a specific entity (order ID, user ID) always needs to be handled by the same execution
 unit, use a Spot or Actor instead of a channel ([06-spot](06-spot.en.md)).
@@ -2473,12 +2375,8 @@ A business message uses the target's logical address.
 The Framework picks the current owner and an eligible node, so the application doesn't hold
 onto a Node RID.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-graph LR
-    O["operations"] -->|"target node rid"| N["managed node"]
-    A["application"] -->|"actor id / spot id / channel"| F["Framework routing"]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/05-addressing-en.html" title="Addressing — operations vs application" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/05-addressing-en.html" target="_blank">↗ View larger</a></p>
 
 The tie-in with SPOT continues in [06-spot](06-spot.en.md).
 
@@ -2695,3 +2593,7 @@ The tie-in with SPOT continues in [06-spot](06-spot.en.md).
 - Topology and handler registration:
   [per-language topology public contract](../../../common/spec/server/languages/README.en.md)
 - The full scenario: [common samples](../../../common/sample/README.en.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

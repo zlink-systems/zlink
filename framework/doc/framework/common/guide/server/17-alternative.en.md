@@ -146,14 +146,8 @@ infrastructure.
 L7 distribution splits work by looking at each individual request, not the connection — a
 mesh sidecar or client-side LB plays this role.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  C2["client"] -->|"distributes request by request"| L7["L7 distribution: mesh sidecar or client-side LB"]
-  L7 -->|"req"| A2["server A"]
-  L7 -->|"req"| B2["server B"]
-  L7 -->|"req"| D2["server C"]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/17-l7-distribute-en.html" title="L7 distribution — split request by request" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-l7-distribute-en.html" target="_blank">↗ View larger</a></p>
 
 In other words, "using gRPC" really means running **gRPC + an L7 LB (usually a mesh) +
 service-location lookup + an event broker + a proto pipeline** together.
@@ -211,28 +205,11 @@ policy, you keep them as-is.
 
 ### 5.3 The Path One Call Takes
 
-```mermaid
-sequenceDiagram
-  autonumber
-  participant A as order-service
-  participant SA as Envoy local
-  participant SB as Envoy remote
-  participant B as payment-service
-  A->>SA: gRPC Charge
-  SA->>SB: location lookup + L7 LB, then mTLS HTTP/2
-  SB->>B: forward
-  B-->>A: reply (sidecar return path)
-```
+<iframe class="zlink-diagram" src="/common/diagrams/17-sidecar-path-en.html" title="Sidecar path — Envoy local to Envoy remote, two hops" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-sidecar-path-en.html" target="_blank">↗ View larger</a></p>
 
-```mermaid
-sequenceDiagram
-  autonumber
-  participant A as order-service
-  participant B as payment-service
-  Note over A: channel location resolved via a location-store row
-  A->>B: RequestToChannel(commerce, payments, Charge) — the framework distributes the peer
-  B-->>A: reply
-```
+<iframe class="zlink-diagram" src="/common/diagrams/17-channel-path-en.html" title="channel path — direct call, no sidecar" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-channel-path-en.html" target="_blank">↗ View larger</a></p>
 
 ### 5.4 Summary Of What Collapses
 
@@ -394,3 +371,7 @@ belongs to
 - [Scaling Microservices: Lessons from Netflix, Uber, Amazon, and Spotify](https://www.netguru.com/blog/scaling-microservices)
 - [Orleans overview (Microsoft Learn)](https://learn.microsoft.com/en-us/dotnet/orleans/overview)
 - [The impact of the Akka License Change (Coralogix)](https://coralogix.com/blog/akka-license-change/)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

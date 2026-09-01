@@ -429,7 +429,7 @@ Framework runtime이 binding의 HWM-managed send 계열(PAIR send, routed send,
 표면이지 framework 내부 경로가 아니다. Core send-completion 통지가 완료를
 구동하므로 framework는 별도 executor나 offload로 감싸지 않는다. Binding terminal의
 이름·반환 타입·flags 계약 자체는
-[바인딩 routed 전송 계약과 비동기 완료 표면 정책](../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md)이
+[바인딩 routed 전송 계약과 비동기 완료 표면 정책](../../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md)이
 소유한다 — 이 절은 framework의 소비 규칙만 소유한다.
 
 다음 두 경우는 sync terminal 사용이 정당하다.

@@ -87,39 +87,8 @@ roughly four patterns. Boxes like login/auth, gateway, and DB cache show up repe
 matter which pattern — but since there's no common framework backing them, a team picks its
 genre's pattern and rebuilds that structure from the socket up.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart TB
-  subgraph row1[" "]
-    direction LR
-    subgraph mmo["① Zone-Sharded — MMORPG"]
-      direction LR
-      C1["client"] --> GW["gateway"] --> Z1["zone server A"]
-      GW --> Z2["zone server B"]
-      Z1 <-.->|"hand off on boundary cross<br/>(own protocol)"| Z2
-    end
-    subgraph rm["② Lobby + Room — casual, MO, board games"]
-      direction LR
-      C2["client"] --> LO["lobby / matching"] --> R1["room servers<br/>(per-room state)"]
-    end
-    mmo ~~~ rm
-  end
-  subgraph row2[" "]
-    direction LR
-    subgraph ded["③ Matchmaker + Dedicated — session-based"]
-      direction LR
-      C3["client"] --> MM["matchmaker<br/>(ticket queue)"] --> FL["dedicated server fleet<br/>(process assigned per match)"]
-    end
-    subgraph act["④ Distributed Actor Service — meta/social backend"]
-      direction LR
-      C4["client"] --> AP["API server<br/>(stateless front-end)"] --> AC["actor cluster<br/>(per-player/guild state,<br/>location-transparent across nodes)"]
-    end
-    ded ~~~ act
-  end
-  row1 ~~~ row2
-  style row1 fill:none,stroke:none
-  style row2 fill:none,stroke:none
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-arch-existing-en.html" title="Game backend patterns — existing approach" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-arch-existing-en.html" target="_blank">↗ View larger</a></p>
 
 - **① Zone-sharding.** The world is split into geographic regions, one server (node) owns
   each region, and when a character crosses a boundary the simulation hands off to the
@@ -180,41 +149,8 @@ There's no need to rebuild from the socket for each one.
 Where the "existing approaches" diagram above split into four, here's how each approach
 assembles with ZLink, in the same spots.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart TB
-  subgraph zrow1[" "]
-    direction LR
-    subgraph zmmo["① Zone-Sharding — ZLink"]
-      direction LR
-      ZC1["client"] --> ZGW1["API server<br/>(route client)"] --> ZRM1["zone server A<br/>(RouteMesh node)"]
-      ZGW1 --> ZRM2["zone server B<br/>(RouteMesh node)"]
-      ZRM1 <-.->|"cross-node actor relocation<br/>on boundary cross"| ZRM2
-    end
-    subgraph zrm["② Lobby + Room — ZLink"]
-      direction LR
-      ZC2["client"] --> ZES["Entry Spot<br/>(entry/matching)"] --> ZRS["room spot<br/>(GetOrCreate)"]:::spot
-    end
-    zmmo ~~~ zrm
-  end
-  subgraph zrow2[" "]
-    direction LR
-    subgraph zded["③ Matchmaker + Dedicated — ZLink"]
-      direction LR
-      ZC3["client"] --> ZMM["channel handler<br/>(matching)"] --> ZRS2["room spot<br/>(GetOrCreate)"]:::spot
-      ZC3 -.->|"connect directly over STREAM after matching"| ZRS2
-    end
-    subgraph zact["④ Actor Service — ZLink"]
-      direction LR
-      ZC4["client"] --> ZAPI4["API server"] --> ZIS["Instance Spot<br/>(entity id, cold activation)"]:::spot
-    end
-    zded ~~~ zact
-  end
-  zrow1 ~~~ zrow2
-  style zrow1 fill:none,stroke:none
-  style zrow2 fill:none,stroke:none
-  classDef spot fill:#e8f5e9,stroke:#2e7d32,stroke-width:4px,color:#1b5e20
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-arch-zlink-en.html" title="Game backend patterns — ZLink approach" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-arch-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 Green (bold border) is the SPOT-family primitive. This is exactly where it contrasts with
 the "existing approaches" diagram above — each approach used to need its own infrastructure
@@ -327,48 +263,14 @@ execution unit.
 
 **The existing approach** — lock acquire/release makes a round trip on every request.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    Client["Client app"]
-    LB["L7 LB / gateway"]:::infra
-    Api["API servers ×N<br/>(stateless)"]:::app
-    Lock["Redis distributed lock<br/>(per-guild-id lock)"]:::extra
-    DB[("Guild state DB")]:::infra
-
-    Client -- "join, donate, etc. over HTTP" --> LB --> Api
-    Api -- "① acquire lock" --> Lock
-    Api -- "② load-modify-store" --> DB
-    Api -- "③ release lock" --> Lock
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-    classDef extra fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#bf360c
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-guild-existing-en.html" title="Guild state change — existing approach" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-guild-existing-en.html" target="_blank">↗ View larger</a></p>
 
 **The ZLink approach** — the lock disappears, and the guild id itself becomes the spot
 address the request will arrive at.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    Client2["Client app"]
-    LB2["L7 LB / gateway"]:::infra
-    Api2["API servers ×N<br/>ASP.NET Core + ZLink<br/>route client"]:::app
-    Guild["GuildSpot ×guild count<br/>(Instance Spot)<br/>guild-id owner · serial execution"]:::spot
-    DB2[("Guild state DB")]:::infra
-    Store["location store<br/>(descriptor rows)"]:::infra
-
-    Client2 -- "join, donate, etc. over HTTP" --> LB2 --> Api2
-    Api2 -- "owner routing by guild id (direct)" --> Guild
-    Guild -- "saves at a point that fits business rules" --> DB2
-    Api2 -.->|"address resolution"| Store
-    Guild -.->|"registration"| Store
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-    classDef spot fill:#e8f5e9,stroke:#2e7d32,stroke-width:4px,color:#1b5e20
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-guild-zlink-en.html" title="Guild state change — ZLink approach" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-guild-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 A request for the same guild always passes through the same GuildSpot's queue, so the second
 request is only processed once the first finishes — it's not that another request is blocked
@@ -425,56 +327,14 @@ shows the difference right in the picture.
 **The existing approach** — the components for the real-time feature (orange) add up to as
 much as the main body.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    Client["Client app"]
-    LB["L7 LB / gateway"]:::infra
-    Api["API servers ×N<br/>(ASP.NET Core, stateless)"]:::app
-    Dom["Domain servers ×N<br/>(gRPC server)"]:::app
-    SD["service discovery<br/>(xDS / Consul)"]:::infra
-    SLB["sticky LB"]:::extra
-    WS["WebSocket servers ×N"]:::extra
-    RP["Redis pub/sub<br/>(real-time fan-out detour)"]:::extra
-    RL["Redis distributed lock<br/>(order/conversation ordering)"]:::extra
-
-    Client -- "HTTP" --> LB --> Api
-    Api -- "gRPC + mesh sidecar" --> Dom
-    Api -.->|"location lookup"| SD
-    Dom -.->|"registration"| SD
-    Client -- "real-time connection" --> SLB --> WS
-    WS <--> RP
-    RP <--> Api
-    Api -.-> RL
-    Dom -.-> RL
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-    classDef extra fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#bf360c
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing-en.html" title="Existing approach — web service + real-time" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-delivery-existing-en.html" target="_blank">↗ View larger</a></p>
 
 **The ZLink approach** — every orange piece disappears, leaving one location store that
 provides node/actor/spot location information.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    Client2["Client app"]
-    LB2["L7 LB / gateway<br/>(HTTP unchanged)"]:::infra
-    Api2["API servers ×N<br/>ASP.NET Core + ZLink<br/>route client"]:::app
-    Dom2["Domain servers ×N<br/>ASP.NET Core + ZLink<br/>SPOT(order/conversation) · STREAM"]:::spot
-    Store["location store<br/>(descriptor rows)"]:::infra
-
-    Client2 -- "HTTP" --> LB2 --> Api2
-    Client2 -- "direct STREAM connect" --> Dom2
-    Api2 -- "channel request/send (direct)" --> Dom2
-    Api2 -.->|"address resolution"| Store
-    Dom2 -.->|"registration"| Store
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-    classDef spot fill:#e8f5e9,stroke:#2e7d32,stroke-width:4px,color:#1b5e20
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink-en.html" title="ZLink approach — web service + real-time" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-delivery-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 Sticky LB, WebSocket server, pub/sub detour, distributed lock, mesh/discovery — five pieces
 shrink down to **one location store.** Inter-server calls and real-time delivery all connect
@@ -540,72 +400,16 @@ pieces right in the picture.
 **The existing approach** — the pipeline pieces for ordered processing (orange) add up to as
 much as the main body.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    Client["Client app"]
-    LB["L7 LB / gateway<br/>(K8s Ingress)"]:::infra
-    Api["API servers ×N<br/>(stateless)"]:::app
-    LOG["Kafka log — owns ordering on the order-processing path<br/>(OrderId key partition)"]:::extra
-    CG["Order-processing consumers ×N<br/>consumer group · offset · rebalance<br/>version check · dedupe"]:::extra
-    SVC["LB for inter-server calls<br/>(K8s Service · service discovery)"]:::extra
-    INV["Inventory · payment services ×N"]:::app
-    CACHE["Cache<br/>(avoiding repeated reads)"]:::extra
-    DB[("Order state DB")]:::infra
-    RM[("Read model for queries")]:::extra
-    JOB["Lag monitoring ·<br/>resync job"]:::extra
-
-    Client -- "order HTTP" --> LB --> Api
-    Api -- "event append" --> LOG
-    LOG -- "the same OrderId, same partition" --> CG
-    CG -- "load-modify-store per event" --> DB
-    CG <-.-> CACHE
-    CACHE -.miss.-> DB
-    CG -- "reserve inventory · approve payment<br/>(HTTP/gRPC)" --> SVC --> INV
-    CG -- "update" --> RM
-    Client -- "query HTTP" --> LB
-    Api -.-> RM
-    JOB -.reconcile.-> DB
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-    classDef extra fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#bf360c
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-order-existing-en.html" title="Order processing — existing approach" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-order-existing-en.html" target="_blank">↗ View larger</a></p>
 
 **The ZLink approach** — this doesn't replace Kafka. **On the order-processing path**, the
 pipeline pieces (orange) disappear, and Kafka stays in its natural role (gray) — propagating
 confirmed facts to independent systems and preserving events that need replay, as a durable
 log.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    Client2["Client app"]
-    LB2["L7 LB / gateway<br/>(K8s Ingress — HTTP ingress unchanged)"]:::infra
-    Api2["API servers ×N<br/>ASP.NET Core + ZLink<br/>route client"]:::app
-    Spot["OrderWorkflow servers ×N<br/>OrderWorkflowSpot<br/>(OrderId owner · serial execution · hot state)"]:::spot
-    INV2["Inventory · payment services ×N<br/>(ZLink channel member)"]:::app
-    DB2[("Order state DB")]:::infra
-    LOG2[("Kafka log — remaining role:<br/>external system propagation · replay preservation")]:::infra
-    EXT["Settlement · analytics · other-team systems<br/>(independent consumers)"]:::infra
-    Store["location store<br/>(descriptor rows)"]:::infra
-
-    Client2 -- "order HTTP" --> LB2 --> Api2
-    Api2 -- "owner routing by OrderId (direct)" --> Spot
-    Spot -- "call by channel name (direct)<br/>reserve inventory · approve payment" --> INV2
-    Spot -- "saves at a point that fits business rules" --> DB2
-    Spot -- "publishes confirmed facts" --> LOG2
-    LOG2 --> EXT
-    Client2 -- "query HTTP" --> LB2
-    Api2 -.query.-> DB2
-    Api2 -.->|"address resolution"| Store
-    Spot -.->|"address resolution"| Store
-    INV2 -.->|registration| Store
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-    classDef spot fill:#e8f5e9,stroke:#2e7d32,stroke-width:4px,color:#1b5e20
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-order-zlink-en.html" title="Order processing — ZLink approach" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-order-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 The key thing across the two pictures is that Kafka's color changes. Kafka (orange), which
 used to own ordering **inside** the processing path, moves **outside** the processing path
@@ -805,15 +609,8 @@ Every option settable at each surface, with its default, is collected in
 
 ## 4. The Four Integration Axes, Summarized
 
-```mermaid
-flowchart LR
-  App[ASP.NET Core app] --> FW[ZLink Framework]
-  FW --> CM[channel messaging<br/>request · send]
-  FW --> PS[PUB / SUB<br/>event fan-out]
-  FW --> SP[SPOT<br/>room·stage·zone·actor]
-  FW --> ST[STREAM<br/>external client connector]
-  CM & PS & SP & ST --> ZB[zlink .NET binding]
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-lang-dotnet-en.html" title="ZLink layers — .NET" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-lang-dotnet-en.html" target="_blank">↗ View larger</a></p>
 
 | Axis | What the user sees | Guide chapter |
 | --- | --- | --- |
@@ -830,36 +627,8 @@ flowchart LR
 An example showing how each feature fits together. Each feature's own chapter zooms into
 part of this map.
 
-```mermaid
-flowchart LR
-    Client["Client app"]
-    subgraph Api["Entry server (e.g. Api)"]
-        HTTP["ASP.NET Core HTTP<br/>POST /games"]:::infra
-        ApiC["route client"]:::channel
-    end
-    subgraph Core["Domain server (e.g. Play)"]
-        CoreS["MeshNode channel member"]:::channel
-        SpotN["SPOT node<br/>(entry + room spots)"]:::spot
-        StreamN["stream node"]:::stream
-        ActorG["session relay"]:::actor
-    end
-    Store["Location store<br/>(descriptor rows)"]:::infra
-
-    Client -- "1 HTTP request" --> HTTP
-    HTTP --> ApiC
-    ApiC -- "2 channel request" --> CoreS
-    CoreS --> SpotN
-    Client -- "3 stream real-time connect" --> StreamN
-    StreamN -- "relay" --> ActorG --> SpotN
-    ApiC -.->|"address resolution"| Store
-    CoreS -.->|registration| Store
-
-    classDef channel fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef spot fill:#e8f5e9,stroke:#2e7d32,color:#000000
-    classDef actor fill:#fff8e1,stroke:#f9a825,color:#000000
-    classDef stream fill:#f3e5f5,stroke:#6a1b9a,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/01-topology-en.html" title="Overall topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-topology-en.html" target="_blank">↗ View larger</a></p>
 
 - **Entry server** — receives an external request over ASP.NET Core HTTP and delegates to
   the domain server.
@@ -951,3 +720,7 @@ The guide uses the following notation consistently throughout.
 - [spec/interfaces index](../../../common/spec/server/languages/dotnet/interfaces/README.en.md) — The formal contract (interface catalog)
 
 ---
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

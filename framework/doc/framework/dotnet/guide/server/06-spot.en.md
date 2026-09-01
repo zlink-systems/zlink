@@ -157,26 +157,8 @@ decided by the Spot kind and its execution mode.
 | User Spot `PerActor` | Serializes separately per Actor and per Spot lane. Different lanes can run concurrently | Each Actor owns its own. Put state shared across lanes in external storage |
 | Instance Spot | Serializes the Spot queue's direct handlers and timer. There's no Actor queue | The Spot instance owns it |
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-  subgraph SW["User Spot -- SpotWide (default)"]
-    direction LR
-    P1["direct packet<br/>timer"] --> SQ1["Spot queue"]
-    A1["Actor A payload"] --> AQ1["Actor A queue"]
-    B1["Actor B payload"] --> BQ1["Actor B queue"]
-    SQ1 --> G1{{"common gate<br/>runs only one callback"}}
-    AQ1 --> G1
-    BQ1 --> G1
-  end
-  subgraph PA["Entry Spot / User Spot PerActor"]
-    direction LR
-    P2["direct packet<br/>timer"] --> SQ2["Spot queue"] --> R2["runs"]
-    A2["Actor A payload"] --> AQ2["Actor A queue"] --> R2A["runs"]
-    B2["Actor B payload"] --> BQ2["Actor B queue"] --> R2B["runs"]
-  end
-  SW ~~~ PA
-```
+<iframe class="zlink-diagram" src="/common/diagrams/06-spot-en.html" title="The Spot execution model — concurrency scope" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/06-spot-en.html" target="_blank">↗ View larger</a></p>
 
 The default is **`SpotWide`**, and most cases use this mode. Because every callback for that
 Spot is serialized through one common gate, the Spot instance and its member Actors can
@@ -899,3 +881,7 @@ Follow these rules.
 - Actor creation and Spot relocation: [Actor & Spot Hosting](07-actor-spot.en.md)
 - Session binding: [Session Actor Dispatch](08-actor-session.en.md)
 - Location Store configuration: [Location](10-location.en.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

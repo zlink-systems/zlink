@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Relocation move unit per execution mode",
+    "subtitle": "SpotWide commits as one aggregate · PerActor commits Actor by Actor",
+    "output": "12-relocation-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 96,
+    "gapY": 82,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "SW_P",
+      "type": "backend",
+      "label": "actor P",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "SW_AGG",
+      "type": "backend",
+      "label": "User Spot",
+      "sublabel": "room-42",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "SW_Q",
+      "type": "backend",
+      "label": "actor Q",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "SW_T",
+      "type": "external",
+      "label": "target node",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "PA_R",
+      "type": "backend",
+      "label": "actor R",
+      "row": 3,
+      "col": 1
+    },
+    {
+      "id": "PA_T",
+      "type": "external",
+      "label": "target node",
+      "row": 4,
+      "col": 2
+    },
+    {
+      "id": "PA_S",
+      "type": "backend",
+      "label": "actor S",
+      "row": 5,
+      "col": 1
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "SpotWide User Spot — moves as one aggregate (room-42)",
+      "wraps": [
+        "SW_P",
+        "SW_AGG",
+        "SW_Q",
+        "SW_T"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Entry Spot · PerActor — moves Actor by Actor (Spot shell)",
+      "wraps": [
+        "PA_R",
+        "PA_S",
+        "PA_T"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "SW_P",
+      "to": "SW_AGG",
+      "variant": "default"
+    },
+    {
+      "from": "SW_Q",
+      "to": "SW_AGG",
+      "variant": "default"
+    },
+    {
+      "from": "SW_AGG",
+      "to": "SW_T",
+      "variant": "emphasis",
+      "label": "1 commit"
+    },
+    {
+      "from": "PA_R",
+      "to": "PA_T",
+      "variant": "emphasis",
+      "label": "commit",
+      "labelDy": -14
+    },
+    {
+      "from": "PA_S",
+      "to": "PA_T",
+      "variant": "emphasis",
+      "label": "commit",
+      "labelDy": 14
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "SpotWide User Spot — 1 commit",
+      "items": [
+        "The whole User Spot \"room-42\" (Spot state + member Actors P·Q) moves to the target node in a single aggregate commit — one arrow."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Entry Spot · PerActor — commit per Actor",
+      "items": [
+        "The Spot shell's Actors R·S each commit separately and move to the target node — two arrows. The Spot instance is a shell that carries no state."
+      ]
+    }
+  ]
+}

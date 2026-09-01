@@ -40,26 +40,8 @@ first instruction. A handler that has started and is awaiting asynchronous I/O t
 not reacquire the queue permit. A framework-side owner keeps the record payload valid until its
 required terminal, but it does not continue to occupy Core HWM budget.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    H1["sending handler<br/>SendToChannel(...)"]:::app
-    SQ["Core ordinary send queue<br/>accounted-byte HWM"]:::queue
-    AC(["Application connection"]):::net
-    RQ["Core ordinary receive queue<br/>accounted-byte HWM"]:::queue
-    BUD["application job queue<br/>reserved + queued permits"]:::budget
-    H2["receiving handler"]:::app
-    CC(["Completion connection"]):::net
-
-    H1 --> SQ --> AC --> RQ --> BUD --> H2
-    H2 -. "terminal reply · error" .-> CC
-    CC -.-> H1
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
-    classDef queue fill:#fff3e0,stroke:#e65100,color:#bf360c
-    classDef budget fill:#f3e5f5,stroke:#6a1b9a,color:#4a148c
-    classDef net fill:#eceff1,stroke:#546e7a,color:#000000
-```
+<iframe class="zlink-diagram" src="/common/diagrams/04-flow-en.html" title="Backpressure path — send to receive, replies dashed" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/04-flow-en.html" target="_blank">↗ View larger</a></p>
 
 When the application job queue reaches its limit, every ordinary ingress record other than a
 terminal reply/error completion identifiable before receive waits cancellably for a permit
@@ -654,3 +636,7 @@ call form.
   [per-language topology public contract](../../../common/spec/server/languages/README.en.md)
 - The byte-unit contract for a socket option: [the core guide's socket option](https://zlink-systems.github.io/zlink/guide/12-socket-options/)
 - Next axis: [05-channel-messaging](05-channel-messaging.en.md)
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

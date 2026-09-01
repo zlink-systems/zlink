@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Order processing — ZLink approach",
+    "subtitle": "OrderWorkflowSpot runs serially as the OrderId owner",
+    "output": "01-order-zlink-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      40,
+      150
+    ],
+    "cols": 4,
+    "gapX": 88,
+    "gapY": 84,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "Client app",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "log",
+      "type": "external",
+      "label": "Kafka log",
+      "sublabel": "external propagation · replay",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "ext",
+      "type": "external",
+      "label": "other-team systems",
+      "sublabel": "independent consumers",
+      "row": 0,
+      "col": 3
+    },
+    {
+      "id": "lb",
+      "type": "external",
+      "label": "L7 LB / gateway",
+      "sublabel": "K8s Ingress",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "api",
+      "type": "frontend",
+      "label": "API servers ×N",
+      "sublabel": "route client",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "spot",
+      "type": "backend",
+      "label": "OrderWorkflow ×N",
+      "sublabel": "OrderId owner · serial exec",
+      "row": 2,
+      "col": 2
+    },
+    {
+      "id": "inv",
+      "type": "frontend",
+      "label": "inventory/payment",
+      "sublabel": "×N · channel member",
+      "row": 2,
+      "col": 3
+    },
+    {
+      "id": "store",
+      "type": "external",
+      "label": "location store",
+      "sublabel": "descriptor rows",
+      "row": 3,
+      "col": 2
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "Order state DB",
+      "row": 3,
+      "col": 3
+    }
+  ],
+  "connections": [
+    {
+      "from": "client",
+      "to": "lb",
+      "label": "order · query HTTP",
+      "variant": "emphasis",
+      "labelDy": 22
+    },
+    {
+      "from": "lb",
+      "to": "api",
+      "variant": "default"
+    },
+    {
+      "from": "api",
+      "to": "spot",
+      "label": "owner routing by OrderId",
+      "variant": "emphasis",
+      "labelDy": -22
+    },
+    {
+      "from": "spot",
+      "to": "inv",
+      "label": "direct channel call",
+      "variant": "emphasis",
+      "labelDy": -22
+    },
+    {
+      "from": "spot",
+      "to": "log",
+      "label": "publish confirmed facts",
+      "variant": "default"
+    },
+    {
+      "from": "log",
+      "to": "ext",
+      "variant": "default"
+    },
+    {
+      "from": "spot",
+      "to": "db",
+      "label": "save",
+      "variant": "default"
+    },
+    {
+      "from": "api",
+      "to": "store",
+      "label": "address resolution",
+      "variant": "dashed"
+    },
+    {
+      "from": "spot",
+      "to": "store",
+      "variant": "dashed"
+    },
+    {
+      "from": "inv",
+      "to": "store",
+      "label": "registration",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "ZLink approach",
+      "items": [
+        "OrderWorkflowSpot runs serially as the OrderId owner · holds hot state",
+        "Inventory · payment are called directly by channel name (ZLink channel member) — reserve inventory · approve payment",
+        "Kafka isn't replaced — its remaining role: external-system propagation · replay preservation (settlement · analytics · other teams consume independently)",
+        "Queries hit the DB; the location store owns addressing (resolution · registration)"
+      ]
+    }
+  ]
+}

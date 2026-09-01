@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "SupportChat — one connection, several actors",
+    "subtitle": "roster · conversation actors bound to one agent session",
+    "output": "14-supportchat-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      160
+    ],
+    "cols": 4,
+    "gapX": 96,
+    "gapY": 120,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "AC",
+      "type": "frontend",
+      "label": "agent client",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "SE",
+      "type": "external",
+      "label": "session",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "RA",
+      "type": "backend",
+      "label": "roster actor",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "A1",
+      "type": "backend",
+      "label": "conversation",
+      "sublabel": "actor A",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "C1",
+      "type": "backend",
+      "label": "customer A",
+      "row": 1,
+      "col": 3
+    },
+    {
+      "id": "A2",
+      "type": "backend",
+      "label": "conversation",
+      "sublabel": "actor B",
+      "row": 2,
+      "col": 2
+    },
+    {
+      "id": "C2",
+      "type": "backend",
+      "label": "customer B",
+      "row": 2,
+      "col": 3
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "conversation Spot A",
+      "wraps": [
+        "A1",
+        "C1"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "conversation Spot B",
+      "wraps": [
+        "A2",
+        "C2"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "AC",
+      "to": "SE",
+      "label": "1 stream",
+      "variant": "default"
+    },
+    {
+      "from": "SE",
+      "to": "RA",
+      "label": "bind",
+      "variant": "dashed"
+    },
+    {
+      "from": "SE",
+      "to": "A1",
+      "label": "bind",
+      "variant": "dashed"
+    },
+    {
+      "from": "SE",
+      "to": "A2",
+      "label": "bind",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "One connection, several actors",
+      "items": [
+        "agent client ↔ session is one stream connection (bidirectional)",
+        "that session binds the roster actor (Entry Spot) + a per-conversation conversation actor together (dashed)",
+        "roster·conversation·customer nodes are circle actors in the original — drawn as boxes here"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "conversation Spot",
+      "items": [
+        "each conversation Spot holds the agent-side conversation actor and the customer actor together",
+        "customers A·B are participants in their own conversation — only inside each Spot, with no separate connection line"
+      ]
+    }
+  ]
+}

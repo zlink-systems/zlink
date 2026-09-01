@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Game backend patterns — ZLink approach",
+    "subtitle": "zone-sharding · lobby+room · matchmaker+dedicated · distributed actor service",
+    "output": "01-arch-zlink-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      170
+    ],
+    "cols": 4,
+    "gapX": 70,
+    "gapY": 78,
+    "cellW": 120,
+    "cellH": 58
+  },
+  "components": [
+    {
+      "id": "zc1",
+      "type": "external",
+      "label": "client",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "zgw1",
+      "type": "frontend",
+      "label": "API server",
+      "sublabel": "route client",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "zrm1",
+      "type": "backend",
+      "label": "zone server A",
+      "sublabel": "RouteMesh node",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "zrm2",
+      "type": "backend",
+      "label": "zone server B",
+      "sublabel": "RouteMesh node",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "zc2",
+      "type": "external",
+      "label": "client",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "zes",
+      "type": "frontend",
+      "label": "Entry Spot",
+      "sublabel": "entry · matching",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "zrs",
+      "type": "backend",
+      "label": "room spot",
+      "sublabel": "GetOrCreate",
+      "row": 2,
+      "col": 2
+    },
+    {
+      "id": "zc3",
+      "type": "external",
+      "label": "client",
+      "row": 3,
+      "col": 0
+    },
+    {
+      "id": "zmm",
+      "type": "frontend",
+      "label": "channel handler",
+      "sublabel": "matching",
+      "row": 3,
+      "col": 1
+    },
+    {
+      "id": "zrs2",
+      "type": "backend",
+      "label": "room spot",
+      "sublabel": "GetOrCreate",
+      "row": 3,
+      "col": 2
+    },
+    {
+      "id": "zc4",
+      "type": "external",
+      "label": "client",
+      "row": 4,
+      "col": 0
+    },
+    {
+      "id": "zapi4",
+      "type": "frontend",
+      "label": "API server",
+      "row": 4,
+      "col": 1
+    },
+    {
+      "id": "zis",
+      "type": "backend",
+      "label": "Instance Spot",
+      "sublabel": "entity id · cold activation",
+      "row": 4,
+      "col": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "① Zone-sharding — ZLink",
+      "wraps": [
+        "zc1",
+        "zgw1",
+        "zrm1",
+        "zrm2"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "② Lobby + room — ZLink",
+      "wraps": [
+        "zc2",
+        "zes",
+        "zrs"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "③ Matchmaker + dedicated — ZLink",
+      "wraps": [
+        "zc3",
+        "zmm",
+        "zrs2"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "④ Actor service — ZLink",
+      "wraps": [
+        "zc4",
+        "zapi4",
+        "zis"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "zc1",
+      "to": "zgw1",
+      "variant": "default"
+    },
+    {
+      "from": "zgw1",
+      "to": "zrm1",
+      "variant": "default"
+    },
+    {
+      "from": "zgw1",
+      "to": "zrm2",
+      "variant": "default",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "from": "zrm1",
+      "to": "zrm2",
+      "variant": "dashed"
+    },
+    {
+      "from": "zc2",
+      "to": "zes",
+      "variant": "default"
+    },
+    {
+      "from": "zes",
+      "to": "zrs",
+      "variant": "default"
+    },
+    {
+      "from": "zc3",
+      "to": "zmm",
+      "variant": "default"
+    },
+    {
+      "from": "zmm",
+      "to": "zrs2",
+      "variant": "default"
+    },
+    {
+      "from": "zc3",
+      "to": "zrs2",
+      "label": "STREAM direct",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom"
+    },
+    {
+      "from": "zc4",
+      "to": "zapi4",
+      "variant": "default"
+    },
+    {
+      "from": "zapi4",
+      "to": "zis",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "ZLink primitives — the state unit is a Spot/actor",
+      "items": [
+        "① On a boundary cross, the actor is relocated cross-node (RouteMesh)",
+        "②③ A room spot is GetOrCreate (attach if present, create if not)",
+        "③ After matching, the client connects directly to the room spot over STREAM",
+        "④ Instance Spot: cold-activated by entity id"
+      ]
+    }
+  ]
+}
