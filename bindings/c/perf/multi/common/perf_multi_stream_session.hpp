@@ -6,110 +6,38 @@
 
 #include <atomic>
 #include <condition_variable>
-#include <deque>
-#include <iomanip>
 #include <mutex>
-#include <string>
-#include <unordered_map>
 
 namespace perf_multi_stream
 {
 
-struct queued_message_t
-{
-    queued_message_t ()
-    {
-        std::memset (&routing_id, 0, sizeof (routing_id));
-        if (zlink_msg_init (&msg) != 0)
-            std::abort ();
-    }
-
-    ~queued_message_t () { (void) zlink_msg_close (&msg); }
-
-    queued_message_t (queued_message_t &&other) noexcept
-    {
-        std::memset (&routing_id, 0, sizeof (routing_id));
-        if (zlink_msg_init (&msg) != 0)
-            std::abort ();
-        routing_id = other.routing_id;
-        if (zlink_msg_move (&msg, &other.msg) != 0)
-            std::abort ();
-    }
-
-    queued_message_t &operator= (queued_message_t &&other) noexcept
-    {
-        if (this == &other)
-            return *this;
-        routing_id = other.routing_id;
-        (void) zlink_msg_close (&msg);
-        if (zlink_msg_init (&msg) != 0)
-            std::abort ();
-        if (zlink_msg_move (&msg, &other.msg) != 0)
-            std::abort ();
-        return *this;
-    }
-
-    bool assign (const zlink_routing_id_t *rid, zlink_msg_t *msg_part)
-    {
-        if (!rid || !msg_part)
-            return false;
-        routing_id = *rid;
-        (void) zlink_msg_close (&msg);
-        if (zlink_msg_init (&msg) != 0)
-            return false;
-        return zlink_msg_move (&msg, msg_part) == 0;
-    }
-
-    zlink_routing_id_t routing_id;
-    zlink_msg_t msg;
-
-  private:
-    queued_message_t (const queued_message_t &);
-    queued_message_t &operator= (const queued_message_t &);
-};
-
-typedef std::deque<queued_message_t> pending_route_messages_t;
-typedef uint32_t pending_route_key_t;
-typedef std::unordered_map<pending_route_key_t, pending_route_messages_t> pending_route_map_t;
-
-enum send_result_t
-{
-    send_result_sent = 0,
-    send_result_pending = 1,
-    send_result_failed = 2
-};
-
 struct session_t
 {
     session_t () :
-        ctx (NULL),
         send_socket (NULL),
         recv_count (0),
         send_count (0),
-        pending_count (0),
-        transport (),
-        pending_by_route (),
-        pending_routes (),
-        pending_cv ()
+        outstanding_count (0),
+        failure_count (0),
+        first_failure_errno (0),
+        failed (false),
+        stop_cv ()
     {
     }
 
-    void *ctx;
     void *send_socket;
     std::atomic<unsigned long long> recv_count;
     std::atomic<unsigned long long> send_count;
-    std::atomic<unsigned long long> pending_count;
-    std::string transport;
-    std::mutex pending_mutex;
-    pending_route_map_t pending_by_route;
-    std::deque<pending_route_key_t> pending_routes;
-    std::condition_variable pending_cv;
+    // Includes a public zlink_send_async call until its immediate result is
+    // known and every Core-owned pending operation until its terminal
+    // completion callback runs.
+    std::atomic<unsigned long long> outstanding_count;
+    std::atomic<unsigned long long> failure_count;
+    std::atomic<int> first_failure_errno;
+    std::atomic<bool> failed;
+    std::mutex stop_mutex;
+    std::condition_variable stop_cv;
 };
-
-inline pending_route_key_t pending_route_key (const zlink_routing_id_t &rid)
-{
-    return perf_stream_common::perf_stream_load_u32_be (rid.data);
-}
 
 inline bool is_stop_payload (const unsigned char *data, size_t size, const char *stop_token)
 {
@@ -117,97 +45,99 @@ inline bool is_stop_payload (const unsigned char *data, size_t size, const char 
            && std::memcmp (data, stop_token, size) == 0;
 }
 
-inline void reset_session (session_t *session,
-                           void *ctx,
-                           void *send_socket,
-                           const std::string &transport)
+inline void reset_session (session_t *session, void *send_socket)
 {
     if (!session)
         return;
-    session->ctx = ctx;
     session->send_socket = send_socket;
     session->recv_count.store (0, std::memory_order_release);
     session->send_count.store (0, std::memory_order_release);
-    session->pending_count.store (0, std::memory_order_release);
-    session->transport = transport;
-    std::lock_guard<std::mutex> lock (session->pending_mutex);
-    session->pending_by_route.clear ();
-    session->pending_routes.clear ();
-    session->pending_cv.notify_all ();
+    session->outstanding_count.store (0, std::memory_order_release);
+    session->failure_count.store (0, std::memory_order_release);
+    session->first_failure_errno.store (0, std::memory_order_release);
+    session->failed.store (false, std::memory_order_release);
+    session->stop_cv.notify_all ();
 }
 
 inline void clear_session (session_t *session)
 {
     if (!session)
         return;
+    // zlink_close() must have completed before this pointer is cleared. It
+    // fences both packet callbacks and Core-owned send completions.
     session->send_socket = NULL;
-    std::lock_guard<std::mutex> lock (session->pending_mutex);
-    session->pending_by_route.clear ();
-    session->pending_routes.clear ();
-    session->pending_cv.notify_all ();
+    session->stop_cv.notify_all ();
 }
 
-inline size_t pending_size (session_t *session)
+inline size_t outstanding_size (const session_t *session)
 {
     if (!session)
         return 0;
-    return static_cast<size_t> (session->pending_count.load (std::memory_order_relaxed));
+    return static_cast<size_t> (
+      session->outstanding_count.load (std::memory_order_acquire));
 }
 
-inline send_result_t try_send (session_t *session, queued_message_t &queued)
+inline void request_stop (session_t *session)
+{
+    perf_stop_requested ().store (true, std::memory_order_release);
+    if (session)
+        session->stop_cv.notify_all ();
+}
+
+inline void record_failure (session_t *session, int error_code)
 {
     if (!session)
-        return send_result_failed;
-    void *send_socket = session->send_socket;
-    if (!send_socket)
-        return send_result_failed;
-
-    // run_server_event_loop() is the sole pending-queue consumer. Direct
-    // callback replies use the pipe-safe fast path in try_send_packet_now().
-    const int rc =
-      perf_zlink_send_rid_parts (send_socket, &queued.routing_id, &queued.msg, 1, ZLINK_DONTWAIT);
-    if (rc == 0)
-        return send_result_sent;
-
-    const int err = zlink_errno ();
-    if (err == EAGAIN)
-        return send_result_pending;
-    if (bench_debug_enabled ()) {
-        std::cerr << "[multi-stream-server] send failed err=" << err << std::endl;
-    }
-    return send_result_failed;
+        return;
+    if (error_code == 0)
+        error_code = EIO;
+    int expected = 0;
+    (void) session->first_failure_errno.compare_exchange_strong (
+      expected, error_code, std::memory_order_acq_rel, std::memory_order_acquire);
+    session->failure_count.fetch_add (1, std::memory_order_relaxed);
+    session->failed.store (true, std::memory_order_release);
+    request_stop (session);
 }
 
-inline bool enqueue (session_t *session, const zlink_routing_id_t *rid, zlink_msg_t *msg_part)
+inline void begin_async_submission (session_t *session)
 {
-    if (!session || !rid || rid->size != sizeof (uint32_t) || !msg_part)
-        return false;
-
-    const pending_route_key_t route_key = pending_route_key (*rid);
-    queued_message_t queued;
-    if (!queued.assign (rid, msg_part))
-        return false;
-
-    {
-        std::lock_guard<std::mutex> lock (session->pending_mutex);
-        pending_route_map_t::iterator route = session->pending_by_route.find (route_key);
-        if (route == session->pending_by_route.end ()) {
-            route = session->pending_by_route
-                      .insert (std::make_pair (route_key, pending_route_messages_t ()))
-                      .first;
-            session->pending_routes.push_back (route_key);
-        }
-        route->second.push_back (std::move (queued));
-        session->pending_count.fetch_add (1, std::memory_order_relaxed);
-    }
-    session->pending_cv.notify_one ();
-    return true;
+    session->outstanding_count.fetch_add (1, std::memory_order_acq_rel);
 }
 
-inline bool
-enqueue_packet_message (session_t *session, const zlink_routing_id_t *rid, zlink_msg_t *packet)
+inline void finish_async_submission (session_t *session)
 {
-    return enqueue (session, rid, packet);
+    if (!session)
+        return;
+    const unsigned long long previous =
+      session->outstanding_count.fetch_sub (1, std::memory_order_acq_rel);
+    if (previous == 0) {
+        session->outstanding_count.store (0, std::memory_order_release);
+        record_failure (session, EPROTO);
+        return;
+    }
+}
+
+inline void record_immediate_admission (session_t *session)
+{
+    if (!session)
+        return;
+    session->send_count.fetch_add (1, std::memory_order_relaxed);
+    finish_async_submission (session);
+}
+
+inline void stream_send_complete_callback (
+  void *, const zlink_send_complete_event_t *event, void *userdata)
+{
+    session_t *session = static_cast<session_t *> (userdata);
+    if (!session || !event)
+        return;
+
+    // Completion is the final word for this operation. In particular, this
+    // callback never resubmits: Core owns admission wait and exact-route FIFO.
+    if (event->result == ZLINK_SEND_ADMITTED)
+        session->send_count.fetch_add (1, std::memory_order_relaxed);
+    else
+        record_failure (session, event->terminal_errno);
+    finish_async_submission (session);
 }
 
 inline bool build_packet_frame (zlink_msg_t *packet_out,
@@ -236,40 +166,46 @@ inline bool build_packet_frame (zlink_msg_t *packet_out,
     return true;
 }
 
-inline send_result_t try_send_packet_now (void *stream_socket,
-                                          session_t *session,
-                                          const zlink_routing_id_t *rid,
-                                          zlink_msg_t *packet)
+inline bool submit_packet_async (session_t *session,
+                                 const zlink_routing_id_t *rid,
+                                 zlink_msg_t *packet)
 {
-    if (!stream_socket || !session || !rid || !packet)
-        return send_result_failed;
+    if (!session || !session->send_socket || !rid || rid->size == 0 || !packet)
+        return false;
 
-    // Hot path: this is called from the STREAM packet callback. When the
-    // routing id matches the current callback, the C API routes directly to the
-    // owning pipe and uses pipe-level synchronization; do not reintroduce a
-    // process-wide send mutex here.
-    const int rc = perf_zlink_send_rid_parts (stream_socket, rid, packet, 1, ZLINK_DONTWAIT);
-    if (rc == 0)
-        return send_result_sent;
+    // The packet callback's source RID is the complete STREAM routing target.
+    // Zero pair fields deliberately request Core's exact current-pair snapshot
+    // for that RID; the application does not maintain or poll a route queue.
+    zlink_routed_submit_target_t target;
+    std::memset (&target, 0, sizeof (target));
+    target.peer_rid = *rid;
 
-    const int err = zlink_errno ();
-    if (err == EAGAIN)
-        return send_result_pending;
-    if (bench_debug_enabled ()) {
-        std::cerr << "[multi-stream-server] try_send_packet_now failed err=" << err
-                  << " rid_size=" << static_cast<unsigned> (rid->size)
-                  << " packet_size=" << zlink_msg_size (packet) << " rid_hex=";
-        for (unsigned int i = 0; i < static_cast<unsigned int> (rid->size); ++i) {
-            std::cerr << std::hex << std::setw (2) << std::setfill ('0')
-                      << static_cast<unsigned> (rid->data[i]);
-        }
-        std::cerr << std::dec << std::setfill (' ') << std::endl;
+    zlink_send_async_options_t options;
+    std::memset (&options, 0, sizeof (options));
+    options.struct_size = sizeof (options);
+    options.target = &target;
+
+    // A non-zero operation may complete before zlink_send_async returns, so
+    // publish the accounting slot first. On SUBMIT_OK, Core owns packet even
+    // when admission is pending.
+    begin_async_submission (session);
+    zlink_send_op_id_t op_id = 0;
+    const zlink_submit_result_t result = zlink_send_async (
+      session->send_socket, packet, 1, &options, &op_id);
+    const int submit_errno = zlink_errno ();
+    if (result != ZLINK_SUBMIT_OK) {
+        finish_async_submission (session);
+        (void) zlink_msg_close (packet);
+        errno = submit_errno;
+        return false;
     }
-    return send_result_failed;
+
+    if (op_id == 0)
+        record_immediate_admission (session);
+    return true;
 }
 
 inline bool handle_packet_message (session_t *session,
-                                   void *stream_socket,
                                    const zlink_routing_id_t *rid,
                                    zlink_msg_t *header_part,
                                    zlink_msg_t *body_part,
@@ -282,7 +218,7 @@ inline bool handle_packet_message (session_t *session,
       static_cast<const unsigned char *> (zlink_msg_data (body_part));
     const size_t body_payload_size = zlink_msg_size (body_part);
     if (is_stop_payload (body_payload, body_payload_size, stop_token)) {
-        perf_stop_requested ().store (true, std::memory_order_release);
+        request_stop (session);
         return true;
     }
 
@@ -291,107 +227,9 @@ inline bool handle_packet_message (session_t *session,
     if (!build_packet_frame (&packet, header_part, body_part))
         return false;
 
-    const send_result_t send_rc = try_send_packet_now (stream_socket, session, rid, &packet);
-    if (send_rc == send_result_sent) {
-        session->send_count.fetch_add (1, std::memory_order_relaxed);
-        (void) zlink_msg_close (&packet);
-        return true;
-    }
-    if (send_rc != send_result_pending) {
-        if (bench_debug_enabled ()) {
-            std::cerr << "[multi-stream-server] immediate send failed err=" << zlink_errno ()
-                      << std::endl;
-        }
-        (void) zlink_msg_close (&packet);
-        return false;
-    }
-
-    const bool queued = enqueue_packet_message (session, rid, &packet);
-    (void) zlink_msg_close (&packet);
-    return queued;
-}
-
-template <typename SendAttempt>
-inline void drain_pending_with (session_t *session, SendAttempt send_attempt)
-{
-    if (!session)
-        return;
-
-    while (true) {
-        size_t route_budget = 0;
-        {
-            std::lock_guard<std::mutex> lock (session->pending_mutex);
-            route_budget = session->pending_routes.size ();
-            if (route_budget == 0)
-                return;
-        }
-
-        bool route_blocked = false;
-        for (size_t route_index = 0; route_index < route_budget; ++route_index) {
-            queued_message_t queued;
-            pending_route_key_t route_key = 0;
-            {
-                std::lock_guard<std::mutex> lock (session->pending_mutex);
-                if (session->pending_routes.empty ())
-                    break;
-
-                route_key = session->pending_routes.front ();
-                session->pending_routes.pop_front ();
-                pending_route_map_t::iterator route =
-                  session->pending_by_route.find (route_key);
-                if (route == session->pending_by_route.end () || route->second.empty ())
-                    continue;
-
-                queued = std::move (route->second.front ());
-                route->second.pop_front ();
-            }
-
-            const send_result_t rc = send_attempt (session, queued);
-            {
-                std::lock_guard<std::mutex> lock (session->pending_mutex);
-                pending_route_map_t::iterator route =
-                  session->pending_by_route.find (route_key);
-                if (route == session->pending_by_route.end ())
-                    continue;
-
-                if (rc == send_result_pending)
-                    route->second.push_front (std::move (queued));
-
-                if (!route->second.empty ())
-                    session->pending_routes.push_back (route_key);
-                else
-                    session->pending_by_route.erase (route);
-            }
-
-            if (rc == send_result_sent) {
-                session->send_count.fetch_add (1, std::memory_order_relaxed);
-                const unsigned long long pending_before =
-                  session->pending_count.load (std::memory_order_relaxed);
-                if (pending_before > 0)
-                    session->pending_count.fetch_sub (1, std::memory_order_relaxed);
-                continue;
-            }
-            if (rc == send_result_pending) {
-                route_blocked = true;
-                continue;
-            }
-            perf_stop_requested ().store (true, std::memory_order_release);
-            return;
-        }
-
-        // One pass gives every active routing id one send opportunity. If a
-        // pipe remains blocked, wait for the next POLLOUT edge instead of
-        // retrying that pipe while other callback threads are still active.
-        if (route_blocked)
-            return;
-    }
-}
-
-inline void drain_pending (session_t *session)
-{
-    drain_pending_with (session, [] (session_t *current, queued_message_t &queued) {
-        return try_send (current, queued);
-    });
+    // Core chooses the current-pipe immediate path when it is FIFO-safe and
+    // retains a backpressured operation until its terminal completion.
+    return submit_packet_async (session, rid, &packet);
 }
 
 struct packet_handler_context_t
@@ -402,14 +240,14 @@ struct packet_handler_context_t
     const char *stop_token;
 };
 
-inline void stream_packet_handler_callback (void *stream_,
+inline void stream_packet_handler_callback (void *,
                                             const zlink_routing_id_t *rid,
                                             zlink_msg_t *header_part,
                                             zlink_msg_t *body_part,
                                             void *userdata)
 {
     packet_handler_context_t *ctx = static_cast<packet_handler_context_t *> (userdata);
-    if (!stream_ || !ctx || !ctx->session || !rid || !header_part || !body_part) {
+    if (!ctx || !ctx->session || !rid || !header_part || !body_part) {
         if (header_part)
             (void) zlink_msg_close (header_part);
         if (body_part)
@@ -417,71 +255,29 @@ inline void stream_packet_handler_callback (void *stream_,
         return;
     }
 
-    if (!handle_packet_message (ctx->session, stream_, rid, header_part, body_part,
-                                ctx->stop_token)) {
-        perf_stop_requested ().store (true, std::memory_order_release);
-        ctx->session->pending_cv.notify_all ();
-    }
+    if (!handle_packet_message (ctx->session, rid, header_part, body_part,
+                                ctx->stop_token))
+        record_failure (ctx->session, zlink_errno ());
 
     (void) zlink_msg_close (header_part);
     (void) zlink_msg_close (body_part);
 }
 
-typedef void (*loop_tick_fn_t) (void *);
-
-inline int run_server_event_loop (session_t *session,
-                                  void *server_socket,
-                                  const char *stop_token,
-                                  loop_tick_fn_t loop_tick,
-                                  void *loop_tick_ctx)
+inline int run_server_event_loop (session_t *session)
 {
-    if (!session || !server_socket || !stop_token || !*stop_token) {
+    if (!session || !session->send_socket) {
         errno = EINVAL;
         return 1;
     }
 
-    int rc = 0;
-    while (!perf_stop_requested ().load (std::memory_order_acquire) && rc == 0) {
-        if (loop_tick)
-            loop_tick (loop_tick_ctx);
-
-        if (pending_size (session) > 0)
-            drain_pending (session);
-
-        if (pending_size (session) == 0) {
-            std::unique_lock<std::mutex> lock (session->pending_mutex);
-            session->pending_cv.wait_for (
-              lock, std::chrono::milliseconds (perf_aux_poll_wait_ms ()), [&] {
-                  return !session->pending_routes.empty ()
-                         || perf_stop_requested ().load (std::memory_order_acquire);
-              });
-            continue;
-        }
-
-        zlink_pollitem_t item;
-        std::memset (&item, 0, sizeof (item));
-        item.socket = server_socket;
-        item.fd = 0;
-        item.events = ZLINK_POLLOUT;
-        item.revents = 0;
-
-        const int poll_rc = perf_socket_poll (&item, 1, perf_aux_poll_wait_ms ());
-        if (poll_rc < 0) {
-            if (zlink_errno () == EINTR || zlink_errno () == EAGAIN)
-                continue;
-            if (bench_debug_enabled ()) {
-                std::cerr << "[multi-stream-server] poll failed err=" << zlink_errno ()
-                          << std::endl;
-            }
-            rc = 1;
-            break;
-        }
-
-        if ((item.revents & ZLINK_POLLOUT) != 0)
-            drain_pending (session);
-    }
-
-    return rc;
+    // Backpressured admission progress is Core-owned. This thread only waits
+    // for a real STOP/failure signal; there is no POLLOUT probe or timer retry.
+    std::unique_lock<std::mutex> lock (session->stop_mutex);
+    session->stop_cv.wait (lock, [session] {
+        return perf_stop_requested ().load (std::memory_order_acquire)
+               || session->failed.load (std::memory_order_acquire);
+    });
+    return session->failed.load (std::memory_order_acquire) ? 1 : 0;
 }
 
 } // namespace perf_multi_stream

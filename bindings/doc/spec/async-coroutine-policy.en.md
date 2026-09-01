@@ -10,7 +10,8 @@ title: "Bindings Routed Submit Contract And Async Completion Surface Policy"
 
 > **What this chapter defines** — for every language binding except C, it fixes
 > the **names and return types** by which the four operation types expose their
-> completion surfaces.
+> completion surfaces. It also defines the common native-completion contract for
+> a C `MULTI_STREAM` packet echo calling public `zlink_send_async()`.
 
 The four operation types and their completion surfaces covered here:
 
@@ -196,9 +197,10 @@ flagless ASYNC path, and does not create separate names like `send_async` or
 ### Completion notification (common)
 
 - The async terminal first installs a `zlink_send_complete_handler`. Immediate
-  admission returns operation id `0` and the binding completes the awaitable
-  immediately. When it waits at HWM it links a nonzero operation id to the
-  awaitable, and `zlink_send_complete_event_t` delivers exactly once as one of
+  admission returns operation id `0` and does not call the completion callback;
+  the binding completes the awaitable immediately. When it waits at HWM it links
+  a nonzero operation id to the awaitable, and `zlink_send_complete_event_t`
+  delivers exactly once as one of
   `ZLINK_SEND_ADMITTED`·`ZLINK_SEND_TIMED_OUT`·`ZLINK_SEND_TERMINAL`.
 - Completions for the same target preserve submission order, and one socket's
   completion callbacks never run concurrently with each other. Registering
@@ -227,6 +229,24 @@ flagless ASYNC path, and does not create separate names like `send_async` or
 - Therefore a call that needs `DONTWAIT` uses the sync terminal, not the async
   terminal.
 - (If the native path changes, align this section's wording to the code.)
+
+### C `MULTI_STREAM` packet echo
+
+For every packet delivered by `zlink_stream_packet_handler()`, the C
+`MULTI_STREAM` server calls public `zlink_send_async()` once to echo to the same
+`source_rid`. The caller does not make a preceding `DONTWAIT` attempt, observe
+`POLLOUT`, keep a binding-local pending queue, or retry from a timer.
+
+When the packet callback can admit on its current pipe immediately without
+breaking FIFO for the same target, Core performs immediate admission. Otherwise,
+Core keeps a pending operation and owns HWM backpressure and send ordering. This
+is Core internals; it does not change the C server's call shape or ownership
+rules.
+
+Immediate admission ends with operation id `0` and no callback. Only a pending
+operation receives a nonzero operation id and exactly one completion callback.
+The C perf server uses that callback only to collect the terminal result; it
+does not resubmit the packet.
 
 ### Contract summary (common)
 
@@ -320,6 +340,13 @@ delivery to its existing completion dispatcher and completes off the native
 callback thread. Request timeout is already Core-owned
 (`ZLINK_REQUEST_TIMED_OUT`). For this completion surface the binding adds no
 admission·retry queue, per-operation executor, or timer.
+
+Registering a `DEALER`/`ROUTER` socket on a public poller with
+`ZLINK_POLLCOMPLETION` transfers only dispatch ownership of the same reply callback
+to the `zlink_poller_wait` caller. It does not change the async terminal,
+exact-once completion, Core-owned timeout, or admission contract. This lets the
+caller choose the completion context; it does not add a request terminal or a
+separate completion path.
 
 | Aspect | bindings completion surface |
 |---|---|
@@ -415,3 +442,7 @@ contract), and the framework typed Session reply surface — is owned by the
 framework spec,
 [Submit And Completion §15 "Consuming Binding Send Terminals"](../../../framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.en.md#15-consuming-binding-send-terminals-implementation).
 This document defines only what the bindings provide.
+
+<!-- bindings-nav:start -->
+[Spec index](README.en.md) | [Previous: Overview](README.en.md) | [Next: C](c/README.en.md)
+<!-- bindings-nav:end -->

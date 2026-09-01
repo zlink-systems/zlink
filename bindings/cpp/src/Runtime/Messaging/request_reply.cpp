@@ -10,6 +10,7 @@
 
 #include <cerrno>
 #include <condition_variable>
+#include <optional>
 
 namespace zlink
 {
@@ -304,11 +305,12 @@ void ensure_raw_request_state (const detail::operation_state_t &state_)
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
 }
 
-// Submits the request part sequence to one exact Core target on the calling
-// thread. Core owns the send-side HWM wait (SNDTIMEO) exactly as it does for a
-// routed send, and owns the reply deadline through ZLINK_REQUEST_TIMED_OUT.
-// The caller chooses whether the bridge is consumed by a coroutine, a
-// blocking caller, or an application callback.
+// Submits the request part sequence on the calling thread. A DEALER leaves
+// target selection to Core at submit time; a ROUTER snapshots the exact
+// transport pair for its explicit peer. Core owns the send-side HWM wait
+// (SNDTIMEO) and the reply deadline through ZLINK_REQUEST_TIMED_OUT. The
+// caller chooses whether the bridge is consumed by a coroutine, a blocking
+// caller, or an application callback.
 void submit_raw_request (detail::operation_state_t &state_,
                          zlink_reply_handler_fn reply_handler_, void *reply_userdata_,
                          void (*delete_userdata_) (void *) noexcept)
@@ -330,8 +332,10 @@ void submit_raw_request (detail::operation_state_t &state_,
     submit_result_t result = submit_result_t::internal_error;
     int result_errno = EINVAL;
     {
-        const zlink_routed_submit_target_t target =
-          select_routed_submit_target (state_.raw.socket, router_rid);
+        std::optional<zlink_routed_submit_target_t> target;
+        if (!dealer)
+            target.emplace (
+              select_routed_submit_target (state_.raw.socket, router_rid));
 
         std::vector<message_t> parts;
         bool multipart = false;
@@ -359,15 +363,16 @@ void submit_raw_request (detail::operation_state_t &state_,
                         (void) zlink_msg_close (&native_view);
                 } else {
                     if (dealer) {
-                        raw_rc = zlink_dealer_request_transport_pair_part (
-                          state_.raw.socket, &target, &native_view,
+                        raw_rc = zlink_dealer_request_part (
+                          state_.raw.socket, &native_view,
                           static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
                           ZLINK_PART_FINAL, timeout,
                           reply_handler_, reply_userdata_);
                     } else {
                         raw_rc = zlink_router_request_transport_pair_part (
-                          state_.raw.socket, &target.peer_rid,
-                          target.transport_pair_id, target.transport_pair_generation,
+                          state_.raw.socket, &target->peer_rid,
+                          target->transport_pair_id,
+                          target->transport_pair_generation,
                           &native_view,
                           static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
                           ZLINK_PART_FINAL, timeout,
@@ -393,16 +398,16 @@ void submit_raw_request (detail::operation_state_t &state_,
                               is_final_ ? reply_handler_ : nullptr;
                             void *userdata = is_final_ ? reply_userdata_ : nullptr;
                             if (dealer) {
-                                return zlink_dealer_request_transport_pair_part (
-                                  state_.raw.socket, &target, part_,
+                                return zlink_dealer_request_part (
+                                  state_.raw.socket, part_,
                                   static_cast<zlink_send_flags_t> (
                                     static_cast<int> (state_.flags)), part_flag_,
                                   is_final_ ? timeout : 0u, handler, userdata);
                             }
                             return zlink_router_request_transport_pair_part (
-                              state_.raw.socket, &target.peer_rid,
-                              target.transport_pair_id,
-                              target.transport_pair_generation, part_,
+                              state_.raw.socket, &target->peer_rid,
+                              target->transport_pair_id,
+                              target->transport_pair_generation, part_,
                               static_cast<zlink_send_flags_t> (
                                 static_cast<int> (state_.flags)), part_flag_,
                               is_final_ ? timeout : 0u, handler, userdata);

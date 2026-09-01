@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -8,6 +9,36 @@ import (
 
 	zlink "zlink.systems/zlink"
 )
+
+func TestMultiStreamControlKeepsStartAndStopOnOneReader(t *testing.T) {
+	control := newMultiStreamControl(strings.NewReader("START,1024\nSTOP\n"), 1024)
+	if err := control.waitForStart(time.Second); err != nil {
+		t.Fatalf("waitForStart(): %v", err)
+	}
+	select {
+	case <-control.stop:
+	case <-time.After(time.Second):
+		t.Fatal("STOP was not observed after START on the shared reader")
+	}
+}
+
+func TestMultiStreamControlRejectsMismatchedStartToken(t *testing.T) {
+	control := newMultiStreamControl(strings.NewReader("START,256\n"), 1024)
+	err := control.waitForStart(time.Second)
+	if err == nil || !strings.Contains(err.Error(), "token mismatch") {
+		t.Fatalf("waitForStart() error = %v, want token mismatch", err)
+	}
+}
+
+func TestMultiStreamExpectedClientsMatchesNonTCPClientCap(t *testing.T) {
+	t.Setenv("PERF_STREAM_NON_TCP_CLIENTS_MAX", "8")
+	if got := multiStreamExpectedClients(multiConfig{transport: "wss", clients: 100}); got != 8 {
+		t.Fatalf("multiStreamExpectedClients(wss) = %d, want 8", got)
+	}
+	if got := multiStreamExpectedClients(multiConfig{transport: "tcp", clients: 100}); got != 100 {
+		t.Fatalf("multiStreamExpectedClients(tcp) = %d, want 100", got)
+	}
+}
 
 func TestMultiStreamRouteDispatchIsolatesBlockedRoute(t *testing.T) {
 	routeA := zlink.NewRoutingIDString("route-a")

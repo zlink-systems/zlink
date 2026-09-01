@@ -9,6 +9,7 @@ from ...contracts.errors.errors import CloseError, ConfigError, RecvError, Submi
 from ..._native.ffi import ZlinkMsg, lib
 from ..._runtime.handles.native_support import (
     _init_msg_from_buffer,
+    _clone_native_msg,
     _msg_data_ptr,
     _msg_refcnt,
     _msg_size,
@@ -46,6 +47,36 @@ class ReceivedMessage:
         if self._closed:
             raise RuntimeError("received message is closed")
         return self._msg
+
+    def _clone_native_for_send(self):
+        """Return an ownership-independent native ref when storage permits.
+
+        Native receive owners expose only a private copy-into hook so their
+        internal ``zlink_msg_t`` never escapes into the Python public surface.
+        Bytes-backed owners return ``None`` and keep the ordinary buffer-copy
+        materialization path.
+        """
+
+        if self._owner is None:
+            return _clone_native_msg(self._native_msg())
+
+        clone_part = getattr(self._owner, "_clone_native_part", None)
+        if clone_part is not None:
+            return clone_part(self._index)
+
+        copy_native_to = getattr(self._owner, "_copy_native_to", None)
+        if copy_native_to is None:
+            return None
+
+        native = ZlinkMsg()
+        rc = lib().zlink_msg_init(ctypes.byref(native))
+        if rc != 0:
+            _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
+        rc, native_errno = copy_native_to(self._index, ctypes.addressof(native))
+        if rc != 0:
+            lib().zlink_msg_close(ctypes.byref(native))
+            _raise_result_error(ConfigError, ConfigResult, rc, native_errno)
+        return native
 
     def __len__(self):
         if self._owner is not None:

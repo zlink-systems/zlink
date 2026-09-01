@@ -24,7 +24,16 @@ Core 버전(`VERSION`)과 바인딩 버전은 독립적으로 관리한다.
 ### Core 릴리즈
 
 - 워크플로우: `.github/workflows/build.yml`
-- 트리거: `core/v*` 태그, `workflow_dispatch`
+- 트리거: `core/v*` 태그를 만든 뒤 해당 태그 ref로 `workflow_dispatch`
+- 실행 예:
+
+  ```bash
+  gh workflow run build.yml --ref core/vX.Y.Z \
+    -f libzlink_version=X.Y.Z
+  ```
+
+  태그 push만으로는 워크플로우가 시작되지 않는다. release job이 태그 ref를
+  검사하므로 `main`이 아니라 생성한 `core/vX.Y.Z`를 `--ref`로 지정해야 한다.
 - 산출물:
   - 플랫폼별 core native archive
   - source tarball

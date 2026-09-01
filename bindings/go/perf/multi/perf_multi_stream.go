@@ -30,12 +30,32 @@ func runMultiStreamServer(cfg multiConfig) {
 	perfcommon.Must(perfcommon.ConfigureTLSServer(server, cfg.transport))
 	perfcommon.ApplyMultiHWM(server, cfg.pattern)
 	perfcommon.ApplyMultiBenchmarkSocketOptions(server, cfg.transport)
+	monitor := perfcommon.OpenMonitor(server)
 	endpoint := perfcommon.BindAndResolveEndpoint(server, cfg.transport, "perf-multi-stream")
 	stopSender, senderErrors := startMultiStreamEchoServer(server)
+	control := newMultiStreamControl(os.Stdin, cfg.msgSize)
 	flushControlLine("READY,%s", endpoint)
+	perfcommon.Must(control.waitForStart(perfcommon.MultiReadyTimeout()))
+	perfcommon.Must(perfcommon.WaitUntilReady(perfcommon.ReadyConfig{
+		Monitor:   monitor,
+		MinEvents: multiStreamExpectedClients(cfg),
+		Timeout:   perfcommon.MultiReadyTimeout(),
+		Name:      "multi stream server connections",
+	}))
+	perfcommon.Must(ctx.RecalculateAutoHwm())
+	perfcommon.PrintSocketAutoHWMDetail(
+		monitor,
+		cfg.pattern,
+		cfg.transport,
+		"server",
+		zlink.SocketTypeStream,
+		cfg.msgSize,
+	)
+	perfcommon.Must(monitor.Close())
+	flushControlLine("SERVER_START_READY,%d", cfg.msgSize)
 	var activeErr error
 	select {
-	case <-waitForStopAsync():
+	case <-control.stop:
 	case activeErr = <-senderErrors:
 	}
 	stopErr := stopSender()
@@ -43,6 +63,31 @@ func runMultiStreamServer(cfg multiConfig) {
 		perfcommon.Must(activeErr)
 	}
 	perfcommon.Must(stopErr)
+}
+
+func multiStreamExpectedClients(cfg multiConfig) int {
+	expected := cfg.clients
+	if cfg.transport == "tcp" {
+		return expected
+	}
+	limit := 10000
+	for _, name := range []string{
+		"PERF_STREAM_NON_TCP_CLIENTS_MAX",
+		"PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX",
+	} {
+		raw := os.Getenv(name)
+		if raw == "" {
+			continue
+		}
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
+			limit = value
+			break
+		}
+	}
+	if expected > limit {
+		return limit
+	}
+	return expected
 }
 
 func startMultiStreamEchoServer(server *zlink.StreamSocket) (func() error, <-chan error) {

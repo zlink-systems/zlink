@@ -9,15 +9,14 @@ package native
 
 extern void goZlinkReplyTrampoline(zlink_request_result_t result_, zlink_msg_t *parts_, size_t part_count_, uintptr_t userdata_);
 
-static inline int zlink_dealer_request_transport_pair_part_go_local(
-    void *dealer_, const zlink_routed_submit_target_t *target_,
+static inline int zlink_dealer_request_part_go_local(
+    void *dealer_,
     zlink_msg_t *part_, zlink_send_flags_t flags_, zlink_part_flag_t part_flag_,
     uint32_t timeout_ms_, uintptr_t userdata_) {
     zlink_reply_handler_fn handler_ = userdata_ == 0
         ? NULL : (zlink_reply_handler_fn)goZlinkReplyTrampoline;
-    return zlink_dealer_request_transport_pair_part(
-        dealer_, target_, part_, flags_, part_flag_, timeout_ms_, handler_,
-        (void *)userdata_);
+    return zlink_dealer_request_part(dealer_, part_, flags_, part_flag_,
+        timeout_ms_, handler_, (void *)userdata_);
 }
 
 static inline int zlink_router_request_transport_pair_part_go_local(
@@ -158,8 +157,9 @@ func (r *requestCompletion) fail(err error) {
 // completion channel separately. The unflagged public terminal adapts an
 // admission error back into that channel to preserve its asynchronous API:
 //
-//  1. snapshot one exact routed target (a value snapshot, not a credit
-//     reservation) so the request and its reply stay on one physical peer,
+//  1. let Core select the DEALER target at submit time, or snapshot the
+//     ROUTER's exact routed target so its request and reply stay on one
+//     physical peer,
 //  2. hand the record to Core with the selected admission flags — Core owns
 //     the HWM wait for NONE and returns immediately for DONTWAIT,
 //  3. arm the reply bridge; Core's reply handler (or its
@@ -195,10 +195,16 @@ func submitRoutedRequest(
 		return nil, err
 	}
 
-	target, err := selectRoutedTarget(core, routerRID)
-	if err == nil {
-		err = submitExactRoutedRequest(
-			core.raw(), role, routerRID, &target, flags, parts, timeoutMillis, completion.onReply)
+	if role == routedDealer {
+		err = submitRoutedRequestParts(
+			core.raw(), role, nil, nil, flags, parts, timeoutMillis, completion.onReply)
+	} else {
+		var target C.zlink_routed_submit_target_t
+		target, err = selectRoutedTarget(core, routerRID)
+		if err == nil {
+			err = submitRoutedRequestParts(
+				core.raw(), role, routerRID, &target, flags, parts, timeoutMillis, completion.onReply)
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -229,10 +235,10 @@ func selectRoutedTarget(core *socketCore, routerRID *RoutingID) (C.zlink_routed_
 	return target, nil
 }
 
-// submitExactRoutedRequest hands the record to Core with admission flags. The
+// submitRoutedRequestParts hands the record to Core with admission flags. The
 // reply handle is armed on the final part only, and is released here when the
 // submit fails — otherwise the reply trampoline owns it.
-func submitExactRoutedRequest(
+func submitRoutedRequestParts(
 	handle unsafe.Pointer,
 	role routedRole,
 	routerRID *RoutingID,
@@ -265,8 +271,8 @@ func submitExactRoutedRequest(
 			partTimeout = timeoutMillis
 		}
 		if role == routedDealer {
-			return submitErrorFromResult(C.zlink_dealer_request_transport_pair_part_go_local(
-				handle, target, part, C.zlink_send_flags_t(flags), partFlag,
+			return submitErrorFromResult(C.zlink_dealer_request_part_go_local(
+				handle, part, C.zlink_send_flags_t(flags), partFlag,
 				C.uint32_t(partTimeout), userdata))
 		}
 		return submitErrorFromResult(C.zlink_router_request_transport_pair_part_go_local(

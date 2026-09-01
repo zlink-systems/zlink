@@ -29,6 +29,10 @@ public final class PerfControl {
         emitLine("CLIENT_READY," + size);
     }
 
+    public static void emitServerStartReady(int size) {
+        emitLine("SERVER_START_READY," + size);
+    }
+
     public static void emitClientDone(int size) {
         emitLine("CLIENT_DONE," + size);
     }
@@ -60,6 +64,43 @@ public final class PerfControl {
             throw new IllegalStateException(label + " control read failed", ex);
         }
         throw new IllegalStateException(label + " missing " + expected);
+    }
+
+    public static boolean awaitStartOrStop(int size, String label) {
+        String expected = "START," + size;
+        try {
+            synchronized (STDIN_LOCK) {
+                String line;
+                while ((line = STDIN_READER.readLine()) != null) {
+                    if (expected.equals(line)) {
+                        return true;
+                    }
+                    if ("STOP".equals(line) || "QUIT".equals(line)) {
+                        return false;
+                    }
+                }
+            }
+        } catch (java.io.IOException ex) {
+            throw new IllegalStateException(label + " control read failed", ex);
+        }
+        return false;
+    }
+
+    public static void awaitStop(String label) {
+        try {
+            synchronized (STDIN_LOCK) {
+                String line;
+                while ((line = STDIN_READER.readLine()) != null) {
+                    if ("STOP".equals(line) || "QUIT".equals(line)) {
+                        return;
+                    }
+                }
+            }
+        } catch (java.io.IOException ex) {
+            throw new IllegalStateException(label + " control read failed", ex);
+        }
+        // Closing the runner control pipe owns the same shutdown boundary as
+        // an explicit STOP, matching the native perf servers.
     }
 
     public static void awaitControlConnected(String endpoint, String label) {

@@ -907,7 +907,8 @@ int zlink::stream_t::xstream_dispatch_msg (msg_t *msg_, pipe_t *pipe_)
     if (dispatch_mode == dispatch_mode_none)
         return 0;
 
-    const stream_dispatch_context_t dispatch_scope (this, pipe_, routing_id_value);
+    const stream_dispatch_context_t dispatch_scope (
+      this, pipe_, routing_id_value, dispatch_mode == dispatch_mode_packet);
     switch (dispatch_mode) {
         case dispatch_mode_raw: {
             const zlink_stream_on_raw_fn raw_callback = _dispatch_raw_callback;

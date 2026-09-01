@@ -112,6 +112,103 @@ def _patch_send_runtime(native):
     )
 
 
+def test_future_completion_finishes_inline_on_event_loop_thread():
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        with patch.object(
+            loop, "call_soon_threadsafe", wraps=loop.call_soon_threadsafe
+        ) as schedule:
+            routed_async_runtime._schedule_future(loop, future, "ready")
+            assert future.result() == "ready"
+            schedule.assert_not_called()
+
+    asyncio.run(scenario())
+
+
+def test_future_completion_coalesces_cross_thread_loop_wakes():
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        first = loop.create_future()
+        second = loop.create_future()
+        with patch.object(
+            loop, "call_soon_threadsafe", wraps=loop.call_soon_threadsafe
+        ) as schedule:
+            worker = threading.Thread(
+                target=lambda: (
+                    routed_async_runtime._schedule_future(loop, first, 1),
+                    routed_async_runtime._schedule_future(loop, second, 2),
+                )
+            )
+            worker.start()
+            worker.join()
+            assert schedule.call_count == 1
+            assert await asyncio.gather(first, second) == [1, 2]
+
+    asyncio.run(scenario())
+
+
+def test_future_completion_batch_continues_after_resolution_and_close_failures():
+    class RejectingFuture:
+        def __init__(self, loop):
+            self._loop = loop
+
+        def done(self):
+            return False
+
+        def get_loop(self):
+            return self._loop
+
+        def set_result(self, _value):
+            raise RuntimeError("resolution failed")
+
+    class CloseProbe:
+        def __init__(self, error=None):
+            self.close_count = 0
+            self._error = error
+
+        def close(self):
+            self.close_count += 1
+            if self._error is not None:
+                raise self._error
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        reported = []
+        previous_handler = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, context: reported.append(context))
+        failing_close = CloseProbe(RuntimeError("close failed"))
+        following_close = CloseProbe()
+        second = loop.create_future()
+        batch = routed_async_runtime._FutureCompletionBatch(loop)
+        try:
+            worker = threading.Thread(
+                target=lambda: (
+                    batch.enqueue(
+                        RejectingFuture(loop),
+                        [failing_close, following_close],
+                        False,
+                    ),
+                    batch.enqueue(second, "second", False),
+                )
+            )
+            worker.start()
+            worker.join()
+
+            assert await asyncio.wait_for(second, 1.0) == "second"
+        finally:
+            loop.set_exception_handler(previous_handler)
+
+        assert failing_close.close_count == 1
+        assert following_close.close_count == 1
+        assert [str(context["exception"]) for context in reported] == [
+            "resolution failed",
+            "close failed",
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_immediate_async_send_does_not_allocate_a_future():
     async def scenario():
         native = _SendAsyncStub(op_id=0)
@@ -473,6 +570,119 @@ def test_async_request_reply_preserves_two_application_parts():
                     finally:
                         for part in reply_parts:
                             part.close()
+
+    asyncio.run(scenario())
+
+
+def test_async_dealer_requests_complete_on_one_public_completion_poller():
+    async def scenario():
+        request_count = 4
+        with zlink.create_context() as context:
+            with zlink.create_dealer_socket(context) as dealer:
+                with zlink.create_router_socket(context) as router:
+                    dealer.options.linger_ms = 0
+                    router.options.linger_ms = 0
+                    endpoint = _endpoint("request-completion-poller")
+                    router.bind(endpoint)
+                    dealer.connect(endpoint)
+
+                    await _send_when_connected(dealer, b"ready")
+                    ready = zlink.create_received()
+                    assert router.recv_into(ready)
+                    ready.close()
+
+                    tasks = []
+                    completion_counts = [0] * request_count
+                    with zlink.create_poller() as poller:
+                        poll_events = zlink.create_poll_events(1)
+                        poller.add_socket(
+                            dealer, zlink.PollEventFlag.POLLCOMPLETION, 41
+                        )
+                        try:
+                            for index in range(request_count):
+                                task = asyncio.create_task(
+                                    dealer.request()
+                                    .messages(b"request", str(index).encode())
+                                    .timeout(1.0)
+                                    .submit()
+                                )
+                                task.add_done_callback(
+                                    lambda _task, index=index: completion_counts.__setitem__(
+                                        index, completion_counts[index] + 1
+                                    )
+                                )
+                                tasks.append(task)
+
+                            received_indexes = set()
+                            for _ in range(200):
+                                await asyncio.sleep(0)
+                                while len(received_indexes) < request_count:
+                                    received = zlink.create_received()
+                                    if not router.recv_into(
+                                        received, flags=zlink.RecvFlags.DONT_WAIT
+                                    ):
+                                        received.close()
+                                        break
+                                    try:
+                                        request_parts = received.to_bytes_list()
+                                        assert request_parts[0] == b"request"
+                                        index = int(request_parts[1])
+                                        assert index not in received_indexes
+                                        received_indexes.add(index)
+                                        received.reply().messages(
+                                            b"reply", request_parts[1]
+                                        ).submit()
+                                    finally:
+                                        received.close()
+                                if len(received_indexes) == request_count:
+                                    break
+                            assert received_indexes == set(range(request_count))
+
+                            # Registering POLLCOMPLETION transfers callback
+                            # dispatch to Poller.wait. Event-loop turns alone
+                            # must not finish any request.
+                            for _ in range(3):
+                                await asyncio.sleep(0)
+                            assert all(not task.done() for task in tasks)
+                            assert completion_counts == [0] * request_count
+
+                            completion_event_count = 0
+                            for _ in range(50):
+                                ready_count = poller.wait(poll_events, 20)
+                                if ready_count:
+                                    completion_event_count += ready_count
+                                    assert poll_events.slot(0) == 41
+                                    assert poll_events.has_event(
+                                        0, zlink.PollEventFlag.POLLCOMPLETION
+                                    )
+                                await asyncio.sleep(0)
+                                if all(task.done() for task in tasks):
+                                    break
+
+                            assert completion_event_count > 0
+                            replies = await asyncio.gather(*tasks)
+                            try:
+                                assert [
+                                    [part.to_bytes() for part in reply]
+                                    for reply in replies
+                                ] == [
+                                    [b"reply", str(index).encode()]
+                                    for index in range(request_count)
+                                ]
+                            finally:
+                                for reply in replies:
+                                    for part in reply:
+                                        part.close()
+                            await asyncio.sleep(0)
+                            assert completion_counts == [1] * request_count
+                        finally:
+                            for task in tasks:
+                                if not task.done():
+                                    task.cancel()
+                            if tasks:
+                                await asyncio.gather(*tasks, return_exceptions=True)
+                            poller.remove_socket(dealer)
+                            assert poller.size() == 0
 
     asyncio.run(scenario())
 

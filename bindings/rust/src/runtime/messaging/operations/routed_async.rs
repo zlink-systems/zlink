@@ -145,9 +145,10 @@ impl RequestCompletion {
 
 /// Consumer side of one Core-owned request.
 ///
-/// The first poll performs exactly one submit against one exact target. Core
-/// owns the HWM contract for that submit and the reply deadline; on acceptance
-/// the Core reply callback completes this Future.
+/// The first poll performs exactly one submit. DEALER target selection stays
+/// inside that Core submit, while ROUTER preserves its explicit exact target.
+/// Core owns the HWM contract and the reply deadline; on acceptance the Core
+/// reply callback completes this Future.
 struct RoutedRequestFuture {
     operation: Option<RequestOpStorage>,
     completion: Arc<RequestCompletion>,
@@ -179,28 +180,16 @@ impl RoutedRequestFuture {
         let timeout_ms = duration_to_timeout_ms(timeout);
 
         let role = operation.routed.role();
-        let router_rid = match role {
-            RoutedRole::Dealer => None,
-            RoutedRole::Router => Some(
-                operation
-                    .peer_rid
-                    .as_ref()
-                    .ok_or_else(|| SubmitError::new(SubmitResult::InvalidArgument, libc::EINVAL))?,
-            ),
-        };
-        let (rc, target) = operation.routed.select_target(router_rid);
-        if rc != 0 {
-            return Err(submit_error_from_errno(unsafe { ffi::zlink_errno() }).into());
-        }
+        let target = select_request_target(&operation.routed, operation.peer_rid.as_ref())?;
 
         let mut parts = operation.parts.into_vec();
         let callback_owner = Arc::into_raw(Arc::clone(&self.completion));
         let result = operation.routed.with_live_handle(|handle| {
-            submit_exact_request(
+            submit_request(
                 handle,
                 role,
                 operation.peer_rid.as_ref(),
-                &target,
+                target.as_ref(),
                 &mut parts,
                 timeout_ms,
                 callback_owner.cast_mut().cast(),
@@ -328,25 +317,16 @@ fn submit_request_callback(
         operation.timeout
     };
     let role = operation.routed.role();
-    let router_rid = match role {
-        RoutedRole::Dealer => None,
-        RoutedRole::Router => Some(operation.peer_rid.as_ref().ok_or_else(|| {
-            SubmitError::new(SubmitResult::InvalidArgument, libc::EINVAL)
-        })?),
-    };
-    let (rc, target) = operation.routed.select_target(router_rid);
-    if rc != 0 {
-        return Err(submit_error_from_errno(unsafe { ffi::zlink_errno() }));
-    }
+    let target = select_request_target(&operation.routed, operation.peer_rid.as_ref())?;
 
     let mut parts = operation.parts.into_vec();
     let callback_owner = Box::into_raw(Box::new(callback)).cast::<c_void>();
     let result = operation.routed.with_live_handle(|handle| {
-        submit_exact_request_with(
+        submit_request_with(
             handle,
             role,
             operation.peer_rid.as_ref(),
-            &target,
+            target.as_ref(),
             &mut parts,
             flags,
             duration_to_timeout_ms(timeout),
@@ -371,16 +351,32 @@ fn submit_request_callback(
     Ok(())
 }
 
-fn submit_exact_request(
+fn select_request_target(
+    routed: &RoutedHandle,
+    router_rid: Option<&RoutingId>,
+) -> Result<Option<ffi::zlink_routed_submit_target_t>, SubmitError> {
+    if routed.role() == RoutedRole::Dealer {
+        return Ok(None);
+    }
+    let router_rid =
+        router_rid.ok_or_else(|| SubmitError::new(SubmitResult::InvalidArgument, libc::EINVAL))?;
+    let (rc, target) = routed.select_target(Some(router_rid));
+    if rc != 0 {
+        return Err(submit_error_from_errno(unsafe { ffi::zlink_errno() }));
+    }
+    Ok(Some(target))
+}
+
+fn submit_request(
     handle: *mut c_void,
     role: RoutedRole,
     router_rid: Option<&RoutingId>,
-    target: &ffi::zlink_routed_submit_target_t,
+    target: Option<&ffi::zlink_routed_submit_target_t>,
     parts: &mut [Message],
     timeout_ms: u32,
     userdata: *mut c_void,
 ) -> i32 {
-    submit_exact_request_with(
+    submit_request_with(
         handle,
         role,
         router_rid,
@@ -393,11 +389,11 @@ fn submit_exact_request(
     )
 }
 
-fn submit_exact_request_with(
+fn submit_request_with(
     handle: *mut c_void,
     role: RoutedRole,
     router_rid: Option<&RoutingId>,
-    target: &ffi::zlink_routed_submit_target_t,
+    target: Option<&ffi::zlink_routed_submit_target_t>,
     parts: &mut [Message],
     flags: u32,
     timeout_ms: u32,
@@ -422,9 +418,8 @@ fn submit_exact_request_with(
         // bounds the wait with SNDTIMEO, and reports the outcome once.
         let rc = unsafe {
             match role {
-                RoutedRole::Dealer => ffi::zlink_dealer_request_transport_pair_part(
+                RoutedRole::Dealer => ffi::zlink_dealer_request_part(
                     handle,
-                    target,
                     part.raw_mut(),
                     flags,
                     flag,
@@ -432,18 +427,21 @@ fn submit_exact_request_with(
                     handler,
                     callback_data,
                 ),
-                RoutedRole::Router => ffi::zlink_router_request_transport_pair_part(
-                    handle,
-                    router_rid.expect("router target").as_raw(),
-                    target.transport_pair_id,
-                    target.transport_pair_generation,
-                    part.raw_mut(),
-                    flags,
-                    flag,
-                    if final_part { timeout_ms } else { 0 },
-                    handler,
-                    callback_data,
-                ),
+                RoutedRole::Router => {
+                    let target = target.expect("router transport pair");
+                    ffi::zlink_router_request_transport_pair_part(
+                        handle,
+                        router_rid.expect("router target").as_raw(),
+                        target.transport_pair_id,
+                        target.transport_pair_generation,
+                        part.raw_mut(),
+                        flags,
+                        flag,
+                        if final_part { timeout_ms } else { 0 },
+                        handler,
+                        callback_data,
+                    )
+                }
             }
         };
         if rc != SubmitResult::Ok as i32 {
@@ -491,5 +489,25 @@ fn request_result_from_native(result: ffi::zlink_request_result_t) -> RequestRes
         ffi::zlink_request_result_t::ZLINK_REQUEST_RESULT_NOT_SUPPORTED => {
             RequestResult::NotSupported
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dealer_request_target_selection_is_core_owned() {
+        let routed = RoutedHandle::new(std::ptr::null_mut(), RoutedRole::Dealer);
+        assert!(select_request_target(&routed, None).unwrap().is_none());
+
+        let source = include_str!("routed_async.rs");
+        let runtime_source = source.split("#[cfg(test)]").next().unwrap();
+        let dealer_standard = ["ffi::zlink_dealer_request_", "part("].concat();
+        let dealer_exact = ["ffi::zlink_dealer_request_", "transport_pair_part("].concat();
+        let router_exact = ["ffi::zlink_router_request_", "transport_pair_part("].concat();
+        assert!(runtime_source.contains(&dealer_standard));
+        assert!(!runtime_source.contains(&dealer_exact));
+        assert!(runtime_source.contains(&router_exact));
     }
 }

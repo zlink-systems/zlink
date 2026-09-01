@@ -34,10 +34,83 @@ DEFAULT_PYTHONPATH = ROOT.parent.parent / "src"
 # MULTI_STREAM client must be the shared C perf_stream_client binary so the
 # measured surface stays the Python STREAM server (see PERF_MULTI_TEST_POLICY).
 STREAM_CLIENT_DIR = REPO_ROOT / "bindings" / "c" / "perf" / "common" / "streamclient"
+STREAM_MULTI_COMMON_DIR = REPO_ROOT / "bindings" / "c" / "perf" / "multi" / "common"
+CANONICAL_STREAM_BUILD_DIR = REPO_ROOT / "bindings" / "c" / "build"
+CANONICAL_STREAM_CLIENT_BIN = CANONICAL_STREAM_BUILD_DIR / "perf" / "perf_stream_client"
 STREAM_CLIENT_BIN = STREAM_CLIENT_DIR / "build" / "perf_stream_client"
 WINDOWS_STREAM_CLIENT_BIN = (
     REPO_ROOT / "bindings" / "c" / "build-windows" / "perf" / "Release" / "perf_stream_client.exe"
 )
+
+
+def _is_executable(path):
+    return path.is_file() and (os.name == "nt" or os.access(path, os.X_OK))
+
+
+def _stream_client_sources():
+    for source_dir in (STREAM_CLIENT_DIR, STREAM_MULTI_COMMON_DIR):
+        if not source_dir.is_dir():
+            continue
+        for pattern in ("*.cpp", "*.hpp"):
+            yield from source_dir.glob(pattern)
+
+
+def _stream_client_is_fresh(path):
+    if not _is_executable(path):
+        return False
+    try:
+        binary_mtime = path.stat().st_mtime_ns
+        return not any(
+            source.stat().st_mtime_ns > binary_mtime
+            for source in _stream_client_sources()
+        )
+    except OSError:
+        return False
+
+
+def _rebuild_canonical_stream_client():
+    if os.name == "nt":
+        build_dir = WINDOWS_STREAM_CLIENT_BIN.parents[2]
+        command = [
+            "cmake",
+            "--build",
+            str(build_dir),
+            "--config",
+            "Release",
+            "--target",
+            "perf_stream_client",
+        ]
+        output = WINDOWS_STREAM_CLIENT_BIN
+    else:
+        build_dir = CANONICAL_STREAM_BUILD_DIR
+        command = [
+            "cmake",
+            "--build",
+            str(build_dir),
+            "--target",
+            "perf_stream_client",
+        ]
+        output = CANONICAL_STREAM_CLIENT_BIN
+    if not (build_dir / "CMakeCache.txt").is_file():
+        return None
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return output if _stream_client_is_fresh(output) else None
+
+
+def _rebuild_fallback_stream_client():
+    try:
+        subprocess.run(
+            ["bash", str(STREAM_CLIENT_DIR / "build.sh")],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return STREAM_CLIENT_BIN if _stream_client_is_fresh(STREAM_CLIENT_BIN) else None
 
 
 def _ensure_stream_client(*, reuse_build=False):
@@ -47,30 +120,37 @@ def _ensure_stream_client(*, reuse_build=False):
         candidates.append(Path(configured))
     if os.name == "nt":
         candidates.append(WINDOWS_STREAM_CLIENT_BIN)
+    else:
+        candidates.append(CANONICAL_STREAM_CLIENT_BIN)
     candidates.append(STREAM_CLIENT_BIN)
-    for candidate in candidates:
-        if candidate.exists() and (os.name == "nt" or os.access(candidate, os.X_OK)):
-            return candidate
+
+    if configured and _is_executable(Path(configured)):
+        # An explicit override is user-owned; never rebuild or replace it.
+        return Path(configured)
+
     if reuse_build:
+        for candidate in candidates:
+            if _is_executable(candidate):
+                return candidate
         raise SystemExit(
             "--reuse-build requires an existing executable STREAM client; "
             f"checked: {', '.join(str(candidate) for candidate in candidates)}"
         )
-    if os.name == "nt":
-        raise SystemExit(
-            "Windows MULTI_STREAM requires the native C perf_stream_client.exe. "
-            "Build bindings/c/perf with CMake or set PERF_STREAM_CLIENT_BIN."
-        )
-    subprocess.run(
-        ["bash", str(STREAM_CLIENT_DIR / "build.sh")],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    if STREAM_CLIENT_BIN.exists() and os.access(STREAM_CLIENT_BIN, os.X_OK):
-        return STREAM_CLIENT_BIN
+
+    for candidate in candidates[1 if configured else 0 :]:
+        if _stream_client_is_fresh(candidate):
+            return candidate
+
+    rebuilt = _rebuild_canonical_stream_client()
+    if rebuilt is not None:
+        return rebuilt
+    if os.name != "nt":
+        rebuilt = _rebuild_fallback_stream_client()
+        if rebuilt is not None:
+            return rebuilt
     raise SystemExit(
-        f"STREAM client build completed without the required executable: {STREAM_CLIENT_BIN}"
+        "STREAM client is missing or stale and could not be rebuilt; "
+        f"checked: {', '.join(str(candidate) for candidate in candidates)}"
     )
 DEFAULT_PATTERNS = (
     "DEALER_DEALER",
@@ -692,6 +772,41 @@ def _wait_for_control_line(proc, prefixes, *, timeout_s, stdout_chunks):
     raise SystemExit(f"missing control line: {wanted}{detail_text}")
 
 
+def _write_control_line(proc, line):
+    if proc.stdin is None:
+        raise SystemExit(f"control stdin is unavailable while sending: {line}")
+    proc.stdin.write(f"{line}\n")
+    proc.stdin.flush()
+
+
+def _release_stream_start(server, client, msg_size, *, timeout_s, stdout_chunks):
+    client_ready = _wait_for_control_line(
+        client,
+        ("CLIENT_READY,", "UNSUPPORTED,", "SKIP,"),
+        timeout_s=timeout_s,
+        stdout_chunks=stdout_chunks,
+    )
+    if client_ready.startswith(("UNSUPPORTED,", "SKIP,")):
+        return client_ready
+    if client_ready != f"CLIENT_READY,{msg_size}":
+        raise SystemExit(f"STREAM client did not become ready: {client_ready}")
+
+    _write_control_line(server, f"START,{msg_size}")
+    server_ready = _wait_for_control_line(
+        server,
+        ("SERVER_START_READY,", "UNSUPPORTED,", "SKIP,"),
+        timeout_s=timeout_s,
+        stdout_chunks=stdout_chunks,
+    )
+    if server_ready.startswith(("UNSUPPORTED,", "SKIP,")):
+        return server_ready
+    if server_ready != f"SERVER_START_READY,{msg_size}":
+        raise SystemExit(f"STREAM server did not acknowledge start: {server_ready}")
+
+    _write_control_line(client, f"START,{msg_size}")
+    return server_ready
+
+
 def _drain_stdout_queue(proc, stdout_chunks):
     lines = getattr(proc, "_zlink_stdout_queue", None)
     if lines is None:
@@ -860,29 +975,47 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
                 _stream_completion_wait_ms(env, shutdown_timeout_ms),
                 "--send-stop-token",
                 "0",
+                "--start-gate",
+                "1",
                 "--endpoint",
                 endpoint,
             ]
+            client = subprocess.Popen(
+                client_cmd,
+                cwd=str(REPO_ROOT),
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                **_server_popen_kwargs(),
+            )
+            start_status = _release_stream_start(
+                server,
+                client,
+                msg_size,
+                timeout_s=ready_timeout_s,
+                stdout_chunks=stdout_chunks,
+            )
+            if start_status.startswith(("UNSUPPORTED,", "SKIP,")):
+                return "\n".join(chunk for chunk in stdout_chunks if chunk)
             try:
-                client_run = subprocess.run(
-                    client_cmd,
-                    cwd=str(REPO_ROOT),
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=client_timeout_s,
-                    check=True,
+                client.wait(timeout=client_timeout_s)
+            except subprocess.TimeoutExpired as exc:
+                _drain_stdout_queue(client, stdout_chunks)
+                raise exc
+            _drain_stdout_queue(client, stdout_chunks)
+            client_stderr = client.stderr.read() if client.stderr else ""
+            if client_stderr:
+                stderr_chunks.append(client_stderr.strip())
+            if client.returncode != 0:
+                raise subprocess.CalledProcessError(
+                    client.returncode,
+                    client.args,
+                    output="\n".join(stdout_chunks),
+                    stderr=client_stderr,
                 )
-            finally:
-                try:
-                    server.stdin.write("STOP\n")
-                    server.stdin.flush()
-                except Exception:
-                    pass
-            if client_run.stdout:
-                stdout_chunks.append(client_run.stdout.strip())
-            if client_run.stderr:
-                stderr_chunks.append(client_run.stderr.strip())
+            _write_control_line(server, "STOP")
             try:
                 server.wait(timeout=shutdown_grace_s)
             except subprocess.TimeoutExpired:

@@ -1,14 +1,14 @@
 {
   "schema": 1,
-  "coreVersion": "0.15.0",
+  "coreVersion": "0.15.1",
   "headers": [
     {
       "path": "include/zlink.h",
-      "sha256": "207f481da35d73432ea5ae5edbe091e062c43e29a92b444611a8b3067f227ac2"
+      "sha256": "a3403e74d5203b07764d3be3889850d8c472601ec37e6cea4c06caecbe84a1ee"
     },
     {
       "path": "include/zlink/common.h",
-      "sha256": "ab571c6d337a5242c08e95d8595fa8e594b59cc120cd2ca1d79427909b1a4d82"
+      "sha256": "edb2a3f68d58d50a9e64ac37d2627a01bf1f8030f83f7643ac670ce573b97c72"
     },
     {
       "path": "include/zlink/core/api.h",
@@ -157,7 +157,7 @@
     "zlink_xpub_recv_part"
   ],
   "localSymbols": [
-    "zlink_dealer_request_transport_pair_part_go_local",
+    "zlink_dealer_request_part_go_local",
     "zlink_recv_handler_go_local",
     "zlink_router_request_transport_pair_part_go_local",
     "zlink_socket_monitor_handler_go_local",

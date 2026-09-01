@@ -297,6 +297,9 @@ class _ReceivedPartsOwner:
             raise RuntimeError("received message is closed")
         return self._parts_ptr[index]
 
+    def _clone_native_part(self, index):
+        return _clone_native_msg(self.msg(index))
+
     def size(self, index):
         return _msg_size(self.msg(index))
 
@@ -345,6 +348,10 @@ class _BytesReceivedPartsOwner:
     def msg(self, index):
         self._check_open(index)
         raise RuntimeError("received message does not own a native zlink_msg_t")
+
+    def _clone_native_part(self, index):
+        self._check_open(index)
+        return None
 
     def size(self, index):
         self._check_open(index)

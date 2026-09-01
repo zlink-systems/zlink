@@ -80,10 +80,31 @@ function resolveMultiMonitorHwm(environment = process.env) {
   return 4_096_000;
 }
 
+function resolveMultiStreamClientCount(
+  clientCount,
+  transport,
+  environment = process.env
+) {
+  const clients = Math.max(1, Math.trunc(Number(clientCount) || 1));
+  if (transport === 'tcp') {
+    return clients;
+  }
+  const configured = Number(
+    environment.PERF_STREAM_NON_TCP_CLIENTS_MAX
+      || environment.PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX
+      || 10_000
+  );
+  const limit = Number.isFinite(configured) && configured > 0
+    ? Math.trunc(configured)
+    : 10_000;
+  return Math.min(clients, limit);
+}
+
 module.exports = {
   benchmarkEndpoint,
   parseMultiArgs: parseArgs,
   reservePort,
   resolveMultiConnectConcurrency,
-  resolveMultiMonitorHwm
+  resolveMultiMonitorHwm,
+  resolveMultiStreamClientCount
 };

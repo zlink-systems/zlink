@@ -61,7 +61,8 @@ Options:
   --server-shutdown-timeout-ms N
                        Override graceful server shutdown wait.
   --server-bind-port N Override benchmark bind port (default: 0 = auto).
-  --auto-hwm-profile N Set auto-HWM profile.
+  --auto-hwm-profile NAME
+                       Set auto-HWM profile: compact, low_latency, balanced, throughput (default: balanced).
   --pin-cpu            Pin server/client benchmark processes to CPU 0 on Linux.`);
 }
 function errorText(error) {

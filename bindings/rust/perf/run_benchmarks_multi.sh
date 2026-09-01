@@ -357,9 +357,7 @@ prepare_core_runtime() {
     # rebuild (the Go runner already compares the versioned file directly).
     local native_dir="${ZLINK_RUST_NATIVE_DIR:-${CORE_LIB_DIR}}"
     local runtime="${native_dir}/libzlink.so"
-    local package_version
-    package_version="$(sed -n 's/^version = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"/\1/p' "${PROJECT_DIR}/Cargo.toml" | head -n1)"
-    [[ -f "${runtime}" ]] || runtime="${native_dir}/libzlink.so.${package_version}"
+    [[ -f "${runtime}" ]] || runtime="${native_dir}/libzlink.so.${ZLINK_CORE_VERSION}"
     if [[ ! -f "${runtime}" ]]; then
         echo "Rust perf runtime not found: ${native_dir}" >&2
         echo "Build core/build or set ZLINK_RUST_NATIVE_DIR." >&2
@@ -982,7 +980,11 @@ for run in $(seq 1 "${RUNS}"); do
                     fi
                     rm -f "${CLIENT_OUT}" "${CLIENT_ERR}"
                 elif [[ "${pat}" == "MULTI_STREAM" ]]; then
-                    if ! CLIENT_OUTPUT="$(timeout "${CLIENT_TIMEOUT_SECONDS}s" "${RUN_PREFIX[@]}" "${STREAM_CLIENT}" \
+                    CLIENT_OUT="$(mktemp)"
+                    CLIENT_ERR="$(mktemp)"
+                    CLIENT_FIFO="$(mktemp -u)"
+                    mkfifo "${CLIENT_FIFO}"
+                    timeout "${CLIENT_TIMEOUT_SECONDS}s" "${RUN_PREFIX[@]}" "${STREAM_CLIENT}" \
                         --transport "${transport}" \
                         --pattern STREAM \
                         --sizes "${size}" \
@@ -993,10 +995,56 @@ for run in $(seq 1 "${RUNS}"); do
                         --io-threads "${PERF_MULTI_CLIENT_IO_THREADS}" \
                         --print-perf-result 1 \
                         --send-stop-token 0 \
-                        --endpoint "${ENDPOINT}" 2>&1)"; then
+                        --start-gate 1 \
+                        --endpoint "${ENDPOINT}" \
+                        < "${CLIENT_FIFO}" > "${CLIENT_OUT}" 2> "${CLIENT_ERR}" &
+                    CLIENT_PID=$!
+                    exec {CLIENT_CONTROL_FD}> "${CLIENT_FIFO}"
+                    rm -f "${CLIENT_FIFO}"
+
+                    CLIENT_READY_LINE="$(wait_for_file_prefix \
+                        "${CLIENT_OUT}" "CLIENT_READY," "${ONE_WAY_CLIENT_READY_TIMEOUT}" || true)"
+                    if [[ "${CLIENT_READY_LINE}" != "CLIENT_READY,${size}" ]]; then
                         case_status="fail"
-                        case_reason="binary_exit_or_timeout"
+                        case_reason="stream_client_ready_timeout_or_invalid"
+                    else
+                        printf 'START,%s\n' "${size}" >&"${SERVER_CONTROL_FD}" || true
+                        SERVER_START_READY_LINE="$(wait_for_file_prefix \
+                            "${SRV_OUT}" "SERVER_START_READY," "${SERVER_READY_TIMEOUT_SECONDS}" || true)"
+                        if [[ "${SERVER_START_READY_LINE}" != "SERVER_START_READY,${size}" ]]; then
+                            case_status="fail"
+                            case_reason="stream_server_start_ack_timeout_or_invalid"
+                        else
+                            printf 'START,%s\n' "${size}" >&"${CLIENT_CONTROL_FD}" || true
+                        fi
                     fi
+
+                    if [[ "${case_status}" == "success" ]]; then
+                        if ! wait_for_pid "${CLIENT_PID}" "${CLIENT_TIMEOUT_SECONDS}"; then
+                            case_status="fail"
+                            case_reason="binary_exit_or_timeout"
+                            kill "${CLIENT_PID}" 2>/dev/null || true
+                            wait "${CLIENT_PID}" 2>/dev/null || true
+                        elif ! wait "${CLIENT_PID}"; then
+                            case_status="fail"
+                            case_reason="binary_exit_or_timeout"
+                        fi
+                    else
+                        kill "${CLIENT_PID}" 2>/dev/null || true
+                        wait "${CLIENT_PID}" 2>/dev/null || true
+                    fi
+                    exec {CLIENT_CONTROL_FD}>&- || true
+
+                    if [[ -f "${CLIENT_OUT}" ]]; then
+                        CLIENT_OUTPUT="$(cat "${CLIENT_OUT}")"
+                    fi
+                    if [[ -s "${CLIENT_ERR}" ]]; then
+                        if [[ -n "${CLIENT_OUTPUT}" ]]; then
+                            CLIENT_OUTPUT+=$'\n'
+                        fi
+                        CLIENT_OUTPUT+="$(cat "${CLIENT_ERR}")"
+                    fi
+                    rm -f "${CLIENT_OUT}" "${CLIENT_ERR}"
                 else
                     if ! CLIENT_OUTPUT="$(timeout "${CLIENT_TIMEOUT_SECONDS}s" "${RUN_PREFIX[@]}" "${CLIENT_BIN}" "${transport}" "${size}" "${ENDPOINT}" 2>&1)"; then
                         case_status="fail"

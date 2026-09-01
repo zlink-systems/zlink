@@ -5,11 +5,15 @@
 const readline = require('node:readline');
 const zlink = require('@zlink-systems/zlink');
 const { configureTlsServer } = require('../common/perf_tls');
-const { parseMultiArgs } = require('./perf_multi_common');
+const {
+  parseMultiArgs,
+  resolveMultiStreamClientCount
+} = require('./perf_multi_common');
 const {
   applyContextPolicy,
   applySocketPolicy,
   emitMultiSocketHwmDetail,
+  waitForConnectionReadyCount,
 } = require('./perf_multi_runtime');
 
 function packetFrame(header, body) {
@@ -49,13 +53,74 @@ function sleepImmediate() {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+function streamStartTimeoutMs(environment = process.env) {
+  for (const name of [
+    'PERF_MULTI_CONNECT_READY_TIMEOUT_MS',
+    'PERF_CONNECT_READY_TIMEOUT_MS'
+  ]) {
+    const value = Number(environment[name]);
+    if (Number.isFinite(value) && value > 0) {
+      return Math.trunc(value);
+    }
+  }
+  return 10_000;
+}
+
+function createStreamControlBarrier(rl, msgSize, timeoutMs = streamStartTimeoutMs()) {
+  const expected = `START,${msgSize}`;
+  let phase = 'waiting';
+  let stopRequested = false;
+  let resolveStart;
+  let rejectStart;
+  const start = new Promise<void>((resolve, reject) => {
+    resolveStart = resolve;
+    rejectStart = reject;
+  });
+  const timer = setTimeout(() => {
+    if (phase === 'waiting') {
+      phase = 'failed';
+      rejectStart(new Error(`stream server timeout waiting for ${expected}`));
+    }
+  }, timeoutMs);
+  const onLine = (rawLine) => {
+    const line = String(rawLine).trim();
+    if (!line) {
+      return;
+    }
+    if (phase === 'waiting') {
+      clearTimeout(timer);
+      if (line === expected) {
+        phase = 'active';
+        resolveStart();
+      } else {
+        phase = 'failed';
+        rejectStart(new Error(
+          `stream server token mismatch: got ${line}, expected ${expected}`
+        ));
+      }
+      return;
+    }
+    if (phase === 'active' && (line === 'STOP' || line === 'QUIT')) {
+      stopRequested = true;
+    }
+  };
+  rl.on('line', onLine);
+  return {
+    start,
+    stopRequested: () => stopRequested,
+    close() {
+      clearTimeout(timer);
+      rl.off('line', onLine);
+    }
+  };
+}
+
 async function main() {
   const options = parseMultiArgs(process.argv.slice(2));
   const ctx = zlink.createContext();
   applyContextPolicy(ctx, 'server', 'MULTI_STREAM');
   const stream = zlink.createStreamSocket(ctx);
   let rl = null;
-  let stop = false;
   const pending = new Set();
   let sendFailure = null;
 
@@ -72,9 +137,34 @@ async function main() {
       );
     }
     configureTlsServer(stream, options.transport);
-    stream.bind(options.endpoint);
-    ctx.recalculateAutoHwm();
-    emitMultiSocketHwmDetail(stream, 'endpoint', options.transport, options.msgSize);
+    const targetClients = resolveMultiStreamClientCount(
+      options.clients,
+      options.transport
+    );
+    let bindCompleted = false;
+    let bindError = null;
+    const connectionsReady = waitForConnectionReadyCount(
+      stream,
+      targetClients,
+      () => {
+        try {
+          stream.bind(options.endpoint);
+          bindCompleted = true;
+        } catch (error) {
+          bindError = error;
+          throw error;
+        }
+      },
+      streamStartTimeoutMs()
+    ).then(
+      () => null,
+      (error) => error
+    );
+    if (!bindCompleted) {
+      const connectionError = bindError || await connectionsReady;
+      throw connectionError
+        || new Error('stream server failed to bind before connection barrier');
+    }
     stream.setPacketHandler((sourceRid, header, body) => {
       let reply;
       try {
@@ -93,21 +183,30 @@ async function main() {
           pending.delete(task);
         });
     });
-    console.log(`READY,${options.endpoint}`);
-
     rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-    (async () => {
-      for await (const line of rl) {
-        if (line === 'STOP' || line === 'QUIT') {
-          stop = true;
-          break;
-        }
+    const control = createStreamControlBarrier(rl, options.msgSize);
+    console.log(`READY,${options.endpoint}`);
+    try {
+      await control.start;
+      const connectionError = await connectionsReady;
+      if (connectionError) {
+        throw connectionError;
       }
-    })();
+      ctx.recalculateAutoHwm();
+      emitMultiSocketHwmDetail(
+        stream,
+        'server-connected',
+        options.transport,
+        options.msgSize
+      );
+      console.log(`SERVER_START_READY,${options.msgSize}`);
 
-    while (!stop) {
-      await sleepImmediate();
-      if (sendFailure) throw sendFailure;
+      while (!control.stopRequested()) {
+        await sleepImmediate();
+        if (sendFailure) throw sendFailure;
+      }
+    } finally {
+      control.close();
     }
     await Promise.all(pending);
   } finally {
@@ -117,7 +216,14 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  createStreamControlBarrier,
+  streamStartTimeoutMs
+};

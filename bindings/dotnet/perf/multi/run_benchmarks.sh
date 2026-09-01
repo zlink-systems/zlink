@@ -84,6 +84,7 @@ STREAM_MSG_SIZES="${PERF_MULTI_STREAM_MSG_SIZES:-${PERF_STREAM_MSG_SIZES:-${DEFA
 CLIENTS="${PERF_MULTI_CLIENTS:-}"
 EFFECTIVE_DEFAULT_CLIENTS="${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}"
 EFFECTIVE_DEFAULT_STREAM_CLIENTS="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}}"
+STREAM_NON_TCP_CLIENTS_MAX="${PERF_STREAM_NON_TCP_CLIENTS_MAX:-${PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX:-10000}}"
 EFFECTIVE_DEFAULT_IO_THREADS="${PERF_MULTI_DEFAULT_IO_THREADS:-${PERF_DEFAULT_IO_THREADS:-4}}"
 DURATION="${PERF_MULTI_DURATION_SECONDS:-5}"
 PART_COUNT="${PERF_PART_COUNT:-2}"
@@ -554,6 +555,20 @@ default_clients_for_pattern() {
   fi
 }
 
+effective_clients_for_transport() {
+  local pattern="${1:-}"
+  local transport="${2:-}"
+  local requested="${3:-}"
+  if [[ "${pattern}" == "MULTI_STREAM" && "${transport}" != "tcp" \
+        && "${requested}" =~ ^[0-9]+$ \
+        && "${STREAM_NON_TCP_CLIENTS_MAX}" =~ ^[0-9]+$ \
+        && "${requested}" -gt "${STREAM_NON_TCP_CLIENTS_MAX}" ]]; then
+    printf '%s' "${STREAM_NON_TCP_CLIENTS_MAX}"
+  else
+    printf '%s' "${requested}"
+  fi
+}
+
 pattern_uses_control_pipe() {
   local pattern="${1:-}"
   case "${pattern}" in
@@ -607,6 +622,37 @@ while time.time() < deadline:
             raise SystemExit(0)
         if "multi_client_error:" in text:
             raise SystemExit(1)
+    time.sleep(0.05)
+raise SystemExit(1)
+PY
+}
+
+wait_for_exact_control_token() {
+  local log_path="$1"
+  local token_prefix="$2"
+  local expected_size="$3"
+  local timeout_ms="$4"
+  python3 - "${log_path}" "${token_prefix}" "${expected_size}" "${timeout_ms}" <<'PY'
+import pathlib
+import sys
+import time
+
+path = pathlib.Path(sys.argv[1])
+prefix = sys.argv[2]
+expected = f"{prefix},{sys.argv[3]}"
+deadline = time.time() + max(0, int(sys.argv[4])) / 1000.0
+position = 0
+while time.time() < deadline:
+    if path.exists():
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            handle.seek(position)
+            for raw in handle:
+                line = raw.strip()
+                if line.startswith(f"{prefix},"):
+                    raise SystemExit(0 if line == expected else 2)
+                if "multi_server_error:" in line or "multi_client_error:" in line:
+                    raise SystemExit(1)
+            position = handle.tell()
     time.sleep(0.05)
 raise SystemExit(1)
 PY
@@ -703,14 +749,18 @@ shutdown_timeout_seconds() {
   printf '%s' "$(( (SERVER_SHUTDOWN_TIMEOUT_MS + 999) / 1000 ))"
 }
 
-write_control_line() {
+try_write_control_line() {
   local fd="$1"
   shift
   if [[ -n "${PERF_MULTI_CONTROL_FILE:-}" ]]; then
-    printf "$@" > "${PERF_MULTI_CONTROL_FILE}" 2>/dev/null || true
-    return
+    printf "$@" > "${PERF_MULTI_CONTROL_FILE}" 2>/dev/null
+    return $?
   fi
-  printf "$@" >&${fd} 2>/dev/null || true
+  printf "$@" >&${fd} 2>/dev/null
+}
+
+write_control_line() {
+  try_write_control_line "$@" || true
 }
 
 extract_results_from_logs() {
@@ -1517,20 +1567,16 @@ run_multi_process() {
 
 run_external_stream_client() {
   local endpoint="$1"
+  local control_fifo="$2"
   ensure_stream_client
   local stream_clients="${pattern_clients}"
-  local non_tcp_max="${PERF_STREAM_NON_TCP_CLIENTS_MAX:-${PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX:-10000}}"
   local stream_completion_wait_ms="${PERF_MULTI_STREAM_COMPLETION_WAIT_MS:-${PERF_STREAM_COMPLETION_WAIT_MS:-${SERVER_SHUTDOWN_TIMEOUT_MS}}}"
-  if [[ "${transport}" != "tcp" && "${stream_clients}" =~ ^[0-9]+$ \
-        && "${non_tcp_max}" =~ ^[0-9]+$ \
-        && "${stream_clients}" -gt "${non_tcp_max}" ]]; then
-    stream_clients="${non_tcp_max}"
-  fi
   local cmd=(
     "${STREAM_CLIENT}" --transport "${transport}" --pattern STREAM
     --sizes "${size}" --runs 1 --duration "${DURATION}"
     --ccu "${stream_clients}" --send-stop-token 0 --endpoint "${endpoint}"
     --completion-wait-ms "${stream_completion_wait_ms}"
+    --start-gate 1
     --io-threads "${CLIENT_IO_THREADS:-${COMMON_IO_THREADS:-${EFFECTIVE_DEFAULT_IO_THREADS:-4}}}"
   )
   if [[ "${PIN_CPU}" -eq 1 && "$(uname -s)" == Linux* ]] \
@@ -1542,7 +1588,8 @@ run_external_stream_client() {
     "PERF_MULTI_PATTERN=${pattern#MULTI_}" \
     "PERF_MULTI_TRANSPORT=${transport}" \
     "PERF_MULTI_COMPONENT=client" \
-    "${cmd[@]}" > "${client_log}" 2>&1
+    "${cmd[@]}" < "${control_fifo}" > "${client_log}" 2>&1 &
+  STREAM_CLIENT_PID=$!
 }
 
 ensure_build_output
@@ -1627,7 +1674,7 @@ print_effective_options() {
   print_line "- transport_transition_ms: ${TRANSPORT_TRANSITION_MS}"
   print_line "- pattern_transition_ms: ${PATTERN_TRANSITION_MS}"
   print_line "- lat_timeout_ms: ${PERF_MULTI_LAT_TIMEOUT_MS:-5000}"
-  print_line "- stream_non_tcp_clients_max: ${PERF_STREAM_NON_TCP_CLIENTS_MAX:-${PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX:-10000}}"
+  print_line "- stream_non_tcp_clients_max: ${STREAM_NON_TCP_CLIENTS_MAX}"
   print_line "- disable_resource_metrics: ${PERF_DISABLE_RESOURCE_METRICS:-0}"
   print_line "- timeout_seconds: ${TIMEOUT_SECONDS_DISPLAY}"
 }
@@ -1658,10 +1705,11 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
     [[ -n "${pattern}" ]] || continue
 
     pattern_msg_sizes="$(msg_sizes_for_pattern "${pattern}" "${MSG_SIZES}")"
-    pattern_clients="${CLIENTS}"
-    if [[ -z "${pattern_clients}" ]]; then
-      pattern_clients="$(default_clients_for_pattern "${pattern}")"
+    requested_pattern_clients="${CLIENTS}"
+    if [[ -z "${requested_pattern_clients}" ]]; then
+      requested_pattern_clients="$(default_clients_for_pattern "${pattern}")"
     fi
+    pattern_clients="${requested_pattern_clients}"
 
     IFS=',' read -r -a msg_sizes <<< "${pattern_msg_sizes}"
     pattern_kind="one-way"
@@ -1691,6 +1739,11 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
       transport="${transports[transport_index]}"
       transport="${transport//[[:space:]]/}"
       [[ -n "${transport}" ]] || continue
+      # Resolve the transport cap before starting either role. The server
+      # consumes PERF_MULTI_CLIENTS as its exact CONNECTION_READY target and
+      # the shared STREAM client consumes the same effective count as --ccu.
+      pattern_clients="$(effective_clients_for_transport \
+        "${pattern}" "${transport}" "${requested_pattern_clients}")"
       if [[ "${transport}" == "inproc" ]]; then
         print_line "UNSUPPORTED,dotnet,${pattern},${transport}"
         unsupported_count=$((unsupported_count + 1))
@@ -1781,48 +1834,82 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
         fi
 
         if [[ "${pattern}" == "MULTI_STREAM" ]]; then
-          if run_external_stream_client "${server_endpoint}"; then
-            write_control_line "${server_control_fd}" 'STOP\n'
-            server_shutdown_ok=1
-            if ! wait_for_pid_exit_zero "${server_pid}" "$(shutdown_timeout_seconds)" "${pattern} server"; then
-              server_shutdown_ok=0
-            fi
-            if unsupported_line="$(extract_unsupported_line "${pattern}" "${transport}" "${client_log}" "${server_log}" 2>/dev/null)"; then
-              print_line "${unsupported_line}"
-              unsupported_count=$((unsupported_count + 1))
-              expected_result_lines=$((expected_result_lines - 5))
-              exec {server_control_fd}>&-
-              continue
-            fi
-            if [[ "${server_shutdown_ok}" -ne 1 ]]; then
-              cat "${server_log}" >&2 || true
-              cat "${client_log}" >&2 || true
-              record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "process_exit_nonzero"
-              status=1
-              exec {server_control_fd}>&-
-              continue
-            fi
-            if ! extracted="$(extract_results_from_logs "${client_log}" "${server_log}" "${pattern}" "${transport}" "${size}")"; then
-              record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "missing_required_result_lines"
-              status=1
-              exec {server_control_fd}>&-
-              continue
-            fi
+          mkfifo "${client_control_fifo}"
+          run_external_stream_client "${server_endpoint}" "${client_control_fifo}"
+          client_pid="${STREAM_CLIENT_PID}"
+          exec {client_control_fd}>"${client_control_fifo}"
+          if [[ "$(normalize_platform)" != "windows" ]]; then
+            rm -f "${client_control_fifo}"
+          fi
+
+          stream_failure_reason=''
+          if ! wait_for_exact_control_token "${client_log}" CLIENT_READY \
+              "${size}" "${READY_TIMEOUT_MS}"; then
+            stream_failure_reason='client_ready_timeout_or_mismatch'
           else
+            if ! try_write_control_line "${server_control_fd}" 'START,%s\n' "${size}"; then
+              stream_failure_reason='server_start_write_failed'
+            elif ! wait_for_exact_control_token "${server_log}" SERVER_START_READY \
+                "${size}" "${READY_TIMEOUT_MS}"; then
+              stream_failure_reason='server_start_ready_timeout_or_mismatch'
+            elif ! printf 'START,%s\n' "${size}" >&${client_control_fd}; then
+              stream_failure_reason='client_start_write_failed'
+            fi
+          fi
+
+          if [[ -z "${stream_failure_reason}" ]]; then
+            if wait_for_pid_exit_zero "${client_pid}" "${RESULT_TIMEOUT_SECONDS}" \
+                "${pattern} client"; then
+              client_pid=0
+            else
+              client_rc=$?
+              stream_failure_reason="stream_client_exit_${client_rc}"
+            fi
+          fi
+
+          if [[ -n "${stream_failure_reason}" ]]; then
+            if [[ "${client_pid}" -ne 0 ]]; then
+              printf 'STOP\n' >&${client_control_fd} 2>/dev/null || true
+              terminate_pid "${client_pid}"
+            fi
+            write_control_line "${server_control_fd}" 'STOP\n'
+            terminate_pid "${server_pid}"
+            exec {client_control_fd}>&-
+            exec {server_control_fd}>&-
             if unsupported_line="$(extract_unsupported_line "${pattern}" "${transport}" "${client_log}" "${server_log}" 2>/dev/null)"; then
               print_line "${unsupported_line}"
               unsupported_count=$((unsupported_count + 1))
               expected_result_lines=$((expected_result_lines - 5))
-              write_control_line "${server_control_fd}" 'STOP\n'
-              terminate_pid "${server_pid}"
-              exec {server_control_fd}>&-
               continue
             fi
             cat "${server_log}" >&2 || true
             cat "${client_log}" >&2 || true
-            write_control_line "${server_control_fd}" 'STOP\n'
-            terminate_pid "${server_pid}"
-            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "process_exit_nonzero"
+            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" \
+              "${stream_failure_reason}"
+            status=1
+            continue
+          fi
+
+          exec {client_control_fd}>&-
+          write_control_line "${server_control_fd}" 'STOP\n'
+          server_shutdown_ok=1
+          if ! wait_for_pid_exit_zero "${server_pid}" "$(shutdown_timeout_seconds)" \
+              "${pattern} server"; then
+            server_shutdown_ok=0
+          fi
+          if [[ "${server_shutdown_ok}" -ne 1 ]]; then
+            cat "${server_log}" >&2 || true
+            cat "${client_log}" >&2 || true
+            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" \
+              "process_exit_nonzero"
+            status=1
+            exec {server_control_fd}>&-
+            continue
+          fi
+          if ! extracted="$(extract_results_from_logs "${client_log}" "${server_log}" \
+              "${pattern}" "${transport}" "${size}")"; then
+            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" \
+              "missing_required_result_lines"
             status=1
             exec {server_control_fd}>&-
             continue

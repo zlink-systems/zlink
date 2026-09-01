@@ -16,14 +16,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
 [[ "$core_prefix" = /* ]] || { echo "--core-prefix must be absolute" >&2; exit 2; }
 core_prefix="$(readlink -f "$core_prefix")"
 export ZLINK_CORE_PACKAGE_PREFIX="$core_prefix"
-export ZLINK_CORE_VERSION="$version"
+export ZLINK_CORE_VERSION="$core_version"
 "$repo_root/scripts/local-package/native/sync-local-core-libs.sh" c
 
-build_dir="$artifact_root/build/bindings-c-$version"
+build_dir="$artifact_root/build/bindings-c-$binding_version"
 cmake -S "$repo_root/bindings/c" -B "$build_dir" \
   -DCMAKE_BUILD_TYPE="$configuration" \
   -DZLINK_C_CORE_BUILD_DIR="$core_prefix" \
@@ -33,17 +34,17 @@ cmake --build "$build_dir" --parallel "${ZLINK_BINDING_BUILD_JOBS:-4}"
 ctest --test-dir "$build_dir" --output-on-failure
 
 out_dir="$artifact_root/c"
-stage="$out_dir/zlink-c-$version"
-archive="$out_dir/zlink-c-$version.tar.gz"
+stage="$out_dir/zlink-c-$binding_version"
+archive="$out_dir/zlink-c-$binding_version.tar.gz"
 rm -rf "$stage" "$archive"
 mkdir -p "$stage/include" "$stage/lib" "$stage/provenance"
 cp -a "$repo_root/bindings/c/include/." "$stage/include/"
 cp -a "$core_prefix/include/." "$stage/include/"
-cp -L "$core_prefix/lib/libzlink.so.$version" "$stage/lib/libzlink.so.$version"
-ln -s "libzlink.so.$version" "$stage/lib/libzlink.so.0"
+cp -L "$core_prefix/lib/libzlink.so.$core_version" "$stage/lib/libzlink.so.$core_version"
+ln -s "libzlink.so.$core_version" "$stage/lib/libzlink.so.0"
 ln -s "libzlink.so.0" "$stage/lib/libzlink.so"
 cp "$core_prefix/share/zlink/core-package-provenance.json" \
   "$stage/provenance/core-package-provenance.json"
-tar -C "$out_dir" -czf "$archive" "zlink-c-$version"
+tar -C "$out_dir" -czf "$archive" "zlink-c-$binding_version"
 rm -rf "$stage"
 echo "C local package: $archive"

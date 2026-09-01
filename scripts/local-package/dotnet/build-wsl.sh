@@ -12,7 +12,7 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Creates Systems.Zlink.<repository-version>.nupkg with the exact matching Core
+Creates Systems.Zlink.<BINDINGS_VERSION>.nupkg with the exact Core VERSION
 Linux runtime.
 EOF
 }
@@ -27,7 +27,8 @@ done
 
 [[ "$core_prefix" = /* ]] || { echo "--core-prefix must be absolute" >&2; exit 2; }
 core_prefix="$(readlink -f "$core_prefix")"
-version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
 manifest="$core_prefix/share/zlink/core-package-provenance.json"
 out_dir="$artifact_root/nuget"
 mkdir -p "$out_dir"
@@ -35,10 +36,10 @@ mkdir -p "$out_dir"
 dotnet pack "$repo_root/bindings/dotnet/src/Zlink/Zlink.csproj" \
   -c "$configuration" -o "$out_dir" \
   -p:ZLinkLinuxX64NativeRoot="$core_prefix/lib" \
-  -p:ZLinkCoreVersion="$version" \
+  -p:ZLinkCoreVersion="$core_version" \
   -p:ZLinkCoreProvenancePath="$manifest"
 
-package="$out_dir/Systems.Zlink.$version.nupkg"
+package="$out_dir/Systems.Zlink.$binding_version.nupkg"
 [[ -f "$package" ]] || { echo "NuGet package is missing: $package" >&2; exit 1; }
 verify_package_entry() {
   local entry="$1"
@@ -55,6 +56,6 @@ PY
 }
 
 verify_package_entry "runtimes/linux-x64/native/libzlink.so.0"
-verify_package_entry "runtimes/linux-x64/native/libzlink.so.$version"
+verify_package_entry "runtimes/linux-x64/native/libzlink.so.$core_version"
 verify_package_entry "provenance/core-package-provenance.json"
 echo ".NET local package: $package"

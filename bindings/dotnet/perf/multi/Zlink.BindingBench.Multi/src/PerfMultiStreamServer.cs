@@ -23,6 +23,9 @@ internal static class PerfMultiStreamServer
 
         int ioTimeoutMs = Math.Max(ResolveMultiSndTimeoutMs(options),
             ResolveMultiRcvTimeoutMs(options));
+        int readyTimeoutMs = ResolveMultiConnectReadyTimeoutMs(options);
+        int clientCount = ResolveMultiClients(options);
+        ulong monitorHwmBytes = ResolveMultiMonitorHwmBytes();
         string endpoint = MultiEndpointFor(options.Transport, "multi-stream",
             options);
 
@@ -31,19 +34,18 @@ internal static class PerfMultiStreamServer
         using var server = ctx.CreateStreamSocket();
         ApplyMultiSocketOptions(server, options);
         RecalculateAutoHwm(ctx);
-        PrintAutoHwmSnapshot(server, "server", options.Transport,
-            options.Size);
         ConfigureTlsServerIfNeeded(server, options.Transport);
+        using var monitor = server.MonitorOpen(SocketEvent.ConnectionReady,
+            monitorHwmBytes);
         server.Options.SendTimeout = TimeSpan.FromMilliseconds(ioTimeoutMs);
         server.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(ioTimeoutMs);
         server.Options.TcpNoDelay = true;
         server.Bind(endpoint);
         endpoint = server.Options.LastEndpoint;
-        RecalculateAutoHwm(ctx);
 
         var dispatchQueue = new StreamDispatchQueue();
         var control = new ControlState(dispatchQueue.StopAccepting);
-        StartControlWatcher(control);
+        StartControlWatcher(control, options.Size);
         var sends = new SendTracker();
         using var drainCancellation = new CancellationTokenSource();
         Task dispatcher = DispatchSendsAsync(server, dispatchQueue, sends,
@@ -92,6 +94,41 @@ internal static class PerfMultiStreamServer
         });
 
         WriteStdoutLine($"READY,{endpoint}");
+        if (!await control.WaitForStartAsync(readyTimeoutMs)
+                .ConfigureAwait(false))
+        {
+            if (Volatile.Read(ref control.StopRequested) == 0)
+                Console.Error.WriteLine("multi_server_error:no_start");
+            control.Fail();
+        }
+        else
+        {
+            // Pair the raw peer's CLIENT_READY with independent server-side
+            // route readiness before freezing the connected Auto-HWM state.
+            if (!WaitConnectReadyCount(monitor, clientCount, readyTimeoutMs))
+            {
+                Console.Error.WriteLine(
+                    "multi_server_error:connect_ready_timeout");
+                control.Fail();
+            }
+            else
+            {
+                try
+                {
+                    // Do not use the best-effort benchmark helper here: a
+                    // failed barrier recalculation must suppress the ACK.
+                    ctx.RecalculateAutoHwm();
+                    PrintAutoHwmSnapshot(server, "server-connected",
+                        options.Transport, options.Size);
+                    WriteStdoutLine($"SERVER_START_READY,{options.Size}");
+                }
+                catch (Exception ex)
+                {
+                    DebugFailure("stream connected Auto-HWM recalc", ex);
+                    control.Fail();
+                }
+            }
+        }
         await control.StopTask.ConfigureAwait(false);
 
         int drainTimeoutMs = Math.Max(1000, ioTimeoutMs * 4);
@@ -116,10 +153,11 @@ internal static class PerfMultiStreamServer
         return control.ResultCode;
     }
 
-    private static void StartControlWatcher(ControlState control)
+    private static void StartControlWatcher(ControlState control, int size)
     {
         string controlFile = PerfEnv.ReadString("PERF_MULTI_CONTROL_FILE",
             string.Empty);
+        string expectedStart = $"START,{size}";
         Thread watcher = new(() =>
         {
             if (!string.IsNullOrWhiteSpace(controlFile))
@@ -140,14 +178,9 @@ internal static class PerfMultiStreamServer
                                     new[] { '\r', '\n' },
                                     StringSplitOptions.RemoveEmptyEntries))
                                 {
-                                    if (line.Trim().Equals("STOP",
-                                            StringComparison.OrdinalIgnoreCase)
-                                        || line.Trim().Equals("QUIT",
-                                            StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        control.RequestStop();
+                                    if (!HandleControlLine(control, line,
+                                            expectedStart))
                                         return;
-                                    }
                                 }
                             }
                         }
@@ -169,11 +202,8 @@ internal static class PerfMultiStreamServer
                 string? line;
                 while ((line = Console.In.ReadLine()) != null)
                 {
-                    if (line == "STOP" || line == "QUIT")
-                    {
-                        control.RequestStop();
+                    if (!HandleControlLine(control, line, expectedStart))
                         return;
-                    }
                 }
             }
             finally
@@ -183,6 +213,24 @@ internal static class PerfMultiStreamServer
         });
         watcher.IsBackground = true;
         watcher.Start();
+    }
+
+    private static bool HandleControlLine(ControlState control, string rawLine,
+        string expectedStart)
+    {
+        string line = rawLine.Trim();
+        if (string.Equals(line, expectedStart, StringComparison.Ordinal))
+        {
+            control.RequestStart();
+            return true;
+        }
+        if (line.Equals("STOP", StringComparison.OrdinalIgnoreCase)
+            || line.Equals("QUIT", StringComparison.OrdinalIgnoreCase))
+        {
+            control.RequestStop();
+            return false;
+        }
+        return true;
     }
 
     private static Message BuildStreamPacket(Message header, Message payload)
@@ -406,6 +454,8 @@ internal static class PerfMultiStreamServer
 
     private sealed class ControlState
     {
+        private readonly TaskCompletionSource _started = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _stopped = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly Action _stopAccepting;
@@ -415,15 +465,32 @@ internal static class PerfMultiStreamServer
             _stopAccepting = stopAccepting;
         }
 
+        internal int StartRequested;
         internal int StopRequested;
         internal int ResultCode;
         internal Task StopTask => _stopped.Task;
+
+        internal void RequestStart()
+        {
+            if (Interlocked.Exchange(ref StartRequested, 1) == 0)
+                _started.TrySetResult();
+        }
+
+        internal async Task<bool> WaitForStartAsync(int timeoutMs)
+        {
+            Task completed = await Task.WhenAny(_started.Task,
+                Task.Delay(Math.Max(1, timeoutMs))).ConfigureAwait(false);
+            return ReferenceEquals(completed, _started.Task)
+                && Volatile.Read(ref StartRequested) != 0
+                && Volatile.Read(ref StopRequested) == 0;
+        }
 
         internal void RequestStop()
         {
             if (Interlocked.Exchange(ref StopRequested, 1) == 0)
             {
                 _stopAccepting();
+                _started.TrySetResult();
                 _stopped.TrySetResult();
             }
         }

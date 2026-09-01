@@ -195,9 +195,14 @@ fn reply_request(received: &zlink::Received) {
         panic!("request has an invalid measurement envelope");
     }
 
+    // Message::try_clone uses zlink_msg_copy, so the reply owns an independent
+    // native reference without copying the payload bytes out to a Vec and back.
+    let reply_payload = received.parts()[0]
+        .try_clone()
+        .expect("clone received reply payload");
     let reply = received
         .reply()
-        .message(Message::try_from(payload).expect("reply payload"));
+        .message(reply_payload);
     let result = if common::measurement_part_count() == 2 {
         reply
             .message(Message::try_from(&[] as &[u8]).expect("empty reply tail"))

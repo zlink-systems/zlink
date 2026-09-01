@@ -20,19 +20,22 @@ fn main() {
     println!("cargo:rerun-if-env-changed=ZLINK_CORE_LIB_DIR");
     println!("cargo:rerun-if-env-changed=ZLINK_RUST_NATIVE_DIR");
     let local_core = env::var("ZLINK_CORE_SOURCE").ok().as_deref() == Some("local");
-    let native_dir = if local_core {
+    let core_include_dir = if local_core {
         let include_dir = env::var_os("ZLINK_CORE_INCLUDE_DIR").map(PathBuf::from)
             .unwrap_or_else(|| panic!(
                 "ZLINK_CORE_SOURCE=local requires ZLINK_CORE_INCLUDE_DIR; source bindings/tools/local_core_runtime.sh first"
             ));
-        let library_dir = env::var_os("ZLINK_CORE_LIB_DIR").map(PathBuf::from)
-            .unwrap_or_else(|| panic!(
-                "ZLINK_CORE_SOURCE=local requires ZLINK_CORE_LIB_DIR; source bindings/tools/local_core_runtime.sh first"
-            ));
         if !include_dir.join("zlink.h").is_file() {
             panic!("Core headers are missing from {}", include_dir.display());
         }
-        library_dir
+        include_dir
+    } else {
+        manifest_dir.join("include")
+    };
+    let native_dir = if local_core {
+        PathBuf::from(env::var_os("ZLINK_CORE_LIB_DIR").unwrap_or_else(|| panic!(
+            "ZLINK_CORE_SOURCE=local requires ZLINK_CORE_LIB_DIR; source bindings/tools/local_core_runtime.sh first"
+        )))
     } else {
         match env::var_os("ZLINK_RUST_NATIVE_DIR") {
         Some(path) => PathBuf::from(path),
@@ -52,7 +55,13 @@ fn main() {
     // do not discover or prefer a repository `core/build` directory here:
     // that would let a clean consumer silently execute a different Core
     // candidate than the one packaged with this crate.
-    let package_version = env::var("CARGO_PKG_VERSION").expect("Cargo package version is required");
+    let core_header = std::fs::read_to_string(core_include_dir.join("zlink.h"))
+        .expect("approved Core zlink.h must be readable");
+    let core_version = ["MAJOR", "MINOR", "PATCH"].iter().map(|name| {
+        core_header.lines().find_map(|line| {
+            line.strip_prefix(&format!("#define ZLINK_VERSION_{name} "))
+        }).expect("approved Core zlink.h must define its version")
+    }).collect::<Vec<_>>().join(".");
     if target_os == "windows" {
         let runtime = native_dir.join("zlink.dll");
         let import_library = native_dir.join("zlink.lib");
@@ -65,7 +74,7 @@ fn main() {
         println!("cargo:rerun-if-changed={}", runtime.display());
         println!("cargo:rerun-if-changed={}", import_library.display());
     } else {
-        let versioned_runtime = native_dir.join(format!("libzlink.so.{package_version}"));
+        let versioned_runtime = native_dir.join(format!("libzlink.so.{core_version}"));
         let runtime = native_dir.join("libzlink.so");
         if !runtime.is_file() || (!local_core && !versioned_runtime.is_file()) {
             panic!(

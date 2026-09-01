@@ -5,7 +5,7 @@ const { once } = require('node:events');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { benchmarkEndpoint, resolveMultiMonitorHwm } = require('./perf_multi_common');
+const { benchmarkEndpoint, resolveMultiMonitorHwm, resolveMultiStreamClientCount } = require('./perf_multi_common');
 const processCaptureStates = new WeakMap();
 function processCaptureState(processRef) {
     const state = processCaptureStates.get(processRef);
@@ -64,9 +64,53 @@ async function waitForLine(processRef, expected, label, timeoutMs) {
         });
     });
 }
+async function waitForExactControlLine(processRef, expected, prefix, label, timeoutMs) {
+    return new Promise((resolve, reject) => {
+        let done = false;
+        const state = processCaptureState(processRef);
+        const seen = state.seenLines.find((line) => line.startsWith(prefix));
+        if (seen !== undefined) {
+            if (seen === expected) {
+                resolve();
+            }
+            else {
+                reject(new Error(`${label} token mismatch: got ${seen}, expected ${expected}`));
+            }
+            return;
+        }
+        const timeout = setTimeout(() => {
+            if (!done) {
+                done = true;
+                reject(new Error(`${label} timeout waiting for ${expected}`));
+            }
+        }, timeoutMs);
+        processRef.once('exit', (code) => {
+            if (!done) {
+                done = true;
+                clearTimeout(timeout);
+                reject(new Error(`${label} exited before ${expected}: ${code}`));
+            }
+        });
+        state.waiters.push((line) => {
+            if (done || !line.startsWith(prefix)) {
+                return false;
+            }
+            done = true;
+            clearTimeout(timeout);
+            if (line === expected) {
+                resolve();
+            }
+            else {
+                reject(new Error(`${label} token mismatch: got ${line}, expected ${expected}`));
+            }
+            return true;
+        });
+    });
+}
 function isControlLine(line) {
     return line.startsWith('READY,')
         || line.startsWith('CLIENT_READY,')
+        || line.startsWith('SERVER_START_READY,')
         || line.startsWith('CLIENT_DONE,');
 }
 function attachProcessCapture(child, resultLines, resultPrefix = 'RESULT,') {
@@ -359,6 +403,9 @@ function clientReadyLine(msgSize) {
 function startLine(msgSize) {
     return `START,${msgSize}`;
 }
+function serverStartReadyLine(msgSize) {
+    return `SERVER_START_READY,${msgSize}`;
+}
 function needsClientReady(pattern) {
     return pattern === 'MULTI_DEALER_DEALER'
         || pattern === 'MULTI_DEALER_ROUTER'
@@ -367,7 +414,8 @@ function needsClientReady(pattern) {
         || pattern === 'MULTI_ROUTER_ROUTER'
         || pattern === 'MULTI_ROUTER_ROUTER_SENDSEND'
         || pattern === 'MULTI_ROUTER_ROUTER_REQREP'
-        || pattern === 'MULTI_PUBSUB';
+        || pattern === 'MULTI_PUBSUB'
+        || pattern === 'MULTI_STREAM';
 }
 function needsRunnerStart(pattern) {
     return pattern === 'MULTI_DEALER_DEALER'
@@ -377,7 +425,8 @@ function needsRunnerStart(pattern) {
         || pattern === 'MULTI_ROUTER_ROUTER'
         || pattern === 'MULTI_ROUTER_ROUTER_SENDSEND'
         || pattern === 'MULTI_ROUTER_ROUTER_REQREP'
-        || pattern === 'MULTI_PUBSUB';
+        || pattern === 'MULTI_PUBSUB'
+        || pattern === 'MULTI_STREAM';
 }
 function childEnv(args, component) {
     const env = { ...process.env };
@@ -479,11 +528,7 @@ function buildClientSpawn(clientPath, clientArgs, args) {
     if (args.pattern !== 'MULTI_STREAM') {
         return buildPinnedSpawn(process.execPath, [clientPath, ...clientArgs], args);
     }
-    let streamClients = args.clients;
-    const nonTcpMax = Number(process.env.PERF_STREAM_NON_TCP_CLIENTS_MAX || process.env.PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX || 10000);
-    if (args.transport !== 'tcp' && Number.isFinite(streamClients) && Number.isFinite(nonTcpMax) && streamClients > nonTcpMax) {
-        streamClients = Math.trunc(nonTcpMax);
-    }
+    const streamClients = resolveMultiStreamClientCount(args.clients, args.transport);
     const streamCompletionWaitMs = process.env.PERF_MULTI_STREAM_COMPLETION_WAIT_MS
         || process.env.PERF_STREAM_COMPLETION_WAIT_MS
         || (Number.isFinite(args.serverShutdownTimeoutMs)
@@ -500,7 +545,8 @@ function buildClientSpawn(clientPath, clientArgs, args) {
         '--runs', '1',
         '--duration', String(args.duration),
         '--completion-wait-ms', streamCompletionWaitMs,
-        '--send-stop-token', '0'
+        '--send-stop-token', '0',
+        '--start-gate', '1'
     ];
     const ioThreads = Number.isFinite(args.clientIoThreads)
         ? args.clientIoThreads
@@ -529,6 +575,18 @@ function resolveClientReadyTimeoutMs(args) {
     return Number.isFinite(args.connectReadyTimeoutMs)
         ? args.connectReadyTimeoutMs
         : 5000;
+}
+async function coordinateRunnerStart(server, client, args, serverLabel = 'server') {
+    if (args.pattern === 'MULTI_STREAM') {
+        writeChildLine(server, `${startLine(args.msgSize)}\n`);
+        await waitForExactControlLine(server, serverStartReadyLine(args.msgSize), 'SERVER_START_READY,', serverLabel, resolveClientReadyTimeoutMs(args));
+        writeChildLine(client, `${startLine(args.msgSize)}\n`);
+        return;
+    }
+    if (needsRunnerStart(args.pattern)) {
+        writeChildLine(server, `${startLine(args.msgSize)}\n`);
+        writeChildLine(client, `${startLine(args.msgSize)}\n`);
+    }
 }
 async function spawnMultiPair(serverScript, clientScript, args) {
     const serverPath = path.join(__dirname, serverScript);
@@ -578,12 +636,28 @@ async function spawnMultiPair(serverScript, clientScript, args) {
         detached: true
     });
     attachProcessCapture(client, resultLines);
-    if (needsClientReady(args.pattern)) {
-        await waitForLine(client, clientReadyLine(args.msgSize), clientScript, resolveClientReadyTimeoutMs(args));
+    try {
+        if (needsClientReady(args.pattern)) {
+            const clientLabel = clientScript || 'perf_stream_client';
+            if (args.pattern === 'MULTI_STREAM') {
+                await waitForExactControlLine(client, clientReadyLine(args.msgSize), 'CLIENT_READY,', clientLabel, resolveClientReadyTimeoutMs(args));
+            }
+            else {
+                await waitForLine(client, clientReadyLine(args.msgSize), clientLabel, resolveClientReadyTimeoutMs(args));
+            }
+        }
+        await coordinateRunnerStart(server, client, args, serverScript);
     }
-    if (needsRunnerStart(args.pattern)) {
-        writeChildLine(server, `${startLine(args.msgSize)}\n`);
-        writeChildLine(client, `${startLine(args.msgSize)}\n`);
+    catch (error) {
+        await Promise.allSettled([
+            terminateProcessTree(server, 1000),
+            terminateProcessTree(client, 1000)
+        ]);
+        const stderr = [stderrText(server), stderrText(client)].filter(Boolean).join('\n');
+        if (stderr) {
+            error.message = `${error.message}\n${stderr}`;
+        }
+        throw error;
     }
     const clientTimeoutMs = resolveMultiTimeoutSeconds(args) * 1000;
     const rssGuard = startRssGuard([['server', server], ['client', client]], `${args.pattern} ${args.transport} ${args.msgSize}B`);
@@ -655,7 +729,12 @@ async function spawnMultiPair(serverScript, clientScript, args) {
 }
 module.exports = {
     attachProcessCapture,
+    buildClientSpawn,
+    clientReadyLine,
+    coordinateRunnerStart,
+    serverStartReadyLine,
     spawnMultiPair,
     stopServer,
+    waitForExactControlLine,
     waitForLine
 };

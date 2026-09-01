@@ -2,6 +2,7 @@ import asyncio
 import sys
 import threading
 import errno
+import time
 
 import zlink
 
@@ -11,9 +12,36 @@ from perf_multi_common import (
     configure_multi_tls_server,
     parse_server_args,
     perf_server_context,
+    resolve_multi_monitor_hwm_bytes,
+    resolve_multi_connect_ready_timeout_ms,
     send_routed,
+    wait_monitor_event,
 )
 from perf_stop_token import STOP_TOKEN
+
+
+def classify_control_line(line, msg_size):
+    text = line.strip()
+    if text in {"STOP", "QUIT"}:
+        return "stop"
+    if text == f"START,{msg_size}":
+        return "start"
+    return None
+
+
+def wait_connection_ready_count(monitor, expected, timeout_ms):
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    for _ in range(expected):
+        remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"timed out waiting for {expected} STREAM connections"
+            )
+        wait_monitor_event(
+            monitor,
+            zlink.MonitorEventMask.CONNECTION_READY,
+            timeout_ms=remaining_ms,
+        )
 
 
 async def main(argv=None):
@@ -23,35 +51,37 @@ async def main(argv=None):
     send_errors = []
     loop = asyncio.get_running_loop()
     async_stop = asyncio.Event()
+    start_requested = asyncio.Event()
 
-    def request_stop():
-        loop.call_soon_threadsafe(async_stop.set)
-
-    def wait_stop():
+    def wait_control():
         for line in sys.stdin:
-            if line.strip() in {"STOP", "QUIT"}:
-                request_stop()
+            command = classify_control_line(line, args.msg_size)
+            if command == "start":
+                loop.call_soon_threadsafe(start_requested.set)
+            elif command == "stop":
+                loop.call_soon_threadsafe(async_stop.set)
                 return
 
-    threading.Thread(target=wait_stop, daemon=True).start()
+    threading.Thread(target=wait_control, daemon=True).start()
 
     with perf_server_context() as ctx:
         with zlink.create_stream_socket(ctx) as server:
             configure_multi_tls_server(server, args.transport)
             apply_multi_socket_options(server)
             server.options.tcp_no_delay = True
+            monitor = server.monitor_open(
+                zlink.MonitorEventMask.CONNECTION_READY,
+                resolve_multi_monitor_hwm_bytes(),
+            )
             server.bind(endpoint)
-            print(f"READY,{endpoint}", flush=True)
 
             def packet_handler(routing_id, header, body):
                 body_view = body.data
                 if len(body_view) == len(STOP_TOKEN) and body_view == STOP_TOKEN:
-                    request_stop()
+                    loop.call_soon_threadsafe(async_stop.set)
                     return
                 frame = build_packet_frame(header.data, body_view)
                 loop.call_soon_threadsafe(schedule_echo, bytes(routing_id), frame)
-
-            server.on_packet(packet_handler)
 
             async def send_echo(routing_id, frame):
                 try:
@@ -78,6 +108,36 @@ async def main(argv=None):
                 task = asyncio.create_task(send_echo(routing_id, frame))
                 pending.add(task)
                 task.add_done_callback(on_send_done)
+
+            server.on_packet(packet_handler)
+            print(f"READY,{endpoint}", flush=True)
+
+            start_wait = asyncio.create_task(start_requested.wait())
+            stop_wait = asyncio.create_task(async_stop.wait())
+            done, pending_control = await asyncio.wait(
+                {start_wait, stop_wait}, return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in pending_control:
+                task.cancel()
+            await asyncio.gather(*pending_control, return_exceptions=True)
+            if stop_wait in done:
+                monitor.close()
+                return
+
+            # The runner only releases this owner-thread recalculation after the
+            # shared raw client reports that every requested connection is ready.
+            # Confirm the target-side monitor count before recalculating HWM.
+            try:
+                wait_connection_ready_count(
+                    monitor,
+                    args.clients,
+                    resolve_multi_connect_ready_timeout_ms(),
+                )
+                ctx.recalculate_auto_hwm()
+                monitor.status()
+            finally:
+                monitor.close()
+            print(f"SERVER_START_READY,{args.msg_size}", flush=True)
 
             # Packet callbacks may arrive from the binding dispatcher thread;
             # schedule every public async send onto this coroutine loop.  The

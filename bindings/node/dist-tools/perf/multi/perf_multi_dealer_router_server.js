@@ -29,9 +29,9 @@ function receiveAndReply(router, received) {
             if (received.requestSeq === null) {
                 throw new Error('request/reply server received payload without request sequence');
             }
-      // A successful public reply consumes this received native Message.
-      // Forward it directly rather than materializing a Buffer copy first.
-      appendMeasurement(received.reply(), payload).submit();
+            // A successful public reply consumes this received native Message.
+            // Forward it directly rather than materializing a Buffer copy first.
+            appendMeasurement(received.reply(), payload).submit();
         }
         finally {
             received.close();

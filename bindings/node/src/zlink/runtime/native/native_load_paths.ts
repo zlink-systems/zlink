@@ -72,18 +72,21 @@ export function preparePrebuiltRuntimePath(prebuiltDir: string): void {
       const packageRoot = path.dirname(path.dirname(prebuiltDir));
       let versionedLibrary: string | undefined;
       try {
-        const packageJson = JSON.parse(
-          fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')
+        const provenance = JSON.parse(
+          fs.readFileSync(
+            path.join(packageRoot, 'provenance', 'core-package-provenance.json'),
+            'utf8'
+          )
         ) as { version?: string };
-        if (packageJson.version !== undefined) {
+        if (provenance.version !== undefined) {
           const candidate = path.join(
             prebuiltDir,
-            `libzlink.so.${packageJson.version}`
+            `libzlink.so.${provenance.version}`
           );
           if (fs.existsSync(candidate)) versionedLibrary = candidate;
         }
       } catch {
-        // The normal package path has package.json. If it is unavailable,
+        // The normal package path has Core provenance. If it is unavailable,
         // leave native loading to the development fallback below.
       }
       if (versionedLibrary !== undefined) fs.symlinkSync(versionedLibrary, soname);

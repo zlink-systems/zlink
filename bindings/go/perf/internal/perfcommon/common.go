@@ -174,6 +174,17 @@ func PrintSingleAutoHWMDetail(
 	socketType zlink.SocketType,
 	msgSize int,
 ) {
+	PrintSocketAutoHWMDetail(monitor, pattern, transport, component, socketType, msgSize)
+}
+
+func PrintSocketAutoHWMDetail(
+	monitor *zlink.SocketMonitor,
+	pattern string,
+	transport string,
+	component string,
+	socketType zlink.SocketType,
+	msgSize int,
+) {
 	if monitor == nil || pattern == "" || component == "" {
 		return
 	}

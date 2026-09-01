@@ -5,12 +5,17 @@
 #include "bench_resource.hpp"
 
 #include <cerrno>
+#include <chrono>
 #include <csignal>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifndef ZLINK_SOCKET_STREAM
@@ -29,12 +34,35 @@ static const char *k_pattern = PERF_MULTI_STREAM_PATTERN_NAME;
 
 static perf_multi_stream::session_t g_stream_session;
 
+struct stdin_watcher_state_t
+{
+    stdin_watcher_state_t () : done (false) {}
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool done;
+};
+
 inline void print_server_metrics (const std::string &lib_name,
                                   const std::string &transport,
                                   const std::vector<size_t> &sizes,
                                   const bench_resource_metrics_t &metrics)
 {
     print_server_metrics_for_sizes (lib_name, k_pattern, transport, sizes, metrics);
+}
+
+zlink_close_result_t close_stream_server_fenced (void *server)
+{
+    // A STOP notification can race the final packet/completion callback
+    // epilogue. CLOSE_BUSY is the public lifecycle handoff signal; retrying
+    // that handoff yields until close can atomically reject new callbacks and
+    // fence every callback already owned by Core.
+    for (;;) {
+        const zlink_close_result_t result = zlink_close (server);
+        if (result != ZLINK_CLOSE_BUSY || zlink_errno () != EBUSY)
+            return result;
+        std::this_thread::yield ();
+    }
 }
 
 } // namespace
@@ -129,10 +157,24 @@ int main (int argc, char **argv)
     }
 
     perf_stop_requested ().store (false, std::memory_order_release);
-    perf_multi_stream::reset_session (&g_stream_session, ctx.get (), server, transport);
+    perf_multi_stream::reset_session (&g_stream_session, server);
     perf_multi_stream::packet_handler_context_t packet_handler_ctx;
     packet_handler_ctx.session = &g_stream_session;
     packet_handler_ctx.stop_token = k_stop_token;
+    // Install completion ownership before packet delivery can submit an echo.
+    if (zlink_send_complete_handler (
+          server, &perf_multi_stream::stream_send_complete_callback, &g_stream_session)
+        != ZLINK_HANDLER_OK) {
+        if (bench_debug_enabled ()) {
+            std::cerr << "[multi-stream-server] send completion handler install failed errno="
+                      << zlink_errno () << std::endl;
+        }
+        close_connect_monitor (connect_monitor);
+        const zlink_close_result_t close_result = close_stream_server_fenced (server);
+        if (close_result == ZLINK_CLOSE_OK)
+            perf_multi_stream::clear_session (&g_stream_session);
+        return 1;
+    }
     if (zlink_stream_packet_handler (server, &perf_multi_stream::stream_packet_handler_callback,
                                      &packet_handler_ctx)
         != ZLINK_HANDLER_OK) {
@@ -140,9 +182,10 @@ int main (int argc, char **argv)
             std::cerr << "[multi-stream-server] packet handler install failed errno="
                       << zlink_errno () << std::endl;
         }
-        perf_multi_stream::clear_session (&g_stream_session);
         close_connect_monitor (connect_monitor);
-        zlink_close (server);
+        const zlink_close_result_t close_result = close_stream_server_fenced (server);
+        if (close_result == ZLINK_CLOSE_OK)
+            perf_multi_stream::clear_session (&g_stream_session);
         return 1;
     }
     install_perf_signal_handlers ();
@@ -152,9 +195,10 @@ int main (int argc, char **argv)
     // requested session and completed the size update. Keep context/socket APIs
     // on this thread; it becomes the server event-loop owner immediately below.
     if (!perf_multi_handshake::wait_for_start_from_stdin (msg_size)) {
-        perf_multi_stream::clear_session (&g_stream_session);
         close_connect_monitor (connect_monitor);
-        zlink_close (server);
+        const zlink_close_result_t close_result = close_stream_server_fenced (server);
+        if (close_result == ZLINK_CLOSE_OK)
+            perf_multi_stream::clear_session (&g_stream_session);
         return 1;
     }
     if (!wait_connect_ready_count (connect_monitor, settings.clients,
@@ -164,9 +208,10 @@ int main (int argc, char **argv)
                       << poll_connect_ready_count (connect_monitor)
                       << " expected=" << settings.clients << std::endl;
         }
-        perf_multi_stream::clear_session (&g_stream_session);
         close_connect_monitor (connect_monitor);
-        zlink_close (server);
+        const zlink_close_result_t close_result = close_stream_server_fenced (server);
+        if (close_result == ZLINK_CLOSE_OK)
+            perf_multi_stream::clear_session (&g_stream_session);
         return 1;
     }
     apply_benchmark_hwm (server, settings.hwm);
@@ -175,9 +220,10 @@ int main (int argc, char **argv)
             std::cerr << "[multi-stream-server] ctx auto-hwm recalc failed err="
                       << zlink_errno () << " size=" << msg_size << std::endl;
         }
-        perf_multi_stream::clear_session (&g_stream_session);
         close_connect_monitor (connect_monitor);
-        zlink_close (server);
+        const zlink_close_result_t close_result = close_stream_server_fenced (server);
+        if (close_result == ZLINK_CLOSE_OK)
+            perf_multi_stream::clear_session (&g_stream_session);
         return 1;
     }
 
@@ -188,27 +234,48 @@ int main (int argc, char **argv)
     close_connect_monitor (connect_monitor);
     std::cout << "SERVER_START_READY," << msg_size << std::endl;
 
-    std::thread stdin_watcher ([] () {
+    const std::shared_ptr<stdin_watcher_state_t> stdin_state =
+      std::make_shared<stdin_watcher_state_t> ();
+    std::thread stdin_watcher ([stdin_state] () {
         std::string line;
         while (std::getline (std::cin, line)) {
             if (line == "STOP" || line == "QUIT") {
-                perf_stop_requested ().store (true, std::memory_order_release);
-                g_stream_session.pending_cv.notify_all ();
-                return;
+                perf_multi_stream::request_stop (&g_stream_session);
+                break;
             }
         }
-        perf_stop_requested ().store (true, std::memory_order_release);
-        g_stream_session.pending_cv.notify_all ();
+        perf_multi_stream::request_stop (&g_stream_session);
+        {
+            std::lock_guard<std::mutex> lock (stdin_state->mutex);
+            stdin_state->done = true;
+        }
+        stdin_state->cv.notify_one ();
     });
-    stdin_watcher.detach ();
 
-    const int loop_rc = perf_multi_stream::run_server_event_loop (
-      &g_stream_session, server, k_stop_token, NULL, NULL);
+    const int loop_rc = perf_multi_stream::run_server_event_loop (&g_stream_session);
 
-    perf_multi_stream::clear_session (&g_stream_session);
+    bool stdin_done = false;
+    {
+        std::unique_lock<std::mutex> lock (stdin_state->mutex);
+        stdin_state->cv.wait_for (lock, std::chrono::milliseconds (100),
+                                  [stdin_state] () { return stdin_state->done; });
+        stdin_done = stdin_state->done;
+    }
+    if (stdin_done)
+        stdin_watcher.join ();
+    else
+        stdin_watcher.detach ();
+
+    // Accepted close fences packet callbacks and Core-owned send completions
+    // before their stack/static userdata and the session socket are cleared.
+    const zlink_close_result_t close_rc = close_stream_server_fenced (server);
+    const bool async_failed =
+      g_stream_session.failed.load (std::memory_order_acquire)
+      || perf_multi_stream::outstanding_size (&g_stream_session) != 0;
+    if (close_rc == ZLINK_CLOSE_OK)
+        perf_multi_stream::clear_session (&g_stream_session);
 
     const bench_resource_metrics_t metrics = bench_finish_resource_probe (cpu_start);
     print_server_metrics (lib_name, transport, sizes, metrics);
-    zlink_close (server);
-    return loop_rc;
+    return loop_rc == 0 && close_rc == ZLINK_CLOSE_OK && !async_failed ? 0 : 1;
 }

@@ -1,6 +1,7 @@
 import asyncio
 import sys
 import time
+from collections import deque
 from contextlib import ExitStack
 
 import zlink
@@ -11,8 +12,7 @@ from perf_multi_common import (
     apply_multi_socket_options,
     benchmark_run_id,
     configure_multi_tls_client,
-    measurement_parts,
-    metric_payload_data,
+    measurement_part_count,
     new_payload,
     parse_client_args,
     perf_client_context,
@@ -22,61 +22,30 @@ from perf_multi_common import (
     resolve_multi_reqrep_drain_timeout_ms,
     resolve_multi_reqrep_timeout_ms,
     result_metrics,
+    scoped_relay_eager_task_factory,
     stamp_payload,
     wait_monitor_event,
 )
 
 
-async def request_with_admission_retry(
-    sock,
-    payload_parts,
-    *,
-    routing_id=None,
-    timeout_s,
-    on_admitted=None,
-):
-    """Await one public request, rebuilding only after pre-admission EAGAIN."""
+_REQUEST_RETRY_RESULTS = frozenset({zlink.SubmitResult.BACKPRESSURED})
 
-    while True:
-        try:
-            operation = (
-                sock.request()
-                if routing_id is None
-                else sock.request(routing_id)
-            )
-            attempt = asyncio.create_task(
-                operation.messages(*payload_parts).timeout(timeout_s).submit()
-            )
-            # The public request coroutine performs admission before its first
-            # suspension. Pending after one turn therefore means Core accepted
-            # it and it is awaiting a reply; a completed task carries either
-            # an inline reply or an immediate admission error.
-            await asyncio.sleep(0)
-            if not attempt.done() and on_admitted is not None:
-                on_admitted()
-                on_admitted = None
-            try:
-                result = await attempt
-            except zlink.SubmitError as exc:
-                if exc.result != zlink.SubmitResult.BACKPRESSURED:
-                    if on_admitted is not None:
-                        on_admitted()
-                    raise
-                # The request was not accepted. Preserve the same logical
-                # payload and retry after one cooperative turn.
-                await asyncio.sleep(0)
-                continue
-            if on_admitted is not None:
-                on_admitted()
-            return result
-        except zlink.SubmitError as exc:
-            if exc.result != zlink.SubmitResult.BACKPRESSURED:
-                if on_admitted is not None:
-                    on_admitted()
-                raise
-            # The request was not accepted. Preserve the same logical payload
-            # and retry after one cooperative turn, without a timer or queue.
-            await asyncio.sleep(0)
+
+async def submit_request_once(
+    sock, payload_parts, *, routing_id=None, timeout_s
+):
+    """Run one public async request attempt and classify pre-admission EAGAIN."""
+
+    operation = sock.request() if routing_id is None else sock.request(routing_id)
+    try:
+        return (
+            await operation.messages(*payload_parts).timeout(timeout_s).submit(),
+            False,
+        )
+    except zlink.SubmitError as exc:
+        if exc.result not in _REQUEST_RETRY_RESULTS:
+            raise
+        return None, True
 
 
 def _close_reply_parts(parts):
@@ -94,7 +63,7 @@ async def run_reqrep_client(argv, *, pattern, routed_request):
     latency_sampler = LatencySampler()
     completed = 0
     pending = set()
-    admission_in_progress = [False for _ in range(args.clients)]
+    retry_payloads = [deque() for _ in range(args.clients)]
     failures = []
     timeout_s = max(0.001, resolve_multi_reqrep_timeout_ms() / 1000.0)
     drain_timeout_s = max(
@@ -128,104 +97,161 @@ async def run_reqrep_client(argv, *, pattern, routed_request):
                         timeout_ms=resolve_multi_connect_ready_timeout_ms(),
                     )
 
-            active_deadline = time.perf_counter() + args.duration
+            # Match Node's connected-client policy: the live peer count owns
+            # auto-HWM sizing, not the earlier socket-construction point.
+            ctx.recalculate_auto_hwm()
+
+            perf_counter = time.perf_counter
+            active_deadline = perf_counter() + args.duration
+            expected_part_count = measurement_part_count()
 
             async def request_once(index, stamped_parts):
                 nonlocal completed
                 reply_parts = None
-                admission_released = False
-
-                def on_admitted():
-                    nonlocal admission_released
-                    admission_released = True
-                    admission_in_progress[index] = False
 
                 try:
                     try:
-                        reply_parts = await request_with_admission_retry(
+                        reply_parts, backpressured = await submit_request_once(
                             sockets[index],
                             stamped_parts,
                             routing_id=b"SERVER" if routed_request else None,
                             timeout_s=timeout_s,
-                            on_admitted=on_admitted,
                         )
+                        if backpressured:
+                            # Core did not take ownership. Preserve this exact
+                            # logical request in the socket-local retry FIFO.
+                            return index, stamped_parts
                     except zlink.RequestError:
                         # Mirrors the C callback contract: a timed-out or
                         # otherwise terminal request is drained but is not an
                         # active completion or a process-fatal submit error.
-                        return
+                        return index, None
 
-                    completed_at = time.perf_counter()
+                    completed_at = perf_counter()
                     if completed_at >= active_deadline:
-                        return
-                    if len(reply_parts) != len(stamped_parts):
-                        return
-                    if len(reply_parts) == 2 and len(reply_parts[1].data) != 0:
-                        return
-                    data = metric_payload_data(
-                        reply_parts[0].data,
-                        expected_size=args.msg_size,
-                    )
-                    if not data:
-                        return
+                        return index, None
+                    if len(reply_parts) != expected_part_count:
+                        return index, None
+                    if expected_part_count == 2 and len(reply_parts[1].data) != 0:
+                        return index, None
+                    data = reply_parts[0].data
+                    if len(data) != args.msg_size:
+                        return index, None
                     active, latency = active_message_latency_ns(
                         data,
                         expected_msg_size=args.msg_size,
                         run_id=run_id,
                     )
                     if not active:
-                        return
+                        return index, None
                     completed += 1
                     if latency is not None:
                         latency_sampler.add(latency / 2.0)
+                    return index, None
                 finally:
-                    if not admission_released:
-                        admission_in_progress[index] = False
                     _close_reply_parts(reply_parts)
 
             def observe_done(task):
                 pending.discard(task)
                 if task.cancelled():
                     return
-                exc = task.exception()
-                if exc is not None:
+                try:
+                    index, retry_parts = task.result()
+                except Exception as exc:
                     failures.append(exc)
+                    return
+                if retry_parts is not None and perf_counter() < active_deadline:
+                    retry_payloads[index].append(retry_parts)
 
-            while time.perf_counter() < active_deadline and not failures:
-                for index in range(len(sockets)):
-                    if time.perf_counter() >= active_deadline:
-                        break
-                    if admission_in_progress[index]:
-                        continue
-                    stamped = bytes(
-                        stamp_payload(
-                            payloads[index],
-                            phase=1,
-                            run_id=run_id,
-                            seq=seqs[index],
-                        )
-                    )
-                    seqs[index] += 1
-                    admission_in_progress[index] = True
-                    task = asyncio.create_task(
-                        request_once(index, measurement_parts(stamped))
-                    )
-                    pending.add(task)
-                    task.add_done_callback(observe_done)
-                # Start every newly-created public request and let reply
-                # completions run. No application window limits accepted
-                # depth; Core/HWM owns admission.
-                await asyncio.sleep(0)
-
-            if pending:
-                _, still_pending = await asyncio.wait(
-                    tuple(pending), timeout=drain_timeout_s
+            # Own request completion dispatch on this event-loop thread. If
+            # Core dispatches each reply from its worker, the ctypes callback
+            # must repeatedly contend for the GIL with this submit loop. A
+            # completion poller keeps the public request API unchanged while
+            # making callback and Future progression single-threaded.
+            with zlink.create_poller() as completion_poller:
+                completion_events = zlink.create_poll_events(
+                    max(1, len(sockets))
                 )
-                if still_pending:
-                    for task in still_pending:
-                        task.cancel()
-                    await asyncio.gather(*still_pending, return_exceptions=True)
-                await asyncio.sleep(0)
+                registered_sockets = []
+                try:
+                    for index, sock in enumerate(sockets):
+                        completion_poller.add_socket(
+                            sock,
+                            zlink.PollEventFlag.POLLCOMPLETION,
+                            index,
+                        )
+                        registered_sockets.append(sock)
+
+                    # Python 3.12 starts each request coroutine immediately,
+                    # matching Node Promise construction and removing one
+                    # scheduler turn plus the old nested Task. Keep each
+                    # logical payload immutable until its request attempt has
+                    # either transferred ownership or entered the socket-local
+                    # retry FIFO.
+                    with scoped_relay_eager_task_factory():
+                        while perf_counter() < active_deadline and not failures:
+                            for index in range(len(sockets)):
+                                if perf_counter() >= active_deadline:
+                                    break
+                                if retry_payloads[index]:
+                                    stamped_parts = retry_payloads[index].popleft()
+                                else:
+                                    stamped = stamp_payload(
+                                        payloads[index],
+                                        phase=1,
+                                        run_id=run_id,
+                                        seq=seqs[index],
+                                    )
+                                    seqs[index] += 1
+                                    stamped = bytes(stamped)
+                                    stamped_parts = (
+                                        (stamped,)
+                                        if expected_part_count == 1
+                                        else (stamped, b"")
+                                    )
+                                task = asyncio.create_task(
+                                    request_once(index, stamped_parts)
+                                )
+                                if task.done():
+                                    observe_done(task)
+                                else:
+                                    pending.add(task)
+                                    task.add_done_callback(observe_done)
+                            # Non-blocking progress avoids both a timer and a
+                            # binding-owned inflight window. The following
+                            # cooperative turn resumes the completed Futures.
+                            completion_poller.wait(completion_events, 0)
+                            await asyncio.sleep(0)
+
+                    drain_deadline = perf_counter() + drain_timeout_s
+                    while (
+                        pending
+                        and perf_counter() < drain_deadline
+                        and not failures
+                    ):
+                        completion_poller.wait(completion_events, 0)
+                        await asyncio.sleep(0)
+
+                    if pending:
+                        still_pending = tuple(pending)
+                        for task in still_pending:
+                            task.cancel()
+                        await asyncio.gather(
+                            *still_pending, return_exceptions=True
+                        )
+                        await asyncio.sleep(0)
+                finally:
+                    # A poller must release every registered requester before
+                    # the outer socket cleanup; closing registered sockets can
+                    # otherwise leave completion dispatch waiting on teardown.
+                    for sock in registered_sockets:
+                        try:
+                            completion_poller.remove_socket(sock)
+                        except Exception as exc:
+                            print(
+                                f"[perf] completion poller remove failed: {exc}",
+                                file=sys.stderr,
+                            )
 
             if failures:
                 raise failures[0]

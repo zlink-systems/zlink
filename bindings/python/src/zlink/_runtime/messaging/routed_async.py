@@ -23,6 +23,8 @@ import asyncio
 import ctypes
 import errno
 import threading
+import weakref
+from collections import deque
 
 from ..._native.ffi import (
     ZLINK_DONTWAIT,
@@ -57,13 +59,14 @@ from .native_parts import _materialize_native_parts
 
 _ETERM = 156384765
 _SEND_PENDING = object()
+_COMPLETION_BATCH_LIMIT = 256
+_completion_batches = weakref.WeakKeyDictionary()
+_completion_batches_lock = threading.Lock()
 
 
 def _finish_future(future, value, is_error):
     if future.done():
-        if not is_error and isinstance(value, list):
-            for message in value:
-                message.close()
+        _discard_future_values(((future, value, is_error),))
         return
     if is_error:
         future.set_exception(value)
@@ -71,13 +74,131 @@ def _finish_future(future, value, is_error):
         future.set_result(value)
 
 
-def _schedule_future(loop, future, value=None, *, is_error=False):
+def _report_completion_exception(loop, future, message, exception):
+    if loop is None:
+        try:
+            loop = future.get_loop()
+        except (AttributeError, RuntimeError):
+            return
     try:
-        loop.call_soon_threadsafe(_finish_future, future, value, is_error)
-    except RuntimeError:
+        loop.call_exception_handler(
+            {
+                "message": message,
+                "exception": exception,
+                "future": future,
+            }
+        )
+    except Exception:
+        # An application exception handler must not prevent the remaining
+        # native completion values from being released.
+        pass
+
+
+def _discard_future_values(entries, loop=None):
+    for future, value, is_error in entries:
         if not is_error and isinstance(value, list):
             for message in value:
-                message.close()
+                try:
+                    message.close()
+                except Exception as error:
+                    _report_completion_exception(
+                        loop,
+                        future,
+                        "Exception while discarding a routed completion value",
+                        error,
+                    )
+
+
+class _FutureCompletionBatch:
+    """Coalesce native-thread completions into bounded event-loop turns."""
+
+    __slots__ = ("_loop_ref", "_lock", "_queue", "_scheduled")
+
+    def __init__(self, loop):
+        self._loop_ref = weakref.ref(loop)
+        self._lock = threading.Lock()
+        self._queue = deque()
+        self._scheduled = False
+
+    def enqueue(self, future, value, is_error):
+        with self._lock:
+            self._queue.append((future, value, is_error))
+            if self._scheduled:
+                return
+            self._scheduled = True
+
+        loop = self._loop_ref()
+        if loop is None:
+            self._discard_pending()
+            return
+        try:
+            loop.call_soon_threadsafe(self._drain)
+        except RuntimeError:
+            self._discard_pending()
+
+    def _discard_pending(self):
+        loop = self._loop_ref()
+        with self._lock:
+            entries = list(self._queue)
+            self._queue.clear()
+            self._scheduled = False
+        _discard_future_values(entries, loop)
+
+    def _drain(self):
+        entries = []
+        with self._lock:
+            while self._queue and len(entries) < _COMPLETION_BATCH_LIMIT:
+                entries.append(self._queue.popleft())
+
+        loop = self._loop_ref()
+        for future, value, is_error in entries:
+            try:
+                _finish_future(future, value, is_error)
+            except Exception as error:
+                _report_completion_exception(
+                    loop,
+                    future,
+                    "Exception while resolving a routed completion future",
+                    error,
+                )
+                _discard_future_values(((future, value, is_error),), loop)
+
+        with self._lock:
+            has_more = bool(self._queue)
+            if not has_more:
+                self._scheduled = False
+        if not has_more:
+            return
+
+        if loop is None:
+            self._discard_pending()
+            return
+        try:
+            # The first cross-thread wake owns the batch. Continue a large
+            # batch with ordinary loop turns instead of writing the loop's
+            # self-pipe once per native completion.
+            loop.call_soon(self._drain)
+        except RuntimeError:
+            self._discard_pending()
+
+
+def _completion_batch_for(loop):
+    with _completion_batches_lock:
+        batch = _completion_batches.get(loop)
+        if batch is None:
+            batch = _FutureCompletionBatch(loop)
+            _completion_batches[loop] = batch
+        return batch
+
+
+def _schedule_future(loop, future, value=None, *, is_error=False):
+    if getattr(loop, "_thread_id", None) == threading.get_ident():
+        _finish_future(future, value, is_error)
+        return
+    try:
+        _completion_batch_for(loop).enqueue(future, value, is_error)
+    except RuntimeError:
+        _discard_future_values(((future, value, is_error),), loop)
 
 
 def _terminal_submit_result(native_errno):
@@ -424,14 +545,22 @@ class RoutedSendOwner:
             self._request_completions[token] = completion
         return completion
 
-    def _attempt_request(self, target, native_parts, timeout_ms, completion, flags):
+    def _attempt_request(self, router_rid, payload, timeout_ms, completion, flags):
+        native_parts = _materialize_native_parts(payload)
+        target = None
+        if self._role != SocketType.DEALER:
+            try:
+                target = self._select_target(router_rid)
+            except Exception:
+                _close_native_parts(native_parts)
+                raise
+
         def attempt(handle):
             if self._role == SocketType.DEALER:
                 return self._submit_parts(
                     native_parts,
-                    lambda part, flag, final: lib().zlink_dealer_request_transport_pair_part(
+                    lambda part, flag, final: lib().zlink_dealer_request_part(
                         handle,
-                        ctypes.byref(target),
                         part,
                         flags,
                         flag,
@@ -458,13 +587,12 @@ class RoutedSendOwner:
 
         handle = self.native_handle()
         if not handle:
+            _close_native_parts(native_parts)
             return int(SubmitResult.TERMINATED), errno.ECANCELED
         return attempt(handle)
 
     async def submit_request(self, router_rid, payload, timeout_ms):
         loop = asyncio.get_running_loop()
-        native_parts = _materialize_native_parts(payload)
-        target = self._select_target(router_rid)
         if timeout_ms == 0:
             timeout_ms = int(self._read_request_timeout_ms())
             if timeout_ms <= 0:
@@ -472,7 +600,7 @@ class RoutedSendOwner:
         completion = self._new_request_completion(loop)
         try:
             rc, native_errno = self._attempt_request(
-                target, native_parts, timeout_ms, completion, ZLINK_DONTWAIT
+                router_rid, payload, timeout_ms, completion, ZLINK_DONTWAIT
             )
         except Exception:
             with self._state_lock:
@@ -487,8 +615,6 @@ class RoutedSendOwner:
     def submit_request_sync(
         self, router_rid, payload, timeout_ms, *, flags=0, callback=None
     ):
-        native_parts = _materialize_native_parts(payload)
-        target = self._select_target(router_rid)
         if timeout_ms == 0:
             timeout_ms = int(self._read_request_timeout_ms())
             if timeout_ms <= 0:
@@ -496,7 +622,7 @@ class RoutedSendOwner:
         completion = self._new_request_completion(callback=callback)
         try:
             rc, native_errno = self._attempt_request(
-                target, native_parts, timeout_ms, completion, int(flags)
+                router_rid, payload, timeout_ms, completion, int(flags)
             )
         except Exception:
             with self._state_lock:

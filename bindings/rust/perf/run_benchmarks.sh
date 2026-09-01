@@ -218,9 +218,7 @@ is_supported_transport_for_pattern() {
 prepare_core_runtime() {
     local native_dir="${ZLINK_RUST_NATIVE_DIR:-${CORE_LIB_DIR}}"
     local runtime="${native_dir}/libzlink.so"
-    local package_version
-    package_version="$(sed -n 's/^version = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"/\1/p' "${PROJECT_DIR}/Cargo.toml" | head -n1)"
-    [[ -f "${runtime}" ]] || runtime="${native_dir}/libzlink.so.${package_version}"
+    [[ -f "${runtime}" ]] || runtime="${native_dir}/libzlink.so.${ZLINK_CORE_VERSION}"
     if [[ ! -f "${runtime}" ]]; then
         echo "Rust perf runtime not found: ${native_dir}" >&2
         echo "Build core/build or set ZLINK_RUST_NATIVE_DIR." >&2

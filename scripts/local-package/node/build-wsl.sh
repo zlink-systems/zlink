@@ -12,8 +12,8 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Builds and packs @zlink-systems/zlink@<repository-version> with the exact
-matching Core native runtime. The native ABI SONAME is libzlink.so.0.
+Builds and packs @zlink-systems/zlink@<BINDINGS_VERSION> with the Core
+<VERSION> native runtime. The native ABI SONAME is libzlink.so.0.
 EOF
 }
 
@@ -28,10 +28,11 @@ done
 [[ "$core_prefix" = /* ]] || { echo "--core-prefix must be absolute" >&2; exit 2; }
 core_prefix="$(readlink -f "$core_prefix")"
 export ZLINK_CORE_INSTALL_PREFIX="$core_prefix"
-version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
 package_version="$(node -p "require('$bindings_dir/package.json').version")"
-[[ "$package_version" = "$version" ]] || {
-  echo "Node package version $package_version does not match Core $version" >&2
+[[ "$package_version" = "$binding_version" ]] || {
+  echo "Node package version $package_version does not match $binding_version" >&2
   exit 1
 }
 core_library="$core_prefix/lib/libzlink.so"
@@ -53,13 +54,13 @@ mkdir -p "$artifact_root/npm"
   prebuild_dir="prebuilds/linux-$node_arch"
   mkdir -p "$prebuild_dir" provenance
   cp build/Release/zlink.node "$prebuild_dir/zlink.node"
-  cp "$core_library" "$prebuild_dir/libzlink.so.$version"
+  cp "$core_library" "$prebuild_dir/libzlink.so.$core_version"
   cp "$core_prefix/lib/libzlink.so.0" "$prebuild_dir/libzlink.so.0"
   cp "$manifest" provenance/core-package-provenance.json
-  ZLINK_CORE_VERSION="$version" npm run verify:prebuilds
+  ZLINK_CORE_VERSION="$core_version" npm run verify:prebuilds
   npm pack --pack-destination "$artifact_root/npm"
 )
 
-package="$artifact_root/npm/zlink-systems-zlink-$version.tgz"
+package="$artifact_root/npm/zlink-systems-zlink-$binding_version.tgz"
 [[ -f "$package" ]] || { echo "Node package is missing: $package" >&2; exit 1; }
 echo "Node local package: $package"

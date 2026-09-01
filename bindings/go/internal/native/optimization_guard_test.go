@@ -26,12 +26,37 @@ var requiredPartSymbols = []string{
 	"zlink_publish_part",
 	"zlink_subscribe_part",
 	"zlink_router_recv_part",
-	"zlink_dealer_request_transport_pair_part",
+	"zlink_dealer_request_part",
 	"zlink_dealer_recv_part",
 	"zlink_dealer_reply_part",
 	"zlink_send_part_rid",
 	"zlink_router_request_transport_pair_part",
 	"zlink_router_reply_part",
+}
+
+func TestDealerRequestDelegatesTargetSelectionToCore(t *testing.T) {
+	path := filepath.Join(bindingRoot(t), "dealer_router_request.go")
+	bodyBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(bodyBytes)
+
+	if strings.Contains(body, "zlink_dealer_request_transport_pair_part") {
+		t.Fatal("default DEALER request must not pin an exact transport pair")
+	}
+	dealerSubmit := regexp.MustCompile(
+		`(?s)if role == routedDealer \{\s*return submitErrorFromResult\(C\.zlink_dealer_request_part_go_local\(`,
+	)
+	if !dealerSubmit.MatchString(body) {
+		t.Fatal("default DEALER request must use zlink_dealer_request_part")
+	}
+	routerSelection := regexp.MustCompile(
+		`(?s)if role == routedDealer \{.*?\} else \{\s*var target C\.zlink_routed_submit_target_t\s*target, err = selectRoutedTarget\(core, routerRID\)`,
+	)
+	if !routerSelection.MatchString(body) {
+		t.Fatal("routed target selection must remain confined to ROUTER requests")
+	}
 }
 
 func bindingRoot(t *testing.T) string {

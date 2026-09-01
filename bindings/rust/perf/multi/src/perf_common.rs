@@ -794,6 +794,12 @@ pub fn print_ready(endpoint: &str) {
     std::io::stdout().flush().ok();
 }
 
+pub fn print_server_start_ready(msg_size: usize) {
+    println!("SERVER_START_READY,{msg_size}");
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+}
+
 pub fn open_connection_ready_monitor(socket: &dyn Monitorable) -> SocketMonitor {
     SocketMonitor::open_with_options(
         socket,
@@ -826,6 +832,27 @@ pub fn wait_monitor_ready(mon: &mut SocketMonitor, timeout: Duration, name: &str
         thread::yield_now();
     }
     panic!("{name} connection-ready wait timed out after {:?}", timeout);
+}
+
+pub fn wait_monitor_ready_count(
+    mon: &mut SocketMonitor,
+    expected: usize,
+    timeout: Duration,
+    name: &str,
+) {
+    let deadline = Instant::now() + timeout;
+    let mut ready = 0usize;
+    while ready < expected && Instant::now() < deadline {
+        match mon.recv_with_flags(RecvFlags::DONT_WAIT) {
+            Ok(Some(event)) if event.is_connection_ready() => ready += 1,
+            Ok(Some(_)) | Ok(None) => thread::yield_now(),
+            Err(error) => panic!("{name} monitor receive failed: {error}"),
+        }
+    }
+    assert!(
+        ready >= expected,
+        "{name} connection-ready count {ready}/{expected} timed out after {timeout:?}"
+    );
 }
 
 pub fn poll_idle_until(deadline: Instant, max_wait: Duration) {
@@ -1189,7 +1216,25 @@ impl MultiArgs {
     }
 }
 
-// -- Wait for stdin STOP (server-side) ---------------------------------------
+// -- Wait for stdin phase control (server-side) ------------------------------
+
+pub fn is_start_command(line: &str, msg_size: usize) -> bool {
+    line.trim() == format!("START,{msg_size}")
+}
+
+pub fn wait_for_start_stdin(msg_size: usize) -> bool {
+    use std::io::BufRead;
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        match line {
+            Ok(line) if matches!(line.trim(), "STOP" | "QUIT") => return false,
+            Ok(line) if is_start_command(&line, msg_size) => return true,
+            Err(_) => return false,
+            _ => {}
+        }
+    }
+    false
+}
 
 pub fn wait_for_stop_stdin() {
     use std::io::BufRead;
@@ -1208,6 +1253,14 @@ mod tests {
     use super::*;
     use std::sync::Barrier;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn stream_start_command_requires_exact_size() {
+        assert!(is_start_command("START,1024", 1024));
+        assert!(is_start_command(" START,1024 ", 1024));
+        assert!(!is_start_command("START,256", 1024));
+        assert!(!is_start_command("STOP", 1024));
+    }
 
     struct ManualFutureState {
         output: usize,

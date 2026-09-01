@@ -13,12 +13,29 @@ use zlink::{
     RecvFlags, RouterSocket, RoutingId, SendFlags, SubmitResult, has, version,
 };
 
+fn packaged_core_version() -> (i32, i32, i32) {
+    let header = std::fs::read_to_string(format!(
+        "{}/include/zlink.h",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("packaged Core header must be readable");
+    let component = |name: &str| -> i32 {
+        header
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("#define ZLINK_VERSION_{name} ")))
+            .expect("packaged Core header must define its version")
+            .parse()
+            .expect("packaged Core version component must be numeric")
+    };
+    (component("MAJOR"), component("MINOR"), component("PATCH"))
+}
+
 // ---------------------------------------------------------------------------
 // Context lifecycle
 // ---------------------------------------------------------------------------
 
 #[test]
-fn direct_common_header_version_matches_package() {
+fn direct_common_header_version_matches_packaged_core() {
     let mut child = Command::new("cc")
         .args([
             "-E",
@@ -55,11 +72,7 @@ fn direct_common_header_version_matches_package() {
         .map(str::trim)
         .find(|line| !line.is_empty())
         .unwrap_or("");
-    let expected_patch = env!("CARGO_PKG_VERSION")
-        .split('.')
-        .nth(2)
-        .expect("crate version must contain a patch component");
-    assert_eq!(version_patch, expected_patch);
+    assert_eq!(version_patch, packaged_core_version().2.to_string());
 }
 
 #[test]
@@ -196,24 +209,7 @@ fn routing_id_max_length() {
 #[test]
 fn version_returns_valid_triple() {
     let (major, minor, patch) = version();
-    let mut package_version = env!("CARGO_PKG_VERSION").split('.');
-    let expected = (
-        package_version
-            .next()
-            .expect("crate version must contain a major component")
-            .parse::<i32>()
-            .expect("crate major version must be numeric"),
-        package_version
-            .next()
-            .expect("crate version must contain a minor component")
-            .parse::<i32>()
-            .expect("crate minor version must be numeric"),
-        package_version
-            .next()
-            .expect("crate version must contain a patch component")
-            .parse::<i32>()
-            .expect("crate patch version must be numeric"),
-    );
+    let expected = packaged_core_version();
     assert_eq!((major, minor, patch), expected);
 }
 

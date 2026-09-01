@@ -5,6 +5,9 @@ import unittest
 import uuid
 
 import zlink
+from zlink._runtime.handles.native_support import _msg_to_bytes
+from zlink._runtime.messaging.native_parts import _materialize_native_parts
+from zlink._runtime.messaging.routed_async import _close_native_parts
 from zlink._runtime.sockets.socket_base import _native_socket_type
 from zlink._runtime.sockets.socket_base_impl import _SocketSendOp
 
@@ -83,6 +86,99 @@ class BoundaryValidationContractTests(unittest.TestCase):
 
 
 class OwnershipContractTests(unittest.TestCase):
+    def test_received_native_parts_clone_survives_close_and_staging_retry(self):
+        endpoint = f"inproc://python-received-clone-{uuid.uuid4()}"
+        first = b"a" * 1024
+        second = b""
+
+        with zlink.create_context() as context:
+            with zlink.create_pair_socket(context) as sender:
+                with zlink.create_pair_socket(context) as receiver:
+                    receiver.bind(endpoint)
+                    sender.connect(endpoint)
+                    time.sleep(0.05)
+                    _SocketSendOp(sender).messages(first, second).submit()
+
+                    received = zlink.create_received()
+                    self.assertTrue(receiver.recv_into(received))
+                    staged = _materialize_native_parts(received.parts)
+                    try:
+                        self.assertEqual(
+                            [_msg_to_bytes(part) for part in staged],
+                            [first, second],
+                        )
+                        # Closing one rejected/abandoned staging attempt must
+                        # not consume the caller-owned received envelope.
+                        _close_native_parts(staged)
+                        staged = []
+                        self.assertEqual(received.to_bytes_list(), [first, second])
+
+                        source_parts = received.parts
+                        staged = _materialize_native_parts(source_parts)
+                        received.close()
+                        self.assertEqual(
+                            [_msg_to_bytes(part) for part in staged],
+                            [first, second],
+                        )
+                        with self.assertRaisesRegex(
+                            RuntimeError, "received message is closed"
+                        ):
+                            _materialize_native_parts(source_parts)
+                    finally:
+                        _close_native_parts(staged)
+                        received.close()
+
+    def test_raw_reply_forwards_received_native_multipart_without_source_copy(self):
+        endpoint = f"inproc://python-received-reply-{uuid.uuid4()}"
+        payloads = [
+            (bytes([index]) * 1024, b"")
+            for index in range(1, 33)
+        ]
+
+        with zlink.create_context() as context:
+            with zlink.create_dealer_socket(context) as dealer:
+                with zlink.create_router_socket(context) as router:
+                    dealer.options.linger_ms = 0
+                    router.options.linger_ms = 0
+                    router.bind(endpoint)
+                    dealer.connect(endpoint)
+                    time.sleep(0.05)
+                    failures = []
+
+                    def reply_all():
+                        received = zlink.create_received()
+                        try:
+                            for expected in payloads:
+                                self.assertTrue(router.recv_into(received))
+                                received.reply().messages(*received.parts).submit()
+                                self.assertEqual(received.to_bytes_list(), list(expected))
+                                received.close()
+                        except BaseException as exc:
+                            failures.append(exc)
+                        finally:
+                            received.close()
+
+                    replier = threading.Thread(target=reply_all)
+                    replier.start()
+                    for expected in payloads:
+                        reply = (
+                            dealer.request()
+                            .messages(*expected)
+                            .timeout(1.0)
+                            .submit_sync()
+                        )
+                        try:
+                            self.assertEqual(
+                                [part.to_bytes() for part in reply], list(expected)
+                            )
+                        finally:
+                            for part in reply:
+                                part.close()
+                    replier.join(timeout=5)
+                    self.assertFalse(replier.is_alive())
+                    if failures:
+                        raise failures[0]
+
     def test_concurrent_multipart_binding_staging_preserves_public_parts(self):
         endpoint = f"inproc://python-concurrent-multipart-{uuid.uuid4()}"
         with zlink.create_context() as context:

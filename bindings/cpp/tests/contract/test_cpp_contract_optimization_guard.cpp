@@ -96,7 +96,7 @@ int main ()
       "zlink_publish_part",
       "zlink_subscribe_part",
       "zlink_router_recv_part",
-      "zlink_dealer_request_transport_pair_part",
+      "zlink_dealer_request_part",
       "zlink_router_request_transport_pair_part",
       "zlink_router_reply_part",
       "submit_borrowed_message_array",
@@ -117,6 +117,18 @@ int main ()
 
     for (const auto &symbol : aggregate_symbols)
         assert (!contains_aggregate_call (all, symbol));
+
+    const std::string request_reply = read_file (
+      cpp_root / "src" / "Runtime" / "Messaging" / "request_reply.cpp");
+    assert (request_reply.find ("zlink_dealer_request_transport_pair_part")
+            == std::string::npos);
+    assert (request_reply.find ("zlink_router_request_transport_pair_part")
+            != std::string::npos);
+    const std::size_t dealer_branch = request_reply.find ("if (!dealer)");
+    const std::size_t target_selection = request_reply.find (
+      "select_routed_submit_target", dealer_branch);
+    assert (dealer_branch != std::string::npos
+            && target_selection != std::string::npos);
 
     assert (all.find ("std::this_thread::sleep_for") == std::string::npos);
 

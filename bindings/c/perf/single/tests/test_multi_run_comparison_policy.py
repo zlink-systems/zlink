@@ -4,6 +4,7 @@ import io
 import os
 import pathlib
 import sys
+import threading
 import unittest
 
 
@@ -13,6 +14,17 @@ RC = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 sys.modules[SPEC.name] = RC
 SPEC.loader.exec_module(RC)
+
+CPP_MODULE_PATH = MODULE_PATH.parents[2] / "cpp" / "perf" / "run_comparison.py"
+CPP_SPEC = importlib.util.spec_from_file_location(
+    "cpp_multi_run_comparison", CPP_MODULE_PATH
+)
+CPP_RC = importlib.util.module_from_spec(CPP_SPEC)
+assert CPP_SPEC and CPP_SPEC.loader
+sys.modules[CPP_SPEC.name] = CPP_RC
+CPP_SPEC.loader.exec_module(CPP_RC)
+
+RUNNER_MODULES = (("c", RC), ("cpp", CPP_RC))
 
 
 def multi_args():
@@ -118,6 +130,156 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
         self.assertEqual(client.stdin.getvalue(), "START,1024\n")
         self.assertEqual(pending_ready_sizes, set())
         self.assertEqual(requested_sizes, set())
+
+    def test_stream_start_request_publishes_state_before_write_and_keeps_ack(self):
+        class FakeProcess:
+            def __init__(self, stdin):
+                self.stdin = stdin
+
+        class BlockingStdin:
+            def __init__(self):
+                self.write_entered = threading.Event()
+                self.release_write = threading.Event()
+                self.value = ""
+
+            def write(self, value):
+                self.value += value
+                self.write_entered.set()
+                if not self.release_write.wait(timeout=1.0):
+                    raise TimeoutError("test did not release START write")
+                return len(value)
+
+            def flush(self):
+                return None
+
+        for runner_name, runner in RUNNER_MODULES:
+            with self.subTest(runner=runner_name):
+                server_stdin = BlockingStdin()
+                server = FakeProcess(server_stdin)
+                client_stdin = io.StringIO()
+                client = FakeProcess(client_stdin)
+                pending_ready_sizes = {1024}
+                requested_sizes = set()
+                requested_start_times = {}
+                state_lock = threading.Lock()
+                request_result = []
+                ack_result = []
+                ack_started = threading.Event()
+
+                request_thread = threading.Thread(
+                    target=lambda: request_result.append(
+                        runner.request_stream_server_start(
+                            server,
+                            1024,
+                            requested_sizes,
+                            requested_start_times,
+                            state_lock,
+                        )
+                    )
+                )
+                request_thread.start()
+                self.assertTrue(server_stdin.write_entered.wait(timeout=1.0))
+                self.assertEqual(requested_sizes, {1024})
+                self.assertIn(1024, requested_start_times)
+                state_lock_was_free = state_lock.acquire(blocking=False)
+                if state_lock_was_free:
+                    state_lock.release()
+                self.assertFalse(state_lock_was_free)
+
+                def forward_ack():
+                    ack_started.set()
+                    ack_result.append(
+                        runner.forward_stream_start_ack(
+                            client,
+                            "SERVER_START_READY,1024\n",
+                            pending_ready_sizes,
+                            requested_sizes,
+                            requested_start_times,
+                            state_lock,
+                        )
+                    )
+
+                ack_thread = threading.Thread(target=forward_ack)
+                ack_thread.start()
+                self.assertTrue(ack_started.wait(timeout=1.0))
+                server_stdin.release_write.set()
+                request_thread.join(timeout=1.0)
+                ack_thread.join(timeout=1.0)
+
+                self.assertFalse(request_thread.is_alive())
+                self.assertFalse(ack_thread.is_alive())
+                self.assertEqual(request_result, [True])
+                self.assertEqual(ack_result, [True])
+                self.assertEqual(server_stdin.value, "START,1024\n")
+                self.assertEqual(client_stdin.getvalue(), "START,1024\n")
+                self.assertEqual(pending_ready_sizes, set())
+                self.assertEqual(requested_sizes, set())
+                self.assertEqual(requested_start_times, {})
+
+    def test_stream_start_request_rolls_back_published_state_on_flush_failure(self):
+        class FailingStdin:
+            def __init__(self, requested_sizes, requested_start_times):
+                self.requested_sizes = requested_sizes
+                self.requested_start_times = requested_start_times
+                self.state_was_published = False
+
+            def write(self, value):
+                self.state_was_published = (
+                    value == "START,1024\n"
+                    and 1024 in self.requested_sizes
+                    and 1024 in self.requested_start_times
+                )
+                return len(value)
+
+            def flush(self):
+                raise OSError("simulated flush failure")
+
+        class FakeProcess:
+            def __init__(self, stdin):
+                self.stdin = stdin
+
+        for runner_name, runner in RUNNER_MODULES:
+            with self.subTest(runner=runner_name):
+                requested_sizes = {2048}
+                requested_start_times = {2048: 1.0}
+                server_stdin = FailingStdin(
+                    requested_sizes, requested_start_times
+                )
+
+                self.assertFalse(
+                    runner.request_stream_server_start(
+                        FakeProcess(server_stdin),
+                        1024,
+                        requested_sizes,
+                        requested_start_times,
+                        threading.Lock(),
+                    )
+                )
+                self.assertTrue(server_stdin.state_was_published)
+                self.assertEqual(requested_sizes, {2048})
+                self.assertEqual(requested_start_times, {2048: 1.0})
+
+    def test_stream_start_barrier_stops_client_when_server_exits(self):
+        class FakeServer:
+            def poll(self):
+                return 1
+
+        class FakeClient:
+            def __init__(self):
+                self.stdin = io.StringIO()
+
+        client = FakeClient()
+        self.assertTrue(
+            RC.stop_stream_client_if_server_exited(
+                FakeServer(), client, {1024}
+            )
+        )
+        self.assertEqual(client.stdin.getvalue(), "STOP\n")
+        self.assertFalse(
+            RC.stop_stream_client_if_server_exited(
+                FakeServer(), client, set()
+            )
+        )
 
     def test_requested_transport_order_is_preserved(self):
         old_allow_multi = RC.ALLOW_MULTI

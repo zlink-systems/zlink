@@ -12,8 +12,8 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Builds the C++ binding against the matching Core local package and installs it
-below .artifacts/wsl/install/zlink-cpp/<repository-version>.
+Builds the C++ binding at BINDINGS_VERSION against the Core VERSION local
+package and installs it below .artifacts/wsl/install/zlink-cpp/<BINDINGS_VERSION>.
 EOF
 }
 
@@ -27,14 +27,15 @@ done
 
 [[ "$core_prefix" = /* ]] || { echo "--core-prefix must be absolute" >&2; exit 2; }
 core_prefix="$(readlink -f "$core_prefix")"
-version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
 package_version="$(sed -n 's/^project(zlink_cpp VERSION \([0-9.]*\).*/\1/p' "$repo_root/bindings/cpp/CMakeLists.txt" | head -n1)"
-[[ "$package_version" = "$version" ]] || {
-  echo "C++ binding version $package_version does not match Core $version" >&2
+[[ "$package_version" = "$binding_version" ]] || {
+  echo "C++ binding version $package_version does not match $binding_version" >&2
   exit 1
 }
-prefix="$artifact_root/install/zlink-cpp/$version"
-build_dir="$artifact_root/build/bindings-cpp-$version"
+prefix="$artifact_root/install/zlink-cpp/$binding_version"
+build_dir="$artifact_root/build/bindings-cpp-$binding_version"
 rm -rf "$prefix"
 cmake -S "$repo_root/bindings/cpp" -B "$build_dir" \
   -DCMAKE_BUILD_TYPE="$configuration" \
@@ -55,7 +56,8 @@ cmake --install "$build_dir"
 cmake \
   -DZLINK_CPP_PREFIX="$prefix" \
   -DZLINK_CORE_PREFIX="$core_prefix" \
-  -DZLINK_CPP_VERSION="$version" \
+  -DZLINK_CORE_VERSION="$core_version" \
+  -DZLINK_CPP_VERSION="$binding_version" \
   -DZLINK_CPP_BUILD_DIR="$build_dir" \
   -P "$script_dir/verify-package.cmake"
 echo "C++ local package: $prefix"

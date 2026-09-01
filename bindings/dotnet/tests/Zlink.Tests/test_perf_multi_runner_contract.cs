@@ -93,6 +93,51 @@ public sealed class test_perf_multi_runner_contract
     }
 
     [Fact]
+    public void stream_non_tcp_cap_is_resolved_once_for_server_and_client()
+    {
+        string source = File.ReadAllText(RunnerPath());
+        string resolver = FunctionBody(source,
+            "effective_clients_for_transport", "pattern_uses_control_pipe");
+        int streamClientStart = source.IndexOf(
+            "run_external_stream_client() {", StringComparison.Ordinal);
+        int streamClientEnd = source.IndexOf(
+            "\n}\n\nensure_build_output\n", streamClientStart,
+            StringComparison.Ordinal);
+        Assert.True(streamClientStart >= 0);
+        Assert.True(streamClientEnd > streamClientStart);
+        string streamClient = source[streamClientStart..streamClientEnd];
+
+        Assert.Contains("${pattern}\" == \"MULTI_STREAM", resolver,
+            StringComparison.Ordinal);
+        Assert.Contains("${transport}\" != \"tcp", resolver,
+            StringComparison.Ordinal);
+        Assert.Contains("${STREAM_NON_TCP_CLIENTS_MAX}", resolver,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("STREAM_NON_TCP_CLIENTS_MAX", streamClient,
+            StringComparison.Ordinal);
+        Assert.Contains("--ccu \"${stream_clients}\"", streamClient,
+            StringComparison.Ordinal);
+        Assert.Contains("PERF_MULTI_CLIENTS=${pattern_clients}", source,
+            StringComparison.Ordinal);
+
+        int resolution = source.LastIndexOf(
+            "pattern_clients=\"$(effective_clients_for_transport",
+            StringComparison.Ordinal);
+        int serverStart = source.IndexOf(
+            "run_multi_process \"server\"", resolution,
+            StringComparison.Ordinal);
+        Assert.True(resolution >= 0);
+        Assert.True(serverStart > resolution,
+            "the effective client count must be resolved before the server starts");
+
+        string server = File.ReadAllText(StreamServerSourcePath());
+        Assert.Contains("int clientCount = ResolveMultiClients(options);",
+            server, StringComparison.Ordinal);
+        Assert.Contains("WaitConnectReadyCount(monitor, clientCount",
+            server, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void reqrep_reply_result_is_not_changed_by_graceful_teardown()
     {
         string source = File.ReadAllText(ReqRepSourcePath());
@@ -175,6 +220,12 @@ public sealed class test_perf_multi_runner_contract
         Path.GetFullPath(Path.Combine(
             Path.GetDirectoryName(file)!, "..", "..", "perf", "multi",
             "Zlink.BindingBench.Multi", "src", "PerfMultiSocketReqRep.cs"));
+
+    private static string StreamServerSourcePath(
+        [CallerFilePath] string file = "") =>
+        Path.GetFullPath(Path.Combine(
+            Path.GetDirectoryName(file)!, "..", "..", "perf", "multi",
+            "Zlink.BindingBench.Multi", "src", "PerfMultiStreamServer.cs"));
 
     private sealed record ProcessResult(
         int ExitCode,

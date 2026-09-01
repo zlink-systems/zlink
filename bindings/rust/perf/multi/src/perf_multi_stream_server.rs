@@ -47,6 +47,7 @@ fn main() {
         .common_options()
         .set_tcp_no_delay(true)
         .expect("tcp_no_delay");
+    let mut ready_monitor = common::open_connection_ready_monitor(&stream);
     let (event_tx, event_rx) = mpsc::channel::<ServerEvent>();
     // The high bit is the stop gate and the low bits count callbacks that may
     // still enqueue one pre-stop Echo. Keeping both in one atomic makes the
@@ -100,6 +101,21 @@ fn main() {
     }
     let endpoint = stream.last_endpoint().expect("endpoint");
     common::print_ready(&endpoint);
+    if !common::wait_for_start_stdin(args.msg_size) {
+        return;
+    }
+    // CLIENT_READY proves the raw peers completed their side of connect. Confirm
+    // the target-side event count before applying the connected-pipe HWM.
+    common::wait_monitor_ready_count(
+        &mut ready_monitor,
+        settings.clients,
+        common::resolve_multi_connect_ready_timeout(),
+        "multi stream server",
+    );
+    ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
+    ready_monitor.status().expect("connected monitor snapshot");
+    drop(ready_monitor);
+    common::print_server_start_ready(args.msg_size);
     drop(event_tx);
     let control_callback_state = callback_state.clone();
     let control_dispatcher = dispatcher.clone();

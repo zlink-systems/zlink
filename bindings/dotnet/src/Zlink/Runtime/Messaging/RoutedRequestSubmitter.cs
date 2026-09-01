@@ -6,8 +6,9 @@ using Systems.Zlink.Runtime.Native;
 namespace Systems.Zlink;
 
 /// <summary>
-///     Submits one DEALER/ROUTER request to an exact Core target on the calling
-///     thread and lets the Core reply callback complete the task.
+///     Submits one DEALER/ROUTER request on the calling thread and lets the
+///     Core reply callback complete the task. DEALER target selection remains
+///     Core-owned; ROUTER requests keep their explicit exact target.
 /// </summary>
 /// <remarks>
 ///     There is no binding-owned pending queue, retry loop, deadline timer or
@@ -39,8 +40,7 @@ internal static class RoutedRequestSubmitter
         var userData = GCHandle.ToIntPtr(self);
         try
         {
-            var target = SelectTarget(handle, routerRoutingId);
-            SubmitParts(handle, socketType, ref target, parts, timeoutMs,
+            SubmitParts(handle, socketType, routerRoutingId, parts, timeoutMs,
                 (int)SendFlags.DontWait, userData);
         }
         catch
@@ -83,8 +83,7 @@ internal static class RoutedRequestSubmitter
         var self = GCHandle.Alloc(completion, GCHandleType.Normal);
         try
         {
-            var target = SelectTarget(handle, routerRoutingId);
-            SubmitParts(handle, socketType, ref target, parts, timeoutMs,
+            SubmitParts(handle, socketType, routerRoutingId, parts, timeoutMs,
                 (int)flags, GCHandle.ToIntPtr(self));
         }
         catch
@@ -94,7 +93,7 @@ internal static class RoutedRequestSubmitter
         }
     }
 
-    private static unsafe ZlinkRoutedSubmitTarget SelectTarget(IntPtr handle,
+    private static unsafe ZlinkRoutedSubmitTarget SelectRouterTarget(IntPtr handle,
         RoutingId? routerRoutingId)
     {
         ZlinkRoutingId nativeRoutingId = default;
@@ -113,10 +112,16 @@ internal static class RoutedRequestSubmitter
     }
 
     private static void SubmitParts(IntPtr handle, SocketType socketType,
-        ref ZlinkRoutedSubmitTarget target, IReadOnlyList<Message> parts,
+        RoutingId? routerRoutingId, IReadOnlyList<Message> parts,
         uint timeoutMs, int flags, IntPtr userData)
     {
-        var routedTarget = target;
+        if (socketType == SocketType.Dealer)
+        {
+            SubmitDealerParts(handle, parts, timeoutMs, flags, userData);
+            return;
+        }
+
+        var routedTarget = SelectRouterTarget(handle, routerRoutingId);
         RequestReplySupport.SubmitOwnedParts(parts,
             (ref ZlinkMsg nativePart, NativeMethods.ZlinkPartFlag partFlag) =>
             {
@@ -124,17 +129,28 @@ internal static class RoutedRequestSubmitter
                 var partTimeout = final ? timeoutMs : 0;
                 var partHandler = final ? ReplyHandlerPointer : IntPtr.Zero;
                 var partUserData = final ? userData : IntPtr.Zero;
-                return socketType == SocketType.Dealer
-                    ? NativeMethods.zlink_dealer_request_transport_pair_part(
-                        handle, ref routedTarget, ref nativePart,
-                        flags, partFlag, partTimeout, partHandler,
-                        partUserData)
-                    : NativeMethods.zlink_router_request_transport_pair_part(
-                        handle, ref routedTarget.PeerRoutingId,
-                        routedTarget.TransportPairId,
-                        routedTarget.TransportPairGeneration, ref nativePart,
-                        flags, partFlag, partTimeout, partHandler,
-                        partUserData);
+                return NativeMethods.zlink_router_request_transport_pair_part(
+                    handle, ref routedTarget.PeerRoutingId,
+                    routedTarget.TransportPairId,
+                    routedTarget.TransportPairGeneration, ref nativePart,
+                    flags, partFlag, partTimeout, partHandler,
+                    partUserData);
+            });
+    }
+
+    private static void SubmitDealerParts(IntPtr handle,
+        IReadOnlyList<Message> parts, uint timeoutMs, int flags,
+        IntPtr userData)
+    {
+        RequestReplySupport.SubmitOwnedParts(parts,
+            (ref ZlinkMsg nativePart, NativeMethods.ZlinkPartFlag partFlag) =>
+            {
+                var final = partFlag == NativeMethods.ZlinkPartFlag.Final;
+                return NativeMethods.zlink_dealer_request_part(handle,
+                    ref nativePart, flags, partFlag,
+                    final ? timeoutMs : 0,
+                    final ? ReplyHandlerPointer : IntPtr.Zero,
+                    final ? userData : IntPtr.Zero);
             });
     }
 

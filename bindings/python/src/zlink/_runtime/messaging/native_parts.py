@@ -10,7 +10,7 @@ failure; the binding closes any later part that was not attempted.
 
 import ctypes
 
-from .message_materializer import Message
+from .message_materializer import Message, ReceivedMessage
 from ..._native.ffi import ZlinkMsg
 from ..handles.native_support import (
     _close_multipart,
@@ -38,6 +38,11 @@ def _materialize_native_parts(payload):
             if isinstance(part, Message):
                 native_parts.append(_clone_native_msg(part._msg))
                 continue
+            if isinstance(part, ReceivedMessage):
+                native = part._clone_native_for_send()
+                if native is not None:
+                    native_parts.append(native)
+                    continue
 
             native = ZlinkMsg()
             _init_msg_from_buffer(native, part, borrow=False)

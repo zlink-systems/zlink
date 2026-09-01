@@ -50,6 +50,12 @@ readiness를 기다리는 방법은 두 가지다.
 | timer | fire count를 받을 수 있음 | 미지원 | `zlink_timer_recv()`로 drain |
 | FD | platform readable | platform writable | platform `POLLPRI`는 `ZLINK_POLLPRI`, 그 밖의 platform 오류 bit는 `ZLINK_POLLERR`로 변환 |
 
+여러 peer를 가진 raw socket의 `ZLINK_POLLOUT`은 socket 전체의 집계 readiness다.
+이 event는 writable해진 routing ID나 transport pair를 식별하지 않으며, 다른 peer의
+여유 때문에 설 수 있다. 따라서 특정 target의 nonblocking submit이 backpressure를
+반환한 뒤 `ZLINK_POLLOUT`을 관측해도 그 target의 다음 submit 성공은 보장되지 않는다.
+operation별 admission 대기는 `zlink_send_async`와 completion 통지를 사용한다.
+
 `ZLINK_POLLITEMS_DFLT`는 내부·application stack buffer의 권장 초기 item 수이며
 readiness bit가 아니다. `ZLINK_HAVE_POLLER == 1`은 이 public poller API가 build에
 포함되었음을 뜻한다.

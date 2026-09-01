@@ -12,8 +12,8 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR] [--python-executable PATH]
 
-Creates zlink-<repository-version> source and wheel packages with the exact
-matching Core Linux runtime. The current Python native target is Linux x86_64.
+Creates zlink-<BINDINGS_VERSION> source and wheel packages with the exact Core
+VERSION Linux runtime. The current Python native target is Linux x86_64.
 EOF
 }
 
@@ -32,12 +32,13 @@ command -v "$python_executable" >/dev/null 2>&1 || {
   echo "Python executable not found: $python_executable" >&2
   exit 1
 }
-version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
 export ZLINK_CORE_PACKAGE_PREFIX="$core_prefix"
-export ZLINK_CORE_VERSION="$version"
+export ZLINK_CORE_VERSION="$core_version"
 package_version="$(sed -n 's/^version = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"/\1/p' "$repo_root/bindings/python/pyproject.toml" | head -n1)"
-[[ "$package_version" = "$version" ]] || {
-  echo "Python package version $package_version does not match Core $version" >&2
+[[ "$package_version" = "$binding_version" ]] || {
+  echo "Python package version $package_version does not match $binding_version" >&2
   exit 1
 }
 
@@ -56,9 +57,9 @@ package_version="$(sed -n 's/^version = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*
   fi
 )
 
-wheel="$artifact_root/python/zlink-$version-py3-none-any.whl"
+wheel="$artifact_root/python/zlink-$binding_version-py3-none-any.whl"
 if [[ ! -f "$wheel" ]]; then
-  wheel="$(find "$artifact_root/python" -maxdepth 1 -type f -name "zlink-$version-*.whl" -print -quit)"
+  wheel="$(find "$artifact_root/python" -maxdepth 1 -type f -name "zlink-$binding_version-*.whl" -print -quit)"
 fi
 [[ -n "$wheel" && -f "$wheel" ]] || { echo "Python wheel is missing" >&2; exit 1; }
 echo "Python local packages: $artifact_root/python"

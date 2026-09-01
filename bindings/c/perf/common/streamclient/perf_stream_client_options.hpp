@@ -147,6 +147,15 @@ inline bool parse_options (int argc, char **argv, client_options_t &opt)
         }
     }
 
+    // The external server barrier owns one isolated size/run process. Accepting
+    // more phases here would leave the second CLIENT_READY without a server
+    // barrier owner and deadlock on stdin.
+    if (opt.start_gate > 0 && (opt.runs != 1 || opt.sizes.size () != 1)) {
+        std::fprintf (stderr,
+                      "--start-gate requires exactly one --sizes value and --runs 1\n");
+        return false;
+    }
+
     return true;
 }
 

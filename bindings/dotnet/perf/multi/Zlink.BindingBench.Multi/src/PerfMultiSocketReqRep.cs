@@ -403,18 +403,20 @@ internal static class PerfMultiSocketReqRep
             DebugLogLimited(ref s_debugServerRecvLogs,
                 $"socket_reqrep_server: recv size={payloadSize} seq={requestSeq}");
         }
-        using Message reply = Message.Allocate(payloadSize);
-        payloadPart.AsReadOnlySpan().CopyTo(reply.AsSpan());
         try
         {
             if (PerfSocketIo.MeasurementPartCount == 2)
             {
                 using Message tail = Message.Allocate(0);
-                received.Reply().Message(reply).Message(tail).Submit();
+                // ReplyCore takes a native ref-counted clone before submit.
+                // Forward the received Message directly so the benchmark does
+                // not add a managed payload allocation and byte copy that are
+                // absent from the public request/reply path itself.
+                received.Reply().Message(payloadPart).Message(tail).Submit();
             }
             else
             {
-                received.Reply().Message(reply).Submit();
+                received.Reply().Message(payloadPart).Submit();
             }
         }
         catch (ZlinkSubmitException ex) when (IsStaleRoute(ex))

@@ -382,10 +382,14 @@ bool perf_stream_server (const std::string &lib_name, const std::string &transpo
         if (!perf::multi::setup_tls_server (server, transport))
             return false;
 
+        perf::multi::connect_monitor_t connect_monitor;
+        if (!perf::multi::open_connect_monitor (server, settings.monitor_hwm,
+                                                connect_monitor))
+            return false;
+
         const std::string bind_endpoint =
           perf::multi::make_endpoint (transport, "cpp_multi_stream", settings.server_bind_port);
         server.bind (bind_endpoint);
-        ctx.ctx ().recalculate_auto_hwm ();
 
         const std::string endpoint =
           transport == "inproc"
@@ -393,8 +397,6 @@ bool perf_stream_server (const std::string &lib_name, const std::string &transpo
             : perf::multi::normalize_endpoint_host (server.options ().last_endpoint ());
         if (endpoint.empty ())
             return false;
-        perf::multi::emit_auto_hwm_detail (server, "server", "server", transport,
-                                           effective_msg_size, "stream");
 
         g_stop_requested.store (false, std::memory_order_release);
         install_signal_handlers ();
@@ -408,6 +410,25 @@ bool perf_stream_server (const std::string &lib_name, const std::string &transpo
             handle_packet (handler_context, source_rid_, header_, body_);
         });
 
+        perf::multi::print_ready (endpoint);
+        // CLIENT_READY means the shared raw peer connected every requested
+        // session and applied this size. Consume the server-side monitor
+        // barrier as independent proof that all target routes are usable,
+        // then recalculate on the server owner path before active traffic.
+        if (!perf::multi::wait_for_start_from_stdin (effective_msg_size))
+            return false;
+        if (!perf::multi::wait_connect_ready_count (
+              connect_monitor, settings.clients, settings.connect_ready_timeout_ms)) {
+            perf::multi::close_connect_monitor (connect_monitor);
+            return false;
+        }
+        perf::multi::close_connect_monitor (connect_monitor);
+        if (!perf::multi::recalculate_auto_hwm (ctx))
+            return false;
+        perf::multi::emit_auto_hwm_detail (server, "server", "server-connected",
+                                           transport, effective_msg_size, "stream");
+        std::cout << "SERVER_START_READY," << effective_msg_size << std::endl;
+
         const std::chrono::milliseconds drain_timeout (
           std::max (1000, io_timeout_ms * 4));
         std::thread dispatcher_thread (&run_packet_dispatcher, handler_context,
@@ -417,7 +438,6 @@ bool perf_stream_server (const std::string &lib_name, const std::string &transpo
         stdin_watcher.detach ();
 
         std::thread event_loop_thread (&run_server_event_loop);
-        perf::multi::print_ready (endpoint);
         event_loop_thread.join ();
         close_packet_queue (handler_context);
         dispatcher_thread.join ();

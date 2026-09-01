@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(zlink_cpp VERSION 0.15.0 LANGUAGES CXX)
+project(zlink_cpp VERSION 0.15.1 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -8,10 +8,12 @@ get_filename_component(ZLINK_CPP_BINDINGS_DIR "${CMAKE_CURRENT_LIST_DIR}" ABSOLU
 get_filename_component(ZLINK_REPO_ROOT_DIR "${ZLINK_CPP_BINDINGS_DIR}/../.." ABSOLUTE)
 
 set(ZLINK_CORE_DIR "${ZLINK_REPO_ROOT_DIR}/core" CACHE PATH "Path to zlink core")
+set(ZLINK_CPP_CORE_VERSION "0.15.1" CACHE STRING
+    "Exact Core package version required by this C++ binding")
 set(ZLINK_CPP_CORE_BUILD_DIR "${ZLINK_REPO_ROOT_DIR}/core/build" CACHE PATH
     "Path to an existing zlink core build directory")
 set(ZLINK_CPP_CORE_PACKAGE_PREFIX "" CACHE PATH
-    "Path to an installed Zlink 0.15.0 Core release prefix")
+    "Path to an installed Zlink 0.15.1 Core release prefix")
 option(ZLINK_CPP_USE_CORE_BUILD_RUNTIME
   "Require the targeted core/build runtime instead of an installed Core package"
   OFF)
@@ -104,7 +106,7 @@ function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
   endif()
 
   if(ZLINK_CPP_CORE_PACKAGE_PREFIX)
-    find_package(zlink ${PROJECT_VERSION} EXACT CONFIG QUIET
+    find_package(zlink ${ZLINK_CPP_CORE_VERSION} EXACT CONFIG QUIET
       PATHS "${ZLINK_CPP_CORE_PACKAGE_PREFIX}"
       NO_DEFAULT_PATH)
     if(TARGET libzlink)
@@ -122,17 +124,18 @@ function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
       "${ZLINK_CPP_CORE_PACKAGE_PREFIX}/share/zlink/core-package-provenance.json")
     if(NOT EXISTS "${_package_provenance}")
       message(FATAL_ERROR
-        "Core release prefix has neither an exact zlink ${PROJECT_VERSION} "
+        "Core release prefix has neither an exact zlink ${ZLINK_CPP_CORE_VERSION} "
         "package config nor package provenance: ${ZLINK_CPP_CORE_PACKAGE_PREFIX}")
     endif()
     file(READ "${_package_provenance}" _package_provenance_json)
     string(REGEX MATCH
       "\"version\"[ \t\r\n]*:[ \t\r\n]*\"([0-9]+\\.[0-9]+\\.[0-9]+)\""
       _package_version_match "${_package_provenance_json}")
-    if(NOT "${CMAKE_MATCH_1}" STREQUAL "${PROJECT_VERSION}")
+    if(NOT "${CMAKE_MATCH_1}" STREQUAL "${ZLINK_CPP_CORE_VERSION}")
       message(FATAL_ERROR
         "Core release prefix version ${CMAKE_MATCH_1} does not match "
-        "zlink_cpp ${PROJECT_VERSION}: ${ZLINK_CPP_CORE_PACKAGE_PREFIX}")
+        "required Core ${ZLINK_CPP_CORE_VERSION} for zlink_cpp ${PROJECT_VERSION}: "
+        "${ZLINK_CPP_CORE_PACKAGE_PREFIX}")
     endif()
     set(_package_include "${ZLINK_CPP_CORE_PACKAGE_PREFIX}/include")
     if(NOT IS_DIRECTORY "${_package_include}")
@@ -218,7 +221,7 @@ function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
 
   message(FATAL_ERROR
     "No zlink core runtime found for this platform. "
-    "Expected an installed Core 0.15.0 package, an existing libzlink target, "
+    "Expected an installed Core 0.15.1 package, an existing libzlink target, "
     "or a targeted source build under ${ZLINK_CPP_CORE_BUILD_DIR}.")
 endfunction()
 

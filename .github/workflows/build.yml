@@ -24,15 +24,36 @@ jobs:
 
       - name: Read versions from VERSION file
         id: versions
+        env:
+          INPUT_LIBZLINK_VERSION: ${{ inputs.libzlink_version }}
         run: |
           LIBZLINK_VERSION_MAJOR=$(grep '^LIBZLINK_VERSION_MAJOR=' VERSION | cut -d'=' -f2)
           LIBZLINK_VERSION_MINOR=$(grep '^LIBZLINK_VERSION_MINOR=' VERSION | cut -d'=' -f2)
           LIBZLINK_VERSION_PATCH=$(grep '^LIBZLINK_VERSION_PATCH=' VERSION | cut -d'=' -f2)
-          LIBZLINK_VERSION=$(grep '^LIBZLINK_VERSION=' VERSION | cut -d'=' -f2)
+          REPOSITORY_LIBZLINK_VERSION=$(grep '^LIBZLINK_VERSION=' VERSION | cut -d'=' -f2)
 
-          # Use manual input if provided, otherwise use VERSION file
-          if [ -n "${{ github.event.inputs.libzlink_version }}" ]; then
-            LIBZLINK_VERSION="${{ github.event.inputs.libzlink_version }}"
+          if ! [[ "${REPOSITORY_LIBZLINK_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "invalid LIBZLINK_VERSION in VERSION: ${REPOSITORY_LIBZLINK_VERSION}" >&2
+            exit 1
+          fi
+          COMPONENT_VERSION="${LIBZLINK_VERSION_MAJOR}.${LIBZLINK_VERSION_MINOR}.${LIBZLINK_VERSION_PATCH}"
+          if [[ "${COMPONENT_VERSION}" != "${REPOSITORY_LIBZLINK_VERSION}" ]]; then
+            echo "VERSION components ${COMPONENT_VERSION} do not match LIBZLINK_VERSION ${REPOSITORY_LIBZLINK_VERSION}" >&2
+            exit 1
+          fi
+
+          # An omitted manual input uses VERSION. A supplied input may only
+          # confirm that exact repository runtime version.
+          LIBZLINK_VERSION="${REPOSITORY_LIBZLINK_VERSION}"
+          if [[ -n "${INPUT_LIBZLINK_VERSION}" ]]; then
+            if ! [[ "${INPUT_LIBZLINK_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "invalid libzlink_version input: ${INPUT_LIBZLINK_VERSION}" >&2
+              exit 1
+            fi
+            if [[ "${INPUT_LIBZLINK_VERSION}" != "${REPOSITORY_LIBZLINK_VERSION}" ]]; then
+              echo "manual version ${INPUT_LIBZLINK_VERSION} does not match VERSION ${REPOSITORY_LIBZLINK_VERSION}" >&2
+              exit 1
+            fi
           fi
 
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
@@ -41,8 +62,8 @@ jobs:
               exit 1
             fi
             TAG_RUNTIME_VERSION="${BASH_REMATCH[1]}"
-            if [[ "${TAG_RUNTIME_VERSION}" != "${LIBZLINK_VERSION}" ]]; then
-              echo "tag runtime ${TAG_RUNTIME_VERSION} does not match source version ${LIBZLINK_VERSION}" >&2
+            if [[ "${TAG_RUNTIME_VERSION}" != "${REPOSITORY_LIBZLINK_VERSION}" ]]; then
+              echo "tag runtime ${TAG_RUNTIME_VERSION} does not match VERSION ${REPOSITORY_LIBZLINK_VERSION}" >&2
               exit 1
             fi
           fi
@@ -605,7 +626,7 @@ jobs:
 
             ### Verification
             All builds have been tested with:
-            - 64 unit tests (Unity framework)
+            - Core automated unit and integration test suite
             - Transport matrix tests (all socket patterns × all transports)
             - TLS/WebSocket functionality
           files: |

@@ -54,6 +54,14 @@ type is as follows.
 | timer | A fire count can be received | Unsupported | Drain with `zlink_timer_recv()` |
 | FD | Platform-readable | Platform-writable | Platform `POLLPRI` maps to `ZLINK_POLLPRI`; all other platform error bits map to `ZLINK_POLLERR` |
 
+For a raw socket with multiple peers, `ZLINK_POLLOUT` is aggregate readiness
+for the socket. The event does not identify which routing ID or transport pair
+became writable and can be raised because another peer has capacity. Therefore,
+after a nonblocking submit to one target reports backpressure, observing
+`ZLINK_POLLOUT` does not guarantee that the next submit to that target succeeds.
+Use `zlink_send_async` and its completion notification for operation-specific
+admission waiting.
+
 `ZLINK_POLLITEMS_DFLT` is the recommended initial item count for internal and
 application stack buffers; it is not a readiness bit. `ZLINK_HAVE_POLLER == 1`
 means that this public poller API is included in the build.

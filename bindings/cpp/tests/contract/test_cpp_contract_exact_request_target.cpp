@@ -6,7 +6,6 @@
 #include <zlink.h>
 #include <zlink/message/api.h>
 
-#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdio>
@@ -189,154 +188,54 @@ bool poll_request_and_reply (zlink::router_socket_t &router_,
     return true;
 }
 
-bool wait_for_request_on_either (two_target_fixture_t &fixture_,
-                                 const std::string &request_payload_,
-                                 bool &on_a_, bool &on_b_)
+// The standard DEALER request submit owns peer selection. Even when the next
+// weighted candidate is backpressured, Core may admit the request to another
+// eligible peer instead of the binding freezing that candidate into an exact
+// transport-pair submit.
+int test_dealer_request_selection_is_core_owned ()
 {
-    const auto deadline = std::chrono::steady_clock::now ()
-                          + std::chrono::seconds (3);
-    while (std::chrono::steady_clock::now () < deadline) {
-        if (poll_request_and_reply (fixture_.router_a, request_payload_,
-                                    "reply:A")) {
-            on_a_ = true;
-            return true;
-        }
-        if (poll_request_and_reply (fixture_.router_b, request_payload_,
-                                    "reply:B")) {
-            on_b_ = true;
-            return true;
-        }
-        std::this_thread::sleep_for (std::chrono::milliseconds (1));
-    }
-    return false;
-}
+    two_target_fixture_t fixture ("core-owned-request-target");
+    fixture.fill_a_until_backpressured (std::string (16384, 'f'));
+    fixture.dealer.options ().send_timeout (std::chrono::milliseconds (200));
 
-// The request terminal picks one exact target and submits to it synchronously.
-// The binding no longer parks or retries the submit, so what has to hold is
-// that the send waits inside Core for that exact target's credit and never
-// gets rerouted to the other pipe.
-int test_request_stays_on_the_initially_selected_exact_target ()
-{
-    two_target_fixture_t fixture ("exact-request-credit");
-    const std::string filler (16384, 'f');
-    fixture.fill_a_until_backpressured (filler);
-    fixture.dealer.options ().send_timeout (std::chrono::seconds (5));
-
-    // Only Core can release the parked submit; drain A from another thread.
-    std::atomic<bool> stop_drain{false};
-    std::thread drain_a ([&] {
-        while (!stop_drain.load (std::memory_order_acquire)) {
-            zlink::received_t received;
-            if (fixture.router_a.recv (received, zlink::recv_flags_t::dontwait)
-                != 0) {
-                std::this_thread::sleep_for (std::chrono::milliseconds (1));
-                continue;
-            }
-            if (received.first_part ().to_string () == filler) {
-                received.close ();
-                continue;
-            }
-            // The request itself: reply on A so the suspension can complete.
-            if (received.request_seq ().has_value ()) {
-                zlink::message_t reply =
-                  zlink_cpp_contract::make_message ("reply:A");
-                received.reply ().message (reply).submit ();
-                continue;
-            }
-            received.close ();
-        }
-    });
-
-    const std::string request_payload = "request-must-stay-on-A";
+    const std::string request_payload = "request-must-use-ready-peer";
     zlink::message_t request =
       zlink_cpp_contract::make_message (request_payload);
-    request_test_task_t completion = await_request (
-      fixture.dealer.request ()
-        .message (std::move (request))
-        .timeout (std::chrono::seconds (5))
-        .async ());
-
     std::vector<zlink::message_t> reply;
+    bool delivered_to_b = false;
     std::string failure;
     try {
-        reply = completion.get ();
+        request_test_task_t completion = await_request (
+          fixture.dealer.request ()
+            .message (std::move (request))
+            .timeout (std::chrono::seconds (3))
+            .async ());
+
+        const auto deadline = std::chrono::steady_clock::now ()
+                              + std::chrono::seconds (3);
+        while (!delivered_to_b
+               && std::chrono::steady_clock::now () < deadline) {
+            delivered_to_b = poll_request_and_reply (
+              fixture.router_b, request_payload, "reply:B");
+            if (!delivered_to_b)
+                std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        }
+        if (delivered_to_b)
+            reply = completion.get ();
     }
     catch (const zlink::binding_error_t &error) {
         failure = "request failed errno="
                   + std::to_string (error.internal_errno ());
     }
-    stop_drain.store (true, std::memory_order_release);
-    drain_a.join ();
-
-    bool rerouted_to_b = false;
-    zlink::received_t stray;
-    if (fixture.router_b.recv (stray, zlink::recv_flags_t::dontwait) == 0) {
-        rerouted_to_b = stray.first_part ().to_string () == request_payload;
-        stray.close ();
-    }
 
     const std::string reply_payload =
       reply.empty () ? std::string () : reply.front ().to_string ();
-    if (!failure.empty () || rerouted_to_b || reply_payload != "reply:A") {
+    if (!failure.empty () || !delivered_to_b || reply_payload != "reply:B") {
         std::fprintf (
           stderr,
-          "exact request violation: %s on_B=%d reply=%s\n",
-          failure.c_str (), rerouted_to_b ? 1 : 0, reply_payload.c_str ());
+          "Core-owned DEALER selection violation: %s on_B=%d reply=%s\n",
+          failure.c_str (), delivered_to_b ? 1 : 0, reply_payload.c_str ());
         return 1;
-    }
-    return 0;
-}
-
-// A target that never regains credit fails the submit on the caller thread and
-// is never rerouted to the other pipe.
-int test_detached_exact_request_is_terminal_without_reroute ()
-{
-    two_target_fixture_t fixture ("exact-request-detach");
-    const std::string filler (16384, 'd');
-    fixture.fill_a_until_backpressured (filler);
-    fixture.dealer.options ().send_timeout (std::chrono::milliseconds (200));
-
-    const std::string request_payload = "detached-request-must-not-reroute";
-    zlink::message_t request =
-      zlink_cpp_contract::make_message (request_payload);
-    bool terminal = false;
-    zlink::submit_result_t terminal_result = zlink::submit_result_t::ok;
-    try {
-        (void) fixture.dealer.request ()
-          .message (request)
-          .timeout (std::chrono::seconds (3))
-          .async ();
-    }
-    catch (const zlink::submit_error_t &error) {
-        terminal = true;
-        terminal_result = error.result ();
-    }
-
-    bool rerouted_to_b = false;
-    const auto b_deadline = std::chrono::steady_clock::now ()
-                            + std::chrono::milliseconds (500);
-    while (std::chrono::steady_clock::now () < b_deadline
-           && !rerouted_to_b) {
-        rerouted_to_b = poll_request_and_reply (
-          fixture.router_b, request_payload, "reply:B");
-        if (!rerouted_to_b)
-            std::this_thread::sleep_for (std::chrono::milliseconds (1));
-    }
-
-    if (!terminal || rerouted_to_b) {
-        std::fprintf (
-          stderr,
-          "detached exact request did not terminate without reroute: "
-          "terminal=%d result=%d on_B=%d\n",
-          terminal ? 1 : 0, static_cast<int> (terminal_result),
-          rerouted_to_b ? 1 : 0);
-        return 1;
-    }
-    // The C++ staging policy leaves the public request lvalue with the caller
-    // after Core consumes the failed synchronous attempt's native part.
-    if (!request.valid ()) {
-        std::fprintf (stderr, "refused request submit consumed the part\n");
-        return 2;
     }
     return 0;
 }
@@ -345,9 +244,5 @@ int test_detached_exact_request_is_terminal_without_reroute ()
 
 int main ()
 {
-    const int retry_result =
-      test_request_stays_on_the_initially_selected_exact_target ();
-    if (retry_result != 0)
-        return retry_result;
-    return test_detached_exact_request_is_terminal_without_reroute ();
+    return test_dealer_request_selection_is_core_owned ();
 }

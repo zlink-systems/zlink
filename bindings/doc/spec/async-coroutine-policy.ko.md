@@ -9,7 +9,9 @@ title: "바인딩 routed 전송 계약과 비동기 완료 표면 정책"
 # 바인딩 routed 전송 계약과 비동기 완료 표면 정책
 
 > **이 장이 정의하는 것** — C를 제외한 언어별 바인딩이 네 operation 유형의
-> 완료 표면을 어떤 **이름과 반환 타입**으로 노출하는지 정한다.
+> 완료 표면을 어떤 **이름과 반환 타입**으로 노출하는지 정한다. 또한 C
+> `MULTI_STREAM` packet echo가 public `zlink_send_async()`를 호출할 때 따르는
+> 공통 native 완료 계약을 정의한다.
 
 이 문서가 다루는 네 operation 유형과 완료 표면:
 
@@ -171,8 +173,9 @@ send 계열은 HWM 대기가 발생할 수 있으므로 대부분의 binding이 
 ### 완료 통지 (공통)
 
 - async terminal은 먼저 `zlink_send_complete_handler`를 설치한다. 즉시 admission은
-  operation id `0`을 반환하고 binding이 awaitable을 즉시 완료한다. HWM으로 대기하면
-  nonzero operation id를 awaitable에 연결하며, `zlink_send_complete_event_t`가
+  operation id `0`을 반환하고 completion callback을 호출하지 않는다. binding은 이 경우
+  awaitable을 즉시 완료한다. HWM으로 대기하면 nonzero operation id를 awaitable에 연결하며,
+  `zlink_send_complete_event_t`가
   `ZLINK_SEND_ADMITTED`·`ZLINK_SEND_TIMED_OUT`·`ZLINK_SEND_TERMINAL` 중 하나로 정확히
   한 번 전달한다.
 - 같은 target의 완료는 제출 순서를 유지하고, 한 socket의 completion callback은 서로
@@ -198,6 +201,22 @@ send 계열은 HWM 대기가 발생할 수 있으므로 대부분의 binding이 
   반환한다.
 - 따라서 `DONTWAIT`가 필요한 호출은 async terminal이 아니라 sync terminal을 쓴다.
 - (native 경로가 바뀌면 이 절의 문장을 코드에 맞춘다.)
+
+### C `MULTI_STREAM` packet echo
+
+C `MULTI_STREAM` server는 `zlink_stream_packet_handler()`가 전달한 packet마다 public
+`zlink_send_async()`를 한 번 호출해 같은 `source_rid`로 echo한다. caller는
+`DONTWAIT` 선행 제출, `POLLOUT` 관찰, binding-local pending queue, timer 재제출을 두지
+않는다.
+
+packet callback에서 현재 pipe로 곧바로 수용할 수 있고 같은 target의 FIFO를 보존할 수
+있으면 Core가 즉시 admission을 수행한다. 그렇지 않으면 Core가 pending operation으로
+보관하고 HWM backpressure와 전송 순서를 처리한다. 이 선택은 Core의 내부 동작이며 C
+server의 호출 형태와 ownership 규칙을 바꾸지 않는다.
+
+즉시 admission은 operation id `0`과 callback 없음으로 끝난다. pending operation만
+nonzero operation id를 받고 정확히 한 번 completion callback을 받는다. C perf server는
+이 callback으로 결과만 집계하며 같은 packet을 다시 제출하지 않는다.
 
 ### 계약 요약 (공통)
 
@@ -280,6 +299,12 @@ reply 완료는 Core가 구동한다. Reply handler callback은 terminal과 payl
 native callback thread 밖에서 완료한다. Request timeout은 이미 Core 소유다
 (`ZLINK_REQUEST_TIMED_OUT`). 바인딩은 이 완료 표면을 위해 admission·재시도 queue,
 operation별 executor나 timer를 추가하지 않는다.
+
+`DEALER`/`ROUTER` socket을 public poller에 `ZLINK_POLLCOMPLETION`으로 등록하면
+Core는 같은 reply callback의 dispatch owner만 `zlink_poller_wait` 호출자로 옮긴다.
+async terminal, exact-once completion, Core 소유 timeout과 admission 계약은 바뀌지
+않는다. 이는 caller가 completion context를 선택하는 것이며 별도 request terminal이나
+completion 경로를 추가하지 않는다.
 
 | 구분 | bindings 완료 표면 |
 |---|---|
@@ -365,3 +390,7 @@ Framework가 이 문서의 binding 표면(send·publish·request·raw reply term
 표면 — 는 framework 스펙
 [제출과 완료 §15 「Binding send terminal 소비」](../../../framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md#15-binding-send-terminal-소비-구현)가
 소유한다. 이 문서는 binding이 무엇을 제공하는지만 정의한다.
+
+<!-- bindings-nav:start -->
+[스펙 목록](README.ko.md) | [이전: 개요](README.ko.md) | [다음: C](c/README.ko.md)
+<!-- bindings-nav:end -->

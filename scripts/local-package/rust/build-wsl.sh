@@ -11,7 +11,7 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Creates zlink-<repository-version>.crate with the exact matching Core Linux
+Creates zlink-<BINDINGS_VERSION>.crate with the exact Core VERSION Linux
 runtime.
 EOF
 }
@@ -26,18 +26,19 @@ done
 
 [[ "$core_prefix" = /* ]] || { echo "--core-prefix must be absolute" >&2; exit 2; }
 core_prefix="$(readlink -f "$core_prefix")"
-version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
 export ZLINK_CORE_PACKAGE_PREFIX="$core_prefix"
-export ZLINK_CORE_VERSION="$version"
+export ZLINK_CORE_VERSION="$core_version"
 package_version="$(sed -n 's/^version = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"/\1/p' "$repo_root/bindings/rust/Cargo.toml" | head -n1)"
-[[ "$package_version" = "$version" ]] || {
-  echo "Rust package version $package_version does not match Core $version" >&2
+[[ "$package_version" = "$binding_version" ]] || {
+  echo "Rust package version $package_version does not match $binding_version" >&2
   exit 1
 }
 
 "$repo_root/scripts/local-package/native/sync-local-core-libs.sh" rust
 native_dir="$repo_root/bindings/rust/native/linux-x86_64"
-[[ -e "$native_dir/libzlink.so.0" && -e "$native_dir/libzlink.so.$version" ]] || {
+[[ -e "$native_dir/libzlink.so.0" && -e "$native_dir/libzlink.so.$core_version" ]] || {
   echo "Rust native payload is incomplete" >&2
   exit 1
 }
@@ -48,9 +49,9 @@ native_dir="$repo_root/bindings/rust/native/linux-x86_64"
   cargo package --locked --allow-dirty --no-verify
 )
 
-crate="$repo_root/bindings/rust/target/package/zlink-$version.crate"
+crate="$repo_root/bindings/rust/target/package/zlink-$binding_version.crate"
 [[ -f "$crate" ]] || { echo "Rust crate is missing: $crate" >&2; exit 1; }
 out_dir="$artifact_root/rust"
 mkdir -p "$out_dir"
 cp "$crate" "$out_dir/"
-echo "Rust local package: $out_dir/zlink-$version.crate"
+echo "Rust local package: $out_dir/zlink-$binding_version.crate"

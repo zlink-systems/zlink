@@ -1215,6 +1215,92 @@ def parse_client_ready_size(line):
     return size_value if size_value > 0 else None
 
 
+def parse_server_start_ready_size(line):
+    stripped = line.strip()
+    if not stripped.startswith("SERVER_START_READY,"):
+        return None
+    parts = stripped.split(",", 1)
+    if len(parts) != 2:
+        return None
+    try:
+        size_value = int(parts[1].strip())
+    except (TypeError, ValueError):
+        return None
+    return size_value if size_value > 0 else None
+
+
+_STREAM_START_STATE_LOCK = threading.Lock()
+
+
+def request_stream_server_start(
+    server_proc,
+    size_value,
+    requested_sizes,
+    requested_start_times=None,
+    state_lock=None,
+):
+    if (
+        size_value is None
+        or not server_proc
+        or not server_proc.stdin
+    ):
+        return False
+
+    lock = state_lock or _STREAM_START_STATE_LOCK
+    with lock:
+        if size_value in requested_sizes:
+            return False
+        # Make an immediate server ACK observe one complete request state. Keep
+        # the lock through flush so a failed write can roll that state back.
+        requested_sizes.add(size_value)
+        if requested_start_times is not None:
+            requested_start_times[size_value] = time.monotonic()
+        try:
+            server_proc.stdin.write(f"START,{size_value}\n")
+            server_proc.stdin.flush()
+            return True
+        except Exception:
+            requested_sizes.discard(size_value)
+            if requested_start_times is not None:
+                requested_start_times.pop(size_value, None)
+            return False
+
+
+def forward_stream_start_ack(
+    client_proc,
+    line,
+    pending_ready_sizes,
+    requested_sizes,
+    requested_start_times=None,
+    state_lock=None,
+):
+    ready_size = parse_server_start_ready_size(line)
+    if (
+        ready_size is None
+        or not client_proc
+        or not client_proc.stdin
+    ):
+        return False
+
+    lock = state_lock or _STREAM_START_STATE_LOCK
+    with lock:
+        if (
+            ready_size not in pending_ready_sizes
+            or ready_size not in requested_sizes
+        ):
+            return False
+        try:
+            client_proc.stdin.write(f"START,{ready_size}\n")
+            client_proc.stdin.flush()
+        except Exception:
+            return False
+        pending_ready_sizes.discard(ready_size)
+        requested_sizes.discard(ready_size)
+        if requested_start_times is not None:
+            requested_start_times.pop(ready_size, None)
+        return True
+
+
 def parse_client_endpoint(line):
     stripped = line.strip()
     if not stripped.startswith("CLIENT_CONTROL_ENDPOINT,"):
@@ -1440,6 +1526,9 @@ def run_sizes_test_stream_shared(
     else:
         timeout_sec = max(60, duration_seconds * max(1, len(sizes)) * 4 + 30)
     ready_timeout_ms = max(0, parse_env_int("PERF_SERVER_READY_TIMEOUT_MS", 10000))
+    connect_ready_timeout_ms = max(
+        0, parse_env_int("PERF_MULTI_CONNECT_READY_TIMEOUT_MS", 10000)
+    )
     shutdown_timeout_ms = max(0, parse_env_int("PERF_SERVER_SHUTDOWN_TIMEOUT_MS", 5000))
     ready_timeout_ms, shutdown_timeout_ms = _resolve_server_timeouts(
         pattern_name, transport, ready_timeout_ms, shutdown_timeout_ms
@@ -1488,6 +1577,8 @@ def run_sizes_test_stream_shared(
         "1",
         "--send-stop-token",
         "0",
+        "--start-gate",
+        "1",
     ]
     client_cmd = build_bench_cmd(shared_client_path, shared_client_args)
     server_env = env.copy()
@@ -1515,8 +1606,24 @@ def run_sizes_test_stream_shared(
     use_control_plane = False
     control_connected = [not use_control_plane]
     pending_ready_sizes = set()
+    requested_start_sizes = set()
+    requested_start_times = {}
+    stream_start_state_lock = threading.Lock()
+    stream_handshake_errors = []
     pending_phase_active_sizes = set()
     client_proc = [None]
+    client_started_at = [None]
+    client_ready_seen = [False]
+
+    def stop_stream_client(warning_label):
+        if not client_proc[0] or not client_proc[0].stdin:
+            return
+        try:
+            client_proc[0].stdin.write("STOP\n")
+            client_proc[0].stdin.flush()
+        except Exception as exc:
+            report_runner_warning(warning_label, exc)
+
     def maybe_send_phase_active(size_value):
         try:
             size_int = int(size_value)
@@ -1546,6 +1653,24 @@ def run_sizes_test_stream_shared(
     def append_server_stdout_line(line):
         server_stdout_buffer.append(line)
         emit_auto_hwm_detail_line(line)
+        server_ready_size = parse_server_start_ready_size(line)
+        if line.strip().startswith("SERVER_START_READY,") and server_ready_size is None:
+            stream_handshake_errors.append("server_start_ready_malformed")
+            stop_stream_client("stop-client-after-malformed-start-ack")
+            return
+        if server_ready_size is not None:
+            if not forward_stream_start_ack(
+                client_proc[0],
+                line,
+                pending_ready_sizes,
+                requested_start_sizes,
+                requested_start_times,
+                stream_start_state_lock,
+            ):
+                stream_handshake_errors.append(
+                    f"server_start_ready_mismatch_{server_ready_size}"
+                )
+                stop_stream_client("stop-client-after-bad-start-ack")
         if pattern_name == "PUBSUB" and line.startswith("PHASE_ACTIVE,"):
             try:
                 phase_size = int(line.split(",", 1)[1])
@@ -1754,20 +1879,39 @@ def run_sizes_test_stream_shared(
                 return
             if use_control_plane and not control_connected[0]:
                 return
-            try:
-                if server_proc.stdin:
-                    server_proc.stdin.write(f"START,{size_value}\n")
-                    server_proc.stdin.flush()
-                sent_to_client = False
-                if client_proc[0] and client_proc[0].stdin:
-                    client_proc[0].stdin.write(f"START,{size_value}\n")
-                    client_proc[0].stdin.flush()
-                    sent_to_client = True
-                if sent_to_client:
-                    pending_ready_sizes.discard(size_value)
-                    flush_pending_phase_active()
-            except Exception as exc:
-                report_runner_warning("send-size-start", exc)
+            if request_stream_server_start(
+                server_proc,
+                size_value,
+                requested_start_sizes,
+                requested_start_times,
+                stream_start_state_lock,
+            ):
+                return
+            with stream_start_state_lock:
+                request_is_pending = size_value in requested_start_sizes
+            if not request_is_pending:
+                stream_handshake_errors.append(
+                    f"server_start_request_failed_{size_value}"
+                )
+                stop_stream_client("stop-client-after-start-request-failure")
+
+        def expire_server_start_requests():
+            if stream_handshake_errors:
+                return
+            now = time.monotonic()
+            timeout_seconds = max(1, connect_ready_timeout_ms) / 1000.0
+            with stream_start_state_lock:
+                expired = [
+                    size_value
+                    for size_value, requested_at in requested_start_times.items()
+                    if now - requested_at >= timeout_seconds
+                ]
+            if not expired:
+                return
+            stream_handshake_errors.append(
+                f"server_start_ready_timeout_{expired[0]}"
+            )
+            stop_stream_client("stop-client-after-start-timeout")
 
         def wait_for_control_connected_forward(timeout_ms):
             if not use_control_plane or control_connected[0]:
@@ -1810,20 +1954,49 @@ def run_sizes_test_stream_shared(
                     )
                 return
             ready_size = parse_client_ready_size(line)
-            if ready_size is not None:
-                pending_ready_sizes.add(ready_size)
+            if line.strip().startswith("CLIENT_READY,"):
+                if ready_size is None or ready_size not in expected_sizes:
+                    stream_handshake_errors.append("client_ready_size_mismatch")
+                    stop_stream_client("stop-client-after-ready-mismatch")
+                    return
+                client_ready_seen[0] = True
+                with stream_start_state_lock:
+                    pending_ready_sizes.add(ready_size)
                 maybe_send_size_start(ready_size)
                 return
             emit_result_metrics_from_line(
                 line, transport, expected_sizes, result_line_callback
             )
-            if control_connected[0] and pending_ready_sizes:
-                maybe_send_size_start(next(iter(pending_ready_sizes)))
+            with stream_start_state_lock:
+                next_pending_size = next(iter(pending_ready_sizes), None)
+            if control_connected[0] and next_pending_size is not None:
+                maybe_send_size_start(next_pending_size)
 
         def on_client_sample(_sample_cpu, _sample_mem):
             pump_server_output_nonblocking()
-            if control_connected[0] and pending_ready_sizes:
-                maybe_send_size_start(next(iter(pending_ready_sizes)))
+            if (
+                not client_ready_seen[0]
+                and not stream_handshake_errors
+                and client_started_at[0] is not None
+                and time.monotonic() - client_started_at[0]
+                >= max(1, connect_ready_timeout_ms) / 1000.0
+            ):
+                stream_handshake_errors.append("client_ready_timeout")
+                stop_stream_client("stop-client-after-ready-timeout")
+            with stream_start_state_lock:
+                start_request_pending = bool(requested_start_sizes)
+            if (
+                start_request_pending
+                and not stream_handshake_errors
+                and server_proc.poll() is not None
+            ):
+                stream_handshake_errors.append("server_exit_before_start_ready")
+                stop_stream_client("stop-client-after-server-exit")
+            expire_server_start_requests()
+            with stream_start_state_lock:
+                next_pending_size = next(iter(pending_ready_sizes), None)
+            if control_connected[0] and next_pending_size is not None:
+                maybe_send_size_start(next_pending_size)
 
         client_run_cmd = client_cmd + ["--endpoint", endpoint]
         if use_control_plane:
@@ -1837,7 +2010,10 @@ def run_sizes_test_stream_shared(
             timeout_sec,
             on_stdout_line=on_client_stdout_line,
             on_sample=on_client_sample,
-            on_process_start=lambda proc: client_proc.__setitem__(0, proc),
+            on_process_start=lambda proc: (
+                client_proc.__setitem__(0, proc),
+                client_started_at.__setitem__(0, time.monotonic()),
+            ),
         )
         pump_server_output_nonblocking()
         client_stdout = sampled.get("stdout", "") or ""
@@ -1881,6 +2057,26 @@ def run_sizes_test_stream_shared(
         token_status, token_reason = detect_special_status(
             combined_stdout, lib_name, pattern_name, transport
         )
+
+        with stream_start_state_lock:
+            start_barrier_incomplete = bool(
+                pending_ready_sizes or requested_start_sizes
+            )
+        if stream_handshake_errors or start_barrier_incomplete:
+            reason = (
+                stream_handshake_errors[0]
+                if stream_handshake_errors
+                else "stream_start_barrier_incomplete"
+            )
+            return {
+                "status": "fail",
+                "parsed": parsed,
+                "timed_out": bool(sampled.get("timed_out", False)),
+                "returncode": sampled.get("returncode", -1),
+                "reason": reason,
+                "warnings": warnings,
+                **progress_meta,
+            }
 
         if sampled.get("timed_out", False):
             return {

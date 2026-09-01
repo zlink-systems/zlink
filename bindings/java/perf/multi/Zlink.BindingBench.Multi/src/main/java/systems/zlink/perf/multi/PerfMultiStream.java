@@ -5,14 +5,13 @@ package systems.zlink.perf.multi;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.eventing.MonitorEventType;
+import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.contracts.sockets.StreamSocket;
 import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -37,7 +36,9 @@ final class PerfMultiStream {
         Thread controlWatcher = null;
 
         try (Context ctx = PerfUtil.newContext(config);
-            StreamSocket server = ctx.createStreamSocket()) {
+            StreamSocket server = ctx.createStreamSocket();
+            SocketMonitor monitor = server.monitorOpen(config.monitorHwm(),
+                MonitorEventType.CONNECTION_READY)) {
             PerfUtil.applySocketOptions(server, config);
             PerfUtil.configureServerTls(server, config.transport());
             Duration streamTimeout = Duration.ofMillis(streamTimeoutMs());
@@ -48,13 +49,25 @@ final class PerfMultiStream {
             try (StreamReplyDispatcher dispatcher =
                      new StreamReplyDispatcher(server, streamTimeout,
                          drainTimeout, stopRequested, stopSignal, failure)) {
-                controlWatcher = startControlWatcher(dispatcher);
                 server.bind(config.endpoint());
-                PerfUtil.recalculateAutoHwm(ctx);
-                PerfUtil.printMultiSocketAutoHwm(config, server, "server",
-                    "server", SocketType.STREAM);
                 server.onPacket(dispatcher::onPacket);
                 PerfControl.emitReady(config.endpoint());
+                if (PerfControl.awaitStartOrStop(config.size(),
+                        "multi stream server")) {
+                    // Pair the raw peer's CLIENT_READY with independent
+                    // server-side proof that every target route is usable.
+                    PerfUtil.waitForMonitorEvent(monitor,
+                        MonitorEventType.CONNECTION_READY, config.clients(),
+                        Duration.ofMillis(config.connectReadyTimeoutMs()),
+                        "multi stream server connections ready");
+                    PerfUtil.recalculateAutoHwm(ctx);
+                    PerfUtil.printMultiSocketAutoHwm(config, server, "server",
+                        "server-connected", SocketType.STREAM);
+                    PerfControl.emitServerStartReady(config.size());
+                    controlWatcher = startControlWatcher(dispatcher);
+                } else {
+                    dispatcher.requestStop();
+                }
 
                 awaitStop(stopRequested, stopSignal);
                 dispatcher.stopAndDrain();
@@ -81,17 +94,11 @@ final class PerfMultiStream {
     private static Thread startControlWatcher(
         StreamReplyDispatcher dispatcher) {
         Thread watcher = new Thread(() -> {
-            try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if ("STOP".equals(line) || "QUIT".equals(line)) {
-                        dispatcher.requestStop();
-                        return;
-                    }
-                }
-            } catch (Exception ex) {
-                throw new IllegalStateException("stream control watcher failed", ex);
+            try {
+                PerfControl.awaitStop("multi stream server");
+                dispatcher.requestStop();
+            } catch (RuntimeException | Error error) {
+                dispatcher.fail(error);
             }
         }, "stream-control");
         watcher.setDaemon(true);
@@ -232,6 +239,10 @@ final class PerfMultiStream {
             }
             stopRequested.set(true);
             signal(stopSignal);
+        }
+
+        void fail(Throwable error) {
+            recordFailure(error);
         }
 
         void stopAndDrain() {

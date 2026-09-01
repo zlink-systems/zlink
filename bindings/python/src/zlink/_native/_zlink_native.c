@@ -422,6 +422,31 @@ static PyObject *native_parts_owner_to_bytes (native_parts_owner_t *owner, PyObj
     return PyBytes_FromStringAndSize ((const char *) data, (Py_ssize_t) size);
 }
 
+static PyObject *native_parts_owner_copy_native_to (native_parts_owner_t *owner,
+                                                    PyObject *args)
+{
+    Py_ssize_t index = 0;
+    unsigned long long destination_value = 0;
+    zlink_msg_t *destination = NULL;
+    int rc = 0;
+    int err = 0;
+
+    if (!PyArg_ParseTuple (args, "nK", &index, &destination_value))
+        return NULL;
+    if (native_parts_owner_check_index (owner, index) != 0)
+        return NULL;
+    if (destination_value == 0) {
+        PyErr_SetString (PyExc_ValueError, "native message destination is null");
+        return NULL;
+    }
+
+    destination = (zlink_msg_t *) (uintptr_t) destination_value;
+    rc = zlink_msg_copy (destination, &owner->parts[index]);
+    if (rc != 0)
+        err = zlink_errno ();
+    return result_tuple (rc, err);
+}
+
 static PyObject *native_parts_owner_close_part (native_parts_owner_t *owner, PyObject *index_obj)
 {
     Py_ssize_t index = PyLong_AsSsize_t (index_obj);
@@ -460,6 +485,8 @@ static PyMethodDef native_parts_owner_methods[] = {
   {"size", (PyCFunction) native_parts_owner_size, METH_O, "Return part size."},
   {"data", (PyCFunction) native_parts_owner_data, METH_O, "Return part memoryview."},
   {"to_bytes", (PyCFunction) native_parts_owner_to_bytes, METH_O, "Return part bytes."},
+  {"_copy_native_to", (PyCFunction) native_parts_owner_copy_native_to, METH_VARARGS,
+   "Copy a native received part into initialized internal storage."},
   {"close_part", (PyCFunction) native_parts_owner_close_part, METH_O, "Close one part."},
   {"close", (PyCFunction) native_parts_owner_close, METH_NOARGS, "Close all parts."},
   {NULL, NULL, 0, NULL},

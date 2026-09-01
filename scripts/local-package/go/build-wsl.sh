@@ -11,8 +11,8 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Creates zlink-go-<repository-version>.tar.gz containing the Go module source,
-headers, and exact matching Core Linux runtime. The Go module path is
+Creates zlink-go-<BINDINGS_VERSION>.tar.gz containing the Go module source,
+headers, and exact Core VERSION Linux runtime. The Go module path is
 zlink.systems/zlink.
 EOF
 }
@@ -27,9 +27,10 @@ done
 
 [[ "$core_prefix" = /* ]] || { echo "--core-prefix must be absolute" >&2; exit 2; }
 core_prefix="$(readlink -f "$core_prefix")"
-version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
 export ZLINK_CORE_PACKAGE_PREFIX="$core_prefix"
-export ZLINK_CORE_VERSION="$version"
+export ZLINK_CORE_VERSION="$core_version"
 module_path="$(sed -n 's/^module //p' "$repo_root/bindings/go/go.mod" | head -n1)"
 [[ "$module_path" = "zlink.systems/zlink" ]] || {
   echo "Go module path is not zlink.systems/zlink" >&2
@@ -38,7 +39,7 @@ module_path="$(sed -n 's/^module //p' "$repo_root/bindings/go/go.mod" | head -n1
 
 "$repo_root/scripts/local-package/native/sync-local-core-libs.sh" go
 native_dir="$repo_root/bindings/go/native/linux-x86_64"
-for file in libzlink.so libzlink.so.0 "libzlink.so.$version"; do
+for file in libzlink.so libzlink.so.0 "libzlink.so.$core_version"; do
   [[ -e "$native_dir/$file" ]] || { echo "Missing Go runtime: $native_dir/$file" >&2; exit 1; }
 done
 
@@ -48,14 +49,14 @@ done
 )
 
 out_dir="$artifact_root/go"
-stage="$out_dir/stage/zlink-$version"
-archive="$out_dir/zlink-go-$version.tar.gz"
+stage="$out_dir/stage/zlink-$binding_version"
+archive="$out_dir/zlink-go-$binding_version.tar.gz"
 rm -rf "$stage" "$archive"
 mkdir -p "$stage"
 cp -a "$repo_root/bindings/go/." "$stage/"
 rm -rf "$stage/perf/results" "$stage/.git"
 mkdir -p "$stage/provenance"
 cp "$core_prefix/share/zlink/core-package-provenance.json" "$stage/provenance/core-package-provenance.json"
-tar -C "$out_dir/stage" -czf "$archive" "zlink-$version"
+tar -C "$out_dir/stage" -czf "$archive" "zlink-$binding_version"
 rm -rf "$out_dir/stage"
 echo "Go local package: $archive"

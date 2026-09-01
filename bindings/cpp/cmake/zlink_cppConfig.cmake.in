@@ -1,6 +1,6 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
-find_dependency(zlink @PROJECT_VERSION@ EXACT CONFIG)
+find_dependency(zlink @ZLINK_CPP_CORE_VERSION@ EXACT CONFIG)
 
 include("${CMAKE_CURRENT_LIST_DIR}/zlink_cppTargets.cmake")

@@ -813,7 +813,7 @@ void test_request_async_accepted_cancel_is_false_and_drop_is_safe ()
     std::this_thread::sleep_for (std::chrono::milliseconds (25));
 }
 
-void test_dealer_request_without_initial_routed_target_is_terminal ()
+void test_dealer_request_without_connected_target_reports_core_admission_failure ()
 {
     zlink::context_t ctx;
     zlink::dealer_socket_t dealer (ctx);
@@ -832,12 +832,12 @@ void test_dealer_request_without_initial_routed_target_is_terminal ()
           .message (payload)
           .timeout (std::chrono::milliseconds (3000))
           .async ();
-        assert (false && "request without an initial exact target must fail");
+        assert (false && "request without a connected target must fail admission");
     }
     catch (const zlink::submit_error_t &error) {
         terminal_without_target = true;
-        assert (error.result () == zlink::submit_result_t::not_connected);
-        assert (error.internal_errno () == ENOTCONN);
+        assert (error.result () == zlink::submit_result_t::backpressured);
+        assert (error.internal_errno () == EAGAIN);
     }
     assert (terminal_without_target);
     assert (payload.valid ());
@@ -1719,7 +1719,7 @@ int main ()
     test_request_dealer_router_roundtrip ();
     test_request_direct_await_suspends_until_reply ();
     test_request_async_accepted_cancel_is_false_and_drop_is_safe ();
-    test_dealer_request_without_initial_routed_target_is_terminal ();
+    test_dealer_request_without_connected_target_reports_core_admission_failure ();
     test_dealer_send_without_initial_routed_target_is_terminal ();
     test_routed_send_submit_is_synchronous_and_consumes_parts ();
     test_routed_builder_does_not_outlive_socket_anchor ();

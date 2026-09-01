@@ -60,6 +60,7 @@ async def main(argv=None):
                         zlink.MonitorEventMask.CONNECTION_READY,
                         timeout_ms=resolve_multi_connect_ready_timeout_ms(),
                     )
+                ctx.recalculate_auto_hwm()
 
                 active_deadline = time.perf_counter() + args.duration
                 recv_storage = [zlink.create_received() for _ in sockets]

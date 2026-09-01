@@ -4,8 +4,9 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
 artifact_root="${ZLINK_LOCAL_PACKAGE_ROOT:-$repo_root/.artifacts/wsl}"
-version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
-release_version="${ZLINK_CORE_RELEASE_VERSION:-$version}"
+core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
+release_version="${ZLINK_CORE_RELEASE_VERSION:-$core_version}"
 language_args=()
 version_action="build"
 
@@ -13,8 +14,8 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [options] [c] [cpp] [dotnet] [go] [java] [node] [python] [rust]
 
-With no language arguments, builds all eight first-party bindings at the
-repository VERSION into .artifacts/wsl. By default the exact matching Core
+With no language arguments, builds all eight first-party bindings at
+BINDINGS_VERSION into .artifacts/wsl. By default the exact matching Core
 release is downloaded and verified — a published core/vVERSION GitHub release
 is a prerequisite. There is no local-core bypass.
 
@@ -61,15 +62,15 @@ fi
   echo "--core-version must be MAJOR.MINOR.PATCH: $release_version" >&2
   exit 2
 }
-[[ "$release_version" = "$version" ]] || {
-  echo "Binding version $version must match Core release version $release_version" >&2
+[[ "$release_version" = "$core_version" ]] || {
+  echo "Requested Core release $release_version must match repository Core $core_version" >&2
   exit 1
 }
 
 mkdir -p "$artifact_root"
 artifact_root="$(readlink -f "$artifact_root")"
 release_core_prefix="$(bash "$script_dir/core/fetch-release.sh" --version "$release_version")"
-core_prefix="$artifact_root/install/zlink-core/$version"
+core_prefix="$artifact_root/install/zlink-core/$core_version"
 case "$core_prefix" in
   "$artifact_root"/*) ;;
   *) echo "Core release staging prefix escaped artifact root" >&2; exit 2 ;;
@@ -97,7 +98,7 @@ manifest_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\
 for lang in "${language_args[@]}"; do
   case "$lang" in
     c|cpp|dotnet|go|java|node|python|rust)
-      echo "-- building local $lang package at $version using Core $release_version (release)"
+      echo "-- building local $lang package at $binding_version using Core $release_version (release)"
       bash "$script_dir/$lang/build-wsl.sh" --core-prefix "$core_prefix"
       ;;
     core)

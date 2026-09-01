@@ -80,14 +80,20 @@ def run_reqrep_server(argv, *, endpoint_token, routed_server):
                             if request is None:
                                 break
                             with request:
-                                parts = request.to_bytes_list()
+                                # The binding materializer clones native-backed
+                                # ReceivedMessage parts by zlink_msg reference;
+                                # raw reply submission is synchronous, so the
+                                # envelope remains valid until ownership has
+                                # transferred and no payload snapshot is needed.
+                                parts = request.parts
                                 if len(parts) != measurement_part_count():
                                     raise RuntimeError(
                                         "invalid measured multipart request"
                                     )
-                                if len(parts) == 2 and parts[1] != b"":
+                                if len(parts) == 2 and len(parts[1]) != 0:
                                     raise RuntimeError(
-                                        "invalid measured multipart trailing frame"
+                                        "invalid measured multipart trailing frame: "
+                                        f"sizes={[len(part) for part in parts]}"
                                     )
                                 if (
                                     request.routing_id is None

@@ -23,6 +23,7 @@
 #include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cerrno>
 #include <climits>
@@ -232,7 +233,11 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
         boost::asio::post (strand, [self] () { self->close_internal (); });
     }
 
-    bool connected () const { return connected_flag && !closed; }
+    bool connected () const
+    {
+        return connected_flag.load (std::memory_order_acquire)
+               && !closed.load (std::memory_order_acquire);
+    }
 
   private:
     // --- Connect ---
@@ -945,8 +950,8 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
 
     boost::asio::strand<boost::asio::io_context::executor_type> strand; // serializes all callbacks
 
-    bool closed;           // permanently shut down
-    bool connected_flag;   // connect succeeded
+    std::atomic<bool> closed;         // permanently shut down
+    std::atomic<bool> connected_flag; // connect succeeded
     bool connect_started;  // do_connect() called at least once
     bool connect_reported; // on_connect_result() sent to owner
     bool write_pending;    // async_write in progress

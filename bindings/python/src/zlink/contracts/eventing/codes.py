@@ -41,10 +41,12 @@ class MonitorStatusDetail(IntFlag):
     FLOW_STATE = 1 << 5
 
 class PollEventFlag(IntFlag):
-    """Readiness conditions a poll source can be watched for or report (readable, writable, error)."""
-    """Mirrors ``zlink_poller_event_flag_e`` in the C ABI. ``POLLCOMPLETION``
-    is reserved for binding runtime workers that drive request completion;
-    application code generally uses ``POLLIN`` / ``POLLOUT``."""
+    """Conditions a poll source can be watched for or report.
+
+    Mirrors ``zlink_poller_event_flag_e`` in the C ABI. ``POLLCOMPLETION`` lets
+    a public caller transfer completion dispatch ownership to the thread calling
+    ``Poller.wait``; ordinary receive/send readiness uses ``POLLIN`` / ``POLLOUT``.
+    """
 
     POLLIN = 1
     POLLOUT = 2

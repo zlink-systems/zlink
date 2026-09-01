@@ -7,7 +7,9 @@
 #include "utils/precompiled.hpp"
 
 #include "api/socket/request_timeout_scheduler_internal.hpp"
+#include "core/pipe.hpp"
 #include "sockets/common/socket_base.hpp"
+#include "sockets/stream/stream_dispatch_internal.hpp"
 #include "utils/err.hpp"
 #include "utils/likely.hpp"
 #include "utils/routing_id.hpp"
@@ -88,6 +90,81 @@ int copy_owned_parts (zlink_msg_t *parts_,
     return 0;
 }
 
+class stream_fast_shadow_t
+{
+  public:
+    stream_fast_shadow_t () : _initialized (false) {}
+    ~stream_fast_shadow_t () { close (); }
+
+    int copy_from (zlink_msg_t *source_)
+    {
+        zlink::msg_t *shadow = reinterpret_cast<zlink::msg_t *> (&_part);
+        if (shadow->init () != 0)
+            return -1;
+        _initialized = true;
+        return shadow->copy (*reinterpret_cast<zlink::msg_t *> (source_));
+    }
+
+    zlink::msg_t *msg ()
+    {
+        return reinterpret_cast<zlink::msg_t *> (&_part);
+    }
+
+    int move_to (std::vector<zlink_msg_t> *parts_)
+    {
+        try {
+            parts_->resize (1);
+        } catch (...) {
+            errno = ENOMEM;
+            return -1;
+        }
+        zlink::msg_t *destination =
+          reinterpret_cast<zlink::msg_t *> (&(*parts_)[0]);
+        if (destination->init () != 0) {
+            parts_->clear ();
+            return -1;
+        }
+        if (destination->move (*msg ()) != 0) {
+            const int saved_errno = errno;
+            const int close_rc = destination->close ();
+            errno_assert (close_rc == 0);
+            parts_->clear ();
+            errno = saved_errno;
+            return -1;
+        }
+        return 0;
+    }
+
+  private:
+    void close ()
+    {
+        if (!_initialized)
+            return;
+        const int saved_errno = errno;
+        if (msg ()->check ()) {
+            const int rc = msg ()->close ();
+            errno_assert (rc == 0);
+        }
+        _initialized = false;
+        errno = saved_errno;
+    }
+
+    zlink_msg_t _part;
+    bool _initialized;
+
+    stream_fast_shadow_t (const stream_fast_shadow_t &);
+    stream_fast_shadow_t &operator= (const stream_fast_shadow_t &);
+};
+
+bool stream_rid_matches (const zlink_routing_id_t &rid_, uint32_t value_)
+{
+    return rid_.size == 4
+           && rid_.data[0] == static_cast<uint8_t> (value_ >> 24)
+           && rid_.data[1] == static_cast<uint8_t> ((value_ >> 16) & 0xff)
+           && rid_.data[2] == static_cast<uint8_t> ((value_ >> 8) & 0xff)
+           && rid_.data[3] == static_cast<uint8_t> (value_ & 0xff);
+}
+
 void consume_caller_parts (zlink_msg_t *parts_, size_t part_count_)
 {
     const int saved_errno = errno;
@@ -157,15 +234,136 @@ int zlink::socket_base_t::send_async_submit (
         return -1;
     }
 
-    //  Resolve the exact target now. Deferring the choice to completion time
-    //  would make per-target FIFO order impossible to state.
+    socket_send_pending_runtime_t &pending = send_pending_runtime ();
     routed_send_target_key_t target;
     bool has_target = false;
     bool deferred_target_select = false;
+    bool stream_fast_eagain = false;
+    bool stream_fast_reserved = false;
+    std::vector<zlink_msg_t> stream_fast_parts;
+    const auto release_stream_fast_reservation = [&] () {
+        scoped_lock_t lock (pending.sync);
+        if (pending.inline_attempts.erase (target) != 0)
+            pending.redrive_epoch.fetch_add (1,
+                                             std::memory_order_release);
+        stream_fast_reserved = false;
+    };
+    const auto redrive_stream_pending = [&] () {
+        drive_send_pending ();
+        dispatch_send_completions_if_local ();
+    };
+
+    // A STREAM packet callback already owns a stable current pipe and exact
+    // RID. Reserve that target before the direct attempt, then use a stack
+    // shadow so a failed speculative send cannot consume caller ownership.
+    if (options.type == ZLINK_CORE_SOCKET_STREAM && options_->target
+        && valid_routing_id (&options_->target->peer_rid)
+        && stream_dispatch_in_callback ()
+        && stream_dispatch_context_t::in_packet_callback ()) {
+        const uint32_t current_routing_id =
+          stream_dispatch_context_t::current_routing_id ();
+        pipe_t *const dispatch_pipe =
+          stream_dispatch_context_t::current_pipe ();
+        pipe_t *const direct_out =
+          dispatch_pipe ? dispatch_pipe->get_peer () : NULL;
+        if (current_routing_id != 0 && direct_out
+            && stream_rid_matches (options_->target->peer_rid,
+                                   current_routing_id)) {
+            uint64_t pair_id = direct_out->get_transport_pair_id ();
+            uint64_t pair_generation =
+              direct_out->get_transport_pair_generation ();
+            if (pair_id == 0) {
+                pair_id = direct_out->get_transport_connection_id ();
+                pair_generation = pair_id == 0 ? 0 : 1;
+            }
+            const bool target_unspecified =
+              options_->target->transport_pair_id == 0
+              && options_->target->transport_pair_generation == 0;
+            const bool target_matches =
+              options_->target->transport_pair_id == pair_id
+              && options_->target->transport_pair_generation
+                   == pair_generation;
+            if (pair_id != 0 && pair_generation != 0
+                && (target_unspecified || target_matches)) {
+                try {
+                    target = routed_send_target_key_t (
+                      options_->target->peer_rid.data,
+                      options_->target->peer_rid.size, pair_id,
+                      pair_generation);
+                } catch (...) {
+                    errno = ENOMEM;
+                    return -1;
+                }
+
+                {
+                    scoped_lock_t lock (pending.sync);
+                    if (pending.failing) {
+                        errno = ESHUTDOWN;
+                        return -1;
+                    }
+                    const std::map<
+                      routed_send_target_key_t,
+                      std::deque<send_pending_record_t *> >::const_iterator
+                      queue = pending.queues.find (target);
+                    if ((queue == pending.queues.end () || queue->second.empty ())
+                        && pending.inline_attempts.count (target) == 0) {
+                        try {
+                            stream_fast_reserved =
+                              pending.inline_attempts.insert (target).second;
+                        } catch (...) {
+                            errno = ENOMEM;
+                            return -1;
+                        }
+                    }
+                }
+                if (stream_fast_reserved) {
+                    stream_fast_shadow_t shadow;
+                    if (shadow.copy_from (&parts_[0]) != 0) {
+                        release_stream_fast_reservation ();
+                        admission.unlock_sync ();
+                        redrive_stream_pending ();
+                        errno = ENOMEM;
+                        return -1;
+                    }
+                    admission.unlock_sync ();
+                    const int fast_rc =
+                      stream_dispatch_send_current_msg_from_io (
+                        shadow.msg (), ZLINK_DONTWAIT);
+                    const int fast_errno = errno;
+                    if (fast_rc >= 0) {
+                        release_stream_fast_reservation ();
+                        consume_caller_parts (parts_, 1);
+                        redrive_stream_pending ();
+                        return 0;
+                    }
+                    if (fast_errno == EAGAIN) {
+                        if (shadow.move_to (&stream_fast_parts) != 0) {
+                            release_stream_fast_reservation ();
+                            redrive_stream_pending ();
+                            errno = ENOMEM;
+                            return -1;
+                        }
+                        stream_fast_eagain = true;
+                        has_target = true;
+                    } else {
+                        release_stream_fast_reservation ();
+                        redrive_stream_pending ();
+                        errno = fast_errno;
+                        return -1;
+                    }
+                }
+            }
+        }
+    }
+
+    //  Resolve the exact target now. Deferring the choice to completion time
+    //  would make per-target FIFO order impossible to state.
     try {
-        if (options.type == ZLINK_CORE_SOCKET_ROUTER
-            || options.type == ZLINK_CORE_SOCKET_STREAM
-            || options.type == ZLINK_CORE_SOCKET_DEALER) {
+        if (stream_fast_eagain) {
+            // Exact current-pipe identity was already snapshotted above.
+        } else if (options.type == ZLINK_CORE_SOCKET_ROUTER
+                   || options.type == ZLINK_CORE_SOCKET_STREAM
+                   || options.type == ZLINK_CORE_SOCKET_DEALER) {
             zlink_routed_submit_target_t resolved;
             uint64_t resolved_connection_id = 0;
             uint64_t resolved_route_incarnation_id = 0;
@@ -233,22 +431,32 @@ int zlink::socket_base_t::send_async_submit (
             has_target = true;
         }
     } catch (...) {
+        if (stream_fast_reserved) {
+            release_stream_fast_reservation ();
+            close_owned_parts (&stream_fast_parts);
+            admission.unlock_sync ();
+            redrive_stream_pending ();
+        }
         errno = ENOMEM;
         return -1;
     }
-    socket_send_pending_runtime_t &pending = send_pending_runtime ();
-    bool attempt_inline = false;
+    bool attempt_inline = stream_fast_eagain;
     bool gate_acquired = false;
     routed_send_target_key_t inline_reservation_key;
     try {
         inline_reservation_key = target;
     } catch (...) {
+        if (stream_fast_eagain) {
+            release_stream_fast_reservation ();
+            close_owned_parts (&stream_fast_parts);
+            redrive_stream_pending ();
+        }
         errno = ENOMEM;
         return -1;
     }
     bool target_reserved = false;
     bool reservation_allocation_failed = false;
-    {
+    if (!stream_fast_eagain) {
         scoped_lock_t lock (pending.sync);
         if (pending.failing) {
             errno = ESHUTDOWN;
@@ -297,7 +505,9 @@ int zlink::socket_base_t::send_async_submit (
     } else {
         if (target_reserved) {
             scoped_lock_t lock (pending.sync);
-            pending.inline_attempts.erase (inline_reservation_key);
+            if (pending.inline_attempts.erase (inline_reservation_key) != 0)
+                pending.redrive_epoch.fetch_add (1,
+                                                 std::memory_order_release);
         }
     }
     // Physical admission has its own complete-record scope below. Release the
@@ -340,86 +550,106 @@ int zlink::socket_base_t::send_async_submit (
     std::optional<send_pending_record_t> inline_record;
     int inline_terminal_errno = 0;
     bool inline_record_owns_copies = false;
+    int inline_errno = EAGAIN;
+    routed_send_attempt_identity_t attempted_identity;
     if (attempt_inline) {
-        //  The inline attempt must not borrow caller storage. A synchronous
-        //  send consumes its native part on every ordinary failure, while an
-        //  async submit that returns non-OK must preserve caller ownership.
-        //  A real msg_t copy keeps those two contracts compatible even when a
-        //  later queue/map allocation rejects the async operation.
-        try {
-            inline_record.emplace ();
-            inline_record->target = target;
-        } catch (...) {
-            pending.admission_gate.store (false,
-                                          std::memory_order_release);
-            {
-                scoped_lock_t lock (pending.sync);
-                pending.inline_attempts.erase (inline_reservation_key);
+        if (stream_fast_eagain) {
+            try {
+                inline_record.emplace ();
+                inline_record->target = target;
+                inline_record->parts.swap (stream_fast_parts);
+            } catch (...) {
+                release_stream_fast_reservation ();
+                close_owned_parts (&stream_fast_parts);
+                redrive_stream_pending ();
+                errno = ENOMEM;
+                return -1;
             }
-            admission.unlock_sync ();
-            drive_send_pending ();
-            dispatch_send_completions_if_local ();
-            errno = ENOMEM;
-            return -1;
-        }
-        inline_record->has_target = has_target;
-        if (copy_owned_parts (parts_, part_count_, &inline_record->parts)
-            != 0) {
-            pending.admission_gate.store (false, std::memory_order_release);
-            {
-                scoped_lock_t lock (pending.sync);
-                pending.inline_attempts.erase (inline_reservation_key);
-            }
-            admission.unlock_sync ();
-            drive_send_pending ();
-            dispatch_send_completions_if_local ();
-            errno = ENOMEM;
-            return -1;
-        }
-        inline_record_owns_copies = true;
-        routed_send_attempt_identity_t attempted_identity;
-        socket_public_send_scope_t physical_admission (
-          lifecycle, true, socket_send_admission_complete);
-        int inline_rc = -1;
-        if (physical_admission.acquired ()) {
-            inline_rc = deferred_target_select
-                          ? send_routed_scoped (
-                              &options_->target->peer_rid,
-                              reinterpret_cast<msg_t *> (
-                                inline_record->parts.data ()),
-                              ZLINK_DONTWAIT, physical_admission, NULL, 0,
-                              NULL, 0, 0, false, NULL, NULL,
-                              &attempted_identity)
-                          : try_admit_send_parts_scoped (
-                              inline_record->parts.data (),
-                              inline_record->parts.size (), target,
-                              has_target, physical_admission);
+            inline_record->has_target = true;
+            inline_record_owns_copies = true;
         } else {
-            // An open incremental sequence is physical admission contention,
-            // not an invalid async submission. Preserve the record and let the
-            // pending driver retry it after the multipart marker is released.
-            errno = EAGAIN;
-        }
-        const int inline_errno = errno;
-        physical_admission.unlock_sync ();
-        if (inline_rc == 0) {
-            pending.admission_gate.store (false, std::memory_order_release);
-            {
-                scoped_lock_t lock (pending.sync);
-                pending.inline_attempts.erase (inline_reservation_key);
-            }
-            //  The pipe now owns its frame references. Close Core's moved
-            //  copies, then consume the caller's original references only
-            //  after the async submit has committed successfully.
-            close_owned_parts (&inline_record->parts);
-            inline_record_owns_copies = false;
-            consume_caller_parts (parts_, part_count_);
-            //  Operations queued behind the direct attempt may also fit now.
-            if (pending.pending_msgs.load (std::memory_order_acquire) != 0) {
+            //  The inline attempt must not borrow caller storage. A synchronous
+            //  send consumes its native part on every ordinary failure, while
+            //  an async submit that returns non-OK must preserve caller
+            //  ownership. A real msg_t copy keeps those contracts compatible
+            //  when a later queue/map allocation rejects the async operation.
+            try {
+                inline_record.emplace ();
+                inline_record->target = target;
+            } catch (...) {
+                pending.admission_gate.store (false,
+                                              std::memory_order_release);
+                {
+                    scoped_lock_t lock (pending.sync);
+                    pending.inline_attempts.erase (inline_reservation_key);
+                }
+                admission.unlock_sync ();
                 drive_send_pending ();
                 dispatch_send_completions_if_local ();
+                errno = ENOMEM;
+                return -1;
             }
-            return 0;
+            inline_record->has_target = has_target;
+            if (copy_owned_parts (parts_, part_count_, &inline_record->parts)
+                != 0) {
+                pending.admission_gate.store (false,
+                                              std::memory_order_release);
+                {
+                    scoped_lock_t lock (pending.sync);
+                    pending.inline_attempts.erase (inline_reservation_key);
+                }
+                admission.unlock_sync ();
+                drive_send_pending ();
+                dispatch_send_completions_if_local ();
+                errno = ENOMEM;
+                return -1;
+            }
+            inline_record_owns_copies = true;
+            socket_public_send_scope_t physical_admission (
+              lifecycle, true, socket_send_admission_complete);
+            int inline_rc = -1;
+            if (physical_admission.acquired ()) {
+                inline_rc = deferred_target_select
+                              ? send_routed_scoped (
+                                  &options_->target->peer_rid,
+                                  reinterpret_cast<msg_t *> (
+                                    inline_record->parts.data ()),
+                                  ZLINK_DONTWAIT, physical_admission, NULL, 0,
+                                  NULL, 0, 0, false, NULL, NULL,
+                                  &attempted_identity)
+                              : try_admit_send_parts_scoped (
+                                  inline_record->parts.data (),
+                                  inline_record->parts.size (), target,
+                                  has_target, physical_admission);
+            } else {
+                // An open incremental sequence is physical admission
+                // contention, not an invalid async submission. Preserve the
+                // record and retry after the multipart marker is released.
+                errno = EAGAIN;
+            }
+            inline_errno = errno;
+            physical_admission.unlock_sync ();
+            if (inline_rc == 0) {
+                pending.admission_gate.store (false,
+                                              std::memory_order_release);
+                {
+                    scoped_lock_t lock (pending.sync);
+                    pending.inline_attempts.erase (inline_reservation_key);
+                }
+                //  The pipe now owns its frame references. Close Core's moved
+                //  copies, then consume the caller's original references only
+                //  after the async submit has committed successfully.
+                close_owned_parts (&inline_record->parts);
+                inline_record_owns_copies = false;
+                consume_caller_parts (parts_, part_count_);
+                //  Operations queued behind the direct attempt may also fit.
+                if (pending.pending_msgs.load (std::memory_order_acquire)
+                    != 0) {
+                    drive_send_pending ();
+                    dispatch_send_completions_if_local ();
+                }
+                return 0;
+            }
         }
 
         if (deferred_target_select) {
@@ -621,8 +851,13 @@ int zlink::socket_base_t::send_async_submit (
                 }
             }
         }
-        if (attempt_inline)
-            pending.inline_attempts.erase (inline_reservation_key);
+        if (attempt_inline) {
+            const size_t erased =
+              pending.inline_attempts.erase (inline_reservation_key);
+            if (stream_fast_reserved && erased != 0)
+                pending.redrive_epoch.fetch_add (1,
+                                                 std::memory_order_release);
+        }
     }
     if (target_publication_lock.owns_lock ())
         target_publication_lock.unlock ();
@@ -630,9 +865,15 @@ int zlink::socket_base_t::send_async_submit (
     if (attempt_inline) {
         {
             scoped_lock_t lock (pending.sync);
-            pending.inline_attempts.erase (inline_reservation_key);
+            const size_t erased =
+              pending.inline_attempts.erase (inline_reservation_key);
+            if (stream_fast_reserved && erased != 0)
+                pending.redrive_epoch.fetch_add (1,
+                                                 std::memory_order_release);
         }
-        pending.admission_gate.store (false, std::memory_order_release);
+        if (gate_acquired)
+            pending.admission_gate.store (false,
+                                          std::memory_order_release);
     }
 
     if (pending_reject_errno != 0) {

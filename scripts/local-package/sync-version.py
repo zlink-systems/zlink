@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Synchronize Core/binding package versions from the repository VERSION file."""
+"""Synchronize Core and first-party binding package versions."""
 
 from __future__ import annotations
 
@@ -45,6 +45,18 @@ def repository_version() -> tuple[str, str, str, str]:
     if version != f"{major}.{minor}.{patch}":
         raise SyncError("LIBZLINK_VERSION does not match its major/minor/patch fields")
     return major, minor, patch, version
+
+
+def bindings_version() -> str:
+    """Read the independently released first-party binding package version."""
+    path = REPO_ROOT / "BINDINGS_VERSION"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if len(lines) != 1 or not lines[0].startswith("ZLINK_BINDINGS_VERSION="):
+        raise SyncError("BINDINGS_VERSION must contain exactly ZLINK_BINDINGS_VERSION=X.Y.Z")
+    key, version = lines[0].split("=", 1)
+    if key != "ZLINK_BINDINGS_VERSION" or not re.fullmatch(SEMVER, version):
+        raise SyncError("BINDINGS_VERSION must contain ZLINK_BINDINGS_VERSION=X.Y.Z")
+    return version
 
 
 def file_sha256(relative: str) -> str:
@@ -138,45 +150,46 @@ def update_framework_node_lock(source: str, version: str) -> str:
     return source[:start] + block + source[end:]
 
 
-def synchronize(write: bool) -> tuple[str, list[Path]]:
-    major, minor, patch, version = repository_version()
+def synchronize(write: bool) -> tuple[str, str, list[Path]]:
+    major, minor, patch, core_version = repository_version()
+    binding_version = bindings_version()
     version_path = f"{major}_{minor}_{patch}"
     sync = Synchronizer(write)
 
     sync.regex(
         "core/CMakeLists.txt",
         rf"project\(zlink VERSION {SEMVER} LANGUAGES C CXX\)",
-        f"project(zlink VERSION {version} LANGUAGES C CXX)",
+        f"project(zlink VERSION {core_version} LANGUAGES C CXX)",
         1,
     )
     sync.regex(
         "core/packaging/debian/changelog",
         rf"(?m)^zlink \({SEMVER}-0\.1\)",
-        f"zlink ({version}-0.1)",
+        f"zlink ({core_version}-0.1)",
         1,
     )
     sync.regex(
         "core/packaging/debian/changelog",
         rf"Package the zlink {SEMVER} public ABI\.",
-        f"Package the zlink {version} public ABI.",
+        f"Package the zlink {core_version} public ABI.",
         1,
     )
     sync.regex(
         "core/packaging/debian/zlink.dsc",
         rf"(?m)^Version: {SEMVER}-0\.1$",
-        f"Version: {version}-0.1",
+        f"Version: {core_version}-0.1",
         1,
     )
     sync.regex(
         "core/packaging/redhat/zlink.spec",
         rf"(?m)^Version:\s+{SEMVER}$",
-        f"Version:       {version}",
+        f"Version:       {core_version}",
         1,
     )
     sync.regex(
         "core/packaging/nuget/package.config",
         rf'(version\s*=\s*"){SEMVER}(")',
-        rf"\g<1>{version}\2",
+        rf"\g<1>{core_version}\2",
         1,
     )
     sync.regex(
@@ -188,7 +201,7 @@ def synchronize(write: bool) -> tuple[str, list[Path]]:
     sync.regex(
         "core/packaging/nuget/package.nuspec",
         rf"(<version>){SEMVER}(</version>)",
-        rf"\g<1>{version}\2",
+        rf"\g<1>{core_version}\2",
         1,
     )
     sync.regex(
@@ -225,9 +238,27 @@ def synchronize(write: bool) -> tuple[str, list[Path]]:
 
     sync.regex(
         "bindings/cpp/CMakeLists.txt",
-        rf"(?<![0-9.]){SEMVER}(?![0-9.])",
-        version,
-        3,
+        rf"project\(zlink_cpp VERSION {SEMVER} LANGUAGES CXX\)",
+        f"project(zlink_cpp VERSION {binding_version} LANGUAGES CXX)",
+        1,
+    )
+    sync.regex(
+        "bindings/cpp/CMakeLists.txt",
+        rf'(set\(ZLINK_CPP_CORE_VERSION "){SEMVER}(" CACHE STRING)',
+        rf"\g<1>{core_version}\2",
+        1,
+    )
+    sync.regex(
+        "bindings/cpp/CMakeLists.txt",
+        rf"Path to an installed Zlink {SEMVER} Core release prefix",
+        f"Path to an installed Zlink {core_version} Core release prefix",
+        1,
+    )
+    sync.regex(
+        "bindings/cpp/CMakeLists.txt",
+        rf"Expected an installed Core {SEMVER} package",
+        f"Expected an installed Core {core_version} package",
+        1,
     )
     cpp_version_test = "bindings/cpp/tests/contract/test_cpp_contract_common_header_version.cpp"
     for name, value in (("MAJOR", major), ("MINOR", minor), ("PATCH", patch)):
@@ -262,26 +293,32 @@ def synchronize(write: bool) -> tuple[str, list[Path]]:
         )
     sync.regex(
         "bindings/dotnet/src/Zlink/Zlink.csproj",
-        rf"(?<![0-9.]){SEMVER}(?![0-9.])",
-        version,
-        8,
+        rf"(<Version>){SEMVER}(</Version>)",
+        rf"\g<1>{binding_version}\2",
+        1,
+    )
+    sync.regex(
+        "bindings/dotnet/src/Zlink/Zlink.csproj",
+        rf"Core {SEMVER} package",
+        f"Core {core_version} package",
+        7,
     )
     sync.regex(
         "bindings/dotnet/src/Zlink/Runtime/Native/NativeLibraryLoader.cs",
         rf"(?<![0-9.]){SEMVER}(?![0-9.])",
-        version,
+        core_version,
         2,
     )
 
     java = "bindings/java/build.gradle"
     java_rules = (
-        (rf"(?m)^version = '{SEMVER}'$", f"version = '{version}'"),
-        (rf"(systems\.zlink\.core\.version', String\),\s*)'{SEMVER}'", rf"\1'{version}'"),
-        (rf"Core {SEMVER} install prefix", f"Core {version} install prefix"),
-        (rf"metadata\.version != '{SEMVER}'", f"metadata.version != '{version}'"),
-        (rf"Core package must report version {SEMVER}", f"Core package must report version {version}"),
-        (rf"approved\.version != '{SEMVER}'", f"approved.version != '{version}'"),
-        (rf"'zlink\.core\.version': '{SEMVER}'", f"'zlink.core.version': '{version}'"),
+        (rf"(?m)^version = '{SEMVER}'$", f"version = '{binding_version}'"),
+        (rf"(systems\.zlink\.core\.version', String\),\s*)'{SEMVER}'", rf"\1'{core_version}'"),
+        (rf"Core {SEMVER} install prefix", f"Core {core_version} install prefix"),
+        (rf"metadata\.version != '{SEMVER}'", f"metadata.version != '{core_version}'"),
+        (rf"Core package must report version {SEMVER}", f"Core package must report version {core_version}"),
+        (rf"approved\.version != '{SEMVER}'", f"approved.version != '{core_version}'"),
+        (rf"'zlink\.core\.version': '{SEMVER}'", f"'zlink.core.version': '{core_version}'"),
     )
     for pattern, replacement in java_rules:
         sync.regex(java, pattern, replacement, 1)
@@ -289,18 +326,18 @@ def synchronize(write: bool) -> tuple[str, list[Path]]:
     sync.regex(
         "bindings/node/package.json",
         rf'("name"\s*:\s*"@zlink-systems/zlink",\s*\n\s*"version"\s*:\s*"){SEMVER}(")',
-        rf"\g<1>{version}\2",
+        rf"\g<1>{binding_version}\2",
         1,
     )
     sync.regex(
         "bindings/node/package-lock.json",
         rf'("name"\s*:\s*"@zlink-systems/zlink",\s*\n\s*"version"\s*:\s*"){SEMVER}(")',
-        rf"\g<1>{version}\2",
+        rf"\g<1>{binding_version}\2",
         2,
     )
     for relative in ("bindings/node/scripts/resolve_core.js", "bindings/node/scripts/verify_prebuilds.js"):
         expected = 2 if relative.endswith("resolve_core.js") else 1
-        sync.regex(relative, rf"(?<![0-9.]){SEMVER}(?![0-9.])", version, expected)
+        sync.regex(relative, rf"(?<![0-9.]){SEMVER}(?![0-9.])", core_version, expected)
 
     sync.regex(
         "bindings/go/contract_test.go",
@@ -311,13 +348,13 @@ def synchronize(write: bool) -> tuple[str, list[Path]]:
     sync.regex(
         "bindings/go/internal/native/raw_contract_test.go",
         rf'(allowlist\.CoreVersion != "){SEMVER}("\s*)',
-        rf"\g<1>{version}\2",
+        rf"\g<1>{core_version}\2",
         1,
     )
     sync.regex(
         "bindings/go/tests/raw-core11-allowlist.json",
         rf'("coreVersion"\s*:\s*"){SEMVER}("\s*,)',
-        rf"\g<1>{version}\2",
+        rf"\g<1>{core_version}\2",
         1,
     )
     for header_path, source_path in (
@@ -333,35 +370,35 @@ def synchronize(write: bool) -> tuple[str, list[Path]]:
     sync.regex(
         "bindings/go/contract_test.go",
         rf"want {SEMVER}",
-        f"want {version}",
+        f"want {core_version}",
         1,
     )
 
     sync.regex(
         "bindings/python/pyproject.toml",
         rf'(?m)^version = "{SEMVER}"$',
-        f'version = "{version}"',
+        f'version = "{binding_version}"',
         1,
     )
     for relative in ("bindings/python/setup.py", "bindings/python/src/zlink/_native/_native_loader.py"):
-        sync.regex(relative, rf"(?<![0-9.]){SEMVER}(?![0-9.])", version, 1)
+        sync.regex(relative, rf"(?<![0-9.]){SEMVER}(?![0-9.])", core_version, 1)
     sync.regex(
         "bindings/python/tests/test_native_contract.py",
         rf"libzlink\.so\.{SEMVER}",
-        f"libzlink.so.{version}",
+        f"libzlink.so.{core_version}",
         1,
     )
 
     sync.regex(
         "bindings/rust/Cargo.toml",
         rf'(\[package\]\nname = "zlink"\nversion = "){SEMVER}(")',
-        rf"\g<1>{version}\2",
+        rf"\g<1>{binding_version}\2",
         1,
     )
     sync.regex(
         "bindings/rust/Cargo.lock",
         rf'(\[\[package\]\]\nname = "zlink"\nversion = "){SEMVER}(")',
-        rf"\g<1>{version}\2",
+        rf"\g<1>{binding_version}\2",
         1,
     )
     for relative in (
@@ -371,52 +408,63 @@ def synchronize(write: bool) -> tuple[str, list[Path]]:
         sync.regex(
             relative,
             rf'(\[\[package\]\]\nname = "zlink"\nversion = "){SEMVER}(")',
-            rf"\g<1>{version}\2",
+            rf"\g<1>{binding_version}\2",
             1,
         )
     sync.regex(
         "bindings/java/tests/run_tests.sh",
         rf"Core {SEMVER} install prefix",
-        f"Core {version} install prefix",
+        f"Core {core_version} install prefix",
         1,
     )
 
     sync.regex(
         "scripts/local-package/dotnet/fixtures/public-consumer/PublicConsumer.csproj",
         rf'(<PackageReference Include="Systems\.Zlink" Version="){SEMVER}(" />)',
-        rf"\g<1>{version}\2",
+        rf"\g<1>{binding_version}\2",
         1,
     )
     sync.regex(
         "scripts/local-package/node/fixtures/public-consumer/package.json",
         rf'("@zlink-systems/zlink"\s*:\s*"){SEMVER}(")',
-        rf"\g<1>{version}\2",
+        rf"\g<1>{binding_version}\2",
         1,
     )
 
-    for variable in ("CPP", "CORE"):
-        sync.regex(
-            "framework/languages/cpp/CMakeLists.txt",
-            rf'(set\(ZLINK_FRAMEWORK_CPP_ZLINK_{variable}_VERSION "){SEMVER}(" CACHE STRING)',
-            rf"\g<1>{version}\2",
-            1,
-        )
+    sync.regex(
+        "framework/languages/cpp/CMakeLists.txt",
+        rf'(set\(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "){SEMVER}(" CACHE STRING)',
+        rf"\g<1>{binding_version}\2",
+        1,
+    )
+    sync.regex(
+        "framework/languages/cpp/CMakeLists.txt",
+        rf'(set\(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "){SEMVER}(" CACHE STRING)',
+        rf"\g<1>{core_version}\2",
+        1,
+    )
     sync.regex(
         "framework/languages/cpp/samples/sample-build-common.sh",
-        rf'(?m)^(\s*local (?:cpp|core)_version="){SEMVER}("\s*)$',
-        rf"\g<1>{version}\2",
-        2,
+        rf'(?m)^(\s*local cpp_version="){SEMVER}("\s*)$',
+        rf"\g<1>{binding_version}\2",
+        1,
+    )
+    sync.regex(
+        "framework/languages/cpp/samples/sample-build-common.sh",
+        rf'(?m)^(\s*local core_version="){SEMVER}("\s*)$',
+        rf"\g<1>{core_version}\2",
+        1,
     )
     sync.regex(
         "framework/languages/cpp/tests/Zlink.Framework.PackageTests/stream_connector_consumer.cmake",
         rf"libzlink\.so\.{SEMVER}",
-        f"libzlink.so.{version}",
+        f"libzlink.so.{core_version}",
         1,
     )
     sync.regex(
         "framework/languages/dotnet/Directory.Packages.props",
         rf"(<ZLinkBindingsPackageVersion[^>]*>){SEMVER}(</ZLinkBindingsPackageVersion>)",
-        rf"\g<1>{version}\2",
+        rf"\g<1>{binding_version}\2",
         1,
     )
     for relative in (
@@ -426,13 +474,13 @@ def synchronize(write: bool) -> tuple[str, list[Path]]:
         sync.regex(
             relative,
             rf"(id=Systems\.Zlink version=){SEMVER}",
-            rf"\g<1>{version}",
+            rf"\g<1>{binding_version}",
             1,
         )
     sync.regex(
         "framework/languages/java/gradle/libs.versions.toml",
         rf'(?m)^zlinkBindings = "{SEMVER}"$',
-        f'zlinkBindings = "{version}"',
+        f'zlinkBindings = "{binding_version}"',
         1,
     )
     for relative in (
@@ -442,7 +490,7 @@ def synchronize(write: bool) -> tuple[str, list[Path]]:
         sync.regex(
             relative,
             rf"(\.artifacts/wsl/install/zlink-core/){SEMVER}(/lib/libzlink\.so)",
-            rf"\g<1>{version}\2",
+            rf"\g<1>{core_version}\2",
             1,
         )
     java_sample_contract = (
@@ -452,25 +500,25 @@ def synchronize(write: bool) -> tuple[str, list[Path]]:
     sync.regex(
         java_sample_contract,
         rf"(\.artifacts/wsl/install/zlink-core/){SEMVER}(/lib/libzlink\.so)",
-        rf"\g<1>{version}\2",
+        rf"\g<1>{core_version}\2",
         2,
     )
     sync.regex(
         java_sample_contract,
         rf"packaged {SEMVER} core runtime",
-        f"packaged {version} core runtime",
+        f"packaged {core_version} core runtime",
         2,
     )
     sync.regex(
         "framework/languages/java/e2e/SubmitAdmission/Role/build.gradle.kts",
         rf'(\.orElse\("){SEMVER}("\))',
-        rf"\g<1>{version}\2",
+        rf"\g<1>{binding_version}\2",
         1,
     )
     sync.regex(
         "framework/languages/java/e2e/SubmitAdmission/run_e2e.sh",
         rf"Core {SEMVER} package",
-        f"Core {version} package",
+        f"Core {core_version} package",
         1,
     )
     for relative, expected in (
@@ -481,20 +529,20 @@ def synchronize(write: bool) -> tuple[str, list[Path]]:
         sync.transform(
             relative,
             lambda source, expected=expected: update_framework_node_dependency(
-                source, version, expected
+                source, binding_version, expected
             ),
         )
     sync.transform(
         "framework/languages/node/package-lock.json",
-        lambda source: update_framework_node_lock(source, version),
+        lambda source: update_framework_node_lock(source, binding_version),
     )
     sync.regex(
         "framework/languages/node/test/contract/fixtures/node-public-contract.json",
         rf'("bindingVersion"\s*:\s*"){SEMVER}(")',
-        rf"\g<1>{version}\2",
+        rf"\g<1>{binding_version}\2",
         1,
     )
-    return version, sync.changed
+    return core_version, binding_version, sync.changed
 
 
 def main() -> int:
@@ -504,17 +552,24 @@ def main() -> int:
     mode.add_argument("--check", action="store_true", help="fail if managed values differ")
     args = parser.parse_args()
     try:
-        version, changed = synchronize(args.write)
+        core_version, binding_version, changed = synchronize(args.write)
     except (OSError, SyncError) as error:
         print(f"version sync failed: {error}", file=sys.stderr)
         return 1
     if args.check and changed:
-        print(f"Core/binding versions must be synchronized from VERSION ({version}):", file=sys.stderr)
+        print(
+            "Core/binding versions must be synchronized "
+            f"(Core={core_version}, bindings={binding_version}):",
+            file=sys.stderr,
+        )
         for path in changed:
             print(f"  {path.relative_to(REPO_ROOT)}", file=sys.stderr)
         return 1
     action = "synchronized" if args.write else "verified"
-    print(f"Core/binding version {version} {action} ({len(changed)} changed file(s))")
+    print(
+        f"Core {core_version}; binding packages {binding_version} {action} "
+        f"({len(changed)} changed file(s))"
+    )
     return 0
 
 

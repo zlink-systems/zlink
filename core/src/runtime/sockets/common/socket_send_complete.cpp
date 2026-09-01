@@ -584,7 +584,8 @@ void zlink::socket_base_t::drive_send_pending ()
                           std::deque<send_pending_record_t *> >::iterator it =
                    pending.queues.begin ();
                  it != pending.queues.end (); ++it) {
-                if (it->second.empty () || blocked.count (it->first) != 0)
+                if (it->second.empty () || blocked.count (it->first) != 0
+                    || pending.inline_attempts.count (it->first) != 0)
                     continue;
                 send_pending_record_t *head = it->second.front ();
                 if (head->claimed)

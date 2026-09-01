@@ -239,7 +239,7 @@ class bench_client_t : public bench_client_iface_t
         }
 
         bool all_pass = true;
-        for (int run_idx = 1; run_idx <= std::max (1, opt.runs); ++run_idx) {
+        for (int run_idx = 1; run_idx <= std::max (1, opt.runs) && all_pass; ++run_idx) {
             for (size_t i = 0; i < opt.sizes.size (); ++i) {
                 const size_t size = opt.sizes[i];
                 case_metrics_t m = run_case (size);
@@ -264,8 +264,10 @@ class bench_client_t : public bench_client_iface_t
                                  latency_p99_ns / 1000000.0);
                 }
                 std::fflush (stdout);
-                if (!m.pass)
+                if (!m.pass) {
                     all_pass = false;
+                    break;
+                }
                 if ((i + 1) < opt.sizes.size ())
                     run_size_transition_completion_wait ();
             }
@@ -350,7 +352,10 @@ class bench_client_t : public bench_client_iface_t
             }
         }
 
-        const long remaining = outstanding_total.fetch_sub (1, std::memory_order_relaxed) - 1;
+        const long previous = outstanding_total.fetch_sub (1, std::memory_order_relaxed);
+        if (previous <= 0)
+            timeout_error_measure.fetch_add (1, std::memory_order_relaxed);
+        const long remaining = previous - 1;
         if (remaining <= 0) {
             std::lock_guard<std::mutex> lk (completion_wait_mu);
             completion_wait_cv.notify_all ();
@@ -374,8 +379,11 @@ class bench_client_t : public bench_client_iface_t
     void on_abandon (long count) override
     {
         if (count > 0) {
-            const long remaining =
-              outstanding_total.fetch_sub (count, std::memory_order_relaxed) - count;
+            const long previous =
+              outstanding_total.fetch_sub (count, std::memory_order_relaxed);
+            if (previous < count)
+                timeout_error_measure.fetch_add (1, std::memory_order_relaxed);
+            const long remaining = previous - count;
             if (remaining <= 0) {
                 std::lock_guard<std::mutex> lk (completion_wait_mu);
                 completion_wait_cv.notify_all ();
@@ -510,14 +518,13 @@ class bench_client_t : public bench_client_iface_t
     // the allow_send()/on_send_begin() race before the residual count is read.
     bool quiesce_phase_for_connected ()
     {
-        std::vector<std::shared_ptr<client_session_t>> copy = snapshot_connected_sessions ();
-        if (copy.empty ())
+        if (sessions.empty ())
             return false;
 
         const std::shared_ptr<session_latch_t> latch =
-          std::make_shared<session_latch_t> (copy.size ());
-        for (size_t i = 0; i < copy.size (); ++i)
-            copy[i]->acknowledge_phase_quiesced (latch);
+          std::make_shared<session_latch_t> (sessions.size ());
+        for (size_t i = 0; i < sessions.size (); ++i)
+            sessions[i]->acknowledge_phase_quiesced (latch);
 
         const auto deadline =
           std::chrono::steady_clock::now () + std::chrono::seconds (k_resize_timeout_s);

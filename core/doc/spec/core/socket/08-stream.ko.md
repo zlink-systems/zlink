@@ -105,6 +105,12 @@ single-part record다. 따라서 다른 raw socket의 multipart 원자적 abort 
 복사본을 준비하면 실패 종류와 무관하게 호출자 코드의 소유권 처리를 일정하게 유지할
 수 있다.
 
+여러 client가 연결된 STREAM에서 `ZLINK_POLLOUT`은 socket 전체의 집계 readiness이며
+특정 `target_rid_`의 credit을 예약하거나 그 RID를 event에 싣지 않는다. 다른 client가
+writable해서 event가 선 뒤에도 원래 target의 재시도는 다시 `EAGAIN`일 수 있다.
+특정 target의 admission 대기를 Core에 맡기려면 peer RID를 target으로 설정한
+`zlink_send_async()`와 completion 통지를 사용한다.
+
 유효한 `target_rid_`에 길이 0인 part를 routed 송신하면 byte record를 보내지 않고 해당
 peer 연결의 종료를 요청한다. 성공 시 이 길이 0 part도 소비된다.
 

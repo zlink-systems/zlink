@@ -17,7 +17,7 @@ if ($Version -notmatch "^[0-9]+\.[0-9]+\.[0-9]+$") {
   throw "Core release version must be MAJOR.MINOR.PATCH: $Version"
 }
 if ($Version -ne $repoVersion) {
-  throw "Binding version $repoVersion must match Core release version $Version"
+  throw "Core release version $Version must match repository VERSION $repoVersion"
 }
 
 $supportedPlatforms = @("windows-x64", "windows-arm64", "linux-x64", "linux-arm64", "macos-x64", "macos-arm64")

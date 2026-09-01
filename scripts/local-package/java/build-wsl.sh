@@ -11,7 +11,7 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Publishes systems.zlink:zlink:<repository-version> to the local Maven
+Publishes systems.zlink:zlink:<BINDINGS_VERSION> to the local Maven
 repository.
 EOF
 }
@@ -26,15 +26,16 @@ done
 
 [[ "$core_prefix" = /* ]] || { echo "--core-prefix must be absolute" >&2; exit 2; }
 core_prefix="$(readlink -f "$core_prefix")"
-version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
 manifest="$core_prefix/share/zlink/core-package-provenance.json"
 manifest_sha="$(sha256sum "$manifest" | awk '{print $1}')"
-runtime_sha="$(sha256sum "$core_prefix/lib/libzlink.so.$version" | awk '{print $1}')"
+runtime_sha="$(sha256sum "$core_prefix/lib/libzlink.so.$core_version" | awk '{print $1}')"
 summary="$artifact_root/maven/core-package-summary.json"
 mkdir -p "$artifact_root/maven"
 cat >"$summary" <<EOF
 {
-  "version": "$version",
+  "version": "$core_version",
   "prefix": "$core_prefix",
   "provenanceSha256": "$manifest_sha",
   "runtime": {"sha256": "$runtime_sha", "soname": "libzlink.so.0"}
@@ -49,8 +50,8 @@ EOF
     ./gradlew --no-daemon clean publishMavenJavaPublicationToReleaseRepoRepository
 )
 
-[[ -f "$artifact_root/maven/systems/zlink/zlink/$version/zlink-$version.jar" ]] || {
+[[ -f "$artifact_root/maven/systems/zlink/zlink/$binding_version/zlink-$binding_version.jar" ]] || {
   echo "Maven binding package is missing" >&2
   exit 1
 }
-echo "Java local package: $artifact_root/maven/systems/zlink/zlink/$version"
+echo "Java local package: $artifact_root/maven/systems/zlink/zlink/$binding_version"

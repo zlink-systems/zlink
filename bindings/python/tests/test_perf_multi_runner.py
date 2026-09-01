@@ -35,17 +35,21 @@ from perf_multi_common import (
 from perf_multi_dealer_dealer_server import (
     dealer_dealer_active_poll_timeout_ms,
 )
-from perf_multi_reqrep_client import request_with_admission_retry
+from perf_multi_reqrep_client import _REQUEST_RETRY_RESULTS, submit_request_once
 from perf_multi_reqrep_server import submit_reqrep_reply
+from perf_multi_stream_server import classify_control_line, wait_connection_ready_count
 from run_benchmarks import (
+    CANONICAL_STREAM_CLIENT_BIN,
     DEFAULT_PATTERNS,
     POLICY_TRANSPORTS,
+    STREAM_CLIENT_BIN,
     _build_options,
     _clients_for_pattern,
     _ensure_stream_client,
     _normalize_pattern,
     _options_clients_display,
     _parse_patterns,
+    _release_stream_start,
     _require_binding_runtime,
     _result_pattern,
     _validate_python_build_options,
@@ -92,14 +96,146 @@ class PerfMultiRunnerTests(unittest.TestCase):
         _require_binding_runtime()
 
     def test_python_runner_reuse_never_builds_missing_stream_client(self):
-        with mock.patch.object(Path, "exists", return_value=False):
+        with mock.patch("run_benchmarks._is_executable", return_value=False):
             with mock.patch("run_benchmarks.subprocess.run") as build:
                 with self.assertRaisesRegex(SystemExit, "--reuse-build"):
                     _ensure_stream_client(reuse_build=True)
         build.assert_not_called()
 
+    def test_python_runner_prefers_canonical_stream_client(self):
+        executable = {CANONICAL_STREAM_CLIENT_BIN, STREAM_CLIENT_BIN}
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch(
+                "run_benchmarks._is_executable",
+                side_effect=lambda path: path in executable,
+            ):
+                with mock.patch("run_benchmarks._stream_client_is_fresh", return_value=True):
+                    selected = _ensure_stream_client()
+        self.assertEqual(selected, CANONICAL_STREAM_CLIENT_BIN)
+
+    def test_python_runner_rebuilds_stale_canonical_stream_client(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch("run_benchmarks._stream_client_is_fresh", return_value=False):
+                with mock.patch(
+                    "run_benchmarks._rebuild_canonical_stream_client",
+                    return_value=CANONICAL_STREAM_CLIENT_BIN,
+                ) as rebuild_canonical:
+                    with mock.patch(
+                        "run_benchmarks._rebuild_fallback_stream_client"
+                    ) as rebuild_fallback:
+                        selected = _ensure_stream_client()
+        self.assertEqual(selected, CANONICAL_STREAM_CLIENT_BIN)
+        rebuild_canonical.assert_called_once_with()
+        rebuild_fallback.assert_not_called()
+
+    def test_python_runner_reuse_accepts_canonical_without_freshness_rebuild(self):
+        executable = {CANONICAL_STREAM_CLIENT_BIN, STREAM_CLIENT_BIN}
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch(
+                "run_benchmarks._is_executable",
+                side_effect=lambda path: path in executable,
+            ):
+                with mock.patch("run_benchmarks._stream_client_is_fresh") as freshness:
+                    selected = _ensure_stream_client(reuse_build=True)
+        self.assertEqual(selected, CANONICAL_STREAM_CLIENT_BIN)
+        freshness.assert_not_called()
+
+    def test_stream_start_barrier_waits_for_server_ack_before_client_start(self):
+        events = []
+
+        class ControlInput:
+            def __init__(self, owner):
+                self.owner = owner
+
+            def write(self, value):
+                events.append(f"{self.owner}:write:{value.strip()}")
+
+            def flush(self):
+                events.append(f"{self.owner}:flush")
+
+        server = mock.Mock(stdin=ControlInput("server"))
+        client = mock.Mock(stdin=ControlInput("client"))
+
+        def wait_for_line(proc, *_args, **_kwargs):
+            if proc is client:
+                events.append("wait:client-ready")
+                return "CLIENT_READY,1024"
+            events.append("wait:server-start-ready")
+            return "SERVER_START_READY,1024"
+
+        with mock.patch("run_benchmarks._wait_for_control_line", side_effect=wait_for_line):
+            _release_stream_start(
+                server,
+                client,
+                "1024",
+                timeout_s=1,
+                stdout_chunks=[],
+            )
+
+        self.assertEqual(
+            events,
+            [
+                "wait:client-ready",
+                "server:write:START,1024",
+                "server:flush",
+                "wait:server-start-ready",
+                "client:write:START,1024",
+                "client:flush",
+            ],
+        )
+
+    def test_stream_server_control_requires_exact_start_size(self):
+        self.assertEqual(classify_control_line("START,1024", 1024), "start")
+        self.assertIsNone(classify_control_line("START,256", 1024))
+        self.assertEqual(classify_control_line("STOP", 1024), "stop")
+
+    def test_stream_server_waits_for_target_connection_count(self):
+        monitor = object()
+        with mock.patch(
+            "perf_multi_stream_server.wait_monitor_event"
+        ) as wait_event:
+            wait_connection_ready_count(monitor, 3, 1000)
+        self.assertEqual(wait_event.call_count, 3)
+
     def test_python_multi_defaults_to_one_io_thread(self):
         self.assertEqual(PYTHON_MULTI_DEFAULT_IO_THREADS, 1)
+
+    def test_routed_sendsend_clients_recalculate_hwm_before_active_phase(self):
+        multi_dir = PERF_DIR / "multi"
+        for filename in (
+            "perf_multi_dealer_router_client.py",
+            "perf_multi_router_router_client.py",
+        ):
+            with self.subTest(filename=filename):
+                source = (multi_dir / filename).read_text(encoding="utf-8")
+                ready_wait = source.index("for monitor in monitors:")
+                recalculate = source.index("ctx.recalculate_auto_hwm()")
+                active_phase = source.index("active_deadline =")
+                self.assertLess(ready_wait, recalculate)
+                self.assertLess(recalculate, active_phase)
+
+    def test_reqrep_client_owns_completion_dispatch_until_drain(self):
+        source = (
+            PERF_DIR / "multi" / "perf_multi_reqrep_client.py"
+        ).read_text(encoding="utf-8")
+        registration = source.index("zlink.PollEventFlag.POLLCOMPLETION")
+        active_progress = source.index(
+            "completion_poller.wait(completion_events, 0)", registration
+        )
+        drain = source.index("drain_deadline =", active_progress)
+        drain_progress = source.index(
+            "completion_poller.wait(completion_events, 0)",
+            active_progress + 1,
+        )
+        removal = source.index("completion_poller.remove_socket(sock)")
+        socket_close = source.index("sock.close()", removal)
+
+        self.assertLess(registration, active_progress)
+        self.assertLess(active_progress, drain)
+        self.assertLess(drain, drain_progress)
+        self.assertLess(drain_progress, removal)
+        self.assertLess(removal, socket_close)
+        self.assertNotIn("await asyncio.wait(", source)
 
     def test_dealer_dealer_stop_token_has_raw_message_shape(self):
         class Part:
@@ -319,7 +455,7 @@ class PerfMultiRunnerTests(unittest.TestCase):
             submit_reqrep_reply(request, (b"payload", b""))
         self.assertEqual(request.attempts, 1)
 
-    def test_request_rebuilds_same_logical_multipart_after_backpressure(self):
+    def test_request_attempt_preserves_logical_multipart_after_backpressure(self):
         reply = object()
 
         class RequestOperation:
@@ -351,20 +487,26 @@ class PerfMultiRunnerTests(unittest.TestCase):
                 return RequestOperation(self)
 
         socket = Socket()
-        admitted = []
-        result = asyncio.run(
-            request_with_admission_retry(
-                socket,
-                (b"payload", b""),
-                timeout_s=0.2,
-                on_admitted=lambda: admitted.append(True),
-            )
+        logical_parts = (b"payload", b"")
+        first_result, first_backpressured = asyncio.run(
+            submit_request_once(socket, logical_parts, timeout_s=0.2)
         )
+        result, second_backpressured = asyncio.run(
+            submit_request_once(socket, logical_parts, timeout_s=0.2)
+        )
+        self.assertIsNone(first_result)
+        self.assertTrue(first_backpressured)
         self.assertIs(result, reply)
-        self.assertEqual(admitted, [True])
+        self.assertFalse(second_backpressured)
         self.assertEqual(
             socket.attempts,
             [((b"payload", b""), 0.2), ((b"payload", b""), 0.2)],
+        )
+
+    def test_request_attempt_retries_only_pre_admission_results(self):
+        self.assertEqual(
+            _REQUEST_RETRY_RESULTS,
+            {zlink.SubmitResult.BACKPRESSURED},
         )
 
     def test_routed_send_rebuilds_after_immediate_admission_backpressure(self):

@@ -206,6 +206,12 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
       (호출자 소유 유지). runner가 그 소켓을 pending으로 표시했다가 poller
       `POLLOUT` readiness에서 **같은 메시지를 재제출**한다. 즉 backpressure를
       runner가 수동으로 관리한다.
+      C `MULTI_STREAM` server는 이 경로의 예외다. packet handler가 전달한 echo마다
+      public `zlink_send_async()`를 한 번 호출한다. `DONTWAIT` 선행 제출과
+      `POLLOUT` pending 재제출은 사용하지 않는다. Core가 packet callback의 현재
+      pipe에서 FIFO-safe한 즉시 admission을 선택하거나, pending operation으로
+      backpressure와 전송 순서를 처리한다. operation id `0`은 즉시 완료이며 callback이
+      없고, nonzero id만 completion callback으로 한 번 완료된다.
     - **C 이외의 binding (async admission 경로)**: HWM-managed send/request는 각
       언어의 async terminal로 제출한다. ownership을 받은 terminal은 backpressure
       동안 async 작업을 suspend하고 Core의 writable/completion 진행에 따라
@@ -231,12 +237,15 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
       HWM admission을 기다리지 않고, raw reply는 request sequence에 대한 즉시
       terminal이므로 공개 API가 synchronous terminal만 제공한다. 이 operation을
       executor나 internal adapter로 감싸 가짜 async 비용을 추가하지 않는다.
-      raw STREAM reply는 이 예외에 포함하지 않는다. C 이외의 binding은 public
+      raw STREAM reply는 이 예외에 포함하지 않는다. 모든 STREAM server는 public
       async terminal을 사용해야 하며, 해당 terminal이 없으면 perf에서 우회하지
       말고 binding public contract를 보완한다.
   - poller는 recv readiness 감지에 사용한다. request-reply completion은 C에서는
-    public completion poller로, 다른 binding에서는 public async request completion으로
-    진행한다. send backpressure는 suite별로 위 방식을 따른다.
+    public completion poller로 진행하고, 다른 binding은 public async request
+    terminal을 사용한다. 다만 event-loop binding은 아래 completion-context alignment
+    예외에 따라 public completion poller로 같은 reply callback의 dispatch 위치만
+    해당 event-loop thread로 옮길 수 있다. send backpressure는 suite별로 위 방식을
+    따른다.
 - **binding이 위 async admission 경로를 표현해야 한다**: C 이외의 multi 측정에서
   HWM-managed send/request는 binding 공개 async terminal을 사용한다. Go처럼 별도 async terminal이 없는
   binding은 blocking `Submit(ctx)` 하나를 goroutine 하나가 소유하고, Go runtime이
@@ -265,12 +274,26 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
     multiplex한다. socket request/reply 경로는 requester socket을 이 public
     poller에 `POLLCOMPLETION` 단독으로 등록한다. C 이외의 binding은 public async
     request completion을 여러 개 동시에 진행한다.
-  suite 정책에 없는 timer, pipe/eventfd wake, `setInterval`, 짧은 sleep,
-  busy polling을 hot path에 두면 C perf와 같은 측정 의미가 아니므로 금지한다.
-  Node처럼 native completion을 JavaScript turn에서 Promise에 전달하는 binding은
-  async completion 진행을 위해 event-loop turn을 양보한다. 이 양보를 timer나
-  별도 progress pump로 대체하면 안 된다.
+  - Python처럼 event-loop thread에서 async terminal을 진행하는 binding은 모든
+    requester socket을 같은 active execution context가 소유한 public poller 하나에
+    `POLLCOMPLETION` 단독으로 등록할 수 있다. submit/progress turn마다 nonblocking
+    `wait(..., 0)`을 최대 한 번 호출한 뒤 zero-delay cooperative yield로 awaitable
+    continuation을 진행한다. 이 등록은 같은 Core reply callback의 dispatch 위치만
+    event-loop thread로 옮기며 public async terminal을 synchronous callback terminal로
+    바꾸지 않는다. reply completion은 request 제출을 gate하지 않으며 application
+    고정 상한 없이 admission backpressure까지 outstanding request를 유지한다.
+  위에서 허용한 request/reply completion-context alignment의 poller wait는 기존
+  active event-loop turn에 묶이며 별도 progress pump가 아니다. `wait(..., 0)` 뒤에
+  사용하는 zero-delay cooperative yield도 sleep fallback이 아니다. 한 event-loop
+  turn 안에서 `wait(..., 0)`을 연속 호출하는 tight loop, socket별 poller/progress OS
+  thread, timer, pipe/eventfd wake, `setInterval`, 양수 sleep fallback은 금지한다.
+  그 밖의 busy polling도 hot path에 두면 C perf와 같은 측정 의미가 아니므로 금지한다.
 - `STREAM`은 raw callback을 제외하지만 packet handler를 정식 수신 경로로 본다.
+- `MULTI_STREAM` server는 packet handler callback마다 public async terminal을 한 번
+  호출한다. C는 `zlink_send_async()`를 사용한다. Core가 immediate admission 또는
+  pending backpressure를 선택하므로 server는 `DONTWAIT`, `POLLOUT`, pending deque,
+  timer 재제출을 구현하지 않는다. operation id `0`은 callback 없이 즉시 끝나며,
+  nonzero id의 completion은 결과만 집계하고 재제출을 시작하지 않는다.
 
 ### 1.1.1 Metric Header Wire Format
 
@@ -581,9 +604,9 @@ perf 구조는 다음 두 책임으로 분리한다. 이 분리는 `bindings/c/p
   - 왕복 완료 의미를 유지한다.
   - `*_SENDSEND` 패턴은 public send/recv API로 echo를 만든다.
   - `*_REQREP` 패턴은 public request/reply API와 suite별 completion 경로로 왕복을
-    만든다. C는 completion poller, C 이외의 binding multi는 async request
-    completion, binding single은 synchronous callback terminal과 completion
-    progress를 사용한다.
+    만든다. C는 completion poller, C 이외의 binding multi는 public async request
+    completion(허용된 event-loop completion-context alignment 포함), binding single은
+    synchronous callback terminal과 completion progress를 사용한다.
   - send 역할과 recv 역할 정책을 둘 다 적용한다.
 - one-way send
   - recv 정책은 없다.
@@ -607,7 +630,8 @@ perf 구조는 다음 두 책임으로 분리한다. 이 분리는 `bindings/c/p
   - client(dealer requester) 는 public request API로 request를 제출하고,
     server(router replier) 는 request를 읽은 뒤 public reply API로 응답한다.
   - C client completion은 public poller `POLLCOMPLETION` 경로로 진행한다.
-    다른 binding은 public async request completion을 여러 개 동시에 진행한다.
+    다른 binding은 public async request completion을 여러 개 동시에 진행하며,
+    event-loop binding은 허용된 completion-context alignment를 함께 사용할 수 있다.
 - `MULTI_ROUTER_ROUTER_REQREP`
   - multi suite 의 route-aware raw socket request/reply 패턴이다.
   - 양쪽 모두 routing identity가 있는 socket을 사용하되, 왕복 의미는
@@ -727,11 +751,14 @@ perf/                                       # bindings/<lang>/perf/
   TCP/TLS/WS/WSS의 OS·TLS·WebSocket buffering 차이가 서로 다른 unresolved 깊이로
   나타나는 것을 막는 `MULTI_STREAM` 전용 예외다. 측정 대상 zlink server의 HWM과
   backpressure 동작은 바꾸지 않는다.
-- unresolved 깊이와 phase 종료 drain 정책은 CLI 옵션이나 환경 변수로 조절하지
-  않는다. active 종료 시 raw client는 새 packet 제출을 중단하고 연결마다 남을 수
-  있는 최대 1개의 echo를 bounded timeout까지 drain한다. timeout 안에 모두
-  완료되지 않으면 해당 case는 `fail`이다. drain 중 완료는 active 측정 구간을
-  연장하거나 RESULT 집계에 추가하지 않는다.
+- unresolved 깊이 1은 고정값이며 CLI 옵션이나 환경 변수로 조절하지 않는다.
+  active 종료 시 raw client는 새 packet 제출 경로가 닫혔음을 확인한 뒤 연결마다
+  남을 수 있는 최대 1개의 echo를 bounded timeout까지 drain한다. drain timeout은
+  raw client의 기존 `--completion-wait-ms`를 사용하며 기본값은 500ms, 64 KiB 이상
+  case의 최솟값은 5000ms다. 새 제출 경로 닫힘 확인 또는 residual drain이 timeout
+  안에 완료되지 않으면 해당 case를 `fail`로 끝내고 shared-client run을 즉시
+  중단한다. drain 중 완료는 active 측정 구간을 연장하거나 RESULT 집계에 추가하지
+  않는다.
 - 이 예외는 일반 zlink send/send echo와 request/reply에 적용하지 않는다. 해당
   패턴은 Core HWM admission backpressure까지 연속 제출하는 기존 정책을 유지한다.
 - `MULTI_STREAM`은 **packet semantics**를 측정한다. server는 `zlink_stream_packet_handler()`
@@ -1214,9 +1241,10 @@ Saved result file: ... (status=partial)
   연속 제출한다. HWM은 send admission queue를 제한하며, reply를 기다리는 request
   수는 실제 admission과 completion 속도로 정해진다.
 - `MULTI_STREAM` 외부 raw client는 Core HWM admission이 없으므로 연결당
-  `outstanding`을 0 또는 1로 고정한다. 이 값과 phase 종료 drain 정책은 CLI나 환경
-  변수로 노출하지 않는다. 이 예외를 STREAM server, 일반 zlink send/send echo,
-  request/reply로 확장하면 안 된다.
+  `outstanding`을 0 또는 1로 고정한다. 이 깊이는 CLI나 환경 변수로 노출하지
+  않는다. phase 종료 timeout은 § 2.0.3의 고정 drain 절차와
+  `--completion-wait-ms` 계약을 따른다. 이 예외를 STREAM server, 일반 zlink
+  send/send echo, request/reply로 확장하면 안 된다.
 
 ### 7.3 실패 시 대응 절차
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap '' PIPE
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -315,6 +316,20 @@ default_clients_for_pattern() {
   fi
 }
 
+effective_clients_for_transport() {
+  local pattern="${1:-}"
+  local transport="${2:-}"
+  local requested="${3:-}"
+  if [[ "${pattern}" == "MULTI_STREAM" && "${transport}" != "tcp" \
+        && "${requested}" =~ ^[0-9]+$ \
+        && "${STREAM_NON_TCP_CLIENTS_MAX}" =~ ^[0-9]+$ \
+        && "${requested}" -gt "${STREAM_NON_TCP_CLIENTS_MAX}" ]]; then
+    printf '%s' "${STREAM_NON_TCP_CLIENTS_MAX}"
+  else
+    printf '%s' "${requested}"
+  fi
+}
+
 pick_endpoint() {
   local transport="$1"
   local token="$2"
@@ -400,6 +415,33 @@ while time.time() < deadline:
                 if line.startswith(token):
                     print(line)
                     raise SystemExit(0)
+            position = handle.tell()
+    time.sleep(0.05)
+raise SystemExit(1)
+PY
+}
+
+wait_for_log_line_exact() {
+  local file="$1"
+  local prefix="$2"
+  local expected="$3"
+  local timeout_ms="$4"
+  python3 - "$file" "$prefix" "$expected" "$timeout_ms" <<'PY'
+import os
+import sys
+import time
+
+path, prefix, expected, timeout_ms = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+deadline = time.time() + (timeout_ms / 1000.0)
+position = 0
+while time.time() < deadline:
+    if os.path.exists(path):
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            handle.seek(position)
+            for raw in handle:
+                line = raw.strip()
+                if line.startswith(prefix):
+                    raise SystemExit(0 if line == expected else 2)
             position = handle.tell()
     time.sleep(0.05)
 raise SystemExit(1)
@@ -946,53 +988,90 @@ CASE_METRIC_LOG=""
 
 run_stream_case() {
   local concurrency="$1"
-  local fifo="${RESULTS_ROOT}/multi/tmp/stream_control_${transport}_${size}.fifo"
+  local server_fifo="${RESULTS_ROOT}/multi/tmp/stream_server_control_${transport}_${size}.fifo"
+  local client_fifo="${RESULTS_ROOT}/multi/tmp/stream_client_control_${transport}_${size}.fifo"
   local endpoint
   local stream_server_cmd=()
+  local server_fd
+  local client_fd
 
   CASE_STATUS=""
   CASE_METRIC_LOG=""
-  rm -f "${fifo}"
-  mkfifo "${fifo}"
+  rm -f "${server_fifo}" "${client_fifo}"
+  mkfifo "${server_fifo}" "${client_fifo}"
   endpoint="$(pick_endpoint "${transport}" "${bare_pattern}")"
   build_multi_role_cmd stream_server_cmd "server" "${endpoint}" "${pattern_server_io_threads}" "${concurrency}"
-  "${stream_server_cmd[@]}" <"${fifo}" >"${server_log}" 2>&1 &
+  "${stream_server_cmd[@]}" <"${server_fifo}" >"${server_log}" 2>&1 &
   local server_pid=$!
-  exec 3>"${fifo}"
+  exec {server_fd}>"${server_fifo}"
   if ! wait_for_log_token "${server_log}" "READY," "${SERVER_READY_TIMEOUT_MS}" >/dev/null; then
     record_failure "${pattern}" "${transport}" "${size}" "${run}" "server_ready_timeout"
+    exec {server_fd}>&-
     wait_for_pid_or_kill "${server_pid}" "${SERVER_SHUTDOWN_TIMEOUT_MS}" "stream server" || true
-    exec 3>&-
-    rm -f "${fifo}"
+    rm -f "${server_fifo}" "${client_fifo}"
     CASE_STATUS="fail"
     return 0
   fi
 
-  local stream_client_rc=0
   local stream_clients="${pattern_clients}"
   local stream_completion_wait_ms="${PERF_MULTI_STREAM_COMPLETION_WAIT_MS:-${PERF_STREAM_COMPLETION_WAIT_MS:-${SERVER_SHUTDOWN_TIMEOUT_MS}}}"
-  if [[ "${transport}" != "tcp" && "${stream_clients}" =~ ^[0-9]+$ \
-        && "${STREAM_NON_TCP_CLIENTS_MAX}" =~ ^[0-9]+$ \
-        && "${stream_clients}" -gt "${STREAM_NON_TCP_CLIENTS_MAX}" ]]; then
-    stream_clients="${STREAM_NON_TCP_CLIENTS_MAX}"
-  fi
   "${stream_client_prefix[@]}" "${STREAM_CLIENT}" --transport "${transport}" --pattern STREAM \
     --sizes "${size}" --runs 1 --duration "${DURATION}" \
     --ccu "${stream_clients}" --io-threads "${pattern_client_io_threads}" \
     --completion-wait-ms "${stream_completion_wait_ms}" \
-    --send-stop-token 0 --endpoint "${endpoint}" \
-    >"${client_log}" 2>&1 || stream_client_rc=$?
-  printf 'STOP\n' >&3
-  exec 3>&-
+    --send-stop-token 0 --start-gate 1 --endpoint "${endpoint}" \
+    <"${client_fifo}" >"${client_log}" 2>&1 &
+  local client_pid=$!
+  exec {client_fd}>"${client_fifo}"
+
+  local stream_failure_reason=""
+  if ! wait_for_log_line_exact "${client_log}" "CLIENT_READY," \
+      "CLIENT_READY,${size}" "${CONNECT_READY_TIMEOUT_MS}" >/dev/null; then
+    stream_failure_reason="client_ready_timeout_or_mismatch"
+  elif ! printf 'START,%s\n' "${size}" >&${server_fd}; then
+    stream_failure_reason="server_start_write_failed"
+  else
+    if ! wait_for_log_line_exact "${server_log}" "SERVER_START_READY," \
+        "SERVER_START_READY,${size}" "${CONNECT_READY_TIMEOUT_MS}" >/dev/null; then
+      stream_failure_reason="server_start_ready_timeout_or_mismatch"
+    elif ! printf 'START,%s\n' "${size}" >&${client_fd}; then
+      stream_failure_reason="client_start_write_failed"
+    fi
+  fi
+
+  local stream_client_rc=0
+  if [[ -z "${stream_failure_reason}" ]]; then
+    if wait_for_pid_or_kill "${client_pid}" "$(( (DURATION + 20) * 1000 ))" \
+        "stream client"; then
+      :
+    else
+      stream_client_rc=$?
+      stream_failure_reason="stream_client_exit_${stream_client_rc}"
+    fi
+  else
+    printf 'STOP\n' >&${client_fd} 2>/dev/null || true
+    wait_for_pid_or_kill "${client_pid}" "${SERVER_SHUTDOWN_TIMEOUT_MS}" \
+      "stream client" >/dev/null 2>&1 || true
+  fi
+
+  printf 'STOP\n' >&${server_fd} 2>/dev/null || true
+  exec {client_fd}>&-
+  exec {server_fd}>&-
   local server_exit=0
   wait_for_pid_or_kill "${server_pid}" "${SERVER_SHUTDOWN_TIMEOUT_MS}" "stream server" || server_exit=$?
-  rm -f "${fifo}"
+  rm -f "${server_fifo}" "${client_fifo}"
   append_auto_hwm_details "${server_log}"
   append_auto_hwm_details "${client_log}"
 
-  if [[ "${stream_client_rc}" -ne 0 ]]; then
+  if [[ -n "${stream_failure_reason}" ]]; then
+    local early_status_record
+    early_status_record="$(case_status "${pattern}" "${transport}" "${size}" "${client_log}")"
+    if [[ "${early_status_record%%,*}" == "unsupported" ]]; then
+      CASE_STATUS="unsupported"
+      return 0
+    fi
     record_failure "${pattern}" "${transport}" "${size}" "${run}" \
-      "stream_client_exit_${stream_client_rc}"
+      "${stream_failure_reason}"
     CASE_STATUS="fail"
     return 0
   fi
@@ -1209,7 +1288,8 @@ for pattern_index in "${!patterns[@]}"; do
   fi
   pattern="${patterns[pattern_index]}"
   bare_pattern="${pattern#MULTI_}"
-  pattern_clients="$(default_clients_for_pattern "${pattern}")"
+  requested_pattern_clients="$(default_clients_for_pattern "${pattern}")"
+  pattern_clients="${requested_pattern_clients}"
   pattern_msg_sizes="$(default_msg_sizes_for_pattern "${pattern}")"
   pattern_default_io_threads="${PERF_MULTI_DEFAULT_IO_THREADS:-${PERF_DEFAULT_IO_THREADS:-4}}"
   pattern_server_io_threads="${SERVER_IO_THREADS:-${COMMON_IO_THREADS:-${pattern_default_io_threads}}}"
@@ -1223,12 +1303,11 @@ for pattern_index in "${!patterns[@]}"; do
       break
     fi
     transport="${transports[transport_index]}"
-    pattern_clients="$(default_clients_for_pattern "${pattern}")"
-    if [[ "${pattern}" == "MULTI_STREAM" && "${transport}" != "tcp" \
-          && "${pattern_clients}" =~ ^[0-9]+$ && "${STREAM_NON_TCP_CLIENTS_MAX}" =~ ^[0-9]+$ \
-          && "${pattern_clients}" -gt "${STREAM_NON_TCP_CLIENTS_MAX}" ]]; then
-      pattern_clients="${STREAM_NON_TCP_CLIENTS_MAX}"
-    fi
+    # Resolve the cap once for both roles. --clients is the Java server's
+    # exact CONNECTION_READY target and --ccu is the shared STREAM client's
+    # connection count.
+    pattern_clients="$(effective_clients_for_transport \
+      "${pattern}" "${transport}" "${requested_pattern_clients}")"
     echo "    Testing ${transport} | ${pattern_msg_sizes}:"
     printf '    Testing %s | %s:\n' "${transport}" "${pattern_msg_sizes}" >> "${tmp_progress}"
     print_table_header "      "

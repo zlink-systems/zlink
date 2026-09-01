@@ -114,7 +114,7 @@ run_external_stream_client() {
     --sizes "${size}" --runs 1 --duration "${duration}" \
     --ccu "${stream_clients}" --io-threads "${stream_client_io_threads}" \
     --completion-wait-ms "${PERF_MULTI_STREAM_COMPLETION_WAIT_MS:-${PERF_STREAM_COMPLETION_WAIT_MS:-${SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}}}}}" \
-    --send-stop-token 0 --endpoint "${endpoint}" \
+    --send-stop-token 0 --start-gate 1 --endpoint "${endpoint}" \
     > "${client_out}" 2> "${client_err}"
 }
 
@@ -1193,7 +1193,7 @@ run_multi_process_case() {
   local case_log="$6"
 
   local srv_out client_out client_err server_fifo ready_line endpoint
-  local server_pid server_control_fd client_pid client_control_fd client_fifo client_ready_line
+  local server_pid server_control_fd client_pid client_control_fd client_fifo client_ready_line server_start_ready_line
   local client_timeout case_status case_gomaxprocs
   case_gomaxprocs="$(resolve_case_gomaxprocs "${pattern}" "${transport}" "${size}")"
   srv_out="$(mktemp "${TMP_DIR}/server.XXXXXX")"
@@ -1269,17 +1269,40 @@ run_multi_process_case() {
   elif [[ "${pattern}" == "MULTI_STREAM" ]]; then
     # Shared C reference client; the Go binding has no STREAM client
     # (measured surface is the Go STREAM server).
+    client_fifo="$(mktemp -u "${TMP_DIR}/client_fifo.XXXXXX")"
+    mkfifo "${client_fifo}"
     run_external_stream_client \
       "${transport}" "${size}" "${duration}" "${clients}" \
-      "${endpoint}" "${client_out}" "${client_err}" &
+      "${endpoint}" "${client_out}" "${client_err}" \
+      < "${client_fifo}" &
     client_pid=$!
-    if ! wait_for_pid "${client_pid}" "${client_timeout}"; then
+    exec {client_control_fd}> "${client_fifo}"
+    rm -f "${client_fifo}"
+
+    client_ready_line="$(wait_for_file_prefix "${client_out}" "CLIENT_READY," "${ONE_WAY_CLIENT_READY_TIMEOUT}" || true)"
+    if [[ "${client_ready_line}" != "CLIENT_READY,${size}" ]]; then
       case_status=1
       kill_process_tree "${client_pid}"
       wait "${client_pid}" 2>/dev/null || true
-    elif ! wait "${client_pid}"; then
-      case_status=1
+    else
+      printf 'START,%s\n' "${size}" >&"${server_control_fd}" || true
+      server_start_ready_line="$(wait_for_file_prefix "${srv_out}" "SERVER_START_READY," "${ONE_WAY_CLIENT_READY_TIMEOUT}" || true)"
+      if [[ "${server_start_ready_line}" != "SERVER_START_READY,${size}" ]]; then
+        case_status=1
+        kill_process_tree "${client_pid}"
+        wait "${client_pid}" 2>/dev/null || true
+      else
+        printf 'START,%s\n' "${size}" >&"${client_control_fd}" || true
+        if ! wait_for_pid "${client_pid}" "${client_timeout}"; then
+          case_status=1
+          kill_process_tree "${client_pid}"
+          wait "${client_pid}" 2>/dev/null || true
+        elif ! wait "${client_pid}"; then
+          case_status=1
+        fi
+      fi
     fi
+    exec {client_control_fd}>&- || true
   else
     run_go_perf ./perf/multi \
       --role client \

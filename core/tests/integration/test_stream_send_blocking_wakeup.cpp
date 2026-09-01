@@ -61,6 +61,124 @@ struct stream_routed_ready_probe_t
     std::vector<stream_routed_ready_event_t> events;
 };
 
+struct stream_packet_async_probe_t
+{
+    stream_packet_async_probe_t (bool fill_) :
+        fill_before_submit (fill_), submitted (false), submit_result (
+          ZLINK_SUBMIT_INTERNAL_ERROR), submit_errno (0), op_id (0),
+        completion_count (0), completion_result (ZLINK_SEND_TERMINAL),
+        completion_errno (0)
+    {
+    }
+
+    bool fill_before_submit;
+    std::mutex sync;
+    std::condition_variable changed;
+    bool submitted;
+    zlink_submit_result_t submit_result;
+    int submit_errno;
+    zlink_send_op_id_t op_id;
+    int completion_count;
+    zlink_send_complete_result_t completion_result;
+    int completion_errno;
+};
+
+void capture_stream_packet_async_completion (
+  void *, const zlink_send_complete_event_t *event_, void *userdata_)
+{
+    stream_packet_async_probe_t *probe =
+      static_cast<stream_packet_async_probe_t *> (userdata_);
+    if (!probe || !event_)
+        return;
+    {
+        std::lock_guard<std::mutex> lock (probe->sync);
+        ++probe->completion_count;
+        probe->completion_result = event_->result;
+        probe->completion_errno = event_->terminal_errno;
+    }
+    probe->changed.notify_all ();
+}
+
+void stream_packet_async_submit_callback (
+  void *stream_, const zlink_routing_id_t *rid_, zlink_msg_t *header_,
+  zlink_msg_t *body_, void *userdata_)
+{
+    stream_packet_async_probe_t *probe =
+      static_cast<stream_packet_async_probe_t *> (userdata_);
+    if (!stream_ || !rid_ || !probe)
+        return;
+
+    if (probe->fill_before_submit) {
+        std::vector<unsigned char> fill (kPayloadSize, 0x51);
+        for (;;) {
+            zlink_msg_t part;
+            if (zlink_msg_init_size (&part, fill.size ()) != 0)
+                break;
+            memcpy (zlink_msg_data (&part), fill.data (), fill.size ());
+            const zlink_submit_result_t result = zlink_send_part_rid (
+              stream_, rid_, &part, ZLINK_DONTWAIT, ZLINK_PART_FINAL);
+            if (result == ZLINK_SUBMIT_OK) {
+                (void) zlink_msg_close (&part);
+                continue;
+            }
+            (void) zlink_msg_close (&part);
+            break;
+        }
+    }
+
+    static const char reply[] = "async";
+    zlink_msg_t part;
+    zlink_submit_result_t result = ZLINK_SUBMIT_INTERNAL_ERROR;
+    int submit_errno = 0;
+    zlink_send_op_id_t op_id = 0;
+    if (zlink_msg_init_size (&part, sizeof (reply) - 1) == 0) {
+        memcpy (zlink_msg_data (&part), reply, sizeof (reply) - 1);
+        zlink_routed_submit_target_t target;
+        memset (&target, 0, sizeof (target));
+        target.peer_rid = *rid_;
+        zlink_send_async_options_t options;
+        memset (&options, 0, sizeof (options));
+        options.struct_size = sizeof (options);
+        options.target = &target;
+        result = zlink_send_async (stream_, &part, 1, &options, &op_id);
+        submit_errno = errno;
+        if (result != ZLINK_SUBMIT_OK)
+            (void) zlink_msg_close (&part);
+    } else {
+        submit_errno = errno;
+    }
+
+    if (header_)
+        (void) zlink_msg_close (header_);
+    if (body_)
+        (void) zlink_msg_close (body_);
+    {
+        std::lock_guard<std::mutex> lock (probe->sync);
+        probe->submit_result = result;
+        probe->submit_errno = submit_errno;
+        probe->op_id = op_id;
+        probe->submitted = true;
+    }
+    probe->changed.notify_all ();
+}
+
+bool wait_stream_packet_submit (stream_packet_async_probe_t *probe_, int timeout_ms_)
+{
+    std::unique_lock<std::mutex> lock (probe_->sync);
+    return probe_->changed.wait_for (
+      lock, std::chrono::milliseconds (timeout_ms_),
+      [probe_] () { return probe_->submitted; });
+}
+
+bool wait_stream_packet_completion (stream_packet_async_probe_t *probe_,
+                                    int timeout_ms_)
+{
+    std::unique_lock<std::mutex> lock (probe_->sync);
+    return probe_->changed.wait_for (
+      lock, std::chrono::milliseconds (timeout_ms_),
+      [probe_] () { return probe_->completion_count != 0; });
+}
+
 void capture_stream_routed_ready (void *,
                                   const zlink_send_complete_event_t *event_,
                                   void *userdata_)
@@ -949,6 +1067,104 @@ void test_stream_part_nonblocking_backpressure_preserves_message ()
 #endif
 }
 
+void test_stream_packet_async_immediate_admission_has_no_completion ()
+{
+#if defined(ZLINK_HAVE_WINDOWS)
+    TEST_IGNORE_MESSAGE ("raw tcp helper unavailable on Windows");
+#else
+    void *server = test_context_socket (ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (server);
+    configure_stream_socket (server);
+
+    stream_packet_async_probe_t probe (false);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_send_complete_handler (
+        server, &capture_stream_packet_async_completion, &probe));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_stream_packet_handler (
+        server, &stream_packet_async_submit_callback, &probe));
+
+    char endpoint[MAX_SOCKET_STRING];
+    memset (endpoint, 0, sizeof (endpoint));
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+    const int raw_fd = connect_raw_tcp (endpoint);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT (0, raw_fd);
+    set_raw_timeout (raw_fd, 1000);
+
+    const unsigned char trigger[] = {0, 0, 0, 0, 0, 1, 0x41};
+    TEST_ASSERT_EQUAL_INT (0, send_all (raw_fd, trigger, sizeof (trigger)));
+    TEST_ASSERT_TRUE (wait_stream_packet_submit (&probe, 3000));
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, probe.submit_result);
+    TEST_ASSERT_EQUAL_UINT64 (0, probe.op_id);
+
+    unsigned char reply[5];
+    TEST_ASSERT_TRUE (recv_raw_exact (raw_fd, reply, sizeof (reply)));
+    TEST_ASSERT_EQUAL_MEMORY ("async", reply, sizeof (reply));
+    TEST_ASSERT_FALSE (wait_stream_packet_completion (&probe, 100));
+    TEST_ASSERT_EQUAL_INT (0, probe.completion_count);
+
+    close_raw_fd (raw_fd);
+    test_context_socket_close (server);
+#endif
+}
+
+void test_stream_packet_async_eagain_detach_has_one_completion ()
+{
+#if defined(ZLINK_HAVE_WINDOWS)
+    TEST_IGNORE_MESSAGE ("raw tcp helper unavailable on Windows");
+#else
+    void *server = test_context_socket (ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (server);
+    configure_stream_socket (server);
+
+    stream_packet_async_probe_t probe (true);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_send_complete_handler (
+        server, &capture_stream_packet_async_completion, &probe));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_stream_packet_handler (
+        server, &stream_packet_async_submit_callback, &probe));
+
+    char endpoint[MAX_SOCKET_STRING];
+    memset (endpoint, 0, sizeof (endpoint));
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+    const int raw_fd = connect_raw_tcp (endpoint);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT (0, raw_fd);
+    set_raw_timeout (raw_fd, 100);
+
+    const unsigned char trigger[] = {0, 0, 0, 0, 0, 1, 0x42};
+    TEST_ASSERT_EQUAL_INT (0, send_all (raw_fd, trigger, sizeof (trigger)));
+    TEST_ASSERT_TRUE (wait_stream_packet_submit (&probe, 3000));
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, probe.submit_result);
+    TEST_ASSERT_NOT_EQUAL (0, probe.op_id);
+
+    close_raw_fd (raw_fd);
+    TEST_ASSERT_TRUE (wait_stream_packet_completion (&probe, 3000));
+    {
+        std::lock_guard<std::mutex> lock (probe.sync);
+        TEST_ASSERT_EQUAL_INT (1, probe.completion_count);
+        TEST_ASSERT_TRUE (probe.completion_result == ZLINK_SEND_ADMITTED
+                          || probe.completion_result == ZLINK_SEND_TERMINAL);
+        if (probe.completion_result == ZLINK_SEND_ADMITTED)
+            TEST_ASSERT_EQUAL_INT (0, probe.completion_errno);
+        else
+            TEST_ASSERT_TRUE (probe.completion_errno == ENOTCONN
+                              || probe.completion_errno == EHOSTUNREACH);
+    }
+    std::this_thread::sleep_for (std::chrono::milliseconds (100));
+    {
+        std::lock_guard<std::mutex> lock (probe.sync);
+        TEST_ASSERT_EQUAL_INT (1, probe.completion_count);
+    }
+
+    test_context_socket_close (server);
+#endif
+}
+
 int main ()
 {
     setup_test_environment ();
@@ -961,5 +1177,8 @@ int main ()
     RUN_TEST (test_stream_blocking_send_times_out_without_peer_reads);
     RUN_TEST (test_stream_nonblocking_send_preserves_message_for_retry);
     RUN_TEST (test_stream_part_nonblocking_backpressure_preserves_message);
+    RUN_TEST (test_stream_packet_async_immediate_admission_has_no_completion);
+    RUN_TEST (
+      test_stream_packet_async_eagain_detach_has_one_completion);
     return UNITY_END ();
 }

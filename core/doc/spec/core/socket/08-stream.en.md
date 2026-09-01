@@ -109,6 +109,14 @@ the same message. Other failures consume the contents. Preparing a copy of a
 payload that may need to be reused before the call lets caller code handle
 ownership uniformly regardless of the failure type.
 
+With multiple clients connected to a STREAM socket, `ZLINK_POLLOUT` is
+aggregate readiness for the socket; it neither reserves credit for a specific
+`target_rid_` nor identifies that routing ID in the event. The original target
+can therefore return `EAGAIN` again even after another writable client raised
+the event. To let Core own admission waiting for one target, use
+`zlink_send_async()` with that peer routing ID as its target and consume its
+completion notification.
+
 Routed sending of a zero-length part to a valid `target_rid_` requests
 termination of that peer connection instead of sending a byte record. Success
 also consumes this zero-length part.
