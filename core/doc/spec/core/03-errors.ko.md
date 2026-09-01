@@ -54,16 +54,23 @@ bindings 개발자다. 이 문서는 "공개 함수의 typed result와 thread-lo
 #define EALREADY        (ZLINK_HAUSNUMERO + 20)  // 중복 operation
 #endif
 #ifndef EDEADLK
-#define EDEADLK         (ZLINK_HAUSNUMERO + 21)  // reentrant callback
+#define EDEADLK         (ZLINK_HAUSNUMERO + 21)  // 금지한 재진입
 #endif
 #ifndef ESHUTDOWN
 #define ESHUTDOWN       (ZLINK_HAUSNUMERO + 22)  // 종료한 socket
 #endif
+#ifndef EPROTOTYPE
+#define EPROTOTYPE      (ZLINK_HAUSNUMERO + 23)  // peer socket type이 operation과 맞지 않음
+#endif
+#ifndef EOVERFLOW
+#define EOVERFLOW       (ZLINK_HAUSNUMERO + 24)  // completion ID sequence 소진
+#endif
 ```
 
 platform에 없는 POSIX errno는 `ZLINK_HAUSNUMERO` 기반 공개 값으로 정의한다. stale handle,
-중복 operation, reentrant callback과 종료한 socket을 표현하는 `ESTALE`, `EALREADY`, `EDEADLK`와
-`ESHUTDOWN`은 모든 지원 platform에서 위 값을 사용할 수 있다.
+중복 operation, 금지한 재진입, 종료한 socket, peer-type 거절과 sequence 소진을 표현하는
+`ESTALE`, `EALREADY`, `EDEADLK`, `ESHUTDOWN`, `EPROTOTYPE`과 `EOVERFLOW`는 모든 지원
+platform에서 위 값을 사용할 수 있다.
 
 같은 fallback 규칙이 다음 18개 POSIX errno에도 적용된다. platform이 해당 이름을 정의하지
 않으면 공개 header가 `ZLINK_HAUSNUMERO + 1`부터 `+ 18`까지의 값으로 정의한다 — 순서대로
@@ -155,11 +162,11 @@ typedef enum zlink_handler_result_t {
 } zlink_handler_result_t;
 ```
 
-`BUFFER_TOO_SMALL`은 caller가 제공한 batch가 첫 complete message를 담지 못하거나 raw SUB/XSUB의
-topic buffer capacity가 0 또는 필요한 길이보다 작은 경우다. raw subscription receive는 필요한 topic
+`BUFFER_TOO_SMALL`은 caller가 제공한 batch가 첫 complete message를 담지 못하거나 raw SUB/XSUB·
+XPUB의 topic buffer가 필요한 길이보다 작은 경우다. 길이 0 topic은 capacity 0과 NULL buffer로도
+성공한다. Topic receive는 필요한 topic
 길이를 반환하고 queue의 topic과 payload를 소비하지 않으므로 caller가 충분한 buffer로 재시도할 수 있다.
-`INVALID_STATE`는 stale handle 또는 종료한 receive state에 사용한다. Handler unregister나
-replace를 같은 callback에서 호출하면 `DEADLOCK`이다.
+`INVALID_STATE`는 stale handle 또는 종료한 receive state에 사용한다.
 
 ### 4.4 Close, bind와 connect result
 
@@ -332,13 +339,13 @@ transport·internal failure 순서로 하나를 반환한다. 성공한 함수�
 | `ZLINK_SUBMIT_BACKPRESSURED` | `EAGAIN`, `ETIMEDOUT`, `ENOBUFS` | socket queue 또는 reservation capacity 부족 |
 | `ZLINK_SUBMIT_NOT_CONNECTED` | `ENOTCONN`, `EHOSTUNREACH` | target connection 없음 |
 | `ZLINK_SUBMIT_NOT_FOUND` | `ENOENT` | raw target 없음 |
-| `ZLINK_SUBMIT_NOT_ADMITTED` | `EACCES`, `ECONNREFUSED` | handshake 또는 raw routing admission 거부 |
+| `ZLINK_SUBMIT_NOT_ADMITTED` | `EACCES`, `ECONNREFUSED`, `EPROTOTYPE` | handshake, raw routing admission 또는 peer socket type 거부 |
 | `ZLINK_SUBMIT_TERMINATED` | `ETERM`, `ESHUTDOWN` | Context 또는 socket lifecycle 종료 |
 | `ZLINK_SUBMIT_INVALID_HANDLE` | `EFAULT` | handle이 `NULL`이거나 종류가 다름 |
 | `ZLINK_SUBMIT_INVALID_ARGUMENT` | `EINVAL`, `EMSGSIZE` | 잘못된 pointer, count, metadata 또는 flags |
 | `ZLINK_SUBMIT_NOT_SUPPORTED` | `ENOTSUP` | handle에서 지원하지 않는 operation |
 | `ZLINK_SUBMIT_INVALID_STATE` | `EBUSY`, `ESTALE`, `EALREADY` | socket lifecycle 또는 request state 오류 |
-| `ZLINK_SUBMIT_THREAD_VIOLATION` | `EDEADLK`, `EPERM`, `EMTHREAD` | 금지한 callback 재진입 또는 thread 사용 |
+| `ZLINK_SUBMIT_THREAD_VIOLATION` | `EDEADLK`, `EPERM`, `EMTHREAD` | 금지한 재진입 또는 thread 사용 |
 | `ZLINK_SUBMIT_OUT_OF_MEMORY` | `ENOMEM` | 필요한 storage 확보 실패 |
 | `ZLINK_SUBMIT_SEQ_EXHAUSTED` | `EOVERFLOW` | operation sequence 공간 소진 |
 | `ZLINK_SUBMIT_INTERNAL_ERROR` | 보존된 errno | 다른 공개 분류가 없는 내부 실패 |
@@ -364,7 +371,8 @@ transport·internal failure 순서로 하나를 반환한다. 성공한 함수�
 | `ZLINK_REQUEST_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | operation 미지원 |
 | `ZLINK_REQUEST_BACKPRESSURED` | `EAGAIN`, `ENOBUFS` | non-blocking admission 또는 reservation 실패 |
 
-Request submit 성공 뒤에는 operation ID마다 terminal result를 정확히 한 번 reply callback으로 전달한다.
+Request submit 성공 뒤에는 nonzero completion ID마다 terminal result를 정확히 한 번
+`zlink_completion_recv()`로 전달한다.
 
 ### 4. Receive result
 
@@ -380,20 +388,20 @@ Request submit 성공 뒤에는 operation ID마다 terminal result를 정확히 
 | `ZLINK_RECV_BUFFER_TOO_SMALL` | `ENOBUFS` | caller output capacity 부족 |
 | `ZLINK_RECV_INVALID_STATE` | `EINVAL`, `ESTALE`, `ESHUTDOWN` | receive lifecycle state 오류 |
 
-Raw subscription의 `BUFFER_TOO_SMALL`에서는 필요한 topic 길이만 기록하고 queued topic·payload와 다른
-output을 변경하지 않는다.
+Raw subscription과 XPUB의 `BUFFER_TOO_SMALL`에서는 필요한 topic 길이만 기록하고 queued record와
+다른 output을 변경하지 않는다.
 
 ### 5. Handler와 close result
 
 | Result | errno | 의미 |
 |---|---|---|
-| `ZLINK_HANDLER_INVALID_ARGUMENT` | `EINVAL` | handler 또는 mask가 잘못됨 |
-| `ZLINK_HANDLER_BUSY` | `EBUSY` | 배타적인 receive model이 이미 등록됨 |
-| `ZLINK_HANDLER_NOT_SUPPORTED` | `ENOTSUP` | handle에서 handler를 지원하지 않음 |
-| `ZLINK_HANDLER_DEADLOCK` | `EDEADLK` | 같은 callback 안의 금지한 등록·해제 |
+| `ZLINK_HANDLER_INVALID_ARGUMENT` | `EINVAL` | handler 인자가 잘못됨 |
+| `ZLINK_HANDLER_BUSY` | `EBUSY` | 배타적인 handler 상태가 이미 존재함 |
+| `ZLINK_HANDLER_NOT_SUPPORTED` | `ENOTSUP` | handle에서 handler operation을 지원하지 않음 |
+| `ZLINK_HANDLER_DEADLOCK` | `EDEADLK` | 금지한 handler 재진입 |
 | `ZLINK_HANDLER_INVALID_HANDLE` | `EFAULT` | handle이 유효하지 않음 |
 | `ZLINK_HANDLER_INTERNAL_ERROR` | 보존된 errno | 다른 공개 분류가 없는 내부 실패 |
-| `ZLINK_CLOSE_BUSY` | `EBUSY`, `EDEADLK` | active child·callback·API가 존재하거나 같은 handle close가 재진입함 |
+| `ZLINK_CLOSE_BUSY` | `EBUSY`, `EDEADLK` | active child·API가 존재하거나 같은 handle close가 재진입함 |
 | `ZLINK_CLOSE_SHUTDOWN` | `ESHUTDOWN` | 이미 종료된 handle |
 | `ZLINK_CLOSE_INVALID_HANDLE` | `EFAULT`, `ESTALE` | pointer 또는 opaque value가 유효하지 않음 |
 | `ZLINK_CLOSE_INTERNAL_ERROR` | 보존된 errno | 다른 공개 분류가 없는 내부 실패 |
@@ -443,18 +451,19 @@ output을 변경하지 않는다.
 - 공개 C API는 실패를 **함수 범주별 8개 typed result enum**으로 정규화한다. 정확한 enum은
   함수 범주에 따라 달라진다.
   - `zlink_submit_result_t` — send / publish / request submit / reply submit
-  - `zlink_request_result_t` — request completion (callback)
+  - `zlink_request_result_t` — request completion record
   - `zlink_recv_result_t` — recv / subscribe / monitor recv / timer recv
-  - `zlink_handler_result_t` — handler 등록
+  - `zlink_handler_result_t` — handler operation
   - `zlink_close_result_t` — close / destroy
   - `zlink_bind_result_t` — bind
   - `zlink_connect_result_t` — connect / disconnect / unbind
   - `zlink_config_result_t` — option set/get, snapshot, poller mutation,
     message lifecycle, timer config
-- 0이 아닌 result enum 값은 family별 번호 대역(1-13, 101-113, 201-208, 301-306, 401-404, 501-505, 601-608, 701-709)을 사용해 서로 겹치지 않으므로, 0이 아닌 `int` 값만으로도 항상
+- 0이 아닌 result enum 값은 family별 번호 대역(1-13, 101-113, 201-208, 301-306, 401-404, 501-505,
+  601-608, 701-709)을 사용해 서로 겹치지 않으므로, 0이 아닌 `int` 값만으로도 항상
   출처를 명확히 식별할 수 있다.
 - 정식 enum 목록은 위의 [Result와 errno 대응](#result와-errno-대응) 절을 참조한다.
-- Request reply callback은 내부 errno를 `from_errno` 정규화를 거쳐 `zlink_request_result_t`로 전달하며, 이 completion channel은 계약상
+- Request completion queue는 내부 errno를 `from_errno` 정규화를 거쳐 `zlink_request_result_t`로 전달하며, 이 completion channel은 계약상
   `zlink_request_result_t`로 정규화되어 있다.
 
 코드는 세 파일을 중심으로 구성된다.
@@ -505,7 +514,7 @@ INVALID_ARGUMENT, INVALID_STATE, NOT_SUPPORTED, BACKPRESSURED)을 사용한다.
 
 정규화 helper는
 [core/src/api/message/request_result_internal.hpp](https://github.com/zlink-systems/zlink/blob/main/core/src/api/message/request_result_internal.hpp)에
-있다. 이 helper는 callback completion errno 값을 공개 completion result 계약으로 대응시킨다.
+있다. 이 helper는 completion errno 값을 공개 completion result 계약으로 대응시킨다.
 
 ### Binding 표면
 
@@ -523,7 +532,7 @@ Hierarchy)를, 전체 enum 목록은 위의 [Result와 errno 대응](#result와-
 
 ## 구현 및 contract test 검증 요구
 
-공개 표면(각 공개 함수의 result 반환값, reply callback의 completion result, `zlink_errno()`,
+공개 표면(각 공개 함수의 result 반환값, `zlink_completion_recv()`의 completion result, `zlink_errno()`,
 `zlink_strerror()`, `zlink_version()`)만으로 다음을 확인한다. 각 항목은 unit test 하나로
 이어진다.
 
@@ -535,16 +544,25 @@ Hierarchy)를, 전체 enum 목록은 위의 [Result와 errno 대응](#result와-
 - `zlink_errno()`는 호출 thread의 값만 반환한다 — 다른 thread에서 실패한 호출이 이 thread의 `zlink_errno()` 값을 바꾸지 않는다.
 
 **확장 errno 상수**
-- platform에 POSIX 정의가 없어도 `ESTALE`, `EALREADY`, `EDEADLK`와 `ESHUTDOWN`은 모든 지원 platform에서 [§3](#3-확장-errno-상수)의 `ZLINK_HAUSNUMERO` 기반 공개 값으로 관찰된다.
+- platform에 POSIX 정의가 없어도 `ESTALE`, `EALREADY`, `EDEADLK`, `ESHUTDOWN`, `EPROTOTYPE`과
+  `EOVERFLOW`는 모든 지원 platform에서 [§3](#3-확장-errno-상수)의 `ZLINK_HAUSNUMERO` 기반 공개
+  값으로 관찰된다.
 
 **Submit과 request completion**
-- Handshake가 완료되지 않은 peer를 향한 submit은 `ZLINK_SUBMIT_NOT_ADMITTED`다.
-- Request submit이 성공하면 operation ID마다 terminal result(`zlink_request_result_t`)가 정확히 한 번 reply callback으로 전달된다.
-- Peer가 유효한 error reply의 첫 4 byte part로 [Request completion result](#3-request-completion-result)의 errno를 보내면 `zlink_reply_handler_fn`은 같은 행의 `zlink_request_result_t`를 받고, 표에 없는 nonzero errno를 보내면 `ZLINK_REQUEST_INTERNAL_ERROR`를 받는다.
+- ROUTER가 DEALER RID로 typed request를 보내면 `ZLINK_SUBMIT_NOT_ADMITTED`와
+  `EPROTOTYPE`이다.
+- Completion ID sequence가 소진되면 submit은 `ZLINK_SUBMIT_SEQ_EXHAUSTED`와 `EOVERFLOW`,
+  ID `0`을 반환한다.
+- Request submit이 성공하면 nonzero ID마다 terminal result(`zlink_request_result_t`)가 정확히 한 번
+  REQUEST completion으로 전달된다.
+- Peer가 유효한 error reply의 첫 4 byte part로 [Request completion result](#3-request-completion-result)의
+  errno를 보내면 `zlink_completion_recv()`는 같은 행의 `zlink_request_result_t`를 받고, 표에 없는
+  nonzero errno이면 `ZLINK_REQUEST_INTERNAL_ERROR`를 받는다.
 
-**Receive와 handler**
-- Raw subscription receive에서 topic buffer capacity가 0이거나 필요한 길이보다 작으면 `ZLINK_RECV_BUFFER_TOO_SMALL`이며, 필요한 topic 길이만 기록하고 queued topic·payload와 다른 output은 변경하지 않는다 — caller가 충분한 buffer로 재시도할 수 있다.
-- Handler unregister나 replace를 같은 callback 안에서 호출하면 `ZLINK_HANDLER_DEADLOCK`(`EDEADLK`)이다.
+**Receive**
+- SUB·XPUB receive에서 topic buffer가 필요한 길이보다 작으면
+  `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`이며 필요한 길이만 기록하고 queued record와 다른 output은
+  변경하지 않는다. 길이 0 topic은 capacity 0·NULL buffer로 성공한다.
 
 **Receive flow state**
 - `zlink_socket_set_receive_flow_state()`는 [§4.6](#46-receive-flow-state-설정-결과)의 각 조건에서 그 행의 result와 errno를 반환한다.

@@ -45,7 +45,7 @@ request에 넘기면 수신 application은 같은 part 수, 순서와 byte를 �
 
 전용 request·reply API는 Core가 소비하는 첫 application message에 내부 metadata를 붙인다.
 Encoder는 이를 wire header로 옮기고 decoder는 다시 message 내부 값으로 복원한다. Socket
-runtime은 request 대상이나 pending completion을 찾은 뒤 public receive와 callback에 payload를
+runtime은 request 대상이나 pending completion을 찾은 뒤 public receive와 completion queue에 payload를
 넘기기 전에 metadata를 제거한다.
 
 - **Public message API는 request-reply kind나 sequence를 만들거나 읽지 않는다.** Application은
@@ -157,7 +157,7 @@ DEALER 또는 ROUTER일 때만 `Routing-Id`도 추가한다. Metadata를 사용�
 `Zlink-Max-Message-Size`를 항상 추가하며, 값은 unsigned 64-bit big-endian 8 byte다. 값 `0`은
 양수 Application maximum이 없음을 뜻한다.
 이 option의 기본값은 비활성화다. 다만 paired DEALER·ROUTER transport는 이 option과
-관계없이 metadata와 [§4.1](#41-request-reply-transport-pair)의 pair property를 항상
+관계없이 metadata와 [§4.1](#41-request-reply-lane)의 lane property를 항상
 추가한다.
 
 **ERROR frame**: ERROR control type은 `0x05`다. Body는 다음 byte 순서로 구성한다.
@@ -166,7 +166,7 @@ DEALER 또는 ROUTER일 때만 `Routing-Id`도 추가한다. Metadata를 사용�
 [type:0x05][error code:u8][reason length:u8][reason bytes]
 ```
 
-### 4.1 Request-reply transport pair
+### 4.1 Request-reply lane
 
 Request-reply를 사용하는 하나의 logical DEALER/ROUTER peer는 두 physical transport
 connection을 사용한다.
@@ -176,11 +176,10 @@ connection을 사용한다.
 | Application | 일반 application message와 request |
 | Completion | 이미 보낸 request를 완료하는 reply와 receive-flow control |
 
-두 connection의 READY frame에는 `Zlink-Pair-Id`, `Zlink-Pair-Generation`,
-`Zlink-Lane`이 들어간다. Pair ID와 generation은 unsigned 64-bit big-endian 값이다.
-Lane은 한 byte이며 Application은 `0`, Completion은 `1`이다. 세 property는 항상
-함께 있어야 한다. 두 connection의 pair ID, generation과 peer routing identity가
-모두 일치해야 한다.
+두 connection의 READY frame에는 `Zlink-Lane`이 들어간다. 값은 한 byte이며 Application은
+`0`, Completion은 `1`이다. 물리 connection ID와 generation은 wire property나 public target이
+아니다. `Zlink-Lane`은 application traffic과 completion traffic을 구분하는 내부 protocol
+property다.
 
 READY의 `Routing-Id`는 두 connection이 같은 peer에 속하는지 검증하는 metadata다. Runtime은
 ROUTER가 peer를 선택하는 synthetic routing-id preamble을 Application lane에만 제공한다.
@@ -211,9 +210,9 @@ public receive에도 나타나지 않는다.
 금지된 flag 조합과 독립 상한을 넘은 CONTROL body는 계속 구조적인 protocol 오류다.
 
 Bind나 connect 전에 설정한 weight는 paired Application pipe가 준비된 뒤에만 상대 scheduler와
-동기화한다. Dynamic 변경도 양방향에서 `0`을 포함한 새 절대값을 적용한다. 같은 pair에 마지막으로
-알린 값과 같으면 command를 다시 만들지 않는다. Reconnect 뒤 새 paired generation의 Application
-pipe가 pair-ready가 되면 현재 설정값을 그 pipe로 다시 알린다.
+동기화한다. Dynamic 변경도 양방향에서 `0`을 포함한 새 절대값을 적용한다. 같은 pipe에 마지막으로
+알린 값과 같으면 command를 다시 만들지 않는다. Reconnect 뒤 새 Application pipe가 ready가 되면
+현재 설정값을 그 pipe로 다시 알린다.
 
 Network `WEIGHT` command는 application HWM과 remote PAUSE를 우회할 수 있다. 그러나 pair-ready
 hold와 한 Application multipart의 part 사이에 다른 record를 넣지 않는 atomic 경계는 우회하지
@@ -221,11 +220,10 @@ hold와 한 Application multipart의 part 사이에 다른 record를 넣지 않�
 상태로 보관한다. FINAL이 multipart를 commit하거나 rollback이 multipart를 제거한 뒤, 그 결과로
 생긴 다음 message 경계에서만 가장 최근 command를 append하고 publish한다.
 
-Application write는 두 lane의 검증이 끝날 때까지 대기한다. 이전 generation에서
-수신한 data를 새 pair에 연결하지 않는다. 한 lane에서 protocol error, identity
-mismatch, fence timeout 또는 terminal failure가 발생하면 pair 전체를 종료한다.
-Reconnect는 새 generation을 만들고 두 lane을 다시 검증한 뒤 Application write를
-재개한다.
+Application write는 두 lane의 검증이 끝날 때까지 대기한다. 이전 connection에서 수신한 data를
+새 connection에 연결하지 않는다. 한 lane에서 protocol error, identity mismatch, fence timeout
+또는 terminal failure가 발생하면 두 lane을 종료한다. Reconnect는 두 lane을 다시 검증한 뒤
+Application write를 재개한다.
 
 FIFO 순서는 각 lane 안에서만 보장한다. 두 lane 사이의 순서는 보장하지 않는다.
 Application ingress가 수신 처리가 밀려 추가 제출을 제한하는
@@ -241,9 +239,9 @@ connection 사이의 순서에 의존하지 않고 자체 generation fence를 �
 | Kind | 값 | Sequence | Application에서 관찰하는 결과 |
 |---|---:|---|---|
 | data | `0x00` | 없음 | Payload를 ordinary message로 받는다. |
-| request | `0x01` | 0이 아닌 8 byte Big Endian 값 | Typed receive가 payload와 reply에 사용할 sequence 또는 local token을 반환한다. |
-| reply | `0x02` | 원래 request와 같은 값 | Completion progress lane이 해당 pending request를 payload로 완료한다. |
-| error reply | `0x03` | 원래 request와 같은 값 | Completion progress lane이 첫 payload part의 errno를 오류 completion으로 바꾼다. |
+| request | `0x01` | 0이 아닌 8 byte Big Endian 값 | ROUTER receive가 payload와 public reply token을 반환한다. Wire 값은 public token이 아니다. |
+| reply | `0x02` | 원래 request와 같은 값 | Completion lane이 해당 pending request의 REQUEST completion을 만든다. |
+| error reply | `0x03` | 원래 request와 같은 값 | Completion lane이 첫 payload part의 errno를 오류 completion으로 바꾼다. |
 
 Multipart request-reply는 첫 application frame에만 request-reply kind와 sequence를
 기록한다. 첫 frame의 `MORE`가 설정되면 둘째 frame부터 `KIND == 0x00`이고, 마지막
@@ -258,11 +256,11 @@ application frame에서 `MORE`가 해제된다.
 `request_sequence == 0`은 유효하지 않다. Reply는 request에서 받은 wire sequence를
 그대로 사용한다. Error reply는 receive-only kind이며 public sender는 없다. 첫
 application payload part는 0이 아닌 errno를 4 byte Big Endian 값으로 담는다. Core C
-completion callback은 errno를 `zlink_request_result_t`로 매핑하고 이 첫 part를 제외한 나머지
-part를 callback payload로 받는다. 상위 language binding의 error 변환과 payload 처리는
+completion은 errno를 `zlink_request_result_t`로 매핑하고 이 첫 part를 제외한 나머지 part를
+`zlink_completion_t.reply_parts`로 받는다. 상위 language binding의 error 변환과 payload 처리는
 [Binding 스펙](../../../../../bindings/doc/spec/README.ko.md#request-reply-오류-정책)이 소유한다.
 첫 part가 없거나 크기가 4 byte가 아니거나 값이 `0`이면
-result는 `ZLINK_REQUEST_PROTOCOL_ERROR`이고 callback payload part 수는 `0`이다.
+result는 `ZLINK_REQUEST_PROTOCOL_ERROR`이고 completion payload part 수는 `0`이다.
 
 ### 5.1 Request-reply sequence (DEALER → ROUTER)
 
@@ -271,21 +269,23 @@ sequenceDiagram
     participant D as DEALER
     participant R as ROUTER
 
-    D->>D: request_seq=N 할당
+    D->>D: internal request sequence N 할당
     D->>D: 첫 payload에 request kind와 sequence N 연결
     D->>R: [REQUEST + sequence N][application payload]
-    R->>R: header metadata 복원 → (source_node_rid, request_seq=N, payload)
+    R->>R: header metadata 복원 → source RID와 internal sequence N
+    R->>R: socket-local opaque reply token 발급
     R->>R: public 전달 전에 metadata 제거
-    R->>R: router_handler로 dispatch
+    R-->>R: router_recv_part로 RID·reply token·payload 공개
+    R->>R: reply token으로 internal sequence N 조회
     R->>R: 첫 reply payload에 reply kind와 sequence N 연결
     R->>R: routing_id로 Completion pipe 선택 (local key)
     R->>D: [REPLY + sequence N][application reply payload]
-    D->>D: pending[seq=N] 매칭 → reply_handler 호출
+    D->>D: pending[seq=N] 매칭 → REQUEST completion enqueue
 ```
 
 이 diagram에서 wire에 나타나는 header 배치는 위 kind와 sequence 규칙이 계약이다. `routing_id`는
 reply wire part가 아니라 ROUTER가 대상 Completion pipe를 고르는 local 선택 key다.
-Pending 매칭과 handler dispatch는 [§9 내부 구조](#9-내부-구조)의 구현 서술이다.
+Pending 매칭과 completion enqueue는 [§9 내부 구조](#9-내부-구조)의 구현 서술이다.
 
 ## 6. Transport routing_id와의 관계
 
@@ -293,7 +293,7 @@ transport `routing_id`와 request-reply 주소는 같은 값이 아니다.
 
 - transport `routing_id`: 현재 연결된 peer를 선택하는 ROUTER local key이며 reply wire에는
   포함되지 않는 주소
-- `request_seq`: request와 reply를 묶는 식별자
+- wire request sequence: Core가 request와 reply를 묶는 내부 correlation 값
 
 둘을 섞으면 reply 주소를 잘못 계산하게 된다.
 문서와 구현 모두 이를 다른 계층으로 설명해야 한다.
@@ -323,13 +323,13 @@ Body 크기 검증은 Application frame과 CONTROL frame을 구분한다.
    최대값이 body보다 작아도 기존 READY·FLOWSTATE와 고정 10 byte WEIGHT가 계속 동작한다.
 
 각 part가 제한 안이어도 non-special Application multipart의 누적 body가 제한을 넘으면 그
-record는 `BODY_TOO_LARGE`(`0x04`)로 실패하며 payload를 handler나 public receive에 전달하지
+record는 `BODY_TOO_LARGE`(`0x04`)로 실패하며 payload를 application queue나 public receive에 전달하지
 않는다. 4097 byte로 선언한 CONTROL body도 `BODY_TOO_LARGE`(`0x04`)로 실패한다. 이는 control용
 무제한 allocation 경로가 아니라 protocol 거부이며, body를 Application receive에 전달하지 않는다.
 WEIGHT가 §4에서 정의한 더 좁은 consume-and-ignore 규칙처럼 control type별 실패 경계를 둘 수
 있지만 구조적 header 검증과 4096 byte 상한은 약화하지 않는다.
 
-검증 실패는 `EPROTO`로 pair를 종료하고 해당 frame을 handler나 reply completion에 전달하지
+검증 실패는 `EPROTO`로 connection을 종료하고 해당 frame을 application queue나 completion에 전달하지
 않는다. 이 frame 자체가 pending request를 완료하지 않으며, pair 종료로 기존 pending request가
 disconnect 결과를 받는 규칙은 유지한다.
 
@@ -384,10 +384,9 @@ message에 metadata를 복원한 뒤 socket runtime이 다음처럼 처리한다
 2. Completion progress lane의 reply와 error reply는 sequence로 pending request를 찾는다.
 3. 필요한 값을 runtime state로 옮긴 뒤 public payload를 내보내기 전에 metadata를 제거한다.
 
-Reply payload는 Completion pipe에서 등록 callback으로 바로 이동한다. 숨은 PAIR
-receive queue나 두 번째 completion payload deque에 보관하지 않는다. Timeout,
-shutdown과 같은 terminal callback에는 payload가 없는 작은 callback metadata queue만
-유지한다. 이 queue는 transport lane이나 wire record가 아니다.
+Reply payload는 Completion pipe에서 socket-local completion ready queue로 이동한다. Enqueue 전에
+public `zlink_msg_t[]` storage를 확보하며, `zlink_completion_recv()`는 그 ownership을 caller에게
+옮긴다. Timeout과 payload 없는 terminal 결과도 같은 tagged queue에 들어간다.
 
 ### Peer-weight control
 
@@ -405,7 +404,7 @@ pending slot은 값을 소유하지 않는다.
 4. 같은 pipe가 ready 상태가 되고 선택 가능한 route로 attach되면 scheduler가 기록값을 읽어
    적용한다.
 5. 실제 적용값이 바뀌면 `PEER_WEIGHT_CHANGED`를 만든다. Event의 `value`는 새 weight이고 lane은
-   Application이며 pair ID와 generation은 값을 적용한 pipe를 식별한다.
+   Application이며 `connection_id`는 값을 적용한 pipe의 물리 connection을 식별한다.
 
 Pipe 종료나 connection ID 불일치는 바로 그 exact pipe의 stale command만 폐기한다. Duplicate
 standby로 남은 pipe는 자기 최신 값을 유지하므로 나중에 같은 pipe가 선택되면 그 값을 적용한다.
@@ -414,29 +413,24 @@ standby로 남은 pipe는 자기 최신 값을 유지하므로 나중에 같은 
 ### Pending과 reply-target key
 
 pending(응답 대기 항목) 소유권은 상위 API 계층에 있다. Outbound request의 pending map은
-socket이 발급한 `request_seq`로 항목을 찾고, 별도 local cookie로 sequence 재사용을 fence한다.
-Completion frame을 적용할 때는 frame을 받은 transport pair ID와 generation도 등록 당시 값과
-같아야 한다.
+socket이 발급한 internal wire sequence로 항목을 찾고, public completion ID와 별도로 관리한다.
+Reply와 timeout resolver 중 pending correlation을 먼저 제거한 하나만 REQUEST completion을
+enqueue하며 late loser는 버린다.
 
 Inbound request의 reply target은 public receive 역할에 따라 다르게 보관한다.
 
-- `DEALER`: socket-local reply token → source pipe와 wire `request_seq`
-- `ROUTER`: source routing ID와 wire `request_seq` → request를 전달한 source pipe
+- `ROUTER`: socket-local public reply token → source logical RID와 wire sequence
 
 완료 규칙(첫 reply 완료, timeout, 중복 reply 무시, error reply 전달)은
 [§10 검증 요구](#10-구현-및-contract-test-검증-요구)가 소유한다.
 
 ### Pending request 수용 한도
 
-Core는 outbound request를 wire에 공개하기 전에 선택한 physical transport pair에 그 request의
-lifecycle charge를 예약한다. 성공한 request의 charge는 reply, timeout, disconnect 또는 socket
-close가 request를 끝낼 때까지 유지한다. Send rollback과 각 terminal path는 자신이 소유한
-charge를 정확히 한 번 반환한다. Pair 교체나 reconnect로 만든 새 generation은 이전 generation의
-charge를 상속하지 않는다.
-
-Charge 계산과 한도는 [Auto HWM의 Pending request 수용](../systems/06-auto-hwm.ko.md#pending-request-수용)이
-소유한다. 이 logical charge는 correlation lifecycle을 제한하며, Core가 request payload를 그 기간
-동안 보관하거나 physical queue HWM 회계를 연장한다는 뜻이 아니다.
+Core는 outbound request를 wire에 공개하기 전에 socket당 65,536개인 SEND·REQUEST 공유
+completion slot과 nonzero completion ID를 예약한다. Slot은 public completion receive가 record를
+queue에서 제거할 때까지 유지한다. DONTWAIT request가 admission 전에 payload를 보관하면
+`ZLINK_OPT_PENDING_MAX_MSGS/BYTES`의 SEND·REQUEST 공유 pool도 사용한다. Admission 뒤에는 request
+payload를 replay용으로 보관하지 않으며 reply timeout과 correlation만 유지한다.
 
 ### WebSocket 구현
 
@@ -453,8 +447,9 @@ traffic을 기다리지 않으며, ZMP frame byte·순서와 application multipa
 
 ## 10. 구현 및 contract test 검증 요구
 
-다른 구현과의 상호운용은 wire에서 관찰하는 byte로, request-reply 완료는 공개 API의
-callback 결과로 확인한다. 각 항목은 test 하나로 이어진다.
+다른 구현과의 상호운용은 wire에서 관찰하는 byte로, request-reply 완료는 공개
+`zlink_router_recv_part`·`zlink_reply_part`·`zlink_completion_recv` 결과로 확인한다. 각 항목은
+test 하나로 이어진다.
 
 **Frame header와 flags**
 - Ordinary data를 보내면 wire에서 MAGIC `0x5A`, VERSION `0x01`, KIND `0x00`, 32-bit Big Endian application payload size를 담은 8 byte header가 관찰된다.
@@ -467,15 +462,17 @@ callback 결과로 확인한다. 각 항목은 test 하나로 이어진다.
 - Paired passive 쪽은 자기 READY의 transport write가 완료되기 전에 local readiness나 pair admission을 공개하지 않는다. Write가 실패하면 readiness 없이 handshake가 실패한다.
 - READY control type `0x04` 뒤의 각 metadata property는 `[name length:u8][name bytes][value length:u32 BE][value bytes]` 배치를 따른다.
 - `ZLINK_OPT_ZMP_METADATA`가 기본값(비활성)이면 metadata property가 없고, 활성화하면 `Socket-Type`과 8 byte big-endian `Zlink-Max-Message-Size`가 추가된다. `Routing-Id`는 DEALER·ROUTER READY에만 추가된다.
-- paired DEALER·ROUTER transport의 READY에는 이 option과 관계없이 `Socket-Type`·`Routing-Id` metadata와 pair property가 항상 있다.
+- paired DEALER·ROUTER transport의 READY에는 이 option과 관계없이 `Socket-Type`·`Routing-Id`와
+  `Zlink-Lane` metadata가 항상 있다.
 - ERROR control type은 `0x05`이며 body는 `[type][error code:u8][reason length:u8][reason bytes]` 배치를 따른다.
 
-**Transport pair**
-- 두 connection의 READY에 `Zlink-Pair-Id`(unsigned 64-bit big-endian), `Zlink-Pair-Generation`(unsigned 64-bit big-endian), `Zlink-Lane`(1 byte, Application `0` / Completion `1`) 세 property가 항상 함께 나타난다.
+**Request-reply lane**
+- 두 connection의 READY에 `Zlink-Lane`이 1 byte로 나타나며 Application은 `0`, Completion은
+  `1`이다.
 - Application write는 두 lane의 검증이 끝난 뒤에 전달된다.
-- 이전 generation에서 수신한 data는 새 pair에 연결되지 않는다.
+- 이전 connection에서 수신한 data는 새 connection에 연결되지 않는다.
 - 한 lane에서 protocol error, identity mismatch, fence timeout 또는 terminal failure가 발생하면 pair 전체가 종료된다.
-- reconnect하면 새 generation이 만들어지고, 두 lane을 다시 검증한 뒤 Application write가 재개된다.
+- reconnect하면 두 lane을 다시 검증한 뒤 Application write가 재개된다.
 - FIFO 순서는 각 lane 안에서만 관찰되며, 두 lane 사이의 순서는 보장되지 않는다.
 - Application ingress가 backpressure로 중단된 동안에도 Completion reply가 처리된다.
 - Network peer-weight advertisement는 `CONTROL`, `KIND == 0x00`, payload size `10`인
@@ -485,8 +482,8 @@ callback 결과로 확인한다. 각 항목은 test 하나로 이어진다.
 - `ZLINK_OPT_MAXMSGSIZE=0`은 Application part와 non-special multipart 합에 option 상한을
   적용하지 않는다. Wire의 32-bit payload-size 범위와 CONTROL 4096 byte 상한은 그대로 적용한다.
 - Non-special Application multipart는 각 part와 모든 part body 합이 `ZLINK_OPT_MAXMSGSIZE` 안일
-  때만 전달된다. 누적 body가 제한을 넘으면 `BODY_TOO_LARGE`(`0x04`)로 pair가 종료되고 handler나
-  public receive에 payload가 나타나지 않는다.
+  때만 전달된다. 누적 body가 제한을 넘으면 `BODY_TOO_LARGE`(`0x04`)로 pair가 종료되고
+  application queue나 public receive에 payload가 나타나지 않는다.
 - 4096 byte CONTROL은 type별 검증 단계에 도달하고, 4097 byte로 선언한 CONTROL은
   `BODY_TOO_LARGE`(`0x04`)로 거부하며 Application record를 만들지 않는다.
 - WEIGHT로 식별했지만 크기가 10이 아니거나 값이 `10000`보다 크면 pair를 끊거나 scheduler
@@ -501,26 +498,29 @@ callback 결과로 확인한다. 각 항목은 test 하나로 이어진다.
 - Network와 inproc pair에서 bind·connect 전에 설정한 양쪽 weight는 paired Application pipe가
   ready 된 뒤 상대 scheduler에 정확한 값으로 적용되며, `0`도 값으로 적용된다.
 - Network와 inproc pair가 ready 된 뒤 양쪽 peer weight를 동적으로 바꾸면
-  `PEER_WEIGHT_CHANGED`가 새 값과 해당 Application lane의 pair ID·generation을 제공하고,
+  `PEER_WEIGHT_CHANGED`가 새 값과 해당 Application lane의 `connection_id`를 제공하고,
   public receive와 Completion pipe에는 weight record가 나타나지 않는다.
 - 같은 값을 다시 설정하면 peer scheduling state와 monitor event가 중복 변경되지 않는다.
-- Reconnect 뒤 public peer 선택과 monitor는 새 generation의 현재 weight를 반영한다. Active
+- Reconnect 뒤 public peer 선택과 monitor는 새 connection의 현재 weight를 반영한다. Active
   standby를 승격하면 그 standby가 마지막으로 받은 값을 사용한다.
 
 **Request-reply와 decode 검증**
 - Ordinary send와 request에 같은 multipart를 넘기면 수신 application은 같은 part 수, 순서와 byte를 관찰한다.
 - Protocol id, version, message type과 sequence 모양의 네 payload part를 ordinary send로 보내도 전체 payload가 그대로 전달되고 request completion을 만들지 않는다.
-- reply의 `request_seq`는 request에서 받은 값과 같다.
+- reply의 wire sequence는 request에서 받은 wire sequence와 같다. Public reply token 값과 같다는
+  보장은 없다.
 - ROUTER가 reply 대상을 고르는 `routing_id`는 local 선택 key이며 reply wire part가 아니다.
 - `error reply`의 첫 payload part는 4 byte Big Endian errno다.
-- 알 수 없는 kind, `request_seq == 0`, request-reply kind와 special flag의 조합, multipart 중간 kind 또는 special frame을 수신하면 `EPROTO`로 pair를 종료하고 payload를 handler나 completion에 전달하지 않는다.
+- 알 수 없는 kind, wire sequence `0`, request-reply kind와 special flag의 조합, multipart 중간
+  kind 또는 special frame을 수신하면 `EPROTO`로 connection을 종료하고 payload를 public receive나
+  completion에 전달하지 않는다.
 - Base header, sequence extension 또는 payload를 끝내지 않고 stream을 닫으면 `EPROTO`이며 application receive나 completion에 부분 payload를 전달하지 않고 connection을 종료한다.
 
 **완료**
 - 첫 reply 1건으로 high-level request가 완료된다.
-- 완료 후 같은 key로 추가 reply가 와도 다시 callback하지 않는다.
-- reply보다 timeout이 먼저 오면 callback은 `ZLINK_REQUEST_TIMED_OUT`을 받는다.
-- 유효한 `error reply`는 Core C callback에 매핑된 non-OK `zlink_request_result_t`와 errno part를
+- 완료 후 같은 wire sequence로 추가 reply가 와도 completion을 다시 만들지 않는다.
+- reply보다 timeout이 먼저 오면 REQUEST completion은 `ZLINK_REQUEST_TIMED_OUT`이다.
+- 유효한 `error reply`는 Core C completion에 매핑된 non-OK `zlink_request_result_t`와 errno part를
   제외한 나머지 payload로 전달된다.
 
 **Transport와 frame 수**

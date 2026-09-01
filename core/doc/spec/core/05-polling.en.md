@@ -59,8 +59,8 @@ for the socket. The event does not identify which routing ID or transport pair
 became writable and can be raised because another peer has capacity. Therefore,
 after a nonblocking submit to one target reports backpressure, observing
 `ZLINK_POLLOUT` does not guarantee that the next submit to that target succeeds.
-Use `zlink_send_async` and its completion notification for operation-specific
-admission waiting.
+Use the part-send completion ID and `zlink_completion_recv()` to distinguish
+operation-specific admission results.
 
 `ZLINK_POLLITEMS_DFLT` is the recommended initial item count for internal and
 application stack buffers; it is not a readiness bit. `ZLINK_HAVE_POLLER == 1`
@@ -68,39 +68,42 @@ means that this public poller API is included in the build.
 
 ## 4. Completion polling
 
-`ZLINK_POLLCOMPLETION` can be used when registering a raw `PAIR`, `DEALER`,
-`ROUTER`, or `STREAM` that owns a completion channel through `zlink_poller_add()`.
-`DEALER` and `ROUTER` use reply completion; sockets that support asynchronous
-send, including `PAIR` and `STREAM`, use a send completion channel.
-It can be registered alone or OR-ed with `ZLINK_POLLIN` and `ZLINK_POLLOUT`.
-This combination lets one poller own receive, send, and completion progress for
-the same socket.
+`ZLINK_POLLCOMPLETION` is level-triggered readiness indicating that a PAIR,
+DEALER, ROUTER, or STREAM socket-local completion queue contains at least one
+record and the next `zlink_completion_recv()` can succeed. It can be registered
+alone or OR-ed with `ZLINK_POLLIN` and `ZLINK_POLLOUT`. Readiness remains set
+while records remain in the queue.
 
-A request completion signal is not a public receive record. When
-`zlink_poller_wait()` observes the signal, it receives the reply payload from the
-paired Completion transport and dispatches the registered reply callback on the
-thread executing that wait call. Even if only a completion signal was processed,
-the poller writes a public event with the `ZLINK_POLLCOMPLETION` bit to the event
-array and includes that event in the returned count. Therefore, a wait that
-processes a completion does not return `0` for that reason. The `recv_part`
-families do not drain this completion.
+`zlink_poller_wait()` does not remove completions or invoke callbacks. The event
+array does not contain operation payloads, and its capacity is unrelated to the
+number of completions. For each ready socket, the caller repeatedly invokes
+`zlink_completion_recv(..., ZLINK_RECV_FLAGS_DONTWAIT)` until it receives
+`ZLINK_RECV_NO_DATA`. Add, modify, and remove do not consume the queue.
 
 ```mermaid
 sequenceDiagram
     participant App as Application
     participant P as Poller
-    participant CT as paired Completion transport
+    participant S as Socket completion queue
     App->>P: Call zlink_poller_wait()
-    Note over P: Observe completion signal
-    P->>CT: Receive reply payload
-    P->>App: Dispatch registered reply callback on wait-call thread
-    P-->>App: Return POLLCOMPLETION event + count
-    Note over App: Continue after checking callback result and event bit
+    P-->>App: Return POLLCOMPLETION readiness
+    loop Until NO_DATA
+        App->>S: zlink_completion_recv(DONTWAIT)
+        S-->>App: One SEND or REQUEST completion
+    end
 ```
 
-Using `ZLINK_POLLCOMPLETION` with another source, in a `zlink_poll()` item, or in
-`zlink_poller_modify()` returns `ZLINK_CONFIG_INVALID_ARGUMENT` with
-`errno == EINVAL`.
+`zlink_poller_add()` and `zlink_poller_modify()` can add or remove the completion
+bit for a supported socket. Using the bit with another source or in a
+`zlink_poll()` item returns `ZLINK_CONFIG_INVALID_ARGUMENT` with `errno == EINVAL`.
+
+At most one poller registration owns a socket's completion bit. If another poller
+already owns it, adding the socket or adding the bit through modify fails with
+`ZLINK_CONFIG_INVALID_STATE` and `errno == EBUSY`, and the existing registration
+remains unchanged. Another poller may take ownership after the current owner removes
+the bit with modify or removes the registration. Queue records and readiness are not
+lost during the transfer. The application maintains one completion-drain owner per
+socket.
 
 ## 5. Source lifetime and serialization
 
@@ -131,7 +134,7 @@ typedef enum zlink_poller_event_flag_e {
   ZLINK_POLLERR        = 4,   // socket close or FD platform error (§3, §5)
   ZLINK_POLLPRI        = 8,   // platform POLLPRI for an FD (§3)
   ZLINK_POLLITEMS_DFLT = 16,  // recommended initial item count; not a readiness bit (§3)
-  ZLINK_POLLCOMPLETION = 32   // polling a socket with a completion channel (§4)
+  ZLINK_POLLCOMPLETION = 32   // socket completion-queue readiness (§4)
 } zlink_poller_event_flag_e;
 
 #define ZLINK_HAVE_POLLER 1   // public poller API is included in the build
@@ -247,15 +250,15 @@ errno mappings.
 > in this document. This section describes how that contract is achieved
 > internally.
 
-The completion reply payload is not copied into a second internal payload queue.
-Payloadless terminal results such as timeout and shutdown may use a small control
-queue to preserve the callback execution thread.
+SEND and REQUEST resolvers append results to the same socket-local ready queue. The
+linearization order of these appends is the public receive order; it does not imply
+submit order or per-target wire order.
 
 ## 9. Implementation and contract-test verification requirements
 
-Verify the following using only the public surface: the `zlink_poll` and
-`zlink_poller_*` functions, return values and errno, event-array contents, and
-reply callback invocation. Each item maps to one unit test.
+Verify the following using only the public surface: the `zlink_poll`,
+`zlink_poller_*`, and `zlink_completion_recv` functions, return values and errno,
+and event-array contents. Each item maps to one unit test.
 
 **zlink_poll**
 
@@ -268,7 +271,8 @@ reply callback invocation. Each item maps to one unit test.
 - Adding the same source twice returns `ZLINK_CONFIG_CONFLICT`/`EEXIST`.
 - Modifying or removing a missing source returns `ZLINK_CONFIG_NOT_FOUND`/`ENOENT`.
 - An invalid event bit returns `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`, while an event unsupported by the source returns `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`.
-- `ZLINK_POLLCOMPLETION` can be used with `zlink_poller_add()` for a raw PAIR, DEALER, ROUTER, or STREAM that owns a completion channel. Using it with any other source, in a `zlink_poll()` item, or in `zlink_poller_modify()` returns `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`.
+- `ZLINK_POLLCOMPLETION` can be added or removed by add or modify for PAIR, DEALER, ROUTER, and STREAM, alone or OR-ed with other socket readiness. Other sources and `zlink_poll()` items return `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`.
+- When two pollers try to own the same socket's completion bit, the second add or modify fails with `ZLINK_CONFIG_INVALID_STATE`/`EBUSY`, and the existing registration remains unchanged. Moving ownership after the current owner removes the bit or source loses neither queued records nor readiness.
 
 **Wait and events**
 
@@ -279,9 +283,9 @@ reply callback invocation. Each item maps to one unit test.
 
 **Completion polling**
 
-- A completion signal is not a public receive record. When wait observes it, wait receives the reply payload from the paired Completion transport and dispatches the registered reply callback on the thread executing that wait call.
-- A wait that processes a completion signal writes a `ZLINK_POLLCOMPLETION` event and includes that event in the returned count.
-- The `recv_part` families do not drain completion.
+- Wait returns `ZLINK_POLLCOMPLETION` while at least one completion record exists; calls to wait, add, modify, or remove alone do not reduce the queue.
+- Receiving the last record with DONTWAIT completion receive clears readiness; readiness remains set while records remain.
+- Completions are neither lost nor merged when their count exceeds event-array capacity; the caller drains each ready socket until `ZLINK_RECV_NO_DATA`.
 
 **Lifetime**
 

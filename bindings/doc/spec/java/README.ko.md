@@ -8,15 +8,13 @@ title: "Java 바인딩 구현 청사진"
 
 # Java 바인딩 구현 청사진
 
-> **이 장이 정의하는 것** — Java 바인딩이 갖춰야 할 `contracts`/`runtime`
-> 목표 형태와 JPMS export 경계.
+> **이 장이 정의하는 것** — Java 바인딩의 `contracts`/`runtime` 구조와 JPMS export 경계.
 
-이 문서는 Java 바인딩의 목표 형태를 정의한다. 모든 메서드를 빠짐없이 나열하는
-레퍼런스는 아니다. 정확한 public 멤버 목록은 리팩터가 완료된 뒤
-`bindings/java/src/main/java/systems/zlink/contracts/` 아래에 둔다.
+이 문서는 Java 바인딩의 공개 계약과 소유 구조를 정의한다. 모든 메서드를 빠짐없이 나열하는
+레퍼런스는 아니며, 정확한 public 멤버 목록은
+`bindings/java/src/main/java/systems/zlink/contracts/`가 소유한다.
 
-Java 바인딩은 .NET 바인딩과 동일한 architecture map을 사용할 때만 정렬된 것으로
-본다:
+Java 바인딩은 .NET 바인딩과 동일한 architecture map을 사용한다.
 
 - public resource 동작은 contract interface로 표현한다;
 - native-backed runtime 구현은 runtime 패키지 아래에 둔다;
@@ -31,14 +29,10 @@ Java public contract 분류는
 다만 동일한 카테고리 소유권, resource 경계, operation/model 그룹은 보존해야
 한다.
 
-이 문서는 breaking target이다. 옛 Java surface를 보존하려는 호환 shim,
-deprecated wrapper, 중복 생성 경로, public runtime alias, direct constructor를
-유지하지 않는다.
-
 | 절 | 다루는 내용 |
 |---|---|
 | [Source Of Truth](#source-of-truth) | 의미 원천과 Java 저장소 소유권 경계 |
-| [Current Refactor Rule](#current-refactor-rule) | 리팩터 진행 중 "옳은 방향"을 판정하는 기준 |
+| [Architecture Requirements](#architecture-requirements) | contract/runtime 소유 경계의 필수 조건 |
 | [Architecture Map](#architecture-map) | `contracts`/`internal`/`runtime` 패키지 트리 |
 | [Public Contract Categories](#public-contract-categories) | contract·runtime 패키지 → 목적 표 |
 | [Native Wait Boundary](#native-wait-boundary) | blocking recv와 poller 기반 수신의 경계 |
@@ -58,7 +52,7 @@ deprecated wrapper, 중복 생성 경로, public runtime alias, direct construct
 | [Spot And Actor Contract Shape](#spot-and-actor-contract-shape) | `SpotNode`/`Spot` 책임과 route 결과 |
 | [Spot Get-Or-Create](#spot-get-or-create) | `getOrCreateSpot` 계약 |
 | [Performance Policy](#performance-policy) | hot path 제약 |
-| [Refactor Workflow](#refactor-workflow) | 정렬 작업 순서 |
+| [아키텍처 요구](#아키텍처-요구) | contract/runtime 경계 요구 |
 | [Implementation Checklist](#implementation-checklist) | 정렬 선언 전 확인 항목 |
 | [Verification](#verification) | 필수 검증 명령과 구조 검색 |
 
@@ -87,24 +81,19 @@ JPMS export는 `systems.zlink.contracts.*` 아래의 문서화된 패키지만 �
 `systems.zlink.runtime.*` 아래 패키지는 `systems.zlink.runtime.nativeapi`를
 포함해 구현 패키지이며 export하지 않는다.
 
-## Current Refactor Rule
+## Architecture Requirements
 
-Java 리팩터 중에는 코드가 잠시 전이 상태일 수 있으나 목표 형태는 고정되어 있다.
-변경이 다음 진술 중 하나를 더 참이 되게 만들 때에만 옳은 방향으로 움직인 것으로
-본다:
+Java package 구조는 다음 조건을 만족한다.
 
 - native-backed resource가 public contract interface로 타입 지정된다;
-- native-backed 구현이 `systems.zlink.runtime.*` 아래로 이동한다;
+- native-backed 구현은 `systems.zlink.runtime.*` 아래에 있다;
 - factory가 contract 타입을 반환하고 runtime 클래스를 감춘다;
-- public contract 파일이 더 이상 `systems.zlink.runtime.*`을 import하지 않는다;
-- 샘플, perf runner, 테스트가 더 이상 runtime 패키지를 import하지 않는다;
-- native handle, raw part loop, callback trampoline, Core reply/send completion,
-  native
-  struct mirror가 public contract 소스 밖으로 이동한다.
+- public contract 파일은 `systems.zlink.runtime.*`을 import하지 않는다;
+- 샘플, perf runner와 테스트는 runtime package를 import하지 않는다;
+- native handle, raw part loop, completion drain state와 native struct mirror는 public contract
+  source 밖에 있다.
 
-native helper만 옮기고 주요 public resource는 concrete contract 클래스로 두는
-것은 충분하지 않다. .NET 표준 목표는 resource 경계에서의 contract/runtime
-분리이며, helper 경계에서의 분리만으로는 부족하다.
+Contract/runtime 분리는 helper뿐 아니라 resource 경계에도 적용한다.
 
 ## Architecture Map
 
@@ -169,8 +158,8 @@ Runtime 패키지는 동일한 .NET 표준 분류를 Java 패키지 이름으로
 | 패키지 | 목적 |
 | ------ | ---- |
 | `systems.zlink.runtime.core` | Context 구현, context option 적용, runtime version/capability 조회 호출. |
-| `systems.zlink.runtime.messaging` | 메시지 materialization, multipart progress, request 실행과 Core callback 연결. |
-| `systems.zlink.runtime.sockets` | Socket kernel, socket family 구현, callback adapter, socket operation 실행. |
+| `systems.zlink.runtime.messaging` | 메시지 materialization, multipart progress, request 실행과 completion registry 연결. |
+| `systems.zlink.runtime.sockets` | Socket kernel, socket family 구현, poller drain과 socket operation 실행. |
 | `systems.zlink.runtime.eventing` | Monitor, poller, poll event, timer, dispatch loop 구현. |
 | `systems.zlink.runtime.service.*` | SpotNode, Spot, Actor, topology, service operation 구현. |
 | `systems.zlink.runtime.errors` | Native errno/result를 public exception/result 도메인으로 변환. |
@@ -426,11 +415,10 @@ factory가 생성해야 한다.
 - Java surface가 actor handle 또는 actor lifecycle resource를 native-backed
   handle로 노출할 때의 Actor resource contract
 
-다음은 staged multipart 상태, request 상태, callback 상태, native submit
+다음은 staged multipart 상태, request 상태와 native submit
 상태를 감추기 때문에 operation contract이다:
 
 - send operation
-- routed send operation
 - publish operation
 - request operation
 - reply operation
@@ -438,17 +426,11 @@ factory가 생성해야 한다.
 - Actor create/join/reply/location operation
 - stream actor bind/unbind/send operation
 
-호출자가 runtime에 동작을 제공하는 경우 handler와 callback 역할은 interface
+호출자가 runtime에 동작을 제공하는 경우 handler 역할은 interface
 또는 functional interface가 될 수 있다:
 
-- socket receive handler
-- stream packet handler
-- monitor handler
-- timer handler
 - SPOT dispatch handler
 - actor lifecycle handler
-- request callback
-- reply callback
 
 ### Must Stay Concrete
 
@@ -532,8 +514,8 @@ constructor는 목표 contract의 일부가 아니다.
 
 ## Contract File Requirements
 
-Contract 파일은 Panama, JNI, native handle, native struct layout, callback
-userdata, Core callback thread, raw `*_part` loop를 몰라도 읽을 수 있어야 한다.
+Contract 파일은 Panama, JNI, native handle, native struct layout, completion
+registry와 raw `*_part` loop를 몰라도 읽을 수 있어야 한다.
 
 Contract 파일이 import할 수 있는 것:
 
@@ -550,7 +532,7 @@ Contract 파일이 import할 수 없는 것:
 - runtime 구현 클래스;
 - native handle wrapper;
 - marshalling helper;
-- Core reply callback helper.
+- Native completion drain helper.
 
 유일한 예외는 Java가 직접 static 생성 와이어링을 선택한 경우의 `Zlink` 같은
 public factory facade이다. 그 경우에도 runtime 참조는 메서드 본문 안의 private
@@ -574,8 +556,7 @@ Runtime이 소유하는 것:
 - native downcall;
 - native struct mirror;
 - 메시지 marshalling;
-- Core request reply callback registry와 send-completion callback registry;
-- callback trampoline;
+- socket-local provisional completion registry와 drain owner;
 - receive cursor;
 - part-loop sequencing;
 - native error mapping;
@@ -590,110 +571,64 @@ runtime/nativeapi가 소유하는 좁은 내부 bridge를 사용한다. native h
 ## Socket Contract Shape
 
 Socket contract는 interface다. native transport 메커니즘이 아니라 동작을
-드러내야 한다.
+드러내야 한다. 공통 `Socket`은 모든 socket에 공통인 다음 동작만 소유한다:
 
-공통 socket 동작은 `Socket`에 둔다:
+- typed common option인 `options()`
+- `monitorOpen()`, `monitorOpen(MonitorEventType...)`,
+  `monitorOpen(long, MonitorEventType...)`
+- TLS server 설정인 `setTlsServer(...)`와 TLS client 설정인 `setTlsClient(...)`
+- `close()`
 
-- `bind`
-- `connect`
-- `unbind`
-- `disconnect`
-- `disconnectRid`
-- `setChannelName`
-- `getChannelName`
-- `options`
-- `close`
+`bind`, `connect`, `unbind`, `disconnect`, `disconnectRid`와 ChannelName 관련 동작은 이를
+지원하는 family 또는 socket별 contract가 소유하며 공통 `Socket`이 소유하지 않는다.
 
 Typed socket contract는 해당 socket 타입에 의미 있는 기능만 더한다:
 
 - `PairSocket`: send와 recv.
 - `DealerSocket`: send, recv, request.
-- `RouterSocket`: routed send, routed recv, request, reply, SPOT routing와
-  monitor event의 exact transport pair 종료.
+- `RouterSocket`: routed send, routed recv, request, reply와 SPOT routing.
 - `PubSocket`: publish.
 - `SubSocket`: subscribe와 subscription event 수신.
 - `XPubSocket`: publish와 subscription event 수신.
 - `XSubSocket`: public 바인딩 contract가 정의하는 send와 subscription 제어.
-- `StreamSocket`: stream send/recv, packet handler, actor gateway, bound actor
+- `StreamSocket`: RAW recv, PACKET recv, stream send, actor gateway, bound actor
   operation.
 
-protocol envelope helper, request token, raw native part submission, callback
-userdata, native routing-id pointer는 노출하지 않는다.
+Protocol envelope helper, raw native part submission과 native routing-ID pointer는
+public contract가 아니다.
 
 ## Operation Builder Shape
 
 Operation builder는 변경 가능한 staged 상태를 감추기 때문에 public interface다.
 operation을 소유하는 카테고리 안에 둔다.
 
-Builder 시작 메서드는 대상 식별자만 받는다:
+Builder 시작 메서드는 대상 식별자와 reply token만 받는다:
 
 - `send()`
 - `send(routingId)`
 - `publish(topic)`
 - `request()`
 - `request(routingId)`
-- `reply(routingId, requestSequence)`
+- `reply(routingId, replyToken)`
 - `sendToSpot(nodeRid, spotRid)`
 - `requestToSpot(nodeRid, spotRid)`
-- `replyToSpot(nodeRid, spotRid, requestSequence)`
+- `replyToSpot(nodeRid, spotRid, replyToken)`
 - `sendBoundActor(sessionRid, actorId)`
 
-`RouterSocket.disconnectTransportPair(transportPairId, transportPairGeneration)`은
-같은 monitor event에서 얻은 non-zero pair identity와 generation에 해당하는
-physical transport pair만 종료 대상으로 지정한다. 같은 peer routing id를
-사용하는 다른 pair에는 영향을 주지 않는다. 이 메서드는 transport pair
-identity가 필요한 Framework connection replacement와 같은 runtime 제어에
-사용하며, 임의의 pair identity를 새로 만들어 전달하지 않는다.
-
-PAIR send와 DEALER/ROUTER routed send builder에는 비동기 `submit()`과 동기
-`submit_sync(SendFlags)`가 있다. Request builder는 세 완료 표면을 제공한다.
-`submit_sync(SendFlags)`는 admission과 reply를 동기 대기해 reply를 직접 반환하고,
-`submit_sync(SendFlags, callback)`은 admission 결과가 결정되면 즉시 반환한 뒤 reply를
-callback으로 전달하며, `submit()`은 `CompletionStage<List<Message>>`를 반환한다.
-Request 제출도 send와 같은 HWM admission을 지나며 sync terminal의 flag가
-`NONE`(대기)과 `DONT_WAIT`(즉시 backpressure)를 선택한다.
+PAIR·DEALER·ROUTER·STREAM send builder는 `SendOperation` family를 사용한다. Send는 비동기
+`submit()`과 동기 `submit_sync()`를 제공한다. Request는 `submit()`과 `submit_sync()`를 제공하고
+reply timeout을 builder에서 설정한다.
 PUB/XPUB publish도 같은 staged message builder를 사용하지만 `submit()`은
 동기 `void`이며, 성공하지 못하면 즉시 `ZlinkSubmitException`을 던진다.
 
-```java
-public interface AsyncSendSubmitOperation {
-    AsyncSendSubmitOperation message(Message part);
-    AsyncSendSubmitOperation timeout(Duration timeout);
-    CompletionStage<Void> submit();
-    void submit_sync(SendFlags flags);
-}
-
-public interface RoutedSendSubmitOperation {
-    RoutedSendSubmitOperation message(Message part);
-    RoutedSendSubmitOperation timeout(Duration timeout);
-    CompletionStage<Void> submit();
-    void submit_sync(SendFlags flags);
-}
-
-public interface RequestSubmitOperation {
-    RequestSubmitOperation message(Message part);
-    RequestSubmitOperation timeout(Duration timeout);
-    CompletionStage<List<Message>> submit();
-    List<Message> submit_sync(SendFlags flags);
-    void submit_sync(SendFlags flags,
-                     BiConsumer<RequestResult, List<Message>> callback);
-}
-```
-
-send builder는 별도 `await()`, `submit(callback)`, `flags(...)`, boolean one-shot
-terminal을 제공하지 않는다. 대신 `submit_sync(SendFlags.NONE)`은 Core가 admit할 때까지
-동기 대기하고, `submit_sync(SendFlags.DONT_WAIT)`은 HWM이 가득 차면 즉시
-`ZlinkSubmitException(BACKPRESSURED)`을 던진다. 인자 없는 `submit()`은 호출 thread를
-막지 않는다. Framework와 Kotlin framework는 동기 overload를 사용하지 않고 반환된
-`CompletionStage`를 직접 completion/await 경계에 연결하며, Kotlin framework의 사용은
-계속 `submit().await()`다. Kotlin이 Java binding을 직접 사용할 때는 동기 overload도
-사용할 수 있다. 언어별 비동기 실행 표면 기준은
-[바인딩 비동기 실행 표면 정책](../async-coroutine-policy.ko.md)을 따른다.
+`submit_sync()`는 Core `NONE`, `submit()`은 Core `DONTWAIT` completion을 사용한다. Kotlin
+framework는 `CompletionStage`를 `await()` 경계에 연결하고 Java binding을 직접 사용할 때는
+동기 terminal도 사용할 수 있다. Exact signature는
+[Pull completion 공개 계약](#pull-completion-공개-계약)에 둔다.
 
 PUB/XPUB publish builder의 `submit()`은 `CompletionStage`를 만들지 않는다. 기본
 lossy publish는 subscriber queue가 가득 차도 해당 subscriber 복사본을 버리고
-성공을 반환하며, `NODROP`은 즉시 오류를 반환한다. PUB/XPUB에
-`zlink_send_async`를 호출하면 Core가 `ENOTSUP`을 반환한다.
+성공을 반환하며, `NODROP`은 즉시 오류를 반환한다.
 
 Raw ROUTER/`Received` reply의 terminal은
 `ReplySubmitOperation.submit() -> void`인 동기 one-shot이다. `CompletionStage`를
@@ -702,32 +637,12 @@ Raw ROUTER/`Received` reply의 terminal은
 `TERMINATED`, `INVALID_ARGUMENT`와 그 밖의 non-HWM submit 실패는 즉시
 `ZlinkSubmitException`으로 전달한다.
 
-### Core completion으로 비동기 operation 완료
+### Completion pull
 
-- 각 PAIR/DEALER/ROUTER/STREAM socket에는 `zlink_send_complete_handler`를
-  하나만 설치한다. routed target은 Core selector 또는 명시된 exact transport-pair
-  identity로 선택하며, binding이 target별 admission queue나 readiness ring을
-  소유하지 않는다.
-- `submit()`은 Core 호출 전에 CompletionStage와 binding-owned opaque userdata
-  token을 strong pending table에 등록한다. Core가 `zlink_send_async` 안에서
-  callback을 inline 호출해도 안전하며, callback은 table에서 항목을 한 번만 꺼내
-  terminal을 snapshot한다.
-- Native completion callback은 Core가 호출한 JVM thread에서 event와 payload 소유권만
-  snapshot하고, 같은 socket의 기존 completion dispatcher가 native callback thread 밖에서
-  stage를 완료한다. 이 경계는 Core callback 안에서 inline `CompletionStage` continuation이 다시 native submit하는 재진입을
-  막는다. Binding은 admission용 thread·queue, readiness scheduler 또는 retry를 만들지
-  않고 deadline은 per-operation Core option으로 유지한다.
-- `TIMED_OUT`와 `TERMINAL`은 `terminal_errno`를 보존한
-  `ZlinkSubmitException`으로 stage를 예외 완료한다. 취소는
-  `zlink_send_async_cancel`을 요청하며 Core completion은 여전히 정확히 한 번
-  전달된다. callback 안에서 다시 submit하는 것은 Core 계약상 `EDEADLK`다.
-- Request는 request callback table을 마지막 request part보다 먼저 설치한다. Core
-  reply callback은 reply를 한 번만 인수하고 위의 기존 socket completion dispatcher로
-  반환 stage 완료를 넘긴다. Request만을 위한 executor·timeout scheduler·retry queue는
-  추가하지 않는다.
-- 현재 Core의 ROUTER multipart abort와 DEALER generic-target-fail 결함 때문에
-  Java multipart-async contract 검증은 한 part record로 제한한다. Core 수정 후
-  multipart assertion을 복원한다.
+Completion-backed state는 native `FINAL` 전에 provisional registry에 등록한다. Native submit
+outcome publish와 completion capture가 합류한 뒤 stage 또는 blocking request를 정확히 한 번
+끝낸다. Stage cancellation은 waiter만 끝내며 late completion은 socket-local drain owner가
+payload와 state를 정리한다.
 
 `sendNoWait`, `sendWithFlags`, `requestAsync`, `publishWithFlags`,
 `send(message)` shortcut 같은 별도의 operation-start 계열을 추가하지 않는다.
@@ -754,7 +669,7 @@ Raw ROUTER/`Received` reply의 terminal은
 
 - 호출자가 제공하는 재사용 가능한 수신 저장소다;
 - close 또는 채택될 때까지 수신된 메시지 part를 소유한다;
-- routing id, SPOT routing id, request sequence, reply sender 메타데이터를
+- routing ID, SPOT routing ID, `ReplyToken`, reply sender metadata를
   가질 수 있다;
 - native receive cursor나 native handle을 노출하지 않는다.
 
@@ -780,7 +695,7 @@ boolean ok = router.recv(received, RecvFlags.DONT_WAIT);
 수신 실패는 문서화된 exception 타입을 던진다.
 
 Core byte HWM charge는 일반 `recv(...)`와 `subscribe(...)`가 payload를 dequeue할
-때 끝난다. `Received`와 `TopicMessage`는 part, Routing ID, request sequence,
+때 끝난다. `Received`와 `TopicMessage`는 part, Routing ID, `ReplyToken`,
 topic과 multipart framing의 Java 수명만 소유한다. `close()`와 다음 수신 저장소
 재사용은 payload와 metadata를 정리하지만 Core HWM accounting에는 관여하지 않는다.
 별도 retained receive, raw lease handle, application byte capacity 또는 중복
@@ -818,7 +733,6 @@ Handler 등록 이름은 이벤트 발생이 아니라 등록을 설명한다.
 
 표준 Java 이름:
 
-- `setPacketHandler`
 - `setDispatchHandler`
 - `recvRouted`
 - `recvActorLifecycle`
@@ -909,7 +823,7 @@ completion lane이 없는 socket은 not-supported result를 담은 `ZlinkConfigE
 관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
 `SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
 `1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
-`FLOW_STATE_STALE_GENERATION`(`1 << 2`), `FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
+`FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
 bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
 `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
 `flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
@@ -977,17 +891,16 @@ concrete result를 반환한다. `created`는 해당 logical spot을 생성한 �
 할당, 회피 가능한 buffer 복사, 숨겨진 wait, sleep, busy wait, 넓은 lock, thread
 join을 사용하지 않는다.
 
-Callback stub과 method-handle 설정은 메시지당 처리 루프가 아니라 등록 시점에
-이루어진다.
+Native method-handle 설정은 메시지당 처리 루프가 아니라 초기화 시점에 이루어진다.
 
 Native bridge 코드는 Java 값을 core receive substrate에서 직접 materialize해야
 한다. Public contract 코드에는 raw native receive 루프가 포함되지 않는다.
 
 Perf, 샘플, 테스트는 export된 public contract 패키지만 사용한다.
 
-## Refactor Workflow
+## 아키텍처 요구
 
-Java 바인딩을 정렬할 때 다음 순서를 사용한다:
+Java 바인딩은 다음 경계를 지킨다:
 
 1. `systems.zlink.contracts.*` 아래에 public resource interface를 정의한다.
 2. 값/모델/result/exception 타입은 해당 contract 카테고리에서 concrete로
@@ -999,8 +912,8 @@ Java 바인딩을 정렬할 때 다음 순서를 사용한다:
 5. factory 진입점을 public contract 타입으로 옮기고 contract interface를
    반환하게 한다.
 6. native-backed resource의 직접 public constructor를 제거한다.
-7. native handle, Panama/JNI 호출, callback trampoline, Core completion, marshalling
-   helper, part loop를 runtime/nativeapi 또는 runtime support 클래스로 옮긴다.
+7. native handle, Panama/JNI 호출, completion drain, marshalling helper, part loop는
+   runtime/nativeapi 또는 runtime support 클래스가 소유한다.
 8. 샘플, perf, 테스트, 문서 예시를 `systems.zlink.contracts.*`만 import하도록
    업데이트한다.
 9. 옛 직접-concrete 형태를 보존하는 호환 alias와 deprecated wrapper를
@@ -1022,7 +935,7 @@ concrete contract resource에서 helper 클래스만 추출하는 것으로 시�
 - 좁게 정당화된 factory 와이어링을 제외하면 contract 파일이
   `systems.zlink.runtime.*`을 import하지 않는다.
 - public signature가 native handle, Panama memory segment, native bridge 타입,
-  callback userdata, Core callback, raw part loop를 언급하지 않는다.
+  completion registry state, raw part loop를 언급하지 않는다.
 - DTO/값/record/enum/result/exception 타입이 concrete로 유지된다.
 - Operation builder가 public contract이며 staged 상태를 감춘다.
 - 샘플, perf, 테스트, 애플리케이션이 `systems.zlink.contracts.*`만 import한다.
@@ -1065,3 +978,145 @@ rg -n "java\\.lang\\.foreign|MemorySegment|Native[A-Za-z]*|RequestProgressPump" 
 이후 의도적으로 concrete로 둔 값 내부만 반환할 수 있다. public resource
 interface나 operation contract가 native bridge 세부에 의존하는 결과를 보여서는
 안 된다.
+
+## Pull completion 공개 계약
+
+Java package는 Core 0.16.0을 exact dependency로 사용한다.
+
+Java runtime은 native completion을 drain해 blocking result 또는 `CompletionStage`로 바꾼다.
+`submit_sync()`는 Core `NONE`, `submit()`은 Core `DONTWAIT`를 사용한다. Kotlin은 독립 native
+ABI나 token wrapper를 만들지 않고 이 Java 계약을 사용한다.
+
+Completion-backed state는 native `FINAL` 전에 provisional registry에 등록한다. Submit outcome
+publish와 completion capture가 모두 끝난 뒤 `CompletionStage` 또는 blocking request를 정확히 한
+번 끝낸다. Stage cancellation은 Core operation을 취소하지 않고 caller wait만 끝내며 late
+completion은 native payload를 정리한다.
+
+`PollEventFlags.POLLCOMPLETION`은 public poller의 wait thread가 native queue를 비우고 live stage
+또는 detached state를 한 건 이상 완전 처리했다는 progress event다. Public poller owner에서
+blocking request를 사용하면 다른 thread가 wait loop를 계속 실행해야 한다.
+
+`ReplyToken`은 ROUTER REQUEST receive만 만들며 class initialization 때 non-exported
+`ContractAccess.ReplyTokenAccess`에 private constructor method reference를 등록한다. Equality와
+hash는 owner identity와 opaque value를 함께 사용한다. `StreamPacket`은 empty reusable output이다.
+Token은 raw accessor, ordering, serialization과 `AutoCloseable`을 제공하지 않는다.
+같은 output의 concurrent recv는 invalid-state다. Message reference는 다음 recv 진입이나
+`close()` 전까지만 유효하다. `recvMode` setter는 첫 bind/connect 전에 `RAW`·`PACKET`만 받고
+`UNSPECIFIED`를 거부한다.
+
+### Public interface
+
+```java
+public interface SendSubmitOperation {
+    SendSubmitOperation message(Message part);
+    CompletionStage<Void> submit();
+    void submit_sync();
+}
+
+public interface RequestSubmitOperation {
+    RequestSubmitOperation message(Message part);
+    RequestSubmitOperation timeout(Duration timeout);
+    CompletionStage<List<Message>> submit();
+    List<Message> submit_sync();
+}
+
+public final class ReplyToken {
+    private final Object owner;
+    private final long value;
+
+    private ReplyToken(Object owner, long value) {
+        this.owner = owner;
+        this.value = value;
+    }
+
+    @Override public boolean equals(Object other) {
+        return other instanceof ReplyToken token
+            && owner == token.owner && value == token.value;
+    }
+    @Override public int hashCode() {
+        return 31 * System.identityHashCode(owner) + Long.hashCode(value);
+    }
+    @Override public String toString() { return "ReplyToken"; }
+}
+
+public interface StreamSocket {
+    SendOperation send(RoutingId rid);
+    boolean recv(Received out, RecvFlags flags);
+    boolean recvPacket(StreamPacket out, RecvFlags flags);
+}
+
+public enum StreamRecvMode {
+    UNSPECIFIED,
+    RAW,
+    PACKET
+}
+
+public final class StreamSocketOptions {
+    public StreamRecvMode recvMode();
+    public void recvMode(StreamRecvMode mode);
+}
+
+public interface ReplySubmitOperation {
+    ReplySubmitOperation message(Message part);
+    void submit();
+}
+
+public final class StreamPacket implements AutoCloseable {
+    public StreamPacket();
+    public boolean isEmpty();
+    public Optional<RoutingId> routingId();
+    public Message header();
+    public Message body();
+    @Override public void close();
+}
+```
+
+Operation 시작 signature는 PAIR `SendOperation send()`, DEALER
+`SendOperation send()`·`RequestOperation request()`, ROUTER
+`SendOperation send(RoutingId)`·`RequestOperation request(RoutingId)`·
+`ReplyOperation reply(RoutingId, ReplyToken)`, STREAM `SendOperation send(RoutingId)`다.
+Send factory는 target을 builder에 capture한다.
+`Received.replyToken()`은 `Optional<ReplyToken>`을 반환한다.
+`Received.send()`는 source target을 capture한 `SendOperation`, `Received.reply()`는 source RID와
+token을 capture한 `ReplyOperation`을 반환한다.
+
+Public Java/Kotlin surface에는 `AsyncSend*`·`RoutedSend*` operation type,
+`StreamSocket.sendAsync()`, send/request flags, request `BiConsumer` terminal, STREAM `onPacket`,
+monitor `onEvent`·ignore, timer `onFire`, pair/generation member가 없다.
+
+Monitor는 `MonitorEvent recv()`·nullable `recv(RecvFlags)`·`MonitorStatus status()`·`close()`를,
+timer는 `start(Duration, long)`·`stop()`·`long recv()`·`close()`를 제공한다. Monitor DONTWAIT
+no-data는 `null`이며 timer no-data는 typed receive exception이다.
+Monitor event의 `connectionId`는 진단과 correlation에만 사용하며 send·reply target이나
+reconnect fence로 사용하지 않는다.
+Internal native enum mirror는 `ZLINK_OPT_PENDING_MAX_MSGS`와
+`ZLINK_OPT_PENDING_MAX_BYTES`만 사용하며 public option method를 추가하지 않는다.
+
+## 구현 및 contract test 검증 요구
+
+Public Java interface, `CompletionStage`·exception과 poller event만으로 다음을 확인한다. 각
+항목은 contract test 하나로 이어진다.
+
+**Operation과 완료**
+
+- PAIR·DEALER·ROUTER·STREAM send factory가 하나의 `SendOperation` family를 반환한다.
+- Send/request는 §Public interface의 flag 없는 async·sync terminal만 제공하고 request timeout은
+  유지한다.
+- Submit 반환 전 completion이 drain돼도 stage는 submit publish와 합류한 뒤 정확히 한 번 끝난다.
+- Stage cancellation 뒤 late completion은 stage를 다시 끝내지 않고 native payload를 정리한다.
+- Non-OK request completion은 typed request exception만 제공하고 error payload를 공개하지 않는다.
+- `POLLCOMPLETION`은 stage settle 또는 detached cleanup이 끝난 뒤에만 반환된다.
+
+**ReplyToken과 STREAM**
+
+- ROUTER REQUEST receive만 non-empty token을 반환하고 같은 owner·value token만 equality와 hash가
+  일치한다.
+- 다른 socket owner token의 reply는 native 호출 전에 실패한다.
+- `StreamPacket`은 성공 뒤 payload를 보유하고 no-data·오류 때 empty이며 `close()` 뒤 재사용할 수
+  있다.
+
+**Pull eventing과 Kotlin**
+
+- Monitor·timer recv는 callback 없이 지정한 no-data 결과와 event·fire count를 반환한다.
+- Kotlin source가 별도 wrapper 없이 Java `ReplyToken`, operation terminal과 STREAM packet
+  interface를 그대로 사용한다.

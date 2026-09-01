@@ -42,9 +42,10 @@ transport(tcp/ipc/tls/ws/wss)가 byte stream을 제공한다.
 - **framing의 주체는 application** — 필요한 application-level framing을 application이
   스스로 정한다.
 
-## 3. Packet-dispatch framing (packet handler 모드)
+## 3. Packet receive framing (PACKET mode)
 
-`zlink_stream_packet_handler()`로 packet handler를 등록하면, zlink는 투명 stream 대신
+framed packet을 수신하려면 application은 첫 successful bind 또는 connect 전에
+`ZLINK_STREAM_RECV_MODE_PACKET`을 선택한다. PACKET mode에서 zlink는 투명 stream 대신
 length-prefixed(길이 접두사) packet framing을 파싱한다. wire의 byte 배치는 다음과 같다.
 
 ```
@@ -54,9 +55,9 @@ length-prefixed(길이 접두사) packet framing을 파싱한다. wire의 byte �
 +------------------+----------------+--------------+------------+
 ```
 
-callback은 header와 body를 별도의 `zlink_msg_t` part로 받는다. handler 등록·callback
-규약과 malformed framing 처리의 계약은
-[Socket — STREAM의 Packet callback 절](../socket/08-stream.ko.md#7-packet-callback과-framing)이
+완성한 packet은 `zlink_stream_recv_packet()`이 header와 body를 별도의 `zlink_msg_t`로
+caller에게 반환한다. PACKET mode 선택, 수신 함수의 output·ownership, malformed framing
+처리의 계약은 [Socket — STREAM의 Packet receive와 framing 절](../socket/08-stream.ko.md#6-packet-receive와-framing)이
 소유한다.
 
 ## 4. 연결 이벤트
@@ -108,11 +109,11 @@ Frame 2: [Payload (N bytes)]
 - raw/packet 경로의 0 byte payload는 application 데이터로 전달되지 않는다(제어
   이벤트로 취급).
 
-**packet handler 모드**
-- `zlink_stream_packet_handler()`로 handler를 등록하면 투명 stream 대신
-  length-prefixed packet framing(`header_size` 2 byte Big Endian, `body_size` 4 byte
-  Big Endian, header, body 순)이 파싱되고, callback이 header와 body를 별도의
-  `zlink_msg_t` part로 받는다.
-- callback 규약과 malformed framing의 상세 검증은
-  [Socket — STREAM의 검증 요구](../socket/08-stream.ko.md#12-구현-및-contract-test-검증-요구)가
+**PACKET mode**
+- 첫 successful bind 또는 connect 전에 `ZLINK_STREAM_RECV_MODE_PACKET`을 선택하면 투명
+  stream 대신 length-prefixed packet framing(`header_size` 2 byte Big Endian, `body_size`
+  4 byte Big Endian, header, body 순)이 파싱되고,
+  `zlink_stream_recv_packet()`이 header와 body를 별도의 `zlink_msg_t`로 반환한다.
+- PACKET mode의 output·ownership과 malformed framing의 상세 검증은
+  [Socket — STREAM의 검증 요구](../socket/08-stream.ko.md#11-구현-및-contract-test-검증-요구)가
   소유한다.

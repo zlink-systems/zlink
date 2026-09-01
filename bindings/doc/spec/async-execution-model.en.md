@@ -1,152 +1,161 @@
 # Async Execution Model and Completion Surface Terminology
 
-> This is a **reference document** that defines, in one place, the
-> **asynchronous/synchronous, execution model, and completion surface** terms
-> used across the bindings spec. It does not create any contract — other spec
-> documents reuse these terms verbatim. When terminology in code or another
-> document disagrees, align it to this document.
+> This document defines the meanings of synchronous and asynchronous, blocking and non-blocking,
+> execution environments, awaitables, and completion progress throughout the binding specifications.
+> Each binding specification and the [async completion surface policy](async-coroutine-policy.en.md)
+> own the public signatures for that language.
 
-## 1. Distinguish the two axes
+## 1. Completion and execution-environment axes
 
-To avoid confusion, separate two different questions.
-
-| Axis | Question | Values |
-|---|---|---|
-| **Completion nature** | **When** does the call hand back completion | **now** (synchronous) / **later** (asynchronous) |
-| **Execution model** | **What** absorbs the wait | OS thread / virtual thread·goroutine / coroutine / event loop |
-
-Completion nature is a property of the **API terminal**; the execution model is
-a property of **where the user calls that API**. (Completion nature itself splits
-further into two axes — `synchronous/asynchronous` and `blocking/non-blocking` —
-see §2.) For example, an asynchronous API can be `await`ed from a coroutine or
-received via callback on an event loop; a synchronous API can be called blocking
-on an OS thread or on a virtual thread.
-
-## 2. Completion nature: synchronous/asynchronous and blocking/non-blocking are different axes
-
-The two pairs are often conflated but answer **different questions**. Keeping
-them apart is what makes the terminology precise.
+When an API returns its result and the environment in which the API runs are separate decisions.
 
 | Axis | Question | Values |
 |---|---|---|
-| **synchronous / asynchronous** | **When** is completion delivered | synchronous: completion is settled by the time the call returns (received in place) · asynchronous: the call only starts the work and completion is delivered later via an awaitable/callback |
-| **blocking / non-blocking** | Does the **thread stop** while waiting | blocking: if it cannot proceed, the calling thread is parked and waits · non-blocking: if it cannot proceed, it returns immediately with a failure (no wait). `DONTWAIT` lives here |
+| Completion time | When does the call return its final result? | Synchronous or asynchronous |
+| Waiting behavior | Does the calling thread stop when the operation cannot progress? | Blocking or non-blocking |
+| Execution environment | What handles waits and continuations? | OS thread, virtual thread/goroutine, coroutine, or event loop |
 
-The two axes **combine.** Placing zlink's send terminals on a grid makes the
-relationship clear.
+A synchronous terminal has determined the final result when the call returns. An asynchronous terminal
+returns an awaitable first and determines the result later. A blocking call makes the calling thread wait
+until it can progress; a non-blocking call does not wait.
 
-| | **blocking** (park if it cannot proceed) | **non-blocking** (fail immediately if it cannot proceed) |
+High-level send/request awaitable terminals use native `DONTWAIT` submission and completion drain.
+Blocking send/request terminals use native `NONE`. Go exposes only one public
+`Submit(context.Context)` terminal but internally waits for a completion after native `DONTWAIT`
+submission. A publish operation's `DONTWAIT` choice is part of its lossy/NODROP contract and is separate
+from the send/request completion model.
+
+## 2. Execution environments
+
+The execution environment does not change the completion semantics of a public terminal. Different
+languages can consume the same kind of awaitable in different execution environments.
+
+| Execution environment | How it handles a wait | Representative bindings |
 |---|---|---|
-| **synchronous** (completion in place) | `submit_sync(NONE)` — park until admitted, then result | `submit_sync(DONTWAIT)` — immediate `BACKPRESSURED`/`EAGAIN` |
-| **asynchronous** (completion later) | (unused — we do not block *and* defer) | `submit()`/`async()` awaitable — return immediately, completion notified later |
+| OS thread | The kernel makes the thread wait. | C, C++ blocking terminal, Java platform thread |
+| Virtual thread/goroutine | The language runtime waits a lightweight execution unit. | Java virtual thread, Go |
+| Coroutine | The function suspends and resumes through a continuation. | C++, Kotlin, Python, Rust |
+| Event loop | Runs Promise or coroutine continuations from a queue. | Node, Python asyncio |
 
-- Therefore a **sync terminal selects blocking/non-blocking via a flag**
-  (`NONE` = blocking, `DONTWAIT` = non-blocking). An async terminal is
-  **always non-blocking** (returns as soon as it starts) and only the completion
-  is later.
-- Native `zlink_send_async` always sits in the "asynchronous·non-blocking" cell,
-  so it cannot express the "synchronous·non-blocking" cell where `DONTWAIT` is
-  meaningful — which is exactly why a separate sync(+flags) terminal is needed
-  (see the [routed submit policy](async-coroutine-policy.en.md)).
+Calling a blocking API from a virtual thread or goroutine does not make the API asynchronous. Conversely,
+waiting for an awaitable from an OS thread does not make the public terminal synchronous. Use
+`coroutine` only for an actual coroutine facility, not as an umbrella term for every asynchronous
+execution method.
 
-- **"Asynchronous" is the umbrella term.** It covers not only coroutines but also
-  **submitting work to a thread pool/executor and being notified of completion
-  separately via a Future** and the like. If "return now without waiting for
-  final completion, notify completion later" holds, it is asynchronous no matter
-  how it is implemented.
-- However, **calling a blocking API from a virtual thread/goroutine is not itself
-  asynchronous** — that call is still synchronous (blocking); the runtime merely
-  absorbs the wait cheaply (§3). Being a lightweight execution unit does not by
-  itself make an API asynchronous.
-- We do not use "coroutine" as the umbrella term — virtual threads, goroutines,
-  and event loops are not coroutines (§3).
+## 3. Awaitables and synchronous results
 
-## 3. Execution model
+A method that finishes an operation and returns either its result or a completion handle is called a
+terminal. Awaitable is the documentation term for the language-specific values that carry asynchronous
+completion.
 
-This is **how** the asynchrony is implemented. The four below are **not mutually
-exclusive categories but combinable implementation elements** — precisely, they
-are combinations of two sub-axes: `execution unit (thread / coroutine)` and
-`completion dispatch (event loop / executor / direct continuation)`. The names
-below are the combinations commonly used in practice.
+| Binding | Awaitable or completion-wait form |
+|---|---|
+| C++ | `async_result_t<T>` |
+| .NET | `Task` |
+| Java/Kotlin | `CompletionStage<T>`; Kotlin uses the Java contract. |
+| Node | `Promise<T>` |
+| Python | `Awaitable[T]` |
+| Rust | `Future<Output = T>` |
+| Go | The goroutine executing `Submit(context.Context)` waits for an internal completion. |
 
-| Execution model | How the wait is absorbed | Code shape | Examples |
-|---|---|---|---|
-| **OS thread (platform thread)** | kernel parks the thread | blocking call | C, C++ `std::thread`, Java platform thread |
-| **Lightweight execution unit (virtual thread / goroutine)** | runtime parks a lightweight unit | blocking call (looks synchronous) | Java virtual thread, Go goroutine |
-| **Coroutine** | the function suspends/resumes (usually a stackless state machine) | explicit `await`/`suspend` | Kotlin `suspend`, Python `async def`, C++20 coroutine, Rust `async`/`Future` |
-| **Event loop** | callbacks/Promises are queued, single-threaded loop | `await` or callback | Node.js, Python asyncio, browser JS |
+A synchronous terminal's return value is not an awaitable. It conveys the result determined within the
+call as `void`, a collection, `Result`, `error`, or a language-specific exception.
 
-Default execution model per language (bindings targeted by this project):
-> **Note.** As of 0.14.0 the send family and **request** have both async and sync terminals in every binding (owned by the [normative table](async-coroutine-policy.en.md)). In languages whose async terminal is `submit()` (Java, Node, Python, and Rust), the sync terminal is consistently named **`submit_sync`** (it names the sync/async axis; the flag selects whether it blocks). The "Completion surface shape" below shows only each language's default/representative surface.
+## 4. Pollers and completion drain
 
+In C, `ZLINK_POLLCOMPLETION` is non-consuming level readiness indicating that the next
+`zlink_completion_recv()` can return one record. `zlink_poller_wait()` does not consume a completion.
+The caller repeats `zlink_completion_recv(..., ZLINK_RECV_FLAGS_DONTWAIT)` for each ready socket through
+`ZLINK_RECV_NO_DATA`.
 
-| Language | Default execution model | Completion surface shape | Notes |
-|---|---|---|---|
-| **C** | OS thread | blocking | core C API |
-| **C++** | OS thread + coroutine | blocking `submit()` / `co_await async()` | C++20 coroutine optional |
-| **.NET** | coroutine (async/await) + thread pool | send·request: async `Async(ct)` · sync `Submit(SendFlags)`/`Submit(SendFlags, cb)` | both send and request have async/sync terminals (0.14.0) |
-| **Java** | no coroutine (`CompletionStage`) · recv on OS/virtual thread | send·request: async `submit()`→`CompletionStage` · sync `submit_sync(...)` | send and request gain sync terminals (0.14.0); virtual thread is **optional** |
-| **Kotlin** | coroutine | `suspend` / `await()` | `kotlinx-coroutines` |
-| **Node** | event loop | `Promise` / `await` | single-threaded |
-| **Python** | coroutine + event loop (asyncio) · OS thread | `await` coroutine object / blocking | GIL, `async def` |
-| **Rust** | coroutine (async) | `.await` `Future` | runtime-agnostic |
-| **Go** | virtual thread (goroutine) | blocking `Submit(ctx)` | completion observed via channel |
+A high-level binding that does not expose raw completions has exactly one drain owner per socket. The
+binding runtime owns a socket that is not registered with a public poller for `PollCompletion`.
+Registration transfers ownership atomically to the thread calling `wait()`; removal or clearing the
+completion bit transfers it back to the runtime owner. The two owners never drain the same queue
+concurrently.
 
-Subtle distinctions:
+High-level `PollCompletion` is a completion progress event returned after the binding takes at least one
+record from the native queue and either completes a live waiter or cleans up detached state. The queue
+can already be empty when it returns, and it does not guarantee a new public-awaitable state change. It
+does not consume application DATA even when `POLLIN` is ready at the same time.
 
-- **Virtual thread vs coroutine** — both are lightweight concurrency, but a
-  virtual thread runs **blocking code as-is** while the runtime parks/unparks it
-  behind the scenes (asynchrony is not visible in the code). A coroutine makes
-  `suspend`/`await` **explicit** (visible in the code).
-- **Coroutine vs event loop** — orthogonal (execution unit vs dispatch mechanism).
-  They are used together: Python asyncio is a **coroutine running on top of an
-  event loop**, and Node **processes `Promise` continuations on the event loop**
-  (JS standard terminology is `async function`/`Promise`, and one does not call
-  Node's execution as a whole a "coroutine"). In both cases the event loop is the
-  underlying dispatch engine.
+While a public poller is the owner, completion-backed terminals depend on drain by that poller's
+`wait()`. Using a blocking request or Go `Submit(context.Context)` at the same time requires another
+thread or goroutine to keep executing the `wait()` loop. Do not invoke `wait()` and a blocking terminal
+serially on the same execution thread. The binding neither takes ownership for a blocking terminal nor
+creates a separate drain thread.
 
-## 4. Completion surface (terminal) and return values
+## 5. Provisional registry and completion join
 
-Bindings provide a per-language **completion surface** over the core C API. This
-document calls **a method that finishes an operation and returns a result or a
-completion handle a `terminal`** (a different meaning from the `terminal
-operation` of Java Stream/Rx; here we use this document's definition). The
-standard names for the values a terminal returns are:
+Before a completion-backed terminal invokes native `FINAL`, it registers provisional language operation
+state in a socket-local registry under a stable `user_context`. It cannot register by completion ID first
+because the ID is not known until the native call returns.
 
-| Return value | Nature | Language |
-|---|---|---|
-| **awaitable** (async completion value) | this document's umbrella for values holding an async completion | umbrella for all below |
-| `Task` / `ValueTask` | .NET awaitable | .NET |
-| `CompletionStage` / `CompletableFuture` | Java completion handle (no language `await`; observed via chaining/`.get()`) | Java |
-| `Promise` | JS awaitable | Node |
-| coroutine object | `await`-able Python awaitable | Python |
-| `Future` | Rust awaitable | Rust |
-| `async_result_t<T>` | C++ move-only awaitable | C++ (`async()`) |
-| completion channel | Go completion handle (observed via receive/`select`) | Go (request) |
+Submit and completion join in the following order.
 
-- The document groups these under **awaitable**, but strictly it is an umbrella
-  over both **values that implement a language `await` protocol directly** (like
-  `Task`, a Python coroutine object, a C++ awaiter) and **handles whose
-  completion is observed via chaining/receive** (like Java `CompletionStage`, a
-  Go channel).
-- A synchronous terminal's return is not an awaitable — it is an idiomatic
-  immediate value (`void`/`bool`/`None`/`Result`/`error`) or an exception.
+1. If native submit fails, the binding observes ID `0`, removes the provisional state, and completes the
+   terminal with the submit error. This path creates no completion.
+2. If a successful send returns ID `0`, the binding completes the terminal with inline success and
+   removes the state.
+3. For a successful request or a nonzero send ID, the binding atomically publishes the submit outcome,
+   ID, and Core ownership into the provisional state.
+4. If the completion is drained before submit returns, the binding locates the state by `user_context`
+   and captures the result and native aggregate ownership.
+5. Only after submit publication and completion capture have both finished does the binding complete the
+   public terminal exactly once and remove the registry entry once.
 
-## 5. Standard terms used in the docs (summary)
+A `wait()` that processes a pre-return completion also does not return `PollCompletion` progress until
+publication and capture join and settlement or cleanup completes. Blocking send and reply do not create
+completions and therefore do not use the provisional registry.
 
-| Concept | Standard term in the docs | Term to avoid |
-|---|---|---|
-| Receiving completion later (umbrella) | **asynchronous** | "coroutine" (as the umbrella) |
-| Receiving completion during the call | **synchronous** | — |
-| Thread parked while waiting | **blocking** | — |
-| Immediate failure return if it cannot proceed | **non-blocking** | — |
-| Umbrella for how asynchrony is implemented | **execution model** | — |
-| Its kinds (not exclusive; combinable) | **OS thread / virtual thread·goroutine / coroutine / event loop** | — |
-| Value holding an async completion | **awaitable** | — |
-| An API's completion surface | **terminal (completion surface)** | — |
+## 6. Caller wait cancellation
 
-- **Use "coroutine" only when naming an actual coroutine language** (Kotlin
-  `suspend`, Python `async def`, C++20, Rust `async`). Use "asynchronous" or
-  "execution model" when covering everything.
-- When listing several execution models, write them as "thread (including virtual
-  threads)·coroutine·event loop".
+High-level cancellation cancels the caller's wait on a language terminal, not the Core operation.
+
+- If cancellation is decided before the native call, the binding neither calls Core nor leaves
+  provisional state.
+- If cancellation races with submit failure during the native call, the binding records only the
+  cancellation claim until native returns. An exact submit error takes precedence when submit fails.
+- If cancellation or Future drop is decided first after successful submit, the binding completes only
+  the live waiter once as canceled or detached. Registry state remains until a late completion or
+  socket/context lifecycle cleanup.
+- A late completion releases the native payload and state but does not complete the public waiter again.
+  A successful ID `0` send whose cancellation was decided first is also not completed again as success.
+- If socket close or context termination makes completion unavailable, the binding completes only the
+  live waiter with the shutdown or terminated error and removes all registry state.
+
+For a non-OK request completion, the high-level binding exposes only a typed request error. It does not
+move the error-reply payload into a language message collection or error property, and closes the native
+completion exactly once before completing the user-visible error. In Go, a typed request error is
+`(nil, error)`; when Context cancellation is decided first, it is `(nil, ctx.Err())`.
+
+## 7. Implementation and contract-test verification requirements
+
+Verify the following using only public terminals, public poller events, and language-specific
+cancellation results. Each item maps to one contract test.
+
+**Completion and drain**
+
+- After a C poller returns `ZLINK_POLLCOMPLETION`, raw drain can receive each queued record once, and
+  poller wait itself does not consume a record.
+- When a high-level poller returns `PollCompletion`, it has completely processed at least one native
+  completion. The event does not guarantee a successful raw receive or a new public-waiter state change.
+- When another thread or goroutine executes `wait()` under public poller ownership, blocking requests
+  and Go `Submit(context.Context)` progress. Without `wait()`, the binding does not take the queue
+  arbitrarily.
+
+**Submit and completion races**
+
+- Native submit failure completes once with the exact submit error and creates no completion progress.
+- A successful ID `0` send succeeds once. Even when a nonzero completion is drained before submit
+  returns, the public terminal completes only once after joining submit publication.
+- A successful request joins a nonzero completion and removes the registry entry once after result
+  conversion or cleanup.
+
+**Cancellation and lifecycle**
+
+- Cancellation before the call does not start a native operation and cancels only the caller terminal.
+- Wait cancellation or Future drop after successful submit completes the waiter once; a late completion
+  does not complete it again and releases the payload.
+- Socket close and context termination complete live waiters with the corresponding lifecycle error and
+  leave no detached state or native payload.

@@ -6,21 +6,19 @@ title: "Go Bindings Public Contract"
 [Spec index](../README.en.md) | [Previous: Python](../python/README.en.md) | [Next: Rust](../rust/README.en.md)
 <!-- bindings-nav:end -->
 
-# Go binding Core 0.13.1 public contract
+# Go binding Core 0.16.0 public contract
 
 > **What this chapter defines** — the public type, ownership, and error
-> contract the currently implemented Go binding provides on top of the
-> Core 0.13.1 raw C API.
+> contract the Go binding provides on top of the Core 0.16.0 raw C API.
 
-This document defines only the public contract of the currently
-implemented Go binding. It does not add pre-implementation designs or
-features that exist only in other languages. Confirm the exact Go
+This document defines the Go binding's public contract. Features that exist only in other languages
+are not part of this contract. Confirm the exact Go
 identifiers and method signatures against `bindings/go/contracts/` and the
 matching projection at the module root.
 
 | Section | Covers |
 |---|---|
-| [Module and public package](#module-and-public-package) | Import path, the internal boundary, the Core 0.13.1 raw scope |
+| [Module and public package](#module-and-public-package) | Import path, the internal boundary, the Core 0.16.0 raw scope |
 | [Public contract categories](#public-contract-categories) | A table of public concepts by category |
 | [Context and resource lifetime](#context-and-resource-lifetime) | Ownership/release rules for Context/socket/monitor/poller/timer |
 | [Byte HWM and Auto-HWM](#byte-hwm-and-auto-hwm) | Mapping between Go `uint64` and Core `uint64_t` byte HWM |
@@ -39,12 +37,12 @@ consumer imports the `zlink` package at the module root.
 `zlink.systems/zlink/contracts` is a public projection that declares
 the same contract split by category, and the root package re-exports it.
 
-Runtime handles, cgo declarations, native structs, callback trampolines, and
+Runtime handles, cgo declarations, native structs, completion-drain state, and
 buffer marshalling are implementation
 details of `internal/native`. These types and this package are not part of
 the consumer contract.
 
-- The current package contract projects only the Core 0.13.1 raw C API.
+- The package contract projects the Core 0.16.0 raw C API.
 - It includes Context, Message, raw sockets, monitor, poller, timer, and utility, but not Spot, Actor, MeshNode, or service operations.
 - The Go module has no per-message codec registration API either.
 - The default path for messages and byte payloads uses the typed API the binding provides.
@@ -125,8 +123,8 @@ message stays open. When the lifetime needs to extend beyond the message,
 | `Bytes` | Reads the caller's slice while `Submit` runs and does not retain it after `Submit` returns |
 
 The Go wrapper owns the `Message` parts in a receive result. Parts
-delivered via `Received`, `TopicMessage`, `SubscriptionEvent`, or a request
-completion channel are explicitly closed after use. When a `Recv` family
+delivered via `Received`, `TopicMessage`, `SubscriptionEvent`, or a successful request result are
+explicitly closed after use. When a `Recv` family
 method takes caller-provided output, it clears that output object's
 existing parts before filling in the new native parts and metadata.
 
@@ -136,158 +134,43 @@ accounting.
 
 ## Socket operation
 
-### Builder terminal signature
+Send, publish, request, and reply use multipart builders. A builder collects its payload and the
+options allowed for that operation, then executes once at the terminal `Submit`. Submitting the same
+builder twice completes the second submission with a state error.
 
-Send, publish, request, and reply use a multipart builder. The builder
-collects payload and the options allowed by that operation, then runs once at
-the terminal `Submit`. Submitting the same builder twice completes the second
-submission with a state error.
+Send and request `Submit(context.Context)` wait for a Core `DONTWAIT` completion. Reply checks the
+Context before call entry, and socket `SNDTIMEO` owns the admission wait after the native call. Only
+publish provides `Flags(SendFlags)`, on a separate `PublishOp`. The
+[Pull completion public contract](#pull-completion-public-contract) contains the exact interface.
 
-The current implementation's terminal signatures are as follows.
+### Context and error classification
 
-```go
-// Message, MoveMessage, and Bytes add a payload part.
-type SendSubmitOp interface {
-    Message(*Message) SendSubmitOp
-    MoveMessage(*Message) SendSubmitOp
-    Bytes([]byte) SendSubmitOp
-    Flags(SendFlags) SendSubmitOp
-    Submit(context.Context) (bool, error)
-}
-
-// This is the HWM-managed routed submit used by DEALER Send and ROUTER SendTo.
-// Submit is synchronous: blocking inside a goroutine is Go's idiomatic await,
-// and the HWM wait itself is owned by Core.
-type RoutedSendSubmitOp interface {
-    Message(*Message) RoutedSendSubmitOp
-    MoveMessage(*Message) RoutedSendSubmitOp
-    Bytes([]byte) RoutedSendSubmitOp
-    Flags(SendFlags) RoutedSendSubmitOp
-    Submit(context.Context) error
-}
-
-// DEALER/ROUTER request provides a flag-free asynchronous completion channel
-// and a synchronous (+flags) terminal returning admission plus that channel.
-// There is no separate callback.
-type RequestSubmitOp interface {
-    Message(*Message) RequestSubmitOp
-    Bytes([]byte) RequestSubmitOp
-    Timeout(time.Duration) RequestSubmitOp
-    Flags(SendFlags) RequestSyncSubmitOp
-    Submit(context.Context) <-chan RequestReplyCompletion
-}
-
-type RequestSyncSubmitOp interface {
-    Message(*Message) RequestSyncSubmitOp
-    Bytes([]byte) RequestSyncSubmitOp
-    Timeout(time.Duration) RequestSyncSubmitOp
-    Flags(SendFlags) RequestSyncSubmitOp
-    Submit(context.Context) (<-chan RequestReplyCompletion, error)
-}
-
-type RequestReplyCompletion struct {
-    Result RequestResult
-    Parts  []*Message
-    Err    error
-}
-
-// The reply builder Received.Reply() creates returns only an error on success, with no value.
-type ReplySubmitOp interface {
-    Message(*Message) ReplySubmitOp
-    Flags(SendFlags) ReplySubmitOp
-    Submit(context.Context) error
-}
-```
-
-### DontWait and error classification
-
-- Existing one-shot PAIR, PUB, XPUB, STREAM, and reply submits may use
-  `SendFlagsDontWait` on builders that allow it.
-- `ReplySubmitOp.Submit(ctx)` is a synchronous one-shot that returns no
-  completion channel. It submits a terminal reply or error reply to the
-  HWM-free completion lane with one native call. HWM backpressure is not a
-  reply result; `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`, and other
-  non-HWM submit failures return immediately as a `*SubmitError` through
-  `error`.
-- Managed DEALER `Send` and ROUTER `SendTo` builders expose
-  `Flags(SendFlags)`. With no flag or `SendFlagsNone`, Core blocks; with
-  `SendFlagsDontWait`, Core immediately returns
-  `SubmitBackpressured`/`EAGAIN` through `error`. DEALER/ROUTER `Request` also
-  passes through the same HWM admission with `Flags(SendFlags).Submit(ctx)`:
-  it reports admission immediately through `error` and delivers the reply on
-  the completion channel. There is no separate callback. The send family also
-  exposes no callback or `SubmitAsync` compatibility terminal.
-- **The binding owns no thread, no queue, and no retry.** A routed send's
-  `Submit(ctx)` is a synchronous terminal that hands the complete record to a
-  blocking Core call (`zlink_send_part` for DEALER, `zlink_send_part_rid` for
-  ROUTER). The HWM wait happens entirely inside Core and resumes on a Core
-  signal. There is no park queue, no readiness-callback retry, no deadline
-  timer, and no dispatcher goroutine in the binding.
-- The upper bound on a flag-free routed-send wait is the socket `SNDTIMEO`.
-  `SNDTIMEO=0`, like `DONTWAIT`, fails immediately with
-  `SubmitBackpressured`/`EAGAIN`. With an unbounded `SNDTIMEO` (`-1`) the
-  calling goroutine waits inside Core until credit returns, so applications
-  are advised to set a finite `SNDTIMEO`.
-- For a routed send, `ctx` owns the **submit boundary**. An already-cancelled
-  or already-expired `ctx` fails with `context.Canceled` /
-  `context.DeadlineExceeded` and nothing reaches the wire. Once Core has taken
-  the record, Core owns the wait and cancelling `ctx` does not interrupt it.
-- A request's flag-free `Submit(ctx)` returns an asynchronous completion
-  channel. `Flags(SendFlags).Submit(ctx)` is a **synchronous submit with an
-  asynchronous completion**. It snapshots one exact `(RID, transport pair, generation)`
-  target (a policy-free value snapshot, not a credit reservation), submits
-  through Core admission, and returns its `error` result plus the completion
-  channel. The
-  selected target does not change during the operation and detaching does not
-  re-select another connection. The completion is driven by Core's reply
-  handler callback — the binding adds no retry queue and no dedicated thread.
-- The request timeout is Core-owned: the builder `Timeout`, or the socket's
-  request-timeout option when absent, is handed to Core, and expiry is reported
-  as `RequestTimedOut`. `ctx` cancellation and deadline separately complete the
-  caller's channel first; a Core reply arriving afterwards is dropped and its
-  parts released.
-- The Go binding adds no lock or gate of its own to an outbound path. Core's
-  per-socket transaction state keeps another sender's parts out of an open
-  sequence and rejects a racing attempt as a whole, without exposing a partial
-  record to the peer. Core consumes the native part actually passed to a
-  synchronous call on ordinary failure; any caller-visible preservation is
-  implemented with binding-owned staging storage. Concurrent multipart submits
-  on one socket are the application's responsibility: the binding does not
-  serialize, wait, or retry. Core's lifecycle gate likewise owns races between
-  close and an in-flight submit.
-- A request channel yields exactly one reply, submit failure, timeout,
-  disconnect, or context-cancellation result and then closes. On success the
-  caller closes `Parts`; failures are carried by `Err` and the corresponding
-  `Result`.
-- Payload parts from complete records submitted concurrently on the same
-  socket do not interleave.
-- On an existing one-shot send that returns a boolean, the normal result for
-  temporary backpressure is `false, nil`; a real failure such as a broken
-  connection, an invalid argument, or Core termination is returned as that
-  function family's error. This `false, nil` rule does not apply to reply,
-  which returns only an error.
-- Only a non-blocking receive's no-data is represented as `false, nil`.
-- Every other receive failure is an error.
+- A Context canceled or past its deadline before the call fails with `context.Canceled` or
+  `context.DeadlineExceeded` without starting a native operation.
+- Context cancellation after successful submit ends only the caller wait. The runtime continues draining
+  the native completion and does not deliver the request result again.
+- Parts of multipart records submitted concurrently on the same socket do not interleave. When the public
+  API preserves a caller message, binding staging restores it; the binding creates no retransmission queue.
+- Only no-data from non-blocking receive is represented as `false, nil`; every other receive failure is
+  an error.
 
 ### Per-socket operations
 
-| Socket | Operations provided |
+| Socket | Operations |
 |---|---|
-| PAIR | One-shot `Send` |
-| PUB, XPUB | `Publish` |
-| DEALER | Managed routed `Send` ending in a synchronous `Submit(ctx) error` |
-| ROUTER | Managed routed `SendTo` taking a routing id and ending in a synchronous `Submit(ctx) error` |
-| STREAM | A one-shot send operation that takes a target routing id |
-| DEALER, ROUTER | A request operation — if ROUTER has received request metadata, it builds the reply operation from that metadata |
-| STREAM | A raw TCP packet callback and caller-provided receive |
+| PAIR | `Send()` |
+| PUB, XPUB | `Publish(topic)`, returning a separate `PublishOp` |
+| DEALER | `Send()`, `Request()` |
+| ROUTER | `SendTo(RoutingID)`, `Request(RoutingID)`, `Reply(RoutingID, ReplyToken)` |
+| STREAM | `SendTo(RoutingID)`, RAW `Recv`, PACKET `RecvPacket` |
 
 | Socket | Receive API |
 |---|---|
-| PAIR, DEALER, ROUTER, STREAM | `Recv`, which fills `Received` storage |
-| SUB, XSUB | `Subscribe`, which fills `TopicMessage` storage |
+| PAIR, DEALER, ROUTER, STREAM | `Recv` filling `Received` storage |
+| SUB, XSUB | `Subscribe` filling `TopicMessage` storage |
 
-Core's part functions are the internal substrate used to implement these
-multipart receive APIs, and are not exposed as Go public methods.
+Core part functions are the internal substrate for these multipart receive APIs and are not exposed as
+public Go methods.
 
 ## Receive and eventing
 
@@ -298,13 +181,13 @@ more results. A real failure is `*RecvError`.
 
 Core byte-HWM charge ends when `Recv` or `Subscribe` dequeues the payload.
 `Received` and `TopicMessage` own only the Go lifetime of parts, routing ID,
-request sequence, topic, and multipart framing. `Close` and storage reuse clean
+`ReplyToken`, topic, and multipart framing. `Close` and storage reuse clean
 up that payload and metadata but do not participate in Core HWM accounting. No
 separate retained receive, native lease handle, application byte capacity, or
 duplicate accounting state exists in a public or internal API.
 
 A socket monitor is opened with a typed event mask and provides
-`MonitorEvent` and `MonitorStatus`. Each Core 0.13.1 monitor event mask and
+`MonitorEvent` and `MonitorStatus`. Each Core 0.16.0 monitor event mask and
 delivered event value is provided as its matching typed constant.
 `MonitorEventMask` is used to open a monitor, and `MonitorEventType` is
 used to check a received `MonitorEvent.Event`.
@@ -326,12 +209,9 @@ counts, `OutstandingApplicationLeaseCount`, `RetiredQueueCount`,
 ABI-reserved and always zero. Reset preserves current, pending, and queue-count
 gauges, rebases both peaks to current, clears epoch counters, and increments
 `MeasurementEpoch`. An ABI version/size mismatch is an unsupported error.
-A poller reports the
-readiness of a socket, file descriptor, or timer source as a `PollEvent`. A
-timer is used to receive an interval event either via a poller or
-directly. The callback or event result for a monitor, poller, or timer
-never exposes the native callback thread as the execution location for a
-public consumer callback.
+A poller reports the readiness of a socket, file descriptor, or timer source as a `PollEvent`. A timer
+is used to receive an interval event either via a poller or directly. Public pull methods on monitor and
+timer return events and fire counts.
 
 ## Receive flow state
 
@@ -349,8 +229,8 @@ The observation surface follows the C contract, so the constant and metric
 names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
 `SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
 with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
-`FLOW_STATE_STALE_GENERATION` (`1 << 2`), and `FLOW_STATE_STALE_EPOCH`
-(`1 << 3`), the status detail bit `FLOW_STATE` (`1 << 5`), and the five status
+and `FLOW_STATE_STALE_EPOCH` (`1 << 3`), the status detail bit `FLOW_STATE`
+(`1 << 5`), and the five status
 fields `flow_paused_connections`, `flow_pause_applied_total`,
 `flow_resume_applied_total`, `flow_state_stale_total`, and
 `flow_pause_duration_ms`, projected with this language's naming convention.
@@ -377,28 +257,26 @@ type ZlinkError interface {
 - `errors.Is` via `Unwrap()` is also supported.
 - The `NativeErrno` field, and the `NativeErrno()` alias, are not part of the public contract.
 
-- If a Context was already cancelled or past its deadline before `Submit`, a
-  routed send channel yields that standard error, while a request channel puts
-  it in `RequestReplyCompletion.Err`. The standard error is not converted into
-  a per-function-family Core error.
-- A reply or failure after native request admission is delivered through the
-  same `RequestReplyCompletion` channel. There is no callback terminal.
+- If a Context was already canceled or past its deadline before `Submit`, that standard error is
+  returned. It is not converted into a per-function-family Core error.
+- A reply or failure after native request admission is returned through the
+  `([]*Message, error)` result of `Submit(context.Context)`.
 
 ## FFI and package boundary
 
 The Go cgo bridge fixes its include path to `include/` inside the package.
 A package consumer does not read the repository's `core/include` directly.
 `bindings/go/tests/raw-core11-allowlist.json` fixes the header file set,
-SHA-256, cgo raw symbols, and local callback helpers in a machine-readable
+SHA-256, cgo raw symbols, and local native helpers in a machine-readable
 form. `zlink/service/` and earlier service symbols are not in the
 allowlist.
 
 The module package uses the following file proxy layout.
 
 ```text
-zlink.systems/zlink/@v/v0.13.1.info
-zlink.systems/zlink/@v/v0.13.1.mod
-zlink.systems/zlink/@v/v0.13.1.zip
+zlink.systems/zlink/@v/v0.16.0.info
+zlink.systems/zlink/@v/v0.16.0.mod
+zlink.systems/zlink/@v/v0.16.0.zip
 ```
 
 The supported platform runtimes are included under the module's
@@ -409,12 +287,162 @@ module cache, without `replace` and without the repository's `core/build`.
 
 - Spot, Actor, MeshNode, and service operations
 - Core 10 compatibility aliases and service headers
-- Private cgo types, native pointers, and callback userdata
+- Private cgo types and native pointers
 - A per-message codec registry, or a caller bypass to raw encode/decode
 - `NativeErrno`
 
-The current verification entry points for GoDoc and the process sample are
+The verification entry points for GoDoc and the process sample are
 recorded in `bindings/go/README.godoc.md`, `bindings/go/tests/run_tests.sh`,
-and `bindings/go/samples/run_samples.sh`. A public contract change in this
-document is applied only after checking the common binding spec and the
-review status of the related draft first.
+and `bindings/go/samples/run_samples.sh`.
+
+## Pull completion public contract
+
+The Go module uses Core 0.16.0 as an exact dependency.
+
+Go uses one `Submit(context.Context)` terminal. The runtime submits with Core `DONTWAIT` and waits the
+goroutine until the socket-local owner drains the completion. A `Context` ends only the caller wait; it
+does not cancel the native operation. If request cancellation is decided first, submit returns
+`(nil, ctx.Err())`, and a late completion releases its payload.
+
+`PollCompletion` is a progress event indicating that the public poller's wait goroutine drained the
+native queue and fully processed at least one live waiter or detached state. Under public poller
+ownership, another goroutine must continue executing the wait loop while `Submit(ctx)` is in use.
+
+A ROUTER REQUEST receive creates a `ReplyToken` as a struct literal inside the package. Its zero value is
+invalid, and equality compares both the owner pointer and opaque value. The zero value of `StreamPacket`
+is an empty reusable output. Publish preserves its existing flags and synchronous submit result on a
+`PublishOp` separate from send. A token provides no raw accessor, ordering, serialization, or `Close`.
+Concurrent recv into the same output is invalid-state. Message pointers remain valid only until the next
+recv entry or `Close()`. Before the first bind/connect, `SetReceiveMode` accepts only
+`StreamReceiveRaw` and `StreamReceivePacket` and rejects `StreamReceiveUnspecified`.
+
+### Public interface
+
+```go
+type SendOp interface {
+    Message(*Message) SendSubmitOp
+    MoveMessage(*Message) SendSubmitOp
+    Bytes([]byte) SendSubmitOp
+}
+
+type SendSubmitOp interface {
+    Message(*Message) SendSubmitOp
+    MoveMessage(*Message) SendSubmitOp
+    Bytes([]byte) SendSubmitOp
+    Submit(context.Context) error
+}
+
+type RequestOp interface {
+    Message(*Message) RequestSubmitOp
+    Bytes([]byte) RequestSubmitOp
+}
+
+type RequestSubmitOp interface {
+    Message(*Message) RequestSubmitOp
+    Bytes([]byte) RequestSubmitOp
+    Timeout(time.Duration) RequestSubmitOp
+    Submit(context.Context) ([]*Message, error)
+}
+
+type ReplyOp interface {
+    Message(*Message) ReplySubmitOp
+}
+
+type ReplySubmitOp interface {
+    Message(*Message) ReplySubmitOp
+    Submit(context.Context) error
+}
+
+type PublishOp interface {
+    Message(*Message) PublishSubmitOp
+    MoveMessage(*Message) PublishSubmitOp
+    Bytes([]byte) PublishSubmitOp
+}
+
+type PublishSubmitOp interface {
+    Message(*Message) PublishSubmitOp
+    MoveMessage(*Message) PublishSubmitOp
+    Bytes([]byte) PublishSubmitOp
+    Flags(SendFlags) PublishSubmitOp
+    Submit(context.Context) (bool, error)
+}
+
+type ReplyToken struct {
+    owner *replyTokenOwner
+    value uint64
+}
+
+func (r *Received) ReplyToken() (ReplyToken, bool)
+func (s *RouterSocket) Reply(
+    rid RoutingID, token ReplyToken) ReplyOp
+
+type StreamReceiveMode int32
+
+const (
+    StreamReceiveUnspecified StreamReceiveMode = iota
+    StreamReceiveRaw
+    StreamReceivePacket
+)
+
+type StreamPacket struct { /* unexported reusable state */ }
+
+func (p *StreamPacket) Empty() bool
+func (p *StreamPacket) RoutingID() RoutingID
+func (p *StreamPacket) HasRoutingID() bool
+func (p *StreamPacket) Header() *Message
+func (p *StreamPacket) Body() *Message
+func (p *StreamPacket) Close() error
+
+func (s *StreamSocket) RecvPacket(
+    out *StreamPacket, flags RecvFlags) (bool, error)
+func (s *StreamSocket) ReceiveMode() (StreamReceiveMode, error)
+func (s *StreamSocket) SetReceiveMode(StreamReceiveMode) error
+```
+
+The operation-start signatures are PAIR `Send() SendOp`, DEALER `Send() SendOp` and
+`Request() RequestOp`, ROUTER `SendTo(RoutingID) SendOp`, `Request(RoutingID) RequestOp`, and
+`Reply(RoutingID, ReplyToken) ReplyOp`, and STREAM `SendTo(RoutingID) SendOp`.
+`Received.Send()` and `Received.Reply()` capture the source target and token. `PubSocket.Publish(topic)`
+and `XPubSocket.Publish(topic)` return `PublishOp`. Calling `Received.Reply()` on a DATA envelope
+returns a state error.
+
+The public Go surface contains no send/request/reply `Flags`, `RequestSyncSubmitOp`, completion channel,
+`RequestReplyCompletion`, `Received.RequestSeq`, STREAM/monitor/timer callback, pair/generation member,
+`SocketMonitor.OnEvent`, or `Timer.OnFire`. `RoutedSendOp` and `RoutedSendSubmitOp` are not public types.
+
+Monitor provides `Recv(RecvFlags) (*MonitorEvent, error)`, `Status()`, and `Close()`. Timer provides
+`Start(intervalNs, repeatCount uint64)`, `Stop()`, `Recv() (uint64, bool, error)`, and `Close()`. Monitor
+DONTWAIT no-data is distinguished by `NO_DATA` on `*RecvError`. The native-header mirror contains only
+`ZLINK_OPT_PENDING_MAX_MSGS` and `ZLINK_OPT_PENDING_MAX_BYTES` as pending options. Monitor-event
+`ConnectionID` is used only for diagnostics and correlation, not as a send/reply target or reconnect
+fence. Pending native options add no public high-level option method.
+
+## Implementation and contract-test verification requirements
+
+Verify the following using only the public Go interface, return values, and poller events. Each item
+maps to one contract test.
+
+**Operations and completion**
+
+- Send and request provide one `Submit(context.Context)` terminal. Request success returns
+  `([]*Message, nil)`, and a non-OK completion returns `(nil, typed request error)`.
+- Send flags not shared by Go and Python appear only on `PublishSubmitOp`, and publish submit retains its
+  `(bool, error)` result.
+- Even when completion drains before submit returns, the result is returned exactly once after joining
+  submit publication.
+- If Context cancellation is decided first, submit returns `(nil, ctx.Err())`; a late completion does
+  not deliver the result again.
+- Under public poller ownership, `Submit(ctx)` progresses when another goroutine executes `wait()`.
+
+**ReplyToken and STREAM**
+
+- `Received.ReplyToken()` returns a valid token and `true` for ROUTER REQUEST, and a zero token and
+  `false` for DATA.
+- A zero token and a token from another owner fail before reply-builder creation.
+- A zero-value `StreamPacket` is empty. Its accessors remain empty after `RecvPacket()` no-data or error
+  and after `Close()`, and the output can be reused.
+
+**Pull eventing**
+
+- Monitor and timer recv return events and fire counts without handlers and distinguish their respective
+  no-data results.

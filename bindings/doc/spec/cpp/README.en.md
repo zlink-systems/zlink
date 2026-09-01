@@ -8,23 +8,18 @@ title: "C++ Bindings Final Structure"
 
 # C++ Bindings Final Structure
 
-> **What this chapter defines** — the `Contracts`/`Runtime` shape the C++
-> library must have once the binding refactor is done, and its required
-> semantic scope.
+> **What this chapter defines** — the C++ library's `Contracts`/`Runtime`
+> shape and required semantic scope.
 
-This document defines the shape the C++ library must have once the
-binding refactor is done. It does not enumerate every method. The concrete
+This document defines the C++ library's public contract and ownership structure.
+It does not enumerate every method. The concrete
 public contract lives at `bindings/cpp/include/zlink/Contracts/`.
 
-In the finished structure, `Contracts/`, the installed header projection,
-tests, samples, the perf runner, and runtime behavior all map
+`Contracts/`, the installed header projection, tests, samples, the perf runner,
+and runtime behavior all map
 `core/include/zlink.h`'s stable core features onto idiomatic C++ types.
 
-This README defines how the C++ binding, in its final state, interprets
-the common policy in `../README.md`. The finished C++ binding does not
-keep old include paths, alias methods, alternate projections, or wrapper
-layers meant to preserve a past surface. This document is the acceptance
-criteria for the refactored C++ binding.
+This README defines how the common policy in `../README.md` applies to the C++ binding.
 
 This binding follows the common bindings architecture map using C++
 naming. `Contracts/` owns the installed public headers, and `Runtime/`
@@ -43,7 +38,7 @@ depend on.
 | [Contract/runtime placement rules](#contractruntime-placement-rules) | The boundary between public declarations and runtime helpers |
 | [Build and packaging policy](#build-and-packaging-policy) | The build/link/install rules for the `zlink_cpp` target |
 | [Contract folder layout](#contract-folder-layout) | The ownership scope of each category under `Contracts/` |
-| [Standard interface rules](#standard-interface-rules) | recv signatures, builders, handler naming rules |
+| [Standard interface rules](#standard-interface-rules) | recv signatures, builders, and terminal rules |
 | [64-bit byte HWM and the monitoring contract](#64-bit-byte-hwm-and-the-monitoring-contract) | The `byte_count_t` representation and the monitor snapshot fields |
 | [Receive flow state](#receive-flow-state) | The receive-flow state type, setter, and monitor surface |
 | [Feature scope](#feature-scope) | The groups the finished public headers cover |
@@ -395,7 +390,7 @@ artifact. The finished binding therefore keeps the following build rules.
 `zlink.hpp` projects these categories into the `zlink` namespace.
 
 - `Core/`: context, context options, routing id, utility resources, and public free functions such as version or capability helpers.
-- `Messaging/`: message, received metadata, topic message, subscription event, stream packet callbacks, builder payload helpers. A codec helper is not included in the C++ binding package — framework-level serialization is handled by a framework codec extension.
+- `Messaging/`: message, received metadata, topic message, subscription event, stream packet value, builder payload helpers. A codec helper is not included in the C++ binding package — framework-level serialization is handled by a framework codec extension.
 - `Sockets/`: socket operations, socket family, typed options, request/reply, publish/subscribe surfaces.
 - `Eventing/`: monitor, monitor snapshot/event, poller, poll event, timer, public poll helpers.
 - `Service/`: SPOT node, SPOT handle, the topology model, actor ref, actor lifecycle, operation builders.
@@ -407,33 +402,15 @@ artifact. The finished binding therefore keeps the following build rules.
 - Data-plane `recv`, routed recv, subscribe, and subscription-event receive use caller-provided output storage (e.g., `received_t&`, `topic_message_t&`, `subscription_event_t&`).
 - `message_t::from(...)` copies the caller's bytes independently. When a caller-owned buffer must be handed to a message without a copy, use the advanced API overload `external_message_t::from(span, free_fn, hint)`. This overload entrusts the buffer to the message, and calls `free_fn(data, hint)` exactly once when the message releases the buffer.
 - send, routed send, publish, request, reply, SPOT operations, and Actor location/session operations return a move-only fluent builder.
-- A builder's start method takes only a target identity, topic, channel, routing id, or request sequence. Payload, flag, timeout, and async submit choices happen at the builder stage.
+- A builder's start method takes only a target identity, topic, channel, routing ID, or `reply_token_t`. Payload, flag, timeout, and async submit choices happen at the builder stage.
 - A SPOT channel-targeted operation uses `send_to_channel(...)` and `request_to_channel(...)`. SPOT topic publish keeps `publish(topic)` as-is.
-- A handler registration method uses the `set_..._handler` name. For example, raw STREAM packet handling uses `set_packet_handler(...)`, a monitor event uses `set_monitor_handler(...)`, and SPOT dispatch uses `set_dispatch_handler(...)`.
-- An `on_...` name is not a public registration method in the finished C++ API — it is reserved for an internal or protected hook when needed.
 - No single-payload shortcut overload is added under the same name as an operation's start method. `send(message)`, `send(routing_id, message)`, `publish(topic, message)`, `send_to_channel(channel, message)`, `send_to_spot(..., message)` are not public contract members. A caller uses `send(...).message(message).submit()`.
 - A multipart payload accumulates via repeated `message(...)` calls. A `messages(...)` convenience method is allowed only when it delegates to the same builder contract and is declared in `Contracts/`.
 - A Dealer socket does not expose protocol envelope helpers such as `request_frame(...)` or `reply(request_token, parts)`. Dealer can start a request with `request()`, but has no API-level peer routing id, so it cannot reply to an arbitrary token.
 - No operation-start overload family such as `send_no_wait`, `publish_with_flags`, `request_async` is added. Keep one operation name, and let the builder absorb variants. The per-language name of the terminal builder method follows the [bindings async execution surface policy](../async-coroutine-policy.en.md).
-- A routed **send** has two terminals on `routed_send_submit_operation_t`:
-  sync `flags(int).submit() -> void` (no flag or `NONE` blocks in Core on the
-  caller's path; `DONTWAIT` reports immediate backpressure as `submit_error_t`)
-  and `async() -> async_result_t<void>` (Core send-completion). Both paths keep no
-  admission park queue, WRITABLE-callback retry, deadline timer, or dispatcher
-  thread — see the
-  [bindings routed send contract and async completion surface policy](../async-coroutine-policy.en.md).
-  **The binding library owns no threads at all.**
-- Core owns the routed send HWM contract end to end: a blocking submit waits
-  inside Core and resumes on the Core signal, the socket `SNDTIMEO` is the wait
-  bound, and `SNDTIMEO=0` returns `BACKPRESSURED` (`EAGAIN`) immediately.
-  Backpressure policy belongs to the application; the binding never retries.
-  Failure is thrown as `submit_error_t`. The public C++ message stays with the
-  caller because the binding submits a separate native view; Core consumes the
-  native part actually passed to a synchronous call on ordinary failure.
-- The routed send builder exposes a `flags(int)` stage only for sync `submit()`.
-  Its `timeout(...)` stage sets the Core per-operation deadline used by
-  `async()`, which takes no flags; sync `submit()` with no flag or `NONE` uses
-  the socket `SNDTIMEO` bound.
+- Send's blocking `submit()` uses Core `NONE` admission, while `async()` waits for a Core
+  `DONTWAIT` completion. Socket `SNDTIMEO` bounds the blocking admission wait. The binding does not
+  create a payload retransmission queue.
 - The C++ binding adds no lock or gate of its own to an outbound path. Core's
   per-socket transaction state keeps another sender's parts out of an open
   sequence and rejects a racing attempt as a whole, without exposing a partial
@@ -443,37 +420,12 @@ artifact. The finished binding therefore keeps the following build rules.
   application's responsibility: the binding does not serialize, wait, or
   retry. Core's lifecycle gate likewise owns races between close and an
   in-flight submit.
-- The terminals for a routed **request** are `submit()` (blocking caller return),
-  `submit(callback)` (immediate return), and `async()`
-  (`async_result_t<std::vector<message_t>>`). It submits synchronously on the
-  calling thread to the exact Core-selected `(RID, transport pair id, generation)`
-  target. Reply completion is Core-driven: the Core reply handler callback
-  completes the async suspension and invokes the callback in the context that
-  delivered that completion. The submit itself follows the same Core-owned HWM
-  contract as a routed send (`SNDTIMEO` is the bound). The `flags(int)` stage
-  on both synchronous terminals waits for admission with `NONE` and reports
-  immediate back-pressure with `DONTWAIT`. The binding keeps no retry
-  queue, timer, or dedicated thread for this surface.
+- Request provides blocking `submit()` and `async()` and retains the builder's reply timeout. It captures
+  the target when the operation is created and does not use physical connection identity as a public target.
 - The request timeout is Core-owned (`ZLINK_REQUEST_TIMED_OUT`); the builder's
   `timeout(...)` sets that Core-owned reply deadline. A submit failure is thrown as
-  `submit_error_t`; after admission, Core's reply lifecycle owns completion. Drop
-  and `async_result_t::cancel()` request cancellation, but a request Core already
-  accepted still ends on its Core-owned terminal event.
-- `request_submit_operation_t::submit()` blocks the caller on the Core reply
-  callback and returns `std::vector<message_t>`. `submit(callback)` installs the
-  existing Core reply bridge and returns `bool` immediately. Callback delivery
-  and `async()` resumption happen in the context that Core uses for completion.
-  Destroying the socket or context from that resumed continuation or callback
-  deadlocks; submitting send/publish/request from a completion callback fails
-  with `EDEADLK`. Handing the continuation to another execution model is the
-  framework's and the application's job.
-- `send_submit_operation_t` (the PAIR/STREAM one-shot) exposes sync
-  `flags(int).submit() -> bool` and `async() -> async_result_t<void>`. Its
-  `timeout(...)` stage sets the Core per-operation deadline for `async()`;
-  completion means admission, not peer delivery. `.flags(dontwait).submit()` returns `false`
-  immediately on backpressure. Destroying the socket/context from an async
-  resumed continuation deadlocks, and submitting from its completion callback
-  fails with `EDEADLK`.
+  `submit_error_t`; after admission, Core's reply lifecycle owns completion. Dropping the awaitable
+  detaches only the waiter; runtime drain cleans up the late completion.
 - `publish_operation_t` (PUB/XPUB) has only synchronous `submit() -> bool`.
   PUB/XPUB publish is lossy, so the publish builder has no `async()` terminal;
   `ZLINK_PUB_OPT_NODROP` backpressure is surfaced only by synchronous submit.
@@ -483,13 +435,12 @@ artifact. The finished binding therefore keeps the following build rules.
   backpressure is not a reply result; `NOT_CONNECTED`, `TERMINATED`,
   `INVALID_ARGUMENT`, and other non-HWM submit failures are delivered
   immediately as `submit_error_t`.
-- No standard-name bypass or operation alias such as `on_send_ready(...)`, `on_packet(...)`, `on_event(...)` is kept. A call site uses the standard public contract directly, not a layered alias.
 
 ## 64-bit byte HWM and the monitoring contract
 
 - Socket HWM and the context Core HWM memory limit and budget are expressed as `byte_count_t`.
 - This value type holds only `uint64_t` bytes, and reveals its unit through the `bytes(...)` constructor function and the `bytes()` accessor function.
-- The old `message_count_t` is not kept as an alias or an adapter.
+- The public contract has no `message_count_t` alias or adapter.
 - `0` means unlimited for HWM, and the manual default is `4,096,000 bytes`.
 
 ```cpp
@@ -552,8 +503,8 @@ the output object. Copying, closing, or destroying that object manages payload
 lifetime, not Core HWM credit or application byte capacity. No separate
 retained receive or lease handle exists in a public or internal API.
 
-The legacy `auto_hwm_msg_unit_bytes` and slot, size-cap, and connection-bucket
-planner properties are removed without aliases. The monitor snapshot projects
+The public contract has no `auto_hwm_msg_unit_bytes` or slot, size-cap, or connection-bucket planner
+properties or aliases. The monitor snapshot projects
 Core monitoring ABI v4 byte-pending fields, keeping pending-message counts
 separate from `snd_pending_bytes` and `rcv_pending_bytes`; context-wide budget, accounting,
 and queue counts come from `core_hwm_budget_snapshot_t`.
@@ -573,8 +524,8 @@ The observation surface follows the C contract, so the constant and metric
 names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
 `SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
 with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
-`FLOW_STATE_STALE_GENERATION` (`1 << 2`), and `FLOW_STATE_STALE_EPOCH`
-(`1 << 3`), the status detail bit `FLOW_STATE` (`1 << 5`), and the five status
+and `FLOW_STATE_STALE_EPOCH` (`1 << 3`), the status detail bit `FLOW_STATE`
+(`1 << 5`), and the five status
 fields `flow_paused_connections`, `flow_pause_applied_total`,
 `flow_resume_applied_total`, `flow_state_stale_total`, and
 `flow_pause_duration_ms`, projected with this language's naming convention.
@@ -637,7 +588,7 @@ The finished C++ binding satisfies the following requirements.
 - The installed headers expose every stable, user-facing core feature.
 - The C++ binding builds and installs a compiled C++ library target in addition to the public headers.
 - `Contracts/Eventing/` is the only public eventing category. `Contracts/Monitoring/` is gone, and `zlink.hpp` includes the Eventing header.
-- The old wrapper include paths are gone. Applications, samples, perf, and tests include only `<zlink.hpp>` or an intentional `Contracts/...` header.
+- Applications, samples, perf, and tests include only `<zlink.hpp>` or an intentional `Contracts/...` header.
 - The public headers and the compiled C++ binding target alone give an application, perf, sample, or framework adapter everything it needs.
 - A user never needs a private helper header or a private runtime source path.
 - A value type stays concrete unless an abstraction genuinely reduces complexity.
@@ -661,3 +612,158 @@ types.
 - `send_to_actor`, once submit succeeds, transfers ownership of one or more message parts, and completes once the Actor owner's mailbox takes them over.
 - `request_to_actor`, once submit succeeds, transfers ownership of the request part and delivers the reply part the Actor handler produced as a native-awaitable result.
 - C++ must not resurrect the removed Discovery route table or resolver API as a compatibility helper.
+
+## Pull completion public contract
+
+The C++ package uses Core 0.16.0 as an exact dependency.
+
+The C++ runtime hides native completion IDs, `user_context`, and raw drain and converts them into a
+blocking result or `async_result_t`. Blocking send/request use Core `NONE`; `async()` uses Core
+`DONTWAIT`. Completion-backed operation state is registered in a provisional registry before native
+`FINAL` and completes exactly once after submit publication and completion capture join. Dropping an
+`async_result_t` only detaches the waiter; it does not cancel the Core operation.
+
+`poll_event_flag_t::pollcompletion` is a progress event indicating that the public poller's wait thread
+drained the native queue and fully processed at least one live waiter or detached state. While a public
+poller is the owner, another thread must execute the wait loop for a blocking request to progress.
+
+Only a ROUTER REQUEST receive creates a `reply_token_t`. The token carries a shared owner tag created by
+the ROUTER wrapper and an opaque value. Equality, hashing, and reply-owner validation use both values.
+It provides no public numeric constructor, raw accessor, ordering, serialization, or close operation.
+`stream_packet_t` is a move-only reusable output that first clears its previous payload on recv entry.
+Concurrent recv into the same output is invalid-state. Header/body references remain valid only until
+the next recv entry or `close()`. Before the first bind/connect, the receive-mode setter accepts only
+`raw` and `packet` and rejects `unspecified`.
+
+### Public interface
+
+```cpp
+class send_submit_operation_t {
+public:
+    send_submit_operation_t&& message(message_t&) &&;
+    send_submit_operation_t&& message(message_t&&) &&;
+    void submit() &&;
+    async_result_t<void> async() &&;
+};
+
+class request_submit_operation_t {
+public:
+    request_submit_operation_t&& message(message_t&) &&;
+    request_submit_operation_t&& message(message_t&&) &&;
+    request_submit_operation_t&& timeout(std::chrono::milliseconds) &&;
+    std::vector<message_t> submit() &&;
+    async_result_t<std::vector<message_t>> async() &&;
+};
+
+class reply_token_t final {
+public:
+    reply_token_t() = delete;
+    reply_token_t(const reply_token_t&) = default;
+    reply_token_t& operator=(const reply_token_t&) = default;
+    friend bool operator==(const reply_token_t&, const reply_token_t&) noexcept;
+
+private:
+    reply_token_t(std::shared_ptr<const void> owner, uint64_t value) noexcept;
+    std::shared_ptr<const void> owner_;
+    uint64_t value_;
+    friend struct detail::received_access_t;
+    friend struct reply_token_hash_t;
+};
+
+struct reply_token_hash_t {
+    std::size_t operator()(const reply_token_t&) const noexcept;
+};
+
+class reply_submit_operation_t {
+public:
+    reply_submit_operation_t&& message(message_t&) &&;
+    void submit() &&;
+};
+
+enum class stream_recv_mode_t : int {
+    unspecified = 0,
+    raw = 1,
+    packet = 2
+};
+
+class stream_packet_t final {
+public:
+    stream_packet_t() = default;
+    ~stream_packet_t();
+    stream_packet_t(stream_packet_t&&) noexcept = default;
+    stream_packet_t& operator=(stream_packet_t&&) noexcept = default;
+    stream_packet_t(const stream_packet_t&) = delete;
+    stream_packet_t& operator=(const stream_packet_t&) = delete;
+
+    bool empty() const noexcept;
+    const std::optional<routing_id_t>& routing_id() const noexcept;
+    message_t& header();
+    message_t& body();
+    void close() noexcept;
+
+private:
+    std::optional<routing_id_t> routing_id_;
+    std::optional<message_t> header_;
+    std::optional<message_t> body_;
+    friend class stream_socket_t;
+};
+
+bool stream_socket_t::recv_packet(
+    stream_packet_t& out, recv_flags_t flags = recv_flags_t::none);
+
+stream_recv_mode_t stream_socket_options_t::recv_mode() const;
+void stream_socket_options_t::recv_mode(stream_recv_mode_t mode);
+```
+
+The operation-start signatures are PAIR `send_operation_t send()`, DEALER
+`send_operation_t send()` and `request_operation_t request()`, ROUTER
+`send_operation_t send(const routing_id_t&)`,
+`request_operation_t request(const routing_id_t&)`, and
+`reply_operation_t reply(const routing_id_t&, reply_token_t)`, and STREAM
+`send_operation_t send(const routing_id_t&)`. A send factory captures the target in the builder.
+`received_t::reply_token()` returns `const std::optional<reply_token_t>&`.
+`received_t::send()` returns a `send_operation_t` that captures the source target, and
+`received_t::reply()` returns a `reply_operation_t` that captures the source RID and token.
+
+The public C++ surface contains no send/request/reply `.flags(...)`, send `.timeout(...)`, request
+callback overload/type, `async_result_t::cancel()`, STREAM packet handler, monitor `on_event` or
+`ignore_event`, timer `on_fire`, pair/generation member, or exact-pair method. PAIR and STREAM send
+`submit()` also do not return `bool`. `routed_send_operation_t` and
+`routed_send_submit_operation_t` are not public types.
+
+Monitor provides `optional<monitor_event_t> recv(recv_flags_t = none)`, `status()`, and `close()`.
+Timer provides `start(duration, uint64_t = 0)`, `stop()`, `optional<uint64_t> recv()`, and `close()`.
+The pending native option names are `ZLINK_OPT_PENDING_MAX_MSGS` and
+`ZLINK_OPT_PENDING_MAX_BYTES`. Monitor-event `connection_id` is used only for diagnostics and
+correlation, not as a send/reply target or reconnect fence. Pending native options do not add a public
+high-level option facade.
+
+## Implementation and contract-test verification requirements
+
+Verify the following using only the public C++ interface, return values, exceptions, and poller events.
+Each item maps to one contract test.
+
+**Operations and completion**
+
+- Every socket's send factory returns `send_operation_t`, and blocking `submit()` and `async()` observe
+  the `NONE` and `DONTWAIT` completion boundaries respectively.
+- Request exposes only timeout, a blocking result, and `async()`. A non-OK completion ends with a typed
+  error and does not expose the error payload.
+- After `async_result_t` drop, a late completion does not complete the waiter again and releases the
+  native aggregate.
+- Under public poller ownership, a completion-backed terminal progresses when a wait loop runs, and
+  `pollcompletion` returns only after settlement or cleanup finishes.
+
+**ReplyToken and STREAM**
+
+- Tokens with the same ROUTER owner and opaque value are equal; tokens with different owners are not.
+  Reply with a token from another owner fails before the native call.
+- Moving a ROUTER wrapper preserves owner-tag identity. After close and recreation, a stale token cannot
+  be used with the new wrapper.
+- `recv_packet()` fills the output on success and leaves it empty on `NO_DATA` or error. The same output
+  can be reused after `close()`.
+
+**Pull eventing**
+
+- Monitor DONTWAIT no-data is `nullopt`, timer no-data is also `nullopt`, and the pull lifecycle exposes
+  each event and fire count once.

@@ -16,20 +16,9 @@ title: "Node / TypeScript 바인딩 구현 청사진"
 `bindings/node/src/index.ts`가 선언하는 패키지 루트 export, `package.json`
 exports, 그리고 생성되는 `.d.ts` 표면이다.
 
-Node/TypeScript 구현체는 소스 패키지 트리, 패키지 export, `.d.ts` 타입, 테스트,
-샘플, perf 러너, 런타임 동작이 이 청사진을 따르고 안정적인
-`core/include/zlink.h` 기능을 TypeScript-idiomatic API로 매핑할 때 정렬되었다고
-본다.
-
-이 README는 `../README.md`의 공통 정책에 정렬된 후의 Node/TypeScript 바인딩
-형태를 기술하며, Node 리팩터링 작업의 가이드이기도 하다. 리팩터링 중에는 이
-문서를 사용해 각 공개 계약, 런타임 구현, 네이티브 브릿지 헬퍼, 테스트, 샘플,
-perf import가 어디에 속하는지 결정한다. Node 바인딩이 정렬되었다고 선언되면
-생성된 선언, 패키지 export, 테스트, 샘플, perf, 런타임 동작은 이 문서와 일치한다.
-
-Node 리팩터링은 깨는 정리 작업이다. 리팩터링 이전의 공개 표면을 보존하기 위해
-호환성 shim, deprecated wrapper, 중복 생성 경로, 런타임 재export alias를 남기지
-않는다.
+소스 패키지 트리, package export, `.d.ts` 타입, 테스트, 샘플, perf runner와 runtime은
+`core/include/zlink.h` 기능을 TypeScript 관용 API로 투영한다. 이 문서는 각 공개 계약,
+runtime 구현과 native bridge helper의 소유 위치를 정의한다.
 
 이 바인딩은 공통 바인딩 아키텍처 맵을 TypeScript 명명 규칙과 함께 따른다. 소문자
 `contracts`와 `runtime` 소스 폴더를 사용하고, 무엇이 공개인지는 패키지 export가
@@ -83,8 +72,8 @@ camelCase 메서드, PascalCase 공개 타입, TypeScript에 어울리는 곳에
 - 계약 소스: `bindings/node/src/zlink/contracts/`.
 - 패키지 projection: 패키지 entrypoint에서 export되고 발행된 TypeScript 정의에
   선언된 심볼.
-- 내부 구현: 네이티브 addon 모듈, 비공개 소스 모듈, N-API 핸들, 콜백 트램펄린,
-  Core completion/reply callback bridge, 컨버터, raw part-loop 헬퍼.
+- 내부 구현: 네이티브 addon 모듈, 비공개 소스 모듈, N-API 핸들,
+  completion drain owner와 provisional registry, 컨버터, raw part-loop 헬퍼.
 - 패키지 경계: `package.json` exports는 문서화된 공개 entrypoint만 노출한다.
 - 문서 역할: 이 README는 형태와 의미적 범위(semantic coverage)를 정의한다. 정확한
   공개 멤버 목록은 패키지 entrypoint와 선언이 소유한다.
@@ -113,7 +102,8 @@ Node/TypeScript 바인딩을 변경할 때 다음 경로를 일관되게 사용�
 - `package.json` exports에 의도적으로 나열되지 않는 한 deep 소스 경로를 공개 API로 노출하지 않는다.
 - 소스 디렉터리 이름은 소문자를 사용한다. `src/zlink/Contracts`나 `src/zlink/Runtime`을 만들지 않는다. 이런 이름은 공개 deep-import 표면으로 오인될 수 있다.
 - `src/zlink/contracts`는 공개 TypeScript 타입, 클래스, 빌더, enum, 에러, 팩토리 반환 계약을 소유한다. 패키지 entrypoint나 런타임 팩토리 모듈이 팩토리 구현을 소유한다.
-- `src/zlink/runtime`은 네이티브 기반 런타임 구현, 네이티브 addon 호출, 핸들 owner, 콜백 트램펄린, Core completion/reply callback bridge, 마샬링, 플랫폼 로딩을 소유한다.
+- `src/zlink/runtime`은 네이티브 기반 런타임 구현, 네이티브 addon 호출, 핸들 owner,
+  completion drain owner와 provisional registry, 마샬링, 플랫폼 로딩을 소유한다.
 
 다음 트리가 정렬된 구현 구조다.
 
@@ -221,9 +211,9 @@ bindings/node/
 나타나는 심볼이라면, 리뷰어는 `src/zlink/contracts` 아래의 계약 소유자나 패키지
 루트 entrypoint를 가리킬 수 있어야 한다.
 
-## API 변경 절차
+## API 변경 원칙
 
-새 core 기능을 매핑할 때:
+Core 기능의 공개 사상은 다음 원칙을 따른다.
 
 1. 올바른 계약 소스 카테고리에 공개 심볼을 추가한다.
 2. 패키지 entrypoint, 선언 표면, `package.json` projection을 갱신한다.
@@ -235,7 +225,7 @@ bindings/node/
 7. 생성된 `dist`와 `.d.ts` 산출물이 비공개 브릿지 모듈을 노출하지 않는지
    확인한다.
 
-기존 코드를 이 형태로 리팩터링할 때:
+Contract/runtime 경계는 다음 요구를 만족한다.
 
 1. 공개 동작 선언을 `src/zlink/contracts/<category>/`로 옮긴다.
 2. 네이티브 기반 런타임 구현을 `src/zlink/runtime/<category>/`로 옮긴다.
@@ -249,8 +239,7 @@ bindings/node/
 8. 선언을 재생성하고 `dist/index.d.ts`가 런타임 구현 모듈이 아니라 계약 표면을
    담고 있는지 확인한다.
 
-다음의 Node 전용 단축 경로가 제거되어야만 리팩터링이 완료된다. 이 항목들은
-선택적인 호환 계층이 아니다.
+다음 Node 전용 단축 경로는 허용하지 않는다.
 
 - `src/zlink/contracts`는 런타임 핸들 모듈을 재export하지 않는다.
 - 계약 파일은 공개 서비스 모델을 기술하기 위해 런타임 리소스 클래스를 import
@@ -262,11 +251,6 @@ bindings/node/
   한다.
 - `package.json`은 런타임, 네이티브, 생성, 비공개 소스 subpath를 노출하지 않는다.
 - 생성된 선언은 런타임 구현 모듈 경로를 공개 타입으로 언급하지 않는다.
-
-인수인계 작업이라면 짧은 작업 설명만으로 충분하다. 이 README와 `../README.md`에
-따라 Node 바인딩을 리팩터링하고, .NET 디자인 형태를 사용하며, TypeScript 명명
-스타일을 보존하고, 호환 shim을 제거하고, 이 문서의 검증 게이트를 통과시키면
-된다.
 
 ## 라이브러리 형태
 
@@ -304,8 +288,7 @@ TypeScript 인터페이스를 먼저 정의한다.
 - operation builder: send, routed send, request, reply, publish, channel
   send/request, SPOT send/request/reply, actor create, actor join, actor join
   reply builder.
-- callback 역할: stream packet handler, monitor handler, poll handler, SPOT
-  dispatch handler, route handler.
+- application handler 역할: SPOT dispatch handler, route handler.
 
 이 역할을 구현하는 런타임 클래스 이름은 private 또는 unexported여도 된다. 그러나
 패키지 루트 팩토리와 생성된 선언은 공개 계약 인터페이스 이름을 사용해야 한다.
@@ -498,18 +481,14 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 - 케이스만 다를 뿐 다른 바인딩과 동일한 정식 액션 이름을 사용한다.
   `send`, `request`, `reply`, `publish`, `subscribe`, `unsubscribe`,
   `recv`, `recvRouted`, `receiveSubscriptionEvent`,
-  `setPacketHandler`, `setDispatchHandler`, `getOrCreateSpot`,
+  `recvPacket`, `setDispatchHandler`, `getOrCreateSpot`,
   `sendToChannel`, `requestToChannel`, `sendToSpot`, `requestToSpot`.
-- 호환성만을 위해 옛 alias를 유지하지 않는다. 리팩터링 이전 이름이 정식 의미와
+- 호환성만을 위해 옛 alias를 유지하지 않는다. 이전 이름이 정식 의미와
   충돌하면 제거하고 정식 TypeScript 이름을 노출한다.
-- 핸들러 등록에 `on...` 이름을 사용하지 않는다. API가 현재 핸들러를 저장하거나
-  교체할 때는 `set...Handler`를 사용한다.
 - `sendNoWait`, `publishWithFlags`, `requestAsync` 같은 operation-start 변형을
-  만들지 않는다. operation 이름은 하나로 유지한다. 각 operation이 지원하는 flag나
-  timeout은 빌더에 둔다. 관리형 send는 아래에서 정의하는 sync
-  `submit_sync(SendFlags)`와 async `submit()` 종단을 사용한다. Request는
-  `submit_sync(flags)`, `submit_sync(flags, callback)`, Promise `submit()`의 세
-  완료 표면을 사용한다.
+  만들지 않는다. Operation 이름은 하나로 유지한다. Send는 `submit_sync()`와
+  `submit()`, request는 `submit_sync()`와 `submit()`을 사용하고 request timeout은
+  builder에 둔다.
 
 ## 정식 인터페이스 규칙
 
@@ -518,7 +497,7 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
   `boolean`을 반환한다.
 - send, routed send, publish, request, reply, SPOT operation, Actor location/
   session operation은 fluent 빌더를 반환한다.
-- 빌더 시작 메서드는 대상 identity, topic, channel, routing id, 요청 sequence만
+- 빌더 시작 메서드는 대상 identity, topic, channel, routing ID와 `ReplyToken`만
   받는다. payload와 그 operation이 지원하는 option은 빌더 단계다.
 - SPOT channel 대상 operation은 `sendToChannel(...)`과
   `requestToChannel(...)`을 사용한다. SPOT topic publish는 `publish(topic)`으로
@@ -545,28 +524,10 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 - operation-start 명명은 위의 함수 이름 규칙을 따른다. 빌더의 종단 메서드는
   Promise 반환 표면에서도 지금처럼 `submit(...)`을 사용한다. `submitAsync` 같은
   별도 종단 이름을 추가하지 않는다.
-- Pair의 `send().message(...)`, DEALER/ROUTER의 routed
-  `send(...).message(...)`, `Received.send().message(...)`는 두 종결자를 제공한다. sync
-  `submit_sync(SendFlags): void`는 `zlink_send_part(_rid)`로 제출하고 실패 시
-  `SubmitError`를 발생시킨다. async `submit(): Promise<void>`는 Core
-  send-complete callback으로 완료된다. timeout은 async operation의 option으로
-  Core에 전달하며, `ADMITTED`면 Promise를 resolve하고 `TIMED_OUT`/`TERMINAL`이면
-  Core errno를 보존한 `SubmitError`로 reject한다. Promise를 버리거나 GC하는 것은
-  취소가 아니며 별도 cancel API를 노출하지 않는다. 이 binding은 thread, queue,
-  retry 또는 readiness/admission 상태를 소유하지 않고, native callback은 JS
-  completion 전달만 수행한다.
-- Stream의 managed `send(routingId)`도 같은 sync/async send 계약을 사용한다.
-  Stream의 `trySend`와 공개 ROUTER `sendTransportPair(...)` 같은 raw one-shot
-  operation은 기존 동기 `void`/`boolean` 계약을 유지하며 managed HWM 대기 종단으로
-  해석하지 않는다.
-- DEALER/ROUTER request는 세 완료 표면을 제공한다. `submit_sync(flags)`는 admission과
-  reply를 동기 대기해 `Message[]`를 직접 반환한다. `submit_sync(flags, callback)`은
-  admission 결과가 결정되면 즉시 반환하고 reply는 callback으로 전달한다.
-  `submit()`은 Core reply callback으로 완료되는 `Promise<Message[]>`를 반환한다.
-  Request 제출도 send와 같은 HWM admission을 지나며 sync flag의 `None`/`DontWait`가
-  admission 대기 여부를 정한다. raw
-  ROUTER reply는 동기 one-shot이다. request/reply 경로에는 binding-owned retry,
-  pending queue 또는 progress timer를 추가하지 않는다.
+- PAIR·DEALER·ROUTER·STREAM send는 target을 capture한 하나의 `SendOperation` family를
+  사용한다. `submit_sync()`는 Core `NONE`, `submit()`은 Core `DONTWAIT` completion을 사용한다.
+- DEALER/ROUTER request는 `submit_sync(): Message[]`와 `submit(): Promise<Message[]>`를
+  제공하고 builder의 reply timeout을 유지한다.
 - Raw ROUTER/`Received` reply의 terminal은
   `ReplySubmitOperation.submit(): void`인 동기 one-shot이다. Promise를 반환하지 않고
   HWM-managed 경로에 진입하지 않으며, terminal reply 또는 error reply를 HWM 없는
@@ -579,10 +540,6 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
   pending queue, worker, retry 또는 readiness/admission API를 추가하지 않는다.
   전달한 Message는 Core submit이 성공한 경우에만 consume하고, 동기 실패에서는
   호출자가 재사용할 수 있다.
-- MeshNode에서 Actor의 bound session으로 보내는 `sendActorBoundSession(...)`은
-  0보다 큰 `expectedBindingGeneration`을 필수로 받는다. binding이 교체된 뒤 이전
-  generation의 호출을 새 session으로 전달하지 않으며, 0은 current binding을
-  자동 선택하지 않고 Core의 `InvalidArgument` 결과를 보존한다.
 
 ## 공개 엔트리 형태
 
@@ -592,7 +549,7 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 - Messaging: `Message`, routing id 값, 수신 메타데이터, 토픽 메시지, 구독
   이벤트, 스트림 packet 데이터.
 - Sockets: pair, dealer, router, pub, sub, xpub, xsub, stream, 타입 있는 옵션,
-  callback, request/reply, publish/subscribe, 스트림 packet API.
+  request/reply, publish/subscribe, 스트림 packet API.
 - Eventing: monitor, monitor snapshot/event, poller, poll event, timer.
 - Service: SPOT node, SPOT 핸들, 토폴로지 스냅샷, Actor
   참조, Actor 생명주기, operation 빌더.
@@ -673,7 +630,7 @@ completion lane이 없는 socket은 not-supported에 해당하는 config 범주 
 관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
 `SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
 `1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
-`FLOW_STATE_STALE_GENERATION`(`1 << 2`), `FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
+`FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
 bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
 `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
 `flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
@@ -715,35 +672,27 @@ Node는 `SpotNode.getOrCreateSpot(spotRid)`를 노출한다. 이는
 - 논블로킹 no-data는 `false`를 반환하며 throw된 에러와 구별된다.
 - SPOT readable dispatch 이벤트는 readiness 알림이다. 호출자는 일치하는 receive
   API를 no-data가 될 때까지 비운다(drain).
-- 일반 socket, routed socket, subscription과 request completion에서 수신한 각 part는
+- 일반 socket, routed socket, subscription과 successful request result에서 수신한 각 part는
   addon이 만든 JavaScript 소유 `Buffer`를 payload로 사용하는 `Message`가 된다. Payload를
   읽을 때 추가 native 호출이 발생하지 않으며 `Message`를 닫아도 `Buffer`의 수명 규칙은
   Node가 관리한다.
 - Core byte HWM charge는 일반 `recv`와 `subscribe`가 message를 dequeue할 때 끝난다.
   결과 객체는 `Message`, `Buffer`와 metadata의 JavaScript 수명만 소유하며, 재사용이나
   close를 Core HWM accounting에 연결하지 않는다.
-- 일반 receive는 multipart framing과 metadata를 보존한다. Dealer는 typed `requestSeq`,
-  Router는 source `RoutingId`와 `requestSeq`, Sub와 XSub는 topic과 Core가 제공한 source
+- 일반 receive는 multipart framing과 metadata를 보존한다. Router는 source `RoutingId`와
+  nullable `ReplyToken`, Sub와 XSub는 topic과 Core가 제공한 source
   `RoutingId`를 유지한다. 별도 retained receive, raw lease handle, application byte
   capacity, accounting setter 또는 part 단위 release는 public이나 internal API에 두지 않는다.
 - Actor join 요청 receive 같은 서비스 제어/admission receive 경로는 재사용 가능한
   데이터 평면 저장보다 더 명확할 때 nullable, `undefined`, 또는 태그된 결과 반환
   형태를 사용할 수 있다. 그래도 no-data와 throw된 하드 receive 에러는 구별한다.
 
-### STREAM packet body storage
+### STREAM packet storage
 
-STREAM packet callback의 header는 다른 Node receive와 같은 JavaScript 소유 `Buffer`를
-사용한다. Body는 socket의 `packetBodyMaterialization` option으로 storage를 선택한다.
-
-| 값 | Callback에 전달하는 `Message` | 주 용도 |
-|---|---|---|
-| `StreamPacketBodyMaterialization.Native` | Core native frame을 소유하고 `data()`가 그 frame의 view를 반환한다. | Body를 읽지 않고 다른 STREAM send로 전달하는 relay |
-| `StreamPacketBodyMaterialization.Managed` | Callback 전에 JavaScript 소유 `Buffer`로 복사한다. | Body를 JavaScript에서 읽거나 managed API에 전달하는 처리 |
-
-기본값은 `Native`다. Packet handler를 등록한 뒤에는 option을 변경할 수 없다. 이 option은
-packet callback의 body만 바꾸며 direct STREAM receive, framing, ordering, HWM, timeout과
-backpressure 결과는 바꾸지 않는다. 두 값 모두 callback이 받은 `Message`의 ownership과
-명시적 close 책임은 같다.
+`StreamPacket`은 routing ID, header와 body를 소유하는 reusable output이다. `recvPacket()`은
+진입할 때 이전 payload를 먼저 정리한다. 성공 뒤 message reference는 다음 recv 진입이나
+`close()` 전까지만 유효하며 더 오래 보관하려면 move 또는 copy한다. No-data와 오류에서는
+output이 empty다.
 
 ## 에러와 검증 정책
 
@@ -784,12 +733,12 @@ backpressure 결과는 바꾸지 않는다. 두 값 모두 callback이 받은 `M
 - 네이티브 기반 리소스는 패키지 루트 팩토리나 계약 메서드를 통해 생성되며 계약
   인터페이스 타입으로 표기된다.
 - 라이브러리 형태 섹션에 나열된 네이티브 기반 리소스, operation builder,
-  callback 역할은 런타임 구현 클래스가 팩토리에 연결되기 전에 공개 계약
+  application handler 역할은 런타임 구현 클래스가 팩토리에 연결되기 전에 공개 계약
   인터페이스를 먼저 갖는다.
 - 호환성만을 위한 옛 alias, 중복 operation-start 이름, deprecated wrapper를 남기지
   않는다.
 
-Node 리팩터링 후 필요한 검증. `bindings/node/`에서 다음 명령을 실행한다.
+Node 계약은 `bindings/node/`에서 다음 명령으로 검증한다.
 
 - `npm run build`를 실행한다.
 - `npm run typecheck`을 실행한다.
@@ -822,3 +771,135 @@ Node는 Actor와 Spot route 조회 결과를 공개 JavaScript 객체와 일치�
 - send operation은 submit이 성공하면 하나 이상의 message part 소유권을 넘기고, Actor 소유자 mailbox가 인계를 받으면 완료된다.
 - request operation은 submit이 성공하면 요청 part의 소유권을 넘기고, Actor handler가 만든 reply part를 전달한다.
 - Node는 제거된 Discovery route table이나 resolver API를 compatibility helper로 되살리면 안 된다.
+
+## Pull completion 공개 계약
+
+Node package는 Core 0.16.0을 exact dependency로 사용한다.
+
+Node runtime은 native completion을 drain해 blocking result 또는 `Promise`로 바꾼다.
+`submit_sync()`는 Core `NONE`, `submit()`은 Core `DONTWAIT`를 사용한다. Completion-backed state는
+native `FINAL` 전에 provisional registry에 등록하고 submit publish와 completion capture가 합류한
+뒤 정확히 한 번 끝낸다. Promise를 더 이상 기다리지 않아도 native operation은 취소하지 않으며
+late completion은 payload와 state를 정리한다.
+
+`PollEventFlag.PollCompletion`은 public poller의 wait thread가 native queue를 비우고 live Promise
+또는 detached state를 한 건 이상 완전 처리했다는 progress event다. Public poller owner에서
+blocking request를 사용하면 다른 thread가 wait loop를 계속 실행해야 한다.
+
+`ReplyToken`은 class static block이 설치한 module-private `makeReplyToken(owner, value)` closure만
+만든다. Constructor sentinel은 export하지 않는다. Equality와 hash는 owner identity와 opaque
+value를 함께 사용한다. `StreamPacket`은 empty reusable output이다.
+Token은 raw conversion, ordering, serialization과 `close()`를 제공하지 않는다.
+같은 output의 concurrent recv는 invalid-state다. Message reference는 다음 recv 진입이나
+`close()` 전까지만 유효하다. `recvMode` setter는 첫 bind/connect 전에 `Raw`·`Packet`만 받고
+`Unspecified`를 거부한다.
+
+### Public interface
+
+```ts
+export interface SendSubmitOperation {
+  message(message: MessageLike): SendSubmitOperation;
+  submit(): Promise<void>;
+  submit_sync(): void;
+}
+
+export class ReplyToken {
+  readonly #owner: object;
+  readonly #value: bigint;
+  private constructor(secret: symbol, owner: object, value: bigint);
+  equals(other: ReplyToken): boolean;
+  hashCode(): number;
+  toString(): "ReplyToken";
+}
+
+export interface RequestSubmitOperation {
+  message(message: MessageLike): RequestSubmitOperation;
+  timeout(timeoutMs: number): RequestSubmitOperation;
+  submit(): Promise<Message[]>;
+  submit_sync(): Message[];
+}
+
+export interface ReplySubmitOperation
+  extends PartBuilder<ReplySubmitOperation> {
+  submit(): void;
+}
+
+export interface StreamSocket {
+  send(routingId: RoutingId): SendOperation;
+  recv(out: Received, flags?: RecvFlags): boolean;
+  recvPacket(out: StreamPacket, flags?: RecvFlags): boolean;
+}
+
+export const StreamRecvMode: Readonly<{
+  Unspecified: 0;
+  Raw: 1;
+  Packet: 2;
+}>;
+export type StreamRecvMode =
+  typeof StreamRecvMode[keyof typeof StreamRecvMode];
+
+export interface StreamSocketOptions {
+  recvMode: StreamRecvMode;
+}
+
+export class StreamPacket {
+  constructor();
+  readonly isEmpty: boolean;
+  readonly routingId: RoutingId | null;
+  readonly header: Message | null;
+  readonly body: Message | null;
+  close(): void;
+}
+```
+
+Operation 시작 signature는 PAIR `send(): SendOperation`, DEALER
+`send(): SendOperation`·`request(): RequestOperation`, ROUTER
+`send(routingId): SendOperation`·`request(routingId): RequestOperation`·
+`reply(routingId, token): ReplyOperation`, STREAM `send(routingId): SendOperation`이다.
+Send factory는 target을 builder에 capture한다.
+`Received.replyToken`은 `ReplyToken | null`이다.
+`Received.send()`는 source target을 capture한 `SendOperation`, `Received.reply()`는 source RID와
+token을 capture한 `ReplyOperation`을 반환한다.
+
+Public Node/TypeScript surface에는 `RoutedSendOperation`·`ImmediateSendOperation`,
+`StreamSocket.trySend()`·`setPacketHandler()`, `RequestCallback`과 callback overload,
+`StreamPacketBodyMaterialization`, monitor/timer callback, pair/generation member가 없다.
+`ReplySubmitOperation`은 `Flaggable`을 상속하지 않고 reply flags를 제공하지 않는다.
+
+Monitor는 `recv(flags?: RecvFlags): MonitorEvent | null`·`status()`·`close()`를, timer는
+`start(intervalNs: bigint, repeatCount: bigint)`·`stop()`·`recv(): bigint | null`·`close()`를
+제공한다.
+Monitor event의 `connectionId`는 진단과 correlation에만 사용하며 send·reply target이나
+reconnect fence로 사용하지 않는다.
+Internal addon enum mirror는 `ZLINK_OPT_PENDING_MAX_MSGS`와
+`ZLINK_OPT_PENDING_MAX_BYTES`만 사용하며 public option property를 추가하지 않는다.
+
+## 구현 및 contract test 검증 요구
+
+Public TypeScript declaration, JavaScript result·error와 poller event만으로 다음을 확인한다. 각
+항목은 contract test 하나로 이어진다.
+
+**Operation과 완료**
+
+- PAIR·DEALER·ROUTER·STREAM send factory가 하나의 `SendOperation` family를 반환한다.
+- Send/request는 §Public interface의 flag 없는 Promise·sync terminal만 제공하고 request timeout은
+  유지한다.
+- Submit 반환 전 completion이 drain돼도 Promise는 submit publish와 합류한 뒤 정확히 한 번
+  settle된다.
+- Promise를 더 이상 기다리지 않는 state의 late completion은 public result를 다시 전달하지 않고
+  native aggregate를 정리한다.
+- Non-OK request completion은 typed error만 제공하고 error payload를 공개하지 않는다.
+- `PollCompletion`은 Promise settle 또는 detached cleanup이 끝난 뒤에만 반환된다.
+
+**ReplyToken과 STREAM**
+
+- ROUTER REQUEST receive만 token을 반환하고 public construction, raw conversion과 serialization이
+  성공하지 않는다.
+- 같은 owner·value token만 같으며 다른 owner token의 reply는 native 호출 전에 실패한다.
+- `StreamPacket`은 recv 성공 뒤 payload를 보유하고 no-data·오류 때 empty이며 `close()` 뒤 재사용할
+  수 있다.
+
+**Pull eventing**
+
+- Monitor·timer recv는 no-data를 `null`로 반환하고 callback 없이 event와 fire count를 관찰한다.
+- TypeScript declaration과 generated JavaScript가 같은 public 이름과 terminal을 제공한다.

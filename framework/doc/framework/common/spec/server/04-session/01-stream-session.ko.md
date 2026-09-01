@@ -41,15 +41,21 @@ Client가 이 STREAM 모델에 접속해 packet을 주고받는 client library�
 | 주체 | 책임 |
 |---|---|
 | Application | Session callback을 구현하고, [packet name](../00-foundation/02-glossary.ko.md#packet-name)으로 처리할 packet을 구분해 Framework 공통 decoder 표면을 사용한다. |
-| Framework | Header framing 조립, packet의 managed queue 진입, session callback 실행과 등록·codec·오류 경계를 관리한다. |
-| Core | STREAM transport의 실제 송수신과 receive pipe HWM을 담당한다. |
+| Framework | managed queue permit을 확보한 뒤 packet 하나를 pull하고, header를 decode해 session callback을 실행하며 등록·codec·오류 경계를 관리한다. |
+| Core | STREAM transport의 실제 송수신, PACKET mode의 packet 경계와 receive pipe HWM을 담당한다. |
 | Connector(client 쪽) | Client가 관찰하는 연결·재연결과 wire 계약을 구현한다. 이 문서는 server 쪽만 정의한다. |
 
-- **Framework는 모든 언어에서 STREAM transport ingress를 `recv` mode로 운영하고, Core의 STREAM packet
-  callback이나 raw receive callback을 등록해 application packet을 받지 않는다.** 이 규칙은 언어별 binding의
-  표현이 달라도 동일하게 적용한다. Core packet callback이나 raw receive callback으로
-  [§4](#4-연결-수락부터-session-callback까지)의 managed queue admission을 우회하면 Core receive pipe의
-  HWM이 application queue를 제한하지 못하므로 Framework contract를 만족하지 못한다.
+- **Framework는 모든 언어에서 첫 bind 전에 Core STREAM socket을 `PACKET` mode로 설정하고,
+  `zlink_stream_recv_packet()` pull로 application packet을 받는다.** Core STREAM packet
+  callback이나 raw receive callback을 등록하지 않으며, 이 규칙은 언어별 binding의 표현이
+  달라도 같다. Core callback을 등록하지 않는 pull 경로는 Framework의 public session
+  lifecycle·packet·오류 callback을 제거하거나 그 호출 경로를 바꾸지 않는다. 이
+  callback들은 managed queue와 serial execution gate 뒤에서 실행된다.
+
+- **Framework는 managed queue permit을 확보하기 전에는 packet pull을 시작하지 않는다.**
+  Permit 없이 Core packet을 계속 drain하면 Core receive pipe HWM이 backpressure 경계로
+  동작하지 못하기 때문이다. 이 규칙은 [§4](#4-연결-수락부터-session-callback까지)의
+  packet별 pull 순서가 내부적으로 만족해야 하는 조건이다.
 
 Transport 본체는 header framing까지만 처리하며 payload의 업무 객체 변환은 담당하지 않는다.
 Session 연결과 연결 해제 lifecycle callback을 기본 표면으로 제공하고, 오류 callback에는
@@ -138,19 +144,22 @@ header framing은 Framework가 관리한다. 모든 Framework 언어의 transpor
 경계를 따른다.
 
 ```text
-Core receive pipe
-    -> Framework recv loop
-    -> header framing과 queue admission
+Core receive pipe (PACKET mode)
+    -> Framework가 managed queue permit을 확보
+    -> Framework가 packet 한 건을 pull
+    -> header decode와 managed queue 진입
     -> session callback
 ```
 
-- **Framework 내부 `recv loop`는 application session callback을 바로 실행하지 않는다.** Framework가
-  packet을 managed queue에 넣은 뒤에만 session callback을 실행한다. 이 queue 경계에서 Framework의
-  dispatch, DI와 logging을 일관되게 적용할 수 있기 때문이다.
-- **Framework는 queue admission이 실패한 동안 새 packet을 읽지 않는다.** Queue에 넣을 수 없는 상태에서 다음
-  receive를 계속하면 Core receive pipe의 HWM이 더 이상 backpressure 경계로 동작하지 않기 때문이다. 이미 받은
-  packet을 버리거나 같은 packet을 callback으로 재전달하지 않는다. Permit은 host 전체가 공유하므로
-  이 중단은 그 연결 하나가 아니라 지원 socket 전체에 적용된다. 임계값과 상태 전이는
+- **Framework 내부 `recv loop`는 managed queue permit을 먼저 확보한 뒤에만
+  `zlink_stream_recv_packet()`으로 packet 한 건을 pull한다.** Pull한 packet의 header를
+  decode해 managed queue에 넣은 뒤 public session callback을 실행한다. 이 queue 경계에서
+  Framework의 dispatch, DI와 logging을 일관되게 적용할 수 있기 때문이다.
+- **Framework는 permit을 확보하지 못한 동안 `zlink_stream_recv_packet()`을 호출하지 않는다.**
+  Queue에 넣을 수 없는 상태에서 다음 packet을 계속 drain하면 Core receive pipe의 HWM이 더
+  이상 backpressure 경계로 동작하지 못한다. Pull한 packet을 버리거나 같은 packet을 callback으로
+  재전달하지 않는다. Permit은 host 전체가 공유하므로 이 중단은 그 연결 하나가 아니라 지원
+  socket 전체에 적용된다. 임계값과 상태 전이는
   [Application job queue와 backpressure §6](../01-execution/04-application-job-queue-and-backpressure.ko.md#6-pressure-상태와-socket-제어)이
   소유한다.
 
@@ -291,9 +300,11 @@ STREAM packet과 cross-node Session record가 공유하는 host permit 규칙은
 
 - Client가 보낸 packet은 packet name, metadata와 payload를 담은 dispatch context로 session
   callback에 도달한다.
+- STREAM packet pull 경로에서도 session lifecycle·packet·오류 callback의 공개 표면과
+  실행은 바뀌지 않으며, packet은 public session callback에 도달한다.
 - Session callback이 managed queue를 소비하지 못하는 동안 client가 계속 보내면 client 쪽 send가
   Core receive pipe HWM에 걸려 멈춘다. Queue가 풀리면 packet은 순서대로 한 번씩만 callback에
-  도달한다 — 폐기되거나 두 번 전달되는 packet이 없다. §2의 recv mode 규칙과 §4의 managed queue
+  도달한다 — 폐기되거나 두 번 전달되는 packet이 없다. §2의 PACKET mode 규칙과 §4의 managed queue
   규칙은 이 관찰로 확인한다.
 - Dispatch context의 [routing ID](../00-foundation/02-glossary.ko.md#routing-id)는 recv 결과의 peer 식별 값과
   같다.
@@ -320,9 +331,6 @@ STREAM packet과 cross-node Session record가 공유하는 host permit 규칙은
 - 다른 MeshNode의 Actor를 bind하고 relay하면 physical STREAM socket은 session owner node에 남고,
   node 사이에는 command 38·24·36·51 record만 오간다. Actor relocation 중에는 여기에 command
   42·43·44가 더해지고, 그 밖의 record는 오가지 않는다.
-
-Core packet callback이나 raw receive callback을 등록하는 경로가 binding 코드에 없다는 것은
-공개 표면으로 관찰할 수 없으므로 정적 검사로 확인한다.
 
 ---
 

@@ -144,8 +144,14 @@ retry waiter 또는 binding adapter를 만들지 않으며 다음 규칙을 따�
   [`Backpressured`](../00-foundation/02-glossary.ko.md#backpressured)는 public terminal result가
   아니다.
 - Capacity가 먼저 확보되면 message를 정확히 한 번 제출하고 정상 완료한다.
-- Timeout, cancellation 또는 runtime shutdown이 먼저 확정되면 late admission 없이
-  예외로 한 번 완료한다.
+- Core가 아직 payload를 소유하지 않은 상태에서 timeout 또는 runtime shutdown이 먼저
+  확정되면 late admission 없이 예외로 한 번 완료한다. Caller cancellation은
+  Framework가 소유한 queue 대기까지 admission을 막을 수 있다. 그러나 Core가
+  successful submit으로 payload를 소유한 뒤에는 caller의 기다림만 취소할 수 있고,
+  Core의 late admission을 막을 수 없다. 이때 늦은 completion의 정리와 caller에
+  두 번째 결과를 전달하지 않는 규칙은
+  [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)이
+  정의한다.
 - 내부 bounded waiter capacity까지 모두 사용 중이면 새 payload를 보관하지 않고
   `DeadlineExceeded`로 즉시 완료한다.
 - 이 hard overload boundary에서도 `Backpressured` status를 공개하거나 나중에
@@ -229,8 +235,10 @@ STREAM one-way send call은 선택적인 호출별 admission timeout modifier를
   생겨도 해당 send를 admission하거나 다시 시도하지 않는다.
 - 이 modifier는 STREAM reply call에는 적용하지 않는다. Reply는 socket send timeout과
   one-shot token 계약을 사용한다.
-- 언어별 cancellation이 별도로 있는 경우 timeout과 경쟁해 먼저 확정된 terminal
-  하나만 결과가 된다.
+- 언어별 cancellation이 timeout과 경쟁하면 caller는 먼저 확정된 terminal 하나만
+  관찰한다. 다만 Core가 successful submit으로 payload를 소유한 뒤 cancellation이
+  확정된 경우에는 caller의 기다림만 끝나며, Core는 나중에 해당 send를 admission할 수
+  있다.
 
 ## 8. STREAM reply token
 
@@ -254,10 +262,12 @@ STREAM reply의 one-shot [reply token](../00-foundation/02-glossary.ko.md#reply-
 
 ## 9. Request completion — 완료 경쟁과 timeout budget
 
-Request는 reply, remote 오류, timeout, cancellation 또는 shutdown 가운데 먼저
-확정된 결과로 한 번 완료된다. Timeout과 cancellation은 호출자의 대기를 끝내지만
-원격 handler가 이미 시작한 업무를 되돌리지 않는다. 늦게 도착한 reply는
-application handler에 다시 전달하지 않고 correlation state를 정리한다.
+Request caller는 reply, remote 오류, timeout, cancellation 또는 shutdown 가운데 먼저
+확정된 결과 하나를 관찰한다. Timeout과 cancellation은 호출자의 대기를 끝내지만
+원격 handler가 이미 시작한 업무를 되돌리지 않는다. 특히 Core가 successful submit으로
+payload를 소유한 뒤 cancellation이 이기면 Core request와 admission은 계속될 수 있다.
+늦게 도착한 reply 또는 completion은 application handler에 다시 전달하지 않고
+correlation state와 native payload를 정리한다.
 
 ```mermaid
 flowchart LR
@@ -538,6 +548,9 @@ dispatcher 자리 예약 시점)은 §10·§11이 규칙과 함께 소유하며 
 
 - 같은 operation에 대해 응답·timeout·취소·종료가 동시에 발생해도 caller는 정확히
   한 번만 완료된다.
+- Core가 successful submit으로 payload를 소유한 뒤 caller cancellation이 완료되면,
+  이후 local capacity가 생겨 해당 message가 admission될 수 있다. Caller는 취소 결과만
+  한 번 관찰하고, 늦은 completion은 runtime이 정리하며 caller를 다시 완료시키지 않는다.
 - 완료 callback은 확정 시점의 호출 stack이 아니라 새 execution turn에서 실행된다.
 - 진행 중 operation과 dispatcher가 예약한 자리가 없으면 request는 보내기 전에
   `CapacityExceeded`로 거부된다.

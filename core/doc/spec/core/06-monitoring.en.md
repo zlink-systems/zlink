@@ -41,26 +41,18 @@ A monitor proceeds through **open → event consumption → close**.
   monitor on the target socket. The `events` mask in the open options selects the
   events to receive. `events == 0` selects no events, while `EVENT_ALL` selects
   every bit.
-- **consumption** — Events are consumed either in handler mode, which registers a
-  callback with [`zlink_socket_monitor_handler`](#zlink_socket_monitor_handler), or
-  in recv mode, in which the caller retrieves events directly with
-  [`zlink_socket_monitor_recv`](#zlink_socket_monitor_recv). Calling recv after a
-  handler has been installed fails with `EBUSY`. Installing a handler on a monitor
-  that has used recv is allowed; events produced after installation are delivered
-  to the handler.
+- **consumption** — The caller retrieves events directly with
+  [`zlink_socket_monitor_recv`](#zlink_socket_monitor_recv).
 - **status** — [`zlink_monitor_status`](#zlink_monitor_status) fills a current-state
   snapshot ([§6](#6-status-snapshot)).
 - **close** — [`zlink_monitor_close`](#zlink_monitor_close) closes the monitor.
 
-Handler, recv, and close must follow the single-consumer rule for the same event queue.
-The caller is responsible for serializing these operations. Core neither detects nor
-serializes concurrent consumption by handler, recv, and close.
+Recv and close must follow the single-consumer rule for the same event queue. The caller
+is responsible for serializing these operations. Core neither detects nor serializes
+concurrent consumption by recv and close.
 
-Event-data ownership depends on the consumption mode. In recv mode, the event addresses
-and the routing ID—the byte sequence that identifies a peer—are values inside the
-caller-owned output structure. A callback's event pointer and the values it contains are
-borrowed views valid only until the callback returns; they must not be referenced after
-the callback returns.
+The event addresses and the routing ID—the byte sequence that identifies a peer—are
+values inside the caller-owned output structure.
 
 ```mermaid
 sequenceDiagram
@@ -69,34 +61,26 @@ sequenceDiagram
     participant S as Raw socket
     App->>Mon: zlink_socket_monitor_open(socket, options)
     S-->>Mon: Record events in state-transition commit order
-    opt recv mode before handler installation
-        App->>Mon: zlink_socket_monitor_recv(&event_out, flags)
-        Mon-->>App: Write event to caller-owned structure
-    end
-    App->>Mon: zlink_socket_monitor_handler(handler, userdata)
-    Note over App,Mon: Handler installation is allowed regardless of prior recv use
-    Mon-->>App: Deliver subsequent events to handler(event) (borrowed view)
     App->>Mon: zlink_socket_monitor_recv(&event_out, flags)
-    Mon-->>App: EBUSY
+    Mon-->>App: Write event to caller-owned structure
     App->>Mon: zlink_monitor_status(&status_out)
     App->>Mon: zlink_monitor_close(&monitor)
 ```
 
 ## 3. Event Interpretation
 
-### 3.1 Connection and Transport-Pair Identification
+### 3.1 Connection and Lane Identification
 
-`connection_id` identifies one physical transport attempt in the current process. When
-Application and Completion transports form one Framework peer, physical lifecycle events
-for each lane use the same `transport_pair_id` and `transport_pair_generation`, and
-`transport_lane` distinguishes the lanes. For a transport that does not use a pair, the
-pair fields are zero and `transport_lane` has the Application value. A pair ID is not a
-global identifier that persists across process restarts.
+`connection_id` is a diagnostic and correlation value that identifies one physical
+transport attempt in the current process. It cannot be used as a send target or reconnect
+fence. When Application and Completion transports form one peer, `transport_lane`
+distinguishes the lanes. A transport without a separate Completion lane has the
+Application value.
 
-However, `CONNECTION_READY` aggregates a pair whose two lanes are both ready as one public
-ready transport. It therefore emits exactly one ready edge for each pair ID and generation
-and counts the pair only once in `value`. Learning the routing ID at different times on the
-two lanes does not split the pair into two ready transports.
+However, `CONNECTION_READY` aggregates a peer whose two lanes are both ready as one public
+ready transport. It therefore emits exactly one ready edge and counts the peer only once
+in `value`. Learning the routing ID at different times on the two lanes does not split the
+peer into two ready transports.
 
 ### 3.2 `value` and `flags`
 
@@ -116,8 +100,7 @@ Because the `value` of `CONNECTION_READY` is the current count of public ready t
 the count increases. A ready-count event without this flag is a count snapshot, not the
 ready edge of a new connection.
 
-`ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE`,
-`ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION`, and
+`ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` and
 `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` apply only to the three receive-flow
 events (`ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, and
 `ZLINK_EVENT_FLOW_STATE_STALE`). [Events](04-events.en.md) owns their emission conditions
@@ -136,8 +119,8 @@ public counter or status field for the number of discarded records. A delayed mo
 consumer does not block raw socket submission.
 
 The thread rule follows the single-consumer rule in
-[§2](#2-monitor-lifecycle-and-consumption-modes): the caller serializes handler, recv, and
-close so that one consumer uses the event queue. Core does not contractually detect or
+[§2](#2-monitor-lifecycle-and-consumption-modes): the caller serializes recv and close so
+that one consumer uses the event queue. Core does not contractually detect or
 serialize concurrent calls on the caller's behalf.
 
 ## 5. Monitor Queue Byte Budget
@@ -166,14 +149,9 @@ of the returned ABI version. These values diagnose the current layout returned b
 they are neither caller inputs nor compatibility-negotiation values. A raw socket monitor
 status has `source_kind` set to `ZLINK_MONITOR_SOURCE_SOCKET`.
 
-Version 3 adds `snd_pending_bytes` and `rcv_pending_bytes` and removes message-unit, slot,
-size-cap, and connection-bucket diagnostic fields. Version 4 appends five receive-flow
-fields to the end of the structure and makes no other change. Older layouts are not
-accepted as compatibility layouts.
-
-`zlink_socket_monitor_open`, its open-options structure, and the status structure replace
-the existing names in place with the current 0.13.0 layout. Core does not add caller
-size/version negotiation or a parallel versioned entry point.
+The current ABI version is `4` and includes `snd_pending_bytes`, `rcv_pending_bytes`, and
+five receive-flow fields. Older layouts are not accepted as compatibility layouts. Core
+provides neither caller size/version negotiation nor a parallel versioned entry point.
 
 ### 6.2 Detail Bits and Valid Fields
 
@@ -196,7 +174,7 @@ report the byte HWM that the socket actually uses, including manual overrides. A
 value is valid only when the corresponding `_valid` field is nonzero.
 
 `snd_bytes_in_flight` and `rcv_bytes_in_flight` are directional pipe totals at snapshot
-time. In the current version 3 layout, `snd_pending_bytes` and `rcv_pending_bytes` report
+time. `snd_pending_bytes` and `rcv_pending_bytes` report
 the same send and receive in-flight totals, respectively. Some sources estimate the
 receive total and count. Pending message fields remain counts, and pending byte fields use
 the same byte unit as admission accounting, but the diagnostic values themselves are not
@@ -304,8 +282,6 @@ typedef struct zlink_monitor_event_t {
   char local_addr[256];                // Local address for the event
   char remote_addr[256];               // Remote address for the event
   uint64_t connection_id;              // Physical transport-attempt ID in the current process (§3.1)
-  uint64_t transport_pair_id;          // Transport-pair ID; 0 when unpaired (§3.1)
-  uint64_t transport_pair_generation;  // Transport-pair generation; 0 when unpaired
   uint32_t transport_lane;             // zlink_monitor_transport_lane_t value
   uint32_t flags;                      // ZLINK_MONITOR_EVENT_FLAG_* bits
 } zlink_monitor_event_t;
@@ -317,15 +293,9 @@ typedef enum zlink_monitor_transport_lane_e {
 
 #define ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE (1u << 0)       // Ready edge that increased the count (§3.2)
 #define ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE (1u << 1)          // Receive-flow event only; Events owns the meaning
-#define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION (1u << 2) // Receive-flow event only; Events owns the meaning
 #define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH (1u << 3)      // Receive-flow event only; Events owns the meaning
 
-typedef void (*zlink_monitor_handler_fn)(
-  const zlink_monitor_event_t *event,  // Borrowed view valid only until the callback returns (§2)
-  void *userdata);
-
 typedef zlink_monitor_event_t zlink_socket_monitor_event_t;
-typedef zlink_monitor_handler_fn zlink_socket_monitor_handler_fn;
 ```
 
 ### 7.3 Enums Used by `value`
@@ -473,32 +443,6 @@ configuration result or binding error type.
 
 ---
 
-### zlink_socket_monitor_handler
-
-Registers a callback consumer on the monitor (handler mode).
-
-```c
-ZLINK_EXPORT zlink_handler_result_t zlink_socket_monitor_handler(
-  void *monitor,
-  zlink_socket_monitor_handler_fn handler,
-  void *userdata);
-```
-
-This function activates handler mode. Installing a handler is allowed even if recv mode
-has been used on this monitor, and events produced after installation are delivered to the
-handler ([§2](#2-monitor-lifecycle-and-consumption-modes)). The event pointer passed to
-the callback and the values it contains are borrowed views valid only until the callback
-returns.
-
-**Returns:** A `zlink_handler_result_t` value.
-
-**Thread safety:** Handler, recv, and close follow the single-consumer rule for the same
-event queue ([§2](#2-monitor-lifecycle-and-consumption-modes)).
-
-**See also:** `zlink_socket_monitor_recv`, `zlink_monitor_ignore_handler`
-
----
-
 ### zlink_socket_monitor_recv
 
 Receives one event into a caller-owned structure (recv mode).
@@ -510,21 +454,18 @@ ZLINK_EXPORT zlink_recv_result_t zlink_socket_monitor_recv(
   zlink_recv_flags_t flags);
 ```
 
-This function writes the complete current 0.13.0 `zlink_socket_monitor_event_t` layout.
+This function writes the complete current `zlink_socket_monitor_event_t` layout.
 The caller must provide an output buffer sized for the current layout. Core does not
 provide a separate receive entry point for the previous event prefix or a version-
 negotiation path. The received event's addresses and routing ID are values inside the
-caller-owned output structure. If a handler is already installed, the function fails with
-`EBUSY`. Recv may be used before a handler is installed; if a handler is then installed,
-subsequent events are delivered to the handler
-([§2](#2-monitor-lifecycle-and-consumption-modes)).
+caller-owned output structure.
 
 **Returns:** A `zlink_recv_result_t` value.
 
-**Thread safety:** Handler, recv, and close follow the single-consumer rule for the same
+**Thread safety:** Recv and close follow the single-consumer rule for the same
 event queue ([§2](#2-monitor-lifecycle-and-consumption-modes)).
 
-**See also:** `zlink_socket_monitor_handler`
+**See also:** `zlink_monitor_status`, `zlink_monitor_close`
 
 ---
 
@@ -561,30 +502,10 @@ ZLINK_EXPORT zlink_close_result_t zlink_monitor_close(void **monitor_p);
 
 **Returns:** A `zlink_close_result_t` value.
 
-**Thread safety:** Handler, recv, and close follow the single-consumer rule for the same
+**Thread safety:** Recv and close follow the single-consumer rule for the same
 event queue ([§2](#2-monitor-lifecycle-and-consumption-modes)).
 
 **See also:** `zlink_socket_monitor_open`
-
----
-
-### zlink_monitor_ignore_handler
-
-A no-op handler that ignores events.
-
-```c
-ZLINK_EXPORT void zlink_monitor_ignore_handler (const zlink_monitor_event_t *event_,
-                                                void *userdata_);
-```
-
-This no-op function neither retains nor releases the supplied event or `userdata`.
-`event` is a borrowed view valid only for the duration of the call. Registering this
-function through the handler API consumes the event queue like a normal callback consumer
-but performs no action for each event.
-
-**Returns:** Nothing (void).
-
-**See also:** `zlink_socket_monitor_handler`
 
 ## 9. Implementation and Contract-Test Verification Requirements
 
@@ -592,20 +513,17 @@ Verify the following through the public surface only: the `zlink_socket_monitor_
 `zlink_monitor_*` functions, open options, event structure, status snapshot, return values,
 and errno. Each item maps to one test.
 
-**Open and consumption modes**
+**Open and pull consumption**
 
 - A monitor opened with `events == 0` receives no events, while one opened with
   `EVENT_ALL` receives events for every bit.
 - If an HWM range or calculation or an allocation prevents monitor creation,
   `zlink_socket_monitor_open` returns `NULL` and sets errno. No separate `RESOURCE_LIMIT`
   configuration result or binding error type is observable.
-- Calling `zlink_socket_monitor_recv` after installing a handler fails with `EBUSY`.
-- `zlink_socket_monitor_handler` can be installed on a monitor that has used recv, and
-  events produced after installation are delivered to the handler.
-- The caller is responsible for single-consumer serialization of handler, recv, and close.
-  Core neither detects nor serializes concurrent consumption by these three operations.
-- Registering `zlink_monitor_ignore_handler` consumes the event queue like a normal callback
-  consumer and neither retains nor releases the supplied event or `userdata`.
+- A DONTWAIT call to `zlink_socket_monitor_recv` with no available event returns
+  `ZLINK_RECV_NO_DATA` and leaves the event output unchanged.
+- The caller is responsible for single-consumer serialization of recv and close. Core
+  neither detects nor serializes concurrent consumption by these two operations.
 
 **Event delivery and ordering**
 
@@ -623,19 +541,19 @@ and errno. Each item maps to one test.
   `HANDSHAKE_FAILED_PROTOCOL` is a `zlink_protocol_error_t` value, the `value` of
   `PEER_WEIGHT_CHANGED` is the new `0..10000` weight, and the `value` of another
   failure event is the errno for that failure.
-- For the same `transport_pair_id` and `transport_pair_generation`, the
-  `CONNECTION_READY` ready edge (`ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE`) occurs
-  exactly once and contributes exactly once to the count in `value`. A ready-count event
-  without the edge flag is a count snapshot.
-- Events for a transport that does not use a pair have zero pair fields and the Application
-  value in `transport_lane`.
+- For each peer whose two lanes are ready, the `CONNECTION_READY` ready edge
+  (`ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE`) occurs exactly once and contributes
+  exactly once to the count in `value`. A ready-count event without the edge flag is a
+  count snapshot.
+- Events for a transport without a Completion lane have the Application value in
+  `transport_lane`.
+- `connection_id` is a diagnostic and correlation value; no public API uses it to select a
+  send or reply target.
 
 **Event-data ownership**
 
-- `zlink_socket_monitor_recv` writes the complete current 0.13.0 layout to a caller-owned
+- `zlink_socket_monitor_recv` writes the complete current layout to a caller-owned
   output structure, and the event addresses and routing ID are values inside that structure.
-- The event pointer passed to a callback and the values it contains remain valid only until
-  the callback returns.
 
 **Status snapshot**
 

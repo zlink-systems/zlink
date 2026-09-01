@@ -36,25 +36,18 @@ event를 제공한다. Monitor는 상태를 관측할 뿐 routing과 queue 상�
 monitor의 수명은 **open → event 소비 → close** 순으로 진행한다.
 
 - **open** — [`zlink_socket_monitor_open`](#zlink_socket_monitor_open)이 대상 socket에
-  monitor를 연다. open options의 `events` mask가 받을 event를 고른다. `events == 0`은
+  monitor를 연다. Open options의 `events` mask가 받을 event를 고른다. `events == 0`은
   event를 선택하지 않고 `EVENT_ALL`은 모든 bit를 선택한다.
-- **소비** — callback을 등록하는 handler
-  mode([`zlink_socket_monitor_handler`](#zlink_socket_monitor_handler))와 호출자가 event를
-  직접 꺼내는 recv mode([`zlink_socket_monitor_recv`](#zlink_socket_monitor_recv))로 event를
-  소비한다. handler를 설치한 뒤 recv를 호출하면 `EBUSY`다. recv를 사용한
-  monitor에 handler를 설치하는 것은 허용되며, 설치 이후의 event는 handler로 전달된다.
+- **소비** — [`zlink_socket_monitor_recv`](#zlink_socket_monitor_recv)로 event를 직접 꺼낸다.
 - **status** — [`zlink_monitor_status`](#zlink_monitor_status)가 현재 상태
   snapshot([§6](#6-status-snapshot))을 채운다.
 - **close** — [`zlink_monitor_close`](#zlink_monitor_close)가 monitor를 닫는다.
 
-Handler, recv와 close는 같은 event queue의 single consumer 규칙을 지켜야 한다.
-이 규칙은 caller가 직접 직렬화해야 하는 사용 의무이며, Core는 handler·recv·close의
+Recv와 close는 같은 event queue의 single consumer 규칙을 지켜야 한다.
+이 규칙은 caller가 직접 직렬화해야 하는 사용 의무이며, Core는 recv·close의
 동시 소비를 검출하거나 직렬화하지 않는다.
 
-event data의 소유권은 소비 mode에 따라 다르다. event의 address와 peer를 식별하는 byte 열인
-routing ID는 recv에서는 caller-owned output 구조체 안의 값이다. callback의 event pointer와
-그 안의 값은 callback이 반환될 때까지만 유효한 borrowed view다 — callback이 반환된 뒤에는
-그 memory를 참조할 수 없다.
+Event의 address와 peer를 식별하는 byte 열인 routing ID는 caller-owned output 구조체 안의 값이다.
 
 ```mermaid
 sequenceDiagram
@@ -63,32 +56,24 @@ sequenceDiagram
     participant S as Raw socket
     App->>Mon: zlink_socket_monitor_open(socket, options)
     S-->>Mon: state transition을 commit한 순서로 event 기록
-    opt handler 설치 전 recv mode
-        App->>Mon: zlink_socket_monitor_recv(&event_out, flags)
-        Mon-->>App: caller 소유 구조체에 event 기록
-    end
-    App->>Mon: zlink_socket_monitor_handler(handler, userdata)
-    Note over App,Mon: 이전 recv 사용 여부와 관계없이 handler 설치 허용
-    Mon-->>App: 이후 event를 handler(event)로 전달 (borrowed view)
     App->>Mon: zlink_socket_monitor_recv(&event_out, flags)
-    Mon-->>App: EBUSY
+    Mon-->>App: caller 소유 구조체에 event 기록
     App->>Mon: zlink_monitor_status(&status_out)
     App->>Mon: zlink_monitor_close(&monitor)
 ```
 
 ## 3. Event 해석
 
-### 3.1 Connection과 transport pair 식별
+### 3.1 Connection과 lane 식별
 
-`connection_id`는 현재 프로세스에서 하나의 물리적 transport 시도를 식별한다. Application과
-Completion transport가 한 Framework peer를 구성하는 경우 각 lane의 물리 lifecycle event는
-같은 `transport_pair_id`와 `transport_pair_generation`을 사용하고 `transport_lane`으로
-lane을 구분한다. Pair를 사용하지 않는 transport에서는 pair field가 0이며 `transport_lane`은
-Application 값이다. Pair id는 프로세스 재시작 사이에 유지되는 전역 식별자가 아니다.
+`connection_id`는 현재 프로세스에서 하나의 물리적 transport 시도를 식별하는 진단·correlation
+값이다. Send target이나 reconnect fence로 사용할 수 없다. Application과 Completion transport가
+한 peer를 구성하면 `transport_lane`으로 lane을 구분한다. 별도 Completion lane이 없는 transport의
+값은 Application이다.
 
-단, `CONNECTION_READY`는 두 lane이 모두 준비된 pair를 하나의 공개 ready transport로
-집계하므로 같은 pair id와 generation마다 ready edge를 정확히 한 번만 발생시키고 `value`에도
-한 번만 센다. 두 lane이 서로 다른 시점에 routing ID를 알게 되어도 pair를 두 ready
+단, `CONNECTION_READY`는 두 lane이 모두 준비된 peer를 하나의 공개 ready transport로
+집계하므로 ready edge를 정확히 한 번만 발생시키고 `value`에도 한 번만 센다. 두 lane이 서로
+다른 시점에 routing ID를 알게 되어도 두 ready
 transport로 나누지 않는다.
 
 ### 3.2 `value`와 `flags`
@@ -110,7 +95,6 @@ event별 `value`의 의미는 다음과 같다.
 않는다.
 
 `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE`,
-`ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION`,
 `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`는 receive-flow event
 3개(`ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`,
 `ZLINK_EVENT_FLOW_STATE_STALE`)에만 적용한다. 발생 조건과 각 event의 `value` 의미는
@@ -128,7 +112,7 @@ record를 폐기하고, 이미 queue에 있는 record는 유지한다. Event를 
 않는다. Monitor consumer 지연은 raw socket submit을 block하지 않는다.
 
 thread 규칙은 [§2](#2-monitor-수명과-소비-mode)의 single consumer 규칙을 따른다 — caller가
-handler, recv와 close를 직렬화해 같은 event queue를 하나의 consumer로 사용한다.
+recv와 close를 직렬화해 같은 event queue를 하나의 consumer로 사용한다.
 Core가 동시 호출을 검출하거나 대신 직렬화해 주는 계약은 없다.
 
 ## 5. Monitor queue의 byte 예산
@@ -157,13 +141,9 @@ Monitor queue는 application Auto HWM [water-filling](glossary.ko.md#water-filli
 크기다. 두 값은 Core가 반환한 현재 layout의 진단값이며 caller 입력이나 호환성 협상값이
 아니다. raw socket monitor status의 `source_kind`는 `ZLINK_MONITOR_SOURCE_SOCKET`이다.
 
-Version 3은 `snd_pending_bytes`와 `rcv_pending_bytes`를 추가하고 message-unit, slot,
-size-cap과 connection-bucket 진단 field를 제거한다. Version 4는 구조체 끝에 receive-flow
-field 5개를 덧붙이고 다른 변경은 없다. 이전 layout을 호환 layout으로 받지 않는다.
-
-`zlink_socket_monitor_open`, open options와 status 구조체는 0.13.0의 현재 layout으로 기존
-이름에서 교체한다. Caller size/version 협상이나 병렬 versioned entrypoint를 추가하지
-않는다.
+현재 ABI version은 `4`이며 `snd_pending_bytes`·`rcv_pending_bytes`와 receive-flow field 5개를
+포함한다. 이전 layout을 호환 layout으로 받지 않으며 caller size/version 협상이나 병렬 versioned
+entrypoint를 제공하지 않는다.
 
 ### 6.2 Detail bit와 유효 field
 
@@ -186,7 +166,7 @@ Planned field는 현재 자동 정책의 계산 결과를 제공한다. Applied 
 field가 0이 아닐 때만 유효하다.
 
 `snd_bytes_in_flight`와 `rcv_bytes_in_flight`는 snapshot 시점의 directional pipe 합계다.
-현재 version 3에서 `snd_pending_bytes`와 `rcv_pending_bytes`는 각각 같은 send·receive
+`snd_pending_bytes`와 `rcv_pending_bytes`는 각각 같은 send·receive
 in-flight 합계를 제공한다. Receive 합계와 count는 일부 source에서 근삿값이다. Pending
 message field의 단위는 계속 count이며 pending byte field는 admission 회계와 같은 byte
 단위를 사용하지만 진단값 자체를 admission 입력으로 사용하지 않는다. Minimum charge와
@@ -291,8 +271,6 @@ typedef struct zlink_monitor_event_t {
   char local_addr[256];                // event의 local 주소
   char remote_addr[256];               // event의 remote 주소
   uint64_t connection_id;              // 현재 프로세스의 물리적 transport 시도 식별자 (§3.1)
-  uint64_t transport_pair_id;          // transport pair 식별자. pair가 없으면 0 (§3.1)
-  uint64_t transport_pair_generation;  // transport pair generation. pair가 없으면 0
   uint32_t transport_lane;             // zlink_monitor_transport_lane_t 값
   uint32_t flags;                      // ZLINK_MONITOR_EVENT_FLAG_* bit
 } zlink_monitor_event_t;
@@ -304,15 +282,9 @@ typedef enum zlink_monitor_transport_lane_e {
 
 #define ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE (1u << 0)       // count가 증가한 ready edge (§3.2)
 #define ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE (1u << 1)          // receive-flow event 전용. 의미는 Events 소유
-#define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION (1u << 2) // receive-flow event 전용. 의미는 Events 소유
 #define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH (1u << 3)      // receive-flow event 전용. 의미는 Events 소유
 
-typedef void (*zlink_monitor_handler_fn)(
-  const zlink_monitor_event_t *event,  // callback 반환까지만 유효한 borrowed view (§2)
-  void *userdata);
-
 typedef zlink_monitor_event_t zlink_socket_monitor_event_t;
-typedef zlink_monitor_handler_fn zlink_socket_monitor_handler_fn;
 ```
 
 ### 7.3 `value`가 사용하는 enum
@@ -457,31 +429,6 @@ ZLINK_EXPORT void *zlink_socket_monitor_open(
 
 ---
 
-### zlink_socket_monitor_handler
-
-monitor에 callback consumer를 등록한다 (handler mode).
-
-```c
-ZLINK_EXPORT zlink_handler_result_t zlink_socket_monitor_handler(
-  void *monitor,
-  zlink_socket_monitor_handler_fn handler,
-  void *userdata);
-```
-
-handler mode를 활성화한다. 이 monitor에서 recv mode를 사용했더라도 handler 설치는
-허용되며 설치 이후의 event는 handler로 전달된다([§2](#2-monitor-수명과-소비-mode)).
-callback에 전달되는 event pointer와 그 안의 값은 callback이 반환될 때까지만 유효한
-borrowed view다.
-
-**반환값:** `zlink_handler_result_t` 값.
-
-**스레드 안전성:** handler, recv와 close는 같은 event queue의 single consumer 규칙을
-지킨다([§2](#2-monitor-수명과-소비-mode)).
-
-**참고:** `zlink_socket_monitor_recv`, `zlink_monitor_ignore_handler`
-
----
-
 ### zlink_socket_monitor_recv
 
 event 하나를 caller 소유 구조체로 받는다 (recv mode).
@@ -493,19 +440,17 @@ ZLINK_EXPORT zlink_recv_result_t zlink_socket_monitor_recv(
   zlink_recv_flags_t flags);
 ```
 
-현재 0.13.0 `zlink_socket_monitor_event_t` layout 전체를 기록한다. 호출자는 현재 layout
+현재 `zlink_socket_monitor_event_t` layout 전체를 기록한다. 호출자는 현재 layout
 크기의 output buffer를 제공해야 하며, 이전 event prefix를 위한 별도 receive entry point나
 version 협상 경로는 제공하지 않는다. 받은 event의 address와 routing ID는 caller-owned
-output 구조체 안의 값이다. handler가 이미 설치되어 있으면 `EBUSY`다.
-handler 설치 전에는 recv를 사용할 수 있고, 그 뒤 handler를 설치하면 후속 event는
-handler로 전달된다([§2](#2-monitor-수명과-소비-mode)).
+output 구조체 안의 값이다.
 
 **반환값:** `zlink_recv_result_t` 값.
 
-**스레드 안전성:** handler, recv와 close는 같은 event queue의 single consumer 규칙을
+**스레드 안전성:** recv와 close는 같은 event queue의 single consumer 규칙을
 지킨다([§2](#2-monitor-수명과-소비-mode)).
 
-**참고:** `zlink_socket_monitor_handler`
+**참고:** `zlink_monitor_status`, `zlink_monitor_close`
 
 ---
 
@@ -541,42 +486,25 @@ ZLINK_EXPORT zlink_close_result_t zlink_monitor_close(void **monitor_p);
 
 **반환값:** `zlink_close_result_t` 값.
 
-**스레드 안전성:** handler, recv와 close는 같은 event queue의 single consumer 규칙을
+**스레드 안전성:** recv와 close는 같은 event queue의 single consumer 규칙을
 지킨다([§2](#2-monitor-수명과-소비-mode)).
 
 **참고:** `zlink_socket_monitor_open`
 
 ---
 
-### zlink_monitor_ignore_handler
-
-event를 무시하는 no-op handler다.
-
-```c
-ZLINK_EXPORT void zlink_monitor_ignore_handler (const zlink_monitor_event_t *event_,
-                                                void *userdata_);
-```
-
-전달된 event와 `userdata`를 보관하거나 해제하지 않는 no-op 함수다. `event`는 호출 동안만
-유효한 borrowed view다. 이 함수를 handler API에 등록하면 일반 callback consumer처럼 event
-queue를 소비하되 각 event에 아무 작업도 하지 않는다.
-
-**반환값:** 없음 (void).
-
-**참고:** `zlink_socket_monitor_handler`
-
 ## 9. 구현 및 contract test 검증 요구
 
 공개 표면(`zlink_socket_monitor_*`·`zlink_monitor_*` 함수, open options, event 구조체,
 status snapshot, 반환값·errno)만으로 다음을 확인한다. 각 항목은 test 하나로 이어진다.
 
-**Open과 소비 mode**
+**Open과 pull 소비**
 - `events == 0`으로 연 monitor는 event를 받지 않고, `EVENT_ALL`로 연 monitor는 모든 bit의 event를 받는다.
 - HWM 범위·계산 또는 allocation 때문에 monitor를 열 수 없으면 `zlink_socket_monitor_open`이 `NULL`을 반환하고 errno가 설정된다. 별도 `RESOURCE_LIMIT` config result나 binding error type은 관찰되지 않는다.
-- handler를 설치한 뒤 `zlink_socket_monitor_recv`를 호출하면 `EBUSY`다.
-- recv를 사용한 monitor에 `zlink_socket_monitor_handler`를 설치할 수 있고, 설치 이후의 event는 handler로 전달된다.
-- handler·recv·close의 single consumer 직렬화는 caller의 의무이며, Core는 이 세 작업의 동시 소비를 검출하거나 직렬화하지 않는다.
-- `zlink_monitor_ignore_handler`를 등록하면 event queue가 일반 callback consumer처럼 소비되고, 전달된 event와 `userdata`는 보관·해제되지 않는다.
+- `zlink_socket_monitor_recv`의 DONTWAIT 호출은 event가 없으면 `ZLINK_RECV_NO_DATA`를 반환하고
+  event output을 변경하지 않는다.
+- recv·close의 single consumer 직렬화는 caller의 의무이며, Core는 두 작업의 동시 소비를
+  검출하거나 직렬화하지 않는다.
 
 **Event 전달과 순서**
 - 같은 monitor에서 받는 event의 순서는 Core가 state transition을 commit한 순서다. 서로 다른 connection I/O thread 사이의 wall-clock order는 보장되지 않는다.
@@ -585,12 +513,15 @@ status snapshot, 반환값·errno)만으로 다음을 확인한다. 각 항목�
 
 **Event 내용**
 - `DISCONNECTED`의 `value`는 `zlink_disconnect_reason_t`, `HANDSHAKE_FAILED_PROTOCOL`의 `value`는 `zlink_protocol_error_t`, `PEER_WEIGHT_CHANGED`의 `value`는 새 `0..10000` weight, 다른 실패 event의 `value`는 해당 실패의 errno다.
-- 같은 `transport_pair_id`와 `transport_pair_generation`에 대해 `CONNECTION_READY`의 ready edge(`ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE`)는 정확히 한 번 발생하고 `value`의 count에도 한 번만 반영된다. edge flag가 없는 ready count event는 count snapshot이다.
-- pair를 사용하지 않는 transport의 event는 pair field가 0이고 `transport_lane`이 Application 값이다.
+- 두 lane이 준비된 peer마다 `CONNECTION_READY`의 ready edge
+  (`ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE`)가 정확히 한 번 발생하고 `value`의 count에도
+  한 번만 반영된다. Edge flag가 없는 ready count event는 count snapshot이다.
+- Completion lane이 없는 transport의 event는 `transport_lane`이 Application 값이다.
+- `connection_id`는 진단·correlation 값이며 이 값으로 send·reply target을 지정하는 public API는 없다.
 
 **Event data 소유권**
-- `zlink_socket_monitor_recv`는 현재 0.13.0 layout 전체를 caller-owned output 구조체에 기록하며, event의 address와 routing ID는 그 구조체 안의 값이다.
-- callback에 전달된 event pointer와 그 안의 값은 callback이 반환될 때까지만 유효하다.
+- `zlink_socket_monitor_recv`는 현재 layout 전체를 caller-owned output 구조체에 기록하며, event의
+  address와 routing ID는 그 구조체 안의 값이다.
 
 **Status snapshot**
 - raw socket monitor status의 `source_kind`는 `ZLINK_MONITOR_SOURCE_SOCKET`, `abi_version`은 `ZLINK_MONITOR_STATUS_ABI_VERSION`, `struct_size`는 반환된 ABI version의 전체 byte 크기다.

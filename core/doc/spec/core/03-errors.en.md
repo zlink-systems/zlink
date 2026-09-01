@@ -57,17 +57,24 @@ errno is unspecified after success.
 #define EALREADY        (ZLINK_HAUSNUMERO + 20)  // duplicate operation
 #endif
 #ifndef EDEADLK
-#define EDEADLK         (ZLINK_HAUSNUMERO + 21)  // reentrant callback
+#define EDEADLK         (ZLINK_HAUSNUMERO + 21)  // forbidden reentry
 #endif
 #ifndef ESHUTDOWN
 #define ESHUTDOWN       (ZLINK_HAUSNUMERO + 22)  // closed socket
 #endif
+#ifndef EPROTOTYPE
+#define EPROTOTYPE      (ZLINK_HAUSNUMERO + 23)  // peer socket type does not match the operation
+#endif
+#ifndef EOVERFLOW
+#define EOVERFLOW       (ZLINK_HAUSNUMERO + 24)  // completion ID sequence exhausted
+#endif
 ```
 
 POSIX errno values missing on a platform use public values based on
-`ZLINK_HAUSNUMERO`. `ESTALE`, `EALREADY`, `EDEADLK`, and `ESHUTDOWN`, which
-represent a stale handle, duplicate operation, reentrant callback, and closed socket,
-are available with the values above on every supported platform.
+`ZLINK_HAUSNUMERO`. `ESTALE`, `EALREADY`, `EDEADLK`, `ESHUTDOWN`, `EPROTOTYPE`,
+and `EOVERFLOW`, which represent a stale handle, duplicate operation, forbidden
+reentry, closed socket, peer-type rejection, and sequence exhaustion, are available
+with the values above on every supported platform.
 
 The same fallback rule applies to the following 18 POSIX errno values. When the platform
 does not define a name, the public header defines it with values from
@@ -164,11 +171,11 @@ typedef enum zlink_handler_result_t {
 ```
 
 `BUFFER_TOO_SMALL` means that a caller-provided batch cannot hold the first complete
-message, or that a raw SUB/XSUB topic buffer has zero capacity or less than the required
-length. Raw subscription receive returns the required topic length without consuming the
-queued topic or payload, so the caller can retry with a sufficient buffer.
-`INVALID_STATE` applies to a stale handle or a terminated receive state. Calling handler
-unregister or replace from the same callback returns `DEADLOCK`.
+message, or that a raw SUB/XSUB or XPUB topic buffer is shorter than the required
+length. A zero-length topic succeeds with zero capacity and a `NULL` buffer. Topic
+receive returns the required topic length without consuming the queued topic or payload,
+so the caller can retry with a sufficient buffer. `INVALID_STATE` applies to a stale
+handle or a terminated receive state.
 
 ### 4.4 Close, bind, and connect results
 
@@ -349,13 +356,13 @@ transport and internal failure. Errno is unspecified after a successful call.
 | `ZLINK_SUBMIT_BACKPRESSURED` | `EAGAIN`, `ETIMEDOUT`, `ENOBUFS` | Socket queue or reservation capacity is unavailable |
 | `ZLINK_SUBMIT_NOT_CONNECTED` | `ENOTCONN`, `EHOSTUNREACH` | No target connection |
 | `ZLINK_SUBMIT_NOT_FOUND` | `ENOENT` | No raw target |
-| `ZLINK_SUBMIT_NOT_ADMITTED` | `EACCES`, `ECONNREFUSED` | Handshake or raw routing admission rejected the submit |
+| `ZLINK_SUBMIT_NOT_ADMITTED` | `EACCES`, `ECONNREFUSED`, `EPROTOTYPE` | Handshake, raw routing admission, or peer socket type rejected the submit |
 | `ZLINK_SUBMIT_TERMINATED` | `ETERM`, `ESHUTDOWN` | Context or socket lifecycle ended |
 | `ZLINK_SUBMIT_INVALID_HANDLE` | `EFAULT` | The handle is `NULL` or has the wrong kind |
 | `ZLINK_SUBMIT_INVALID_ARGUMENT` | `EINVAL`, `EMSGSIZE` | Invalid pointer, count, metadata, or flags |
 | `ZLINK_SUBMIT_NOT_SUPPORTED` | `ENOTSUP` | The handle does not support the operation |
 | `ZLINK_SUBMIT_INVALID_STATE` | `EBUSY`, `ESTALE`, `EALREADY` | Socket lifecycle or request state error |
-| `ZLINK_SUBMIT_THREAD_VIOLATION` | `EDEADLK`, `EPERM`, `EMTHREAD` | Forbidden callback reentry or thread use |
+| `ZLINK_SUBMIT_THREAD_VIOLATION` | `EDEADLK`, `EPERM`, `EMTHREAD` | Forbidden reentry or thread use |
 | `ZLINK_SUBMIT_OUT_OF_MEMORY` | `ENOMEM` | Required storage could not be acquired |
 | `ZLINK_SUBMIT_SEQ_EXHAUSTED` | `EOVERFLOW` | Operation sequence space is exhausted |
 | `ZLINK_SUBMIT_INTERNAL_ERROR` | preserved errno | Internal failure without another public category |
@@ -381,8 +388,8 @@ Each socket document defines input ownership and socket-specific detailed condit
 | `ZLINK_REQUEST_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | Unsupported operation |
 | `ZLINK_REQUEST_BACKPRESSURED` | `EAGAIN`, `ENOBUFS` | Nonblocking admission or reservation failed |
 
-After a successful request submit, exactly one terminal result is delivered to the reply
-callback for each operation ID.
+After a successful request submit, exactly one terminal result is delivered by
+`zlink_completion_recv()` for each nonzero completion ID.
 
 ### 4. Receive result
 
@@ -398,20 +405,20 @@ callback for each operation ID.
 | `ZLINK_RECV_BUFFER_TOO_SMALL` | `ENOBUFS` | Caller output capacity is insufficient |
 | `ZLINK_RECV_INVALID_STATE` | `EINVAL`, `ESTALE`, `ESHUTDOWN` | Receive lifecycle state error |
 
-For a raw subscription, `BUFFER_TOO_SMALL` records only the required topic length and
-leaves the queued topic, payload, and other outputs unchanged.
+For raw subscription and XPUB receive, `BUFFER_TOO_SMALL` records only the required
+topic length and leaves the queued record and other outputs unchanged.
 
 ### 5. Handler and close result
 
 | Result | errno | Meaning |
 |---|---|---|
-| `ZLINK_HANDLER_INVALID_ARGUMENT` | `EINVAL` | The handler or mask is invalid |
-| `ZLINK_HANDLER_BUSY` | `EBUSY` | An exclusive receive model is already registered |
-| `ZLINK_HANDLER_NOT_SUPPORTED` | `ENOTSUP` | The handle does not support handlers |
-| `ZLINK_HANDLER_DEADLOCK` | `EDEADLK` | Forbidden registration or removal inside the same callback |
+| `ZLINK_HANDLER_INVALID_ARGUMENT` | `EINVAL` | A handler argument is invalid |
+| `ZLINK_HANDLER_BUSY` | `EBUSY` | An exclusive handler state already exists |
+| `ZLINK_HANDLER_NOT_SUPPORTED` | `ENOTSUP` | The handle does not support the handler operation |
+| `ZLINK_HANDLER_DEADLOCK` | `EDEADLK` | Forbidden handler reentry |
 | `ZLINK_HANDLER_INVALID_HANDLE` | `EFAULT` | The handle is invalid |
 | `ZLINK_HANDLER_INTERNAL_ERROR` | preserved errno | Internal failure without another public category |
-| `ZLINK_CLOSE_BUSY` | `EBUSY`, `EDEADLK` | An active child, callback, or API exists, or close reentered the same handle |
+| `ZLINK_CLOSE_BUSY` | `EBUSY`, `EDEADLK` | An active child or API exists, or close reentered the same handle |
 | `ZLINK_CLOSE_SHUTDOWN` | `ESHUTDOWN` | The handle is already shut down |
 | `ZLINK_CLOSE_INVALID_HANDLE` | `EFAULT`, `ESTALE` | The pointer or opaque value is invalid |
 | `ZLINK_CLOSE_INTERNAL_ERROR` | preserved errno | Internal failure without another public category |
@@ -462,9 +469,9 @@ leaves the queued topic, payload, and other outputs unchanged.
 - The public C API normalizes failures into **eight typed result enums by function
   category**. The exact enum depends on the function category.
   - `zlink_submit_result_t` — send / publish / request submit / reply submit
-  - `zlink_request_result_t` — request completion (callback)
+  - `zlink_request_result_t` — request completion record
   - `zlink_recv_result_t` — recv / subscribe / monitor recv / timer recv
-  - `zlink_handler_result_t` — handler registration
+  - `zlink_handler_result_t` — handler operation
   - `zlink_close_result_t` — close / destroy
   - `zlink_bind_result_t` — bind
   - `zlink_connect_result_t` — connect / disconnect / unbind
@@ -475,8 +482,8 @@ leaves the queued topic, payload, and other outputs unchanged.
   Therefore, any nonzero `int` value always identifies its origin unambiguously.
 - See [Result and errno mapping](#result-and-errno-mapping) above for the formal enum
   catalog.
-- Request reply callbacks pass internal errno through `from_errno` normalization as
-  `zlink_request_result_t`; this completion channel is normalized by contract as
+- The request completion queue passes internal errno through `from_errno` normalization
+  as `zlink_request_result_t`; this completion channel is normalized by contract as
   `zlink_request_result_t`.
 
 The code is organized around three files.
@@ -529,7 +536,7 @@ NOT_SUPPORTED, BACKPRESSURED).
 
 The normalization helper is in
 [core/src/api/message/request_result_internal.hpp](https://github.com/zlink-systems/zlink/blob/main/core/src/api/message/request_result_internal.hpp).
-It maps callback completion errno values to the public completion result contract.
+It maps completion errno values to the public completion result contract.
 
 ### Binding surface
 
@@ -551,8 +558,8 @@ already describes the failure (for example, `BACKPRESSURED`, `NOT_FOUND`, or
 ## Implementation and contract-test verification requirements
 
 Verify the following using only the public surface: the result returned by each public
-function, the completion result in a reply callback, `zlink_errno()`, `zlink_strerror()`,
-and `zlink_version()`. Each item maps to one unit test.
+function, the completion result from `zlink_completion_recv()`, `zlink_errno()`,
+`zlink_strerror()`, and `zlink_version()`. Each item maps to one unit test.
 
 **Common rules**
 
@@ -571,28 +578,29 @@ and `zlink_version()`. Each item maps to one unit test.
 **Extended errno constants**
 
 - Even when a platform does not provide their POSIX definitions, `ESTALE`, `EALREADY`,
-  `EDEADLK`, and `ESHUTDOWN` are observed on every supported platform with the public
-  `ZLINK_HAUSNUMERO`-based values in [§3](#3-extended-errno-constants).
+  `EDEADLK`, `ESHUTDOWN`, `EPROTOTYPE`, and `EOVERFLOW` are observed on every supported
+  platform with the public `ZLINK_HAUSNUMERO`-based values in
+  [§3](#3-extended-errno-constants).
 
 **Submit and request completion**
 
-- A submit to a peer whose handshake has not completed returns
-  `ZLINK_SUBMIT_NOT_ADMITTED`.
+- When a ROUTER sends a typed request to a DEALER RID, the result is
+  `ZLINK_SUBMIT_NOT_ADMITTED` with `EPROTOTYPE`.
+- When the completion ID sequence is exhausted, submit returns
+  `ZLINK_SUBMIT_SEQ_EXHAUSTED` with `EOVERFLOW` and ID `0`.
 - After a successful request submit, exactly one terminal result
-  (`zlink_request_result_t`) is delivered to the reply callback for each operation ID.
+  (`zlink_request_result_t`) is delivered as a REQUEST completion for each nonzero ID.
 - When a peer sends an errno from [Request completion result](#3-request-completion-result)
-  in the first 4-byte part of a valid error reply, `zlink_reply_handler_fn` receives the
+  in the first 4-byte part of a valid error reply, `zlink_completion_recv()` receives the
   `zlink_request_result_t` from the same row. An unlisted nonzero errno produces
   `ZLINK_REQUEST_INTERNAL_ERROR`.
 
-**Receive and handler**
+**Receive**
 
-- When the topic buffer capacity for a raw subscription receive is zero or less than the
-  required length, the result is `ZLINK_RECV_BUFFER_TOO_SMALL`. Only the required topic
-  length is recorded; the queued topic, payload, and other outputs remain unchanged, so
-  the caller can retry with a sufficient buffer.
-- Calling handler unregister or replace from the same callback returns
-  `ZLINK_HANDLER_DEADLOCK` (`EDEADLK`).
+- When the topic buffer for SUB or XPUB receive is shorter than the required length, the
+  result is `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`. Only the required length is
+  recorded; the queued record and other outputs remain unchanged. A zero-length topic
+  succeeds with zero capacity and a `NULL` buffer.
 
 **Receive flow state**
 

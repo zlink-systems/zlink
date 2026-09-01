@@ -8,33 +8,19 @@ title: "Rust Bindings Implementation Blueprint"
 
 # Rust Bindings Implementation Blueprint
 
-> **What this chapter defines** — the expected Rust crate shape and the
+> **What this chapter defines** — the Rust crate's public shape and the
 > `contracts`/`runtime` source placement rules.
 
-This document defines the expected Rust crate shape. It is not an
+This document defines the Rust crate shape. It is not an
 exhaustive list of every public item. The concrete public contract source
 is `bindings/rust/src/contracts/`. `bindings/rust/src/lib.rs` is the crate
 projection that re-exports the intended public API.
 
-A Rust implementation is aligned when the `contracts` source tree, the
-private runtime tree, the public export projection, rustdoc, tests,
-samples, the perf runner, and runtime behavior all follow this blueprint
-and map the stable `core/include/zlink.h` capabilities onto an idiomatic
-Rust API.
+The `contracts` source tree, private runtime tree, public export projection, rustdoc, tests, samples,
+perf runner, and runtime project `core/include/zlink.h` capabilities into an idiomatic Rust API. This
+document defines where each public contract and runtime helper is owned.
 
-This README describes the Rust binding shape once it is aligned with the
-common policy in `../README.md`, and it doubles as the guide for the Rust
-refactor work itself. While the refactor is in progress, use this document
-to decide where each public contract, runtime implementation, native
-bridge helper, test, sample, and perf import belongs. Once the Rust
-binding is declared aligned, the source layout, public re-exports,
-rustdoc, tests, samples, perf, and runtime behavior must match this
-document.
-
-The Rust refactor is a breaking cleanup. It does not leave behind
-compatibility shims, deprecated wrappers, duplicate creation paths, or old
-re-export aliases meant to preserve the pre-refactor public surface.
-
+ This binding follows
 This binding follows the common bindings architecture map using Rust
 naming conventions. The `contracts` and private `runtime` modules organize
 source ownership, and `lib.rs` decides which module paths become the
@@ -44,7 +30,7 @@ public crate API.
 |---|---|
 | [Public contract source](#public-contract-source) | The contracts/runtime/native source locations and documentation's role |
 | [Repository layout](#repository-layout) | The file-granularity policy and the aligned directory tree |
-| [API change workflow](#api-change-workflow) | The procedure for new mappings and refactors, and the shortcuts that must be removed |
+| [API change principles](#api-change-principles) | Public mapping and contract/runtime boundary requirements |
 | [Library shape](#library-shape) | RAII ownership, `Result`, Builders, the `unsafe` boundary |
 | [Contract / runtime placement rules](#contract--runtime-placement-rules) | The boundary between public declarations and private helpers |
 | [Contract file layout](#contract-file-layout) | Files per category under `contracts/` |
@@ -185,9 +171,9 @@ reviewer must be able to point to the common contract category it belongs
 to. If a module exists only for native calls or to maintain an unsafe
 invariant, it stays private under `runtime/`.
 
-## API change workflow
+## API change principles
 
-When mapping a new core capability.
+The public projection of a Core capability follows these principles.
 
 1. Choose the common contract category that will own the public behavior.
 2. Add the public type, method, or function to the module that safely owns it, and update the `lib.rs` re-export projection if it must be visible at the crate root.
@@ -198,19 +184,19 @@ When mapping a new core capability.
 7. Update samples and perf only through the public API.
 8. Run formatting and clippy-style checks where available.
 
-When refactoring existing code into this shape.
+The contract/runtime boundary meets these requirements.
 
 1. Move public behavior declarations to `src/contracts/<category>/`.
 2. Move native-backed implementations to `src/runtime/<category>/`.
 3. Keep unsafe FFI, native loading, raw handles, and callback trampolines under `src/runtime/native/`.
-4. Replace direct runtime construction in public code with a crate root constructor or a contract method.
-5. Remove compatibility re-exports that expose a runtime module as public API.
-6. Remove deprecated wrappers, duplicate operation-start names, and old naming aliases instead of keeping them as shims.
-7. Update tests, samples, and perf to use only the public crate export.
-8. Regenerate/review rustdoc so private implementation modules don't appear as public API.
+4. Public code constructs resources through a crate-root constructor or contract method.
+5. Crate exports do not expose a runtime module as public API.
+6. Deprecated wrappers, duplicate operation-start names, and compatibility-only naming aliases are not
+   part of the public surface.
+7. Tests, samples, and perf use only the public crate export.
+8. Rustdoc does not expose private implementation modules as public API.
 
-The refactor is complete only once the following Rust-specific shortcuts
-are gone.
+The following Rust-specific shortcuts are not allowed.
 
 - The `contracts` modules do not re-export `runtime` or `runtime::native`.
 - Contract files never import a runtime resource type to describe a public service model.
@@ -267,8 +253,8 @@ The contract source uses the same classification as the [.NET bindings blueprint
 
 - `core/`: `context.rs`, `routing_id.rs`, and core option/value files.
 - `messaging/`: `message.rs`, `received.rs`, `topic_message.rs`, `subscription_event.rs`, common operation payload types.
-- `sockets/`: socket types/traits, socket option types, send/request/reply builder contracts, stream packet handler contracts, socket flags.
-- `eventing/`: monitor, monitor event/status, poller, poll event, timer, event handler contracts.
+- `sockets/`: socket types/traits, socket option types, send/request/reply builder contracts, stream packet values, socket flags.
+- `eventing/`: monitor, monitor event/status, poller, poll event, and timer contracts.
 - `service/`: SPOT node, Spot, Actor, topology model, service operation builders, under a `spot/` submodule.
 - `errors/`: public error types, the result domain, error-code mapping.
 
@@ -328,7 +314,8 @@ public crate items and re-exports.
 
 - Data-plane `recv`, routed recv, `subscribe`, and subscription-event receive fill a caller-provided `&mut Received`, `&mut TopicMessage`, or `&mut SubscriptionEvent` value and return `Result<bool, RecvError>`.
 - Send, routed send, publish, request, reply, SPOT operations, and Actor location/session operations return a typestate builder.
-- A builder's start method takes only a target identity, topic, channel, routing id, or request sequence. Payload, flag, timeout, callback, and async submit choices are the builder's state or stages.
+- A builder's start method takes only a target identity, topic, channel, routing ID, or `ReplyToken`.
+  Payload, request timeout, and terminal choice are the builder's state or stages.
 - SPOT's channel-targeted operations use `send_to_channel(...)` and `request_to_channel(...)`. SPOT's topic publish keeps `publish(topic)` as-is.
 - No single-payload shortcut method is added under the same name as an operation's start method. `send(message)`, `send(routing_id, message)`, `publish(topic, message)`, `send_to_channel(channel, message)`, `send_to_spot(..., message)` are not public contract members. A caller uses `send(...).message(message).submit()`.
 - A multipart payload accumulates via repeated `message(...)` calls. A `messages(...)` convenience method is allowed only when it delegates to the same builder contract and is declared on the public crate surface.
@@ -343,56 +330,21 @@ public crate items and re-exports.
   let reply = dealer.request().message(request).submit().await?;
   ```
 
-  HWM-managed **send** (PAIR `send()`, STREAM `send(target)`,
-  `Received::send()`, and DEALER/ROUTER routed send) provides two terminals.
-  Asynchronous `submit()` returns a runtime-independent
-  `Future<Output = Result<(), SubmitError>>`. Synchronous
-  `submit_sync(SendFlags) -> Result<(), SubmitError>` blocks inside Core
-  for admission with `SendFlags::NONE` and immediately returns
-  `Backpressured` with `SendFlags::DONT_WAIT`. Request provides three completion
-  surfaces. `submit_sync(SendFlags)` waits synchronously for admission and reply
-  and returns the reply directly; `on_reply(cb).submit_sync(SendFlags)` returns
-  the admission result immediately and delivers the reply through the callback;
-  `submit()` returns `Future<Output = Result<Vec<Message>, ZlinkError>>`.
-  Request submission passes through the same HWM admission and its synchronous
-  flag selects admission waiting. **publish** is not in
-  that classification: its terminal is the synchronous
-  `submit() -> Result<(), SubmitError>` (lossy PUB semantics; with
-  `ZLINK_PUB_OPT_NODROP` a full subscriber surfaces `Backpressured`
-  immediately).
-- The Core send-completion notification drives a send Future to completion.
-  The socket runtime registers one long-lived `zlink_send_complete_handler`
-  per socket for every subject `zlink_send_async` supports (PAIR, DEALER,
-  ROUTER, STREAM), and the Future hands the whole record to `zlink_send_async`
-  in one call on its first poll. When Core admits the record immediately the
-  completion runs inline and that same poll returns `Ready`. The completion
-  callback only stores the result and wakes the waker — Core refuses a submit
-  from inside a completion with `EDEADLK` — and resumption happens in the
-  context Core delivered the completion on. `timeout(...)` maps to
-  `zlink_send_async_options_t::timeout_ms`, a per-operation deadline. The
-  binding keeps no park queue, no WRITABLE retry, no deadline timer and no
-  dispatcher thread. There is no public `on_send_ready`; send completion is
-  delivered only through the Future.
-- Routed send builders expose both `submit()` and
-  `submit_sync(SendFlags)` as required by the send contract. Because Rust has
-  no overloads, request callback completion uses the
-  `on_reply(cb).submit_sync(SendFlags)` builder; no separate progress-polling
-  terminal is exposed. PUB/XPUB `publish` and ROUTER reply remain
-  separate synchronous operation contracts. The raw
+  HWM-managed **send** (PAIR `send()`, STREAM `send(target)`, `Received::send()`, and
+  DEALER/ROUTER send) provides asynchronous `submit()` and synchronous `submit_sync()`. Request also
+  provides `submit()` and `submit_sync()` and keeps reply timeout on the builder. **publish** is not
+  in this classification: its terminal is synchronous
+  `submit() -> Result<(), SubmitError>` (lossy PUB semantics; under `ZLINK_PUB_OPT_NODROP`, a full
+  subscriber immediately returns `Backpressured`).
+- A send Future progresses when the socket-local owner drains a Core `DONTWAIT` completion.
+  `submit_sync()` uses Core `NONE` admission. Future drop detaches only the waiter; a late completion
+  releases provisional-registry state and the native payload.
+- PUB/XPUB `publish` and ROUTER reply retain separate synchronous operation contracts. The raw
   ROUTER/`Received` reply terminal is the one-shot
-  `ReplyOp<Ready>::submit() -> Result<(), SubmitError>`. It submits a terminal
-  reply or error reply to the HWM-free completion lane with one native call.
-  HWM backpressure is not a reply result; `NOT_CONNECTED`, `TERMINATED`,
-  `INVALID_ARGUMENT`, and other non-HWM submit failures return immediately as
-  `Err(SubmitError)`.
-- Dropping a send Future before completion requests `zlink_send_async_cancel`.
-  Core still completes a cancelled operation exactly once, so the binding keeps
-  the operation state alive in its socket-scoped registry until that completion
-  arrives, and the Core op id makes the cancel ABA-safe. Dropping an accepted
-  request Future detaches only its consumer; Core still completes the reply or
-  the timeout for the accepted request. Completion is resolved exactly once.
-  Strict FIFO ordering among operations for the same target is not a public
-  contract.
+  `ReplyOp<Ready>::submit() -> Result<(), SubmitError>`. It submits a terminal reply or error reply to
+  the HWM-free completion lane with one native call. HWM backpressure is not a reply result;
+  `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`, and other non-HWM submit failures return
+  immediately as `Err(SubmitError)`.
 
 ## Crate layout
 
@@ -400,7 +352,7 @@ The crate must expose clear public modules or re-exports.
 
 - Core: context, options, version/capability lookup helpers, utility.
 - Messaging: message, routing id, received metadata, topic message, subscription event, stream packet data.
-- Sockets: pair, dealer, router, pub, sub, xpub, xsub, stream, typed options, callbacks, request/reply, publish/subscribe, stream packet API.
+- Sockets: pair, dealer, router, pub, sub, xpub, xsub, stream, typed options, request/reply, publish/subscribe, stream packet API.
 - Eventing: monitor, monitor snapshot/event, poller, poll event, timer.
 - Service: SPOT node, SPOT handle, topology snapshot, actor ref, actor lifecycle, operation builders.
 - Error: the typed error/result domain that preserves core semantics.
@@ -471,8 +423,8 @@ The observation surface follows the C contract, so the constant and metric
 names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
 `SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
 with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
-`FLOW_STATE_STALE_GENERATION` (`1 << 2`), and `FLOW_STATE_STALE_EPOCH`
-(`1 << 3`), the status detail bit `FLOW_STATE` (`1 << 5`), and the five status
+and `FLOW_STATE_STALE_EPOCH` (`1 << 3`), the status detail bit `FLOW_STATE`
+(`1 << 5`), and the five status
 fields `flow_paused_connections`, `flow_pause_applied_total`,
 `flow_resume_applied_total`, `flow_state_stale_total`, and
 `flow_pause_duration_ms`, projected with this language's naming convention.
@@ -487,7 +439,7 @@ Once the binding is aligned with the common .NET-baseline policy, the
 public crate must cover the following stable, user-facing capabilities.
 
 - Context lifecycle, options, shutdown, auto-HWM recalculation, version, capability lookup, strerror.
-- Message ownership, multipart payload, routing id, received metadata, topic message, subscription event, stream packet callbacks.
+- Message ownership, multipart payload, routing id, received metadata, topic message, subscription event, and stream packet values.
 - Every socket family and its typed options. `SubSocket::subscription_at(index)` and `XSubSocket::subscription_at(index)` return that index's subscription filter and whether it is a pattern. If that index doesn't exist, they return `None`.
 - Monitor, poller, timer, readiness semantics.
 - SPOT node, SPOT handle, topology snapshot, actor, stream actor binding.
@@ -513,9 +465,8 @@ logical spot.
   payload. `Received` and `TopicMessage` own only the Rust lifetime of parts
   and metadata; reuse, consuming accessors, and `Drop` do not participate in
   Core HWM accounting. No separate retained receive, raw lease handle, or
-  application byte capacity exists in a public or internal API. Ordinary typed
-  receive preserves DEALER request sequence, ROUTER routing id/request
-  sequence, and SUB topic/routing id metadata.
+  application byte capacity exists in a public or internal API. Ordinary typed receive preserves
+  ROUTER routing ID and `ReplyToken`, and SUB topic/routing ID metadata.
 - Non-blocking no-data is distinguished from a hard receive failure.
 - A SPOT readable dispatch event is a readiness notification. The caller drains the matching receive API until it returns no-data.
 - Returned message data has clear ownership and lifetime. Borrowed data never outlives its native owner.
@@ -549,10 +500,10 @@ logical spot.
 - `lib.rs` imports a runtime module only to wire up constructors, and does not export a runtime module or a runtime implementation type name.
 - Tests, samples, and perf do not use private runtime imports.
 - A native-backed resource is created via a crate root constructor or a contract method, and typed as a public contract type.
-- No old alias, duplicate operation-start name, or deprecated wrapper is kept only for compatibility.
+- The public surface has no compatibility-only alias, duplicate operation-start name, or deprecated
+  wrapper.
 
-Required verification after a Rust refactor. Run these commands from
-`bindings/rust/`.
+Run the required verification commands from `bindings/rust/`.
 
 - Run `cargo fmt --all --check`.
 - Run `cargo test --workspace --all-targets`.
@@ -576,3 +527,159 @@ Rust exposes Actor and Spot route lookup results as public value types.
 - The send operation, once submit succeeds, transfers ownership of one or more message parts, and completes once the Actor owner's mailbox takes them over.
 - The request operation, once submit succeeds, transfers ownership of the request part and delivers the reply part the Actor handler produced.
 - Rust must not resurrect the removed Discovery route table or resolver API as a compatibility helper.
+
+## Pull completion public contract
+
+The Rust crate uses Core 0.16.0 as an exact dependency.
+
+The Rust runtime drains native completions and converts them into blocking `Result` values or
+runtime-independent Futures. `submit_sync()` uses Core `NONE`; `submit()` uses Core `DONTWAIT`.
+Completion-backed state is registered in a provisional registry before native `FINAL` and completes
+exactly once after submit publication and completion capture join. Future drop or executor task abort
+ends only the waiter and does not cancel the Core operation; a late completion releases the payload and
+state.
+
+`POLLCOMPLETION` is a progress event indicating that the public poller's wait thread drained the native
+queue and fully processed at least one live Future or detached state. Under public poller ownership,
+using a blocking request requires another thread to continue executing the wait loop.
+
+A `ReplyToken` carries both an `Arc<RouterOwnerTag>` created by the ROUTER wrapper and an opaque value.
+Only `pub(crate) fn from_native(owner, value)` creates a token; equality, hashing, and reply-owner
+validation use owner-tag identity and the value. `StreamPacket` is a reusable output, but `close(self)`
+is a consuming terminal. A token provides no `Default`, raw numeric conversion, ordering,
+serialization, or close operation. Concurrent recv into the same output is invalid-state. Message
+references remain valid only until the next recv entry or output drop. Before the first bind/connect,
+`set_recv_mode` accepts only `Raw` and `Packet` and rejects `Unspecified`.
+
+### Public interface
+
+```rust
+#[derive(Clone)]
+pub struct ReplyToken {
+    owner: Arc<RouterOwnerTag>,
+    value: u64,
+}
+
+impl PartialEq for ReplyToken { /* Arc::ptr_eq(owner) + value */ }
+impl Eq for ReplyToken {}
+impl std::hash::Hash for ReplyToken { /* owner tag address + value */ }
+
+impl std::fmt::Debug for ReplyToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ReplyToken")
+    }
+}
+
+impl SendOp<Ready> {
+    pub fn submit(
+        self,
+    ) -> impl Future<Output = Result<(), SubmitError>> + Send;
+    pub fn submit_sync(self) -> Result<(), SubmitError>;
+}
+
+impl RequestOp<Ready> {
+    pub fn timeout(self, timeout: Duration) -> Self;
+    pub fn submit(
+        self,
+    ) -> impl Future<Output = Result<Vec<Message>, ZlinkError>> + Send;
+    pub fn submit_sync(self) -> Result<Vec<Message>, ZlinkError>;
+}
+
+impl Received {
+    pub fn reply_token(&self) -> Option<ReplyToken>;
+}
+
+impl ReplyOp<Ready> {
+    pub fn submit(self) -> Result<(), SubmitError>;
+}
+
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamRecvMode {
+    Unspecified = 0,
+    Raw = 1,
+    Packet = 2,
+}
+
+pub struct StreamPacket {
+    routing_id: Option<RoutingId>,
+    header: Option<Message>,
+    body: Option<Message>,
+}
+
+impl Default for StreamPacket {
+    fn default() -> Self;
+}
+
+impl StreamPacket {
+    pub fn empty() -> Self;
+    pub fn is_empty(&self) -> bool;
+    pub fn routing_id(&self) -> Option<&RoutingId>;
+    pub fn header(&self) -> Option<&Message>;
+    pub fn body(&self) -> Option<&Message>;
+    pub fn close(self) -> Result<(), CloseError>;
+}
+
+impl StreamSocket {
+    pub fn recv_packet(
+        &self, out: &mut StreamPacket, flags: RecvFlags,
+    ) -> Result<bool, RecvError>;
+}
+
+impl StreamSocketOptions<'_> {
+    pub fn recv_mode(&self) -> Result<StreamRecvMode, ConfigError>;
+    pub fn set_recv_mode(
+        &self, mode: StreamRecvMode,
+    ) -> Result<(), ConfigError>;
+}
+```
+
+The operation-start signatures are PAIR `send(&self) -> SendOp<Empty>`, DEALER
+`send(&self) -> SendOp<Empty>` and `request(&self) -> RequestOp<Empty>`, ROUTER
+`send(&self, &RoutingId) -> SendOp<Empty>`,
+`request(&self, &RoutingId) -> RequestOp<Empty>`, and
+`reply(&self, &RoutingId, ReplyToken) -> ReplyOp<Empty>`, and STREAM
+`send(&self, &RoutingId) -> SendOp<Empty>`. A send factory captures the target in the builder.
+`Received::send()` returns a `SendOp<Empty>` that captures the source target, and
+`Received::reply()` returns a `ReplyOp<Empty>` that captures the source RID and token.
+
+The public Rust surface contains no `RoutedSendOp`, send `.timeout(Duration)`, `RequestCallbackOp` or
+`on_reply()`, `ReplyOp::flags()`, STREAM callback, `SocketMonitor::on_event()`, `ignore_handler()`, or
+`snapshot()`, `Timer::on_fire()`, or pair/generation member.
+
+Monitor provides `recv()`, `recv_with_flags(RecvFlags)`, `status()`, and `close(&mut self)`. Monitor
+DONTWAIT no-data is `Ok(None)`. Timer provides `start(&self, u64, u64)`, `stop(&self)`, and
+`recv() -> Result<Option<u64>, RecvError>`; `Drop` performs lifecycle cleanup. The native-header mirror
+contains only `ZLINK_OPT_PENDING_MAX_MSGS` and `ZLINK_OPT_PENDING_MAX_BYTES` as pending options.
+Monitor-event `connection_id` is used only for diagnostics and correlation, not as a send/reply target
+or reconnect fence. Pending native options add no public high-level option method.
+
+## Implementation and contract-test verification requirements
+
+Verify the following using only the public Rust interface, `Result`, Futures, and poller events. Each
+item maps to one contract test.
+
+**Operations and completion**
+
+- Every socket's send factory returns `SendOp<Empty>`, and send/request expose only the flag-free Future
+  and synchronous terminals in the Public interface section.
+- Even when completion drains before submit returns, the Future completes exactly once after joining
+  submit publication.
+- After Future drop or task abort, a late completion does not complete the Future again and releases the
+  native aggregate.
+- A non-OK request completion exposes only typed `ZlinkError` and does not expose the error payload.
+- `POLLCOMPLETION` returns only after Future settlement or detached cleanup finishes.
+
+**ReplyToken and STREAM**
+
+- A token is `Clone` but not `Copy` or `Default`, provides no raw numeric conversion, and its `Debug`
+  output does not expose the raw value.
+- Moving a ROUTER wrapper preserves owner-tag identity. After close and recreation, reply with a stale
+  token fails before the native call.
+- `recv_packet()` fills the output after success and leaves it empty on no-data or error; consuming
+  `close(self)` and `Drop` do not release the payload twice.
+
+**Pull eventing**
+
+- Monitor and timer recv distinguish no-data as `Ok(None)` and expose events and fire counts without
+  callbacks.

@@ -29,7 +29,7 @@ The following documents own the related contracts.
 | Related contract | Defining document |
 |---|---|
 | socket creation, common options, send/recv flags, and result enums | [Socket Common](README.en.md) |
-| ownership transfer, pending bound, timeout, cancellation, close fail-fast, and callback rules for asynchronous sends | [Socket Common](README.en.md) |
+| send ownership, pending and completion bounds, and pull completion | [Socket Common](README.en.md) |
 | message lifecycle, ownership, and multipart | [Message](../02-message.en.md) |
 | result-to-errno mapping | [Errors](../03-errors.en.md#result-and-errno-mapping) |
 
@@ -91,7 +91,9 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part (
   void *s_,
   zlink_msg_t *part_,
   zlink_send_flags_t flags_,
-  zlink_part_flag_t part_flag_);
+  zlink_part_flag_t part_flag_,
+  void *user_context_,
+  zlink_completion_id_t *completion_id_out_);
 ```
 
 [Section 2](#2-multipart-sends-and-record-atomicity) defines single-part sends with
@@ -100,13 +102,16 @@ atomicity.
 
 This function consumes the content of `part_` on both success and failure. If the same content may be
 needed again, copy it before the call. Initialize a consumed `zlink_msg_t` before reusing it. Pass
-`ZLINK_SEND_FLAGS_NONE` or `ZLINK_DONTWAIT` in `flags_`. A non-blocking call that cannot proceed
-immediately returns `ZLINK_SUBMIT_BACKPRESSURED`.
+`ZLINK_SEND_FLAGS_NONE` or `ZLINK_SEND_FLAGS_DONTWAIT` in `flags_`. A `NONE FINAL` call snapshots
+`SNDTIMEO` on entry, waits through local queue admission, and finishes with ID `0` and no
+completion. A `DONTWAIT FINAL` call has ID `0` if admission is immediate; if Core retains it as
+pending, it has a nonzero ID and produces one SEND completion. [Socket Common](README.en.md#part-send-and-pending-admission)
+owns the exact optional ID-output and context rules.
 
 **Returns:** `ZLINK_SUBMIT_OK` on success; otherwise a `zlink_submit_result_t` value that identifies
 the cause. The full mapping follows the [errno map](../03-errors.en.md#result-and-errno-mapping).
 
-**See also:** `zlink_recv_part`, `zlink_send_async`
+**See also:** `zlink_recv_part`, `zlink_completion_recv`
 
 ---
 
@@ -131,7 +136,8 @@ exactly once. A failure before a part is received does not transfer ownership.
 `*has_more_out_` is `ZLINK_PART_MORE` when another part follows and `ZLINK_PART_FINAL` for the last
 part. Receive all parts of one multipart message on the same thread with this function, from the first
 part through the last part. The normal path is to call it after observing `ZLINK_POLLIN` with a poller.
-A `ZLINK_DONTWAIT` call with no available data returns `ZLINK_RECV_NO_DATA`.
+A `ZLINK_RECV_FLAGS_DONTWAIT` call with no available data returns `ZLINK_RECV_NO_DATA`
+with `EAGAIN`.
 
 **Returns:** `ZLINK_RECV_OK` on success; otherwise a `zlink_recv_result_t` value.
 
@@ -139,38 +145,23 @@ A `ZLINK_DONTWAIT` call with no available data returns `ZLINK_RECV_NO_DATA`.
 
 ---
 
-### Asynchronous send admission
+### PAIR logical route and reconnect
 
-```c
-ZLINK_EXPORT zlink_submit_result_t zlink_send_async (
-  void *s_, zlink_msg_t *parts_, size_t part_count_,
-  const zlink_send_async_options_t *options_,
-  zlink_send_op_id_t *op_id_out_);
+A PAIR socket has one logical route. If its physical connection disconnects while Core holds a
+`DONTWAIT FINAL` as pending or while a `NONE FINAL` call waits for admission, the operation does
+not terminate solely because of the disconnect. When the same PAIR logical route reconnects,
+Core retries local queue admission while preserving FIFO. `NONE` uses only the remaining budget
+from the `SNDTIMEO` snapshot.
 
-ZLINK_EXPORT zlink_handler_result_t zlink_send_complete_handler (
-  void *s_, zlink_send_complete_handler_fn handler_, void *userdata_);
-
-ZLINK_EXPORT zlink_submit_result_t zlink_send_async_cancel (
-  void *s_, zlink_send_op_id_t op_id_);
-```
-
-PAIR supports the complete asynchronous send admission surface. `options_->target` is ignored. A PAIR
-socket has exactly one peer, so all pending operations share one target queue and are admitted in
-submit order.
-
-Completion means admission into the Core send queue, not delivery to the peer. [Socket
-Common](README.en.md) owns the complete contract, including ownership transfer, the per-socket pending
-bound, per-operation timeout, cancellation, close fail-fast, and callback rules.
-
-**Returns:** `ZLINK_SUBMIT_OK` / `ZLINK_HANDLER_OK` on success; otherwise a
-`zlink_submit_result_t` or `zlink_handler_result_t` value.
-
-**See also:** `zlink_send_part`
+After admission, Core keeps no separate replay copy of the application payload. Therefore, if the
+connection disconnects after ID `0` or `ZLINK_SEND_ADMITTED` is established, Core does not send
+the same record again on a new connection. Completion means local queue admission, not confirmation
+that the peer received the record.
 
 ## 5. Implementation and contract-test verification requirements
 
-Verify the following using only the public surface (`zlink_send_part`, `zlink_recv_part`, the
-`zlink_send_async` family, `zlink_socket_set_receive_flow_state`, monitor observations, return values,
+Verify the following using only the public surface (`zlink_send_part`, `zlink_recv_part`,
+`zlink_completion_recv`, `zlink_socket_set_receive_flow_state`, monitor observations, return values,
 and errno). Each item maps to one test.
 
 **1:1 send and receive**
@@ -181,23 +172,23 @@ and errno). Each item maps to one test.
 **Part flow**
 - When a single-part message is sent with `ZLINK_PART_FINAL`, the receiver observes `ZLINK_PART_FINAL` in `*has_more_out_`.
 - For a multipart message, the receiver observes `ZLINK_PART_MORE` on every part before the last and `ZLINK_PART_FINAL` on the last part.
-- A `ZLINK_DONTWAIT` send that cannot proceed immediately returns `ZLINK_SUBMIT_BACKPRESSURED`; a `ZLINK_DONTWAIT` receive with no available data returns `ZLINK_RECV_NO_DATA`.
+- If `DONTWAIT FINAL` is admitted immediately, it returns ID `0` and no completion. If Core retains it as pending, exactly one SEND completion is returned for its nonzero ID. If the pending or completion bound prevents retention, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and ID `0`.
+- A `ZLINK_RECV_FLAGS_DONTWAIT` receive with no available data returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
 
 **Record atomicity**
 - If any submit in an open multipart sequence fails, the peer receives no part of that record.
 - Both successful and failed calls consume `part_`, including the failed call's `part_`; a consumed `zlink_msg_t` can be reused only after it is initialized again.
 - The next submit after a failure starts the first part of a new record—the entire record retained before the calls can be resubmitted from its first part for a retry.
 
-**Asynchronous send admission**
-- The complete `zlink_send_async`, `zlink_send_complete_handler`, and `zlink_send_async_cancel` surface works with PAIR.
-- A submitted value in `options_->target` is ignored.
-- Multiple pending operations are admitted in submit order.
-- A completion notification means admission into the Core send queue, not confirmation of delivery to the peer.
+**Logical reconnect and completion**
+- If the pending target disconnects before admission and the same PAIR logical route reconnects, the record is admitted in FIFO order and the disconnect alone does not produce a TERMINAL completion.
+- `NONE FINAL` waits for reconnect of the same logical route within the snapshotted `SNDTIMEO`; expiration returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, ID `0`, and no completion.
+- Disconnecting and reconnecting after ID `0` or `ZLINK_SEND_ADMITTED` does not replay the same application record.
 
 **Absence of receive flow state**
 - `zlink_socket_set_receive_flow_state()` returns `ZLINK_CONFIG_NOT_SUPPORTED` with `errno == ENOTSUP` for a PAIR socket, while byte HWM, low water mark, and transport backpressure behavior remain in effect.
 - A PAIR socket's monitor status does not set `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`.
 - A PAIR socket does not emit `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, or `ZLINK_EVENT_FLOW_STATE_STALE` events.
 
-[Socket Common](README.en.md) owns verification of ownership transfer, the pending bound,
-per-operation timeout, cancellation, close fail-fast, and callback rules.
+[Socket Common](README.en.md) owns verification of ownership transfer, pending and completion
+bounds, close, and pull completion.

@@ -16,23 +16,11 @@ not an exhaustive list of every class or type member. The concrete public
 contract is the package-root export declared by `bindings/node/src/index.ts`,
 the `package.json` exports, and the generated `.d.ts` surface.
 
-A Node/TypeScript implementation is considered aligned when the source
-package tree, package exports, `.d.ts` types, tests, samples, perf runners,
-and runtime behavior follow this blueprint and map stable
-`core/include/zlink.h` capabilities into TypeScript-idiomatic APIs.
+The source package tree, package exports, `.d.ts` types, tests, samples, perf runners, and runtime
+project `core/include/zlink.h` capabilities into a TypeScript-idiomatic API. This document defines
+where each public contract, runtime implementation, and native bridge helper is owned.
 
-This README describes the Node/TypeScript binding shape after it is aligned
-to the shared policy in `../README.md`, and it also serves as the guide for
-the Node refactoring work. During the refactor, use this document to decide
-where each public contract, runtime implementation, native bridge helper,
-test, sample, and perf import belongs. Once the Node binding is declared
-aligned, generated declarations, package exports, tests, samples, perf, and
-runtime behavior all match this document.
-
-The Node refactor is a breaking cleanup. It does not keep compatibility
-shims, deprecated wrappers, duplicate construction paths, or runtime
-re-export aliases only to preserve the pre-refactor public surface.
-
+ This binding follows
 This binding follows the shared bindings architecture map with TypeScript
 naming conventions. It uses lower-case `contracts` and `runtime` source
 folders, and package exports decide what is public. It does not copy
@@ -61,7 +49,7 @@ casing, or file names when a TypeScript idiom is clearer.
 |---|---|
 | [Public Contract Source](#public-contract-source) | Export projection, contract source location, package boundary |
 | [Repository Layout](#repository-layout) | The aligned directory tree and lower-case folder rules |
-| [API Change Workflow](#api-change-workflow) | New-mapping/refactor procedure, shortcuts that must be removed |
+| [API Change Principles](#api-change-principles) | Public mapping and contract/runtime boundary requirements |
 | [Library Shape](#library-shape) | Resources/roles that need interface-first definitions |
 | [Contract / Runtime Placement Rules](#contract--runtime-placement-rules) | The boundary between public declarations and runtime implementation |
 | [Contract Category Map](#contract-category-map) | Category-to-folder mapping |
@@ -69,7 +57,7 @@ casing, or file names when a TypeScript idiom is clearer.
 | [Runtime File Layout](#runtime-file-layout) | Files by category under `runtime/`, and alignment-failure examples |
 | [Construction Entry Points](#construction-entry-points) | The list of package-root factory functions |
 | [Function Naming Rules](#function-naming-rules) | camelCase, canonical action names, handler-registration rules |
-| [Canonical Interface Rules](#canonical-interface-rules) | `recv` signatures, builders, exceptions such as `publishAsync` |
+| [Canonical Interface Rules](#canonical-interface-rules) | `recv` signatures, builders, and submit rules |
 | [Public Entry Shape](#public-entry-shape) | Domain grouping of the package entrypoint |
 | [64-bit Byte HWM and Monitoring Contract](#64-bit-byte-hwm-and-monitoring-contract) | `bigint` HWM representation and monitor snapshot fields |
 | [Receive flow state](#receive-flow-state) | The receive-flow state type, setter, and monitor surface |
@@ -88,9 +76,8 @@ casing, or file names when a TypeScript idiom is clearer.
 - Contract source: `bindings/node/src/zlink/contracts/`.
 - Package projection: symbols exported from the package entrypoint and
   declared in the published TypeScript definitions.
-- Internal implementation: native addon modules, private source modules,
-  N-API handles, callback trampolines, request progress helpers, converters,
-  and raw part-loop helpers.
+- Internal implementation: native addon modules, private source modules, N-API handles, completion-drain
+  owners and provisional registries, converters, and raw part-loop helpers.
 - Package boundary: `package.json` exports expose only documented public
   entrypoints.
 - Documentation role: this README defines shape and semantic coverage. The
@@ -120,7 +107,8 @@ Use these paths consistently when changing the Node/TypeScript binding.
 - Do not expose deep source paths as public API unless they are deliberately listed in `package.json` exports.
 - Use lower-case source directory names. Do not create `src/zlink/Contracts` or `src/zlink/Runtime`; those names could be mistaken for a public deep-import surface.
 - `src/zlink/contracts` owns public TypeScript types, classes, builders, enums, errors, and factory return contracts. The package entrypoint or a runtime factory module owns the factory implementation.
-- `src/zlink/runtime` owns native-backed runtime implementations, native addon calls, handle owners, callback trampolines, request progress helpers, marshalling, and platform loading.
+- `src/zlink/runtime` owns native-backed runtime implementations, native addon calls, handle owners,
+  completion-drain owners and provisional registries, marshalling, and platform loading.
 
 The following tree is the aligned implementation structure.
 
@@ -230,9 +218,9 @@ symbol appears in the package root or the generated `.d.ts`, a reviewer must
 be able to point to its owner under `src/zlink/contracts` or the package-root
 entrypoint.
 
-## API Change Workflow
+## API Change Principles
 
-When mapping a new core capability:
+The public projection of a Core capability follows these principles:
 
 1. Add the public symbol to the correct contract source category.
 2. Update the package entrypoint, declaration surface, and `package.json`
@@ -246,24 +234,22 @@ When mapping a new core capability:
 7. Confirm the generated `dist` and `.d.ts` output do not expose private
    bridge modules.
 
-When refactoring existing code to this shape:
+The contract/runtime boundary meets these requirements:
 
 1. Move public behavior declarations to `src/zlink/contracts/<category>/`.
 2. Move native-backed runtime implementations to
    `src/zlink/runtime/<category>/`.
 3. Keep native addon loading and N-API calls under
    `src/zlink/runtime/native/`.
-4. Replace direct runtime construction in public code with package-root
-   factories or contract methods.
-5. Remove compatibility exports that expose runtime modules as public API.
-6. Remove deprecated wrappers, duplicate overload families, and old naming
-   aliases rather than keeping them as shims.
-7. Update tests, samples, and perf to import from the package root only.
-8. Regenerate declarations and confirm `dist/index.d.ts` carries the
+4. Public code constructs resources through package-root factories or contract methods.
+5. Package exports do not expose runtime modules as public API.
+6. Deprecated wrappers, duplicate overload families, and compatibility-only naming aliases are not
+   part of the public surface.
+7. Tests, samples, and perf import from the package root only.
+8. Generated declarations in `dist/index.d.ts` carry the
    contract surface, not runtime implementation modules.
 
-The refactor is complete only once the following Node-specific shortcuts are
-removed. These are not optional compatibility layers.
+The following Node-specific shortcuts are not allowed.
 
 - `src/zlink/contracts` does not re-export runtime handle modules.
 - Contract files do not import runtime resource classes to describe public
@@ -277,11 +263,6 @@ removed. These are not optional compatibility layers.
   source subpaths.
 - Generated declarations do not mention runtime implementation module paths
   as public types.
-
-For a handoff, a short task statement is enough: refactor the Node binding
-according to this README and `../README.md`, use the .NET design shape,
-preserve TypeScript naming style, remove compatibility shims, and pass this
-document's verification gates.
 
 ## Library Shape
 
@@ -321,8 +302,7 @@ resources and roles before writing or exposing a runtime class.
 - Operation builders: send, routed send, request, reply, publish, channel
   send/request, SPOT send/request/reply, actor create, actor join, and actor
   join reply builders.
-- Callback roles: stream packet handler, monitor handler, poll handler, SPOT
-  dispatch handler, route handler, and admission handler.
+- Application handler roles: SPOT dispatch handler and route handler.
 
 The runtime class that implements a role may have a private or unexported
 name, but the package-root factory and the generated declaration must use
@@ -392,9 +372,8 @@ shared with .NET, but the names inside it stay idiomatic TypeScript.
 - `messaging/`: `message.ts`, `received.ts`, `topic_message.ts`,
   `subscription_event.ts`, and common operation payload types.
 - `sockets/`: socket interfaces, socket option types, send/request/reply
-  builder contracts, stream packet handler contracts, and socket flags.
-- `eventing/`: monitor, monitor event/status, poller, poll events, timer, and
-  event handler contracts.
+  builder contracts, stream packet values, and socket flags.
+- `eventing/`: monitor, monitor event/status, poller, poll events, and timer contracts.
 - `service/`: a `spot/` subfolder holding SPOT node, Spot, Actor, topology
   model, and service operation builders. Use named files such as
   `spot_node.ts`, `spot.ts`, `actor.ts`, and `spot_operations.ts`, and group
@@ -535,20 +514,16 @@ using TypeScript spelling.
 - Use the same canonical action names as the other bindings, differing only
   in case: `send`, `request`, `reply`, `publish`, `subscribe`,
   `unsubscribe`, `recv`, `recvRouted`, `receiveSubscriptionEvent`,
-  `setPacketHandler`, `setDispatchHandler`,
+  `recvPacket`, `setDispatchHandler`,
   `getOrCreateSpot`, `sendToChannel`, `requestToChannel`, `sendToSpot`, and
   `requestToSpot`.
-- Do not keep an old alias only for compatibility. When a pre-refactor name
-  conflicts with the canonical meaning, remove it and expose the canonical
+- Do not keep an alias only for compatibility. When another name
+  conflicts with the canonical meaning, expose the canonical
   TypeScript name.
-- Do not use `on...` names for handler registration. Use `set...Handler`
-  when the API stores or replaces the current handler.
-- Do not create operation-start variants such as `sendNoWait`,
-  `publishWithFlags`, or `requestAsync`. Keep a single operation name. Put
-  operation-specific flags or timeouts on the builder. Managed sends use the
-  synchronous `submit_sync(SendFlags)` and asynchronous `submit()` terminals defined
-  below. Requests use three completion surfaces: `submit_sync(flags)`,
-  `submit_sync(flags, callback)`, and Promise-returning `submit()`.
+- Do not create operation-start variants such as `sendNoWait`, `publishWithFlags`, or `requestAsync`.
+  Keep a single operation name. Send uses `submit_sync()` and `submit()`. Request uses
+  `submit_sync()` and `submit()`, with the request
+  timeout on the builder.
 
 ## Canonical Interface Rules
 
@@ -558,7 +533,7 @@ using TypeScript spelling.
 - Send, routed send, publish, request, reply, SPOT operations, and Actor
   location/session operations return a fluent builder.
 - A builder start method takes only the target identity, topic, channel,
-  routing id, or request sequence. Payload and the options supported by that
+  routing ID, or `ReplyToken`. Payload and the options supported by that
   operation are builder steps.
 - SPOT channel-targeted operations use `sendToChannel(...)` and
   `requestToChannel(...)`. SPOT topic publish stays `publish(topic)`.
@@ -591,30 +566,10 @@ using TypeScript spelling.
   builder's terminal method keeps using `submit(...)` even on a
   Promise-returning surface. Do not add a separate `submitAsync` terminal
   name.
-- Pair `send().message(...)`, DEALER/ROUTER routed
-  `send(...).message(...)`, and `Received.send().message(...)` provide two terminals. Synchronous
-  `submit_sync(SendFlags): void` submits through `zlink_send_part(_rid)` and throws
-  `SubmitError` on failure. Asynchronous `submit(): Promise<void>` completes
-  through Core's send-completion callback. The async operation timeout is
-  passed to Core. `ADMITTED` resolves the Promise; `TIMED_OUT` and `TERMINAL`
-  reject it with a `SubmitError` that preserves Core's errno. Dropping or
-  garbage-collecting the Promise is not cancellation, and no separate cancel
-  API is exposed. The binding owns no admission thread, queue, retry, or
-  readiness state; the native callback only delivers completion to JavaScript.
-- Stream managed `send(routingId)` uses the same sync/async send contract.
-  Stream `trySend` and raw one-shot operations such as public ROUTER
-  `sendTransportPair(...)` retain their synchronous `void`/`boolean` contracts
-  and are not managed HWM-wait terminals.
-- DEALER/ROUTER request provides three completion surfaces.
-  `submit_sync(flags)` waits synchronously for admission and reply and returns
-  `Message[]` directly. `submit_sync(flags, callback)` returns once the
-  admission result is known and delivers the reply through the callback.
-  `submit()` returns `Promise<Message[]>`, completed through Core's reply
-  callback. Request submission passes through the same HWM admission as send;
-  synchronous flags `None`/`DontWait` select admission waiting. Raw ROUTER reply
-  is a synchronous one-shot. The
-  request/reply path adds no binding-owned retry, pending-admission queue, or
-  progress timer.
+- PAIR, DEALER, ROUTER, and STREAM send use one `SendOperation` family that captures the target.
+  `submit_sync()` uses Core `NONE`; `submit()` uses Core `DONTWAIT` completion.
+- DEALER/ROUTER request provides `submit_sync(): Message[]` and
+  `submit(): Promise<Message[]>` and retains the builder's reply timeout.
 - The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
   `ReplySubmitOperation.submit(): void`. It returns no Promise, enters no HWM-
   managed path, and submits a terminal reply or error reply to the HWM-free
@@ -627,36 +582,6 @@ using TypeScript spelling.
   Publish adds no `publishAsync`, binding-owned pending queue, worker, retry,
   or readiness/admission API. A submitted Message is consumed only when
   Core submit succeeds and remains reusable after synchronous failure.
-- The MeshNode Logical Multicast publisher also provides `publishAsync(...)`
-  because Core's one blocking publish call must run outside the Node.js
-  event loop. This name applies only to this publisher and does not change
-  the async-suffix rule for other binding operations. Payload and metadata
-  are copied into binding-owned storage before the worker is queued. An
-  `AbortSignal` can cancel the operation only before the Core call starts.
-  An abort after the Core call has started does not change the submit
-  result and detail of the publish that has already started. A programming
-  or system failure remains an exception. No separate timeout option is
-  added; Core's MeshNode send timeout applies.
-- `publishAsync(...)` returns `Promise<MeshPublishResult>`. `Ok`,
-  `Backpressured`, `NotFound`, `NotConnected`, `Terminated`, and
-  `NotAdmitted` are returned as normal submit results, preserving the detail
-  Core filled in. In particular, the non-zero detail of a `Backpressured`
-  result where only some targets were accepted is not discarded.
-  `InvalidArgument`, `InvalidHandle`, `InvalidState`, `NotSupported`,
-  `ThreadViolation`, `OutOfMemory`, `SeqExhausted`, and `InternalError` are
-  programming or system errors, so they raise `SubmitError`.
-- Once a `publishAsync(...)` call has been queued, calling `close()` on the
-  publisher rejects any new publish immediately. `close()` does not make the
-  Node.js event loop wait. An operation that has already been queued or has
-  started its Core call keeps the native publisher handle, and the native
-  handle is released only after the last operation's Core call and Promise
-  completion processing finish.
-- `sendActorBoundSession(...)`, which sends from a MeshNode to an Actor's
-  bound session, requires an `expectedBindingGeneration` greater than zero.
-  It does not forward a call from a stale generation to the new session
-  after the binding is replaced, and zero does not auto-select the current
-  binding — it preserves Core's `InvalidArgument` result.
-
 ## Public Entry Shape
 
 The package entrypoint groups the API around domain concepts.
@@ -666,7 +591,7 @@ The package entrypoint groups the API around domain concepts.
 - Messaging: `Message`, routing id values, received metadata, topic
   messages, subscription events, and stream packet data.
 - Sockets: pair, dealer, router, pub, sub, xpub, xsub, stream, typed
-  options, callbacks, request/reply, publish/subscribe, and stream packet
+  options, request/reply, publish/subscribe, and stream packet
   APIs.
 - Eventing: monitor, monitor snapshot/event, poller, poll events, and timer.
 - Service: SPOT node, SPOT handle, topology snapshot, Actor reference, Actor
@@ -729,8 +654,7 @@ their name and are provided as `bigint`. Whether a deferred value is valid
 is provided as a separate boolean. Pending-message counts are display
 diagnostics; `sndPendingBytes` and `rcvPendingBytes` are separate `bigint` byte
 values. Slot, message-unit, size-cap, and connection-bucket properties,
-including an old count-based name such as `autoHwmAppliedSndHwm`, are not kept
-as aliases.
+including a count-based name such as `autoHwmAppliedSndHwm`, are not part of the public surface.
 
 `CoreHwmBudgetSnapshot` projects ABI version/size, configured/runtime/resolved
 memory limits, configured/effective budgets, planned/applied/manual-reserved
@@ -760,8 +684,8 @@ The observation surface follows the C contract, so the constant and metric
 names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
 `SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
 with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
-`FLOW_STATE_STALE_GENERATION` (`1 << 2`), and `FLOW_STATE_STALE_EPOCH`
-(`1 << 3`), the status detail bit `FLOW_STATE` (`1 << 5`), and the five status
+and `FLOW_STATE_STALE_EPOCH` (`1 << 3`), the status detail bit `FLOW_STATE`
+(`1 << 5`), and the five status
 fields `flow_paused_connections`, `flow_pause_applied_total`,
 `flow_resume_applied_total`, `flow_state_stale_total`, and
 `flow_pause_duration_ms`, projected with this language's naming convention.
@@ -778,7 +702,7 @@ covers all of the following stable user-facing capabilities.
 - Context lifecycle, options, shutdown, auto-HWM recalculation, version,
   capability lookup, and strerror.
 - Message ownership, multipart payload, routing id, received metadata,
-  topic message, subscription event, and stream packet callback.
+  topic message, subscription event, and stream packet value.
 - Every socket family and its typed options.
 - Monitor, poller, timer, and readiness semantics.
 - SPOT node, SPOT handle, topology snapshot, Actor, and stream Actor
@@ -805,7 +729,7 @@ created the logical spot.
 - A SPOT readable dispatch event is a readiness notification. The caller
   drains the matching receive API until it reaches no-data.
 - Each part received from a general socket, routed socket, subscription, or
-  request completion becomes a `Message` whose payload is a JavaScript-owned
+  successful request result becomes a `Message` whose payload is a JavaScript-owned
   `Buffer` created by the addon. Reading the payload does not require another
   native call, and Node manages the `Buffer` lifetime after the `Message` is
   closed.
@@ -813,8 +737,8 @@ created the logical spot.
   message. The result object owns only the JavaScript lifetime of its `Message`
   values, buffers, and metadata. Reusing or closing it does not participate in
   Core HWM accounting.
-- Ordinary receive preserves multipart framing and metadata: typed
-  `requestSeq` for Dealer, source `RoutingId` plus `requestSeq` for Router, and
+- Ordinary receive preserves multipart framing and metadata: source `RoutingId` plus nullable
+  `ReplyToken` for Router, and
   topic plus any Core-provided source `RoutingId` for Sub and XSub. No separate
   retained receive, raw lease handle, application byte capacity, accounting
   setter, or per-part release exists in a public or internal API.
@@ -823,21 +747,12 @@ created the logical spot.
   when that is clearer than reusable data-plane storage. It still
   distinguishes no-data from a thrown hard receive error.
 
-### STREAM Packet Body Storage
+### STREAM packet storage
 
-A STREAM packet callback receives its header in a JavaScript-owned `Buffer`,
-the same as other Node receive paths. The socket's
-`packetBodyMaterialization` option selects the body storage.
-
-| Value | `Message` passed to the callback | Primary use |
-|---|---|---|
-| `StreamPacketBodyMaterialization.Native` | Owns the Core native frame, and `data()` returns a view of that frame. | Relaying a body to another STREAM send without reading it |
-| `StreamPacketBodyMaterialization.Managed` | Copies the body into a JavaScript-owned `Buffer` before invoking the callback. | Reading the body in JavaScript or passing it to a managed API |
-
-The default is `Native`. The option cannot change after a packet handler is
-registered. It changes only the packet callback body; it does not change direct
-STREAM receive, framing, ordering, HWM, timeout, or backpressure results. Both
-values have the same public `Message` ownership and explicit close responsibility.
+`StreamPacket` is a reusable output that owns a routing ID, header, and body. On entry, `recvPacket()`
+first releases the previous payload. After success, message references remain valid only until the next
+recv entry or `close()`; move or copy them to retain them longer. The output is empty on no-data and
+error.
 
 ## Error and Validation Policy
 
@@ -879,13 +794,13 @@ values have the same public `Message` ownership and explicit close responsibilit
 - Tests, samples, and perf do not use a deep runtime import.
 - A native-backed resource is created through a package-root factory or
   contract method, and is typed as a contract interface.
-- Every native-backed resource, operation builder, and callback role listed
+- Every native-backed resource, operation builder, and application handler role listed
   in Library Shape has its public contract interface first, before the
   runtime implementation class is wired into a factory.
-- No old alias, duplicate operation-start name, or deprecated wrapper is
-  kept only for compatibility.
+- The public surface has no compatibility-only alias, duplicate operation-start name, or deprecated
+  wrapper.
 
-Required verification after the Node refactor. Run the following commands
+Verify the Node contract with the following commands
 from `bindings/node/`.
 
 - Run `npm run build`.
@@ -927,3 +842,132 @@ objects with matching TypeScript declarations.
   succeeds, and delivers the reply part the Actor handler produced.
 - Node does not revive a removed Discovery route table or resolver API as a
   compatibility helper.
+
+## Pull completion public contract
+
+The Node package uses Core 0.16.0 as an exact dependency.
+
+The Node runtime drains native completions and converts them into blocking results or `Promise`.
+`submit_sync()` uses Core `NONE`; `submit()` uses Core `DONTWAIT`. Completion-backed state is registered
+in a provisional registry before native `FINAL` and completes exactly once after submit publication and
+completion capture join. No longer waiting for a Promise does not cancel the native operation; a late
+completion releases the payload and state.
+
+`PollEventFlag.PollCompletion` is a progress event indicating that the public poller's wait thread
+drained the native queue and fully processed at least one live Promise or detached state. Under public
+poller ownership, using a blocking request requires another thread to continue executing the wait loop.
+
+Only module-private `makeReplyToken(owner, value)`, installed by a class static block, creates a
+`ReplyToken`; the constructor sentinel is not exported. Equality and hashing use both owner identity and
+an opaque value. `StreamPacket` is an empty reusable output. A token provides no raw conversion,
+ordering, serialization, or `close()`. Concurrent recv into the same output is invalid-state. Message
+references remain valid only until the next recv entry or `close()`. Before the first bind/connect, the
+`recvMode` setter accepts only `Raw` and `Packet` and rejects `Unspecified`.
+
+### Public interface
+
+```ts
+export interface SendSubmitOperation {
+  message(message: MessageLike): SendSubmitOperation;
+  submit(): Promise<void>;
+  submit_sync(): void;
+}
+
+export class ReplyToken {
+  readonly #owner: object;
+  readonly #value: bigint;
+  private constructor(secret: symbol, owner: object, value: bigint);
+  equals(other: ReplyToken): boolean;
+  hashCode(): number;
+  toString(): "ReplyToken";
+}
+
+export interface RequestSubmitOperation {
+  message(message: MessageLike): RequestSubmitOperation;
+  timeout(timeoutMs: number): RequestSubmitOperation;
+  submit(): Promise<Message[]>;
+  submit_sync(): Message[];
+}
+
+export interface ReplySubmitOperation
+  extends PartBuilder<ReplySubmitOperation> {
+  submit(): void;
+}
+
+export interface StreamSocket {
+  send(routingId: RoutingId): SendOperation;
+  recv(out: Received, flags?: RecvFlags): boolean;
+  recvPacket(out: StreamPacket, flags?: RecvFlags): boolean;
+}
+
+export const StreamRecvMode: Readonly<{
+  Unspecified: 0;
+  Raw: 1;
+  Packet: 2;
+}>;
+export type StreamRecvMode =
+  typeof StreamRecvMode[keyof typeof StreamRecvMode];
+
+export interface StreamSocketOptions {
+  recvMode: StreamRecvMode;
+}
+
+export class StreamPacket {
+  constructor();
+  readonly isEmpty: boolean;
+  readonly routingId: RoutingId | null;
+  readonly header: Message | null;
+  readonly body: Message | null;
+  close(): void;
+}
+```
+
+The operation-start signatures are PAIR `send(): SendOperation`, DEALER
+`send(): SendOperation` and `request(): RequestOperation`, ROUTER
+`send(routingId): SendOperation`, `request(routingId): RequestOperation`, and
+`reply(routingId, token): ReplyOperation`, and STREAM `send(routingId): SendOperation`. A send factory
+captures the target in the builder. `Received.replyToken` is `ReplyToken | null`. `Received.send()`
+returns a `SendOperation` that captures the source target, and `Received.reply()` returns a
+`ReplyOperation` that captures the source RID and token.
+
+The public Node/TypeScript surface contains no `RoutedSendOperation` or `ImmediateSendOperation`,
+`StreamSocket.trySend()` or `setPacketHandler()`, `RequestCallback` or callback overload,
+`StreamPacketBodyMaterialization`, monitor/timer callback, or pair/generation member.
+`ReplySubmitOperation` does not extend `Flaggable` and provides no reply flags.
+
+Monitor provides `recv(flags?: RecvFlags): MonitorEvent | null`, `status()`, and `close()`. Timer provides
+`start(intervalNs: bigint, repeatCount: bigint)`, `stop()`, `recv(): bigint | null`, and `close()`.
+Monitor-event `connectionId` is used only for diagnostics and correlation, not as a send/reply target or
+reconnect fence. The internal addon enum mirror uses only `ZLINK_OPT_PENDING_MAX_MSGS` and
+`ZLINK_OPT_PENDING_MAX_BYTES` and adds no public option property.
+
+## Implementation and contract-test verification requirements
+
+Verify the following using only public TypeScript declarations, JavaScript results and errors, and
+poller events. Each item maps to one contract test.
+
+**Operations and completion**
+
+- PAIR, DEALER, ROUTER, and STREAM send factories return one `SendOperation` family.
+- Send/request expose only the flag-free Promise and synchronous terminals in the Public interface
+  section and retain request timeout.
+- Even when completion drains before submit returns, the Promise settles exactly once after joining
+  submit publication.
+- A late completion for state whose Promise is no longer awaited does not deliver another public result
+  and releases the native aggregate.
+- A non-OK request completion exposes only a typed error and does not expose the error payload.
+- `PollCompletion` returns only after Promise settlement or detached cleanup finishes.
+
+**ReplyToken and STREAM**
+
+- Only ROUTER REQUEST receive returns a token; public construction, raw conversion, and serialization do
+  not succeed.
+- Only tokens with the same owner and value are equal, and reply with a token from another owner fails
+  before the native call.
+- `StreamPacket` holds a payload after recv success, is empty on no-data or error, and can be reused after
+  `close()`.
+
+**Pull eventing**
+
+- Monitor and timer recv return no-data as `null` and expose events and fire counts without callbacks.
+- TypeScript declarations and generated JavaScript provide the same public names and terminals.

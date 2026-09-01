@@ -8,26 +8,16 @@ title: "Rust 바인딩 구현 청사진"
 
 # Rust 바인딩 구현 청사진
 
-> **이 장이 정의하는 것** — 기대되는 Rust crate 형태와 `contracts`/`runtime`
+> **이 장이 정의하는 것** — Rust crate의 공개 형태와 `contracts`/`runtime`
 > 소스 배치 규칙.
 
-이 문서는 기대되는 Rust crate 형태를 정의한다. 모든 공개 아이템을 빠짐없이 나열한
+이 문서는 Rust crate 형태를 정의한다. 모든 공개 아이템을 빠짐없이 나열한
 목록은 아니다. 구체적인 공개 계약 소스는 `bindings/rust/src/contracts/`이다.
 `bindings/rust/src/lib.rs`는 의도된 공개 API를 re-export하는 crate projection이다.
 
-Rust 구현이 정렬된 상태란, `contracts` 소스 트리, private runtime 트리, 공개 export
-projection, rustdoc, 테스트, 샘플, perf runner, 런타임 동작이 이 청사진을 따르고
-안정된 `core/include/zlink.h` 능력을 Rust 관용 API로 매핑하는 상태이다.
-
-이 README는 `../README.md`의 공통 정책에 정렬된 후의 Rust 바인딩 형태를 기술하며,
-동시에 Rust 리팩터 작업의 가이드이기도 하다. 리팩터 진행 중에는 이 문서를 사용해
-각 공개 계약, 런타임 구현, 네이티브 브릿지 헬퍼, 테스트, 샘플, perf import가 어디에
-속하는지 결정한다. Rust 바인딩이 정렬되었다고 선언되면, 소스 레이아웃, 공개
-re-export, rustdoc, 테스트, 샘플, perf, 런타임 동작이 이 문서와 일치해야 한다.
-
-Rust 리팩터는 호환을 깨는 정리 작업이다. 리팩터 이전의 공개 표면을 유지하기 위한
-호환 shim, deprecated wrapper, 중복 생성 경로, 옛 re-export alias는 남겨두지
-않는다.
+`contracts` 소스 트리, private runtime 트리, public export projection, rustdoc, 테스트,
+샘플, perf runner와 runtime은 `core/include/zlink.h` 기능을 Rust 관용 API로 투영한다.
+이 문서는 각 공개 계약과 runtime helper의 소유 위치를 정의한다.
 
 이 바인딩은 공통 바인딩 아키텍처 맵을 Rust 명명 규칙으로 따른다. `contracts`와
 private `runtime` 모듈이 소스 소유권을 조직화하고, `lib.rs`가 어떤 모듈 경로를
@@ -280,9 +270,8 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
 - `messaging/`: `message.rs`, `received.rs`, `topic_message.rs`,
   `subscription_event.rs`, 공통 operation payload 타입.
 - `sockets/`: socket 타입/trait, socket option 타입, send/request/reply builder
-  계약, stream packet handler 계약, socket flag.
-- `eventing/`: monitor, monitor event/status, poller, poll event, timer, event
-  handler 계약.
+  계약, stream packet 값과 socket flag.
+- `eventing/`: monitor, monitor event/status, poller, poll event, timer 계약.
 - `service/`: SPOT node, Spot, Actor, topology model, service operation builder를
   담는 `spot/` 하위 모듈로 둔다.
 - `errors/`: 공개 error 타입, result 도메인, error-code 매핑.
@@ -359,9 +348,9 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
   `&mut SubscriptionEvent` 값을 채우고 `Result<bool, RecvError>`를 반환한다.
 - Send, routed send, publish, request, reply, SPOT 작업, Actor
   location/session 작업은 typestate builder를 반환한다.
-- Builder의 start 메서드는 대상 identity, topic, channel, routing id 또는
-  request sequence만 받는다. Payload, flag, timeout, callback, async submit
-  선택은 builder의 상태 또는 단계이다.
+- Builder의 start 메서드는 대상 identity, topic, channel, routing ID 또는
+  `ReplyToken`만 받는다. Payload, request timeout과 terminal 선택은 builder의
+  상태 또는 단계이다.
 - SPOT의 채널 지정 작업은 `send_to_channel(...)`과 `request_to_channel(...)`을
   사용한다. SPOT의 토픽 publish는 `publish(topic)`을 그대로 유지한다.
 - Operation 시작 메서드와 동일한 이름의 단일 payload 단축 메서드를 추가하지
@@ -394,46 +383,20 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
   ```
 
   HWM-managed **send**(PAIR `send()`, STREAM `send(target)`, `Received::send()`,
-  DEALER/ROUTER routed send)는 두 terminal을 제공한다. 비동기 `submit()`은
-  runtime 비종속 `Future<Output = Result<(), SubmitError>>`를 반환하고, 동기
-  `submit_sync(SendFlags) -> Result<(), SubmitError>`는 `SendFlags::NONE`에서
-  Core 내부 admission을 blocking 대기하며 `SendFlags::DONT_WAIT`에서 즉시
-  `Backpressured`를 반환한다. Request는 세 완료 표면을 제공한다.
-  `submit_sync(SendFlags)`는 admission과 reply를 동기 대기해 reply를 직접 반환하고,
-  `on_reply(cb).submit_sync(SendFlags)`는 admission 결과를 즉시 반환한 뒤 reply를
-  callback으로 전달하며, `submit()`은
-  `Future<Output = Result<Vec<Message>, ZlinkError>>`를 반환한다. Request 제출도 같은
-  HWM admission을 지나며 sync flag가 대기 여부를 정한다. **publish**는
+  DEALER/ROUTER send)는 비동기 `submit()`과 동기 `submit_sync()`를 제공한다.
+  Request도 `submit()`과 `submit_sync()`를 제공하고 reply timeout을 builder에 둔다. **publish**는
   이 분류에 포함되지 않으며 동기 `submit() -> Result<(), SubmitError>`가
   terminal이다(lossy PUB 의미론, `ZLINK_PUB_OPT_NODROP`에서는 즉시
   `Backpressured` 오류).
-- Send Future의 완료는 Core send-completion 통지가 구동한다. Socket runtime은
-  `zlink_send_async` 가 지원하는 subject(PAIR, DEALER, ROUTER, STREAM)마다
-  socket당 하나의 `zlink_send_complete_handler`를 소켓 수명 동안 등록하고,
-  Future는 최초 poll에서 record 전체를 `zlink_send_async`로 한 번 넘긴다.
-  Core가 즉시 admit하면 completion이 inline으로 실행되어 그 poll이 곧바로
-  `Ready`가 된다. Completion callback은 결과를 저장하고 waker를 깨우는 일만
-  하며(Core는 callback 안에서의 submit을 `EDEADLK`로 거부한다), 재개는 Core가
-  완료를 전달한 컨텍스트에서 일어난다. `timeout(...)`은
-  `zlink_send_async_options_t::timeout_ms`(per-operation deadline)로 전달한다.
-  바인딩은 park queue, WRITABLE 재시도, deadline timer, dispatcher thread를
-  두지 않는다. 공개 `on_send_ready`는 없고 send completion은 Future로만 전달한다.
-- Routed send builder는 send 계약에 따라 `submit()`과
-  `submit_sync(SendFlags)`를 함께 제공한다. Request callback은 Rust의 overload 부재에
-  맞춰 `on_reply(cb).submit_sync(SendFlags)` 빌더로 표현하고 별도 progress polling
-  terminal은 제공하지 않는다. PUB/XPUB
-  `publish`와 ROUTER reply는 별도의 동기
+- Send Future는 Core `DONTWAIT` completion을 socket-local owner가 drain할 때 진행한다.
+  `submit_sync()`는 Core `NONE` admission을 사용한다. Future drop은 waiter만 detach하며 late
+  completion은 provisional registry와 native payload를 정리한다.
+- PUB/XPUB `publish`와 ROUTER reply는 별도의 동기
   operation 계약을 유지한다. Raw ROUTER/`Received` reply의 terminal은
   `ReplyOp<Ready>::submit() -> Result<(), SubmitError>`인 one-shot이다. Native reply를
   HWM 없는 completion lane에 한 번 호출해 terminal reply 또는 error reply를 제출한다.
   HWM backpressure는 reply 결과가 아니며 `NOT_CONNECTED`, `TERMINATED`,
   `INVALID_ARGUMENT`와 그 밖의 non-HWM submit 실패는 즉시 `Err(SubmitError)`로 반환한다.
-- Send Future가 완료 전에 drop되면 `zlink_send_async_cancel`로 취소를 요청한다.
-  Core는 취소된 operation도 정확히 한 번 완료하므로, 바인딩은 그 completion이
-  도착할 때까지 op state를 socket-scoped registry에 살려 두며 op id로 ABA를
-  방지한다. Request가 acceptance된 뒤 Future가 drop되면 소비자만 분리하며, 이미
-  수용된 request의 reply 또는 timeout 정리는 Core가 계속 완료한다. Completion은
-  정확히 한 번만 확정된다. 같은 target의 엄격한 FIFO 순서는 public 계약이 아니다.
 
 ## Crate 레이아웃
 
@@ -505,7 +468,7 @@ errno에서 도출한다. 따라서 completion lane이 없는 socket의 `ENOTSUP
 관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
 `SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
 `1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
-`FLOW_STATE_STALE_GENERATION`(`1 << 2`), `FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
+`FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
 bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
 `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
 `flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
@@ -549,8 +512,8 @@ boolean은 논리적 spot을 생성한 호출에서만 `true`이다.
   `Received`와 `TopicMessage`는 part와 metadata의 Rust 수명만 소유하며 재사용,
   consuming accessor 또는 `Drop`을 Core HWM accounting에 연결하지 않는다.
   별도 retained receive, raw lease handle 또는 application byte capacity는 public이나
-  internal API에 두지 않는다. DEALER request sequence, ROUTER routing id/request
-  sequence와 SUB topic/routing id metadata는 일반 typed receive가 보존한다.
+  internal API에 두지 않는다. ROUTER routing ID와 `ReplyToken`, SUB topic/routing ID
+  metadata는 일반 typed receive가 보존한다.
 - non-blocking no-data는 hard receive 실패와 구별된다.
 - SPOT readable dispatch 이벤트는 readiness 알림이다. 호출자는 매칭되는 receive
   API를 no-data가 될 때까지 비운다.
@@ -636,3 +599,160 @@ Rust는 Actor와 Spot route 조회 결과를 공개 값 타입으로 노출한�
 - send operation은 submit이 성공하면 하나 이상의 message part 소유권을 넘기고, Actor 소유자 mailbox가 인계를 받으면 완료된다.
 - request operation은 submit이 성공하면 요청 part의 소유권을 넘기고, Actor handler가 만든 reply part를 전달한다.
 - Rust는 제거된 Discovery route table이나 resolver API를 compatibility helper로 되살리면 안 된다.
+
+## Pull completion 공개 계약
+
+Rust crate는 Core 0.16.0을 exact dependency로 사용한다.
+
+Rust runtime은 native completion을 drain해 blocking `Result` 또는 runtime-independent `Future`로
+바꾼다. `submit_sync()`는 Core `NONE`, `submit()`은 Core `DONTWAIT`를 사용한다.
+Completion-backed state는 native `FINAL` 전에 provisional registry에 등록하고 submit publish와
+completion capture가 합류한 뒤 정확히 한 번 끝낸다. Future drop이나 executor task abort는 Core
+operation을 취소하지 않고 waiter만 detach하며 late completion은 payload와 state를 정리한다.
+
+`POLLCOMPLETION`은 public poller의 wait thread가 native queue를 비우고 live Future 또는 detached
+state를 한 건 이상 완전 처리했다는 progress event다. Public poller owner에서 blocking request를
+사용하면 다른 thread가 wait loop를 계속 실행해야 한다.
+
+`ReplyToken`은 ROUTER wrapper가 만든 `Arc<RouterOwnerTag>`와 opaque value를 함께 보유한다.
+`pub(crate) fn from_native(owner, value)`만 token을 만들며 equality·hash와 reply owner 검증은
+owner tag identity와 value를 사용한다. `StreamPacket`은 reusable output이지만 `close(self)`는
+consuming terminal이다.
+Token은 `Default`, raw numeric conversion, ordering, serialization과 close를 제공하지 않는다.
+같은 output의 concurrent recv는 invalid-state다. Message reference는 다음 recv 진입이나 output
+drop 전까지만 유효하다. `set_recv_mode`는 첫 bind/connect 전에 `Raw`·`Packet`만 받고
+`Unspecified`를 거부한다.
+
+### Public interface
+
+```rust
+#[derive(Clone)]
+pub struct ReplyToken {
+    owner: Arc<RouterOwnerTag>,
+    value: u64,
+}
+
+impl PartialEq for ReplyToken { /* Arc::ptr_eq(owner) + value */ }
+impl Eq for ReplyToken {}
+impl std::hash::Hash for ReplyToken { /* owner tag address + value */ }
+
+impl std::fmt::Debug for ReplyToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ReplyToken")
+    }
+}
+
+impl SendOp<Ready> {
+    pub fn submit(
+        self,
+    ) -> impl Future<Output = Result<(), SubmitError>> + Send;
+    pub fn submit_sync(self) -> Result<(), SubmitError>;
+}
+
+impl RequestOp<Ready> {
+    pub fn timeout(self, timeout: Duration) -> Self;
+    pub fn submit(
+        self,
+    ) -> impl Future<Output = Result<Vec<Message>, ZlinkError>> + Send;
+    pub fn submit_sync(self) -> Result<Vec<Message>, ZlinkError>;
+}
+
+impl Received {
+    pub fn reply_token(&self) -> Option<ReplyToken>;
+}
+
+impl ReplyOp<Ready> {
+    pub fn submit(self) -> Result<(), SubmitError>;
+}
+
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamRecvMode {
+    Unspecified = 0,
+    Raw = 1,
+    Packet = 2,
+}
+
+pub struct StreamPacket {
+    routing_id: Option<RoutingId>,
+    header: Option<Message>,
+    body: Option<Message>,
+}
+
+impl Default for StreamPacket {
+    fn default() -> Self;
+}
+
+impl StreamPacket {
+    pub fn empty() -> Self;
+    pub fn is_empty(&self) -> bool;
+    pub fn routing_id(&self) -> Option<&RoutingId>;
+    pub fn header(&self) -> Option<&Message>;
+    pub fn body(&self) -> Option<&Message>;
+    pub fn close(self) -> Result<(), CloseError>;
+}
+
+impl StreamSocket {
+    pub fn recv_packet(
+        &self, out: &mut StreamPacket, flags: RecvFlags,
+    ) -> Result<bool, RecvError>;
+}
+
+impl StreamSocketOptions<'_> {
+    pub fn recv_mode(&self) -> Result<StreamRecvMode, ConfigError>;
+    pub fn set_recv_mode(
+        &self, mode: StreamRecvMode,
+    ) -> Result<(), ConfigError>;
+}
+```
+
+Operation 시작 signature는 PAIR `send(&self) -> SendOp<Empty>`, DEALER
+`send(&self) -> SendOp<Empty>`·`request(&self) -> RequestOp<Empty>`, ROUTER
+`send(&self, &RoutingId) -> SendOp<Empty>`·
+`request(&self, &RoutingId) -> RequestOp<Empty>`·
+`reply(&self, &RoutingId, ReplyToken) -> ReplyOp<Empty>`, STREAM
+`send(&self, &RoutingId) -> SendOp<Empty>`다. Send factory는 target을 builder에 capture한다.
+`Received::send()`는 source target을 capture한 `SendOp<Empty>`, `Received::reply()`는 source RID와
+token을 capture한 `ReplyOp<Empty>`를 반환한다.
+
+Public Rust surface에는 `RoutedSendOp`, send `.timeout(Duration)`, `RequestCallbackOp`·
+`on_reply()`, `ReplyOp::flags()`, STREAM callback, `SocketMonitor::on_event()`·
+`ignore_handler()`·`snapshot()`, `Timer::on_fire()`, pair/generation member가 없다.
+
+Monitor는 `recv()`·`recv_with_flags(RecvFlags)`·`status()`·`close(&mut self)`를 제공한다.
+Monitor DONTWAIT no-data는 `Ok(None)`이다. Timer는 `start(&self, u64, u64)`·`stop(&self)`·
+`recv() -> Result<Option<u64>, RecvError>`를 제공하고 `Drop`이 lifecycle을 정리한다. Native header
+mirror의 pending option은 `ZLINK_OPT_PENDING_MAX_MSGS`와 `ZLINK_OPT_PENDING_MAX_BYTES`다.
+Monitor event의 `connection_id`는 진단과 correlation에만 사용하며 send·reply target이나
+reconnect fence로 사용하지 않는다.
+Pending native option은 public high-level option method를 추가하지 않는다.
+
+## 구현 및 contract test 검증 요구
+
+Public Rust interface, `Result`·Future와 poller event만으로 다음을 확인한다. 각 항목은 contract
+test 하나로 이어진다.
+
+**Operation과 완료**
+
+- 모든 socket의 send factory가 `SendOp<Empty>`를 반환하고 send/request는 §Public interface의
+  flag 없는 Future·sync terminal만 제공한다.
+- Submit 반환 전 completion이 drain돼도 Future는 submit publish와 합류한 뒤 정확히 한 번
+  끝난다.
+- Future drop 또는 task abort 뒤 late completion은 Future를 다시 끝내지 않고 native aggregate를
+  정리한다.
+- Non-OK request completion은 typed `ZlinkError`만 제공하고 error payload를 공개하지 않는다.
+- `POLLCOMPLETION`은 Future settle 또는 detached cleanup이 끝난 뒤에만 반환된다.
+
+**ReplyToken과 STREAM**
+
+- Token은 `Clone`이지만 `Copy`·`Default`·raw 숫자 변환을 제공하지 않고 `Debug`가 raw 값을
+  노출하지 않는다.
+- ROUTER wrapper move 뒤 owner tag identity가 유지되며 close·recreate 뒤 stale token의 reply는
+  native 호출 전에 실패한다.
+- `recv_packet()`은 성공 뒤 output을 채우고 no-data·오류 때 empty로 유지하며, consuming
+  `close(self)`와 `Drop`이 payload를 중복 해제하지 않는다.
+
+**Pull eventing**
+
+- Monitor·timer recv는 `Ok(None)`으로 no-data를 구분하고 callback 없이 event와 fire count를
+  관찰한다.

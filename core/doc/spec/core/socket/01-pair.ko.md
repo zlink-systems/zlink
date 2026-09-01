@@ -29,7 +29,7 @@ receive-flow 상태가 없다는 사실이다. 모든 socket 타입이 공유하
 | 관련 계약 | 정의하는 문서 |
 |---|---|
 | socket 생성·공통 옵션·send/recv flag·result enum | [Socket 공통](README.ko.md) |
-| 비동기 송신의 소유권 이전·pending 상한·timeout·취소·close fail-fast·callback 규칙 | [Socket 공통](README.ko.md) |
+| 송신 ownership, pending·completion 상한과 pull completion | [Socket 공통](README.ko.md) |
 | message lifecycle·ownership과 multipart | [Message](../02-message.ko.md) |
 | result와 errno 대응 | [Errors](../03-errors.ko.md#result와-errno-대응) |
 
@@ -92,7 +92,9 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part (
   void *s_,
   zlink_msg_t *part_,
   zlink_send_flags_t flags_,
-  zlink_part_flag_t part_flag_);
+  zlink_part_flag_t part_flag_,
+  void *user_context_,
+  zlink_completion_id_t *completion_id_out_);
 ```
 
 단일 part의 `ZLINK_PART_FINAL` 전송, multipart의 시작·연결 규칙과 record 단위 원자성은
@@ -100,13 +102,16 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part (
 
 이 함수는 성공과 실패 모두에서 `part_`의 내용을 소비한다. 같은 내용을 다시 사용할 가능성이
 있으면 호출 전에 복사해야 하며, 소비된 `zlink_msg_t`를 다시 사용하려면 먼저 초기화해야
-한다. `flags_`에는 `ZLINK_SEND_FLAGS_NONE` 또는 `ZLINK_DONTWAIT`를 전달한다. non-blocking
-호출이 즉시 진행할 수 없으면 `ZLINK_SUBMIT_BACKPRESSURED`를 반환한다.
+한다. `flags_`에는 `ZLINK_SEND_FLAGS_NONE` 또는 `ZLINK_SEND_FLAGS_DONTWAIT`를 전달한다. `NONE FINAL`은
+호출 진입 시 `SNDTIMEO`를 snapshot해 local queue admission까지 기다리고 ID `0`과 completion
+없음으로 끝난다. `DONTWAIT FINAL`은 즉시 admission되면 ID `0`이고, Core가 pending으로
+보관하면 nonzero ID와 SEND completion 한 건을 만든다. Optional ID output과 context의 정확한
+규칙은 [Socket 공통](README.ko.md#part-send와-pending-admission)을 따른다.
 
 **반환값:** 성공 시 `ZLINK_SUBMIT_OK`, 실패 시 원인을 나타내는 `zlink_submit_result_t` 값.
 전체 대응은 [errno map](../03-errors.ko.md#result와-errno-대응)을 따른다.
 
-**참고:** `zlink_recv_part`, `zlink_send_async`
+**참고:** `zlink_recv_part`, `zlink_completion_recv`
 
 ---
 
@@ -131,7 +136,8 @@ ZLINK_EXPORT zlink_recv_result_t zlink_recv_part (
 `*has_more_out_`은 다음 part가 있으면 `ZLINK_PART_MORE`, 마지막 part이면
 `ZLINK_PART_FINAL`이다. 한 multipart message는 첫 part부터 마지막 part까지 같은 thread에서
 이 함수로 계속 수신한다. 일반적인 경로는 poller에서 `ZLINK_POLLIN`을 관찰한 뒤 호출하는
-방식이다. `ZLINK_DONTWAIT` 호출에 수신할 데이터가 없으면 `ZLINK_RECV_NO_DATA`를 반환한다.
+방식이다. `ZLINK_RECV_FLAGS_DONTWAIT` 호출에 수신할 데이터가 없으면 `ZLINK_RECV_NO_DATA`와
+`EAGAIN`을 반환한다.
 
 **반환값:** 성공 시 `ZLINK_RECV_OK`, 실패 시 `zlink_recv_result_t` 값.
 
@@ -139,37 +145,20 @@ ZLINK_EXPORT zlink_recv_result_t zlink_recv_part (
 
 ---
 
-### 비동기 송신 admission
+### PAIR의 논리 route와 reconnect
 
-```c
-ZLINK_EXPORT zlink_submit_result_t zlink_send_async (
-  void *s_, zlink_msg_t *parts_, size_t part_count_,
-  const zlink_send_async_options_t *options_,
-  zlink_send_op_id_t *op_id_out_);
+PAIR socket에는 단일 logical route가 있다. `DONTWAIT FINAL`을 Core가 pending으로 접수하거나
+`NONE FINAL`이 admission을 기다리는 동안 물리 connection이 끊겨도 terminal로 끝내지 않는다.
+Core는 같은 PAIR logical route가 다시 연결되면 FIFO를 유지해 local queue admission을 다시
+시도한다. `NONE`은 snapshot한 `SNDTIMEO`의 남은 budget만 사용한다.
 
-ZLINK_EXPORT zlink_handler_result_t zlink_send_complete_handler (
-  void *s_, zlink_send_complete_handler_fn handler_, void *userdata_);
-
-ZLINK_EXPORT zlink_submit_result_t zlink_send_async_cancel (
-  void *s_, zlink_send_op_id_t op_id_);
-```
-
-PAIR는 비동기 송신 admission 표면 전체를 지원한다. `options_->target`은 무시된다. PAIR
-socket은 peer가 정확히 하나이므로 모든 pending operation이 하나의 target queue를 공유하고
-제출 순서대로 admit된다.
-
-완료는 Core 송신 queue로의 admission을 뜻하며 peer 전달이 아니다. 소유권 이전, socket 단위
-pending 상한, operation별 timeout, 취소, close fail-fast, callback 규칙 등 계약 전체는
-[Socket 공통](README.ko.md)이 소유한다.
-
-**반환값:** 성공 시 `ZLINK_SUBMIT_OK` / `ZLINK_HANDLER_OK`, 실패 시
-`zlink_submit_result_t` 또는 `zlink_handler_result_t` 값.
-
-**참고:** `zlink_send_part`
+Admission 뒤에는 application payload의 별도 replay copy를 유지하지 않는다. 따라서 ID `0` 또는
+`ZLINK_SEND_ADMITTED`가 확정된 뒤 connection이 끊겨도 새 connection에 같은 record를 다시
+보내지 않는다. 완료는 local queue admission을 뜻하며 peer 수신 확인이 아니다.
 
 ## 5. 구현 및 contract test 검증 요구
 
-공개 표면(`zlink_send_part`·`zlink_recv_part`·`zlink_send_async` 계열,
+공개 표면(`zlink_send_part`·`zlink_recv_part`·`zlink_completion_recv`,
 `zlink_socket_set_receive_flow_state`, monitor 관찰, 반환값·errno)만으로 다음을 확인한다.
 각 항목은 test 하나로 이어진다.
 
@@ -181,23 +170,28 @@ pending 상한, operation별 timeout, 취소, close fail-fast, callback 규칙 �
 **part 흐름**
 - 단일 part message를 `ZLINK_PART_FINAL`로 보내면 수신 측 `*has_more_out_`은 `ZLINK_PART_FINAL`이다.
 - multipart message를 보내면 수신 측은 마지막 전 part에서 `ZLINK_PART_MORE`, 마지막 part에서 `ZLINK_PART_FINAL`을 관찰한다.
-- `ZLINK_DONTWAIT` 송신이 즉시 진행할 수 없으면 `ZLINK_SUBMIT_BACKPRESSURED`, `ZLINK_DONTWAIT` 수신에 데이터가 없으면 `ZLINK_RECV_NO_DATA`를 반환한다.
+- `DONTWAIT FINAL`이 즉시 admission되면 ID `0`과 completion 없음이고, Core가 pending으로
+  보관하면 nonzero ID의 SEND completion을 정확히 한 번 반환한다. Pending·completion 상한 때문에
+  Core가 보관하지 못하면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`이다.
+- `ZLINK_RECV_FLAGS_DONTWAIT` 수신에 데이터가 없으면 `ZLINK_RECV_NO_DATA`와 `EAGAIN`을 반환한다.
 
 **record 원자성**
 - 열린 multipart sequence에서 submit 하나가 실패하면 peer는 그 record의 어떤 part도 수신하지 않는다.
 - 실패한 호출의 `part_`를 포함해 성공·실패 모두에서 `part_`는 소비되며, 소비된 `zlink_msg_t`는 다시 초기화한 뒤에만 재사용할 수 있다.
 - 실패 후 다음 submit은 새 record의 첫 part로 시작한다 — 호출 전에 보관한 전체 record를 첫 part부터 다시 제출해 재시도할 수 있다.
 
-**비동기 송신 admission**
-- PAIR에서 `zlink_send_async`·`zlink_send_complete_handler`·`zlink_send_async_cancel` 표면 전체가 동작한다.
-- `options_->target`을 채워 제출해도 무시된다.
-- 여러 pending operation은 제출 순서대로 admit된다.
-- 완료 통지는 Core 송신 queue로의 admission을 뜻하며 peer 전달 확인이 아니다.
+**Logical reconnect와 completion**
+- Admission 전 pending target의 connection을 끊었다가 같은 PAIR logical route를 reconnect하면
+  record가 FIFO로 admission되고 disconnect만으로 TERMINAL completion이 생기지 않는다.
+- `NONE FINAL`은 snapshot한 `SNDTIMEO` 안에서 같은 logical route의 reconnect를 기다리며,
+  만료하면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`, completion 없음이다.
+- ID `0` 또는 `ZLINK_SEND_ADMITTED` 뒤 connection을 끊고 다시 연결해도 같은 application
+  record가 replay되지 않는다.
 
 **Receive flow state 부재**
 - `zlink_socket_set_receive_flow_state()`는 PAIR socket에 대해 `errno == ENOTSUP`과 함께 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고, byte HWM·low water mark·transport backpressure 동작은 그대로 유지된다.
 - PAIR socket의 monitor status는 `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`를 설정하지 않는다.
 - PAIR socket에서는 `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, `ZLINK_EVENT_FLOW_STATE_STALE` event가 발생하지 않는다.
 
-소유권 이전·pending 상한·operation별 timeout·취소·close fail-fast·callback 규칙의 검증은
+소유권 이전, pending·completion 상한, close와 pull completion의 검증은
 [Socket 공통](README.ko.md)이 소유한다.

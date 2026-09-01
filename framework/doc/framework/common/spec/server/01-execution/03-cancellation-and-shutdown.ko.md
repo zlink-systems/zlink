@@ -19,6 +19,12 @@ title: "Cancellation과 shutdown"
 - Cancellation은 협력적 요청이다.
 - 이미 완료된 결과를 cancellation으로 바꾸지 않으며, 이미 수락한 one-way 메시지의
   전달을 취소하지 않는다.
+- Framework가 소유한 queue에서 대기하는 동안에는 cancellation으로 record를 제거해
+  Core submit을 시작하지 않게 할 수 있다. 그러나 Core가 successful submit으로
+  payload를 소유한 뒤에는 caller의 기다림만 중단할 수 있으며, Core admission이나
+  request를 취소하지 않는다.
+- Caller가 기다림을 중단한 뒤 도착한 completion은 socket owner가 drain하고 native
+  payload를 정리한다. 이 completion은 caller를 다시 완료시키지 않는다.
 - 언어별 표면은 `.NET` `CancellationToken`, Java
   `CompletionStage.toCompletableFuture().cancel(false)`, Kotlin coroutine
   cancellation, Node.js `AbortSignal`을 사용한다.
@@ -55,12 +61,15 @@ Call이 pre-cancelled 상태로 도착했을 때의 규칙은 다음과 같다.
 ## 3. Cancellation의 경쟁 처리
 
 - Cancellation은 exceptional completion이다.
-- Admission을 시작한 뒤 cancellation, timeout, shutdown과 수락이 경쟁하면 원자
-  terminal state를 먼저 확정한 하나만 call을 완료한다. 이 완료 자리 하나를 두고
-  경쟁하는 구조 자체는
+- Core submit 전 Framework queue 대기에서는 cancellation, timeout, shutdown과 admission이
+  경쟁하며, 먼저 확정된 하나만 caller 결과와 record 처리를 정한다. 이 완료 자리 하나를
+  두고 경쟁하는 구조 자체는
   [Submit과 completion 「10. Operation identity와 완료 자리」](01-submit-and-completion.ko.md#10-operation-identity와-완료-자리-구현)가
   정의한다.
-- 취소된 pending admission은 나중에 수락되면 안 된다.
+- Core가 successful submit으로 payload를 소유한 뒤 cancellation이 확정되면 caller는
+  cancelled로 완료된다. Core operation은 계속되므로 local capacity가 나중에 생기면
+  late admission이 일어날 수 있다. Runtime은 그 completion을 정리하되 caller에게
+  두 번째 terminal 결과를 전달하지 않는다.
 - ChannelName과 topic으로 같은 Channel의 여러
   [Spot](../00-foundation/02-glossary.ko.md#spot) — 주소와 상태를 가진 논리 instance —
   에 message 하나를 전달하는 방식인
@@ -69,11 +78,17 @@ Call이 pre-cancelled 상태로 도착했을 때의 규칙은 다음과 같다.
 
 ```mermaid
 flowchart LR
-    A["admission 시작"] --> X{"먼저 확정되는 것은?"}
-    X -->|cancellation| R1["cancellation으로 완료<br/>이후 수락되지 않음"]
+    A["admission 시작"] --> O{"Core가 payload를<br/>소유했는가?"}
+    O -->|아니오| X{"먼저 확정되는 것은?"}
+    X -->|cancellation| R1["Core submit 없이<br/>cancellation으로 완료"]
     X -->|timeout| R2["DeadlineExceeded로 완료"]
     X -->|shutdown| R3["ShuttingDown으로 완료"]
-    X -->|수락| R4["정상 완료"]
+    X -->|admission| R4["Core successful submit"]
+    O -->|예| R4
+    R4 --> C{"caller cancellation?"}
+    C -->|아니오| R5["Core completion을 caller가 관찰"]
+    C -->|예| R6["caller만 cancellation으로 완료<br/>Core는 late admission 가능"]
+    R6 --> R7["늦은 completion drain·payload 정리"]
 ```
 
 ## 4. Logical Multicast cancellation
@@ -165,9 +180,12 @@ public terminal, MeshNode 상태 전환이 관찰되는 placement·routing 결�
 
 **경쟁 처리**
 
-- Admission 시작 뒤 cancellation·timeout·shutdown·수락이 동시에 일어나도 call은
-  정확히 하나의 terminal 결과로 완료된다.
-- Cancellation으로 완료된 pending admission은 이후 수락된 결과로 다시 바뀌지 않는다.
+- Framework queue가 record를 소유하는 동안 cancellation·timeout·shutdown·admission이
+  동시에 일어나도 caller는 정확히 하나의 terminal 결과를 관찰하고, cancellation이
+  이기면 Core submit은 시작되지 않는다.
+- Core가 successful submit으로 payload를 소유한 뒤 caller cancellation이 이겨도 caller는
+  취소 결과만 한 번 관찰한다. 이후 local capacity가 생겨 late admission이 일어나면
+  runtime은 completion과 native payload를 정리하고 caller를 다시 완료시키지 않는다.
 
 **Logical Multicast cancellation**
 

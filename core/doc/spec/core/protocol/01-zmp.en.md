@@ -50,7 +50,7 @@ A dedicated request or reply API attaches internal metadata to the first applica
 message that Core consumes. The encoder moves it into the wire header, and the decoder
 restores it as an internal message value. After the socket runtime finds the request target
 or pending completion, it removes the metadata before returning payload to a public receive
-operation or callback.
+operation or completion queue.
 
 - **No public message API creates or reads a request-reply kind or sequence.** Applications
   pass only payload to request and reply APIs, and raw send always produces ordinary data.
@@ -161,7 +161,7 @@ or ROUTER, also adds `Routing-Id`. A READY that uses metadata always includes
 `Zlink-Max-Message-Size`, whose value is an 8-byte unsigned 64-bit big-endian integer. A value of
 `0` means that no positive Application maximum is configured. This
 option is disabled by default. However, a paired DEALER·ROUTER transport always adds metadata
-and the pair properties from [§4.1](#41-request-reply-transport-pair), regardless of this
+and the lane property from [§4.1](#41-request-reply-lane), regardless of this
 option.
 
 **ERROR frame**: the ERROR control type is `0x05`. Its body has the following byte order.
@@ -170,7 +170,7 @@ option.
 [type:0x05][error code:u8][reason length:u8][reason bytes]
 ```
 
-### 4.1 Request-reply transport pair
+### 4.1 Request-reply lane
 
 One logical DEALER/ROUTER peer that uses request-reply has two physical transport
 connections.
@@ -180,10 +180,10 @@ connections.
 | Application | Ordinary application messages and requests |
 | Completion | Replies that complete requests already sent and receive-flow control |
 
-The READY frame on each connection contains `Zlink-Pair-Id`, `Zlink-Pair-Generation`, and
-`Zlink-Lane`. Pair ID and generation are unsigned 64-bit big-endian values. Lane is one byte:
-Application is `0`, and Completion is `1`. All three properties must be present together.
-The pair ID, generation, and peer routing identity must all match across the two connections.
+The READY frame on each connection contains `Zlink-Lane`. Its value is one byte:
+Application is `0`, and Completion is `1`. Physical connection IDs and generations are
+neither wire properties nor public targets. `Zlink-Lane` is an internal protocol property
+that distinguishes application traffic from completion traffic.
 
 The `Routing-Id` in READY is metadata used to verify that both connections belong to the same
 peer. The runtime exposes the synthetic routing-ID preamble used by a ROUTER to select that peer
@@ -217,9 +217,9 @@ protocol errors.
 
 A weight configured before bind or connect is synchronized with the peer scheduler only after the
 paired Application pipe is ready. A dynamic change also applies the new absolute value, including
-`0`, in both directions. If the value equals the last value advertised for the pair, Core does not
-create another command. After reconnect, the Application pipe of the new paired generation
-re-advertises the current configured value when it becomes pair-ready.
+`0`, in both directions. If the value equals the last value advertised for the pipe, Core does not
+create another command. After reconnect, the new Application pipe re-advertises the current
+configured value when it becomes ready.
 
 A network `WEIGHT` command may bypass application HWM and remote PAUSE. It does not bypass the
 pair-ready hold or the atomic boundary of an Application multipart. While an Application multipart
@@ -228,9 +228,9 @@ multipart, or after rollback removes it, the sender appends and publishes that l
 as the next record at the resulting message boundary.
 
 Application writes wait until both lanes have completed validation. Data received from an
-earlier generation is not attached to the new pair. A protocol error, identity mismatch,
-fence timeout, or terminal failure on one lane terminates the entire pair. Reconnect creates
-a new generation, revalidates both lanes, and then resumes Application writes.
+earlier connection is not attached to the new connection. A protocol error, identity
+mismatch, fence timeout, or terminal failure on one lane terminates both lanes. Reconnect
+revalidates both lanes and then resumes Application writes.
 
 FIFO ordering is guaranteed only within each lane. No ordering is guaranteed between the
 two lanes. Completion replies can be processed even when Application ingress is stopped by
@@ -247,9 +247,9 @@ request-reply record.
 | Kind | Value | Sequence | Application-visible result |
 |---|---:|---|---|
 | data | `0x00` | None | The payload is received as an ordinary message. |
-| request | `0x01` | Nonzero 8-byte Big Endian value | Typed receive returns the payload and a sequence or local token used to reply. |
-| reply | `0x02` | Same value as the original request | The Completion progress lane completes the corresponding pending request with the payload. |
-| error reply | `0x03` | Same value as the original request | The Completion progress lane converts errno in the first payload part into an error completion. |
+| request | `0x01` | Nonzero 8-byte Big Endian value | ROUTER receive returns the payload and a public reply token. The wire value is not the public token. |
+| reply | `0x02` | Same value as the original request | The Completion lane creates a REQUEST completion for the corresponding pending request. |
+| error reply | `0x03` | Same value as the original request | The Completion lane converts errno in the first payload part into an error completion. |
 
 Only the first application frame of a multipart request-reply carries a request-reply kind
 and sequence. If the first frame has `MORE`, the second and subsequent frames use
@@ -263,13 +263,13 @@ and sequence. If the first frame has `MORE`, the second and subsequent frames us
 
 `request_sequence == 0` is invalid. A reply reuses the wire sequence received in the
 request. Error reply is receive-only and has no public sender. Its first application
-payload part contains a nonzero errno as a 4-byte Big Endian value. The Core C completion
-callback receives that errno mapped to `zlink_request_result_t` and the remaining parts,
-excluding the errno part, as callback payload. The
+payload part contains a nonzero errno as a 4-byte Big Endian value. Core maps that errno to
+`zlink_request_result_t` and puts the remaining parts, excluding the errno part, in
+`zlink_completion_t.reply_parts`. The
 [Binding specification](../../../../../bindings/doc/spec/README.en.md#request-reply-error-policy)
 owns higher-level binding error conversion and payload handling. If the first part is absent,
-is not 4 bytes, or contains `0`, the result is `ZLINK_REQUEST_PROTOCOL_ERROR` and the callback
-payload part count is `0`.
+is not 4 bytes, or contains `0`, the result is `ZLINK_REQUEST_PROTOCOL_ERROR` and the
+completion payload part count is `0`.
 
 ### 5.1 Request-reply sequence (DEALER → ROUTER)
 
@@ -278,21 +278,23 @@ sequenceDiagram
     participant D as DEALER
     participant R as ROUTER
 
-    D->>D: Allocate request_seq=N
+    D->>D: Allocate internal request sequence N
     D->>D: Attach request kind and sequence N to first payload
     D->>R: [REQUEST + sequence N][application payload]
-    R->>R: Restore header metadata → (source_node_rid, request_seq=N, payload)
+    R->>R: Restore header metadata → source RID and internal sequence N
+    R->>R: Issue socket-local opaque reply token
     R->>R: Remove metadata before public delivery
-    R->>R: Dispatch to router_handler
+    R-->>R: Expose RID, reply token, and payload through router_recv_part
+    R->>R: Resolve internal sequence N from reply token
     R->>R: Attach reply kind and sequence N to first reply payload
     R->>R: Select Completion pipe by routing_id (local key)
     R->>D: [REPLY + sequence N][application reply payload]
-    D->>D: Match pending[seq=N] → invoke reply_handler
+    D->>D: Match pending[seq=N] → enqueue REQUEST completion
 ```
 
 In this diagram, the header layout visible on the wire is the contract defined by the kind and sequence
 rules above. `routing_id` is not a reply wire part; it is a local selection key that the ROUTER
-uses to choose the destination Completion pipe. Pending matching and handler dispatch are
+uses to choose the destination Completion pipe. Pending matching and completion enqueue are
 implementation descriptions in [§9 Internal structure](#9-internal-structure).
 
 ## 6. Relationship to transport routing_id
@@ -301,7 +303,8 @@ The transport `routing_id` and the request-reply address are not the same value.
 
 - transport `routing_id`: a ROUTER-local key that selects the currently connected peer and
   is not included in the reply wire
-- `request_seq`: an identifier that correlates a request with its reply
+- wire request sequence: an internal correlation value that Core uses to match a request
+  with its reply
 
 Mixing the two results in incorrect reply-address computation. Both the documentation and
 implementation must describe them as separate layers.
@@ -334,14 +337,14 @@ Body-size validation distinguishes Application and CONTROL frames.
    maximum is smaller than their body.
 
 Even when each part is within the limit, a non-special Application multipart whose cumulative body
-exceeds the limit fails with `BODY_TOO_LARGE` (`0x04`) and delivers no payload to a handler or public
-receive. A declared 4097-byte CONTROL body also fails with `BODY_TOO_LARGE` (`0x04`). This is a
+exceeds the limit fails with `BODY_TOO_LARGE` (`0x04`) and delivers no payload to the application
+queue or public receive. A declared 4097-byte CONTROL body also fails with `BODY_TOO_LARGE` (`0x04`). This is a
 protocol rejection, not an unlimited control allocation path, and the body is not delivered to an
 Application receive. Type-specific controls can define a narrower consume-and-ignore rule, as WEIGHT
 does in §4, without weakening the structural header and 4096-byte checks.
 
-A validation failure terminates the pair with `EPROTO` and does not deliver the frame to a
-handler or reply completion. The frame itself does not complete a pending request; existing
+A validation failure terminates the connection with `EPROTO` and does not deliver the frame to an
+application queue or completion. The frame itself does not complete a pending request; existing
 pending requests retain the established disconnect result when the pair is torn down.
 
 ## 8. Transport framing
@@ -402,10 +405,10 @@ these steps.
 3. After moving the required values into runtime state, Core removes metadata before public
    payload export.
 
-The reply payload moves directly from the Completion pipe to the registered callback. It is
-not retained in a hidden PAIR receive queue or a second completion payload deque. Only a
-small payloadless callback metadata queue is maintained for terminal callbacks such as
-timeout and shutdown. This queue is not a transport lane or a wire record.
+The reply payload moves from the Completion pipe to the socket-local completion ready
+queue. Core acquires public `zlink_msg_t[]` storage before enqueue, and
+`zlink_completion_recv()` transfers its ownership to the caller. Timeout and other
+payloadless terminal results enter the same tagged queue.
 
 ### Peer-weight control
 
@@ -424,7 +427,7 @@ Delivery proceeds in this order.
 4. When the same pipe becomes ready and is attached as a selectable route, the scheduler reads and
    applies its recorded value.
 5. An actual applied change emits `PEER_WEIGHT_CHANGED`. The event `value` is the new weight, its
-   lane is Application, and its pair ID and generation identify the pipe to which it was applied.
+   lane is Application, and its `connection_id` identifies the pipe's physical connection.
 
 Termination or a connection-ID mismatch discards only that exact pipe's stale command. A pipe that
 remains as a duplicate standby retains its own latest value, so it applies if that same pipe is
@@ -434,14 +437,13 @@ route discards previously recorded state.
 ### Pending and reply-target keys
 
 Ownership of pending response entries resides in the upper API layer. The outbound-request
-pending map locates an entry by the socket-issued `request_seq` and fences sequence reuse with a
-separate local cookie. A Completion frame is applied only when its transport pair ID and generation
-also match the values registered with the request.
+pending map locates an entry by the socket-issued internal wire sequence and manages it
+separately from the public completion ID. Whichever of the reply and timeout resolvers first
+removes the pending correlation enqueues the REQUEST completion; the late loser is discarded.
 
 An inbound request stores its reply target according to the public receive role.
 
-- `DEALER`: socket-local reply token → source pipe and wire `request_seq`
-- `ROUTER`: source routing ID and wire `request_seq` → the source pipe that delivered the request
+- `ROUTER`: socket-local public reply token → source logical RID and wire sequence
 
 [§10 Verification requirements](#10-implementation-and-contract-test-verification-requirements)
 owns the completion rules: completion by the first reply, timeout, ignoring duplicate
@@ -449,16 +451,12 @@ replies, and delivery of error replies.
 
 ### Pending-request admission limit
 
-Before publishing an outbound request on the wire, Core reserves that request's lifecycle charge
-on the selected physical transport pair. A successful request retains the charge until a reply,
-timeout, disconnect, or socket close terminates the request. Send rollback and each terminal path
-return exactly once only the charge they own. Replacing a pair or reconnecting into a new
-generation does not carry charge from the previous generation into the new pair.
-
-The [Pending-request admission](../systems/06-auto-hwm.en.md#pending-request-admission) section of
-Auto HWM owns the charge calculation and limit. This logical charge bounds the correlation
-lifecycle; it does not mean that Core retains the request payload for that lifetime or extends
-physical-queue HWM accounting.
+Before publishing an outbound request on the wire, Core reserves one of the 65,536 shared
+SEND and REQUEST completion slots per socket and a nonzero completion ID. The slot remains
+reserved until public completion receive removes the record from the queue. If a DONTWAIT
+request retains its payload before admission, it also uses the SEND and REQUEST shared
+`ZLINK_OPT_PENDING_MAX_MSGS/BYTES` pool. After admission, Core does not retain the request
+payload for replay; it retains only reply correlation and the timeout.
 
 ### WebSocket implementation
 
@@ -478,8 +476,8 @@ write and, on WSS, TLS processing for every ZMP frame.
 ## 10. Implementation and contract-test verification requirements
 
 Interoperability with another implementation is verified by observing bytes on the wire,
-and request-reply completion is verified through callback results from the public API. Each
-item maps to one test.
+and request-reply completion is verified through public `zlink_router_recv_part`,
+`zlink_reply_part`, and `zlink_completion_recv` results. Each item maps to one test.
 
 **Frame header and flags**
 
@@ -506,23 +504,20 @@ item maps to one test.
 - When `ZLINK_OPT_ZMP_METADATA` has its default value (disabled), there are no metadata
   properties. Enabling it adds `Socket-Type` and the 8-byte big-endian
   `Zlink-Max-Message-Size`. `Routing-Id` is added only to DEALER·ROUTER READY frames.
-- A paired DEALER·ROUTER transport's READY always contains `Socket-Type` and `Routing-Id`
-  metadata and the pair properties, regardless of this option.
+- A paired DEALER·ROUTER transport's READY always contains `Socket-Type`, `Routing-Id`, and
+  `Zlink-Lane` metadata, regardless of this option.
 - The ERROR control type is `0x05`, and its body follows the layout
   `[type][error code:u8][reason length:u8][reason bytes]`.
 
-**Transport pair**
+**Request-reply lane**
 
-- The three properties `Zlink-Pair-Id` (unsigned 64-bit big-endian),
-  `Zlink-Pair-Generation` (unsigned 64-bit big-endian), and `Zlink-Lane` (1 byte,
-  Application `0` / Completion `1`) always appear together in both connections' READY
-  frames.
+- `Zlink-Lane` appears as one byte in both connections' READY frames: Application is `0`
+  and Completion is `1`.
 - Application writes are delivered after both lanes complete validation.
-- Data received from an earlier generation is not attached to the new pair.
+- Data received from an earlier connection is not attached to the new connection.
 - A protocol error, identity mismatch, fence timeout, or terminal failure on one lane
   terminates the entire pair.
-- Reconnect creates a new generation, revalidates both lanes, and then resumes Application
-  writes.
+- Reconnect revalidates both lanes and then resumes Application writes.
 - FIFO ordering is observed only within each lane; no ordering is guaranteed between lanes.
 - Completion replies are processed even while Application ingress is stopped by
   backpressure.
@@ -536,7 +531,7 @@ item maps to one test.
   apply.
 - A non-special Application multipart is delivered only when every part and the sum of all part
   bodies are within `ZLINK_OPT_MAXMSGSIZE`. If its cumulative body exceeds that limit, the pair
-  terminates with `BODY_TOO_LARGE` (`0x04`) and no payload reaches a handler or public receive.
+  terminates with `BODY_TOO_LARGE` (`0x04`) and no payload reaches the application queue or public receive.
 - A 4096-byte CONTROL reaches type-specific validation, while a declared 4097-byte CONTROL is
   rejected as `BODY_TOO_LARGE` (`0x04`) and produces no Application record.
 - A body identified as WEIGHT but having a size other than 10 or a value above `10000` is consumed
@@ -553,11 +548,11 @@ item maps to one test.
   with their exact values to the peer scheduler after the paired Application pipe becomes ready;
   `0` is applied as a value.
 - Dynamically changing peer weights in both directions after a network or inproc pair is ready
-  produces `PEER_WEIGHT_CHANGED` with the new value and that Application lane's pair ID and
-  generation, while no weight record appears on public receive or the Completion pipe.
+  produces `PEER_WEIGHT_CHANGED` with the new value and that Application lane's
+  `connection_id`, while no weight record appears on public receive or the Completion pipe.
 - Setting the same value again does not duplicate a peer scheduling-state change or monitor event.
 - After reconnect, public peer selection and monitoring reflect the current weight on the new
-  generation. Promoting an active standby uses the value that standby most recently received.
+  connection. Promoting an active standby uses the value that standby most recently received.
 
 **Request-reply and decode validation**
 
@@ -565,13 +560,14 @@ item maps to one test.
   part count, order, and bytes at the receiver.
 - Sending four ordinary payload parts that resemble a protocol id, version, message type,
   and sequence preserves all four as payload and creates no request completion.
-- A reply's `request_seq` is the same value received in the request.
+- A reply's wire sequence is the same wire sequence received in the request. It is not
+  guaranteed to equal the public reply token.
 - The `routing_id` that the ROUTER uses to select the reply destination is a local selection
   key, not a reply wire part.
 - The first payload part of an `error reply` is a 4-byte Big Endian errno.
-- Receiving an unknown kind, `request_seq == 0`, a request-reply kind combined with a special
-  flag, or a kind or special frame in the middle of a multipart terminates the pair with
-  `EPROTO` and delivers no payload to a handler or completion.
+- Receiving an unknown kind, wire sequence `0`, a request-reply kind combined with a special
+  flag, or a kind or special frame in the middle of a multipart terminates the connection
+  with `EPROTO` and delivers no payload to public receive or completion.
 - Closing a stream before the base header, sequence extension, or payload finishes produces
   `EPROTO`, delivers no partial payload to application receive or completion, and terminates
   the connection.
@@ -579,9 +575,10 @@ item maps to one test.
 **Completion**
 
 - The first reply completes the high-level request.
-- Additional replies with the same key after completion do not invoke the callback again.
-- If timeout occurs before a reply, the callback receives `ZLINK_REQUEST_TIMED_OUT`.
-- A valid `error reply` is delivered to the Core C callback as a mapped non-OK
+- Additional replies with the same wire sequence after completion do not create another
+  completion.
+- If timeout occurs before a reply, the REQUEST completion is `ZLINK_REQUEST_TIMED_OUT`.
+- A valid `error reply` is delivered to the Core C completion as a mapped non-OK
   `zlink_request_result_t` plus the remaining payload after the errno part.
 
 **Transport and frame count**

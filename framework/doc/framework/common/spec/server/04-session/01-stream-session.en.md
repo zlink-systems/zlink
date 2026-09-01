@@ -50,18 +50,21 @@ The following is outside the scope of this contract.
 | Party | Responsibility |
 |---|---|
 | Application | Implements the session callback, and distinguishes which packet to process by [packet name](../00-foundation/02-glossary.en.md#packet-name), using the framework's common decoder surface. |
-| Framework | Assembles header framing, admits packets into the managed queue, runs the session callback, and manages the registration, codec, and error boundaries. |
-| Core | Handles the actual STREAM transport send/receive and the receive pipe HWM. |
+| Framework | After acquiring a managed queue permit, pulls one packet, decodes its header, runs the session callback, and manages registration, codec, and error boundaries. |
+| Core | Handles actual STREAM transport send/receive, packet boundaries in `PACKET` mode, and the receive pipe HWM. |
 | Connector (client side) | Implements the connection/reconnection and wire contract the client observes. This document defines only the server side. |
 
-- **The framework operates STREAM transport ingress in `recv` mode in every
-  language, and doesn't register Core's STREAM packet callback or raw receive
-  callback to receive application packets.** This rule applies identically
-  regardless of how a per-language binding expresses it. Bypassing
-  [§4](#4-from-connection-accept-to-the-session-callback)'s managed queue
-  admission with the Core packet callback or raw receive callback means the
-  Core receive pipe's HWM can't bound the application queue, so it doesn't
-  satisfy the framework contract.
+- **Before the first bind in every language, the framework sets the Core STREAM socket to
+  `PACKET` mode and receives application packets by pulling with
+  `zlink_stream_recv_packet()`.** It does not register a Core STREAM packet callback or raw
+  receive callback, and this rule is the same regardless of how a per-language binding
+  expresses it. The pull path without a Core callback does not remove the Framework's public
+  session lifecycle, packet, or error callbacks or change their call path. Those callbacks run
+  behind the managed queue and serial execution gate.
+- **The framework does not start a packet pull before it acquires a managed queue permit.**
+  Draining Core packets without a permit would prevent the Core receive pipe HWM from acting as
+  the backpressure boundary. This is an internal condition that the per-packet pull order in
+  [§4](#4-from-connection-accept-to-the-session-callback) must satisfy.
 
 The transport body only handles header framing — it isn't responsible for
 converting the payload into a business object. Session connect and disconnect
@@ -161,23 +164,23 @@ framing are managed by the framework. Transport ingress in every framework
 language follows this boundary.
 
 ```text
-Core receive pipe
-    -> Framework recv loop
-    -> header framing and queue admission
+Core receive pipe (PACKET mode)
+    -> Framework acquires a managed queue permit
+    -> Framework pulls one packet
+    -> header decode and managed queue entry
     -> session callback
 ```
 
-- **The framework's internal `recv loop` doesn't run the application session
-  callback directly.** The framework runs the session callback only after
-  putting the packet on the managed queue. Framework dispatch, DI, and
-  logging can be applied consistently at this queue boundary.
-- **The framework doesn't read a new packet while queue admission is
-  failing.** Continuing to the next receive while unable to admit into the
-  queue would mean the Core receive pipe's HWM no longer acts as the
-  backpressure boundary. It doesn't drop an already-received packet or
-  redeliver the same packet to the callback. Because the permit is shared by
-  the entire host, this pause applies to all supported sockets, not just that
-  connection. Thresholds and state transitions are owned by
+- **The framework's internal `recv loop` acquires a managed queue permit before pulling one
+  packet with `zlink_stream_recv_packet()`.** It decodes the pulled packet's header, puts the
+  packet on the managed queue, and then runs the public session callback. Framework dispatch,
+  DI, and logging can be applied consistently at this queue boundary.
+- **The framework does not call `zlink_stream_recv_packet()` while it cannot acquire a
+  permit.** Continuing to drain the next packet while unable to enqueue it would mean the Core
+  receive pipe HWM no longer acts as the backpressure boundary. It neither discards a pulled
+  packet nor redelivers the same packet to the callback. Because the permit is shared by the
+  whole host, this pause applies to all supported sockets, not just that connection. Thresholds
+  and state transitions are owned by
   [Application Job Queue And Backpressure §6](../01-execution/04-application-job-queue-and-backpressure.en.md#6-pressure-state-and-socket-control).
 
 A Handler filter doesn't apply to STREAM session dispatch. The scope and
@@ -345,10 +348,13 @@ and the inter-node wire records. Each item leads to one contract test.
 
 - A packet a client sends reaches the session callback as a dispatch context
   holding packet name, metadata, and payload.
+- The public surface and execution of session lifecycle, packet, and error
+  callbacks do not change on the STREAM packet-pull path, and packets reach
+  the public session callback.
 - While the session callback can't consume the managed queue, a client that
   keeps sending stalls at the Core receive pipe HWM on the client side. Once
   the queue drains, packets reach the callback in order exactly once each —
-  none are dropped or delivered twice. §2's recv-mode rule and §4's managed
+  none are dropped or delivered twice. §2's `PACKET` mode rule and §4's managed
   queue rule are confirmed by this observation.
 - The dispatch context's [routing ID](../00-foundation/02-glossary.en.md#routing-id) equals
   the peer identity value from the recv result.
@@ -379,10 +385,6 @@ and the inter-node wire records. Each item leads to one contract test.
   physical STREAM socket on the session owner node, and only command
   38/24/36/51 records are exchanged between nodes. During Actor relocation,
   commands 42/43/44 are added to this, and no other record is exchanged.
-
-That no code path registering the Core packet callback or raw receive
-callback exists in the binding code can't be observed from the public
-surface, so it's confirmed by static inspection.
 
 ---
 

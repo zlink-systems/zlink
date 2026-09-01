@@ -190,7 +190,7 @@ socket 유형은 `ENOTSUP`과 함께 `ZLINK_CONFIG_NOT_SUPPORTED`다. Close가 a
 | 종류 | 이름 |
 |---|---|
 | Event | `ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED` (`1u << 16`), `..._SEND_FLOW_RESUMED` (`1u << 17`), `..._FLOW_STATE_STALE` (`1u << 18`)와 짧은 alias `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, `ZLINK_EVENT_FLOW_STATE_STALE`. `ZLINK_SOCKET_MONITOR_EVENT_ALL`은 `0x7FFFFu`다 |
-| Event flag | `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` (`1u << 1`), `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION` (`1u << 2`), `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` (`1u << 3`). `zlink_monitor_event_t.flags`에서 읽는다 |
+| Event flag | `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` (`1u << 1`), `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` (`1u << 3`). `zlink_monitor_event_t.flags`에서 읽는다 |
 | Detail bit | `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` (`1u << 5`) |
 | Status field | `zlink_monitor_status_t` 끝에 덧붙은 `uint64_t` 5개: `flow_paused_connections`, `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`, `flow_pause_duration_ms` |
 
@@ -208,7 +208,7 @@ C 리뷰는 `core/include/zlink.h`에서 다음 그룹을 점검한다.
 - 메시지 생명주기, 메시지 데이터 접근, copy/move/adopt 규칙, 속성 조회.
 - 소켓 생명주기, bind/connect, disconnect, 옵션, TLS 헬퍼, routing id,
   send, receive, request, reply, publish, subscribe, stream API.
-- 이벤팅 API: monitor, poller, timer, 콜백 등록, readiness 의미.
+- 이벤팅 API: monitor, poller, timer, pull receive와 readiness 의미.
 - SPOT node, SPOT handle, topology snapshot, actor, service 계층 API.
 - error/result enum과 errno 매핑.
 
@@ -237,7 +237,7 @@ C 호출자는 메모리를 명시적으로 소유한다. 헤더는 모든 경�
   넘어온 메시지 파트를 close한다.
 - 핸들은 대응하는 `zlink_*_close`, `zlink_*_destroy`, `zlink_ctx_term`,
   또는 문서화된 생명주기 함수를 통해 close한다.
-- 콜백 등록은 호출자가 비공개 worker, socket, inproc endpoint 세부 정보를
+- Pull receive와 poller 사용은 호출자가 비공개 worker, socket, inproc endpoint 세부 정보를
   알도록 요구하지 않는다.
 
 ## Error와 Result 정책
@@ -292,3 +292,178 @@ C 바인딩은 코어 route 결과 struct를 그대로 공개 ABI로 노출한�
 C 바인딩은 `zlink_router_send_actor`, `zlink_router_request_actor`,
 또는 Actor-to-ROUTER request 헬퍼를 추가하지 않는다. Actor 지정 전달은
 route 조회 뒤 기존 Spot routed send/request로 처리한다.
+
+## Pull completion과 STREAM packet
+
+C header와 library는 Core 0.16.0 ABI를 그대로 투영한다.
+
+C는 SEND·REQUEST completion을 raw tagged record로 공개한다. `ZLINK_POLLCOMPLETION`은
+다음 `zlink_completion_recv()`가 한 건을 반환할 수 있다는 non-consuming level readiness다.
+Poller wait는 record를 소비하지 않으므로 caller는 준비된 socket마다 DONTWAIT recv를
+`ZLINK_RECV_NO_DATA`까지 반복한다. Socket 하나의 completion bit는 poller registration 하나만
+소유하며, application도 completion drain owner를 하나만 둔다.
+
+`DONTWAIT FINAL` send가 즉시 local admission되지 않으면 Core가 payload를 보관하고 nonzero
+completion ID를 반환한다. ID `0`은 이미 admission됐거나 operation을 접수하지 않았으므로 후속
+completion이 없다는 뜻이다. Request의 successful `FINAL`은 항상 nonzero ID를 반환한다.
+Completion ID와 `user_context`는 correlation 값이며 취소 handle이나 callback 인자가 아니다.
+
+ROUTER REQUEST receive는 nonzero `zlink_reply_token_t`를 반환한다. Token은 responder ROUTER
+socket과 source logical RID 범위의 opaque capability다. DATA의 token은 `0`이다. Application은
+REQUEST의 모든 part를 받은 뒤 source RID와 token을 그대로 reply에 사용한다.
+
+STREAM은 첫 successful bind/connect 전에 `RAW` 또는 `PACKET` receive mode를 선택한다.
+`PACKET` mode의 `zlink_stream_recv_packet()`은 caller가 준비한 empty header/body output으로
+owned message를 옮기고 source RID는 다음 data recv 진입 전까지 유효한 borrowed view로 반환한다.
+
+### Public interface
+
+```c
+typedef uint64_t zlink_completion_id_t;
+typedef uint64_t zlink_reply_token_t;
+
+typedef enum zlink_completion_kind_t {
+  ZLINK_COMPLETION_SEND = 1,
+  ZLINK_COMPLETION_REQUEST = 2
+} zlink_completion_kind_t;
+
+typedef enum zlink_send_complete_result_t {
+  ZLINK_SEND_ADMITTED = 0,
+  ZLINK_SEND_TERMINAL = 202
+} zlink_send_complete_result_t;
+
+typedef struct zlink_completion_t {
+  uint32_t struct_size;
+  zlink_completion_kind_t kind;
+  zlink_completion_id_t completion_id;
+  void *user_context;
+  zlink_routing_id_t peer_rid;
+  zlink_send_complete_result_t send_result;
+  int send_terminal_errno;
+  zlink_request_result_t request_result;
+  zlink_msg_t *reply_parts;
+  size_t reply_part_count;
+} zlink_completion_t;
+
+ZLINK_EXPORT zlink_submit_result_t zlink_send_part(
+  void *s_,
+  zlink_msg_t *part_,
+  zlink_send_flags_t flags_,
+  zlink_part_flag_t part_flag_,
+  void *user_context_,
+  zlink_completion_id_t *completion_id_out_);
+
+ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid(
+  void *s_,
+  const zlink_routing_id_t *target_rid_,
+  zlink_msg_t *part_,
+  zlink_send_flags_t flags_,
+  zlink_part_flag_t part_flag_,
+  void *user_context_,
+  zlink_completion_id_t *completion_id_out_);
+
+ZLINK_EXPORT zlink_submit_result_t zlink_request_part(
+  void *s_,
+  const zlink_routing_id_t *target_router_rid_or_null_,
+  zlink_msg_t *part_,
+  zlink_send_flags_t flags_,
+  zlink_part_flag_t part_flag_,
+  uint32_t timeout_ms_,
+  void *user_context_,
+  zlink_completion_id_t *completion_id_out_);
+
+ZLINK_EXPORT zlink_submit_result_t zlink_reply_part(
+  void *router_,
+  const zlink_routing_id_t *source_rid_,
+  zlink_reply_token_t reply_token_,
+  zlink_msg_t *part_,
+  zlink_part_flag_t part_flag_);
+
+ZLINK_EXPORT zlink_recv_result_t zlink_completion_recv(
+  void *s_,
+  zlink_completion_t *completion_out_,
+  zlink_recv_flags_t flags_);
+
+ZLINK_EXPORT void zlink_completion_close(
+  zlink_completion_t *completion_);
+
+ZLINK_EXPORT zlink_recv_result_t zlink_router_recv_part(
+  void *router_,
+  const zlink_routing_id_t **source_rid_out_,
+  zlink_reply_token_t *reply_token_out_,
+  zlink_msg_t *part_out_,
+  zlink_part_flag_t *has_more_out_,
+  zlink_recv_flags_t flags_);
+
+typedef enum zlink_stream_recv_mode_t {
+  ZLINK_STREAM_RECV_MODE_UNSPECIFIED = 0,
+  ZLINK_STREAM_RECV_MODE_RAW = 1,
+  ZLINK_STREAM_RECV_MODE_PACKET = 2
+} zlink_stream_recv_mode_t;
+
+typedef enum zlink_stream_option_t {
+  ZLINK_STREAM_OPT_NOTIFY = 0x3501,
+  ZLINK_STREAM_OPT_RECV_MODE = 0x3502
+} zlink_stream_option_t;
+
+ZLINK_EXPORT zlink_recv_result_t zlink_stream_recv_packet(
+  void *stream_,
+  const zlink_routing_id_t **source_rid_out_,
+  zlink_msg_t *header_out_,
+  zlink_msg_t *body_out_,
+  zlink_recv_flags_t flags_);
+```
+
+`zlink_completion_t` output은 caller가 0으로 초기화하고 `struct_size`를 설정한다. Successful
+recv 뒤에는 SEND record도 `zlink_completion_close()`로 닫는다. REQUEST `OK` payload의
+`reply_parts`는 Core allocator base이며 caller가 array를 직접 free하지 않는다. Close는 남은
+message와 array를 정리하고 `struct_size`를 보존한 empty aggregate로 되돌린다.
+
+Pending option은 다음 이름과 값만 public enum에 둔다.
+
+```c
+ZLINK_OPT_PENDING_MAX_MSGS  = 0x303A,
+ZLINK_OPT_PENDING_MAX_BYTES = 0x303B
+```
+
+Public C ABI에는 `zlink_send_async*`, `zlink_send_complete_handler`와
+`zlink_send_complete_handler_fn`, send/request/recv/STREAM/monitor/timer callback type·등록 함수,
+dealer/router별 request/reply·exact-pair API와 `_v2` recv가 없다. Pending option에도
+`SEND_PENDING` 이름은 없다.
+
+Monitor와 timer는 pull lifecycle을 사용한다. Monitor는
+`zlink_socket_monitor_open()`·`zlink_socket_monitor_recv()`·`zlink_monitor_status()`·
+`zlink_monitor_close()`를, timer는 `zlink_timer_new()`·`zlink_timer_start()`·
+`zlink_timer_stop()`·`zlink_timer_recv()`·`zlink_timer_destroy()`를 제공한다.
+Monitor의 `connection_id`는 진단과 correlation에만 사용하며 send·reply target이나 reconnect
+fence로 사용하지 않는다.
+
+## 구현 및 contract test 검증 요구
+
+Public C ABI, 반환값·errno와 poller event만으로 다음을 확인한다. 각 항목은 contract test
+하나로 이어진다.
+
+**Submit과 completion**
+
+- `DONTWAIT FINAL`이 즉시 admission되면 ID `0`과 completion 없음이 관찰되고, Core pending으로
+  접수되면 nonzero ID와 SEND completion 한 건이 관찰된다.
+- Successful REQUEST `FINAL`은 nonzero ID를 반환하고 reply·timeout·terminal 중 REQUEST
+  completion 한 건만 반환한다.
+- `ZLINK_POLLCOMPLETION`은 wait에서 record를 소비하지 않으며 DONTWAIT drain 뒤 queue가 비면
+  `ZLINK_RECV_NO_DATA`와 `EAGAIN`을 반환한다.
+- Successful completion recv 뒤 close하면 output이 `struct_size`를 보존한 empty aggregate가 되고
+  같은 output을 다시 사용할 수 있다.
+
+**Reply token과 STREAM**
+
+- ROUTER DATA recv는 token `0`, REQUEST의 모든 multipart part는 같은 nonzero token을 반환한다.
+- 다른 responder socket이나 source RID의 token으로 reply를 시작하면 native submit이 실패한다.
+- STREAM은 mode가 `UNSPECIFIED`인 동안 bind/connect가 실패하고, `RAW`·`PACKET` 설정 뒤 해당 recv
+  family만 성공한다.
+- PACKET recv 성공은 RID·header·body를 반환하며 `NO_DATA`와 오류는 caller의 empty output을
+  변경하지 않는다.
+
+**Pull eventing**
+
+- Monitor와 timer의 recv는 준비된 event·fire count를 pull로 반환하고 DONTWAIT no-data를
+  각 recv 결과로 구분한다.

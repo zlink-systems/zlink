@@ -43,11 +43,11 @@ This form follows these design intentions.
 - **The application owns framing** — The application defines any application-level
   framing it needs.
 
-## 3. Packet-dispatch framing (packet handler mode)
+## 3. Packet receive framing (PACKET mode)
 
-When a packet handler is registered with `zlink_stream_packet_handler()`, zlink parses
-length-prefixed packet framing instead of a transparent stream. The byte layout on the
-wire is as follows.
+To receive framed packets, the application selects `ZLINK_STREAM_RECV_MODE_PACKET`
+before the first successful bind or connect. In PACKET mode, zlink parses length-prefixed
+packet framing instead of a transparent stream. The byte layout on the wire is as follows.
 
 ```
 +------------------+----------------+--------------+------------+
@@ -56,10 +56,10 @@ wire is as follows.
 +------------------+----------------+--------------+------------+
 ```
 
-The callback receives the header and body as separate `zlink_msg_t` parts. The
-[Packet callback section of Socket — STREAM](../socket/08-stream.en.md#7-packet-callback-and-framing)
-owns the handler registration and callback contract and the contract for handling
-malformed framing.
+`zlink_stream_recv_packet()` returns each complete packet to the caller with the header
+and body in separate `zlink_msg_t` values. The
+[Packet receive and framing section of Socket — STREAM](../socket/08-stream.en.md#6-packet-receive-and-framing)
+owns PACKET mode selection, output ownership, and malformed-framing handling.
 
 ## 4. Connection events
 
@@ -113,11 +113,12 @@ connections from external clients, and monitor events). Each item maps to one te
 - A zero-byte payload on the raw/packet path is not delivered as application data (it
   is treated as a control event).
 
-**Packet handler mode**
-- When a handler is registered with `zlink_stream_packet_handler()`, length-prefixed
-  packet framing (two-byte Big Endian `header_size`, four-byte Big Endian `body_size`,
-  followed by header and body) is parsed instead of a transparent stream, and
-  the callback receives the header and body as separate `zlink_msg_t` parts.
+**PACKET mode**
+- When `ZLINK_STREAM_RECV_MODE_PACKET` is selected before the first successful bind or
+  connect, length-prefixed packet framing (two-byte Big Endian `header_size`, four-byte
+  Big Endian `body_size`, followed by header and body) is parsed instead of a transparent
+  stream, and `zlink_stream_recv_packet()` returns the header and body as separate
+  `zlink_msg_t` values.
 - The [verification requirements of Socket —
-  STREAM](../socket/08-stream.en.md#12-implementation-and-contract-test-verification-requirements)
-  own detailed verification of the callback contract and malformed framing.
+  STREAM](../socket/08-stream.en.md#11-implementation-and-contract-test-verification-requirements)
+  own detailed verification of PACKET-mode output ownership and malformed framing.

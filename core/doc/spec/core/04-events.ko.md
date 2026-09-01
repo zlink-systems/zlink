@@ -26,15 +26,15 @@ event를 실제로 받는 경로의 계약은 다음 문서가 소유한다.
 | 관련 계약 | 정의하는 문서 |
 |---|---|
 | readiness 소비 — `zlink_poll`과 poller wait API | [Polling](05-polling.ko.md) |
-| monitor 열기, handler·recv 소비, event mask와 `zlink_monitor_event_t` 선언, queue overflow와 status counter | [Monitoring](06-monitoring.ko.md) |
+| monitor 열기, recv 소비, event mask와 `zlink_monitor_event_t` 선언, queue overflow와 status counter | [Monitoring](06-monitoring.ko.md) |
 
 ## 2. Event family
 
 | Family | Source | 전달 API | 의미 |
 |---|---|---|---|
-| socket monitor | raw socket monitor handle | handler 또는 recv | bind, connect, handshake, disconnect, protocol과 close |
+| socket monitor | raw socket monitor handle | `zlink_socket_monitor_recv` | bind, connect, handshake, disconnect, protocol과 close |
 | poller readiness | raw socket, FD 또는 generic timer | `zlink_poll`, poller wait | receive 또는 submit retry를 수행할 가치가 있음 |
-| timer fire | generic timer handle | handler 또는 timer recv | 누적 fire count가 있음 |
+| timer fire | generic timer handle | `zlink_timer_recv` | 누적 fire count가 있음 |
 
 Monitor event는 이미 일어난 일의 관측 기록이다. 반면 readiness는 현재 work 존재
 가능성을 알리는 level-triggered 상태다 — 한 번 발생하고 끝나는 기록이 아니라, 조건이
@@ -57,27 +57,26 @@ message 통로 — 에 적용한다.
 
 `ZLINK_EVENT_SEND_FLOW_PAUSED`와 `ZLINK_EVENT_SEND_FLOW_RESUMED`는 이 socket의 application
 pipe 하나에서 peer 상태가 실제로 PAUSED와 RUNNING 사이를 오갈 때, 그 전이를 pipe에 적용한
-뒤에만 발생한다. `ZLINK_EVENT_FLOW_STATE_STALE`은 Core가 flow-state frame을 stale이나 중복으로
-판정해 거부할 때 발생한다. 일반 data frame, peer가 이미 유지하는 상태를 다시 요청한 경우,
-아무것도 바꾸지 않는 flow-state frame에는 event를 발생시키지 않는다.
+뒤에만 발생한다. `ZLINK_EVENT_FLOW_STATE_STALE`은 같은 connection에서 받은 flow epoch가
+전진하지 않아 frame을 거부할 때 발생한다. 일반 data frame, peer가 이미 유지하는 상태를 다시 요청한 경우,
+아무것도 바꾸지 않는 flow-state frame에는 event를 발생시키지 않는다. Core가 물리 connection
+identity 불일치로 내부 폐기하는 flow-state frame도 public monitor event를 만들지 않으며,
+[Monitoring](06-monitoring.ko.md)의 `flow_state_stale_total` counter에만 반영된다.
 
 적용된 flow 상태의 버전 번호를 flow epoch라 한다. 각 event가 담는 값은 다음과 같다.
 
 | Event | `value` | `flags` | 다른 field |
 |---|---|---|---|
-| `ZLINK_EVENT_SEND_FLOW_PAUSED` | 적용된 상태의 flow epoch | 없음 | PAUSED된 peer의 `routing_id`, `transport_pair_id`, `transport_pair_generation` |
+| `ZLINK_EVENT_SEND_FLOW_PAUSED` | 적용된 상태의 flow epoch | 없음 | PAUSED된 peer의 `routing_id`, `connection_id`, Application lane |
 | `ZLINK_EVENT_SEND_FLOW_RESUMED` | 적용된 상태의 flow epoch | remote pause를 해제한 결과 pipe가 실제로 writable이면 `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` | PAUSED와 동일 |
-| `ZLINK_EVENT_FLOW_STATE_STALE` | 사유 flag가 선택하는 받은 generation 또는 받은 epoch | `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION`과 `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` 중 정확히 하나 | `transport_pair_id`, 현재 generation을 담은 `transport_pair_generation` |
+| `ZLINK_EVENT_FLOW_STATE_STALE` | 받은 flow epoch | `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` | 해당 peer의 `routing_id`, `connection_id`, Application lane |
 
 byte [HWM](glossary.ko.md#hwm), transport wait, termination 같은 다른 원인이 계속 pipe를
 막고 있으면 `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE`이 없다. 따라서 RESUMED event만으로
 다음 send가 수락된다고 보장하지 않는다.
 
-Stale 사유 2개가 `value`의 의미를 선택하므로 모호하지 않다. `FLOW_STATE_STALE_GENERATION`은
-frame이 다른 connection generation을 지칭한 경우이며 `value`가 받은 generation,
-`transport_pair_generation`이 현재 generation이다. `FLOW_STATE_STALE_EPOCH`는 frame이 현재
-generation에 속하지만 epoch가 전진하지 않은 경우이며 `value`가 받은 epoch이고, 현재 epoch는
-같은 pair의 직전 PAUSED 또는 RESUMED event가 보고한 값이다.
+`FLOW_STATE_STALE_EPOCH`는 flow epoch가 전진하지 않은 frame을 뜻한다. `value`는 받은 epoch이고,
+현재 epoch는 같은 connection의 직전 PAUSED 또는 RESUMED event가 보고한 값이다.
 
 이 event 3개는 monitor event mask의 bit 16, 17, 18을 사용하므로 `ZLINK_EVENT_ALL`은
 `0x7FFFF`다. Mask를 직접 지정하는 monitor는 해당 bit를 설정해야 이 event를 받는다.
@@ -90,19 +89,20 @@ Queue overflow와 status counter의 정확한 계약은 [Monitoring](06-monitori
 
 ## 6. 구현 및 contract test 검증 요구
 
-공개 표면(monitor의 handler·recv로 받은 event의 `event`·`value`·`flags`와 field, monitor
+공개 표면(monitor recv로 받은 event의 `event`·`value`·`flags`와 field, monitor
 open 시 지정한 event mask)만으로 다음을 확인한다. 각 항목은 unit test 하나로 이어진다.
 
 **Receive-flow event 발생**
 - Paired DEALER/ROUTER socket에서 peer 상태가 실제로 PAUSED와 RUNNING 사이를 오가면, 그 전이를 application pipe에 적용한 뒤 `ZLINK_EVENT_SEND_FLOW_PAUSED` 또는 `ZLINK_EVENT_SEND_FLOW_RESUMED`가 관찰된다.
 - 일반 data frame, peer가 이미 유지하는 상태를 다시 요청한 경우, 아무것도 바꾸지 않는 flow-state frame에는 receive-flow event가 관찰되지 않는다.
-- Core가 flow-state frame을 stale이나 중복으로 판정해 거부하면 `ZLINK_EVENT_FLOW_STATE_STALE`이 관찰된다.
+- 같은 connection의 flow epoch가 중복·역행해 frame을 거부하면 `ZLINK_EVENT_FLOW_STATE_STALE`이 관찰된다.
 
 **Event field와 flag**
-- PAUSED·RESUMED event의 `value`는 적용된 상태의 flow epoch이고, event는 PAUSED된 peer의 `routing_id`, `transport_pair_id`, `transport_pair_generation`을 담는다.
+- PAUSED·RESUMED event의 `value`는 적용된 상태의 flow epoch이고, event는 PAUSED된 peer의
+  `routing_id`, `connection_id`와 Application lane을 담는다.
 - remote pause를 해제한 결과 pipe가 실제로 writable일 때만 RESUMED event에 `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE`이 있다. byte HWM, transport wait, termination 같은 다른 원인이 pipe를 계속 막으면 이 flag가 없고, RESUMED event만으로 다음 send 수락이 보장되지 않는다.
-- STALE event의 `flags`에는 `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION`과 `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` 중 정확히 하나가 있다.
-- GENERATION 사유면 `value`가 받은 generation이고 `transport_pair_generation`이 현재 generation이다. EPOCH 사유면 `value`가 받은 epoch이고, 현재 epoch는 같은 pair의 직전 PAUSED 또는 RESUMED event가 보고한 값과 같다.
+- STALE event의 `flags`에는 `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`이 있고 `value`는 받은
+  epoch다. 현재 epoch는 같은 connection의 직전 PAUSED 또는 RESUMED event가 보고한 값과 같다.
 
 **Event mask**
 - Receive-flow event 3개는 monitor event mask의 bit 16, 17, 18을 사용하고 `ZLINK_EVENT_ALL`은 `0x7FFFF`다.

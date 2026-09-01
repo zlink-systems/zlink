@@ -191,7 +191,7 @@ The observation surface is also the Core surface:
 | Kind | Names |
 |---|---|
 | Events | `ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED` (`1u << 16`), `..._SEND_FLOW_RESUMED` (`1u << 17`), `..._FLOW_STATE_STALE` (`1u << 18`), with the short aliases `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, `ZLINK_EVENT_FLOW_STATE_STALE`; `ZLINK_SOCKET_MONITOR_EVENT_ALL` is `0x7FFFFu` |
-| Event flags | `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` (`1u << 1`), `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION` (`1u << 2`), `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` (`1u << 3`), read from `zlink_monitor_event_t.flags` |
+| Event flags | `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` (`1u << 1`), `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` (`1u << 3`), read from `zlink_monitor_event_t.flags` |
 | Detail bit | `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` (`1u << 5`) |
 | Status fields | `flow_paused_connections`, `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`, `flow_pause_duration_ms`, all `uint64_t` appended at the end of `zlink_monitor_status_t` |
 
@@ -208,7 +208,7 @@ A C review checks the following groups in `core/include/zlink.h`.
 - Runtime, version, capability lookup, context lifecycle, context options.
 - Message lifecycle, message data access, copy/move/adopt rules, attribute lookup.
 - Socket lifecycle, bind/connect, disconnect, options, TLS helpers, routing id, send, receive, request, reply, publish, subscribe, stream API.
-- Eventing API: monitor, poller, timer, callback registration, readiness semantics.
+- Eventing API: monitor, poller, timer, pull receive, and readiness semantics.
 - SPOT node, SPOT handle, topology snapshot, actor, service-layer API.
 - error/result enums and errno mapping.
 
@@ -236,7 +236,7 @@ explicit at every boundary.
 - An API that moves or adopts message storage documents the source object's state after the call.
 - A recv API fills caller-provided storage. The caller closes any message part whose ownership was transferred to it.
 - A handle is closed through the matching `zlink_*_close`, `zlink_*_destroy`, `zlink_ctx_term`, or a documented lifecycle function.
-- Callback registration does not require the caller to know private worker, socket, or inproc endpoint details.
+- Pull receive and poller use do not require the caller to know private worker, socket, or inproc endpoint details.
 
 ## Error and Result policy
 
@@ -280,3 +280,179 @@ The C binding does not add `zlink_router_send_actor`,
 `zlink_router_request_actor`, or an Actor-to-ROUTER request helper.
 Actor-directed delivery is handled by route lookup followed by the
 existing Spot routed send/request.
+
+## Pull completion and STREAM packets
+
+The C header and library project the Core 0.16.0 ABI without alteration.
+
+C exposes SEND and REQUEST completions as raw tagged records. `ZLINK_POLLCOMPLETION` is
+non-consuming level readiness indicating that the next `zlink_completion_recv()` can return one
+record. Poller wait does not consume a record, so the caller repeats DONTWAIT recv for every ready
+socket through `ZLINK_RECV_NO_DATA`. One poller registration owns the completion bit of a socket, and
+the application also maintains exactly one completion drain owner.
+
+When a `DONTWAIT FINAL` send cannot obtain immediate local admission, Core retains the payload and
+returns a nonzero completion ID. ID `0` means that admission has already completed or the operation was
+not accepted, so no later completion follows. A successful request `FINAL` always returns a nonzero ID.
+The completion ID and `user_context` are correlation values, not cancellation handles or callback
+arguments.
+
+A ROUTER REQUEST receive returns a nonzero `zlink_reply_token_t`. The token is an opaque capability
+scoped to the responder ROUTER socket and source logical RID. A DATA token is `0`. After receiving every
+part of a REQUEST, the application passes the source RID and token unchanged to reply.
+
+STREAM selects `RAW` or `PACKET` receive mode before its first successful bind/connect. In `PACKET`
+mode, `zlink_stream_recv_packet()` moves owned messages into caller-prepared empty header/body outputs
+and returns the source RID as a borrowed view that remains valid until the next data-receive entry.
+
+### Public interface
+
+```c
+typedef uint64_t zlink_completion_id_t;
+typedef uint64_t zlink_reply_token_t;
+
+typedef enum zlink_completion_kind_t {
+  ZLINK_COMPLETION_SEND = 1,
+  ZLINK_COMPLETION_REQUEST = 2
+} zlink_completion_kind_t;
+
+typedef enum zlink_send_complete_result_t {
+  ZLINK_SEND_ADMITTED = 0,
+  ZLINK_SEND_TERMINAL = 202
+} zlink_send_complete_result_t;
+
+typedef struct zlink_completion_t {
+  uint32_t struct_size;
+  zlink_completion_kind_t kind;
+  zlink_completion_id_t completion_id;
+  void *user_context;
+  zlink_routing_id_t peer_rid;
+  zlink_send_complete_result_t send_result;
+  int send_terminal_errno;
+  zlink_request_result_t request_result;
+  zlink_msg_t *reply_parts;
+  size_t reply_part_count;
+} zlink_completion_t;
+
+ZLINK_EXPORT zlink_submit_result_t zlink_send_part(
+  void *s_,
+  zlink_msg_t *part_,
+  zlink_send_flags_t flags_,
+  zlink_part_flag_t part_flag_,
+  void *user_context_,
+  zlink_completion_id_t *completion_id_out_);
+
+ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid(
+  void *s_,
+  const zlink_routing_id_t *target_rid_,
+  zlink_msg_t *part_,
+  zlink_send_flags_t flags_,
+  zlink_part_flag_t part_flag_,
+  void *user_context_,
+  zlink_completion_id_t *completion_id_out_);
+
+ZLINK_EXPORT zlink_submit_result_t zlink_request_part(
+  void *s_,
+  const zlink_routing_id_t *target_router_rid_or_null_,
+  zlink_msg_t *part_,
+  zlink_send_flags_t flags_,
+  zlink_part_flag_t part_flag_,
+  uint32_t timeout_ms_,
+  void *user_context_,
+  zlink_completion_id_t *completion_id_out_);
+
+ZLINK_EXPORT zlink_submit_result_t zlink_reply_part(
+  void *router_,
+  const zlink_routing_id_t *source_rid_,
+  zlink_reply_token_t reply_token_,
+  zlink_msg_t *part_,
+  zlink_part_flag_t part_flag_);
+
+ZLINK_EXPORT zlink_recv_result_t zlink_completion_recv(
+  void *s_,
+  zlink_completion_t *completion_out_,
+  zlink_recv_flags_t flags_);
+
+ZLINK_EXPORT void zlink_completion_close(
+  zlink_completion_t *completion_);
+
+ZLINK_EXPORT zlink_recv_result_t zlink_router_recv_part(
+  void *router_,
+  const zlink_routing_id_t **source_rid_out_,
+  zlink_reply_token_t *reply_token_out_,
+  zlink_msg_t *part_out_,
+  zlink_part_flag_t *has_more_out_,
+  zlink_recv_flags_t flags_);
+
+typedef enum zlink_stream_recv_mode_t {
+  ZLINK_STREAM_RECV_MODE_UNSPECIFIED = 0,
+  ZLINK_STREAM_RECV_MODE_RAW = 1,
+  ZLINK_STREAM_RECV_MODE_PACKET = 2
+} zlink_stream_recv_mode_t;
+
+typedef enum zlink_stream_option_t {
+  ZLINK_STREAM_OPT_NOTIFY = 0x3501,
+  ZLINK_STREAM_OPT_RECV_MODE = 0x3502
+} zlink_stream_option_t;
+
+ZLINK_EXPORT zlink_recv_result_t zlink_stream_recv_packet(
+  void *stream_,
+  const zlink_routing_id_t **source_rid_out_,
+  zlink_msg_t *header_out_,
+  zlink_msg_t *body_out_,
+  zlink_recv_flags_t flags_);
+```
+
+The caller zero-initializes a `zlink_completion_t` output and sets `struct_size`. After a successful
+recv, the caller closes SEND records as well with `zlink_completion_close()`. For a REQUEST `OK`
+payload, `reply_parts` is a Core allocator base; the caller does not free the array directly. Close
+releases remaining messages and the array, then restores an empty aggregate while preserving
+`struct_size`.
+
+Only the following names and values appear in the public enum for pending options.
+
+```c
+ZLINK_OPT_PENDING_MAX_MSGS  = 0x303A,
+ZLINK_OPT_PENDING_MAX_BYTES = 0x303B
+```
+
+The public C ABI contains no `zlink_send_async*`, `zlink_send_complete_handler`,
+`zlink_send_complete_handler_fn`, send/request/recv/STREAM/monitor/timer callback types or registration
+functions, dealer/router-specific request/reply or exact-pair APIs, or `_v2` recv. Pending options also
+contain no `SEND_PENDING` name.
+
+Monitor and timer use a pull lifecycle. Monitor provides `zlink_socket_monitor_open()`,
+`zlink_socket_monitor_recv()`, `zlink_monitor_status()`, and `zlink_monitor_close()`. Timer provides
+`zlink_timer_new()`, `zlink_timer_start()`, `zlink_timer_stop()`, `zlink_timer_recv()`, and
+`zlink_timer_destroy()`. Monitor `connection_id` is used only for diagnostics and correlation, not as a
+send/reply target or reconnect fence.
+
+## Implementation and contract-test verification requirements
+
+Verify the following using only the public C ABI, return values, errno, and poller events. Each item maps
+to one contract test.
+
+**Submit and completion**
+
+- When `DONTWAIT FINAL` obtains immediate admission, ID `0` and no completion are observed. When Core
+  accepts it as pending, a nonzero ID and one SEND completion are observed.
+- A successful REQUEST `FINAL` returns a nonzero ID and exactly one REQUEST completion containing a
+  reply, timeout, or terminal result.
+- `ZLINK_POLLCOMPLETION` does not consume a record in wait. Once a DONTWAIT drain empties the queue,
+  recv returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
+- Closing an output after successful completion recv restores an empty aggregate that preserves
+  `struct_size`, and the same output can be reused.
+
+**Reply token and STREAM**
+
+- ROUTER DATA recv returns token `0`; every multipart part of a REQUEST returns the same nonzero token.
+- Starting a reply with a token from another responder socket or source RID makes native submit fail.
+- STREAM bind/connect fails while mode is `UNSPECIFIED`; after setting `RAW` or `PACKET`, only the
+  corresponding recv family succeeds.
+- Successful PACKET recv returns RID, header, and body. `NO_DATA` and errors leave the caller's empty
+  outputs unchanged.
+
+**Pull eventing**
+
+- Monitor and timer recv return ready events and fire counts through pull and distinguish DONTWAIT
+  no-data in their respective recv results.

@@ -158,9 +158,8 @@ the same counter.
 ## 3. Timer
 
 A timer provides a nanosecond-resolution periodic or one-shot generic timer.
-Create a standalone timer with `zlink_timer_new`. A timer fire event can be
-received synchronously with `zlink_timer_recv`, driven by a
-`zlink_timer_handler` callback, or integrated into a poller with
+Create a standalone timer with `zlink_timer_new`. A timer fire event is
+received with `zlink_timer_recv` or integrated into a poller with
 `zlink_poller_add_timer`—[Poll and Poller](05-polling.en.md) owns the poller
 integration contract.
 
@@ -171,26 +170,11 @@ sequenceDiagram
     App->>T: zlink_timer_new()
     App->>T: zlink_timer_start(interval_ns, repeat_count)
     Note over T: First fire after interval_ns nanoseconds,<br/>then repeats at the same interval
-    T-->>App: fire (increments from 1 within this start)
-    App->>T: zlink_timer_recv() or invoke the registered handler
+    App->>T: zlink_timer_recv()
+    T-->>App: fire count (increments from 1 within this start)
     Note over T: If repeat_count is positive, automatically stops after that many fires
     App->>T: zlink_timer_stop() / zlink_timer_destroy()
 ```
-
-### zlink_timer_handler_fn
-
-```c
-typedef void (*zlink_timer_handler_fn) (void *timer_,
-                                        uint64_t fire_count_,
-                                        void *userdata_);
-```
-
-This is the signature of a timer expiration callback. `timer_` is the handle
-of the timer that fired, `fire_count_` is the fire count starting from 1
-within the most recent successful `zlink_timer_start` execution, and
-`userdata_` is the user pointer supplied when the handler was registered.
-
----
 
 ### zlink_timer_new
 
@@ -304,38 +288,7 @@ the result is `ZLINK_RECV_NO_DATA` (internal `EAGAIN`).
 **Thread safety:** It must not be called concurrently with another operation
 on the same timer.
 
-**See also:** `zlink_timer_handler`, `zlink_timer_start`
-
----
-
-### zlink_timer_handler
-
-Registers a timer expiration callback handler.
-
-```c
-ZLINK_EXPORT zlink_handler_result_t zlink_timer_handler (void *timer_,
-                                            zlink_timer_handler_fn handler_,
-                                            void *userdata_);
-```
-
-After `handler_` is registered, it is called each time the timer fires. A
-`NULL` `handler_` is invalid and fails with
-`ZLINK_HANDLER_INVALID_ARGUMENT` (`EINVAL`). After a handler is registered,
-`zlink_timer_recv` on the same timer returns `ZLINK_RECV_BUSY`.
-
-The callback receives the timer handle, the fire count starting from 1 within
-the most recent start execution, and `userdata_`
-([`zlink_timer_handler_fn`](#zlink_timer_handler_fn)). `userdata_` is an
-opaque pointer passed through to the callback unchanged.
-
-**Returns:** `ZLINK_HANDLER_OK` on success, or a `zlink_handler_result_t`
-value on failure. `zlink_errno()` preserves the internal errno for
-diagnostics.
-
-**Thread safety:** It must not be called concurrently with another operation
-on the same timer.
-
-**See also:** `zlink_timer_recv`, `zlink_timer_start`
+**See also:** `zlink_timer_start`
 
 ## 4. Stopwatch
 
@@ -455,7 +408,7 @@ kind.
 
 The proxy does not bridge pending state or reply targets on the completion progress lane. This API
 does not transparently complete a request across a proxy, and the proxy neither creates
-request-reply metadata nor forwards completion callbacks.
+request-reply metadata nor forwards completion records.
 
 **Returns:** `ZLINK_CONFIG_OK` when the proxy ends normally, or a
 `zlink_config_result_t` error otherwise. If a required handle is `NULL` or
@@ -535,7 +488,7 @@ called from the thread being joined.
 ## 8. Implementation and Contract Test Verification Requirements
 
 Verify the following using only the public surface (utility functions, return
-values and errno, and callback invocations). Each item maps to one unit test.
+values, and errno). Each item maps to one unit test.
 
 **Atomic counter**
 
@@ -568,14 +521,6 @@ values and errno, and callback invocations). Each item maps to one unit test.
   execution. After a stop followed by another start, the first value is `1`
   again. If the timer has already stopped and no fire remains to be read, the
   result is `ZLINK_RECV_NO_DATA` (internal `EAGAIN`).
-- Passing a `NULL` handler to `zlink_timer_handler` returns
-  `ZLINK_HANDLER_INVALID_ARGUMENT` (`EINVAL`).
-- After a handler is registered, `zlink_timer_recv` on the same timer returns
-  `ZLINK_RECV_BUSY`.
-- The registered handler is called on every fire with the timer handle, the
-  fire count that starts from 1 within the current start execution, and the
-  `userdata_` supplied during registration. After a stop followed by another
-  start, the first callback count is `1` again.
 - After `zlink_timer_stop`, no new fire event occurs until the timer is started
   again.
 - After `zlink_timer_destroy`, `*timer_p_` is `NULL`.
@@ -623,8 +568,7 @@ values and errno, and callback invocations). Each item maps to one unit test.
 **Common return convention**
 
 - Each function that returns a result type (`zlink_close_result_t`,
-  `zlink_config_result_t`, `zlink_recv_result_t`, or
-  `zlink_handler_result_t`) returns the corresponding OK value on success and
+  `zlink_config_result_t`, or `zlink_recv_result_t`) returns the corresponding OK value on success and
   a result value on failure, while `zlink_errno()` preserves the internal
   errno for diagnostics.
 

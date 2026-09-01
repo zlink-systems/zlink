@@ -8,19 +8,17 @@ title: "C++ 바인딩 최종 구조"
 
 # C++ 바인딩 최종 구조
 
-> **이 장이 정의하는 것** — 바인딩 리팩터링이 끝난 뒤 C++ 라이브러리가 가져야 할
+> **이 장이 정의하는 것** — C++ 라이브러리의
 > `Contracts`/`Runtime` 형태와 필수 의미 범위.
 
-이 문서는 바인딩 리팩터링이 끝난 뒤 C++ 라이브러리가 가져야 할 형태를 정의한다.
+이 문서는 C++ 라이브러리의 공개 계약과 소유 구조를 정의한다.
 모든 메서드를 빠짐없이 열거하지 않는다. 구체적인 공개 계약은
 `bindings/cpp/include/zlink/Contracts/`에 있다.
 
-완성된 구조에서는 `Contracts/`, 설치되는 헤더 투영, 테스트, 샘플, perf 러너, 런타임
+`Contracts/`, 설치되는 헤더 투영, 테스트, 샘플, perf runner와 runtime
 동작이 모두 `core/include/zlink.h`의 안정적인 코어 기능을 C++ 관용 타입으로 매핑한다.
 
-이 README는 `../README.md`의 공통 정책을 C++ 바인딩이 최종 상태에서 어떻게 해석하는지
-정의한다. 완성된 C++ 바인딩은 과거 표면을 보존하기 위한 기존 include 경로, 별칭 메서드,
-다른 투영, 래퍼 계층을 유지하지 않는다. 이 문서가 리팩터링된 C++ 바인딩의 수용 기준이다.
+이 README는 `../README.md`의 공통 정책을 C++ binding에 적용하는 방법을 정의한다.
 
 이 바인딩은 공통 바인딩 아키텍처 지도를 C++ 네이밍으로 따른다. `Contracts/`는 설치되는
 공개 헤더를 소유하고, `Runtime/`은 `src/` 아래 비공개 구현을 소유한다. 폴더 이름은 저장소
@@ -407,7 +405,7 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
 - `Core/`: context, context 옵션, routing id, utility 리소스, 그리고 version 또는
   역할 헬퍼 같은 공개 free function.
 - `Messaging/`: message, received metadata, topic message, subscription event, stream
-  packet callback, 빌더 payload 헬퍼. codec helper는 C++ 바인딩 package에 포함하지
+  packet 값, 빌더 payload 헬퍼. codec helper는 C++ 바인딩 package에 포함하지
   않고, framework 수준 직렬화는 framework codec extension에서 다룬다.
 - `Sockets/`: socket 동작, socket family, 타입 지정 옵션, request/reply, publish/subscribe
   표면.
@@ -429,16 +427,10 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
   메시지에 맡기고, 메시지가 버퍼를 해제할 때 `free_fn(data, hint)`를 한 번 호출한다.
 - send, routed send, publish, request, reply, SPOT operation, Actor location/session
   operation은 move-only fluent 빌더를 반환한다.
-- 빌더 시작 메서드는 대상 identity, topic, channel, routing id, request sequence만
+- 빌더 시작 메서드는 대상 identity, topic, channel, routing ID와 `reply_token_t`만
   받는다. payload, flag, timeout, async submit 선택은 빌더 단계에서 한다.
 - SPOT 채널 대상 operation은 `send_to_channel(...)`과 `request_to_channel(...)`을 쓴다.
   SPOT topic publish는 `publish(topic)`을 그대로 쓴다.
-- handler 등록 메서드는 `set_..._handler` 이름을 쓴다. 예를 들어 raw STREAM
-  packet 처리는 `set_packet_handler(...)`,
-  monitor 이벤트는 `set_monitor_handler(...)`, SPOT dispatch는
-  `set_dispatch_handler(...)`를 쓴다.
-- `on_...` 이름은 완성된 C++ API에서 공개 등록 메서드가 아니다. 이는 필요할 때 내부 또는
-  protected 훅을 위해 예약한다.
 - operation 시작 메서드와 같은 이름의 단일 payload 단축 오버로드를 추가하지 않는다.
   `send(message)`, `send(routing_id, message)`, `publish(topic, message)`,
   `send_to_channel(channel, message)`, `send_to_spot(..., message)`는 공개 계약 멤버가
@@ -452,23 +444,9 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
   계열을 추가하지 않는다. operation 이름은 하나로 유지하고 변형은 빌더가 흡수한다. 종단
   빌더 메서드의 언어별 이름은
   [바인딩 비동기 실행 표면 정책](../async-coroutine-policy.ko.md)을 따른다.
-- routed **send**의 terminal은 `routed_send_submit_operation_t`의
-  sync `flags(int).submit() -> void`(flag 없거나 `NONE`이면 호출 thread에서 Core가
-  blocking, `DONTWAIT`면 즉시 backpressure를 `submit_error_t`로 전달)와
-  `async() -> async_result_t<void>`(Core send-completion) 두 가지다. 두 경로 모두
-  binding은 admission park queue, WRITABLE-callback 재시도, deadline timer,
-  dispatcher thread를 두지 않는다 —
-  [바인딩 routed 전송 계약과 비동기 완료 표면 정책](../async-coroutine-policy.ko.md)
-  참고. **binding 라이브러리는 스레드를 하나도 소유하지 않는다.**
-- routed send의 HWM 대기·재개·timeout은 전부 Core가 소유한다. blocking 모드는 Core
-  내부에서 대기하다 Core 신호로 재개하고, socket `SNDTIMEO`가 대기 상한이며,
-  `SNDTIMEO=0`은 즉시 `BACKPRESSURED`(`EAGAIN`)를 반환한다. 백프레셔 정책의 소유자는
-  어플리케이션이며 binding은 재시도하지 않는다. 실패는 `submit_error_t`로 던지고,
-  binding이 별도 native view를 제출하므로 공개 C++ message는 호출자에게 남는다. 일반 실패에서도
-  동기 호출에 실제 전달된 native part는 Core가 소비한다.
-- routed send builder는 sync `submit()` 전용 `flags(int)` 단계를 노출한다.
-  `timeout(...)`은 `async()`의 Core per-operation deadline이며, async에는 flags가
-  없다. flag 없거나 `NONE`인 동기 `submit()`의 대기 상한은 socket `SNDTIMEO`다.
+- Send의 blocking `submit()`은 Core `NONE` admission을 사용하고 `async()`는 Core
+  `DONTWAIT` completion을 기다린다. Socket `SNDTIMEO`는 blocking admission wait의
+  상한이다. Binding은 payload 재전송 queue를 만들지 않는다.
 - C++ binding은 outbound 경로에 자체 lock이나 gate를 두지 않는다. Core는 socket별
   transaction state로 이미 열린 sequence에 다른 sender의 part가 들어오지 않게 막는다.
   열린 sequence와 경합하는 attempt는 peer에 부분 record를 남기지 않고 통째로 거부한다.
@@ -476,32 +454,13 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
   공개 C++ message를 보존한다. 같은 socket에 동시에 multipart를 제출할 때 직렬화할 책임은
   어플리케이션에 있다. binding은 직렬화하거나 대기하거나 재시도하지 않는다. close와
   in-flight 제출의 경합도 Core lifecycle gate가 담당한다.
-- routed **request**의 terminal은 `submit()`(caller thread blocking 반환),
-  `submit(callback)`(즉시 반환), `async()`(`async_result_t<std::vector<message_t>>`) 세
-  가지다. Core가 선택한 정확한 `(RID, transport pair id, generation)` target에 호출
-  thread에서 동기 제출하고, reply completion은 Core가 구동한다. `async()` 재개와 callback
-  호출은 그 완료가 발생한 컨텍스트에서 일어난다. 제출 자체의 HWM 계약은 routed send와
-  같다(Core 소유, `SNDTIMEO`가 상한). 두 sync terminal의 `flags(int)` 단계는
-  `NONE`이면 admission을 기다리고 `DONTWAIT`면 즉시 backpressure를 반환한다.
-  binding은 이 표면을 위해 재시도 큐, 타이머,
-  전용 스레드를 두지 않는다.
+- Request는 blocking `submit()`과 `async()`를 제공하고 builder의 reply timeout을 유지한다.
+  Target은 operation 생성 때 capture하며 physical connection identity를 public target으로
+  사용하지 않는다.
 - request timeout은 Core 소유다(`ZLINK_REQUEST_TIMED_OUT`). builder의 `timeout(...)`은 그
   Core-owned reply deadline을 지정한다. 제출 실패는 `submit_error_t`로 던지고, 수용 후에는
-  Core reply lifecycle이 완료를 소유한다. drop과 `async_result_t::cancel()`은 cancellation을
-  요청하지만 Core가 이미 수용한 request는 Core-owned terminal event로 끝난다.
-- `request_submit_operation_t::submit()`은 caller thread가 condvar로 reply callback을
-  기다려 `std::vector<message_t>`를 반환한다. `submit(callback)`은 Core reply callback을
-  기존 bridge로 연결하고 즉시 `bool`을 반환한다. callback과 `async()`의 재개는 Core가
-  완료를 전달한 context에서 일어난다. 그 resumed continuation이나 callback에서 socket 또는
-  context를 파괴하면 deadlock하며, completion callback 안에서 send/publish/request를
-  제출하면 `EDEADLK`다. 실행 모델 연결(다른 executor로의 handoff)은 framework와
-  어플리케이션 몫이다.
-- `send_submit_operation_t`(PAIR/STREAM one-shot)의 terminal은 sync
-  `flags(int).submit() -> bool`와 `async() -> async_result_t<void>`다. `async()`의
-  `timeout(...)`은 Core per-operation deadline이며, completion은 admission을 뜻한다.
-  `.flags(dontwait).submit()`은
-  backpressure면 `false`를 즉시 반환한다. `async()`의 resumed continuation에서 socket/context를
-  파괴하면 deadlock하고 completion callback 안의 submit은 `EDEADLK`다.
+  Core reply lifecycle이 완료를 소유한다. Awaitable drop은 waiter만 detach하고 late completion은
+  runtime drain이 정리한다.
 - `publish_operation_t`(PUB/XPUB)의 terminal은 synchronous `submit() -> bool` 하나다.
   PUB/XPUB는 lossy publish semantics를 가지므로 publish builder에는 `async()`가 없다.
   `ZLINK_PUB_OPT_NODROP`의 backpressure는 동기 submit에서만 표면화한다.
@@ -510,8 +469,6 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
   reply를 HWM 없는 completion lane에 native 호출 한 번으로 제출한다. HWM backpressure는
   reply 결과가 아니며 `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`와 그 밖의
   non-HWM submit 실패는 즉시 `submit_error_t`로 전달한다.
-- `on_send_ready(...)`, `on_packet(...)`, `on_event(...)` 같은 표준 이름 우회나 operation
-  별칭을 두지 않는다. 호출 지점은 계층화된 별칭 대신 표준 공개 계약을 그대로 쓴다.
 
 ## 64-bit byte HWM과 monitoring 계약
 
@@ -591,7 +548,7 @@ result를 담은 `config_error_t`가 된다. 이미 유지하는 상태를 다�
 관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
 `SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
 `1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
-`FLOW_STATE_STALE_GENERATION`(`1 << 2`), `FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
+`FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
 bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
 `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
 `flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
@@ -695,3 +652,159 @@ C++는 Actor와 Spot 라우트 조회 결과를 구체 계약 타입으로 노�
 - `send_to_actor`는 submit이 성공하면 하나 이상의 message part 소유권을 넘기고, Actor 소유자 mailbox가 인계를 받으면 완료된다.
 - `request_to_actor`는 submit이 성공하면 요청 part의 소유권을 넘기고, Actor handler가 만든 reply part를 native awaitable 결과로 전달한다.
 - C++는 제거된 Discovery route table이나 resolver API를 compatibility helper로 되살리면 안 된다.
+
+## Pull completion 공개 계약
+
+C++ package는 Core 0.16.0을 exact dependency로 사용한다.
+
+C++ runtime은 native completion ID, `user_context`와 raw drain을 숨기고 blocking 결과 또는
+`async_result_t`로 바꾼다. Blocking send/request는 Core `NONE`, `async()`는 Core `DONTWAIT`를
+사용한다. Completion-backed operation state는 native `FINAL` 전에 provisional registry에
+등록하고 submit publish와 completion capture가 합류한 뒤 정확히 한 번 끝낸다. `async_result_t`
+drop은 waiter를 detach할 뿐 Core operation을 취소하지 않는다.
+
+`poll_event_flag_t::pollcompletion`은 public poller의 wait thread가 native queue를 비우고 live
+waiter 또는 detached state를 한 건 이상 완전 처리했다는 progress event다. Public poller가
+owner이면 다른 thread가 wait loop를 실행해야 blocking request가 진행한다.
+
+ROUTER REQUEST receive만 `reply_token_t`를 만든다. Token은 ROUTER wrapper가 만든 shared owner
+tag와 opaque value를 함께 보유한다. Equality·hash와 reply owner 검증은 두 값을 사용한다.
+Public numeric constructor, raw accessor, ordering, serialization과 close를 제공하지 않는다.
+`stream_packet_t`는 move-only reusable output이며 recv 진입 때 이전 payload를 먼저 비운다.
+같은 output의 concurrent recv는 invalid-state다. Header/body reference는 다음 recv 진입이나
+`close()` 전까지만 유효하다. Receive mode setter는 첫 bind/connect 전에 `raw`·`packet`만 받고
+`unspecified`를 거부한다.
+
+### Public interface
+
+```cpp
+class send_submit_operation_t {
+public:
+    send_submit_operation_t&& message(message_t&) &&;
+    send_submit_operation_t&& message(message_t&&) &&;
+    void submit() &&;
+    async_result_t<void> async() &&;
+};
+
+class request_submit_operation_t {
+public:
+    request_submit_operation_t&& message(message_t&) &&;
+    request_submit_operation_t&& message(message_t&&) &&;
+    request_submit_operation_t&& timeout(std::chrono::milliseconds) &&;
+    std::vector<message_t> submit() &&;
+    async_result_t<std::vector<message_t>> async() &&;
+};
+
+class reply_token_t final {
+public:
+    reply_token_t() = delete;
+    reply_token_t(const reply_token_t&) = default;
+    reply_token_t& operator=(const reply_token_t&) = default;
+    friend bool operator==(const reply_token_t&, const reply_token_t&) noexcept;
+
+private:
+    reply_token_t(std::shared_ptr<const void> owner, uint64_t value) noexcept;
+    std::shared_ptr<const void> owner_;
+    uint64_t value_;
+    friend struct detail::received_access_t;
+    friend struct reply_token_hash_t;
+};
+
+struct reply_token_hash_t {
+    std::size_t operator()(const reply_token_t&) const noexcept;
+};
+
+class reply_submit_operation_t {
+public:
+    reply_submit_operation_t&& message(message_t&) &&;
+    void submit() &&;
+};
+
+enum class stream_recv_mode_t : int {
+    unspecified = 0,
+    raw = 1,
+    packet = 2
+};
+
+class stream_packet_t final {
+public:
+    stream_packet_t() = default;
+    ~stream_packet_t();
+    stream_packet_t(stream_packet_t&&) noexcept = default;
+    stream_packet_t& operator=(stream_packet_t&&) noexcept = default;
+    stream_packet_t(const stream_packet_t&) = delete;
+    stream_packet_t& operator=(const stream_packet_t&) = delete;
+
+    bool empty() const noexcept;
+    const std::optional<routing_id_t>& routing_id() const noexcept;
+    message_t& header();
+    message_t& body();
+    void close() noexcept;
+
+private:
+    std::optional<routing_id_t> routing_id_;
+    std::optional<message_t> header_;
+    std::optional<message_t> body_;
+    friend class stream_socket_t;
+};
+
+bool stream_socket_t::recv_packet(
+    stream_packet_t& out, recv_flags_t flags = recv_flags_t::none);
+
+stream_recv_mode_t stream_socket_options_t::recv_mode() const;
+void stream_socket_options_t::recv_mode(stream_recv_mode_t mode);
+```
+
+Operation 시작 signature는 PAIR `send_operation_t send()`, DEALER
+`send_operation_t send()`·`request_operation_t request()`, ROUTER
+`send_operation_t send(const routing_id_t&)`·
+`request_operation_t request(const routing_id_t&)`·
+`reply_operation_t reply(const routing_id_t&, reply_token_t)`, STREAM
+`send_operation_t send(const routing_id_t&)`다. Send factory는 target을 builder에 capture한다.
+`received_t::reply_token()`은 `const std::optional<reply_token_t>&`를 반환한다.
+`received_t::send()`은 source target을 capture한 `send_operation_t`, `received_t::reply()`는 source
+RID와 token을 capture한 `reply_operation_t`를 반환한다.
+
+Public C++ surface에는 send/request/reply `.flags(...)`, send `.timeout(...)`, request callback
+overload/type, `async_result_t::cancel()`, STREAM packet handler, monitor `on_event`·`ignore_event`,
+timer `on_fire`, pair/generation member와 exact-pair method가 없다. PAIR·STREAM send의
+`submit()`도 `bool`을 반환하지 않는다. `routed_send_operation_t`와
+`routed_send_submit_operation_t`도 public type이 아니다.
+
+Monitor는 `optional<monitor_event_t> recv(recv_flags_t = none)`·`status()`·`close()`를,
+timer는 `start(duration, uint64_t = 0)`·`stop()`·`optional<uint64_t> recv()`·`close()`를
+제공한다. Pending native option 이름은 `ZLINK_OPT_PENDING_MAX_MSGS`와
+`ZLINK_OPT_PENDING_MAX_BYTES`다.
+Monitor event의 `connection_id`는 진단과 correlation에만 사용하며 send·reply target이나
+reconnect fence로 사용하지 않는다.
+Pending native option은 public high-level option façade를 추가하지 않는다.
+
+## 구현 및 contract test 검증 요구
+
+Public C++ interface, 반환값·exception과 poller event만으로 다음을 확인한다. 각 항목은 contract
+test 하나로 이어진다.
+
+**Operation과 완료**
+
+- 모든 socket의 send factory가 `send_operation_t`를 반환하고 blocking `submit()`과
+  `async()`가 각각 `NONE`과 `DONTWAIT` 완료 경계를 관찰한다.
+- Request는 timeout·blocking result·`async()`만 제공하고 non-OK completion은 typed error로
+  끝나며 error payload를 공개하지 않는다.
+- `async_result_t` drop 뒤 late completion은 waiter를 다시 끝내지 않고 native aggregate를
+  정리한다.
+- Public poller owner에서 wait loop가 있을 때 completion-backed terminal이 진행하고,
+  `pollcompletion`은 settle 또는 cleanup이 끝난 뒤에만 반환된다.
+
+**ReplyToken과 STREAM**
+
+- 같은 ROUTER owner와 opaque value의 token은 같고 다른 owner의 token은 다르며, 다른 owner
+  token의 reply는 native 호출 전에 실패한다.
+- ROUTER wrapper move는 owner tag identity를 보존하고 close·recreate 뒤 stale token은 새
+  wrapper에 사용할 수 없다.
+- `recv_packet()`은 성공 때 output을 채우고 `NO_DATA`·오류 때 empty로 유지하며, `close()` 뒤
+  같은 output을 다시 사용할 수 있다.
+
+**Pull eventing**
+
+- Monitor DONTWAIT no-data는 `nullopt`, timer no-data도 `nullopt`이며 pull lifecycle로 event와
+  fire count를 한 번씩 관찰한다.

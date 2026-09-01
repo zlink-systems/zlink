@@ -8,16 +8,14 @@ title: "Java Binding Implementation Blueprint"
 
 # Java Binding Implementation Blueprint
 
-> **What this chapter defines** — the target `contracts`/`runtime` shape the
-> Java binding must have, and the JPMS export boundary.
+> **What this chapter defines** — the Java binding's `contracts`/`runtime` structure and JPMS export
+> boundary.
 
-This document defines the target Java binding shape. It is not an exhaustive
-method reference. The exact public member list belongs in
-`bindings/java/src/main/java/systems/zlink/contracts/` after the refactor is
-complete.
+This document defines the Java binding's public contract and ownership structure. It is not an
+exhaustive method reference. `bindings/java/src/main/java/systems/zlink/contracts/` owns the exact
+public member list.
 
-The Java binding is aligned only when it uses the same architecture map as the
-.NET binding:
+The Java binding uses the same architecture map as the .NET binding:
 
 - public resource behavior is expressed as contract interfaces;
 - native-backed runtime implementations live under runtime packages;
@@ -32,14 +30,10 @@ copy every C# file literally when Java's public type rules make that awkward,
 but it must preserve the same category ownership, resource boundary, and
 operation/model grouping.
 
-This is a breaking target. Do not keep compatibility shims, deprecated
-wrappers, duplicate construction paths, public runtime aliases, or direct
-constructors only to preserve the old Java surface.
-
 | Section | Covers |
 |---|---|
 | [Source Of Truth](#source-of-truth) | The semantic source of truth and the Java repository ownership boundary |
-| [Current Refactor Rule](#current-refactor-rule) | The test for "the right direction" while the refactor is in progress |
+| [Architecture Requirements](#architecture-requirements) | Required contract/runtime ownership boundaries |
 | [Architecture Map](#architecture-map) | The `contracts`/`internal`/`runtime` package tree |
 | [Public Contract Categories](#public-contract-categories) | A table of contract/runtime packages to purpose |
 | [Native Wait Boundary](#native-wait-boundary) | The boundary between blocking recv and poller-based receive |
@@ -59,7 +53,7 @@ constructors only to preserve the old Java surface.
 | [Spot And Actor Contract Shape](#spot-and-actor-contract-shape) | `SpotNode`/`Spot` responsibilities and route results |
 | [Spot Get-Or-Create](#spot-get-or-create) | The `getOrCreateSpot` contract |
 | [Performance Policy](#performance-policy) | Hot-path constraints |
-| [Refactor Workflow](#refactor-workflow) | The order of alignment work |
+| [Architecture requirements](#architecture-requirements-1) | Contract/runtime boundary requirements |
 | [Implementation Checklist](#implementation-checklist) | Checks before declaring alignment |
 | [Verification](#verification) | Required verification commands and structural searches |
 
@@ -89,24 +83,19 @@ JPMS exports must include only documented packages under
 including `systems.zlink.runtime.nativeapi`, are implementation packages and
 must not be exported.
 
-## Current Refactor Rule
+## Architecture Requirements
 
-During the Java refactor, code may temporarily be in transition, but the target
-shape is fixed. A change moves in the right direction only if it makes one of
-these statements more true:
+The Java package structure meets these conditions.
 
 - a native-backed resource is typed by a public contract interface;
-- a native-backed implementation moves under `systems.zlink.runtime.*`;
+- a native-backed implementation lives under `systems.zlink.runtime.*`;
 - a factory returns a contract type and hides the runtime class;
-- a public contract file no longer imports `systems.zlink.runtime.*`;
-- a sample, perf runner, or test no longer imports runtime packages;
-- a native handle, raw part loop, callback trampoline, request pump, or native
-  struct mirror moves out of public contract source.
+- a public contract file does not import `systems.zlink.runtime.*`;
+- samples, perf runners, and tests do not import runtime packages;
+- native handles, raw part loops, completion-drain state, and native struct mirrors remain outside public
+  contract source.
 
-Moving only a native helper while leaving the main public resource as a
-concrete contract class is not sufficient. The .NET-standard target is a
-contract/runtime split at the resource boundary, not only at the helper
-boundary.
+The contract/runtime split applies at resource boundaries as well as helper boundaries.
 
 ## Architecture Map
 
@@ -145,7 +134,7 @@ hooks application-facing API.
 `runtime` is the implementation map. It mirrors the Java target classification:
 `core`, `messaging`, `sockets`, `eventing`, `service`, `errors`, and Java's
 `nativeapi` equivalent of `.NET` `Runtime/Native`. It owns native handles,
-downcalls, marshalling, callback bridge state, request progress, socket
+downcalls, marshalling, completion-drain state, socket
 kernels, service kernels, option mapping, and lifecycle details. Runtime
 support code such as handle lifetime, buffer conversion, and option mapping is
 kept under the owning runtime category instead of introducing extra public
@@ -174,8 +163,8 @@ names:
 | Package | Purpose |
 |---------|---------|
 | `systems.zlink.runtime.core` | Context implementation, context option application, runtime version/capability calls. |
-| `systems.zlink.runtime.messaging` | Message materialization, multipart progress, request progress, and request execution. |
-| `systems.zlink.runtime.sockets` | Socket kernels, socket family implementations, callback adapters, and socket operation execution. |
+| `systems.zlink.runtime.messaging` | Message materialization, multipart progress, request execution, and completion-registry integration. |
+| `systems.zlink.runtime.sockets` | Socket kernels, socket family implementations, poller drain, and socket operation execution. |
 | `systems.zlink.runtime.eventing` | Monitor, poller, poll event, timer, and dispatch loop implementations. |
 | `systems.zlink.runtime.service.*` | SpotNode, Spot, Actor, topology, and service operation implementations. |
 | `systems.zlink.runtime.errors` | Native errno/result conversion into public exception/result domains. |
@@ -440,11 +429,10 @@ interfaces and must be created by factories.
 - Actor resource contracts when the Java surface exposes actor handles or actor
   lifecycle resources as native-backed handles
 
-These are operation contracts because they hide staged multipart state, request
-state, callback state, or native submit state:
+These are operation contracts because they hide staged multipart state, request state, or native submit
+state:
 
 - send operation
-- routed send operation
 - publish operation
 - request operation
 - reply operation
@@ -452,17 +440,11 @@ state, callback state, or native submit state:
 - Actor create/join/reply/location operation
 - stream actor bind/unbind/send operation
 
-Handler and callback roles may be interfaces or functional interfaces when
+Handler roles may be interfaces or functional interfaces when
 callers provide behavior to the runtime:
 
-- socket receive handler
-- stream packet handler
-- monitor handler
-- timer handler
 - SPOT dispatch handler
 - actor lifecycle handler
-- request callback
-- reply callback
 
 ### Must Stay Concrete
 
@@ -547,7 +529,7 @@ classes are not part of the target contract.
 ## Contract File Requirements
 
 Contract files must be readable without knowing Panama, JNI, native handles,
-native struct layouts, callback userdata, request pump threads, or raw
+native struct layouts, the completion registry, or raw
 `*_part` loops.
 
 Contract files may import:
@@ -567,7 +549,7 @@ Contract files must not import:
 - runtime implementation classes;
 - native handle wrappers;
 - marshalling helpers;
-- request progress helpers.
+- native completion drain helpers.
 
 The only exception is a public factory facade such as `Zlink` if Java chooses
 direct static construction wiring. Even then, runtime references must be
@@ -592,8 +574,7 @@ Runtime owns:
 - native downcalls;
 - native struct mirrors;
 - message marshalling;
-- request progress pumps;
-- callback trampolines;
+- socket-local provisional completion registry and drain owner;
 - receive cursors;
 - part-loop sequencing;
 - native error mapping;
@@ -607,159 +588,80 @@ native handles or internal fields in the public contract.
 
 ## Socket Contract Shape
 
-Socket contracts are interfaces. They should expose behavior, not native
-transport mechanics.
+All socket resource contracts extend `Socket`. The common `Socket` owns only capabilities shared by
+every socket:
 
-Common socket behavior belongs in `Socket`:
+- typed common options through `options()`;
+- monitor open through `monitorOpen()`, `monitorOpen(MonitorEventType...)`, and
+  `monitorOpen(long, MonitorEventType...)`;
+- TLS server configuration through `setTlsServer(...)` and TLS client configuration through
+  `setTlsClient(...)`;
+- `close()`.
 
-- `bind`
-- `connect`
-- `unbind`
-- `disconnect`
-- `disconnectRid`
-- `setChannelName`
-- `getChannelName`
-- `options`
-- `close`
+The family-specific or socket-specific contract that supports them owns `bind`, `connect`, `unbind`,
+`disconnect`, `disconnectRid`, and ChannelName operations. The common `Socket` does not own them.
 
-Typed socket contracts add only capabilities that are meaningful for that
-socket type:
+A typed socket contract adds only behavior meaningful for that socket type:
 
 - `PairSocket`: send and recv.
 - `DealerSocket`: send, recv, request.
-- `RouterSocket`: routed send, routed recv, request, reply, SPOT routing, and
-  exact transport-pair termination from a monitor event.
+- `RouterSocket`: routed send, routed recv, request, reply, and SPOT routing.
 - `PubSocket`: publish.
-- `SubSocket`: subscribe and subscription event receive.
-- `XPubSocket`: publish plus subscription event receive.
-- `XSubSocket`: send and subscription control as defined by the public
-  binding contract.
-- `StreamSocket`: stream send/recv, packet handler, actor gateway, bound actor
-  operations.
+- `SubSocket`: subscribe and subscription-event receive.
+- `XPubSocket`: publish and subscription-event receive.
+- `XSubSocket`: send and subscription control defined by the public binding contract.
+- `StreamSocket`: RAW recv, PACKET recv, stream send, actor gateway, and bound-actor operations.
 
-Do not expose protocol envelope helpers, request tokens, raw native part
-submission, callback userdata, or native routing-id pointers.
+Protocol envelope helpers, raw native part submission, and native routing-ID pointers are not public
+contract members.
 
 ## Operation Builder Shape
 
-Operation builders are public interfaces because they hide mutable staged
-state. They live in the category that owns the operation.
+An operation builder is a public interface because it hides mutable staged state. It lives in the
+category that owns the operation.
 
-Builder start methods take only the target identity:
+A builder start method accepts only a target identifier and reply token:
 
 - `send()`
 - `send(routingId)`
 - `publish(topic)`
 - `request()`
 - `request(routingId)`
-- `reply(routingId, requestSequence)`
+- `reply(routingId, replyToken)`
 - `sendToSpot(nodeRid, spotRid)`
 - `requestToSpot(nodeRid, spotRid)`
-- `replyToSpot(nodeRid, spotRid, requestSequence)`
+- `replyToSpot(nodeRid, spotRid, replyToken)`
 - `sendBoundActor(sessionRid, actorId)`
 
-`RouterSocket.disconnectTransportPair(transportPairId, transportPairGeneration)`
-marks only the physical transport pair identified by the same monitor event's
-non-zero pair identity and generation for termination. It does not affect
-another pair using the same peer routing id. This operation is used for
-runtime connection control such as Framework connection replacement; callers
-must not invent a pair identity.
-
-PAIR send and DEALER/ROUTER routed send builders provide asynchronous
-`submit()` and synchronous `submit_sync(SendFlags)`. A request builder provides
-three completion surfaces. `submit_sync(SendFlags)` waits synchronously for
-admission and reply and returns the reply directly;
-`submit_sync(SendFlags, callback)` returns when the admission result is known
-and delivers the reply through the callback; `submit()` returns
-`CompletionStage<List<Message>>`. Request submission passes through the same
-HWM admission as send, and the synchronous terminals use `NONE` (wait) or
-`DONT_WAIT` (immediate back-pressure). PUB/XPUB publish uses the same staged message
-builder shape, but its `submit()` is synchronous `void` and immediately throws
+PAIR, DEALER, ROUTER, and STREAM send builders use the `SendOperation` family. Send provides
+asynchronous `submit()` and synchronous `submit_sync()`. Request provides `submit()` and
+`submit_sync()` and sets its reply timeout on the builder. PUB/XPUB publish uses the same staged
+message-builder pattern, but its `submit()` is synchronous `void` and immediately throws
 `ZlinkSubmitException` on failure.
 
-```java
-public interface AsyncSendSubmitOperation {
-    AsyncSendSubmitOperation message(Message part);
-    AsyncSendSubmitOperation timeout(Duration timeout);
-    CompletionStage<Void> submit();
-    void submit_sync(SendFlags flags);
-}
+`submit_sync()` uses Core `NONE`; `submit()` uses Core `DONTWAIT` completion. The Kotlin
+framework connects `CompletionStage` to its `await()` boundary. Direct Java binding use can also
+use the synchronous terminal. The
+[Pull completion public contract](#pull-completion-public-contract) contains the exact signatures.
 
-public interface RoutedSendSubmitOperation {
-    RoutedSendSubmitOperation message(Message part);
-    RoutedSendSubmitOperation timeout(Duration timeout);
-    CompletionStage<Void> submit();
-    void submit_sync(SendFlags flags);
-}
-
-public interface RequestSubmitOperation {
-    RequestSubmitOperation message(Message part);
-    RequestSubmitOperation timeout(Duration timeout);
-    CompletionStage<List<Message>> submit();
-    List<Message> submit_sync(SendFlags flags);
-    void submit_sync(SendFlags flags,
-                     BiConsumer<RequestResult, List<Message>> callback);
-}
-```
-
-Send builders do not expose a separate `await()`, `submit(callback)`,
-`flags(...)`, or a boolean one-shot terminal. Instead,
-`submit_sync(SendFlags.NONE)` waits synchronously for Core admission, while
-`submit_sync(SendFlags.DONT_WAIT)` immediately throws
-`ZlinkSubmitException(BACKPRESSURED)` when the HWM is full. The no-argument
-`submit()` does not block the calling thread. Framework and Kotlin framework do
-not use the synchronous overload; they continue to connect the returned
-`CompletionStage` directly to their completion/await boundaries with
-`submit().await()`. Kotlin code that uses the Java binding directly may also use
-the synchronous overload. The shared language policy is defined in
-[bindings async execution surface policy](../async-coroutine-policy.en.md).
-
-The PUB/XPUB publish builder's `submit()` creates no `CompletionStage`. Default
-lossy publish drops a copy for a full subscriber queue and reports success;
-`NODROP` reports an immediate error. Core returns `ENOTSUP` if
-`zlink_send_async` is called for PUB/XPUB.
+PUB/XPUB publish `submit()` creates no `CompletionStage`. Default lossy publish succeeds by
+dropping the copy for a subscriber whose queue is full; `NODROP` returns an immediate error.
 
 The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
-`ReplySubmitOperation.submit() -> void`. It returns no `CompletionStage` and
-submits a terminal reply or error reply to the HWM-free completion lane with
-one native call. HWM backpressure is not a reply result; `NOT_CONNECTED`,
-`TERMINATED`, `INVALID_ARGUMENT`, and other non-HWM submit failures are
-delivered immediately as `ZlinkSubmitException`.
+`ReplySubmitOperation.submit() -> void`. It creates no `CompletionStage`, accepts no send flags,
+and submits a terminal reply or error reply to the HWM-free completion lane with one native call. HWM
+backpressure is not a reply result. `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`, and
+other non-HWM submit failures are delivered immediately as `ZlinkSubmitException`.
 
-### Completing Asynchronous Operations From Core Completion
+### Completion pull
 
-- Each PAIR/DEALER/ROUTER/STREAM socket installs exactly one
-  `zlink_send_complete_handler`. Core's selector or an explicit exact
-  transport-pair identity selects a routed target; the binding owns no
-  per-target admission queue or readiness ring.
-- Before calling Core, `submit()` registers the `CompletionStage` and a
-  binding-owned opaque userdata token in a strong pending table. This remains
-  safe if Core invokes a completion inline from `zlink_send_async`; the native
-  callback removes the entry exactly once and snapshots its terminal.
-- A native completion callback snapshots only the event and payload ownership
-  on the JVM thread used by Core. The socket's existing completion dispatcher
-  completes the stage outside the native callback thread. This prevents an
-  inline `CompletionStage` continuation from re-entering a native submit while
-  Core is still dispatching the callback. The binding adds no admission thread
-  or queue, readiness scheduler, or retry; the deadline remains a per-operation
-  Core option.
-- `TIMED_OUT` and `TERMINAL` preserve `terminal_errno` in the exceptional
-  `ZlinkSubmitException`. Cancellation requests `zlink_send_async_cancel`, and
-  Core still delivers exactly one completion. Re-entering submit from inside a
-  Core callback is rejected with `EDEADLK` by the Core contract.
-- A request installs its callback table before the final request part. The Core
-  reply callback takes the reply exactly once and hands stage completion to the
-  same existing socket completion dispatcher. The binding adds no
-  request-specific executor, timeout scheduler, or retry queue.
-- Because of current Core ROUTER multipart-abort and DEALER
-  generic-target-failure defects, Java multipart-async contract verification is
-  limited to a one-part record. Restore the multipart assertion after those
-  Core defects are fixed.
+Completion-backed state is registered in a provisional registry before native `FINAL`. A stage or
+blocking request completes exactly once after native submit-outcome publication joins completion
+capture. Stage cancellation completes only the waiter; the socket-local drain owner releases payload
+and state on late completion.
 
-Do not add separate operation-start families such as `sendNoWait`,
-`sendWithFlags`, `requestAsync`, `publishWithFlags`, or direct
-`send(message)` shortcuts. Use one operation name and let the builder absorb
-the variation.
+Do not add separate operation-start families such as `sendNoWait`, `sendWithFlags`,
+`requestAsync`, `publishWithFlags`, or a `send(message)` shortcut.
 
 ## Messaging Values
 
@@ -783,7 +685,7 @@ contract types.
 
 - is reusable caller-provided receive storage;
 - owns received message parts until closed or adopted;
-- may carry routing id, SPOT routing id, request sequence, and reply sender
+- may carry routing ID, SPOT routing ID, `ReplyToken`, and reply sender
   metadata;
 - does not expose native receive cursors or native handles.
 
@@ -809,7 +711,7 @@ Hard receive failures throw the documented exception type.
 
 Core byte-HWM charge ends when ordinary `recv(...)` or `subscribe(...)`
 dequeues the payload. `Received` and `TopicMessage` own only the Java lifetime
-of parts, routing ID, request sequence, topic, and multipart framing. Closing
+of parts, routing ID, `ReplyToken`, topic, and multipart framing. Closing
 or reusing the output cleans up payload and metadata but does not participate
 in Core HWM accounting. No separate retained receive, raw lease handle,
 application byte capacity, or duplicate accounting state exists in a public or
@@ -848,7 +750,6 @@ Handler registration names describe registration, not event occurrence.
 
 Canonical Java names:
 
-- `setPacketHandler`
 - `setDispatchHandler`
 - `recvRouted`
 - `recvActorLifecycle`
@@ -950,8 +851,8 @@ The observation surface follows the C contract, so the constant and metric
 names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
 `SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
 with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
-`FLOW_STATE_STALE_GENERATION` (`1 << 2`), and `FLOW_STATE_STALE_EPOCH`
-(`1 << 3`), the status detail bit `FLOW_STATE` (`1 << 5`), and the five status
+and `FLOW_STATE_STALE_EPOCH` (`1 << 3`), the status detail bit `FLOW_STATE`
+(`1 << 5`), and the five status
 fields `flow_paused_connections`, `flow_pause_applied_total`,
 `flow_resume_applied_total`, `flow_state_stale_total`, and
 `flow_pause_duration_ms`, projected with this language's naming convention.
@@ -1022,17 +923,16 @@ Hot paths must not use reflection, dynamic method lookup, classpath scanning,
 avoidable allocation, avoidable buffer copies, hidden waits, sleeps, busy
 waits, broad locks, or thread joins.
 
-Callback stub and method-handle setup may happen during registration, not in
-the per-message processing loop.
+Native method-handle setup happens during initialization, not in the per-message processing loop.
 
 Native bridge code should materialize Java values directly from core receive
 substrates. Public contract code should not contain raw native receive loops.
 
 Perf, samples, and tests use exported public contract packages only.
 
-## Refactor Workflow
+## Architecture requirements
 
-Use this order when aligning the Java binding:
+The Java binding maintains these boundaries:
 
 1. Define the public resource interfaces under `systems.zlink.contracts.*`.
 2. Keep value/model/result/exception types concrete in their contract
@@ -1043,14 +943,13 @@ Use this order when aligning the Java binding:
 4. Make runtime classes implement the contract interfaces.
 5. Move factory entrypoints to public contract types and make them return
    contract interfaces.
-6. Remove direct public constructors for native-backed resources.
-7. Move native handles, Panama/JNI calls, callback trampolines, request pumps,
-   marshalling helpers, and part loops into runtime/nativeapi or runtime
-   support classes.
-8. Update samples, perf, tests, and documentation examples to import only
+6. Native-backed resources have no direct public constructors.
+7. Runtime/nativeapi or runtime support classes own native handles, Panama/JNI calls, completion drain,
+   marshalling helpers, and part loops.
+8. Samples, perf, tests, and documentation examples import only
    `systems.zlink.contracts.*`.
-9. Remove compatibility aliases and deprecated wrappers that preserve the old
-   direct-concrete shape.
+9. Compatibility aliases and deprecated wrappers for a direct-concrete shape are not part of the
+   public contract.
 10. Verify JPMS exports expose only contract packages.
 
 Do not start by only extracting helper classes from concrete contract
@@ -1069,21 +968,20 @@ The Java binding is aligned only when all items are true:
 - Contract files, except narrowly justified factory wiring, do not import
   `systems.zlink.runtime.*`.
 - Public signatures do not mention native handles, Panama memory segments,
-  native bridge types, callback userdata, request pumps, or raw part loops.
+  native bridge types, completion-registry state, or raw part loops.
 - DTO/value/record/enum/result/exception types remain concrete.
 - Operation builders are public contracts and hide staged state.
 - Samples, perf, tests, and applications import only
   `systems.zlink.contracts.*`.
-- No direct constructors for native-backed resources remain as public
-  construction paths.
-- No compatibility wrappers, old aliases, or deprecated duplicate operation
-  names remain.
+- Native-backed resources have no direct public construction paths.
+- The public surface has no compatibility wrappers, earlier-name aliases, or deprecated duplicate
+  operation names.
 - Public contract package and file layout matches the category map in this
   document.
 
 ## Verification
 
-Run verification from `bindings/java/` after the refactor.
+Run verification from `bindings/java/`.
 
 Required baseline:
 
@@ -1115,3 +1013,146 @@ The first three searches must return no public-surface leaks. The last search
 may only return intentionally concrete value internals after review; it must
 not show public resource interfaces or operation contracts depending on native
 bridge details.
+
+## Pull completion public contract
+
+The Java package uses Core 0.16.0 as an exact dependency.
+
+The Java runtime drains native completions and converts them into blocking results or
+`CompletionStage`. `submit_sync()` uses Core `NONE`; `submit()` uses Core `DONTWAIT`. Kotlin uses this
+Java contract without creating an independent native ABI or token wrapper.
+
+Completion-backed state is registered in a provisional registry before native `FINAL`. A
+`CompletionStage` or blocking request completes exactly once after submit-outcome publication and
+completion capture have both finished. Stage cancellation ends only the caller wait and does not cancel
+the Core operation; a late completion releases the native payload.
+
+`PollEventFlags.POLLCOMPLETION` is a progress event indicating that the public poller's wait thread
+drained the native queue and fully processed at least one live stage or detached state. Under public
+poller ownership, using a blocking request requires another thread to continue executing the wait loop.
+
+Only ROUTER REQUEST receive creates a `ReplyToken`. During class initialization, it registers a private
+constructor method reference with non-exported `ContractAccess.ReplyTokenAccess`. Equality and hashing
+use both owner identity and an opaque value. `StreamPacket` is an empty reusable output. A token provides
+no raw accessor, ordering, serialization, or `AutoCloseable`. Concurrent recv into the same output is
+invalid-state. Message references remain valid only until the next recv entry or `close()`. Before the
+first bind/connect, the `recvMode` setter accepts only `RAW` and `PACKET` and rejects `UNSPECIFIED`.
+
+### Public interface
+
+```java
+public interface SendSubmitOperation {
+    SendSubmitOperation message(Message part);
+    CompletionStage<Void> submit();
+    void submit_sync();
+}
+
+public interface RequestSubmitOperation {
+    RequestSubmitOperation message(Message part);
+    RequestSubmitOperation timeout(Duration timeout);
+    CompletionStage<List<Message>> submit();
+    List<Message> submit_sync();
+}
+
+public final class ReplyToken {
+    private final Object owner;
+    private final long value;
+
+    private ReplyToken(Object owner, long value) {
+        this.owner = owner;
+        this.value = value;
+    }
+
+    @Override public boolean equals(Object other) {
+        return other instanceof ReplyToken token
+            && owner == token.owner && value == token.value;
+    }
+    @Override public int hashCode() {
+        return 31 * System.identityHashCode(owner) + Long.hashCode(value);
+    }
+    @Override public String toString() { return "ReplyToken"; }
+}
+
+public interface StreamSocket {
+    SendOperation send(RoutingId rid);
+    boolean recv(Received out, RecvFlags flags);
+    boolean recvPacket(StreamPacket out, RecvFlags flags);
+}
+
+public enum StreamRecvMode {
+    UNSPECIFIED,
+    RAW,
+    PACKET
+}
+
+public final class StreamSocketOptions {
+    public StreamRecvMode recvMode();
+    public void recvMode(StreamRecvMode mode);
+}
+
+public interface ReplySubmitOperation {
+    ReplySubmitOperation message(Message part);
+    void submit();
+}
+
+public final class StreamPacket implements AutoCloseable {
+    public StreamPacket();
+    public boolean isEmpty();
+    public Optional<RoutingId> routingId();
+    public Message header();
+    public Message body();
+    @Override public void close();
+}
+```
+
+The operation-start signatures are PAIR `SendOperation send()`, DEALER
+`SendOperation send()` and `RequestOperation request()`, ROUTER
+`SendOperation send(RoutingId)`, `RequestOperation request(RoutingId)`, and
+`ReplyOperation reply(RoutingId, ReplyToken)`, and STREAM `SendOperation send(RoutingId)`. A send
+factory captures the target in the builder. `Received.replyToken()` returns `Optional<ReplyToken>`.
+`Received.send()` returns a `SendOperation` that captures the source target, and `Received.reply()`
+returns a `ReplyOperation` that captures the source RID and token.
+
+The public Java/Kotlin surface contains no `AsyncSend*` or `RoutedSend*` operation type,
+`StreamSocket.sendAsync()`, send/request flags, request `BiConsumer` terminal, STREAM `onPacket`,
+monitor `onEvent` or ignore, timer `onFire`, or pair/generation member.
+
+Monitor provides `MonitorEvent recv()`, nullable `recv(RecvFlags)`, `MonitorStatus status()`, and
+`close()`. Timer provides `start(Duration, long)`, `stop()`, `long recv()`, and `close()`. Monitor
+DONTWAIT no-data is `null`; timer no-data is a typed receive exception. Monitor-event `connectionId` is
+used only for diagnostics and correlation, not as a send/reply target or reconnect fence. The internal
+native enum mirror uses only `ZLINK_OPT_PENDING_MAX_MSGS` and `ZLINK_OPT_PENDING_MAX_BYTES` and adds no
+public option method.
+
+## Implementation and contract-test verification requirements
+
+Verify the following using only the public Java interface, `CompletionStage`, exceptions, and poller
+events. Each item maps to one contract test.
+
+**Operations and completion**
+
+- PAIR, DEALER, ROUTER, and STREAM send factories return one `SendOperation` family.
+- Send/request expose only the flag-free async and synchronous terminals in the Public interface section
+  and retain request timeout.
+- Even when completion drains before submit returns, the stage completes exactly once after joining
+  submit publication.
+- After stage cancellation, a late completion does not complete the stage again and releases the native
+  payload.
+- A non-OK request completion exposes only a typed request exception and does not expose the error
+  payload.
+- `POLLCOMPLETION` returns only after stage settlement or detached cleanup finishes.
+
+**ReplyToken and STREAM**
+
+- Only ROUTER REQUEST receive returns a non-empty token, and only tokens with the same owner and value
+  have matching equality and hash.
+- Reply with a token owned by another socket fails before the native call.
+- `StreamPacket` holds a payload after success, is empty on no-data or error, and can be reused after
+  `close()`.
+
+**Pull eventing and Kotlin**
+
+- Monitor and timer recv return their specified no-data results, events, and fire counts without
+  callbacks.
+- Kotlin source uses the Java `ReplyToken`, operation terminals, and STREAM packet interface directly,
+  without another wrapper.

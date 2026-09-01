@@ -21,9 +21,8 @@ runtime implementation classes, tests, samples, the perf runner, and
 package behavior all follow this blueprint and map `core/include/zlink.h`'s
 stable features onto a .NET-appropriate API.
 
-This README describes the finished .NET binding shape — it is not a
-temporary target draft. It also serves as the baseline guide for aligning
-other wrapper binding documents to the same architecture map. Even when
+This README describes the .NET binding shape and serves as the baseline guide for aligning
+other binding documents to the same architecture map. Even when
 another binding uses its own language-specific naming, the contract/
 runtime ownership, public contract categories, file-splitting criteria,
 and verification intent described here still apply.
@@ -42,7 +41,7 @@ user-facing behavior should never be discovered first in a runtime file.
 |---|---|
 | [Public contract source](#public-contract-source) | Namespace, contract/runtime source locations, the API reference link |
 | [Repository layout](#repository-layout) | The aligned directory tree and folder ownership boundary |
-| [API change workflow](#api-change-workflow) | The procedure for new mappings/refactors, and the shortcuts that must be removed |
+| [API change principles](#api-change-principles) | Public mapping and contract/runtime boundary requirements |
 | [Library shape](#library-shape) | Interface/concrete-type classification, builders, `IDisposable`, RoutingId helpers |
 | [Contract / Runtime placement rules](#contract--runtime-placement-rules) | The boundary between public declarations and runtime implementation |
 | [Standard interface rules](#standard-interface-rules) | recv signatures, builder start methods, naming constraints |
@@ -163,9 +162,9 @@ must be hidden inside the .NET binding. Another binding may use different
 names for these support areas, but never moves that detail into a public
 contract file.
 
-## API change workflow
+## API change principles
 
-When mapping a new core feature:
+The public projection of a Core capability follows these principles:
 
 1. Add the user-facing behavior to the appropriate `Contracts/` category.
 2. Use a concrete DTO/value/record type unless the caller needs substitutable behavior.
@@ -175,22 +174,21 @@ When mapping a new core feature:
 6. Update samples and perf only through the public contract and public factories.
 7. Confirm a framework adapter does not reach the binding's private members via reflection or `InternalsVisibleTo`.
 
-When refactoring existing .NET code:
+The contract/runtime boundary meets these requirements:
 
 1. Move user-facing declarations to their matching `Contracts/` category.
 2. Move the native-backed implementation, handle ownership, request progress, marshalling, and option validation to `Runtime/`.
 3. Keep P/Invoke declarations and native struct mirrors in `Runtime/Native/`.
-4. Remove a duplicate public entry point that preserves only an old shape without reducing the caller's complexity.
+4. A duplicate public entry point that exists only for compatibility is not part of the contract.
 5. Update samples, perf, and framework adapters only through the public contract and documented creation entry points.
 6. Add or update tests through the public `Systems.Zlink` surface.
 
-The refactor is considered complete once all of the following
-.NET-specific shortcuts are gone.
+The following .NET-specific shortcuts are not allowed.
 
 - The public contract never mentions P/Invoke, `SafeHandle`, a native struct, a raw option id, callback userdata, request pump state, or a part-loop helper.
 - A runtime class never introduces public behavior that can't be found in `Contracts/`.
 - Framework adapters, samples, perf, and tests never use reflection, `NonPublic` lookup, or a private runtime shortcut.
-- A compatibility wrapper is never kept only to preserve an old public shape.
+- A compatibility-only wrapper is not part of the public shape.
 
 ## Library shape
 
@@ -217,8 +215,8 @@ follow is defined by the following .NET types.
 - Core resource: `IContext`.
 - Socket resource roles: `ISocket`, `IMessageSocket`, the routed socket contract, the pub/sub socket contract, and the pair/dealer/router/pub/sub/xpub/xsub/stream socket-family interfaces. A family interface exists only when that family has native-backed behavior.
 - Eventing resource roles: the monitor socket contract, `IPoller`, the poll event source contract, `IZlinkTimer`. `ISpotNode`, `ISpot`, and, when an Actor handle is exposed, `IActor` or an equivalent actor resource contract.
-- Operation builder roles: send, routed send, request, reply, publish, channel send/request, SPOT send/request/reply, actor create, actor join, actor join reply operations.
-- Callback roles: stream packet handler, monitor handler, poll handler, SPOT dispatch handler, route handler, admission handler, reply callback.
+- Operation builder roles: send, request, reply, publish, channel send/request, SPOT send/request/reply, actor create, actor join, actor join reply operations.
+- Handler roles: SPOT dispatch handler, route handler, and admission handler.
 
 ### RoutingId string and binary helpers
 
@@ -259,10 +257,9 @@ behavior are defined only by the immutable byte value.
   (`Result == Backpressured`), and the retry policy belongs to the application.
   `TryPublish(topic)` is the separate surface that observes the same
   back-pressure as `false` instead of an exception.
-- There is no public `OnSendReady`. An HWM-managed asynchronous send completes
-  the Task returned by `Async(...)` from Core send completion.
-- A builder's start method takes only a target identity, topic, channel, routing id, or request sequence. Payload, flag, timeout, callback, and async submit choices are handled at the builder stage.
-- A reply builder has no send-flag stage. Since the core reply function takes no send-flag argument, the .NET binding does not expose a no-op `Flags(...)` as part of the public contract.
+- A builder's start method takes only a target identity, topic, channel, routing id, or `ReplyToken`.
+  Payload, request timeout, and terminal choice are handled at the builder stage.
+- A reply builder collects its payload and ends with `Submit()`.
 - The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
   `ReplySubmitOperation.Submit() -> void`. It submits a terminal reply or error
   reply to the HWM-free completion lane with one native call. HWM backpressure
@@ -277,80 +274,16 @@ behavior are defined only by the immutable byte value.
   variants. An awaitable terminal on an HWM-managed DEALER/ROUTER routed
   send/request builder is unified as `Async(...)`.
 
-### HWM-managed send sync(+flags)/async terminals
+### Send and request terminals
 
-- `IDealerSocket.Send()` and `IRouterSocket.Send(RoutingId)` return
-  `RoutedSendOperation`. `RoutedSendSubmitOperation` provides both the sync
-  `void Submit(SendFlags)` terminal and the async
-  `Task Async(CancellationToken)` terminal. `SendFlags.None` waits inside Core
-  for admission; `SendFlags.DontWait` immediately throws
-  `ZlinkSubmitException` (`Result == Backpressured`) when HWM is full. PAIR send
-  and `Received.Send()` provide the same terminal pair.
-- The `RequestSubmitOperation` returned from `IDealerSocket.Request()` or
-  `IRouterSocket.Request(RoutingId)` provides three completion surfaces.
-  `Submit(SendFlags)` waits synchronously for admission and reply and returns
-  the reply directly. `Submit(SendFlags, callback)` returns as soon as the
-  admission result is known and delivers the reply through the callback.
-  `Async(CancellationToken)` returns an awaitable `Task`. Request submission
-  passes through the same HWM admission as send, and both synchronous terminals
-  use `SendFlags.None`/`SendFlags.DontWait` to select admission waiting.
-- Multipart payloads accumulate through repeated `Message(...)` calls or
-  `Messages(...)`, followed by one `Async(...)`. `Async(...)` transfers payload
-  ownership to the operation and returns a Task without blocking the caller
-  thread.
-- The initially selected target remains fixed until the operation terminates.
-  HWM waiting never reroutes the operation to another target.
-- While HWM credit is unavailable, the operation occupies neither the caller
-  thread nor a worker thread, and it holds no socket-wide lock that prevents
-  another send from progressing.
-- HWM waiting on one target does not delay admission for another target. This
-  independence is not a public strict-FIFO guarantee for a routing id.
-- Request passes builder `Timeout(...)` to Core as the per-request deadline, and
-  Core reports expiry as `ZLINK_REQUEST_TIMED_OUT`. The routed send admission
-  deadline is the Core-side per-operation option. Cancellation, close,
-  disconnect, target loss, timeout, and a fast reply may race, but only one Task
-  terminal wins.
-- Cancellation completes the Task as canceled, so awaiting it throws
-  `OperationCanceledException`. If routed send is not admitted by the Core
-  deadline, it faults with `ZlinkSubmitException`
-  (`Result == Backpressured`); if request does not finish by `Timeout(...)`, it
-  faults with `ZlinkRequestException` (`Result == TimedOut`).
-- Not awaiting the returned Task, or discarding its reference, does not cancel
-  the operation. Payload ownership and terminal cleanup remain with the
-  operation until one of the preceding terminal conditions completes it.
-- The public contract has no separate queue capacity or queue-full result and
-  requires no Framework retry or polling.
-- PAIR, STREAM, DEALER/ROUTER routed send, and `Received.Send()` all follow the
-  same HWM-managed send terminal pair. The sync terminal passes flags to native
-  `zlink_send_part(_rid)`; the async terminal follows `zlink_send_async`
+- Every socket's send factory returns a `SendOperation` that captures the target.
+- Send `Submit()` uses Core `NONE` admission, and `Async(CancellationToken)` uses Core `DONTWAIT`
   completion.
-- Core's send-completion notification drives pending routed send completion. The socket
-  runtime installs `zlink_send_complete_handler` once, on the first `Async(...)`,
-  and every operation then hands one complete record to `zlink_send_async`. The
-  binding owns no park queue, no readiness retry pump, no deadline timer and no
-  dispatcher thread. There is no public send-ready callback.
-- The completion callback only delivers completion. It never calls send,
-  publish, or request on any socket; Core refuses such a call with `EDEADLK`.
-- The completion delegate instance handed to Core must outlive the socket. The
-  runtime roots it through both a field and an explicit `GCHandle`, and releases
-  it only after the native socket is closed. Collecting it early would leave
-  Core calling a freed reverse-P/Invoke stub.
-- Operation state is kept alive by the `GCHandle` that travels through Core as
-  the operation `userdata`; a pending operation's exactly-once completion frees that handle. A
-  submit that is not `SUBMIT_OK` runs no completion, so payload ownership
-  returns to the caller immediately.
-- Immediate admission returns `SUBMIT_OK` with operation id zero and no
-  callback. The binding releases the `GCHandle` and returns a completed Task,
-  so the caller never suspends on that path.
-- `CancellationToken` maps to `zlink_send_async_cancel`. A cancelled operation
-  still completes exactly once (`TERMINAL` / `ECANCELED`), and an operation
-  whose admission is already committed is not cancelled and completes as
-  `ADMITTED`.
-- The per-operation deadline is a Core-side option
-  (`zlink_send_async_options_t.timeout_ms`). The binding owns no deadline timer.
-- PUB/XPUB `publish` is not part of this surface: Core's `zlink_send_async`
-  returns `ENOTSUP` for PUB/XPUB, and the publish terminal is the synchronous
-  `Submit()`.
+- Request `Submit()` and `Async(CancellationToken)` wait through reply, timeout, or typed error. The
+  builder's `Timeout(...)` sets the Core request timeout.
+- `CancellationToken` represents either rejection before the native call or caller-wait cancellation
+  after successful submit. Runtime drain releases the payload and provisional state on late completion.
+- Publish retains synchronous `Submit()` on a separate operation.
 
 ## Contract folder layout
 
@@ -466,9 +399,8 @@ allocation-free draining.
   `Dispose()`, `ReleaseForReuse()`, and storage reuse do not participate in Core
   HWM accounting.
 - No separate retained receive, lease handle, or application byte capacity
-  exists in a public or internal API. Ordinary receive preserves the Dealer
-  message type and request sequence, Router source RID and request sequence,
-  and SUB topic and source RID.
+  exists in a public or internal API. Ordinary receive preserves the Router source RID and nullable
+  `ReplyToken`, and the SUB topic and source RID.
 - `false` means no data only for a non-blocking receive using `RecvFlags.DontWait`.
 - A real receive failure (one that is not simply no-data) throws `ZlinkRecvException`.
 - A control-plane API such as monitor recv or timer recv may keep a nullable return form when no-data is a natural value shape.
@@ -495,7 +427,7 @@ SPOT is a service-layer API — it is never a leak of the raw socket.
 - The public type is `ulong`, which does not shrink Core's `uint64_t` range.
 - `0` means unlimited, and the manual default is `4_096_000 bytes`.
 - The binding calls Core with an exact 8-byte value.
-- No previous `int` overload, alias, or count-unit adapter is provided.
+- The public surface provides no `int` overload, alias, or count-unit adapter.
 
 ```csharp
 public interface IContextOptions
@@ -579,8 +511,8 @@ The observation surface follows the C contract, so the constant and metric
 names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
 `SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
 with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
-`FLOW_STATE_STALE_GENERATION` (`1 << 2`), and `FLOW_STATE_STALE_EPOCH`
-(`1 << 3`), the status detail bit `FLOW_STATE` (`1 << 5`), and the five status
+and `FLOW_STATE_STALE_EPOCH` (`1 << 3`), the status detail bit `FLOW_STATE`
+(`1 << 5`), and the five status
 fields `flow_paused_connections`, `flow_pause_applied_total`,
 `flow_resume_applied_total`, `flow_state_stale_total`, and
 `flow_pause_duration_ms`, projected with this language's naming convention.
@@ -623,7 +555,7 @@ Before declaring the .NET binding aligned:
 - `Contracts/`'s public signatures never expose `Runtime/Native/`, a raw handle, a native struct mirror, a request-progress type, or a runtime implementation class. An internal delegation from a static facade to runtime code is allowed.
 - A runtime class never becomes a second contract surface.
 - A framework adapter calls the public binding API directly.
-- No old alias, duplicate operation-start name, or deprecated wrapper preserved only for compatibility remains.
+- The public surface has no compatibility-only alias, duplicate operation-start name, or deprecated wrapper.
 
 Required verification after a .NET binding change. Run the following
 commands from `bindings/dotnet/`.
@@ -647,3 +579,148 @@ commands from `bindings/dotnet/`.
 - `SendToActor`, once submit succeeds, transfers ownership of one or more message parts, and completes once the Actor owner's mailbox takes them over.
 - `RequestToActor`, once submit succeeds, transfers ownership of the request part and delivers the reply part the Actor handler produced, as a task or a callback.
 - The binding must not resurrect the removed Discovery route table or resolver API as a compatibility helper.
+
+## Pull completion public contract
+
+The .NET package uses Core 0.16.0 as an exact dependency.
+
+The .NET runtime drains native completions and converts them into blocking results or `Task`. `Submit()`
+uses Core `NONE`; `Async()` uses Core `DONTWAIT`. Completion-backed state is registered in a
+provisional registry before native `FINAL` and completes exactly once after submit publication and
+completion capture join. `CancellationToken` represents rejection before the native operation or Task
+wait cancellation after successful submit; it does not cancel the native operation.
+
+`PollEventFlags.PollCompletion` is a progress event indicating that the public poller's wait thread
+drained the native queue and fully processed at least one live Task or detached state. When a public
+poller owns the queue, using a blocking request requires another thread to continue executing the wait
+loop.
+
+`ReplyToken` is a sealed reference type created only by ROUTER REQUEST receive. It compares both owner
+object identity and an opaque value, and does not expose the raw value even as a string. `StreamPacket`
+is an empty reusable output created by a factory; `Dispose()` clears its payload for reuse. A token
+provides no numeric constructor, raw accessor, ordering, serialization, or `IDisposable`. Concurrent recv
+into the same output is invalid-state. Message references remain valid only until the next recv entry or
+`Dispose()`. Before the first bind/connect, the receive-mode setter accepts only `Raw` and `Packet` and
+rejects `Unspecified`.
+
+### Public interface
+
+```csharp
+public interface SendSubmitOperation
+{
+    SendSubmitOperation Message(Message message);
+    void Submit();
+    Task Async(CancellationToken cancellationToken = default);
+}
+
+public interface RequestSubmitOperation
+{
+    RequestSubmitOperation Message(Message message);
+    RequestSubmitOperation Timeout(TimeSpan timeout);
+    IReadOnlyList<Message> Submit();
+    Task<IReadOnlyList<Message>> Async(
+        CancellationToken cancellationToken = default);
+}
+
+public interface ReplySubmitOperation
+{
+    ReplySubmitOperation Message(Message message);
+    void Submit();
+}
+
+public sealed class ReplyToken : IEquatable<ReplyToken>
+{
+    private readonly object _owner;
+    private readonly ulong _value;
+
+    internal ReplyToken(object owner, ulong value)
+    {
+        _owner = owner;
+        _value = value;
+    }
+
+    public bool Equals(ReplyToken? other) => other is not null
+        && ReferenceEquals(_owner, other._owner) && _value == other._value;
+    public override bool Equals(object? obj) =>
+        obj is ReplyToken other && Equals(other);
+    public override int GetHashCode() =>
+        HashCode.Combine(
+            System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(_owner), _value);
+    public override string ToString() => nameof(ReplyToken);
+}
+
+public enum StreamReceiveMode
+{
+    Unspecified = 0,
+    Raw = 1,
+    Packet = 2
+}
+
+public sealed class StreamPacket : IDisposable
+{
+    private StreamPacket();
+    public static StreamPacket Create();
+    public bool IsEmpty { get; }
+    public RoutingId? RoutingId { get; }
+    public Message? Header { get; }
+    public Message? Body { get; }
+    public void Dispose();
+}
+
+public interface IStreamSocket
+{
+    SendOperation Send(RoutingId routingId);
+    bool Recv(Received result, RecvFlags flags = RecvFlags.None);
+    bool RecvPacket(StreamPacket result,
+                    RecvFlags flags = RecvFlags.None);
+}
+```
+
+The operation-start signatures are PAIR `SendOperation Send()`, DEALER
+`SendOperation Send()` and `RequestOperation Request()`, ROUTER
+`SendOperation Send(RoutingId)`, `RequestOperation Request(RoutingId)`, and
+`ReplyOperation Reply(RoutingId, ReplyToken)`, and STREAM `SendOperation Send(RoutingId)`. A send
+factory captures the target in the builder. `Received.ReplyToken` is nullable, and
+`StreamSocketOptions.ReceiveMode` can be set to only `Raw` or `Packet` before the first bind/connect.
+`Received.Send()` returns a `SendOperation` that captures the source target, and `Received.Reply()`
+returns a `ReplyOperation` that captures the source RID and token.
+
+The public .NET surface contains no send/request `Flags` or `Submit(SendFlags)`, request callback
+delegate/overload, `IStreamSocket.TrySend`, `IStreamSocket.RecvPart`, STREAM callback,
+`ISocketMonitor.OnEvent`, `IZlinkTimer.OnFire`, or pair/generation property or method.
+`RoutedSendOperation` and `RoutedSendSubmitOperation` are not public types.
+
+Monitor provides `MonitorEvent? Recv(RecvFlags = None)`, `MonitorStatus Status()`, and `Close()`. Timer
+provides `Start(TimeSpan, ulong)`, `Stop()`, `ulong? Recv(RecvFlags = None)`, and `Close()`. The Core
+`connection_id` projected into a monitor event is used only for diagnostics and correlation, not as a
+send/reply target or reconnect fence. The internal native enum mirror uses only
+`ZLINK_OPT_PENDING_MAX_MSGS` and `ZLINK_OPT_PENDING_MAX_BYTES` and adds no public option property.
+
+## Implementation and contract-test verification requirements
+
+Verify the following using only the public .NET interface, Tasks, exceptions, and poller events. Each
+item maps to one contract test.
+
+**Operations and completion**
+
+- Send and request factories return `SendOperation` and `RequestOperation` and expose only the terminal
+  signatures in the Public interface section.
+- Even when completion drains before submit returns, the Task completes exactly once after joining
+  submit publication.
+- When `CancellationToken` cancellation is decided first, only the Task is canceled; a late completion
+  does not complete the Task again and releases the native payload.
+- A non-OK request completion throws only the existing typed exception and does not expose the error
+  payload.
+- Public poller `PollCompletion` returns only after Task settlement or detached cleanup finishes.
+
+**ReplyToken and STREAM**
+
+- Tokens with the same owner and value are equal, while tokens with different owners are not. Reply
+  started with a token from another socket fails before the native call.
+- `StreamPacket.Create()` returns an empty output. A `false` result or error from `RecvPacket()` leaves
+  the output empty, and it can be reused after `Dispose()`.
+
+**Pull eventing**
+
+- Monitor and timer DONTWAIT no-data is `null`, and their pull methods expose events and fire counts
+  without handlers.

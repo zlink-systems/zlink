@@ -6,14 +6,14 @@ title: "Python 바인딩 공개 계약"
 [스펙 목록](../README.ko.md) | [이전: Node.js](../node/README.ko.md) | [다음: Go](../go/README.ko.md)
 <!-- bindings-nav:end -->
 
-# Python binding Core 0.13.1 공개 계약
+# Python binding Core 0.16.0 공개 계약
 
-> **이 장이 정의하는 것** — `zlink` Python package가 Core 0.13.1 raw messaging 위에 제공하는
+> **이 장이 정의하는 것** — `zlink` Python package가 Core 0.16.0 raw messaging 위에 제공하는
 > 공개 타입·소유권·오류 계약.
 
-- 이 문서는 `zlink` Python package가 제공하는 Core 0.13.1 raw messaging 계약을 정의한다.
-- 현재 구현과 공개 header에 없는 기능은 이 문서의 계약이 아니다.
-- Python 3.9 이상을 지원하며 package version은 `0.13.1`이다.
+- 이 문서는 `zlink` Python package가 제공하는 Core 0.16.0 raw messaging 계약을 정의한다.
+- 이 문서와 공개 header가 정의하지 않는 기능은 Python binding 계약이 아니다.
+- Python 3.9 이상을 지원하며 package version은 `0.16.0`이다.
 - 현재 native package target은 Linux x86_64이며, 다른 target은 별도 candidate payload와 clean consumer 검증 전까지 이 계약의 지원 범위가 아니다.
 
 | 절 | 다루는 내용 |
@@ -22,7 +22,6 @@ title: "Python 바인딩 공개 계약"
 | [Package 표면](#package-표면) | public factory와 private 영역 경계 |
 | [Byte HWM과 Auto-HWM](#byte-hwm과-auto-hwm) | Python `int`와 Core `uint64_t` byte HWM의 매핑 |
 | [소유권과 수명](#소유권과-수명) | native handle·message·Received의 소유·해제 규칙 |
-| [Callback 표면](#callback-표면) | 공개 callback 경로와 노출하지 않는 primitive |
 | [송수신과 no-data](#송수신과-no-data) | submit·no-data 표현과 native failure 전달 |
 | [Receive flow state](#receive-flow-state) | receive-flow 상태 타입, setter와 monitor 표면 |
 | [Error](#error) | `ZlinkError` 계열과 result 필드 |
@@ -106,90 +105,26 @@ oversize·blocked·aggregate flag, `budget_generation`과 `measurement_epoch`을
   metadata가 `Received`에 기록되고, `close()` 또는 context manager 종료 시 native parts를 해제한다.
 - `Received`의 `parts`가 제공하는 native view는 owner가 열린 동안만 유효하다. 다른 수명으로 넘겨야
   하면 `to_bytes()` 또는 `to_bytes_list()`로 값을 복사한다.
-- callback을 등록하면 callback과 필요한 Python 참조는 native callback 등록보다 먼저 해제되지 않는다.
-  callback 예외는 binding의 callback error policy에 따라 전달된다.
-
 Core byte HWM charge는 일반 `recv_into`와 `subscribe_into`가 payload를 dequeue할 때
-끝난다. `Received`와 `TopicMessage`는 native part, routing id, request sequence, topic과
+끝난다. `Received`와 `TopicMessage`는 native part, routing ID, reply token, topic과
 multipart framing의 Python 수명만 소유한다. `close()`, context manager 종료 또는 저장소
 재사용을 Core HWM accounting에 연결하지 않는다. 별도 retained receive, raw lease handle,
 application byte capacity, allowance 또는 중복 accounting 상태는 public이나 internal
 API에 두지 않는다.
 
-## Callback 표면
-
-Core FFI의 `zlink_recv_handler()`는 Python package가 직접 노출하지 않는 private 구현
-primitive다. Python의 공개 callback 표면은 STREAM packet의 `on_packet`,
-monitor event의 `on_event`로 고정한다. Raw receive나
-routed request completion callback을 등록하는 별도 public method는 제공하지 않는다.
-공개 `on_send_ready`는 없다. HWM-managed send 완료는 `submit()`이 이미 반환하는 awaitable로 전달된다
-(Core `zlink_send_complete_handler` 통지), 별도 readiness callback으로 전달되지 않는다.
-
 ## 송수신과 no-data
 
-바인딩은 이 표면 전체에서 스레드, 대기열, 재시도를 하나도 소유하지 않는다
-(`bindings/doc/spec/async-coroutine-policy.ko.md`).
-
-- PUB·STREAM 송신과 ROUTER reply 같은 unrelated 동기 builder는 message part를 추가한 뒤
-  `submit()`한다. Raw ROUTER/`Received` reply의 `submit()`은 `None`을 반환하는 동기
-  one-shot이며 terminal reply 또는 error reply를 HWM 없는 completion lane에 native 호출
-  한 번으로 제출한다. HWM backpressure는 reply 결과가 아니며 `NOT_CONNECTED`,
-  `TERMINATED`, `INVALID_ARGUMENT`와 그 밖의 non-HWM submit 실패는 즉시 `SubmitError`로
-  발생시킨다. `publish()`(PUB/XPUB)도 동기 전용이다 — 기본 PUB semantics는 lossy이므로
-  (가득 찬 subscriber queue는 그 subscriber의 copy를 조용히 drop하고 publisher는 절대
-  대기하지 않는다) `ZLINK_PUB_OPT_NODROP`은 즉시 `SubmitError`/`BACKPRESSURED`를
-  표면화하며, Core의 `zlink_send_async`는 PUB/XPUB에서 `ENOTSUP`을 반환하므로 publish
-  awaitable은 없다.
-- HWM-managed send — PAIR `send()`와 DEALER/ROUTER routed `send()` — 와 `request()`는
-  둘 다 Core HWM admission queue를 지날 수 있으므로 ASYNC다. Send builder에는 async
-  `submit()`과 sync `submit_sync(*, flags=0) -> None` 종결자가 있다. Request
-  builder는 세 완료 표면을 제공한다. `submit_sync(*, flags)`는 admission과 reply를
-  동기 대기해 reply를 직접 반환하고, `submit_sync(*, flags, callback)`은 admission
-  결과가 결정되면 즉시 반환한 뒤 reply를 callback으로 전달하며, `submit()`은 await
-  가능한 coroutine object를 반환한다. Request 제출도 send와 같은 HWM admission을
-  지나며 sync flag의 `NONE`/`DONT_WAIT`가 admission 대기 여부를 정한다. Async send는
-  `await pair.send().message(message).submit()`,
-  `await dealer.send().message(message).submit()`,
-  `reply = await dealer.request().message(request).submit()`처럼 사용하며, `submit()`은
-  await 가능한 coroutine object를 즉시 반환한다. 이 메서드는 반환 전에 native blocking
-  submit을 실행하지 않는다.
-  - **send**는 complete record 전체를 `zlink_send_async(socket, parts, count, options,
-    &op_id)` 한 번으로 Core에 넘긴다(`core/include/zlink/socket/api.h`). 완료는
-    정확히 한 번이며 socket 생성 시 설치하는 단일 `zlink_send_complete_handler`가
-    구동한다. Core가 즉시 admit하면 callback은 inline으로 실행되어 awaitable이 이미
-    resolve된 상태이므로 awaiter는 suspend하지 않는다. 그 외에는 Core의 async mailbox
-    thread, timeout 시 Core의 deadline thread, close 중에는 closing thread에서 실행될
-    수 있다. Binding은 completion을 awaitable에 연결할 때 Core가 할당하는 `op_id`가
-    아니라 `zlink_send_async_options_t.userdata`로 전달하는 opaque token을 사용한다 —
-    `op_id`는 호출이 반환된 뒤에만 알 수 있어 inline completion에는 너무 늦게 도착할 수
-    있기 때문이다. 별도 Python timer는 없다: deadline은 Core-side
-    `zlink_send_async_options_t.timeout_ms` 필드다(`_runtime/eventing/timer.py`가 이미
-    Core-owned timing에 쓰는 것과 같은 패턴). Awaitable cancellation은
-    `zlink_send_async_cancel`로 매핑한다.
-  - **request**는 Core의 routed request entry point
-    (`zlink_dealer_request_transport_pair_part` /
-    `zlink_router_request_transport_pair_part`)로 한 번만 submit하고, 완료는 순수하게
-    Core의 reply callback이 구동한다 — admission ticket도, completion을 구동하는
-    binding-owned polling thread도 없다. Core가 즉시 admit할 수 없는 submit(예:
-    `BACKPRESSURED`)은 binding이 큐에 넣고 재시도하는 대신 즉시 `SubmitError`를
-    발생시킨다. reply timeout은 Core 자신의 `ZLINK_REQUEST_TIMED_OUT` deadline이다.
-    ROUTER는 submit 전에 `zlink_select_routed_submit_target`으로 정확한 transport-pair
-    target을 선택하고, DEALER는 Core가 submit 시점에 하나를 직접 선택하게 한다.
-  - Coroutine cancellation은 pending operation을 정확히 한 번 종료한다. 한 target의
-    send나 request 대기는 다른 target의 submit도 Python event loop도 막지 않는다 —
-    admission 순서는 Python 쪽 대기가 아니라 Core 자신의 target별 queue가 정한다.
-    Sync `submit_sync(*, flags=0)`은 `zlink_send_part(_rid)`를 호출한다. Flag가
-    없거나 `SendFlags.NONE`이면 Core 안에서 admit까지 blocking하고,
-    `SendFlags.DONT_WAIT`이면 backpressure를 즉시 `SubmitError`로 전달한다. Callback이나
-    `submit_async()` compatibility terminal은 제공하지 않는다.
+- Send·request builder의 완료 경계, provisional registry와 cancellation은
+  [비동기 완료 표면 정책](../async-coroutine-policy.ko.md)을 따른다.
+- Reply와 publish는 synchronous `submit()`으로 끝난다. Publish flags는 별도 `PublishOp`만
+  제공한다.
 - `RecvFlags.DONT_WAIT`를 사용한 caller-provided receive는 message가 없을 때 `False`를 반환한다.
 - timer, monitor와 같은 직접 반환 control API는 pending value가 없을 때 `None`을 반환한다.
 - 실제 native failure는 해당 error type으로 전달하며 no-data로 숨기지 않는다.
 
-DEALER와 ROUTER request/reply는 Core routing metadata와 request sequence를 보존한다. ROUTER receive의
-`Received.routing_id`는 raw routing id이며 다른 identity type으로 변환되지 않는다.
+DEALER와 ROUTER request/reply는 Core routing metadata와 `ReplyToken`을 보존한다. ROUTER receive의
+`Received.routing_id`는 routing ID이며 다른 identity type으로 변환되지 않는다.
 현재 single-part accessor 이름은 구현·contract test와 같은 `single_part_or_throw()`를 사용한다.
-이름 변경은 별도 draft 승인 뒤에만 수행한다.
 
 ## Receive flow state
 
@@ -203,7 +138,7 @@ errno를 담은 `ConfigError`를 발생시키므로, completion lane이 없는 s
 관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
 `SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
 `1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
-`FLOW_STATE_STALE_GENERATION`(`1 << 2`), `FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
+`FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
 bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
 `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
 `flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
@@ -229,3 +164,156 @@ Core result를 반환하는 호출은 Python의 대응 error에 `result`, `code`
 - 사용 방법은 [Python guide](../../guide/python/index.ko.md)를 따른다.
 - Core 함수와 layout의 기준은 repository의 `core/include/zlink.h`와 Core spec이다.
 - 구현 상세와 callback/native lifetime 설명은 이 문서가 아니라 internals 문서의 대상이다.
+
+## Pull completion 공개 계약
+
+Python package는 Core 0.16.0을 exact dependency로 사용한다.
+
+Python runtime은 native completion을 drain해 blocking result 또는 awaitable로 바꾼다.
+`submit_sync()`는 Core `NONE`, `submit()`은 Core `DONTWAIT`를 사용한다. Completion-backed state는
+native `FINAL` 전에 provisional registry에 등록하고 submit publish와 completion capture가 합류한
+뒤 정확히 한 번 끝낸다. Awaitable cancellation은 Core operation을 취소하지 않고 caller wait만
+끝내며 late completion은 payload와 state를 정리한다.
+
+`PollEventFlag.POLLCOMPLETION`은 public poller의 wait thread가 native queue를 비우고 live awaitable
+또는 detached state를 한 건 이상 완전 처리했다는 progress event다. Public poller owner에서
+blocking request를 사용하면 다른 thread가 wait loop를 계속 실행해야 한다.
+
+`ReplyToken`은 module-private `_reply_token_from_native`만 만들며 public construction과
+serialization을 거부한다. Factory는 `object.__new__(ReplyToken)`과 `object.__setattr__`로
+private `_owner`·`_value`를 채운다. Equality와 hash는 owner identity와 opaque value를 함께 사용한다.
+`StreamPacket`은 empty reusable output이다. Publish는 send와 별도 `PublishOp`에서 기존 flags와
+synchronous submit 의미를 유지한다.
+Token은 raw property, `int()` conversion, ordering과 `close()`를 제공하지 않는다.
+같은 output의 concurrent recv는 invalid-state다. Message reference는 다음 recv 진입이나
+`close()` 전까지만 유효하다. `recv_mode` setter는 첫 bind/connect 전에 `RAW`·`PACKET`만 받고
+`UNSPECIFIED`를 거부한다.
+
+### Public interface
+
+```python
+class SendOp(Protocol):
+    def message(self, payload) -> "SendOp": ...
+    def messages(self, *payloads) -> "SendOp": ...
+    def submit(self) -> Awaitable[None]: ...
+    def submit_sync(self) -> None: ...
+
+class RequestOp(Protocol):
+    def message(self, payload) -> "RequestOp": ...
+    def messages(self, *payloads) -> "RequestOp": ...
+    def timeout(self, timeout) -> "RequestOp": ...
+    def submit(self) -> Awaitable[list[Message]]: ...
+    def submit_sync(self) -> list[Message]: ...
+
+class ReplyOp(Protocol):
+    def message(self, payload) -> "ReplyOp": ...
+    def messages(self, *payloads) -> "ReplyOp": ...
+    def submit(self) -> None: ...
+
+class PublishOp(Protocol):
+    def message(self, payload) -> "PublishOp": ...
+    def messages(self, *payloads) -> "PublishOp": ...
+    def flags(self, flags) -> "PublishOp": ...
+    def submit(self) -> None: ...
+
+@final
+class ReplyToken:
+    __slots__ = ("_owner", "_value")
+
+    def __new__(cls) -> NoReturn:
+        raise TypeError("ReplyToken is created by ROUTER request receive")
+
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+    def __repr__(self) -> str: return "ReplyToken()"
+    def __copy__(self) -> "ReplyToken": return self
+    def __deepcopy__(self, memo) -> "ReplyToken": return self
+    def __reduce_ex__(self, protocol):
+        raise TypeError("ReplyToken cannot be serialized")
+
+class StreamRecvMode(IntEnum):
+    UNSPECIFIED = 0
+    RAW = 1
+    PACKET = 2
+
+class StreamSocketOptions(Protocol):
+    @property
+    def recv_mode(self) -> StreamRecvMode: ...
+
+    @recv_mode.setter
+    def recv_mode(self, mode: StreamRecvMode) -> None: ...
+
+class StreamPacket:
+    routing_id: Optional[RoutingId]
+    header: Optional[Message]
+    body: Optional[Message]
+
+    def __init__(self) -> None: ...
+    @property
+    def is_empty(self) -> bool: ...
+    def close(self) -> None: ...
+    def __enter__(self) -> "StreamPacket": ...
+    def __exit__(self, exc_type, exc, tb) -> None: ...
+
+class Received:
+    routing_id: Optional[RoutingId]
+    reply_token: Optional[ReplyToken]
+
+class StreamSocket:
+    def send(self, routing_id: RoutingId) -> SendOp: ...
+    def recv_into(
+        self, out: Received, *, flags: RecvFlags = RecvFlags.NONE
+    ) -> bool: ...
+    def recv_packet_into(
+        self, out: StreamPacket, *, flags: RecvFlags = RecvFlags.NONE
+    ) -> bool: ...
+```
+
+Operation 시작 signature는 PAIR `send() -> SendOp`, DEALER `send() -> SendOp`·
+`request() -> RequestOp`, ROUTER `send(routing_id) -> SendOp`·
+`request(routing_id) -> RequestOp`·`reply(routing_id, token) -> ReplyOp`, STREAM
+`send(routing_id) -> SendOp`다. Send factory는 target을 builder에 capture한다. PUB·XPUB의
+`publish(topic)`은 `PublishOp`를 반환한다.
+`Received.send()`는 source target을 capture한 `SendOp`, `Received.reply()`는 source RID와 token을
+capture한 `ReplyOp`를 반환한다.
+
+Public Python surface에는 `RoutedSendOp`, `StreamSocket.send_async()`·`on_packet()`, request
+callback 인자, reply의 `_FlaggedFluentMessageOp`·flags, monitor `ignore_handler`·`on_event`, timer
+`on_fire`, pair/generation member가 없다.
+
+Monitor는 `recv(*, flags=RecvFlags.NONE) -> Optional[MonitorEvent]`·`status()`·`close()`를,
+timer는 `start(interval_ns:int, repeat_count:int)`·`stop()`·`recv() -> Optional[int]`·`close()`를
+제공한다.
+Monitor event의 `connection_id`는 진단과 correlation에만 사용하며 send·reply target이나
+reconnect fence로 사용하지 않는다.
+Internal FFI enum mirror는 `ZLINK_OPT_PENDING_MAX_MSGS`와
+`ZLINK_OPT_PENDING_MAX_BYTES`만 사용하며 public option property를 추가하지 않는다.
+
+## 구현 및 contract test 검증 요구
+
+Public Python protocol, result·exception과 poller event만으로 다음을 확인한다. 각 항목은 contract
+test 하나로 이어진다.
+
+**Operation과 완료**
+
+- Send/request는 §Public interface의 flag 없는 awaitable·sync terminal만 제공하고 request timeout은
+  유지한다.
+- `publish(topic)`은 별도 `PublishOp`를 반환하고 publish flags와 synchronous submit을 제공한다.
+- Submit 반환 전 completion이 drain돼도 awaitable은 submit publish와 합류한 뒤 정확히 한 번
+  끝난다.
+- Awaitable cancellation 뒤 late completion은 awaitable을 다시 끝내지 않고 native payload를
+  정리한다.
+- Non-OK request completion은 typed exception만 제공하고 error payload를 공개하지 않는다.
+- `POLLCOMPLETION`은 settle 또는 detached cleanup이 끝난 뒤에만 반환된다.
+
+**ReplyToken과 STREAM**
+
+- Public `ReplyToken()`과 pickle serialization은 실패하고 `copy.copy()`·`copy.deepcopy()`는 같은
+  immutable valid token을 반환한다.
+- 같은 owner·value token만 같으며 다른 owner token의 reply는 native 호출 전에 실패한다.
+- `recv_packet_into()`는 성공 뒤 output을 채우고 no-data·오류 때 empty로 유지하며 `close()` 뒤
+  재사용할 수 있다.
+
+**Pull eventing**
+
+- Monitor·timer recv는 no-data를 `None`으로 반환하고 callback 없이 event와 fire count를 관찰한다.

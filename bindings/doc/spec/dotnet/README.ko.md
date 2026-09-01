@@ -19,9 +19,8 @@ title: ".NET 바인딩 구현 청사진"
 청사진을 따르고 `core/include/zlink.h`의 안정 기능들을 .NET에 맞는 API로
 사상할 때 .NET 구현은 정렬되었다고 본다.
 
-이 README는 완성된 .NET 바인딩 형태를 기술하며, 일시적 목표 초안이 아니다.
-또한 다른 래퍼 바인딩 문서들을 동일한 아키텍처 맵에 정렬시키는 기준 가이드
-역할도 한다. 다른 바인딩이 언어별 명명을 사용하더라도 여기서 설명한
+이 README는 .NET 바인딩 형태를 기술하며 다른 binding 문서가 같은 architecture map을
+사용하도록 하는 기준 역할도 한다. 다른 바인딩이 언어별 명명을 사용하더라도 여기서 설명한
 contract/runtime 소유, 공개 계약 카테고리, 파일 분할 기준, 검증 의도는 그대로
 유지한다.
 
@@ -164,9 +163,9 @@ bindings/dotnet/
 지원 영역들에 다른 이름을 쓸 수 있지만, 그 세부 내용을 공개 계약 파일로
 옮기지 않는다.
 
-## API 변경 워크플로
+## API 변경 원칙
 
-새 코어 기능을 사상할 때:
+Core 기능의 공개 사상은 다음 원칙을 따른다.
 
 1. 사용자 노출 동작을 알맞은 `Contracts/` 카테고리에 추가한다.
 2. 호출자가 대체 가능한 동작을 필요로 하지 않는 한 구체 DTO/value/record
@@ -178,7 +177,7 @@ bindings/dotnet/
 7. 프레임워크 어댑터가 reflection이나 `InternalsVisibleTo`로 바인딩의
    private 멤버에 접근하지 않는지 확인한다.
 
-기존 .NET 코드를 리팩터링할 때:
+Contract/runtime 경계는 다음 요구를 만족한다.
 
 1. 사용자 노출 선언은 대응되는 `Contracts/` 카테고리로 옮긴다.
 2. 네이티브 기반 구현, 핸들 ownership, request 진행, 마샬링, 옵션 검증은
@@ -190,7 +189,7 @@ bindings/dotnet/
    갱신한다.
 6. 공개 `Systems.Zlink` 표면을 통해 테스트를 추가하거나 갱신한다.
 
-아래 .NET 고유 단축 경로가 모두 사라졌을 때 리팩터링이 완료된 것으로 본다.
+다음 .NET 고유 단축 경로는 허용하지 않는다.
 
 - 공개 계약은 P/Invoke, `SafeHandle`, 네이티브 struct, raw 옵션 id, 콜백
   userdata, request 펌프 상태, part 루프 헬퍼를 언급하지 않는다.
@@ -243,11 +242,10 @@ bindings/dotnet/
   계약, `IZlinkTimer`.
   `ISpotNode`, `ISpot`, 그리고 Actor handle이 노출될 때의 `IActor` 또는
   동등한 actor 리소스 계약.
-- Operation builder 역할: send, routed send, request, reply, publish,
+- Operation builder 역할: send, request, reply, publish,
   channel send/request, SPOT send/request/reply, actor create, actor join,
   actor join reply operation.
-- Callback 역할: stream packet handler, monitor handler, poll handler,
-  SPOT dispatch handler, route handler, admission handler, reply callback.
+- Handler 역할: SPOT dispatch handler, route handler와 admission handler.
 
 ### RoutingId 문자열 및 바이너리 헬퍼
 
@@ -300,14 +298,10 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
   `ZlinkSubmitException`(`Result == Backpressured`)으로 표면화되고, 재시도
   정책은 어플리케이션이 소유한다. `TryPublish(topic)`는 같은 backpressure를
   예외 없이 `false`로 관찰하는 별도 표면이다.
-- 공개 `OnSendReady`는 없다. HWM-managed 비동기 send는 `Async(...)`가 반환한
-  Task를 Core send completion으로 완료한다.
 - builder의 시작 메서드는 target identity, topic, channel, routing id,
-  request 시퀀스만 받는다. payload, flag, timeout, callback, 비동기 submit
-  선택은 builder 단계에서 처리한다.
-- reply builder는 send flag 단계를 갖지 않는다. core reply 함수는 send flag
-  인자를 받지 않으므로, .NET binding은 no-op `Flags(...)`를 public 계약으로
-  노출하지 않는다.
+  `ReplyToken`만 받는다. Payload, request timeout과 terminal 선택은 builder
+  단계에서 처리한다.
+- Reply builder는 payload를 모은 뒤 `Submit()`으로 끝난다.
 - Raw ROUTER/`Received` reply의 terminal은
   `ReplySubmitOperation.Submit() -> void`인 동기 one-shot이다. Terminal reply와 error
   reply를 HWM 없는 completion lane에 native 호출 한 번으로 제출한다. HWM backpressure는
@@ -335,75 +329,16 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
   builder가 흡수한다. HWM-managed DEALER/ROUTER routed send/request의 awaitable
   terminal builder 메서드는 `Async(...)`로 통일한다.
 
-### HWM-managed send의 sync(+flags)/async terminal
+### Send·request terminal
 
-- `IDealerSocket.Send()`와 `IRouterSocket.Send(RoutingId)`는
-  `RoutedSendOperation`을 반환한다. `RoutedSendSubmitOperation`은 sync
-  `void Submit(SendFlags)`와 async `Task Async(CancellationToken)` terminal을
-  함께 제공한다. `SendFlags.None`은 Core 안에서 admission까지 기다리고,
-  `SendFlags.DontWait`는 HWM이 가득 차면 즉시 `ZlinkSubmitException`
-  (`Result == Backpressured`)을 발생시킨다. PAIR send와 `Received.Send()`도
-  같은 두 terminal을 제공한다.
-- `IDealerSocket.Request()`와 `IRouterSocket.Request(RoutingId)`의
-  `RequestSubmitOperation`은 세 완료 표면을 제공한다. `Submit(SendFlags)`는
-  admission과 reply를 동기 대기해 reply를 직접 반환한다.
-  `Submit(SendFlags, callback)`은 admission 결과가 결정되면 즉시 반환하고 reply는
-  callback으로 전달한다. `Async(CancellationToken)`은 await 가능한 `Task`를 반환한다.
-  request 제출도 send와 같은 HWM admission을 지나며 두 sync terminal은
-  `SendFlags.None`/`SendFlags.DontWait`로 admission 대기 여부를 정한다.
-- multipart는 반복 `Message(...)` 또는 `Messages(...)`로 누적하고 마지막에
-  한 번 `Async(...)`를 호출한다. `Async(...)`는 payload ownership을 operation으로
-  옮기고, 호출자 thread를 blocking하지 않은 채 Task를 반환한다.
-- 처음 선택된 target은 operation이 끝날 때까지 유지되며, HWM 대기 중 다른
-  target으로 reroute하지 않는다.
-- HWM credit을 기다리는 동안 호출자 thread나 worker thread를 점유하지 않으며,
-  같은 socket의 다른 send를 막는 socket-wide lock도 점유하지 않는다.
-- 한 target의 HWM 대기는 다른 target의 admission을 지연시키지 않는다. 이
-  독립성은 특정 routing id에 대한 공개 strict-FIFO 보장을 뜻하지 않는다.
-- request는 builder `Timeout(...)`을 Core의 per-request deadline으로 넘기며,
-  만료는 Core가 `ZLINK_REQUEST_TIMED_OUT`으로 통지한다. routed send의
-  admission deadline은 Core-side per-operation 옵션이다. cancellation, close,
-  disconnect, target 연결 종료, timeout, 빠른 reply가 경합해도 Task terminal은
-  한 번만 결정된다.
-- `CancellationToken`이 취소되면 Task는 취소 상태로 끝나며 await는
-  `OperationCanceledException`을 발생시킨다. Routed send가 Core deadline까지
-  admission되지 않으면 `ZlinkSubmitException`(`Result == Backpressured`)으로,
-  request가 `Timeout(...)`까지 끝나지 않으면
-  `ZlinkRequestException`(`Result == TimedOut`)으로 끝난다.
-- 호출자가 반환된 Task를 await하지 않거나 참조를 보관하지 않아도 operation 자체는
-  취소되지 않는다. payload ownership과 terminal 정리는 위 조건 중 하나로
-  operation이 끝날 때까지 유지된다.
-- 공개 계약에는 별도 queue capacity나 queue-full 결과가 없으며,
-  Framework retry/polling을 요구하지 않는다.
-- PAIR, STREAM, DEALER/ROUTER routed send와 `Received.Send()`는 모두 같은
-  HWM-managed send terminal 짝을 따른다. sync terminal은 native
-  `zlink_send_part(_rid)`에 flag를 넘기고 async terminal은
-  `zlink_send_async` 완료 통지를 따른다.
-- routed send의 pending 완료는 Core send-completion 통지가 구동한다. socket runtime은 첫
-  `Async(...)` 시점에 `zlink_send_complete_handler`를 한 번 등록하고, 이후 모든
-  operation은 complete record 하나를 `zlink_send_async`로 넘긴다. 바인딩은 park
-  queue, readiness 재시도 pump, deadline timer, dispatcher thread를 두지
-  않는다. 공개 send-ready callback은 없다.
-- 완료 콜백은 completion 전달만 한다. 콜백 안에서 어떤 socket의 send/publish/
-  request도 호출하지 않는다(Core는 그런 호출을 `EDEADLK`로 거부한다).
-- Core에 넘긴 완료 delegate 인스턴스는 socket 수명 동안 살아 있어야 한다.
-  runtime은 이를 필드와 명시적 `GCHandle` 두 경로로 뿌리내리고, native socket이
-  닫힌 뒤에만 해제한다. 수집되면 Core가 해제된 reverse-P/Invoke stub을 호출하게
-  된다.
-- operation 상태는 `zlink_send_async`의 `userdata`로 전달되는 `GCHandle`이
-  살려 둔다. nonzero operation id를 받은 pending은 정확히 한 번 도착하는 완료가
-  그 handle을 해제한다. `SUBMIT_OK`가 아니면 완료가 없으므로 payload ownership은
-  즉시 호출자에게 되돌아간다.
-- 즉시 admission은 `SUBMIT_OK`와 operation id `0`을 반환하고 callback을 실행하지
-  않는다. binding이 `GCHandle`을 해제하고 완료된 Task를 반환하므로 호출자는
-  suspend하지 않는다.
-- `CancellationToken`은 `zlink_send_async_cancel`로 매핑한다. 취소된 operation도
-  정확히 한 번 완료하며(`TERMINAL`/`ECANCELED`), 이미 admission이 확정된
-  operation은 취소되지 않고 `ADMITTED`로 완료한다.
-- per-operation deadline은 Core-side 옵션(`zlink_send_async_options_t.timeout_ms`)
-  이다. 바인딩은 자체 deadline timer를 두지 않는다.
-- PUB/XPUB의 `publish`는 이 표면에 포함되지 않는다. Core의 `zlink_send_async`는
-  PUB/XPUB에서 `ENOTSUP`을 반환하며, publish는 동기 `Submit()`이 terminal이다.
+- 모든 socket의 send factory는 target을 capture한 `SendOperation`을 반환한다.
+- Send의 `Submit()`은 Core `NONE` admission, `Async(CancellationToken)`은 Core `DONTWAIT`
+  completion을 사용한다.
+- Request의 `Submit()`과 `Async(CancellationToken)`은 reply·timeout·typed error까지 기다린다.
+  Builder의 `Timeout(...)`은 Core request timeout을 설정한다.
+- `CancellationToken`은 native 호출 전 차단 또는 successful submit 뒤 caller wait cancellation만
+  표현한다. Late completion은 runtime drain이 payload와 provisional state를 정리한다.
+- Publish는 별도 operation의 synchronous `Submit()`을 유지한다.
 
 ## Contract 폴더 레이아웃
 
@@ -542,8 +477,8 @@ object identity 기반 dictionary 조회를 포함해 다시 사용하면 안 �
   `TopicMessage`는 part와 metadata의 관리 객체 수명만 소유하며, `Dispose()`,
   `ReleaseForReuse()` 또는 같은 저장소 재사용을 Core HWM accounting에 연결하지 않는다.
 - 별도 retained receive, lease handle 또는 application byte capacity는 public이나
-  internal API에 두지 않는다. 일반 receive가 Dealer message type과 request sequence,
-  Router source RID와 request sequence, SUB topic과 source RID를 그대로 보존한다.
+  internal API에 두지 않는다. 일반 receive는 Router source RID와 nullable `ReplyToken`,
+  SUB topic과 source RID를 그대로 보존한다.
 - `false`는 `RecvFlags.DontWait`를 사용한 nonblocking receive에서만 데이터
   없음을 의미한다.
 - 실제 receive 실패(데이터 없음이 아닌 실패)는 `ZlinkRecvException`을 던진다.
@@ -661,7 +596,7 @@ lane이 없는 socket은 `ConfigResult.NotSupported`를 담은 `ZlinkConfigExcep
 관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
 `SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
 `1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
-`FLOW_STATE_STALE_GENERATION`(`1 << 2`), `FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
+`FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
 bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
 `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
 `flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
@@ -751,3 +686,147 @@ field를 읽을 뿐, flow-state frame을 직접 encode, decode, 송신 또는 �
 - `SendToActor`는 submit이 성공하면 하나 이상의 message part 소유권을 넘기고, Actor 소유자 mailbox가 인계를 받으면 완료된다.
 - `RequestToActor`는 submit이 성공하면 요청 part의 소유권을 넘기고, Actor handler가 만든 reply part를 task 또는 callback으로 전달한다.
 - 바인딩은 제거된 Discovery route table이나 resolver API를 compatibility helper로 되살리면 안 된다.
+
+## Pull completion 공개 계약
+
+.NET package는 Core 0.16.0을 exact dependency로 사용한다.
+
+.NET runtime은 native completion을 drain해 blocking result 또는 `Task`로 바꾼다. `Submit()`은
+Core `NONE`, `Async()`는 Core `DONTWAIT`를 사용한다. Completion-backed state는 native `FINAL`
+전에 provisional registry에 등록하고 submit publish와 completion capture가 합류한 뒤 정확히 한
+번 끝난다. `CancellationToken`은 native operation 취소가 아니라 호출 전 차단 또는 successful
+submit 뒤 Task wait cancellation만 표현한다.
+
+`PollEventFlags.PollCompletion`은 public poller의 wait thread가 native queue를 비우고 live Task
+또는 detached state를 한 건 이상 완전 처리했다는 progress event다. Public poller owner에서
+blocking request를 사용하면 다른 thread가 wait loop를 계속 실행해야 한다.
+
+`ReplyToken`은 ROUTER REQUEST receive만 만드는 sealed reference type이다. Owner object identity와
+opaque value를 함께 비교하며 raw 값을 문자열로도 공개하지 않는다. `StreamPacket`은 factory로
+만든 empty reusable output이고 `Dispose()`는 payload를 비운 뒤 재사용할 수 있게 한다.
+Token은 numeric constructor, raw accessor, ordering, serialization과 `IDisposable`을 제공하지 않는다.
+같은 output의 concurrent recv는 invalid-state다. Message reference는 다음 recv 진입이나
+`Dispose()` 전까지만 유효하다. Receive mode setter는 첫 bind/connect 전에 `Raw`·`Packet`만
+받고 `Unspecified`를 거부한다.
+
+### Public interface
+
+```csharp
+public interface SendSubmitOperation
+{
+    SendSubmitOperation Message(Message message);
+    void Submit();
+    Task Async(CancellationToken cancellationToken = default);
+}
+
+public interface RequestSubmitOperation
+{
+    RequestSubmitOperation Message(Message message);
+    RequestSubmitOperation Timeout(TimeSpan timeout);
+    IReadOnlyList<Message> Submit();
+    Task<IReadOnlyList<Message>> Async(
+        CancellationToken cancellationToken = default);
+}
+
+public interface ReplySubmitOperation
+{
+    ReplySubmitOperation Message(Message message);
+    void Submit();
+}
+
+public sealed class ReplyToken : IEquatable<ReplyToken>
+{
+    private readonly object _owner;
+    private readonly ulong _value;
+
+    internal ReplyToken(object owner, ulong value)
+    {
+        _owner = owner;
+        _value = value;
+    }
+
+    public bool Equals(ReplyToken? other) => other is not null
+        && ReferenceEquals(_owner, other._owner) && _value == other._value;
+    public override bool Equals(object? obj) =>
+        obj is ReplyToken other && Equals(other);
+    public override int GetHashCode() =>
+        HashCode.Combine(
+            System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(_owner), _value);
+    public override string ToString() => nameof(ReplyToken);
+}
+
+public enum StreamReceiveMode
+{
+    Unspecified = 0,
+    Raw = 1,
+    Packet = 2
+}
+
+public sealed class StreamPacket : IDisposable
+{
+    private StreamPacket();
+    public static StreamPacket Create();
+    public bool IsEmpty { get; }
+    public RoutingId? RoutingId { get; }
+    public Message? Header { get; }
+    public Message? Body { get; }
+    public void Dispose();
+}
+
+public interface IStreamSocket
+{
+    SendOperation Send(RoutingId routingId);
+    bool Recv(Received result, RecvFlags flags = RecvFlags.None);
+    bool RecvPacket(StreamPacket result,
+                    RecvFlags flags = RecvFlags.None);
+}
+```
+
+Operation 시작 signature는 PAIR `SendOperation Send()`, DEALER
+`SendOperation Send()`·`RequestOperation Request()`, ROUTER
+`SendOperation Send(RoutingId)`·`RequestOperation Request(RoutingId)`·
+`ReplyOperation Reply(RoutingId, ReplyToken)`, STREAM `SendOperation Send(RoutingId)`다.
+Send factory는 target을 builder에 capture한다.
+`Received.ReplyToken`은 nullable token이며 `StreamSocketOptions.ReceiveMode`는 첫 bind/connect 전
+`Raw` 또는 `Packet`만 설정할 수 있다.
+`Received.Send()`는 source target을 capture한 `SendOperation`, `Received.Reply()`는 source RID와
+token을 capture한 `ReplyOperation`을 반환한다.
+
+Public .NET surface에는 send/request `Flags`·`Submit(SendFlags)`, request callback
+delegate/overload, `IStreamSocket.TrySend`, `IStreamSocket.RecvPart`, STREAM callback,
+`ISocketMonitor.OnEvent`, `IZlinkTimer.OnFire`, pair/generation property·method가 없다.
+`RoutedSendOperation`과 `RoutedSendSubmitOperation`도 public type이 아니다.
+
+Monitor는 `MonitorEvent? Recv(RecvFlags = None)`·`MonitorStatus Status()`·`Close()`를,
+timer는 `Start(TimeSpan, ulong)`·`Stop()`·`ulong? Recv(RecvFlags = None)`·`Close()`를 제공한다.
+Monitor event에 투영한 Core `connection_id`는 진단과 correlation에만 사용하며 send·reply
+target이나 reconnect fence로 사용하지 않는다.
+Internal native enum mirror는 `ZLINK_OPT_PENDING_MAX_MSGS`와
+`ZLINK_OPT_PENDING_MAX_BYTES`만 사용하며 public option property를 추가하지 않는다.
+
+## 구현 및 contract test 검증 요구
+
+Public .NET interface, Task·exception과 poller event만으로 다음을 확인한다. 각 항목은 contract
+test 하나로 이어진다.
+
+**Operation과 완료**
+
+- Send와 request factory가 `SendOperation`·`RequestOperation`을 반환하고 §Public interface의
+  terminal signature만 제공한다.
+- Submit 반환 전 completion이 drain돼도 Task는 submit publish와 합류한 뒤 정확히 한 번 끝난다.
+- `CancellationToken` 취소가 먼저 확정되면 Task만 취소되고 late completion은 Task를 다시
+  끝내지 않으며 native payload를 정리한다.
+- Non-OK request completion은 기존 typed exception만 발생시키고 error payload를 공개하지 않는다.
+- Public poller의 `PollCompletion`은 Task settle 또는 detached cleanup이 끝난 뒤에만 반환된다.
+
+**ReplyToken과 STREAM**
+
+- 같은 owner·value token은 같고 다른 owner token은 다르며 다른 socket의 token으로 시작한 reply는
+  native 호출 전에 실패한다.
+- `StreamPacket.Create()`는 empty output을 반환하고 `RecvPacket()`의 `false`·오류는 output을
+  empty로 유지하며 `Dispose()` 뒤 재사용할 수 있다.
+
+**Pull eventing**
+
+- Monitor와 timer의 DONTWAIT no-data는 `null`이며 handler 없이 pull method로 event와 fire count를
+  관찰한다.

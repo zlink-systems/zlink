@@ -20,6 +20,13 @@ title: "Cancellation And Shutdown"
 - Cancellation is a cooperative request.
 - An already-completed result is not turned into a cancellation, and delivery
   of an already-accepted one-way message is not cancelled.
+- While waiting in a Framework-owned queue, cancellation can remove the record
+  and prevent Core submit from starting. Once Core owns the payload through a
+  successful submit, it can only stop the caller's wait; it does not cancel
+  Core admission or the request.
+- The socket owner drains a completion that arrives after the caller stops
+  waiting and cleans up its native payload. That completion does not complete
+  the caller again.
 - The per-language surface uses `.NET` `CancellationToken`, Java
   `CompletionStage.toCompletableFuture().cancel(false)`, Kotlin coroutine
   cancellation, and Node.js `AbortSignal`.
@@ -58,12 +65,14 @@ The rules for a call that arrives already pre-cancelled are:
 ## 3. Handling The Cancellation Race
 
 - Cancellation is an exceptional completion.
-- If cancellation, timeout, shutdown, and acceptance race after admission has
-  started, only the one atomic terminal state decided first completes the
-  call. The structure itself — one completion slot being raced for — is owned
-  by
+- While a record waits in the Framework queue before Core submit, cancellation, timeout,
+  shutdown, and admission race; only the one decided first determines the caller result and
+  record handling. The structure itself — one completion slot being raced for — is owned by
   [Submit And Completion "10. Operation Identity And Where Completion Happens"](01-submit-and-completion.en.md#10-operation-identity-and-where-completion-happens-implementation).
-- A cancelled pending admission must not be accepted later.
+- A cancellation decided after Core owns the payload through a successful
+  submit completes only the caller as cancelled. Core can admit later once
+  local capacity becomes available; the runtime drains that completion without
+  delivering a second terminal result to the caller.
 - [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast) — delivering one
   message to multiple [Spot](../00-foundation/02-glossary.en.md#spot)s in the same Channel by
   ChannelName and topic — cancellation follows the bounded I/O executor submission and commit
@@ -71,11 +80,17 @@ The rules for a call that arrives already pre-cancelled are:
 
 ```mermaid
 flowchart LR
-    A["Admission starts"] --> X{"What is decided first?"}
-    X -->|cancellation| R1["Completes with cancellation<br/>never accepted afterward"]
+    A["Admission starts"] --> O{"Has Core taken ownership<br/>of payload?"}
+    O -->|no| X{"What is decided first?"}
+    X -->|cancellation| R1["Completes with cancellation<br/>without Core submit"]
     X -->|timeout| R2["Completes with DeadlineExceeded"]
     X -->|shutdown| R3["Completes with ShuttingDown"]
-    X -->|acceptance| R4["Completes normally"]
+    X -->|admission| R4["Core successful submit"]
+    O -->|yes| R4
+    R4 --> C{"caller cancellation?"}
+    C -->|no| R5["Caller observes Core completion"]
+    C -->|yes| R6["Only caller completes with cancellation<br/>Core may admit late"]
+    R6 --> R7["Drain late completion and clean up payload"]
 ```
 
 ## 4. Logical Multicast Cancellation
@@ -180,11 +195,14 @@ MeshNode state transition is observed. Each item leads to one test.
 
 **Handling the race**
 
-- Even if cancellation, timeout, shutdown, and acceptance all happen at the
-  same time after admission has started, the call completes with exactly one
-  terminal result.
-- A pending admission completed with cancellation is never later flipped to
-  an accepted result.
+- While the Framework queue owns a record, even if cancellation, timeout,
+  shutdown, and admission happen at the same time, the caller observes exactly
+  one terminal result; if cancellation wins, Core submit does not start.
+- Even if caller cancellation wins after Core owns the payload through a
+  successful submit, the caller observes only the cancellation result once.
+  If late admission occurs once local capacity becomes available, the runtime
+  cleans up the completion and native payload without completing the caller
+  again.
 
 **Logical Multicast cancellation**
 

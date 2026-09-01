@@ -148,10 +148,9 @@ counter 핸들을 해제한다. 파괴 후 `*counter_p_`의 pointer는 `NULL`로
 ## 3. Timer
 
 Timer는 나노초 정밀도의 주기적 또는 일회성 generic timer를 제공한다. `zlink_timer_new`로
-독립 실행형 timer를 생성한다. timer가 fire하는 event는 `zlink_timer_recv`로 동기
-수신하거나 `zlink_timer_handler` callback으로 구동할 수 있고, `zlink_poller_add_timer`로
-poller에 통합할 수도 있다 — poller 통합 계약은 [Poll과 poller](05-polling.ko.md)가
-소유한다.
+독립 실행형 timer를 생성한다. timer가 fire하는 event는 `zlink_timer_recv`로 수신하고,
+`zlink_poller_add_timer`로 poller에 통합할 수도 있다 — poller 통합 계약은
+[Poll과 poller](05-polling.ko.md)가 소유한다.
 
 ```mermaid
 sequenceDiagram
@@ -160,23 +159,11 @@ sequenceDiagram
     App->>T: zlink_timer_new()
     App->>T: zlink_timer_start(interval_ns, repeat_count)
     Note over T: interval_ns 나노초 뒤 첫 fire,<br/>이후 같은 간격으로 반복
-    T-->>App: fire (이번 start 안에서 1부터 증가)
-    App->>T: zlink_timer_recv() 또는 등록한 handler 호출
+    App->>T: zlink_timer_recv()
+    T-->>App: fire count (이번 start 안에서 1부터 증가)
     Note over T: repeat_count가 양수면 그 횟수만큼 fire 후 자동 정지
     App->>T: zlink_timer_stop() / zlink_timer_destroy()
 ```
-
-### zlink_timer_handler_fn
-
-```c
-typedef void (*zlink_timer_handler_fn) (void *timer_,
-                                        uint64_t fire_count_,
-                                        void *userdata_);
-```
-
-timer 만료 callback의 signature다. `timer_`는 fire한 timer 핸들이고, `fire_count_`는
-가장 최근에 성공한 `zlink_timer_start` 실행에서 1부터 세는 fire 횟수이며,
-`userdata_`는 handler 등록 시 넘긴 사용자 pointer다.
 
 ---
 
@@ -283,35 +270,7 @@ recv 모드에서 다음 timer fire를 기다린다. 성공하면 `*fire_count_o
 
 **스레드 안전성:** 같은 timer의 다른 작업과 동시에 호출하면 안 된다.
 
-**참고:** `zlink_timer_handler`, `zlink_timer_start`
-
----
-
-### zlink_timer_handler
-
-timer 만료 callback handler를 등록한다.
-
-```c
-ZLINK_EXPORT zlink_handler_result_t zlink_timer_handler (void *timer_,
-                                            zlink_timer_handler_fn handler_,
-                                            void *userdata_);
-```
-
-`handler_`를 등록하면 timer가 fire할 때마다 호출된다. `NULL` `handler_`는 유효하지
-않으며 `ZLINK_HANDLER_INVALID_ARGUMENT`(`EINVAL`)로 실패한다. handler를 등록한 뒤에는
-같은 timer의 `zlink_timer_recv`가 `ZLINK_RECV_BUSY`를 반환한다.
-
-callback은 timer 핸들, 가장 최근 start 실행 안에서 1부터 증가하는 fire 횟수와
-`userdata_`를 받는다
-([`zlink_timer_handler_fn`](#zlink_timer_handler_fn)). `userdata_`는 callback에 그대로
-전달하는 불투명 pointer다.
-
-**반환값:** 성공 시 `ZLINK_HANDLER_OK`, 실패 시 `zlink_handler_result_t` 값.
-`zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
-
-**스레드 안전성:** 같은 timer의 다른 작업과 동시에 호출하면 안 된다.
-
-**참고:** `zlink_timer_recv`, `zlink_timer_start`
+**참고:** `zlink_timer_start`
 
 ## 4. Stopwatch
 
@@ -513,9 +472,6 @@ unit test 하나로 이어진다.
 - `zlink_timer_start(timer, 0, repeat_count)`는 `ZLINK_CONFIG_INVALID_ARGUMENT`과 내부 `EINVAL`로 실패한다.
 - `zlink_timer_start`에 양수 `repeat_count_`를 주면 그 횟수만큼 fire한 뒤 자동으로 정지하고, `0`이면 명시적으로 정지할 때까지 반복한다.
 - `zlink_timer_recv`는 다음 fire를 기다렸다가 성공 시 `*fire_count_out_`에 현재 start 실행에서 1부터 증가하는 fire 횟수를 기록한다. stop 뒤 다시 start하면 첫 값은 다시 `1`이다. timer가 이미 멈췄고 읽을 fire가 없으면 `ZLINK_RECV_NO_DATA`(내부 `EAGAIN`)다.
-- `zlink_timer_handler`에 `NULL` handler를 주면 `ZLINK_HANDLER_INVALID_ARGUMENT`(`EINVAL`)다.
-- handler를 등록한 뒤 같은 timer의 `zlink_timer_recv`는 `ZLINK_RECV_BUSY`를 반환한다.
-- 등록한 handler는 fire마다 timer 핸들, 현재 start 실행에서 1부터 증가하는 fire 횟수와 등록 시 넘긴 `userdata_`로 호출된다. stop 뒤 다시 start하면 첫 callback의 횟수는 다시 `1`이다.
 - `zlink_timer_stop` 후 다시 시작할 때까지 새 fire event가 발생하지 않는다.
 - `zlink_timer_destroy` 후 `*timer_p_`가 `NULL`이다.
 
@@ -542,7 +498,7 @@ unit test 하나로 이어진다.
 - `zlink_thread_join`은 대상 thread가 종료될 때까지 기다린 뒤 핸들을 해제하며, 핸들당 정확히 한 번만 호출한다.
 
 **공통 반환 규약**
-- result type(`zlink_close_result_t`·`zlink_config_result_t`·`zlink_recv_result_t`·`zlink_handler_result_t`)을 반환하는 각 함수는 성공 시 해당 OK 값을, 실패 시 result 값을 반환하며 `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
+- result type(`zlink_close_result_t`·`zlink_config_result_t`·`zlink_recv_result_t`)을 반환하는 각 함수는 성공 시 해당 OK 값을, 실패 시 result 값을 반환하며 `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](README.ko.md) | [이전: Monitoring](06-monitoring.ko.md) | [다음: Runtime Boundary](08-runtime-boundary.ko.md)

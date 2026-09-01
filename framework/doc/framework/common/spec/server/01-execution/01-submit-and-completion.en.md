@@ -149,8 +149,13 @@ callback, retry waiter, or separate binding adapter, and follows these rules.
   result.
 - If capacity becomes available first, the message is submitted exactly once and completes
   normally.
-- If a timeout, cancellation, or runtime shutdown is decided first, the call completes
-  exactly once, as an exception, with no late admission.
+- If a timeout or runtime shutdown is decided before Core owns the payload, the call completes
+  exactly once as an exception, with no late admission. Caller cancellation can prevent
+  admission while the record waits in a Framework-owned queue. Once Core owns the payload
+  through a successful submit, however, cancellation can only end the caller's wait; it cannot
+  prevent Core late admission. Rules for cleaning up the late completion and not delivering a
+  second result to the caller are defined by
+  [Cancellation And Shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race).
 - If the internal bounded waiter capacity is fully used, a new payload is not held — the
   call completes immediately with `DeadlineExceeded`.
 - Even at this hard overload boundary, the `Backpressured` status is not exposed, nor is the
@@ -239,7 +244,8 @@ the STREAM transport queue.
 - This modifier does not apply to a STREAM reply call. A reply uses the socket send timeout
   and the one-shot token contract.
 - Where a language separately provides cancellation, timeout and cancellation race to one
-  terminal result.
+  terminal result. If cancellation is decided after Core owns the payload through a successful
+  submit, only the caller's wait ends and Core can admit that send later.
 
 ## 8. STREAM Reply Token
 
@@ -264,10 +270,12 @@ The one-shot [reply token](../00-foundation/02-glossary.en.md#reply-token) rules
 
 ## 9. Request Completion — The Completion Race And Timeout Budget
 
-A request completes exactly once, with whichever of reply, remote error, timeout,
+The caller of a request observes exactly one result: whichever of reply, remote error, timeout,
 cancellation, or shutdown is decided first. Timeout and cancellation end the caller's wait,
-but do not roll back work the remote handler already started. A late-arriving reply is not
-redelivered to the application handler — only the correlation state is cleaned up.
+but do not roll back work the remote handler already started. In particular, if cancellation
+wins after Core owns the payload through a successful submit, the Core request and admission
+can continue. A reply or completion that arrives late is not redelivered to the application
+handler; the runtime cleans up the correlation state and native payload.
 
 ```mermaid
 flowchart LR
@@ -568,6 +576,10 @@ reserved — are owned, with their rules, by §10/§11 and are not repeated here
 
 - Even if a response, timeout, cancellation, and shutdown occur at the same time for the
   same operation, the caller completes exactly once.
+- If caller cancellation completes after Core owns the payload through a successful submit,
+  that message can be admitted once local capacity becomes available. The caller observes only
+  the cancellation result once; the runtime cleans up the late completion and does not
+  complete the caller again.
 - The completion callback runs on a new execution turn, not the call stack at the moment of
   confirmation.
 - If no slot is reserved among the in-progress operations and the dispatcher, the request is
