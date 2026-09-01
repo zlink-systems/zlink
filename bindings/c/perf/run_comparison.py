@@ -679,7 +679,12 @@ def select_transports(pattern_name):
         base = TRANSPORTS
     if not _env_transports:
         return list(base)
-    return [t for t in base if t in _env_transports]
+
+    selected = []
+    for transport in _env_transports:
+        if transport in base and transport not in selected:
+            selected.append(transport)
+    return selected
 
 
 _env_sizes = parse_env_list("PERF_MSG_SIZES", int)
@@ -3729,7 +3734,7 @@ def build_effective_option_items(args, selected_patterns):
         else:
             sizes.extend(MSG_SIZES)
 
-    unique_transports = sorted(set(transports))
+    unique_transports = list(dict.fromkeys(transports))
     unique_sizes = sorted(set(sizes))
     num_runs = args["num_runs"]
     only = bool(selected_patterns) and all(

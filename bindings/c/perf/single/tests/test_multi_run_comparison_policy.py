@@ -68,6 +68,20 @@ def auto_hwm_detail_line(pattern, transport, component, msg_size, **fields):
 
 
 class MultiRunComparisonPolicyTests(unittest.TestCase):
+    def test_requested_transport_order_is_preserved(self):
+        old_allow_multi = RC.ALLOW_MULTI
+        old_env_transports = RC._env_transports
+        try:
+            RC.ALLOW_MULTI = True
+            RC._env_transports = ["wss", "tcp", "wss"]
+            self.assertEqual(
+                RC.select_transports("DEALER_ROUTER_REQREP"),
+                ["wss", "tcp"],
+            )
+        finally:
+            RC.ALLOW_MULTI = old_allow_multi
+            RC._env_transports = old_env_transports
+
     def test_paired_gate_selects_process_per_peer_router_echo_clients(self):
         previous = os.environ.get("PERF_MULTI_MATCHED_BASELINE")
         try:

@@ -9,12 +9,10 @@
 #include "../../common/perf_tls_setup.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -78,7 +76,6 @@ struct client_state_t
         active_deadline_ns (0),
         active_reply_count (0),
         fatal (false),
-        callback_mutex (),
         slots (),
         events (),
         latency (maximum_latency_sample_cap)
@@ -91,9 +88,8 @@ struct client_state_t
     uint64_t active_deadline_ns;
     unsigned long long active_reply_count;
     bool fatal;
-    // Reply callbacks are serialized per socket, but different client sockets
-    // may complete concurrently. Guard per-slot wait state and shared metrics.
-    std::mutex callback_mutex;
+    // Every socket is registered on one POLLCOMPLETION poller. The benchmark
+    // thread therefore owns submission, reply callbacks, and metrics.
     std::vector<client_slot_t> slots;
     std::vector<zlink_poller_event_t> events;
     bench_latency_sampler_t latency;
@@ -141,7 +137,6 @@ inline void on_request_reply (zlink_request_result_t result,
         return;
 
     client_state_t *state = slot->owner;
-    std::lock_guard<std::mutex> lock (state->callback_mutex);
     if (slot->outstanding > 0)
         --slot->outstanding;
 
@@ -207,15 +202,11 @@ inline bool submit_request (const endpoint_config_t &config,
     if (payload_size > 0)
         std::memcpy (zlink_msg_data (&part), slot->payload.data (), payload_size);
 
-    {
-        std::lock_guard<std::mutex> lock (slot->owner->callback_mutex);
-        ++slot->outstanding;
-    }
+    ++slot->outstanding;
     zlink_submit_result_t rc = ZLINK_SUBMIT_INVALID_ARGUMENT;
     if (config.client_router_request) {
         if (!target_rid || target_rid->size == 0) {
             zlink_msg_close (&part);
-            std::lock_guard<std::mutex> lock (slot->owner->callback_mutex);
             --slot->outstanding;
             errno = EINVAL;
             return false;
@@ -236,10 +227,7 @@ inline bool submit_request (const endpoint_config_t &config,
 
     const int err = zlink_errno ();
     zlink_msg_close (&part);
-    {
-        std::lock_guard<std::mutex> lock (slot->owner->callback_mutex);
-        --slot->outstanding;
-    }
+    --slot->outstanding;
     if (is_transient_submit (rc, err)) {
         if (blocked_out)
             *blocked_out = true;
@@ -248,9 +236,8 @@ inline bool submit_request (const endpoint_config_t &config,
     return false;
 }
 
-inline bool any_waiting_reply (client_state_t &state)
+inline bool any_waiting_reply (const client_state_t &state)
 {
-    std::lock_guard<std::mutex> lock (state.callback_mutex);
     for (size_t i = 0; i < state.slots.size (); ++i) {
         if (state.slots[i].outstanding != 0)
             return true;
@@ -303,18 +290,15 @@ inline bool run_active_window (const endpoint_config_t &config,
         target_rid_ptr = &target_rid;
     }
 
-    {
-        std::lock_guard<std::mutex> lock (state->callback_mutex);
-        state->active_run_id = run_id;
-        state->active_msg_size = msg_size;
-        state->active_deadline_ns =
-          perf_multi_metric::now_ns ()
-          + static_cast<uint64_t> (std::max (1, settings.duration_seconds)) * 1000000000ULL;
-        state->active_reply_count = 0;
-        state->latency.reset ();
-        for (size_t i = 0; i < state->slots.size (); ++i)
-            state->slots[i].outstanding = 0;
-    }
+    state->active_run_id = run_id;
+    state->active_msg_size = msg_size;
+    state->active_deadline_ns =
+      perf_multi_metric::now_ns ()
+      + static_cast<uint64_t> (std::max (1, settings.duration_seconds)) * 1000000000ULL;
+    state->active_reply_count = 0;
+    state->latency.reset ();
+    for (size_t i = 0; i < state->slots.size (); ++i)
+        state->slots[i].outstanding = 0;
     state->fatal = false;
     for (size_t i = 0; i < state->slots.size (); ++i) {
         state->slots[i].next_seq = 1;
@@ -357,11 +341,8 @@ inline bool run_active_window (const endpoint_config_t &config,
     if (!drain_pending_replies (state, request_timeout_ms))
         return false;
 
-    {
-        std::lock_guard<std::mutex> lock (state->callback_mutex);
-        *reply_count_out = state->active_reply_count;
-        *latency_out = state->latency.snapshot ();
-    }
+    *reply_count_out = state->active_reply_count;
+    *latency_out = state->latency.snapshot ();
     return true;
 }
 
