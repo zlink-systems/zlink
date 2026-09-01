@@ -450,7 +450,7 @@ currently Ready object.
 
     if (room) {
         co_await spot_outbound.request_to_spot (room.value ().spot_id (), get_room_state_t{})
-          .submit<room_state_t> ();
+          .async<room_state_t> ();
     }
     ```
 

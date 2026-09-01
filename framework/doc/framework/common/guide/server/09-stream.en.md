@@ -368,7 +368,7 @@ request, use the current dispatch's one-shot reply token.
     {
         // Replies exactly once, using the same request correlation. Ends in failure if it isn't a request.
         co_await stream.reply_packet (zlink::message_t::from_json (pong_t{message.sequence}))
-          .submit ();
+          .async ();
     }
     ```
 
@@ -431,7 +431,7 @@ Use `Send` when the server pushes first.
     co_await stream.send (server_notice_t{"maintenance"})
       .metadata ("severity", "info")
       .compress ()
-      .submit ();
+      .async ();
     ```
 
 === "Java"
@@ -512,10 +512,10 @@ The client uses the Stream Connector package, not the server Framework package.
     connector.on<game_state_notify_t> ("GameStateNotify",
                                        [] (const auto &message) { render (message.payload ()); });
 
-    co_await connector.connect ().submit (); // Finishes connecting and preparing the receive loop.
+    co_await connector.connect ().async (); // Finishes connecting and preparing the receive loop.
 
     while (running) {
-        co_await connector.dispatch ().submit (); // manual mode runs the callback on this caller.
+        co_await connector.dispatch ().async (); // manual mode runs the callback on this caller.
     }
     ```
 
@@ -652,10 +652,10 @@ working at `Off`.
 
     ```cpp
     // Waits for admission into the bounded outbound queue.
-    co_await connector.send (player_input_t{direction}).submit ();
+    co_await connector.send (player_input_t{direction}).async ();
 
     // Finds the response by request sequence.
-    auto profile = co_await connector.request (get_profile_t{player_id}).submit<profile_t> ();
+    auto profile = co_await connector.request (get_profile_t{player_id}).async<profile_t> ();
     ```
 
 === "Java"

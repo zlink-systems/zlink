@@ -127,7 +127,7 @@ Ready Actor of the same type already exists. The caller never specifies the targ
                     .get_or_create ("player", player_id, create_player_t{display_name})
                     .in_mesh ("play")
                     .timeout (std::chrono::seconds (10))
-                    .submit ();
+                    .async ();
 
     if (!result)
         throw std::runtime_error ("Player creation was rejected.");
@@ -1115,12 +1115,12 @@ You can send a message by ActorId without knowing which Spot or node the Actor i
 === "C++"
 
     ```cpp
-    co_await actor_client.send_to_actor (player_id, award_experience_t{10}).submit ();
+    co_await actor_client.send_to_actor (player_id, award_experience_t{10}).async ();
 
     auto profile = co_await actor_client
                      .request_to_actor (player_id, get_player_profile_t{})
                      .timeout (std::chrono::seconds (3))
-                     .submit<player_profile_t> ();
+                     .async<player_profile_t> ();
     ```
 
 === "Java"

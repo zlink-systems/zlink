@@ -105,8 +105,8 @@ connector가 제공하는 검증 함수로 대부분의 시나리오를 표현�
 | push가 **정해진 순서로** 오는지 확인한다 | `WaitForSequence<TNotify>().Expect(...).Expect(...)` |
 | 요청이 **실패해야** 함을 확인한다 | `ExpectFailure(...)` |
 
-**terminal 표기는 언어를 따른다** — `.NET`은 `Async`, C++은 `async`, Java · Node는 `submit`,
-Kotlin은 `await`다([비동기 실행 정책](../../../common/spec/server/01-execution/README.ko.md)).
+**terminal 표기는 언어를 따른다** — `.NET`은 `Async`, C++은 `async`, Java · Node는
+`submit`, Kotlin은 `await`다([비동기 실행 정책](../../../common/spec/server/01-execution/README.ko.md)).
 
 값 비교는 `Ensure(조건, 메시지)`를 사용한다. 메시지는 필수이며, 실패하면 그
 메시지를 담은 예외로 시나리오가 끝난다.

@@ -420,7 +420,7 @@ ZLink는 이 중 **연결·세션(STREAM), room·상태 단위(SPOT), 서버 간
     co_await spots.request_to_spot (guild_id, join_guild_req_t{user_id})
       .instance_spot ("guild")
       .in_mesh ("social")
-      .submit<join_guild_res_t> ();
+      .async<join_guild_res_t> ();
     ```
 
 === "Java"
@@ -530,10 +530,10 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 세 조각이 사
     co_await spots.request_to_spot (request.order_id, request)  // request는 이미 start_order_workflow_req_t 바디다.
       .instance_spot ("order-workflow")
       .in_mesh ("commerce")
-      .submit<start_order_workflow_res_t> ();
+      .async<start_order_workflow_res_t> ();
 
     // actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-    co_await actor.context ().bound_session ().send (order_status_changed_t{order_id, status}).submit ();
+    co_await actor.context ().bound_session ().send (order_status_changed_t{order_id, status}).async ();
     ```
 
 === "Java"
@@ -928,7 +928,7 @@ application에서는 "`services` mesh의 `orders` channel로 요청을 보낸다
       .request_to_channel (
         "price",                                            // process-local로 찾을 ChannelName
         price_request_t{"AAPL"})
-      .submit<price_reply_t> ();                            // 송신한 뒤 reply를 비동기로 기다린다.
+      .async<price_reply_t> ();                            // 송신한 뒤 reply를 비동기로 기다린다.
     ```
 
 === "Java"

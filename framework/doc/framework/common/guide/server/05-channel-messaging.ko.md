@@ -99,7 +99,7 @@ application 코드에 남는 것은 endpoint나 프록시 설정이 아니라 **
                     // 대상은 ChannelName 하나. 주소도 MeshName도 넣지 않는다.
                     .request_to_channel ("orders",
                                          place_order_t{"order-1042", "acct-77", 18742})
-                    .submit<order_placed_t> ();
+                    .async<order_placed_t> ();
     ```
 
 === "Java"
@@ -265,7 +265,7 @@ mesh 소켓을 그대로 사용하므로 별도 소켓이 없고,
       .publish (sample_topics_t::player_milestone_channel, // 전달 범위를 정하는 ChannelName.
                 sample_topics_t::player_milestone,         // 그 안에서 받을 Spot을 고르는 topic.
                 milestone_event)
-      .submit ();
+      .async ();
 
     // 구독 — entry spot이 시작할 때.
     _context.handlers ().add_subscribe<&play_entry_spot_t::on_player_win_milestone> (
@@ -385,9 +385,9 @@ message로 바꿔 주지 않는다. Spot이나 Actor에 보내려면 **처음부
 
     | 종류 | 보내는 호출 | 받는 handler |
     | --- | --- | --- |
-    | request | `request_to_channel (name, req).submit<TReply> ()` | `request_type`·`reply_type`을 선언한 handler class |
-    | send | `send_to_channel (name, msg).submit ()` | `request_type`만 선언한 handler class |
-    | publish (fanout) | `publish (name, topic, evt).submit ()` | `request_type`만 선언한 fanout handler class |
+    | request | `request_to_channel (name, req).async<TReply> ()` | `request_type`·`reply_type`을 선언한 handler class |
+    | send | `send_to_channel (name, msg).async ()` | `request_type`만 선언한 handler class |
+    | publish (fanout) | `publish (name, topic, evt).async ()` | `request_type`만 선언한 fanout handler class |
 
 === "Java"
 
@@ -710,7 +710,7 @@ class에 여러 handler 메서드를 둘 때 편하다.
             co_await _publisher
               .publish ("api.events", "user.cache-refreshed",
                         user_cache_refreshed_event_t{command.account_id})
-              .submit ();
+              .async ();
         }
 
       private:
@@ -840,7 +840,7 @@ Request는 상대 reply가 도착할 때까지 기다린다. 규칙은 하나다
                       .request_to_channel ("tictactoe.play",
                                            create_room_request_t{request.game_name})
                       .timeout (std::chrono::seconds (5)) // reply를 기다릴 상한.
-                      .submit<create_room_reply_t> ();    // reply가 도착할 때까지 기다린다.
+                      .async<create_room_reply_t> ();    // reply가 도착할 때까지 기다린다.
 
         co_return create_game_reply_t{room.room_id, room.game_name};
     }
@@ -1111,16 +1111,16 @@ Fanout handler는 독립 fanout channel builder에 등록하며 RouteMesh handle
         task_t<double> get (const std::string &symbol)
         {
             auto reply = co_await _client
-                           // 대상은 ChannelName 하나다. reply 타입은 submit<T>에서 지정한다.
+                           // 대상은 ChannelName 하나다. reply 타입은 async<T>에서 지정한다.
                            .request_to_channel ("price", price_request_t{symbol})
-                           .submit<price_reply_t> ();
+                           .async<price_reply_t> ();
             co_return reply.price;
         }
 
         task_t<void> refresh (const std::string &account_id)
         {
             // send: 내 runtime이 제출을 받아들일 때까지만 기다린다.
-            co_await _client.send_to_channel ("profile", refresh_cache_command_t{account_id}).submit ();
+            co_await _client.send_to_channel ("profile", refresh_cache_command_t{account_id}).async ();
         }
 
       private:
@@ -1227,7 +1227,7 @@ Fanout handler는 독립 fanout channel builder에 등록하며 RouteMesh handle
       .request_to_channel ("price", price_request_t{symbol})
       // 이 호출의 reply 대기 상한을 기본(30초)과 다르게 둘 때만 지정한다.
       .timeout (std::chrono::seconds (5))
-      .submit<price_reply_t> ();
+      .async<price_reply_t> ();
     // reply 대기 상한 결정 순서(앞이 우선):
     //   1) 호출별 .timeout (...)
     //   2) MeshNode builder의 set_default_request_timeout (...)
@@ -1308,7 +1308,7 @@ Fanout handler는 독립 fanout channel builder에 등록하며 RouteMesh handle
             co_await _publisher
               .publish ("api.events", "profile.cache-refreshed",
                         profile_cache_refreshed_event_t{account_id})
-              .submit ();
+              .async ();
         }
 
       private:
@@ -2236,7 +2236,7 @@ Node direct 호출은 `RoutingId`로 특정 MeshNode 하나를 지정한다. 이
     // 특정 노드의 운영 상태를 묻기 때문에 node direct를 사용한다.
     auto status = co_await route_client
                     .request_to_node ("play", target, get_node_status_t{})
-                    .submit<node_status_t> ();
+                    .async<node_status_t> ();
 
     class node_status_handler_t
     {

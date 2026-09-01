@@ -210,14 +210,14 @@ Bingo의 매칭 handler 하나에 뒤의 둘이 함께 나온다.
                        .request_to_spot ("match:" + level_bucket, reserve_bingo_room_req_t{})
                        .instance_spot (sample_names_t::matchmaker_spot_type) // 없으면 생성해도 된다는 intent.
                        .in_mesh (sample_names_t::matchmaking_mesh_name)
-                       .submit<reserve_bingo_room_res_t> ();
+                       .async<reserve_bingo_room_res_t> ();
 
     // User Spot — 생성 호출이 따로 있다.
     auto created = co_await spots
                      .get_or_create (allocated.room_id, sample_names_t::room_spot_type)
                      .in_mesh (sample_names_t::play_mesh_name)
                      .request (allocated.settings) // 새 Spot의 on_create로 전달된다.
-                     .submit ();
+                     .async ();
     ```
 
 === "Java"
@@ -477,7 +477,7 @@ ID로 쓸 Spot을 확보하는 호출**이다. 어느 쪽을 쓸지는 "이미 �
                      .in_mesh ("play")
                      .request (create_game_t{"ranked"}) // on_create에 전달할 생성 요청이다.
                      .timeout (std::chrono::seconds (10))
-                     .submit ();
+                     .async ();
 
     if (created.state == spot_create_state_t::rejected)
         throw std::runtime_error ("Game creation was rejected.");
@@ -604,7 +604,7 @@ ID로 쓸 Spot을 확보하는 호출**이다. 어느 쪽을 쓸지는 "이미 �
                     .get_or_create ("lobby-eu-1", "lobby")
                     .in_mesh ("play")
                     .request (create_lobby_t{"eu"}) // existing으로 끝나면 이 요청은 전달되지 않는다.
-                    .submit ();
+                    .async ();
 
     switch (result.state) {
     case spot_create_state_t::existing: // 이미 있던 lobby를 그대로 쓴다.
@@ -1348,7 +1348,7 @@ handler는 dispatch마다 scope를 가지므로 ORM을 생성자로 받아도 �
         auto saved = co_await _context.outbound ()
                        .request_to_channel ("score",
                                             persist_score_t{_context.spot_id (), request.value})
-                       .submit<persist_score_reply_t> ();
+                       .async<persist_score_reply_t> ();
 
         co_return save_score_reply_t{saved.version};
     }
@@ -1526,12 +1526,12 @@ Spot 수명 동안 유지해도 되는 의존성(설정, 싱글톤 client, 순�
 === "C++"
 
     ```cpp
-    co_await spot_outbound.send_to_spot ("room-42", chat_t{"hello"}).submit ();
+    co_await spot_outbound.send_to_spot ("room-42", chat_t{"hello"}).async ();
 
     auto state = co_await spot_client
                    .request_to_spot ("room-42", get_room_state_t{})
                    .timeout (std::chrono::seconds (3))
-                   .submit<room_state_t> ();
+                   .async<room_state_t> ();
     ```
 
 === "Java"
@@ -1600,14 +1600,14 @@ factory로 준비할지 고르는 stable type**이다. 그 mesh에 Instance Spot
                    .request_to_spot ("bronze", find_match_t{player_id})
                    .instance_spot ("matchmaker") // 대상이 없으면 이 stable type의 factory로 준비한다.
                    .in_mesh ("matchmaking")      // 처음 배치할 mesh를 고른다.
-                   .submit<match_result_t> ();
+                   .async<match_result_t> ();
 
     // type이 하나만 등록된 mesh — 생략하면 Framework가 그 유일한 type을 고른다.
     auto single = co_await spot_client
                     .request_to_spot ("bronze", find_match_t{player_id})
                     .instance_spot ()            // 대상 node에 등록된 유일한 type으로 준비한다.
                     .in_mesh ("matchmaking")
-                    .submit<match_result_t> ();
+                    .async<match_result_t> ();
     ```
 
 === "Java"

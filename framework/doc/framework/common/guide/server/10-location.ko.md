@@ -439,7 +439,7 @@ relocation record는 Framework 내부 정보이므로 반환하지 않는다. `N
 
     if (room) {
         co_await spot_outbound.request_to_spot (room.value ().spot_id (), get_room_state_t{})
-          .submit<room_state_t> ();
+          .async<room_state_t> ();
     }
     ```
 

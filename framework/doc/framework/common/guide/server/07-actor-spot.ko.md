@@ -122,7 +122,7 @@ Actor가 다른 node의 Spot으로 join할 때와 host `Relocate`로 이전할 �
                     .get_or_create ("player", player_id, create_player_t{display_name})
                     .in_mesh ("play")
                     .timeout (std::chrono::seconds (10))
-                    .submit ();
+                    .async ();
 
     if (!result)
         throw std::runtime_error ("Player creation was rejected.");
@@ -1097,12 +1097,12 @@ Actor가 어느 Spot과 node에 있는지 몰라도 ActorId로 메시지를 보�
 === "C++"
 
     ```cpp
-    co_await actor_client.send_to_actor (player_id, award_experience_t{10}).submit ();
+    co_await actor_client.send_to_actor (player_id, award_experience_t{10}).async ();
 
     auto profile = co_await actor_client
                      .request_to_actor (player_id, get_player_profile_t{})
                      .timeout (std::chrono::seconds (3))
-                     .submit<player_profile_t> ();
+                     .async<player_profile_t> ();
     ```
 
 === "Java"

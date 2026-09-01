@@ -361,7 +361,7 @@ one-shot reply token을 사용한다.
     {
         // 같은 request correlation으로 한 번만 reply한다. request가 아니면 실패로 끝난다.
         co_await stream.reply_packet (zlink::message_t::from_json (pong_t{message.sequence}))
-          .submit ();
+          .async ();
     }
     ```
 
@@ -423,7 +423,7 @@ Server가 먼저 push할 때는 `Send`를 사용한다.
     co_await stream.send (server_notice_t{"maintenance"})
       .metadata ("severity", "info")
       .compress ()
-      .submit ();
+      .async ();
     ```
 
 === "Java"
@@ -504,10 +504,10 @@ Client는 server Framework package가 아니라 Stream Connector package를 사�
     connector.on<game_state_notify_t> ("GameStateNotify",
                                        [] (const auto &message) { render (message.payload ()); });
 
-    co_await connector.connect ().submit (); // 연결과 receive loop 준비를 완료한다.
+    co_await connector.connect ().async (); // 연결과 receive loop 준비를 완료한다.
 
     while (running) {
-        co_await connector.dispatch ().submit (); // manual 모드는 이 caller에서 callback을 실행한다.
+        co_await connector.dispatch ().async (); // manual 모드는 이 caller에서 callback을 실행한다.
     }
     ```
 
@@ -641,10 +641,10 @@ Request/response 매칭에 쓰는 correlation은 protocol 정보라 `Off`에서�
 
     ```cpp
     // bounded outbound queue admission까지 기다린다.
-    co_await connector.send (player_input_t{direction}).submit ();
+    co_await connector.send (player_input_t{direction}).async ();
 
     // request sequence로 response를 찾는다.
-    auto profile = co_await connector.request (get_profile_t{player_id}).submit<profile_t> ();
+    auto profile = co_await connector.request (get_profile_t{player_id}).async<profile_t> ();
     ```
 
 === "Java"

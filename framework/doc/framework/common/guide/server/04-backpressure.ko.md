@@ -134,7 +134,7 @@ send는 응답을 기다리지 않지만, 기다려야 하는 대상이 하나 �
 === "C++"
 
     ```cpp
-    co_await client.send_to_channel ("orders", cancel_order_t{"order-1042"}).submit ();
+    co_await client.send_to_channel ("orders", cancel_order_t{"order-1042"}).async ();
     // 이 co_await가 끝났다는 것은 "내 runtime이 제출을 받아들였다"까지다.
     // 상대가 받았거나 handler가 끝났다는 뜻이 아니다.
     ```
@@ -192,7 +192,7 @@ operation을 만들거나 다시 보내지 않는다** — terminal 실패 뒤 �
 
     ```cpp
     try {
-        co_await client.send_to_channel ("orders", command).submit ();
+        co_await client.send_to_channel ("orders", command).async ();
     } catch (const framework_exception_t &ex) {
         if (ex.kind () != framework_error_kind_t::deadline_exceeded)
             throw;
@@ -307,7 +307,7 @@ request는 보낼 자리와 상대의 reply를 모두 기다리므로, 정체가
                           .request_to_channel ("inventory",
                                                reserve_stock_t{request.sku, request.quantity})
                           .timeout (std::chrono::seconds (3))
-                          .submit<stock_reserved_t> ();
+                          .async<stock_reserved_t> ();
 
         co_return place_order_reply_t{request.order_id, reserved.reservation_id};
     }
