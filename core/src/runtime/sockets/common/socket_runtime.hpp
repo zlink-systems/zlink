@@ -650,6 +650,25 @@ struct send_pending_record_t
     send_pending_record_t *completion_next;
 };
 
+//  Per-target direct-admission reservation. STREAM packet callbacks retain
+//  inactive entries for the lifetime of one exact transport target so the
+//  steady-state echo path does not allocate and free a tree node per packet.
+//  Detach marks an active retained entry for removal by its current owner.
+struct send_inline_attempt_state_t
+{
+    send_inline_attempt_state_t (bool active_ = false,
+                                 bool retained_ = false) :
+        active (active_), retained (retained_), retire (false),
+        retire_errno (0)
+    {
+    }
+
+    bool active;
+    bool retained;
+    bool retire;
+    int retire_errno;
+};
+
 //  Per-socket asynchronous send admission state.
 //
 //  Ordering: records for one target form a FIFO. The admit loop only ever
@@ -703,8 +722,11 @@ struct socket_send_pending_runtime_t
       queues;
     //  Reserves per-target ordering while a submitter attempts the direct
     //  admission path outside the pending mutex. Different targets may still
-    //  admit independently when one target is backpressured.
-    std::set<routed_send_target_key_t> inline_attempts;
+    //  admit independently when one target is backpressured. STREAM retains
+    //  inactive exact-target entries until detach to avoid steady-state node
+    //  churn; `active` alone controls ordering exclusion.
+    std::map<routed_send_target_key_t, send_inline_attempt_state_t>
+      inline_attempts;
     std::map<zlink_send_op_id_t, send_pending_record_t *> by_op;
     std::atomic<uint64_t> pending_msgs;
     //  Incremented after every queue insertion.  The admission driver uses

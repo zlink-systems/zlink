@@ -1093,15 +1093,26 @@ void test_stream_packet_async_immediate_admission_has_no_completion ()
     TEST_ASSERT_GREATER_OR_EQUAL_INT (0, raw_fd);
     set_raw_timeout (raw_fd, 1000);
 
-    const unsigned char trigger[] = {0, 0, 0, 0, 0, 1, 0x41};
-    TEST_ASSERT_EQUAL_INT (0, send_all (raw_fd, trigger, sizeof (trigger)));
-    TEST_ASSERT_TRUE (wait_stream_packet_submit (&probe, 3000));
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, probe.submit_result);
-    TEST_ASSERT_EQUAL_UINT64 (0, probe.op_id);
+    for (unsigned char body = 0x41; body != 0x43; ++body) {
+        const unsigned char trigger[] = {0, 0, 0, 0, 0, 1, body};
+        TEST_ASSERT_EQUAL_INT (0,
+                               send_all (raw_fd, trigger, sizeof (trigger)));
+        TEST_ASSERT_TRUE (wait_stream_packet_submit (&probe, 3000));
+        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, probe.submit_result);
+        TEST_ASSERT_EQUAL_UINT64 (0, probe.op_id);
 
-    unsigned char reply[5];
-    TEST_ASSERT_TRUE (recv_raw_exact (raw_fd, reply, sizeof (reply)));
-    TEST_ASSERT_EQUAL_MEMORY ("async", reply, sizeof (reply));
+        unsigned char reply[5];
+        TEST_ASSERT_TRUE (recv_raw_exact (raw_fd, reply, sizeof (reply)));
+        TEST_ASSERT_EQUAL_MEMORY ("async", reply, sizeof (reply));
+
+        if (body != 0x42) {
+            std::lock_guard<std::mutex> lock (probe.sync);
+            probe.submitted = false;
+            probe.submit_result = ZLINK_SUBMIT_INTERNAL_ERROR;
+            probe.submit_errno = 0;
+            probe.op_id = 0;
+        }
+    }
     TEST_ASSERT_FALSE (wait_stream_packet_completion (&probe, 100));
     TEST_ASSERT_EQUAL_INT (0, probe.completion_count);
 

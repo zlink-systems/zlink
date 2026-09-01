@@ -87,6 +87,23 @@ int copy_send_attempt_parts (zlink_msg_t *parts_,
     return 0;
 }
 
+bool send_target_matches (const zlink::routed_send_target_key_t &candidate_,
+                          const zlink_routing_id_t *peer_rid_,
+                          uint64_t transport_pair_id_,
+                          uint64_t transport_pair_generation_,
+                          uint64_t route_incarnation_id_)
+{
+    return candidate_.transport_pair_id == transport_pair_id_
+           && candidate_.transport_pair_generation
+                == transport_pair_generation_
+           && candidate_.route_incarnation_id == route_incarnation_id_
+           && candidate_.peer_rid.size () == peer_rid_->size
+           && (peer_rid_->size == 0
+               || memcmp (candidate_.peer_rid.data (), peer_rid_->data,
+                          peer_rid_->size)
+                    == 0);
+}
+
 }
 
 bool zlink::socket_type_supports_send_completion (int type_)
@@ -584,8 +601,12 @@ void zlink::socket_base_t::drive_send_pending ()
                           std::deque<send_pending_record_t *> >::iterator it =
                    pending.queues.begin ();
                  it != pending.queues.end (); ++it) {
+                const std::map<routed_send_target_key_t,
+                               send_inline_attempt_state_t>::const_iterator
+                  inline_attempt = pending.inline_attempts.find (it->first);
                 if (it->second.empty () || blocked.count (it->first) != 0
-                    || pending.inline_attempts.count (it->first) != 0)
+                    || (inline_attempt != pending.inline_attempts.end ()
+                        && inline_attempt->second.active))
                     continue;
                 send_pending_record_t *head = it->second.front ();
                 if (head->claimed)
@@ -882,6 +903,29 @@ void zlink::socket_base_t::fail_send_pending_for_target (
         return;
 
     socket_send_pending_runtime_t &pending = send_pending_runtime ();
+    {
+        scoped_lock_t lock (pending.sync);
+        std::map<routed_send_target_key_t,
+                 send_inline_attempt_state_t>::iterator attempt =
+          pending.inline_attempts.begin ();
+        while (attempt != pending.inline_attempts.end ()) {
+            if (!send_target_matches (
+                  attempt->first, peer_rid_, transport_pair_id_,
+                  transport_pair_generation_, route_incarnation_id_)) {
+                ++attempt;
+                continue;
+            }
+            if (attempt->second.active) {
+                if (!attempt->second.retire) {
+                    attempt->second.retire = true;
+                    attempt->second.retire_errno = terminal_errno_;
+                }
+                ++attempt;
+            } else {
+                attempt = pending.inline_attempts.erase (attempt);
+            }
+        }
+    }
     bool completed_any = false;
     while (true) {
         send_pending_record_t *doomed = NULL;
@@ -892,16 +936,9 @@ void zlink::socket_base_t::fail_send_pending_for_target (
                    pending.queues.begin ();
                  queue != pending.queues.end () && !doomed; ++queue) {
                 const routed_send_target_key_t &candidate = queue->first;
-                if (candidate.transport_pair_id != transport_pair_id_
-                    || candidate.transport_pair_generation
-                         != transport_pair_generation_
-                    || candidate.route_incarnation_id
-                         != route_incarnation_id_
-                    || candidate.peer_rid.size () != peer_rid_->size
-                    || (peer_rid_->size > 0
-                        && memcmp (candidate.peer_rid.data (), peer_rid_->data,
-                                   peer_rid_->size)
-                             != 0))
+                if (!send_target_matches (
+                      candidate, peer_rid_, transport_pair_id_,
+                      transport_pair_generation_, route_incarnation_id_))
                     continue;
                 //  Submit order is preserved on the failure path too.
                 for (std::deque<send_pending_record_t *>::iterator it =
@@ -993,6 +1030,20 @@ void zlink::socket_base_t::fail_all_send_pending (int terminal_errno_)
     {
         scoped_lock_t lock (pending.sync);
         pending.failing = true;
+        std::map<routed_send_target_key_t,
+                 send_inline_attempt_state_t>::iterator attempt =
+          pending.inline_attempts.begin ();
+        while (attempt != pending.inline_attempts.end ()) {
+            if (attempt->second.active) {
+                if (!attempt->second.retire) {
+                    attempt->second.retire = true;
+                    attempt->second.retire_errno = terminal_errno_;
+                }
+                ++attempt;
+            } else {
+                attempt = pending.inline_attempts.erase (attempt);
+            }
+        }
     }
     while (true) {
         send_pending_record_t *doomed = NULL;

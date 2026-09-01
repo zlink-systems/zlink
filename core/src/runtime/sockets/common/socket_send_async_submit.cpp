@@ -90,72 +90,6 @@ int copy_owned_parts (zlink_msg_t *parts_,
     return 0;
 }
 
-class stream_fast_shadow_t
-{
-  public:
-    stream_fast_shadow_t () : _initialized (false) {}
-    ~stream_fast_shadow_t () { close (); }
-
-    int copy_from (zlink_msg_t *source_)
-    {
-        zlink::msg_t *shadow = reinterpret_cast<zlink::msg_t *> (&_part);
-        if (shadow->init () != 0)
-            return -1;
-        _initialized = true;
-        return shadow->copy (*reinterpret_cast<zlink::msg_t *> (source_));
-    }
-
-    zlink::msg_t *msg ()
-    {
-        return reinterpret_cast<zlink::msg_t *> (&_part);
-    }
-
-    int move_to (std::vector<zlink_msg_t> *parts_)
-    {
-        try {
-            parts_->resize (1);
-        } catch (...) {
-            errno = ENOMEM;
-            return -1;
-        }
-        zlink::msg_t *destination =
-          reinterpret_cast<zlink::msg_t *> (&(*parts_)[0]);
-        if (destination->init () != 0) {
-            parts_->clear ();
-            return -1;
-        }
-        if (destination->move (*msg ()) != 0) {
-            const int saved_errno = errno;
-            const int close_rc = destination->close ();
-            errno_assert (close_rc == 0);
-            parts_->clear ();
-            errno = saved_errno;
-            return -1;
-        }
-        return 0;
-    }
-
-  private:
-    void close ()
-    {
-        if (!_initialized)
-            return;
-        const int saved_errno = errno;
-        if (msg ()->check ()) {
-            const int rc = msg ()->close ();
-            errno_assert (rc == 0);
-        }
-        _initialized = false;
-        errno = saved_errno;
-    }
-
-    zlink_msg_t _part;
-    bool _initialized;
-
-    stream_fast_shadow_t (const stream_fast_shadow_t &);
-    stream_fast_shadow_t &operator= (const stream_fast_shadow_t &);
-};
-
 bool stream_rid_matches (const zlink_routing_id_t &rid_, uint32_t value_)
 {
     return rid_.size == 4
@@ -235,27 +169,91 @@ int zlink::socket_base_t::send_async_submit (
     }
 
     socket_send_pending_runtime_t &pending = send_pending_runtime ();
+    typedef std::map<routed_send_target_key_t, send_inline_attempt_state_t>
+      inline_attempt_map_t;
+    const auto reserve_inline_attempt_locked = [&pending] (
+                                                 const routed_send_target_key_t
+                                                   &key_,
+                                                 bool retain_,
+                                                 inline_attempt_map_t::iterator
+                                                   *attempt_out_) -> bool {
+        if (attempt_out_)
+            *attempt_out_ = pending.inline_attempts.end ();
+        inline_attempt_map_t::iterator attempt =
+          pending.inline_attempts.find (key_);
+        if (attempt != pending.inline_attempts.end ()) {
+            if (attempt->second.active || attempt->second.retire)
+                return false;
+            attempt->second.active = true;
+            attempt->second.retained =
+              attempt->second.retained || retain_;
+            if (attempt_out_)
+                *attempt_out_ = attempt;
+            return true;
+        }
+        const std::pair<inline_attempt_map_t::iterator, bool> inserted =
+          pending.inline_attempts.insert (std::make_pair (
+            key_, send_inline_attempt_state_t (true, retain_)));
+        if (inserted.second && attempt_out_)
+            *attempt_out_ = inserted.first;
+        return inserted.second;
+    };
+    const auto release_inline_attempt_locked = [&pending] (
+                                                 const routed_send_target_key_t
+                                                   &key_) -> bool {
+        std::map<routed_send_target_key_t,
+                 send_inline_attempt_state_t>::iterator attempt =
+          pending.inline_attempts.find (key_);
+        if (attempt == pending.inline_attempts.end ()
+            || !attempt->second.active)
+            return false;
+        attempt->second.active = false;
+        if (!attempt->second.retained || attempt->second.retire)
+            pending.inline_attempts.erase (attempt);
+        return true;
+    };
     routed_send_target_key_t target;
     bool has_target = false;
     bool deferred_target_select = false;
     bool stream_fast_eagain = false;
     bool stream_fast_reserved = false;
+    inline_attempt_map_t::iterator stream_fast_attempt =
+      pending.inline_attempts.end ();
     std::vector<zlink_msg_t> stream_fast_parts;
-    const auto release_stream_fast_reservation = [&] () {
+    const auto release_stream_fast_reservation = [&] () -> bool {
+        bool need_redrive = false;
         scoped_lock_t lock (pending.sync);
-        if (pending.inline_attempts.erase (target) != 0)
-            pending.redrive_epoch.fetch_add (1,
-                                             std::memory_order_release);
+        if (stream_fast_attempt != pending.inline_attempts.end ()
+            && stream_fast_attempt->second.active) {
+            stream_fast_attempt->second.active = false;
+            if (!stream_fast_attempt->second.retained
+                || stream_fast_attempt->second.retire) {
+                pending.inline_attempts.erase (stream_fast_attempt);
+                stream_fast_attempt = pending.inline_attempts.end ();
+            }
+            if (pending.pending_msgs.load (std::memory_order_relaxed) != 0) {
+                const std::map<
+                  routed_send_target_key_t,
+                  std::deque<send_pending_record_t *> >::const_iterator queue =
+                  pending.queues.find (target);
+                need_redrive = queue != pending.queues.end ()
+                               && !queue->second.empty ();
+            }
+            if (need_redrive)
+                pending.redrive_epoch.fetch_add (1,
+                                                 std::memory_order_release);
+        }
         stream_fast_reserved = false;
+        return need_redrive;
     };
     const auto redrive_stream_pending = [&] () {
         drive_send_pending ();
-        dispatch_send_completions_if_local ();
     };
 
     // A STREAM packet callback already owns a stable current pipe and exact
-    // RID. Reserve that target before the direct attempt, then use a stack
-    // shadow so a failed speculative send cannot consume caller ownership.
+    // RID. Reserve that target before the direct attempt. The current-pipe
+    // try-write preserves caller ownership on EAGAIN, so copy the part only
+    // when Core actually has to retain pending work.
     if (options.type == ZLINK_CORE_SOCKET_STREAM && options_->target
         && valid_routing_id (&options_->target->peer_rid)
         && stream_dispatch_in_callback ()
@@ -301,15 +299,23 @@ int zlink::socket_base_t::send_async_submit (
                         errno = ESHUTDOWN;
                         return -1;
                     }
-                    const std::map<
-                      routed_send_target_key_t,
-                      std::deque<send_pending_record_t *> >::const_iterator
-                      queue = pending.queues.find (target);
-                    if ((queue == pending.queues.end () || queue->second.empty ())
-                        && pending.inline_attempts.count (target) == 0) {
+                    bool target_queue_empty =
+                      pending.pending_msgs.load (std::memory_order_relaxed)
+                      == 0;
+                    if (!target_queue_empty) {
+                        const std::map<
+                          routed_send_target_key_t,
+                          std::deque<send_pending_record_t *> >::const_iterator
+                          queue = pending.queues.find (target);
+                        target_queue_empty =
+                          queue == pending.queues.end ()
+                          || queue->second.empty ();
+                    }
+                    if (target_queue_empty) {
                         try {
                             stream_fast_reserved =
-                              pending.inline_attempts.insert (target).second;
+                              reserve_inline_attempt_locked (
+                                target, true, &stream_fast_attempt);
                         } catch (...) {
                             errno = ENOMEM;
                             return -1;
@@ -317,37 +323,37 @@ int zlink::socket_base_t::send_async_submit (
                     }
                 }
                 if (stream_fast_reserved) {
-                    stream_fast_shadow_t shadow;
-                    if (shadow.copy_from (&parts_[0]) != 0) {
-                        release_stream_fast_reservation ();
-                        admission.unlock_sync ();
-                        redrive_stream_pending ();
-                        errno = ENOMEM;
-                        return -1;
-                    }
                     admission.unlock_sync ();
                     const int fast_rc =
                       stream_dispatch_send_current_msg_from_io (
-                        shadow.msg (), ZLINK_DONTWAIT);
+                        reinterpret_cast<msg_t *> (&parts_[0]),
+                        ZLINK_DONTWAIT);
                     const int fast_errno = errno;
                     if (fast_rc >= 0) {
-                        release_stream_fast_reservation ();
-                        consume_caller_parts (parts_, 1);
-                        redrive_stream_pending ();
+                        // A follower published before this release is visible
+                        // under the same mutex and needs an explicit wake. A
+                        // follower published afterwards drives itself, while
+                        // unrelated targets do not need a global rescan.
+                        if (release_stream_fast_reservation ())
+                            redrive_stream_pending ();
                         return 0;
                     }
                     if (fast_errno == EAGAIN) {
-                        if (shadow.move_to (&stream_fast_parts) != 0) {
-                            release_stream_fast_reservation ();
-                            redrive_stream_pending ();
+                        // The current-pipe try-write does not consume its
+                        // message on EAGAIN. Only pay for the ownership shadow
+                        // when Core really has to retain pending work.
+                        if (copy_owned_parts (parts_, 1, &stream_fast_parts)
+                            != 0) {
+                            if (release_stream_fast_reservation ())
+                                redrive_stream_pending ();
                             errno = ENOMEM;
                             return -1;
                         }
                         stream_fast_eagain = true;
                         has_target = true;
                     } else {
-                        release_stream_fast_reservation ();
-                        redrive_stream_pending ();
+                        if (release_stream_fast_reservation ())
+                            redrive_stream_pending ();
                         errno = fast_errno;
                         return -1;
                     }
@@ -432,10 +438,12 @@ int zlink::socket_base_t::send_async_submit (
         }
     } catch (...) {
         if (stream_fast_reserved) {
-            release_stream_fast_reservation ();
+            const bool need_redrive =
+              release_stream_fast_reservation ();
             close_owned_parts (&stream_fast_parts);
             admission.unlock_sync ();
-            redrive_stream_pending ();
+            if (need_redrive)
+                redrive_stream_pending ();
         }
         errno = ENOMEM;
         return -1;
@@ -447,9 +455,11 @@ int zlink::socket_base_t::send_async_submit (
         inline_reservation_key = target;
     } catch (...) {
         if (stream_fast_eagain) {
-            release_stream_fast_reservation ();
+            const bool need_redrive =
+              release_stream_fast_reservation ();
             close_owned_parts (&stream_fast_parts);
-            redrive_stream_pending ();
+            if (need_redrive)
+                redrive_stream_pending ();
         }
         errno = ENOMEM;
         return -1;
@@ -483,7 +493,8 @@ int zlink::socket_base_t::send_async_submit (
         }
         if (target_queue_empty) {
             try {
-                if (pending.inline_attempts.insert (inline_reservation_key).second)
+                if (reserve_inline_attempt_locked (inline_reservation_key,
+                                                   false, NULL))
                     target_reserved = true;
             } catch (...) {
                 reservation_allocation_failed = true;
@@ -505,7 +516,7 @@ int zlink::socket_base_t::send_async_submit (
     } else {
         if (target_reserved) {
             scoped_lock_t lock (pending.sync);
-            if (pending.inline_attempts.erase (inline_reservation_key) != 0)
+            if (release_inline_attempt_locked (inline_reservation_key))
                 pending.redrive_epoch.fetch_add (1,
                                                  std::memory_order_release);
         }
@@ -559,9 +570,11 @@ int zlink::socket_base_t::send_async_submit (
                 inline_record->target = target;
                 inline_record->parts.swap (stream_fast_parts);
             } catch (...) {
-                release_stream_fast_reservation ();
+                const bool need_redrive =
+                  release_stream_fast_reservation ();
                 close_owned_parts (&stream_fast_parts);
-                redrive_stream_pending ();
+                if (need_redrive)
+                    redrive_stream_pending ();
                 errno = ENOMEM;
                 return -1;
             }
@@ -581,7 +594,8 @@ int zlink::socket_base_t::send_async_submit (
                                               std::memory_order_release);
                 {
                     scoped_lock_t lock (pending.sync);
-                    pending.inline_attempts.erase (inline_reservation_key);
+                    release_inline_attempt_locked (
+                      inline_reservation_key);
                 }
                 admission.unlock_sync ();
                 drive_send_pending ();
@@ -596,7 +610,8 @@ int zlink::socket_base_t::send_async_submit (
                                               std::memory_order_release);
                 {
                     scoped_lock_t lock (pending.sync);
-                    pending.inline_attempts.erase (inline_reservation_key);
+                    release_inline_attempt_locked (
+                      inline_reservation_key);
                 }
                 admission.unlock_sync ();
                 drive_send_pending ();
@@ -634,7 +649,8 @@ int zlink::socket_base_t::send_async_submit (
                                               std::memory_order_release);
                 {
                     scoped_lock_t lock (pending.sync);
-                    pending.inline_attempts.erase (inline_reservation_key);
+                    release_inline_attempt_locked (
+                      inline_reservation_key);
                 }
                 //  The pipe now owns its frame references. Close Core's moved
                 //  copies, then consume the caller's original references only
@@ -666,7 +682,8 @@ int zlink::socket_base_t::send_async_submit (
                                               std::memory_order_release);
                 {
                     scoped_lock_t lock (pending.sync);
-                    pending.inline_attempts.erase (inline_reservation_key);
+                    release_inline_attempt_locked (
+                      inline_reservation_key);
                 }
                 close_owned_parts (&inline_record->parts);
                 inline_record_owns_copies = false;
@@ -687,7 +704,8 @@ int zlink::socket_base_t::send_async_submit (
                                               std::memory_order_release);
                 {
                     scoped_lock_t lock (pending.sync);
-                    pending.inline_attempts.erase (inline_reservation_key);
+                    release_inline_attempt_locked (
+                      inline_reservation_key);
                 }
                 close_owned_parts (&inline_record->parts);
                 inline_record_owns_copies = false;
@@ -756,6 +774,24 @@ int zlink::socket_base_t::send_async_submit (
         if (inline_terminal_errno == 0 && pending.failing) {
             pending_reject_errno = ESHUTDOWN;
         } else {
+            // STREAM detach can retire the exact target after the current-pipe
+            // attempt returned EAGAIN but before this record is published.
+            // The fail sweep cannot see an unpublished record, so preserve the
+            // accepted-operation contract by publishing it terminal here.
+            if (inline_terminal_errno == 0 && attempt_inline) {
+                const std::map<
+                  routed_send_target_key_t,
+                  send_inline_attempt_state_t>::const_iterator attempt =
+                  pending.inline_attempts.find (inline_reservation_key);
+                if (attempt != pending.inline_attempts.end ()
+                    && attempt->second.active && attempt->second.retire) {
+                    inline_terminal_errno =
+                      attempt->second.retire_errno != 0
+                        ? attempt->second.retire_errno
+                        : ENOTCONN;
+                    record->claimed = true;
+                }
+            }
             // Route replacement and pending publication form one ordered step.
             // If the physical attempt belonged to a route already retired by
             // direct I/O handover, accept it as a terminal async operation
@@ -852,9 +888,9 @@ int zlink::socket_base_t::send_async_submit (
             }
         }
         if (attempt_inline) {
-            const size_t erased =
-              pending.inline_attempts.erase (inline_reservation_key);
-            if (stream_fast_reserved && erased != 0)
+            const bool released =
+              release_inline_attempt_locked (inline_reservation_key);
+            if (stream_fast_reserved && released)
                 pending.redrive_epoch.fetch_add (1,
                                                  std::memory_order_release);
         }
@@ -865,9 +901,9 @@ int zlink::socket_base_t::send_async_submit (
     if (attempt_inline) {
         {
             scoped_lock_t lock (pending.sync);
-            const size_t erased =
-              pending.inline_attempts.erase (inline_reservation_key);
-            if (stream_fast_reserved && erased != 0)
+            const bool released =
+              release_inline_attempt_locked (inline_reservation_key);
+            if (stream_fast_reserved && released)
                 pending.redrive_epoch.fetch_add (1,
                                                  std::memory_order_release);
         }
