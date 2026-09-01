@@ -172,6 +172,7 @@ Options:
   --server-shutdown-timeout-ms N
   --server-bind-port N
   --auto-hwm-profile NAME
+                              Auto-HWM profile: compact, low_latency, balanced, throughput (default: balanced).
   --results-dir PATH
   --results-tag NAME
   --output PATH

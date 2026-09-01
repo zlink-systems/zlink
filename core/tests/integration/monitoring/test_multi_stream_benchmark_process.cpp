@@ -291,11 +291,13 @@ void run_multi_stream_process_case (const char *recv_mode_, const char *transpor
     common_env.push_back ("PERF_WARMUP_SECONDS=1");
     common_env.push_back ("PERF_SETTLE_MS=500");
     common_env.push_back ("PERF_MULTI_CLIENTS=4");
+    common_env.push_back ("PERF_MULTI_PRINT_AUTO_HWM_DETAIL=1");
     common_env.push_back (std::string ("PERF_RECV_MODE=") + recv_mode_);
 
     std::vector<std::string> server_args;
     server_args.push_back ("current");
     server_args.push_back (transport_);
+    server_args.push_back ("64");
     TEST_ASSERT_TRUE (start_process (server_path, server_args, common_env, &server));
 
     std::string ready_line;
@@ -323,8 +325,21 @@ void run_multi_stream_process_case (const char *recv_mode_, const char *transpor
     client_args.push_back ("1");
     client_args.push_back ("--print-perf-result");
     client_args.push_back ("1");
+    client_args.push_back ("--start-gate");
+    client_args.push_back ("1");
 
     TEST_ASSERT_TRUE (start_process (client_path, client_args, common_env, &client));
+
+    std::string client_ready_line;
+    TEST_ASSERT_TRUE (
+      wait_for_stdout_prefix (&client, "CLIENT_READY,64", 10000, &client_ready_line));
+    write_stdin_line (&server, "START,64\n");
+
+    std::string server_start_ready_line;
+    TEST_ASSERT_TRUE (wait_for_stdout_prefix (
+      &server, "SERVER_START_READY,64", 10000, &server_start_ready_line));
+    TEST_ASSERT_TRUE (stdout_contains_metric (&server, "label=server-connected"));
+    write_stdin_line (&client, "START,64\n");
 
     int client_rc = INT_MIN;
     TEST_ASSERT_TRUE (wait_for_exit_code (&client, 30000, &client_rc));

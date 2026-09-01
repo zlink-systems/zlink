@@ -1318,6 +1318,85 @@ def parse_client_ready_size(line):
     return size_value if size_value > 0 else None
 
 
+def parse_server_start_ready_size(line):
+    stripped = line.strip()
+    if not stripped.startswith("SERVER_START_READY,"):
+        return None
+    parts = stripped.split(",", 1)
+    if len(parts) != 2:
+        return None
+    try:
+        size_value = int(parts[1].strip())
+    except (TypeError, ValueError):
+        return None
+    return size_value if size_value > 0 else None
+
+
+def build_stream_shared_client_args(
+    transport, pattern_name, size_csv, duration_seconds, clients, io_threads
+):
+    return [
+        "--transport",
+        transport,
+        "--pattern",
+        pattern_name,
+        "--sizes",
+        size_csv,
+        "--runs",
+        "1",
+        "--duration",
+        str(duration_seconds),
+        "--ccu",
+        str(clients),
+        "--io-threads",
+        str(io_threads),
+        "--print-perf-result",
+        "1",
+        "--send-stop-token",
+        "0",
+        "--start-gate",
+        "1",
+    ]
+
+
+def request_stream_server_start(server_proc, size_value, requested_sizes):
+    if (
+        size_value is None
+        or size_value in requested_sizes
+        or not server_proc
+        or not server_proc.stdin
+    ):
+        return False
+    try:
+        server_proc.stdin.write(f"START,{size_value}\n")
+        server_proc.stdin.flush()
+        requested_sizes.add(size_value)
+        return True
+    except Exception:
+        return False
+
+
+def forward_stream_start_ack(
+    client_proc, line, pending_ready_sizes, requested_sizes
+):
+    ready_size = parse_server_start_ready_size(line)
+    if (
+        ready_size is None
+        or ready_size not in pending_ready_sizes
+        or not client_proc
+        or not client_proc.stdin
+    ):
+        return False
+    try:
+        client_proc.stdin.write(f"START,{ready_size}\n")
+        client_proc.stdin.flush()
+        pending_ready_sizes.discard(ready_size)
+        requested_sizes.discard(ready_size)
+        return True
+    except Exception:
+        return False
+
+
 def parse_client_endpoint(line):
     stripped = line.strip()
     if not stripped.startswith("CLIENT_CONTROL_ENDPOINT,"):
@@ -1526,26 +1605,14 @@ def run_sizes_test_stream_shared(
     server_cmd = build_bench_cmd(
         server_binary_path, [lib_name, transport, str(sizes[0] if sizes else 64)]
     )
-    shared_client_args = [
-        "--transport",
+    shared_client_args = build_stream_shared_client_args(
         transport,
-        "--pattern",
         pattern_name,
-        "--sizes",
         size_csv,
-        "--runs",
-        "1",
-        "--duration",
-        str(duration_seconds),
-        "--ccu",
-        str(clients_int),
-        "--io-threads",
-        str(client_io_threads_int),
-        "--print-perf-result",
-        "1",
-        "--send-stop-token",
-        "0",
-    ]
+        duration_seconds,
+        clients_int,
+        client_io_threads_int,
+    )
     client_cmd = build_bench_cmd(shared_client_path, shared_client_args)
     server_env = env.copy()
     client_env = env.copy()
@@ -1570,6 +1637,7 @@ def run_sizes_test_stream_shared(
     use_control_plane = normalize_multi_pattern_name(pattern_name) in CONTROL_PLANE_PATTERNS
     control_connected = [not use_control_plane]
     pending_ready_sizes = set()
+    server_start_requested_sizes = set()
     pending_phase_active_sizes = set()
     client_proc = [None]
 
@@ -1602,6 +1670,10 @@ def run_sizes_test_stream_shared(
         server_stdout_buffer.append(line)
         emit_auto_hwm_detail_line(line)
         emit_benchmark_diag_line(line)
+        if forward_stream_start_ack(
+            client_proc[0], line, pending_ready_sizes, server_start_requested_sizes
+        ):
+            flush_pending_phase_active()
         if pattern_name == "PUBSUB" and line.startswith("PHASE_ACTIVE,"):
             try:
                 phase_size = int(line.split(",", 1)[1])
@@ -1810,20 +1882,9 @@ def run_sizes_test_stream_shared(
                 return
             if use_control_plane and not control_connected[0]:
                 return
-            try:
-                if server_proc.stdin:
-                    server_proc.stdin.write(f"START,{size_value}\n")
-                    server_proc.stdin.flush()
-                sent_to_client = False
-                if client_proc[0] and client_proc[0].stdin:
-                    client_proc[0].stdin.write(f"START,{size_value}\n")
-                    client_proc[0].stdin.flush()
-                    sent_to_client = True
-                if sent_to_client:
-                    pending_ready_sizes.discard(size_value)
-                    flush_pending_phase_active()
-            except Exception:
-                pass
+            request_stream_server_start(
+                server_proc, size_value, server_start_requested_sizes
+            )
 
         def wait_for_control_connected_forward(timeout_ms):
             if not use_control_plane or control_connected[0]:

@@ -252,7 +252,7 @@ ready gate는 패턴이 실제 active payload를 시작할 수 있는 최소 조
 |---|---|
 | raw socket | client socket의 `CONNECTION_READY` 확인 |
 | runner barrier를 사용하는 raw socket | `CONNECTION_READY` 확인 뒤 `CLIENT_READY,<size>` 출력, runner의 `START,<size>` 수신 |
-| `MULTI_STREAM` | STREAM 연결과 패턴별 HELLO/READY 계약 완료 |
+| `MULTI_STREAM` | raw client의 모든 target 연결·size update 완료, server의 target `CONNECTION_READY` 확인·context auto-HWM 재계산·connected snapshot 완료, `SERVER_START_READY,<size>` ACK 수신 |
 
 ### 1.6 Auto-HWM 정책
 
@@ -266,17 +266,17 @@ ready gate는 패턴이 실제 active payload를 시작할 수 있는 최소 조
   쓰거나 single suite 기본값 `1`을 multi에 가져오면 비교 의미가 달라진다.
 - 기본 실행에서는 pattern/role 특례 없이 같은 context budget을 공유한다.
   숫자 HWM이나 transport buffer를 직접 주입해서 결과를 고정하지 않는다.
-- multi runner는 실행 중인 메시지 크기를 context
-  `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES`로 전달한다. 이 값은 최대 메시지
-  크기 제한이 아니라 auto-HWM 예산을 메시지 슬롯으로 바꾸는 계획 단위다.
-- C, .NET, Java 등 multi perf는 size 케이스마다 아래 순서를 지켜야 한다.
-  1. benchmark context를 만든다.
-  2. socket을 만들고 bind/connect 준비를 끝낸다.
-  3. 해당 케이스의 payload size를 context
-     `AUTO_HWM_MSG_UNIT_BYTES`로 설정하고 auto-HWM을 다시 계산한다.
-  4. ready gate 이후 active phase를 시작한다.
-- 이 순서가 빠지면 작은 메시지와 큰 메시지가 같은 HWM 계획 단위를 쓰게 되어
-  C 기준과 비교 의미가 달라진다.
+- context auto-HWM은 byte budget과 실제 물리 queue/연결 수를 기준으로
+  `SNDHWM`, `RCVHWM` byte 값을 계산한다. 연결 수가 계획에 포함되는 패턴은
+  target 연결이 준비된 뒤 context auto-HWM을 다시 계산해야 한다.
+- `MULTI_STREAM` server는 runner의 `START,<size>`를 받은 뒤 target
+  `CONNECTION_READY` 수를 확인하고 context auto-HWM을 다시 계산한다. 이어서
+  실제 connected socket snapshot을 수집하고 `SERVER_START_READY,<size>`를
+  출력해야 한다.
+- runner는 `SERVER_START_READY,<size>`를 확인한 뒤에만 raw client에
+  `START,<size>`를 보내 active phase를 시작한다. target 연결 수 미달, context
+  auto-HWM 재계산 실패, ACK 누락은 해당 case 실패다. 상세 순서는
+  [§ 2.1.1 패턴별 Orchestration 시퀀스](#패턴별-orchestration-시퀀스)를 따른다.
 - `PERF_MULTI_HWM`, `PERF_MULTI_SNDHWM`, `PERF_MULTI_RCVHWM`, `PERF_SNDBUF`,
   `PERF_RCVBUF` 는 debug 전용 override 이다. 기본 경로에서는 비활성이고,
   `PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES=1` 또는
@@ -330,10 +330,11 @@ Multi 벤치마크는 **server/client 별도 프로세스**로 동작한다.
 | 1. server 시작 | 스크립트가 server 바이너리를 spawn |
 | 2. server READY | server가 bind 완료 후 stdout에 `READY,<endpoint>` 출력 |
 | 3. client 시작 | 스크립트가 READY를 읽은 후 client 바이너리를 spawn (`--endpoint <endpoint>`) |
-| 4. 측정 수행 | 패턴별 측정 주체인 server 또는 client가 active phase에서 throughput/latency를 측정하고 패턴의 완료 지점에서 `RESULT`를 출력한다. |
-| 5. client 완료 | client는 패턴 계약에 따라 `CLIENT_DONE` 또는 process exit로 완료를 알린다. request/reply 패턴은 `CLIENT_DONE` 뒤에도 completion 대상 socket을 유지하며 runner의 `STOP`을 기다린다. |
-| 6. server 종료 | 스크립트가 server stdin에 `STOP` 메시지 송신 → graceful shutdown 대기 → timeout 시 SIGTERM (Linux) / TerminateProcess (Windows) → 재 timeout 시 SIGKILL (Linux). server/client가 출력한 RESULT line을 합산 |
-| 7. request/reply client 종료 | server 종료를 확인한 뒤 스크립트가 client stdin에 `STOP`을 보낸다. client는 socket을 닫고 exit code 0으로 종료한다. |
+| 4. ready/start gate | runner와 바이너리가 [§ 2.1.1](#211-runner--바이너리-orchestration-메시지-규격)의 패턴별 계약을 완료한다. `MULTI_STREAM`은 `SERVER_START_READY`까지 확인한다. |
+| 5. 측정 수행 | 패턴별 측정 주체인 server 또는 client가 active phase에서 throughput/latency를 측정하고 패턴의 완료 지점에서 `RESULT`를 출력한다. |
+| 6. client 완료 | client는 패턴 계약에 따라 `CLIENT_DONE` 또는 process exit로 완료를 알린다. request/reply 패턴은 `CLIENT_DONE` 뒤에도 completion 대상 socket을 유지하며 runner의 `STOP`을 기다린다. |
+| 7. server 종료 | 스크립트가 server stdin에 `STOP` 메시지 송신 → graceful shutdown 대기 → timeout 시 SIGTERM (Linux) / TerminateProcess (Windows) → 재 timeout 시 SIGKILL (Linux). server/client가 출력한 RESULT line을 합산 |
+| 8. request/reply client 종료 | server 종료를 확인한 뒤 스크립트가 client stdin에 `STOP`을 보낸다. client는 socket을 닫고 exit code 0으로 종료한다. |
 
 > **server 종료 순서**: ① stdin `STOP\n` 송신 + stdin close ② shutdown timeout 대기 ③ `terminate()` (SIGTERM) ④ 2차 timeout 대기 ⑤ `kill()` (SIGKILL). server는 stdin에서 `STOP` 또는 `QUIT` 수신 시 graceful shutdown을 수행한다.
 
@@ -356,7 +357,8 @@ Multi 벤치마크는 **server/client 별도 프로세스**로 동작한다.
 runner(스크립트/Python 엔진)와 server/client 바이너리는 **stdin/stdout 텍스트
 프로토콜**로 프로세스 lifecycle을 조정한다. 각 메시지는 한 줄(`\n` 종단)이다.
 
-- **즉시 flush 필수**: 모든 제어 메시지(`READY`, `CLIENT_READY`, `RESULT` 등)는
+- **즉시 flush 필수**: 모든 제어 메시지(`READY`, `CLIENT_READY`,
+  `SERVER_START_READY`, `RESULT` 등)는
   출력 즉시 stdout을 flush해야 한다. runner는 메시지 도착으로 다음 단계를
   결정하므로, 버퍼링 지연은 orchestration 실패를 유발한다.
 - managed runtime(Java, .NET 등)은 stdout auto-flush를 활성화하거나 매 라인
@@ -367,6 +369,7 @@ runner(스크립트/Python 엔진)와 server/client 바이너리는 **stdin/stdo
 | 메시지 | 형식 | 의미 |
 |--------|------|------|
 | `READY` | `READY,<endpoint>` | bind 완료, benchmark endpoint 전달 |
+| `SERVER_START_READY` | `SERVER_START_READY,<msg_size>` | `MULTI_STREAM` target `CONNECTION_READY` 확인, context auto-HWM 재계산, connected snapshot 완료 |
 | `RESULT` | `RESULT,<lib>,<pattern>,<transport>,<size>,<metric>,<value>` | 측정 결과 |
 | `UNSUPPORTED` | `UNSUPPORTED,<lib>,<pattern>,<transport>` | transport 미지원 |
 
@@ -384,7 +387,7 @@ runner(스크립트/Python 엔진)와 server/client 바이너리는 **stdin/stdo
 
 | 메시지 | 형식 | 의미 |
 |--------|------|------|
-| `START` | `START,<msg_size>` | 해당 size 케이스 active 시작 |
+| `START` | `START,<msg_size>` | 일반 runner barrier의 active 시작. `MULTI_STREAM`에서는 server 준비 검증 요청 |
 | `STOP` | `STOP` | graceful shutdown 요청 |
 | `QUIT` | `QUIT` | graceful shutdown 요청 (`STOP`과 동일) |
 
@@ -408,15 +411,22 @@ sequenceDiagram
     participant C as Client
 
     S->>R: READY,endpoint
-    R->>C: endpoint argument
-    C->>S: connect and complete ready gate
-    opt pattern uses runner start barrier
+    R->>C: endpoint 인자 전달
+    C->>S: connect 및 ready gate 완료
+    alt MULTI_STREAM
+        Note over C: 모든 target 연결과 size update 완료
+        C->>R: CLIENT_READY,size
+        R->>S: START,size
+        Note over S: target CONNECTION_READY 수 확인<br/>context auto-HWM 재계산<br/>connected snapshot 수집
+        S->>R: SERVER_START_READY,size
+        R->>C: START,size
+    else 기타 runner barrier 패턴
         C->>R: CLIENT_READY,size
         R->>S: START,size
         R->>C: START,size
     end
-    Note over S,C: RESULT source and timing follow the pattern measurement contract
-    opt pattern emits completion token
+    Note over S,C: RESULT 주체와 시점은 패턴 측정 계약을 따름
+    opt completion token을 출력하는 패턴
         C->>R: CLIENT_DONE,size
     end
     R->>S: STOP
@@ -436,6 +446,10 @@ sequenceDiagram
 - raw socket의 실제 연결 확인은 바이너리 내부 `CONNECTION_READY`가 담당한다.
   runner barrier를 사용하는 raw pattern은 그 확인이 끝난 뒤
   `CLIENT_READY,<msg_size>`와 `START,<msg_size>`로 active 시작을 조정한다.
+- `MULTI_STREAM` raw client는 모든 target 연결과 size update가 끝난 뒤
+  `CLIENT_READY,<msg_size>`를 출력한다. runner는 server에 `START,<msg_size>`를
+  보내고, server의 `SERVER_START_READY,<msg_size>`를 확인한 뒤에만 client에
+  `START,<msg_size>`를 보내 active를 시작한다.
 
 ### 2.2 소스 파일 구조
 
@@ -509,7 +523,7 @@ for pattern in [MULTI_DEALER_DEALER, MULTI_PUBSUB, ...]:
 
 | Phase | 방식 | 기본값 | 환경 변수 |
 |-------|------|--------|-----------|
-| ready | event-based | raw socket client=`CONNECTION_READY`, one-way raw start=`CLIENT_READY`/`START` | `PERF_MULTI_CONNECT_READY_TIMEOUT_MS` |
+| ready | event-based | raw socket client=`CONNECTION_READY`, runner barrier=`CLIENT_READY`/`START`, `MULTI_STREAM` server ACK=`SERVER_START_READY` | `PERF_MULTI_CONNECT_READY_TIMEOUT_MS` |
 | active | time-based | 5s | `PERF_MULTI_DURATION_SECONDS` |
 
 > `PERF_MULTI_SETTLE_MS`는 C multi perf에서 삭제됐다. benchmark phase를 추가하는
@@ -826,6 +840,12 @@ server/client 분리 패턴은 **별도 소스 파일 / 별도 바이너리**로
   대체할 수 없다.
 - client 프로세스는 raw transport(`tcp`,`tls`,`ws`,`wss`)로 `connect`해야 하며, zlink STREAM 소켓의 client `connect()` 경로를 사용하지 않는다.
 - 각 size 측정에서 `connect_ok`는 `target clients`와 동일해야 한다(100%). 하나라도 미달하면 해당 조합은 `fail`이다.
+- raw client는 모든 target transport 연결과 해당 size update를 완료한 뒤에만
+  `CLIENT_READY,<msg_size>`를 출력한다. server는 runner의 `START,<msg_size>`를
+  받은 뒤 target `CONNECTION_READY` 수를 확인하고 context auto-HWM 재계산과
+  connected snapshot을 완료한 다음 `SERVER_START_READY,<msg_size>`를 출력한다.
+  runner가 이 ACK를 확인해 client에 `START,<msg_size>`를 보낸 뒤 active를
+  시작한다.
 - 위 모델을 위반한 구현은 정책 위반이므로 해당 코드를 삭제하고 정책 모델로 다시 구현해야 한다.
 - 위반 구현에서 나온 실행 결과는 정책 산출물로 인정하지 않는다.
 - raw `STREAM` callback mode는 perf에서 별도 테스트하지 않는다.
@@ -968,10 +988,13 @@ bindings/c/perf/run_benchmarks_multi.sh --duration 10
 # 터미널 2 (client)
 ./core/build/linux-x64/bin/comp_src_dealer_dealer_client current tcp 1024 --endpoint tcp://127.0.0.1:15557
 
-# 예시: MULTI_STREAM
-./core/build/linux-x64/bin/comp_src_stream_server current tcp
-./core/build/linux-x64/bin/perf_stream_client current tcp 1024 --endpoint tcp://127.0.0.1:15557
+# MULTI_STREAM은 two-stage start barrier가 필요하므로 runner로 실행
+bindings/c/perf/run_benchmarks_multi.sh --pattern MULTI_STREAM --transports tcp --msg-sizes 1024
 ```
+
+`MULTI_STREAM` 바이너리를 직접 실행할 때도 [§ 2.1.1의 시퀀스](#패턴별-orchestration-시퀀스)를
+그대로 중계해야 한다. server/client를 시작하는 두 명령만으로는 유효한 측정이
+시작되지 않는다.
 
 | 인자 | 대상 | 설명 |
 |------|------|------|
@@ -1253,6 +1276,7 @@ pattern별 공식 start contract 를 사용한다.
 |------|------|
 | raw socket client 연결 확인 API | `zlink_socket_monitor_open(...)` 뒤에 `CONNECTION_READY` 직접 대기 helper 사용 |
 | runner-barrier raw start API | `CONNECTION_READY` 확인 뒤 `CLIENT_READY` / `START` runner orchestration 사용 |
+| `MULTI_STREAM` server start gate | runner의 `START` 뒤 target `CONNECTION_READY` 수 확인, context auto-HWM 재계산, connected snapshot 수집, `SERVER_START_READY` 출력 |
 | 대기 방식 | app thread에서 타임아웃 기반 bounded wait — busy-wait/sleep 금지 |
 | 타임아웃 | `PERF_MULTI_CONNECT_READY_TIMEOUT_MS` (기본 10000ms) 초과 시 run 실패 처리 |
 | Monitor HWM | raw monitor 사용 시 4,096,000 byte. C/Go는 `PERF_MULTI_MONITOR_HWM_BYTES`, 나머지 binding은 `PERF_MULTI_MONITOR_HWM`을 사용한다 |
@@ -1262,8 +1286,11 @@ pattern별 공식 start contract 를 사용한다.
   counting으로 끝낸다.
 - runner-barrier raw 는 먼저 `CONNECTION_READY` 로 연결 준비를 닫고, suite별
   패턴 표의 `CLIENT_READY` / `START` 계약으로 active start gate 를 닫는다.
-- server 측에서도 runner-barrier raw 는 `START` stdin token 을 기준으로 active
-  송신을 시작한다.
+- `MULTI_STREAM` raw client는 모든 target 연결과 size update를 완료한 뒤
+  `CLIENT_READY`를 출력한다. server는 `START` stdin token을 준비 검증 요청으로
+  처리하며, target `CONNECTION_READY` 확인, context auto-HWM 재계산, connected
+  snapshot 수집을 끝낸 뒤 `SERVER_START_READY`를 출력한다. runner가 이 ACK를
+  확인해 client에 `START`를 보낸 시점이 active 시작 경계다.
 
 ### 13.3 코어 로직 인라인 (multi 보충)
 

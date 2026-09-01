@@ -203,7 +203,14 @@ def parse_args(argv):
     parser.add_argument("--monitor-hwm", default="")
     parser.add_argument("--server-shutdown-timeout-ms", default="")
     parser.add_argument("--server-bind-port", default="")
-    parser.add_argument("--auto-hwm-profile", default="")
+    parser.add_argument(
+        "--auto-hwm-profile",
+        default="",
+        help=(
+            "auto-HWM profile: compact, low_latency, balanced, or throughput "
+            "(default: balanced)"
+        ),
+    )
     return parser.parse_args(argv)
 
 

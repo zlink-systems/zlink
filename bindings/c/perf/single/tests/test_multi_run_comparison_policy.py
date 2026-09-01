@@ -68,6 +68,57 @@ def auto_hwm_detail_line(pattern, transport, component, msg_size, **fields):
 
 
 class MultiRunComparisonPolicyTests(unittest.TestCase):
+    def test_stream_server_start_ready_token_parser(self):
+        self.assertEqual(RC.parse_server_start_ready_size("SERVER_START_READY,1024\n"), 1024)
+        self.assertIsNone(RC.parse_server_start_ready_size("SERVER_START_READY,0\n"))
+        self.assertIsNone(RC.parse_server_start_ready_size("PHASE_ACTIVE,1024\n"))
+
+    def test_stream_start_barrier_waits_for_server_ack(self):
+        class FakeProcess:
+            def __init__(self):
+                self.stdin = io.StringIO()
+
+        args = RC.build_stream_shared_client_args(
+            "tcp", "STREAM", "1024", 1, 100, 4
+        )
+        start_gate_index = args.index("--start-gate")
+        self.assertEqual(args[start_gate_index + 1], "1")
+
+        server = FakeProcess()
+        client = FakeProcess()
+        pending_ready_sizes = set()
+        requested_sizes = set()
+
+        ready_size = RC.parse_client_ready_size("CLIENT_READY,1024\n")
+        pending_ready_sizes.add(ready_size)
+        self.assertTrue(
+            RC.request_stream_server_start(server, ready_size, requested_sizes)
+        )
+        self.assertEqual(server.stdin.getvalue(), "START,1024\n")
+        self.assertEqual(client.stdin.getvalue(), "")
+
+        self.assertFalse(
+            RC.forward_stream_start_ack(
+                client,
+                "AUTO_HWM_DETAIL,pattern=STREAM\n",
+                pending_ready_sizes,
+                requested_sizes,
+            )
+        )
+        self.assertEqual(client.stdin.getvalue(), "")
+
+        self.assertTrue(
+            RC.forward_stream_start_ack(
+                client,
+                "SERVER_START_READY,1024\n",
+                pending_ready_sizes,
+                requested_sizes,
+            )
+        )
+        self.assertEqual(client.stdin.getvalue(), "START,1024\n")
+        self.assertEqual(pending_ready_sizes, set())
+        self.assertEqual(requested_sizes, set())
+
     def test_requested_transport_order_is_preserved(self):
         old_allow_multi = RC.ALLOW_MULTI
         old_env_transports = RC._env_transports

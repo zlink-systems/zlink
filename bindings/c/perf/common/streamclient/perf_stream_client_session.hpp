@@ -426,14 +426,16 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
 
     // --- Send/receive echo loop ---
 
-    // Keep one transport write operation active at a time, but do not gate
-    // the next submission on echo receipt.  Transport backpressure controls
-    // admission; outstanding echoes are drained independently.
+    // Keep one unresolved echo per raw connection. A raw peer has no Core HWM
+    // admission point, so using async_write completion as admission would fill
+    // transport-specific OS/TLS/WebSocket buffers and distort comparisons.
     void maybe_send_more ()
     {
         if (closed || !connected ())
             return;
         if (write_pending)
+            return;
+        if (!perf_stream_common::perf_stream_can_submit_echo (outstanding))
             return;
         if (!owner.allow_send ())
             return;

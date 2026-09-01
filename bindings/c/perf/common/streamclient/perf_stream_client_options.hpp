@@ -33,6 +33,7 @@ struct client_options_t
     int io_threads;
     std::string stop_token;
     int send_stop_token;
+    int start_gate;
 
     client_options_t () :
         transport ("tcp"),
@@ -47,7 +48,8 @@ struct client_options_t
         size_transition_completion_wait_ms (0),
         io_threads (4),
         stop_token ("__zlink_perf_stop__"),
-        send_stop_token (0)
+        send_stop_token (0),
+        start_gate (0)
     {
         sizes.push_back (64);
         sizes.push_back (1024);
@@ -111,6 +113,7 @@ inline bool parse_options (int argc, char **argv, client_options_t &opt)
     opt.io_threads = args.get_int ("--io-threads", opt.io_threads, 1);
     opt.stop_token = args.get_string ("--stop-token", opt.stop_token.c_str ());
     opt.send_stop_token = args.get_int ("--send-stop-token", opt.send_stop_token, 0);
+    opt.start_gate = args.get_int ("--start-gate", opt.start_gate, 0);
 
     const std::string endpoint = args.get_string ("--endpoint", "");
     if (!endpoint.empty ()) {

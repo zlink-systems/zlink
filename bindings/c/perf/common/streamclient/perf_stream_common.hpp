@@ -44,6 +44,14 @@ inline bool perf_stream_is_active_completion (bool collection_enabled,
            && completion_ns < phase_end_ns;
 }
 
+// The raw STREAM peer has no Core send/HWM admission point. Keep exactly one
+// unresolved echo per connection so TCP, TLS, WS, and WSS are offered the same
+// load instead of benchmarking their different local buffering depths.
+inline bool perf_stream_can_submit_echo (size_t outstanding)
+{
+    return outstanding == 0;
+}
+
 inline double perf_stream_echo_latency_ns (uint64_t rtt_ns)
 {
     return static_cast<double> (rtt_ns) * 0.5;

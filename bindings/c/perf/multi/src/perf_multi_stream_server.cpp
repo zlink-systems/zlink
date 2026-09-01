@@ -1,5 +1,6 @@
 #include "../common/perf_common.hpp"
 #include "../common/perf_common_multi.hpp"
+#include "../common/perf_multi_handshake.hpp"
 #include "../common/perf_multi_stream_session.hpp"
 #include "bench_resource.hpp"
 
@@ -105,6 +106,16 @@ int main (int argc, char **argv)
         return 1;
     }
 
+    // Open before bind so the START barrier can prove that every requested raw
+    // transport connection reached Core CONNECTION_READY before HWM planning.
+    connect_monitor_t connect_monitor;
+    if (!open_connect_monitor (server, connect_monitor)) {
+        if (bench_debug_enabled ())
+            std::cerr << "[multi-stream-server] connect monitor open failed" << std::endl;
+        zlink_close (server);
+        return 1;
+    }
+
     const std::string endpoint =
       bind_server_endpoint (server, transport, lib_name + "_stream_server");
     if (endpoint.empty ()) {
@@ -112,12 +123,10 @@ int main (int argc, char **argv)
             std::cerr << "[multi-stream-server] bind endpoint failed errno=" << zlink_errno ()
                       << std::endl;
         }
+        close_connect_monitor (connect_monitor);
         zlink_close (server);
         return 1;
     }
-
-    perf_print_auto_hwm_snapshot (server, false, "server", transport, true, msg_size,
-                                  ZLINK_SOCKET_STREAM);
 
     perf_stop_requested ().store (false, std::memory_order_release);
     perf_multi_stream::reset_session (&g_stream_session, ctx.get (), server, transport);
@@ -132,37 +141,74 @@ int main (int argc, char **argv)
                       << zlink_errno () << std::endl;
         }
         perf_multi_stream::clear_session (&g_stream_session);
+        close_connect_monitor (connect_monitor);
         zlink_close (server);
         return 1;
     }
     install_perf_signal_handlers ();
+
+    std::cout << "READY," << endpoint << std::endl;
+    // The runner sends this START only after the raw client has connected every
+    // requested session and completed the size update. Keep context/socket APIs
+    // on this thread; it becomes the server event-loop owner immediately below.
+    if (!perf_multi_handshake::wait_for_start_from_stdin (msg_size)) {
+        perf_multi_stream::clear_session (&g_stream_session);
+        close_connect_monitor (connect_monitor);
+        zlink_close (server);
+        return 1;
+    }
+    if (!wait_connect_ready_count (connect_monitor, settings.clients,
+                                   settings.connect_ready_timeout_ms)) {
+        if (bench_debug_enabled ()) {
+            std::cerr << "[multi-stream-server] connection-ready barrier failed ready="
+                      << poll_connect_ready_count (connect_monitor)
+                      << " expected=" << settings.clients << std::endl;
+        }
+        perf_multi_stream::clear_session (&g_stream_session);
+        close_connect_monitor (connect_monitor);
+        zlink_close (server);
+        return 1;
+    }
+    apply_benchmark_hwm (server, settings.hwm);
+    if (zlink_ctx_auto_hwm_recalculate (ctx.get ()) != ZLINK_CONFIG_OK) {
+        if (bench_debug_enabled ()) {
+            std::cerr << "[multi-stream-server] ctx auto-hwm recalc failed err="
+                      << zlink_errno () << " size=" << msg_size << std::endl;
+        }
+        perf_multi_stream::clear_session (&g_stream_session);
+        close_connect_monitor (connect_monitor);
+        zlink_close (server);
+        return 1;
+    }
+
+    // Unlike the removed bind-time snapshot, this observes attached application
+    // pipes and therefore reports their actual applied byte HWM.
+    perf_print_auto_hwm_snapshot (server, false, "server-connected", transport, true,
+                                  msg_size, ZLINK_SOCKET_STREAM);
+    close_connect_monitor (connect_monitor);
+    std::cout << "SERVER_START_READY," << msg_size << std::endl;
 
     std::thread stdin_watcher ([] () {
         std::string line;
         while (std::getline (std::cin, line)) {
             if (line == "STOP" || line == "QUIT") {
                 perf_stop_requested ().store (true, std::memory_order_release);
+                g_stream_session.pending_cv.notify_all ();
                 return;
             }
         }
         perf_stop_requested ().store (true, std::memory_order_release);
+        g_stream_session.pending_cv.notify_all ();
     });
     stdin_watcher.detach ();
 
-    std::atomic<int> loop_rc (0);
-    std::thread event_loop_thread ([&] () {
-        loop_rc.store (perf_multi_stream::run_server_event_loop (&g_stream_session, server,
-                                                                 k_stop_token, NULL, NULL),
-                       std::memory_order_release);
-    });
-
-    std::cout << "READY," << endpoint << std::endl;
-    event_loop_thread.join ();
+    const int loop_rc = perf_multi_stream::run_server_event_loop (
+      &g_stream_session, server, k_stop_token, NULL, NULL);
 
     perf_multi_stream::clear_session (&g_stream_session);
 
     const bench_resource_metrics_t metrics = bench_finish_resource_probe (cpu_start);
     print_server_metrics (lib_name, transport, sizes, metrics);
     zlink_close (server);
-    return loop_rc.load (std::memory_order_acquire);
+    return loop_rc;
 }

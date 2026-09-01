@@ -1,5 +1,6 @@
 #include "perf_multi_client_helpers.hpp"
 #include "perf_multi_relay_server.hpp"
+#include "perf_multi_stream_session.hpp"
 #include "perf_multi_weighted_latency.hpp"
 #include "../../common/streamclient/perf_stream_common.hpp"
 
@@ -7,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <vector>
 
@@ -232,6 +234,13 @@ void test_stream_active_completion_cutoff_and_echo_latency ()
     assert (stream_completion_ns >= stream_stamp_ns);
 }
 
+void test_stream_raw_peer_allows_one_unresolved_echo ()
+{
+    assert (perf_stream_common::perf_stream_can_submit_echo (0));
+    assert (!perf_stream_common::perf_stream_can_submit_echo (1));
+    assert (!perf_stream_common::perf_stream_can_submit_echo (2));
+}
+
 void set_multi_hwm_env (const char *value)
 {
 #if defined(_WIN32)
@@ -253,6 +262,91 @@ void test_hwm_parser_preserves_uint64_range ()
     set_multi_hwm_env (NULL);
 }
 
+zlink_routing_id_t make_stream_route (uint32_t id)
+{
+    zlink_routing_id_t route;
+    std::memset (&route, 0, sizeof (route));
+    route.size = sizeof (id);
+    perf_stream_common::perf_stream_store_u32_be (route.data, id);
+    return route;
+}
+
+void require_stream_test (bool condition)
+{
+    if (!condition)
+        std::abort ();
+}
+
+void enqueue_stream_test_message (perf_multi_stream::session_t *session,
+                                  const zlink_routing_id_t &route,
+                                  unsigned char value)
+{
+    zlink_msg_t msg;
+    require_stream_test (zlink_msg_init_size (&msg, 1) == 0);
+    *static_cast<unsigned char *> (zlink_msg_data (&msg)) = value;
+    require_stream_test (perf_multi_stream::enqueue (session, &route, &msg));
+    require_stream_test (zlink_msg_close (&msg) == 0);
+}
+
+void test_stream_pending_queue_requires_integral_route ()
+{
+    perf_multi_stream::session_t session;
+    zlink_routing_id_t route = make_stream_route (1);
+    route.size = 1;
+    zlink_msg_t msg;
+    require_stream_test (zlink_msg_init_size (&msg, 1) == 0);
+    require_stream_test (!perf_multi_stream::enqueue (&session, &route, &msg));
+    require_stream_test (perf_multi_stream::pending_size (&session) == 0);
+    require_stream_test (zlink_msg_close (&msg) == 0);
+}
+
+void test_stream_pending_drain_is_fair_across_routes ()
+{
+    perf_multi_stream::session_t session;
+    const uint32_t blocked_route_id = 1;
+    const uint32_t ready_route_id = 2;
+    const zlink_routing_id_t blocked_route = make_stream_route (blocked_route_id);
+    const zlink_routing_id_t ready_route = make_stream_route (ready_route_id);
+    enqueue_stream_test_message (&session, blocked_route, 1);
+    enqueue_stream_test_message (&session, blocked_route, 2);
+    enqueue_stream_test_message (&session, ready_route, 3);
+    enqueue_stream_test_message (&session, ready_route, 4);
+
+    bool block_first_route = true;
+    std::vector<unsigned char> attempts;
+    std::vector<unsigned char> sent;
+    const auto sender = [&] (perf_multi_stream::session_t *,
+                             perf_multi_stream::queued_message_t &queued) {
+        const unsigned char value =
+          *static_cast<unsigned char *> (zlink_msg_data (&queued.msg));
+        attempts.push_back (value);
+        if (perf_stream_common::perf_stream_load_u32_be (queued.routing_id.data)
+              == blocked_route_id
+            && block_first_route)
+            return perf_multi_stream::send_result_pending;
+        sent.push_back (value);
+        return perf_multi_stream::send_result_sent;
+    };
+
+    perf_multi_stream::drain_pending_with (&session, sender);
+    require_stream_test ((attempts == std::vector<unsigned char>{1, 3}));
+    require_stream_test ((sent == std::vector<unsigned char>{3}));
+    require_stream_test (perf_multi_stream::pending_size (&session) == 3);
+
+    attempts.clear ();
+    perf_multi_stream::drain_pending_with (&session, sender);
+    require_stream_test ((attempts == std::vector<unsigned char>{1, 4}));
+    require_stream_test ((sent == std::vector<unsigned char>{3, 4}));
+    require_stream_test (perf_multi_stream::pending_size (&session) == 2);
+
+    block_first_route = false;
+    attempts.clear ();
+    perf_multi_stream::drain_pending_with (&session, sender);
+    require_stream_test ((attempts == std::vector<unsigned char>{1, 2}));
+    require_stream_test ((sent == std::vector<unsigned char>{3, 4, 1, 2}));
+    require_stream_test (perf_multi_stream::pending_size (&session) == 0);
+}
+
 }
 
 int main ()
@@ -269,6 +363,9 @@ int main ()
     test_count_duration_and_bandwidth ();
     test_echo_latency_uses_one_way_estimate ();
     test_stream_active_completion_cutoff_and_echo_latency ();
+    test_stream_raw_peer_allows_one_unresolved_echo ();
     test_hwm_parser_preserves_uint64_range ();
+    test_stream_pending_queue_requires_integral_route ();
+    test_stream_pending_drain_is_fair_across_routes ();
     return 0;
 }

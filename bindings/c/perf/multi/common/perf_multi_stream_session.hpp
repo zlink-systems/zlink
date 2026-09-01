@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 
 namespace perf_multi_stream
 {
@@ -67,6 +68,10 @@ struct queued_message_t
     queued_message_t &operator= (const queued_message_t &);
 };
 
+typedef std::deque<queued_message_t> pending_route_messages_t;
+typedef uint32_t pending_route_key_t;
+typedef std::unordered_map<pending_route_key_t, pending_route_messages_t> pending_route_map_t;
+
 enum send_result_t
 {
     send_result_sent = 0,
@@ -83,7 +88,8 @@ struct session_t
         send_count (0),
         pending_count (0),
         transport (),
-        pending_queue (),
+        pending_by_route (),
+        pending_routes (),
         pending_cv ()
     {
     }
@@ -94,11 +100,16 @@ struct session_t
     std::atomic<unsigned long long> send_count;
     std::atomic<unsigned long long> pending_count;
     std::string transport;
-    std::mutex send_mutex;
     std::mutex pending_mutex;
-    std::deque<queued_message_t> pending_queue;
+    pending_route_map_t pending_by_route;
+    std::deque<pending_route_key_t> pending_routes;
     std::condition_variable pending_cv;
 };
+
+inline pending_route_key_t pending_route_key (const zlink_routing_id_t &rid)
+{
+    return perf_stream_common::perf_stream_load_u32_be (rid.data);
+}
 
 inline bool is_stop_payload (const unsigned char *data, size_t size, const char *stop_token)
 {
@@ -120,7 +131,8 @@ inline void reset_session (session_t *session,
     session->pending_count.store (0, std::memory_order_release);
     session->transport = transport;
     std::lock_guard<std::mutex> lock (session->pending_mutex);
-    session->pending_queue.clear ();
+    session->pending_by_route.clear ();
+    session->pending_routes.clear ();
     session->pending_cv.notify_all ();
 }
 
@@ -130,7 +142,8 @@ inline void clear_session (session_t *session)
         return;
     session->send_socket = NULL;
     std::lock_guard<std::mutex> lock (session->pending_mutex);
-    session->pending_queue.clear ();
+    session->pending_by_route.clear ();
+    session->pending_routes.clear ();
     session->pending_cv.notify_all ();
 }
 
@@ -138,8 +151,7 @@ inline size_t pending_size (session_t *session)
 {
     if (!session)
         return 0;
-    std::lock_guard<std::mutex> lock (session->pending_mutex);
-    return session->pending_queue.size ();
+    return static_cast<size_t> (session->pending_count.load (std::memory_order_relaxed));
 }
 
 inline send_result_t try_send (session_t *session, queued_message_t &queued)
@@ -150,7 +162,8 @@ inline send_result_t try_send (session_t *session, queued_message_t &queued)
     if (!send_socket)
         return send_result_failed;
 
-    std::lock_guard<std::mutex> send_lock (session->send_mutex);
+    // run_server_event_loop() is the sole pending-queue consumer. Direct
+    // callback replies use the pipe-safe fast path in try_send_packet_now().
     const int rc =
       perf_zlink_send_rid_parts (send_socket, &queued.routing_id, &queued.msg, 1, ZLINK_DONTWAIT);
     if (rc == 0)
@@ -167,17 +180,25 @@ inline send_result_t try_send (session_t *session, queued_message_t &queued)
 
 inline bool enqueue (session_t *session, const zlink_routing_id_t *rid, zlink_msg_t *msg_part)
 {
-    if (!session || !rid || !msg_part)
+    if (!session || !rid || rid->size != sizeof (uint32_t) || !msg_part)
         return false;
 
+    const pending_route_key_t route_key = pending_route_key (*rid);
     queued_message_t queued;
     if (!queued.assign (rid, msg_part))
         return false;
 
-    session->pending_count.fetch_add (1, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock (session->pending_mutex);
-        session->pending_queue.push_back (std::move (queued));
+        pending_route_map_t::iterator route = session->pending_by_route.find (route_key);
+        if (route == session->pending_by_route.end ()) {
+            route = session->pending_by_route
+                      .insert (std::make_pair (route_key, pending_route_messages_t ()))
+                      .first;
+            session->pending_routes.push_back (route_key);
+        }
+        route->second.push_back (std::move (queued));
+        session->pending_count.fetch_add (1, std::memory_order_relaxed);
     }
     session->pending_cv.notify_one ();
     return true;
@@ -290,39 +311,87 @@ inline bool handle_packet_message (session_t *session,
     return queued;
 }
 
-inline void drain_pending (session_t *session)
+template <typename SendAttempt>
+inline void drain_pending_with (session_t *session, SendAttempt send_attempt)
 {
     if (!session)
         return;
 
     while (true) {
-        queued_message_t queued;
+        size_t route_budget = 0;
         {
             std::lock_guard<std::mutex> lock (session->pending_mutex);
-            if (session->pending_queue.empty ())
+            route_budget = session->pending_routes.size ();
+            if (route_budget == 0)
                 return;
-            queued = std::move (session->pending_queue.front ());
-            session->pending_queue.pop_front ();
         }
 
-        const send_result_t rc = try_send (session, queued);
-        if (rc == send_result_sent) {
-            session->send_count.fetch_add (1, std::memory_order_relaxed);
-            const unsigned long long pending_before =
-              session->pending_count.load (std::memory_order_relaxed);
-            if (pending_before > 0) {
-                session->pending_count.fetch_sub (1, std::memory_order_relaxed);
+        bool route_blocked = false;
+        for (size_t route_index = 0; route_index < route_budget; ++route_index) {
+            queued_message_t queued;
+            pending_route_key_t route_key = 0;
+            {
+                std::lock_guard<std::mutex> lock (session->pending_mutex);
+                if (session->pending_routes.empty ())
+                    break;
+
+                route_key = session->pending_routes.front ();
+                session->pending_routes.pop_front ();
+                pending_route_map_t::iterator route =
+                  session->pending_by_route.find (route_key);
+                if (route == session->pending_by_route.end () || route->second.empty ())
+                    continue;
+
+                queued = std::move (route->second.front ());
+                route->second.pop_front ();
             }
-            continue;
-        }
-        if (rc == send_result_pending) {
-            std::lock_guard<std::mutex> lock (session->pending_mutex);
-            session->pending_queue.push_front (std::move (queued));
+
+            const send_result_t rc = send_attempt (session, queued);
+            {
+                std::lock_guard<std::mutex> lock (session->pending_mutex);
+                pending_route_map_t::iterator route =
+                  session->pending_by_route.find (route_key);
+                if (route == session->pending_by_route.end ())
+                    continue;
+
+                if (rc == send_result_pending)
+                    route->second.push_front (std::move (queued));
+
+                if (!route->second.empty ())
+                    session->pending_routes.push_back (route_key);
+                else
+                    session->pending_by_route.erase (route);
+            }
+
+            if (rc == send_result_sent) {
+                session->send_count.fetch_add (1, std::memory_order_relaxed);
+                const unsigned long long pending_before =
+                  session->pending_count.load (std::memory_order_relaxed);
+                if (pending_before > 0)
+                    session->pending_count.fetch_sub (1, std::memory_order_relaxed);
+                continue;
+            }
+            if (rc == send_result_pending) {
+                route_blocked = true;
+                continue;
+            }
+            perf_stop_requested ().store (true, std::memory_order_release);
             return;
         }
-        perf_stop_requested ().store (true, std::memory_order_release);
-        return;
+
+        // One pass gives every active routing id one send opportunity. If a
+        // pipe remains blocked, wait for the next POLLOUT edge instead of
+        // retrying that pipe while other callback threads are still active.
+        if (route_blocked)
+            return;
     }
+}
+
+inline void drain_pending (session_t *session)
+{
+    drain_pending_with (session, [] (session_t *current, queued_message_t &queued) {
+        return try_send (current, queued);
+    });
 }
 
 struct packet_handler_context_t
@@ -383,7 +452,7 @@ inline int run_server_event_loop (session_t *session,
             std::unique_lock<std::mutex> lock (session->pending_mutex);
             session->pending_cv.wait_for (
               lock, std::chrono::milliseconds (perf_aux_poll_wait_ms ()), [&] {
-                  return !session->pending_queue.empty ()
+                  return !session->pending_routes.empty ()
                          || perf_stop_requested ().load (std::memory_order_acquire);
               });
             continue;

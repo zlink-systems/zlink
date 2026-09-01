@@ -406,6 +406,31 @@ void test_active_senders_keep_core_default_admission_timeout ()
     }
 }
 
+void test_multi_runner_owns_io_threads_alias ()
+{
+    const std::filesystem::path repo_root =
+      std::filesystem::path (__FILE__).parent_path ().parent_path ().parent_path ()
+        .parent_path ().parent_path ();
+    std::ifstream input (
+      repo_root / "bindings/cpp/perf/run_binding_multi.sh");
+    require (input.good (), "missing C++ multi runner");
+    const std::string source ((std::istreambuf_iterator<char> (input)),
+                              std::istreambuf_iterator<char> ());
+    const size_t alias_begin = source.find ("    --io-threads)");
+    const size_t alias_end = source.find ("    --server-io-threads)", alias_begin);
+    require (alias_begin != std::string::npos && alias_end != std::string::npos,
+             "multi runner lost the --io-threads alias");
+    require (source.find ("SCRIPT_ARGS", alias_begin) >= alias_end,
+             "multi runner forwarded --io-threads to the comparison runner");
+    require (source.find (
+               "SERVER_IO_THREADS=\"${SERVER_IO_THREADS:-${COMMON_IO_THREADS}}\"")
+               != std::string::npos
+               && source.find (
+                    "CLIENT_IO_THREADS=\"${CLIENT_IO_THREADS:-${COMMON_IO_THREADS}}\"")
+                    != std::string::npos,
+             "multi runner did not map --io-threads to both benchmark roles");
+}
+
 void test_remote_snapshot_defers_reentrant_enqueue ()
 {
     perf::application_ready_queue_t ready_queue;
@@ -517,6 +542,7 @@ int main ()
     test_public_send_handoff_precedes_poller_return ();
     test_stop_token_wait_ignores_active_drain_deadline ();
     test_active_senders_keep_core_default_admission_timeout ();
+    test_multi_runner_owns_io_threads_alias ();
     test_remote_snapshot_defers_reentrant_enqueue ();
     test_dealer_dealer_counter_stays_application_owned ();
     test_reqrep_completion_owner_is_the_application_queue ();

@@ -19,6 +19,7 @@
 #include "perf_stream_client_options.hpp"
 #include "perf_stream_client_session.hpp"
 #include "perf_stream_common.hpp"
+#include "../../multi/common/perf_multi_handshake.hpp"
 
 #include <boost/asio.hpp>
 
@@ -555,10 +556,14 @@ class bench_client_t : public bench_client_iface_t
                     == std::cv_status::timeout)
                     break;
             }
-            // A saturated active window normally has outstanding echoes at
-            // its cutoff.  Any remainder after this teardown grace is neither
-            // an active completion nor an active timeout.  The owning session
-            // drains it later or abandons it during its actual close.
+        }
+
+        // With the fixed one-echo-per-connection contract, the lifecycle tail
+        // is bounded by the connection count. A remainder at the deadline
+        // means this size did not quiesce and must not contaminate the next one.
+        if (outstanding_total.load (std::memory_order_relaxed) > 0) {
+            timeout_error_measure.fetch_add (1, std::memory_order_relaxed);
+            return false;
         }
 
         return true;
@@ -636,6 +641,33 @@ class bench_client_t : public bench_client_iface_t
             failed.timeout_error = 1;
             failed.pass = false;
             return failed;
+        }
+
+        if (opt.start_gate > 0) {
+            const long connected = count_connected_sessions ();
+            if (connected < required_connect) {
+                case_metrics_t failed;
+                failed.connect_ok = connected;
+                failed.connect_fail = std::max<long> (0, connect_target - connected);
+                failed.timeout_error = 1;
+                failed.pass = false;
+                return failed;
+            }
+
+            // Emit readiness only after every requested transport session is
+            // connected and its size update has completed. The runner first
+            // releases the Core server, waits for its HWM-recalculation ack,
+            // and only then forwards START back to this client.
+            std::printf ("CLIENT_READY,%zu\n", size);
+            std::fflush (stdout);
+            if (!perf_multi_handshake::wait_for_start_from_stdin (size)) {
+                case_metrics_t failed;
+                failed.connect_ok = connected;
+                failed.connect_fail = 0;
+                failed.timeout_error = 1;
+                failed.pass = false;
+                return failed;
+            }
         }
 
         const bool window_ok = run_active_window (std::max (1, opt.duration));

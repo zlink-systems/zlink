@@ -668,7 +668,6 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       COMMON_IO_THREADS="${2}"
-      SCRIPT_ARGS+=( "$1" "$2" )
       shift 2
       ;;
     --server-io-threads)
@@ -927,6 +926,10 @@ fi
 if [[ -n "${COMMON_IO_THREADS}" ]] && ( ! is_uint "${COMMON_IO_THREADS}" || (( COMMON_IO_THREADS < 1 )) ); then
   echo "Error: --io-threads must be a positive integer." >&2
   exit 1
+fi
+if [[ -n "${COMMON_IO_THREADS}" ]]; then
+  SERVER_IO_THREADS="${SERVER_IO_THREADS:-${COMMON_IO_THREADS}}"
+  CLIENT_IO_THREADS="${CLIENT_IO_THREADS:-${COMMON_IO_THREADS}}"
 fi
 if [[ -n "${SERVER_IO_THREADS}" ]] && ( ! is_uint "${SERVER_IO_THREADS}" || (( SERVER_IO_THREADS < 1 )) ); then
   echo "Error: --server-io-threads must be a positive integer." >&2

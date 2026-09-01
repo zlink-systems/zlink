@@ -150,7 +150,7 @@ Options:
   --server-shutdown-timeout-ms N Server shutdown timeout.
   --server-bind-port N    Fixed bind port (0=auto).
   --monitor-hwm N         Monitor socket HWM.
-  --auto-hwm-profile NAME Auto-HWM profile.
+  --auto-hwm-profile NAME Auto-HWM profile: compact, low_latency, balanced, throughput (default: balanced).
   --results-dir PATH     Results root override.
   --results-tag NAME     Optional report suffix tag.
   --core-version VERSION Download and use the specified released Core version.
