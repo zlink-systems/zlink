@@ -325,7 +325,7 @@ Everything else starts from its default.
 - The exact signatures and value ranges:
   [Topology public interfaces](../../../common/spec/server/languages/dotnet/interfaces/03-configuration-topology.en.md) ·
   [Host configuration interfaces](../../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.en.md)
-- Registration points and layering: [01-overview](01-overview.en.md#architecture--layering-and-registration-points)
+- Registration points and layering: [01-overview](01-overview.en.md#33-architecture--layering-and-registration-points)
 - Runtime observation and operations: [11-monitoring](11-monitoring.en.md) · [12-operations](12-operations.en.md)
 
 ---
