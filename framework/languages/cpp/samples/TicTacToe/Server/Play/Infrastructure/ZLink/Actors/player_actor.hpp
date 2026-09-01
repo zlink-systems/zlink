@@ -106,15 +106,15 @@ struct player_actor_t : framework::actor_t
               accepted->reply->decode<tictactoe_game_join_res_t> ();
             actor_context->bound_session ()
               .send (join_game_notify_t{joined.state})
-              .submit ();
+              .async ();
         } else if (std::holds_alternative<actor_join_rejected_t> (completion)) {
             actor_context->bound_session ()
               .send (join_game_failed_notify_t{room_id, "room admission rejected"})
-              .submit ();
+              .async ();
         } else if (std::holds_alternative<actor_join_failed_t> (completion)) {
             actor_context->bound_session ()
               .send (join_game_failed_notify_t{room_id, "room admission failed"})
-              .submit ();
+              .async ();
         }
         processed_join_operations.emplace (operation);
         if (!pending_join_rooms.empty ())
@@ -124,7 +124,7 @@ struct player_actor_t : framework::actor_t
 
     template <typename TNotify> void push (const TNotify &notify) const
     {
-        actor_context->bound_session ().send (notify).submit ();
+        actor_context->bound_session ().send (notify).async ();
     }
 
     player_info_t require_player () const

@@ -124,14 +124,14 @@ class support_user_actor_t : public actor_t
                 co_await actor_context.bound_session ()
                   .send (join_conversation_failed_notify_t{conversation_id, "Rejected"})
                   .metadata (conversation_id_metadata_key, conversation_id)
-                  .submit ();
+                  .async ();
             } else {
                 const auto &failed = std::get<actor_join_failed_t> (completion);
                 co_await actor_context.bound_session ()
                   .send (join_conversation_failed_notify_t{
                     conversation_id, std::to_string (static_cast<int> (failed.error_kind))})
                   .metadata (conversation_id_metadata_key, conversation_id)
-                  .submit ();
+                  .async ();
             }
         }
 
@@ -578,7 +578,7 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
         }
         std::cerr << "supportchat conversation: bound_push_begin packet=" << packet_name
                   << " participant=" << participant_id << "\n";
-        co_await (*actor)->context ().bound_session ().send (message).submit ();
+        co_await (*actor)->context ().bound_session ().send (message).async ();
         std::cerr << "supportchat conversation: bound push packet=" << packet_name
                   << " participant=" << participant_id << "\n";
         co_return;
@@ -724,7 +724,7 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
                            .request ("supportchat.api",
                                      open_conversation_api_req_t{actor.actor_id, actor.display_name,
                                                                  request.subject})
-                           .submit<open_conversation_api_res_t> ();
+                           .async<open_conversation_api_res_t> ();
         const auto conversation_id = allocated.state.conversation_id;
         auto scheduled = actor.schedule_conversation_join (conversation_id, false);
         co_return open_conversation_res_t{conversation_id, std::move (scheduled.state)};
@@ -755,7 +755,7 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
                       << " actor=" << actor_id << "\n";
             return;
         }
-        found->second->context ().bound_session ().send (message).submit ();
+        found->second->context ().bound_session ().send (message).async ();
         std::cerr << "supportchat support: bound push packet=" << packet_name
                   << " actor=" << actor_id << "\n";
     }
@@ -783,7 +783,7 @@ class ensure_support_user_actor_handler_t
           co_await _actors.get_or_create (actor_id_t (request.actor_id), support_user_actor_type)
             .in_mesh (sample_names_t::mesh)
             .creation_request (request)
-            .submit ();
+            .async ();
         if (const auto *existing = std::get_if<actor_create_existing_t> (&created))
             co_return ensure_support_user_actor_res_t{actor_location_t::from (existing->actor)};
         if (const auto *actor = std::get_if<actor_create_created_t> (&created))
@@ -823,7 +823,7 @@ class ensure_agent_conversation_handler_t
             .in_mesh (sample_names_t::mesh)
             .creation_request (ensure_support_user_actor_req_t{
               conversation_actor_id, request.display_name, role_t::agent, request.roster_actor_id})
-            .submit ();
+            .async ();
         std::optional<actor_ref_t> actor;
         if (const auto *existing = std::get_if<actor_create_existing_t> (&created))
             actor = existing->actor;
@@ -838,12 +838,12 @@ class ensure_agent_conversation_handler_t
                        .request (actor->actor_id (),
                                  join_conversation_req_t{request.roster_actor_id, role_t::agent,
                                                          request.display_name})
-                       .submit<join_conversation_res_t> ();
+                       .async<join_conversation_res_t> ();
         } else {
             joined = co_await _actor_client
                        .request (actor->actor_id (),
                                  schedule_conversation_join_req_t{request.conversation_id})
-                       .submit<join_conversation_res_t> ();
+                       .async<join_conversation_res_t> ();
         }
         co_return ensure_agent_conversation_res_t{actor_location_t::from (*actor), joined.scheduled,
                                                   joined.state};

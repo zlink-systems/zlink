@@ -676,7 +676,7 @@ zlink::framework::task_t<void> run_request_turn_probe (
     }
     zlink::framework::request_call_t<int> call (
       "TurnProbe", [reply] (const auto &, auto, const auto &) { return reply->task (); });
-    const auto value = release_turn ? co_await call.yield () : co_await call.submit ();
+    const auto value = release_turn ? co_await call.yield () : co_await call.async ();
     if (value != 7) {
         throw std::runtime_error ("turn probe reply mismatch");
     }
@@ -1894,7 +1894,7 @@ bool verify_same_actor_synchronous_reentry_is_immediate ()
           actor_request_call_t request (
             client, actor_id_t ("actor-a"), "ReentryProbe", message_t{});
           const auto started = std::chrono::steady_clock::now ();
-          const auto result = request.submit_message ().result ();
+          const auto result = request.async_message ().result ();
           const auto elapsed = std::chrono::steady_clock::now () - started;
           try {
               result.value ();
@@ -4573,7 +4573,7 @@ class actor_cutover_probe_spot_t final
             const auto submitted = actor.context ()
                                      .bound_session ()
                                      .send (std::string ("target-joined"))
-                                     .submit ()
+                                     .async ()
                                      .result ();
             actor_cutover_probe_t::joined_bound_push_submitted.store (static_cast<bool> (submitted),
                                                                       std::memory_order_release);
@@ -4686,7 +4686,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
             const auto submitted = gateway.actor_context (committed_actor)
                                      .bound_session ()
                                      .send (std::string ("joined-before-completion"))
-                                     .submit ()
+                                     .async ()
                                      .result ();
             joined_bound_push_submitted.store (static_cast<bool> (submitted),
                                                std::memory_order_release);
@@ -4973,7 +4973,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         const auto submitted = gateway.actor_context (combined_committed_actor)
                                  .bound_session ()
                                  .send (std::string ("combined-joined"))
-                                 .submit ()
+                                 .async ()
                                  .result ();
         if (!submitted)
             throw std::runtime_error ("combined Join bound push was not submitted");
@@ -6282,7 +6282,7 @@ bool verify_remote_actor_completion_keeps_session_ref_until_route_ack ()
     const auto target = actor_ref_access_t::make (
       node_rid_t::from_string ("target-node"), "player",
       "remote-source-actor", 7);
-    if (!session.bind (source).submit ().result ())
+    if (!session.bind (source).async ().result ())
         return false;
 
     int publications = 0;
@@ -6856,12 +6856,12 @@ int main ()
     auto context =
       zlink::framework::detail::spot_context_access_t::create ();
     auto async_call = context.run_cpu_worker ([] { return 1; });
-    auto async_result = async_call.submit ().result ();
+    auto async_result = async_call.async ().result ();
     if (async_result
         || async_result.error_kind () != zlink::framework::framework_error_kind_t::internal_failure) {
         return 6;
     }
-    auto duplicate_async = async_call.submit ().result ();
+    auto duplicate_async = async_call.async ().result ();
     if (duplicate_async
         || duplicate_async.error_kind ()
              != zlink::framework::framework_error_kind_t::protocol_error) {
@@ -6869,13 +6869,13 @@ int main ()
     }
 
     auto callback_call = context.run_cpu_worker ([] { return 2; });
-    const auto unconfigured_result = callback_call.submit ().result ();
+    const auto unconfigured_result = callback_call.async ().result ();
     if (unconfigured_result
         || unconfigured_result.error_kind ()
              != zlink::framework::framework_error_kind_t::internal_failure) {
         return 8;
     }
-    const auto duplicate_result = callback_call.submit ().result ();
+    const auto duplicate_result = callback_call.async ().result ();
     if (duplicate_result
         || duplicate_result.error_kind ()
              != zlink::framework::framework_error_kind_t::protocol_error) {
@@ -6889,7 +6889,7 @@ int main ()
         worker_thread = std::this_thread::get_id ();
         return 42;
     });
-    auto submit_task = submit_call.submit ();
+    auto submit_task = submit_call.async ();
     if (scheduler->worker_job_count () != 1 || scheduler->owner_job_count () != 0) {
         return 10;
     }
@@ -6906,7 +6906,7 @@ int main ()
     auto async_scheduler = std::make_shared<controlled_worker_scheduler_t> ();
     auto async_context = context_with_scheduler (async_scheduler);
     auto worker_call = async_context.run_cpu_worker ([] { return 7; });
-    auto worker_task = worker_call.submit ();
+    auto worker_task = worker_call.async ();
     async_scheduler->run_worker_job ();
     async_scheduler->run_owner_job ();
     const auto worker_result = worker_task.result ();
@@ -6918,7 +6918,7 @@ int main ()
     full_scheduler->queue_full = true;
     auto full_context = context_with_scheduler (full_scheduler);
     auto full_call = full_context.run_cpu_worker ([] { return 3; });
-    auto full_task = full_call.submit ();
+    auto full_task = full_call.async ();
     if (full_scheduler->worker_job_count () != 0 || full_scheduler->owner_job_count () != 1) {
         return 14;
     }
@@ -6938,7 +6938,7 @@ int main ()
           timeout_saw_cancellation.store (cancellation.stop_requested ());
           return 9;
       });
-    auto timeout_task = timeout_call.timeout (std::chrono::milliseconds (5)).submit ();
+    auto timeout_task = timeout_call.timeout (std::chrono::milliseconds (5)).async ();
     for (int attempt = 0; attempt < 50 && !timeout_task.await_ready (); ++attempt) {
         std::this_thread::sleep_for (std::chrono::milliseconds (2));
     }
@@ -6965,7 +6965,7 @@ int main ()
           shutdown_saw_cancellation.store (cancellation.stop_requested ());
           return 11;
       });
-    auto shutdown_task = shutdown_call.submit ();
+    auto shutdown_task = shutdown_call.async ();
     shutdown_scheduler->request_stop ();
     if (!shutdown_task.await_ready ()) {
         return 21;
@@ -6991,7 +6991,7 @@ int main ()
         auto source =
           std::make_shared<zlink::framework::detail::task_completion_source_t<int>> ();
         auto call = io_context.run_io_worker ([source] { return source->task (); });
-        io_tasks.push_back (call.submit ());
+        io_tasks.push_back (call.async ());
         io_sources.push_back (std::move (source));
     }
     if (io_scheduler->worker_job_count () != 8 || io_scheduler->owner_job_count () != 0) {
@@ -7019,7 +7019,7 @@ int main ()
           io_thread = std::this_thread::get_id ();
           return io_thread_source->task ();
       });
-    auto io_thread_task = io_thread_call.submit ();
+    auto io_thread_task = io_thread_call.async ();
     io_scheduler->run_worker_job ();
     if (io_thread == std::thread::id{}) {
         return 24;
@@ -7035,7 +7035,7 @@ int main ()
     auto io_timeout_call = io_context.run_io_worker (
       [io_timeout_source] { return io_timeout_source->task (); });
     auto io_timeout_task =
-      io_timeout_call.timeout (std::chrono::milliseconds (5)).submit ();
+      io_timeout_call.timeout (std::chrono::milliseconds (5)).async ();
     if (io_scheduler->worker_job_count () != 1) {
         return 29;
     }

@@ -229,7 +229,7 @@ class commerce_api_handlers_t
         co_return co_await _routes.request_to_spot (spot_id_t (request.order_id), request)
           .instance_spot (sample_names_t::order_workflow_spot)
           .timeout (std::chrono::milliseconds (5000))
-          .template submit<TReply> ();
+          .template async<TReply> ();
     }
 
     route_client_t &_routes;

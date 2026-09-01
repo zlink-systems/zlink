@@ -215,13 +215,13 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     const auto sent = client.send_to_spot ("cart-17", event_t{1})
                         .instance_spot ("shopping-cart")
                         .in_mesh ("commerce")
-                        .submit ().result ();
+                        .async ().result ();
     ASSERT_TRUE (sent);
 
     const auto reply = client.request_to_spot ("cart-17", request_t{2})
                          .instance_spot ("different-type")
                          .in_mesh ("different-mesh")
-                         .submit<reply_t> ().result ();
+                         .async<reply_t> ().result ();
     ASSERT_TRUE (reply);
     EXPECT_EQ (71, reply.value ().value);
     EXPECT_EQ (1, activations.load ());
@@ -259,7 +259,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
 
     const auto result = builder.route_client (serializers)
                           .send_to_spot ("missing", event_t{1})
-                          .submit ().result ();
+                          .async ().result ();
     EXPECT_FALSE (result);
     EXPECT_EQ (zlink::framework::framework_error_kind_t::not_found,
                result.error_kind ());
@@ -300,7 +300,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
                           .request_to_spot ("cold-cart", request_t{7})
                           .instance_spot ("shopping-cart")
                           .in_mesh ("commerce")
-                          .submit<reply_t> ()
+                          .async<reply_t> ()
                           .result ();
 
     EXPECT_FALSE (result);
@@ -337,10 +337,10 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     auto client = builder.route_client (serializers);
     EXPECT_FALSE (client.send_to_spot ("missing", event_t{1})
                     .instance_spot ("quest")
-                    .submit ().result ());
+                    .async ().result ());
     EXPECT_FALSE (client.send_to_spot ("missing", event_t{1})
                     .instance_spot ("quest")
-                    .submit ().result ());
+                    .async ().result ());
 
     EXPECT_EQ (2, resolver.reads.load ());
     EXPECT_EQ (2, activations.load ());
@@ -428,7 +428,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     const auto stale = client.request_to_spot ("player-alice", request_t{1})
                          .instance_spot ("player-quest")
                          .in_mesh ("gamequest")
-                         .submit<reply_t> ()
+                         .async<reply_t> ()
                          .result ();
     ASSERT_FALSE (stale);
     EXPECT_EQ (zlink::framework::framework_error_kind_t::shutting_down,
@@ -440,7 +440,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     const auto rehydrated = client.request_to_spot ("player-alice", request_t{2})
                               .instance_spot ("player-quest")
                               .in_mesh ("gamequest")
-                              .submit<reply_t> ()
+                              .async<reply_t> ()
                               .result ();
     ASSERT_TRUE (rehydrated);
     EXPECT_EQ (3, rehydrated.value ().value);

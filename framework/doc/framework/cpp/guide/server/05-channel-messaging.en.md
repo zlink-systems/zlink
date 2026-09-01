@@ -94,7 +94,7 @@ auto placed = co_await client
                 // The target is just one ChannelName. No address, no MeshName.
                 .request_to_channel ("orders",
                                      place_order_t{"order-1042", "acct-77", 18742})
-                .submit<order_placed_t> ();
+                .async<order_placed_t> ();
 ```
 
 > To compare deployment structure, call path, and infrastructure mapping side-by-side with
@@ -182,7 +182,7 @@ co_await _context.outbound ()
   .publish (sample_topics_t::player_milestone_channel, // The ChannelName that decides delivery scope.
             sample_topics_t::player_milestone,         // The topic that picks which Spots receive it within that scope.
             milestone_event)
-  .submit ();
+  .async ();
 
 // Subscribing -- when the entry spot starts.
 _context.handlers ().add_subscribe<&play_entry_spot_t::on_player_win_milestone> (
@@ -240,9 +240,9 @@ The call shape and matching handler interface per language are as follows.
 
 | Kind | The call it sends | The handler that receives it |
 | --- | --- | --- |
-| request | `request_to_channel (name, req).submit<TReply> ()` | A handler class declaring `request_type`/`reply_type` |
-| send | `send_to_channel (name, msg).submit ()` | A handler class declaring only `request_type` |
-| publish (fanout) | `publish (name, topic, evt).submit ()` | A fanout handler class declaring only `request_type` |
+| request | `request_to_channel (name, req).async<TReply> ()` | A handler class declaring `request_type`/`reply_type` |
+| send | `send_to_channel (name, msg).async ()` | A handler class declaring only `request_type` |
+| publish (fanout) | `publish (name, topic, evt).async ()` | A fanout handler class declaring only `request_type` |
 
 A channel handler is an independent class. Since different requests can run concurrently,
 don't put mutable domain state in a handler member. The handler instance and its scoped
@@ -340,7 +340,7 @@ class refresh_cache_handler_t
         co_await _publisher
           .publish ("api.events", "user.cache-refreshed",
                     user_cache_refreshed_event_t{command.account_id})
-          .submit ();
+          .async ();
     }
 
   private:
@@ -373,7 +373,7 @@ task_t<create_game_reply_t> handle (const create_game_request_t &request)
                   .request_to_channel ("tictactoe.play",
                                        create_room_request_t{request.game_name})
                   .timeout (std::chrono::seconds (5)) // The cap on waiting for the reply.
-                  .submit<create_room_reply_t> ();    // Waits until the reply arrives.
+                  .async<create_room_reply_t> ();    // Waits until the reply arrives.
 
     co_return create_game_reply_t{room.room_id, room.game_name};
 }
@@ -479,16 +479,16 @@ class price_service_t
     task_t<double> get (const std::string &symbol)
     {
         auto reply = co_await _client
-                       // The target is just one ChannelName. The reply type is specified in submit<T>.
+                       // The target is just one ChannelName. The reply type is specified in async<T>.
                        .request_to_channel ("price", price_request_t{symbol})
-                       .submit<price_reply_t> ();
+                       .async<price_reply_t> ();
         co_return reply.price;
     }
 
     task_t<void> refresh (const std::string &account_id)
     {
         // send: only waits until my runtime accepts the submission.
-        co_await _client.send_to_channel ("profile", refresh_cache_command_t{account_id}).submit ();
+        co_await _client.send_to_channel ("profile", refresh_cache_command_t{account_id}).async ();
     }
 
   private:
@@ -518,7 +518,7 @@ co_await client
   .request_to_channel ("price", price_request_t{symbol})
   // Specify only when this call's reply-wait cap should differ from the default (30s).
   .timeout (std::chrono::seconds (5))
-  .submit<price_reply_t> ();
+  .async<price_reply_t> ();
 // Order that decides the reply-wait cap (earlier wins):
 //   1) Per-call .timeout (...)
 //   2) The MeshNode builder's set_default_request_timeout (...)
@@ -539,7 +539,7 @@ class profile_service_t
         co_await _publisher
           .publish ("api.events", "profile.cache-refreshed",
                     profile_cache_refreshed_event_t{account_id})
-          .submit ();
+          .async ();
     }
 
   private:
@@ -901,7 +901,7 @@ auto target = zlink::routing_id_t::from (std::string ("play-node-1"));
 // Uses node direct because it's asking about a specific node's operational status.
 auto status = co_await route_client
                 .request_to_node ("play", target, get_node_status_t{})
-                .submit<node_status_t> ();
+                .async<node_status_t> ();
 
 class node_status_handler_t
 {

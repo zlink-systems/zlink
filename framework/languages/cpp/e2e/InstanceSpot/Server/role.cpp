@@ -324,7 +324,7 @@ class instance_request_handler_t
                                  .instance_spot (e2e::spot_type)
                                  .in_mesh (e2e::mesh_name)
                                  .timeout (std::chrono::seconds (5))
-                                 .submit<e2e::probe_res_t> ();
+                                 .async<e2e::probe_res_t> ();
             co_return json_response (reply);
         }
         catch (const fw::framework_exception_t &error) {
@@ -353,7 +353,7 @@ class instance_send_handler_t
               .send_to_spot (request.spot_id, request)
               .instance_spot (e2e::spot_type)
               .in_mesh (e2e::mesh_name)
-              .submit ();
+              .async ();
             co_return json_response ({ {"status", "accepted"},
                                        {"spotId", request.spot_id},
                                        {"operationId", request.operation_id},

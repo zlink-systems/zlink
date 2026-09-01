@@ -140,7 +140,7 @@ class create_game_http_handler_t
 
 | 서비스 | 설명 |
 |--------|------|
-| `request_client_t` | 채널 요청 송신 — `request(mesh, channel, msg).submit<TReply>()` |
+| `request_client_t` | 채널 요청 송신 — `request(mesh, channel, msg).async<TReply>()` |
 | `logger_t<TOwner>` | 소유 타입 이름으로 태그된 로거 — `_logger.info(...)` |
 | `session_actor_manager_t` | stream session에서 actor 생성·조회·바인딩 |
 | `logger_factory_t` | `create("category")` — 카테고리를 동적으로 정할 때(`create<TCategory>()`는 타입명 기반) |

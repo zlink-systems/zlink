@@ -478,7 +478,7 @@ stream_write_call_t &stream_write_call_t::compress ()
     return *this;
 }
 
-task_t<void> stream_write_call_t::submit ()
+task_t<void> stream_write_call_t::async ()
 {
     auto state = _state;
     auto claimed = state->claim_submit ();
@@ -543,7 +543,7 @@ stream_send_call_t &stream_send_call_t::timeout (std::chrono::milliseconds timeo
     return *this;
 }
 
-task_t<void> stream_send_call_t::submit ()
+task_t<void> stream_send_call_t::async ()
 {
     auto state = _state;
     auto claimed = state->claim_submit ();
@@ -1467,7 +1467,7 @@ void stream_runtime_t::send_session_closing (stream_t &stream,
           .write_packet_with_header (
             std::move (closing),
             zlink::message_t::from (std::string (payload_bytes.begin (), payload_bytes.end ())))
-          .submit ().result ().value ();
+          .async ().result ().value ();
     }
     catch (...) {
     }
@@ -1480,7 +1480,7 @@ void stream_runtime_t::send_heartbeat_ping (stream_t &stream) const noexcept
                               stream_header_flags_t::none, std::nullopt, "$zlink.heartbeat.ping",
                               {});
         stream.write_packet_with_header (std::move (ping), zlink::message_t{})
-          .submit ().result ().value ();
+          .async ().result ().value ();
     }
     catch (...) {
     }
@@ -1493,7 +1493,7 @@ void stream_runtime_t::send_heartbeat_pong (stream_t &stream) const noexcept
                               stream_header_flags_t::none, std::nullopt,
                               "$zlink.heartbeat.pong", {});
         stream.write_packet_with_header (std::move (pong), zlink::message_t{})
-          .submit ().result ().value ();
+          .async ().result ().value ();
     }
     catch (...) {
     }

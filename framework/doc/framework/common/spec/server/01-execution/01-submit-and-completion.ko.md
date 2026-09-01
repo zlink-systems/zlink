@@ -47,7 +47,7 @@ option을 반복했을 때의 처리와 terminal 재호출 오류는 각 operati
 | 일반 비동기 terminal | Request, worker 또는 create의 application 결과가 terminal 상태가 될 때까지 기다린다 | 완료 continuation이 끝날 때까지 현재 [owner](../00-foundation/02-glossary.ko.md#owner) turn을 유지한다 |
 | `Yield` | Operation을 제출한 뒤 callback이 application queue에서 execution gate를 점유해 실행되는 단위인 shared [Spot turn](../00-foundation/02-glossary.ko.md#spot-turn)을 반납하고 application 결과를 기다린다 | 완료 continuation은 같은 Spot gate를 다시 얻어 새 turn에서 재개한다 |
 
-언어별 일반 비동기 terminal 이름은 .NET `Async`, Java·Node.js·C++ `submit`, Kotlin
+언어별 일반 비동기 terminal 이름은 .NET `Async`, C++ `async`, Java·Node.js `submit`, Kotlin
 전용 wrapper의 `await`다. 비동기 완료를 반환하지 않는 즉시 제출은 `Submit`·`submit`을
 사용한다. 실제 shared Spot gate를 반납하는 terminal만 `Yield`·`yield`라는 이름을
 사용한다.
@@ -453,13 +453,13 @@ completion으로 끝난다. Token claim 규칙은 [§8](#8-stream-reply-token)�
 
 | Framework 언어 | Typed Session reply terminal | 완료 표현 |
 |---|---|---|
-| C++ | `.reply_packet(...).submit()` | `co_await` 가능한 Framework task |
+| C++ | `.reply_packet(...).async()` | `co_await` 가능한 Framework task |
 | .NET | `.Reply(...).Async(ct)` | `ValueTask` |
 | Java | `.reply(...).submit()` | `CompletionStage<Void>` |
 | Kotlin | `.reply(...).await()` | suspending `Unit` |
 | Node | `.reply(...).submit(signal?)` | `Promise<void>` |
 
-같은 `submit` 이름을 쓰는 언어에서도 반환 타입과 소유 계층으로 raw binding
+`submit` 이름을 쓰는 언어에서도 반환 타입과 소유 계층으로 raw binding
 reply(동기 one-shot)와 구분한다.
 
 ## 16. 언어별 표현
@@ -474,22 +474,22 @@ interface가 소유한다.
 | Java | `submit(...)`이 `CompletionStage<T>`를 반환한다 | `yield(...)` | [Channel messaging](../languages/java/interfaces/channel-messaging.ko.md) |
 | Kotlin | 전용 call wrapper의 suspending `await()`를 사용한다 | 전용 wrapper의 `yield()` | [Channel messaging](../languages/kotlin/interfaces/channel-messaging.ko.md) |
 | Node.js | `submit(...)`이 `Promise<T>`를 반환한다 | `yield(...)` | [인터페이스 목차](../languages/node/interfaces/README.ko.md) |
-| C++ | `submit(...)`이 `task_t<T>`를 반환한다 | `yield(...)` | [framework 인터페이스](../languages/cpp/interfaces/README.ko.md) |
+| C++ | `async(...)`가 `task_t<T>`를 반환한다 | `yield(...)` | [framework 인터페이스](../languages/cpp/interfaces/README.ko.md) |
 
 각 언어별 interface는 terminator별 return type, cancellation 인자, callback 또는
 coroutine 표현을 고정한다. 언어 표준 표현이 달라도 같은 operation의 완료 시점,
 ordering과 오류 분류는 달라지지 않는다.
 
-C++ `task_t`는 호출할 때 operation을 시작하므로 `submit()`을 결과 사용 여부에 따라
+C++ `task_t`는 호출할 때 operation을 시작하므로 `async()`를 결과 사용 여부에 따라
 다음과 같이 사용할 수 있다. 아래 두 줄은 서로 다른 single-use call을 보여 준다.
 
 ```cpp
-sendCall.submit();                      // 결과 없이 operation만 시작한다.
-auto reply = co_await requestCall.submit(); // 비동기 application reply를 기다린다.
+sendCall.async();                      // 결과 없이 operation만 시작한다.
+auto reply = co_await requestCall.async(); // 비동기 application reply를 기다린다.
 ```
 
 반환형만 다른 overload는 만들지 않는다. C++ Messaging call wrapper는 같은 인자의
-blocking `submit()`과 coroutine terminal을 함께 제공하지 않고 `task_t<T> submit()`
+blocking `submit()`과 coroutine terminal을 함께 제공하지 않고 `task_t<T> async()`
 하나를 제공한다. Callback overload는 parameter list가 다르므로 `submit(callback)`으로
 제공할 수 있다.
 

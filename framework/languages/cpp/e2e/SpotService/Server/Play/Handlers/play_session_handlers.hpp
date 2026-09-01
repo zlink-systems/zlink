@@ -29,7 +29,7 @@ class push_bound_session_handler_t
         }
         auto reply =
           actor->relay_request ("PushReq", zlink::message_t::from_json (request.push))
-            .submit ()
+            .async ()
             .result ();
         if (!reply) {
             throw zlink::framework::framework_exception_t (

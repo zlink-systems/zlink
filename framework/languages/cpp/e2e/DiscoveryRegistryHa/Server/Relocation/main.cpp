@@ -499,7 +499,7 @@ class create_spot_handler_t
         const auto request = parse_body (http_request).get<e2e::create_spot_req_t> ();
         const auto created = co_await _spots.get_or_create (request.spot_id, "df-user")
                                .creation_request (request)
-                               .submit ();
+                               .async ();
         co_return json_response (nlohmann::json (e2e::create_spot_res_t{
           request.spot_id, std::string (created.spot.node_rid ().value ())}));
     }
@@ -541,7 +541,7 @@ class create_actor_handler_t
         auto created = co_await _actor_manager
                         .get_or_create (fw::actor_id_t (request.actor_id), request.actor_type)
                         .creation_request (request)
-                        .submit ();
+                        .async ();
         const auto ref = std::visit (
           [] (const auto &result) -> fw::actor_ref_t {
               using result_t = std::decay_t<decltype (result)>;
@@ -579,7 +579,7 @@ class relocate_actor_handler_t
         try {
             auto result = co_await _actors.request (fw::actor_id_t (actor_id), request)
                             .timeout (std::chrono::seconds (20))
-                            .submit<e2e::relocate_res_t> ();
+                            .async<e2e::relocate_res_t> ();
             co_return json_response (nlohmann::json (result));
         }
         catch (const fw::framework_exception_t &error) {
@@ -605,7 +605,7 @@ class probe_actor_handler_t
         try {
             auto response = co_await _actors.request (fw::actor_id_t (actor_id), request)
                               .timeout (std::chrono::seconds (10))
-                              .submit<e2e::probe_state_res_t> ();
+                              .async<e2e::probe_state_res_t> ();
             co_return json_response (nlohmann::json (response));
         }
         catch (const fw::framework_exception_t &error) {

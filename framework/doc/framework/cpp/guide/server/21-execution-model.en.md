@@ -96,7 +96,7 @@ handle (const create_game_http_req_t &request)
     auto room = co_await _client
                   .request ("tictactoe.application", "tictactoe.play",
                             create_game_req_t{request.game_name})
-                  .submit<create_game_res_t> ();
+                  .async<create_game_res_t> ();
     co_return create_game_http_res_t{room.room_id,
                                      room.game_name,
                                      room.owner_play_endpoint,
@@ -146,7 +146,7 @@ sequenceDiagram
 
     W->>H1: run handle()
     activate H1
-    H1->>CH: co_await request(...).submit()
+    H1->>CH: co_await request(...).async()
     deactivate H1
     Note over H1: suspend -- waiting for response (holds no thread)
     Note over W: the worker moves to the next work immediately

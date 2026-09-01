@@ -25,7 +25,7 @@ create_route_spot (zlink::framework::spot_manager_t &spots,
     auto created = spots
                      .get_or_create (std::move (spot_id), std::move (stable_type))
                      .creation_request (std::move (request))
-                     .submit ()
+                     .async ()
                      .result ();
     if (!created) {
         throw zlink::framework::framework_exception_t (
@@ -86,7 +86,7 @@ class route_spot_state_handler_t
         auto reply =
           _routes
             .request_to_spot (resolve_required_spot_id (_spots, spot_id), request.state)
-            .submit<e2e::state_res_t> ()
+            .async<e2e::state_res_t> ()
             .result ();
         if (!reply) {
             throw zlink::framework::framework_exception_t (
@@ -125,7 +125,7 @@ class direct_spot_route_handler_t
           _routes
             .request_to_spot (resolve_required_spot_id (_spots, request.spot_id),
                               e2e::direct_spot_req_t{request.source_actor_id, request.value})
-            .submit<e2e::direct_spot_res_t> ()
+            .async<e2e::direct_spot_res_t> ()
             .result ();
         if (!reply) {
             throw zlink::framework::framework_exception_t (
@@ -163,7 +163,7 @@ class direct_spot_command_route_handler_t
         _routes
           .send_to_spot (resolve_required_spot_id (_spots, request.spot_id),
                          e2e::direct_spot_msg_t{request.source_actor_id, request.value})
-          .submit ();
+          .async ();
 
         zlink::framework::http_response_t response;
         response.body = nlohmann::json (e2e::spot_state_command_route_res_t{.accepted = true})
@@ -199,7 +199,7 @@ class spot_stage_probe_route_handler_t
               resolve_required_spot_id (_spots, request.spot_id),
               e2e::stage_probe_req_t{.marker = request.marker, .delta = request.delta})
             .timeout (std::chrono::seconds (3))
-            .submit<e2e::state_res_t> ()
+            .async<e2e::state_res_t> ()
             .result ();
         if (!reply) {
             throw zlink::framework::framework_exception_t (
@@ -240,7 +240,7 @@ class spot_stage_timer_route_handler_t
           .send_to_spot (
             resolve_required_spot_id (_spots, request.spot_id),
             e2e::stage_timer_start_msg_t{.name = request.name, .period_ms = request.period_ms})
-          .submit ();
+          .async ();
 
         zlink::framework::http_response_t response;
         response.body =
@@ -278,7 +278,7 @@ class spot_state_command_route_handler_t
         _routes
           .send_to_spot (resolve_required_spot_id (_spots, request.spot_id),
                          e2e::direct_spot_msg_t{"sm-c1-client", request.marker})
-          .submit ();
+          .async ();
 
         zlink::framework::http_response_t response;
         response.body = nlohmann::json (e2e::spot_state_command_route_res_t{.accepted = true})
@@ -310,7 +310,7 @@ class spot_publish_route_handler_t
         _publisher
           .publish (e2e::publisher_channel, e2e::mesh_topic,
                     e2e::mesh_msg_t{"evt-sm-c1", request.marker})
-          .submit ()
+          .async ()
           .result ()
           .value ();
 
@@ -392,7 +392,7 @@ class spot_worker_start_route_handler_t
           _routes
             .request_to_spot (resolve_required_spot_id (_spots, request.spot_id), request)
             .timeout (std::chrono::seconds (30))
-            .submit<e2e::spot_worker_start_res_t> ()
+            .async<e2e::spot_worker_start_res_t> ()
             .result ();
         if (!reply) {
             throw zlink::framework::framework_exception_t (
@@ -588,7 +588,7 @@ class spot_slow_route_handler_t
             .request_to_spot (resolve_required_spot_id (_spots, request.spot_id),
                               e2e::slow_spot_req_t{request.value})
             .timeout (std::chrono::milliseconds (request.timeout_ms))
-            .submit<e2e::direct_spot_res_t> ()
+            .async<e2e::direct_spot_res_t> ()
             .result ();
 
         zlink::framework::http_response_t response;
@@ -626,14 +626,14 @@ class spot_missing_route_handler_t
                                      .request_to_spot (*target,
                                                        e2e::unhandled_spot_req_t{request.value})
                                      .timeout (std::chrono::milliseconds (1000))
-                                     .submit<e2e::direct_spot_res_t> ()
+                                     .async<e2e::direct_spot_res_t> ()
                                      .result ();
             request_failed = !missing_request.has_value ();
             try {
                 _routes
                   .send_to_spot (*target, e2e::unhandled_spot_msg_t{e2e::unhandled_spot_req_t{
                                             request.value + ":send"}})
-                  .submit ();
+                  .async ();
             }
             catch (const zlink::framework::framework_exception_t &) {
             }
@@ -677,7 +677,7 @@ class spot_missing_handler_request_handler_t
             .request_to_spot (resolve_required_spot_id (_spots, request.spot_id),
                               e2e::unhandled_spot_req_t{"missing-handler"})
             .timeout (std::chrono::milliseconds (2000))
-            .submit<e2e::direct_spot_res_t> ()
+            .async<e2e::direct_spot_res_t> ()
             .result ();
 
         zlink::framework::http_response_t response;
@@ -716,7 +716,7 @@ class spot_missing_handler_command_handler_t
         _routes
           .send_to_spot (resolve_required_spot_id (_spots, request.spot_id),
                          e2e::unhandled_spot_msg_t{e2e::unhandled_spot_req_t{request.marker}})
-          .submit ();
+          .async ();
 
         zlink::framework::http_response_t response;
         response.body =
@@ -759,7 +759,7 @@ class spot_missing_target_request_handler_t
                            .request_to_spot (*target,
                                              e2e::direct_spot_req_t{"missing-target", "noop"})
                            .timeout (std::chrono::milliseconds (2000))
-                           .submit<e2e::direct_spot_res_t> ()
+                           .async<e2e::direct_spot_res_t> ()
                            .result ();
             failed = !reply.has_value ();
         }
@@ -798,7 +798,7 @@ class spot_outbound_route_handler_t
             .request_to_spot (resolve_required_spot_id (_spots, request.spot_id),
                               e2e::outbound_req_t{request.marker})
             .timeout (std::chrono::milliseconds (3000))
-            .submit<e2e::outbound_res_t> ()
+            .async<e2e::outbound_res_t> ()
             .result ();
         if (!reply) {
             throw zlink::framework::framework_exception_t (
@@ -841,7 +841,7 @@ class spot_outbound_negative_route_handler_t
             .request_to_spot (resolve_required_spot_id (_spots, request.spot_id),
                               e2e::outbound_negative_req_t{e2e::outbound_req_t{request.marker}})
             .timeout (std::chrono::milliseconds (3000))
-            .submit<e2e::outbound_res_t> ()
+            .async<e2e::outbound_res_t> ()
             .result ();
         if (!reply) {
             throw zlink::framework::framework_exception_t (
@@ -888,7 +888,7 @@ class spot_to_spot_route_handler_t
         auto reply =
           _routes.request_to_spot (*source, e2e::spot_to_spot_direct_req_t{request})
             .timeout (std::chrono::milliseconds (2000))
-            .submit<e2e::spot_to_spot_route_res_t> ()
+            .async<e2e::spot_to_spot_route_res_t> ()
             .result ();
         if (!reply) {
             throw zlink::framework::framework_exception_t (
@@ -928,7 +928,7 @@ class spot_to_spot_timeout_route_handler_t
             .request_to_spot (resolve_required_spot_id (_spots, request.source_spot_id),
                               e2e::spot_to_spot_timeout_req_t{request})
             .timeout (std::chrono::milliseconds (3000))
-            .submit<e2e::spot_to_spot_timeout_route_res_t> ()
+            .async<e2e::spot_to_spot_timeout_route_res_t> ()
             .result ();
         if (!reply) {
             throw zlink::framework::framework_exception_t (
@@ -968,7 +968,7 @@ class spot_to_spot_negative_route_handler_t
             .request_to_spot (resolve_required_spot_id (_spots, request.source_spot_id),
                               e2e::spot_to_spot_negative_req_t{request})
             .timeout (std::chrono::milliseconds (3000))
-            .submit<e2e::spot_to_spot_negative_route_res_t> ()
+            .async<e2e::spot_to_spot_negative_route_res_t> ()
             .result ();
         if (!reply) {
             throw zlink::framework::framework_exception_t (

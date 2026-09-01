@@ -41,12 +41,12 @@ class game_session_t final : public fw::packet_stream_session_t
             try {
                 response =
                   co_await _actor_client.request (fw::actor_id_t (request.actor_id), request)
-                    .submit<actor_location_probe_res_t> ();
+                    .async<actor_location_probe_res_t> ();
             }
             catch (const fw::framework_exception_t &) {
                 response = {request.actor_id, 0, {}, errors_t::not_found};
             }
-            stream.reply_packet (zlink::message_t::from_json (response)).submit ();
+            stream.reply_packet (zlink::message_t::from_json (response)).async ();
             co_return;
         }
         if (packet == fresh_actor_probe_req_t::packet_name) {
@@ -57,16 +57,16 @@ class game_session_t final : public fw::packet_stream_session_t
                 if (!located)
                     throw fw::framework_exception_t (located.error_kind (),
                                                      "fresh actor creation was rejected");
-                auto bound = co_await actors.bind_or_get (located.value ().ref ()).submit ();
+                auto bound = co_await actors.bind_or_get (located.value ().ref ()).async ();
                 const auto observed = co_await _actor_client
                                         .request (fw::actor_id_t (request.actor_id),
                                                   actor_location_probe_req_t{request.actor_id})
-                                        .submit<actor_location_probe_res_t> ();
+                                        .async<actor_location_probe_res_t> ();
                 stream
                   .reply_packet (zlink::message_t::from_json (
                     fresh_actor_probe_res_t{observed.actor_id, observed.object_generation,
                                             observed.owner_node_rid, observed.error}))
-                  .submit ();
+                  .async ();
             }
             catch (const fw::framework_exception_t &error) {
                 stream
@@ -77,7 +77,7 @@ class game_session_t final : public fw::packet_stream_session_t
                     error.kind () == fw::framework_error_kind_t::deadline_exceeded
                       ? errors_t::deadline_exceeded
                       : errors_t::unavailable}))
-                  .submit ();
+                  .async ();
             }
             co_return;
         }
@@ -86,8 +86,8 @@ class game_session_t final : public fw::packet_stream_session_t
             try {
                 const auto reply =
                   co_await _actor_client.request (fw::actor_id_t (request.actor_id), request)
-                    .submit<message_follow_probe_res_t> ();
-                stream.reply_packet (zlink::message_t::from_json (reply)).submit ();
+                    .async<message_follow_probe_res_t> ();
+                stream.reply_packet (zlink::message_t::from_json (reply)).async ();
             }
             catch (const fw::framework_exception_t &error) {
                 stream
@@ -97,14 +97,14 @@ class game_session_t final : public fw::packet_stream_session_t
                     error.kind () == fw::framework_error_kind_t::deadline_exceeded
                       ? errors_t::deadline_exceeded
                       : errors_t::unavailable}))
-                  .submit ();
+                  .async ();
             }
             co_return;
         }
         if (packet == message_follow_probe_msg_t::packet_name) {
             const auto message = payload.parse_json<message_follow_probe_msg_t> ();
             try {
-                co_await _actor_client.send (fw::actor_id_t (message.actor_id), message).submit ();
+                co_await _actor_client.send (fw::actor_id_t (message.actor_id), message).async ();
             }
             catch (const fw::framework_exception_t &) {
             }
@@ -121,7 +121,7 @@ class game_session_t final : public fw::packet_stream_session_t
             if (!located)
                 throw fw::framework_exception_t (located.error_kind (),
                                                  "player actor could not be located");
-            auto bound = co_await actors.bind_or_get (located.value ().ref ()).submit ();
+            auto bound = co_await actors.bind_or_get (located.value ().ref ()).async ();
             _player_id = std::string (bound.actor_id ());
         }
 
@@ -192,7 +192,7 @@ class world_bootstrap_handler_t
             const auto created =
               co_await _spots.get_or_create (fw::spot_id_t (zone), names_t::zone_spot)
                 .in_mesh (names_t::mesh)
-                .submit ();
+                .async ();
             if (created.state != fw::spot_create_state_t::rejected)
                 ++zone_count;
         }
@@ -216,7 +216,7 @@ class world_bootstrap_handler_t
             const auto created =
               co_await _directory.get_or_create (fw::actor_id_t (route.id), names_t::player_actor)
                 .in_mesh (names_t::mesh)
-                .submit ();
+                .async ();
             if (const auto *value = std::get_if<fw::actor_create_created_t> (&created)) {
                 actor_ids.push_back (value->actor.actor_id ());
                 ++bot_count;
@@ -232,7 +232,7 @@ class world_bootstrap_handler_t
               co_await _actors
                 .request (actor_ids[index],
                           enter_world_req_t{route.x, route.y, true, route.dx, route.dy})
-                .submit<enter_world_res_t> ();
+                .async<enter_world_res_t> ();
             if (entered.error)
                 throw fw::framework_exception_t (fw::framework_error_kind_t::rejected,
                                                  *entered.error);

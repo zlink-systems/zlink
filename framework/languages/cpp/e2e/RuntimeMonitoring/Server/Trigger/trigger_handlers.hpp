@@ -35,7 +35,7 @@ class profile_request_handler_t
     {
         auto call = _channels.request (profile_channel, request)
                       .timeout (std::chrono::milliseconds (3000))
-                      .submit<profile_res_t> ();
+                      .async<profile_res_t> ();
         const auto &reply = call.result ();
         if (!reply.has_value ()) {
             throw std::runtime_error (

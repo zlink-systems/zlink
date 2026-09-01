@@ -148,7 +148,7 @@ constructor injection.
 
 | Service | Description |
 |--------|------|
-| `request_client_t` | Sends a channel request — `request(mesh, channel, msg).submit<TReply>()` |
+| `request_client_t` | Sends a channel request — `request(mesh, channel, msg).async<TReply>()` |
 | `logger_t<TOwner>` | A logger tagged with the owning type's name — `_logger.info(...)` |
 | `session_actor_manager_t` | Creates, looks up, and binds Actors from a stream session |
 | `logger_factory_t` | `create("category")` — for when the category is decided dynamically (`create<TCategory>()` is type-name-based) |

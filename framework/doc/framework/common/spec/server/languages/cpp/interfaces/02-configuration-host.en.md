@@ -903,14 +903,14 @@ task_t<match_bingo_api_res_t> handle(const match_bingo_api_req_t &request)
  allocate_bingo_room_res_t allocated = co_await _client
  .request(sample_names_t::play_channel,
  allocate_bingo_room_req_t { request.mode })
- .submit<allocate_bingo_room_res_t>();
+ .async<allocate_bingo_room_res_t>();
 
  co_return match_bingo_api_res_t { allocated.room_id };
 }
 ```
 
 A sample handler doesn't pull the result directly with
-`.submit().result().value()`. That code would make the handler look
+`.async().result().value()`. That code would make the handler look
 like it's performing a blocking wait inside the runtime, which doesn't
 fit the goal of providing the same async model across every language
 version.

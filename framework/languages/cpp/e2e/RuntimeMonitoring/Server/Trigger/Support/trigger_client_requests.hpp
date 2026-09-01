@@ -37,7 +37,7 @@ class transient_request_service_t final : public zlink::framework::hosted_servic
             auto &channels = services.get_required<zlink::framework::channel_client_t> ();
             auto request = channels.request (profile_channel, _request)
                              .timeout (std::chrono::milliseconds (3000))
-                             .submit<profile_res_t> ();
+                             .async<profile_res_t> ();
             const auto &reply = request.result ();
             if (!reply.has_value ()) {
                 _error =

@@ -17,7 +17,7 @@ inline task_t<match_bingo_res_t> bingo_entry_spot_t::match_bingo (player_actor_t
     match_request.set_mode (request.mode ());
     auto matched = co_await _context.outbound ()
                      .request (sample_names_t::api_channel, match_request)
-                     .submit<match_bingo_api_res_t> ();
+                     .async<match_bingo_api_res_t> ();
     bingo_room_join_req_t join_request;
     join_request.set_room_id (matched.room_id ());
     join_request.set_actor_id (actor.actor_id);

@@ -232,7 +232,7 @@ class room_spot_t : public fw::spot_t<fw::actor_t>
         _context
           .publish (obs::projection_topic,
                     obs::projection_event_t{request.spot_id, request.marker, _applied})
-          .submit ();
+          .async ();
         return obs::obs_action_res_t{request.spot_id, request.marker, _applied};
     }
 
@@ -244,7 +244,7 @@ class room_spot_t : public fw::spot_t<fw::actor_t>
           .publish (obs::projection_topic,
                     obs::projection_event_t{_context.spot_id (),
                                             "obs-timer", _applied})
-          .submit ();
+          .async ();
     }
 
   private:
@@ -393,7 +393,7 @@ class actor_ping_handler_t
         }
         co_return co_await _actors.request (fw::actor_id_t (request.actor_id), request)
           .timeout (std::chrono::milliseconds (5000))
-          .submit<obs::actor_ping_res_t> ();
+          .async<obs::actor_ping_res_t> ();
     }
 
   private:
@@ -431,9 +431,9 @@ class obs_session_t final : public fw::packet_stream_session_t
         auto request = payload.parse_json<obs::obs_action_req_t> ();
         auto reply = co_await _routes.request_to_spot (request.spot_id, request)
                        .timeout (std::chrono::milliseconds (5000))
-                       .submit<obs::obs_action_res_t> ();
+                       .async<obs::obs_action_res_t> ();
         stream.reply_packet (zlink::message_t::from_json (reply))
-          .submit ();
+          .async ();
         co_return;
     }
 
@@ -540,7 +540,7 @@ class action_handler_t
     {
         co_return co_await _routes.request_to_spot (request.spot_id, request)
           .timeout (std::chrono::milliseconds (5000))
-          .submit<obs::obs_action_res_t> ();
+          .async<obs::obs_action_res_t> ();
     }
 
   private:
@@ -576,7 +576,7 @@ class create_room_handler_t
                   zlink::framework::e2e::observability_ops::server::host_role_t::order_workflow
                 ? obs::order_workflow_spot
                 : obs::room_spot)
-            .submit ()
+            .async ()
             .result ();
         if (!created) {
             return obs::create_room_res_t{request.spot_id, "rejected"};

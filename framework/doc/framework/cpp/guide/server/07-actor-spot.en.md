@@ -74,7 +74,7 @@ auto result = co_await actors
                 .get_or_create ("player", player_id, create_player_t{display_name})
                 .in_mesh ("play")
                 .timeout (std::chrono::seconds (10))
-                .submit ();
+                .async ();
 
 if (!result)
     throw std::runtime_error ("Player creation was rejected.");
@@ -385,12 +385,12 @@ first, the join ends in `Unavailable`; if the shutdown seal came first, it ends 
 You can send a message by ActorId without knowing which Spot or node the Actor is on.
 
 ```cpp
-co_await actor_client.send_to_actor (player_id, award_experience_t{10}).submit ();
+co_await actor_client.send_to_actor (player_id, award_experience_t{10}).async ();
 
 auto profile = co_await actor_client
                  .request_to_actor (player_id, get_player_profile_t{})
                  .timeout (std::chrono::seconds (3))
-                 .submit<player_profile_t> ();
+                 .async<player_profile_t> ();
 ```
 
 Even while an Actor is moving to another node, the caller specifies only the ActorId. The

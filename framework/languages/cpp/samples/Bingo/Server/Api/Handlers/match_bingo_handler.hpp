@@ -40,7 +40,7 @@ class match_bingo_api_handler_t
                                              std::move (reserve_request))
                            .instance_spot (sample_names_t::matchmaker_spot)
                            .in_mesh (sample_names_t::matchmaking_mesh)
-                           .submit<reserve_bingo_room_res_t> ();
+                           .async<reserve_bingo_room_res_t> ();
         co_await _spots.get_or_create (spot_id_t (allocated.room_id ()), sample_names_t::room_spot)
           .in_mesh (sample_names_t::room_spot_mesh)
           .creation_request ([&allocated] {
@@ -48,7 +48,7 @@ class match_bingo_api_handler_t
               *create.mutable_settings () = allocated.settings ();
               return create;
           }())
-          .submit ();
+          .async ();
         _logger.info ("match bingo room", {{"actor_id", request.actor_id ()},
                                            {"room_id", allocated.room_id ()},
                                            {"mode", request.mode ()}});

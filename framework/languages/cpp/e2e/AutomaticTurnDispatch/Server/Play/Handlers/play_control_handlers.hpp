@@ -16,7 +16,7 @@ ensure_probe_spot (zlink::framework::spot_manager_t &spots,
 {
     auto created = spots.get_or_create (std::move (spot_id), probe_spot_name)
                      .in_mesh (spot_channel)
-                     .submit ()
+                     .async ()
                      .result ();
     if (!created) {
         throw zlink::framework::framework_exception_t (
@@ -100,7 +100,7 @@ class bind_await_actors_handler_t
               .get_or_create (zlink::framework::actor_id_t (actor_id), actor_type)
               .in_mesh (spot_channel)
               .timeout (std::chrono::milliseconds (15000))
-              .submit ()
+              .async ()
               .result ();
             if (!created) {
                 throw zlink::framework::framework_exception_t (
@@ -120,7 +120,7 @@ class bind_await_actors_handler_t
                   }
               },
               created.value ());
-            auto bound = _actors.bind_or_get (actor_ref).submit ().result ();
+            auto bound = _actors.bind_or_get (actor_ref).async ().result ();
             if (!bound) {
                 throw zlink::framework::framework_exception_t (
                   bound.error_kind (),

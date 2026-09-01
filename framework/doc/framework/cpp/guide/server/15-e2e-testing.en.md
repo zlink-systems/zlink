@@ -37,9 +37,9 @@ that work. **The client library your real users use is itself the verification t
 E2E test comes down to just this much code.
 
 ```cpp
-co_await client.connect ().submit ();                                     // A real connection
+co_await client.connect ().async ();                                     // A real connection
 auto auth = co_await client.request (authenticate_req_t{actor_id})       // A real request
-              .submit<authenticate_res_t> ();
+              .async<authenticate_res_t> ();
 auto push = co_await other.wait_for<player_joined_notify_t> ().async (); // Confirms a real push arrived
 ensure (push.payload.actor_id == auth.player.actor_id);
 ```
@@ -109,8 +109,8 @@ Most scenarios are expressed with the verification functions the connector provi
 | Confirm pushes arrive in a **fixed order** | `WaitForSequence<TNotify>().Expect(...).Expect(...)` |
 | Confirm a request **fails** | `ExpectFailure(...)` |
 
-**The terminal call follows the language** — `.NET` uses `Async`, Java/Node/C++ use
-`submit`, Kotlin uses `await`
+**The terminal call follows the language** — `.NET` uses `Async`, C++ uses `async`,
+Java/Node use `submit`, and Kotlin uses `await`
 ([Async Execution Policy](../../../common/spec/server/01-execution/README.en.md)).
 
 Value comparison uses `Ensure(condition, message)`. The message is required, and on
@@ -170,7 +170,7 @@ part of the contract. Verifying only the success path leaves this path unverifie
 bool failed = false;
 try {
     co_await agent.request (open_conversation_req_t{"unauthenticated"})
-      .submit<open_conversation_res_t> ();
+      .async<open_conversation_res_t> ();
 } catch (const zlink::stream_connector::stream_error_t &error) {
     failed = error.code == zlink::stream_connector::error_code_t::remote_error;
 }
@@ -242,9 +242,9 @@ task_t<void> run (const tictactoe_client_options_t &options)
     auto client2 = create_stream_client (room.play_endpoints[1], options);
 
     // 3. Whoever connects first authenticates and enters the empty room.
-    co_await client1.connect ().submit ();
+    co_await client1.connect ().async ();
     co_await client1.request (authenticate_req_t{options.x_actor_id})
-      .submit<authenticate_res_t> ();
+      .async<authenticate_res_t> ();
     auto join1 = co_await join_game (client1, room.room_id); // Register wait -> send -> receive (see §3)
     ensure (join1.state.status == tictactoe_status_t::waiting_for_players);
 
@@ -254,14 +254,14 @@ task_t<void> run (const tictactoe_client_options_t &options)
       .async ();
 
     // 4. Once the second player joins, the room starts and a push reaches the first player.
-    co_await client2.connect ().submit ();
+    co_await client2.connect ().async ();
     co_await client2.request (authenticate_req_t{options.o_actor_id})
-      .submit<authenticate_res_t> ();
+      .async<authenticate_res_t> ();
     auto join2 = co_await join_game (client2, room.room_id);
     ensure (join2.state.status == tictactoe_status_t::in_progress);
 
     // 5. Making a move -- the response and the push delivered to the opponent should point to the same state.
-    auto move = co_await client1.request (place_mark_req_t{0}).submit<place_mark_res_t> ();
+    auto move = co_await client1.request (place_mark_req_t{0}).async<place_mark_res_t> ();
     auto saw_move = co_await client2.wait_for<game_state_notify_t> ()
                       .where ([] (const auto &m) { return m.state.last_move_cell == 0; })
                       .async ();
@@ -290,7 +290,7 @@ client can't confirm.
 task_t<join_game_notify_t> join_game (auto &connector, const std::string &room_id)
 {
     auto completion = connector.wait_for<join_game_notify_t> ().async ();
-    co_await connector.send (join_game_msg_t{room_id}).submit ();
+    co_await connector.send (join_game_msg_t{room_id}).async ();
     co_return (co_await std::move (completion)).payload;
 }
 ```

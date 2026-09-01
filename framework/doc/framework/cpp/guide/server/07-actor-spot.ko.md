@@ -69,7 +69,7 @@ auto result = co_await actors
                 .get_or_create ("player", player_id, create_player_t{display_name})
                 .in_mesh ("play")
                 .timeout (std::chrono::seconds (10))
-                .submit ();
+                .async ();
 
 if (!result)
     throw std::runtime_error ("Player creation was rejected.");
@@ -367,12 +367,12 @@ shutdown seal이 먼저면 `ShuttingDown`으로 끝난다.
 Actor가 어느 Spot과 node에 있는지 몰라도 ActorId로 메시지를 보낼 수 있다.
 
 ```cpp
-co_await actor_client.send_to_actor (player_id, award_experience_t{10}).submit ();
+co_await actor_client.send_to_actor (player_id, award_experience_t{10}).async ();
 
 auto profile = co_await actor_client
                  .request_to_actor (player_id, get_player_profile_t{})
                  .timeout (std::chrono::seconds (3))
-                 .submit<player_profile_t> ();
+                 .async<player_profile_t> ();
 ```
 
 Actor가 다른 node로 옮겨가는 중에도 caller는 ActorId만 지정한다. Framework는 호출할 때마다

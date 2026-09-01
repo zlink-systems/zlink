@@ -44,7 +44,7 @@ handle_http_await (zlink::framework::spot_context_t &context,
                   + spot_id + "|request=" + request.request_id);
     const auto response = request.terminator == "yield"
                             ? co_await call.yield<yd::external_delay_res_t> ()
-                            : co_await call.submit<yd::external_delay_res_t> ();
+                            : co_await call.async<yd::external_delay_res_t> ();
     evidence.add (prefix + "-resumed|rid=" + evidence.node_rid + "|spot=" + spot_id
                   + "|request=" + request.request_id + "|marker=" + response.body.marker);
     evidence.add (prefix + "-completed|rid=" + evidence.node_rid + "|spot=" + spot_id
@@ -67,7 +67,7 @@ handle_io_worker_await (zlink::framework::spot_context_t &context,
           .query ("marker", request.operation_id)
           .query ("delayMs", std::to_string (request.delay_ms))
           .timeout (std::chrono::seconds (5))
-          .submit<yd::external_delay_res_t> ();
+          .async<yd::external_delay_res_t> ();
     });
     evidence.add ("io-worker-released|rid=" + evidence.node_rid + "|spot=" + spot_id
                   + "|request=" + request.request_id + "|operation="

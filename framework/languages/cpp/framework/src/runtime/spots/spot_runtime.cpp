@@ -4698,7 +4698,7 @@ spot_create_call_t &spot_create_call_t::timeout (std::chrono::milliseconds timeo
     return *this;
 }
 
-task_t<spot_create_result_t> spot_create_call_t::submit ()
+task_t<spot_create_result_t> spot_create_call_t::async ()
 {
     if (!_state || _state->submitted)
         return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
@@ -4740,7 +4740,7 @@ task_t<spot_create_result_t> spot_create_call_t::yield ()
         return detail::unsupported_yield_task<spot_create_result_t> ();
     }
     auto turn_plan = detail::prepare_serial_turn_await (true);
-    auto task = submit ();
+    auto task = async ();
     if (!turn_plan) {
         return task;
     }

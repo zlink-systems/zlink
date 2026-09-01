@@ -134,7 +134,7 @@ class send_handler_t
             e2e::actor_msg_t notify{request.scenario, request.actor_id, request.value};
             co_await _actors
               .send (zlink::framework::actor_id_t (request.actor_id), notify)
-              .submit ();
+              .async ();
             co_return e2e::actor_call_res_t{request.scenario, request.actor_id, "sent", ""};
         }
         catch (const zlink::framework::framework_exception_t &error) {
@@ -164,7 +164,7 @@ class request_handler_t
             e2e::actor_req_t ask{request.scenario, request.actor_id, request.value};
             auto reply = co_await _actors.request (zlink::framework::actor_id_t (request.actor_id), ask)
                            .timeout (std::chrono::seconds (5))
-                           .submit<e2e::actor_res_t> ();
+                           .async<e2e::actor_res_t> ();
             co_return e2e::actor_call_res_t{
               request.scenario, request.actor_id, reply.value, ""};
         }
@@ -263,7 +263,7 @@ class request_captured_handler_t
                                               e2e::actor_req_t{request.scenario,
                                                                request.actor_id, request.value})
                            .timeout (std::chrono::seconds (5))
-                           .submit<e2e::actor_res_t> ();
+                           .async<e2e::actor_res_t> ();
             co_return e2e::actor_call_res_t{request.scenario, request.actor_id, reply.value,
                                                  ""};
         }

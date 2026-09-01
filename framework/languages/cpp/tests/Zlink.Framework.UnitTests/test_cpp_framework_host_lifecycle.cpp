@@ -247,7 +247,7 @@ class relocation_source_service_t final : public zlink::framework::hosted_servic
                       .get_or_create (zlink::framework::spot_id_t ("host-relocation-spot"),
                                       "host-relocation-spot")
                       .timeout (std::chrono::seconds (1))
-                      .submit ()
+                      .async ()
                       .result ();
                   if (created) {
                       created_spot.store (true, std::memory_order_release);
@@ -271,7 +271,7 @@ class relocation_source_service_t final : public zlink::framework::hosted_servic
                 client
                   .send_to_spot (zlink::framework::spot_id_t ("host-relocation-spot"),
                                  relocation_ready_message_t{1})
-                  .submit ()
+                  .async ()
                   .result ();
               if (submitted)
                   ready_sent.store (true, std::memory_order_release);
@@ -383,7 +383,7 @@ bool verify_remote_actor_create_completion_reaches_source ()
         .get_or_create (zlink::framework::actor_id_t ("host-remote-created-actor"),
                         "remote-create-actor")
         .timeout (std::chrono::seconds (5))
-        .submit ()
+        .async ()
         .result ();
     auto &location_repository =
       source_services.get_required<zlink::framework::location_repository_t> ();

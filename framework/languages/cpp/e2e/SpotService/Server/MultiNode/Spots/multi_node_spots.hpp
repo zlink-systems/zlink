@@ -106,12 +106,12 @@ class multi_node_spot_t
                                  command->target_spot_id,
                                  e2e::state_req_t{.op = "add", .amount = 7})
                                .timeout (std::chrono::milliseconds (3000))
-                               .submit<e2e::state_res_t> ();
+                               .async<e2e::state_res_t> ();
                 _context
                   .send_to_spot (command->target_spot_id,
                                  e2e::direct_spot_msg_t{.source_actor_id = command->source_spot_id,
                                                         .value = "sm-f6-send-" + command->marker})
-                  .submit ();
+                  .async ();
                 _state.record ("SpotOnlyRequest", {}, _context.spot_id (),
                                "target=" + command->target_spot_id + "|value="
                                  + std::to_string (reply.value)

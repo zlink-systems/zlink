@@ -17,7 +17,7 @@ inline workflow_res_t request_workflow (zlink::framework::channel_client_t &chan
 {
     auto reply = channels.request (workflow_channel, request)
                    .timeout (std::chrono::seconds (5))
-                   .submit<workflow_res_t> ()
+                   .async<workflow_res_t> ()
                    .result ();
     if (!reply) {
         if (reply.error ()) {

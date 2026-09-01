@@ -45,7 +45,7 @@ handle_basic_hold (zlink::framework::spot_context_t &context,
                                 .delay_ms = delay_ms,
                                 .marker = "hold"})
       .timeout (std::chrono::milliseconds (5000))
-      .submit<yd::delay_res_t> ();
+      .async<yd::delay_res_t> ();
     evidence.add ("hold-resumed|rid=" + evidence.node_rid + "|spot=" + spot_id
                   + "|request=" + request_id + "|handler=spot");
     evidence.add ("hold-completed|rid=" + evidence.node_rid + "|spot=" + spot_id
@@ -74,7 +74,7 @@ handle_basic_yield (zlink::framework::spot_context_t &context,
     evidence.add ("await-released|rid=" + evidence.node_rid + "|spot=" + spot_id
                   + "|request=" + request_id + "|correlation="
                   + correlation_id + "|handler=spot");
-    co_await call.submit<yd::delay_res_t> ();
+    co_await call.async<yd::delay_res_t> ();
     evidence.add ("await-resumed|rid=" + evidence.node_rid + "|spot=" + spot_id
                   + "|request=" + request_id + "|correlation="
                   + correlation_id + "|handler=spot");

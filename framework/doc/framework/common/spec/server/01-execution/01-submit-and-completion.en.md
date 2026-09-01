@@ -49,7 +49,7 @@ the error for re-invoking a terminal.
 | general async terminal | Waits until the request, worker, or create's application result reaches a terminal state | Holds the current [owner](../00-foundation/02-glossary.en.md#owner) turn until the completion continuation finishes |
 | `Yield` | Submits the operation, then releases the shared [Spot turn](../00-foundation/02-glossary.en.md#spot-turn) — the unit in which a callback occupies the execution gate from an application queue to run — while waiting for the application result | The completion continuation re-acquires the same Spot gate and resumes in a new turn |
 
-The general async terminal name per language is .NET `Async`, Java/Node.js/C++ `submit`,
+The general async terminal name per language is .NET `Async`, C++ `async`, Java/Node.js `submit`,
 and the dedicated Kotlin wrapper's `await`. An immediate submit that returns no async
 completion uses `Submit`/`submit`. Only the terminal that actually releases the shared Spot
 gate uses the name `Yield`/`yield`.
@@ -478,13 +478,13 @@ attempting transport. Token claim rules are owned by
 
 | Framework language | Typed Session reply terminal | Completion expression |
 |---|---|---|
-| C++ | `.reply_packet(...).submit()` | `co_await`-able framework task |
+| C++ | `.reply_packet(...).async()` | `co_await`-able framework task |
 | .NET | `.Reply(...).Async(ct)` | `ValueTask` |
 | Java | `.reply(...).submit()` | `CompletionStage<Void>` |
 | Kotlin | `.reply(...).await()` | suspending `Unit` |
 | Node | `.reply(...).submit(signal?)` | `Promise<void>` |
 
-Even in languages that use the same `submit` name, the return type and
+In languages that use the `submit` name, the return type and
 owning layer distinguish it from the raw binding reply (a synchronous
 one-shot).
 
@@ -500,24 +500,24 @@ the specific return type and error representation.
 | Java | `submit(...)` returns `CompletionStage<T>` | `yield(...)` | [Channel messaging](../languages/java/interfaces/channel-messaging.en.md) |
 | Kotlin | Uses the dedicated call wrapper's suspending `await()` | The dedicated wrapper's `yield()` | [Channel messaging](../languages/kotlin/interfaces/channel-messaging.en.md) |
 | Node.js | `submit(...)` returns `Promise<T>` | `yield(...)` | [interface index](../languages/node/interfaces/README.en.md) |
-| C++ | `submit(...)` returns `task_t<T>` | `yield(...)` | [framework interfaces](../languages/cpp/interfaces/README.en.md) |
+| C++ | `async(...)` returns `task_t<T>` | `yield(...)` | [framework interfaces](../languages/cpp/interfaces/README.en.md) |
 
 Each per-language interface fixes the return type, cancellation argument, and callback or coroutine
 representation per terminator. Even when the language's standard idiom differs, the same
 operation's completion timing, ordering, and error classification do not change.
 
-Because C++'s `task_t` starts the operation when it's called, `submit()` can be used in the
+Because C++'s `task_t` starts the operation when it's called, `async()` can be used in the
 following two ways depending on whether the result is consumed. The two lines below show two
 distinct single-use calls.
 
 ```cpp
-sendCall.submit();                      // Starts the operation only, with no result.
-auto reply = co_await requestCall.submit(); // Awaits the async application reply.
+sendCall.async();                      // Starts the operation only, with no result.
+auto reply = co_await requestCall.async(); // Awaits the async application reply.
 ```
 
 No overload differing only by return type is created. The C++ Messaging call wrapper does
 not offer a blocking `submit()` alongside a coroutine terminal for the same arguments — it
-offers a single `task_t<T> submit()`. A callback overload can be provided as
+offers a single `task_t<T> async()`. A callback overload can be provided as
 `submit(callback)` since its parameter list differs.
 
 ## 17. Verification Requirements

@@ -216,7 +216,7 @@ class player_entry_spot_t : public entry_spot_t<player_actor_t>
         for (const auto &progress : notify.projection) {
             actor.actor_context.bound_session ()
               .send (quest_progress_notify_t{notify.player_id, progress})
-              .submit ();
+              .async ();
         }
         if (!notify.completed_quest_id.empty ()) {
             const auto completed =
@@ -227,7 +227,7 @@ class player_entry_spot_t : public entry_spot_t<player_actor_t>
             if (completed != notify.projection.end ()) {
                 actor.actor_context.bound_session ()
                   .send (quest_completed_notify_t{notify.player_id, *completed, true})
-                  .submit ();
+                  .async ();
             }
         }
     }
@@ -279,7 +279,7 @@ class gamequest_session_t final : public packet_stream_session_t
                   actor.error_kind (),
                   actor.error () ? actor.error ()->what () : "gamequest session actor bind failed");
             }
-            auto bound = co_await _actors.bind_or_get (actor.value ().ref ()).submit ();
+            auto bound = co_await _actors.bind_or_get (actor.value ().ref ()).async ();
             _player_id = request.player_id;
             _store.bind (request.player_id, _topology.api_name);
             auto synced = co_await sync_projection (request.player_id);
@@ -292,8 +292,8 @@ class gamequest_session_t final : public packet_stream_session_t
             auto reply = co_await current
                            ->relay_request (join_session_req_t::packet_name,
                                             zlink::message_t::from_json (request))
-                           .submit ();
-            stream.reply_packet (reply).submit ();
+                           .async ();
+            stream.reply_packet (reply).async ();
             co_return;
         }
         if (packet == get_quest_progress_req_t::packet_name) {
@@ -303,14 +303,14 @@ class gamequest_session_t final : public packet_stream_session_t
             stream
               .reply_packet (
                 zlink::message_t::from_json (get_quest_progress_res_t{synced.updated_quests}))
-              .submit ();
+              .async ();
             co_return;
         }
         if (packet == sync_quest_progress_req_t::packet_name) {
             const auto request = payload.parse_json<sync_quest_progress_req_t> ();
             auto synced = co_await sync_projection (request.player_id);
             _store.merge_projection (request.player_id, synced.updated_quests);
-            stream.reply_packet (zlink::message_t::from_json (synced)).submit ();
+            stream.reply_packet (zlink::message_t::from_json (synced)).async ();
             co_return;
         }
         if (packet == projection_admin_req_t::packet_name) {
@@ -319,24 +319,24 @@ class gamequest_session_t final : public packet_stream_session_t
                 co_await _routes.send_to_spot (
                   player_spot_id (request.player_id),
                   close_player_quest_msg_t{std::string ("client-self-check")})
-                  .submit ();
+                  .async ();
                 stream.reply_packet (zlink::message_t::from_json (
                   projection_admin_res_t{true, _store.projection (request.player_id)}))
-                  .submit ();
+                  .async ();
                 co_return;
             }
             auto result =
               co_await _routes.request_to_spot (player_spot_id (request.player_id), request)
                 .instance_spot (sample_names_t::player_quest_spot)
-                .template submit<projection_admin_res_t> ();
-            stream.reply_packet (zlink::message_t::from_json (result)).submit ();
+                .template async<projection_admin_res_t> ();
+            stream.reply_packet (zlink::message_t::from_json (result)).async ();
             co_return;
         }
         if (packet == unpublished_kill_req_t::packet_name) {
             const auto request = payload.parse_json<unpublished_kill_req_t> ();
             _store.add_unpublished_kills (request.player_id, request.count);
             stream.reply_packet (zlink::message_t::from_json (unpublished_kill_res_t{true}))
-              .submit ();
+              .async ();
             co_return;
         }
         if (packet == kill_monster_req_t::packet_name) {
@@ -353,7 +353,7 @@ class gamequest_session_t final : public packet_stream_session_t
                 throw;
             }
             stream.reply_packet (zlink::message_t::from_json (kill_monster_res_t{event.event_id}))
-              .submit ();
+              .async ();
             co_return;
         }
         if (packet == collect_item_req_t::packet_name) {
@@ -393,7 +393,7 @@ class gamequest_session_t final : public packet_stream_session_t
                                           sync_quest_progress_owner_req_t{
                                             player_id, _store.snapshot_kill_count (player_id)})
                         .instance_spot (sample_names_t::player_quest_spot)
-                        .template submit<sync_quest_progress_res_t> ();
+                        .template async<sync_quest_progress_res_t> ();
         co_return synced;
     }
 
@@ -403,7 +403,7 @@ class gamequest_session_t final : public packet_stream_session_t
     {
         co_await _routes.send_to_spot (player_spot_id (event.player_id), event)
           .instance_spot (sample_names_t::player_quest_spot)
-          .submit ();
+          .async ();
         _store.record_event (event);
         std::cerr << "gamequest-api event-routed player=" << event.player_id << "\n";
         co_return;

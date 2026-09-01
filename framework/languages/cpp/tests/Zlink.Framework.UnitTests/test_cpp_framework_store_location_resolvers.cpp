@@ -557,7 +557,7 @@ class echo_stream_session_t final : public zlink::framework::packet_stream_sessi
                const zlink::framework::session_message_context_t &,
                const zlink::message_t &payload) override
     {
-        stream.reply_packet (payload).submit ();
+        stream.reply_packet (payload).async ();
         return success ();
     }
 
@@ -982,7 +982,7 @@ class auto_connect_request_client_t final : public zlink::framework::hosted_serv
         for (int attempt = 0; attempt < 40; ++attempt) {
             auto reply = client.request (auto_connect_request_t{17})
                            .timeout (std::chrono::milliseconds (500))
-                           .submit<auto_connect_reply_t> ()
+                           .async<auto_connect_reply_t> ()
                            .result ();
             if (reply && reply.value ().value == 1017) {
                 observed = true;
@@ -1020,7 +1020,7 @@ class missing_auto_connect_request_client_t final
         auto reply = _app->advanced ().zlink ().request_client ("orders")
                        .request (auto_connect_request_t{17})
                        .timeout (std::chrono::milliseconds (50))
-                       .submit<auto_connect_reply_t> ()
+                       .async<auto_connect_reply_t> ()
                        .result ();
         if (!reply) {
             observed_error = reply.error_kind ();
@@ -1055,7 +1055,7 @@ class rejected_auto_connect_request_client_t final
             auto reply =
               client.request (auto_connect_request_t{17})
                 .timeout (std::chrono::milliseconds (500))
-                .submit<auto_connect_reply_t> ()
+                .async<auto_connect_reply_t> ()
                 .result ();
             if (!reply
                 && reply.error_kind ()
@@ -1211,7 +1211,7 @@ class user_spot_manager_client_t final
             auto created =
               manager.get_or_create (rid, "room")
                 .timeout (std::chrono::seconds (2))
-                .submit ()
+                .async ()
                 .result ();
             if (!created) {
                 last_error =
@@ -1280,7 +1280,7 @@ class generated_user_spot_collision_client_t final
             auto occupied =
               manager.get_or_create (collision, "occupied")
                 .timeout (std::chrono::seconds (2))
-                .submit ()
+                .async ()
                 .result ();
             if (!occupied) {
                 last_error =
@@ -1295,7 +1295,7 @@ class generated_user_spot_collision_client_t final
             auto generated =
               manager.create ("room")
                 .timeout (std::chrono::seconds (2))
-                .submit ()
+                .async ()
                 .result ();
             if (generated
                 || !generated.error ()
@@ -1310,7 +1310,7 @@ class generated_user_spot_collision_client_t final
             auto existing =
               manager.get_or_create (collision, "occupied")
                 .timeout (std::chrono::seconds (2))
-                .submit ()
+                .async ()
                 .result ();
             if (!existing
                 || existing.value ().state
@@ -1326,7 +1326,7 @@ class generated_user_spot_collision_client_t final
             auto mismatch =
               manager.get_or_create (collision, "room")
                 .timeout (std::chrono::seconds (2))
-                .submit ()
+                .async ()
                 .result ();
             if (mismatch
                 || !mismatch.error ()
@@ -1380,7 +1380,7 @@ class source_cleanup_client_t final
                 "source-cleanup"),
               "failing")
             .timeout (std::chrono::seconds (2))
-            .submit ()
+            .async ()
             .result ();
         observed =
           !result && result.error ()
@@ -1418,7 +1418,7 @@ class auto_connect_publish_client_t final : public zlink::framework::hosted_serv
                   .publish (
                     "events", "profile.changed",
                     blocked_auto_connect_event_t{attempt + 1})
-                  .submit ();
+                  .async ();
             }
             catch (const std::exception &error) {
                 last_error = error.what ();
@@ -1434,7 +1434,7 @@ class auto_connect_publish_client_t final : public zlink::framework::hosted_serv
         for (int attempt = 0; attempt < 80; ++attempt) {
             try {
                 publisher.publish ("events", "profile.changed", auto_connect_event_t{attempt + 1})
-                  .submit ();
+                  .async ();
             }
             catch (const std::exception &error) {
                 last_error = error.what ();

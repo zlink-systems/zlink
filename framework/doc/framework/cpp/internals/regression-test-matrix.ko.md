@@ -76,7 +76,7 @@ structured dispatch-error record 변경은 최소한 contract header test 와 ch
 | samples | Bingo e2e, TicTacToe HTTP `POST /games` + zlink channel + STREAM connector e2e, server/client file log assertions |
 
 zlink 관련 회귀 테스트는 framework 공통 스펙의 기능 기대값을 기준으로 한다. C++ 서버
-framework는 `co_await submit()` 표면을 사용하지만, timeout, decode failure,
+framework는 `co_await async()` 표면을 사용하지만, timeout, decode failure,
 handler not found, shutdown, queue full, disconnected 같은 error kind와 로그/monitoring event는
 같은 의미로 고정한다. 테스트는 단순히 process exit code만 확인하지 않고, request sequence,
 topic/packet name, correlation id, server-side file log, client-side 결과를 함께 검증해야 한다.

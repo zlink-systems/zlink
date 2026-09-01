@@ -351,7 +351,7 @@ class planned_relocation_handler_t
             const auto created =
               co_await _spots.get_or_create (spot_id_t (fixture_id),
                                              "shoppingmall.planned.relocation.workflow")
-                .submit ();
+                .async ();
             co_return planned_relocation_res_t{
               true, created.spot.object_generation ()};
         }

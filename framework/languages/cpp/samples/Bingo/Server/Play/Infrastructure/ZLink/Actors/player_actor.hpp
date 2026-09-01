@@ -63,7 +63,7 @@ struct player_actor_t : framework::actor_t
 
     template <typename TNotify> void push (const TNotify &notify) const
     {
-        actor_context->bound_session ().send (notify).submit ();
+        actor_context->bound_session ().send (notify).async ();
     }
 };
 

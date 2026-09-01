@@ -191,7 +191,7 @@ class create_actor_handler_t
               .get_or_create (fw::actor_id_t (id), type)
               .in_mesh (_mesh.value)
               .creation_request (fw::message_t::from (probe_req_t{id}))
-              .submit ();
+              .async ();
             const auto ref = std::visit ([] (const auto &value) -> fw::actor_ref_t {
                 using result_t = std::decay_t<decltype (value)>;
                 if constexpr (std::is_same_v<result_t, fw::actor_create_rejected_t>)
@@ -233,7 +233,7 @@ class create_spot_handler_t
             const auto result = co_await _spots
               .get_or_create (fw::spot_id_t (id), type)
               .in_mesh (_mesh.value)
-              .submit ();
+              .async ();
             co_return fw::http_response_t{.body = nlohmann::json{
               {"id", id}, {"mesh", std::string (result.spot.mesh_name ())},
               {"nodeRid", std::string (result.spot.node_rid ().value ())},
@@ -266,11 +266,11 @@ class probe_handler_t
         try {
             if (kind == "actor") {
                 auto result = co_await _actors.request (fw::actor_id_t (id), probe_req_t{id})
-                                 .submit<probe_res_t> ();
+                                 .async<probe_res_t> ();
                 co_return fw::http_response_t{.body = nlohmann::json (result).dump ()};
             }
             auto result = co_await _routes.request_to_spot (
-              fw::spot_id_t (id), probe_req_t{id}).submit<probe_res_t> ();
+              fw::spot_id_t (id), probe_req_t{id}).async<probe_res_t> ();
             co_return fw::http_response_t{.body = nlohmann::json (result).dump ()};
         }
         catch (const fw::framework_exception_t &error) {

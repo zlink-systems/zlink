@@ -153,7 +153,7 @@ handle_timer_tick (zlink::framework::spot_context_t &context,
         evidence.add ("timer-await-released|rid=" + evidence.node_rid + "|spot="
                       + spot_id + "|request=" + state->request_id + "|timer="
                       + state->timer_name + "|tick=" + tick_id + "|handler=timer");
-        co_await call.submit<yd::delay_res_t> ();
+        co_await call.async<yd::delay_res_t> ();
         evidence.add ("timer-await-resumed|rid=" + evidence.node_rid + "|spot="
                       + spot_id + "|request=" + state->request_id + "|timer="
                       + state->timer_name + "|tick=" + tick_id + "|handler=timer");

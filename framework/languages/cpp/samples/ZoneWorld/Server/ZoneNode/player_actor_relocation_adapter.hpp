@@ -67,7 +67,7 @@ class player_actor_t final : public fw::actor_t
             if (pending_initial_entry && !is_bot) {
                 co_await _context.bound_session ().send (
                   join_world_res_t{player_id, zone_id, x, y,
-                                   std::nullopt}).submit ();
+                                   std::nullopt}).async ();
                 std::cout << "zoneworld-join-response player=" << player_id
                           << " zone=" << zone_id << std::endl;
             }
@@ -85,11 +85,11 @@ class player_actor_t final : public fw::actor_t
             const auto error = framework_error_name (failed->error_kind);
             if (pending_crash_probe && !is_bot) {
                 co_await _context.bound_session ().send (
-                  crash_relocation_probe_res_t{error}).submit ();
+                  crash_relocation_probe_res_t{error}).async ();
             }
             else if (pending_initial_entry && !is_bot) {
                 co_await _context.bound_session ().send (
-                  join_world_res_t{player_id, zone_id, x, y, error}).submit ();
+                  join_world_res_t{player_id, zone_id, x, y, error}).async ();
             }
             pending_join = false;
             pending_crash_probe = false;
@@ -112,13 +112,13 @@ class player_actor_t final : public fw::actor_t
             }
             else if (pending_initial_entry) {
                 co_await _context.bound_session ().send (
-                  join_world_res_t{player_id, zone_id, x, y, reason}).submit ();
+                  join_world_res_t{player_id, zone_id, x, y, reason}).async ();
             }
             else {
                 co_await _context.bound_session ()
                   .send (move_rejected_notify_t{
                     reason, x, y})
-                  .submit ();
+                  .async ();
             }
             pending_join = false;
             pending_crash_probe = false;

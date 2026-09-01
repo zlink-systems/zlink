@@ -181,7 +181,7 @@ class node_direct_handler_t
           mesh_name, zlink::routing_id_t::from (target),
           node_probe_t{.value = "rm-a3"});
         try {
-            co_await call.submit ();
+            co_await call.async ();
             co_return zlink::framework::http_response_t{
               .body =
                 R"({"terminal":"Submitted","errorKind":""})"};

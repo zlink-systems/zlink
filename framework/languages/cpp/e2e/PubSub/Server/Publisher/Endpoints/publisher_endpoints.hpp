@@ -26,9 +26,9 @@ inline zlink::framework::http_response_t publish_from_query (
     /* packet_name이 주어지면 handler가 없는 negative wire 변형으로 발행한다. */
     if (packet_name != nullptr) {
         publisher.publish (event_channel, topic->second, missing_event_t{value->second})
-          .submit ();
+          .async ();
     } else {
-        publisher.publish (event_channel, topic->second, event_t{value->second}).submit ();
+        publisher.publish (event_channel, topic->second, event_t{value->second}).async ();
     }
     evidence.add (std::string ("published|topic=") + topic->second + "|value=" + value->second
                   + "|packet=" + (packet_name == nullptr ? "Event" : packet_name));

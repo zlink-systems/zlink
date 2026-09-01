@@ -18,7 +18,7 @@ template <typename T> class immediate_call_state_t
 
     void set_timeout (std::chrono::milliseconds) {}
 
-    task_t<T> submit () { return task_t<T> (_result); }
+    task_t<T> async () { return task_t<T> (_result); }
     task_t<T> yield ()
     {
         return current_serial_turn_allows_yield ()
@@ -37,7 +37,7 @@ template <> class immediate_call_state_t<void>
 
     void set_timeout (std::chrono::milliseconds) {}
 
-    task_t<void> submit () { return task_t<void> (_result); }
+    task_t<void> async () { return task_t<void> (_result); }
     task_t<void> yield ()
     {
         return current_serial_turn_allows_yield ()
@@ -63,7 +63,7 @@ template <typename T> class async_call_state_t
     }
 
     void set_timeout (std::chrono::milliseconds) {}
-    task_t<T> submit () { return _completion->task (); }
+    task_t<T> async () { return _completion->task (); }
     task_t<T> yield ()
     {
         return current_serial_turn_allows_yield () ? _completion->task ()
@@ -84,7 +84,7 @@ template <typename TDerived, typename TResult> class call_facade_t
         return static_cast<TDerived &> (*this);
     }
 
-    task_t<TResult> submit () { return _submit (); }
+    task_t<TResult> async () { return _submit (); }
     task_t<TResult> yield () { return _yield (); }
 
   protected:
@@ -92,7 +92,7 @@ template <typename TDerived, typename TResult> class call_facade_t
     {
         auto state = std::make_shared<immediate_call_state_t<TResult>> (
           std::move (result));
-        _submit = [state] { return state->submit (); };
+        _submit = [state] { return state->async (); };
         _yield = [state] { return state->yield (); };
     }
 
@@ -100,7 +100,7 @@ template <typename TDerived, typename TResult> class call_facade_t
     {
         auto state = std::make_shared<async_call_state_t<TResult>> (
           std::move (task));
-        _submit = [state] { return state->submit (); };
+        _submit = [state] { return state->async (); };
         _yield = [state] { return state->yield (); };
     }
 

@@ -149,7 +149,7 @@ task_t<void> handle (stream_t &stream, const ping_t &message)
 {
     // Replies exactly once, using the same request correlation. Ends in failure if it isn't a request.
     co_await stream.reply_packet (zlink::message_t::from_json (pong_t{message.sequence}))
-      .submit ();
+      .async ();
 }
 ```
 
@@ -168,7 +168,7 @@ Use `send` when the server pushes first.
 co_await stream.send (server_notice_t{"maintenance"})
   .metadata ("severity", "info")
   .compress ()
-  .submit ();
+  .async ();
 ```
 
 ## 4. Actor Dispatch
@@ -193,10 +193,10 @@ auto connector = zlink::stream_connector::connector_factory_t::create (connector
 connector.on<game_state_notify_t> ("GameStateNotify",
                                    [] (const auto &message) { render (message.payload ()); });
 
-co_await connector.connect ().submit (); // Finishes connecting and preparing the receive loop.
+co_await connector.connect ().async (); // Finishes connecting and preparing the receive loop.
 
 while (running) {
-    co_await connector.dispatch ().submit (); // manual mode runs the callback on this caller.
+    co_await connector.dispatch ().async (); // manual mode runs the callback on this caller.
 }
 ```
 
@@ -222,10 +222,10 @@ connector_options.diagnostics_level = zlink::stream_connector::diagnostics_level
 
 ```cpp
 // Waits for admission into the bounded outbound queue.
-co_await connector.send (player_input_t{direction}).submit ();
+co_await connector.send (player_input_t{direction}).async ();
 
 // Finds the response by request sequence.
-auto profile = co_await connector.request (get_profile_t{player_id}).submit<profile_t> ();
+auto profile = co_await connector.request (get_profile_t{player_id}).async<profile_t> ();
 ```
 
 The Connector's default typed codec is JSON. Packet name override, push waiting, reconnect,

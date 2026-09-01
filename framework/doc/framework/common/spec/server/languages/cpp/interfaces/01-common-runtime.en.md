@@ -105,7 +105,7 @@ MeshNode, location owner token, or generation, and the framework
 handles routing envelope, location claim, and serializer selection.
 
 An ordinary request receives a typed reply through
-`request_to_node(...).timeout(...).submit<TReply>()`. A value set with
+`request_to_node(...).timeout(...).async<TReply>()`. A value set with
 `.metadata(key, value)` is snapshotted per the application metadata
 contract, and transport detail and correlation state aren't exposed in
 the public API.
@@ -390,7 +390,7 @@ public:
  worker_call_t() = default;
  explicit worker_call_t(executor_t executor);
  worker_call_t &timeout (std::chrono::milliseconds value);
- task_t<TResult> submit ();
+ task_t<TResult> async ();
  task_t<TResult> yield ();
 };
 
@@ -412,9 +412,9 @@ context.** The rule for resuming completion in the original execution
 context is owned by
 [Async Execution Policy](../../../01-execution/README.en.md).
 The worker function is passed a `std::stop_token` combining timeout,
-host shutdown, and caller cancellation. `submit()` is a terminal that
-doesn't wait for a result, and `submit()` keeps the current turn and
-waits for the result. `yield()` returns that turn and waits for the
+host shutdown, and caller cancellation. One-way `async()` completes
+without a result, while result-bearing `async()` keeps the current turn
+and waits for the result. `yield()` returns that turn and waits for the
 result only in a `SpotWide` User Spot's or Instance Spot's shared turn.
 In a different execution context, it completes with
 `invalid_operation` without submitting the worker or returning the
@@ -425,7 +425,7 @@ bound are set only before host start.
 ### 7.4 Error Boundary
 
 An API that returns synchronous validation and an explicit result
-object returns failure as `result_t<T>`. An async call's `submit()`
+object returns failure as `result_t<T>`. An async call's `async()`
 throws `framework_exception_t` carrying the same error information on
 failure. The application's error branch uses `kind()`. `code()` adds
 diagnostic information when there's a platform cause such as timeout

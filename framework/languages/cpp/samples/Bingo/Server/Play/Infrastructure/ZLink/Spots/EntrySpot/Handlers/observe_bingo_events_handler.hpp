@@ -22,7 +22,7 @@ inline task_t<observe_bingo_events_res_t> bingo_entry_spot_t::observe_bingo_even
     co_await _context.manager ()
       .get_or_create (observer_id, sample_names_t::room_spot)
       .creation_request (payload)
-      .submit ();
+      .async ();
     bingo_room_join_req_t join_request;
     join_request.set_room_id (request.room_id ());
     join_request.set_actor_id (actor.actor_id);

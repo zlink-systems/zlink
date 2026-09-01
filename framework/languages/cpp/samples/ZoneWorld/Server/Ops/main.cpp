@@ -65,7 +65,7 @@ class ops_console_registry_t
                 writes.push_back (stream.write_packet (zlink::message_t::from_json (message))
                                     .packet_name (T::packet_name)
                                     .timeout (std::chrono::seconds (2))
-                                    .submit ());
+                                    .async ());
             }
             catch (...) {
             }
@@ -382,11 +382,11 @@ class ops_session_t final : public fw::packet_stream_session_t
         const auto packet = std::string (dispatch.packet_name);
         if (packet == watch_nodes_req_t::packet_name) {
             stream.reply_packet (zlink::message_t::from_json (watch_nodes_res_t{_state.nodes ()}))
-              .submit ();
+              .async ();
             co_return;
         }
         if (packet == relocation_pair_req_t::packet_name) {
-            stream.reply_packet (zlink::message_t::from_json (_state.relocation_pair ())).submit ();
+            stream.reply_packet (zlink::message_t::from_json (_state.relocation_pair ())).async ();
             co_return;
         }
         if (packet == announce_world_req_t::packet_name) {
@@ -395,8 +395,8 @@ class ops_session_t final : public fw::packet_stream_session_t
             co_await _publisher
               .publish (names_t::broadcast_channel, names_t::announce_topic,
                         world_announce_event_t{id, request.text})
-              .submit ();
-            stream.reply_packet (zlink::message_t::from_json (announce_world_res_t{id})).submit ();
+              .async ();
+            stream.reply_packet (zlink::message_t::from_json (announce_world_res_t{id})).async ();
             co_return;
         }
         if (packet == set_maintenance_req_t::packet_name) {
@@ -408,17 +408,17 @@ class ops_session_t final : public fw::packet_stream_session_t
                                                             apply_node_maintenance_req_t{
                                                               request.node_id, request.enabled})
                                        .timeout (std::chrono::seconds (10))
-                                       .submit<apply_node_maintenance_res_t> ();
+                                       .async<apply_node_maintenance_res_t> ();
                 co_await _publisher
                   .publish (names_t::broadcast_channel, names_t::maintenance_topic,
                             node_maintenance_changed_event_t{request.node_id, request.enabled})
-                  .submit ();
+                  .async ();
                 if (const auto changed = _state.set_maintenance (request.node_id, request.enabled))
                     co_await _consoles.publish (*changed);
                 stream
                   .reply_packet (zlink::message_t::from_json (set_maintenance_res_t{
                     applied.node_id, applied.enabled, applied.zones, std::nullopt}))
-                  .submit ();
+                  .async ();
             }
             catch (const fw::framework_exception_t &error) {
                 stream
@@ -429,7 +429,7 @@ class ops_session_t final : public fw::packet_stream_session_t
                     error.kind () == fw::framework_error_kind_t::deadline_exceeded
                       ? errors_t::deadline_exceeded
                       : errors_t::unavailable}))
-                  .submit ();
+                  .async ();
             }
             co_return;
         }
@@ -441,18 +441,18 @@ class ops_session_t final : public fw::packet_stream_session_t
                     .request_to_channel (names_t::ops_channel (request.node_id),
                                          get_node_diagnostics_req_t{request.node_id})
                     .timeout (std::chrono::seconds (10))
-                    .submit<get_node_diagnostics_res_t> ();
+                    .async<get_node_diagnostics_res_t> ();
                 stream
                   .reply_packet (zlink::message_t::from_json (
                     node_diagnostics_res_t{result.node_id, result.zones, result.player_count,
                                            result.maintenance, std::nullopt}))
-                  .submit ();
+                  .async ();
             }
             catch (const fw::framework_exception_t &) {
                 stream
                   .reply_packet (zlink::message_t::from_json (
                     node_diagnostics_res_t{request.node_id, {}, 0, false, errors_t::unavailable}))
-                  .submit ();
+                  .async ();
             }
             co_return;
         }

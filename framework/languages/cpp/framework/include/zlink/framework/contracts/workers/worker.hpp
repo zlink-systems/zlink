@@ -415,7 +415,7 @@ template <typename TResult> class worker_call_t
         return *this;
     }
 
-    task_t<TResult> submit () { return start (false); }
+    task_t<TResult> async () { return start (false); }
 
     task_t<TResult> yield () { return start (true); }
 

@@ -2062,7 +2062,7 @@ void app_t::_apply_zlink_framework ()
                                                        std::move (actor_type));
               if (creation_payload)
                   call.creation_request (message_t::from_raw (*creation_payload, serializers));
-              const auto created = call.submit ().result ();
+              const auto created = call.async ().result ();
               if (!created)
                   return result_t<actor_ref_t>::failure (
                     created.error_kind (),

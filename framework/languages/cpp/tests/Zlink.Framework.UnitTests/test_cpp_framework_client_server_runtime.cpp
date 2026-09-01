@@ -224,7 +224,7 @@ void verify_public_listener_status_reports_bound_endpoint ()
       provider.get_required<zlink::framework::channel_client_t> ();
     const auto server_only_send =
       channels.send ("listener-status", network_probe_message_t{})
-        .submit ()
+        .async ()
         .result ();
     if (server_only_send
         || server_only_send.error_kind ()
@@ -235,7 +235,7 @@ void verify_public_listener_status_reports_bound_endpoint ()
     const auto server_only_request =
       channels.request_to_channel (
                 "listener-status", network_probe_message_t{})
-        .submit<network_probe_message_t> ()
+        .async<network_probe_message_t> ()
         .result ();
     if (server_only_request
         || server_only_request.error_kind ()

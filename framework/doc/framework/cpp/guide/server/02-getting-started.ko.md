@@ -107,7 +107,7 @@ app.add_zlink_framework ([] (zlink_framework_options_t &options) {
 task_t<std::string> hello_http_handler_t::handle (const std::string &name)
 {
     auto reply = co_await _route.request_to_channel ("greeting", hello_t{name})
-                   .submit<greeting_t> ();
+                   .async<greeting_t> ();
     co_return reply.text;
 }
 ```
@@ -191,7 +191,7 @@ create_game_http_handler_t::handle (const create_game_http_req_t &request)
       .in_mesh (sample_nodes_t::mesh)         // Object를 만들 RouteMesh를 선택한다.
       .creation_request (tictactoe_game_create_req_t{
         game_name, sample_defaults_t::required_level})  // 새 Spot의 on_create에 전달할 최초 설정이다.
-      .submit ();
+      .async ();
 
     co_return create_game_http_res_t{
       created.spot.spot_id (),                // Framework가 발급한 SpotId를 room id로 사용한다.

@@ -43,7 +43,7 @@ class authenticate_play_session_handler_t
         const auto authenticate_request = authenticate_player_req_t{request.access_token};
         auto authenticated =
           co_await _client.request (sample_names_t::api_channel, authenticate_request)
-            .submit<authenticate_player_res_t> ();
+            .async<authenticate_player_res_t> ();
         if (authenticated.player.actor_id.empty ()) {
             co_return result_t<session_actor_t>::failure (framework_error_kind_t::internal_failure,
                                                           "Player authentication failed.");
@@ -59,7 +59,7 @@ class authenticate_play_session_handler_t
             co_return result_t<session_actor_t>::failure (framework_error_kind_t::internal_failure,
                                                           "Player actor could not be located.");
         }
-        auto actor = co_await actors.bind_or_get (located.value ().ref ()).submit ();
+        auto actor = co_await actors.bind_or_get (located.value ().ref ()).async ();
         bool first_player_x_binding = false;
         {
             std::lock_guard lock (bound_actors_mutex);
@@ -73,7 +73,7 @@ class authenticate_play_session_handler_t
 
         const auto reply_payload = authenticate_res_t{player};
         const auto reply_message = zlink::message_t::from_json (reply_payload);
-        stream.reply_packet (reply_message).submit ();
+        stream.reply_packet (reply_message).async ();
 
         co_return actor;
     }

@@ -115,14 +115,14 @@ class actor_session_t final : public fw::packet_stream_session_t
             throw fw::framework_exception_t (fw::framework_error_kind_t::not_found,
                                              "actor session target was not found");
         }
-        auto bound = co_await _actors.bind_or_get (*actor_ref).submit ();
+        auto bound = co_await _actors.bind_or_get (*actor_ref).async ();
         _bound_actor_id = std::string (bound.actor_id ());
         _bind_scenario = request.scenario;
         _evidence.append ({request.scenario, _bound_actor_id, "bind", _gateway_rid});
         stream
           .reply_packet (zlink::message_t::from_json (
             e2e::bind_actor_session_res_t{request.scenario, _bound_actor_id}))
-          .submit ();
+          .async ();
     }
 
   private:

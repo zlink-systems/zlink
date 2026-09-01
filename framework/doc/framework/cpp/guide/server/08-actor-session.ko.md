@@ -60,11 +60,11 @@ if (!located)
                                                  "Player actor could not be located.");
 
 // 같은 exact incarnation이 이미 bind됐으면 기존 route를 반환한다.
-auto actor = co_await actors.bind_or_get (located.value ().ref ()).submit ();
+auto actor = co_await actors.bind_or_get (located.value ().ref ()).async ();
 
 // 현재 request의 one-shot reply를 제출한다.
 stream.reply_packet (zlink::message_t::from_json (authenticated_t{actor.actor_id ()}))
-  .submit ();
+  .async ();
 ```
 
 `bind`는 중복 bind를 오류로 처리한다. 인증 재전송처럼 이미 bind됐을 수 있는 흐름은
@@ -146,7 +146,7 @@ task_t<void> game_room_t::state_changed (player_actor_t &actor,
     co_await actor.context ().bound_session ()
       .send (game_state_notify_t{message.state})
       .metadata ("revision", std::to_string (message.revision))
-      .submit ();
+      .async ();
 }
 ```
 

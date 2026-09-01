@@ -99,7 +99,7 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
           .bound_session ()
           .send (offer_delivery_notify_t{message.courier_id, message.delivery_id,
                                          message.pickup_address, message.dropoff_address})
-          .submit ();
+          .async ();
     }
 
     /* 배송원의 결정은 배차 쪽으로 one-way로 돌려준다. 노드는 시한을 세지 않는다 — 제안 시한은
@@ -121,7 +121,7 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
           .send (sample_names_t::dispatch_route_channel,
                  offer_delivery_result_msg_t{decision.delivery_id, decision.courier_id, attempt,
                                              decision.accepted, decision.reason})
-          .submit ();
+          .async ();
     }
 
   private:

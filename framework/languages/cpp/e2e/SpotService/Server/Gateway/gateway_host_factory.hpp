@@ -67,7 +67,7 @@ class gateway_publish_handler_t
           _publisher
             .publish (e2e::publisher_channel, e2e::mesh_topic,
                       e2e::mesh_msg_t{"evt-sm-c4", request.marker})
-            .submit ()
+            .async ()
             .result ();
         if (!published) {
             throw zlink::framework::framework_exception_t (
@@ -129,7 +129,7 @@ class gateway_actor_push_handler_t
               _actors.request (zlink::framework::actor_id_t (request.actor_id),
                                e2e::actor_push_req_t{request.value})
                 .timeout (std::chrono::milliseconds (10000))
-                .submit<e2e::actor_push_res_t> ()
+                .async<e2e::actor_push_res_t> ()
                 .result ();
             if (!reply) {
                 const auto error_kind = gateway_error_kind_name (reply.error_kind ());

@@ -205,7 +205,7 @@ application doesn't call `bind()` again to learn about relocation.
 The Actor-interworking member of `bound_session_t`,
 `session_actor_t`, and `session_actor_manager_t` is owned by the
 [Actor interface](05-actors.en.md). The metadata/compression/
-`submit()` member of `stream_send_call_t` and `stream_write_call_t`
+`async()` member of `stream_send_call_t` and `stream_write_call_t`
 keeps the same admission contract as the call family in
 [Channel messaging](03-channel-messaging.en.md).
 STREAM application callback, send/reply, and compression extension use

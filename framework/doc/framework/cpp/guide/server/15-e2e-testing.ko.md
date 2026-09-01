@@ -35,9 +35,9 @@ handler 단위 테스트를 아무리 촘촘히 작성해도 확인되지 않는
 코드만으로 끝난다.
 
 ```cpp
-co_await client.connect ().submit ();                                     // 실제 연결
+co_await client.connect ().async ();                                     // 실제 연결
 auto auth = co_await client.request (authenticate_req_t{actor_id})       // 실제 request
-              .submit<authenticate_res_t> ();
+              .async<authenticate_res_t> ();
 auto push = co_await other.wait_for<player_joined_notify_t> ().async (); // 실제 push 도착 확인
 ensure (push.payload.actor_id == auth.player.actor_id);
 ```
@@ -105,7 +105,7 @@ connector가 제공하는 검증 함수로 대부분의 시나리오를 표현�
 | push가 **정해진 순서로** 오는지 확인한다 | `WaitForSequence<TNotify>().Expect(...).Expect(...)` |
 | 요청이 **실패해야** 함을 확인한다 | `ExpectFailure(...)` |
 
-**terminal 표기는 언어를 따른다** — `.NET`은 `Async`, Java · Node · C++은 `submit`,
+**terminal 표기는 언어를 따른다** — `.NET`은 `Async`, C++은 `async`, Java · Node는 `submit`,
 Kotlin은 `await`다([비동기 실행 정책](../../../common/spec/server/01-execution/README.ko.md)).
 
 값 비교는 `Ensure(조건, 메시지)`를 사용한다. 메시지는 필수이며, 실패하면 그
@@ -164,7 +164,7 @@ auto status_sequence =
 bool failed = false;
 try {
     co_await agent.request (open_conversation_req_t{"unauthenticated"})
-      .submit<open_conversation_res_t> ();
+      .async<open_conversation_res_t> ();
 } catch (const zlink::stream_connector::stream_error_t &error) {
     failed = error.code == zlink::stream_connector::error_code_t::remote_error;
 }
@@ -233,9 +233,9 @@ task_t<void> run (const tictactoe_client_options_t &options)
     auto client2 = create_stream_client (room.play_endpoints[1], options);
 
     // 3. 먼저 접속한 쪽이 인증하고 빈 방에 들어간다.
-    co_await client1.connect ().submit ();
+    co_await client1.connect ().async ();
     co_await client1.request (authenticate_req_t{options.x_actor_id})
-      .submit<authenticate_res_t> ();
+      .async<authenticate_res_t> ();
     auto join1 = co_await join_game (client1, room.room_id); // 대기 등록 → send → 수신(§3)
     ensure (join1.state.status == tictactoe_status_t::waiting_for_players);
 
@@ -245,14 +245,14 @@ task_t<void> run (const tictactoe_client_options_t &options)
       .async ();
 
     // 4. 두 번째 player가 입장하면 방이 시작되고, 먼저 입장한 쪽에 push가 전달된다.
-    co_await client2.connect ().submit ();
+    co_await client2.connect ().async ();
     co_await client2.request (authenticate_req_t{options.o_actor_id})
-      .submit<authenticate_res_t> ();
+      .async<authenticate_res_t> ();
     auto join2 = co_await join_game (client2, room.room_id);
     ensure (join2.state.status == tictactoe_status_t::in_progress);
 
     // 5. 수를 두면 응답과 상대에게 전달된 push가 같은 상태를 가리켜야 한다.
-    auto move = co_await client1.request (place_mark_req_t{0}).submit<place_mark_res_t> ();
+    auto move = co_await client1.request (place_mark_req_t{0}).async<place_mark_res_t> ();
     auto saw_move = co_await client2.wait_for<game_state_notify_t> ()
                       .where ([] (const auto &m) { return m.state.last_move_cell == 0; })
                       .async ();
@@ -279,7 +279,7 @@ task_t<void> run (const tictactoe_client_options_t &options)
 task_t<join_game_notify_t> join_game (auto &connector, const std::string &room_id)
 {
     auto completion = connector.wait_for<join_game_notify_t> ().async ();
-    co_await connector.send (join_game_msg_t{room_id}).submit ();
+    co_await connector.send (join_game_msg_t{room_id}).async ();
     co_return (co_await std::move (completion)).payload;
 }
 ```

@@ -318,7 +318,7 @@ class player_quest_spot_t : public instance_spot_t
           .send (actor->actor_id (),
                  notify_quest_progress_msg_t{message.player_id, result.projection,
                                              result.completed_quest_id})
-          .submit ();
+          .async ();
         std::cerr << "gamequest mission notified player=" << message.player_id
                   << " completed=" << result.completed_quest_id << "\n";
         co_return;

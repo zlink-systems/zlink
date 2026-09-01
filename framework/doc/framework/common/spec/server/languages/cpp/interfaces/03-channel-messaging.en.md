@@ -795,7 +795,7 @@ class request_call_t {
 public:
  request_call_t &timeout(std::chrono::milliseconds timeout);
  request_call_t &metadata(std::string key, std::string value);
- task_t<TReply> submit();
+ task_t<TReply> async();
  task_t<TReply> yield();
 };
 
@@ -805,7 +805,7 @@ public:
  channel_request_call_t &metadata(std::string key, std::string value);
 
  template <typename TReply>
- task_t<TReply> submit();
+ task_t<TReply> async();
 
  template <typename TReply>
  task_t<TReply> yield();
@@ -814,13 +814,13 @@ public:
 class send_call_t {
 public:
  send_call_t &metadata(std::string key, std::string value);
- task_t<void> submit();
+ task_t<void> async();
 };
 
 class bound_session_send_call_t {
 public:
  bound_session_send_call_t &metadata(std::string key, std::string value);
- task_t<void> submit();
+ task_t<void> async();
 };
 
 class stream_send_call_t {
@@ -835,7 +835,7 @@ public:
  stream_send_call_t &packet_name(std::string packet_name);
  stream_send_call_t &compress();
  stream_send_call_t &timeout(std::chrono::milliseconds timeout);
- task_t<void> submit();
+ task_t<void> async();
 };
 
 class stream_write_call_t {
@@ -850,7 +850,7 @@ public:
 
  stream_write_call_t &metadata(std::string key, std::string value);
  stream_write_call_t &compress();
- task_t<void> submit();
+ task_t<void> async();
 };
 
 template <typename TActor>
@@ -977,9 +977,9 @@ policy.
 A request handler's return value allows `TReply` or `task_t<TReply>`.
 A handler returning `task_t<TReply>` has the same meaning as `.NET`'s
 `async Task<TReply>` handler, and a call that must wait for a result
-like an internal request is used as `co_await call.submit()`. A
+like an internal request is used as `co_await call.async()`. A
 one-way send/push receives the bounded admission result up to the send
-timeout with `co_await call.submit()`. If accepted immediately, the
+timeout with `co_await call.async()`. If accepted immediately, the
 prepared task can complete right away, without waiting for remote
 handler completion.
 
@@ -1102,7 +1102,7 @@ public:
 class route_send_call_t {
 public:
  route_send_call_t &metadata(std::string key, std::string value);
- task_t<void> submit();
+ task_t<void> async();
 };
 
 class spot_send_call_t {
@@ -1111,7 +1111,7 @@ public:
  spot_send_call_t &instance_spot();
  spot_send_call_t &instance_spot(std::string stable_type);
  spot_send_call_t &in_mesh(std::string mesh_name);
- task_t<void> submit();
+ task_t<void> async();
 };
 
 class spot_request_call_t {
@@ -1123,7 +1123,7 @@ public:
  spot_request_call_t &in_mesh(std::string mesh_name);
 
  template <typename TReply>
- task_t<TReply> submit();
+ task_t<TReply> async();
 
  template <typename TReply>
  task_t<TReply> yield();
@@ -1131,13 +1131,13 @@ public:
 
 class fanout_publish_call_t {
 public:
- task_t<void> submit();
+ task_t<void> async();
 };
 
 class publish_call_t {
 public:
  publish_call_t &metadata(std::string key, std::string value);
- task_t<void> submit();
+ task_t<void> async();
 };
 
 } // namespace zlink::framework
@@ -1156,7 +1156,7 @@ is existing-only, and ends with `not_found` for a Missing RID.
 applies only to the first placement of a Missing RID together with the
 Instance marker. The marker and this option can each be set only once
 per call, and a duplicate setting is `invalid_operation`. A terminal
-operation among `submit()` or `yield<TReply>()` can also be started
+operation among `async()` or `yield<TReply>()` can also be started
 only once, and a second call is `invalid_operation`.
 
 The public API stays based on channel name and typed payload
@@ -1168,14 +1168,14 @@ a call that specifies the
 are used for classic fanout, and the Framework decides the codec. If
 the specified topic is the internal liveness byte `01 5A 4C 46 31`,
 it doesn't start transport and raises `framework_exception_t`.
-`fanout_publish_call_t::submit()` completes normally once the local
+`fanout_publish_call_t::async()` completes normally once the local
 publisher transport accepts the event. It doesn't return subscriber
 count or receive completion. `publish_call_t` is
 [Logical Multicast](../../../00-foundation/02-glossary.en.md#logical-multicast)-only.
 It completes normally once the publisher local queue accepts the
 event, even with 0 subscribers.
 
-Every server one-way call's `submit()` and Session Actor `relay(...)`
+Every server one-way call's `async()` and Session Actor `relay(...)`
 don't produce a normal completion value. Normal completion means the
 operation family's defined source-local queue accepted the message.
 It doesn't wait for remote handler execution, subscriber receipt,
@@ -1223,7 +1223,7 @@ admission only allows the `1..INT_MAX` range. `0`, negative, and
 exceeding the bound are rejected as a configuration error at setting
 time or, at latest, at startup, and aren't switched to the default.
 
-Logical Multicast's `publish_call_t::submit()` does a direct handoff to
+Logical Multicast's `publish_call_t::async()` does a direct handoff to
 a bounded I/O executor. If a worker slot isn't obtained immediately, it
 waits for capacity up to the send timeout. Once a slot is obtained, it
 calls the raw binding publish exactly once. The point this call starts

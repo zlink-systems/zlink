@@ -182,7 +182,7 @@ namespace zlink::framework {
 class actor_send_call_t {
 public:
  actor_send_call_t &metadata(std::string key, std::string value);
- task_t<void> submit();
+ task_t<void> async();
 };
 
 class actor_request_call_t {
@@ -191,12 +191,12 @@ public:
  actor_request_call_t &metadata(std::string key, std::string value);
 
  template <typename TReply>
- task_t<TReply> submit();
+ task_t<TReply> async();
 
  template <typename TReply>
  task_t<TReply> yield();
 
- task_t<message_t> submit_message();
+ task_t<message_t> async_message();
  task_t<message_t> yield_message();
 };
 
@@ -259,7 +259,7 @@ public:
  actor_create_call_t &creation_request(TCreation request);
 
  actor_create_call_t &timeout(std::chrono::milliseconds timeout);
- task_t<actor_create_result_t> submit();
+ task_t<actor_create_result_t> async();
  task_t<actor_create_result_t> yield();
 };
 
@@ -279,7 +279,7 @@ public:
 } // namespace zlink::framework
 ```
 
-A call object sets each option at most once, and calls `submit()` only
+A call object sets each option at most once, and calls `async()` only
 once too. A duplicate option is `invalid_operation`, and a second
 submit is also `invalid_operation`. When `in_mesh` is omitted, if there
 is exactly one object-role Mesh, it's auto-selected; with zero it's
@@ -394,5 +394,5 @@ The declarations in this document belong to public trace's
 valid while the current Actor handler is running in a `SpotWide` User
 Spot's shared execution gate. If an Entry Spot Actor or a `PerActor`
 User Spot's Actor calls them, they complete with `invalid_operation`
-without submitting the operation or returning the turn. `submit()` can
+without submitting the operation or returning the turn. `async()` can
 be used in every Actor execution context.

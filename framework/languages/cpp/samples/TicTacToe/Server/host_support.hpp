@@ -172,7 +172,7 @@ class play_api_channel_readiness_service_t final : public hosted_service_t
                                               authenticate_player_req_t{
                                                 "tictactoe-readiness"})
                                    .timeout (std::chrono::milliseconds (500))
-                                   .submit<authenticate_player_res_t> ();
+                                   .async<authenticate_player_res_t> ();
                   observe_task_completion (
                     request, [attempt] (const result_t<authenticate_player_res_t> &result) {
                         {

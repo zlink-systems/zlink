@@ -320,14 +320,14 @@ class channel_probe_handler_t
                                    std::string (e2e::audit_channel),
                                    request_type{request.id + "-audit", "echo"})
                                  .timeout (std::chrono::seconds (5))
-                                 .submit<reply_type> ();
+                                 .async<reply_type> ();
             downstream.push_back (audit.role + ":" + audit.channel);
             const auto workflow = co_await _channels
                                     .request_to_channel (
                                       std::string (e2e::workflow_channel),
                                       request_type{request.id + "-workflow", "echo"})
                                     .timeout (std::chrono::seconds (5))
-                                    .submit<reply_type> ();
+                                    .async<reply_type> ();
             downstream.push_back (workflow.role + ":" + workflow.channel);
         }
 
@@ -488,7 +488,7 @@ class config12_instance_spot_t final : public fw::instance_spot_t
                                          e2e::spot_workflow_req_t{
                                            request.id + "-workflow", request.timer_name})
                                 .timeout (std::chrono::seconds (5))
-                                .submit<e2e::spot_workflow_res_t> ();
+                                .async<e2e::spot_workflow_res_t> ();
         (void) workflow;
         _evidence.add ("spot-workflow-reply|spot=" + spot + "|id=" + request.id);
         auto timer = _context.add_timer<config12_timer_handler_t> (
@@ -510,7 +510,7 @@ class config12_instance_spot_t final : public fw::instance_spot_t
                                          e2e::spot_workflow_req_t{
                                            spot + "-timer-workflow", tick.name})
                                 .timeout (std::chrono::seconds (5))
-                                .submit<e2e::spot_workflow_res_t> ();
+                                .async<e2e::spot_workflow_res_t> ();
         (void) workflow;
         _evidence.add ("spot-timer-workflow-reply|spot=" + spot + "|timer=" + tick.name);
         _evidence.add ("spot-timer-end|spot=" + spot + "|timer=" + tick.name
@@ -559,11 +559,11 @@ class request_handler_t
             if (channel == e2e::workflow_channel) {
                 reply = co_await _channels.request_to_channel (channel, message)
                           .timeout (timeout)
-                          .submit<e2e::channel_probe_res_t> ();
+                          .async<e2e::channel_probe_res_t> ();
             } else {
                 reply = co_await _routes.request_to_channel (channel, message)
                           .timeout (timeout)
-                          .submit<e2e::channel_probe_res_t> ();
+                          .async<e2e::channel_probe_res_t> ();
             }
             co_return json_response ({ {"succeeded", true}, {"reply", reply} });
         }
@@ -600,9 +600,9 @@ class send_handler_t
             const auto channel = body.at ("channel").get<std::string> ();
             const auto message = e2e::channel_probe_msg_t{body.at ("id").get<std::string> ()};
             if (channel == e2e::workflow_channel) {
-                co_await _channels.send_to_channel (channel, message).submit ();
+                co_await _channels.send_to_channel (channel, message).async ();
             } else {
-                co_await _routes.send_to_channel (channel, message).submit ();
+                co_await _routes.send_to_channel (channel, message).async ();
             }
             co_return json_response ({ {"succeeded", true} });
         }
@@ -841,7 +841,7 @@ class spot_workflow_http_handler_t
                                  .instance_spot (std::string (e2e::spot_type))
                                  .in_mesh (std::string (e2e::game_mesh))
                                  .timeout (std::chrono::seconds (5))
-                                 .submit<e2e::spot_workflow_res_t> ();
+                                 .async<e2e::spot_workflow_res_t> ();
             co_return json_response ({ {"succeeded", true}, {"reply", reply} });
         }
         catch (const fw::framework_exception_t &error) {

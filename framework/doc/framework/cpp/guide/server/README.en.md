@@ -91,7 +91,7 @@ directly, and the framework handles serialization (JSON / MessagePack / Protobuf
 // Sending side (channel client)
 auto result = co_await _client
     .request ("support.core", open_conversation_req_t{user_id})
-    .submit<open_conversation_res_t> ();
+    .async<open_conversation_res_t> ();
 
 // Receiving side (channel server handler)
 class open_conversation_handler_t {

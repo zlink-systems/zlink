@@ -625,7 +625,7 @@ int main ()
         }
     }
 
-    auto sample_task = sample_call_t (42).submit ();
+    auto sample_task = sample_call_t (42).async ();
     if (sample_task.result ().value () != 42) {
         return 1;
     }
@@ -642,10 +642,10 @@ int main ()
               return zlink::framework::result_t<void>::success ();
           });
         auto duplicate_copy = duplicate_call;
-        duplicate_call.submit ().result ().value ();
+        duplicate_call.async ().result ().value ();
         bool duplicate_rejected = false;
         try {
-            (void) duplicate_copy.submit ().result ().value ();
+            (void) duplicate_copy.async ().result ().value ();
         }
         catch (const zlink::framework::framework_exception_t &error) {
             duplicate_rejected =
@@ -665,10 +665,10 @@ int main ()
               return zlink::framework::result_t<void>::success ();
           });
         auto multicast_copy = multicast_call;
-        multicast_call.submit ().result ().value ();
+        multicast_call.async ().result ().value ();
         bool duplicate_multicast_rejected = false;
         try {
-            (void) multicast_copy.submit ().result ().value ();
+            (void) multicast_copy.async ().result ().value ();
         }
         catch (const zlink::framework::framework_exception_t &error) {
             duplicate_multicast_rejected =
@@ -689,7 +689,7 @@ int main ()
           });
         // Dequeue is already terminal for the caller. Application-bound paths
         // report the later failure through their structured observer.
-        failed_after_completion.submit ().result ().value ();
+        failed_after_completion.async ().result ().value ();
 
         /* Logical Multicast uses one direct handoff after its worker slots.
          * Test-owned work latches prove that every slot is occupied before the
@@ -713,7 +713,7 @@ int main ()
                   occupied_workers_finished.arrive ();
                   return zlink::framework::result_t<void>::success ();
               });
-            occupied_workers.push_back (occupied.submit ());
+            occupied_workers.push_back (occupied.async ());
         }
         if (!occupied_workers_started.wait_for (std::chrono::seconds (2))) {
             {
@@ -733,7 +733,7 @@ int main ()
               return zlink::framework::result_t<void>::success ();
           },
           std::chrono::seconds (1));
-        auto handoff_task = handoff.submit ();
+        auto handoff_task = handoff.async ();
         std::atomic_int overflow_calls{0};
         zlink::framework::publish_call_t overflow (
           [&] (const zlink::framework::publish_call_t::metadata_map_t &) {
@@ -742,7 +742,7 @@ int main ()
           },
           std::chrono::milliseconds (25));
         bool overflow_timed_out = false;
-        auto overflow_task = overflow.submit ();
+        auto overflow_task = overflow.async ();
         const bool overflow_completed_immediately = overflow_task.await_ready ();
         try {
             overflow_task.result ().value ();
@@ -792,7 +792,7 @@ int main ()
                   deadline_workers_finished.arrive ();
                   return zlink::framework::result_t<void>::success ();
               });
-            deadline_workers.push_back (occupied.submit ());
+            deadline_workers.push_back (occupied.async ());
             /* The previous phase's handler-finished latch fires immediately
              * before the executor returns its slot. Admit this phase one
              * confirmed worker at a time so a still-returning slot cannot turn
@@ -817,7 +817,7 @@ int main ()
               return zlink::framework::result_t<void>::success ();
           },
           std::chrono::milliseconds (25));
-        auto expired_handoff_task = expired_handoff.submit ();
+        auto expired_handoff_task = expired_handoff.async ();
         std::this_thread::sleep_for (std::chrono::milliseconds (35));
         {
             std::lock_guard lock (multicast_gate_mutex);
@@ -846,7 +846,7 @@ int main ()
               recovered_finished.arrive ();
               return zlink::framework::result_t<void>::success ();
           });
-        recovered.submit ().result ().value ();
+        recovered.async ().result ().value ();
         if (!recovered_finished.wait_for (std::chrono::seconds (2)))
             return 87;
     }

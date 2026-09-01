@@ -689,7 +689,7 @@ class request_call_t {
 public:
     request_call_t &timeout(std::chrono::milliseconds timeout);
     request_call_t &metadata(std::string key, std::string value);
-    task_t<TReply> submit();
+    task_t<TReply> async();
     task_t<TReply> yield();
 };
 
@@ -699,7 +699,7 @@ public:
     channel_request_call_t &metadata(std::string key, std::string value);
 
     template <typename TReply>
-    task_t<TReply> submit();
+    task_t<TReply> async();
 
     template <typename TReply>
     task_t<TReply> yield();
@@ -708,13 +708,13 @@ public:
 class send_call_t {
 public:
     send_call_t &metadata(std::string key, std::string value);
-    task_t<void> submit();
+    task_t<void> async();
 };
 
 class bound_session_send_call_t {
 public:
     bound_session_send_call_t &metadata(std::string key, std::string value);
-    task_t<void> submit();
+    task_t<void> async();
 };
 
 class stream_send_call_t {
@@ -729,7 +729,7 @@ public:
     stream_send_call_t &packet_name(std::string packet_name);
     stream_send_call_t &compress();
     stream_send_call_t &timeout(std::chrono::milliseconds timeout);
-    task_t<void> submit();
+    task_t<void> async();
 };
 
 class stream_write_call_t {
@@ -744,7 +744,7 @@ public:
 
     stream_write_call_t &metadata(std::string key, std::string value);
     stream_write_call_t &compress();
-    task_t<void> submit();
+    task_t<void> async();
 };
 
 template <typename TActor>
@@ -851,8 +851,8 @@ offload 실행 정책을 명시한다.
 
 request handler 반환값은 `TReply` 또는 `task_t<TReply>`를 허용한다. `task_t<TReply>`를
 반환하는 handler는 `.NET`의 `async Task<TReply>` handler와 같은 의미이며, 내부
-request처럼 결과를 기다려야 하는 호출은 `co_await call.submit()` 형태로 사용한다.
-one-way send/push는 `co_await call.submit()`으로 send timeout까지 bounded admission 결과를 받는다.
+request처럼 결과를 기다려야 하는 호출은 `co_await call.async()` 형태로 사용한다.
+one-way send/push는 `co_await call.async()`으로 send timeout까지 bounded admission 결과를 받는다.
 즉시 수락되면 준비된 task가 바로 완료될 수 있으며 remote handler 완료는 기다리지 않는다.
 
 Handler coroutine은 blocking wait 없이 `task_t<T>`로 완료된다. 같은 task의 terminal 결과는 한 번만
@@ -971,7 +971,7 @@ public:
 class route_send_call_t {
 public:
     route_send_call_t &metadata(std::string key, std::string value);
-    task_t<void> submit();
+    task_t<void> async();
 };
 
 class spot_send_call_t {
@@ -980,7 +980,7 @@ public:
     spot_send_call_t &instance_spot();
     spot_send_call_t &instance_spot(std::string stable_type);
     spot_send_call_t &in_mesh(std::string mesh_name);
-    task_t<void> submit();
+    task_t<void> async();
 };
 
 class spot_request_call_t {
@@ -992,7 +992,7 @@ public:
     spot_request_call_t &in_mesh(std::string mesh_name);
 
     template <typename TReply>
-    task_t<TReply> submit();
+    task_t<TReply> async();
 
     template <typename TReply>
     task_t<TReply> yield();
@@ -1000,13 +1000,13 @@ public:
 
 class fanout_publish_call_t {
 public:
-    task_t<void> submit();
+    task_t<void> async();
 };
 
 class publish_call_t {
 public:
     publish_call_t &metadata(std::string key, std::string value);
-    task_t<void> submit();
+    task_t<void> async();
 };
 
 } // namespace zlink::framework
@@ -1020,7 +1020,7 @@ generation을 추가하지 않는다. Instance marker를 설정하지 않은 cal
 `instance_spot()`은 [stable type](../../../00-foundation/02-glossary.ko.md#stable-type)을 생략하고 `instance_spot(stable_type)`은 stable type을 명시한다.
 `in_mesh(...)`는 Instance marker와 함께 Missing RID의 최초 placement에만 적용한다. Marker와 이 option은
 한 call에서 한 번만 설정할 수 있고 중복 설정은
-`invalid_operation`이다. `submit()` 또는 `yield<TReply>()` 가운데 terminal operation도
+`invalid_operation`이다. `async()` 또는 `yield<TReply>()` 가운데 terminal operation도
 한 번만 시작할 수 있으며 두 번째 호출은 `invalid_operation`이다.
 
 Public API는 transport 종류와 무관하게 channel name과 typed payload를 기준으로 유지한다.
@@ -1028,12 +1028,12 @@ Public API는 transport 종류와 무관하게 channel name과 typed payload를 
 명시하는 호출을 함께 제공한다. 두 호출 모두 classic fanout에 사용하며 Framework가 codec을 결정한다.
 명시한 topic이 내부 liveness용 byte `01 5A 4C 46 31`이면 transport를 시작하지 않고
 `framework_exception_t`를 발생시킨다.
-`fanout_publish_call_t::submit()`은 local publisher transport가 event를 수락하면 정상 완료한다.
+`fanout_publish_call_t::async()`은 local publisher transport가 event를 수락하면 정상 완료한다.
 Subscriber 수와 수신 완료는 반환하지 않는다. `publish_call_t`는
 [Logical Multicast](../../../00-foundation/02-glossary.ko.md#logical-multicast) 전용이다. Subscriber가 0개여도
 publisher local queue가 event를 수락하면 정상 완료한다.
 
-모든 server one-way call의 `submit()`과 session Actor `relay(...)`는 정상 완료 값을 만들지 않는다. 정상
+모든 server one-way call의 `async()`과 session Actor `relay(...)`는 정상 완료 값을 만들지 않는다. 정상
 완료는 operation family가 정의한 source-local queue가 message를 수락했다는 뜻이다. Remote handler 실행,
 subscriber 수신, remote Spot queue 수락과 application callback 완료는 기다리지 않는다. Queue capacity가
 부족하면 해당 family의 send timeout까지 capacity signal을 기다리고, deadline 안에 공간이 생기면 message를
@@ -1062,7 +1062,7 @@ millisecond로 올린다. 만료되면 `deadline_exceeded`로 terminal-once 완�
 범위만 허용한다. `0`, 음수와 상한 초과는 설정 시점 또는 늦어도 startup에서 configuration error로
 거부하며 기본값으로 바꾸지 않는다.
 
-Logical Multicast의 `publish_call_t::submit()`은 bounded I/O executor에 direct handoff한다. 즉시 worker slot을
+Logical Multicast의 `publish_call_t::async()`은 bounded I/O executor에 direct handoff한다. 즉시 worker slot을
 얻지 못하면 send timeout까지 capacity를 기다린다. Slot을 얻으면 raw binding publish를 정확히 한 번 호출한다.
 이 call이 시작된 시점이 operation commit barrier다. Transaction이 시작된 뒤 개별 target 실패는 이미 수락한
 target을 rollback하거나 전체 publish를 자동 재시도하지 않는다. Remote transport와 local Spot queue의

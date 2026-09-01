@@ -250,7 +250,7 @@ task_t<mark_result_t> bingo_room_spot_t::mark_number (const mark_number_t &reque
 co_await spots.request_to_spot (guild_id, join_guild_req_t{user_id})
   .instance_spot ("guild")
   .in_mesh ("social")
-  .submit<join_guild_res_t> ();
+  .async<join_guild_res_t> ();
 ```
 
 이 시나리오는 아직 실행 가능한 기준 샘플이 없다 — 위 코드는 GameQuest의
@@ -312,10 +312,10 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 세 조각이 사
 co_await spots.request_to_spot (request.order_id, request)  // request는 이미 start_order_workflow_req_t 바디다.
   .instance_spot ("order-workflow")
   .in_mesh ("commerce")
-  .submit<start_order_workflow_res_t> ();
+  .async<start_order_workflow_res_t> ();
 
 // actor handler 안 — 재접속해도 같은 actor로 이어진 client에 push(sticky LB 없음).
-co_await actor.context ().bound_session ().send (order_status_changed_t{order_id, status}).submit ();
+co_await actor.context ().bound_session ().send (order_status_changed_t{order_id, status}).async ();
 ```
 
 실행되는 근거 샘플: [SupportChat](../../../common/sample/supportchat/README.ko.md) ·
@@ -486,7 +486,7 @@ auto reply = co_await client
   .request_to_channel (
     "price",                                            // process-local로 찾을 ChannelName
     price_request_t{"AAPL"})
-  .submit<price_reply_t> ();                            // 송신한 뒤 reply를 비동기로 기다린다.
+  .async<price_reply_t> ();                            // 송신한 뒤 reply를 비동기로 기다린다.
 ```
 
 연결·설정 코드가 사라지고 남는 것은 handler와 channel 등록 몇 줄이다.

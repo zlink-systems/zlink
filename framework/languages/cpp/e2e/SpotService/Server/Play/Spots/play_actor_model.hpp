@@ -467,14 +467,14 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
         auto reply = co_await _context.outbound ()
                        .request (e2e::api_channel, e2e::channel_echo_req_t{request.value})
                        .timeout (std::chrono::milliseconds (3000))
-                       .submit<e2e::channel_echo_res_t> ();
+                       .async<e2e::channel_echo_res_t> ();
         _context.outbound ()
           .send (e2e::api_channel,
                  e2e::channel_msg_t{"cmd-" + actor.actor_id + "-" + request.value})
-          .submit ();
+          .async ();
         _context
           .publish (e2e::mesh_topic, e2e::mesh_msg_t{"evt-" + actor.actor_id, request.value})
-          .submit ();
+          .async ();
         _state.record ("SpotOutbound", actor.actor_id, _context.spot_id (),
                        reply.value);
         co_return e2e::outbound_res_t{reply.value, true, true};
@@ -486,20 +486,20 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
         auto reply = co_await _context.outbound ()
                        .request (e2e::api_channel, e2e::channel_echo_req_t{request.value})
                        .timeout (std::chrono::milliseconds (3000))
-                       .submit<e2e::channel_echo_res_t> ();
+                       .async<e2e::channel_echo_res_t> ();
         _context.outbound ()
           .send (e2e::api_channel, e2e::channel_msg_t{"notify-" + request.value})
-          .submit ();
+          .async ();
         _context
           .publish (e2e::mesh_topic, e2e::mesh_msg_t{"evt-sm-c2", "sm-c2-publish"})
-          .submit ();
+          .async ();
         bool timed_out = false;
         try {
             (void) co_await _context.outbound ()
               .request (e2e::api_channel,
                         e2e::channel_slow_req_t{.value = request.value, .delay_ms = 1000})
               .timeout (std::chrono::milliseconds (300))
-              .submit<e2e::channel_slow_res_t> ();
+              .async<e2e::channel_slow_res_t> ();
         }
         catch (...) {
             timed_out = true;
@@ -519,7 +519,7 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
               .request (e2e::api_channel,
                         e2e::missing_channel_req_t{e2e::channel_echo_req_t{request.value}})
               .timeout (std::chrono::milliseconds (1000))
-              .submit<e2e::channel_echo_res_t> ();
+              .async<e2e::channel_echo_res_t> ();
         }
         catch (...) {
             request_failed = true;
@@ -527,7 +527,7 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
         _context.outbound ()
           .send (e2e::api_channel,
                  e2e::missing_channel_msg_t{e2e::channel_msg_t{"missing-" + request.value}})
-          .submit ();
+          .async ();
         _state.record ("SpotOutboundNegative", {}, _context.spot_id (),
                        std::string ("requestFailed=") + (request_failed ? "true" : "false"));
         co_return e2e::outbound_res_t{"missing-" + request.value, false, request_failed};
@@ -548,7 +548,7 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
                 return snapshot + request.delta;
             })
             .timeout (std::chrono::milliseconds (3000))
-            .submit ();
+            .async ();
         _value += request.delta;
         ++_sequence;
         _state.record ("WorkerCompleted", actor.actor_id,
@@ -612,25 +612,25 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
             .request_to_spot (target_spot,
                               e2e::direct_spot_req_t{actor.actor_id, request.value})
             .timeout (std::chrono::milliseconds (3000))
-            .submit<e2e::direct_spot_res_t> ();
+            .async<e2e::direct_spot_res_t> ();
         _context
           .send_to_spot (target_spot,
                          e2e::direct_spot_msg_t{actor.actor_id, request.value + ":command"})
-          .submit ();
+          .async ();
         _context
           .publish (e2e::mesh_topic,
                     e2e::mesh_msg_t{"evt-spot-to-spot", actor.actor_id + ":" + request.value})
-          .submit ();
+          .async ();
         auto missing = _context
                          .request_to_spot (target_spot, e2e::unhandled_spot_req_t{request.value})
                          .timeout (std::chrono::milliseconds (1000))
-                         .submit<e2e::direct_spot_res_t> ()
+                         .async<e2e::direct_spot_res_t> ()
                          .result ();
         auto timed_out = _context
                            .request_to_spot (target_spot,
                                              e2e::slow_spot_req_t{request.value})
                            .timeout (std::chrono::milliseconds (50))
-                           .submit<e2e::direct_spot_res_t> ()
+                           .async<e2e::direct_spot_res_t> ()
                            .result ();
         _state.record ("SpotToSpotOutbound", actor.actor_id,
                        _context.spot_id (), reply.value);
@@ -650,16 +650,16 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
             .request_to_spot (target_spot,
                               e2e::direct_spot_req_t{source_spot, target_value})
             .timeout (std::chrono::milliseconds (3000))
-            .submit<e2e::direct_spot_res_t> ();
+            .async<e2e::direct_spot_res_t> ();
         _context
           .send_to_spot (target_spot,
                          e2e::direct_spot_msg_t{source_spot,
                                                 "sm-c3-send-" + request.marker})
-          .submit ();
+          .async ();
         _context
           .publish (e2e::mesh_topic,
                     e2e::mesh_msg_t{"evt-sm-c3", "sm-c3-publish-" + request.marker})
-          .submit ();
+          .async ();
         _state.record ("SpotToSpotOutbound", {}, source_spot,
                        "target=" + request.target_spot_id + "|value=" + reply.value);
         co_return e2e::spot_to_spot_route_res_t{
@@ -679,7 +679,7 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
               .request_to_spot (target_spot,
                                 e2e::slow_spot_req_t{"sm-c3-" + request.marker})
               .timeout (std::chrono::milliseconds (50))
-              .submit<e2e::direct_spot_res_t> ();
+              .async<e2e::direct_spot_res_t> ();
         }
         catch (...) {
             failed = true;
@@ -706,7 +706,7 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
               .request_to_spot (target_spot,
                                 e2e::direct_spot_req_t{source_spot, request.marker})
               .timeout (std::chrono::milliseconds (1000))
-              .submit<e2e::direct_spot_res_t> ();
+              .async<e2e::direct_spot_res_t> ();
         }
         catch (...) {
             request_failed = true;
@@ -714,7 +714,7 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
         _context
           .send_to_spot (target_spot,
                          e2e::direct_spot_msg_t{source_spot, "missing-" + request.marker})
-          .submit ();
+          .async ();
         _state.record ("SpotToSpotNegative", {}, source_spot,
                        "target=" + request.target_spot_id + "|requestFailed="
                          + std::string (request_failed ? "true" : "false"));
@@ -732,7 +732,7 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
             auto attempted = _context.manager ()
                                .get_or_create (_context.spot_id (), e2e::alternate_spot)
                                .creation_request (request)
-                               .submit ()
+                               .async ()
                                .result ();
             if (!attempted) {
                 const auto *error = attempted.error ();
@@ -770,7 +770,7 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
         ++actor.ping_seen;
         co_await actor.context ().bound_session ()
           .send (e2e::actor_push_notify_t{actor.actor_id, request.value, actor.ping_seen})
-          .submit ();
+          .async ();
         _state.record ("ActorPushedSession", actor.actor_id,
                        _context.spot_id (), request.value);
         co_return e2e::actor_push_res_t{true, actor.actor_id, actor.ping_seen};
@@ -928,7 +928,7 @@ class entry_spot_t
             auto created = _context.manager ()
                              .get_or_create (rid, e2e::user_spot)
                              .creation_request (request)
-                             .submit ()
+                             .async ()
                              .result ();
             if (!created) {
                 const auto *error = created.error ();
@@ -1036,7 +1036,7 @@ class entry_spot_t
         ++actor.ping_seen;
         co_await actor.context ().bound_session ()
           .send (e2e::actor_push_notify_t{actor.actor_id, request.value, actor.ping_seen})
-          .submit ();
+          .async ();
         _state.record ("EntryActorPushedSession", actor.actor_id,
                        _context.spot_id (), request.value);
         co_return e2e::actor_push_res_t{true, actor.actor_id, actor.ping_seen};

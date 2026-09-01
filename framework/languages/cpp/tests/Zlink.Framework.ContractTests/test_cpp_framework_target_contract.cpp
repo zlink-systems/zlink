@@ -671,9 +671,9 @@ int main ()
                   "IMP-CP-07", "actor resolver and runtime query do not share generation state");
 
     /* CPP-G0-ASYNC-001 — one-way terminators return the async admission result. */
-    gate.require (!tree_contains (include_root, "void submit ()"), "CPP-G0-ASYNC-001",
-                  "server one-way submit terminators still discard admission results");
-    gate.require (actor_hpp.find ("task_t<void> submit") != std::string::npos,
+    gate.require (!tree_contains (include_root, "void async ()"), "CPP-G0-ASYNC-001",
+                  "server one-way async terminators still discard admission results");
+    gate.require (actor_hpp.find ("task_t<void> async") != std::string::npos,
                   "CPP-G0-ASYNC-001",
                   "actor one-way send does not expose the async admission result");
 

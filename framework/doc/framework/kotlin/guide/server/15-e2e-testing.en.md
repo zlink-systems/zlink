@@ -109,8 +109,8 @@ Most scenarios are expressed with the verification functions the connector provi
 | Confirm pushes arrive in a **fixed order** | `WaitForSequence<TNotify>().Expect(...).Expect(...)` |
 | Confirm a request **fails** | `expectFailure(...)` |
 
-**The terminal call follows the language** — `.NET` uses `Async`, Java/Node/C++ use
-`submit`, Kotlin uses `await`
+**The terminal call follows the language** — `.NET` uses `Async`, C++ uses `async`,
+Java/Node use `submit`, and Kotlin uses `await`
 ([Async Execution Policy](../../../common/spec/server/01-execution/README.en.md)).
 
 Value comparison uses `Ensure(condition, message)`. The message is required, and on

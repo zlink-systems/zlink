@@ -56,10 +56,10 @@ class await_session_t final : public zlink::framework::packet_stream_session_t
             auto reply = co_await request_control<yd::bind_await_actors_res_t> (
               request, packet, target_or_default (dispatch));
             for (const auto &actor : reply.actors) {
-                (void) co_await _actors.bind_or_get (to_actor_ref (actor)).submit ();
+                (void) co_await _actors.bind_or_get (to_actor_ref (actor)).async ();
                 _bound_actors[actor.actor_id] = actor.node_rid;
             }
-            stream.reply_packet (zlink::message_t::from_json (reply)).submit ();
+            stream.reply_packet (zlink::message_t::from_json (reply)).async ();
             co_return;
         }
         if (packet == yd::ensure_spot_req_t::packet_name) {
@@ -71,76 +71,76 @@ class await_session_t final : public zlink::framework::packet_stream_session_t
             }
             auto reply = co_await request_control<yd::ensure_spot_res_t> (
               request, packet, target_or_default (dispatch));
-            stream.reply_packet (zlink::message_t::from_json (reply)).submit ();
+            stream.reply_packet (zlink::message_t::from_json (reply)).async ();
             co_return;
         }
         if (packet == yd::await_evidence_req_t::packet_name) {
             auto reply = co_await request_control<yd::await_evidence_res_t> (
               payload.parse_json<yd::await_evidence_req_t> (), packet, target_or_default (dispatch));
-            stream.reply_packet (zlink::message_t::from_json (reply)).submit ();
+            stream.reply_packet (zlink::message_t::from_json (reply)).async ();
             co_return;
         }
         if (packet == yd::await_evidence_wait_req_t::packet_name) {
             auto reply = co_await request_control<yd::await_evidence_res_t> (
               payload.parse_json<yd::await_evidence_wait_req_t> (), packet,
               target_or_default (dispatch));
-            stream.reply_packet (zlink::message_t::from_json (reply)).submit ();
+            stream.reply_packet (zlink::message_t::from_json (reply)).async ();
             co_return;
         }
         if (packet == yd::await_shutdown_scenario_req_t::packet_name) {
             auto reply =
               co_await run_shutdown_through_spot_route (
                 payload.parse_json<yd::await_shutdown_scenario_req_t> ());
-            stream.reply_packet (zlink::message_t::from_json (reply)).submit ();
+            stream.reply_packet (zlink::message_t::from_json (reply)).async ();
             co_return;
         }
         if (packet == yd::await_shutdown_recovery_req_t::packet_name) {
             auto reply =
               co_await run_shutdown_recovery_through_spot_route (
                 payload.parse_json<yd::await_shutdown_recovery_req_t> ());
-            stream.reply_packet (zlink::message_t::from_json (reply)).submit ();
+            stream.reply_packet (zlink::message_t::from_json (reply)).async ();
             co_return;
         }
         if (packet == yd::hold_req_t::packet_name) {
             auto reply = co_await request_spot<yd::automatic_turn_dispatch_res_t> (
               target_or_default (dispatch), spot_id (dispatch),
               payload.parse_json<yd::hold_req_t> (), packet);
-            stream.reply_packet (zlink::message_t::from_json (reply)).submit ();
+            stream.reply_packet (zlink::message_t::from_json (reply)).async ();
             co_return;
         }
         if (packet == yd::await_req_t::packet_name) {
             auto reply = co_await request_spot<yd::automatic_turn_dispatch_res_t> (
               target_or_default (dispatch), spot_id (dispatch),
               payload.parse_json<yd::await_req_t> (), packet);
-            stream.reply_packet (zlink::message_t::from_json (reply)).submit ();
+            stream.reply_packet (zlink::message_t::from_json (reply)).async ();
             co_return;
         }
         if (packet == yd::worker_await_req_t::packet_name) {
             auto reply = co_await request_spot<yd::automatic_turn_dispatch_res_t> (
               target_or_default (dispatch), spot_id (dispatch),
               payload.parse_json<yd::worker_await_req_t> (), packet);
-            stream.reply_packet (zlink::message_t::from_json (reply)).submit ();
+            stream.reply_packet (zlink::message_t::from_json (reply)).async ();
             co_return;
         }
         if (packet == yd::await_timeout_req_t::packet_name) {
             auto reply = co_await request_spot<yd::await_timeout_res_t> (
               target_or_default (dispatch), spot_id (dispatch),
               payload.parse_json<yd::await_timeout_req_t> (), packet);
-            stream.reply_packet (zlink::message_t::from_json (reply)).submit ();
+            stream.reply_packet (zlink::message_t::from_json (reply)).async ();
             co_return;
         }
         if (packet == yd::remote_spot_await_req_t::packet_name) {
             auto reply = co_await request_spot<yd::automatic_turn_dispatch_res_t> (
               target_or_default (dispatch), spot_id (dispatch),
               payload.parse_json<yd::remote_spot_await_req_t> (), packet);
-            stream.reply_packet (zlink::message_t::from_json (reply)).submit ();
+            stream.reply_packet (zlink::message_t::from_json (reply)).async ();
             co_return;
         }
         if (packet == yd::probe_req_t::packet_name) {
             auto reply = co_await request_spot<yd::automatic_turn_dispatch_res_t> (
               target_or_default (dispatch), spot_id (dispatch),
               payload.parse_json<yd::probe_req_t> (), packet);
-            stream.reply_packet (zlink::message_t::from_json (reply)).submit ();
+            stream.reply_packet (zlink::message_t::from_json (reply)).async ();
             co_return;
         }
         if (packet == yd::hold_msg_t::packet_name) {
@@ -201,10 +201,10 @@ class await_session_t final : public zlink::framework::packet_stream_session_t
             std::thread (
               [actor_value = std::move (actor_value), stream_copy = std::move (stream_copy),
                packet, payload_copy = std::move (payload_copy)] () mutable {
-                  auto task = actor_value.relay_request (packet, payload_copy).submit ();
+                  auto task = actor_value.relay_request (packet, payload_copy).async ();
                   const auto &reply = task.result ();
                   if (reply) {
-                      stream_copy.reply_packet (reply.value ()).submit ();
+                      stream_copy.reply_packet (reply.value ()).async ();
                   } else {
                       (void) stream_copy.close ().result ();
                   }
@@ -270,7 +270,7 @@ class await_session_t final : public zlink::framework::packet_stream_session_t
              * 넉넉한 값을 쓴다. */
             co_await _routes.request_to_node (yd::control_channel, target, request)
             .timeout (std::chrono::milliseconds (15000))
-            .template submit<TReply> ();
+            .template async<TReply> ();
         co_return reply;
     }
 
@@ -329,7 +329,7 @@ class await_session_t final : public zlink::framework::packet_stream_session_t
     {
         (void) target;
         (void) packet;
-        co_await _routes.send_to_spot (spot_id, request).submit ();
+        co_await _routes.send_to_spot (spot_id, request).async ();
     }
 
     template <typename TReply, typename TRequest>
@@ -344,7 +344,7 @@ class await_session_t final : public zlink::framework::packet_stream_session_t
         (void) packet;
         co_return co_await _routes.request_to_spot (spot_id, request)
           .timeout (timeout)
-          .template submit<TReply> ();
+          .template async<TReply> ();
     }
 
     static zlink::routing_id_t

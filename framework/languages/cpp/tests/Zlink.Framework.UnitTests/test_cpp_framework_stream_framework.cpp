@@ -71,7 +71,7 @@ class sample_session_t final : public zlink::framework::packet_stream_session_t
                           + payload.to_string ());
         last_can_reply = dispatch.can_reply;
         last_metadata = dispatch.metadata;
-        stream.reply_packet (payload).submit ().result ().value ();
+        stream.reply_packet (payload).async ().result ().value ();
         return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
     }
 
@@ -158,10 +158,10 @@ class duplicate_reply_session_t final : public zlink::framework::packet_stream_s
     {
         auto winner = stream.reply_packet (payload);
         auto loser = stream.reply_packet (payload);
-        co_await winner.submit ();
+        co_await winner.async ();
         winner_completed = true;
         try {
-            (void) co_await loser.submit ();
+            (void) co_await loser.async ();
         }
         catch (const zlink::framework::framework_exception_t &error) {
             loser_rejected =
@@ -200,11 +200,11 @@ class failed_reply_session_t final : public zlink::framework::packet_stream_sess
       const zlink::framework::session_message_context_t &,
       const zlink::message_t &payload) override
     {
-        const auto first = stream.reply_packet (payload).submit ().result ();
+        const auto first = stream.reply_packet (payload).async ().result ();
         first_failed = !first
                        && first.error_kind ()
                             == zlink::framework::framework_error_kind_t::internal_failure;
-        const auto second = stream.reply_packet (payload).submit ().result ();
+        const auto second = stream.reply_packet (payload).async ().result ();
         second_rejected = !second
                           && second.error_kind ()
                                == zlink::framework::framework_error_kind_t::protocol_error;
@@ -286,7 +286,7 @@ class delayed_reply_session_t final : public zlink::framework::packet_stream_ses
         _entered.set_value ();
         co_await _resume.task ();
         try {
-            (void) co_await stream.reply_packet (payload).submit ();
+            (void) co_await stream.reply_packet (payload).async ();
             reply_result = zlink::framework::result_t<void>::success ();
         }
         catch (const zlink::framework::framework_exception_t &error) {
@@ -565,7 +565,7 @@ class transport_error_session_t final : public zlink::framework::packet_stream_s
     {
         record (_packets);
         if (dispatch.can_reply) {
-            (void) co_await stream.reply_packet (payload).submit ();
+            (void) co_await stream.reply_packet (payload).async ();
         }
         co_return;
     }
@@ -1337,7 +1337,7 @@ int main ()
     push_codec_stream
       .write_packet (zlink::message_t::from (std::string ("json-push")))
       .packet_name ("JsonPush")
-      .submit ().result ().value ();
+      .async ().result ().value ();
     const auto push_codec_headers = runtime.written_headers (push_codec_stream);
     if (push_codec_headers.size () != 2
         || push_codec_headers.back ().kind () != stream_message_kind_t::send
@@ -1570,12 +1570,12 @@ int main ()
     send_call.metadata ("trace", "send-trace")
       .packet_name ("renamed")
       .compress ()
-      .submit ()
+      .async ()
       .result ()
       .value ();
     bool duplicate_send_rejected = false;
     try {
-        (void) send_call.submit ().result ().value ();
+        (void) send_call.async ().result ().value ();
     }
     catch (const zlink::framework::framework_exception_t &error) {
         duplicate_send_rejected =
@@ -1627,7 +1627,7 @@ int main ()
     if (!write_rejected_disconnected ([&] {
             return fluent_stream
               .write_packet (zlink::message_t::from (std::string ("after-close")))
-              .submit ().result ().value ();
+              .async ().result ().value ();
         })) {
         return 24;
     }
@@ -1637,7 +1637,7 @@ int main ()
     if (!write_rejected_disconnected ([&] {
             return stream
               .write_packet (zlink::message_t::from (std::string ("after-disconnect")))
-              .submit ().result ().value ();
+              .async ().result ().value ();
         })) {
         return 25;
     }
@@ -1754,7 +1754,7 @@ int main ()
     auto custom_stream = custom_runtime.open_session ("custom-stream");
     custom_stream.write_packet (zlink::message_t::from (std::string ("custom-outbound")))
       .compress ()
-      .submit ().result ().value ();
+      .async ().result ().value ();
     if (custom_runtime.written_payloads (custom_stream).size () != 1
         || custom_runtime.written_payloads (custom_stream)[0].to_string ()
              != "custom-stream:custom-outbound") {
@@ -1787,7 +1787,7 @@ int main ()
     try {
         disabled_stream.write_packet (zlink::message_t::from (std::string ("disabled")))
           .compress ()
-          .submit ().result ().value ();
+          .async ().result ().value ();
     }
     catch (const zlink::framework::framework_exception_t &) {
         disabled_compress_rejected = true;

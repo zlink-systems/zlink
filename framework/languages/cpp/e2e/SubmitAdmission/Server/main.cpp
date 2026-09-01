@@ -372,7 +372,7 @@ class saturation_start_handler_t
                 auto submission =
                   _routes.send_to_channel (
                     saturation_channel_name (index), std::move (prime))
-                    .submit ();
+                    .async ();
                 _state.note_launched ();
                 _state.retain (observe_saturation_send (
                   std::move (submission), _state));
@@ -384,7 +384,7 @@ class saturation_start_handler_t
                   saturation_channel_name (index),
                   std::move (message))
                 .timeout (std::chrono::milliseconds (timeout_ms))
-                .submit<sa::admission_res_t> ();
+                .async<sa::admission_res_t> ();
             _state.note_launched ();
             _state.retain (observe_saturation_request (
               std::move (request_task), _state));
@@ -544,7 +544,7 @@ class owner_isolation_submit_handler_t
                     .operation_id = "owner-isolation-prime",
                     .sequence = 1,
                     .payload = "x"})
-                .submit ());
+                .async ());
             co_return zlink::framework::http_response_t{
               .body = nlohmann::json (response).dump ()};
         }
@@ -564,7 +564,7 @@ class owner_isolation_submit_handler_t
                   .sequence = 1,
                   .payload = "x"})
               .timeout (std::chrono::seconds (5))
-              .submit<sa::admission_res_t> ();
+              .async<sa::admission_res_t> ();
             co_return zlink::framework::http_response_t{
               .body = nlohmann::json (response).dump ()};
         }
@@ -598,7 +598,7 @@ class node_submit_handler_t
         auto operation = _routes.send_to_node (
           sa::mesh_name, zlink::routing_id_t::from (request.target_rid), request.message);
         return response_after_submit (
-          request.message.operation_id, operation.submit ());
+          request.message.operation_id, operation.async ());
     }
 
   private:
@@ -622,7 +622,7 @@ class channel_submit_handler_t
     handle (const sa::admission_req_t &message)
     {
         auto operation = _routes.send_to_channel (sa::channel_name, as_msg (message));
-        return response_after_submit (message.operation_id, operation.submit ());
+        return response_after_submit (message.operation_id, operation.async ());
     }
 
   private:
@@ -647,7 +647,7 @@ class fanout_submit_handler_t
     {
         return response_after_submit (
           message.operation_id,
-          _publisher.publish (sa::fanout_channel, "admission", as_event (message)).submit ());
+          _publisher.publish (sa::fanout_channel, "admission", as_event (message)).async ());
     }
 
   private:
@@ -696,7 +696,7 @@ class client_server_submit_handler_t
     handle (const sa::admission_req_t &message)
     {
         auto operation = _channels.send (sa::client_server_channel, as_msg (message));
-        return response_after_submit (message.operation_id, operation.submit ());
+        return response_after_submit (message.operation_id, operation.async ());
     }
 
   private:
@@ -1019,7 +1019,7 @@ class ensure_actor_handler_t
         if (!created) {
             throw *created.error ();
         }
-        auto bound = _actors.bind_or_get (created.value ().ref ()).submit ().result ();
+        auto bound = _actors.bind_or_get (created.value ().ref ()).async ().result ();
         if (!bound) {
             throw *bound.error ();
         }
@@ -1061,7 +1061,7 @@ class bound_session_submit_handler_t
         }
         auto operation = actor->bound_session ().send (request.message);
         return response_after_submit (
-          request.message.operation_id, operation.submit ());
+          request.message.operation_id, operation.async ());
     }
 
   private:
@@ -1118,7 +1118,7 @@ class submit_admission_stream_session_t final :
               zlink::framework::actor_id_t (target.actor_id), target.generation,
               sa::mesh_name,
               zlink::framework::node_rid_t::from_string (target.node_rid));
-            auto bound = co_await _actors.bind_or_get (std::move (ref)).submit ();
+            auto bound = co_await _actors.bind_or_get (std::move (ref)).async ();
             const auto &bound_ref = bound.ref ();
             stream
               .reply_packet (zlink::message_t::from_json (sa::actor_bind_res_t{
@@ -1126,7 +1126,7 @@ class submit_admission_stream_session_t final :
                 .actor_id = std::string (bound_ref.actor_id ().value ()),
                 .node_rid = std::string (bound_ref.node_rid ().value ()),
                 .generation = bound_ref.object_generation ()}))
-              .submit ();
+              .async ();
             co_return;
         }
         if (packet_name == sa::actor_relay_req_t::packet_name) {
@@ -1146,7 +1146,7 @@ class submit_admission_stream_session_t final :
                                       .status = "Submitted",
                                       .public_invocation_count = 1,
                                       .terminal_count = 1}))
-              .submit ();
+              .async ();
             co_return;
         }
         if (packet_name == "AdmissionNoTokenMsg") {
@@ -1157,7 +1157,7 @@ class submit_admission_stream_session_t final :
                                   .public_invocation_count = 1,
                                   .terminal_count = 1}));
             std::vector<std::string> terminals;
-            terminals.push_back (stream_terminal (invalid.submit ().result ()));
+            terminals.push_back (stream_terminal (invalid.async ().result ()));
             _state.record_reply_race (message.operation_id, std::move (terminals));
             co_return;
         }
@@ -1173,8 +1173,8 @@ class submit_admission_stream_session_t final :
         if (packet_name == "AdmissionSequentialReq") {
             auto reply = stream.reply_packet (zlink::message_t::from_json (response));
             std::vector<std::string> terminals;
-            terminals.push_back (stream_terminal (reply.submit ().result ()));
-            terminals.push_back (stream_terminal (reply.submit ().result ()));
+            terminals.push_back (stream_terminal (reply.async ().result ()));
+            terminals.push_back (stream_terminal (reply.async ().result ()));
             _state.record_reply_race (message.operation_id, std::move (terminals));
             co_return;
         }
@@ -1187,11 +1187,11 @@ class submit_admission_stream_session_t final :
         std::vector<std::string> terminals (2);
         std::thread first_submit ([&] {
             start.arrive_and_wait ();
-            terminals[0] = stream_terminal (first.submit ().result ());
+            terminals[0] = stream_terminal (first.async ().result ());
         });
         std::thread second_submit ([&] {
             start.arrive_and_wait ();
-            terminals[1] = stream_terminal (second.submit ().result ());
+            terminals[1] = stream_terminal (second.async ().result ());
         });
         start.arrive_and_wait ();
         first_submit.join ();
@@ -1226,7 +1226,7 @@ class stream_send_handler_t
         auto operation = stream->write_packet (
           zlink::message_t::from_json (as_msg (message)));
         operation.packet_name (sa::admission_msg_t::packet_name);
-        return response_after_submit (message.operation_id, operation.submit ());
+        return response_after_submit (message.operation_id, operation.async ());
     }
 
   private:
@@ -1276,7 +1276,7 @@ class stream_backpressure_handler_t
             auto operation = stream->write_packet (message);
             operation.packet_name (sa::admission_msg_t::packet_name).timeout (timeout);
             const auto attempt_started = std::chrono::steady_clock::now ();
-            const auto result = operation.submit ().result ();
+            const auto result = operation.async ().result ();
             if (!result) {
                 const auto completed = std::chrono::steady_clock::now ();
                 const auto elapsed =

@@ -25,7 +25,7 @@ title: "Cancellation And Shutdown"
   cancellation, and Node.js `AbortSignal`.
 - The `toCompletableFuture()` of a stage the Java Framework returns is tied to
   the cancellation and cleanup of the original pending admission.
-- C++ one-way submit provides no separate public cancellation input.
+- The C++ one-way `async()` terminal provides no separate public cancellation input.
 - Not using a C++ task, or simply not holding onto a Java stage, does not by
   itself guarantee the operation was cancelled.
 

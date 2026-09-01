@@ -189,7 +189,7 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
             co_await _context
               .publish (sample_names_t::player_milestone_topic,
                         milestone_event)
-              .submit ();
+              .async ();
         }
         co_return;
     }

@@ -77,7 +77,7 @@ Regression tests include both feature-level unit tests and application flow test
 | samples | Bingo e2e, TicTacToe HTTP `POST /games` + zlink channel + STREAM connector e2e, server/client file log assertions |
 
 zlink-related regression tests are based on the expected behavior in the common framework spec. The
-C++ server framework uses the `co_await submit()` surface, but error kinds such as timeout, decode
+C++ server framework uses the `co_await async()` surface, but error kinds such as timeout, decode
 failure, handler not found, shutdown, queue full, and disconnected, and their log/monitoring events,
 carry the same fixed meaning. Tests must not just check the process exit code — they must also verify
 the request sequence, topic/packet name, correlation id, server-side file log, and client-side result

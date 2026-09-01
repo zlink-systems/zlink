@@ -273,7 +273,7 @@ same time in the first place.
 co_await spots.request_to_spot (guild_id, join_guild_req_t{user_id})
   .instance_spot ("guild")
   .in_mesh ("social")
-  .submit<join_guild_res_t> ();
+  .async<join_guild_res_t> ();
 ```
 
 There's no runnable reference sample for this scenario yet — the code above applies the same
@@ -339,10 +339,10 @@ remains.
 co_await spots.request_to_spot (request.order_id, request)  // request is already a start_order_workflow_req_t body.
   .instance_spot ("order-workflow")
   .in_mesh ("commerce")
-  .submit<start_order_workflow_res_t> ();
+  .async<start_order_workflow_res_t> ();
 
 // Inside an actor handler — push to a client that's still tied to the same actor after reconnect (no sticky LB).
-co_await actor.context ().bound_session ().send (order_status_changed_t{order_id, status}).submit ();
+co_await actor.context ().bound_session ().send (order_status_changed_t{order_id, status}).async ();
 ```
 
 Runnable reference samples: [SupportChat](../../../common/sample/supportchat/README.en.md) ·
@@ -525,7 +525,7 @@ auto reply = co_await client
   .request_to_channel (
     "price",                                            // The ChannelName to look up process-locally
     price_request_t{"AAPL"})
-  .submit<price_reply_t> ();                            // Sends, then waits for the reply asynchronously.
+  .async<price_reply_t> ();                            // Sends, then waits for the reply asynchronously.
 ```
 
 The connection/setup code disappears, leaving a handler and a few lines of channel

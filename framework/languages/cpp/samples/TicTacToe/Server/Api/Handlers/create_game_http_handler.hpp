@@ -40,7 +40,7 @@ class create_game_http_handler_t
                       .creation_request (                               // 새 Spot의 생성 callback에 전달할 최초 설정이다.
                         tictactoe_game_create_req_t{
                           game_name, sample_names_t::required_level})
-                      .submit ();                                       // C++의 비동기 완료 terminal이다.
+                      .async ();                                       // C++의 비동기 완료 terminal이다.
         // --8<-- [end:doc-create]
         _logger.info (std::string ("reply ") + create_game_http_res_t::packet_name);
         co_return create_game_http_res_t{

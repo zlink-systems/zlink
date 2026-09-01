@@ -154,7 +154,7 @@ class to_actor_e2e_spot_t
             actor.context ()
               .bound_session ()
               .send (e2e::actor_push_notify_t{message.scenario, actor.actor_id (), message.value})
-              .submit ();
+              .async ();
         }
     }
 
@@ -199,7 +199,7 @@ class ensure_actor_handler_t
                               e2e::actor_type_name)
               .in_mesh (e2e::spot_mesh_name)
               .timeout (std::chrono::seconds (15))
-              .submit ()
+              .async ()
               .result ();
             if (!created)
                 throw *created.error ();
@@ -258,7 +258,7 @@ class push_actor_handler_t
               .send (zlink::framework::actor_id_t (request.actor_id),
                      e2e::actor_msg_t{request.scenario, request.actor_id,
                                          request.value, true})
-              .submit ();
+              .async ();
             co_return e2e::actor_call_res_t{request.scenario, request.actor_id,
                                                 "pushed", ""};
         }

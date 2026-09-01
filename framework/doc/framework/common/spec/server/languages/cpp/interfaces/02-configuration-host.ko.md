@@ -773,13 +773,13 @@ task_t<match_bingo_api_res_t> handle(const match_bingo_api_req_t &request)
  allocate_bingo_room_res_t allocated = co_await _client
  .request(sample_names_t::play_channel,
  allocate_bingo_room_req_t { request.mode })
- .submit<allocate_bingo_room_res_t>();
+ .async<allocate_bingo_room_res_t>();
 
  co_return match_bingo_api_res_t { allocated.room_id };
 }
 ```
 
-샘플 handler는 `.submit().result().value()`로 결과를 직접 꺼내지 않는다. 그런 코드는
+샘플 handler는 `.async().result().value()`로 결과를 직접 꺼내지 않는다. 그런 코드는
 handler가 runtime 안에서 blocking wait를 수행하는 것처럼 보이고, 모든 언어 버전에서 같은 async
 모델을 제공한다는 목표와 맞지 않다.
 

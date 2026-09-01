@@ -64,11 +64,11 @@ if (!located)
                                                  "Player actor could not be located.");
 
 // Returns the existing route if the same exact incarnation is already bound.
-auto actor = co_await actors.bind_or_get (located.value ().ref ()).submit ();
+auto actor = co_await actors.bind_or_get (located.value ().ref ()).async ();
 
 // Submits the current request's one-shot reply.
 stream.reply_packet (zlink::message_t::from_json (authenticated_t{actor.actor_id ()}))
-  .submit ();
+  .async ();
 ```
 
 `bind` treats a duplicate bind as an error. For a flow that might already be bound, like a
@@ -153,7 +153,7 @@ task_t<void> game_room_t::state_changed (player_actor_t &actor,
     co_await actor.context ().bound_session ()
       .send (game_state_notify_t{message.state})
       .metadata ("revision", std::to_string (message.revision))
-      .submit ();
+      .async ();
 }
 ```
 

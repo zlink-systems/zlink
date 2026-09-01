@@ -153,7 +153,7 @@ actor_create_call_t::timeout (std::chrono::milliseconds timeout)
     return *this;
 }
 
-task_t<actor_create_result_t> actor_create_call_t::submit ()
+task_t<actor_create_result_t> actor_create_call_t::async ()
 {
     return _state->lane.run ([&] {
         if (_state->submitted)
@@ -187,7 +187,7 @@ task_t<actor_create_result_t> actor_create_call_t::yield ()
         return detail::unsupported_yield_task<actor_create_result_t> ();
     }
     auto turn_plan = detail::prepare_serial_turn_await (true);
-    auto task = submit ();
+    auto task = async ();
     if (!turn_plan) {
         return task;
     }
@@ -293,7 +293,7 @@ actor_send_call_t &actor_send_call_t::metadata (std::string key, std::string val
     return *this;
 }
 
-task_t<void> actor_send_call_t::submit ()
+task_t<void> actor_send_call_t::async ()
 {
     if (!_submission->try_claim ()) {
         return task_t<void> (result_t<void>::failure (
@@ -338,7 +338,7 @@ actor_request_call_t &actor_request_call_t::metadata (
     return *this;
 }
 
-task_t<message_t> actor_request_call_t::submit_message ()
+task_t<message_t> actor_request_call_t::async_message ()
 {
     return start (false);
 }

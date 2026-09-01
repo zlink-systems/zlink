@@ -916,10 +916,10 @@ actor context.
 The call execution surface expresses the common async call contract in
 C++ coroutine convention. `request(...)`, `send(...)`,
 `join_spot(...)`, and `join_entry_spot(...)` return a call object. A
-one-way call's `submit()` returns a `task_t` carrying the bounded
+one-way call's `async()` returns a `task_t` carrying the bounded
 admission result up to the send timeout. Session Actor `relay(...)`
 doesn't build a separate call object and returns a `task_t<void>` that
-produces no normal completion value. For a request, `submit()` is the
+produces no normal completion value. For a request, `async()` is the
 point that waits for reply completion.
 An ordinary channel `request_call_t` gathers metadata and request
 timeout, and `send_call_t` gathers only metadata, before submit, and
@@ -931,8 +931,8 @@ calls. `defer()` doesn't look up a target or start Store I/O — it only
 registers Join intent and an inactive queue barrier on the current
 handler. If the handler ends normally, it activates the barrier and
 starts Join; if the handler fails, the registration is discarded.
-`defer()` doesn't return a value, and doesn't provide a `submit()`,
-`async()`, or `yield()` terminal. The Join result is later reported
+`defer()` doesn't return a value, and doesn't provide an `async()` or
+`yield()` terminal. The Join result is later reported
 through `actor_t::on_join_completed(...)`. The default timeout is 5
 seconds, and a specified value must be in the `1..INT_MAX` range in
 milliseconds. The Framework fixes the absolute deadline using the
@@ -949,7 +949,7 @@ object completes as a protocol error.
 ```cpp
 auto reply = co_await client
   .request("profile", query) // selects the call target only by ChannelName.
-  .submit<profile_reply_t>();
+  .async<profile_reply_t>();
 
 use_profile(reply);
 ```
@@ -959,7 +959,7 @@ blocking wait isn't allowed in a handler, timer, STREAM session
 callback, or actor relay path.
 
 The error kind projects `.NET` framework's `ZLinkFrameworkErrorKind`
-into C++ naming. `submit()` throws `framework_exception_t` carrying the
+into C++ naming. `async()` throws `framework_exception_t` carrying the
 same information on failure.
 
 ## 3. Timer
@@ -1049,7 +1049,7 @@ public:
     spot_create_call_t &creation_request(TRequest request);
 
     spot_create_call_t &timeout(std::chrono::milliseconds timeout);
-    task_t<spot_create_result_t> submit();
+    task_t<spot_create_result_t> async();
     task_t<spot_create_result_t> yield();
 };
 
@@ -1069,11 +1069,11 @@ public:
 `spot_manager_t` only creates a User Spot. `Create` has the Framework
 generate the global SpotId, and `GetOrCreate` uses the global SpotId
 the caller provided. An Instance Spot create/get-or-create member and
-a kind argument aren't provided. A call option and submit can each be
+a kind argument aren't provided. A call option and the `async()` terminal can each be
 used only once. If the existing authority is an Instance kind or a
 different stable type, it's `type_mismatch`; with no eligible capacity,
 it's `capacity_exceeded`.
-A terminal `submit()` returns the `spot_ref_t`, the
+A terminal `async()` returns the `spot_ref_t`, the
 `existing`/`created`/`rejected` state, and the creation callback reply
 together as one `spot_create_result_t`.
 

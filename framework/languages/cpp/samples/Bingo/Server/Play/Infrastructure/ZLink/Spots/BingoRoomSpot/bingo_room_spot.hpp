@@ -281,7 +281,7 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
         reward_event.set_item_id (bingo_reward_items_t::golden_dauber_id);
         reward_event.set_item_name (bingo_reward_items_t::golden_dauber_name);
         reward_event.set_rarity (bingo_reward_items_t::legendary_rarity);
-        _context->publish (sample_names_t::reward_topic, reward_event).submit ();
+        _context->publish (sample_names_t::reward_topic, reward_event).async ();
     }
 
     template <typename TNotify>

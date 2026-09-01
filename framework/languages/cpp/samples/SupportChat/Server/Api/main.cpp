@@ -106,7 +106,7 @@ class open_conversation_api_handler_t
               std::chrono::duration_cast<std::chrono::milliseconds> (
                 std::chrono::system_clock::now ().time_since_epoch ())
                 .count ()})
-            .submit ();
+            .async ();
         if (created.state == spot_create_state_t::rejected || !created.reply) {
             throw framework_exception_t (framework_error_kind_t::rejected,
                                          "SupportChat conversation creation returned no state");

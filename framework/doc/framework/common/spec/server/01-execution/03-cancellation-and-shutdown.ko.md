@@ -24,7 +24,7 @@ title: "Cancellation과 shutdown"
   cancellation, Node.js `AbortSignal`을 사용한다.
 - Java Framework가 반환한 stage의 `toCompletableFuture()`는 원본 pending admission의
   cancellation과 cleanup에 연결된다.
-- C++ one-way submit은 별도 public cancellation 입력을 제공하지 않는다.
+- C++ one-way `async()` terminal은 별도 public cancellation 입력을 제공하지 않는다.
 - C++ task를 사용하지 않거나 Java stage를 단순히 보관하지 않는 것만으로 operation이
   취소됐다고 보장하지 않는다.
 

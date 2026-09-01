@@ -2410,7 +2410,7 @@ actor_gateway_runtime_t::bind_session_stream (std::string actor_id,
                                       std::move (packet_name));
               try {
                   stream.write_packet_with_header (std::move (header), payload)
-                    .submit ()
+                    .async ()
                     .result ()
                     .value ();
                   return task_t<void> (result_t<void>::success ());
@@ -2470,7 +2470,7 @@ actor_gateway_runtime_t::bind_session_route (actor_ref_t actor_ref,
                 .send_to_node (route_channel_name, target_node_rid,
                                make_actor_bound_session_route_request (
                                  *current_actor_ref, packet_name, payload_codec, payload))
-                .submit ()
+                .async ()
                 .result ()
                 .value ();
               return task_t<void> (result_t<void>::success ());

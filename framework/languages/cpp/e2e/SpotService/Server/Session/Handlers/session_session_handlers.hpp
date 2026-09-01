@@ -51,7 +51,7 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
           zlink::message_t::from_json (
             e2e::actor_push_notify_t{actor_id, "duplicate-session", 0}));
         notice.packet_name ("ActorBindingReplacedNotify");
-        co_await notice.submit ();
+        co_await notice.async ();
         _state.record ("ActorBindingReplacedCallback", actor_id, {}, "completed");
     }
 
@@ -77,7 +77,7 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
                   "stream auth target or actor ref is invalid");
             }
             _state.record ("StreamAuthEnsured", request.actor_id, {}, request.target_node_rid);
-            auto bound_result = _actors.bind_or_get (to_actor_ref (request.actor)).submit ().result ();
+            auto bound_result = _actors.bind_or_get (to_actor_ref (request.actor)).async ().result ();
             if (!bound_result) {
                 throw zlink::framework::framework_exception_t (
                   bound_result.error_kind (),
@@ -101,7 +101,7 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
                 .reply_packet (
                   zlink::message_t::from_json (
                     e2e::stream_auth_res_t{request.actor, _state.node_rid}))
-                .submit ();
+                .async ();
             _state.record ("StreamAuthReplied", actor_id, {}, request.target_node_rid);
             co_return;
         }
@@ -118,7 +118,7 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
                 .request_to_node (e2e::route_channel, zlink::routing_id_t::from (request.target_node_rid),
                           e2e::ensure_actor_req_t{.actor_id = request.actor_id,
                                                   .display_name = request.display_name})
-                .submit<e2e::ensure_actor_res_t> ()
+                .async<e2e::ensure_actor_res_t> ()
                 .result ();
             if (!ensured_result) {
                 throw zlink::framework::framework_exception_t (
@@ -127,7 +127,7 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
                                          : "stream ensure auth ensure actor failed");
             }
             const auto ensured = ensured_result.value ();
-            auto bound_result = _actors.bind_or_get (to_actor_ref (ensured.actor)).submit ().result ();
+            auto bound_result = _actors.bind_or_get (to_actor_ref (ensured.actor)).async ().result ();
             if (!bound_result) {
                 throw zlink::framework::framework_exception_t (
                   bound_result.error_kind (),
@@ -149,7 +149,7 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
                 .reply_packet (
                   zlink::message_t::from_json (
                     e2e::stream_auth_res_t{ensured.actor, _state.node_rid}))
-                .submit ();
+                .async ();
             co_return;
         }
 
@@ -160,11 +160,11 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
               actor.error () ? actor.error ()->what () : "bound actor route is not found");
         }
         if (dispatch.can_reply) {
-            auto reply = co_await actor.value ().relay_request (payload).submit ();
+            auto reply = co_await actor.value ().relay_request (payload).async ();
             if (dispatch.packet_name == "JoinReq") {
                 const auto joined = reply.parse_json<e2e::join_res_t> ();
                 auto rebound_result =
-                  _actors.bind_or_get (to_actor_ref (joined.actor)).submit ().result ();
+                  _actors.bind_or_get (to_actor_ref (joined.actor)).async ().result ();
                 if (!rebound_result) {
                     throw zlink::framework::framework_exception_t (
                       rebound_result.error_kind (),
@@ -174,7 +174,7 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
                 auto rebound = rebound_result.value ();
                 _bound_session_actors.insert_or_assign (std::string (rebound.actor_id ()), rebound);
             }
-            stream.reply_packet (reply).submit ();
+            stream.reply_packet (reply).async ();
             co_return;
         }
         co_await actor.value ().relay (payload);

@@ -78,7 +78,7 @@ template <typename TReply> class request_call_t
         return *this;
     }
 
-    task_t<TReply> submit () { return start (false); }
+    task_t<TReply> async () { return start (false); }
 
     task_t<TReply> yield () { return start (true); }
 
@@ -154,14 +154,14 @@ class channel_request_call_t
         return *this;
     }
 
-    template <typename TReply> task_t<TReply> submit () { return start<TReply> (false); }
+    template <typename TReply> task_t<TReply> async () { return start<TReply> (false); }
 
     template <typename TReply> task_t<TReply> yield () { return start<TReply> (true); }
 
   protected:
     template <typename TReply> task_t<TReply> start (bool release_turn)
     {
-        /* `submit()` and `yield()` are commonly called on a temporary returned
+        /* `async()` and `yield()` are commonly called on a temporary returned
          * by MessageBus::request(). Copy every value needed by the coroutine
          * before the call object can be destroyed. The suspended operation must
          * own its request state instead of retaining this object's address. */
@@ -211,7 +211,7 @@ class channel_request_call_t
             return detail::result_access_t::failure<TReply> (error);
         }
     }
-    task_t<zlink::message_t> submit_raw ()
+    task_t<zlink::message_t> async_raw ()
     {
         if (!_submit) {
             return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
@@ -269,7 +269,7 @@ class send_call_t
         return *this;
     }
 
-    task_t<void> submit ()
+    task_t<void> async ()
     {
         if (!_submission->try_claim ()) {
             return task_t<void> (result_t<void>::failure (
@@ -365,7 +365,7 @@ class publish_call_t
         return *this;
     }
 
-    task_t<void> submit ()
+    task_t<void> async ()
     {
         if (!_submission->try_claim ()) {
             return task_t<void> (result_t<void>::failure (
@@ -420,7 +420,7 @@ class bound_session_send_call_t
         return *this;
     }
 
-    task_t<void> submit () { return _call.submit (); }
+    task_t<void> async () { return _call.async (); }
 
   private:
     send_call_t _call;
@@ -431,7 +431,7 @@ class fanout_publish_call_t
   public:
     explicit fanout_publish_call_t (send_call_t call) : _call (std::move (call)) {}
 
-    task_t<void> submit () { return _call.submit (); }
+    task_t<void> async () { return _call.async (); }
 
   private:
     send_call_t _call;
@@ -452,7 +452,7 @@ class stream_write_call_t
 
     stream_write_call_t &metadata (std::string key, std::string value);
     stream_write_call_t &compress ();
-    task_t<void> submit ();
+    task_t<void> async ();
 
   private:
     using submit_fn_t =
@@ -488,7 +488,7 @@ class stream_send_call_t
     stream_send_call_t &packet_name (std::string packet_name);
     stream_send_call_t &compress ();
     stream_send_call_t &timeout (std::chrono::milliseconds timeout);
-    task_t<void> submit ();
+    task_t<void> async ();
 
   private:
     using submit_fn_t =

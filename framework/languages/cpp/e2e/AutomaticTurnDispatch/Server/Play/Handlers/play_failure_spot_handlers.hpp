@@ -65,7 +65,7 @@ handle_await_timeout (zlink::framework::spot_context_t &context,
             .timeout (std::chrono::milliseconds (request.timeout_ms));
         evidence.add ("timeout-await-released|rid=" + evidence.node_rid + "|spot=" + spot_id
                       + "|request=" + request.request_id + "|handler=spot");
-        co_await call.submit<yd::delay_res_t> ();
+        co_await call.async<yd::delay_res_t> ();
         evidence.add ("timeout-await-unexpected-resumed|rid=" + evidence.node_rid
                       + "|spot=" + spot_id + "|request=" + request.request_id
                       + "|handler=spot");

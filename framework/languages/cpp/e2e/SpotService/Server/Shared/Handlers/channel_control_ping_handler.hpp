@@ -36,7 +36,7 @@ class channel_control_ping_route_handler_t
             .request_to_node (mesh_name, zlink::routing_id_t::from (request.target_node_rid),
                       e2e::channel_echo_req_t{request.value})
             .timeout (std::chrono::milliseconds (3000))
-            .submit<e2e::channel_echo_res_t> ()
+            .async<e2e::channel_echo_res_t> ()
             .result ();
         if (!reply) {
             throw zlink::framework::framework_exception_t (

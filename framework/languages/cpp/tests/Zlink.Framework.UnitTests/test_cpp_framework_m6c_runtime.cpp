@@ -260,7 +260,7 @@ class host_relocation_source_service_t final
               "host-relocation-spot"),
             "host-relocation-spot")
             .timeout (std::chrono::seconds (5))
-            .submit ().result ();
+            .async ().result ();
         if (!created) {
             error = created.error ()
               ? created.error ()->what ()
@@ -292,7 +292,7 @@ class host_relocation_source_service_t final
                       zlink::framework::spot_id_t (
                         "host-relocation-spot"),
                       host_relocation_ready_message_t{1})
-                      .submit ().result ();
+                      .async ().result ();
                   if (sent) {
                       ready_sent.store (
                         true, std::memory_order_release);
@@ -581,13 +581,13 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &te
           manager_before_defer.find (zlink::framework::spot_id_t ("blocked-spot")).result ();
         manager_rejected =
           !found && found.error_kind () == zlink::framework::framework_error_kind_t::not_configured;
-        const auto worker = worker_before_defer.submit ().result ();
+        const auto worker = worker_before_defer.async ().result ();
         worker_rejected =
           !worker
           && worker.error_kind () == zlink::framework::framework_error_kind_t::not_configured;
         const auto outbound =
           outbound_before_defer.send_to_channel ("blocked-channel", std::string ("blocked"))
-            .submit ()
+            .async ()
             .result ();
         outbound_rejected =
           !outbound

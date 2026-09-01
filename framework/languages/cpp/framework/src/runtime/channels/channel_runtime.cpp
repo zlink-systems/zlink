@@ -1291,7 +1291,7 @@ result_t<void> route_send_call_t::submit_now ()
     return _submit (_packet_name, _metadata);
 }
 
-task_t<void> route_send_call_t::submit ()
+task_t<void> route_send_call_t::async ()
 {
     if (!_submission->try_claim ()) {
         throw framework_exception_t (

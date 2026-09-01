@@ -157,7 +157,7 @@ class courier_offer_port_t
           .send (actor->actor_id (),
                  offer_delivery_msg_t{courier_id, delivery.delivery_id, attempt,
                                       delivery.pickup_address, delivery.dropoff_address})
-          .submit ();
+          .async ();
     }
 
   private:
@@ -177,7 +177,7 @@ class delivery_status_publisher_t
         delivery_status_changed_req_t changed{delivery.delivery_id, delivery.customer_id, status,
                                               courier_id, now_unix_ms ()};
         (void) co_await _channels.request (sample_names_t::tracking_route_channel, changed)
-          .submit<delivery_status_changed_res_t> ();
+          .async<delivery_status_changed_res_t> ();
     }
 
   private:
@@ -471,7 +471,7 @@ class create_delivery_http_handler_t
           .send (sample_names_t::dispatch_route_channel,
                  assign_delivery_msg_t{request.delivery_id, request.customer_id,
                                        request.pickup_address, request.dropoff_address})
-          .submit ();
+          .async ();
         std::cerr << "deliverydispatch api: created delivery=" << request.delivery_id << "\n";
         return create_delivery_res_t{request.delivery_id};
     }

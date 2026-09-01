@@ -142,7 +142,7 @@ class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
           .bound_session ()
           .send (delivery_status_notify_t{status.delivery_id, status.status, status.courier_id,
                                           status.occurred_at_unix_ms})
-          .submit ();
+          .async ();
         if (status.status == delivery_status_t::delivered) {
             std::cerr << "deliverydispatch-customer pushed status=Delivered delivery="
                       << status.delivery_id << "\n";
@@ -186,8 +186,8 @@ class customer_gateway_session_t final : public packet_stream_session_t
         if (dispatch.packet_name != subscribe_delivery_req_t::packet_name) {
             auto actor = require_single_bound_actor (stream, std::string (dispatch.packet_name));
             if (dispatch.can_reply) {
-                auto reply = co_await actor.relay_request (payload).submit ();
-                stream.reply_packet (reply).submit ();
+                auto reply = co_await actor.relay_request (payload).async ();
+                stream.reply_packet (reply).async ();
                 co_return;
             }
             co_await actor.relay (payload);
@@ -205,7 +205,7 @@ class customer_gateway_session_t final : public packet_stream_session_t
         }
         std::string actor_id = sample_names_t::customer_id;
         if (!_bound_actors.contains (actor_id)) {
-            auto bound = co_await actors.bind_or_get (actor.value ().ref ()).submit ();
+            auto bound = co_await actors.bind_or_get (actor.value ().ref ()).async ();
             actor_id = std::string (bound.actor_id ());
             _bound_actors.insert (actor_id);
             std::cerr << "deliverydispatch-customer bound customer=" << actor_id << "\n";
@@ -216,9 +216,9 @@ class customer_gateway_session_t final : public packet_stream_session_t
                                          "bound customer actor route is not found");
         }
         auto reply =
-          co_await current->relay_request (zlink::message_t::from_json (request)).submit ();
+          co_await current->relay_request (zlink::message_t::from_json (request)).async ();
         _sessions.subscribe (actor_id, request.delivery_id, stream);
-        stream.reply_packet (reply).submit ();
+        stream.reply_packet (reply).async ();
         std::cerr << "deliverydispatch customer-session: subscribed customer="
                   << sample_names_t::customer_id << " delivery=" << request.delivery_id << "\n";
     }

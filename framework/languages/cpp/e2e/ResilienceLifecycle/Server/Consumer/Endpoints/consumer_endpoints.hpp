@@ -196,7 +196,7 @@ inline profile_res_t request_profile_once (zlink::framework::channel_client_t &c
 {
     auto call = channels.request (api_channel, request)
                   .timeout (timeout)
-                  .submit<profile_res_t> ();
+                  .async<profile_res_t> ();
     const auto &reply = call.result ();
     if (reply) {
         return reply.value ();
@@ -242,7 +242,7 @@ class manual_profile_request_handler_t
     {
         auto call = _channels.request ("resilience.lifecycle.api.manual", request)
                       .timeout (std::chrono::milliseconds (3000))
-                      .submit<profile_res_t> ();
+                      .async<profile_res_t> ();
         const auto &reply = call.result ();
         if (reply) {
             return reply.value ();
@@ -271,7 +271,7 @@ class manual_b_profile_request_handler_t
     {
         auto call = _channels.request ("resilience.lifecycle.api.manual.b", request)
                       .timeout (std::chrono::milliseconds (3000))
-                      .submit<profile_res_t> ();
+                      .async<profile_res_t> ();
         const auto &reply = call.result ();
         if (reply) {
             return reply.value ();
@@ -300,7 +300,7 @@ class slow_request_handler_t
     {
         auto call = _channels.request (api_channel, request)
                       .timeout (std::chrono::milliseconds (100))
-                      .submit<profile_res_t> ();
+                      .async<profile_res_t> ();
         const auto &reply = call.result ();
         if (reply) {
             return {.failed = false, .error_type = ""};
@@ -329,7 +329,7 @@ class missing_request_handler_t
     {
         auto call = _channels.request (api_channel, missing_profile_req_t{request})
                       .timeout (std::chrono::milliseconds (3000))
-                      .submit<profile_res_t> ();
+                      .async<profile_res_t> ();
         const auto &reply = call.result ();
         if (reply) {
             return {.failed = false, .error_type = ""};
@@ -356,7 +356,7 @@ class profile_command_handler_t
 
     operation_status_t handle (const profile_msg_t &command)
     {
-        _channels.send (api_channel, command).submit ();
+        _channels.send (api_channel, command).async ();
         return {.status = "sent"};
     }
 
@@ -378,7 +378,7 @@ class missing_profile_command_handler_t
 
     operation_status_t handle (const profile_msg_t &command)
     {
-        _channels.send (api_channel, missing_profile_msg_t{command}).submit ();
+        _channels.send (api_channel, missing_profile_msg_t{command}).async ();
         return {.status = "sent"};
     }
 
@@ -507,7 +507,7 @@ class transient_route_request_service_t final :
                   route_channel, zlink::routing_id_t::from ("api-a"),
                   _request)
                 .timeout (std::chrono::seconds (5))
-                .submit<scenario_route_res_t> ()
+                .async<scenario_route_res_t> ()
                 .result ()
                 .value ();
         }

@@ -38,7 +38,7 @@ class authenticate_session_handler_t
         authenticate_request.set_access_token (request.access_token ());
         auto authenticated =
           co_await _client.request (sample_names_t::api_channel, authenticate_request)
-            .submit<authenticate_player_res_t> ();
+            .async<authenticate_player_res_t> ();
         if (!authenticated.accepted () || !authenticated.has_actor_id ()
             || !authenticated.has_display_name ()) {
             co_return result_t<session_actor_t>::failure (framework_error_kind_t::internal_failure,
@@ -57,14 +57,14 @@ class authenticate_session_handler_t
               located.error_kind (),
               located.error () ? located.error ()->what () : "Player actor could not be located.");
         }
-        auto bound = co_await actors.bind_or_get (located.value ().ref ()).submit ();
+        auto bound = co_await actors.bind_or_get (located.value ().ref ()).async ();
         auto actor = actors.find (authenticated.actor_id ()).value_or (bound);
 
         authenticate_res_t reply_payload;
         reply_payload.set_actor_id (authenticated.actor_id ());
         reply_payload.set_display_name (authenticated.display_name ());
         const auto reply_message = zlink::stream_connector::to_stream_payload (reply_payload);
-        stream.reply_packet (reply_message).submit ();
+        stream.reply_packet (reply_message).async ();
 
         co_return actor;
     }

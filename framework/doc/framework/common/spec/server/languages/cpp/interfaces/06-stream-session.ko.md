@@ -193,7 +193,7 @@ Application은 relocation을 알기 위해 `bind()`를 다시 호출하지 않�
 
 `bound_session_t`, `session_actor_t`와 `session_actor_manager_t`의 Actor 연동 member는
 [Actor interface](05-actors.ko.md)가 소유한다. `stream_send_call_t`와 `stream_write_call_t`의
-metadata·compression·`submit()` member는 [Channel messaging](03-channel-messaging.ko.md)의 call family와
+metadata·compression·`async()` member는 [Channel messaging](03-channel-messaging.ko.md)의 call family와
 같은 admission 계약을 유지한다.
 STREAM application callback, send·reply와 compression extension은 binding message가 아니라
 `zlink::framework::message_t`를 사용한다. Framework codec registry가 typed payload와 이 message 경계를 변환한다.

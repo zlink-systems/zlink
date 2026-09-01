@@ -1768,7 +1768,7 @@ class spot_create_call_t
         return creation_request (message_t::from (std::move (request)));
     }
     spot_create_call_t &timeout (std::chrono::milliseconds timeout);
-    task_t<spot_create_result_t> submit ();
+    task_t<spot_create_result_t> async ();
     task_t<spot_create_result_t> yield ();
 
   private:

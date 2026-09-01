@@ -113,14 +113,14 @@ auto allocated = co_await spot_client
                    .request_to_spot ("match:" + level_bucket, reserve_bingo_room_req_t{})
                    .instance_spot (sample_names_t::matchmaker_spot_type) // The intent that creation is OK if it's missing.
                    .in_mesh (sample_names_t::matchmaking_mesh_name)
-                   .submit<reserve_bingo_room_res_t> ();
+                   .async<reserve_bingo_room_res_t> ();
 
 // User Spot -- there's a separate create call.
 auto created = co_await spots
                  .get_or_create (allocated.room_id, sample_names_t::room_spot_type)
                  .in_mesh (sample_names_t::play_mesh_name)
                  .request (allocated.settings) // Delivered to the new Spot's on_create.
-                 .submit ();
+                 .async ();
 ```
 
 A User/Instance Spot also specifies its relocation policy in factory registration. It can't
@@ -229,7 +229,7 @@ auto created = co_await spots
                  .in_mesh ("play")
                  .request (create_game_t{"ranked"}) // The create request delivered to on_create.
                  .timeout (std::chrono::seconds (10))
-                 .submit ();
+                 .async ();
 
 if (created.state == spot_create_state_t::rejected)
     throw std::runtime_error ("Game creation was rejected.");
@@ -256,7 +256,7 @@ auto result = co_await spots
                 .get_or_create ("lobby-eu-1", "lobby")
                 .in_mesh ("play")
                 .request (create_lobby_t{"eu"}) // Not delivered if this ends as existing.
-                .submit ();
+                .async ();
 
 switch (result.state) {
 case spot_create_state_t::existing: // Uses the lobby that already existed, as-is.
@@ -484,7 +484,7 @@ task_t<save_score_reply_t> game_room_t::save_score (const save_score_t &request)
     auto saved = co_await _context.outbound ()
                    .request_to_channel ("score",
                                         persist_score_t{_context.spot_id (), request.value})
-                   .submit<persist_score_reply_t> ();
+                   .async<persist_score_reply_t> ();
 
     co_return save_score_reply_t{saved.version};
 }
@@ -526,12 +526,12 @@ Regular User Spot messaging needs only the SpotId. The Framework looks up the lo
 generation from the current authority.
 
 ```cpp
-co_await spot_outbound.send_to_spot ("room-42", chat_t{"hello"}).submit ();
+co_await spot_outbound.send_to_spot ("room-42", chat_t{"hello"}).async ();
 
 auto state = co_await spot_client
                .request_to_spot ("room-42", get_room_state_t{})
                .timeout (std::chrono::seconds (3))
-               .submit<room_state_t> ();
+               .async<room_state_t> ();
 ```
 
 An Instance Spot adds an intent to the same call surface. The argument to
@@ -545,14 +545,14 @@ auto match = co_await spot_client
                .request_to_spot ("bronze", find_match_t{player_id})
                .instance_spot ("matchmaker") // Prepares it with this stable type's factory if the target is missing.
                .in_mesh ("matchmaking")      // Picks the mesh for initial placement.
-               .submit<match_result_t> ();
+               .async<match_result_t> ();
 
 // A mesh with only one type registered -- omit it and the Framework picks that sole type.
 auto single = co_await spot_client
                 .request_to_spot ("bronze", find_match_t{player_id})
                 .instance_spot ()            // Prepares it with the only type registered on the target node.
                 .in_mesh ("matchmaking")
-                .submit<match_result_t> ();
+                .async<match_result_t> ();
 ```
 
 A call without `instance_spot(...)` only looks for an already-running Spot and fails without

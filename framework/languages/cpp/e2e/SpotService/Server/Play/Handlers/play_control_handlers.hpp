@@ -22,7 +22,7 @@ create_spot (zlink::framework::spot_manager_t &spots,
     auto created = spots
                      .get_or_create (std::move (spot_id), std::move (stable_type))
                      .creation_request (std::move (request))
-                     .submit ()
+                     .async ()
                      .result ();
     if (!created) {
         throw zlink::framework::framework_exception_t (
@@ -116,7 +116,7 @@ class ensure_actor_handler_t
               actor.error_kind (),
               actor.error () ? actor.error ()->what () : "ensure actor create failed");
         }
-        auto bound = _actors.bind_or_get (actor.value ().ref ()).submit ().result ();
+        auto bound = _actors.bind_or_get (actor.value ().ref ()).async ().result ();
         if (!bound) {
             throw zlink::framework::framework_exception_t (
               bound.error_kind (),
@@ -294,7 +294,7 @@ class type_mismatch_spot_handler_t
             throw zlink::framework::framework_exception_t (
               actor.error_kind (), actor.error () ? actor.error ()->what () : "actor create failed");
         }
-        auto bound = _actors.bind_or_get (actor.value ().ref ()).submit ().result ();
+        auto bound = _actors.bind_or_get (actor.value ().ref ()).async ().result ();
         if (!bound) {
             throw zlink::framework::framework_exception_t (
               bound.error_kind (), bound.error () ? bound.error ()->what () : "actor bind failed");
@@ -315,7 +315,7 @@ class type_mismatch_spot_handler_t
                                .display_name = "SM-A7",
                                .level = 7,
                                .tags = {"type-mismatch"}}))
-            .submit ()
+            .async ()
             .result ();
         if (!join_reply) {
             throw zlink::framework::framework_exception_t (
@@ -327,7 +327,7 @@ class type_mismatch_spot_handler_t
             ->relay_request ("StateReq",
                              zlink::message_t::from_json (
                                e2e::state_req_t{.op = "set", .amount = 17}))
-            .submit ()
+            .async ()
             .result ();
         if (!seeded) {
             throw zlink::framework::framework_exception_t (
@@ -345,7 +345,7 @@ class type_mismatch_spot_handler_t
                     ->relay_request ("StateReq",
                                      zlink::message_t::from_json (
                                        e2e::state_req_t{.op = "noop", .amount = 0}))
-                    .submit ()
+                    .async ()
                     .result ();
                 if (!observed) {
                     throw zlink::framework::framework_exception_t (

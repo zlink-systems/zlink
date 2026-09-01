@@ -48,7 +48,7 @@ class delivery_status_changed_handler_t
                                                         request.customer_id,
                                                         request.status, request.courier_id,
                                                         request.occurred_at_unix_ms})
-          .submit ();
+          .async ();
 
         if (request.status == delivery_status_t::delivered) {
             std::cerr << "deliverydispatch-tracking status=Delivered delivery="

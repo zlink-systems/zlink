@@ -33,7 +33,7 @@ class profile_request_handler_t
     {
         auto call = _channels.request (api_channel, request)
                       .timeout (std::chrono::milliseconds (5000))
-                      .submit<profile_res_t> ();
+                      .async<profile_res_t> ();
         const auto &reply = call.result ();
         if (!reply) {
             throw std::runtime_error (
@@ -68,7 +68,7 @@ class profile_request_timeout_handler_t
         }
         auto call = _channels.request (api_channel, profile)
                       .timeout (std::chrono::milliseconds (timeout_ms))
-                      .submit<profile_res_t> ();
+                      .async<profile_res_t> ();
         const auto &reply = call.result ();
         zlink::framework::http_response_t response;
         if (!reply) {

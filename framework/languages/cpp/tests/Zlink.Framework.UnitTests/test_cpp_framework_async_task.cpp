@@ -231,7 +231,7 @@ int main ()
     }
 
     zlink::framework::request_call_t<int> call (zlink::framework::detail::boundary_failure<int> (zlink::framework::detail::boundary_error_t::timed_out, "timeout"));
-    auto coroutine_result = call.submit ().result ();
+    auto coroutine_result = call.async ().result ();
     if ((coroutine_result.error () != nullptr
          && zlink::framework::detail::boundary_state (*coroutine_result.error ()) != zlink::framework::detail::boundary_error_t::timed_out)) {
         return 3;
@@ -245,7 +245,7 @@ int main ()
     }
 
     zlink::framework::request_call_t<int> shutdown_call (zlink::framework::detail::boundary_failure<int> (zlink::framework::detail::boundary_error_t::shutdown, "shutdown"));
-    const auto shutdown_result = shutdown_call.submit ().result ();
+    const auto shutdown_result = shutdown_call.async ().result ();
     if (shutdown_result || shutdown_result.error () == nullptr
         || zlink::framework::detail::boundary_state (*shutdown_result.error ())
              != zlink::framework::detail::boundary_error_t::shutdown) {
@@ -307,7 +307,7 @@ int main ()
           one_way_invoked = true;
           return zlink::framework::result_t<void>::success ();
       });
-    const auto accepted_result = accepted.submit ().result ();
+    const auto accepted_result = accepted.async ().result ();
     if (!accepted_result || !one_way_invoked) {
         return 10;
     }
@@ -315,7 +315,7 @@ int main ()
     zlink::framework::send_call_t timed_out (
       zlink::framework::detail::boundary_failure<void> (
         zlink::framework::detail::boundary_error_t::timed_out, "send timed out"));
-    const auto timed_out_result = timed_out.submit ().result ();
+    const auto timed_out_result = timed_out.async ().result ();
     if (timed_out_result
         || timed_out_result.error_kind ()
              != zlink::framework::framework_error_kind_t::deadline_exceeded) {
@@ -325,7 +325,7 @@ int main ()
     zlink::framework::send_call_t disconnected (
       zlink::framework::detail::boundary_failure<void> (
         zlink::framework::detail::boundary_error_t::disconnected, "route unavailable"));
-    const auto disconnected_result = disconnected.submit ().result ();
+    const auto disconnected_result = disconnected.async ().result ();
     if (disconnected_result
         || disconnected_result.error_kind ()
              != zlink::framework::framework_error_kind_t::unavailable) {
@@ -346,7 +346,7 @@ int main ()
             zlink::framework::framework_error_kind_t::internal_failure,
             "target failed after handoff");
       });
-    const auto blocked_terminal = blocked_publish.submit ().result ();
+    const auto blocked_terminal = blocked_publish.async ().result ();
     if (!blocked_terminal) {
         return 13;
     }
@@ -374,7 +374,7 @@ int main ()
             zlink::framework::framework_error_kind_t::internal_failure,
             "post-start failure is internal");
       });
-    const auto failed_terminal = failed_publish.submit ().result ();
+    const auto failed_terminal = failed_publish.async ().result ();
     if (!failed_terminal) {
         return 15;
     }

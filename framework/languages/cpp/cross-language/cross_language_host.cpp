@@ -550,7 +550,7 @@ class spot_route_client_service_t final : public fw::hosted_service_t
                            .request_to_node (_channel, target,
                                              test_host_spot_route_request_t{_value})
                            .timeout (std::chrono::seconds (5))
-                           .submit<test_host_spot_route_reply_t> ()
+                           .async<test_host_spot_route_reply_t> ()
                            .result ();
             if (reply) {
                 sink.append ("spot-route-reply|" + reply.value ().value);
@@ -595,7 +595,7 @@ class spot_route_client_service_t final : public fw::hosted_service_t
     {
         auto reply = routes.request_to_node (_channel, target, std::move (request))
                        .timeout (std::chrono::seconds (5))
-                       .template submit<test_host_spot_route_reply_t> ()
+                       .template async<test_host_spot_route_reply_t> ()
                        .result ();
         if (reply) {
             sink.append (marker + "|unexpected-success");
@@ -631,7 +631,7 @@ class raw_stream_session_t final : public fw::packet_stream_session_t
     {
         _sink.append ("raw|" + std::string (dispatch.packet_name) + "|"
                       + payload.to_string ());
-        stream.reply_packet (zlink::message_t::from_json (std::string ("pong"))).submit ();
+        stream.reply_packet (zlink::message_t::from_json (std::string ("pong"))).async ();
         co_return;
     }
 
@@ -656,7 +656,7 @@ class channel_client_service_t final : public fw::hosted_service_t
         auto &sink = services.get_required<event_sink_t> ();
         auto reply = client.request (_channel, test_host_profile_request_t{_value})
                        .timeout (std::chrono::seconds (5))
-                       .submit<test_host_profile_reply_t> ()
+                       .async<test_host_profile_reply_t> ()
                        .result ();
         if (!reply) {
             sink.append (std::string ("channel-client-error|")
@@ -664,7 +664,7 @@ class channel_client_service_t final : public fw::hosted_service_t
             co_return;
         }
         sink.append ("channel-client-reply|" + reply.value ().value);
-        client.send (_channel, test_host_profile_send_t{_value + "-send"}).submit ();
+        client.send (_channel, test_host_profile_send_t{_value + "-send"}).async ();
         sink.append ("channel-client-sent|" + _value + "-send");
         write_ready ();
         co_return;
@@ -694,7 +694,7 @@ class fanout_publish_service_t final : public fw::hosted_service_t
          * repeats until the runner sees the marker or the deadline passes. */
         const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (15);
         while (std::chrono::steady_clock::now () < deadline) {
-            publisher.publish (_channel, _topic, test_host_published_event_t{_value}).submit ();
+            publisher.publish (_channel, _topic, test_host_published_event_t{_value}).async ();
             std::this_thread::sleep_for (std::chrono::milliseconds (250));
         }
         sink.append ("channel-publisher-done|" + _topic + ":" + _value);
@@ -1289,7 +1289,7 @@ class user_spot_target_service_t final : public fw::hosted_service_t
                              .creation_request (
                                user_spot_create_req_t{"cross-language-user-spot"})
                              .timeout (std::chrono::seconds (15))
-                             .submit ()
+                             .async ()
                              .result ();
             if (created) {
                 target_node_rid = std::string (created.value ().spot.node_rid ().value ());
@@ -1353,7 +1353,7 @@ class user_spot_target_service_t final : public fw::hosted_service_t
                                  _mesh_name, zlink::routing_id_t::from (_source_node_rid),
                                  user_spot_discovery_probe_req_t{"reciprocal-discovery"})
                                .timeout (std::chrono::seconds (2))
-                               .submit<user_spot_discovery_probe_res_t> ()
+                               .async<user_spot_discovery_probe_res_t> ()
                                .result ();
                 if (reply && reply.value ().node_rid == _source_node_rid) {
                     sink.append ("user-spot-source-peer-ready|ready=true|peers="
@@ -1386,7 +1386,7 @@ class user_spot_target_service_t final : public fw::hosted_service_t
                            .request (fw::actor_id_t (_actor_id),
                                      user_spot_probe_req_t{"target-owner-probe"})
                            .timeout (std::chrono::seconds (5))
-                           .submit<user_spot_probe_res_t> ()
+                           .async<user_spot_probe_res_t> ()
                            .result ();
             if (reply && reply.value ().node_rid == target_node_rid) {
                 sink.append ("user-spot-probe|nodeRid=" + reply.value ().node_rid
@@ -1493,7 +1493,7 @@ class user_spot_source_service_t final : public fw::hosted_service_t
                          .in_mesh (_mesh_name)
                          .creation_request (cross_lang_actor_create_req_t{7, 4})
                          .timeout (std::chrono::seconds (15))
-                         .submit ()
+                         .async ()
                          .result ();
         if (!created) {
             sink.append (std::string ("user-spot-source-error|kind=")
@@ -1529,7 +1529,7 @@ class user_spot_source_service_t final : public fw::hosted_service_t
                        .request (fw::actor_id_t (_actor_id),
                                  begin_user_spot_join_req_t{_spot_id, "canonical-28"})
                        .timeout (std::chrono::seconds (45))
-                       .submit<user_spot_join_res_t> ()
+                       .async<user_spot_join_res_t> ()
                        .result ();
         if (!reply) {
             sink.append (std::string ("user-spot-source-error|kind=")

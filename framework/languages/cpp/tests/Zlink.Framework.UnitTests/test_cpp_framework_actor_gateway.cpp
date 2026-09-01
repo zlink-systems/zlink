@@ -273,8 +273,8 @@ int replaced_session_find_is_exact_and_disconnects_once ()
     session_actor_manager_access_t::attach (current_session, stream_t{});
     const auto actor = test_actor_ref ("actor-node", "player", "actor-replaced", 1);
 
-    (void) old_session.bind (actor).submit ().result ().value ();
-    (void) current_session.bind (actor).submit ().result ().value ();
+    (void) old_session.bind (actor).async ().result ().value ();
+    (void) current_session.bind (actor).async ().result ().value ();
     int disconnected = 0;
     gateway.on_disconnect ([&] (const actor_ref_t &) {
         ++disconnected;
@@ -326,8 +326,8 @@ int bind_or_get_reuses_same_physical_session_generation ()
           return task_t<void> (result_t<void>::success ());
       });
     const auto actor = test_actor_ref ("actor-node", "player", "bind-or-get-idempotent-actor", 1);
-    const auto first = manager.bind_or_get (actor).submit ().result ();
-    const auto second = manager.bind_or_get (actor).submit ().result ();
+    const auto first = manager.bind_or_get (actor).async ().result ();
+    const auto second = manager.bind_or_get (actor).async ().result ();
     if (!first || !second || native_binds.load () != 1)
         return 1;
 
@@ -348,7 +348,7 @@ int bind_or_get_reuses_same_physical_session_generation ()
           return task_t<void> (result_t<void>::success ());
       });
     session_actor_manager_access_t::attach (manager, std::move (new_stream));
-    const auto reconnect = manager.bind_or_get (actor).submit ().result ();
+    const auto reconnect = manager.bind_or_get (actor).async ().result ();
     if (!reconnect || native_binds.load () != 2)
         return 3;
     if (state->sync ([&] {
@@ -389,11 +389,11 @@ int bind_or_get_completion_can_reenter_same_manager ()
     auto continuation_ran = std::make_shared<std::atomic_bool> (false);
     auto reentrant = [] (session_actor_manager_t manager, actor_ref_t actor,
                          std::shared_ptr<std::atomic_bool> continuation_ran) -> task_t<void> {
-        (void) co_await manager.bind_or_get (actor).submit ();
+        (void) co_await manager.bind_or_get (actor).async ();
         if (!manager.find ("bind-or-get-reentrant-actor")) {
             throw std::runtime_error ("bind_or_get continuation could not find its Actor");
         }
-        (void) co_await manager.bind_or_get (actor).submit ();
+        (void) co_await manager.bind_or_get (actor).async ();
         continuation_ran->store (true, std::memory_order_release);
         co_return;
     }(manager, actor, continuation_ran);
@@ -417,7 +417,7 @@ int bind_or_get_all_exit_paths_complete_within_deadline ()
     actor_gateway_runtime_t no_stream_gateway;
     auto no_stream_manager = no_stream_gateway.manager ();
     const auto no_stream =
-      finite_task_result (no_stream_manager.bind_or_get (no_stream_actor).submit ());
+      finite_task_result (no_stream_manager.bind_or_get (no_stream_actor).async ());
     if (!no_stream || !*no_stream) {
         return 1;
     }
@@ -436,8 +436,8 @@ int bind_or_get_all_exit_paths_complete_within_deadline ()
           return task_t<void> (result_t<void>::success ());
       });
     const auto reuse_actor = test_actor_ref ("actor-node", "player", "finite-reuse", 1);
-    const auto initial = finite_task_result (reuse_manager.bind_or_get (reuse_actor).submit ());
-    const auto reused = finite_task_result (reuse_manager.bind_or_get (reuse_actor).submit ());
+    const auto initial = finite_task_result (reuse_manager.bind_or_get (reuse_actor).async ());
+    const auto reused = finite_task_result (reuse_manager.bind_or_get (reuse_actor).async ());
     if (!initial || !*initial || !reused || !*reused || reuse_native_binds.load () != 1) {
         return 2;
     }
@@ -454,7 +454,7 @@ int bind_or_get_all_exit_paths_complete_within_deadline ()
       success_manager,
       [success_source] (actor_ref_t, std::uint64_t) { return success_source->task (); });
     const auto success_actor = test_actor_ref ("actor-node", "player", "finite-native-success", 1);
-    auto success_task = success_manager.bind_or_get (success_actor).submit ();
+    auto success_task = success_manager.bind_or_get (success_actor).async ();
     success_source->complete (result_t<void>::success ());
     const auto success = finite_task_result (std::move (success_task));
     if (!success || !*success || !success_manager.find ("finite-native-success")) {
@@ -473,7 +473,7 @@ int bind_or_get_all_exit_paths_complete_within_deadline ()
       failure_manager,
       [failure_source] (actor_ref_t, std::uint64_t) { return failure_source->task (); });
     const auto failure_actor = test_actor_ref ("actor-node", "player", "finite-native-failure", 1);
-    auto failure_task = failure_manager.bind_or_get (failure_actor).submit ();
+    auto failure_task = failure_manager.bind_or_get (failure_actor).async ();
     failure_source->complete (
       result_t<void>::failure (framework_error_kind_t::unavailable, "native bind rejected"));
     const auto failure = finite_task_result (std::move (failure_task));
@@ -497,7 +497,7 @@ int bind_or_get_all_exit_paths_complete_within_deadline ()
     const auto exception_actor =
       test_actor_ref ("actor-node", "player", "finite-native-exception", 1);
     const auto exception =
-      finite_task_result (exception_manager.bind_or_get (exception_actor).submit ());
+      finite_task_result (exception_manager.bind_or_get (exception_actor).async ());
     if (!exception || *exception
         || exception->error_kind () != framework_error_kind_t::internal_failure
         || exception_manager.find ("finite-native-exception")) {
@@ -528,7 +528,7 @@ int direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ()
     session_actor_manager_access_t::attach (new_session, std::move (new_stream));
 
     const auto actor = test_actor_ref ("actor-node", "player", "direct-rebind-actor", 1);
-    auto old_binding = old_session.bind (actor).submit ().result ();
+    auto old_binding = old_session.bind (actor).async ().result ();
     if (!old_binding)
         return 2;
     auto stale_handle = std::move (old_binding.value ());
@@ -561,7 +561,7 @@ int direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ()
           return task_t<void> (result_t<void>::success ());
       });
     std::optional<result_t<session_actor_t>> rebound;
-    std::thread rebind_thread ([&] { rebound = new_session.bind (actor).submit ().result (); });
+    std::thread rebind_thread ([&] { rebound = new_session.bind (actor).async ().result (); });
     binder_entered.wait ();
 
     int disconnected = 0;
@@ -609,7 +609,7 @@ int direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ()
           return task_t<void> (result_t<void>::failure (framework_error_kind_t::unavailable,
                                                         "deterministic native binding rejection"));
       });
-    const auto rejected = new_session.bind (actor).submit ().result ();
+    const auto rejected = new_session.bind (actor).async ().result ();
     if (rejected || rejected.error_kind () != framework_error_kind_t::unavailable
         || !new_session.find ("direct-rebind-actor")) {
         return 7;
@@ -640,7 +640,7 @@ int destroyed_or_recreated_actor_ignores_stale_disconnect_handle ()
     session_actor_manager_access_t::attach (new_session, runtime.open_session ("destroy-recreate"));
 
     const auto original = test_actor_ref ("actor-node", "player", "recreated-actor", 1);
-    auto original_result = old_session.bind (original).submit ().result ();
+    auto original_result = old_session.bind (original).async ().result ();
     if (!original_result)
         return 1;
     auto stale_handle = std::move (original_result.value ());
@@ -655,7 +655,7 @@ int destroyed_or_recreated_actor_ignores_stale_disconnect_handle ()
     }
 
     const auto recreated = test_actor_ref ("actor-node", "player", "recreated-actor", 2);
-    auto recreated_result = new_session.bind (recreated).submit ().result ();
+    auto recreated_result = new_session.bind (recreated).async ().result ();
     if (!recreated_result)
         return 3;
     const auto stale_after_recreate = stale_handle.notify_disconnected ().result ();
@@ -676,10 +676,10 @@ int actor_send_is_one_shot ()
     recording_actor_client_t client;
     actor_send_call_t call (client, actor_id_t ("actor-2"), "message", message_t{});
     auto copied = call;
-    call.submit ().result ().value ();
+    call.async ().result ().value ();
     bool rejected = false;
     try {
-        (void) copied.submit ().result ().value ();
+        (void) copied.async ().result ().value ();
     }
     catch (const framework_exception_t &error) {
         rejected = error.kind () == framework_error_kind_t::protocol_error;
@@ -782,9 +782,9 @@ int session_disconnect_is_all_settled_and_token_fenced ()
     const actor_ref_t first = test_actor_ref ("actor-node", "player", "actor-a", 1);
     const actor_ref_t second = test_actor_ref ("actor-node", "player", "actor-b", 1);
 
-    auto stale = manager.bind (first).submit ().result ().value ();
-    auto current = manager.bind (first).submit ().result ().value ();
-    (void) manager.bind (second).submit ().result ().value ();
+    auto stale = manager.bind (first).async ().result ().value ();
+    auto current = manager.bind (first).async ().result ().value ();
+    (void) manager.bind (second).async ().result ().value ();
     if (stale.notify_disconnected ().result ().error_kind ()
         != framework_error_kind_t::not_configured) {
         return 1;
@@ -826,8 +826,8 @@ int logical_disconnect_is_selected_and_keeps_session_live ()
     session_actor_manager_access_t::attach (manager, stream_t{});
     const actor_ref_t first = test_actor_ref ("actor-node", "player", "actor-a", 1);
     const actor_ref_t second = test_actor_ref ("actor-node", "player", "actor-b", 1);
-    auto first_binding = manager.bind (first).submit ().result ().value ();
-    auto second_binding = manager.bind (second).submit ().result ().value ();
+    auto first_binding = manager.bind (first).async ().result ().value ();
+    auto second_binding = manager.bind (second).async ().result ().value ();
     std::vector<std::string> disconnected;
     gateway.on_disconnect ([&] (const actor_ref_t &actor) {
         disconnected.emplace_back (actor.actor_id ().value ());
@@ -862,9 +862,9 @@ int route_update_preserves_object_generation ()
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
     const actor_ref_t original = test_actor_ref ("actor-node-a", "player", "actor-route", 7);
-    auto original_binding = manager.bind (original).submit ().result ().value ();
+    auto original_binding = manager.bind (original).async ().result ().value ();
     const actor_ref_t unaffected = test_actor_ref ("actor-node-a", "player", "actor-other", 3);
-    auto unaffected_binding = manager.bind (unaffected).submit ().result ().value ();
+    auto unaffected_binding = manager.bind (unaffected).async ().result ().value ();
 
     std::vector<actor_ref_t> relay_routes;
     gateway.on_relay ([&] (const actor_ref_t &actor, const actor_context_t &,
@@ -887,7 +887,7 @@ int route_update_preserves_object_generation ()
         || !gateway.update_actor_ref (relocated)) {
         return 7;
     }
-    auto relocated_binding = manager.bind (relocated).submit ().result ().value ();
+    auto relocated_binding = manager.bind (relocated).async ().result ().value ();
     if (!relocated_binding.relay ("packet", zlink::message_t{}).result ()
         || relay_routes.size () != 2
         || relay_routes.back ().node_rid ().value () != relocated.node_rid ().value ()) {
@@ -902,7 +902,7 @@ int route_update_preserves_object_generation ()
     const auto rejected = gateway.update_actor_ref (new_incarnation);
     if (rejected || rejected.error_kind () != framework_error_kind_t::invalid_operation)
         return 2;
-    const auto rejected_bind = manager.bind (new_incarnation).submit ().result ();
+    const auto rejected_bind = manager.bind (new_incarnation).async ().result ();
     if (rejected_bind || rejected_bind.error_kind () != framework_error_kind_t::invalid_operation)
         return 3;
     const auto disconnected = relocated_binding.notify_disconnected ().result ();
@@ -922,10 +922,10 @@ int exact_session_generation_mismatch_is_invalid_operation ()
     session_actor_manager_access_t::attach (manager, stream_t{});
     const actor_ref_t current = test_actor_ref ("actor-node", "player", "exact-actor", 3);
     const actor_ref_t stale = test_actor_ref ("actor-node", "player", "exact-actor", 2);
-    if (!manager.bind (current).submit ().result ()) {
+    if (!manager.bind (current).async ().result ()) {
         return 1;
     }
-    const auto bind_result = manager.bind (stale).submit ().result ();
+    const auto bind_result = manager.bind (stale).async ().result ();
     if (bind_result || bind_result.error_kind () != framework_error_kind_t::invalid_operation) {
         return 2;
     }
@@ -1020,7 +1020,7 @@ int bound_session_send_does_not_publish_caller_location ()
     auto sent = gateway.actor_context (target)
                   .bound_session ()
                   .send (std::string ("push"))
-                  .submit ()
+                  .async ()
                   .result ();
     const auto delivery_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
     while (sends.load (std::memory_order_acquire) != 1
@@ -1144,7 +1144,7 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
     const auto submitted = gateway.actor_context (target)
                              .bound_session ()
                              .send (std::string ("RelocationReady"))
-                             .submit ()
+                             .async ()
                              .result ();
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
     while (sends.load (std::memory_order_acquire) != 1
@@ -1384,12 +1384,12 @@ int bound_session_push_detaches_before_direct_sink_entry ()
         return gateway.actor_context (actor)
           .bound_session ()
           .send (std::string ("joined"))
-          .submit ()
+          .async ()
           .result ();
     });
     const auto immediate = submitted.wait_for (std::chrono::milliseconds (100));
     auto second =
-      gateway.actor_context (actor).bound_session ().send (std::string ("joined-again")).submit ();
+      gateway.actor_context (actor).bound_session ().send (std::string ("joined-again")).async ();
     {
         std::unique_lock lock (gate_mutex);
         if (!gate_changed.wait_for (lock, std::chrono::seconds (1),
@@ -1849,8 +1849,8 @@ int session_relay_queue_is_ordered_without_blocking_other_actors ()
     session_actor_manager_access_t::attach (manager, stream_t{});
     const auto actor_a = test_actor_ref ("actor-owner", "game.actor", "relay-a", 1);
     const auto actor_b = test_actor_ref ("actor-owner", "game.actor", "relay-b", 1);
-    auto bound_a = manager.bind (actor_a).submit ().result ().value ();
-    auto bound_b = manager.bind (actor_b).submit ().result ().value ();
+    auto bound_a = manager.bind (actor_a).async ().result ().value ();
+    auto bound_b = manager.bind (actor_b).async ().result ().value ();
     const auto session_rid = zlink::routing_id_t::from (std::string ("relay-session"));
     if (!gateway.record_session_relay_source (actor_a, session_rid, 31)
         || !gateway.record_session_relay_source (actor_b, session_rid, 37)) {
@@ -1921,7 +1921,7 @@ int session_relay_does_not_start_actor_dispatch_on_session_thread ()
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
     const auto actor = test_actor_ref ("actor-owner", "game.actor", "relay-execution", 1);
-    auto binding = manager.bind (actor).submit ().result ().value ();
+    auto binding = manager.bind (actor).async ().result ().value ();
     const auto session_thread = std::this_thread::get_id ();
     std::thread::id actor_dispatch_thread;
     gateway.on_relay ([&] (const actor_ref_t &, actor_context_t, const stream_header_t &,
@@ -1984,7 +1984,7 @@ int disconnect_notification_survives_pending_dispatcher_completion ()
     session_actor_manager_access_t::attach (manager, stream_t{});
     const std::string actor_id (96, 'd');
     const auto actor = test_actor_ref ("actor-owner", "game.actor", actor_id, 1);
-    auto bound = manager.bind (actor).submit ().result ().value ();
+    auto bound = manager.bind (actor).async ().result ().value ();
     auto pending = std::make_shared<task_completion_source_t<void>> ();
     auto disconnect_started = std::make_shared<std::atomic_bool> (false);
     gateway.on_disconnect (
@@ -2028,7 +2028,7 @@ int relay_request_survives_pending_dispatcher_completion ()
     const std::string packet_name (96, 'p');
     const std::string payload_text (4096, 'v');
     const auto actor = test_actor_ref ("actor-owner", "game.actor", actor_id, 1);
-    auto bound = manager.bind (actor).submit ().result ().value ();
+    auto bound = manager.bind (actor).async ().result ().value ();
     auto pending = std::make_shared<task_completion_source_t<void>> ();
     auto relay_started = std::make_shared<std::atomic_bool> (false);
     gateway.on_relay ([pending, relay_started, actor_id, packet_name, payload_text] (
@@ -2040,7 +2040,7 @@ int relay_request_survives_pending_dispatcher_completion ()
     });
 
     auto request =
-      bound.relay_request (packet_name, zlink::message_t::from (payload_text)).submit ();
+      bound.relay_request (packet_name, zlink::message_t::from (payload_text)).async ();
     if (!relay_started->load (std::memory_order_acquire))
         return 1;
 
@@ -2067,7 +2067,7 @@ int relay_send_survives_pending_dispatcher_completion ()
     const std::string packet_name (96, 'n');
     const std::string payload_text (4096, 'b');
     const auto actor = test_actor_ref ("actor-owner", "game.actor", actor_id, 1);
-    auto bound = manager.bind (actor).submit ().result ().value ();
+    auto bound = manager.bind (actor).async ().result ().value ();
     auto pending = std::make_shared<task_completion_source_t<void>> ();
     auto relay_started = std::make_shared<std::atomic_bool> (false);
     gateway.on_relay ([pending, relay_started, actor_id, packet_name, payload_text] (
@@ -3989,7 +3989,7 @@ int reconnect_push_reaches_new_session_across_two_hosts ()
     const auto public_push = actor_owner.actor_context (actor)
                                .bound_session ()
                                .send (std::string ("public-push"))
-                               .submit ()
+                               .async ()
                                .result ();
     if (!public_push)
         return 7;
@@ -4960,7 +4960,7 @@ int session_relay_waiter_capacity_is_bounded ()
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
     const actor_ref_t actor = test_actor_ref ("actor-node-a", "player", "actor-capacity", 1);
-    auto binding = manager.bind (actor).submit ().result ().value ();
+    auto binding = manager.bind (actor).async ().result ().value ();
 
     std::vector<std::shared_ptr<task_completion_source_t<std::optional<zlink::message_t>>>>
       dispatched;
@@ -5030,7 +5030,7 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
 
     const auto fence = gateway.begin_join_completion_delivery_fence (actor);
     auto submitted =
-      gateway.actor_context (actor).bound_session ().send (std::string ("join-response")).submit ();
+      gateway.actor_context (actor).bound_session ().send (std::string ("join-response")).async ();
     if (!submitted.result ())
         return 2;
 
@@ -5065,7 +5065,7 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
     auto next_submitted = gateway.actor_context (actor)
                             .bound_session ()
                             .send (std::string ("after-settlement-observer"))
-                            .submit ();
+                            .async ();
     if (!next_submitted.result () || next_delivery_started.load (std::memory_order_acquire)) {
         return 5;
     }

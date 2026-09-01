@@ -303,7 +303,7 @@ class actor_send_call_t
                        message_t message);
 
     actor_send_call_t &metadata (std::string key, std::string value);
-    task_t<void> submit ();
+    task_t<void> async ();
 
   private:
     actor_client_t *_client;
@@ -327,7 +327,7 @@ class actor_request_call_t
     actor_request_call_t &timeout (std::chrono::milliseconds timeout);
     actor_request_call_t &metadata (std::string key, std::string value);
 
-    template <typename TReply> task_t<TReply> submit ()
+    template <typename TReply> task_t<TReply> async ()
     {
         auto reply = co_await start (false);
         co_return reply.template decode<TReply> (serializers ());
@@ -339,7 +339,7 @@ class actor_request_call_t
         co_return reply.template decode<TReply> (serializers ());
     }
 
-    task_t<message_t> submit_message ();
+    task_t<message_t> async_message ();
     task_t<message_t> yield_message ();
 
   private:
@@ -439,7 +439,7 @@ class actor_create_call_t
         return creation_request (message_t::from (std::move (request)));
     }
     actor_create_call_t &timeout (std::chrono::milliseconds timeout);
-    task_t<actor_create_result_t> submit ();
+    task_t<actor_create_result_t> async ();
     task_t<actor_create_result_t> yield ();
 
   private:
@@ -639,7 +639,7 @@ class relay_request_call_t : private detail::call_facade_t<relay_request_call_t,
     {
     }
 
-    using base_t::submit;
+    using base_t::async;
     using base_t::timeout;
     using base_t::yield;
 

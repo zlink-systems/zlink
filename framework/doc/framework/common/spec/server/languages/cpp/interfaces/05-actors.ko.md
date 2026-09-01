@@ -157,7 +157,7 @@ namespace zlink::framework {
 class actor_send_call_t {
 public:
  actor_send_call_t &metadata(std::string key, std::string value);
- task_t<void> submit();
+ task_t<void> async();
 };
 
 class actor_request_call_t {
@@ -166,12 +166,12 @@ public:
  actor_request_call_t &metadata(std::string key, std::string value);
 
  template <typename TReply>
- task_t<TReply> submit();
+ task_t<TReply> async();
 
  template <typename TReply>
  task_t<TReply> yield();
 
- task_t<message_t> submit_message();
+ task_t<message_t> async_message();
  task_t<message_t> yield_message();
 };
 
@@ -230,7 +230,7 @@ public:
  actor_create_call_t &creation_request(TCreation request);
 
  actor_create_call_t &timeout(std::chrono::milliseconds timeout);
- task_t<actor_create_result_t> submit();
+ task_t<actor_create_result_t> async();
  task_t<actor_create_result_t> yield();
 };
 
@@ -250,7 +250,7 @@ public:
 } // namespace zlink::framework
 ```
 
-Call object는 option마다 최대 한 번 설정하고 `submit()`도 한 번만 호출한다. Duplicate option은
+Call object는 option마다 최대 한 번 설정하고 `async()`도 한 번만 호출한다. Duplicate option은
 `invalid_operation`, 두 번째 submit도 `invalid_operation`이다. `in_mesh`를 생략했을 때 object role Mesh가
 하나면 자동 선택하고, 0개면 `not_configured`, 여러 개면 `invalid_operation`이다. Unknown
 Mesh는 `not_found`다.
@@ -334,5 +334,5 @@ generation이 바뀌면 session-not-bound 또는 stale 결과로 끝나며, Fram
 
 이 문서에 선언된 `yield()`와 `yield_message()`는 현재 Actor handler가 `SpotWide` User Spot의 shared
 execution gate에서 실행 중일 때만 유효하다. Entry Spot Actor와 `PerActor` User Spot의 Actor가 호출하면
-operation을 제출하거나 turn을 반환하지 않고 `invalid_operation`으로 완료한다. `submit()`은 모든 Actor
+operation을 제출하거나 turn을 반환하지 않고 `invalid_operation`으로 완료한다. `async()`은 모든 Actor
 실행 문맥에서 사용할 수 있다.

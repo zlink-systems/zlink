@@ -448,7 +448,7 @@ class mesh_profile_request_handler_t
               route_mesh_channel, zlink::routing_id_t::from (target),
               payload)
             .timeout (std::chrono::seconds (5))
-            .submit<profile_res_t> ()
+            .async<profile_res_t> ()
             .result ()
             .value ();
         _evidence.add (
@@ -486,7 +486,7 @@ class mesh_application_gate_request_handler_t
               route_mesh_channel, zlink::routing_id_t::from (target),
               payload)
             .timeout (std::chrono::seconds (15))
-            .submit<application_gate_res_t> ()
+            .async<application_gate_res_t> ()
             .result ()
             .value ();
         return {.body = nlohmann::json (reply).dump ()};
@@ -551,12 +551,12 @@ class create_spot_handler_t
       try {
         const auto requested = request.query_values.find ("spotId");
         const auto created = requested == request.query_values.end ()
-                               ? _spots.create (spot_channel).submit ().result ()
+                               ? _spots.create (spot_channel).async ().result ()
                                : _spots
                                    .get_or_create (zlink::framework::spot_id_t (
                                                      requested->second),
                                                    spot_channel)
-                                   .submit ()
+                                   .async ()
                                    .result ();
         if (!created) {
             return {.status = 409,
@@ -843,7 +843,7 @@ class create_actor_handler_t
         try {
             const auto result = _actors
               .create (zlink::framework::actor_id_t (actor_id), monitoring_actor_type)
-              .submit ()
+              .async ()
               .result ();
             const auto &created = result.value ();
             std::string provider_rid;
@@ -925,7 +925,7 @@ class create_subject_handler_t
         const auto spot_id = request.query_values.at ("spotId");
         const auto created = _spots
           .get_or_create (spot_id, monitoring_subject_spot)
-          .submit ()
+          .async ()
           .result ();
         if (!created)
             return {.status = 500, .body = R"({"error":"subject creation failed"})"};
@@ -999,7 +999,7 @@ class publish_probe_handler_t
             route_mesh_channel,
             topic,
             profile_req_t{.value = "publish", .marker = topic})
-          .submit ()
+          .async ()
           .result ()
           .value ();
         zlink::framework::http_response_t response;

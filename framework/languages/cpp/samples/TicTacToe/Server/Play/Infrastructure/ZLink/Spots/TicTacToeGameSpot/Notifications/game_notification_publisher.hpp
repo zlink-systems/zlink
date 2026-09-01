@@ -28,7 +28,7 @@ class game_notification_publisher_t
             if (actor_id == excluded_actor_id || actor == nullptr) {
                 continue;
             }
-            co_await actor->context ().bound_session ().send (notify).submit ();
+            co_await actor->context ().bound_session ().send (notify).async ();
         }
         co_return;
     }

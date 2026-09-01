@@ -100,7 +100,7 @@ inline bool apply_move_authority (player_actor_t &actor, const move_msg_t &messa
             actor.context ()
               .bound_session ()
               .send (move_rejected_notify_t{*error, actor.x, actor.y})
-              .submit ();
+              .async ();
         }
         return false;
     }
@@ -161,7 +161,7 @@ class zone_entry_spot_t final : public fw::entry_spot_t<player_actor_t>
               .bound_session ()
               .send (
                 join_world_res_t{actor.player_id, actor.zone_id, actor.x, actor.y, std::nullopt})
-              .submit ();
+              .async ();
             return;
         }
         actor.x = spec_t::spawn_x;
@@ -329,7 +329,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
             actor.context ()
               .bound_session ()
               .send (zone_changed_notify_t{actor.player_id, actor.zone_id})
-              .submit ();
+              .async ();
         co_return;
     }
 
@@ -352,7 +352,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
         co_await actor.context ()
           .bound_session ()
           .send (join_world_res_t{actor.player_id, actor.zone_id, actor.x, actor.y, std::nullopt})
-          .submit ();
+          .async ();
         std::cout << "zoneworld-join-response player=" << actor.player_id
                   << " zone=" << actor.zone_id << std::endl;
         co_return;
@@ -421,7 +421,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
             actor.context ()
               .bound_session ()
               .send (zone_state_notify_t{message.zone_id, message.tick, message.players})
-              .submit ();
+              .async ();
     }
     void deliver_changed (player_actor_t &actor,
                           fw::message_context_t &,
@@ -431,7 +431,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
             actor.context ()
               .bound_session ()
               .send (zone_changed_notify_t{message.player_id, message.zone_id})
-              .submit ();
+              .async ();
     }
     void deliver_announce (player_actor_t &actor,
                            fw::message_context_t &,
@@ -441,7 +441,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
             actor.context ()
               .bound_session ()
               .send (world_announce_notify_t{message.announcement_id, message.text})
-              .submit ();
+              .async ();
     }
 
     fw::task_t<void> announce (const deliver_announce_msg_t &message)
@@ -460,7 +460,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
             co_await _actor_client
               .send (fw::actor_id_t (id),
                      deliver_world_announce_msg_t{message.announcement_id, message.text})
-              .submit ();
+              .async ();
     }
 
     void border (const zone_border_event_t &event)
@@ -507,7 +507,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
               .publish (
                 border_topic (_context.spot_id (), to),
                 zone_border_event_t{_context.spot_id (), to, _tick, std::move (border_players)})
-              .submit ();
+              .async ();
         }
 
         std::map<std::string, player_view_t> merged;
@@ -537,7 +537,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
                 co_await _actor_client
                   .send (fw::actor_id_t (id),
                          deliver_zone_state_msg_t{_context.spot_id (), _tick, snapshot})
-                  .submit ();
+                  .async ();
             }
             catch (const fw::framework_exception_t &) {
             }
@@ -555,7 +555,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
                     bots.push_back (id);
         }
         for (const auto &id : bots)
-            co_await _actor_client.send (fw::actor_id_t (id), bot_tick_msg_t{}).submit ();
+            co_await _actor_client.send (fw::actor_id_t (id), bot_tick_msg_t{}).async ();
     }
 
   private:
@@ -644,7 +644,7 @@ class announce_fanout_handler_t
             co_await _routes
               .send_to_spot (fw::spot_id_t (zone),
                              deliver_announce_msg_t{event.announcement_id, event.text})
-              .submit ();
+              .async ();
     }
 
   private:
@@ -720,7 +720,7 @@ class node_report_service_t final : public fw::hosted_service_t
               ->send_to_channel (names_t::report_channel,
                                  report_spot_event_msg_t{g_node_state->node_id, kind, detail,
                                                          format_timestamp (event.timestamp)})
-              .submit ();
+              .async ();
             std::cout << "zoneworld-spot-event-reported node=" << g_node_state->node_id
                       << " kind=" << kind << " " << detail << std::endl;
         }
@@ -739,7 +739,7 @@ class node_report_service_t final : public fw::hosted_service_t
                                                           g_node_state->zone_snapshot (),
                                                           g_node_state->player_count (),
                                                           g_node_state->maintenance.load ()})
-              .submit ();
+              .async ();
             std::cout << "zoneworld-status-report node=" << g_node_state->node_id << std::endl;
         }
         catch (const std::exception &error) {
@@ -816,7 +816,7 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
             try {
                 co_await spots.get_or_create (fw::spot_id_t (zone), names_t::zone_spot)
                   .in_mesh (names_t::mesh)
-                  .submit ();
+                  .async ();
             }
             catch (const std::exception &) {
                 // A peer may still be entering the mesh. The fixed retry budget owns

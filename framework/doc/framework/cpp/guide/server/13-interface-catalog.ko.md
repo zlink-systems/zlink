@@ -32,7 +32,7 @@ class place_order_handler_t
         co_return co_await _client
           .request_to_channel ("orders", request)
           .timeout (std::chrono::seconds (3))
-          .submit<order_placed_t> ();
+          .async<order_placed_t> ();
     }
 
   private:

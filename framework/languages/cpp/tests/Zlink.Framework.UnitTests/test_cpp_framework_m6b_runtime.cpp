@@ -469,7 +469,7 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     };
 
     auto first = client->send (
-      actor_id_t (key.global_id), std::string ("first")).submit ().result ();
+      actor_id_t (key.global_id), std::string ("first")).async ().result ();
     assert (first);
     assert (collect_actor_sends (*old_target, 2s) == 1);
     assert (collect_actor_sends (*new_target, 20ms) == 0);
@@ -696,7 +696,7 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
           actor_id_t (key.global_id),
           "B6Request",
           message_t::from (std::string ("request")));
-        return request.timeout (2s).submit<std::string> ().result ();
+        return request.timeout (2s).async<std::string> ().result ();
     });
     const auto request_deadline = std::chrono::steady_clock::now () + 2s;
     while ((!old_dispatch_future.valid ()
@@ -721,7 +721,7 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
       actor_id_t (key.global_id),
       "B7OneWay",
       message_t::from (std::string ("move-48")));
-    assert (one_way.submit ().result ());
+    assert (one_way.async ().result ());
     const auto one_way_deadline = std::chrono::steady_clock::now () + 2s;
     while ((!old_dispatch_future.valid ()
             || old_dispatch_future.wait_for (0ms)
@@ -767,7 +767,7 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
       actor_id_t (key.global_id),
       "AfterB7FollowNotice",
       message_t::from (std::string ("after-notice")));
-    assert (after_notice.submit ().result ());
+    assert (after_notice.async ().result ());
     assert (wait_for_application (*new_target, 2s));
     assert (!wait_for_application (*old_target, 20ms));
     assert (one_way_deliveries.load (std::memory_order_relaxed) == 1);
@@ -777,7 +777,7 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
       actor_id_t (key.global_id),
       "SecondClientPrime",
       message_t::from (std::string ("prime-b")));
-    assert (second_prime.submit ().result ());
+    assert (second_prime.async ().result ());
 
     const auto returned = std::get<authority_stored_t> (
       store->compare_exchange_authority (
@@ -811,7 +811,7 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
       actor_id_t (key.global_id),
       "AfterFollowNotice",
       message_t::from (std::string ("later")));
-    assert (later.submit ().result ());
+    assert (later.async ().result ());
     // A cached call performs only the deletion-only preflight read. A cache
     // miss would add a second authority read and select the returned A route.
     assert (store->authority_reads.load (std::memory_order_relaxed)
@@ -843,7 +843,7 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
       actor_id_t (key.global_id),
       "RemainingClientAfterNotice",
       message_t::from (std::string ("remaining")));
-    assert (remaining.submit ().result ());
+    assert (remaining.async ().result ());
     assert (store->authority_reads.load (std::memory_order_relaxed)
               - reads_before_remaining_call
             == 2);
@@ -1720,7 +1720,7 @@ request_after_actor_await (recording_actor_client_t &client)
     actor_request_call_t other (
       client, actor_id_t ("other"), "OtherRequest", message_t{});
     try {
-        (void) co_await other.submit_message ();
+        (void) co_await other.async_message ();
     }
     catch (const framework_exception_t &error) {
         co_return result_t<message_t>::failure (error.kind (), error.what ());
@@ -1728,7 +1728,7 @@ request_after_actor_await (recording_actor_client_t &client)
     actor_request_call_t self (
       client, actor_id_t ("actor-1"), "SelfRequest", message_t{});
     try {
-        co_return co_await self.submit_message ();
+        co_return co_await self.async_message ();
     }
     catch (const framework_exception_t &error) {
         co_return result_t<message_t>::failure (error.kind (), error.what ());
@@ -2112,7 +2112,7 @@ void verify_self_actor_request_rejected_before_submission ()
     actor_request_call_t async_request (
       actor_client, actor.actor_id (), "SelfRequest", message_t{});
 
-    const auto async_result = async_request.submit_message ().result ();
+    const auto async_result = async_request.async_message ().result ();
     assert (!async_result);
     assert (
       async_result.error_kind ()
@@ -2280,7 +2280,7 @@ void verify_same_gate_request_rejected_before_submission ()
             "awaited request requires the current Spot execution gate");
       });
 
-    const auto result = request.submit ().result ();
+    const auto result = request.async ().result ();
     assert (!result);
     assert (
       result.error_kind ()

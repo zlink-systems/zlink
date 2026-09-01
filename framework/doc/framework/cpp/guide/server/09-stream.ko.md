@@ -142,7 +142,7 @@ task_t<void> handle (stream_t &stream, const ping_t &message)
 {
     // 같은 request correlation으로 한 번만 reply한다. request가 아니면 실패로 끝난다.
     co_await stream.reply_packet (zlink::message_t::from_json (pong_t{message.sequence}))
-      .submit ();
+      .async ();
 }
 ```
 
@@ -160,7 +160,7 @@ Server가 먼저 push할 때는 `send`를 사용한다.
 co_await stream.send (server_notice_t{"maintenance"})
   .metadata ("severity", "info")
   .compress ()
-  .submit ();
+  .async ();
 ```
 
 ## 4. Actor dispatch
@@ -185,10 +185,10 @@ auto connector = zlink::stream_connector::connector_factory_t::create (connector
 connector.on<game_state_notify_t> ("GameStateNotify",
                                    [] (const auto &message) { render (message.payload ()); });
 
-co_await connector.connect ().submit (); // 연결과 receive loop 준비를 완료한다.
+co_await connector.connect ().async (); // 연결과 receive loop 준비를 완료한다.
 
 while (running) {
-    co_await connector.dispatch ().submit (); // manual 모드는 이 caller에서 callback을 실행한다.
+    co_await connector.dispatch ().async (); // manual 모드는 이 caller에서 callback을 실행한다.
 }
 ```
 
@@ -211,10 +211,10 @@ connector_options.diagnostics_level = zlink::stream_connector::diagnostics_level
 
 ```cpp
 // bounded outbound queue admission까지 기다린다.
-co_await connector.send (player_input_t{direction}).submit ();
+co_await connector.send (player_input_t{direction}).async ();
 
 // request sequence로 response를 찾는다.
-auto profile = co_await connector.request (get_profile_t{player_id}).submit<profile_t> ();
+auto profile = co_await connector.request (get_profile_t{player_id}).async<profile_t> ();
 ```
 
 Connector의 기본 typed codec은 JSON이다. Packet name override, push 대기, reconnect, heartbeat와

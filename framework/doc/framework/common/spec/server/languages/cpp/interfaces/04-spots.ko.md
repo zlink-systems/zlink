@@ -765,9 +765,9 @@ raw payload 처리는 framework 내부 invoker가 맡으며 application public a
 별도 raw join overload를 두지 않는다.
 
 호출 실행 표면은 공통 비동기 call 계약을 C++ coroutine 관례로 표현한다. `request(...)`, `send(...)`,
-`join_spot(...)`과 `join_entry_spot(...)`은 call object를 반환한다. One-way call의 `submit()`은 send timeout까지
+`join_spot(...)`과 `join_entry_spot(...)`은 call object를 반환한다. One-way call의 `async()`은 send timeout까지
 bounded admission 결과를 담은 `task_t`를 반환한다. Session Actor `relay(...)`는 별도 call object를 만들지 않고
-정상 완료 값을 만들지 않는 `task_t<void>`를 반환한다. Request는 `submit()`이 reply 완료를
+정상 완료 값을 만들지 않는 `task_t<void>`를 반환한다. Request는 `async()`이 reply 완료를
 기다리는 지점이다.
 일반 channel `request_call_t`는 metadata와 request timeout을, `send_call_t`는 metadata만 submit 전에 모으고,
 submit 시점에 framework envelope 정책으로 넘긴다. typed packet name은 registration
@@ -776,7 +776,7 @@ descriptor가 결정한다.
 Actor Join은 다른 messaging call과 실행 경계가 다르다. `defer()`는 target을 조회하거나
 Store I/O를 시작하지 않고 현재 handler에 Join intent와 비활성 queue barrier만 등록한다.
 handler가 정상 종료하면 barrier를 활성화하여 Join을 시작하고, handler가 실패하면 등록 내용을
-폐기한다. `defer()`는 값을 반환하지 않으며 `submit()`, `async()`, `yield()` terminal을 제공하지 않는다.
+폐기한다. `defer()`는 값을 반환하지 않으며 `async()`나 `yield()` terminal을 제공하지 않는다.
 Join 결과는 나중에 `actor_t::on_join_completed(...)`로 알린다. 기본 timeout은 5초이고,
 명시하는 값은 millisecond 기준 `1..INT_MAX` 범위여야 한다. Framework는 `defer()` 시점의
 monotonic clock으로 absolute deadline을 고정한다.
@@ -789,7 +789,7 @@ Worker call도 같은 실행 문맥 제한을 적용한다. CPU worker는 동기
 ```cpp
 auto reply = co_await client
   .request("profile", query) // ChannelName만으로 호출 대상을 선택한다.
-  .submit<profile_reply_t>();
+  .async<profile_reply_t>();
 
 use_profile(reply);
 ```
@@ -798,7 +798,7 @@ public framework async 표면에 `std::future`를 사용하지 않는다. blocki
 timer, STREAM session callback, actor relay 경로에서 허용하지 않는다.
 
 오류 종류는 `.NET` framework의 `ZLinkFrameworkErrorKind`를 C++ naming으로 투영한다.
-`submit()`은 실패 시 같은 정보를 가진 `framework_exception_t`를 throw한다.
+`async()`은 실패 시 같은 정보를 가진 `framework_exception_t`를 throw한다.
 
 ## 3. Timer
 
@@ -880,7 +880,7 @@ public:
     spot_create_call_t &creation_request(TRequest request);
 
     spot_create_call_t &timeout(std::chrono::milliseconds timeout);
-    task_t<spot_create_result_t> submit();
+    task_t<spot_create_result_t> async();
     task_t<spot_create_result_t> yield();
 };
 
@@ -899,10 +899,10 @@ public:
 
 `spot_manager_t`는 User Spot만 생성한다. `Create`는 Framework가 global SpotId를 생성하고,
 `GetOrCreate`는 caller가 제공한 global SpotId를 사용한다. Instance Spot create/get-or-create member와 kind
-인자는 제공하지 않는다. Call option과 submit은 각각 한 번만 사용할 수 있다. Existing authority가 Instance
+인자는 제공하지 않는다. Call option과 `async()` terminal은 각각 한 번만 사용할 수 있다. Existing authority가 Instance
 kind이거나 stable type이 다르면 `type_mismatch`, eligible capacity가 없으면
 `capacity_exceeded`다.
-Terminal `submit()`은 `spot_ref_t`, `existing`·`created`·`rejected` state와 creation callback reply를
+Terminal `async()`은 `spot_ref_t`, `existing`·`created`·`rejected` state와 creation callback reply를
 `spot_create_result_t` 하나로 반환한다.
 
 `Find`는 current Ready User SpotRef만 반환하고 생성하지 않는다. Instance authority는 manager의 `Find` 결과에

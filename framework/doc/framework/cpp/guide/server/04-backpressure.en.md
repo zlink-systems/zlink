@@ -155,7 +155,7 @@ never judges before/after by arrival order.
 slot to send into.**
 
 ```cpp
-co_await client.send_to_channel ("orders", cancel_order_t{"order-1042"}).submit ();
+co_await client.send_to_channel ("orders", cancel_order_t{"order-1042"}).async ();
 // This co_await finishing means only "my runtime accepted the submission."
 // It doesn't mean the peer received it or the handler finished.
 ```
@@ -169,7 +169,7 @@ is up to the application.
 
 ```cpp
 try {
-    co_await client.send_to_channel ("orders", command).submit ();
+    co_await client.send_to_channel ("orders", command).async ();
 } catch (const framework_exception_t &ex) {
     if (ex.kind () != framework_error_kind_t::deadline_exceeded)
         throw;
@@ -219,7 +219,7 @@ task_t<place_order_reply_t> handle (const place_order_t &request)
                       .request_to_channel ("inventory",
                                            reserve_stock_t{request.sku, request.quantity})
                       .timeout (std::chrono::seconds (3))
-                      .submit<stock_reserved_t> ();
+                      .async<stock_reserved_t> ();
 
     co_return place_order_reply_t{request.order_id, reserved.reservation_id};
 }

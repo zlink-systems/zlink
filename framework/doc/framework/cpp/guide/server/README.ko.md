@@ -90,7 +90,7 @@ MessagePack / Protobuf)는 프레임워크가 처리한다.
 // 보내는 쪽 (채널 클라이언트)
 auto result = co_await _client
     .request ("support.core", open_conversation_req_t{user_id})
-    .submit<open_conversation_res_t> ();
+    .async<open_conversation_res_t> ();
 
 // 받는 쪽 (채널 서버의 핸들러)
 class open_conversation_handler_t {
