@@ -6,38 +6,202 @@
     "subtitle": "The deadline expires, A's attempt=1 is marked expired and Reassigned is pushed → re-offered to B → Delivered",
     "output": "sample-delivery-reassign-en.html",
     "column_fit": "spread",
-    "viewBox": [1180, 1120],
-    "legend": { "mode": "hidden" }
+    "viewBox": [
+      1320,
+      1240
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
   },
   "participants": [
-    { "id": "C", "type": "frontend", "label": "Customer Client" },
-    { "id": "D", "type": "frontend", "label": "Dispatch" },
-    { "id": "T", "type": "frontend", "label": "Tracking" },
-    { "id": "A", "type": "backend", "label": "CourierActor A" },
-    { "id": "B", "type": "backend", "label": "CourierActor B" },
-    { "id": "CB", "type": "frontend", "label": "Courier Client B" },
-    { "id": "CS", "type": "frontend", "label": "CourierSession" },
-    { "id": "CG", "type": "frontend", "label": "CustomerGateway" }
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "Customer Client"
+    },
+    {
+      "id": "D",
+      "type": "frontend",
+      "label": "Dispatch"
+    },
+    {
+      "id": "T",
+      "type": "frontend",
+      "label": "Tracking"
+    },
+    {
+      "id": "A",
+      "type": "backend",
+      "label": "CourierActor A"
+    },
+    {
+      "id": "B",
+      "type": "backend",
+      "label": "CourierActor B"
+    },
+    {
+      "id": "CB",
+      "type": "frontend",
+      "label": "Courier Client B"
+    },
+    {
+      "id": "CS",
+      "type": "frontend",
+      "label": "CourierSession"
+    },
+    {
+      "id": "CU",
+      "type": "backend",
+      "label": "CustomerActor"
+    },
+    {
+      "id": "CG",
+      "type": "frontend",
+      "label": "CustomerGateway"
+    }
   ],
   "messages": [
-    { "from": "C", "to": "D", "y": 160, "label": "CreateDeliveryReq(delivery-reassign)", "variant": "default" },
-    { "from": "D", "to": "A", "y": 208, "label": "OfferDeliveryMsg(attempt=1)", "variant": "default" },
-    { "from": "D", "to": "T", "y": 256, "label": "deadline expires → DeliveryStatusChangedReq(Reassigned)", "variant": "default" },
-    { "from": "T", "to": "D", "y": 304, "label": "DeliveryStatusChangedRes", "variant": "return" },
-    { "from": "T", "to": "CG", "y": 352, "label": "DeliveryStatusUpdatedMsg", "variant": "default" },
-    { "from": "CG", "to": "C", "y": 400, "label": "DeliveryStatusNotify(Reassigned)", "variant": "return" },
-    { "from": "D", "to": "B", "y": 448, "label": "OfferDeliveryMsg(attempt=2)", "variant": "default" },
-    { "from": "B", "to": "CS", "y": 496, "label": "OfferDeliveryNotify", "variant": "default" },
-    { "from": "CS", "to": "CB", "y": 544, "label": "OfferDeliveryNotify", "variant": "return" },
-    { "from": "CB", "to": "CS", "y": 592, "label": "CourierDecisionMsg(accepted=true)", "variant": "default" },
-    { "from": "CS", "to": "B", "y": 640, "label": "CourierDecisionMsg", "variant": "default" },
-    { "from": "B", "to": "D", "y": 688, "label": "OfferDeliveryResultMsg(attempt=2)", "variant": "default" },
-    { "from": "D", "to": "T", "y": 736, "label": "DeliveryStatusChangedReq(Accepted)", "variant": "default" },
-    { "from": "T", "to": "D", "y": 784, "label": "DeliveryStatusChangedRes", "variant": "return" },
-    { "from": "D", "to": "T", "y": 832, "label": "DeliveryStatusChangedReq(Delivered)", "variant": "default" },
-    { "from": "T", "to": "D", "y": 880, "label": "DeliveryStatusChangedRes", "variant": "return" },
-    { "from": "T", "to": "CG", "y": 928, "label": "DeliveryStatusUpdatedMsg(Delivered)", "variant": "default" },
-    { "from": "CG", "to": "C", "y": 976, "label": "DeliveryStatusNotify(Delivered)", "variant": "return" }
+    {
+      "from": "C",
+      "to": "D",
+      "y": 160,
+      "label": "CreateDeliveryReq(delivery-reassign)",
+      "variant": "default"
+    },
+    {
+      "from": "D",
+      "to": "A",
+      "y": 208,
+      "label": "OfferDeliveryMsg(attempt=1)",
+      "variant": "default"
+    },
+    {
+      "from": "D",
+      "to": "T",
+      "y": 256,
+      "label": "deadline expires → DeliveryStatusChangedReq(Reassigned)",
+      "variant": "default"
+    },
+    {
+      "from": "T",
+      "to": "D",
+      "y": 304,
+      "label": "DeliveryStatusChangedRes",
+      "variant": "return"
+    },
+    {
+      "from": "T",
+      "to": "CU",
+      "y": 352,
+      "label": "DeliveryStatusUpdatedMsg",
+      "variant": "default"
+    },
+    {
+      "from": "CU",
+      "to": "CG",
+      "variant": "default",
+      "label": "DeliveryStatusNotify",
+      "y": 400
+    },
+    {
+      "from": "CG",
+      "to": "C",
+      "y": 448,
+      "label": "DeliveryStatusNotify(Reassigned)",
+      "variant": "return"
+    },
+    {
+      "from": "D",
+      "to": "B",
+      "y": 496,
+      "label": "OfferDeliveryMsg(attempt=2)",
+      "variant": "default"
+    },
+    {
+      "from": "B",
+      "to": "CS",
+      "y": 544,
+      "label": "OfferDeliveryNotify",
+      "variant": "default"
+    },
+    {
+      "from": "CS",
+      "to": "CB",
+      "y": 592,
+      "label": "OfferDeliveryNotify",
+      "variant": "return"
+    },
+    {
+      "from": "CB",
+      "to": "CS",
+      "y": 640,
+      "label": "CourierDecisionMsg(accepted=true)",
+      "variant": "default"
+    },
+    {
+      "from": "CS",
+      "to": "B",
+      "y": 688,
+      "label": "CourierDecisionMsg",
+      "variant": "default"
+    },
+    {
+      "from": "B",
+      "to": "D",
+      "y": 736,
+      "label": "OfferDeliveryResultMsg(attempt=2)",
+      "variant": "default"
+    },
+    {
+      "from": "D",
+      "to": "T",
+      "y": 784,
+      "label": "DeliveryStatusChangedReq(Accepted)",
+      "variant": "default"
+    },
+    {
+      "from": "T",
+      "to": "D",
+      "y": 832,
+      "label": "DeliveryStatusChangedRes",
+      "variant": "return"
+    },
+    {
+      "from": "D",
+      "to": "T",
+      "y": 880,
+      "label": "DeliveryStatusChangedReq(Delivered)",
+      "variant": "default"
+    },
+    {
+      "from": "T",
+      "to": "D",
+      "y": 928,
+      "label": "DeliveryStatusChangedRes",
+      "variant": "return"
+    },
+    {
+      "from": "T",
+      "to": "CU",
+      "y": 976,
+      "label": "DeliveryStatusUpdatedMsg(Delivered)",
+      "variant": "default"
+    },
+    {
+      "from": "CU",
+      "to": "CG",
+      "variant": "default",
+      "label": "DeliveryStatusNotify",
+      "y": 1024
+    },
+    {
+      "from": "CG",
+      "to": "C",
+      "y": 1072,
+      "label": "DeliveryStatusNotify(Delivered)",
+      "variant": "return"
+    }
   ],
   "cards": [
     {
@@ -52,7 +216,7 @@
       "dot": "cyan",
       "title": "Reassignment path",
       "items": [
-        "In this flow the status push goes directly from Tracking to CustomerGateway (the normal flow in §7.1 goes through CustomerActor — the two diagrams denote the path differently, kept verbatim from the source).",
+        "Tracking sends the status push to the CustomerActor, which pushes to the bound CustomerGateway session (same as §7.1 and the actual sample code sendToActor — the source mermaid omitted CustomerActor; corrected against the code).",
         "Reassignment order check: confirm the order Assigned, Reassigned, Accepted, Delivered and that the courier is B after Accepted."
       ]
     }
