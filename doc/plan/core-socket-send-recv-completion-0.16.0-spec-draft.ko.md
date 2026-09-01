@@ -220,8 +220,8 @@ failure는 `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, 그 밖의 runtime failure는
 Platform `<errno.h>`가 정의하지 않으면 `zlink_errno.h`가
 `#ifndef EPROTOTYPE` 경로에서 `ZLINK_HAUSNUMERO + 23`,
 `#ifndef EOVERFLOW` 경로에서 `ZLINK_HAUSNUMERO + 24`로 정의하며 Core와 native
-header mirror는 같은 값을 사용한다. Completion ID sequence와 C++·Rust binding
-owner nonce 소진도 이 `EOVERFLOW`를 사용한다.
+header mirror는 같은 값을 사용한다. Completion ID sequence 소진도 이 `EOVERFLOW`를
+사용한다.
 
 재시도 경계는 local send queue admission까지다. ID `0` 또는 `ZLINK_SEND_ADMITTED`가
 확정된 뒤에는 payload가 기존 transport/pipe 전달 계약으로 넘어가며 Core는 application
@@ -894,7 +894,10 @@ reconnect fence로 사용하지 않는다. `Zlink-Lane`은 Application/Completio
   따라서 모든 고수준 send/request builder의 public `flags` 선택과
   `submit_sync(DONTWAIT)`는 제거한다. Pending completion을 반환할 표면이 없는 sync
   terminal에 DONTWAIT를 남기면 완료를 유실하기 때문이다. PUB·XPUB publish flag는
-  별도 lossy/NODROP 계약이므로 유지한다.
+  별도 lossy/NODROP 계약이므로 유지한다. 현재 publish가 공용 send operation type을
+  재사용하는 Go·Python은 publish를 별도 `PublishOp`로 분리해(§11.7·§11.8) 기존
+  flags·synchronous submit 표면을 유지하고, 이미 publish operation type이 분리된
+  나머지 언어는 기존 publish 표면을 변경하지 않는다.
 - Send operation별 timeout은 모든 binding에서 제거하고 request reply timeout만 유지한다.
   Request callback terminal과 callback type은 전부 제거한다. C++·.NET·Java/Kotlin·
   Node·Python·Rust의 send/request에는 blocking과 awaitable terminal을 하나씩 남기고,
@@ -988,20 +991,19 @@ reconnect fence로 사용하지 않는다. `Zlink-Lane`은 Application/Completio
   non-exported `ContractAccess.ReplyTokenAccess`를 class static initializer에서 private
   constructor method reference로 등록하는 경로를 사용한다. Node는 class static block이
   module-private `makeReplyToken(owner,value)` closure를 설치하고 sentinel을 export하지 않는다.
-  Python은 module-private `_reply_token_from_native`가 `object.__new__(ReplyToken)`으로 instance를
-  만들고 identity-keyed private side table에 weak reference·owner·opaque value를 등록한다.
-  Instance에는 state slot이 없고 weak-reference slot만 있다. Go는 binding package 내부
-  unexported struct literal, Rust는
-  `pub(crate) fn from_native(owner_id, value)`를 사용한다. 이 경로들은 ROUTER REQUEST recv
+  Python은 module-private `_reply_token_from_native`가 `object.__new__(ReplyToken)`과
+  `object.__setattr__`로 private `_owner`·`_value`를 채운 immutable instance를 만든다. Go는
+  binding package 내부 unexported struct literal, Rust는
+  `pub(crate) fn from_native(owner, value)`를 사용한다. 이 경로들은 ROUTER REQUEST recv
   adapter만 호출하며 public declaration·reflection-friendly raw factory·test hook으로 노출하지 않는다.
-- C++과 Rust의 numeric `owner_id`는 native handle·pointer·connection·generation이 아닌
-  binding process-wide nonzero 64-bit ROUTER wrapper-instance nonce다. Wrapper를 move하면 같은
-  nonce를 옮기고 close·destruction 후에도 그 값을 process lifetime 동안 재발급하지
-  않는다. `0`은 invalid로 예약하고 wrap·reuse를 금지한다. 마지막 nonzero 값이
-  소진된 뒤 C++ ROUTER 생성은
-  `config_error_t(config_result_t::internal_error, EOVERFLOW)`를 throw하고, Rust ROUTER 생성은
-  `Err(ConfigError::new(ConfigResult::InternalError, EOVERFLOW))`를 반환한다. 두 binding은 이미
-  만든 native socket을 caller에 공개하기 전에 close한다. 이 nonce는 internal이며
+  언어 reflection·unsafe로 private state를 조작한 위조 token 방어는 모든 언어에서 계약 범위
+  밖이다.
+- C++과 Rust는 언어에 안정적인 객체 identity가 없으므로 ROUTER wrapper 생성 시 heap
+  owner tag 하나를 만들고(C++ `std::shared_ptr<const void>`, Rust `Arc`) token이 그 tag를
+  공유 보유한다. Equality·hash와 reply owner validation은 tag identity와 opaque value를
+  함께 사용한다. Live token이 tag를 유지하므로 wrapper close/destruction 뒤 주소 재사용으로
+  다른 socket의 token과 같아지는 일이 없고, 별도 nonce 발급·process-lifetime 재사용 금지·
+  소진 오류 규칙은 두지 않는다. Wrapper move는 같은 tag를 옮긴다. Tag는 internal이며
   public accessor·serialization은 없다.
 - STREAM handler를 제거하고 첫 bind/connect 전 receive mode와 reusable packet output을 추가한다.
   모든 고수준 binding의 receive-mode enum은 `UNSPECIFIED`, `RAW`, `PACKET` 세 값을
@@ -1099,18 +1101,18 @@ public:
     reply_token_t() = delete;
     reply_token_t(const reply_token_t&) = default;
     reply_token_t& operator=(const reply_token_t&) = default;
-    friend bool operator==(reply_token_t, reply_token_t) noexcept;
+    friend bool operator==(const reply_token_t&, const reply_token_t&) noexcept;
 
 private:
-    reply_token_t(uint64_t owner_id, uint64_t value) noexcept;
-    uint64_t owner_id_;
+    reply_token_t(std::shared_ptr<const void> owner, uint64_t value) noexcept;
+    std::shared_ptr<const void> owner_;
     uint64_t value_;
     friend struct detail::received_access_t;
     friend struct reply_token_hash_t;
 };
 
 struct reply_token_hash_t {
-    std::size_t operator()(reply_token_t) const noexcept;
+    std::size_t operator()(const reply_token_t&) const noexcept;
 };
 
 class reply_submit_operation_t {
@@ -1159,7 +1161,7 @@ void stream_socket_options_t::recv_mode(stream_recv_mode_t mode);
 `const std::optional<reply_token_t>& reply_token() const noexcept`로 바꾸고, 명시적 ROUTER
 reply는 `reply(const routing_id_t&, reply_token_t)`를 사용한다. `reply_token_t`는 default·숫자
 생성과 raw accessor가 없고 copy·equality·`reply_token_hash_t`만 공개한다. Equality·hash와
-reply owner validation은 §11.1의 never-reused `owner_id_`와 opaque `value_`를 함께
+reply owner validation은 §11.1의 shared owner tag identity와 opaque `value_`를 함께
 사용한다. `stream_packet_t`는
 move-only reusable output이다. `recv_packet()`은 §11.1의 reset·ownership·`NO_DATA` 계약을 따른다.
 
@@ -1251,8 +1253,9 @@ value를 함께 비교한다. `ToString()`은 raw 값을 노출하지 않는다.
 만들고 `RecvPacket()`과 `Dispose()`는 §11.1의 reset·ownership·`NO_DATA` 계약을 따른다.
 
 Send/request `Flags`·`Submit(SendFlags)`, request callback delegate/overload, `IStreamSocket.TrySend`,
-STREAM callback, `ISocketMonitor.OnEvent`, `IZlinkTimer.OnFire`, pair/generation property·method를
-제거한다. `CancellationToken`은
+out-parameter RAW recv `IStreamSocket.RecvPart`—위 signature의 `Recv(Received, RecvFlags)`로
+대체—, STREAM callback, `ISocketMonitor.OnEvent`, `IZlinkTimer.OnFire`, pair/generation
+property·method를 제거한다. `CancellationToken`은
 유지하되 Core 전 submit 차단 또는 successful submit 후 Task wait cancellation만 표현한다.
 `RoutedSendOperation`·`RoutedSendSubmitOperation`은 제거하고 모든 socket의
 `Send(...)`가 target을 capture한 `SendOperation`을 반환한다.
@@ -1426,9 +1429,15 @@ class ReplyOp(Protocol):
     def messages(self, *payloads) -> "ReplyOp": ...
     def submit(self) -> None: ...
 
+class PublishOp(Protocol):
+    def message(self, payload) -> "PublishOp": ...
+    def messages(self, *payloads) -> "PublishOp": ...
+    def flags(self, flags) -> "PublishOp": ...
+    def submit(self) -> None: ...
+
 @final
 class ReplyToken:
-    __slots__ = ("__weakref__",)
+    __slots__ = ("_owner", "_value")
 
     def __new__(cls) -> NoReturn:
         raise TypeError("ReplyToken is created by ROUTER request receive")
@@ -1479,17 +1488,15 @@ class StreamSocket:
     ) -> bool: ...
 ```
 
-`ReplyToken`의 public construction은 항상 실패하고 module-private native factory만 token object의
-identity를 private side table의 owner·opaque value에 등록한다. Table은 object hash를 key로
-사용하지 않고 `id(instance) -> (weakref(instance), owner, value)`를 보관한다. Lookup은
-보관한 weak reference가 현재 object 자체를 가리키는지 identity로 다시 확인한다. Weak-reference
-callback은 table에 남은 weak reference가 callback 자신과 같을 때만 entry를 제거해
-Python object ID 재사용 ABA를 막는다. `object.__setattr__()`로
-변경할 instance state가 없다. `object.__new__(ReplyToken)`으로 만든 미등록 instance는
-equality·hash의 유효 token으로 인정하지 않고 reply 진입 전 invalid-argument로 거부한다.
-`copy.copy()`·`copy.deepcopy()`는 immutable self를 반환하고 유효 token의 equality·hash는
-owner와 opaque value를 함께 사용한다. Raw property·`int()` 변환·pickle serialization은 제공하지
-않는다. `StreamPacket`과 `recv_packet_into()`는 §11.1의 reset·ownership·`NO_DATA` 계약을 따른다.
+`ReplyToken`의 public construction은 항상 실패하고 module-private native factory만
+`object.__new__(ReplyToken)`과 `object.__setattr__`로 private `_owner`·`_value`를 채운
+immutable instance를 만든다. Equality·hash는 owner identity와 opaque value를 함께 사용하고,
+`_owner`가 채워지지 않은 instance는 reply 진입 전 invalid-argument로 거부한다. Reflection으로
+private field를 조작한 위조 token 방어는 §11.1대로 계약 범위 밖이다.
+`copy.copy()`·`copy.deepcopy()`는 immutable self를 반환한다. Raw property·`int()` 변환·pickle
+serialization은 제공하지 않는다. `StreamPacket`과 `recv_packet_into()`는 §11.1의 reset·ownership·`NO_DATA` 계약을 따른다.
+PUB·XPUB의 `publish(topic)`은 flags 없는 새 `SendOp` 대신 위 `PublishOp`를 반환해
+0.15 publish의 flags·synchronous submit 표면을 유지한다.
 `RoutedSendOp`, `StreamSocket.send_async()`/`on_packet()`,
 request callback 인자, reply의 `_FlaggedFluentMessageOp`·flags, monitor `ignore_handler`/`on_event`,
 timer `on_fire`, pair/generation
@@ -1536,6 +1543,20 @@ type ReplySubmitOp interface {
     Submit(context.Context) error
 }
 
+type PublishOp interface {
+    Message(*Message) PublishSubmitOp
+    MoveMessage(*Message) PublishSubmitOp
+    Bytes([]byte) PublishSubmitOp
+}
+
+type PublishSubmitOp interface {
+    Message(*Message) PublishSubmitOp
+    MoveMessage(*Message) PublishSubmitOp
+    Bytes([]byte) PublishSubmitOp
+    Flags(SendFlags) PublishSubmitOp
+    Submit(context.Context) (bool, error)
+}
+
 type ReplyToken struct {
     owner *replyTokenOwner
     value uint64
@@ -1573,7 +1594,9 @@ func (s *StreamSocket) SetReceiveMode(StreamReceiveMode) error
 builder를 만들기 전에 invalid token과 다른 socket owner를 거부한다. `StreamPacket` zero value는
 empty reusable output이다. Empty 상태에서 `HasRoutingID()`는 false, `RoutingID()`는 zero value,
 `Header()`·`Body()`는 nil을 반환하며 `Close()` 뒤에도 같다. `Close()`와 `RecvPacket()`은 §11.1의
-reset·ownership·`NO_DATA` 계약을 따른다. Send/request/reply `Flags`, `RequestSyncSubmitOp`, completion channel과
+reset·ownership·`NO_DATA` 계약을 따른다. `PubSocket.Publish(topic)`과
+`XPubSocket.Publish(topic)`은 flags 없는 새 `SendOp` 대신 위 `PublishOp`를 반환해 0.15
+publish의 `Flags`·submit 의미를 유지한다. Send/request/reply `Flags`, `RequestSyncSubmitOp`, completion channel과
 `RequestReplyCompletion`, `Received.RequestSeq`, STREAM/monitor/timer callback과 pair/generation
 표면—`SocketMonitor.OnEvent`, `Timer.OnFire`를 포함—을 제거한다.
 `RoutedSendOp`·`RoutedSendSubmitOp`는 `SendOp`·`SendSubmitOp`로
@@ -1584,11 +1607,15 @@ goroutine으로 구성한다. Reply `Submit(ctx)`의 Context는 native 호출 �
 ### 11.9 Rust binding
 
 ```rust
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub struct ReplyToken {
-    owner_id: u64,
+    owner: Arc<RouterOwnerTag>,
     value: u64,
 }
+
+impl PartialEq for ReplyToken { /* owner tag identity(Arc::ptr_eq) + value */ }
+impl Eq for ReplyToken {}
+impl std::hash::Hash for ReplyToken { /* owner tag 주소 + value */ }
 
 impl std::fmt::Debug for ReplyToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1661,8 +1688,8 @@ impl StreamSocketOptions<'_> {
 ```
 
 `ReplyToken` field는 private이며 `Default`·`From<u64>`·`Into<u64>`를 구현하지 않는다. `Debug`도
-raw 값을 숨긴다. Copy·equality·hash와 reply owner validation은 §11.1의
-never-reused process-wide owner ID와 opaque value를 함께 사용한다. `StreamPacket`은
+raw 값을 숨긴다. Token은 `Copy`가 아닌 `Clone`이며, equality·hash와 reply owner
+validation은 §11.1의 shared owner tag identity와 opaque value를 함께 사용한다. `StreamPacket`은
 Drop으로 payload를 정리하며 `recv_packet()`은 §11.1의 reset·ownership·`NO_DATA` 계약을 따른다.
 `RoutedSendOp`, send `.timeout(Duration)`, `RequestCallbackOp`/`on_reply()`,
 `ReplyOp::flags()`, STREAM callback, `SocketMonitor::on_event()`·`ignore_handler()`·`snapshot()`,
@@ -1878,7 +1905,9 @@ poller event만으로 다음을 확인한다.
 - C++·.NET·Java/Kotlin·Node·Python·Rust의 blocking terminal은 Core `NONE`, awaitable
   terminal은 Core `DONTWAIT`를 사용한다. Go의 단일 `Submit(context.Context)` terminal은
   Core `DONTWAIT` 후 internal completion을 기다린다. 모든 고수준 binding에 public
-  send/request flags, send timeout, request callback은 없다.
+  send/request flags, send timeout, request callback은 없다. PUB·XPUB publish는 언어별
+  publish operation type이 flags를 유지하고, Go·Python은 §11.7·§11.8의 분리된
+  `PublishOp`를 반환한다.
 - 모든 binding은 `PollCompletion`을 유지하고 public poller와 runtime drain owner가 경합하지
   않는다. C는 non-consuming level readiness, 고수준 binding은 native queue를 drain·settle한
   건이 있을 때만 반환하는 progress event이며 후속 raw recv 성공이나 DATA 소비를 뜻하지 않는다.
@@ -1894,11 +1923,10 @@ poller event만으로 다음을 확인한다.
   wrapper를 leak·double-close 없이 정리한다.
 - 언어별 `ReplyToken`은 ROUTER REQUEST recv만 만들고 owner-aware equality/hash를 제공하되 raw
   생성·변환·serialization이 없다. 다른 socket의 token·default/zero invalid token은 native
-  진입 전 거부한다. Python은 state를 instance slot에 두지 않고 private identity side table에
-  보관하며 slot mutation·`object.__new__()`/side-table-state forge를 거부한다.
+  진입 전 거부한다.
   `copy.copy()`·`copy.deepcopy()`는 동일 valid instance를 반환하고 reply에 계속 사용할 수
-  있음을 검증한다. C++·Rust owner nonce는 move 후 유지·process-lifetime non-reuse·
-  exhaustion error와 close/recreate stale-token rejection을 검증한다. STREAM mode와 reusable
+  있음을 검증한다. C++·Rust는 wrapper move 후 같은 owner tag 유지와 ROUTER close/recreate
+  뒤 stale token의 owner 불일치 거부를 검증한다. STREAM mode와 reusable
   packet output은 §11.3~§11.9 exact signature와 reset·ownership·default/zero 수명 규칙을
   따른다. C++·.NET·Java/Kotlin·Node·Python·Go의 close는 idempotent reset 후
   reuse하고, Rust는 consuming `close(self)`·Drop exactly-once cleanup과 use-after-close/double-close

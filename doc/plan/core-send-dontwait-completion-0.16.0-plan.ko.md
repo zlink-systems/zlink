@@ -1,7 +1,7 @@
 # Core socket pull 전환·성능 검증과 0.16.0 release 계획
 
 > 작성일: 2026-09-01
-> 작업 저장소: `/home/hep7hep7/project/zlink`
+> 작업 저장소: `/home/hep7/project/zlink`
 > 기준 branch: `main`
 > 상태: 0.16.0 확정 draft의 정식 스펙 이관과 구현 인수인계 계획
 > 권장 주 작업자: `gpt-5.6-sol`, reasoning `ultra`
@@ -211,16 +211,17 @@ git diff -- core/src/runtime/sockets/common/socket_runtime.hpp \
   core/tests/integration/test_stream_send_blocking_wakeup.cpp
 ```
 
-2026-09-01 기준 branch는 `main`이고 다음 네 파일에 사용자의 STREAM 성능 변경이 있다. 승인 없이
-restore, reset, checkout, 삭제 또는 덮어쓰기를 하지 않는다.
+다음 네 파일의 사용자 STREAM 성능 변경은 2026-09-01 `main`에 commit됐다
+(`59d6de03d3` fast-path). 이 변경을 승인 없이 revert, restore, reset, checkout,
+삭제 또는 덮어쓰기하지 않으며 §4.2의 최적화 보존 대상으로 취급한다.
 
 - `core/src/runtime/sockets/common/socket_runtime.hpp`
 - `core/src/runtime/sockets/common/socket_send_async_submit.cpp`
 - `core/src/runtime/sockets/common/socket_send_complete.cpp`
 - `core/tests/integration/test_stream_send_blocking_wakeup.cpp`
 
-Plan과 draft도 untracked 상태일 수 있다. 다른 dirty·untracked 파일은 사용자 작업으로 보고 요청
-범위 밖에서는 수정하거나 commit하지 않는다.
+다른 dirty·untracked 파일은 사용자 작업으로 보고 요청 범위 밖에서는 수정하거나 commit하지
+않는다.
 
 ### 4.2 STREAM 최적화의 쉬운 설명
 
@@ -319,8 +320,8 @@ Core 정식 스펙은 다음 순서로 바꾼다.
    `ZLINK_SUBMIT_NOT_ADMITTED`+`EPROTOTYPE`로 mapping하고, platform header에
    errno가 없을 때의 public portable fallback을
    `EPROTOTYPE = ZLINK_HAUSNUMERO + 23`,
-   `EOVERFLOW = ZLINK_HAUSNUMERO + 24`로 고정한다. Completion sequence 소진과
-   C++·Rust binding owner nonce 소진은 모두 후자를 사용한다.
+   `EOVERFLOW = ZLINK_HAUSNUMERO + 24`로 고정한다. Completion sequence 소진은
+   후자를 사용한다.
    XPUB topic buffer 부족은 event를 dequeue하지 않는
    `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`로 일원화하고 0.15의 dequeue+
    `INTERNAL_ERROR`+`EMSGSIZE`를 제거한다.
@@ -768,12 +769,10 @@ empty reusable output이며 recv 진입 시 이전 payload를 먼저 정리한�
 header/body를 소유하고 `NO_DATA`·오류면 empty다. 같은 output의 concurrent recv는 invalid-state이고
 message reference는 다음 recv/close 전까지만 유효하다. Rust의 consuming `close(self)`만 재사용하지
 않고 나머지 언어의 `close/Dispose`는 idempotent reset 뒤 재사용을 허용한다.
-C++·Rust의 token owner는 native handle/pointer가 아닌 process-wide nonzero 64-bit
-ROUTER wrapper-instance nonce다. Move는 같은 값을 유지하고 close/destruction 후에도
-process lifetime 동안 재사용하지 않는다. `0`·wrap·reuse를 금지하고 소진 후
-C++ 생성은 `config_error_t(config_result_t::internal_error, EOVERFLOW)`, Rust 생성은
-`Err(ConfigError::new(ConfigResult::InternalError, EOVERFLOW))`로 실패하며 caller에 공개하지 않은 native
-socket은 정리한다.
+C++·Rust의 token owner는 ROUTER wrapper가 생성 시 만드는 heap owner tag
+(C++ `std::shared_ptr<const void>`, Rust `Arc`)이고 token이 tag를 공유 보유해
+close/recreate 뒤 주소 재사용 ABA가 없다. 별도 nonce 발급·process-lifetime 재사용
+금지·소진 오류 규칙은 두지 않는다.
 
 Reply는 C의 `zlink_reply_part(router, source_rid, reply_token, part, part_flag)`와 모든
 고수준 binding의 flag-없는 `ReplySubmitOperation.Submit/submit()`으로 고정한다. C++·Go·
@@ -785,12 +784,14 @@ C++·.NET·Java/Kotlin·Node·Python·Rust의 sync terminal은 Core `NONE`, awai
 terminal은 Core `DONTWAIT`를 사용한다. Go는 단일 `Submit(context.Context)`에서
 Core `DONTWAIT`로 접수한 뒤 internal completion을 기다린다. 모든 고수준 binding에서
 send/request flags, reply flags, send operation timeout, request callback terminal을 제거한다. Publish flags와
-request reply timeout은 별도 계약이므로 유지한다.
+request reply timeout은 별도 계약이므로 유지한다. Publish가 공용 send operation type을
+재사용하는 Go·Python은 draft §11.7·§11.8의 별도 `PublishOp`로 분리해 기존 publish
+flags·submit 의미를 보존한다.
 
 모든 binding은 언어별 opaque `ReplyToken`을 추가하고 public numeric constructor·raw
 변환을 두지 않는다. `request_seq` 표면은 `reply_token`으로 바꾸고 ROUTER REQUEST
 recv만 token을 만든다. Internal 생성은 draft §11.1의 C++ friend, .NET internal constructor,
-Java non-exported `ContractAccess`, Node module-private closure, Python module-private identity side-table factory,
+Java non-exported `ContractAccess`, Node module-private closure, Python module-private factory,
 Go unexported literal, Rust `pub(crate) from_native` 경로로만 구현하고 public test/raw factory를
 만들지 않는다. STREAM은 `UNSPECIFIED/RAW/PACKET` mode, mode getter/setter,
 reusable packet output과 packet recv를 추가한다. Setter는 `UNSPECIFIED`를 거부하고
@@ -838,17 +839,17 @@ Core 0.16.0 exact dependency를 갖게 한다.
 각 binding은 다음을 함께 고친다.
 
 - 위 표의 exact send/request public signature와 completion tagged record FFI
+- Go·Python publish의 별도 `PublishOp` 분리와 기존 publish flags·submit 의미 보존,
+  .NET `IStreamSocket.RecvPart`의 `Recv(Received, RecvFlags)` 대체
 - STREAM RAW/PACKET option과 packet recv
 - Monitor·timer·recv callback 제거와 exact pull wrapper
 - Exact pair/generation type·field·method 제거
 - `ReplyToken` strong type과 request sequence rename
 - ROUTER recv-only internal token factory, same-owner equality/hash·different-owner inequality,
   default/zero invalid와 raw conversion·serialization 부재
-- C++·Rust process-wide owner nonce의 move 유지·close 후 non-reuse·overflow 생성 실패,
-  ROUTER close/recreate 후 같은 raw token value의 stale-token inequality·reply pre-native 거부
-- Python `ReplyToken`의 instance field 부재, `object.__setattr__`로 state를 변경할 수 없음,
-  `object.__new__()`로 만든 미등록 instance·side-table state 복제를 시도한 forged token의
-  reply 거부, weakref cleanup의 object-ID reuse ABA 방지,
+- C++·Rust shared owner tag의 wrapper move 후 유지, ROUTER close/recreate 뒤 stale token의
+  owner 불일치·reply pre-native 거부
+- Python `ReplyToken`의 public construction 실패와
   `copy.copy()`·`copy.deepcopy()`가 반환한 동일 valid token의 reply 허용
 - Operation factory 반환 type과 유지할 모든 builder method—Python `message/messages` 포함—의
   compile/contract test
@@ -1352,7 +1353,7 @@ unrelated 모듈을 정리하지 않는다. 불필요 코드 제거는 callback�
       pre-return drain을 exactly once settle하고 synchronous failure에 completion이 없다.
 - [ ] Non-OK error-reply payload는 C만 노출하고 나머지 binding은 typed error settle 전
       native aggregate를 한 번 정리하며 새 error-payload API가 없다.
-- [ ] C++·Rust token owner nonce가 process lifetime non-reuse·overflow 계약을 지키고,
+- [ ] C++·Rust token owner tag가 close/recreate 뒤 stale token의 owner 불일치 거부를 지키고,
       Rust `StreamPacket::close(self)`는 다른 binding의 idempotent close test와 분리된다.
 - [ ] Binding 여덟 개의 모든 지원 pattern·transport 1024-byte perf smoke가 통과한다.
 - [ ] Core·binding guide가 실제 public sample과 일치하고 독립 2축 review를 통과한다.
