@@ -51,7 +51,7 @@ correlation은 framework가 처리한다.
 
 ## 2. 사용이 필요한 상황
 
-### 실시간 게임 서버 구축
+### 2.1 실시간 게임 서버 구축
 
 **무엇이 어려운가.** 게임 서버에는 웹의 `ASP.NET Core`/Spring 같은 표준화된
 프레임워크가 없다. 우연이 아니라 이유가 있다.
@@ -206,7 +206,7 @@ task_t<mark_result_t> bingo_room_spot_t::mark_number (const mark_number_t &reque
 실행되는 근거 샘플: [TicTacToe](../../../common/sample/tictactoe/README.ko.md) ·
 [Bingo](../../../common/sample/bingo/README.ko.md) · [GameQuest](../../../common/sample/event/gamequest.ko.md)
 
-### 하나의 엔티티에 대한 동시 접근
+### 2.2 하나의 엔티티에 대한 동시 접근
 
 **왜 어려운가.** 길드처럼 **서로 다른 여러 유저가 같은 엔티티를 동시에 수정**해야
 하는 경우가 있다. 두 유저가 동시에 가입을 신청해 정원을 넘기거나, 두 기부가 동시에
@@ -256,7 +256,7 @@ co_await spots.request_to_spot (guild_id, join_guild_req_t{user_id})
 이 시나리오는 아직 실행 가능한 기준 샘플이 없다 — 위 코드는 GameQuest의
 `PlayerQuestSpot` 등록·호출 방식과 같은 API 표면을 길드에 적용한 것이다.
 
-### 기존 웹 서비스의 실시간 기능 추가
+### 2.3 기존 웹 서비스의 실시간 기능 추가
 
 **왜 복잡도가 올라가는가.** **배달 주문 앱**을 떠올려 보자 — 주문 넣기·조회는 평범한
 HTTP 요청/응답이지만, "준비 중 → 배달 출발 → 곧 도착" 상태는 앱을 새로고침하지 않아도
@@ -321,7 +321,7 @@ co_await actor.context ().bound_session ().send (order_status_changed_t{order_id
 실행되는 근거 샘플: [SupportChat](../../../common/sample/supportchat/README.ko.md) ·
 [DeliveryDispatch](../../../common/sample/deliverydispatch/README.ko.md)
 
-### 이벤트 중심 업무 처리 단순화
+### 2.4 이벤트 중심 업무 처리 단순화
 
 ZLink의 사용 지점은 실시간 기능만이 아니다. 주문 처리·정산·재고처럼 **같은 엔티티의
 이벤트를 순서대로, 중복 없이 처리해야 하는** 업무는 화면에 실시간 push가 하나도 없어도

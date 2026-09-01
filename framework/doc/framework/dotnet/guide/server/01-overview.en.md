@@ -57,7 +57,7 @@ routing, reconnect, and correlation.
 
 ## 2. Situations Where You Need It
 
-### Building A Real-Time Game Server
+### 2.1 Building A Real-Time Game Server
 
 **What makes it hard.** Game servers have no standardized framework like the web's
 `ASP.NET Core`/Spring. This isn't an accident — there's a reason.
@@ -229,7 +229,7 @@ every message for one room (requests, subscription events, timer ticks, actor pa
 Runnable reference samples: [TicTacToe](../../../common/sample/tictactoe/README.en.md) ·
 [Bingo](../../../common/sample/bingo/README.en.md) · [GameQuest](../../../common/sample/event/gamequest.en.md)
 
-### Concurrent Access To One Entity
+### 2.2 Concurrent Access To One Entity
 
 **Why it's hard.** There are cases, like a guild, where **several different users need to
 modify the same entity at the same time.** Just like two users applying to join at the same
@@ -283,7 +283,7 @@ await spots.RequestToSpot(guildId, new JoinGuildReq(userId))
 There's no runnable reference sample for this scenario yet — the code above applies the same
 API surface as GameQuest's `PlayerQuestSpot` registration/call approach to a guild.
 
-### Adding Real-Time Features To An Existing Web Service
+### 2.3 Adding Real-Time Features To An Existing Web Service
 
 **Why complexity goes up.** The standard shape of a large web service — Spring/`ASP.NET
 Core` + Redis (cache) + Kafka (events) + LB/K8s — is optimized for **stateless
@@ -352,7 +352,7 @@ await actor.Context.BoundSession.Send(new OrderStatusChanged(orderId, status)).A
 Runnable reference samples: [SupportChat](../../../common/sample/supportchat/README.en.md) ·
 [DeliveryDispatch](../../../common/sample/deliverydispatch/README.en.md)
 
-### Simplifying Event-Driven Business Processing
+### 2.4 Simplifying Event-Driven Business Processing
 
 Where ZLink applies isn't limited to real-time features. Business processes like order
 handling, settlement, and inventory — where **the same entity's events must be processed in
