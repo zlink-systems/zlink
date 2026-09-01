@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Room creation and authentication / entry",
+    "subtitle": "the Spot manager issues RoomId and chooses the owner — the ingress doesn't change the owner",
+    "output": "sample-tictactoe-create-auth-en.html",
+    "column_fit": "spread",
+    "viewBox": [1046, 1180],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Client" },
+    { "id": "API", "type": "frontend", "label": "Api A/B" },
+    { "id": "M", "type": "backend", "label": "Spot Manager" },
+    { "id": "P", "type": "backend", "label": "Play Session" },
+    { "id": "A", "type": "backend", "label": "Player Actor" },
+    { "id": "R", "type": "backend", "label": "Room Spot" }
+  ],
+  "messages": [
+    { "from": "C", "to": "API", "y": 160, "label": "CreateGameHttpReq", "variant": "default" },
+    { "from": "API", "to": "M", "y": 208, "label": "create Room Spot (TicTacToeGameCreateReq)", "variant": "default" },
+    { "from": "M", "to": "R", "y": 256, "label": "create and initialize Room Spot", "variant": "default" },
+    { "from": "R", "to": "M", "y": 304, "label": "accept creation", "variant": "return" },
+    { "from": "M", "to": "API", "y": 352, "label": "creation result (RoomId)", "variant": "return" },
+    { "from": "API", "to": "C", "y": 400, "label": "CreateGameHttpRes(RoomId, RequiredLevel, ...)", "variant": "return" },
+    { "from": "C", "to": "P", "y": 448, "label": "AuthenticateReq", "variant": "default" },
+    { "from": "P", "to": "API", "y": 496, "label": "via tictactoe.api → AuthenticatePlayerReq", "variant": "default" },
+    { "from": "API", "to": "P", "y": 544, "label": "AuthenticatePlayerRes(PlayerInfo)", "variant": "return" },
+    { "from": "P", "to": "A", "y": 592, "label": "GetOrCreate(PlayerActorCreateReq)", "variant": "default" },
+    { "from": "A", "to": "P", "y": 640, "label": "current ActorRef", "variant": "return" },
+    { "from": "P", "to": "C", "y": 688, "label": "AuthenticateRes(PlayerInfo)", "variant": "return" },
+    { "from": "C", "to": "P", "y": 736, "label": "JoinGameMsg(RoomId)", "variant": "default" },
+    { "from": "P", "to": "A", "y": 784, "label": "dispatch JoinGameMsg to bound Actor", "variant": "default" },
+    { "from": "A", "to": "R", "y": 832, "label": "TicTacToeGameJoinReq(PlayerInfo)", "variant": "default" },
+    { "from": "R", "to": "A", "y": 880, "label": "TicTacToeGameJoinRes", "variant": "return" },
+    { "from": "A", "to": "P", "y": 928, "label": "push JoinGameNotify to current session", "variant": "return" },
+    { "from": "P", "to": "C", "y": 976, "label": "JoinGameNotify", "variant": "return" },
+    { "from": "R", "to": "P", "y": 1024, "label": "PlayerJoinedNotify to existing member", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Participants and ingress note",
+      "items": [
+        "Api A/B = Api A or Api B; Spot Manager = Framework Spot Manager; Play Session = Play A or Play B Session.",
+        "The host uses Play A; the guest and observer use Play B. (mermaid Note over Client,Play)",
+        "CreateGameHttpRes carries RoomId, RequiredLevel, PlayEndpoints, PlayNodes, and GameName."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Create, authenticate, join",
+      "items": [
+        "The Spot manager issues the RoomId and chooses the owner; the owner doesn't change based on the Play ingress the client uses.",
+        "P selects one Api through tictactoe.api and sends AuthenticatePlayerReq; then GetOrCreate with PlayerActorCreateReq(PlayerInfo).",
+        "R checks Level >= RequiredLevel (mermaid self-step) before replying TicTacToeGameJoinRes.",
+        "A join failure is reported by JoinGameFailedNotify on the current session; JoinGameMsg or PlaceMarkReq before authentication ends in an error."
+      ]
+    }
+  ]
+}

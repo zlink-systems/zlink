@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "구현 구조 — Client · Shared · Server",
+    "subtitle": "모든 언어가 같은 logical component를 같은 순서·책임으로 구현한다",
+    "output": "sample-delivery-structure.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 4, "gapX": 74, "gapY": 80, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "cl-prog", "type": "frontend", "label": "Program", "row": 0, "col": 0 },
+    { "id": "cl-scen", "type": "frontend", "label": "Scenario", "sublabel": "customer·courier·§9 assertion", "row": 0, "col": 1 },
+
+    { "id": "sh-conf", "type": "external", "label": "Configuration", "sublabel": "role·Mesh·Channel·timeout", "row": 1, "col": 0 },
+    { "id": "sh-json", "type": "external", "label": "JSON Contracts", "sublabel": "message·field·enum·optional", "row": 1, "col": 1 },
+
+    { "id": "d-prog", "type": "frontend", "label": "Program", "row": 2, "col": 0 },
+    { "id": "d-app", "type": "frontend", "label": "Application", "sublabel": "DispatchWorker·OfferPolicy", "row": 2, "col": 1 },
+    { "id": "d-infra", "type": "frontend", "label": "Infrastructure", "sublabel": "Http·RouteMesh·Evidence", "row": 2, "col": 2 },
+
+    { "id": "cs-prog", "type": "frontend", "label": "Program", "row": 3, "col": 0 },
+    { "id": "cs-infra", "type": "frontend", "label": "Infrastructure", "sublabel": "Stream·Binding·ActorClient", "row": 3, "col": 1 },
+
+    { "id": "cn-prog", "type": "backend", "label": "Program", "row": 4, "col": 0 },
+    { "id": "cn-dom", "type": "backend", "label": "Domain", "sublabel": "CourierState·OfferDecision", "row": 4, "col": 1 },
+    { "id": "cn-app", "type": "backend", "label": "Application", "sublabel": "OfferHandler·AttemptGuard", "row": 4, "col": 2 },
+    { "id": "cn-infra", "type": "backend", "label": "Infrastructure", "sublabel": "EntrySpot·CourierActorAdapter", "row": 4, "col": 3 },
+
+    { "id": "t-prog", "type": "frontend", "label": "Program", "row": 5, "col": 0 },
+    { "id": "t-dom", "type": "frontend", "label": "Domain", "sublabel": "DeliveryStatus·StatusTransition", "row": 5, "col": 1 },
+    { "id": "t-app", "type": "frontend", "label": "Application", "sublabel": "StatusWorkflow·EvidenceWriter", "row": 5, "col": 2 },
+    { "id": "t-infra", "type": "frontend", "label": "Infrastructure", "sublabel": "TrackingHandler·StatusStore", "row": 5, "col": 3 },
+
+    { "id": "cg-prog", "type": "frontend", "label": "Program", "row": 6, "col": 0 },
+    { "id": "cg-infra", "type": "frontend", "label": "Infrastructure", "sublabel": "Stream·Binding·ActorClient", "row": 6, "col": 1 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Client", "wraps": ["cl-prog", "cl-scen"] },
+    { "kind": "region", "label": "Shared", "wraps": ["sh-conf", "sh-json"] },
+    { "kind": "region", "label": "Server / Dispatch — HTTP·배차 worker", "wraps": ["d-prog", "d-app", "d-infra"] },
+    { "kind": "region", "label": "Server / CourierSession — STREAM·binding", "wraps": ["cs-prog", "cs-infra"] },
+    { "kind": "region", "label": "Server / CourierActorNode — Entry Spot·Courier Actor", "wraps": ["cn-prog", "cn-dom", "cn-app", "cn-infra"] },
+    { "kind": "region", "label": "Server / Tracking — status·evidence", "wraps": ["t-prog", "t-dom", "t-app", "t-infra"] },
+    { "kind": "region", "label": "Server / CustomerGateway — STREAM·binding", "wraps": ["cg-prog", "cg-infra"] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "트리 경계",
+      "items": [
+        "루트 DeliveryDispatch의 top-level 3개: Client · Shared · Server. Server가 Dispatch·CourierSession·CourierActorNode·Tracking·CustomerGateway를 담는다.",
+        "색: Client는 파랑(client app). CourierActorNode는 초록(Entry Spot·Courier Actor를 실행하는 object server). Dispatch·CourierSession·Tracking·CustomerGateway는 파랑(edge·session·status app). Shared는 회색(로케일 중립 공통 자산).",
+        "Client { Program, Scenario } · Shared { Configuration, JSON Contracts }."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "server 하위 파일",
+      "items": [
+        "Dispatch: Application { DispatchWorker, OfferPolicy } · Infrastructure { HttpHandlers, RouteMeshClients, DispatchEvidenceAdapter }.",
+        "CourierSession: Infrastructure { StreamSession, CourierBindingAdapter, CourierActorClient }.",
+        "CourierActorNode: Domain { CourierState, OfferDecision } · Application { OfferHandler, AttemptGuard } · Infrastructure { EntrySpot, CourierActorAdapter }.",
+        "Tracking: Domain { DeliveryStatus, StatusTransition } · Application { StatusWorkflow, EvidenceWriter } · Infrastructure { TrackingHandler, StatusStoreAdapter }.",
+        "CustomerGateway: Infrastructure { StreamSession, CustomerBindingAdapter, CustomerActorClient }."
+      ]
+    }
+  ]
+}

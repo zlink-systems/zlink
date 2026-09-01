@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "The Wins 100 milestone",
+    "subtitle": "the host's win brings Wins to 100 · the observer on another ingress gets WinMilestoneNotify",
+    "output": "sample-tictactoe-milestone-en.html",
+    "column_fit": "spread",
+    "viewBox": [1046, 700],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "O", "type": "frontend", "label": "Observer Client" },
+    { "id": "OP", "type": "backend", "label": "Observer Play" },
+    { "id": "E", "type": "backend", "label": "Entry Spot" },
+    { "id": "R", "type": "backend", "label": "Room Spot" },
+    { "id": "HP", "type": "backend", "label": "Host Play" },
+    { "id": "H", "type": "frontend", "label": "Host Client" }
+  ],
+  "messages": [
+    { "from": "O", "to": "OP", "y": 160, "label": "ObserveMilestoneReq", "variant": "default" },
+    { "from": "OP", "to": "E", "y": 208, "label": "dispatch to bound Actor's Entry handler", "variant": "default" },
+    { "from": "E", "to": "OP", "y": 256, "label": "ObserveMilestoneRes(subscribed=true)", "variant": "return" },
+    { "from": "OP", "to": "O", "y": 304, "label": "ObserveMilestoneRes", "variant": "return" },
+    { "from": "H", "to": "HP", "y": 352, "label": "final PlaceMarkReq", "variant": "default" },
+    { "from": "HP", "to": "R", "y": 400, "label": "dispatch to bound Actor's Room handler", "variant": "default" },
+    { "from": "R", "to": "E", "y": 448, "label": "PlayerWinMilestoneEvent", "variant": "return" },
+    { "from": "E", "to": "OP", "y": 496, "label": "WinMilestoneNotify to observer session", "variant": "return" },
+    { "from": "OP", "to": "O", "y": 544, "label": "WinMilestoneNotify", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Subscribe then publish",
+      "items": [
+        "Observer Play = Observer Play Session; Host Play = Host Play Session; Entry Spot = Play Entry Spot.",
+        "The fake user source gives the host Wins=99; the host's win in this game brings it to 100.",
+        "R computes Wins=100 (mermaid self-step), then publishes PlayerWinMilestoneEvent to a subscribed Entry Spot."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Publish is not the result",
+      "items": [
+        "Multicast publish completion doesn't mean the subscriber handler finished or the win is confirmed.",
+        "The Room Spot decides the win and board state; the milestone only announces an already-decided value."
+      ]
+    }
+  ]
+}

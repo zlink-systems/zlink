@@ -1,0 +1,191 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Duplicate start and resume after interruption",
+    "subtitle": "same IdempotencyKey converges on one OrderId — recovery replays the stream before choosing the next step",
+    "output": "sample-shoppingmall-duplicate-resume-en.html",
+    "column_fit": "spread",
+    "viewBox": [
+      1240,
+      1010
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "participants": [
+    {
+      "id": "ClientA",
+      "type": "frontend",
+      "label": "Client A"
+    },
+    {
+      "id": "ClientB",
+      "type": "frontend",
+      "label": "Client B"
+    },
+    {
+      "id": "APIA",
+      "type": "frontend",
+      "label": "CommerceApi A"
+    },
+    {
+      "id": "APIB",
+      "type": "frontend",
+      "label": "CommerceApi B"
+    },
+    {
+      "id": "State",
+      "type": "database",
+      "label": "Commerce State"
+    },
+    {
+      "id": "Workflow",
+      "type": "backend",
+      "label": "OrderWorkflow",
+      "sublabel": "/ Order Spot"
+    },
+    {
+      "id": "Events",
+      "type": "database",
+      "label": "Order Event Store"
+    },
+    {
+      "id": "Payment",
+      "type": "external",
+      "label": "Payment"
+    }
+  ],
+  "messages": [
+    {
+      "from": "ClientA",
+      "to": "APIA",
+      "y": 160,
+      "label": "[par] StartOrderReq(same IdempotencyKey)",
+      "variant": "default"
+    },
+    {
+      "from": "APIA",
+      "to": "State",
+      "y": 208,
+      "label": "[par] Reserve mapping",
+      "variant": "default"
+    },
+    {
+      "from": "ClientB",
+      "to": "APIB",
+      "y": 256,
+      "label": "[par] StartOrderReq(same IdempotencyKey)",
+      "variant": "default"
+    },
+    {
+      "from": "APIB",
+      "to": "State",
+      "y": 304,
+      "label": "[par] Reserve mapping",
+      "variant": "default"
+    },
+    {
+      "from": "State",
+      "to": "APIA",
+      "y": 352,
+      "label": "One OrderId",
+      "variant": "return"
+    },
+    {
+      "from": "State",
+      "to": "APIB",
+      "y": 400,
+      "label": "Same OrderId",
+      "variant": "return"
+    },
+    {
+      "from": "APIA",
+      "to": "Workflow",
+      "y": 448,
+      "label": "StartOrderWorkflowReq",
+      "variant": "default"
+    },
+    {
+      "from": "APIB",
+      "to": "Workflow",
+      "y": 496,
+      "label": "StartOrderWorkflowReq",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 544,
+      "label": "Deduplicate SourceCommandId",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "APIA",
+      "y": 592,
+      "label": "StartOrderWorkflowRes",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "APIB",
+      "y": 640,
+      "label": "StartOrderWorkflowRes",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 688,
+      "label": "Replay OrderId stream",
+      "variant": "default"
+    },
+    {
+      "from": "Events",
+      "to": "Workflow",
+      "y": 736,
+      "label": "InventoryReserved state",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "Payment",
+      "y": 784,
+      "label": "AuthorizePaymentReq(existing PaymentId)",
+      "variant": "default"
+    },
+    {
+      "from": "Payment",
+      "to": "Workflow",
+      "y": 832,
+      "label": "Authorization result",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 880,
+      "label": "Append Payment event with expected version",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Concurrent start (mermaid par ... and ...)",
+      "items": [
+        "Messages 1-4 ([par]-tagged) run concurrently, not sequentially: Client A → CommerceApi A → Commerce State and Client B → CommerceApi B → Commerce State happen at the same time. Whichever request first succeeds at reserving the mapping decides the OrderId; the other discards its candidate and uses the same one."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Recovery replays the stream before choosing the next step",
+      "items": [
+        "mermaid Note over Workflow,Events (positioned right before 'Replay OrderId stream'): 'Recovery replays the stream before choosing the next step.'",
+        "If SourceCommandId is already in the stream, the Workflow doesn't re-record the event — it returns the fold result. The Workflow replays to confirm the last-recorded state (e.g. InventoryReserved), skips the completed step, and runs from payment onward. This rule applies both to an explicit ContinueOrderWorkflowReq and to resumption after a planned relocation."
+      ]
+    }
+  ]
+}

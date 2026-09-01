@@ -64,27 +64,8 @@ another node.
 The only role the Client connects to directly is Session. API, Matchmaking, and Play communicate
 over server-to-server channels and RouteMesh.
 
-```mermaid
-flowchart LR
-    subgraph Clients[Clients]
-        PC[Player Clients x2]
-        OC[Observer Client x1]
-    end
-
-    subgraph Servers[Servers]
-        S[Session Servers x2]
-        A[API Servers x2]
-        M[Matchmaking Server x1]
-        P[Play Servers x2]
-    end
-
-    PC ---|STREAM| S
-    OC ---|STREAM| S
-    S ---|bingo.api| A
-    S ---|bingo.play| P
-    A ---|bingo.play| P
-    A ---|bingo.matchmaking| M
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-topology-en.html" title="System composition and topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-topology-en.html" target="_blank">↗ View larger</a></p>
 
 | Logical Connection | Role |
 |---|---|
@@ -410,22 +391,8 @@ boundaries omitted from the diagram.
 
 ### 7.1 Authentication And Binding
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Session
-    participant API
-    participant Play
-
-    Client->>Session: AuthenticateReq
-    Session->>API: AuthenticatePlayerReq
-    API-->>Session: AuthenticatePlayerRes
-    Session->>Play: Get or create Player Actor
-    Play-->>Session: ActorRef
-    Session->>Session: Bind current STREAM session
-    Session-->>Client: AuthenticateRes
-    Note over Session,Play: Later packets use the stored binding route
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-auth-binding-en.html" title="Authentication and binding" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-auth-binding-en.html" target="_blank">↗ View larger</a></p>
 
 1. The Client sends `AuthenticateReq` over the Session STREAM.
 2. Session asks API to validate the token.
@@ -440,51 +407,8 @@ relocation, the Framework updates the binding route.
 
 ### 7.2 Matching And Game Start
 
-```mermaid
-sequenceDiagram
-    participant Player1 as Player Client 1
-    participant Player2 as Player Client 2
-    participant Session
-    participant Actor1 as Play / Player Actor 1
-    participant Actor2 as Play / Player Actor 2
-    participant API
-    participant Matchmaker as Matchmaking
-    participant Room as Play / Room
-
-    Player1->>Session: MatchBingoReq
-    Session->>Actor1: Relay through binding
-    Actor1->>API: MatchBingoApiReq
-    API->>Matchmaker: ReserveBingoRoomReq
-    Matchmaker-->>API: ReserveBingoRoomRes
-    API->>Room: Get or create Room
-    Room-->>API: Ready
-    Actor1->>Actor1: Register deferred Room join
-    Actor1-->>Session: MatchBingoRes(WaitingForPlayers)
-    Session-->>Player1: MatchBingoRes
-    Note over Actor1,Room: The handler returns, then the deferred join runs
-    Actor1->>Room: Join Player 1
-    Room-->>Actor1: Join accepted
-
-    Player2->>Session: MatchBingoReq
-    Session->>Actor2: Relay through binding
-    Actor2->>API: MatchBingoApiReq
-    API->>Matchmaker: ReserveBingoRoomReq
-    Matchmaker-->>API: Same RoomId and settings
-    Actor2->>Actor2: Register deferred Room join
-    par Match result
-        Actor2-->>Session: MatchBingoRes(WaitingForPlayers)
-        Session-->>Player2: MatchBingoRes
-    and Deferred join after handler return
-        Actor2->>Room: Join Player 2
-        Room->>Room: State = Running
-        Room-->>Actor1: BingoGameStartedNotify
-        Room-->>Actor2: BingoGameStartedNotify
-        Actor1-->>Session: BingoGameStartedNotify
-        Actor2-->>Session: BingoGameStartedNotify
-        Session-->>Player1: BingoGameStartedNotify
-        Session-->>Player2: BingoGameStartedNotify
-    end
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-matching-start-en.html" title="Matching and game start" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-matching-start-en.html" target="_blank">↗ View larger</a></p>
 
 1. `player-1` sends `MatchBingoReq`.
 2. API requests a reservation from the level bucket's Matchmaker Instance Spot.
@@ -512,33 +436,8 @@ The Observer doesn't look up the player record.
 
 ### 7.3 Card, Draw, And Winner Decision
 
-```mermaid
-sequenceDiagram
-    participant Players as Player Clients
-    participant Session
-    participant Actors as Play / Player Actors
-    participant Room as Play / Room
-
-    Players->>Session: SubmitBingoCardReq
-    Session->>Actors: Relay through binding
-    Actors->>Room: Submit card
-    Room-->>Actors: Card accepted
-    Actors-->>Session: SubmitBingoCardRes
-    Session-->>Players: SubmitBingoCardRes
-    Room->>Room: Start logical draw timer
-
-    loop Each draw tick
-        Room->>Room: Draw number and update marks
-        Room-->>Actors: BingoNumberDrawnNotify
-        Actors-->>Session: BingoNumberDrawnNotify
-        Session-->>Players: BingoNumberDrawnNotify
-    end
-
-    Room->>Room: Select winner and set Finished
-    Room-->>Actors: BingoGameEndedNotify
-    Actors-->>Session: BingoGameEndedNotify
-    Session-->>Players: BingoGameEndedNotify
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-card-draw-en.html" title="Card, draw, and winner decision" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-card-draw-en.html" target="_blank">↗ View larger</a></p>
 
 1. Once both players confirm the start push, they each submit a different deterministic card.
 2. The Room validates card size, number range, and duplicates, and marks the center free cell.
@@ -555,32 +454,8 @@ implement game rules either.
 
 ### 7.4 Reward Observation
 
-```mermaid
-sequenceDiagram
-    participant Observer as Observer Client
-    participant Session
-    participant ObserverActor as Play / Observer Actor
-    participant ObserverRoom as Play / Observer Room
-    participant GameRoom as Play / Game Room
-
-    Observer->>Session: ObserveBingoEventsReq
-    Session->>ObserverActor: Relay through binding
-    ObserverActor->>ObserverRoom: Join observed RoomId
-    ObserverRoom-->>ObserverActor: Subscribed
-    ObserverActor-->>Session: ObserveBingoEventsRes
-    Session-->>Observer: ObserveBingoEventsRes
-
-    GameRoom-->>ObserverRoom: BingoRewardAcquiredEvent
-    ObserverRoom-->>ObserverActor: BingoRewardAnnouncedNotify
-    ObserverActor-->>Session: BingoRewardAnnouncedNotify
-    Session-->>Observer: BingoRewardAnnouncedNotify
-
-    Observer->>Session: StopObservingBingoEventsReq
-    Session->>ObserverActor: Relay through binding
-    ObserverActor->>ObserverRoom: Leave
-    ObserverActor-->>Session: StopObservingBingoEventsRes
-    Session-->>Observer: StopObservingBingoEventsRes
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-reward-observe-en.html" title="Reward observation" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-reward-observe-en.html" target="_blank">↗ View larger</a></p>
 
 The game room first confirms the end result, submits the player push, and then publishes
 `BingoRewardAcquiredEvent` to the `bingo.room.reward` topic. Each Play node's local observation
@@ -623,22 +498,8 @@ Player Actor cleanup after the game ends runs in a separate order.
 - Disconnect cleanup alone doesn't trigger actor destroy.
 - A stream disconnect cleans up the bound session but doesn't immediately destroy the actor.
 
-```mermaid
-sequenceDiagram
-    participant Room as Play / Room
-    participant PlayerActor as Play / Player Actor
-    participant API
-    participant EntrySpot as Play / Entry Spot
-
-    Room->>PlayerActor: Mark destroy after Entry Spot
-    Room->>PlayerActor: Leave Room
-    Room->>API: ReportBingoResultReq
-    API-->>Room: ReportBingoResultRes
-    Note over PlayerActor,EntrySpot: Framework relocates the Actor after leave
-    EntrySpot->>EntrySpot: Invoke join callback
-    EntrySpot->>PlayerActor: Destroy Actor
-    Note over EntrySpot,PlayerActor: Destroy does not invoke the leave callback
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-end-cleanup-en.html" title="Disconnect and end cleanup" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-end-cleanup-en.html" target="_blank">↗ View larger</a></p>
 
 1. The Room records state so cleanup only starts once.
 2. It marks each player Actor to destroy after returning to the Entry Spot, and leaves the room.
@@ -686,44 +547,8 @@ Language-specific package, namespace, file extension, and build module represent
 But merging roles or moving them to a different layer in only one language, reinterpreting the
 structure, isn't allowed.
 
-```text
-Bingo Sample
-+-- Client
-|   +-- Program
-|   +-- Scenario
-+-- Shared
-|   +-- Configuration
-|   +-- Protobuf Contracts
-+-- Server
-    +-- API
-    |   +-- Program
-    |   +-- Handlers
-    |   +-- Player Record Store
-    +-- Matchmaking
-    |   +-- Program
-    |   +-- Application
-    |   +-- Infrastructure
-    |       +-- Redis Adapter
-    |       +-- Instance Spot Adapter
-    +-- Session
-    |   +-- Program
-    |   +-- STREAM Session
-    |       +-- Handlers
-    +-- Play
-        +-- Program
-        +-- Domain
-        |   +-- Bingo Card
-        |   +-- Bingo Game
-        |   +-- Bingo Room State
-        +-- Infrastructure
-            +-- Player Actor
-            |   +-- Actor Relocation Adapter
-            +-- Entry Spot
-            |   +-- Handlers
-            +-- Bingo Room Spot
-                +-- Room Relocation Adapter
-                +-- Handlers
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-structure-en.html" title="Bingo implementation structure" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-structure-en.html" target="_blank">↗ View larger</a></p>
 
 | Logical Component | Responsibility Kept In Every Language |
 |---|---|
@@ -894,3 +719,7 @@ An implementation that turns on observability features uses the per-language exa
 [Graceful Drain](../../spec/server/05-location-relocation/05-host-relocation-flow.en.md). Observability configuration and a
 100-Actor relocation workload aren't success criteria for this base sample — they're verified by
 [Config 11 Observability/Ops E2E](../../e2e/config-11-observability-ops.en.md).
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

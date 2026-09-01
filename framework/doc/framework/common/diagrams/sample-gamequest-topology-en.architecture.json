@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "System composition and topology",
+    "subtitle": "two GameApis, two QuestMissions share one gamequest RouteMesh · owner selected per PlayerId",
+    "output": "sample-gamequest-topology-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 110, "gapY": 90, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C1", "type": "frontend", "label": "Game Client A", "row": 0, "col": 0 },
+    { "id": "C2", "type": "frontend", "label": "Game Client B", "row": 3, "col": 0 },
+    { "id": "G1", "type": "frontend", "label": "GameApi 1", "row": 0, "col": 1 },
+    { "id": "G2", "type": "frontend", "label": "GameApi 2", "row": 3, "col": 1 },
+    { "id": "Q1", "type": "backend", "label": "QuestMission 1", "row": 1, "col": 2 },
+    { "id": "Q2", "type": "backend", "label": "QuestMission 2", "row": 2, "col": 2 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Clients", "wraps": ["C1", "C2"] },
+    { "kind": "region", "label": "Servers", "wraps": ["G1", "G2", "Q1", "Q2"] }
+  ],
+  "connections": [
+    { "from": "C1", "to": "G1", "label": "STREAM", "variant": "default" },
+    { "from": "C2", "to": "G2", "label": "STREAM", "variant": "default" },
+    { "from": "G1", "to": "Q1", "label": "gamequest RouteMesh", "variant": "default" },
+    { "from": "G1", "to": "Q2", "variant": "default" },
+    { "from": "G2", "to": "Q1", "variant": "default" },
+    { "from": "G2", "to": "Q2", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Roles",
+      "items": [
+        "GameApi owns the session actor and gameplay edge, distributing connections. QuestMission provides the PlayerQuestSpot Instance factory.",
+        "The Framework selects the owner per PlayerId using Location Store authority and capacity.",
+        "The two roles share one RouteMesh, without creating a per-mission ChannelName."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Message roles",
+      "items": [
+        "STREAM delivers client requests, responses, and pushes.",
+        "RouteMesh delivers Spot direct messages between GameApi and QuestMission nodes."
+      ]
+    }
+  ]
+}

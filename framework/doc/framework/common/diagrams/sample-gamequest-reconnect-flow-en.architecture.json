@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Duplication and reconnect",
+    "subtitle": "the same IdempotencyKey maps to the same source EventId · reconnect rebinds the session, not the owner state",
+    "output": "sample-gamequest-reconnect-flow-en.html",
+    "column_fit": "spread",
+    "viewBox": [1000, 800],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Game Client" },
+    { "id": "G", "type": "frontend", "label": "GameApi" },
+    { "id": "P", "type": "backend", "label": "PlayerQuestSpot" }
+  ],
+  "messages": [
+    { "from": "C", "to": "G", "y": 160, "label": "STREAM reconnect", "variant": "default" },
+    { "from": "C", "to": "G", "y": 208, "label": "JoinSessionReq(player-1)", "variant": "default" },
+    { "from": "G", "to": "C", "y": 256, "label": "JoinSessionRes(active quests)", "variant": "return" },
+    { "from": "C", "to": "G", "y": 304, "label": "GetQuestProgressReq", "variant": "default" },
+    { "from": "G", "to": "P", "y": 352, "label": "GetQuestProgressReq(player-1)", "variant": "default" },
+    { "from": "P", "to": "G", "y": 400, "label": "GetQuestProgressRes", "variant": "return" },
+    { "from": "G", "to": "C", "y": 448, "label": "GetQuestProgressRes", "variant": "return" },
+    { "from": "C", "to": "G", "y": 496, "label": "KillMonsterReq(same key)", "variant": "default" },
+    { "from": "G", "to": "P", "y": 544, "label": "GameplayMsg(same eventId)", "variant": "default" },
+    { "from": "P", "to": "G", "y": 592, "label": "existing result, no duplicate event", "variant": "return" },
+    { "from": "G", "to": "C", "y": 640, "label": "existing result", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Dedupe and reconnect",
+      "items": [
+        "The same IdempotencyKey is converted to the same source EventId; PlayerQuestSpot checks the already-stored sourceEventId and doesn't re-append the domain event.",
+        "On reconnect, the same PlayerId session actor is bound, and progress is confirmed via GetQuestProgressReq."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "No binding, no push",
+      "items": [
+        "A notify sent while there's no session binding isn't a success condition — the state is recorded in the event store and restored via lookup after reconnect."
+      ]
+    }
+  ]
+}

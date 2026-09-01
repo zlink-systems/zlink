@@ -346,7 +346,7 @@ deadline 초과와 callback 실패는 서로 다른 결과값으로 구분된다
 
 ```java
 meshOptions.mesh("game.room").setPlacementWeight(0); // 새 object 배치 대상에서 제외
-meshOptions.channel("game.room").setWeight(0);      // 새 channel select-one 대상에서 제외
+meshOptions.channel("game.room").weight(0);      // 새 channel select-one 대상에서 제외
 ```
 
 두 weight는 독립적이며 실행 중 새 선택에 반영된다. Placement weight는 Actor·Spot create와 relocation

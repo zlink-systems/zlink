@@ -176,7 +176,7 @@ by area, makes ZLink's spot clear.
 | Social/meta features — friends, leaderboards, groups, chat | [Nakama](https://heroiclabs.com/nakama-gamelift/) | A backend server product |
 
 ZLink provides **connections/sessions (STREAM), rooms/state units (SPOT), inter-server
-messaging (channel), participant state (actor), and zero-downtime termination (drain)** among
+messaging (channel), participant state (actor), and zero-downtime termination (host relocation)** among
 these — but not as a dedicated runtime or managed service, as a **library layer on the major
 framework you already use.**
 
@@ -189,15 +189,8 @@ framework you already use.**
 And all of this stays inside the framework you already use — the opposite direction from
 bringing in a new engine and moving to a separate ecosystem.
 
-```text
-+-----------------------------------------------------------+
-|  ASP.NET Core / Spring / NestJS                           |
-|  DI, config, logging, deployment unchanged                |
-+-----------------------------------------------------------+
-|  ZLink Framework                                          |
-|  SPOT · actor · STREAM · drain                            |
-+-----------------------------------------------------------+
-```
+<iframe class="zlink-diagram" src="/common/diagrams/overview-stack-en.html" title="ZLink is a library layer on your framework" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/overview-stack-en.html" target="_blank">↗ View larger</a></p>
 
 **As code.** Declare one room, and write that room's progression logic.
 
@@ -340,12 +333,6 @@ Sticky LB, WebSocket server, pub/sub detour, distributed lock, mesh/discovery �
 shrink down to **one location store.** Inter-server calls and real-time delivery all connect
 directly, runtime to runtime.
 
-**This doesn't replace your existing stack.** Kafka stays exactly where it is, as a durable
-event stream, and Redis stays as cache/persistence support, in both pictures (which is why
-they're left out of the diagram). What ZLink cuts is the **complexity of connection,
-routing, and state management** you used to assemble by hand in between, for real-time
-delivery.
-
 **As code.** Where the distributed lock and sticky routing used to sit, the following code
 remains.
 
@@ -442,6 +429,10 @@ routing** instead of a log means most of the pieces above simply never need to b
 | Version check/distributed lock against redelivery | **Serial execution** — no concurrent writer for the same unit, so there's no lock/version contention on the normal path | [06 §3](06-spot.en.md) |
 | LB/service discovery for inter-server calls | **channel name + location store** — call by the name `"inventory"` and it sends directly to a currently available peer | [05](05-channel-messaging.en.md)·[10](10-location.en.md) |
 | Operating offset/lag/resync jobs | With no consumption pipeline, that operational item doesn't exist at all | |
+
+**This doesn't replace your existing stack.** Kafka stays exactly where it is, as a durable
+event stream, and Redis stays as cache/persistence support. What ZLink cuts is the
+**complexity of connection, routing, and state management** you used to assemble by hand in between.
 
 **The boundary stays where it is.** Where a durable log is genuinely needed — event replay,
 long-term retention, broad fan-out to independent systems — Kafka is the right fit and stays

@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "시스템 구성과 topology — 구조적 연결",
+    "subtitle": "Client·server component 배치와 RouteMesh·ClientServer 연결 (Store·evidence는 resource 표)",
+    "output": "sample-delivery-topology.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 4, "gapX": 104, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "CA", "type": "frontend", "label": "Courier Client A", "row": 0, "col": 0 },
+    { "id": "CS", "type": "frontend", "label": "CourierSession", "row": 0, "col": 1 },
+    { "id": "CN1", "type": "backend", "label": "CourierActorNode 1", "row": 0, "col": 2 },
+    { "id": "CB", "type": "frontend", "label": "Courier Client B", "row": 1, "col": 0 },
+    { "id": "CN2", "type": "backend", "label": "CourierActorNode 2", "row": 1, "col": 1 },
+    { "id": "D", "type": "frontend", "label": "Dispatch", "row": 1, "col": 2 },
+    { "id": "T", "type": "frontend", "label": "Tracking", "row": 1, "col": 3 },
+    { "id": "CC", "type": "frontend", "label": "Customer Client", "row": 2, "col": 0 },
+    { "id": "CG", "type": "frontend", "label": "CustomerGateway", "row": 2, "col": 3 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Servers", "wraps": ["CS", "CN1", "CN2", "D", "T", "CG"] }
+  ],
+  "connections": [
+    { "from": "CA", "to": "CS", "label": "STREAM", "variant": "default" },
+    { "from": "CB", "to": "CS", "label": "STREAM", "variant": "default" },
+    { "from": "CC", "to": "D", "label": "HTTP", "variant": "default" },
+    { "from": "CC", "to": "CG", "label": "STREAM", "variant": "default" },
+    { "from": "CS", "to": "CN1", "variant": "default" },
+    { "from": "CS", "to": "CN2", "variant": "default" },
+    { "from": "D", "to": "CN1", "variant": "default" },
+    { "from": "D", "to": "CN2", "variant": "default" },
+    { "from": "D", "to": "CN1", "variant": "dashed" },
+    { "from": "D", "to": "CN2", "variant": "dashed" },
+    { "from": "D", "to": "T", "variant": "dashed" },
+    { "from": "T", "to": "CG", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "채널 원문 이름",
+      "items": [
+        "실선 RouteMesh는 object routing용이다 — Courier 쪽 `deliverydispatch.courier`(D·CS → CourierActorNode 1/2), Customer 쪽 `deliverydispatch.customer`(Tracking → CustomerGateway).",
+        "점선 ClientServer는 방향이 정해진 독립 channel이다 — `deliverydispatch.dispatch`(Dispatch → CourierActorNode 1/2), `deliverydispatch.tracking`(Dispatch → Tracking). Dispatch는 각 CourierActorNode에 courier RouteMesh와 dispatch ClientServer 두 채널로 연결한다.",
+        "원문 연결은 무방향 `---` 구조 연결이다(화살표 머리는 렌더 제약이며 방향 주장이 아니다)."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "역할과 경계",
+      "items": [
+        "Dispatch는 HTTP edge와 배차 worker를 제공한다. CourierSession/CustomerGateway는 STREAM을 받고 각 Actor에 현재 session을 bind한다. CourierActorNode 1/2는 같은 Actor type·Entry Spot을 제공하는 eligible object server다(초록). Tracking은 상태 event를 기록하고 Customer Actor에 전달한다.",
+        "서버 수와 actor owner는 Application 설정으로 고정하지 않는다. Location Store가 current authority를 제공하고 Framework가 target을 선택한다."
+      ]
+    }
+  ]
+}

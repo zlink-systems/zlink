@@ -693,8 +693,8 @@ serving value.
 
 ```java
 // An operational admin endpoint. "orders" is the registered ChannelName.
-meshOptions.channel("orders").setWeight(0);   // Excludes this ChannelName from new select-one targets
-meshOptions.channel("orders").setWeight(100); // Back to normal
+meshOptions.channel("orders").weight(0);   // Excludes this ChannelName from new select-one targets
+meshOptions.channel("orders").weight(100); // Back to normal
 ```
 
 - `Weight = 0` (drain) **doesn't close** the serving socket. In-flight requests that
@@ -864,7 +864,7 @@ ZLinkMeshNodeBuilder mesh = options.addRouteMesh("play")
 
 // A handler that returns the node's own operational status.
 mesh.addRouteRequestHandler(
-    NodeStatusHandler.class, GetNodeStatus.class, NodeStatus.class, "ops.node.status");
+    NodeStatusHandler.class, GetNodeStatus.class, NodeStatus.class);
 ```
 
 The caller passes the Node RID and MeshName confirmed from the management system together.

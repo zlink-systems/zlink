@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Bingo implementation structure",
+    "subtitle": "Client · Shared · Server(API, Matchmaking, Session, Play) — same layout and responsibilities in every language",
+    "output": "sample-bingo-structure-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 110], "cols": 6, "gapX": 44, "gapY": 40, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "root", "type": "external", "label": "Bingo Sample", "row": 0, "col": 0 },
+
+    { "id": "client", "type": "frontend", "label": "Client", "row": 1, "col": 1 },
+    { "id": "cprog", "type": "frontend", "label": "Program", "row": 2, "col": 2 },
+    { "id": "cscen", "type": "frontend", "label": "Scenario", "row": 3, "col": 2 },
+
+    { "id": "shared", "type": "external", "label": "Shared", "row": 4, "col": 1 },
+    { "id": "sconf", "type": "external", "label": "Configuration", "row": 5, "col": 2 },
+    { "id": "sproto", "type": "external", "label": "Protobuf", "sublabel": "Contracts", "row": 6, "col": 2 },
+
+    { "id": "server", "type": "external", "label": "Server", "row": 7, "col": 1 },
+
+    { "id": "api", "type": "frontend", "label": "API", "row": 8, "col": 2 },
+    { "id": "aprog", "type": "frontend", "label": "Program", "row": 9, "col": 3 },
+    { "id": "ahand", "type": "frontend", "label": "Handlers", "row": 10, "col": 3 },
+    { "id": "arec", "type": "frontend", "label": "Player Record", "sublabel": "Store", "row": 11, "col": 3 },
+
+    { "id": "mm", "type": "backend", "label": "Matchmaking", "row": 12, "col": 2 },
+    { "id": "mprog", "type": "backend", "label": "Program", "row": 13, "col": 3 },
+    { "id": "mapp", "type": "backend", "label": "Application", "row": 14, "col": 3 },
+    { "id": "minfra", "type": "backend", "label": "Infrastructure", "row": 15, "col": 3 },
+    { "id": "mredis", "type": "backend", "label": "Redis Adapter", "row": 16, "col": 4 },
+    { "id": "minst", "type": "backend", "label": "Instance Spot", "sublabel": "Adapter", "row": 17, "col": 4 },
+
+    { "id": "sess", "type": "external", "label": "Session", "row": 18, "col": 2 },
+    { "id": "seprog", "type": "external", "label": "Program", "row": 19, "col": 3 },
+    { "id": "sestream", "type": "external", "label": "STREAM Session", "row": 20, "col": 3 },
+    { "id": "sehand", "type": "external", "label": "Handlers", "row": 21, "col": 4 },
+
+    { "id": "play", "type": "backend", "label": "Play", "row": 22, "col": 2 },
+    { "id": "pprog", "type": "backend", "label": "Program", "row": 23, "col": 3 },
+    { "id": "pdom", "type": "backend", "label": "Domain", "row": 24, "col": 3 },
+    { "id": "pcard", "type": "backend", "label": "Bingo Card", "row": 25, "col": 4 },
+    { "id": "pgame", "type": "backend", "label": "Bingo Game", "row": 26, "col": 4 },
+    { "id": "pstate", "type": "backend", "label": "Bingo Room", "sublabel": "State", "row": 27, "col": 4 },
+    { "id": "pinfra", "type": "backend", "label": "Infrastructure", "row": 28, "col": 3 },
+    { "id": "pactor", "type": "backend", "label": "Player Actor", "row": 29, "col": 4 },
+    { "id": "parel", "type": "backend", "label": "Actor Relocation", "sublabel": "Adapter", "row": 30, "col": 5 },
+    { "id": "pentry", "type": "backend", "label": "Entry Spot", "row": 31, "col": 4 },
+    { "id": "pehand", "type": "backend", "label": "Handlers", "row": 32, "col": 5 },
+    { "id": "proom", "type": "backend", "label": "Bingo Room Spot", "row": 33, "col": 4 },
+    { "id": "prrel", "type": "backend", "label": "Room Relocation", "sublabel": "Adapter", "row": 34, "col": 5 },
+    { "id": "prhand", "type": "backend", "label": "Handlers", "row": 35, "col": 5 }
+  ],
+  "connections": [
+    { "from": "root", "to": "client", "variant": "default" },
+    { "from": "root", "to": "shared", "variant": "default" },
+    { "from": "root", "to": "server", "variant": "default" },
+
+    { "from": "client", "to": "cprog", "variant": "default" },
+    { "from": "client", "to": "cscen", "variant": "default" },
+
+    { "from": "shared", "to": "sconf", "variant": "default" },
+    { "from": "shared", "to": "sproto", "variant": "default" },
+
+    { "from": "server", "to": "api", "variant": "default" },
+    { "from": "server", "to": "mm", "variant": "default" },
+    { "from": "server", "to": "sess", "variant": "default" },
+    { "from": "server", "to": "play", "variant": "default" },
+
+    { "from": "api", "to": "aprog", "variant": "default" },
+    { "from": "api", "to": "ahand", "variant": "default" },
+    { "from": "api", "to": "arec", "variant": "default" },
+
+    { "from": "mm", "to": "mprog", "variant": "default" },
+    { "from": "mm", "to": "mapp", "variant": "default" },
+    { "from": "mm", "to": "minfra", "variant": "default" },
+    { "from": "minfra", "to": "mredis", "variant": "default" },
+    { "from": "minfra", "to": "minst", "variant": "default" },
+
+    { "from": "sess", "to": "seprog", "variant": "default" },
+    { "from": "sess", "to": "sestream", "variant": "default" },
+    { "from": "sestream", "to": "sehand", "variant": "default" },
+
+    { "from": "play", "to": "pprog", "variant": "default" },
+    { "from": "play", "to": "pdom", "variant": "default" },
+    { "from": "play", "to": "pinfra", "variant": "default" },
+    { "from": "pdom", "to": "pcard", "variant": "default" },
+    { "from": "pdom", "to": "pgame", "variant": "default" },
+    { "from": "pdom", "to": "pstate", "variant": "default" },
+    { "from": "pinfra", "to": "pactor", "variant": "default" },
+    { "from": "pactor", "to": "parel", "variant": "default" },
+    { "from": "pinfra", "to": "pentry", "variant": "default" },
+    { "from": "pentry", "to": "pehand", "variant": "default" },
+    { "from": "pinfra", "to": "proom", "variant": "default" },
+    { "from": "proom", "to": "prrel", "variant": "default" },
+    { "from": "proom", "to": "prhand", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Client and Shared",
+      "items": [
+        "Client/Program configures the STREAM connector and runs the scenario once; Client/Scenario owns the §9 assertion order from authentication through stopping observation.",
+        "Shared/Configuration owns the role names, Channel/Mesh names, and sample configuration keys; Shared/Protobuf Contracts owns the same bingo_messages.proto schema and packet names."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Server / API and Matchmaking",
+      "items": [
+        "API → Program, Handlers, Player Record Store: owns authentication, player record, and matching-coordination handlers.",
+        "Matchmaking → Program, Application (waiting-room reservation use case), Infrastructure → Redis Adapter, Instance Spot Adapter. The Redis client is placed only under Matchmaking's Infrastructure."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Server / Session and Play",
+      "items": [
+        "Session → Program, STREAM Session → Handlers: owns the STREAM session, pre-auth dispatch, and Actor binding/relay.",
+        "Play → Program; Domain → Bingo Card, Bingo Game, Bingo Room State; Infrastructure → Player Actor (Actor Relocation Adapter), Entry Spot (Handlers), Bingo Room Spot (Room Relocation Adapter, Handlers).",
+        "Domain has no Framework, Redis, STREAM, codec, or endpoint types. Merging roles or moving them to a different layer in only one language isn't allowed."
+      ]
+    }
+  ]
+}

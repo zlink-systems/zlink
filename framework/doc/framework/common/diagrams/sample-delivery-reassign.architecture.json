@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Timeout 재배정 — Attempt=2 승격",
+    "subtitle": "deadline 만료로 A의 attempt=1을 expired 처리하고 Reassigned push → B로 재제안 → Delivered",
+    "output": "sample-delivery-reassign.html",
+    "column_fit": "spread",
+    "viewBox": [1180, 1120],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Customer Client" },
+    { "id": "D", "type": "frontend", "label": "Dispatch" },
+    { "id": "T", "type": "frontend", "label": "Tracking" },
+    { "id": "A", "type": "backend", "label": "CourierActor A" },
+    { "id": "B", "type": "backend", "label": "CourierActor B" },
+    { "id": "CB", "type": "frontend", "label": "Courier Client B" },
+    { "id": "CS", "type": "frontend", "label": "CourierSession" },
+    { "id": "CG", "type": "frontend", "label": "CustomerGateway" }
+  ],
+  "messages": [
+    { "from": "C", "to": "D", "y": 160, "label": "CreateDeliveryReq(delivery-reassign)", "variant": "default" },
+    { "from": "D", "to": "A", "y": 208, "label": "OfferDeliveryMsg(attempt=1)", "variant": "default" },
+    { "from": "D", "to": "T", "y": 256, "label": "deadline 만료 → DeliveryStatusChangedReq(Reassigned)", "variant": "default" },
+    { "from": "T", "to": "D", "y": 304, "label": "DeliveryStatusChangedRes", "variant": "return" },
+    { "from": "T", "to": "CG", "y": 352, "label": "DeliveryStatusUpdatedMsg", "variant": "default" },
+    { "from": "CG", "to": "C", "y": 400, "label": "DeliveryStatusNotify(Reassigned)", "variant": "return" },
+    { "from": "D", "to": "B", "y": 448, "label": "OfferDeliveryMsg(attempt=2)", "variant": "default" },
+    { "from": "B", "to": "CS", "y": 496, "label": "OfferDeliveryNotify", "variant": "default" },
+    { "from": "CS", "to": "CB", "y": 544, "label": "OfferDeliveryNotify", "variant": "return" },
+    { "from": "CB", "to": "CS", "y": 592, "label": "CourierDecisionMsg(accepted=true)", "variant": "default" },
+    { "from": "CS", "to": "B", "y": 640, "label": "CourierDecisionMsg", "variant": "default" },
+    { "from": "B", "to": "D", "y": 688, "label": "OfferDeliveryResultMsg(attempt=2)", "variant": "default" },
+    { "from": "D", "to": "T", "y": 736, "label": "DeliveryStatusChangedReq(Accepted)", "variant": "default" },
+    { "from": "T", "to": "D", "y": 784, "label": "DeliveryStatusChangedRes", "variant": "return" },
+    { "from": "D", "to": "T", "y": 832, "label": "DeliveryStatusChangedReq(Delivered)", "variant": "default" },
+    { "from": "T", "to": "D", "y": 880, "label": "DeliveryStatusChangedRes", "variant": "return" },
+    { "from": "T", "to": "CG", "y": 928, "label": "DeliveryStatusUpdatedMsg(Delivered)", "variant": "default" },
+    { "from": "CG", "to": "C", "y": 976, "label": "DeliveryStatusNotify(Delivered)", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "orange",
+      "title": "deadline 만료와 stale decision (원문 Note·후속 문단)",
+      "items": [
+        "원문 `Note over D`: deadline expires and attempt 1 is marked expired — Dispatch sweeper가 현재 기록을 Expired로 바꾸고 B를 다음 후보로 선택한다. (archify sequence는 note를 렌더하지 않아 세 번째 메시지 label과 이 카드로 보존한다.)",
+        "attempt 2가 시작된 뒤 도착한 A의 결정은 stale decision으로 기록되고 상태에 영향이 없다. 후보가 더 남지 않으면 Dispatch가 Failed를 기록하고 terminal 상태를 보낸다."
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "재배정 경로",
+      "items": [
+        "이 흐름의 상태 push는 Tracking이 CustomerGateway로 직접 보낸다(정상 흐름 §7.1은 CustomerActor를 거친다 — 두 그림의 경로 표기가 다르며 원문 그대로 옮겼다).",
+        "재배정 순서 검증: Assigned, Reassigned, Accepted, Delivered 순서와 Accepted 이후 courier가 B인지 확인한다."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Lookup and projection regeneration",
+    "subtitle": "GetOrderStateReq only reads; RebuildOrderProjectionReq replays the stream and replaces the projection",
+    "output": "sample-shoppingmall-lookup-rebuild-en.html",
+    "column_fit": "spread",
+    "viewBox": [
+      980,
+      760
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "participants": [
+    {
+      "id": "Client",
+      "type": "frontend",
+      "label": "Client"
+    },
+    {
+      "id": "API",
+      "type": "frontend",
+      "label": "CommerceApi"
+    },
+    {
+      "id": "Projection",
+      "type": "database",
+      "label": "Order Read Model"
+    },
+    {
+      "id": "Workflow",
+      "type": "backend",
+      "label": "OrderWorkflow",
+      "sublabel": "/ Order Spot"
+    },
+    {
+      "id": "Events",
+      "type": "database",
+      "label": "Order Event Store"
+    }
+  ],
+  "messages": [
+    {
+      "from": "Client",
+      "to": "API",
+      "y": 160,
+      "label": "GetOrderStateReq",
+      "variant": "default"
+    },
+    {
+      "from": "API",
+      "to": "Projection",
+      "y": 208,
+      "label": "Read OrderState",
+      "variant": "default"
+    },
+    {
+      "from": "Projection",
+      "to": "API",
+      "y": 256,
+      "label": "Current state",
+      "variant": "return"
+    },
+    {
+      "from": "API",
+      "to": "Client",
+      "y": 304,
+      "label": "GetOrderStateRes",
+      "variant": "return"
+    },
+    {
+      "from": "Client",
+      "to": "API",
+      "y": 352,
+      "label": "RebuildOrderProjectionReq",
+      "variant": "default"
+    },
+    {
+      "from": "API",
+      "to": "Workflow",
+      "y": 400,
+      "label": "RebuildOrderProjectionReq",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 448,
+      "label": "Replay all OrderId events",
+      "variant": "default"
+    },
+    {
+      "from": "Events",
+      "to": "Workflow",
+      "y": 496,
+      "label": "Ordered event stream",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "Projection",
+      "y": 544,
+      "label": "Replace projection from fold",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "API",
+      "y": 592,
+      "label": "RebuildOrderProjectionRes",
+      "variant": "return"
+    },
+    {
+      "from": "API",
+      "to": "Client",
+      "y": 640,
+      "label": "Rebuild result",
+      "variant": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Reading vs rebuilding",
+      "items": [
+        "GetOrderStateReq only reads the read model — it doesn't progress the order. Even if the projection is deleted or inconsistent, it must be rebuildable based on the OrderEventStore alone.",
+        "If a process is interrupted after a terminal event was recorded but before the projection reflected it, the resume command first reflects the terminal fold result into the projection, then returns the same state."
+      ]
+    }
+  ]
+}

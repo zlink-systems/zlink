@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Idle, Close, And Reconnect",
+    "subtitle": "ConversationIdleNotify → grace expires → ConversationClosedNotify → reconnect·rejoin",
+    "output": "sample-supportchat-idle-close-en.html",
+    "column_fit": "spread",
+    "viewBox": [900, 850],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Customer Client" },
+    { "id": "S", "type": "external", "label": "Session" },
+    { "id": "P", "type": "backend", "label": "ConversationSpot" },
+    { "id": "A", "type": "frontend", "label": "Agent Client" }
+  ],
+  "messages": [
+    { "from": "P", "to": "S", "y": 160, "label": "ConversationIdleNotify", "variant": "return" },
+    { "from": "S", "to": "C", "y": 208, "label": "ConversationIdleNotify", "variant": "return" },
+    { "from": "S", "to": "A", "y": 256, "label": "ConversationIdleNotify", "variant": "return" },
+    { "from": "P", "to": "S", "y": 304, "label": "grace expires → ConversationClosedNotify", "variant": "return" },
+    { "from": "S", "to": "C", "y": 352, "label": "ConversationClosedNotify", "variant": "return" },
+    { "from": "S", "to": "A", "y": 400, "label": "ConversationClosedNotify", "variant": "return" },
+    { "from": "C", "to": "S", "y": 448, "label": "STREAM reconnect", "variant": "default" },
+    { "from": "C", "to": "S", "y": 496, "label": "AuthenticateReq(same token)", "variant": "default" },
+    { "from": "S", "to": "C", "y": 544, "label": "AuthenticateRes", "variant": "return" },
+    { "from": "C", "to": "S", "y": 592, "label": "JoinConversationReq(metadata ConversationId)", "variant": "default" },
+    { "from": "S", "to": "P", "y": 640, "label": "JoinConversationReq", "variant": "default" },
+    { "from": "P", "to": "S", "y": 688, "label": "JoinConversationRes(scheduled=false)", "variant": "return" },
+    { "from": "S", "to": "C", "y": 736, "label": "JoinConversationRes(scheduled=false)", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Idle·grace·close transitions",
+      "items": [
+        "After the domain idle deadline passes since the last message, ConversationSpot transitions to WaitingForClose and sends ConversationIdleNotify to both sides. If a message arrives within the grace timeout, it returns to Active; otherwise it sends Closed and ConversationClosedNotify. An explicit close transitions directly to Closed.",
+        "The original's P→P self-message 'grace deadline expires' is merged into the following ConversationClosedNotify arrow's label ('grace expires → …') because archify sequence doesn't support self-messages."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Reconnect relay rules",
+      "items": [
+        "Reconnecting doesn't recreate the actor or the Conversation state — it returns the current state with scheduled=false. The Agent re-binds the roster actor, sends SetAgentAvailableReq(true), and then sends JoinConversationReq for each conversation that was open.",
+        "Session relays to the agent's conversation actor when the metadata ConversationId is found in the agent conversation-actor map, and relays a customer map miss to the customer identity actor.",
+        "When preparation and reconnect assertions across several processes take longer than the idle deadline, the runner may send a normal typed SendChatMessageReq to renew valid application traffic — this is not a heartbeat or keepalive, and a control packet, sleep, or log line must not replace it. The actual idle and grace behavior is checked with a separate bounded wait."
+      ]
+    }
+  ]
+}

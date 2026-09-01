@@ -99,7 +99,7 @@ handle (const create_game_http_req_t &request)
 }
 ```
 
-채널·HTTP 핸들러는 **worker 풀**에서 실행된다. `options.configure_worker()`가 반환하는
+채널·HTTP 핸들러는 **worker 풀**에서 실행된다. `options.worker()`가 반환하는
 설정의 `min_threads`, `max_threads`, `idle_timeout`, `max_queue_length`로 worker 풀을
 구성한다. 핸들러가 `co_await` 에 도달하면
 코루틴만 멈추고(suspend) 실행 스레드는 다른 큐 항목을 처리한다. 같은 Spot 큐는 그

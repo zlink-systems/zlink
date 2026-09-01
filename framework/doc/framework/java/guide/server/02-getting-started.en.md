@@ -77,7 +77,7 @@ public class ServerApplication {
 
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services") // Names the mesh.
                 .listen("tcp://0.0.0.0:7101");                          // Its own endpoint for other processes to connect to.
-            mesh.channel("greeting").server()                           // This process handles "greeting".
+            mesh.channelName("greeting").server()                           // This process handles "greeting".
                 .addRequestHandler(HelloHandler.class, Hello.class, Greeting.class);
         };
     }
@@ -101,7 +101,7 @@ ZLinkFrameworkConfigurer zlink() {
     return options -> {
         ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
             .listen("tcp://0.0.0.0:7102");                  // It also needs its own endpoint.
-        mesh.channel("greeting").client();                  // The call-only side is Client.
+        mesh.channelName("greeting").client();                  // The call-only side is Client.
         mesh.peerConnections().connect("tcp://127.0.0.1:7101"); // Manual connection — write the server endpoint directly.
     };
 }

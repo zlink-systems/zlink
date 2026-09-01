@@ -91,28 +91,8 @@ headless runner는 server별 self-check를 실행하며, 브라우저 client는 
 기본 topology는 Client와 server component의 배치와 연결만 표현한다. Redis와 maintenance
 store는 resource 표에서 설명하며 이동·publish 시간 순서는 §7 sequence diagram에서 설명한다.
 
-```mermaid
-flowchart LR
-    subgraph Clients[Clients]
-        G[Game Browser]
-        O[Ops Browser]
-    end
-    subgraph Servers[Servers]
-        GW[Gateway]
-        Z1[ZoneNode A]
-        Z2[ZoneNode B]
-        OPS[Ops]
-    end
-    G ---|STREAM WS| GW
-    O ---|STREAM WS| OPS
-    GW ---|zoneworld.mesh RouteMesh| Z1
-    GW ---|zoneworld.mesh RouteMesh| Z2
-    OPS ---|zoneworld.mesh RouteMesh| Z1
-    OPS ---|zoneworld.mesh RouteMesh| Z2
-    Z1 ---|zoneworld.mesh RouteMesh| Z2
-    OPS ---|zoneworld.broadcast fanout| Z1
-    OPS ---|zoneworld.broadcast fanout| Z2
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-topology.html" title="ZoneWorld topology — Client · Server 배치와 연결" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-zoneworld-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 - Gateway만 player-facing game STREAM을 제공하고 Ops만 control STREAM을 제공한다.
 - ZoneNode A/B는 같은 executable capability로 실행하며 Zone Spot factory(stable type
@@ -453,28 +433,8 @@ join을 `Defer()`로 등록하고 현재 handler를 정상 종료하며, join �
 admission까지 완료**가 이 시나리오의 규범 의미이며, admission 이전 상태(cache 등)로
 JoinWorldRes terminal을 만드는 구현은 비적합이다.
 
-```mermaid
-sequenceDiagram
-    participant C as Game Browser
-    participant G as Gateway
-    participant A as Player Actor
-    participant Z as Zone Spot
-
-    C->>G: JoinWorldReq
-    G->>A: create or get Player Actor
-    A->>A: Defer() zone join, handler 종료
-    A->>Z: EnterZoneReq(zone-nw)
-    Z-->>A: EnterZoneRes (join completion callback)
-    A-->>G: JoinWorldRes(25,25) — completion에서 발신
-    G-->>C: JoinWorldRes
-    C->>G: MoveMsg(28,27)
-    G->>A: MoveMsg
-    A->>A: validate and update coordinates
-    A->>Z: UpdatePositionMsg
-    Z-->>A: ZoneStateNotify source
-    A-->>G: ZoneStateNotify
-    G-->>C: ZoneStateNotify(28,27)
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-join-move.html" title="입장과 같은 zone 이동 — JoinWorld · Move" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-zoneworld-join-move.html" target="_blank">↗ 크게 보기</a></p>
 
 ### 7.2 경계 이동과 relocation
 
@@ -482,28 +442,8 @@ target zone owner가 같으면 membership만 바뀌고, 다르면 같은 Player 
 materialize되는 relocation이 발생한다. Application은 두 경우를 NodeId로 구분하지 않는다.
 두 경우 모두 request/reply인 `EnterZoneReq`와 `EnterZoneRes`를 사용한다.
 
-```mermaid
-sequenceDiagram
-    participant C as Game Browser
-    participant G as Gateway
-    participant A as Player Actor
-    participant S as Source Zone Spot
-    participant T as Target Zone Spot
-    participant N as Target ZoneNode
-
-    C->>G: MoveMsg(target coordinate)
-    G->>A: MoveMsg
-    A->>A: validate adjacent zone
-    A->>T: EnterZoneReq
-    T->>N: relocation admission when owner differs
-    N->>N: Capture and Restore actor state
-    N-->>A: target owner ready
-    A-->>G: ZoneChangedNotify
-    G-->>C: ZoneChangedNotify
-    T-->>A: DeliverZoneStateMsg
-    A-->>G: ZoneStateNotify through same binding
-    G-->>C: ZoneStateNotify
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-relocation.html" title="경계 이동과 relocation" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-zoneworld-relocation.html" target="_blank">↗ 크게 보기</a></p>
 
 Relocation은 ActorId와 ObjectGeneration을 유지하고 owner generation만 바꾼다. relocation 중
 이전 owner에 도착한 one-way 또는 request message는 committed target으로 Follow한다. source는
@@ -540,26 +480,8 @@ WatchNodesRes의 Registered와 Connected는 서로 다른 관측값이다. Conne
 관찰의 peer state에서 얻고, Registered는 Framework topology status가 등록 신호를 노출하지
 않으므로 ZoneNode의 explicit report에서 얻는다.
 
-```mermaid
-sequenceDiagram
-    participant O as Ops Browser
-    participant S as Ops
-    participant Z1 as ZoneNode A
-    participant Z2 as ZoneNode B
-
-    O->>S: WatchNodesReq
-    S-->>O: WatchNodesRes
-    O->>S: AnnounceWorldReq
-    S-->>O: AnnounceWorldRes
-    S-->>Z1: WorldAnnounceEvent fanout
-    S-->>Z2: WorldAnnounceEvent fanout
-    O->>S: SetMaintenanceReq(nodeId,true)
-    S-->>O: SetMaintenanceRes
-    S-->>Z1: NodeMaintenanceChangedEvent fanout
-    S-->>Z2: NodeMaintenanceChangedEvent fanout
-    Z1->>Z1: apply only matching NodeId
-    Z2->>Z2: apply only matching NodeId
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-ops.html" title="Ops 관찰, announce와 maintenance" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-zoneworld-ops.html" target="_blank">↗ 크게 보기</a></p>
 
 Target zone owner가 maintenance=true이면 target Zone Spot의 OnActorJoin admission이
 ZoneMaintenance로 거부한다. 허용 범위는 같은 zone 내부 이동뿐이다(같은 NodeId의 다른 zone
@@ -594,56 +516,8 @@ self-check 항목으로 관측한다.
 같은 책임으로 유지한다. headless scenario와 browser client의 파일 위치는 달라도 Gateway, ZoneNode와
 Ops의 경계, zone state owner와 relocation adapter의 위치는 바꾸지 않는다.
 
-```text
-ZoneWorld
-+-- Client
-|   +-- Program
-|   +-- HeadlessScenario
-|   +-- BrowserGame
-|   +-- BrowserOps
-+-- Shared
-|   +-- Configuration
-|   +-- JSON Contracts
-|   +-- WorldRules
-+-- Server
-    +-- Gateway
-    |   +-- Program
-    |   +-- Application
-    |   |   +-- PlayerBinding
-    |   |   +-- PlayerRelay
-    |   +-- Infrastructure
-    |       +-- StreamSession
-    |       +-- GatewayHandlers
-    +-- ZoneNode
-    |   +-- Program
-    |   +-- Domain
-    |   |   +-- ZoneState
-    |   |   +-- PlayerStateView
-    |   |   +-- BorderPolicy
-    |   +-- Application
-    |   |   +-- Movement
-    |   |   +-- ZoneAdmission
-    |   |   +-- BotTick
-    |   +-- Infrastructure
-    |       +-- EntrySpot
-    |       +-- ZoneSpot
-    |       +-- PlayerActorAdapter
-    |       +-- RelocationAdapter
-    |       +-- BorderPublisher
-    |       +-- LocalReportHandler
-    +-- Ops
-        +-- Program
-        +-- Application
-        |   +-- NodeWatch
-        |   +-- AnnounceWorld
-        |   +-- Maintenance
-        |   +-- Diagnostics
-        +-- Infrastructure
-            +-- OpsStream
-            +-- RuntimeEventCollector
-            +-- FanoutPublisher
-            +-- MaintenanceStoreAdapter
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-structure.html" title="구현 구조 — Client · Shared · Server" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-zoneworld-structure.html" target="_blank">↗ 크게 보기</a></p>
 
 | Logical component | 모든 언어에서 유지할 책임 | 의존 방향과 금지 경계 |
 |---|---|---|
@@ -847,3 +721,7 @@ self-check 시나리오 ID(`ZW-*`)는 의도별 계열로 묶인다. 각 계열�
 
 이 값을 비워 두면 재기동한 node가 zone 2개를 요구하며 claim을 반복하다 예산을 소진한다 —
 실제로 cpp 구현이 그 상태였다.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

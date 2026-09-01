@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "경계 이동과 relocation",
+    "subtitle": "target owner가 다르면 같은 Player Actor가 target owner에서 materialize된다 — Application은 두 경우를 NodeId로 구분하지 않는다",
+    "output": "sample-zoneworld-relocation.html",
+    "column_fit": "spread",
+    "viewBox": [1040, 720],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "c", "type": "frontend", "label": "Game Browser" },
+    { "id": "g", "type": "external", "label": "Gateway" },
+    { "id": "a", "type": "backend", "label": "Player Actor" },
+    { "id": "s", "type": "backend", "label": "Source Zone Spot" },
+    { "id": "t", "type": "backend", "label": "Target Zone Spot" },
+    { "id": "n", "type": "backend", "label": "Target ZoneNode" }
+  ],
+  "messages": [
+    { "from": "c", "to": "g", "y": 160, "label": "MoveMsg(target coordinate)", "variant": "default" },
+    { "from": "g", "to": "a", "y": 208, "label": "MoveMsg", "variant": "default" },
+    { "from": "a", "to": "t", "y": 256, "label": "validate 후 EnterZoneReq", "variant": "default" },
+    { "from": "t", "to": "n", "y": 304, "label": "relocation admission when owner differs", "variant": "default" },
+    { "from": "n", "to": "a", "y": 352, "label": "Capture/Restore 후 target owner ready", "variant": "return" },
+    { "from": "a", "to": "g", "y": 400, "label": "ZoneChangedNotify", "variant": "return" },
+    { "from": "g", "to": "c", "y": 448, "label": "ZoneChangedNotify", "variant": "return" },
+    { "from": "t", "to": "a", "y": 496, "label": "DeliverZoneStateMsg", "variant": "return" },
+    { "from": "a", "to": "g", "y": 544, "label": "ZoneStateNotify through same binding", "variant": "return" },
+    { "from": "g", "to": "c", "y": 592, "label": "ZoneStateNotify", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "자기 메시지 2개 (archify 미지원 → 인접 화살표에 합침)",
+      "items": [
+        "원문 Player Actor→Player Actor \"validate adjacent zone\"을 뒤따르는 EnterZoneReq 화살표 라벨에 합쳤다.",
+        "원문 Target ZoneNode→Target ZoneNode \"Capture and Restore actor state\"를 뒤따르는 \"target owner ready\" 화살표 라벨에 합쳤다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Source Zone Spot은 이 흐름에서 message를 받지 않는다",
+      "items": [
+        "원문 mermaid는 participant로 Source Zone Spot(S)을 선언하지만 이 시퀀스의 어떤 화살표도 S를 향하거나 S에서 출발하지 않는다 — 원문 그대로 lifeline만 유지했다.",
+        "Relocation은 ActorId와 ObjectGeneration을 유지하고 owner generation만 바꾼다. relocation 중 이전 owner에 도착한 one-way 또는 request message는 committed target으로 Follow한다. source는 Follow 중 Location Store를 다시 조회하거나 다른 owner에 같은 operation을 자동 제출하지 않는다."
+      ]
+    }
+  ]
+}

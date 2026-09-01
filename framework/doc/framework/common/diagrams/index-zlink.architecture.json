@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ZLink 방식 — 웹 서비스 + 실시간",
+    "subtitle": "서버 간 호출은 channel로 직접 · 오버헤드가 location store 하나로 수렴한다",
+    "output": "index-zlink.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 2,
+    "gapX": 150,
+    "gapY": 88,
+    "cellW": 150,
+    "cellH": 78
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "클라이언트 앱",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "lb",
+      "type": "external",
+      "label": "L7 LB / gateway",
+      "sublabel": "HTTP는 그대로",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "api",
+      "type": "frontend",
+      "label": "API 서버들 ×N",
+      "sublabel": "+ ZLink route client",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "dom",
+      "type": "backend",
+      "label": "도메인 서버들 ×N",
+      "sublabel": "ZLink SPOT · STREAM",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "store",
+      "type": "external",
+      "label": "location store",
+      "row": 3,
+      "col": 0
+    }
+  ],
+  "connections": [
+    {
+      "from": "client",
+      "to": "lb",
+      "label": "HTTP",
+      "variant": "emphasis",
+      "labelDy": 24
+    },
+    {
+      "from": "lb",
+      "to": "api",
+      "variant": "default"
+    },
+    {
+      "from": "api",
+      "to": "dom",
+      "label": "channel request/send",
+      "variant": "emphasis"
+    },
+    {
+      "from": "client",
+      "to": "dom",
+      "label": "STREAM 직접 접속",
+      "variant": "emphasis"
+    },
+    {
+      "from": "api",
+      "to": "store",
+      "label": "주소 해석",
+      "variant": "dashed",
+      "labelDy": 44
+    },
+    {
+      "from": "dom",
+      "to": "store",
+      "label": "등록",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "channel로 서버-투-서버 (핵심)",
+      "items": [
+        "API 서버 ↔ 도메인 서버: channel request/send가 직접 (브로커·sticky LB 없음)",
+        "client는 도메인 서버에 STREAM으로 직접 접속",
+        "도메인 서버 = 한 주문/대화의 SPOT owner (직렬, 분산 락 없음) + STREAM 호스트",
+        "둘 다 ZLink; API 서버가 client를 라우팅한다"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "location store = 디스커버리 전용",
+      "items": [
+        "node·actor·spot 위치만 — 주소 해석(API)·등록(도메인), 데이터/메시지 경로가 아니다",
+        "그래서 링크가 점선(control plane)"
+      ]
+    }
+  ]
+}

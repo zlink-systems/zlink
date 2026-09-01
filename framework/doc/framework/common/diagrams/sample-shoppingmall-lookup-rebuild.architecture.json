@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "조회와 프로젝션 재생성",
+    "subtitle": "GetOrderStateReq는 read model만 읽는다 · RebuildOrderProjectionReq는 event stream만 재생해 projection을 다시 만든다",
+    "output": "sample-shoppingmall-lookup-rebuild.html",
+    "column_fit": "spread",
+    "viewBox": [
+      1100,
+      800
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "participants": [
+    {
+      "id": "Client",
+      "type": "frontend",
+      "label": "Client"
+    },
+    {
+      "id": "API",
+      "type": "frontend",
+      "label": "CommerceApi"
+    },
+    {
+      "id": "Projection",
+      "type": "database",
+      "label": "Order Read Model"
+    },
+    {
+      "id": "Workflow",
+      "type": "backend",
+      "label": "OrderWorkflow",
+      "sublabel": "/ Order Spot"
+    },
+    {
+      "id": "Events",
+      "type": "database",
+      "label": "Order Event Store"
+    }
+  ],
+  "messages": [
+    {
+      "from": "Client",
+      "to": "API",
+      "y": 160,
+      "label": "GetOrderStateReq",
+      "variant": "default"
+    },
+    {
+      "from": "API",
+      "to": "Projection",
+      "y": 208,
+      "label": "Read OrderState",
+      "variant": "default"
+    },
+    {
+      "from": "Projection",
+      "to": "API",
+      "y": 256,
+      "label": "Current state",
+      "variant": "return"
+    },
+    {
+      "from": "API",
+      "to": "Client",
+      "y": 304,
+      "label": "GetOrderStateRes",
+      "variant": "return"
+    },
+    {
+      "from": "Client",
+      "to": "API",
+      "y": 352,
+      "label": "RebuildOrderProjectionReq",
+      "variant": "default"
+    },
+    {
+      "from": "API",
+      "to": "Workflow",
+      "y": 400,
+      "label": "RebuildOrderProjectionReq",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 448,
+      "label": "Replay all OrderId events",
+      "variant": "default"
+    },
+    {
+      "from": "Events",
+      "to": "Workflow",
+      "y": 496,
+      "label": "Ordered event stream",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "Projection",
+      "y": 544,
+      "label": "Replace projection from fold",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "API",
+      "y": 592,
+      "label": "RebuildOrderProjectionRes",
+      "variant": "return"
+    },
+    {
+      "from": "API",
+      "to": "Client",
+      "y": 640,
+      "label": "Rebuild result",
+      "variant": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "조회와 재생성의 경계",
+      "items": [
+        "GetOrderStateReq는 read model만 읽으며 주문을 진행시키지 않는다. Projection이 삭제되거나 불일치한 경우에도 OrderEventStore만 기준으로 다시 만들 수 있어야 한다.",
+        "종료 event 기록 뒤 projection 반영 전에 process가 중단된 경우, 재개 명령은 terminal fold 결과를 projection에 먼저 반영하고 같은 상태를 반환한다."
+      ]
+    }
+  ]
+}

@@ -176,7 +176,7 @@ by area, makes ZLink's spot clear.
 | Social/meta features — friends, leaderboards, groups, chat | [Nakama](https://heroiclabs.com/nakama-gamelift/) | A backend server product |
 
 ZLink provides **connections/sessions (STREAM), rooms/state units (SPOT), inter-server
-messaging (channel), participant state (actor), and zero-downtime termination (drain)** among
+messaging (channel), participant state (actor), and zero-downtime termination (host relocation)** among
 these — but not as a dedicated runtime or managed service, as a **library layer on the major
 framework you already use.**
 
@@ -189,15 +189,8 @@ framework you already use.**
 And all of this stays inside the framework you already use — the opposite direction from
 bringing in a new engine and moving to a separate ecosystem.
 
-```text
-+-----------------------------------------------------------+
-|  ASP.NET Core / Spring / NestJS                           |
-|  DI, config, logging, deployment unchanged                |
-+-----------------------------------------------------------+
-|  ZLink Framework                                          |
-|  SPOT · actor · STREAM · drain                            |
-+-----------------------------------------------------------+
-```
+<iframe class="zlink-diagram" src="/common/diagrams/overview-stack-en.html" title="ZLink is a library layer on your framework" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/overview-stack-en.html" target="_blank">↗ View larger</a></p>
 
 **As code.** Declare one room, and write that room's progression logic.
 
@@ -205,7 +198,7 @@ bringing in a new engine and moving to a separate ecosystem.
 // Registration — one room mesh and a room type
 val node = options.addRouteMesh("game.room")
 node.listen("tcp://0.0.0.0:9001")
-node.channel("game.room").server()      // A mesh has at least 1 logical membership
+node.channelName("game.room").server()      // A mesh has at least 1 logical membership
 node.objects().server()
     .addSpotFactory("room", BingoRoomSpot::class.java) { factory ->
         factory.recreateOnRelocation()
@@ -338,12 +331,6 @@ Sticky LB, WebSocket server, pub/sub detour, distributed lock, mesh/discovery �
 shrink down to **one location store.** Inter-server calls and real-time delivery all connect
 directly, runtime to runtime.
 
-**This doesn't replace your existing stack.** Kafka stays exactly where it is, as a durable
-event stream, and Redis stays as cache/persistence support, in both pictures (which is why
-they're left out of the diagram). What ZLink cuts is the **complexity of connection,
-routing, and state management** you used to assemble by hand in between, for real-time
-delivery.
-
 **As code.** Where the distributed lock and sticky routing used to sit, the following code
 remains.
 
@@ -442,6 +429,10 @@ routing** instead of a log means most of the pieces above simply never need to b
 | LB/service discovery for inter-server calls | **channel name + location store** — call by the name `"inventory"` and it sends directly to a currently available peer | [05](05-channel-messaging.en.md)·[10](10-location.en.md) |
 | Operating offset/lag/resync jobs | With no consumption pipeline, that operational item doesn't exist at all | |
 
+**This doesn't replace your existing stack.** Kafka stays exactly where it is, as a durable
+event stream, and Redis stays as cache/persistence support. What ZLink cuts is the
+**complexity of connection, routing, and state management** you used to assemble by hand in between.
+
 **The boundary stays where it is.** Where a durable log is genuinely needed — event replay,
 long-term retention, broad fan-out to independent systems — Kafka is the right fit and stays
 exactly there ([Chapter 17 §4](17-alternative.en.md)). What ZLink cuts is the case where a
@@ -521,7 +512,7 @@ class GetPriceHandler : ZLinkRequestHandler<PriceRequest, PriceReply> {
 options.addRouteMesh("services")                        // Scopes the communication range by MeshName.
     .listen("tcp://0.0.0.0:7301")                       // Opens this MeshNode's endpoint.
     .setRoutingId(RoutingId.from("price-1"))
-    .channel("price")                                   // Registers the price-handling membership.
+    .channelName("price")                                   // Registers the price-handling membership.
     .server()
     .addRequestHandler(GetPriceHandler::class.java, PriceRequest::class.java, PriceReply::class.java)
 
@@ -572,13 +563,13 @@ val zlink = ZLinkFrameworkConfigurer { options ->
     options.addRouteMesh("services")                         // MeshNode for inter-server request/send
         .listen("tcp://0.0.0.0:7301")
         .setRoutingId(RoutingId.from("service-a"))
-        .channel("orders").server()                          // The logical membership to handle
+        .channelName("orders").server()                          // The logical membership to handle
     options.addFanoutChannel("events")
         .enablePublisher("tcp://0.0.0.0:7302")               // classic event fan-out
     options.addRouteMesh("game.room")                        // SPOT/actor are also owned by a MeshNode
         .listen("tcp://0.0.0.0:7304")
         .setRoutingId(RoutingId.from("room-a"))
-        .channel("game.room").server()
+        .channelName("game.room").server()
     options.addStreamNode("gateway")
         .bind("tcp://0.0.0.0:7400")                          // The external client endpoint
 }

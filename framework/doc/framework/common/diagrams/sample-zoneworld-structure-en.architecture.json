@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Implementation Structure — Client · Shared · Server",
+    "subtitle": "Every language implements the same logical component with the same responsibility (Gateway=session·relay, ZoneNode=zone Spot·Player Actor, Ops=node watch·fanout)",
+    "output": "sample-zoneworld-structure-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 4, "gapX": 84, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "cl-prog", "type": "frontend", "label": "Program", "row": 0, "col": 0 },
+    { "id": "cl-scen", "type": "frontend", "label": "HeadlessScenario", "row": 0, "col": 1 },
+    { "id": "cl-game", "type": "frontend", "label": "BrowserGame", "row": 0, "col": 2 },
+    { "id": "cl-ops", "type": "frontend", "label": "BrowserOps", "row": 0, "col": 3 },
+
+    { "id": "sh-conf", "type": "external", "label": "Configuration", "row": 1, "col": 0 },
+    { "id": "sh-json", "type": "external", "label": "JSON Contracts", "row": 1, "col": 1 },
+    { "id": "sh-rules", "type": "external", "label": "WorldRules", "row": 1, "col": 2 },
+
+    { "id": "gw-prog", "type": "external", "label": "Program", "row": 2, "col": 0 },
+    { "id": "gw-app", "type": "external", "label": "Application", "sublabel": "PlayerBinding·PlayerRelay", "row": 2, "col": 1 },
+    { "id": "gw-infra", "type": "external", "label": "Infrastructure", "sublabel": "StreamSession·Handlers", "row": 2, "col": 2 },
+
+    { "id": "zn-prog", "type": "backend", "label": "Program", "row": 3, "col": 0 },
+    { "id": "zn-dom", "type": "backend", "label": "Domain", "sublabel": "ZoneState·PlayerView·Border", "row": 3, "col": 1 },
+    { "id": "zn-app", "type": "backend", "label": "Application", "sublabel": "Movement·Admission·BotTick", "row": 3, "col": 2 },
+    { "id": "zn-infra", "type": "backend", "label": "Infrastructure", "sublabel": "EntrySpot·ZoneSpot·+4 more", "row": 3, "col": 3 },
+
+    { "id": "ops-prog", "type": "external", "label": "Program", "row": 4, "col": 0 },
+    { "id": "ops-app", "type": "external", "label": "Application", "sublabel": "NodeWatch·Announce·+2 more", "row": 4, "col": 1 },
+    { "id": "ops-infra", "type": "external", "label": "Infrastructure", "sublabel": "OpsStream·+3 more", "row": 4, "col": 2 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Client", "wraps": ["cl-prog", "cl-scen", "cl-game", "cl-ops"] },
+    { "kind": "region", "label": "Shared", "wraps": ["sh-conf", "sh-json", "sh-rules"] },
+    { "kind": "region", "label": "Server / Gateway — session·relay", "wraps": ["gw-prog", "gw-app", "gw-infra"] },
+    { "kind": "region", "label": "Server / ZoneNode — zone Spot·Player Actor", "wraps": ["zn-prog", "zn-dom", "zn-app", "zn-infra"] },
+    { "kind": "region", "label": "Server / Ops — node watch·fanout·maintenance", "wraps": ["ops-prog", "ops-app", "ops-infra"] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Full tree path and color",
+      "items": [
+        "ZoneWorld root has 3 top-level nodes: Client { Program, HeadlessScenario, BrowserGame, BrowserOps } · Shared { Configuration, JSON Contracts, WorldRules } · Server { Gateway, ZoneNode, Ops }.",
+        "Color: Client=blue (frontend, browser·headless adapter), Shared·Gateway·Ops=gray (external, common assets and session·relay·control-plane plumbing), ZoneNode=green (backend, the layer that provides zone Spot·Player Actor)."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Full path under Server / Gateway·Ops",
+      "items": [
+        "Gateway { Program, Application { PlayerBinding, PlayerRelay }, Infrastructure { StreamSession, GatewayHandlers } }.",
+        "Ops { Program, Application { NodeWatch, AnnounceWorld, Maintenance, Diagnostics }, Infrastructure { OpsStream, RuntimeEventCollector, FanoutPublisher, MaintenanceStoreAdapter } }."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Full path under Server / ZoneNode",
+      "items": [
+        "ZoneNode { Program, Domain { ZoneState, PlayerStateView, BorderPolicy }, Application { Movement, ZoneAdmission, BotTick }, Infrastructure { EntrySpot, ZoneSpot, PlayerActorAdapter, RelocationAdapter, BorderPublisher, LocalReportHandler } }."
+      ]
+    }
+  ]
+}

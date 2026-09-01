@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Room 생성과 인증·입장 — Create · Authenticate · Join",
+    "subtitle": "API가 Room Spot을 예약·생성하고, Play Session이 인증·Actor bind·Room join을 잇는다",
+    "output": "sample-tictactoe-create-auth.html",
+    "column_fit": "spread",
+    "viewBox": [1060, 1150],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Client" },
+    { "id": "API", "type": "frontend", "label": "Api (A/B)" },
+    { "id": "M", "type": "backend", "label": "Spot Manager" },
+    { "id": "P", "type": "backend", "label": "Play Session (A/B)" },
+    { "id": "A", "type": "backend", "label": "Player Actor" },
+    { "id": "R", "type": "backend", "label": "Room Spot" }
+  ],
+  "messages": [
+    { "from": "C", "to": "API", "y": 160, "label": "CreateGameHttpReq", "variant": "default" },
+    { "from": "API", "to": "M", "y": 208, "label": "TicTacToeGameCreateReq (Room Spot 생성)", "variant": "default" },
+    { "from": "M", "to": "R", "y": 256, "label": "Room Spot 생성·초기화", "variant": "default" },
+    { "from": "R", "to": "M", "y": 304, "label": "생성 수락", "variant": "return" },
+    { "from": "M", "to": "API", "y": 352, "label": "생성 결과(RoomId)", "variant": "return" },
+    { "from": "API", "to": "C", "y": 400, "label": "CreateGameHttpRes(RoomId, …)", "variant": "return" },
+    { "from": "C", "to": "P", "y": 448, "label": "AuthenticateReq", "variant": "default" },
+    { "from": "P", "to": "API", "y": 496, "label": "AuthenticatePlayerReq (Api 하나 선택)", "variant": "default" },
+    { "from": "API", "to": "P", "y": 544, "label": "AuthenticatePlayerRes(PlayerInfo)", "variant": "return" },
+    { "from": "P", "to": "A", "y": 592, "label": "PlayerActorCreateReq — GetOrCreate", "variant": "default" },
+    { "from": "A", "to": "P", "y": 640, "label": "current ActorRef", "variant": "return" },
+    { "from": "P", "to": "C", "y": 688, "label": "AuthenticateRes(PlayerInfo)", "variant": "return" },
+    { "from": "C", "to": "P", "y": 736, "label": "JoinGameMsg(RoomId)", "variant": "default" },
+    { "from": "P", "to": "A", "y": 784, "label": "bound Actor에 JoinGameMsg 전달", "variant": "default" },
+    { "from": "A", "to": "R", "y": 832, "label": "TicTacToeGameJoinReq(PlayerInfo)", "variant": "default" },
+    { "from": "R", "to": "A", "y": 880, "label": "TicTacToeGameJoinRes (admission 통과)", "variant": "return" },
+    { "from": "A", "to": "P", "y": 928, "label": "current session에 JoinGameNotify push", "variant": "return" },
+    { "from": "P", "to": "C", "y": 976, "label": "JoinGameNotify", "variant": "return" },
+    { "from": "R", "to": "P", "y": 1024, "label": "기존 member session에 PlayerJoinedNotify", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "ingress 선택과 owner 불변",
+      "items": [
+        "원문 Note(C~P 구간): host는 Play A, guest·observer는 Play B를 사용한다. Client가 어떤 Play ingress를 써도 room owner는 바뀌지 않는다.",
+        "CreateGameHttpRes 전체 필드: RoomId, RequiredLevel, PlayEndpoints, PlayNodes, GameName."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "자기 확인 단계와 원문 라벨",
+      "items": [
+        "원문 R→R 자기 메시지 'Level ≥ RequiredLevel 확인'은 archify sequence가 자기 메시지를 지원하지 않아 TicTacToeGameJoinRes 화살표 라벨에 합쳤다.",
+        "참여자 원문 라벨 — API: Api A 또는 Api B · M: Framework Spot Manager · P: Play A 또는 Play B Session.",
+        "인증 전에 JoinGameMsg·PlaceMarkReq가 오면 Actor를 만들지 않고 오류로 끝낸다. Join 실패는 current session에 JoinGameFailedNotify로 알린다."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "정상 progress와 completion",
+    "subtitle": "Instance intent가 첫 event에서 Missing PlayerQuestSpot을 준비한다 · 접수한 action마다 notify가 뒤따른다",
+    "output": "sample-gamequest-progress-flow.html",
+    "column_fit": "spread",
+    "viewBox": [1000, 1000],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Game Client" },
+    { "id": "G", "type": "frontend", "label": "GameApi" },
+    { "id": "P", "type": "backend", "label": "PlayerQuestSpot" }
+  ],
+  "messages": [
+    { "from": "C", "to": "G", "y": 160, "label": "JoinSessionReq", "variant": "default" },
+    { "from": "G", "to": "C", "y": 208, "label": "JoinSessionRes", "variant": "return" },
+    { "from": "C", "to": "G", "y": 256, "label": "KillMonsterReq", "variant": "default" },
+    { "from": "G", "to": "P", "y": 304, "label": "GameplayMsg(PlayerId)", "variant": "default" },
+    { "from": "P", "to": "G", "y": 352, "label": "QuestProgressNotify (replay, dedupe, evaluate and fold)", "variant": "return" },
+    { "from": "G", "to": "C", "y": 400, "label": "QuestProgressNotify", "variant": "return" },
+    { "from": "C", "to": "G", "y": 448, "label": "KillMonsterReq", "variant": "default" },
+    { "from": "G", "to": "P", "y": 496, "label": "GameplayMsg", "variant": "default" },
+    { "from": "P", "to": "G", "y": 544, "label": "QuestProgressNotify", "variant": "return" },
+    { "from": "G", "to": "C", "y": 592, "label": "QuestProgressNotify", "variant": "return" },
+    { "from": "C", "to": "G", "y": 640, "label": "KillMonsterReq", "variant": "default" },
+    { "from": "G", "to": "P", "y": 688, "label": "GameplayMsg", "variant": "default" },
+    { "from": "P", "to": "G", "y": 736, "label": "QuestCompletedNotify (append QuestCompleted and update projection)", "variant": "return" },
+    { "from": "G", "to": "C", "y": 784, "label": "QuestCompletedNotify", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "owner turn",
+      "items": [
+        "첫 PlayerId event가 도착하면 Instance intent가 Missing PlayerQuestSpot을 준비한다. owner Spot은 stream replay로 aggregate를 복원한 뒤 event를 평가한다.",
+        "모든 progress와 completion notify는 PlayerQuestSpot이 event stream과 projection을 갱신한 뒤 보낸다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "one-way action",
+      "items": [
+        "KillMonsterReq/Res의 response는 GameApi가 action을 접수해 만든 EventId를 반환한다.",
+        "CollectItemMsg와 EnterAreaMsg는 response가 없는 one-way action이며, self-check는 notify와 evidence를 따로 확인한다 — one-way send 완료는 target handler의 domain append 완료를 뜻하지 않는다."
+      ]
+    }
+  ]
+}

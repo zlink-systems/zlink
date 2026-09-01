@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Disconnect and destroy",
+    "subtitle": "disconnect runs the lifecycle callback only · explicit leave destroys the Actor at the Entry Spot",
+    "output": "sample-tictactoe-disconnect-en.html",
+    "column_fit": "spread",
+    "viewBox": [1010, 820],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Client" },
+    { "id": "P", "type": "backend", "label": "Play Session" },
+    { "id": "F", "type": "backend", "label": "Session Runtime" },
+    { "id": "R", "type": "backend", "label": "Room Spot" },
+    { "id": "E", "type": "backend", "label": "Entry Spot" }
+  ],
+  "messages": [
+    { "from": "C", "to": "P", "y": 160, "label": "STREAM connection ends (abnormal, -x)", "variant": "default" },
+    { "from": "F", "to": "R", "y": 208, "label": "notify disconnected lifecycle callback", "variant": "default" },
+    { "from": "C", "to": "P", "y": 256, "label": "new STREAM connection", "variant": "default" },
+    { "from": "C", "to": "P", "y": 304, "label": "AuthenticateReq", "variant": "default" },
+    { "from": "P", "to": "C", "y": 352, "label": "AuthenticateRes", "variant": "return" },
+    { "from": "C", "to": "P", "y": 400, "label": "JoinGameMsg(RoomId)", "variant": "default" },
+    { "from": "P", "to": "R", "y": 448, "label": "dispatch to existing room member's handler", "variant": "default" },
+    { "from": "R", "to": "P", "y": 496, "label": "JoinGameNotify(current GameState)", "variant": "return" },
+    { "from": "P", "to": "C", "y": 544, "label": "JoinGameNotify", "variant": "return" },
+    { "from": "C", "to": "P", "y": 592, "label": "LeaveGameMsg", "variant": "default" },
+    { "from": "P", "to": "R", "y": 640, "label": "dispatch to bound Actor's Room handler", "variant": "default" },
+    { "from": "R", "to": "E", "y": 688, "label": "Framework moves Actor to Entry Spot", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Interleaved self-steps (mermaid self-messages, in arrow order)",
+      "items": [
+        "After arrow 1 (STREAM ends): F fixes the current binding snapshot.",
+        "After arrow 2 (notify callback): R runs the disconnected lifecycle callback; then F cleans up the binding after all notifications finish — both before the reconnect (arrow 3).",
+        "Between arrows 4 and 5 (AuthenticateReq/Res): P resolves the existing Actor and binds its exact ActorRef.",
+        "After arrow 11 (dispatch to Room handler): R marks the Actor and requests public leave.",
+        "After arrow 12 (move to Entry Spot): E destroys the Actor — the terminal step."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Disconnect vs explicit leave",
+      "items": [
+        "Session Runtime = Framework Session Runtime. The first arrow is a physical STREAM termination (mermaid -x); it doesn't destroy the Actor or change Room membership.",
+        "On reconnect, the Play Session finds the existing Actor and binds its exact ActorRef; because the Actor is already a member, JoinGameMsg returns the current GameState without new membership.",
+        "LeaveGameMsg is one-way, so send completion doesn't prove destroy; the runner checks the Room leave callback and Entry Spot destruction per Actor. Host and guest each run this leave path."
+      ]
+    }
+  ]
+}

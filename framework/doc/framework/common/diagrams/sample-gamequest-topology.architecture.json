@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "시스템 구성과 topology",
+    "subtitle": "GameApi 2대, QuestMission 2대가 하나의 gamequest RouteMesh를 공유한다 · owner는 PlayerId별로 선택",
+    "output": "sample-gamequest-topology.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 110, "gapY": 90, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C1", "type": "frontend", "label": "Game Client A", "row": 0, "col": 0 },
+    { "id": "C2", "type": "frontend", "label": "Game Client B", "row": 3, "col": 0 },
+    { "id": "G1", "type": "frontend", "label": "GameApi 1", "row": 0, "col": 1 },
+    { "id": "G2", "type": "frontend", "label": "GameApi 2", "row": 3, "col": 1 },
+    { "id": "Q1", "type": "backend", "label": "QuestMission 1", "row": 1, "col": 2 },
+    { "id": "Q2", "type": "backend", "label": "QuestMission 2", "row": 2, "col": 2 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Clients", "wraps": ["C1", "C2"] },
+    { "kind": "region", "label": "Servers", "wraps": ["G1", "G2", "Q1", "Q2"] }
+  ],
+  "connections": [
+    { "from": "C1", "to": "G1", "label": "STREAM", "variant": "default" },
+    { "from": "C2", "to": "G2", "label": "STREAM", "variant": "default" },
+    { "from": "G1", "to": "Q1", "label": "gamequest RouteMesh", "variant": "default" },
+    { "from": "G1", "to": "Q2", "variant": "default" },
+    { "from": "G2", "to": "Q1", "variant": "default" },
+    { "from": "G2", "to": "Q2", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "역할",
+      "items": [
+        "GameApi는 session actor와 gameplay edge를 소유하고 connection을 분산한다. QuestMission은 PlayerQuestSpot Instance factory를 제공한다.",
+        "PlayerId별 owner는 Framework가 Location Store authority와 capacity를 사용해 선택한다.",
+        "두 역할은 하나의 RouteMesh를 공유하며 mission별 ChannelName을 만들지 않는다."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "메시지 역할",
+      "items": [
+        "STREAM은 client request, response와 push를 전달한다.",
+        "RouteMesh는 GameApi와 QuestMission node 사이의 Spot direct message를 전달한다."
+      ]
+    }
+  ]
+}

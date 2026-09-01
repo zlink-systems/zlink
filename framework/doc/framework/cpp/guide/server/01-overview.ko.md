@@ -158,7 +158,7 @@ RouteMesh·Spot·Instance Spot 조합으로 구현한다. 방식이 바뀌어도
 | 소셜·메타 기능 — 친구, 리더보드, 그룹, 채팅 | [Nakama](https://heroiclabs.com/nakama-gamelift/) | 백엔드 서버 제품 |
 
 ZLink는 이 중 **연결·세션(STREAM), room·상태 단위(SPOT), 서버 간 메시징(channel),
-참가자 상태(actor), 무중단 종료(drain)** 를 제공한다 — 단, 전용 런타임이나 관리형
+참가자 상태(actor), 무중단 종료(host relocation)** 를 제공한다 — 단, 전용 런타임이나 관리형
 서비스가 아니라 **쓰던 메이저 프레임워크 위의 라이브러리 계층**으로.
 
 - **호스팅·fleet은 ZLink의 몫이 아니다.** K8s든 GameLift든 그 위에서 ZLink 서버가
@@ -170,15 +170,8 @@ ZLink는 이 중 **연결·세션(STREAM), room·상태 단위(SPOT), 서버 간
 그리고 이 전부가 쓰던 프레임워크 안이다 — 엔진을 새로 들여와 별도 생태계로 옮겨가야
 하는 것과는 정반대 방향이다.
 
-```text
-+-----------------------------------------------------------+
-|  ASP.NET Core / Spring / NestJS                           |
-|  DI · 설정 · 로깅 · 배포 그대로                           |
-+-----------------------------------------------------------+
-|  ZLink Framework                                          |
-|  SPOT · actor · STREAM · drain                            |
-+-----------------------------------------------------------+
-```
+<iframe class="zlink-diagram" src="/common/diagrams/overview-stack.html" title="ZLink은 프레임워크 위의 라이브러리 계층" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/overview-stack.html" target="_blank">↗ 크게 보기</a></p>
 
 **코드로 보면.** room 하나를 선언하고, 그 room의 진행 로직을 쓴다.
 
@@ -310,11 +303,6 @@ sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 세 조각이 사
 **Instance Spot**이, 실시간 연결은 shell 서버 대신 **Session 서버**(STREAM)가, 서버 간
 전달은 **runtime 직접 연결**이 맡는다. 새로 두는 인프라는 **location store 하나**뿐이다.
 
-**기존 스택을 대체하는 것이 아니다.** Kafka는 내구성 있는 이벤트 스트림으로, Redis는
-캐시/영속 보조로 양쪽 그림 모두에 그대로 남는다(그래서 그림에서 뺐다). ZLink가
-줄이는 것은 그 사이에서 실시간 전달을 위해 직접 조립하던 **연결·라우팅·상태 관리의
-복잡도**다.
-
 **코드로 보면.** 분산 락과 sticky 라우팅이 있던 자리에 다음 코드가 남는다.
 
 ```cpp
@@ -401,6 +389,10 @@ routing**으로 풀면, 위 조각의 대부분은 조립할 필요 자체가 �
 | 재전달 대비 version check·분산 락 | **직렬 실행** — 같은 단위에 동시 writer가 없어 정상 경로에서 락·version 경합이 없다 | [06 §3](06-spot.ko.md) |
 | 서버 간 호출용 LB·service discovery | **channel name + location store** — `"inventory"` 이름으로 부르면 현재 사용 가능한 peer로 직접 전송한다 | [05](05-channel-messaging.ko.md)·[10](10-location.ko.md) |
 | offset·lag·재동기화 잡 운영 | 소비 파이프라인이 없으므로 해당 운영 항목 자체가 없다 | |
+
+**기존 스택을 대체하는 것이 아니다.** Kafka는 내구성 있는 이벤트 스트림으로, Redis는
+캐시/영속 보조로 그대로 남는다. ZLink가 줄이는 것은 그 사이에서 직접 조립하던
+**연결·라우팅·상태 관리의 복잡도**다.
 
 **경계는 그대로다.** durable log가 진짜 필요한 요구 — 이벤트 replay, 장기 보존, 독립
 시스템들로의 광범위 fan-out — 는 Kafka가 맞고 그대로 남긴다([17장 §4](17-alternative.ko.md)).

@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "종료 cleanup — Report · Relocate · Destroy",
+    "subtitle": "Room이 결과를 기록·leave한 뒤 Framework가 Actor를 Entry Spot으로 옮기고 Entry Spot이 destroy한다",
+    "output": "sample-bingo-end-cleanup.html",
+    "column_fit": "spread",
+    "viewBox": [860, 500],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "R", "type": "backend", "label": "Room" },
+    { "id": "PA", "type": "backend", "label": "Player Actor" },
+    { "id": "API", "type": "frontend", "label": "API" },
+    { "id": "ES", "type": "backend", "label": "Entry Spot" }
+  ],
+  "messages": [
+    { "from": "R", "to": "PA", "y": 160, "label": "Mark destroy after Entry Spot", "variant": "default" },
+    { "from": "R", "to": "PA", "y": 208, "label": "Leave Room", "variant": "default" },
+    { "from": "R", "to": "API", "y": 256, "label": "ReportBingoResultReq", "variant": "default" },
+    { "from": "API", "to": "R", "y": 304, "label": "ReportBingoResultRes", "variant": "return" },
+    { "from": "ES", "to": "PA", "y": 352, "label": "join callback 실행 후 Destroy Actor", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "자기 메시지와 원문 Note",
+      "items": [
+        "원문 Entry Spot→Entry Spot 자기 메시지 'Invoke join callback'은 archify sequence가 자기 메시지를 지원하지 않아 Destroy Actor 화살표 라벨에 합쳤다. 순서: relocation 뒤 Entry Spot이 join callback을 호출하고 destroy 표시를 확인한 뒤 destroy한다.",
+        "원문 Note(Player Actor~Entry Spot): Framework가 leave 뒤 Actor를 relocate한다.",
+        "원문 Note(Entry Spot~Player Actor): Destroy는 leave callback을 호출하지 않는다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "cleanup 순서와 destroy 계약",
+      "items": [
+        "Room은 cleanup이 한 번만 시작되도록 상태를 기록하고, 각 player Actor에 Entry Spot 복귀 뒤 destroy 표시를 남긴 뒤 room에서 leave한다. Room leave callback은 API 결과 기록을 Yield로 기다리며, 외부 효과는 같은 callback이 다시 실행돼도 같은 결과로 수렴하도록 idempotent하게 처리한다.",
+        "Destroy는 Actor registry·native ref·binding을 정리하지만 leave callback을 추가로 호출하지 않는다. 이 흐름은 Entry Spot context가 보유한 Actor instance를 받는 destroy operation을 사용한다 — 호출자는 exact ActorRef destroy의 false 결과를 기대하지 않으며, 결과 값이 없는 비동기 completion으로 표현한다."
+      ]
+    }
+  ]
+}

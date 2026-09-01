@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Chat And Typing",
+    "subtitle": "Agent greeting(MessageSeq 1) · Customer reply(MessageSeq 2) · one-way SetTypingMsg",
+    "output": "sample-supportchat-chat-typing-en.html",
+    "column_fit": "spread",
+    "viewBox": [900, 980],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Customer Client" },
+    { "id": "S", "type": "external", "label": "Session" },
+    { "id": "P", "type": "backend", "label": "ConversationSpot" },
+    { "id": "A", "type": "frontend", "label": "Agent Client" }
+  ],
+  "messages": [
+    { "from": "A", "to": "S", "y": 160, "label": "SendChatMessageReq(metadata ConversationId)", "variant": "default" },
+    { "from": "S", "to": "P", "y": 208, "label": "SendChatMessageReq", "variant": "default" },
+    { "from": "P", "to": "S", "y": 256, "label": "SendChatMessageRes(MessageSeq=1)", "variant": "return" },
+    { "from": "S", "to": "A", "y": 304, "label": "SendChatMessageRes(MessageSeq=1)", "variant": "return" },
+    { "from": "P", "to": "S", "y": 352, "label": "ChatMessageNotify to customer binding", "variant": "return" },
+    { "from": "S", "to": "C", "y": 400, "label": "ChatMessageNotify(MessageSeq=1)", "variant": "return" },
+    { "from": "C", "to": "S", "y": 448, "label": "SendChatMessageReq", "variant": "default" },
+    { "from": "S", "to": "P", "y": 496, "label": "SendChatMessageReq", "variant": "default" },
+    { "from": "P", "to": "S", "y": 544, "label": "SendChatMessageRes(MessageSeq=2)", "variant": "return" },
+    { "from": "S", "to": "C", "y": 592, "label": "SendChatMessageRes(MessageSeq=2)", "variant": "return" },
+    { "from": "P", "to": "S", "y": 640, "label": "ChatMessageNotify to agent binding", "variant": "return" },
+    { "from": "S", "to": "A", "y": 688, "label": "ChatMessageNotify(MessageSeq=2)", "variant": "return" },
+    { "from": "C", "to": "S", "y": 736, "label": "SetTypingMsg(true)", "variant": "default" },
+    { "from": "S", "to": "P", "y": 784, "label": "SetTypingMsg", "variant": "default" },
+    { "from": "P", "to": "S", "y": 832, "label": "TypingChangedNotify to agent binding", "variant": "return" },
+    { "from": "S", "to": "A", "y": 880, "label": "TypingChangedNotify", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "What a chat response means",
+      "items": [
+        "A chat message is request/reply because the server-assigned MessageSeq and acceptance errors must be confirmed. A chat response means acceptance, validation, and MessageSeq confirmation, but it doesn't mean the counterpart read it.",
+        "The Agent greeting becomes MessageSeq 1, and the Customer reply becomes MessageSeq 2, following the same flow in the opposite direction."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Typing and rejection after Closed",
+      "items": [
+        "SetTypingMsg is a one-way send with no response. After source-local admission, it doesn't guarantee the target handler or the counterpart received it — the effect is confirmed once TypingChangedNotify arrives at the counterpart.",
+        "A SendChatMessageReq in the Closed state is an Application callback rejection and returns a typed `Rejected` error response, and a SetTypingMsg in the Closed state is silently ignored. This domain rejection is distinct from the Framework `ErrorKind` values used for transport, route, and protocol failures."
+      ]
+    }
+  ]
+}

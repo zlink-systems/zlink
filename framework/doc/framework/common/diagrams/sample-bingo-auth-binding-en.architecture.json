@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Authentication and binding",
+    "subtitle": "Session validates the token via API, gets/creates the Player Actor, and binds the STREAM session",
+    "output": "sample-bingo-auth-binding-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Client" },
+    { "id": "S", "type": "external", "label": "Session" },
+    { "id": "API", "type": "frontend", "label": "API" },
+    { "id": "P", "type": "backend", "label": "Play" }
+  ],
+  "messages": [
+    { "from": "C", "to": "S", "y": 160, "label": "AuthenticateReq", "variant": "default" },
+    { "from": "S", "to": "API", "y": 208, "label": "AuthenticatePlayerReq", "variant": "default" },
+    { "from": "API", "to": "S", "y": 256, "label": "AuthenticatePlayerRes", "variant": "return" },
+    { "from": "S", "to": "P", "y": 304, "label": "Get or create Player Actor", "variant": "default" },
+    { "from": "P", "to": "S", "y": 352, "label": "ActorRef", "variant": "return" },
+    { "from": "S", "to": "C", "y": 400, "label": "AuthenticateRes (after Session binds the current STREAM session)", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Binding step and route",
+      "items": [
+        "Between ActorRef and AuthenticateRes, Session binds the current STREAM session to the returned ActorRef (mermaid Session self-message).",
+        "mermaid Note over Session,Play: later packets use the stored binding route — game packets after AuthenticateRes is returned are relayed to the Actor via the stored binding route."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Ownership boundary",
+      "items": [
+        "Session asks API to validate the token; on success Session gets or creates the Player Actor by global ActorId and stable actor type.",
+        "Session doesn't store the physical Play endpoint or NodeRid. If the Actor moves via a planned relocation, the Framework updates the binding route."
+      ]
+    }
+  ]
+}

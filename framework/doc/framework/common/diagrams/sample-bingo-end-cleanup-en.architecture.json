@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Disconnect and end cleanup",
+    "subtitle": "the Room marks and leaves the Actor · the Framework returns it to the Entry Spot, which destroys it",
+    "output": "sample-bingo-end-cleanup-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "R", "type": "backend", "label": "Room" },
+    { "id": "PA", "type": "backend", "label": "Player Actor" },
+    { "id": "API", "type": "frontend", "label": "API" },
+    { "id": "ES", "type": "backend", "label": "Entry Spot" }
+  ],
+  "messages": [
+    { "from": "R", "to": "PA", "y": 160, "label": "Mark destroy after Entry Spot", "variant": "default" },
+    { "from": "R", "to": "PA", "y": 208, "label": "Leave Room", "variant": "default" },
+    { "from": "R", "to": "API", "y": 256, "label": "ReportBingoResultReq", "variant": "default" },
+    { "from": "API", "to": "R", "y": 304, "label": "ReportBingoResultRes", "variant": "return" },
+    { "from": "ES", "to": "PA", "y": 352, "label": "Destroy Actor", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Relocation and destroy (mermaid Notes and Entry Spot self-message)",
+      "items": [
+        "mermaid Note over PlayerActor,EntrySpot: after the Room leave, the Framework relocates the Actor to the Entry Spot and calls its join callback (Entry Spot self-message 'Invoke join callback').",
+        "mermaid Note over EntrySpot,PlayerActor: Destroy does not invoke the leave callback — Destroy cleans up the Actor registry, native ref, and binding, but doesn't call onLeaveActor again."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Order and boundaries",
+      "items": [
+        "The Room records state so cleanup only starts once, marks each player Actor to destroy after returning to the Entry Spot, and leaves the room.",
+        "The Room leave callback waits on API's result recording via Yield; the external effect is idempotent so the same result converges on re-run. The Entry Spot checks the mark and then calls the public destroy operation, expressed as an async completion with no result value.",
+        "On a STREAM disconnect the Framework submits disconnect to each exact identity in the binding snapshot: it cleans up the bound session but doesn't iterate Actors, remove a binding directly, destroy the Actor, or change room membership."
+      ]
+    }
+  ]
+}

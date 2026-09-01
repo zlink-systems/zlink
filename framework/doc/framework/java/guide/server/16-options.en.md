@@ -189,7 +189,7 @@ Specified on the builder that `addStreamNode(name)` returns.
 | --- | --- | --- |
 | `bind(endpoint)` · `bind(port)` · `bind()` | The address clients connect to | Must be specified |
 | `setBindHost` · `setAdvertiseHost` | The bind address and advertised address | The `configureNetwork()` value |
-| `enableActorDispatch(String meshName)` | Lets a session relay to an Actor | Not enabled |
+| `enableActorDispatch()` | Lets a session relay to an Actor | Not enabled |
 | `registerSession(Class)` | The session type created per connection | Must be specified |
 | `setTlsServer(cert, key[, requireClientCert])` | TLS configuration | Plaintext |
 
@@ -204,7 +204,7 @@ bean to use them.
 | Value | Surface | What it's for |
 | --- | --- | --- |
 | Placement weight | `mesh(name).setPlacementWeight(int)` | Remove or restore this node as a new-object placement target |
-| Channel weight | `channel(name).setWeight(int)` | Remove or restore this node as a new select-one target |
+| Channel weight | `channel(name).weight(int)` | Remove or restore this node as a new select-one target |
 
 Setting either to `0` **only stops new assignments.** Existing objects and connections stay
 alive as-is.

@@ -66,34 +66,8 @@ event sourcing은 Framework의 일반 저장 기능이 아니라 이 sample이 �
 전형적인 stateless web backend에서는 다음 구성 요소가 주문별 순서, 조율 상태, 외부 효과 재시도와
 조회 결과 전달을 나누어 담당한다.
 
-```mermaid
-flowchart LR
-    C[Web Client] --> LB[Load Balancer] --> API[Order API]
-    subgraph Backend[Stateless Web Backend]
-        SAGA[Saga Orchestrator]
-        ODB[(Order State DB)]
-        IDEM[(Idempotency Store)]
-        LOG[(Event Log and Outbox)]
-        RM[(Read Model)]
-        SCHED[Scheduler]
-    end
-    INV[Inventory Service]
-    PAY[Payment PSP]
-
-    API --> IDEM
-    API --> ODB
-    API --> LOG
-    API -->|Accepted OrderId| C
-    LOG --> SAGA
-    SAGA --> INV
-    SAGA --> PAY
-    SAGA --> ODB
-    SAGA --> LOG
-    SAGA --> RM
-    SCHED -.resume.-> SAGA
-    C -->|poll| API
-    API --> RM
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-existing-web.html" title="기존 방식 — 상태 저장 없는 웹 백엔드" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-shoppingmall-existing-web.html" target="_blank">↗ 크게 보기</a></p>
 
 이 구성은 단순한 CRUD보다 많은 책임을 외부 infrastructure에 둔다. 상태 DB와 lock 또는 version은
 동시 writer를 막고, saga와 event log는 다음 단계를 결정하며, outbox는 상태 기록과 event 발행의
@@ -135,20 +109,8 @@ projection 장애 복구와 Ready owner crash 정책은 여전히 sample/Applica
 server component로 배치하지 않는다. Request, response와 상태 전이의 시간 순서는 §7 sequence
 diagram에서 설명한다.
 
-```mermaid
-flowchart LR
-    subgraph Clients[Clients]
-        C[Web Clients]
-    end
-
-    subgraph Servers[Servers]
-        API[CommerceApi x2]
-        WF[OrderWorkflow x2]
-    end
-
-    C ---|HTTP| API
-    API ---|shoppingmall.workflow RouteMesh| WF
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-topology.html" title="기본 topology — Client와 서버 배치" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-shoppingmall-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 `CommerceApi`와 `OrderWorkflow`는 `shoppingmall.workflow` RouteMesh를 공유한다. 두 역할은 모두
 object Client로 등록할 수 있으며, object routing을 제공하는 Workflow process는
@@ -458,46 +420,8 @@ status를 되돌리지 않는다. `ReservationId`와 `PaymentId`는 `OrderId`와
 
 ### 7.1 주문 시작과 성공 처리
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant API as CommerceApi
-    participant State as Commerce State
-    participant Workflow as OrderWorkflow / Order Spot
-    participant Events as Order Event Store
-    participant Projection as Order Read Model
-    participant Inventory
-    participant Payment
-
-    Client->>API: StartOrderReq
-    API->>State: Reserve idempotency mapping
-    State-->>API: OrderId
-    API->>Workflow: StartOrderWorkflowReq
-    Workflow->>Events: Replay OrderId stream
-    Events-->>Workflow: Empty stream
-    Workflow->>Events: Append OrderStartedEvent
-    Workflow->>Projection: Apply Created
-    Workflow->>State: Confirm started mapping
-    Workflow-->>API: StartOrderWorkflowRes
-    API-->>Client: StartOrderRes(Created)
-
-    Note over Workflow: Background continuation does not extend the HTTP reply boundary
-    Workflow->>Inventory: ReserveInventoryReq
-    Inventory-->>Workflow: ReserveInventoryRes(accepted)
-    Workflow->>Events: Append InventoryReservedEvent
-    Workflow->>Projection: Apply InventoryReserved
-    Workflow->>Payment: AuthorizePaymentReq
-    Payment-->>Workflow: AuthorizePaymentRes(accepted)
-    Workflow->>Events: Append PaymentAuthorizedEvent
-    Workflow->>Projection: Apply PaymentAuthorized
-    Workflow->>Events: Append OrderConfirmedEvent
-    Workflow->>Projection: Apply Confirmed
-
-    Client->>API: GetOrderStateReq
-    API->>Projection: Read OrderState
-    Projection-->>API: Confirmed
-    API-->>Client: GetOrderStateRes(Confirmed)
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-start-success.html" title="주문 시작과 성공 처리 흐름" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-shoppingmall-start-success.html" target="_blank">↗ 크게 보기</a></p>
 
 새 주문의 `StartOrderRes`는 `Created` 경계를 확인하면 반환된다. 예약·승인·확정은 background
 continuation에서 진행하며, HTTP 응답이 그 완료를 기다린다는 계약은 없다. Client는
@@ -509,40 +433,8 @@ projection을 갱신한다. 이후 external module 결과에 따라 다음 event
 
 ### 7.2 재고 실패와 결제 실패 보상
 
-```mermaid
-sequenceDiagram
-    participant Workflow as OrderWorkflow / Order Spot
-    participant Inventory
-    participant Payment
-    participant Events as Order Event Store
-    participant Projection as Order Read Model
-
-    Workflow->>Inventory: ReserveInventoryReq
-    Inventory-->>Workflow: ReserveInventoryRes
-    alt Inventory rejected
-        Workflow->>Events: Append InventoryReservationFailedEvent
-        Workflow->>Events: Append OrderFailedEvent
-        Workflow->>Projection: Apply Failed
-    else Inventory accepted
-        Workflow->>Events: Append InventoryReservedEvent
-        Workflow->>Projection: Apply InventoryReserved
-        Workflow->>Payment: AuthorizePaymentReq
-        Payment-->>Workflow: AuthorizePaymentRes
-        alt Payment rejected
-            Workflow->>Events: Append PaymentFailedEvent
-            Workflow->>Inventory: ReleaseInventoryReq
-            Inventory-->>Workflow: ReleaseInventoryRes
-            Workflow->>Events: Append InventoryReleasedEvent
-            Workflow->>Events: Append OrderFailedEvent
-            Workflow->>Projection: Apply Failed
-        else Payment accepted
-            Workflow->>Events: Append PaymentAuthorizedEvent
-            Workflow->>Projection: Apply PaymentAuthorized
-            Workflow->>Events: Append OrderConfirmedEvent
-            Workflow->>Projection: Apply Confirmed
-        end
-    end
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-failure-compensation.html" title="재고 실패와 결제 실패 보상" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-shoppingmall-failure-compensation.html" target="_blank">↗ 크게 보기</a></p>
 
 재고 예약이 거절되면 Payment module을 호출하지 않는다. Payment가 거절되면 이미 기록한
 `ReservationId`로 해제를 요청하고, 해제 결과와 `OrderFailedEvent`를 순서대로 기록한다. 재고와
@@ -551,39 +443,8 @@ Workflow가 성공 event와 실패 event 중 하나를 선택할 수 있다.
 
 ### 7.3 중복 시작과 중단 뒤 재개
 
-```mermaid
-sequenceDiagram
-    participant ClientA as Client A
-    participant ClientB as Client B
-    participant APIA as CommerceApi A
-    participant APIB as CommerceApi B
-    participant State as Commerce State
-    participant Workflow as OrderWorkflow / Order Spot
-    participant Events as Order Event Store
-    participant Payment
-
-    par Concurrent start with the same key
-        ClientA->>APIA: StartOrderReq(same IdempotencyKey)
-        APIA->>State: Reserve mapping
-    and
-        ClientB->>APIB: StartOrderReq(same IdempotencyKey)
-        APIB->>State: Reserve mapping
-    end
-    State-->>APIA: One OrderId
-    State-->>APIB: Same OrderId
-    APIA->>Workflow: StartOrderWorkflowReq
-    APIB->>Workflow: StartOrderWorkflowReq
-    Workflow->>Events: Deduplicate SourceCommandId
-    Workflow-->>APIA: StartOrderWorkflowRes
-    Workflow-->>APIB: StartOrderWorkflowRes
-
-    Note over Workflow,Events: Recovery replays the stream before choosing the next step
-    Workflow->>Events: Replay OrderId stream
-    Events-->>Workflow: InventoryReserved state
-    Workflow->>Payment: AuthorizePaymentReq(existing PaymentId)
-    Payment-->>Workflow: Authorization result
-    Workflow->>Events: Append Payment event with expected version
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-duplicate-resume.html" title="중복 시작과 중단 후 재개" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-shoppingmall-duplicate-resume.html" target="_blank">↗ 크게 보기</a></p>
 
 동시 시작에서는 `CommerceStateStore`의 mapping reservation에서 먼저 성공한 요청이 `OrderId`를
 결정한다. 다른 요청은 자신의 후보 ID를 버리고 같은 ID를 사용한다. `SourceCommandId`가 이미
@@ -609,27 +470,8 @@ relocation이 없는 성공 분기와 같아야 한다. 이 흐름은 crash fail
 
 ### 7.4 조회와 projection 재생성
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant API as CommerceApi
-    participant Projection as Order Read Model
-    participant Workflow as OrderWorkflow / Order Spot
-    participant Events as Order Event Store
-
-    Client->>API: GetOrderStateReq
-    API->>Projection: Read OrderState
-    Projection-->>API: Current state
-    API-->>Client: GetOrderStateRes
-
-    Client->>API: RebuildOrderProjectionReq
-    API->>Workflow: RebuildOrderProjectionReq
-    Workflow->>Events: Replay all OrderId events
-    Events-->>Workflow: Ordered event stream
-    Workflow->>Projection: Replace projection from fold
-    Workflow-->>API: RebuildOrderProjectionRes
-    API-->>Client: Rebuild result
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-lookup-rebuild.html" title="조회와 프로젝션 재생성" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-shoppingmall-lookup-rebuild.html" target="_blank">↗ 크게 보기</a></p>
 
 `GetOrderStateReq`는 read model만 읽으며 주문을 진행시키지 않는다. Projection이 삭제되거나
 불일치한 경우에도 `OrderEventStore`만 기준으로 다시 만들 수 있어야 한다. 종료 event 기록 뒤
@@ -638,19 +480,8 @@ projection 반영 전에 process가 중단된 경우, 재개 명령은 terminal 
 
 ### 7.5 lifecycle과 failure 경계
 
-```mermaid
-sequenceDiagram
-    participant Caller
-    participant Workflow as OrderWorkflow / Order Spot
-    participant Events as Order Event Store
-
-    Caller->>Workflow: ContinueOrderWorkflowReq
-    Workflow->>Events: Replay existing stream
-    Events-->>Workflow: Folded OrderState
-    Workflow->>Workflow: Run only the next valid step
-    Workflow-->>Caller: ContinueOrderWorkflowRes
-    Note over Caller,Workflow: Ready owner crash is not automatic failover
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-lifecycle.html" title="Lifecycle과 실패 경계" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-shoppingmall-lifecycle.html" target="_blank">↗ 크게 보기</a></p>
 
 | 현재 authority 상태 | Instance message의 의미 | Sample 결과 |
 |---|---|---|
@@ -673,44 +504,8 @@ release, fencing, event와 external effect recovery를 먼저 public contract로
 위치에서 찾을 수 있어야 한다. Project, package, namespace와 file extension은 언어별로 달라도 되지만
 역할을 합치거나 public surface를 임의로 추가하지 않는다.
 
-```text
-ShoppingMall
-+-- Client
-|   +-- Program
-|   +-- Scenario
-+-- Shared
-|   +-- Configuration
-|   +-- JSON Contracts
-+-- Server
-    +-- CommerceApi
-    |   +-- Program
-    |   +-- Application
-    |   |   +-- Start Order
-    |   |   +-- Get Order State
-    |   +-- Infrastructure
-    |       +-- Http
-    |       +-- Workflow Client
-    |       +-- Store Adapter
-    +-- OrderWorkflow
-        +-- Program
-        +-- Domain
-        |   +-- Order Aggregate
-        |   +-- Order Policy
-        |   +-- Order Events
-        |   +-- Inventory Policy
-        |   +-- Payment Policy
-        +-- Application
-        |   +-- Workflow Loop
-        |   +-- Projection Rebuild
-        |   +-- Compensation
-        +-- Infrastructure
-            +-- Order Workflow Spot
-            +-- Event Store Adapter
-            +-- Read Model Adapter
-            +-- Commerce State Adapter
-            +-- Inventory Adapter
-            +-- Payment Adapter
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-implementation-structure.html" title="구현 구조 — ShoppingMall" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-shoppingmall-implementation-structure.html" target="_blank">↗ 크게 보기</a></p>
 
 | Logical component | 모든 언어에서 유지할 책임 |
 |---|---|
@@ -888,3 +683,7 @@ Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 
 - [ ] sample code가 public Framework API와 기본 typed JSON codec만 사용한다.
 - [ ] smoke 실행이 readiness를 bounded wait로 확인하고 성공 marker를 조건부로 출력하며,
       §10.1 표의 모든 행을 문자열과 횟수까지 통과시킨다.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

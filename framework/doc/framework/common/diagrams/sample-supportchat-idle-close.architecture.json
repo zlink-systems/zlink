@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "idle, close와 reconnect",
+    "subtitle": "ConversationIdleNotify → grace 만료 → ConversationClosedNotify → reconnect·재join",
+    "output": "sample-supportchat-idle-close.html",
+    "column_fit": "spread",
+    "viewBox": [900, 850],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Customer Client" },
+    { "id": "S", "type": "external", "label": "Session" },
+    { "id": "P", "type": "backend", "label": "ConversationSpot" },
+    { "id": "A", "type": "frontend", "label": "Agent Client" }
+  ],
+  "messages": [
+    { "from": "P", "to": "S", "y": 160, "label": "ConversationIdleNotify", "variant": "return" },
+    { "from": "S", "to": "C", "y": 208, "label": "ConversationIdleNotify", "variant": "return" },
+    { "from": "S", "to": "A", "y": 256, "label": "ConversationIdleNotify", "variant": "return" },
+    { "from": "P", "to": "S", "y": 304, "label": "grace 만료 → ConversationClosedNotify", "variant": "return" },
+    { "from": "S", "to": "C", "y": 352, "label": "ConversationClosedNotify", "variant": "return" },
+    { "from": "S", "to": "A", "y": 400, "label": "ConversationClosedNotify", "variant": "return" },
+    { "from": "C", "to": "S", "y": 448, "label": "STREAM reconnect", "variant": "default" },
+    { "from": "C", "to": "S", "y": 496, "label": "AuthenticateReq(same token)", "variant": "default" },
+    { "from": "S", "to": "C", "y": 544, "label": "AuthenticateRes", "variant": "return" },
+    { "from": "C", "to": "S", "y": 592, "label": "JoinConversationReq(metadata ConversationId)", "variant": "default" },
+    { "from": "S", "to": "P", "y": 640, "label": "JoinConversationReq", "variant": "default" },
+    { "from": "P", "to": "S", "y": 688, "label": "JoinConversationRes(scheduled=false)", "variant": "return" },
+    { "from": "S", "to": "C", "y": 736, "label": "JoinConversationRes(scheduled=false)", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "idle·grace·close 전이",
+      "items": [
+        "마지막 message 뒤 domain idle deadline이 지나면 ConversationSpot이 WaitingForClose로 전환하고 양쪽에 ConversationIdleNotify를 보낸다. grace timeout 안에 message가 오면 Active로 돌아가고, 그렇지 않으면 Closed와 ConversationClosedNotify를 보낸다. explicit close는 바로 Closed로 전환한다.",
+        "원문 P→P 자기 메시지 'grace deadline expires'는 archify sequence가 자기 메시지를 지원하지 않아 뒤이은 ConversationClosedNotify 화살표 라벨('grace 만료 → …')에 합쳤다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "reconnect relay 규칙",
+      "items": [
+        "reconnect는 actor와 Conversation state를 새로 만들지 않는다. scheduled=false로 현재 state를 반환한다. Agent는 roster actor를 다시 bind하고 SetAgentAvailableReq(true)를 보낸 뒤 열려 있던 conversation마다 JoinConversationReq를 보낸다.",
+        "Session은 metadata ConversationId가 agent conversation actor map에 있으면 그 actor로 relay하고, customer의 map miss는 customer identity actor로 relay한다.",
+        "여러 process의 준비·재연결 검증이 idle deadline보다 오래 걸리면 runner는 일반 typed SendChatMessageReq로 traffic 유효를 갱신할 수 있다 — 이는 heartbeat·keepalive가 아니며 control packet·sleep·log line으로 deadline을 대신 늘리지 않는다. 실제 idle·grace 동작은 별도 bounded wait로 확인한다."
+      ]
+    }
+  ]
+}

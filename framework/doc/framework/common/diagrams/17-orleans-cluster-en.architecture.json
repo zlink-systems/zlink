@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Orleans/Akka — actor cluster with separate edge",
+    "subtitle": "client gateway via SignalR/WS · actor cluster is a separate runtime",
+    "output": "17-orleans-cluster-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 2, "gapX": 110, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "web", "type": "frontend", "label": "web framework", "sublabel": "edge", "row": 0, "col": 0 },
+    { "id": "wsEdge", "type": "messagebus", "label": "SignalR / WS edge", "sublabel": "client gateway", "row": 0, "col": 1 },
+    { "id": "cluster", "type": "external", "label": "Orleans/Akka", "sublabel": "actor cluster", "row": 1, "col": 0 }
+  ],
+  "connections": [
+    { "from": "web", "to": "wsEdge", "variant": "default" },
+    { "from": "web", "to": "cluster", "variant": "default", "fromSide": "bottom" }
+  ],
+  "cards": [
+    {
+      "dot": "slate",
+      "title": "Orleans/Akka — a separate layer",
+      "items": [
+        "web framework edge → SignalR/WebSocket edge (client gateway) admits external clients",
+        "actor cluster: storage provider · persistence — a separate runtime (gray)"
+      ]
+    }
+  ]
+}

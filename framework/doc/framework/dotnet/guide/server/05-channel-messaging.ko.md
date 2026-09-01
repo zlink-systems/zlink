@@ -730,19 +730,19 @@ public sealed class AvroOrderSerializer : IZLinkMessageSerializer
 {
     private readonly Avro.Schema _schema = Avro.Schema.Parse(SchemaJson);
 
-    // serializer의 책임은 business 객체 ↔ Message(byte payload) 변환뿐. packet name 결정·codec 선택은 framework.
-    public Message Serialize(object value, Type type)
+    // serializer의 책임은 business 객체 ↔ ZLinkEncodedPayload(byte payload) 변환뿐. packet name 결정·codec 선택은 framework.
+    public ZLinkEncodedPayload Serialize(object value, Type type)
     {
         using var buffer = new MemoryStream();
         var writer = new Avro.Generic.GenericWriter<object>(_schema);
         writer.Write(value, new Avro.IO.BinaryEncoder(buffer));
-        return Message.From(buffer.ToArray());
+        return ZLinkEncodedPayload.From(buffer.ToArray());
     }
 
-    public object? Deserialize(Message message, Type type)
+    public object? Deserialize(ZLinkEncodedPayload payload, Type type)
     {
         var reader = new Avro.Generic.GenericReader<object>(_schema, _schema);
-        return reader.Read(null!, new Avro.IO.BinaryDecoder(new MemoryStream(message.ToArray())));
+        return reader.Read(null!, new Avro.IO.BinaryDecoder(new MemoryStream(payload.ToArray())));
     }
 }
 

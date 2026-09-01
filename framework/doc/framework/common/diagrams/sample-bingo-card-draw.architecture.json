@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Card·draw와 winner 결정 — Submit · Draw · Finish",
+    "subtitle": "두 card 제출 뒤 room의 logical timer가 tick마다 번호를 뽑아 mark하고, complete line에서 winner를 정한다",
+    "output": "sample-bingo-card-draw.html",
+    "column_fit": "spread",
+    "viewBox": [820, 800],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "PL", "type": "frontend", "label": "Players" },
+    { "id": "S", "type": "external", "label": "Session" },
+    { "id": "AC", "type": "backend", "label": "Actors" },
+    { "id": "R", "type": "backend", "label": "Room" }
+  ],
+  "messages": [
+    { "from": "PL", "to": "S", "y": 160, "label": "SubmitBingoCardReq", "variant": "default" },
+    { "from": "S", "to": "AC", "y": 208, "label": "Relay through binding", "variant": "default" },
+    { "from": "AC", "to": "R", "y": 256, "label": "Submit card", "variant": "default" },
+    { "from": "R", "to": "AC", "y": 304, "label": "Card accepted", "variant": "return" },
+    { "from": "AC", "to": "S", "y": 352, "label": "SubmitBingoCardRes", "variant": "return" },
+    { "from": "S", "to": "PL", "y": 400, "label": "SubmitBingoCardRes", "variant": "return" },
+    { "from": "R", "to": "AC", "y": 448, "label": "[loop] draw timer 시작·번호 추첨·mark 후 BingoNumberDrawnNotify", "variant": "return" },
+    { "from": "AC", "to": "S", "y": 496, "label": "[loop] BingoNumberDrawnNotify", "variant": "return" },
+    { "from": "S", "to": "PL", "y": 544, "label": "[loop] BingoNumberDrawnNotify", "variant": "return" },
+    { "from": "R", "to": "AC", "y": 592, "label": "winner 결정·Finished 후 BingoGameEndedNotify", "variant": "return" },
+    { "from": "AC", "to": "S", "y": 640, "label": "BingoGameEndedNotify", "variant": "return" },
+    { "from": "S", "to": "PL", "y": 688, "label": "BingoGameEndedNotify", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "자기 메시지 3개와 loop (archify 미지원 → 인접 화살표에 합침)",
+      "items": [
+        "원문 Room→Room 'Start logical draw timer'와 'Draw number and update marks'(loop Each draw tick)를 첫 BingoNumberDrawnNotify 라벨에 합쳤다. `[loop]` 표시 세 줄이 원문의 draw tick 반복이다 — tick마다 번호 하나를 뽑고 두 card를 mark한 뒤 증가하는 DrawSeq로 notify한다.",
+        "원문 Room→Room 'Select winner and set Finished' → 뒤따르는 BingoGameEndedNotify 라벨에 합쳤다. Complete line이 처음 생긴 draw에서 winner를 정하고 state를 Finished로 바꾼다.",
+        "순서: SubmitBingoCardRes 반환 뒤 timer가 시작한다(제출·응답보다 뒤)."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "domain 소유와 규칙",
+      "items": [
+        "두 player는 start push를 확인한 뒤 서로 다른 deterministic card를 제출한다. Room은 card 크기·숫자 범위·중복을 검증하고 가운데 free cell을 mark한다. 두 card가 모두 준비되면 logical timer가 draw tick을 시작한다.",
+        "Card 검증, draw deck, mark와 winner 판정은 domain module이 소유한다. Client는 번호를 뽑거나 mark를 제출하지 않는다. Session handler와 Framework adapter도 game rule을 구현하지 않는다."
+      ]
+    }
+  ]
+}

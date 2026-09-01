@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Making a move and the final state",
+    "subtitle": "the requester gets PlaceMarkRes · the other client gets GameStateNotify with the same state",
+    "output": "sample-tictactoe-place-mark-en.html",
+    "column_fit": "spread",
+    "viewBox": [1040, 820],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "H", "type": "frontend", "label": "Host Client" },
+    { "id": "P1", "type": "backend", "label": "Play Session A" },
+    { "id": "R", "type": "backend", "label": "Room Spot" },
+    { "id": "P2", "type": "backend", "label": "Play Session B" },
+    { "id": "G", "type": "frontend", "label": "Guest Client" }
+  ],
+  "messages": [
+    { "from": "H", "to": "P1", "y": 160, "label": "PlaceMarkReq(cell)", "variant": "default" },
+    { "from": "P1", "to": "R", "y": 208, "label": "dispatch to bound Actor's Room handler", "variant": "default" },
+    { "from": "R", "to": "P1", "y": 256, "label": "PlaceMarkRes(GameState)", "variant": "return" },
+    { "from": "P1", "to": "H", "y": 304, "label": "PlaceMarkRes", "variant": "return" },
+    { "from": "R", "to": "P2", "y": 352, "label": "GameStateNotify", "variant": "return" },
+    { "from": "P2", "to": "G", "y": 400, "label": "GameStateNotify", "variant": "return" },
+    { "from": "G", "to": "P2", "y": 448, "label": "PlaceMarkReq(cell)", "variant": "default" },
+    { "from": "P2", "to": "R", "y": 496, "label": "dispatch to bound Actor's Room handler", "variant": "default" },
+    { "from": "R", "to": "P2", "y": 544, "label": "PlaceMarkRes(GameState)", "variant": "return" },
+    { "from": "P2", "to": "G", "y": 592, "label": "PlaceMarkRes", "variant": "return" },
+    { "from": "R", "to": "P1", "y": 640, "label": "GameStateNotify", "variant": "return" },
+    { "from": "P1", "to": "H", "y": 688, "label": "GameStateNotify", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Turn and response",
+      "items": [
+        "The requesting client receives PlaceMarkRes; the other client receives GameStateNotify with the same state.",
+        "P1/P2 dispatch each request to the bound Actor's Room handler on the Room Spot."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Rejections",
+      "items": [
+        "A wrong turn, an occupied cell, and a finished room are Application callback rejections and return a typed Rejected error. Only transport, route, and protocol failures use other Framework ErrorKind values.",
+        "The final state's status and winner must match on both clients."
+      ]
+    }
+  ]
+}

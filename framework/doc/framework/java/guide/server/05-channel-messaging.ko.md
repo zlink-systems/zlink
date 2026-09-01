@@ -652,8 +652,8 @@ weight가 모두 같으면 새 요청은 균등하게 round-robin으로 분배�
 
 ```java
 // 운영 admin 엔드포인트. "orders"는 등록한 ChannelName이다.
-meshOptions.channel("orders").setWeight(0);   // 이 ChannelName을 새 select-one 대상에서 제외
-meshOptions.channel("orders").setWeight(100); // 정상 복귀
+meshOptions.channel("orders").weight(0);   // 이 ChannelName을 새 select-one 대상에서 제외
+meshOptions.channel("orders").weight(100); // 정상 복귀
 ```
 
 - `Weight = 0`(drain)은 serving socket을 **닫지 않는다**. 이미 들어온 in-flight 요청은
@@ -811,7 +811,7 @@ ZLinkMeshNodeBuilder mesh = options.addRouteMesh("play")
 
 // 노드 자체의 운영 상태를 반환하는 handler다.
 mesh.addRouteRequestHandler(
-    NodeStatusHandler.class, GetNodeStatus.class, NodeStatus.class, "ops.node.status");
+    NodeStatusHandler.class, GetNodeStatus.class, NodeStatus.class);
 ```
 
 호출자는 관리 시스템에서 확인한 Node RID와 MeshName을 함께 전달한다.

@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Conventional web approach — delivery/dispatch comparison",
+    "subtitle": "queue · registry · timeout job · event bus (orange) attach as separate components",
+    "output": "sample-delivery-existing-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 3, "gapX": 96, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C", "type": "frontend", "label": "Clients", "sublabel": "Customer·Courier", "row": 0, "col": 0 },
+    { "id": "LB", "type": "external", "label": "Load Balancer", "row": 1, "col": 0 },
+    { "id": "API", "type": "frontend", "label": "Delivery API", "row": 2, "col": 0 },
+    { "id": "DB", "type": "database", "label": "Delivery DB", "row": 1, "col": 1 },
+    { "id": "Q", "type": "messagebus", "label": "Dispatch Queue", "row": 2, "col": 1 },
+    { "id": "E", "type": "messagebus", "label": "Event Bus", "row": 3, "col": 1 },
+    { "id": "J", "type": "messagebus", "label": "Timeout Job", "row": 1, "col": 2 },
+    { "id": "W", "type": "frontend", "label": "Dispatch Worker", "row": 2, "col": 2 },
+    { "id": "R", "type": "messagebus", "label": "Session Registry", "row": 3, "col": 2 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Stateless Web Backend", "wraps": ["DB", "Q", "W", "R", "E", "J"] }
+  ],
+  "connections": [
+    { "from": "C", "to": "LB", "variant": "default" },
+    { "from": "LB", "to": "API", "variant": "default" },
+    { "from": "API", "to": "DB", "variant": "default" },
+    { "from": "API", "to": "Q", "variant": "default" },
+    { "from": "Q", "to": "W", "variant": "default" },
+    { "from": "W", "to": "R", "variant": "default" },
+    { "from": "W", "to": "E", "variant": "default" },
+    { "from": "J", "to": "DB", "variant": "default" },
+    { "from": "J", "to": "Q", "variant": "default" },
+    { "from": "E", "to": "API", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "orange",
+      "title": "Coordination overhead attached (orange)",
+      "items": [
+        "The queue, registry, timeout job, and event bus are separate components. DeliveryDispatch does not remove this responsibility; it shifts the boundary so the DispatchWorker owns offer state and deadlines while the Framework handles Actor routing and session binding.",
+        "Color basis: Session Registry follows the sibling comparison diagram (01-delivery-existing), which places session-affinity overhead like a sticky LB as messagebus (orange) and the L7 LB/gateway as external (gray). Dispatch Worker is retained business logic (→ DispatchWorker), so it is frontend (blue)."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Correspondence",
+      "items": [
+        "session registry → Courier/Customer Actor and bound session. dispatch queue/worker → DispatchWorker. event bus → status/evidence on Tracking. websocket push gateway → CustomerGateway/CourierSession. timeout job → worker sweeper."
+      ]
+    }
+  ]
+}

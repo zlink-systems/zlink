@@ -87,7 +87,8 @@ Values applied across the whole process.
 | `UseFilter<T>()` | Common processing to put in front of handlers | None | Gathering logging/validation/authorization in one place |
 | `ConfigureMetadata()` | The metadata keys allowed to pass between a client connection and an actor | No key allowed | Something like auth info needs to pass from the connection to the actor |
 | `ConfigureNetwork()` | The default `BindHost`/`AdvertiseHost` for every endpoint | Unspecified | The bind address and advertised address need to differ in a container/Kubernetes |
-| `ConfigureDispatch()` | Unhandled dispatch, diagnostics, Core HWM, and the application job queue | Diagnostics use `Errors`; both profiles use `Balanced` | Tuning dispatch policy, diagnostics, the Core byte budget, or the queued-job limit |
+| `ConfigureDispatch()` | Unhandled dispatch and diagnostics | Diagnostics use `Errors` | Tuning dispatch policy or diagnostics |
+| `ConfigureInboundDispatch()` | Core HWM and the application job queue | Both profiles use `Balanced` | Tuning the Core byte budget or the queued-job limit |
 | `ApplicationVersion` | This process's application version | `0` | Picking a relocation target by version during a zero-downtime deploy |
 | `MaintenanceWave` | The maintenance group name this process belongs to | None | Grouping nodes to maintain/replace in sequence |
 | `Worker` | The thread pool heavy work is handed off to | Max `processor count × 2` (min 2) · 30s idle · 1024 queue | Handing off a lot of slow computation/I/O to a worker |
@@ -167,7 +168,6 @@ framework does not calculate a separate connection-count bucket table
 | --- | --- | --- | --- |
 | `SendHighWaterMark` | Bytes this node can hold, per peer, **to send**. `0` means unlimited | Absorbs more of a momentary burst | The sender waits sooner, surfacing congestion faster |
 | `ReceiveHighWaterMark` | Bytes this node can hold, per peer, **after receiving**. `0` means unlimited | Tolerates more processing delay | This node fails to pick messages up sooner, delaying the peer's send first |
-| `MaxMessageSize` | The max size of one message that will be accepted | Can exchange a larger payload | Blocks an excessive payload at the door |
 | `MailboxMessageBudget` · `MailboxByteBudget` | The message count and bytes one execution unit like a Spot/Actor can hold | A slow execution unit tolerates more of a burst | Surfaces a delayed execution unit sooner |
 | `ReceiveTimeout` · `SendTimeout` | The socket-level wait ceiling | — | The default behavior is enough in most cases |
 | `Linger` (publish socket) | How long to wait for a remaining message when closing | Doesn't drop the last publish on shutdown | The default is `0`, so it closes immediately |
@@ -189,7 +189,7 @@ process memory based on the byte ceiling, specify a finite value.
 
 ### 3.3 Core HWM And The Application Job Queue
 
-These are values on `IZLinkDispatchOptions`, returned by `ConfigureDispatch()`.
+These are values on `IZLinkInboundDispatchOptions`, returned by `ConfigureInboundDispatch()`.
 
 | Setting | What it sets | Default |
 | --- | --- | --- |

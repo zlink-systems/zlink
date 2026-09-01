@@ -970,10 +970,10 @@ framework는 발견한 handler를 모든 channel에 자동으로 열지 않는�
     ```typescript
     const mesh = builder.addRouteMesh('services')
       .listen('tcp://0.0.0.0:7101')
-      .setRoutingId(RoutingId.from('api-1'));
+      .routingId('api-1');
     mesh.channel('api').server()                    // server()가 handler를 받는 역할이다.
-      .addRequestHandler(GetProfileHandler)
-      .addSendHandler(RefreshCacheHandler);
+      .addRequestHandler('GetProfileRequest', GetProfileHandler)
+      .addSendHandler('RefreshCacheCommand', RefreshCacheHandler);
     ```
 
 
@@ -1035,10 +1035,10 @@ framework는 발견한 handler를 모든 channel에 자동으로 열지 않는�
     ```typescript
     const mesh = builder.addRouteMesh('services')
       .listen('tcp://0.0.0.0:7101')
-      .setRoutingId(RoutingId.from('api-1'));
+      .routingId('api-1');
 
     mesh.channel('api').server()                 // 이 node가 처리하는 channel.
-      .addRequestHandler(GetProfileHandler);
+      .addRequestHandler('GetProfileRequest', GetProfileHandler);
     mesh.channel('billing').client();            // 호출만 하는 channel은 client — handler를 등록하지 않는다.
     ```
 
@@ -1619,7 +1619,7 @@ filter도 그 수만큼 실행되고, 무거운 filter는 구독자가 늘수록
     ```typescript
     const mesh = builder.addRouteMesh('services')
       .listen('tcp://0.0.0.0:7102')
-      .setRoutingId(RoutingId.from('profile-client-1'));
+      .routingId('profile-client-1');
     mesh.channel('profile').client();
     mesh.peerConnections().connect('tcp://10.0.10.15:7101');
     mesh.peerConnections().connect('tcp://10.0.10.16:7101');
@@ -1697,16 +1697,16 @@ weight가 모두 같으면 새 요청은 균등하게 round-robin으로 분배�
 
     ```java
     // 운영 admin 엔드포인트. "orders"는 등록한 ChannelName이다.
-    meshOptions.channel("orders").setWeight(0);   // 이 ChannelName을 새 select-one 대상에서 제외
-    meshOptions.channel("orders").setWeight(100); // 정상 복귀
+    meshOptions.channel("orders").weight(0);   // 이 ChannelName을 새 select-one 대상에서 제외
+    meshOptions.channel("orders").weight(100); // 정상 복귀
     ```
 
 === "Kotlin"
 
     ```kotlin
     // 운영 admin 엔드포인트. "orders"는 등록한 ChannelName이다.
-    meshOptions.channel("orders").setWeight(0)   // 이 ChannelName을 새 select-one 대상에서 제외
-    meshOptions.channel("orders").setWeight(100) // 정상 복귀
+    meshOptions.channel("orders").weight(0)   // 이 ChannelName을 새 select-one 대상에서 제외
+    meshOptions.channel("orders").weight(100) // 정상 복귀
     ```
 
 === "Node/TypeScript"
@@ -1770,7 +1770,7 @@ weight가 모두 같으면 새 요청은 균등하게 round-robin으로 분배�
     ```typescript
     const mesh = builder.addRouteMesh('services')
       .listen('tcp://0.0.0.0:7101')
-      .setRoutingId(RoutingId.from('orders-1'));
+      .routingId('orders-1');
     mesh.channel('orders').server().setWeight(30); // 이 channel 역할의 시작 weight
     ```
 
@@ -1836,19 +1836,19 @@ serializer는 서로 겹치지 않게 여러 개 둘 수 있다.
     {
         private readonly Avro.Schema _schema = Avro.Schema.Parse(SchemaJson);
 
-        // serializer의 책임은 business 객체 ↔ Message(byte payload) 변환뿐. packet name 결정·codec 선택은 framework.
-        public Message Serialize(object value, Type type)
+        // serializer의 책임은 business 객체 ↔ ZLinkEncodedPayload(byte payload) 변환뿐. packet name 결정·codec 선택은 framework.
+        public ZLinkEncodedPayload Serialize(object value, Type type)
         {
             using var buffer = new MemoryStream();
             var writer = new Avro.Generic.GenericWriter<object>(_schema);
             writer.Write(value, new Avro.IO.BinaryEncoder(buffer));
-            return Message.From(buffer.ToArray());
+            return ZLinkEncodedPayload.From(buffer.ToArray());
         }
 
-        public object? Deserialize(Message message, Type type)
+        public object? Deserialize(ZLinkEncodedPayload payload, Type type)
         {
             var reader = new Avro.Generic.GenericReader<object>(_schema, _schema);
-            return reader.Read(null!, new Avro.IO.BinaryDecoder(new MemoryStream(message.ToArray())));
+            return reader.Read(null!, new Avro.IO.BinaryDecoder(new MemoryStream(payload.ToArray())));
         }
     }
 
@@ -2018,7 +2018,7 @@ serializer는 서로 겹치지 않게 여러 개 둘 수 있다.
       .listen('tcp://0.0.0.0:5600')
       .setRoutingIdPrefix('resize');
     mesh.channel('image.resize').server()
-      .addRequestHandler(ResizeHandler);
+      .addRequestHandler('ResizeRequest', ResizeHandler);
     ```
 
 호출 노드는 같은 ChannelName을 Client로 등록하고 처리 노드를 연결한다.
@@ -2178,7 +2178,7 @@ Node direct 호출은 `RoutingId`로 특정 MeshNode 하나를 지정한다. 이
 
     // 노드 자체의 운영 상태를 반환하는 handler다.
     mesh.addRouteRequestHandler(
-        NodeStatusHandler.class, GetNodeStatus.class, NodeStatus.class, "ops.node.status");
+        NodeStatusHandler.class, GetNodeStatus.class, NodeStatus.class);
     ```
 
 === "Kotlin"
@@ -2190,8 +2190,7 @@ Node direct 호출은 `RoutingId`로 특정 MeshNode 하나를 지정한다. 이
 
     // 노드 자체의 운영 상태를 반환하는 handler다.
     mesh.addRouteRequestHandler(
-        NodeStatusHandler::class.java, GetNodeStatus::class.java, NodeStatus::class.java,
-        "ops.node.status")
+        NodeStatusHandler::class.java, GetNodeStatus::class.java, NodeStatus::class.java)
     ```
 
 === "Node/TypeScript"
@@ -2199,10 +2198,10 @@ Node direct 호출은 `RoutingId`로 특정 MeshNode 하나를 지정한다. 이
     ```typescript
     const mesh = builder.addRouteMesh('play')
       .listen(playRouterEndpoint)
-      .setRoutingId(RoutingId.from(playRouterId));
+      .routingId(playRouterId);
 
     // 노드 자체의 운영 상태를 반환하는 handler다.
-    mesh.addRouteRequestHandler(NodeStatusHandler, 'ops.node.status');
+    mesh.addRequestHandler('ops.node.status', NodeStatusHandler);
     ```
 
 
@@ -2295,7 +2294,7 @@ Node direct 호출은 `RoutingId`로 특정 MeshNode 하나를 지정한다. 이
 === "Node/TypeScript"
 
     ```typescript
-    const target = RoutingId.from('play-node-1');
+    const target = 'play-node-1';
 
     // 특정 노드의 운영 상태를 묻기 때문에 Node direct를 사용한다.
     const status = await routeClient
@@ -2493,7 +2492,7 @@ SPOT과의 결합은 [06-spot](06-spot.ko.md)에서 이어진다.
 
             const mesh = builder.addRouteMesh('services')
               .listen('tcp://0.0.0.0:7101')
-              .setRoutingId(RoutingId.from('api-1'));
+              .routingId('api-1');
             mesh.channel('api').server()
               .addHandlerGroup('api');                   // 노출: handler group을 channel에 연결한다.
             mesh.channel('account').client();            // 호출만 하는 channel.
@@ -2503,7 +2502,7 @@ SPOT과의 결합은 [06-spot](06-spot.ko.md)에서 이어진다.
             events.connect('tcp://127.0.0.1:7201');       // 자기 발행도 구독해 보여 주는 예다.
             events.addHandlerGroup('api.events');         // 구독 handler를 group으로 붙인다.
 
-            return builder;
+            return builder.build();
           }
         })
       ],

@@ -92,7 +92,7 @@ registers an Instance Spot to hold the matching queue.
         sample_names_t::room_spot_type,                  // Stable type -- selected by this name when creating.
         [] (spot_context_t c) { return std::make_shared<bingo_room_t> (std::move (c)); },
         [] (auto &factory) {
-            factory.execution_mode (user_spot_execution_mode_t::spot_wide);
+            factory.set_execution_mode (user_spot_execution_mode_t::spot_wide);
             factory.template preserve_state_with<bingo_room_relocation_adapter_t> ();
         });
 
@@ -326,7 +326,7 @@ stable type becomes a placement candidate.
         "game-room",
         [] (spot_context_t c) { return std::make_shared<game_room_t> (std::move (c)); },
         [] (auto &factory) {
-            factory.execution_mode (user_spot_execution_mode_t::spot_wide);
+            factory.set_execution_mode (user_spot_execution_mode_t::spot_wide);
             factory.disable_relocation ();
         })
       .add_instance_spot_factory<matchmaker_t> (
@@ -2295,7 +2295,7 @@ until the point the application signals.
         [] (spot_context_t c) { return std::make_shared<game_room_t> (std::move (c)); },
         [] (auto &factory) {
             // Only usable in this mode.
-            factory.execution_mode (user_spot_execution_mode_t::spot_wide);
+            factory.set_execution_mode (user_spot_execution_mode_t::spot_wide);
             factory.set_relocation_coordination_mode (spot_relocation_coordination_mode_t::application_signaled);
             factory.template preserve_state_with<game_room_relocation_adapter_t> ();
         });

@@ -95,39 +95,8 @@ RID를 security identity처럼 사용하는 경로는 허용하지 않는다.
 Relocation Store는 resource 표에서 설명하며 HTTP, stream, join과 publish의 시간 순서는 §7
 sequence diagram에 둔다.
 
-```mermaid
-flowchart LR
-    subgraph Clients[Clients]
-        H[Host Client]
-        G[Guest Client]
-        O[Observer Client]
-    end
-    subgraph Servers[Servers]
-        A1[Api A]
-        A2[Api B]
-        P1[Play A]
-        P2[Play B]
-        AC1["Play A tictactoe.api<br/>Api 하나 선택"]
-        AC2["Play B tictactoe.api<br/>Api 하나 선택"]
-    end
-    H ---|HTTP| A1
-    G ---|HTTP| A2
-    O ---|HTTP| A2
-    H ---|STREAM| P1
-    G ---|STREAM| P2
-    O ---|STREAM| P2
-    A1 ---|tictactoe RouteMesh| P1
-    A1 ---|tictactoe RouteMesh| P2
-    A2 ---|tictactoe RouteMesh| P1
-    A2 ---|tictactoe RouteMesh| P2
-    P1 ---|tictactoe RouteMesh| P2
-    P1 --- AC1
-    AC1 -.-> A1
-    AC1 -.-> A2
-    P2 --- AC2
-    AC2 -.-> A1
-    AC2 -.-> A2
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-topology.html" title="시스템 구성과 topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-tictactoe-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 - Api A/B는 object client이며 room create request를 Play object server로 보낸다.
 - Play A/B는 object server이고 같은 object type, Entry Spot과 Logical Multicast membership을
@@ -388,37 +357,8 @@ Room Spot 생성을 요청한다. Spot manager가 RoomId를 발급하고 owner�
 `CreateGameHttpRes`로 RoomId, RequiredLevel, PlayEndpoints, PlayNodes와 GameName을 반환한다. Client가
 어떤 Play ingress를 사용해도 room owner는 바뀌지 않는다.
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant API as Api A 또는 Api B
-    participant M as Framework Spot Manager
-    participant P as Play A 또는 Play B Session
-    participant A as Player Actor
-    participant R as Room Spot
-
-    C->>API: CreateGameHttpReq
-    API->>M: TicTacToeGameCreateReq로 Room Spot 생성 요청
-    M->>R: Room Spot 생성과 초기화
-    R-->>M: 생성 수락
-    M-->>API: 생성 결과(RoomId)
-    API-->>C: CreateGameHttpRes(RoomId, RequiredLevel, PlayEndpoints, PlayNodes, GameName)
-    Note over C,P: host는 Play A 사용<br/>guest와 observer는 Play B 사용
-    C->>P: AuthenticateReq
-    P->>API: tictactoe.api에서 Api 하나를 선택해 AuthenticatePlayerReq 전송
-    API-->>P: AuthenticatePlayerRes(PlayerInfo)
-    P->>A: PlayerActorCreateReq(PlayerInfo)로 GetOrCreate
-    A-->>P: current ActorRef
-    P-->>C: AuthenticateRes(PlayerInfo)
-    C->>P: JoinGameMsg(RoomId)
-    P->>A: bound Actor에 JoinGameMsg 전달
-    A->>R: TicTacToeGameJoinReq(PlayerInfo)
-    R->>R: Level >= RequiredLevel 확인
-    R-->>A: TicTacToeGameJoinRes
-    A-->>P: current session에 JoinGameNotify push
-    P-->>C: JoinGameNotify
-    R-->>P: 기존 member의 session에 PlayerJoinedNotify 전송
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-create-auth.html" title="Room 생성과 인증·입장" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-tictactoe-create-auth.html" target="_blank">↗ 크게 보기</a></p>
 
 Join failure는 current session에 보내는 `JoinGameFailedNotify`로 알린다. 인증 전에
 `JoinGameMsg`나 `PlaceMarkReq`를 보내면 Actor를 만들지 않고 해당 호출을 오류로 끝낸다.
@@ -430,27 +370,8 @@ request client는 PlaceMarkRes를 받고 상대 client는 GameStateNotify를 받
 끝난다. Transport·route·protocol 실패만 Framework의 다른 `ErrorKind`로 끝난다. 최종 state의
 status와 winner는 양쪽 client에서 같아야 한다.
 
-```mermaid
-sequenceDiagram
-    participant H as Host Client
-    participant P1 as Play Session A
-    participant R as Room Spot
-    participant P2 as Play Session B
-    participant G as Guest Client
-
-    H->>P1: PlaceMarkReq(cell)
-    P1->>R: bound Actor의 Room handler에 요청 전달
-    R-->>P1: PlaceMarkRes(GameState)
-    P1-->>H: PlaceMarkRes
-    R-->>P2: GameStateNotify
-    P2-->>G: GameStateNotify
-    G->>P2: PlaceMarkReq(cell)
-    P2->>R: bound Actor의 Room handler에 요청 전달
-    R-->>P2: PlaceMarkRes(GameState)
-    P2-->>G: PlaceMarkRes
-    R-->>P1: GameStateNotify
-    P1-->>H: GameStateNotify
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-place-mark.html" title="수 두기와 최종 state" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-tictactoe-place-mark.html" target="_blank">↗ 크게 보기</a></p>
 
 ### 7.3 Wins 100 milestone
 
@@ -458,26 +379,8 @@ Fake user source는 host의 Wins를 99로 제공한다. host가 이번 game에�
 Room Spot이 PlayerWinMilestoneEvent를 publish한다. Observer는 host와 다른 Play ingress의
 local Entry Spot에서 topic subscription을 완료한 뒤 WinMilestoneNotify를 기다린다.
 
-```mermaid
-sequenceDiagram
-    participant O as Observer Client
-    participant OP as Observer Play Session
-    participant E as Play Entry Spot
-    participant R as Room Spot
-    participant HP as Host Play Session
-    participant H as Host Client
-
-    O->>OP: ObserveMilestoneReq
-    OP->>E: bound Actor의 Entry handler에 요청 전달
-    E-->>OP: ObserveMilestoneRes(subscribed=true)
-    OP-->>O: ObserveMilestoneRes
-    H->>HP: 마지막 PlaceMarkReq
-    HP->>R: bound Actor의 Room handler에 요청 전달
-    R->>R: Wins=100 계산
-    R-->>E: PlayerWinMilestoneEvent
-    E-->>OP: observer의 current session에 WinMilestoneNotify 전송
-    OP-->>O: WinMilestoneNotify
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-milestone.html" title="Wins 100 milestone" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-tictactoe-milestone.html" target="_blank">↗ 크게 보기</a></p>
 
 Multicast publish 완료는 subscriber handler의 처리 완료나 game win 확정을 뜻하지 않는다.
 win과 board state는 Room Spot이 결정하고 milestone은 이미 결정된 값을 알리는 용도다.
@@ -498,33 +401,8 @@ Spot이 `destroyActor`를 호출한다. `LeaveGameMsg`는 one-way이므로 clien
 완료를 판단하지 않는다. Runner는 각 Actor에서 Room leave callback이 실행되고 Entry Spot의 destroy가
 끝났는지 별도로 확인한다.
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant P as Play Session
-    participant F as Framework Session Runtime
-    participant R as Room Spot
-    participant E as Entry Spot
-
-    C-xP: STREAM connection 종료
-    F->>F: current binding snapshot 고정
-    F->>R: bound Actor의 disconnect lifecycle callback 통지
-    R->>R: disconnected lifecycle callback 실행
-    F->>F: 모든 통지 완료 후 binding 정리
-    C->>P: 새 STREAM connection
-    C->>P: AuthenticateReq
-    P->>P: Existing Actor를 찾고 exact ActorRef bind
-    P-->>C: AuthenticateRes
-    C->>P: JoinGameMsg(RoomId)
-    P->>R: 기존 room member handler에 전달
-    R-->>P: JoinGameNotify(current GameState)
-    P-->>C: JoinGameNotify
-    C->>P: LeaveGameMsg
-    P->>R: bound Actor의 Room handler에 전달
-    R->>R: Actor에 표시를 남기고 public leave 요청
-    R->>E: Framework가 Actor를 Entry Spot으로 이동
-    E->>E: Actor destroy
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-disconnect.html" title="Disconnect와 destroy" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-tictactoe-disconnect.html" target="_blank">↗ 크게 보기</a></p>
 
 이 diagram은 한 Player의 reconnect와 이어지는 leave 경로를 나타낸다. host와 guest는 각각 같은
 leave 경로를 실행하며, Runner는 두 Actor의 evidence를 따로 확인한다.
@@ -535,45 +413,8 @@ leave 경로를 실행하며, Runner는 두 Actor의 evidence를 따로 확인�
 책임으로 구현한다. Api는 HTTP와 user source를, Play는 stream과 game state를 소유한다. 두 Play
 process가 같은 capability를 제공한다는 점도 언어별 sample에서 유지한다.
 
-```text
-TicTacToe
-+-- Client
-|   +-- Program
-|   +-- Scenario
-+-- Shared
-|   +-- Configuration
-|   +-- JSON Contracts
-+-- Server
-    +-- Api
-    |   +-- Program
-    |   +-- Application
-    |   |   +-- CreateGame
-    |   |   +-- AuthenticatePlayer
-    |   +-- Infrastructure
-    |       +-- HttpHandlers
-    |       +-- UserSourceAdapter
-    |       +-- SpotManagerAdapter
-    |       +-- HandlerRegistration
-    +-- Play
-        +-- Program
-        +-- Domain
-        |   +-- Board
-        |   +-- Match
-        |   +-- TurnPolicy
-        +-- Application
-        |   +-- JoinGame
-        |   +-- PlaceMark
-        |   +-- LeaveGame
-        |   +-- MilestonePublisher
-        +-- Infrastructure
-            +-- StreamSession
-            +-- EntrySpot
-            +-- PlayerActorRelocationAdapter
-            +-- RoomSpot
-            +-- MulticastHandlers
-            +-- StoreProviders
-            +-- HandlerRegistration
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-structure.html" title="TicTacToe 구현 구조" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-tictactoe-structure.html" target="_blank">↗ 크게 보기</a></p>
 
 | Logical component | 모든 언어에서 유지할 책임 | 의존 방향과 금지 경계 |
 |---|---|---|
@@ -769,3 +610,7 @@ Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 
 - Framework public API와 typed JSON codec만 사용하며 message별 codec registry를 추가하지 않는다.
 - Runner가 server와 client를 build하고 각 process가 준비될 때까지 기다린다. 이어서 self-check와 server
   evidence를 확인하고 실행 중 만든 resource를 정리한다.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

@@ -186,7 +186,7 @@ Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한�
 | --- | --- | --- |
 | `bind(endpoint)` · `bind(port)` · `bind()` | client가 접속할 주소 | 지정해야 한다 |
 | `setBindHost` · `setAdvertiseHost` | bind 주소와 광고 주소 | `configureNetwork()` 값 |
-| `enableActorDispatch(String meshName)` | session이 Actor로 relay할 수 있게 한다 | 하지 않음 |
+| `enableActorDispatch()` | session이 Actor로 relay할 수 있게 한다 | 하지 않음 |
 | `registerSession(Class)` | 연결마다 만들 session 타입 | 지정해야 한다 |
 | `setTlsServer(cert, key[, requireClientCert])` | TLS 구성 | 평문 |
 
@@ -201,7 +201,7 @@ Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한�
 | 값 | 표면 | 무엇에 쓰나 |
 | --- | --- | --- |
 | 배치 가중치 | `mesh(name).setPlacementWeight(int)` | 새 object 배치 대상에서 빼거나 되돌린다 |
-| channel 가중치 | `channel(name).setWeight(int)` | 새 select-one 대상에서 빼거나 되돌린다 |
+| channel 가중치 | `channel(name).weight(int)` | 새 select-one 대상에서 빼거나 되돌린다 |
 
 둘 다 `0`으로 두면 **새 배정만 멈춘다.** 이미 있는 object와 연결은 그대로 살아 있다.
 

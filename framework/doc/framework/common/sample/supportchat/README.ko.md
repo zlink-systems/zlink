@@ -67,24 +67,8 @@ WaitingForClose를 거쳐 Closed가 된다.
 resource 표에 두고, authentication·assignment·typing의 시간 순서는 §7 sequence diagram에
 둔다.
 
-```mermaid
-flowchart LR
-    subgraph Clients[Clients]
-        C[Customer Client]
-        A[Agent Client]
-    end
-    subgraph Servers[Servers]
-        S[Session]
-        API[Api]
-        SUP[Support]
-    end
-    C ---|STREAM| S
-    A ---|STREAM| S
-    S ---|supportchat.api ClientServer| API
-    SUP ---|supportchat.api ClientServer| API
-    S ---|supportchat RouteMesh| SUP
-    API ---|supportchat RouteMesh| SUP
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-topology.html" title="시스템 구성과 topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-supportchat-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 - Session만 client-facing STREAM endpoint를 제공한다.
 - Api는 token 검증과 Spot creation request를 처리한다.
@@ -346,40 +330,8 @@ id가 아니라 상담원 identity actor id다. client가 사람 단위로 parti
 capacity를 가진 상태다. Customer가 상담을 열면 Support가 새 Conversation Spot을 만들고
 customer actor를 join한다. 배정 가능한 Agent가 없으면 WaitingForAgent에서 대기한다.
 
-```mermaid
-sequenceDiagram
-    participant C as Customer Client
-    participant A as Agent Client
-    participant S as Session
-    participant API as Api
-    participant P as ConversationSpot
-
-    A->>S: AuthenticateReq
-    S->>API: AuthenticateUserReq
-    API-->>S: AuthenticateUserRes
-    S-->>A: AuthenticateRes
-    A->>S: SetAgentAvailableReq(true)
-    S-->>A: SetAgentAvailableRes(true)
-    C->>S: AuthenticateReq
-    S->>API: AuthenticateUserReq
-    API-->>S: AuthenticateUserRes
-    S-->>C: AuthenticateRes
-    C->>S: OpenConversationReq(subject)
-    S->>API: OpenConversationApiReq
-    API->>P: ConversationCreateReq
-    P-->>API: ConversationCreateRes
-    API-->>S: OpenConversationApiRes
-    S-->>C: OpenConversationRes
-    P-->>S: ConversationAssignedNotify
-    S-->>A: ConversationAssignedNotify
-    A->>S: JoinConversationReq(metadata ConversationId)
-    S->>P: JoinConversationReq
-    P-->>S: JoinConversationRes(scheduled=true)
-    S-->>A: JoinConversationRes(scheduled=true)
-    P-->>S: ParticipantJoinedNotify(Active)
-    S-->>C: ParticipantJoinedNotify(Active)
-    S-->>A: ParticipantJoinedNotify(Active)
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-auth-join.html" title="인증, 상담 생성과 agent join" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-supportchat-auth-join.html" target="_blank">↗ 크게 보기</a></p>
 
 scheduled=true는 join 예약을 의미하며 membership commit 완료가 아니다. 양쪽 client가
 Active 상태의 ParticipantJoinedNotify를 확인해야 agent join을 완료로 판정한다.
@@ -391,30 +343,8 @@ SendChatMessageRes, Customer에는 ChatMessageNotify를 보낸다. Customer repl
 되며 반대 방향으로 같은 흐름을 따른다. SetTypingMsg는 상대방에 TypingChangedNotify가
 도착하면 효과를 확인하고, 요청자 response를 기다리지 않는다.
 
-```mermaid
-sequenceDiagram
-    participant C as Customer Client
-    participant S as Session
-    participant P as ConversationSpot
-    participant A as Agent Client
-
-    A->>S: SendChatMessageReq(metadata ConversationId)
-    S->>P: SendChatMessageReq
-    P-->>S: SendChatMessageRes(MessageSeq=1)
-    S-->>A: SendChatMessageRes(MessageSeq=1)
-    P-->>S: ChatMessageNotify to customer binding
-    S-->>C: ChatMessageNotify(MessageSeq=1)
-    C->>S: SendChatMessageReq
-    S->>P: SendChatMessageReq
-    P-->>S: SendChatMessageRes(MessageSeq=2)
-    S-->>C: SendChatMessageRes(MessageSeq=2)
-    P-->>S: ChatMessageNotify to agent binding
-    S-->>A: ChatMessageNotify(MessageSeq=2)
-    C->>S: SetTypingMsg(true)
-    S->>P: SetTypingMsg
-    P-->>S: TypingChangedNotify to agent binding
-    S-->>A: TypingChangedNotify
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-chat-typing.html" title="채팅과 typing" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-supportchat-chat-typing.html" target="_blank">↗ 크게 보기</a></p>
 
 Chat response는 접수·검증과 MessageSeq 확정을 뜻하지만 상대방이 읽었음을 뜻하지 않는다.
 Closed 상태의 SendChatMessageReq는 Application callback의 거부이므로 typed `Rejected` 오류
@@ -434,28 +364,8 @@ runner는 idle 판정 전에 일반 typed `SendChatMessageReq`를 보내고, res
 heartbeat나 transport keepalive가 아니며, control packet·임의의 sleep·log line으로 idle
 deadline을 대신 늘려서는 안 된다. 실제 idle과 grace 동작은 별도의 bounded wait로 확인한다.
 
-```mermaid
-sequenceDiagram
-    participant C as Customer Client
-    participant S as Session
-    participant P as ConversationSpot
-    participant A as Agent Client
-
-    P-->>S: ConversationIdleNotify
-    S-->>C: ConversationIdleNotify
-    S-->>A: ConversationIdleNotify
-    P->>P: grace deadline expires
-    P-->>S: ConversationClosedNotify
-    S-->>C: ConversationClosedNotify
-    S-->>A: ConversationClosedNotify
-    C->>S: STREAM reconnect
-    C->>S: AuthenticateReq(same token)
-    S-->>C: AuthenticateRes
-    C->>S: JoinConversationReq(metadata ConversationId)
-    S->>P: JoinConversationReq
-    P-->>S: JoinConversationRes(scheduled=false)
-    S-->>C: JoinConversationRes(scheduled=false)
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-idle-close.html" title="idle, close와 reconnect" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-supportchat-idle-close.html" target="_blank">↗ 크게 보기</a></p>
 
 reconnect는 actor와 Conversation state를 새로 만들지 않는다. Agent는 roster actor를 다시
 bind하고 SetAgentAvailableReq(true)를 보낸 뒤 열려 있던 conversation마다 JoinConversationReq를
@@ -468,49 +378,8 @@ relay하고, customer의 map miss는 customer identity actor로 relay한다.
 책임으로 구현한다. Session은 stream과 binding만, Api는 인증·생성 edge만, Support는 대화 상태만
 소유한다. 이 경계를 합치면 언어별 sample의 reconnect와 idle 흐름을 비교할 수 없게 된다.
 
-```text
-SupportChat
-+-- Client
-|   +-- Program
-|   +-- CustomerScenario
-|   +-- AgentScenario
-+-- Shared
-|   +-- Configuration
-|   +-- JSON Contracts
-+-- Server
-    +-- Session
-    |   +-- Program
-    |   +-- Application
-    |   |   +-- SessionBinding
-    |   |   +-- MetadataRouting
-    |   +-- Infrastructure
-    |       +-- StreamSession
-    |       +-- PacketHandlers
-    |       +-- ActorRelay
-    +-- Api
-    |   +-- Program
-    |   +-- Application
-    |   |   +-- Authentication
-    |   |   +-- ConversationCreation
-    |   +-- Infrastructure
-    |       +-- ApiHandlers
-    |       +-- SupportClient
-    +-- Support
-        +-- Program
-        +-- Domain
-        |   +-- Conversation
-        |   +-- ConversationPolicy
-        |   +-- ConversationEvents
-        +-- Application
-        |   +-- AgentAssignment
-        |   +-- ConversationCommands
-        |   +-- NotificationMapping
-        +-- Infrastructure
-            +-- SupportEntrySpot
-            +-- ConversationSpot
-            +-- ActorAdapters
-            +-- TimerAdapter
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-structure.html" title="구현 구조 — Client · Shared · Server" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-supportchat-structure.html" target="_blank">↗ 크게 보기</a></p>
 
 | Logical component | 모든 언어에서 유지할 책임 | 의존 방향과 금지 경계 |
 |---|---|---|
@@ -667,3 +536,7 @@ Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 
 - Ready owner 장애를 crash failover로 표시하지 않고 Unavailable 경계를 유지한다.
 - runner가 build, readiness, self-check, cleanup을 수행하고 §10.1 표의 모든 행을 문자열과
   횟수까지 통과시킨다.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

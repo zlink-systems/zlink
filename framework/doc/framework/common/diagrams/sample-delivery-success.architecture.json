@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "정상 흐름 — 배차·수락·상태 push",
+    "subtitle": "CreateDeliveryReq 접수 → Attempt=1 제안 → 수락 → Assigned·Accepted·PickedUp·Delivered 순서 push",
+    "output": "sample-delivery-success.html",
+    "column_fit": "spread",
+    "viewBox": [1180, 1300],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Customer Client" },
+    { "id": "CG", "type": "frontend", "label": "CustomerGateway" },
+    { "id": "CA", "type": "frontend", "label": "Courier Client" },
+    { "id": "CS", "type": "frontend", "label": "CourierSession" },
+    { "id": "D", "type": "frontend", "label": "Dispatch" },
+    { "id": "ACT", "type": "backend", "label": "CourierActor" },
+    { "id": "T", "type": "frontend", "label": "Tracking" },
+    { "id": "CU", "type": "backend", "label": "CustomerActor" }
+  ],
+  "messages": [
+    { "from": "C", "to": "CG", "y": 160, "label": "SubscribeDeliveryReq", "variant": "default" },
+    { "from": "CG", "to": "C", "y": 208, "label": "SubscribeDeliveryRes", "variant": "return" },
+    { "from": "CA", "to": "CS", "y": 256, "label": "BindCourierSessionReq", "variant": "default" },
+    { "from": "CS", "to": "CA", "y": 304, "label": "BindCourierSessionRes", "variant": "return" },
+    { "from": "C", "to": "D", "y": 352, "label": "CreateDeliveryReq", "variant": "default" },
+    { "from": "D", "to": "C", "y": 400, "label": "CreateDeliveryRes", "variant": "return" },
+    { "from": "D", "to": "ACT", "y": 448, "label": "OfferDeliveryMsg (attempt=1)", "variant": "default" },
+    { "from": "ACT", "to": "CS", "y": 496, "label": "OfferDeliveryNotify", "variant": "default" },
+    { "from": "CS", "to": "CA", "y": 544, "label": "OfferDeliveryNotify", "variant": "return" },
+    { "from": "CA", "to": "CS", "y": 592, "label": "CourierDecisionMsg(accepted=true)", "variant": "default" },
+    { "from": "CS", "to": "ACT", "y": 640, "label": "CourierDecisionMsg", "variant": "default" },
+    { "from": "ACT", "to": "D", "y": 688, "label": "OfferDeliveryResultMsg", "variant": "default" },
+    { "from": "D", "to": "T", "y": 736, "label": "DeliveryStatusChangedReq(Assigned)", "variant": "default" },
+    { "from": "T", "to": "D", "y": 784, "label": "DeliveryStatusChangedRes", "variant": "return" },
+    { "from": "D", "to": "T", "y": 832, "label": "DeliveryStatusChangedReq(Accepted)", "variant": "default" },
+    { "from": "T", "to": "D", "y": 880, "label": "DeliveryStatusChangedRes", "variant": "return" },
+    { "from": "D", "to": "T", "y": 928, "label": "DeliveryStatusChangedReq(PickedUp)", "variant": "default" },
+    { "from": "T", "to": "D", "y": 976, "label": "DeliveryStatusChangedRes", "variant": "return" },
+    { "from": "D", "to": "T", "y": 1024, "label": "DeliveryStatusChangedReq(Delivered)", "variant": "default" },
+    { "from": "T", "to": "D", "y": 1072, "label": "DeliveryStatusChangedRes", "variant": "return" },
+    { "from": "T", "to": "CU", "y": 1120, "label": "DeliveryStatusUpdatedMsg", "variant": "default" },
+    { "from": "CU", "to": "CG", "y": 1168, "label": "DeliveryStatusNotify", "variant": "return" },
+    { "from": "CG", "to": "C", "y": 1216, "label": "DeliveryStatusNotify(Delivered)", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "순서와 검증",
+      "items": [
+        "DeliveryStatusNotify가 Assigned, Accepted, PickedUp, Delivered 순서로 도착하고 각 payload의 DeliveryId가 subscription과 같은지 확인한다.",
+        "상태 event 기록과 push가 순서대로 완료되는 것은 Application의 sample 정책이며, Framework의 일반적인 channel 전역 순서를 의미하지 않는다.",
+        "배송원 응답을 기다리는 동안 Dispatch handler는 실행 줄을 점유하지 않는다."
+      ]
+    }
+  ]
+}

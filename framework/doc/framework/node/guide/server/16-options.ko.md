@@ -42,7 +42,7 @@ ZLinkModule.forRootFactory({
       .setSpotLimit(2_000);
     mesh.channel('room').server();
 
-    return builder;   // 돌려주지 않으면 아무것도 켜지지 않는다.
+    return builder.build();   // 돌려주지 않으면 아무것도 켜지지 않는다.
   }
 });
 ```
@@ -176,11 +176,11 @@ Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한�
 | `bind(endpoint)` · `bind(port?)` | client가 접속할 주소 | 지정해야 한다 |
 | `setBindHost` · `setAdvertiseHost` | bind 주소와 광고 주소 | `configureNetwork()` 값 |
 | `enableActorDispatch()` | session이 Actor로 relay할 수 있게 한다 | 하지 않음 |
-| `registerSession(factory)` | 연결마다 만들 session factory | 지정해야 한다 |
+| `registerSession(sessionType)` | 연결마다 만들 session class(또는 session factory class) | 지정해야 한다 |
 | `setTlsServer(certPath, keyPath, requireClientCert?)` | TLS 구성 | 평문 |
 
-**`registerSession`은 class가 아니라 factory를 받는다.** 다른 언어가 타입을 넘기는
-자리다.
+**`registerSession`은 session class 자체를 받거나, 연결별 생성 로직이 필요하면
+factory class를 받는다.** 둘 다 다른 언어와 마찬가지로 class 참조로 넘긴다.
 
 ## 7. 실행 중 바꿀 수 있는 것
 
@@ -209,14 +209,15 @@ Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한�
 
 ## 9. 자주 발생하는 문제
 
-- **아무것도 안 켜진다** → `useFactory`가 builder를 돌려주지 않았다. 마지막에
-  `return builder`가 있어야 한다.
+- **아무것도 안 켜진다** → `useFactory`가 완성된 옵션을 돌려주지 않았다. 마지막에
+  `return builder.build()`가 있어야 한다.
 - **timeout이 이상하게 짧거나 길다** → 인자가 **밀리초 숫자**다. 초로 착각해 `3`을
   넣으면 3밀리초다.
 - **`setApplicationVersion`에서 타입 오류가 난다** → `bigint`를 받는다. `12n`으로 쓴다.
 - **`0`으로 두었더니 memory가 계속 는다** → high-water mark의 `0`은 무제한이다.
 - **level 값이 안 맞는다** → Node는 lowercase string(`"errors"`)을 사용한다.
-- **`registerSession`에 class를 넘겼는데 안 된다** → factory를 받는다.
+- **`registerSession`이 factory만 받는다고 알고 있었다** → session class를 직접 넘겨도
+  된다. factory class는 연결별로 다른 생성 로직이 필요할 때만 쓴다.
 - **가중치를 0으로 했는데 기존 연결이 끊긴다고 생각했다** → 가중치는 **새 배정만** 막는다.
 - **여러 언어 node를 섞었더니 owner 판정이 다르다** → lease 기본값이 언어마다 다르다(§5).
 

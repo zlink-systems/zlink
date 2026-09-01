@@ -89,7 +89,7 @@ Instance Spot을 등록한다.
         sample_names_t::room_spot_type,                  // stable type — 생성할 때 이 이름으로 선택한다.
         [] (spot_context_t c) { return std::make_shared<bingo_room_t> (std::move (c)); },
         [] (auto &factory) {
-            factory.execution_mode (user_spot_execution_mode_t::spot_wide);
+            factory.set_execution_mode (user_spot_execution_mode_t::spot_wide);
             factory.template preserve_state_with<bingo_room_relocation_adapter_t> ();
         });
 
@@ -321,7 +321,7 @@ Spot을 실행할 MeshNode는 Object Server role과 factory를 등록한다. 고
         "game-room",
         [] (spot_context_t c) { return std::make_shared<game_room_t> (std::move (c)); },
         [] (auto &factory) {
-            factory.execution_mode (user_spot_execution_mode_t::spot_wide);
+            factory.set_execution_mode (user_spot_execution_mode_t::spot_wide);
             factory.disable_relocation ();
         })
       .add_instance_spot_factory<matchmaker_t> (
@@ -2261,7 +2261,7 @@ Framework는 turn 경계는 알지만 application이 정의한 일관성 단위�
         [] (spot_context_t c) { return std::make_shared<game_room_t> (std::move (c)); },
         [] (auto &factory) {
             // 이 모드에서만 쓸 수 있다.
-            factory.execution_mode (user_spot_execution_mode_t::spot_wide);
+            factory.set_execution_mode (user_spot_execution_mode_t::spot_wide);
             factory.set_relocation_coordination_mode (spot_relocation_coordination_mode_t::application_signaled);
             factory.template preserve_state_with<game_room_relocation_adapter_t> ();
         });

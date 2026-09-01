@@ -96,28 +96,8 @@ The base topology only expresses the placement of Client and server components a
 connections. Redis and the maintenance store are described in the resource table, and the time
 order of movement/publish is described in the §7 sequence diagrams.
 
-```mermaid
-flowchart LR
-    subgraph Clients[Clients]
-        G[Game Browser]
-        O[Ops Browser]
-    end
-    subgraph Servers[Servers]
-        GW[Gateway]
-        Z1[ZoneNode A]
-        Z2[ZoneNode B]
-        OPS[Ops]
-    end
-    G ---|STREAM WS| GW
-    O ---|STREAM WS| OPS
-    GW ---|zoneworld.mesh RouteMesh| Z1
-    GW ---|zoneworld.mesh RouteMesh| Z2
-    OPS ---|zoneworld.mesh RouteMesh| Z1
-    OPS ---|zoneworld.mesh RouteMesh| Z2
-    Z1 ---|zoneworld.mesh RouteMesh| Z2
-    OPS ---|zoneworld.broadcast fanout| Z1
-    OPS ---|zoneworld.broadcast fanout| Z2
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-topology-en.html" title="System configuration and topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-zoneworld-topology-en.html" target="_blank">↗ View larger</a></p>
 
 - Only Gateway provides the player-facing game STREAM, and only Ops provides the control STREAM.
 - ZoneNode A/B run with the same executable capability, registering the Zone Spot factory
@@ -467,28 +447,8 @@ means target zone admission has completed** is the normative meaning in this sce
 implementation that produces the JoinWorldRes terminal from pre-admission state (such as a
 cache) is non-conforming.
 
-```mermaid
-sequenceDiagram
-    participant C as Game Browser
-    participant G as Gateway
-    participant A as Player Actor
-    participant Z as Zone Spot
-
-    C->>G: JoinWorldReq
-    G->>A: create or get Player Actor
-    A->>A: Defer() zone join, end handler
-    A->>Z: EnterZoneReq(zone-nw)
-    Z-->>A: EnterZoneRes (join completion callback)
-    A-->>G: JoinWorldRes(25,25) — sent from completion
-    G-->>C: JoinWorldRes
-    C->>G: MoveMsg(28,27)
-    G->>A: MoveMsg
-    A->>A: validate and update coordinates
-    A->>Z: UpdatePositionMsg
-    Z-->>A: ZoneStateNotify source
-    A-->>G: ZoneStateNotify
-    G-->>C: ZoneStateNotify(28,27)
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-join-move-en.html" title="Joining and moving within the same zone" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-zoneworld-join-move-en.html" target="_blank">↗ View larger</a></p>
 
 ### 7.2 Border Crossing And Relocation
 
@@ -496,28 +456,8 @@ If the target zone owner is the same, only membership changes; if different, the
 materializes at the target owner, which is a relocation. The Application doesn't distinguish the
 two cases by NodeId — both use the `EnterZoneReq`/`EnterZoneRes` request/reply pair.
 
-```mermaid
-sequenceDiagram
-    participant C as Game Browser
-    participant G as Gateway
-    participant A as Player Actor
-    participant S as Source Zone Spot
-    participant T as Target Zone Spot
-    participant N as Target ZoneNode
-
-    C->>G: MoveMsg(target coordinate)
-    G->>A: MoveMsg
-    A->>A: validate adjacent zone
-    A->>T: EnterZoneReq
-    T->>N: relocation admission when owner differs
-    N->>N: Capture and Restore actor state
-    N-->>A: target owner ready
-    A-->>G: ZoneChangedNotify
-    G-->>C: ZoneChangedNotify
-    T-->>A: DeliverZoneStateMsg
-    A-->>G: ZoneStateNotify through same binding
-    G-->>C: ZoneStateNotify
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-relocation-en.html" title="Border crossing and relocation" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-zoneworld-relocation-en.html" target="_blank">↗ View larger</a></p>
 
 Relocation keeps the ActorId and ObjectGeneration and only changes the owner generation. A
 one-way or request message that arrives at the previous owner during relocation Follows to the
@@ -556,26 +496,8 @@ observations: Connected comes from the peer state of the runtime status observat
 Registered comes from ZoneNode's explicit report, since the Framework topology status doesn't
 expose a registration signal.
 
-```mermaid
-sequenceDiagram
-    participant O as Ops Browser
-    participant S as Ops
-    participant Z1 as ZoneNode A
-    participant Z2 as ZoneNode B
-
-    O->>S: WatchNodesReq
-    S-->>O: WatchNodesRes
-    O->>S: AnnounceWorldReq
-    S-->>O: AnnounceWorldRes
-    S-->>Z1: WorldAnnounceEvent fanout
-    S-->>Z2: WorldAnnounceEvent fanout
-    O->>S: SetMaintenanceReq(nodeId,true)
-    S-->>O: SetMaintenanceRes
-    S-->>Z1: NodeMaintenanceChangedEvent fanout
-    S-->>Z2: NodeMaintenanceChangedEvent fanout
-    Z1->>Z1: apply only matching NodeId
-    Z2->>Z2: apply only matching NodeId
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-ops-en.html" title="Ops observation, announce, and maintenance" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-zoneworld-ops-en.html" target="_blank">↗ View larger</a></p>
 
 If the target zone owner has `maintenance=true`, the target Zone Spot's `OnActorJoin` admission
 rejects with ZoneMaintenance. Only movement within the same zone is allowed (moving to a
@@ -613,56 +535,8 @@ logical components below with the same responsibilities. The headless scenario a
 can live in different file locations, but the boundaries of Gateway, ZoneNode, and Ops, and the
 placement of the zone state owner and relocation adapter, don't change.
 
-```text
-ZoneWorld
-+-- Client
-|   +-- Program
-|   +-- HeadlessScenario
-|   +-- BrowserGame
-|   +-- BrowserOps
-+-- Shared
-|   +-- Configuration
-|   +-- JSON Contracts
-|   +-- WorldRules
-+-- Server
-    +-- Gateway
-    |   +-- Program
-    |   +-- Application
-    |   |   +-- PlayerBinding
-    |   |   +-- PlayerRelay
-    |   +-- Infrastructure
-    |       +-- StreamSession
-    |       +-- GatewayHandlers
-    +-- ZoneNode
-    |   +-- Program
-    |   +-- Domain
-    |   |   +-- ZoneState
-    |   |   +-- PlayerStateView
-    |   |   +-- BorderPolicy
-    |   +-- Application
-    |   |   +-- Movement
-    |   |   +-- ZoneAdmission
-    |   |   +-- BotTick
-    |   +-- Infrastructure
-    |       +-- EntrySpot
-    |       +-- ZoneSpot
-    |       +-- PlayerActorAdapter
-    |       +-- RelocationAdapter
-    |       +-- BorderPublisher
-    |       +-- LocalReportHandler
-    +-- Ops
-        +-- Program
-        +-- Application
-        |   +-- NodeWatch
-        |   +-- AnnounceWorld
-        |   +-- Maintenance
-        |   +-- Diagnostics
-        +-- Infrastructure
-            +-- OpsStream
-            +-- RuntimeEventCollector
-            +-- FanoutPublisher
-            +-- MaintenanceStoreAdapter
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-zoneworld-structure-en.html" title="Implementation structure — Client · Shared · Server" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-zoneworld-structure-en.html" target="_blank">↗ View larger</a></p>
 
 | Logical Component | Responsibility Kept In Every Language | Dependency Direction And Forbidden Boundary |
 |---|---|---|
@@ -878,3 +752,7 @@ abrupt. Only the initial cold start claims zones.
 
 Leaving this unstated makes a restarted node demand two zones and retry the claim until its budget
 runs out, which is exactly the state the cpp implementation was in.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

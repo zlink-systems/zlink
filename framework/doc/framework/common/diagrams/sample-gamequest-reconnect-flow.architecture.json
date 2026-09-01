@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "중복과 reconnect",
+    "subtitle": "같은 IdempotencyKey는 같은 source EventId로 변환한다 · reconnect는 owner state가 아닌 session만 다시 binding한다",
+    "output": "sample-gamequest-reconnect-flow.html",
+    "column_fit": "spread",
+    "viewBox": [1000, 800],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Game Client" },
+    { "id": "G", "type": "frontend", "label": "GameApi" },
+    { "id": "P", "type": "backend", "label": "PlayerQuestSpot" }
+  ],
+  "messages": [
+    { "from": "C", "to": "G", "y": 160, "label": "STREAM reconnect", "variant": "default" },
+    { "from": "C", "to": "G", "y": 208, "label": "JoinSessionReq(player-1)", "variant": "default" },
+    { "from": "G", "to": "C", "y": 256, "label": "JoinSessionRes(active quests)", "variant": "return" },
+    { "from": "C", "to": "G", "y": 304, "label": "GetQuestProgressReq", "variant": "default" },
+    { "from": "G", "to": "P", "y": 352, "label": "GetQuestProgressReq(player-1)", "variant": "default" },
+    { "from": "P", "to": "G", "y": 400, "label": "GetQuestProgressRes", "variant": "return" },
+    { "from": "G", "to": "C", "y": 448, "label": "GetQuestProgressRes", "variant": "return" },
+    { "from": "C", "to": "G", "y": 496, "label": "KillMonsterReq(same key)", "variant": "default" },
+    { "from": "G", "to": "P", "y": 544, "label": "GameplayMsg(same eventId)", "variant": "default" },
+    { "from": "P", "to": "G", "y": 592, "label": "existing result without duplicate event", "variant": "return" },
+    { "from": "G", "to": "C", "y": 640, "label": "existing result", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "dedupe와 reconnect",
+      "items": [
+        "같은 IdempotencyKey는 같은 source EventId로 변환한다. PlayerQuestSpot은 이미 저장된 sourceEventId를 확인하고 domain event를 다시 append하지 않는다.",
+        "reconnect에서는 같은 PlayerId session actor를 binding하고 GetQuestProgressReq로 projection을 확인한다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "binding 없는 동안의 notify",
+      "items": [
+        "session binding이 없는 동안의 notify는 성공 조건이 아니다 — 상태는 event store에 기록되고 reconnect 뒤 조회로 복원된다."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "기존 방식 — 상태 저장 없는 웹 백엔드",
+    "subtitle": "외부 이펙트·saga 상태·조회 모델 중복이 모두 애플리케이션 인프라에 있다",
+    "output": "sample-shoppingmall-existing-web.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 5, "gapX": 90, "gapY": 90, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C", "type": "frontend", "label": "Web Client", "row": 0, "col": 0 },
+    { "id": "LB", "type": "external", "label": "Load Balancer", "row": 0, "col": 1 },
+    { "id": "API", "type": "frontend", "label": "Order API", "row": 0, "col": 2 },
+
+    { "id": "IDEM", "type": "database", "label": "Idempotency", "sublabel": "Store", "row": 1, "col": 1 },
+    { "id": "LOG", "type": "database", "label": "Event Log", "sublabel": "+ Outbox", "row": 1, "col": 2 },
+    { "id": "ODB", "type": "database", "label": "Order State", "sublabel": "DB", "row": 1, "col": 3 },
+
+    { "id": "INV", "type": "external", "label": "Inventory", "sublabel": "Service", "row": 2, "col": 0 },
+    { "id": "SAGA", "type": "frontend", "label": "Saga", "sublabel": "Orchestrator", "row": 2, "col": 2 },
+    { "id": "PAY", "type": "external", "label": "Payment", "sublabel": "PSP", "row": 2, "col": 4 },
+
+    { "id": "SCHED", "type": "messagebus", "label": "Scheduler", "row": 3, "col": 1 },
+    { "id": "RM", "type": "database", "label": "Read Model", "row": 3, "col": 3 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Stateless Web Backend", "wraps": ["SAGA", "ODB", "IDEM", "LOG", "RM", "SCHED"] }
+  ],
+  "connections": [
+    { "from": "C", "to": "LB", "variant": "default" },
+    { "from": "LB", "to": "API", "variant": "default" },
+    { "from": "API", "to": "IDEM", "variant": "default" },
+    { "from": "API", "to": "LOG", "variant": "default" },
+    { "from": "API", "to": "ODB", "variant": "default" },
+    { "from": "API", "to": "C", "variant": "default", "label": "Accepted OrderId", "fromSide": "bottom", "toSide": "bottom" },
+    { "from": "C", "to": "API", "variant": "default", "label": "poll", "fromSide": "bottom", "toSide": "bottom" },
+    { "from": "LOG", "to": "SAGA", "variant": "default" },
+    { "from": "SAGA", "to": "LOG", "variant": "default" },
+    { "from": "SAGA", "to": "INV", "variant": "default" },
+    { "from": "SAGA", "to": "PAY", "variant": "default" },
+    { "from": "SAGA", "to": "ODB", "variant": "default" },
+    { "from": "SAGA", "to": "RM", "variant": "default" },
+    { "from": "API", "to": "RM", "variant": "default" },
+    { "from": "SCHED", "to": "SAGA", "variant": "dashed", "label": "resume" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Stateless Web Backend의 책임",
+      "items": [
+        "Saga Orchestrator가 event log/outbox를 보고 다음 단계를 정하고, Order State DB·Event Log·Read Model에 다시 쓴다.",
+        "Scheduler는 중단된 saga를 재개한다(점선 = 업무 흐름 본체가 아니라 붙는 오버헤드).",
+        "Client는 CommerceApi에 상태를 poll하고, CommerceApi도 Read Model을 직접 읽는다."
+      ]
+    }
+  ]
+}

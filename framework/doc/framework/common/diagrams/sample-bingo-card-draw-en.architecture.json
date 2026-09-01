@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Card, draw, and winner decision",
+    "subtitle": "both cards submitted → the room's logical timer draws numbers each tick → a winner is decided and the room is Finished",
+    "output": "sample-bingo-card-draw-en.html",
+    "column_fit": "spread",
+    "viewBox": [980, 800],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "PL", "type": "frontend", "label": "Player Clients" },
+    { "id": "S", "type": "external", "label": "Session" },
+    { "id": "AC", "type": "backend", "label": "Player Actors" },
+    { "id": "R", "type": "backend", "label": "Room" }
+  ],
+  "messages": [
+    { "from": "PL", "to": "S", "y": 160, "label": "SubmitBingoCardReq", "variant": "default" },
+    { "from": "S", "to": "AC", "y": 208, "label": "Relay through binding", "variant": "default" },
+    { "from": "AC", "to": "R", "y": 256, "label": "Submit card", "variant": "default" },
+    { "from": "R", "to": "AC", "y": 304, "label": "Card accepted", "variant": "return" },
+    { "from": "AC", "to": "S", "y": 352, "label": "SubmitBingoCardRes", "variant": "return" },
+    { "from": "S", "to": "PL", "y": 400, "label": "SubmitBingoCardRes", "variant": "return" },
+    { "from": "R", "to": "AC", "y": 448, "label": "[loop each draw tick] BingoNumberDrawnNotify (increasing DrawSeq)", "variant": "return" },
+    { "from": "AC", "to": "S", "y": 496, "label": "BingoNumberDrawnNotify", "variant": "return" },
+    { "from": "S", "to": "PL", "y": 544, "label": "BingoNumberDrawnNotify", "variant": "return" },
+    { "from": "R", "to": "AC", "y": 592, "label": "BingoGameEndedNotify (winner set, Finished)", "variant": "return" },
+    { "from": "AC", "to": "S", "y": 640, "label": "BingoGameEndedNotify", "variant": "return" },
+    { "from": "S", "to": "PL", "y": 688, "label": "BingoGameEndedNotify", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Room self-steps (mermaid Room self-messages)",
+      "items": [
+        "After both cards are accepted the Room starts the logical draw timer.",
+        "loop 'Each draw tick': the Room draws one number and updates marks, then notifies with an increasing DrawSeq — the diagram renders one representative tick.",
+        "On the draw where a complete line first appears, the Room selects the winner and sets state = Finished, then sends both players BingoGameEndedNotify."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Rule ownership",
+      "items": [
+        "Once both players confirm the start push, each submits a different deterministic card. The Room validates card size, number range, and duplicates, and marks the center free cell.",
+        "Card validation, the draw deck, marking, and winner determination are owned by the domain module. The Client doesn't draw numbers or submit marks; the Session handler and Framework adapter don't implement game rules."
+      ]
+    }
+  ]
+}

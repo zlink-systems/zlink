@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Ops 관찰, announce와 maintenance",
+    "subtitle": "AnnounceWorldReq·SetMaintenanceReq 뒤 Ops가 두 ZoneNode에 classic fanout으로 알린다",
+    "output": "sample-zoneworld-ops.html",
+    "column_fit": "spread",
+    "viewBox": [900, 680],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "o", "type": "frontend", "label": "Ops Browser" },
+    { "id": "s", "type": "external", "label": "Ops" },
+    { "id": "z1", "type": "backend", "label": "ZoneNode A" },
+    { "id": "z2", "type": "backend", "label": "ZoneNode B" }
+  ],
+  "messages": [
+    { "from": "o", "to": "s", "y": 160, "label": "WatchNodesReq", "variant": "default" },
+    { "from": "s", "to": "o", "y": 208, "label": "WatchNodesRes", "variant": "return" },
+    { "from": "o", "to": "s", "y": 256, "label": "AnnounceWorldReq", "variant": "default" },
+    { "from": "s", "to": "o", "y": 304, "label": "AnnounceWorldRes", "variant": "return" },
+    { "from": "s", "to": "z1", "y": 352, "label": "WorldAnnounceEvent fanout", "variant": "return" },
+    { "from": "s", "to": "z2", "y": 400, "label": "WorldAnnounceEvent fanout", "variant": "return" },
+    { "from": "o", "to": "s", "y": 448, "label": "SetMaintenanceReq(nodeId,true)", "variant": "default" },
+    { "from": "s", "to": "o", "y": 496, "label": "SetMaintenanceRes", "variant": "return" },
+    { "from": "s", "to": "z1", "y": 544, "label": "NodeMaintenanceChangedEvent fanout → apply only matching NodeId", "variant": "return" },
+    { "from": "s", "to": "z2", "y": 592, "label": "NodeMaintenanceChangedEvent fanout → apply only matching NodeId", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "자기 메시지 2개 (archify 미지원 → 앞 화살표에 합침)",
+      "items": [
+        "원문 ZoneNode A→ZoneNode A와 ZoneNode B→ZoneNode B \"apply only matching NodeId\"는 각각 뒤따르는 화살표가 없는 마지막 메시지라, 대신 그 직전 NodeMaintenanceChangedEvent fanout 화살표 라벨에 \"→ apply only matching NodeId\"로 합쳤다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "fanout은 완료를 성공 기준으로 쓰지 않는다",
+      "items": [
+        "border sync와 announce는 publish이며 target handler 완료를 성공 기준으로 사용하지 않는다. AnnounceWorldReq 뒤 AnnouncementId 발급이 client 성공 조건이며 fanout publish 완료나 subscriber handler 완료를 조건으로 삼지 않는다.",
+        "Ops는 desired state를 maintenance store에 기록하므로 ZoneNode 재시작 뒤 같은 NodeId의 maintenance state를 복원한다. target zone owner의 OnActorJoin admission이 ZoneMaintenance 거부의 유일한 최종 판정자다."
+      ]
+    }
+  ]
+}

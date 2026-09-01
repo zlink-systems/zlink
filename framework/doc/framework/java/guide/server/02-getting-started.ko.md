@@ -73,7 +73,7 @@ public class ServerApplication {
 
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services") // mesh 이름을 정한다.
                 .listen("tcp://0.0.0.0:7101");                          // 다른 process가 접속할 자기 endpoint.
-            mesh.channel("greeting").server()                           // 이 process가 "greeting"을 처리한다.
+            mesh.channelName("greeting").server()                           // 이 process가 "greeting"을 처리한다.
                 .addRequestHandler(HelloHandler.class, Hello.class, Greeting.class);
         };
     }
@@ -97,7 +97,7 @@ ZLinkFrameworkConfigurer zlink() {
     return options -> {
         ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
             .listen("tcp://0.0.0.0:7102");                  // 자기 endpoint도 필요하다.
-        mesh.channel("greeting").client();                  // 호출만 하는 쪽은 Client.
+        mesh.channelName("greeting").client();                  // 호출만 하는 쪽은 Client.
         mesh.peerConnections().connect("tcp://127.0.0.1:7101"); // 수동 연결 — server endpoint를 직접 적는다.
     };
 }

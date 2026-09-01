@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "TicTacToe implementation structure",
+    "subtitle": "Client · Shared · Server(Api, Play) — same layout and responsibilities in every language",
+    "output": "sample-tictactoe-structure-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 110], "cols": 5, "gapX": 80, "gapY": 40, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "root", "type": "external", "label": "TicTacToe", "row": 0, "col": 0 },
+
+    { "id": "client", "type": "frontend", "label": "Client", "row": 1, "col": 1 },
+    { "id": "cprog", "type": "frontend", "label": "Program", "row": 2, "col": 2 },
+    { "id": "cscen", "type": "frontend", "label": "Scenario", "row": 3, "col": 2 },
+
+    { "id": "shared", "type": "external", "label": "Shared", "row": 4, "col": 1 },
+    { "id": "sconf", "type": "external", "label": "Configuration", "row": 5, "col": 2 },
+    { "id": "sjson", "type": "external", "label": "JSON", "sublabel": "Contracts", "row": 6, "col": 2 },
+
+    { "id": "server", "type": "external", "label": "Server", "row": 7, "col": 1 },
+
+    { "id": "api", "type": "frontend", "label": "Api", "row": 8, "col": 2 },
+    { "id": "aprog", "type": "frontend", "label": "Program", "row": 9, "col": 3 },
+    { "id": "aapp", "type": "frontend", "label": "Application", "row": 10, "col": 3 },
+    { "id": "acreate", "type": "frontend", "label": "CreateGame", "row": 11, "col": 4 },
+    { "id": "aauth", "type": "frontend", "label": "Authenticate", "sublabel": "Player", "row": 12, "col": 4 },
+    { "id": "ainfra", "type": "frontend", "label": "Infrastructure", "row": 13, "col": 3 },
+    { "id": "ahttp", "type": "frontend", "label": "HttpHandlers", "row": 14, "col": 4 },
+    { "id": "ausrc", "type": "frontend", "label": "UserSource", "sublabel": "Adapter", "row": 15, "col": 4 },
+    { "id": "aspot", "type": "frontend", "label": "SpotManager", "sublabel": "Adapter", "row": 16, "col": 4 },
+    { "id": "areg", "type": "frontend", "label": "Handler", "sublabel": "Registration", "row": 17, "col": 4 },
+
+    { "id": "play", "type": "backend", "label": "Play", "row": 18, "col": 2 },
+    { "id": "pprog", "type": "backend", "label": "Program", "row": 19, "col": 3 },
+    { "id": "pdom", "type": "backend", "label": "Domain", "row": 20, "col": 3 },
+    { "id": "pboard", "type": "backend", "label": "Board", "row": 21, "col": 4 },
+    { "id": "pmatch", "type": "backend", "label": "Match", "row": 22, "col": 4 },
+    { "id": "pturn", "type": "backend", "label": "TurnPolicy", "row": 23, "col": 4 },
+    { "id": "papp", "type": "backend", "label": "Application", "row": 24, "col": 3 },
+    { "id": "pjoin", "type": "backend", "label": "JoinGame", "row": 25, "col": 4 },
+    { "id": "pmark", "type": "backend", "label": "PlaceMark", "row": 26, "col": 4 },
+    { "id": "pleave", "type": "backend", "label": "LeaveGame", "row": 27, "col": 4 },
+    { "id": "pmile", "type": "backend", "label": "Milestone", "sublabel": "Publisher", "row": 28, "col": 4 },
+    { "id": "pinfra", "type": "backend", "label": "Infrastructure", "row": 29, "col": 3 },
+    { "id": "pstream", "type": "backend", "label": "Stream", "sublabel": "Session", "row": 30, "col": 4 },
+    { "id": "pentry", "type": "backend", "label": "EntrySpot", "row": 31, "col": 4 },
+    { "id": "preloc", "type": "backend", "label": "PlayerActor", "sublabel": "RelocationAdapter", "row": 32, "col": 4 },
+    { "id": "proom", "type": "backend", "label": "RoomSpot", "row": 33, "col": 4 },
+    { "id": "pmulti", "type": "backend", "label": "Multicast", "sublabel": "Handlers", "row": 34, "col": 4 },
+    { "id": "pstore", "type": "backend", "label": "Store", "sublabel": "Providers", "row": 35, "col": 4 },
+    { "id": "preg", "type": "backend", "label": "Handler", "sublabel": "Registration", "row": 36, "col": 4 }
+  ],
+  "connections": [
+    { "from": "root", "to": "client", "variant": "default" },
+    { "from": "root", "to": "shared", "variant": "default" },
+    { "from": "root", "to": "server", "variant": "default" },
+
+    { "from": "client", "to": "cprog", "variant": "default" },
+    { "from": "client", "to": "cscen", "variant": "default" },
+
+    { "from": "shared", "to": "sconf", "variant": "default" },
+    { "from": "shared", "to": "sjson", "variant": "default" },
+
+    { "from": "server", "to": "api", "variant": "default" },
+    { "from": "server", "to": "play", "variant": "default" },
+
+    { "from": "api", "to": "aprog", "variant": "default" },
+    { "from": "api", "to": "aapp", "variant": "default" },
+    { "from": "api", "to": "ainfra", "variant": "default" },
+    { "from": "aapp", "to": "acreate", "variant": "default" },
+    { "from": "aapp", "to": "aauth", "variant": "default" },
+    { "from": "ainfra", "to": "ahttp", "variant": "default" },
+    { "from": "ainfra", "to": "ausrc", "variant": "default" },
+    { "from": "ainfra", "to": "aspot", "variant": "default" },
+    { "from": "ainfra", "to": "areg", "variant": "default" },
+
+    { "from": "play", "to": "pprog", "variant": "default" },
+    { "from": "play", "to": "pdom", "variant": "default" },
+    { "from": "play", "to": "papp", "variant": "default" },
+    { "from": "play", "to": "pinfra", "variant": "default" },
+    { "from": "pdom", "to": "pboard", "variant": "default" },
+    { "from": "pdom", "to": "pmatch", "variant": "default" },
+    { "from": "pdom", "to": "pturn", "variant": "default" },
+    { "from": "papp", "to": "pjoin", "variant": "default" },
+    { "from": "papp", "to": "pmark", "variant": "default" },
+    { "from": "papp", "to": "pleave", "variant": "default" },
+    { "from": "papp", "to": "pmile", "variant": "default" },
+    { "from": "pinfra", "to": "pstream", "variant": "default" },
+    { "from": "pinfra", "to": "pentry", "variant": "default" },
+    { "from": "pinfra", "to": "preloc", "variant": "default" },
+    { "from": "pinfra", "to": "proom", "variant": "default" },
+    { "from": "pinfra", "to": "pmulti", "variant": "default" },
+    { "from": "pinfra", "to": "pstore", "variant": "default" },
+    { "from": "pinfra", "to": "preg", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Client and Shared",
+      "items": [
+        "Client/Program configures the HTTP client and stream connector and starts the scenario; Client/Scenario creates the room, authenticates, joins, moves, observes, leaves, and self-checks.",
+        "Shared/Configuration fixes the Api/Play role, manual endpoint, Channel, and runner marker; Shared/JSON Contracts owns the HTTP, stream, room, milestone, and state wire declarations."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Server / Api (full names)",
+      "items": [
+        "Api/Program; Api/Application → CreateGame, AuthenticatePlayer; Api/Infrastructure → HttpHandlers, UserSourceAdapter, SpotManagerAdapter, HandlerRegistration.",
+        "Api owns HTTP and the user source and doesn't change board, turn, or room membership."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Server / Play (full names)",
+      "items": [
+        "Play/Program; Play/Domain → Board, Match, TurnPolicy; Play/Application → JoinGame, PlaceMark, LeaveGame, MilestonePublisher.",
+        "Play/Infrastructure → StreamSession, EntrySpot, PlayerActorRelocationAdapter, RoomSpot, MulticastHandlers, StoreProviders, HandlerRegistration.",
+        "Domain computes board and winner and doesn't reference ZLink types, the stream connector, or a Redis client; Infrastructure wires stream, actor, Spot, both Stores, and Logical Multicast."
+      ]
+    }
+  ]
+}

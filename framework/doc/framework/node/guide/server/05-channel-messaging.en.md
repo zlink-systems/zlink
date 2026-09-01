@@ -380,10 +380,10 @@ The framework doesn't automatically open every discovered handler on every chann
 ```typescript
 const mesh = builder.addRouteMesh('services')
   .listen('tcp://0.0.0.0:7101')
-  .setRoutingId(RoutingId.from('api-1'));
+  .routingId('api-1');
 mesh.channel('api').server()                    // server() is the role that receives handlers.
-  .addRequestHandler(GetProfileHandler)
-  .addSendHandler(RefreshCacheHandler);
+  .addRequestHandler('GetProfileRequest', GetProfileHandler)
+  .addSendHandler('RefreshCacheCommand', RefreshCacheHandler);
 ```
 
 ### Registering Multiple Channels On One MeshNode
@@ -394,10 +394,10 @@ role.
 ```typescript
 const mesh = builder.addRouteMesh('services')
   .listen('tcp://0.0.0.0:7101')
-  .setRoutingId(RoutingId.from('api-1'));
+  .routingId('api-1');
 
 mesh.channel('api').server()                 // A channel this node handles.
-  .addRequestHandler(GetProfileHandler);
+  .addRequestHandler('GetProfileRequest', GetProfileHandler);
 mesh.channel('billing').client();            // A call-only channel is client -- no handler registered.
 ```
 
@@ -624,7 +624,7 @@ A manual connection is set on the MeshNode's peer list.
 ```typescript
 const mesh = builder.addRouteMesh('services')
   .listen('tcp://0.0.0.0:7102')
-  .setRoutingId(RoutingId.from('profile-client-1'));
+  .routingId('profile-client-1');
 mesh.channel('profile').client();
 mesh.peerConnections().connect('tcp://10.0.10.15:7101');
 mesh.peerConnections().connect('tcp://10.0.10.16:7101');
@@ -701,7 +701,7 @@ The same `Weight` is also set as an initial value at registration time.
 ```typescript
 const mesh = builder.addRouteMesh('services')
   .listen('tcp://0.0.0.0:7101')
-  .setRoutingId(RoutingId.from('orders-1'));
+  .routingId('orders-1');
 mesh.channel('orders').server().setWeight(30); // This channel role's starting weight
 ```
 
@@ -770,7 +770,7 @@ const mesh = builder.addRouteMesh('media')
   .listen('tcp://0.0.0.0:5600')
   .setRoutingIdPrefix('resize');
 mesh.channel('image.resize').server()
-  .addRequestHandler(ResizeHandler);
+  .addRequestHandler('ResizeRequest', ResizeHandler);
 ```
 
 The calling node registers the same ChannelName as Client and connects to the processing
@@ -842,16 +842,16 @@ pick where an Actor/Spot is created or to pin a business message to a specific s
 ```typescript
 const mesh = builder.addRouteMesh('play')
   .listen(playRouterEndpoint)
-  .setRoutingId(RoutingId.from(playRouterId));
+  .routingId(playRouterId);
 
 // A handler that returns the node's own operational status.
-mesh.addRouteRequestHandler(NodeStatusHandler, 'ops.node.status');
+mesh.addRequestHandler('ops.node.status', NodeStatusHandler);
 ```
 
 The caller passes the Node RID and MeshName confirmed from the management system together.
 
 ```typescript
-const target = RoutingId.from('play-node-1');
+const target = 'play-node-1';
 
 // Uses Node direct because it's asking about a specific node's operational status.
 const status = await routeClient
@@ -893,7 +893,7 @@ The tie-in with SPOT continues in [06-spot](06-spot.en.md).
 
         const mesh = builder.addRouteMesh('services')
           .listen('tcp://0.0.0.0:7101')
-          .setRoutingId(RoutingId.from('api-1'));
+          .routingId('api-1');
         mesh.channel('api').server()
           .addHandlerGroup('api');                   // Exposure: ties the handler group to the channel.
         mesh.channel('account').client();            // A call-only channel.
@@ -903,7 +903,7 @@ The tie-in with SPOT continues in [06-spot](06-spot.en.md).
         events.connect('tcp://127.0.0.1:7201');       // Also subscribes to its own publish, as an example.
         events.addHandlerGroup('api.events');         // Attaches the subscription handler as a group.
 
-        return builder;
+        return builder.build();
       }
     })
   ],

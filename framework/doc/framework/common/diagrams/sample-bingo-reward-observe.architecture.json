@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Reward 관찰 — Observe · Publish · Stop",
+    "subtitle": "Observer가 관찰 room에 join하고, Game Room의 reward publish가 observer push로 전달된 뒤 관찰을 종료한다",
+    "output": "sample-bingo-reward-observe.html",
+    "column_fit": "spread",
+    "viewBox": [1000, 940],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "O", "type": "frontend", "label": "Observer" },
+    { "id": "S", "type": "external", "label": "Session" },
+    { "id": "OA", "type": "backend", "label": "Observer Actor" },
+    { "id": "OR", "type": "backend", "label": "Observer Room" },
+    { "id": "GR", "type": "backend", "label": "Game Room" }
+  ],
+  "messages": [
+    { "from": "O", "to": "S", "y": 160, "label": "ObserveBingoEventsReq", "variant": "default" },
+    { "from": "S", "to": "OA", "y": 208, "label": "Relay through binding", "variant": "default" },
+    { "from": "OA", "to": "OR", "y": 256, "label": "Join observed RoomId", "variant": "default" },
+    { "from": "OR", "to": "OA", "y": 304, "label": "Subscribed", "variant": "return" },
+    { "from": "OA", "to": "S", "y": 352, "label": "ObserveBingoEventsRes", "variant": "return" },
+    { "from": "S", "to": "O", "y": 400, "label": "ObserveBingoEventsRes", "variant": "return" },
+    { "from": "GR", "to": "OR", "y": 448, "label": "BingoRewardAcquiredEvent (publish)", "variant": "return" },
+    { "from": "OR", "to": "OA", "y": 496, "label": "BingoRewardAnnouncedNotify", "variant": "return" },
+    { "from": "OA", "to": "S", "y": 544, "label": "BingoRewardAnnouncedNotify", "variant": "return" },
+    { "from": "S", "to": "O", "y": 592, "label": "BingoRewardAnnouncedNotify", "variant": "return" },
+    { "from": "O", "to": "S", "y": 640, "label": "StopObservingBingoEventsReq", "variant": "default" },
+    { "from": "S", "to": "OA", "y": 688, "label": "Relay through binding", "variant": "default" },
+    { "from": "OA", "to": "OR", "y": 736, "label": "Leave", "variant": "default" },
+    { "from": "OA", "to": "S", "y": 784, "label": "StopObservingBingoEventsRes", "variant": "return" },
+    { "from": "S", "to": "O", "y": 832, "label": "StopObservingBingoEventsRes", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "참여자 원문 라벨과 publish 경로",
+      "items": [
+        "참여자 원문 라벨 — Observer: Observer Client · Observer Actor: Play / Observer Actor · Observer Room: Play / Observer Room · Game Room: Play / Game Room.",
+        "Game room은 종료 결과를 먼저 확정하고 player push를 제출한 뒤 `bingo.room.reward` topic에 BingoRewardAcquiredEvent를 publish한다. 각 Play node의 관찰용 local BingoRoom이 같은 topic을 구독하고, Event의 RoomId가 자신의 ObservedRoomId와 일치하는 room만 observer Actor에게 typed message를 보내 bound session으로 notify한다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "관찰 경계와 완료 의미",
+      "items": [
+        "관찰 room은 player membership·card·timer·winner 판정에 참여하지 않는다. Reward 수신만을 위한 별도 Spot type도 만들지 않는다.",
+        "Publish의 정상 완료는 source runtime이 작업을 시작했다는 뜻이며 subscriber handler 실행이나 target별 수락을 보장하지 않는다. Client는 publish 반환값이 아니라 BingoRewardAnnouncedNotify payload로 전달 결과를 확인한다."
+      ]
+    }
+  ]
+}

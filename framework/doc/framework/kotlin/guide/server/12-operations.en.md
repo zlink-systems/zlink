@@ -375,7 +375,7 @@ socket options (HWM, timeout) are exclusive to `configureRouterSocket()` before 
 
 ```kotlin
 meshOptions.mesh("game.room").setPlacementWeight(0) // Excludes it from new object placement
-meshOptions.channel("game.room").setWeight(0)      // Excludes it from new channel select-one
+meshOptions.channel("game.room").weight(0)      // Excludes it from new channel select-one
 ```
 
 The two weights are independent and take effect on new selections while running. Placement

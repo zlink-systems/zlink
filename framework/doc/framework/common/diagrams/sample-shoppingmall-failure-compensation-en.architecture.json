@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Inventory failure and payment failure compensation",
+    "subtitle": "Inventory rejected → no Payment call; Payment rejected → release then Failed",
+    "output": "sample-shoppingmall-failure-compensation-en.html",
+    "column_fit": "spread",
+    "viewBox": [
+      900,
+      1120
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "participants": [
+    {
+      "id": "Workflow",
+      "type": "backend",
+      "label": "OrderWorkflow",
+      "sublabel": "/ Order Spot"
+    },
+    {
+      "id": "Inventory",
+      "type": "external",
+      "label": "Inventory"
+    },
+    {
+      "id": "Payment",
+      "type": "external",
+      "label": "Payment"
+    },
+    {
+      "id": "Events",
+      "type": "database",
+      "label": "Order Event Store"
+    },
+    {
+      "id": "Projection",
+      "type": "database",
+      "label": "Order Read Model"
+    }
+  ],
+  "messages": [
+    {
+      "from": "Workflow",
+      "to": "Inventory",
+      "y": 160,
+      "label": "ReserveInventoryReq",
+      "variant": "default"
+    },
+    {
+      "from": "Inventory",
+      "to": "Workflow",
+      "y": 208,
+      "label": "ReserveInventoryRes",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 256,
+      "label": "[Inventory rejected] Append InventoryReservationFailedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 304,
+      "label": "Append OrderFailedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Projection",
+      "y": 352,
+      "label": "Apply Failed",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 400,
+      "label": "[Inventory accepted] Append InventoryReservedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Projection",
+      "y": 448,
+      "label": "Apply InventoryReserved",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Payment",
+      "y": 496,
+      "label": "AuthorizePaymentReq",
+      "variant": "default"
+    },
+    {
+      "from": "Payment",
+      "to": "Workflow",
+      "y": 544,
+      "label": "AuthorizePaymentRes",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 592,
+      "label": "[Payment rejected] Append PaymentFailedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Inventory",
+      "y": 640,
+      "label": "ReleaseInventoryReq",
+      "variant": "default"
+    },
+    {
+      "from": "Inventory",
+      "to": "Workflow",
+      "y": 688,
+      "label": "ReleaseInventoryRes",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 736,
+      "label": "Append InventoryReleasedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 784,
+      "label": "Append OrderFailedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Projection",
+      "y": 832,
+      "label": "Apply Failed",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 880,
+      "label": "[Payment accepted] Append PaymentAuthorizedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Projection",
+      "y": 928,
+      "label": "Apply PaymentAuthorized",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 976,
+      "label": "Append OrderConfirmedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Projection",
+      "y": 1024,
+      "label": "Apply Confirmed",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "mermaid alt/else structure (archify has no native block — flattened, bracket-tagged)",
+      "items": [
+        "alt Inventory rejected: messages 3-5 only, Payment is never called.",
+        "else Inventory accepted: messages 6-9 run, then a nested alt: Payment rejected → messages 10-15 (release + InventoryReleasedEvent + OrderFailedEvent); else Payment accepted → messages 16-19 (PaymentAuthorizedEvent + OrderConfirmedEvent). The Payment-rejected and Payment-accepted branches are mutually exclusive."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Compensation contract",
+      "items": [
+        "If Payment is rejected, release is requested with the already-recorded ReservationId, and the release result and OrderFailedEvent are recorded in order.",
+        "Both Inventory and Payment must return the first result when given the same deterministic ID again."
+      ]
+    }
+  ]
+}

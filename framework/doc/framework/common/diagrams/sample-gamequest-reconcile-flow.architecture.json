@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "reset/reconcile와 failure boundary",
+    "subtitle": "SyncQuestProgressReq가 GameplayStateStore fact와 fold를 비교하고 QuestReconciled를 append한다",
+    "output": "sample-gamequest-reconcile-flow.html",
+    "column_fit": "spread",
+    "viewBox": [1000, 640],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Game Client" },
+    { "id": "G", "type": "frontend", "label": "GameApi" },
+    { "id": "P", "type": "backend", "label": "PlayerQuestSpot" }
+  ],
+  "messages": [
+    { "from": "C", "to": "G", "y": 160, "label": "SyncQuestProgressReq", "variant": "default" },
+    { "from": "G", "to": "P", "y": 208, "label": "SyncQuestProgressReq(player-1)", "variant": "default" },
+    { "from": "P", "to": "G", "y": 256, "label": "SyncQuestProgressRes (read facts and compare fold)", "variant": "return" },
+    { "from": "G", "to": "C", "y": 304, "label": "corrected progress", "variant": "return" },
+    { "from": "P", "to": "G", "y": 352, "label": "QuestProgressNotify", "variant": "return" },
+    { "from": "G", "to": "C", "y": 400, "label": "corrected notify", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "reconcile",
+      "items": [
+        "GameplayStateStore fact가 증가했지만 GameplayMsg가 유실된 경우 Client 또는 운영 trigger가 SyncQuestProgressReq를 보낸다.",
+        "Spot은 authoritative fact를 읽어 현재 fold와 비교하고 필요한 QuestReconciled event를 append한다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "failure boundary",
+      "items": [
+        "Ready owner process가 종료되면 현재 Spot operation은 Unavailable로 끝난다 — Framework는 새 QuestMission node를 선택해 실패한 operation을 자동 재제출하지 않는다.",
+        "Explicit Close가 authority release까지 완료된 뒤의 새 Instance intent는 새 generation에서 event stream을 replay할 수 있다. 이 두 경우를 crash failover로 같은 흐름에 쓰지 않는다."
+      ]
+    }
+  ]
+}

@@ -108,7 +108,7 @@ handle (const create_game_http_req_t &request)
 
 A channel/HTTP handler runs on the **worker pool.** The worker pool is configured from
 `min_threads`, `max_threads`, `idle_timeout`, and `max_queue_length` in the settings
-`options.configure_worker()` returns. When a handler reaches `co_await`, only the
+`options.worker()` returns. When a handler reaches `co_await`, only the
 coroutine pauses (suspends) -- the execution thread goes to process another queue item.
 The same Spot queue doesn't start the next callback until that handler completes.
 

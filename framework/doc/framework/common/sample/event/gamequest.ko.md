@@ -56,28 +56,8 @@ ingest와 지급 transaction을 추가해야 하며 이 sample의 완료 기준�
 stateless web backend에서는 room/field가 gameplay event를 ingest API로 보내고, log partition,
 consumer, cache, DB lock, projection과 presence가 player별 순서와 push를 나누어 담당한다.
 
-```mermaid
-flowchart LR
-    C[Game Client] --> RF[Room Field]
-    RF --> LB[Load Balancer]
-    LB --> API[Event Ingest API]
-    subgraph Backend[Stateless Backend]
-        LOG[(Partitioned Log)]
-        DB[(State DB)]
-        QC[Quest Consumer]
-        RM[(Read Model)]
-        PS[Pub Sub]
-        PR[Presence]
-    end
-    API --> LOG
-    LOG --> QC
-    QC --> DB
-    QC --> RM
-    QC --> PS
-    PS --> PR
-    PR --> RF
-    RF --> C
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-existing-web.html" title="기존 stateless web 방식" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-gamequest-existing-web.html" target="_blank">↗ 크게 보기</a></p>
 
 GameQuest는 진행 tier에서 PlayerId를 global SpotId로 사용해 owner turn을 Framework에 맡긴다.
 QuestEventStore와 projection, reset/reconcile은 Application에 남는다. Framework가 Kafka
@@ -99,25 +79,8 @@ tier는 유실을 fact 재계산으로 흡수한다는 점이 다르다. 두 sam
 기본 topology는 Client와 server component의 연결만 보여 준다. QuestEventStore,
 QuestReadModelStore, GameplayStateStore와 QuestDefinition은 resource 표에서 설명한다.
 
-```mermaid
-flowchart LR
-    subgraph Clients[Clients]
-        C1[Game Client A]
-        C2[Game Client B]
-    end
-    subgraph Servers[Servers]
-        G1[GameApi 1]
-        G2[GameApi 2]
-        Q1[QuestMission 1]
-        Q2[QuestMission 2]
-    end
-    C1 ---|STREAM| G1
-    C2 ---|STREAM| G2
-    G1 ---|gamequest RouteMesh| Q1
-    G1 ---|gamequest RouteMesh| Q2
-    G2 ---|gamequest RouteMesh| Q1
-    G2 ---|gamequest RouteMesh| Q2
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-topology.html" title="시스템 구성과 topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-gamequest-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 GameApi는 session actor와 gameplay edge를 소유하고 connection을 분산한다. QuestMission은
 PlayerQuestSpot Instance factory를 제공한다. PlayerId별 owner는 Framework가 Location Store
@@ -346,29 +309,8 @@ message QuestReconciled {
 첫 PlayerId event가 도착하면 Instance intent가 Missing PlayerQuestSpot을 준비한다. owner
 Spot은 stream replay로 aggregate를 복원한 뒤 event를 평가한다.
 
-```mermaid
-sequenceDiagram
-    participant C as Game Client
-    participant G as GameApi
-    participant P as PlayerQuestSpot
-
-    C->>G: JoinSessionReq
-    G-->>C: JoinSessionRes
-    C->>G: KillMonsterReq
-    G->>P: GameplayMsg(PlayerId)
-    Note over P: replay, dedupe, evaluate and fold
-    P-->>G: QuestProgressNotify
-    G-->>C: QuestProgressNotify
-    C->>G: KillMonsterReq
-    G->>P: GameplayMsg
-    P-->>G: QuestProgressNotify
-    G-->>C: QuestProgressNotify
-    C->>G: KillMonsterReq
-    G->>P: GameplayMsg
-    Note over P: append QuestCompleted and update projection
-    P-->>G: QuestCompletedNotify
-    G-->>C: QuestCompletedNotify
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-progress-flow.html" title="정상 progress와 completion" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-gamequest-progress-flow.html" target="_blank">↗ 크게 보기</a></p>
 
 `KillMonsterReq/Res`의 response는 GameApi가 action을 접수해 만든 EventId를 반환한다.
 `CollectItemMsg`와 `EnterAreaMsg`는 response가 없는 one-way action이며, 접수 이후의 progress와
@@ -382,24 +324,8 @@ stream과 projection을 갱신한 뒤 보낸다. one-way send 완료는 target h
 sourceEventId를 확인하고 domain event를 다시 append하지 않는다. reconnect에서는 같은
 PlayerId session actor를 binding하고 GetQuestProgressReq로 projection을 확인한다.
 
-```mermaid
-sequenceDiagram
-    participant C as Game Client
-    participant G as GameApi
-    participant P as PlayerQuestSpot
-
-    C->>G: STREAM reconnect
-    C->>G: JoinSessionReq(player-1)
-    G-->>C: JoinSessionRes(active quests)
-    C->>G: GetQuestProgressReq
-    G->>P: GetQuestProgressReq(player-1)
-    P-->>G: GetQuestProgressRes
-    G-->>C: GetQuestProgressRes
-    C->>G: KillMonsterReq(same key)
-    G->>P: GameplayMsg(same eventId)
-    P-->>G: Existing result without duplicate event
-    G-->>C: existing result
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-reconnect-flow.html" title="중복과 reconnect" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-gamequest-reconnect-flow.html" target="_blank">↗ 크게 보기</a></p>
 
 Session binding이 없는 동안의 notify는 성공 조건이 아니다. 상태는 event store에 기록되고
 reconnect 뒤 조회로 복원된다.
@@ -410,20 +336,8 @@ GameplayStateStore fact가 증가했지만 GameplayMsg가 유실된 경우 Clien
 SyncQuestProgressReq를 보낸다. Spot은 authoritative fact를 읽어 현재 fold와 비교하고
 필요한 QuestReconciled event를 append한다.
 
-```mermaid
-sequenceDiagram
-    participant C as Game Client
-    participant G as GameApi
-    participant P as PlayerQuestSpot
-
-    C->>G: SyncQuestProgressReq
-    G->>P: SyncQuestProgressReq(player-1)
-    Note over P: read facts and compare fold
-    P-->>G: SyncQuestProgressRes
-    G-->>C: corrected progress
-    P-->>G: QuestProgressNotify
-    G-->>C: corrected notify
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-reconcile-flow.html" title="reset/reconcile와 failure boundary" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-gamequest-reconcile-flow.html" target="_blank">↗ 크게 보기</a></p>
 
 Ready owner process가 종료되면 현재 Spot operation은 Unavailable로 끝난다. Framework는
 새 QuestMission node를 선택해 실패한 operation을 자동 재제출하지 않는다. Explicit Close가
@@ -436,40 +350,8 @@ authority release까지 완료된 뒤의 새 Instance intent는 새 generation�
 책임으로 구현한다. 실제 directory와 type 표현은 달라도 `GameApi`가 edge와 session을, `QuestMission`이
 player별 state를 소유하는 경계는 바꾸지 않는다.
 
-```text
-GameQuest
-+-- Client
-|   +-- Program
-|   +-- Scenario
-+-- Shared
-|   +-- Configuration
-|   +-- JSON Contracts
-+-- Server
-    +-- GameApi
-    |   +-- Program
-    |   +-- Application
-    |   |   +-- GameplayUseCases
-    |   |   +-- SessionBinding
-    |   +-- Infrastructure
-    |       +-- StreamHandlers
-    |       +-- SpotClients
-    |       +-- ProjectionQueryAdapter
-    +-- QuestMission
-        +-- Program
-        +-- Domain
-        |   +-- QuestPolicy
-        |   +-- PlayerQuestAggregate
-        |   +-- QuestEvents
-        +-- Application
-        |   +-- ApplyGameplay
-        |   +-- ReconcileProgress
-        |   +-- ProjectionUpdate
-        +-- Infrastructure
-            +-- PlayerQuestSpot
-            +-- EventStoreAdapter
-            +-- ReadModelAdapter
-            +-- GameplayStateAdapter
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-structure.html" title="구현 구조 — Client · Shared · Server" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-gamequest-structure.html" target="_blank">↗ 크게 보기</a></p>
 
 | Logical component | 모든 언어에서 유지할 책임 | 의존 방향과 금지 경계 |
 |---|---|---|
@@ -630,3 +512,7 @@ Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 
   message별 codec registry를 추가하지 않는다.
 - runner가 build, readiness, self-check, cleanup을 수행하고 §10.1 표의 모든 행을 문자열과
   횟수까지 통과시킨다.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

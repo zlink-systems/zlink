@@ -59,27 +59,8 @@ Ready owner가 비정상 종료되었을 때 다른 node에 object를 자동으�
 Client가 직접 연결하는 역할은 Session뿐이다. API, Matchmaking과 Play는 server 간 channel과
 RouteMesh로 통신한다.
 
-```mermaid
-flowchart LR
-    subgraph Clients[Clients]
-        PC[Player Clients x2]
-        OC[Observer Client x1]
-    end
-
-    subgraph Servers[Servers]
-        S[Session Servers x2]
-        A[API Servers x2]
-        M[Matchmaking Server x1]
-        P[Play Servers x2]
-    end
-
-    PC ---|STREAM| S
-    OC ---|STREAM| S
-    S ---|bingo.api| A
-    S ---|bingo.play| P
-    A ---|bingo.play| P
-    A ---|bingo.matchmaking| M
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-topology.html" title="시스템 구성과 topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-topology.html" target="_blank">↗ 크게 보기</a></p>
 
 | 논리 연결 | 역할 |
 |---|---|
@@ -400,22 +381,8 @@ application state 변경, 완료 조건과 diagram에서 생략한 실패 경계
 
 ### 7.1 인증과 binding
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Session
-    participant API
-    participant Play
-
-    Client->>Session: AuthenticateReq
-    Session->>API: AuthenticatePlayerReq
-    API-->>Session: AuthenticatePlayerRes
-    Session->>Play: Get or create Player Actor
-    Play-->>Session: ActorRef
-    Session->>Session: Bind current STREAM session
-    Session-->>Client: AuthenticateRes
-    Note over Session,Play: Later packets use the stored binding route
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-auth-binding.html" title="인증과 binding" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-auth-binding.html" target="_blank">↗ 크게 보기</a></p>
 
 1. Client가 Session STREAM으로 `AuthenticateReq`를 보낸다.
 2. Session이 API에 token 검증을 요청한다.
@@ -428,51 +395,8 @@ Framework가 binding route를 갱신한다.
 
 ### 7.2 Matching과 game start
 
-```mermaid
-sequenceDiagram
-    participant Player1 as Player Client 1
-    participant Player2 as Player Client 2
-    participant Session
-    participant Actor1 as Play / Player Actor 1
-    participant Actor2 as Play / Player Actor 2
-    participant API
-    participant Matchmaker as Matchmaking
-    participant Room as Play / Room
-
-    Player1->>Session: MatchBingoReq
-    Session->>Actor1: Relay through binding
-    Actor1->>API: MatchBingoApiReq
-    API->>Matchmaker: ReserveBingoRoomReq
-    Matchmaker-->>API: ReserveBingoRoomRes
-    API->>Room: Get or create Room
-    Room-->>API: Ready
-    Actor1->>Actor1: Room join을 deferred operation으로 등록
-    Actor1-->>Session: MatchBingoRes(WaitingForPlayers)
-    Session-->>Player1: MatchBingoRes
-    Note over Actor1,Room: Handler 반환 뒤 deferred join 실행
-    Actor1->>Room: Player 1 참가
-    Room-->>Actor1: 참가 수락
-
-    Player2->>Session: MatchBingoReq
-    Session->>Actor2: Relay through binding
-    Actor2->>API: MatchBingoApiReq
-    API->>Matchmaker: ReserveBingoRoomReq
-    Matchmaker-->>API: Same RoomId and settings
-    Actor2->>Actor2: Room join을 deferred operation으로 등록
-    par Matching 응답
-        Actor2-->>Session: MatchBingoRes(WaitingForPlayers)
-        Session-->>Player2: MatchBingoRes
-    and Handler 반환 뒤 deferred join
-        Actor2->>Room: Player 2 참가
-        Room->>Room: State = Running
-        Room-->>Actor1: BingoGameStartedNotify
-        Room-->>Actor2: BingoGameStartedNotify
-        Actor1-->>Session: BingoGameStartedNotify
-        Actor2-->>Session: BingoGameStartedNotify
-        Session-->>Player1: BingoGameStartedNotify
-        Session-->>Player2: BingoGameStartedNotify
-    end
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-matching-start.html" title="Matching과 game start" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-matching-start.html" target="_blank">↗ 크게 보기</a></p>
 
 1. `player-1`이 `MatchBingoReq`를 보낸다.
 2. API가 level bucket의 Matchmaker Instance Spot에 reservation을 요청한다.
@@ -497,33 +421,8 @@ state를 재개 뒤에도 그대로 유효하다고 가정하지 않는다. Obse
 
 ### 7.3 Card, draw와 winner 결정
 
-```mermaid
-sequenceDiagram
-    participant Players as Player Clients
-    participant Session
-    participant Actors as Play / Player Actors
-    participant Room as Play / Room
-
-    Players->>Session: SubmitBingoCardReq
-    Session->>Actors: Relay through binding
-    Actors->>Room: Submit card
-    Room-->>Actors: Card accepted
-    Actors-->>Session: SubmitBingoCardRes
-    Session-->>Players: SubmitBingoCardRes
-    Room->>Room: Start logical draw timer
-
-    loop Each draw tick
-        Room->>Room: Draw number and update marks
-        Room-->>Actors: BingoNumberDrawnNotify
-        Actors-->>Session: BingoNumberDrawnNotify
-        Session-->>Players: BingoNumberDrawnNotify
-    end
-
-    Room->>Room: Select winner and set Finished
-    Room-->>Actors: BingoGameEndedNotify
-    Actors-->>Session: BingoGameEndedNotify
-    Session-->>Players: BingoGameEndedNotify
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-card-draw.html" title="Card·draw와 winner 결정" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-card-draw.html" target="_blank">↗ 크게 보기</a></p>
 
 1. 두 player는 start push를 확인한 뒤 서로 다른 deterministic card를 제출한다.
 2. Room은 card 크기, 숫자 범위와 중복을 검증하고 가운데 free cell을 mark한다.
@@ -537,32 +436,8 @@ Card 검증, draw deck, mark와 winner 판정은 domain module이 소유한다. 
 
 ### 7.4 Reward 관찰
 
-```mermaid
-sequenceDiagram
-    participant Observer as Observer Client
-    participant Session
-    participant ObserverActor as Play / Observer Actor
-    participant ObserverRoom as Play / Observer Room
-    participant GameRoom as Play / Game Room
-
-    Observer->>Session: ObserveBingoEventsReq
-    Session->>ObserverActor: Relay through binding
-    ObserverActor->>ObserverRoom: Join observed RoomId
-    ObserverRoom-->>ObserverActor: Subscribed
-    ObserverActor-->>Session: ObserveBingoEventsRes
-    Session-->>Observer: ObserveBingoEventsRes
-
-    GameRoom-->>ObserverRoom: BingoRewardAcquiredEvent
-    ObserverRoom-->>ObserverActor: BingoRewardAnnouncedNotify
-    ObserverActor-->>Session: BingoRewardAnnouncedNotify
-    Session-->>Observer: BingoRewardAnnouncedNotify
-
-    Observer->>Session: StopObservingBingoEventsReq
-    Session->>ObserverActor: Relay through binding
-    ObserverActor->>ObserverRoom: Leave
-    ObserverActor-->>Session: StopObservingBingoEventsRes
-    Session-->>Observer: StopObservingBingoEventsRes
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-reward-observe.html" title="Reward 관찰" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-reward-observe.html" target="_blank">↗ 크게 보기</a></p>
 
 Game room은 종료 결과를 먼저 확정하고 player push를 제출한 뒤 `bingo.room.reward` topic에
 `BingoRewardAcquiredEvent`를 publish한다. 각 Play node의 관찰용 local `BingoRoom`은 같은 topic을
@@ -601,22 +476,8 @@ Game 종료 뒤 player Actor cleanup은 별도 순서로 실행한다.
 - disconnect cleanup만으로 actor destroy가 실행되지 않는다.
 - stream disconnect는 bound session을 정리하지만 actor를 즉시 destroy하지 않는다.
 
-```mermaid
-sequenceDiagram
-    participant Room as Play / Room
-    participant PlayerActor as Play / Player Actor
-    participant API
-    participant EntrySpot as Play / Entry Spot
-
-    Room->>PlayerActor: Mark destroy after Entry Spot
-    Room->>PlayerActor: Leave Room
-    Room->>API: ReportBingoResultReq
-    API-->>Room: ReportBingoResultRes
-    Note over PlayerActor,EntrySpot: Framework relocates the Actor after leave
-    EntrySpot->>EntrySpot: Invoke join callback
-    EntrySpot->>PlayerActor: Destroy Actor
-    Note over EntrySpot,PlayerActor: Destroy does not invoke the leave callback
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-end-cleanup.html" title="종료 cleanup" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-end-cleanup.html" target="_blank">↗ 크게 보기</a></p>
 
 1. Room은 cleanup이 한 번만 시작되도록 상태를 기록한다.
 2. 각 player Actor에 Entry Spot 복귀 뒤 destroy할 표시를 남기고 room에서 leave한다.
@@ -659,44 +520,8 @@ Application Job Queue 포화는 이 결과의 원인이 아니다. Sample은 이
 표현은 달라도 된다. 그러나 한 언어에서만 역할을 합치거나 다른 layer로 옮겨 구조를 다시 해석하게
 만들면 안 된다.
 
-```text
-Bingo Sample
-+-- Client
-|   +-- Program
-|   +-- Scenario
-+-- Shared
-|   +-- Configuration
-|   +-- Protobuf Contracts
-+-- Server
-    +-- API
-    |   +-- Program
-    |   +-- Handlers
-    |   +-- Player Record Store
-    +-- Matchmaking
-    |   +-- Program
-    |   +-- Application
-    |   +-- Infrastructure
-    |       +-- Redis Adapter
-    |       +-- Instance Spot Adapter
-    +-- Session
-    |   +-- Program
-    |   +-- STREAM Session
-    |       +-- Handlers
-    +-- Play
-        +-- Program
-        +-- Domain
-        |   +-- Bingo Card
-        |   +-- Bingo Game
-        |   +-- Bingo Room State
-        +-- Infrastructure
-            +-- Player Actor
-            |   +-- Actor Relocation Adapter
-            +-- Entry Spot
-            |   +-- Handlers
-            +-- Bingo Room Spot
-                +-- Room Relocation Adapter
-                +-- Handlers
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-structure.html" title="Bingo 구현 구조" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-bingo-structure.html" target="_blank">↗ 크게 보기</a></p>
 
 | Logical component | 모든 언어에서 유지할 책임 |
 |---|---|
@@ -848,3 +673,7 @@ Log 대기는 `100 ms` 간격으로 최대 `300`회 확인한다. 이 예산은 
 [Graceful Drain](../../spec/server/05-location-relocation/05-host-relocation-flow.ko.md)의 언어별 exact interface를 사용한다.
 관측 설정과 100 Actor relocation workload는 이 기본 sample의 성공 조건이 아니라
 [Config 11 관측·운영 E2E](../../e2e/config-11-observability-ops.ko.md)가 검증한다.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

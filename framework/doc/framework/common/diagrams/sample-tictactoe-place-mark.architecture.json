@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "수 두기와 최종 state — Place Mark",
+    "subtitle": "요청 client는 PlaceMarkRes, 상대 client는 GameStateNotify로 같은 state를 받는다",
+    "output": "sample-tictactoe-place-mark.html",
+    "column_fit": "spread",
+    "viewBox": [1000, 820],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "H", "type": "frontend", "label": "Host Client" },
+    { "id": "P1", "type": "backend", "label": "Play Session A" },
+    { "id": "R", "type": "backend", "label": "Room Spot" },
+    { "id": "P2", "type": "backend", "label": "Play Session B" },
+    { "id": "G", "type": "frontend", "label": "Guest Client" }
+  ],
+  "messages": [
+    { "from": "H", "to": "P1", "y": 160, "label": "PlaceMarkReq(cell)", "variant": "default" },
+    { "from": "P1", "to": "R", "y": 208, "label": "bound Actor의 Room handler에 요청 전달", "variant": "default" },
+    { "from": "R", "to": "P1", "y": 256, "label": "PlaceMarkRes(GameState)", "variant": "return" },
+    { "from": "P1", "to": "H", "y": 304, "label": "PlaceMarkRes", "variant": "return" },
+    { "from": "R", "to": "P2", "y": 352, "label": "GameStateNotify", "variant": "return" },
+    { "from": "P2", "to": "G", "y": 400, "label": "GameStateNotify", "variant": "return" },
+    { "from": "G", "to": "P2", "y": 448, "label": "PlaceMarkReq(cell)", "variant": "default" },
+    { "from": "P2", "to": "R", "y": 496, "label": "bound Actor의 Room handler에 요청 전달", "variant": "default" },
+    { "from": "R", "to": "P2", "y": 544, "label": "PlaceMarkRes(GameState)", "variant": "return" },
+    { "from": "P2", "to": "G", "y": 592, "label": "PlaceMarkRes", "variant": "return" },
+    { "from": "R", "to": "P1", "y": 640, "label": "GameStateNotify", "variant": "return" },
+    { "from": "P1", "to": "H", "y": 688, "label": "GameStateNotify", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "요청·통지 대칭",
+      "items": [
+        "request client는 PlaceMarkRes를, 상대 client는 GameStateNotify를 받으며 같은 Board·Status·Winner를 갖는다. 최종 state는 양쪽에서 같아야 한다.",
+        "잘못된 turn·사용한 cell·종료된 room은 Application callback의 거부이므로 typed Rejected 오류로 끝난다. Transport·route·protocol 실패만 다른 ErrorKind로 끝난다."
+      ]
+    }
+  ]
+}

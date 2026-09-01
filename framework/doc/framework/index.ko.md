@@ -239,57 +239,15 @@ Instance Spot의 실제 동작은 [06-spot](cpp/guide/server/06-spot.ko.md)이 �
 동시에 수정하지 않도록 분산 락으로 순서를 지킨다. 실시간 기능 하나를 위해 본체에
 준하는 구성 요소(주황)가 추가된다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    Client["클라이언트 앱"]
-    LB["L7 LB / gateway"]:::infra
-    Api["API 서버들 ×N<br/>(stateless)"]:::app
-    Dom["도메인 서버들 ×N"]:::app
-    SD["service discovery"]:::infra
-    SLB["sticky LB"]:::extra
-    WS["WebSocket 서버 ×N"]:::extra
-    RP["Redis pub/sub<br/>(실시간 fan-out 경유)"]:::extra
-    RL["Redis 분산 락<br/>(순서 보장)"]:::extra
-
-    Client -- "HTTP" --> LB --> Api
-    Api -- "서버 간 호출" --> Dom
-    Api -.->|"위치 조회"| SD
-    Dom -.->|"등록"| SD
-    Client -- "실시간 연결" --> SLB --> WS
-    WS <--> RP
-    RP <--> Api
-    Api -.-> RL
-    Dom -.-> RL
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-    classDef extra fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#bf360c
-```
+<iframe class="zlink-diagram" src="/common/diagrams/index-existing.html" title="기존 방식 — 웹 서비스 + 실시간" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/index-existing.html" target="_blank">↗ 크게 보기</a></p>
 
 **ZLink 방식.** 주황 조각이 전부 사라지고, node·actor·spot의 위치를 알려주는
 location store 하나가 남는다. 서버 간 호출과 실시간 전달은 runtime 간에 직접
 연결된다.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    Client2["클라이언트 앱"]
-    LB2["L7 LB / gateway<br/>(HTTP는 그대로)"]:::infra
-    Api2["API 서버들 ×N<br/>+ ZLink route client"]:::app
-    Dom2["도메인 서버들 ×N<br/>+ ZLink SPOT · STREAM"]:::spot
-    Store["location store"]:::infra
-
-    Client2 -- "HTTP" --> LB2 --> Api2
-    Client2 -- "STREAM 직접 접속" --> Dom2
-    Api2 -- "channel request/send" --> Dom2
-    Api2 -.->|"주소 해석"| Store
-    Dom2 -.->|"등록"| Store
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-    classDef spot fill:#e8f5e9,stroke:#2e7d32,stroke-width:4px,color:#1b5e20
-```
+<iframe class="zlink-diagram" src="/common/diagrams/index-zlink.html" title="ZLink 방식 — 웹 서비스 + 실시간" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/index-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
 sticky LB · WebSocket 서버 · pub/sub 경유 · 분산 락 · service discovery — 다섯 조각이
 **location store 하나**로 줄었다. Kafka·Redis 같은 기존 스택을 대체하는 것이 아니다
@@ -364,3 +322,7 @@ Core는 이 프레임워크가 얹히는 메시징 엔진이다. 프레임워크
 binding은 그 C API를 언어에서 사용하는 얇은 층이다(.NET · C++ · Java · Node.js ·
 Python · Go · Rust). framework가 없는 언어에서 zlink를 쓰거나, framework가 감싸지
 않은 소켓 기능이 필요할 때 여기서 시작한다.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

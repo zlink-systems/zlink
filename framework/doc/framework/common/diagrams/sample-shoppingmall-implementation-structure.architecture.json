@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "구현 구조 — ShoppingMall",
+    "subtitle": "모든 언어가 Client·Shared·Server를 같은 순서·위치로 둔다",
+    "output": "sample-shoppingmall-implementation-structure.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 6, "gapX": 60, "gapY": 78, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "cli_program", "type": "frontend", "label": "Program", "row": 0, "col": 0 },
+    { "id": "cli_scenario", "type": "frontend", "label": "Scenario", "row": 0, "col": 1 },
+
+    { "id": "sh_config", "type": "frontend", "label": "Configuration", "row": 1, "col": 0 },
+    { "id": "sh_json", "type": "frontend", "label": "JSON Contracts", "row": 1, "col": 1 },
+
+    { "id": "capi_program", "type": "backend", "label": "CommerceApi", "sublabel": "Program", "row": 2, "col": 0 },
+
+    { "id": "capi_start", "type": "backend", "label": "Start Order", "row": 3, "col": 0 },
+    { "id": "capi_get", "type": "backend", "label": "Get Order State", "row": 3, "col": 1 },
+
+    { "id": "capi_http", "type": "backend", "label": "Http", "row": 4, "col": 0 },
+    { "id": "capi_wfclient", "type": "backend", "label": "Workflow Client", "row": 4, "col": 1 },
+    { "id": "capi_store", "type": "backend", "label": "Store Adapter", "row": 4, "col": 2 },
+
+    { "id": "owf_program", "type": "backend", "label": "OrderWorkflow", "sublabel": "Program", "row": 5, "col": 0 },
+
+    { "id": "owf_agg", "type": "backend", "label": "Order Aggregate", "row": 6, "col": 0 },
+    { "id": "owf_policy", "type": "backend", "label": "Order Policy", "row": 6, "col": 1 },
+    { "id": "owf_events", "type": "backend", "label": "Order Events", "row": 6, "col": 2 },
+    { "id": "owf_invpol", "type": "backend", "label": "Inventory Policy", "row": 6, "col": 3 },
+    { "id": "owf_paypol", "type": "backend", "label": "Payment Policy", "row": 6, "col": 4 },
+
+    { "id": "owf_loop", "type": "backend", "label": "Workflow Loop", "row": 7, "col": 0 },
+    { "id": "owf_rebuild", "type": "backend", "label": "Projection Rebuild", "row": 7, "col": 1 },
+    { "id": "owf_comp", "type": "backend", "label": "Compensation", "row": 7, "col": 2 },
+
+    { "id": "owf_spot", "type": "backend", "label": "Order Workflow", "sublabel": "Spot", "row": 8, "col": 0 },
+    { "id": "owf_eventadapter", "type": "backend", "label": "Event Store", "sublabel": "Adapter", "row": 8, "col": 1 },
+    { "id": "owf_rmadapter", "type": "backend", "label": "Read Model", "sublabel": "Adapter", "row": 8, "col": 2 },
+    { "id": "owf_stateadapter", "type": "backend", "label": "Commerce State", "sublabel": "Adapter", "row": 8, "col": 3 },
+    { "id": "owf_invadapter", "type": "backend", "label": "Inventory", "sublabel": "Adapter", "row": 8, "col": 4 },
+    { "id": "owf_payadapter", "type": "backend", "label": "Payment", "sublabel": "Adapter", "row": 8, "col": 5 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Client", "wraps": ["cli_program", "cli_scenario"] },
+    { "kind": "region", "label": "Shared", "wraps": ["sh_config", "sh_json"] },
+    { "kind": "region", "label": "Server / CommerceApi / Application", "wraps": ["capi_start", "capi_get"] },
+    { "kind": "region", "label": "Server / CommerceApi / Infrastructure", "wraps": ["capi_http", "capi_wfclient", "capi_store"] },
+    { "kind": "region", "label": "Server / OrderWorkflow / Domain", "wraps": ["owf_agg", "owf_policy", "owf_events", "owf_invpol", "owf_paypol"] },
+    { "kind": "region", "label": "Server / OrderWorkflow / Application", "wraps": ["owf_loop", "owf_rebuild", "owf_comp"] },
+    { "kind": "region", "label": "Server / OrderWorkflow / Infrastructure", "wraps": ["owf_spot", "owf_eventadapter", "owf_rmadapter", "owf_stateadapter", "owf_invadapter", "owf_payadapter"] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "실제 중첩(region 라벨은 이를 평평하게 편 것이다)",
+      "items": [
+        "ShoppingMall > Client | Shared | Server. Server > CommerceApi | OrderWorkflow. capi_program·owf_program은 각각 Server/CommerceApi와 Server/OrderWorkflow의 최상위 Program이며 그 역할의 Application/Infrastructure sub-region과 형제 관계다 — region 소속 노드가 아니다.",
+        "역할은 합쳐지지 않고 public surface도 임의로 늘어나지 않는다 — 모든 지원 언어가 이 logical component를 같은 위치에서 유지한다."
+      ]
+    }
+  ]
+}

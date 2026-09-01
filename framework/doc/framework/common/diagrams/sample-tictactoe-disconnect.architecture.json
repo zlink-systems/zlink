@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Disconnect와 destroy — Reconnect · Leave",
+    "subtitle": "disconnect는 binding만 정리하고, 명시적 LeaveGameMsg가 Entry Spot 이동·destroy를 시작한다",
+    "output": "sample-tictactoe-disconnect.html",
+    "column_fit": "spread",
+    "viewBox": [1000, 820],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Client" },
+    { "id": "P", "type": "backend", "label": "Play Session" },
+    { "id": "F", "type": "backend", "label": "Session Runtime" },
+    { "id": "R", "type": "backend", "label": "Room Spot" },
+    { "id": "E", "type": "backend", "label": "Entry Spot" }
+  ],
+  "messages": [
+    { "from": "C", "to": "P", "y": 160, "label": "STREAM connection 종료 (-x 비정상 종료)", "variant": "dashed" },
+    { "from": "F", "to": "R", "y": 208, "label": "bound Actor의 disconnect lifecycle callback 통지", "variant": "default" },
+    { "from": "C", "to": "P", "y": 256, "label": "새 STREAM connection", "variant": "default" },
+    { "from": "C", "to": "P", "y": 304, "label": "AuthenticateReq", "variant": "default" },
+    { "from": "P", "to": "C", "y": 352, "label": "AuthenticateRes (existing Actor에 exact ActorRef bind)", "variant": "return" },
+    { "from": "C", "to": "P", "y": 400, "label": "JoinGameMsg(RoomId)", "variant": "default" },
+    { "from": "P", "to": "R", "y": 448, "label": "기존 room member handler에 전달", "variant": "default" },
+    { "from": "R", "to": "P", "y": 496, "label": "JoinGameNotify(current GameState)", "variant": "return" },
+    { "from": "P", "to": "C", "y": 544, "label": "JoinGameNotify", "variant": "return" },
+    { "from": "C", "to": "P", "y": 592, "label": "LeaveGameMsg", "variant": "default" },
+    { "from": "P", "to": "R", "y": 640, "label": "bound Actor의 Room handler에 전달", "variant": "default" },
+    { "from": "R", "to": "E", "y": 688, "label": "Framework가 Actor를 Entry Spot으로 이동 (표시 남기고 public leave)", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "원문 전체 순서 (1/2) — disconnect와 reconnect",
+      "items": [
+        "1. C ⊗ P: STREAM connection 종료 (physical disconnect, 원문 -x = 비정상 종료)",
+        "2. F→F: current binding snapshot 고정",
+        "3. F→R: bound Actor의 disconnect lifecycle callback 통지",
+        "4. R→R: disconnected lifecycle callback 실행",
+        "5. F→F: 모든 통지 완료 후 binding 정리",
+        "6. C→P: 새 STREAM connection",
+        "7. C→P: AuthenticateReq",
+        "8. P→P: Existing Actor를 찾고 exact ActorRef bind",
+        "9. P→C: AuthenticateRes"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "원문 전체 순서 (2/2) — leave와 destroy",
+      "items": [
+        "10. C→P: JoinGameMsg(RoomId)",
+        "11. P→R: 기존 room member handler에 전달",
+        "12. R→P: JoinGameNotify(current GameState)",
+        "13. P→C: JoinGameNotify",
+        "14. C→P: LeaveGameMsg",
+        "15. P→R: bound Actor의 Room handler에 전달",
+        "16. R→R: Actor에 표시를 남기고 public leave 요청",
+        "17. R→E: Framework가 Actor를 Entry Spot으로 이동",
+        "18. E→E: Actor destroy"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "렌더 제약과 원문 보존",
+      "items": [
+        "archify sequence는 자기 메시지(F→F, R→R, P→P, E→E)와 -x 종료 화살표를 지원하지 않는다. 위 두 카드에 18단계 순서를 그대로 보존했고, 그림의 화살표는 참여자 사이 메시지만 담는다.",
+        "disconnect는 bound Actor의 current Spot에서 disconnected lifecycle callback을 실행하고 binding을 정리하지만 leave·membership 변경·destroy를 시작하지 않는다. host와 guest가 각각 같은 leave 경로를 실행하고 Runner가 두 Actor의 evidence를 따로 확인한다.",
+        "참여자 F(Session Runtime)의 원문 라벨은 Framework Session Runtime이다."
+      ]
+    }
+  ]
+}

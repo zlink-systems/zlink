@@ -59,28 +59,8 @@ In a stateless web backend, a room/field sends gameplay events to an ingest API,
 partitioning, consumers, cache, DB locks, projection, and presence separately handle per-player
 ordering and push.
 
-```mermaid
-flowchart LR
-    C[Game Client] --> RF[Room Field]
-    RF --> LB[Load Balancer]
-    LB --> API[Event Ingest API]
-    subgraph Backend[Stateless Backend]
-        LOG[(Partitioned Log)]
-        DB[(State DB)]
-        QC[Quest Consumer]
-        RM[(Read Model)]
-        PS[Pub Sub]
-        PR[Presence]
-    end
-    API --> LOG
-    LOG --> QC
-    QC --> DB
-    QC --> RM
-    QC --> PS
-    PS --> PR
-    PR --> RF
-    RF --> C
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-existing-web-en.html" title="Existing stateless web approach" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-gamequest-existing-web-en.html" target="_blank">↗ View larger</a></p>
 
 GameQuest uses the PlayerId as the global SpotId in the progress tier, leaving the owner turn to the
 Framework. QuestEventStore, projection, and reset/reconcile stay with the Application. Do not
@@ -103,25 +83,8 @@ The basic topology shows only the connections between the Client and server comp
 QuestEventStore, QuestReadModelStore, GameplayStateStore, and QuestDefinition are explained in the
 resource table.
 
-```mermaid
-flowchart LR
-    subgraph Clients[Clients]
-        C1[Game Client A]
-        C2[Game Client B]
-    end
-    subgraph Servers[Servers]
-        G1[GameApi 1]
-        G2[GameApi 2]
-        Q1[QuestMission 1]
-        Q2[QuestMission 2]
-    end
-    C1 ---|STREAM| G1
-    C2 ---|STREAM| G2
-    G1 ---|gamequest RouteMesh| Q1
-    G1 ---|gamequest RouteMesh| Q2
-    G2 ---|gamequest RouteMesh| Q1
-    G2 ---|gamequest RouteMesh| Q2
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-topology-en.html" title="System composition and topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-gamequest-topology-en.html" target="_blank">↗ View larger</a></p>
 
 GameApi owns the session actor and the gameplay edge, distributing connections. QuestMission
 provides the PlayerQuestSpot Instance factory. The Framework selects the owner per PlayerId using
@@ -351,29 +314,8 @@ The starting state is GameApi having completed STREAM readiness and the Client h
 JoinSessionRes. When the first PlayerId event arrives, the Instance intent prepares the missing
 PlayerQuestSpot. The owner Spot restores the aggregate via stream replay, then evaluates the event.
 
-```mermaid
-sequenceDiagram
-    participant C as Game Client
-    participant G as GameApi
-    participant P as PlayerQuestSpot
-
-    C->>G: JoinSessionReq
-    G-->>C: JoinSessionRes
-    C->>G: KillMonsterReq
-    G->>P: GameplayMsg(PlayerId)
-    Note over P: replay, dedupe, evaluate and fold
-    P-->>G: QuestProgressNotify
-    G-->>C: QuestProgressNotify
-    C->>G: KillMonsterReq
-    G->>P: GameplayMsg
-    P-->>G: QuestProgressNotify
-    G-->>C: QuestProgressNotify
-    C->>G: KillMonsterReq
-    G->>P: GameplayMsg
-    Note over P: append QuestCompleted and update projection
-    P-->>G: QuestCompletedNotify
-    G-->>C: QuestCompletedNotify
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-progress-flow-en.html" title="Normal progress and completion" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-gamequest-progress-flow-en.html" target="_blank">↗ View larger</a></p>
 
 `KillMonsterReq/Res`'s response returns the EventId GameApi built after accepting the action.
 `CollectItemMsg` and `EnterAreaMsg` are one-way actions with no response, and the progress and
@@ -388,24 +330,8 @@ The same IdempotencyKey is converted to the same source EventId. PlayerQuestSpot
 already-stored sourceEventId and doesn't re-append the domain event. On reconnect, the same PlayerId
 session actor is bound, and progress is confirmed via GetQuestProgressReq.
 
-```mermaid
-sequenceDiagram
-    participant C as Game Client
-    participant G as GameApi
-    participant P as PlayerQuestSpot
-
-    C->>G: STREAM reconnect
-    C->>G: JoinSessionReq(player-1)
-    G-->>C: JoinSessionRes(active quests)
-    C->>G: GetQuestProgressReq
-    G->>P: GetQuestProgressReq(player-1)
-    P-->>G: GetQuestProgressRes
-    G-->>C: GetQuestProgressRes
-    C->>G: KillMonsterReq(same key)
-    G->>P: GameplayMsg(same eventId)
-    P-->>G: Existing result without duplicate event
-    G-->>C: existing result
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-reconnect-flow-en.html" title="Duplication and reconnect" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-gamequest-reconnect-flow-en.html" target="_blank">↗ View larger</a></p>
 
 A notify sent while there's no session binding isn't a success condition. The state is recorded in
 the event store and restored via lookup after reconnect.
@@ -416,20 +342,8 @@ If GameplayStateStore facts increased but a GameplayMsg was lost, the Client or 
 trigger sends SyncQuestProgressReq. The Spot reads the authoritative facts, compares them against
 the current fold, and appends the needed QuestReconciled event.
 
-```mermaid
-sequenceDiagram
-    participant C as Game Client
-    participant G as GameApi
-    participant P as PlayerQuestSpot
-
-    C->>G: SyncQuestProgressReq
-    G->>P: SyncQuestProgressReq(player-1)
-    Note over P: read facts and compare fold
-    P-->>G: SyncQuestProgressRes
-    G-->>C: corrected progress
-    P-->>G: QuestProgressNotify
-    G-->>C: corrected notify
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-reconcile-flow-en.html" title="Reset/reconcile and the failure boundary" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-gamequest-reconcile-flow-en.html" target="_blank">↗ View larger</a></p>
 
 If the Ready owner process terminates, the current Spot operation ends as Unavailable. The Framework
 doesn't automatically resubmit the failed operation by selecting a new QuestMission node. A new
@@ -443,40 +357,8 @@ logical components below with the same responsibilities. Even if the actual dire
 representation differ, the boundary where `GameApi` owns the edge and session while `QuestMission`
 owns per-player state doesn't change.
 
-```text
-GameQuest
-+-- Client
-|   +-- Program
-|   +-- Scenario
-+-- Shared
-|   +-- Configuration
-|   +-- JSON Contracts
-+-- Server
-    +-- GameApi
-    |   +-- Program
-    |   +-- Application
-    |   |   +-- GameplayUseCases
-    |   |   +-- SessionBinding
-    |   +-- Infrastructure
-    |       +-- StreamHandlers
-    |       +-- SpotClients
-    |       +-- ProjectionQueryAdapter
-    +-- QuestMission
-        +-- Program
-        +-- Domain
-        |   +-- QuestPolicy
-        |   +-- PlayerQuestAggregate
-        |   +-- QuestEvents
-        +-- Application
-        |   +-- ApplyGameplay
-        |   +-- ReconcileProgress
-        |   +-- ProjectionUpdate
-        +-- Infrastructure
-            +-- PlayerQuestSpot
-            +-- EventStoreAdapter
-            +-- ReadModelAdapter
-            +-- GameplayStateAdapter
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-gamequest-structure-en.html" title="Implementation structure — Client · Shared · Server" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-gamequest-structure-en.html" target="_blank">↗ View larger</a></p>
 
 | Logical Component | Responsibility Kept In Every Language | Dependency Direction And Forbidden Boundary |
 |---|---|---|
@@ -649,3 +531,7 @@ does not print this marker.
   frames, private runtime, or a per-message codec registry.
 - The runner performs build, readiness, self-check, and cleanup, and passes every row of the §10.1
   table down to the string and the count.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

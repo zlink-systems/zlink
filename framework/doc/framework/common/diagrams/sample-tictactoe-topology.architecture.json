@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "시스템 구성과 topology — 구조적 연결",
+    "subtitle": "수동 endpoint로 Client·Api·Play를 잇는다 (Redis Location·Relocation Store는 resource 표에서 설명)",
+    "output": "sample-tictactoe-topology.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 5, "gapX": 80, "gapY": 78, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "H", "type": "frontend", "label": "Host Client", "row": 1, "col": 0 },
+    { "id": "A1", "type": "frontend", "label": "Api A", "row": 1, "col": 1 },
+    { "id": "AC1", "type": "messagebus", "label": "tictactoe.api", "sublabel": "Play A · Api 선택", "row": 0, "col": 2 },
+    { "id": "P1", "type": "backend", "label": "Play A", "row": 1, "col": 2 },
+    { "id": "P2", "type": "backend", "label": "Play B", "row": 2, "col": 2 },
+    { "id": "AC2", "type": "messagebus", "label": "tictactoe.api", "sublabel": "Play B · Api 선택", "row": 3, "col": 2 },
+    { "id": "A2", "type": "frontend", "label": "Api B", "row": 2, "col": 3 },
+    { "id": "G", "type": "frontend", "label": "Guest Client", "row": 2, "col": 4 },
+    { "id": "O", "type": "frontend", "label": "Observer Client", "row": 3, "col": 4 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Servers", "wraps": ["A1", "A2", "AC1", "P1", "P2", "AC2"] }
+  ],
+  "connections": [
+    { "from": "H", "to": "A1", "label": "HTTP", "variant": "default" },
+    { "from": "G", "to": "A2", "variant": "default" },
+    { "from": "O", "to": "A2", "variant": "default" },
+
+    { "from": "H", "to": "P1", "label": "STREAM", "variant": "default", "fromSide": "top", "toSide": "top" },
+    { "from": "G", "to": "P2", "variant": "default", "fromSide": "bottom", "toSide": "bottom" },
+    { "from": "O", "to": "P2", "variant": "default" },
+
+    { "from": "A1", "to": "P1", "variant": "default" },
+    { "from": "A1", "to": "P2", "variant": "default" },
+    { "from": "A2", "to": "P1", "variant": "default" },
+    { "from": "A2", "to": "P2", "variant": "default" },
+    { "from": "P1", "to": "P2", "variant": "default" },
+
+    { "from": "P1", "to": "AC1", "variant": "default" },
+    { "from": "P2", "to": "AC2", "variant": "default" },
+    { "from": "AC1", "to": "A1", "variant": "dashed" },
+    { "from": "AC1", "to": "A2", "variant": "dashed" },
+    { "from": "AC2", "to": "A1", "variant": "dashed" },
+    { "from": "AC2", "to": "A2", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "연결 읽는 법",
+      "items": [
+        "실선(HTTP·STREAM·RouteMesh)은 원문의 `---` 무방향 구조적 연결이다 — 요청 방향이 아니라 peer·ingress 연결 의도만 나타낸다(화살표 머리는 렌더 제약이며 방향 주장이 아니다). Api↔Play 네 실선은 모두 같은 tictactoe RouteMesh이고 Play A—Play B가 수동 RouteMesh peer다.",
+        "점선(tictactoe.api → Api)만 원문의 `-.->` 방향 연결이다. 각 Play의 독립 tictactoe.api ClientServer channel이 Api A/B endpoint를 받아 authentication request를 보낼 때 Api 하나를 선택한다.",
+        "AC1·AC2 원문 라벨: 'Play A tictactoe.api / Api 하나 선택', 'Play B tictactoe.api / Api 하나 선택'. host는 HTTP로 Api A·STREAM으로 Play A, guest·observer는 HTTP로 Api B·STREAM으로 Play B에 연결한다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "역할과 경계",
+      "items": [
+        "Api A/B는 object client이며 room create request를 Play object server로 보낸다. Play A/B는 object server로 같은 object type·Entry Spot·Logical Multicast membership을 제공한다.",
+        "Api A와 Api B 사이에는 object peer를 만들지 않는다. Play A/B와 Api의 peer 방향은 runner가 제공하는 수동 endpoint 설정으로 구성한다.",
+        "CreateGameHttpRes의 PlayEndpoints는 ingress 선택용이며 room placement·owner 증거가 아니다. Redis Location·Relocation Store는 이 그림이 아니라 resource 표에서 설명한다."
+      ]
+    }
+  ]
+}

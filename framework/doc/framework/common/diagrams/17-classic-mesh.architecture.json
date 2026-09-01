@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "기존 방식 — gRPC + service mesh + broker + WS edge",
+    "subtitle": "app마다 Envoy sidecar · mesh ctl · broker · WS edge 오버헤드",
+    "output": "17-classic-mesh.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 96, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "ordApp", "type": "frontend", "label": "order-service", "sublabel": "app + gRPC stub", "row": 0, "col": 0 },
+    { "id": "payApp", "type": "frontend", "label": "payment-service", "sublabel": "app + gRPC server", "row": 0, "col": 2 },
+    { "id": "ordEnvoy", "type": "messagebus", "label": "Envoy sidecar", "row": 1, "col": 0 },
+    { "id": "payEnvoy", "type": "messagebus", "label": "Envoy sidecar", "row": 1, "col": 2 },
+    { "id": "mesh", "type": "messagebus", "label": "service mesh ctl", "sublabel": "discovery + L7", "row": 2, "col": 1 },
+    { "id": "broker", "type": "messagebus", "label": "event broker", "row": 3, "col": 0 },
+    { "id": "wsEdge", "type": "messagebus", "label": "WS edge gateway", "row": 3, "col": 2 }
+  ],
+  "connections": [
+    { "from": "ordApp", "to": "ordEnvoy", "variant": "default" },
+    { "from": "payApp", "to": "payEnvoy", "variant": "default" },
+    { "from": "ordEnvoy", "to": "payEnvoy", "variant": "default", "label": "mTLS", "fromSide": "right", "toSide": "left" },
+    { "from": "ordEnvoy", "to": "mesh", "variant": "default", "fromSide": "bottom" },
+    { "from": "payEnvoy", "to": "mesh", "variant": "default", "fromSide": "bottom" }
+  ],
+  "cards": [
+    {
+      "dot": "orange",
+      "title": "기존 — 붙는 오버헤드",
+      "items": [
+        "order-service: app + gRPC stub + Envoy sidecar / payment-service: app + gRPC server + Envoy sidecar",
+        "두 Envoy sidecar가 mTLS로 통신하고, 각 서비스가 service mesh ctl(discovery + L7)로 연결",
+        "event broker와 WS edge gateway는 별도 컴포넌트로 추가된다"
+      ]
+    }
+  ]
+}

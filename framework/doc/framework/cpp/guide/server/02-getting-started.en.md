@@ -160,8 +160,9 @@ is used to create or call an Actor and Spot on another Object Server.
 app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
     // Registers a shared Store so every process queries the same location information.
     options.add_location_store (
-      std::make_shared<redis_location_store_t> (settings.redis_endpoint,
-                                                settings.redis_key_prefix));
+      std::make_shared<redis_location_store_t> (redis_location_options_t{
+        .connection_string = settings.redis_endpoint,
+        .key_prefix = settings.redis_key_prefix}));
 
     auto mesh = options.add_route_mesh (sample_nodes_t::mesh)
       .listen (settings.mesh_endpoint)

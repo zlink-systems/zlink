@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Authentication, Conversation Creation, And Agent Join",
+    "subtitle": "Agent·Customer authenticate → OpenConversation → Conversation Spot created → agent join",
+    "output": "sample-supportchat-auth-join-en.html",
+    "column_fit": "spread",
+    "viewBox": [1010, 1400],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Customer Client" },
+    { "id": "A", "type": "frontend", "label": "Agent Client" },
+    { "id": "S", "type": "external", "label": "Session" },
+    { "id": "API", "type": "frontend", "label": "Api" },
+    { "id": "P", "type": "backend", "label": "ConversationSpot" }
+  ],
+  "messages": [
+    { "from": "A", "to": "S", "y": 160, "label": "AuthenticateReq", "variant": "default" },
+    { "from": "S", "to": "API", "y": 208, "label": "AuthenticateUserReq", "variant": "default" },
+    { "from": "API", "to": "S", "y": 256, "label": "AuthenticateUserRes", "variant": "return" },
+    { "from": "S", "to": "A", "y": 304, "label": "AuthenticateRes", "variant": "return" },
+    { "from": "A", "to": "S", "y": 352, "label": "SetAgentAvailableReq(true)", "variant": "default" },
+    { "from": "S", "to": "A", "y": 400, "label": "SetAgentAvailableRes(true)", "variant": "return" },
+    { "from": "C", "to": "S", "y": 448, "label": "AuthenticateReq", "variant": "default" },
+    { "from": "S", "to": "API", "y": 496, "label": "AuthenticateUserReq", "variant": "default" },
+    { "from": "API", "to": "S", "y": 544, "label": "AuthenticateUserRes", "variant": "return" },
+    { "from": "S", "to": "C", "y": 592, "label": "AuthenticateRes", "variant": "return" },
+    { "from": "C", "to": "S", "y": 640, "label": "OpenConversationReq(subject)", "variant": "default" },
+    { "from": "S", "to": "API", "y": 688, "label": "OpenConversationApiReq", "variant": "default" },
+    { "from": "API", "to": "P", "y": 736, "label": "ConversationCreateReq", "variant": "default" },
+    { "from": "P", "to": "API", "y": 784, "label": "ConversationCreateRes", "variant": "return" },
+    { "from": "API", "to": "S", "y": 832, "label": "OpenConversationApiRes", "variant": "return" },
+    { "from": "S", "to": "C", "y": 880, "label": "OpenConversationRes", "variant": "return" },
+    { "from": "P", "to": "S", "y": 928, "label": "ConversationAssignedNotify", "variant": "return" },
+    { "from": "S", "to": "A", "y": 976, "label": "ConversationAssignedNotify", "variant": "return" },
+    { "from": "A", "to": "S", "y": 1024, "label": "JoinConversationReq(metadata ConversationId)", "variant": "default" },
+    { "from": "S", "to": "P", "y": 1072, "label": "JoinConversationReq", "variant": "default" },
+    { "from": "P", "to": "S", "y": 1120, "label": "JoinConversationRes(scheduled=true)", "variant": "return" },
+    { "from": "S", "to": "A", "y": 1168, "label": "JoinConversationRes(scheduled=true)", "variant": "return" },
+    { "from": "P", "to": "S", "y": 1216, "label": "ParticipantJoinedNotify(Active)", "variant": "return" },
+    { "from": "S", "to": "C", "y": 1264, "label": "ParticipantJoinedNotify(Active)", "variant": "return" },
+    { "from": "S", "to": "A", "y": 1312, "label": "ParticipantJoinedNotify(Active)", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Judging join completion",
+      "items": [
+        "scheduled=true means the join was scheduled, not that membership commit is complete. Agent join should only be judged complete once both clients confirm the Active ParticipantJoinedNotify.",
+        "The ConversationId of JoinConversationReq is a required stream-metadata value and isn't put into the payload as a route. participantId, role, and displayName are values needed for the actor join."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Starting state and waiting",
+      "items": [
+        "The starting state is that Session, Api, and Support readiness is complete, and the Agent roster is either empty or has capacity.",
+        "When no Agent is assignable, the Customer's OpenConversationReq isn't an error — it waits at WaitingForAgent.",
+        "OpenConversationApiReq and ConversationCreateReq are server-to-server request/reply. The Framework-issued SpotId is used as the ConversationId, and the owner location and ActorRef aren't put into the response. The ActorId in ParticipantJoinedNotify and ConversationAssignedNotify is the agent's identity actor id."
+      ]
+    }
+  ]
+}

@@ -43,7 +43,7 @@ ZLinkModule.forRootFactory({
       .setSpotLimit(2_000);
     mesh.channel('room').server();
 
-    return builder;   // Nothing turns on if you don't return it.
+    return builder.build();   // Nothing turns on if you don't return it.
   }
 });
 ```
@@ -181,11 +181,12 @@ Specified on the builder that `addStreamNode(name)` returns.
 | `bind(endpoint)` · `bind(port?)` | The address clients connect to | Must be specified |
 | `setBindHost` · `setAdvertiseHost` | The bind address and advertised address | The `configureNetwork()` value |
 | `enableActorDispatch()` | Lets a session relay to an Actor | Not enabled |
-| `registerSession(factory)` | The session factory used per connection | Must be specified |
+| `registerSession(sessionType)` | The session class (or session factory class) used per connection | Must be specified |
 | `setTlsServer(certPath, keyPath, requireClientCert?)` | TLS configuration | Plaintext |
 
-**`registerSession` takes a factory, not a class.** This is a spot where the other
-languages pass a type.
+**`registerSession` takes the session class itself, or a factory class if you need custom
+per-connection construction logic.** Both are passed as a class reference, the same as the
+other languages.
 
 ## 7. What You Can Change While Running
 
@@ -216,14 +217,15 @@ alive as-is.
 
 ## 9. Common Problems
 
-- **Nothing turns on** → `useFactory` didn't return the builder. It has to end with
-  `return builder`.
+- **Nothing turns on** → `useFactory` didn't return the built options. It has to end with
+  `return builder.build()`.
 - **The timeout is oddly short or long** → the argument is a **number in milliseconds**.
   If you mistake it for seconds and pass `3`, that's 3 milliseconds.
 - **`setApplicationVersion` throws a type error** → it takes a `bigint`. Write it as `12n`.
 - **I left it at `0` and memory keeps growing** → `0` on a high-water mark means unlimited.
 - **The level value doesn't match** → Node uses a lowercase string (`"errors"`).
-- **I passed a class to `registerSession` and it doesn't work** → it takes a factory.
+- **I read that `registerSession` only takes a factory** → it also accepts the session class
+  directly; a factory class is only needed for custom construction logic.
 - **I set weight to 0 and thought it dropped existing connections** → weight blocks **only
   new assignments.**
 - **Owner determination differs after mixing nodes from different languages** → the lease

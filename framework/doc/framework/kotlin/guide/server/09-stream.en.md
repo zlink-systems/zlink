@@ -35,7 +35,7 @@ Register one session type on a Stream node. If you use Actor dispatch, enable it
 ```kotlin
 options.addStreamNode("client-stream")
     .bind("tcp://0.0.0.0:9100")
-    .enableActorDispatch("play")            // Kotlin uses the Java surface as-is.
+    .enableActorDispatch()            // Kotlin uses the Java surface as-is.
     .registerSession(PlaySession::class.java) // Registers the session type to create per connection.
 ```
 

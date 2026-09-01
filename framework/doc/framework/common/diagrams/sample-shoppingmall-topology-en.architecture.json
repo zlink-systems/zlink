@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Basic topology — client and server placement",
+    "subtitle": "CommerceApi and OrderWorkflow share the shoppingmall.workflow RouteMesh",
+    "output": "sample-shoppingmall-topology-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [80, 160], "cols": 3, "gapX": 140, "gapY": 100, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C", "type": "frontend", "label": "Web Clients", "row": 0, "col": 0 },
+    { "id": "API", "type": "frontend", "label": "CommerceApi", "sublabel": "×2", "row": 0, "col": 1 },
+    { "id": "WF", "type": "backend", "label": "OrderWorkflow", "sublabel": "×2", "row": 0, "col": 2 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Clients", "wraps": ["C"] },
+    { "kind": "region", "label": "Servers", "wraps": ["API", "WF"] }
+  ],
+  "connections": [
+    { "from": "C", "to": "API", "variant": "default", "label": "HTTP" },
+    { "from": "API", "to": "WF", "variant": "default", "label": "RouteMesh" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Clients → Servers",
+      "items": [
+        "CommerceApi and OrderWorkflow share the shoppingmall.workflow RouteMesh; the Workflow process registers the shoppingmall.order-workflow Instance factory; no order-dedicated ClientServer Channel or wildcard ChannelName is added."
+      ]
+    }
+  ]
+}

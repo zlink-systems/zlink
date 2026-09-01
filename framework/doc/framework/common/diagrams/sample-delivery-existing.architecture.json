@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "기존 웹 방식 — 배송·배차 비교 구성",
+    "subtitle": "queue·registry·timeout job·event bus(주황)가 별도 component로 붙는다",
+    "output": "sample-delivery-existing.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 3, "gapX": 96, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C", "type": "frontend", "label": "Clients", "sublabel": "Customer·Courier", "row": 0, "col": 0 },
+    { "id": "LB", "type": "external", "label": "Load Balancer", "row": 1, "col": 0 },
+    { "id": "API", "type": "frontend", "label": "Delivery API", "row": 2, "col": 0 },
+    { "id": "DB", "type": "database", "label": "Delivery DB", "row": 1, "col": 1 },
+    { "id": "Q", "type": "messagebus", "label": "Dispatch Queue", "row": 2, "col": 1 },
+    { "id": "E", "type": "messagebus", "label": "Event Bus", "row": 3, "col": 1 },
+    { "id": "J", "type": "messagebus", "label": "Timeout Job", "row": 1, "col": 2 },
+    { "id": "W", "type": "frontend", "label": "Dispatch Worker", "row": 2, "col": 2 },
+    { "id": "R", "type": "messagebus", "label": "Session Registry", "row": 3, "col": 2 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Stateless Web Backend", "wraps": ["DB", "Q", "W", "R", "E", "J"] }
+  ],
+  "connections": [
+    { "from": "C", "to": "LB", "variant": "default" },
+    { "from": "LB", "to": "API", "variant": "default" },
+    { "from": "API", "to": "DB", "variant": "default" },
+    { "from": "API", "to": "Q", "variant": "default" },
+    { "from": "Q", "to": "W", "variant": "default" },
+    { "from": "W", "to": "R", "variant": "default" },
+    { "from": "W", "to": "E", "variant": "default" },
+    { "from": "J", "to": "DB", "variant": "default" },
+    { "from": "J", "to": "Q", "variant": "default" },
+    { "from": "E", "to": "API", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "orange",
+      "title": "붙는 조율 오버헤드(주황)",
+      "items": [
+        "queue, registry, timeout job과 event bus가 별도 component다. DeliveryDispatch는 이 책임을 없애지 않고, DispatchWorker가 제안 상태와 deadline을 소유하고 Framework가 Actor routing·session binding을 맡는 방식으로 책임의 경계를 바꾼다.",
+        "색 근거: Session Registry는 sibling 비교 그림(01-delivery-existing)이 sticky LB 같은 session-affinity 오버헤드를 messagebus(주황)로, L7 LB/gateway를 external(회색)로 둔 선례를 따랐다. Dispatch Worker는 유지되는 업무 로직(→ DispatchWorker)이라 frontend(파랑)로 뒀다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "대응 관계",
+      "items": [
+        "session registry → Courier·Customer Actor와 bound session. dispatch queue·worker → DispatchWorker. event bus → Tracking의 status·evidence. websocket push gateway → CustomerGateway·CourierSession. timeout job → worker sweeper."
+      ]
+    }
+  ]
+}

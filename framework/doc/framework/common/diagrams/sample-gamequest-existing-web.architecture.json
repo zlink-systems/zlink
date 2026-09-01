@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "기존 stateless web 방식",
+    "subtitle": "log partition, consumer, cache/DB, pub/sub, presence가 player별 순서와 push를 나누어 담당한다",
+    "output": "sample-gamequest-existing-web.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 5, "gapX": 70, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C", "type": "frontend", "label": "Game Client", "row": 0, "col": 0 },
+    { "id": "RF", "type": "frontend", "label": "Room Field", "row": 0, "col": 1 },
+    { "id": "LB", "type": "external", "label": "Load Balancer", "row": 0, "col": 2 },
+    { "id": "API", "type": "frontend", "label": "Event Ingest API", "row": 0, "col": 3 },
+    { "id": "LOG", "type": "database", "label": "Partitioned Log", "row": 1, "col": 3 },
+    { "id": "QC", "type": "frontend", "label": "Quest Consumer", "row": 2, "col": 3 },
+    { "id": "DB", "type": "database", "label": "State DB", "row": 3, "col": 2 },
+    { "id": "RM", "type": "database", "label": "Read Model", "row": 3, "col": 3 },
+    { "id": "PS", "type": "messagebus", "label": "Pub Sub", "row": 3, "col": 4 },
+    { "id": "PR", "type": "external", "label": "Presence", "row": 4, "col": 3 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Stateless Backend", "wraps": ["LOG", "DB", "QC", "RM", "PS", "PR"] }
+  ],
+  "connections": [
+    { "from": "C", "to": "RF", "variant": "default" },
+    { "from": "RF", "to": "LB", "variant": "default" },
+    { "from": "LB", "to": "API", "variant": "default" },
+    { "from": "API", "to": "LOG", "variant": "default" },
+    { "from": "LOG", "to": "QC", "variant": "default" },
+    { "from": "QC", "to": "DB", "variant": "default" },
+    { "from": "QC", "to": "RM", "variant": "default" },
+    { "from": "QC", "to": "PS", "variant": "default" },
+    { "from": "PS", "to": "PR", "variant": "default" },
+    { "from": "PR", "to": "RF", "variant": "default", "fromSide": "left", "toSide": "bottom" },
+    { "from": "RF", "to": "C", "variant": "default", "fromSide": "top", "toSide": "top" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "기존 구성",
+      "items": [
+        "room/field가 gameplay event를 load balancer를 거쳐 ingest API로 보내고, API는 partitioned log에 append한다.",
+        "quest consumer가 log를 읽어 player별 state DB와 read model을 갱신하고 pub/sub에 발행한다.",
+        "presence가 pub/sub을 구독해 room/field로 push하고, room/field는 client에 전달한다."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "GameQuest 대응",
+      "items": [
+        "GameQuest는 진행 tier에서 PlayerId를 global SpotId로 사용해 owner turn을 Framework에 맡긴다.",
+        "QuestEventStore와 projection, reset/reconcile은 Application에 남는다 — Framework가 Kafka durability나 reward 지급 atomicity를 제공한다고 해석하지 않는다."
+      ]
+    }
+  ]
+}

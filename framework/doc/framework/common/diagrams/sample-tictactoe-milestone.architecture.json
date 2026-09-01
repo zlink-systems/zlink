@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Wins 100 milestone — Logical Multicast",
+    "subtitle": "Room Spot이 PlayerWinMilestoneEvent를 publish하고 observer의 Entry Spot이 받는다",
+    "output": "sample-tictactoe-milestone.html",
+    "column_fit": "spread",
+    "viewBox": [1060, 720],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "O", "type": "frontend", "label": "Observer Client" },
+    { "id": "OP", "type": "backend", "label": "Observer Play" },
+    { "id": "E", "type": "backend", "label": "Entry Spot" },
+    { "id": "R", "type": "backend", "label": "Room Spot" },
+    { "id": "HP", "type": "backend", "label": "Host Play" },
+    { "id": "H", "type": "frontend", "label": "Host Client" }
+  ],
+  "messages": [
+    { "from": "O", "to": "OP", "y": 160, "label": "ObserveMilestoneReq", "variant": "default" },
+    { "from": "OP", "to": "E", "y": 208, "label": "bound Actor의 Entry handler에 요청 전달", "variant": "default" },
+    { "from": "E", "to": "OP", "y": 256, "label": "ObserveMilestoneRes(subscribed=true)", "variant": "return" },
+    { "from": "OP", "to": "O", "y": 304, "label": "ObserveMilestoneRes", "variant": "return" },
+    { "from": "H", "to": "HP", "y": 352, "label": "마지막 PlaceMarkReq", "variant": "default" },
+    { "from": "HP", "to": "R", "y": 400, "label": "bound Actor의 Room handler에 요청 전달", "variant": "default" },
+    { "from": "R", "to": "E", "y": 448, "label": "PlayerWinMilestoneEvent (Wins=100)", "variant": "return" },
+    { "from": "E", "to": "OP", "y": 496, "label": "observer session에 WinMilestoneNotify", "variant": "return" },
+    { "from": "OP", "to": "O", "y": 544, "label": "WinMilestoneNotify", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "publish의 의미",
+      "items": [
+        "원문 R→R 자기 메시지 'Wins=100 계산'은 archify가 자기 메시지를 지원하지 않아 PlayerWinMilestoneEvent 라벨에 합쳤다.",
+        "Multicast publish 완료는 subscriber handler의 처리 완료나 game win 확정을 뜻하지 않는다. win과 board state는 Room Spot이 결정하고 milestone은 이미 결정된 값을 알리는 용도다.",
+        "Fake user source가 host의 Wins를 99로 제공하고, 이번 game 승리로 100이 되면 publish한다. Observer는 host와 다른 Play ingress의 local Entry Spot에서 구독한다.",
+        "참여자 원문 라벨 — OP: Observer Play Session · E: Play Entry Spot · HP: Host Play Session."
+      ]
+    }
+  ]
+}

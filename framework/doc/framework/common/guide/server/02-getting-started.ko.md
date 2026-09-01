@@ -274,7 +274,7 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
 
                 ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services") // mesh 이름을 정한다.
                     .listen("tcp://0.0.0.0:7101");                          // 다른 process가 접속할 자기 endpoint.
-                mesh.channel("greeting").server()                           // 이 process가 "greeting"을 처리한다.
+                mesh.channelName("greeting").server()                           // 이 process가 "greeting"을 처리한다.
                     .addRequestHandler(HelloHandler.class, Hello.class, Greeting.class);
             };
         }
@@ -303,7 +303,7 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
 
             val mesh = options.addRouteMesh("services")                      // mesh 이름을 정한다.
                 .listen("tcp://0.0.0.0:7101")                                // 다른 process가 접속할 자기 endpoint.
-            mesh.channel("greeting").server()                                // 이 process가 "greeting"을 처리한다.
+            mesh.channelName("greeting").server()                                // 이 process가 "greeting"을 처리한다.
                 .addRequestHandler(HelloHandler::class.java, Hello::class.java, Greeting::class.java)
         }
     }
@@ -328,9 +328,9 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
             const mesh = builder.addRouteMesh('services')   // mesh 이름을 정한다.
               .listen('tcp://0.0.0.0:7101');                // 다른 process가 접속할 자기 endpoint.
             mesh.channel('greeting').server()               // 이 process가 "greeting"을 처리한다.
-              .addRequestHandler(HelloHandler);
+              .addRequestHandler(PacketNames.hello, HelloHandler);
 
-            return builder;
+            return builder.build();
           }
         }),
         zlinkModule(__dirname, { })                         // handler를 provider로 모은다.
@@ -412,7 +412,7 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
         return options -> {
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
                 .listen("tcp://0.0.0.0:7102");                  // 자기 endpoint도 필요하다.
-            mesh.channel("greeting").client();                  // 호출만 하는 쪽은 Client.
+            mesh.channelName("greeting").client();                  // 호출만 하는 쪽은 Client.
             mesh.peerConnections().connect("tcp://127.0.0.1:7101"); // 수동 연결 — server endpoint를 직접 적는다.
         };
     }
@@ -440,7 +440,7 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
     fun zlink(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
         val mesh = options.addRouteMesh("services")
             .listen("tcp://0.0.0.0:7102")                       // 자기 endpoint도 필요하다.
-        mesh.channel("greeting").client()                       // 호출만 하는 쪽은 Client.
+        mesh.channelName("greeting").client()                       // 호출만 하는 쪽은 Client.
         mesh.peerConnections().connect("tcp://127.0.0.1:7101")  // 수동 연결 — server endpoint를 직접 적는다.
     }
 
@@ -466,8 +466,8 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
         const mesh = builder.addRouteMesh('services')
           .listen('tcp://0.0.0.0:7102');                        // 자기 endpoint도 필요하다.
         mesh.channel('greeting').client();                      // 호출만 하는 쪽은 client.
-        mesh.peerConnections.connect('tcp://127.0.0.1:7101');   // 수동 연결 — server endpoint를 직접 적는다.
-        return builder;
+        mesh.peerConnections().connect('tcp://127.0.0.1:7101');   // 수동 연결 — server endpoint를 직접 적는다.
+        return builder.build();
       }
     })
 
@@ -609,8 +609,9 @@ Actor와 Spot을 다른 Object Server에 생성하거나 호출할 때 사용한
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
         // 모든 process가 같은 위치 정보를 조회하도록 공용 Store를 등록한다.
         options.add_location_store (
-          std::make_shared<redis_location_store_t> (settings.redis_endpoint,
-                                                    settings.redis_key_prefix));
+          std::make_shared<redis_location_store_t> (redis_location_options_t{
+            .connection_string = settings.redis_endpoint,
+            .key_prefix = settings.redis_key_prefix}));
 
         auto mesh = options.add_route_mesh (sample_nodes_t::mesh)
           .listen (settings.mesh_endpoint)
@@ -672,7 +673,7 @@ Actor와 Spot을 다른 Object Server에 생성하거나 호출할 때 사용한
 
       // API process는 Object를 보관하지 않고 원격 Object 호출만 시작한다.
       mesh.objects().client();
-      return builder;
+      return builder.build();
     }
     ```
 
@@ -1078,7 +1079,7 @@ API 서버에 요청할 때 사용한다. Game Spot 생성에는 사용하지 �
     builder.addClientServerChannel(SampleChannels.api)
       .server()
       .listen()
-      .addRequestHandler(AuthenticatePlayerHandler);
+      .addRequestHandler(PacketNames.authenticatePlayerReq, AuthenticatePlayerHandler);
 
     // Play process: 인증 요청을 보낸다.
     builder.addClientServerChannel(SampleChannels.api)

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ZLink — 통합 스택",
+    "subtitle": "client 연결·서비스 메시징·actor 상태가 하나로 내려옴",
+    "output": "17-zlink-integrated.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 1, "gapX": 70, "gapY": 20, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "integrated", "type": "backend", "label": "ZLink 통합 스택", "sublabel": "web·STREAM·SPOT·channel·loc", "row": 0, "col": 0 }
+  ],
+  "boundaries": [],
+  "connections": [],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "ZLink — 하나로 내려옴",
+      "items": [
+        "web framework (ASP.NET Core / Spring / …)",
+        "STREAM clients · SPOT and actor state",
+        "channel messaging · location store",
+        "세 계층이 하나의 스택으로 내려온다 — Orleans는 web edge·WS edge·actor cluster 세 계층으로 흩어진다"
+      ]
+    }
+  ]
+}

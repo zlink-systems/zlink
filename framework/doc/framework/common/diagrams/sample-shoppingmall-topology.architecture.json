@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "시스템 구성과 topology",
+    "subtitle": "Client는 HTTP로 CommerceApi만 호출하고, CommerceApi와 OrderWorkflow는 shoppingmall.workflow RouteMesh로 통신한다",
+    "output": "sample-shoppingmall-topology.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 100, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C", "type": "frontend", "label": "Web Clients", "row": 0, "col": 0 },
+    { "id": "API", "type": "frontend", "label": "CommerceApi ×2", "row": 0, "col": 1 },
+    { "id": "WF", "type": "backend", "label": "OrderWorkflow ×2", "row": 0, "col": 2 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Clients", "wraps": ["C"] },
+    { "kind": "region", "label": "Servers", "wraps": ["API", "WF"] }
+  ],
+  "connections": [
+    { "from": "C", "to": "API", "label": "HTTP", "variant": "default" },
+    { "from": "API", "to": "WF", "label": "shoppingmall.workflow RouteMesh", "variant": "default", "labelDy": -24 }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "원문 x2 → ×2 (다중 인스턴스 표기)",
+      "items": [
+        "원문 mermaid label 'CommerceApi x2'·'OrderWorkflow x2'의 'x2'는 다중 인스턴스를 뜻하므로 archify ×N 스택 표기 규칙에 맞춰 '×2'(곱하기 기호)로 옮겼다 — 뜻은 그대로다. Web Clients는 원문에 배수 표기가 없어 단수로 둔다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "resource는 이 그림에 없다",
+      "items": [
+        "OrderEventStore, OrderReadModelStore, CommerceStateStore, Inventory·Payment module은 원문 본문이 'resource이므로 server component로 배치하지 않는다'고 명시한다. 이 diagram은 Client·server component와 구조적 연결만 담고, resource 소유·역할은 본문 표(§3)가 별도로 설명한다."
+      ]
+    }
+  ]
+}

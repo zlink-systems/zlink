@@ -42,7 +42,7 @@ Stream node에는 session type 하나를 등록한다. Actor dispatch를 사용�
     ```kotlin
     options.addStreamNode("client-stream")
         .bind("tcp://0.0.0.0:9100")
-        .enableActorDispatch("play")            // Kotlin도 Java 표면을 그대로 쓴다.
+        .enableActorDispatch()            // Kotlin도 Java 표면을 그대로 쓴다.
         .registerSession(PlaySession::class.java) // 연결마다 만들 session type을 등록한다.
     ```
 

@@ -206,18 +206,21 @@ Built-in support for what a production server needs.
 ### Registry / Discovery — automatic server address wiring
 
 When several Play server instances come up, you don't hardcode which server to connect to or
-its endpoint. The Registry server manages addresses, and each server discovers them
-dynamically with `use_discovery()`.
+its endpoint. A shared Redis-backed Location Store tracks addresses, and each server discovers
+them dynamically through `add_location_store<redis::redis_location_store_t> ()`.
 
 ```cpp
-options.use_discovery ()    // fetches node addresses automatically from the registry
-  .add_registry_endpoint (topology.registry_endpoint);
+options.add_location_store<redis::redis_location_store_t> ()
+  .set_connection_string (topology.redis_endpoint)
+  .set_key_prefix (topology.redis_key_prefix + "location:");
 
-options.add_spot_mesh ("bingo.room.discovery")
-  .add_node ("bingo.room.node")
-  .set_routing_id (topology.rid).enable_router (topology.router_endpoint)
+auto room_mesh = options.add_route_mesh (sample_names_t::room_spot_mesh);
+room_mesh.set_routing_id (zlink::routing_id_t::from ("bingo-play-" + topology.play_node))
+  .listen (topology.selected_play_spot_router_endpoint ());
+room_mesh.objects ()
+  .server ()
   .add_entry_spot<bingo_entry_spot_t> ()
-  .add_spot<bingo_room_spot_t> ("bingo.room");
+  .add_spot_factory<bingo_room_spot_t> (sample_names_t::room_spot);
 ```
 
 [Chapter 10 →](10-location.en.md)

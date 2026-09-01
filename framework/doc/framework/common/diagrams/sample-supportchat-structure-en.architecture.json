@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Implementation Structure — Client · Shared · Server",
+    "subtitle": "Every language implements the same logical component with the same responsibility (Session=stream·binding, Api=auth·creation edge, Support=conversation state)",
+    "output": "sample-supportchat-structure-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 4, "gapX": 74, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "cl-prog", "type": "frontend", "label": "Program", "row": 0, "col": 0 },
+    { "id": "cl-cust", "type": "frontend", "label": "CustomerScenario", "sublabel": "auth·open·message·close", "row": 0, "col": 1 },
+    { "id": "cl-agent", "type": "frontend", "label": "AgentScenario", "sublabel": "availability·join·reconnect", "row": 0, "col": 2 },
+
+    { "id": "sh-conf", "type": "external", "label": "Configuration", "sublabel": "role·Mesh·Channel·timeout", "row": 1, "col": 0 },
+    { "id": "sh-json", "type": "external", "label": "JSON Contracts", "sublabel": "auth·conversation·chat·notify", "row": 1, "col": 1 },
+
+    { "id": "se-prog", "type": "external", "label": "Program", "row": 2, "col": 0 },
+    { "id": "se-app", "type": "external", "label": "Application", "sublabel": "SessionBinding·MetadataRouting", "row": 2, "col": 1 },
+    { "id": "se-infra", "type": "external", "label": "Infrastructure", "sublabel": "Stream·Packet·ActorRelay", "row": 2, "col": 2 },
+
+    { "id": "api-prog", "type": "frontend", "label": "Program", "row": 3, "col": 0 },
+    { "id": "api-app", "type": "frontend", "label": "Application", "sublabel": "Auth·ConversationCreation", "row": 3, "col": 1 },
+    { "id": "api-infra", "type": "frontend", "label": "Infrastructure", "sublabel": "ApiHandlers·SupportClient", "row": 3, "col": 2 },
+
+    { "id": "su-prog", "type": "backend", "label": "Program", "row": 4, "col": 0 },
+    { "id": "su-dom", "type": "backend", "label": "Domain", "sublabel": "Conversation·Policy·Events", "row": 4, "col": 1 },
+    { "id": "su-app", "type": "backend", "label": "Application", "sublabel": "Assignment·Commands·Notify", "row": 4, "col": 2 },
+    { "id": "su-infra", "type": "backend", "label": "Infrastructure", "sublabel": "EntrySpot·ConvSpot·Actor·Timer", "row": 4, "col": 3 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Client", "wraps": ["cl-prog", "cl-cust", "cl-agent"] },
+    { "kind": "region", "label": "Shared", "wraps": ["sh-conf", "sh-json"] },
+    { "kind": "region", "label": "Server / Session — stream·binding", "wraps": ["se-prog", "se-app", "se-infra"] },
+    { "kind": "region", "label": "Server / Api — auth·creation edge", "wraps": ["api-prog", "api-app", "api-infra"] },
+    { "kind": "region", "label": "Server / Support — conversation state", "wraps": ["su-prog", "su-dom", "su-app", "su-infra"] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Full tree path",
+      "items": [
+        "The root SupportChat has 3 top-level nodes: Client · Shared · Server. Server holds Session·Api·Support. Client is blue (client app), Api is blue (auth·creation edge app), Session is gray (stream·binding plumbing), Support is green (Spot·actor·conversation state), Shared is neutral (gray) common assets.",
+        "Client { Program, CustomerScenario, AgentScenario } · Shared { Configuration, JSON Contracts }."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Server / Session·Api subfiles",
+      "items": [
+        "Session { Program, Application{SessionBinding, MetadataRouting}, Infrastructure{StreamSession, PacketHandlers, ActorRelay} }.",
+        "Api { Program, Application{Authentication, ConversationCreation}, Infrastructure{ApiHandlers, SupportClient} }."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Server / Support subfiles",
+      "items": [
+        "Program.",
+        "Domain { Conversation, ConversationPolicy, ConversationEvents }.",
+        "Application { AgentAssignment, ConversationCommands, NotificationMapping }.",
+        "Infrastructure { SupportEntrySpot, ConversationSpot, ActorAdapters, TimerAdapter }."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "입장과 같은 zone 이동 — JoinWorld · Move",
+    "subtitle": "JoinWorldRes는 join completion callback에서 발신 — admission 완료까지가 성공 의미",
+    "output": "sample-zoneworld-join-move.html",
+    "column_fit": "spread",
+    "viewBox": [900, 800],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "c", "type": "frontend", "label": "Game Browser" },
+    { "id": "g", "type": "external", "label": "Gateway" },
+    { "id": "a", "type": "backend", "label": "Player Actor" },
+    { "id": "z", "type": "backend", "label": "Zone Spot" }
+  ],
+  "messages": [
+    { "from": "c", "to": "g", "y": 160, "label": "JoinWorldReq", "variant": "default" },
+    { "from": "g", "to": "a", "y": 208, "label": "create or get Player Actor", "variant": "default" },
+    { "from": "a", "to": "z", "y": 256, "label": "Defer() 후 EnterZoneReq(zone-nw)", "variant": "default" },
+    { "from": "z", "to": "a", "y": 304, "label": "EnterZoneRes (join completion callback)", "variant": "return" },
+    { "from": "a", "to": "g", "y": 352, "label": "JoinWorldRes(25,25) — completion에서 발신", "variant": "return" },
+    { "from": "g", "to": "c", "y": 400, "label": "JoinWorldRes", "variant": "return" },
+    { "from": "c", "to": "g", "y": 448, "label": "MoveMsg(28,27)", "variant": "default" },
+    { "from": "g", "to": "a", "y": 496, "label": "MoveMsg", "variant": "default" },
+    { "from": "a", "to": "z", "y": 544, "label": "validate 후 UpdatePositionMsg", "variant": "default" },
+    { "from": "z", "to": "a", "y": 592, "label": "ZoneStateNotify source", "variant": "return" },
+    { "from": "a", "to": "g", "y": 640, "label": "ZoneStateNotify", "variant": "return" },
+    { "from": "g", "to": "c", "y": 688, "label": "ZoneStateNotify(28,27)", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "자기 메시지 2개 (archify 미지원 → 인접 화살표에 합침)",
+      "items": [
+        "원문 Player Actor→Player Actor \"Defer() zone join, handler 종료\"를 뒤따르는 EnterZoneReq(zone-nw) 화살표 라벨에 합쳤다. Zone join은 Framework Actor Join이라 handler 안에서 동기 완료되지 않는다 — Actor는 join을 Defer()로 등록하고 현재 handler를 정상 종료하며, join 결과는 completion callback으로 도착한다.",
+        "원문 Player Actor→Player Actor \"validate and update coordinates\"를 뒤따르는 UpdatePositionMsg 화살표 라벨에 합쳤다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "JoinWorldRes의 규범 의미",
+      "items": [
+        "JoinWorldRes는 join completion callback에서 발신한다 — JoinWorldRes 성공 = target zone admission까지 완료가 이 시나리오의 규범 의미이며, admission 이전 상태(cache 등)로 terminal을 만드는 구현은 비적합이다."
+      ]
+    }
+  ]
+}

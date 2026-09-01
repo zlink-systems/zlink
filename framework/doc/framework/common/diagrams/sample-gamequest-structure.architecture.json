@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "구현 구조 — Client · Shared · Server",
+    "subtitle": "모든 언어가 같은 logical component를 같은 책임으로 구현한다 (GameApi=edge·session, QuestMission=player별 state)",
+    "output": "sample-gamequest-structure.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 3, "gapX": 90, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "cl-prog", "type": "frontend", "label": "Program", "row": 0, "col": 0 },
+    { "id": "cl-scen", "type": "frontend", "label": "Scenario", "sublabel": "join~reconcile assertion", "row": 0, "col": 1 },
+
+    { "id": "sh-conf", "type": "external", "label": "Configuration", "sublabel": "role·Mesh·stream·marker", "row": 1, "col": 0 },
+    { "id": "sh-json", "type": "external", "label": "JSON Contracts", "sublabel": "action·progress·notify", "row": 1, "col": 1 },
+
+    { "id": "api-prog", "type": "frontend", "label": "Program", "row": 2, "col": 0 },
+    { "id": "api-app", "type": "frontend", "label": "Application", "sublabel": "Gameplay·SessionBinding", "row": 2, "col": 1 },
+    { "id": "api-infra", "type": "frontend", "label": "Infrastructure", "sublabel": "Stream·SpotClient·Query", "row": 2, "col": 2 },
+
+    { "id": "qm-prog", "type": "backend", "label": "Program", "row": 3, "col": 0 },
+    { "id": "qm-dom", "type": "backend", "label": "Domain", "sublabel": "Policy·Aggregate·Events", "row": 3, "col": 1 },
+    { "id": "qm-app", "type": "backend", "label": "Application", "sublabel": "Apply·Reconcile·Projection", "row": 3, "col": 2 },
+    { "id": "qm-infra", "type": "backend", "label": "Infrastructure", "sublabel": "Spot·EventStore·ReadModel", "row": 4, "col": 0 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Client", "wraps": ["cl-prog", "cl-scen"] },
+    { "kind": "region", "label": "Shared", "wraps": ["sh-conf", "sh-json"] },
+    { "kind": "region", "label": "Server / GameApi — edge·session", "wraps": ["api-prog", "api-app", "api-infra"] },
+    { "kind": "region", "label": "Server / QuestMission — player별 state", "wraps": ["qm-prog", "qm-dom", "qm-app", "qm-infra"] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "전체 트리 경로와 색",
+      "items": [
+        "루트 GameQuest의 top-level 3개: Client · Shared · Server. Server가 GameApi·QuestMission을 담는다. 색: Client·GameApi=파랑(app·edge·session), QuestMission=초록(Spot·player별 state), Shared=회색(공통 자산).",
+        "Client { Program, Scenario } · Shared { Configuration, JSON Contracts }."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Server / GameApi 하위",
+      "items": [
+        "Program.",
+        "Application { GameplayUseCases, SessionBinding }.",
+        "Infrastructure { StreamHandlers, SpotClients, ProjectionQueryAdapter }."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Server / QuestMission 하위",
+      "items": [
+        "Program.",
+        "Domain { QuestPolicy, PlayerQuestAggregate, QuestEvents }.",
+        "Application { ApplyGameplay, ReconcileProgress, ProjectionUpdate }.",
+        "Infrastructure { PlayerQuestSpot, EventStoreAdapter, ReadModelAdapter, GameplayStateAdapter }."
+      ]
+    }
+  ]
+}

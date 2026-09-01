@@ -77,7 +77,7 @@ topic이다.
 | `zlinkFramework()` | builder를 만든다 |
 | `zlinkModule(__dirname, options)` | 그 디렉터리의 handler·Spot·Actor를 provider로 모은다 |
 | `zlinkDiscoverProviders(...)` | provider 탐색을 직접 제어할 때 |
-| `ZLinkFrameworkOptionsBuilder` | builder 타입 |
+| `ZLinkFrameworkOptions` | builder 타입 |
 | `ZLinkMeshNodeBuilder` · `ZLinkMeshChannelBuilder` · `ZLinkMeshObjectRoleBuilder` | MeshNode와 역할 |
 | `ZLinkFanoutChannelBuilder` · `ZLinkStreamNodeBuilder` | fanout channel · STREAM node |
 | `ZLinkMeshPeerConnections` · `ZLinkEndpointConnections` | 수동 peer 연결 |

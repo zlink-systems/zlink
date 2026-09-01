@@ -218,7 +218,7 @@ keep only one Ready.
       .addSpotFactory('room', RoomSpot, (factory) => factory.recreateOnRelocation());
 
     play.channel('play.ops').server()
-      .addRequestHandler(NodeStatusHandler);
+      .addRequestHandler('GetNodeStatus', NodeStatusHandler);
     ```
 
 

@@ -156,8 +156,9 @@ Actor와 Spot을 다른 Object Server에 생성하거나 호출할 때 사용한
 app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
     // 모든 process가 같은 위치 정보를 조회하도록 공용 Store를 등록한다.
     options.add_location_store (
-      std::make_shared<redis_location_store_t> (settings.redis_endpoint,
-                                                settings.redis_key_prefix));
+      std::make_shared<redis_location_store_t> (redis_location_options_t{
+        .connection_string = settings.redis_endpoint,
+        .key_prefix = settings.redis_key_prefix}));
 
     auto mesh = options.add_route_mesh (sample_nodes_t::mesh)
       .listen (settings.mesh_endpoint)

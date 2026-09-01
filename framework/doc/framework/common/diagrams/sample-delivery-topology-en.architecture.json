@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "System configuration and topology — structural connections",
+    "subtitle": "Client/server component placement and RouteMesh/ClientServer connections (Store/evidence in the resource table)",
+    "output": "sample-delivery-topology-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 3, "gapX": 120, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "CA", "type": "frontend", "label": "Courier Client A", "row": 0, "col": 0 },
+    { "id": "CB", "type": "frontend", "label": "Courier Client B", "row": 1, "col": 0 },
+    { "id": "CS", "type": "frontend", "label": "CourierSession", "row": 0, "col": 1 },
+    { "id": "CN1", "type": "backend", "label": "CourierActorNode 1", "row": 0, "col": 2 },
+    { "id": "CN2", "type": "backend", "label": "CourierActorNode 2", "row": 1, "col": 2 },
+    { "id": "D", "type": "frontend", "label": "Dispatch", "row": 2, "col": 1 },
+    { "id": "T", "type": "frontend", "label": "Tracking", "row": 2, "col": 2 },
+    { "id": "CC", "type": "frontend", "label": "Customer Client", "row": 3, "col": 0 },
+    { "id": "CG", "type": "frontend", "label": "CustomerGateway", "row": 3, "col": 1 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Servers", "wraps": ["CS", "CN1", "CN2", "D", "T", "CG"] }
+  ],
+  "connections": [
+    { "from": "CA", "to": "CS", "label": "STREAM", "variant": "default" },
+    { "from": "CB", "to": "CS", "label": "STREAM", "variant": "default" },
+    { "from": "CC", "to": "D", "label": "HTTP", "variant": "default" },
+    { "from": "CC", "to": "CG", "label": "STREAM", "variant": "default" },
+    { "from": "CS", "to": "CN1", "variant": "default" },
+    { "from": "CS", "to": "CN2", "variant": "default" },
+    { "from": "D", "to": "CN1", "label": "RouteMesh", "variant": "default" },
+    { "from": "D", "to": "CN2", "label": "RouteMesh", "variant": "default" },
+    { "from": "D", "to": "CN1", "label": "ClientServer", "variant": "dashed" },
+    { "from": "D", "to": "CN2", "label": "ClientServer", "variant": "dashed" },
+    { "from": "D", "to": "T", "label": "ClientServer", "variant": "dashed" },
+    { "from": "T", "to": "CG", "label": "RouteMesh", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Channel names (verbatim)",
+      "items": [
+        "Solid RouteMesh edges are for object routing — on the courier side `deliverydispatch.courier` (D/CS → CourierActorNode 1/2), on the customer side `deliverydispatch.customer` (Tracking → CustomerGateway).",
+        "Dashed ClientServer edges are independent, directed channels — `deliverydispatch.dispatch` (Dispatch → CourierActorNode 1/2), `deliverydispatch.tracking` (Dispatch → Tracking). Dispatch connects to each CourierActorNode over two channels: courier RouteMesh and dispatch ClientServer.",
+        "The source connections are undirected `---` structural links (arrowheads are a rendering constraint, not a claim of direction)."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Roles and boundaries",
+      "items": [
+        "Dispatch provides the HTTP edge and the dispatch worker. CourierSession/CustomerGateway receive STREAMs and bind the current session to each Actor. CourierActorNode 1/2 are eligible object servers offering the same Actor type and Entry Spot (green). Tracking records status events and sends them to the Customer Actor.",
+        "The number of servers and the actor owner are not fixed by Application configuration. The Location Store provides current authority and the Framework selects the target."
+      ]
+    }
+  ]
+}

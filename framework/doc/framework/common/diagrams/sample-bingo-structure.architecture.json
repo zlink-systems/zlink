@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "구현 구조 — Client · Shared · Server",
+    "subtitle": "모든 언어가 같은 logical component를 같은 책임으로 구현한다 (API=인증·record, Play=stream·game state)",
+    "output": "sample-bingo-structure.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 3, "gapX": 84, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "cl-prog", "type": "frontend", "label": "Program", "row": 0, "col": 0 },
+    { "id": "cl-scen", "type": "frontend", "label": "Scenario", "sublabel": "인증~관찰 종료 assertion", "row": 0, "col": 1 },
+
+    { "id": "sh-conf", "type": "external", "label": "Configuration", "sublabel": "role·channel·mesh·key", "row": 1, "col": 0 },
+    { "id": "sh-proto", "type": "external", "label": "Protobuf Contracts", "sublabel": "bingo_messages.proto", "row": 1, "col": 1 },
+
+    { "id": "api-prog", "type": "frontend", "label": "Program", "row": 2, "col": 0 },
+    { "id": "api-hand", "type": "frontend", "label": "Handlers", "row": 2, "col": 1 },
+    { "id": "api-rec", "type": "frontend", "label": "Player Record Store", "row": 2, "col": 2 },
+
+    { "id": "mm-prog", "type": "backend", "label": "Program", "row": 3, "col": 0 },
+    { "id": "mm-app", "type": "backend", "label": "Application", "row": 3, "col": 1 },
+    { "id": "mm-infra", "type": "backend", "label": "Infrastructure", "sublabel": "Redis·Instance Spot Adapter", "row": 3, "col": 2 },
+
+    { "id": "se-prog", "type": "external", "label": "Program", "row": 4, "col": 0 },
+    { "id": "se-stream", "type": "external", "label": "STREAM Session", "sublabel": "Handlers", "row": 4, "col": 1 },
+
+    { "id": "pl-prog", "type": "backend", "label": "Program", "row": 5, "col": 0 },
+    { "id": "pl-dom", "type": "backend", "label": "Domain", "sublabel": "Card·Game·Room State", "row": 5, "col": 1 },
+    { "id": "pl-infra", "type": "backend", "label": "Infrastructure", "sublabel": "Player Actor·Entry·Room Spot", "row": 5, "col": 2 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Client", "wraps": ["cl-prog", "cl-scen"] },
+    { "kind": "region", "label": "Shared", "wraps": ["sh-conf", "sh-proto"] },
+    { "kind": "region", "label": "Server / API — 인증·record·매칭 조율", "wraps": ["api-prog", "api-hand", "api-rec"] },
+    { "kind": "region", "label": "Server / Matchmaking — reservation", "wraps": ["mm-prog", "mm-app", "mm-infra"] },
+    { "kind": "region", "label": "Server / Session — 연결·relay", "wraps": ["se-prog", "se-stream"] },
+    { "kind": "region", "label": "Server / Play — stream·game state", "wraps": ["pl-prog", "pl-dom", "pl-infra"] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "전체 트리 경로와 색",
+      "items": [
+        "루트 Bingo Sample의 top-level 3개: Client · Shared · Server. Server가 API·Matchmaking·Session·Play를 담는다. 색: Client·API=파랑(app), Play·Matchmaking=초록(Spot·actor·game state), Session=회색(연결·relay infra), Shared=회색(공통 자산).",
+        "Client { Program, Scenario } · Shared { Configuration, Protobuf Contracts }."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Server / API · Matchmaking · Session 하위",
+      "items": [
+        "API { Program, Handlers, Player Record Store }.",
+        "Matchmaking { Program, Application, Infrastructure { Redis Adapter, Instance Spot Adapter } }.",
+        "Session { Program, STREAM Session { Handlers } }."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Server / Play 하위 파일",
+      "items": [
+        "Program.",
+        "Domain { Bingo Card, Bingo Game, Bingo Room State }.",
+        "Infrastructure { Player Actor { Actor Relocation Adapter }, Entry Spot { Handlers }, Bingo Room Spot { Room Relocation Adapter, Handlers } }."
+      ]
+    }
+  ]
+}

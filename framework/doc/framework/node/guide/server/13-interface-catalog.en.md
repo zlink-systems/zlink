@@ -79,7 +79,7 @@ module.
 | `zlinkFramework()` | Creates the builder |
 | `zlinkModule(__dirname, options)` | Collects that directory's handlers/Spots/Actors as providers |
 | `zlinkDiscoverProviders(...)` | For controlling provider discovery directly |
-| `ZLinkFrameworkOptionsBuilder` | The builder type |
+| `ZLinkFrameworkOptions` | The builder type |
 | `ZLinkMeshNodeBuilder` · `ZLinkMeshChannelBuilder` · `ZLinkMeshObjectRoleBuilder` | MeshNode and its roles |
 | `ZLinkFanoutChannelBuilder` · `ZLinkStreamNodeBuilder` | Fanout channel / STREAM node |
 | `ZLinkMeshPeerConnections` · `ZLinkEndpointConnections` | Manual peer connections |

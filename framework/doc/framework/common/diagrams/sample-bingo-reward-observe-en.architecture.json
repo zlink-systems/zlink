@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Reward observation",
+    "subtitle": "the game room publishes the reward · the observer's local room forwards it as a bound push, then the observer stops",
+    "output": "sample-bingo-reward-observe-en.html",
+    "column_fit": "spread",
+    "viewBox": [1040, 920],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "O", "type": "frontend", "label": "Observer" },
+    { "id": "S", "type": "external", "label": "Session" },
+    { "id": "OA", "type": "backend", "label": "Observer Actor" },
+    { "id": "OR", "type": "backend", "label": "Observer Room" },
+    { "id": "GR", "type": "backend", "label": "Game Room" }
+  ],
+  "messages": [
+    { "from": "O", "to": "S", "y": 160, "label": "ObserveBingoEventsReq", "variant": "default" },
+    { "from": "S", "to": "OA", "y": 208, "label": "Relay through binding", "variant": "default" },
+    { "from": "OA", "to": "OR", "y": 256, "label": "Join observed RoomId", "variant": "default" },
+    { "from": "OR", "to": "OA", "y": 304, "label": "Subscribed", "variant": "return" },
+    { "from": "OA", "to": "S", "y": 352, "label": "ObserveBingoEventsRes", "variant": "return" },
+    { "from": "S", "to": "O", "y": 400, "label": "ObserveBingoEventsRes", "variant": "return" },
+    { "from": "GR", "to": "OR", "y": 448, "label": "BingoRewardAcquiredEvent (publish to bingo.room.reward)", "variant": "return" },
+    { "from": "OR", "to": "OA", "y": 496, "label": "BingoRewardAnnouncedNotify", "variant": "return" },
+    { "from": "OA", "to": "S", "y": 544, "label": "BingoRewardAnnouncedNotify", "variant": "return" },
+    { "from": "S", "to": "O", "y": 592, "label": "BingoRewardAnnouncedNotify", "variant": "return" },
+    { "from": "O", "to": "S", "y": 640, "label": "StopObservingBingoEventsReq", "variant": "default" },
+    { "from": "S", "to": "OA", "y": 688, "label": "Relay through binding", "variant": "default" },
+    { "from": "OA", "to": "OR", "y": 736, "label": "Leave", "variant": "default" },
+    { "from": "OA", "to": "S", "y": 784, "label": "StopObservingBingoEventsRes", "variant": "return" },
+    { "from": "S", "to": "O", "y": 832, "label": "StopObservingBingoEventsRes", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Participants and publish path",
+      "items": [
+        "Observer = Observer Client; Observer Actor/Room = Play / Observer Actor/Room; Game Room = Play / Game Room.",
+        "The game room first confirms the end result, submits the player push, then publishes BingoRewardAcquiredEvent to the bingo.room.reward topic. Each Play node's local observation BingoRoom subscribes to the same topic; only a room whose event RoomId matches its own ObservedRoomId sends a typed message to the observer Actor, which notifies via bound session."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Delivery semantics",
+      "items": [
+        "The observation room doesn't participate in player membership, cards, the timer, or winner determination, and no separate reward-only Spot type is created.",
+        "Normal publish completion means the source runtime started the operation — it doesn't guarantee subscriber handler execution or per-target acceptance. The Client confirms the delivery result via the BingoRewardAnnouncedNotify payload, not the publish return value."
+      ]
+    }
+  ]
+}

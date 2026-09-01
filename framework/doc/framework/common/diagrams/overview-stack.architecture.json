@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ZLink은 프레임워크 위의 라이브러리 계층",
+    "subtitle": "위 = 쓰던 host 프레임워크 · 아래 = ZLink 라이브러리 계층",
+    "output": "overview-stack.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      130
+    ],
+    "cols": 1,
+    "gapX": 70,
+    "gapY": 14,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "host",
+      "type": "frontend",
+      "label": "host 프레임워크",
+      "sublabel": "DI · 설정 · 로깅 그대로",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "zlink",
+      "type": "backend",
+      "label": "ZLink Framework",
+      "sublabel": "SPOT · actor · STREAM",
+      "row": 1,
+      "col": 0
+    }
+  ],
+  "connections": [],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "위층 — 기존 host 프레임워크",
+      "items": [
+        "ASP.NET Core / Spring / NestJS — DI · 설정 · 로깅 · 배포 그대로"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "아래층 — ZLink 라이브러리 계층",
+      "items": [
+        "SPOT · actor · STREAM · host relocation — 프레임워크 위에 얹히는 라이브러리 계층"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Joining and moving within the same zone",
+    "subtitle": "JoinWorld completes from the Actor Join completion callback · same-zone Move updates the Zone Spot copy",
+    "output": "sample-zoneworld-join-move-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Game Browser" },
+    { "id": "G", "type": "external", "label": "Gateway" },
+    { "id": "A", "type": "backend", "label": "Player Actor" },
+    { "id": "Z", "type": "backend", "label": "Zone Spot" }
+  ],
+  "messages": [
+    { "from": "C", "to": "G", "y": 160, "label": "JoinWorldReq", "variant": "default" },
+    { "from": "G", "to": "A", "y": 207, "label": "create or get Player Actor; Defer() zone join, end handler", "variant": "default" },
+    { "from": "A", "to": "Z", "y": 254, "label": "EnterZoneReq(zone-nw)", "variant": "default" },
+    { "from": "Z", "to": "A", "y": 301, "label": "EnterZoneRes (join completion callback)", "variant": "return" },
+    { "from": "A", "to": "G", "y": 348, "label": "JoinWorldRes(25,25) — sent from completion", "variant": "return" },
+    { "from": "G", "to": "C", "y": 395, "label": "JoinWorldRes", "variant": "return" },
+    { "from": "C", "to": "G", "y": 442, "label": "MoveMsg(28,27)", "variant": "default" },
+    { "from": "G", "to": "A", "y": 489, "label": "MoveMsg; validate and update coordinates", "variant": "default" },
+    { "from": "A", "to": "Z", "y": 536, "label": "UpdatePositionMsg", "variant": "default" },
+    { "from": "Z", "to": "A", "y": 583, "label": "ZoneStateNotify source", "variant": "return" },
+    { "from": "A", "to": "G", "y": 630, "label": "ZoneStateNotify", "variant": "return" },
+    { "from": "G", "to": "C", "y": 677, "label": "ZoneStateNotify(28,27)", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Self-actions folded into the following message (archify sequence rejects from==to)",
+      "items": [
+        "mermaid A->>A: Defer() zone join, end handler — the Actor registers the join with Defer() and ends the current handler normally before EnterZoneReq; the join result arrives in a completion callback.",
+        "mermaid A->>A: validate and update coordinates — the Actor validates the move and updates coordinates before sending UpdatePositionMsg to the Zone Spot."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Normative meaning",
+      "items": [
+        "A zone join is a Framework Actor Join, so it does not complete synchronously inside a handler.",
+        "A successful JoinWorldRes means target zone admission has completed — an implementation that produces the JoinWorldRes terminal from pre-admission state (such as a cache) is non-conforming.",
+        "Starting state: Gateway, the two ZoneNodes, and Ops have completed readiness, and the browser has connected a STREAM to Gateway. JoinWorld starts at (25,25) in zone-nw."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "시스템 구성과 topology — 역할별 연결",
+    "subtitle": "Client는 Session에만 연결하고, API·Matchmaking·Play는 server 간 channel과 RouteMesh로 통신한다",
+    "output": "sample-bingo-topology.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 4, "gapX": 96, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "PC", "type": "frontend", "label": "Player Clients ×2", "row": 0, "col": 0 },
+    { "id": "OC", "type": "frontend", "label": "Observer Client", "row": 1, "col": 0 },
+    { "id": "S", "type": "external", "label": "Session Servers ×2", "sublabel": "연결 종단 · relay", "row": 0, "col": 1 },
+    { "id": "A", "type": "frontend", "label": "API Servers ×2", "sublabel": "인증 · 매칭 조율", "row": 0, "col": 2 },
+    { "id": "P", "type": "backend", "label": "Play Servers ×2", "sublabel": "player Actor · Room Spot", "row": 1, "col": 2 },
+    { "id": "M", "type": "backend", "label": "Matchmaking Server", "sublabel": "Matchmaker Instance Spot", "row": 0, "col": 3 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Clients", "wraps": ["PC", "OC"] },
+    { "kind": "region", "label": "Servers", "wraps": ["S", "A", "P", "M"] }
+  ],
+  "connections": [
+    { "from": "PC", "to": "S", "label": "STREAM", "variant": "default" },
+    { "from": "OC", "to": "S", "label": "STREAM", "variant": "default" },
+    { "from": "S", "to": "A", "label": "bingo.api", "variant": "default" },
+    { "from": "S", "to": "P", "label": "bingo.play", "variant": "default" },
+    { "from": "A", "to": "P", "label": "bingo.play", "variant": "default", "labelDx": 22, "labelDy": 30 },
+    { "from": "A", "to": "M", "label": "bingo.matchmaking", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "연결 읽는 법 — 무방향 구조 연결",
+      "items": [
+        "모든 실선은 원문의 `---` 무방향 구조적 연결이다 — 요청 방향이 아니라 peer·ingress 연결 의도만 나타낸다(화살표 머리는 archify 렌더 제약이며 방향 주장이 아니다). Client가 직접 연결하는 역할은 Session뿐이며, API·Matchmaking·Play는 server 간 channel과 RouteMesh로 통신한다.",
+        "×2는 원문 `x2`(다중 인스턴스): Player Clients·Session·API·Play. Observer Client는 x1(단수). Matchmaking Server는 sample 규모에서 한 process지만 singleton으로 가정하지 않는다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "논리 연결 역할",
+      "items": [
+        "`bingo.api` ClientServer Channel: Session과 Play가 인증·player record API를 호출한다. STREAM: Client request·response·server push를 한 연결로 전달한다.",
+        "`bingo.matchmaking` RouteMesh: API가 level bucket의 Matchmaker Instance Spot을 호출한다. `bingo.play` RouteMesh: API와 Session이 Room·Actor를 찾고 Play node가 object message와 Logical Multicast를 처리한다.",
+        "각 process RID는 `<role-prefix>-<uuid-v4>`로 시작할 때 새로 만들고 연결·관측에만 쓴다. logical identity는 ActorId·RoomId다. prefix — API의 Play Mesh=api, API의 Matchmaking Mesh=api-matchmaking, Matchmaking=matchmaking, Play=play, Session=session."
+      ]
+    }
+  ]
+}

@@ -211,7 +211,7 @@ admission에서 하나만 Ready로 유지한다.
       .addSpotFactory('room', RoomSpot, (factory) => factory.recreateOnRelocation());
 
     play.channel('play.ops').server()
-      .addRequestHandler(NodeStatusHandler);
+      .addRequestHandler('GetNodeStatus', NodeStatusHandler);
     ```
 
 

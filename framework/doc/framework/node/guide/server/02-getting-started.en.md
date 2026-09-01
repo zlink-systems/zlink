@@ -74,9 +74,9 @@ export interface Greeting { readonly text: string; }
         const mesh = builder.addRouteMesh('services')   // Names the mesh.
           .listen('tcp://0.0.0.0:7101');                // Its own endpoint for other processes to connect to.
         mesh.channel('greeting').server()               // This process handles "greeting".
-          .addRequestHandler(HelloHandler);
+          .addRequestHandler(PacketNames.hello, HelloHandler);
 
-        return builder;
+        return builder.build();
       }
     }),
     zlinkModule(__dirname, { })                         // Gathers handlers as providers.
@@ -103,8 +103,8 @@ ZLinkModule.forRootFactory({
     const mesh = builder.addRouteMesh('services')
       .listen('tcp://0.0.0.0:7102');                        // It also needs its own endpoint.
     mesh.channel('greeting').client();                      // The call-only side is client.
-    mesh.peerConnections.connect('tcp://127.0.0.1:7101');   // Manual connection — write the server endpoint directly.
-    return builder;
+    mesh.peerConnections().connect('tcp://127.0.0.1:7101');   // Manual connection — write the server endpoint directly.
+    return builder.build();
   }
 })
 
@@ -179,7 +179,7 @@ useFactory: () => {
 
   // The API process doesn't hold any Object — it only initiates remote Object calls.
   mesh.objects().client();
-  return builder;
+  return builder.build();
 }
 ```
 
@@ -270,7 +270,7 @@ authentication from the API server. It isn't used for Game Spot creation.
 builder.addClientServerChannel(SampleChannels.api)
   .server()
   .listen()
-  .addRequestHandler(AuthenticatePlayerHandler);
+  .addRequestHandler(PacketNames.authenticatePlayerReq, AuthenticatePlayerHandler);
 
 // Play process: sends the authentication request.
 builder.addClientServerChannel(SampleChannels.api)

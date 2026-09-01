@@ -86,7 +86,8 @@ process 전체에 적용되는 값이다.
 | `UseFilter<T>()` | handler 앞에 둘 공통 처리 | 없음 | 로그·검증·권한 확인을 한곳에 모을 때 |
 | `ConfigureMetadata()` | client 연결과 actor 사이에 넘길 수 있는 metadata key | 아무 key도 허용 안 함 | 인증 정보처럼 특정 값을 연결에서 actor로 넘겨야 할 때 |
 | `ConfigureNetwork()` | 모든 endpoint의 기본 `BindHost`·`AdvertiseHost` | 지정 없음 | 컨테이너·Kubernetes에서 bind 주소와 광고 주소가 달라야 할 때 |
-| `ConfigureDispatch()` | 처리기가 없는 dispatch·진단, Core HWM, Application job queue | 진단 `Errors`, 두 profile 모두 `Balanced` | dispatch 정책·진단 또는 Core byte budget·queued-job 상한을 조정할 때 |
+| `ConfigureDispatch()` | 처리기가 없는 dispatch·진단 | 진단 `Errors` | dispatch 정책·진단을 조정할 때 |
+| `ConfigureInboundDispatch()` | Core HWM, Application job queue | 두 profile 모두 `Balanced` | Core byte budget·queued-job 상한을 조정할 때 |
 | `ApplicationVersion` | 이 process의 application 버전 | `0` | 무중단 배포에서 버전으로 이전 대상을 고를 때 |
 | `MaintenanceWave` | 이 process가 속한 점검 그룹 이름 | 없음 | 노드를 묶어 차례로 점검·교체할 때 |
 | `Worker` | 무거운 작업을 넘길 스레드 풀 | 최대 `프로세서 수 × 2`(최소 2) · 유휴 30초 · 대기열 1024 | 오래 걸리는 계산·I/O를 worker로 많이 넘길 때 |
@@ -161,7 +162,6 @@ Core가 context budget과 physical queue census로 계산한다. Framework는 co
 | --- | --- | --- | --- |
 | `SendHighWaterMark` | 이 node가 상대별로 **보내려고** 보관할 수 있는 byte. `0`은 무제한 | 순간 폭주를 더 흡수한다 | 보내는 쪽이 더 일찍 기다려 혼잡이 빨리 드러난다 |
 | `ReceiveHighWaterMark` | 이 node가 상대별로 **받아서** 보관할 수 있는 byte. `0`은 무제한 | 처리 지연을 더 버틴다 | 이 node가 더 일찍 가져가지 못해 상대 송신이 먼저 지연된다 |
-| `MaxMessageSize` | 받아들일 message 하나의 최대 크기 | 큰 payload를 주고받을 수 있다 | 과도한 payload를 입구에서 막는다 |
 | `MailboxMessageBudget` · `MailboxByteBudget` | Spot·Actor 같은 실행 단위 하나가 보관할 수 있는 message 수와 byte | 느린 실행 단위가 burst를 더 버틴다 | 처리가 지연되는 실행 단위를 일찍 드러낸다 |
 | `ReceiveTimeout` · `SendTimeout` | 소켓 수준 대기 상한 | — | 기본 동작으로 충분한 경우가 대부분이다 |
 | `Linger`(발행 소켓) | 닫을 때 남은 message를 기다리는 시간 | 종료 시 마지막 발행을 흘리지 않는다 | 기본 `0`이라 즉시 닫는다 |
@@ -181,7 +181,7 @@ handler 실행 시간)을 확인한다. 반대로 빠르게 실패시켜 다른 
 
 ### 3.3 Core HWM과 Application job queue
 
-`ConfigureDispatch()`가 돌려주는 `IZLinkDispatchOptions`의 값이다.
+`ConfigureInboundDispatch()`가 돌려주는 `IZLinkInboundDispatchOptions`의 값이다.
 
 | 설정 | 정하는 값 | 기본값 |
 | --- | --- | --- |

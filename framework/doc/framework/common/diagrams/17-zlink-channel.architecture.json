@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ZLink 방식 — framework + location store",
+    "subtitle": "sidecar·mesh·broker·WS edge가 한 겹으로 접힘",
+    "output": "17-zlink-channel.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 96, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "ordApp", "type": "frontend", "label": "order-service", "sublabel": "app", "row": 0, "col": 0 },
+    { "id": "payApp", "type": "frontend", "label": "payment-service", "sublabel": "app", "row": 0, "col": 2 },
+    { "id": "ordZ", "type": "backend", "label": "ZLink Framework", "sublabel": "channel client", "row": 1, "col": 0 },
+    { "id": "payZ", "type": "backend", "label": "ZLink Framework", "sublabel": "channel server", "row": 1, "col": 2 },
+    { "id": "store", "type": "external", "label": "location store", "sublabel": "descriptor rows", "row": 2, "col": 1 },
+    { "id": "fanout", "type": "backend", "label": "fanout channel", "row": 3, "col": 0 },
+    { "id": "stream", "type": "backend", "label": "STREAM session", "row": 3, "col": 2 }
+  ],
+  "connections": [
+    { "from": "ordApp", "to": "ordZ", "variant": "default" },
+    { "from": "payApp", "to": "payZ", "variant": "default" },
+    { "from": "ordZ", "to": "payZ", "variant": "default", "label": "channel name", "fromSide": "right", "toSide": "left" },
+    { "from": "ordZ", "to": "store", "variant": "default", "fromSide": "bottom" },
+    { "from": "payZ", "to": "store", "variant": "default", "fromSide": "bottom" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "ZLink — 한 겹으로 접힘",
+      "items": [
+        "order-service·payment-service는 app + ZLink Framework(channel client/server)",
+        "channel name으로 직접 호출 · 위치는 location store(descriptor rows)로 조회",
+        "broker와 WS edge는 fanout channel·STREAM session으로 흡수 — ZLink가 대신하는 것(초록)"
+      ]
+    }
+  ]
+}

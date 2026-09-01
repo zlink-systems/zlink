@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ZLink — framework + location store",
+    "subtitle": "sidecar·mesh·broker·WS edge collapse into one layer",
+    "output": "17-zlink-channel-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 96, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "ordApp", "type": "frontend", "label": "order-service", "sublabel": "app", "row": 0, "col": 0 },
+    { "id": "payApp", "type": "frontend", "label": "payment-service", "sublabel": "app", "row": 0, "col": 2 },
+    { "id": "ordZ", "type": "backend", "label": "ZLink Framework", "sublabel": "channel client", "row": 1, "col": 0 },
+    { "id": "payZ", "type": "backend", "label": "ZLink Framework", "sublabel": "channel server", "row": 1, "col": 2 },
+    { "id": "store", "type": "external", "label": "location store", "sublabel": "descriptor rows", "row": 2, "col": 1 },
+    { "id": "fanout", "type": "backend", "label": "fanout channel", "row": 3, "col": 0 },
+    { "id": "stream", "type": "backend", "label": "STREAM session", "row": 3, "col": 2 }
+  ],
+  "connections": [
+    { "from": "ordApp", "to": "ordZ", "variant": "default" },
+    { "from": "payApp", "to": "payZ", "variant": "default" },
+    { "from": "ordZ", "to": "payZ", "variant": "default", "label": "channel name", "fromSide": "right", "toSide": "left" },
+    { "from": "ordZ", "to": "store", "variant": "default", "fromSide": "bottom" },
+    { "from": "payZ", "to": "store", "variant": "default", "fromSide": "bottom" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "ZLink — collapses into one layer",
+      "items": [
+        "order-service/payment-service are app + ZLink Framework (channel client/server)",
+        "Direct call by channel name; location resolved via the location store (descriptor rows)",
+        "broker and WS edge are absorbed into the fanout channel and STREAM session — what ZLink replaces (green)"
+      ]
+    }
+  ]
+}

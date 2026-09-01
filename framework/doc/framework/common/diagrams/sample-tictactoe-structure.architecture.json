@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "구현 구조 — Client · Shared · Server",
+    "subtitle": "모든 언어가 같은 logical component를 같은 책임으로 구현한다 (Api=HTTP·user source, Play=stream·game state)",
+    "output": "sample-tictactoe-structure.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 160], "cols": 4, "gapX": 74, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "cl-prog", "type": "frontend", "label": "Program", "row": 0, "col": 0 },
+    { "id": "cl-scen", "type": "frontend", "label": "Scenario", "sublabel": "room·인증·join·mark·leave", "row": 0, "col": 1 },
+
+    { "id": "sh-conf", "type": "external", "label": "Configuration", "sublabel": "role·endpoint·channel·marker", "row": 1, "col": 0 },
+    { "id": "sh-json", "type": "external", "label": "JSON Contracts", "sublabel": "HTTP·stream·room·state", "row": 1, "col": 1 },
+
+    { "id": "api-prog", "type": "frontend", "label": "Program", "row": 2, "col": 0 },
+    { "id": "api-app", "type": "frontend", "label": "Application", "sublabel": "CreateGame·AuthenticatePlayer", "row": 2, "col": 1 },
+    { "id": "api-infra", "type": "frontend", "label": "Infrastructure", "sublabel": "Http·UserSource·SpotManager·Reg", "row": 2, "col": 2 },
+
+    { "id": "pl-prog", "type": "backend", "label": "Program", "row": 3, "col": 0 },
+    { "id": "pl-dom", "type": "backend", "label": "Domain", "sublabel": "Board·Match·TurnPolicy", "row": 3, "col": 1 },
+    { "id": "pl-app", "type": "backend", "label": "Application", "sublabel": "Join·Mark·Leave·Publish", "row": 3, "col": 2 },
+    { "id": "pl-infra", "type": "backend", "label": "Infrastructure", "sublabel": "7 modules → 카드", "row": 3, "col": 3 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Client", "wraps": ["cl-prog", "cl-scen"] },
+    { "kind": "region", "label": "Shared", "wraps": ["sh-conf", "sh-json"] },
+    { "kind": "region", "label": "Server / Api — HTTP·user source", "wraps": ["api-prog", "api-app", "api-infra"] },
+    { "kind": "region", "label": "Server / Play — stream·game state", "wraps": ["pl-prog", "pl-dom", "pl-app", "pl-infra"] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "전체 트리 경로",
+      "items": [
+        "루트 TicTacToe의 top-level 3개: Client · Shared · Server. Server가 Api와 Play를 담는다. Client는 파랑(client app), Api는 파랑(HTTP·user source app), Play는 초록(Spot·actor·game state), Shared는 중립(회색) 공통 자산.",
+        "Client { Program, Scenario } · Shared { Configuration, JSON Contracts }."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Server / Api 하위 파일",
+      "items": [
+        "Program.",
+        "Application { CreateGame, AuthenticatePlayer }.",
+        "Infrastructure { HttpHandlers, UserSourceAdapter, SpotManagerAdapter, HandlerRegistration }."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Server / Play 하위 파일",
+      "items": [
+        "Program.",
+        "Domain { Board, Match, TurnPolicy }.",
+        "Application { JoinGame, PlaceMark, LeaveGame, MilestonePublisher }.",
+        "Infrastructure { StreamSession, EntrySpot, PlayerActorRelocationAdapter, RoomSpot, MulticastHandlers, StoreProviders, HandlerRegistration }."
+      ]
+    }
+  ]
+}

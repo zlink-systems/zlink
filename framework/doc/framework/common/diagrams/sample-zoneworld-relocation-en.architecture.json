@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Border crossing and relocation",
+    "subtitle": "Same EnterZoneReq/EnterZoneRes pair for same-owner and cross-owner moves · relocation admission and Capture/Restore when the owner differs",
+    "output": "sample-zoneworld-relocation-en.html",
+    "column_fit": "spread",
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Game Browser" },
+    { "id": "G", "type": "external", "label": "Gateway" },
+    { "id": "A", "type": "backend", "label": "Player Actor" },
+    { "id": "S", "type": "backend", "label": "Source Zone Spot" },
+    { "id": "T", "type": "backend", "label": "Target Zone Spot" },
+    { "id": "N", "type": "external", "label": "Target ZoneNode" }
+  ],
+  "messages": [
+    { "from": "C", "to": "G", "y": 160, "label": "MoveMsg(target coordinate)", "variant": "default" },
+    { "from": "G", "to": "A", "y": 208, "label": "MoveMsg", "variant": "default" },
+    { "from": "A", "to": "T", "y": 256, "label": "validate adjacent zone; EnterZoneReq", "variant": "default" },
+    { "from": "T", "to": "N", "y": 304, "label": "relocation admission when owner differs", "variant": "default" },
+    { "from": "N", "to": "A", "y": 352, "label": "Capture and Restore actor state → target owner ready", "variant": "return" },
+    { "from": "A", "to": "G", "y": 400, "label": "ZoneChangedNotify", "variant": "return" },
+    { "from": "G", "to": "C", "y": 448, "label": "ZoneChangedNotify", "variant": "return" },
+    { "from": "T", "to": "A", "y": 496, "label": "DeliverZoneStateMsg", "variant": "return" },
+    { "from": "A", "to": "G", "y": 544, "label": "ZoneStateNotify through same binding", "variant": "return" },
+    { "from": "G", "to": "C", "y": 592, "label": "ZoneStateNotify", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Self-actions folded into the following message (archify sequence rejects from==to)",
+      "items": [
+        "mermaid A->>A: validate adjacent zone — the Player Actor validates the adjacent zone before sending EnterZoneReq to the Target Zone Spot.",
+        "mermaid N->>N: Capture and Restore actor state — the Target ZoneNode captures and restores actor state before replying \"target owner ready\" to the Player Actor."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Same-owner vs. cross-owner, and Source Zone Spot",
+      "items": [
+        "If the target zone owner is the same, only membership changes; if different, the same Player Actor materializes at the target owner, which is a relocation — the Application doesn't distinguish the two cases by NodeId, both use the EnterZoneReq/EnterZoneRes request/reply pair.",
+        "Source Zone Spot (participant S) is declared in the original diagram but receives no message in this flow — the source doesn't re-query the Location Store or automatically resubmit the same operation to a different owner while Following.",
+        "Relocation keeps the ActorId and ObjectGeneration and only changes the owner generation. A one-way or request message that arrives at the previous owner during relocation Follows to the committed target."
+      ]
+    }
+  ]
+}

@@ -283,7 +283,7 @@ done."
 
                 ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services") // Names the mesh.
                     .listen("tcp://0.0.0.0:7101");                          // Its own endpoint for other processes to connect to.
-                mesh.channel("greeting").server()                           // This process handles "greeting".
+                mesh.channelName("greeting").server()                           // This process handles "greeting".
                     .addRequestHandler(HelloHandler.class, Hello.class, Greeting.class);
             };
         }
@@ -312,7 +312,7 @@ done."
 
             val mesh = options.addRouteMesh("services")                      // Names the mesh.
                 .listen("tcp://0.0.0.0:7101")                                // Its own endpoint for other processes to connect to.
-            mesh.channel("greeting").server()                                // This process handles "greeting".
+            mesh.channelName("greeting").server()                                // This process handles "greeting".
                 .addRequestHandler(HelloHandler::class.java, Hello::class.java, Greeting::class.java)
         }
     }
@@ -337,9 +337,9 @@ done."
             const mesh = builder.addRouteMesh('services')   // Names the mesh.
               .listen('tcp://0.0.0.0:7101');                // Its own endpoint for other processes to connect to.
             mesh.channel('greeting').server()               // This process handles "greeting".
-              .addRequestHandler(HelloHandler);
+              .addRequestHandler(PacketNames.hello, HelloHandler);
 
-            return builder;
+            return builder.build();
           }
         }),
         zlinkModule(__dirname, { })                         // Gathers handlers as providers.
@@ -421,7 +421,7 @@ done."
         return options -> {
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
                 .listen("tcp://0.0.0.0:7102");                  // It also needs its own endpoint.
-            mesh.channel("greeting").client();                  // The call-only side is Client.
+            mesh.channelName("greeting").client();                  // The call-only side is Client.
             mesh.peerConnections().connect("tcp://127.0.0.1:7101"); // Manual connection — write the server endpoint directly.
         };
     }
@@ -449,7 +449,7 @@ done."
     fun zlink(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
         val mesh = options.addRouteMesh("services")
             .listen("tcp://0.0.0.0:7102")                       // It also needs its own endpoint.
-        mesh.channel("greeting").client()                       // The call-only side is Client.
+        mesh.channelName("greeting").client()                       // The call-only side is Client.
         mesh.peerConnections().connect("tcp://127.0.0.1:7101")  // Manual connection — write the server endpoint directly.
     }
 
@@ -475,8 +475,8 @@ done."
         const mesh = builder.addRouteMesh('services')
           .listen('tcp://0.0.0.0:7102');                        // It also needs its own endpoint.
         mesh.channel('greeting').client();                      // The call-only side is client.
-        mesh.peerConnections.connect('tcp://127.0.0.1:7101');   // Manual connection — write the server endpoint directly.
-        return builder;
+        mesh.peerConnections().connect('tcp://127.0.0.1:7101');   // Manual connection — write the server endpoint directly.
+        return builder.build();
       }
     })
 
@@ -619,8 +619,9 @@ is used to create or call an Actor and Spot on another Object Server.
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
         // Registers a shared Store so every process queries the same location information.
         options.add_location_store (
-          std::make_shared<redis_location_store_t> (settings.redis_endpoint,
-                                                    settings.redis_key_prefix));
+          std::make_shared<redis_location_store_t> (redis_location_options_t{
+            .connection_string = settings.redis_endpoint,
+            .key_prefix = settings.redis_key_prefix}));
 
         auto mesh = options.add_route_mesh (sample_nodes_t::mesh)
           .listen (settings.mesh_endpoint)
@@ -682,7 +683,7 @@ is used to create or call an Actor and Spot on another Object Server.
 
       // The API process doesn't hold any Object — it only initiates remote Object calls.
       mesh.objects().client();
-      return builder;
+      return builder.build();
     }
     ```
 
@@ -1088,7 +1089,7 @@ authentication from the API server. It isn't used for Game Spot creation.
     builder.addClientServerChannel(SampleChannels.api)
       .server()
       .listen()
-      .addRequestHandler(AuthenticatePlayerHandler);
+      .addRequestHandler(PacketNames.authenticatePlayerReq, AuthenticatePlayerHandler);
 
     // Play process: sends the authentication request.
     builder.addClientServerChannel(SampleChannels.api)

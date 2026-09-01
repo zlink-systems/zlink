@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "인증과 binding — Authenticate · Bind",
+    "subtitle": "Session이 API token 검증 뒤 Player Actor를 얻어 현재 STREAM session에 bind한다",
+    "output": "sample-bingo-auth-binding.html",
+    "column_fit": "spread",
+    "viewBox": [780, 560],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Client" },
+    { "id": "S", "type": "external", "label": "Session" },
+    { "id": "API", "type": "frontend", "label": "API" },
+    { "id": "P", "type": "backend", "label": "Play" }
+  ],
+  "messages": [
+    { "from": "C", "to": "S", "y": 160, "label": "AuthenticateReq", "variant": "default" },
+    { "from": "S", "to": "API", "y": 208, "label": "AuthenticatePlayerReq", "variant": "default" },
+    { "from": "API", "to": "S", "y": 256, "label": "AuthenticatePlayerRes", "variant": "return" },
+    { "from": "S", "to": "P", "y": 304, "label": "Get or create Player Actor", "variant": "default" },
+    { "from": "P", "to": "S", "y": 352, "label": "ActorRef", "variant": "return" },
+    { "from": "S", "to": "C", "y": 400, "label": "STREAM session bind 후 AuthenticateRes", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "자기 메시지와 bind 순서",
+      "items": [
+        "원문 Session→Session 자기 메시지 'Bind current STREAM session'은 archify sequence가 자기 메시지를 지원하지 않아 AuthenticateRes 반환 라벨에 합쳤다. 실제 순서: ActorRef 수신 → 현재 STREAM session에 bind → AuthenticateRes 반환.",
+        "인증 성공 시 Session은 전역 ActorId와 stable actor type으로 Player Actor를 GetOrCreate한 뒤, Framework가 반환한 ActorRef를 현재 stream session에 bind한다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "원문 Note — binding route",
+      "items": [
+        "원문 Note(Session~Play): AuthenticateRes 반환 뒤의 game packet은 저장된 binding route로 Actor에 relay된다.",
+        "Session은 physical Play endpoint나 NodeRid를 저장하지 않는다. Actor가 계획된 relocation으로 이동하면 Framework가 binding route를 갱신한다."
+      ]
+    }
+  ]
+}

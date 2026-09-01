@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "System composition and topology",
+    "subtitle": "the Client connects only to Session · API, Matchmaking, Play talk server-to-server over RouteMesh",
+    "output": "sample-bingo-topology-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 5, "gapX": 60, "gapY": 132, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "PC", "type": "frontend", "label": "Player Clients", "sublabel": "×2", "row": 1, "col": 0 },
+    { "id": "OC", "type": "frontend", "label": "Observer Client", "sublabel": "one STREAM", "row": 2, "col": 0 },
+
+    { "id": "S", "type": "external", "label": "Session Servers", "sublabel": "×2", "row": 1, "col": 2 },
+    { "id": "A", "type": "frontend", "label": "API Servers", "sublabel": "×2", "row": 2, "col": 2 },
+    { "id": "P", "type": "backend", "label": "Play Servers", "sublabel": "×2", "row": 1, "col": 4 },
+    { "id": "M", "type": "backend", "label": "Matchmaking", "sublabel": "Matchmaker Spot", "row": 2, "col": 4 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Clients", "wraps": ["PC", "OC"] },
+    { "kind": "region", "label": "Servers", "wraps": ["S", "A", "P", "M"] }
+  ],
+  "connections": [
+    { "from": "PC", "to": "S", "label": "STREAM", "variant": "emphasis" },
+    { "from": "OC", "to": "S", "label": "STREAM", "variant": "emphasis" },
+    { "from": "S", "to": "A", "label": "bingo.api", "variant": "default", "labelDy": 55 },
+    { "from": "S", "to": "P", "label": "bingo.play", "variant": "default" },
+    { "from": "A", "to": "P", "label": "bingo.play", "variant": "default", "labelDy": 40 },
+    { "from": "A", "to": "M", "label": "bingo.matchmaking", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Client-facing edge",
+      "items": [
+        "The only role the Client connects to directly is Session; API, Matchmaking, and Play communicate over server-to-server channels and RouteMesh.",
+        "Both Player Clients (×2) and the Observer Client (×1) open one STREAM connection to the Session Servers (mermaid subgraph Clients).",
+        "Counts (mermaid subgraph Servers): Session ×2, API ×2, Play ×2, and a single Matchmaking server ×1 (not assumed to be a singleton)."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Logical channels (mermaid drew all links undirected ---)",
+      "items": [
+        "bingo.api (Session→API): ClientServer channel — Session and Play call the authentication/player-record API.",
+        "bingo.matchmaking (API→Matchmaking): RouteMesh — API calls the level bucket's Matchmaker Instance Spot.",
+        "bingo.play (Session→Play and API→Play): RouteMesh — API and Session find the Room/Actor; the Play node processes object messages and Logical Multicast.",
+        "STREAM delivers client requests, responses, and server push over one connection."
+      ]
+    }
+  ]
+}

@@ -71,9 +71,9 @@ export interface Greeting { readonly text: string; }
         const mesh = builder.addRouteMesh('services')   // mesh 이름을 정한다.
           .listen('tcp://0.0.0.0:7101');                // 다른 process가 접속할 자기 endpoint.
         mesh.channel('greeting').server()               // 이 process가 "greeting"을 처리한다.
-          .addRequestHandler(HelloHandler);
+          .addRequestHandler(PacketNames.hello, HelloHandler);
 
-        return builder;
+        return builder.build();
       }
     }),
     zlinkModule(__dirname, { })                         // handler를 provider로 모은다.
@@ -100,8 +100,8 @@ ZLinkModule.forRootFactory({
     const mesh = builder.addRouteMesh('services')
       .listen('tcp://0.0.0.0:7102');                        // 자기 endpoint도 필요하다.
     mesh.channel('greeting').client();                      // 호출만 하는 쪽은 client.
-    mesh.peerConnections.connect('tcp://127.0.0.1:7101');   // 수동 연결 — server endpoint를 직접 적는다.
-    return builder;
+    mesh.peerConnections().connect('tcp://127.0.0.1:7101');   // 수동 연결 — server endpoint를 직접 적는다.
+    return builder.build();
   }
 })
 
@@ -175,7 +175,7 @@ useFactory: () => {
 
   // API process는 Object를 보관하지 않고 원격 Object 호출만 시작한다.
   mesh.objects().client();
-  return builder;
+  return builder.build();
 }
 ```
 
@@ -266,7 +266,7 @@ API 서버에 요청할 때 사용한다. Game Spot 생성에는 사용하지 �
 builder.addClientServerChannel(SampleChannels.api)
   .server()
   .listen()
-  .addRequestHandler(AuthenticatePlayerHandler);
+  .addRequestHandler(PacketNames.authenticatePlayerReq, AuthenticatePlayerHandler);
 
 // Play process: 인증 요청을 보낸다.
 builder.addClientServerChannel(SampleChannels.api)

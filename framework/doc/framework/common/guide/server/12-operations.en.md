@@ -519,14 +519,14 @@ socket options (HWM, timeout) are exclusive to `ConfigureRouterSocket()` before 
 
     ```java
     meshOptions.mesh("game.room").setPlacementWeight(0); // Excludes it from new object placement
-    meshOptions.channel("game.room").setWeight(0);      // Excludes it from new channel select-one
+    meshOptions.channel("game.room").weight(0);      // Excludes it from new channel select-one
     ```
 
 === "Kotlin"
 
     ```kotlin
     meshOptions.mesh("game.room").setPlacementWeight(0) // Excludes it from new object placement
-    meshOptions.channel("game.room").setWeight(0)      // Excludes it from new channel select-one
+    meshOptions.channel("game.room").weight(0)      // Excludes it from new channel select-one
     ```
 
 === "Node/TypeScript"

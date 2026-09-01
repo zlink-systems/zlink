@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Matching과 game start — Reserve · Join · Start",
+    "subtitle": "두 player가 같은 reservation으로 같은 Room에 deferred join하고, 두 번째 join이 game을 Running으로 만든다",
+    "output": "sample-bingo-matching-start.html",
+    "column_fit": "spread",
+    "viewBox": [1040, 1420],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "P1", "type": "frontend", "label": "Player 1" },
+    { "id": "P2", "type": "frontend", "label": "Player 2" },
+    { "id": "S", "type": "external", "label": "Session" },
+    { "id": "A1", "type": "backend", "label": "Actor 1" },
+    { "id": "A2", "type": "backend", "label": "Actor 2" },
+    { "id": "API", "type": "frontend", "label": "API" },
+    { "id": "M", "type": "backend", "label": "Matchmaker" },
+    { "id": "R", "type": "backend", "label": "Room" }
+  ],
+  "messages": [
+    { "from": "P1", "to": "S", "y": 160, "label": "MatchBingoReq", "variant": "default" },
+    { "from": "S", "to": "A1", "y": 208, "label": "Relay through binding", "variant": "default" },
+    { "from": "A1", "to": "API", "y": 256, "label": "MatchBingoApiReq", "variant": "default" },
+    { "from": "API", "to": "M", "y": 304, "label": "ReserveBingoRoomReq", "variant": "default" },
+    { "from": "M", "to": "API", "y": 352, "label": "ReserveBingoRoomRes", "variant": "return" },
+    { "from": "API", "to": "R", "y": 400, "label": "Get or create Room", "variant": "default" },
+    { "from": "R", "to": "API", "y": 448, "label": "Ready", "variant": "return" },
+    { "from": "A1", "to": "S", "y": 496, "label": "deferred join 등록 후 MatchBingoRes(WaitingForPlayers)", "variant": "return" },
+    { "from": "S", "to": "P1", "y": 544, "label": "MatchBingoRes", "variant": "return" },
+    { "from": "A1", "to": "R", "y": 592, "label": "Player 1 참가 (handler 반환 뒤 deferred join)", "variant": "default" },
+    { "from": "R", "to": "A1", "y": 640, "label": "참가 수락", "variant": "return" },
+    { "from": "P2", "to": "S", "y": 688, "label": "MatchBingoReq", "variant": "default" },
+    { "from": "S", "to": "A2", "y": 736, "label": "Relay through binding", "variant": "default" },
+    { "from": "A2", "to": "API", "y": 784, "label": "MatchBingoApiReq", "variant": "default" },
+    { "from": "API", "to": "M", "y": 832, "label": "ReserveBingoRoomReq", "variant": "default" },
+    { "from": "M", "to": "API", "y": 880, "label": "Same RoomId and settings", "variant": "return" },
+    { "from": "A2", "to": "S", "y": 928, "label": "[par] deferred join 등록 후 MatchBingoRes(WaitingForPlayers)", "variant": "return" },
+    { "from": "S", "to": "P2", "y": 976, "label": "[par] MatchBingoRes", "variant": "return" },
+    { "from": "A2", "to": "R", "y": 1024, "label": "[par] Player 2 참가", "variant": "default" },
+    { "from": "R", "to": "A1", "y": 1072, "label": "State=Running 후 BingoGameStartedNotify", "variant": "return" },
+    { "from": "R", "to": "A2", "y": 1120, "label": "BingoGameStartedNotify", "variant": "return" },
+    { "from": "A1", "to": "S", "y": 1168, "label": "BingoGameStartedNotify", "variant": "return" },
+    { "from": "A2", "to": "S", "y": 1216, "label": "BingoGameStartedNotify", "variant": "return" },
+    { "from": "S", "to": "P1", "y": 1264, "label": "BingoGameStartedNotify", "variant": "return" },
+    { "from": "S", "to": "P2", "y": 1312, "label": "BingoGameStartedNotify", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "자기 메시지 3개 (archify 미지원 → 인접 화살표에 합침)",
+      "items": [
+        "원문 Actor1→Actor1 'Room join을 deferred operation으로 등록' → MatchBingoRes(WaitingForPlayers) 반환 라벨에 합쳤다. Handler 반환 뒤 join이 실행되므로 MatchBingoRes만으로 join 완료를 판정하지 않는다.",
+        "원문 Actor2→Actor2 'Room join을 deferred operation으로 등록' → 같은 방식으로 par 블록의 MatchBingoRes 반환에 합쳤다.",
+        "원문 Room→Room 'State = Running' → 뒤따르는 첫 BingoGameStartedNotify(Actor1) 라벨에 합쳤다. 두 번째 Actor join이 끝나면 room이 Running으로 바뀌고 두 player에게 알린다 — 이 알림이 game 시작의 authoritative completion이다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "원문 par 블록과 Note",
+      "items": [
+        "참여자 원문 라벨 — Player 1/2: Player Client 1/2 · Actor 1/2: Play / Player Actor 1/2 · Matchmaker: Matchmaking · Room: Play / Room.",
+        "`[par]` 표시 메시지는 원문 par/and 블록으로 두 그룹이 병렬 실행된다: (Matching 응답) Actor2→Session→Player2 MatchBingoRes 와 (Handler 반환 뒤 deferred join) Actor2→Room 참가 뒤 State=Running·BingoGameStartedNotify fan-out.",
+        "원문 Note(Actor1~Room): Handler 반환 뒤 deferred join이 실행된다.",
+        "Room owner 조회와 remote join은 Location Store가 처리한다. Concurrent GetOrCreate caller는 하나의 Creating authority가 Ready가 될 때까지 기다리며 별도 factory를 실행하지 않는다. Player join callback은 API record 조회를 Yield로 기다린 뒤 room이 Finished인지·Actor가 여전히 member인지 재확인하고 state를 바꾼다."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,254 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "주문 시작과 성공 처리 흐름",
+    "subtitle": "StartOrderRes는 Created 시점에 반환된다 — 예약·승인·확정은 background에서 이어진다",
+    "output": "sample-shoppingmall-start-success.html",
+    "column_fit": "spread",
+    "viewBox": [
+      1280,
+      1440
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "participants": [
+    {
+      "id": "Client",
+      "type": "frontend",
+      "label": "Client"
+    },
+    {
+      "id": "API",
+      "type": "frontend",
+      "label": "CommerceApi"
+    },
+    {
+      "id": "State",
+      "type": "database",
+      "label": "Commerce State"
+    },
+    {
+      "id": "Workflow",
+      "type": "backend",
+      "label": "OrderWorkflow",
+      "sublabel": "/ Order Spot"
+    },
+    {
+      "id": "Events",
+      "type": "database",
+      "label": "Order Event Store"
+    },
+    {
+      "id": "Projection",
+      "type": "database",
+      "label": "Order Read Model"
+    },
+    {
+      "id": "Inventory",
+      "type": "external",
+      "label": "Inventory"
+    },
+    {
+      "id": "Payment",
+      "type": "external",
+      "label": "Payment"
+    }
+  ],
+  "messages": [
+    {
+      "from": "Client",
+      "to": "API",
+      "y": 160,
+      "label": "StartOrderReq",
+      "variant": "default"
+    },
+    {
+      "from": "API",
+      "to": "State",
+      "y": 208,
+      "label": "Reserve idempotency mapping",
+      "variant": "default"
+    },
+    {
+      "from": "State",
+      "to": "API",
+      "y": 256,
+      "label": "OrderId",
+      "variant": "return"
+    },
+    {
+      "from": "API",
+      "to": "Workflow",
+      "y": 304,
+      "label": "StartOrderWorkflowReq",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 352,
+      "label": "Replay OrderId stream",
+      "variant": "default"
+    },
+    {
+      "from": "Events",
+      "to": "Workflow",
+      "y": 400,
+      "label": "Empty stream",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 448,
+      "label": "Append OrderStartedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Projection",
+      "y": 496,
+      "label": "Apply Created",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "State",
+      "y": 544,
+      "label": "Confirm started mapping",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "API",
+      "y": 592,
+      "label": "StartOrderWorkflowRes",
+      "variant": "return"
+    },
+    {
+      "from": "API",
+      "to": "Client",
+      "y": 640,
+      "label": "StartOrderRes(Created)",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "Inventory",
+      "y": 688,
+      "label": "ReserveInventoryReq",
+      "variant": "default"
+    },
+    {
+      "from": "Inventory",
+      "to": "Workflow",
+      "y": 736,
+      "label": "ReserveInventoryRes(accepted)",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 784,
+      "label": "Append InventoryReservedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Projection",
+      "y": 832,
+      "label": "Apply InventoryReserved",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Payment",
+      "y": 880,
+      "label": "AuthorizePaymentReq",
+      "variant": "default"
+    },
+    {
+      "from": "Payment",
+      "to": "Workflow",
+      "y": 928,
+      "label": "AuthorizePaymentRes(accepted)",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 976,
+      "label": "Append PaymentAuthorizedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Projection",
+      "y": 1024,
+      "label": "Apply PaymentAuthorized",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 1072,
+      "label": "Append OrderConfirmedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Projection",
+      "y": 1120,
+      "label": "Apply Confirmed",
+      "variant": "default"
+    },
+    {
+      "from": "Client",
+      "to": "API",
+      "y": 1168,
+      "label": "GetOrderStateReq",
+      "variant": "default"
+    },
+    {
+      "from": "API",
+      "to": "Projection",
+      "y": 1216,
+      "label": "Read OrderState",
+      "variant": "default"
+    },
+    {
+      "from": "Projection",
+      "to": "API",
+      "y": 1264,
+      "label": "Confirmed",
+      "variant": "return"
+    },
+    {
+      "from": "API",
+      "to": "Client",
+      "y": 1312,
+      "label": "GetOrderStateRes(Confirmed)",
+      "variant": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Background continuation does not extend the HTTP reply boundary",
+      "items": [
+        "mermaid Note over Workflow(11번 StartOrderWorkflowRes/StartOrderRes 직후, 12번 ReserveInventoryReq 앞에 위치): 'Background continuation does not extend the HTTP reply boundary.' 11번 StartOrderRes(Created)는 12~21번(재고 예약·결제 승인·확정)의 완료를 기다리지 않는다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "흐름을 읽는 법",
+      "items": [
+        "CommerceApi는 mapping 예약과 입력 검증을 수행하지만 event stream을 기록하지 않는다. OrderWorkflowSpot은 stream을 replay해 aggregate를 복원하고 OrderStartedEvent를 기록한 뒤 projection을 갱신한다.",
+        "Client는 GetOrderStateReq를 bounded polling으로 반복해 Confirmed 또는 Failed를 확인한다."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Reset/reconcile and the failure boundary",
+    "subtitle": "SyncQuestProgressReq compares GameplayStateStore facts against the fold and appends QuestReconciled",
+    "output": "sample-gamequest-reconcile-flow-en.html",
+    "column_fit": "spread",
+    "viewBox": [1000, 640],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Game Client" },
+    { "id": "G", "type": "frontend", "label": "GameApi" },
+    { "id": "P", "type": "backend", "label": "PlayerQuestSpot" }
+  ],
+  "messages": [
+    { "from": "C", "to": "G", "y": 160, "label": "SyncQuestProgressReq", "variant": "default" },
+    { "from": "G", "to": "P", "y": 208, "label": "SyncQuestProgressReq(player-1)", "variant": "default" },
+    { "from": "P", "to": "G", "y": 256, "label": "SyncQuestProgressRes (read facts, compare fold)", "variant": "return" },
+    { "from": "G", "to": "C", "y": 304, "label": "corrected progress", "variant": "return" },
+    { "from": "P", "to": "G", "y": 352, "label": "QuestProgressNotify", "variant": "return" },
+    { "from": "G", "to": "C", "y": 400, "label": "corrected notify", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Reconcile",
+      "items": [
+        "If GameplayStateStore facts increased but a GameplayMsg was lost, the Client or an operational trigger sends SyncQuestProgressReq.",
+        "The Spot reads the authoritative facts, compares them against the current fold, and appends the needed QuestReconciled event."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Failure boundary",
+      "items": [
+        "If the Ready owner process terminates, the current Spot operation ends as Unavailable — the Framework doesn't automatically resubmit the failed operation by selecting a new QuestMission node.",
+        "A new Instance intent, after an explicit Close completes authority release, can replay the event stream in a new generation. These two cases are not used in the same flow as crash failover."
+      ]
+    }
+  ]
+}

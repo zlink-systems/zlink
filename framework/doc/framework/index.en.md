@@ -246,57 +246,15 @@ and a distributed lock keeps order so multiple instances don't modify the same o
 once. Adding one real-time feature adds a set of components (orange) nearly as large as the
 main system.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    Client["client app"]
-    LB["L7 LB / gateway"]:::infra
-    Api["API servers x N<br/>(stateless)"]:::app
-    Dom["domain servers x N"]:::app
-    SD["service discovery"]:::infra
-    SLB["sticky LB"]:::extra
-    WS["WebSocket servers x N"]:::extra
-    RP["Redis pub/sub<br/>(real-time fan-out path)"]:::extra
-    RL["Redis distributed lock<br/>(order guarantee)"]:::extra
-
-    Client -- "HTTP" --> LB --> Api
-    Api -- "server-to-server calls" --> Dom
-    Api -.->|"location lookup"| SD
-    Dom -.->|"registration"| SD
-    Client -- "real-time connection" --> SLB --> WS
-    WS <--> RP
-    RP <--> Api
-    Api -.-> RL
-    Dom -.-> RL
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-    classDef extra fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#bf360c
-```
+<iframe class="zlink-diagram" src="/common/diagrams/index-existing-en.html" title="Existing approach — web service + real-time" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/index-existing-en.html" target="_blank">↗ View larger</a></p>
 
 **The ZLink approach.** Every orange piece disappears, leaving one location store that
 tells you where nodes, actors, and spots live. Server-to-server calls and real-time
 delivery connect directly between runtimes.
 
-```mermaid
-%%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
-flowchart LR
-    Client2["client app"]
-    LB2["L7 LB / gateway<br/>(HTTP unchanged)"]:::infra
-    Api2["API servers x N<br/>+ ZLink route client"]:::app
-    Dom2["domain servers x N<br/>+ ZLink SPOT / STREAM"]:::spot
-    Store["location store"]:::infra
-
-    Client2 -- "HTTP" --> LB2 --> Api2
-    Client2 -- "direct STREAM connect" --> Dom2
-    Api2 -- "channel request/send" --> Dom2
-    Api2 -.->|"address resolution"| Store
-    Dom2 -.->|"registration"| Store
-
-    classDef app fill:#e3f2fd,stroke:#1565c0,color:#000000
-    classDef infra fill:#eceff1,stroke:#546e7a,color:#000000
-    classDef spot fill:#e8f5e9,stroke:#2e7d32,stroke-width:4px,color:#1b5e20
-```
+<iframe class="zlink-diagram" src="/common/diagrams/index-zlink-en.html" title="ZLink approach — web service + real-time" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/index-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 Sticky LB, WebSocket server, pub/sub relay, distributed lock, service discovery -- five
 pieces reduced to **one location store.** This doesn't replace an existing stack like Kafka
@@ -376,3 +334,7 @@ usage; the spec covers the C API's functions, options, and error codes.
 A binding is a thin layer that uses that C API from a language (.NET, C++, Java, Node.js,
 Python, Go, Rust). Start here if you're using zlink from a language with no framework, or
 you need a socket feature the framework doesn't wrap.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

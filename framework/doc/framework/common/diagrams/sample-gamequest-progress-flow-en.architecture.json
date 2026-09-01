@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Normal progress and completion",
+    "subtitle": "Instance intent activates the missing PlayerQuestSpot on the first event · notify follows each accepted action",
+    "output": "sample-gamequest-progress-flow-en.html",
+    "column_fit": "spread",
+    "viewBox": [1000, 1000],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Game Client" },
+    { "id": "G", "type": "frontend", "label": "GameApi" },
+    { "id": "P", "type": "backend", "label": "PlayerQuestSpot" }
+  ],
+  "messages": [
+    { "from": "C", "to": "G", "y": 160, "label": "JoinSessionReq", "variant": "default" },
+    { "from": "G", "to": "C", "y": 208, "label": "JoinSessionRes", "variant": "return" },
+    { "from": "C", "to": "G", "y": 256, "label": "KillMonsterReq", "variant": "default" },
+    { "from": "G", "to": "P", "y": 304, "label": "GameplayMsg(PlayerId)", "variant": "default" },
+    { "from": "P", "to": "G", "y": 352, "label": "QuestProgressNotify (replay, dedupe, evaluate, fold)", "variant": "return" },
+    { "from": "G", "to": "C", "y": 400, "label": "QuestProgressNotify", "variant": "return" },
+    { "from": "C", "to": "G", "y": 448, "label": "KillMonsterReq", "variant": "default" },
+    { "from": "G", "to": "P", "y": 496, "label": "GameplayMsg", "variant": "default" },
+    { "from": "P", "to": "G", "y": 544, "label": "QuestProgressNotify", "variant": "return" },
+    { "from": "G", "to": "C", "y": 592, "label": "QuestProgressNotify", "variant": "return" },
+    { "from": "C", "to": "G", "y": 640, "label": "KillMonsterReq", "variant": "default" },
+    { "from": "G", "to": "P", "y": 688, "label": "GameplayMsg", "variant": "default" },
+    { "from": "P", "to": "G", "y": 736, "label": "QuestCompletedNotify (append QuestCompleted, update projection)", "variant": "return" },
+    { "from": "G", "to": "C", "y": 784, "label": "QuestCompletedNotify", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Owner turn",
+      "items": [
+        "When the first PlayerId event arrives, Instance intent prepares the missing PlayerQuestSpot; the owner Spot restores the aggregate via stream replay, then evaluates the event.",
+        "Every progress and completion notify is sent after PlayerQuestSpot updates the event stream and projection."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "One-way actions",
+      "items": [
+        "KillMonsterReq/Res's response returns the EventId GameApi built after accepting the action.",
+        "CollectItemMsg and EnterAreaMsg are one-way actions with no response; the self-check confirms the notify and evidence separately, since a one-way send's completion doesn't mean the target handler's domain append has completed."
+      ]
+    }
+  ]
+}

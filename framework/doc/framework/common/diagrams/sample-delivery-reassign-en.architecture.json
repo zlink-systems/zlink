@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Timeout reassignment — promotion to Attempt=2",
+    "subtitle": "The deadline expires, A's attempt=1 is marked expired and Reassigned is pushed → re-offered to B → Delivered",
+    "output": "sample-delivery-reassign-en.html",
+    "column_fit": "spread",
+    "viewBox": [1180, 1120],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Customer Client" },
+    { "id": "D", "type": "frontend", "label": "Dispatch" },
+    { "id": "T", "type": "frontend", "label": "Tracking" },
+    { "id": "A", "type": "backend", "label": "CourierActor A" },
+    { "id": "B", "type": "backend", "label": "CourierActor B" },
+    { "id": "CB", "type": "frontend", "label": "Courier Client B" },
+    { "id": "CS", "type": "frontend", "label": "CourierSession" },
+    { "id": "CG", "type": "frontend", "label": "CustomerGateway" }
+  ],
+  "messages": [
+    { "from": "C", "to": "D", "y": 160, "label": "CreateDeliveryReq(delivery-reassign)", "variant": "default" },
+    { "from": "D", "to": "A", "y": 208, "label": "OfferDeliveryMsg(attempt=1)", "variant": "default" },
+    { "from": "D", "to": "T", "y": 256, "label": "deadline expires → DeliveryStatusChangedReq(Reassigned)", "variant": "default" },
+    { "from": "T", "to": "D", "y": 304, "label": "DeliveryStatusChangedRes", "variant": "return" },
+    { "from": "T", "to": "CG", "y": 352, "label": "DeliveryStatusUpdatedMsg", "variant": "default" },
+    { "from": "CG", "to": "C", "y": 400, "label": "DeliveryStatusNotify(Reassigned)", "variant": "return" },
+    { "from": "D", "to": "B", "y": 448, "label": "OfferDeliveryMsg(attempt=2)", "variant": "default" },
+    { "from": "B", "to": "CS", "y": 496, "label": "OfferDeliveryNotify", "variant": "default" },
+    { "from": "CS", "to": "CB", "y": 544, "label": "OfferDeliveryNotify", "variant": "return" },
+    { "from": "CB", "to": "CS", "y": 592, "label": "CourierDecisionMsg(accepted=true)", "variant": "default" },
+    { "from": "CS", "to": "B", "y": 640, "label": "CourierDecisionMsg", "variant": "default" },
+    { "from": "B", "to": "D", "y": 688, "label": "OfferDeliveryResultMsg(attempt=2)", "variant": "default" },
+    { "from": "D", "to": "T", "y": 736, "label": "DeliveryStatusChangedReq(Accepted)", "variant": "default" },
+    { "from": "T", "to": "D", "y": 784, "label": "DeliveryStatusChangedRes", "variant": "return" },
+    { "from": "D", "to": "T", "y": 832, "label": "DeliveryStatusChangedReq(Delivered)", "variant": "default" },
+    { "from": "T", "to": "D", "y": 880, "label": "DeliveryStatusChangedRes", "variant": "return" },
+    { "from": "T", "to": "CG", "y": 928, "label": "DeliveryStatusUpdatedMsg(Delivered)", "variant": "default" },
+    { "from": "CG", "to": "C", "y": 976, "label": "DeliveryStatusNotify(Delivered)", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "orange",
+      "title": "Deadline expiry and stale decision (source Note and following paragraph)",
+      "items": [
+        "Source `Note over D`: deadline expires and attempt 1 is marked expired — the Dispatch sweeper marks the current record Expired and selects B as the next candidate. (archify sequence doesn't render notes, so this is preserved in the third message label and this card.)",
+        "A decision from A that arrives after attempt 2 starts is recorded as a stale decision and has no status effect. If no candidate remains, Dispatch records Failed and sends the terminal status."
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Reassignment path",
+      "items": [
+        "In this flow the status push goes directly from Tracking to CustomerGateway (the normal flow in §7.1 goes through CustomerActor — the two diagrams denote the path differently, kept verbatim from the source).",
+        "Reassignment order check: confirm the order Assigned, Reassigned, Accepted, Delivered and that the courier is B after Accepted."
+      ]
+    }
+  ]
+}

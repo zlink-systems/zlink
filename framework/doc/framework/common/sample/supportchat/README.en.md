@@ -70,24 +70,8 @@ The base topology only expresses the placement of Client and server components a
 structural connections. The Location Store is placed in the resource table, and the time order of
 authentication/assignment/typing belongs to the §7 sequence diagrams.
 
-```mermaid
-flowchart LR
-    subgraph Clients[Clients]
-        C[Customer Client]
-        A[Agent Client]
-    end
-    subgraph Servers[Servers]
-        S[Session]
-        API[Api]
-        SUP[Support]
-    end
-    C ---|STREAM| S
-    A ---|STREAM| S
-    S ---|supportchat.api ClientServer| API
-    SUP ---|supportchat.api ClientServer| API
-    S ---|supportchat RouteMesh| SUP
-    API ---|supportchat RouteMesh| SUP
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-topology-en.html" title="System Configuration And Topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-supportchat-topology-en.html" target="_blank">↗ View larger</a></p>
 
 - Only Session provides the client-facing STREAM endpoint.
 - Api handles token validation and the Spot-creation request.
@@ -351,40 +335,8 @@ either empty or has capacity. When the Customer opens a conversation, Support cr
 Conversation Spot and joins the customer actor. If no Agent is assignable, it waits at
 WaitingForAgent.
 
-```mermaid
-sequenceDiagram
-    participant C as Customer Client
-    participant A as Agent Client
-    participant S as Session
-    participant API as Api
-    participant P as ConversationSpot
-
-    A->>S: AuthenticateReq
-    S->>API: AuthenticateUserReq
-    API-->>S: AuthenticateUserRes
-    S-->>A: AuthenticateRes
-    A->>S: SetAgentAvailableReq(true)
-    S-->>A: SetAgentAvailableRes(true)
-    C->>S: AuthenticateReq
-    S->>API: AuthenticateUserReq
-    API-->>S: AuthenticateUserRes
-    S-->>C: AuthenticateRes
-    C->>S: OpenConversationReq(subject)
-    S->>API: OpenConversationApiReq
-    API->>P: ConversationCreateReq
-    P-->>API: ConversationCreateRes
-    API-->>S: OpenConversationApiRes
-    S-->>C: OpenConversationRes
-    P-->>S: ConversationAssignedNotify
-    S-->>A: ConversationAssignedNotify
-    A->>S: JoinConversationReq(metadata ConversationId)
-    S->>P: JoinConversationReq
-    P-->>S: JoinConversationRes(scheduled=true)
-    S-->>A: JoinConversationRes(scheduled=true)
-    P-->>S: ParticipantJoinedNotify(Active)
-    S-->>C: ParticipantJoinedNotify(Active)
-    S-->>A: ParticipantJoinedNotify(Active)
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-auth-join-en.html" title="Authentication, Conversation Creation, And Agent Join" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-supportchat-auth-join-en.html" target="_blank">↗ View larger</a></p>
 
 `scheduled=true` means the join was scheduled, not that membership commit is complete. Agent join
 should only be judged complete once both clients confirm the Active `ParticipantJoinedNotify`.
@@ -397,30 +349,8 @@ becomes MessageSeq 2 and follows the same flow in the opposite direction. For `S
 effect is confirmed once `TypingChangedNotify` arrives at the counterpart, and it doesn't wait for a
 response to the requester.
 
-```mermaid
-sequenceDiagram
-    participant C as Customer Client
-    participant S as Session
-    participant P as ConversationSpot
-    participant A as Agent Client
-
-    A->>S: SendChatMessageReq(metadata ConversationId)
-    S->>P: SendChatMessageReq
-    P-->>S: SendChatMessageRes(MessageSeq=1)
-    S-->>A: SendChatMessageRes(MessageSeq=1)
-    P-->>S: ChatMessageNotify to customer binding
-    S-->>C: ChatMessageNotify(MessageSeq=1)
-    C->>S: SendChatMessageReq
-    S->>P: SendChatMessageReq
-    P-->>S: SendChatMessageRes(MessageSeq=2)
-    S-->>C: SendChatMessageRes(MessageSeq=2)
-    P-->>S: ChatMessageNotify to agent binding
-    S-->>A: ChatMessageNotify(MessageSeq=2)
-    C->>S: SetTypingMsg(true)
-    S->>P: SetTypingMsg
-    P-->>S: TypingChangedNotify to agent binding
-    S-->>A: TypingChangedNotify
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-chat-typing-en.html" title="Chat And Typing" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-supportchat-chat-typing-en.html" target="_blank">↗ View larger</a></p>
 
 A chat response means acceptance, validation, and MessageSeq confirmation, but it doesn't mean the
 counterpart read it. A `SendChatMessageReq` in the Closed state is an Application callback
@@ -442,28 +372,8 @@ This message is not a heartbeat or transport keepalive; a control packet, arbitr
 line must not replace it. The actual idle and grace behavior is checked with a separate bounded
 wait.
 
-```mermaid
-sequenceDiagram
-    participant C as Customer Client
-    participant S as Session
-    participant P as ConversationSpot
-    participant A as Agent Client
-
-    P-->>S: ConversationIdleNotify
-    S-->>C: ConversationIdleNotify
-    S-->>A: ConversationIdleNotify
-    P->>P: grace deadline expires
-    P-->>S: ConversationClosedNotify
-    S-->>C: ConversationClosedNotify
-    S-->>A: ConversationClosedNotify
-    C->>S: STREAM reconnect
-    C->>S: AuthenticateReq(same token)
-    S-->>C: AuthenticateRes
-    C->>S: JoinConversationReq(metadata ConversationId)
-    S->>P: JoinConversationReq
-    P-->>S: JoinConversationRes(scheduled=false)
-    S-->>C: JoinConversationRes(scheduled=false)
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-idle-close-en.html" title="Idle, Close, And Reconnect" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-supportchat-idle-close-en.html" target="_blank">↗ View larger</a></p>
 
 Reconnecting doesn't recreate the actor or the Conversation state. The Agent re-binds the roster
 actor, sends `SetAgentAvailableReq(true)`, and then sends `JoinConversationReq` for each
@@ -479,49 +389,12 @@ binding, Api owns only the authentication/creation edge, and Support owns only t
 state. Merging this boundary makes the reconnect and idle flows incomparable across per-language
 samples.
 
-```text
-SupportChat
-+-- Client
-|   +-- Program
-|   +-- CustomerScenario
-|   +-- AgentScenario
-+-- Shared
-|   +-- Configuration
-|   +-- JSON Contracts
-+-- Server
-    +-- Session
-    |   +-- Program
-    |   +-- Application
-    |   |   +-- SessionBinding
-    |   |   +-- MetadataRouting
-    |   +-- Infrastructure
-    |       +-- StreamSession
-    |       +-- PacketHandlers
-    |       +-- ActorRelay
-    +-- Api
-    |   +-- Program
-    |   +-- Application
-    |   |   +-- Authentication
-    |   |   +-- ConversationCreation
-    |   +-- Infrastructure
-    |       +-- ApiHandlers
-    |       +-- SupportClient
-    +-- Support
-        +-- Program
-        +-- Domain
-        |   +-- Conversation
-        |   +-- ConversationPolicy
-        |   +-- ConversationEvents
-        +-- Application
-        |   +-- AgentAssignment
-        |   +-- ConversationCommands
-        |   +-- NotificationMapping
-        +-- Infrastructure
-            +-- SupportEntrySpot
-            +-- ConversationSpot
-            +-- ActorAdapters
-            +-- TimerAdapter
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-supportchat-structure-en.html" title="Implementation Structure — Client · Shared · Server" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-supportchat-structure-en.html" target="_blank">↗ View larger</a></p>
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>
 
 | Logical Component | Responsibility Kept In Every Language | Dependency Direction And Forbidden Boundary |
 |---|---|---|

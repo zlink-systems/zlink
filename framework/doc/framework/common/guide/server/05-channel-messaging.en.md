@@ -987,10 +987,10 @@ The framework doesn't automatically open every discovered handler on every chann
     ```typescript
     const mesh = builder.addRouteMesh('services')
       .listen('tcp://0.0.0.0:7101')
-      .setRoutingId(RoutingId.from('api-1'));
+      .routingId('api-1');
     mesh.channel('api').server()                    // server() is the role that receives handlers.
-      .addRequestHandler(GetProfileHandler)
-      .addSendHandler(RefreshCacheHandler);
+      .addRequestHandler('GetProfileRequest', GetProfileHandler)
+      .addSendHandler('RefreshCacheCommand', RefreshCacheHandler);
     ```
 
 
@@ -1053,10 +1053,10 @@ role.
     ```typescript
     const mesh = builder.addRouteMesh('services')
       .listen('tcp://0.0.0.0:7101')
-      .setRoutingId(RoutingId.from('api-1'));
+      .routingId('api-1');
 
     mesh.channel('api').server()                 // A channel this node handles.
-      .addRequestHandler(GetProfileHandler);
+      .addRequestHandler('GetProfileRequest', GetProfileHandler);
     mesh.channel('billing').client();            // A call-only channel is client -- no handler registered.
     ```
 
@@ -1651,7 +1651,7 @@ A manual connection is set on the MeshNode's peer list.
     ```typescript
     const mesh = builder.addRouteMesh('services')
       .listen('tcp://0.0.0.0:7102')
-      .setRoutingId(RoutingId.from('profile-client-1'));
+      .routingId('profile-client-1');
     mesh.channel('profile').client();
     mesh.peerConnections().connect('tcp://10.0.10.15:7101');
     mesh.peerConnections().connect('tcp://10.0.10.16:7101');
@@ -1738,16 +1738,16 @@ serving value.
 
     ```java
     // An operational admin endpoint. "orders" is the registered ChannelName.
-    meshOptions.channel("orders").setWeight(0);   // Excludes this ChannelName from new select-one targets
-    meshOptions.channel("orders").setWeight(100); // Back to normal
+    meshOptions.channel("orders").weight(0);   // Excludes this ChannelName from new select-one targets
+    meshOptions.channel("orders").weight(100); // Back to normal
     ```
 
 === "Kotlin"
 
     ```kotlin
     // An operational admin endpoint. "orders" is the registered ChannelName.
-    meshOptions.channel("orders").setWeight(0)   // Excludes this ChannelName from new select-one targets
-    meshOptions.channel("orders").setWeight(100) // Back to normal
+    meshOptions.channel("orders").weight(0)   // Excludes this ChannelName from new select-one targets
+    meshOptions.channel("orders").weight(100) // Back to normal
     ```
 
 === "Node/TypeScript"
@@ -1813,7 +1813,7 @@ The same `Weight` is also set as an initial value at registration time.
     ```typescript
     const mesh = builder.addRouteMesh('services')
       .listen('tcp://0.0.0.0:7101')
-      .setRoutingId(RoutingId.from('orders-1'));
+      .routingId('orders-1');
     mesh.channel('orders').server().setWeight(30); // This channel role's starting weight
     ```
 
@@ -1880,20 +1880,20 @@ as they don't overlap.
     {
         private readonly Avro.Schema _schema = Avro.Schema.Parse(SchemaJson);
 
-        // A serializer's only responsibility is converting business object <-> Message (byte payload).
+        // A serializer's only responsibility is converting business object <-> ZLinkEncodedPayload (byte payload).
         // Packet-name resolution and codec selection belong to the framework.
-        public Message Serialize(object value, Type type)
+        public ZLinkEncodedPayload Serialize(object value, Type type)
         {
             using var buffer = new MemoryStream();
             var writer = new Avro.Generic.GenericWriter<object>(_schema);
             writer.Write(value, new Avro.IO.BinaryEncoder(buffer));
-            return Message.From(buffer.ToArray());
+            return ZLinkEncodedPayload.From(buffer.ToArray());
         }
 
-        public object? Deserialize(Message message, Type type)
+        public object? Deserialize(ZLinkEncodedPayload payload, Type type)
         {
             var reader = new Avro.Generic.GenericReader<object>(_schema, _schema);
-            return reader.Read(null!, new Avro.IO.BinaryDecoder(new MemoryStream(message.ToArray())));
+            return reader.Read(null!, new Avro.IO.BinaryDecoder(new MemoryStream(payload.ToArray())));
         }
     }
 
@@ -2065,7 +2065,7 @@ The calling node registers provider endpoints via location-store auto-connect or
       .listen('tcp://0.0.0.0:5600')
       .setRoutingIdPrefix('resize');
     mesh.channel('image.resize').server()
-      .addRequestHandler(ResizeHandler);
+      .addRequestHandler('ResizeRequest', ResizeHandler);
     ```
 
 The calling node registers the same ChannelName as Client and connects to the processing
@@ -2232,7 +2232,7 @@ pick where an Actor/Spot is created or to pin a business message to a specific s
 
     // A handler that returns the node's own operational status.
     mesh.addRouteRequestHandler(
-        NodeStatusHandler.class, GetNodeStatus.class, NodeStatus.class, "ops.node.status");
+        NodeStatusHandler.class, GetNodeStatus.class, NodeStatus.class);
     ```
 
 === "Kotlin"
@@ -2244,8 +2244,7 @@ pick where an Actor/Spot is created or to pin a business message to a specific s
 
     // A handler that returns the node's own operational status.
     mesh.addRouteRequestHandler(
-        NodeStatusHandler::class.java, GetNodeStatus::class.java, NodeStatus::class.java,
-        "ops.node.status")
+        NodeStatusHandler::class.java, GetNodeStatus::class.java, NodeStatus::class.java)
     ```
 
 === "Node/TypeScript"
@@ -2253,10 +2252,10 @@ pick where an Actor/Spot is created or to pin a business message to a specific s
     ```typescript
     const mesh = builder.addRouteMesh('play')
       .listen(playRouterEndpoint)
-      .setRoutingId(RoutingId.from(playRouterId));
+      .routingId(playRouterId);
 
     // A handler that returns the node's own operational status.
-    mesh.addRouteRequestHandler(NodeStatusHandler, 'ops.node.status');
+    mesh.addRequestHandler('ops.node.status', NodeStatusHandler);
     ```
 
 
@@ -2349,7 +2348,7 @@ The caller passes the Node RID and MeshName confirmed from the management system
 === "Node/TypeScript"
 
     ```typescript
-    const target = RoutingId.from('play-node-1');
+    const target = 'play-node-1';
 
     // Uses Node direct because it's asking about a specific node's operational status.
     const status = await routeClient
@@ -2547,7 +2546,7 @@ The tie-in with SPOT continues in [06-spot](06-spot.en.md).
 
             const mesh = builder.addRouteMesh('services')
               .listen('tcp://0.0.0.0:7101')
-              .setRoutingId(RoutingId.from('api-1'));
+              .routingId('api-1');
             mesh.channel('api').server()
               .addHandlerGroup('api');                   // Exposure: ties the handler group to the channel.
             mesh.channel('account').client();            // A call-only channel.
@@ -2557,7 +2556,7 @@ The tie-in with SPOT continues in [06-spot](06-spot.en.md).
             events.connect('tcp://127.0.0.1:7201');       // Also subscribes to its own publish, as an example.
             events.addHandlerGroup('api.events');         // Attaches the subscription handler as a group.
 
-            return builder;
+            return builder.build();
           }
         })
       ],

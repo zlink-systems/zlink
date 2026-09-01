@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "채팅과 typing",
+    "subtitle": "Agent greeting(MessageSeq 1) · Customer reply(MessageSeq 2) · one-way SetTypingMsg",
+    "output": "sample-supportchat-chat-typing.html",
+    "column_fit": "spread",
+    "viewBox": [900, 980],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Customer Client" },
+    { "id": "S", "type": "external", "label": "Session" },
+    { "id": "P", "type": "backend", "label": "ConversationSpot" },
+    { "id": "A", "type": "frontend", "label": "Agent Client" }
+  ],
+  "messages": [
+    { "from": "A", "to": "S", "y": 160, "label": "SendChatMessageReq(metadata ConversationId)", "variant": "default" },
+    { "from": "S", "to": "P", "y": 208, "label": "SendChatMessageReq", "variant": "default" },
+    { "from": "P", "to": "S", "y": 256, "label": "SendChatMessageRes(MessageSeq=1)", "variant": "return" },
+    { "from": "S", "to": "A", "y": 304, "label": "SendChatMessageRes(MessageSeq=1)", "variant": "return" },
+    { "from": "P", "to": "S", "y": 352, "label": "ChatMessageNotify to customer binding", "variant": "return" },
+    { "from": "S", "to": "C", "y": 400, "label": "ChatMessageNotify(MessageSeq=1)", "variant": "return" },
+    { "from": "C", "to": "S", "y": 448, "label": "SendChatMessageReq", "variant": "default" },
+    { "from": "S", "to": "P", "y": 496, "label": "SendChatMessageReq", "variant": "default" },
+    { "from": "P", "to": "S", "y": 544, "label": "SendChatMessageRes(MessageSeq=2)", "variant": "return" },
+    { "from": "S", "to": "C", "y": 592, "label": "SendChatMessageRes(MessageSeq=2)", "variant": "return" },
+    { "from": "P", "to": "S", "y": 640, "label": "ChatMessageNotify to agent binding", "variant": "return" },
+    { "from": "S", "to": "A", "y": 688, "label": "ChatMessageNotify(MessageSeq=2)", "variant": "return" },
+    { "from": "C", "to": "S", "y": 736, "label": "SetTypingMsg(true)", "variant": "default" },
+    { "from": "S", "to": "P", "y": 784, "label": "SetTypingMsg", "variant": "default" },
+    { "from": "P", "to": "S", "y": 832, "label": "TypingChangedNotify to agent binding", "variant": "return" },
+    { "from": "S", "to": "A", "y": 880, "label": "TypingChangedNotify", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Chat response의 의미",
+      "items": [
+        "Chat message는 server 부여 MessageSeq와 접수 오류를 확인해야 하므로 request/reply다. Chat response는 접수·검증·MessageSeq 확정을 뜻하지만 상대방이 읽었음을 뜻하지 않는다.",
+        "Agent greeting이 MessageSeq 1, Customer reply가 MessageSeq 2가 되며 반대 방향으로 같은 흐름을 따른다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "typing과 Closed 거부",
+      "items": [
+        "SetTypingMsg는 response가 없는 one-way send다. source-local admission 뒤 target handler와 상대방 수신을 보장하지 않으며, 상대방에 TypingChangedNotify가 도착하면 효과를 확인한다.",
+        "Closed 상태의 SendChatMessageReq는 Application callback 거부이므로 typed `Rejected` 오류 response를 반환하고, Closed 상태의 SetTypingMsg는 조용히 무시한다. 이 domain 거부는 transport·route·protocol 실패의 Framework `ErrorKind`와 구분된다."
+      ]
+    }
+  ]
+}

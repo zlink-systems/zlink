@@ -203,18 +203,21 @@ options.http ()
 ### Registry / Discovery — 서버 주소 자동 연결
 
 여러 Play 서버 인스턴스가 뜰 때 어느 서버로 연결할지, endpoint를 코드에
-하드코딩하지 않는다. Registry 서버가 주소를 관리하고, 각 서버는
-`use_discovery()`로 동적으로 찾는다.
+하드코딩하지 않는다. Redis 기반 공용 Location Store가 주소를 관리하고, 각 서버는
+`add_location_store<redis::redis_location_store_t> ()`로 동적으로 찾는다.
 
 ```cpp
-options.use_discovery ()    // registry에서 노드 주소를 자동으로 받아온다
-  .add_registry_endpoint (topology.registry_endpoint);
+options.add_location_store<redis::redis_location_store_t> ()
+  .set_connection_string (topology.redis_endpoint)
+  .set_key_prefix (topology.redis_key_prefix + "location:");
 
-options.add_spot_mesh ("bingo.room.discovery")
-  .add_node ("bingo.room.node")
-  .set_routing_id (topology.rid).enable_router (topology.router_endpoint)
+auto room_mesh = options.add_route_mesh (sample_names_t::room_spot_mesh);
+room_mesh.set_routing_id (zlink::routing_id_t::from ("bingo-play-" + topology.play_node))
+  .listen (topology.selected_play_spot_router_endpoint ());
+room_mesh.objects ()
+  .server ()
   .add_entry_spot<bingo_entry_spot_t> ()
-  .add_spot<bingo_room_spot_t> ("bingo.room");
+  .add_spot_factory<bingo_room_spot_t> (sample_names_t::room_spot);
 ```
 
 [10장 →](10-location.ko.md)

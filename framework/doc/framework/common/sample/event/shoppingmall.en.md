@@ -72,34 +72,8 @@ in, like a payment PSP or a separate inventory service.
 In a typical stateless web backend, the following components separately handle per-order ordering,
 coordination state, external-effect retry, and delivering lookup results.
 
-```mermaid
-flowchart LR
-    C[Web Client] --> LB[Load Balancer] --> API[Order API]
-    subgraph Backend[Stateless Web Backend]
-        SAGA[Saga Orchestrator]
-        ODB[(Order State DB)]
-        IDEM[(Idempotency Store)]
-        LOG[(Event Log and Outbox)]
-        RM[(Read Model)]
-        SCHED[Scheduler]
-    end
-    INV[Inventory Service]
-    PAY[Payment PSP]
-
-    API --> IDEM
-    API --> ODB
-    API --> LOG
-    API -->|Accepted OrderId| C
-    LOG --> SAGA
-    SAGA --> INV
-    SAGA --> PAY
-    SAGA --> ODB
-    SAGA --> LOG
-    SAGA --> RM
-    SCHED -.resume.-> SAGA
-    C -->|poll| API
-    API --> RM
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-existing-web-en.html" title="Existing approach — stateless web backend" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-shoppingmall-existing-web-en.html" target="_blank">↗ View larger</a></p>
 
 This composition puts more responsibility on external infrastructure than simple CRUD. The state DB
 and lock or version prevent concurrent writers, the saga and event log decide the next step, and the
@@ -143,20 +117,8 @@ components. `OrderEventStore`, `OrderReadModelStore`, `CommerceStateStore`, Inve
 are resources, so they're not placed as server components in the diagram below. The time order of
 requests, responses, and state transitions is explained in the §7 sequence diagrams.
 
-```mermaid
-flowchart LR
-    subgraph Clients[Clients]
-        C[Web Clients]
-    end
-
-    subgraph Servers[Servers]
-        API[CommerceApi x2]
-        WF[OrderWorkflow x2]
-    end
-
-    C ---|HTTP| API
-    API ---|shoppingmall.workflow RouteMesh| WF
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-topology-en.html" title="Basic topology — client and server placement" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-shoppingmall-topology-en.html" target="_blank">↗ View larger</a></p>
 
 `CommerceApi` and `OrderWorkflow` share the `shoppingmall.workflow` RouteMesh. Both roles can be
 registered as an object Client, and the Workflow process, which provides object routing, registers
@@ -473,46 +435,8 @@ conditions, and the scope where automatic failover isn't provided.
 
 ### 7.1 Order Start And Success Processing
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant API as CommerceApi
-    participant State as Commerce State
-    participant Workflow as OrderWorkflow / Order Spot
-    participant Events as Order Event Store
-    participant Projection as Order Read Model
-    participant Inventory
-    participant Payment
-
-    Client->>API: StartOrderReq
-    API->>State: Reserve idempotency mapping
-    State-->>API: OrderId
-    API->>Workflow: StartOrderWorkflowReq
-    Workflow->>Events: Replay OrderId stream
-    Events-->>Workflow: Empty stream
-    Workflow->>Events: Append OrderStartedEvent
-    Workflow->>Projection: Apply Created
-    Workflow->>State: Confirm started mapping
-    Workflow-->>API: StartOrderWorkflowRes
-    API-->>Client: StartOrderRes(Created)
-
-    Note over Workflow: Background continuation does not extend the HTTP reply boundary
-    Workflow->>Inventory: ReserveInventoryReq
-    Inventory-->>Workflow: ReserveInventoryRes(accepted)
-    Workflow->>Events: Append InventoryReservedEvent
-    Workflow->>Projection: Apply InventoryReserved
-    Workflow->>Payment: AuthorizePaymentReq
-    Payment-->>Workflow: AuthorizePaymentRes(accepted)
-    Workflow->>Events: Append PaymentAuthorizedEvent
-    Workflow->>Projection: Apply PaymentAuthorized
-    Workflow->>Events: Append OrderConfirmedEvent
-    Workflow->>Projection: Apply Confirmed
-
-    Client->>API: GetOrderStateReq
-    API->>Projection: Read OrderState
-    Projection-->>API: Confirmed
-    API-->>Client: GetOrderStateRes(Confirmed)
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-start-success-en.html" title="Order start and success processing" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-shoppingmall-start-success-en.html" target="_blank">↗ View larger</a></p>
 
 A new order's `StartOrderRes` returns once the `Created` boundary is confirmed. Reservation,
 authorization, and confirmation proceed in a background continuation, and there's no contract that
@@ -526,40 +450,8 @@ external module's result.
 
 ### 7.2 Inventory Failure And Payment Failure Compensation
 
-```mermaid
-sequenceDiagram
-    participant Workflow as OrderWorkflow / Order Spot
-    participant Inventory
-    participant Payment
-    participant Events as Order Event Store
-    participant Projection as Order Read Model
-
-    Workflow->>Inventory: ReserveInventoryReq
-    Inventory-->>Workflow: ReserveInventoryRes
-    alt Inventory rejected
-        Workflow->>Events: Append InventoryReservationFailedEvent
-        Workflow->>Events: Append OrderFailedEvent
-        Workflow->>Projection: Apply Failed
-    else Inventory accepted
-        Workflow->>Events: Append InventoryReservedEvent
-        Workflow->>Projection: Apply InventoryReserved
-        Workflow->>Payment: AuthorizePaymentReq
-        Payment-->>Workflow: AuthorizePaymentRes
-        alt Payment rejected
-            Workflow->>Events: Append PaymentFailedEvent
-            Workflow->>Inventory: ReleaseInventoryReq
-            Inventory-->>Workflow: ReleaseInventoryRes
-            Workflow->>Events: Append InventoryReleasedEvent
-            Workflow->>Events: Append OrderFailedEvent
-            Workflow->>Projection: Apply Failed
-        else Payment accepted
-            Workflow->>Events: Append PaymentAuthorizedEvent
-            Workflow->>Projection: Apply PaymentAuthorized
-            Workflow->>Events: Append OrderConfirmedEvent
-            Workflow->>Projection: Apply Confirmed
-        end
-    end
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-failure-compensation-en.html" title="Inventory failure and payment failure compensation" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-shoppingmall-failure-compensation-en.html" target="_blank">↗ View larger</a></p>
 
 If the inventory reservation is rejected, the Payment module isn't called. If Payment is rejected, a
 release is requested with the already-recorded `ReservationId`, and the release result and the
@@ -569,39 +461,8 @@ between a success event and a failure event.
 
 ### 7.3 Duplicate Start And Resume After Interruption
 
-```mermaid
-sequenceDiagram
-    participant ClientA as Client A
-    participant ClientB as Client B
-    participant APIA as CommerceApi A
-    participant APIB as CommerceApi B
-    participant State as Commerce State
-    participant Workflow as OrderWorkflow / Order Spot
-    participant Events as Order Event Store
-    participant Payment
-
-    par Concurrent start with the same key
-        ClientA->>APIA: StartOrderReq(same IdempotencyKey)
-        APIA->>State: Reserve mapping
-    and
-        ClientB->>APIB: StartOrderReq(same IdempotencyKey)
-        APIB->>State: Reserve mapping
-    end
-    State-->>APIA: One OrderId
-    State-->>APIB: Same OrderId
-    APIA->>Workflow: StartOrderWorkflowReq
-    APIB->>Workflow: StartOrderWorkflowReq
-    Workflow->>Events: Deduplicate SourceCommandId
-    Workflow-->>APIA: StartOrderWorkflowRes
-    Workflow-->>APIB: StartOrderWorkflowRes
-
-    Note over Workflow,Events: Recovery replays the stream before choosing the next step
-    Workflow->>Events: Replay OrderId stream
-    Events-->>Workflow: InventoryReserved state
-    Workflow->>Payment: AuthorizePaymentReq(existing PaymentId)
-    Payment-->>Workflow: Authorization result
-    Workflow->>Events: Append Payment event with expected version
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-duplicate-resume-en.html" title="Duplicate start and resume after interruption" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-shoppingmall-duplicate-resume-en.html" target="_blank">↗ View larger</a></p>
 
 On a concurrent start, whichever request first succeeds at reserving the mapping in
 `CommerceStateStore` decides the `OrderId`. The other request discards its candidate ID and uses the
@@ -630,27 +491,8 @@ failover or owner-loss recovery.
 
 ### 7.4 Lookup And Projection Regeneration
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant API as CommerceApi
-    participant Projection as Order Read Model
-    participant Workflow as OrderWorkflow / Order Spot
-    participant Events as Order Event Store
-
-    Client->>API: GetOrderStateReq
-    API->>Projection: Read OrderState
-    Projection-->>API: Current state
-    API-->>Client: GetOrderStateRes
-
-    Client->>API: RebuildOrderProjectionReq
-    API->>Workflow: RebuildOrderProjectionReq
-    Workflow->>Events: Replay all OrderId events
-    Events-->>Workflow: Ordered event stream
-    Workflow->>Projection: Replace projection from fold
-    Workflow-->>API: RebuildOrderProjectionRes
-    API-->>Client: Rebuild result
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-lookup-rebuild-en.html" title="Lookup and projection regeneration" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-shoppingmall-lookup-rebuild-en.html" target="_blank">↗ View larger</a></p>
 
 `GetOrderStateReq` only reads the read model — it doesn't progress the order. Even if the projection
 is deleted or inconsistent, it must be rebuildable based on the `OrderEventStore` alone. If a
@@ -660,19 +502,8 @@ same state.
 
 ### 7.5 Lifecycle And The Failure Boundary
 
-```mermaid
-sequenceDiagram
-    participant Caller
-    participant Workflow as OrderWorkflow / Order Spot
-    participant Events as Order Event Store
-
-    Caller->>Workflow: ContinueOrderWorkflowReq
-    Workflow->>Events: Replay existing stream
-    Events-->>Workflow: Folded OrderState
-    Workflow->>Workflow: Run only the next valid step
-    Workflow-->>Caller: ContinueOrderWorkflowRes
-    Note over Caller,Workflow: Ready owner crash is not automatic failover
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-lifecycle-en.html" title="Lifecycle and the failure boundary" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-shoppingmall-lifecycle-en.html" target="_blank">↗ View larger</a></p>
 
 | Current Authority State | Meaning Of The Instance Message | Sample Result |
 |---|---|---|
@@ -696,44 +527,8 @@ Every supported language places `Client`, `Shared`, `Server` in the same order, 
 logical components must be findable in the same location. The project, package, namespace, and file
 extension can vary per language, but roles aren't merged or the public surface arbitrarily expanded.
 
-```text
-ShoppingMall
-+-- Client
-|   +-- Program
-|   +-- Scenario
-+-- Shared
-|   +-- Configuration
-|   +-- JSON Contracts
-+-- Server
-    +-- CommerceApi
-    |   +-- Program
-    |   +-- Application
-    |   |   +-- Start Order
-    |   |   +-- Get Order State
-    |   +-- Infrastructure
-    |       +-- Http
-    |       +-- Workflow Client
-    |       +-- Store Adapter
-    +-- OrderWorkflow
-        +-- Program
-        +-- Domain
-        |   +-- Order Aggregate
-        |   +-- Order Policy
-        |   +-- Order Events
-        |   +-- Inventory Policy
-        |   +-- Payment Policy
-        +-- Application
-        |   +-- Workflow Loop
-        |   +-- Projection Rebuild
-        |   +-- Compensation
-        +-- Infrastructure
-            +-- Order Workflow Spot
-            +-- Event Store Adapter
-            +-- Read Model Adapter
-            +-- Commerce State Adapter
-            +-- Inventory Adapter
-            +-- Payment Adapter
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-shoppingmall-implementation-structure-en.html" title="Implementation structure — ShoppingMall" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-shoppingmall-implementation-structure-en.html" target="_blank">↗ View larger</a></p>
 
 | Logical Component | Responsibility Kept In Every Language |
 |---|---|
@@ -928,3 +723,7 @@ allowed. All five languages ship both a `.sh` and a `.ps1`.
 - [ ] The sample code uses only the public Framework API and the default typed JSON codec.
 - [ ] The smoke run confirms readiness with a bounded wait, prints the success marker
       conditionally, and passes every row of the §10.1 table down to the string and the count.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

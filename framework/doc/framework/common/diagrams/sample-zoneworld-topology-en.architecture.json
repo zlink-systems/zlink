@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "System configuration and topology",
+    "subtitle": "Game/Ops browsers · Gateway/Ops · two ZoneNodes on zoneworld.mesh RouteMesh + broadcast fanout",
+    "output": "sample-zoneworld-topology-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 4, "gapX": 96, "gapY": 92, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "G", "type": "frontend", "label": "Game Browser", "row": 0, "col": 0 },
+    { "id": "GW", "type": "external", "label": "Gateway", "row": 0, "col": 2 },
+    { "id": "Z1", "type": "backend", "label": "ZoneNode A", "row": 1, "col": 1 },
+    { "id": "Z2", "type": "backend", "label": "ZoneNode B", "row": 1, "col": 3 },
+    { "id": "O", "type": "frontend", "label": "Ops Browser", "row": 2, "col": 0 },
+    { "id": "OPS", "type": "external", "label": "Ops", "row": 2, "col": 2 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Clients", "wraps": ["G", "O"] },
+    { "kind": "region", "label": "Servers", "wraps": ["GW", "Z1", "Z2", "OPS"] }
+  ],
+  "connections": [
+    { "from": "G", "to": "GW", "label": "STREAM WS", "variant": "default" },
+    { "from": "O", "to": "OPS", "label": "STREAM WS", "variant": "default" },
+    { "from": "GW", "to": "Z1", "label": "mesh RouteMesh", "variant": "default" },
+    { "from": "GW", "to": "Z2", "label": "mesh RouteMesh", "variant": "default" },
+    { "from": "OPS", "to": "Z1", "label": "mesh RouteMesh", "variant": "default" },
+    { "from": "OPS", "to": "Z2", "label": "mesh RouteMesh", "variant": "default" },
+    { "from": "Z1", "to": "Z2", "label": "mesh RouteMesh", "variant": "default" },
+    { "from": "OPS", "to": "Z1", "label": "broadcast fanout", "variant": "default" },
+    { "from": "OPS", "to": "Z2", "label": "broadcast fanout", "variant": "default" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Full channel names (mermaid edge labels)",
+      "items": [
+        "\"mesh RouteMesh\" on the diagram is the full mermaid label \"zoneworld.mesh RouteMesh\" — carries the ChannelName, Spot/Actor direct messages, and Logical Multicast.",
+        "\"broadcast fanout\" is the full mermaid label \"zoneworld.broadcast fanout\" — a classic fanout publisher/subscriber connection independent of the mesh.",
+        "Only Gateway provides the player-facing game STREAM, and only Ops provides the control STREAM."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "ZoneNode roles",
+      "items": [
+        "ZoneNode A/B run with the same executable capability, registering the Zone Spot factory (stable type zoneworld.zone, four Spot instances by ZoneId), the Player Actor factory (stable type zoneworld.player), the zone Channel, and the report channel.",
+        "Each ZoneNode declares a Zone Spot capacity of 2 — the four zones split 2/2 across the two nodes by capacity; the split is discovered via Ops probes, never pinned by fixtures.",
+        "Location Store placement selects the owner of objects such as Zone Spots and Player Actors. NodeId and the transport RID are separate domains.",
+        "Only the Gateway and Ops endpoints are exposed to the Client; the ZoneNode endpoint isn't exposed."
+      ]
+    }
+  ]
+}

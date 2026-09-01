@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Lifecycle and the failure boundary",
+    "subtitle": "a Ready owner crash ends in Unavailable — it is not automatic failover",
+    "output": "sample-shoppingmall-lifecycle-en.html",
+    "column_fit": "spread",
+    "viewBox": [
+      700,
+      560
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "participants": [
+    {
+      "id": "Caller",
+      "type": "frontend",
+      "label": "Caller"
+    },
+    {
+      "id": "Workflow",
+      "type": "backend",
+      "label": "OrderWorkflow",
+      "sublabel": "/ Order Spot"
+    },
+    {
+      "id": "Events",
+      "type": "database",
+      "label": "Order Event Store"
+    }
+  ],
+  "messages": [
+    {
+      "from": "Caller",
+      "to": "Workflow",
+      "y": 160,
+      "label": "ContinueOrderWorkflowReq",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 208,
+      "label": "Replay existing stream",
+      "variant": "default"
+    },
+    {
+      "from": "Events",
+      "to": "Workflow",
+      "y": 256,
+      "label": "Folded OrderState",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "Caller",
+      "y": 304,
+      "label": "ContinueOrderWorkflowRes (after running only the next valid step)",
+      "variant": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Self-message fallback (see report for rationale)",
+      "items": [
+        "mermaid has a self-message 'Workflow->>Workflow: Run only the next valid step' between the Events reply and ContinueOrderWorkflowRes. archify sequence messages route between two distinct participant columns; a from==to self-message was dropped as a separate arrow and its meaning folded into the ContinueOrderWorkflowRes label above."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Ready owner crash is not automatic failover",
+      "items": [
+        "mermaid Note over Caller,Workflow (positioned at the end): 'Ready owner crash is not automatic failover.' A Ready owner process failure ends the current operation in Unavailable; only a new attempt follows a separate policy — no new object is created on a different node automatically."
+      ]
+    }
+  ]
+}

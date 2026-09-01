@@ -70,27 +70,8 @@ In a small system where the delivery and the courier's response finish within a 
 a status table and a unique key are enough. Once a separate stream, worker, and external effects
 appear, the following additional responsibilities must be coordinated.
 
-```mermaid
-flowchart LR
-    C[Customer and Courier Clients] --> LB[Load Balancer]
-    LB --> API[Delivery API]
-    subgraph Backend[Stateless Web Backend]
-        DB[(Delivery DB)]
-        Q[Dispatch Queue]
-        W[Dispatch Worker]
-        R[Session Registry]
-        E[Event Bus]
-        J[Timeout Job]
-    end
-    API --> DB
-    API --> Q
-    Q --> W
-    W --> R
-    W --> E
-    J --> DB
-    J --> Q
-    E --> API
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-existing-en.html" title="Conventional web approach — delivery/dispatch comparison" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-delivery-existing-en.html" target="_blank">↗ View larger</a></p>
 
 In this comparison configuration, the queue, registry, timeout job, and event bus are separate
 components. DeliveryDispatch does not remove this responsibility. It shifts the responsibility
@@ -112,34 +93,8 @@ connections. The Store and evidence are described in the resource table and are 
 server components in the diagram. The time order of requests, responses, and timeouts is owned by
 the §7 sequence diagrams.
 
-```mermaid
-flowchart LR
-    subgraph Clients[Clients]
-        CC[Customer Client]
-        CA[Courier Client A]
-        CB[Courier Client B]
-    end
-    subgraph Servers[Servers]
-        D[Dispatch]
-        CS[CourierSession]
-        CN1[CourierActorNode 1]
-        CN2[CourierActorNode 2]
-        T[Tracking]
-        CG[CustomerGateway]
-    end
-    CC ---|HTTP| D
-    CC ---|STREAM| CG
-    CA ---|STREAM| CS
-    CB ---|STREAM| CS
-    D ---|deliverydispatch.courier RouteMesh| CN1
-    D ---|deliverydispatch.courier RouteMesh| CN2
-    CS ---|deliverydispatch.courier RouteMesh| CN1
-    CS ---|deliverydispatch.courier RouteMesh| CN2
-    D ---|deliverydispatch.dispatch ClientServer| CN1
-    D ---|deliverydispatch.dispatch ClientServer| CN2
-    D ---|deliverydispatch.tracking ClientServer| T
-    T ---|deliverydispatch.customer RouteMesh| CG
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-topology-en.html" title="System configuration and topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-delivery-topology-en.html" target="_blank">↗ View larger</a></p>
 
 - Dispatch provides the HTTP edge and the dispatch worker.
 - CourierSession receives courier STREAMs and binds the current session to the courier Actor.
@@ -337,41 +292,8 @@ binding response. Once `CreateDeliveryReq` is accepted, Dispatch records Attempt
 offer to A. While waiting for the courier's response, the Dispatch handler doesn't occupy an
 execution turn.
 
-```mermaid
-sequenceDiagram
-    participant C as Customer Client
-    participant CG as CustomerGateway
-    participant CA as Courier Client
-    participant CS as CourierSession
-    participant D as Dispatch
-    participant ACT as CourierActor
-    participant T as Tracking
-    participant CU as CustomerActor
-
-    C->>CG: SubscribeDeliveryReq
-    CG-->>C: SubscribeDeliveryRes
-    CA->>CS: BindCourierSessionReq
-    CS-->>CA: BindCourierSessionRes
-    C->>D: CreateDeliveryReq
-    D-->>C: CreateDeliveryRes
-    D->>ACT: OfferDeliveryMsg (attempt=1)
-    ACT->>CS: OfferDeliveryNotify
-    CS-->>CA: OfferDeliveryNotify
-    CA->>CS: CourierDecisionMsg(accepted=true)
-    CS->>ACT: CourierDecisionMsg
-    ACT->>D: `OfferDeliveryResultMsg`
-    D->>T: DeliveryStatusChangedReq(Assigned)
-    T-->>D: DeliveryStatusChangedRes
-    D->>T: DeliveryStatusChangedReq(Accepted)
-    T-->>D: DeliveryStatusChangedRes
-    D->>T: DeliveryStatusChangedReq(PickedUp)
-    T-->>D: DeliveryStatusChangedRes
-    D->>T: DeliveryStatusChangedReq(Delivered)
-    T-->>D: DeliveryStatusChangedRes
-    T->>CU: DeliveryStatusUpdatedMsg
-    CU-->>CG: DeliveryStatusNotify
-    CG-->>C: DeliveryStatusNotify(Delivered)
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-success-en.html" title="Normal flow — offer, accept, status push" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-delivery-success-en.html" target="_blank">↗ View larger</a></p>
 
 Confirm that `DeliveryStatusNotify` arrives in the order Assigned, Accepted, PickedUp, Delivered,
 and that each payload's DeliveryId matches the subscription. Status events being recorded and
@@ -384,37 +306,8 @@ If A doesn't send a decision within the deadline after receiving `OfferDeliveryM
 Dispatch sweeper marks the current record Expired and selects B as the next candidate. A's late
 decision doesn't match the current Attempt=2, so it's discarded.
 
-```mermaid
-sequenceDiagram
-    participant C as Customer Client
-    participant D as Dispatch
-    participant T as Tracking
-    participant A as CourierActor A
-    participant B as CourierActor B
-    participant CB as Courier Client B
-    participant CS as CourierSession
-    participant CG as CustomerGateway
-
-    C->>D: CreateDeliveryReq(delivery-reassign)
-    D->>A: OfferDeliveryMsg(attempt=1)
-    Note over D: deadline expires and attempt 1 is marked expired
-    D->>T: DeliveryStatusChangedReq(Reassigned)
-    T-->>D: DeliveryStatusChangedRes
-    T->>CG: DeliveryStatusUpdatedMsg
-    CG-->>C: DeliveryStatusNotify(Reassigned)
-    D->>B: OfferDeliveryMsg(attempt=2)
-    B->>CS: OfferDeliveryNotify
-    CS-->>CB: OfferDeliveryNotify
-    CB->>CS: CourierDecisionMsg(accepted=true)
-    CS->>B: CourierDecisionMsg
-    B->>D: `OfferDeliveryResultMsg`(attempt=2)
-    D->>T: DeliveryStatusChangedReq(Accepted)
-    T-->>D: DeliveryStatusChangedRes
-    D->>T: DeliveryStatusChangedReq(Delivered)
-    T-->>D: DeliveryStatusChangedRes
-    T->>CG: DeliveryStatusUpdatedMsg(Delivered)
-    CG-->>C: DeliveryStatusNotify(Delivered)
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-reassign-en.html" title="Timeout reassignment — promotion to Attempt=2" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-delivery-reassign-en.html" target="_blank">↗ View larger</a></p>
 
 A decision that arrives after attempt 2 starts is recorded as a stale decision and has no status
 effect. If no candidate remains, Dispatch records Failed and sends the terminal status.
@@ -440,59 +333,8 @@ actual directory and type representation can differ per language, but the bounda
 `Program` composes the host and public endpoints; business decisions live in `Application` and
 `Domain`, and Framework wiring lives in `Infrastructure`.
 
-```text
-DeliveryDispatch
-+-- Client
-|   +-- Program
-|   +-- Scenario
-+-- Shared
-|   +-- Configuration
-|   +-- JSON Contracts
-+-- Server
-    +-- Dispatch
-    |   +-- Program
-    |   +-- Application
-    |   |   +-- DispatchWorker
-    |   |   +-- OfferPolicy
-    |   +-- Infrastructure
-    |       +-- HttpHandlers
-    |       +-- RouteMeshClients
-    |       +-- DispatchEvidenceAdapter
-    +-- CourierSession
-    |   +-- Program
-    |   +-- Infrastructure
-    |       +-- StreamSession
-    |       +-- CourierBindingAdapter
-    |       +-- CourierActorClient
-    +-- CourierActorNode
-    |   +-- Program
-    |   +-- Domain
-    |   |   +-- CourierState
-    |   |   +-- OfferDecision
-    |   +-- Application
-    |   |   +-- OfferHandler
-    |   |   +-- AttemptGuard
-    |   +-- Infrastructure
-    |       +-- EntrySpot
-    |       +-- CourierActorAdapter
-    +-- Tracking
-    |   +-- Program
-    |   +-- Domain
-    |   |   +-- DeliveryStatus
-    |   |   +-- StatusTransition
-    |   +-- Application
-    |   |   +-- StatusWorkflow
-    |   |   +-- EvidenceWriter
-    |   +-- Infrastructure
-    |       +-- TrackingHandler
-    |       +-- StatusStoreAdapter
-    +-- CustomerGateway
-        +-- Program
-        +-- Infrastructure
-            +-- StreamSession
-            +-- CustomerBindingAdapter
-            +-- CustomerActorClient
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-delivery-structure-en.html" title="DeliveryDispatch implementation structure" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-delivery-structure-en.html" target="_blank">↗ View larger</a></p>
 
 | Logical Component | Responsibility Kept In Every Language | Dependency Direction And Forbidden Boundary |
 |---|---|---|
@@ -663,3 +505,7 @@ fails, it does not print this marker.
 - A Ready owner failure is not shown as crash failover, and that scope is verified as Unavailable.
 - The runner performs build, resource, readiness, self-check, and cleanup, and passes every row of
   the §10.1 table down to the string and the count.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

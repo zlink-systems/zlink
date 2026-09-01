@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "System Configuration And Topology — Structural Connections",
+    "subtitle": "Placement of Client·Session·Api·Support and undirected structural connections (Location Store is described in the resource table)",
+    "output": "sample-supportchat-topology-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 90, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C", "type": "frontend", "label": "Customer Client", "row": 0, "col": 0 },
+    { "id": "A", "type": "frontend", "label": "Agent Client", "row": 0, "col": 1 },
+    { "id": "S", "type": "external", "label": "Session", "sublabel": "client-facing STREAM", "row": 1, "col": 0 },
+    { "id": "API", "type": "frontend", "label": "Api", "sublabel": "token validation · Spot create", "row": 2, "col": 0 },
+    { "id": "SUP", "type": "backend", "label": "Support", "sublabel": "Entry·Conversation Spot·actor", "row": 2, "col": 1 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Clients", "wraps": ["C", "A"] },
+    { "kind": "region", "label": "Servers", "wraps": ["S", "API", "SUP"] }
+  ],
+  "connections": [
+    { "from": "C", "to": "S", "label": "STREAM", "variant": "default", "labelDy": 24 },
+    { "from": "A", "to": "S", "label": "STREAM", "variant": "default" },
+    { "from": "S", "to": "API", "label": "supportchat.api", "variant": "default", "labelDy": 24 },
+    { "from": "S", "to": "SUP", "label": "RouteMesh", "variant": "default", "fromSide": "right" },
+    { "from": "SUP", "to": "API", "label": "supportchat.api", "variant": "default" },
+    { "from": "API", "to": "SUP", "variant": "default", "fromSide": "bottom", "toSide": "bottom" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "How to read the connections",
+      "items": [
+        "Every line is the original's `---` undirected structural connection — it expresses peer/ingress connection intent, not request direction (arrowheads are a render constraint, not a directional claim).",
+        "The Customer and Agent Client each connect to Session over STREAM. Only Session provides the client-facing STREAM endpoint.",
+        "The S↔API and SUP↔API solid lines are the supportchat.api ClientServer (an independent channel for API request/reply). Between API↔SUP there are actually two connections — supportchat.api ClientServer and supportchat RouteMesh — but the diagram labels only one pair and routes the second (RouteMesh) around the bottom. S↔SUP is also supportchat RouteMesh."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Roles and boundaries",
+      "items": [
+        "Session and Api are object clients, and Support provides object-server capability. No separate peer is created between the two object clients. Session, Api, and Support are each 1+ instances.",
+        "Support provides the SupportEntrySpot, ConversationSpot, the customer actor, the agent roster actor, and the conversation actor. Api handles token validation and the Conversation Spot creation request.",
+        "supportchat.api is an independent ClientServer for API request/reply — Channel Server membership isn't mixed into the object RouteMesh. The Location Store manages peer discovery, Actor/Spot authority, and generation, and the Session binding route is kept by the Session owner; this diagram doesn't cover that — see the resource table."
+      ]
+    }
+  ]
+}

@@ -101,39 +101,8 @@ The basic topology shows only the structural connections of the Client and serve
 Redis Location Store and Relocation Store are explained in the resource table, and the time order
 of HTTP, stream, join, and publish is placed in the §7 sequence diagrams.
 
-```mermaid
-flowchart LR
-    subgraph Clients[Clients]
-        H[Host Client]
-        G[Guest Client]
-        O[Observer Client]
-    end
-    subgraph Servers[Servers]
-        A1[Api A]
-        A2[Api B]
-        P1[Play A]
-        P2[Play B]
-        AC1["Play A tictactoe.api<br/>select one Api"]
-        AC2["Play B tictactoe.api<br/>select one Api"]
-    end
-    H ---|HTTP| A1
-    G ---|HTTP| A2
-    O ---|HTTP| A2
-    H ---|STREAM| P1
-    G ---|STREAM| P2
-    O ---|STREAM| P2
-    A1 ---|tictactoe RouteMesh| P1
-    A1 ---|tictactoe RouteMesh| P2
-    A2 ---|tictactoe RouteMesh| P1
-    A2 ---|tictactoe RouteMesh| P2
-    P1 ---|tictactoe RouteMesh| P2
-    P1 --- AC1
-    AC1 -.-> A1
-    AC1 -.-> A2
-    P2 --- AC2
-    AC2 -.-> A1
-    AC2 -.-> A2
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-topology-en.html" title="System composition and topology" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-tictactoe-topology-en.html" target="_blank">↗ View larger</a></p>
 
 - Api A/B are object clients, sending the room-create request to a Play object server.
 - Play A/B are object servers, providing the same object type, Entry Spot, and Logical Multicast
@@ -401,37 +370,8 @@ the Framework Spot manager to create a Room Spot. The Spot manager issues the Ro
 the owner. The Api returns RoomId, RequiredLevel, PlayEndpoints, PlayNodes, and GameName in
 `CreateGameHttpRes`. The room owner doesn't change based on the Play ingress the client uses.
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant API as Api A or Api B
-    participant M as Framework Spot Manager
-    participant P as Play A or Play B Session
-    participant A as Player Actor
-    participant R as Room Spot
-
-    C->>API: CreateGameHttpReq
-    API->>M: request Room Spot creation with TicTacToeGameCreateReq
-    M->>R: create and initialize Room Spot
-    R-->>M: accept creation
-    M-->>API: creation result (RoomId)
-    API-->>C: CreateGameHttpRes(RoomId, RequiredLevel, PlayEndpoints, PlayNodes, GameName)
-    Note over C,P: host uses Play A<br/>guest and observer use Play B
-    C->>P: AuthenticateReq
-    P->>API: select one Api through tictactoe.api and send AuthenticatePlayerReq
-    API-->>P: AuthenticatePlayerRes(PlayerInfo)
-    P->>A: GetOrCreate with PlayerActorCreateReq(PlayerInfo)
-    A-->>P: current ActorRef
-    P-->>C: AuthenticateRes(PlayerInfo)
-    C->>P: JoinGameMsg(RoomId)
-    P->>A: dispatch JoinGameMsg to bound Actor
-    A->>R: TicTacToeGameJoinReq(PlayerInfo)
-    R->>R: check Level >= RequiredLevel
-    R-->>A: TicTacToeGameJoinRes
-    A-->>P: push JoinGameNotify to current session
-    P-->>C: JoinGameNotify
-    R-->>P: send PlayerJoinedNotify to existing member's session
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-create-auth-en.html" title="Room creation and authentication" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-tictactoe-create-auth-en.html" target="_blank">↗ View larger</a></p>
 
 A join failure is reported by `JoinGameFailedNotify` on the current session. Sending `JoinGameMsg`
 or `PlaceMarkReq` before authentication doesn't create an Actor; the call ends in an error.
@@ -443,27 +383,8 @@ wrong turn, an occupied cell, and a finished room are Application callback rejec
 in a typed `Rejected` error response; only transport, route, and protocol failures end with other
 Framework `ErrorKind` values. The final state's status and winner must be the same on both clients.
 
-```mermaid
-sequenceDiagram
-    participant H as Host Client
-    participant P1 as Play Session A
-    participant R as Room Spot
-    participant P2 as Play Session B
-    participant G as Guest Client
-
-    H->>P1: PlaceMarkReq(cell)
-    P1->>R: dispatch request to bound Actor's Room handler
-    R-->>P1: PlaceMarkRes(GameState)
-    P1-->>H: PlaceMarkRes
-    R-->>P2: GameStateNotify
-    P2-->>G: GameStateNotify
-    G->>P2: PlaceMarkReq(cell)
-    P2->>R: dispatch request to bound Actor's Room handler
-    R-->>P2: PlaceMarkRes(GameState)
-    P2-->>G: PlaceMarkRes
-    R-->>P1: GameStateNotify
-    P1-->>H: GameStateNotify
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-place-mark-en.html" title="Making a move and the final state" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-tictactoe-place-mark-en.html" target="_blank">↗ View larger</a></p>
 
 ### 7.3 The Wins 100 Milestone
 
@@ -472,26 +393,8 @@ The fake user source provides the host's Wins as 99. When the host wins this gam
 at the local Entry Spot of a Play ingress different from the host's, then waits for
 `WinMilestoneNotify`.
 
-```mermaid
-sequenceDiagram
-    participant O as Observer Client
-    participant OP as Observer Play Session
-    participant E as Play Entry Spot
-    participant R as Room Spot
-    participant HP as Host Play Session
-    participant H as Host Client
-
-    O->>OP: ObserveMilestoneReq
-    OP->>E: dispatch request to bound Actor's Entry handler
-    E-->>OP: ObserveMilestoneRes(subscribed=true)
-    OP-->>O: ObserveMilestoneRes
-    H->>HP: final PlaceMarkReq
-    HP->>R: dispatch request to bound Actor's Room handler
-    R->>R: compute Wins=100
-    R-->>E: PlayerWinMilestoneEvent
-    E-->>OP: send WinMilestoneNotify to observer's current session
-    OP-->>O: WinMilestoneNotify
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-milestone-en.html" title="The Wins 100 milestone" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-tictactoe-milestone-en.html" target="_blank">↗ View larger</a></p>
 
 Multicast publish completion doesn't mean the subscriber handler finished processing, or that the
 game win is confirmed. The Room Spot decides the win and board state, and the milestone is only for
@@ -514,33 +417,8 @@ the Entry Spot calls `destroyActor`. `LeaveGameMsg` is one-way, so client-side s
 doesn't prove destroy completion. For each Actor, the runner separately checks that the Room leave
 callback ran and destruction at the Entry Spot completed.
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant P as Play Session
-    participant F as Framework Session Runtime
-    participant R as Room Spot
-    participant E as Entry Spot
-
-    C-xP: STREAM connection ends
-    F->>F: fix current binding snapshot
-    F->>R: notify bound Actor's disconnected lifecycle callback
-    R->>R: run disconnected lifecycle callback
-    F->>F: clean up binding after all notifications finish
-    C->>P: new STREAM connection
-    C->>P: AuthenticateReq
-    P->>P: resolve Existing Actor and bind exact ActorRef
-    P-->>C: AuthenticateRes
-    C->>P: JoinGameMsg(RoomId)
-    P->>R: dispatch to existing room member's handler
-    R-->>P: JoinGameNotify(current GameState)
-    P-->>C: JoinGameNotify
-    C->>P: LeaveGameMsg
-    P->>R: dispatch to bound Actor's Room handler
-    R->>R: mark Actor and request public leave
-    R->>E: Framework moves Actor to Entry Spot
-    E->>E: destroy Actor
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-disconnect-en.html" title="Disconnect and destroy" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-tictactoe-disconnect-en.html" target="_blank">↗ View larger</a></p>
 
 This diagram shows one Player's reconnect and subsequent leave path. The host and guest each run
 the same leave path, and the runner checks evidence for the two Actors separately.
@@ -552,45 +430,8 @@ logical components below with the same responsibilities. Api owns HTTP and the u
 owns the stream and game state. That both Play processes provide the same capability is also kept
 in per-language samples.
 
-```text
-TicTacToe
-+-- Client
-|   +-- Program
-|   +-- Scenario
-+-- Shared
-|   +-- Configuration
-|   +-- JSON Contracts
-+-- Server
-    +-- Api
-    |   +-- Program
-    |   +-- Application
-    |   |   +-- CreateGame
-    |   |   +-- AuthenticatePlayer
-    |   +-- Infrastructure
-    |       +-- HttpHandlers
-    |       +-- UserSourceAdapter
-    |       +-- SpotManagerAdapter
-    |       +-- HandlerRegistration
-    +-- Play
-        +-- Program
-        +-- Domain
-        |   +-- Board
-        |   +-- Match
-        |   +-- TurnPolicy
-        +-- Application
-        |   +-- JoinGame
-        |   +-- PlaceMark
-        |   +-- LeaveGame
-        |   +-- MilestonePublisher
-        +-- Infrastructure
-            +-- StreamSession
-            +-- EntrySpot
-            +-- PlayerActorRelocationAdapter
-            +-- RoomSpot
-            +-- MulticastHandlers
-            +-- StoreProviders
-            +-- HandlerRegistration
-```
+<iframe class="zlink-diagram" src="/common/diagrams/sample-tictactoe-structure-en.html" title="TicTacToe implementation structure" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/sample-tictactoe-structure-en.html" target="_blank">↗ View larger</a></p>
 
 | Logical Component | Responsibility Kept In Every Language | Dependency Direction And Forbidden Boundary |
 |---|---|---|
@@ -801,3 +642,7 @@ does not print this marker.
   registry.
 - The runner builds the servers and client, waits until every process is ready, checks the
   self-check and server evidence, and cleans up resources created during the run.
+
+<script>
+(function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
+</script>

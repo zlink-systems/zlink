@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "재고 실패와 결제 실패 보상",
+    "subtitle": "재고가 거절되면 결제를 호출하지 않는다 · 결제가 거절되면 재고를 해제한 뒤 Failed로 끝난다",
+    "output": "sample-shoppingmall-failure-compensation.html",
+    "column_fit": "spread",
+    "viewBox": [
+      1100,
+      1200
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "participants": [
+    {
+      "id": "Workflow",
+      "type": "backend",
+      "label": "OrderWorkflow",
+      "sublabel": "/ Order Spot"
+    },
+    {
+      "id": "Inventory",
+      "type": "external",
+      "label": "Inventory"
+    },
+    {
+      "id": "Payment",
+      "type": "external",
+      "label": "Payment"
+    },
+    {
+      "id": "Events",
+      "type": "database",
+      "label": "Order Event Store"
+    },
+    {
+      "id": "Projection",
+      "type": "database",
+      "label": "Order Read Model"
+    }
+  ],
+  "messages": [
+    {
+      "from": "Workflow",
+      "to": "Inventory",
+      "y": 160,
+      "label": "ReserveInventoryReq",
+      "variant": "default"
+    },
+    {
+      "from": "Inventory",
+      "to": "Workflow",
+      "y": 208,
+      "label": "ReserveInventoryRes",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 256,
+      "label": "[Inventory rejected] Append InventoryReservationFailedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 304,
+      "label": "Append OrderFailedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Projection",
+      "y": 352,
+      "label": "Apply Failed",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 400,
+      "label": "[Inventory accepted] Append InventoryReservedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Projection",
+      "y": 448,
+      "label": "Apply InventoryReserved",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Payment",
+      "y": 496,
+      "label": "AuthorizePaymentReq",
+      "variant": "default"
+    },
+    {
+      "from": "Payment",
+      "to": "Workflow",
+      "y": 544,
+      "label": "AuthorizePaymentRes",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 592,
+      "label": "[Payment rejected] Append PaymentFailedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Inventory",
+      "y": 640,
+      "label": "ReleaseInventoryReq",
+      "variant": "default"
+    },
+    {
+      "from": "Inventory",
+      "to": "Workflow",
+      "y": 688,
+      "label": "ReleaseInventoryRes",
+      "variant": "return"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 736,
+      "label": "Append InventoryReleasedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 784,
+      "label": "Append OrderFailedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Projection",
+      "y": 832,
+      "label": "Apply Failed",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 880,
+      "label": "[Payment accepted] Append PaymentAuthorizedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Projection",
+      "y": 928,
+      "label": "Apply PaymentAuthorized",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Events",
+      "y": 976,
+      "label": "Append OrderConfirmedEvent",
+      "variant": "default"
+    },
+    {
+      "from": "Workflow",
+      "to": "Projection",
+      "y": 1024,
+      "label": "Apply Confirmed",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "mermaid alt/else 분기 구조 (archify에는 alt/else 표현이 없어 평평하게 폈다)",
+      "items": [
+        "alt Inventory rejected → 3~5번만 실행, Payment는 호출하지 않는다.",
+        "else Inventory accepted → 6~9번을 실행한 뒤 { alt Payment rejected → 10~15번 / else Payment accepted → 16~19번 } 중 하나만 실행한다(상호 배타적)."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "보상 순서",
+      "items": [
+        "재고 예약이 거절되면 Payment module을 호출하지 않는다. Payment가 거절되면 이미 기록한 ReservationId로 해제를 요청하고, 해제 결과와 OrderFailedEvent를 순서대로 기록한다.",
+        "재고와 결제 module은 같은 결정적 ID를 다시 받은 경우 최초 결과를 반환해야 한다."
+      ]
+    }
+  ]
+}

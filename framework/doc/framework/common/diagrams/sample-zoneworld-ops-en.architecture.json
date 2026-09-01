@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Ops observation, announce, and maintenance",
+    "subtitle": "Ops fans WorldAnnounceEvent and NodeMaintenanceChangedEvent out to every ZoneNode, which applies only its own NodeId",
+    "output": "sample-zoneworld-ops-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "O", "type": "frontend", "label": "Ops Browser" },
+    { "id": "S", "type": "external", "label": "Ops" },
+    { "id": "Z1", "type": "backend", "label": "ZoneNode A" },
+    { "id": "Z2", "type": "backend", "label": "ZoneNode B" }
+  ],
+  "messages": [
+    { "from": "O", "to": "S", "y": 160, "label": "WatchNodesReq", "variant": "default" },
+    { "from": "S", "to": "O", "y": 208, "label": "WatchNodesRes", "variant": "return" },
+    { "from": "O", "to": "S", "y": 256, "label": "AnnounceWorldReq", "variant": "default" },
+    { "from": "S", "to": "O", "y": 304, "label": "AnnounceWorldRes", "variant": "return" },
+    { "from": "S", "to": "Z1", "y": 352, "label": "WorldAnnounceEvent fanout", "variant": "return" },
+    { "from": "S", "to": "Z2", "y": 400, "label": "WorldAnnounceEvent fanout", "variant": "return" },
+    { "from": "O", "to": "S", "y": 448, "label": "SetMaintenanceReq(nodeId,true)", "variant": "default" },
+    { "from": "S", "to": "O", "y": 496, "label": "SetMaintenanceRes", "variant": "return" },
+    { "from": "S", "to": "Z1", "y": 544, "label": "NodeMaintenanceChangedEvent fanout; Z1 applies only matching NodeId", "variant": "return" },
+    { "from": "S", "to": "Z2", "y": 592, "label": "NodeMaintenanceChangedEvent fanout; Z2 applies only matching NodeId", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Self-actions folded into the preceding message (archify sequence rejects from==to, no following message on that lane)",
+      "items": [
+        "mermaid Z1->>Z1: apply only matching NodeId — appended to the NodeMaintenanceChangedEvent fanout message to Z1.",
+        "mermaid Z2->>Z2: apply only matching NodeId — appended to the NodeMaintenanceChangedEvent fanout message to Z2."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Registered vs. Connected, and maintenance semantics",
+      "items": [
+        "WatchNodesRes's Registered and Connected are different observations: Connected comes from the peer state of the runtime status observation, and Registered comes from ZoneNode's explicit report — the Framework topology status doesn't expose a registration signal.",
+        "If the target zone owner has maintenance=true, the target Zone Spot's OnActorJoin admission rejects with ZoneMaintenance. Only movement within the same zone is allowed.",
+        "This maintenance is application admission desired state and does not invoke Host relocation flow's Relocate(PlannedMaintenance) — it is not crash failover.",
+        "Ops records desired state to the maintenance store, so the maintenance state for the same NodeId is restored after a ZoneNode restart."
+      ]
+    }
+  ]
+}

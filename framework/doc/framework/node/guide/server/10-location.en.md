@@ -93,7 +93,7 @@ play.objects().server()
   .addSpotFactory('room', RoomSpot, (factory) => factory.recreateOnRelocation());
 
 play.channel('play.ops').server()
-  .addRequestHandler(NodeStatusHandler);
+  .addRequestHandler('GetNodeStatus', NodeStatusHandler);
 ```
 
 The application never specifies the target Node RID or endpoint to create an Actor/Spot on.

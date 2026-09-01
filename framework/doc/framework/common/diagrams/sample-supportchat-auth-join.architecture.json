@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "인증, 상담 생성과 agent join",
+    "subtitle": "Agent·Customer 인증 → OpenConversation → Conversation Spot 생성 → agent join",
+    "output": "sample-supportchat-auth-join.html",
+    "column_fit": "spread",
+    "viewBox": [1010, 1400],
+    "legend": { "mode": "hidden" }
+  },
+  "participants": [
+    { "id": "C", "type": "frontend", "label": "Customer Client" },
+    { "id": "A", "type": "frontend", "label": "Agent Client" },
+    { "id": "S", "type": "external", "label": "Session" },
+    { "id": "API", "type": "frontend", "label": "Api" },
+    { "id": "P", "type": "backend", "label": "ConversationSpot" }
+  ],
+  "messages": [
+    { "from": "A", "to": "S", "y": 160, "label": "AuthenticateReq", "variant": "default" },
+    { "from": "S", "to": "API", "y": 208, "label": "AuthenticateUserReq", "variant": "default" },
+    { "from": "API", "to": "S", "y": 256, "label": "AuthenticateUserRes", "variant": "return" },
+    { "from": "S", "to": "A", "y": 304, "label": "AuthenticateRes", "variant": "return" },
+    { "from": "A", "to": "S", "y": 352, "label": "SetAgentAvailableReq(true)", "variant": "default" },
+    { "from": "S", "to": "A", "y": 400, "label": "SetAgentAvailableRes(true)", "variant": "return" },
+    { "from": "C", "to": "S", "y": 448, "label": "AuthenticateReq", "variant": "default" },
+    { "from": "S", "to": "API", "y": 496, "label": "AuthenticateUserReq", "variant": "default" },
+    { "from": "API", "to": "S", "y": 544, "label": "AuthenticateUserRes", "variant": "return" },
+    { "from": "S", "to": "C", "y": 592, "label": "AuthenticateRes", "variant": "return" },
+    { "from": "C", "to": "S", "y": 640, "label": "OpenConversationReq(subject)", "variant": "default" },
+    { "from": "S", "to": "API", "y": 688, "label": "OpenConversationApiReq", "variant": "default" },
+    { "from": "API", "to": "P", "y": 736, "label": "ConversationCreateReq", "variant": "default" },
+    { "from": "P", "to": "API", "y": 784, "label": "ConversationCreateRes", "variant": "return" },
+    { "from": "API", "to": "S", "y": 832, "label": "OpenConversationApiRes", "variant": "return" },
+    { "from": "S", "to": "C", "y": 880, "label": "OpenConversationRes", "variant": "return" },
+    { "from": "P", "to": "S", "y": 928, "label": "ConversationAssignedNotify", "variant": "return" },
+    { "from": "S", "to": "A", "y": 976, "label": "ConversationAssignedNotify", "variant": "return" },
+    { "from": "A", "to": "S", "y": 1024, "label": "JoinConversationReq(metadata ConversationId)", "variant": "default" },
+    { "from": "S", "to": "P", "y": 1072, "label": "JoinConversationReq", "variant": "default" },
+    { "from": "P", "to": "S", "y": 1120, "label": "JoinConversationRes(scheduled=true)", "variant": "return" },
+    { "from": "S", "to": "A", "y": 1168, "label": "JoinConversationRes(scheduled=true)", "variant": "return" },
+    { "from": "P", "to": "S", "y": 1216, "label": "ParticipantJoinedNotify(Active)", "variant": "return" },
+    { "from": "S", "to": "C", "y": 1264, "label": "ParticipantJoinedNotify(Active)", "variant": "return" },
+    { "from": "S", "to": "A", "y": 1312, "label": "ParticipantJoinedNotify(Active)", "variant": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "join 완료 판정",
+      "items": [
+        "scheduled=true는 join 예약을 의미하며 membership commit 완료가 아니다. 양쪽 client가 Active 상태의 ParticipantJoinedNotify를 확인해야 agent join을 완료로 판정한다.",
+        "JoinConversationReq의 ConversationId는 stream metadata 필수 값이며 payload에 route를 넣지 않는다. participantId·role·displayName은 actor join에 필요한 값이다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "시작 상태와 대기",
+      "items": [
+        "시작 상태는 Session·Api·Support readiness가 완료되고 Agent roster가 비어 있거나 capacity를 가진 상태다.",
+        "배정 가능한 Agent가 없으면 Customer의 OpenConversationReq는 오류가 아니라 WaitingForAgent 상태에서 대기한다.",
+        "OpenConversationApiReq와 ConversationCreateReq는 server 간 request/reply다. Framework가 발급한 SpotId를 ConversationId로 사용하며 owner 위치·ActorRef는 response에 넣지 않는다. ParticipantJoinedNotify·ConversationAssignedNotify의 ActorId는 상담원 identity actor id다."
+      ]
+    }
+  ]
+}

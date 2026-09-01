@@ -156,48 +156,11 @@ proto 파이프라인**을 함께 운영한다는 뜻이다.
 
 ### 5.2 배치 구조 비교
 
-```text
-[classic] gRPC + service mesh + broker + WS edge
+<iframe class="zlink-diagram" src="/common/diagrams/17-classic-mesh.html" title="기존 방식 — gRPC + service mesh + broker + WS edge" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-classic-mesh.html" target="_blank">↗ 크게 보기</a></p>
 
-  +------------------+          +------------------+
-  | order-service    |          | payment-service  |
-  | app + gRPC stub  |          | app + gRPC server|
-  | Envoy sidecar    +--mTLS--->| Envoy sidecar    |
-  +--------+---------+          +---------+--------+
-           |                              |
-           +-------------+----------------+
-                         |
-                +--------v---------+
-                | service mesh ctl |
-                | discovery + L7   |
-                +------------------+
-
-  +------------------+          +------------------+
-  | event broker     |          | WS edge gateway  |
-  +------------------+          +------------------+
-```
-
-```text
-[ZLink] ZLink Framework  + location store
-
-  +------------------+          +------------------+
-  | order-service    |          | payment-service  |
-  | app              | channel  | app              |
-  | ZLink Framework  +--------->| ZLink Framework  |
-  | channel client   | name     | channel server   |
-  +--------+---------+          +---------+--------+
-           |                              |
-           +-------------+----------------+
-                         |
-                +--------v---------+
-                | location store   |
-                | descriptor rows  |
-                +------------------+
-
-  +------------------+          +------------------+
-  | fanout channel   |          | STREAM session   |
-  +------------------+          +------------------+
-```
+<iframe class="zlink-diagram" src="/common/diagrams/17-zlink-channel.html" title="ZLink 방식 — framework + location store" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-zlink-channel.html" target="_blank">↗ 크게 보기</a></p>
 
 Envoy sidecar와 mesh control plane(서비스 위치 조회·L7 LB·mTLS) 자리가 framework와
 location store 한 겹으로 들어온다. broker와 WS edge는 요구가 단순한 실시간 전파·연결
@@ -254,31 +217,11 @@ Orleans·Akka는 **actor 프리미티브 하나에** 깊이 집중한다. 그런
 
 ### 6.2 배치 구조 비교
 
-```text
-[Orleans/Akka] actor cluster with separate edge
+<iframe class="zlink-diagram" src="/common/diagrams/17-orleans-cluster.html" title="Orleans/Akka — actor cluster + 별도 edge" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-orleans-cluster.html" target="_blank">↗ 크게 보기</a></p>
 
-  +------------------+     +------------------+
-  | web framework    |     | SignalR /        |
-  | edge             +---->| WebSocket edge   |  (client gateway)
-  +--------+---------+     +------------------+
-           |
-  +--------v---------+
-  | Orleans/Akka     |
-  | actor cluster    |
-  | storage provider |
-  | persistence      |
-  +------------------+
-```
-
-```text
-[ZLink] integrated stack
-
-  +-----------------------------------------------+
-  | web framework (ASP.NET Core / Spring / …)     |
-  | STREAM clients / SPOT and actor state         |
-  | channel messaging / location store            |
-  +-----------------------------------------------+
-```
+<iframe class="zlink-diagram" src="/common/diagrams/17-zlink-integrated.html" title="ZLink — 통합 스택" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-zlink-integrated.html" target="_blank">↗ 크게 보기</a></p>
 
 client 연결·서비스 메시징·actor 상태가 서로 다른 세 계층에서 하나로 내려온다.
 다만 이 그림이 감추지 않는 것도 있다 — Orleans/Akka가 오랜 기간에 걸쳐 미리

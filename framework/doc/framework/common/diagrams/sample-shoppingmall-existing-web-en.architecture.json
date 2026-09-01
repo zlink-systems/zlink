@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Existing approach — stateless web backend",
+    "subtitle": "external effects, saga state, and read-model duplication all live in application infrastructure",
+    "output": "sample-shoppingmall-existing-web-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 5, "gapX": 90, "gapY": 90, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C", "type": "frontend", "label": "Web Client", "row": 0, "col": 0 },
+    { "id": "LB", "type": "external", "label": "Load Balancer", "row": 0, "col": 1 },
+    { "id": "API", "type": "frontend", "label": "Order API", "row": 0, "col": 2 },
+
+    { "id": "IDEM", "type": "database", "label": "Idempotency", "sublabel": "Store", "row": 1, "col": 1 },
+    { "id": "LOG", "type": "database", "label": "Event Log", "sublabel": "+ Outbox", "row": 1, "col": 2 },
+    { "id": "ODB", "type": "database", "label": "Order State", "sublabel": "DB", "row": 1, "col": 3 },
+
+    { "id": "INV", "type": "external", "label": "Inventory", "sublabel": "Service", "row": 2, "col": 0 },
+    { "id": "SAGA", "type": "frontend", "label": "Saga", "sublabel": "Orchestrator", "row": 2, "col": 2 },
+    { "id": "PAY", "type": "external", "label": "Payment", "sublabel": "PSP", "row": 2, "col": 4 },
+
+    { "id": "SCHED", "type": "messagebus", "label": "Scheduler", "row": 3, "col": 1 },
+    { "id": "RM", "type": "database", "label": "Read Model", "row": 3, "col": 3 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Stateless Web Backend", "wraps": ["SAGA", "ODB", "IDEM", "LOG", "RM", "SCHED"] }
+  ],
+  "connections": [
+    { "from": "C", "to": "LB", "variant": "default" },
+    { "from": "LB", "to": "API", "variant": "default" },
+    { "from": "API", "to": "IDEM", "variant": "default" },
+    { "from": "API", "to": "LOG", "variant": "default" },
+    { "from": "API", "to": "ODB", "variant": "default" },
+    { "from": "API", "to": "C", "variant": "default", "label": "Accepted OrderId", "fromSide": "bottom", "toSide": "bottom", "labelAt": [310, 224] },
+    { "from": "C", "to": "API", "variant": "default", "label": "poll", "fromSide": "bottom", "toSide": "bottom", "labelAt": [310, 146] },
+    { "from": "LOG", "to": "SAGA", "variant": "default" },
+    { "from": "SAGA", "to": "LOG", "variant": "default" },
+    { "from": "SAGA", "to": "INV", "variant": "default" },
+    { "from": "SAGA", "to": "PAY", "variant": "default" },
+    { "from": "SAGA", "to": "ODB", "variant": "default" },
+    { "from": "SAGA", "to": "RM", "variant": "default" },
+    { "from": "API", "to": "RM", "variant": "default" },
+    { "from": "SCHED", "to": "SAGA", "variant": "dashed", "label": "resume" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Stateless Web Backend responsibilities",
+      "items": [
+        "Saga Orchestrator decides the next step from the event log/outbox and writes back to the Order State DB, Event Log, and Read Model.",
+        "The Scheduler resumes an interrupted saga (dashed = attached overhead, not core business flow).",
+        "The client polls CommerceApi for status; CommerceApi also reads the Read Model directly."
+      ]
+    }
+  ]
+}

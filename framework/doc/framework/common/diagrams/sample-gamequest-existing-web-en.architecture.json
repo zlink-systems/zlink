@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Existing stateless web approach",
+    "subtitle": "log partitioning, consumer, cache/DB, pub/sub, and presence separately handle per-player ordering and push",
+    "output": "sample-gamequest-existing-web-en.html",
+    "legend": { "mode": "hidden" }
+  },
+  "layout": { "mode": "grid", "origin": [50, 150], "cols": 5, "gapX": 70, "gapY": 82, "cellW": 120, "cellH": 60 },
+  "components": [
+    { "id": "C", "type": "frontend", "label": "Game Client", "row": 0, "col": 0 },
+    { "id": "RF", "type": "frontend", "label": "Room Field", "row": 0, "col": 1 },
+    { "id": "LB", "type": "external", "label": "Load Balancer", "row": 0, "col": 2 },
+    { "id": "API", "type": "frontend", "label": "Event Ingest API", "row": 0, "col": 3 },
+    { "id": "LOG", "type": "database", "label": "Partitioned Log", "row": 1, "col": 3 },
+    { "id": "QC", "type": "frontend", "label": "Quest Consumer", "row": 2, "col": 3 },
+    { "id": "DB", "type": "database", "label": "State DB", "row": 3, "col": 2 },
+    { "id": "RM", "type": "database", "label": "Read Model", "row": 3, "col": 3 },
+    { "id": "PS", "type": "messagebus", "label": "Pub Sub", "row": 3, "col": 4 },
+    { "id": "PR", "type": "external", "label": "Presence", "row": 4, "col": 3 }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Stateless Backend", "wraps": ["LOG", "DB", "QC", "RM", "PS", "PR"] }
+  ],
+  "connections": [
+    { "from": "C", "to": "RF", "variant": "default" },
+    { "from": "RF", "to": "LB", "variant": "default" },
+    { "from": "LB", "to": "API", "variant": "default" },
+    { "from": "API", "to": "LOG", "variant": "default" },
+    { "from": "LOG", "to": "QC", "variant": "default" },
+    { "from": "QC", "to": "DB", "variant": "default" },
+    { "from": "QC", "to": "RM", "variant": "default" },
+    { "from": "QC", "to": "PS", "variant": "default" },
+    { "from": "PS", "to": "PR", "variant": "default" },
+    { "from": "PR", "to": "RF", "variant": "default", "fromSide": "left", "toSide": "bottom" },
+    { "from": "RF", "to": "C", "variant": "default", "fromSide": "top", "toSide": "top" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Existing composition",
+      "items": [
+        "A room/field sends gameplay events through a load balancer to an ingest API, which appends to a partitioned log.",
+        "A quest consumer reads the log, updates a per-player state DB and read model, and publishes to pub/sub.",
+        "Presence subscribes to pub/sub and pushes back to the room/field, which relays to the client."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "GameQuest equivalent",
+      "items": [
+        "GameQuest uses the PlayerId as the global SpotId in the progress tier, leaving the owner turn to the Framework.",
+        "QuestEventStore, projection, and reset/reconcile stay with the Application — this is not the Framework providing Kafka durability or reward-payout atomicity."
+      ]
+    }
+  ]
+}

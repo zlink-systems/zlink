@@ -363,10 +363,10 @@ framework는 발견한 handler를 모든 channel에 자동으로 열지 않는�
 ```typescript
 const mesh = builder.addRouteMesh('services')
   .listen('tcp://0.0.0.0:7101')
-  .setRoutingId(RoutingId.from('api-1'));
+  .routingId('api-1');
 mesh.channel('api').server()                    // server()가 handler를 받는 역할이다.
-  .addRequestHandler(GetProfileHandler)
-  .addSendHandler(RefreshCacheHandler);
+  .addRequestHandler('GetProfileRequest', GetProfileHandler)
+  .addSendHandler('RefreshCacheCommand', RefreshCacheHandler);
 ```
 
 ### 한 MeshNode에 여러 channel 등록
@@ -376,10 +376,10 @@ mesh.channel('api').server()                    // server()가 handler를 받는
 ```typescript
 const mesh = builder.addRouteMesh('services')
   .listen('tcp://0.0.0.0:7101')
-  .setRoutingId(RoutingId.from('api-1'));
+  .routingId('api-1');
 
 mesh.channel('api').server()                 // 이 node가 처리하는 channel.
-  .addRequestHandler(GetProfileHandler);
+  .addRequestHandler('GetProfileRequest', GetProfileHandler);
 mesh.channel('billing').client();            // 호출만 하는 channel은 client — handler를 등록하지 않는다.
 ```
 
@@ -592,7 +592,7 @@ filter도 그 수만큼 실행되고, 무거운 filter는 구독자가 늘수록
 ```typescript
 const mesh = builder.addRouteMesh('services')
   .listen('tcp://0.0.0.0:7102')
-  .setRoutingId(RoutingId.from('profile-client-1'));
+  .routingId('profile-client-1');
 mesh.channel('profile').client();
 mesh.peerConnections().connect('tcp://10.0.10.15:7101');
 mesh.peerConnections().connect('tcp://10.0.10.16:7101');
@@ -658,7 +658,7 @@ meshOptions.channel('orders').weight = 100; // 정상 복귀
 ```typescript
 const mesh = builder.addRouteMesh('services')
   .listen('tcp://0.0.0.0:7101')
-  .setRoutingId(RoutingId.from('orders-1'));
+  .routingId('orders-1');
 mesh.channel('orders').server().setWeight(30); // 이 channel 역할의 시작 weight
 ```
 
@@ -724,7 +724,7 @@ const mesh = builder.addRouteMesh('media')
   .listen('tcp://0.0.0.0:5600')
   .setRoutingIdPrefix('resize');
 mesh.channel('image.resize').server()
-  .addRequestHandler(ResizeHandler);
+  .addRequestHandler('ResizeRequest', ResizeHandler);
 ```
 
 호출 노드는 같은 ChannelName을 Client로 등록하고 처리 노드를 연결한다.
@@ -789,16 +789,16 @@ Node direct 호출은 `RoutingId`로 특정 MeshNode 하나를 지정한다. 이
 ```typescript
 const mesh = builder.addRouteMesh('play')
   .listen(playRouterEndpoint)
-  .setRoutingId(RoutingId.from(playRouterId));
+  .routingId(playRouterId);
 
 // 노드 자체의 운영 상태를 반환하는 handler다.
-mesh.addRouteRequestHandler(NodeStatusHandler, 'ops.node.status');
+mesh.addRequestHandler('ops.node.status', NodeStatusHandler);
 ```
 
 호출자는 관리 시스템에서 확인한 Node RID와 MeshName을 함께 전달한다.
 
 ```typescript
-const target = RoutingId.from('play-node-1');
+const target = 'play-node-1';
 
 // 특정 노드의 운영 상태를 묻기 때문에 Node direct를 사용한다.
 const status = await routeClient
@@ -840,7 +840,7 @@ SPOT과의 결합은 [06-spot](06-spot.ko.md)에서 이어진다.
 
         const mesh = builder.addRouteMesh('services')
           .listen('tcp://0.0.0.0:7101')
-          .setRoutingId(RoutingId.from('api-1'));
+          .routingId('api-1');
         mesh.channel('api').server()
           .addHandlerGroup('api');                   // 노출: handler group을 channel에 연결한다.
         mesh.channel('account').client();            // 호출만 하는 channel.
@@ -850,7 +850,7 @@ SPOT과의 결합은 [06-spot](06-spot.ko.md)에서 이어진다.
         events.connect('tcp://127.0.0.1:7201');       // 자기 발행도 구독해 보여 주는 예다.
         events.addHandlerGroup('api.events');         // 구독 handler를 group으로 붙인다.
 
-        return builder;
+        return builder.build();
       }
     })
   ],

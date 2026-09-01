@@ -154,48 +154,11 @@ service-location lookup + an event broker + a proto pipeline** together.
 
 ### 5.2 Deployment Shape Comparison
 
-```text
-[classic] gRPC + service mesh + broker + WS edge
+<iframe class="zlink-diagram" src="/common/diagrams/17-classic-mesh-en.html" title="Classic — gRPC + service mesh + broker + WS edge" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-classic-mesh-en.html" target="_blank">↗ View larger</a></p>
 
-  +------------------+          +------------------+
-  | order-service    |          | payment-service  |
-  | app + gRPC stub  |          | app + gRPC server|
-  | Envoy sidecar    +--mTLS--->| Envoy sidecar    |
-  +--------+---------+          +---------+--------+
-           |                              |
-           +-------------+----------------+
-                         |
-                +--------v---------+
-                | service mesh ctl |
-                | discovery + L7   |
-                +------------------+
-
-  +------------------+          +------------------+
-  | event broker     |          | WS edge gateway  |
-  +------------------+          +------------------+
-```
-
-```text
-[ZLink] ZLink Framework  + location store
-
-  +------------------+          +------------------+
-  | order-service    |          | payment-service  |
-  | app              | channel  | app              |
-  | ZLink Framework  +--------->| ZLink Framework  |
-  | channel client   | name     | channel server   |
-  +--------+---------+          +---------+--------+
-           |                              |
-           +-------------+----------------+
-                         |
-                +--------v---------+
-                | location store   |
-                | descriptor rows  |
-                +------------------+
-
-  +------------------+          +------------------+
-  | fanout channel   |          | STREAM session   |
-  +------------------+          +------------------+
-```
+<iframe class="zlink-diagram" src="/common/diagrams/17-zlink-channel-en.html" title="ZLink — framework + location store" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-zlink-channel-en.html" target="_blank">↗ View larger</a></p>
 
 The Envoy sidecar and the mesh control plane's spot (service-location lookup, L7 LB, mTLS)
 collapse into one layer: the framework plus the location store. The broker and the WS edge
@@ -258,31 +221,11 @@ actor yourself.
 
 ### 6.2 Deployment Shape Comparison
 
-```text
-[Orleans/Akka] actor cluster with separate edge
+<iframe class="zlink-diagram" src="/common/diagrams/17-orleans-cluster-en.html" title="Orleans/Akka — actor cluster with separate edge" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-orleans-cluster-en.html" target="_blank">↗ View larger</a></p>
 
-  +------------------+     +------------------+
-  | web framework    |     | SignalR /        |
-  | edge             +---->| WebSocket edge   |  (client gateway)
-  +--------+---------+     +------------------+
-           |
-  +--------v---------+
-  | Orleans/Akka     |
-  | actor cluster    |
-  | storage provider |
-  | persistence      |
-  +------------------+
-```
-
-```text
-[ZLink] integrated stack
-
-  +-----------------------------------------------+
-  | web framework (ASP.NET Core / Spring / …)     |
-  | STREAM clients / SPOT and actor state         |
-  | channel messaging / location store            |
-  +-----------------------------------------------+
-```
+<iframe class="zlink-diagram" src="/common/diagrams/17-zlink-integrated-en.html" title="ZLink — integrated stack" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/17-zlink-integrated-en.html" target="_blank">↗ View larger</a></p>
 
 Client connections, service messaging, and actor state — three separate layers — collapse
 into one. But this picture doesn't hide everything either — it doesn't mean the auxiliary

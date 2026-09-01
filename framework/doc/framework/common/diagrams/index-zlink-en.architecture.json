@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ZLink approach — web service + real-time",
+    "subtitle": "Server-to-server goes direct over channel · the overhead collapses to one location store",
+    "output": "index-zlink-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 2,
+    "gapX": 150,
+    "gapY": 88,
+    "cellW": 150,
+    "cellH": 78
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "client app",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "lb",
+      "type": "external",
+      "label": "L7 LB / gateway",
+      "sublabel": "HTTP unchanged",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "api",
+      "type": "frontend",
+      "label": "API servers ×N",
+      "sublabel": "+ ZLink route client",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "dom",
+      "type": "backend",
+      "label": "domain servers ×N",
+      "sublabel": "ZLink SPOT / STREAM",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "store",
+      "type": "external",
+      "label": "location store",
+      "row": 3,
+      "col": 0
+    }
+  ],
+  "connections": [
+    {
+      "from": "client",
+      "to": "lb",
+      "label": "HTTP",
+      "variant": "emphasis",
+      "labelDy": 24
+    },
+    {
+      "from": "lb",
+      "to": "api",
+      "variant": "default"
+    },
+    {
+      "from": "api",
+      "to": "dom",
+      "label": "channel request/send",
+      "variant": "emphasis"
+    },
+    {
+      "from": "client",
+      "to": "dom",
+      "label": "direct STREAM connect",
+      "variant": "emphasis"
+    },
+    {
+      "from": "api",
+      "to": "store",
+      "label": "address resolution",
+      "variant": "dashed",
+      "labelDy": 44
+    },
+    {
+      "from": "dom",
+      "to": "store",
+      "label": "registration",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Server-to-server over channel (the core)",
+      "items": [
+        "API servers ↔ domain servers: channel request/send goes direct (no broker, no sticky LB)",
+        "the client connects directly to a domain server over STREAM (direct STREAM connect)",
+        "domain server = the SPOT owner for one order/conversation (serial, no distributed lock) + STREAM host",
+        "both run ZLink; the API server routes the client"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "location store = discovery only",
+      "items": [
+        "holds node/actor/spot locations only — address resolution (API) and registration (domain), not a data/message path",
+        "that's why its links are dotted (control plane)"
+      ]
+    }
+  ]
+}
