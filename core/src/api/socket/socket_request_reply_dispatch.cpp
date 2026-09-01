@@ -84,7 +84,9 @@ completion_message_result_t complete_reply_from_transport (
       state_->socket, pending.handler, callback_errno, callback_parts,
       callback_part_count, pending.userdata);
     zlink::request_completion::release_reservation (&state_->completion);
-    state_->socket->notify_request_completion ();
+    // The readable completion lane already scheduled the current completion
+    // owner. This reply has now been delivered directly, so publishing another
+    // wake would only make the next public request process a stale command.
 
     // Callback-visible message ownership transfers to the callback. A
     // conforming callback closes or moves every exposed part before returning.

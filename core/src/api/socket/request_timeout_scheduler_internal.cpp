@@ -222,11 +222,14 @@ void cancel (const std::shared_ptr<task_t> &task_)
         std::lock_guard<std::mutex> schedule_lock (state.mutex);
         if (task_->registered) {
             if (task_->schedule_it != state.schedule.end ()) {
-                // The scheduler only needs to recompute its wait when the
-                // canceled task owns the deadline it is currently waiting
-                // for. Removing any later task leaves that wait valid.
-                notify_scheduler = task_->schedule_it == state.schedule.begin ();
+                const bool was_earliest =
+                  task_->schedule_it == state.schedule.begin ();
                 state.schedule.erase (task_->schedule_it);
+                // Removing the earliest task can only move the next deadline
+                // later, so the scheduler's existing wait remains safe. Wake
+                // only when the queue became empty so its bounded idle-exit
+                // lifecycle is not delayed until the canceled deadline.
+                notify_scheduler = was_earliest && state.schedule.empty ();
             }
             task_->registered = false;
             task_->schedule_it = schedule_map_t::iterator ();

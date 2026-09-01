@@ -2942,6 +2942,12 @@ void test_completion_poller_exclusively_owns_routed_async_completion ()
           0, completion_errno,
           "callback-owned reply parts were touched again after callback return");
 
+        zlink_poller_event_t stale_event;
+        memset (&stale_event, 0, sizeof (stale_event));
+        TEST_ASSERT_EQUAL_INT_MESSAGE (
+          0, zlink_poller_wait (poller, &stale_event, 1, 0, NULL),
+          "delivered reply left a stale POLLCOMPLETION wake");
+
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
                                zlink_poller_remove (poller, dealer));
         TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));

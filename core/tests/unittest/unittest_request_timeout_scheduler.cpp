@@ -102,39 +102,53 @@ void test_cancel_while_handler_is_firing_waits_for_handler_completion ()
     TEST_ASSERT_EQUAL_INT (0, state.cleanup_count.load (std::memory_order_relaxed));
 }
 
-void test_cancel_notifies_scheduler_only_for_earliest_deadline ()
+void test_cancel_notifies_scheduler_only_when_last_deadline_is_removed ()
 {
     callback_state_t earliest_state;
-    callback_state_t later_state;
+    callback_state_t middle_state;
+    callback_state_t latest_state;
 
     std::shared_ptr<zlink::request_timeout::task_t> earliest =
       zlink::request_timeout::schedule (10000, timeout_handler,
                                         &earliest_state, cleanup_handler);
     TEST_ASSERT_TRUE (earliest.get () != NULL);
-    std::shared_ptr<zlink::request_timeout::task_t> later =
-      zlink::request_timeout::schedule (20000, timeout_handler, &later_state,
+    std::shared_ptr<zlink::request_timeout::task_t> middle =
+      zlink::request_timeout::schedule (20000, timeout_handler, &middle_state,
                                         cleanup_handler);
-    TEST_ASSERT_TRUE (later.get () != NULL);
+    TEST_ASSERT_TRUE (middle.get () != NULL);
+    std::shared_ptr<zlink::request_timeout::task_t> latest =
+      zlink::request_timeout::schedule (30000, timeout_handler, &latest_state,
+                                        cleanup_handler);
+    TEST_ASSERT_TRUE (latest.get () != NULL);
 
     zlink::request_timeout::test_reset_cancel_notification_count ();
-    zlink::request_timeout::cancel (later);
+    zlink::request_timeout::cancel (earliest);
     TEST_ASSERT_EQUAL_UINT64 (
       0, zlink::request_timeout::test_cancel_notification_count ());
 
-    zlink::request_timeout::cancel (earliest);
+    zlink::request_timeout::cancel (middle);
+    TEST_ASSERT_EQUAL_UINT64 (
+      0, zlink::request_timeout::test_cancel_notification_count ());
+
+    zlink::request_timeout::cancel (latest);
     TEST_ASSERT_EQUAL_UINT64 (
       1, zlink::request_timeout::test_cancel_notification_count ());
 
-    later.reset ();
+    latest.reset ();
+    middle.reset ();
     earliest.reset ();
     TEST_ASSERT_EQUAL_INT (
       0, earliest_state.entered.load (std::memory_order_relaxed));
     TEST_ASSERT_EQUAL_INT (
-      0, later_state.entered.load (std::memory_order_relaxed));
+      0, middle_state.entered.load (std::memory_order_relaxed));
+    TEST_ASSERT_EQUAL_INT (
+      0, latest_state.entered.load (std::memory_order_relaxed));
     TEST_ASSERT_EQUAL_INT (
       1, earliest_state.cleanup_count.load (std::memory_order_relaxed));
     TEST_ASSERT_EQUAL_INT (
-      1, later_state.cleanup_count.load (std::memory_order_relaxed));
+      1, middle_state.cleanup_count.load (std::memory_order_relaxed));
+    TEST_ASSERT_EQUAL_INT (
+      1, latest_state.cleanup_count.load (std::memory_order_relaxed));
 }
 
 void test_schedule_across_idle_exit_boundary_fires_every_task ()
@@ -201,7 +215,7 @@ int main (void)
 
     RUN_TEST (test_cancel_before_deadline_prevents_handler_and_runs_cleanup);
     RUN_TEST (test_cancel_while_handler_is_firing_waits_for_handler_completion);
-    RUN_TEST (test_cancel_notifies_scheduler_only_for_earliest_deadline);
+    RUN_TEST (test_cancel_notifies_scheduler_only_when_last_deadline_is_removed);
     RUN_TEST (test_schedule_across_idle_exit_boundary_fires_every_task);
     RUN_TEST (test_schedule_after_canceling_last_task_across_idle_exit_fires);
 
