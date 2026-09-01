@@ -491,10 +491,33 @@ class bench_client_t : public bench_client_iface_t
         if (copy.empty ())
             return false;
 
-        const std::shared_ptr<resize_latch_t> latch =
-          std::make_shared<resize_latch_t> (copy.size ());
+        const std::shared_ptr<session_latch_t> latch =
+          std::make_shared<session_latch_t> (copy.size ());
         for (size_t i = 0; i < copy.size (); ++i)
             copy[i]->set_chunk_size (size, latch);
+
+        const auto deadline =
+          std::chrono::steady_clock::now () + std::chrono::seconds (k_resize_timeout_s);
+        std::unique_lock<std::mutex> lk (latch->mu);
+        while (latch->pending > 0) {
+            if (latch->cv.wait_until (lk, deadline) == std::cv_status::timeout)
+                return false;
+        }
+        return true;
+    }
+
+    // Fence every session strand after switching to phase_ready. This closes
+    // the allow_send()/on_send_begin() race before the residual count is read.
+    bool quiesce_phase_for_connected ()
+    {
+        std::vector<std::shared_ptr<client_session_t>> copy = snapshot_connected_sessions ();
+        if (copy.empty ())
+            return false;
+
+        const std::shared_ptr<session_latch_t> latch =
+          std::make_shared<session_latch_t> (copy.size ());
+        for (size_t i = 0; i < copy.size (); ++i)
+            copy[i]->acknowledge_phase_quiesced (latch);
 
         const auto deadline =
           std::chrono::steady_clock::now () + std::chrono::seconds (k_resize_timeout_s);
@@ -544,6 +567,11 @@ class bench_client_t : public bench_client_iface_t
 
         mode.store (phase_ready, std::memory_order_release);
         collect_metrics.store (false, std::memory_order_release);
+
+        if (!quiesce_phase_for_connected ()) {
+            timeout_error_measure.fetch_add (1, std::memory_order_relaxed);
+            return false;
+        }
 
         const int completion_wait_ms =
           effective_tail_drain_ms (phase_size.load (std::memory_order_acquire));

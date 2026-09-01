@@ -63,6 +63,9 @@
     send를 제출할 수 있지만 echo 수신을 기다리면 안 된다.
     request coroutine은 reply completion을 기다리는 동안 다음 request 작업을 별도로
     시작해야 한다. 왕복을 inflight 1로 직렬화하면 C의 nonblocking 모델과 달라진다.
+    단, `MULTI_STREAM` 외부 raw client는 Core HWM admission이 없는 검증 peer이므로
+    연결당 unresolved echo를 최대 1개로 고정한다. 이 예외는 zlink send/send와
+    request/reply의 연속 제출 의미를 바꾸지 않는다.
   - C app thread는 poller/completion을 구동한다. 다른 binding은 coroutine/async
     runtime 또는 그 언어의 동등한 비동기 실행 모델로 recv drain과 send
     continuation을 진행한다.
@@ -129,6 +132,16 @@ poller wait 이후 hot path는 poller가 ready로 보고한 source만 처리해�
     실제 admission 속도는 소켓 HWM과 peer의 drain 속도로 정해진다.
   - 기존 `MULTI_DEALER_ROUTER`, `MULTI_ROUTER_ROUTER` 이름은 위 send/send echo
     pattern의 호환 이름이다.
+- **`MULTI_STREAM` 외부 raw client** (raw 연결 N개):
+  - raw peer 송신은 Core HWM admission을 통과하지 않는다. 연속 제출을 허용하면
+    TCP/TLS/WS/WSS의 OS·TLS·WebSocket buffering 차이가 연결별 unresolved 깊이를
+    다르게 만들어 transport 비교 조건이 달라진다.
+  - 각 연결은 `outstanding == 0`일 때만 echo packet 1개를 제출한다. echo를 받기
+    전에는 같은 연결에 다음 packet을 제출하지 않으므로 unresolved echo는 연결당
+    최대 1개다.
+  - 이 값은 CLI 옵션이나 환경 변수로 조절하지 않는다. 측정 대상 STREAM server의
+    HWM/backpressure 및 일반 zlink send/send·request/reply의 연속 제출 정책은
+    그대로 유지한다.
 - **request/reply 클라이언트** (per-socket):
   - client process는 N개 requester socket을 하나의 active execution context에서
     multiplex한다. socket마다 별도 recv/progress OS thread를 만들지 않는다.
@@ -165,7 +178,8 @@ poller wait 이후 hot path는 poller가 ready로 보고한 source만 처리해�
 - C reference는 app thread 하나가 poller event loop를 구동한다.
 - C 이외의 binding은 async runtime 하나가 여러 socket의 send, recv와 completion을
   concurrent하게 진행한다. socket마다 전용 OS thread를 만들거나 submit 직후
-  완료를 기다려 inflight를 1로 제한하지 않는다.
+  완료를 기다려 zlink send/send 또는 request/reply inflight를 1로 제한하지 않는다.
+  `MULTI_STREAM` 외부 raw client의 연결당 unresolved echo 1개 규칙만 예외다.
 
 ### 1.3.1 Poller wait timeout 정책
 
@@ -846,6 +860,20 @@ server/client 분리 패턴은 **별도 소스 파일 / 별도 바이너리**로
   connected snapshot을 완료한 다음 `SERVER_START_READY,<msg_size>`를 출력한다.
   runner가 이 ACK를 확인해 client에 `START,<msg_size>`를 보낸 뒤 active를
   시작한다.
+- raw client의 연결별 echo 상태와 허용 동작은 다음과 같이 고정한다.
+
+  | 상태 | 허용 동작 |
+  |------|-----------|
+  | active, `outstanding == 0` | echo packet 1개 제출 후 `outstanding = 1` |
+  | active, `outstanding == 1` | 다음 제출 금지. echo 수신 후 `outstanding = 0` |
+  | phase 종료 | 새 제출을 먼저 닫고, 연결마다 남을 수 있는 최대 1개의 echo를 bounded timeout까지 drain |
+
+- phase 종료 drain이 timeout 안에 끝나지 않으면 해당 case는 `fail`이다. drain 중
+  완료된 echo는 active 측정 구간을 연장하거나 RESULT 집계에 추가하지 않는다.
+- 연결별 unresolved 깊이와 phase 종료 drain 정책은 고정 계약이다. CLI 옵션이나
+  환경 변수로 노출하지 않는다. 이 예외는 Core HWM admission이 없는 외부 raw
+  peer에만 적용하며, STREAM server와 일반 zlink send/send·request/reply에는
+  적용하지 않는다.
 - 위 모델을 위반한 구현은 정책 위반이므로 해당 코드를 삭제하고 정책 모델로 다시 구현해야 한다.
 - 위반 구현에서 나온 실행 결과는 정책 산출물로 인정하지 않는다.
 - raw `STREAM` callback mode는 perf에서 별도 테스트하지 않는다.
@@ -927,6 +955,9 @@ run_benchmarks_multi.sh / .ps1                         # 공식 multi entrypoint
 | `--server-shutdown-timeout-ms N` | server 종료 대기 타임아웃(ms) | 5000 |
 | `--server-bind-port N` | server 바인드 포트 (0=자동 할당) | 0 |
 | `--auto-hwm-profile NAME` | context auto-HWM profile (`compact`, `low_latency`, `balanced`, `throughput`) | `balanced` |
+
+`MULTI_STREAM` raw peer의 연결별 unresolved echo 깊이와 phase 종료 drain 정책은
+CLI나 환경 변수로 조절하는 옵션을 제공하지 않는다.
 
 #### 빌드 모드 동작
 
@@ -1201,6 +1232,8 @@ bindings/c/perf/run_benchmarks_multi.sh --pattern MULTI_STREAM --transports tcp 
 
 - `PERF_MULTI_CLIENT_POLL_TIMEOUT_MS`, `PERF_MULTI_CLIENT_IDLE_SLEEP_US`, `PERF_MULTI_SEND_BACKOFF_US`, `PERF_MULTI_BLOCKING_SEND`는 삭제됐다.
 - `PERF_MULTI_RECV_BATCH`, `PERF_MULTI_SEND_WORKERS`, `PERF_SERVER_RECV_THREADS`는 삭제됐다.
+- `MULTI_STREAM` raw peer의 unresolved echo 깊이와 phase 종료 drain 정책을 바꾸는
+  `PERF_*` 환경 변수는 두지 않는다.
 
 ### 12.4 프로세스 조정
 

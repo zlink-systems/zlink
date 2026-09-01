@@ -5,7 +5,7 @@
 // Provides:
 //   Benchmark tuning constants (connect batch, socket buffers, RTT capacity)
 //   phase_mode_t  - ready / active state enum
-//   resize_latch_t – condition-variable barrier for chunk-size transitions
+//   session_latch_t – condition-variable barrier for strand acknowledgements
 //   client_session_t – single transport connection with packet-framed async I/O loop
 //
 // Each client_session_t runs entirely on a strand and reports events
@@ -87,11 +87,10 @@ enum phase_mode_t
     phase_active = 1, // traffic active, metrics collected
 };
 
-// Countdown barrier for chunk-size transitions.
-// The main thread waits until all connected sessions acknowledge the new size.
-struct resize_latch_t
+// Countdown barrier for operations dispatched to every connected session.
+struct session_latch_t
 {
-    explicit resize_latch_t (size_t pending_) : pending (pending_) {}
+    explicit session_latch_t (size_t pending_) : pending (pending_) {}
 
     std::mutex mu;
     std::condition_variable cv;
@@ -179,7 +178,7 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
     }
 
     // Update payload size and decrement the resize latch (strand-dispatched).
-    void set_chunk_size (size_t size, const std::shared_ptr<resize_latch_t> &latch)
+    void set_chunk_size (size_t size, const std::shared_ptr<session_latch_t> &latch)
     {
         const std::shared_ptr<client_session_t> self = shared_from_this ();
         boost::asio::post (strand, [self, size, latch] () {
@@ -194,6 +193,24 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
                 }
                 latch->cv.notify_one ();
             }
+        });
+    }
+
+    // Acknowledge that every handler admitted before phase_ready has left this
+    // strand. Handlers queued after this point observe phase_ready and cannot
+    // submit another echo.
+    void acknowledge_phase_quiesced (const std::shared_ptr<session_latch_t> &latch)
+    {
+        const std::shared_ptr<client_session_t> self = shared_from_this ();
+        boost::asio::post (strand, [self, latch] () {
+            if (!latch)
+                return;
+            {
+                std::lock_guard<std::mutex> lk (latch->mu);
+                if (latch->pending > 0)
+                    --latch->pending;
+            }
+            latch->cv.notify_one ();
         });
     }
 
