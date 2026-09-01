@@ -324,7 +324,10 @@ Core 정식 스펙은 다음 순서로 바꾼다.
    후자를 사용한다.
    XPUB topic buffer 부족은 event를 dequeue하지 않는
    `ZLINK_RECV_BUFFER_TOO_SMALL`+`ENOBUFS`로 일원화하고 0.15의 dequeue+
-   `INTERNAL_ERROR`+`EMSGSIZE`를 제거한다.
+   `INTERNAL_ERROR`+`EMSGSIZE`를 제거한다. 같은 단계에서
+   `core/doc/spec/core/07-utilities.{ko,en}.md`의 timer handler 표면과
+   `core/doc/spec/core/protocol/02-raw.{ko,en}.md`의 stream packet handler 서술도
+   pull 계약으로 정리한다.
 6. Binding 비동기 스펙에서 Core operation cancel과 callback bridge를 제거하고 언어별 awaitable이
    poller+drain loop 위에 있다는 계약을 정의한다.
    `bindings/doc/spec/{c,cpp,dotnet,go,java,node,python,rust}/README.{ko,en}.md`에는

@@ -850,7 +850,11 @@ Go Context 같은 언어 관용과 분리한다.
 
 `connection_id`는 monitor의 진단·correlation 값으로만 유지하고 send target, reply target 또는
 reconnect fence로 사용하지 않는다. `Zlink-Lane`은 Application/Completion wire lane을
-구분하는 내부 protocol property로 유지한다.
+구분하는 내부 protocol property로 유지한다. Public `ZLINK_EVENT_FLOW_STATE_STALE`은 같은
+connection의 flow epoch 중복·역행(`FLOW_STATE_STALE_EPOCH`)에서만 발생한다. 물리 connection
+identity 불일치로 Core가 내부 폐기하는 flow-state frame은 public monitor event를 만들지
+않으며, `flow_state_stale_total` counter는 내부 폐기를 포함해 무시한 flow-state frame 총수를
+세는 진단 값으로 유지한다.
 
 ## 10. 확정 결정 요약
 
