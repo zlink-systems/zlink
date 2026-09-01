@@ -32,6 +32,11 @@ struct serializer_registry_access_t;
 encoded_payload_t encoded_payload_from_raw (const zlink::message_t &message);
 zlink::message_t encoded_payload_to_raw (const encoded_payload_t &payload);
 
+template <typename T, typename = void> struct extension_serializer_traits_t
+{
+    static constexpr bool available = false;
+};
+
 template <typename T, typename = void> struct is_json_serializable_t : std::false_type
 {
 };
@@ -102,8 +107,7 @@ class encoded_payload_t
 
     std::span<const std::byte> bytes () const noexcept
     {
-        return _borrowed_bytes.value_or (
-          std::span<const std::byte> (_bytes));
+        return _borrowed_bytes.value_or (std::span<const std::byte> (_bytes));
     }
     std::vector<std::uint8_t> to_bytes () const
     {
@@ -121,8 +125,7 @@ class encoded_payload_t
         const auto source = bytes ();
         if (source.empty ())
             return {};
-        return std::string (reinterpret_cast<const char *> (source.data ()),
-                            source.size ());
+        return std::string (reinterpret_cast<const char *> (source.data ()), source.size ());
     }
 
     std::size_t size () const noexcept { return bytes ().size (); }
@@ -172,8 +175,7 @@ template <typename T> class serializer_t
                   deserialize_fn_t deserialize,
                   std::string content_type) :
         _state (std::make_shared<const state_t> (
-          state_t{std::move (serialize), std::move (deserialize),
-                  std::move (content_type)}))
+          state_t{std::move (serialize), std::move (deserialize), std::move (content_type)}))
     {
     }
 
@@ -186,10 +188,9 @@ template <typename T> class serializer_t
             throw;
         }
         catch (...) {
-            throw detail::make_origin_exception (
-              framework_error_kind_t::protocol_error,
-              detail::failure_origin_t::payload_encode,
-              "payload serialization failed");
+            throw detail::make_origin_exception (framework_error_kind_t::protocol_error,
+                                                 detail::failure_origin_t::payload_encode,
+                                                 "payload serialization failed");
         }
     }
 
@@ -202,17 +203,13 @@ template <typename T> class serializer_t
             throw;
         }
         catch (...) {
-            throw detail::make_origin_exception (
-              framework_error_kind_t::protocol_error,
-              detail::failure_origin_t::payload_decode,
-              "payload deserialization failed");
+            throw detail::make_origin_exception (framework_error_kind_t::protocol_error,
+                                                 detail::failure_origin_t::payload_decode,
+                                                 "payload deserialization failed");
         }
     }
 
-    const std::string &content_type () const noexcept
-    {
-        return _state->content_type;
-    }
+    const std::string &content_type () const noexcept { return _state->content_type; }
 
   private:
     struct state_t
@@ -248,9 +245,8 @@ class serializer_registry_t
                                 typename serializer_t<T>::deserialize_fn_t deserialize,
                                 std::string content_type = "application/octet-stream")
     {
-        return add_for_registration<T> (
-          std::move (serialize), std::move (deserialize),
-          std::move (content_type), std::nullopt);
+        return add_for_registration<T> (std::move (serialize), std::move (deserialize),
+                                        std::move (content_type), std::nullopt);
     }
 
     /// Gets the serializer for T. If no custom serializer is registered and T can be converted
@@ -265,57 +261,57 @@ class serializer_registry_t
         serializer_t<T> selected = [&] {
             auto registered = erased_serializer (type);
             if (!registered) {
-            if constexpr (detail::is_json_serializer_compatible_v<T>) {
-                return serializer_t<T> (
-                  [] (const T &value) {
-                      const auto text = codecs::json::detail::dump_profile (
-                        nlohmann::json (value));
-                      return encoded_payload_t::from_bytes (
-                        std::as_bytes (std::span<const char> (
-                          text.data (), text.size ())));
-                  },
-                  [] (const encoded_payload_t &payload) {
-                      const auto bytes = payload.bytes ();
-                      const auto *begin = reinterpret_cast<const char *> (
-                        bytes.data ());
-                      const auto *end = begin == nullptr
-                                          ? begin
-                                          : begin + bytes.size ();
-                      return codecs::json::detail::parse_profile (begin, end)
-                        .template get<T> ();
-                  },
-                  "application/json");
-            } else {
-                return serializer_t<T> (
-                  [] (const T &) -> encoded_payload_t {
-                      throw framework_exception_t (
-                        framework_error_kind_t::protocol_error,
-                        "No serializer is registered for this payload type");
-                  },
-                  [] (const encoded_payload_t &) -> T {
-                      throw framework_exception_t (
-                        framework_error_kind_t::protocol_error,
-                      "No serializer is registered for this payload type");
-                  },
-                  "application/json");
-            }
+                if constexpr (detail::extension_serializer_traits_t<T>::available) {
+                    using traits_t = detail::extension_serializer_traits_t<T>;
+                    const auto extension = erased_serializer (
+                      std::type_index (typeid (typename traits_t::registration_key_type)));
+                    if (extension) {
+                        return traits_t::make_serializer ();
+                    }
+                }
+                if constexpr (detail::is_json_serializer_compatible_v<T>) {
+                    return serializer_t<T> (
+                      [] (const T &value) {
+                          const auto text =
+                            codecs::json::detail::dump_profile (nlohmann::json (value));
+                          return encoded_payload_t::from_bytes (
+                            std::as_bytes (std::span<const char> (text.data (), text.size ())));
+                      },
+                      [] (const encoded_payload_t &payload) {
+                          const auto bytes = payload.bytes ();
+                          const auto *begin = reinterpret_cast<const char *> (bytes.data ());
+                          const auto *end = begin == nullptr ? begin : begin + bytes.size ();
+                          return codecs::json::detail::parse_profile (begin, end)
+                            .template get<T> ();
+                      },
+                      "application/json");
+                } else {
+                    return serializer_t<T> (
+                      [] (const T &) -> encoded_payload_t {
+                          throw framework_exception_t (
+                            framework_error_kind_t::protocol_error,
+                            "No serializer is registered for this payload type");
+                      },
+                      [] (const encoded_payload_t &) -> T {
+                          throw framework_exception_t (
+                            framework_error_kind_t::protocol_error,
+                            "No serializer is registered for this payload type");
+                      },
+                      "application/json");
+                }
             }
             auto serialize = std::move (registered->serialize);
             auto deserialize = std::move (registered->deserialize);
             return serializer_t<T> (
-              [serialize = std::move (serialize)] (const T &value) {
-                  return serialize (&value);
-              },
-              [deserialize = std::move (deserialize)] (
-                const encoded_payload_t &payload) {
+              [serialize = std::move (serialize)] (const T &value) { return serialize (&value); },
+              [deserialize = std::move (deserialize)] (const encoded_payload_t &payload) {
                   T value{};
                   deserialize (payload, &value);
                   return value;
               },
               std::move (registered->content_type));
-        } ();
-        auto candidate = std::make_shared<const serializer_t<T>> (
-          std::move (selected));
+        }();
+        auto candidate = std::make_shared<const serializer_t<T>> (std::move (selected));
         const auto resolved = cache_serializer (type, candidate);
         return *std::static_pointer_cast<const serializer_t<T>> (resolved);
     }
@@ -330,11 +326,11 @@ class serializer_registry_t
     friend class codec_registration_context_t;
 
     template <typename T>
-    serializer_registry_t &add_for_registration (
-      typename serializer_t<T>::serialize_fn_t serialize,
-      typename serializer_t<T>::deserialize_fn_t deserialize,
-      std::string content_type,
-      std::optional<std::size_t> registration)
+    serializer_registry_t &
+    add_for_registration (typename serializer_t<T>::serialize_fn_t serialize,
+                          typename serializer_t<T>::deserialize_fn_t deserialize,
+                          std::string content_type,
+                          std::optional<std::size_t> registration)
     {
         return add_erased (
           std::type_index (typeid (T)),
@@ -354,13 +350,10 @@ class serializer_registry_t
         std::string content_type;
     };
 
-    std::optional<erased_serializer_t>
-    erased_serializer (std::type_index type) const;
-    std::shared_ptr<const void>
-    cached_serializer (std::type_index type) const noexcept;
-    std::shared_ptr<const void>
-    cache_serializer (std::type_index type,
-                      std::shared_ptr<const void> serializer) const;
+    std::optional<erased_serializer_t> erased_serializer (std::type_index type) const;
+    std::shared_ptr<const void> cached_serializer (std::type_index type) const noexcept;
+    std::shared_ptr<const void> cache_serializer (std::type_index type,
+                                                  std::shared_ptr<const void> serializer) const;
     void invalidate_cached_serializer (std::type_index type) noexcept;
     void freeze () noexcept;
     std::size_t begin_registration ();
@@ -379,10 +372,7 @@ namespace detail
 
 struct serializer_registry_access_t
 {
-    static void freeze (serializer_registry_t &registry) noexcept
-    {
-        registry.freeze ();
-    }
+    static void freeze (serializer_registry_t &registry) noexcept { registry.freeze (); }
 };
 
 template <typename TPayload>
@@ -392,9 +382,8 @@ TPayload deserialize_typed_payload (serializer_registry_t &serializers,
 {
     const auto serializer = serializers.get<TPayload> ();
     if (!content_type.empty () && content_type != serializer.content_type ()) {
-        throw framework_exception_t (
-          framework_error_kind_t::protocol_error,
-          "inbound content type does not match the typed handler codec");
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "inbound content type does not match the typed handler codec");
     }
     return serializer.deserialize (encoded_payload_from_raw (message));
 }

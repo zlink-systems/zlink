@@ -42,7 +42,7 @@ set(ZLINK_FRAMEWORK_CPP_REPO_ROOT "${ZLINK_FRAMEWORK_CPP_DIR}/../../.." CACHE PA
   "Path to the zlink repository root")
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "0.15.1" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "0.15.2" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
 set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "0.15.1" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
@@ -1158,6 +1158,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
 
 endif()
 
+if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS OR ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)
+  add_zlink_protobuf_schema(sample_cpp_framework_bingo_proto
+    ${ZLINK_FRAMEWORK_CPP_DIR}/samples/Bingo/Shared/Contracts/bingo_messages.proto)
+endif()
+
 if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_executable(zlink_cpp_framework_mesh_node_vertical_test
     tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_node_vertical.cpp)
@@ -1272,6 +1277,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink::framework
     zlink::framework_codec_protobuf
     zlink::stream_connector
+    sample_cpp_framework_bingo_proto
     GTest::gtest
     GTest::gmock)
   target_include_directories(test_cpp_framework_sample_parity PRIVATE
@@ -2303,8 +2309,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)
     zlink_framework_cpp_add_boost_headers(${target_name})
   endfunction()
 
-  add_zlink_protobuf_schema(sample_cpp_framework_bingo_proto
-    ${ZLINK_FRAMEWORK_CPP_DIR}/samples/Bingo/Shared/Contracts/bingo_messages.proto)
   add_zlink_framework_sample(
     sample_cpp_framework_bingo_api
     samples/Bingo/Server/Api/main.cpp

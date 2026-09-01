@@ -17,7 +17,11 @@ class bingo_player_record_store_t
     {
         std::lock_guard lock (_mutex);
         auto [record, _] = _records.try_emplace (actor_id, player_record_t{actor_id, 0, 0});
-        return {record->second.actor_id, record->second.wins, record->second.losses};
+        get_player_record_res_t response;
+        response.set_actor_id (record->second.actor_id);
+        response.set_wins (record->second.wins);
+        response.set_losses (record->second.losses);
+        return response;
     }
 
     report_bingo_result_res_t report (const std::string &actor_id, bool won)
@@ -29,7 +33,11 @@ class bingo_player_record_store_t
         } else {
             ++record->second.losses;
         }
-        return {record->second.actor_id, record->second.wins, record->second.losses};
+        report_bingo_result_res_t response;
+        response.set_actor_id (record->second.actor_id);
+        response.set_wins (record->second.wins);
+        response.set_losses (record->second.losses);
+        return response;
     }
 
   private:

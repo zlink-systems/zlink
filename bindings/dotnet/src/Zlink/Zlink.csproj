@@ -4,7 +4,7 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
-        <Version>0.15.1</Version>
+        <Version>0.15.2</Version>
         <AssemblyName>Systems.Zlink</AssemblyName>
         <PackageId>Systems.Zlink</PackageId>
         <RootNamespace>Systems.Zlink</RootNamespace>

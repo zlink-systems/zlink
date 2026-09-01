@@ -123,39 +123,49 @@ TEST (CppFrameworkSampleParity, BingoUsesDotNetSamplePacketSurface)
     EXPECT_STREQ (sample_names_t::game_started_packet, "BingoGameStartedNotify");
     EXPECT_STREQ (sample_names_t::number_drawn_packet, "BingoNumberDrawnNotify");
     EXPECT_STREQ (sample_names_t::game_ended_packet, "BingoGameEndedNotify");
-    EXPECT_STREQ (bingo_reward_acquired_event_t::packet_name, "BingoRewardAcquiredEvent");
-    EXPECT_STREQ (bingo_room_create_req_t::packet_name, "BingoRoomCreateReq");
+    EXPECT_EQ (bingo_reward_acquired_event_t::descriptor ()->name (), "BingoRewardAcquiredEvent");
+    EXPECT_EQ (bingo_room_create_req_t::descriptor ()->name (), "BingoRoomCreateReq");
 
     authenticate_player_handler_t auth;
-    const auto authenticated = auth.handle ({"player-1"});
-    ASSERT_TRUE (authenticated.accepted);
-    ASSERT_TRUE (authenticated.actor_id);
-    ASSERT_TRUE (authenticated.display_name);
+    authenticate_player_req_t authentication;
+    authentication.set_access_token ("player-1");
+    const auto authenticated = auth.handle (authentication);
+    ASSERT_TRUE (authenticated.accepted ());
+    ASSERT_TRUE (authenticated.has_actor_id ());
+    ASSERT_TRUE (authenticated.has_display_name ());
 
     sample_topology_t topology;
-    const reserve_bingo_room_res_t allocated{
-      "two-player-room-1", {"Bingo Room 1", bingo_sample_modes_t::two_player, 2, 15, "Game", ""}};
-    const auto create_wire = nlohmann::json (bingo_room_create_req_t{allocated.settings});
-    ASSERT_TRUE (create_wire.contains ("settings"));
-    EXPECT_EQ (create_wire.at ("settings").at ("roomName"), "Bingo Room 1");
+    reserve_bingo_room_res_t allocated;
+    allocated.set_room_id ("two-player-room-1");
+    auto *settings = allocated.mutable_settings ();
+    settings->set_room_name ("Bingo Room 1");
+    settings->set_mode (bingo_sample_modes_t::two_player);
+    settings->set_required_players (2);
+    settings->set_max_draw_number (15);
+    settings->set_purpose ("Game");
+    bingo_room_create_req_t create_request;
+    *create_request.mutable_settings () = allocated.settings ();
+    EXPECT_EQ (create_request.settings ().room_name (), "Bingo Room 1");
 
     player_actor_factory_t actor_factory;
     const auto player_actor =
-      actor_factory.create (*authenticated.actor_id, *authenticated.display_name);
-    EXPECT_EQ (player_actor.actor_id, *authenticated.actor_id);
+      actor_factory.create (authenticated.actor_id (), authenticated.display_name ());
+    EXPECT_EQ (player_actor.actor_id, authenticated.actor_id ());
 
-    bingo_room_spot_t room_spot (allocated.room_id);
+    bingo_room_spot_t room_spot (allocated.room_id ());
+    bingo_room_join_req_t join_request;
+    join_request.set_room_id (allocated.room_id ());
+    join_request.set_actor_id (authenticated.actor_id ());
+    join_request.set_display_name (authenticated.display_name ());
     const auto joined =
       room_spot
-        .on_actor_join (*authenticated.actor_id,
-                        zlink::framework::message_t::from (bingo_room_join_req_t{
-                          allocated.room_id, *authenticated.actor_id, *authenticated.display_name}))
+        .on_actor_join (authenticated.actor_id (), zlink::framework::message_t::from (join_request))
         .result ()
         .value ();
     ASSERT_TRUE (joined.accepted);
     ASSERT_TRUE (joined.reply);
     const auto join_reply = joined.reply->decode<bingo_room_join_res_t> ();
-    EXPECT_EQ (join_reply.state.players.size (), 1U);
+    EXPECT_EQ (join_reply.state ().players_size (), 1);
 
     const auto room_source = read_file (
       cpp_language_root ()
@@ -178,40 +188,43 @@ TEST (CppFrameworkSampleParity, BingoUsesDotNetSamplePacketSurface)
                std::string::npos);
 
     auto second_actor = actor_factory.create ("player-2", "Player 2");
+    bingo_room_join_req_t second_join_request;
+    second_join_request.set_room_id (allocated.room_id ());
+    second_join_request.set_actor_id ("player-2");
+    second_join_request.set_display_name ("Player 2");
     const auto second_joined =
-      room_spot
-        .on_actor_join ("player-2", zlink::framework::message_t::from (bingo_room_join_req_t{
-                                      allocated.room_id, "player-2", "Player 2"}))
+      room_spot.on_actor_join ("player-2", zlink::framework::message_t::from (second_join_request))
         .result ()
         .value ();
     ASSERT_TRUE (second_joined.accepted);
     ASSERT_TRUE (second_joined.reply);
-    EXPECT_EQ (second_joined.reply->decode<bingo_room_join_res_t> ().state.players.size (), 1U);
+    EXPECT_EQ (second_joined.reply->decode<bingo_room_join_res_t> ().state ().players_size (), 1);
 }
 
 TEST (CppFrameworkSampleParity, BingoClientChecksEveryDocumentedScenarioState)
 {
     const auto root = cpp_language_root () / "samples/Bingo";
     const auto scenario = read_file (root / "Client/bingo_client_scenario.hpp");
-    const auto messages = read_file (root / "Shared/Contracts/messages.hpp");
+    const auto contracts = read_file (root / "Shared/Contracts/bingo_messages.proto");
     const auto room =
       read_file (root / "Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp");
     const auto runner = read_file (root / "run_sample.sh");
 
-    EXPECT_NE (scenario.find ("client1_joined.state.players"), std::string::npos)
+    EXPECT_NE (scenario.find ("client1_joined.state ().players ()"), std::string::npos)
       << "SMP-CP-34 step 5 must validate the player records carried by the join push";
-    EXPECT_NE (messages.find ("int wins"), std::string::npos)
+    EXPECT_NE (contracts.find ("int32 wins"), std::string::npos)
       << "Bingo player state must carry the wins loaded during actor join";
-    EXPECT_NE (messages.find ("int losses"), std::string::npos)
+    EXPECT_NE (contracts.find ("int32 losses"), std::string::npos)
       << "Bingo player state must carry the losses loaded during actor join";
-    EXPECT_NE (scenario.find ("player.wins == 0 && player.losses == 0"), std::string::npos)
+    EXPECT_NE (scenario.find ("player.wins () == 0 && player.losses () == 0"), std::string::npos)
       << "SMP-CP-34 step 5 must validate the loaded record values";
-    EXPECT_NE (scenario.find ("client1_card.state.players"), std::string::npos)
+    EXPECT_NE (scenario.find ("client1_card.state ().players_size ()"), std::string::npos)
       << "SMP-CP-34 step 7 must validate both submitted cards in the second response";
-    EXPECT_NE (scenario.find ("same_bingo_room_state (client1_drawn.state, client2_drawn.state)"),
-               std::string::npos)
+    EXPECT_NE (
+      scenario.find ("same_bingo_room_state (client1_drawn.state (), client2_drawn.state ())"),
+      std::string::npos)
       << "SMP-CP-34 step 8 must compare the complete draw state from both pushes";
-    EXPECT_NE (scenario.find ("same_bingo_player_list (client1_ended.state.players"),
+    EXPECT_NE (scenario.find ("same_bingo_player_list (client1_ended.state ().players ()"),
                std::string::npos)
       << "SMP-CP-34 step 9 must compare the final player lists from both pushes";
     EXPECT_NE (room.find ("bingo-lifecycle room-leave actor="), std::string::npos)
@@ -253,7 +266,8 @@ TEST (CppFrameworkSampleParity, BingoMatchmakingUsesInstanceSpotAndRedisReservat
 
     EXPECT_NE (api.find (".instance_spot (sample_names_t::matchmaker_spot)"), std::string::npos);
     EXPECT_NE (api.find (".get_or_create ("), std::string::npos);
-    EXPECT_NE (store.find ("request.level_bucket + \":\" + request.mode"), std::string::npos);
+    EXPECT_NE (store.find ("request.level_bucket () + \":\""), std::string::npos);
+    EXPECT_NE (store.find ("+ request.mode ()"), std::string::npos);
     EXPECT_NE (store.find ("'RoomName', newRoomName"), std::string::npos);
 }
 
@@ -289,10 +303,8 @@ TEST (CppFrameworkSampleParity, BingoFinalCleanupGuardsRelocationAfterClose)
                    "bingo_room_draw_timer_handler.hpp");
 
     const auto cleanup = handler.find ("co_await leave_finished_actors ()");
-    const auto occupancy_guard =
-      handler.find ("if (!actors.empty () || !observers.empty ())");
-    const auto relocation_defer =
-      handler.find ("_context->relocation_ready ().defer ()");
+    const auto occupancy_guard = handler.find ("if (!actors.empty () || !observers.empty ())");
+    const auto relocation_defer = handler.find ("_context->relocation_ready ().defer ()");
     EXPECT_NE (cleanup, std::string::npos);
     EXPECT_NE (occupancy_guard, std::string::npos);
     EXPECT_NE (relocation_defer, std::string::npos);
@@ -315,7 +327,7 @@ TEST (CppFrameworkSampleParity, DomainOwnsBingoJoinAndSupportChatTimeoutDecision
       / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp");
     EXPECT_NE (bingo_domain.find ("bingo_room_join_result_t"), std::string::npos);
     EXPECT_NE (bingo_domain.find ("game_started"), std::string::npos);
-    EXPECT_NE (bingo_spot.find ("const auto joined = _game.join"), std::string::npos);
+    EXPECT_NE (bingo_spot.find ("_game.join (actor.actor_id"), std::string::npos);
     EXPECT_EQ (bingo_spot.find ("state.players.size () == 2"), std::string::npos);
 
     const auto conversation =
@@ -727,8 +739,8 @@ TEST (CppFrameworkSampleParity, ShoppingMallStartsAfterWorkflowPeerReadiness)
     //  passive, sample-owned row the CommerceApi emits once it can route to a workflow node.
     EXPECT_EQ (api.find ("route_ready_http_handler_t"), std::string::npos)
       << "ShoppingMall CommerceApi must not expose a synthetic readiness probe endpoint";
-    const auto readiness =
-      read_file (cpp_language_root () / "samples/ShoppingMall/Server/Configuration/sample_readiness.hpp");
+    const auto readiness = read_file (
+      cpp_language_root () / "samples/ShoppingMall/Server/Configuration/sample_readiness.hpp");
     EXPECT_NE (readiness.find ("shoppingmall-ready kind=object-route"), std::string::npos)
       << "ShoppingMall must emit the object-route readiness row from a passive observation";
     EXPECT_NE (runner.find ("shoppingmall-ready kind=object-route node=api-a target=workflow-a"),
@@ -1209,7 +1221,8 @@ TEST (CppFrameworkSampleParity, BingoUsesProtobufCodecSurface)
     const auto bingo_root = cpp_language_root () / "samples/Bingo";
     const auto readme = read_file (bingo_root / "README.ko.md");
     const auto inventory = read_file (bingo_root / "sample-porting-inventory.ko.md");
-    const auto common_codecs = read_file (bingo_root / "Server/common_codecs.hpp");
+    const auto contracts = read_file (bingo_root / "Shared/Contracts/messages.hpp");
+    const auto domain = read_file (bingo_root / "Server/Play/Domain/Bingo/bingo_state.hpp");
     const auto session = read_file (bingo_root / "Server/Session/Sessions/bingo_session.hpp");
     const auto client = read_file (bingo_root / "Client/main.cpp");
 
@@ -1221,10 +1234,11 @@ TEST (CppFrameworkSampleParity, BingoUsesProtobufCodecSurface)
       << "Bingo inventory must record the Protobuf codec path";
     EXPECT_EQ (inventory.find ("framework 기본 JSON codec"), std::string::npos)
       << "Bingo inventory must not mark JSON codec parity as done";
-    EXPECT_NE (common_codecs.find ("#include <zlink/codecs/protobuf.hpp>"), std::string::npos);
-    EXPECT_NE (common_codecs.find ("protobuf_codec_extension_t::register_payload_serializer"),
-               std::string::npos)
-      << "Bingo framework payloads must be registered with the Protobuf codec extension";
+    EXPECT_NE (contracts.find ("#include \"bingo_messages.pb.h\""), std::string::npos);
+    EXPECT_EQ (contracts.find ("register_payload_serializer"), std::string::npos)
+      << "Bingo must use generated protobuf messages without per-message codec registration";
+    EXPECT_EQ (domain.find ("google::protobuf"), std::string::npos)
+      << "Bingo domain state must not depend on protobuf runtime types";
     EXPECT_EQ (session.find ("stream_codec_t"), std::string::npos)
       << "Bingo session code must not select the framework-owned bound stream codec";
     EXPECT_NE (client.find (".codecs ().use (zlink::framework_codecs::protobuf ())"),
@@ -1313,8 +1327,7 @@ TEST (CppFrameworkSampleParity, TicTacToeRunnerReleasesClientAfterLeaveLifecycle
     const auto host_leave =
       client.find ("reconnected_client.send (reconnected_leave_request).submit ();");
     const auto guest_leave = client.find ("client2.send (client2_leave_request).submit ();");
-    const auto client_wait =
-      client.find ("if (!options.lifecycle_completion_file.empty ())");
+    const auto client_wait = client.find ("if (!options.lifecycle_completion_file.empty ())");
     const auto client_close = client.find ("co_await reconnected_client.close ().async ();");
     ASSERT_NE (host_leave, std::string::npos);
     ASSERT_NE (guest_leave, std::string::npos);
@@ -1328,28 +1341,29 @@ TEST (CppFrameworkSampleParity, TicTacToeRunnerReleasesClientAfterLeaveLifecycle
     const auto shell_client_wait = shell_runner.find ("wait \"$CLIENT_PID\"");
     ASSERT_NE (shell_release, std::string::npos);
     ASSERT_NE (shell_client_wait, std::string::npos);
-    for (const auto *evidence : {
-           "wait_log_count 1 \"tictactoe-lifecycle leave-completed actor=player-x\"",
-           "wait_log_count 1 \"tictactoe-lifecycle leave-completed actor=player-o\"",
-           "wait_log_count 1 \"tictactoe-lifecycle actor-destroy-complete actor=player-x\"",
-           "wait_log_count 1 \"tictactoe-lifecycle actor-destroy-complete actor=player-o\""}) {
+    for (const auto *evidence :
+         {"wait_log_count 1 \"tictactoe-lifecycle leave-completed actor=player-x\"",
+          "wait_log_count 1 \"tictactoe-lifecycle leave-completed actor=player-o\"",
+          "wait_log_count 1 \"tictactoe-lifecycle actor-destroy-complete actor=player-x\"",
+          "wait_log_count 1 \"tictactoe-lifecycle actor-destroy-complete actor=player-o\""}) {
         const auto evidence_wait = shell_runner.find (evidence);
         ASSERT_NE (evidence_wait, std::string::npos) << evidence;
         EXPECT_LT (evidence_wait, shell_release) << evidence;
     }
     EXPECT_LT (shell_release, shell_client_wait);
 
-    const auto powershell_release = powershell_runner.find (
-      "New-Item -ItemType File -Path $LifecycleCompletionFile");
+    const auto powershell_release =
+      powershell_runner.find ("New-Item -ItemType File -Path $LifecycleCompletionFile");
     const auto powershell_client_wait =
       powershell_runner.find ("$ClientProcess.WaitForExit(30000)");
     ASSERT_NE (powershell_release, std::string::npos);
     ASSERT_NE (powershell_client_wait, std::string::npos);
-    for (const auto *evidence : {
-           "Wait-LogCount $playLogs \"tictactoe-lifecycle leave-completed actor=player-x\"",
-           "Wait-LogCount $playLogs \"tictactoe-lifecycle leave-completed actor=player-o\"",
-           "Wait-LogCount $playLogs \"tictactoe-lifecycle actor-destroy-complete actor=player-x\"",
-           "Wait-LogCount $playLogs \"tictactoe-lifecycle actor-destroy-complete actor=player-o\""}) {
+    for (const auto *evidence :
+         {"Wait-LogCount $playLogs \"tictactoe-lifecycle leave-completed actor=player-x\"",
+          "Wait-LogCount $playLogs \"tictactoe-lifecycle leave-completed actor=player-o\"",
+          "Wait-LogCount $playLogs \"tictactoe-lifecycle actor-destroy-complete actor=player-x\"",
+          "Wait-LogCount $playLogs \"tictactoe-lifecycle actor-destroy-complete "
+          "actor=player-o\""}) {
         const auto evidence_wait = powershell_runner.find (evidence);
         ASSERT_NE (evidence_wait, std::string::npos) << evidence;
         EXPECT_LT (evidence_wait, powershell_release) << evidence;
@@ -1638,7 +1652,6 @@ TEST (CppFrameworkSampleParity, BingoHostsUseRouteMeshCapabilities)
     const auto play_factory = read_file (bingo_root / "Server/Play/play_server_host_factory.hpp");
     const auto session_factory =
       read_file (bingo_root / "Server/Session/session_server_host_factory.hpp");
-    const auto common_codecs = read_file (bingo_root / "Server/common_codecs.hpp");
     const auto session = read_file (bingo_root / "Server/Session/Sessions/bingo_session.hpp");
     const auto contracts = read_file (bingo_root / "Shared/Contracts/messages.hpp");
     const auto client = read_file (bingo_root / "Client/bingo_client_scenario.hpp");
@@ -1651,14 +1664,13 @@ TEST (CppFrameworkSampleParity, BingoHostsUseRouteMeshCapabilities)
     EXPECT_EQ (play_factory.find ("[topology] (entry_spot_context_t context)"), std::string::npos);
     EXPECT_EQ (play_factory.find ("[] (spot_context_t context)"), std::string::npos);
     EXPECT_EQ (play_factory.find (".add_spot_factory<bingo_room_t>"), std::string::npos);
-    EXPECT_NE (api_framework.find ("options.codecs ().use<bingo_protobuf_codecs_t> ()"),
+    EXPECT_NE (api_framework.find ("options.codecs ().use (zlink::framework_codecs::protobuf ())"),
                std::string::npos);
-    EXPECT_NE (play_factory.find ("options.codecs ().use<bingo_protobuf_codecs_t> ()"),
+    EXPECT_NE (play_factory.find ("options.codecs ().use (zlink::framework_codecs::protobuf ())"),
                std::string::npos);
-    EXPECT_NE (session_factory.find ("options.codecs ().use<bingo_protobuf_codecs_t> ()"),
-               std::string::npos);
-    EXPECT_EQ (common_codecs.find ("codecs.use (framework_codecs::protobuf ())"),
-               std::string::npos);
+    EXPECT_NE (
+      session_factory.find ("options.codecs ().use (zlink::framework_codecs::protobuf ())"),
+      std::string::npos);
     EXPECT_NE (
       client_main.find ("core_client1.codecs ().use (zlink::framework_codecs::protobuf ())"),
       std::string::npos);

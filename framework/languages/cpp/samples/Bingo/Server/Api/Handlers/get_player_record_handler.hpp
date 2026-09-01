@@ -27,11 +27,10 @@ class get_player_record_handler_t
 
     get_player_record_res_t handle (const get_player_record_req_t &request)
     {
-        auto record = _records.get (request.actor_id);
-        _logger.info ("api player record loaded",
-                      {{"actor_id", record.actor_id},
-                       {"wins", std::to_string (record.wins)},
-                       {"losses", std::to_string (record.losses)}});
+        auto record = _records.get (request.actor_id ());
+        _logger.info ("api player record loaded", {{"actor_id", record.actor_id ()},
+                                                   {"wins", std::to_string (record.wins ())},
+                                                   {"losses", std::to_string (record.losses ())}});
         return record;
     }
 

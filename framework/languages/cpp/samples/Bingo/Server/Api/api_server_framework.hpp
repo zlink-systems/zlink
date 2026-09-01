@@ -3,7 +3,6 @@
 
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_topology.hpp"
-#include "../common_codecs.hpp"
 #include "../sample_log_dir.hpp"
 #include "../../Shared/Contracts/messages.hpp"
 #include "Handlers/authenticate_player_handler.hpp"
@@ -12,6 +11,7 @@
 #include "Handlers/report_bingo_result_handler.hpp"
 
 #include <zlink/locations/redis.hpp>
+#include <zlink/codecs/protobuf.hpp>
 
 namespace zlink::samples::bingo
 {
@@ -23,7 +23,7 @@ inline app_t &add_bingo_api_server (app_t &app, const sample_topology_t &topolog
     app.logging ().use_file (flow_log_path (topology.log_dir, "api-" + topology.api_node));
     auto &options = app.add_zlink_framework ();
     options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
-    options.codecs ().use<bingo_protobuf_codecs_t> ();
+    options.codecs ().use (zlink::framework_codecs::protobuf ());
     options.add_location_store<redis::redis_location_store_t> ()
       .set_connection_string (topology.redis_endpoint)
       .set_key_prefix (topology.redis_key_prefix + "location:");

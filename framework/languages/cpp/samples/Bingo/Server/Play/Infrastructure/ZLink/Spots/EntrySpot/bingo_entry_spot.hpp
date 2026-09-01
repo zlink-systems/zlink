@@ -2,6 +2,7 @@
 #pragma once
 
 #include "../../Actors/player_actor.hpp"
+#include "../../protobuf_messages.hpp"
 #include "../../../../../Configuration/sample_names.hpp"
 
 #include <zlink/framework.hpp>
@@ -46,7 +47,7 @@ class bingo_entry_spot_t : public entry_spot_t<player_actor_t>
     {
         const auto request = create_request.decode<ensure_player_actor_req_t> ();
         actor.display_name =
-          request.display_name.empty () ? request.actor_id : request.display_name;
+          request.display_name ().empty () ? request.actor_id () : request.display_name ();
         created_actor_ids.push_back (actor.actor_id);
         co_return actor_create_response_t::accept ();
     }
@@ -60,7 +61,9 @@ class bingo_entry_spot_t : public entry_spot_t<player_actor_t>
     {
         joined_actor_ids.push_back (actor.actor_id);
         if (actor.actor_id == bingo_sample_players_t::observer) {
-            actor.push (observer_returned_to_entry_spot_notify_t{actor.actor_id});
+            observer_returned_to_entry_spot_notify_t notification;
+            notification.set_actor_id (actor.actor_id);
+            actor.push (notification);
             co_return;
         }
         if (!actor.destroy_after_entry_spot_join) {

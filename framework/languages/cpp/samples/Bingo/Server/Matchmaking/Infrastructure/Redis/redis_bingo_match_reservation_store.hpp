@@ -19,64 +19,66 @@
 namespace zlink::samples::bingo
 {
 
-class redis_bingo_match_reservation_store_t final
-    : public bingo_match_reservation_store_t
+class redis_bingo_match_reservation_store_t final : public bingo_match_reservation_store_t
 {
   public:
-    explicit redis_bingo_match_reservation_store_t (
-      const sample_topology_t &topology) :
+    explicit redis_bingo_match_reservation_store_t (const sample_topology_t &topology) :
         _topology (topology)
     {
     }
 
-    reserve_bingo_room_res_t
-    reserve (const reserve_bingo_room_req_t &request) override
+    reserve_bingo_room_res_t reserve (const reserve_bingo_room_req_t &request) override
     {
-        if (request.mode != bingo_sample_modes_t::two_player) {
-            throw std::runtime_error ("Unsupported bingo mode: " + request.mode);
+        if (request.mode () != bingo_sample_modes_t::two_player) {
+            throw std::runtime_error ("Unsupported bingo mode: " + request.mode ());
         }
-        if (request.actor_id.empty () || request.level_bucket.empty ()) {
-            throw std::runtime_error (
-              "Actor id and level bucket are required");
+        if (request.actor_id ().empty () || request.level_bucket ().empty ()) {
+            throw std::runtime_error ("Actor id and level bucket are required");
         }
         const auto new_room_id = make_room_id ();
-        const auto settings = bingo_room_settings_payload_t{
-          "Bingo Room " + new_room_id.substr (new_room_id.size () - 6),
-          request.mode,
-          2,
-          15,
-          "Game",
-          ""};
+        bingo_room_settings_payload_t settings;
+        settings.set_room_name ("Bingo Room " + new_room_id.substr (new_room_id.size () - 6));
+        settings.set_mode (request.mode ());
+        settings.set_required_players (2);
+        settings.set_max_draw_number (15);
+        settings.set_purpose ("Game");
         const auto now = std::to_string (std::chrono::duration_cast<std::chrono::milliseconds> (
                                            std::chrono::system_clock::now ().time_since_epoch ())
                                            .count ());
         auto reply = execute (
-          {"EVAL", script (), "1", match_key (request), request.actor_id,
-           new_room_id, settings.room_name, settings.mode,
-           std::to_string (settings.required_players),
-           std::to_string (settings.max_draw_number), settings.purpose,
-           settings.observed_room_id.value_or (""), now});
+          {"EVAL", script (), "1", match_key (request), request.actor_id (), new_room_id,
+           settings.room_name (), settings.mode (), std::to_string (settings.required_players ()),
+           std::to_string (settings.max_draw_number ()), settings.purpose (),
+           settings.has_observed_room_id () ? settings.observed_room_id () : "", now});
         if (reply.size () != 7) {
             throw std::runtime_error ("Redis match queue returned an invalid reservation.");
         }
-        return {reply[0],
-                {reply[1], reply[2], std::stoi (reply[3]),
-                 std::stoi (reply[4]), reply[5], reply[6]}};
+        reserve_bingo_room_res_t response;
+        response.set_room_id (reply[0]);
+        auto *reserved_settings = response.mutable_settings ();
+        reserved_settings->set_room_name (reply[1]);
+        reserved_settings->set_mode (reply[2]);
+        reserved_settings->set_required_players (std::stoi (reply[3]));
+        reserved_settings->set_max_draw_number (std::stoi (reply[4]));
+        reserved_settings->set_purpose (reply[5]);
+        if (!reply[6].empty ())
+            reserved_settings->set_observed_room_id (reply[6]);
+        return response;
     }
 
   private:
     std::string match_key (const reserve_bingo_room_req_t &request) const
     {
-        return _topology.redis_key_prefix + "match:"
-               + request.level_bucket + ":" + request.mode;
+        return _topology.redis_key_prefix + "match:" + request.level_bucket () + ":"
+               + request.mode ();
     }
 
     static std::string make_room_id ()
     {
-        static thread_local std::mt19937_64 random{std::random_device{} ()};
+        static thread_local std::mt19937_64 random{std::random_device{}()};
         std::ostringstream value;
-        value << "bingo-room-" << std::hex << std::setfill ('0')
-              << std::setw (16) << random () << std::setw (16) << random ();
+        value << "bingo-room-" << std::hex << std::setfill ('0') << std::setw (16) << random ()
+              << std::setw (16) << random ();
         return value.str ();
     }
 

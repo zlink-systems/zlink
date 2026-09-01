@@ -164,8 +164,7 @@ bool public_headers_do_not_expose_runtime_dependencies (const std::filesystem::p
                        == "framework/include/zlink/framework/contracts/locations/location.hpp"
                      || relative_text
                           == "framework/include/zlink/framework/contracts/locations/rows.hpp"
-                     || relative_text
-                          == "zlink/framework/contracts/locations/location.hpp"
+                     || relative_text == "zlink/framework/contracts/locations/location.hpp"
                      || relative_text == "zlink/framework/contracts/locations/rows.hpp")
                     && needle == "#include <zlink/Contracts/Service") {
                     continue;
@@ -201,9 +200,8 @@ bool file_contains (const std::filesystem::path &path, const std::string &needle
 bool is_code_guard_file (const std::filesystem::path &path)
 {
     const auto ext = path.extension ().generic_string ();
-    if (ext == ".cpp" || ext == ".cc" || ext == ".cxx" || ext == ".c"
-        || ext == ".hpp" || ext == ".hh" || ext == ".hxx" || ext == ".h"
-        || ext == ".cmake") {
+    if (ext == ".cpp" || ext == ".cc" || ext == ".cxx" || ext == ".c" || ext == ".hpp"
+        || ext == ".hh" || ext == ".hxx" || ext == ".h" || ext == ".cmake") {
         return true;
     }
     return path.filename () == "CMakeLists.txt";
@@ -222,17 +220,16 @@ bool path_contains_segment (const std::filesystem::path &path, const std::string
 bool redesigned_cpp_contract_symbols_do_not_regress (const std::filesystem::path &root)
 {
     bool ok = true;
-    const std::filesystem::path scan_roots[] = {
-      root / "framework", root / "tests", root / "e2e", root / "samples"};
-    const std::vector<std::string> forbidden = {
-      std::string ("add_actor_") + "packet",
-      std::string ("route_request_") + "call_t",
-      std::string ("join_spot_") + "raw",
-      std::string ("join_entry_spot_") + "raw",
-      std::string ("leave") + "Actor",
-      std::string ("route_location_") + "resolver_t",
-      std::string ("use_registry_") + "spot_resolver",
-      std::string ("registry_spot_") + "resolver"};
+    const std::filesystem::path scan_roots[] = {root / "framework", root / "tests", root / "e2e",
+                                                root / "samples"};
+    const std::vector<std::string> forbidden = {std::string ("add_actor_") + "packet",
+                                                std::string ("route_request_") + "call_t",
+                                                std::string ("join_spot_") + "raw",
+                                                std::string ("join_entry_spot_") + "raw",
+                                                std::string ("leave") + "Actor",
+                                                std::string ("route_location_") + "resolver_t",
+                                                std::string ("use_registry_") + "spot_resolver",
+                                                std::string ("registry_spot_") + "resolver"};
 
     for (const auto &scan_root : scan_roots) {
         if (!std::filesystem::exists (scan_root)) {
@@ -324,8 +321,8 @@ bool non_empty_directories_do_not_keep_gitkeep (const std::filesystem::path &roo
 
 bool actor_model_documents_actor_destroy_lifecycle (const std::filesystem::path &root)
 {
-    const auto path =
-      root.parent_path ().parent_path () / "doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md";
+    const auto path = root.parent_path ().parent_path ()
+                      / "doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md";
     std::ifstream input (path);
     std::ostringstream buffer;
     buffer << input.rdbuf ();
@@ -359,8 +356,8 @@ bool actor_model_documents_actor_destroy_lifecycle (const std::filesystem::path 
 
 bool framework_api_documents_actor_destroy_lifecycle (const std::filesystem::path &root)
 {
-    const auto path =
-      root.parent_path ().parent_path () / "doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md";
+    const auto path = root.parent_path ().parent_path ()
+                      / "doc/framework/common/spec/server/00-foundation/06-framework-api.ko.md";
     std::ifstream input (path);
     std::ostringstream buffer;
     buffer << input.rdbuf ();
@@ -431,8 +428,7 @@ bool registry_spec_does_not_reintroduce_monitoring_contract (const std::filesyst
 
     bool ok = true;
     const std::string stale[] = {"Registry snapshot event는 등록된 monitoring source에만 전달",
-                                 "topology나 service summary",
-                                 "typed monitoring event",
+                                 "topology나 service summary", "typed monitoring event",
                                  "Registry snapshot diff event는 설정된 interval을 따르고",
                                  "monitoring 통합 단계에서 별도 regression으로 고정한다"};
     for (const auto &needle : stale) {
@@ -560,29 +556,21 @@ bool sample_and_e2e_code_does_not_read_the_environment (const std::filesystem::p
             std::size_t line_no = 0;
             while (std::getline (input, line)) {
                 ++line_no;
-                const bool reads_environment = line.find ("getenv (") != std::string::npos
-                                               || line.find ("getenv(") != std::string::npos
-                                               || line.find ("load_env (") != std::string::npos
-                                               || line.find ("load_env(") != std::string::npos
-                                               || line.find ("os.environ") != std::string::npos
-                                               || (line.find ("${ZLINK_")
-                                                     != std::string::npos
-                                                   && line.find (
-                                                        "${ZLINK_CPP_BUILD_DIR")
-                                                        == std::string::npos)
-                                               || (line.find ("$ZLINK_")
-                                                     != std::string::npos
-                                                   && line.find (
-                                                        "$ZLINK_CPP_BUILD_DIR")
-                                                        == std::string::npos)
-                                               || ((line.find ("${BINGO_") != std::string::npos
-                                                    || line.find ("${GAMEQUEST_")
-                                                         != std::string::npos
-                                                    || line.find ("${SHOPPINGMALL_")
-                                                         != std::string::npos
-                                                    || line.find ("${TICTACTOE_")
-                                                         != std::string::npos)
-                                                   && line.find (":-") != std::string::npos);
+                const bool reads_environment =
+                  line.find ("getenv (") != std::string::npos
+                  || line.find ("getenv(") != std::string::npos
+                  || line.find ("load_env (") != std::string::npos
+                  || line.find ("load_env(") != std::string::npos
+                  || line.find ("os.environ") != std::string::npos
+                  || (line.find ("${ZLINK_") != std::string::npos
+                      && line.find ("${ZLINK_CPP_BUILD_DIR") == std::string::npos)
+                  || (line.find ("$ZLINK_") != std::string::npos
+                      && line.find ("$ZLINK_CPP_BUILD_DIR") == std::string::npos)
+                  || ((line.find ("${BINGO_") != std::string::npos
+                       || line.find ("${GAMEQUEST_") != std::string::npos
+                       || line.find ("${SHOPPINGMALL_") != std::string::npos
+                       || line.find ("${TICTACTOE_") != std::string::npos)
+                      && line.find (":-") != std::string::npos);
                 if (reads_environment) {
                     std::cerr << "sample/e2e application code must take configuration from its "
                                  "config file, not the environment: "
@@ -595,8 +583,7 @@ bool sample_and_e2e_code_does_not_read_the_environment (const std::filesystem::p
     return ok;
 }
 
-bool runner_generated_config_files_are_private_and_cleaned (
-  const std::filesystem::path &root)
+bool runner_generated_config_files_are_private_and_cleaned (const std::filesystem::path &root)
 {
     bool ok = true;
     for (const auto *tree : {"samples", "e2e"}) {
@@ -611,8 +598,7 @@ bool runner_generated_config_files_are_private_and_cleaned (
             if (content.find ("--config") == std::string::npos) {
                 continue;
             }
-            if (content.find ("os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)")
-                == std::string::npos) {
+            if (content.find ("os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)") == std::string::npos) {
                 std::cerr << "runner-generated application config must use mode 0600: "
                           << entry.path () << '\n';
                 ok = false;
@@ -667,7 +653,8 @@ bool observability_ops_uses_role_specific_entrypoints (const std::filesystem::pa
                               std::istreambuf_iterator<char> ());
     if (runner.find ("zlink_cpp_e2e_observability_ops_server") != std::string::npos
         || runner.find ('\"' + std::string ("role") + '\"') != std::string::npos) {
-        std::cerr << "ObservabilityOps must not select server roles through one binary/config key\n";
+        std::cerr
+          << "ObservabilityOps must not select server roles through one binary/config key\n";
         ok = false;
     }
     return ok;
@@ -715,18 +702,15 @@ bool affected_e2e_clients_own_each_scenario_in_a_file (const std::filesystem::pa
         std::vector<const char *> ids;
     };
     const std::vector<config_scenarios_t> configs{
-      {"ToActorMessaging",
-       {"TA-A1", "TA-A2", "TA-A3", "TA-A4", "TA-B1", "TA-B2", "TA-B3"}},
+      {"ToActorMessaging", {"TA-A1", "TA-A2", "TA-A3", "TA-A4", "TA-B1", "TA-B2", "TA-B3"}},
       {"DiscoveryRegistryHa",
-       {"SF-A1", "SF-A2", "SF-B1", "SF-B2", "SF-C1", "SF-C2", "SF-D1", "SF-D2",
-        "SF-D3", "SF-E1"}},
+       {"SF-A1", "SF-A2", "SF-B1", "SF-B2", "SF-C1", "SF-C2", "SF-D1", "SF-D2", "SF-D3", "SF-E1"}},
       {"SpotActorTransfer",
-       {"ST-A1", "ST-A2", "ST-A3", "ST-B1", "ST-B2", "ST-B3", "ST-B4", "ST-C1",
-        "ST-C2", "ST-C3", "ST-D1", "ST-D2", "ST-E1", "ST-E2", "ST-F1", "ST-F2",
-        "ST-F3", "ST-F4", "ST-F5", "ST-F6"}},
+       {"ST-A1", "ST-A2", "ST-A3", "ST-B1", "ST-B2", "ST-B3", "ST-B4", "ST-C1", "ST-C2", "ST-C3",
+        "ST-D1", "ST-D2", "ST-E1", "ST-E2", "ST-F1", "ST-F2", "ST-F3", "ST-F4", "ST-F5", "ST-F6"}},
       {"ObservabilityOps",
-       {"OBS-A1", "OBS-A2", "OBS-A3", "OBS-A4", "OBS-B1", "OBS-B2", "OBS-B3",
-        "OBS-B4", "OBS-C1", "OBS-C2", "OBS-C3", "OBS-C4", "OBS-C5"}},
+       {"OBS-A1", "OBS-A2", "OBS-A3", "OBS-A4", "OBS-B1", "OBS-B2", "OBS-B3", "OBS-B4", "OBS-C1",
+        "OBS-C2", "OBS-C3", "OBS-C4", "OBS-C5"}},
     };
 
     bool ok = true;
@@ -744,8 +728,8 @@ bool affected_e2e_clients_own_each_scenario_in_a_file (const std::filesystem::pa
             const auto symbol = "run_" + key + "_scenario";
             const auto path = client_root / "Scenarios" / filename;
             if (!std::filesystem::is_regular_file (path)) {
-                std::cerr << config.directory << " requires client scenario file for " << id
-                          << ": " << path << '\n';
+                std::cerr << config.directory << " requires client scenario file for " << id << ": "
+                          << path << '\n';
                 ok = false;
                 continue;
             }
@@ -754,8 +738,7 @@ bool affected_e2e_clients_own_each_scenario_in_a_file (const std::filesystem::pa
                                         std::istreambuf_iterator<char> ());
             if (scenario.find (id) == std::string::npos
                 || scenario.find (symbol) == std::string::npos) {
-                std::cerr << path << " must own " << id << " execution through " << symbol
-                          << '\n';
+                std::cerr << path << " must own " << id << " execution through " << symbol << '\n';
                 ok = false;
             }
             if (main_content.find (filename) == std::string::npos
@@ -1045,22 +1028,16 @@ bool http_hosting_public_surface_excludes_non_goal_features (const std::filesyst
     return ok;
 }
 
-bool location_store_public_surface_hides_domain_repositories (
-  const std::filesystem::path &root)
+bool location_store_public_surface_hides_domain_repositories (const std::filesystem::path &root)
 {
     bool ok = true;
     const std::filesystem::path include_roots[] = {
-      root / "framework/include",
-      root / "extensions/framework-locations-redis/include"};
+      root / "framework/include", root / "extensions/framework-locations-redis/include"};
     const std::string forbidden[] = {
-      "maintenance_stores.hpp",
-      "location_repository_t",
-      "relocation_repository_t",
-      "authority_key_t",
-      "aggregate_prepare_request_t",
-      "location_owner_token_t",
-      "redis_location_repository_t",
-      "redis_relocation_repository_t"};
+      "maintenance_stores.hpp",      "location_repository_t",
+      "relocation_repository_t",     "authority_key_t",
+      "aggregate_prepare_request_t", "location_owner_token_t",
+      "redis_location_repository_t", "redis_relocation_repository_t"};
 
     for (const auto &include_root : include_roots) {
         for (const auto &entry : std::filesystem::recursive_directory_iterator (include_root)) {
@@ -1103,9 +1080,9 @@ int main ()
       require_exists (root / "framework/include/zlink/framework/contracts/detail/message_name.hpp");
     const auto location_values_header =
       root / "framework/include/zlink/framework/contracts/locations/values.hpp";
-    ok &= file_does_not_contain (
-      location_values_header, std::string ("to_") + "canonical_string",
-      "location canonical strings are an internal codec, not public API");
+    ok &=
+      file_does_not_contain (location_values_header, std::string ("to_") + "canonical_string",
+                             "location canonical strings are an internal codec, not public API");
     ok &= file_does_not_contain (
       location_values_header, std::string ("try_parse_") + "location",
       "location canonical string parsing is an internal codec, not public API");
@@ -1115,15 +1092,13 @@ int main ()
       "route resolver is internal-only and must not return to the public location surface");
     const auto redis_store_header =
       root / "extensions/framework-locations-redis/include/zlink/locations/redis.hpp";
-    ok &= file_does_not_contain (
-      redis_store_header, "options () const",
-      "Redis Store concrete classes must not add a public options query");
-    ok &= file_does_not_contain (
-      redis_store_header, "options = {}",
-      "Redis Store constructors require explicit provider options");
-    ok &= file_does_not_contain (
-      redis_store_header, "127.0.0.1",
-      "Redis provider options must not publish a default endpoint");
+    ok &=
+      file_does_not_contain (redis_store_header, "options () const",
+                             "Redis Store concrete classes must not add a public options query");
+    ok &= file_does_not_contain (redis_store_header, "options = {}",
+                                 "Redis Store constructors require explicit provider options");
+    ok &= file_does_not_contain (redis_store_header, "127.0.0.1",
+                                 "Redis provider options must not publish a default endpoint");
     const std::string removed_framework_facades[] = {
       "actors.hpp", "app.hpp",           "assembly.hpp",  "call.hpp",       "channels.hpp",
       "config.hpp", "error.hpp",         "execution.hpp", "handlers.hpp",   "health.hpp",
@@ -1152,9 +1127,8 @@ int main ()
     ok &= require_exists (root / "framework/src/runtime/messaging/envelope_codec.cpp");
     ok &= require_exists (root / "framework/src/runtime/messaging/envelope_codec.hpp");
     ok &= require_exists (root / "framework/src/runtime/messaging/logical_multicast_runtime.cpp");
-    ok &= require_absent (
-      root / "framework/src/runtime/messaging/logical_multicast_runtime.hpp",
-      "logical multicast runtime must not expose production test hooks");
+    ok &= require_absent (root / "framework/src/runtime/messaging/logical_multicast_runtime.hpp",
+                          "logical multicast runtime must not expose production test hooks");
     const auto legacy_submit_owner_reason =
       "binding-owned async admission must not leave a Framework retry owner";
     ok &= require_absent (root / "framework/src/runtime/messaging/async_submit_runtime.cpp",
@@ -1268,10 +1242,16 @@ int main ()
     ok &= require_exists (root / "samples/Bingo/run_sample.sh");
     ok &= require_exists (root / "samples/Bingo/run_sample.ps1");
     ok &= require_exists (root / "samples/Bingo/Shared/Contracts/messages.hpp");
-    /* Bingo의 payload codec은 Protobuf다. wire 스키마는 `.proto`가 정본이고, 도메인 타입은 그
-     * 스키마가 만든 message로 옮겨 실린다. */
+    /* Bingo의 payload codec은 Protobuf다. wire 스키마는 `.proto`가 정본이고 generated message를
+     * transport에서 직접 사용한다. Domain state와의 변환은 Play infrastructure가 소유한다. */
     ok &= require_exists (root / "samples/Bingo/Shared/Contracts/bingo_messages.proto");
-    ok &= require_exists (root / "samples/Bingo/Shared/Contracts/protobuf_conversions.hpp");
+    ok &= require_exists (root
+                          / "samples/Bingo/Server/Play/Infrastructure/ZLink/protobuf_messages.hpp");
+    ok &= require_exists (root / "samples/Bingo/Server/Play/Domain/Bingo/bingo_state.hpp");
+    ok &= require_absent (root / "samples/Bingo/Shared/Contracts/protobuf_conversions.hpp",
+                          "Bingo must use generated protobuf messages directly");
+    ok &= require_absent (root / "samples/Bingo/Server/common_codecs.hpp",
+                          "Bingo must not register protobuf serializers per message");
     ok &= require_absent (root / "samples/Bingo/Shared" / "Configuration",
                           "Bingo Shared must contain message contracts only");
     ok &= require_absent (root / "samples/Bingo/Shared" / "sample.hpp",
@@ -1297,16 +1277,14 @@ int main ()
     ok &= require_exists (root / "samples/Bingo/Server/Play/Domain/Bingo/bingo_card.hpp");
     ok &= require_exists (root / "samples/Bingo/Server/Play/Domain/Bingo/bingo_game.hpp");
     ok &= require_exists (root / "samples/Bingo/Server/Play/Domain/Bingo/bingo_room_game.hpp");
-    ok &= require_exists (
-      root
-      / "samples/Bingo/Server/Matchmaking/Application/"
-        "bingo_match_reservation_store.hpp");
-    ok &= require_exists (
-      root / "samples/Bingo/Server/Matchmaking/matchmaking_server_host_factory.hpp");
-    ok &= require_exists (
-      root
-      / "samples/Bingo/Server/Matchmaking/Infrastructure/Redis/"
-        "redis_bingo_match_reservation_store.hpp");
+    ok &= require_exists (root
+                          / "samples/Bingo/Server/Matchmaking/Application/"
+                            "bingo_match_reservation_store.hpp");
+    ok &= require_exists (root
+                          / "samples/Bingo/Server/Matchmaking/matchmaking_server_host_factory.hpp");
+    ok &= require_exists (root
+                          / "samples/Bingo/Server/Matchmaking/Infrastructure/Redis/"
+                            "redis_bingo_match_reservation_store.hpp");
     ok &= require_exists (
       root / "samples/Bingo/Server/Play/Infrastructure/ZLink/Actors/player_actor.hpp");
     ok &= require_exists (
@@ -1331,29 +1309,25 @@ int main ()
                           "SPOT actor packets must be registered as spot member functions");
     ok &= require_absent (
       root
-      / "samples/Bingo/Server/Play/Infrastructure/ZLink/Handlers/"
-        "allocate_bingo_room_handler.hpp",
+        / "samples/Bingo/Server/Play/Infrastructure/ZLink/Handlers/"
+          "allocate_bingo_room_handler.hpp",
       "Matchmaker Instance Spot owns Redis reservation and Play does not allocate rooms");
-    ok &= require_absent (
-      root
-        / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/Handlers/"
-          "ensure_player_actor_handler.hpp",
-      "Bingo Entry Spot owns Actor creation admission in on_create_actor");
+    ok &=
+      require_absent (root
+                        / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/Handlers/"
+                          "ensure_player_actor_handler.hpp",
+                      "Bingo Entry Spot owns Actor creation admission in on_create_actor");
     ok &= file_contains (
-      root
-        / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/bingo_entry_spot.hpp",
+      root / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/bingo_entry_spot.hpp",
       "task_t<actor_create_response_t>");
     ok &= file_contains (
-      root
-        / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/bingo_entry_spot.hpp",
+      root / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/bingo_entry_spot.hpp",
       "on_create_actor (");
     ok &= file_contains (
-      root
-        / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/bingo_entry_spot.hpp",
+      root / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/bingo_entry_spot.hpp",
       "player_actor_t &actor");
     ok &= file_contains (
-      root
-        / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/bingo_entry_spot.hpp",
+      root / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/EntrySpot/bingo_entry_spot.hpp",
       "create_request.decode<ensure_player_actor_req_t> ()");
     ok &= require_exists (root / "samples/Bingo/Server/Play/play_server_host_factory.hpp");
     ok &= require_absent (root / "samples/Bingo/Server/Registry",
@@ -1381,16 +1355,13 @@ int main ()
     ok &= require_exists (root / "samples/run_samples.ps1");
     const auto sample_shell_aggregate = root / "samples/run_samples.sh";
     const auto sample_powershell_aggregate = root / "samples/run_samples.ps1";
-    for (const auto &runner : {"TicTacToe", "Bingo", "DeliveryDispatch", "SupportChat",
-                               "GameQuest", "ShoppingMall"}) {
-        ok &= file_contains (sample_shell_aggregate,
-                             std::string (runner) + "/run_sample.sh");
-        ok &= file_contains (sample_powershell_aggregate,
-                             std::string (runner) + "/run_sample.sh");
+    for (const auto &runner :
+         {"TicTacToe", "Bingo", "DeliveryDispatch", "SupportChat", "GameQuest", "ShoppingMall"}) {
+        ok &= file_contains (sample_shell_aggregate, std::string (runner) + "/run_sample.sh");
+        ok &= file_contains (sample_powershell_aggregate, std::string (runner) + "/run_sample.sh");
     }
-    ok &= file_does_not_contain (
-      sample_shell_aggregate, "MAX_ATTEMPTS",
-      "the C++ sample aggregate must not retry a bind failure");
+    ok &= file_does_not_contain (sample_shell_aggregate, "MAX_ATTEMPTS",
+                                 "the C++ sample aggregate must not retry a bind failure");
     ok &= file_does_not_contain (
       sample_shell_aggregate, "BIND_RETRY_PATTERN",
       "the C++ sample aggregate must not classify bind failure as retryable");
@@ -1824,12 +1795,11 @@ int main ()
                          "actor_request_call_t request (actor_id_t actor_id");
     ok &= file_contains (root / "framework/src/runtime/actors/actor_client.cpp",
                          "actor_authority_key (actor_id)");
-    ok &= file_does_not_contain (
-      root / "framework/src/runtime/locations/store_location_resolvers.hpp",
-      "\"1:\" + std::string (object_id)",
-      "Location reads must not fall back to legacy Actor authority keys");
-    ok &= file_contains (root / "CMakeLists.txt",
-                         "framework/src/runtime/actors/actor_client.cpp");
+    ok &=
+      file_does_not_contain (root / "framework/src/runtime/locations/store_location_resolvers.hpp",
+                             "\"1:\" + std::string (object_id)",
+                             "Location reads must not fall back to legacy Actor authority keys");
+    ok &= file_contains (root / "CMakeLists.txt", "framework/src/runtime/actors/actor_client.cpp");
 
     ok &= public_headers_do_not_include_runtime (root / "framework/include");
     ok &= public_headers_do_not_include_runtime (root / "connector/core/include");
@@ -1857,16 +1827,16 @@ int main ()
     ok &= observability_ops_uses_role_specific_entrypoints (root);
     ok &= spot_actor_transfer_uses_role_specific_entrypoints (root);
     ok &= affected_e2e_clients_own_each_scenario_in_a_file (root);
-    ok &= file_does_not_contain (
-      root / "e2e/run_e2e_all.sh", "exec env E2E_START_ORDER=",
-      "the aggregate E2E runner must pass start order as a runner option, not an environment variable");
+    ok &= file_does_not_contain (root / "e2e/run_e2e_all.sh", "exec env E2E_START_ORDER=",
+                                 "the aggregate E2E runner must pass start order as a runner "
+                                 "option, not an environment variable");
     ok &= file_contains (root / "e2e/RuntimeMonitoring/run_e2e.sh",
                          "$CLIENT\" --config=\"$CONFIG_DIR/client.json\"");
     ok &= file_contains (root / "e2e/RuntimeMonitoring/Client/Support/client_options.hpp",
                          "RuntimeMonitoring client requires --config=<path>");
     ok &= file_does_not_contain (
-      root / "e2e/RuntimeMonitoring/Client/Support/client_options.hpp", "--log-dir=",
-      "RuntimeMonitoring client file paths and topology must come from typed config");
+      root / "e2e/RuntimeMonitoring/Client/Support/client_options.hpp",
+      "--log-dir=", "RuntimeMonitoring client file paths and topology must come from typed config");
     ok &= redesigned_cpp_contract_symbols_do_not_regress (root);
     ok &= contract_headers_have_compile_coverage (root, "framework/include", "");
     ok &= contract_headers_have_compile_coverage (root, "connector/core/include", "");

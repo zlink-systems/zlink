@@ -4,7 +4,6 @@
 #include "../Configuration/sample_configuration.hpp"
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_topology.hpp"
-#include "../common_codecs.hpp"
 #include "../host_support.hpp"
 #include "../sample_log_dir.hpp"
 #include "Application/bingo_match_reservation_store.hpp"
@@ -13,6 +12,7 @@
 #include <chrono>
 #include <memory>
 #include <zlink/locations/redis.hpp>
+#include <zlink/codecs/protobuf.hpp>
 
 namespace zlink::samples::bingo
 {
@@ -41,8 +41,7 @@ class bingo_matchmaker_t : public instance_spot_t
 
     void configure () override
     {
-        _context.handlers ().add_handler<&bingo_matchmaker_t::reserve> (
-          reserve_bingo_room_req_t::packet_name);
+        _context.handlers ().add_handler<&bingo_matchmaker_t::reserve> ();
     }
 
     task_t<void> on_initialize () override
@@ -89,7 +88,7 @@ class matchmaking_server_host_factory_t
         observe_runtime_metrics (app, topology.log_dir, "matchmaking");
         auto &options = app.add_zlink_framework ();
         options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
-        options.codecs ().use<bingo_protobuf_codecs_t> ();
+        options.codecs ().use (zlink::framework_codecs::protobuf ());
         options.add_location_store<redis::redis_location_store_t> ()
           .set_connection_string (topology.redis_endpoint)
           .set_key_prefix (topology.redis_key_prefix + "location:");

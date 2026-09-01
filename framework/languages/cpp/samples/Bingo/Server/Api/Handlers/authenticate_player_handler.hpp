@@ -25,18 +25,25 @@ class authenticate_player_handler_t
 
     authenticate_player_res_t handle (const authenticate_player_req_t &request)
     {
-        if (request.access_token == bingo_sample_players_t::observer) {
-            _logger.info ("authenticate observer", {{"actor_id", request.access_token}});
-            return {true, request.access_token, "Observer", std::nullopt};
+        authenticate_player_res_t response;
+        if (request.access_token () == bingo_sample_players_t::observer) {
+            _logger.info ("authenticate observer", {{"actor_id", request.access_token ()}});
+            response.set_accepted (true);
+            response.set_actor_id (request.access_token ());
+            response.set_display_name ("Observer");
+            return response;
         }
-        if (request.access_token.rfind ("player-", 0) != 0) {
-            _logger.warn ("reject player authentication", {{"access_token", request.access_token}});
-            return {false, std::nullopt, std::nullopt,
-                    "access token must be a sample player id"};
+        if (request.access_token ().rfind ("player-", 0) != 0) {
+            _logger.warn ("reject player authentication",
+                          {{"access_token", request.access_token ()}});
+            response.set_reason ("access token must be a sample player id");
+            return response;
         }
-        _logger.info ("authenticate player", {{"actor_id", request.access_token}});
-        return {true, request.access_token, "Player " + request.access_token.substr (7),
-                std::nullopt};
+        _logger.info ("authenticate player", {{"actor_id", request.access_token ()}});
+        response.set_accepted (true);
+        response.set_actor_id (request.access_token ());
+        response.set_display_name ("Player " + request.access_token ().substr (7));
+        return response;
     }
 
   private:

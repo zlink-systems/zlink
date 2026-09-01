@@ -2,6 +2,7 @@
 #pragma once
 
 #include <zlink/framework/contracts/configuration/framework_options.hpp>
+#include <zlink/framework/codecs/json_stream_connector.hpp>
 #include <zlink/stream_connector/contracts/codec_registry.hpp>
 
 #include <google/protobuf/message_lite.h>
@@ -13,6 +14,10 @@
 
 namespace zlink::framework_codecs
 {
+
+struct protobuf_registration_key_t
+{
+};
 
 /* Protobuf codec extension: payload는 protobuf wire 그대로 싣는다. 등록 방법은 두 가지다.
  *
@@ -27,7 +32,14 @@ class protobuf_codec_extension_t
   public:
     template <typename TBuilder> void register_framework_codecs (TBuilder &codecs) const
     {
-        (void) codecs;
+        codecs.template add_serializer<protobuf_registration_key_t> (
+          [] (const protobuf_registration_key_t &) {
+              return zlink::framework::encoded_payload_t{};
+          },
+          [] (const zlink::framework::encoded_payload_t &) {
+              return protobuf_registration_key_t{};
+          },
+          content_type);
     }
 
     void register_connector_codecs (zlink::stream_connector::codec_registry_t &codecs) const
@@ -49,8 +61,7 @@ class protobuf_codec_extension_t
               //  even stores its bytes inline in the temporary itself), and
               //  the temporary dies at the end of this full expression — the
               //  returned payload must OWN its bytes.
-              return zlink::framework::encoded_payload_t::from_string (
-                serialize (value));
+              return zlink::framework::encoded_payload_t::from_string (serialize (value));
           },
           [] (const zlink::framework::encoded_payload_t &payload) {
               TMessage value;
@@ -72,8 +83,7 @@ class protobuf_codec_extension_t
               to_protobuf (value, message);
               //  Same ownership rule as above: never return a payload that
               //  borrows a temporary message's buffer.
-              return zlink::framework::encoded_payload_t::from_string (
-                serialize (message));
+              return zlink::framework::encoded_payload_t::from_string (serialize (message));
           },
           [] (const zlink::framework::encoded_payload_t &payload) {
               TMessage message;
@@ -112,3 +122,75 @@ inline protobuf_codec_extension_t protobuf ()
 }
 
 } // namespace zlink::framework_codecs
+
+namespace zlink::framework::detail
+{
+
+template <typename T>
+struct extension_serializer_traits_t<
+  T,
+  std::enable_if_t<std::is_base_of_v<google::protobuf::MessageLite, T>>>
+{
+    static constexpr bool available = true;
+    using registration_key_type = framework_codecs::protobuf_registration_key_t;
+
+    static serializer_t<T> make_serializer ()
+    {
+        return serializer_t<T> (
+          [] (const T &value) {
+              std::string bytes;
+              if (!value.SerializeToString (&bytes)) {
+                  throw std::runtime_error ("protobuf codec failed to serialize "
+                                            + std::string (value.GetTypeName ()));
+              }
+              return encoded_payload_t::from_string (bytes);
+          },
+          [] (const encoded_payload_t &payload) {
+              T value;
+              if (!value.ParseFromString (encoded_payload_to_raw (payload).to_string ())) {
+                  throw std::runtime_error ("protobuf codec failed to parse "
+                                            + std::string (value.GetTypeName ()));
+              }
+              return value;
+          },
+          framework_codecs::protobuf_codec_extension_t::content_type);
+    }
+};
+
+} // namespace zlink::framework::detail
+
+namespace zlink::stream_connector::codecs
+{
+
+template <typename T>
+requires std::is_base_of_v<google::protobuf::MessageLite, T> struct codec_traits<T>
+{
+    static constexpr codec_t codec = codec_t::protobuf;
+
+    static zlink::message_t encode (const T &value)
+    {
+        std::string bytes;
+        if (!value.SerializeToString (&bytes)) {
+            throw std::runtime_error ("protobuf codec failed to serialize "
+                                      + std::string (value.GetTypeName ()));
+        }
+        return zlink::message_t::from (bytes);
+    }
+
+    static T decode (const zlink::message_t &payload)
+    {
+        T value;
+        if (!value.ParseFromString (payload.to_string ())) {
+            throw std::runtime_error ("protobuf codec failed to parse "
+                                      + std::string (value.GetTypeName ()));
+        }
+        return value;
+    }
+
+    static T decode_message_pack (const zlink::message_t &)
+    {
+        throw std::runtime_error ("protobuf payload cannot be decoded as MessagePack");
+    }
+};
+
+} // namespace zlink::stream_connector::codecs

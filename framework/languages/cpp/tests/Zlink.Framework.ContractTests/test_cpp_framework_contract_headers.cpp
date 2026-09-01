@@ -84,6 +84,8 @@
 #include <zlink/stream_e2e_client/codecs/auto_codec.hpp>
 #include <zlink/stream_e2e_client/task.hpp>
 
+#include <google/protobuf/wrappers.pb.h>
+
 #include <future>
 #include <functional>
 #include <memory>
@@ -1068,16 +1070,14 @@ static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::inbound_dispatch_options_t &> ()
                              .set_max_queued_application_jobs (std::optional<std::uint32_t>{1})),
                  zlink::framework::inbound_dispatch_options_t &>);
-static_assert (
-  std::is_same_v<decltype (std::declval<zlink::framework::inbound_dispatch_options_t &> ()
-                             .set_application_job_queue_pause_threshold_percent (
-                               std::uint32_t{80})),
-                 zlink::framework::inbound_dispatch_options_t &>);
-static_assert (
-  std::is_same_v<decltype (std::declval<zlink::framework::inbound_dispatch_options_t &> ()
-                             .set_application_job_queue_resume_threshold_percent (
-                               std::uint32_t{60})),
-                 zlink::framework::inbound_dispatch_options_t &>);
+static_assert (std::is_same_v<
+               decltype (std::declval<zlink::framework::inbound_dispatch_options_t &> ()
+                           .set_application_job_queue_pause_threshold_percent (std::uint32_t{80})),
+               zlink::framework::inbound_dispatch_options_t &>);
+static_assert (std::is_same_v<
+               decltype (std::declval<zlink::framework::inbound_dispatch_options_t &> ()
+                           .set_application_job_queue_resume_threshold_percent (std::uint32_t{60})),
+               zlink::framework::inbound_dispatch_options_t &>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::core_hwm_options_t &> ()
                                           .set_core_hwm_memory_limit_bytes (std::uint64_t{1})),
                               zlink::framework::core_hwm_options_t &>);
@@ -1096,17 +1096,17 @@ static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::framework_runtime_status_t> ().capacity),
                  zlink::framework::host_capacity_status_t>);
 static_assert (
-  std::is_same_v<decltype (std::declval<zlink::framework::application_job_queue_status_t> ()
-                             .pause_permit_count),
-                 std::uint32_t>);
+  std::is_same_v<
+    decltype (std::declval<zlink::framework::application_job_queue_status_t> ().pause_permit_count),
+    std::uint32_t>);
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::application_job_queue_status_t> ()
                              .resume_permit_count),
                  std::uint32_t>);
 static_assert (
-  std::is_same_v<decltype (std::declval<zlink::framework::application_job_queue_status_t> ()
-                             .pressure_state),
-                 zlink::framework::application_job_queue_pressure_state_t>);
+  std::is_same_v<
+    decltype (std::declval<zlink::framework::application_job_queue_status_t> ().pressure_state),
+    zlink::framework::application_job_queue_pressure_state_t>);
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::application_job_queue_status_t> ()
                              .current_pause_duration),
@@ -1885,6 +1885,20 @@ int main ()
     if (!capability_snapshot.max_message_size
         || capability_snapshot.max_message_size->bytes () != 16 * 1024 * 1024) {
         return 6;
+    }
+    zlink::framework::serializer_registry_t protobuf_serializers;
+    zlink::framework::codec_registration_context_t protobuf_registration (protobuf_serializers);
+    zlink::framework_codecs::protobuf ().register_framework_codecs (protobuf_registration);
+    google::protobuf::StringValue protobuf_value;
+    protobuf_value.set_value ("direct-protobuf");
+    const auto protobuf_serializer = protobuf_serializers.get<google::protobuf::StringValue> ();
+    const auto protobuf_bytes = protobuf_serializer.serialize (protobuf_value);
+    const auto protobuf_round_trip = protobuf_serializer.deserialize (protobuf_bytes);
+    if (protobuf_serializer.content_type () != "application/x-protobuf"
+        || protobuf_round_trip.value () != "direct-protobuf"
+        || zlink::framework::detail::message_name<google::protobuf::StringValue> ()
+             != "StringValue") {
+        return 10;
     }
     return 0;
 }

@@ -4,7 +4,6 @@
 #include "../Configuration/sample_configuration.hpp"
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_topology.hpp"
-#include "../common_codecs.hpp"
 #include "../sample_log_dir.hpp"
 #include "../../Shared/Contracts/messages.hpp"
 #include "../host_support.hpp"
@@ -16,6 +15,7 @@
 
 #include <memory>
 #include <zlink/locations/redis.hpp>
+#include <zlink/codecs/protobuf.hpp>
 
 namespace zlink::samples::bingo
 {
@@ -39,7 +39,7 @@ class play_server_host_factory_t
         observe_runtime_metrics (app, topology.log_dir, "play-" + topology.play_node);
         auto &options = app.add_zlink_framework ();
         options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
-        options.codecs ().use<bingo_protobuf_codecs_t> ();
+        options.codecs ().use (zlink::framework_codecs::protobuf ());
         options.add_location_store<redis::redis_location_store_t> ()
           .set_connection_string (topology.redis_endpoint)
           .set_key_prefix (topology.redis_key_prefix + "location:");

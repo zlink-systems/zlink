@@ -12,10 +12,20 @@
 namespace zlink::samples::bingo
 {
 
+struct bingo_player_joined_t
+{
+    std::string room_id;
+    std::string actor_id;
+    std::string display_name;
+    int seat = 0;
+    bool is_host = false;
+    bingo_room_state_t state;
+};
+
 struct bingo_room_join_result_t
 {
-    player_joined_notify_t player_joined;
-    std::optional<game_started_notify_t> game_started;
+    bingo_player_joined_t player_joined;
+    bool game_started = false;
 };
 
 class bingo_room_game_t
@@ -23,11 +33,10 @@ class bingo_room_game_t
   public:
     bingo_room_game_t () = default;
 
-    explicit bingo_room_game_t (std::string room_id) : _state{std::move (room_id)} {}
+    explicit bingo_room_game_t (std::string room_id) { _state.room_id = std::move (room_id); }
 
     explicit bingo_room_game_t (bingo_room_state_t state) :
-        _state (std::move (state)),
-        _game (_state.last_drawn_number.value_or (0) + 1)
+        _state (std::move (state)), _game (_state.last_drawn_number.value_or (0) + 1)
     {
     }
 
@@ -37,16 +46,14 @@ class bingo_room_game_t
         _game = bingo_game_t (_state.last_drawn_number.value_or (0) + 1);
     }
 
-    bingo_room_join_result_t join (std::string actor_id,
-                                   std::string display_name,
-                                   int wins = 0,
-                                   int losses = 0)
+    bingo_room_join_result_t
+    join (std::string actor_id, std::string display_name, int wins = 0, int losses = 0)
     {
         if (_state.players.size () >= 2) {
             throw std::runtime_error ("bingo room is full");
         }
         if (find_player (actor_id) != _state.players.end ()) {
-            return {{_state.room_id, actor_id, display_name, 0, false, _state}, std::nullopt};
+            return {{_state.room_id, actor_id, display_name, 0, false, _state}, false};
         }
 
         const bool is_host = _state.players.empty ();
@@ -54,28 +61,23 @@ class bingo_room_game_t
         if (is_host) {
             _state.host_actor_id = actor_id;
         }
-        _state.players.push_back (
-          {actor_id, display_name, seat, is_host, {}, {}, 0, wins, losses});
+        _state.players.push_back ({actor_id, display_name, seat, is_host, {}, {}, 0, wins, losses});
         _state.can_start = _state.players.size () == 2;
         if (_state.can_start) {
-            _state.status = bingo_room_status_t::running;
+            _state.status = "Running";
         }
-        auto joined = player_joined_notify_t{_state.room_id, std::move (actor_id),
-                                             std::move (display_name), seat, is_host, _state};
-        auto started = _state.can_start
-                         ? std::optional<game_started_notify_t> (game_started_notify_t{_state})
-                         : std::nullopt;
-        return {std::move (joined), std::move (started)};
+        return {
+          {_state.room_id, std::move (actor_id), std::move (display_name), seat, is_host, _state},
+          _state.can_start};
     }
 
-    submit_bingo_card_res_t submit_card (const std::string &actor_id,
-                                         const std::vector<int> &numbers)
+    bingo_room_state_t submit_card (const std::string &actor_id, const std::vector<int> &numbers)
     {
-        if (_state.status != bingo_room_status_t::running) {
+        if (_state.status != "Running") {
             throw std::runtime_error ("bingo room is not running");
         }
         _game.submit_card (_state.players, actor_id, numbers);
-        return {_state};
+        return _state;
     }
 
     bool should_draw () const noexcept { return _game.all_cards_submitted (_state.players); }
@@ -89,15 +91,14 @@ class bingo_room_game_t
         }
     }
 
-    std::optional<number_drawn_notify_t> draw_next () { return _game.draw_next (_state); }
+    std::optional<bingo_number_drawn_t> draw_next () { return _game.draw_next (_state); }
 
     bingo_room_state_t leave (const std::string &actor_id)
     {
-        _state.players.erase (std::remove_if (_state.players.begin (), _state.players.end (),
-                                              [&] (const auto &player) {
-                                                  return player.actor_id == actor_id;
-                                              }),
-                              _state.players.end ());
+        _state.players.erase (
+          std::remove_if (_state.players.begin (), _state.players.end (),
+                          [&] (const auto &player) { return player.actor_id == actor_id; }),
+          _state.players.end ());
         _state.can_start = _state.players.size () == 2;
         return _state;
     }
@@ -107,9 +108,8 @@ class bingo_room_game_t
   private:
     std::vector<bingo_player_state_t>::iterator find_player (const std::string &actor_id)
     {
-        return std::find_if (_state.players.begin (), _state.players.end (), [&] (const auto &p) {
-            return p.actor_id == actor_id;
-        });
+        return std::find_if (_state.players.begin (), _state.players.end (),
+                             [&] (const auto &p) { return p.actor_id == actor_id; });
     }
 
     bingo_room_state_t _state;

@@ -15,9 +15,9 @@ inline task_t<void> bingo_room_spot_t::handle_draw_tick (const timer_tick_t &)
     if (!drawn) {
         co_return;
     }
-    send_to_players (*drawn);
+    send_to_players (make_message (*drawn));
     if (drawn->state.status == bingo_room_status_t::finished) {
-        send_to_players (game_ended_notify_t{drawn->state});
+        send_to_players (make_game_ended_message (drawn->state));
         publish_reward (*drawn);
         _draw_timer.cancel ();
         co_await leave_finished_actors ();
@@ -27,9 +27,8 @@ inline task_t<void> bingo_room_spot_t::handle_draw_tick (const timer_tick_t &)
     }
 }
 
-inline task_t<void>
-bingo_room_draw_timer_handler_t::handle (bingo_room_spot_t &spot,
-                                         const timer_tick_t &tick) const
+inline task_t<void> bingo_room_draw_timer_handler_t::handle (bingo_room_spot_t &spot,
+                                                             const timer_tick_t &tick) const
 {
     co_await spot.handle_draw_tick (tick);
 }

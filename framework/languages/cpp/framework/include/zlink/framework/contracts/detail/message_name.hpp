@@ -15,10 +15,19 @@ template <typename T> concept static_packet_name = requires
     } -> std::convertible_to<const char *>;
 };
 
+template <typename T> concept protobuf_descriptor_name = requires
+{
+    {
+        std::string (T::descriptor ()->name ())
+    } -> std::same_as<std::string>;
+};
+
 template <typename T> std::string message_name ()
 {
     if constexpr (static_packet_name<T>) {
         return T::packet_name;
+    } else if constexpr (protobuf_descriptor_name<T>) {
+        return std::string (T::descriptor ()->name ());
     } else {
         return typeid (T).name ();
     }

@@ -20,6 +20,11 @@ template <typename T> struct codec_traits
     static zlink::message_t encode (const T &value) { return zlink::message_t::from_json (value); }
 
     static T decode (const zlink::message_t &message) { return message.parse_json<T> (); }
+
+    static T decode_message_pack (const zlink::message_t &message)
+    {
+        return nlohmann::json::from_msgpack (message.to_bytes ()).template get<T> ();
+    }
 };
 
 template <typename T> void decode_payload (codec_t codec, const zlink::message_t &payload, T &value)
@@ -34,7 +39,7 @@ template <typename T> void decode_payload (codec_t codec, const zlink::message_t
         case codec_t::raw:
             return;
         case codec_t::message_pack:
-            value = nlohmann::json::from_msgpack (payload.to_bytes ()).template get<T> ();
+            value = codec_traits<T>::decode_message_pack (payload);
             return;
     }
     value = codec_traits<T>::decode (payload);
