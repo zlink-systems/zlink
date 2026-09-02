@@ -47,9 +47,9 @@ public sealed class CoreHwmBudgetSnapshot
     public ulong ProvisionalAccountedBytes { get; internal init; }
     /// <summary>Gets peak application-accounted bytes.</summary>
     public ulong PeakAccountedBytes { get; internal init; }
-    /// <summary>Gets current completion-lane bytes.</summary>
+    /// <summary>Gets current Completion-connection bytes for count-2 ROUTER-ROUTER peers.</summary>
     public ulong CompletionCurrentAccountedBytes { get; internal init; }
-    /// <summary>Gets peak completion-lane bytes.</summary>
+    /// <summary>Gets peak Completion-connection bytes for count-2 ROUTER-ROUTER peers.</summary>
     public ulong CompletionPeakAccountedBytes { get; internal init; }
     /// <summary>Gets pending completion message count.</summary>
     public ulong CompletionPendingMessageCount { get; internal init; }

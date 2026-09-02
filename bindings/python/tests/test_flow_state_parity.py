@@ -247,7 +247,7 @@ class MonitorEventMetadataTests(unittest.TestCase):
     the public MonitorEvent must carry that metadata even though this
     contract test only exercises the always-available connection-lifecycle
     events (triggering an actual flow-pause/resume/stale event needs a live
-    DEALER/ROUTER completion lane, out of reach for a fast unit test)."""
+    DEALER/ROUTER receive-flow control, out of reach for a fast unit test)."""
 
     def test_monitor_event_mask_constants_match_c_abi(self):
         self.assertEqual(int(zlink.MonitorEventMask.SEND_FLOW_PAUSED), 0x10000)

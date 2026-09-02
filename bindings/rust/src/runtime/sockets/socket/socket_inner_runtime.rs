@@ -449,8 +449,9 @@ impl crate::internal::SocketStorage {
         Ok(RoutingId::from_raw(unsafe { raw.assume_init() }))
     }
 
-    /// Sets this socket's local receive-flow state and synchronises it to the
-    /// paired DEALER/ROUTER completion lane. `value` is the C ABI discriminant
+    /// Sets this DEALER/ROUTER socket's local receive-flow state. Control uses
+    /// the Application connection for count-1 peers and the Completion
+    /// connection for count-2 ROUTER-ROUTER peers. `value` is the C ABI discriminant
     /// (0 = RUNNING, 1 = PAUSED; see `ReceiveFlowState`). Repeating the
     /// current state succeeds as a no-op. Core reports
     /// `ZLINK_CONFIG_NOT_SUPPORTED` for any socket type other than

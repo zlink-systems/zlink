@@ -34,9 +34,9 @@ enum class monitor_event : uint32_t
     /// pipe. `value` carries the flow epoch; check `monitor_event_flag_t::send_flow_writable`
     /// in the event's `flags` for whether the pipe is actually writable now.
     send_flow_resumed = 131072,
-    /// Fires when a stale or duplicate completion-lane flow-state frame is
-    /// rejected. `flags` disambiguates the stale reason and `value` carries
-    /// the corresponding rejected field.
+    /// Fires when a stale or duplicate receive-flow frame is rejected for an
+    /// affected Application pipe. `flags` disambiguates the stale reason and
+    /// `value` carries the corresponding rejected field.
     flow_state_stale = 262144,
     all = 0x7FFFF
 };

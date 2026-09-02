@@ -123,7 +123,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
 
                     # ABI 4 adds paired DEALER/ROUTER receive-flow telemetry
                     # (core-byte-hwm-flow-control-plan.ko.md §6). A PAIR
-                    # socket has no completion lane to observe, so
+                    # socket does not support receive-flow control, so
                     # ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE (bit 5) stays
                     # unset and these fields stay at their zeroed default.
                     for field in (

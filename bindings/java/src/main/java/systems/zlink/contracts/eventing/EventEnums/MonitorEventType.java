@@ -40,14 +40,13 @@ public enum MonitorEventType {
     /** A peer's load-balancing weight changed. */
     PEER_WEIGHT_CHANGED(0x8000),
     /**
-     * A paired DEALER/ROUTER completion lane applied a remote PAUSED
-     * transition to an application pipe. No event fires for a normal data
+     * A remote PAUSED transition was applied to an affected Application pipe.
+     * No event fires for a normal data
      * frame.
      */
     SEND_FLOW_PAUSED(0x10000),
     /**
-     * A paired DEALER/ROUTER completion lane applied a remote RUNNING
-     * transition, resuming an application pipe.
+     * A remote RUNNING transition resumed an affected Application pipe.
      */
     SEND_FLOW_RESUMED(0x20000),
     /** A stale or duplicate receive-flow-state frame was ignored. */

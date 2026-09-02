@@ -16,8 +16,8 @@ class MonitorStatus:
     the queued counts; and
     the ``auto_hwm_*`` fields report the automatic high-water-mark sizing
     decisions (applied marks, effective buffers, last recalculation, and
-    deferred shrinks); and (since ABI 4) the ``flow_*`` fields report paired
-    DEALER/ROUTER completion-lane receive-flow telemetry, populated only when
+    deferred shrinks); and (since ABI 4) the ``flow_*`` fields report
+    DEALER/ROUTER receive-flow telemetry for affected Application pipes, populated only when
     ``detail_flags`` has the flow-state detail bit set.
     """
 

@@ -34,8 +34,7 @@ enum class monitor_status_detail : uint32_t
     snd_pending_msgs = 2,
     rcv_pending_msgs = 4,
     /// Set when flow_paused_connections and the other flow_* fields on
-    /// monitor_status_t are populated (ABI 4+, paired DEALER/ROUTER
-    /// sockets only).
+    /// monitor_status_t are populated (ABI 4+, DEALER/ROUTER sockets only).
     flow_state = 32
 };
 
@@ -131,9 +130,10 @@ struct monitor_status_t
     uint64_t oversize_message_admission_count;
     uint64_t oversize_message_admission_max_bytes;
 
-    /* Paired DEALER/ROUTER completion-lane receive-flow observation
-     * (core-byte-hwm-flow-control-plan.ko.md §6). Present since ABI 4;
-     * zero for socket types without a completion lane. */
+    /* DEALER/ROUTER receive-flow observation for the affected Application
+     * pipe. Control uses the Application connection for count-1 peers and
+     * the Completion connection for count-2 ROUTER-ROUTER peers. Present
+     * since ABI 4; zero for socket types other than DEALER/ROUTER. */
     uint64_t flow_paused_connections;
     uint64_t flow_pause_applied_total;
     uint64_t flow_resume_applied_total;

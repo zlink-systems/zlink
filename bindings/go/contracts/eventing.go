@@ -72,9 +72,9 @@ const (
 	MonitorEventConnectionReady = impl.MonitorEventConnectionReady
 	// MonitorEventPeerWeightChanged fires when a peer's load-balancing weight changes.
 	MonitorEventPeerWeightChanged = impl.MonitorEventPeerWeightChanged
-	// MonitorEventSendFlowPaused selects the paired DEALER/ROUTER completion-lane PAUSED-transition event.
+    // MonitorEventSendFlowPaused selects the PAUSED-transition event for an affected Application pipe.
 	MonitorEventSendFlowPaused = impl.MonitorEventSendFlowPaused
-	// MonitorEventSendFlowResumed selects the paired completion-lane RUNNING-transition event.
+    // MonitorEventSendFlowResumed selects the RUNNING-transition event for an affected Application pipe.
 	MonitorEventSendFlowResumed = impl.MonitorEventSendFlowResumed
 	// MonitorEventFlowStateStale selects a rejected stale or duplicate flow-state frame event.
 	MonitorEventFlowStateStale = impl.MonitorEventFlowStateStale
@@ -110,9 +110,9 @@ const (
 	MonitorEventTypeHandshakeFailedAuth = impl.MonitorEventTypeHandshakeFailedAuth
 	// MonitorEventTypePeerWeightChanged is the delivered value for a peer weight change.
 	MonitorEventTypePeerWeightChanged = impl.MonitorEventTypePeerWeightChanged
-	// MonitorEventTypeSendFlowPaused is the delivered value for a completion-lane PAUSED transition.
+    // MonitorEventTypeSendFlowPaused is the delivered value for a PAUSED transition on an affected Application pipe.
 	MonitorEventTypeSendFlowPaused = impl.MonitorEventTypeSendFlowPaused
-	// MonitorEventTypeSendFlowResumed is the delivered value for a completion-lane RUNNING transition.
+    // MonitorEventTypeSendFlowResumed is the delivered value for a RUNNING transition on an affected Application pipe.
 	MonitorEventTypeSendFlowResumed = impl.MonitorEventTypeSendFlowResumed
 	// MonitorEventTypeFlowStateStale is the delivered value for a rejected stale or duplicate flow-state frame.
 	MonitorEventTypeFlowStateStale = impl.MonitorEventTypeFlowStateStale
@@ -128,7 +128,7 @@ const (
 	MonitorEventFlagFlowStateStaleEpoch = impl.MonitorEventFlagFlowStateStaleEpoch
 	// MonitorTransportLaneApplication identifies the application lane of a paired transport.
 	MonitorTransportLaneApplication = impl.MonitorTransportLaneApplication
-	// MonitorTransportLaneCompletion identifies the completion lane of a paired transport.
+    // MonitorTransportLaneCompletion identifies the Completion connection of a count-2 ROUTER-ROUTER peer.
 	MonitorTransportLaneCompletion = impl.MonitorTransportLaneCompletion
 	// PollIn reports that a receive will not block.
 	PollIn = impl.PollIn

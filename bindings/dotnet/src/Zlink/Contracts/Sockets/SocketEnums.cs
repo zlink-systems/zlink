@@ -81,8 +81,9 @@ public enum AutoHwmProfile
 }
 
 /// <summary>
-///     The socket-wide receive-flow state synchronised over the paired
-///     DEALER/ROUTER completion lane. RUNNING and PAUSED are an absolute
+///     The DEALER/ROUTER socket-wide receive-flow state. Control uses the
+///     Application connection for count-1 peers and the Completion connection
+///     for count-2 ROUTER-ROUTER peers. RUNNING and PAUSED are an absolute
 ///     state, not a counter: repeating the current value is a successful
 ///     no-op. Values match the C ABI's <c>zlink_receive_flow_state_t</c>.
 ///     Only DEALER and ROUTER sockets support this; other socket types throw

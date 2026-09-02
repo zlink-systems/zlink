@@ -422,13 +422,14 @@ class _Socket(_BaseSocket):
             _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
 
     def set_receive_flow_state(self, state: ReceiveFlowState):
-        """Set this socket's local receive-flow state and synchronise it to
-        the paired DEALER/ROUTER completion lane.
+        """Set this DEALER/ROUTER socket's local receive-flow state. Control
+        uses the Application connection for count-1 peers and the Completion
+        connection for count-2 ROUTER-ROUTER peers.
 
         RUNNING/PAUSED is an absolute state, not a counter: repeating the
         current state succeeds and resynchronises nothing new. Only
-        DEALER/ROUTER sockets have a completion lane to synchronise this
-        state over; every other socket type (PAIR, the PUB/SUB family, and
+        DEALER/ROUTER sockets support this state; every other socket type
+        (PAIR, the PUB/SUB family, and
         STREAM) raises :class:`ConfigError` with
         :attr:`ConfigResult.NOT_SUPPORTED` and keeps its existing byte HWM
         and transport backpressure unchanged.

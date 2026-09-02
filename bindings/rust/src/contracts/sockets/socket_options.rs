@@ -68,7 +68,9 @@ pub enum SubmitRetryMode {
     LocalFailure = 1,
 }
 
-/// Receive-flow state for the paired DEALER/ROUTER completion lane
+/// Receive-flow state for DEALER/ROUTER sockets. Control uses the Application
+/// connection for count-1 peers and the Completion connection for count-2
+/// ROUTER-ROUTER peers.
 /// (core-byte-hwm-flow-control-plan.ko.md §5). RUNNING and PAUSED are an
 /// absolute socket-wide state, not a counter: repeating the current state
 /// succeeds as a no-op. Values match the C ABI (`zlink_receive_flow_state_t`).
@@ -164,8 +166,9 @@ impl<'a> CommonSocketOptions<'a> {
             RidDuplicatePolicy::Reject
         })
     }
-    /// Sets this socket's local receive-flow state and synchronises it to the
-    /// peer's paired DEALER/ROUTER completion lane
+    /// Sets this DEALER/ROUTER socket's local receive-flow state. Control uses
+    /// the Application connection for count-1 peers and the Completion
+    /// connection for count-2 ROUTER-ROUTER peers
     /// (core-byte-hwm-flow-control-plan.ko.md §5). Repeating the current
     /// state succeeds as a no-op. Returns
     /// [`ConfigResult::NotSupported`](crate::ConfigResult::NotSupported) for

@@ -24,9 +24,9 @@ export const MonitorEventType = Object.freeze({
   HandshakeFailedProtocol: 0x2000,
   HandshakeFailedAuth: 0x4000,
   PeerWeightChanged: 0x8000,
-  /** A remote-PAUSE condition was first applied to an application pipe on the paired completion lane. */
+  /** A remote-PAUSE condition was first applied to an affected application pipe. */
   SendFlowPaused: 0x10000,
-  /** A remote-PAUSE condition was cleared on the paired completion lane. */
+  /** A remote-PAUSE condition was cleared on an affected application pipe. */
   SendFlowResumed: 0x20000,
   /** A stale or duplicate receive-flow-state frame (old generation or non-advancing epoch) was ignored. */
   FlowStateStale: 0x40000
@@ -101,8 +101,8 @@ export interface MonitorStatus {
   readonly oversizeMessageAdmissionCount: bigint;
   readonly oversizeMessageAdmissionMaxBytes: bigint;
   /**
-   * Paired DEALER/ROUTER completion-lane receive-flow telemetry (present
-   * since ABI 4). Populated only for DEALER/ROUTER sockets; other socket
+   * DEALER/ROUTER receive-flow telemetry for affected application pipes
+   * (present since ABI 4). Populated only for DEALER/ROUTER sockets; other socket
    * types report zero for all five fields.
    */
   /** Current count of application pipes this socket sees as remote-PAUSED. */

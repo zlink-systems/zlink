@@ -43,7 +43,9 @@ pub enum zlink_completion_kind_t {
     ZLINK_COMPLETION_REQUEST = 2,
 }
 
-/// Receive-flow state for the paired DEALER/ROUTER completion lane
+/// Receive-flow state for DEALER/ROUTER sockets. Control uses the Application
+/// connection for count-1 peers and the Completion connection for count-2
+/// ROUTER-ROUTER peers.
 /// (core-byte-hwm-flow-control-plan.ko.md §5). RUNNING and PAUSED are an
 /// absolute socket-wide state, not a counter; see
 /// `core/include/zlink_enum.h`.
@@ -477,8 +479,9 @@ pub struct zlink_monitor_status_t {
     pub minimum_core_message_charge_bytes: u64,
     pub oversize_message_admission_count: u64,
     pub oversize_message_admission_max_bytes: u64,
-    // Paired DEALER/ROUTER completion-lane receive-flow observation
-    // (core-byte-hwm-flow-control-plan.ko.md §6). Present since ABI 4; see
+    // DEALER/ROUTER receive-flow observation for the affected Application
+    // pipe. Control uses the Application connection for count-1 peers and the
+    // Completion connection for count-2 ROUTER-ROUTER peers. Present since ABI 4; see
     // ZLINK_MONITOR_STATUS_ABI_VERSION and ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE
     // in core/include/zlink_enum.h. Order matches
     // core/include/zlink/eventing/api.h exactly -- this struct is written to

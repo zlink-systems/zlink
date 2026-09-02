@@ -221,7 +221,7 @@ public sealed partial class MonitorStatus
 
     /// <summary>
     ///     Gets the current count of application pipes this socket sees as
-    ///     remote-PAUSED over the paired DEALER/ROUTER completion lane.
+    ///     remote-PAUSED for affected Application pipes.
     /// </summary>
     public ulong FlowPausedConnections { get; }
 

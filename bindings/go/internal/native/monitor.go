@@ -32,10 +32,10 @@ const (
 	MonitorEventHandshakeFailedProtocol MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_PROTOCOL)
 	MonitorEventHandshakeFailedAuth     MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_AUTH)
 	MonitorEventPeerWeightChanged       MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_PEER_WEIGHT_CHANGED)
-	// MonitorEventSendFlowPaused selects the paired DEALER/ROUTER completion-lane
-	// PAUSED-transition event (core-byte-hwm-flow-control-plan.ko.md §6).
+    // MonitorEventSendFlowPaused selects the PAUSED-transition event for an
+    // affected Application pipe (core-byte-hwm-flow-control-plan.ko.md §6).
 	MonitorEventSendFlowPaused MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED)
-	// MonitorEventSendFlowResumed selects the paired completion-lane RUNNING-transition event.
+    // MonitorEventSendFlowResumed selects the RUNNING-transition event for an affected Application pipe.
 	MonitorEventSendFlowResumed MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_RESUMED)
 	// MonitorEventFlowStateStale selects a rejected stale or duplicate flow-state frame event.
 	MonitorEventFlowStateStale MonitorEventMask = MonitorEventMask(C.ZLINK_SOCKET_MONITOR_EVENT_FLOW_STATE_STALE)
@@ -213,9 +213,10 @@ type MonitorStatus struct {
 	MinimumCoreMessageChargeBytes    uint64
 	OversizeMessageAdmissionCount    uint64
 	OversizeMessageAdmissionMaxBytes uint64
-	// Paired DEALER/ROUTER completion-lane receive-flow observation
-	// (core-byte-hwm-flow-control-plan.ko.md §6). Present since ABI 4; zero on
-	// socket types with no completion lane.
+    // DEALER/ROUTER receive-flow observation for affected Application pipes.
+    // Control uses the Application connection for count-1 peers and the
+    // Completion connection for count-2 ROUTER-ROUTER peers. Present since ABI 4;
+    // zero on socket types other than DEALER/ROUTER.
 	FlowPausedConnections  uint64
 	FlowPauseAppliedTotal  uint64
 	FlowResumeAppliedTotal uint64

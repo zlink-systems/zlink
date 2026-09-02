@@ -216,7 +216,7 @@ fn socket_monitor_status() {
     // ABI 4 (core-byte-hwm-flow-control-plan.ko.md §6): Core now writes a
     // 232-byte record (see ffi_layout_tests.rs); confirm the live snapshot
     // reports that ABI version and that the five new flow-state metrics are
-    // reachable through the public surface. PAIR has no completion lane, so
+    // reachable through the public surface. PAIR does not support receive-flow control, so
     // these are expected to read as zero here -- this is a surface/ABI
     // check, not a behavioral one.
     assert_eq!(snap.abi_version, 4);

@@ -82,7 +82,7 @@ func TestMonitorRecv(t *testing.T) {
 
 	// §8.1.1 follow-up: the five flow-state metrics must be present on the
 	// public MonitorStatus surface and read as zero on a fresh PAIR socket,
-	// which has no paired DEALER/ROUTER completion lane.
+    // which does not support DEALER/ROUTER receive-flow control.
 	if snapshot.FlowPausedConnections != 0 ||
 		snapshot.FlowPauseAppliedTotal != 0 ||
 		snapshot.FlowResumeAppliedTotal != 0 ||
@@ -97,11 +97,12 @@ func TestMonitorRecv(t *testing.T) {
 // pair id) and the corresponding MonitorStatus flow counters must advance.
 //
 // zlink_socket_set_receive_flow_state sets the caller's own *local receive*
-// state and propagates it to the peer over the completion lane; the peer is
+// state and propagates it to the peer over the Application connection for this
+// count-1 DEALER-ROUTER pair; the peer is
 // the one whose *send* is now paused, so ROUTER pausing its receive is
 // observed as SEND_FLOW_PAUSED on the connected DEALER, not on the ROUTER
-// itself. The paired completion lane this relies on is a TCP transport
-// concept, so this test uses a TCP loopback endpoint rather than inproc.
+// itself. This Application connection is a TCP transport concept, so this
+// test uses a TCP loopback endpoint rather than inproc.
 func TestMonitorObservesReceiveFlowStateTransitionsWithPairMetadata(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()

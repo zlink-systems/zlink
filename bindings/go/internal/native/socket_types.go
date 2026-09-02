@@ -45,8 +45,9 @@ const (
 	SubmitRetryLocalFailure SubmitRetryMode = 1
 )
 
-// ReceiveFlowState is the paired DEALER/ROUTER completion-lane receive-flow
-// state (core-byte-hwm-flow-control-plan.ko.md §5). It mirrors
+// ReceiveFlowState is the DEALER/ROUTER receive-flow state. Control uses the
+// Application connection for count-1 peers and the Completion connection for
+// count-2 ROUTER-ROUTER peers. It mirrors
 // zlink_receive_flow_state_t and is an absolute socket-wide state, not a
 // counter: setting the current value again succeeds as a no-op.
 type ReceiveFlowState int32

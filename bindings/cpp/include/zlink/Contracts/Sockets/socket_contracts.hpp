@@ -70,12 +70,13 @@ class socket_t
                          const std::string &hostname_,
                          bool trust_system_ = false);
 
-    /// @brief Set this socket's local receive-flow state and synchronise it
-    /// to the paired DEALER/ROUTER completion lane. Repeating the current
-    /// state succeeds as a no-op. Throws @c config_error_t with
-    /// @c config_result_t::not_supported for a socket type without a
-    /// completion lane (PAIR, PUB/SUB family, STREAM), @c invalid_argument
-    /// for a state outside @c receive_flow_state_t, @c invalid_handle for an
+    /// @brief Set this DEALER/ROUTER socket's local receive-flow state.
+    /// Control uses the Application connection for count-1 peers and the
+    /// Completion connection for count-2 ROUTER-ROUTER peers. Repeating the
+    /// current state succeeds as a no-op. Throws @c config_error_t with
+    /// @c config_result_t::not_supported for a socket type other than
+    /// DEALER/ROUTER (PAIR, PUB/SUB family, STREAM), @c invalid_argument for
+    /// a state outside @c receive_flow_state_t, @c invalid_handle for an
     /// invalid socket, and @c invalid_state when a concurrent close wins.
     void set_receive_flow_state (receive_flow_state_t state_);
 

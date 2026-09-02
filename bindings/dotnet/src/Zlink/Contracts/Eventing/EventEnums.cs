@@ -90,8 +90,8 @@ public enum SocketEvent
     PeerWeightChanged = 0x8000,
 
     /// <summary>
-    ///     A remote PAUSE was first applied to an application pipe over the
-    ///     paired DEALER/ROUTER completion lane. <c>Value</c> carries the
+    ///     A remote PAUSE was first applied to an affected Application pipe.
+    ///     <c>Value</c> carries the
     ///     flow epoch.
     /// </summary>
     SendFlowPaused = 0x10000,
@@ -106,8 +106,8 @@ public enum SocketEvent
     SendFlowResumed = 0x20000,
 
     /// <summary>
-    ///     A stale or duplicate completion-lane flow-state frame was
-    ///     rejected. <see cref="MonitorEvent.Flags" /> disambiguates the
+    ///     A stale or duplicate receive-flow frame was rejected for an
+    ///     affected Application pipe. <see cref="MonitorEvent.Flags" /> disambiguates the
     ///     stale reason and <see cref="MonitorEvent.Value" /> carries the
     ///     corresponding rejected field.
     /// </summary>
@@ -206,8 +206,8 @@ public enum MonitorEventType
     PeerWeightChanged = 0x8000,
 
     /// <summary>
-    ///     A remote PAUSE was first applied to an application pipe over the
-    ///     paired DEALER/ROUTER completion lane. <see cref="MonitorEvent.Value" />
+    ///     A remote PAUSE was first applied to an affected Application pipe.
+    ///     <see cref="MonitorEvent.Value" />
     ///     carries the flow epoch.
     /// </summary>
     SendFlowPaused = 0x10000,
@@ -222,8 +222,8 @@ public enum MonitorEventType
     SendFlowResumed = 0x20000,
 
     /// <summary>
-    ///     A stale or duplicate completion-lane flow-state frame was
-    ///     rejected. <see cref="MonitorEvent.Flags" /> disambiguates the
+    ///     A stale or duplicate receive-flow frame was rejected for an
+    ///     affected Application pipe. <see cref="MonitorEvent.Flags" /> disambiguates the
     ///     stale reason and <see cref="MonitorEvent.Value" /> carries the
     ///     corresponding rejected field.
     /// </summary>

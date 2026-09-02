@@ -71,8 +71,9 @@ public interface ISocket : IZlinkSocket, IDisposable, IAsyncDisposable
         bool trustSystem = false);
 
     /// <summary>
-    ///     Sets this socket's local receive-flow state and synchronises it to
-    ///     the paired DEALER/ROUTER completion lane. RUNNING and PAUSED are
+    ///     Sets this DEALER/ROUTER socket's local receive-flow state. Control
+    ///     uses the Application connection for count-1 peers and the Completion
+    ///     connection for count-2 ROUTER-ROUTER peers. RUNNING and PAUSED are
     ///     an absolute state, not a counter: repeating the current state
     ///     also succeeds. Only DEALER and ROUTER sockets support this; other
     ///     socket types throw <see cref="ZlinkConfigException" /> with

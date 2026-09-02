@@ -31,8 +31,8 @@ impl SocketMonitorEventMask {
     pub const ALL: Self = Self(0x7FFFF);
     /// Subscribes only to the connection-ready event.
     pub const CONNECTION_READY: Self = Self(0x1000);
-    /// Subscribes to the paired DEALER/ROUTER completion lane applying a
-    /// remote PAUSED state to a connection for the first time
+    /// Subscribes to a remote PAUSED state first applied to an affected
+    /// Application pipe
     /// (core-byte-hwm-flow-control-plan.ko.md §6). No event fires for a
     /// normal data frame.
     pub const SEND_FLOW_PAUSED: Self = Self(1 << 16);
@@ -224,7 +224,7 @@ pub struct MonitorStatus {
     /// Largest accounted message admitted by the empty-pipe oversize rule.
     pub oversize_message_admission_max_bytes: u64,
     /// Current count of application pipes this socket sees as remote-PAUSED
-    /// (paired DEALER/ROUTER completion lane; present since ABI 4).
+    /// (DEALER/ROUTER receive-flow; present since ABI 4).
     pub flow_paused_connections: u64,
     /// Total PAUSED transitions actually applied (never a stale/duplicate).
     pub flow_pause_applied_total: u64,

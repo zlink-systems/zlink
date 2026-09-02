@@ -3,8 +3,9 @@
 package systems.zlink.contracts.sockets;
 
 /**
- * A socket's local receive-flow state, broadcast to paired DEALER/ROUTER
- * transports over the completion lane. Values match
+ * A DEALER/ROUTER socket's local receive-flow state. Control uses the
+ * Application connection for count-1 peers and the Completion connection for
+ * count-2 ROUTER-ROUTER peers. Values match
  * {@code zlink_receive_flow_state_t}.
  */
 public enum ReceiveFlowState {

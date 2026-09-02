@@ -25,8 +25,10 @@ export const SOCKET_MONITOR_EVENT_ALL = 0x7FFFF;
 /**
  * A socket's local receive-flow state, applied to DEALER/ROUTER sockets via
  * `setReceiveFlowState`. Values match `zlink_receive_flow_state_t`. Setting
- * `PAUSED` synthesizes a remote-PAUSE condition for peers on the paired
- * completion lane; setting the same state again is a no-op success.
+ * `PAUSED` synthesizes a remote-PAUSE condition for affected Application
+ * pipes; control uses the Application connection for count-1 peers and the
+ * Completion connection for count-2 ROUTER-ROUTER peers. Setting the same
+ * state again is a no-op success.
  */
 export const ReceiveFlowState = Object.freeze({
   RUNNING: 0,
