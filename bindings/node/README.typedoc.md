@@ -31,8 +31,8 @@ bindings/node/typedoc/html/index.html
 
 ## Callback Handler Capacity
 
-Send completion and request reply callbacks are installed once per socket and
-use N-API thread-safe functions only to deliver completion data into
-JavaScript. The callback does not submit, wait, retry, or own a binding queue.
-There is no send-ready or publisher-admission callback surface. Stream packet,
-socket monitor, and timer callbacks retain their existing delivery limits.
+The current public contract does not install completion handlers. Managed send
+uses `submit()`/`submit_sync()`, request uses the matching terminals returning
+reply parts, and STREAM, socket-monitor, and timer input is caller-driven pull.
+If a public poller owns `PollEventFlag.PollCompletion`, its owner keeps calling
+`wait()` so native completions are drained and settled.

@@ -25,9 +25,9 @@ bind/connect/config 실패 API(Sockets/Messaging/Eventing/Core category)가
 | Error | Result 상수 | 던지는 곳 | 값 |
 |---|---|---|---|
 | `SubmitError` | `SubmitResult`(Sockets category) | send/publish/request-submit API | `Backpressured`(1, 정상 제어 흐름), `NotConnected`(2), `NotFound`(3), `Terminated`(4), `InvalidHandle`(5), `InvalidArgument`(6), `NotSupported`(7), `InvalidState`(8), `ThreadViolation`(9), `OutOfMemory`(10), `SeqExhausted`(11), `InternalError`(12), `NotAdmitted`(13, 정상 제어 흐름) |
-| `RequestError` | `RequestResult` | request/reply 완료 | `TimedOut`(101), `NotFound`(102), `Terminated`(103), `ProtocolError`(104), `InternalError`(105), `Rejected`(106), `Conflict`(107), `Busy`(108), `NotConnected`(109), `InvalidArgument`(110), `InvalidState`(111), `NotSupported`(112), `Backpressured`(113) |
+| `RequestError` | `RequestResult` | `submit()` reject 또는 `submit_sync()` terminal request 실패 | `TimedOut`(101), `NotFound`(102), `Terminated`(103), `ProtocolError`(104), `InternalError`(105), `Rejected`(106), `Conflict`(107), `Busy`(108), `NotConnected`(109), `InvalidArgument`(110), `InvalidState`(111), `NotSupported`(112), `Backpressured`(113) |
 | `RecvError` | `RecvResult` | recv-family API | `NoData`(201), `Busy`(202), `Terminated`(203), `InvalidHandle`(204), `NotSupported`(205), `InternalError`(206), `BufferTooSmall`(207), `InvalidState`(208) — **이 binding의 `RecvResult`는 `BufferTooSmall`/`InvalidState`를 포함한다, go와 일치**; 다른 모든 언어는 이 값들이 없는 6개 값 집합을 공유한다 |
-| `HandlerError` | `HandlerResult` | handler 등록 API | `InvalidArgument`(301), `Busy`(302), `NotSupported`(303), `Deadlock`(304), `InvalidHandle`(305), `InternalError`(306) |
+| `HandlerError` | `HandlerResult` | 유지되는 result family; 현행 public completion/event 전달은 handler를 등록하지 않음 | `InvalidArgument`(301), `Busy`(302), `NotSupported`(303), `Deadlock`(304), `InvalidHandle`(305), `InternalError`(306) |
 | `CloseError` | `CloseResult` | `close()` 경로, `Context.shutdown()` | `Busy`(401), `Shutdown`(402), `InvalidHandle`(403), `InternalError`(404) |
 | `BindError` | `BindResult` | `Socket.bind(...)` | `InvalidArgument`(501), `AddrInUse`(502), `NotSupported`(503), `InvalidHandle`(504), `InternalError`(505) |
 | `ConnectError` | `ConnectResult` | `connect`/`unbind`/`disconnect`/`disconnectRid` | `InvalidArgument`(601), `NotSupported`(602), `InvalidHandle`(603), `InternalError`(604), `NotFound`(605), `Conflict`(606), `Busy`(607), `AuthFailed`(608) — **이 binding은 `AuthFailed`가 있다, go와 일치**; 다른 모든 언어는 이 값이 없는 7개 값 집합을 공유한다 |
@@ -53,9 +53,9 @@ bind/connect/config 실패 API(Sockets/Messaging/Eventing/Core category)가
 잃는다. `RecvResult`/`ConfigResult`의 `BufferTooSmall`은 caller가
 제공한 output 용량이 첫 완결된 값을 담을 수 없다는 뜻이다 — 호출은
 아무것도 소비하지 않으므로 더 큰 buffer로 재시도해도 안전하다.
-`InvalidState`는 stale handle이나 닫힌 수신·연결 상태를 다룬다. 같은
-handler의 콜백 안에서 그 handler를 교체·해제하면 실제로 deadlock에
-빠지는 대신 `Deadlock`을 반환한다.
+`InvalidState`는 stale handle이나 닫힌 수신·연결 상태를 다룬다.
+`HandlerResult` family는 남아 있지만 현행 public send/request terminal과
+pull-event 표면은 이를 생성하지 않는다.
 
 ---
 

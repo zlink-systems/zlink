@@ -5,7 +5,7 @@
 # 05. Errors
 
 이 category는 core의 result-enum-family 표에 대응하는 이 레퍼런스의 대응 문서다 —
-공유 exception 기반과, 모든 submit/request/recv/handler/close/bind/connect/config
+공유 exception 기반과, 모든 submit/request/recv/event/close/bind/connect/config
 실패 API(Sockets/Messaging/Eventing/Core category)가 던지는 7개 typed exception을
 문서화한다. 정확한 signature는
 [`Contracts/Errors/`](../../../../bindings/cpp/include/zlink/Contracts/Errors/)가
@@ -22,9 +22,9 @@
 | Exception | Result enum | 던지는 곳 | 값 |
 |---|---|---|---|
 | `submit_error_t` | `submit_result_t`(Sockets category) | send/publish/request-submit API | `backpressured`(1, 정상 제어 흐름), `not_connected`(2), `not_found`(3), `terminated`(4), `invalid_handle`(5), `invalid_argument`(6), `not_supported`(7), `invalid_state`(8), `thread_violation`(9), `out_of_memory`(10), `seq_exhausted`(11), `internal_error`(12), `not_admitted`(13, 정상 제어 흐름) |
-| `request_error_t` | `request_result_t`(Messaging category) | request/reply 완료 | `timed_out`(101), `not_found`(102), `terminated`(103), `protocol_error`(104), `internal_error`(105), `rejected`(106), `conflict`(107), `busy`(108), `not_connected`(109), `invalid_argument`(110), `invalid_state`(111), `not_supported`(112) |
+| `request_error_t` | `request_result_t`(Messaging category) | `submit()` awaitable 또는 blocking request terminal | `timed_out`(101), `not_found`(102), `terminated`(103), `protocol_error`(104), `internal_error`(105), `rejected`(106), `conflict`(107), `busy`(108), `not_connected`(109), `invalid_argument`(110), `invalid_state`(111), `not_supported`(112), `backpressured`(113) |
 | `recv_error_t` | `recv_result_t`(Sockets category) | recv-family API | `no_data`(201), `busy`(202), `terminated`(203), `invalid_handle`(204), `not_supported`(205), `internal_error`(206) |
-| `handler_error_t` | `handler_result_t` | handler 등록 API | `invalid_argument`(301), `busy`(302), `not_supported`(303), `deadlock`(304), `invalid_handle`(305), `internal_error`(306) |
+| `handler_error_t` | `handler_result_t` | 유지되는 result family; 현행 public completion/event 전달에는 등록형 handler가 없음 | `invalid_argument`(301), `busy`(302), `not_supported`(303), `deadlock`(304), `invalid_handle`(305), `internal_error`(306) |
 | `close_error_t` | `close_result_t` | `close()` 경로, `context_t::shutdown()` | `busy`(401), `shutdown`(402), `invalid_handle`(403), `internal_error`(404) |
 | `bind_error_t` | `bind_result_t` | `socket_t::bind(...)` | `invalid_argument`(501), `addr_in_use`(502), `not_supported`(503), `invalid_handle`(504), `internal_error`(505) |
 | `connect_error_t` | `connect_result_t` | `connect`/`unbind`/`disconnect`/`disconnect_rid` | `invalid_argument`(601), `not_supported`(602), `invalid_handle`(603), `internal_error`(604), `not_found`(605), `conflict`(606), `busy`(607) |
@@ -40,9 +40,9 @@
 `not_connected`/`not_found`/`not_admitted`는 예외적 실패가 아니라 정상적인 실행
 흐름이다 — non-zero submit 결과를 전부 같게 취급하는 caller는 "재시도가
 합리적"과 "이대로 제출하면 절대 성공하지 않음"의 구분을 잃는다.
-`invalid_state`는 stale handle이나 닫힌 수신·연결 상태를 다룬다. 같은
-handler의 콜백 안에서 그 handler를 교체·해제하면 실제로 deadlock에 빠지는
-대신 `deadlock`을 반환한다.
+`invalid_state`는 stale handle이나 닫힌 수신·연결 상태를 다룬다.
+`handler_result_t` family는 남아 있지만 현행 public send/request terminal과
+pull-event 표면은 이를 생성하지 않는다.
 
 ---
 

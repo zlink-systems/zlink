@@ -20,8 +20,9 @@ Observes a socket's connection lifecycle events and reads its current status. (N
 `socket_monitor_t`.)
 
 ```ts
-const monitor = socket.monitorOpen(SOCKET_MONITOR_EVENT_ALL);
-monitor.onEvent(event => logger.info(`${event.event} ${event.remoteAddr}`));
+const monitor = socket.monitorOpen([MonitorEventType.Connected]);
+const event = monitor.recv(RecvFlags.DontWait);
+if (event) logger.info(`${event.event} ${event.remoteAddr}`);
 const status = monitor.status();
 ```
 
@@ -30,25 +31,23 @@ const status = monitor.status();
 | Member | Meaning |
 | --- | --- |
 | `recv(flags?: number)` | pulls the next event; returns `MonitorEvent \| null` — `null` when nothing pending under a non-blocking flag |
-| `onEvent(handler: (event: MonitorEvent) => void)` | registers a passive lifecycle-event callback |
 | `status()` | returns a `MonitorStatus` point-in-time snapshot |
 | `close()` | closes the monitor |
 
 **Completion result.** All members are synchronous.
 
-**When to use.** Use `onEvent` for a passive lifecycle observer registered once, or pass the
-handler directly to `Socket.monitorOpen(events, handler)` (Sockets category) at creation time. Use
-`recv` for a pull-based drain loop instead. Use `status()` for a point-in-time snapshot.
+**When to use.** Use `recv` for a caller-driven pull loop and `status()` for a point-in-time
+snapshot. Monitor delivery has no registration callback.
 
 ---
 
 ## `MonitorEvent`
 
 A single socket connection-lifecycle event reported by a monitor. A `class` with a private
-constructor — instances are created only by monitor `recv`/`onEvent` operations, never
+constructor — instances are created only by monitor `recv` operations, never
 directly.
 
-**Options.** No parameters — obtained via a monitor's `recv`/`onEvent`, not constructed directly.
+**Options.** No parameters — obtained via a monitor's `recv`, not constructed directly.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -117,6 +116,9 @@ const ready = poller.wait(events, 1000);
 
 **Completion result.** Registration/removal members are synchronous. `wait` blocks up to
 `timeoutMs`, filling `events` in place and returning the ready count as `number`.
+When a socket was registered for `PollEventFlag.PollCompletion`, the owner must keep calling
+`wait()` so the binding can drain and settle native completions; perform a separate blocking
+terminal on another execution context when both roles are needed.
 
 **When to use.** Use one poller across a service's lifetime. Prefer `modify` over `remove` + `add`
 when only the watched events change. Reuse one `PollEvents` buffer across `wait` calls rather than

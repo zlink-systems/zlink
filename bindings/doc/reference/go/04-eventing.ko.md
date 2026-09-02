@@ -23,9 +23,7 @@ socket의 connection lifecycle event를 관찰하고 현재 status를 읽는다.
 
 ```go
 monitor, err := contracts.OpenSocketMonitor(dealer, contracts.MonitorEventConnectionReady)
-monitor.OnEvent(func(event *contracts.MonitorEvent) {
-    fmt.Println(event.RemoteAddr)
-})
+event, err := monitor.Recv(contracts.RecvFlagsNone)
 status, err := monitor.Status()
 ```
 
@@ -33,20 +31,19 @@ status, err := monitor.Status()
 
 | Member | 의미 |
 | --- | --- |
-| `OpenSocketMonitor(socket SocketTarget, events ...MonitorEventMask) (*SocketMonitor, error)` | monitor를 연다; **variadic이고 실제로 필터링한다** — `events`를 넘기지 않으면 `MonitorEventAll`을 구독하지만, 넘긴 mask는 OR로 합쳐져 실제로 반영된다, `SocketMonitor::open`이 그런 파라미터를 전혀 받지 않고 구성한 어떤 mask 값과도 무관하게 항상 모든 이벤트를 구독하는 rust와 다르다 |
+| `OpenSocketMonitor(socket SocketTarget, events ...MonitorEventMask) (*SocketMonitor, error)` | monitor를 연다; `events`가 없으면 `MonitorEventAll`을 구독하고, 넘긴 mask는 OR로 합쳐져 반영된다 |
 | `Recv(flags RecvFlags) (*MonitorEvent, error)` | blocking과 non-blocking 둘 다를 위한 단일 진입점; non-blocking 형태엔 `RecvFlagsDontWait`를 넘긴다 — **여기서 no-data 시 값-반환 형태는 문서화된 예외다**, 자신의 doc comment에 따르면: "Value-return form is allowed for monitor/timer control-plane APIs by doc/spec/bindings/go/README.md §Receive And Subscribe Shape" |
 | `Status() (*MonitorStatus, error)` | 시점 스냅샷을 반환 |
-| `OnEvent(handler func(*MonitorEvent)) error` | 수동적 lifecycle-event 콜백을 등록 |
+| `Recv(RecvFlagsDontWait)` | non-blocking pull, queue가 비면 event 없음 |
 | `Close() error` | monitor를 닫음 |
 
 **Completion result.** 모든 member는 동기다. `SocketTarget`(Core
 category)은 모든 내장 socket type이 구현하는 공유 interface다 —
 `Proxy`/`Poller` 등록이 쓰는 것과 같다.
 
-**선택 기준.** 한 번 등록하는 수동적 lifecycle observer엔 `OnEvent`를
-쓴다; 대신 pull 기반 drain loop엔 `Recv`를 쓴다. `OpenSocketMonitor`에
-특정 `MonitorEventMask` 값을 넘겨 구독을 제한한다 — rust와 달리 이
-binding의 mask 인자는 실제로 효과가 있다.
+**선택 기준.** pull 기반 lifecycle-event drain loop엔 `Recv`를 쓴다.
+`OpenSocketMonitor`에
+특정 `MonitorEventMask` 값을 넘겨 구독을 제한한다.
 
 ---
 
@@ -234,10 +231,8 @@ interval마다 fire하며 poll되거나 기다려질 수 있는 timer, `Poller`�
 
 ```go
 timer, err := contracts.NewTimer()
-timer.OnFire(func(t *contracts.Timer, fireCount uint64) {
-    fmt.Println("fired", fireCount, "times")
-})
 timer.Start(1_000_000_000, 0) // 나노초 단위 interval, time.Duration 아님
+fireCount, ok, err := timer.Recv()
 ```
 
 **Options.**
@@ -248,13 +243,12 @@ timer.Start(1_000_000_000, 0) // 나노초 단위 interval, time.Duration 아님
 | `Start(intervalNs, repeatCount uint64) error` | `intervalNs`마다 fire를 시작; **interval은 raw 나노초 `uint64`다, `time.Duration`이 아니다** — 이 binding의 다른 곳(Core/Sockets category)에 있는 duration-typed option 관례를 깬다; `repeatCount`가 `0`이면 무한 반복 |
 | `Stop() error` | fire를 멈춤; `Start`로 재시작 가능 |
 | `Recv() (uint64, bool, error)` | 누적 fire count; 대기 중인 게 없으면 error가 아니라 `bool`이 `false` — **`SocketMonitor.Recv`와 같은 문서화된 no-data 시 값-반환 예외**, doc/spec/bindings/go/README.md §Receive And Subscribe Shape를 인용하는 자신의 doc comment에 따르면 |
-| `OnFire(handler func(timer *Timer, fireCount uint64)) error` | 수동적 interval 콜백을 등록 |
+| 반복 `Recv()` | pull surface로 pending cumulative fire count drain |
 | `Close() error` | timer를 닫음 |
 
 **Completion result.** 모든 member는 동기다.
 
-**선택 기준.** 수동적 interval callback엔 `OnFire`를 쓴다; 대신
-expiration을 poll하려면 `Recv`를 쓰거나, socket과 함께 하나의
+**선택 기준.** expiration을 pull하려면 `Recv`를 쓰거나, socket과 함께 하나의
 wait에서 multiplex하려면 `Poller.AddTimer`로 timer를 등록한다.
 
 ---

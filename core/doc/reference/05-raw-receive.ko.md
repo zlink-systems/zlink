@@ -3,9 +3,9 @@
 
 # 05. Raw receive
 
-이 category는 socket 타입 전체가 공유하는 두 수신 진입점 — part 기반 수신과 raw callback을
-다룬다. 둘 중 무엇을(또는 socket-type 전용 수신 family를) 특정 socket 타입에 쓸지는 실행 중
-선택이 아니라 고정되어 있다 — 아래 표와 각 socket 타입 자신의 category를 참고한다. 정확한
+이 category는 raw socket 타입이 공유하는 part 기반 DATA 수신을 다룬다. Socket-type 전용 수신
+family가 적용될 수도 있다. 아래 표와 각 socket 타입 자신의 category를 참고한다. STREAM은 첫
+bind 또는 connect 전에 RAW/PACKET도 명시적으로 선택한다. 정확한
 signature는 [Socket 공통 스펙](../spec/core/socket/README.ko.md)이 소유한다.
 
 ---
@@ -23,8 +23,8 @@ zlink_part_flag_t has_more;
 zlink_recv_result_t result = zlink_recv_part(s, &source_rid, &part, &has_more, ZLINK_RECV_FLAGS_NONE);
 ```
 
-**Parameters.** `source_rid_out_`는 선택적이며 Core 소유 view를 받는다(같은 스레드의 다음
-raw recv 호출 이후에도 살려야 하면 복사한다 — `STREAM`은 실제 view를, `PAIR`와 `DEALER`는
+**Parameters.** `source_rid_out_`는 선택적이며 Core 소유 view를 받는다(같은 socket의 다음
+data receive 진입 이후에도 필요하면 복사한다 — `STREAM`은 실제 view를, `PAIR`와 `DEALER`는
 `NULL`을 반환한다). `part_out_`는 이미 초기화된 message를 가리켜야 하며 필수다.
 `has_more_out_`는 필수이며 `ZLINK_PART_MORE` 또는 `ZLINK_PART_FINAL`로 설정된다. `flags_`는
 `ZLINK_RECV_FLAGS_NONE`(blocking) 또는 `ZLINK_RECV_FLAGS_DONTWAIT`다.
@@ -44,27 +44,26 @@ pollers category)와 짝지어 쓴다.
 
 ---
 
-## `zlink_recv_handler`
+## STREAM RAW와 PACKET receive
 
-`STREAM` socket에 raw 수신 callback을 붙여 `recv + poller` 모델을 push 전달로 대체한다.
+STREAM socket은 첫 bind 또는 connect에 성공하기 전에 pull receive family 하나를 고른다.
 
 ```c
-zlink_recv_handler(stream_socket, on_raw_message, userdata);
+zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_PACKET;
+zlink_set_stream_option(stream_socket, ZLINK_STREAM_OPT_RECV_MODE,
+                        &mode, sizeof(mode));
 ```
 
-**Parameters.** `handler_`는 `zlink_socket_msg_handler_fn`이다 — 소유 I/O thread에서
-source routing ID, message part 배열, part 개수와 함께 호출된다. 모든 part의 소유권이
-callback으로 이전되며 각 part는 정확히 한 번 닫아야 한다. `userdata_`는 그대로 전달된다.
+**Parameters.** `ZLINK_STREAM_RECV_MODE_RAW`는 `zlink_recv_part()`를,
+`ZLINK_STREAM_RECV_MODE_PACKET`은 `zlink_stream_recv_packet()`을 고른다. PACKET receive는
+caller가 초기화한 `header_out_`와 `body_out_` message를 채우고 source routing-id view를 반환한다.
 
-**Return과 errno.** `zlink_handler_result_t`를 반환한다 — 성공하면
-`ZLINK_HANDLER_OK`. Raw `STREAM` 외의 subject면 `ENOTSUP`. 성공적으로 attach된 뒤에는
-같은 handle의 `zlink_recv_part`, `zlink_stream_packet_handler`(STREAM category),
-data-plane poller `ZLINK_POLLIN`이 `EBUSY`로 실패한다 — 같은 handle에 두 번째 attach도
-`EBUSY`로 실패한다.
+**Return과 errno.** Mode를 고르지 않고 bind 또는 connect하면 `EINVAL`로 실패한다. 첫 bind 또는
+connect 성공 뒤에는 현재 값으로 설정해도 `EBUSY`로 실패한다. 다른 mode의 receive family를
+호출하면 `ZLINK_RECV_NOT_SUPPORTED`와 `ENOTSUP`을 반환한다.
 
-**선택 기준.** 이것 또는 `zlink_recv_part`, `zlink_stream_packet_handler`(STREAM category)
-중 하나를 고른다 — `STREAM` handle마다 정확히 하나의 raw 수신 모드다. 아래 수신 표면 표와
-packet-framed 대안은 STREAM category를 참고한다.
+**선택 기준.** Framing 없는 byte record에는 RAW를 골라 `ZLINK_POLLIN`과 함께 쓴다. Wire
+protocol이 Core의 고정 header/body framing을 사용하면 PACKET을 고른다. STREAM category를 참고한다.
 
 ---
 
@@ -73,18 +72,16 @@ packet-framed 대안은 STREAM category를 참고한다.
 | Socket 타입 | 수신 표면 | 비고 |
 |---|---|---|
 | PAIR | `zlink_recv_part()` | part 수신만 |
-| DEALER | `zlink_recv_part()`(+ `zlink_dealer_request_part()` 완료 callback) | part-receive data plane |
+| DEALER | `zlink_recv_part()` + `zlink_completion_recv()` | DATA는 part receive, 제출한 request 결과는 completion receive |
 | SUB / XSUB | `zlink_subscribe_part()` | topic-part 수신만 — SUB·XSUB category 참고 |
-| ROUTER | `zlink_router_recv_part()`(+ `zlink_router_request_part()` 완료 callback) | part-receive data plane — ROUTER category 참고 |
-| STREAM | `zlink_recv_part()` / `zlink_recv_handler()` / `zlink_stream_packet_handler()` | 예외: 정확히 하나의 모드를 고른다 — STREAM category 참고 |
+| ROUTER | `zlink_router_recv_part()` + `zlink_completion_recv()` | DATA/REQUEST는 part receive, 제출한 request 결과는 completion receive |
+| STREAM | `zlink_recv_part()` 또는 `zlink_stream_recv_packet()` | bind/connect 전에 RAW 또는 PACKET 선택 — STREAM category 참고 |
 | PUB | N/A | send 전용 |
 | XPUB | `zlink_xpub_recv_part()`(구독 이벤트, recv 전용) | data plane은 send — XPUB category 참고 |
-| monitor / timer | recv와 callback 둘 다 지원 | Socket monitor·Timers category 참고 |
+| monitor / timer | pull receive | Socket monitor·Timers category 참고 |
 
-`DEALER`/`ROUTER`의 request 완료 callback은 비동기 operation 완료 표면이지 data-plane
-수신 callback이 아니다 — 둘 다 callback을 쓰지만 역할은 분리되어 있다. `STREAM`은
-application이 handle마다 세 수신 모델 중 하나를 고르는 유일한 예외다 — 같은 handle에서 다른
-모드를 활성화하려는 두 번째 시도는 `EBUSY`로 실패한다.
+`DEALER`/`ROUTER`의 REQUEST completion queue는 operation 완료 표면이지 DATA 수신이 아니다.
+STREAM은 endpoint를 활성화하기 전에 두 pull receive mode 중 정확히 하나를 고른다.
 
 ---
 

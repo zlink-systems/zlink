@@ -27,7 +27,7 @@ with zlink.create_context() as ctx:
             sender.bind("inproc://python-guide-pair")
             receiver.connect("inproc://python-guide-pair")
 
-            sender.send().message(b"hello").submit_sync(flags=zlink.SendFlags.NONE)
+            sender.send().message(b"hello").submit_sync()
             received = zlink.create_received()  # 호출자가 수신 저장 공간을 소유한다.
             assert receiver.recv_into(received)
             with received:
@@ -46,7 +46,7 @@ with zlink.create_context() as ctx:
 ```python
 message = zlink.Message.from_(bytearray(b"payload"))  # caller buffer와 분리된 message를 만든다.
 with message:
-    socket.send().message(message).submit_sync(flags=zlink.SendFlags.NONE)
+    socket.send().message(message).submit_sync()
 
 received = zlink.create_received()
 socket.recv_into(received)  # no-data를 허용하는 non-blocking 호출이면 False를 반환한다.
@@ -58,37 +58,41 @@ with received:
 pending value를 직접 반환하는 control API는 값이 없을 때 `None`을 반환한다.
 
 HWM 대기 가능 send는 async `submit()`과 sync
-`submit_sync(*, flags=zlink.SendFlags.NONE)`을 제공한다. async 코드에서는
-`await socket.send().message(message).submit()`을 사용한다. plain thread에서는
-`submit_sync()`을 사용할 수 있으며, `flags=zlink.SendFlags.DONT_WAIT`을 지정하면
-HWM이 가득 찼을 때 즉시 `SubmitError`가 발생한다.
+`submit_sync()`을 제공한다. async 코드에서는
+`await socket.send().message(message).submit()`을 사용한다. 이 terminal은 DONTWAIT을
+사용하고 socket completion queue에서 settle된다. Plain thread의 `submit_sync()`은 local
+admission까지 Core 안에서 blocking한다.
 
-Request도 같은 HWM admission을 지나며 세 완료 표면을 제공한다.
-`submit_sync(*, flags)`는 admission과 reply를 동기 대기해 reply를 직접 반환하고,
-`submit_sync(*, flags, callback)`은 admission 결과가 결정되면 즉시 반환한 뒤 reply를
-callback으로 전달하며, `submit()`은 await 가능한 coroutine object를 반환한다. Sync
-flag의 `NONE`/`DONT_WAIT`가 admission 대기 여부를 정한다.
+Request는 reply까지 blocking하는 `submit_sync()`과 socket completion queue에서 settle되는
+awaitable `list[Message]`를 반환하는 `submit()`을 제공한다. Reply는 terminal 결과이며 별도
+DATA receive가 아니다.
+
+Core가 pre-admission operation을 접수한 뒤 retry를 소유하므로 caller retry queue를 만들거나
+payload를 재전송하지 않는다. 공용 native `ZLINK_OPT_PENDING_MAX_MSGS/BYTES` cap은 pending
+SEND와 REQUEST에 함께 적용되고 send 전용 pending 이름은 없다. Completion은 local
+admission일 뿐 peer delivery나 application acknowledgement가 아니다.
+
+asyncio Task 취소는 Python waiter의 대기를 멈출 수 있다. Core submit 전에는 Core를 호출하지
+않고 중단하지만, Core가 payload를 접수한 뒤에는 admission이나 request가 계속될 수 있고
+socket owner가 늦은 completion을 drain한다. Bind/connect 전에
+`stream.options.recv_mode`를 `zlink.StreamRecvMode.RAW` 또는 `.PACKET`으로 정한 뒤 각각
+`recv_into` 또는 `recv_packet_into`를 사용한다.
+
+public poller가 socket의 `zlink.PollEventFlag.POLLCOMPLETION` owner이면 blocking request나
+awaitable이 남아 있는 동안 다른 thread가 `wait()` loop를 계속 실행해야 한다. `wait()`가
+native completion을 drain해 Python state를 settle/cleanup하므로 같은 thread에서 wait 사이에
+blocking terminal을 호출하면 진행이 멈출 수 있다.
 
 ## DEALER와 ROUTER
 
-DEALER와 ROUTER는 raw `RoutingId`와 request sequence를 유지한다. ROUTER가 받은 `Received`에서
-`routing_id`를 읽고, 같은 metadata를 reply builder가 사용한다.
+DEALER와 ROUTER는 raw `RoutingId`를 유지하며 ROUTER request에는 opaque `ReplyToken`도 있다.
+Reply builder에는 `Received`에서 얻은 두 값을 함께 넘긴다.
 
 ```python
-with zlink.create_context() as ctx:
-    with zlink.create_dealer_socket(ctx) as dealer:
-        with zlink.create_router_socket(ctx) as router:
-            router.bind("inproc://python-guide-request")
-            dealer.connect("inproc://python-guide-request")
-
-            dealer.request().message(b"ping").submit(on_reply)  # reply callback을 등록한다.
-            received = zlink.create_received()
-            assert router.recv_into(received)
-            with received:
-                received.reply().message(b"pong").submit()  # 수신 routing metadata로 회신한다.
+--8<-- "bindings/python/samples/request_reply_async_sample.py:doc"
 ```
 
-실제 callback lifetime과 timeout 처리는 `request_reply_callback_sample.py`를 참고한다.
+completion-backed awaitable과 reply-token lifetime은 `request_reply_async_sample.py`를 참고한다.
 
 ## Routing ID와 오류
 
@@ -98,7 +102,7 @@ with zlink.create_context() as ctx:
 ```python
 rid = zlink.RoutingId.from_(b"server-01")
 try:
-    socket.send().message(b"data").submit_sync(flags=zlink.SendFlags.DONT_WAIT)
+    socket.send().message(b"data").submit_sync()
 except zlink.SubmitError as exc:
     if exc.result == zlink.SubmitResult.BACKPRESSURED:
         # back-pressure는 결과를 확인한 뒤 application policy로 처리한다.
@@ -112,11 +116,10 @@ except zlink.SubmitError as exc:
 
 ## 스레딩 유의사항
 
-flag 없는 `submit_sync()`은 HWM admission을 기다리는 동안 호출 thread를 멈춘다.
+`submit_sync()`은 HWM admission을 기다리는 동안 호출 thread를 멈춘다.
 plain thread에서는 그 thread만 대기하므로 사용할 수 있다. 그러나 asyncio 이벤트 루프
 안에서 호출하면 루프 전체가 멈춰 다른 task와 send completion도 진행되지 않는다.
-asyncio 코드에서는 async `submit()`을 `await`한다. 즉시 backpressure가 필요하면
-`submit_sync(flags=zlink.SendFlags.DONT_WAIT)`을 사용한다.
+asyncio 코드에서는 async `submit()`을 `await`한다.
 
 ## Sample와 perf
 
@@ -124,10 +127,10 @@ raw sample runner에는 다음 process가 포함된다.
 
 - `pair_recv_sample.py`
 - `dealer_router_recv_sample.py`
-- `request_reply_callback_sample.py`
+- `request_reply_async_sample.py`
 - `pubsub_recv_sample.py`
 - `stream_recv_sample.py`
-- `stream_packet_callback_sample.py`
+- `stream_packet_recv_sample.py`
 - `monitor_recv_sample.py`
 
 Perf runner는 사용할 Core 또는 wheel runtime을 명시해야 한다. runner가 출력하는 path와 SHA-256을

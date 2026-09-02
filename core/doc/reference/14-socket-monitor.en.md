@@ -25,40 +25,34 @@ shorter `ZLINK_EVENT_*` names) selecting which events to observe:
 `CONNECTED`/`CONNECT_DELAYED`/`CONNECT_RETRIED`/`LISTENING`/`BIND_FAILED`/`ACCEPTED`/
 `ACCEPT_FAILED`/`CLOSED`/`CLOSE_FAILED`/`DISCONNECTED`/`MONITOR_STOPPED`/
 `HANDSHAKE_FAILED_NO_DETAIL`/`CONNECTION_READY`/`HANDSHAKE_FAILED_PROTOCOL`/
-`HANDSHAKE_FAILED_AUTH`/`PEER_WEIGHT_CHANGED`, or `ALL` (`0xFFFF`) for everything; `events == 0`
+`HANDSHAKE_FAILED_AUTH`/`PEER_WEIGHT_CHANGED`/`SEND_FLOW_PAUSED`/`SEND_FLOW_RESUMED`/
+`FLOW_STATE_STALE`, or `ALL` (`0x7FFFF`) for everything; `events == 0`
 selects nothing.
 
 **Return and errno.** Returns a monitor handle on success, or `NULL` on failure with `errno` set.
 
-**When to use.** Call this once per socket you need to observe. The monitor starts in **recv
-model** — pull events with `zlink_socket_monitor_recv`, or switch to callback-only model with
-`zlink_socket_monitor_handler`. Close the handle with `zlink_monitor_close` when no longer
-needed.
+**When to use.** Call this once per socket you need to observe and pull events with
+`zlink_socket_monitor_recv`. Close the handle with `zlink_monitor_close` when no longer needed.
 
 ---
 
-## `zlink_socket_monitor_handler` / `zlink_socket_monitor_recv`
+## `zlink_socket_monitor_recv`
 
-Switches a monitor to callback delivery, or pulls the next queued event — mutually exclusive
-modes, like a raw socket's receive modes (Raw receive category).
+Pulls the next queued event into caller-owned storage.
 
 ```c
-zlink_socket_monitor_handler(monitor, on_monitor_event, userdata);
-// or, in recv model:
 zlink_monitor_event_t event;
 zlink_socket_monitor_recv(monitor, &event, ZLINK_RECV_FLAGS_NONE);
 ```
 
-**Parameters.** `handler` takes a `zlink_monitor_handler_fn` and `userdata_`. `recv` takes an
-`event_out_` output struct and `flags_` (`ZLINK_RECV_FLAGS_NONE` or `_DONTWAIT`).
+**Parameters.** Takes an `event_out_` output struct and `flags_`
+(`ZLINK_RECV_FLAGS_NONE` or `_DONTWAIT`).
 
-**Return and errno.** `handler` returns `zlink_handler_result_t` — `ZLINK_HANDLER_OK` on success;
-activating handler mode while already in the other mode returns `EBUSY`. `recv` returns
-`zlink_recv_result_t` — `ZLINK_RECV_OK` on success.
+**Return and errno.** Returns `zlink_recv_result_t` — `ZLINK_RECV_OK` on success and
+`ZLINK_RECV_NO_DATA` for a DONTWAIT call with no queued event.
 
-**When to use.** With receive mode, event addresses and routing IDs are values inside the
-caller-owned output struct; with handler mode, the callback's event pointer and contained values
-are borrowed views valid only until the callback returns. `DISCONNECTED.value` is a
+**When to use.** Event addresses and routing IDs are values inside the caller-owned output struct.
+`DISCONNECTED.value` is a
 `zlink_disconnect_reason_t`, `HANDSHAKE_FAILED_PROTOCOL.value` is a `zlink_protocol_error_t`,
 `PEER_WEIGHT_CHANGED.value` is the new weight in `0..10000`; other failure events carry the
 errno for that failure. The monitor queue is bounded — when full, Core aggregates identical
@@ -111,22 +105,21 @@ zlink_monitor_close(&monitor);
 
 ---
 
-## `zlink_monitor_ignore_handler`
+## Ignoring an event
 
-A no-op event handler that drains events without taking any action.
+A pull consumer can intentionally discard an event after receiving it.
 
 ```c
-zlink_socket_monitor_handler(monitor, zlink_monitor_ignore_handler, NULL);
+zlink_monitor_event_t ignored;
+zlink_socket_monitor_recv(monitor, &ignored, ZLINK_RECV_FLAGS_NONE);
 ```
 
-**Parameters.** Matches the `zlink_monitor_handler_fn` signature so it can be registered
-directly.
+**Parameters.** Uses the ordinary caller-owned monitor event output.
 
-**Return and errno.** None — it neither retains nor releases the event or `userdata_`.
+**Return and errno.** The receive result is the same as any monitor pull.
 
-**When to use.** Register this when you want handler-mode semantics (so the monitor queue never
-grows unbounded) but the application currently has nothing to do with the events themselves —
-`event` is a borrowed view valid only for the call, same as any other handler-mode callback.
+**When to use.** Drain and discard events when the application does not need their content. The
+monitor queue remains bounded, but a consumer still has to pull it.
 
 ---
 

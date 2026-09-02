@@ -54,7 +54,7 @@ server.Recv(received);
 Console.WriteLine(received.FirstPart().GetString());   // PING
 
 using var reply = Message.From("ACK");
-server.Send().Message(reply).Submit(SendFlags.None);
+server.Send().Message(reply).Submit();
 ```
 
 ```csharp
@@ -66,7 +66,7 @@ client.Connect("tcp://127.0.0.1:5555");
 mon.Recv();
 
 using var ping = Message.From("PING");
-client.Send().Message(ping).Submit(SendFlags.None);
+client.Send().Message(ping).Submit();
 
 using var received = Received.Create();
 client.Recv(received);
@@ -123,22 +123,36 @@ extension during the framework's configuration stage. On surfaces that exchange
 raw `Message` directly — such as the framework's actor join callback — the
 application layer explicitly builds and interprets the byte payload.
 
-HWM-managed sends provide synchronous `Submit(SendFlags)` and asynchronous
-`Async()` terminals. `Submit(SendFlags.None)` blocks until HWM admission, while
-`Submit(SendFlags.DontWait)` immediately throws `ZlinkSubmitException` when the
-HWM is full. In asynchronous code, use the flag-free `await ...Async()` terminal.
+HWM-managed sends provide synchronous `Submit()` and asynchronous `Async()`
+terminals. `Submit()` blocks in Core until local HWM admission. In asynchronous
+code, use `await ...Async()`; it submits with DONTWAIT and settles from the
+socket completion queue.
 
 ```csharp
-socket.Send().Message(message).Submit(SendFlags.DontWait); // synchronous, non-blocking
-await socket.Send().Message(message).Async();              // asynchronous completion
+socket.Send().Message(message).Submit();       // synchronous Core admission
+await socket.Send().Message(message).Async();  // asynchronous completion
 ```
 
-Request also passes through HWM admission and provides three completion
-surfaces. `Submit(SendFlags)` waits synchronously for admission and reply and
-returns the reply directly; `Submit(SendFlags, callback)` returns once admission
-is decided and delivers the reply through the callback; `Async()` returns an
-awaitable. The synchronous flag selects `None` (wait) or `DontWait` (immediate
-back-pressure).
+Request provides `Submit()` to block until the reply and `Async()` to return a
+`Task<IReadOnlyList<Message>>` settled from the socket completion queue. The
+reply is the terminal result, not DATA received separately.
+
+Core owns retry after accepting a pre-admission operation; do not add a caller
+retry queue or resubmit its payload. The shared native
+`ZLINK_OPT_PENDING_MAX_MSGS/BYTES` limits cover pending SEND and REQUEST, and no
+send-only pending names exist. Completion confirms local admission, not peer
+delivery or an application acknowledgement.
+
+A `CancellationToken` can prevent a pre-submit call or stop the managed waiter.
+After Core accepts the payload, cancellation does not cancel Core admission or
+the request; the socket owner still drains a late completion and releases it.
+Set `stream.Options.ReceiveMode` to `StreamReceiveMode.Raw` or `.Packet` before
+bind/connect, then use `Recv` or `RecvPacket` respectively.
+
+When a public poller owns `PollEventFlags.PollCompletion` for a socket, another
+thread must keep `Wait()` looping while a blocking request or Task is pending.
+`Wait()` drains native completions and settles or cleans managed state; invoking
+a blocking terminal between waits on the same thread can stall completion.
 
 ### 3. Received
 
@@ -152,7 +166,7 @@ socket.Recv(received);
 Message      first = received.FirstPart();   // first part (no ownership transfer)
 string       body  = first.GetString();
 RoutingId?   from  = received.RoutingId;     // present if a routing path exists
-ulong?       seq   = received.RequestSeq;    // present for request/reply
+ReplyToken?  token = received.ReplyToken;    // present on a ROUTER request
 IReadOnlyList<Message> parts = received.Parts;  // full multipart set
 ```
 
@@ -222,12 +236,11 @@ catch (ZlinkException ex)
 | `ZlinkCloseException` / `ZlinkHandlerException` | Close/callback |
 
 A non-blocking receive returns `false` from `Recv(...)` when no data is available.
-For a non-blocking send, `Submit(SendFlags.DontWait)` reports back-pressure with
-`ZlinkSubmitException`.
+The asynchronous send uses Core DONTWAIT and reports failure through its Task.
 
 ```csharp
 if (!socket.Recv(received, RecvFlags.DontWait)) { /* no data */ }
-try { socket.Send().Message(m).Submit(SendFlags.DontWait); }
+try { await socket.Send().Message(m).Async(); }
 catch (ZlinkSubmitException ex) when (ex.Result == SubmitResult.Backpressured) { /* back-pressure */ }
 ```
 
@@ -253,10 +266,10 @@ for the full list of C functions.
 | Message creation | `zlink_msg_init` / `_init_size` / `_init_data` | `new Message(size)` / `Message.From(...)` |
 | Message access | `zlink_msg_data` / `zlink_msg_size` | `Message.AsReadOnlySpan()` / `Message.Size` |
 | Message release | `zlink_msg_close` / `zlink_multipart_close` | `Message.Dispose()` / `Zlink.MultipartClose(parts)` |
-| Synchronous send | `zlink_send_part` (+`_rid`) + flag | `socket.Send().Message(...).Submit(flags)` |
-| Asynchronous send | `zlink_send_async` | `await socket.Send().Message(...).Async()` |
+| Synchronous send | `zlink_send_part` (+`_rid`) with NONE | `socket.Send().Message(...).Submit()` |
+| Asynchronous send | DONTWAIT send + completion pull | `await socket.Send().Message(...).Async()` |
 | Receive | `zlink_recv_part` | `socket.Recv(Received)` |
-| Request / reply | `zlink_dealer_request_part` / `zlink_router_reply_part` | `dealer.Request()....Async()` / `router.Reply(...)` |
+| Request / reply | `zlink_request_part` / `zlink_reply_part` | `dealer.Request()....Async()` / `router.Reply(rid, token)` |
 | Subscribe | `zlink_set_subscription` / `zlink_subscribe_part` | `socket.SetSubscription(...)` / `socket.Subscribe(TopicMessage)` |
 | Monitor | `zlink_socket_monitor_open` / `_recv` | `socket.MonitorOpen(...)` / `monitor.Recv()` |
 | Poller / timer | `zlink_poller_*` / `zlink_timer_*` | `Zlink.CreatePoller()` / `Zlink.CreateTimer()` |
@@ -280,10 +293,9 @@ AOT** publishing, make sure the target RID's assets are included in the output
 Threading: `IContext` is thread-safe and shareable across threads. Sockets are
 single-thread-owned — see [thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/)
 for the full rules.
-`Submit(SendFlags.None)` stops the calling thread while it
-waits for HWM admission. This is safe on a plain thread because only that thread
-waits. Use `Async()` when the caller must remain available, or
-`Submit(SendFlags.DontWait)` when immediate back-pressure is required.
+`Submit()` stops the calling thread while it waits for HWM admission. This is
+safe on a plain thread because only that thread waits. Use `Async()` when the
+caller must remain available.
 
 ---
 
@@ -298,7 +310,7 @@ waits. Use `Async()` when the caller must remain available, or
 | `RequestReplyAsync` | Async request/reply |
 | `PubSubRecv` | PUB/SUB topics |
 | `MonitorRecv` | Socket monitor |
-| `StreamRecv`, `StreamPacketCallback` | STREAM + packet callback |
+| `StreamRecv`, `StreamPacketCallback` | STREAM RAW/PACKET pull (legacy sample-directory name) |
 
 > SPOT/Actor examples are covered by the framework samples, not the core binding —
 > see the [Spot](../../../../framework/doc/framework/common/guide/server/06-spot.en.md) ·

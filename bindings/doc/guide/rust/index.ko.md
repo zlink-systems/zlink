@@ -101,11 +101,25 @@ HWM 대기 가능 send는 비동기 `submit()` Future와 동기
 `submit_sync(SendFlags::NONE)`을 사용할 수 있고, 즉시 backpressure가 필요하면
 `SendFlags::DONT_WAIT`을 지정합니다.
 
-Request도 같은 HWM admission을 지나며 세 완료 표면을 제공합니다.
-`submit_sync(SendFlags)`는 admission과 reply를 동기 대기해 reply를 직접 반환하고,
-`on_reply(cb).submit_sync(SendFlags)`는 admission 결과를 즉시 반환한 뒤 reply를
-callback으로 전달하며, `submit()`은 Future를 반환합니다. Sync flag가 admission 대기
-여부를 정합니다.
+Request는 reply까지 blocking하는 `submit_sync()`과 socket completion queue에서 settle되는
+`Vec<Message>` Future를 반환하는 `submit()`을 제공합니다. Reply는 terminal 결과이며 별도
+DATA receive가 아닙니다.
+
+Core가 pre-admission operation을 접수한 뒤 retry를 소유하므로 caller retry queue를 만들거나
+payload를 재전송하지 않습니다. 공용 native `ZLINK_OPT_PENDING_MAX_MSGS/BYTES` cap은 pending
+SEND와 REQUEST에 함께 적용되고 send 전용 pending 이름은 없습니다. Completion은 local
+admission일 뿐 peer delivery나 application acknowledgement가 아닙니다.
+
+Future를 drop하면 Rust waiter의 대기를 멈출 수 있습니다. Core submit 전에는 builder를 버려
+Core를 호출하지 않지만, Core가 payload를 접수한 뒤에는 admission이나 request가 계속될 수
+있고 socket owner가 늦은 completion을 drain합니다. Bind/connect 전에
+`stream.options().set_recv_mode(StreamRecvMode::Raw)` 또는 `::Packet`을 호출한 뒤 각각
+`recv` 또는 `recv_packet`을 사용합니다.
+
+public poller가 socket의 `POLLCOMPLETION` owner이면 blocking request나 Future가 남아 있는
+동안 다른 thread가 `wait()` loop를 계속 실행해야 합니다. `wait()`가 native completion을
+drain해 Rust state를 settle/cleanup하므로 같은 thread에서 wait 사이에 blocking terminal을
+호출하면 진행이 멈출 수 있습니다.
 
 수신된 메시지 읽기:
 
@@ -124,7 +138,7 @@ socket.recv(&mut received, RecvFlags::NONE).unwrap();
 
 let parts = received.parts();                       // &[Message]
 let rid: Option<&RoutingId> = received.routing_id(); // ROUTER/SPOT
-let seq: Option<u64> = received.request_seq();
+let token: Option<&ReplyToken> = received.reply_token();
 ```
 
 ### 라우팅 ID
@@ -189,7 +203,7 @@ match socket.send().message(msg).submit_sync(SendFlags::DONT_WAIT) {
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
 | `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(m).submit_sync(flags)` |
-| `zlink_send_async(...)` | `socket.send().message(m).submit().await` |
+| DONTWAIT send + completion pull | `socket.send().message(m).submit().await` |
 | `zlink_recv_part(...)` | `socket.recv(&mut received, flags)` |
 | `zlink_msg_data(msg)` | `part.as_bytes()` |
 | `zlink_routing_id_t` | `RoutingId` |
@@ -245,7 +259,7 @@ std::thread::spawn(move || {
 | `request_reply_future_sample.rs` | Future 요청/응답 |
 | `pubsub_recv_sample.rs` | PUB/SUB 발행·구독 |
 | `stream_recv_sample.rs` | STREAM 원시 TCP |
-| `stream_packet_callback_sample.rs` | STREAM 패킷 콜백 |
+| `stream_packet_recv_sample.rs` | STREAM PACKET pull |
 | `monitor_recv_sample.rs` | 모니터 이벤트 수신 |
 
 > SPOT·Actor 예제는 core 바인딩이 아니라 framework 샘플이 다룬다. Rust에는 아직

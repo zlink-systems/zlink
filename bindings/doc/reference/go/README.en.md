@@ -30,12 +30,12 @@ Go-specific notes carried into every category below:
   socket type itself. Only `CommonSocketOptions` (via `.CommonOptions()`) and `PubSocketOptions`
   (via `.PubOptions()`) exist as separate accessor objects — every other language covered so far
   gives every socket type its own named options facade.
-- **`RequestOp` has both a Go-channel async path and a callback path** —
-  `SubmitAsync(ctx) (<-chan RequestReplyCompletion, error)` alongside `Submit(ctx, callback) (bool,
-  error)` — unlike rust, which is callback-only, or dotnet/java/node/cpp, which use a
-  Task/CompletionStage/Promise/`async_result_t`. Every builder's terminal `Submit`/`SubmitAsync`
-  takes a `context.Context` as its first argument for cancellation, which no other language's
-  operation builder does.
+- **`RequestOp` has one completion-backed Go terminal** — `Submit(ctx)` returns
+  `([]*Message, error)` after the socket completion queue yields the reply or terminal failure.
+  Every send/request/reply `Submit` takes a `context.Context`; canceling it stops the Go waiter,
+  but successful native submit has no Core cancellation operation. The socket owner continues to
+  drain and settle that late completion. Use a separate goroutine when a public poller's
+  `PollCompletion` wait loop owns completion draining.
 - **`ZlinkError` is a Go `interface`**, not a struct or enum — each typed error implements
   `Error() string`, `Code() int`, `InternalErrno() int`, and `Unwrap() error` (the standard-library
   `errors.Is`/`errors.As` integration point), per its own doc comment.

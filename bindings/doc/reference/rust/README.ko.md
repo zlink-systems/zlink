@@ -31,9 +31,9 @@ framework 계층에만 존재한다. 아래 Contract 원본 열은 스펙 산문
 - **`ZlinkError`는 각 typed error variant를 감싸는 Rust enum이다**(`Submit(SubmitError)`,
   `Request(RequestError)`, ...) — 상속 기반 class가 아니라 "여러 typed error 중 하나"를
   표현하는 Rust다운 형태다.
-- **이 binding의 public contract엔 async/Future를 반환하는 request submit이 없다** —
-  지금까지 다룬 다른 모든 언어(dotnet의 `Task`, java의 `CompletionStage`, node의
-  `Promise`, cpp의 `async_result_t`)와 달리, `RequestOp::submit`은 callback 전용이다.
+- **Request submit에는 async·blocking terminal이 모두 있다** —
+  `RequestOp::submit()`은 runtime 비종속 `Future`를 반환하고 `submit_sync()`는
+  block한 뒤 caller-owned reply message를 반환한다. 어느 terminal도 callback을 설치하지 않는다.
 
 ## 로케일 관례
 

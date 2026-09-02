@@ -61,8 +61,8 @@ Holds one received message envelope: routing metadata, parts, and an optional re
 
 ```cpp
 zlink::received_t received;
-if (dealer.recv (received) == 0) { /* ... */ }
-if (received.request_seq ()) {
+if (router.recv (received) == 0) { /* ... */ }
+if (received.reply_token ()) {
     received.reply ().message (reply_msg).submit ();
 }
 ```
@@ -72,7 +72,7 @@ if (received.request_seq ()) {
 | Member | Returns | Meaning |
 | --- | --- | --- |
 | `routing_id()` | `const std::optional<routing_id_t>&` | the source's routing id, present when the receive path provides one |
-| `request_seq()` | `const std::optional<uint64_t>&` | present when this envelope is replyable |
+| `reply_token()` | `const std::optional<reply_token_t>&` | opaque capability present on a ROUTER request |
 | `parts()` | `const std::vector<message_t>&` (mutable overload too) | every message part this envelope holds |
 | `is_single_part()` | `bool` | whether `parts()` has exactly one element |
 | `first_part()` | `message_t` | the first part, without transferring ownership |
@@ -82,10 +82,10 @@ if (received.request_seq ()) {
 | `close()` | — | releases the message parts owned by this envelope |
 
 **Completion result.** All synchronous. `send()`/`reply()` reconstruct the send/reply context
-lazily at submit time from the stored routing id and request sequence, avoiding a per-receive
+lazily at submit time from the stored routing id and reply token, avoiding a per-receive
 `std::function` closure and heap allocation on the server hot path.
 
-**When to use.** Reuse one `received_t` across a receive loop. Check `request_seq()` before calling
+**When to use.** Reuse one `received_t` across a receive loop. Check `reply_token()` before calling
 `reply()` to confirm the envelope is actually replyable.
 
 ---
@@ -167,22 +167,23 @@ std::move (received.reply ()).message (reply_msg).submit ();
 | Stage | Member | Meaning |
 | --- | --- | --- |
 | `send_operation_t` | `.message(message_t&)`/`.message(message_t&&)` | `&&`-qualified — builder is consumed by each call, chain with `std::move(...)` |
-| `send_submit_operation_t` | `.message(...)` / `.flags(int)` / `.submit()` | add parts, set flags, terminal |
+| `send_submit_operation_t` | `.message(...)` / `.submit()` / `.async()` | add parts, then choose blocking or awaitable terminal |
 | `request_operation_t`/`request_submit_operation_t` | same as `send` + `.timeout(std::chrono::milliseconds)` | mirrors the send chain, adding a reply-wait timeout |
-| `request_submit_operation_t.flags(int)` | narrows to `request_callback_submit_operation_t` | drops the awaitable `.async()` path — only `.submit(request_callback_t)` remains |
-| `reply_operation_t`/`reply_submit_operation_t` | mirrors `send`, `.flags(...)` throws `submit_error_t{not_supported}` for anything but `send_flags_t::none` | core reply function takes no send-flag argument |
+| `request_submit_operation_t` terminals | `.submit()` / `.async()` | blocking reply result or completion-backed awaitable reply result |
+| `reply_operation_t`/`reply_submit_operation_t` | `.message(...)` / `.submit()` | flag-free synchronous reply through the received RID and token |
 
 **Completion result.** All synchronous calls; parts are consumed on a successful submit only.
 
 | Terminal | Returns | Meaning |
 | --- | --- | --- |
-| `send_submit_operation_t::submit()` | `bool` | `false` only under `send_flags_t::dontwait` back-pressure; other failures throw `submit_error_t` |
+| `send_submit_operation_t::submit()` | `void` | blocks for Core local admission; failures throw `submit_error_t` |
+| `send_submit_operation_t::async()` | `async_result_t<void>` | DONTWAIT submit settled from the socket completion queue |
 | `reply_submit_operation_t::submit()` | `void` | throws `submit_error_t` on failure |
-| `request_submit_operation_t::async()` | `async_result_t<std::vector<message_t>>` | `.get()` blocks for the reply; `.wait_for(...)`/`.wait_until(...)` polls with a timeout — both internally pump request progress rather than blocking the OS thread |
-| `submit(request_callback_t)` (`request_submit_operation_t`/`request_callback_submit_operation_t`) | `bool` | the dispatch result; the actual reply arrives later via the callback as `(request_result_t, std::vector<message_t>)` — the vector is populated only when the result is `request_result_t::ok`, and the callback owns and must `close()` each message |
+| `request_submit_operation_t::submit()` | `std::vector<message_t>` | blocks until the completion queue yields the reply |
+| `request_submit_operation_t::async()` | `async_result_t<std::vector<message_t>>` | awaitable reply; the caller owns every returned message |
 
-**When to use.** `.async()` when the caller can wait on a future; `.flags(...).submit(callback)`
-for callback-driven completion instead. `received_t::reply()`/`send()` rather than reconstructing
+**When to use.** `.async()` in a coroutine and `.submit()` on a thread that may block. Use
+`received_t::reply()`/`send()` rather than reconstructing
 the destination by hand. Since `message()` overloads are `&&`-qualified, always chain from an
 rvalue — an lvalue builder cannot call `.message(...)` directly.
 

@@ -18,7 +18,8 @@ Observes a socket's connection lifecycle events and reads its current status.
 
 ```rust
 let mut monitor = SocketMonitor::open(&socket)?;
-monitor.on_event(|event| println!("{:?} {}", event.event, event.remote_addr))?;
+let event = monitor.recv()?;
+println!("{:?} {}", event.event, event.remote_addr);
 let status = monitor.status()?;
 ```
 
@@ -27,45 +28,41 @@ let status = monitor.status()?;
 | Member | Meaning |
 | --- | --- |
 | `open(socket: &dyn Monitorable) -> Result<Self, ConfigError>` | **takes no event-mask parameter and always subscribes to every event**, per its own doc comment ("Open a socket monitor for all events") |
+| `open_with_options(socket, SocketMonitorOpenOptions) -> Result<Self, ConfigError>` | opens with an explicit event mask and monitor byte HWM |
 | `recv(&self) -> Result<MonitorEvent, RecvError>` | blocking pull of the next event |
 | `recv_with_flags(&self, flags: RecvFlags) -> Result<Option<MonitorEvent>, RecvError>` | non-blocking variant, `Ok(None)` when nothing pending |
-| `status()` / `snapshot()` | returns a `MonitorStatus` point-in-time snapshot; equivalent — `snapshot` is an alias for `status` |
-| `on_event<F>(&mut self, handler: F) -> Result<(), HandlerError> where F: Fn(&MonitorEvent) + Send + 'static` | registers a passive lifecycle-event callback |
-| `ignore_handler() -> fn(&MonitorEvent)` | a static no-op handler a caller can register |
+| `status()` | returns a `MonitorStatus` point-in-time snapshot |
 | `close(&mut self) -> Result<(), CloseError>` | closes the monitor |
 
 **Completion result.** All members are synchronous. `Monitorable` is a sealed marker trait every
 built-in socket type implements; a crate consumer cannot implement it for a custom type.
 
-**When to use.** Use `on_event` for a passive lifecycle observer registered once; use `recv`/
-`recv_with_flags` for a pull-based drain loop instead. Use `status()` for a point-in-time snapshot.
+**When to use.** Use `recv`/`recv_with_flags` for a caller-driven pull loop and `status()` for a
+point-in-time snapshot. Monitor delivery has no registration callback.
 
 ---
 
-## `SocketMonitorEventMask` (declared but unreachable as a filter)
+## `SocketMonitorEventMask` (monitor filter options)
 
-A typed bitmask intended for subscribing a monitor to a subset of events — but **`SocketMonitor::open`
-takes no such parameter**, so this type has no way to actually filter a subscription through this
-binding's public contract. The underlying implementation has a `pub(crate)`
-`socket_monitor_open_with_events(socket, events)` that `open()` calls internally, always passing
-`SocketMonitorEventMask::ALL` — that function is not exported.
+A typed bitmask for subscribing a monitor to a subset of events. `SocketMonitor::open()` selects
+all events; `open_with_options(socket, SocketMonitorOpenOptions { events, monitor_hwm_bytes })`
+applies an explicit mask and byte HWM.
 
-**Options.** The wrapped `u32` field is private, so a consumer cannot construct an arbitrary mask
-directly, only combine the two named ones via `BitOr`/`BitOrAssign`.
+**Options.** The wrapped `u32` field is private, so a consumer combines the named masks via
+`BitOr`/`BitOrAssign`.
 
 | Member | Meaning |
 | --- | --- |
-| `ALL` | `0x7FFF` |
+| `ALL` | `0x7FFFF` |
 | `CONNECTION_READY` | `0x1000` |
+| `SEND_FLOW_PAUSED` / `SEND_FLOW_RESUMED` / `FLOW_STATE_STALE` | paired DEALER/ROUTER flow-state transitions |
 | `bits()` | reads the raw value |
 | `MONITOR_EVENT_ALL` / `MONITOR_EVENT_CONNECTION_READY` | top-level convenience aliases for the same two constants |
 
 **Completion result.** N/A — a plain value type.
 
-**When to use.** Not applicable from application code today — `SocketMonitor::open` always
-subscribes to every event regardless of any `SocketMonitorEventMask` value constructed. Whether
-`open` should gain an events parameter, or whether this type should be removed, is a spec-level
-question outside this reference's scope.
+**When to use.** Use `open()` for all events and `open_with_options()` when the subscription or
+monitor queue byte HWM must be explicit.
 
 ---
 
@@ -155,9 +152,10 @@ consumer cannot implement it for a custom type.
 
 **Completion result.** Registration/removal members return `Result<(), ConfigError>`. `wait`
 returns `Result<usize, RecvError>` — the ready count, writing up to `events.len()` results in
-place. Modifying a registration to add or remove `POLLCOMPLETION` specifically requires
-`remove_socket` + `add_socket` again rather than `modify_socket`, per its own doc comment — because
-completion processing has separate ownership in Core.
+place. `modify_socket` can atomically add or remove `POLLCOMPLETION`, transferring the socket's
+completion-drain owner with the native registration change. While a public poller owns that bit,
+its owner must keep calling `wait()` to drain and settle completions; use another execution context
+for a simultaneous blocking terminal.
 
 **When to use.** Use one poller across a service's lifetime. Reuse one `Vec<PollEvent>` buffer
 across `wait` calls rather than allocating one per wait.
@@ -201,8 +199,8 @@ but registerable with one via `Poller::add_timer`.
 
 ```rust
 let mut timer = Timer::new()?;
-timer.on_fire(|_timer, count| println!("fired {count} times"))?;
 timer.start(1_000_000_000, 0)?; // interval in nanoseconds
+let count = timer.recv()?;
 ```
 
 **Options.**
@@ -213,13 +211,11 @@ timer.start(1_000_000_000, 0)?; // interval in nanoseconds
 | `start(&self, interval_ns: u64, repeat_count: u64) -> Result<(), ConfigError>` | starts firing on `interval_ns`; **the interval is nanoseconds**, unlike every other language's `Duration`/millisecond-based `start`; `repeat_count == 0` means unlimited |
 | `stop(&self) -> Result<(), ConfigError>` | stops firing; restartable via `start` |
 | `recv(&self) -> Result<Option<u64>, RecvError>` | the cumulative fire count, `Ok(None)` when nothing pending |
-| `on_fire<F>(&mut self, handler: F) -> Result<(), HandlerError> where F: Fn(&Timer, u64) + Send + 'static` | registers a passive interval callback |
 
 **Completion result.** All members are synchronous.
 
-**When to use.** Use `on_fire` for a passive interval callback; use `recv` to poll expirations
-instead, or register the timer with `Poller::add_timer` to multiplex it alongside sockets on one
-wait.
+**When to use.** Use `recv` to pull expirations, or register the timer with `Poller::add_timer` to
+multiplex it alongside sockets on one wait. Timer delivery has no registration callback.
 
 ---
 

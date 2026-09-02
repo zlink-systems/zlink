@@ -27,9 +27,9 @@ result enum을 담은 자신만의 typed error struct를 갖는다 — caller는
 | Error struct | Result enum | 반환하는 곳 | 값 |
 |---|---|---|---|
 | `SubmitError` | `SubmitResult`(Messaging category) | send/publish/request-submit API | `Backpressured`(1, 정상 제어 흐름), `NotConnected`(2), `NotFound`(3), `Terminated`(4), `InvalidHandle`(5), `InvalidArgument`(6), `NotSupported`(7), `InvalidState`(8), `ThreadViolation`(9), `OutOfMemory`(10), `SeqExhausted`(11), `InternalError`(12), `NotAdmitted`(13, 정상 제어 흐름) |
-| `RequestError` | `RequestResult` | request/reply 완료(`RequestOp` 콜백에 전달) | `TimedOut`(101), `NotFound`(102), `Terminated`(103), `ProtocolError`(104), `InternalError`(105), `Rejected`(106), `Conflict`(107), `Busy`(108), `NotConnected`(109), `InvalidArgument`(110), `InvalidState`(111), `NotSupported`(112) — **여기엔 `Backpressured` variant가 없다**, 113에 이를 정의하는 다른 모든 언어의 `RequestResult`/대응물과 다르다 |
+| `RequestError` | `RequestResult` | Future `submit()` 또는 blocking `submit_sync()` terminal request 실패 | `TimedOut`(101), `NotFound`(102), `Terminated`(103), `ProtocolError`(104), `InternalError`(105), `Rejected`(106), `Conflict`(107), `Busy`(108), `NotConnected`(109), `InvalidArgument`(110), `InvalidState`(111), `NotSupported`(112), `Backpressured`(113) |
 | `RecvError` | `RecvResult` | recv-family API | `NoData`(201), `Busy`(202), `Terminated`(203), `InvalidHandle`(204), `NotSupported`(205), `InternalError`(206) — 6개 값 집합(`BufferTooSmall`/`InvalidState` 없음, dotnet/cpp/java와 일치, node의 8개 값 집합과 다름) |
-| `HandlerError` | `HandlerResult` | handler 등록 API | `InvalidArgument`(301), `Busy`(302), `NotSupported`(303), `Deadlock`(304), `InvalidHandle`(305), `InternalError`(306) |
+| `HandlerError` | `HandlerResult` | 유지되는 result family; 현행 public completion/event 전달은 handler를 등록하지 않음 | `InvalidArgument`(301), `Busy`(302), `NotSupported`(303), `Deadlock`(304), `InvalidHandle`(305), `InternalError`(306) |
 | `CloseError` | `CloseResult` | `close()` 경로, `Context::shutdown()` | `Busy`(401), `Shutdown`(402), `InvalidHandle`(403), `InternalError`(404) |
 | `BindError` | `BindResult` | `bind(...)` | `InvalidArgument`(501), `AddrInUse`(502), `NotSupported`(503), `InvalidHandle`(504), `InternalError`(505) |
 | `ConnectError` | `ConnectResult` | `connect`/`unbind`/`disconnect`/`disconnect_rid` | `InvalidArgument`(601), `NotSupported`(602), `InvalidHandle`(603), `InternalError`(604), `NotFound`(605), `Conflict`(606), `Busy`(607) — 7개 값(`AuthFailed` 없음, dotnet/cpp/java와 일치, node의 8개 값 집합과 다름) |
@@ -37,21 +37,17 @@ result enum을 담은 자신만의 typed error struct를 갖는다 — caller는
 
 **언어간 비대칭, 여기서 다시 명시.** 모든 wrapper binding의 result
 enum은 core의 `zlink_*_result_t` family(core Errors category에
-문서화됨)를 정확히 반영해야 하지만, 서로 일치하지 않는다: 이 binding의
-`RecvResult`/`ConnectResult`/`ConfigResult`는 (node의 더 완전한 집합이
-아니라) *더 작은* 값 집합(cpp/java)과 일치한다. `RequestResult`엔
-`Backpressured`가 아예 없는데, 지금까지 다룬 다른 모든 언어는 이를
-정의한다. 이 binding이 빠진 값을 가져야 하는지, 아니면 다른 곳의 더
-완전한 값을 줄여야 하는지는 스펙 차원의 질문이며 이 레퍼런스의 범위
-밖이다 — 이 항목은 그 사실이 묻히지 않도록 명시해둔다.
+문서화됨)를 정확히 반영해야 하지만 auxiliary receive/connect/config 값은
+모든 binding이 같게 노출하지 않는다. 다만 `RequestResult`는 공통 terminal
+`Backpressured`(113)를 포함한다.
 
 **각 값 family가 실제로 뜻하는 것.** `SubmitResult`의
 `Backpressured`/`NotConnected`/`NotFound`/`NotAdmitted`는 예외적 실패가
 아니라 정상적인 실행 흐름이다 — non-`Ok` submit 결과를 전부 같게
 취급하는 코드는 "재시도가 합리적"과 "이대로 제출하면 절대 성공하지
 않음"의 구분을 잃는다. `InvalidState`는 stale handle이나 닫힌
-수신·연결 상태를 다룬다. 같은 handler의 콜백 안에서 그 handler를
-교체·해제하면 실제로 deadlock에 빠지는 대신 `Deadlock`을 반환한다.
+수신·연결 상태를 다룬다. `HandlerResult` family는 남아 있지만 현행 public
+send/request terminal과 pull-event 표면은 이를 생성하지 않는다.
 
 ---
 
@@ -61,9 +57,8 @@ Rust다운 공유 error 타입 — 상속 기반 class가 아니라, typed error
 struct마다 variant 하나씩을 가진 `enum`.
 
 ```rust
-match dealer.send().message(part)?.submit() {
-    Ok(true) => { /* queued */ }
-    Ok(false) => { /* SendFlags::DONT_WAIT이고 block됐을 상황 */ }
+match dealer.send().message(part).submit_sync() {
+    Ok(()) => { /* Core가 terminal acceptance를 보고 */ }
     Err(err) => {
         let zlink_err: ZlinkError = err.into();
         if zlink_err.code() == SubmitResult::Backpressured as i32 {

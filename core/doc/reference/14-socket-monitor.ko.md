@@ -25,41 +25,36 @@ void *monitor = zlink_socket_monitor_open(s, &options);
 `CONNECTED`/`CONNECT_DELAYED`/`CONNECT_RETRIED`/`LISTENING`/`BIND_FAILED`/`ACCEPTED`/
 `ACCEPT_FAILED`/`CLOSED`/`CLOSE_FAILED`/`DISCONNECTED`/`MONITOR_STOPPED`/
 `HANDSHAKE_FAILED_NO_DETAIL`/`CONNECTION_READY`/`HANDSHAKE_FAILED_PROTOCOL`/
-`HANDSHAKE_FAILED_AUTH`/`PEER_WEIGHT_CHANGED`, 전부는 `ALL`(`0xFFFF`) — `events == 0`은
+`HANDSHAKE_FAILED_AUTH`/`PEER_WEIGHT_CHANGED`/`SEND_FLOW_PAUSED`/`SEND_FLOW_RESUMED`/
+`FLOW_STATE_STALE`, 전부는 `ALL`(`0x7FFFF`) — `events == 0`은
 아무것도 선택하지 않는다.
 
 **Return과 errno.** 성공하면 monitor handle을, 실패하면 `NULL`을 반환하며 `errno`가
 설정된다.
 
-**선택 기준.** 관찰해야 하는 socket마다 한 번 호출한다. Monitor는 **recv model**로
-시작한다 — `zlink_socket_monitor_recv`로 이벤트를 뽑거나,
-`zlink_socket_monitor_handler`로 callback 전용 model로 전환한다. 더 이상 필요 없으면
+**선택 기준.** 관찰해야 하는 socket마다 한 번 호출하고
+`zlink_socket_monitor_recv`로 이벤트를 pull한다. 더 이상 필요 없으면
 `zlink_monitor_close`로 handle을 닫는다.
 
 ---
 
-## `zlink_socket_monitor_handler` / `zlink_socket_monitor_recv`
+## `zlink_socket_monitor_recv`
 
-Monitor를 callback 전달로 전환하거나, 큐잉된 다음 이벤트를 뽑는다 — raw socket의 수신
-모드(Raw receive category)처럼 서로 배타적인 모드다.
+큐잉된 다음 event를 caller-owned storage로 pull한다.
 
 ```c
-zlink_socket_monitor_handler(monitor, on_monitor_event, userdata);
-// 또는 recv model에서:
 zlink_monitor_event_t event;
 zlink_socket_monitor_recv(monitor, &event, ZLINK_RECV_FLAGS_NONE);
 ```
 
-**Parameters.** `handler`는 `zlink_monitor_handler_fn`과 `userdata_`를 받는다. `recv`는
-`event_out_` 출력 구조체와 `flags_`(`ZLINK_RECV_FLAGS_NONE` 또는 `_DONTWAIT`)를 받는다.
+**Parameters.** `event_out_` 출력 구조체와 `flags_`
+(`ZLINK_RECV_FLAGS_NONE` 또는 `_DONTWAIT`)를 받는다.
 
-**Return과 errno.** `handler`는 `zlink_handler_result_t`를 반환한다 — 성공하면
-`ZLINK_HANDLER_OK`. 이미 다른 모드에 있는데 handler 모드를 활성화하면 `EBUSY`. `recv`는
-`zlink_recv_result_t`를 반환한다 — 성공하면 `ZLINK_RECV_OK`.
+**Return과 errno.** `zlink_recv_result_t`를 반환한다 — 성공하면
+`ZLINK_RECV_OK`, DONTWAIT 호출에 queued event가 없으면 `ZLINK_RECV_NO_DATA`다.
 
-**선택 기준.** Recv model에서는 이벤트 주소와 routing ID가 caller 소유 출력 구조체 안의
-값이고, handler model에서는 callback의 이벤트 pointer와 담긴 값이 callback이 반환될
-때까지만 유효한 borrowed view다. `DISCONNECTED.value`는 `zlink_disconnect_reason_t`,
+**선택 기준.** 이벤트 주소와 routing ID는 caller 소유 출력 구조체 안의 값이다.
+`DISCONNECTED.value`는 `zlink_disconnect_reason_t`,
 `HANDSHAKE_FAILED_PROTOCOL.value`는 `zlink_protocol_error_t`,
 `PEER_WEIGHT_CHANGED.value`는 `0..10000` 범위의 새 weight다 — 다른 실패 이벤트는 그
 실패의 errno를 담는다. Monitor queue는 유계다 — 가득 차면 Core는 동일한 고빈도 이벤트를
@@ -114,21 +109,21 @@ zlink_monitor_close(&monitor);
 
 ---
 
-## `zlink_monitor_ignore_handler`
+## Event 무시하기
 
-아무 동작도 하지 않고 이벤트를 흘려보내는 no-op event handler다.
+Pull consumer는 받은 event를 의도적으로 버릴 수 있다.
 
 ```c
-zlink_socket_monitor_handler(monitor, zlink_monitor_ignore_handler, NULL);
+zlink_monitor_event_t ignored;
+zlink_socket_monitor_recv(monitor, &ignored, ZLINK_RECV_FLAGS_NONE);
 ```
 
-**Parameters.** `zlink_monitor_handler_fn` signature와 일치해 바로 등록할 수 있다.
+**Parameters.** 일반 caller-owned monitor event 출력을 사용한다.
 
-**Return과 errno.** 없음 — 이벤트나 `userdata_`를 보관하지도 해제하지도 않는다.
+**Return과 errno.** 일반 monitor pull과 같은 receive 결과를 반환한다.
 
-**선택 기준.** Handler-mode semantics는 원하지만(monitor queue가 무한정 커지지 않도록)
-application이 지금 당장 이벤트로 할 일이 없을 때 등록한다 — `event`는 다른 handler-mode
-callback과 마찬가지로 호출 동안만 유효한 borrowed view다.
+**선택 기준.** Application이 event 내용을 사용하지 않아도 pull해서 버린다. Monitor
+queue는 유계지만 consumer가 계속 drain해야 한다.
 
 ---
 

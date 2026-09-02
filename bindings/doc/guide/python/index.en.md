@@ -28,7 +28,7 @@ with zlink.create_context() as ctx:
             sender.bind("inproc://python-guide-pair")
             receiver.connect("inproc://python-guide-pair")
 
-            sender.send().message(b"hello").submit_sync(flags=zlink.SendFlags.NONE)
+            sender.send().message(b"hello").submit_sync()
             received = zlink.create_received()  # the caller owns the receive storage.
             assert receiver.recv_into(received)
             with received:
@@ -50,7 +50,7 @@ shown below.
 ```python
 message = zlink.Message.from_(bytearray(b"payload"))  # builds a message detached from the caller's buffer.
 with message:
-    socket.send().message(message).submit_sync(flags=zlink.SendFlags.NONE)
+    socket.send().message(message).submit_sync()
 
 received = zlink.create_received()
 socket.recv_into(received)  # returns False for a non-blocking call that allows no-data.
@@ -63,40 +63,43 @@ Control APIs that directly return a pending value — timers, monitors — retur
 `None` when there's no value.
 
 HWM-managed sends provide asynchronous `submit()` and synchronous
-`submit_sync(*, flags=zlink.SendFlags.NONE)` terminals. In async code, use
-`await socket.send().message(message).submit()`. On a plain thread,
-`submit_sync()` is available; pass `flags=zlink.SendFlags.DONT_WAIT` to get
-an immediate `SubmitError` when the HWM is full.
+`submit_sync()` terminals. In async code, use
+`await socket.send().message(message).submit()`; it submits with DONTWAIT and
+settles from the socket completion queue. On a plain thread, `submit_sync()`
+blocks in Core until local admission.
 
-Request also passes through HWM admission and provides three completion
-surfaces. `submit_sync(*, flags)` waits synchronously for admission and reply
-and returns the reply directly; `submit_sync(*, flags, callback)` returns once
-admission is decided and delivers the reply through the callback; `submit()`
-returns an awaitable coroutine object. `NONE`/`DONT_WAIT` select admission
-waiting for the synchronous terminals.
+Request provides `submit_sync()` to block until the reply and `submit()` to
+return an awaitable `list[Message]` settled from the socket completion queue.
+The reply is that terminal result, not DATA received separately.
+
+Core owns retry after accepting a pre-admission operation; do not create a
+caller retry queue or resubmit its payload. The shared native
+`ZLINK_OPT_PENDING_MAX_MSGS/BYTES` caps cover pending SEND and REQUEST; no
+send-only pending names exist. Completion means local admission, not peer
+delivery or an application acknowledgement.
+
+Canceling an asyncio Task can stop the Python waiter. Before Core submit, abort
+without calling Core; after Core accepts the payload, admission or request work
+may continue and the socket owner drains a late completion. Set
+`stream.options.recv_mode` to `zlink.StreamRecvMode.RAW` or `.PACKET` before
+bind/connect, then use `recv_into` or `recv_packet_into` respectively.
+
+If a public poller owns `zlink.PollEventFlag.POLLCOMPLETION` for a socket, keep
+another thread calling `wait()` while a blocking request or awaitable is
+pending. `wait()` drains native completions and settles or cleans Python state;
+calling a blocking terminal between waits on the same thread can stall it.
 
 ## DEALER And ROUTER
 
-DEALER and ROUTER carry a raw `RoutingId` and a request sequence. Read
-`routing_id` off the `Received` the ROUTER gets, and the reply builder uses the
-same metadata.
+DEALER and ROUTER carry a raw `RoutingId`; a ROUTER request also carries an
+opaque `ReplyToken`. The reply builder requires both values from `Received`.
 
 ```python
-with zlink.create_context() as ctx:
-    with zlink.create_dealer_socket(ctx) as dealer:
-        with zlink.create_router_socket(ctx) as router:
-            router.bind("inproc://python-guide-request")
-            dealer.connect("inproc://python-guide-request")
-
-            dealer.request().message(b"ping").submit(on_reply)  # registers a reply callback.
-            received = zlink.create_received()
-            assert router.recv_into(received)
-            with received:
-                received.reply().message(b"pong").submit()  # replies using the received routing metadata.
+--8<-- "bindings/python/samples/request_reply_async_sample.py:doc"
 ```
 
-See `request_reply_callback_sample.py` for real callback lifetime and timeout
-handling.
+See `request_reply_async_sample.py` for the completion-backed awaitable and
+reply-token lifetime.
 
 ## Routing ID And Errors
 
@@ -106,7 +109,7 @@ and values exceeding the Core max length are rejected at input validation.
 ```python
 rid = zlink.RoutingId.from_(b"server-01")
 try:
-    socket.send().message(b"data").submit_sync(flags=zlink.SendFlags.DONT_WAIT)
+    socket.send().message(b"data").submit_sync()
 except zlink.SubmitError as exc:
     if exc.result == zlink.SubmitResult.BACKPRESSURED:
         # handle back-pressure as application policy, after checking the result.
@@ -121,12 +124,11 @@ except zlink.SubmitError as exc:
 
 ## Threading Notes
 
-`submit_sync()` without `DONT_WAIT` stops its calling thread while waiting
-for HWM admission. This is safe on a plain thread because only that thread waits.
+`submit_sync()` stops its calling thread while waiting for HWM admission. This
+is safe on a plain thread because only that thread waits.
 Calling it inside an asyncio event loop stops the entire loop, so other tasks and
 send completions cannot progress. In asyncio code, `await` asynchronous
-`submit()`. For immediate back-pressure, use
-`submit_sync(flags=zlink.SendFlags.DONT_WAIT)`.
+`submit()`.
 
 ## Samples And Perf
 
@@ -134,10 +136,10 @@ The raw sample runner includes the following:
 
 - `pair_recv_sample.py`
 - `dealer_router_recv_sample.py`
-- `request_reply_callback_sample.py`
+- `request_reply_async_sample.py`
 - `pubsub_recv_sample.py`
 - `stream_recv_sample.py`
-- `stream_packet_callback_sample.py`
+- `stream_packet_recv_sample.py`
 - `monitor_recv_sample.py`
 
 The perf runner must specify which Core or wheel runtime to use. Compare the

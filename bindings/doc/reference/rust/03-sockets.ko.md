@@ -95,7 +95,7 @@ ConfigError>`를 반환한다.
 
 ```rust
 let pair = ctx.pair_socket()?;
-pair.send().message(Message::try_from("ping")?)?.submit()?;
+pair.send().message(Message::try_from("ping")?).submit_sync()?;
 let mut received = Received::empty();
 if pair.recv(&mut received, RecvFlags::NONE)? { /* ... */ }
 ```
@@ -104,7 +104,7 @@ if pair.recv(&mut received, RecvFlags::NONE)? { /* ... */ }
 
 | Member | 의미 |
 | --- | --- |
-| `send(&self) -> SendOp<Empty>` | 공유 `SendOp` builder를 시작; `submit()`은 Core send-completion callback이 완료를 구동하는 `Future`를 반환 |
+| `send(&self) -> SendOp<Empty>` | 공유 `SendOp` builder를 시작; Future `submit()` 또는 blocking `submit_sync()` terminal 선택 |
 | `recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError>` | `out`을 다음 메시지로 채움 |
 | `common_options() -> CommonSocketOptions<'_>` | 공유 option facade |
 
@@ -126,7 +126,7 @@ let dealer = ctx.dealer_socket()?;
 dealer.set_routing_id(&"worker-3".into())?;
 dealer.request()
     .message(Message::try_from("payload")?)
-    .submit(|result| { /* result: Result<Vec<Message>, RequestError> */ })?;
+    .submit_sync()?;
 ```
 
 **Options.** `PairSocket`과 같은 공유 표면에 더해:
@@ -154,7 +154,7 @@ reply할 수 있다.
 
 ```rust
 let router = ctx.router_socket()?;
-router.send(&peer_rid).message(Message::try_from("hello")?)?.submit()?;
+router.send(&peer_rid).message(Message::try_from("hello")?).submit_sync()?;
 ```
 
 **Options.** `PairSocket`과 같은 공유 lifecycle/TLS 표면(여기서도
@@ -163,23 +163,22 @@ router.send(&peer_rid).message(Message::try_from("hello")?)?.submit()?;
 
 | Member | 의미 |
 | --- | --- |
-| `send(&self, target: &RoutingId) -> SendOp<Empty>` | 공유 `SendOp`을 그 peer로 향해 시작; `submit()`은 Core send-completion callback이 완료를 구동하는 `Future`를 반환 |
+| `send(&self, target: &RoutingId) -> SendOp<Empty>` | 공유 `SendOp`을 그 peer로 향해 시작; Future 또는 blocking terminal 선택 |
 | `recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError>` | `out`을 다음 메시지로 채움 |
 | `request(&self, peer_rid: &RoutingId) -> RequestOp<Empty>` | Messaging category의 `RequestOp`, 특정 peer로 향함 |
-| `reply(&self, rid: &RoutingId, request_seq: u64) -> ReplyOp<Empty>` | Messaging category의 `ReplyOp`, 해당 peer의 request에 응답 |
+| `reply(&self, rid: &RoutingId, reply_token: ReplyToken) -> ReplyOp<Empty>` | Messaging category의 `ReplyOp`, 이 ROUTER가 받은 opaque capability를 소비 |
 | `set_routing_id(&self, &RoutingId)` / `routing_id(&self)` | 이 socket 자신의 routing id를 지정/조회, peer가 connect 시 관찰 |
 | `common_options()` | 공유 option facade |
 | `router_options() -> RouterSocketOptions<'_>` | 타입별 option facade 반환: `set_mandatory(bool)` — set-only; `set_probe(bool)` — set-only; `set_connect_routing_id(&RoutingId)` — set-only(**이 binding엔 할당된 connect routing id의 getter가 없다**, dotnet/cpp의 읽기 전용 `ConnectRoutingId`/`connect_routing_id()` property와 다름); `weight()`/`set_weight(u32)`; `request_timeout()`/`set_request_timeout(Duration)` — Dealer와 달리 양방향 모두 |
 
 **Completion result.** `recv`는 `PairSocket`과 같은 관례를 따른다.
-**이 binding엔 `try_send_completion_control`/
-`set_completion_control_handler`가 선언돼 있지 않다** — dotnet/cpp/
-java/node에서 ROUTER에 문서화된 opaque Completion-control 표면에
-대응하는 게 여기엔 없다.
+Managed send/request completion은 선택한 terminal이 반환한다. 선택된
+application/completion pipe는 Core 안에서 paired 상태를 유지하며 별도 public
+channel로 노출되지 않는다.
 
 **선택 기준.** DEALER가 특정 peer를 지정할 수 없는 ROUTER 주도·ROUTER
-응답 request/reply엔 `request(peer_rid)`/`reply(rid, request_seq)`를
-쓴다.
+응답 request/reply엔 `request(peer_rid)`/`reply(rid, reply_token)`을
+쓴다. Token은 opaque하고 socket-owned이며 one-shot이다.
 
 ---
 
@@ -240,25 +239,31 @@ framed packet을 직접 주고받는다.
 
 ```rust
 let stream = ctx.stream_socket()?;
-stream.on_packet(|routing_id, header, body| { /* header/body 소유 */ })?;
+stream.stream_options().set_recv_mode(StreamRecvMode::Packet)?;
+let mut packet = StreamPacket::empty();
+if stream.recv_packet(&mut packet, RecvFlags::NONE)? { /* packet 사용 */ }
+packet.close()?;
 ```
 
 **Options.**
 
 | Member | 의미 |
 | --- | --- |
-| `send(&self, target: &RoutingId) -> SendOp<Empty>` | 공유 `SendOp`을 그 peer로 향해 시작; `submit()`은 Core send-completion callback이 완료를 구동하는 `Future`를 반환 |
-| `recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError>` | `out`을 다음 packet으로 채움; 이 binding의 `recv`는 추가로 source routing id를 `out`의 send/reply context로 포착해서, 이후 `out.send()`가 packet을 보낸 쪽으로 향하게 한다 — 다른 언어에선 이렇게 명시적으로 문서화되지 않은 STREAM 고유 보강 |
+| `send(&self, target: &RoutingId) -> SendOp<Empty>` | 공유 managed `SendOp`을 그 peer로 향해 시작 |
+| `recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError>` | 다음 RAW-mode record를 pull하고 `out.send()`용 source route를 포착 |
+| `recv_packet(&self, out: &mut StreamPacket, flags: RecvFlags) -> Result<bool, RecvError>` | PACKET-mode header/body 하나를 재사용 caller-owned storage로 pull |
 | `disconnect_rid(&self, peer_rid: &RoutingId) -> Result<(), ConnectError>` | 직접 선언됨, `StreamSocket`엔 `connect`/`disconnect`가 전혀 없다 — 다른 socket type이 공유하는 connect/disconnect/disconnect_rid 삼총사를 아예 선언하지 않는다 |
-| `on_packet<F>(&mut self, handler: F) -> Result<(), HandlerError> where F: Fn(RoutingId, Message, Message) + Send + 'static` | callback 기반 packet loop를 등록; handler가 `header`와 `body`를 둘 다 소유하며, 반환하면 drop됨 |
 | `set_routing_id(&self, &RoutingId)` / `routing_id(&self)` | 이 socket 자신의 routing id를 지정/조회, peer가 connect 시 관찰 |
 | `common_options()` | 공유 option facade |
 | `stream_options() -> StreamSocketOptions<'_>` | 타입별 option facade: `set_notify(bool)`/`notify()` — 활성화 시 peer connect/disconnect를 application 메시지로 전달 |
 
-**Completion result.** `recv`는 위 `DONT_WAIT`에서 `Ok(false)` 관례를
-따른다.
+**Completion result.** `recv`와 `recv_packet`은 위
+`DONT_WAIT`에서 `Ok(false)` 관례를 따른다. Caller가 `StreamPacket`을
+소유하며 `close()` 또는 drop으로 message를 해제한다.
 
-**선택 기준.** callback 기반 packet loop엔 `on_packet`을 쓴다.
+**선택 기준.** 첫 successful bind/connect 전에
+`stream_options().set_recv_mode(StreamRecvMode::Raw/Packet)`을 정한다.
+이후 변경은 invalid state며, 선택한 pull API를 drain한다.
 
 ---
 
@@ -266,14 +271,14 @@ stream.on_packet(|routing_id, header, body| { /* header/body 소유 */ })?;
 
 | 타입 | 사용처 | 값 |
 |---|---|---|
-| `SendFlags`(`u32`를 감싸는 tuple struct) | 모든 send/request/reply builder의 `.flags(...)` 단계(Messaging category) | `NONE`, `DONT_WAIT`(enum variant가 아니라 associated const) |
+| `SendFlags`(`u32`를 감싸는 tuple struct) | `PublishOp::flags(...)`에만 사용 | `NONE`, `DONT_WAIT`(enum variant가 아니라 associated const) |
 | `RecvFlags`(`u32`를 감싸는 tuple struct) | 모든 `recv`/`subscribe`/`receive_subscription_event` | `NONE`, `DONT_WAIT`(associated const) |
 | `RidDuplicatePolicy` | `CommonSocketOptions::rid_duplicate_policy` | `Reject`, `Handover` |
 | `SubmitRetryMode` | `CommonSocketOptions::submit_retry_mode` | `Off`, `LocalFailure` |
 
-**선택 기준.** `SendFlags`/`RecvFlags`는 `enum` 타입이 아니라 `pub const
-NONE`/`DONT_WAIT` associated constant와 `bits()` accessor를 가진
-`struct`다 — 지금까지 다룬 다른 모든 언어의 flag 표현(dotnet/java의
+**선택 기준.** `SendFlags`는 publish에 제한된다. `RecvFlags`는 `enum`
+타입이 아니라 `pub const NONE`/`DONT_WAIT` associated constant와 `bits()`
+accessor를 가진 `struct`다 — 지금까지 다룬 다른 모든 언어의 flag 표현(dotnet/java의
 `[Flags] enum`, cpp의 static member를 가진 class, node의 freeze된 객체
 상수)과 구별되는 설계 선택이다.
 

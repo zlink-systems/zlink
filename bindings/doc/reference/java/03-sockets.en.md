@@ -35,7 +35,6 @@ socket.close();
 | `monitorOpen(MonitorEventType... events)` | opens a monitor subscribed only to the given events — varargs, not a bitmask flags parameter |
 | `setTlsServer(String certPem, String keyPem, boolean requireClientCert)` | apply before `bind` |
 | `setTlsClient(String caCertPem, String hostname, boolean trustSystem)` | apply before `connect` |
-| `setSendReadyHandler(SendReadyHandler handler)` | registers a back-pressure-cleared callback |
 | `close()` | closes the native socket |
 
 `Socket` itself declares no `bind`/`connect` — each concrete socket interface below redeclares its
@@ -165,7 +164,7 @@ Routes messages to peers addressed by routing id, and can reply to a specific pe
 ```java
 try (RouterSocket router = context.createRouterSocket()) {
     router.send(peerRid).message(Message.from("hello")).submit();
-    router.setCompletionControlHandler((rid, parts) -> { /* ... */ });
+    router.reply(peerRid, replyToken).message(Message.from("ok")).submit();
 }
 ```
 
@@ -178,18 +177,16 @@ try (RouterSocket router = context.createRouterSocket()) {
 | `send(RoutingId)` | starts the shared `SendOperation`, addressed to that peer |
 | `recv(Received, RecvFlags)` | same shape as `PairSocket` |
 | `request(RoutingId)` | Messaging category's `RequestOperation`, addressed to a specific peer |
-| `reply(RoutingId, long requestSequence)` | Messaging category's `ReplyOperation`, answering that peer's request |
-| `trySendCompletionControl(RoutingId peerRid, List<Message> parts)` | sends an opaque control record to a peer over its existing connection; does not consume `parts` |
-| `setCompletionControlHandler(CompletionControlHandler handler)` | registers the callback that receives incoming completion-control records; the callback owns every message in `parts` and must close it once |
+| `reply(RoutingId, ReplyToken)` | Messaging category's `ReplyOperation`, answering the request identified by the opaque token |
+| `Received.replyToken()` | returns the socket-bound token supplied by ROUTER receive |
+| request terminal | returns reply parts or typed failure through `submit_sync()`/`submit()` after completion drain |
 | `options()` | returns `RouterSocketOptions`: `mandatory()`/`mandatory(boolean)` (error instead of silent drop on an unknown route); `handover()`/`handover(boolean)` (shorthand over `ridDuplicatePolicy`); `probe()`/`probe(boolean)`; `connectRoutingId()` (`Optional<RoutingId>`, read-only)/`setConnectRoutingId(RoutingId)` — asymmetric naming between getter and setter; `requestTimeout()`/`requestTimeout(Duration)` — **both directions, unlike Dealer's set-only**; `peerWeight()`/`peerWeight(int)` — **both directions, unlike Dealer's set-only** |
 
-**Completion result.** `trySendCompletionControl` returns `boolean` — `false` only when the
-completion connection is back-pressured. `recv` follows the `boolean` convention above.
+**Completion result.** `recv` follows the `boolean` convention above. Request terminals settle
+from the socket completion queue and callers close returned reply messages.
 
-**When to use.** Use `request(peerRid)`/`reply(rid, requestSequence)` for ROUTER-initiated or
-ROUTER-answered request/reply, where DEALER cannot address a specific peer. Use
-`trySendCompletionControl`/`setCompletionControlHandler` for an opaque bounded control record
-independent from application-level receive.
+**When to use.** Use `request(peerRid)`/`reply(rid, replyToken)` for ROUTER-initiated or
+ROUTER-answered request/reply. The token comes from receive and must not be synthesized or reused.
 
 ---
 
@@ -269,7 +266,9 @@ every other socket type.
 
 ```java
 try (StreamSocket stream = context.createStreamSocket()) {
-    stream.onPacket((routingId, header, body) -> { /* owns header/body */ });
+    stream.options().recvMode(StreamRecvMode.PACKET);
+    StreamPacket packet = new StreamPacket();
+    boolean ok = stream.recvPacket(packet, RecvFlags.NONE);
 }
 ```
 
@@ -280,26 +279,27 @@ try (StreamSocket stream = context.createStreamSocket()) {
 | `bind(String)` / `unbind(String)` | starts/stops listening on an address — **no `connect`/`disconnect`/`disconnectRid` on this interface**, unlike every other socket type above |
 | `setRoutingId(RoutingId)` / `getRoutingId()` | assigns/reads this socket's own routing id, observed by peers on connect |
 | `send(RoutingId)` | starts the shared `SendOperation`, addressed to that peer |
-| `recv(Received result, RecvFlags flags)` | populates `result` with the next packet |
-| `onPacket(StreamPacketHandler handler)` | registers a callback-driven packet loop; the handler receives `(RoutingId routingId, Message header, Message body)` and owns both |
-| `options()` | returns `StreamSocketOptions`: `notifyEnabled()`/`notify(boolean)` — **the getter and setter have different names** (`notifyEnabled()`, not `notify()`); delivers peer connect/disconnect as application messages when enabled |
+| `recv(Received result, RecvFlags flags)` | pulls the next raw record in RAW mode |
+| `recvPacket(StreamPacket result, RecvFlags flags)` | pulls one caller-owned header/body packet in PACKET mode |
+| `options()` | `recvMode(StreamRecvMode)` selects RAW or PACKET before bind/connect; `notifyEnabled()`/`notify(boolean)` applies to RAW mode |
 
 **Completion result.** `recv` follows the `boolean` convention above.
 
-**When to use.** Use `onPacket` for a callback-driven packet loop.
+**When to use.** Select RAW or PACKET before bind/connect and call only the matching pull receive.
 
 ---
 
 ## Handler functional interfaces
 
-Every callback registration point in this category takes a `@FunctionalInterface`.
+The current socket category exposes no callback registration point. Delivery is pull/completion
+based; the types below carry the state previously associated with handler arguments.
 
 | Interface | Registered by | Signature |
 |---|---|---|
-| `SendReadyHandler` | `Socket.setSendReadyHandler(...)` | `void onReady()` |
-| `StreamPacketHandler` | `StreamSocket.onPacket(...)` | `void onPacket(RoutingId routingId, Message header, Message body)` |
-| `CompletionControlHandler` | `RouterSocket.setCompletionControlHandler(...)` | `void onControl(RoutingId sourceRoutingId, List<Message> parts)` — owns every message in `parts` |
-| `RequestCallback` | `RequestSubmitOperation.submit(callback)`/`RequestCallbackSubmitOperation.submit(callback)` (Messaging category) | `void onComplete(RequestResult result, List<Message> parts)` — owns `parts` only when `result == RequestResult.OK` |
+| `ReplyToken` | `Received.replyToken()` / `RouterSocket.reply(...)` | opaque, owner-bound request reply capability |
+| `StreamPacket` | `StreamSocket.recvPacket(...)` | caller-owned reusable routing-id/header/body output |
+| `CompletionStage<Void>` | `SendSubmitOperation.submit()` | completion-backed send terminal |
+| `CompletionStage<List<Message>>` | `RequestSubmitOperation.submit()` | completion-backed request terminal; caller closes reply parts |
 
 ---
 
@@ -314,15 +314,15 @@ Shared enums referenced across every entry above.
 | `AutoHwmRecalcReason` | Monitor status (Eventing category); its `value()`/`fromValue()` helpers are package-private | `NONE`, `INITIAL`, `ROLE_CHANGE`, `POLICY_TOGGLE`, `REFRESH`, `DEFERRED_SHRINK` |
 | `RidDuplicatePolicy` | `CommonSocketOptions.ridDuplicatePolicy`, `RouterSocketOptions.handover` | `REJECT`, `HANDOVER` |
 | `SubmitRetryMode` | `CommonSocketOptions.submitRetryMode` | `OFF`, `LOCAL_FAILURE` |
-| `SendFlags` | Every send/request/reply builder's `.flags(...)` stage (Messaging category) | `NONE`, `DONT_WAIT` |
+| `SendFlags` | `PublishSubmitOperation.flags(...)` only | `NONE`, `DONT_WAIT` |
 | `RecvFlags` | Every `recv`/`subscribe`/`receiveSubscriptionEvent` | `NONE`, `DONT_WAIT` |
 | `SendResult` | The outcome of a non-blocking send attempt | `SENT`, `BACKPRESSURED`, `NOT_READY` |
 | `SubmitResult` | Mirrored by `ZlinkSubmitException` (Errors category) | `OK`, `BACKPRESSURED`, `NOT_CONNECTED`, `NOT_FOUND`, `TERMINATED`, `INVALID_HANDLE`, `INVALID_ARGUMENT`, `NOT_SUPPORTED`, `INVALID_STATE`, `THREAD_VIOLATION`, `OUT_OF_MEMORY`, `SEQ_EXHAUSTED`, `INTERNAL_ERROR`, `NOT_ADMITTED` |
 | `RecvResult` | Mirrored by `ZlinkRecvException` (Errors category) | `OK`, `NO_DATA`(201), `BUSY`(202), `TERMINATED`(203), `INVALID_HANDLE`(204), `NOT_SUPPORTED`(205), `INTERNAL_ERROR`(206) |
-| `RequestResult` | Mirrored by `ZlinkRequestException` (Errors category), delivered by `RequestCallback` | `OK`, `TIMED_OUT`(101), `NOT_FOUND`(102), `TERMINATED`(103), `PROTOCOL_ERROR`(104), `INTERNAL_ERROR`(105), `REJECTED`(106), `CONFLICT`(107), `BUSY`(108), `NOT_CONNECTED`(109), `INVALID_ARGUMENT`(110), `INVALID_STATE`(111), `NOT_SUPPORTED`(112), `BACKPRESSURED`(113) |
+| `RequestResult` | Mirrored by `ZlinkRequestException` (Errors category), delivered by `submit_sync()`/`submit()` | `OK`, `TIMED_OUT`(101), `NOT_FOUND`(102), `TERMINATED`(103), `PROTOCOL_ERROR`(104), `INTERNAL_ERROR`(105), `REJECTED`(106), `CONFLICT`(107), `BUSY`(108), `NOT_CONNECTED`(109), `INVALID_ARGUMENT`(110), `INVALID_STATE`(111), `NOT_SUPPORTED`(112), `BACKPRESSURED`(113) |
 
-**When to use.** `DONT_WAIT` on either flags enum turns a blocking call into a non-blocking one
-that reports `false`/back-pressure instead of blocking.
+**When to use.** `DONT_WAIT` applies to publish and receive. Managed send/request/reply terminals
+do not accept it.
 
 ---
 

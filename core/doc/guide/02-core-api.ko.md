@@ -18,7 +18,7 @@ socket을 만든다. 모든 socket을 닫은 뒤 context를 종료한다.
 
 `zlink_bind()`와 `zlink_connect()`로 endpoint를 설정한다. `zlink_unbind()`와
 `zlink_disconnect()`는 endpoint를 제거한다. `zlink_close()`는 socket resource를 해제한다. 다른
-operation이나 callback이 실행 중이면 close가 busy를 반환할 수 있다.
+operation이 실행 중이면 close가 busy를 반환할 수 있다.
 
 ## 설정
 
@@ -34,7 +34,8 @@ Core는 part 단위 multipart API를 사용한다.
 - `zlink_send_part_rid()`는 routed peer를 선택한다.
 - `zlink_publish_part()`는 topic과 payload를 발행한다.
 - Typed receive 함수는 part 하나와 `ZLINK_PART_MORE` 또는 `ZLINK_PART_FINAL`을 반환한다.
-- DEALER와 ROUTER request 함수는 `zlink_reply_handler_fn`으로 완료 결과를 전달한다.
+- DEALER와 ROUTER request는 0이 아닌 completion ID를 반환한다. Reply와 terminal 결과는
+  `zlink_completion_recv()`로 받고 각 record를 `zlink_completion_close()`로 해제한다.
 
 성공한 send가 message part를 소비하기 전까지 caller가 소유한다. 수신한 part는 정확히 한 번 close하거나
 move해야 한다.
@@ -42,8 +43,8 @@ move해야 한다.
 ## Eventing
 
 Poller는 socket, file descriptor와 generic timer readiness를 기다린다. Socket monitor는 raw
-transport와 protocol event를 보고하고 현재 status snapshot을 제공한다. Generic timer는 receive,
-callback 또는 poller로 소비할 수 있다.
+transport와 protocol event를 보고하고 현재 status snapshot을 제공한다. Generic timer는 직접
+receive하거나 poller readiness 뒤에 receive한다.
 
 Result 값, ownership과 concurrency의 정확한 계약은 public header 주석과
 [Core spec](../spec/core/README.ko.md)을 기준으로 한다.

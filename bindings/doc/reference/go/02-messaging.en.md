@@ -62,14 +62,14 @@ when an independent copy is needed rather than transferring ownership through `M
 
 ## `Received`
 
-A received message envelope: its routing metadata, request sequence (if this receive came from a
+A received message envelope: its routing metadata, opaque reply token (for a ROUTER request), and
 request/reply exchange), and message parts. Reuse one instance across `recv` calls to avoid a
 per-receive allocation — the socket's receive method resets and repopulates it.
 
 ```go
 var received contracts.Received
-ok, err := dealer.Recv(&received, contracts.RecvFlagsNone)
-if ok && received.HasRequestSeq() {
+ok, err := router.Recv(&received, contracts.RecvFlagsNone)
+if _, replyable := received.ReplyToken(); ok && replyable {
     received.Reply().Message(reply).Submit(ctx)
 }
 ```
@@ -80,11 +80,11 @@ address to a socket's receive method (Sockets category), which populates it.
 | Member | Meaning |
 | --- | --- |
 | `RoutingID() RoutingID` / `HasRoutingID() bool` | the peer routing id and whether it's present |
-| `RequestSeq() uint64` / `HasRequestSeq() bool` | the request sequence and whether it's present |
+| `ReplyToken() (ReplyToken, bool)` | the opaque reply capability and whether it is present |
 | `IsSinglePart() bool` | whether `Parts()` has exactly one element |
 | `Parts() []*Message` | every message part this envelope holds |
 | `FirstPart() (*Message, error)` | the first part, without ownership transfer — the part remains owned by `Received` |
-| `Reply() ReplyOp` | starts the shared reply builder; only valid when `HasRequestSeq()` is true — `Submit` on the resulting builder returns `*SubmitError` otherwise |
+| `Reply() ReplyOp` | starts the shared reply builder; only valid when `ReplyToken()` is present |
 | `Send() SendOp` | starts the shared send builder, addressed back to this envelope's captured source route |
 | `Close() error` | closes every retained part; safe to call on a `nil` receiver |
 
@@ -94,7 +94,7 @@ closing the prior contents never leaks native frames.
 
 **When to use.** Reuse one `Received` across a receive loop by reference rather than allocating a
 new one per message. Use `Reply()` rather than reconstructing the destination route by hand — the
-routing id and request sequence are encapsulated and inaccessible outside this builder.
+routing id and reply token are encapsulated by this builder.
 
 ---
 
@@ -153,59 +153,45 @@ observe subscriber churn.
 
 The fluent builder interfaces every socket type's `Send`/`Publish`/`Request`/`Reply` entry point
 (Sockets category) returns to accumulate parts, flags, and a terminal submit. Every stage is a
-distinct Go interface (`SendOp` → `SendSubmitOp`, `RequestOp` → `RequestSubmitOp` →
-`RequestCallbackSubmitOp`, `ReplyOp` → `ReplySubmitOp`) — calling a stage-appropriate method
+distinct Go interface (`SendOp` → `SendSubmitOp`, `RequestOp` → `RequestSubmitOp`,
+`ReplyOp` → `ReplySubmitOp`) — calling a stage-appropriate method
 returns the next interface in the chain, so a caller cannot call `Submit` before at least one part
 has been added.
 
 ```go
-ok, err := dealer.Send().Message(part1).Message(part2).Submit(ctx)
+err := dealer.Send().Message(part1).Message(part2).Submit(ctx)
 
-ch, err := dealer.Request().
+parts, err := dealer.Request().
     Message(payload).
     Timeout(5 * time.Second).
-    SubmitAsync(ctx)
-completion := <-ch
-
-ok, err := dealer.Request().
-    Message(payload).
-    Submit(ctx, func(result contracts.RequestResult, parts []*contracts.Message) {
-        // delivered later, on a background dispatch goroutine
-    })
+    Submit(ctx)
 
 err := received.Reply().Message(reply).Submit(ctx)
 ```
 
-**Options.** **Every terminal `Submit`/`SubmitAsync` takes a `context.Context` as its first
-argument** — a cancelled or deadline-exceeded context short-circuits the call with that context's
+**Options.** Every terminal `Submit` takes a `context.Context` as its first
+argument — a cancelled or deadline-exceeded context short-circuits the call with that context's
 `Err()` before the native submit runs, which no other language's operation builder does.
 
 | Stage | Member | Meaning |
 | --- | --- | --- |
 | `SendOp` | `.Message(*Message)` / `.MoveMessage(*Message)` / `.Bytes([]byte)` → `SendSubmitOp` | start the chain; `MoveMessage` transfers the message's ownership to the socket on a successful submit |
-| `SendSubmitOp` | same three add methods + `.Flags(SendFlags)` / `.Submit(ctx context.Context) (bool, error)` | add parts, set flags, terminal |
+| `SendSubmitOp` | same three add methods + `.Submit(ctx context.Context) error` | add parts, completion-backed terminal |
 | `RequestOp` | `.Message` / `.Bytes` → `RequestSubmitOp` | start the request chain |
 | `RequestSubmitOp` | `.Timeout(time.Duration)` | adds a reply-wait timeout |
-| `RequestSubmitOp.Flags(SendFlags)` | narrows to `RequestCallbackSubmitOp` | callback-only stage |
-| `RequestSubmitOp` terminals | `.SubmitAsync(ctx) (<-chan RequestReplyCompletion, error)` and `.Submit(ctx, callback RequestReplyCallback) (bool, error)` | **both exposed at once** — no other language covered so far exposes both an async-channel and a callback terminal on the same builder stage |
-| `RequestCallbackSubmitOp` | repeats `Message`/`Bytes`/`Timeout`/`Flags` + only the callback `Submit` | the `SubmitAsync` channel path is gone once narrowed |
+| `RequestSubmitOp` terminal | `.Submit(ctx context.Context) ([]*Message, error)` | returns the completion-backed reply parts directly |
+| `context.Context` | passed to send/request/reply `Submit` | bounds the Go waiter; it is not a Core cancel after successful native submit |
 | `ReplyOp` | `.Message(*Message)` → `ReplySubmitOp` | starts the reply chain |
-| `ReplySubmitOp` | `.Flags(SendFlags)` / `.Submit(ctx context.Context) error` | set flags, terminal |
+| `ReplySubmitOp` | `.Message(...)` / `.Submit(ctx context.Context) error` | flag-free synchronous reply terminal |
 
-**Completion result.** `SendSubmitOp.Submit` returns `(bool, error)` — the `bool` is `false` only
-when `SendFlagsDontWait` was set and the send would have blocked (back-pressure); any other
-failure is the `error`. `ReplySubmitOp.Submit` returns `error` alone. `RequestSubmitOp.Submit`/
-`RequestCallbackSubmitOp.Submit` return `(bool, error)` for the *dispatch* itself (whether the
-request was accepted) — the actual reply or failure arrives later as a `RequestReplyCompletion`
-(`{Result RequestResult; Parts []*Message; Err error}`) sent on the `SubmitAsync` channel, or as
-the `(RequestResult, []*Message)` arguments to the `Submit` callback, delivered on a background
-dispatch goroutine either way. Every builder is single-use — calling `Submit`/`SubmitAsync` a
-second time on the same builder value returns an error rather than resubmitting.
+**Completion result.** `SendSubmitOp.Submit` and `ReplySubmitOp.Submit` return `error`.
+`RequestSubmitOp.Submit` returns `([]*Message, error)` after the socket completion queue yields a
+terminal result; the caller closes every reply message. Every builder is single-use — a second
+`Submit` returns an error rather than resubmitting.
 
-**When to use.** Use `SubmitAsync` when the call site already communicates via channels/`select`;
-use the callback `Submit` when integrating with code that expects a callback instead. Use
+**When to use.** Call `Submit(ctx)` and handle its direct result in the owning goroutine. Use
 `Received.Reply()`/`Send()` rather than reconstructing the destination route by hand — the routing
-id (and request sequence, for `Reply`) are encapsulated and inaccessible outside the builder.
+id and reply token for `Reply` are encapsulated by the builder.
 
 ---
 

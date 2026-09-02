@@ -22,7 +22,7 @@ socket type except `StreamSocket`) outbound connection.
 ```ts
 socket.bind('tcp://*:5555');
 socket.setTlsServer(certPath, keyPath, true);
-const monitor = socket.monitorOpen(SOCKET_MONITOR_EVENT_ALL);
+const monitor = socket.monitorOpen([MonitorEventType.Connected]);
 socket.close();
 ```
 
@@ -36,7 +36,7 @@ Core category — that accept any concrete socket type.
 | --- | --- |
 | `bind(endpoint: string)` / `unbind(endpoint: string)` | starts/stops listening on an address |
 | `close()` | closes the native socket |
-| `monitorOpen(events?: number, handler?: SocketMonitorHandler)` | opens a monitor; unlike every other language covered so far, **the handler can be registered directly at open time** as this method's second parameter, instead of always requiring a separate `onEvent`-style call afterward |
+| `monitorOpen(events?: readonly MonitorEventType[], monitorHwmBytes?: bigint)` | opens a caller-owned pull monitor with an optional event set and byte HWM |
 | `setTlsServer(cert, key, requireClientCert?)` | apply before `bind` |
 | `setTlsClient(ca, hostname, trustSystem?)` | apply before `connect` |
 | `ConnectableSocket.connect(endpoint: string)` / `disconnect(endpoint: string)` | connects/disconnects to a peer address |
@@ -45,9 +45,8 @@ Core category — that accept any concrete socket type.
 **Completion result.** All members are synchronous with no return value except `monitorOpen`, which
 returns `MonitorSocket` (Eventing category) synchronously — the caller owns and must close it.
 
-**When to use.** Call `setTlsServer`/`setTlsClient` before `bind`/`connect` respectively. Pass a
-handler directly to `monitorOpen(events, handler)` when there is no need to hold the monitor for
-`recv`-style draining separately.
+**When to use.** Call `setTlsServer`/`setTlsClient` before `bind`/`connect` respectively. Keep the
+returned monitor and drain it with `recv`; no callback registration path is installed.
 
 ---
 
@@ -119,7 +118,7 @@ extends (see below) — unlike dotnet/java/cpp, which give Pair and Dealer a sep
 
 ```ts
 const pair = createPairSocket(ctx);
-pair.send().message(Message.from('ping')).submit();
+pair.send().message(Message.from('ping')).submit_sync();
 const received = new Received();
 if (pair.recv(received)) { /* ... */ }
 ```
@@ -131,7 +130,6 @@ if (pair.recv(received)) { /* ... */ }
 | `options` | `CommonSocketOptions` |
 | `send()` | starts the shared `SendOperation` builder |
 | `recv(result: Received, flags?: RecvFlags)` | populates `result` with the next message |
-| `setSendReadyHandler(handler: () => void)` | registers a back-pressure-cleared callback |
 
 **Completion result.** `recv` returns `boolean` — `false` only when `RecvFlags.DontWait` is set and
 no message is available.
@@ -175,8 +173,7 @@ Extends `ConnectableSocket` directly (not `PairSocket`).
 
 ```ts
 const router = createRouterSocket(ctx);
-router.send(peerRid).message(Message.from('hello')).submit();
-router.setCompletionControlHandler((rid, parts) => { /* ... */ });
+await router.send(peerRid).message(Message.from('hello')).submit();
 ```
 
 **Options.**
@@ -186,20 +183,16 @@ router.setCompletionControlHandler((rid, parts) => { /* ... */ });
 | `options` | `RouterSocketOptions` |
 | `send(routingId)` | starts the shared `SendOperation`, addressed to that peer |
 | `recv(result: Received, flags?: RecvFlags)` | populates `result` with the next message |
-| `setSendReadyHandler(handler)` | registers a back-pressure-cleared callback |
 | `setRoutingId(routingId)` / `getRoutingId()` | assigns/reads this socket's own routing id, observed by peers on connect |
 | `request(peerRid)` | Messaging category's `RequestOperation`, addressed to a specific peer |
-| `reply(peerRid, requestSeq: bigint)` | Messaging category's `ReplyOperation`, answering that peer's request |
-| `trySendCompletionControl(peerRid, parts: readonly MessageLike[])` | sends an opaque control record to a peer over its existing connection; does not consume `parts` |
-| `setCompletionControlHandler(handler: (sourceRoutingId, parts: Message[]) => void)` | registers the callback that receives incoming completion-control records; the handler owns the received messages |
+| `reply(peerRid, token: ReplyToken)` | Messaging category's `ReplyOperation`, consuming the opaque capability received from this ROUTER |
 
-**Completion result.** `trySendCompletionControl` returns `boolean` — `false` only when the
-completion connection is back-pressured. `recv` follows the `boolean` convention above.
+**Completion result.** Managed send and request completion is delivered only by their Promise or
+blocking terminal. `recv` follows the `boolean` convention above.
 
-**When to use.** Use `request(peerRid)`/`reply(peerRid, requestSeq)` for ROUTER-initiated or
-ROUTER-answered request/reply, where DEALER cannot address a specific peer. Use
-`trySendCompletionControl`/`setCompletionControlHandler` for an opaque bounded control record
-independent from application-level receive.
+**When to use.** Use `request(peerRid)`/`reply(peerRid, token)` for ROUTER-initiated or
+ROUTER-answered request/reply, where DEALER cannot address a specific peer. Keep the `ReplyToken`
+opaque, socket-owned, and one-shot.
 
 ---
 
@@ -223,7 +216,6 @@ if (xpub.receiveSubscriptionEvent(evt)) { /* ... */ }
 | --- | --- |
 | `options` | `PubSocketOptions` |
 | `publish(topic: string)` | starts the shared `SendOperation` builder |
-| `setSendReadyHandler(handler)` | registers a back-pressure-cleared callback |
 | `receiveSubscriptionEvent(result: SubscriptionEvent, flags?: RecvFlags)` | `XPubSocket` only; populates `result` with the next subscribe/unsubscribe |
 
 **No `setRoutingId`/`getRoutingId` on `PubSocket`** (unlike dotnet's `IPubSocket`, which has both).
@@ -278,7 +270,10 @@ every other socket type. Extends `Socket` (not `ConnectableSocket`) and declares
 
 ```ts
 const stream = createStreamSocket(ctx);
-stream.setPacketHandler((sourceRid, header, body) => { /* owns header/body */ });
+stream.options.recvMode = StreamRecvMode.Packet;
+const packet = new StreamPacket();
+if (stream.recvPacket(packet)) { /* use packet.routingId/header/body */ }
+packet.close();
 ```
 
 **Options.**
@@ -287,16 +282,16 @@ stream.setPacketHandler((sourceRid, header, body) => { /* owns header/body */ })
 | --- | --- |
 | `options` | `StreamSocketOptions` |
 | `send(routingId)` | starts the shared `SendOperation`, addressed to that peer |
-| `recv(result: Received, flags?: RecvFlags)` | populates `result` with the next packet |
-| `setPacketHandler(handler: StreamPacketHandler)` | registers a callback-driven packet loop |
-| `setSendReadyHandler(handler)` | registers a back-pressure-cleared callback |
+| `recv(result: Received, flags?: RecvFlags)` | pulls the next RAW-mode record |
+| `recvPacket(result: StreamPacket, flags?: RecvFlags)` | pulls the next PACKET-mode header/body pair into reusable storage |
 | `setRoutingId(routingId)` / `getRoutingId()` | assigns/reads this socket's own routing id, observed by peers on connect |
 | `disconnectRid(routingId)` | declared directly on this interface, since `StreamSocket` does not inherit `ConnectableSocket`'s copy |
 
-**Completion result.** `recv` follows the `boolean` convention above. The packet handler owns both
-`header` and `body` messages it receives.
+**Completion result.** `recv` and `recvPacket` follow the `boolean` convention above. The caller
+owns the packet's header/body messages and releases them with `packet.close()`.
 
-**When to use.** Use `setPacketHandler` for a callback-driven packet loop.
+**When to use.** Set `options.recvMode` to `StreamRecvMode.Raw` or `.Packet` before the first
+successful bind/connect; changing it afterward reports invalid state. Drain the selected pull API.
 
 ---
 
@@ -307,17 +302,16 @@ Shared constant objects and their derived types, referenced across every entry a
 | Constant | Used by | Values |
 |---|---|---|
 | `SocketType` | Internal socket-kind identification | **Dual-cased**: both `ANY`/`PAIR`/`PUB`/`SUB`/`DEALER`/`ROUTER`/`XPUB`/`XSUB`/`STREAM` and `Any`/`Pair`/`Pub`/`Sub`/`Dealer`/`Router`/`XPub`/`XSub`/`Stream` are exported as aliases for the identical numeric values |
-| `SOCKET_MONITOR_EVENT_ALL` | `Socket.monitorOpen(events)` | `0xFFFF` — a convenience "subscribe to everything" constant; individual lifecycle event flags (`Connected`, `Disconnected`, etc.) are the `MonitorEventType` constant object, declared in the Eventing category's `contracts/eventing/monitor.ts` rather than here in `socket_constants.ts` |
+| `SOCKET_MONITOR_EVENT_ALL` | compatibility constant | `0x7FFFF`; current `monitorOpen` takes a `readonly MonitorEventType[]` rather than a numeric mask |
 | `RidDuplicatePolicy` | `CommonSocketOptions.ridDuplicatePolicy`, `RouterSocketOptions.handover` | `Reject`, `Handover` |
 | `SubmitRetryMode` | `CommonSocketOptions.submitRetryMode` (property itself typed as plain `number`) | `Off`, `LocalFailure` |
-| `SendFlags` | Every send/request/reply builder's `.flags(...)` stage (Messaging category) | `None`, `DontWait` |
+| `SendFlags` | exported compatibility constants; not accepted by managed send/request/reply terminals | `None`, `DontWait` |
 | `RecvFlags` | Every `recv`/`subscribe`/`receiveSubscriptionEvent` | `None`, `DontWait` |
 | `PollEventFlag` | Poller registration/wait (Eventing category) | `PollIn`, `PollOut`, `PollErr`, `PollPri`, `PollCompletion` |
 
-**When to use.** `DontWait` on either flags constant turns a blocking call into a non-blocking one
-that reports `false`/back-pressure instead of blocking. Pass `SOCKET_MONITOR_EVENT_ALL` to
-`monitorOpen(events)` to subscribe to every lifecycle event, or OR together specific
-`MonitorEventType` values (Eventing category) as a raw numeric mask to filter a subscription.
+**When to use.** Use `RecvFlags.DontWait` for pull APIs that should return `false` instead of
+blocking. Managed send/request/reply terminals deliberately do not expose `DontWait`; pass a list
+of `MonitorEventType` values to filter `monitorOpen`.
 
 ---
 

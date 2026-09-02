@@ -107,19 +107,34 @@ socket.send ().message (msg).submit ();
 ```
 
 HWM 대기 가능 send에는 동기와 비동기 종결자가 모두 있습니다. plain thread에서는
-`submit()`을 사용하며, `flags(ZLINK_DONTWAIT)`를 앞에 붙이면 HWM이 가득 찼을 때
-즉시 반환합니다. coroutine에서는 flag 없는 `async()`를 `co_await`합니다.
+Core의 blocking admission 경로를 따르는 `submit()`을 사용합니다. Coroutine에서는
+DONTWAIT을 사용하고 socket completion queue에서 완료되는 `async()`를 `co_await`합니다.
 
 ```cpp
 socket.send ().message (msg).submit (); // 동기, 기본은 HWM admission까지 blocking
-bool sent = socket.send ().message (msg).flags (ZLINK_DONTWAIT).submit ();
 co_await socket.send ().message (msg).async (); // 비동기, 호출 thread를 막지 않음
 ```
 
-Request도 같은 HWM admission을 지나며 세 완료 표면을 제공합니다. `submit()`은
-admission과 reply를 동기 대기해 reply를 직접 반환하고, `submit(callback)`은 admission
-결과가 결정되면 즉시 반환한 뒤 reply를 callback으로 전달하며, `async()`는 awaitable을
-반환합니다. 두 sync terminal은 `flags(NONE/DONTWAIT)`로 admission 대기 여부를 정합니다.
+Request도 두 terminal style을 사용합니다. `submit()`은 reply까지 blocking하고,
+`async()`는 socket completion queue에서 완료되는 awaitable을 반환합니다. Reply는 이
+terminal의 결과이며 별도 DATA receive로 받지 않습니다.
+
+접수된 pre-admission operation의 retry는 Core가 소유합니다. Caller retry queue를 만들거나
+같은 payload를 다시 submit하지 않습니다. 공용 native
+`ZLINK_OPT_PENDING_MAX_MSGS/BYTES` 제한은 pending SEND와 REQUEST에 함께 적용되며,
+send 전용 pending option 이름은 없습니다. Completion은 local admission을 뜻할 뿐 peer
+delivery나 application acknowledgement가 아닙니다.
+
+소비하지 않은 `async_result_t`를 파괴하면 caller waiter만 detach됩니다. Core submit 전에는
+Core를 호출하지 않고 language operation을 중단할 수 있지만, successful submit 뒤에는 Core가
+계속 admission할 수 있고 socket owner가 늦게 온 completion을 drain합니다. STREAM은
+bind/connect 전에 `stream_recv_mode_t::raw` 또는 `packet`을 고른 뒤 각각 `recv()` 또는
+`recv_packet()`을 사용합니다.
+
+public poller가 socket의 `poll_event_t::completion` owner이면 blocking request나 awaitable이
+남아 있는 동안 다른 thread가 `wait()`를 계속 호출해야 합니다. Wait가 native completion을
+drain해 binding state를 settle/cleanup하므로, 같은 thread가 wait 사이에서 blocking terminal을
+호출하면 진행이 멈출 수 있습니다.
 
 수신된 메시지 읽기:
 
@@ -140,7 +155,7 @@ socket.recv (inbound, zlink::recv_flags_t::none);
 
 auto parts = inbound.parts ();                              // const vector
 auto rid = inbound.routing_id ();                          // optional<routing_id_t>
-auto seq = inbound.request_seq ();                         // optional<uint64_t>
+auto token = inbound.reply_token ();                       // optional<reply_token_t>
 
 inbound.close ();   // 명시적 해제 (또는 소멸자)
 ```
@@ -159,8 +174,8 @@ socket.set_routing_id (rid);
 
 | 상황 | 규칙 |
 |------|------|
-| `submit()` 성공(`true` 반환) | `message_t`가 move됨 — 이후 사용 무효 |
-| `submit()` — `dontwait` 배압 | `false` 반환(예외 없음), 메시지 소유권 유지 |
+| `submit()` 성공 | `message_t`가 move됨 — 이후 사용 무효 |
+| `async()` | Core completion 대기 동안 operation이 move된 message를 소유 |
 | `submit()` 기타 실패 | 예외(`submit_error_t`) 발생, 메시지 소유권 유지 |
 | `recv()` | `received_t&`로 in-place 수신, `close()` 또는 소멸자로 해제 |
 | 비동기 요청 | 회신 `std::vector<message_t>` 소유, 벡터 소멸 시 자동 해제 |
@@ -181,18 +196,12 @@ try {
 C++ 바인딩은 `zlink::binding_error_t`를 상속하는 작업별 예외를 던집니다.
 
 ```cpp
-// dontwait 배압은 false 반환으로 처리(예외 아님)
-zlink::message_t msg = zlink::message_t::from ("data");
-bool sent = socket.send ().message (msg).flags (ZLINK_DONTWAIT).submit ();
-if (!sent) {
-    // 배압 — 재시도하거나 나중에 보냄 (msg 소유권 유지)
-}
-
-// 그 외 전송 실패는 submit_error_t 예외로 전달된다
 try {
+    zlink::message_t msg = zlink::message_t::from ("data");
     socket.send ().message (msg).submit ();
 } catch (const zlink::submit_error_t &e) {
-    // e.result()로 실패 원인 확인
+    // blocking admission timeout/backpressure 결과도 포함
+    // application policy를 적용하기 전에 e.result() 확인
 }
 ```
 
@@ -224,8 +233,8 @@ try {
 | `zlink_socket(ctx, type)` | `zlink::pair_socket_t{ctx}` 등 |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(m).flags(flag).submit()` |
-| `zlink_send_async(...)` | `co_await socket.send().message(m).async()` |
+| blocking `zlink_send_part(...)` / `zlink_send_part_rid(...)` | `socket.send().message(m).submit()` |
+| DONTWAIT send + completion pull | `co_await socket.send().message(m).async()` |
 | `zlink_recv_part(...)` | `socket.recv(received)` |
 | `zlink_msg_data(msg)` | `part.data()` / `part.bytes()` |
 | `zlink_msg_size(msg)` | `part.size()` |
@@ -254,13 +263,13 @@ if (zlink::has ("draft")) {
 |------|------|
 | `context_t` | 스레드 간 공유 가능 |
 | 소켓 | **하나의 스레드에서만** 사용. 동시 접근 금지 |
-| 디스패치 핸들러 | zlink 내부 워커 스레드에서 호출됨 |
+| Completion과 receive 전달 | caller-owned terminal 또는 pull loop에서 관찰 |
 | `message_t::bytes()` | 메시지 수명 동안만 유효한 span |
 
 flag 없는 동기 `submit()`은 HWM admission을 기다리는 동안 호출 thread를 멈춥니다.
 plain thread에서는 그 thread만 대기합니다. 다른 작업을 계속해야 하는 coroutine에서는
-`co_await async()`를 사용하고, 즉시 backpressure가 필요하면
-`.flags(ZLINK_DONTWAIT).submit()`을 사용합니다.
+`co_await async()`를 사용합니다. Managed send는 public DONTWAIT flag terminal을
+노출하지 않습니다.
 
 ```cpp
 // 올바른 패턴: 소켓 per-스레드
@@ -283,7 +292,7 @@ std::thread worker ([&ctx] {
 | `dealer_router_recv_sample.cpp` | DEALER/ROUTER 송수신(요청/응답) |
 | `pubsub_recv_sample.cpp` | XPUB/SUB 발행·구독 |
 | `stream_recv_sample.cpp` | STREAM 원시 TCP |
-| `stream_packet_callback_sample.cpp` | STREAM 패킷 콜백 |
+| `stream_packet_pull_sample.cpp` | STREAM PACKET pull |
 | `monitor_recv_sample.cpp` | 모니터 이벤트 수신 |
 | `request_reply_async_sample.cpp` | ROUTER/DEALER 비동기 요청/응답 |
 

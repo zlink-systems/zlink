@@ -157,7 +157,7 @@ reply할 수 있다.
 ```csharp
 using IRouterSocket router = context.CreateRouterSocket();
 router.Send(peerRid).Message(Message.From("hello")).Submit();
-router.OnCompletionControl((rid, parts) => { /* ... */ });
+router.Reply(peerRid, replyToken).Message(Message.From("ok")).Submit();
 ```
 
 **옵션.** `IRoutedMessageSocket`(`Send(RoutingId)`, `Recv(Received, RecvFlags)`)과
@@ -173,19 +173,16 @@ router.OnCompletionControl((rid, parts) => { /* ... */ });
 | `Options.PeerWeight` | — | `int` 0-100 |
 | `SetRoutingId(RoutingId)` / `GetRoutingId()` | — | 이 socket 자신의 routing id를 지정/읽음, peer가 connect 시 관찰 |
 | `Request(RoutingId peerRid)` | — | Messaging category의 `RequestOperation`, 특정 peer로 향함 |
-| `Reply(RoutingId rid, ulong requestSeq)` | — | Messaging category의 `ReplyOperation`, 그 peer의 request에 응답 |
-| `TrySendCompletionControl(RoutingId peerRid, IReadOnlyList<Message> parts)` | — | `parts`를 소비하지 않고 peer의 기존 connection으로 opaque control record 전송 |
-| `OnCompletionControl(CompletionControlHandler handler)` | — | 수신되는 completion-control record를 받는 콜백 등록 |
+| `Reply(RoutingId rid, ReplyToken replyToken)` | — | token이 식별하는 수신 request에 답하는 `ReplyOperation` |
+| `Received.ReplyToken` | — | ROUTER request와 함께 반환되는 opaque socket-bound reply capability |
+| request terminal | — | reply 또는 terminal failure는 application DATA가 아니라 `Request(...).Submit()`/`.Async()` 결과 |
 
-**완료 결과.** `TrySendCompletionControl`은 동기로 `bool`을 반환한다 — `false`는
-completion-lane back-pressure를 뜻하고, 그 외 실패는 `ZlinkSubmitException`을
-던진다. `CompletionControlHandler`는 background dispatch 스레드에서 실행되며
-`parts`의 모든 메시지를 소유한다 — 각각 정확히 한 번 dispose해야 한다.
+**완료 결과.** Request terminal은 socket completion queue에서 settle되며 caller가 반환된
+reply message를 소유하고 dispose한다.
 
 **선택 기준.** DEALER가 특정 peer를 지정할 수 없는 ROUTER 주도·ROUTER 응답
-request/reply엔 `Request(peerRid)`/`Reply(rid, requestSeq)`를 쓴다.
-application-level receive와 독립적인 opaque bounded control record엔
-`TrySendCompletionControl`/`OnCompletionControl`을 쓴다.
+request/reply엔 `Request(peerRid)`/`Reply(rid, replyToken)`을 쓴다. Opaque token은 합성하거나
+재사용하지 않는다.
 
 ---
 
@@ -273,7 +270,9 @@ peer와 framed packet을 직접 주고받는다.
 
 ```csharp
 using IStreamSocket stream = context.CreateStreamSocket();
-stream.OnPacket((routingId, header, body) => { /* header/body 소유; 각각 한 번 dispose */ });
+stream.Options.ReceiveMode = StreamReceiveMode.Packet;
+using var packet = StreamPacket.Create();
+bool ok = stream.RecvPacket(packet, RecvFlags.None);
 ```
 
 **옵션.** `IRoutedMessageSocket`을 확장:
@@ -281,16 +280,14 @@ stream.OnPacket((routingId, header, body) => { /* header/body 소유; 각각 한
 | Member | 기본값 | 의미 |
 | --- | --- | --- |
 | `Options.Notify` | `false` | `bool`; peer connect/disconnect를 application message로 전달 |
-| `OnPacket(StreamPacketHandler handler)` | — | background-dispatch-thread 콜백; handler가 `header`/`body`를 소유하며 정확히 한 번 dispose해야 함 |
-| `RecvPart(out RoutingId? sourceRoutingId, out Message? part, out bool hasMore, RecvFlags flags)` | `RecvFlags.None` | 다음 packet part를 가져옴; 첫 호출이 이 socket을 receive 모드로 고정 — `OnPacket`과 함께 쓸 수 없음 |
+| `Options.ReceiveMode` | `Unspecified` | bind/connect 전에 `Raw` 또는 `Packet` 설정, 이후 immutable |
+| `Recv(Received, RecvFlags)` / `RecvPacket(StreamPacket, RecvFlags)` | `RecvFlags.None` | 선택한 모드에 따라 RAW record 또는 PACKET header/body pair pull |
 | `DisconnectRid(RoutingId peerRid)` | — | 그 routing id로 식별되는 peer의 connection을 끊음 |
 
-**완료 결과.** `RecvPart`는 동기로 `bool`을 반환한다 — 반환된 `part`는 caller
-소유다. `StreamPacketHandler`는 메시지 소유권을 콜백으로 이전하며, 콜백은
-`header`와 `body`를 정확히 한 번씩 dispose해야 한다.
+**완료 결과.** 두 receive 형식 모두 `bool`을 반환하며 `false`는 DONTWAIT no-data다.
+Caller가 채워진 receive envelope 또는 packet을 소유하고 dispose한다.
 
-**선택 기준.** callback 기반 packet loop엔 `OnPacket`을, pull 기반 loop엔
-`RecvPart`를 쓴다 — 첫 receive 호출이 이뤄지면 둘은 상호 배타적이다.
+**선택 기준.** Bind/connect 전에 RAW 또는 PACKET을 고르고 일치하는 pull receive만 호출한다.
 
 ---
 

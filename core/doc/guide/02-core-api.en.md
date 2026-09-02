@@ -9,8 +9,8 @@ closed.
 
 Use `zlink_bind()` and `zlink_connect()` to establish endpoints.
 `zlink_unbind()` and `zlink_disconnect()` remove them. `zlink_close()` releases
-the socket. A close attempt may report busy while another admitted operation or
-callback is active.
+the socket. A close attempt may report busy while another admitted operation is
+active.
 
 ## Configuration
 
@@ -27,7 +27,9 @@ Core uses part-wise multipart APIs:
 - `zlink_publish_part()` publishes a topic and payload.
 - Typed receive functions return one part and a `ZLINK_PART_MORE` or
   `ZLINK_PART_FINAL` flag.
-- DEALER and ROUTER request functions complete through `zlink_reply_handler_fn`.
+- DEALER and ROUTER requests return nonzero completion IDs; receive their replies
+  and terminal results with `zlink_completion_recv()` and release each record with
+  `zlink_completion_close()`.
 
 The caller owns a message part until a successful send consumes it. A received
 part must be closed or moved exactly once.
@@ -36,7 +38,7 @@ part must be closed or moved exactly once.
 
 Pollers wait for socket, file-descriptor, and generic-timer readiness. Socket
 monitors report raw transport and protocol events and expose a current status
-snapshot. Generic timers can be consumed by receive, callback, or poller.
+snapshot. Generic timers are consumed by receive, directly or after poller readiness.
 
 The public header comments and [Core specification](../spec/core/README.en.md) are
 the source of truth for result values, ownership, and concurrency.

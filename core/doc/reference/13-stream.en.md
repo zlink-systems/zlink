@@ -6,10 +6,9 @@
 A bind-only raw socket that assigns a 4-byte routing ID to every accepted client connection and
 exchanges byte records or fixed-framing packets over routed TCP or WebSocket. STREAM does not
 support `zlink_connect` and does not interpret application payloads. It reuses
-`zlink_socket`/`zlink_bind`/`zlink_close` (Socket lifecycle category), `zlink_recv_part`/
-`zlink_recv_handler` (Raw receive category — STREAM is the one type where `source_rid_out_`
-returns a real view instead of `NULL`), and asynchronous send via
-`zlink_send_async`/`zlink_send_complete_handler` (Socket lifecycle category) unchanged; this
+`zlink_socket`/`zlink_bind`/`zlink_close` (Socket lifecycle category), RAW `zlink_recv_part`
+(Raw receive category — STREAM is the one type where `source_rid_out_` returns a real view
+instead of `NULL`), and completion-backed send through the Socket lifecycle category; this
 category covers STREAM's own option, its version of directed send, and the packet-framing
 receive mode unique to it. The exact signatures are owned by the
 [STREAM specification](../spec/core/socket/08-stream.en.md).
@@ -18,23 +17,23 @@ receive mode unique to it. The exact signatures are owned by the
 
 ## `zlink_set_stream_option` / `zlink_get_stream_option`
 
-Sets or reads STREAM's one type-specific option.
+Sets or reads STREAM's type-specific receive options.
 
 ```c
-int notify = 1;
-zlink_set_stream_option(stream_socket, ZLINK_STREAM_OPT_NOTIFY, &notify, sizeof(notify));
+zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_PACKET;
+zlink_set_stream_option(stream_socket, ZLINK_STREAM_OPT_RECV_MODE, &mode, sizeof(mode));
 ```
 
-**Parameters.** `option_` is `ZLINK_STREAM_OPT_NOTIFY` (`int` 0 or 1) — must be set before
-`zlink_bind`. `1` exposes client connect and disconnect as zero-length data records, with the
-source routing ID identifying the client.
+**Parameters.** `ZLINK_STREAM_OPT_RECV_MODE` takes RAW or PACKET and must be set before the first
+successful bind/connect. `ZLINK_STREAM_OPT_NOTIFY` takes `int` 0 or 1; value `1` exposes client
+connect and disconnect as zero-length RAW records and is not supported with PACKET.
 
 **Return and errno.** Both return `zlink_config_result_t` — `ZLINK_CONFIG_OK` on success. Use
 `zlink_set_option`/`zlink_get_option` (Socket options and identity category) for common HWM,
 timeout, linger, TLS, and buffer options.
 
-**When to use.** Enable `ZLINK_STREAM_OPT_NOTIFY` when the application needs to detect client
-connect/disconnect through the same receive path as data, without a separate monitor.
+**When to use.** Select RAW for unframed bytes and optional connection notifications. Select
+PACKET for the fixed header/body framing consumed by `zlink_stream_recv_packet()`.
 
 ---
 
@@ -44,49 +43,44 @@ Sends one raw data part to a specific connected client by routing ID — STREAM'
 distinct in shape from ROUTER's use of the same function name (ROUTER category).
 
 ```c
-zlink_send_part_rid(stream_socket, &client_rid, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part_rid(stream_socket, &client_rid, &part, ZLINK_SEND_FLAGS_NONE,
+                    ZLINK_PART_FINAL, NULL, NULL);
 ```
 
 **Parameters.** `target_rid_` must be a valid 4-byte routing ID this STREAM socket assigned.
-`part_flag_` must be `ZLINK_PART_FINAL` — passing `ZLINK_PART_MORE` returns
-`ZLINK_SUBMIT_NOT_SUPPORTED` with `ENOTSUP`, since STREAM send never opens a multipart sequence.
+Every part in a multipart sequence uses the same RID and flags from MORE through FINAL.
 
 **Return and errno.** Returns `zlink_submit_result_t` — `ZLINK_SUBMIT_OK` on success.
-`ZLINK_SUBMIT_NOT_CONNECTED` for a missing connection. `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`
-on backpressure — unlike other socket types, this specific failure leaves `part_` owned by the
-caller and retryable as-is; every other failure (and success) still consumes it.
+`ZLINK_SUBMIT_NOT_CONNECTED` for a missing connection. Every result consumes `part_`; retain a
+separate copy before the first part if the complete record may need application-level recovery.
 
-**When to use.** Because STREAM send is always single-part, the atomic multipart-abort rule that
-applies to PAIR/DEALER/ROUTER/PUB does not apply here — a `ZLINK_PART_MORE` failure stages
-nothing, and the next call is an independent record. Keeping a payload copy before the call still
-gives one uniform recovery strategy across every failure result, including the one case
-(backpressure) where the original content survives.
+**When to use.** A NONE FINAL blocks for same-RID local admission within `SNDTIMEO`. DONTWAIT may
+return a nonzero completion ID when Core retains the full record; Core then owns same-RID retry
+until admission or a terminal result. A failed part atomically discards the staged prefix.
 
 ---
 
-## `zlink_stream_packet_handler`
+## `zlink_stream_recv_packet`
 
-Attaches a packet-framed receive callback — one of the three mutually exclusive STREAM receive
-modes (with `zlink_recv_part` and `zlink_recv_handler`, Raw receive category).
+Receives one assembled header/body packet in PACKET mode.
 
 ```c
-zlink_stream_packet_handler(stream_socket, on_packet, userdata);
+zlink_stream_recv_packet(stream_socket, &source_rid, &header, &body,
+                         ZLINK_RECV_FLAGS_NONE);
 ```
 
-**Parameters.** `handler_` is a `zlink_stream_packet_handler_fn`, invoked per assembled packet
-with the source routing ID and separate `header_`/`body_` messages. Both are delivered as valid
-`zlink_msg_t` values even at zero length (never `NULL`), and ownership of both transfers to the
-callback — each must be consumed or closed exactly once.
+**Parameters.** `source_rid_out_` receives the socket-owned client RID view. `header_out_` and
+`body_out_` are initialized messages filled on success; each remains a valid message even at
+zero length. `flags_` selects blocking NONE or DONTWAIT receive.
 
-**Return and errno.** Returns `zlink_handler_result_t` — `ZLINK_HANDLER_OK` on success. The first
-raw part receive or handler registration on a handle fixes its receive mode; activating a
-different mode, or registering this handler again, fails with a busy result and `EBUSY`.
+**Return and errno.** Returns `zlink_recv_result_t`. No packet under DONTWAIT returns
+`ZLINK_RECV_NO_DATA` with `EAGAIN`; RAW mode returns `ZLINK_RECV_NOT_SUPPORTED` with `ENOTSUP`.
+On success the caller owns and closes or moves both messages exactly once.
 
 **When to use.** Use this when the application's wire protocol is the fixed frame Core assembles
 on each client's byte stream — a 2-byte big-endian `header_size`, a 4-byte big-endian
 `body_size`, then exactly `header_size` header bytes followed by exactly `body_size` body bytes.
-Choose `zlink_recv_part` instead for raw byte records with no framing, or `zlink_recv_handler`
-for a raw push callback without this frame assembly.
+Choose RAW `zlink_recv_part` instead for byte records without this framing.
 
 ---
 

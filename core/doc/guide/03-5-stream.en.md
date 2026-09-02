@@ -15,12 +15,12 @@ Core rules:
 - Clients must use OS/Asio/WebSocket raw client stacks, not zlink STREAM sockets.
 - RAW mode has no zlink-level wire framing — it is a transparent byte
   stream (the encoder/decoder pass bytes through unchanged). For
-  length-delimited packets, use the packet handler, which frames as
+  length-delimited packets, use PACKET mode, which frames as
   2-byte BE header size + 4-byte BE body size + header + body.
 - At the zlink API level: raw `zlink_recv_part()` exposes the source
   client's 4-byte `routing_id` through its own `source_rid_out_`
-  out-parameter, and the raw/packet callbacks pass `source_rid` as a
-  separate callback argument the same way.
+  out-parameter, and packet `zlink_stream_recv_packet()` exposes the same
+  Core-owned borrowed view through `source_rid_out_`.
 
 Valid combination:
 
@@ -52,27 +52,25 @@ Supported server transports:
 ## 3. STREAM-Specific Behavior
 
 STREAM is the only exception type in the raw socket family. Exactly one of
-three receive models may be active on a given handle.
+two receive modes must be selected before the first successful bind.
 
-- **raw recv**: `zlink_recv_part()` pulls transport fragments directly, one
+- **RAW**: `zlink_recv_part()` pulls transport fragments directly, one
   part at a time, with the source routing id returned through its
   `source_rid_out_` out-parameter. Pair it with a poller watching
   `ZLINK_POLLIN`.
-- **raw callback**: `zlink_recv_handler()` delivers raw fragments through
-  a callback. Useful for event-driven servers.
-- **packet callback**: `zlink_stream_packet_handler()` delivers packets
+- **PACKET**: `zlink_stream_recv_packet()` pulls packets
   assembled from a fixed framing convention (2B header size + 4B body
   size + header + body, all big-endian) as header/body pairs.
 
-The three models are mutually exclusive; a second attempt to activate a
-different mode on the same handle fails with `EBUSY`. Applications pick
-whichever model fits best.
+Set `ZLINK_STREAM_OPT_RECV_MODE` to `ZLINK_STREAM_RECV_MODE_RAW` or
+`ZLINK_STREAM_RECV_MODE_PACKET` before bind. The mode becomes immutable after
+the first successful bind; the receive API for the other mode returns `ENOTSUP`.
 
 STREAM-specific behavior:
 
 - `source_rid` is auto-assigned per connection by the server,
   always fixed 4 bytes (`uint32`, big-endian).
-- To close one client, pass the `source_rid` received from callback or recv
+- To close one client, pass the `source_rid` received from recv
   to `zlink_disconnect_rid()`. STREAM target routing ids must be 4 bytes.
 - Connect/disconnect are **not** in-band data markers. They are reported
   through the socket monitor as `ZLINK_EVENT_CONNECTION_READY` /
@@ -82,42 +80,39 @@ STREAM-specific behavior:
 
 ---
 
-## 4. Callback Example
+## 4. RAW Pull Example
 
-In STREAM raw callbacks every delivered part is application data; observe
+In STREAM RAW mode every pulled part is application data; observe
 connect/disconnect on the socket monitor (see [Monitoring](../spec/core/06-monitoring.en.md)).
 
 ```c
-void on_message(const zlink_routing_id_t *source_rid,
-                zlink_msg_t *parts, size_t part_count,
-                void *userdata)
-{
-    for (size_t i = 0; i < part_count; i++) {
-        void *data = zlink_msg_data(&parts[i]);
-        size_t size = zlink_msg_size(&parts[i]);
+zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_RAW;
+zlink_set_stream_option(stream, ZLINK_STREAM_OPT_RECV_MODE,
+                        &mode, sizeof(mode));
+zlink_bind(stream, "tcp://0.0.0.0:8080");
 
-        /* echo reply */
-        zlink_msg_t reply;
-        zlink_msg_init_size(&reply, size);
-        memcpy(zlink_msg_data(&reply), data, size);
-        zlink_send_part_rid(stream, source_rid, &reply, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
-
-        zlink_msg_close(&parts[i]);
-    }
+const zlink_routing_id_t *source_rid = NULL;
+zlink_msg_t part;
+zlink_msg_init(&part);
+zlink_part_flag_t more = ZLINK_PART_FINAL;
+if (zlink_recv_part(stream, &source_rid, &part, &more,
+                    ZLINK_RECV_FLAGS_NONE) == ZLINK_RECV_OK) {
+    zlink_msg_t reply;
+    zlink_msg_init_size(&reply, zlink_msg_size(&part));
+    memcpy(zlink_msg_data(&reply), zlink_msg_data(&part), zlink_msg_size(&part));
+    zlink_send_part_rid(stream, source_rid, &reply, ZLINK_SEND_FLAGS_NONE,
+                       ZLINK_PART_FINAL, NULL, NULL);
+    zlink_msg_close(&part);
 }
-
-/* Attach callback dispatch (detachable outside the callback; detach/close from
-   inside the callback returns EBUSY) */
-zlink_recv_handler(stream, on_message, NULL);
 ```
 
 ### Key Points
 
 | Item | Description |
 |---|---|
-| Attach API | `zlink_recv_handler()` |
-| Callback | `zlink_socket_msg_handler_fn` |
-| Lifetime | Detachable outside the callback; detach/close from inside the callback returns `EBUSY` |
+| Receive API | `zlink_recv_part()` |
+| Readiness | A poller reports `ZLINK_POLLIN`; the application then drains receives |
+| Lifetime | `source_rid` remains valid until the same socket's next data-recv entry or close |
 | Framing | Raw bytes as received from the transport |
 | Send | `zlink_send_part_rid()` |
 
@@ -125,54 +120,47 @@ zlink_recv_handler(stream, on_message, NULL);
 > (default) or returns `ZLINK_SUBMIT_BACKPRESSURED` with `ZLINK_DONTWAIT`. For advanced
 > backpressure patterns, see [Performance Guide](10-performance.en.md).
 
-- Only one callback can be attached at a time; calling attach while a
-  callback is already attached returns `ZLINK_HANDLER_BUSY`.
-- The handler is permanent and cannot be detached for the lifetime of
-  the socket.
-- Close from inside the callback is not supported (returns `ZLINK_CLOSE_BUSY`).
+- The caller owns a successfully received `zlink_msg_t` and closes it exactly once.
+- Copy the borrowed `source_rid` before the next data receive when it must be retained.
+- `ZLINK_RECV_FLAGS_DONTWAIT` returns `ZLINK_RECV_NO_DATA` with `EAGAIN` when empty.
 
 ---
 
-## 4.1 Packet Callback Mode
+## 4.1 PACKET Pull Mode
 
 When the upstream protocol uses the fixed framing convention (2-byte
 big-endian header size + 4-byte big-endian body size + header payload +
-body payload), register a packet-level callback with
-`zlink_stream_packet_handler()`. The core handles fragment accumulation
-and length parsing, so the application receives assembled header/body
-pairs directly.
+body payload), select PACKET mode and pull with
+`zlink_stream_recv_packet()`. Core handles fragment accumulation and length
+parsing, so the application receives assembled header/body pairs directly.
 
 ```c
-void on_packet(void *stream,
-               const zlink_routing_id_t *source_rid,
-               zlink_msg_t *header,
-               zlink_msg_t *body,
-               void *userdata)
-{
-    /* header and body are always valid zlink_msg_t objects. Length zero
-       is still delivered as a valid msg_t (never NULL). */
-    /* source_rid is a borrowed view valid only for the duration of the
-       callback. Copy the value if you need to keep it afterwards. */
+zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_PACKET;
+zlink_set_stream_option(stream, ZLINK_STREAM_OPT_RECV_MODE,
+                        &mode, sizeof(mode));
+zlink_bind(stream, "tcp://0.0.0.0:8080");
 
-    /* ... process header / body ... */
-
-    zlink_msg_close(header);
-    zlink_msg_close(body);
+const zlink_routing_id_t *source_rid = NULL;
+zlink_msg_t header;
+zlink_msg_t body;
+zlink_msg_init(&header);
+zlink_msg_init(&body);
+if (zlink_stream_recv_packet(stream, &source_rid, &header, &body,
+                             ZLINK_RECV_FLAGS_NONE) == ZLINK_RECV_OK) {
+    /* process header/body; zero-length messages are valid */
+    zlink_msg_close(&header);
+    zlink_msg_close(&body);
 }
-
-zlink_stream_packet_handler(stream, on_packet, NULL);
 ```
 
-Rules for packet callback mode:
+Rules for PACKET mode:
 
 - `header_size` or `body_size` equal to zero is allowed; both sides are
   still delivered as valid `zlink_msg_t` objects.
-- Ownership of `header` and `body` is transferred to the callback. The
-  callback must close or consume each `msg_t` exactly once.
-- With packet handler attached, raw recv (`zlink_recv_part()`), raw callback
-  (`zlink_recv_handler()`), and data-plane `ZLINK_POLLIN` registration on
-  the same handle all fail with `EBUSY`. A second
-  `zlink_stream_packet_handler()` attach also fails with `EBUSY`.
+- Ownership of `header` and `body` is transferred to the caller. The
+  caller must close or consume each `msg_t` exactly once.
+- In PACKET mode, raw receive (`zlink_recv_part()`) fails with `ENOTSUP`.
+  In RAW mode, `zlink_stream_recv_packet()` fails the same way.
 - Malformed packets (length exceeding implementation limits, assembly
   failure, premature close, etc.) result in the connection being closed
   as the default policy. Observe such events via the socket monitor.
@@ -197,7 +185,7 @@ char buf[4096];
 ssize_t n = recv(fd, buf, sizeof(buf), 0);
 ```
 
-If the server side uses the **packet handler** (`zlink_stream_packet_handler`),
+If the server side uses **PACKET mode** (`zlink_stream_recv_packet`),
 the client must frame each packet as 2-byte BE header size + 4-byte BE body
 size + header + body:
 
@@ -217,7 +205,8 @@ send(fd, body, body_len, 0);
 
 Main supported options:
 - `ZLINK_OPT_MAXMSGSIZE`, `ZLINK_OPT_SNDHWM`, `ZLINK_OPT_RCVHWM`, `ZLINK_OPT_SNDBUF`, `ZLINK_OPT_RCVBUF`, `ZLINK_OPT_BACKLOG`, `ZLINK_OPT_LINGER`
-- `ZLINK_STREAM_OPT_NOTIFY` (via `zlink_set_stream_option()` / `zlink_get_stream_option()`): enable connect/disconnect notifications
+- `ZLINK_STREAM_OPT_RECV_MODE` (via `zlink_set_stream_option()` / `zlink_get_stream_option()`): select RAW or PACKET before bind
+- `ZLINK_STREAM_OPT_NOTIFY`: enable zero-length connect/disconnect records in RAW mode; it cannot be combined with PACKET mode
 - TLS/WSS server: `zlink_set_tls_server()` / TLS client: `zlink_set_tls_client()`
 
 STREAM listeners often receive bytes from raw TCP peers. If the peer is not
@@ -318,6 +307,60 @@ These tests use STREAM server + raw client paths.
 
     ```rust
     --8<-- "bindings/rust/samples/stream_recv_sample.rs:doc"
+    ```
+
+### PACKET pull examples
+
+These variants pull packets that use the fixed framing convention.
+
+=== "C++"
+
+    ```cpp
+    --8<-- "bindings/cpp/samples/stream_packet_pull_sample.cpp:doc"
+    ```
+
+=== "C#/.NET"
+
+    ```csharp
+    --8<-- "bindings/dotnet/samples/StreamPacketCallback/Program.cs:doc"
+    ```
+
+=== "Java"
+
+    ```java
+    --8<-- "bindings/java/samples/Zlink.Samples/src/main/java/systems/zlink/samples/StreamPacketCallbackSample.java:doc"
+    ```
+
+=== "Kotlin"
+
+    A current pull-based Kotlin PACKET sample is not yet available in this source tree.
+
+=== "Python"
+
+    ```python
+    --8<-- "bindings/python/samples/stream_packet_recv_sample.py:doc"
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    --8<-- "bindings/node/samples/stream_packet_sample.ts:doc"
+    ```
+
+=== "JavaScript"
+
+    A current pull-based JavaScript PACKET sample is not yet available in this source tree.
+
+=== "Go"
+
+    ```go
+    --8<-- "bindings/go/samples/stream_packet_callback_sample/main.go:doc"
+    ```
+
+=== "Rust"
+
+    ```rust
+    --8<-- "bindings/rust/samples/stream_packet_recv_sample.rs:doc"
     ```
 
 ---

@@ -22,9 +22,9 @@ result enum으로 분기하고 errno는 로깅과 세밀한 진단에 쓴다. �
 | Enum | 사용처 | 공통 값 |
 |---|---|---|
 | `zlink_submit_result_t` | send/publish/request-submit API(모든 socket-type category) | `OK`(0), `BACKPRESSURED`(1, 정상 제어 흐름), `NOT_CONNECTED`(2), `NOT_FOUND`(3), `NOT_ADMITTED`(13, 정상 제어 흐름 — target은 확인됐지만 admission 정책이 거부), `TERMINATED`(4), `INVALID_HANDLE`(5), `INVALID_ARGUMENT`(6), `NOT_SUPPORTED`(7), `INVALID_STATE`(8), `THREAD_VIOLATION`(9), `OUT_OF_MEMORY`(10), `SEQ_EXHAUSTED`(11), `INTERNAL_ERROR`(12) |
-| `zlink_request_result_t` | `zlink_reply_handler_fn` 완료(DEALER/ROUTER category) | `OK`(0), `TIMED_OUT`(101), `NOT_FOUND`(102), `TERMINATED`(103), `PROTOCOL_ERROR`(104), `INTERNAL_ERROR`(105), `REJECTED`(106), `CONFLICT`(107), `BUSY`(108), `NOT_CONNECTED`(109), `INVALID_ARGUMENT`(110), `INVALID_STATE`(111), `NOT_SUPPORTED`(112), `BACKPRESSURED`(113) |
+| `zlink_request_result_t` | `zlink_completion_recv()`가 반환한 REQUEST record(DEALER/ROUTER category) | `OK`(0), `TIMED_OUT`(101), `NOT_FOUND`(102), `TERMINATED`(103), `PROTOCOL_ERROR`(104), `INTERNAL_ERROR`(105), `REJECTED`(106), `CONFLICT`(107), `BUSY`(108), `NOT_CONNECTED`(109), `INVALID_ARGUMENT`(110), `INVALID_STATE`(111), `NOT_SUPPORTED`(112), `BACKPRESSURED`(113) |
 | `zlink_recv_result_t` | recv family API(Raw receive·Socket monitor·Timers category) | `OK`(0), `NO_DATA`(201), `BUSY`(202), `TERMINATED`(203), `INVALID_HANDLE`(204), `NOT_SUPPORTED`(205), `INTERNAL_ERROR`(206), `BUFFER_TOO_SMALL`(207), `INVALID_STATE`(208) |
-| `zlink_handler_result_t` | handler 등록 API(Raw receive·Socket lifecycle·Socket monitor·Timers category) | `OK`(0), `INVALID_ARGUMENT`(301), `BUSY`(302), `NOT_SUPPORTED`(303), `DEADLOCK`(304), `INVALID_HANDLE`(305), `INTERNAL_ERROR`(306) |
+| `zlink_handler_result_t` | typed handler-result family는 유지하며 socket completion·receive·monitor·timer 전달은 pull API를 사용 | `OK`(0), `INVALID_ARGUMENT`(301), `BUSY`(302), `NOT_SUPPORTED`(303), `DEADLOCK`(304), `INVALID_HANDLE`(305), `INTERNAL_ERROR`(306) |
 | `zlink_close_result_t` | `zlink_ctx_term`/`zlink_close`/`zlink_ctx_shutdown`/`zlink_timer_destroy`/`zlink_monitor_close` | `OK`(0), `BUSY`(401), `SHUTDOWN`(402), `INVALID_HANDLE`(403), `INTERNAL_ERROR`(404) |
 | `zlink_bind_result_t` | `zlink_bind`(Socket lifecycle category) | `OK`(0), `INVALID_ARGUMENT`(501), `ADDR_IN_USE`(502), `NOT_SUPPORTED`(503), `INVALID_HANDLE`(504), `INTERNAL_ERROR`(505) |
 | `zlink_connect_result_t` | `zlink_connect`/`zlink_unbind`/`zlink_disconnect`/`zlink_disconnect_rid`(Socket lifecycle category) | `OK`(0), `INVALID_ARGUMENT`(601), `NOT_SUPPORTED`(602), `INVALID_HANDLE`(603), `INTERNAL_ERROR`(604), `NOT_FOUND`(605), `CONFLICT`(606), `BUSY`(607), `AUTH_FAILED`(608) |
@@ -38,8 +38,8 @@ result enum으로 분기하고 errno는 로깅과 세밀한 진단에 쓴다. �
 caller가 제공한 buffer가 첫 완결된 값을 담을 수 없다는(또는 SUB/XSUB의 경우 topic
 buffer 용량이 너무 작다는) 뜻이다 — 호출은 아무것도 소비하지 않고 필요한 크기를
 보고하므로 더 큰 buffer로 재시도해도 안전하다. `INVALID_STATE`는 stale handle이나 닫힌
-수신·연결 상태를 다룬다. 같은 handler의 callback 안에서 그 handler를 해제·교체하면
-실제로 deadlock에 빠지는 대신 `DEADLOCK`을 반환한다.
+수신·연결 상태를 다룬다. Handler result family는 ABI에 남아 있지만 현행 socket
+completion·receive·monitor·timer 전달은 pull 기반이며 이를 생성하지 않는다.
 
 ---
 

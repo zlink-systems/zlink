@@ -70,18 +70,18 @@ zlink_connect(dealer, "tcp://127.0.0.1:5558");
 zlink_msg_t msg1, msg2, msg3;
 zlink_msg_init_size(&msg1, 9);
 memcpy(zlink_msg_data(&msg1), "request-1", 9);
-zlink_send_part(dealer, &msg1, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(dealer, &msg1, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 zlink_msg_init_size(&msg2, 9);
 memcpy(zlink_msg_data(&msg2), "request-2", 9);
-zlink_send_part(dealer, &msg2, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(dealer, &msg2, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 zlink_msg_init_size(&msg3, 9);
 memcpy(zlink_msg_data(&msg3), "request-3", 9);
-zlink_send_part(dealer, &msg3, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(dealer, &msg3, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
-/* 응답은 poller 루프에서 zlink_recv_part()로 소비하거나,
-   (zlink_dealer_request_part() 사용 시) 그 reply 콜백으로 전달받는다 */
+/* 일반 DATA는 zlink_recv_part()로 소비한다.
+   zlink_request_part() 결과는 zlink_completion_recv()로 drain한다. */
 ```
 
 ### 수신 모드
@@ -121,10 +121,10 @@ zlink_msg_init_size(&body, 4);
 memcpy(zlink_msg_data(&body), "body", 4);
 
 zlink_submit_result_t rc = zlink_send_part(
-    dealer, &header, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE);
+    dealer, &header, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, NULL, NULL);
 if (rc == ZLINK_SUBMIT_OK)
     rc = zlink_send_part(
-        dealer, &body, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+        dealer, &body, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 ```
 
 ## 4. 소켓 옵션
@@ -155,31 +155,14 @@ zlink_connect(dealer, "tcp://127.0.0.1:5558");
 
 ### 4.1 request-reply
 
-DEALER가 응답을 기다리는 흐름은 일반 `send/recv`와 별도로
-`zlink_dealer_request_part()`를 사용한다. 이 함수는 ZMP(zlink 전용 메시지 프로토콜) request-reply envelope(요청-응답 식별용 헤더 wrapper)를
-붙여 보내고, 응답은 콜백으로 전달된다.
+DEALER가 상관된 응답을 기다리려면 일반 DATA `send/recv` 대신 `zlink_request_part()`를
+사용한다. 이 함수는 ZMP(zlink 전용 메시지 프로토콜) request-reply envelope(요청-응답
+식별용 header wrapper)를 붙이고, reply 또는 terminal 결과를 socket completion queue에 넣는다.
 
 > ZMP request-reply envelope의 와이어 프레임 형식은
 > [ZMP 프로토콜](../spec/core/protocol/01-zmp.ko.md)을 참고.
 
 ```c
-static void on_reply(zlink_request_result_t result,
-                     zlink_msg_t *parts,
-                     size_t part_count,
-                     void *userdata)
-{
-    if (result != ZLINK_REQUEST_OK) {
-        /* result 값: ZLINK_REQUEST_TIMED_OUT, ZLINK_REQUEST_NOT_FOUND,
-           ZLINK_REQUEST_TERMINATED, ZLINK_REQUEST_PROTOCOL_ERROR */
-        fprintf(stderr, "request failed: %d\n", (int)result);
-        return;
-    }
-
-    /* parts_와 그 안의 모든 메시지 소유권은 이 콜백으로 이동한다.
-       정확히 한 번 해제한다. */
-    zlink_multipart_close(parts, part_count);
-}
-
 int timeout_ms = 1000;
 zlink_set_dealer_option(
   dealer,
@@ -190,16 +173,22 @@ zlink_set_dealer_option(
 zlink_msg_t req;
 zlink_msg_init_size(&req, 4);
 memcpy(zlink_msg_data(&req), "ping", 4);
-/* 시그니처: zlink_dealer_request_part(dealer, part, flags, part_flag,
-   timeout_ms, handler, userdata) */
-zlink_submit_result_t rc = zlink_dealer_request_part(
-    dealer, &req, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-    0 /* timeout_ms: 0이면 ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS 사용 */,
-    on_reply, NULL);
-if (rc != ZLINK_SUBMIT_OK) { /* submit 실패 처리 */ }
+zlink_completion_id_t id = 0;
+zlink_submit_result_t rc = zlink_request_part(
+    dealer, NULL, &req, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
+    0 /* ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS 사용 */, NULL, &id);
+if (rc == ZLINK_SUBMIT_OK) {
+    zlink_completion_t completion = {0};
+    completion.struct_size = sizeof(completion);
+    if (zlink_completion_recv(dealer, &completion, ZLINK_RECV_FLAGS_NONE)
+        == ZLINK_RECV_OK) {
+        /* completion.request_result는 OK, TIMED_OUT, NOT_FOUND 등이다. */
+        zlink_completion_close(&completion);
+    }
+}
 ```
 
-`zlink_dealer_request_part()`에 `timeout_ms_ == 0`을 전달하면 소켓 기본값인
+`zlink_request_part()`에 `timeout_ms_ == 0`을 전달하면 DEALER 소켓 기본값인
 `ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS`(별도 설정이 없으면 `5000ms`)가
 적용된다.
 
@@ -218,39 +207,38 @@ void *dealer = zlink_socket(ctx, ZLINK_SOCKET_DEALER);
 zlink_set_routing_id(dealer, "D1", 2);
 zlink_connect(dealer, "tcp://127.0.0.1:5558");
 
-/* 클라이언트 요청 */
+/* 클라이언트 typed request */
 zlink_msg_t req;
 zlink_msg_init_size(&req, 5);
 memcpy(zlink_msg_data(&req), "Hello", 5);
-zlink_send_part(dealer, &req, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_completion_id_t request_id = 0;
+zlink_request_part(dealer, NULL, &req, ZLINK_SEND_FLAGS_NONE,
+                   ZLINK_PART_FINAL, 0, NULL, &request_id);
 
-/* 서버: zlink_router_recv_part()로 수신 (source_rid + request_seq) */
+/* 서버: source_rid + opaque reply_token으로 REQUEST 수신 */
 const zlink_routing_id_t *source_rid = NULL;
-uint64_t request_seq = 0;
+zlink_reply_token_t reply_token = 0;
 zlink_msg_t part;
 zlink_part_flag_t more;
 
 zlink_msg_init(&part);
-zlink_router_recv_part(router, &source_rid, &request_seq, &part, &more,
+zlink_router_recv_part(router, &source_rid, &reply_token, &part, &more,
                        ZLINK_RECV_FLAGS_NONE);
 printf("Received from [%.*s]: %.*s\n", (int)source_rid->size, source_rid->data,
        (int)zlink_msg_size(&part), (char *)zlink_msg_data(&part));
 
-/* 일반 directed traffic은 request_seq == 0이므로,
-   zlink_router_reply_part()가 아니라 zlink_send_part_rid()로 응답한다. */
+/* 0이 아닌 token은 REQUEST이며 그대로 돌려준다. */
 zlink_msg_t reply;
 zlink_msg_init_size(&reply, 5);
 memcpy(zlink_msg_data(&reply), "World", 5);
-zlink_send_part_rid(router, source_rid, &reply, ZLINK_SEND_FLAGS_NONE,
-                    ZLINK_PART_FINAL);
+zlink_reply_part(router, source_rid, reply_token, &reply, ZLINK_PART_FINAL);
 zlink_msg_close(&part);
 
-/* 클라이언트: zlink_recv_part()로 응답 수신 */
-zlink_msg_t reply_part;
-zlink_part_flag_t reply_more;
-zlink_msg_init(&reply_part);
-zlink_recv_part(dealer, NULL, &reply_part, &reply_more, ZLINK_RECV_FLAGS_NONE);
-zlink_msg_close(&reply_part);
+/* 클라이언트: DATA가 아닌 REQUEST completion으로 응답 수신 */
+zlink_completion_t completion = {0};
+completion.struct_size = sizeof(completion);
+zlink_completion_recv(dealer, &completion, ZLINK_RECV_FLAGS_NONE);
+zlink_completion_close(&completion);
 ```
 
 > 참고: `core/tests/integration/test_router_multiple_dealers.cpp` — TCP/IPC/inproc 예제
@@ -411,7 +399,7 @@ if (rc == ZLINK_SUBMIT_NOT_ADMITTED) {
 재연결 없이 후보 집합에 복귀한다.
 
 연결된 ROUTER가 모두 가중치 `0`이면 `zlink_send_part()`와
-`zlink_dealer_request_part()`는 `ZLINK_SUBMIT_NOT_ADMITTED`를 반환한다.
+`zlink_request_part()`는 `ZLINK_SUBMIT_NOT_ADMITTED`를 반환한다.
 연결이 끊긴 것이 아니라 보낼 대상이 일시적으로 없는 상태이므로 호출자는
 최소 한 대의 ROUTER가 양수 가중치로 복귀할 때까지 기다렸다가
 재시도해야 한다. `NOT_ADMITTED`를 영구 실패로 취급하면 유지보수가

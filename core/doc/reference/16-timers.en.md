@@ -4,7 +4,7 @@
 # 16. Timers
 
 This category covers the entry points for a standalone generic timer: nanosecond-resolution
-periodic or one-shot scheduling, consumed synchronously or by callback, and optionally
+periodic or one-shot scheduling, consumed synchronously by pull, and optionally
 integrated into a poller (`zlink_poller_add_timer`/`zlink_poller_remove_timer`, Polling and
 pollers category). A timer fire is one of Core's three event families (the others are socket
 monitor events and poller readiness — Socket monitor and Polling and pollers categories). The
@@ -55,32 +55,23 @@ call is safe to make concurrently with other operations on the same timer.
 
 ---
 
-## `zlink_timer_recv` / `zlink_timer_handler`
+## `zlink_timer_recv`
 
-Consumes timer fires synchronously, or attaches a callback — mutually exclusive, like other
-Core receive/callback pairs (Raw receive category).
+Consumes timer fires synchronously through the pull API.
 
 ```c
 uint64_t fire_count;
 zlink_timer_recv(timer, &fire_count);
-// or:
-zlink_timer_handler(timer, on_timer_fire, userdata);
 ```
 
-**Parameters.** `recv` takes an output `fire_count_out_` (the cumulative fire count). `handler`
-takes a `zlink_timer_handler_fn` (receiving the timer handle, cumulative fire count, and
-`userdata_`) — `NULL` is invalid.
+**Parameters.** Takes an output `fire_count_out_` (the cumulative fire count).
 
 **Return and errno.** `recv` returns `zlink_recv_result_t` — `ZLINK_RECV_OK` on success,
 `ZLINK_RECV_NO_DATA` (`EAGAIN`) when the timer has stopped with no fire event left to receive.
-`handler` returns `zlink_handler_result_t` — `ZLINK_HANDLER_OK` on success,
-`ZLINK_HANDLER_INVALID_ARGUMENT`/`EINVAL` for a `NULL` handler. After attaching a handler,
-`zlink_timer_recv` on the same timer returns `ZLINK_RECV_BUSY`.
 
-**When to use.** Use `recv` for a synchronous, poll-style wait on a fire; use `handler` for
-push-style delivery. Neither call is safe to make concurrently with other operations on the same
-timer. To integrate a timer into an existing event loop alongside sockets and FDs instead of
-either of these, use `zlink_poller_add_timer` (Polling and pollers category) and drain with
+**When to use.** Use `recv` for a synchronous, poll-style wait on a fire. It is not safe to call
+concurrently with other operations on the same timer. To integrate a timer into an existing event
+loop alongside sockets and FDs, use `zlink_poller_add_timer` (Polling and pollers category) and drain with
 `zlink_timer_recv` once the poller reports it ready.
 
 ---

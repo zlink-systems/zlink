@@ -161,7 +161,7 @@ Routes messages to peers addressed by routing id, and can reply to a specific pe
 ```cpp
 zlink::router_socket_t router (ctx);
 std::move (router.send (peer_rid)).message (part).submit ();
-router.set_completion_control_handler ([] (auto &rid, auto parts) { /* ... */ });
+std::move (router.reply (peer_rid, reply_token)).message (reply).submit ();
 ```
 
 **Options.**
@@ -173,19 +173,18 @@ router.set_completion_control_handler ([] (auto &rid, auto parts) { /* ... */ })
 | `recv(received_t&, recv_flags_t)` | `recv_flags_t::none` | populates the envelope with the next message |
 | `recv(routing_id_t& source_rid_out_, message_t& part_out_, recv_flags_t)` | `recv_flags_t::none` | pull-based single-part receive; caller may keep a long-lived `received_t` across calls to reuse storage without reallocation |
 | `request(const routing_id_t&)` | — | Messaging category's `request_operation_t`, addressed to a specific peer |
-| `reply(const routing_id_t&, uint64_t request_seq_)` | — | Messaging category's `reply_operation_t`, answering that peer's request |
-| `try_send_completion_control(const routing_id_t& peer_rid_, const std::vector<message_t>& parts_)` | — | sends an opaque control record to a peer over its existing connection, without consuming `parts_` |
-| `set_completion_control_handler(completion_control_handler_t)` | — | registers the callback that receives incoming completion-control records; `using completion_control_handler_t = std::function<void(const routing_id_t&, std::vector<message_t>)>` — callback owns the received vector |
+| `reply(const routing_id_t&, reply_token_t)` | — | Messaging category's `reply_operation_t`, answering the received request identified by the opaque token |
+| `recv(...)` reply token | — | `received_t::reply_token()` carries the token; `received_t::reply()` captures it with the source RID |
+| request terminal | — | reply or terminal failure is returned by `request(...).submit()`/`.async()`, never as application DATA |
 | `set_routing_id(const routing_id_t&)` / `get_routing_id(routing_id_t&) const` | — | assigns/reads this socket's own routing id, observed by peers on connect |
 | `options()` | — | returns `router_socket_options_t` |
 
-**Completion result.** `try_send_completion_control` returns `bool` — `false` only when the
-completion connection is back-pressured. `recv` follows the `int` convention above.
+**Completion result.** `recv` follows the `int` convention above. Request terminals settle from
+the socket completion queue.
 
-**When to use.** `request(peer_rid)`/`reply(rid, request_seq)` for ROUTER-initiated or
-ROUTER-answered request/reply, where DEALER cannot address a specific peer.
-`try_send_completion_control`/`set_completion_control_handler` for an opaque bounded control record
-independent from application-level receive.
+**When to use.** `request(peer_rid)`/`reply(rid, reply_token)` for ROUTER-initiated or
+ROUTER-answered request/reply, where DEALER cannot address a specific peer. The token is opaque,
+socket-bound metadata from receive and must not be synthesized.
 
 ---
 
@@ -270,7 +269,9 @@ other socket type.
 
 ```cpp
 zlink::stream_socket_t stream (ctx);
-stream.set_packet_handler ([] (auto &rid, auto &&header, auto &&body) { /* owns header/body */ });
+stream.options ().recv_mode (zlink::stream_recv_mode_t::packet);
+zlink::stream_packet_t packet;
+bool ok = stream.recv_packet (packet, zlink::recv_flags_t::none);
 ```
 
 **Options.**
@@ -279,15 +280,16 @@ stream.set_packet_handler ([] (auto &rid, auto &&header, auto &&body) { /* owns 
 | --- | --- | --- |
 | `explicit stream_socket_t(context_t&)` | — | constructs the socket, bound to that context |
 | `send(const routing_id_t&)` | — | starts the shared `send_operation_t`, addressed to that peer |
-| `recv(received_t&, recv_flags_t)` | `recv_flags_t::none` | populates the envelope with the next packet; unlike dotnet's `IStreamSocket` (which has a `RecvPart` returning raw parts plus routing id/`hasMore`), no separate raw-part receive overload is public here |
-| `set_packet_handler(std::function<void(const routing_id_t&, message_t&&, message_t&&)>)` | — | registers a callback-driven packet loop |
+| `recv(received_t&, recv_flags_t)` | `recv_flags_t::none` | pulls the next raw record in `stream_recv_mode_t::raw` |
+| `recv_packet(stream_packet_t&, recv_flags_t)` | `recv_flags_t::none` | pulls one header/body packet with source RID in `stream_recv_mode_t::packet` |
 | `set_routing_id(const routing_id_t&)` / `get_routing_id(routing_id_t&) const` | — | assigns/reads this socket's own routing id, observed by peers on connect |
 | `options()` | — | returns `stream_socket_options_t` |
 
-**Completion result.** `recv` follows the `int` convention above. The packet handler transfers
-message ownership to the callback via rvalue references.
+**Completion result.** `recv` follows the `int` convention above; `recv_packet` returns `false`
+only for DONTWAIT no-data and otherwise transfers the packet messages to `stream_packet_t`.
 
-**When to use.** `set_packet_handler` for a callback-driven packet loop.
+**When to use.** Select RAW or PACKET with `options().recv_mode(...)` before bind/connect, then
+call only the matching pull receive family.
 
 ---
 
@@ -325,7 +327,7 @@ Shared types referenced across every entry above.
 | `rid_duplicate_policy_t` | `common_socket_options_t::rid_duplicate_policy`, `router_socket_options_t::handover` | `reject`, `handover` |
 | `submit_retry_mode_t` | `common_socket_options_t::submit_retry_mode` | `off`, `local_failure` |
 | `tcp_keepalive_mode_t` | `common_socket_options_t::tcp_keepalive` | `os_default`, `off`, `on` |
-| `send_flags_t` (class w/ static members, not an `enum`) | Every send/request/reply builder's `.flags(int)` stage (Messaging category) | `none`, `dontwait` |
+| `send_flags_t` (class w/ static members, not an `enum`) | synchronous publish flags | `none`, `dontwait` |
 | `recv_flags_t` (class w/ static members, not an `enum`) | Every `recv`/`subscribe`/`receive_subscription_event` | `none`, `dontwait` |
 | `send_result_t` | The outcome of a non-blocking send attempt | `sent`, `backpressured`, `not_ready` |
 | `submit_result_t` | Thrown as `submit_error_t` (Errors category) | Mirrors `zlink_submit_result_t` (see Errors category) |

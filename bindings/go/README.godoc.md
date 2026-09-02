@@ -34,11 +34,17 @@ The exported Go package reflects the Core 0.16.0 raw-socket contract.
 - publish uses its separate flag-bearing `PublishOp`
 - non-blocking receive returns `(value, ok, error)`
 - ROUTER request receive exposes an opaque owner-bound `ReplyToken`
-- STREAM supports raw receive and reusable pull-based `StreamPacket` output
+- STREAM selects RAW or PACKET before bind/connect and uses raw receive or
+  reusable pull-based `StreamPacket` output respectively
 - monitor and timer delivery is pull-only
 - context options are exposed via `Context.Options()` and `ContextOptions`
 - typed domain objects are used for `Message`, `RoutingID`, `Received`,
   `TopicMessage`, `SubscriptionEvent`, and `MonitorEvent`
+
+When a public poller owns a socket's `PollCompletion` drain, keep calling
+`Wait` from another goroutine while a completion-backed `Submit(ctx)` is
+outstanding. Otherwise the terminal cannot settle until ownership returns to
+the runtime or the poller drains the queue.
 - raw option bags and raw flags are not exposed publicly
 - socket-specific capabilities are exposed only on concrete socket types
 - monitor open APIs take typed masks and default to `ALL` when omitted

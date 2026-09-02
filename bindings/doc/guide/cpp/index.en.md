@@ -109,20 +109,35 @@ socket.send ().message (msg).submit ();
 ```
 
 HWM-managed sends provide both synchronous and asynchronous terminals. On a
-plain thread, use `submit()`; add `flags(ZLINK_DONTWAIT)` to return immediately
-when the HWM is full. In a coroutine, `co_await` the flag-free `async()` terminal.
+plain thread, use `submit()`, which follows Core's blocking admission path. In a
+coroutine, `co_await` the `async()` terminal, which uses DONTWAIT and completes
+from the socket completion queue.
 
 ```cpp
 socket.send ().message (msg).submit (); // sync; blocks until HWM admission by default
-bool sent = socket.send ().message (msg).flags (ZLINK_DONTWAIT).submit ();
 co_await socket.send ().message (msg).async (); // async; does not block the caller thread
 ```
 
-Request also passes through HWM admission and provides three completion
-surfaces. `submit()` waits synchronously for admission and reply and returns the
-reply directly; `submit(callback)` returns once admission is decided and
-delivers the reply through the callback; `async()` returns an awaitable. Both
-synchronous terminals use `flags(NONE/DONTWAIT)` to select admission waiting.
+Request uses the same two terminal styles: `submit()` blocks until the reply,
+while `async()` returns an awaitable completed from the socket completion queue.
+The reply is returned by that terminal; it is not DATA received separately.
+
+Core owns retry for an accepted pre-admission operation. Do not add a caller
+retry queue or resubmit the same payload. The shared native
+`ZLINK_OPT_PENDING_MAX_MSGS/BYTES` limits apply to pending SEND and REQUEST;
+there are no send-only pending option names. Completion means local admission,
+not peer delivery or an application acknowledgement.
+
+Destroying an unconsumed `async_result_t` detaches only the caller waiter. Before
+Core submit, abandon the language operation without calling Core; after a
+successful submit, Core may still admit it and the socket owner drains its late
+completion. STREAM must select `stream_recv_mode_t::raw` or `packet` before
+bind/connect and then use `recv()` or `recv_packet()` respectively.
+
+If a public poller owns `poll_event_t::completion` for a socket, keep another
+thread calling `wait()` while any blocking request or awaitable is outstanding.
+The wait drains native completions and settles or cleans their binding state;
+calling a blocking terminal between waits on that same thread can stall it.
 
 Reading a received message:
 
@@ -143,7 +158,7 @@ socket.recv (inbound, zlink::recv_flags_t::none);
 
 auto parts = inbound.parts ();                              // const vector
 auto rid = inbound.routing_id ();                          // optional<routing_id_t>
-auto seq = inbound.request_seq ();                         // optional<uint64_t>
+auto token = inbound.reply_token ();                       // optional<reply_token_t>
 
 inbound.close ();   // explicit release (or via destructor)
 ```
@@ -162,8 +177,8 @@ socket.set_routing_id (rid);
 
 | Situation | Rule |
 |------|------|
-| `submit()` succeeds (returns `true`) | `message_t` is moved — invalid to use afterward |
-| `submit()` — `dontwait` back-pressure | returns `false` (no exception), message ownership retained |
+| `submit()` succeeds | `message_t` is moved — invalid to use afterward |
+| `async()` | operation owns the moved message while Core completion is pending |
 | `submit()` other failure | throws (`submit_error_t`), message ownership retained |
 | `recv()` | receives in place into `received_t&`, released via `close()` or destructor |
 | Async request | owns the reply `std::vector<message_t>`, auto-released when the vector is destroyed |
@@ -185,18 +200,12 @@ The C++ binding throws per-operation exceptions that inherit from
 `zlink::binding_error_t`.
 
 ```cpp
-// dontwait back-pressure is handled via a false return (not an exception)
-zlink::message_t msg = zlink::message_t::from ("data");
-bool sent = socket.send ().message (msg).flags (ZLINK_DONTWAIT).submit ();
-if (!sent) {
-    // back-pressure — retry or send later (message ownership retained)
-}
-
-// other send failures come through as a submit_error_t exception
 try {
+    zlink::message_t msg = zlink::message_t::from ("data");
     socket.send ().message (msg).submit ();
 } catch (const zlink::submit_error_t &e) {
-    // check e.result() for the failure cause
+    // includes a blocking admission timeout/back-pressure result
+    // check e.result() before applying application policy
 }
 ```
 
@@ -228,8 +237,8 @@ instead of throwing (see the samples).
 | `zlink_socket(ctx, type)` | `zlink::pair_socket_t{ctx}`, etc. |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(m).flags(flag).submit()` |
-| `zlink_send_async(...)` | `co_await socket.send().message(m).async()` |
+| blocking `zlink_send_part(...)` / `zlink_send_part_rid(...)` | `socket.send().message(m).submit()` |
+| DONTWAIT send + completion pull | `co_await socket.send().message(m).async()` |
 | `zlink_recv_part(...)` | `socket.recv(received)` |
 | `zlink_msg_data(msg)` | `part.data()` / `part.bytes()` |
 | `zlink_msg_size(msg)` | `part.size()` |
@@ -258,13 +267,13 @@ Threading rules:
 |------|------|
 | `context_t` | shareable across threads |
 | Sockets | **single-thread use only**. No concurrent access |
-| Dispatch handlers | invoked on zlink's internal worker threads |
+| Completion and receive delivery | observed by caller-owned terminals or pull loops |
 | `message_t::bytes()` | span valid only while the message lives |
 
 A synchronous `submit()` without a flag stops its calling thread while waiting
 for HWM admission. This only parks that plain thread. In a coroutine that must
-keep making progress, use `co_await async()`; use
-`.flags(ZLINK_DONTWAIT).submit()` when immediate back-pressure is required.
+keep making progress, use `co_await async()`. Managed send does not expose a
+public DONTWAIT flag terminal.
 
 ```cpp
 // correct pattern: one socket per thread
@@ -287,7 +296,7 @@ Verified samples live under `bindings/cpp/samples/`.
 | `dealer_router_recv_sample.cpp` | DEALER/ROUTER send/receive (request/reply) |
 | `pubsub_recv_sample.cpp` | XPUB/SUB publish/subscribe |
 | `stream_recv_sample.cpp` | STREAM raw TCP |
-| `stream_packet_callback_sample.cpp` | STREAM packet callback |
+| `stream_packet_pull_sample.cpp` | STREAM PACKET pull |
 | `monitor_recv_sample.cpp` | Monitor event receive |
 | `request_reply_async_sample.cpp` | ROUTER/DEALER async request/reply |
 

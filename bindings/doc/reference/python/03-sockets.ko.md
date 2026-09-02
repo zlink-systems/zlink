@@ -114,7 +114,7 @@ ZMTP 레벨 liveness 감지를 조정하려면 세 `heartbeat_*` property를
 
 ```python
 pair = create_pair_socket(ctx)
-pair.send().message(b"ping").submit()
+pair.send().message(b"ping").submit_sync()
 received = create_received()
 if pair.recv_into(received):
     ...
@@ -144,7 +144,7 @@ if pair.recv_into(received):
 
 ```python
 dealer = create_dealer_socket(ctx)
-dealer.request().message(b"payload").submit(callback)
+reply = await dealer.request().message(b"payload").submit()
 ```
 
 **Options.** **`set_routing_id`/`get_routing_id`가 전혀 없다** — README
@@ -174,13 +174,12 @@ reply할 수 있다.
 
 ```python
 router = create_router_socket(ctx)
-router.send(peer_rid).message(b"hello").submit()
+await router.send(peer_rid).message(b"hello").submit()
 ```
 
-**Options.** **이 binding엔 `try_send_completion_control`/
-`set_completion_control_handler`가 선언돼 있지 않다** —
-dotnet/cpp/java/node에서 ROUTER에 문서화된 opaque Completion-control
-표면에 대응하는 게 여기엔 없다, rust에도 같은 표면이 없는 것과 일치.
+**Options.** ROUTER는 DEALER와 같은 managed send/request terminal을 쓴다.
+Core가 선택된 application pipe와 paired completion pipe를 함께 유지하며,
+binding은 별도 completion-control channel이 아닌 terminal 결과를 노출한다.
 
 | Member | 의미 |
 | --- | --- |
@@ -188,14 +187,14 @@ dotnet/cpp/java/node에서 ROUTER에 문서화된 opaque Completion-control
 | `connect(endpoint)` / `disconnect(endpoint)` | peer 주소로 connect/disconnect |
 | `send(routing_id)` | 공유 `SendOp`을 그 peer로 향해 시작 |
 | `request(routing_id)` | Messaging category의 공유 `RequestOp`, 특정 peer로 향함 |
-| `reply(routing_id, request_seq)` | 공유 `ReplyOp`, 해당 peer의 request에 응답 |
+| `reply(routing_id, token)` | 공유 `ReplyOp`, 이 ROUTER가 받은 opaque `ReplyToken`을 소비 |
 | `recv_into(received, *, flags=0)` | `received`를 다음 메시지로 채움 |
 
 **Completion result.** `recv_into`는 위 관례를 따른다.
 
 **선택 기준.** DEALER가 특정 peer를 지정할 수 없는 ROUTER 주도·ROUTER
-응답 request/reply엔 `request(routing_id)`/`reply(routing_id,
-request_seq)`를 쓴다.
+응답 request/reply엔 `request(routing_id)`/`reply(routing_id, token)`을
+쓴다. Token은 opaque하고 socket-owned이며 one-shot이다.
 
 ---
 
@@ -254,7 +253,10 @@ peer와 framed packet을 직접 주고받는다.
 
 ```python
 stream = create_stream_socket(ctx)
-stream.on_packet(lambda rid, header, body: ...)
+stream.stream_options.recv_mode = StreamRecvMode.PACKET
+packet = StreamPacket()
+if stream.recv_packet_into(packet):
+    packet.close()
 ```
 
 **Options.** **이 Protocol엔 `connect`/`disconnect`가 선언돼 있지
@@ -264,28 +266,29 @@ stream.on_packet(lambda rid, header, body: ...)
 | --- | --- |
 | `stream_options` | 타입별 option facade |
 | `send(routing_id)` | 공유 `SendOp`을 그 peer로 향해 시작 |
-| `recv_into(received, *, flags=0)` | `received`를 다음 packet으로 채움 |
-| `on_packet(handler)` | callback 기반 packet loop를 등록; handler가 header와 body 메시지를 둘 다 소유하며 background dispatch 스레드에서 실행됨 |
+| `recv_into(received, *, flags=0)` | 다음 RAW-mode record를 pull |
+| `recv_packet_into(packet, *, flags=0)` | 다음 PACKET-mode header/body를 재사용 caller-owned storage로 pull |
 | `disconnect_rid(peer_rid)` | 해당 routing id로 식별되는 peer를 disconnect |
 
-**Completion result.** `recv_into`는 위 관례를 따른다.
+**Completion result.** `recv_into`와 `recv_packet_into`는 위 관례를 따른다.
+Caller가 packet을 소유하고 `packet.close()`로 header/body를 해제한다.
 
-**선택 기준.** callback 기반 packet loop엔 `on_packet`을 쓴다.
+**선택 기준.** 첫 successful bind/connect 전에 `stream_options.recv_mode`를
+`StreamRecvMode.RAW` 또는 `.PACKET`으로 정한다. 이후 변경은 invalid state며,
+선택한 pull API를 drain한다.
 
 ---
 
 ## Send / request / reply operation-builder 형태
 
 위 모든 socket type의 `send`/`publish`/`request`/`reply` 진입점이
-part·flag·terminal submit을 누적하기 위해 반환하는 fluent builder.
+part를 누적하고 terminal submit에 도달하기 위해 반환하는 fluent builder.
 모든 builder 단계는 공유 `_FluentMessageOp` 기반 Protocol을 확장한다.
 
 ```python
-dealer.send().message(part1).message(part2).submit()
+await dealer.send().message(part1).message(part2).submit()
 
-dealer.request().message(payload).timeout(5.0).submit(
-    lambda result, parts: ...
-)
+reply = await dealer.request().message(payload).timeout(5.0).submit()
 
 received.reply().message(b"ok").submit()
 ```
@@ -296,21 +299,20 @@ received.reply().message(b"ok").submit()
 | --- | --- | --- |
 | `_FluentMessageOp`(공유 기반) | `message(payload)` | part 하나를 추가, chain을 시작/계속 |
 | | `messages(*payloads)` | 한 호출로 여러 part 추가 — **여기선 공유 기반 Protocol에 직접 선언돼 있다**, multi-part 편의가 별도 extension method인 다른 언어와 다름 |
-| | `flags(flags)` | flag 설정 |
-| `SendOp extends _FluentMessageOp` | `submit()` | terminal |
-| `RequestOp extends _FluentMessageOp` | `timeout(timeout)` / `submit(callback)` | reply-wait timeout을 더함; **callback 전용, 이 Protocol엔 awaitable/Future 반환 overload가 문서화돼 있지 않다**, dotnet/java/node/cpp의 async 경로가 아니라 rust의 callback 전용 request submit과 일치 |
-| `RequestCallbackOp` | `timeout` / `submit(callback)` | `.flags(...)`를 호출한 후에만 도달하는 좁혀진 타입이 아니라 **별도 Protocol**로서 `RequestOp`의 형태를 그대로 반영 — `RequestOp`와 `RequestCallbackOp` 둘 다 `submit(callback)`을 직접 노출한다 |
+| `SendOp extends _FluentMessageOp` | `submit()` / `submit_sync()` | awaitable 또는 blocking terminal |
+| `RequestOp extends _FluentMessageOp` | `timeout(timeout)` / `submit()` / `submit_sync()` | reply-wait timeout을 더하며 caller-owned reply message 반환 |
+| `PublishOp extends _FluentMessageOp` | `flags(flags)` / `submit()` | 동기 lossy/NODROP publication; send flag를 유지하는 유일한 operation family |
 | `ReplyOp extends _FluentMessageOp` | `submit()` | terminal |
 
-**Completion result.** `SendOp.submit()`/`ReplyOp.submit()`은
-operation 결과를 동기로 반환한다. `RequestOp`/
-`RequestCallbackOp.submit(callback)`은 나중에 background dispatch
-스레드에서 reply를 `callback`에 전달한다.
+**Completion result.** Send `submit()`은 awaitable이고 `submit_sync()`는
+Core terminal 결과까지 block한다. Request도 reply message를 반환하는
+awaitable/blocking terminal을 제공하고 reply·publish `submit()`은 동기다.
+Managed send/request/reply terminal은 `SendFlags.DONT_WAIT`를 받지 않는다.
 
 **선택 기준.** part마다 `.message(...)`를 chain하는 대신 한 호출로
-여러 part를 추가하려면 `messages(*payloads)`를 쓴다. async/awaitable
-request 경로가 없으므로, 호출부에서 `await` 어법이 필요하면
-callback 안에서 `asyncio`로 직접 연결한다(`Future`/event 등).
+여러 part를 추가하려면 `messages(*payloads)`를 쓴다. `asyncio` 코드에서는
+awaitable terminal을 우선하고 호출 thread가 block해도 될 때만 동기
+terminal을 쓴다.
 
 ---
 
@@ -319,16 +321,16 @@ callback 안에서 `asyncio`로 직접 연결한다(`Future`/event 등).
 | Enum | 사용처 | 값 |
 |---|---|---|
 | `SocketType` | 내부 socket 종류 식별 | `ANY`, `PAIR`, `PUB`, `SUB`, `DEALER`, `ROUTER`, `XPUB`, `XSUB`, `STREAM` |
-| `SendFlags` | 모든 send/request/reply builder의 `.flags(...)` 단계(위) | `NONE`, `DONT_WAIT` |
+| `SendFlags` | `PublishOp.flags(...)`에만 사용 | `NONE`, `DONT_WAIT` |
 | `RecvFlags` | 모든 `recv_into`/`subscribe_into`/`receive_subscription_event_into` | `NONE`, `DONT_WAIT` |
 | `SubmitResult` | `SubmitError`가 반영(Errors category) | `OK`, `BACKPRESSURED`, `NOT_CONNECTED`, `NOT_FOUND`, `TERMINATED`, `INVALID_HANDLE`, `INVALID_ARGUMENT`, `NOT_SUPPORTED`, `INVALID_STATE`, `THREAD_VIOLATION`, `OUT_OF_MEMORY`, `SEQ_EXHAUSTED`, `INTERNAL_ERROR`, `NOT_ADMITTED` |
 | `RequestResult` | `RequestError`가 반영(Errors category) | `OK`, `TIMED_OUT`(101), `NOT_FOUND`(102), `TERMINATED`(103), `PROTOCOL_ERROR`(104), `INTERNAL_ERROR`(105), `REJECTED`(106), `CONFLICT`(107), `BUSY`(108), `NOT_CONNECTED`(109), `INVALID_ARGUMENT`(110), `INVALID_STATE`(111), `NOT_SUPPORTED`(112), `BACKPRESSURED`(113) |
 | `RecvResult` | `RecvError`가 반영(Errors category) | `OK`, `NO_DATA`(201), `BUSY`(202), `TERMINATED`(203), `INVALID_HANDLE`(204), `NOT_SUPPORTED`(205), `INTERNAL_ERROR`(206), `BUFFER_TOO_SMALL`(207), `INVALID_STATE`(208) — 더 완전한 8개 값 집합(node와 일치, dotnet/cpp/java/rust의 6개 값 집합과 다름) |
-| `HandlerResult` | handler 등록 API | `OK`, `INVALID_ARGUMENT`(301), `BUSY`(302), `NOT_SUPPORTED`(303), `DEADLOCK`(304), `INVALID_HANDLE`(305), `INTERNAL_ERROR`(306) |
+| `HandlerResult` | 유지되는 result family; 현행 public completion/event 경로는 terminal 또는 pull 사용 | `OK`, `INVALID_ARGUMENT`(301), `BUSY`(302), `NOT_SUPPORTED`(303), `DEADLOCK`(304), `INVALID_HANDLE`(305), `INTERNAL_ERROR`(306) |
 | `RidDuplicatePolicy` | `CommonSocketOptions.rid_duplicate_policy`, `RouterSocketOptions.handover` | `REJECT`, `HANDOVER` |
 | `SubmitRetryMode` | `CommonSocketOptions.submit_retry_mode` | `OFF`, `LOCAL_FAILURE` |
 
-**선택 기준.** 두 flags enum 어느 쪽이든 `DONT_WAIT`는 blocking 호출을
+**선택 기준.** publish 또는 receive의 `DONT_WAIT`는 blocking 호출을
 non-blocking으로 바꿔 block하는 대신 `False`/back-pressure를
 보고한다.
 

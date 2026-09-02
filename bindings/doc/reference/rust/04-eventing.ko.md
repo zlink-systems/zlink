@@ -19,7 +19,8 @@ socket의 connection lifecycle event를 관찰하고 현재 상태를 읽는다.
 
 ```rust
 let mut monitor = SocketMonitor::open(&socket)?;
-monitor.on_event(|event| println!("{:?} {}", event.event, event.remote_addr))?;
+let event = monitor.recv()?;
+println!("{:?} {}", event.event, event.remote_addr);
 let status = monitor.status()?;
 ```
 
@@ -28,50 +29,43 @@ let status = monitor.status()?;
 | Member | 의미 |
 | --- | --- |
 | `open(socket: &dyn Monitorable) -> Result<Self, ConfigError>` | **event-mask 인자를 받지 않으며, 자신의 doc comment에 따르면 항상 모든 event를 구독한다**("Open a socket monitor for all events") |
+| `open_with_options(socket, SocketMonitorOpenOptions) -> Result<Self, ConfigError>` | 명시적 event mask와 monitor byte HWM으로 연다 |
 | `recv(&self) -> Result<MonitorEvent, RecvError>` | 다음 event를 blocking으로 가져옴 |
 | `recv_with_flags(&self, flags: RecvFlags) -> Result<Option<MonitorEvent>, RecvError>` | non-blocking 변형, 대기 중인 게 없으면 `Ok(None)` |
-| `status()` / `snapshot()` | 시점 스냅샷 `MonitorStatus`를 반환; 동등 — `snapshot`은 `status`의 alias |
-| `on_event<F>(&mut self, handler: F) -> Result<(), HandlerError> where F: Fn(&MonitorEvent) + Send + 'static` | 수동적 lifecycle-event 콜백을 등록 |
-| `ignore_handler() -> fn(&MonitorEvent)` | caller가 등록할 수 있는 static no-op handler |
+| `status()` | 시점 스냅샷 `MonitorStatus`를 반환 |
 | `close(&mut self) -> Result<(), CloseError>` | monitor를 닫음 |
 
 **Completion result.** 모든 member는 동기다. `Monitorable`은 모든 내장
 socket type이 구현하는 sealed marker trait다 — crate 사용자는 custom
 타입에 대해 이걸 구현할 수 없다.
 
-**선택 기준.** 한 번 등록하는 수동적 lifecycle observer엔 `on_event`를
-쓴다. pull 기반 drain loop엔 대신 `recv`/`recv_with_flags`를 쓴다.
-시점 스냅샷엔 `status()`를 쓴다.
+**선택 기준.** caller-driven pull loop에는 `recv`/`recv_with_flags`를 쓰고
+시점 스냅샷에는 `status()`를 쓴다. Monitor 전달에는 등록형 callback이 없다.
 
 ---
 
-## `SocketMonitorEventMask`(선언은 됐지만 필터로는 도달 불가)
+## `SocketMonitorEventMask`(monitor filter option)
 
-monitor를 event의 부분집합에 구독시키려는 typed bitmask다 — 하지만
-**`SocketMonitor::open`이 그런 인자를 받지 않아서**, 이 타입은 이
-binding의 public contract를 통해 실제로 구독을 필터링할 방법이 없다.
-밑에 깔린 구현엔 `open()`이 내부적으로 호출하는 `pub(crate)`
-`socket_monitor_open_with_events(socket, events)`가 있고, 항상
-`SocketMonitorEventMask::ALL`을 넘긴다 — 그 함수는 export되지 않는다.
+monitor를 event의 부분집합에 구독시키는 typed bitmask다.
+`SocketMonitor::open()`은 전체 event를 선택하고,
+`open_with_options(socket, SocketMonitorOpenOptions { events,
+monitor_hwm_bytes })`는 명시한 mask와 byte HWM을 적용한다.
 
-**Options.** 감싸인 `u32` 필드가 private이라 사용자가 임의 mask를 직접
-만들 수 없고, `BitOr`/`BitOrAssign`으로 명명된 두 값을 결합만 할 수
-있다.
+**Options.** 감싸인 `u32` 필드가 private이라 사용자는 명명된 mask를
+`BitOr`/`BitOrAssign`으로 결합한다.
 
 | Member | 의미 |
 | --- | --- |
-| `ALL` | `0x7FFF` |
+| `ALL` | `0x7FFFF` |
 | `CONNECTION_READY` | `0x1000` |
+| `SEND_FLOW_PAUSED` / `SEND_FLOW_RESUMED` / `FLOW_STATE_STALE` | paired DEALER/ROUTER flow-state transition |
 | `bits()` | raw 값을 읽음 |
 | `MONITOR_EVENT_ALL` / `MONITOR_EVENT_CONNECTION_READY` | 같은 두 상수의 최상위 편의 alias |
 
 **Completion result.** 해당 없음 — 순수 값 타입.
 
-**선택 기준.** 오늘 시점 application 코드에서는 해당 사항 없음 —
-어떤 `SocketMonitorEventMask` 값을 만들든 상관없이 `SocketMonitor::open`은
-항상 모든 event를 구독한다. `open`이 events 인자를 가져야 하는지, 아니면
-이 타입을 제거해야 하는지는 스펙 차원의 질문이며 이 레퍼런스의 범위
-밖이다.
+**선택 기준.** 전체 event에는 `open()`을 쓰고 subscription 또는 monitor
+queue byte HWM을 명시해야 할 때는 `open_with_options()`를 쓴다.
 
 ---
 
@@ -166,10 +160,11 @@ trait다 — crate 사용자는 custom 타입에 대해 이걸 구현할 수 없
 
 **Completion result.** 등록/제거 member는 `Result<(), ConfigError>`를
 반환한다. `wait`는 `Result<usize, RecvError>`(준비된 개수)를 반환하며,
-`events.len()`까지 결과를 그 자리에 쓴다. `POLLCOMPLETION`을
-추가·제거하도록 등록을 바꾸는 건 자신의 doc comment에 따르면 특별히
-`modify_socket`이 아니라 `remove_socket` + `add_socket`을 다시 해야
-한다 — completion 처리가 Core에서 별도 소유권을 갖기 때문이다.
+`events.len()`까지 결과를 그 자리에 쓴다. `modify_socket`은
+`POLLCOMPLETION`을 원자적으로 추가·제거하며 native registration 변경과
+함께 completion-drain owner를 이전한다. Public poller가 그 bit를 소유하는
+동안 owner는 `wait()`를 계속 호출해 completion을 drain·settle해야 한다.
+동시에 blocking terminal이 필요하면 다른 execution context에서 수행한다.
 
 **선택 기준.** 서비스 수명 전체에서 poller 하나를 쓴다. `wait` 호출마다
 할당하는 대신 `Vec<PollEvent>` buffer 하나를 재사용한다.
@@ -214,8 +209,8 @@ interval마다 fire하며 poll하거나 await할 수 있는 timer로, `Poller`�
 
 ```rust
 let mut timer = Timer::new()?;
-timer.on_fire(|_timer, count| println!("fired {count} times"))?;
 timer.start(1_000_000_000, 0)?; // 나노초 단위 interval
+let count = timer.recv()?;
 ```
 
 **Options.**
@@ -226,13 +221,12 @@ timer.start(1_000_000_000, 0)?; // 나노초 단위 interval
 | `start(&self, interval_ns: u64, repeat_count: u64) -> Result<(), ConfigError>` | `interval_ns`마다 fire를 시작; **interval이 나노초 단위다**, `Duration`/밀리초 기반 `start`를 쓰는 다른 모든 언어와 다르다; `repeat_count == 0`은 무제한 |
 | `stop(&self) -> Result<(), ConfigError>` | fire를 멈춤; `start`로 재시작 가능 |
 | `recv(&self) -> Result<Option<u64>, RecvError>` | 누적 fire count, 대기 중인 게 없으면 `Ok(None)` |
-| `on_fire<F>(&mut self, handler: F) -> Result<(), HandlerError> where F: Fn(&Timer, u64) + Send + 'static` | 수동적 interval 콜백을 등록 |
 
 **Completion result.** 모든 member는 동기다.
 
-**선택 기준.** 수동적 interval 콜백엔 `on_fire`를, 대신 만료를
-poll하려면 `recv`를, socket과 함께 하나의 wait에서 multiplex하려면
-`Poller::add_timer`로 등록한다.
+**선택 기준.** 만료를 pull하려면 `recv`를, socket과 함께 하나의 wait에서
+multiplex하려면 `Poller::add_timer`로 등록한다. Timer 전달에는 등록형
+callback이 없다.
 
 ---
 

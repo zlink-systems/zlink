@@ -65,8 +65,8 @@ payload를 만들 땐 크기 지정 생성자나 복사하는 `from(...)` factor
 
 ```cpp
 zlink::received_t received;
-if (dealer.recv (received) == 0) { /* ... */ }
-if (received.request_seq ()) {
+if (router.recv (received) == 0) { /* ... */ }
+if (received.reply_token ()) {
     received.reply ().message (reply_msg).submit ();
 }
 ```
@@ -76,7 +76,7 @@ if (received.request_seq ()) {
 | Member | 반환 | 의미 |
 | --- | --- | --- |
 | `routing_id()` | `const std::optional<routing_id_t>&` | source의 routing id, receive 경로가 제공할 때만 존재 |
-| `request_seq()` | `const std::optional<uint64_t>&` | 이 envelope이 reply 가능할 때만 존재 |
+| `reply_token()` | `const std::optional<reply_token_t>&` | ROUTER request에 있는 opaque reply capability |
 | `parts()` | `const std::vector<message_t>&`(mutable overload도) | 이 envelope이 담은 모든 message part |
 | `is_single_part()` | `bool` | `parts()`가 정확히 하나인지 |
 | `first_part()` | `message_t` | 첫 part, 소유권 이전 없음 |
@@ -86,11 +86,11 @@ if (received.request_seq ()) {
 | `close()` | — | 이 envelope이 소유한 message part를 해제 |
 
 **완료 결과.** 모두 동기다. `send()`/`reply()`는 저장된 routing id와 request
-sequence로부터 submit 시점에 지연 생성되는 send/reply context를 재구성한다 —
+token으로부터 submit 시점에 지연 생성되는 send/reply context를 재구성한다 —
 server hot path에서 receive마다 `std::function` closure와 heap 할당을 피한다.
 
 **선택 기준.** message마다 새로 생성하는 대신 receive loop 전체에서 `received_t`
-하나를 재사용한다. `reply()`를 호출하기 전에 `request_seq()`로 envelope이 실제로
+하나를 재사용한다. `reply()`를 호출하기 전에 `reply_token()`으로 envelope이 실제로
 reply 가능한지 확인한다.
 
 ---
@@ -173,22 +173,23 @@ std::move (received.reply ()).message (reply_msg).submit ();
 | 단계 | Member | 의미 |
 | --- | --- | --- |
 | `send_operation_t` | `.message(message_t&)`/`.message(message_t&&)` | `&&`-qualified — 호출마다 builder가 소비됨, `std::move(...)`로 chain |
-| `send_submit_operation_t` | `.message(...)` / `.flags(int)` / `.submit()` | part 추가, flag 설정, terminal |
+| `send_submit_operation_t` | `.message(...)` / `.submit()` / `.async()` | part 추가 뒤 blocking 또는 awaitable terminal 선택 |
 | `request_operation_t`/`request_submit_operation_t` | `send`와 동일 + `.timeout(std::chrono::milliseconds)` | send chain을 그대로 반영하며 reply 대기 timeout을 더함 |
-| `request_submit_operation_t.flags(int)` | `request_callback_submit_operation_t`로 좁힘 | awaitable `.async()` 경로가 사라짐 — 이후 `.submit(request_callback_t)`만 도달 가능 |
-| `reply_operation_t`/`reply_submit_operation_t` | `send`와 같은 형태, `.flags(...)`는 `send_flags_t::none` 외 값이면 `submit_error_t{not_supported}` | core reply 함수가 send-flag 인자를 받지 않음 |
+| `request_submit_operation_t` terminal | `.submit()` / `.async()` | blocking reply 결과 또는 completion-backed awaitable reply 결과 |
+| `reply_operation_t`/`reply_submit_operation_t` | `.message(...)` / `.submit()` | 수신 RID와 token을 쓰는 flag-free synchronous reply |
 
 **완료 결과.** 모두 동기 호출이다; part는 성공적인 submit에서만 소비된다.
 
 | Terminal | 반환 | 의미 |
 | --- | --- | --- |
-| `send_submit_operation_t::submit()` | `bool` | `send_flags_t::dontwait` backpressure일 때만 `false`, 그 외 실패는 `submit_error_t` |
+| `send_submit_operation_t::submit()` | `void` | Core local admission까지 blocking, 실패하면 `submit_error_t` |
+| `send_submit_operation_t::async()` | `async_result_t<void>` | DONTWAIT submit을 socket completion queue에서 settle |
 | `reply_submit_operation_t::submit()` | `void` | 실패하면 `submit_error_t`를 던짐 |
-| `request_submit_operation_t::async()` | `async_result_t<std::vector<message_t>>` | `.get()`은 reply를 block 대기, `.wait_for(...)`/`.wait_until(...)`은 timeout과 함께 poll — 둘 다 OS 스레드를 그대로 block하는 대신 내부적으로 request progress를 pump |
-| `submit(request_callback_t)`(`request_submit_operation_t`/`request_callback_submit_operation_t`) | `bool` | dispatch 결과일 뿐, 실제 reply는 나중에 콜백으로 `(request_result_t, std::vector<message_t>)`가 전달됨 — 결과가 `request_result_t::ok`일 때만 벡터가 채워지며, 콜백이 각 메시지를 소유하고 반드시 `close()`해야 함 |
+| `request_submit_operation_t::submit()` | `std::vector<message_t>` | completion queue가 reply를 낼 때까지 blocking |
+| `request_submit_operation_t::async()` | `async_result_t<std::vector<message_t>>` | awaitable reply, caller가 모든 반환 message를 소유 |
 
-**선택 기준.** caller가 future를 기다릴 수 있을 땐 `.async()`를, 대신 callback
-기반 완료가 필요할 땐 `.flags(...).submit(callback)`을 쓴다. 목적지를 손으로
+**선택 기준.** coroutine에서는 `.async()`를, blocking 가능한 thread에서는 `.submit()`을
+쓴다. 목적지를 손으로
 재구성하는 대신 `received_t::reply()`/`send()`를 쓴다. `message()` overload가
 `&&`-qualified이므로 항상 rvalue에서 chain한다 — lvalue builder는
 `.message(...)`를 직접 호출할 수 없다.

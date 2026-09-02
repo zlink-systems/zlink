@@ -2,19 +2,19 @@
 # Monitoring raw sockets
 
 Socket monitors expose transport and protocol events without changing the data
-receive path. Open a monitor with `zlink_socket_monitor_open()` and choose one
-consumption mode.
+receive path. Open a monitor with `zlink_socket_monitor_open()` and consume it
+through the pull API.
 
 ## Receive mode
 
 Call `zlink_socket_monitor_recv()` directly or register the monitor with a
 poller. This mode fits an event loop that already owns scheduling.
 
-## Callback mode
+## Poller-driven pull
 
-Install `zlink_socket_monitor_handler()`. The callback runs on the Core control
-runtime, not on the monitored socket's I/O thread. Keep the callback short so
-later monitor and timer callbacks are not delayed.
+Register the monitor with a poller when one event loop owns scheduling. After
+readiness, call `zlink_socket_monitor_recv()` to drain the event; Core exposes
+no monitor callback registration path.
 
 ## Snapshot
 

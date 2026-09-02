@@ -31,9 +31,11 @@ receive 함수를 호출한다.
 - PAIR는 `zlink_recv_part()`를 사용한다.
 - SUB는 topic을 별도로 반환하는 `zlink_subscribe_part()`를 사용한다.
 - XPUB은 subscription 알림에 `zlink_xpub_recv_part()`를 사용한다.
-- DEALER는 request/reply traffic에 `zlink_dealer_recv_part()`를 사용한다.
-- ROUTER는 peer와 request metadata를 반환하는 `zlink_router_recv_part()`를 사용한다.
-- STREAM은 `zlink_recv_handler()` 또는 `zlink_stream_packet_handler()`를 사용할 수 있다.
+- DEALER는 일반 DATA에 `zlink_recv_part()`를 사용하고 request reply는
+  `zlink_completion_recv()`로 받는다.
+- ROUTER는 peer와 불투명 reply token을 반환하는 `zlink_router_recv_part()`를 사용한다.
+- STREAM은 첫 bind 또는 connect 전에 RAW(`zlink_recv_part()`)와
+  PACKET(`zlink_stream_recv_packet()`) 중 하나를 고른다.
 
 Monitor handle과 generic timer도 같은 poller에 등록할 수 있다.
 

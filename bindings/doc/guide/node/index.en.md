@@ -102,21 +102,35 @@ received.close();
 ```
 
 HWM-managed sends provide asynchronous `submit()` and synchronous
-`submit_sync(SendFlags)` overloads. On Node's event loop, use the flag-free,
-Promise-returning `submit()` by default. Use
-`submit_sync(zlink.SendFlags.DontWait)` only when immediate back-pressure is needed.
+`submit_sync()` terminals. On Node's event loop, use the Promise-returning
+`submit()` by default; it uses DONTWAIT and settles from the socket completion
+queue. `submit_sync()` blocks in Core until local admission.
 
 ```javascript
 await socket.send().message(Buffer.from('data')).submit(); // asynchronous
-socket.send().message(Buffer.from('data')).submit_sync(zlink.SendFlags.DontWait); // sync, non-blocking
+socket.send().message(Buffer.from('data')).submit_sync();  // synchronous Core admission
 ```
 
-Request also passes through HWM admission and provides three completion
-surfaces. `submit_sync(flags)` waits synchronously for admission and reply and
-returns the reply directly; `submit_sync(flags, callback)` returns once
-admission is decided and delivers the reply through the callback; `submit()`
-returns a Promise. `None`/`DontWait` select admission waiting for the synchronous
-terminals.
+Request provides `submit_sync()` to block until the reply and `submit()` to
+return a `Promise<Message[]>` settled from the socket completion queue. The
+reply is that terminal result, not DATA received separately.
+
+Core owns retry after accepting a pre-admission operation; do not add a caller
+retry queue or resubmit its payload. The shared native
+`ZLINK_OPT_PENDING_MAX_MSGS/BYTES` limits cover pending SEND and REQUEST, with
+no send-only pending names. Completion confirms local admission, not peer
+delivery or an application acknowledgement.
+
+Before submit, cancellation means omitting the call. Node exposes no public Core
+cancel after a successful submit; abandoning a Promise only stops caller
+observation, while the socket owner drains the late completion. Set
+`stream.options.recvMode` to `zlink.StreamRecvMode.Raw` or `.Packet` before
+bind/connect, then use `recv` or `recvPacket` respectively.
+
+If a public poller owns `zlink.PollEventFlag.PollCompletion` for a socket, keep
+another thread calling `wait()` while a blocking request or Promise is pending.
+`wait()` drains native completions and settles or cleans Node state; calling a
+blocking terminal between waits on the same thread can stall it.
 
 ### Received — the receive envelope
 
@@ -126,7 +140,7 @@ socket.recv(received);                  // synchronous, blocking
 try {
   const parts = received.parts;         // Message[]
   const rid = received.routingId;       // RoutingId or null
-  const seq = received.requestSeq;      // bigint or null
+  const token = received.replyToken;    // ReplyToken or null on ROUTER request
 } finally {
   received.close();
 }
@@ -168,7 +182,7 @@ The Node binding throws per-operation error classes.
 
 ```javascript
 try {
-  socket.send().message(Buffer.from('data')).submit_sync(zlink.SendFlags.DontWait);
+  await socket.send().message(Buffer.from('data')).submit();
 } catch (error) {
   if (error instanceof zlink.SubmitError) {
     if (error.result === zlink.SubmitResult.Backpressured) {
@@ -195,8 +209,8 @@ Each exposes the result code via a `.result` property.
 | `zlink_socket(ctx, type)` | `zlink.createPairSocket(ctx)`, etc. |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(buf).submit_sync(flags)` |
-| `zlink_send_async(...)` | `await socket.send().message(buf).submit()` |
+| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + NONE | `socket.send().message(buf).submit_sync()` |
+| DONTWAIT send + completion pull | `await socket.send().message(buf).submit()` |
 | `zlink_recv_part(...)` | `socket.recv(received)` |
 | `zlink_msg_data(msg)` | `part.data()` (Buffer) |
 | `zlink_routing_id_t` | `zlink.RoutingId` |
@@ -222,13 +236,11 @@ console.log(`zlink ${major}.${minor}.${patch}`);
 |------|------|
 | `Context` / sockets | used on the main event loop |
 | Blocking `recv()` | blocks the event loop, so keep it short or prefer non-blocking + poller |
-| Synchronous `submit_sync(SendFlags.None)` | stops the entire event loop while waiting for HWM admission, halting runtime progress — do not use it |
-| Synchronous `submit_sync(SendFlags.DontWait)` | returns immediately and does not block the event loop |
+| Synchronous `submit_sync()` | stops the event loop while waiting for HWM admission — do not use it on the loop |
 | Async `submit()` | Promise-based — doesn't block the event loop |
 
-Do not run a blocking send on Node's event loop. For an immediate attempt, use
-`submit_sync(zlink.SendFlags.DontWait)`; to wait for HWM admission, `await` the
-asynchronous `submit()` terminal.
+Do not run a blocking send on Node's event loop. `await` the asynchronous
+`submit()` terminal; use `submit_sync()` only on a suitable worker thread.
 
 ---
 
@@ -243,7 +255,7 @@ Verified samples live under `bindings/node/samples/`.
 | `request_reply_sample.ts` | Request/reply |
 | `pubsub_recv_sample.ts` | PUB/SUB publish/subscribe |
 | `stream_recv_sample.ts` | STREAM raw TCP |
-| `stream_packet_callback_sample.ts` | STREAM packet callback |
+| `stream_packet_sample.ts` | STREAM PACKET pull |
 | `monitor_recv_sample.ts` | Monitor event receive |
 
 > SPOT/Actor examples are covered by the framework samples, not the core

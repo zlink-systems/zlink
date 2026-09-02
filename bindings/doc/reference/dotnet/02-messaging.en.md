@@ -75,7 +75,7 @@ Reads envelope metadata and message parts, or starts a reply/send addressed to t
 source.
 
 ```csharp
-if (received.RequestSeq is { } seq)
+if (received.ReplyToken is { } token)
 {
     received.Reply().Message(Message.From("ok")).Submit();
 }
@@ -87,20 +87,20 @@ Message first = received.FirstPart();
 | Member | Returns | Meaning |
 | --- | --- | --- |
 | `RoutingId` | `RoutingId?` | present when the receive path provides one |
-| `RequestSeq` | `ulong?` | present when replyable |
+| `ReplyToken` | `ReplyToken?` | opaque capability present on a ROUTER request |
 | `MessageType` | `ReceivedMessageType` | `Raw`/`Request`/`Reply`/`ErrorReply` |
 | `Parts` | `IReadOnlyList<Message>` | every message part this envelope holds |
 | `IsSinglePart` | `bool` | whether `Parts` has exactly one element |
 | `FirstPart()` | `Message` | the first part, without transferring ownership |
 | `SinglePartOrThrow()` | `Message` | the single part, throws if `Parts` has more than one |
-| `Reply()` | builder | valid only when `RequestSeq` has a value — see the shared builder shape below |
+| `Reply()` | builder | valid only when `ReplyToken` has a value — see the shared builder shape below |
 | `Send()` | builder | addressed to the envelope's source route |
 
 **Completion result.** All synchronous. `Dispose()` releases message parts owned by this envelope
 unless another API already transferred their ownership. `Reply()`/`Send()` return a builder from
 the shared operation-builder shape below.
 
-**When to use.** Branch on `MessageType`/`RequestSeq` to decide whether an envelope is replyable.
+**When to use.** Branch on `MessageType`/`ReplyToken` to decide whether an envelope is replyable.
 Use `Reply()` to answer a request in place instead of looking up the source route separately.
 
 ---
@@ -187,9 +187,9 @@ received.Reply().Message(Message.From("ok")).Submit();
 | Stage | Member | Meaning |
 | --- | --- | --- |
 | `SendOperation` | `.Message(Message)` | starts the chain |
-| `SendSubmitOperation` | `.Message(...)` / `.Flags(SendFlags)` / `.Submit()` | add parts, set flags, terminal |
+| `SendSubmitOperation` | `.Message(...)` / `.Submit()` / `.Async(CancellationToken)` | add parts, then choose blocking or Task terminal |
 | `RequestOperation`/`RequestSubmitOperation` | same as `Send` + `.Timeout(TimeSpan)` | mirrors the send chain, adding a reply-wait timeout |
-| `RequestSubmitOperation.Flags(...)` | narrows to `RequestCallbackSubmitOperation` | drops the awaitable `.Async()` path — only `.Submit(RequestCallback)` remains |
+| `RequestSubmitOperation` terminals | `.Submit()` / `.Async(CancellationToken)` | blocking reply result or completion-backed Task reply result |
 | `ReplyOperation`/`ReplySubmitOperation` | mirrors `Send`, no flags stage | core reply function takes no send-flag argument |
 | `Messages(IReadOnlyList<Message>)` | `MessageOperations` extension | adds several parts in order at any stage of all four families; not an independent entry point |
 
@@ -199,13 +199,13 @@ consumes each native staging part actually passed to a synchronous submit.
 
 | Terminal | Returns | Meaning |
 | --- | --- | --- |
-| `SendSubmitOperation.Submit()` | `bool` | `false` only under `SendFlags.DontWait` back-pressure; every other failure throws `ZlinkException` |
+| `SendSubmitOperation.Submit()` | `void` | blocks for Core local admission; failures throw `ZlinkException` |
+| `SendSubmitOperation.Async(CancellationToken)` | `Task` | DONTWAIT submit settled from the socket completion queue |
 | `ReplySubmitOperation.Submit()` | `void` | throws `ZlinkException` on failure |
 | `RequestSubmitOperation.Async(CancellationToken)` | `Task<IReadOnlyList<Message>>` | the caller owns and must dispose the reply messages |
-| `Submit(RequestCallback)` (`RequestSubmitOperation`/`RequestCallbackSubmitOperation`) | `bool` | the dispatch result; the actual reply arrives later via the callback as `(RequestResult result, IReadOnlyList<Message> parts)` — `parts` is populated only when `result` is `RequestResult.Ok` |
+| `RequestSubmitOperation.Submit()` | `IReadOnlyList<Message>` | blocks until the completion queue yields the reply; caller disposes parts |
 
-**When to use.** `.Async()` in async code; `.Flags(...).Submit(callback)` when a callback-completion
-surface is needed instead (a synchronous dispatch thread that can't await). `Reply()`/`Send()` from
+**When to use.** `.Async()` in async code and `.Submit()` on a thread that may block. Use `Reply()`/`Send()` from
 a `Received` envelope rather than reconstructing the destination route by hand.
 
 ---

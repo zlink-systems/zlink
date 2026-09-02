@@ -22,8 +22,9 @@ binding의 contract에선 다른 언어의 `SocketMonitor`/`socket_monitor_t`와
 달리 `MonitorSocket`으로 명명됨).
 
 ```ts
-const monitor = socket.monitorOpen(SOCKET_MONITOR_EVENT_ALL);
-monitor.onEvent(event => logger.info(`${event.event} ${event.remoteAddr}`));
+const monitor = socket.monitorOpen([MonitorEventType.Connected]);
+const event = monitor.recv(RecvFlags.DontWait);
+if (event) logger.info(`${event.event} ${event.remoteAddr}`);
 const status = monitor.status();
 ```
 
@@ -32,26 +33,23 @@ const status = monitor.status();
 | Member | 의미 |
 | --- | --- |
 | `recv(flags?: number)` | 다음 event를 가져옴; `MonitorEvent \| null` 반환 — non-blocking flag 아래 대기 중인 게 없으면 `null` |
-| `onEvent(handler: (event: MonitorEvent) => void)` | 수동적 lifecycle-event 콜백을 등록 |
 | `status()` | 시점 스냅샷 `MonitorStatus`를 반환 |
 | `close()` | monitor를 닫음 |
 
 **Completion result.** 모든 member는 동기다.
 
-**선택 기준.** 한 번 등록하는 수동적 lifecycle observer엔 `onEvent`를
-쓰거나, 생성 시점에 handler를 `Socket.monitorOpen(events, handler)`
-(Sockets category)에 직접 넘긴다. pull 기반 drain loop엔 대신 `recv`를
-쓴다. 시점 스냅샷엔 `status()`를 쓴다.
+**선택 기준.** caller-driven pull loop에는 `recv`를 쓰고 시점 스냅샷에는
+`status()`를 쓴다. Monitor 전달에는 등록형 callback이 없다.
 
 ---
 
 ## `MonitorEvent`
 
 monitor가 보고하는 socket connection-lifecycle event 하나. private
-생성자를 가진 `class`다 — instance는 monitor `recv`/`onEvent`
+생성자를 가진 `class`다 — instance는 monitor `recv`
 operation으로만 생성되며 직접 생성할 수 없다.
 
-**Options.** 인자 없음 — 직접 생성하지 않고 monitor의 `recv`/`onEvent`로
+**Options.** 인자 없음 — 직접 생성하지 않고 monitor의 `recv`로
 얻는다.
 
 | Field | 타입 | 의미 |
@@ -124,6 +122,9 @@ const ready = poller.wait(events, 1000);
 **Completion result.** 등록/제거 member는 동기다. `wait`는
 `timeoutMs`까지 block하며, `events`를 그 자리에서 채우고 준비된 개수를
 `number`로 반환한다.
+Socket을 `PollEventFlag.PollCompletion`으로 등록했다면 owner가 `wait()`를
+계속 호출해 binding이 native completion을 drain·settle하게 해야 한다.
+두 역할이 모두 필요하면 별도 execution context에서 blocking terminal을 수행한다.
 
 **선택 기준.** 서비스 수명 전체에서 poller 하나를 쓴다. 감시하는 event만
 바뀔 땐 `remove` + `add` 대신 `modify`를 선호한다. `wait` 호출마다 새로

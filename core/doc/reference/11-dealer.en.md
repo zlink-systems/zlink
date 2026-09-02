@@ -44,147 +44,132 @@ retried against another candidate.
 
 ---
 
-## `zlink_dealer_send_transport_pair_part`
+## `zlink_send_part` (DEALER)
 
-Submits one raw part only through the exact target pipe from a prior selection — no reselection to
-a different connected peer.
+Submits one ordinary DATA part. Core selects one compatible positive-weight logical route when
+the FINAL record is submitted.
 
 ```c
-zlink_routed_submit_target_t target;
-zlink_select_routed_submit_target(dealer, NULL, &target);
-zlink_dealer_send_transport_pair_part(dealer, &target, &part, ZLINK_SEND_FLAGS_NONE,
-                                       ZLINK_PART_FINAL);
+zlink_completion_id_t id = 0;
+zlink_send_part(dealer, &part, ZLINK_SEND_FLAGS_DONTWAIT,
+                ZLINK_PART_FINAL, user_context, &id);
 ```
 
-**Parameters.** `target_` is a `zlink_routed_submit_target_t` obtained from
-`zlink_select_routed_submit_target` (ROUTER category, shared by DEALER: pass `NULL` for
-`router_rid_or_null_` to commit one weighted selection) on the same DEALER. Core validates once
-that the routing ID, transport pair ID, and generation still identify the same connected
-application pipe and submits only to that pipe.
+**Parameters.** A multipart uses this same function and flags from MORE through FINAL.
+`user_context_` may be non-NULL only for DONTWAIT FINAL. The optional completion ID is zero for
+MORE, blocking NONE, and immediate DONTWAIT admission.
 
-**Return and errno.** Returns `zlink_submit_result_t` — `ZLINK_SUBMIT_OK` on success.
-`ZLINK_SUBMIT_BACKPRESSURED` when the target pipe is at HWM; `ZLINK_SUBMIT_NOT_CONNECTED` after
-detach or for a stale generation. Neither case reselects another pipe. Once the first part
-succeeds, the exact-pipe fence remains through `ZLINK_PART_FINAL`; an intermediate or final part
-failure rolls back the entire staged record, so no partial record becomes visible to the peer.
+**Return and errno.** `NONE FINAL` waits for local admission within `SNDTIMEO`. DONTWAIT returns
+immediately; if Core retains the record before admission, it returns a nonzero ID and later one
+SEND completion. A failed part consumes the input and rolls back the whole staged record.
 
-**When to use.** Use this instead of `zlink_send_part` (PAIR category) when the application has
-already snapshotted one exact weighted-selection outcome (for example to keep a related sequence
-of sends on the same peer) and must not let a later call reselect a different connected peer.
+**When to use.** Use this for one-way DATA. Once Core retains a DONTWAIT record, Core owns retry
+for the configured endpoint selected at FINAL. Do not enqueue or resubmit the same payload in the
+application. Admission completion does not confirm peer delivery.
 
 ---
 
-## `zlink_dealer_recv_part`
+## `zlink_recv_part` (DEALER)
 
-Receives one part of a complete record from a DEALER socket, classified by type.
+Receives one part of an ordinary DATA record from a DEALER socket.
 
 ```c
-uint8_t message_type;
-uint64_t request_seq;
 zlink_msg_t part;
 zlink_msg_init(&part);
 zlink_part_flag_t has_more;
-zlink_dealer_recv_part(dealer, &message_type, &request_seq, &part, &has_more, ZLINK_RECV_FLAGS_NONE);
+zlink_recv_part(dealer, NULL, &part, &has_more, ZLINK_RECV_FLAGS_NONE);
 ```
 
-**Parameters.** Every output pointer is required: `message_type_out_` (a `uint8_t` holding a
-`zlink_dealer_message_type_t` value), `request_seq_out_`, `part_out_` (already-initialized),
-`has_more_out_`. `flags_` is `ZLINK_RECV_FLAGS_NONE` or `ZLINK_RECV_FLAGS_DONTWAIT`.
+**Parameters.** `source_rid_out_` is optional and is `NULL` for DEALER. `part_out_` must be an
+initialized message and `has_more_out_` receives MORE or FINAL. `flags_` is
+`ZLINK_RECV_FLAGS_NONE` or `ZLINK_RECV_FLAGS_DONTWAIT`.
 
 **Return and errno.** Returns `zlink_recv_result_t` — `ZLINK_RECV_OK` on success, with received
 part ownership transferring to the caller (Message category). `ZLINK_RECV_NO_DATA` with `EAGAIN`
 for a non-blocking call with nothing available.
 
-**When to use.** Classify the record via `message_type_out_`: `ZLINK_DEALER_MESSAGE_RAW` (`0`,
-`request_seq_out_ == 0`) is an ordinary raw multipart message with no request/reply envelope.
-`ZLINK_DEALER_MESSAGE_REQUEST` (`1`, nonzero sequence) is a request this DEALER received — the
-sequence is the reply token to pass to `zlink_dealer_reply_part`. Replies and terminal failures
-for work started via `zlink_dealer_request_part` are delivered only through that call's
-`zlink_reply_handler_fn` completion, not through this receive call. Every part of
-one multipart record returns the same type and sequence; when `has_more_out_ ==
-ZLINK_PART_MORE`, the next call continues the same record.
+**When to use.** DEALER receives only ordinary DATA here. Replies, timeouts, and terminal results
+for submitted requests appear only as REQUEST records from `zlink_completion_recv()`, never as
+DATA. When `has_more_out_ == ZLINK_PART_MORE`, the next call continues the same DATA record.
 
 ---
 
-## `zlink_dealer_request_part`
+## `zlink_request_part` (DEALER)
 
-Submits one asynchronous request payload, part at a time, expecting a reply via callback.
+Submits one request payload part at a time. Its reply or terminal result is pulled from the
+socket-local completion queue.
 
 ```c
-zlink_dealer_request_part(dealer, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-                           /*timeout_ms=*/3000, on_reply, userdata);
+zlink_completion_id_t id = 0;
+zlink_request_part(dealer, NULL, &part, ZLINK_SEND_FLAGS_DONTWAIT,
+                   ZLINK_PART_FINAL, 3000, user_context, &id);
 ```
 
-**Parameters.** For an intermediate part, pass `ZLINK_PART_MORE`, `timeout_ms_ == 0`,
-`handler_ == NULL`, `userdata_ == NULL`. The final part uses `ZLINK_PART_FINAL` and a non-`NULL`
-`handler_` (a `zlink_reply_handler_fn`); `timeout_ms_ == 0` on that final call uses the
-`ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS` default instead of no timeout. `flags_` is
-`ZLINK_SEND_FLAGS_NONE` or `ZLINK_SEND_FLAGS_DONTWAIT`.
+**Parameters.** DEALER passes `NULL` as the target because Core selects one ready ROUTER logical
+route. MORE requires timeout `0` and NULL context. FINAL accepts an explicit reply timeout;
+`0` selects `ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS`. A successful FINAL always returns a nonzero ID.
 
-**Return and errno.** Returns `zlink_submit_result_t` — `ZLINK_SUBMIT_OK` on the final part means
-exactly one completion will later reach `handler_`; a failed submit never invokes the handler.
-Ownership of the callback's `parts_` and every message transfers to the callback, which releases
-them exactly once. `zlink_request_result_t` (delivered to the callback, not returned here)
-identifies timeout and other terminal outcomes.
+**Return and errno.** A successful FINAL reserves correlation and exactly one REQUEST completion.
+Pre-admission failure returns ID `0` and creates no completion. On success,
+`zlink_completion_recv()` returns `request_result` and, for OK, the reply multipart. Close every
+record with `zlink_completion_close()`.
 
 **When to use.** Use this instead of `zlink_send_part` (PAIR category) when the message needs a
 tracked reply. As with any `*_part` send family, a sequence from `ZLINK_PART_MORE` through
 `ZLINK_PART_FINAL` must complete on the same handle without interleaving a different send-helper
 family; a failure at any point atomically discards every staged part in that record (nothing
 becomes visible to the peer), still consumes the failed call's `part_`, and creates no request
-sequence or handler invocation — retry the whole record from its first part using retained
+sequence or completion — retry the whole record from its first part using retained
 copies.
 
 ---
 
-## `zlink_dealer_request_transport_pair_part`
+## `zlink_completion_recv` (DEALER)
 
-Submits an asynchronous request only through the exact target pipe from a prior selection.
+Pulls one pending-send or request terminal record from the DEALER completion queue.
 
 ```c
-zlink_dealer_request_transport_pair_part(dealer, &target, &part, ZLINK_SEND_FLAGS_NONE,
-                                          ZLINK_PART_FINAL, /*timeout_ms=*/3000, on_reply,
-                                          userdata);
+zlink_completion_t completion = {0};
+completion.struct_size = sizeof(completion);
+zlink_recv_result_t rc = zlink_completion_recv(
+    dealer, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+if (rc == ZLINK_RECV_OK)
+    zlink_completion_close(&completion);
 ```
 
-**Parameters.** `target_` is obtained the same way as for `zlink_dealer_send_transport_pair_part`
-(this category); the remaining parameters follow `zlink_dealer_request_part`'s
-intermediate/final-part convention.
+**Parameters.** The output must have exact `struct_size` and otherwise be empty. `flags_` is NONE
+or DONTWAIT. Use `completion_id` or `user_context` to find the operation; resolver order is not
+submit order.
 
-**Return and errno.** Returns `zlink_submit_result_t`, with the same target validation, no
-reselection, multipart fence, and rollback rules as `zlink_dealer_send_transport_pair_part`. Core
-registers the pending correlation and timeout lifecycle before the request envelope can become
-visible on the wire; a failed final submit removes the pending entry and completion reservation
-without invoking `handler_`.
+**Return and errno.** DONTWAIT on an empty queue returns `ZLINK_RECV_NO_DATA` and `EAGAIN`.
+Successful REQUEST records own their reply array until `zlink_completion_close()`.
 
-**When to use.** Use this instead of `zlink_dealer_request_part` when the tracked request must go
-through the exact pipe already selected via `zlink_select_routed_submit_target` (ROUTER category),
-rather than letting Core commit a fresh weighted selection for this call.
+**When to use.** After `ZLINK_POLLCOMPLETION`, drain repeatedly through NO_DATA. This queue is
+separate from DATA receive even though a DEALER-ROUTER REPLY shares the physical Application FIFO
+with preceding DATA and can therefore be delayed behind it.
 
 ---
 
-## `zlink_dealer_reply_part`
+## DEALER responder boundary
 
-Sends a reply part for a request record this DEALER received.
+DEALER is a request originator, not a typed REQUEST responder. It exposes no DEALER reply-part
+function and `zlink_recv_part()` never returns a reply token.
 
 ```c
-zlink_dealer_reply_part(dealer, request_seq, &reply_part, ZLINK_PART_FINAL);
+/* Responders use a ROUTER socket and the token from zlink_router_recv_part(). */
+zlink_reply_part(router, source_rid, reply_token, &reply_part, ZLINK_PART_FINAL);
 ```
 
-**Parameters.** `request_seq_` must be the nonzero reply token `zlink_dealer_recv_part` returned
-for that request, on the same socket. `part_`/`part_flag_` follow the same multipart rules as
-other send families — a multipart reply reuses the same token for every part.
+**Parameters.** `reply_token` is an opaque socket-owned capability returned only by ROUTER
+request receive. It is not a wire sequence and must not be synthesized or interpreted.
 
-**Return and errno.** Returns `zlink_submit_result_t` — `ZLINK_SUBMIT_OK` on a successful final
-part completes the reply for that token, which then cannot be reused. On a reply-sequence
-failure, the token stays valid until either a successful `ZLINK_PART_FINAL` or request-lifecycle
-termination, so a retained complete reply can be resubmitted from its first part.
+**Return and errno.** `zlink_reply_part()` validates the source RID, token, and owning ROUTER.
+Only successful FINAL consumes the token; a failed attempt leaves it available for a complete
+retry while the request lifecycle still exists.
 
-**When to use.** Use this to answer a record classified as `ZLINK_DEALER_MESSAGE_REQUEST` by
-`zlink_dealer_recv_part`. `ZLINK_POLLIN` (Polling and pollers category) means a raw or
-request/reply record can be received; `ZLINK_POLLOUT`/`zlink_send_complete_handler` (Socket
-lifecycle category) mean retrying a backpressured submit is worth attempting, not that it will
-succeed.
+**When to use.** Pair DEALER request submission with a ROUTER responder. `ZLINK_POLLIN` on DEALER
+means DATA can be received; `ZLINK_POLLCOMPLETION` means a SEND or REQUEST completion can be
+drained. Neither readiness bit guarantees peer delivery or that a later submit will succeed.
 
 ---
 

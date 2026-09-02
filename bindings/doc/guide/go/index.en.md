@@ -144,21 +144,35 @@ snapshot := msg.Bytes()       // an independent copy
 text := msg.Text()            // UTF-8 string conversion
 ```
 
-The synchronous terminal for HWM-managed sends is
-`Flags(SendFlags).Submit(ctx)`. With no flag or `SendFlagsNone`, the current
-goroutine waits inside Core for HWM admission. With `SendFlagsDontWait`, a full
-HWM immediately returns a `*SubmitError` for a routed send and `(false, nil)` for
-a PAIR send. Go send has no separate asynchronous terminal.
+The terminal for HWM-managed sends is `Submit(ctx)`. It uses the completion-
+backed DONTWAIT path without blocking the goroutine in Core; the Context bounds
+the caller wait. Go send has no separate callback or synchronous terminal.
 
 ```go
-err := dealer.Send().Message(msg).Flags(zlink.SendFlagsDontWait).Submit(ctx)
+err := dealer.Send().Message(msg).Submit(ctx)
 ```
 
-Request passes through the same HWM admission, but Go does not split it into a
-separate callback or three methods. `Flags(SendFlags).Submit(ctx)` immediately
-returns the admission result and delivers the reply on the accompanying
-completion channel. `SendFlagsNone` waits for admission and
-`SendFlagsDontWait` reports immediate back-pressure.
+Request also has one idiomatic terminal:
+`request.Message(...).Timeout(...).Submit(ctx)` returns the reply parts and
+error directly after its socket completion is drained. The reply is not DATA
+received separately. Send and request do not expose callback terminals.
+
+Core owns retry after accepting a pre-admission operation; do not add a caller
+retry queue or resubmit its payload. The native
+`ZLINK_OPT_PENDING_MAX_MSGS/BYTES` caps are shared by pending SEND and REQUEST,
+with no send-only pending names. Completion means local admission, not peer
+delivery or an application acknowledgement.
+
+Canceling the `context.Context` can stop a pre-submit call or the Go waiter. If
+Core already accepted the payload, admission or request processing may continue
+and the socket owner still drains the late completion. STREAM must call
+`SetReceiveMode(StreamReceiveRaw)` or `SetReceiveMode(StreamReceivePacket)`
+before bind/connect, then use `Recv` or `RecvPacket` respectively.
+
+If a public poller owns `PollCompletion` for a socket, keep another goroutine
+calling `Wait()` while `Submit(ctx)` is outstanding. `Wait()` drains native
+completions and settles or cleans Go state; a blocking submit between waits on
+the same goroutine can stall completion.
 
 ### 3. Received — the receive envelope
 
@@ -216,7 +230,7 @@ The Go binding's ownership rules are simple.
 ```go
 // pattern: safe even on error
 msg, _ := zlink.NewMessage([]byte("data"))
-if _, err := socket.Send().Message(msg).Submit(nil); err != nil {
+if err := socket.Send().Message(msg).Submit(context.Background()); err != nil {
     defer msg.Close() // only closed on send failure
 }
 // on send success msg is already consumed, no Close() needed
@@ -230,7 +244,7 @@ The Go binding returns the standard `error` interface. If you need the result
 code, check it with a type assertion.
 
 ```go
-_, err := socket.Send().Message(msg).Flags(zlink.SendFlagsDontWait).Submit(nil)
+err := socket.Send().Message(msg).Submit(context.Background())
 if err != nil {
     var submitErr *zlink.SubmitError
     if errors.As(err, &submitErr) {
@@ -332,7 +346,7 @@ Verified sample code lives under `bindings/go/samples/`.
 | `request_reply_async_sample` | Async request/reply |
 | `pubsub_recv_sample` | XPUB/SUB publish/subscribe |
 | `stream_recv_sample` | STREAM raw TCP |
-| `stream_packet_callback_sample` | STREAM packet callback |
+| `stream_packet_callback_sample` | STREAM PACKET pull (legacy directory name) |
 | `monitor_recv_sample` | Monitor event receive |
 
 > SPOT/Actor examples are covered by the framework samples, not the core

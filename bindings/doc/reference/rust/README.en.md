@@ -31,9 +31,9 @@ Rust-specific notes carried into every category below:
 - **`ZlinkError` is a Rust enum wrapping each typed error variant** (`Submit(SubmitError)`,
   `Request(RequestError)`, ...), not an inheritance base class — the idiomatic Rust shape for "one
   of several typed errors."
-- **No async/Future-returning request submit exists in this binding's public contract** — unlike
-  every other language covered so far (dotnet's `Task`, java's `CompletionStage`, node's `Promise`,
-  cpp's `async_result_t`), `RequestOp::submit` is callback-only.
+- **Request submission has both async and blocking terminals** — `RequestOp::submit()` returns a
+  runtime-independent `Future`, while `submit_sync()` blocks and returns the caller-owned reply
+  messages. Neither terminal installs a callback.
 
 ## Locale convention
 

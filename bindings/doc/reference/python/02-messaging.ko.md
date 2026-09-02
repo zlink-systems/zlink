@@ -8,7 +8,7 @@
 `ReceivedMessage`, `TopicMessage`, `SubscriptionEvent`)을 다룬다.
 **send/request/reply operation-builder family는 여기 선언돼 있지 않다**
 — 지금까지 다룬 다른 모든 언어와 달리, 그 Protocol(`SendOp`,
-`RequestOp`, `RequestCallbackOp`, `ReplyOp`)은
+`RequestOp`, `ReplyOp`, `PublishOp`)은
 `contracts/sockets/operations.py`에 있으며 대신 Sockets category에
 문서화된다. 정확한 signature는
 [`contracts/messaging/`](../../../../bindings/python/src/zlink/contracts/messaging/)가
@@ -93,13 +93,12 @@ received = create_received()
 if dealer.recv_into(received):
     if received.is_single_part():
         pass
-    received.reply().message(b"ok").submit()
+    if received.reply_token is not None:
+        received.reply().message(b"ok").submit()
 ```
 
-**Options.** **`Received`도 `ReceivedMultipart`도 이 contract에서
-`routing_id`/`request_seq`를 문서화된 public member로 노출하지
-않는다** — reply/send context는 `reply()`/`send()` 메서드 자체를
-통해서만 도달한다.
+**Options.** `Received`는 `routing_id`와 opaque `reply_token`을
+노출하고, `ReceivedMultipart`에는 공유 part container 동작만 있다.
 
 | 타입 | Member | 의미 |
 | --- | --- | --- |
@@ -111,16 +110,16 @@ if dealer.recv_into(received):
 | | `single_part_or_throw()` | 단일 part; 정확히 하나가 아니면 `RecvError` |
 | | `close()` | 소유한 모든 part를 닫음 |
 | `Received extends ReceivedMultipart` | `send()` | 공유 `SendOp` builder(Sockets category)를 시작, 이 envelope이 포착한 source route로 향함; envelope에 send context가 없으면 `SubmitError` |
+| | `routing_id` / `reply_token` | source route와 선택적 socket-owned one-shot `ReplyToken` capability |
 | | `reply()` | 공유 `ReplyOp` builder를 시작; envelope이 reply 가능하지 않으면 `SubmitError` |
 
 **Completion result.** 모든 member는 동기다. 둘 다 sync·async
 context-manager 프로토콜을 지원한다.
 
 **선택 기준.** message마다 새로 생성하는 대신 receive loop 전체에서
-(`create_received()`로) `Received` 하나를 재사용한다. envelope이
-reply 가능한지·send context가 있는지 미리 테스트할 별도의
-boolean/property가 없으므로, `reply()`/`send()`가 예외를 던지는지로
-판단한다.
+(`create_received()`로) `Received` 하나를 재사용한다. Reply 전에
+`reply_token is not None`을 확인하고 opaque token을 복사·직렬화·합성하지
+않는다.
 
 ---
 

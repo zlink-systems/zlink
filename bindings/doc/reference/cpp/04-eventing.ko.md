@@ -21,7 +21,7 @@ socket의 connection lifecycle event를 관찰하고 현재 상태를 읽는다.
 ```cpp
 zlink::socket_monitor_t monitor =
     zlink::socket_monitor_t::open (socket, zlink::monitor_event::connected | zlink::monitor_event::disconnected);
-monitor.on_event ([] (const zlink::monitor_event_t &e) { /* ... */ });
+auto event = monitor.recv (zlink::recv_flags_t::none);
 zlink::monitor_status_t status = monitor.status ();
 ```
 
@@ -32,17 +32,17 @@ zlink::monitor_status_t status = monitor.status ();
 | `socket_monitor_t()` | — | 기본, 대입 전까지 invalid |
 | `open(const socket_t&, monitor_event)` | `monitor_event::all` | static — 실제 생성 경로, 내부적으로 `socket_t::monitor_open(...)`이 호출 |
 | `valid()` | — | 이 monitor가 아직 사용 가능한지 |
-| `on_event(std::function<void(const monitor_event_t&)>)` | — | 모든 lifecycle event에 대한 수동적 observer를 등록 |
+| `recv(recv_flags_t)` | `recv_flags_t::none` | 유일한 event delivery 경로, 다음 queued lifecycle event pull |
 | `recv(recv_flags_t)` | `recv_flags_t::none` | 다음 event를 가져옴; `std::optional<monitor_event_t>` 반환 |
 | `status() const` | — | monitor 대상 socket 상태의 시점 스냅샷, `monitor_status_t` 반환 |
 | `close()` | — | monitor의 native resource를 해제 |
-| `ignore_event(const monitor_event_t&) noexcept` | — | static no-op, 의도적으로 아무것도 안 하는 handler가 필요한 caller용 |
+| move 생성/대입 | — | caller-owned monitor resource 이전 |
 
 **완료 결과.** 모든 member는 동기다. move-only다 — 소멸자는 암묵적으로
 close하지 않는다.
 
-**선택 기준.** 한 번 등록하는 수동적 lifecycle observer엔 `on_event`를, pull
-기반 drain loop엔 `recv`를 쓴다. 시점 스냅샷엔 `status()`를 쓴다.
+**선택 기준.** pull 기반 lifecycle-event drain loop엔 `recv`를 쓰고 시점 스냅샷엔
+`status()`를 쓴다.
 
 ---
 
@@ -174,8 +174,8 @@ standalone timer.
 
 ```cpp
 zlink::timer_t timer;
-timer.on_fire ([] (uint64_t count) { /* ... */ });
 timer.start (std::chrono::seconds (1), /*repeat_count=*/0);
+auto count = timer.recv ();
 ```
 
 **옵션.**
@@ -185,14 +185,14 @@ timer.start (std::chrono::seconds (1), /*repeat_count=*/0);
 | `start(duration, uint64_t repeat_count_)` | `repeat_count_ = 0` | `duration`마다 fire를 시작(임의 `std::chrono::duration`을 받는 template, 내부적으로 나노초로 변환; 음수는 `config_error_t{invalid_argument}`); `repeat_count_`가 횟수 상한 |
 | `stop()` | — | fire를 멈춤; `start`로 재시작 가능 |
 | `recv()` | — | 누적 fire count를 가져옴; `std::optional<uint64_t>` 반환, 대기 중인 게 없으면 `std::nullopt` |
-| `on_fire(std::function<void(uint64_t)>)` | — | fire할 때마다 호출되는 수동적 observer를 등록; dotnet의 `Action<IZlinkTimer, ulong>`과 달리, 여기 콜백은 timer 자신이 아니라 fire count만 받음 |
+| `valid()` | — | 이 timer가 아직 사용 가능한지 |
 | `close()` | — | timer의 native resource를 해제 |
 
 **완료 결과.** 모든 member는 동기다. move-only다 — 소멸자는 암묵적으로
 close하지 않는다.
 
-**선택 기준.** 수동적 interval 콜백엔 `on_fire`를, 만료를 poll하려면
-`recv`를, socket과 함께 multiplex하려면 `poller_t::add(timer_t&,
+**선택 기준.** 만료를 pull하려면 `recv`를, socket과 함께 multiplex하려면
+`poller_t::add(timer_t&,
 std::uintptr_t)`로 등록한다.
 
 ---

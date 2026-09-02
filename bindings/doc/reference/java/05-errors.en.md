@@ -5,7 +5,7 @@
 # 05. Errors
 
 This category is this reference's counterpart to core's result-enum-family table — it documents
-the shared exception hierarchy and the seven typed exceptions every submit/request/recv/handler/
+the shared exception hierarchy and the seven typed exceptions every submit/request/recv/event/
 close/bind/connect/config-failing API throws (Sockets/Messaging/Eventing/Core categories). The
 exact signatures are owned by
 [`contracts/errors/`](../../../../bindings/java/src/main/java/systems/zlink/contracts/errors/).
@@ -24,9 +24,9 @@ exception below (`public final`).
 | Exception | Result enum | Thrown by | Values |
 |---|---|---|---|
 | `ZlinkSubmitException` | `SubmitResult` (Sockets category) | send/publish/request-submit APIs | `BACKPRESSURED`(1, ordinary control flow), `NOT_CONNECTED`(2), `NOT_FOUND`(3), `TERMINATED`(4), `INVALID_HANDLE`(5), `INVALID_ARGUMENT`(6), `NOT_SUPPORTED`(7), `INVALID_STATE`(8), `THREAD_VIOLATION`(9), `OUT_OF_MEMORY`(10), `SEQ_EXHAUSTED`(11), `INTERNAL_ERROR`(12), `NOT_ADMITTED`(13, ordinary control flow) |
-| `ZlinkRequestException` | `RequestResult` (Sockets category) | request/reply completion | `TIMED_OUT`(101), `NOT_FOUND`(102), `TERMINATED`(103), `PROTOCOL_ERROR`(104), `INTERNAL_ERROR`(105), `REJECTED`(106), `CONFLICT`(107), `BUSY`(108), `NOT_CONNECTED`(109), `INVALID_ARGUMENT`(110), `INVALID_STATE`(111), `NOT_SUPPORTED`(112), `BACKPRESSURED`(113) |
+| `ZlinkRequestException` | `RequestResult` (Sockets category) | `submit_sync()` or `submit()` terminal request failure | `TIMED_OUT`(101), `NOT_FOUND`(102), `TERMINATED`(103), `PROTOCOL_ERROR`(104), `INTERNAL_ERROR`(105), `REJECTED`(106), `CONFLICT`(107), `BUSY`(108), `NOT_CONNECTED`(109), `INVALID_ARGUMENT`(110), `INVALID_STATE`(111), `NOT_SUPPORTED`(112), `BACKPRESSURED`(113) |
 | `ZlinkRecvException` | `RecvResult` (Sockets category) | recv-family APIs | `NO_DATA`(201), `BUSY`(202), `TERMINATED`(203), `INVALID_HANDLE`(204), `NOT_SUPPORTED`(205), `INTERNAL_ERROR`(206) |
-| `ZlinkHandlerException` | `HandlerResult` | handler registration APIs | `INVALID_ARGUMENT`(301), `BUSY`(302), `NOT_SUPPORTED`(303), `DEADLOCK`(304), `INVALID_HANDLE`(305), `INTERNAL_ERROR`(306) |
+| `ZlinkHandlerException` | `HandlerResult` | retained result family; current public completion/event delivery has no registered handler | `INVALID_ARGUMENT`(301), `BUSY`(302), `NOT_SUPPORTED`(303), `DEADLOCK`(304), `INVALID_HANDLE`(305), `INTERNAL_ERROR`(306) |
 | `ZlinkCloseException` | `CloseResult` | `close()` paths, `Context.shutdown()` | `BUSY`(401), `SHUTDOWN`(402), `INVALID_HANDLE`(403), `INTERNAL_ERROR`(404) |
 | `ZlinkBindException` | `BindResult` | `Socket.bind(...)` | `INVALID_ARGUMENT`(501), `ADDR_IN_USE`(502), `NOT_SUPPORTED`(503), `INVALID_HANDLE`(504), `INTERNAL_ERROR`(505) |
 | `ZlinkConnectException` | `ConnectResult` | `connect`/`unbind`/`disconnect`/`disconnectRid` | `INVALID_ARGUMENT`(601), `NOT_SUPPORTED`(602), `INVALID_HANDLE`(603), `INTERNAL_ERROR`(604), `NOT_FOUND`(605), `CONFLICT`(606), `BUSY`(607) |
@@ -42,8 +42,8 @@ reference's scope.
 `NOT_FOUND`/`NOT_ADMITTED` are ordinary execution flow, not exceptional failures — a caller that
 treats every non-`OK` submit result the same way loses the distinction between "retry is
 reasonable" and "this submit will never succeed as constructed." `INVALID_STATE` covers a stale
-handle or a closed receive/connection state. Replacing or removing a handler from inside that same
-handler's own callback reports `DEADLOCK` rather than actually deadlocking.
+handle or a closed receive/connection state. `HandlerResult` remains part of the result model, but
+current public send/request terminals and pull-event surfaces do not produce it.
 
 ---
 

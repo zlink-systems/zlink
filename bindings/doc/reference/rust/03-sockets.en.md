@@ -89,7 +89,7 @@ An exclusive one-to-one peering socket with no routing.
 
 ```rust
 let pair = ctx.pair_socket()?;
-pair.send().message(Message::try_from("ping")?)?.submit()?;
+pair.send().message(Message::try_from("ping")?).submit_sync()?;
 let mut received = Received::empty();
 if pair.recv(&mut received, RecvFlags::NONE)? { /* ... */ }
 ```
@@ -98,7 +98,7 @@ if pair.recv(&mut received, RecvFlags::NONE)? { /* ... */ }
 
 | Member | Meaning |
 | --- | --- |
-| `send(&self) -> SendOp<Empty>` | starts the shared `SendOp` builder; its `submit()` returns a `Future` completed by the Core send-completion callback |
+| `send(&self) -> SendOp<Empty>` | starts the shared `SendOp` builder; choose its Future `submit()` or blocking `submit_sync()` terminal |
 | `recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError>` | populates `out` with the next message |
 | `common_options() -> CommonSocketOptions<'_>` | the shared options facade |
 
@@ -119,7 +119,7 @@ let dealer = ctx.dealer_socket()?;
 dealer.set_routing_id(&"worker-3".into())?;
 dealer.request()
     .message(Message::try_from("payload")?)
-    .submit(|result| { /* result: Result<Vec<Message>, RequestError> */ })?;
+    .submit_sync()?;
 ```
 
 **Options.** Same shared surface as `PairSocket`, plus:
@@ -144,7 +144,7 @@ Routes messages to peers addressed by routing id, and can reply to a specific pe
 
 ```rust
 let router = ctx.router_socket()?;
-router.send(&peer_rid).message(Message::try_from("hello")?)?.submit()?;
+router.send(&peer_rid).message(Message::try_from("hello")?).submit_sync()?;
 ```
 
 **Options.** Same shared lifecycle/TLS surface as `PairSocket` (it declares its own copy
@@ -152,21 +152,20 @@ independently, same as every other socket type here), plus:
 
 | Member | Meaning |
 | --- | --- |
-| `send(&self, target: &RoutingId) -> SendOp<Empty>` | starts the shared `SendOp`, addressed to that peer; its `submit()` returns a `Future` completed by the Core send-completion callback |
+| `send(&self, target: &RoutingId) -> SendOp<Empty>` | starts the shared `SendOp`, addressed to that peer; choose its Future or blocking terminal |
 | `recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError>` | populates `out` with the next message |
 | `request(&self, peer_rid: &RoutingId) -> RequestOp<Empty>` | Messaging category's `RequestOp`, addressed to a specific peer |
-| `reply(&self, rid: &RoutingId, request_seq: u64) -> ReplyOp<Empty>` | Messaging category's `ReplyOp`, answering that peer's request |
+| `reply(&self, rid: &RoutingId, reply_token: ReplyToken) -> ReplyOp<Empty>` | Messaging category's `ReplyOp`, consuming the opaque capability received from this ROUTER |
 | `set_routing_id(&self, &RoutingId)` / `routing_id(&self)` | assigns/reads this socket's own routing id, observed by peers on connect |
 | `common_options()` | the shared options facade |
 | `router_options() -> RouterSocketOptions<'_>` | returns the per-type options facade: `set_mandatory(bool)` — set-only; `set_probe(bool)` — set-only; `set_connect_routing_id(&RoutingId)` — set-only (**no getter for the assigned connect routing id in this binding**, unlike dotnet's/cpp's read-only `ConnectRoutingId`/`connect_routing_id()` property); `weight()`/`set_weight(u32)`; `request_timeout()`/`set_request_timeout(Duration)` — both directions, unlike Dealer's |
 
-**Completion result.** `recv` follows the same convention as `PairSocket`. **This binding does not
-declare `try_send_completion_control`/`set_completion_control_handler`** — the opaque
-Completion-control surface documented on ROUTER in dotnet/cpp/java/node has no equivalent public
-entry point here.
+**Completion result.** `recv` follows the same convention as `PairSocket`. Managed send/request
+completion is returned by the chosen terminal; the selected application and completion pipes stay
+paired inside Core rather than appearing as a separate public channel.
 
-**When to use.** Use `request(peer_rid)`/`reply(rid, request_seq)` for ROUTER-initiated or
-ROUTER-answered request/reply, where DEALER cannot address a specific peer.
+**When to use.** Use `request(peer_rid)`/`reply(rid, reply_token)` for ROUTER-initiated or
+ROUTER-answered request/reply. Keep the token opaque, socket-owned, and one-shot.
 
 ---
 
@@ -224,24 +223,29 @@ every other socket type.
 
 ```rust
 let stream = ctx.stream_socket()?;
-stream.on_packet(|routing_id, header, body| { /* owns header/body */ })?;
+stream.stream_options().set_recv_mode(StreamRecvMode::Packet)?;
+let mut packet = StreamPacket::empty();
+if stream.recv_packet(&mut packet, RecvFlags::NONE)? { /* use packet */ }
+packet.close()?;
 ```
 
 **Options.**
 
 | Member | Meaning |
 | --- | --- |
-| `send(&self, target: &RoutingId) -> SendOp<Empty>` | starts the shared `SendOp`, addressed to that peer; its `submit()` returns a `Future` completed by the Core send-completion callback |
-| `recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError>` | populates `out` with the next packet; this binding's `recv` additionally captures the source routing id as a send/reply context on `out`, so a subsequent `out.send()` addresses the packet's sender — a STREAM-specific enrichment not documented as such on other languages |
+| `send(&self, target: &RoutingId) -> SendOp<Empty>` | starts the shared managed `SendOp`, addressed to that peer |
+| `recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError>` | pulls the next RAW-mode record and captures its source route for `out.send()` |
+| `recv_packet(&self, out: &mut StreamPacket, flags: RecvFlags) -> Result<bool, RecvError>` | pulls one PACKET-mode header/body pair into reusable caller-owned storage |
 | `disconnect_rid(&self, peer_rid: &RoutingId) -> Result<(), ConnectError>` | declared directly, since `StreamSocket` has no `connect`/`disconnect` at all — it never declares the connect/disconnect/disconnect_rid trio the other socket types share |
-| `on_packet<F>(&mut self, handler: F) -> Result<(), HandlerError> where F: Fn(RoutingId, Message, Message) + Send + 'static` | registers a callback-driven packet loop; the handler owns both `header` and `body`, dropped when it returns |
 | `set_routing_id(&self, &RoutingId)` / `routing_id(&self)` | assigns/reads this socket's own routing id, observed by peers on connect |
 | `common_options()` | the shared options facade |
 | `stream_options() -> StreamSocketOptions<'_>` | the per-type options facade: `set_notify(bool)`/`notify()` — delivers peer connect/disconnect as application messages when enabled |
 
-**Completion result.** `recv` follows the `Ok(false)`-on-`DONT_WAIT` convention above.
+**Completion result.** `recv` and `recv_packet` follow the `Ok(false)`-on-`DONT_WAIT` convention.
+The caller owns `StreamPacket` and releases its messages with `close()` or drop.
 
-**When to use.** Use `on_packet` for a callback-driven packet loop.
+**When to use.** Set `stream_options().set_recv_mode(StreamRecvMode::Raw/Packet)` before the first
+successful bind/connect; changing it afterward returns invalid state. Drain the selected pull API.
 
 ---
 
@@ -249,12 +253,12 @@ stream.on_packet(|routing_id, header, body| { /* owns header/body */ })?;
 
 | Type | Used by | Values |
 |---|---|---|
-| `SendFlags` (tuple struct wrapping `u32`) | Every send/request/reply builder's `.flags(...)` stage (Messaging category) | `NONE`, `DONT_WAIT` (associated consts, not enum variants) |
+| `SendFlags` (tuple struct wrapping `u32`) | `PublishOp::flags(...)` only | `NONE`, `DONT_WAIT` (associated consts, not enum variants) |
 | `RecvFlags` (tuple struct wrapping `u32`) | Every `recv`/`subscribe`/`receive_subscription_event` | `NONE`, `DONT_WAIT` (associated consts) |
 | `RidDuplicatePolicy` | `CommonSocketOptions::rid_duplicate_policy` | `Reject`, `Handover` |
 | `SubmitRetryMode` | `CommonSocketOptions::submit_retry_mode` | `Off`, `LocalFailure` |
 
-**When to use.** `SendFlags`/`RecvFlags` are `struct`s with `pub const NONE`/`DONT_WAIT`
+**When to use.** `SendFlags` is limited to publish; `RecvFlags` is a `struct` with `pub const NONE`/`DONT_WAIT`
 associated constants and a `bits()` accessor, not `enum` types — a design choice distinct from
 every other language's flag representation covered so far (dotnet/java's `[Flags] enum`, cpp's
 class with static members, node's frozen object constants).

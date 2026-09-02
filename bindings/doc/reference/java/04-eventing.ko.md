@@ -19,7 +19,7 @@ socket의 connection lifecycle event를 관찰하고 현재 상태를 읽는다.
 
 ```java
 try (SocketMonitor monitor = socket.monitorOpen(MonitorEventType.CONNECTED, MonitorEventType.DISCONNECTED)) {
-    monitor.onEvent(event -> logger.info("{} {}", event.event(), event.remoteAddr()));
+    MonitorEvent event = monitor.recv(RecvFlags.NONE);
     MonitorStatus status = monitor.status();
 }
 ```
@@ -28,16 +28,16 @@ try (SocketMonitor monitor = socket.monitorOpen(MonitorEventType.CONNECTED, Moni
 
 | Member | 의미 |
 | --- | --- |
-| `onEvent(SocketMonitorHandler handler)` | 수동적 lifecycle-event 콜백을 등록 |
+| `recv(RecvFlags.DONT_WAIT)` | 다음 queued lifecycle event non-blocking pull |
 | `recv()` / `recv(RecvFlags flags)` | 다음 event를 가져옴; 둘 다 `MonitorEvent`를 직접 반환한다 — dotnet의 `MonitorEvent?`와 달리 `Optional`/nullable이 아니다 |
 | `status()` | 시점 스냅샷 `MonitorStatus`를 반환 |
-| `IGNORE_HANDLER` | caller가 의도적으로 event를 버리고 싶을 때 등록할 수 있는 public static 상수 no-op `SocketMonitorHandler` |
+| `close()` | caller-owned monitor resource 해제 |
 
 **Completion result.** 모든 member는 동기다. `SocketMonitor extends
 AutoCloseable`이다.
 
-**선택 기준.** 한 번 등록하는 수동적 lifecycle observer엔 `onEvent`를,
-pull 기반 drain loop엔 대신 `recv`를 쓴다. 시점 스냅샷엔 `status()`를 쓴다.
+**선택 기준.** pull 기반 lifecycle-event drain loop엔 `recv`를 쓰고 시점 스냅샷엔
+`status()`를 쓴다.
 
 ---
 
@@ -182,8 +182,8 @@ standalone timer.
 
 ```java
 try (ZlinkTimer timer = Zlink.createTimer()) {
-    timer.onFire((t, count) -> logger.info("fired {} times", count));
     timer.start(Duration.ofSeconds(1), 0L);
+    long count = timer.recv();
 }
 ```
 
@@ -194,13 +194,12 @@ try (ZlinkTimer timer = Zlink.createTimer()) {
 | `start(Duration interval, long repeatCount)` | `interval`마다 fire를 시작; `repeatCount == 0`은 무제한 |
 | `stop()` | fire를 멈춤; `start`로 재시작 가능 |
 | `recv()` | `long`을 직접 반환 — 누적 fire count; dotnet의 `ulong?`/cpp의 `std::optional<uint64_t>`와 달리 소스에선 nullable/optional이 아니다 |
-| `onFire(TimerHandler handler)` | 수동적 interval 콜백을 등록; handler는 `(ZlinkTimer timer, long fireCount)`를 받음 |
+| 반복 `recv()` | pull surface에서 cumulative fire count drain |
 
 **Completion result.** 모든 member는 동기다. `ZlinkTimer extends
 AutoCloseable`이다.
 
-**선택 기준.** 수동적 interval 콜백엔 `onFire`를, 대신 만료를 poll하려면
-`recv`를, socket과 함께 하나의 wait에서 multiplex하려면
+**선택 기준.** 만료를 pull하려면 `recv`를 쓰고 socket과 함께 하나의 wait에서 multiplex하려면
 `Poller.add(ZlinkTimer, long)`로 등록한다.
 
 ---
@@ -209,8 +208,8 @@ AutoCloseable`이다.
 
 | Interface | 등록하는 곳 | Signature |
 |---|---|---|
-| `SocketMonitorHandler` | `SocketMonitor.onEvent(...)` | `void onEvent(MonitorEvent event)` |
-| `TimerHandler` | `ZlinkTimer.onFire(...)` | `void onFire(ZlinkTimer timer, long fireCount)` |
+| `MonitorEvent` | `SocketMonitor.recv(...)` | monitor queue가 반환하는 caller-owned value |
+| `long` fire count | `ZlinkTimer.recv()` | timer queue가 반환하는 cumulative count |
 
 ---
 

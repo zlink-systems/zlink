@@ -4,7 +4,7 @@
 # 03. Socket lifecycle
 
 이 category는 모든 raw socket 타입에 공통인 진입점 — 생성, endpoint lifecycle
-(bind/connect/disconnect), 종료, 비동기 send, 수신 flow control을 다룬다. Socket 타입별
+(bind/connect/disconnect), 종료, blocking 또는 completion 기반 send, 수신 flow control을 다룬다. Socket 타입별
 옵션과 data-plane 연산은 각자의 category(아래 PAIR/PUB/SUB/XPUB/XSUB/DEALER/ROUTER/STREAM)에
 있다. 정확한 signature는 [Socket 공통 스펙](../spec/core/socket/README.ko.md)이 소유한다.
 
@@ -29,8 +29,8 @@ void *s = zlink_socket(ctx, ZLINK_SOCKET_DEALER);
 
 **선택 기준.** Application이 필요로 하는 socket마다 한 번 호출한다. 수신 모드는 `type_`으로
 고정된다 — `PAIR`/`DEALER`/`SUB`/`XSUB`는 part receive를, `ROUTER`는
-`zlink_router_recv_part()`를 쓰고, `STREAM`만 raw part receive·raw callback·packet
-callback 중 선택할 수 있다(STREAM category 참고). Socket은 context가 종료되기 전에
+`zlink_router_recv_part()`를 쓰고, `STREAM`만 첫 bind 또는 connect 전에 RAW part receive와
+PACKET receive 중 하나를 고른다(STREAM category 참고). Socket은 context가 종료되기 전에
 `zlink_close`로 닫아야 한다.
 
 ---
@@ -46,16 +46,15 @@ zlink_close_result_t result = zlink_close(s);
 **Parameters.** Socket handle만 받는다.
 
 **Return과 errno.** `zlink_close_result_t`를 반환한다 — 성공하면 `ZLINK_CLOSE_OK`. Handle이
-유효한 socket이 아니면 `ENOTSOCK`, 다른 스레드에서 이 handle에 callback이나 operation이
-진행 중이면 `EBUSY`.
+유효한 socket이 아니면 `ENOTSOCK`, 다른 스레드에서 이 handle에 operation이 진행 중이면
+`EBUSY`.
 
 **선택 기준.** 더 이상 필요 없는 socket을 해제할 때 호출한다. 남아 있는 send queue 메시지는
 `ZLINK_OPT_LINGER`(Socket options and identity category)에 따라 버려지거나 전송된다. 공개
 handle은 계층화된 스레드 안전성 계약을 따른다 — hot-path `send`는 동시 호출 가능하고,
 control-path 호출(bind/connect/option/monitor)은 정합성을 위해 직렬화되며, `close`는 더
 엄격한 fail-fast gate를 쓴다 — 일단 수락되면 같은 handle의 새 API 진입은 `ESHUTDOWN`으로
-실패한다. send-completion이나 monitor callback 안에서의 self-close는 실패하지 않고 callback이
-반환될 때까지 미뤄진다.
+실패한다.
 
 ---
 
@@ -116,69 +115,78 @@ routing map에서 직접 찾고(`STREAM`은 `peer_rid_`가 4바이트 connection
 
 ---
 
-## `zlink_send_async` / `zlink_send_complete_handler` / `zlink_send_async_cancel`
+## `zlink_send_part` / `zlink_send_part_rid` / `zlink_completion_recv`
 
-완결된 multipart record 하나를 Core의 비동기 send에 넘기고, pending send가 어떻게 끝났는지
-보고하는 callback을 설치·교체하며, 아직 완료되지 않은 operation 하나의 취소를 요청한다.
+일반 part-send 함수는 `flags_`로 blocking local admission과 completion 기반 pending
+admission을 고른다. `NONE FINAL`은 socket에서 스냅샷한 `ZLINK_OPT_SNDTIMEO`까지 기다리고,
+`DONTWAIT FINAL`은 즉시 반환한다. Core가 record를 보관한 경우에만 0이 아닌 socket-local
+completion ID를 반환한다.
 
 ```c
-zlink_send_complete_handler(s, on_send_complete, userdata);
+zlink_msg_t part;
+zlink_msg_init_size(&part, payload_size);
+memcpy(zlink_msg_data(&part), payload, payload_size);
 
-zlink_send_op_id_t op_id = 0;
-zlink_send_async_options_t opts = { .struct_size = sizeof(opts), .timeout_ms = 1000 };
-zlink_submit_result_t r = zlink_send_async(s, parts, part_count, &opts, &op_id);
-if (r == ZLINK_SUBMIT_OK && op_id != 0) {
-    // op_id는 완료가 아직 pending인 동안에만 0이 아니다.
-    zlink_send_async_cancel(s, op_id);
+zlink_completion_id_t id = 0;
+zlink_submit_result_t r = zlink_send_part(
+    s, &part, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
+    user_context, &id);
+
+if (r == ZLINK_SUBMIT_OK && id != 0) {
+    zlink_completion_t completion = {0};
+    completion.struct_size = sizeof(completion);
+    if (zlink_completion_recv(s, &completion, ZLINK_RECV_FLAGS_NONE)
+        == ZLINK_RECV_OK) {
+        /* 결과를 처리하기 전에 completion_id 또는 user_context를 대조한다. */
+        zlink_completion_close(&completion);
+    }
 }
 ```
 
-**Parameters.** `zlink_send_async`의 `parts_`/`part_count_`는 multipart record다.
-`options_`(`zlink_send_async_options_t`, `struct_size`는 `sizeof`로 설정)는 operation별
-`timeout_ms`(`0` = deadline 없음, `ZLINK_OPT_SNDTIMEO`와 무관), completion event로 그대로
-돌아오는 opaque `userdata`, 이전에 스냅샷한 routed pipe를 가리키는 선택적 `target`
-(`zlink_routed_submit_target_t`)을 담는다. `op_id_out_`은 caller가 즉시 admission과 pending
-완료를 구분할 필요가 없으면 `NULL`일 수 있다. `zlink_send_complete_handler`의 `handler_`는
-`zlink_send_complete_handler_fn`이다 — `NULL`을 넘기면 안 된다(이 호출은 교체 전용이지
-해제가 아니다). `zlink_send_async_cancel`은 이전 `zlink_send_async` 호출이 반환한 `op_id`를
-받는다.
+**Parameters.** `zlink_send_part()`는 Core가 logical target을 고르게 하고, routed socket은
+logical RID와 `zlink_send_part_rid()`를 사용한다. Physical pair ID나 generation은 public
+target이 아니다. 모든 part 호출은 성공과 실패 모두에서 `part_`를 소비한다. `MORE`는 part
+하나를 staging하고 `FINAL`은 완성 record를 제출한다. 한 sequence는 같은 함수 family, target,
+flag를 사용한다. `user_context_`는 DONTWAIT `FINAL`에서만 NULL이 아닐 수 있고 Core는 이를
+되돌려 줄 뿐 읽거나 해제하지 않는다. 선택적인 ID output은 validation 전에 0으로 설정된다.
 
-**Return과 errno.** `zlink_send_async`는 `zlink_submit_result_t`를 반환한다 —
-`*op_id_out_ == 0`인 `ZLINK_SUBMIT_OK`는 즉시 admission을 뜻하며 completion callback이
-실행되지 않는다. `op_id`가 0이 아닌 `ZLINK_SUBMIT_OK`는 record가 pending 상태이며 정확히 한
-번 완료를 받는다는 뜻이다. 설정된 `ZLINK_OPT_SEND_PENDING_MAX_MSGS`/`_BYTES` 한도를 넘으면
-`ZLINK_SUBMIT_BACKPRESSURED`(part 소유권은 caller에 남는다). Completion handler를 먼저
-설치하지 않았거나(호출이 pending 상태가 될 수 있으므로 handler가 필수다) subject가
-`zlink_send_async`가 지원하지 않는 것이면 `EINVAL`. Raw `PAIR`/`DEALER`/`ROUTER`/`STREAM`
-밖의 socket 타입이면 `ENOTSUP`. `zlink_send_complete_handler`는 `zlink_handler_result_t`를
-반환한다 — 성공하면 `ZLINK_HANDLER_OK`, 같은 집합 밖의 socket 타입이면 `ENOTSUP`, 같은
-handle의 completion callback 안에서 재진입 호출하면 `EDEADLK`. `zlink_send_async_cancel`은
-`zlink_submit_result_t`를 반환한다 — `ZLINK_SUBMIT_OK`는 취소가 수락됐고 완료가
-`ZLINK_SEND_TERMINAL`/`ECANCELED`를 보고할 것이라는 뜻이다. 그 id를 가진 pending operation이
-없으면 `ZLINK_SUBMIT_NOT_FOUND`. 다른 resolver가 이미 operation을 선점했으면
-`ZLINK_SUBMIT_INVALID_STATE`(그 resolver가 여전히 정확히 한 번 완료를 보고한다).
+**Return과 errno.** 성공한 `NONE FINAL` 또는 즉시 admission된 `DONTWAIT FINAL`은 ID `0`으로
+`ZLINK_SUBMIT_OK`를 반환하고 completion을 만들지 않는다. Core가 DONTWAIT record를 admission
+전에 보관하면 0이 아닌 ID로 `ZLINK_SUBMIT_OK`를 반환하고 나중에 SEND completion 하나를 만든다.
+Validation, target 부재, `SNDTIMEO`, pending limit 또는 completion slot 실패는 ID `0`으로
+동기 반환되고 completion을 만들지 않는다. `zlink_completion_recv()`는 raw
+`PAIR`/`DEALER`/`ROUTER`/`STREAM`에서만 지원한다. 성공적으로 받은 SEND 또는 REQUEST record는
+모두 `zlink_completion_close()`로 닫는다.
 
-**선택 기준.** `ZLINK_SUBMIT_OK`에서 `parts_[0 .. part_count_)`의 모든 항목 소유권이
-Core로 넘어간다 — caller는 close를 포함해 그 메시지를 다시 건드리면 안 된다. 다른 결과에서는
-소유권이 caller에 남는다. Completion event(`zlink_send_complete_event_t` — `op_id`,
-`userdata`, `peer_rid`, transport-pair identity, `result`, `terminal_errno`를 담음)의
-`ZLINK_SEND_ADMITTED`는 Core send queue로의 admission을 뜻하지 peer 전달 확인이 아니다 —
-전달 확인이 필요하면 request/reply를 쓴다. 한 socket의 completion은 서로 동시에 실행되지
-않지만, 고정된 스레드는 보장되지 않는다 — callback은 Core async mailbox 스레드, timeout이면
-Core deadline 스레드, close 중이면 closing 스레드, 또는 socket이 poller에
-`ZLINK_POLLCOMPLETION`으로 등록돼 있으면 `zlink_poller_wait`를 호출한 스레드(Polling and
-pollers category)에서 실행될 수 있다 — 이는 dispatch 위치만의 변경이다. Callback은 완료를
-application 상태에 넘기는 일만 해야 한다 — 그 안에서 어떤 socket의 send·publish·request
-진입점을 호출해도 `EDEADLK`로 실패하며, 어떤 socket의 send-completion handler를 교체해도
-마찬가지다. 취소된 operation도 정확히 한 번은 완료된다.
+**Pending ownership과 limit.** 성공한 DONTWAIT submit이 0이 아닌 ID를 반환한 뒤에는 Core가
+완성 record와 admission 전 재시도를 소유한다. Application은 별도 retry queue를 만들거나 같은
+payload를 다시 제출하지 않는다. Core는 transient reconnect 동안 같은 logical PAIR route,
+설정된 DEALER endpoint 또는 routed RID에만 재시도한다. `ZLINK_OPT_PENDING_MAX_MSGS`와
+`ZLINK_OPT_PENDING_MAX_BYTES`는 DONTWAIT SEND와 REQUEST가 공유하는 socket-local pool의 한도이며
+`0`은 무제한이다. PAIR, DEALER, ROUTER, STREAM에서만 지원한다. 이전
+0.16.0에서는 이전 send-scoped pending-limit 이름을 사용하지 않는다.
+
+**Admission은 delivery가 아니다.** ID `0`과 `ZLINK_SEND_ADMITTED`는 local send queue
+admission을 뜻한다. Peer receipt를 확인하거나 delivery ACK를 만들지 않으며 이후 disconnect에서
+payload를 replay하지 않는다. 상관된 peer 응답이 필요하면 request/reply를 사용한다.
+
+### Cancellation 경계
+
+Core가 submit을 성공시킨 뒤에는 public operation-cancel API가 없다. Completion ID는 상관관계
+값이지 제어 handle이 아니다. Core submit 전에는 application 또는 binding이 Core를 호출하지 않고
+취소할 수 있고, Framework-owned queue도 submit 전에 work를 제거할 수 있다. Core가 record를
+소유한 뒤 cancellation은 caller의 wait만 중단한다. Core는 늦게 admission할 수 있으며 socket
+owner는 늦은 completion도 drain하고 close해야 한다. Socket close와 context termination은 별도
+lifecycle cleanup 계약을 따른다.
 
 ---
 
 ## `zlink_socket_set_receive_flow_state`
 
 이 socket의 local receive-flow state(`ZLINK_RECEIVE_FLOW_RUNNING` /
-`ZLINK_RECEIVE_FLOW_PAUSED`)를 설정하고 짝을 이루는 `DEALER`/`ROUTER` completion lane에
-동기화한다.
+`ZLINK_RECEIVE_FLOW_PAUSED`)를 `DEALER` 또는 `ROUTER` socket에 설정한다. Transport lane은
+socket 조합으로 정한다. DEALER-DEALER와 DEALER-ROUTER는 Application을, ROUTER-ROUTER는
+Completion을 사용한다.
 
 ```c
 zlink_config_result_t r =
@@ -191,8 +199,8 @@ zlink_config_result_t r =
 **Return과 errno.** `zlink_config_result_t`를 반환한다 — 성공하면 `ZLINK_CONFIG_OK`(현재
 state를 반복해도 포함). `NULL`이거나 유효하지 않은 handle이면 `ZLINK_CONFIG_INVALID_HANDLE`.
 `zlink_receive_flow_state_t` 밖의 state면 `ZLINK_CONFIG_INVALID_ARGUMENT`. `DEALER`/`ROUTER`
-이외의 socket 타입이면 `ZLINK_CONFIG_NOT_SUPPORTED`(completion lane이 없어 기존 byte HWM과
-transport backpressure가 그대로 유지된다). 동시 진행 중인 close가 먼저 수락됐으면
+이외의 socket 타입이면 `ZLINK_CONFIG_NOT_SUPPORTED`이며, 지원하지 않는 타입은 기존 byte HWM과
+transport backpressure를 그대로 유지한다. 동시 진행 중인 close가 먼저 수락됐으면
 `ZLINK_CONFIG_INVALID_STATE`.
 
 **선택 기준.** `RUNNING`/`PAUSED`는 카운터가 아니라 절대 state다 — 현재 state를 반복해도

@@ -7,7 +7,7 @@
 This category covers message ownership and the receive envelope types (`Received`,
 `ReceivedMessage`, `TopicMessage`, `SubscriptionEvent`). **The send/request/reply operation-builder
 family is not declared here** — unlike every other language covered so far, those Protocols
-(`SendOp`, `RequestOp`, `RequestCallbackOp`, `ReplyOp`) live in `contracts/sockets/operations.py`
+(`SendOp`, `RequestOp`, `ReplyOp`, `PublishOp`) live in `contracts/sockets/operations.py`
 and are documented in the Sockets category instead. The exact signatures are owned by
 [`contracts/messaging/`](../../../../bindings/python/src/zlink/contracts/messaging/).
 
@@ -83,12 +83,12 @@ received = create_received()
 if dealer.recv_into(received):
     if received.is_single_part():
         pass
-    received.reply().message(b"ok").submit()
+    if received.reply_token is not None:
+        received.reply().message(b"ok").submit()
 ```
 
-**Options.** **Neither `Received` nor `ReceivedMultipart` exposes `routing_id`/`request_seq` as a
-documented public member in this contract** — reply/send context is reached only through the
-`reply()`/`send()` methods themselves.
+**Options.** `Received` exposes `routing_id` and the opaque `reply_token`; `ReceivedMultipart`
+contains only the shared part container behavior.
 
 | Type | Member | Meaning |
 | --- | --- | --- |
@@ -100,15 +100,15 @@ documented public member in this contract** — reply/send context is reached on
 | | `single_part_or_throw()` | the single part; raises `RecvError` unless exactly one part |
 | | `close()` | closes every owned part |
 | `Received extends ReceivedMultipart` | `send()` | starts the shared `SendOp` builder (Sockets category), addressed to this envelope's captured source route; raises `SubmitError` if the envelope carries no send context |
+| | `routing_id` / `reply_token` | source route and optional socket-owned, one-shot `ReplyToken` capability |
 | | `reply()` | starts the shared `ReplyOp` builder; raises `SubmitError` unless the envelope is replyable |
 
 **Completion result.** All members are synchronous. Both support sync/async context-manager
 protocols.
 
 **When to use.** Reuse one `Received` (via `create_received()`) across a receive loop rather than
-constructing a new one per message. Check whether `reply()`/`send()` raises before assuming an
-envelope is replyable/has a send context, since there is no separate boolean/property to test for
-it ahead of time.
+constructing a new one per message. Check `reply_token is not None` before replying; do not copy,
+serialize, or synthesize the opaque token.
 
 ---
 

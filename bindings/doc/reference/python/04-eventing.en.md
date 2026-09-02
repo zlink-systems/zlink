@@ -17,7 +17,9 @@ Observes a socket's connection lifecycle events and reads its current status.
 
 ```python
 monitor = open_socket_monitor(socket)
-monitor.on_event(lambda event: print(event.event, event.remote_addr))
+event = monitor.recv(flags=RecvFlags.DONT_WAIT)
+if event is not None:
+    print(event.event, event.remote_addr)
 status = monitor.status()
 ```
 
@@ -28,14 +30,12 @@ status = monitor.status()
 | `status()` | returns a `MonitorStatus` point-in-time snapshot |
 | `close()` | closes the monitor |
 | `recv(*, flags=0)` | pulls the next event; returns `MonitorEvent` or `None` when `DONT_WAIT` is set and none is available |
-| `on_event(handler)` | registers a passive lifecycle-event callback, invoked on a background dispatch thread |
-| `ignore_handler` | a `staticmethod` (`lambda event: None`) a caller can register to explicitly discard events |
 
 **Completion result.** All members are synchronous. Supports both sync and async context-manager
 protocols.
 
-**When to use.** Use `on_event` for a passive lifecycle observer registered once; use `recv` for a
-pull-based drain loop instead. Use `status()` for a point-in-time snapshot.
+**When to use.** Use `recv` for a caller-driven pull loop and `status()` for a point-in-time
+snapshot. Monitor delivery has no registration callback.
 
 ---
 
@@ -123,6 +123,9 @@ ready = poller.wait(events, timeout_ms=1000)
 **Completion result.** Registration/removal members are synchronous. `wait` blocks up to
 `timeout_ms`, filling `events` in place and returning the ready count. Supports both sync and async
 context-manager protocols.
+When a socket was registered for `PollEventFlag.POLLCOMPLETION`, its owner must keep calling
+`wait()` so the binding can drain and settle native completions. Run a blocking terminal in a
+separate execution context when both roles are needed.
 
 **When to use.** Use one poller across a service's lifetime. Reuse one `PollEvents` buffer across
 `wait` calls rather than creating one per wait.
@@ -180,8 +183,8 @@ A timer that fires on an interval and can be polled or awaited.
 
 ```python
 timer = create_timer()
-timer.on_fire(lambda count: print(f"fired {count} times"))
 timer.start(interval_ns=1_000_000_000, repeat_count=0)
+count = timer.recv()
 ```
 
 **Options.**
@@ -191,15 +194,13 @@ timer.start(interval_ns=1_000_000_000, repeat_count=0)
 | `start(interval_ns: int, repeat_count: int)` | starts firing on `interval_ns`; **the interval is nanoseconds**, matching rust's `Timer::start`, not the millisecond/`Duration`-based `start` every other language covered so far uses; `repeat_count == 0` means unlimited |
 | `stop()` | stops firing; restartable via `start` |
 | `recv()` | returns `Optional[int]` — the cumulative fire count, `None` when nothing pending |
-| `on_fire(handler)` | registers a passive interval callback, invoked on a background dispatch thread — **the handler here receives only the fire count**, not `(timer, count)` the way most other languages' `on_fire`/`onFire` callbacks do |
 | `close()` | closes the timer |
 
 **Completion result.** All members are synchronous. Supports both sync and async context-manager
 protocols.
 
-**When to use.** Use `on_fire` for a passive interval callback; use `recv` to poll expirations
-instead, or register the timer with `Poller.add_timer` to multiplex it alongside sockets on one
-wait.
+**When to use.** Use `recv` to pull expirations, or register the timer with `Poller.add_timer` to
+multiplex it alongside sockets on one wait. Timer delivery has no registration callback.
 
 ---
 

@@ -67,13 +67,13 @@ constructed multipart array in one call instead of a hand-written loop.
 
 ## `Received`
 
-Aggregates one recv result: an optional routing id, request sequence, and the owned message parts.
+Aggregates one recv result: an optional routing id, opaque reply token, and the owned message parts.
 The returned `parts()` view is immutable and does not copy the underlying array.
 
 ```java
 Received received = new Received();
-if (dealer.recv(received)) {
-    received.requestSeq().ifPresent(seq ->
+if (router.recv(received)) {
+    received.replyToken().ifPresent(token ->
         received.reply().message(Message.from("ok")).submit());
 }
 ```
@@ -84,7 +84,7 @@ overwrites internal state in place on each successful receive, avoiding a per-re
 | Member | Returns | Meaning |
 | --- | --- | --- |
 | `getRoutingId()` | `Optional<RoutingId>` | present when the receive path provides one |
-| `requestSeq()` | `Optional<Long>` | present when replyable |
+| `replyToken()` | `Optional<ReplyToken>` | opaque capability present on a ROUTER request |
 | `parts()` | `List<Message>`, immutable view | every message part this envelope holds |
 | `isSinglePart()` | `boolean` | whether `parts()` has exactly one element |
 | `firstPart()` | `Message` | the first part, without transferring ownership |
@@ -98,7 +98,7 @@ overwrites internal state in place on each successful receive, avoiding a per-re
 `ZlinkRecvException` when there is no data or the part count doesn't match, respectively —
 mirroring the receive-side result codes in the Errors category.
 
-**When to use.** Reuse one `Received` across a receive loop. Check `requestSeq()` before calling
+**When to use.** Reuse one `Received` across a receive loop. Check `replyToken()` before calling
 `reply()` to confirm the envelope is actually replyable.
 
 ---
@@ -168,7 +168,7 @@ lookup (Sockets category).
 The fluent builder every socket type's `send`/`publish`/`request`/`reply` entry point (Sockets
 category) returns to accumulate parts, flags, and a terminal submit. All builder interfaces extend
 the shared `MessageBuilderStage<TSubmit>` (`TSubmit message(Message part)`), and the request
-family additionally extends `TimeoutSubmitOperation<TResult, TCallback>`.
+family additionally extends `TimeoutSubmitOperation<List<Message>>`.
 
 ```java
 dealer.send().message(part1).message(part2).submit();
@@ -179,8 +179,8 @@ CompletionStage<List<Message>> future = dealer.request()
     .submit();
 List<Message> reply = future.toCompletableFuture().join();
 
-// or, on a virtual thread:
-List<Message> reply2 = dealer.request().message(Message.from("payload")).await();
+// or on a thread that may block:
+List<Message> reply2 = dealer.request().message(Message.from("payload")).submit_sync();
 
 received.reply().message(Message.from("ok")).submit();
 ```
@@ -190,28 +190,28 @@ received.reply().message(Message.from("ok")).submit();
 | Stage | Member | Meaning |
 | --- | --- | --- |
 | `SendOperation` | `.message(Message)` | starts the chain |
-| `SendSubmitOperation` | `.message(...)` / `.flags(SendFlags)` / `.submit()` | add parts, set flags, terminal |
+| `SendSubmitOperation` | `.message(...)` / `.submit_sync()` / `.submit()` | add parts, then choose blocking or CompletionStage terminal |
 | `RequestOperation`/`RequestSubmitOperation` | same as `Send` + `.timeout(Duration)` | mirrors the send chain, adding a reply-wait timeout |
-| `RequestSubmitOperation.flags(SendFlags)` | narrows to `RequestCallbackSubmitOperation` | drops the `CompletionStage`-returning `.submit()` — only `.submit(RequestCallback)` remains reachable |
+| `RequestSubmitOperation` terminals | `.submit_sync()` / `.submit()` | blocking reply result or completion-backed `CompletionStage` reply |
 | `ReplyOperation`/`ReplySubmitOperation` | mirrors `Send` | no flags stage — the underlying reply function takes no send-flag argument |
-| `TimeoutSubmitOperation.await()` | `default` method | submits and blocks the current thread until the result completes; explicitly intended for virtual threads (parking a virtual thread frees its carrier platform thread, unlike blocking a platform thread directly) — the framework's own async path uses `submit()` instead |
+| `TimeoutSubmitOperation` | `.timeout(Duration)` | sets only the request reply timeout; it does not add a send deadline |
 
 **Completion result.**
 
 | Terminal | Returns | Meaning |
 | --- | --- | --- |
-| `SendSubmitOperation.submit()` | `boolean` | `false` only when `SendFlags.DONT_WAIT` is set and the send would have blocked; other failures throw `ZlinkException` |
+| `SendSubmitOperation.submit_sync()` | `void` | blocks for Core local admission; failures throw `ZlinkException` |
+| `SendSubmitOperation.submit()` | `CompletionStage<Void>` | DONTWAIT submit settled from the socket completion queue |
 | `ReplySubmitOperation.submit()` | `void` | throws `ZlinkException` on failure |
 | `RequestSubmitOperation.submit()` | `CompletionStage<List<Message>>` | the caller owns and must close the reply messages |
-| `submit(RequestCallback)` (`RequestSubmitOperation`/`RequestCallbackSubmitOperation`) | `boolean` | same `DONT_WAIT` convention; delivers the result and parts to the callback later — the callback owns the parts only when the result is `RequestResult.OK` |
+| `RequestSubmitOperation.submit_sync()` | `List<Message>` | blocks until the completion queue yields the reply; caller closes parts |
 
 Every builder consumes its accumulated public `Message` parts on a successful submit only. On
 failure, binding-owned native staging preserves the public parts for the caller even though Core
 consumes each staging part actually passed to a synchronous call.
 
-**When to use.** `submit()`'s `CompletionStage` in ordinary async code; `await()` instead on a
-virtual thread for code that reads more naturally as a sequential call; `.flags(...).submit(callback)`
-when a callback-completion surface is needed on a thread that shouldn't block or park at all.
+**When to use.** `submit()`'s `CompletionStage` in ordinary async code and `submit_sync()` on a
+thread that may block or park.
 `Received.reply()`/`send()` rather than reconstructing the destination route by hand.
 
 ---

@@ -137,7 +137,7 @@ ok, err := pair.Recv(&received, contracts.RecvFlagsNone)
 | --- | --- |
 | `Send() SendOp` | starts the shared send builder |
 | `Recv(out *Received, flags RecvFlags) (bool, error)` | populates `out` with the next message |
-| `OnSendReady(handler func()) error` | registers a back-pressure-cleared callback |
+| completion-backed `Submit(ctx)` | Core owns pre-admission retry; caller waits through its Context |
 
 **Completion result.** `Recv` returns `(false, nil)` only when `RecvFlagsDontWait` is set and no
 message is available.
@@ -154,9 +154,7 @@ Load-balances sends across its connected peers and can issue routed requests.
 ```go
 dealer, err := ctx.DealerSocket()
 dealer.SetRoutingID(contracts.NewRoutingIDString("worker-3"))
-dealer.Request().Message(payload).Submit(ctx, func(result contracts.RequestResult, parts []*contracts.Message) {
-    // ...
-})
+parts, err := dealer.Request().Message(payload).Submit(ctx)
 ```
 
 **Options.** Same shared surface as `PairSocket`, plus:
@@ -182,27 +180,23 @@ request's context (`Received.Reply()`) or use ROUTER's explicit reply surface in
 
 ## `RouterSocket`
 
-Routes messages to peers addressed by routing id, replies to a specific peer's request, and
-additionally supports an opaque completion-control channel.
+Routes messages to peers addressed by routing id and replies to a specific peer's request.
 
 ```go
 router, err := ctx.RouterSocket()
 router.SendTo(peerRID).Message(hello).Submit(ctx)
-router.OnCompletionControl(func(received *contracts.Received) {
-    defer received.Close()
-})
+router.Reply(peerRID, replyToken).Message(reply).Submit(ctx)
 ```
 
-**Options.** Same shared surface as `PairSocket`, plus. **This binding does implement
-Completion-control on ROUTER**, unlike rust, which declares no equivalent public entry point.
+**Options.** Same shared surface as `PairSocket`, plus:
 
 | Member | Meaning |
 | --- | --- |
 | `SendTo(target RoutingID) SendOp` | starts the shared send builder, addressed to that peer |
-| `Recv(out, flags) (bool, error)` | populates `out` with the next message; returns `*RecvError{Result: RecvBusy}` if a receive-callback handler is already installed — this binding's `Recv`/callback path are mutually exclusive on ROUTER |
+| `Recv(out, flags) (bool, error)` | populates `out` with the next application message |
 | `Request(peerRID RoutingID) RequestOp` | Messaging category's `RequestOp`, addressed to a specific peer |
-| `Reply(rid RoutingID, requestSeq uint64) ReplyOp` | Messaging category's `ReplyOp`, answering that peer's request |
-| `OnSendReady(handler func()) error` | registers a back-pressure-cleared callback |
+| `Reply(rid RoutingID, token ReplyToken) ReplyOp` | Messaging category's `ReplyOp`, answering the request identified by the opaque token |
+| `Received.ReplyToken()` | returns the socket-bound token supplied by ROUTER receive |
 | `SetRoutingID(RoutingID) error` / `RoutingID() (RoutingID, error)` | assigns/reads this socket's own routing id, observed by peers on connect |
 | `SetMandatory(bool) error` | **set-only**; error instead of silent drop on an unknown route |
 | `SetProbe(bool) error` | **set-only**; sends an empty probe on connect |
@@ -210,15 +204,14 @@ Completion-control on ROUTER**, unlike rust, which declares no equivalent public
 | `SetConnectRoutingID(RoutingID) error` | **set-only — no getter for the assigned connect routing id**, unlike dotnet's/cpp's read-only `ConnectRoutingId` property |
 | `Weight()` / `SetWeight(int)` | load-balancing weight, both directions |
 | `RequestTimeout()` / `SetRequestTimeout(time.Duration)` | request timeout, **both directions, unlike Dealer's set-only** |
-| `OnCompletionControl(handler func(*Received)) error` | registers the callback that receives incoming completion-control records |
-| `CompletionControl(peerRID RoutingID) SendOp` | an opaque control-plane record addressed to a peer; the control plane accepts no send flags — `Flags` values other than `SendFlagsNone` are rejected at submit time |
+| request `Submit(ctx)` | returns reply parts or a typed terminal error after completion drain |
+| send `Submit(ctx)` | returns after the accepted send's completion is settled |
 
 **Completion result.** `Recv` follows the same convention as `PairSocket`.
 
-**When to use.** Use `Request(peerRID)`/`Reply(rid, requestSeq)` for ROUTER-initiated or
-ROUTER-answered request/reply, where DEALER cannot address a specific peer. Use
-`OnCompletionControl`/`CompletionControl` for out-of-band control messages that should not be
-confused with ordinary application payloads.
+**When to use.** Use `Request(peerRID)`/`Reply(rid, token)` for ROUTER-initiated or
+ROUTER-answered request/reply, where DEALER cannot address a specific peer. The token comes from
+receive and must not be synthesized or reused.
 
 ---
 
@@ -241,13 +234,12 @@ ok, err := sub.Subscribe(&msg, contracts.RecvFlagsNone)
 
 **Options.** **Neither `PubSocket` nor `XPubSocket` declares `SetRoutingID`/`RoutingID`** — no
 routing-id surface at all on either type in this binding, the same as every other language covered
-so far. **Neither `SubSocket` nor `XSubSocket` declares `OnSendReady`** — the only socket types in
-this binding without it.
+so far. Subscription receive remains a pull-only path.
 
 | Type | Member | Meaning |
 | --- | --- | --- |
 | `PubSocket` | `Publish(topic string) SendOp` | starts the shared send builder |
-| | `OnSendReady(handler func()) error` | registers a back-pressure-cleared callback |
+| | `Publish(topic string).Submit(ctx)` | synchronous lossy/NODROP publish terminal |
 | | `PubOptions() *PubSocketOptions` | the per-type options facade |
 | `SubSocket` / `XSubSocket` | `Subscribe(out *TopicMessage, flags RecvFlags) (bool, error)` | populates `out` with the next matching publish |
 | | `SetSubscription(filter string) error` / `UnsetSubscription(filter string) error` | adds/removes a topic filter; subscriptions accumulate |
@@ -274,9 +266,9 @@ of this category for what that omits.
 
 ```go
 stream, err := ctx.StreamSocket()
-stream.OnPacket(func(routingID contracts.RoutingID, header, body *contracts.Message) {
-    // owns header/body
-})
+stream.SetReceiveMode(contracts.StreamReceivePacket)
+var packet contracts.StreamPacket
+ok, err := stream.RecvPacket(&packet, contracts.RecvFlagsNone)
 ```
 
 **Options.** No `StreamSocketOptions` facade type exists — `SetNotify`/`Notify` are declared
@@ -285,15 +277,15 @@ directly on `StreamSocket`, unlike `PubSocketOptions`'s separate facade shape.
 | Member | Meaning |
 | --- | --- |
 | `SendTo(target RoutingID) SendOp` | starts the shared send builder, addressed to that peer |
-| `Recv(out *Received, flags RecvFlags) (bool, error)` | populates `out` with the next packet; this binding's `Recv` additionally captures the source routing id as a send context on `out`, so a subsequent `out.Send()` addresses the packet's sender — a STREAM-specific enrichment |
-| `OnPacket(handler func(RoutingID, *Message, *Message)) error` | registers a callback-driven packet loop; the handler owns both `header` and `body` |
-| `OnSendReady(handler func()) error` | registers a back-pressure-cleared callback |
+| `Recv(out *Received, flags RecvFlags) (bool, error)` | pulls a raw record when receive mode is `StreamReceiveRaw` |
+| `RecvPacket(out *StreamPacket, flags RecvFlags) (bool, error)` | pulls one caller-owned header/body packet in `StreamReceivePacket` mode |
+| `SetReceiveMode(StreamReceiveMode)` / `ReceiveMode()` | select RAW or PACKET before bind/connect; immutable afterward |
 | `SetRoutingID(RoutingID) error` / `RoutingID() (RoutingID, error)` | assigns/reads this socket's own routing id, observed by peers on connect |
 | `SetNotify(bool)` / `Notify() (bool, error)` | delivers peer connect/disconnect as application messages when enabled |
 
-**Completion result.** `Recv` follows the `(false, nil)`-on-`DontWait` convention.
+**Completion result.** Both receive forms follow the `(false, nil)`-on-`DontWait` convention.
 
-**When to use.** Use `OnPacket` for a callback-driven packet loop. Remember `StreamSocket` cannot
+**When to use.** Select RAW or PACKET before bind, then use the matching pull API. Remember `StreamSocket` cannot
 `Connect`/`Disconnect` at all in this binding — it is bind-and-accept only from the public API's
 perspective.
 
@@ -303,7 +295,7 @@ perspective.
 
 | Type | Used by | Values |
 |---|---|---|
-| `SendFlags` (named `int`) | Every send/request/reply builder's `.Flags(...)` stage (Messaging category) | `SendFlagsNone`, `SendFlagsDontWait` |
+| `SendFlags` (named `int`) | synchronous publish `.Flags(...)` stage | `SendFlagsNone`, `SendFlagsDontWait` |
 | `RecvFlags` (named `int`) | Every `Recv`/`Subscribe`/`ReceiveSubscriptionEvent` | `RecvFlagsNone`, `RecvFlagsDontWait` |
 | `RidDuplicatePolicy` (named `int`) | `CommonSocketOptions.RidDuplicatePolicy`/`RouterSocket.SetHandover` | `RidDuplicateReject`, `RidDuplicateHandover` |
 | `SubmitRetryMode` (named `int`) | `CommonSocketOptions.SubmitRetryMode` | `SubmitRetryOff`, `SubmitRetryLocalFailure` |

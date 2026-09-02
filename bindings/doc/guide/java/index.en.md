@@ -70,7 +70,7 @@ try (Context ctx = Zlink.createContext();
         System.out.println(text); // PING
 
         try (Message reply = Message.from("ACK")) {
-            server.send().message(reply).submit_sync(SendFlags.NONE);
+            server.send().message(reply).submit_sync();
         }
     }
 }
@@ -84,7 +84,7 @@ try (Context ctx = Zlink.createContext();
     client.connect("tcp://127.0.0.1:5555");
 
     try (Message ping = Message.from("PING")) {
-        client.send().message(ping).submit_sync(SendFlags.NONE);
+        client.send().message(ping).submit_sync();
     }
 
     try (Received received = new Received()) {
@@ -129,7 +129,7 @@ retained, so retry or close it explicitly.
 ```java
 // build a copy from a string
 try (Message msg = Message.from("payload")) {
-    socket.send().message(msg).submit_sync(SendFlags.NONE);
+    socket.send().message(msg).submit_sync();
 }
 // once submit succeeds msg is already consumed — closing the try block is harmless
 
@@ -139,27 +139,40 @@ try (Message msg = Message.from(bytes)) { ... }
 // allocate a sized empty frame
 try (Message msg = new Message(256)) {
     msg.mutableDataBuffer().put(data);
-    socket.send().message(msg).submit_sync(SendFlags.NONE);
+    socket.send().message(msg).submit_sync();
 }
 ```
 
 HWM-managed sends provide asynchronous `submit()` and synchronous
-`submit_sync(SendFlags)` overloads. `submit_sync(SendFlags.NONE)` stops the current thread
-until HWM admission, while `submit_sync(SendFlags.DONT_WAIT)` immediately throws
-`ZlinkSubmitException` when the HWM is full. The flag-free overload returns a
-`CompletionStage<Void>` for asynchronous completion.
+`submit_sync()` terminals. `submit_sync()` stops the current thread until Core
+admits the record locally. `submit()` uses DONTWAIT and returns a
+`CompletionStage<Void>` settled from the socket completion queue.
 
 ```java
-socket.send().message(message).submit_sync(SendFlags.DONT_WAIT); // synchronous, non-blocking
+socket.send().message(message).submit_sync(); // synchronous Core admission
 CompletionStage<Void> completion = socket.send().message(message).submit(); // asynchronous
 ```
 
-Request also passes through HWM admission and provides three completion
-surfaces. `submit_sync(flags)` waits synchronously for admission and reply and
-returns the reply directly; `submit_sync(flags, callback)` returns once
-admission is decided and delivers the reply through the callback; `submit()`
-returns a `CompletionStage`. `NONE`/`DONT_WAIT` select admission waiting for the
-synchronous terminals.
+Request provides `submit_sync()` to block until the reply and `submit()` to
+return a `CompletionStage<List<Message>>` settled from the socket completion
+queue. The reply is that terminal result, not DATA received separately.
+
+Core owns retry after accepting a pre-admission operation; do not create a
+caller retry queue or resubmit its payload. The shared native
+`ZLINK_OPT_PENDING_MAX_MSGS/BYTES` limits cover pending SEND and REQUEST; no
+send-only pending names exist. Completion confirms local admission, not peer
+delivery or an application acknowledgement.
+
+Canceling a Java Future/coroutine can stop the language waiter. Before Core
+submit, abort without calling Core; after Core accepts the payload, admission or
+request work may continue and the socket owner drains a late completion. Set
+`stream.options().recvMode(StreamRecvMode.RAW)` or `.PACKET` before bind/connect,
+then use `recv` or `recvPacket` respectively.
+
+If a public poller owns `PollEventFlags.POLLCOMPLETION` for a socket, another
+thread must keep `wait()` looping while a blocking request or CompletionStage is
+pending. `wait()` drains native completions and settles or cleans Java state;
+calling a blocking terminal between waits on the same thread can stall it.
 
 Calling `recv(..., RecvFlags.NONE)` directly blocks the current Java thread in
 native recv. This surface is a low-level socket API. On a framework path
@@ -241,13 +254,13 @@ The Java binding's ownership rules. try-with-resources is the default pattern.
 | A send terminal succeeds | ownership of the added `Message` transfers to the send stack. No separate `close()` needed |
 | A send terminal fails (exception or failed stage) | ownership is retained by the caller. try-with-resources handles it automatically |
 | `recv()` succeeds | the caller owns the `Received`. try-with-resources required |
-| `submitAsync()` completes | the reply `List<Message>` is caller-owned. Needs `Message.closeAll(reply)` |
+| Request `submit()` completes | the reply `List<Message>` is caller-owned. Needs `Message.closeAll(reply)` |
 | `Context.close()` | interrupts every blocking operation under the context |
 
 ```java
 // pattern: safe via try-with-resources
 try (Message msg = Message.from("data")) {
-    socket.send().message(msg).submit_sync(SendFlags.DONT_WAIT);
+    socket.send().message(msg).submit_sync();
     // returning means msg was consumed; back-pressure is a ZlinkSubmitException
 } // if submit throws, try-with-resources closes msg
 ```
@@ -260,7 +273,7 @@ The Java binding throws exceptions from the `ZlinkException` hierarchy.
 
 ```java
 try (Message msg = Message.from("data")) {
-    socket.send().message(msg).submit_sync(SendFlags.DONT_WAIT);
+    socket.send().message(msg).submit_sync();
 } catch (ZlinkSubmitException e) {
     switch (e.getResult()) {
         case BACKPRESSURED -> { /* retry shortly */ }
@@ -298,8 +311,8 @@ Every exception inherits from `ZlinkException` and exposes `getCode()` and
 | `zlink_close(socket)` | `socket.close()` |
 | `zlink_bind(socket, ep)` | `socket.bind(ep)` |
 | `zlink_connect(socket, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(m).submit_sync(flags)` |
-| `zlink_send_async(...)` | `socket.send().message(m).submit()` (`CompletionStage`) |
+| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + NONE | `socket.send().message(m).submit_sync()` |
+| DONTWAIT send + completion pull | `socket.send().message(m).submit()` (`CompletionStage`) |
 | `zlink_recv_part(...)` | `socket.recv(received, flags)` |
 | `zlink_msg_data(msg)` | `msg.data()` |
 | `zlink_msg_size(msg)` | `msg.size()` |
@@ -334,11 +347,10 @@ if (Zlink.has("draft")) {
 **Threading:** `Context` can be shared across threads, but sockets must be used
 **from a single thread only**. Dispatch handlers are invoked on zlink's internal
 worker threads, so avoid blocking for long inside a handler.
-`submit_sync(SendFlags.NONE)` stops the current platform thread
-or virtual thread while waiting for HWM admission. Other threads and virtual
-threads continue to run, so this is safe in those execution environments. Use
-asynchronous `submit()` to keep the caller available, or
-`submit_sync(SendFlags.DONT_WAIT)` for immediate back-pressure. See
+`submit_sync()` stops the current platform thread or virtual thread while
+waiting for HWM admission. Other threads and virtual threads continue to run,
+so this is safe in those execution environments. Use asynchronous `submit()`
+to keep the caller available. See
 [thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/) for
 details.
 
@@ -356,7 +368,7 @@ Verified sample code lives at
 | `RequestReplyAsyncSample` | Async request/reply |
 | `PubSubRecvSample` | PUB/SUB publish/subscribe |
 | `StreamRecvSample` | STREAM raw TCP |
-| `StreamPacketCallbackSample` | STREAM packet callback |
+| `StreamPacketCallbackSample` | STREAM PACKET pull (legacy class name) |
 | `MonitorRecvSample` | Monitor event receive |
 
 > SPOT/Actor examples are covered by the framework samples, not the core
@@ -384,7 +396,7 @@ table above all apply identically — only the idiom differs for Kotlin.
   `try`/`finally`.
 - **Send completion**: in a coroutine, await the `CompletionStage` returned by
   Java's asynchronous `submit()` as `submit().await()`. Do not call the blocking
-  `submit_sync(SendFlags)` overload inside a coroutine.
+  `submit_sync()` terminal inside a coroutine.
 
 ```kotlin
 Zlink.createContext().use { ctx ->
@@ -395,8 +407,9 @@ Zlink.createContext().use { ctx ->
 }
 ```
 
-- **Callbacks**: handlers pass through as Kotlin lambdas as-is —
-  `timer.onFire { _, n -> ... }`.
+- **Pull delivery**: timer, monitor, STREAM packet, send completion, and request
+  reply paths are consumed through their receive or awaitable terminals; Kotlin
+  does not add callback-only terminals.
 - **Samples**: `bindings/kotlin/samples/` (`.kt`) has the same canonical set as
   the Java samples. Build/run through the Java gradle `:kotlin-samples`
   subproject.

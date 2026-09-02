@@ -17,7 +17,7 @@ Observes a socket's connection lifecycle events and reads its current status.
 
 ```csharp
 using ISocketMonitor monitor = socket.MonitorOpen(SocketEvent.Connected | SocketEvent.Disconnected);
-monitor.OnEvent(e => logger.LogInformation("{Event} {Remote}", e.Event, e.RemoteAddr));
+MonitorEvent? next = monitor.Recv(RecvFlags.None);
 MonitorStatus status = monitor.Status();
 ```
 
@@ -25,20 +25,20 @@ MonitorStatus status = monitor.Status();
 
 | Member | Default | Meaning |
 | --- | --- | --- |
-| `OnEvent(Action<MonitorEvent> handler)` | — | registers a passive observer, invoked on a background dispatch thread for every lifecycle event |
+| `Recv(RecvFlags.DontWait)` | — | non-blocking pull; returns null when the event queue is empty |
 | `Recv(RecvFlags flags)` | `RecvFlags.None` | pulls the next event; returns `MonitorEvent?`, null when `DontWait` and nothing pending |
 | `Status()` | — | a point-in-time snapshot of the monitored socket's state |
 | `Close()` | — | releases the monitor's native resources |
 
 `MonitorEvent(MonitorEventType Event, uint Value, RoutingId? RoutingId, string LocalAddr, string
-RemoteAddr)` is the record delivered by both `OnEvent` and `Recv` — `Value` is event-specific,
+RemoteAddr)` is the record delivered by `Recv` — `Value` is event-specific,
 `RoutingId` present only when the event carries one.
 
 **Completion result.** All synchronous. `ISocketMonitor` is `IDisposable`/`IAsyncDisposable`;
 `Close()` releases resources without waiting on disposal semantics.
 
-**When to use.** `OnEvent` for a passive lifecycle observer registered once; `Recv` for a
-pull-based drain loop instead. `Status()` for a point-in-time snapshot.
+**When to use.** `Recv` for a pull-based lifecycle-event drain loop and `Status()` for a
+point-in-time snapshot.
 
 ---
 
@@ -132,8 +132,8 @@ poller.
 
 ```csharp
 using IZlinkTimer timer = Zlink.CreateTimer();
-timer.OnFire((t, count) => logger.LogInformation("fired {Count} times", count));
 timer.Start(TimeSpan.FromSeconds(1), repeatCount: 0);
+ulong? count = timer.Recv();
 ```
 
 **Options.**
@@ -143,13 +143,13 @@ timer.Start(TimeSpan.FromSeconds(1), repeatCount: 0);
 | `Start(TimeSpan interval, ulong repeatCount)` | — | starts firing every `interval`; `repeatCount` bounds how many times (see source for the sentinel meaning "repeat indefinitely") |
 | `Stop()` | — | stops firing; restartable via `Start` |
 | `Recv(RecvFlags flags)` | `RecvFlags.None` | pulls the cumulative fire count; returns `ulong?`, null when `DontWait` and nothing pending |
-| `OnFire(Action<IZlinkTimer, ulong> handler)` | — | registers a passive observer, invoked on a background dispatch thread on every fire |
+| `Recv(RecvFlags.DontWait)` | — | non-blocking pull; returns null when no fire is pending |
 | `Close()` | — | releases the timer's native resources |
 
 **Completion result.** All synchronous. `IZlinkTimer` is `IDisposable`/`IAsyncDisposable`.
 
-**When to use.** `OnFire` for a passive interval callback; `Recv` to poll/await expirations
-instead, or register with `IPoller.Add(IZlinkTimer, nuint)` to multiplex alongside sockets.
+**When to use.** `Recv` to pull expirations, or register with
+`IPoller.Add(IZlinkTimer, nuint)` to multiplex alongside sockets.
 
 ---
 

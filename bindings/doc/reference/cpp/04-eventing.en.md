@@ -19,7 +19,7 @@ Observes a socket's connection lifecycle events and reads its current status.
 ```cpp
 zlink::socket_monitor_t monitor =
     zlink::socket_monitor_t::open (socket, zlink::monitor_event::connected | zlink::monitor_event::disconnected);
-monitor.on_event ([] (const zlink::monitor_event_t &e) { /* ... */ });
+auto event = monitor.recv (zlink::recv_flags_t::none);
 zlink::monitor_status_t status = monitor.status ();
 ```
 
@@ -30,16 +30,16 @@ zlink::monitor_status_t status = monitor.status ();
 | `socket_monitor_t()` | — | default, invalid until assigned |
 | `open(const socket_t&, monitor_event)` | `monitor_event::all` | static — the actual constructor path, called internally by `socket_t::monitor_open(...)` |
 | `valid()` | — | whether this monitor is still usable |
-| `on_event(std::function<void(const monitor_event_t&)>)` | — | registers a passive observer for every lifecycle event |
+| `recv(recv_flags_t)` | `recv_flags_t::none` | the sole event-delivery path; pulls the next queued lifecycle event |
 | `recv(recv_flags_t)` | `recv_flags_t::none` | pulls the next event; returns `std::optional<monitor_event_t>` |
 | `status() const` | — | a point-in-time snapshot of the monitored socket's state, returns `monitor_status_t` |
 | `close()` | — | releases the monitor's native resources |
-| `ignore_event(const monitor_event_t&) noexcept` | — | static no-op, for a caller that wants a handler that intentionally does nothing |
+| move construction/assignment | — | transfers the caller-owned monitor resource |
 
 **Completion result.** All synchronous. Move-only; the destructor does not implicitly close.
 
-**When to use.** `on_event` for a passive lifecycle observer registered once; `recv` for a
-pull-based drain loop instead. `status()` for a point-in-time snapshot.
+**When to use.** `recv` for a pull-based lifecycle-event drain loop and `status()` for a
+point-in-time snapshot.
 
 ---
 
@@ -168,8 +168,8 @@ poller.
 
 ```cpp
 zlink::timer_t timer;
-timer.on_fire ([] (uint64_t count) { /* ... */ });
 timer.start (std::chrono::seconds (1), /*repeat_count=*/0);
+auto count = timer.recv ();
 ```
 
 **Options.**
@@ -179,13 +179,13 @@ timer.start (std::chrono::seconds (1), /*repeat_count=*/0);
 | `start(duration, uint64_t repeat_count_)` | `repeat_count_ = 0` | starts firing every `duration` (a template accepting any `std::chrono::duration`, converted internally to nanoseconds; negative throws `config_error_t{invalid_argument}`); `repeat_count_` bounds how many times |
 | `stop()` | — | stops firing; restartable via `start` |
 | `recv()` | — | pulls the cumulative fire count; returns `std::optional<uint64_t>`, `std::nullopt` when nothing pending |
-| `on_fire(std::function<void(uint64_t)>)` | — | registers a passive observer, invoked on every fire; unlike dotnet's `Action<IZlinkTimer, ulong>`, the callback here receives only the fire count, not the timer itself |
+| `valid()` | — | whether this timer is still usable |
 | `close()` | — | releases the timer's native resources |
 
 **Completion result.** All synchronous. Move-only; the destructor does not implicitly close.
 
-**When to use.** `on_fire` for a passive interval callback; `recv` to poll expirations instead, or
-register with `poller_t::add(timer_t&, std::uintptr_t)` to multiplex alongside sockets.
+**When to use.** `recv` to pull expirations, or register with
+`poller_t::add(timer_t&, std::uintptr_t)` to multiplex alongside sockets.
 
 ---
 

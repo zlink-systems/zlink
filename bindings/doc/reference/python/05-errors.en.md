@@ -23,9 +23,9 @@ other contracts) deriving from an internal `_TypedZlinkError` base, itself deriv
 | Exception | Result enum | Raised by | Values |
 |---|---|---|---|
 | `SubmitError` | `SubmitResult` (Sockets category) | send/publish/request-submit APIs | `BACKPRESSURED`(1, ordinary control flow), `NOT_CONNECTED`(2), `NOT_FOUND`(3), `TERMINATED`(4), `INVALID_HANDLE`(5), `INVALID_ARGUMENT`(6), `NOT_SUPPORTED`(7), `INVALID_STATE`(8), `THREAD_VIOLATION`(9), `OUT_OF_MEMORY`(10), `SEQ_EXHAUSTED`(11), `INTERNAL_ERROR`(12), `NOT_ADMITTED`(13, ordinary control flow) |
-| `RequestError` | `RequestResult` (Sockets category) | request/reply completion | `TIMED_OUT`(101), `NOT_FOUND`(102), `TERMINATED`(103), `PROTOCOL_ERROR`(104), `INTERNAL_ERROR`(105), `REJECTED`(106), `CONFLICT`(107), `BUSY`(108), `NOT_CONNECTED`(109), `INVALID_ARGUMENT`(110), `INVALID_STATE`(111), `NOT_SUPPORTED`(112), `BACKPRESSURED`(113) |
+| `RequestError` | `RequestResult` (Sockets category) | awaited `submit()` or blocking `submit_sync()` terminal request failure | `TIMED_OUT`(101), `NOT_FOUND`(102), `TERMINATED`(103), `PROTOCOL_ERROR`(104), `INTERNAL_ERROR`(105), `REJECTED`(106), `CONFLICT`(107), `BUSY`(108), `NOT_CONNECTED`(109), `INVALID_ARGUMENT`(110), `INVALID_STATE`(111), `NOT_SUPPORTED`(112), `BACKPRESSURED`(113) |
 | `RecvError` | `RecvResult` (Sockets category) | recv-family APIs | `NO_DATA`(201), `BUSY`(202), `TERMINATED`(203), `INVALID_HANDLE`(204), `NOT_SUPPORTED`(205), `INTERNAL_ERROR`(206), `BUFFER_TOO_SMALL`(207), `INVALID_STATE`(208) — the fuller 8-value set (matching node's) |
-| `HandlerError` | `HandlerResult` (Sockets category) | handler registration APIs | `INVALID_ARGUMENT`(301), `BUSY`(302), `NOT_SUPPORTED`(303), `DEADLOCK`(304), `INVALID_HANDLE`(305), `INTERNAL_ERROR`(306) |
+| `HandlerError` | `HandlerResult` (Sockets category) | retained result family; current public completion/event delivery does not register handlers | `INVALID_ARGUMENT`(301), `BUSY`(302), `NOT_SUPPORTED`(303), `DEADLOCK`(304), `INVALID_HANDLE`(305), `INTERNAL_ERROR`(306) |
 | `CloseError` | `CloseResult` | `close()` paths, `Context.shutdown()` | `BUSY`(401), `SHUTDOWN`(402), `INVALID_HANDLE`(403), `INTERNAL_ERROR`(404) |
 | `BindError` | `BindResult` | `Socket.bind(...)` | `INVALID_ARGUMENT`(501), `ADDR_IN_USE`(502), `NOT_SUPPORTED`(503), `INVALID_HANDLE`(504), `INTERNAL_ERROR`(505) |
 | `ConnectError` | `ConnectResult` | `connect`/`disconnect`/`disconnect_rid` | `INVALID_ARGUMENT`(601), `NOT_SUPPORTED`(602), `INVALID_HANDLE`(603), `INTERNAL_ERROR`(604), `NOT_FOUND`(605), `CONFLICT`(606), `BUSY`(607), `AUTH_FAILED`(608) — the fuller 8-value set (matching node's) |
@@ -43,8 +43,8 @@ every non-`OK` submit result the same way loses the distinction between "retry i
 "this submit will never succeed as constructed." `BUFFER_TOO_SMALL` means the caller-provided
 output capacity couldn't hold the first complete value; the call consumes nothing, so retrying with
 a larger buffer is safe. `INVALID_STATE` covers a stale handle or a closed receive/connection
-state. Replacing or removing a handler from inside that same handler's own callback reports
-`DEADLOCK` rather than actually deadlocking.
+state. `HandlerResult` remains part of the result model, but current public send/request terminals
+and pull-event surfaces do not produce it.
 
 ---
 

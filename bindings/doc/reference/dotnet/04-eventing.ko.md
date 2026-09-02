@@ -18,7 +18,7 @@ socket의 connection lifecycle event를 관찰하고 현재 상태를 읽는다.
 
 ```csharp
 using ISocketMonitor monitor = socket.MonitorOpen(SocketEvent.Connected | SocketEvent.Disconnected);
-monitor.OnEvent(e => logger.LogInformation("{Event} {Remote}", e.Event, e.RemoteAddr));
+MonitorEvent? next = monitor.Recv(RecvFlags.None);
 MonitorStatus status = monitor.Status();
 ```
 
@@ -26,20 +26,20 @@ MonitorStatus status = monitor.Status();
 
 | Member | 기본값 | 의미 |
 | --- | --- | --- |
-| `OnEvent(Action<MonitorEvent> handler)` | — | 수동적 observer를 등록, 모든 lifecycle event마다 background dispatch 스레드에서 호출됨 |
+| `Recv(RecvFlags.DontWait)` | — | non-blocking pull, event queue가 비면 null |
 | `Recv(RecvFlags flags)` | `RecvFlags.None` | 다음 event를 가져옴; `MonitorEvent?` 반환, `DontWait`고 대기 중인 게 없으면 null |
 | `Status()` | — | monitor 대상 socket 상태의 시점 스냅샷 |
 | `Close()` | — | monitor의 native resource를 해제 |
 
 `MonitorEvent(MonitorEventType Event, uint Value, RoutingId? RoutingId, string LocalAddr,
-string RemoteAddr)`는 `OnEvent`와 `Recv` 둘 다가 전달하는 record다 — `Value`는
+string RemoteAddr)`는 `Recv`가 전달하는 record다 — `Value`는
 event별로 다르고, `RoutingId`는 event가 가진 경우에만 존재한다.
 
 **완료 결과.** 모두 동기다. `ISocketMonitor`는 `IDisposable`/`IAsyncDisposable`이다 —
 `Close()`는 disposal semantic을 기다리지 않고 resource를 반환한다.
 
-**선택 기준.** 한 번 등록하는 수동적 lifecycle observer엔 `OnEvent`를, pull 기반
-drain loop엔 `Recv`를 쓴다. 시점 스냅샷엔 `Status()`를 쓴다.
+**선택 기준.** pull 기반 lifecycle-event drain loop엔 `Recv`를 쓰고 시점 스냅샷엔
+`Status()`를 쓴다.
 
 ---
 
@@ -132,8 +132,8 @@ timer.
 
 ```csharp
 using IZlinkTimer timer = Zlink.CreateTimer();
-timer.OnFire((t, count) => logger.LogInformation("fired {Count} times", count));
 timer.Start(TimeSpan.FromSeconds(1), repeatCount: 0);
+ulong? count = timer.Recv();
 ```
 
 **옵션.**
@@ -143,13 +143,13 @@ timer.Start(TimeSpan.FromSeconds(1), repeatCount: 0);
 | `Start(TimeSpan interval, ulong repeatCount)` | — | `interval`마다 fire를 시작; `repeatCount`가 횟수 상한("무기한 반복"을 뜻하는 sentinel 값은 소스 참고) |
 | `Stop()` | — | fire를 멈춤; `Start`로 재시작 가능 |
 | `Recv(RecvFlags flags)` | `RecvFlags.None` | 누적 fire count를 가져옴; `ulong?` 반환, `DontWait`고 대기 중인 게 없으면 null |
-| `OnFire(Action<IZlinkTimer, ulong> handler)` | — | 수동적 observer를 등록, fire할 때마다 background dispatch 스레드에서 호출됨 |
+| `Recv(RecvFlags.DontWait)` | — | non-blocking pull, pending fire가 없으면 null |
 | `Close()` | — | timer의 native resource를 해제 |
 
 **완료 결과.** 모두 동기다. `IZlinkTimer`는 `IDisposable`/`IAsyncDisposable`이다.
 
-**선택 기준.** 수동적 interval 콜백엔 `OnFire`를, poll·await하려면 `Recv`를,
-socket과 함께 multiplex하려면 `IPoller.Add(IZlinkTimer, nuint)`로 등록한다.
+**선택 기준.** expiration을 pull하려면 `Recv`를, socket과 함께 multiplex하려면
+`IPoller.Add(IZlinkTimer, nuint)`로 등록한다.
 
 ---
 

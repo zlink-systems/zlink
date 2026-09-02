@@ -166,7 +166,7 @@ routing id로 지정된 peer에게 메시지를 보내고, 특정 peer의 reques
 ```cpp
 zlink::router_socket_t router (ctx);
 std::move (router.send (peer_rid)).message (part).submit ();
-router.set_completion_control_handler ([] (auto &rid, auto parts) { /* ... */ });
+std::move (router.reply (peer_rid, reply_token)).message (reply).submit ();
 ```
 
 **옵션.**
@@ -178,19 +178,18 @@ router.set_completion_control_handler ([] (auto &rid, auto parts) { /* ... */ })
 | `recv(received_t&, recv_flags_t)` | `recv_flags_t::none` | 다음 메시지로 envelope을 채움 |
 | `recv(routing_id_t& source_rid_out_, message_t& part_out_, recv_flags_t)` | `recv_flags_t::none` | pull 기반 single-part receive; caller가 오래 사는 `received_t`를 유지해 storage를 재할당 없이 재사용 가능 |
 | `request(const routing_id_t&)` | — | Messaging category의 `request_operation_t`, 특정 peer로 향함 |
-| `reply(const routing_id_t&, uint64_t request_seq_)` | — | Messaging category의 `reply_operation_t`, 그 peer의 request에 응답 |
-| `try_send_completion_control(const routing_id_t& peer_rid_, const std::vector<message_t>& parts_)` | — | `parts_`를 소비하지 않고 peer의 기존 connection으로 opaque control record 전송 |
-| `set_completion_control_handler(completion_control_handler_t)` | — | 수신되는 completion-control record를 받는 콜백 등록; `using completion_control_handler_t = std::function<void(const routing_id_t&, std::vector<message_t>)>` — 콜백이 수신 벡터를 소유 |
+| `reply(const routing_id_t&, reply_token_t)` | — | opaque token이 식별하는 수신 request에 답하는 `reply_operation_t` |
+| `recv(...)` reply token | — | `received_t::reply_token()`이 token을 제공하고 `received_t::reply()`가 source RID와 함께 포착 |
+| request terminal | — | reply 또는 terminal failure는 application DATA가 아니라 `request(...).submit()`/`.async()` 결과 |
 | `set_routing_id(const routing_id_t&)` / `get_routing_id(routing_id_t&) const` | — | 이 socket 자신의 routing id를 지정/읽음, peer가 connect 시 관찰 |
 | `options()` | — | `router_socket_options_t` 반환 |
 
-**완료 결과.** `try_send_completion_control`은 `bool`을 반환한다 — completion
-connection이 back-pressure일 때만 `false`다. `recv`는 위 `int` 관례를 따른다.
+**완료 결과.** `recv`는 위 `int` 관례를 따른다. Request terminal은 socket completion
+queue에서 settle된다.
 
 **선택 기준.** DEALER가 특정 peer를 지정할 수 없는 ROUTER 주도·ROUTER 응답
-request/reply엔 `request(peer_rid)`/`reply(rid, request_seq)`를 쓴다.
-application-level receive와 독립적인 opaque bounded control record엔
-`try_send_completion_control`/`set_completion_control_handler`를 쓴다.
+request/reply엔 `request(peer_rid)`/`reply(rid, reply_token)`을 쓴다. Token은 receive에서
+얻는 opaque socket-bound metadata이며 합성하지 않는다.
 
 ---
 
@@ -276,7 +275,9 @@ packet을 직접 주고받는다.
 
 ```cpp
 zlink::stream_socket_t stream (ctx);
-stream.set_packet_handler ([] (auto &rid, auto &&header, auto &&body) { /* header/body 소유 */ });
+stream.options ().recv_mode (zlink::stream_recv_mode_t::packet);
+zlink::stream_packet_t packet;
+bool ok = stream.recv_packet (packet, zlink::recv_flags_t::none);
 ```
 
 **옵션.**
@@ -285,15 +286,16 @@ stream.set_packet_handler ([] (auto &rid, auto &&header, auto &&body) { /* heade
 | --- | --- | --- |
 | `explicit stream_socket_t(context_t&)` | — | 그 context에 묶인 socket을 생성 |
 | `send(const routing_id_t&)` | — | 그 peer로 향하는 공유 `send_operation_t` 시작 |
-| `recv(received_t&, recv_flags_t)` | `recv_flags_t::none` | 다음 packet으로 envelope을 채움; dotnet의 `IStreamSocket`(raw part와 routing id/`hasMore`를 반환하는 `RecvPart`가 있음)과 달리, 여기 public으로 선언된 별도 raw-part receive overload는 없음 |
-| `set_packet_handler(std::function<void(const routing_id_t&, message_t&&, message_t&&)>)` | — | callback 기반 packet loop 등록 |
+| `recv(received_t&, recv_flags_t)` | `recv_flags_t::none` | `stream_recv_mode_t::raw`에서 다음 raw record pull |
+| `recv_packet(stream_packet_t&, recv_flags_t)` | `recv_flags_t::none` | `stream_recv_mode_t::packet`에서 source RID와 header/body packet 하나 pull |
 | `set_routing_id(const routing_id_t&)` / `get_routing_id(routing_id_t&) const` | — | 이 socket 자신의 routing id를 지정/읽음, peer가 connect 시 관찰 |
 | `options()` | — | `stream_socket_options_t` 반환 |
 
-**완료 결과.** `recv`는 위 `int` 관례를 따른다. packet handler는 rvalue 참조를
-통해 메시지 소유권을 콜백으로 이전한다.
+**완료 결과.** `recv`는 위 `int` 관례를 따르고 `recv_packet`은 DONTWAIT no-data에서만
+`false`이며, 그 외 성공은 packet message를 `stream_packet_t`에 이전한다.
 
-**선택 기준.** callback 기반 packet loop엔 `set_packet_handler`를 쓴다.
+**선택 기준.** Bind/connect 전에 `options().recv_mode(...)`로 RAW 또는 PACKET을 정하고
+일치하는 pull receive family만 호출한다.
 
 ---
 
@@ -333,7 +335,7 @@ application이 다른 스레드에서 control socket을 통해 loop을 일시정
 | `rid_duplicate_policy_t` | `common_socket_options_t::rid_duplicate_policy`, `router_socket_options_t::handover` | `reject`, `handover` |
 | `submit_retry_mode_t` | `common_socket_options_t::submit_retry_mode` | `off`, `local_failure` |
 | `tcp_keepalive_mode_t` | `common_socket_options_t::tcp_keepalive` | `os_default`, `off`, `on` |
-| `send_flags_t`(static member를 가진 class, `enum`이 아님) | 모든 send/request/reply builder의 `.flags(int)` 단계(Messaging category) | `none`, `dontwait` |
+| `send_flags_t`(static member를 가진 class, `enum`이 아님) | synchronous publish flag | `none`, `dontwait` |
 | `recv_flags_t`(static member를 가진 class, `enum`이 아님) | 모든 `recv`/`subscribe`/`receive_subscription_event` | `none`, `dontwait` |
 | `send_result_t` | non-blocking send 시도의 결과 | `sent`, `backpressured`, `not_ready` |
 | `submit_result_t` | `submit_error_t`로 던져짐(Errors category) | `zlink_submit_result_t`를 반영(Errors category 참고) |

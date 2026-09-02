@@ -19,7 +19,9 @@ socket의 connection lifecycle event를 관찰하고 현재 상태를 읽는다.
 
 ```python
 monitor = open_socket_monitor(socket)
-monitor.on_event(lambda event: print(event.event, event.remote_addr))
+event = monitor.recv(flags=RecvFlags.DONT_WAIT)
+if event is not None:
+    print(event.event, event.remote_addr)
 status = monitor.status()
 ```
 
@@ -30,15 +32,12 @@ status = monitor.status()
 | `status()` | 시점 스냅샷 `MonitorStatus`를 반환 |
 | `close()` | monitor를 닫음 |
 | `recv(*, flags=0)` | 다음 event를 가져옴; `MonitorEvent` 또는 `DONT_WAIT`가 설정되고 없으면 `None` 반환 |
-| `on_event(handler)` | 수동적 lifecycle-event 콜백을 등록, background dispatch 스레드에서 호출됨 |
-| `ignore_handler` | caller가 event를 명시적으로 버리려고 등록할 수 있는 `staticmethod`(`lambda event: None`) |
 
 **Completion result.** 모든 member는 동기다. sync·async
 context-manager 프로토콜을 둘 다 지원한다.
 
-**선택 기준.** 한 번 등록하는 수동적 lifecycle observer엔
-`on_event`를 쓴다. pull 기반 drain loop엔 대신 `recv`를 쓴다. 시점
-스냅샷엔 `status()`를 쓴다.
+**선택 기준.** caller-driven pull loop에는 `recv`를 쓰고 시점
+스냅샷에는 `status()`를 쓴다. Monitor 전달에는 등록형 callback이 없다.
 
 ---
 
@@ -133,6 +132,9 @@ ready = poller.wait(events, timeout_ms=1000)
 `timeout_ms`까지 block하며, `events`를 그 자리에서 채우고 준비된
 개수를 반환한다. sync·async context-manager 프로토콜을 둘 다
 지원한다.
+Socket을 `PollEventFlag.POLLCOMPLETION`으로 등록했다면 owner가 `wait()`를
+계속 호출해 binding이 native completion을 drain·settle하게 해야 한다.
+두 역할이 필요하면 별도 execution context에서 blocking terminal을 수행한다.
 
 **선택 기준.** 서비스 수명 전체에서 poller 하나를 쓴다. `wait`
 호출마다 새로 만드는 대신 `PollEvents` buffer 하나를 재사용한다.
@@ -192,8 +194,8 @@ interval마다 fire하며 poll하거나 await할 수 있는 timer.
 
 ```python
 timer = create_timer()
-timer.on_fire(lambda count: print(f"fired {count} times"))
 timer.start(interval_ns=1_000_000_000, repeat_count=0)
+count = timer.recv()
 ```
 
 **Options.**
@@ -203,15 +205,14 @@ timer.start(interval_ns=1_000_000_000, repeat_count=0)
 | `start(interval_ns: int, repeat_count: int)` | `interval_ns`마다 fire를 시작; **interval이 나노초 단위다**, rust의 `Timer::start`와 일치하고 지금까지 다룬 다른 모든 언어가 쓰는 밀리초/`Duration` 기반 `start`와 다르다; `repeat_count == 0`은 무제한 |
 | `stop()` | fire를 멈춤; `start`로 재시작 가능 |
 | `recv()` | `Optional[int]` 반환 — 누적 fire count, 대기 중인 게 없으면 `None` |
-| `on_fire(handler)` | 수동적 interval 콜백을 등록, background dispatch 스레드에서 호출됨 — **여기 handler는 fire count만 받는다**, 대부분 다른 언어의 `on_fire`/`onFire` 콜백이 받는 `(timer, count)`가 아니다 |
 | `close()` | timer를 닫음 |
 
 **Completion result.** 모든 member는 동기다. sync·async
 context-manager 프로토콜을 둘 다 지원한다.
 
-**선택 기준.** 수동적 interval 콜백엔 `on_fire`를, 대신 만료를
-poll하려면 `recv`를, socket과 함께 하나의 wait에서 multiplex하려면
-`Poller.add_timer`로 등록한다.
+**선택 기준.** 만료를 pull하려면 `recv`를, socket과 함께 하나의
+wait에서 multiplex하려면 `Poller.add_timer`로 등록한다. Timer 전달에는
+등록형 callback이 없다.
 
 ---
 

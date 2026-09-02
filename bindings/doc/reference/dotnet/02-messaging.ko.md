@@ -77,7 +77,7 @@ envelope 메타데이터·message part를 읽거나, envelope의 source를 향�
 시작한다.
 
 ```csharp
-if (received.RequestSeq is { } seq)
+if (received.ReplyToken is { } token)
 {
     received.Reply().Message(Message.From("ok")).Submit();
 }
@@ -89,20 +89,20 @@ Message first = received.FirstPart();
 | Member | 반환 | 의미 |
 | --- | --- | --- |
 | `RoutingId` | `RoutingId?` | receive 경로가 제공할 때만 존재 |
-| `RequestSeq` | `ulong?` | reply 가능할 때만 존재 |
+| `ReplyToken` | `ReplyToken?` | ROUTER request에 있는 opaque reply capability |
 | `MessageType` | `ReceivedMessageType` | `Raw`/`Request`/`Reply`/`ErrorReply` |
 | `Parts` | `IReadOnlyList<Message>` | 이 envelope이 담은 모든 message part |
 | `IsSinglePart` | `bool` | `Parts`가 정확히 하나인지 |
 | `FirstPart()` | `Message` | 첫 part, 소유권 이전 없음 |
 | `SinglePartOrThrow()` | `Message` | 단일 part, `Parts`가 둘 이상이면 예외 |
-| `Reply()` | builder | `RequestSeq`가 값을 가질 때만 유효 — 아래 공유 builder 형태 참고 |
+| `Reply()` | builder | `ReplyToken`이 값을 가질 때만 유효 — 아래 공유 builder 형태 참고 |
 | `Send()` | builder | envelope의 source route로 향함 |
 
 **완료 결과.** 모두 동기다. `Dispose()`는 다른 API가 이미 소유권을 이전하지 않은 한 이
 envelope이 소유한 message part를 해제한다. `Reply()`/`Send()`는 아래 공유
 operation-builder 형태의 builder를 반환한다.
 
-**선택 기준.** `MessageType`/`RequestSeq`로 분기해 envelope이 reply 가능한지 판단한다.
+**선택 기준.** `MessageType`/`ReplyToken`으로 분기해 envelope이 reply 가능한지 판단한다.
 source route를 따로 찾지 않고 요청에 답하려면 `Reply()`를 쓴다.
 
 ---
@@ -189,9 +189,9 @@ received.Reply().Message(Message.From("ok")).Submit();
 | 단계 | Member | 의미 |
 | --- | --- | --- |
 | `SendOperation` | `.Message(Message)` | chain 시작 |
-| `SendSubmitOperation` | `.Message(...)` / `.Flags(SendFlags)` / `.Submit()` | part 추가, flag 설정, terminal |
+| `SendSubmitOperation` | `.Message(...)` / `.Submit()` / `.Async(CancellationToken)` | part 추가 뒤 blocking 또는 Task terminal 선택 |
 | `RequestOperation`/`RequestSubmitOperation` | `Send`와 동일 + `.Timeout(TimeSpan)` | send chain을 그대로 반영하며 reply 대기 timeout을 더함 |
-| `RequestSubmitOperation.Flags(...)` | `RequestCallbackSubmitOperation`으로 좁힘 | awaitable `.Async()` 경로가 사라짐 — 이후 `.Submit(RequestCallback)`만 도달 가능 |
+| `RequestSubmitOperation` terminal | `.Submit()` / `.Async(CancellationToken)` | blocking reply 또는 completion-backed Task reply 결과 |
 | `ReplyOperation`/`ReplySubmitOperation` | `Send`와 같은 형태, flags 단계 없음 | core reply 함수가 send-flag 인자를 받지 않음 |
 | `Messages(IReadOnlyList<Message>)` | `MessageOperations` extension | 네 family 전체의 모든 단계에서 여러 part를 순서대로 한 번에 추가; 독립 진입점 아님 |
 
@@ -200,14 +200,14 @@ received.Reply().Message(Message.From("ok")).Submit();
 
 | Terminal | 반환 | 의미 |
 | --- | --- | --- |
-| `SendSubmitOperation.Submit()` | `bool` | `SendFlags.DontWait` backpressure일 때만 `false`, 그 외 실패는 `ZlinkException` |
+| `SendSubmitOperation.Submit()` | `void` | Core local admission까지 blocking, 실패하면 `ZlinkException` |
+| `SendSubmitOperation.Async(CancellationToken)` | `Task` | DONTWAIT submit을 socket completion queue에서 settle |
 | `ReplySubmitOperation.Submit()` | `void` | 실패하면 `ZlinkException`을 던짐 |
 | `RequestSubmitOperation.Async(CancellationToken)` | `Task<IReadOnlyList<Message>>` | caller가 reply message를 소유하며 반드시 dispose해야 함 |
-| `Submit(RequestCallback)`(`RequestSubmitOperation`/`RequestCallbackSubmitOperation`) | `bool` | dispatch 결과일 뿐, 실제 reply는 나중에 콜백으로 `(RequestResult result, IReadOnlyList<Message> parts)`가 전달됨 — `result`가 `RequestResult.Ok`일 때만 `parts`가 채워짐 |
+| `RequestSubmitOperation.Submit()` | `IReadOnlyList<Message>` | completion queue가 reply를 낼 때까지 blocking, caller가 part dispose |
 
-**선택 기준.** async 코드에선 `.Async()`를 쓴다. callback-completion 표면이 필요할 땐
-(await할 수 없는 동기 dispatch 스레드) `.Flags(...).Submit(callback)`을 쓴다.
-목적지 route를 손으로 재구성하는 대신 `Received` envelope의 `Reply()`/`Send()`를 쓴다.
+**선택 기준.** async 코드에서는 `.Async()`를, blocking 가능한 thread에서는 `.Submit()`을
+쓴다. 목적지 route를 손으로 재구성하는 대신 `Received` envelope의 `Reply()`/`Send()`를 쓴다.
 
 ---
 

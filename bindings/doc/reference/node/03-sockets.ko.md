@@ -25,7 +25,7 @@ connection.
 ```ts
 socket.bind('tcp://*:5555');
 socket.setTlsServer(certPath, keyPath, true);
-const monitor = socket.monitorOpen(SOCKET_MONITOR_EVENT_ALL);
+const monitor = socket.monitorOpen([MonitorEventType.Connected]);
 socket.close();
 ```
 
@@ -41,7 +41,7 @@ DealerSocket | RouterSocket | XPubSocket | XSubSocket | StreamSocket`)은
 | --- | --- |
 | `bind(endpoint: string)` / `unbind(endpoint: string)` | 주소에서 listen을 시작/중단 |
 | `close()` | native socket을 닫는다 |
-| `monitorOpen(events?: number, handler?: SocketMonitorHandler)` | monitor를 연다; 지금까지 다룬 다른 모든 언어와 달리 **handler를 open 시점에 이 메서드의 두 번째 인자로 직접 등록할 수 있다**, 항상 이후에 별도의 `onEvent` 스타일 호출이 필요한 게 아니라 |
+| `monitorOpen(events?: readonly MonitorEventType[], monitorHwmBytes?: bigint)` | 선택 event 집합과 byte HWM으로 caller-owned pull monitor를 연다 |
 | `setTlsServer(cert, key, requireClientCert?)` | `bind` 전에 적용 |
 | `setTlsClient(ca, hostname, trustSystem?)` | `connect` 전에 적용 |
 | `ConnectableSocket.connect(endpoint: string)` / `disconnect(endpoint: string)` | peer 주소로 connect/disconnect |
@@ -52,8 +52,8 @@ DealerSocket | RouterSocket | XPubSocket | XSubSocket | StreamSocket`)은
 반환한다 — caller가 소유하며 반드시 close해야 한다.
 
 **선택 기준.** `bind`/`connect` 전에 각각 `setTlsServer`/`setTlsClient`를
-호출한다. `recv` 스타일 drain을 위해 monitor를 따로 유지할 필요가 없을
-땐 handler를 `monitorOpen(events, handler)`에 직접 넘긴다.
+호출한다. 반환된 monitor를 유지하고 `recv`로 drain한다. callback 등록
+경로는 설치하지 않는다.
 
 ---
 
@@ -127,7 +127,7 @@ bind한 후 `lastEndpoint`를 읽는다.
 
 ```ts
 const pair = createPairSocket(ctx);
-pair.send().message(Message.from('ping')).submit();
+pair.send().message(Message.from('ping')).submit_sync();
 const received = new Received();
 if (pair.recv(received)) { /* ... */ }
 ```
@@ -139,7 +139,6 @@ if (pair.recv(received)) { /* ... */ }
 | `options` | `CommonSocketOptions` |
 | `send()` | 공유 `SendOperation` builder를 시작 |
 | `recv(result: Received, flags?: RecvFlags)` | `result`를 다음 메시지로 채움 |
-| `setSendReadyHandler(handler: () => void)` | back-pressure 해제 콜백을 등록 |
 
 **Completion result.** `recv`는 `boolean`을 반환한다 —
 `RecvFlags.DontWait`가 설정되고 메시지가 없을 때만 `false`다.
@@ -187,8 +186,7 @@ reply할 수 있다. `PairSocket`이 아니라 `ConnectableSocket`을 직접
 
 ```ts
 const router = createRouterSocket(ctx);
-router.send(peerRid).message(Message.from('hello')).submit();
-router.setCompletionControlHandler((rid, parts) => { /* ... */ });
+await router.send(peerRid).message(Message.from('hello')).submit();
 ```
 
 **Options.**
@@ -198,22 +196,16 @@ router.setCompletionControlHandler((rid, parts) => { /* ... */ });
 | `options` | `RouterSocketOptions` |
 | `send(routingId)` | 공유 `SendOperation`을 그 peer로 향해 시작 |
 | `recv(result: Received, flags?: RecvFlags)` | `result`를 다음 메시지로 채움 |
-| `setSendReadyHandler(handler)` | back-pressure 해제 콜백을 등록 |
 | `setRoutingId(routingId)` / `getRoutingId()` | 이 socket 자신의 routing id를 지정/조회, peer가 connect 시 관찰 |
 | `request(peerRid)` | Messaging category의 `RequestOperation`, 특정 peer로 향함 |
-| `reply(peerRid, requestSeq: bigint)` | Messaging category의 `ReplyOperation`, 해당 peer의 request에 응답 |
-| `trySendCompletionControl(peerRid, parts: readonly MessageLike[])` | peer의 기존 연결로 opaque control record를 전송; `parts`를 소비하지 않음 |
-| `setCompletionControlHandler(handler: (sourceRoutingId, parts: Message[]) => void)` | 들어오는 completion-control record를 받는 콜백을 등록; handler가 수신 메시지를 소유 |
+| `reply(peerRid, token: ReplyToken)` | Messaging category의 `ReplyOperation`, 이 ROUTER가 받은 opaque capability를 소비 |
 
-**Completion result.** `trySendCompletionControl`은 `boolean`을
-반환한다 — completion connection이 back-pressure일 때만 `false`다.
-`recv`는 위 `boolean` 관례를 따른다.
+**Completion result.** Managed send와 request completion은 해당 Promise
+또는 blocking terminal로만 전달된다. `recv`는 위 `boolean` 관례를 따른다.
 
 **선택 기준.** DEALER가 특정 peer를 지정할 수 없는 ROUTER 주도·ROUTER
-응답 request/reply엔 `request(peerRid)`/`reply(peerRid, requestSeq)`를
-쓴다. application-level receive와 독립적인 opaque bounded control
-record엔 `trySendCompletionControl`/`setCompletionControlHandler`를
-쓴다.
+응답 request/reply엔 `request(peerRid)`/`reply(peerRid, token)`을 쓴다.
+`ReplyToken`은 opaque하고 socket-owned이며 one-shot인 채로 유지한다.
 
 ---
 
@@ -238,7 +230,6 @@ if (xpub.receiveSubscriptionEvent(evt)) { /* ... */ }
 | --- | --- |
 | `options` | `PubSocketOptions` |
 | `publish(topic: string)` | 공유 `SendOperation` builder를 시작 |
-| `setSendReadyHandler(handler)` | back-pressure 해제 콜백을 등록 |
 | `receiveSubscriptionEvent(result: SubscriptionEvent, flags?: RecvFlags)` | `XPubSocket`에만 있음; `result`를 다음 subscribe/unsubscribe로 채움 |
 
 **`PubSocket`엔 `setRoutingId`/`getRoutingId`가 없다**(둘 다 있는 dotnet의
@@ -298,7 +289,10 @@ framed packet을 직접 주고받는다. (`ConnectableSocket`이 아니라)
 
 ```ts
 const stream = createStreamSocket(ctx);
-stream.setPacketHandler((sourceRid, header, body) => { /* header/body 소유 */ });
+stream.options.recvMode = StreamRecvMode.Packet;
+const packet = new StreamPacket();
+if (stream.recvPacket(packet)) { /* packet.routingId/header/body 사용 */ }
+packet.close();
 ```
 
 **Options.**
@@ -307,16 +301,17 @@ stream.setPacketHandler((sourceRid, header, body) => { /* header/body 소유 */ 
 | --- | --- |
 | `options` | `StreamSocketOptions` |
 | `send(routingId)` | 공유 `SendOperation`을 그 peer로 향해 시작 |
-| `recv(result: Received, flags?: RecvFlags)` | `result`를 다음 packet으로 채움 |
-| `setPacketHandler(handler: StreamPacketHandler)` | callback 기반 packet loop를 등록 |
-| `setSendReadyHandler(handler)` | back-pressure 해제 콜백을 등록 |
+| `recv(result: Received, flags?: RecvFlags)` | 다음 RAW-mode record를 pull |
+| `recvPacket(result: StreamPacket, flags?: RecvFlags)` | 다음 PACKET-mode header/body를 재사용 storage로 pull |
 | `setRoutingId(routingId)` / `getRoutingId()` | 이 socket 자신의 routing id를 지정/조회, peer가 connect 시 관찰 |
 | `disconnectRid(routingId)` | `StreamSocket`이 `ConnectableSocket`의 사본을 상속하지 않으므로 이 interface에 직접 선언됨 |
 
-**Completion result.** `recv`는 위 `boolean` 관례를 따른다. packet
-handler는 수신하는 `header`와 `body` 메시지를 둘 다 소유한다.
+**Completion result.** `recv`와 `recvPacket`은 위 `boolean` 관례를 따른다.
+Caller가 packet의 header/body를 소유하며 `packet.close()`로 해제한다.
 
-**선택 기준.** callback 기반 packet loop엔 `setPacketHandler`를 쓴다.
+**선택 기준.** 첫 successful bind/connect 전에 `options.recvMode`를
+`StreamRecvMode.Raw` 또는 `.Packet`으로 정한다. 이후 변경은 invalid state며,
+선택한 pull API를 drain한다.
 
 ---
 
@@ -327,19 +322,17 @@ handler는 수신하는 `header`와 `body` 메시지를 둘 다 소유한다.
 | 상수 | 사용처 | 값 |
 |---|---|---|
 | `SocketType` | 내부 socket 종류 식별 | **이중 케이싱**: `ANY`/`PAIR`/`PUB`/`SUB`/`DEALER`/`ROUTER`/`XPUB`/`XSUB`/`STREAM`과 `Any`/`Pair`/`Pub`/`Sub`/`Dealer`/`Router`/`XPub`/`XSub`/`Stream` 둘 다 동일한 숫자값의 alias로 export됨 |
-| `SOCKET_MONITOR_EVENT_ALL` | `Socket.monitorOpen(events)` | `0xFFFF` — "전체 구독" 편의 상수; 개별 lifecycle event flag(`Connected`, `Disconnected` 등)는 여기 `socket_constants.ts`가 아니라 Eventing category의 `contracts/eventing/monitor.ts`에 선언된 `MonitorEventType` 상수 객체다 |
+| `SOCKET_MONITOR_EVENT_ALL` | 호환성 상수 | `0x7FFFF`; 현행 `monitorOpen`은 숫자 mask 대신 `readonly MonitorEventType[]`를 받음 |
 | `RidDuplicatePolicy` | `CommonSocketOptions.ridDuplicatePolicy`, `RouterSocketOptions.handover` | `Reject`, `Handover` |
 | `SubmitRetryMode` | `CommonSocketOptions.submitRetryMode`(property 자체는 순수 `number`로 타입 지정) | `Off`, `LocalFailure` |
-| `SendFlags` | 모든 send/request/reply builder의 `.flags(...)` 단계(Messaging category) | `None`, `DontWait` |
+| `SendFlags` | export된 호환성 상수; managed send/request/reply terminal은 받지 않음 | `None`, `DontWait` |
 | `RecvFlags` | 모든 `recv`/`subscribe`/`receiveSubscriptionEvent` | `None`, `DontWait` |
 | `PollEventFlag` | Poller 등록/wait(Eventing category) | `PollIn`, `PollOut`, `PollErr`, `PollPri`, `PollCompletion` |
 
-**선택 기준.** 두 flags 상수 어느 쪽이든 `DontWait`는 blocking 호출을
-non-blocking으로 바꿔 block하는 대신 `false`/back-pressure를
-보고한다. 모든 lifecycle event를 구독하려면 `monitorOpen(events)`에
-`SOCKET_MONITOR_EVENT_ALL`을 넘기고, 구독을 필터링하려면 특정
-`MonitorEventType` 값(Eventing category)을 OR해서 raw 숫자 mask로
-넘긴다.
+**선택 기준.** `RecvFlags.DontWait`는 pull API가 block하는 대신 `false`를
+반환해야 할 때 쓴다. Managed send/request/reply terminal은 의도적으로
+`DontWait`를 노출하지 않는다. `monitorOpen` 필터에는 `MonitorEventType`
+값 목록을 넘긴다.
 
 ---
 

@@ -150,7 +150,7 @@ ok, err := pair.Recv(&received, contracts.RecvFlagsNone)
 | --- | --- |
 | `Send() SendOp` | 공유 send builder를 시작 |
 | `Recv(out *Received, flags RecvFlags) (bool, error)` | `out`을 다음 메시지로 채움 |
-| `OnSendReady(handler func()) error` | back-pressure 해제 콜백을 등록 |
+| completion-backed `Submit(ctx)` | Core가 pre-admission retry를 소유하고 caller는 Context로 대기 |
 
 **Completion result.** `Recv`는 `RecvFlagsDontWait`가 설정돼 있고
 메시지가 없을 때만 `(false, nil)`을 반환한다.
@@ -168,9 +168,7 @@ ok, err := pair.Recv(&received, contracts.RecvFlagsNone)
 ```go
 dealer, err := ctx.DealerSocket()
 dealer.SetRoutingID(contracts.NewRoutingIDString("worker-3"))
-dealer.Request().Message(payload).Submit(ctx, func(result contracts.RequestResult, parts []*contracts.Message) {
-    // ...
-})
+parts, err := dealer.Request().Message(payload).Submit(ctx)
 ```
 
 **Options.** `PairSocket`과 같은 공유 표면에 더해:
@@ -197,28 +195,23 @@ envelope helper가 없다 — 대신 수신 request context의
 
 ## `RouterSocket`
 
-routing id로 지정된 peer에 메시지를 보내고, 특정 peer의 request에
-응답하며, 추가로 opaque completion-control channel을 지원한다.
+routing id로 지정된 peer에 메시지를 보내고 특정 peer의 request에 응답한다.
 
 ```go
 router, err := ctx.RouterSocket()
 router.SendTo(peerRID).Message(hello).Submit(ctx)
-router.OnCompletionControl(func(received *contracts.Received) {
-    defer received.Close()
-})
+router.Reply(peerRID, replyToken).Message(reply).Submit(ctx)
 ```
 
-**Options.** `PairSocket`과 같은 공유 표면에 더해. **이 binding은
-ROUTER에서 completion-control을 실제로 구현한다**, 대응하는 공개
-진입점을 선언하지 않는 rust와 다르다.
+**Options.** `PairSocket`과 같은 공유 표면에 더해:
 
 | Member | 의미 |
 | --- | --- |
 | `SendTo(target RoutingID) SendOp` | 공유 send builder를 그 peer로 향해 시작 |
-| `Recv(out, flags) (bool, error)` | `out`을 다음 메시지로 채움; receive-callback handler가 이미 설치돼 있으면 `*RecvError{Result: RecvBusy}`를 반환 — 이 binding에서 `Recv`와 callback 경로는 ROUTER에서 상호 배타적 |
+| `Recv(out, flags) (bool, error)` | `out`을 다음 application message로 채움 |
 | `Request(peerRID RoutingID) RequestOp` | Messaging category의 `RequestOp`, 특정 peer로 향함 |
-| `Reply(rid RoutingID, requestSeq uint64) ReplyOp` | Messaging category의 `ReplyOp`, 해당 peer의 request에 응답 |
-| `OnSendReady(handler func()) error` | back-pressure 해제 콜백을 등록 |
+| `Reply(rid RoutingID, token ReplyToken) ReplyOp` | opaque token이 식별하는 request에 답하는 `ReplyOp` |
+| `Received.ReplyToken()` | ROUTER receive가 제공한 socket-bound token 반환 |
 | `SetRoutingID(RoutingID) error` / `RoutingID() (RoutingID, error)` | 이 socket 자신의 routing id를 지정/조회, peer가 connect 시 관찰 |
 | `SetMandatory(bool) error` | **set-only**; 알 수 없는 route에서 조용히 버리는 대신 오류 |
 | `SetProbe(bool) error` | **set-only**; connect 시 빈 probe 전송 |
@@ -226,16 +219,15 @@ ROUTER에서 completion-control을 실제로 구현한다**, 대응하는 공개
 | `SetConnectRoutingID(RoutingID) error` | **set-only — 할당된 connect routing id의 getter 없음**, 읽기 전용 `ConnectRoutingId` property를 가진 dotnet/cpp와 다름 |
 | `Weight()` / `SetWeight(int)` | load-balancing 가중치, 양방향 모두 |
 | `RequestTimeout()` / `SetRequestTimeout(time.Duration)` | request timeout, **양방향 모두, Dealer의 set-only와 다름** |
-| `OnCompletionControl(handler func(*Received)) error` | 들어오는 completion-control record를 받는 콜백을 등록 |
-| `CompletionControl(peerRID RoutingID) SendOp` | peer로 향하는 opaque control-plane record; control plane은 send flag를 전혀 받지 않는다 — `SendFlagsNone` 외의 `Flags` 값은 submit 시점에 거부된다 |
+| request `Submit(ctx)` | completion drain 뒤 reply part 또는 typed terminal error 반환 |
+| send `Submit(ctx)` | 접수된 send completion이 settle된 뒤 반환 |
 
 **Completion result.** `Recv`는 `PairSocket`과 같은 관례를 따른다.
 
 **선택 기준.** DEALER가 특정 peer를 지정할 수 없는 곳에서
 ROUTER-시작 또는 ROUTER-응답 request/reply엔
-`Request(peerRID)`/`Reply(rid, requestSeq)`를 쓴다. 일반 application
-payload와 혼동되면 안 되는 out-of-band control 메시지엔
-`OnCompletionControl`/`CompletionControl`을 쓴다.
+`Request(peerRID)`/`Reply(rid, token)`을 쓴다. Token은 receive에서 얻고 합성하거나
+재사용하지 않는다.
 
 ---
 
@@ -260,14 +252,13 @@ ok, err := sub.Subscribe(&msg, contracts.RecvFlagsNone)
 
 **Options.** **`PubSocket`도 `XPubSocket`도 `SetRoutingID`/`RoutingID`를
 선언하지 않는다** — 둘 다 이 binding에 routing-id 표면이 전혀 없다,
-지금까지 다룬 다른 모든 언어와 동일하다. **`SubSocket`도 `XSubSocket`도
-`OnSendReady`를 선언하지 않는다** — 이 binding에서 유일하게
-`OnSendReady`가 없는 socket type이다.
+지금까지 다룬 다른 모든 언어와 동일하다. `SubSocket`과 `XSubSocket`은
+receive/subscription 표면만 노출하며 managed send completion은 없다.
 
 | 타입 | Member | 의미 |
 | --- | --- | --- |
 | `PubSocket` | `Publish(topic string) SendOp` | 공유 send builder를 시작 |
-| | `OnSendReady(handler func()) error` | back-pressure 해제 콜백을 등록 |
+| | `Publish(topic string).Submit(ctx)` | synchronous lossy/NODROP publish terminal |
 | | `PubOptions() *PubSocketOptions` | 타입별 option facade |
 | `SubSocket` / `XSubSocket` | `Subscribe(out *TopicMessage, flags RecvFlags) (bool, error)` | `out`을 다음 매칭 publish로 채움 |
 | | `SetSubscription(filter string) error` / `UnsetSubscription(filter string) error` | topic filter를 추가/제거; subscription은 누적된다 |
@@ -295,9 +286,9 @@ field로 감싼다 — 이게 무엇을 빠뜨리는지는 이 category 맨 위 
 
 ```go
 stream, err := ctx.StreamSocket()
-stream.OnPacket(func(routingID contracts.RoutingID, header, body *contracts.Message) {
-    // header/body를 소유
-})
+stream.SetReceiveMode(contracts.StreamReceivePacket)
+var packet contracts.StreamPacket
+ok, err := stream.RecvPacket(&packet, contracts.RecvFlagsNone)
 ```
 
 **Options.** `StreamSocketOptions` facade 타입은 존재하지 않는다 —
@@ -307,16 +298,15 @@ stream.OnPacket(func(routingID contracts.RoutingID, header, body *contracts.Mess
 | Member | 의미 |
 | --- | --- |
 | `SendTo(target RoutingID) SendOp` | 공유 send builder를 그 peer로 향해 시작 |
-| `Recv(out *Received, flags RecvFlags) (bool, error)` | `out`을 다음 packet으로 채움; 이 binding의 `Recv`는 추가로 source routing id를 `out`에 send context로 캡처한다, 그래서 이어지는 `out.Send()`는 packet의 발신자로 향한다 — STREAM 전용 보강 |
-| `OnPacket(handler func(RoutingID, *Message, *Message)) error` | callback 기반 packet loop를 등록; handler가 `header`와 `body` 둘 다 소유 |
-| `OnSendReady(handler func()) error` | back-pressure 해제 콜백을 등록 |
+| `Recv(out *Received, flags RecvFlags) (bool, error)` | `StreamReceiveRaw`에서 raw record pull |
+| `RecvPacket(out *StreamPacket, flags RecvFlags) (bool, error)` | `StreamReceivePacket`에서 caller-owned header/body packet 하나 pull |
+| `SetReceiveMode(StreamReceiveMode)` / `ReceiveMode()` | bind/connect 전에 RAW 또는 PACKET 선택, 이후 immutable |
 | `SetRoutingID(RoutingID) error` / `RoutingID() (RoutingID, error)` | 이 socket 자신의 routing id를 지정/조회, peer가 connect 시 관찰 |
 | `SetNotify(bool)` / `Notify() (bool, error)` | 활성화 시 peer connect/disconnect를 application 메시지로 전달 |
 
-**Completion result.** `Recv`는 `DontWait`에서 `(false, nil)` 관례를
-따른다.
+**Completion result.** 두 receive 형식 모두 `DontWait`에서 `(false, nil)` 관례를 따른다.
 
-**선택 기준.** callback 기반 packet loop엔 `OnPacket`을 쓴다.
+**선택 기준.** Bind 전에 RAW 또는 PACKET을 정하고 일치하는 pull API를 쓴다.
 `StreamSocket`은 이 binding의 공개 API 관점에서 아예 `Connect`/
 `Disconnect`가 불가능하다는 걸 기억한다 — bind-and-accept 전용이다.
 
@@ -326,7 +316,7 @@ stream.OnPacket(func(routingID contracts.RoutingID, header, body *contracts.Mess
 
 | 타입 | 사용처 | 값 |
 |---|---|---|
-| `SendFlags`(명명된 `int`) | 모든 send/request/reply builder의 `.Flags(...)` 단계(Messaging category) | `SendFlagsNone`, `SendFlagsDontWait` |
+| `SendFlags`(명명된 `int`) | synchronous publish `.Flags(...)` 단계 | `SendFlagsNone`, `SendFlagsDontWait` |
 | `RecvFlags`(명명된 `int`) | 모든 `Recv`/`Subscribe`/`ReceiveSubscriptionEvent` | `RecvFlagsNone`, `RecvFlagsDontWait` |
 | `RidDuplicatePolicy`(명명된 `int`) | `CommonSocketOptions.RidDuplicatePolicy`/`RouterSocket.SetHandover` | `RidDuplicateReject`, `RidDuplicateHandover` |
 | `SubmitRetryMode`(명명된 `int`) | `CommonSocketOptions.SubmitRetryMode` | `SubmitRetryOff`, `SubmitRetryLocalFailure` |

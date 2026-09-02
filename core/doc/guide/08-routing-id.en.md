@@ -20,24 +20,24 @@ zlink_set_routing_id(socket, id, sizeof(id) - 1);
 ## Receive and reply
 
 `zlink_recv_part()`, `zlink_subscribe_part()`, and
-`zlink_router_recv_part()` return a pointer to a thread-local routing-id view.
-The next receive-like call on the same thread may invalidate it.
+`zlink_router_recv_part()` return a pointer to a socket-owned routing-id view.
+The next data-receive entry on that same socket, successful or not, invalidates it.
 
 ```c
 const zlink_routing_id_t *source_rid = NULL;
-uint64_t request_seq = 0;
+zlink_reply_token_t reply_token = 0;
 zlink_msg_t part;
 zlink_part_flag_t more;
 
 zlink_msg_init(&part);
 zlink_router_recv_part(
-    router, &source_rid, &request_seq, &part, &more, 0);
-/* Copy source_rid now if another receive may run before it is used. */
+    router, &source_rid, &reply_token, &part, &more, ZLINK_RECV_FLAGS_NONE);
+/* Copy source_rid now if another data receive on router may run first. */
 ```
 
 Use a received routing id with `zlink_send_part_rid()` for ordinary routed
-traffic. For a request, combine it with the returned sequence and call
-`zlink_router_reply_part()`.
+traffic. For a request, combine it with the returned opaque token and call
+`zlink_reply_part()`; ordinary DATA has token `0`.
 
 ## Disconnect a peer
 

@@ -102,11 +102,26 @@ HWM-managed sends provide an asynchronous `submit()` future and synchronous
 `submit_sync(SendFlags::NONE)` is available; pass `SendFlags::DONT_WAIT`
 when immediate back-pressure is required.
 
-Request also passes through HWM admission and provides three completion
-surfaces. `submit_sync(SendFlags)` waits synchronously for admission and reply
-and returns the reply directly; `on_reply(cb).submit_sync(SendFlags)` returns
-the admission result immediately and delivers the reply through the callback;
-`submit()` returns a Future. The synchronous flag selects admission waiting.
+Request provides `submit_sync()` to block until the reply and `submit()` to
+return a Future whose `Vec<Message>` is settled from the socket completion
+queue. The reply is that terminal result, not DATA received separately.
+
+Core owns retry after accepting a pre-admission operation; do not add a caller
+retry queue or resubmit its payload. The shared native
+`ZLINK_OPT_PENDING_MAX_MSGS/BYTES` caps cover pending SEND and REQUEST, with no
+send-only pending names. Completion means local admission, not peer delivery or
+an application acknowledgement.
+
+Dropping a Future can stop the Rust waiter. Before Core submit, abandon the
+builder without calling Core; after Core accepts the payload, admission or
+request work may continue and the socket owner drains a late completion. Call
+`stream.options().set_recv_mode(StreamRecvMode::Raw)` or `::Packet` before
+bind/connect, then use `recv` or `recv_packet` respectively.
+
+If a public poller owns `POLLCOMPLETION` for a socket, keep another thread
+calling `wait()` while a blocking request or Future is pending. `wait()` drains
+native completions and settles or cleans Rust state; calling a blocking
+terminal between waits on the same thread can stall it.
 
 Reading a received message:
 
@@ -125,7 +140,7 @@ socket.recv(&mut received, RecvFlags::NONE).unwrap();
 
 let parts = received.parts();                       // &[Message]
 let rid: Option<&RoutingId> = received.routing_id(); // ROUTER/SPOT
-let seq: Option<u64> = received.request_seq();
+let token: Option<&ReplyToken> = received.reply_token();
 ```
 
 ### Routing ID
@@ -190,7 +205,7 @@ Each exposes the result code enum via a `code()` method.
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
 | `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(m).submit_sync(flags)` |
-| `zlink_send_async(...)` | `socket.send().message(m).submit().await` |
+| DONTWAIT send + completion pull | `socket.send().message(m).submit().await` |
 | `zlink_recv_part(...)` | `socket.recv(&mut received, flags)` |
 | `zlink_msg_data(msg)` | `part.as_bytes()` |
 | `zlink_routing_id_t` | `RoutingId` |
@@ -247,7 +262,7 @@ Verified samples live under `bindings/rust/samples/`.
 | `request_reply_future_sample.rs` | Future request/reply |
 | `pubsub_recv_sample.rs` | PUB/SUB publish/subscribe |
 | `stream_recv_sample.rs` | STREAM raw TCP |
-| `stream_packet_callback_sample.rs` | STREAM packet callback |
+| `stream_packet_recv_sample.rs` | STREAM PACKET pull |
 | `monitor_recv_sample.rs` | Monitor event receive |
 
 > SPOT/Actor examples are covered by the framework samples, not the core

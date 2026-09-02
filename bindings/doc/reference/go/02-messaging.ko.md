@@ -68,15 +68,15 @@ caller가 명시적으로 호출해야 한다. `MoveMessage` 계열 builder 호�
 
 ## `Received`
 
-수신 메시지 envelope: routing metadata, request sequence(이 수신이
-request/reply 교환에서 온 경우), message part. `recv` 호출마다
+수신 메시지 envelope: routing metadata, ROUTER request의 opaque reply token,
+message part. `recv` 호출마다
 새로 만드는 대신 인스턴스 하나를 재사용해 매 수신당 할당을 피한다 —
 socket의 receive 메서드가 이를 리셋하고 다시 채운다.
 
 ```go
 var received contracts.Received
-ok, err := dealer.Recv(&received, contracts.RecvFlagsNone)
-if ok && received.HasRequestSeq() {
+ok, err := router.Recv(&received, contracts.RecvFlagsNone)
+if _, replyable := received.ReplyToken(); ok && replyable {
     received.Reply().Message(reply).Submit(ctx)
 }
 ```
@@ -88,11 +88,11 @@ if ok && received.HasRequestSeq() {
 | Member | 의미 |
 | --- | --- |
 | `RoutingID() RoutingID` / `HasRoutingID() bool` | peer routing id와 존재 여부 |
-| `RequestSeq() uint64` / `HasRequestSeq() bool` | request sequence와 존재 여부 |
+| `ReplyToken() (ReplyToken, bool)` | opaque reply capability와 존재 여부 |
 | `IsSinglePart() bool` | `Parts()`가 정확히 하나인지 |
 | `Parts() []*Message` | 이 envelope이 담은 모든 message part |
 | `FirstPart() (*Message, error)` | 소유권 이전 없이 첫 part — part는 여전히 `Received`가 소유 |
-| `Reply() ReplyOp` | 공유 reply builder를 시작; `HasRequestSeq()`가 true일 때만 유효 — 아니면 결과 builder의 `Submit`이 `*SubmitError`를 반환 |
+| `Reply() ReplyOp` | 공유 reply builder 시작; `ReplyToken()`이 있을 때만 유효 |
 | `Send() SendOp` | 공유 send builder를 시작, 이 envelope이 캡처한 source route로 향함 |
 | `Close() error` | 보관 중인 모든 part를 닫음; `nil` receiver에서 호출해도 안전 |
 
@@ -103,7 +103,7 @@ if ok && received.HasRequestSeq() {
 
 **선택 기준.** 수신 loop에서 매 메시지당 새로 할당하는 대신 `Received`
 하나를 참조로 재사용한다. 목적지 route를 손으로 재구성하는 대신
-`Reply()`를 쓴다 — routing id와 request sequence는 캡슐화돼 있어 이
+`Reply()`를 쓴다 — routing id와 opaque reply token은 캡슐화돼 있어 이
 builder 밖에선 접근할 수 없다.
 
 ---
@@ -166,32 +166,25 @@ subscription-event receive 경로(Sockets category)에서 쓴다.
 ## Send / request / reply operation-builder 형태
 
 모든 socket type의 `Send`/`Publish`/`Request`/`Reply` 진입점(Sockets
-category)이 반환하는, part·flag·terminal submit을 누적하는 fluent
+category)이 반환하는, part와 terminal submit을 누적하는 fluent
 builder interface. 각 단계는 별개의 Go interface다(`SendOp` →
 `SendSubmitOp`, `RequestOp` → `RequestSubmitOp` →
-`RequestCallbackSubmitOp`, `ReplyOp` → `ReplySubmitOp`) — 단계에
+`ReplyOp` → `ReplySubmitOp`) — 단계에
 맞는 메서드를 호출하면 chain의 다음 interface를 반환하므로, caller는
 part를 하나라도 추가하기 전엔 `Submit`을 호출할 수 없다.
 
 ```go
-ok, err := dealer.Send().Message(part1).Message(part2).Submit(ctx)
+err := dealer.Send().Message(part1).Message(part2).Submit(ctx)
 
-ch, err := dealer.Request().
+parts, err := dealer.Request().
     Message(payload).
     Timeout(5 * time.Second).
-    SubmitAsync(ctx)
-completion := <-ch
-
-ok, err := dealer.Request().
-    Message(payload).
-    Submit(ctx, func(result contracts.RequestResult, parts []*contracts.Message) {
-        // 나중에, 백그라운드 dispatch goroutine에서 전달됨
-    })
+    Submit(ctx)
 
 err := received.Reply().Message(reply).Submit(ctx)
 ```
 
-**Options.** **모든 terminal `Submit`/`SubmitAsync`는 첫 인자로
+**Options.** 모든 terminal `Submit`은 첫 인자로
 `context.Context`를 받는다** — 취소되거나 deadline이 지난 context는
 native submit이 실행되기 전에 그 context의 `Err()`로 호출을 즉시
 중단시킨다, 다른 어떤 언어의 operation builder도 이러지 않는다.
@@ -199,33 +192,23 @@ native submit이 실행되기 전에 그 context의 `Err()`로 호출을 즉시
 | Stage | Member | 의미 |
 | --- | --- | --- |
 | `SendOp` | `.Message(*Message)` / `.MoveMessage(*Message)` / `.Bytes([]byte)` → `SendSubmitOp` | chain을 시작; `MoveMessage`는 submit이 성공하면 메시지 소유권을 socket으로 이전 |
-| `SendSubmitOp` | 같은 세 추가 메서드 + `.Flags(SendFlags)` / `.Submit(ctx context.Context) (bool, error)` | part 추가, flag 설정, terminal |
+| `SendSubmitOp` | 같은 세 추가 메서드 + `.Submit(ctx context.Context) error` | part 추가, completion-backed terminal |
 | `RequestOp` | `.Message` / `.Bytes` → `RequestSubmitOp` | request chain을 시작 |
 | `RequestSubmitOp` | `.Timeout(time.Duration)` | reply-wait timeout을 더함 |
-| `RequestSubmitOp.Flags(SendFlags)` | `RequestCallbackSubmitOp`로 좁혀짐 | callback 전용 단계 |
-| `RequestSubmitOp` terminal | `.SubmitAsync(ctx) (<-chan RequestReplyCompletion, error)`와 `.Submit(ctx, callback RequestReplyCallback) (bool, error)` | **동시에 둘 다 노출** — 지금까지 다룬 다른 어떤 언어도 같은 builder 단계에 async-channel과 callback terminal을 동시에 노출하지 않는다 |
-| `RequestCallbackSubmitOp` | `Message`/`Bytes`/`Timeout`/`Flags`를 반복 + callback `Submit`만 | 좁혀지면 `SubmitAsync` channel 경로는 사라진다 |
+| `RequestSubmitOp` terminal | `.Submit(ctx context.Context) ([]*Message, error)` | completion-backed reply part를 직접 반환 |
+| `context.Context` | send/request/reply `Submit`에 전달 | Go waiter를 제한하며 successful native submit 뒤 Core cancel은 아님 |
 | `ReplyOp` | `.Message(*Message)` → `ReplySubmitOp` | reply chain을 시작 |
-| `ReplySubmitOp` | `.Flags(SendFlags)` / `.Submit(ctx context.Context) error` | flag 설정, terminal |
+| `ReplySubmitOp` | `.Message(...)` / `.Submit(ctx context.Context) error` | flag-free synchronous reply terminal |
 
-**Completion result.** `SendSubmitOp.Submit`은 `(bool, error)`를
-반환한다 — `bool`은 `SendFlagsDontWait`가 설정됐고 send가 block됐을
-경우에만(backpressure) `false`다; 그 외 실패는 전부 `error`다.
-`ReplySubmitOp.Submit`은 `error`만 반환한다. `RequestSubmitOp.Submit`/
-`RequestCallbackSubmitOp.Submit`은 *dispatch* 자체에 대해(request가
-수락됐는지) `(bool, error)`를 반환한다 — 실제 reply나 실패는 나중에
-`RequestReplyCompletion`(`{Result RequestResult; Parts []*Message; Err
-error}`)로 `SubmitAsync` channel에 실려 오거나, `Submit` callback의
-`(RequestResult, []*Message)` 인자로 오며, 어느 쪽이든 백그라운드
-dispatch goroutine에서 전달된다. 모든 builder는 1회용이다 — 같은
-builder 값에 `Submit`/`SubmitAsync`를 두 번째 호출하면 재제출하는
-대신 error를 반환한다.
+**Completion result.** `SendSubmitOp.Submit`과 `ReplySubmitOp.Submit`은 `error`를
+반환한다. `RequestSubmitOp.Submit`은 socket completion queue가 terminal을 낸 뒤
+`([]*Message, error)`를 반환하고 caller가 모든 reply message를 닫는다. 모든 builder는
+1회용이며 두 번째 `Submit`은 재제출하지 않고 error를 반환한다.
 
-**선택 기준.** 호출부가 이미 channel/`select`로 통신할 땐
-`SubmitAsync`를 쓴다; callback을 기대하는 코드와 통합할 땐 callback
-`Submit`을 쓴다. 목적지 route를 손으로 재구성하는 대신
+**선택 기준.** owning goroutine에서 `Submit(ctx)`의 직접 결과를 처리한다. 목적지
+route를 손으로 재구성하는 대신
 `Received.Reply()`/`Send()`를 쓴다 — routing id(그리고 `Reply`의
-경우 request sequence)는 캡슐화돼 있어 builder 밖에선 접근할 수 없다.
+경우 reply token)는 builder에 캡슐화된다.
 
 ---
 

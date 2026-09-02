@@ -64,7 +64,7 @@ frame이 socket으로 이전되고(아래 operation-builder 형태의 chain에�
 ```rust
 let mut received = Received::empty();
 if dealer.recv(&mut received, RecvFlags::NONE)? {
-    if received.request_seq().is_some() {
+    if received.reply_token().is_some() {
         received.reply().message(Message::try_from("ok")?).submit()?;
     }
 }
@@ -77,13 +77,13 @@ if dealer.recv(&mut received, RecvFlags::NONE)? {
 | --- | --- |
 | `is_single_part()` | `parts()`가 정확히 하나인지 |
 | `routing_id()` | `Option<&RoutingId>`, receive 경로가 제공할 때만 존재 |
-| `request_seq()` | `Option<u64>`, reply 가능할 때만 존재 |
+| `reply_token()` | `Option<ReplyToken>`, reply 가능할 때만 존재하는 opaque socket-owned one-shot capability |
 | `parts()` | `&[Message]`, 이 envelope이 담은 모든 message part |
 | `first_part() -> Result<&Message, RecvError>` | 소유권 이전 없이 첫 part |
 | `single_part()` / `single_part_or_error()` | 동등 — 둘 다 `self`를 소비하고 `Result<Message, RecvError>`를 반환, 정확히 하나가 아니면 error |
 | `into_parts() -> Vec<Message>` | `self`를 소비하며 모든 part의 소유권을 이전 |
 | `close(self) -> Result<(), CloseError>` | `self`를 소비, 소유한 모든 part를 닫음 |
-| `reply()` | 공유 `ReplyOp<Empty>` builder를 시작; request sequence가 있는 envelope에서만 유효 |
+| `reply()` | 공유 `ReplyOp<Empty>` builder를 시작; opaque reply token이 있는 envelope에서만 유효 |
 | `send()` | 공유 `SendOp<Empty>` builder를 시작, 이 envelope이 포착한 source route로 향함 |
 
 **Completion result.** 모든 member는 동기다. 여러 메서드(`single_part`,
@@ -169,8 +169,7 @@ non-blocking send의 결과, 작은 standalone enum으로.
 
 **Completion result.** 해당 없음 — 이 레퍼런스 tier에 문서화된 어떤
 진입점도 이걸 직접 반환하지 않는 순수 값 타입이다. 이 category
-소스에서 `SendOp::submit()`(아래)이 실제로 반환하는 `bool`과 구별되는
-public 타입으로 존재한다.
+소스에서 현행 builder terminal 결과와 구별되는 public 타입으로 존재한다.
 
 **선택 기준.** 여기 문서화된 builder 기반 send 경로가 직접 만들어내는
 게 아니다 — 더 저수준 진입점이 이 타입을 반환하는지는 Sockets
@@ -181,25 +180,23 @@ category를 참고한다.
 ## Send / request / reply operation-builder 형태
 
 모든 socket type의 `send`/`publish`/`request`/`reply` 진입점(Sockets
-category)이 part·flag·terminal submit을 누적하기 위해 반환하는
+category)이 part를 누적하고 terminal submit에 도달하기 위해 반환하는
 **typestate 기반** fluent builder. 지금까지 다룬 다른 모든 언어(builder
 단계마다 별개의 interface/class 타입을 쓰는, 예:
 `SendOperation`/`SendSubmitOperation`)와 달리, Rust는 단계 전환을
-컴파일러가 정적으로 추적하는 zero-sized marker 타입(`Empty`, `Ready`,
-`CallbackReady`)으로 매개변수화된 단일 제네릭 타입(`SendOp<State>`,
+컴파일러가 정적으로 추적하는 zero-sized marker 타입(`Empty`, `Ready`)으로
+매개변수화된 단일 제네릭 타입(`SendOp<State>`,
 `RequestOp<State>`, `ReplyOp<State>`)으로 표현한다. 각
 `impl SendOp<Empty> { ... }`/`impl SendOp<Ready> { ... }` block은 그
 단계에서 유효한 메서드만 노출한다.
 
 ```rust
-dealer.send().message(part1)?.message(part2)?.submit()?;
+dealer.send().message(part1).message(part2).submit().await?;
 
-dealer.request()
+let reply = dealer.request()
     .message(Message::try_from("payload")?)
     .timeout(Duration::from_secs(5))
-    .submit(|result| {
-        // 나중에 전달됨; result: Result<Vec<Message>, RequestError>
-    })?;
+    .submit().await?;
 
 received.reply().message(Message::try_from("ok")?).submit()?;
 ```
@@ -209,30 +206,23 @@ received.reply().message(Message::try_from("ok")?).submit()?;
 | Stage | Member | 의미 |
 | --- | --- | --- |
 | `SendOp<Empty>` | `.message(self, Message) -> SendOp<Ready>` | chain을 시작, `self`를 소비하고 다음 단계 타입을 반환 |
-| `SendOp<Ready>` | `.message(...)` / `.timeout(self, Duration) -> Self` / `.submit(self) -> impl Future<Output = Result<(), SubmitError>>` | part 추가, per-operation Core deadline 설정, terminal. flag 단계는 없다 — `zlink_send_async`는 절대 blocking하지 않으므로 `DONT_WAIT`이 의미를 갖지 않는다 |
+| `SendOp<Ready>` | `.message(...)` / `.submit() -> impl Future<Output = Result<(), SubmitError>>` / `.submit_sync()` | part 추가 후 async 또는 blocking Core-completion terminal 선택; flag 단계 없음 |
 | `PublishOp<Empty>` → `PublishOp<Ready>` | `.message(...)` / `.flags(self, SendFlags) -> Self` / `.submit(self) -> Result<(), SubmitError>` | PUB/XPUB 전용; PUB는 lossy이고 HWM에서 대기하지 않으므로 동기 |
-| `RequestOp<Empty>` → `RequestOp<Ready>` | `SendOp`와 같음 + `.timeout(self, Duration) -> Self` | send chain을 미러링하며 reply-wait timeout을 더함 |
-| `RequestOp<Ready>.flags(self, SendFlags)` | `RequestOp<CallbackReady>`로 좁혀짐 | 같은 `message`/`timeout`/`flags`/`submit` 메서드를 다시 노출 — 그 단계에서 flag를 여러 번 설정할 수 있다 |
-| `RequestOp<Ready>::submit` / `RequestOp<CallbackReady>::submit` | `submit<F>(self, callback: F) -> Result<(), SubmitError> where F: FnOnce(Result<Vec<Message>, RequestError>) + Send + 'static` | **둘 다 callback 전용** — 지금까지 다룬 다른 모든 언어와 달리 이 binding의 public contract엔 `Future`/async를 반환하는 overload가 없다 |
-| `ReplyOp<Empty>` → `ReplyOp<Ready>` | `SendOp`를 반영, `.submit(self) -> Result<(), SubmitError>` | `.flags(self, SendFlags) -> Self` 외엔 자신만의 flags-narrowing 동작이 없다 |
+| `RequestOp<Empty>` → `RequestOp<Ready>` | `.message(...)` / `.timeout(...)` / `.submit()` / `.submit_sync()` | caller-owned reply message를 반환하는 awaitable 또는 blocking terminal |
+| `ReplyOp<Empty>` → `ReplyOp<Ready>` | `.message(...)` / `.submit(self) -> Result<(), SubmitError>` | 동기 flag-free reply terminal |
 
 **Completion result.** `SendOp::submit()`은 runtime 비종속 `Future`를 반환하고
-그 출력은 `Result<(), SubmitError>`다. 완료는 Core send-completion callback이
-구동하며, admit되지 못한 terminal completion(timeout, cancel, close, route 실패)은
-Core errno와 함께 `SubmitResult::NotAdmitted`로 표면화한다. 완료 전에 Future를
-drop하면 `zlink_send_async_cancel`로 취소를 요청한다. `PublishOp::submit()`과
-`ReplyOp::submit()`은 동기적으로 `Result<(), SubmitError>`를 반환한다.
-`RequestOp::submit(callback)`은 *dispatch* 자체(request가 성공적으로
-제출됐는지)에 대해 `Result<(), SubmitError>`를 반환한다 — 실제
-reply나 실패는 나중에 background dispatch 스레드에서 `callback`에
-`Result<Vec<Message>, RequestError>`로 전달된다. 모든 builder는 성공적인
-submit에서만 누적된 `Message` part를 소비한다.
+그 출력은 `Result<(), SubmitError>`다. `submit_sync()`는 같은 Core terminal
+결과까지 block한다. `RequestOp::submit()`은 Future를 반환하고
+`submit_sync()`는 block하며, 둘 다 caller-owned reply message 또는
+`ZlinkError`를 낸다. `PublishOp::submit()`과 `ReplyOp::submit()`은 동기다.
+진행 중 Future를 drop하면 해당 waiter만 detach된다. Core가 이미 accept한
+operation을 취소하지 않으며 socket completion owner가 late terminal을 계속
+drain한다. 모든 builder는 성공적인 submit에서만 누적 `Message` part를 소비한다.
 
-**선택 기준.** Rust엔 여기 async submit 경로가 없으므로, 모든
-request/reply엔 callback 형태를 쓴다 — 호출부에서 `async`/`.await`
-어법이 필요하면 async 런타임의 channel/oneshot으로 직접 연결한다.
-목적지 route를 손으로 재구성하는 대신 `Received.reply()`/`send()`를
-쓴다.
+**선택 기준.** async 코드에서는 Future terminal을 우선하고 호출 thread가
+block해도 될 때만 `submit_sync()`를 쓴다. 목적지 route를 손으로
+재구성하는 대신 `Received.reply()`/`send()`를 쓴다.
 
 ---
 

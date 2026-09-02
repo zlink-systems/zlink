@@ -3,10 +3,9 @@
 
 # 05. Raw receive
 
-This category covers the two receive entry points shared across socket types: part-based receive
-and the raw callback. Which of these — or a socket-type-specific receive family — applies to a
-given socket type is fixed, not a runtime choice; see the table below and each socket type's own
-category. The exact signatures are owned by the
+This category covers part-based DATA receive shared across raw socket types. A socket-type-specific
+receive family may apply instead; see the table below and each socket type's own category. STREAM
+also makes an explicit RAW/PACKET choice before its first bind or connect. The exact signatures are owned by the
 [Socket common specification](../spec/core/socket/README.en.md).
 
 ---
@@ -25,7 +24,7 @@ zlink_recv_result_t result = zlink_recv_part(s, &source_rid, &part, &has_more, Z
 ```
 
 **Parameters.** `source_rid_out_` is optional and receives a Core-owned view (copy it if it must
-outlive the next raw recv call on the same thread; `STREAM` returns a real view, `PAIR` and
+outlive the next data-receive entry on the same socket; `STREAM` returns a real view, `PAIR` and
 `DEALER` return `NULL`). `part_out_` must point to an already-initialized message and is
 required. `has_more_out_` is required and is set to `ZLINK_PART_MORE` or `ZLINK_PART_FINAL`.
 `flags_` is `ZLINK_RECV_FLAGS_NONE` (blocking) or `ZLINK_RECV_FLAGS_DONTWAIT`.
@@ -45,28 +44,26 @@ Pair this with a poller observing `ZLINK_POLLIN` (Polling and pollers category) 
 
 ---
 
-## `zlink_recv_handler`
+## STREAM RAW and PACKET receive
 
-Attaches a raw receive callback to a `STREAM` socket, replacing the `recv + poller` model with
-push delivery.
+A STREAM socket selects one pull receive family before its first successful bind or connect.
 
 ```c
-zlink_recv_handler(stream_socket, on_raw_message, userdata);
+zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_PACKET;
+zlink_set_stream_option(stream_socket, ZLINK_STREAM_OPT_RECV_MODE,
+                        &mode, sizeof(mode));
 ```
 
-**Parameters.** `handler_` is a `zlink_socket_msg_handler_fn` — invoked on the owning I/O thread
-with the source routing ID, an array of message parts, and the part count; ownership of every
-part transfers to the callback, and each must be closed exactly once. `userdata_` is passed
-through.
+**Parameters.** `ZLINK_STREAM_RECV_MODE_RAW` selects `zlink_recv_part()`;
+`ZLINK_STREAM_RECV_MODE_PACKET` selects `zlink_stream_recv_packet()`. PACKET receive fills
+caller-initialized `header_out_` and `body_out_` messages and returns the source routing-id view.
 
-**Return and errno.** Returns `zlink_handler_result_t` — `ZLINK_HANDLER_OK` on success.
-`ENOTSUP` for any subject other than raw `STREAM`. After a successful attach, `zlink_recv_part`,
-`zlink_stream_packet_handler` (STREAM category), and data-plane poller `ZLINK_POLLIN` on the same
-handle fail with `EBUSY` — a second attach on the same handle also fails with `EBUSY`.
+**Return and errno.** Bind or connect without a selected mode fails with `EINVAL`. After the first
+successful bind or connect, changing even to the current mode fails with `EBUSY`. Calling the
+receive family for the other mode returns `ZLINK_RECV_NOT_SUPPORTED` with `ENOTSUP`.
 
-**When to use.** Choose this, `zlink_recv_part`, or `zlink_stream_packet_handler` (STREAM
-category) — exactly one raw receive mode per `STREAM` handle; see the receive-surface table
-below and the STREAM category for the packet-framed alternative.
+**When to use.** Choose RAW for unframed byte records and pair it with `ZLINK_POLLIN`. Choose
+PACKET when the wire protocol uses Core's fixed header/body framing; see the STREAM category.
 
 ---
 
@@ -75,18 +72,16 @@ below and the STREAM category for the packet-framed alternative.
 | Socket type | Receive surface | Notes |
 |---|---|---|
 | PAIR | `zlink_recv_part()` | part receive only |
-| DEALER | `zlink_recv_part()` (+ `zlink_dealer_request_part()` completion callback) | part-receive data plane |
+| DEALER | `zlink_recv_part()` + `zlink_completion_recv()` | DATA uses part receive; submitted request results use completion receive |
 | SUB / XSUB | `zlink_subscribe_part()` | topic-part receive only — see SUB/XSUB categories |
-| ROUTER | `zlink_router_recv_part()` (+ `zlink_router_request_part()` completion callback) | part-receive data plane — see ROUTER category |
-| STREAM | `zlink_recv_part()` / `zlink_recv_handler()` / `zlink_stream_packet_handler()` | exception: choose exactly one mode — see STREAM category |
+| ROUTER | `zlink_router_recv_part()` + `zlink_completion_recv()` | DATA/REQUEST uses part receive; submitted request results use completion receive |
+| STREAM | `zlink_recv_part()` or `zlink_stream_recv_packet()` | choose RAW or PACKET before bind/connect — see STREAM category |
 | PUB | N/A | send-only |
 | XPUB | `zlink_xpub_recv_part()` (subscription events, recv-only) | data plane is send — see XPUB category |
-| monitor / timer | recv and callback both supported | see Socket monitor and Timers categories |
+| monitor / timer | pull receive | see Socket monitor and Timers categories |
 
-The request-completion callback on `DEALER`/`ROUTER` is an async operation-completion surface,
-not a data-plane receive callback — the two roles stay separate even though both use a callback.
-`STREAM` is the one exception where an application picks among three receive models per handle; a
-second attempt to activate a different mode on the same handle fails with `EBUSY`.
+The REQUEST completion queue on `DEALER`/`ROUTER` is an operation-completion surface, not DATA
+receive. STREAM selects exactly one of two pull receive modes before endpoint activation.
 
 ---
 

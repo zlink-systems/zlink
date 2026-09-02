@@ -12,17 +12,17 @@ title: "Raw socket monitoring"
 > 이 챕터는 연결 상태를 관측하는 방법을 사용법 중심으로 설명한다.
 
 Socket monitor는 data receive 경로를 바꾸지 않고 transport와 protocol event를 제공한다.
-`zlink_socket_monitor_open()`으로 monitor를 열고 한 가지 소비 방식을 선택한다.
+`zlink_socket_monitor_open()`으로 monitor를 열고 pull API로 소비한다.
 
 ## Receive 방식
 
 `zlink_socket_monitor_recv()`를 직접 호출하거나 monitor를 poller에 등록한다. 기존 event loop가
 scheduling을 담당할 때 사용한다.
 
-## Callback 방식
+## Poller 기반 pull
 
-`zlink_socket_monitor_handler()`를 등록한다. Callback은 관찰 대상 socket의 I/O thread가 아니라 Core
-control runtime에서 실행된다. 다음 monitor와 timer callback이 지연되지 않도록 callback을 짧게 유지한다.
+하나의 event loop가 scheduling을 소유하면 monitor를 poller에 등록한다. Readiness 뒤
+`zlink_socket_monitor_recv()`로 event를 drain한다. Core에는 monitor callback 등록 경로가 없다.
 
 ## Snapshot
 

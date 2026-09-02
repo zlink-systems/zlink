@@ -5,7 +5,7 @@
 # 05. Errors
 
 이 category는 core의 result-enum-family 표에 대응하는 이 레퍼런스의 대응 문서다 —
-공유 exception 기반과, 모든 submit/request/recv/handler/close/bind/connect/config
+공유 exception 기반과, 모든 submit/request/recv/event/close/bind/connect/config
 실패 API(Sockets/Messaging/Eventing/Core category)가 던지는 7개 typed exception을
 문서화한다. 정확한 signature는
 [`Contracts/Errors/`](../../../../bindings/dotnet/src/Zlink/Contracts/Errors/)가
@@ -22,9 +22,9 @@
 | Exception | 던지는 곳 | `ErrorCode` 값 |
 |---|---|---|
 | `ZlinkSubmitException` | send/publish/request-submit API(모든 socket-type category) | `Backpressured`(1, 정상 제어 흐름), `NotConnected`(2), `NotFound`(3), `Terminated`(4), `InvalidHandle`(5), `InvalidArgument`(6), `NotSupported`(7), `InvalidState`(8), `ThreadViolation`(9), `OutOfMemory`(10), `SeqExhausted`(11), `InternalError`(12), `NotAdmitted`(13, 정상 제어 흐름 — target은 도달 가능했지만 admission 정책이 거부) |
-| `ZlinkRequestException` | request/reply 완료 | `TimedOut`(101), `NotFound`(102), `Terminated`(103), `ProtocolError`(104), `InternalError`(105), `Rejected`(106), `Conflict`(107), `Busy`(108), `NotConnected`(109), `InvalidArgument`(110), `InvalidState`(111), `NotSupported`(112) |
+| `ZlinkRequestException` | `Submit()` 또는 `Async()` terminal request 실패 | `TimedOut`(101), `NotFound`(102), `Terminated`(103), `ProtocolError`(104), `InternalError`(105), `Rejected`(106), `Conflict`(107), `Busy`(108), `NotConnected`(109), `InvalidArgument`(110), `InvalidState`(111), `NotSupported`(112), `Backpressured`(113) |
 | `ZlinkRecvException` | recv-family API(Sockets/Eventing category) | `NoData`(201), `Busy`(202), `Terminated`(203), `InvalidHandle`(204), `NotSupported`(205), `InternalError`(206) |
-| `ZlinkHandlerException` | handler 등록 API(Sockets/Eventing category) | `InvalidArgument`(301), `Busy`(302), `NotSupported`(303), `Deadlock`(304, handler를 자신의 콜백 안에서 교체·해제), `InvalidHandle`(305), `InternalError`(306) |
+| `ZlinkHandlerException` | 유지되는 result family; 현행 public completion/event 전달에는 등록형 handler가 없음 | `InvalidArgument`(301), `Busy`(302), `NotSupported`(303), `Deadlock`(304), `InvalidHandle`(305), `InternalError`(306) |
 | `ZlinkCloseException` | `Close()`/`Dispose` 경로(Sockets/Eventing category), `IContext.Shutdown()`(Core category) | `Busy`(401), `Shutdown`(402), `InvalidHandle`(403), `InternalError`(404) |
 | `ZlinkBindException` | `ISocket.Bind(...)`(Sockets category) | `InvalidArgument`(501), `AddrInUse`(502), `NotSupported`(503), `InvalidHandle`(504), `InternalError`(505) |
 | `ZlinkConnectException` | `IConnectableSocket.Connect`/`Unbind`/`Disconnect`/`DisconnectRid`(Sockets category) | `InvalidArgument`(601), `NotSupported`(602), `InvalidHandle`(603), `InternalError`(604), `NotFound`(605), `Conflict`(606), `Busy`(607) |
@@ -36,9 +36,9 @@
 "이대로 제출하면 절대 성공하지 않음"의 구분을 잃는다. `ZlinkConfigException`의
 `BufferTooSmall`은 caller가 제공한 output 용량이 첫 완결된 값을 담을 수 없다는
 뜻이다 — 호출은 아무것도 소비하지 않으므로 더 큰 buffer로 재시도해도 안전하다.
-`InvalidState`는 stale handle이나 닫힌 수신·연결 상태를 다룬다. 같은 handler의
-콜백 안에서 그 handler를 교체·해제하면 실제로 deadlock에 빠지는 대신
-`Deadlock`을 반환한다.
+`InvalidState`는 stale handle이나 닫힌 수신·연결 상태를 다룬다. Handler
+result family는 남아 있지만 현행 public send/request terminal과 pull-event
+표면은 이를 생성하지 않는다.
 
 ---
 

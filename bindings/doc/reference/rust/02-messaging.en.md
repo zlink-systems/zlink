@@ -58,7 +58,7 @@ or `close`d; reuse one instance across `recv` calls to avoid a per-receive alloc
 ```rust
 let mut received = Received::empty();
 if dealer.recv(&mut received, RecvFlags::NONE)? {
-    if received.request_seq().is_some() {
+    if received.reply_token().is_some() {
         received.reply().message(Message::try_from("ok")?).submit()?;
     }
 }
@@ -71,13 +71,13 @@ storage.
 | --- | --- |
 | `is_single_part()` | whether `parts()` has exactly one element |
 | `routing_id()` | `Option<&RoutingId>`, present when the receive path provides one |
-| `request_seq()` | `Option<u64>`, present when replyable |
+| `reply_token()` | `Option<ReplyToken>`, an opaque socket-owned one-shot capability present when replyable |
 | `parts()` | `&[Message]`, every message part this envelope holds |
 | `first_part() -> Result<&Message, RecvError>` | the first part, without transferring ownership |
 | `single_part()` / `single_part_or_error()` | equivalent — both consume `self` and return `Result<Message, RecvError>`, erroring unless exactly one part |
 | `into_parts() -> Vec<Message>` | consumes `self`, transferring ownership of every part |
 | `close(self) -> Result<(), CloseError>` | consumes `self`, closes every owned part |
-| `reply()` | starts the shared `ReplyOp<Empty>` builder; valid only for envelopes with a request sequence |
+| `reply()` | starts the shared `ReplyOp<Empty>` builder; valid only when an opaque reply token is present |
 | `send()` | starts the shared `SendOp<Empty>` builder, addressed to this envelope's captured source route |
 
 **Completion result.** All members are synchronous. Several methods (`single_part`, `into_parts`,
@@ -159,7 +159,7 @@ The outcome of a non-blocking send, as a small standalone enum.
 
 **Completion result.** N/A — a plain value type, not itself returned by any entry point documented
 in this reference tier; it exists as a public type in this category's source, distinct from the
-`bool` that `SendOp::submit()` (below) actually returns.
+the terminal results returned by the current builder paths below.
 
 **When to use.** Not directly produced by the builder-based send path documented here — see the
 Sockets category for whether any lower-level entry point returns this type.
@@ -169,23 +169,21 @@ Sockets category for whether any lower-level entry point returns this type.
 ## Send / request / reply operation-builder shape
 
 The **typestate-based** fluent builder every socket type's `send`/`publish`/`request`/`reply`
-entry point (Sockets category) returns to accumulate parts, flags, and a terminal submit. Unlike
+entry point (Sockets category) returns to accumulate parts and reach a terminal submit. Unlike
 every other language covered so far — which use distinct interface/class types per builder stage
 (`SendOperation`/`SendSubmitOperation`, etc.) — Rust expresses the stage transitions as a single
 generic type (`SendOp<State>`, `RequestOp<State>`, `ReplyOp<State>`) parameterized by a
-zero-sized marker type (`Empty`, `Ready`, `CallbackReady`) that the compiler tracks statically; each
+zero-sized marker type (`Empty`, `Ready`) that the compiler tracks statically; each
 `impl SendOp<Empty> { ... }`/`impl SendOp<Ready> { ... }` block exposes only the methods valid at
 that stage.
 
 ```rust
-dealer.send().message(part1)?.message(part2)?.submit()?;
+dealer.send().message(part1).message(part2).submit().await?;
 
-dealer.request()
+let reply = dealer.request()
     .message(Message::try_from("payload")?)
     .timeout(Duration::from_secs(5))
-    .submit(|result| {
-        // delivered later; result: Result<Vec<Message>, RequestError>
-    })?;
+    .submit().await?;
 
 received.reply().message(Message::try_from("ok")?).submit()?;
 ```
@@ -195,27 +193,22 @@ received.reply().message(Message::try_from("ok")?).submit()?;
 | Stage | Member | Meaning |
 | --- | --- | --- |
 | `SendOp<Empty>` | `.message(self, Message) -> SendOp<Ready>` | starts the chain, consumes `self`, returns the next-stage type |
-| `SendOp<Ready>` | `.message(...)` / `.timeout(self, Duration) -> Self` / `.submit(self) -> impl Future<Output = Result<(), SubmitError>>` | add parts, set the per-operation Core deadline, terminal. There is no flags stage: `zlink_send_async` never blocks, so `DONT_WAIT` has no meaning here |
+| `SendOp<Ready>` | `.message(...)` / `.submit() -> impl Future<Output = Result<(), SubmitError>>` / `.submit_sync()` | add parts, then choose async or blocking Core-completion terminal; there is no flags stage |
 | `PublishOp<Empty>` → `PublishOp<Ready>` | `.message(...)` / `.flags(self, SendFlags) -> Self` / `.submit(self) -> Result<(), SubmitError>` | PUB/XPUB only; synchronous because PUB is lossy and never waits at a HWM |
-| `RequestOp<Empty>` → `RequestOp<Ready>` | same as `SendOp` + `.timeout(self, Duration) -> Self` | mirrors the send chain, adding a reply-wait timeout |
-| `RequestOp<Ready>.flags(self, SendFlags)` | narrows to `RequestOp<CallbackReady>` | exposes the same `message`/`timeout`/`flags`/`submit` methods again — flags may be set more than once at that stage |
-| `RequestOp<Ready>::submit` / `RequestOp<CallbackReady>::submit` | `submit<F>(self, callback: F) -> Result<(), SubmitError> where F: FnOnce(Result<Vec<Message>, RequestError>) + Send + 'static` | **both callback-only** — there is no `Future`/async-returning overload in this binding's public contract, unlike every other language covered so far |
-| `ReplyOp<Empty>` → `ReplyOp<Ready>` | mirrors `SendOp`, `.submit(self) -> Result<(), SubmitError>` | no flags-narrowing behavior of its own beyond `.flags(self, SendFlags) -> Self` |
+| `RequestOp<Empty>` → `RequestOp<Ready>` | `.message(...)` / `.timeout(...)` / `.submit()` / `.submit_sync()` | awaitable or blocking terminal returning caller-owned reply messages |
+| `ReplyOp<Empty>` → `ReplyOp<Ready>` | `.message(...)` / `.submit(self) -> Result<(), SubmitError>` | synchronous flag-free reply terminal |
 
 **Completion result.** `SendOp::submit()` returns a runtime-independent `Future` resolving to
-`Result<(), SubmitError>`; the Core send-completion callback drives it, and a non-admitted terminal
-completion (timeout, cancel, close, route failure) surfaces as `SubmitResult::NotAdmitted` with the
-Core errno. Dropping the Future before completion requests `zlink_send_async_cancel`.
-`PublishOp::submit()` and `ReplyOp::submit()` return `Result<(), SubmitError>` synchronously.
-`RequestOp::submit(callback)` returns `Result<(), SubmitError>` for the *dispatch* itself (whether
-the request was successfully submitted) — the actual reply-or-failure is delivered later to
-`callback` as `Result<Vec<Message>, RequestError>`, on a background dispatch thread. Every builder
-consumes its accumulated `Message` parts on a successful submit only.
+`Result<(), SubmitError>`; `submit_sync()` blocks for the same Core terminal result.
+`RequestOp::submit()` returns a Future and `submit_sync()` blocks, both yielding caller-owned reply
+messages or `ZlinkError`. `PublishOp::submit()` and `ReplyOp::submit()` are synchronous. Dropping an
+in-flight Future detaches that waiter; it does not cancel an operation already accepted by Core,
+and the socket completion owner still drains the late terminal. Every builder consumes its
+accumulated `Message` parts on a successful submit only.
 
-**When to use.** Because Rust has no async submit path here, use the callback form for any
-request/reply — bridge it to an async runtime's channel/oneshot manually if `async`/`.await`
-ergonomics are needed at the call site. Use `Received::reply()`/`send()` rather than reconstructing
-the destination route by hand.
+**When to use.** Prefer the Future terminal in async code and use `submit_sync()` only when the
+calling thread may block. Use `Received::reply()`/`send()` rather than reconstructing the
+destination route by hand.
 
 ---
 

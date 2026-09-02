@@ -22,7 +22,8 @@ zlink_msg_t part;
 zlink_msg_init_size(&part, payload_size);
 memcpy(zlink_msg_data(&part), payload, payload_size);
 /* The successful final send transfers ownership to Core. */
-zlink_send_part(socket, &part, 0, ZLINK_PART_FINAL);
+zlink_send_part(socket, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
+                NULL, NULL);
 ```
 
 ## Receive
@@ -31,5 +32,6 @@ Typed receive functions fill a caller-initialized `zlink_msg_t` and report
 whether another part follows. Close or move every received part exactly once.
 Routing ids and topics are returned as metadata rather than payload frames.
 
-Request/reply completion callbacks own every returned part for the duration of
-the callback and must close or move them before returning.
+For a successful REQUEST completion, `zlink_completion_recv()` transfers a
+Core-owned contiguous reply array into `zlink_completion_t`. Read or move its
+parts, then call `zlink_completion_close()`; never free the array directly.

@@ -38,7 +38,6 @@ socket.close();
 | `monitorOpen(MonitorEventType... events)` | 지정한 이벤트만 구독하는 monitor를 연다 — 비트마스크 flags 인자가 아니라 varargs |
 | `setTlsServer(String certPem, String keyPem, boolean requireClientCert)` | `bind` 전에 적용 |
 | `setTlsClient(String caCertPem, String hostname, boolean trustSystem)` | `connect` 전에 적용 |
-| `setSendReadyHandler(SendReadyHandler handler)` | back-pressure 해제 콜백을 등록 |
 | `close()` | native socket을 닫는다 |
 
 `Socket` 자체는 `bind`/`connect`를 선언하지 않는다 — 아래 각 구체 socket
@@ -175,7 +174,7 @@ routing id로 지정된 peer에게 메시지를 보내고, 특정 peer의 reques
 ```java
 try (RouterSocket router = context.createRouterSocket()) {
     router.send(peerRid).message(Message.from("hello")).submit();
-    router.setCompletionControlHandler((rid, parts) -> { /* ... */ });
+    router.reply(peerRid, replyToken).message(Message.from("ok")).submit();
 }
 ```
 
@@ -188,19 +187,17 @@ try (RouterSocket router = context.createRouterSocket()) {
 | `send(RoutingId)` | 공유 `SendOperation`을 그 peer로 향해 시작 |
 | `recv(Received, RecvFlags)` | `PairSocket`과 같은 형태 |
 | `request(RoutingId)` | Messaging category의 `RequestOperation`, 특정 peer로 향함 |
-| `reply(RoutingId, long requestSequence)` | Messaging category의 `ReplyOperation`, 해당 peer의 request에 응답 |
-| `trySendCompletionControl(RoutingId peerRid, List<Message> parts)` | peer의 기존 연결로 opaque control record를 전송; `parts`를 소비하지 않음; `false`는 back-pressure |
-| `setCompletionControlHandler(CompletionControlHandler handler)` | 들어오는 completion-control record를 받는 콜백을 등록; 콜백이 `parts`의 모든 메시지를 소유하며 한 번 close해야 함 |
+| `reply(RoutingId, ReplyToken)` | opaque token이 식별하는 request에 답하는 `ReplyOperation` |
+| `Received.replyToken()` | ROUTER receive가 제공한 socket-bound token 반환 |
+| request terminal | completion drain 뒤 `submit_sync()`/`submit()`을 통해 reply part 또는 typed failure 반환 |
 | `options()` | `RouterSocketOptions` 반환: `mandatory()`/`mandatory(boolean)`(알 수 없는 route에서 조용히 버리는 대신 오류); `handover()`/`handover(boolean)`(`ridDuplicatePolicy`의 shorthand); `probe()`/`probe(boolean)`; `connectRoutingId()`(`Optional<RoutingId>`, 읽기 전용)/`setConnectRoutingId(RoutingId)` — getter·setter 이름이 비대칭; `requestTimeout()`/`requestTimeout(Duration)` — **Dealer의 set-only와 달리 양방향 모두**; `peerWeight()`/`peerWeight(int)` — **Dealer의 set-only와 달리 양방향 모두** |
 
-**Completion result.** `trySendCompletionControl`은 `boolean`을 반환한다 —
-completion connection이 back-pressure일 때만 `false`다. `recv`는 위
-`boolean` 관례를 따른다.
+**Completion result.** `recv`는 위 `boolean` 관례를 따른다. Request terminal은 socket
+completion queue에서 settle되고 caller가 반환 reply message를 close한다.
 
 **선택 기준.** DEALER가 특정 peer를 지정할 수 없는 ROUTER 주도·ROUTER
-응답 request/reply엔 `request(peerRid)`/`reply(rid, requestSequence)`를
-쓴다. application-level receive와 독립적인 opaque bounded control
-record엔 `trySendCompletionControl`/`setCompletionControlHandler`를 쓴다.
+응답 request/reply엔 `request(peerRid)`/`reply(rid, replyToken)`을 쓴다. Token은 receive에서
+얻고 합성하거나 재사용하지 않는다.
 
 ---
 
@@ -282,7 +279,9 @@ framed packet을 직접 주고받는다.
 
 ```java
 try (StreamSocket stream = context.createStreamSocket()) {
-    stream.onPacket((routingId, header, body) -> { /* header/body 소유 */ });
+    stream.options().recvMode(StreamRecvMode.PACKET);
+    StreamPacket packet = new StreamPacket();
+    boolean ok = stream.recvPacket(packet, RecvFlags.NONE);
 }
 ```
 
@@ -293,26 +292,27 @@ try (StreamSocket stream = context.createStreamSocket()) {
 | `bind(String)` / `unbind(String)` | 주소에서 listen을 시작/중단 — **다른 모든 socket type과 달리 이 interface엔 `connect`/`disconnect`/`disconnectRid`가 없다** |
 | `setRoutingId(RoutingId)` / `getRoutingId()` | 이 socket 자신의 routing id를 지정/조회, peer가 connect 시 관찰 |
 | `send(RoutingId)` | 공유 `SendOperation`을 그 peer로 향해 시작 |
-| `recv(Received result, RecvFlags flags)` | `result`를 다음 packet으로 채움 |
-| `onPacket(StreamPacketHandler handler)` | callback 기반 packet loop를 등록; handler는 `(RoutingId routingId, Message header, Message body)`를 받고 둘 다 소유 |
-| `options()` | `StreamSocketOptions` 반환: `notifyEnabled()`/`notify(boolean)` — **getter와 setter의 이름이 다르다**(`notify()`가 아니라 `notifyEnabled()`); 활성화 시 peer connect/disconnect를 application 메시지로 전달 |
+| `recv(Received result, RecvFlags flags)` | RAW mode에서 다음 raw record pull |
+| `recvPacket(StreamPacket result, RecvFlags flags)` | PACKET mode에서 caller-owned header/body packet 하나 pull |
+| `options()` | `recvMode(StreamRecvMode)`로 bind/connect 전에 RAW/PACKET 선택; `notifyEnabled()`/`notify(boolean)`은 RAW mode에 적용 |
 
 **Completion result.** `recv`는 위 `boolean` 관례를 따른다.
 
-**선택 기준.** callback 기반 packet loop엔 `onPacket`을 쓴다.
+**선택 기준.** Bind/connect 전에 RAW 또는 PACKET을 정하고 일치하는 pull receive만 호출한다.
 
 ---
 
 ## Handler functional interface
 
-이 category의 모든 콜백 등록 지점은 `@FunctionalInterface`를 받는다.
+현재 socket category에는 callback 등록 지점이 없다. Delivery는 pull/completion 기반이고,
+아래 type이 이전 handler argument 역할의 state를 운반한다.
 
 | Interface | 등록하는 곳 | Signature |
 |---|---|---|
-| `SendReadyHandler` | `Socket.setSendReadyHandler(...)` | `void onReady()` |
-| `StreamPacketHandler` | `StreamSocket.onPacket(...)` | `void onPacket(RoutingId routingId, Message header, Message body)` |
-| `CompletionControlHandler` | `RouterSocket.setCompletionControlHandler(...)` | `void onControl(RoutingId sourceRoutingId, List<Message> parts)` — `parts`의 모든 메시지를 소유 |
-| `RequestCallback` | `RequestSubmitOperation.submit(callback)`/`RequestCallbackSubmitOperation.submit(callback)`(Messaging category) | `void onComplete(RequestResult result, List<Message> parts)` — `result == RequestResult.OK`일 때만 `parts` 소유 |
+| `ReplyToken` | `Received.replyToken()` / `RouterSocket.reply(...)` | opaque owner-bound request reply capability |
+| `StreamPacket` | `StreamSocket.recvPacket(...)` | caller-owned reusable routing-id/header/body output |
+| `CompletionStage<Void>` | `SendSubmitOperation.submit()` | completion-backed send terminal |
+| `CompletionStage<List<Message>>` | `RequestSubmitOperation.submit()` | completion-backed request terminal, caller가 reply part close |
 
 ---
 
@@ -327,15 +327,15 @@ try (StreamSocket stream = context.createStreamSocket()) {
 | `AutoHwmRecalcReason` | Monitor status(Eventing category); `value()`/`fromValue()` helper는 package-private | `NONE`, `INITIAL`, `ROLE_CHANGE`, `POLICY_TOGGLE`, `REFRESH`, `DEFERRED_SHRINK` |
 | `RidDuplicatePolicy` | `CommonSocketOptions.ridDuplicatePolicy`, `RouterSocketOptions.handover` | `REJECT`, `HANDOVER` |
 | `SubmitRetryMode` | `CommonSocketOptions.submitRetryMode` | `OFF`, `LOCAL_FAILURE` |
-| `SendFlags` | 모든 send/request/reply builder의 `.flags(...)` 단계(Messaging category) | `NONE`, `DONT_WAIT` |
+| `SendFlags` | `PublishSubmitOperation.flags(...)`에만 사용 | `NONE`, `DONT_WAIT` |
 | `RecvFlags` | 모든 `recv`/`subscribe`/`receiveSubscriptionEvent` | `NONE`, `DONT_WAIT` |
 | `SendResult` | non-blocking send 시도의 결과 | `SENT`, `BACKPRESSURED`, `NOT_READY` |
 | `SubmitResult` | `ZlinkSubmitException`이 반영(Errors category) | `OK`, `BACKPRESSURED`, `NOT_CONNECTED`, `NOT_FOUND`, `TERMINATED`, `INVALID_HANDLE`, `INVALID_ARGUMENT`, `NOT_SUPPORTED`, `INVALID_STATE`, `THREAD_VIOLATION`, `OUT_OF_MEMORY`, `SEQ_EXHAUSTED`, `INTERNAL_ERROR`, `NOT_ADMITTED` |
 | `RecvResult` | `ZlinkRecvException`이 반영(Errors category) | `OK`, `NO_DATA`(201), `BUSY`(202), `TERMINATED`(203), `INVALID_HANDLE`(204), `NOT_SUPPORTED`(205), `INTERNAL_ERROR`(206) |
-| `RequestResult` | `ZlinkRequestException`이 반영(Errors category), `RequestCallback`이 전달 | `OK`, `TIMED_OUT`(101), `NOT_FOUND`(102), `TERMINATED`(103), `PROTOCOL_ERROR`(104), `INTERNAL_ERROR`(105), `REJECTED`(106), `CONFLICT`(107), `BUSY`(108), `NOT_CONNECTED`(109), `INVALID_ARGUMENT`(110), `INVALID_STATE`(111), `NOT_SUPPORTED`(112), `BACKPRESSURED`(113) |
+| `RequestResult` | `ZlinkRequestException`이 반영(Errors category), `submit_sync()`/`submit()`이 전달 | `OK`, `TIMED_OUT`(101), `NOT_FOUND`(102), `TERMINATED`(103), `PROTOCOL_ERROR`(104), `INTERNAL_ERROR`(105), `REJECTED`(106), `CONFLICT`(107), `BUSY`(108), `NOT_CONNECTED`(109), `INVALID_ARGUMENT`(110), `INVALID_STATE`(111), `NOT_SUPPORTED`(112), `BACKPRESSURED`(113) |
 
-**선택 기준.** 두 flags enum 어느 쪽이든 `DONT_WAIT`는 blocking 호출을
-non-blocking으로 바꿔 block하는 대신 `false`/back-pressure를 보고한다.
+**선택 기준.** `DONT_WAIT`는 publish와 receive에 적용한다. Managed
+send/request/reply terminal은 이를 받지 않는다.
 
 ---
 

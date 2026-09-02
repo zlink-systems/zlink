@@ -109,7 +109,7 @@ An exclusive one-to-one peering socket with no routing.
 
 ```python
 pair = create_pair_socket(ctx)
-pair.send().message(b"ping").submit()
+pair.send().message(b"ping").submit_sync()
 received = create_received()
 if pair.recv_into(received):
     ...
@@ -138,7 +138,7 @@ Load-balances sends across its connected peers and can issue routed requests.
 
 ```python
 dealer = create_dealer_socket(ctx)
-dealer.request().message(b"payload").submit(callback)
+reply = await dealer.request().message(b"payload").submit()
 ```
 
 **Options.** **No `set_routing_id`/`get_routing_id` at all** — see the README's note.
@@ -166,12 +166,12 @@ Routes messages to peers addressed by routing id, and can reply to a specific pe
 
 ```python
 router = create_router_socket(ctx)
-router.send(peer_rid).message(b"hello").submit()
+await router.send(peer_rid).message(b"hello").submit()
 ```
 
-**Options.** **This binding declares no `try_send_completion_control`/
-`set_completion_control_handler`** — the opaque Completion-control surface documented on ROUTER in
-dotnet/cpp/java/node has no equivalent here, matching rust's absence of the same surface.
+**Options.** ROUTER uses the same managed send/request terminals as DEALER. Core keeps the selected
+application pipe and its paired completion pipe together; the binding exposes terminal results,
+not a separate completion-control channel.
 
 | Member | Meaning |
 | --- | --- |
@@ -179,13 +179,13 @@ dotnet/cpp/java/node has no equivalent here, matching rust's absence of the same
 | `connect(endpoint)` / `disconnect(endpoint)` | connects/disconnects to a peer address |
 | `send(routing_id)` | starts the shared `SendOp`, addressed to that peer |
 | `request(routing_id)` | Messaging category's shared `RequestOp`, addressed to a specific peer |
-| `reply(routing_id, request_seq)` | the shared `ReplyOp`, answering that peer's request |
+| `reply(routing_id, token)` | the shared `ReplyOp`, consuming the opaque `ReplyToken` received from this ROUTER |
 | `recv_into(received, *, flags=0)` | populates `received` with the next message |
 
 **Completion result.** `recv_into` follows the convention above.
 
-**When to use.** Use `request(routing_id)`/`reply(routing_id, request_seq)` for ROUTER-initiated or
-ROUTER-answered request/reply, where DEALER cannot address a specific peer.
+**When to use.** Use `request(routing_id)`/`reply(routing_id, token)` for ROUTER-initiated or
+ROUTER-answered request/reply. Keep the token opaque, socket-owned, and one-shot.
 
 ---
 
@@ -240,7 +240,10 @@ every other socket type.
 
 ```python
 stream = create_stream_socket(ctx)
-stream.on_packet(lambda rid, header, body: ...)
+stream.stream_options.recv_mode = StreamRecvMode.PACKET
+packet = StreamPacket()
+if stream.recv_packet_into(packet):
+    packet.close()
 ```
 
 **Options.** **No `connect`/`disconnect` declared on this Protocol** — matching every other
@@ -250,28 +253,29 @@ language's STREAM asymmetry.
 | --- | --- |
 | `stream_options` | the per-type options facade |
 | `send(routing_id)` | starts the shared `SendOp`, addressed to that peer |
-| `recv_into(received, *, flags=0)` | populates `received` with the next packet |
-| `on_packet(handler)` | registers a callback-driven packet loop; the handler owns both header and body messages, running on a background dispatch thread |
+| `recv_into(received, *, flags=0)` | pulls the next RAW-mode record |
+| `recv_packet_into(packet, *, flags=0)` | pulls the next PACKET-mode header/body pair into reusable caller-owned storage |
 | `disconnect_rid(peer_rid)` | disconnects the peer identified by that routing id |
 
-**Completion result.** `recv_into` follows the convention above.
+**Completion result.** `recv_into` and `recv_packet_into` follow the convention above. The caller
+owns the packet and closes its header/body with `packet.close()`.
 
-**When to use.** Use `on_packet` for a callback-driven packet loop.
+**When to use.** Set `stream_options.recv_mode` to `StreamRecvMode.RAW` or `.PACKET` before the
+first successful bind/connect; changing it afterward raises invalid state. Drain the selected
+pull API.
 
 ---
 
 ## Send / request / reply operation-builder shape
 
 The fluent builder every socket type's `send`/`publish`/`request`/`reply` entry point above returns
-to accumulate parts, flags, and a terminal submit. All builder stages extend the shared
+to accumulate parts and reach a terminal submit. All builder stages extend the shared
 `_FluentMessageOp` base Protocol.
 
 ```python
-dealer.send().message(part1).message(part2).submit()
+await dealer.send().message(part1).message(part2).submit()
 
-dealer.request().message(payload).timeout(5.0).submit(
-    lambda result, parts: ...
-)
+reply = await dealer.request().message(payload).timeout(5.0).submit()
 
 received.reply().message(b"ok").submit()
 ```
@@ -282,20 +286,19 @@ received.reply().message(b"ok").submit()
 | --- | --- | --- |
 | `_FluentMessageOp` (shared base) | `message(payload)` | add one part, starts/continues the chain |
 | | `messages(*payloads)` | add several parts in one call — **declared directly on the shared base Protocol here**, unlike other languages where the multi-part convenience is a separate extension method |
-| | `flags(flags)` | set flags |
-| `SendOp extends _FluentMessageOp` | `submit()` | terminal |
-| `RequestOp extends _FluentMessageOp` | `timeout(timeout)` / `submit(callback)` | adds a reply-wait timeout; **callback-only, no awaitable/Future-returning overload documented on this Protocol**, matching rust's callback-only request submit rather than dotnet/java/node/cpp's async path |
-| `RequestCallbackOp` | `timeout` / `submit(callback)` | mirrors `RequestOp`'s shape as a **separate Protocol** rather than a narrowed type reached only after calling `.flags(...)` — both `RequestOp` and `RequestCallbackOp` expose `submit(callback)` directly |
+| `SendOp extends _FluentMessageOp` | `submit()` / `submit_sync()` | awaitable or blocking terminal |
+| `RequestOp extends _FluentMessageOp` | `timeout(timeout)` / `submit()` / `submit_sync()` | adds a reply-wait timeout; returns caller-owned reply messages |
+| `PublishOp extends _FluentMessageOp` | `flags(flags)` / `submit()` | synchronous lossy/NODROP publication; the only operation family retaining send flags |
 | `ReplyOp extends _FluentMessageOp` | `submit()` | terminal |
 
-**Completion result.** `SendOp.submit()`/`ReplyOp.submit()` return the operation result
-synchronously. `RequestOp`/`RequestCallbackOp.submit(callback)` deliver the reply to `callback`
-later, on a background dispatch thread.
+**Completion result.** Send `submit()` is awaitable and `submit_sync()` blocks for Core's terminal
+result. Request has matching awaitable/blocking terminals returning reply messages; reply and
+publish `submit()` are synchronous. Managed send/request/reply terminals do not accept
+`SendFlags.DONT_WAIT`.
 
 **When to use.** Use `messages(*payloads)` to add several parts in one call instead of chaining
-`.message(...)` per part. Since there is no async/awaitable request path, bridge to `asyncio`
-manually (a `Future`/event set inside the callback) if `await`-style ergonomics are needed at the
-call site.
+`.message(...)` per part. Prefer the awaitable terminal in `asyncio` code and use the synchronous
+terminal only when the calling thread may block.
 
 ---
 
@@ -304,16 +307,16 @@ call site.
 | Enum | Used by | Values |
 |---|---|---|
 | `SocketType` | Internal socket-kind identification | `ANY`, `PAIR`, `PUB`, `SUB`, `DEALER`, `ROUTER`, `XPUB`, `XSUB`, `STREAM` |
-| `SendFlags` | Every send/request/reply builder's `.flags(...)` stage (above) | `NONE`, `DONT_WAIT` |
+| `SendFlags` | `PublishOp.flags(...)` only | `NONE`, `DONT_WAIT` |
 | `RecvFlags` | Every `recv_into`/`subscribe_into`/`receive_subscription_event_into` | `NONE`, `DONT_WAIT` |
 | `SubmitResult` | Mirrored by `SubmitError` (Errors category) | `OK`, `BACKPRESSURED`, `NOT_CONNECTED`, `NOT_FOUND`, `TERMINATED`, `INVALID_HANDLE`, `INVALID_ARGUMENT`, `NOT_SUPPORTED`, `INVALID_STATE`, `THREAD_VIOLATION`, `OUT_OF_MEMORY`, `SEQ_EXHAUSTED`, `INTERNAL_ERROR`, `NOT_ADMITTED` |
 | `RequestResult` | Mirrored by `RequestError` (Errors category) | `OK`, `TIMED_OUT`(101), `NOT_FOUND`(102), `TERMINATED`(103), `PROTOCOL_ERROR`(104), `INTERNAL_ERROR`(105), `REJECTED`(106), `CONFLICT`(107), `BUSY`(108), `NOT_CONNECTED`(109), `INVALID_ARGUMENT`(110), `INVALID_STATE`(111), `NOT_SUPPORTED`(112), `BACKPRESSURED`(113) |
 | `RecvResult` | Mirrored by `RecvError` (Errors category) | `OK`, `NO_DATA`(201), `BUSY`(202), `TERMINATED`(203), `INVALID_HANDLE`(204), `NOT_SUPPORTED`(205), `INTERNAL_ERROR`(206), `BUFFER_TOO_SMALL`(207), `INVALID_STATE`(208) — the fuller 8-value set (matching node's, not dotnet/cpp/java/rust's 6-value set) |
-| `HandlerResult` | Handler registration APIs | `OK`, `INVALID_ARGUMENT`(301), `BUSY`(302), `NOT_SUPPORTED`(303), `DEADLOCK`(304), `INVALID_HANDLE`(305), `INTERNAL_ERROR`(306) |
+| `HandlerResult` | retained result family; current public completion/event paths use terminals or pull | `OK`, `INVALID_ARGUMENT`(301), `BUSY`(302), `NOT_SUPPORTED`(303), `DEADLOCK`(304), `INVALID_HANDLE`(305), `INTERNAL_ERROR`(306) |
 | `RidDuplicatePolicy` | `CommonSocketOptions.rid_duplicate_policy`, `RouterSocketOptions.handover` | `REJECT`, `HANDOVER` |
 | `SubmitRetryMode` | `CommonSocketOptions.submit_retry_mode` | `OFF`, `LOCAL_FAILURE` |
 
-**When to use.** `DONT_WAIT` on either flags enum turns a blocking call into a non-blocking one that
+**When to use.** `DONT_WAIT` on publish or receive turns a blocking call into a non-blocking one that
 reports `False`/back-pressure instead of blocking.
 
 ---

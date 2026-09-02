@@ -19,10 +19,11 @@ STREAM 소켓은 **외부 RAW 클라이언트**와 통신하기 위한 **서버 
 - `ZLINK_SOCKET_STREAM`은 `zlink_bind()`만 지원한다.
 - `ZLINK_SOCKET_STREAM`에 `zlink_connect()`를 호출하면 `EOPNOTSUPP`를 반환한다.
 - 클라이언트는 zlink STREAM 소켓이 아니라 OS/Asio/WebSocket 등의 **raw client**를 사용해야 한다.
-- STREAM은 raw 바이트 스트림을 그대로 전달한다. **framing(패킷 경계)은 사용자가 정의**해야 한다.
+- RAW 모드는 raw 바이트 스트림을 그대로 전달한다. PACKET 모드는 2바이트 BE header 크기 +
+  4바이트 BE body 크기 + header + body framing을 사용한다.
 - zlink API 수준에서: raw `zlink_recv_part()`는 발신 클라이언트의 4바이트
-  `routing_id`를 자체 `source_rid_out_` out-parameter로 노출하며, raw/패킷
-  콜백도 `source_rid`를 별도의 콜백 인자로 넘긴다는 점은 동일하다.
+  `routing_id`를 자체 `source_rid_out_` out-parameter로 노출하며, packet
+  `zlink_stream_recv_packet()`도 같은 Core-owned borrowed view를 `source_rid_out_`로 노출한다.
 
 유효 조합:
 
@@ -53,26 +54,25 @@ zlink_bind(stream, "tcp://0.0.0.0:8080");
 
 ## 3. STREAM 고유 동작
 
-STREAM은 기반 소켓 계열(raw socket family)에서 유일한 예외 타입이다. 한 핸들에서 세
-가지 수신 모델 중 정확히 하나를 고른다.
+STREAM은 기반 소켓 계열(raw socket family)에서 유일한 예외 타입이다. 첫 bind 성공 전에 두
+가지 수신 모드 중 정확히 하나를 고른다.
 
-- **직접 수신(raw recv)**: `zlink_recv_part()`로 transport 조각을 part 단위로
+- **RAW**: `zlink_recv_part()`로 transport 조각을 part 단위로
   직접 가져온다. 소스 routing id는 `source_rid_out_` out-parameter로
   받는다. poller의 `ZLINK_POLLIN`과 함께 사용한다.
-- **콜백 수신(raw callback)**: `zlink_recv_handler()`로 수신 조각을 콜백으로 받는다.
-  이벤트 기반(event-driven) 서버에 적합하다.
-- **패킷 콜백(packet callback)**: `zlink_stream_packet_handler()`로 고정 framing(framing,
+- **PACKET**: `zlink_stream_recv_packet()`으로 고정 framing(framing,
   패킷 경계를 구분하는 방식) 규약(2B header size + 4B body size + header + body, big-endian)을
   따르는 패킷을 조립된 header/body 형태로 받는다.
 
-세 모델은 상호 배타이며, 한 핸들에서 두 번째 모드로 전환하려 하면
-`EBUSY`로 실패한다. 응용은 필요에 맞는 모드 하나만 고른다.
+bind 전에 `ZLINK_STREAM_OPT_RECV_MODE`를 `ZLINK_STREAM_RECV_MODE_RAW` 또는
+`ZLINK_STREAM_RECV_MODE_PACKET`으로 설정한다. 첫 bind 성공 뒤에는 모드를 바꿀 수 없고,
+다른 모드의 수신 API는 `ENOTSUP`로 실패한다.
 
 STREAM만의 고유 동작은 다음과 같다.
 
 - `source_rid`는 서버가 연결별로 자동 할당하며,
   고정 4바이트(`uint32`, big-endian)이다.
-- 특정 클라이언트를 끊어야 하면 콜백이나 recv에서 받은 `source_rid`를
+- 특정 클라이언트를 끊어야 하면 recv에서 받은 `source_rid`를
   `zlink_disconnect_rid()`에 넘긴다. STREAM의 대상 rid는 반드시 4바이트다.
 - connect/disconnect는 in-band 데이터 마커가 **아니다**. 소켓 monitor의
   `ZLINK_EVENT_CONNECTION_READY` / `ZLINK_EVENT_DISCONNECTED` 이벤트로
@@ -81,41 +81,39 @@ STREAM만의 고유 동작은 다음과 같다.
 
 ---
 
-## 4. 콜백 예시
+## 4. RAW pull 예시
 
-STREAM raw 콜백에서 전달되는 모든 part는 애플리케이션 데이터다.
+STREAM RAW 모드에서 pull한 모든 part는 애플리케이션 데이터다.
 connect/disconnect는 소켓 monitor로 관찰한다([Monitoring](../spec/core/06-monitoring.ko.md) 참고).
 
 ```c
-void on_message(const zlink_routing_id_t *source_rid,
-                zlink_msg_t *parts, size_t part_count,
-                void *userdata)
-{
-    for (size_t i = 0; i < part_count; i++) {
-        void *data = zlink_msg_data(&parts[i]);
-        size_t size = zlink_msg_size(&parts[i]);
+zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_RAW;
+zlink_set_stream_option(stream, ZLINK_STREAM_OPT_RECV_MODE,
+                        &mode, sizeof(mode));
+zlink_bind(stream, "tcp://0.0.0.0:8080");
 
-        /* echo reply */
-        zlink_msg_t reply;
-        zlink_msg_init_size(&reply, size);
-        memcpy(zlink_msg_data(&reply), data, size);
-        zlink_send_part_rid(stream, source_rid, &reply, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
-
-        zlink_msg_close(&parts[i]);
-    }
+const zlink_routing_id_t *source_rid = NULL;
+zlink_msg_t part;
+zlink_msg_init(&part);
+zlink_part_flag_t more = ZLINK_PART_FINAL;
+if (zlink_recv_part(stream, &source_rid, &part, &more,
+                    ZLINK_RECV_FLAGS_NONE) == ZLINK_RECV_OK) {
+    zlink_msg_t reply;
+    zlink_msg_init_size(&reply, zlink_msg_size(&part));
+    memcpy(zlink_msg_data(&reply), zlink_msg_data(&part), zlink_msg_size(&part));
+    zlink_send_part_rid(stream, source_rid, &reply, ZLINK_SEND_FLAGS_NONE,
+                       ZLINK_PART_FINAL, NULL, NULL);
+    zlink_msg_close(&part);
 }
-
-/* Attach callback dispatch (콜백 밖에서 해제 가능; 콜백 실행 중 detach/close는 EBUSY) */
-zlink_recv_handler(stream, on_message, NULL);
 ```
 
 ### 주요 사항
 
 | 항목 | 설명 |
 |---|---|
-| Attach API | `zlink_recv_handler()` |
-| 콜백 | `zlink_socket_msg_handler_fn` |
-| 수명 | 콜백 밖에서 dispatch 해제 가능. 콜백 실행 중 detach/close는 `EBUSY` |
+| 수신 API | `zlink_recv_part()` |
+| readiness | poller가 `ZLINK_POLLIN`을 알리면 애플리케이션이 recv를 drain |
+| 수명 | `source_rid`는 같은 소켓의 다음 data-recv 진입 또는 close 전까지 유효 |
 | framing | transport에서 수신된 raw 바이트 |
 | 전송 | `zlink_send_part_rid()` |
 
@@ -123,52 +121,47 @@ zlink_recv_handler(stream, on_message, NULL);
 > `ZLINK_DONTWAIT` 로 `ZLINK_SUBMIT_BACKPRESSURED` 를 반환한다.
 > 배압(backpressure) 패턴은 [성능 가이드](10-performance.ko.md)를 참고.
 
-- 수신 콜백은 한 번에 하나만 등록할 수 있으며, 이미 등록된 상태에서 attach를
-  호출하면 `errno=EBUSY`와 함께 `ZLINK_HANDLER_BUSY`를 반환한다.
-- 수신 콜백이 활성인 동안 direct recv 계열과 data-plane `POLLIN`은
-  `EBUSY`다.
-- 콜백 내부에서 close를 호출하는 것은 지원되지 않는다 (`EBUSY` 실패).
+- 성공적으로 받은 `zlink_msg_t`는 호출자가 소유하며 정확히 한 번 close한다.
+- 다음 data receive 뒤에도 `source_rid`가 필요하면 borrowed view를 미리 복사한다.
+- 빈 큐에서 `ZLINK_RECV_FLAGS_DONTWAIT`을 쓰면 `EAGAIN`과 `ZLINK_RECV_NO_DATA`를 반환한다.
 
 ---
 
-## 4.1 패킷 콜백 모드
+## 4.1 PACKET pull 모드
 
 고정 framing 규약(2바이트 big-endian header size + 4바이트 big-endian
 body size + header payload + body payload)을 사용하는 상위 프로토콜에서는
-`zlink_stream_packet_handler()`로 패킷 단위 콜백을 등록할 수 있다.
-core가 조각(fragment) 누적과 길이 해석을 직접 처리하므로 응용은 header/body를
+PACKET 모드를 선택하고 `zlink_stream_recv_packet()`으로 pull한다.
+Core가 조각(fragment) 누적과 길이 해석을 직접 처리하므로 응용은 header/body를
 그대로 받아 처리한다.
 
 ```c
-void on_packet(void *stream,
-               const zlink_routing_id_t *source_rid,
-               zlink_msg_t *header,
-               zlink_msg_t *body,
-               void *userdata)
-{
-    /* header_size == 0 이어도 header 는 길이 0 의 유효한 msg_t 로 전달된다.
-       body 도 마찬가지. NULL 이 들어오지 않는다. */
-    /* source_rid 는 콜백 실행 중에만 유효한 borrowed view 이므로,
-       이후에도 유지하려면 값을 복사해 둔다. */
+zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_PACKET;
+zlink_set_stream_option(stream, ZLINK_STREAM_OPT_RECV_MODE,
+                        &mode, sizeof(mode));
+zlink_bind(stream, "tcp://0.0.0.0:8080");
 
-    /* ... header / body 로 상위 프로토콜 처리 ... */
-
-    zlink_msg_close(header);
-    zlink_msg_close(body);
+const zlink_routing_id_t *source_rid = NULL;
+zlink_msg_t header;
+zlink_msg_t body;
+zlink_msg_init(&header);
+zlink_msg_init(&body);
+if (zlink_stream_recv_packet(stream, &source_rid, &header, &body,
+                             ZLINK_RECV_FLAGS_NONE) == ZLINK_RECV_OK) {
+    /* header/body 처리. 길이 0인 메시지도 유효하다. */
+    zlink_msg_close(&header);
+    zlink_msg_close(&body);
 }
-
-zlink_stream_packet_handler(stream, on_packet, NULL);
 ```
 
-패킷 콜백 모드의 규칙은 다음과 같다.
+PACKET 모드의 규칙은 다음과 같다.
 
 - `header_size` 와 `body_size` 는 각각 0 도 허용된다. 길이가 0 이어도 msg_t 는
   유효한 객체로 전달된다.
-- `header` 와 `body` 의 소유권은 콜백으로 이전된다. 콜백은 두 msg_t 를 각각
+- `header` 와 `body` 의 소유권은 호출자로 이전된다. 호출자는 두 msg_t 를 각각
   정확히 한 번 close 하거나 소비해야 한다.
-- 같은 핸들에서 직접 수신 모드(`zlink_recv_part()`), 콜백 수신 모드
-  (`zlink_recv_handler()`), 데이터 경로 `ZLINK_POLLIN` 등록은 모두
-  `EBUSY` 로 실패한다. 두 번째 패킷 핸들러 등록도 마찬가지다.
+- PACKET 모드에서 raw receive(`zlink_recv_part()`)는 `ENOTSUP`로 실패한다.
+  RAW 모드에서 `zlink_stream_recv_packet()`도 같은 방식으로 실패한다.
 - framing 규약을 지키지 않는 비정형 패킷(malformed packet)(길이 제한 초과, 조립 실패,
   불완전 상태 연결 종료 등)은 연결을 닫는 기본 동작으로 이어진다. 이
   이벤트는 소켓 모니터(socket monitor) 경로로 관찰한다.
@@ -193,7 +186,7 @@ char buf[4096];
 ssize_t n = recv(fd, buf, sizeof(buf), 0);
 ```
 
-서버가 **패킷 핸들러**(`zlink_stream_packet_handler`)를 쓰면 클라이언트는 각
+서버가 **PACKET 모드**(`zlink_stream_recv_packet`)를 쓰면 클라이언트는 각
 패킷을 2바이트 BE header size + 4바이트 BE body size + header + body로
 framing해야 한다:
 
@@ -219,7 +212,8 @@ send(fd, body, body_len, 0);
   - `ZLINK_OPT_SNDBUF` / `ZLINK_OPT_RCVBUF`
   - `ZLINK_OPT_BACKLOG`
   - `ZLINK_OPT_LINGER`
-  - `ZLINK_STREAM_OPT_NOTIFY` (`zlink_set_stream_option()` / `zlink_get_stream_option()`): 현재는 옵션 값을 set/get만 한다(저장/조회)
+  - `ZLINK_STREAM_OPT_RECV_MODE` (`zlink_set_stream_option()` / `zlink_get_stream_option()`): bind 전에 RAW 또는 PACKET 선택
+  - `ZLINK_STREAM_OPT_NOTIFY`: RAW 모드의 길이 0 connect/disconnect record 활성화. PACKET과 결합 불가
 - TLS/WSS 서버: `zlink_set_tls_server()`
 - TLS 클라이언트: `zlink_set_tls_client()`
 
@@ -325,9 +319,9 @@ STREAM 소켓으로 원시 바이트를 주고받는 자립형 예제다(모든 
     --8<-- "bindings/rust/samples/stream_recv_sample.rs:doc"
     ```
 
-### 패킷 콜백 방식
+### PACKET pull 방식
 
-수신 패킷을 콜백으로 처리하는 변형이다.
+고정 framing의 수신 패킷을 애플리케이션이 pull하는 변형이다.
 
 === "C++"
 
@@ -349,9 +343,7 @@ STREAM 소켓으로 원시 바이트를 주고받는 자립형 예제다(모든 
 
 === "Kotlin"
 
-    ```kotlin
-    --8<-- "bindings/kotlin/samples/src/main/kotlin/systems/zlink/samples/StreamPacketCallbackSample.kt:doc"
-    ```
+    현재 source tree에는 pull 기반 Kotlin PACKET sample이 아직 없다.
 
 === "Python"
 
@@ -367,9 +359,7 @@ STREAM 소켓으로 원시 바이트를 주고받는 자립형 예제다(모든 
 
 === "JavaScript"
 
-    ```javascript
-    --8<-- "bindings/javascript/samples/stream_packet_callback_sample.js:doc"
-    ```
+    현재 source tree에는 pull 기반 JavaScript PACKET sample이 아직 없다.
 
 === "Go"
 

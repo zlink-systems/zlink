@@ -77,7 +77,7 @@ zlink_poller_remove(poller, s);
 **Parameters.** `source`는 socket handle이다. `user_data`(add에만)는 일치하는
 `zlink_poller_event_t` 항목으로 되돌려받는 borrowed pointer다. `events`는
 `zlink_pollitem_t`와 같은 `zlink_poller_event_mask_t` bit에 더해
-`ZLINK_POLLCOMPLETION`(completion channel을 가진 raw `PAIR`·`DEALER`·`ROUTER`·`STREAM`을
+`ZLINK_POLLCOMPLETION`(completion queue를 가진 raw `PAIR`·`DEALER`·`ROUTER`·`STREAM`을
 추가할 때만 유효 — 아래 참고)을 받는다.
 
 **Return과 errno.** 셋 다 `zlink_config_result_t`를 반환한다 — 성공하면
@@ -88,11 +88,10 @@ event면 `ZLINK_CONFIG_NOT_SUPPORTED`와 `ENOTSUP`.
 
 **선택 기준.** Poller는 source handle을 빌릴 뿐이다 — 파괴하기 전에 source를 제거한다.
 `ZLINK_POLLCOMPLETION`을(단독으로, 또는 `ZLINK_POLLIN`/`ZLINK_POLLOUT`과 OR로) 설정하면
-하나의 poller가 같은 socket의 수신·송신·완료 진행을 함께 소유한다. `DEALER`와 `ROUTER`는
-이를 reply completion에 쓰고(DEALER/ROUTER category), 비동기 send를 지원하는 socket —
-`PAIR`·`DEALER`·`ROUTER`·`STREAM` — 은 `zlink_send_complete_handler`(Socket lifecycle
-category)로 설치한 send-completion channel에 쓴다. 이 등록은 그 callback의 dispatch를
-Core async mailbox 스레드에서 `zlink_poller_wait`를 호출하는 스레드로 옮긴다. 다른 source,
+하나의 poller가 같은 socket의 DATA readiness와 completion readiness를 함께 소유한다.
+`DEALER`와 `ROUTER`는 REQUEST 결과에 쓰고(DEALER/ROUTER category),
+`PAIR`·`DEALER`·`ROUTER`·`STREAM`은 pending-send completion record에도 쓴다. 이 등록은
+readiness만 소유하며 `zlink_poller_wait()`가 queue record를 제거하지는 않는다. 다른 source,
 `zlink_poll` item, `zlink_poller_modify`에 쓰면 `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`을
 반환한다. 등록된 source가 닫히면 `POLLERR`를 한 번 만들며 명시적으로 제거될 때까지 등록
 상태로 남는다.
@@ -147,6 +146,23 @@ Poller에 현재 등록된 모든 source에 대한 readiness를 기다린다.
 zlink_poller_event_t events[16];
 zlink_config_result_t err;
 int ready = zlink_poller_wait(poller, events, 16, /*timeout_ms=*/1000, &err);
+
+for (int i = 0; i < ready; ++i) {
+    if ((events[i].events & ZLINK_POLLCOMPLETION) == 0)
+        continue;
+    for (;;) {
+        zlink_completion_t completion = {0};
+        completion.struct_size = sizeof(completion);
+        zlink_recv_result_t rc = zlink_completion_recv(
+            events[i].socket, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc == ZLINK_RECV_NO_DATA)
+            break;
+        if (rc != ZLINK_RECV_OK)
+            break; /* typed receive 실패 처리 */
+        /* completion_id 또는 user_context를 대조하고 결과를 처리한다. */
+        zlink_completion_close(&completion);
+    }
+}
 ```
 
 **Parameters.** `events`/`event_capacity`는 caller 소유 출력 배열과 그 크기다.
@@ -157,12 +173,12 @@ int ready = zlink_poller_wait(poller, events, 16, /*timeout_ms=*/1000, &err);
 `source_kind`(`SOCKET`/`FD`/`TIMER` — 일치하는 `socket`/`fd`/`timer` 중 하나만
 유효), `user_data`(등록 시의 borrowed pointer), `events`를 보고한다.
 
-**선택 기준.** 반환된 배열은 caller 소유이며 Core storage에 대한 pointer를 담지
-않는다. `ZLINK_POLLCOMPLETION` 신호를 처리한 wait — DEALER/ROUTER reply completion이든,
-`zlink_send_complete_handler`(Socket lifecycle category)로 설치한 send completion이든 —
-는 여전히 `ZLINK_POLLCOMPLETION` bit가 설정된 공개 이벤트를 쓰고 반환된 총 개수에 포함시킨다.
-따라서 `wait`가 그 이유로 `0`을 반환하는 일은 없다 — caller는 이미 실행된 callback이 바꾼
-상태를 살펴보면 된다. `recv_part` family는 이 완료 신호를 스스로 소진하지 않는다.
+**선택 기준.** 반환된 배열은 caller 소유이며 Core storage에 대한 pointer를 담지 않는다.
+`ZLINK_POLLCOMPLETION`은 level-triggered다. Wait는 readiness를 보고하지만 record를 소비하지
+않는다. 준비된 socket마다 DONTWAIT `zlink_completion_recv()`를 `ZLINK_RECV_NO_DATA`까지
+반복하고 성공한 record를 모두 close한다. Socket의 completion bit는 poller registration 하나만
+소유할 수 있고 다른 thread가 동시에 drain하는 것은 지원하지 않는다. `recv_part` family는 이
+queue를 스스로 소진하지 않는다.
 
 ---
 

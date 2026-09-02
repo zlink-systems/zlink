@@ -141,20 +141,34 @@ snapshot := msg.Bytes()       // 독립 복사본
 text := msg.Text()            // UTF-8 문자열 변환
 ```
 
-HWM 대기 가능 send의 동기 종결자는 `Flags(SendFlags).Submit(ctx)`입니다. flag를
-생략하거나 `SendFlagsNone`을 지정하면 Core 안에서 HWM admission까지 현재 goroutine이
-대기합니다. `SendFlagsDontWait`을 지정하면 HWM이 가득 찼을 때 routed send는 즉시
-`*SubmitError`를 반환하고, PAIR send는 `(false, nil)`을 반환합니다. Go send에는
-별도 async 종결자가 없습니다.
+HWM 대기 가능 send의 terminal은 `Submit(ctx)`입니다. Goroutine을 Core 안에서 blocking하지
+않는 completion-backed DONTWAIT 경로를 사용하고 Context가 caller wait의 경계를 정합니다.
+Go send에는 별도 callback이나 synchronous terminal이 없습니다.
 
 ```go
-err := dealer.Send().Message(msg).Flags(zlink.SendFlagsDontWait).Submit(ctx)
+err := dealer.Send().Message(msg).Submit(ctx)
 ```
 
-Request도 같은 HWM admission을 지나지만 Go에서는 별도 callback이나 세 메서드로
-나누지 않습니다. `Flags(SendFlags).Submit(ctx)`가 admission 결과를 즉시 반환하고,
-reply는 함께 받은 completion channel로 전달합니다. `SendFlagsNone`은 admission을
-기다리고 `SendFlagsDontWait`은 즉시 backpressure를 반환합니다.
+Request도 하나의 언어 관용 terminal을 사용합니다.
+`request.Message(...).Timeout(...).Submit(ctx)`는 socket completion이 drain된 뒤 reply
+parts와 error를 직접 반환합니다. Reply는 별도 DATA receive가 아니며 send/request에는
+callback terminal이 없습니다.
+
+Core가 pre-admission operation을 접수한 뒤 retry를 소유하므로 caller retry queue를 만들거나
+payload를 재전송하지 않습니다. Native `ZLINK_OPT_PENDING_MAX_MSGS/BYTES` cap은 pending
+SEND와 REQUEST에 공유되고 send 전용 pending 이름은 없습니다. Completion은 local admission일
+뿐 peer delivery나 application acknowledgement가 아닙니다.
+
+`context.Context` 취소는 pre-submit 호출 또는 Go waiter의 대기를 중단할 수 있습니다. Core가
+이미 payload를 접수했다면 admission이나 request 처리는 계속될 수 있고 socket owner가 늦은
+completion도 drain합니다. STREAM은 bind/connect 전에
+`SetReceiveMode(StreamReceiveRaw)` 또는 `SetReceiveMode(StreamReceivePacket)`을 호출한 뒤
+각각 `Recv` 또는 `RecvPacket`을 사용합니다.
+
+public poller가 socket의 `PollCompletion` owner이면 `Submit(ctx)`가 남아 있는 동안 다른
+goroutine이 `Wait()` loop를 계속 실행해야 합니다. `Wait()`가 native completion을 drain해
+Go state를 settle/cleanup하므로 같은 goroutine에서 wait 사이에 blocking submit을 호출하면
+completion이 멈출 수 있습니다.
 
 ### 3. Received — 수신 봉투
 
@@ -211,7 +225,7 @@ Go 바인딩의 소유권 규칙은 단순합니다.
 ```go
 // 패턴: 에러가 나도 안전하게
 msg, _ := zlink.NewMessage([]byte("data"))
-if _, err := socket.Send().Message(msg).Submit(nil); err != nil {
+if err := socket.Send().Message(msg).Submit(context.Background()); err != nil {
     defer msg.Close() // 전송 실패 시에만 닫음
 }
 // 전송 성공 시 msg는 이미 소비되어 Close() 불필요
@@ -225,7 +239,7 @@ Go 바인딩은 표준 `error` 인터페이스를 돌려줍니다. 결과 코드
 어서션으로 확인합니다.
 
 ```go
-_, err := socket.Send().Message(msg).Flags(zlink.SendFlagsDontWait).Submit(nil)
+err := socket.Send().Message(msg).Submit(context.Background())
 if err != nil {
     var submitErr *zlink.SubmitError
     if errors.As(err, &submitErr) {
@@ -326,7 +340,7 @@ flag 없는 기본 send는 HWM admission을 기다리는 동안 호출 goroutine
 | `request_reply_async_sample` | 비동기 요청/응답 |
 | `pubsub_recv_sample` | XPUB/SUB 발행·구독 |
 | `stream_recv_sample` | STREAM 원시 TCP |
-| `stream_packet_callback_sample` | STREAM 패킷 콜백 |
+| `stream_packet_callback_sample` | STREAM PACKET pull(legacy directory 이름) |
 | `monitor_recv_sample` | 모니터 이벤트 수신 |
 
 > SPOT·Actor 예제는 core 바인딩이 아니라 framework 샘플이 다룬다. Go에는 아직

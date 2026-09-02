@@ -65,18 +65,18 @@ zlink_connect(dealer, "tcp://127.0.0.1:5558");
 zlink_msg_t msg1, msg2, msg3;
 zlink_msg_init_size(&msg1, 9);
 memcpy(zlink_msg_data(&msg1), "request-1", 9);
-zlink_send_part(dealer, &msg1, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(dealer, &msg1, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 zlink_msg_init_size(&msg2, 9);
 memcpy(zlink_msg_data(&msg2), "request-2", 9);
-zlink_send_part(dealer, &msg2, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(dealer, &msg2, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 zlink_msg_init_size(&msg3, 9);
 memcpy(zlink_msg_data(&msg3), "request-3", 9);
-zlink_send_part(dealer, &msg3, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(dealer, &msg3, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
-/* Replies are drained with zlink_recv_part() in a poller loop, or
-   (for zlink_dealer_request_part()) delivered through its reply callback */
+/* Ordinary DATA is drained with zlink_recv_part(). Results for
+   zlink_request_part() are drained with zlink_completion_recv(). */
 ```
 
 ### Receive Modes
@@ -116,10 +116,10 @@ zlink_msg_init_size(&body, 4);
 memcpy(zlink_msg_data(&body), "body", 4);
 
 zlink_submit_result_t rc = zlink_send_part(
-    dealer, &header, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE);
+    dealer, &header, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, NULL, NULL);
 if (rc == ZLINK_SUBMIT_OK)
     rc = zlink_send_part(
-        dealer, &body, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+        dealer, &body, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 ```
 
 ## 4. Socket Options
@@ -150,31 +150,14 @@ zlink_connect(dealer, "tcp://127.0.0.1:5558");
 
 ### 4.1 Request-Reply
 
-When DEALER needs to send a request and wait for a reply, use
-`zlink_dealer_request_part()` instead of ordinary `send/recv`. This function
-attaches a ZMP request-reply envelope and delivers the reply via callback.
+When DEALER needs a correlated reply, use `zlink_request_part()` instead of
+ordinary DATA `send/recv`. It attaches a ZMP request-reply envelope and places
+the reply or terminal result in the socket completion queue.
 
 > For the ZMP request-reply envelope wire format, see
 > [ZMP Protocol](../spec/core/protocol/01-zmp.en.md).
 
 ```c
-static void on_reply(zlink_request_result_t result,
-                     zlink_msg_t *parts,
-                     size_t part_count,
-                     void *userdata)
-{
-    if (result != ZLINK_REQUEST_OK) {
-        /* result values: ZLINK_REQUEST_TIMED_OUT, ZLINK_REQUEST_NOT_FOUND,
-           ZLINK_REQUEST_TERMINATED, ZLINK_REQUEST_PROTOCOL_ERROR */
-        fprintf(stderr, "request failed: %d\n", (int)result);
-        return;
-    }
-
-    /* Ownership of parts_ and every message moves to this callback;
-       release exactly once. */
-    zlink_multipart_close(parts, part_count);
-}
-
 int timeout_ms = 1000;
 zlink_set_dealer_option(
   dealer,
@@ -185,16 +168,22 @@ zlink_set_dealer_option(
 zlink_msg_t req;
 zlink_msg_init_size(&req, 4);
 memcpy(zlink_msg_data(&req), "ping", 4);
-/* signature: zlink_dealer_request_part(dealer, part, flags, part_flag,
-   timeout_ms, handler, userdata) */
-zlink_submit_result_t rc = zlink_dealer_request_part(
-    dealer, &req, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-    0 /* timeout_ms: 0 uses ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS */,
-    on_reply, NULL);
-if (rc != ZLINK_SUBMIT_OK) { /* handler is not called; handle submit failure */ }
+zlink_completion_id_t id = 0;
+zlink_submit_result_t rc = zlink_request_part(
+    dealer, NULL, &req, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
+    0 /* uses ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS */, NULL, &id);
+if (rc == ZLINK_SUBMIT_OK) {
+    zlink_completion_t completion = {0};
+    completion.struct_size = sizeof(completion);
+    if (zlink_completion_recv(dealer, &completion, ZLINK_RECV_FLAGS_NONE)
+        == ZLINK_RECV_OK) {
+        /* completion.request_result is OK, TIMED_OUT, NOT_FOUND, ... */
+        zlink_completion_close(&completion);
+    }
+}
 ```
 
-When `timeout_ms_ == 0` is passed to `zlink_dealer_request_part()`, it uses
+When `timeout_ms_ == 0` is passed to `zlink_request_part()`, DEALER uses
 the `ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS` socket default (`5000ms` unless set
 otherwise).
 
@@ -213,39 +202,38 @@ void *dealer = zlink_socket(ctx, ZLINK_SOCKET_DEALER);
 zlink_set_routing_id(dealer, "D1", 2);
 zlink_connect(dealer, "tcp://127.0.0.1:5558");
 
-/* Client request */
+/* Client typed request */
 zlink_msg_t req;
 zlink_msg_init_size(&req, 5);
 memcpy(zlink_msg_data(&req), "Hello", 5);
-zlink_send_part(dealer, &req, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_completion_id_t request_id = 0;
+zlink_request_part(dealer, NULL, &req, ZLINK_SEND_FLAGS_NONE,
+                   ZLINK_PART_FINAL, 0, NULL, &request_id);
 
-/* Server: receive with zlink_router_recv_part() (source_rid + request_seq) */
+/* Server: receive REQUEST with source_rid + opaque reply_token. */
 const zlink_routing_id_t *source_rid = NULL;
-uint64_t request_seq = 0;
+zlink_reply_token_t reply_token = 0;
 zlink_msg_t part;
 zlink_part_flag_t more;
 
 zlink_msg_init(&part);
-zlink_router_recv_part(router, &source_rid, &request_seq, &part, &more,
+zlink_router_recv_part(router, &source_rid, &reply_token, &part, &more,
                        ZLINK_RECV_FLAGS_NONE);
 printf("Received from [%.*s]: %.*s\n", (int)source_rid->size, source_rid->data,
        (int)zlink_msg_size(&part), (char *)zlink_msg_data(&part));
 
-/* Ordinary directed traffic has request_seq == 0, so reply with
-   zlink_send_part_rid() rather than zlink_router_reply_part(). */
+/* A nonzero token marks REQUEST and must be returned unchanged. */
 zlink_msg_t reply;
 zlink_msg_init_size(&reply, 5);
 memcpy(zlink_msg_data(&reply), "World", 5);
-zlink_send_part_rid(router, source_rid, &reply, ZLINK_SEND_FLAGS_NONE,
-                    ZLINK_PART_FINAL);
+zlink_reply_part(router, source_rid, reply_token, &reply, ZLINK_PART_FINAL);
 zlink_msg_close(&part);
 
-/* Client: receive the reply with zlink_recv_part() */
-zlink_msg_t reply_part;
-zlink_part_flag_t reply_more;
-zlink_msg_init(&reply_part);
-zlink_recv_part(dealer, NULL, &reply_part, &reply_more, ZLINK_RECV_FLAGS_NONE);
-zlink_msg_close(&reply_part);
+/* Client: receive the reply as REQUEST completion, not DATA. */
+zlink_completion_t completion = {0};
+completion.struct_size = sizeof(completion);
+zlink_completion_recv(dealer, &completion, ZLINK_RECV_FLAGS_NONE);
+zlink_completion_close(&completion);
 ```
 
 > Reference: `core/tests/integration/test_router_multiple_dealers.cpp` -- TCP/IPC/inproc examples
@@ -406,7 +394,7 @@ connections stay alive, so a peer that flips back to a positive weight
 rejoins the rotation without reconnect.
 
 If every known peer is `0`, `zlink_send_part()` and
-`zlink_dealer_request_part()` return `ZLINK_SUBMIT_NOT_ADMITTED`. The caller
+`zlink_request_part()` return `ZLINK_SUBMIT_NOT_ADMITTED`. The caller
 should wait for at least one peer to return to a positive weight before
 retrying; treating `NOT_ADMITTED` as a hard failure would discard
 messages that are expected to succeed once maintenance ends.

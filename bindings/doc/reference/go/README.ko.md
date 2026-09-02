@@ -30,12 +30,12 @@ impl.X` alias이고 모든 함수/상수는 `internal/native`(export되지 않�
   직접 method로 선언돼 있다. `CommonSocketOptions`(`.CommonOptions()`로)와
   `PubSocketOptions`(`.PubOptions()`로)만 별도 accessor 객체로 존재한다 — 지금까지
   다룬 다른 모든 언어는 모든 socket type에 자신만의 명명된 option facade를 준다.
-- **`RequestOp`엔 Go-channel async 경로와 callback 경로가 둘 다 있다** —
-  `SubmitAsync(ctx) (<-chan RequestReplyCompletion, error)`와 `Submit(ctx, callback)
-  (bool, error)`가 나란히 있다 — callback 전용인 rust나, Task/CompletionStage/Promise/
-  `async_result_t`를 쓰는 dotnet/java/node/cpp와 다르다. 모든 builder의 terminal
-  `Submit`/`SubmitAsync`는 취소를 위해 첫 인자로 `context.Context`를 받는다, 다른
-  어떤 언어의 operation builder도 이러지 않는다.
+- **`RequestOp`에는 completion-backed Go terminal 하나가 있다** — `Submit(ctx)`는
+  socket completion queue가 reply 또는 terminal failure를 낸 뒤 `([]*Message, error)`를
+  반환한다. Send/request/reply `Submit`은 모두 `context.Context`를 받으며, 취소는 Go
+  waiter를 멈추지만 successful native submit 뒤 Core operation을 취소하지 않는다.
+  Socket owner는 late completion을 계속 drain·settle한다. Public poller의
+  `PollCompletion` wait loop가 drain ownership을 가지면 별도 goroutine을 사용한다.
 - **`ZlinkError`는 Go `interface`다**, struct나 enum이 아니다 — 각 typed error는
   `Error() string`, `Code() int`, `InternalErrno() int`, `Unwrap() error`(표준
   라이브러리 `errors.Is`/`errors.As` 연동 지점)를 구현한다, 자신의 doc comment에

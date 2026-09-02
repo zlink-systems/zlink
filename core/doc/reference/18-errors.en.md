@@ -23,9 +23,9 @@ table is the index every other category's entries point back to.
 | Enum | Used by | Common values |
 |---|---|---|
 | `zlink_submit_result_t` | send/publish/request-submit APIs (every socket-type category) | `OK`(0), `BACKPRESSURED`(1, normal control flow), `NOT_CONNECTED`(2), `NOT_FOUND`(3), `NOT_ADMITTED`(13, normal control flow — target identified but admission policy rejects), `TERMINATED`(4), `INVALID_HANDLE`(5), `INVALID_ARGUMENT`(6), `NOT_SUPPORTED`(7), `INVALID_STATE`(8), `THREAD_VIOLATION`(9), `OUT_OF_MEMORY`(10), `SEQ_EXHAUSTED`(11), `INTERNAL_ERROR`(12) |
-| `zlink_request_result_t` | `zlink_reply_handler_fn` completion (DEALER/ROUTER categories) | `OK`(0), `TIMED_OUT`(101), `NOT_FOUND`(102), `TERMINATED`(103), `PROTOCOL_ERROR`(104), `INTERNAL_ERROR`(105), `REJECTED`(106), `CONFLICT`(107), `BUSY`(108), `NOT_CONNECTED`(109), `INVALID_ARGUMENT`(110), `INVALID_STATE`(111), `NOT_SUPPORTED`(112), `BACKPRESSURED`(113) |
+| `zlink_request_result_t` | REQUEST records returned by `zlink_completion_recv()` (DEALER/ROUTER categories) | `OK`(0), `TIMED_OUT`(101), `NOT_FOUND`(102), `TERMINATED`(103), `PROTOCOL_ERROR`(104), `INTERNAL_ERROR`(105), `REJECTED`(106), `CONFLICT`(107), `BUSY`(108), `NOT_CONNECTED`(109), `INVALID_ARGUMENT`(110), `INVALID_STATE`(111), `NOT_SUPPORTED`(112), `BACKPRESSURED`(113) |
 | `zlink_recv_result_t` | recv-family APIs (Raw receive, Socket monitor, Timers categories) | `OK`(0), `NO_DATA`(201), `BUSY`(202), `TERMINATED`(203), `INVALID_HANDLE`(204), `NOT_SUPPORTED`(205), `INTERNAL_ERROR`(206), `BUFFER_TOO_SMALL`(207), `INVALID_STATE`(208) |
-| `zlink_handler_result_t` | handler-registration APIs (Raw receive, Socket lifecycle, Socket monitor, Timers categories) | `OK`(0), `INVALID_ARGUMENT`(301), `BUSY`(302), `NOT_SUPPORTED`(303), `DEADLOCK`(304), `INVALID_HANDLE`(305), `INTERNAL_ERROR`(306) |
+| `zlink_handler_result_t` | retained typed handler-result family; socket completion, receive, monitor, and timer delivery use pull APIs | `OK`(0), `INVALID_ARGUMENT`(301), `BUSY`(302), `NOT_SUPPORTED`(303), `DEADLOCK`(304), `INVALID_HANDLE`(305), `INTERNAL_ERROR`(306) |
 | `zlink_close_result_t` | `zlink_ctx_term`/`zlink_close`/`zlink_ctx_shutdown`/`zlink_timer_destroy`/`zlink_monitor_close` | `OK`(0), `BUSY`(401), `SHUTDOWN`(402), `INVALID_HANDLE`(403), `INTERNAL_ERROR`(404) |
 | `zlink_bind_result_t` | `zlink_bind` (Socket lifecycle category) | `OK`(0), `INVALID_ARGUMENT`(501), `ADDR_IN_USE`(502), `NOT_SUPPORTED`(503), `INVALID_HANDLE`(504), `INTERNAL_ERROR`(505) |
 | `zlink_connect_result_t` | `zlink_connect`/`zlink_unbind`/`zlink_disconnect`/`zlink_disconnect_rid` (Socket lifecycle category) | `OK`(0), `INVALID_ARGUMENT`(601), `NOT_SUPPORTED`(602), `INVALID_HANDLE`(603), `INTERNAL_ERROR`(604), `NOT_FOUND`(605), `CONFLICT`(606), `BUSY`(607), `AUTH_FAILED`(608) |
@@ -39,8 +39,8 @@ reasonable" and "this will never succeed as submitted." `BUFFER_TOO_SMALL` on re
 means a caller-provided buffer can't hold the first complete value (or, for SUB/XSUB, that the
 topic buffer capacity is too small) — the call reports the required size without consuming
 anything, so a retry with a bigger buffer is safe. `INVALID_STATE` covers a stale handle or
-closed receive/connection state. Unregistering or replacing a handler from inside that same
-handler's callback returns `DEADLOCK` rather than deadlocking for real.
+closed receive/connection state. The handler result family remains in the ABI, but current
+socket completion, receive, monitor, and timer delivery is pull-based and does not produce it.
 
 ---
 

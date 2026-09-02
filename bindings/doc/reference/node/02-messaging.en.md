@@ -83,7 +83,7 @@ allocation.
 ```ts
 const received = new Received();
 if (dealer.recv(received)) {
-  if (received.requestSeq !== null) {
+  if (received.replyToken !== null) {
     received.reply().message(Message.from('ok')).submit();
   }
 }
@@ -95,14 +95,14 @@ if (dealer.recv(received)) {
 | Member | Meaning |
 | --- | --- |
 | `routingId` | `RoutingId \| null`, present when the receive path provides one |
-| `requestSeq` | `bigint \| null`, present when replyable |
-| `reply()` | starts the shared `ReplyOperation` builder; throws `SubmitError` when the envelope has no request sequence/reply context |
+| `replyToken` | `ReplyToken \| null`, opaque and present only when replyable |
+| `reply()` | starts the shared `ReplyOperation` builder; throws `SubmitError` when the envelope has no reply token/context |
 | `send()` | starts the shared `SendOperation` builder, addressed to this envelope's captured source route; throws `SubmitError` when the envelope carries no send context |
 
 **Completion result.** All members are synchronous.
 
 **When to use.** Reuse one `Received` across a receive loop rather than constructing a new one per
-message. Check `requestSeq !== null` before calling `reply()` to confirm the envelope is replyable.
+message. Check `replyToken !== null` before calling `reply()` to confirm the envelope is replyable.
 
 ---
 
@@ -163,12 +163,12 @@ subscription-snapshot lookup (Sockets category).
 ## Send / request / reply operation-builder shape
 
 The fluent builder every socket type's `send`/`publish`/`request`/`reply` entry point (Sockets
-category) returns to accumulate parts, flags, and a terminal submit. Every builder stage extends
-one of three small generic stage interfaces: `PartBuilder<TNext>` (`message(m): TNext`),
-`Flaggable<TNext>` (`flags(f): TNext`), `Timeoutable<TNext>` (`timeout(ms): TNext`).
+category) returns to accumulate parts and reach a terminal. Builder stages use
+`PartBuilder<TNext>` (`message(m): TNext`) and requests additionally use
+`Timeoutable<TNext>` (`timeout(ms): TNext`).
 
 ```ts
-dealer.send().message(Message.from('p1')).message(Message.from('p2')).submit();
+await dealer.send().message(Message.from('p1')).message(Message.from('p2')).submit();
 
 const reply = await dealer.request()
   .message(Message.from('payload'))
@@ -183,42 +183,37 @@ received.reply().message(Message.from('ok')).submit();
 | Stage | Member | Meaning |
 | --- | --- | --- |
 | `SendOperation` | `extends PartBuilder<SendSubmitOperation>` | `.message(m)` starts the chain |
-| `SendSubmitOperation` | `.message(...)` / `.flags(f)` / `submit(): boolean` | add parts, set flags, terminal |
+| `SendSubmitOperation` | `.message(...)` / `submit(): Promise<void>` / `submit_sync(): void` | add parts, then choose Promise or blocking terminal |
 | `RequestOperation` | `extends PartBuilder<RequestSubmitOperation>` | `.message(m)` starts the chain |
 | `RequestSubmitOperation` | `.message(...)` / `.timeout(timeoutMs: number)` | mirrors the send chain, adding a reply-wait timeout in plain milliseconds (not a Duration-like type) |
-| `RequestSubmitOperation.flags(f)` | narrows to `RequestCallbackSubmitOperation` | drops the `Promise`-returning `submit()` — only `submit(callback: RequestCallback): boolean` remains reachable |
-| `RequestSubmitOperation.submit()` | no-argument overload | returns `Promise<Message[]>` |
+| `RequestSubmitOperation.submit()` / `.submit_sync()` | no-argument terminals | return `Promise<Message[]>` / `Message[]`; caller owns the reply messages |
 | `ReplyOperation` | `extends PartBuilder<ReplySubmitOperation>` | `.message(m)` starts the chain |
-| `ReplySubmitOperation` | `.message(...)` / `.flags(f)` / `submit(): void` | mirrors `Send`, no timeout stage |
+| `ReplySubmitOperation` | `.message(...)` / `submit(): void` | synchronous flag-free reply terminal |
 
-**Completion result.** `SendSubmitOperation.submit()` returns `boolean` synchronously (`false` only
-when `SendFlags.DontWait` is set and the send would have blocked — other failures throw a typed
-error, Errors category). `ReplySubmitOperation.submit()` returns `void`.
-`RequestSubmitOperation.submit()` (no-argument form) returns `Promise<Message[]>` — the caller owns
-and must close the reply messages. `RequestSubmitOperation.submit(callback)`/
-`RequestCallbackSubmitOperation.submit(callback)` return `boolean` (same `DontWait` convention) and
-deliver `(result, parts)` to `RequestCallback` later — the callback owns `parts` only when `result`
-is the success value. Every builder consumes its accumulated `Message` parts on a successful submit
-only; on failure the public messages remain with the caller because the binding submitted separate
-native staging parts. Core still consumes each staging part actually passed to a synchronous call.
+**Completion result.** Send `submit()` returns a `Promise<void>` and `submit_sync()` blocks until
+Core reports a terminal send result. Request has matching Promise and blocking terminals returning
+caller-owned reply messages; reply `submit()` is synchronous. Managed send/request/reply terminals
+do not accept `SendFlags.DontWait`. Every builder consumes its accumulated `Message` parts on a
+successful submit only; on failure the public messages remain with the caller because the binding
+submitted separate native staging parts. Core still consumes each staging part actually passed to
+a synchronous call.
 
-**When to use.** Use the no-argument `submit()`'s `Promise` in ordinary `async`/`await` code; use
-`.flags(...).submit(callback)` when a callback-completion surface is needed instead of a promise.
-Use `Received.reply()`/`send()` rather than reconstructing the destination route by hand.
+**When to use.** Use `submit()` in ordinary `async`/`await` code and `submit_sync()` only when the
+calling thread may block. Use `Received.reply()`/`send()` rather than reconstructing the
+destination route by hand.
 
 ---
 
 ## Handler type aliases
 
-Function-type aliases used as callback parameters across the Sockets/Eventing categories.
+Completion delivery no longer uses registered function aliases. The public replacements are
+terminal return values, pull receive values, and the opaque reply capability.
 
-| Alias | Registered by | Signature |
+| Area | Public replacement | Result |
 |---|---|---|
-| `SocketSendReadyHandler` | A socket's send-ready registration (Sockets category) | `() => void` |
-| `StreamPacketHandler` | `StreamSocket`'s packet registration (Sockets category) | `(sourceRid: RoutingId, header: Message, body: Message) => void` — owns both messages |
-| `SocketMonitorHandler` | `SocketMonitor.onEvent(...)` (Eventing category) | `(event: MonitorEvent) => void` |
-| `RequestCallback` | `RequestSubmitOperation.submit(callback)`/`RequestCallbackSubmitOperation.submit(callback)` (above) | `(result: RequestResult, parts: readonly Message[]) => void` — owns `parts` only on success |
-| `ReplyHandler` | Not currently reached by any documented public entry point in this reference tier | `(result: RequestResult, parts: Message[]) => void` |
+| send/request | `submit()` / `submit_sync()` | Promise or blocking terminal |
+| STREAM/monitor | `recvPacket(...)` / `recv(...)` | caller-driven pull |
+| request reply | `ReplyToken` / `Received.reply()` | one-shot opaque reply capability |
 
 ---
 

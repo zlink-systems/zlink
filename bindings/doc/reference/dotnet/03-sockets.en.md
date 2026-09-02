@@ -154,7 +154,7 @@ peer's request.
 ```csharp
 using IRouterSocket router = context.CreateRouterSocket();
 router.Send(peerRid).Message(Message.From("hello")).Submit();
-router.OnCompletionControl((rid, parts) => { /* ... */ });
+router.Reply(peerRid, replyToken).Message(Message.From("ok")).Submit();
 ```
 
 **Options.** Adds to `IRoutedMessageSocket` (`Send(RoutingId)`, `Recv(Received, RecvFlags)`)
@@ -170,18 +170,16 @@ and `IConnectableSocket`:
 | `Options.PeerWeight` | — | `int` 0-100 |
 | `SetRoutingId(RoutingId)` / `GetRoutingId()` | — | assigns/reads this socket's own routing id, observed by peers on connect |
 | `Request(RoutingId peerRid)` | — | Messaging category's `RequestOperation`, addressed to a specific peer |
-| `Reply(RoutingId rid, ulong requestSeq)` | — | Messaging category's `ReplyOperation`, answering that peer's request |
-| `TrySendCompletionControl(RoutingId peerRid, IReadOnlyList<Message> parts)` | — | sends an opaque control record to a peer over its existing connection, without consuming `parts` |
-| `OnCompletionControl(CompletionControlHandler handler)` | — | registers the callback that receives incoming completion-control records |
+| `Reply(RoutingId rid, ReplyToken replyToken)` | — | Messaging category's `ReplyOperation`, answering the received request identified by the token |
+| `Received.ReplyToken` | — | opaque socket-bound reply capability returned with a ROUTER request |
+| request terminal | — | reply or terminal failure is returned by `Request(...).Submit()`/`.Async()`, never as application DATA |
 
-**Completion result.** `TrySendCompletionControl` returns `bool` synchronously — `false` means
-completion-lane back-pressure; other failures throw `ZlinkSubmitException`. `CompletionControlHandler`
-runs on a background dispatch thread and owns every message in `parts` — dispose each exactly once.
+**Completion result.** Request terminals settle from the socket completion queue; callers own and
+dispose the returned reply messages.
 
-**When to use.** `Request(peerRid)`/`Reply(rid, requestSeq)` for ROUTER-initiated or
-ROUTER-answered request/reply, where DEALER cannot address a specific peer.
-`TrySendCompletionControl`/`OnCompletionControl` for an opaque bounded control record on a peer's
-existing connection, independent from application-level receive.
+**When to use.** `Request(peerRid)`/`Reply(rid, replyToken)` for ROUTER-initiated or
+ROUTER-answered request/reply, where DEALER cannot address a specific peer. Do not synthesize or
+reuse the opaque token.
 
 ---
 
@@ -269,7 +267,9 @@ protocol used by every other socket type.
 
 ```csharp
 using IStreamSocket stream = context.CreateStreamSocket();
-stream.OnPacket((routingId, header, body) => { /* owns header/body; dispose each once */ });
+stream.Options.ReceiveMode = StreamReceiveMode.Packet;
+using var packet = StreamPacket.Create();
+bool ok = stream.RecvPacket(packet, RecvFlags.None);
 ```
 
 **Options.** Extends `IRoutedMessageSocket`:
@@ -277,16 +277,14 @@ stream.OnPacket((routingId, header, body) => { /* owns header/body; dispose each
 | Member | Default | Meaning |
 | --- | --- | --- |
 | `Options.Notify` | `false` | `bool`; deliver peer connect/disconnect as application messages |
-| `OnPacket(StreamPacketHandler handler)` | — | background-dispatch-thread callback; handler owns and must dispose `header`/`body` exactly once |
-| `RecvPart(out RoutingId? sourceRoutingId, out Message? part, out bool hasMore, RecvFlags flags)` | `RecvFlags.None` | pulls the next packet part; first call fixes this socket to receive mode — cannot combine with `OnPacket` |
+| `Options.ReceiveMode` | `Unspecified` | set `Raw` or `Packet` before bind/connect; immutable afterward |
+| `Recv(Received, RecvFlags)` / `RecvPacket(StreamPacket, RecvFlags)` | `RecvFlags.None` | pull RAW records or PACKET header/body pairs according to the selected mode |
 | `DisconnectRid(RoutingId peerRid)` | — | disconnects the peer identified by that routing id |
 
-**Completion result.** `RecvPart` returns `bool` synchronously; the returned `part` is
-caller-owned. `StreamPacketHandler` transfers message ownership to the callback, which must
-dispose `header` and `body` exactly once.
+**Completion result.** Both receive forms return `bool`; `false` means DONTWAIT no-data. The
+caller owns the populated receive envelope or packet and disposes it.
 
-**When to use.** `OnPacket` for a callback-driven packet loop, or `RecvPart` for a pull-based one —
-mutually exclusive once the first receive call is made.
+**When to use.** Select RAW or PACKET before bind/connect, then call only the matching pull receive.
 
 ---
 

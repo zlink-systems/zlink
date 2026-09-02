@@ -70,13 +70,13 @@ factory를 쓴다. wire format을 중간 `byte[]` 없이 message storage에 직�
 
 ## `Received`
 
-recv 결과 하나를 집계한다: 선택적 routing id, request sequence, 소유한 message
+recv 결과 하나를 집계한다: 선택적 routing id, opaque reply token, 소유한 message
 part. 반환된 `parts()` view는 불변이며 밑에 깔린 배열을 복사하지 않는다.
 
 ```java
 Received received = new Received();
-if (dealer.recv(received)) {
-    received.requestSeq().ifPresent(seq ->
+if (router.recv(received)) {
+    received.replyToken().ifPresent(token ->
         received.reply().message(Message.from("ok")).submit());
 }
 ```
@@ -88,7 +88,7 @@ binding이 매 성공적인 receive마다 내부 상태를 그 자리에서 덮�
 | Member | 반환 | 의미 |
 | --- | --- | --- |
 | `getRoutingId()` | `Optional<RoutingId>` | receive 경로가 제공할 때만 존재 |
-| `requestSeq()` | `Optional<Long>` | reply 가능할 때만 존재 |
+| `replyToken()` | `Optional<ReplyToken>` | ROUTER request에 있는 opaque reply capability |
 | `parts()` | `List<Message>`, 불변 view | 이 envelope이 담은 모든 message part |
 | `isSinglePart()` | `boolean` | `parts()`가 정확히 하나인지 |
 | `firstPart()` | `Message` | 첫 part, 소유권 이전 없음 |
@@ -103,7 +103,7 @@ binding이 매 성공적인 receive마다 내부 상태를 그 자리에서 덮�
 category에 문서화된 receive측 result code를 그대로 반영한다.
 
 **선택 기준.** message마다 새로 생성하는 대신 receive loop 전체에서 `Received`
-하나를 재사용한다. `reply()`를 호출하기 전에 `requestSeq()`로 envelope이 실제로
+하나를 재사용한다. `reply()`를 호출하기 전에 `replyToken()`으로 envelope이 실제로
 reply 가능한지 확인한다.
 
 ---
@@ -175,7 +175,7 @@ subscription-snapshot 조회(Sockets category)의 반환 타입이다.
 category)이 part·flag·terminal submit을 누적하기 위해 반환하는 fluent builder.
 모든 builder interface는 공유 `MessageBuilderStage<TSubmit>`(`TSubmit
 message(Message part)`)를 확장하며, request family는 추가로
-`TimeoutSubmitOperation<TResult, TCallback>`을 확장한다.
+`TimeoutSubmitOperation<List<Message>>`을 확장한다.
 
 ```java
 dealer.send().message(part1).message(part2).submit();
@@ -186,8 +186,8 @@ CompletionStage<List<Message>> future = dealer.request()
     .submit();
 List<Message> reply = future.toCompletableFuture().join();
 
-// 또는 virtual thread에서:
-List<Message> reply2 = dealer.request().message(Message.from("payload")).await();
+// 또는 blocking 가능한 thread에서:
+List<Message> reply2 = dealer.request().message(Message.from("payload")).submit_sync();
 
 received.reply().message(Message.from("ok")).submit();
 ```
@@ -197,28 +197,27 @@ received.reply().message(Message.from("ok")).submit();
 | 단계 | Member | 의미 |
 | --- | --- | --- |
 | `SendOperation` | `.message(Message)` | chain 시작 |
-| `SendSubmitOperation` | `.message(...)` / `.flags(SendFlags)` / `.submit()` | part 추가, flag 설정, terminal |
+| `SendSubmitOperation` | `.message(...)` / `.submit_sync()` / `.submit()` | part 추가 뒤 blocking 또는 CompletionStage terminal 선택 |
 | `RequestOperation`/`RequestSubmitOperation` | `Send`와 동일 + `.timeout(Duration)` | send chain을 그대로 반영하며 reply 대기 timeout을 더함 |
-| `RequestSubmitOperation.flags(SendFlags)` | `RequestCallbackSubmitOperation`으로 좁힘 | `CompletionStage`를 반환하는 `.submit()`이 사라짐 — 이후 `.submit(RequestCallback)`만 도달 가능 |
+| `RequestSubmitOperation` terminal | `.submit_sync()` / `.submit()` | blocking reply 또는 completion-backed `CompletionStage` reply 결과 |
 | `ReplyOperation`/`ReplySubmitOperation` | `Send`와 같은 형태 | flags 단계가 없음 — 밑바탕 reply 함수가 send-flag 인자를 받지 않음 |
-| `TimeoutSubmitOperation.await()` | `default` 메서드 | submit하고 결과가 완료될 때까지 현재 스레드를 block — 명시적으로 virtual thread를 위한 것이다(virtual thread를 parking하면 carrier platform thread가 풀리는 반면, platform thread를 직접 block하는 것과 다르다) — framework 자신의 async 경로는 대신 `submit()`을 쓴다 |
+| `TimeoutSubmitOperation` | `.timeout(Duration)` | request reply timeout만 설정하며 send deadline을 추가하지 않음 |
 
 **완료 결과.**
 
 | Terminal | 반환 | 의미 |
 | --- | --- | --- |
-| `SendSubmitOperation.submit()` | `boolean` | `SendFlags.DONT_WAIT`가 설정되고 send가 block됐을 때만 `false`, 그 외 실패는 `ZlinkException` |
+| `SendSubmitOperation.submit_sync()` | `void` | Core local admission까지 blocking, 실패하면 `ZlinkException` |
+| `SendSubmitOperation.submit()` | `CompletionStage<Void>` | DONTWAIT submit을 socket completion queue에서 settle |
 | `ReplySubmitOperation.submit()` | `void` | 실패하면 `ZlinkException`을 던짐 |
 | `RequestSubmitOperation.submit()` | `CompletionStage<List<Message>>` | caller가 reply message를 소유하며 반드시 close해야 함 |
-| `submit(RequestCallback)`(`RequestSubmitOperation`/`RequestCallbackSubmitOperation`) | `boolean` | 같은 `DONT_WAIT` 관례; 결과와 part를 나중에 콜백에 전달 — 결과가 `RequestResult.OK`일 때만 콜백이 part를 소유 |
+| `RequestSubmitOperation.submit_sync()` | `List<Message>` | completion queue가 reply를 낼 때까지 blocking, caller가 part close |
 
 모든 builder는 성공적인 submit에서만 누적된 `Message` part를 소비한다 — 실패
 시 소유권은 caller에게 복원된다.
 
-**선택 기준.** 일반 async 코드에선 `submit()`의 `CompletionStage`를 쓴다.
-순차 호출처럼 자연스럽게 읽히는 코드가 필요한 virtual thread에선 `await()`을
-쓴다. 전혀 block·park해선 안 되는 스레드에서 callback-completion 표면이
-필요할 땐 `.flags(...).submit(callback)`을 쓴다. 목적지 route를 손으로
+**선택 기준.** 일반 async 코드에선 `submit()`의 `CompletionStage`를 쓰고 blocking 가능한
+thread에서는 `submit_sync()`를 쓴다. 목적지 route를 손으로
 재구성하는 대신 `Received.reply()`/`send()`를 쓴다.
 
 ---

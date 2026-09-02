@@ -88,7 +88,7 @@ reply/send context. 닫힐 때까지 part를 소유한다. receive마다 새로 
 ```ts
 const received = new Received();
 if (dealer.recv(received)) {
-  if (received.requestSeq !== null) {
+  if (received.replyToken !== null) {
     received.reply().message(Message.from('ok')).submit();
   }
 }
@@ -100,14 +100,14 @@ if (dealer.recv(received)) {
 | Member | 의미 |
 | --- | --- |
 | `routingId` | `RoutingId \| null`, receive 경로가 제공할 때만 존재 |
-| `requestSeq` | `bigint \| null`, reply 가능할 때만 존재 |
-| `reply()` | 공유 `ReplyOperation` builder를 시작; envelope에 request sequence/reply context가 없으면 `SubmitError` |
+| `replyToken` | `ReplyToken \| null`, opaque하며 reply 가능할 때만 존재 |
+| `reply()` | 공유 `ReplyOperation` builder를 시작; envelope에 reply token/context가 없으면 `SubmitError` |
 | `send()` | 공유 `SendOperation` builder를 시작, 이 envelope이 포착한 source route로 향함; envelope에 send context가 없으면 `SubmitError` |
 
 **Completion result.** 모든 member는 동기다.
 
 **선택 기준.** message마다 새로 생성하는 대신 receive loop 전체에서
-`Received` 하나를 재사용한다. `reply()`를 호출하기 전에 `requestSeq !==
+`Received` 하나를 재사용한다. `reply()`를 호출하기 전에 `replyToken !==
 null`로 envelope이 reply 가능한지 확인한다.
 
 ---
@@ -172,14 +172,12 @@ socket의 subscription-snapshot 조회(Sockets category)의 반환 타입이다.
 ## Send / request / reply operation-builder 형태
 
 모든 socket type의 `send`/`publish`/`request`/`reply` 진입점(Sockets
-category)이 part·flag·terminal submit을 누적하기 위해 반환하는 fluent
-builder. 모든 builder 단계는 세 개의 작은 제네릭 stage interface 중
-하나를 확장한다: `PartBuilder<TNext>`(`message(m): TNext`),
-`Flaggable<TNext>`(`flags(f): TNext`), `Timeoutable<TNext>`
-(`timeout(ms): TNext`).
+category)이 part를 누적하고 terminal에 도달하기 위해 반환하는 fluent
+builder. Builder 단계는 `PartBuilder<TNext>`(`message(m): TNext`)를 쓰고,
+request는 `Timeoutable<TNext>`(`timeout(ms): TNext`)도 쓴다.
 
 ```ts
-dealer.send().message(Message.from('p1')).message(Message.from('p2')).submit();
+await dealer.send().message(Message.from('p1')).message(Message.from('p2')).submit();
 
 const reply = await dealer.request()
   .message(Message.from('payload'))
@@ -194,45 +192,36 @@ received.reply().message(Message.from('ok')).submit();
 | Stage | Member | 의미 |
 | --- | --- | --- |
 | `SendOperation` | `extends PartBuilder<SendSubmitOperation>` | `.message(m)`이 chain을 시작 |
-| `SendSubmitOperation` | `.message(...)` / `.flags(f)` / `submit(): boolean` | part 추가, flag 설정, terminal |
+| `SendSubmitOperation` | `.message(...)` / `submit(): Promise<void>` / `submit_sync(): void` | part 추가 후 Promise 또는 blocking terminal 선택 |
 | `RequestOperation` | `extends PartBuilder<RequestSubmitOperation>` | `.message(m)`이 chain을 시작 |
 | `RequestSubmitOperation` | `.message(...)` / `.timeout(timeoutMs: number)` | send chain을 미러링하며 reply-wait timeout(Duration류가 아닌 순수 밀리초)을 더함 |
-| `RequestSubmitOperation.flags(f)` | `RequestCallbackSubmitOperation`으로 좁혀짐 | `Promise` 반환 `submit()`을 없앰 — `submit(callback: RequestCallback): boolean`만 도달 가능해짐 |
-| `RequestSubmitOperation.submit()` | 인자 없는 overload | `Promise<Message[]>` 반환 |
+| `RequestSubmitOperation.submit()` / `.submit_sync()` | 인자 없는 terminal | `Promise<Message[]>` / `Message[]` 반환; caller가 reply message를 소유 |
 | `ReplyOperation` | `extends PartBuilder<ReplySubmitOperation>` | `.message(m)`이 chain을 시작 |
-| `ReplySubmitOperation` | `.message(...)` / `.flags(f)` / `submit(): void` | `Send`를 미러링, timeout 단계 없음 |
+| `ReplySubmitOperation` | `.message(...)` / `submit(): void` | 동기 flag-free reply terminal |
 
-**Completion result.** `SendSubmitOperation.submit()`은 동기로
-`boolean`을 반환한다(`SendFlags.DontWait`가 설정되고 send가 block됐을
-때만 `false` — 그 외 실패는 typed error를 던진다, Errors category).
-`ReplySubmitOperation.submit()`은 `void`를 반환한다.
-`RequestSubmitOperation.submit()`(인자 없는 형태)은
-`Promise<Message[]>`를 반환한다 — caller가 reply message를 소유하며
-반드시 close해야 한다. `RequestSubmitOperation.submit(callback)`/
-`RequestCallbackSubmitOperation.submit(callback)`은 `boolean`을
-반환하고(같은 `DontWait` 관례) `(result, parts)`를 나중에
-`RequestCallback`에 전달한다 — `result`가 성공값일 때만 콜백이 `parts`를
-소유한다. 모든 builder는 성공적인 submit에서만 누적된 `Message` part를
-소비한다 — 실패 시 소유권은 caller에게 복원된다.
+**Completion result.** Send `submit()`은 `Promise<void>`를 반환하고
+`submit_sync()`는 Core의 terminal send 결과까지 block한다. Request도
+caller-owned reply message를 반환하는 Promise/blocking terminal을 제공하고,
+reply `submit()`은 동기다. Managed send/request/reply terminal은
+`SendFlags.DontWait`를 받지 않는다. 모든 builder는 성공적인 submit에서만
+누적된 `Message` part를 소비한다 — 실패 시 소유권은 caller에게 복원된다.
 
-**선택 기준.** 일반 `async`/`await` 코드에선 인자 없는 `submit()`의
-`Promise`를 쓴다. promise 대신 callback-completion 표면이 필요할 땐
-`.flags(...).submit(callback)`을 쓴다. 목적지 route를 손으로 재구성하는
-대신 `Received.reply()`/`send()`를 쓴다.
+**선택 기준.** 일반 `async`/`await` 코드에선 `submit()`을 쓰고 호출
+thread가 block해도 될 때만 `submit_sync()`를 쓴다. 목적지 route를 손으로
+재구성하는 대신 `Received.reply()`/`send()`를 쓴다.
 
 ---
 
 ## Handler type alias
 
-Sockets/Eventing category 전반에서 콜백 인자로 쓰이는 함수 타입 alias.
+완료 전달에는 더 이상 등록형 function alias를 쓰지 않는다. Public 대체
+표면은 terminal 반환값, pull receive 값, opaque reply capability다.
 
-| Alias | 등록하는 곳 | Signature |
+| 영역 | Public 대체 표면 | 결과 |
 |---|---|---|
-| `SocketSendReadyHandler` | socket의 send-ready 등록(Sockets category) | `() => void` |
-| `StreamPacketHandler` | `StreamSocket`의 packet 등록(Sockets category) | `(sourceRid: RoutingId, header: Message, body: Message) => void` — 두 메시지 모두 소유 |
-| `SocketMonitorHandler` | `SocketMonitor.onEvent(...)`(Eventing category) | `(event: MonitorEvent) => void` |
-| `RequestCallback` | `RequestSubmitOperation.submit(callback)`/`RequestCallbackSubmitOperation.submit(callback)`(위) | `(result: RequestResult, parts: readonly Message[]) => void` — 성공일 때만 `parts` 소유 |
-| `ReplyHandler` | 이 레퍼런스 트리에 문서화된 어떤 public 진입점으로도 현재 도달하지 않음 | `(result: RequestResult, parts: Message[]) => void` |
+| send/request | `submit()` / `submit_sync()` | Promise 또는 blocking terminal |
+| STREAM/monitor | `recvPacket(...)` / `recv(...)` | caller-driven pull |
+| request reply | `ReplyToken` / `Received.reply()` | one-shot opaque reply capability |
 
 ---
 

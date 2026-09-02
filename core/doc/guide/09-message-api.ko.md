@@ -31,7 +31,8 @@ zlink_msg_t part;
 zlink_msg_init_size(&part, payload_size);
 memcpy(zlink_msg_data(&part), payload, payload_size);
 /* 성공한 final send는 ownership을 Core로 옮긴다. */
-zlink_send_part(socket, &part, 0, ZLINK_PART_FINAL);
+zlink_send_part(socket, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
+                NULL, NULL);
 ```
 
 ## Receive
@@ -40,5 +41,6 @@ Typed receive 함수는 caller가 초기화한 `zlink_msg_t`를 채우고 다음
 모든 part를 정확히 한 번 close하거나 move한다. Routing id와 topic은 payload frame이 아니라
 metadata로 반환된다.
 
-Request/reply completion callback은 전달받은 모든 part를 callback 실행 동안 소유하며 반환하기 전에
-close하거나 move해야 한다.
+성공한 REQUEST completion에서 `zlink_completion_recv()`는 Core가 소유하던 연속 reply 배열을
+`zlink_completion_t`로 옮긴다. Part를 읽거나 move한 뒤 `zlink_completion_close()`를 호출하고,
+배열을 직접 free하지 않는다.

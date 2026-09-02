@@ -23,9 +23,9 @@ i32` field, `new(code, native_errno)`, `code()`/`native_errno()` accessors, `Dis
 | Error struct | Result enum | Returned by | Values |
 |---|---|---|---|
 | `SubmitError` | `SubmitResult` (Messaging category) | send/publish/request-submit APIs | `Backpressured`(1, ordinary control flow), `NotConnected`(2), `NotFound`(3), `Terminated`(4), `InvalidHandle`(5), `InvalidArgument`(6), `NotSupported`(7), `InvalidState`(8), `ThreadViolation`(9), `OutOfMemory`(10), `SeqExhausted`(11), `InternalError`(12), `NotAdmitted`(13, ordinary control flow) |
-| `RequestError` | `RequestResult` | request/reply completion (delivered to the `RequestOp` callback) | `TimedOut`(101), `NotFound`(102), `Terminated`(103), `ProtocolError`(104), `InternalError`(105), `Rejected`(106), `Conflict`(107), `Busy`(108), `NotConnected`(109), `InvalidArgument`(110), `InvalidState`(111), `NotSupported`(112) — **no `Backpressured` variant here**, unlike every other language's `RequestResult`/equivalent, which defines one at 113 |
+| `RequestError` | `RequestResult` | Future `submit()` or blocking `submit_sync()` terminal request failure | `TimedOut`(101), `NotFound`(102), `Terminated`(103), `ProtocolError`(104), `InternalError`(105), `Rejected`(106), `Conflict`(107), `Busy`(108), `NotConnected`(109), `InvalidArgument`(110), `InvalidState`(111), `NotSupported`(112), `Backpressured`(113) |
 | `RecvError` | `RecvResult` | recv-family APIs | `NoData`(201), `Busy`(202), `Terminated`(203), `InvalidHandle`(204), `NotSupported`(205), `InternalError`(206) — the 6-value set (no `BufferTooSmall`/`InvalidState`, matching dotnet/cpp/java, not node's 8-value set) |
-| `HandlerError` | `HandlerResult` | handler registration APIs | `InvalidArgument`(301), `Busy`(302), `NotSupported`(303), `Deadlock`(304), `InvalidHandle`(305), `InternalError`(306) |
+| `HandlerError` | `HandlerResult` | retained result family; current public completion/event delivery does not register handlers | `InvalidArgument`(301), `Busy`(302), `NotSupported`(303), `Deadlock`(304), `InvalidHandle`(305), `InternalError`(306) |
 | `CloseError` | `CloseResult` | `close()` paths, `Context::shutdown()` | `Busy`(401), `Shutdown`(402), `InvalidHandle`(403), `InternalError`(404) |
 | `BindError` | `BindResult` | `bind(...)` | `InvalidArgument`(501), `AddrInUse`(502), `NotSupported`(503), `InvalidHandle`(504), `InternalError`(505) |
 | `ConnectError` | `ConnectResult` | `connect`/`unbind`/`disconnect`/`disconnect_rid` | `InvalidArgument`(601), `NotSupported`(602), `InvalidHandle`(603), `InternalError`(604), `NotFound`(605), `Conflict`(606), `Busy`(607) — 7 values (no `AuthFailed`, matching dotnet/cpp/java, not node's 8-value set) |
@@ -33,18 +33,15 @@ i32` field, `new(code, native_errno)`, `code()`/`native_errno()` accessors, `Dis
 
 **Cross-language asymmetry, restated here.** Every wrapper binding's result enum is supposed to
 mirror core's `zlink_*_result_t` families exactly (documented in core's Errors category), but they
-don't all agree: this binding's `RecvResult`/`ConnectResult`/`ConfigResult` match the *smaller*
-value sets (cpp/java, not node's fuller ones); its `RequestResult` is missing `Backpressured`
-entirely, which every other language covered so far does define. Whether this binding should gain
-the missing values, or whether the fuller ones elsewhere should be pared back, is a spec-level
-question outside this reference's scope — this entry states the fact so it doesn't get lost.
+do not all expose the same auxiliary receive/connect/config values. `RequestResult`, however,
+includes the common `Backpressured` terminal at 113.
 
 **What each value family actually means.** `SubmitResult`'s `Backpressured`/`NotConnected`/
 `NotFound`/`NotAdmitted` are ordinary execution flow, not exceptional failures — code that treats
 every non-`Ok` submit result the same way loses the distinction between "retry is reasonable" and
 "this submit will never succeed as constructed." `InvalidState` covers a stale handle or a closed
-receive/connection state. Replacing or removing a handler from inside that same handler's own
-callback reports `Deadlock` rather than actually deadlocking.
+receive/connection state. `HandlerResult` remains part of the result model, but current public
+send/request terminals and pull-event surfaces do not produce it.
 
 ---
 
@@ -54,9 +51,8 @@ The Rust-idiomatic shared error type: an `enum` with one variant per typed error
 than an inheritance base class.
 
 ```rust
-match dealer.send().message(part)?.submit() {
-    Ok(true) => { /* queued */ }
-    Ok(false) => { /* SendFlags::DONT_WAIT and would have blocked */ }
+match dealer.send().message(part).submit_sync() {
+    Ok(()) => { /* Core reported terminal acceptance */ }
     Err(err) => {
         let zlink_err: ZlinkError = err.into();
         if zlink_err.code() == SubmitResult::Backpressured as i32 {

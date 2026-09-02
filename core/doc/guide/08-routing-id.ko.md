@@ -29,24 +29,25 @@ zlink_set_routing_id(socket, id, sizeof(id) - 1);
 
 ## 수신과 응답
 
-`zlink_recv_part()`, `zlink_subscribe_part()`, `zlink_router_recv_part()`는 thread-local
-routing-id view의 pointer를 반환한다. 같은 thread에서 다음 receive 계열 함수를 호출하면 이 view가
-무효화될 수 있다.
+`zlink_recv_part()`, `zlink_subscribe_part()`, `zlink_router_recv_part()`는 socket-owned
+routing-id view의 pointer를 반환한다. 같은 socket에서 다음 data receive 함수에 진입하면 성공 여부와
+관계없이 이 view가 무효화된다.
 
 ```c
 const zlink_routing_id_t *source_rid = NULL;
-uint64_t request_seq = 0;
+zlink_reply_token_t reply_token = 0;
 zlink_msg_t part;
 zlink_part_flag_t more;
 
 zlink_msg_init(&part);
 zlink_router_recv_part(
-    router, &source_rid, &request_seq, &part, &more, 0);
-/* 다음 receive 전에 사용할 수 없다면 source_rid를 즉시 복사한다. */
+    router, &source_rid, &reply_token, &part, &more, ZLINK_RECV_FLAGS_NONE);
+/* 같은 router에서 다음 data receive 전에 source_rid를 즉시 복사한다. */
 ```
 
 일반 routed message는 수신한 routing id와 `zlink_send_part_rid()`를 사용한다. Request에
-응답할 때는 반환된 sequence를 함께 전달해 `zlink_router_reply_part()`를 호출한다.
+응답할 때는 반환된 불투명 token을 함께 전달해 `zlink_reply_part()`를 호출한다. 일반 DATA의
+token은 `0`이다.
 
 ## Peer 연결 종료
 

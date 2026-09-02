@@ -51,7 +51,7 @@ server.Recv(received);
 Console.WriteLine(received.FirstPart().GetString());   // PING
 
 using var reply = Message.From("ACK");
-server.Send().Message(reply).Submit(SendFlags.None);
+server.Send().Message(reply).Submit();
 ```
 
 ```csharp
@@ -63,7 +63,7 @@ client.Connect("tcp://127.0.0.1:5555");
 mon.Recv();
 
 using var ping = Message.From("PING");
-client.Send().Message(ping).Submit(SendFlags.None);
+client.Send().Message(ping).Submit();
 
 using var received = Received.Create();
 client.Recv(received);
@@ -118,21 +118,34 @@ byte[] copy             = fromText.ToArray();         // 복사해서 꺼내기
 framework의 actor join callback처럼 raw `Message`를 직접 주고받는 표면에서는
 application 계층에서 명시적으로 byte payload를 만들고 해석한다.
 
-HWM 대기 가능 send는 동기 `Submit(SendFlags)`와 비동기 `Async()`를 제공합니다.
-`Submit(SendFlags.None)`은 HWM admission까지 blocking하고,
-`Submit(SendFlags.DontWait)`는 HWM이 가득 차면 즉시 `ZlinkSubmitException`을
-발생시킵니다. 비동기 실행 흐름에서는 flag 없는 `await ...Async()`를 사용합니다.
+HWM 대기 가능 send는 동기 `Submit()`과 비동기 `Async()`를 제공합니다.
+`Submit()`은 local HWM admission까지 Core 안에서 blocking합니다. 비동기 실행 흐름에서는
+`await ...Async()`를 사용하며, DONTWAIT submit 뒤 socket completion queue에서 settle됩니다.
 
 ```csharp
-socket.Send().Message(message).Submit(SendFlags.DontWait); // 동기 non-blocking
-await socket.Send().Message(message).Async();              // 비동기 완료
+socket.Send().Message(message).Submit();       // 동기 Core admission
+await socket.Send().Message(message).Async();  // 비동기 완료
 ```
 
-Request도 같은 HWM admission을 지나며 세 완료 표면을 제공합니다.
-`Submit(SendFlags)`은 admission과 reply를 동기 대기해 reply를 직접 반환하고,
-`Submit(SendFlags, callback)`은 admission 결과가 결정되면 즉시 반환한 뒤 reply를
-callback으로 전달하며, `Async()`는 awaitable을 반환합니다. Sync terminal의 flag가
-`None`(대기)과 `DontWait`(즉시 backpressure)를 선택합니다.
+Request는 reply까지 blocking하는 `Submit()`과 socket completion queue에서 settle되는
+`Task<IReadOnlyList<Message>>`를 반환하는 `Async()`를 제공합니다. Reply는 terminal의
+결과이며 별도 DATA receive로 받지 않습니다.
+
+Core가 pre-admission operation을 접수한 뒤 retry를 소유하므로 caller retry queue를 만들거나
+payload를 재전송하지 않습니다. 공용 native `ZLINK_OPT_PENDING_MAX_MSGS/BYTES` 제한은 pending
+SEND와 REQUEST에 함께 적용되고 send 전용 pending 이름은 없습니다. Completion은 local
+admission이며 peer delivery나 application acknowledgement가 아닙니다.
+
+`CancellationToken`은 pre-submit 호출을 막거나 managed waiter의 대기를 중단할 수 있습니다.
+Core가 payload를 접수한 뒤에는 cancellation이 Core admission이나 request를 취소하지 않으며,
+socket owner가 늦은 completion도 drain하고 해제합니다. Bind/connect 전에
+`stream.Options.ReceiveMode`를 `StreamReceiveMode.Raw` 또는 `.Packet`으로 정하고 각각
+`Recv` 또는 `RecvPacket`을 사용합니다.
+
+public poller가 socket의 `PollEventFlags.PollCompletion` owner이면 blocking request나 Task가
+남아 있는 동안 다른 thread가 `Wait()` loop를 계속 실행해야 합니다. `Wait()`가 native
+completion을 drain해 managed state를 settle/cleanup하므로 같은 thread에서 wait 사이에
+blocking terminal을 호출하면 completion이 멈출 수 있습니다.
 
 ### 3. 수신 (Received)
 
@@ -146,7 +159,7 @@ socket.Recv(received);
 Message      first = received.FirstPart();   // 첫 파트(소유권 이전 없음)
 string       body  = first.GetString();
 RoutingId?   from  = received.RoutingId;     // 라우팅 경로가 있으면
-ulong?       seq   = received.RequestSeq;    // 요청/응답이면
+ReplyToken?  token = received.ReplyToken;    // ROUTER request이면
 IReadOnlyList<Message> parts = received.Parts;  // 멀티파트 전체
 ```
 
@@ -213,13 +226,12 @@ catch (ZlinkException ex)
 | `ZlinkConfigException` | 옵션/설정 |
 | `ZlinkCloseException` / `ZlinkHandlerException` | 종료/콜백 |
 
-논블로킹 수신에서 데이터가 없으면 `Recv(...)`가 `false`를 반환합니다. 논블로킹
-send의 backpressure는 `Submit(SendFlags.DontWait)`가 `ZlinkSubmitException`으로
-전달합니다.
+논블로킹 수신에서 데이터가 없으면 `Recv(...)`가 `false`를 반환합니다. 비동기 send는
+Core DONTWAIT을 사용하고 실패를 Task로 전달합니다.
 
 ```csharp
 if (!socket.Recv(received, RecvFlags.DontWait)) { /* 데이터 없음 */ }
-try { socket.Send().Message(m).Submit(SendFlags.DontWait); }
+try { await socket.Send().Message(m).Async(); }
 catch (ZlinkSubmitException ex) when (ex.Result == SubmitResult.Backpressured) { /* 백프레셔 */ }
 ```
 
@@ -244,10 +256,10 @@ C 코어(`zlink.h`)에서 넘어오거나 다른 언어 바인딩과 비교할 �
 | 메시지 생성 | `zlink_msg_init` / `_init_size` / `_init_data` | `new Message(size)` / `Message.From(...)` |
 | 메시지 접근 | `zlink_msg_data` / `zlink_msg_size` | `Message.AsReadOnlySpan()` / `Message.Size` |
 | 메시지 해제 | `zlink_msg_close` / `zlink_multipart_close` | `Message.Dispose()` / `Zlink.MultipartClose(parts)` |
-| 동기 송신 | `zlink_send_part` (+`_rid`) + flag | `socket.Send().Message(...).Submit(flags)` |
-| 비동기 송신 | `zlink_send_async` | `await socket.Send().Message(...).Async()` |
+| 동기 송신 | `zlink_send_part` (+`_rid`) + NONE | `socket.Send().Message(...).Submit()` |
+| 비동기 송신 | DONTWAIT send + completion pull | `await socket.Send().Message(...).Async()` |
 | 수신 | `zlink_recv_part` | `socket.Recv(Received)` |
-| 요청 / 응답 | `zlink_dealer_request_part` / `zlink_router_reply_part` | `dealer.Request()....Async()` / `router.Reply(...)` |
+| 요청 / 응답 | `zlink_request_part` / `zlink_reply_part` | `dealer.Request()....Async()` / `router.Reply(rid, token)` |
 | 구독 | `zlink_set_subscription` / `zlink_subscribe_part` | `socket.SetSubscription(...)` / `socket.Subscribe(TopicMessage)` |
 | 모니터 | `zlink_socket_monitor_open` / `_recv` | `socket.MonitorOpen(...)` / `monitor.Recv()` |
 | 폴러 / 타이머 | `zlink_poller_*` / `zlink_timer_*` | `Zlink.CreatePoller()` / `Zlink.CreateTimer()` |
@@ -268,10 +280,9 @@ RID 자산이 출력에 포함되는지 확인하세요 (`dotnet publish -r <rid
 
 스레딩: `IContext`는 스레드 안전하며 여러 스레드에서 공유 가능합니다. 소켓은
 단일 스레드 소유 — 전체 규칙은 [스레드 안전성](https://zlink-systems.github.io/zlink/ko/guide/11-thread-safety/) 참고.
-`Submit(SendFlags.None)`은 HWM admission을 기다리는 동안 호출 thread를 멈춥니다.
-plain thread에서는 그 thread만 대기하므로 사용할 수 있습니다. thread를 점유하지 않고
-완료를 기다려야 하면 `Async()`를 사용하고, 즉시 backpressure가 필요하면
-`Submit(SendFlags.DontWait)`를 사용합니다.
+`Submit()`은 HWM admission을 기다리는 동안 호출 thread를 멈춥니다. Plain thread에서는
+그 thread만 대기하므로 사용할 수 있습니다. Thread를 점유하지 않고 완료를 기다려야 하면
+`Async()`를 사용합니다.
 
 ---
 
@@ -286,7 +297,7 @@ plain thread에서는 그 thread만 대기하므로 사용할 수 있습니다. 
 | `RequestReplyAsync` | 비동기 요청/응답 |
 | `PubSubRecv` | PUB/SUB 토픽 |
 | `MonitorRecv` | 소켓 모니터 |
-| `StreamRecv`, `StreamPacketCallback` | STREAM + 패킷 콜백 |
+| `StreamRecv`, `StreamPacketCallback` | STREAM RAW/PACKET pull(legacy sample directory 이름) |
 
 > SPOT·Actor 예제는 core 바인딩이 아니라 framework 샘플이 다룬다 —
 > [Spot](../../../../framework/doc/framework/common/guide/server/06-spot.ko.md) ·

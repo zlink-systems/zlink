@@ -78,7 +78,7 @@ zlink_poller_remove(poller, s);
 **Parameters.** `source` is the socket handle. `user_data` (add only) is the borrowed pointer
 delivered back in matching `zlink_poller_event_t` entries. `events` is the same
 `zlink_poller_event_mask_t` bits as `zlink_pollitem_t`, plus `ZLINK_POLLCOMPLETION` (valid only
-when adding a raw `PAIR`, `DEALER`, `ROUTER`, or `STREAM` that owns a completion channel — see
+when adding a raw `PAIR`, `DEALER`, `ROUTER`, or `STREAM` that owns a completion queue — see
 below).
 
 **Return and errno.** All three return `zlink_config_result_t` — `ZLINK_CONFIG_OK` on success.
@@ -89,11 +89,10 @@ returns `ZLINK_CONFIG_INVALID_ARGUMENT` with `EINVAL`; an event unsupported by t
 
 **When to use.** A poller only borrows the source handle — remove a source before destroying it.
 Set `ZLINK_POLLCOMPLETION` (alone, or OR-ed with `ZLINK_POLLIN`/`ZLINK_POLLOUT`) to let one
-poller own receive, send, and completion progress for the same socket together. `DEALER` and
-`ROUTER` use it for reply completion (DEALER/ROUTER categories); any socket that supports
-asynchronous send — `PAIR`, `DEALER`, `ROUTER`, `STREAM` — uses it for the send-completion
-channel installed with `zlink_send_complete_handler` (Socket lifecycle category), which this
-registration moves from the Core async mailbox thread to the calling `zlink_poller_wait` thread.
+poller own DATA readiness and completion readiness for the same socket together. `DEALER` and
+`ROUTER` use it for REQUEST results (DEALER/ROUTER categories); `PAIR`, `DEALER`, `ROUTER`, and
+`STREAM` also use it for pending-send completion records. The registration owns readiness only:
+`zlink_poller_wait()` does not remove records from the queue.
 Using it on any other source, in a `zlink_poll` item, or in `zlink_poller_modify` returns
 `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`. A registered source that closes produces `POLLERR`
 once and stays registered until explicitly removed.
@@ -148,6 +147,23 @@ Waits for readiness across every source currently registered on a poller.
 zlink_poller_event_t events[16];
 zlink_config_result_t err;
 int ready = zlink_poller_wait(poller, events, 16, /*timeout_ms=*/1000, &err);
+
+for (int i = 0; i < ready; ++i) {
+    if ((events[i].events & ZLINK_POLLCOMPLETION) == 0)
+        continue;
+    for (;;) {
+        zlink_completion_t completion = {0};
+        completion.struct_size = sizeof(completion);
+        zlink_recv_result_t rc = zlink_completion_recv(
+            events[i].socket, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc == ZLINK_RECV_NO_DATA)
+            break;
+        if (rc != ZLINK_RECV_OK)
+            break; /* handle the typed receive failure */
+        /* Match completion_id or user_context, then process the result. */
+        zlink_completion_close(&completion);
+    }
+}
 ```
 
 **Parameters.** `events`/`event_capacity` is the caller-owned output array and its size.
@@ -159,11 +175,11 @@ int ready = zlink_poller_wait(poller, events, 16, /*timeout_ms=*/1000, &err);
 `user_data` (the borrowed pointer from registration), and `events`.
 
 **When to use.** The returned array is caller-owned and contains no pointer into Core storage.
-A wait that dispatches a `ZLINK_POLLCOMPLETION` signal — DEALER/ROUTER reply completion, or the
-send completion installed with `zlink_send_complete_handler` (Socket lifecycle category) — still
-writes a public event with the `ZLINK_POLLCOMPLETION` bit and counts it in the returned total, so
-`wait` does not return `0` for that reason; the caller can inspect state the dispatched callback
-already changed. The `recv_part` families never drain this completion signal themselves.
+`ZLINK_POLLCOMPLETION` is level-triggered: wait reports readiness but does not consume a record.
+For every ready socket, repeat DONTWAIT `zlink_completion_recv()` through
+`ZLINK_RECV_NO_DATA`, and close every successful record. One poller registration may own the
+completion bit for a socket; concurrent drain by another thread is unsupported. The `recv_part`
+families never drain this queue.
 
 ---
 

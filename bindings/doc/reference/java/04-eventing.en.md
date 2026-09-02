@@ -17,7 +17,7 @@ Observes a socket's connection lifecycle events and reads its current status.
 
 ```java
 try (SocketMonitor monitor = socket.monitorOpen(MonitorEventType.CONNECTED, MonitorEventType.DISCONNECTED)) {
-    monitor.onEvent(event -> logger.info("{} {}", event.event(), event.remoteAddr()));
+    MonitorEvent event = monitor.recv(RecvFlags.NONE);
     MonitorStatus status = monitor.status();
 }
 ```
@@ -26,15 +26,15 @@ try (SocketMonitor monitor = socket.monitorOpen(MonitorEventType.CONNECTED, Moni
 
 | Member | Meaning |
 | --- | --- |
-| `onEvent(SocketMonitorHandler handler)` | registers a passive lifecycle-event callback |
+| `recv(RecvFlags.DONT_WAIT)` | non-blocking pull of the next queued lifecycle event |
 | `recv()` / `recv(RecvFlags flags)` | pulls the next event; both return `MonitorEvent` directly — not `Optional`/nullable, unlike dotnet's `MonitorEvent?` |
 | `status()` | returns a `MonitorStatus` point-in-time snapshot |
-| `IGNORE_HANDLER` | a public static constant no-op `SocketMonitorHandler` a caller can register when it intentionally wants to discard events |
+| `close()` | releases the caller-owned monitor resource |
 
 **Completion result.** All members are synchronous. `SocketMonitor extends AutoCloseable`.
 
-**When to use.** Use `onEvent` for a passive lifecycle observer registered once; use `recv` for a
-pull-based drain loop instead. Use `status()` for a point-in-time snapshot.
+**When to use.** Use `recv` for a pull-based lifecycle-event drain loop and `status()` for a
+point-in-time snapshot.
 
 ---
 
@@ -172,8 +172,8 @@ poller.
 
 ```java
 try (ZlinkTimer timer = Zlink.createTimer()) {
-    timer.onFire((t, count) -> logger.info("fired {} times", count));
     timer.start(Duration.ofSeconds(1), 0L);
+    long count = timer.recv();
 }
 ```
 
@@ -184,12 +184,12 @@ try (ZlinkTimer timer = Zlink.createTimer()) {
 | `start(Duration interval, long repeatCount)` | starts firing on `interval`; `repeatCount == 0` means unlimited |
 | `stop()` | stops firing; restartable via `start` |
 | `recv()` | returns `long` directly — the cumulative fire count; unlike dotnet's `ulong?`/cpp's `std::optional<uint64_t>`, this is not nullable/optional in source |
-| `onFire(TimerHandler handler)` | registers a passive interval callback; the handler receives `(ZlinkTimer timer, long fireCount)` |
+| repeated `recv()` | drains cumulative fire counts through the pull surface |
 
 **Completion result.** All members are synchronous. `ZlinkTimer extends AutoCloseable`.
 
-**When to use.** Use `onFire` for a passive interval callback; use `recv` to poll expirations
-instead, or register the timer with `Poller.add(ZlinkTimer, long)` to multiplex it alongside
+**When to use.** Use `recv` to pull expirations, or register the timer with
+`Poller.add(ZlinkTimer, long)` to multiplex it alongside
 sockets on one wait.
 
 ---
@@ -198,8 +198,8 @@ sockets on one wait.
 
 | Interface | Registered by | Signature |
 |---|---|---|
-| `SocketMonitorHandler` | `SocketMonitor.onEvent(...)` | `void onEvent(MonitorEvent event)` |
-| `TimerHandler` | `ZlinkTimer.onFire(...)` | `void onFire(ZlinkTimer timer, long fireCount)` |
+| `MonitorEvent` | `SocketMonitor.recv(...)` | caller-owned value returned from the monitor queue |
+| `long` fire count | `ZlinkTimer.recv()` | cumulative count returned from the timer queue |
 
 ---
 

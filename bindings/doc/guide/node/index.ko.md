@@ -100,21 +100,34 @@ const text = data.toString('utf8');
 received.close();
 ```
 
-HWM 대기 가능 send는 비동기 `submit()`과 동기 `submit_sync(SendFlags)` overload를
-제공합니다. Node 이벤트 루프에서는 Promise를 반환하는 flag 없는 `submit()`을
-기본으로 사용합니다. 즉시 backpressure가 필요할 때만
-`submit_sync(zlink.SendFlags.DontWait)`을 사용합니다.
+HWM 대기 가능 send는 비동기 `submit()`과 동기 `submit_sync()` terminal을
+제공합니다. Node 이벤트 루프에서는 Promise를 반환하는 `submit()`을 기본으로 사용합니다.
+이 terminal은 DONTWAIT을 사용하고 socket completion queue에서 settle됩니다.
+`submit_sync()`은 local admission까지 Core 안에서 blocking합니다.
 
 ```javascript
 await socket.send().message(Buffer.from('data')).submit(); // 비동기
-socket.send().message(Buffer.from('data')).submit_sync(zlink.SendFlags.DontWait); // 동기 non-blocking
+socket.send().message(Buffer.from('data')).submit_sync();  // 동기 Core admission
 ```
 
-Request도 같은 HWM admission을 지나며 세 완료 표면을 제공합니다.
-`submit_sync(flags)`는 admission과 reply를 동기 대기해 reply를 직접 반환하고,
-`submit_sync(flags, callback)`은 admission 결과가 결정되면 즉시 반환한 뒤 reply를
-callback으로 전달하며, `submit()`은 Promise를 반환합니다. Sync flag의
-`None`/`DontWait`가 admission 대기 여부를 정합니다.
+Request는 reply까지 blocking하는 `submit_sync()`과 socket completion queue에서 settle되는
+`Promise<Message[]>`를 반환하는 `submit()`을 제공합니다. Reply는 terminal 결과이며 별도
+DATA receive가 아닙니다.
+
+Core가 pre-admission operation을 접수한 뒤 retry를 소유하므로 caller retry queue를 만들거나
+payload를 재전송하지 않습니다. 공용 native `ZLINK_OPT_PENDING_MAX_MSGS/BYTES` 제한은 pending
+SEND와 REQUEST에 함께 적용되고 send 전용 pending 이름은 없습니다. Completion은 local
+admission일 뿐 peer delivery나 application acknowledgement가 아닙니다.
+
+Submit 전 cancellation은 호출하지 않는 것으로 처리합니다. Successful submit 뒤에는 public
+Core cancel이 없으며 Promise 관찰을 버려도 socket owner가 늦은 completion을 drain합니다.
+Bind/connect 전에 `stream.options.recvMode`를 `zlink.StreamRecvMode.Raw` 또는 `.Packet`으로
+정한 뒤 각각 `recv` 또는 `recvPacket`을 사용합니다.
+
+public poller가 socket의 `zlink.PollEventFlag.PollCompletion` owner이면 blocking request나
+Promise가 남아 있는 동안 다른 thread가 `wait()` loop를 계속 실행해야 합니다. `wait()`가
+native completion을 drain해 Node state를 settle/cleanup하므로 같은 thread에서 wait 사이에
+blocking terminal을 호출하면 진행이 멈출 수 있습니다.
 
 ### Received — 수신 봉투
 
@@ -124,7 +137,7 @@ socket.recv(received);                  // 동기 블로킹
 try {
   const parts = received.parts;         // Message[]
   const rid = received.routingId;       // RoutingId 또는 null
-  const seq = received.requestSeq;      // bigint 또는 null
+  const token = received.replyToken;    // ROUTER request의 ReplyToken 또는 null
 } finally {
   received.close();
 }
@@ -166,7 +179,7 @@ Node 바인딩은 작업별 에러 클래스를 던집니다.
 
 ```javascript
 try {
-  socket.send().message(Buffer.from('data')).submit_sync(zlink.SendFlags.DontWait);
+  await socket.send().message(Buffer.from('data')).submit();
 } catch (error) {
   if (error instanceof zlink.SubmitError) {
     if (error.result === zlink.SubmitResult.Backpressured) {
@@ -193,8 +206,8 @@ try {
 | `zlink_socket(ctx, type)` | `zlink.createPairSocket(ctx)` 등 |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
-| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + flag | `socket.send().message(buf).submit_sync(flags)` |
-| `zlink_send_async(...)` | `await socket.send().message(buf).submit()` |
+| `zlink_send_part(...)` / `zlink_send_part_rid(...)` + NONE | `socket.send().message(buf).submit_sync()` |
+| DONTWAIT send + completion pull | `await socket.send().message(buf).submit()` |
 | `zlink_recv_part(...)` | `socket.recv(received)` |
 | `zlink_msg_data(msg)` | `part.data()` (Buffer) |
 | `zlink_routing_id_t` | `zlink.RoutingId` |
@@ -220,13 +233,11 @@ console.log(`zlink ${major}.${minor}.${patch}`);
 |------|------|
 | `Context`·소켓 | 메인 이벤트 루프에서 사용 |
 | 블로킹 `recv()` | 이벤트 루프를 막으므로 짧게 사용하거나 논블로킹 + 폴러 권장 |
-| 동기 `submit_sync(SendFlags.None)` | HWM 대기 시 이벤트 루프 전체를 멈춰 런타임 진행이 정지함 — 사용하지 않음 |
-| 동기 `submit_sync(SendFlags.DontWait)` | 즉시 반환하므로 이벤트 루프를 막지 않음 |
+| 동기 `submit_sync()` | HWM 대기 시 이벤트 루프 전체를 멈춤 — 이벤트 루프에서 사용하지 않음 |
 | 비동기 `submit()` | Promise 기반 — 이벤트 루프를 막지 않음 |
 
-Node에서는 blocking send를 이벤트 루프에서 실행하지 않습니다. `DONTWAIT`가 필요한
-즉시 제출에는 `submit_sync(zlink.SendFlags.DontWait)`을 사용하고, HWM admission을
-기다려야 하면 비동기 `submit()`을 `await`합니다.
+Node에서는 blocking send를 이벤트 루프에서 실행하지 않습니다. 비동기 `submit()`을
+`await`하고 `submit_sync()`은 적절한 worker thread에서만 사용합니다.
 
 ---
 
@@ -241,7 +252,7 @@ Node에서는 blocking send를 이벤트 루프에서 실행하지 않습니다.
 | `request_reply_sample.ts` | 요청/응답 |
 | `pubsub_recv_sample.ts` | PUB/SUB 발행·구독 |
 | `stream_recv_sample.ts` | STREAM 원시 TCP |
-| `stream_packet_callback_sample.ts` | STREAM 패킷 콜백 |
+| `stream_packet_sample.ts` | STREAM PACKET pull |
 | `monitor_recv_sample.ts` | 모니터 이벤트 수신 |
 
 > SPOT·Actor 예제는 core 바인딩이 아니라 framework 샘플이 다룬다 — 아래

@@ -21,9 +21,7 @@ Observes a socket's connection lifecycle events and reads its current status.
 
 ```go
 monitor, err := contracts.OpenSocketMonitor(dealer, contracts.MonitorEventConnectionReady)
-monitor.OnEvent(func(event *contracts.MonitorEvent) {
-    fmt.Println(event.RemoteAddr)
-})
+event, err := monitor.Recv(contracts.RecvFlagsNone)
 status, err := monitor.Status()
 ```
 
@@ -31,19 +29,19 @@ status, err := monitor.Status()
 
 | Member | Meaning |
 | --- | --- |
-| `OpenSocketMonitor(socket SocketTarget, events ...MonitorEventMask) (*SocketMonitor, error)` | opens the monitor; **variadic and genuinely filtering** — passing no `events` subscribes to `MonitorEventAll`, but any masks supplied are OR-combined and actually honored, unlike rust's `SocketMonitor::open`, which accepts no such parameter and always subscribes to every event regardless of any mask value constructed |
+| `OpenSocketMonitor(socket SocketTarget, events ...MonitorEventMask) (*SocketMonitor, error)` | opens the monitor; passing no `events` subscribes to `MonitorEventAll`, while supplied masks are OR-combined and honored |
 | `Recv(flags RecvFlags) (*MonitorEvent, error)` | single entry point for both blocking and non-blocking; pass `RecvFlagsDontWait` for the non-blocking form — **the value-return-on-no-data shape here is a documented exception**, per its own doc comment: "Value-return form is allowed for monitor/timer control-plane APIs by doc/spec/bindings/go/README.md §Receive And Subscribe Shape" |
 | `Status() (*MonitorStatus, error)` | returns a point-in-time snapshot |
-| `OnEvent(handler func(*MonitorEvent)) error` | registers a passive lifecycle-event callback |
+| `Recv(RecvFlagsDontWait)` | non-blocking pull; returns no event when the queue is empty |
 | `Close() error` | closes the monitor |
 
 **Completion result.** All members are synchronous. `SocketTarget` (Core category) is the shared
 interface every built-in socket type implements — the same interface `Proxy`/`Poller` registration
 uses.
 
-**When to use.** Use `OnEvent` for a passive lifecycle observer registered once; use `Recv` for a
-pull-based drain loop instead. Pass specific `MonitorEventMask` values to `OpenSocketMonitor` to
-limit the subscription — unlike rust, this binding's mask parameter actually has an effect.
+**When to use.** Use `Recv` for a pull-based lifecycle-event drain loop. Pass specific
+`MonitorEventMask` values to `OpenSocketMonitor` to
+limit the subscription.
 
 ---
 
@@ -218,10 +216,8 @@ but registerable with one via `Poller.AddTimer`.
 
 ```go
 timer, err := contracts.NewTimer()
-timer.OnFire(func(t *contracts.Timer, fireCount uint64) {
-    fmt.Println("fired", fireCount, "times")
-})
 timer.Start(1_000_000_000, 0) // interval in nanoseconds, not time.Duration
+fireCount, ok, err := timer.Recv()
 ```
 
 **Options.**
@@ -232,13 +228,13 @@ timer.Start(1_000_000_000, 0) // interval in nanoseconds, not time.Duration
 | `Start(intervalNs, repeatCount uint64) error` | starts firing on `intervalNs`; **the interval is a raw nanosecond `uint64`, not `time.Duration`**, breaking from every duration-typed option elsewhere in this binding (Core/Sockets categories); `repeatCount` of `0` means repeat indefinitely |
 | `Stop() error` | stops firing; restartable via `Start` |
 | `Recv() (uint64, bool, error)` | the cumulative fire count; the `bool` is `false` when nothing is pending rather than an error — **the same documented value-return-on-no-data exception as `SocketMonitor.Recv`**, per its own doc comment citing doc/spec/bindings/go/README.md §Receive And Subscribe Shape |
-| `OnFire(handler func(timer *Timer, fireCount uint64)) error` | registers a passive interval callback |
+| repeated `Recv()` | drains each pending cumulative fire count through the pull surface |
 | `Close() error` | closes the timer |
 
 **Completion result.** All members are synchronous.
 
-**When to use.** Use `OnFire` for a passive interval callback; use `Recv` to poll expirations
-instead, or register the timer with `Poller.AddTimer` to multiplex it alongside sockets on one
+**When to use.** Use `Recv` to pull expirations, or register the timer with `Poller.AddTimer` to
+multiplex it alongside sockets on one
 wait.
 
 ---

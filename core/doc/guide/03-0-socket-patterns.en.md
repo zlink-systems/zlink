@@ -21,9 +21,11 @@ multipart message reaches `ZLINK_PART_FINAL`.
 - PAIR uses `zlink_recv_part()`.
 - SUB uses `zlink_subscribe_part()` and returns the topic separately.
 - XPUB uses `zlink_xpub_recv_part()` for subscription notifications.
-- DEALER uses `zlink_dealer_recv_part()` for request/reply traffic.
-- ROUTER uses `zlink_router_recv_part()` and returns peer and request metadata.
-- STREAM may use `zlink_recv_handler()` or `zlink_stream_packet_handler()`.
+- DEALER uses `zlink_recv_part()` for ordinary DATA; request replies arrive through
+  `zlink_completion_recv()`.
+- ROUTER uses `zlink_router_recv_part()` and returns the peer and an opaque reply token.
+- STREAM selects RAW (`zlink_recv_part()`) or PACKET
+  (`zlink_stream_recv_packet()`) before its first bind or connect.
 
 Monitor handles and generic timers can be registered with the same poller.
 

@@ -16,10 +16,10 @@ name a target routing id. Use it when one socket must address multiple DEALER or
 individually, rather than round-robin like DEALER.
 
 **Key characteristics:**
-- Receive: every record carries the sender's routing id and a request sequence
+- Receive: every record carries the sender's routing id and an opaque reply token
 - Send: directed only — the caller selects the peer by routing id
-- Two traffic shapes on one socket: ordinary raw messages (`request_seq == 0`) and request
-  records that expect a reply (`request_seq != 0`)
+- Two traffic shapes on one socket: ordinary DATA (reply token `0`) and REQUEST
+  records that expect a reply (nonzero token)
 
 **Valid socket combinations:** ROUTER ↔ DEALER, ROUTER ↔ ROUTER
 
@@ -43,17 +43,17 @@ zlink_bind(router, "tcp://*:5558");
 ### Receiving a Message
 
 `zlink_router_recv_part()` returns one payload part at a time. The routing-id view remains valid
-until the next receive-like call on the same thread. Copy it when it must outlive that call.
+until the next data-receive entry on the same socket. Copy it when it must outlive that call.
 
 ```c
 const zlink_routing_id_t *source_rid = NULL;
-uint64_t request_seq = 0;
+zlink_reply_token_t reply_token = 0;
 zlink_msg_t part;
 zlink_part_flag_t more;
 
 zlink_msg_init(&part);
 zlink_recv_result_t rc = zlink_router_recv_part(
-    router, &source_rid, &request_seq, &part, &more, ZLINK_RECV_FLAGS_NONE);
+    router, &source_rid, &reply_token, &part, &more, ZLINK_RECV_FLAGS_NONE);
 if (rc == ZLINK_RECV_OK) {
     /* source_rid selects the peer; more == ZLINK_PART_MORE means another
        part of the same record follows. */
@@ -62,9 +62,9 @@ if (rc == ZLINK_RECV_OK) {
 /* other rc values: ZLINK_RECV_NO_DATA (EAGAIN), TERMINATED, INVALID_HANDLE */
 ```
 
-For ordinary routed traffic, `request_seq` is zero. A positive sequence identifies a request that
-must be answered with `zlink_router_reply_part()` (see [§4](#4-request-and-reply)) rather than
-`zlink_send_part_rid()`.
+For ordinary routed DATA, `reply_token` is zero. A nonzero token identifies a REQUEST that must
+be answered with `zlink_reply_part()` (see [§4](#4-request-and-reply)) rather than
+`zlink_send_part_rid()`; the application does not interpret the token.
 
 ### Sending Routed Data
 
@@ -146,62 +146,54 @@ zlink_connect(router, "tcp://127.0.0.1:5559");
 
 ## 4. Request and Reply
 
-`zlink_router_request_part()` submits a routed request and completes through a reply callback
-instead of an ordinary receive record. A received request (`request_seq != 0`) is answered with
-`zlink_router_reply_part()`, using the source routing id and request sequence returned by the
-receive call.
+`zlink_request_part()` submits a routed request and returns a nonzero completion ID. Its reply or
+terminal result is pulled with `zlink_completion_recv()`, never ordinary DATA receive. A received
+REQUEST (nonzero reply token) is answered with `zlink_reply_part()` using the source RID and token
+returned by the receive call.
 
 ```c
-static void on_reply(zlink_request_result_t result,
-                     zlink_msg_t *parts,
-                     size_t part_count,
-                     void *userdata)
-{
-    if (result != ZLINK_REQUEST_OK) {
-        /* result values: ZLINK_REQUEST_TIMED_OUT, ZLINK_REQUEST_NOT_FOUND,
-           ZLINK_REQUEST_TERMINATED, ZLINK_REQUEST_PROTOCOL_ERROR, ... */
-        return;
-    }
-    /* parts_ ownership moves to this callback; close exactly once. */
-    zlink_multipart_close(parts, part_count);
-}
-
 zlink_msg_t req;
 zlink_msg_init_size(&req, 4);
 memcpy(zlink_msg_data(&req), "ping", 4);
 
-zlink_submit_result_t rc = zlink_router_request_part(
+zlink_completion_id_t id = 0;
+zlink_submit_result_t rc = zlink_request_part(
     router, peer_rid, &req, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
-    0 /* timeout_ms: 0 uses ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS */,
-    on_reply, NULL);
-if (rc != ZLINK_SUBMIT_OK) { /* handler is not called; handle submit failure */ }
+    0 /* uses ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS */, NULL, &id);
+if (rc == ZLINK_SUBMIT_OK) {
+    zlink_completion_t completion = {0};
+    completion.struct_size = sizeof(completion);
+    if (zlink_completion_recv(router, &completion, ZLINK_RECV_FLAGS_NONE)
+        == ZLINK_RECV_OK)
+        zlink_completion_close(&completion);
+}
 ```
 
-On the receiving side, answer with the routing id and request sequence the receive call returned:
+On the receiving side, answer with the routing id and opaque token the receive call returned:
 
 ```c
 const zlink_routing_id_t *source_rid = NULL;
-uint64_t request_seq = 0;
+zlink_reply_token_t reply_token = 0;
 zlink_msg_t part;
 zlink_part_flag_t more;
 
 zlink_msg_init(&part);
-zlink_router_recv_part(router, &source_rid, &request_seq, &part, &more, ZLINK_RECV_FLAGS_NONE);
+zlink_router_recv_part(router, &source_rid, &reply_token, &part, &more, ZLINK_RECV_FLAGS_NONE);
 
-if (request_seq != 0) {
+if (reply_token != 0) {
     /* This record expects a reply, not a directed send. */
     zlink_msg_t reply;
     zlink_msg_init_size(&reply, 5);
     memcpy(zlink_msg_data(&reply), "World", 5);
-    zlink_router_reply_part(router, source_rid, request_seq, &reply, ZLINK_PART_FINAL);
+    zlink_reply_part(router, source_rid, reply_token, &reply, ZLINK_PART_FINAL);
 }
 zlink_msg_close(&part);
 ```
 
-A reply submit that fails is not backpressure: raw and error replies travel on a separate
-completion progress lane that is not subject to HWM. A missing reply path returns
-`ZLINK_SUBMIT_NOT_CONNECTED` (`errno == ENOTCONN`) immediately, and `ZLINK_POLLOUT` does not make
-that one-shot reply retryable.
+A reply to a DEALER peer shares that DEALER-ROUTER Application connection's FIFO, HWM, and PAUSED
+state, so it can report `ZLINK_SUBMIT_BACKPRESSURED`. A reply to a ROUTER peer uses the
+ROUTER-ROUTER Completion lane. Only successful FINAL consumes the reply token; a failed complete
+attempt can be retried while the request lifecycle remains valid.
 
 > Reference: `core/tests/integration/test_zmp_request_reply.cpp` and
 > `core/tests/integration/test_zmp_request_reply_router_recv_surface.cpp`
@@ -237,10 +229,10 @@ zlink_connect(dealer2, endpoint);
 
 ### Pattern 2: Request-Reply with Correlation
 
-Use `zlink_router_request_part()` / `zlink_router_reply_part()` (see [§4](#4-request-and-reply))
+Use `zlink_request_part()` / `zlink_reply_part()` (see [§4](#4-request-and-reply))
 when the caller needs delivery confirmation and a correlated answer instead of free-form
-send/recv. `request_seq` correlates one reply to one request; it is `0` for ordinary directed
-traffic and non-zero only for records that must go through `zlink_router_reply_part()`.
+send/recv. The completion ID correlates the origin result; the opaque nonzero reply token lets the
+responder answer one REQUEST and is `0` for ordinary DATA.
 
 ### Pattern 3: Enforcing Reachability with MANDATORY
 
@@ -267,10 +259,10 @@ as the frontend.
 
 ### Routing ID Lifetime
 
-`source_rid` returned by `zlink_router_recv_part()` is a thread-local view owned by Core. It stays
-valid only until the next receive-like call on the same thread; copy the bytes if the id must
-outlive that call. All parts of one multipart record return the same routing id and request
-sequence. See [Routing IDs](08-routing-id.en.md) for the full lifetime and copy contract.
+`source_rid` returned by `zlink_router_recv_part()` is a socket-owned view. It stays valid only
+until the next data-receive entry on that same socket, successful or not; copy the bytes if the id
+must outlive that call. All parts of one multipart record return the same routing id and reply
+token. See [Routing IDs](08-routing-id.en.md) for the full lifetime and copy contract.
 
 ### No Peer Connected vs. HWM Backpressure
 
@@ -279,15 +271,12 @@ an unconnected routing id returns `ZLINK_SUBMIT_NOT_CONNECTED` — nothing is qu
 connected peer whose queue is at HWM blocks (default) or returns `ZLINK_SUBMIT_BACKPRESSURED` with
 `ZLINK_SEND_FLAGS_DONTWAIT`.
 
-### Exact-Pipe Targeting
+### Logical-RID Targeting
 
-`zlink_send_part_rid()` and `zlink_router_request_part()` select among a routing id's current
-pipes at submit time. When a caller has already snapshotted one exact pipe (for example from a
-monitor event or `zlink_select_routed_submit_target()`), use
-`zlink_send_part_transport_pair()` / `zlink_router_request_transport_pair_part()` instead: they
-submit only to that exact `(routing id, pair id, generation)` and never reroute to a different
-pipe with the same routing id. A stale generation or detached pipe fails with
-`ZLINK_SUBMIT_NOT_CONNECTED`; HWM on that exact pipe fails with `ZLINK_SUBMIT_BACKPRESSURED`.
+`zlink_send_part_rid()` and `zlink_request_part()` accept only the logical routing id. Physical
+pair IDs and generations are not public send selectors. If Core retains a DONTWAIT record before
+admission, it keeps the same logical RID across transient reconnect and reports the terminal via
+the completion ID. After local admission, Core does not replay the payload on a new connection.
 
 ### Concurrency
 
