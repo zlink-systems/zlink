@@ -240,6 +240,66 @@ int zlink::dealer_t::xselect_routed_submit_target (
     return 0;
 }
 
+int zlink::dealer_t::xselect_routed_submit_pipe (pipe_t **pipe_out_,
+                                                 bool request_only_)
+{
+    if (!pipe_out_) {
+        errno = EFAULT;
+        return -1;
+    }
+    *pipe_out_ = NULL;
+    const int rc = _lb.select_connected_pipe (
+      pipe_out_,
+      request_only_ ? &dealer_t::request_submit_candidate
+                    : &dealer_t::routed_submit_candidate,
+      this);
+    if (rc != 0)
+        return -1;
+    if (request_only_) {
+        //  Keep the request route history that the general selection path
+        //  maintains, so a later disconnected wait still knows this route.
+        const std::string &endpoint =
+          (*pipe_out_)->get_endpoint_pair ().identifier ();
+        if (endpoint.empty ()) {
+            *pipe_out_ = NULL;
+            errno = EHOSTUNREACH;
+            return -1;
+        }
+        if (_request_route_history.find (endpoint)
+            == _request_route_history.end ())
+            remember_request_route (*pipe_out_, _lb.weight (*pipe_out_));
+    }
+    return 0;
+}
+
+int zlink::dealer_t::xsend_selected_pipe (
+  pipe_t *pipe_, msg_t *msg_, int flags_, bool request_only_,
+  pipe_message_admission_t *admission_out_, pipe_write_observer_fn observer_,
+  void *observer_userdata_)
+{
+    //  Same admission rules as xsend_configured_endpoint, applied to a pipe
+    //  the caller selected under the current send scope.
+    if (!pipe_) {
+        errno = EAGAIN;
+        return -1;
+    }
+    if (request_only_
+        && pipe_->get_peer_socket_type () != ZLINK_CORE_SOCKET_ROUTER) {
+        errno = EPROTOTYPE;
+        return -1;
+    }
+    if (_lb.weight (pipe_) == 0) {
+        errno = ECONNREFUSED;
+        return -1;
+    }
+    if (!transport_pair_application_ready (pipe_)) {
+        errno = EAGAIN;
+        return -1;
+    }
+    return sendpipe_to (
+      pipe_, msg_, flags_, admission_out_, observer_, observer_userdata_);
+}
+
 int zlink::dealer_t::xsend_configured_endpoint (
   const std::string &endpoint_, msg_t *msg_, int flags_, bool request_only_,
   pipe_t **pipe_out_, pipe_message_admission_t *admission_out_,

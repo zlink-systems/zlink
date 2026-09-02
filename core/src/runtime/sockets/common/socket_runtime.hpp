@@ -612,7 +612,8 @@ struct routed_send_target_key_t
     routed_send_target_key_t () :
         transport_pair_id (0),
         transport_pair_generation (0),
-        route_incarnation_id (0)
+        route_incarnation_id (0),
+        selected_pipe (NULL)
     {
     }
     routed_send_target_key_t (const void *routing_id_,
@@ -628,7 +629,8 @@ struct routed_send_target_key_t
         logical_endpoint (logical_endpoint_),
         transport_pair_id (transport_pair_id_),
         transport_pair_generation (transport_pair_generation_),
-        route_incarnation_id (route_incarnation_id_)
+        route_incarnation_id (route_incarnation_id_),
+        selected_pipe (NULL)
     {
     }
 
@@ -656,6 +658,11 @@ struct routed_send_target_key_t
     // independent of the mutable network connection id, so an engine reset
     // cannot orphan pending work and a replacement pipe cannot consume it.
     uint64_t route_incarnation_id;
+    // Transient, not part of the key: a DEALER pipe already selected under
+    // the send scope that owns this attempt. The first frame of the record
+    // goes to it directly instead of resolving `logical_endpoint`. Only set
+    // by the blocking-send fast path and never stored in a pending queue.
+    pipe_t *selected_pipe;
 };
 
 // Internal REQUEST admission hooks. The resolver runs only after one pending

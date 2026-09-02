@@ -359,6 +359,8 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _out_physical_queue (out_physical_queue_),
     _transport_lane (transport_lane_application),
     _transport_lane_count (0),
+    _transport_pair_application_ready (false),
+    _state_active (true),
     _registry_accounting (registry_accounting_),
     _transport_pair_id (0),
     _transport_pair_generation (0),
@@ -544,8 +546,19 @@ bool zlink::pipe_t::has_completed_termination () const
 
 bool zlink::pipe_t::is_lifecycle_active () const
 {
-    scoped_fast_lock_t lock (_out_sync);
-    return _state == active;
+    return _state_active.load (std::memory_order_acquire);
+}
+
+void zlink::pipe_t::set_transport_pair_application_ready (bool ready_)
+{
+    _transport_pair_application_ready.store (ready_,
+                                             std::memory_order_release);
+}
+
+bool zlink::pipe_t::transport_pair_application_ready_cached () const
+{
+    return _transport_pair_application_ready.load (
+      std::memory_order_acquire);
 }
 
 void zlink::pipe_t::set_event_sink (i_pipe_events *sink_)
@@ -2774,10 +2787,12 @@ void zlink::pipe_t::process_pipe_term ()
             pending_to_read = delimiter_result == ypipe_read_rejected;
         }
 
-        if (_delay && pending_to_read)
+        if (_delay && pending_to_read) {
             _state = waiting_for_delimiter;
-        else {
+            _state_active.store (false, std::memory_order_release);
+        } else {
             _state = term_ack_sent;
+            _state_active.store (false, std::memory_order_release);
             _out_pipe = NULL;
             if (_sink)
                 _sink->pipe_peer_terminated (this);
@@ -2789,6 +2804,7 @@ void zlink::pipe_t::process_pipe_term ()
     //  term command as well, so we can move straight to term_ack_sent state.
     else if (_state == delimiter_received) {
         _state = term_ack_sent;
+        _state_active.store (false, std::memory_order_release);
         _out_pipe = NULL;
         if (_sink)
             _sink->pipe_peer_terminated (this);
@@ -2800,6 +2816,7 @@ void zlink::pipe_t::process_pipe_term ()
     //  own ack.
     else if (_state == term_req_sent1) {
         _state = term_req_sent2;
+        _state_active.store (false, std::memory_order_release);
         _out_pipe = NULL;
         if (_sink)
             _sink->pipe_peer_terminated (this);
@@ -2905,6 +2922,7 @@ void zlink::pipe_t::set_nodelay ()
         _out_pipe = NULL;
         (void) send_pipe_term_ack (get_peer ());
         _state = term_ack_sent;
+        _state_active.store (false, std::memory_order_release);
     }
 }
 
@@ -2930,6 +2948,7 @@ void zlink::pipe_t::terminate (bool delay_)
     if (_state == active) {
         send_pipe_term (get_peer ());
         _state = term_req_sent1;
+        _state_active.store (false, std::memory_order_release);
     }
     //  There are still pending messages available, but the user calls
     //  'terminate'. We can act as if all the pending messages were read.
@@ -2939,6 +2958,7 @@ void zlink::pipe_t::terminate (bool delay_)
         _out_pipe = NULL;
         (void) send_pipe_term_ack (get_peer ());
         _state = term_ack_sent;
+        _state_active.store (false, std::memory_order_release);
     }
     //  If there are pending messages still available, do nothing.
     else if (_state == waiting_for_delimiter) {
@@ -2949,6 +2969,7 @@ void zlink::pipe_t::terminate (bool delay_)
     else if (_state == delimiter_received) {
         send_pipe_term (get_peer ());
         _state = term_req_sent1;
+        _state_active.store (false, std::memory_order_release);
     }
     //  There are no other states.
     else {
@@ -3017,13 +3038,16 @@ void zlink::pipe_t::process_delimiter ()
     }
     zlink_assert (_state == active || _state == waiting_for_delimiter);
 
-    if (_state == active)
+    if (_state == active) {
         _state = delimiter_received;
+        _state_active.store (false, std::memory_order_release);
+    }
     else {
         rollback_unlocked (false);
         _out_pipe = NULL;
         (void) send_pipe_term_ack (get_peer ());
         _state = term_ack_sent;
+        _state_active.store (false, std::memory_order_release);
     }
 }
 

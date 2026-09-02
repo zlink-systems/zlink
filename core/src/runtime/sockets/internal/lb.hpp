@@ -138,6 +138,9 @@ class lb_t
 
     //  Active candidates in ascending identifier order.
     std::vector<candidate_t> _ordered;
+    //  Reused by select_connected_pipe so a per-send selection does not
+    //  allocate. Only valid for the duration of one call.
+    std::vector<candidate_t> _select_scratch;
     pipe_t *_weighted_multipart_pipe;
 
     void deactivate (pipe_t *pipe_);

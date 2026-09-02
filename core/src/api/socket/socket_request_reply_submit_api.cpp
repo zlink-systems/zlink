@@ -525,17 +525,24 @@ int send_public_router_reply_with_wait (
             return -1;
         }
 
-        // Reconnect and pair-ready transitions arrive through the socket
-        // mailbox. A short bounded park avoids a busy loop without adding a
-        // separate reply deadline scheduler or touching the steady fast path.
-        const std::chrono::milliseconds retry_delay (1);
-        if (infinite)
-            std::this_thread::sleep_for (retry_delay);
-        else
-            std::this_thread::sleep_for (
-              std::min (retry_delay,
-                        std::chrono::duration_cast<std::chrono::milliseconds> (
-                          deadline - now)));
+        // Reconnect, pair-ready and write-credit transitions all arrive
+        // through the socket mailbox, so park on it: the wait returns as soon
+        // as such a command lands instead of sleeping through a fixed slice.
+        // A framed transport (WS/WSS) reports EAGAIN on every flush wait; not
+        // every such release is posted as a socket command, so keep the
+        // slice at 1 ms and let a command that does land cut it short.
+        int wait_ms = 1;
+        if (!infinite) {
+            const long long remaining_ms =
+              std::chrono::duration_cast<std::chrono::milliseconds> (
+                deadline - now)
+                .count ();
+            if (remaining_ms < wait_ms)
+                wait_ms = remaining_ms > 0 ? static_cast<int> (remaining_ms)
+                                           : 1;
+        }
+        if (socket_->wait_submit_progress (wait_ms) != 0)
+            return -1;
     }
 }
 

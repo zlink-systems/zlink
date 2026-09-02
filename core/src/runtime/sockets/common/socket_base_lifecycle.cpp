@@ -322,6 +322,11 @@ int zlink::socket_base_t::process_submit_commands ()
     return process_commands (0, true, true);
 }
 
+int zlink::socket_base_t::wait_submit_progress (int timeout_ms_)
+{
+    return process_commands (timeout_ms_ < 0 ? 0 : timeout_ms_, false);
+}
+
 #ifdef ZLINK_BUILD_TESTS
 void zlink::socket_base_t::test_receive_owner_snapshot (
   uint64_t *progress_epoch_out_, uint64_t *public_mailbox_drains_out_,
@@ -618,6 +623,13 @@ bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
         // release the old receive lease before making the detached state
         // observable to that acquire.
         receive_runtime ().release_receive_sync_from_async_owner ();
+        //  This executor consumed the primary notification descriptor while
+        //  it drained the commands that led here (for example the
+        //  activate_read of the first message after a monitor closed). The
+        //  drain loop re-arms that descriptor only when it keeps running, so
+        //  do it here as well, or a public poller sleeps through input this
+        //  temporary owner already applied.
+        mailbox->rearm_primary_signaler ();
         stopped = true;
     }
     if (stopped)

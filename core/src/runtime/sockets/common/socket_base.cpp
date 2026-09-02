@@ -457,6 +457,33 @@ int zlink::socket_base_t::xsend_routed (const zlink_routing_id_t *target_rid_,
     return -1;
 }
 
+int zlink::socket_base_t::xselect_routed_submit_pipe (pipe_t **pipe_out_,
+                                                      bool request_only_)
+{
+    LIBZLINK_UNUSED (request_only_);
+    if (pipe_out_)
+        *pipe_out_ = NULL;
+    errno = ENOTSUP;
+    return -1;
+}
+
+int zlink::socket_base_t::xsend_selected_pipe (
+  pipe_t *pipe_, msg_t *msg_, int flags_, bool request_only_,
+  pipe_message_admission_t *admission_out_, pipe_write_observer_fn observer_,
+  void *observer_userdata_)
+{
+    LIBZLINK_UNUSED (pipe_);
+    LIBZLINK_UNUSED (msg_);
+    LIBZLINK_UNUSED (flags_);
+    LIBZLINK_UNUSED (request_only_);
+    LIBZLINK_UNUSED (observer_);
+    LIBZLINK_UNUSED (observer_userdata_);
+    if (admission_out_)
+        *admission_out_ = pipe_message_admission_invalid;
+    errno = ENOTSUP;
+    return -1;
+}
+
 int zlink::socket_base_t::xsend_configured_endpoint (
   const std::string &endpoint_, msg_t *msg_, int flags_, bool request_only_,
   pipe_t **pipe_out_, pipe_message_admission_t *admission_out_,

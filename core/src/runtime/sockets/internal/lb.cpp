@@ -225,9 +225,11 @@ int zlink::lb_t::select_connected_pipe (pipe_t **pipe_out_,
     }
     *pipe_out_ = NULL;
 
-    std::vector<candidate_t> connected;
+    std::vector<candidate_t> &connected = _select_scratch;
+    connected.clear ();
     bool has_positive_weight = false;
-    connected.reserve (_pipes.size ());
+    if (connected.capacity () < _pipes.size ())
+        connected.reserve (_pipes.size ());
     for (pipes_t::size_type i = 0; i < _pipes.size (); ++i) {
         entries_t::iterator entry = _entries.find (_pipes[i]);
         if (entry == _entries.end () || entry->second.weight == 0)

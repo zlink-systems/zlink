@@ -366,10 +366,18 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
             //  balancer's multipart pipe. Continue through ordinary xsend so
             //  the whole record remains one gated sequence.
             const bool routed_start = has_target_ && i == 0;
+            const bool selected_pipe_start =
+              i == 0 && target_.selected_pipe != NULL;
             const bool configured_endpoint_start =
-              i == 0 && !target_.logical_endpoint.empty ();
+              i == 0 && !selected_pipe_start
+              && !target_.logical_endpoint.empty ();
             const bool observe_commit = observer_ && i + 1 == count;
-            const int rc = configured_endpoint_start
+            const int rc = selected_pipe_start
+              ? xsend_selected_pipe (
+                  target_.selected_pipe, msg, flags, request_admission_,
+                  NULL, observe_commit ? observer_ : NULL,
+                  observe_commit ? observer_userdata_ : NULL)
+              : configured_endpoint_start
               ? xsend_configured_endpoint (
                   target_.logical_endpoint, msg, flags, request_admission_,
                   attempted_pipe_out_, NULL,

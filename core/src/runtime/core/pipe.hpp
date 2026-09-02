@@ -524,6 +524,12 @@ class pipe_t ZLINK_FINAL : public object_t,
     void set_transport_lane_count (unsigned char lane_count_);
     transport_lane_t get_transport_lane () const;
     unsigned char get_transport_lane_count () const;
+    //  Socket-published mirror of "this pipe is the Application lane of a
+    //  ready transport pair". Written by the socket under its pair-table
+    //  mutex at admission and detach; read lock-free on the send/recv hot
+    //  path so per-message routing does not take that mutex.
+    void set_transport_pair_application_ready (bool ready_);
+    bool transport_pair_application_ready_cached () const;
     bool uses_registry_accounting () const;
     uint64_t get_transport_pair_id () const;
     uint64_t get_transport_pair_generation () const;
@@ -829,6 +835,11 @@ class pipe_t ZLINK_FINAL : public object_t,
     std::shared_ptr<physical_queue_record_t> _out_physical_queue;
     transport_lane_t _transport_lane;
     std::atomic<unsigned char> _transport_lane_count;
+    std::atomic<bool> _transport_pair_application_ready;
+    //  Lock-free mirror of `_state == active`. `_state` only ever leaves
+    //  `active`, so every transition clears this flag under `_out_sync` and
+    //  readers never need that lock.
+    std::atomic<bool> _state_active;
     const bool _registry_accounting;
     uint64_t _transport_pair_id;
     uint64_t _transport_pair_generation;

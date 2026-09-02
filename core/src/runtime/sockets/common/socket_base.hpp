@@ -507,6 +507,11 @@ class socket_base_t : public own_t,
     //  across the direct transport operation with no later public call to make
     //  progress. An empty mailbox keeps the normal hot-path throttle.
     int process_submit_commands ();
+    //  Park on the socket mailbox for at most timeout_ms_ (or until a command
+    //  such as activate_write / pair-ready lands), then drain it. The bounded
+    //  wait primitive for public submit paths that must retry without
+    //  sleeping through a fixed slice.
+    int wait_submit_progress (int timeout_ms_);
     int close ();
     int close (int handoff_timeout_ms_);
     // Reserve close before the public wrapper tears down request state.
@@ -828,6 +833,18 @@ class socket_base_t : public own_t,
                               routed_send_attempt_identity_t
                                 *attempt_identity_out_ = NULL,
                               uint64_t expected_route_incarnation_id_ = 0);
+    //  Hot-path pair for the single-part blocking send: pick the pipe the
+    //  load balancer would commit to, then admit one frame to exactly that
+    //  pipe. Both run under one send scope, so the pointer never outlives
+    //  the scope that observed it. Sockets without configured-endpoint
+    //  routing report ENOTSUP and the caller uses the general path.
+    virtual int xselect_routed_submit_pipe (pipe_t **pipe_out_,
+                                            bool request_only_);
+    virtual int xsend_selected_pipe (pipe_t *pipe_, msg_t *msg_, int flags_,
+                                     bool request_only_,
+                                     pipe_message_admission_t *admission_out_,
+                                     pipe_write_observer_fn observer_,
+                                     void *observer_userdata_);
     virtual int xsend_configured_endpoint (
       const std::string &endpoint_, zlink::msg_t *msg_, int flags_,
       bool request_only_,
@@ -1341,7 +1358,7 @@ class socket_base_t : public own_t,
     accepted_transport_pairs_t _accepted_transport_pairs;
     std::deque<transport_pair_key_t> _ready_completion_pairs;
     std::set<transport_pair_key_t> _ready_completion_pair_set;
-    bool _public_part_receive_delivery_hold_active;
+    std::atomic<bool> _public_part_receive_delivery_hold_active;
     pipe_t *_public_part_receive_delivery_hold_pipe;
     transport_pair_key_t _public_part_receive_delivery_hold_key;
     //  Socket-wide local receive-flow state, guarded by _transport_pairs_sync

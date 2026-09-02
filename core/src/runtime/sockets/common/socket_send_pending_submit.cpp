@@ -6,6 +6,8 @@
 
 #include "utils/precompiled.hpp"
 
+#include "core/c_api_copy_internal.hpp"
+
 #include "core/pipe.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "utils/err.hpp"
@@ -223,7 +225,52 @@ int zlink::socket_base_t::send_completion_submit_blocking (
         return 0;
     };
 
+    bool fast_selected = false;
     if (type == ZLINK_CORE_SOCKET_DEALER) {
+        //  Blocking-send fast path: select the pipe and admit the whole
+        //  record to it under one scope, the way a plain DEALER send always
+        //  did. Success returns without endpoint strings, attached-pipe
+        //  snapshots or the pending machinery. A retryable refusal commits
+        //  this selection to the configured-endpoint wait loop below (the
+        //  same pipe, now addressed by its endpoint); any other failure is
+        //  final, with the errno the general attempt would have produced.
+        socket_public_send_scope_t fast_scope (
+          lifecycle_coordinator (), true, socket_send_admission_complete);
+        if (!fast_scope.acquired ())
+            return -1;
+        if (process_commands (0, true) != 0)
+            return -1;
+        pipe_t *selected = NULL;
+        if (xselect_routed_submit_pipe (&selected, false) == 0 && selected) {
+            routed_send_target_key_t fast_target;
+            fast_target.selected_pipe = selected;
+            if (try_admit_send_parts_scoped (parts_, part_count_, fast_target,
+                                             false, fast_scope, NULL, true,
+                                             NULL, NULL, false)
+                == 0)
+                return 0;
+            const int fast_errno = errno;
+            if (!retryable_logical_send_errno (fast_errno)) {
+                errno = fast_errno;
+                return -1;
+            }
+            //  Commit the selection while the scope still pins the pipe.
+            try {
+                logical_endpoint =
+                  selected->get_endpoint_pair ().identifier ();
+                const blob_t &rid = selected->get_routing_id ();
+                target = routed_send_target_key_t (
+                  rid.data (), rid.size (), 0, 0, 0, logical_endpoint);
+            } catch (...) {
+                errno = ENOMEM;
+                return -1;
+            }
+            fast_selected = !logical_endpoint.empty ();
+        }
+        fast_scope.unlock_sync ();
+    }
+
+    if (type == ZLINK_CORE_SOCKET_DEALER && !fast_selected) {
         // Selection is committed once, at FINAL.  A never-handshaken endpoint
         // may become eligible during the same entry budget; after selection,
         // retries use only its configured endpoint.
@@ -418,7 +465,49 @@ int zlink::socket_base_t::request_admission_submit_blocking (
     std::string logical_endpoint;
     int timeout = options.sndtimeo;
     const uint64_t end = timeout < 0 ? 0 : _clock.now_ms () + timeout;
-    while (true) {
+    bool fast_selected = false;
+    if (options.type == ZLINK_CORE_SOCKET_DEALER && !target_rid_or_null_) {
+        //  Same fast path as the blocking send: select the ROUTER-peer pipe
+        //  and admit the request record to it under one scope. Backpressure
+        //  commits this selection to the configured-endpoint retry loop
+        //  below; every other refusal is final, as in the general attempt.
+        socket_public_send_scope_t fast_scope (
+          lifecycle_coordinator (), true, socket_send_admission_complete);
+        if (!fast_scope.acquired ())
+            return -1;
+        if (process_commands (0, true) != 0)
+            return -1;
+        pipe_t *selected = NULL;
+        if (xselect_routed_submit_pipe (&selected, true) == 0 && selected) {
+            routed_send_target_key_t fast_target;
+            fast_target.selected_pipe = selected;
+            const int rc = try_admit_send_parts_scoped (
+              parts_, part_count_, fast_target, false, fast_scope, NULL,
+              true, admission_observer_, admission_observer_userdata_, true);
+            if (rc == 0) {
+                errno = 0;
+                return 0;
+            }
+            const int fast_errno = errno;
+            if (fast_errno != EAGAIN) {
+                errno = fast_errno;
+                return -1;
+            }
+            try {
+                logical_endpoint =
+                  selected->get_endpoint_pair ().identifier ();
+                const blob_t &rid = selected->get_routing_id ();
+                copy_routing_id_from_bytes (rid.data (), rid.size (),
+                                            &resolved.peer_rid);
+            } catch (...) {
+                errno = ENOMEM;
+                return -1;
+            }
+            fast_selected = !logical_endpoint.empty ();
+        }
+        fast_scope.unlock_sync ();
+    }
+    while (!fast_selected) {
         int selection_errno = 0;
         {
             socket_public_send_scope_t selection_scope (

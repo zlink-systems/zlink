@@ -387,6 +387,8 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
                     reject_pipes[2] = pair.completion;
                 } else {
                     pair.ready = true;
+                    pair.application->set_transport_pair_application_ready (
+                      true);
                     ready_application = pair.application;
                     ready_completion = pair.completion_source ();
                     // The Application lane is not a socket-visible route
@@ -1163,6 +1165,12 @@ void zlink::socket_base_t::bind_public_part_receive_delivery_hold (
 void zlink::socket_base_t::end_public_part_receive_delivery_hold (
   bool receive_sync_held_)
 {
+    //  Steady-state receives never hold; skip both locks unless a hold was
+    //  published. The flag is only set by this socket's own request/reply
+    //  path, so an unlocked read cannot miss a hold that must be released.
+    if (!_public_part_receive_delivery_hold_active.load (
+          std::memory_order_acquire))
+        return;
     receive_runtime_t &receive = receive_runtime ();
     const auto release = [&] () {
         pipe_t *held_pipe = NULL;
@@ -1631,6 +1639,9 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
             // detach ends it immediately; retaining the surviving sibling only
             // keeps teardown/lifetime state, never a usable ready pair.
             pair_it->second.ready = false;
+            if (pair_it->second.application)
+                pair_it->second.application
+                  ->set_transport_pair_application_ready (false);
             pair_it->second.draining = false;
             _ready_completion_pair_set.erase (transport_pair_key_t (
               pair_id, pipe_->get_transport_pair_generation ()));
@@ -1984,17 +1995,12 @@ void zlink::socket_base_t::cache_completion_pipe_routing_id (
 bool zlink::socket_base_t::transport_pair_application_ready (
   const pipe_t *pipe_) const
 {
-    if (!pipe_ || pipe_->get_transport_lane () != transport_lane_application
-        || pipe_->get_transport_pair_id () == 0
-        || pipe_->get_transport_pair_generation () == 0)
-        return false;
-
-    const transport_pair_key_t key (pipe_->get_transport_pair_id (),
-                                    pipe_->get_transport_pair_generation ());
-    scoped_lock_t lock (_transport_pairs_sync);
-    const transport_pairs_t::const_iterator it = _transport_pairs.find (key);
-    return it != _transport_pairs.end () && it->second.ready
-           && it->second.application == pipe_;
+    //  The pair table publishes this bit into the Application pipe at
+    //  admission and clears it on the first physical detach (see
+    //  `set_transport_pair_application_ready`), so the per-message send and
+    //  receive paths read it without the table mutex.
+    return pipe_ && pipe_->get_transport_lane () == transport_lane_application
+           && pipe_->transport_pair_application_ready_cached ();
 }
 
 int zlink::socket_base_t::socket_id () const

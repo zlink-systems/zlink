@@ -63,6 +63,13 @@ class dealer_t : public socket_base_t
                         *attempt_identity_out_ = NULL,
                       uint64_t expected_route_incarnation_id_ = 0)
       ZLINK_OVERRIDE;
+    int xselect_routed_submit_pipe (pipe_t **pipe_out_,
+                                    bool request_only_) ZLINK_OVERRIDE;
+    int xsend_selected_pipe (pipe_t *pipe_, msg_t *msg_, int flags_,
+                             bool request_only_,
+                             pipe_message_admission_t *admission_out_,
+                             pipe_write_observer_fn observer_,
+                             void *observer_userdata_) ZLINK_OVERRIDE;
     int xsend_configured_endpoint (
       const std::string &endpoint_, zlink::msg_t *msg_, int flags_,
       bool request_only_,
