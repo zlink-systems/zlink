@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail a C perf comparison when any reported cell regresses by more than 5%."""
+"""Gate C perf reports on per-cell limits and four-size geometric means."""
 
 from __future__ import annotations
 
@@ -15,9 +15,18 @@ from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 RUNNER_PATH = SCRIPT_DIR / "run_comparison.py"
 CellKey = Tuple[str, str, int, str]
+AggregateKey = Tuple[str, str, str, str]
 
 HIGHER_IS_BETTER = {"throughput", "bandwidth"}
 LATENCY_PREFIX = "latency"
+REQUIRED_SIZES = (64, 256, 1024, 65536)
+SUPPORTED_METRICS = (
+    "throughput",
+    "bandwidth",
+    "latency",
+    "latency_p95",
+    "latency_p99",
+)
 
 
 def _load_report_parser():
@@ -52,6 +61,18 @@ class CellVerdict:
     baseline: float | None
     candidate: float | None
     ratio: float | None
+    rule: str
+    status: str
+
+
+@dataclass
+class AggregateVerdict:
+    suite: str
+    pattern: str
+    transport: str
+    metric: str
+    ratios: Dict[int, float | None]
+    geometric_mean: float | None
     rule: str
     status: str
 
@@ -179,6 +200,87 @@ def compare_reports(
     return verdicts
 
 
+def compare_aggregates(verdicts: Sequence[CellVerdict]) -> List[AggregateVerdict]:
+    """Aggregate the four required size ratios by geometric mean."""
+    cell_groups: Dict[AggregateKey, Dict[int, CellVerdict]] = {}
+    pattern_transports = {
+        (verdict.suite, verdict.key[0], verdict.key[1]) for verdict in verdicts
+    }
+    for suite, pattern, transport in pattern_transports:
+        for metric in SUPPORTED_METRICS:
+            cell_groups[(suite, pattern, transport, metric)] = {}
+
+    for verdict in verdicts:
+        pattern, transport, msg_size, metric = verdict.key
+        if msg_size in REQUIRED_SIZES:
+            cell_groups.setdefault(
+                (verdict.suite, pattern, transport, metric), {}
+            )[msg_size] = verdict
+
+    aggregates: List[AggregateVerdict] = []
+    for (suite, pattern, transport, metric), cells in sorted(cell_groups.items()):
+        ratios = {
+            size: cells[size].ratio if size in cells else None
+            for size in REQUIRED_SIZES
+        }
+        missing_sizes = [size for size in REQUIRED_SIZES if size not in cells]
+        unavailable_sizes = [
+            size
+            for size in REQUIRED_SIZES
+            if size in cells
+            and (
+                cells[size].ratio is None
+                or not math.isfinite(cells[size].ratio)
+                or cells[size].ratio < 0
+            )
+        ]
+        geometric_mean = None
+        rule = (
+            "geomean(candidate/baseline) >= 1.0"
+            if metric in HIGHER_IS_BETTER
+            else "geomean(candidate/baseline) <= 1.0"
+        )
+
+        if missing_sizes:
+            status = "FAIL missing sizes=" + ",".join(map(str, missing_sizes))
+        elif unavailable_sizes:
+            status = "FAIL unavailable ratios sizes=" + ",".join(
+                map(str, unavailable_sizes)
+            )
+        else:
+            values = [ratios[size] for size in REQUIRED_SIZES]
+            assert all(value is not None for value in values)
+            numeric_values = [float(value) for value in values if value is not None]
+            geometric_mean = (
+                0.0
+                if any(value == 0 for value in numeric_values)
+                else math.exp(
+                    sum(math.log(value) for value in numeric_values)
+                    / len(numeric_values)
+                )
+            )
+            passes = (
+                geometric_mean >= 1.0
+                if metric in HIGHER_IS_BETTER
+                else geometric_mean <= 1.0
+            )
+            status = "PASS" if passes else "FAIL aggregate-regression"
+
+        aggregates.append(
+            AggregateVerdict(
+                suite,
+                pattern,
+                transport,
+                metric,
+                ratios,
+                geometric_mean,
+                rule,
+                status,
+            )
+        )
+    return aggregates
+
+
 def report_errors(label: str, report: ParsedReport) -> Iterable[str]:
     for key in report.duplicate_cells:
         yield f"{label}: duplicate cell {format_key(key)}"
@@ -208,14 +310,51 @@ def print_verdicts(verdicts: Sequence[CellVerdict]) -> None:
         )
 
 
+def print_aggregates(verdicts: Sequence[AggregateVerdict]) -> None:
+    print("\nAggregate verdicts (geometric mean of ratios for sizes 64, 256, 1024, 65536):")
+    print(
+        "| Suite | Pattern | Transport | Metric | 64 Ratio | 256 Ratio | "
+        "1024 Ratio | 65536 Ratio | Geomean | Rule | Status |"
+    )
+    print("|---|---|---|---|---:|---:|---:|---:|---:|---|---|")
+    for verdict in verdicts:
+        ratio_columns = " | ".join(
+            "-" if verdict.ratios[size] is None else f"{verdict.ratios[size]:.4f}"
+            for size in REQUIRED_SIZES
+        )
+        geometric_mean = (
+            "-" if verdict.geometric_mean is None else f"{verdict.geometric_mean:.4f}"
+        )
+        print(
+            f"| {verdict.suite} | {verdict.pattern} | {verdict.transport} | "
+            f"{verdict.metric} | {ratio_columns} | {geometric_mean} | "
+            f"{verdict.rule} | {verdict.status} |"
+        )
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Compare C single/multi perf reports cell-by-cell with a 5%% gate."
+        description=(
+            "Compare C single/multi perf reports with per-cell 5% limits and "
+            "four-size aggregate limits. Aggregate ratios use the geometric mean."
+        ),
+        epilog=(
+            "Each report option is repeatable. Aggregates require sizes "
+            "64,256,1024,65536 for every pattern/transport and metric."
+        ),
     )
-    parser.add_argument("--baseline-single", type=pathlib.Path)
-    parser.add_argument("--candidate-single", type=pathlib.Path)
-    parser.add_argument("--baseline-multi", type=pathlib.Path)
-    parser.add_argument("--candidate-multi", type=pathlib.Path)
+    parser.add_argument(
+        "--baseline-single", type=pathlib.Path, action="append", metavar="REPORT"
+    )
+    parser.add_argument(
+        "--candidate-single", type=pathlib.Path, action="append", metavar="REPORT"
+    )
+    parser.add_argument(
+        "--baseline-multi", type=pathlib.Path, action="append", metavar="REPORT"
+    )
+    parser.add_argument(
+        "--candidate-multi", type=pathlib.Path, action="append", metavar="REPORT"
+    )
     args = parser.parse_args(argv)
     pairs = ((args.baseline_single, args.candidate_single), (args.baseline_multi, args.candidate_multi))
     if not any(left is not None for pair in pairs for left in pair):
@@ -226,32 +365,69 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def load_reports(
+    label: str, paths: Sequence[pathlib.Path]
+) -> Tuple[ParsedReport, List[str]]:
+    """Parse and merge repeated report inputs, rejecting overlapping cells."""
+    combined = ParsedReport(path=paths[0])
+    errors: List[str] = []
+    sources: Dict[CellKey, pathlib.Path] = {}
+    for path in paths:
+        report = parse_report(path)
+        errors.extend(report_errors(label, report))
+        for key, value in report.cells.items():
+            if key in combined.cells:
+                errors.append(
+                    f"{label}: duplicate cell {format_key(key)} across reports "
+                    f"({sources[key]}, {path})"
+                )
+                continue
+            combined.cells[key] = value
+            sources[key] = path
+    return combined, errors
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     all_verdicts: List[CellVerdict] = []
     errors: List[str] = []
-    for suite, baseline_path, candidate_path in (
+    for suite, baseline_paths, candidate_paths in (
         ("single", args.baseline_single, args.candidate_single),
         ("multi", args.baseline_multi, args.candidate_multi),
     ):
-        if baseline_path is None:
+        if baseline_paths is None:
             continue
-        baseline = parse_report(baseline_path)
-        candidate = parse_report(candidate_path)
-        errors.extend(report_errors(f"{suite} baseline", baseline))
-        errors.extend(report_errors(f"{suite} candidate", candidate))
+        baseline, baseline_errors = load_reports(
+            f"{suite} baseline", baseline_paths
+        )
+        candidate, candidate_errors = load_reports(
+            f"{suite} candidate", candidate_paths
+        )
+        errors.extend(baseline_errors)
+        errors.extend(candidate_errors)
         all_verdicts.extend(compare_reports(suite, baseline, candidate))
 
+    aggregate_verdicts = compare_aggregates(all_verdicts)
     if all_verdicts:
         print_verdicts(all_verdicts)
+    if aggregate_verdicts:
+        print_aggregates(aggregate_verdicts)
     if errors:
         print("\nReport errors:")
         for error in errors:
             print(f"- {error}")
 
     failed_cells = sum(not verdict.status.startswith("PASS") for verdict in all_verdicts)
-    failed = bool(errors or failed_cells)
-    print(f"\nFinal: {'FAIL' if failed else 'PASS'} (cells={len(all_verdicts)}, failed_cells={failed_cells}, report_errors={len(errors)})")
+    failed_aggregates = sum(
+        not verdict.status.startswith("PASS") for verdict in aggregate_verdicts
+    )
+    failed = bool(errors or failed_cells or failed_aggregates)
+    print(
+        f"\nFinal: {'FAIL' if failed else 'PASS'} "
+        f"(cells={len(all_verdicts)}, failed_cells={failed_cells}, "
+        f"aggregates={len(aggregate_verdicts)}, "
+        f"failed_aggregates={failed_aggregates}, report_errors={len(errors)})"
+    )
     return 1 if failed else 0
 
 
