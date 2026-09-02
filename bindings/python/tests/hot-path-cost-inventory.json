@@ -14,10 +14,10 @@
       "guard_test": "test_raw_hot_path_keeps_gil_release_and_part_failure_cleanup"
     },
     {
-      "path": "src/zlink/_runtime/eventing/dispatcher.py:CallbackDispatcher",
-      "owner": "Callback dispatcher lifecycle and callback thread boundary",
+      "path": "src/zlink/_runtime/messaging/routed_async.py:CompletionOwner",
+      "owner": "Socket-local completion registry and drain ownership",
       "cost_class": "lock",
-      "guard_test": "test_raw_runtime_does_not_use_dynamic_ffi_or_service_fallbacks"
+      "guard_test": "test_raw_hot_path_keeps_gil_release_and_part_failure_cleanup"
     },
     {
       "path": "src/zlink/_native/_zlink_native.c:Py_BEGIN_ALLOW_THREADS",

@@ -12,9 +12,9 @@ def respond(router_socket):
     with received:
         if received.routing_id != zlink.RoutingId(b"REQ-CLIENT"):
             raise AssertionError("unexpected request routing id")
-        if received.request_seq is None:
-            raise AssertionError("missing request sequence")
-        router_socket.reply(received.routing_id, received.request_seq).message(
+        if received.reply_token is None:
+            raise AssertionError("missing reply token")
+        router_socket.reply(received.routing_id, received.reply_token).message(
             b"pong"
         ).submit()
 

@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MPL-2.0
 
-from typing import Protocol, runtime_checkable
+from typing import Optional, Protocol, runtime_checkable
 
+from ..sockets.codes import RecvFlags
 from .codes import MonitorEventMask
 
 
@@ -111,9 +112,7 @@ class MonitorEvent:
     generation, per ``MonitorEventFlag``); ``routing_id`` is the peer routing
     id when the event carries one; ``local_addr``/``remote_addr`` are the
     endpoint addresses; ``connection_id`` is the process-local identity of
-    the physical transport attempt; ``transport_pair_id`` is non-zero for a
-    paired Application/Completion transport and ``transport_pair_generation``
-    is that pair's generation (zero for an unpaired transport);
+    the physical transport attempt;
     ``transport_lane`` is one of the application/completion lane values; and
     ``flags`` carries event-specific bits (``MonitorEventFlag``) such as
     whether a resumed pipe is actually writable, or which part of a stale
@@ -129,8 +128,6 @@ class MonitorEvent:
         local_addr,
         remote_addr,
         connection_id,
-        transport_pair_id,
-        transport_pair_generation,
         transport_lane,
         flags,
     ):
@@ -140,16 +137,12 @@ class MonitorEvent:
         self.local_addr = local_addr
         self.remote_addr = remote_addr
         self.connection_id = connection_id
-        self.transport_pair_id = transport_pair_id
-        self.transport_pair_generation = transport_pair_generation
         self.transport_lane = transport_lane
         self.flags = flags
 
 @runtime_checkable
 class MonitorSocket(Protocol):
     """Observes a socket's connection lifecycle events and current status."""
-
-    ignore_handler = staticmethod(lambda event: None)
 
     def status(self):
         """Return a :class:`MonitorStatus` snapshot of the monitored socket."""
@@ -159,14 +152,11 @@ class MonitorSocket(Protocol):
         """Close the monitor and release its resources."""
         ...
 
-    def recv(self, *, flags=0):
+    def recv(
+        self, *, flags: RecvFlags = RecvFlags.NONE
+    ) -> Optional[MonitorEvent]:
         """Receive the next monitor event, or ``None`` when ``DONT_WAIT`` is set
         and none is available."""
-        ...
-
-    def on_event(self, handler):
-        """Register ``handler``, invoked for each monitor event on a background
-        dispatch thread."""
         ...
 
     def __enter__(self): ...

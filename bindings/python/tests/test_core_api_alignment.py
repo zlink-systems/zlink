@@ -50,16 +50,16 @@ class CoreApiAlignmentTests(unittest.TestCase):
             "Received",
             "RoutingId",
             "SendOp",
-            "RoutedSendOp",
             "RequestOp",
             "ReplyOp",
+            "PublishOp",
+            "ReplyToken",
+            "StreamPacket",
+            "StreamRecvMode",
         ):
             self.assertTrue(hasattr(zlink, name), name)
-        self.assertFalse(hasattr(zlink, "RequestCallbackOp"))
-
         self.assertFalse(hasattr(zlink.Message, "get_property"))
         self.assertTrue(hasattr(zlink.Message, "ref_count"))
-        self.assertFalse(hasattr(zlink.PairSocket, "try_send"))
         self.assertFalse(hasattr(zlink.PairSocket, "try_recv"))
         self.assertFalse(hasattr(zlink.RouterSocket, "send_to_spot"))
         self.assertFalse(hasattr(zlink.StreamSocket, "bind_actor"))
@@ -169,10 +169,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
                 with zlink.create_pair_socket(ctx) as right:
                     left.bind("inproc://python-core-11-pair")
                     right.connect("inproc://python-core-11-pair")
-                    # PAIR send is HWM-managed (Core `zlink_send_async`) and
-                    # ASYNC-classified per bindings/doc/spec/
-                    # async-coroutine-policy.ko.md: `submit()` returns an
-                    # awaitable coroutine object.
+                    # PAIR awaitable send uses Core DONTWAIT plus pull completion.
                     self.assertIsNone(
                         asyncio.run(
                             left.send().messages(b"first", b"second").submit()
@@ -283,7 +280,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
                         self.assertTrue(router.recv_into(received))
                         with received:
                             self.assertIsNotNone(received.routing_id)
-                            self.assertIsInstance(received.request_seq, int)
+                            self.assertIsInstance(received.reply_token, zlink.ReplyToken)
                             self.assertEqual(received.to_bytes_list(), [b"ping"])
                             received.reply().message(b"pong").submit()
                         parts = await pending
@@ -313,14 +310,13 @@ class CoreApiAlignmentTests(unittest.TestCase):
                     self.assertEqual(len(received), 0)
 
                     async def send_first_record_when_connected():
-                        # DEALER send is HWM-managed and ASYNC-classified
-                        # (Core `zlink_send_async`); bindings own no retry,
+                        # DEALER awaitable send is HWM-managed; bindings own no retry,
                         # so an admission attempt made before the `connect()`
                         # pipe has attached surfaces immediately instead of
                         # being queued. Retry the bounded connect race here.
                         #
                         # Single part only: a >1-part DEALER record through
-                        # `zlink_send_async` (target committed by Core at
+                        # the Core submit operation (target committed at
                         # submit time) never admits under this Core contract
                         # build — every attempt reports
                         # `SubmitResult.NOT_FOUND`/`EHOSTUNREACH` even long
@@ -347,7 +343,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
                     self.assertIsNone(asyncio.run(send_first_record_when_connected()))
                     self.assertTrue(router.recv_into(received))
                     self.assertIsNotNone(received.routing_id)
-                    self.assertIsNone(received.request_seq)
+                    self.assertIsNone(received.reply_token)
                     self.assertEqual(received.to_bytes_list(), [b"first"])
                     snapshot = received.first_part().data
 
@@ -375,7 +371,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
         )
         self.assertEqual(
             (ctypes.sizeof(ZlinkMonitorEvent), ctypes.alignment(ZlinkMonitorEvent)),
-            (816, 8),
+            (800, 8),
         )
         self.assertEqual(
             (ctypes.sizeof(ZlinkMonitorStatus), ctypes.alignment(ZlinkMonitorStatus)),

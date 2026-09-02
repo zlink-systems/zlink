@@ -97,7 +97,7 @@ def run_reqrep_server(argv, *, endpoint_token, routed_server):
                                     )
                                 if (
                                     request.routing_id is None
-                                    or request.request_seq is None
+                                    or request.reply_token is None
                                 ):
                                     raise RuntimeError(
                                         "request is missing routing correlation metadata"

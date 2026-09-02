@@ -4,10 +4,10 @@ import ctypes
 
 from ...contracts.core.options import AutoHwmRecalcReason
 from ...contracts.errors.codes import CloseResult, ConfigResult
-from ...contracts.errors.errors import CloseError, ConfigError, HandlerError, RecvError
+from ...contracts.errors.errors import CloseError, ConfigError, RecvError
 from ...contracts.eventing.codes import MonitorEventMask
 from ...contracts.eventing.monitor import MonitorEvent, MonitorStatus
-from ...contracts.sockets.codes import HandlerResult, RecvResult
+from ...contracts.sockets.codes import RecvResult
 from ..._native.ffi import (
     ZlinkMonitorEvent,
     ZlinkMonitorStatus,
@@ -15,14 +15,11 @@ from ..._native.ffi import (
     lib,
 )
 from ..buffers.payload_buffers import _validated_uint64
-from ..eventing.dispatcher import CallbackDispatcher
 from ..handles.native_support import (
     _raise_last_error,
     _raise_result_error,
-    _report_unhandled_callback_exception,
     _routing_id_bytes,
 )
-from ..sockets.socket_base import _enter_callback, _leave_callback
 
 
 def _decode_fixed(buf):
@@ -74,21 +71,9 @@ def _monitor_status_from_native(snapshot):
     )
 
 
-_SOCKET_MONITOR_HANDLER = ctypes.CFUNCTYPE(
-    None, ctypes.POINTER(ZlinkMonitorEvent), ctypes.c_void_p
-)
-
-
 class NativeMonitorSocket:
-    ignore_handler = staticmethod(lambda event: None)
-
     def __init__(self, handle):
         self._handle = handle
-        self._handler = None
-        self._handler_cb = None
-        self._dispatcher = CallbackDispatcher(
-            "zlink-monitor-dispatch", _enter_callback, _leave_callback
-        )
         if not self._handle:
             _raise_last_error()
 
@@ -101,43 +86,9 @@ class NativeMonitorSocket:
             local_addr=_decode_fixed(native.local_addr),
             remote_addr=_decode_fixed(native.remote_addr),
             connection_id=int(native.connection_id),
-            transport_pair_id=int(native.transport_pair_id),
-            transport_pair_generation=int(native.transport_pair_generation),
             transport_lane=int(native.transport_lane),
             flags=int(native.flags),
         )
-
-    def _start_event_dispatch(self, handler):
-        if handler is None:
-            raise ValueError("handler must not be None")
-        if self._handler is not None:
-            raise RuntimeError("handler is already attached")
-
-        self._handler = handler
-        dispatcher = self._dispatcher
-        decode = self._decode_event
-        register = lib().zlink_socket_monitor_handler
-
-        def _invoke(event):
-            try:
-                handler(event)
-            except Exception:
-                _report_unhandled_callback_exception(handler)
-
-        def _callback(event_ptr, _):
-            try:
-                event = decode(event_ptr.contents)
-            except Exception:
-                _report_unhandled_callback_exception(handler)
-                return
-            dispatcher.submit(lambda event=event: _invoke(event))
-
-        callback = _SOCKET_MONITOR_HANDLER(_callback)
-        rc = register(self._handle, callback, None)
-        if rc != 0:
-            self._handler = None
-            _raise_result_error(HandlerError, HandlerResult, rc, lib().zlink_errno())
-        self._handler_cb = callback
 
     def status(self):
         snapshot = ZlinkMonitorStatus()
@@ -154,9 +105,6 @@ class NativeMonitorSocket:
         if rc != 0:
             _raise_result_error(CloseError, CloseResult, rc, lib().zlink_errno())
         self._handle = None
-        self._handler = None
-        self._handler_cb = None
-        self._dispatcher.close()
 
     def recv(self, *, flags=0):
         native = ZlinkMonitorEvent()
@@ -166,9 +114,6 @@ class NativeMonitorSocket:
         if rc != 0:
             _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
         return self._decode_event(native)
-
-    def on_event(self, handler):
-        self._start_event_dispatch(handler)
 
     def __enter__(self):
         return self

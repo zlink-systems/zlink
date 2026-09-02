@@ -25,10 +25,8 @@ async def main(argv=None):
     args = parse_server_args(argv or sys.argv[1:])
     endpoint = benchmark_endpoint(args.transport, "multi-router-router")
     stop = threading.Event()
-    # ROUTER routed send is HWM-managed and ASYNC-classified (Core
-    # `zlink_send_async`, bindings/doc/spec/async-coroutine-policy.ko.md):
-    # `submit()` returns an awaitable completed by Core's send-completion
-    # notification. The binding owns no retry queue or POLLOUT
+    # ROUTER routed send is HWM-managed: `submit()` returns an awaitable
+    # completed by Core pull completion. The binding owns no retry queue or POLLOUT
     # readiness-hint (`send_ready` semantics is abolished), so each reply is
     # a fire-and-forget task instead of a manually-queued DONTWAIT retry
     # driven by POLLOUT.

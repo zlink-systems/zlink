@@ -76,16 +76,12 @@ def wait_until(predicate, timeout_ms=5000, description="condition"):
 
 
 def submit_request_op(op, *, timeout=2, description="request"):
-    replies = []
-
-    def on_reply(result, messages):
-        replies.append((result, [message.to_bytes() for message in messages]))
+    try:
+        messages = op.timeout(timeout).submit_sync()
+    except zlink.RequestError as error:
+        raise RuntimeError(f"{description} failed: {error.result!r}") from error
+    try:
+        return [message.to_bytes() for message in messages]
+    finally:
         for message in messages:
             message.close()
-
-    op.timeout(timeout).submit(on_reply)
-    wait_until(lambda: replies, timeout_ms=int(timeout * 1000), description=description)
-    result, messages = replies[0]
-    if result != zlink.RequestResult.OK:
-        raise RuntimeError(f"{description} failed: {result!r}")
-    return messages

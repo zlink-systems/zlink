@@ -13,7 +13,7 @@ CANONICAL_SAMPLES = [
     "dealer_router_recv_sample.py",
     "pubsub_recv_sample.py",
     "stream_recv_sample.py",
-    "stream_packet_callback_sample.py",
+    "stream_packet_recv_sample.py",
     "monitor_recv_sample.py",
 ]
 

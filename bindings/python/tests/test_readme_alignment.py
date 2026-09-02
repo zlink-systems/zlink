@@ -16,19 +16,16 @@ class ReadmeAlignmentTests(unittest.TestCase):
         self.assertIn("RecvFlags", readme)
         self.assertIn("ContextOptions", readme)
         self.assertIn("ref_count", readme)
-        self.assertIn("on_packet", readme)
-        self.assertIn("on_event", readme)
-        # HWM-managed send completion is Core's
-        # `zlink_send_complete_handler` notification, delivered through the
-        # awaitable `submit()` already returns. There is no send-ready public
-        # callback.
-        self.assertIn("zlink_send_complete_handler", readme)
+        self.assertIn("StreamPacket", readme)
+        self.assertIn("ReplyToken", readme)
+        self.assertIn("POLLCOMPLETION", readme)
+        self.assertIn("pull-only", readme)
         self.assertIn("receive_subscription_event", readme)
         self.assertIn(
             "monitor_open(events=..., monitor_hwm_bytes=...)", readme
         )
         self.assertIn("MonitorEventMask", readme)
-        self.assertIn("async context manager cleanup", readme)
+        self.assertIn("asynchronous context manager cleanup", readme)
         self.assertIn("Timer", readme)
         self.assertIn("Stopwatch", readme)
         self.assertIn("AtomicCounter", readme)

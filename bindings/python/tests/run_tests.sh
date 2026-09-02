@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export ZLINK_CORE_SOURCE="${ZLINK_CORE_SOURCE:-local}"
 source "${ROOT_DIR}/../tools/local_core_runtime.sh"
 zlink_export_local_core_runtime
 if [[ "$(uname -s)" == "Linux" && -n "${ZLINK_LIBRARY_PATH:-}" ]]; then

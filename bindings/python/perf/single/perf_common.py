@@ -414,7 +414,6 @@ def _submit_backpressured_result():
 
 
 def send_nonblocking(sock, payload, *, routing_id=None, measurement=True):
-    flag = _dont_wait_flag()
     try:
         if routing_id is None:
             op = sock.send()
@@ -424,7 +423,7 @@ def send_nonblocking(sock, payload, *, routing_id=None, measurement=True):
             op.messages(*measurement_parts(payload))
         else:
             op.message(payload)
-        op.submit_sync(flags=flag)
+        op.submit_sync()
         return True
     except _submit_error_type() as exc:
         if exc.result == _submit_backpressured_result():
@@ -432,22 +431,19 @@ def send_nonblocking(sock, payload, *, routing_id=None, measurement=True):
         raise
 
 
-def send_routed_sync(sock, payload, *, routing_id=None, measurement=True,
-                     flags=None):
+def send_routed_sync(sock, payload, *, routing_id=None, measurement=True):
     """Submit a routed send through the synchronous blocking public terminal.
 
     Single-process benchmarks deliberately keep coroutine scheduling out of
     setup and the measured data path. Core owns HWM admission.
     """
 
-    if flags is None:
-        flags = _require_zlink().SendFlags.NONE
     op = sock.send() if routing_id is None else sock.send(routing_id)
     if measurement:
         op.messages(*measurement_parts(payload))
     else:
         op.message(payload)
-    op.submit_sync(flags=flags)
+    op.submit_sync()
     return True
 
 
@@ -459,7 +455,8 @@ def publish_nonblocking(sock, topic, payload, *, measurement=True):
             op.messages(*measurement_parts(payload))
         else:
             op.message(payload)
-        return bool(op.flags(flag).submit())
+        op.flags(flag).submit()
+        return True
     except _submit_error_type() as exc:
         if exc.result == _submit_backpressured_result():
             return False

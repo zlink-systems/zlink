@@ -2,8 +2,6 @@
 
 import ctypes
 import errno as _errno
-import sys
-import traceback
 
 from ...contracts.core.routing_id import RoutingId
 from ...contracts.errors.codes import (
@@ -19,7 +17,7 @@ from ...contracts.errors.errors import (
     ZlinkError,
     _TypedZlinkError,
 )
-from ..._native.ffi import ZlinkMsg, ZlinkRoutingId, ZlinkSendCompleteEvent, lib
+from ..._native.ffi import ZlinkMsg, ZlinkRoutingId, lib
 
 
 def _request_result_from_code(code):
@@ -159,26 +157,6 @@ def _decode_topic_text(raw):
     return bytes(raw).decode("utf-8", errors="replace")
 
 
-_SOCKET_RECV_HANDLER = ctypes.CFUNCTYPE(
-    None,
-    ctypes.POINTER(ZlinkRoutingId),
-    ctypes.POINTER(ZlinkMsg),
-    ctypes.c_size_t,
-    ctypes.c_void_p,
-)
-_SEND_COMPLETE_HANDLER = ctypes.CFUNCTYPE(
-    None,
-    ctypes.c_void_p,
-    ctypes.POINTER(ZlinkSendCompleteEvent),
-    ctypes.c_void_p,
-)
-_REPLY_HANDLER = ctypes.CFUNCTYPE(
-    None,
-    ctypes.c_int,
-    ctypes.POINTER(ZlinkMsg),
-    ctypes.c_size_t,
-    ctypes.c_void_p,
-)
 def _copy_routing_id(routing_id):
     view = _as_bytes_view(routing_id)
     size = view.nbytes
@@ -274,15 +252,6 @@ def _routing_id_bytes(routing_id):
 
 def _is_eagain(exc):
     return isinstance(exc, ZlinkError) and exc.native_errno == _errno.EAGAIN
-
-
-def _report_unhandled_callback_exception(handler):
-    exc_type, exc_value, exc_traceback = sys.exc_info()
-    if exc_type is None:
-        return
-    print(f"Unhandled zlink callback exception in {handler!r}",
-          file=sys.stderr)
-    traceback.print_exception(exc_type, exc_value, exc_traceback)
 
 
 class _ReceivedPartsOwner:

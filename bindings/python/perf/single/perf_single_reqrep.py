@@ -71,7 +71,7 @@ def _run_replier(replier, state, drain_timeout_s):
                 parts = received.to_bytes_list()
                 if len(parts) == 1 and parts[0] == STOP_TOKEN:
                     return
-                if received.routing_id is None or received.request_seq is None:
+                if received.routing_id is None or received.reply_token is None:
                     raise RuntimeError("request is missing routing correlation metadata")
                 payload = measurement_payload(parts)
                 if payload is None:
@@ -87,9 +87,7 @@ def _run_replier(replier, state, drain_timeout_s):
 
 def _request_operation_sync(requester, routing_id, parts, timeout_s):
     operation = requester.request() if routing_id is None else requester.request(routing_id)
-    return operation.messages(*parts).timeout(timeout_s).submit_sync(
-        flags=zlink.SendFlags.NONE
-    )
+    return operation.messages(*parts).timeout(timeout_s).submit_sync()
 
 
 def _routing_probe(requester, routing_id, timeout_s):
@@ -216,7 +214,7 @@ def _send_stop(requester, routing_id):
     for _ in range(100):
         try:
             operation = requester.send() if routing_id is None else requester.send(routing_id)
-            operation.message(STOP_TOKEN).submit_sync(flags=zlink.SendFlags.NONE)
+            operation.message(STOP_TOKEN).submit_sync()
             return
         except zlink.SubmitError as exc:
             if not _transient_submit_result(exc.result):

@@ -1,55 +1,33 @@
 # SPDX-License-Identifier: MPL-2.0
 
-"""Core `send_complete`-driven async send and reply-driven request completion.
-
-Zero binding-owned threads, queues, or retry. HWM-managed **send** (PAIR
-send, DEALER/ROUTER/STREAM routed send) is admitted by ``zlink_send_async`` and
-completed by the single ``zlink_send_complete_handler`` installed on the
-socket — inline when Core admits immediately, or later from whatever
-context Core chooses to dispatch the callback from (its own async mailbox
-thread, a deadline thread, or a ``ZLINK_POLLCOMPLETION`` poller). This
-module never retries a backpressured attempt and never waits on a
-binding-owned queue or timer: the per-operation deadline is the Core-side
-``zlink_send_async_options_t.timeout_ms`` field, exactly as
-``_runtime/eventing/timer.py`` hands timing entirely to a Core timer
-handle.
-
-**request** completion is purely the Core reply callback resolving the
-awaitable it was armed with; there is no admission ticket and no
-binding-owned polling thread pumping a completion poller.
-"""
+"""Socket-local pull completion ownership for Core 0.16.0 operations."""
 
 import asyncio
 import ctypes
 import errno
 import threading
-import weakref
-from collections import deque
 
 from ..._native.ffi import (
+    ZLINK_COMPLETION_REQUEST,
+    ZLINK_COMPLETION_SEND,
     ZLINK_DONTWAIT,
     ZLINK_PART_FINAL,
     ZLINK_PART_MORE,
     ZLINK_SEND_ADMITTED,
-    ZLINK_SEND_TERMINAL,
-    ZLINK_SEND_TIMED_OUT,
-    ZlinkMsg,
-    ZlinkRoutedSubmitTarget,
-    ZlinkSendAsyncOptions,
+    ZlinkCompletion,
+    ZlinkPollerEvent,
     lib,
 )
-from ...contracts.errors.errors import HandlerError, RequestError, SubmitError
-from ...contracts.sockets.codes import (
-    HandlerResult,
-    RequestResult,
-    SocketType,
-    SubmitResult,
+from ...contracts.errors.codes import ConfigResult
+from ...contracts.errors.errors import (
+    ConfigError,
+    RecvError,
+    RequestError,
+    SubmitError,
 )
+from ...contracts.sockets.codes import RecvResult, RequestResult, SubmitResult
 from ..handles.native_support import (
-    _REPLY_HANDLER,
-    _SEND_COMPLETE_HANDLER,
     _clone_native_msg,
-    _close_multipart,
     _copy_routing_id,
     _raise_result_error,
     _request_result_from_code,
@@ -57,627 +35,471 @@ from ..handles.native_support import (
 from .message_materializer import Message
 from .native_parts import _materialize_native_parts
 
-_ETERM = 156384765
-_SEND_PENDING = object()
-_COMPLETION_BATCH_LIMIT = 256
-_completion_batches = weakref.WeakKeyDictionary()
-_completion_batches_lock = threading.Lock()
 
-
-def _finish_future(future, value, is_error):
-    if future.done():
-        _discard_future_values(((future, value, is_error),))
+def _close_messages(messages):
+    if not isinstance(messages, list):
         return
-    if is_error:
-        future.set_exception(value)
-    else:
-        future.set_result(value)
-
-
-def _report_completion_exception(loop, future, message, exception):
-    if loop is None:
+    for message in messages:
         try:
-            loop = future.get_loop()
-        except (AttributeError, RuntimeError):
-            return
-    try:
-        loop.call_exception_handler(
-            {
-                "message": message,
-                "exception": exception,
-                "future": future,
-            }
-        )
-    except Exception:
-        # An application exception handler must not prevent the remaining
-        # native completion values from being released.
-        pass
+            message.close()
+        except Exception:
+            pass
 
 
-def _discard_future_values(entries, loop=None):
-    for future, value, is_error in entries:
-        if not is_error and isinstance(value, list):
-            for message in value:
-                try:
-                    message.close()
-                except Exception as error:
-                    _report_completion_exception(
-                        loop,
-                        future,
-                        "Exception while discarding a routed completion value",
-                        error,
-                    )
+def _request_errno(result):
+    return {
+        RequestResult.TIMED_OUT: errno.ETIMEDOUT,
+        RequestResult.NOT_FOUND: errno.ENOENT,
+        RequestResult.TERMINATED: getattr(errno, "ESHUTDOWN", errno.ECANCELED),
+        RequestResult.PROTOCOL_ERROR: errno.EPROTO,
+        RequestResult.REJECTED: errno.EACCES,
+        RequestResult.CONFLICT: getattr(errno, "ESTALE", errno.EIO),
+        RequestResult.BUSY: errno.EBUSY,
+        RequestResult.NOT_CONNECTED: errno.ENOTCONN,
+        RequestResult.INVALID_ARGUMENT: errno.EINVAL,
+        RequestResult.INVALID_STATE: errno.EBUSY,
+        RequestResult.NOT_SUPPORTED: errno.ENOTSUP,
+        RequestResult.BACKPRESSURED: errno.EAGAIN,
+    }.get(result, errno.EIO)
 
 
-class _FutureCompletionBatch:
-    """Coalesce native-thread completions into bounded event-loop turns."""
+class _CompletionEntry:
+    """Join native submit publication with one captured completion."""
 
-    __slots__ = ("_loop_ref", "_lock", "_queue", "_scheduled")
+    __slots__ = (
+        "kind",
+        "loop",
+        "future",
+        "condition",
+        "_published",
+        "_captured",
+        "_settled",
+        "_detached",
+        "_value",
+        "_error",
+        "completion_id",
+    )
 
-    def __init__(self, loop):
-        self._loop_ref = weakref.ref(loop)
-        self._lock = threading.Lock()
-        self._queue = deque()
-        self._scheduled = False
-
-    def enqueue(self, future, value, is_error):
-        with self._lock:
-            self._queue.append((future, value, is_error))
-            if self._scheduled:
-                return
-            self._scheduled = True
-
-        loop = self._loop_ref()
-        if loop is None:
-            self._discard_pending()
-            return
-        try:
-            loop.call_soon_threadsafe(self._drain)
-        except RuntimeError:
-            self._discard_pending()
-
-    def _discard_pending(self):
-        loop = self._loop_ref()
-        with self._lock:
-            entries = list(self._queue)
-            self._queue.clear()
-            self._scheduled = False
-        _discard_future_values(entries, loop)
-
-    def _drain(self):
-        entries = []
-        with self._lock:
-            while self._queue and len(entries) < _COMPLETION_BATCH_LIMIT:
-                entries.append(self._queue.popleft())
-
-        loop = self._loop_ref()
-        for future, value, is_error in entries:
-            try:
-                _finish_future(future, value, is_error)
-            except Exception as error:
-                _report_completion_exception(
-                    loop,
-                    future,
-                    "Exception while resolving a routed completion future",
-                    error,
-                )
-                _discard_future_values(((future, value, is_error),), loop)
-
-        with self._lock:
-            has_more = bool(self._queue)
-            if not has_more:
-                self._scheduled = False
-        if not has_more:
-            return
-
-        if loop is None:
-            self._discard_pending()
-            return
-        try:
-            # The first cross-thread wake owns the batch. Continue a large
-            # batch with ordinary loop turns instead of writing the loop's
-            # self-pipe once per native completion.
-            loop.call_soon(self._drain)
-        except RuntimeError:
-            self._discard_pending()
-
-
-def _completion_batch_for(loop):
-    with _completion_batches_lock:
-        batch = _completion_batches.get(loop)
-        if batch is None:
-            batch = _FutureCompletionBatch(loop)
-            _completion_batches[loop] = batch
-        return batch
-
-
-def _schedule_future(loop, future, value=None, *, is_error=False):
-    if getattr(loop, "_thread_id", None) == threading.get_ident():
-        _finish_future(future, value, is_error)
-        return
-    try:
-        _completion_batch_for(loop).enqueue(future, value, is_error)
-    except RuntimeError:
-        _discard_future_values(((future, value, is_error),), loop)
-
-
-def _terminal_submit_result(native_errno):
-    if native_errno in (
-        errno.ECANCELED,
-        getattr(errno, "ESHUTDOWN", -1),
-        _ETERM,
-    ):
-        return SubmitResult.TERMINATED
-    if native_errno in (errno.ENOENT, getattr(errno, "EHOSTUNREACH", -1)):
-        return SubmitResult.NOT_FOUND
-    return SubmitResult.NOT_CONNECTED
-
-
-def _close_native_parts(native_parts, start=0):
-    for native in native_parts[start:]:
-        lib().zlink_msg_close(ctypes.byref(native))
-
-
-class _SendOperation:
-    """One in-flight `zlink_send_async` anchor, keyed by `userdata` token.
-
-    Once `zlink_send_async` returns `ZLINK_SUBMIT_OK`, message ownership has
-    transferred to Core for the whole lifetime of the operation, including
-    every completion result (`ADMITTED`/`TIMED_OUT`/`TERMINAL`) — this
-    anchor never closes native parts itself.
-    """
-
-    __slots__ = ("token", "loop", "future", "op_id", "completion")
-
-    def __init__(self, token, loop):
-        self.token = token
+    def __init__(self, kind, loop=None):
+        self.kind = kind
         self.loop = loop
-        # Most sends are admitted inline (`op_id == 0`) and never receive a
-        # completion callback. Allocate an asyncio Future only after Core
-        # returns a non-zero op id and the callback is still pending.
-        self.future = None
-        self.op_id = None
-        # Core may invoke the callback before `zlink_send_async` returns its
-        # non-zero op id. The callback records the terminal value here for
-        # the event-loop thread to consume directly.
-        self.completion = _SEND_PENDING
+        self.future = None if loop is None else loop.create_future()
+        self.condition = threading.Condition()
+        self._published = False
+        self._captured = False
+        self._settled = False
+        self._detached = False
+        self._value = None
+        self._error = None
+        self.completion_id = 0
+
+    @property
+    def context(self):
+        return id(self)
+
+    def publish(self, completion_id):
+        with self.condition:
+            self.completion_id = int(completion_id)
+            self._published = True
+            deliver = self._settle_if_joined_locked()
+        self._deliver(deliver)
+
+    def fail_submit(self):
+        with self.condition:
+            self._published = True
+            self._captured = True
+            self._settled = True
+            self.condition.notify_all()
+
+    def capture_inline_send(self):
+        with self.condition:
+            self._captured = True
+            deliver = self._settle_if_joined_locked()
+        self._deliver(deliver)
+
+    def capture(self, completion):
+        value = None
+        failure = None
+        try:
+            if self.kind == ZLINK_COMPLETION_SEND:
+                if (
+                    int(completion.kind) != ZLINK_COMPLETION_SEND
+                    or int(completion.send_result) != ZLINK_SEND_ADMITTED
+                ):
+                    native_errno = int(completion.send_terminal_errno) or errno.EIO
+                    failure = SubmitError(SubmitResult.NOT_ADMITTED, native_errno)
+            elif int(completion.kind) != ZLINK_COMPLETION_REQUEST:
+                failure = RequestError(RequestResult.INTERNAL_ERROR, errno.EPROTO)
+            else:
+                result = _request_result_from_code(int(completion.request_result))
+                if result != RequestResult.OK:
+                    failure = RequestError(result, _request_errno(result))
+                else:
+                    value = []
+                    try:
+                        for index in range(int(completion.reply_part_count)):
+                            message = Message.__new__(Message)
+                            message._msg = _clone_native_msg(completion.reply_parts[index])
+                            message._valid = True
+                            message._keepalive = None
+                            value.append(message)
+                    except BaseException:
+                        _close_messages(value)
+                        value = None
+                        failure = RequestError(RequestResult.INTERNAL_ERROR, errno.EIO)
+        finally:
+            lib().zlink_completion_close(ctypes.byref(completion))
+
+        with self.condition:
+            if self._captured:
+                _close_messages(value)
+                return
+            self._value = value
+            self._error = failure
+            self._captured = True
+            deliver = self._settle_if_joined_locked()
+        self._deliver(deliver)
+
+    def shutdown(self):
+        native_errno = getattr(errno, "ESHUTDOWN", errno.ECANCELED)
+        error = (
+            SubmitError(SubmitResult.TERMINATED, native_errno)
+            if self.kind == ZLINK_COMPLETION_SEND
+            else RequestError(RequestResult.TERMINATED, native_errno)
+        )
+        with self.condition:
+            if self._settled:
+                return
+            self._published = True
+            self._captured = True
+            self._error = error
+            deliver = self._settle_if_joined_locked()
+        self._deliver(deliver)
+
+    def _settle_if_joined_locked(self):
+        if not self._published or not self._captured or self._settled:
+            return None
+        self._settled = True
+        self.condition.notify_all()
+        return self._value, self._error, self._detached
+
+    def _deliver(self, deliver):
+        if deliver is None or self.future is None:
+            return
+        value, error, detached = deliver
+        if detached:
+            _close_messages(value)
+            return
+
+        def finish():
+            with self.condition:
+                detached_now = self._detached
+            if detached_now or self.future.done():
+                _close_messages(value)
+                return
+            if error is not None:
+                self.future.set_exception(error)
+            else:
+                self.future.set_result(value)
+
+        if getattr(self.loop, "_thread_id", None) == threading.get_ident():
+            finish()
+            return
+        try:
+            self.loop.call_soon_threadsafe(finish)
+        except RuntimeError:
+            _close_messages(value)
+
+    def detach(self):
+        value = None
+        with self.condition:
+            self._detached = True
+            if self.future is not None and self.future.done() and not self.future.cancelled():
+                try:
+                    if self.future.exception() is None:
+                        value = self.future.result()
+                except BaseException:
+                    pass
+        _close_messages(value)
+
+    async def wait_async(self):
+        try:
+            return await asyncio.shield(self.future)
+        except asyncio.CancelledError:
+            self.detach()
+            raise
+
+    def wait_request(self):
+        with self.condition:
+            while not self._settled:
+                self.condition.wait()
+            if self._error is not None:
+                raise self._error
+            value = self._value
+            self._value = None
+            return value
+
+    def wait_settled(self):
+        with self.condition:
+            while not self._settled:
+                self.condition.wait()
 
 
-class SendCompletionOwner:
-    """Owns one socket's `zlink_send_complete_handler` and pending anchors.
-
-    Mirrors the C++ reference (`socket_callback_state_t`): one completion
-    handler per socket, a pending-operation table keyed by an opaque token
-    carried through Core in `zlink_send_async_options_t.userdata` and
-    returned unchanged in `zlink_send_complete_event_t.userdata`. Using our
-    own token instead of the Core-assigned `op_id` for correlation is
-    required because Core may invoke the completion inline, before
-    `zlink_send_async` has returned the `op_id` to us.
-    """
+class CompletionOwner:
+    """Own one socket completion queue and its provisional registry."""
 
     def __init__(self, socket):
         self._socket = socket
-        self._lock = threading.Lock()
-        self._pending = {}
-        self._next_token = 1
-        self._handler = _SEND_COMPLETE_HANDLER(self._on_complete)
-        rc = lib().zlink_send_complete_handler(
-            self.native_handle(), self._handler, None
-        )
-        if rc != int(HandlerResult.OK):
-            _raise_result_error(
-                HandlerError, HandlerResult, rc, lib().zlink_errno()
-            )
+        self._lock = threading.RLock()
+        self._entries = {}
+        self._public_owner = None
+        self._runtime_poller = None
+        self._runtime_thread = None
+        self._runtime_stop = False
+        self._shutdown = False
 
-    def native_handle(self):
-        return self._socket._handle
-
-    def drain_pending(self):
+    def _register(self, entry):
         with self._lock:
-            pending = list(self._pending.values())
-            self._pending.clear()
-            ready = []
-            for op in pending:
-                op.completion = SubmitError(
-                    SubmitResult.TERMINATED, errno.ECANCELED
+            if self._shutdown:
+                raise SubmitError(
+                    SubmitResult.INVALID_STATE,
+                    getattr(errno, "ESHUTDOWN", errno.ECANCELED),
                 )
-                if op.future is not None:
-                    ready.append((op.loop, op.future, op.completion))
-        for loop, future, error in ready:
-            _schedule_future(loop, future, error, is_error=True)
+            self._entries[entry.context] = entry
+            if self._public_owner is None:
+                self._start_runtime_owner_locked()
 
-    def _on_complete(self, _subject, event_ptr, _userdata):
-        if not event_ptr:
+    def _unregister(self, entry):
+        with self._lock:
+            self._entries.pop(entry.context, None)
+
+    def _start_runtime_owner_locked(self):
+        if self._runtime_poller or self._runtime_thread or self._shutdown:
             return
-        event = event_ptr.contents
-        token = ctypes.cast(event.userdata, ctypes.c_void_p).value
-        with self._lock:
-            op = self._pending.pop(token, None) if token is not None else None
-            if op is None:
-                return
-            result = int(event.result)
-            if result == ZLINK_SEND_ADMITTED:
-                op.completion = None
-            elif result == ZLINK_SEND_TIMED_OUT:
-                op.completion = SubmitError(
-                    SubmitResult.BACKPRESSURED, errno.ETIMEDOUT
-                )
-            else:
-                native_errno = int(event.terminal_errno)
-                op.completion = SubmitError(
-                    _terminal_submit_result(native_errno), native_errno
-                )
-            future = op.future
-            completion = op.completion
-        if future is not None:
-            _schedule_future(
-                op.loop,
-                future,
-                completion,
-                is_error=completion is not None,
-            )
-
-    async def submit(self, payload, *, target=None, timeout_ms=0):
-        loop = asyncio.get_running_loop()
-        # `_materialize_native_parts` hands back independently owned struct
-        # values; copy their bytes into one contiguous array for the single
-        # `zlink_send_async` record. Past this point the array — not the
-        # source list — is the live owner (see `_SendOperation`).
-        source_parts = _materialize_native_parts(payload)
-        part_count = len(source_parts)
-        parts_array = (ZlinkMsg * part_count)(*source_parts)
-
-        with self._lock:
-            token = self._next_token
-            self._next_token += 1
-            op = _SendOperation(token, loop)
-            self._pending[token] = op
-
-        options = ZlinkSendAsyncOptions(
-            struct_size=ctypes.sizeof(ZlinkSendAsyncOptions),
-            timeout_ms=int(timeout_ms) if timeout_ms else 0,
-            userdata=ctypes.c_void_p(token),
-            target=ctypes.pointer(target) if target is not None else None,
-        )
-        op_id_out = ctypes.c_uint64(0)
-        rc = lib().zlink_send_async(
-            self.native_handle(),
-            parts_array,
-            part_count,
-            ctypes.byref(options),
-            ctypes.byref(op_id_out),
-        )
-        if rc != int(SubmitResult.OK):
-            with self._lock:
-                self._pending.pop(token, None)
+        poller = lib().zlink_poller_new()
+        if not poller:
+            raise OSError(lib().zlink_errno(), "zlink_poller_new failed")
+        rc = lib().zlink_poller_add(poller, self._socket._handle, None, 32)
+        if rc != int(ConfigResult.OK):
             native_errno = lib().zlink_errno()
-            _close_native_parts(parts_array)
-            _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
-
-        if op_id_out.value == 0:
-            # Core completed synchronously and deliberately emits no callback.
-            with self._lock:
-                self._pending.pop(token, None)
-            return None
-
-        with self._lock:
-            op.op_id = op_id_out.value
-            completion = op.completion
-            if completion is _SEND_PENDING:
-                op.future = loop.create_future()
-
-        # If Core completed on another thread before `zlink_send_async`
-        # returned, the callback recorded its result because no Future
-        # existed yet. Consume it directly; only a still-pending operation
-        # needs an awaitable allocation.
-        if completion is not _SEND_PENDING:
-            if completion is not None:
-                raise completion
-            return None
-
-        try:
-            await op.future
-        except asyncio.CancelledError:
-            with self._lock:
-                still_pending = self._pending.get(token) is op
-            if still_pending and op.op_id:
-                lib().zlink_send_async_cancel(self.native_handle(), op.op_id)
-            raise
-        return None
-
-
-class _RequestCompletion:
-    """One armed request completed by a Future, callback, or blocking waiter."""
-
-    __slots__ = (
-        "token",
-        "loop",
-        "future",
-        "callback",
-        "condition",
-        "value",
-        "error",
-        "done",
-    )
-
-    def __init__(self, token, loop=None, callback=None):
-        self.token = token
-        self.loop = loop
-        self.future = None if loop is None else loop.create_future()
-        self.callback = callback
-        self.condition = (
-            None
-            if loop is not None or callback is not None
-            else threading.Condition()
+            handle = ctypes.c_void_p(poller)
+            lib().zlink_poller_destroy(ctypes.byref(handle))
+            _raise_result_error(ConfigError, ConfigResult, rc, native_errno)
+        self._runtime_poller = poller
+        self._runtime_stop = False
+        thread = threading.Thread(
+            target=self._runtime_loop,
+            name="zlink-completion-drain",
+            daemon=True,
         )
-        self.value = None
-        self.error = None
-        self.done = False
+        self._runtime_thread = thread
+        thread.start()
 
-    def resolve(self, value=None, error=None):
-        if self.future is not None:
-            if self.future.done():
-                if error is None and isinstance(value, list):
-                    for message in value:
-                        message.close()
-                return
-            _schedule_future(
-                self.loop,
-                self.future,
-                error if error is not None else value,
-                is_error=error is not None,
-            )
-            return
-        if self.callback is not None:
-            self.callback(None if error is not None else value, error)
-            return
-        with self.condition:
-            if self.done:
-                if error is None and isinstance(value, list):
-                    for message in value:
-                        message.close()
-                return
-            self.value = value
-            self.error = error
-            self.done = True
-            self.condition.notify()
-
-    def wait(self):
-        with self.condition:
-            while not self.done:
-                self.condition.wait()
-            if self.error is not None:
-                raise self.error
-            return self.value
-
-
-class RoutedSendOwner:
-    """Socket-local HWM-managed send (via `zlink_send_async`) and
-    Core-reply-driven request completion. Owns no thread, queue, or retry
-    policy of its own.
-    """
-
-    def __init__(
-        self,
-        socket,
-        role,
-        read_request_timeout_ms,
-    ):
-        self._socket = socket
-        self._role = role
-        self._read_request_timeout_ms = read_request_timeout_ms
-        self._state_lock = threading.RLock()
-        self._request_completions = {}
-        self._next_request_token = 1
-        self._reply_handler = _REPLY_HANDLER(self._on_request_reply)
-        self._send_completion = SendCompletionOwner(socket)
-
-    def native_handle(self):
-        return self._socket._handle
-
-    # -- HWM-managed send (PAIR send, DEALER/ROUTER routed send) --------
-
-    def _select_target(self, router_rid):
-        target = ZlinkRoutedSubmitTarget()
-        native_rid = None if router_rid is None else _copy_routing_id(router_rid)
-        rc = lib().zlink_select_routed_submit_target(
-            self.native_handle(),
-            None if native_rid is None else ctypes.byref(native_rid),
-            ctypes.byref(target),
-        )
-        if rc != int(SubmitResult.OK):
-            _raise_result_error(
-                SubmitError, SubmitResult, rc, lib().zlink_errno()
-            )
-        return target
-
-    async def submit_send(self, router_rid, payload):
-        # ROUTER requires an exact target snapshot for the given routing id.
-        # DEALER always passes `target=None` here — Core commits one
-        # weighted selection at submit time (`zlink_send_async_options_t`
-        # doc, core/include/zlink/socket/api.h).
-        target = self._select_target(router_rid) if self._role != SocketType.DEALER else None
-        # `zlink_send_async_options_t.timeout_ms` is a per-operation Core
-        # deadline, unrelated to `ZLINK_OPT_SNDTIMEO`. 0 means no deadline:
-        # Core's own
-        # pending-queue bound (`ZLINK_OPT_SEND_PENDING_MAX_MSGS`/`_BYTES`)
-        # governs backpressure rejection, not a binding-owned timer.
-        await self._send_completion.submit(payload, target=target, timeout_ms=0)
-
-    def run_sync_outbound_attempt(self, attempt):
-        handle = self.native_handle()
-        if not handle:
-            _raise_result_error(
-                SubmitError,
-                SubmitResult,
-                SubmitResult.TERMINATED,
-                errno.ECANCELED,
-            )
-        rc, native_errno = attempt(handle)
-        if rc != int(SubmitResult.OK):
-            _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
+    def _detach_runtime_owner_locked(self):
+        self._runtime_stop = True
+        thread = self._runtime_thread
+        poller = self._runtime_poller
+        self._runtime_thread = None
+        self._runtime_poller = None
+        return thread, poller
 
     @staticmethod
-    def _submit_parts(native_parts, submit_part):
+    def _finish_runtime_owner(thread, poller):
+        if thread is not None and thread is not threading.current_thread():
+            thread.join()
+        if poller:
+            handle = ctypes.c_void_p(poller)
+            lib().zlink_poller_destroy(ctypes.byref(handle))
+
+    def _runtime_loop(self):
+        while True:
+            with self._lock:
+                if self._runtime_stop or self._shutdown:
+                    return
+                poller = self._runtime_poller
+            native_event = ZlinkPollerEvent()
+            error_out = ctypes.c_int()
+            rc = lib().zlink_poller_wait(
+                poller, ctypes.byref(native_event), 1, 25, ctypes.byref(error_out)
+            )
+            if rc > 0:
+                try:
+                    self.drain(wait_for_publish=False)
+                except Exception:
+                    return
+            elif rc < 0 and lib().zlink_errno() not in (errno.EINTR, errno.EAGAIN):
+                return
+
+    def transfer_to_public(self, poller_owner):
+        with self._lock:
+            if self._shutdown:
+                raise ConfigError(
+                    ConfigResult.INVALID_STATE,
+                    getattr(errno, "ESHUTDOWN", errno.ECANCELED),
+                )
+            if self._public_owner is not None and self._public_owner is not poller_owner:
+                raise ConfigError(ConfigResult.INVALID_STATE, errno.EBUSY)
+            if self._public_owner is poller_owner:
+                return
+            self._public_owner = poller_owner
+            thread, poller = self._detach_runtime_owner_locked()
+        self._finish_runtime_owner(thread, poller)
+
+    def transfer_to_runtime(self, poller_owner):
+        with self._lock:
+            if self._public_owner is not poller_owner:
+                return
+            self._public_owner = None
+            if self._entries and not self._shutdown:
+                self._start_runtime_owner_locked()
+
+    def drain(self, wait_for_publish):
+        processed = 0
+        while True:
+            completion = ZlinkCompletion()
+            completion.struct_size = ctypes.sizeof(ZlinkCompletion)
+            rc = lib().zlink_completion_recv(
+                self._socket._handle,
+                ctypes.byref(completion),
+                ZLINK_DONTWAIT,
+            )
+            if rc == int(RecvResult.NO_DATA):
+                break
+            if rc != int(RecvResult.OK):
+                _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
+            context = int(completion.user_context or 0)
+            with self._lock:
+                entry = self._entries.get(context)
+            if entry is None:
+                lib().zlink_completion_close(ctypes.byref(completion))
+            else:
+                entry.capture(completion)
+                if wait_for_publish:
+                    entry.wait_settled()
+                self._unregister(entry)
+            processed += 1
+        return processed
+
+    @staticmethod
+    def _close_unsubmitted(native_parts, start=0):
+        for native in native_parts[start:]:
+            lib().zlink_msg_close(ctypes.byref(native))
+
+    def _submit_parts(self, target, native_parts, flags, entry=None, timeout_ms=None):
+        native_rid = None if target is None else _copy_routing_id(target)
+        completion_id = ctypes.c_uint64(0)
         part_count = len(native_parts)
         for index, native in enumerate(native_parts):
-            flag = ZLINK_PART_FINAL if index == part_count - 1 else ZLINK_PART_MORE
-            rc = submit_part(ctypes.byref(native), flag, index == part_count - 1)
+            final = index == part_count - 1
+            part_flag = ZLINK_PART_FINAL if final else ZLINK_PART_MORE
+            context = ctypes.c_void_p(entry.context) if final and entry is not None else None
+            completion_out = ctypes.byref(completion_id) if final and entry is not None else None
+            if timeout_ms is not None:
+                rc = lib().zlink_request_part(
+                    self._socket._handle,
+                    None if native_rid is None else ctypes.byref(native_rid),
+                    ctypes.byref(native),
+                    flags,
+                    part_flag,
+                    int(timeout_ms) if final else 0,
+                    context,
+                    completion_out,
+                )
+            elif native_rid is None:
+                rc = lib().zlink_send_part(
+                    self._socket._handle,
+                    ctypes.byref(native),
+                    flags,
+                    part_flag,
+                    context,
+                    completion_out,
+                )
+            else:
+                rc = lib().zlink_send_part_rid(
+                    self._socket._handle,
+                    ctypes.byref(native_rid),
+                    ctypes.byref(native),
+                    flags,
+                    part_flag,
+                    context,
+                    completion_out,
+                )
             if rc != int(SubmitResult.OK):
                 native_errno = lib().zlink_errno()
-                # Core consumes the attempted native part on ordinary
-                # rejection. The binding owns these materialized copies and
-                # closes the now-empty attempted slot together with every
-                # later part that was not attempted.
-                _close_native_parts(native_parts, index)
-                return int(rc), native_errno
-        return int(SubmitResult.OK), 0
+                self._close_unsubmitted(native_parts, index)
+                return int(rc), native_errno, 0
+        return int(SubmitResult.OK), 0, int(completion_id.value)
 
-    # -- request: submitted once, completed purely by the Core reply
-    # callback. No admission ticket, no retry on backpressure. ----------
-
-    def _new_request_completion(self, loop=None, callback=None):
-        with self._state_lock:
-            token = self._next_request_token
-            self._next_request_token += 1
-        completion = _RequestCompletion(token, loop, callback)
-        with self._state_lock:
-            self._request_completions[token] = completion
-        return completion
-
-    def _attempt_request(self, router_rid, payload, timeout_ms, completion, flags):
+    async def submit_send(self, target, payload):
         native_parts = _materialize_native_parts(payload)
-        target = None
-        if self._role != SocketType.DEALER:
-            try:
-                target = self._select_target(router_rid)
-            except Exception:
-                _close_native_parts(native_parts)
-                raise
-
-        def attempt(handle):
-            if self._role == SocketType.DEALER:
-                return self._submit_parts(
-                    native_parts,
-                    lambda part, flag, final: lib().zlink_dealer_request_part(
-                        handle,
-                        part,
-                        flags,
-                        flag,
-                        timeout_ms if final else 0,
-                        self._reply_handler if final else None,
-                        ctypes.c_void_p(completion.token) if final else None,
-                    ),
-                )
-            return self._submit_parts(
-                native_parts,
-                lambda part, flag, final: lib().zlink_router_request_transport_pair_part(
-                    handle,
-                    ctypes.byref(target.peer_rid),
-                    target.transport_pair_id,
-                    target.transport_pair_generation,
-                    part,
-                    flags,
-                    flag,
-                    timeout_ms if final else 0,
-                    self._reply_handler if final else None,
-                    ctypes.c_void_p(completion.token) if final else None,
-                ),
-            )
-
-        handle = self.native_handle()
-        if not handle:
-            _close_native_parts(native_parts)
-            return int(SubmitResult.TERMINATED), errno.ECANCELED
-        return attempt(handle)
-
-    async def submit_request(self, router_rid, payload, timeout_ms):
-        loop = asyncio.get_running_loop()
-        if timeout_ms == 0:
-            timeout_ms = int(self._read_request_timeout_ms())
-            if timeout_ms <= 0:
-                timeout_ms = 5000
-        completion = self._new_request_completion(loop)
-        try:
-            rc, native_errno = self._attempt_request(
-                router_rid, payload, timeout_ms, completion, ZLINK_DONTWAIT
-            )
-        except Exception:
-            with self._state_lock:
-                self._request_completions.pop(completion.token, None)
-            raise
+        entry = _CompletionEntry(ZLINK_COMPLETION_SEND, asyncio.get_running_loop())
+        self._register(entry)
+        rc, native_errno, completion_id = self._submit_parts(
+            target, native_parts, ZLINK_DONTWAIT, entry
+        )
         if rc != int(SubmitResult.OK):
-            with self._state_lock:
-                self._request_completions.pop(completion.token, None)
+            entry.fail_submit()
+            self._unregister(entry)
             _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
-        return await completion.future
+        entry.publish(completion_id)
+        if completion_id == 0:
+            entry.capture_inline_send()
+            self._unregister(entry)
+        await entry.wait_async()
 
-    def submit_request_sync(
-        self, router_rid, payload, timeout_ms, *, flags=0, callback=None
-    ):
-        if timeout_ms == 0:
-            timeout_ms = int(self._read_request_timeout_ms())
-            if timeout_ms <= 0:
-                timeout_ms = 5000
-        completion = self._new_request_completion(callback=callback)
-        try:
-            rc, native_errno = self._attempt_request(
-                router_rid, payload, timeout_ms, completion, int(flags)
-            )
-        except Exception:
-            with self._state_lock:
-                self._request_completions.pop(completion.token, None)
-            raise
+    def submit_send_sync(self, target, payload):
+        native_parts = _materialize_native_parts(payload)
+        rc, native_errno, _ = self._submit_parts(target, native_parts, 0)
         if rc != int(SubmitResult.OK):
-            with self._state_lock:
-                self._request_completions.pop(completion.token, None)
             _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
-        if callback is not None:
-            return None
-        return completion.wait()
 
-    def _on_request_reply(self, result_code, parts, part_count, userdata):
-        token = ctypes.cast(userdata, ctypes.c_void_p).value
-        with self._state_lock:
-            completion = self._request_completions.pop(token, None)
-        if completion is None:
-            _close_multipart(parts, int(part_count))
-            return
-        result = _request_result_from_code(int(result_code))
-        if result != RequestResult.OK:
-            _close_multipart(parts, int(part_count))
-            completion.resolve(error=RequestError(result, 0))
-            return
-        messages = []
-        try:
-            for index in range(int(part_count)):
-                message = Message.__new__(Message)
-                message._msg = _clone_native_msg(parts[index])
-                message._valid = True
-                message._keepalive = None
-                messages.append(message)
-        except Exception:
-            for message in messages:
-                message.close()
-            completion.resolve(
-                error=RequestError(RequestResult.INTERNAL_ERROR, errno.EIO)
-            )
-        else:
-            completion.resolve(value=messages)
-        finally:
-            _close_multipart(parts, int(part_count))
+    async def submit_request(self, target, payload, timeout_ms):
+        native_parts = _materialize_native_parts(payload)
+        entry = _CompletionEntry(ZLINK_COMPLETION_REQUEST, asyncio.get_running_loop())
+        self._register(entry)
+        rc, native_errno, completion_id = self._submit_parts(
+            target, native_parts, ZLINK_DONTWAIT, entry, int(timeout_ms)
+        )
+        if rc != int(SubmitResult.OK):
+            entry.fail_submit()
+            self._unregister(entry)
+            _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
+        if completion_id == 0:
+            entry.fail_submit()
+            self._unregister(entry)
+            raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO)
+        entry.publish(completion_id)
+        return await entry.wait_async()
 
-    # -- lifecycle --------------------------------------------------------
+    def submit_request_sync(self, target, payload, timeout_ms):
+        native_parts = _materialize_native_parts(payload)
+        entry = _CompletionEntry(ZLINK_COMPLETION_REQUEST)
+        self._register(entry)
+        rc, native_errno, completion_id = self._submit_parts(
+            target, native_parts, 0, entry, int(timeout_ms)
+        )
+        if rc != int(SubmitResult.OK):
+            entry.fail_submit()
+            self._unregister(entry)
+            _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
+        if completion_id == 0:
+            entry.fail_submit()
+            self._unregister(entry)
+            raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO)
+        entry.publish(completion_id)
+        return entry.wait_request()
 
-    def finish_close(self):
-        with self._state_lock:
-            completions = list(self._request_completions.values())
-            self._request_completions.clear()
-        self._send_completion.drain_pending()
-        for completion in completions:
-            completion.resolve(
-                error=RequestError(RequestResult.TERMINATED, errno.ECANCELED)
-            )
+    def shutdown(self):
+        with self._lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+            thread, poller = self._detach_runtime_owner_locked()
+            entries = list(self._entries.values())
+            self._entries.clear()
+        self._finish_runtime_owner(thread, poller)
+        for entry in entries:
+            entry.shutdown()
 
 
-__all__ = ["RoutedSendOwner", "SendCompletionOwner"]
+__all__ = ["CompletionOwner"]

@@ -2,7 +2,12 @@
 
 from typing import Protocol, runtime_checkable
 
+from ..core.routing_id import RoutingId
+from ..messaging.received import Received
+from ..messaging.stream_packet import StreamPacket
 from . import socket as _socket_contract
+from .codes import RecvFlags
+from .operations import SendOp
 
 
 @runtime_checkable
@@ -14,26 +19,21 @@ class StreamSocket(_socket_contract._SocketContract, Protocol):
         """The STREAM-specific typed options facade."""
         ...
 
-    def send(self, routing_id):
-        """Begin a synchronous send addressed to ``routing_id``; ``submit()``
-        preserves the existing bool result contract."""
+    def send(self, routing_id: RoutingId) -> SendOp:
+        """Begin a send addressed to ``routing_id``."""
         ...
 
-    def send_async(self, routing_id):
-        """Begin an HWM-managed send addressed to ``routing_id``. The returned
-        routed operation exposes awaitable ``submit()`` and blocking
-        ``submit_sync()`` terminals."""
-        ...
-
-    def recv_into(self, received, *, flags=0):
+    def recv_into(
+        self, received: Received, *, flags: RecvFlags = RecvFlags.NONE
+    ) -> bool:
         """Receive a message into ``received`` storage; ``False`` when
         ``DONT_WAIT`` is set and none is available."""
         ...
 
-    def on_packet(self, handler):
-        """Register ``handler``, invoked for each inbound framed packet with the
-        sender routing id, header, and body; it owns the two messages and runs
-        on a background dispatch thread."""
+    def recv_packet_into(
+        self, out: StreamPacket, *, flags: RecvFlags = RecvFlags.NONE
+    ) -> bool:
+        """Receive one framed packet into reusable caller-owned storage."""
         ...
 
     def disconnect_rid(self, peer_rid):

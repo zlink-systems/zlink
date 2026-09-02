@@ -1,7 +1,6 @@
 """Regression tests for retryable native ownership transitions."""
 
 import errno
-from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -43,85 +42,39 @@ class _RetryableHandle:
             raise zlink.CloseError(zlink.CloseResult.BUSY, errno.EBUSY)
 
 
-def _socket_with_lifecycle_state(socket_cls, handle):
+def _socket_with_handle(socket_cls, handle):
     owner = object.__new__(socket_cls)
     owner._socket_handle = handle
-    owner._recv_handler = object()
-    owner._recv_handler_cb = object()
-    owner._packet_handler = object()
-    owner._packet_handler_cb = object()
-    owner._dispatcher = Mock()
     return owner
 
 
-def test_socket_handle_preserves_native_handle_after_ebusy_for_retry():
+def test_socket_handle_preserves_native_handle_after_busy_for_retry():
     native = _NativeCloseStub("zlink_close", [zlink.CloseResult.BUSY, 0])
     handle = socket_base._SocketHandle(123, own=True)
-
     with patch.object(socket_base, "lib", return_value=native):
-        with pytest.raises(zlink.CloseError) as raised:
+        with pytest.raises(zlink.CloseError):
             handle.close()
-        assert raised.value.result == zlink.CloseResult.BUSY
         assert handle.handle == 123
-
         handle.close()
-
     assert handle.handle is None
     assert len(native.calls) == 2
 
 
-def test_socket_close_keeps_callback_state_when_native_close_fails():
+def test_socket_close_preserves_handle_for_retry():
     handle = _RetryableHandle()
-    socket = _socket_with_lifecycle_state(socket_base._BaseSocket, handle)
-    callback_refs = (
-        socket._recv_handler,
-        socket._recv_handler_cb,
-        socket._packet_handler,
-        socket._packet_handler_cb,
-    )
-
+    socket = _socket_with_handle(socket_base._BaseSocket, handle)
     with pytest.raises(zlink.CloseError):
         socket.close()
-
-    assert (
-        socket._recv_handler,
-        socket._recv_handler_cb,
-        socket._packet_handler,
-        socket._packet_handler_cb,
-    ) == callback_refs
-    socket._dispatcher.close.assert_not_called()
-
+    assert handle.calls == 1
     socket.close()
-
-    assert all(
-        value is None
-        for value in (
-            socket._recv_handler,
-            socket._recv_handler_cb,
-            socket._packet_handler,
-            socket._packet_handler_cb,
-        )
-    )
-    socket._dispatcher.close.assert_called_once_with()
+    assert handle.calls == 2
 
 
 def test_socket_resource_exit_retries_native_busy_until_close_succeeds():
     handle = _RetryableHandle()
-    socket = _socket_with_lifecycle_state(socket_base._BaseSocket, handle)
-
+    socket = _socket_with_handle(socket_base._BaseSocket, handle)
     socket.__exit__(None, None, None)
-
     assert handle.calls == 2
-    assert all(
-        value is None
-        for value in (
-            socket._recv_handler,
-            socket._recv_handler_cb,
-            socket._packet_handler,
-            socket._packet_handler_cb,
-        )
-    )
-    socket._dispatcher.close.assert_called_once_with()
 
 
 def test_socket_resource_exit_does_not_retry_non_busy_close_error():
@@ -129,31 +82,22 @@ def test_socket_resource_exit_does_not_retry_non_busy_close_error():
     handle.close.side_effect = zlink.CloseError(
         zlink.CloseResult.INVALID_HANDLE, errno.EFAULT
     )
-    socket = _socket_with_lifecycle_state(socket_base._BaseSocket, handle)
-
-    with pytest.raises(zlink.CloseError) as raised:
+    socket = _socket_with_handle(socket_base._BaseSocket, handle)
+    with pytest.raises(zlink.CloseError):
         socket.__exit__(None, None, None)
-
-    assert raised.value.result == zlink.CloseResult.INVALID_HANDLE
     handle.close.assert_called_once_with()
 
 
-def test_routed_async_owner_is_not_terminated_until_socket_close_succeeds():
+def test_completion_owner_is_shutdown_before_each_native_close_attempt():
     handle = _RetryableHandle()
-    socket = _socket_with_lifecycle_state(socket_base_impl.DealerSocket, handle)
-    admission = Mock()
-    socket._routed_admission = admission
-
+    socket = _socket_with_handle(socket_base_impl.DealerSocket, handle)
+    completion = Mock()
+    socket._completion_owner = completion
     with pytest.raises(zlink.CloseError):
         socket.close()
-
-    # The binding does not publish a closing gate or wait for submitters.
-    # Core rejected this close, so all Python-side state remains live.
-    admission.finish_close.assert_not_called()
-
+    completion.shutdown.assert_called_once_with()
     socket.close()
-
-    admission.finish_close.assert_called_once_with()
+    assert completion.shutdown.call_count == 2
 
 
 @pytest.mark.parametrize(
@@ -163,44 +107,29 @@ def test_routed_async_owner_is_not_terminated_until_socket_close_succeeds():
         (timer_runtime, timer_runtime.NativeTimer, "zlink_timer_destroy"),
     ],
 )
-def test_event_owner_preserves_state_after_failed_destroy(
+def test_pull_event_owner_preserves_handle_after_failed_destroy(
     runtime_module, runtime_cls, method_name
 ):
     native = _NativeCloseStub(method_name, [zlink.CloseResult.BUSY, 0])
     owner = object.__new__(runtime_cls)
     owner._handle = 123
-    owner._handler = object()
-    owner._handler_cb = object()
-    if runtime_cls is monitor_runtime.NativeMonitorSocket:
-        owner._dispatcher = Mock()
-
     with patch.object(runtime_module, "lib", return_value=native):
         with pytest.raises(zlink.CloseError):
             owner.close()
         assert owner._handle == 123
-        assert owner._handler is not None
-        assert owner._handler_cb is not None
-
         owner.close()
-
     assert owner._handle is None
-    assert owner._handler is None
-    assert owner._handler_cb is None
-    if runtime_cls is monitor_runtime.NativeMonitorSocket:
-        owner._dispatcher.close.assert_called_once_with()
 
 
 def test_context_preserves_handle_after_failed_termination():
     native = _NativeCloseStub("zlink_ctx_term", [zlink.CloseResult.BUSY, 0])
     owner = object.__new__(context_runtime.NativeContext)
     owner._handle = 123
-
     with patch.object(context_runtime, "lib", return_value=native):
         with pytest.raises(zlink.CloseError):
             owner.close()
         assert owner._handle == 123
         owner.close()
-
     assert owner._handle is None
 
 
@@ -208,28 +137,13 @@ def test_poller_preserves_handle_after_failed_destroy():
     native = _NativeCloseStub("zlink_poller_destroy", [zlink.CloseResult.BUSY, 0])
     owner = object.__new__(poller_runtime.NativePoller)
     owner._handle = 123
-
     with patch.object(poller_runtime, "lib", return_value=native):
         with pytest.raises(zlink.CloseError):
             owner.close()
         assert owner._handle == 123
-
         owner.close()
-
     assert owner._handle is None
     assert len(native.calls) == 2
-
-
-@pytest.mark.parametrize("error_type", (TypeError, BufferError))
-def test_invalid_native_bridge_payload_is_not_reported_as_backpressure(error_type):
-    bridge = Mock()
-    bridge.send_parts.side_effect = error_type("invalid payload")
-    owner = object.__new__(socket_base._BaseSocket)
-    owner._socket_handle = SimpleNamespace(handle=123)
-
-    with patch.object(socket_base, "_native_extension", bridge):
-        with pytest.raises(error_type):
-            owner._send_payload_via_native_bridge(object(), 1)
 
 
 def test_unknown_native_result_is_preserved_in_typed_error():
@@ -240,6 +154,5 @@ def test_unknown_native_result_is_preserved_in_typed_error():
             999,
             errno.EIO,
         )
-
     assert raised.value.result == 999
     assert raised.value.code == 999

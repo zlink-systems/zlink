@@ -73,12 +73,25 @@ class NativePoller:
         self._handle = lib().zlink_poller_new()
         if not self._handle:
             _raise_last_error()
+        self._socket_registrations = {}
+
+    @staticmethod
+    def _completion_owner(socket, events):
+        if int(events) & int(PollEventFlag.POLLCOMPLETION):
+            return getattr(socket, "_completion_owner", None)
+        return None
 
     def add_socket(self, socket, events, slot):
         user_data = ctypes.c_void_p(_validate_slot(slot))
+        owner = self._completion_owner(socket, events)
+        if owner is not None:
+            owner.transfer_to_public(self)
         rc = lib().zlink_poller_add(self._handle, socket._handle, user_data, int(events))
         if rc != 0:
+            if owner is not None:
+                owner.transfer_to_runtime(self)
             _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
+        self._socket_registrations[int(socket._handle)] = [socket, int(events), owner]
 
     def add_fd(self, fd, events, slot):
         user_data = ctypes.c_void_p(_validate_slot(slot))
@@ -93,9 +106,22 @@ class NativePoller:
             _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
 
     def modify_socket(self, socket, events):
+        key = int(socket._handle)
+        registration = self._socket_registrations.get(key)
+        old_owner = None if registration is None else registration[2]
+        new_owner = self._completion_owner(socket, events)
+        if old_owner is None and new_owner is not None:
+            new_owner.transfer_to_public(self)
         rc = lib().zlink_poller_modify(self._handle, socket._handle, int(events))
         if rc != 0:
+            if old_owner is None and new_owner is not None:
+                new_owner.transfer_to_runtime(self)
             _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
+        if registration is not None:
+            registration[1] = int(events)
+            registration[2] = new_owner
+        if old_owner is not None and new_owner is None:
+            old_owner.transfer_to_runtime(self)
 
     def modify_fd(self, fd, events):
         rc = lib().zlink_poller_modify_fd(self._handle, int(fd), int(events))
@@ -103,9 +129,13 @@ class NativePoller:
             _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
 
     def remove_socket(self, socket):
+        key = int(socket._handle)
         rc = lib().zlink_poller_remove(self._handle, socket._handle)
         if rc != 0:
             _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
+        registration = self._socket_registrations.pop(key, None)
+        if registration is not None and registration[2] is not None:
+            registration[2].transfer_to_runtime(self)
 
     def remove_fd(self, fd):
         rc = lib().zlink_poller_remove_fd(self._handle, int(fd))
@@ -137,8 +167,24 @@ class NativePoller:
         )
         if ready < 0:
             _raise_result_error(RecvError, RecvResult, error_out.value, lib().zlink_errno())
-        events._mark_ready_count(ready)
-        return int(ready)
+        output_index = 0
+        for index in range(int(ready)):
+            native = events._events[index]
+            if (
+                int(native.source_kind) == int(PollSourceKind.SOCKET)
+                and int(native.events) & int(PollEventFlag.POLLCOMPLETION)
+            ):
+                registration = self._socket_registrations.get(int(native.socket or 0))
+                owner = None if registration is None else registration[2]
+                if owner is not None and owner.drain(wait_for_publish=True) == 0:
+                    native.events = int(native.events) & ~int(PollEventFlag.POLLCOMPLETION)
+            if int(native.events) == 0:
+                continue
+            if output_index != index:
+                events._events[output_index] = native
+            output_index += 1
+        events._mark_ready_count(output_index)
+        return output_index
 
     def close(self):
         if not self._handle:
@@ -148,6 +194,12 @@ class NativePoller:
         if rc != 0:
             _raise_result_error(CloseError, CloseResult, rc, lib().zlink_errno())
         self._handle = None
+        registrations_map = getattr(self, "_socket_registrations", {})
+        registrations = list(registrations_map.values())
+        registrations_map.clear()
+        for _socket, _events, owner in registrations:
+            if owner is not None:
+                owner.transfer_to_runtime(self)
 
     def __enter__(self):
         return self

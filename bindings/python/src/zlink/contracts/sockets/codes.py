@@ -94,6 +94,14 @@ class ReceiveFlowState(IntEnum):
     RUNNING = 0
     PAUSED = 1
 
+
+class StreamRecvMode(IntEnum):
+    """STREAM receive framing selected before the first bind or connect."""
+
+    UNSPECIFIED = 0
+    RAW = 1
+    PACKET = 2
+
 class SubmitRetryMode(IntEnum):
     """Whether a failed submit is retried (``OFF`` or ``LOCAL_FAILURE``)."""
     OFF = 0
@@ -110,4 +118,5 @@ __all__ = [
     "RidDuplicatePolicy",
     "SubmitRetryMode",
     "ReceiveFlowState",
+    "StreamRecvMode",
 ]

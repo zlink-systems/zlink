@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MPL-2.0
 
-from typing import Awaitable, Callable, Optional, Protocol, runtime_checkable
+from typing import Awaitable, Protocol, runtime_checkable
+
+from ..messaging.message import Message
 
 
 @runtime_checkable
@@ -17,31 +19,19 @@ class _FluentMessageOp(Protocol):
 
 
 @runtime_checkable
-class _FlaggedFluentMessageOp(_FluentMessageOp, Protocol):
-    def flags(self, flags):
-        """Set the send flags used by submission."""
-        ...
-
-
-@runtime_checkable
-class SendOp(_FlaggedFluentMessageOp, Protocol):
+class SendOp(_FluentMessageOp, Protocol):
     """Build and submit a multipart send."""
 
-    def submit(self):
-        """Submit the parts and return the operation result."""
-        ...
+    def message(self, payload) -> "SendOp": ...
 
-
-@runtime_checkable
-class RoutedSendOp(_FluentMessageOp, Protocol):
-    """Build an HWM-managed send (PAIR or DEALER/ROUTER/STREAM routed send)."""
+    def messages(self, *payloads) -> "SendOp": ...
 
     def submit(self) -> Awaitable[None]:
-        """Return the coroutine Core's send-completion notification resolves."""
+        """Submit without blocking and await Core admission completion."""
         ...
 
-    def submit_sync(self, *, flags=0) -> None:
-        """Submit synchronously, blocking unless DONT_WAIT is set."""
+    def submit_sync(self) -> None:
+        """Submit synchronously through Core's blocking admission path."""
         ...
 
 
@@ -49,33 +39,51 @@ class RoutedSendOp(_FluentMessageOp, Protocol):
 class RequestOp(_FluentMessageOp, Protocol):
     """Build an HWM-managed routed request."""
 
-    def timeout(self, timeout):
+    def message(self, payload) -> "RequestOp": ...
+
+    def messages(self, *payloads) -> "RequestOp": ...
+
+    def timeout(self, timeout) -> "RequestOp":
         """Set the reply timeout."""
         ...
 
-    def submit(self) -> Awaitable[list]:
+    def submit(self) -> Awaitable[list["Message"]]:
         """Return the coroutine that completes with the reply parts."""
         ...
 
-    def submit_sync(
-        self,
-        *,
-        flags=0,
-        callback: Optional[
-            Callable[[Optional[list], Optional[BaseException]], None]
-        ] = None,
-    ):
-        """Return a reply, or deliver it to callback after synchronous admission."""
+    def submit_sync(self) -> list["Message"]:
+        """Block until the request reaches a terminal result."""
         ...
 
 
 @runtime_checkable
-class ReplyOp(_FlaggedFluentMessageOp, Protocol):
+class ReplyOp(_FluentMessageOp, Protocol):
     """Build and submit a reply."""
 
-    def submit(self):
+    def message(self, payload) -> "ReplyOp": ...
+
+    def messages(self, *payloads) -> "ReplyOp": ...
+
+    def submit(self) -> None:
         """Submit the reply parts."""
         ...
 
 
-__all__ = ["ReplyOp", "RequestOp", "RoutedSendOp", "SendOp"]
+@runtime_checkable
+class PublishOp(_FluentMessageOp, Protocol):
+    """Build and synchronously submit a topic publication."""
+
+    def message(self, payload) -> "PublishOp": ...
+
+    def messages(self, *payloads) -> "PublishOp": ...
+
+    def flags(self, flags) -> "PublishOp":
+        """Set the lossy/NODROP publication flags."""
+        ...
+
+    def submit(self) -> None:
+        """Submit the publication synchronously."""
+        ...
+
+
+__all__ = ["PublishOp", "ReplyOp", "RequestOp", "SendOp"]

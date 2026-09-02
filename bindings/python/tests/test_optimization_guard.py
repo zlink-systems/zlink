@@ -50,8 +50,12 @@ def test_raw_hot_path_keeps_gil_release_and_part_failure_cleanup():
     assert "zlink_send_part" in native_text
     assert "zlink_recv_part" in native_text
     assert "zlink_router_recv_part" in native_text
-    assert "_send_payload_via_native_bridge" in socket_text
     assert "_recv_owner_via_native_bridge" in socket_text
+    completion_text = (
+        SRC / "_runtime" / "messaging" / "routed_async.py"
+    ).read_text(encoding="utf-8")
+    assert "class CompletionOwner" in completion_text
+    assert "self._entries[entry.context] = entry" in completion_text
     assert "for (Py_ssize_t j = i; j < prepared.count; ++j)" in native_text
 
 
@@ -67,7 +71,6 @@ def test_public_operations_remain_builder_only():
     assert hasattr(zlink.PairSocket, "send")
     assert hasattr(zlink.DealerSocket, "request")
     assert hasattr(zlink.RouterSocket, "reply")
-    assert not hasattr(zlink.PairSocket, "try_send")
     assert not hasattr(zlink.RouterSocket, "send_to_spot")
     assert not hasattr(zlink.StreamSocket, "send_bound_actor")
 

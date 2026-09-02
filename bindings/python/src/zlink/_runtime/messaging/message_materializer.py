@@ -224,7 +224,7 @@ class ReceivedMultipart(_BaseReceived):
         self,
         owner=None,
         routing_id=None,
-        request_seq=None,
+        reply_token=None,
         *,
         router_socket=None,
     ):
@@ -235,7 +235,7 @@ class ReceivedMultipart(_BaseReceived):
             self._owner = None
             self.parts = ()
             self.routing_id = None
-            self.request_seq = None
+            self.reply_token = None
             self._router_socket = None
             return
         self._owner = owner
@@ -244,7 +244,7 @@ class ReceivedMultipart(_BaseReceived):
         else:
             self.parts = self._build_parts(owner)
         self.routing_id = routing_id
-        self.request_seq = request_seq
+        self.reply_token = reply_token
         self._router_socket = router_socket
 
     def _adopt_from(self, source):
@@ -257,18 +257,18 @@ class ReceivedMultipart(_BaseReceived):
         self._owner = source._owner
         self.parts = source.parts
         self.routing_id = source.routing_id
-        self.request_seq = source.request_seq
+        self.reply_token = source.reply_token
         self._router_socket = source._router_socket
         source._clear_owner()
         source.routing_id = None
-        source.request_seq = None
+        source.reply_token = None
         source._router_socket = None
 
     def _replace(
         self,
         owner,
         routing_id=None,
-        request_seq=None,
+        reply_token=None,
         *,
         router_socket=None,
     ):
@@ -285,7 +285,7 @@ class ReceivedMultipart(_BaseReceived):
         self._owner = owner
         self.parts = next_parts
         self.routing_id = routing_id
-        self.request_seq = request_seq
+        self.reply_token = reply_token
         self._router_socket = router_socket
 
 
@@ -295,7 +295,6 @@ class TopicMessage(_BaseReceived):
         topic=None,
         owner=None,
         routing_id=None,
-        request_seq=None,
     ):
         if owner is None:
             self._topic = ""
@@ -303,14 +302,12 @@ class TopicMessage(_BaseReceived):
             self._owner = None
             self.parts = ()
             self.routing_id = None
-            self.request_seq = None
             return
         self._topic = topic
         self._topic_raw = None
         self._owner = owner
         self.parts = self._build_parts(owner)
         self.routing_id = routing_id
-        self.request_seq = request_seq
 
     @property
     def topic(self):
@@ -334,12 +331,10 @@ class TopicMessage(_BaseReceived):
         self._owner = source._owner
         self.parts = source.parts
         self.routing_id = source.routing_id
-        self.request_seq = source.request_seq
         source._topic = ""
         source._topic_raw = None
         source._clear_owner()
         source.routing_id = None
-        source.request_seq = None
 
     def _replace(
         self,
@@ -348,7 +343,6 @@ class TopicMessage(_BaseReceived):
         topic="",
         topic_raw=None,
         routing_id=None,
-        request_seq=None,
     ):
         try:
             next_parts = self._build_parts(owner)
@@ -361,7 +355,6 @@ class TopicMessage(_BaseReceived):
         self._owner = owner
         self.parts = next_parts
         self.routing_id = routing_id
-        self.request_seq = request_seq
 
 
 class Received(ReceivedMultipart):
@@ -376,13 +369,13 @@ class Received(ReceivedMultipart):
         return self._router_socket.send(self.routing_id)
 
     def reply(self):
-        """Return a ReplyOp for this received request. Valid only when
-        ``request_seq`` is present."""
-        if self.request_seq is None:
+        """Return a ReplyOp for this received request. Valid only when a
+        reply token is present."""
+        if self.reply_token is None:
             raise SubmitError(SubmitResult.INVALID_STATE, 0)
         if self._router_socket is None or self.routing_id is None:
             raise SubmitError(SubmitResult.INVALID_STATE, 0)
-        return self._router_socket.reply(self.routing_id, self.request_seq)
+        return self._router_socket.reply(self.routing_id, self.reply_token)
 
 
 class SubscriptionEvent:

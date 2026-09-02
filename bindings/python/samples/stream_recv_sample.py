@@ -10,6 +10,7 @@ def main():
 
     with zlink.create_context() as ctx:
         with zlink.create_stream_socket(ctx) as server:
+            server.stream_options.recv_mode = zlink.StreamRecvMode.RAW
             with server.monitor_open(zlink.MonitorEventMask.ACCEPTED) as server_monitor:
                 server.bind(endpoint)
                 with socket.create_connection(("127.0.0.1", port), timeout=3.0) as client:
@@ -23,7 +24,7 @@ def main():
                             raise AssertionError("unexpected stream payload")
                         if not received.routing_id:
                             raise AssertionError("stream sample expected a routing id")
-                        server.send(received.routing_id).message(b"hello-stream").submit()
+                        server.send(received.routing_id).message(b"hello-stream").submit_sync()
                     reply = client.recv(64)
                     if reply != b"hello-stream":
                         raise AssertionError(f"unexpected stream reply: {reply!r}")

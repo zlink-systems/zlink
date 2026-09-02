@@ -21,11 +21,6 @@ class Timer(Protocol):
         when none is pending."""
         ...
 
-    def on_fire(self, handler) -> None:
-        """Register ``handler``, invoked on each expiration with the fire count.
-        It runs on a background dispatch thread."""
-        ...
-
     def close(self) -> None:
         """Close the timer and release its resources."""
         ...

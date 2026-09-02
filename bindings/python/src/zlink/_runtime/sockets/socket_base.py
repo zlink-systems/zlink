@@ -2,11 +2,9 @@
 
 import ctypes
 import errno as _errno
-import threading
 import time as _time
 from typing import Optional
 
-from ..eventing.dispatcher import CallbackDispatcher
 from ...contracts.errors.codes import (
     BindResult,
     CloseResult,
@@ -15,7 +13,6 @@ from ...contracts.errors.codes import (
 )
 from ...contracts.eventing.codes import MonitorEventMask
 from ...contracts.sockets.codes import (
-    HandlerResult,
     ReceiveFlowState,
     RecvResult,
     SocketType,
@@ -43,7 +40,6 @@ from ...contracts.errors.errors import (
     CloseError,
     ConfigError,
     ConnectError,
-    HandlerError,
     RecvError,
     SubmitError,
 )
@@ -52,16 +48,13 @@ from ..messaging.message_materializer import (
     Received,
     TopicMessage,
 )
-from ..messaging.native_parts import _materialize_native_parts, _payload_parts
+from ..messaging.native_parts import _payload_parts
 from ..handles.native_support import (
-    _SOCKET_RECV_HANDLER,
     _BytesReceivedPartsOwner,
     _ReceivedPartsOwner,
     _as_bytes_view,
-    _clone_native_msg,
     _copy_routing_id,
     _recv_native_parts,
-    _report_unhandled_callback_exception,
     _raise_result_error,
     _routing_id_bytes,
     _validated_c_string_text,
@@ -70,7 +63,6 @@ from ..handles.native_support import (
     _send_buffer,
 )
 
-_callback_depth_by_thread = {}
 try:
     from ..._native import _zlink_native as _native_extension
 except ImportError:  # pragma: no cover - exercised when extension is not built.
@@ -87,39 +79,6 @@ _native_subscribe_owner = (
     if _native_extension is not None
     else None
 )
-
-
-def _in_callback():
-    return _callback_depth_by_thread.get(threading.get_ident(), 0) > 0
-
-
-def _enter_callback():
-    ident = threading.get_ident()
-    _callback_depth_by_thread[ident] = _callback_depth_by_thread.get(ident, 0) + 1
-
-
-def _leave_callback():
-    ident = threading.get_ident()
-    depth = _callback_depth_by_thread.get(ident, 0) - 1
-    if depth > 0:
-        _callback_depth_by_thread[ident] = depth
-    else:
-        _callback_depth_by_thread.pop(ident, None)
-
-
-def _ensure_not_in_callback(operation):
-    if _in_callback():
-        raise SubmitError(
-            SubmitResult.INVALID_STATE,
-            _errno.EDEADLK,
-        )
-
-
-def _clone_received_owner(parts_ptr, part_count):
-    parts_array = (ZlinkMsg * part_count)()
-    for index in range(part_count):
-        parts_array[index] = _clone_native_msg(parts_ptr[index])
-    return _ReceivedPartsOwner(parts_array, part_count)
 
 
 def _native_socket_type(sock_type):
@@ -159,19 +118,6 @@ def _submit_parts(native_parts, submit_part):
     return 0, 0
 
 
-# Stream packet callback trampoline type. Lives in the runtime/native bridge
-# because it is a raw FFI callback signature; concrete socket classes import
-# it when wiring StreamSocket.on_packet handlers.
-_STREAM_PACKET_HANDLER = ctypes.CFUNCTYPE(
-    None,
-    ctypes.c_void_p,
-    ctypes.POINTER(ZlinkRoutingId),
-    ctypes.POINTER(ZlinkMsg),
-    ctypes.POINTER(ZlinkMsg),
-    ctypes.c_void_p,
-)
-
-
 class _SocketHandle:
     def __init__(self, handle, own):
         self.handle = handle
@@ -201,7 +147,7 @@ _RESOURCE_CLOSE_RETRY_TIMEOUT_SECONDS = 1.0
 
 
 def _close_owned_resource(close):
-    """Close a binding-owned resource after transient callback ownership drains."""
+    """Retry a binding-owned resource while native ownership is transiently busy."""
     deadline = _time.monotonic() + _RESOURCE_CLOSE_RETRY_TIMEOUT_SECONDS
     while True:
         try:
@@ -240,13 +186,6 @@ class _BaseSocket:
     def _init_from_native_handle(self, handle, *, own, socket_type):
         self._socket_handle = _SocketHandle(handle, own)
         self._socket_type = socket_type
-        self._recv_handler = None
-        self._recv_handler_cb = None
-        self._packet_handler = None
-        self._packet_handler_cb = None
-        self._dispatcher = CallbackDispatcher(
-            "zlink-socket-dispatch", _enter_callback, _leave_callback
-        )
         self._options = create_common_socket_options(self)
 
     @property
@@ -274,93 +213,7 @@ class _BaseSocket:
         )
         return obj
 
-    def _send_native_parts(self, native_parts, flags):
-        _ensure_not_in_callback("blocking send")
-        part_count = len(native_parts)
-        for index, native in enumerate(native_parts):
-            rc = lib().zlink_send_part(
-                self._handle,
-                ctypes.byref(native),
-                int(flags),
-                _part_flag(index, part_count),
-            )
-            if rc != 0:
-                err = lib().zlink_errno()
-                _close_native_parts(native_parts, index)
-                _raise_result_error(SubmitError, SubmitResult, rc, err)
-        return 0
-
-    def _send_native_parts_to_routing_id(self, routing_id, native_parts, flags):
-        _ensure_not_in_callback("blocking send")
-        target = _copy_routing_id(routing_id)
-        part_count = len(native_parts)
-        for index, native in enumerate(native_parts):
-            rc = lib().zlink_send_part_rid(
-                self._handle,
-                ctypes.byref(target),
-                ctypes.byref(native),
-                int(flags),
-                _part_flag(index, part_count),
-            )
-            if rc != 0:
-                err = lib().zlink_errno()
-                _close_native_parts(native_parts, index)
-                _raise_result_error(SubmitError, SubmitResult, rc, err)
-        return 0
-
-    def _submit_bridge_result(self, result, flags):
-        if result is None:
-            return None
-        rc, err = result
-        if int(rc) != 0:
-            if (int(flags) & 1) and err == _errno.EAGAIN:
-                return False
-            _raise_result_error(SubmitError, SubmitResult, rc, err)
-        return True
-
-    def _send_payload_via_native_bridge(self, payload, flags):
-        _ensure_not_in_callback("blocking send")
-        if _native_extension is None:
-            return None
-        if any(isinstance(part, Message) for part in _payload_parts(payload)):
-            return None
-        result = _native_extension.send_parts(
-            int(self._socket_handle.handle), payload, int(flags)
-        )
-        return self._submit_bridge_result(result, flags)
-
-    def _send_routed_payload_via_native_bridge(self, routing_id, payload, flags):
-        _ensure_not_in_callback("blocking send")
-        if _native_extension is None:
-            return None
-        if any(isinstance(part, Message) for part in _payload_parts(payload)):
-            return None
-        result = _native_extension.send_parts_rid(
-            int(self._socket_handle.handle),
-            _validated_routing_id_bytes(routing_id),
-            payload,
-            int(flags),
-        )
-        return self._submit_bridge_result(result, flags)
-
-    def _send_routed_payload_bytes_via_native_bridge(
-        self, routing_id_bytes, payload, flags
-    ):
-        _ensure_not_in_callback("blocking send")
-        if _native_extension is None:
-            return None
-        if any(isinstance(part, Message) for part in _payload_parts(payload)):
-            return None
-        result = _native_extension.send_parts_rid(
-            int(self._socket_handle.handle),
-            routing_id_bytes,
-            payload,
-            int(flags),
-        )
-        return self._submit_bridge_result(result, flags)
-
     def _publish_payload_via_native_bridge(self, topic_bytes, payload, flags):
-        _ensure_not_in_callback("blocking publish")
         if _native_extension is None:
             return None
         if any(isinstance(part, Message) for part in _payload_parts(payload)):
@@ -368,11 +221,12 @@ class _BaseSocket:
         result = _native_extension.publish_parts(
             int(self._socket_handle.handle), topic_bytes, payload, int(flags)
         )
-        return self._submit_bridge_result(result, flags)
+        rc, err = result
+        if int(rc) != 0:
+            _raise_result_error(SubmitError, SubmitResult, rc, err)
+        return True
 
     def _recv_parts_via_native_bridge(self, flags):
-        if _in_callback():
-            return None
         if _native_extension is None:
             return None
         if _native_recv_owner is not None:
@@ -399,8 +253,6 @@ class _BaseSocket:
         return routing_id, _BytesReceivedPartsOwner._from_trusted_bytes_tuple(parts)
 
     def _recv_owner_via_native_bridge(self, flags):
-        if _in_callback():
-            return None
         if _native_recv_owner is None:
             return None
         result = _native_recv_owner(int(self._socket_handle.handle), int(flags))
@@ -434,9 +286,6 @@ class _BaseSocket:
         if rc != 0:
             _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
         return buf.raw[: out_size.value]
-
-    def _native_parts_from_payload(self, payload):
-        return _materialize_native_parts(payload)
 
     def _unsupported_capability(self, capability):
         actual = _socket_type_name(self._socket_type)
@@ -519,17 +368,7 @@ class _BaseSocket:
         return open_socket_monitor(self, events, monitor_hwm_bytes)
 
     def close(self):
-        # Core may return EBUSY while a callback or admitted API is in flight.
-        # Keep every Python-side owner reference until native close succeeds so
-        # the caller can retry without losing callback state.
         self._socket_handle.close()
-        self._recv_handler = None
-        self._packet_handler = None
-        dispatcher = self._dispatcher
-        if dispatcher is not None:
-            dispatcher.close()
-        self._recv_handler_cb = None
-        self._packet_handler_cb = None
 
     def __enter__(self):
         return self
@@ -724,18 +563,6 @@ class _SubscriberOptionSocket(_Socket):
 
 
 class _MessageSocket(_Socket):
-    def send(self, payload, *, flags=0):
-        try:
-            bridged = self._send_payload_via_native_bridge(payload, flags)
-            if bridged is None:
-                self._send_native_parts(self._native_parts_from_payload(payload), flags)
-                return True
-            return bridged
-        except SubmitError as ex:
-            if (int(flags) & 1) and ex.result == SubmitResult.BACKPRESSURED:
-                return False
-            raise
-
     def recv_into(self, received, *, flags=0):
         """Receives into a caller-provided ``Received`` object.
 
@@ -765,106 +592,16 @@ class _MessageSocket(_Socket):
         received._replace(owner, routing)
         return True
 
-    def _attach_recv_handler(self, handler):
-        if handler is None:
-            raise ValueError("handler must not be None")
-        if self._recv_handler is not None:
-            raise RuntimeError("handler is already attached")
-
-        self._recv_handler = handler
-        dispatcher = self._dispatcher
-
-        def _invoke(received):
-            try:
-                handler(received)
-            except Exception:
-                try:
-                    received.close()
-                finally:
-                    _report_unhandled_callback_exception(handler)
-            else:
-                received.close()
-
-        def _callback(routing_id_ptr, parts_ptr, part_count, _):
-            try:
-                routing_id = None
-                if routing_id_ptr:
-                    routing_id = _routing_id_bytes(routing_id_ptr.contents)
-                received = Received(
-                    _clone_received_owner(parts_ptr, int(part_count)),
-                    routing_id,
-                )
-            except Exception:
-                _report_unhandled_callback_exception(handler)
-                return
-            if not dispatcher.submit(lambda received=received: _invoke(received)):
-                received.close()
-
-        callback = _SOCKET_RECV_HANDLER(_callback)
-        rc = lib().zlink_recv_handler(self._handle, callback, None)
-        if rc != 0:
-            self._recv_handler = None
-            _raise_result_error(HandlerError, HandlerResult, rc, lib().zlink_errno())
-        self._recv_handler_cb = callback
-
-
 class _RoutedMessageSocket(_MessageSocket):
-    def send(self, routing_id, payload, *, flags=0):
-        try:
-            bridged = self._send_routed_payload_via_native_bridge(
-                routing_id,
-                payload,
-                flags,
-            )
-            if bridged is None:
-                self._send_native_parts_to_routing_id(
-                    routing_id,
-                    self._native_parts_from_payload(payload),
-                    flags,
-                )
-                return True
-            return bridged
-        except SubmitError as ex:
-            if (int(flags) & 1) and ex.result == SubmitResult.BACKPRESSURED:
-                return False
-            raise
+    pass
 
 
 class _PublisherSocket(_Socket):
-    def publish(self, topic, payload, *, flags=0):
-        try:
-            _ensure_not_in_callback("blocking publish")
-            topic_bytes = _validated_c_string_value(topic, field="topic")
-            bridged = self._publish_payload_via_native_bridge(
-                topic_bytes, payload, flags
-            )
-            if bridged is not None:
-                return bridged
-            native_parts = self._native_parts_from_payload(payload)
-            part_count = len(native_parts)
-            for index, native in enumerate(native_parts):
-                rc = lib().zlink_publish_part(
-                    self._handle,
-                    topic_bytes,
-                    ctypes.byref(native),
-                    int(flags),
-                    _part_flag(index, part_count),
-                )
-                if rc != 0:
-                    err = lib().zlink_errno()
-                    _close_native_parts(native_parts, index)
-                    _raise_result_error(SubmitError, SubmitResult, rc, err)
-            return True
-        except SubmitError as ex:
-            if (int(flags) & 1) and ex.result == SubmitResult.BACKPRESSURED:
-                return False
-            raise
+    pass
 
 
 class _SubscriberSocket(_Socket):
     def _subscribe_parts_via_native_bridge(self, flags):
-        if _in_callback():
-            return None
         if _native_subscribe_owner is not None:
             result = _native_subscribe_owner(int(self._socket_handle.handle), int(flags))
             if result is False:

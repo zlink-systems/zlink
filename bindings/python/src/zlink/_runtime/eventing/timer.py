@@ -4,19 +4,10 @@ import ctypes
 from typing import Optional
 
 from ...contracts.errors.codes import CloseResult, ConfigResult
-from ...contracts.errors.errors import CloseError, ConfigError, HandlerError, RecvError
-from ...contracts.sockets.codes import HandlerResult, RecvResult
+from ...contracts.errors.errors import CloseError, ConfigError, RecvError
+from ...contracts.sockets.codes import RecvResult
 from ..._native.ffi import lib
-from ..core.zlink import _report_unhandled_exception
 from ..handles.native_support import _raise_result_error
-
-
-_TIMER_HANDLER = ctypes.CFUNCTYPE(
-    None,
-    ctypes.c_void_p,
-    ctypes.c_uint64,
-    ctypes.c_void_p,
-)
 
 
 class NativeTimer:
@@ -26,8 +17,6 @@ class NativeTimer:
         self._handle = lib().zlink_timer_new()
         if not self._handle:
             _raise_result_error(ConfigError, ConfigResult, 701, lib().zlink_errno())
-        self._handler = None
-        self._handler_cb = None
 
     def start(self, interval_ns: int, repeat_count: int) -> None:
         if not self._handle:
@@ -54,25 +43,6 @@ class NativeTimer:
             _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
         return int(fire_count.value)
 
-    def on_fire(self, handler) -> None:
-        if handler is None:
-            raise ValueError("handler must not be None")
-        if self._handler_cb is not None:
-            raise RuntimeError("handler is already attached")
-
-        def _callback(_timer, fire_count, _userdata):
-            try:
-                handler(self, int(fire_count))
-            except Exception:
-                _report_unhandled_exception(handler)
-
-        callback = _TIMER_HANDLER(_callback)
-        rc = lib().zlink_timer_handler(self._handle, callback, None)
-        if rc != 0:
-            _raise_result_error(HandlerError, HandlerResult, rc, lib().zlink_errno())
-        self._handler = handler
-        self._handler_cb = callback
-
     def close(self) -> None:
         if not self._handle:
             return
@@ -81,8 +51,6 @@ class NativeTimer:
         if rc != 0:
             _raise_result_error(CloseError, CloseResult, rc, lib().zlink_errno())
         self._handle = None
-        self._handler = None
-        self._handler_cb = None
 
     def __enter__(self):
         return self

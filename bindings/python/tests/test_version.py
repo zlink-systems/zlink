@@ -35,7 +35,7 @@ class VersionTests(unittest.TestCase):
                     s2.connect(endpoint)
                     payload = b"ping"
                     # PAIR send is HWM-managed and ASYNC-classified (Core
-                    # `zlink_send_async`); `submit()` returns an awaitable.
+                    # Core pull completion); `submit()` returns an awaitable.
                     asyncio.run(s1.send().message(payload).submit())
                     received = zlink.create_received()
                     self.assertTrue(s2.recv_into(received))

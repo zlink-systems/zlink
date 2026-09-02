@@ -1,6 +1,63 @@
 # SPDX-License-Identifier: MPL-2.0
 
-from typing import Protocol, runtime_checkable
+from __future__ import annotations
+
+from typing import NoReturn, Optional, Protocol, final, runtime_checkable
+
+from ..core.routing_id import RoutingId
+
+
+@final
+class ReplyToken:
+    """Opaque capability for replying to one ROUTER request."""
+
+    __slots__ = ("_owner", "_value")
+
+    def __new__(cls) -> NoReturn:
+        raise TypeError("ReplyToken is created by ROUTER request receive")
+
+    def __setattr__(self, name, value) -> NoReturn:
+        raise AttributeError("ReplyToken is immutable")
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, ReplyToken)
+            and self._owner is other._owner
+            and self._value == other._value
+        )
+
+    def __hash__(self) -> int:
+        return hash((id(self._owner), self._value))
+
+    def __repr__(self) -> str:
+        return "ReplyToken()"
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        return self
+
+    def __reduce_ex__(self, protocol):
+        raise TypeError("ReplyToken cannot be serialized")
+
+
+def _reply_token_from_native(owner, value):
+    native_value = int(value)
+    if owner is None or native_value == 0:
+        raise ValueError("native reply token must have an owner and non-zero value")
+    token = object.__new__(ReplyToken)
+    object.__setattr__(token, "_owner", owner)
+    object.__setattr__(token, "_value", native_value)
+    return token
+
+
+def _reply_token_owner_matches(token, owner):
+    return isinstance(token, ReplyToken) and token._owner is owner
+
+
+def _reply_token_value(token):
+    return token._value
 
 
 @runtime_checkable
@@ -93,15 +150,22 @@ class Received(ReceivedMultipart, Protocol):
     """A received message envelope with routing metadata and an optional
     reply/send context."""
 
-    def send(self):
+    routing_id: Optional[RoutingId]
+
+    @property
+    def reply_token(self) -> Optional[ReplyToken]:
+        """The opaque reply capability for a ROUTER request, otherwise None."""
+        ...
+
+    def send(self) -> "SendOp":
         """Begin a send addressed to this envelope's source route; raise
         :class:`SubmitError` when the envelope carries no send context."""
         ...
 
-    def reply(self):
+    def reply(self) -> "ReplyOp":
         """Begin a reply to this request; raise :class:`SubmitError` unless the
-        envelope is replyable (has a request sequence)."""
+        envelope is replyable (has a reply token)."""
         ...
 
 
-__all__ = ["Received", "ReceivedMessage", "ReceivedMultipart"]
+__all__ = ["Received", "ReceivedMessage", "ReceivedMultipart", "ReplyToken"]

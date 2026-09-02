@@ -7,9 +7,7 @@ import uuid
 import zlink
 from zlink._runtime.handles.native_support import _msg_to_bytes
 from zlink._runtime.messaging.native_parts import _materialize_native_parts
-from zlink._runtime.messaging.routed_async import _close_native_parts
-from zlink._runtime.sockets.socket_base import _native_socket_type
-from zlink._runtime.sockets.socket_base_impl import _SocketSendOp
+from zlink._runtime.sockets.socket_base import _close_native_parts, _native_socket_type
 
 
 class BoundaryValidationContractTests(unittest.TestCase):
@@ -97,7 +95,7 @@ class OwnershipContractTests(unittest.TestCase):
                     receiver.bind(endpoint)
                     sender.connect(endpoint)
                     time.sleep(0.05)
-                    _SocketSendOp(sender).messages(first, second).submit()
+                    sender.send().messages(first, second).submit_sync()
 
                     received = zlink.create_received()
                     self.assertTrue(receiver.recv_into(received))
@@ -212,9 +210,9 @@ class OwnershipContractTests(unittest.TestCase):
                                     (prefix + "-b").encode()
                                 )
                                 try:
-                                    _SocketSendOp(sender).messages(
+                                    sender.send().messages(
                                         first, second
-                                    ).submit()
+                                    ).submit_sync()
                                     local_successes.add(prefix)
                                 except zlink.SubmitError as error:
                                     if (

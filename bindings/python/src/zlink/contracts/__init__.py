@@ -31,6 +31,7 @@ from .sockets.codes import (
     RidDuplicatePolicy,
     SubmitRetryMode,
     ReceiveFlowState,
+    StreamRecvMode,
 )
 from .errors.codes import (
     CloseResult,
@@ -64,6 +65,8 @@ from .messaging import (
     Received,
     TopicMessage,
     SubscriptionEvent,
+    ReplyToken,
+    StreamPacket,
 )
 from .eventing import (
     MonitorEvent,
@@ -74,7 +77,7 @@ from .eventing import (
     PollEvents,
     Timer,
 )
-from .sockets.operations import ReplyOp, RequestOp, RoutedSendOp, SendOp
+from .sockets.operations import PublishOp, ReplyOp, RequestOp, SendOp
 from .sockets import (
     CommonSocketOptions,
     DealerSocketOptions,
@@ -117,6 +120,7 @@ __all__ = [
     "RidDuplicatePolicy",
     "SubmitRetryMode",
     "ReceiveFlowState",
+    "StreamRecvMode",
     "ErrorCode",
     "ProtocolError",
     "MonitorEventMask",
@@ -138,8 +142,10 @@ __all__ = [
     "Received",
     "TopicMessage",
     "SubscriptionEvent",
+    "ReplyToken",
+    "StreamPacket",
     "SendOp",
-    "RoutedSendOp",
+    "PublishOp",
     "RequestOp",
     "ReplyOp",
     "MonitorEvent",

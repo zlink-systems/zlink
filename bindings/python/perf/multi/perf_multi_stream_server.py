@@ -69,6 +69,7 @@ async def main(argv=None):
             configure_multi_tls_server(server, args.transport)
             apply_multi_socket_options(server)
             server.options.tcp_no_delay = True
+            server.stream_options.recv_mode = zlink.StreamRecvMode.PACKET
             monitor = server.monitor_open(
                 zlink.MonitorEventMask.CONNECTION_READY,
                 resolve_multi_monitor_hwm_bytes(),
@@ -90,7 +91,7 @@ async def main(argv=None):
                         frame,
                         routing_id=routing_id,
                         measurement=False,
-                        method="send_async",
+                        method="send",
                     )
                 except zlink.SubmitError as exc:
                     if exc.result not in {
@@ -109,7 +110,6 @@ async def main(argv=None):
                 pending.add(task)
                 task.add_done_callback(on_send_done)
 
-            server.on_packet(packet_handler)
             print(f"READY,{endpoint}", flush=True)
 
             start_wait = asyncio.create_task(start_requested.wait())
@@ -139,10 +139,18 @@ async def main(argv=None):
                 monitor.close()
             print(f"SERVER_START_READY,{args.msg_size}", flush=True)
 
-            # Packet callbacks may arrive from the binding dispatcher thread;
-            # schedule every public async send onto this coroutine loop.  The
-            # cross-thread stop event is signal-driven, not a timer pump.
-            await async_stop.wait()
+            packet = zlink.StreamPacket()
+            try:
+                while not async_stop.is_set():
+                    if server.recv_packet_into(
+                        packet, flags=zlink.RecvFlags.DONT_WAIT
+                    ):
+                        packet_handler(packet.routing_id, packet.header, packet.body)
+                        packet.close()
+                    else:
+                        await asyncio.sleep(0)
+            finally:
+                packet.close()
             if send_errors:
                 raise send_errors[0]
             if pending:

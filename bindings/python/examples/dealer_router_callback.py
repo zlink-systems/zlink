@@ -17,12 +17,12 @@ def main():
                         dealer.connect(endpoint)
                         wait_connected(rtr_mon, dlr_mon)
 
-                dealer.send().message(b"ping").submit()
+                dealer.send().message(b"ping").submit_sync()
                 request = zlink.create_received()
                 if not router.recv_into(request):
                     raise RuntimeError("expected dealer-router request")
                 with request:
-                    request.send().message(b"pong").submit()
+                    request.send().message(b"pong").submit_sync()
                 reply = zlink.create_received()
                 if not dealer.recv_into(reply):
                     raise RuntimeError("expected dealer-router reply")

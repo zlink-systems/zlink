@@ -89,9 +89,12 @@ class StreamSocketOptions(Protocol):
 
     Attributes:
         notify: Whether peer connect and disconnect events are delivered as messages.
+        recv_mode: RAW byte records or framed PACKET records. Set before the
+            first bind or connect.
     """
 
     notify = _contract_property()
+    recv_mode = _contract_property()
 
 
 @runtime_checkable

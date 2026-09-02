@@ -3,6 +3,7 @@
 from typing import Protocol, runtime_checkable
 
 from . import socket as _socket_contract
+from .operations import RequestOp, SendOp
 
 
 @runtime_checkable
@@ -18,7 +19,7 @@ class PairSocket(_socket_contract._SocketContract, Protocol):
         """Disconnect the connection previously established to ``endpoint``."""
         ...
 
-    def send(self):
+    def send(self) -> SendOp:
         """Begin a multipart send: add parts on the returned builder, then
         submit. Parts are consumed on a successful submit."""
         ...
@@ -53,11 +54,11 @@ class DealerSocket(_socket_contract._SocketContract, Protocol):
         """Disconnect the connection previously established to ``endpoint``."""
         ...
 
-    def send(self):
+    def send(self) -> SendOp:
         """Begin a multipart send; parts are consumed on a successful submit."""
         ...
 
-    def request(self):
+    def request(self) -> RequestOp:
         """Begin a request: add parts, then submit and await a reply. Parts are
         consumed on a successful submit."""
         ...

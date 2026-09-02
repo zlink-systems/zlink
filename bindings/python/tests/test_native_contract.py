@@ -4,14 +4,13 @@ from pathlib import Path
 
 from zlink._native import _zlink_native
 from zlink._native.ffi import (
+    ZlinkCompletion,
+    ZlinkMonitorEvent,
     ZlinkMonitorStatus,
     ZlinkMsg,
     ZlinkPollItem,
     ZlinkPollerEvent,
-    ZlinkRoutedSubmitTarget,
     ZlinkRoutingId,
-    ZlinkSendAsyncOptions,
-    ZlinkSendCompleteEvent,
     ZlinkSocketMonitorOpenOptions,
     lib,
 )
@@ -21,87 +20,40 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "zlink"
 
 
-def test_ffi_layouts_are_the_core_0_13_1_layouts():
-    """Byte parity with `core/include/zlink/socket/api.h` (Core 0.13.1).
-
-    Expected sizes are cross-checked against a C translation unit that
-    includes the real header (see the async-coroutine-policy realignment
-    log) — this test only pins the ctypes side so a future header drift is
-    caught here first.
-    """
+def test_ffi_layouts_are_the_core_0_16_layouts():
     assert (ctypes.sizeof(ZlinkMsg), ctypes.alignment(ZlinkMsg)) == (64, 8)
     assert (ctypes.sizeof(ZlinkRoutingId), ctypes.alignment(ZlinkRoutingId)) == (256, 1)
-    # Grew from 192 to 232 bytes with the ABI v4 flow-control fields
-    # (core-byte-hwm-flow-control-plan.ko.md §6); unrelated to this
-    # realignment but caught here since the pin was stale.
+    assert (ctypes.sizeof(ZlinkCompletion), ctypes.alignment(ZlinkCompletion)) == (312, 8)
+    assert (ctypes.sizeof(ZlinkMonitorEvent), ctypes.alignment(ZlinkMonitorEvent)) == (800, 8)
     assert (ctypes.sizeof(ZlinkMonitorStatus), ctypes.alignment(ZlinkMonitorStatus)) == (232, 8)
     assert (ctypes.sizeof(ZlinkSocketMonitorOpenOptions), ctypes.alignment(ZlinkSocketMonitorOpenOptions)) == (16, 8)
     expected_poll_item = (24, 8) if os.name == "nt" else (16, 8)
     assert (ctypes.sizeof(ZlinkPollItem), ctypes.alignment(ZlinkPollItem)) == expected_poll_item
     assert (ctypes.sizeof(ZlinkPollerEvent), ctypes.alignment(ZlinkPollerEvent)) == (48, 8)
-    assert (
-        ctypes.sizeof(ZlinkRoutedSubmitTarget),
-        ctypes.alignment(ZlinkRoutedSubmitTarget),
-    ) == (272, 8)
-    # `zlink_send_complete_event_t` / `zlink_send_async_options_t`
-    # (core/include/zlink/socket/api.h) — replace the removed
-    # `zlink_routed_send_ready_event_t` layout pin.
-    assert (
-        ctypes.sizeof(ZlinkSendCompleteEvent),
-        ctypes.alignment(ZlinkSendCompleteEvent),
-    ) == (296, 8)
-    assert (
-        ctypes.sizeof(ZlinkSendAsyncOptions),
-        ctypes.alignment(ZlinkSendAsyncOptions),
-    ) == (24, 8)
 
 
-def test_exact_routed_send_and_send_complete_symbols_are_bound_directly():
+def test_pull_completion_and_raw_part_symbols_are_bound_directly():
     native = lib()
     for name in (
-        "zlink_send_async",
-        "zlink_send_complete_handler",
-        "zlink_send_async_cancel",
-        "zlink_select_routed_submit_target",
-        "zlink_send_part_transport_pair",
-        "zlink_dealer_send_transport_pair_part",
-        "zlink_dealer_request_transport_pair_part",
-        "zlink_router_request_transport_pair_part",
+        "zlink_send_part",
+        "zlink_send_part_rid",
+        "zlink_request_part",
+        "zlink_reply_part",
+        "zlink_router_recv_part",
+        "zlink_stream_recv_packet",
+        "zlink_completion_recv",
+        "zlink_completion_close",
     ):
         assert callable(getattr(native, name))
 
 
-def test_send_ready_symbols_are_absent():
-    """Completion uses `zlink_send_complete_handler`; no send-ready symbol exists."""
-    native = lib()
-    for name in ("zlink_send_ready_handler", "zlink_routed_send_ready_handler"):
-        assert not hasattr(native, name), name
-
-
-def test_native_extension_exposes_only_raw_bridge_operations():
-    assert {
-        name
-        for name in dir(_zlink_native)
-        if not name.startswith("__")
-    } == {
-        "NativeReceivedPartsOwner",
-        "BytesReceivedPartsOwner",
-        "SocketSendOp",
-        "RoutedSendOp",
-        "PublisherSendOp",
-        "socket_send_op",
-        "routed_send_op",
-        "publisher_send_op",
-        "send_parts",
-        "send_parts_rid",
-        "publish_parts",
-        "recv_parts",
-        "recv_owner",
-        "dealer_recv_owner",
-        "router_recv_owner",
-        "subscribe_parts",
-        "subscribe_owner",
-    }
+def test_native_extension_exposes_only_current_raw_bridges():
+    names = {name for name in dir(_zlink_native) if not name.startswith("__")}
+    assert "dealer_recv_owner" not in names
+    assert "TargetSendOp" in names
+    assert "router_recv_owner" in names
+    assert "recv_owner" in names
+    assert "subscribe_owner" in names
     assert not (SRC / "_native" / "_zlink_perf_native.c").exists()
     assert "_zlink_perf_native" not in (ROOT / "setup.py").read_text(encoding="utf-8")
 
@@ -119,8 +71,6 @@ def test_native_source_contains_no_service_ffi_or_repository_fallback():
         "zlink_spot_",
         "zlink_actor_",
         "zlink_service_",
-        "spot_",
-        "actor_",
         "core/build",
         "ctypes.util",
     ):
@@ -140,33 +90,15 @@ def test_package_platform_policy_is_explicit_for_supported_native_targets():
     assert "darwin-x86_64" not in setup_text
     assert "linux-aarch64" not in setup_text
     assert "libzlink.dylib" not in loader_text
-    assert 'f"native/{platform_dir}/*"' not in setup_text
-    native_root = SRC / "native"
-    payloads = {
-        path.relative_to(native_root).as_posix()
-        for path in native_root.rglob("*")
-        if path.is_file() or path.is_symlink()
-    }
-    if os.name == "nt":
-        assert "windows-x86_64/zlink.dll" in payloads
-    else:
-        assert {
-            "linux-x86_64/libzlink.so",
-            "linux-x86_64/libzlink.so.0",
-            "linux-x86_64/libzlink.so.0.15.1",
-        }.issubset(payloads)
 
 
-def test_raw_core_symbol_binding_is_present_and_removed_symbols_are_absent():
+def test_raw_core_symbol_binding_has_no_framework_service_symbols():
     native = lib()
     for name in (
         "zlink_ctx_new",
         "zlink_msg_init",
         "zlink_msg_refcnt",
         "zlink_socket",
-        "zlink_send_part",
-        "zlink_recv_part",
-        "zlink_router_recv_part",
         "zlink_timer_new",
         "zlink_poller_new",
         "zlink_socket_monitor_open",

@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: MPL-2.0
 
 import ctypes
+import errno
 
 from ...contracts.core.routing_id import RoutingId
-from ...contracts.sockets.codes import RidDuplicatePolicy
+from ...contracts.sockets.codes import RidDuplicatePolicy, StreamRecvMode
+from ...contracts.errors.codes import ConfigResult
+from ...contracts.errors.errors import ConfigError
 from ..native_codes import RouterOption, SocketOption
 from ...contracts.messaging.message import Message
 from ..._native.ffi import lib
@@ -241,6 +244,7 @@ class DealerSocketOptions:
 
 class StreamSocketOptions:
     _NOTIFY = 0x3501
+    _RECV_MODE = 0x3502
 
     def __init__(self, socket):
         self._socket = socket
@@ -252,6 +256,19 @@ class StreamSocketOptions:
     @notify.setter
     def notify(self, value):
         self._socket._set_stream_option(self._NOTIFY, _bool_bytes(value))
+
+    @property
+    def recv_mode(self):
+        return StreamRecvMode(
+            _read_int32(self._socket._get_stream_option(self._RECV_MODE, 4))
+        )
+
+    @recv_mode.setter
+    def recv_mode(self, value):
+        mode = StreamRecvMode(value)
+        if mode is StreamRecvMode.UNSPECIFIED:
+            raise ConfigError(ConfigResult.INVALID_ARGUMENT, errno.EINVAL)
+        self._socket._set_stream_option(self._RECV_MODE, _int32_bytes(mode))
 
 
 class SubSocketOptions:

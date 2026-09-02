@@ -101,7 +101,7 @@ class ReceiveFlowStateUnsupportedSocketTests(unittest.TestCase):
                     )
                     # Existing send/recv behavior is unchanged by the rejected call.
                     # PAIR send is HWM-managed and ASYNC-classified; `submit()`
-                    # returns an awaitable (Core `zlink_send_async`).
+                    # returns an awaitable backed by Core pull completion.
                     self.assertIsNone(
                         asyncio.run(left.send().message(b"still-works").submit())
                     )
@@ -270,7 +270,7 @@ class MonitorEventMetadataTests(unittest.TestCase):
         )
         self.assertEqual(int(zlink.MonitorEventFlag.FLOW_STATE_STALE_EPOCH), 8)
 
-    def test_monitor_event_surfaces_pair_and_connection_metadata(self):
+    def test_monitor_event_surfaces_connection_metadata(self):
         probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -291,14 +291,10 @@ class MonitorEventMetadataTests(unittest.TestCase):
                                 break
                             _time.sleep(0.001)
                         self.assertIsNotNone(event)
-                    # The full 64-bit value, plus every connection/pair
-                    # identity field the C struct carries, is on the public
-                    # object (plan §6's flow events are identified by this
-                    # same metadata: pair id, pair generation, and value).
+                    # The full 64-bit value and connection diagnostics carried
+                    # by the C struct are on the public object.
                     self.assertIsInstance(event.value, int)
                     self.assertIsInstance(event.connection_id, int)
-                    self.assertIsInstance(event.transport_pair_id, int)
-                    self.assertIsInstance(event.transport_pair_generation, int)
                     self.assertIsInstance(event.transport_lane, int)
                     self.assertIsInstance(event.flags, int)
                     # Not every event carries a routing id (e.g. LISTENING).

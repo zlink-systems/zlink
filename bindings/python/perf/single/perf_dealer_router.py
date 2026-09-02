@@ -32,7 +32,7 @@ def _send_stop_token(sock):
 
     for _ in range(100):
         try:
-            sock.send().message(STOP_TOKEN).submit_sync(flags=zlink.SendFlags.NONE)
+            sock.send().message(STOP_TOKEN).submit_sync()
             return
         except zlink.SubmitError as exc:
             if exc.result != zlink.SubmitResult.BACKPRESSURED:

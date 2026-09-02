@@ -5,7 +5,9 @@ from .received import (
     Received,
     ReceivedMessage,
     ReceivedMultipart,
+    ReplyToken,
 )
+from .stream_packet import StreamPacket
 from .subscription_event import SubscriptionEvent
 from .topic_message import TopicMessage
 
@@ -14,6 +16,8 @@ __all__ = [
     "Received",
     "ReceivedMessage",
     "ReceivedMultipart",
+    "ReplyToken",
+    "StreamPacket",
     "TopicMessage",
     "SubscriptionEvent",
 ]

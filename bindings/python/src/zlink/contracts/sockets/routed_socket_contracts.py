@@ -3,6 +3,7 @@
 from typing import Protocol, runtime_checkable
 
 from . import socket as _socket_contract
+from .operations import ReplyOp, RequestOp, SendOp
 
 
 @runtime_checkable
@@ -23,18 +24,18 @@ class RouterSocket(_socket_contract._SocketContract, Protocol):
         """Disconnect the connection previously established to ``endpoint``."""
         ...
 
-    def send(self, routing_id):
+    def send(self, routing_id) -> SendOp:
         """Begin a send addressed to ``routing_id``; parts are consumed on a
         successful submit."""
         ...
 
-    def request(self, routing_id):
+    def request(self, routing_id) -> RequestOp:
         """Begin a request to peer ``routing_id``; parts are consumed on submit
         and a reply is awaited."""
         ...
 
-    def reply(self, routing_id, request_seq):
-        """Begin a reply to request ``request_seq`` from ``routing_id``; parts
+    def reply(self, routing_id, token) -> ReplyOp:
+        """Begin a reply using ``token`` from ``routing_id``; parts
         are consumed on a successful submit."""
         ...
 

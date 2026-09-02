@@ -3,6 +3,7 @@
 from typing import Protocol, runtime_checkable
 
 from . import socket as _socket_contract
+from .operations import PublishOp
 
 
 @runtime_checkable
@@ -23,7 +24,7 @@ class PubSocket(_socket_contract._SocketContract, Protocol):
         """Disconnect the connection previously established to ``endpoint``."""
         ...
 
-    def publish(self, topic):
+    def publish(self, topic) -> PublishOp:
         """Begin publishing under ``topic``; parts are consumed on a successful
         submit."""
         ...
@@ -84,7 +85,7 @@ class XPubSocket(_socket_contract._SocketContract, Protocol):
         """Disconnect the connection previously established to ``endpoint``."""
         ...
 
-    def publish(self, topic):
+    def publish(self, topic) -> PublishOp:
         """Begin publishing under ``topic``; parts are consumed on a successful
         submit."""
         ...

@@ -19,42 +19,25 @@ class ZlinkRoutingId(ctypes.Structure):
     _fields_ = [("size", ctypes.c_uint8), ("data", ctypes.c_uint8 * 255)]
 
 
-class ZlinkRoutedSubmitTarget(ctypes.Structure):
-    _fields_ = [
-        ("peer_rid", ZlinkRoutingId),
-        ("transport_pair_id", ctypes.c_uint64),
-        ("transport_pair_generation", ctypes.c_uint64),
-    ]
-
-
-# `zlink_send_complete_result_t` (core/include/zlink/socket/api.h).
+# Completion constants and layout mirror ``core/include/zlink/socket/api.h``.
 ZLINK_SEND_ADMITTED = 0
-ZLINK_SEND_TIMED_OUT = 201
 ZLINK_SEND_TERMINAL = 202
+ZLINK_COMPLETION_SEND = 1
+ZLINK_COMPLETION_REQUEST = 2
 
 
-class ZlinkSendCompleteEvent(ctypes.Structure):
-    """`zlink_send_complete_event_t` — one Core send completion."""
-
-    _fields_ = [
-        ("op_id", ctypes.c_uint64),
-        ("userdata", ctypes.c_void_p),
-        ("peer_rid", ZlinkRoutingId),
-        ("transport_pair_id", ctypes.c_uint64),
-        ("transport_pair_generation", ctypes.c_uint64),
-        ("result", ctypes.c_int),
-        ("terminal_errno", ctypes.c_int),
-    ]
-
-
-class ZlinkSendAsyncOptions(ctypes.Structure):
-    """`zlink_send_async_options_t` — submit options for one async send."""
-
+class ZlinkCompletion(ctypes.Structure):
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
-        ("timeout_ms", ctypes.c_uint32),
-        ("userdata", ctypes.c_void_p),
-        ("target", ctypes.POINTER(ZlinkRoutedSubmitTarget)),
+        ("kind", ctypes.c_int),
+        ("completion_id", ctypes.c_uint64),
+        ("user_context", ctypes.c_void_p),
+        ("peer_rid", ZlinkRoutingId),
+        ("send_result", ctypes.c_int),
+        ("send_terminal_errno", ctypes.c_int),
+        ("request_result", ctypes.c_int),
+        ("reply_parts", ctypes.POINTER(ZlinkMsg)),
+        ("reply_part_count", ctypes.c_size_t),
     ]
 
 
@@ -66,8 +49,6 @@ class ZlinkMonitorEvent(ctypes.Structure):
         ("local_addr", ctypes.c_char * 256),
         ("remote_addr", ctypes.c_char * 256),
         ("connection_id", ctypes.c_uint64),
-        ("transport_pair_id", ctypes.c_uint64),
-        ("transport_pair_generation", ctypes.c_uint64),
         ("transport_lane", ctypes.c_uint32),
         ("flags", ctypes.c_uint32),
     ]
@@ -198,7 +179,7 @@ ZLINK_DONTWAIT = 1
 
 
 class _Lib:
-    """Own the complete Core 0.9.0 raw symbol and layout declaration."""
+    """Own the Core 0.16.0 raw symbol and layout declaration used by Python."""
 
     def __init__(self):
         self.lib = load_native_library(self._bind_loaded)
@@ -217,11 +198,9 @@ class _Lib:
         p_msg = ctypes.POINTER(ZlinkMsg)
         p_rid = ctypes.POINTER(ZlinkRoutingId)
         p_rid_ptr = ctypes.POINTER(p_rid)
-        p_routed_target = ctypes.POINTER(ZlinkRoutedSubmitTarget)
         p_int = ctypes.POINTER(ctypes.c_int)
         p_size = ctypes.POINTER(ctypes.c_size_t)
-        p_send_async_options = ctypes.POINTER(ZlinkSendAsyncOptions)
-        p_send_op_id = ctypes.POINTER(ctypes.c_uint64)
+        p_completion_id = ctypes.POINTER(ctypes.c_uint64)
 
         specs = [
             ("zlink_version", [p_int, p_int, p_int], None),
@@ -264,12 +243,6 @@ class _Lib:
             ("zlink_multipart_close", [p_msg, ctypes.c_size_t], None),
             ("zlink_socket", [ctypes.c_void_p, ctypes.c_int], ctypes.c_void_p),
             ("zlink_socket_set_receive_flow_state", [ctypes.c_void_p, ctypes.c_int], ctypes.c_int),
-            ("zlink_recv_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
-            ("zlink_stream_packet_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
-            ("zlink_send_async", [ctypes.c_void_p, p_msg, ctypes.c_size_t, p_send_async_options, p_send_op_id], ctypes.c_int),
-            ("zlink_send_complete_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
-            ("zlink_send_async_cancel", [ctypes.c_void_p, ctypes.c_uint64], ctypes.c_int),
-            ("zlink_select_routed_submit_target", [ctypes.c_void_p, p_rid, p_routed_target], ctypes.c_int),
             ("zlink_close", [ctypes.c_void_p], ctypes.c_int),
             ("zlink_set_option", [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t], ctypes.c_int),
             ("zlink_get_option", [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, p_size], ctypes.c_int),
@@ -292,28 +265,22 @@ class _Lib:
             ("zlink_unbind", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_int),
             ("zlink_disconnect", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_int),
             ("zlink_disconnect_rid", [ctypes.c_void_p, p_rid], ctypes.c_int),
-            ("zlink_send_part", [ctypes.c_void_p, p_msg, ctypes.c_int, ctypes.c_int], ctypes.c_int),
-            ("zlink_send_part_rid", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_int, ctypes.c_int], ctypes.c_int),
-            ("zlink_send_part_transport_pair", [ctypes.c_void_p, p_rid, ctypes.c_uint64, ctypes.c_uint64, p_msg, ctypes.c_int, ctypes.c_int], ctypes.c_int),
-            ("zlink_dealer_request_part", [ctypes.c_void_p, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
-            ("zlink_dealer_request_transport_pair_part", [ctypes.c_void_p, p_routed_target, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
-            ("zlink_dealer_send_transport_pair_part", [ctypes.c_void_p, p_routed_target, p_msg, ctypes.c_int, ctypes.c_int], ctypes.c_int),
-            ("zlink_dealer_recv_part", [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(ctypes.c_uint64), p_msg, p_int, ctypes.c_int], ctypes.c_int),
-            ("zlink_dealer_reply_part", [ctypes.c_void_p, ctypes.c_uint64, p_msg, ctypes.c_int], ctypes.c_int),
-            ("zlink_router_request_part", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
-            ("zlink_router_request_transport_pair_part", [ctypes.c_void_p, p_rid, ctypes.c_uint64, ctypes.c_uint64, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
-            ("zlink_router_reply_part", [ctypes.c_void_p, p_rid, ctypes.c_uint64, p_msg, ctypes.c_int], ctypes.c_int),
+            ("zlink_send_part", [ctypes.c_void_p, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_void_p, p_completion_id], ctypes.c_int),
+            ("zlink_send_part_rid", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_void_p, p_completion_id], ctypes.c_int),
+            ("zlink_request_part", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, p_completion_id], ctypes.c_int),
+            ("zlink_reply_part", [ctypes.c_void_p, p_rid, ctypes.c_uint64, p_msg, ctypes.c_int], ctypes.c_int),
             ("zlink_router_recv_part", [ctypes.c_void_p, p_rid_ptr, ctypes.POINTER(ctypes.c_uint64), p_msg, p_int, ctypes.c_int], ctypes.c_int),
             ("zlink_recv_part", [ctypes.c_void_p, p_rid_ptr, p_msg, p_int, ctypes.c_int], ctypes.c_int),
+            ("zlink_stream_recv_packet", [ctypes.c_void_p, p_rid_ptr, p_msg, p_msg, ctypes.c_int], ctypes.c_int),
+            ("zlink_completion_recv", [ctypes.c_void_p, ctypes.POINTER(ZlinkCompletion), ctypes.c_int], ctypes.c_int),
+            ("zlink_completion_close", [ctypes.POINTER(ZlinkCompletion)], None),
             ("zlink_publish_part", [ctypes.c_void_p, ctypes.c_char_p, p_msg, ctypes.c_int, ctypes.c_int], ctypes.c_int),
             ("zlink_set_subscription", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_int),
             ("zlink_unset_subscription", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_int),
             ("zlink_subscription_at", [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, p_size, p_int], ctypes.c_int),
             ("zlink_subscribe_part", [ctypes.c_void_p, p_rid_ptr, ctypes.POINTER(ctypes.c_char), ctypes.c_size_t, p_size, p_msg, p_int, ctypes.c_int], ctypes.c_int),
             ("zlink_xpub_recv_part", [ctypes.c_void_p, p_rid_ptr, p_int, ctypes.POINTER(ctypes.c_char), ctypes.c_size_t, p_size, ctypes.c_int], ctypes.c_int),
-            ("zlink_monitor_ignore_handler", [ctypes.POINTER(ZlinkMonitorEvent), ctypes.c_void_p], None),
             ("zlink_socket_monitor_open", [ctypes.c_void_p, ctypes.POINTER(ZlinkSocketMonitorOpenOptions)], ctypes.c_void_p),
-            ("zlink_socket_monitor_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
             ("zlink_socket_monitor_recv", [ctypes.c_void_p, ctypes.POINTER(ZlinkMonitorEvent), ctypes.c_int], ctypes.c_int),
             ("zlink_monitor_status", [ctypes.c_void_p, ctypes.POINTER(ZlinkMonitorStatus)], ctypes.c_int),
             ("zlink_monitor_close", [ctypes.POINTER(ctypes.c_void_p)], ctypes.c_int),
@@ -335,7 +302,6 @@ class _Lib:
             ("zlink_timer_start", [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint64], ctypes.c_int),
             ("zlink_timer_stop", [ctypes.c_void_p], ctypes.c_int),
             ("zlink_timer_recv", [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint64)], ctypes.c_int),
-            ("zlink_timer_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
         ]
         for name, argtypes, restype in specs:
             self._require(name, argtypes, restype)
