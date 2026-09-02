@@ -77,6 +77,7 @@ For wire protocols, events, polling, monitoring, and internal system structure, 
 | [Core Source Layout](systems/07-core-source-layout.en.md) | Source directory structure and include direction |
 | [Core POSD Module Structure](systems/08-posd-module-structure.en.md) | Separation of responsibilities by layer |
 | [Core Design Decisions](systems/09-design-decisions.en.md) | Key design decisions |
+| [Core Hot Path](systems/10-hot-path.en.md) | Rules and performance gates for the per-message path |
 
 ## 6. Task-Based Index
 

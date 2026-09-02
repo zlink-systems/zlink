@@ -31,3 +31,4 @@ together with its internal implementation.
 | [07. Core Source Layout](07-core-source-layout.en.md) | Source directory layout and include direction |
 | [08. Core POSD Module Structure](08-posd-module-structure.en.md) | Responsibility separation across layers |
 | [09. Core Design Decisions](09-design-decisions.en.md) | Key design decisions |
+| [10. Core Hot Path](10-hot-path.en.md) | Scope of the per-message path, forbidden operations, state caches, performance gates |

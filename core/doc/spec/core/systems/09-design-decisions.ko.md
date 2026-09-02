@@ -5,7 +5,7 @@ title: "Core design decisions"
 [English](https://zlink-systems.github.io/zlink/spec/core/systems/09-design-decisions/) | 한국어
 
 <!-- zlink-nav:start -->
-[시스템 목차](README.ko.md) | [이전: POSD module 구조](08-posd-module-structure.ko.md)
+[시스템 목차](README.ko.md) | [이전: POSD module 구조](08-posd-module-structure.ko.md) | [다음: Core hot path](10-hot-path.ko.md)
 <!-- zlink-nav:end -->
 
 # Core design decisions

@@ -82,6 +82,7 @@ wire 프로토콜, event·polling·monitoring과 내부 시스템 구조는 필�
 | [Core source layout](systems/07-core-source-layout.ko.md) | source directory 구성과 include 방향 |
 | [Core POSD module structure](systems/08-posd-module-structure.ko.md) | 계층별 책임 분리 |
 | [Core design decisions](systems/09-design-decisions.ko.md) | 주요 설계 결정 사항 |
+| [Core hot path](systems/10-hot-path.ko.md) | message당 실행 경로의 규칙과 성능 gate |
 
 ## 6. 작업별 색인
 
