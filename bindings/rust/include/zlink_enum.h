@@ -212,7 +212,9 @@ typedef enum zlink_auto_hwm_recalc_reason_t
 
 typedef enum zlink_protocol_error_t
 {
-    ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_HELLO = 0x10000013
+    ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_HELLO = 0x10000013,
+    /* READY metadata or paired-lane topology is malformed. */
+    ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_READY = 0x10000016
 } zlink_protocol_error_t;
 
 typedef enum zlink_monitor_source_kind_t

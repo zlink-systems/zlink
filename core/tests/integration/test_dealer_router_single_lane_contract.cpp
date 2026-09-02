@@ -1451,6 +1451,7 @@ void test_sl_wire_mandatory_lane_count_rejections ()
     test_monitor_probe_t probe;
     void *monitor = open_test_monitor_probe (
       router, ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL
+                | ZLINK_EVENT_DISCONNECTED
                 | ZLINK_EVENT_CONNECTION_READY,
       &probe);
     char endpoint[MAX_SOCKET_STRING];
@@ -1471,6 +1472,7 @@ void test_sl_wire_mandatory_lane_count_rejections ()
 
     for (size_t index = 0; index != sizeof (invalid) / sizeof (invalid[0]);
          ++index) {
+        const int event_start = test_monitor_probe_count (&probe);
         fd_t peer = connect_socket (endpoint, AF_INET, IPPROTO_TCP);
         TEST_ASSERT_NOT_EQUAL (retired_fd, peer);
         set_raw_recv_timeout (peer, contract_wait_ms);
@@ -1482,9 +1484,27 @@ void test_sl_wire_mandatory_lane_count_rejections ()
           invalid[index].include_count, invalid[index].count,
           invalid[index].count_size, true, &invalid[index].lane, 1));
         TEST_ASSERT_TRUE (wait_for_raw_close (peer));
+        int protocol_index = -1;
+        TEST_ASSERT_TRUE (test_monitor_probe_wait_event_after (
+          &probe, ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL, event_start,
+          contract_wait_ms, &protocol_index));
+        const zlink_monitor_event_t protocol_event =
+          test_monitor_probe_record_at (&probe, protocol_index);
+        TEST_ASSERT_EQUAL_HEX64 (
+          ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_READY,
+          protocol_event.value);
+        int disconnected_index = -1;
+        TEST_ASSERT_TRUE (test_monitor_probe_wait_event_after (
+          &probe, ZLINK_EVENT_DISCONNECTED, protocol_index + 1,
+          contract_wait_ms, &disconnected_index));
+        const zlink_monitor_event_t disconnected_event =
+          test_monitor_probe_record_at (&probe, disconnected_index);
+        TEST_ASSERT_EQUAL_UINT64 (protocol_event.connection_id,
+                                  disconnected_event.connection_id);
         close (peer);
     }
 
+    const int duplicate_event_start = test_monitor_probe_count (&probe);
     fd_t duplicate_a = connect_socket (endpoint, AF_INET, IPPROTO_TCP);
     fd_t duplicate_b = connect_socket (endpoint, AF_INET, IPPROTO_TCP);
     TEST_ASSERT_NOT_EQUAL (retired_fd, duplicate_a);
@@ -1505,9 +1525,44 @@ void test_sl_wire_mandatory_lane_count_rejections ()
       true, &zero, 1));
     TEST_ASSERT_TRUE (wait_for_raw_close (duplicate_a));
     TEST_ASSERT_TRUE (wait_for_raw_close (duplicate_b));
+    TEST_ASSERT_TRUE (zlink_test_wait_until (contract_wait_ms, [&] {
+        return count_probe_events (
+                 &probe, ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL)
+                 >= 9
+               && count_probe_events (&probe, ZLINK_EVENT_DISCONNECTED) >= 9;
+    }));
+    int duplicate_disconnects = 0;
+    const int duplicate_event_end = test_monitor_probe_count (&probe);
+    for (int event_index = duplicate_event_start;
+         event_index != duplicate_event_end; ++event_index) {
+        const zlink_monitor_event_t disconnected_event =
+          test_monitor_probe_record_at (&probe, event_index);
+        if (disconnected_event.event != ZLINK_EVENT_DISCONNECTED)
+            continue;
+        TEST_ASSERT_NOT_EQUAL (0, disconnected_event.connection_id);
+        bool matching_protocol = false;
+        for (int prior = duplicate_event_start; prior != event_index; ++prior) {
+            const zlink_monitor_event_t protocol_event =
+              test_monitor_probe_record_at (&probe, prior);
+            if (protocol_event.event
+                  == ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL
+                && protocol_event.connection_id
+                     == disconnected_event.connection_id) {
+                TEST_ASSERT_EQUAL_HEX64 (
+                  ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_READY,
+                  protocol_event.value);
+                matching_protocol = true;
+                break;
+            }
+        }
+        TEST_ASSERT_TRUE (matching_protocol);
+        ++duplicate_disconnects;
+    }
+    TEST_ASSERT_EQUAL_INT (2, duplicate_disconnects);
     close (duplicate_b);
     close (duplicate_a);
 
+    const int missing_lane_event_start = test_monitor_probe_count (&probe);
     fd_t missing_lane = connect_socket (endpoint, AF_INET, IPPROTO_TCP);
     TEST_ASSERT_NOT_EQUAL (retired_fd, missing_lane);
     set_raw_recv_timeout (missing_lane, contract_wait_ms);
@@ -1517,11 +1572,27 @@ void test_sl_wire_mandatory_lane_count_rejections ()
       missing_lane, ZLINK_CORE_SOCKET_ROUTER, "sl-missing-lane", true, &two,
       1, true, &zero, 1));
     TEST_ASSERT_TRUE (wait_for_raw_close (missing_lane));
+    int missing_lane_protocol_index = -1;
+    TEST_ASSERT_TRUE (test_monitor_probe_wait_event_after (
+      &probe, ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL,
+      missing_lane_event_start, contract_wait_ms,
+      &missing_lane_protocol_index));
+    const zlink_monitor_event_t missing_lane_protocol_event =
+      test_monitor_probe_record_at (&probe, missing_lane_protocol_index);
+    TEST_ASSERT_EQUAL_HEX64 (
+      ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_READY,
+      missing_lane_protocol_event.value);
+    int missing_lane_disconnected_index = -1;
+    TEST_ASSERT_TRUE (test_monitor_probe_wait_event_after (
+      &probe, ZLINK_EVENT_DISCONNECTED, missing_lane_protocol_index + 1,
+      contract_wait_ms, &missing_lane_disconnected_index));
+    const zlink_monitor_event_t missing_lane_disconnected_event =
+      test_monitor_probe_record_at (&probe, missing_lane_disconnected_index);
+    TEST_ASSERT_EQUAL_UINT64 (
+      missing_lane_protocol_event.connection_id,
+      missing_lane_disconnected_event.connection_id);
     close (missing_lane);
 
-    // READY metadata rejection is observed as a handshake disconnect. The
-    // public HANDSHAKE_FAILED_PROTOCOL value currently names malformed HELLO
-    // only, so do not manufacture a READY-specific monitor contract here.
     TEST_ASSERT_EQUAL_INT (
       0, count_ready_edges (&probe));
     zlink_msg_t no_part;
@@ -1551,6 +1622,7 @@ void test_sl_wire_old_peer_without_lane_count_rejected ()
     test_monitor_probe_t probe;
     void *monitor = open_test_monitor_probe (
       router, ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL
+                | ZLINK_EVENT_DISCONNECTED
                 | ZLINK_EVENT_CONNECTION_READY,
       &probe);
     char endpoint[MAX_SOCKET_STRING];
@@ -1580,6 +1652,40 @@ void test_sl_wire_old_peer_without_lane_count_rejected ()
                             payload, sizeof (payload) - 1);
     TEST_ASSERT_TRUE (wait_for_raw_close (old_application));
     TEST_ASSERT_TRUE (wait_for_raw_close (old_completion));
+    TEST_ASSERT_TRUE (zlink_test_wait_until (contract_wait_ms, [&] {
+        return count_probe_events (
+                 &probe, ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL)
+                 >= 2
+               && count_probe_events (&probe, ZLINK_EVENT_DISCONNECTED) >= 2;
+    }));
+    int old_peer_disconnects = 0;
+    const int old_peer_event_end = test_monitor_probe_count (&probe);
+    for (int event_index = 0; event_index != old_peer_event_end;
+         ++event_index) {
+        const zlink_monitor_event_t disconnected_event =
+          test_monitor_probe_record_at (&probe, event_index);
+        if (disconnected_event.event != ZLINK_EVENT_DISCONNECTED)
+            continue;
+        TEST_ASSERT_NOT_EQUAL (0, disconnected_event.connection_id);
+        bool matching_protocol = false;
+        for (int prior = 0; prior != event_index; ++prior) {
+            const zlink_monitor_event_t protocol_event =
+              test_monitor_probe_record_at (&probe, prior);
+            if (protocol_event.event
+                  == ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL
+                && protocol_event.connection_id
+                     == disconnected_event.connection_id) {
+                TEST_ASSERT_EQUAL_HEX64 (
+                  ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_READY,
+                  protocol_event.value);
+                matching_protocol = true;
+                break;
+            }
+        }
+        TEST_ASSERT_TRUE (matching_protocol);
+        ++old_peer_disconnects;
+    }
+    TEST_ASSERT_EQUAL_INT (2, old_peer_disconnects);
     TEST_ASSERT_EQUAL_INT (
       0, count_ready_edges (&probe));
 

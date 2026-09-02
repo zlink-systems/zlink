@@ -54,6 +54,7 @@ class ErrorCode(IntEnum):
 class ProtocolError(IntEnum):
     """Wire-protocol error codes reported during a handshake."""
     ZMP_MALFORMED_COMMAND_HELLO = 0x10000013
+    ZMP_MALFORMED_COMMAND_READY = 0x10000016
 
 class DisconnectReason(IntEnum):
     """Why a connection was disconnected."""

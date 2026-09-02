@@ -327,7 +327,8 @@ typedef enum zlink_disconnect_reason_t {   // Value of a DISCONNECTED event (§3
 #define ZLINK_DISCONNECT_CTX_TERM ZLINK_DISCONNECT_REASON_CTX_TERM
 
 typedef enum zlink_protocol_error_t {      // Value of a HANDSHAKE_FAILED_PROTOCOL event (§3.2)
-  ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_HELLO = 0x10000013
+  ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_HELLO = 0x10000013,
+  ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_READY = 0x10000016
 } zlink_protocol_error_t;
 ```
 
@@ -551,6 +552,12 @@ and errno. Each item maps to one test.
   `HANDSHAKE_FAILED_PROTOCOL` is a `zlink_protocol_error_t` value, the `value` of
   `PEER_WEIGHT_CHANGED` is the new `0..10000` weight, and the `value` of another
   failure event is the errno for that failure.
+- A malformed HELLO reports `ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_HELLO`. A READY protocol
+  error as defined by 01-zmp (missing, wrong-length, or wrong-value `Zlink-Lane-Count` or
+  `Zlink-Lane`, a count mismatch, lane `1` on count `1`, a duplicate or missing lane on count
+  `2`, or a socket type or `Routing-Id` mismatch) reports a `HANDSHAKE_FAILED_PROTOCOL` event
+  whose `value` is `ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_READY` before that physical
+  connection's `DISCONNECTED`. Neither case produces `CONNECTION_READY` or application payload.
 - When count `1` for DEALER-DEALER or DEALER-ROUTER or count `2` for ROUTER-ROUTER becomes
   ready as one logical peer, the `CONNECTION_READY` ready edge
   (`ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE`) occurs exactly once and contributes

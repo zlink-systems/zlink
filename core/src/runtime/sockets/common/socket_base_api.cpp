@@ -435,6 +435,23 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     }
 
     if (reject_pipes[0]) {
+        // Duplicate count-two lanes and cross-lane identity/topology conflicts
+        // are only knowable when socket admission compares both validated
+        // physical connections. Publish the READY protocol failure for every
+        // network connection before terminating the related lane set.
+        for (size_t i = 0; i < 3; ++i) {
+            pipe_t *const rejected = reject_pipes[i];
+            if (!rejected || rejected->get_transport_connection_id () == 0)
+                continue;
+            bool already_reported = false;
+            for (size_t prior = 0; prior < i; ++prior)
+                already_reported = already_reported
+                                   || reject_pipes[prior] == rejected;
+            if (!already_reported)
+                event_handshake_failed_protocol (
+                  rejected->get_endpoint_pair (),
+                  ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_READY);
+        }
         if (reject_attached_application && reject_pipes[1]) {
             receive_runtime_t &receive = receive_runtime ();
             scoped_lock_t receive_lock (receive.sync);

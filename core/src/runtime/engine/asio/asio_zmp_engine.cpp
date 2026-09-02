@@ -386,13 +386,32 @@ bool zlink::asio_zmp_engine_t::handshake ()
 
 bool zlink::asio_zmp_engine_t::handshake_timer_should_fail ()
 {
-    if (!paired_transport () || _negotiated_transport_pair_id == 0
-        || _negotiated_transport_pair_generation == 0)
+    if (!paired_transport ())
         return true;
 
-    return !socket ()->transport_pair_is_ready (
-      _negotiated_transport_pair_id,
-      _negotiated_transport_pair_generation);
+    const bool pair_ready = _negotiated_transport_pair_id != 0
+                            && _negotiated_transport_pair_generation != 0
+                            && socket ()->transport_pair_is_ready (
+                              _negotiated_transport_pair_id,
+                              _negotiated_transport_pair_generation);
+    if (pair_ready)
+        return false;
+
+    // Once HELLO selected a two-lane topology, expiry means that the peer did
+    // not complete both READY lanes within HANDSHAKE_IVL.  This is the
+    // count-two incomplete-lane READY protocol error, not a generic timeout.
+    if (_hello_received && _negotiated_transport_lane_count == 2u) {
+        set_last_error (zmp_error_handshake_timeout,
+                        "transport pair READY incomplete");
+        errno = EPROTO;
+        socket ()->event_handshake_failed_protocol (
+          session ()->get_endpoint (),
+          ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_READY);
+        error (protocol_error);
+        return false;
+    }
+
+    return true;
 }
 
 bool zlink::asio_zmp_engine_t::receive_hello ()
@@ -736,8 +755,15 @@ int zlink::asio_zmp_engine_t::process_command_message (msg_t *msg_)
 {
     const char *error_reason = NULL;
     switch (zmp_control::classify_command_message (msg_, _ready_received, &error_reason)) {
-        case zmp_control::command_message_ready:
-            return process_ready_message (msg_);
+        case zmp_control::command_message_ready: {
+            const int rc = process_ready_message (msg_);
+            if (rc < 0 && paired_transport ()) {
+                socket ()->event_handshake_failed_protocol (
+                  session ()->get_endpoint (),
+                  ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_READY);
+            }
+            return rc;
+        }
         case zmp_control::command_message_error:
             return process_error_message (msg_);
         case zmp_control::command_message_data_after_ready:

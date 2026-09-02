@@ -313,7 +313,8 @@ typedef enum zlink_disconnect_reason_t {   // DISCONNECTED event의 value (§3.2
 #define ZLINK_DISCONNECT_CTX_TERM ZLINK_DISCONNECT_REASON_CTX_TERM
 
 typedef enum zlink_protocol_error_t {      // HANDSHAKE_FAILED_PROTOCOL event의 value (§3.2)
-  ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_HELLO = 0x10000013
+  ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_HELLO = 0x10000013,
+  ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_READY = 0x10000016
 } zlink_protocol_error_t;
 ```
 
@@ -520,6 +521,12 @@ status snapshot, 반환값·errno)만으로 다음을 확인한다. 각 항목�
 
 **Event 내용**
 - `DISCONNECTED`의 `value`는 `zlink_disconnect_reason_t`, `HANDSHAKE_FAILED_PROTOCOL`의 `value`는 `zlink_protocol_error_t`, `PEER_WEIGHT_CHANGED`의 `value`는 새 `0..10000` weight, 다른 실패 event의 `value`는 해당 실패의 errno다.
+- 잘못된 HELLO는 `ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_HELLO`, 01-zmp가 READY protocol error로
+  규정한 경우(`Zlink-Lane-Count`·`Zlink-Lane` 누락·길이·값 오류, count 불일치, count `1`의 lane `1`,
+  count `2`의 lane 중복·누락, socket type·`Routing-Id` 불일치)는
+  `ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_READY` value의 `HANDSHAKE_FAILED_PROTOCOL` event를
+  해당 physical connection의 `DISCONNECTED`보다 먼저 낸다. 두 경우 모두 `CONNECTION_READY`와
+  application payload는 나오지 않는다.
 - DEALER-DEALER·DEALER-ROUTER count `1`과 ROUTER-ROUTER count `2`가 각각 logical peer 하나로 준비될 때마다
   `CONNECTION_READY`의 ready edge
   (`ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE`)가 정확히 한 번 발생하고 `value`의 count에도
