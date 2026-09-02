@@ -5,19 +5,11 @@ package native
 /*
 #include <stdint.h>
 #include "zlink.h"
-
-extern void goZlinkMonitorTrampoline(zlink_monitor_event_t *event_, uintptr_t userdata_);
-
-static inline int zlink_socket_monitor_handler_go_local(void *m, uintptr_t userdata) {
-    return zlink_socket_monitor_handler(m, (zlink_socket_monitor_handler_fn)goZlinkMonitorTrampoline, (void *)userdata);
-}
-
 */
 import "C"
 
 import (
 	"errors"
-	"runtime/cgo"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -117,10 +109,6 @@ const (
 	// MonitorEventFlagSendFlowWritable is set on MonitorEventTypeSendFlowResumed when
 	// clearing the remote pause left the pipe actually writable. Value carries the flow epoch.
 	MonitorEventFlagSendFlowWritable MonitorEventFlag = MonitorEventFlag(C.ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE)
-	// MonitorEventFlagFlowStateStaleGeneration is set on MonitorEventTypeFlowStateStale
-	// when the frame named a different connection generation. Value carries the
-	// received generation; TransportPairGeneration carries the current one.
-	MonitorEventFlagFlowStateStaleGeneration MonitorEventFlag = MonitorEventFlag(C.ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION)
 	// MonitorEventFlagFlowStateStaleEpoch is set on MonitorEventTypeFlowStateStale when
 	// the epoch did not advance inside the current generation. Value carries the
 	// received epoch.
@@ -147,11 +135,6 @@ type MonitorEvent struct {
 	RemoteAddr string
 	// ConnectionID is the process-local identity of the physical transport attempt.
 	ConnectionID uint64
-	// TransportPairID is non-zero for a paired Application/Completion transport.
-	TransportPairID uint64
-	// TransportPairGeneration is the generation of the paired transport. Zero for
-	// an unpaired transport.
-	TransportPairGeneration uint64
 	// TransportLane identifies which lane of a paired transport this event describes.
 	TransportLane MonitorTransportLane
 	// Flags carries event-specific detail bits; see MonitorEventFlag.
@@ -294,9 +277,8 @@ func monitorStatusFromC(raw C.zlink_monitor_status_t) MonitorStatus {
 }
 
 type SocketMonitor struct {
-	handle     atomic.Pointer[byte]
-	callbackMu sync.Mutex
-	callback   cgo.Handle
+	handle  atomic.Pointer[byte]
+	closeMu sync.Mutex
 }
 
 func resolveMonitorOpenOptions(options []MonitorOpenOption) (monitorOpenConfig, error) {
@@ -381,82 +363,45 @@ func (m *SocketMonitor) Status() (*MonitorStatus, error) {
 	return &snapshot, nil
 }
 
-func (m *SocketMonitor) OnEvent(handler func(*MonitorEvent)) error {
-	if handler == nil {
-		return &HandlerError{Result: HandlerInvalidArgument, nativeErrno: int(C.EINVAL)}
-	}
-	if m == nil {
-		return &HandlerError{Result: HandlerInvalidHandle, nativeErrno: int(C.EFAULT)}
-	}
-	m.callbackMu.Lock()
-	defer m.callbackMu.Unlock()
-	handlePtr := m.raw()
-	if handlePtr == nil {
-		return &HandlerError{Result: HandlerInvalidHandle, nativeErrno: int(C.EFAULT)}
-	}
-	state := newMonitorCallbackState(handler)
-	handle := cgo.NewHandle(state)
-	if err := handlerErrorFromResult(C.zlink_socket_monitor_handler_go_local(handlePtr, C.uintptr_t(handle))); err != nil {
-		state.close()
-		handle.Delete()
-		return err
-	}
-	if m.callback != 0 {
-		releaseCallbackHandle(m.callback)
-	}
-	m.callback = handle
-	return nil
-}
-
 func (m *SocketMonitor) Close() error {
 	if m == nil {
 		return nil
 	}
-	m.callbackMu.Lock()
+	m.closeMu.Lock()
 	handlePtr := m.raw()
 	if handlePtr == nil {
-		m.callbackMu.Unlock()
+		m.closeMu.Unlock()
 		return nil
 	}
 	handle := handlePtr
 	if err := closeErrorFromResult(C.zlink_monitor_close(&handle)); err != nil {
-		m.callbackMu.Unlock()
+		m.closeMu.Unlock()
 		return err
 	}
 	m.handle.Store(nil)
-	callback := m.callback
-	m.callback = 0
-	m.callbackMu.Unlock()
-	if callback != 0 {
-		releaseCallbackHandle(callback)
-	}
+	m.closeMu.Unlock()
 	return nil
 }
 
 func monitorEventFromC(raw C.zlink_socket_monitor_event_t) *MonitorEvent {
 	return &MonitorEvent{
-		Event:                   MonitorEventType(raw.event),
-		Value:                   uint64(raw.value),
-		RoutingID:               routingIDFromC(raw.routing_id),
-		LocalAddr:               C.GoString(&raw.local_addr[0]),
-		RemoteAddr:              C.GoString(&raw.remote_addr[0]),
-		ConnectionID:            uint64(raw.connection_id),
-		TransportPairID:         uint64(raw.transport_pair_id),
-		TransportPairGeneration: uint64(raw.transport_pair_generation),
-		TransportLane:           MonitorTransportLane(raw.transport_lane),
-		Flags:                   MonitorEventFlag(raw.flags),
+		Event:         MonitorEventType(raw.event),
+		Value:         uint64(raw.value),
+		RoutingID:     routingIDFromC(raw.routing_id),
+		LocalAddr:     C.GoString(&raw.local_addr[0]),
+		RemoteAddr:    C.GoString(&raw.remote_addr[0]),
+		ConnectionID:  uint64(raw.connection_id),
+		TransportLane: MonitorTransportLane(raw.transport_lane),
+		Flags:         MonitorEventFlag(raw.flags),
 	}
 }
 
 // monitorEventFromRawFieldsForTest exercises monitorEventFromC's field-by-field
-// conversion from plain Go values, so a non-cgo test file in this package can
-// verify the 64-bit round-trip without itself importing "C" — this package's
-// cgo //export trampolines (goZlinkMonitorTrampoline, etc.) make a second
-// cgo-using compilation unit for its own _test.go files unsupported by the Go
-// toolchain ("use of cgo in test not supported").
+// conversion from plain Go values so tests can verify the 64-bit round-trip
+// without importing C from a test compilation unit.
 func monitorEventFromRawFieldsForTest(
 	eventType MonitorEventType,
-	value, connectionID, transportPairID, transportPairGeneration uint64,
+	value, connectionID uint64,
 	transportLane MonitorTransportLane,
 	flags MonitorEventFlag,
 ) *MonitorEvent {
@@ -464,24 +409,7 @@ func monitorEventFromRawFieldsForTest(
 	raw.event = C.uint64_t(eventType)
 	raw.value = C.uint64_t(value)
 	raw.connection_id = C.uint64_t(connectionID)
-	raw.transport_pair_id = C.uint64_t(transportPairID)
-	raw.transport_pair_generation = C.uint64_t(transportPairGeneration)
 	raw.transport_lane = C.uint32_t(transportLane)
 	raw.flags = C.uint32_t(flags)
 	return monitorEventFromC(raw)
-}
-
-//export goZlinkMonitorTrampoline
-func goZlinkMonitorTrampoline(event *C.zlink_monitor_event_t, userdata C.uintptr_t) {
-	state, ok := safeHandleAs[*monitorCallbackState](userdata)
-	if !ok {
-		return
-	}
-	payload := monitorEventFromC(*event)
-	state.dispatcher.enqueue(&callbackTask{
-		label: "socket-monitor",
-		invoke: func() {
-			state.handler(payload)
-		},
-	})
 }

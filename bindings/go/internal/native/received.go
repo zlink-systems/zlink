@@ -8,13 +8,23 @@ package native
 */
 import "C"
 
+import "context"
+
+type replyTokenOwner struct{ marker byte }
+
+// ReplyToken is an opaque capability for one ROUTER request. Its zero value is
+// invalid. Go's native equality and map hashing include both unexported fields.
+type ReplyToken struct {
+	owner *replyTokenOwner
+	value uint64
+}
+
 type Received struct {
-	routingID     RoutingID
-	parts         []*Message
-	requestSeq    uint64
-	hasRequestSeq bool
-	reply         func(SendFlags, []*Message) error
-	send          func(SendFlags, []sendBuilderPart) (bool, error)
+	routingID RoutingID
+	parts     []*Message
+	token     ReplyToken
+	reply     func([]*Message) error
+	send      func(context.Context, []sendBuilderPart) error
 }
 
 func (r *Received) RoutingID() RoutingID {
@@ -47,8 +57,7 @@ func (r *Received) beginReceive() []*Message {
 	}
 	r.routingID = RoutingID{}
 	r.parts = nil
-	r.requestSeq = 0
-	r.hasRequestSeq = false
+	r.token = ReplyToken{}
 	r.reply = nil
 	r.send = nil
 	return previous
@@ -57,28 +66,22 @@ func (r *Received) beginReceive() []*Message {
 func (r *Received) replace(
 	routingID RoutingID,
 	parts []*Message,
-	requestSeq uint64,
-	hasRequestSeq bool,
-	reply func(SendFlags, []*Message) error,
-	send func(SendFlags, []sendBuilderPart) (bool, error),
+	token ReplyToken,
+	reply func([]*Message) error,
+	send func(context.Context, []sendBuilderPart) error,
 ) {
 	r.routingID = routingID
 	r.parts = parts
-	r.requestSeq = requestSeq
-	r.hasRequestSeq = hasRequestSeq
+	r.token = token
 	r.reply = reply
 	r.send = send
 }
 
-func (r *Received) RequestSeq() uint64 {
-	if r == nil {
-		return 0
+func (r *Received) ReplyToken() (ReplyToken, bool) {
+	if r == nil || r.token.owner == nil || r.token.value == 0 {
+		return ReplyToken{}, false
 	}
-	return r.requestSeq
-}
-
-func (r *Received) HasRequestSeq() bool {
-	return r != nil && r.hasRequestSeq
+	return r.token, true
 }
 
 func (r *Received) IsSinglePart() bool {
@@ -105,50 +108,38 @@ func (r *Received) SinglePartOrError() (*Message, error) {
 	return r.parts[0], nil
 }
 
-// Reply returns an operation builder for replying to this received request.
-// Only valid when HasRequestSeq() is true; otherwise Submit returns
-// *SubmitError. RoutingID and RequestSeq are encapsulated.
+// Reply captures the routing ID and opaque reply token from this envelope.
 func (r *Received) Reply() ReplyOp {
-	return newReplyBuilder(func(parts []*Message, flags SendFlags) error {
-		if r == nil {
+	if r == nil {
+		return newReplyBuilder(func([]*Message) error {
 			return &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+		})
+	}
+	reply := r.reply
+	token := r.token
+	return newReplyBuilder(func(parts []*Message) error {
+		if reply == nil || token.owner == nil || token.value == 0 {
+			return &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.EBUSY)}
 		}
-		if !r.hasRequestSeq || r.reply == nil {
-			return &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
-		}
-		if err := validateReplyFlags(flags); err != nil {
-			return err
-		}
-		return r.reply(flags, parts)
+		return reply(parts)
 	})
 }
 
 // Send returns an operation builder for a regular routed message back to
 // the sender of this Received. The source routing ID is encapsulated.
 func (r *Received) Send() SendOp {
-	return newSendBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
-		if r == nil {
+	if r == nil {
+		return newSendBuilder(func(context.Context, []sendBuilderPart) error {
 			return &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
-		}
-		if r.send == nil {
+		})
+	}
+	send := r.send
+	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
+		if send == nil {
 			return &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
 		}
-		sent, err := r.send(flags, parts)
-		if err != nil {
-			return err
-		}
-		if !sent {
-			return &SubmitError{Result: SubmitBackpressured, nativeErrno: int(C.EAGAIN)}
-		}
-		return nil
+		return send(ctx, parts)
 	})
-}
-
-func validateReplyFlags(flags SendFlags) error {
-	if flags == SendFlagsNone {
-		return nil
-	}
-	return &SubmitError{Result: SubmitNotSupported, nativeErrno: int(C.ENOTSUP)}
 }
 
 func (r *Received) Close() error {
@@ -166,8 +157,7 @@ func (r *Received) Close() error {
 	}
 	r.routingID = RoutingID{}
 	r.parts = nil
-	r.requestSeq = 0
-	r.hasRequestSeq = false
+	r.token = ReplyToken{}
 	r.reply = nil
 	r.send = nil
 	return first

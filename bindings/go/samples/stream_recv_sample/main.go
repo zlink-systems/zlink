@@ -18,6 +18,7 @@ func main() {
 	server, err := ctx.StreamSocket()
 	samplecommon.Must(err)
 	defer server.Close()
+	samplecommon.Must(server.SetReceiveMode(zlink.StreamReceiveRaw))
 
 	endpoint := samplecommon.UniqueTCP("stream-recv")
 	samplecommon.Must(server.Bind(endpoint))
@@ -39,7 +40,7 @@ func main() {
 		samplecommon.Must(fmt.Errorf("unexpected payload %q", string(part.Data())))
 	}
 
-	_, err = received.Send().Message(samplecommon.Message(sent)).Submit(context.Background())
+	err = received.Send().Message(samplecommon.Message(sent)).Submit(context.Background())
 	samplecommon.Must(err)
 
 	buffer := make([]byte, len(sent))

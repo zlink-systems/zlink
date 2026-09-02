@@ -124,8 +124,6 @@ const (
 	MonitorEventFlagConnectionReadyEdge = impl.MonitorEventFlagConnectionReadyEdge
 	// MonitorEventFlagSendFlowWritable is set on a RESUMED event when the pipe became actually writable.
 	MonitorEventFlagSendFlowWritable = impl.MonitorEventFlagSendFlowWritable
-	// MonitorEventFlagFlowStateStaleGeneration is set on a STALE event whose frame named a different connection generation.
-	MonitorEventFlagFlowStateStaleGeneration = impl.MonitorEventFlagFlowStateStaleGeneration
 	// MonitorEventFlagFlowStateStaleEpoch is set on a STALE event whose epoch did not advance in the current generation.
 	MonitorEventFlagFlowStateStaleEpoch = impl.MonitorEventFlagFlowStateStaleEpoch
 	// MonitorTransportLaneApplication identifies the application lane of a paired transport.

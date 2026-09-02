@@ -317,9 +317,9 @@ func submitErrorFromResult[T resultCodeValue](result T) error {
 	return &SubmitError{Result: resultCode, nativeErrno: errno}
 }
 
-// requestCompletionError maps a terminal callback result without consulting
-// thread-local errno. A callback carries a result code, not the errno from the
-// native thread that produced it, so completion errors must use the stable
+// requestCompletionError maps a terminal completion result without consulting
+// thread-local errno. A completion record carries a result code, not the errno
+// from the native thread that produced it, so errors must use the stable
 // result-to-errno policy.
 func requestCompletionError(result RequestResult) error {
 	if result == RequestOK {

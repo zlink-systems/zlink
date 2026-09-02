@@ -34,10 +34,10 @@ func runPair(cfg benchmarkConfig) perfcommon.Result {
 	perfcommon.WaitConnectedWithTimeout(perfcommon.SingleReadyTimeout(), serverMon, clientMon)
 
 	result := runSingleOneWay(cfg, server, func(message *zlink.Message) (bool, error) {
-		return perfcommon.SubmitMeasurement(client.Send(), message, zlink.SendFlagsNone)
+		err := perfcommon.SubmitMeasurementSend(client.Send(), message)
+		return err == nil, err
 	}, func(message *zlink.Message) error {
-		_, err := client.Send().MoveMessage(message).Submit(context.Background())
-		return err
+		return client.Send().MoveMessage(message).Submit(context.Background())
 	})
 	perfcommon.PrintSingleAutoHWMDetail(serverMon, cfg.pattern, cfg.transport, "receiver", zlink.SocketTypePair, cfg.msgSize)
 	perfcommon.PrintSingleAutoHWMDetail(clientMon, cfg.pattern, cfg.transport, "sender", zlink.SocketTypePair, cfg.msgSize)

@@ -32,7 +32,7 @@ func main() {
 	samplecommon.WaitConnected(serverMon, clientMon)
 
 	sent := "hello-pair"
-	_, err = client.Send().Message(samplecommon.Message(sent)).Submit(context.Background())
+	err = client.Send().Message(samplecommon.Message(sent)).Submit(context.Background())
 	samplecommon.Must(err)
 
 	var received zlink.Received

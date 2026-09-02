@@ -40,7 +40,7 @@ func main() {
 	_, err = router.Recv(&request, zlink.RecvFlagsNone)
 	samplecommon.Must(err)
 	defer request.Close()
-	_, err = request.Send().Message(samplecommon.Message("pong")).Submit(context.Background())
+	err = request.Send().Message(samplecommon.Message("pong")).Submit(context.Background())
 	samplecommon.Must(err)
 
 	var reply zlink.Received

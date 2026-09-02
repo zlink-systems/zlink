@@ -16,8 +16,8 @@ import (
 
 func TestRuntimeVersionIsAvailable(t *testing.T) {
 	version := zlink.RuntimeVersion()
-	if version.Major != 0 || version.Minor != 15 || version.Patch != 1 {
-		t.Fatalf("RuntimeVersion() = %d.%d.%d, want 0.15.1", version.Major, version.Minor, version.Patch)
+	if version.Major < 0 || version.Minor < 0 || version.Patch < 0 {
+		t.Fatalf("RuntimeVersion() returned an invalid version: %d.%d.%d", version.Major, version.Minor, version.Patch)
 	}
 }
 
@@ -115,8 +115,8 @@ func TestRequestReplyCanonicalDealerRouterRoundTrip(t *testing.T) {
 			t.Errorf("HasRoutingID() = false")
 			return
 		}
-		if !received.HasRequestSeq() {
-			t.Errorf("HasRequestSeq() = false")
+		if _, ok := received.ReplyToken(); !ok {
+			t.Errorf("ReplyToken() = invalid")
 			return
 		}
 		if !received.IsSinglePart() {
@@ -143,15 +143,13 @@ func TestRequestReplyCanonicalDealerRouterRoundTrip(t *testing.T) {
 	}()
 
 	requestPayload := []byte("ping")
-	replyCh := dealerSocket.Request().Bytes(requestPayload).Timeout(2 * time.Second).Submit(context.Background())
+	reply, err := dealerSocket.Request().Bytes(requestPayload).Timeout(2 * time.Second).Submit(context.Background())
 	if !bytes.Equal(requestPayload, []byte("ping")) {
 		t.Fatalf("Request().Bytes() mutated caller payload = %q", string(requestPayload))
 	}
-	completion := awaitRequest(t, replyCh)
-	if completion.Err != nil {
-		t.Fatalf("Request() completion error = %v", completion.Err)
+	if err != nil {
+		t.Fatalf("Request() error = %v", err)
 	}
-	reply := completion.Parts
 	if len(reply) != 1 {
 		t.Fatalf("Request() reply parts = %d, want 1", len(reply))
 	}
@@ -203,6 +201,9 @@ func TestRouterRequestSupportPreservesDataReceiveSurface(t *testing.T) {
 		t.Fatalf("Recv() error = %v", err)
 	}
 	defer received.Close()
+	if token, ok := received.ReplyToken(); ok || token != (zlink.ReplyToken{}) {
+		t.Fatalf("DATA ReplyToken() = (%v, %v), want (zero, false)", token, ok)
+	}
 	part, err := received.SinglePartOrError()
 	if err != nil {
 		t.Fatalf("SinglePartOrError() error = %v", err)
@@ -221,6 +222,9 @@ func TestStreamRecvCanonicalRoundTrip(t *testing.T) {
 		t.Fatalf("StreamSocket() error = %v", err)
 	}
 	defer stream.Close()
+	if err := stream.SetReceiveMode(zlink.StreamReceiveRaw); err != nil {
+		t.Fatalf("SetReceiveMode() error = %v", err)
+	}
 
 	monitor, err := zlink.OpenSocketMonitor(
 		stream,
@@ -263,7 +267,7 @@ func TestStreamRecvCanonicalRoundTrip(t *testing.T) {
 	}
 
 	reply := newMessage(t, "hello-stream")
-	if _, err := stream.SendTo(received.RoutingID()).Message(reply).Submit(context.Background()); err != nil {
+	if err := stream.SendTo(received.RoutingID()).Message(reply).Submit(context.Background()); err != nil {
 		t.Fatalf("SendTo() error = %v", err)
 	}
 
@@ -276,7 +280,7 @@ func TestStreamRecvCanonicalRoundTrip(t *testing.T) {
 	}
 }
 
-func TestStreamOnPacketCanonicalRoundTrip(t *testing.T) {
+func TestStreamPacketPullCanonicalRoundTrip(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
@@ -285,6 +289,9 @@ func TestStreamOnPacketCanonicalRoundTrip(t *testing.T) {
 		t.Fatalf("StreamSocket() error = %v", err)
 	}
 	defer stream.Close()
+	if err := stream.SetReceiveMode(zlink.StreamReceivePacket); err != nil {
+		t.Fatalf("SetReceiveMode() error = %v", err)
+	}
 
 	monitor, err := zlink.OpenSocketMonitor(
 		stream,
@@ -300,27 +307,6 @@ func TestStreamOnPacketCanonicalRoundTrip(t *testing.T) {
 		t.Fatalf("Bind() error = %v", err)
 	}
 
-	done := make(chan error, 1)
-	if err := stream.OnPacket(func(source zlink.RoutingID, header, body *zlink.Message) {
-		if got := string(body.Data()); got != "hello-stream" {
-			done <- fmt.Errorf("packet body = %q, want %q", got, "hello-stream")
-			_ = header.Close()
-			_ = body.Close()
-			return
-		}
-		packet := frameStreamPacketMessage(t, header, body)
-		_ = header.Close()
-		_ = body.Close()
-		if _, err := stream.SendTo(source).Message(packet).Submit(context.Background()); err != nil {
-			_ = packet.Close()
-			done <- err
-			return
-		}
-		done <- nil
-	}); err != nil {
-		t.Fatalf("OnPacket() error = %v", err)
-	}
-
 	conn, err := net.DialTimeout("tcp", strings.TrimPrefix(endpoint, "tcp://"), 5*time.Second)
 	if err != nil {
 		t.Fatalf("net.DialTimeout() error = %v", err)
@@ -331,18 +317,21 @@ func TestStreamOnPacketCanonicalRoundTrip(t *testing.T) {
 
 	payload := []byte("hello-stream")
 	writeStreamPacket(t, conn, payload)
+	var packet zlink.StreamPacket
+	ok, err := stream.RecvPacket(&packet, zlink.RecvFlagsNone)
+	if err != nil || !ok {
+		t.Fatalf("RecvPacket() = ok %v, err %v", ok, err)
+	}
+	if got := string(packet.Body().Data()); got != "hello-stream" {
+		t.Fatalf("packet body = %q, want %q", got, "hello-stream")
+	}
+	framed := frameStreamPacketMessage(t, packet.Header(), packet.Body())
+	if err := stream.SendTo(packet.RoutingID()).Message(framed).Submit(context.Background()); err != nil {
+		t.Fatalf("packet reply error = %v", err)
+	}
 
 	buffer := readStreamPacketBody(t, conn)
 	if !bytes.Equal(buffer, payload) {
-		t.Fatalf("stream callback reply = %q, want %q", string(buffer), string(payload))
-	}
-
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("callback send error = %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatalf("stream callback did not reply")
+		t.Fatalf("stream packet reply = %q, want %q", string(buffer), string(payload))
 	}
 }

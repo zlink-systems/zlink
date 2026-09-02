@@ -2,20 +2,20 @@
 
 // Package zlink provides idiomatic Go bindings for the zlink messaging library.
 //
-// The public surface follows the Core 0.13.1 raw-socket contract:
+// The public surface follows the Core 0.16.0 raw-socket contract:
 //   - multipart-only public send/receive APIs
-//   - blocking methods use direct names and non-blocking methods use Try*
-//   - non-blocking submit returns `(false, nil)` only for temporary backpressure
+//   - send and request builders expose one context-aware completion terminal
+//   - publish alone retains send flags and its `(bool, error)` result
 //   - non-blocking receive reports only "no data" via the ok result
-//   - message diagnostics expose only the properties provided by the Core 0.13.1 raw API
+//   - ROUTER requests carry opaque owner-bound reply tokens
+//   - STREAM packet, monitor, and timer delivery are pull-based
 //   - context options are exposed through Context.Options() as ContextOptions
 //   - socket capabilities are split by concrete socket type
 //   - typed domain objects model routing IDs, aggregate receive results, topic
 //     messages, subscription events, and monitor events
 //   - raw option bags and raw flags are not exposed publicly
 //   - monitor open APIs use typed event masks and default to ALL when omitted
-//   - callback delivery hops from native threads onto Go-managed dispatcher
-//     goroutines before invoking user handlers
+//   - poller completion readiness advances the socket-local completion owner
 //
 // Message ownership follows the native contract at the binding boundary.
 // Message(...) submits a binding-owned staging copy, preserving the caller's

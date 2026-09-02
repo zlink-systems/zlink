@@ -46,15 +46,15 @@ func TestSurfaceCanonicalBuilderSignatures(t *testing.T) {
 	}
 
 	sendOp := reflect.TypeOf((*zlink.SendOp)(nil)).Elem()
-	routedSendOp := reflect.TypeOf((*zlink.RoutedSendOp)(nil)).Elem()
 	requestOp := reflect.TypeOf((*zlink.RequestOp)(nil)).Elem()
 	replyOp := reflect.TypeOf((*zlink.ReplyOp)(nil)).Elem()
+	publishOp := reflect.TypeOf((*zlink.PublishOp)(nil)).Elem()
 	assertReturn((*zlink.PairSocket)(nil), "Send", sendOp)
-	assertReturn((*zlink.DealerSocket)(nil), "Send", routedSendOp)
+	assertReturn((*zlink.DealerSocket)(nil), "Send", sendOp)
 	assertReturn((*zlink.DealerSocket)(nil), "Request", requestOp)
-	assertReturn((*zlink.PubSocket)(nil), "Publish", sendOp)
-	assertReturn((*zlink.XPubSocket)(nil), "Publish", sendOp)
-	assertReturn((*zlink.RouterSocket)(nil), "SendTo", routedSendOp)
+	assertReturn((*zlink.PubSocket)(nil), "Publish", publishOp)
+	assertReturn((*zlink.XPubSocket)(nil), "Publish", publishOp)
+	assertReturn((*zlink.RouterSocket)(nil), "SendTo", sendOp)
 	assertReturn((*zlink.RouterSocket)(nil), "Request", requestOp)
 	assertReturn((*zlink.RouterSocket)(nil), "Reply", replyOp)
 	assertReturn((*zlink.StreamSocket)(nil), "SendTo", sendOp)
@@ -69,7 +69,6 @@ func TestSurfaceRawSocketCapabilities(t *testing.T) {
 		{(*zlink.PairSocket)(nil), "Send", true},
 		{(*zlink.PairSocket)(nil), "Recv", true},
 		{(*zlink.PairSocket)(nil), "RecvPart", false},
-		{(*zlink.PairSocket)(nil), "TrySend", false},
 		{(*zlink.PairSocket)(nil), "SendBytes", false},
 		{(*zlink.PubSocket)(nil), "Publish", true},
 		{(*zlink.PubSocket)(nil), "Recv", false},
@@ -83,7 +82,7 @@ func TestSurfaceRawSocketCapabilities(t *testing.T) {
 		{(*zlink.RouterSocket)(nil), "RoutingID", true},
 		{(*zlink.RouterSocket)(nil), "Send", false},
 		{(*zlink.StreamSocket)(nil), "SetNotify", true},
-		{(*zlink.StreamSocket)(nil), "OnPacket", true},
+		{(*zlink.StreamSocket)(nil), "RecvPacket", true},
 		{(*zlink.StreamSocket)(nil), "Connect", false},
 		{(*zlink.StreamSocket)(nil), "Disconnect", false},
 		{(*zlink.XPubSocket)(nil), "ReceiveSubscriptionEvent", true},
@@ -163,45 +162,40 @@ func TestSurfaceTypedOptionsAndCallbacks(t *testing.T) {
 	}
 }
 
-func TestSurfaceManagedRoutedTerminalHasSyncSubmitAndSendFlags(t *testing.T) {
+func TestSurfacePullCompletionTerminalSignatures(t *testing.T) {
 	contextType := reflect.TypeOf((*context.Context)(nil)).Elem()
-	// Routed send is synchronous: Submit(ctx) error plus builder flags. Request
-	// keeps its async completion-channel terminal and narrows through Flags to
-	// the synchronous admission terminal.
-	sendCompletionType := reflect.TypeOf((*error)(nil)).Elem()
-	requestCompletionType := reflect.TypeOf((<-chan zlink.RequestReplyCompletion)(nil))
-	sendFlagsType := reflect.TypeOf(zlink.SendFlagsNone)
+	errorType := reflect.TypeOf((*error)(nil)).Elem()
+	messageSliceType := reflect.TypeOf([]*zlink.Message(nil))
 
-	assertTerminal := func(target reflect.Type, completion reflect.Type) {
+	assertSendTerminal := func(target reflect.Type) {
 		t.Helper()
 		method, ok := target.MethodByName("Submit")
-		if !ok || method.Type.NumIn() != 1 || method.Type.In(0) != contextType || method.Type.NumOut() != 1 || method.Type.Out(0) != completion {
+		if !ok || method.Type.NumIn() != 1 || method.Type.In(0) != contextType || method.Type.NumOut() != 1 || method.Type.Out(0) != errorType {
 			t.Fatalf("%v.Submit signature = %v", target, method.Type)
 		}
-		for _, forbidden := range []string{"SubmitAsync", "Callback", "OnProgress"} {
+		for _, forbidden := range []string{"Flags", "SubmitAsync", "Callback", "OnProgress"} {
 			if _, ok := target.MethodByName(forbidden); ok {
 				t.Fatalf("%v should not expose compatibility terminal %s", target, forbidden)
 			}
 		}
 	}
-
-	routedType := reflect.TypeOf((*zlink.RoutedSendSubmitOp)(nil)).Elem()
-	assertTerminal(routedType, sendCompletionType)
-	flagsMethod, ok := routedType.MethodByName("Flags")
-	if !ok || flagsMethod.Type.NumIn() != 1 || flagsMethod.Type.In(0) != sendFlagsType || flagsMethod.Type.NumOut() != 1 || flagsMethod.Type.Out(0) != routedType {
-		t.Fatalf("%v.Flags signature = %v", routedType, flagsMethod.Type)
-	}
-
+	assertSendTerminal(reflect.TypeOf((*zlink.SendSubmitOp)(nil)).Elem())
+	assertSendTerminal(reflect.TypeOf((*zlink.ReplySubmitOp)(nil)).Elem())
 	requestType := reflect.TypeOf((*zlink.RequestSubmitOp)(nil)).Elem()
-	assertTerminal(requestType, requestCompletionType)
-	requestSyncType := reflect.TypeOf((*zlink.RequestSyncSubmitOp)(nil)).Elem()
-	flagsMethod, ok = requestType.MethodByName("Flags")
-	if !ok || flagsMethod.Type.NumIn() != 1 || flagsMethod.Type.In(0) != sendFlagsType || flagsMethod.Type.NumOut() != 1 || flagsMethod.Type.Out(0) != requestSyncType {
-		t.Fatalf("%v.Flags signature = %v", requestType, flagsMethod.Type)
+	requestSubmit, ok := requestType.MethodByName("Submit")
+	if !ok || requestSubmit.Type.NumIn() != 1 || requestSubmit.Type.In(0) != contextType || requestSubmit.Type.NumOut() != 2 || requestSubmit.Type.Out(0) != messageSliceType || requestSubmit.Type.Out(1) != errorType {
+		t.Fatalf("%v.Submit signature = %v", requestType, requestSubmit.Type)
 	}
-	syncSubmit, ok := requestSyncType.MethodByName("Submit")
-	if !ok || syncSubmit.Type.NumIn() != 1 || syncSubmit.Type.In(0) != contextType || syncSubmit.Type.NumOut() != 2 || syncSubmit.Type.Out(0) != requestCompletionType || syncSubmit.Type.Out(1) != sendCompletionType {
-		t.Fatalf("%v.Submit signature = %v", requestSyncType, syncSubmit.Type)
+	if _, ok := requestType.MethodByName("Flags"); ok {
+		t.Fatalf("%v must not expose Flags", requestType)
+	}
+	publishType := reflect.TypeOf((*zlink.PublishSubmitOp)(nil)).Elem()
+	publishSubmit, ok := publishType.MethodByName("Submit")
+	if !ok || publishSubmit.Type.NumOut() != 2 || publishSubmit.Type.Out(0).Kind() != reflect.Bool || publishSubmit.Type.Out(1) != errorType {
+		t.Fatalf("%v.Submit signature = %v", publishType, publishSubmit.Type)
+	}
+	if _, ok := publishType.MethodByName("Flags"); !ok {
+		t.Fatalf("%v must expose Flags", publishType)
 	}
 }
 

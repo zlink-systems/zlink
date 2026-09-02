@@ -98,14 +98,14 @@ func TestNilInputValidation(t *testing.T) {
 			t.Fatalf("Recv(nil) error = %v, want *RecvError/EFAULT", err)
 		}
 	}
-	if _, err := socket.Send().Message(nil).Submit(context.Background()); err == nil {
+	if err := socket.Send().Message(nil).Submit(context.Background()); err == nil {
 		t.Fatalf("Send(nil) should fail")
 	}
 	stream, _ := ctx.StreamSocket()
 	defer stream.Close()
 
-	if err := stream.OnPacket(nil); err == nil {
-		t.Fatalf("OnPacket(nil) should fail")
+	if _, err := stream.RecvPacket(nil, zlink.RecvFlagsDontWait); err == nil {
+		t.Fatalf("RecvPacket(nil) should fail")
 	}
 }
 

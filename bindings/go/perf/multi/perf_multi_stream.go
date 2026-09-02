@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -13,7 +14,7 @@ import (
 )
 
 // PERF_MULTI_TEST_POLICY / perf_multi_stream_server.cpp: the measured
-// surface for MULTI_STREAM is the Go STREAM *server* / packet handler.
+// surface for MULTI_STREAM is the Go STREAM *server* / packet pull loop.
 // The client role is the shared C reference binary
 // bindings/c/perf/common/streamclient/perf_stream_client, spawned by
 // run_benchmarks_multi.sh (mirroring the dotnet runner). There is no
@@ -26,6 +27,7 @@ func runMultiStreamServer(cfg multiConfig) {
 	server, err := ctx.StreamSocket()
 	perfcommon.Must(err)
 	defer server.Close()
+	perfcommon.Must(server.SetReceiveMode(zlink.StreamReceivePacket))
 
 	perfcommon.Must(perfcommon.ConfigureTLSServer(server, cfg.transport))
 	perfcommon.ApplyMultiHWM(server, cfg.pattern)
@@ -92,14 +94,36 @@ func multiStreamExpectedClients(cfg multiConfig) int {
 
 func startMultiStreamEchoServer(server *zlink.StreamSocket) (func() error, <-chan error) {
 	dispatch := newMultiStreamRouteDispatch(server)
-
-	perfcommon.Must(server.OnPacket(func(source zlink.RoutingID, header, body *zlink.Message) {
-		packet := perfcommon.FrameStreamPacketMessage(header, body)
-		_ = header.Close()
-		_ = body.Close()
-		dispatch.enqueue(source, packet)
-	}))
-	return dispatch.stop, dispatch.errors
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var received zlink.StreamPacket
+		defer received.Close()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			ok, err := server.RecvPacket(&received, zlink.RecvFlagsDontWait)
+			if err != nil {
+				dispatch.recordError(err)
+				return
+			}
+			if !ok {
+				runtime.Gosched()
+				continue
+			}
+			packet := perfcommon.FrameStreamPacketMessage(received.Header(), received.Body())
+			dispatch.enqueue(received.RoutingID(), packet)
+		}
+	}()
+	return func() error {
+		close(stop)
+		<-done
+		return dispatch.stop()
+	}, dispatch.errors
 }
 
 type multiStreamPacketNode struct {
@@ -136,7 +160,8 @@ type multiStreamRouteDispatch struct {
 func newMultiStreamRouteDispatch(server *zlink.StreamSocket) *multiStreamRouteDispatch {
 	return newMultiStreamRouteDispatchWithSubmit(
 		func(source zlink.RoutingID, packet *zlink.Message) (bool, error) {
-			return server.SendTo(source).MoveMessage(packet).Submit(context.Background())
+			err := server.SendTo(source).MoveMessage(packet).Submit(context.Background())
+			return err == nil, err
 		},
 	)
 }
@@ -241,7 +266,7 @@ func (r *multiStreamRouteSender) submit(packet *zlink.Message) bool {
 			return false
 		}
 		if perfcommon.IsStaleRoute(sendErr) {
-			// The connection vanished after callback admission. Drop this route's
+			// The connection vanished after packet admission. Drop this route's
 			// queued echoes without affecting any other route sender.
 			r.abort()
 			return false

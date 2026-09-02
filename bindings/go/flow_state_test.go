@@ -75,7 +75,6 @@ func TestFlowStateMonitorEventConstantsMatchCABIAndArePublic(t *testing.T) {
 	}{
 		{"MonitorEventFlagConnectionReadyEdge", zlink.MonitorEventFlagConnectionReadyEdge, 1 << 0},
 		{"MonitorEventFlagSendFlowWritable", zlink.MonitorEventFlagSendFlowWritable, 1 << 1},
-		{"MonitorEventFlagFlowStateStaleGeneration", zlink.MonitorEventFlagFlowStateStaleGeneration, 1 << 2},
 		{"MonitorEventFlagFlowStateStaleEpoch", zlink.MonitorEventFlagFlowStateStaleEpoch, 1 << 3},
 	}
 	for _, tc := range flagCases {

@@ -11,7 +11,6 @@ import "C"
 
 import (
 	"math"
-	"runtime/cgo"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,12 +19,10 @@ import (
 )
 
 type socketCore struct {
-	handle             atomic.Pointer[byte]
-	callbackMu         sync.Mutex
-	recvHandle         cgo.Handle
-	recvActive         atomic.Uintptr
-	subscribeHandle    cgo.Handle
-	streamPacketHandle cgo.Handle
+	handle     atomic.Pointer[byte]
+	closeMu    sync.Mutex
+	context    *Context
+	completion *completionOwner
 }
 
 func newSocketCore(ctx *Context, socketType C.zlink_socket_type_t) (*socketCore, error) {
@@ -36,8 +33,10 @@ func newSocketCore(ctx *Context, socketType C.zlink_socket_type_t) (*socketCore,
 	if handle == nil {
 		return nil, configErrorFromErrno(currentErrno())
 	}
-	core := &socketCore{}
+	core := &socketCore{context: ctx}
 	core.handle.Store((*byte)(handle))
+	core.completion = newCompletionOwner(handle)
+	ctx.registerSocket(core)
 	return core, nil
 }
 
@@ -89,60 +88,29 @@ func (s *socketCore) Close() error {
 	if s == nil {
 		return nil
 	}
-	s.callbackMu.Lock()
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
 	if s.raw() == nil {
-		s.callbackMu.Unlock()
 		return nil
 	}
+	s.completion.shutdownOwner()
 	handle := s.raw()
 	closeErr := closeErrorFromResult(C.zlink_close(handle))
 	if closeErr != nil {
-		s.callbackMu.Unlock()
 		return closeErr
 	}
 	s.handle.Store(nil)
-	s.callbackMu.Unlock()
-	s.releaseCallbacks()
-	return nil
-}
-
-func (s *socketCore) releaseCallbacks() {
-	s.callbackMu.Lock()
-	handles := []cgo.Handle{s.recvHandle, s.subscribeHandle, s.streamPacketHandle}
-	s.recvHandle = 0
-	s.recvActive.Store(0)
-	s.subscribeHandle = 0
-	s.streamPacketHandle = 0
-	s.callbackMu.Unlock()
-	for _, handle := range handles {
-		releaseCallbackHandle(handle)
-	}
-}
-
-func (s *socketCore) hasReceiveHandler() bool {
-	return s.recvActive.Load() != 0
-}
-
-func (s *socketCore) replaceCallback(handle cgo.Handle, slot *cgo.Handle, active *atomic.Uintptr, register func() error) error {
-	s.callbackMu.Lock()
-	if s.isClosed() {
-		s.callbackMu.Unlock()
-		return &HandlerError{Result: HandlerInvalidArgument, nativeErrno: int(C.EFAULT)}
-	}
-	if err := register(); err != nil {
-		s.callbackMu.Unlock()
-		return err
-	}
-	previous := *slot
-	*slot = handle
-	if active != nil {
-		active.Store(uintptr(handle))
-	}
-	s.callbackMu.Unlock()
-	if previous != 0 {
-		releaseCallbackHandle(previous)
+	if s.context != nil {
+		s.context.unregisterSocket(s)
 	}
 	return nil
+}
+
+func (s *socketCore) completionDrainOwner() *completionOwner {
+	if s == nil {
+		return nil
+	}
+	return s.completion
 }
 
 func (s *socketCore) setIntOption(option C.zlink_option_t, value int32) error {

@@ -35,6 +35,8 @@ type Context struct {
 	handle           atomic.Pointer[byte]
 	closed           atomic.Bool
 	closeMu          sync.Mutex
+	socketsMu        sync.Mutex
+	sockets          map[*socketCore]struct{}
 	optionsMu        sync.RWMutex
 	options          *ContextOptions
 	threadNamePrefix string
@@ -96,7 +98,7 @@ func NewContext() (*Context, error) {
 	if handle == nil {
 		return nil, configErrorFromErrno(currentErrno())
 	}
-	ctx := &Context{}
+	ctx := &Context{sockets: make(map[*socketCore]struct{})}
 	ctx.handle.Store((*byte)(handle))
 	ctx.options = &ContextOptions{ctx: ctx}
 	if limit := debug.SetMemoryLimit(-1); limit > 0 && limit < math.MaxInt64 {
@@ -124,6 +126,7 @@ func (c *Context) Close() error {
 	if c.closed.Load() || c.raw() == nil {
 		return nil
 	}
+	c.shutdownSocketCompletions()
 	handle := c.raw()
 	if err := closeErrorFromResult(C.zlink_ctx_term(handle)); err != nil {
 		return err
@@ -137,7 +140,41 @@ func (c *Context) Shutdown() error {
 	if c == nil || c.closed.Load() {
 		return nil
 	}
+	c.shutdownSocketCompletions()
 	return closeErrorFromResult(C.zlink_ctx_shutdown(c.raw()))
+}
+
+func (c *Context) registerSocket(socket *socketCore) {
+	if c == nil || socket == nil {
+		return
+	}
+	c.socketsMu.Lock()
+	c.sockets[socket] = struct{}{}
+	c.socketsMu.Unlock()
+}
+
+func (c *Context) unregisterSocket(socket *socketCore) {
+	if c == nil || socket == nil {
+		return
+	}
+	c.socketsMu.Lock()
+	delete(c.sockets, socket)
+	c.socketsMu.Unlock()
+}
+
+func (c *Context) shutdownSocketCompletions() {
+	if c == nil {
+		return
+	}
+	c.socketsMu.Lock()
+	sockets := make([]*socketCore, 0, len(c.sockets))
+	for socket := range c.sockets {
+		sockets = append(sockets, socket)
+	}
+	c.socketsMu.Unlock()
+	for _, socket := range sockets {
+		socket.completion.shutdownOwner()
+	}
 }
 
 // RecalculateAutoHwm forces an automatic HWM recalculation. Returns *ConfigError on failure.

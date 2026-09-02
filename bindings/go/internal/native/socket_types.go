@@ -6,18 +6,12 @@ package native
 #include <stdint.h>
 #include <stdlib.h>
 #include "zlink.h"
-
-extern void goZlinkStreamPacketTrampoline(void *stream_, const zlink_routing_id_t *source_rid_, zlink_msg_t *header_, zlink_msg_t *body_, uintptr_t userdata_);
-
-static inline int zlink_stream_packet_handler_go_local(void *s, uintptr_t userdata) {
-    return zlink_stream_packet_handler(s, (zlink_stream_packet_handler_fn)goZlinkStreamPacketTrampoline, (void *)userdata);
-}
 */
 import "C"
 
 import (
 	"context"
-	"runtime/cgo"
+	"sync/atomic"
 	"time"
 	"unsafe"
 )
@@ -62,8 +56,6 @@ const (
 	ReceiveFlowPaused  ReceiveFlowState = 1
 )
 
-type recvCallback func(*Received)
-
 const recvTopicBufferCap = 64 * 1024
 
 type PairSocket struct {
@@ -81,10 +73,8 @@ func newPairSocket(ctx *Context) (*PairSocket, error) {
 }
 
 func (s *PairSocket) Send() SendOp {
-	return newSendBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
-		return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-			return submitErrorFromResult(C.zlink_send_part(s.raw(), part, C.zlink_send_flags_t(flags), partFlag))
-		})
+	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
+		return submitCompletionSend(ctx, s.socketCore, nil, false, parts)
 	})
 }
 
@@ -102,8 +92,8 @@ func newPubSocket(ctx *Context, socketType C.zlink_socket_type_t) (*PubSocket, e
 	}, nil
 }
 
-func (s *PubSocket) Publish(topic string) SendOp {
-	return newSendBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
+func (s *PubSocket) Publish(topic string) PublishOp {
+	return newPublishBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
 		return s.withCString(topic, func(cstr *C.char) error {
 			return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
 				return submitErrorFromResult(C.zlink_publish_part(s.raw(), cstr, part, C.zlink_send_flags_t(flags), partFlag))
@@ -186,15 +176,15 @@ func (s *DealerSocket) SetRequestTimeout(value time.Duration) error {
 	return configErrorFromResult(C.zlink_set_dealer_option(s.raw(), C.ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS, unsafe.Pointer(&raw), C.size_t(C.sizeof_int)))
 }
 
-func (s *DealerSocket) Send() RoutedSendOp {
-	return newRoutedSendBuilder(func(ctx context.Context, flags SendFlags, parts []sendBuilderPart) error {
-		return submitRoutedSend(ctx, s.socketCore, routedDealer, nil, flags, parts)
+func (s *DealerSocket) Send() SendOp {
+	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
+		return submitCompletionSend(ctx, s.socketCore, nil, false, parts)
 	})
 }
 
 func (s *DealerSocket) Request() RequestOp {
-	return newRequestBuilder(func(ctx context.Context, flags SendFlags, parts []requestBuilderPart, timeout time.Duration) (<-chan RequestReplyCompletion, error) {
-		return submitRoutedRequest(ctx, s.socketCore, routedDealer, nil, flags, timeout, parts)
+	return newRequestBuilder(func(ctx context.Context, parts []requestBuilderPart, timeout time.Duration) ([]*Message, error) {
+		return submitCompletionRequest(ctx, s.socketCore, nil, timeout, parts)
 	})
 }
 
@@ -208,7 +198,10 @@ func newRouterSocket(ctx *Context) (*RouterSocket, error) {
 		return nil, err
 	}
 	return &RouterSocket{
-		routedSocket: &routedSocket{connectionSocket: &connectionSocket{socketCore: core}},
+		routedSocket: &routedSocket{
+			connectionSocket: &connectionSocket{socketCore: core},
+			replyOwner:       &replyTokenOwner{marker: 1},
+		},
 	}, nil
 }
 
@@ -294,8 +287,8 @@ func newXPubSocket(ctx *Context) (*XPubSocket, error) {
 	return &XPubSocket{xpubSubscribeSocket: &xpubSubscribeSocket{publishSocket: pub.publishSocket}}, nil
 }
 
-func (s *XPubSocket) Publish(topic string) SendOp {
-	return newSendBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
+func (s *XPubSocket) Publish(topic string) PublishOp {
+	return newPublishBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
 		return s.withCString(topic, func(cstr *C.char) error {
 			return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
 				return submitErrorFromResult(C.zlink_publish_part(s.raw(), cstr, part, C.zlink_send_flags_t(flags), partFlag))
@@ -330,6 +323,80 @@ type StreamSocket struct {
 	core *routedSocket
 }
 
+type StreamReceiveMode int32
+
+const (
+	StreamReceiveUnspecified StreamReceiveMode = iota
+	StreamReceiveRaw
+	StreamReceivePacket
+)
+
+// StreamPacket is reusable caller-owned storage for one decoded STREAM
+// packet. Its zero value is empty and ready for RecvPacket.
+type StreamPacket struct {
+	routingID RoutingID
+	header    *Message
+	body      *Message
+	receiving atomic.Bool
+}
+
+func (p *StreamPacket) Empty() bool {
+	return p == nil || (p.routingID.Size() == 0 && p.header == nil && p.body == nil)
+}
+
+func (p *StreamPacket) RoutingID() RoutingID {
+	if p == nil {
+		return RoutingID{}
+	}
+	return p.routingID
+}
+
+func (p *StreamPacket) HasRoutingID() bool { return p != nil && p.routingID.Size() > 0 }
+
+func (p *StreamPacket) Header() *Message {
+	if p == nil {
+		return nil
+	}
+	return p.header
+}
+
+func (p *StreamPacket) Body() *Message {
+	if p == nil {
+		return nil
+	}
+	return p.body
+}
+
+func (p *StreamPacket) reset() error {
+	if p == nil {
+		return nil
+	}
+	var first error
+	if p.header != nil {
+		first = p.header.Close()
+	}
+	if p.body != nil {
+		if err := p.body.Close(); err != nil && first == nil {
+			first = err
+		}
+	}
+	p.routingID = RoutingID{}
+	p.header = nil
+	p.body = nil
+	return first
+}
+
+func (p *StreamPacket) Close() error {
+	if p == nil {
+		return nil
+	}
+	if !p.receiving.CompareAndSwap(false, true) {
+		return &RecvError{Result: RecvInvalidState, nativeErrno: int(C.EBUSY)}
+	}
+	defer p.receiving.Store(false)
+	return p.reset()
+}
+
 func newStreamSocket(ctx *Context) (*StreamSocket, error) {
 	core, err := newSocketCore(ctx, C.ZLINK_SOCKET_STREAM)
 	if err != nil {
@@ -345,6 +412,13 @@ func (s *StreamSocket) raw() unsafe.Pointer {
 		return nil
 	}
 	return s.core.raw()
+}
+
+func (s *StreamSocket) completionDrainOwner() *completionOwner {
+	if s == nil || s.core == nil {
+		return nil
+	}
+	return s.core.socketCore.completion
 }
 
 func (s *StreamSocket) Bind(endpoint string) error {
@@ -428,11 +502,8 @@ func (s *StreamSocket) RoutingID() (RoutingID, error) {
 }
 
 func (s *StreamSocket) SendTo(target RoutingID) SendOp {
-	return newSendBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
-		rid := target.toC()
-		return submitStreamFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-			return submitErrorFromResult(C.zlink_send_part_rid(s.raw(), &rid, part, C.zlink_send_flags_t(flags), partFlag))
-		})
+	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
+		return submitCompletionSend(ctx, s.core.socketCore, &target, true, parts)
 	})
 }
 
@@ -445,31 +516,80 @@ func (s *StreamSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 	}
 	if out.routingID.Size() > 0 {
 		routingID := out.routingID
-		out.send = func(sendFlags SendFlags, builderParts []sendBuilderPart) (bool, error) {
-			return s.core.submitStreamToBuilder(routingID, sendFlags, builderParts)
+		out.send = func(ctx context.Context, builderParts []sendBuilderPart) error {
+			return submitCompletionSend(ctx, s.core.socketCore, &routingID, true, builderParts)
 		}
 	}
 	return true, nil
 }
 
-func (s *StreamSocket) OnPacket(handler func(RoutingID, *Message, *Message)) error {
-	if handler == nil {
-		return &HandlerError{Result: HandlerInvalidArgument, nativeErrno: int(C.EINVAL)}
+func (s *StreamSocket) RecvPacket(out *StreamPacket, flags RecvFlags) (bool, error) {
+	if out == nil {
+		return false, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
+	if !out.receiving.CompareAndSwap(false, true) {
+		return false, &RecvError{Result: RecvInvalidState, nativeErrno: int(C.EBUSY)}
+	}
+	defer out.receiving.Store(false)
+	_ = out.reset()
+
+	header := &Message{}
+	if err := configErrorFromResult(C.zlink_msg_init(&header.msg)); err != nil {
+		return false, err
+	}
+	body := &Message{}
+	if err := configErrorFromResult(C.zlink_msg_init(&body.msg)); err != nil {
+		_ = header.Close()
+		return false, err
+	}
+	var sourceRID *C.zlink_routing_id_t
+	result := C.zlink_stream_recv_packet(
+		s.raw(), &sourceRID, &header.msg, &body.msg, C.zlink_recv_flags_t(flags))
+	if result == C.ZLINK_RECV_NO_DATA {
+		_ = header.Close()
+		_ = body.Close()
+		return false, nil
+	}
+	if err := recvErrorFromResult(result); err != nil {
+		_ = header.Close()
+		_ = body.Close()
+		return false, err
+	}
+	routingID := routingIDFromCPtr(sourceRID)
+	if routingID.Size() == 0 {
+		_ = header.Close()
+		_ = body.Close()
+		return false, &RecvError{Result: RecvInternalError, nativeErrno: int(C.EPROTO)}
+	}
+	out.routingID = routingID
+	out.header = header
+	out.body = body
+	return true, nil
+}
+
+func (s *StreamSocket) ReceiveMode() (StreamReceiveMode, error) {
+	if s == nil || s.core == nil || s.core.isClosed() {
+		return StreamReceiveUnspecified, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
+	var raw C.int
+	size := C.size_t(C.sizeof_int)
+	if err := configErrorFromResult(C.zlink_get_stream_option(
+		s.raw(), C.ZLINK_STREAM_OPT_RECV_MODE, unsafe.Pointer(&raw), &size)); err != nil {
+		return StreamReceiveUnspecified, err
+	}
+	return StreamReceiveMode(raw), nil
+}
+
+func (s *StreamSocket) SetReceiveMode(mode StreamReceiveMode) error {
+	if mode != StreamReceiveRaw && mode != StreamReceivePacket {
+		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
 	}
 	if s == nil || s.core == nil || s.core.isClosed() {
-		return &HandlerError{Result: HandlerInvalidArgument, nativeErrno: int(C.EFAULT)}
+		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	state := newStreamPacketCallbackState(handler)
-	handle := cgo.NewHandle(state)
-	err := s.core.connectionSocket.replaceCallback(handle, &s.core.streamPacketHandle, nil, func() error {
-		return handlerErrorFromResult(C.zlink_stream_packet_handler_go_local(s.raw(), C.uintptr_t(handle)))
-	})
-	if err != nil {
-		state.close()
-		handle.Delete()
-		return err
-	}
-	return nil
+	raw := C.int(mode)
+	return configErrorFromResult(C.zlink_set_stream_option(
+		s.raw(), C.ZLINK_STREAM_OPT_RECV_MODE, unsafe.Pointer(&raw), C.size_t(C.sizeof_int)))
 }
 
 func (s *StreamSocket) SetNotify(value bool) error {

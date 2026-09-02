@@ -107,7 +107,10 @@ func recvSingleRoutedOneWayOnce(
 	if !ok {
 		return false, nil
 	}
-	if received.RoutingID().Size() == 0 || received.HasRequestSeq() {
+	if received.RoutingID().Size() == 0 {
+		return false, fmt.Errorf("unexpected routed receive metadata")
+	}
+	if _, valid := received.ReplyToken(); valid {
 		return false, fmt.Errorf("unexpected routed receive metadata")
 	}
 	parts := received.Parts()

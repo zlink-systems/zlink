@@ -6,12 +6,6 @@ package native
 #include <stdint.h>
 #include "zlink.h"
 
-extern void goZlinkTimerTrampoline(void *timer_, uint64_t fire_count_, uintptr_t userdata_);
-
-static inline int zlink_timer_handler_go_local(void *timer, uintptr_t userdata) {
-	return zlink_timer_handler(timer, (zlink_timer_handler_fn)goZlinkTimerTrampoline, (void *)userdata);
-}
-
 static inline void *zlink_userdata_from_handle(uintptr_t handle) {
 	return (void *)handle;
 }
@@ -23,7 +17,6 @@ static inline uintptr_t zlink_handle_from_userdata(void *userdata) {
 import "C"
 
 import (
-	"runtime/cgo"
 	"sync"
 	"time"
 	"unsafe"
@@ -74,13 +67,27 @@ const (
 )
 
 type pollerEntry struct {
-	kind   pollerEntryKind
-	socket SocketTarget
-	raw    unsafe.Pointer
-	fd     int
-	timer  *Timer
-	slot   uintptr
-	events PollEventFlag
+	kind           pollerEntryKind
+	socket         SocketTarget
+	raw            unsafe.Pointer
+	fd             int
+	timer          *Timer
+	slot           uintptr
+	events         PollEventFlag
+	owner          *completionOwner
+	ownsCompletion bool
+}
+
+type completionOwnerTarget interface {
+	completionDrainOwner() *completionOwner
+}
+
+func completionOwnerOf(socket SocketTarget) *completionOwner {
+	target, ok := socket.(completionOwnerTarget)
+	if !ok {
+		return nil
+	}
+	return target.completionDrainOwner()
 }
 
 type Poller struct {
@@ -94,31 +101,9 @@ type Poller struct {
 	closed     bool
 }
 
-type timerCallbackState struct {
-	dispatcher *callbackDispatcher
-	timer      *Timer
-	handler    func(*Timer, uint64)
-}
-
-func newTimerCallbackState(timer *Timer, handler func(*Timer, uint64)) *timerCallbackState {
-	return &timerCallbackState{
-		dispatcher: newCallbackDispatcher(),
-		timer:      timer,
-		handler:    handler,
-	}
-}
-
-func (s *timerCallbackState) close() {
-	if s == nil {
-		return
-	}
-	s.dispatcher.close()
-}
-
 type Timer struct {
-	handle   unsafe.Pointer
-	closed   bool
-	callback cgo.Handle
+	handle unsafe.Pointer
+	closed bool
 }
 
 func NewTimer() (*Timer, error) {
@@ -169,27 +154,6 @@ func (t *Timer) Recv() (uint64, bool, error) {
 	return uint64(fireCount), true, nil
 }
 
-func (t *Timer) OnFire(handler func(timer *Timer, fireCount uint64)) error {
-	if handler == nil {
-		return &HandlerError{Result: HandlerInvalidArgument, nativeErrno: int(C.EINVAL)}
-	}
-	if t == nil || t.closed || t.handle == nil {
-		return &HandlerError{Result: HandlerInvalidArgument, nativeErrno: int(C.EFAULT)}
-	}
-	state := newTimerCallbackState(t, handler)
-	handle := cgo.NewHandle(state)
-	if err := handlerErrorFromResult(C.zlink_timer_handler_go_local(t.handle, C.uintptr_t(handle))); err != nil {
-		state.close()
-		handle.Delete()
-		return err
-	}
-	if t.callback != 0 {
-		releaseCallbackHandle(t.callback)
-	}
-	t.callback = handle
-	return nil
-}
-
 func (t *Timer) Close() error {
 	if t == nil || t.closed || t.handle == nil {
 		return nil
@@ -197,10 +161,6 @@ func (t *Timer) Close() error {
 	handle := t.handle
 	if err := closeErrorFromResult(C.zlink_timer_destroy(&handle)); err != nil {
 		return err
-	}
-	if t.callback != 0 {
-		releaseCallbackHandle(t.callback)
-		t.callback = 0
 	}
 	t.handle = nil
 	t.closed = true
@@ -258,7 +218,20 @@ func (p *Poller) AddSocket(socket SocketTarget, events PollEventFlag, slot uintp
 		return err
 	}
 	entry := p.makeEntry(pollerEntrySocket, socket, raw, 0, nil, slot, events)
+	entry.owner = completionOwnerOf(socket)
+	entry.ownsCompletion = events&PollCompletion != 0
+	if entry.ownsCompletion {
+		if entry.owner == nil {
+			return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		}
+		if err := entry.owner.transferToPublic(p); err != nil {
+			return err
+		}
+	}
 	if err := configErrorFromResult(C.zlink_poller_add(p.handle, raw, entry.userDataPtr(), C.short(events))); err != nil {
+		if entry.ownsCompletion {
+			entry.owner.transferToRuntime(p)
+		}
 		return err
 	}
 	p.sockets[uintptr(raw)] = entry
@@ -274,25 +247,34 @@ func (p *Poller) ModifySocket(socket SocketTarget, events PollEventFlag) error {
 	if p.closed || p.handle == nil {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	// Core rejects adding the completion flag through modify, so reject it
-	// before touching the Go registry as well.
-	if events&PollCompletion != 0 {
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
-	}
 	raw, err := socketHandle(socket)
 	if err != nil {
 		return err
 	}
 	entry := p.sockets[uintptr(raw)]
-	if entry != nil && entry.events&PollCompletion != 0 {
-		// Change completion registration with remove + add, matching Core.
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+	if entry == nil {
+		return &ConfigError{Result: ConfigNotFound, nativeErrno: int(C.ENOENT)}
+	}
+	hadCompletion := entry.ownsCompletion
+	wantsCompletion := events&PollCompletion != 0
+	if !hadCompletion && wantsCompletion {
+		if entry.owner == nil {
+			return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		}
+		if err := entry.owner.transferToPublic(p); err != nil {
+			return err
+		}
 	}
 	if err := configErrorFromResult(C.zlink_poller_modify(p.handle, raw, C.short(events))); err != nil {
+		if !hadCompletion && wantsCompletion {
+			entry.owner.transferToRuntime(p)
+		}
 		return err
 	}
-	if entry != nil {
-		entry.events = events
+	entry.events = events
+	entry.ownsCompletion = wantsCompletion
+	if hadCompletion && !wantsCompletion {
+		entry.owner.transferToRuntime(p)
 	}
 	return nil
 }
@@ -310,10 +292,14 @@ func (p *Poller) RemoveSocket(socket SocketTarget) error {
 	if err != nil {
 		return err
 	}
+	entry := p.sockets[uintptr(raw)]
 	if err := configErrorFromResult(C.zlink_poller_remove(p.handle, raw)); err != nil {
 		return err
 	}
 	delete(p.sockets, uintptr(raw))
+	if entry != nil && entry.ownsCompletion {
+		entry.owner.transferToRuntime(p)
+	}
 	return nil
 }
 
@@ -447,16 +433,36 @@ func (p *Poller) Wait(events []PollEvent, timeout time.Duration) (int, error) {
 		}
 		return 0, configErrorFromErrno(currentErrno())
 	}
+	out := 0
 	for i := 0; i < int(count); i++ {
 		event := nativeEvents[i]
-		events[i] = PollEvent{
+		revents := PollEventFlag(event.events)
+		if revents&PollCompletion != 0 {
+			p.mu.Lock()
+			entry := p.sockets[uintptr(event.socket)]
+			p.mu.Unlock()
+			if entry != nil && entry.ownsCompletion && entry.owner != nil {
+				processed, drainErr := entry.owner.drain(true)
+				if drainErr != nil {
+					return 0, drainErr
+				}
+				if processed == 0 {
+					revents &^= PollCompletion
+				}
+			}
+		}
+		if revents == 0 {
+			continue
+		}
+		events[out] = PollEvent{
 			SourceKind: PollSourceKind(event.source_kind),
 			Fd:         int(event.fd),
 			Slot:       uintptr(event.user_data),
-			Revents:    PollEventFlag(event.events),
+			Revents:    revents,
 		}
+		out++
 	}
-	return int(count), nil
+	return out, nil
 }
 
 func (p *Poller) Close() error {
@@ -473,6 +479,11 @@ func (p *Poller) Close() error {
 	handle := p.handle
 	if err := closeErrorFromResult(C.zlink_poller_destroy(&handle)); err != nil {
 		return err
+	}
+	for _, entry := range p.sockets {
+		if entry.ownsCompletion && entry.owner != nil {
+			entry.owner.transferToRuntime(p)
+		}
 	}
 	for k := range p.sockets {
 		delete(p.sockets, k)

@@ -29,7 +29,7 @@
         "internal/native/socket_multipart.go:164-191"
       ],
       "reason": "Message submit preserves the public caller handle with a binding-owned native staging copy; Core consumes the staged native part on ordinary synchronous rejection.",
-      "guardTest": "TestBlockingSendFailurePreservesMessagePayload"
+      "guardTest": "TestTargetedSendFailurePreservesMessagePayload"
     },
     {
       "id": "received-adopt-wrapper",
@@ -53,10 +53,10 @@
       "id": "bytes-builder-native-copy",
       "classification": "required",
       "sources": [
-        "internal/native/socket_multipart_request.go:53-95"
+        "internal/native/socket_multipart.go:263-350"
       ],
       "reason": "A builder supplied with []byte must materialize Core-owned messages before Submit returns.",
-      "guardTest": "TestBlockingSendFailurePreservesBytesPayload"
+      "guardTest": "TestTargetedSendFailurePreservesBytesPayload"
     },
     {
       "id": "option-scratch-buffer",
@@ -70,13 +70,13 @@
       "guardTest": "TestOptionRoundTrips"
     },
     {
-      "id": "callback-dispatcher-worker",
+      "id": "completion-owner-worker",
       "classification": "required",
       "sources": [
-        "internal/native/callbacks.go:24-128"
+        "internal/native/completion_owner.go:199-287"
       ],
-      "reason": "One dispatcher worker per callback registration preserves callback ordering and gives socket close an explicit completion owner.",
-      "guardTest": "TestReceiveCallbackPanicDoesNotCloseSocketOrStopFutureCallbacks"
+      "reason": "One runtime drain worker per active socket owns completion progress until a public poller atomically takes ownership.",
+      "guardTest": "TestPollerCompletionOwnsRequestProgressAndTransfersBack"
     },
     {
       "id": "cgo-package-runtime-rpath",

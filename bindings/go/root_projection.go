@@ -6,15 +6,14 @@ package zlink
 import impl "zlink.systems/zlink/contracts"
 
 type (
-	SendOp              = impl.SendOp
-	SendSubmitOp        = impl.SendSubmitOp
-	RoutedSendOp        = impl.RoutedSendOp
-	RoutedSendSubmitOp  = impl.RoutedSendSubmitOp
-	RequestOp           = impl.RequestOp
-	RequestSubmitOp     = impl.RequestSubmitOp
-	RequestSyncSubmitOp = impl.RequestSyncSubmitOp
-	ReplyOp             = impl.ReplyOp
-	ReplySubmitOp       = impl.ReplySubmitOp
+	SendOp          = impl.SendOp
+	SendSubmitOp    = impl.SendSubmitOp
+	RequestOp       = impl.RequestOp
+	RequestSubmitOp = impl.RequestSubmitOp
+	ReplyOp         = impl.ReplyOp
+	ReplySubmitOp   = impl.ReplySubmitOp
+	PublishOp       = impl.PublishOp
+	PublishSubmitOp = impl.PublishSubmitOp
 
 	MonitorEventMask     = impl.MonitorEventMask
 	MonitorSourceKind    = impl.MonitorSourceKind
@@ -26,12 +25,13 @@ type (
 	MonitorStatus        = impl.MonitorStatus
 	SocketMonitor        = impl.SocketMonitor
 
-	RoutingID              = impl.RoutingID
-	Message                = impl.Message
-	RequestReplyCompletion = impl.RequestReplyCompletion
-	Received               = impl.Received
-	TopicMessage           = impl.TopicMessage
-	SubscriptionEvent      = impl.SubscriptionEvent
+	RoutingID         = impl.RoutingID
+	Message           = impl.Message
+	ReplyToken        = impl.ReplyToken
+	Received          = impl.Received
+	TopicMessage      = impl.TopicMessage
+	SubscriptionEvent = impl.SubscriptionEvent
+	StreamPacket      = impl.StreamPacket
 
 	Version               = impl.Version
 	Context               = impl.Context
@@ -58,6 +58,7 @@ type (
 	XPubSocket          = impl.XPubSocket
 	XSubSocket          = impl.XSubSocket
 	StreamSocket        = impl.StreamSocket
+	StreamReceiveMode   = impl.StreamReceiveMode
 	SendFlags           = impl.SendFlags
 	RecvFlags           = impl.RecvFlags
 
@@ -141,12 +142,11 @@ const (
 	MonitorEventTypeAll                     = impl.MonitorEventTypeAll
 	MonitorSourceSocket                     = impl.MonitorSourceSocket
 
-	MonitorEventFlagConnectionReadyEdge      = impl.MonitorEventFlagConnectionReadyEdge
-	MonitorEventFlagSendFlowWritable         = impl.MonitorEventFlagSendFlowWritable
-	MonitorEventFlagFlowStateStaleGeneration = impl.MonitorEventFlagFlowStateStaleGeneration
-	MonitorEventFlagFlowStateStaleEpoch      = impl.MonitorEventFlagFlowStateStaleEpoch
-	MonitorTransportLaneApplication          = impl.MonitorTransportLaneApplication
-	MonitorTransportLaneCompletion           = impl.MonitorTransportLaneCompletion
+	MonitorEventFlagConnectionReadyEdge = impl.MonitorEventFlagConnectionReadyEdge
+	MonitorEventFlagSendFlowWritable    = impl.MonitorEventFlagSendFlowWritable
+	MonitorEventFlagFlowStateStaleEpoch = impl.MonitorEventFlagFlowStateStaleEpoch
+	MonitorTransportLaneApplication     = impl.MonitorTransportLaneApplication
+	MonitorTransportLaneCompletion      = impl.MonitorTransportLaneCompletion
 
 	AutoHwmProfileCompact             = impl.AutoHwmProfileCompact
 	AutoHwmProfileLowLatency          = impl.AutoHwmProfileLowLatency
@@ -159,24 +159,27 @@ const (
 	AutoHwmRecalcReasonRefresh        = impl.AutoHwmRecalcReasonRefresh
 	AutoHwmRecalcReasonDeferredShrink = impl.AutoHwmRecalcReasonDeferredShrink
 
-	RidDuplicateReject      = impl.RidDuplicateReject
-	RidDuplicateHandover    = impl.RidDuplicateHandover
-	SubmitRetryOff          = impl.SubmitRetryOff
-	SubmitRetryLocalFailure = impl.SubmitRetryLocalFailure
-	ReceiveFlowRunning      = impl.ReceiveFlowRunning
-	ReceiveFlowPaused       = impl.ReceiveFlowPaused
-	SendFlagsNone           = impl.SendFlagsNone
-	SendFlagsDontWait       = impl.SendFlagsDontWait
-	RecvFlagsNone           = impl.RecvFlagsNone
-	RecvFlagsDontWait       = impl.RecvFlagsDontWait
-	PollIn                  = impl.PollIn
-	PollOut                 = impl.PollOut
-	PollErr                 = impl.PollErr
-	PollPri                 = impl.PollPri
-	PollCompletion          = impl.PollCompletion
-	PollSourceSocket        = impl.PollSourceSocket
-	PollSourceFD            = impl.PollSourceFD
-	PollSourceTimer         = impl.PollSourceTimer
+	RidDuplicateReject       = impl.RidDuplicateReject
+	RidDuplicateHandover     = impl.RidDuplicateHandover
+	SubmitRetryOff           = impl.SubmitRetryOff
+	SubmitRetryLocalFailure  = impl.SubmitRetryLocalFailure
+	ReceiveFlowRunning       = impl.ReceiveFlowRunning
+	ReceiveFlowPaused        = impl.ReceiveFlowPaused
+	SendFlagsNone            = impl.SendFlagsNone
+	SendFlagsDontWait        = impl.SendFlagsDontWait
+	RecvFlagsNone            = impl.RecvFlagsNone
+	RecvFlagsDontWait        = impl.RecvFlagsDontWait
+	StreamReceiveUnspecified = impl.StreamReceiveUnspecified
+	StreamReceiveRaw         = impl.StreamReceiveRaw
+	StreamReceivePacket      = impl.StreamReceivePacket
+	PollIn                   = impl.PollIn
+	PollOut                  = impl.PollOut
+	PollErr                  = impl.PollErr
+	PollPri                  = impl.PollPri
+	PollCompletion           = impl.PollCompletion
+	PollSourceSocket         = impl.PollSourceSocket
+	PollSourceFD             = impl.PollSourceFD
+	PollSourceTimer          = impl.PollSourceTimer
 
 	SubmitOK              = impl.SubmitOK
 	SubmitBackpressured   = impl.SubmitBackpressured

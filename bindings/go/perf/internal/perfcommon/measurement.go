@@ -31,7 +31,7 @@ func MeasurementPartCount() int {
 	return 2
 }
 
-func SubmitMeasurement(op zlink.SendOp, message *zlink.Message, flags zlink.SendFlags) (bool, error) {
+func SubmitMeasurement(op zlink.PublishOp, message *zlink.Message, flags zlink.SendFlags) (bool, error) {
 	submit := op.MoveMessage(message)
 	if MeasurementPartCount() == 2 {
 		tail := NewMessageWithSize(0)
@@ -41,18 +41,14 @@ func SubmitMeasurement(op zlink.SendOp, message *zlink.Message, flags zlink.Send
 	return submit.Flags(flags).Submit(context.Background())
 }
 
-func SubmitMeasurementRouted(op zlink.RoutedSendOp, message *zlink.Message) error {
-	return SubmitMeasurementRoutedFlags(op, message, zlink.SendFlagsNone)
-}
-
-func SubmitMeasurementRoutedFlags(op zlink.RoutedSendOp, message *zlink.Message, flags zlink.SendFlags) error {
+func SubmitMeasurementSend(op zlink.SendOp, message *zlink.Message) error {
 	submit := op.MoveMessage(message)
 	if MeasurementPartCount() == 2 {
 		tail := NewMessageWithSize(0)
 		defer tail.Close()
 		submit = submit.Message(tail)
 	}
-	return submit.Flags(flags).Submit(context.Background())
+	return submit.Submit(context.Background())
 }
 
 func MeasurementPayload(parts []*zlink.Message) (*zlink.Message, error) {

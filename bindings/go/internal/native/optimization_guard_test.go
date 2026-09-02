@@ -26,15 +26,15 @@ var requiredPartSymbols = []string{
 	"zlink_publish_part",
 	"zlink_subscribe_part",
 	"zlink_router_recv_part",
-	"zlink_dealer_request_part",
-	"zlink_dealer_recv_part",
-	"zlink_dealer_reply_part",
 	"zlink_send_part_rid",
-	"zlink_router_request_transport_pair_part",
-	"zlink_router_reply_part",
+	"zlink_request_part",
+	"zlink_reply_part",
+	"zlink_completion_recv",
+	"zlink_completion_close",
+	"zlink_stream_recv_packet",
 }
 
-func TestDealerRequestDelegatesTargetSelectionToCore(t *testing.T) {
+func TestRequestUsesUnifiedCoreTargetContract(t *testing.T) {
 	path := filepath.Join(bindingRoot(t), "dealer_router_request.go")
 	bodyBytes, err := os.ReadFile(path)
 	if err != nil {
@@ -42,20 +42,19 @@ func TestDealerRequestDelegatesTargetSelectionToCore(t *testing.T) {
 	}
 	body := string(bodyBytes)
 
-	if strings.Contains(body, "zlink_dealer_request_transport_pair_part") {
-		t.Fatal("default DEALER request must not pin an exact transport pair")
+	if !strings.Contains(body, "C.zlink_request_part(") {
+		t.Fatal("send/request adapter must use zlink_request_part")
 	}
-	dealerSubmit := regexp.MustCompile(
-		`(?s)if role == routedDealer \{\s*return submitErrorFromResult\(C\.zlink_dealer_request_part_go_local\(`,
-	)
-	if !dealerSubmit.MatchString(body) {
-		t.Fatal("default DEALER request must use zlink_dealer_request_part")
+}
+
+func TestCompletionCleanupHasOneNativeCloseSite(t *testing.T) {
+	path := filepath.Join(bindingRoot(t), "completion_owner.go")
+	bodyBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	routerSelection := regexp.MustCompile(
-		`(?s)if role == routedDealer \{.*?\} else \{\s*var target C\.zlink_routed_submit_target_t\s*target, err = selectRoutedTarget\(core, routerRID\)`,
-	)
-	if !routerSelection.MatchString(body) {
-		t.Fatal("routed target selection must remain confined to ROUTER requests")
+	if got := strings.Count(string(bodyBytes), "C.zlink_completion_close("); got != 1 {
+		t.Fatalf("native completion close call sites = %d, want 1 guarded site", got)
 	}
 }
 

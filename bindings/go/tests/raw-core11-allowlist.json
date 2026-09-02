@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "coreVersion": "0.15.1",
+  "coreVersion": "0.16.0",
   "headers": [
     {
       "path": "include/zlink.h",
@@ -16,7 +16,7 @@
     },
     {
       "path": "include/zlink/eventing/api.h",
-      "sha256": "7e773c5e0f6b2589dcc791eb5bf3326c8e89b04f22a5190982c47bb9222b7f60"
+      "sha256": "5a439f8a1b608473dcec63fad954ccf0770a0d36201f5a6153661f02b32d46e6"
     },
     {
       "path": "include/zlink/message/api.h",
@@ -24,15 +24,15 @@
     },
     {
       "path": "include/zlink/socket/api.h",
-      "sha256": "319fe117ba6f225444605dcf2d1df00a28d4c0a04b4e3603c12fa3fb3832994b"
+      "sha256": "89871551a417881eaaf4a5f5ee11d1d3931f1d318f8b4d9e7f219e967c7bf5c2"
     },
     {
       "path": "include/zlink_enum.h",
-      "sha256": "b3a47932595c859adb0a44f858e99f778ff97ebd86543b2890cddd012ff831a5"
+      "sha256": "efec61ad4858ffa74c187f9922cc8f0fd53b56caa5dd552ce4b76143e71d8292"
     },
     {
       "path": "include/zlink_errno.h",
-      "sha256": "c41c9b2e6a74e6244d8194916b47677232c36d32955c68b7d22ac13cff30fb62"
+      "sha256": "aad14ff78cd7a890b660163387290070ab60b6bcea9c6627ceb64094013b3faa"
     }
   ],
   "publicSymbols": [
@@ -45,6 +45,10 @@
     "zlink_auto_hwm_budget_snapshot_t",
     "zlink_bind",
     "zlink_close",
+    "zlink_completion_close",
+    "zlink_completion_id_t",
+    "zlink_completion_recv",
+    "zlink_completion_t",
     "zlink_config_result_t",
     "zlink_connect",
     "zlink_ctx_auto_hwm_recalculate",
@@ -58,8 +62,6 @@
     "zlink_ctx_set_data",
     "zlink_ctx_shutdown",
     "zlink_ctx_term",
-    "zlink_dealer_recv_part",
-    "zlink_dealer_reply_part",
     "zlink_disconnect",
     "zlink_disconnect_rid",
     "zlink_errno",
@@ -73,7 +75,6 @@
     "zlink_get_sub_option",
     "zlink_has",
     "zlink_monitor_close",
-    "zlink_monitor_event_t",
     "zlink_monitor_status",
     "zlink_monitor_status_t",
     "zlink_msg_adopt",
@@ -111,12 +112,11 @@
     "zlink_recv_flags_t",
     "zlink_recv_part",
     "zlink_recv_result_t",
-    "zlink_request_result_t",
-    "zlink_routed_submit_target_t",
+    "zlink_reply_part",
+    "zlink_reply_token_t",
+    "zlink_request_part",
     "zlink_router_recv_part",
-    "zlink_router_reply_part",
     "zlink_routing_id_t",
-    "zlink_select_routed_submit_target",
     "zlink_send_flags_t",
     "zlink_send_part",
     "zlink_send_part_rid",
@@ -141,6 +141,7 @@
     "zlink_stopwatch_intermediate",
     "zlink_stopwatch_start",
     "zlink_stopwatch_stop",
+    "zlink_stream_recv_packet",
     "zlink_strerror",
     "zlink_sub_option_t",
     "zlink_subscribe_part",
@@ -157,13 +158,9 @@
     "zlink_xpub_recv_part"
   ],
   "localSymbols": [
-    "zlink_dealer_request_part_go_local",
-    "zlink_recv_handler_go_local",
-    "zlink_router_request_transport_pair_part_go_local",
-    "zlink_socket_monitor_handler_go_local",
-    "zlink_stream_packet_handler_go_local",
+    "zlink_go_completion_context",
+    "zlink_go_completion_context_value",
     "zlink_thread_start_go",
-    "zlink_timer_handler_go_local",
     "zlink_userdata_from_handle"
   ],
   "forbiddenPaths": [

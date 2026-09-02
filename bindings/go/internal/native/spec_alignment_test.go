@@ -205,7 +205,6 @@ func TestCoreEventFlagBitValuesRemainComplete(t *testing.T) {
 	}{
 		{"connection ready edge", MonitorEventFlagConnectionReadyEdge, 1 << 0},
 		{"send flow writable", MonitorEventFlagSendFlowWritable, 1 << 1},
-		{"flow state stale generation", MonitorEventFlagFlowStateStaleGeneration, 1 << 2},
 		{"flow state stale epoch", MonitorEventFlagFlowStateStaleEpoch, 1 << 3},
 	}
 	for _, tc := range flagCases {
@@ -219,19 +218,17 @@ func TestCoreEventFlagBitValuesRemainComplete(t *testing.T) {
 }
 
 // §8.1.1 follow-up: monitorEventFromC must preserve the full 64-bit value and
-// the transport-pair/connection/flag metadata Core carries alongside a
-// flow-state event, not just truncate to 32 bits.
-func TestMonitorEventFromCPreserves64BitValueAndPairMetadata(t *testing.T) {
+// the connection/flag metadata Core carries alongside a flow-state event,
+// without reviving the removed public pair/generation fields.
+func TestMonitorEventFromCPreserves64BitValueAndConnectionMetadata(t *testing.T) {
 	const bigValue = uint64(0x1_0000_0002)
 	const bigConnectionID = uint64(0xFFFF_FFFF_0000_0001)
-	const bigPairID = uint64(0x2_0000_0003)
-	const bigGeneration = uint64(7)
 
 	event := monitorEventFromRawFieldsForTest(
 		MonitorEventTypeFlowStateStale,
-		bigValue, bigConnectionID, bigPairID, bigGeneration,
+		bigValue, bigConnectionID,
 		MonitorTransportLaneCompletion,
-		MonitorEventFlagFlowStateStaleGeneration|MonitorEventFlagFlowStateStaleEpoch,
+		MonitorEventFlagFlowStateStaleEpoch,
 	)
 
 	if event.Value != bigValue {
@@ -240,17 +237,11 @@ func TestMonitorEventFromCPreserves64BitValueAndPairMetadata(t *testing.T) {
 	if event.ConnectionID != bigConnectionID {
 		t.Fatalf("ConnectionID = %#x, want %#x", event.ConnectionID, bigConnectionID)
 	}
-	if event.TransportPairID != bigPairID {
-		t.Fatalf("TransportPairID = %#x, want %#x", event.TransportPairID, bigPairID)
-	}
-	if event.TransportPairGeneration != bigGeneration {
-		t.Fatalf("TransportPairGeneration = %d, want %d", event.TransportPairGeneration, bigGeneration)
-	}
 	if event.TransportLane != MonitorTransportLaneCompletion {
 		t.Fatalf("TransportLane = %d, want %d", event.TransportLane, MonitorTransportLaneCompletion)
 	}
-	if !event.HasFlag(MonitorEventFlagFlowStateStaleGeneration) || !event.HasFlag(MonitorEventFlagFlowStateStaleEpoch) {
-		t.Fatalf("Flags = %#x, missing expected stale-generation/stale-epoch bits", event.Flags)
+	if !event.HasFlag(MonitorEventFlagFlowStateStaleEpoch) {
+		t.Fatalf("Flags = %#x, missing expected stale-epoch bit", event.Flags)
 	}
 	if event.HasFlag(MonitorEventFlagConnectionReadyEdge) || event.HasFlag(MonitorEventFlagSendFlowWritable) {
 		t.Fatalf("Flags = %#x, unexpected bit set", event.Flags)
@@ -293,23 +284,21 @@ func TestReceivedReplyHelpersCarryCanonicalMetadata(t *testing.T) {
 	}
 	defer replyPart.Close()
 
-	var gotFlags SendFlags
-	var gotRequestSeq uint64
 	var gotReplyCount int
+	owner := &replyTokenOwner{marker: 1}
+	token := ReplyToken{owner: owner, value: 42}
 	received := &Received{
-		routingID:     NewRoutingID([]byte("peer")),
-		requestSeq:    42,
-		hasRequestSeq: true,
-		parts:         []*Message{replyPart},
+		routingID: NewRoutingID([]byte("peer")),
+		token:     token,
+		parts:     []*Message{replyPart},
 	}
-	received.reply = func(flags SendFlags, parts []*Message) error {
-		gotFlags = flags
-		gotRequestSeq = received.RequestSeq()
+	received.reply = func(parts []*Message) error {
 		gotReplyCount = len(parts)
 		return nil
 	}
 
-	if !received.HasRoutingID() || !received.HasRequestSeq() {
+	gotToken, ok := received.ReplyToken()
+	if !received.HasRoutingID() || !ok || gotToken != token {
 		t.Fatalf("received helper predicates should reflect stored metadata")
 	}
 	if !received.IsSinglePart() {
@@ -318,47 +307,26 @@ func TestReceivedReplyHelpersCarryCanonicalMetadata(t *testing.T) {
 	if err := received.Reply().Message(replyPart).Submit(context.Background()); err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
-	if gotFlags != SendFlagsNone {
-		t.Fatalf("Reply() passed flags %v, want %v", gotFlags, SendFlagsNone)
-	}
-	if gotRequestSeq != 42 {
-		t.Fatalf("RequestSeq() = %d, want 42", gotRequestSeq)
-	}
 	if gotReplyCount != 1 {
 		t.Fatalf("reply part count = %d, want 1", gotReplyCount)
 	}
 }
 
-func TestReceivedReplyBuilderRejectsUnsupportedFlags(t *testing.T) {
-	replyPart, err := NewMessage([]byte("reply"))
-	if err != nil {
-		t.Fatalf("NewMessage() error = %v", err)
+func TestReplyTokenEqualityIncludesOwnerAndValue(t *testing.T) {
+	owner := &replyTokenOwner{marker: 1}
+	otherOwner := &replyTokenOwner{marker: 1}
+	left := ReplyToken{owner: owner, value: 42}
+	if left != (ReplyToken{owner: owner, value: 42}) {
+		t.Fatal("same owner and value should compare equal")
 	}
-	defer replyPart.Close()
-
-	called := false
-	received := &Received{
-		requestSeq:    42,
-		hasRequestSeq: true,
-		reply: func(flags SendFlags, parts []*Message) error {
-			called = true
-			return nil
-		},
+	if left == (ReplyToken{owner: otherOwner, value: 42}) {
+		t.Fatal("different owners must compare unequal")
 	}
-
-	err = received.Reply().Message(replyPart).Flags(SendFlagsDontWait).Submit(context.Background())
-	if err == nil {
-		t.Fatalf("Reply() should reject unsupported flags")
+	if left == (ReplyToken{owner: owner, value: 43}) {
+		t.Fatal("different values must compare unequal")
 	}
-	var submitErr *SubmitError
-	if !errors.As(err, &submitErr) {
-		t.Fatalf("Reply() error type = %T, want *SubmitError", err)
-	}
-	if submitErr.Result != SubmitNotSupported {
-		t.Fatalf("Reply() result = %v, want %v", submitErr.Result, SubmitNotSupported)
-	}
-	if called {
-		t.Fatalf("Reply() should not invoke the reply callback for unsupported flags")
+	if (ReplyToken{}) == left {
+		t.Fatal("zero token must not equal a valid token")
 	}
 }
 
@@ -377,8 +345,8 @@ func TestReceivedReplyRequiresValidContext(t *testing.T) {
 	if !errors.As(err, &submitErr) {
 		t.Fatalf("Reply() error type = %T, want *SubmitError", err)
 	}
-	if submitErr.Result != SubmitInvalidArgument {
-		t.Fatalf("Reply() result = %v, want %v", submitErr.Result, SubmitInvalidArgument)
+	if submitErr.Result != SubmitInvalidState {
+		t.Fatalf("Reply() result = %v, want %v", submitErr.Result, SubmitInvalidState)
 	}
 }
 

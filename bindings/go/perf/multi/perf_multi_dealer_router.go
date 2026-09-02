@@ -162,7 +162,7 @@ func sendMultiDealerRouterRequest(
 ) error {
 	perfcommon.StampWindowPayload(payload, window.ActiveAt)
 	message := perfcommon.NewMessage(payload)
-	return perfcommon.SubmitMeasurementRouted(socket.Send(), message)
+	return perfcommon.SubmitMeasurementSend(socket.Send(), message)
 }
 
 func drainMultiDealerRouterReplies(

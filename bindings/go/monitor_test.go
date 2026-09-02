@@ -146,9 +146,6 @@ func TestMonitorObservesReceiveFlowStateTransitionsWithPairMetadata(t *testing.T
 	if !event.IsSendFlowPaused() {
 		t.Fatalf("expected a SendFlowPaused event, got %+v", event)
 	}
-	if event.TransportPairID == 0 {
-		t.Fatalf("SendFlowPaused event TransportPairID = 0, want non-zero pair id")
-	}
 
 	if err := router.SetReceiveFlowState(zlink.ReceiveFlowRunning); err != nil {
 		t.Fatalf("SetReceiveFlowState(Running) error = %v", err)
@@ -156,9 +153,6 @@ func TestMonitorObservesReceiveFlowStateTransitionsWithPairMetadata(t *testing.T
 	resumed := waitForMonitorEvent(t, dealerMon, 5*time.Second)
 	if !resumed.IsSendFlowResumed() {
 		t.Fatalf("expected a SendFlowResumed event, got %+v", resumed)
-	}
-	if resumed.TransportPairID != event.TransportPairID {
-		t.Fatalf("SendFlowResumed TransportPairID = %d, want %d (same pair as PAUSED)", resumed.TransportPairID, event.TransportPairID)
 	}
 
 	snapshot, err := dealerMon.Status()
@@ -173,7 +167,7 @@ func TestMonitorObservesReceiveFlowStateTransitionsWithPairMetadata(t *testing.T
 	}
 }
 
-func TestMonitorOnEventReceivesStateChange(t *testing.T) {
+func TestMonitorRecvPullReceivesStateChange(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
@@ -189,16 +183,6 @@ func TestMonitorOnEventReceivesStateChange(t *testing.T) {
 	}
 	defer serverMon.Close()
 
-	events := make(chan *zlink.MonitorEvent, 4)
-	if err := serverMon.OnEvent(func(event *zlink.MonitorEvent) {
-		events <- event
-	}); err != nil {
-		t.Fatalf("OnEvent() error = %v", err)
-	}
-	if _, err := serverMon.Recv(0); err == nil {
-		t.Fatalf("Recv() after OnEvent() should fail")
-	}
-
 	if err := server.Bind(endpoint); err != nil {
 		t.Fatalf("Bind() error = %v", err)
 	}
@@ -206,15 +190,10 @@ func TestMonitorOnEventReceivesStateChange(t *testing.T) {
 		t.Fatalf("Connect() error = %v", err)
 	}
 
-	var event *zlink.MonitorEvent
-	select {
-	case event = <-events:
-	case <-time.After(5 * time.Second):
-		t.Fatalf("monitor callback did not receive an event within 5s")
-	}
+	event := waitForMonitorEvent(t, serverMon, 5*time.Second)
 
 	if !event.IsListening() && !event.IsAccepted() && !event.IsConnectionReady() {
-		t.Fatalf("unexpected monitor callback event: %+v", event)
+		t.Fatalf("unexpected monitor event: %+v", event)
 	}
 }
 

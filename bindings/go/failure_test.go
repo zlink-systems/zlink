@@ -1,13 +1,11 @@
 package zlink_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,7 +27,7 @@ func TestSubmitContextCancellationUsesStandardErrors(t *testing.T) {
 	message := newMessage(t, "context-canceled")
 	defer message.Close()
 
-	if _, err := socket.Send().Message(message).Submit(canceled); !errors.Is(err, context.Canceled) {
+	if err := socket.Send().Message(message).Submit(canceled); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Send().Submit(canceled) error = %v, want context.Canceled", err)
 	}
 	if got := string(message.Data()); got != "context-canceled" {
@@ -49,13 +47,13 @@ func TestRequestContextDeadlineUsesStandardErrors(t *testing.T) {
 
 	deadline, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	completion := awaitRequest(t, socket.Request().Bytes([]byte("context-deadline")).Submit(deadline))
-	if !errors.Is(completion.Err, context.DeadlineExceeded) {
-		t.Fatalf("Request().Submit(expired) error = %v, want context.DeadlineExceeded", completion.Err)
+	parts, err := socket.Request().Bytes([]byte("context-deadline")).Submit(deadline)
+	if parts != nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Request().Submit(expired) = (%v, %v), want (nil, context.DeadlineExceeded)", parts, err)
 	}
 }
 
-func TestRequestCompletionChannelDeliversReply(t *testing.T) {
+func TestRequestSubmitReturnsReply(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
@@ -70,7 +68,7 @@ func TestRequestCompletionChannelDeliversReply(t *testing.T) {
 	}
 	defer dealer.Close()
 
-	endpoint := inprocEndpoint("request-completion-channel")
+	endpoint := inprocEndpoint("request-submit-reply")
 	if err := router.Bind(endpoint); err != nil {
 		t.Fatalf("Bind() error = %v", err)
 	}
@@ -98,16 +96,13 @@ func TestRequestCompletionChannelDeliversReply(t *testing.T) {
 		serverDone <- request.Reply().Message(reply).Submit(context.Background())
 	}()
 
-	completion := awaitRequest(t, dealer.Request().Bytes([]byte("channel-request")).Timeout(2*time.Second).Submit(context.Background()))
-	defer zlink.MultipartClose(completion.Parts)
-	if completion.Err != nil {
-		t.Fatalf("request completion error = %v", completion.Err)
+	parts, err := dealer.Request().Bytes([]byte("channel-request")).Timeout(2 * time.Second).Submit(context.Background())
+	defer zlink.MultipartClose(parts)
+	if err != nil {
+		t.Fatalf("request error = %v", err)
 	}
-	if completion.Result != zlink.RequestOK {
-		t.Fatalf("request result = %v, want RequestOK", completion.Result)
-	}
-	if len(completion.Parts) != 1 || string(completion.Parts[0].Data()) != "channel-reply" {
-		t.Fatalf("request completion parts = %d, want channel-reply", len(completion.Parts))
+	if len(parts) != 1 || string(parts[0].Data()) != "channel-reply" {
+		t.Fatalf("request parts = %d, want channel-reply", len(parts))
 	}
 	select {
 	case err := <-serverDone:
@@ -150,8 +145,11 @@ func TestPollerModifyCompletionDoesNotDisableRequestCompletion(t *testing.T) {
 	if err := poller.AddSocket(dealer, zlink.PollIn, 81); err != nil {
 		t.Fatalf("AddSocket() error = %v", err)
 	}
-	if err := poller.ModifySocket(dealer, zlink.PollCompletion); err == nil {
-		t.Fatalf("ModifySocket(PollCompletion) should be rejected")
+	if err := poller.ModifySocket(dealer, zlink.PollCompletion); err != nil {
+		t.Fatalf("ModifySocket(PollCompletion) error = %v", err)
+	}
+	if err := poller.ModifySocket(dealer, zlink.PollIn); err != nil {
+		t.Fatalf("ModifySocket(PollIn) error = %v", err)
 	}
 	reply, err := zlink.NewMessage([]byte("pong"))
 	if err != nil {
@@ -170,19 +168,11 @@ func TestPollerModifyCompletionDoesNotDisableRequestCompletion(t *testing.T) {
 		serverDone <- request.Reply().Message(reply).Submit(context.Background())
 	}()
 
-	completion := dealer.Request().Bytes([]byte("ping")).Timeout(time.Second).Submit(context.Background())
-	select {
-	case result, ok := <-completion:
-		if !ok {
-			t.Fatalf("completion channel closed without result")
-		}
-		if result.Err != nil {
-			t.Fatalf("request completion error = %v", result.Err)
-		}
-		zlink.MultipartClose(result.Parts)
-	case <-time.After(3 * time.Second):
-		t.Fatalf("request completion did not arrive after rejected poller modify")
+	parts, err := dealer.Request().Bytes([]byte("ping")).Timeout(time.Second).Submit(context.Background())
+	if err != nil {
+		t.Fatalf("request error after owner transfer = %v", err)
 	}
+	zlink.MultipartClose(parts)
 	select {
 	case err := <-serverDone:
 		if err != nil {
@@ -193,7 +183,7 @@ func TestPollerModifyCompletionDoesNotDisableRequestCompletion(t *testing.T) {
 	}
 }
 
-func TestPollerCompletionObservesRequestsWithoutOwningProgress(t *testing.T) {
+func TestPollerCompletionOwnsRequestProgressAndTransfersBack(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
@@ -261,11 +251,19 @@ func TestPollerCompletionObservesRequestsWithoutOwningProgress(t *testing.T) {
 	}
 
 	serverDone := serveRequest("poller-reply")
-	completion := dealer.Request().Bytes([]byte("poller-request")).Timeout(2 * time.Second).Submit(context.Background())
+	type requestResult struct {
+		parts []*zlink.Message
+		err   error
+	}
+	completion := make(chan requestResult, 1)
+	go func() {
+		parts, err := dealer.Request().Bytes([]byte("poller-request")).Timeout(2 * time.Second).Submit(context.Background())
+		completion <- requestResult{parts: parts, err: err}
+	}()
 
 	events := make([]zlink.PollEvent, 1)
 	sawCompletionEvent := false
-	var first zlink.RequestReplyCompletion
+	var first requestResult
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		n, err := poller.Wait(events, 100*time.Millisecond)
@@ -276,10 +274,7 @@ func TestPollerCompletionObservesRequestsWithoutOwningProgress(t *testing.T) {
 			sawCompletionEvent = true
 		}
 		select {
-		case result, ok := <-completion:
-			if !ok {
-				t.Fatalf("completion channel closed without result")
-			}
+		case result := <-completion:
 			first = result
 			goto firstComplete
 		default:
@@ -291,10 +286,10 @@ firstComplete:
 	if !sawCompletionEvent {
 		t.Fatalf("request completed without a PollCompletion event")
 	}
-	if first.Err != nil {
-		t.Fatalf("first request completion error = %v", first.Err)
+	if first.err != nil {
+		t.Fatalf("first request completion error = %v", first.err)
 	}
-	zlink.MultipartClose(first.Parts)
+	zlink.MultipartClose(first.parts)
 	if err := <-serverDone; err != nil {
 		t.Fatalf("first server request error = %v", err)
 	}
@@ -305,37 +300,28 @@ firstComplete:
 	registered = false
 
 	serverDone = serveRequest("internal-reply")
-	second := dealer.Request().Bytes([]byte("internal-request")).Timeout(2 * time.Second).Submit(context.Background())
-	select {
-	case result, ok := <-second:
-		if !ok {
-			t.Fatalf("second completion channel closed without result")
-		}
-		if result.Err != nil {
-			t.Fatalf("second request completion error = %v", result.Err)
-		}
-		zlink.MultipartClose(result.Parts)
-	case <-time.After(5 * time.Second):
-		t.Fatalf("request completion did not continue after RemoveSocket")
+	second, err := dealer.Request().Bytes([]byte("internal-request")).Timeout(2 * time.Second).Submit(context.Background())
+	if err != nil {
+		t.Fatalf("request completion did not continue after RemoveSocket: %v", err)
 	}
+	zlink.MultipartClose(second)
 	if err := <-serverDone; err != nil {
 		t.Fatalf("second server request error = %v", err)
 	}
 }
 
-func TestSendDontWaitDoesNotTreatTemporaryBackpressureAsError(t *testing.T) {
+func TestSendDoesNotExposeFlags(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
 	socket, _ := ctx.PairSocket()
 	defer socket.Close()
-	_ = socket.Bind(inprocEndpoint("try-send"))
-
-	ok, err := socket.Send().Message(newMessage(t, "data")).Flags(zlink.SendFlagsDontWait).Submit(context.Background())
-	if err != nil {
-		t.Fatalf("Send() with DontWait should not error for backpressure, got: %v", err)
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := socket.Send().Message(newMessage(t, "data")).Submit(canceled)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Send() cancellation error = %v", err)
 	}
-	_ = ok
 }
 
 func TestPublishDontWaitReturnsErrorWhenUnroutable(t *testing.T) {
@@ -351,7 +337,7 @@ func TestPublishDontWaitReturnsErrorWhenUnroutable(t *testing.T) {
 	}
 }
 
-func TestRoutedSendFailureSurfacesError(t *testing.T) {
+func TestTargetedSendFailureSurfacesError(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
@@ -371,7 +357,7 @@ func TestRoutedSendFailureSurfacesError(t *testing.T) {
 	}
 }
 
-func TestRoutedSendFailurePreservesMessagePayload(t *testing.T) {
+func TestTargetedSendFailurePreservesMessagePayload(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
@@ -398,7 +384,7 @@ func TestRoutedSendFailurePreservesMessagePayload(t *testing.T) {
 	}
 }
 
-func TestRoutedSendFailurePreservesBytesPayload(t *testing.T) {
+func TestTargetedSendFailurePreservesBytesPayload(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
@@ -450,111 +436,6 @@ func TestMoveMessageFailureConsumesMessagePayload(t *testing.T) {
 	}
 }
 
-func TestStreamMoveMessageBackpressureRetainsMessagePayload(t *testing.T) {
-	tests := []struct {
-		name   string
-		submit func(*zlink.StreamSocket, *zlink.Received, zlink.RoutingID, *zlink.Message) (bool, error)
-	}{
-		{
-			name: "socket SendTo",
-			submit: func(stream *zlink.StreamSocket, _ *zlink.Received, target zlink.RoutingID, msg *zlink.Message) (bool, error) {
-				return stream.SendTo(target).
-					MoveMessage(msg).
-					Flags(zlink.SendFlagsDontWait).
-					Submit(context.Background())
-			},
-		},
-		{
-			name: "received Send",
-			submit: func(_ *zlink.StreamSocket, route *zlink.Received, _ zlink.RoutingID, msg *zlink.Message) (bool, error) {
-				return route.Send().
-					MoveMessage(msg).
-					Flags(zlink.SendFlagsDontWait).
-					Submit(context.Background())
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			testStreamMoveMessageBackpressureRetainsMessagePayload(t, test.submit)
-		})
-	}
-}
-
-func testStreamMoveMessageBackpressureRetainsMessagePayload(
-	t *testing.T,
-	submit func(*zlink.StreamSocket, *zlink.Received, zlink.RoutingID, *zlink.Message) (bool, error),
-) {
-	t.Helper()
-	ctx := newContext(t)
-	defer ctx.Close()
-
-	stream, err := ctx.StreamSocket()
-	if err != nil {
-		t.Fatalf("StreamSocket() error = %v", err)
-	}
-	defer stream.Close()
-
-	const payloadSize = 4096
-	if err := stream.SetSendHighWaterMark(10 * (payloadSize + 64)); err != nil {
-		t.Fatalf("SetSendHighWaterMark() error = %v", err)
-	}
-	endpoint := tcpEndpoint(t)
-	if err := stream.Bind(endpoint); err != nil {
-		t.Fatalf("Bind() error = %v", err)
-	}
-
-	conn, err := net.DialTimeout("tcp", strings.TrimPrefix(endpoint, "tcp://"), 5*time.Second)
-	if err != nil {
-		t.Fatalf("net.DialTimeout() error = %v", err)
-	}
-	defer conn.Close()
-	if _, err := conn.Write([]byte("route")); err != nil {
-		t.Fatalf("route probe write error = %v", err)
-	}
-
-	var route zlink.Received
-	if _, err := stream.Recv(&route, zlink.RecvFlagsNone); err != nil {
-		t.Fatalf("STREAM route receive error = %v", err)
-	}
-	defer route.Close()
-	target := route.RoutingID()
-
-	payload := bytes.Repeat([]byte{0x73}, payloadSize)
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		msg, err := zlink.NewMessage(payload)
-		if err != nil {
-			t.Fatalf("NewMessage() error = %v", err)
-		}
-		sent, err := submit(stream, &route, target, msg)
-		if err != nil {
-			_ = msg.Close()
-			t.Fatalf("STREAM MoveMessage submit error = %v", err)
-		}
-		if sent {
-			if got := msg.Data(); got != nil {
-				_ = msg.Close()
-				t.Fatalf("successful STREAM MoveMessage retained %d payload bytes", len(got))
-			}
-			_ = msg.Close()
-			continue
-		}
-
-		if msg.Size() != payloadSize || !bytes.Equal(msg.Data(), payload) {
-			_ = msg.Close()
-			t.Fatalf("backpressured STREAM MoveMessage did not retain the submitted payload")
-		}
-		if err := msg.Close(); err != nil {
-			t.Fatalf("retained message Close() error = %v", err)
-		}
-		return
-	}
-
-	t.Fatalf("STREAM send did not reach backpressure within 5s")
-}
-
 func TestSendDoesNotSwallowClosedSocketErrors(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
@@ -564,7 +445,7 @@ func TestSendDoesNotSwallowClosedSocketErrors(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	if _, err := socket.Send().Message(newMessage(t, "data")).Submit(context.Background()); err == nil {
+	if err := socket.Send().Message(newMessage(t, "data")).Submit(context.Background()); err == nil {
 		t.Fatalf("Send() on closed socket should surface an error")
 	}
 }
@@ -647,54 +528,34 @@ func TestReceiveSubscriptionEventDoesNotSwallowClosedSocketErrors(t *testing.T) 
 	}
 }
 
-func TestCallbackModeConflictsWithDirectRecv(t *testing.T) {
+func TestStreamPacketNoDataLeavesOutputEmpty(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
-	endpoint := tcpEndpoint(t)
 	server, _ := ctx.StreamSocket()
 	defer server.Close()
-
-	if err := server.Bind(endpoint); err != nil {
-		t.Fatalf("Bind() error = %v", err)
+	if err := server.SetReceiveMode(zlink.StreamReceivePacket); err != nil {
+		t.Fatalf("SetReceiveMode() error = %v", err)
 	}
-	conn, err := net.DialTimeout("tcp", strings.TrimPrefix(endpoint, "tcp://"), 5*time.Second)
-	if err != nil {
-		t.Fatalf("net.DialTimeout() error = %v", err)
+	var packet zlink.StreamPacket
+	if ok, err := server.RecvPacket(&packet, zlink.RecvFlagsDontWait); err != nil || ok {
+		t.Fatalf("RecvPacket(DontWait) = (%v, %v), want (false, nil)", ok, err)
 	}
-	defer conn.Close()
-
-	delivered := make(chan struct{}, 1)
-	if err := server.OnPacket(func(source zlink.RoutingID, header, body *zlink.Message) {
-		defer header.Close()
-		defer body.Close()
-		_ = source
-		delivered <- struct{}{}
-	}); err != nil {
-		t.Fatalf("OnPacket() error = %v", err)
-	}
-
-	var received zlink.Received
-	if _, err := server.Recv(&received, zlink.RecvFlagsNone); err == nil {
-		t.Fatalf("Recv() after OnPacket() should fail")
-	}
-
-	writeStreamPacket(t, conn, []byte("callback-data"))
-
-	select {
-	case <-delivered:
-	case <-time.After(5 * time.Second):
-		t.Fatalf("callback was not delivered within 5s")
+	if !packet.Empty() || packet.HasRoutingID() || packet.Header() != nil || packet.Body() != nil {
+		t.Fatalf("no-data packet must remain empty")
 	}
 }
 
-func TestReceiveCallbackCanUseBlockingSend(t *testing.T) {
+func TestStreamPacketPullCanUseCompletionSend(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
 	endpoint := tcpEndpoint(t)
 	server, _ := ctx.StreamSocket()
 	defer server.Close()
+	if err := server.SetReceiveMode(zlink.StreamReceivePacket); err != nil {
+		t.Fatalf("SetReceiveMode() error = %v", err)
+	}
 
 	if err := server.Bind(endpoint); err != nil {
 		t.Fatalf("Bind() error = %v", err)
@@ -706,45 +567,32 @@ func TestReceiveCallbackCanUseBlockingSend(t *testing.T) {
 	}
 	defer conn.Close()
 
-	sendErrs := make(chan error, 1)
-	if err := server.OnPacket(func(source zlink.RoutingID, header, body *zlink.Message) {
-		packet := frameStreamPacketMessage(t, header, body)
-		_ = header.Close()
-		_ = body.Close()
-		if _, err := server.SendTo(source).Message(packet).Submit(context.Background()); err != nil {
-			_ = packet.Close()
-			sendErrs <- err
-			return
-		}
-		sendErrs <- nil
-	}); err != nil {
-		t.Fatalf("OnPacket() error = %v", err)
-	}
-
 	writeStreamPacket(t, conn, []byte("request"))
-
-	select {
-	case err := <-sendErrs:
-		if err != nil {
-			t.Fatalf("callback Send() error = %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatalf("callback send did not complete within 5s")
+	var received zlink.StreamPacket
+	if ok, err := server.RecvPacket(&received, zlink.RecvFlagsNone); err != nil || !ok {
+		t.Fatalf("RecvPacket() = (%v, %v), want (true, nil)", ok, err)
+	}
+	packet := frameStreamPacketMessage(t, received.Header(), received.Body())
+	if err := server.SendTo(received.RoutingID()).Message(packet).Submit(context.Background()); err != nil {
+		t.Fatalf("packet Send() error = %v", err)
 	}
 
 	reply := readStreamPacketBody(t, conn)
 	if got := string(reply); got != "request" {
-		t.Fatalf("callback reply = %q, want %q", got, "request")
+		t.Fatalf("packet reply = %q, want %q", got, "request")
 	}
 }
 
-func TestReceiveCallbackPanicDoesNotCloseSocketOrStopFutureCallbacks(t *testing.T) {
+func TestStreamPacketOutputResetsAndReuses(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
 	endpoint := tcpEndpoint(t)
 	server, _ := ctx.StreamSocket()
 	defer server.Close()
+	if err := server.SetReceiveMode(zlink.StreamReceivePacket); err != nil {
+		t.Fatalf("SetReceiveMode() error = %v", err)
+	}
 
 	if err := server.Bind(endpoint); err != nil {
 		t.Fatalf("Bind() error = %v", err)
@@ -755,44 +603,32 @@ func TestReceiveCallbackPanicDoesNotCloseSocketOrStopFutureCallbacks(t *testing.
 		t.Fatalf("net.DialTimeout() error = %v", err)
 	}
 	defer conn.Close()
-
-	var calls atomic.Int32
-	delivered := make(chan struct{}, 1)
-	if err := server.OnPacket(func(source zlink.RoutingID, header, body *zlink.Message) {
-		defer header.Close()
-		switch calls.Add(1) {
-		case 1:
-			panic("callback panic for policy test")
-		default:
-			defer body.Close()
-			_ = source
-			delivered <- struct{}{}
-		}
-	}); err != nil {
-		t.Fatalf("OnPacket() error = %v", err)
-	}
 
 	writeStreamPacket(t, conn, []byte("first"))
-	writeStreamPacket(t, conn, []byte("second"))
-
-	select {
-	case <-delivered:
-	case <-time.After(5 * time.Second):
-		t.Fatalf("callback delivery stopped after panic")
+	var packet zlink.StreamPacket
+	if ok, err := server.RecvPacket(&packet, zlink.RecvFlagsNone); err != nil || !ok {
+		t.Fatalf("first RecvPacket() = (%v, %v)", ok, err)
 	}
-
-	if got := calls.Load(); got < 2 {
-		t.Fatalf("callback invocation count = %d, want at least 2", got)
+	firstBody := packet.Body()
+	writeStreamPacket(t, conn, []byte("second"))
+	if ok, err := server.RecvPacket(&packet, zlink.RecvFlagsNone); err != nil || !ok {
+		t.Fatalf("second RecvPacket() = (%v, %v)", ok, err)
+	}
+	if packet.Body() == firstBody || string(packet.Body().Data()) != "second" {
+		t.Fatalf("reused packet did not replace its body")
 	}
 }
 
-func TestCloseInsideReceiveCallbackDoesNotDeadlock(t *testing.T) {
+func TestStreamPacketCloseRestoresEmptyAccessors(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
 	endpoint := tcpEndpoint(t)
 	server, _ := ctx.StreamSocket()
 	defer server.Close()
+	if err := server.SetReceiveMode(zlink.StreamReceivePacket); err != nil {
+		t.Fatalf("SetReceiveMode() error = %v", err)
+	}
 
 	if err := server.Bind(endpoint); err != nil {
 		t.Fatalf("Bind() error = %v", err)
@@ -804,24 +640,15 @@ func TestCloseInsideReceiveCallbackDoesNotDeadlock(t *testing.T) {
 	}
 	defer conn.Close()
 
-	closed := make(chan error, 1)
-	if err := server.OnPacket(func(source zlink.RoutingID, header, body *zlink.Message) {
-		defer header.Close()
-		defer body.Close()
-		_ = source
-		closed <- server.Close()
-	}); err != nil {
-		t.Fatalf("OnPacket() error = %v", err)
+	writeStreamPacket(t, conn, []byte("close-packet"))
+	var packet zlink.StreamPacket
+	if ok, err := server.RecvPacket(&packet, zlink.RecvFlagsNone); err != nil || !ok {
+		t.Fatalf("RecvPacket() = (%v, %v)", ok, err)
 	}
-
-	writeStreamPacket(t, conn, []byte("close-from-callback"))
-
-	select {
-	case err := <-closed:
-		if err != nil {
-			t.Fatalf("Close() from callback error = %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatalf("Close() from callback deadlocked")
+	if err := packet.Close(); err != nil {
+		t.Fatalf("StreamPacket.Close() error = %v", err)
+	}
+	if !packet.Empty() || packet.HasRoutingID() || packet.Header() != nil || packet.Body() != nil {
+		t.Fatalf("closed packet must expose only empty accessors")
 	}
 }

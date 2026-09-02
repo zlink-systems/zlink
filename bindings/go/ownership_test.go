@@ -25,7 +25,7 @@ func TestSendConsumesMessageOwnership(t *testing.T) {
 	_ = client.Connect(endpoint)
 
 	msg := newMessage(t, "owned")
-	if _, err := client.Send().Message(msg).Submit(context.Background()); err != nil {
+	if err := client.Send().Message(msg).Submit(context.Background()); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 	if data := msg.Data(); data != nil {
@@ -45,7 +45,7 @@ func TestRecvOwnershipCanBeExplicitlyReleased(t *testing.T) {
 
 	_ = server.Bind(endpoint)
 	_ = client.Connect(endpoint)
-	_, _ = client.Send().Message(newMessage(t, "recv-owned")).Submit(context.Background())
+	_ = client.Send().Message(newMessage(t, "recv-owned")).Submit(context.Background())
 
 	var received zlink.Received
 	if _, err := server.Recv(&received, zlink.RecvFlagsNone); err != nil {
@@ -66,12 +66,15 @@ func TestUnsentMessageSupportsExplicitClose(t *testing.T) {
 	}
 }
 
-func TestStreamRecvShapeMatchesCallbackShape(t *testing.T) {
+func TestStreamRawAndPacketPullShapesPreservePayload(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
 	directServer, _ := ctx.StreamSocket()
 	defer directServer.Close()
+	if err := directServer.SetReceiveMode(zlink.StreamReceiveRaw); err != nil {
+		t.Fatalf("direct SetReceiveMode() error = %v", err)
+	}
 
 	directEndpoint := tcpEndpoint(t)
 	if err := directServer.Bind(directEndpoint); err != nil {
@@ -94,44 +97,35 @@ func TestStreamRecvShapeMatchesCallbackShape(t *testing.T) {
 	}
 	defer directReceived.Close()
 
-	callbackServer, _ := ctx.StreamSocket()
-	defer callbackServer.Close()
-
-	callbackEndpoint := tcpEndpoint(t)
-	if err := callbackServer.Bind(callbackEndpoint); err != nil {
-		t.Fatalf("callback Bind() error = %v", err)
+	packetServer, _ := ctx.StreamSocket()
+	defer packetServer.Close()
+	if err := packetServer.SetReceiveMode(zlink.StreamReceivePacket); err != nil {
+		t.Fatalf("packet SetReceiveMode() error = %v", err)
 	}
 
-	callbackPartsCh := make(chan []byte, 1)
-	if err := callbackServer.OnPacket(func(source zlink.RoutingID, header, body *zlink.Message) {
-		defer header.Close()
-		defer body.Close()
-		_ = source
-		callbackPartsCh <- append([]byte(nil), body.Data()...)
-	}); err != nil {
-		t.Fatalf("OnPacket() error = %v", err)
+	packetEndpoint := tcpEndpoint(t)
+	if err := packetServer.Bind(packetEndpoint); err != nil {
+		t.Fatalf("packet Bind() error = %v", err)
 	}
 
-	callbackConn, err := net.DialTimeout("tcp", strings.TrimPrefix(callbackEndpoint, "tcp://"), 5*time.Second)
+	packetConn, err := net.DialTimeout("tcp", strings.TrimPrefix(packetEndpoint, "tcp://"), 5*time.Second)
 	if err != nil {
-		t.Fatalf("callback dial error = %v", err)
+		t.Fatalf("packet dial error = %v", err)
 	}
-	defer callbackConn.Close()
+	defer packetConn.Close()
 
-	writeStreamPacket(t, callbackConn, payload)
-
-	var callbackPayload []byte
-	select {
-	case callbackPayload = <-callbackPartsCh:
-	case <-time.After(5 * time.Second):
-		t.Fatalf("callback did not deliver payload within 5s")
+	writeStreamPacket(t, packetConn, payload)
+	var packet zlink.StreamPacket
+	if ok, err := packetServer.RecvPacket(&packet, zlink.RecvFlagsNone); err != nil || !ok {
+		t.Fatalf("RecvPacket() = (%v, %v)", ok, err)
 	}
+	defer packet.Close()
 
 	directPart, err := directReceived.SinglePartOrError()
 	if err != nil {
 		t.Fatalf("direct SinglePartOrError() error = %v", err)
 	}
-	if !bytes.Equal(directPart.Data(), callbackPayload) {
-		t.Fatalf("payload mismatch: direct=%q callback=%q", string(directPart.Data()), string(callbackPayload))
+	if !bytes.Equal(directPart.Data(), packet.Body().Data()) {
+		t.Fatalf("payload mismatch: raw=%q packet=%q", string(directPart.Data()), string(packet.Body().Data()))
 	}
 }

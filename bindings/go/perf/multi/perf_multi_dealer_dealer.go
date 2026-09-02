@@ -213,7 +213,7 @@ func runMultiDealerDealerSendWindow(clients []dealerDealerClient, cfg multiConfi
 				var sendErr error
 				if perfcommon.MeasurementPartCount() == 2 {
 					message := perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt)
-					sendErr = perfcommon.SubmitMeasurementRouted(client.socket.Send(), message)
+					sendErr = perfcommon.SubmitMeasurementSend(client.socket.Send(), message)
 				} else {
 					_, sendErr = perfcommon.SubmitRoutedWindowPayload(cfg.msgSize, window.ActiveAt, func(message *zlink.Message) error {
 						if !useMultiDealerDealerMoveMessage(cfg.transport, cfg.msgSize) {

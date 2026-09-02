@@ -9,14 +9,16 @@ type (
 	RoutingID = impl.RoutingID
 	// Message owns a message payload; sending consumes it and Close releases it.
 	Message = impl.Message
-	// RequestReplyCompletion carries the result and reply parts of a completed request.
-	RequestReplyCompletion = impl.RequestReplyCompletion
+	// ReplyToken is an opaque ROUTER request reply capability; its zero value is invalid.
+	ReplyToken = impl.ReplyToken
 	// Received is a received message envelope: routing metadata, parts, and an optional reply/send context.
 	Received = impl.Received
 	// TopicMessage is a received publish: its topic and message parts.
 	TopicMessage = impl.TopicMessage
 	// SubscriptionEvent is a subscriber's subscribe or unsubscribe as observed by an XPUB socket.
 	SubscriptionEvent = impl.SubscriptionEvent
+	// StreamPacket is reusable output storage for one decoded STREAM packet.
+	StreamPacket = impl.StreamPacket
 )
 
 var (

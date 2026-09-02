@@ -168,7 +168,7 @@ func sendMultiRouterRouterRequest(
 ) error {
 	perfcommon.StampWindowPayload(payload, window.ActiveAt)
 	message := perfcommon.NewMessage(payload)
-	return perfcommon.SubmitMeasurementRouted(socket.SendTo(serverID), message)
+	return perfcommon.SubmitMeasurementSend(socket.SendTo(serverID), message)
 }
 
 func recvMultiRouterRouterReply(
@@ -194,8 +194,8 @@ func validateMultiRouterRoutes(serverID zlink.RoutingID, clients []multiRouterCl
 			payload := perfcommon.PreparePayload(msgSize)
 			perfcommon.StampProbePayload(payload)
 			message := perfcommon.NewMessage(payload)
-			sendErr := perfcommon.SubmitMeasurementRoutedFlags(
-				client.socket.SendTo(serverID), message, zlink.SendFlagsDontWait)
+			sendErr := perfcommon.SubmitMeasurementSend(
+				client.socket.SendTo(serverID), message)
 			if sendErr != nil && !perfcommon.IsReadyProbeTransient(sendErr) {
 				perfcommon.Must(fmt.Errorf("multi router/router route probe[%d] send: %w", index, sendErr))
 			}
@@ -324,7 +324,7 @@ func submitMultiRouterReply(
 ) error {
 	for {
 		message := perfcommon.NewMessage(payload)
-		err := perfcommon.SubmitMeasurementRouted(server.SendTo(target), message)
+		err := perfcommon.SubmitMeasurementSend(server.SendTo(target), message)
 		if err == nil || perfcommon.IsStaleRoute(err) {
 			return nil
 		}

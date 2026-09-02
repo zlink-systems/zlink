@@ -25,8 +25,10 @@ func TestCoreCapabilityMatrixHasTypedGoOwner(t *testing.T) {
 		symbol string
 		owner  string
 	}{
-		{name: "DEALER typed receive", symbol: "zlink_dealer_recv_part", owner: "func (s *DealerSocket) Recv"},
-		{name: "DEALER request reply", symbol: "zlink_dealer_reply_part", owner: "func (s *DealerSocket) reply"},
+		{name: "completion drain", symbol: "zlink_completion_recv", owner: "func (o *completionOwner) drain"},
+		{name: "unified request", symbol: "zlink_request_part", owner: "func submitCompletionRequest"},
+		{name: "opaque reply", symbol: "zlink_reply_part", owner: "func (s *routedSocket) reply"},
+		{name: "STREAM packet pull", symbol: "zlink_stream_recv_packet", owner: "func (s *StreamSocket) RecvPacket"},
 	} {
 		if !strings.Contains(text, capability.symbol) {
 			t.Fatalf("Core capability %s is not referenced by Go binding", capability.name)

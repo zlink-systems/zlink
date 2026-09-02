@@ -8,82 +8,51 @@ import (
 )
 
 type SendOp interface {
-	Message(message *Message) SendSubmitOp
-	MoveMessage(message *Message) SendSubmitOp
-	Bytes(data []byte) SendSubmitOp
+	Message(*Message) SendSubmitOp
+	MoveMessage(*Message) SendSubmitOp
+	Bytes([]byte) SendSubmitOp
 }
 
 type SendSubmitOp interface {
-	Message(message *Message) SendSubmitOp
-	MoveMessage(message *Message) SendSubmitOp
-	Bytes(data []byte) SendSubmitOp
-	Flags(flags SendFlags) SendSubmitOp
-	Submit(ctx context.Context) (bool, error)
-}
-
-// RoutedSendOp builds a DEALER/ROUTER send. The HWM wait belongs to Core, so
-// the terminal is the synchronous Submit(ctx) below.
-type RoutedSendOp interface {
-	Message(message *Message) RoutedSendSubmitOp
-	MoveMessage(message *Message) RoutedSendSubmitOp
-	Bytes(data []byte) RoutedSendSubmitOp
-}
-
-// RoutedSendSubmitOp exposes the single terminal for a managed routed send.
-// Submit is synchronous — blocking the calling goroutine is Go's idiomatic
-// await, and the wait itself happens inside Core (bounded by the socket's
-// SNDTIMEO). ctx owns cancellation and deadlines at the submit boundary:
-// an already-cancelled ctx fails before anything reaches the wire.
-type RoutedSendSubmitOp interface {
-	Message(message *Message) RoutedSendSubmitOp
-	MoveMessage(message *Message) RoutedSendSubmitOp
-	Bytes(data []byte) RoutedSendSubmitOp
-	Flags(flags SendFlags) RoutedSendSubmitOp
-	Submit(ctx context.Context) error
+	Message(*Message) SendSubmitOp
+	MoveMessage(*Message) SendSubmitOp
+	Bytes([]byte) SendSubmitOp
+	Submit(context.Context) error
 }
 
 type RequestOp interface {
-	Message(message *Message) RequestSubmitOp
-	Bytes(data []byte) RequestSubmitOp
+	Message(*Message) RequestSubmitOp
+	Bytes([]byte) RequestSubmitOp
 }
 
 type RequestSubmitOp interface {
-	Message(message *Message) RequestSubmitOp
-	Bytes(data []byte) RequestSubmitOp
-	Timeout(timeout time.Duration) RequestSubmitOp
-	Flags(flags SendFlags) RequestSyncSubmitOp
-	Submit(ctx context.Context) <-chan RequestReplyCompletion
-}
-
-// RequestSyncSubmitOp is the synchronous admission terminal for a request.
-// Submit returns after Core admits the request (or rejects it immediately with
-// SendFlagsDontWait); the reply is still delivered through the completion
-// channel so callers can submit continuously and collect later.
-type RequestSyncSubmitOp interface {
-	Message(message *Message) RequestSyncSubmitOp
-	Bytes(data []byte) RequestSyncSubmitOp
-	Timeout(timeout time.Duration) RequestSyncSubmitOp
-	Flags(flags SendFlags) RequestSyncSubmitOp
-	Submit(ctx context.Context) (<-chan RequestReplyCompletion, error)
+	Message(*Message) RequestSubmitOp
+	Bytes([]byte) RequestSubmitOp
+	Timeout(time.Duration) RequestSubmitOp
+	Submit(context.Context) ([]*Message, error)
 }
 
 type ReplyOp interface {
-	Message(message *Message) ReplySubmitOp
+	Message(*Message) ReplySubmitOp
 }
 
 type ReplySubmitOp interface {
-	Message(message *Message) ReplySubmitOp
-	Flags(flags SendFlags) ReplySubmitOp
-	Submit(ctx context.Context) error
+	Message(*Message) ReplySubmitOp
+	Submit(context.Context) error
 }
 
-type sendBuilder struct {
-	first [1]sendBuilderPart
-	parts []sendBuilderPart
-	count int
-	flags SendFlags
-	submitOnce
-	submit func(parts []sendBuilderPart, flags SendFlags) error
+type PublishOp interface {
+	Message(*Message) PublishSubmitOp
+	MoveMessage(*Message) PublishSubmitOp
+	Bytes([]byte) PublishSubmitOp
+}
+
+type PublishSubmitOp interface {
+	Message(*Message) PublishSubmitOp
+	MoveMessage(*Message) PublishSubmitOp
+	Bytes([]byte) PublishSubmitOp
+	Flags(SendFlags) PublishSubmitOp
+	Submit(context.Context) (bool, error)
 }
 
 type sendBuilderPart struct {
@@ -93,7 +62,15 @@ type sendBuilderPart struct {
 	bytes   bool
 }
 
-func newSendBuilder(submit func(parts []sendBuilderPart, flags SendFlags) error) SendOp {
+type sendBuilder struct {
+	first [1]sendBuilderPart
+	parts []sendBuilderPart
+	count int
+	submitOnce
+	submit func(context.Context, []sendBuilderPart) error
+}
+
+func newSendBuilder(submit func(context.Context, []sendBuilderPart) error) SendOp {
 	return &sendBuilder{submit: submit}
 }
 
@@ -112,8 +89,6 @@ func (b *sendBuilder) Bytes(data []byte) SendSubmitOp {
 	return b
 }
 
-// append keeps the common single-part submit on the builder itself. A slice is
-// required only after the caller adds a second multipart frame.
 func (b *sendBuilder) append(part sendBuilderPart) {
 	if b.count == 0 {
 		b.first[0] = part
@@ -127,12 +102,73 @@ func (b *sendBuilder) append(part sendBuilderPart) {
 	b.count++
 }
 
-func (b *sendBuilder) Flags(flags SendFlags) SendSubmitOp {
+func (b *sendBuilder) builderParts() []sendBuilderPart {
+	if b.count == 1 {
+		return b.first[:]
+	}
+	return b.parts
+}
+
+func (b *sendBuilder) Submit(ctx context.Context) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if b.count == 0 {
+		return configInvalidArgumentError()
+	}
+	if err := b.markSubmitted(); err != nil {
+		return err
+	}
+	return b.submit(ctx, b.builderParts())
+}
+
+type publishBuilder struct {
+	first [1]sendBuilderPart
+	parts []sendBuilderPart
+	count int
+	flags SendFlags
+	submitOnce
+	submit func([]sendBuilderPart, SendFlags) error
+}
+
+func newPublishBuilder(submit func([]sendBuilderPart, SendFlags) error) PublishOp {
+	return &publishBuilder{submit: submit}
+}
+
+func (b *publishBuilder) Message(message *Message) PublishSubmitOp {
+	b.append(sendBuilderPart{message: message})
+	return b
+}
+
+func (b *publishBuilder) MoveMessage(message *Message) PublishSubmitOp {
+	b.append(sendBuilderPart{message: message, move: true})
+	return b
+}
+
+func (b *publishBuilder) Bytes(data []byte) PublishSubmitOp {
+	b.append(sendBuilderPart{data: data, bytes: true})
+	return b
+}
+
+func (b *publishBuilder) append(part sendBuilderPart) {
+	if b.count == 0 {
+		b.first[0] = part
+		b.count = 1
+		return
+	}
+	if b.count == 1 {
+		b.parts = append(b.parts, b.first[0])
+	}
+	b.parts = append(b.parts, part)
+	b.count++
+}
+
+func (b *publishBuilder) Flags(flags SendFlags) PublishSubmitOp {
 	b.flags = flags
 	return b
 }
 
-func (b *sendBuilder) Submit(ctx context.Context) (bool, error) {
+func (b *publishBuilder) Submit(ctx context.Context) (bool, error) {
 	if err := contextError(ctx); err != nil {
 		return false, err
 	}
@@ -144,73 +180,12 @@ func (b *sendBuilder) Submit(ctx context.Context) (bool, error) {
 	}
 	parts := b.parts
 	if b.count == 1 {
-		parts = b.singlePart()
+		parts = b.first[:]
 	}
 	if err := b.submit(parts, b.flags); err != nil {
 		return submitBackpressureAsNotSubmitted(err)
 	}
 	return true, nil
-}
-
-func (b *sendBuilder) singlePart() []sendBuilderPart {
-	return b.first[:]
-}
-
-type routedSendBuilder struct {
-	parts []sendBuilderPart
-	flags SendFlags
-	submitOnce
-	submit func(context.Context, SendFlags, []sendBuilderPart) error
-}
-
-func newRoutedSendBuilder(submit func(context.Context, SendFlags, []sendBuilderPart) error) RoutedSendOp {
-	return &routedSendBuilder{submit: submit}
-}
-
-func (b *routedSendBuilder) Message(message *Message) RoutedSendSubmitOp {
-	b.parts = append(b.parts, sendBuilderPart{message: message})
-	return b
-}
-
-func (b *routedSendBuilder) MoveMessage(message *Message) RoutedSendSubmitOp {
-	b.parts = append(b.parts, sendBuilderPart{message: message, move: true})
-	return b
-}
-
-func (b *routedSendBuilder) Bytes(data []byte) RoutedSendSubmitOp {
-	b.parts = append(b.parts, sendBuilderPart{data: data, bytes: true})
-	return b
-}
-
-func (b *routedSendBuilder) Flags(flags SendFlags) RoutedSendSubmitOp {
-	b.flags = flags
-	return b
-}
-
-func (b *routedSendBuilder) Submit(ctx context.Context) error {
-	if len(b.parts) == 0 {
-		return configInvalidArgumentError()
-	}
-	if err := b.markSubmitted(); err != nil {
-		return err
-	}
-	return b.submit(ctx, b.flags, b.parts)
-}
-
-type requestBuilderState struct {
-	parts   []requestBuilderPart
-	timeout time.Duration
-	flags   SendFlags
-	submitOnce
-	submit func(context.Context, SendFlags, []requestBuilderPart, time.Duration) (<-chan RequestReplyCompletion, error)
-}
-
-type requestBuilder struct {
-	state *requestBuilderState
-}
-
-type requestSyncBuilder struct {
-	state *requestBuilderState
 }
 
 type requestBuilderPart struct {
@@ -219,93 +194,57 @@ type requestBuilderPart struct {
 	bytes   bool
 }
 
-func newRequestBuilder(submit func(context.Context, SendFlags, []requestBuilderPart, time.Duration) (<-chan RequestReplyCompletion, error)) RequestOp {
-	return &requestBuilder{state: &requestBuilderState{submit: submit}}
+type requestBuilder struct {
+	parts   []requestBuilderPart
+	timeout time.Duration
+	submitOnce
+	submit func(context.Context, []requestBuilderPart, time.Duration) ([]*Message, error)
+}
+
+func newRequestBuilder(submit func(context.Context, []requestBuilderPart, time.Duration) ([]*Message, error)) RequestOp {
+	return &requestBuilder{submit: submit}
 }
 
 func (b *requestBuilder) Message(message *Message) RequestSubmitOp {
-	b.state.parts = append(b.state.parts, requestBuilderPart{message: message})
+	b.parts = append(b.parts, requestBuilderPart{message: message})
 	return b
 }
 
 func (b *requestBuilder) Bytes(data []byte) RequestSubmitOp {
-	b.state.parts = append(b.state.parts, requestBuilderPart{data: data, bytes: true})
+	b.parts = append(b.parts, requestBuilderPart{data: data, bytes: true})
 	return b
 }
 
 func (b *requestBuilder) Timeout(timeout time.Duration) RequestSubmitOp {
-	b.state.timeout = timeout
+	b.timeout = timeout
 	return b
 }
 
-func (b *requestBuilder) Flags(flags SendFlags) RequestSyncSubmitOp {
-	b.state.flags = flags
-	return &requestSyncBuilder{state: b.state}
-}
-
-func (b *requestBuilder) submit(ctx context.Context) (<-chan RequestReplyCompletion, error) {
+func (b *requestBuilder) Submit(ctx context.Context) ([]*Message, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
-	if len(b.state.parts) == 0 {
+	if len(b.parts) == 0 || b.timeout < 0 {
 		return nil, configInvalidArgumentError()
 	}
-	if err := b.state.markSubmitted(); err != nil {
+	if err := b.markSubmitted(); err != nil {
 		return nil, err
 	}
-	return b.state.submit(ctx, b.state.flags, b.state.parts, b.state.timeout)
-}
-
-func (b *requestBuilder) Submit(ctx context.Context) <-chan RequestReplyCompletion {
-	completion, err := b.submit(ctx)
-	if err != nil {
-		return completedRequest(err)
-	}
-	return completion
-}
-
-func (b *requestSyncBuilder) Message(message *Message) RequestSyncSubmitOp {
-	b.state.parts = append(b.state.parts, requestBuilderPart{message: message})
-	return b
-}
-
-func (b *requestSyncBuilder) Bytes(data []byte) RequestSyncSubmitOp {
-	b.state.parts = append(b.state.parts, requestBuilderPart{data: data, bytes: true})
-	return b
-}
-
-func (b *requestSyncBuilder) Timeout(timeout time.Duration) RequestSyncSubmitOp {
-	b.state.timeout = timeout
-	return b
-}
-
-func (b *requestSyncBuilder) Flags(flags SendFlags) RequestSyncSubmitOp {
-	b.state.flags = flags
-	return b
-}
-
-func (b *requestSyncBuilder) Submit(ctx context.Context) (<-chan RequestReplyCompletion, error) {
-	return (&requestBuilder{state: b.state}).submit(ctx)
+	return b.submit(ctx, b.parts, b.timeout)
 }
 
 type replyBuilder struct {
 	parts []*Message
-	flags SendFlags
 	submitOnce
-	submit func(parts []*Message, flags SendFlags) error
+	submit func([]*Message) error
 }
 
-func newReplyBuilder(submit func(parts []*Message, flags SendFlags) error) ReplyOp {
+func newReplyBuilder(submit func([]*Message) error) ReplyOp {
 	return &replyBuilder{submit: submit}
 }
 
 func (b *replyBuilder) Message(message *Message) ReplySubmitOp {
 	b.parts = append(b.parts, message)
-	return b
-}
-
-func (b *replyBuilder) Flags(flags SendFlags) ReplySubmitOp {
-	b.flags = flags
 	return b
 }
 
@@ -319,7 +258,7 @@ func (b *replyBuilder) Submit(ctx context.Context) error {
 	if err := b.markSubmitted(); err != nil {
 		return err
 	}
-	return b.submit(b.parts, b.flags)
+	return b.submit(b.parts)
 }
 
 func contextError(ctx context.Context) error {
@@ -332,11 +271,4 @@ func contextError(ctx context.Context) error {
 	default:
 		return nil
 	}
-}
-
-func completedRequest(err error) <-chan RequestReplyCompletion {
-	result := make(chan RequestReplyCompletion, 1)
-	result <- requestCompletionFromError(err)
-	close(result)
-	return result
 }

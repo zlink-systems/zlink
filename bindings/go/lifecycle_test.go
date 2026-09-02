@@ -24,9 +24,6 @@ func TestNilLifecycleReceiversReturnTypedErrors(t *testing.T) {
 	if _, err := monitor.Status(); err == nil {
 		t.Fatal("nil SocketMonitor.Status() should fail")
 	}
-	if err := monitor.OnEvent(func(*zlink.MonitorEvent) {}); err == nil {
-		t.Fatal("nil SocketMonitor.OnEvent() should fail")
-	}
 }
 
 func TestThreadJoinConcurrentCallersWaitForCompletion(t *testing.T) {

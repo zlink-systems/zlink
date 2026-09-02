@@ -56,21 +56,20 @@ func main() {
 			requestDone <- fmt.Errorf("unexpected request %q", string(part.Data()))
 			return
 		}
-		requestSeq := received.RequestSeq()
-		if !received.HasRequestSeq() {
-			requestDone <- fmt.Errorf("missing request sequence")
+		token, ok := received.ReplyToken()
+		if !ok {
+			requestDone <- fmt.Errorf("missing reply token")
 			return
 		}
-		replyErr := routerSocket.Reply(received.RoutingID(), requestSeq).Message(samplecommon.Message("pong")).Submit(context.Background())
+		replyErr := routerSocket.Reply(received.RoutingID(), token).Message(samplecommon.Message("pong")).Submit(context.Background())
 		requestDone <- replyErr
 	}()
 
-	completion := <-dealerSocket.Request().
+	reply, err := dealerSocket.Request().
 		Message(samplecommon.Message("ping")).
 		Timeout(2 * time.Second).
 		Submit(context.Background())
-	samplecommon.Must(completion.Err)
-	reply := completion.Parts
+	samplecommon.Must(err)
 	defer func() {
 		for _, part := range reply {
 			part.Close()

@@ -35,22 +35,22 @@ type (
 	StreamSocket = impl.StreamSocket
 	// SendOp builds a multipart send; submitting consumes the added parts.
 	SendOp = impl.SendOp
-	// SendSubmitOp accepts further parts, flags, and the terminal submit of a send.
+	// SendSubmitOp accepts further parts and the completion-backed terminal submit of a send.
 	SendSubmitOp = impl.SendSubmitOp
-	// RoutedSendOp builds an exact-target managed send on a DEALER or ROUTER.
-	RoutedSendOp = impl.RoutedSendOp
-	// RoutedSendSubmitOp completes when Core accepts the complete routed record.
-	RoutedSendSubmitOp = impl.RoutedSendSubmitOp
 	// RequestOp builds a request; submitting consumes the parts and awaits a reply.
 	RequestOp = impl.RequestOp
-	// RequestSubmitOp accepts further parts, a timeout, and the completion-channel terminal.
+	// RequestSubmitOp accepts further parts, a timeout, and the reply-result terminal.
 	RequestSubmitOp = impl.RequestSubmitOp
-	// RequestSyncSubmitOp returns synchronous admission and a completion channel.
-	RequestSyncSubmitOp = impl.RequestSyncSubmitOp
 	// ReplyOp builds a reply; submitting consumes the parts.
 	ReplyOp = impl.ReplyOp
-	// ReplySubmitOp accepts further parts, flags, and the terminal submit of a reply.
+	// ReplySubmitOp accepts further parts and the flag-free synchronous terminal.
 	ReplySubmitOp = impl.ReplySubmitOp
+	// PublishOp builds a lossy or NODROP publish operation.
+	PublishOp = impl.PublishOp
+	// PublishSubmitOp retains publish flags and its synchronous submit result.
+	PublishSubmitOp = impl.PublishSubmitOp
+	// StreamReceiveMode selects RAW or decoded PACKET receive before bind/connect.
+	StreamReceiveMode = impl.StreamReceiveMode
 	// SendFlags modify send behavior; DontWait reports back-pressure instead of blocking.
 	SendFlags = impl.SendFlags
 	// RecvFlags modify receive behavior; DontWait returns instead of blocking when no message is available.
@@ -87,5 +87,8 @@ const (
 	// ReceiveFlowRunning is the default receive-flow state: the completion lane accepts data normally.
 	ReceiveFlowRunning = impl.ReceiveFlowRunning
 	// ReceiveFlowPaused pauses the completion lane's remote peer without touching byte HWM or transport backpressure.
-	ReceiveFlowPaused = impl.ReceiveFlowPaused
+	ReceiveFlowPaused        = impl.ReceiveFlowPaused
+	StreamReceiveUnspecified = impl.StreamReceiveUnspecified
+	StreamReceiveRaw         = impl.StreamReceiveRaw
+	StreamReceivePacket      = impl.StreamReceivePacket
 )

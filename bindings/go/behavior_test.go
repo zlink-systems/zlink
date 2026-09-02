@@ -3,7 +3,6 @@ package zlink_test
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -27,7 +26,7 @@ func TestPairSendRecvRoundTrip(t *testing.T) {
 		t.Fatalf("Connect() error = %v", err)
 	}
 
-	if _, err := client.Send().Message(newMessage(t, "hello-pair")).Submit(context.Background()); err != nil {
+	if err := client.Send().Message(newMessage(t, "hello-pair")).Submit(context.Background()); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 
@@ -64,7 +63,7 @@ func TestPairSendBytesRoundTrip(t *testing.T) {
 	}
 
 	payload := []byte("hello-bytes")
-	if _, err := client.Send().Bytes(payload).Submit(context.Background()); err != nil {
+	if err := client.Send().Bytes(payload).Submit(context.Background()); err != nil {
 		t.Fatalf("Send().Bytes() error = %v", err)
 	}
 	if string(payload) != "hello-bytes" {
@@ -105,7 +104,7 @@ func TestPairMultipartBytesRoundTrip(t *testing.T) {
 
 	message := newMessage(t, "message-part")
 	defer message.Close()
-	if _, err := client.Send().
+	if err := client.Send().
 		Bytes([]byte("first-bytes")).
 		Message(message).
 		Bytes([]byte("last-bytes")).
@@ -156,7 +155,7 @@ func TestPollerWaitWritesCallerOwnedEvents(t *testing.T) {
 	if err := poller.AddSocket(server, zlink.PollIn, 7); err != nil {
 		t.Fatalf("AddSocket() error = %v", err)
 	}
-	if _, err := client.Send().Message(newMessage(t, "poller")).Submit(context.Background()); err != nil {
+	if err := client.Send().Message(newMessage(t, "poller")).Submit(context.Background()); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 
@@ -269,10 +268,10 @@ func TestPollerCapacityLeavesRemainingReadySource(t *testing.T) {
 	if err := poller.AddSocket(receiver2, zlink.PollIn, 102); err != nil {
 		t.Fatalf("AddSocket(receiver2) error = %v", err)
 	}
-	if _, err := sender1.Send().Message(newMessage(t, "a")).Submit(context.Background()); err != nil {
+	if err := sender1.Send().Message(newMessage(t, "a")).Submit(context.Background()); err != nil {
 		t.Fatalf("Send(a) error = %v", err)
 	}
-	if _, err := sender2.Send().Message(newMessage(t, "b")).Submit(context.Background()); err != nil {
+	if err := sender2.Send().Message(newMessage(t, "b")).Submit(context.Background()); err != nil {
 		t.Fatalf("Send(b) error = %v", err)
 	}
 
@@ -335,7 +334,7 @@ func TestPollerModifyRemoveAndTimeout(t *testing.T) {
 	if err := poller.ModifySocket(receiver, 0); err != nil {
 		t.Fatalf("ModifySocket(none) error = %v", err)
 	}
-	if _, err := sender.Send().Message(newMessage(t, "hidden")).Submit(context.Background()); err != nil {
+	if err := sender.Send().Message(newMessage(t, "hidden")).Submit(context.Background()); err != nil {
 		t.Fatalf("Send(hidden) error = %v", err)
 	}
 	events := make([]zlink.PollEvent, 1)
@@ -362,7 +361,7 @@ func TestPollerModifyRemoveAndTimeout(t *testing.T) {
 	if err := poller.RemoveSocket(receiver); err != nil {
 		t.Fatalf("RemoveSocket() error = %v", err)
 	}
-	if _, err := sender.Send().Message(newMessage(t, "removed")).Submit(context.Background()); err != nil {
+	if err := sender.Send().Message(newMessage(t, "removed")).Submit(context.Background()); err != nil {
 		t.Fatalf("Send(removed) error = %v", err)
 	}
 	n, err = poller.Wait(events, 0)
@@ -404,7 +403,7 @@ func TestPollerDistinguishesTimerAndSocketInSameBuffer(t *testing.T) {
 	if err := poller.AddTimer(timer, 42); err != nil {
 		t.Fatalf("AddTimer() error = %v", err)
 	}
-	if _, err := sender.Send().Message(newMessage(t, "socket")).Submit(context.Background()); err != nil {
+	if err := sender.Send().Message(newMessage(t, "socket")).Submit(context.Background()); err != nil {
 		t.Fatalf("Send(socket) error = %v", err)
 	}
 	if err := timer.Start(uint64(5*time.Millisecond), 1); err != nil {
@@ -479,7 +478,7 @@ func TestPairMultipartRoundTrip(t *testing.T) {
 	_ = server.Bind(endpoint)
 	_ = client.Connect(endpoint)
 
-	if _, err := client.Send().Message(newMessage(t, "frame-1")).Message(newMessage(t, "frame-2")).Submit(context.Background()); err != nil {
+	if err := client.Send().Message(newMessage(t, "frame-1")).Message(newMessage(t, "frame-2")).Submit(context.Background()); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 
@@ -507,7 +506,7 @@ func TestPairRecvReusesResultStorage(t *testing.T) {
 	_ = client.Connect(endpoint)
 
 	for _, payload := range []string{"first", "second"} {
-		if _, err := client.Send().Message(newMessage(t, payload)).Submit(context.Background()); err != nil {
+		if err := client.Send().Message(newMessage(t, payload)).Submit(context.Background()); err != nil {
 			t.Fatalf("Send(%q) error = %v", payload, err)
 		}
 	}
@@ -561,7 +560,7 @@ func TestPairRecvAggregateRoundTrip(t *testing.T) {
 	_ = client.Connect(endpoint)
 	_ = server.SetReceiveTimeout(5 * time.Second)
 
-	if _, err := client.Send().Message(newMessage(t, "hello-part")).Submit(context.Background()); err != nil {
+	if err := client.Send().Message(newMessage(t, "hello-part")).Submit(context.Background()); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 
@@ -640,54 +639,6 @@ func TestDealerRouterRoundTrip(t *testing.T) {
 	part, _ := response.SinglePartOrError()
 	if !bytes.Equal(part.Data(), []byte("response")) {
 		t.Fatalf("unexpected response = %q", string(part.Data()))
-	}
-}
-
-func TestDealerRecvRequestUsesReceivedReplyContext(t *testing.T) {
-	ctx := newContext(t)
-	defer ctx.Close()
-
-	endpoint := inprocEndpoint("dealer-request-context")
-	dealer, _ := ctx.DealerSocket()
-	router, _ := ctx.RouterSocket()
-	defer dealer.Close()
-	defer router.Close()
-	dealerRID := zlink.NewRoutingID([]byte("dealer-server"))
-	_ = dealer.SetRoutingID(dealerRID)
-	_ = dealer.Bind(endpoint)
-	_ = router.SetRoutingID(zlink.NewRoutingID([]byte("router-client")))
-	_ = router.Connect(endpoint)
-	_ = dealer.SetReceiveTimeout(5 * time.Second)
-
-	serverDone := make(chan error, 1)
-	go func() {
-		var request zlink.Received
-		ok, err := dealer.Recv(&request, zlink.RecvFlagsNone)
-		if err != nil || !ok {
-			serverDone <- fmt.Errorf("dealer Recv() = ok %v, err %v", ok, err)
-			return
-		}
-		defer request.Close()
-		if !request.HasRequestSeq() {
-			serverDone <- fmt.Errorf("dealer request did not expose request sequence")
-			return
-		}
-		reply := newMessage(t, "dealer-reply")
-		serverDone <- request.Reply().Message(reply).Submit(context.Background())
-	}()
-
-	completion := awaitRequest(t, router.Request(dealerRID).Bytes([]byte("dealer-request")).Timeout(5*time.Second).Submit(context.Background()))
-	if completion.Err != nil {
-		t.Fatalf("Router request completion error = %v", completion.Err)
-	}
-	zlink.MultipartClose(completion.Parts)
-	select {
-	case err := <-serverDone:
-		if err != nil {
-			t.Fatalf("dealer reply error = %v", err)
-		}
-	case <-time.After(8 * time.Second):
-		t.Fatalf("dealer request handler timed out")
 	}
 }
 
