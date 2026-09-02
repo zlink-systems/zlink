@@ -37,7 +37,8 @@ internal static class Program
                 string requestPayload = received.Parts[0].GetString();
                 SampleSupport.EnsureEqual("ping", requestPayload, "request");
                 using var reply = Message.From("pong");
-                routerSocket.Reply(routingId, received.RequestSeq ?? 0UL)
+                routerSocket.Reply(routingId, received.ReplyToken
+                    ?? throw new InvalidOperationException("missing reply token"))
                     .Message(reply).Submit();
             }
             finally

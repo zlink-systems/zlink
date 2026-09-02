@@ -25,12 +25,6 @@ public interface IZlinkTimer : IDisposable, IAsyncDisposable
     ulong? Recv(RecvFlags flags = RecvFlags.None);
 
     /// <summary>
-    ///     Registers a callback invoked on each expiration with the timer and the
-    ///     fire count. The callback runs on a background dispatch thread.
-    /// </summary>
-    void OnFire(Action<IZlinkTimer, ulong> handler);
-
-    /// <summary>
     ///     Closes the timer and releases its resources.
     /// </summary>
     void Close();

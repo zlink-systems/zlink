@@ -1,56 +1,17 @@
 using System.Diagnostics;
-using System.Reflection;
 using Xunit;
 
 namespace Systems.Zlink.Tests;
 
 /// <summary>
-///     The routed asynchronous send terminal is a thin wrapper over the Core
-///     0.13.2 send-admission contract: one complete record goes to
-///     <c>zlink_send_async</c>. Immediate admission returns operation id zero
-///     and resolves locally; a non-zero pending operation receives exactly one
-///     Core completion. The binding parks nothing, retries nothing and times
-///     nothing.
+///     Send and request awaitable terminals submit with DONTWAIT and complete
+///     only after their socket-local completion has been drained.
 /// </summary>
 public sealed class test_routed_async_admission
 {
     private const ulong RecordHwm = 65_536UL + 64UL;
     private static readonly string FillerPayload =
         "filler" + new string('d', 65_536);
-
-    [Fact]
-    public void pending_send_defers_task_allocation_until_it_is_observed()
-    {
-        object pending = CreatePendingSend();
-        FieldInfo completionField = PendingSendCompletionField(pending);
-
-        Assert.Null(completionField.GetValue(pending));
-
-        Task task = PendingSendTask(pending);
-
-        Assert.NotNull(completionField.GetValue(pending));
-        Assert.False(task.IsCompleted);
-
-        CompletePendingSendAsAdmitted(pending);
-
-        Assert.True(task.IsCompletedSuccessfully);
-    }
-
-    [Fact]
-    public void inline_completion_and_task_observation_share_one_task()
-    {
-        object pending = CreatePendingSend();
-        FieldInfo completionField = PendingSendCompletionField(pending);
-
-        CompletePendingSendAsAdmitted(pending);
-        object? completionAfterCallback = completionField.GetValue(pending);
-        Task first = PendingSendTask(pending);
-        Task second = PendingSendTask(pending);
-
-        Assert.NotNull(completionAfterCallback);
-        Assert.Same(first, second);
-        Assert.True(first.IsCompletedSuccessfully);
-    }
 
     [Fact]
     public void synchronous_terminal_admits_a_routed_send()
@@ -68,14 +29,14 @@ public sealed class test_routed_async_admission
         Thread.Sleep(100);
 
         using Message payload = Message.From("sync-payload");
-        dealer.Send().Message(payload).Submit(SendFlags.None);
+        dealer.Send().Message(payload).Submit();
 
         using Received received = RecvWithRetry(router);
         Assert.Equal("sync-payload", received.SinglePartOrThrow().GetString());
     }
 
     [Fact]
-    public void dontwait_terminal_reports_immediate_backpressure()
+    public async Task async_terminal_parks_without_blocking_for_hwm_credit()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -93,48 +54,49 @@ public sealed class test_routed_async_admission
         Thread.Sleep(100);
         _ = FillDealerTarget(dealer, out List<Task> filler);
 
-        using Message payload = Message.From("backpressured");
+        using var cancellation = new CancellationTokenSource();
+        using Message payload = Message.From("pending");
         var started = Stopwatch.StartNew();
-        ZlinkSubmitException error = Assert.Throws<ZlinkSubmitException>(() =>
-            dealer.Send().Message(payload).Submit(SendFlags.DontWait));
+        Task pending = dealer.Send().Message(payload).Async(cancellation.Token);
         started.Stop();
 
-        Assert.Equal(ZlinkSubmitException.ErrorCode.Backpressured, error.Result);
         Assert.True(started.Elapsed < TimeSpan.FromMilliseconds(250));
+        await Task.Delay(25);
+        Assert.False(pending.IsCompleted);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () => await pending);
         SwallowAll(filler);
     }
 
     [Fact]
-    public void request_callback_terminal_reports_immediate_backpressure()
+    public async Task request_cancellation_only_cancels_the_caller_wait()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
 
         using var context = Zlink.CreateContext();
-        context.Options.AutoHwmEnabled = false;
         using var dealer = context.CreateDealerSocket();
         using var router = context.CreateRouterSocket();
-        dealer.Options.SendHighWaterMark = RecordHwm;
-        router.Options.ReceiveHighWaterMark = RecordHwm;
         string endpoint = CoreTestSupport.NewEndpoint(
-            "inproc", "dotnet-request-callback-dontwait");
+            "inproc", "dotnet-request-wait-cancel");
         router.Bind(endpoint);
         dealer.Connect(endpoint);
-        Thread.Sleep(100);
-        _ = FillDealerTarget(dealer, out List<Task> filler);
 
-        using Message payload = Message.From("request-backpressured");
-        bool callbackCalled = false;
-        var started = Stopwatch.StartNew();
-        ZlinkSubmitException error = Assert.Throws<ZlinkSubmitException>(() =>
-            dealer.Request().Message(payload).Timeout(TimeSpan.FromSeconds(1))
-                .Submit(SendFlags.DontWait, (_, _) => callbackCalled = true));
-        started.Stop();
+        using var cancellation = new CancellationTokenSource();
+        using Message payload = Message.From("cancel-wait");
+        Task<IReadOnlyList<Message>> pending = dealer.Request().Message(payload)
+            .Timeout(TimeSpan.FromSeconds(2)).Async(cancellation.Token);
+        using Received received = RecvWithRetry(router);
 
-        Assert.Equal(ZlinkSubmitException.ErrorCode.Backpressured, error.Result);
-        Assert.False(callbackCalled);
-        Assert.True(started.Elapsed < TimeSpan.FromMilliseconds(250));
-        SwallowAll(filler);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () => await pending);
+
+        using Message reply = Message.From("late-reply");
+        router.Reply(received.RoutingId!.Value, received.ReplyToken!)
+            .Message(reply).Submit();
+        await Task.Delay(25);
     }
 
     [Fact]
@@ -157,9 +119,8 @@ public sealed class test_routed_async_admission
         Task admitted = dealer.Send().Message(payload).Async();
         started.Stop();
 
-        // Immediate admission returns operation id zero and the binding
-        // resolves locally without entering Core's callback dispatch scope.
-        Assert.Same(Task.CompletedTask, admitted);
+        // Awaitable submission uses the socket-local completion drain even
+        // when Core can admit the record immediately.
         Assert.True(started.Elapsed < TimeSpan.FromMilliseconds(250));
         await admitted.WaitAsync(TimeSpan.FromSeconds(3));
 
@@ -224,10 +185,10 @@ public sealed class test_routed_async_admission
         using Message tail = Message.Allocate(0);
         Task admission = dealer.Send().Message(payload).Message(tail).Async();
 
-        Assert.Same(Task.CompletedTask, admission);
         Assert.Throws<ObjectDisposedException>(() => _ = payload.Size);
         Assert.Throws<ObjectDisposedException>(() => _ = tail.Size);
         await admission.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.True(admission.IsCompletedSuccessfully);
 
         using Received received = RecvWithRetry(router);
         Assert.Collection(received.Parts,
@@ -253,7 +214,7 @@ public sealed class test_routed_async_admission
         parts[^1].Dispose();
         try
         {
-            RoutedSendSubmitOperation operation = sender.Send().Messages(parts);
+            SendSubmitOperation operation = sender.Send().Messages(parts);
             Action submit = () => _ = operation.Async();
             Assert.Throws<ObjectDisposedException>(submit);
 
@@ -481,8 +442,8 @@ public sealed class test_routed_async_admission
 
     /// <summary>
     ///     Submits large records until one parks, and returns that parked task.
-    ///     `zlink_send_async` never reports HWM back-pressure to the caller: a
-    ///     record that cannot be admitted becomes a Core pending operation.
+    ///     Awaitable send never blocks the caller for HWM credit: a record that
+    ///     cannot be admitted remains pending until its completion is drained.
     /// </summary>
     private static Task FillDealerTarget(IDealerSocket dealer,
         out List<Task> submitted)
@@ -553,38 +514,4 @@ public sealed class test_routed_async_admission
         throw new TimeoutException("Timed out waiting for routed record.");
     }
 
-    private static object CreatePendingSend()
-    {
-        Type pendingType = typeof(Message).Assembly.GetType(
-            "Systems.Zlink.SendCompletionRegistry+PendingSend",
-            throwOnError: true)!;
-        ConstructorInfo constructor = pendingType.GetConstructor(
-            BindingFlags.Instance | BindingFlags.NonPublic,
-            binder: null, new[] { typeof(CancellationToken) },
-            modifiers: null)!;
-        return constructor.Invoke(new object[] { CancellationToken.None });
-    }
-
-    private static FieldInfo PendingSendCompletionField(object pending)
-    {
-        return pending.GetType().GetField("_completion",
-            BindingFlags.Instance | BindingFlags.NonPublic)!;
-    }
-
-    private static Task PendingSendTask(object pending)
-    {
-        PropertyInfo property = pending.GetType().GetProperty("Task",
-            BindingFlags.Instance | BindingFlags.NonPublic)!;
-        return (Task)property.GetValue(pending)!;
-    }
-
-    private static void CompletePendingSendAsAdmitted(object pending)
-    {
-        Type pendingType = pending.GetType();
-        MethodInfo method = pendingType.GetMethod("Complete",
-            BindingFlags.Instance | BindingFlags.NonPublic)!;
-        Type resultType = method.GetParameters()[0].ParameterType;
-        object admitted = Enum.Parse(resultType, "Admitted");
-        method.Invoke(pending, new[] { admitted, (object)0 });
-    }
 }

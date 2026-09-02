@@ -30,11 +30,8 @@ internal static partial class NativeMethods
         "zlink_ctx_get_data",
         "zlink_ctx_shutdown",
         "zlink_ctx_term",
-        "zlink_dealer_recv_part",
-        "zlink_dealer_reply_part",
-        "zlink_dealer_request_part",
-        "zlink_dealer_request_transport_pair_part",
-        "zlink_dealer_send_transport_pair_part",
+        "zlink_completion_close",
+        "zlink_completion_recv",
         "zlink_disconnect",
         "zlink_disconnect_rid",
         "zlink_errno",
@@ -72,20 +69,12 @@ internal static partial class NativeMethods
         "zlink_poller_wait",
         "zlink_proxy",
         "zlink_publish_part",
-        "zlink_recv_handler",
         "zlink_recv_part",
+        "zlink_reply_part",
+        "zlink_request_part",
         "zlink_router_recv_part",
-        "zlink_router_recv_part_v2",
-        "zlink_router_reply_part",
-        "zlink_router_request_part",
-        "zlink_router_request_transport_pair_part",
-        "zlink_select_routed_submit_target",
-        "zlink_send_async",
-        "zlink_send_async_cancel",
-        "zlink_send_complete_handler",
         "zlink_send_part",
         "zlink_send_part_rid",
-        "zlink_send_part_transport_pair",
         "zlink_set_dealer_option",
         "zlink_set_option",
         "zlink_set_pub_option",
@@ -98,19 +87,17 @@ internal static partial class NativeMethods
         "zlink_set_tls_server",
         "zlink_sleep",
         "zlink_socket",
-        "zlink_socket_monitor_handler",
         "zlink_socket_monitor_open",
         "zlink_socket_monitor_recv",
         "zlink_socket_set_receive_flow_state",
         "zlink_stopwatch_intermediate",
         "zlink_stopwatch_start",
         "zlink_stopwatch_stop",
-        "zlink_stream_packet_handler",
+        "zlink_stream_recv_packet",
         "zlink_strerror",
         "zlink_subscribe_part",
         "zlink_subscription_at",
         "zlink_timer_destroy",
-        "zlink_timer_handler",
         "zlink_timer_new",
         "zlink_timer_recv",
         "zlink_timer_start",
@@ -234,32 +221,6 @@ internal static partial class NativeMethods
     internal static extern void zlink_multipart_close(IntPtr parts, nuint count);
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int zlink_dealer_request_part(IntPtr dealer,
-        ref ZlinkMsg part, int flags, ZlinkPartFlag partFlag, uint timeoutMs,
-        IntPtr handler, IntPtr userData);
-
-    [LibraryImport(LibraryName)]
-    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
-    internal static partial int zlink_dealer_recv_part(IntPtr dealer,
-        out byte messageType, out ulong requestSeq, ref ZlinkMsg part,
-        out ZlinkPartFlag hasMore, int flags);
-
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int zlink_dealer_reply_part(IntPtr dealer,
-        ulong requestSeq, ref ZlinkMsg part, ZlinkPartFlag partFlag);
-
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int zlink_router_request_part(IntPtr router,
-        ref ZlinkRoutingId peerRoutingId, ref ZlinkMsg part, int flags,
-        ZlinkPartFlag partFlag, uint timeoutMs,
-        IntPtr handler, IntPtr userData);
-
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int zlink_router_reply_part(IntPtr router,
-        ref ZlinkRoutingId peerRoutingId, ulong requestSeq,
-        ref ZlinkMsg part, ZlinkPartFlag partFlag);
-
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr zlink_atomic_counter_new();
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
@@ -287,7 +248,4 @@ internal static partial class NativeMethods
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern ulong zlink_stopwatch_stop(IntPtr watch);
 
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    internal delegate void ZlinkReplyHandlerDelegate(int result, IntPtr parts,
-        nuint partCount, IntPtr userData);
 }

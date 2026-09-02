@@ -88,20 +88,16 @@ internal sealed partial class SocketKernel
 
     private bool ReceiveRoutedParts(int flags,
         out RoutingIdSnapshot routingId,
-        out ulong requestSeq, out ulong transportPairId,
-        out ulong transportPairGeneration, out Message? singlePart,
+        out ulong replyToken, out Message? singlePart,
         out MultipartMessageCollection? parts,
         bool allowNoData = false)
     {
         routingId = default;
-        requestSeq = 0;
-        transportPairId = 0;
-        transportPairGeneration = 0;
+        replyToken = 0;
         singlePart = null;
         parts = null;
         if (_policy.UsesRouterRoutedReceiveEnvelope)
-            return ReceiveRouterParts(flags, out routingId, out requestSeq,
-                out transportPairId, out transportPairGeneration,
+            return ReceiveRouterParts(flags, out routingId, out replyToken,
                 out singlePart, out parts, allowNoData);
 
         var nativeParts = Array.Empty<ZlinkMsg>();
@@ -173,17 +169,14 @@ internal sealed partial class SocketKernel
 
     private bool ReceiveRouterParts(int flags,
         out RoutingIdSnapshot routingId,
-        out ulong requestSeq, out ulong transportPairId,
-        out ulong transportPairGeneration, out Message? singlePart,
+        out ulong replyToken, out Message? singlePart,
         out MultipartMessageCollection? parts,
         bool allowNoData)
     {
         var nativeParts = Array.Empty<ZlinkMsg>();
         var nativePartCount = 0;
         routingId = default;
-        requestSeq = 0;
-        transportPairId = 0;
-        transportPairGeneration = 0;
+        replyToken = 0;
         singlePart = null;
         parts = null;
         try
@@ -199,20 +192,14 @@ internal sealed partial class SocketKernel
                 try
                 {
                     IntPtr sourceNodeRid;
-                    ulong receivedRequestSeq;
-                    ulong receivedTransportPairId;
-                    ulong receivedTransportPairGeneration;
+                    ulong receivedReplyToken;
                     int hasMore;
                     var rc = (flags & DontWaitFlag) != 0
-                        ? NativeMethods.zlink_router_recv_part_v2_nowait(Handle,
-                            out sourceNodeRid, out receivedRequestSeq,
-                            out receivedTransportPairId,
-                            out receivedTransportPairGeneration,
+                        ? NativeMethods.zlink_router_recv_part_nowait(Handle,
+                            out sourceNodeRid, out receivedReplyToken,
                             ref part, out hasMore, flags)
-                        : NativeMethods.zlink_router_recv_part_v2(Handle,
-                            out sourceNodeRid, out receivedRequestSeq,
-                            out receivedTransportPairId,
-                            out receivedTransportPairGeneration,
+                        : NativeMethods.zlink_router_recv_part(Handle,
+                            out sourceNodeRid, out receivedReplyToken,
                             ref part, out hasMore, flags);
                     if (rc != 0)
                     {
@@ -228,10 +215,7 @@ internal sealed partial class SocketKernel
                     if (nativePartCount == 0)
                     {
                         routingId = RoutingIdSnapshot.FromPointer(sourceNodeRid);
-                        requestSeq = receivedRequestSeq;
-                        transportPairId = receivedTransportPairId;
-                        transportPairGeneration =
-                            receivedTransportPairGeneration;
+                        replyToken = receivedReplyToken;
                     }
 
                     if (hasMore == 0 && nativePartCount == 0)

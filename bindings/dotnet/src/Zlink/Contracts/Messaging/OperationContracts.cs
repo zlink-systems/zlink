@@ -25,7 +25,8 @@ public interface SendOperation
 }
 
 /// <summary>
-///     Accepts further parts, flags, and the terminal submit of a send builder.
+///     Accepts further parts and the blocking or awaitable terminal of a send
+///     builder.
 /// </summary>
 public interface SendSubmitOperation
 {
@@ -36,20 +37,15 @@ public interface SendSubmitOperation
     SendSubmitOperation Message(Message message);
 
     /// <summary>
-    ///     Sets the flags applied at submit time, replacing any previously set
-    ///     flags.
+    ///     Blocks until Core admits the accumulated record locally.
     /// </summary>
-    SendSubmitOperation Flags(SendFlags flags);
+    void Submit();
 
     /// <summary>
-    ///     Submits the accumulated parts.
+    ///     Submits without blocking for HWM credit and completes after the
+    ///     socket-local native completion is drained.
     /// </summary>
-    /// <returns>
-    ///     true when the parts were queued for sending; false only when
-    ///     <see cref="SendFlags.DontWait" /> is set and the send would have blocked
-    ///     (back-pressure). Other failures throw <see cref="ZlinkException" />.
-    /// </returns>
-    bool Submit();
+    Task Async(CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -90,50 +86,24 @@ public interface PublishSubmitOperation
     void Submit();
 }
 
-/// <summary>
-///     Builds an exact-target DEALER or ROUTER send whose terminal operation is
-///     language-native asynchronous admission.
-/// </summary>
-public interface RoutedSendOperation
+/// <summary>Builds a non-blocking publish that reports immediate refusal.</summary>
+public interface TryPublishOperation
 {
-    /// <summary>
-    ///     Adds the first message part. Ownership transfers to the asynchronous
-    ///     operation when <see cref="RoutedSendSubmitOperation.Async" /> is
-    ///     called.
-    /// </summary>
-    RoutedSendSubmitOperation Message(Message message);
+    /// <summary>Adds the first message part.</summary>
+    TryPublishSubmitOperation Message(Message message);
 }
 
-/// <summary>
-///     Accepts further parts and asynchronously waits until Core admits the
-///     complete routed record.
-/// </summary>
-public interface RoutedSendSubmitOperation
+/// <summary>Completes a non-blocking publish attempt.</summary>
+public interface TryPublishSubmitOperation
 {
     /// <summary>Adds another message part.</summary>
-    RoutedSendSubmitOperation Message(Message message);
+    TryPublishSubmitOperation Message(Message message);
 
-    /// <summary>
-    ///     Submits the accumulated parts synchronously using the selected send
-    ///     flags. <see cref="SendFlags.None" /> waits for Core admission;
-    ///     <see cref="SendFlags.DontWait" /> reports immediate back-pressure as
-    ///     <see cref="ZlinkSubmitException" />.
-    /// </summary>
-    void Submit(SendFlags flags);
+    /// <summary>Sets publish-specific flags.</summary>
+    TryPublishSubmitOperation Flags(SendFlags flags);
 
-    /// <summary>
-    ///     Hands the complete record to Core and returns without waiting for
-    ///     target HWM credit. The task is completed exactly once by the Core
-    ///     send completion: successfully on admission, with
-    ///     <see cref="ZlinkSubmitException" /> on a terminal outcome, and
-    ///     cancelled when <paramref name="ct" /> cancels the operation before
-    ///     admission commits.
-    /// </summary>
-    /// <remarks>
-    ///     A record admitted immediately completes inline, before the returned
-    ///     task is handed back, so the caller never suspends on the fast path.
-    /// </remarks>
-    Task Async(CancellationToken ct = default);
+    /// <summary>Returns false only for immediate publish backpressure.</summary>
+    bool Submit();
 }
 
 /// <summary>
@@ -170,12 +140,7 @@ public interface RequestSubmitOperation
     /// <summary>
     ///     Blocks until Core completes the request and returns the reply parts.
     /// </summary>
-    IReadOnlyList<Message> Submit(SendFlags flags);
-
-    /// <summary>
-    ///     Returns after admission and delivers request completion by callback.
-    /// </summary>
-    void Submit(SendFlags flags, RequestCallback callback);
+    IReadOnlyList<Message> Submit();
 
     /// <summary>
     ///     Transfers the request parts to the operation, asynchronously waits for
@@ -186,13 +151,9 @@ public interface RequestSubmitOperation
     ///     this method transfers all accumulated request parts to the pending
     ///     operation, including while it waits for exact-target admission.
     /// </remarks>
-    Task<IReadOnlyList<Message>> Async(CancellationToken ct = default);
+    Task<IReadOnlyList<Message>> Async(
+        CancellationToken cancellationToken = default);
 }
-
-/// <summary>Receives a request completion and its reply parts.</summary>
-/// <remarks>On success, the callback owns and must dispose the reply parts.</remarks>
-public delegate void RequestCallback(RequestResult result,
-    IReadOnlyList<Message> reply);
 
 /// <summary>
 ///     Builds a reply to a received request: add the reply parts, then submit.

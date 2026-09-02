@@ -95,14 +95,14 @@ public sealed class test_router_multiple_dealers
             received.SinglePartOrThrow().AsReadOnlySpan()));
 
         using Message reply = Message.From("pong");
-        received.Send().Message(reply).Submit(SendFlags.None);
+        received.Send().Message(reply).Submit();
 
         Assert.Equal("pong", CoreTestSupport.ReceiveUtf8WithTimeout(dealer,
             2000));
     }
 
     [Fact]
-    public async Task received_send_async_transfers_multipart_and_reuses_envelope()
+    public async Task async_received_send_transfers_multipart_and_reuses_envelope()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -154,7 +154,7 @@ public sealed class test_router_multiple_dealers
     }
 
     [Fact]
-    public async Task received_send_async_does_not_reselect_after_same_rid_handover()
+    public async Task async_received_send_keeps_captured_routing_id_after_handover()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -180,9 +180,7 @@ public sealed class test_router_multiple_dealers
             .WaitAsync(TimeSpan.FromSeconds(2));
         using var captured = Received.Create();
         Assert.True(router.Recv(captured));
-        Assert.NotEqual(0UL, captured.TransportPairId);
-        Assert.NotEqual(0UL, captured.TransportPairGeneration);
-        RoutedSendOperation capturedSend = captured.Send();
+        SendOperation capturedSend = captured.Send();
 
         replacement.Connect(endpoint);
         Thread.Sleep(100);
@@ -198,18 +196,18 @@ public sealed class test_router_multiple_dealers
         // retain the source route snapshot captured before the handover.
         Assert.False(router.Recv(captured, RecvFlags.DontWait));
         using Message exactReply = Message.From("first-only");
-        var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(() =>
-            capturedSend.Message(exactReply).Async());
-        Assert.Equal(ZlinkSubmitException.ErrorCode.NotFound, failure.Result);
+        await capturedSend.Message(exactReply).Async();
 
         using var firstUnexpected = Received.Create();
         Assert.False(first.Recv(firstUnexpected, RecvFlags.DontWait));
-        using var unexpected = Received.Create();
-        Assert.False(replacement.Recv(unexpected, RecvFlags.DontWait));
+        using var delivered = Received.Create();
+        Assert.True(CoreTestSupport.WaitUntil(
+            () => replacement.Recv(delivered, RecvFlags.DontWait), 2000));
+        Assert.Equal("first-only", delivered.SinglePartOrThrow().GetString());
     }
 
     [Fact]
-    public async Task request_received_send_async_uses_captured_source_context()
+    public async Task async_request_received_send_uses_captured_source_context()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -231,7 +229,6 @@ public sealed class test_router_multiple_dealers
         using var received = Received.Create();
         Assert.True(router.Recv(received));
         Assert.Equal(ReceivedMessageType.Request, received.MessageType);
-        Assert.NotEqual(0UL, received.TransportPairId);
 
         using Message sideMessage = Message.From("source-send");
         await received.Send().Message(sideMessage).Async()
@@ -272,10 +269,6 @@ public sealed class test_router_multiple_dealers
         using var received = Received.Create();
         Assert.True(router.Recv(received));
         Assert.Equal("first", received.SinglePartOrThrow().GetString());
-        Assert.NotEqual(0UL, received.TransportPairId);
-        Assert.NotEqual(0UL, received.TransportPairGeneration);
-        ulong expectedPairId = received.TransportPairId;
-        ulong expectedPairGeneration = received.TransportPairGeneration;
 
         using Message next = Message.From("next");
         await dealer.Send().Message(next).Async()
@@ -283,8 +276,6 @@ public sealed class test_router_multiple_dealers
         Assert.True(CoreTestSupport.WaitUntil(
             () => router.Recv(received, RecvFlags.DontWait), 2000));
         Assert.Equal("next", received.SinglePartOrThrow().GetString());
-        Assert.Equal(expectedPairId, received.TransportPairId);
-        Assert.Equal(expectedPairGeneration, received.TransportPairGeneration);
 
         using Message multipartHead = Message.From("multipart");
         using Message multipartTail = Message.From("tail");
@@ -295,12 +286,8 @@ public sealed class test_router_multiple_dealers
         Assert.Collection(received.Parts,
             part => Assert.Equal("multipart", part.GetString()),
             part => Assert.Equal("tail", part.GetString()));
-        Assert.Equal(expectedPairId, received.TransportPairId);
-        Assert.Equal(expectedPairGeneration, received.TransportPairGeneration);
 
         Assert.False(router.Recv(received, RecvFlags.DontWait));
-        Assert.Equal(0UL, received.TransportPairId);
-        Assert.Equal(0UL, received.TransportPairGeneration);
     }
 
     [Fact]

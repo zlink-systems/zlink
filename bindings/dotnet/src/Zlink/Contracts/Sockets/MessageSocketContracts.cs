@@ -39,7 +39,7 @@ public interface IMessageSocket : IReceivingMessageSocket, IConnectableSocket
     ///     send builders may be submitted concurrently on the same socket. Do not
     ///     share one builder or one message between concurrent operations.
     /// </summary>
-    RoutedSendOperation Send();
+    SendOperation Send();
 }
 
 /// <summary>
@@ -59,7 +59,7 @@ public interface IDealerSocket : IReceivingMessageSocket, IConnectableSocket
     ///     Begins a DEALER send whose <c>Async</c> terminal waits for exact-target
     ///     Core admission without occupying the caller thread.
     /// </summary>
-    RoutedSendOperation Send();
+    SendOperation Send();
 
     /// <summary>
     ///     Gets DEALER-specific socket options.

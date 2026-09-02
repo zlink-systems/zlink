@@ -21,11 +21,4 @@ internal static partial class NativeMethods
     internal static extern int zlink_timer_recv(IntPtr timer,
         out ulong fireCount);
 
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int zlink_timer_handler(IntPtr timer,
-        ZlinkTimerHandlerDelegate handler, IntPtr userData);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    internal delegate void ZlinkTimerHandlerDelegate(IntPtr timer,
-        ulong fireCount, IntPtr userData);
 }

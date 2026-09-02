@@ -4,7 +4,7 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
-        <Version>0.15.2</Version>
+        <Version>0.16.0</Version>
         <AssemblyName>Systems.Zlink</AssemblyName>
         <PackageId>Systems.Zlink</PackageId>
         <RootNamespace>Systems.Zlink</RootNamespace>
@@ -38,18 +38,18 @@
     </ItemGroup>
     <Target Name="ValidateCorePackageInput" BeforeTargets="Pack">
         <Error Condition="'$(ZLinkLinuxX64NativeRoot)' == '' And '$(ZLinkWindowsX64NativeRoot)' == ''"
-                Text="ZLinkLinuxX64NativeRoot or ZLinkWindowsX64NativeRoot must identify the approved Core 0.15.1 package runtime directory." />
+                Text="ZLinkLinuxX64NativeRoot or ZLinkWindowsX64NativeRoot must identify the approved Core 0.16.0 package runtime directory." />
         <Error Condition="'$(ZLinkCoreVersion)' == ''"
-               Text="ZLinkCoreVersion must identify the approved Core 0.15.1 package version." />
+               Text="ZLinkCoreVersion must identify the approved Core 0.16.0 package version." />
         <Error Condition="'$(ZLinkCoreSource)' != 'local' And ('$(ZLinkCoreProvenancePath)' == '' Or !Exists('$(ZLinkCoreProvenancePath)'))"
-               Text="ZLinkCoreProvenancePath must identify the approved Core 0.15.1 package provenance." />
+               Text="ZLinkCoreProvenancePath must identify the approved Core 0.16.0 package provenance." />
         <Error Condition="'$(ZLinkLinuxX64NativeRoot)' != '' And !Exists('$(ZLinkLinuxX64NativeRoot)\libzlink.so')"
-               Text="The approved Core 0.15.1 package is missing libzlink.so." />
+               Text="The approved Core 0.16.0 package is missing libzlink.so." />
         <Error Condition="'$(ZLinkLinuxX64NativeRoot)' != '' And !Exists('$(ZLinkLinuxX64NativeRoot)\libzlink.so.0')"
-               Text="The approved Core 0.15.1 package is missing libzlink.so.0." />
+               Text="The approved Core 0.16.0 package is missing libzlink.so.0." />
         <Error Condition="'$(ZLinkLinuxX64NativeRoot)' != '' And !Exists('$(ZLinkLinuxX64NativeRoot)\libzlink.so.$(ZLinkCoreVersion)')"
-               Text="The approved Core 0.15.1 package is missing its exact versioned runtime." />
+               Text="The approved Core 0.16.0 package is missing its exact versioned runtime." />
         <Error Condition="'$(ZLinkWindowsX64NativeRoot)' != '' And !Exists('$(ZLinkWindowsX64NativeRoot)\zlink.dll')"
-                Text="The approved Core 0.15.1 package is missing zlink.dll." />
+                Text="The approved Core 0.16.0 package is missing zlink.dll." />
     </Target>
 </Project>

@@ -260,7 +260,7 @@ public enum MonitorEventFlags : uint
     ///     Set on <see cref="MonitorEventType.FlowStateStale" /> when the
     ///     frame named a different connection generation.
     ///     <see cref="MonitorEvent.Value" /> then carries the received
-    ///     generation, and <see cref="MonitorEvent.TransportPairGeneration" />
+    ///     generation, and <see cref="MonitorEvent.ConnectionId" />
     ///     carries the current one.
     /// </summary>
     FlowStateStaleGeneration = 1u << 2,

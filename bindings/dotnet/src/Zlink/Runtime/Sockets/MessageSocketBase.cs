@@ -44,11 +44,6 @@ internal abstract class ReceivingMessageSocketBase : ConnectableSocketBase,
         return Kernel.ReceiveInto(result, (int)flags);
     }
 
-    internal void OnReceive(SocketRecvHandler handler)
-    {
-        Kernel.RecvHandler(handler);
-    }
-
     /// <summary>
     ///     Receive one wire part into <paramref name="result" />. This exposes the
     ///     single-part receive primitive directly; when <paramref name="hasMore" />
@@ -94,9 +89,9 @@ internal abstract class MessageSocketBase : ReceivingMessageSocketBase,
     ///     Start a send operation (operation builder).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public RoutedSendOperation Send()
+    public SendOperation Send()
     {
-        return new MessageSocketSendOperation(this);
+        return new SocketSendOperation(this);
     }
 
     /// <summary>
@@ -112,7 +107,7 @@ internal abstract class MessageSocketBase : ReceivingMessageSocketBase,
     internal bool SendCore(Message message, SendFlags flags = SendFlags.None)
     {
         if ((flags & SendFlags.DontWait) != 0)
-            return SocketKernel.TrySendOrThrow(
+            return SocketKernel.InterpretNoWaitResult(
                 Kernel.SendMessageResultUnchecked(message, (int)flags));
 
         Kernel.SendMessageUnchecked(message, flags);
@@ -126,7 +121,7 @@ internal abstract class MessageSocketBase : ReceivingMessageSocketBase,
         if (parts.Count == 1)
             return SendCore(parts[0], flags);
         if ((flags & SendFlags.DontWait) != 0)
-            return SocketKernel.TrySendOrThrow(Kernel.SendNoWaitResult(parts));
+            return SocketKernel.InterpretNoWaitResult(Kernel.SendNoWaitResult(parts));
 
         Kernel.Send(parts, flags);
         return true;

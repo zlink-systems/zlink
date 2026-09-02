@@ -112,17 +112,6 @@ public partial class CommonSocketOptions
     }
 
     /// <summary>
-    ///     Gets or sets how long a blocking send waits to enqueue a message before
-    ///     failing; null blocks indefinitely.
-    /// </summary>
-    public TimeSpan? SendTimeout
-    {
-        get => DecodeDuration(Socket.GetOption(SocketOptions.SndTimeo));
-        set => Socket.SetOption(SocketOptions.SndTimeo,
-            EncodeDuration(value, nameof(value)));
-    }
-
-    /// <summary>
     ///     Gets or sets the time limit for a single connection attempt; null uses
     ///     the OS default.
     /// </summary>

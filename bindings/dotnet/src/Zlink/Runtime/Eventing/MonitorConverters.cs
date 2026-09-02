@@ -24,7 +24,7 @@ internal static class MonitorConverters
         return new MonitorEvent((MonitorEventType)(evt.Event & 0xFFFFFFFFuL),
             evt.Value, RoutingIdCodec.ToRoutingId(
                 NativeHelpers.ReadRoutingId(ref evt.RoutingId)),
-            local, remote, evt.TransportPairId, evt.TransportPairGeneration,
+            local, remote, evt.ConnectionId, evt.TransportLane,
             (MonitorEventFlags)evt.Flags);
     }
 

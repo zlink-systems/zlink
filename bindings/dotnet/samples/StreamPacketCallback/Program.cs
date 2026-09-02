@@ -1,4 +1,3 @@
-using System.Threading;
 using SampleCommon;
 using Systems.Zlink;
 
@@ -13,31 +12,22 @@ internal static class Program
         using var ctx = Zlink.CreateContext();
         using var stream = ctx.CreateStreamSocket();
         stream.Options.Linger = TimeSpan.Zero;
+        stream.Options.ReceiveMode = StreamReceiveMode.Packet;
         string endpoint = SampleSupport.NewEndpoint("tcp", "sample");
         int port = SampleSupport.ExtractPort(endpoint);
         using var monitor = stream.MonitorOpen(SocketEvent.Accepted);
         stream.Bind(endpoint);
 
-        using var signal = new ManualResetEventSlim(false);
-        string? callbackPayload = null;
-        StreamPacketHandler handler = (routingId, header, body) =>
-        {
-            using (header)
-            using (body)
-            {
-                callbackPayload = body.GetString();
-            }
-            signal.Set();
-        };
-        stream.OnPacket(handler);
-
         using var client = SampleSupport.ConnectRawClient(port);
         SampleSupport.WaitMonitorEvent(monitor, 5000, SocketEvent.Accepted);
         SampleSupport.SendStreamPacket(client.GetStream(), "hello-stream"u8);
-        SampleSupport.WaitOrThrow(() => signal.IsSet, 2000,
-            "stream packet callback timeout");
+        using var packet = StreamPacket.Create();
+        if (!stream.RecvPacket(packet))
+            throw new InvalidOperationException("packet receive failed");
+        string callbackPayload = packet.Body?.GetString()
+            ?? throw new InvalidOperationException("missing packet body");
         Console.WriteLine(
-            $"[stream/packet-callback] send: \"hello-stream\" -> recv: \"{callbackPayload}\"");
+            $"[stream/packet-pull] send: \"hello-stream\" -> recv: \"{callbackPayload}\"");
         // --8<-- [end:doc]
     }
 }

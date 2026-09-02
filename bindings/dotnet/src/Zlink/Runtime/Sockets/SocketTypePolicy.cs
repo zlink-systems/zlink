@@ -39,7 +39,7 @@ internal sealed class SocketTypePolicy
                                             || SocketType == SocketType.Dealer,
             SocketCapability.MessageReceive => SocketType == SocketType.Pair
                                                || SocketType == SocketType.Dealer,
-            SocketCapability.RoutedSend => SocketType == SocketType.Router
+            SocketCapability.TargetedSend => SocketType == SocketType.Router
                                            || SocketType == SocketType.Stream,
             SocketCapability.RoutedReceive => SocketType == SocketType.Router
                                               || SocketType == SocketType.Stream,
@@ -85,7 +85,7 @@ internal sealed class SocketTypePolicy
     {
         MessageSend,
         MessageReceive,
-        RoutedSend,
+        TargetedSend,
         RoutedReceive,
         Publish,
         SubscriptionControl,

@@ -42,14 +42,14 @@ internal sealed partial class SocketKernel
     private void SendCore(ref ZlinkRoutingId routingId,
         ReadOnlySpan<Message> parts, int flags, string paramName)
     {
-        SubmitMultipartCore(MultipartSubmitKind.RoutedSend, null, ref routingId,
+        SubmitMultipartCore(MultipartSubmitKind.TargetedSend, null, ref routingId,
             parts, flags, paramName, false);
     }
 
     private SendResult SendNoWaitResultCore(ref ZlinkRoutingId routingId,
         ReadOnlySpan<Message> parts, string paramName)
     {
-        return SubmitMultipartCore(MultipartSubmitKind.RoutedSend, null,
+        return SubmitMultipartCore(MultipartSubmitKind.TargetedSend, null,
             ref routingId, parts, DontWaitFlag, paramName,
             true);
     }
@@ -100,7 +100,7 @@ internal sealed partial class SocketKernel
                     {
                         MultipartSubmitKind.Send => NativeMethods.zlink_send_part(
                             Handle, ref nativeParts[i], flags, partFlag),
-                        MultipartSubmitKind.RoutedSend =>
+                        MultipartSubmitKind.TargetedSend =>
                             NativeMethods.zlink_send_part_rid(Handle,
                                 ref routingId, ref nativeParts[i], flags, partFlag),
                         _ => throw new InvalidOperationException()
@@ -166,7 +166,7 @@ internal sealed partial class SocketKernel
             MultipartSubmitKind.Publish => mapNoWaitResult
                 ? PublishNoWaitSingleCore(topic!, part)
                 : SubmitSinglePublish(topic!, part, flags),
-            MultipartSubmitKind.RoutedSend => mapNoWaitResult
+            MultipartSubmitKind.TargetedSend => mapNoWaitResult
                 ? SendSingleResultCore(ref routingId, part, flags)
                 : SubmitSingle(ref routingId, part, flags),
             _ => throw new InvalidOperationException()
@@ -196,6 +196,6 @@ internal sealed partial class SocketKernel
     {
         Send,
         Publish,
-        RoutedSend
+        TargetedSend
     }
 }

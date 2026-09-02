@@ -31,7 +31,6 @@ internal static class PerfMultiDealerRouterClient
                 var client = ctx.CreateDealerSocket();
                 ApplyMultiSocketOptions(client, options);
                 ConfigureTlsClientIfNeeded(client, options.Transport);
-                client.Options.SendTimeout = TimeSpan.FromMilliseconds(sndTimeoutMs);
                 client.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(rcvTimeoutMs);
                 client.SetRoutingId(RoutingId.From(
                     System.Text.Encoding.ASCII.GetBytes($"CLIENT-{i}")));

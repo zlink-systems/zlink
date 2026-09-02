@@ -18,27 +18,17 @@ internal sealed partial class SocketKernel : IDisposable
 
     private void DisposeCore()
     {
-        _handle.Dispose();
-
-        // The Core raw API has no STREAM detach entry point; the packet
-        // callback lifecycle ends with the successful socket close. Clearing the
-        // managed stream callback state keeps the pinned delegates collectable.
-        if (_streamAttached)
+        _completion?.PrepareClose();
+        try
         {
-            _streamAttached = false;
-            _callbacks.ClearStream();
+            _handle.Dispose();
         }
-
-        // Core delivers a terminal completion for every operation still
-        // pending when the socket closes, so nothing is drained here. Managed
-        // completion state changes only after Core accepted the close; EBUSY
-        // leaves the native handle and every managed callback intact.
-        _sendCompletion?.BeginClose();
-
-        // Core no longer holds the reverse-P/Invoke stub once the socket is
-        // closed, so the completion delegate root can finally be released.
-        _sendCompletion?.ReleaseAfterNativeClose();
-        _callbacks.ClearAllNonStream();
+        catch
+        {
+            _completion?.CancelClose();
+            throw;
+        }
+        _completion?.CompleteClose();
         GC.SuppressFinalize(this);
     }
 }

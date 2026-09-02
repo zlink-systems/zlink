@@ -20,19 +20,19 @@ public sealed class test_request_reply
         string endpoint = CoreTestSupport.NewEndpoint("inproc", "request-sync");
         router.Bind(endpoint);
         dealer.Connect(endpoint);
-        Thread.Sleep(50);
+        CoreTestSupport.WaitReady(dealer);
 
         Task server = Task.Run(() => ReplyOnce(router, "sync-pong"));
         using Message request = Message.From("sync-ping");
         IReadOnlyList<Message> reply = dealer.Request().Message(request)
-            .Timeout(TimeSpan.FromSeconds(2)).Submit(SendFlags.None);
+            .Timeout(TimeSpan.FromSeconds(2)).Submit();
         Assert.Equal("sync-pong", reply[0].GetString());
         Zlink.MultipartClose(reply);
         await server;
     }
 
     [Fact]
-    public async Task request_sync_callback_terminal_delivers_reply()
+    public async Task request_async_terminal_delivers_reply()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -43,25 +43,15 @@ public sealed class test_request_reply
         string endpoint = CoreTestSupport.NewEndpoint("inproc", "request-callback");
         router.Bind(endpoint);
         dealer.Connect(endpoint);
-        Thread.Sleep(50);
+        CoreTestSupport.WaitReady(dealer);
 
         Task server = Task.Run(() => ReplyOnce(router, "callback-pong"));
-        using var completed = new ManualResetEventSlim(false);
-        RequestResult result = RequestResult.InternalError;
-        IReadOnlyList<Message>? reply = null;
         using Message request = Message.From("callback-ping");
-        dealer.Request().Message(request).Timeout(TimeSpan.FromSeconds(2))
-            .Submit(SendFlags.None, (value, parts) =>
-            {
-                result = value;
-                reply = parts;
-                completed.Set();
-            });
+        IReadOnlyList<Message> reply = await dealer.Request().Message(request)
+            .Timeout(TimeSpan.FromSeconds(2)).Async();
 
-        Assert.True(completed.Wait(TimeSpan.FromSeconds(5)));
-        Assert.Equal(RequestResult.Ok, result);
-        Assert.Equal("callback-pong", Assert.Single(reply!).GetString());
-        Zlink.MultipartClose(reply!);
+        Assert.Equal("callback-pong", Assert.Single(reply).GetString());
+        Zlink.MultipartClose(reply);
         await server;
     }
 
@@ -99,7 +89,7 @@ public sealed class test_request_reply
         string endpoint = CoreTestSupport.NewEndpoint("inproc", "request-reply");
         routerSocket.Bind(endpoint);
         dealerSocket.Connect(endpoint);
-        Thread.Sleep(50);
+        CoreTestSupport.WaitReady(dealerSocket);
 
         using var handled = new ManualResetEventSlim(false);
         Task serverTask = Task.Run(() =>
@@ -108,13 +98,12 @@ public sealed class test_request_reply
             routerSocket.Recv(received);
             try
             {
-                Assert.True(received.RequestSeq.HasValue);
-                Assert.NotEqual(0UL, received.RequestSeq.Value);
+                Assert.True(received.ReplyToken is not null);
                 Assert.Equal("ping", received.Parts[0].GetString());
                 using Message reply = Message.From("pong");
                 routerSocket.Reply(
                     received.RoutingId ?? throw new InvalidOperationException(
-                        "missing routing id"), received.RequestSeq.Value)
+                        "missing routing id"), received.ReplyToken!)
                     .Message(reply).Submit();
                 handled.Set();
             }
@@ -161,7 +150,7 @@ public sealed class test_request_reply
         client.Options.SetConnectRoutingId(serverRid);
         server.Bind(endpoint);
         client.Connect(endpoint);
-        Thread.Sleep(50);
+        CoreTestSupport.WaitReady(client);
 
         using Message request = Message.From("ping");
         Task<IReadOnlyList<Message>> completion = client.Request(serverRid)
@@ -171,7 +160,7 @@ public sealed class test_request_reply
 
         using Received received = RecvWithRetry(server);
         Assert.Equal(ReceivedMessageType.Request, received.MessageType);
-        Assert.True(received.RequestSeq.HasValue);
+        Assert.True(received.ReplyToken is not null);
         Assert.Equal("ping", received.Parts[0].GetString());
         ReplyOperation detachedReply = received.Reply();
         received.Dispose();
@@ -205,7 +194,7 @@ public sealed class test_request_reply
             "request-then-unsolicited");
         router.Bind(endpoint);
         dealer.Connect(endpoint);
-        Thread.Sleep(50);
+        CoreTestSupport.WaitReady(dealer);
 
         using Message request = Message.From("hello");
         Task<IReadOnlyList<Message>> replyTask = dealer.Request()
@@ -216,10 +205,10 @@ public sealed class test_request_reply
         Assert.True(router.Recv(inbound));
         RoutingId sourceRid = inbound.RoutingId
             ?? throw new InvalidOperationException("missing routing id");
-        ulong requestSeq = inbound.RequestSeq
-            ?? throw new InvalidOperationException("missing request sequence");
+        ReplyToken replyToken = inbound.ReplyToken
+            ?? throw new InvalidOperationException("missing reply token");
         using Message admitted = Message.From("admitted");
-        router.Reply(sourceRid, requestSeq)
+        router.Reply(sourceRid, replyToken)
             .Message(admitted)
             .Submit();
         IReadOnlyList<Message> reply = await replyTask;
@@ -249,7 +238,7 @@ public sealed class test_request_reply
             "request-then-unsolicited-dontwait");
         router.Bind(endpoint);
         dealer.Connect(endpoint);
-        Thread.Sleep(50);
+        CoreTestSupport.WaitReady(dealer);
 
         using Message request = Message.From("hello");
         Task<IReadOnlyList<Message>> replyTask = dealer.Request()
@@ -266,12 +255,12 @@ public sealed class test_request_reply
         Received inbound = RecvWithRetry(router);
         RoutingId sourceRid = inbound.RoutingId
             ?? throw new InvalidOperationException("missing routing id");
-        ulong requestSeq = inbound.RequestSeq
-            ?? throw new InvalidOperationException("missing request sequence");
+        ReplyToken replyToken = inbound.ReplyToken
+            ?? throw new InvalidOperationException("missing reply token");
         foreach (Message part in inbound.Parts) part.Dispose();
 
         using Message admitted = Message.From("admitted");
-        router.Reply(sourceRid, requestSeq)
+        router.Reply(sourceRid, replyToken)
             .Message(admitted)
             .Submit();
         IReadOnlyList<Message> reply = await replyTask;
@@ -286,357 +275,6 @@ public sealed class test_request_reply
         dealer.Disconnect(endpoint);
     }
 
-    [Fact]
-    public async Task dealer_received_reply_routes_same_sequence_to_source_peer()
-    {
-        if (!CoreTestSupport.IsNativeAvailable())
-            return;
-
-        using var ctx = Zlink.CreateContext();
-        using var server = ctx.CreateDealerSocket();
-        using var clientA = ctx.CreateDealerSocket();
-        using var clientB = ctx.CreateDealerSocket();
-
-        string endpoint = CoreTestSupport.NewEndpoint("inproc",
-            "dealer-directed-reply");
-        server.Bind(endpoint);
-        clientA.Connect(endpoint);
-        clientB.Connect(endpoint);
-        Thread.Sleep(50);
-
-        using Message requestA = Message.From("from-a");
-        using Message requestB = Message.From("from-b");
-        Task<IReadOnlyList<Message>> requestATask = clientA.Request()
-            .Message(requestA)
-            .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
-        Task<IReadOnlyList<Message>> requestBTask = clientB.Request()
-            .Message(requestB)
-            .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
-
-        Received? receivedA = null;
-        Received? receivedB = null;
-        for (int i = 0; i < 2; i++)
-        {
-            Received received = RecvWithRetry(server);
-            Assert.Equal(ReceivedMessageType.Request, received.MessageType);
-            Assert.True(received.RequestSeq.HasValue);
-            Assert.NotEqual(0UL, received.RequestSeq.Value);
-            string payload = received.Parts[0].GetString();
-            if (payload == "from-a")
-                receivedA = received;
-            else if (payload == "from-b")
-                receivedB = received;
-            else
-            {
-                received.Dispose();
-                throw new InvalidOperationException(
-                    $"Unexpected payload '{payload}'.");
-            }
-        }
-
-        Assert.NotNull(receivedA);
-        Assert.NotNull(receivedB);
-        Assert.NotEqual(receivedA!.RequestSeq, receivedB!.RequestSeq);
-
-        using Message replyB = Message.From("reply-b");
-        using Message replyA = Message.From("reply-a");
-        receivedB.Reply().Message(replyB).Submit();
-        receivedA.Reply().Message(replyA).Submit();
-        receivedA.Dispose();
-        receivedB.Dispose();
-
-        IReadOnlyList<Message> clientAReply = await requestATask;
-        Assert.Equal("reply-a", clientAReply[0].GetString());
-        Zlink.MultipartClose(clientAReply);
-
-        IReadOnlyList<Message> clientBReply = await requestBTask;
-        Assert.Equal("reply-b", clientBReply[0].GetString());
-        Zlink.MultipartClose(clientBReply);
-    }
-
-    [Fact]
-    public async Task dealer_received_reply_routes_when_request_uses_dontwait_callback()
-    {
-        if (!CoreTestSupport.IsNativeAvailable())
-            return;
-
-        using var ctx = Zlink.CreateContext();
-        using var server = ctx.CreateDealerSocket();
-        using var client = ctx.CreateDealerSocket();
-
-        string endpoint = CoreTestSupport.NewEndpoint("inproc",
-            "dealer-dontwait-directed-reply");
-        server.Bind(endpoint);
-        client.Connect(endpoint);
-        Thread.Sleep(50);
-
-        using Message request = Message.From("from-client");
-        Task<IReadOnlyList<Message>> completion = client.Request()
-            .Message(request)
-            .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
-
-        using Received received = RecvWithRetry(server);
-        Assert.Equal(ReceivedMessageType.Request, received.MessageType);
-        Assert.True(received.RequestSeq.HasValue);
-        Assert.Equal("from-client", received.Parts[0].GetString());
-
-        using Message reply = Message.From("reply");
-        received.Reply().Message(reply).Submit();
-
-        IReadOnlyList<Message> clientReply = await completion.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.Equal("reply", clientReply[0].GetString());
-        Zlink.MultipartClose(clientReply);
-    }
-
-    [Fact]
-    public async Task dealer_received_reply_routes_over_tcp_with_async_request()
-    {
-        if (!CoreTestSupport.IsNativeAvailable())
-            return;
-
-        using var ctx = Zlink.CreateContext();
-        using var server = ctx.CreateDealerSocket();
-        using var client = ctx.CreateDealerSocket();
-
-        string endpoint = CoreTestSupport.NewEndpoint("tcp",
-            "dealer-dontwait-tcp-directed-reply");
-        server.Bind(endpoint);
-        client.Connect(endpoint);
-        Thread.Sleep(100);
-
-        using Message request = Message.From("from-client");
-        Task<IReadOnlyList<Message>> completion = client.Request()
-            .Message(request)
-            .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
-
-        using Received received = RecvWithRetry(server);
-        Assert.Equal(ReceivedMessageType.Request, received.MessageType);
-        Assert.True(received.RequestSeq.HasValue);
-        Assert.Equal("from-client", received.Parts[0].GetString());
-
-        using Message reply = Message.From("reply");
-        received.Reply().Message(reply).Submit();
-
-        IReadOnlyList<Message> clientReply = await completion.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.Equal("reply", clientReply[0].GetString());
-        Zlink.MultipartClose(clientReply);
-    }
-
-    [Fact]
-    public async Task dealer_received_multipart_reply_routes_over_tcp_with_async_request()
-    {
-        if (!CoreTestSupport.IsNativeAvailable())
-            return;
-
-        using var ctx = Zlink.CreateContext();
-        using var server = ctx.CreateDealerSocket();
-        using var client = ctx.CreateDealerSocket();
-
-        string endpoint = CoreTestSupport.NewEndpoint("tcp",
-            "dealer-dontwait-tcp-multipart-reply");
-        server.Bind(endpoint);
-        client.Connect(endpoint);
-        Thread.Sleep(100);
-
-        using Message requestHeader = Message.From("request-header");
-        using Message requestBody = Message.From("request-body");
-        Task<IReadOnlyList<Message>> completion = client.Request()
-            .Messages([requestHeader, requestBody])
-            .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
-
-        using Received received = RecvWithRetry(server);
-        Assert.Equal(ReceivedMessageType.Request, received.MessageType);
-        Assert.True(received.RequestSeq.HasValue);
-        Assert.Equal("request-header", received.Parts[0].GetString());
-        Assert.Equal("request-body", received.Parts[1].GetString());
-
-        using Message replyHeader = Message.From("reply-header");
-        using Message replyBody = Message.From("reply-body");
-        received.Reply().Messages([replyHeader, replyBody]).Submit();
-
-        IReadOnlyList<Message> clientReply = await completion.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.Equal("reply-header", clientReply[0].GetString());
-        Assert.Equal("reply-body", clientReply[1].GetString());
-        Zlink.MultipartClose(clientReply);
-    }
-
-    [Fact]
-    public async Task dealer_received_large_first_part_multipart_reply_routes_over_tcp()
-    {
-        if (!CoreTestSupport.IsNativeAvailable())
-            return;
-
-        using var ctx = Zlink.CreateContext();
-        using var server = ctx.CreateDealerSocket();
-        using var client = ctx.CreateDealerSocket();
-
-        string endpoint = CoreTestSupport.NewEndpoint("tcp",
-            "dealer-large-first-part-reply");
-        server.Bind(endpoint);
-        client.Connect(endpoint);
-        Thread.Sleep(100);
-
-        using Message requestHeader = Message.From("request-header");
-        using Message requestBody = Message.From("request-body");
-        Task<IReadOnlyList<Message>> completion = client.Request()
-            .Messages([requestHeader, requestBody])
-            .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
-
-        using Received received = RecvWithRetry(server);
-        Assert.Equal(ReceivedMessageType.Request, received.MessageType);
-        Assert.True(received.RequestSeq.HasValue);
-
-        var replyHeaderText =
-            """{"kind":2,"channelName":"profile.mesh","messageName":"ProfileRequest","contentType":"application/json","correlationId":"reply","deadline":null,"topic":null,"errorCode":null,"errorMessage":null,"source":null}""";
-        using Message replyHeader = Message.From(replyHeaderText);
-        using Message replyBody = Message.From("""{"value":"reply","providerRid":"api-a"}""");
-        received.Reply().Messages([replyHeader, replyBody]).Submit();
-
-        IReadOnlyList<Message> clientReply = await completion.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.Equal(replyHeaderText, clientReply[0].GetString());
-        Assert.Equal("""{"value":"reply","providerRid":"api-a"}""", clientReply[1].GetString());
-        Zlink.MultipartClose(clientReply);
-    }
-
-    [Fact]
-    public async Task dealer_received_reply_routes_from_one_of_two_bound_tcp_peers_async()
-    {
-        if (!CoreTestSupport.IsNativeAvailable())
-            return;
-
-        using var serverAContext = Zlink.CreateContext();
-        using var serverBContext = Zlink.CreateContext();
-        using var clientContext = Zlink.CreateContext();
-        using var serverA = serverAContext.CreateDealerSocket();
-        using var serverB = serverBContext.CreateDealerSocket();
-        using var client = clientContext.CreateDealerSocket();
-
-        string endpointA = CoreTestSupport.NewEndpoint("tcp",
-            "dealer-dontwait-two-peers-a");
-        string endpointB = CoreTestSupport.NewEndpoint("tcp",
-            "dealer-dontwait-two-peers-b");
-        serverA.Bind(endpointA);
-        serverB.Bind(endpointB);
-        client.Connect(endpointA);
-        client.Connect(endpointB);
-        Thread.Sleep(100);
-
-        using Message requestHeader = Message.From("request-header");
-        using Message requestBody = Message.From("request-body");
-        Task<IReadOnlyList<Message>> completion = client.Request()
-            .Messages([requestHeader, requestBody])
-            .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
-
-        Received received = RecvWithRetry(serverA, serverB);
-        Assert.Equal(ReceivedMessageType.Request, received.MessageType);
-        Assert.True(received.RequestSeq.HasValue);
-        Assert.Equal("request-header", received.Parts[0].GetString());
-        Assert.Equal("request-body", received.Parts[1].GetString());
-
-        using Message replyHeader = Message.From("reply-header");
-        using Message replyBody = Message.From("reply-body");
-        received.Reply().Messages([replyHeader, replyBody]).Submit();
-        received.Dispose();
-
-        IReadOnlyList<Message> clientReply = await completion.WaitAsync(
-            TimeSpan.FromSeconds(2));
-        Assert.Equal("reply-header", clientReply[0].GetString());
-        Assert.Equal("reply-body", clientReply[1].GetString());
-        Zlink.MultipartClose(clientReply);
-    }
-
-    [Fact]
-    public async Task dealer_received_reply_routes_with_framework_dealer_mesh_options()
-    {
-        if (!CoreTestSupport.IsNativeAvailable())
-            return;
-
-        using var ctx = Zlink.CreateContext();
-        using var serverA = ctx.CreateDealerSocket();
-        using var serverB = ctx.CreateDealerSocket();
-        using var client = ctx.CreateDealerSocket();
-
-        serverA.Options.PeerWeight = 100;
-        serverB.Options.PeerWeight = 100;
-        client.Options.PeerWeight = 100;
-
-        string endpointA = CoreTestSupport.NewEndpoint("tcp",
-            "dealer-framework-options-a");
-        string endpointB = CoreTestSupport.NewEndpoint("tcp",
-            "dealer-framework-options-b");
-        serverA.Bind(endpointA);
-        serverB.Bind(endpointB);
-        client.Connect(endpointA);
-        client.Connect(endpointB);
-        Thread.Sleep(100);
-
-        using Message requestHeader = Message.From("request-header");
-        using Message requestBody = Message.From("request-body");
-        Task<IReadOnlyList<Message>> completion = client.Request()
-            .Messages([requestHeader, requestBody])
-            .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
-
-        using Received received = RecvWithRetry(serverA, serverB);
-        Assert.Equal(ReceivedMessageType.Request, received.MessageType);
-        Assert.True(received.RequestSeq.HasValue);
-        Assert.Equal("request-header", received.Parts[0].GetString());
-        Assert.Equal("request-body", received.Parts[1].GetString());
-
-        using Message replyHeader = Message.From("reply-header");
-        using Message replyBody = Message.From("reply-body");
-        received.Reply().Messages([replyHeader, replyBody]).Submit();
-
-        IReadOnlyList<Message> clientReply = await completion.WaitAsync(
-            TimeSpan.FromSeconds(2));
-        Assert.Equal("reply-header", clientReply[0].GetString());
-        Assert.Equal("reply-body", clientReply[1].GetString());
-        Zlink.MultipartClose(clientReply);
-    }
-
-    [Fact]
-    public async Task dealer_received_reply_routes_when_submitted_from_another_thread()
-    {
-        if (!CoreTestSupport.IsNativeAvailable())
-            return;
-
-        using var serverContext = Zlink.CreateContext();
-        using var clientContext = Zlink.CreateContext();
-        using var server = serverContext.CreateDealerSocket();
-        using var client = clientContext.CreateDealerSocket();
-
-        string endpoint = CoreTestSupport.NewEndpoint("tcp",
-            "dealer-reply-from-another-thread");
-        server.Bind(endpoint);
-        client.Connect(endpoint);
-        Thread.Sleep(100);
-
-        using Message request = Message.From("request");
-        Task<IReadOnlyList<Message>> completion = client.Request()
-            .Message(request)
-            .Timeout(TimeSpan.FromSeconds(2))
-            .Async();
-
-        Received received = RecvWithRetry(server);
-        await Task.Run(() =>
-        {
-            using Message reply = Message.From("reply");
-            received.Reply().Message(reply).Submit();
-            received.Dispose();
-        });
-
-        IReadOnlyList<Message> clientReply = await completion.WaitAsync(
-            TimeSpan.FromSeconds(2));
-        Assert.Equal("reply", clientReply[0].GetString());
-        Zlink.MultipartClose(clientReply);
-    }
 
     [Fact]
     public async Task request_router_preserves_data_receive_surface()
@@ -652,7 +290,7 @@ public sealed class test_request_reply
             "request-reply-data");
         routerSocket.Bind(endpoint);
         dealerSocket.Connect(endpoint);
-        Thread.Sleep(50);
+        CoreTestSupport.WaitReady(dealerSocket);
 
         using Message payload = Message.From("plain-data");
         await dealerSocket.Send().Message(payload).Async();
@@ -687,7 +325,7 @@ public sealed class test_request_reply
             "request-reply-callback-owned");
         routerSocket.Bind(endpoint);
         dealerSocket.Connect(endpoint);
-        Thread.Sleep(50);
+        CoreTestSupport.WaitReady(dealerSocket);
 
         using var handled = new ManualResetEventSlim(false);
         Message? owned = null;
@@ -701,7 +339,9 @@ public sealed class test_request_reply
                 using Message reply = Message.From("pong-owned");
                 routerSocket.Reply(
                     received.RoutingId ?? throw new InvalidOperationException(
-                        "missing routing id"), received.RequestSeq ?? 0UL)
+                        "missing routing id"), received.ReplyToken
+                        ?? throw new InvalidOperationException(
+                            "missing reply token"))
                     .Message(reply).Submit();
                 handled.Set();
             }
@@ -748,7 +388,7 @@ public sealed class test_request_reply
     {
         using Received received = RecvWithRetry(router);
         using Message reply = Message.From(payload);
-        router.Reply(received.RoutingId!.Value, received.RequestSeq!.Value)
+        router.Reply(received.RoutingId!.Value, received.ReplyToken!)
             .Message(reply).Submit();
     }
 

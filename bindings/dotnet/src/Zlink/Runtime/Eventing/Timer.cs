@@ -7,9 +7,6 @@ namespace Systems.Zlink;
 internal sealed class Timer : NativeOwner, IZlinkTimer
 {
     private readonly bool _ownsHandle;
-    private Action<IZlinkTimer, ulong>? _handler;
-    private SynchronizationContext? _handlerContext;
-    private NativeMethods.ZlinkTimerHandlerDelegate? _handlerNative;
     private IntPtr _recvPoller;
     private ZlinkPollerEvent[]? _recvPollEvents;
 
@@ -61,29 +58,6 @@ internal sealed class Timer : NativeOwner, IZlinkTimer
         return fireCount;
     }
 
-    public void OnFire(Action<IZlinkTimer, ulong> handler)
-    {
-        if (handler == null)
-            throw new ArgumentNullException(nameof(handler));
-        EnsureNotDisposed();
-
-        _handler = handler;
-        _handlerContext = SynchronizationContext.Current;
-        if (_handlerNative != null)
-            return;
-
-        _handlerNative = OnNativeFire;
-        var rc = NativeMethods.zlink_timer_handler(_handle, _handlerNative,
-            IntPtr.Zero);
-        if (rc != 0)
-        {
-            _handler = null;
-            _handlerContext = null;
-            _handlerNative = null;
-            throw ZlinkException.CreateHandlerException((HandlerResult)rc);
-        }
-    }
-
     public void Close()
     {
         Dispose();
@@ -124,13 +98,11 @@ internal sealed class Timer : NativeOwner, IZlinkTimer
         {
             DestroyRecvPoller(throwOnError);
             MarkClosed();
-            ClearHandler();
             return;
         }
 
         DestroyRecvPoller(throwOnError);
-        _ = DestroyHandle(NativeMethods.zlink_timer_destroy, throwOnError,
-            _ => ClearHandler());
+        _ = DestroyHandle(NativeMethods.zlink_timer_destroy, throwOnError);
     }
 
     private bool PollReadyNoWait()
@@ -200,29 +172,4 @@ internal sealed class Timer : NativeOwner, IZlinkTimer
         return handle;
     }
 
-    private void ClearHandler()
-    {
-        _handler = null;
-        _handlerContext = null;
-        _handlerNative = null;
-    }
-
-    private void OnNativeFire(IntPtr timer, ulong fireCount, IntPtr userData)
-    {
-        _ = timer;
-        _ = userData;
-
-        var handler = _handler;
-        if (handler == null)
-            return;
-
-        try
-        {
-            CallbackDelivery.Post(_handlerContext, () => handler(this, fireCount));
-        }
-        catch (Exception ex)
-        {
-            CallbackExceptionHub.Report(ex);
-        }
-    }
 }

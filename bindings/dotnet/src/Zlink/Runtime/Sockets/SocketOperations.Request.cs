@@ -42,16 +42,10 @@ internal sealed class DealerRequestOperation : RequestOperation,
         return _socket.RequestCore(_parts.Parts, _timeout, ct);
     }
 
-    public IReadOnlyList<Message> Submit(SendFlags flags)
+    public IReadOnlyList<Message> Submit()
     {
         EnsureReadyToSubmit();
-        return _socket.RequestCore(_parts.Parts, _timeout, flags);
-    }
-
-    public void Submit(SendFlags flags, RequestCallback callback)
-    {
-        EnsureReadyToSubmit();
-        _socket.RequestCore(_parts.Parts, _timeout, flags, callback);
+        return _socket.RequestCore(_parts.Parts, _timeout);
     }
 
     private void EnsureReadyToSubmit()
@@ -109,16 +103,10 @@ internal sealed class RouterPeerRequestOperation : RequestOperation,
         return _socket.RequestCore(_peerRid, _parts.Parts, _timeout, ct);
     }
 
-    public IReadOnlyList<Message> Submit(SendFlags flags)
+    public IReadOnlyList<Message> Submit()
     {
         EnsureReadyToSubmit();
-        return _socket.RequestCore(_peerRid, _parts.Parts, _timeout, flags);
-    }
-
-    public void Submit(SendFlags flags, RequestCallback callback)
-    {
-        EnsureReadyToSubmit();
-        _socket.RequestCore(_peerRid, _parts.Parts, _timeout, flags, callback);
+        return _socket.RequestCore(_peerRid, _parts.Parts, _timeout);
     }
 
     private void EnsureReadyToSubmit()

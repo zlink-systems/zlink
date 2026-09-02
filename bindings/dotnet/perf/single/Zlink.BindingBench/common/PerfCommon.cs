@@ -302,7 +302,7 @@ internal static partial class PerfRunner
             try
             {
                 using Message token = Message.From(StopToken.Bytes);
-                sender.Send().Message(token).Submit(SendFlags.None);
+                sender.Send().Message(token).Submit();
                 return true;
             }
             catch (ZlinkException ex)
@@ -380,7 +380,6 @@ internal static partial class PerfRunner
         {
             try
             {
-                sender.Options.SendTimeout = null;
                 if (PerfSocketIo.Publish(sender, topic, StopToken.Bytes,
                         SendFlags.None) > 0)
                     return;
@@ -454,7 +453,6 @@ internal static partial class PerfRunner
             PerfEnv.ReadNonNegative("PERF_ALLOW_MANUAL_SOCKET_OVERRIDES", 0) != 0;
 
         socket.Options.Linger = TimeSpan.Zero;
-        socket.Options.SendTimeout = TimeSpan.FromMilliseconds(sndTimeo);
         socket.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(rcvTimeo);
         if (allowManualOverrides)
         {

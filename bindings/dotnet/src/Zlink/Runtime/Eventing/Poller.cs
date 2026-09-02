@@ -32,17 +32,26 @@ internal sealed class Poller : NativeOwner, IPoller
     public void Add(IZlinkSocket socket, PollEventFlags events, nuint slot)
     {
         EnsureNotDisposed();
-        var socketHandle = SocketInterop.RequirePollableHandle(socket,
-            nameof(socket));
+        var concreteSocket = SocketInterop.RequireSocket(socket, nameof(socket));
+        var socketHandle = concreteSocket.Handle;
         EnumValidation.EnsurePollEvents(events, nameof(events));
+
+        var ownsCompletion = (events & PollEventFlags.PollCompletion) != 0;
+        var completionOwner = concreteSocket.Kernel.Completion;
+        if (ownsCompletion)
+            completionOwner.TransferToPublic(this);
 
         var userData = SlotToUserData(slot);
         var rc = NativeMethods.zlink_poller_add(_handle, socketHandle,
             userData, (short)events);
         if (rc != 0)
+        {
+            if (ownsCompletion)
+                completionOwner.TransferToRuntime(this);
             ZlinkException.ThrowConfigIfError(rc);
+        }
         RegisterItem(new PollItem(PollItemKind.Socket, socket, socketHandle, 0,
-            null, events, slot));
+            null, events, slot, completionOwner, ownsCompletion));
     }
 
     public void AddFd(int fd, PollEventFlags events, nuint slot)
@@ -56,7 +65,7 @@ internal sealed class Poller : NativeOwner, IPoller
         if (rc != 0)
             ZlinkException.ThrowConfigIfError(rc);
         RegisterItem(new PollItem(PollItemKind.Fd, null, IntPtr.Zero, fd, null,
-            events, slot));
+            events, slot, null, false));
     }
 
     public void Add(IZlinkTimer timer, nuint slot)
@@ -70,7 +79,7 @@ internal sealed class Poller : NativeOwner, IPoller
         if (rc != 0)
             ZlinkException.ThrowConfigIfError(rc);
         RegisterItem(new PollItem(PollItemKind.Timer, null, IntPtr.Zero, 0,
-            concreteTimer, PollEventFlags.PollIn, slot));
+            concreteTimer, PollEventFlags.PollIn, slot, null, false));
     }
 
     public void Modify(IZlinkSocket socket, PollEventFlags events)
@@ -85,10 +94,24 @@ internal sealed class Poller : NativeOwner, IPoller
             throw new ArgumentException("socket is not registered",
                 nameof(socket));
 
+        var item = _items[index];
+        var wantsCompletion = (events & PollEventFlags.PollCompletion) != 0;
+        if (!item.OwnsCompletion && wantsCompletion)
+            item.CompletionOwner!.TransferToPublic(this);
+
         var rc = NativeMethods.zlink_poller_modify(_handle, socketHandle,
             (short)events);
-        ZlinkException.ThrowConfigIfError(rc);
-        _items[index].Events = events;
+        if (rc != 0)
+        {
+            if (!item.OwnsCompletion && wantsCompletion)
+                item.CompletionOwner!.TransferToRuntime(this);
+            ZlinkException.ThrowConfigIfError(rc);
+        }
+        var hadCompletion = item.OwnsCompletion;
+        item.Events = events;
+        item.OwnsCompletion = wantsCompletion;
+        if (hadCompletion && !wantsCompletion)
+            item.CompletionOwner!.TransferToRuntime(this);
     }
 
     public void ModifyFd(int fd, PollEventFlags events)
@@ -118,7 +141,10 @@ internal sealed class Poller : NativeOwner, IPoller
 
         var rc = NativeMethods.zlink_poller_remove(_handle, socketHandle);
         ZlinkException.ThrowConfigIfError(rc);
+        var item = _items[index];
         UnregisterItem(index);
+        if (item.OwnsCompletion)
+            item.CompletionOwner!.TransferToRuntime(this);
         return true;
     }
 
@@ -157,17 +183,16 @@ internal sealed class Poller : NativeOwner, IPoller
         EnsureNotDisposed();
 
         _ = DestroyHandle(DestroyNative, throwOnError: true);
+        ReleaseCompletionOwners();
+        _items.Clear();
+        _nativeEvents = Array.Empty<ZlinkPollerEvent>();
 
         _handle = NativeMethods.zlink_poller_new();
         if (_handle == IntPtr.Zero)
         {
             _handle = IntPtr.Zero;
-            _items.Clear();
-            _nativeEvents = Array.Empty<ZlinkPollerEvent>();
             throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
         }
-        _items.Clear();
-        _nativeEvents = Array.Empty<ZlinkPollerEvent>();
     }
 
     public void Close()
@@ -193,9 +218,23 @@ internal sealed class Poller : NativeOwner, IPoller
         if (ready == 0)
             return 0;
 
+        var written = 0;
         for (var i = 0; i < ready; i++)
-            destination[i] = MapEvent(_nativeEvents[i]);
-        return ready;
+        {
+            var nativeEvent = _nativeEvents[i];
+            if ((nativeEvent.Events & (short)PollEventFlags.PollCompletion) != 0)
+            {
+                var itemIndex = FindSocket(nativeEvent.Socket);
+                if (itemIndex >= 0 && _items[itemIndex].OwnsCompletion
+                    && _items[itemIndex].CompletionOwner!.Drain(true) == 0)
+                    nativeEvent.Events &=
+                        unchecked((short)~(short)PollEventFlags.PollCompletion);
+            }
+            if (nativeEvent.Events == 0)
+                continue;
+            destination[written++] = MapEvent(nativeEvent);
+        }
+        return written;
     }
 
     public void Dispose()
@@ -224,6 +263,7 @@ internal sealed class Poller : NativeOwner, IPoller
     {
         _ = DestroyHandle(DestroyNative, throwOnError, _ =>
         {
+            ReleaseCompletionOwners();
             _items.Clear();
             _nativeEvents = Array.Empty<ZlinkPollerEvent>();
         });
@@ -325,6 +365,13 @@ internal sealed class Poller : NativeOwner, IPoller
         _items.RemoveAt(index);
     }
 
+    private void ReleaseCompletionOwners()
+    {
+        foreach (var item in _items)
+            if (item.OwnsCompletion)
+                item.CompletionOwner!.TransferToRuntime(this);
+    }
+
     private void EnsureNotDisposed()
     {
         EnsureNativeHandle(nameof(Poller));
@@ -354,7 +401,8 @@ internal sealed class Poller : NativeOwner, IPoller
     {
         public PollItem(PollItemKind kind, IZlinkSocket? socket,
             IntPtr socketHandle, int fd, Timer? timer, PollEventFlags events,
-            nuint slot)
+            nuint slot, CompletionOwner? completionOwner,
+            bool ownsCompletion)
         {
             Kind = kind;
             Socket = socket;
@@ -363,6 +411,8 @@ internal sealed class Poller : NativeOwner, IPoller
             Timer = timer;
             Events = events;
             Slot = slot;
+            CompletionOwner = completionOwner;
+            OwnsCompletion = ownsCompletion;
         }
 
         public PollItemKind Kind { get; }
@@ -372,6 +422,8 @@ internal sealed class Poller : NativeOwner, IPoller
         public Timer? Timer { get; }
         public PollEventFlags Events { get; set; }
         public nuint Slot { get; }
+        public CompletionOwner? CompletionOwner { get; }
+        public bool OwnsCompletion { get; set; }
         public bool IsSocket => Kind == PollItemKind.Socket;
     }
 }

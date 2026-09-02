@@ -56,8 +56,7 @@ public sealed class test_pair_tcp
 
         using Message part1 = Message.From("hello");
         using Message part2 = Message.From("world");
-        Assert.True(client.Send().Message(part1).Message(part2)
-            .TrySubmit(SendFlags.DontWait));
+        client.Send().Message(part1).Message(part2).Submit();
 
         var received = Received.Create();
         server.Recv(received);
@@ -411,7 +410,7 @@ public sealed class test_pair_tcp
     }
 
     [Fact]
-    public void socket_monitor_attach_handler_snapshot_and_close_work()
+    public void socket_monitor_pull_snapshot_and_close_work()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -425,54 +424,17 @@ public sealed class test_pair_tcp
 
         using ISocketMonitor monitor = server.MonitorOpen(SocketEvent.ConnectionReady
             | SocketEvent.Disconnected);
-        int callbackCount = 0;
-        monitor.OnEvent(_ => Interlocked.Increment(ref callbackCount));
-
         client.Connect(endpoint);
-        Thread.Sleep(50);
+        Assert.NotNull(monitor.Recv());
 
         MonitorStatus snapshot = monitor.Status();
         Assert.Equal<MonitorSourceKind>(MonitorSourceKind.Socket, snapshot.SourceKind);
         Assert.True(snapshot.SndPendingMsgs >= 0);
 
-        Assert.True(CoreTestSupport.WaitUntil(() =>
-            Volatile.Read(ref callbackCount) >= 1, 15000, 10));
-
         monitor.Close();
         Assert.Throws<ObjectDisposedException>(() => monitor.Status());
     }
 
-    [Fact]
-    public void send_nonblocking_reports_backpressured_when_pair_hwm_is_exhausted()
-    {
-        if (!CoreTestSupport.IsNativeAvailable())
-            return;
-
-        using var ctx = Zlink.CreateContext();
-        using var sender = ctx.CreatePairSocket();
-        using var receiver = ctx.CreatePairSocket();
-        string endpoint = CoreTestSupport.NewEndpoint("inproc",
-            "pair-try-send-backpressured");
-
-        sender.Options.SendHighWaterMark = 1;
-        receiver.Options.ReceiveHighWaterMark = 1;
-        sender.Bind(endpoint);
-        receiver.Connect(endpoint);
-        Thread.Sleep(50);
-
-        bool sent = true;
-        byte[] payloadBytes = new byte[64 * 1024];
-        for (int i = 0; i < 16 * 1024; i++)
-        {
-            using Message payload = Message.From(payloadBytes);
-            sent = sender.Send().Message(payload)
-                .TrySubmit(SendFlags.DontWait);
-            if (!sent)
-                break;
-        }
-
-        Assert.False(sent);
-    }
 
     [Fact]
     public void recv_part_reuses_message_storage_and_reports_multipart_boundary()
@@ -492,7 +454,7 @@ public sealed class test_pair_tcp
 
         using Message first = Message.From("first"u8.ToArray());
         using Message second = Message.From("second"u8.ToArray());
-        sender.Send().Message(first).Message(second).Submit(SendFlags.None);
+        sender.Send().Message(first).Message(second).Submit();
 
         using var received = Received.Create();
         Assert.True(CoreTestSupport.WaitUntil(
@@ -527,80 +489,12 @@ public sealed class test_pair_tcp
         Thread.Sleep(50);
 
         using Message payload = Message.From("once");
-        RoutedSendSubmitOperation operation = sender.Send().Message(payload);
-        operation.Submit(SendFlags.None);
+        SendSubmitOperation operation = sender.Send().Message(payload);
+        operation.Submit();
         Assert.Throws<ZlinkConfigException>(() =>
-            operation.Submit(SendFlags.None));
+            operation.Submit());
     }
 
-    [Fact]
-    public void from_bytes_nonblocking_send_completes_borrowed_lifetime()
-    {
-        if (!CoreTestSupport.IsNativeAvailable())
-            return;
-
-        using var ctx = Zlink.CreateContext();
-        using var sender = ctx.CreatePairSocket();
-        using var receiver = ctx.CreatePairSocket();
-        string endpoint = CoreTestSupport.NewEndpoint("inproc",
-            "pair-from-bytes-borrowed-lifetime");
-
-        sender.Options.SendHighWaterMark = 4096;
-        receiver.Options.ReceiveHighWaterMark = 4096;
-        sender.Bind(endpoint);
-        receiver.Connect(endpoint);
-        Thread.Sleep(50);
-
-        byte[] payloadBytes = new byte[64];
-        using var received = Received.Create();
-        for (int i = 0; i < 2048; i++)
-        {
-            payloadBytes[0] = unchecked((byte)i);
-            bool sent = false;
-            while (!sent)
-            {
-                using Message payload = Message.From(payloadBytes);
-                sent = sender.Send()
-                    .Message(payload)
-                    .TrySubmit(SendFlags.DontWait);
-                while (receiver.Recv(received, RecvFlags.DontWait))
-                {
-                }
-            }
-        }
-    }
-
-    [Fact]
-    public void send_nonblocking_returns_false_only_for_backpressured_pair_queue()
-    {
-        if (!CoreTestSupport.IsNativeAvailable())
-            return;
-
-        using var ctx = Zlink.CreateContext();
-        using var sender = ctx.CreatePairSocket();
-        using var receiver = ctx.CreatePairSocket();
-        string endpoint = CoreTestSupport.NewEndpoint("inproc",
-            "pair-public-try-send-backpressured");
-
-        sender.Options.SendHighWaterMark = 1;
-        receiver.Options.ReceiveHighWaterMark = 1;
-        sender.Bind(endpoint);
-        receiver.Connect(endpoint);
-        Thread.Sleep(50);
-
-        bool sent = true;
-        byte[] payloadBytes = new byte[64 * 1024];
-        for (int i = 0; i < 16 * 1024; i++)
-        {
-            using Message payload = Message.From(payloadBytes);
-            sent = sender.Send().Message(payload)
-                .TrySubmit(SendFlags.DontWait);
-            if (!sent)
-                break;
-        }
-
-        Assert.False(sent);
-    }
 
     [Fact]
     public async Task routed_async_reports_not_connected_for_unknown_router_peer()

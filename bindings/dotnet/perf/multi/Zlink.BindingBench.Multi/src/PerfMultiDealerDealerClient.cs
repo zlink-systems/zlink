@@ -30,7 +30,6 @@ internal static class PerfMultiDealerDealerClient
                 var client = ctx.CreateDealerSocket();
                 ApplyMultiSocketOptions(client, options);
                 ConfigureTlsClientIfNeeded(client, options.Transport);
-                client.Options.SendTimeout = TimeSpan.FromMilliseconds(sndTimeoutMs);
                 client.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(rcvTimeoutMs);
                 client.SetRoutingId(RoutingId.From(
                     System.Text.Encoding.ASCII.GetBytes($"client_{i}")));
@@ -138,7 +137,7 @@ internal static class PerfMultiDealerDealerClient
             try
             {
                 using Message message = new(MultiStopToken.AsSpan());
-                socket.Send().Message(message).Submit(SendFlags.None);
+                socket.Send().Message(message).Submit();
                 return true;
             }
             catch (ZlinkSubmitException ex)

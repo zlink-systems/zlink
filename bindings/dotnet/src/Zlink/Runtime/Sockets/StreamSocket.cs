@@ -15,32 +15,15 @@ internal sealed class StreamSocket : RoutedMessageSocketBase, IStreamSocket
 
     public new StreamSocketOptions Options { get; }
 
-    public RoutedSendOperation Send(RoutingId routingId)
+    public SendOperation Send(RoutingId routingId)
     {
-        return new RoutedAsyncSendOperation(this, routingId);
+        return new SocketSendOperation(this, routingId);
     }
 
-    public new SendOperation TrySend(RoutingId routingId)
-    {
-        return base.TrySend(routingId);
-    }
-
-    public void OnPacket(StreamPacketHandler handler)
-    {
-        Kernel.AttachStreamPacket(handler);
-    }
-
-    public bool RecvPart(
-        out RoutingId? sourceRoutingId,
-        out Message? part,
-        out bool hasMore,
+    public bool RecvPacket(StreamPacket result,
         RecvFlags flags = RecvFlags.None)
     {
-        return Kernel.ReceiveStreamPart(
-            out sourceRoutingId,
-            out part,
-            out hasMore,
-            flags);
+        return Kernel.ReceiveStreamPacket(result, flags);
     }
 
     public void DisconnectRid(RoutingId peerRid)

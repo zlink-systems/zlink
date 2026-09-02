@@ -102,13 +102,13 @@ internal sealed partial class SocketKernel
             IntPtr sourceRoutingId;
             if (_policy.UsesRouterRoutedReceiveEnvelope)
             {
-                ulong requestSeq;
+                ulong replyToken;
                 rc = (flags & DontWaitFlag) != 0
                     ? NativeMethods.zlink_router_recv_part_nowait(Handle,
-                        out sourceRoutingId, out requestSeq, ref part,
+                        out sourceRoutingId, out replyToken, ref part,
                         out more, flags)
                     : NativeMethods.zlink_router_recv_part(Handle,
-                        out sourceRoutingId, out requestSeq, ref part,
+                        out sourceRoutingId, out replyToken, ref part,
                         out more, flags);
             }
             else
@@ -190,14 +190,13 @@ internal sealed partial class SocketKernel
     private bool TryReceiveIntoRoutedCore(Received result, int flags)
     {
         var allowNoData = (flags & DontWaitFlag) != 0;
-        if (!ReceiveRoutedParts(flags, out var routingId, out var requestSeq,
-                out var transportPairId, out var transportPairGeneration,
+        if (!ReceiveRoutedParts(flags, out var routingId, out var replyToken,
                 out var singlePart, out var parts, allowNoData))
             return false;
         try
         {
             PopulateRoutedReceivedInto(result, singlePart, parts, routingId,
-                requestSeq, transportPairId, transportPairGeneration);
+                replyToken);
             return true;
         }
         catch
@@ -218,54 +217,26 @@ internal sealed partial class SocketKernel
 
     private void PopulateRoutedReceivedInto(Received result,
         Message? singlePart, MultipartMessageCollection? parts,
-        RoutingIdSnapshot routingId, ulong requestSeq,
-        ulong transportPairId, ulong transportPairGeneration)
+        RoutingIdSnapshot routingId, ulong nativeReplyToken)
     {
-        if (requestSeq == 0)
+        if (nativeReplyToken == 0)
         {
             if (singlePart != null)
                 result.PopulateRoutedSinglePart(singlePart, routingId,
-                    null, null, sendKernel: this,
-                    transportPairId: transportPairId,
-                    transportPairGeneration: transportPairGeneration);
+                    null, sendKernel: this);
             else
                 result.PopulateRoutedMultipart(parts!, routingId,
-                    null, null, sendKernel: this,
-                    transportPairId: transportPairId,
-                    transportPairGeneration: transportPairGeneration);
+                    null, sendKernel: this);
             return;
         }
 
-        // Request-reply context: capture the routing ids and request seq in
-        // a reply handler closure so Received.Reply() can dispatch via the
-        // kernel. This path allocates a RoutingId / byte[] / closure per
-        // recv; non-request-reply routed traffic (the common router-router
-        // / dealer-router echo case) skips this branch entirely.
-        var routingIdBytes = routingId.ToByteArray();
-        var replyRoutingId = routingIdBytes == null
-            ? null
-            : RoutingId.FromOwnedOptionalBytes(routingIdBytes);
-        ReceivedReplyHandler replyHandler = replyParts =>
-        {
-            if (replyRoutingId is null)
-                throw new ZlinkSubmitException(SubmitResult.InvalidArgument,
-                    (int)ErrorCode.EInval);
-            SendReplyCore(replyRoutingId.Value, requestSeq, replyParts);
-        };
+        var replyToken = new ReplyToken(_replyTokenOwner, nativeReplyToken);
 
         if (singlePart != null)
             result.PopulateRoutedSinglePart(singlePart, routingId,
-                requestSeq, replyHandler, CreateRoutedSendHandler(routingId),
-                CreateRoutedSendSingleHandler(routingId),
-                sendKernel: this,
-                transportPairId: transportPairId,
-                transportPairGeneration: transportPairGeneration);
+                replyToken, sendKernel: this);
         else
             result.PopulateRoutedMultipart(parts!, routingId,
-                requestSeq, replyHandler, CreateRoutedSendHandler(routingId),
-                CreateRoutedSendSingleHandler(routingId),
-                sendKernel: this,
-                transportPairId: transportPairId,
-                transportPairGeneration: transportPairGeneration);
+                replyToken, sendKernel: this);
     }
 }

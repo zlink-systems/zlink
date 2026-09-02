@@ -155,7 +155,7 @@ internal static partial class PerfRunner
         }
     }
 
-    internal static void TrySendStopToken(IReadOnlyList<ISocket> activeClients)
+    internal static void SendStopTokenNoWait(IReadOnlyList<ISocket> activeClients)
     {
         if (activeClients == null || activeClients.Count == 0)
             return;

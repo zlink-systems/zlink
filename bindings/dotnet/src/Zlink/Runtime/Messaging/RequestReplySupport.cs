@@ -177,6 +177,23 @@ internal static class RequestReplySupport
         }
     }
 
+    internal static void SubmitPreservingOnFailure(
+        IReadOnlyList<Message> parts, NativePartSubmitter submit)
+    {
+        EnsureParts(parts, nameof(parts));
+        var clones = CloneParts(parts);
+        try
+        {
+            SubmitOwnedParts(clones, submit);
+            for (var i = 0; i < parts.Count; i++)
+                parts[i].ConsumeAfterSuccessfulSubmit();
+        }
+        finally
+        {
+            DisposeParts(clones);
+        }
+    }
+
     internal delegate int NativePartSubmitter(
         ref ZlinkMsg nativePart, NativeMethods.ZlinkPartFlag partFlag);
 }

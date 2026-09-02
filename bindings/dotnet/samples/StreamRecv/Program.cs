@@ -12,6 +12,7 @@ internal static class Program
 
         using var ctx = Zlink.CreateContext();
         using var stream = ctx.CreateStreamSocket();
+        stream.Options.ReceiveMode = StreamReceiveMode.Raw;
         stream.Options.Linger = TimeSpan.Zero;
         string endpoint = SampleSupport.NewEndpoint("tcp", "sample");
         int port = SampleSupport.ExtractPort(endpoint);
@@ -33,7 +34,7 @@ internal static class Program
         SampleSupport.EnsureEqual("hello-stream", payload, "payload");
 
         using var reply = Message.From("hello-stream");
-        received.Send().Message(reply).Submit(SendFlags.None);
+        received.Send().Message(reply).Submit();
         string echoed = System.Text.Encoding.UTF8.GetString(
             SampleSupport.ReceiveExact(network, "hello-stream".Length));
         Console.WriteLine(

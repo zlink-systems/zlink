@@ -16,9 +16,9 @@ internal sealed class RouterSocket : RoutedReceivingSocketBase, IRouterSocket
 
     public new RouterSocketOptions Options { get; }
 
-    public RoutedSendOperation Send(RoutingId routingId)
+    public SendOperation Send(RoutingId routingId)
     {
-        return new RoutedAsyncSendOperation(this, routingId);
+        return new SocketSendOperation(this, routingId);
     }
 
     public void SetRoutingId(RoutingId routingId)
@@ -57,9 +57,13 @@ internal sealed class RouterSocket : RoutedReceivingSocketBase, IRouterSocket
     /// <summary>
     ///     Start a reply (operation builder).
     /// </summary>
-    public ReplyOperation Reply(RoutingId rid, ulong requestSeq)
+    public ReplyOperation Reply(RoutingId rid, ReplyToken replyToken)
     {
-        return new RouterPeerReplyOperation(this, rid, requestSeq);
+        ArgumentNullException.ThrowIfNull(replyToken);
+        if (!replyToken.IsOwnedBy(Kernel.ReplyTokenOwner))
+            throw new ZlinkSubmitException(SubmitResult.InvalidArgument,
+                (int)ErrorCode.EInval);
+        return new RouterPeerReplyOperation(this, rid, replyToken);
     }
 
     internal Task<IReadOnlyList<Message>> RequestCore(RoutingId peerRid,
@@ -72,41 +76,18 @@ internal sealed class RouterSocket : RoutedReceivingSocketBase, IRouterSocket
     }
 
     internal IReadOnlyList<Message> RequestCore(RoutingId peerRid,
-        IReadOnlyList<Message> parts, TimeSpan timeout, SendFlags flags)
+        IReadOnlyList<Message> parts, TimeSpan timeout)
     {
         var timeoutMs = RequestReplySupport.NormalizeRequestTimeout(timeout,
             DefaultRequestTimeout);
-        return Kernel.Request(peerRid, parts, timeoutMs, flags);
+        return Kernel.Request(peerRid, parts, timeoutMs);
     }
 
-    internal void RequestCore(RoutingId peerRid,
-        IReadOnlyList<Message> parts, TimeSpan timeout, SendFlags flags,
-        RequestCallback callback)
-    {
-        var timeoutMs = RequestReplySupport.NormalizeRequestTimeout(timeout,
-            DefaultRequestTimeout);
-        Kernel.Request(peerRid, parts, timeoutMs, flags, callback);
-    }
-
-    internal void ReplyCore(RoutingId peerRid, ulong requestSeq,
+    internal void ReplyCore(RoutingId peerRid, ReplyToken replyToken,
         IReadOnlyList<Message> parts)
     {
         RequestReplySupport.EnsureParts(parts, nameof(parts));
-        var nativeRoutingId = peerRid.ToNative();
-        var cloned = RequestReplySupport.CloneParts(parts);
-        try
-        {
-            RequestReplySupport.SubmitClonedParts(cloned,
-                (ref ZlinkMsg nativePart,
-                        NativeMethods.ZlinkPartFlag partFlag) =>
-                    NativeMethods.zlink_router_reply_part(Handle,
-                        ref nativeRoutingId, requestSeq, ref nativePart,
-                        partFlag));
-        }
-        finally
-        {
-            RequestReplySupport.DisposeParts(cloned);
-        }
+        Kernel.SendReplyCore(peerRid, replyToken, parts);
     }
 
 }

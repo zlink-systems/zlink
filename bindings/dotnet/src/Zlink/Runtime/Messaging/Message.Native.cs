@@ -347,6 +347,13 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         Invalidate();
     }
 
+    internal void ConsumeAfterSuccessfulSubmit()
+    {
+        EnsureValid();
+        NativeMethods.zlink_msg_close(ref _msg);
+        Invalidate(clearHandle: true);
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void DisposeNativeOwned()
     {

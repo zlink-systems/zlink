@@ -114,24 +114,15 @@ public sealed class test_system
     }
 
     [Fact]
-    public void timer_on_fire_invokes_callback()
+    public void timer_pull_receives_fire_count()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
 
         using var timer = Zlink.CreateTimer();
-        using var fired = new ManualResetEventSlim(false);
-        ulong observed = 0;
-
-        timer.OnFire((_, fireCount) =>
-        {
-            observed = fireCount;
-            fired.Set();
-        });
         timer.Start(TimeSpan.FromMilliseconds(5), 1);
 
-        Assert.True(fired.Wait(20000));
-        Assert.Equal(1UL, observed);
+        Assert.Equal(1UL, timer.Recv());
     }
 
     private static void CreateContextForFinalizerTest()

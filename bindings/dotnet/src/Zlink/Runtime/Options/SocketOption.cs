@@ -54,6 +54,8 @@ internal enum SocketOption
     SubmitRetryMode = 0x3037,
     SubmitRetryTimeout = 0x3038,
     SubmitRetryAttempts = 0x3039,
+    PendingMaxMsgs = 0x303A,
+    PendingMaxBytes = 0x303B,
     RouterMandatory = 0x3101,
     ProbeRouter = 0x3103,
     ConnectRoutingId = 0x3104,
@@ -71,6 +73,7 @@ internal enum SocketOption
     XPubApproveSubscribe = 0x3308,
     XPubRejectSubscribe = 0x3309,
     StreamNotify = 0x3501,
+    StreamReceiveMode = 0x3502,
     SubTopicsCount = 0x3400,
     UseFd = 0x7F000005
 }

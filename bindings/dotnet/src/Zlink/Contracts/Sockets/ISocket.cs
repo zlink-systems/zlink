@@ -90,8 +90,8 @@ public interface ISocket : IZlinkSocket, IDisposable, IAsyncDisposable
     ///     socket immediately. Send and request operations may be admitted from
     ///     multiple threads, while receive is single-consumer. Close and dispose
     ///     use a stricter lifecycle gate and may report <c>EBUSY</c> while an
-    ///     admitted operation or callback is still running; stop and join the
-    ///     owning receive/callback path before retrying close.
+    ///     admitted operation or receive is still running; stop and join the
+    ///     owning receive path before retrying close.
     /// </summary>
     void Close();
 }

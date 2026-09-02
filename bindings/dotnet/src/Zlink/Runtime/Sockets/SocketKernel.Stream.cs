@@ -4,265 +4,67 @@ using Systems.Zlink.Runtime.Native;
 
 namespace Systems.Zlink.Runtime.Sockets.Internal;
 
-internal sealed partial class SocketKernel : IDisposable
+internal sealed partial class SocketKernel
 {
-    public void AttachStreamPacket(StreamFramedPacketHandler handler)
+    internal bool ReceiveStreamPacket(StreamPacket result, RecvFlags flags)
     {
-        EnsureSupports(nameof(AttachStreamPacket),
-            SocketTypePolicy.SocketCapability.StreamAttach);
-        if (handler == null)
-            throw new ArgumentNullException(nameof(handler));
-        lock (_streamRegistrationSync)
+        ArgumentNullException.ThrowIfNull(result);
+        result.BeginReceive();
+
+        ZlinkMsg header = default;
+        ZlinkMsg body = default;
+        var headerInitialized = false;
+        var bodyInitialized = false;
+        try
         {
-            var context = SynchronizationContext.Current;
-            var previousFramed = _callbacks.StreamFramedPacketHandler;
-            var previousUInt32 = _callbacks.StreamUInt32FramedPacketHandler;
-            var previousContext = _callbacks.StreamPacketContext;
-            var previousNative = _callbacks.StreamPacketNative;
-            _callbacks.StreamFramedPacketHandler = handler;
-            _callbacks.StreamUInt32FramedPacketHandler = null;
-            _callbacks.StreamPacketContext = context;
-            _callbacks.StreamPacketNative = OnStreamPacket;
-            var rc = NativeMethods.zlink_stream_packet_handler(Handle,
-                _callbacks.StreamPacketNative, IntPtr.Zero);
+            var rc = NativeMethods.zlink_msg_init(ref header);
             if (rc != 0)
-            {
-                _callbacks.StreamFramedPacketHandler = previousFramed;
-                _callbacks.StreamUInt32FramedPacketHandler = previousUInt32;
-                _callbacks.StreamPacketContext = previousContext;
-                _callbacks.StreamPacketNative = previousNative;
-                throw ZlinkException.CreateHandlerException(
+                throw ZlinkException.CreateRecvException(
                     NativeMethods.zlink_errno());
-            }
+            headerInitialized = true;
 
-            _streamAttached = true;
-        }
-    }
-
-    public void AttachStreamPacket(StreamPacketHandler handler)
-    {
-        if (handler == null)
-            throw new ArgumentNullException(nameof(handler));
-        AttachStreamPacket((StreamFramedPacketHandler)((routingId, header, body) =>
-            handler(routingId, header, body)));
-    }
-
-    public void AttachStreamPacket(StreamUInt32FramedPacketHandler handler)
-    {
-        EnsureSupports(nameof(AttachStreamPacket),
-            SocketTypePolicy.SocketCapability.StreamAttach);
-        if (handler == null)
-            throw new ArgumentNullException(nameof(handler));
-        lock (_streamRegistrationSync)
-        {
-            var context = SynchronizationContext.Current;
-            var previousFramed = _callbacks.StreamFramedPacketHandler;
-            var previousUInt32 = _callbacks.StreamUInt32FramedPacketHandler;
-            var previousContext = _callbacks.StreamPacketContext;
-            var previousNative = _callbacks.StreamPacketNative;
-            _callbacks.StreamFramedPacketHandler = null;
-            _callbacks.StreamUInt32FramedPacketHandler = handler;
-            _callbacks.StreamPacketContext = context;
-            _callbacks.StreamPacketNative = OnStreamPacketUInt32;
-            var rc = NativeMethods.zlink_stream_packet_handler(Handle,
-                _callbacks.StreamPacketNative, IntPtr.Zero);
+            rc = NativeMethods.zlink_msg_init(ref body);
             if (rc != 0)
-            {
-                _callbacks.StreamFramedPacketHandler = previousFramed;
-                _callbacks.StreamUInt32FramedPacketHandler = previousUInt32;
-                _callbacks.StreamPacketContext = previousContext;
-                _callbacks.StreamPacketNative = previousNative;
-                throw ZlinkException.CreateHandlerException(
+                throw ZlinkException.CreateRecvException(
                     NativeMethods.zlink_errno());
-            }
+            bodyInitialized = true;
 
-            _streamAttached = true;
-        }
-    }
+            rc = NativeMethods.zlink_stream_recv_packet(Handle,
+                out var sourceRoutingId, ref header, ref body, (int)flags);
+            if ((RecvResult)rc == RecvResult.NoData
+                && (flags & RecvFlags.DontWait) != 0)
+                return false;
+            if ((RecvResult)rc != RecvResult.Ok)
+                throw ZlinkException.CreateRecvException((RecvResult)rc);
 
-    public bool ReceiveStreamPart(
-        out RoutingId? sourceRoutingId,
-        out Message? part,
-        out bool hasMore,
-        RecvFlags flags)
-    {
-        EnsureSupports(nameof(ReceiveStreamPart),
-            SocketTypePolicy.SocketCapability.RoutedReceive);
-        lock (_streamRegistrationSync)
-        {
-            if (_streamAttached)
-                throw ZlinkException.CreateHandlerException(
-                    HandlerResult.Busy);
-        }
+            var routingId = RoutingIdSnapshot.FromPointer(sourceRoutingId)
+                .ToRoutingId();
+            if (!routingId.HasValue)
+                throw new ZlinkRecvException(RecvResult.InternalError);
 
-        var received = new Message();
-        try
-        {
-            if (ReceiveRoutedPartInto(
-                    received,
-                    out sourceRoutingId,
-                    out hasMore,
-                    (int)flags))
+            var headerMessage = Message.MoveFromNative(ref header);
+            Message? bodyMessage = null;
+            try
             {
-                part = received;
-                return true;
+                bodyMessage = Message.MoveFromNative(ref body);
+                result.CompleteReceive(routingId.Value, headerMessage,
+                    bodyMessage);
             }
-
-            received.Dispose();
-            part = null;
-            return false;
-        }
-        catch
-        {
-            received.Dispose();
-            sourceRoutingId = null;
-            hasMore = false;
-            part = null;
-            throw;
-        }
-    }
-
-    private static void CloseStreamPacket(IntPtr msg)
-    {
-        if (msg == IntPtr.Zero)
-            return;
-        try
-        {
-            NativeMethods.zlink_msg_close(msg);
-        }
-        catch
-        {
-        }
-    }
-
-    private unsafe void OnStreamPacket(IntPtr stream, IntPtr routingId,
-        IntPtr header, IntPtr body, IntPtr userdata)
-    {
-        var packetHandler = _callbacks.StreamFramedPacketHandler;
-        var context = _callbacks.StreamPacketContext;
-        if (packetHandler == null || routingId == IntPtr.Zero)
-        {
-            CloseStreamPacket(header);
-            CloseStreamPacket(body);
-            return;
-        }
-
-        Message? headerMsg = null;
-        Message? bodyMsg = null;
-        var delivered = false;
-        try
-        {
-            ref ZlinkRoutingId nativeRoutingId = ref *(ZlinkRoutingId*)routingId;
-            var publicRoutingId = RoutingId.FromNative(ref nativeRoutingId);
-            if (!publicRoutingId.HasValue)
+            catch
             {
-                CloseStreamPacket(header);
-                CloseStreamPacket(body);
-                return;
+                headerMessage.Dispose();
+                bodyMessage?.Dispose();
+                throw;
             }
-            headerMsg = Message.MoveFromNativeSingle(header);
-            bodyMsg = Message.MoveFromNativeSingle(body);
-            if (context == null)
-                packetHandler(publicRoutingId.Value, headerMsg, bodyMsg);
-            else
-                CallbackDelivery.Post(
-                    context,
-                    () => packetHandler(publicRoutingId.Value, headerMsg, bodyMsg));
-            delivered = true;
-        }
-        catch (Exception ex)
-        {
-            CallbackExceptionHub.Report(ex);
-            if (!delivered)
-            {
-                try
-                {
-                    headerMsg?.Dispose();
-                }
-                catch
-                {
-                }
-
-                try
-                {
-                    bodyMsg?.Dispose();
-                }
-                catch
-                {
-                }
-            }
+            return true;
         }
         finally
         {
-            CloseStreamPacket(header);
-            CloseStreamPacket(body);
+            if (headerInitialized)
+                NativeMethods.zlink_msg_close(ref header);
+            if (bodyInitialized)
+                NativeMethods.zlink_msg_close(ref body);
+            result.EndReceive();
         }
     }
-
-    private unsafe void OnStreamPacketUInt32(IntPtr stream, IntPtr routingId,
-        IntPtr header, IntPtr body, IntPtr userdata)
-    {
-        var packetHandler =
-            _callbacks.StreamUInt32FramedPacketHandler;
-        var context = _callbacks.StreamPacketContext;
-        if (packetHandler == null || routingId == IntPtr.Zero)
-        {
-            CloseStreamPacket(header);
-            CloseStreamPacket(body);
-            return;
-        }
-
-        var ridBytes = NativeHelpers.ReadRoutingId(
-            ref *(ZlinkRoutingId*)routingId);
-        if (!RoutingIdCodec.TryToUInt32(ridBytes, out var routingIdValue))
-        {
-            CloseStreamPacket(header);
-            CloseStreamPacket(body);
-            return;
-        }
-
-        Message? headerMsg = null;
-        Message? bodyMsg = null;
-        var delivered = false;
-        try
-        {
-            headerMsg = Message.MoveFromNativeSingle(header);
-            bodyMsg = Message.MoveFromNativeSingle(body);
-            if (context == null)
-                packetHandler(routingIdValue, headerMsg, bodyMsg);
-            else
-                CallbackDelivery.Post(
-                    context,
-                    () => packetHandler(routingIdValue, headerMsg, bodyMsg));
-            delivered = true;
-        }
-        catch (Exception ex)
-        {
-            CallbackExceptionHub.Report(ex);
-            if (!delivered)
-            {
-                try
-                {
-                    headerMsg?.Dispose();
-                }
-                catch
-                {
-                }
-
-                try
-                {
-                    bodyMsg?.Dispose();
-                }
-                catch
-                {
-                }
-            }
-        }
-        finally
-        {
-            CloseStreamPacket(header);
-            CloseStreamPacket(body);
-        }
-    }
-
 }

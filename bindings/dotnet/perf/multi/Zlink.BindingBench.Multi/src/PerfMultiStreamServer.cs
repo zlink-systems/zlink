@@ -33,11 +33,11 @@ internal static class PerfMultiStreamServer
         ApplyMultiServerContextOptions(ctx, options);
         using var server = ctx.CreateStreamSocket();
         ApplyMultiSocketOptions(server, options);
+        server.Options.ReceiveMode = StreamReceiveMode.Packet;
         RecalculateAutoHwm(ctx);
         ConfigureTlsServerIfNeeded(server, options.Transport);
         using var monitor = server.MonitorOpen(SocketEvent.ConnectionReady,
             monitorHwmBytes);
-        server.Options.SendTimeout = TimeSpan.FromMilliseconds(ioTimeoutMs);
         server.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(ioTimeoutMs);
         server.Options.TcpNoDelay = true;
         server.Bind(endpoint);
@@ -50,46 +50,42 @@ internal static class PerfMultiStreamServer
         using var drainCancellation = new CancellationTokenSource();
         Task dispatcher = DispatchSendsAsync(server, dispatchQueue, sends,
             control, drainCancellation.Token);
-        long handlersInFlight = 0;
-
-        server.OnPacket((routingId, header, payload) =>
+        Task receiver = Task.Run(() =>
         {
-            Interlocked.Increment(ref handlersInFlight);
-            Message? packet = null;
-            try
+            using var result = StreamPacket.Create();
+            while (Volatile.Read(ref control.StopRequested) == 0)
             {
-                using (header)
-                using (payload)
+                try
                 {
-                    if (Volatile.Read(ref control.StopRequested) != 0)
-                        return;
-                    ReadOnlySpan<byte> body = payload.AsReadOnlySpan();
+                    if (!server.RecvPacket(result))
+                        continue;
+                    Message? header = result.Header;
+                    Message? bodyMessage = result.Body;
+                    RoutingId? routingId = result.RoutingId;
+                    if (header == null || bodyMessage == null || routingId == null)
+                        continue;
+                    ReadOnlySpan<byte> body = bodyMessage.AsReadOnlySpan();
                     if (IsStopTokenPayload(body))
                     {
                         control.RequestStop();
-                        return;
+                        break;
                     }
 
-                    packet = BuildStreamPacket(header, payload);
+                    Message packet = BuildStreamPacket(header, bodyMessage);
+                    if (!dispatchQueue.TryEnqueue(routingId.Value, packet))
+                        packet.Dispose();
                 }
-
-                if (dispatchQueue.TryEnqueue(routingId, packet))
-                    packet = null;
-                else
+                catch (ZlinkException)
                 {
-                    packet.Dispose();
-                    packet = null;
+                    if (Volatile.Read(ref control.StopRequested) == 0)
+                        continue;
                 }
-            }
-            catch (Exception ex)
-            {
-                packet?.Dispose();
-                DebugFailure("stream packet callback", ex);
-                control.Fail();
-            }
-            finally
-            {
-                Interlocked.Decrement(ref handlersInFlight);
+                catch (Exception ex)
+                {
+                    DebugFailure("stream packet receive", ex);
+                    control.Fail();
+                    break;
+                }
             }
         });
 
@@ -131,6 +127,8 @@ internal static class PerfMultiStreamServer
         }
         await control.StopTask.ConfigureAwait(false);
 
+        await receiver.ConfigureAwait(false);
+
         int drainTimeoutMs = Math.Max(1000, ioTimeoutMs * 4);
         drainCancellation.CancelAfter(drainTimeoutMs);
         try
@@ -142,12 +140,7 @@ internal static class PerfMultiStreamServer
             control.Fail();
         }
 
-        long handlerDeadline = Stopwatch.GetTimestamp()
-            + (long)drainTimeoutMs * Stopwatch.Frequency / 1000L;
-        while (Volatile.Read(ref handlersInFlight) != 0
-               && Stopwatch.GetTimestamp() < handlerDeadline)
-            await Task.Delay(1).ConfigureAwait(false);
-        if (sends.Count != 0 || Volatile.Read(ref handlersInFlight) != 0)
+        if (sends.Count != 0)
             control.Fail();
 
         return control.ResultCode;

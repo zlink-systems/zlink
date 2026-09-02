@@ -21,46 +21,32 @@ internal unsafe struct ZlinkRoutingId
     public fixed byte Data[255];
 }
 
-[StructLayout(LayoutKind.Sequential)]
-internal struct ZlinkRoutedSubmitTarget
+internal enum ZlinkCompletionKind
 {
-    public ZlinkRoutingId PeerRoutingId;
-    public ulong TransportPairId;
-    public ulong TransportPairGeneration;
-}
-
-/// <summary>
-///     Mirrors <c>zlink_send_async_options_t</c>.
-/// </summary>
-[StructLayout(LayoutKind.Sequential)]
-internal unsafe struct ZlinkSendAsyncOptions
-{
-    public uint StructSize;
-    public uint TimeoutMs;
-    public IntPtr Userdata;
-    public ZlinkRoutedSubmitTarget* Target;
-}
-
-/// <summary>
-///     Mirrors <c>zlink_send_complete_event_t</c>.
-/// </summary>
-[StructLayout(LayoutKind.Sequential)]
-internal struct ZlinkSendCompleteEvent
-{
-    public ulong OpId;
-    public IntPtr Userdata;
-    public ZlinkRoutingId PeerRoutingId;
-    public ulong TransportPairId;
-    public ulong TransportPairGeneration;
-    public ZlinkSendCompleteResult Result;
-    public int TerminalErrno;
+    Send = 1,
+    Request = 2
 }
 
 internal enum ZlinkSendCompleteResult
 {
     Admitted = 0,
-    TimedOut = 201,
     Terminal = 202
+}
+
+/// <summary>Mirrors <c>zlink_completion_t</c>.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct ZlinkCompletion
+{
+    public uint StructSize;
+    public ZlinkCompletionKind Kind;
+    public ulong CompletionId;
+    public IntPtr UserContext;
+    public ZlinkRoutingId PeerRoutingId;
+    public ZlinkSendCompleteResult SendResult;
+    public int SendTerminalErrno;
+    public RequestResult RequestResult;
+    public ZlinkMsg* ReplyParts;
+    public nuint ReplyPartCount;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -72,8 +58,6 @@ internal unsafe struct ZlinkMonitorEvent
     public fixed byte LocalAddr[256];
     public fixed byte RemoteAddr[256];
     public ulong ConnectionId;
-    public ulong TransportPairId;
-    public ulong TransportPairGeneration;
     public uint TransportLane;
     public uint Flags;
 }

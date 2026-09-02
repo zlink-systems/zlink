@@ -34,11 +34,11 @@ internal abstract class PublisherSocketBase : ConnectableSocketBase, IPublisherS
     ///     Start an explicit immediate topic publish operation.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public SendOperation TryPublish(string topic)
+    public TryPublishOperation TryPublish(string topic)
     {
         if (topic == null)
             throw new ArgumentNullException(nameof(topic));
-        return new PublisherTrySendOperation(this, topic);
+        return new PublisherTryPublishOperation(this, topic);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -46,7 +46,7 @@ internal abstract class PublisherSocketBase : ConnectableSocketBase, IPublisherS
         SendFlags flags = SendFlags.None)
     {
         if ((flags & SendFlags.DontWait) != 0)
-            return SocketKernel.TrySendOrThrow(Kernel.PublishNoWaitResult(topic,
+            return SocketKernel.InterpretNoWaitResult(Kernel.PublishNoWaitResult(topic,
                 message));
 
         Kernel.PublishMessageUnchecked(topic, message, flags);
@@ -59,7 +59,7 @@ internal abstract class PublisherSocketBase : ConnectableSocketBase, IPublisherS
         if (parts.Count == 1)
             return PublishCore(topic, parts[0], flags);
         if ((flags & SendFlags.DontWait) != 0)
-            return SocketKernel.TrySendOrThrow(Kernel.PublishNoWaitResult(topic,
+            return SocketKernel.InterpretNoWaitResult(Kernel.PublishNoWaitResult(topic,
                 parts));
 
         Kernel.Publish(topic, parts, flags);

@@ -39,6 +39,25 @@ internal static class CoreTestSupport
         }
     }
 
+    internal static void WaitReady(params ISocket[] sockets)
+    {
+        foreach (ISocket socket in sockets)
+        {
+            using ISocketMonitor monitor = socket.MonitorOpen(
+                SocketEvent.ConnectionReady);
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (monitor.Status().IsReady)
+                    break;
+                _ = monitor.Recv(RecvFlags.DontWait);
+                Thread.Sleep(1);
+            }
+            if (!monitor.Status().IsReady)
+                throw new TimeoutException("socket did not become ready");
+        }
+    }
+
     internal static (int major, int minor, int patch) ReadCoreHeaderVersion()
     {
         string? header = FindCoreHeader();
@@ -160,7 +179,7 @@ internal static class CoreTestSupport
             using Message message = Message.From(payload);
             try
             {
-                socket.Send().Message(message).Submit(SendFlags.None);
+                socket.Send().Message(message).Submit();
                 return;
             }
             catch (ZlinkSubmitException)

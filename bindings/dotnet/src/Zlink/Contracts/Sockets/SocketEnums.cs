@@ -137,6 +137,19 @@ public enum SubmitRetryMode
     LocalFailure = 1
 }
 
+/// <summary>Controls whether STREAM receives raw records or decoded packets.</summary>
+public enum StreamReceiveMode
+{
+    /// <summary>No receive mode has been selected.</summary>
+    Unspecified = 0,
+
+    /// <summary>Receive raw STREAM records through <c>Recv</c>.</summary>
+    Raw = 1,
+
+    /// <summary>Receive decoded header/body packets through <c>RecvPacket</c>.</summary>
+    Packet = 2
+}
+
 /// <summary>
 ///     Flags that modify send behavior.
 /// </summary>

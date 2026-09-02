@@ -34,7 +34,7 @@ public interface IRouterSocket : IConnectableRoutedMessageSocket
     ///     Begins an exact-target ROUTER send whose <c>Async</c> terminal waits
     ///     for Core admission without occupying the caller thread.
     /// </summary>
-    RoutedSendOperation Send(RoutingId routingId);
+    SendOperation Send(RoutingId routingId);
 
     /// <summary>
     ///     Gets ROUTER-specific socket options.
@@ -63,6 +63,6 @@ public interface IRouterSocket : IConnectableRoutedMessageSocket
     ///     builders may be submitted concurrently on the same socket. Do not share
     ///     one builder or one message between concurrent operations.
     /// </summary>
-    ReplyOperation Reply(RoutingId rid, ulong requestSeq);
+    ReplyOperation Reply(RoutingId rid, ReplyToken replyToken);
 
 }

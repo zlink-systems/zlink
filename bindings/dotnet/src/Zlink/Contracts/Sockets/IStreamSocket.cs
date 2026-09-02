@@ -3,53 +3,23 @@
 namespace Systems.Zlink;
 
 /// <summary>
-///     STREAM callback for framed packet dispatch.
-///     Message ownership is transferred to the callback.
-///     The callback must dispose each message exactly once.
-/// </summary>
-public delegate void StreamPacketHandler(RoutingId routingId, Message header,
-    Message body);
-
-/// <summary>
 ///     Contract for a STREAM socket: exchanges framed packets with raw TCP peers.
 /// </summary>
 public interface IStreamSocket : IReceivingMessageSocket
 {
     /// <summary>
     ///     Begins an exact-target STREAM send whose asynchronous terminal waits
-    ///     for Core admission to the selected connection generation.
+    ///     for Core admission to the selected logical connection.
     /// </summary>
-    RoutedSendOperation Send(RoutingId routingId);
-
-    /// <summary>
-    ///     Begins an explicit immediate STREAM send. The terminal returns false
-    ///     when <see cref="SendFlags.DontWait" /> is selected and Core cannot
-    ///     admit the record immediately.
-    /// </summary>
-    SendOperation TrySend(RoutingId routingId);
+    SendOperation Send(RoutingId routingId);
 
     /// <summary>
     ///     Gets the STREAM-specific typed options facade.
     /// </summary>
     new StreamSocketOptions Options { get; }
 
-    /// <summary>
-    ///     Registers the handler invoked for each inbound framed packet. The
-    ///     handler runs on a background dispatch thread and owns its messages (see
-    ///     <see cref="StreamPacketHandler" />).
-    /// </summary>
-    void OnPacket(StreamPacketHandler handler);
-
-    /// <summary>
-    ///     Receives one raw STREAM part and its source routing id. The returned
-    ///     message is owned by the caller and must be disposed. The first
-    ///     receive operation fixes this socket to receive mode; it cannot be
-    ///     combined with packet callback registration.
-    /// </summary>
-    bool RecvPart(
-        out RoutingId? sourceRoutingId,
-        out Message? part,
-        out bool hasMore,
+    /// <summary>Receives one decoded packet into reusable output storage.</summary>
+    bool RecvPacket(StreamPacket result,
         RecvFlags flags = RecvFlags.None);
 
     /// <summary>

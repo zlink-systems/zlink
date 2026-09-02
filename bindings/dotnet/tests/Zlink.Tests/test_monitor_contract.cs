@@ -43,7 +43,7 @@ public sealed class test_monitor_contract
     }
 
     [Fact]
-    public void socket_monitor_attach_handler_snapshot_and_close_contract()
+    public void socket_monitor_pull_snapshot_and_close_contract()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -58,14 +58,13 @@ public sealed class test_monitor_contract
         string endpoint = CoreTestSupport.NewEndpoint("tcp", "monitor-handler");
         server.Bind(endpoint);
 
-        using var events = new CallbackEventQueue<SocketMonitorEvent>();
         using ISocketMonitor monitor = server.MonitorOpen(
             SocketEvent.ConnectionReady | SocketEvent.Disconnected);
-        monitor.OnEvent(events.Enqueue);
 
         client.Connect(endpoint);
 
-        Assert.True(events.TryDequeue(20000, out SocketMonitorEvent evt));
+        SocketMonitorEvent evt = monitor.Recv()
+            ?? throw new TimeoutException("missing connection event");
         Assert.Equal(MonitorEventType.ConnectionReady, evt.Event);
 
         MonitorStatus snapshot = monitor.Status();
@@ -126,7 +125,7 @@ public sealed class test_monitor_contract
     }
 
     [Fact]
-    public void socket_monitor_ignore_handler_switches_to_callback_only_model()
+    public void socket_monitor_remains_pull_only_after_connection()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -138,25 +137,9 @@ public sealed class test_monitor_contract
         server.Bind(endpoint);
 
         using ISocketMonitor monitor = server.MonitorOpen(SocketEvent.ConnectionReady);
-        monitor.OnEvent(_ => { });
-
         client.Connect(endpoint);
-
-        Assert.True(CoreTestSupport.WaitUntil(() =>
-        {
-            try
-            {
-                _ = monitor.Status();
-                return true;
-            }
-            catch (ZlinkConfigException)
-            {
-                return false;
-            }
-        }, 3000));
-
-        ZlinkRecvException error = Assert.Throws<ZlinkRecvException>(() => monitor.Recv());
-        Assert.Equal(ZlinkRecvException.ErrorCode.Busy, error.Result);
+        Assert.NotNull(monitor.Recv());
+        Assert.NotNull(monitor.Status());
     }
 
     // core-byte-hwm-flow-control-plan.ko.md §6 / core/include/zlink_enum.h:
@@ -185,7 +168,7 @@ public sealed class test_monitor_contract
     }
 
     [Fact]
-    public void monitor_event_value_and_pair_fields_are_full_64_bit()
+    public void monitor_event_value_and_connection_fields_match_abi_widths()
     {
         // Guards against the truncating `(uint)evt.Value` cast this section
         // fixed: the public record's fields must be wide enough to carry
@@ -195,11 +178,11 @@ public sealed class test_monitor_contract
                 .PropertyType);
         Assert.Equal(typeof(ulong),
             typeof(MonitorEvent).GetProperty(
-                    nameof(MonitorEvent.TransportPairId))!
+                    nameof(MonitorEvent.ConnectionId))!
                 .PropertyType);
-        Assert.Equal(typeof(ulong),
+        Assert.Equal(typeof(uint),
             typeof(MonitorEvent).GetProperty(
-                    nameof(MonitorEvent.TransportPairGeneration))!
+                    nameof(MonitorEvent.TransportLane))!
                 .PropertyType);
         Assert.Equal(typeof(MonitorEventFlags),
             typeof(MonitorEvent).GetProperty(nameof(MonitorEvent.Flags))!
@@ -208,11 +191,11 @@ public sealed class test_monitor_contract
         const ulong beyondUInt32 = (ulong)uint.MaxValue + 1UL;
         var evt = new MonitorEvent(MonitorEventType.SendFlowPaused,
             beyondUInt32, null, string.Empty, string.Empty,
-            beyondUInt32 + 1UL, beyondUInt32 + 2UL,
+            beyondUInt32 + 1UL, 2U,
             MonitorEventFlags.SendFlowWritable);
 
         Assert.Equal(beyondUInt32, evt.Value);
-        Assert.Equal(beyondUInt32 + 1UL, evt.TransportPairId);
-        Assert.Equal(beyondUInt32 + 2UL, evt.TransportPairGeneration);
+        Assert.Equal(beyondUInt32 + 1UL, evt.ConnectionId);
+        Assert.Equal(2U, evt.TransportLane);
     }
 }

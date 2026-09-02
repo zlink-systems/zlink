@@ -24,7 +24,7 @@ public interface IPublisherSocket : IConnectableSocket
     ///     <see cref="SendFlags.DontWait" /> to observe back-pressure as a
     ///     <c>false</c> result rather than an exception.
     /// </summary>
-    SendOperation TryPublish(string topic);
+    TryPublishOperation TryPublish(string topic);
 }
 
 /// <summary>

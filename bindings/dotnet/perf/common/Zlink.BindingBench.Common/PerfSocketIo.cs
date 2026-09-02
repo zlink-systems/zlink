@@ -99,7 +99,7 @@ public static class PerfSocketIo
                 message.Dispose();
                 return new ValueTask<int>(payload.Length);
             }
-            return AwaitRoutedSendAsync(submit, message, payload.Length);
+            return AwaitTargetedSendAsync(submit, message, payload.Length);
         }
         catch
         {
@@ -173,7 +173,7 @@ public static class PerfSocketIo
         }
     }
 
-    private static async ValueTask<int> AwaitRoutedSendAsync(Task submit,
+    private static async ValueTask<int> AwaitTargetedSendAsync(Task submit,
         Message message, int size)
     {
         try
@@ -196,10 +196,10 @@ public static class PerfSocketIo
         Task submit = socket.Send(routingId).Message(message).Async();
         if (submit.IsCompletedSuccessfully)
             return new ValueTask<int>(size);
-        return AwaitRoutedSendAsync(submit, size);
+        return AwaitTargetedSendAsync(submit, size);
     }
 
-    private static async ValueTask<int> AwaitRoutedSendAsync(Task submit,
+    private static async ValueTask<int> AwaitTargetedSendAsync(Task submit,
         int size)
     {
         await submit.ConfigureAwait(false);
@@ -213,7 +213,7 @@ public static class PerfSocketIo
         try
         {
             var submit = socket.Send().Message(message);
-            submit.Submit(flags);
+            submit.Submit();
             return payload.Length;
         }
         catch (ZlinkSubmitException ex)
@@ -237,7 +237,7 @@ public static class PerfSocketIo
             var submit = socket.Send().Message(message);
             if (tail != null)
                 submit = submit.Message(tail);
-            submit.Submit(flags);
+            submit.Submit();
             return payload.Length;
         }
         catch (ZlinkSubmitException ex)
@@ -258,7 +258,7 @@ public static class PerfSocketIo
         int size = message.Size;
         try
         {
-            socket.Send().Message(message).Submit(flags);
+            socket.Send().Message(message).Submit();
             return size;
         }
         catch (ZlinkSubmitException ex)
@@ -278,7 +278,7 @@ public static class PerfSocketIo
             var submit = socket.Send().Message(message);
             if (tail != null)
                 submit = submit.Message(tail);
-            submit.Submit(flags);
+            submit.Submit();
             return payload.Length;
         }
         catch (ZlinkSubmitException ex)
@@ -307,7 +307,7 @@ public static class PerfSocketIo
         try
         {
             var submit = socket.Send(routingId).Message(message);
-            submit.Submit(flags);
+            submit.Submit();
             return payload.Length;
         }
         catch (ZlinkSubmitException ex)
@@ -331,7 +331,7 @@ public static class PerfSocketIo
             var submit = socket.Send(routingId).Message(message);
             if (tail != null)
                 submit = submit.Message(tail);
-            submit.Submit(flags);
+            submit.Submit();
             return payload.Length;
         }
         catch (ZlinkSubmitException ex)
@@ -352,7 +352,7 @@ public static class PerfSocketIo
         int size = message.Size;
         try
         {
-            socket.Send(routingId).Message(message).Submit(flags);
+            socket.Send(routingId).Message(message).Submit();
             return size;
         }
         catch (ZlinkSubmitException ex)

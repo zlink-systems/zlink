@@ -53,21 +53,9 @@ public sealed partial class Received : IDisposable
     }
 
     /// <summary>
-    ///     Gets the request sequence when this envelope can be replied to.
+    ///     Gets the opaque reply capability when this envelope can be replied to.
     /// </summary>
-    public ulong? RequestSeq => _metadata?.RequestSeq;
-
-    /// <summary>
-    ///     Gets the exact transport pair id that delivered a Router envelope,
-    ///     or zero when the receive path does not provide one.
-    /// </summary>
-    public ulong TransportPairId => _transportPairId;
-
-    /// <summary>
-    ///     Gets the generation of <see cref="TransportPairId" />, or zero when
-    ///     the receive path does not provide a transport pair identity.
-    /// </summary>
-    public ulong TransportPairGeneration => _transportPairGeneration;
+    public ReplyToken? ReplyToken => _replyToken;
 
     /// <summary>
     ///     Gets the envelope kind.
@@ -130,18 +118,18 @@ public sealed partial class Received : IDisposable
     ///     Start a reply operation for request envelopes.
     /// </summary>
     /// <remarks>
-    ///     The operation is valid only when <see cref="RequestSeq" /> has a value.
+    ///     The operation is valid only when <see cref="ReplyToken" /> has a value.
     /// </remarks>
     public ReplyOperation Reply()
     {
-        return new ReceivedReplyOperationImpl(CaptureReplyHandler());
+        return new ReceivedReplyOperationImpl(CaptureReplyContext());
     }
 
     /// <summary>
     ///     Start a send operation addressed to the source route of this envelope.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public RoutedSendOperation Send()
+    public SendOperation Send()
     {
         return new ReceivedSendOperationImpl(CaptureSendContext());
     }

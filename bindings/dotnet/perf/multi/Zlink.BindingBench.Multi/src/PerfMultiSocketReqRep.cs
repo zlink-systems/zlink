@@ -144,8 +144,6 @@ internal static class PerfMultiSocketReqRep
                 {
                     ApplyMultiSocketOptions(socket, options);
                     ConfigureTlsClientIfNeeded(socket, options.Transport);
-                    socket.Options.SendTimeout =
-                        TimeSpan.FromMilliseconds(ResolveMultiSndTimeoutMs(options));
                     socket.Options.ReceiveTimeout =
                         TimeSpan.FromMilliseconds(ResolveMultiRcvTimeoutMs(options));
                 }
@@ -393,15 +391,14 @@ internal static class PerfMultiSocketReqRep
         if (!PerfSocketIo.TryMeasurementPayload(received.Parts,
                 out Message payloadPart))
             return true;
-        if (!received.RequestSeq.HasValue)
+        if (received.ReplyToken == null)
             return true;
 
         int payloadSize = payloadPart.Size;
-        ulong requestSeq = received.RequestSeq.Value;
         if (s_debugEnabled)
         {
             DebugLogLimited(ref s_debugServerRecvLogs,
-                $"socket_reqrep_server: recv size={payloadSize} seq={requestSeq}");
+                $"socket_reqrep_server: recv size={payloadSize}");
         }
         try
         {
@@ -438,7 +435,7 @@ internal static class PerfMultiSocketReqRep
         if (s_debugEnabled)
         {
             DebugLogLimited(ref s_debugServerReplyLogs,
-                $"socket_reqrep_server: replied size={payloadSize} seq={requestSeq}");
+                $"socket_reqrep_server: replied size={payloadSize}");
         }
         return true;
     }

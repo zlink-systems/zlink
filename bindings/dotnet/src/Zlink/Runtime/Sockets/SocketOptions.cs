@@ -145,6 +145,9 @@ internal static class SocketOptions
     public static SocketOptionKey<int> StreamNotify { get; } =
         Int(SocketOption.StreamNotify);
 
+    public static SocketOptionKey<int> StreamReceiveMode { get; } =
+        Int(SocketOption.StreamReceiveMode);
+
     public static SocketOptionKey<int> InvertMatching { get; } =
         Int(SocketOption.InvertMatching);
 

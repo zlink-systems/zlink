@@ -195,7 +195,6 @@ internal static partial class PerfRunner
             if (options.MultiRcvBuf > 0)
                 socket.Options.ReceiveBufferSize = options.MultiRcvBuf;
         }
-        socket.Options.SendTimeout = TimeSpan.FromMilliseconds(sndTimeo);
         socket.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(rcvTimeo);
     }
 

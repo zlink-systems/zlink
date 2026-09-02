@@ -69,7 +69,7 @@ internal sealed partial class SocketKernel : IDisposable
 
     public void Send(string routingId, Message message, SendFlags flags = SendFlags.None)
     {
-        EnsureSupports(nameof(Send), SocketTypePolicy.SocketCapability.RoutedSend);
+        EnsureSupports(nameof(Send), SocketTypePolicy.SocketCapability.TargetedSend);
         if (routingId == null)
             throw new ArgumentNullException(nameof(routingId));
         if (message == null)
@@ -93,7 +93,7 @@ internal sealed partial class SocketKernel : IDisposable
     public void Send(RoutingId routingId, Message message,
         SendFlags flags = SendFlags.None)
     {
-        EnsureSupports(nameof(Send), SocketTypePolicy.SocketCapability.RoutedSend);
+        EnsureSupports(nameof(Send), SocketTypePolicy.SocketCapability.TargetedSend);
         SendRoutedMessageUnchecked(routingId, message, flags);
     }
 
@@ -136,7 +136,7 @@ internal sealed partial class SocketKernel : IDisposable
     public void Send(uint routingId, Message message,
         SendFlags flags = SendFlags.None)
     {
-        EnsureSupports(nameof(Send), SocketTypePolicy.SocketCapability.RoutedSend);
+        EnsureSupports(nameof(Send), SocketTypePolicy.SocketCapability.TargetedSend);
         if (message == null)
             throw new ArgumentNullException(nameof(message));
         var nativeRoutingId = RoutingIdCodec.ToNative(routingId);
@@ -155,7 +155,7 @@ internal sealed partial class SocketKernel : IDisposable
     public SendResult SendNoWaitResult(string routingId, Message message)
     {
         EnsureSupports(nameof(SendNoWaitResult),
-            SocketTypePolicy.SocketCapability.RoutedSend);
+            SocketTypePolicy.SocketCapability.TargetedSend);
         if (routingId == null)
             throw new ArgumentNullException(nameof(routingId));
         if (message == null)
@@ -166,7 +166,7 @@ internal sealed partial class SocketKernel : IDisposable
     public SendResult SendNoWaitResult(RoutingId routingId, Message message)
     {
         EnsureSupports(nameof(SendNoWaitResult),
-            SocketTypePolicy.SocketCapability.RoutedSend);
+            SocketTypePolicy.SocketCapability.TargetedSend);
         if (message == null)
             throw new ArgumentNullException(nameof(message));
         ZlinkRoutingId fallback = default;
@@ -178,7 +178,7 @@ internal sealed partial class SocketKernel : IDisposable
     public void Send(string routingId, IReadOnlyList<Message> parts,
         SendFlags flags = SendFlags.None)
     {
-        EnsureSupports(nameof(Send), SocketTypePolicy.SocketCapability.RoutedSend);
+        EnsureSupports(nameof(Send), SocketTypePolicy.SocketCapability.TargetedSend);
         if (routingId == null)
             throw new ArgumentNullException(nameof(routingId));
         RequestReplySupport.EnsureParts(parts, nameof(parts));
@@ -195,7 +195,7 @@ internal sealed partial class SocketKernel : IDisposable
     public void Send(RoutingId routingId, IReadOnlyList<Message> parts,
         SendFlags flags = SendFlags.None)
     {
-        EnsureSupports(nameof(Send), SocketTypePolicy.SocketCapability.RoutedSend);
+        EnsureSupports(nameof(Send), SocketTypePolicy.SocketCapability.TargetedSend);
         RequestReplySupport.EnsureParts(parts, nameof(parts));
 
         ZlinkRoutingId fallback = default;
@@ -210,7 +210,7 @@ internal sealed partial class SocketKernel : IDisposable
     public SendResult SendNoWaitResult(string routingId, IReadOnlyList<Message> parts)
     {
         EnsureSupports(nameof(SendNoWaitResult),
-            SocketTypePolicy.SocketCapability.RoutedSend);
+            SocketTypePolicy.SocketCapability.TargetedSend);
         if (routingId == null)
             throw new ArgumentNullException(nameof(routingId));
         RequestReplySupport.EnsureParts(parts, nameof(parts));
@@ -220,7 +220,7 @@ internal sealed partial class SocketKernel : IDisposable
     public SendResult SendNoWaitResult(RoutingId routingId, IReadOnlyList<Message> parts)
     {
         EnsureSupports(nameof(SendNoWaitResult),
-            SocketTypePolicy.SocketCapability.RoutedSend);
+            SocketTypePolicy.SocketCapability.TargetedSend);
         RequestReplySupport.EnsureParts(parts, nameof(parts));
 
         ZlinkRoutingId fallback = default;

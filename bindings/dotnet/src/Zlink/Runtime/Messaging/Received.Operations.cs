@@ -7,35 +7,36 @@ namespace Systems.Zlink;
 public sealed partial class Received : IDisposable
 {
     internal ReceivedSendContext CaptureSendContext() =>
-        new(
-            _sendKernel,
-            _sendRoutingIdSnapshot,
-            _sendHandler,
-            _sendSingleHandler,
-            IsSinglePart ? _transportPairId : 0,
-            IsSinglePart ? _transportPairGeneration : 0);
+        new(_sendKernel, _sendRoutingIdSnapshot);
 
-    internal ReceivedReplyHandler CaptureReplyHandler()
+    internal ReceivedReplyContext CaptureReplyContext()
     {
-        if (_metadata is not
-            {
-                RequestSeq: not null,
-                ReplyHandler: { } replyHandler
-            })
+        if (_replyToken is null || _sendKernel is null)
             throw new ZlinkSubmitException(SubmitResult.InvalidArgument,
                 (int)ErrorCode.EInval);
-        return replyHandler;
+        var target = _sendRoutingIdSnapshot.ToRoutingId();
+        if (!target.HasValue)
+            throw new ZlinkSubmitException(SubmitResult.InvalidArgument,
+                (int)ErrorCode.EInval);
+        return new ReceivedReplyContext(_sendKernel, target.Value, _replyToken);
     }
 
 }
 
+internal sealed class ReceivedReplyContext(
+    Runtime.Sockets.Internal.SocketKernel kernel,
+    RoutingId target,
+    ReplyToken replyToken)
+{
+    internal void Reply(IReadOnlyList<Message> parts)
+    {
+        kernel.SendReplyCore(target, replyToken, parts);
+    }
+}
+
 internal sealed class ReceivedSendContext(
     Runtime.Sockets.Internal.SocketKernel? sendKernel,
-    RoutingIdSnapshot routingId,
-    ReceivedSendHandler? sendHandler,
-    ReceivedSendSingleHandler? sendSingleHandler,
-    ulong transportPairId,
-    ulong transportPairGeneration)
+    RoutingIdSnapshot routingId)
 {
     internal Task SendAsyncCore(
         OperationMessageBuffer parts,
@@ -49,46 +50,23 @@ internal sealed class ReceivedSendContext(
             throw new ZlinkSubmitException(SubmitResult.InvalidArgument,
                 (int)ErrorCode.EInval);
         return parts.IsSingle
-            ? sendKernel.SendCompletion.SendSingleAsync(target.Value,
-                parts.Single, cancellationToken, transportPairId,
-                transportPairGeneration)
-            : sendKernel.SendCompletion.SendAsync(target.Value, parts.Parts,
-                cancellationToken, transportPairId,
-                transportPairGeneration);
+            ? sendKernel.Completion.SendAsync(target.Value,
+                new SingleMessageReadOnlyList(parts.Single),
+                cancellationToken)
+            : sendKernel.Completion.SendAsync(target.Value, parts.Parts,
+                cancellationToken);
     }
 
-    internal bool SendCore(Message part, SendFlags flags = SendFlags.None)
-    {
-        ArgumentNullException.ThrowIfNull(part);
-        if (sendKernel != null)
-            return sendKernel.SendReceivedSingle(
-                routingId,
-                transportPairId,
-                transportPairGeneration,
-                part,
-                flags);
-        if (sendSingleHandler != null)
-            return sendSingleHandler(part, flags);
-        return SendCore(new SingleMessageReadOnlyList(part), flags);
-    }
-
-    internal bool SendCore(
-        IReadOnlyList<Message> parts,
-        SendFlags flags = SendFlags.None)
+    internal void SendCore(IReadOnlyList<Message> parts)
     {
         ArgumentNullException.ThrowIfNull(parts);
-        if (parts.Count == 1)
-            return SendCore(parts[0], flags);
-        if (sendKernel != null)
-            return sendKernel.SendReceivedParts(
-                routingId,
-                transportPairId,
-                transportPairGeneration,
-                parts,
-                flags);
-        if (sendHandler == null)
+        if (sendKernel == null)
             throw new ZlinkSubmitException(SubmitResult.InvalidArgument,
                 (int)ErrorCode.EInval);
-        return sendHandler(parts, flags);
+        var target = routingId.ToRoutingId();
+        if (!target.HasValue)
+            throw new ZlinkSubmitException(SubmitResult.InvalidArgument,
+                (int)ErrorCode.EInval);
+        sendKernel.Completion.Send(target.Value, parts);
     }
 }

@@ -179,7 +179,13 @@ public sealed partial class ZlinkRequestException : ZlinkException
         /// <summary>
         ///     The operation is not supported.
         /// </summary>
-        NotSupported = 112
+        NotSupported = 112,
+
+        /// <summary>
+        ///     The request could not be admitted because the target was
+        ///     backpressured.
+        /// </summary>
+        Backpressured = 113
     }
 
     /// <summary>

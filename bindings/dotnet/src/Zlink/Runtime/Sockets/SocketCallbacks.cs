@@ -2,16 +2,6 @@
 
 namespace Systems.Zlink;
 
-internal delegate void StreamFramedPacketHandler(
-    RoutingId routingId,
-    Message header,
-    Message body);
-
-internal delegate void StreamUInt32FramedPacketHandler(uint routingId,
-    Message header, Message body);
-
-internal delegate void SocketRecvHandler(string routingId, Message[] parts);
-
 internal static class SocketInterop
 {
     internal static SocketBase RequireSocket(IZlinkSocket socket, string paramName)

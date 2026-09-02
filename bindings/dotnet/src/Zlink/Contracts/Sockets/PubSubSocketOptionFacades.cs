@@ -7,6 +7,20 @@ namespace Systems.Zlink;
 /// </summary>
 public sealed partial class StreamSocketOptions : CommonSocketOptions
 {
+    /// <summary>Gets or sets the STREAM receive mode.</summary>
+    public StreamReceiveMode ReceiveMode
+    {
+        get => (StreamReceiveMode)Socket.GetOption(
+            SocketOptions.StreamReceiveMode);
+        set
+        {
+            if (value is not (StreamReceiveMode.Raw
+                or StreamReceiveMode.Packet))
+                throw new ArgumentOutOfRangeException(nameof(value));
+            Socket.SetOption(SocketOptions.StreamReceiveMode, (int)value);
+        }
+    }
+
     /// <summary>
     ///     Gets or sets whether peer connect and disconnect events are delivered to
     ///     the application as messages.

@@ -59,21 +59,18 @@ public sealed class test_optimization_guard
     }
 
     [Fact]
-    public void dealer_request_leaves_target_selection_to_core()
+    public void request_uses_unified_core_part_api_without_binding_registry()
     {
         string path = Path.Combine(BindingRoot(), "src", "Zlink", "Runtime",
-            "Messaging", "RoutedRequestSubmitter.cs");
+            "Messaging", "CompletionOwner.cs");
         string source = File.ReadAllText(path);
 
-        Assert.Contains("NativeMethods.zlink_dealer_request_part(", source,
+        Assert.Contains("NativeMethods.zlink_request_part(", source,
             StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            "NativeMethods.zlink_dealer_request_transport_pair_part(", source,
+        Assert.DoesNotContain("SelectRouterTarget", source,
             StringComparison.Ordinal);
-        Assert.Matches(
-            @"if \(socketType == SocketType\.Dealer\)\s*\{\s*" +
-            @"SubmitDealerParts\([^;]+;\s*return;\s*\}\s*" +
-            @"var routedTarget = SelectRouterTarget\(", source);
+        Assert.DoesNotContain("SendCompletionRegistry", source,
+            StringComparison.Ordinal);
     }
 
     [Fact]

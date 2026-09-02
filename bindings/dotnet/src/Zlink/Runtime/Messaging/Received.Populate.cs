@@ -29,13 +29,9 @@ public sealed partial class Received : IDisposable
 
         _routingId = null;
         _routingIdSnapshot = default;
-        _metadata = null;
-        _sendSingleHandler = null;
-        _sendHandler = null;
+        _replyToken = null;
         _sendKernel = null;
         _sendRoutingIdSnapshot = default;
-        _transportPairId = 0;
-        _transportPairGeneration = 0;
         MessageType = ReceivedMessageType.Raw;
         _closed = false;
     }
@@ -50,75 +46,30 @@ public sealed partial class Received : IDisposable
         _parts = parts;
     }
 
-    internal void PopulateMessageEnvelope(Message[] parts,
-        ReceivedMessageType messageType, ulong? requestSeq,
-        ReceivedReplyHandler? replyHandler = null)
-    {
-        _parts = MultipartMessageCollection.FromMessages(parts);
-        MessageType = messageType;
-        _metadata = ReceivedMetadata.Create(requestSeq, replyHandler);
-    }
-
-    internal void PopulateMessageEnvelopeSingle(Message singlePart,
-        ReceivedMessageType messageType, ulong? requestSeq,
-        ReceivedReplyHandler? replyHandler = null)
-    {
-        _singlePart = singlePart;
-        MessageType = messageType;
-        _metadata = ReceivedMetadata.Create(requestSeq, replyHandler);
-    }
-
     internal void PopulateRoutedSinglePart(Message singlePart,
-        RoutingIdSnapshot routingId, ulong? requestSeq,
-        ReceivedReplyHandler? replyHandler,
-        ReceivedSendHandler? sendHandler = null,
-        ReceivedSendSingleHandler? sendSingleHandler = null,
-        SocketKernel? sendKernel = null,
-        ulong transportPairId = 0,
-        ulong transportPairGeneration = 0)
+        RoutingIdSnapshot routingId, ReplyToken? replyToken,
+        SocketKernel? sendKernel = null)
     {
         _singlePart = singlePart;
         _routingIdSnapshot = routingId;
-        _transportPairId = transportPairId;
-        _transportPairGeneration = transportPairGeneration;
-        MessageType = requestSeq.HasValue || replyHandler is not null
+        MessageType = replyToken is not null
             ? ReceivedMessageType.Request
             : ReceivedMessageType.Raw;
-        _metadata = ReceivedMetadata.Create(requestSeq, replyHandler);
-        _sendSingleHandler = sendSingleHandler;
-        _sendHandler = sendHandler;
+        _replyToken = replyToken;
         SetSendContext(sendKernel, routingId);
     }
 
     internal void PopulateRoutedMultipart(MultipartMessageCollection parts,
-        RoutingIdSnapshot routingId, ulong? requestSeq,
-        ReceivedReplyHandler? replyHandler,
-        ReceivedSendHandler? sendHandler = null,
-        ReceivedSendSingleHandler? sendSingleHandler = null,
-        SocketKernel? sendKernel = null,
-        ulong transportPairId = 0,
-        ulong transportPairGeneration = 0)
+        RoutingIdSnapshot routingId, ReplyToken? replyToken,
+        SocketKernel? sendKernel = null)
     {
         _parts = parts;
         _routingIdSnapshot = routingId;
-        _transportPairId = transportPairId;
-        _transportPairGeneration = transportPairGeneration;
-        MessageType = requestSeq.HasValue || replyHandler is not null
+        MessageType = replyToken is not null
             ? ReceivedMessageType.Request
             : ReceivedMessageType.Raw;
-        _metadata = ReceivedMetadata.Create(requestSeq, replyHandler);
-        _sendSingleHandler = sendSingleHandler;
-        _sendHandler = sendHandler;
+        _replyToken = replyToken;
         SetSendContext(sendKernel, routingId);
-    }
-
-    internal void SetSendHandler(ReceivedSendHandler? sendHandler,
-        ReceivedSendSingleHandler? sendSingleHandler = null)
-    {
-        _sendKernel = null;
-        _sendRoutingIdSnapshot = default;
-        _sendSingleHandler = sendSingleHandler;
-        _sendHandler = sendHandler;
     }
 
     internal void SetSendContext(SocketKernel? sendKernel,

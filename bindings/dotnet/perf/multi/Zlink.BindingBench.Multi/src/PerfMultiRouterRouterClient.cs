@@ -32,7 +32,6 @@ internal static class PerfMultiRouterRouterClient
                 var client = ctx.CreateRouterSocket();
                 ApplyMultiSocketOptions(client, options);
                 ConfigureTlsClientIfNeeded(client, options.Transport);
-                client.Options.SendTimeout = TimeSpan.FromMilliseconds(sndTimeoutMs);
                 client.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(rcvTimeoutMs);
                 // Match the C router client: set both the client identity and
                 // the peer routing id before Connect so ConnectionReady means

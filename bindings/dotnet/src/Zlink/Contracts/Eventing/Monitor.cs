@@ -8,12 +8,6 @@ namespace Systems.Zlink;
 public interface ISocketMonitor : IDisposable, IAsyncDisposable
 {
     /// <summary>
-    ///     Registers a callback invoked for each monitor event. The callback runs
-    ///     on a background dispatch thread.
-    /// </summary>
-    void OnEvent(Action<MonitorEvent> handler);
-
-    /// <summary>
     ///     Receives the next monitor event, or null when none is pending and
     ///     <see cref="RecvFlags.DontWait" /> is set.
     /// </summary>
@@ -45,15 +39,8 @@ public interface ISocketMonitor : IDisposable, IAsyncDisposable
 /// <param name="RoutingId">The peer routing id, when the event carries one.</param>
 /// <param name="LocalAddr">The local endpoint address.</param>
 /// <param name="RemoteAddr">The remote endpoint address.</param>
-/// <param name="TransportPairId">
-///     Identifies the paired application/completion transport this event
-///     belongs to, or zero when the connection is not paired.
-/// </param>
-/// <param name="TransportPairGeneration">
-///     The generation of the paired transport named by
-///     <paramref name="TransportPairId" />, or zero for an unpaired
-///     transport.
-/// </param>
+/// <param name="ConnectionId">The native connection identifier.</param>
+/// <param name="TransportLane">The transport lane that emitted the event.</param>
 /// <param name="Flags">Event-specific flags; see <see cref="MonitorEventFlags" />.</param>
 public sealed record MonitorEvent(
     MonitorEventType Event,
@@ -61,8 +48,8 @@ public sealed record MonitorEvent(
     RoutingId? RoutingId,
     string LocalAddr,
     string RemoteAddr,
-    ulong TransportPairId,
-    ulong TransportPairGeneration,
+    ulong ConnectionId,
+    uint TransportLane,
     MonitorEventFlags Flags);
 
 /// <summary>

@@ -75,31 +75,30 @@ public sealed class test_flow_state
             () => router.Recv(received, RecvFlags.DontWait), 2000));
         received.Dispose();
 
-        using var events = new CallbackEventQueue<SocketMonitorEvent>();
         using ISocketMonitor monitor = dealer.MonitorOpen(
             SocketEvent.SendFlowPaused | SocketEvent.SendFlowResumed);
-        monitor.OnEvent(events.Enqueue);
 
         // The ROUTER asking to pause blocks the DEALER's send pipe, so the
         // event is observed on the DEALER's monitor, not the ROUTER's.
         router.SetReceiveFlowState(ReceiveFlowState.Paused);
 
-        Assert.True(events.TryDequeue(2000, out SocketMonitorEvent paused));
+        SocketMonitorEvent paused = monitor.Recv()
+            ?? throw new TimeoutException("missing pause event");
         Assert.Equal(MonitorEventType.SendFlowPaused, paused.Event);
         Assert.NotEqual(0UL, paused.Value);
-        Assert.NotEqual(0UL, paused.TransportPairId);
+        Assert.NotEqual(0UL, paused.ConnectionId);
         Assert.NotNull(paused.RoutingId);
         Assert.Equal(MonitorEventFlags.None,
             paused.Flags & MonitorEventFlags.SendFlowWritable);
 
         router.SetReceiveFlowState(ReceiveFlowState.Running);
 
-        Assert.True(events.TryDequeue(2000, out SocketMonitorEvent resumed));
+        SocketMonitorEvent resumed = monitor.Recv()
+            ?? throw new TimeoutException("missing resume event");
         Assert.Equal(MonitorEventType.SendFlowResumed, resumed.Event);
         Assert.True(resumed.Value > paused.Value);
-        Assert.Equal(paused.TransportPairId, resumed.TransportPairId);
-        Assert.Equal(paused.TransportPairGeneration,
-            resumed.TransportPairGeneration);
+        Assert.Equal(paused.ConnectionId, resumed.ConnectionId);
+        Assert.Equal(paused.TransportLane, resumed.TransportLane);
         Assert.Equal(MonitorEventFlags.SendFlowWritable,
             resumed.Flags & MonitorEventFlags.SendFlowWritable);
     }
@@ -147,7 +146,7 @@ public sealed class test_flow_state
             () => client.SetReceiveFlowState(ReceiveFlowState.Paused));
 
         using Message payload = Message.From("still-works");
-        client.Send().Message(payload).Submit(SendFlags.None);
+        client.Send().Message(payload).Submit();
 
         var received = Received.Create();
         Assert.True(CoreTestSupport.WaitUntil(

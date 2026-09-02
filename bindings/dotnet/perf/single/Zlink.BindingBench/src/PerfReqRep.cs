@@ -211,18 +211,17 @@ internal static class PerfReqRep
                 msgSize,
                 durationSeconds,
                 latencyCap,
-                (message, callback) =>
+                message =>
                 {
                     using Message? tail = PerfSocketIo.MeasurementPartCount == 2
                         ? Message.Allocate(0) : null;
                     if (tail == null)
-                        client.Request().Message(message)
+                        return client.Request().Message(message)
                             .Timeout(ResolveReqRepTimeout())
-                            .Submit(SendFlags.DontWait, callback);
-                    else
-                        client.Request().Message(message).Message(tail)
-                            .Timeout(ResolveReqRepTimeout())
-                            .Submit(SendFlags.DontWait, callback);
+                            .Async();
+                    return client.Request().Message(message).Message(tail)
+                        .Timeout(ResolveReqRepTimeout())
+                        .Async();
                 });
         }
         catch (Exception ex)
@@ -265,7 +264,7 @@ internal static class PerfReqRep
                 using Message pingMessage = Message.From(ping);
                 client.Send(RouterReqRepServerRid)
                     .Message(pingMessage)
-                    .Submit(SendFlags.None);
+                    .Submit();
             }
             catch (ZlinkException ex)
                 when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
@@ -301,7 +300,7 @@ internal static class PerfReqRep
             using Message pongMessage = Message.From(pong);
             server.Send(clientActualRoutingId.Value)
                 .Message(pongMessage)
-                .Submit(SendFlags.None);
+                .Submit();
         }
         catch (ZlinkException ex)
             when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
@@ -368,18 +367,17 @@ internal static class PerfReqRep
                 msgSize,
                 durationSeconds,
                 latencyCap,
-                (message, callback) =>
+                message =>
                 {
                     using Message? tail = PerfSocketIo.MeasurementPartCount == 2
                         ? Message.Allocate(0) : null;
                     if (tail == null)
-                        client.Request(targetRid).Message(message)
+                        return client.Request(targetRid).Message(message)
                             .Timeout(ResolveReqRepTimeout())
-                            .Submit(SendFlags.DontWait, callback);
-                    else
-                        client.Request(targetRid).Message(message).Message(tail)
-                            .Timeout(ResolveReqRepTimeout())
-                            .Submit(SendFlags.DontWait, callback);
+                            .Async();
+                    return client.Request(targetRid).Message(message).Message(tail)
+                        .Timeout(ResolveReqRepTimeout())
+                        .Async();
                 });
         }
         catch (Exception ex)
@@ -407,7 +405,7 @@ internal static class PerfReqRep
 
     private static (long completed, List<double> latencySamples) RunRequestLoop(
         ISocket requester, int msgSize, int durationSeconds, int latencyCap,
-        Action<Message, RequestCallback> submit)
+        Func<Message, Task<IReadOnlyList<Message>>> submit)
     {
         int payloadSize = Math.Max(msgSize, PerfMetricHeaderSize);
         using var completionPoller = Zlink.CreatePoller();
@@ -484,9 +482,10 @@ internal static class PerfReqRep
                     bool submitted = false;
                     try
                     {
-                        submit(message, CompleteRequest);
+                        Task<IReadOnlyList<Message>> request = submit(message);
                         submitted = true;
                         seq++;
+                        _ = CompleteRequest(request);
                     }
                     catch (ZlinkException ex)
                         when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
@@ -507,16 +506,13 @@ internal static class PerfReqRep
                         }
                     }
 
-                    void CompleteRequest(RequestResult result,
-                        IReadOnlyList<Message> parts)
+                    async Task CompleteRequest(
+                        Task<IReadOnlyList<Message>> request)
                     {
+                        IReadOnlyList<Message>? parts = null;
                         try
                         {
-                            if (result == RequestResult.TimedOut)
-                                return;
-                            if (result != RequestResult.Ok)
-                                throw new InvalidOperationException(
-                                    $"request completion failed: {result}");
+                            parts = await request.ConfigureAwait(false);
                             if (!PerfSocketIo.TryMeasurementPayload(parts,
                                     out Message replyPayload))
                             {
@@ -544,13 +540,18 @@ internal static class PerfReqRep
                             }
                             Interlocked.Increment(ref completed);
                         }
+                        catch (ZlinkRequestException ex)
+                            when (ex.Result == ZlinkRequestException.ErrorCode.TimedOut)
+                        {
+                        }
                         catch (Exception ex)
                         {
                             RecordError(ex);
                         }
                         finally
                         {
-                            Zlink.MultipartClose(parts);
+                            if (parts != null)
+                                Zlink.MultipartClose(parts);
                             if (Interlocked.Exchange(ref counted, 0) == 1)
                                 Interlocked.Decrement(ref inFlight);
                         }
@@ -599,7 +600,7 @@ internal static class PerfReqRep
             if (!PerfSocketIo.TryMeasurementPayload(received.Parts,
                     out Message payloadPart))
                 continue;
-            if (!received.RequestSeq.HasValue)
+            if (received.ReplyToken == null)
                 continue;
 
             // HOT PATH: the C replier transfers the received native message

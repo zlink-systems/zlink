@@ -8,31 +8,24 @@ internal sealed partial class SocketKernel : IDisposable
 {
     private const int TopicBufferSize = 4096;
     private const int DontWaitFlag = 1;
-    private readonly SocketCallbackRegistry _callbacks = new();
-    private readonly object _streamRegistrationSync = new();
-
     private readonly SocketHandle _handle;
     private readonly SocketOptionAccessor _options;
     private readonly SocketTypePolicy _policy;
-    private readonly SendCompletionRegistry? _sendCompletion;
-    private bool _streamAttached;
+    private readonly CompletionOwner? _completion;
+    private readonly object _replyTokenOwner = new();
 
     public SocketKernel(Context context, SocketType type)
     {
         _handle = new SocketHandle(context, type);
         _options = new SocketOptionAccessor(_handle);
         _policy = new SocketTypePolicy(type);
-        _sendCompletion = CreateSendCompletion(type);
+        _completion = CreateCompletionOwner(type);
     }
 
     public IntPtr Handle => _handle.DangerousGetHandle();
     public SocketType Type => _policy.SocketType;
-    /// <summary>
-    ///     The socket's Core send-completion bridge. The managed delegate is
-    ///     rooted with the socket so close cannot race lazy bridge creation;
-    ///     the Core completion handler itself is still installed on first use.
-    /// </summary>
-    internal SendCompletionRegistry SendCompletion
+    /// <summary>The socket-local pull-completion owner.</summary>
+    internal CompletionOwner Completion
     {
         get
         {
@@ -41,15 +34,17 @@ internal sealed partial class SocketKernel : IDisposable
                 throw new NotSupportedException(
                     "Asynchronous send requires a PAIR, DEALER, ROUTER, or STREAM socket.");
 
-            return _sendCompletion!;
+            return _completion!;
         }
     }
 
-    private SendCompletionRegistry? CreateSendCompletion(SocketType type)
+    internal object ReplyTokenOwner => _replyTokenOwner;
+
+    private CompletionOwner? CreateCompletionOwner(SocketType type)
     {
         return type is SocketType.Pair or SocketType.Dealer
             or SocketType.Router or SocketType.Stream
-            ? new SendCompletionRegistry(Handle, type)
+            ? new CompletionOwner(Handle, type)
             : null;
     }
 
@@ -57,23 +52,14 @@ internal sealed partial class SocketKernel : IDisposable
         RoutingId? routerRoutingId, IReadOnlyList<Message> parts,
         uint timeoutMs, CancellationToken cancellationToken)
     {
-        return RoutedRequestSubmitter.RequestAsync(Handle, Type,
-            routerRoutingId, parts, timeoutMs, cancellationToken);
+        return Completion.RequestAsync(routerRoutingId, parts, timeoutMs,
+            cancellationToken);
     }
 
     internal IReadOnlyList<Message> Request(RoutingId? routerRoutingId,
-        IReadOnlyList<Message> parts, uint timeoutMs, SendFlags flags)
+        IReadOnlyList<Message> parts, uint timeoutMs)
     {
-        return RoutedRequestSubmitter.Request(Handle, Type, routerRoutingId,
-            parts, timeoutMs, flags);
-    }
-
-    internal void Request(RoutingId? routerRoutingId,
-        IReadOnlyList<Message> parts, uint timeoutMs, SendFlags flags,
-        RequestCallback callback)
-    {
-        RoutedRequestSubmitter.Request(Handle, Type, routerRoutingId, parts,
-            timeoutMs, flags, callback);
+        return Completion.Request(routerRoutingId, parts, timeoutMs);
     }
 
     public bool ReceiveSubscriptionEvent(SubscriptionEvent result,
@@ -86,25 +72,13 @@ internal sealed partial class SocketKernel : IDisposable
         return ReceiveSubscriptionEventInto(result, (int)flags);
     }
 
-    private void SendReplyCore(RoutingId routingId,
-        ulong requestSeq, IReadOnlyList<Message> parts)
+    internal void SendReplyCore(RoutingId routingId,
+        ReplyToken replyToken, IReadOnlyList<Message> parts)
     {
-        var nativeRoutingId = routingId.ToNative();
-        var cloned = RequestReplySupport.CloneParts(parts);
-        try
-        {
-            RequestReplySupport.SubmitClonedParts(cloned,
-                (ref ZlinkMsg nativePart,
-                    NativeMethods.ZlinkPartFlag partFlag) =>
-                    NativeMethods.zlink_router_reply_part(Handle,
-                        ref nativeRoutingId, requestSeq, ref nativePart,
-                        partFlag));
-        }
-        catch
-        {
-            RequestReplySupport.DisposeParts(cloned);
-            throw;
-        }
+        if (!replyToken.IsOwnedBy(_replyTokenOwner))
+            throw new ZlinkSubmitException(SubmitResult.InvalidArgument,
+                (int)ErrorCode.EInval);
+        Completion.Reply(routingId, replyToken, parts);
     }
 
     private void SendPartsWithFlags(IReadOnlyList<Message> parts, int flags)
@@ -187,7 +161,7 @@ internal sealed partial class SocketKernel : IDisposable
             : RoutingId.From(value);
     }
 
-    internal static bool TrySendOrThrow(SendResult result)
+    internal static bool InterpretNoWaitResult(SendResult result)
     {
         return result switch
         {

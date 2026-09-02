@@ -45,14 +45,6 @@ internal abstract class RoutedMessageSocketBase : RoutedReceivingSocketBase
     }
 
     /// <summary>
-    ///     Start a synchronous STREAM send operation.
-    /// </summary>
-    public SendOperation TrySend(RoutingId routingId)
-    {
-        return new StreamSendOperation(this, routingId);
-    }
-
-    /// <summary>
     ///     Send a single routed message part directly.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -67,7 +59,7 @@ internal abstract class RoutedMessageSocketBase : RoutedReceivingSocketBase
         SendFlags flags = SendFlags.None)
     {
         if ((flags & SendFlags.DontWait) != 0)
-            return SocketKernel.TrySendOrThrow(Kernel.SendNoWaitResult(routingId,
+            return SocketKernel.InterpretNoWaitResult(Kernel.SendNoWaitResult(routingId,
                 message));
 
         Kernel.Send(routingId, message, flags);
@@ -79,7 +71,7 @@ internal abstract class RoutedMessageSocketBase : RoutedReceivingSocketBase
         SendFlags flags = SendFlags.None)
     {
         if ((flags & SendFlags.DontWait) != 0)
-            return SocketKernel.TrySendOrThrow(
+            return SocketKernel.InterpretNoWaitResult(
                 Kernel.SendRoutedMessageResultUnchecked(routingId, message,
                     (int)flags));
 
@@ -92,7 +84,7 @@ internal abstract class RoutedMessageSocketBase : RoutedReceivingSocketBase
         SendFlags flags = SendFlags.None)
     {
         if ((flags & SendFlags.DontWait) != 0)
-            return SocketKernel.TrySendOrThrow(Kernel.SendNoWaitResult(routingId,
+            return SocketKernel.InterpretNoWaitResult(Kernel.SendNoWaitResult(routingId,
                 parts));
 
         Kernel.Send(routingId, parts, flags);
@@ -106,7 +98,7 @@ internal abstract class RoutedMessageSocketBase : RoutedReceivingSocketBase
         if (parts.Count == 1)
             return SendRoutedCore(routingId, parts[0], flags);
         if ((flags & SendFlags.DontWait) != 0)
-            return SocketKernel.TrySendOrThrow(Kernel.SendNoWaitResult(routingId,
+            return SocketKernel.InterpretNoWaitResult(Kernel.SendNoWaitResult(routingId,
                 parts));
 
         Kernel.Send(routingId, parts, flags);
@@ -133,11 +125,6 @@ internal abstract class RoutedMessageSocketBase : RoutedReceivingSocketBase
         IReadOnlyList<Message> parts)
     {
         return Kernel.SendNoWaitResult(routingId, parts);
-    }
-
-    internal void OnReceive(SocketRecvHandler handler)
-    {
-        Kernel.RecvHandler(handler);
     }
 
     /// <summary>

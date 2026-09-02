@@ -23,7 +23,6 @@ internal static class PerfMultiPubSubServer
         using var server = ctx.CreatePubSocket();
         ApplyMultiSocketOptions(server, options);
         ConfigureTlsServerIfNeeded(server, options.Transport);
-        server.Options.SendTimeout = TimeSpan.FromMilliseconds(sndTimeoutMs);
         server.Options.NoDrop = options.PubSubXpubNoDrop > 0;
         server.Options.Linger = TimeSpan.Zero;
 
