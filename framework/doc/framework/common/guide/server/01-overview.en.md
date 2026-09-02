@@ -249,10 +249,17 @@ framework you already use.**
   them directly with a channel handler and spot. There's less pre-built for you, but the
   ownership and freedom over the logic stays with the app.
 
-And all of this stays inside the framework you already use — the opposite direction from
-bringing in a new engine and moving to a separate ecosystem.
+Instead of rebuilding for each language, ZLink puts the hard runtime in a single **native
+Core (C API)** and wraps it in per-language layers. Per-language **`bindings`** connect that
+C API to each language's socket API, and on top a per-language **ZLink Framework** provides
+surfaces like RouteMesh · SPOT · actor · STREAM. The reason for this thin 3-layer split is
+**multi-language support** — implement the Core once and swap only the language surface, and
+C++, .NET, the JVM, and Node share the same core. `bindings` and the Core are the framework's
+internal implementation, not exposed on the public API, and application code doesn't change
+even if they're replaced later — this backend boundary is explained separately by
+[internals/backend-dependency-policy](../../internals/backend-dependency-policy.en.md).
 
-<iframe class="zlink-diagram" src="/common/diagrams/overview-stack-en.html" title="ZLink is a library layer on your framework" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/overview-stack-en.html" title="ZLink internal layers — a thin 3-layer stack for multi-language" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/overview-stack-en.html" target="_blank">↗ View larger</a></p>
 
 **As code.** Declare one room, and write that room's progression logic.
@@ -1062,100 +1069,17 @@ request/response."
 The connection/setup code disappears, leaving a handler and a few lines of channel
 registration.
 
-### 3.3 Architecture — Layering And Registration Points
+### 3.3 Layering And Registration Points
 
-=== "C#/.NET"
+<iframe class="zlink-diagram" src="/common/diagrams/01-layers-en.html" title="Layer structure — ZLink on the host, business logic on top" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-layers-en.html" target="_blank">↗ View larger</a></p>
 
-    ```text
-    +-----------------------------------------------------------+
-    |  ASP.NET Core app                                         |
-    |  DI, configuration, logging, hosted services              |
-    +-----------------------------------------------------------+
-    |  ZLink Framework for .NET                                 |
-    |  RouteMesh, SPOT, actor, STREAM, location, monitoring     |
-    +-----------------------------------------------------------+
-    |  bindings/dotnet (backend adapter)                        |
-    |  raw DEALER/ROUTER/PUB/SUB/STREAM socket API               |
-    +-----------------------------------------------------------+
-    |  Core (C API, native)                                      |
-    +-----------------------------------------------------------+
-    ```
-
-=== "C++"
-
-    ```text
-    +-----------------------------------------------------------+
-    |  C++ application                                          |
-    |  DI, configuration, logging, hosted services              |
-    +-----------------------------------------------------------+
-    |  ZLink Framework for C++ (includes DI/config/HTTP)         |
-    |  RouteMesh, SPOT, actor, STREAM, location, monitoring     |
-    +-----------------------------------------------------------+
-    |  bindings/cpp (backend adapter)                           |
-    |  raw DEALER/ROUTER/PUB/SUB/STREAM socket API               |
-    +-----------------------------------------------------------+
-    |  Core (C API, native)                                      |
-    +-----------------------------------------------------------+
-    ```
-
-=== "Java"
-
-    ```text
-    +-----------------------------------------------------------+
-    |  Spring Boot app                                          |
-    |  DI, configuration, logging, hosted services              |
-    +-----------------------------------------------------------+
-    |  ZLink Framework for Java                                 |
-    |  RouteMesh, SPOT, actor, STREAM, location, monitoring     |
-    +-----------------------------------------------------------+
-    |  bindings/java (backend adapter)                          |
-    |  raw DEALER/ROUTER/PUB/SUB/STREAM socket API               |
-    +-----------------------------------------------------------+
-    |  Core (C API, native)                                      |
-    +-----------------------------------------------------------+
-    ```
-
-=== "Kotlin"
-
-    ```text
-    +-----------------------------------------------------------+
-    |  Spring Boot app (Kotlin)                                 |
-    |  DI, configuration, logging, hosted services              |
-    +-----------------------------------------------------------+
-    |  ZLink Framework + Kotlin layer                            |
-    |  RouteMesh, SPOT, actor, STREAM, location, monitoring     |
-    +-----------------------------------------------------------+
-    |  bindings/java (backend adapter)                          |
-    |  raw DEALER/ROUTER/PUB/SUB/STREAM socket API               |
-    +-----------------------------------------------------------+
-    |  Core (C API, native)                                      |
-    +-----------------------------------------------------------+
-    ```
-
-=== "Node/TypeScript"
-
-    ```text
-    +-----------------------------------------------------------+
-    |  NestJS app                                               |
-    |  DI, configuration, logging, hosted services              |
-    +-----------------------------------------------------------+
-    |  ZLink Framework for Node.js                              |
-    |  RouteMesh, SPOT, actor, STREAM, location, monitoring     |
-    +-----------------------------------------------------------+
-    |  bindings/node (backend adapter)                          |
-    |  raw DEALER/ROUTER/PUB/SUB/STREAM socket API               |
-    +-----------------------------------------------------------+
-    |  Core (C API, native)                                      |
-    +-----------------------------------------------------------+
-    ```
-
-The code the application writes lives in the top two layers. The Framework exposes its own
-functionality through the **DI · hosted service · handler · attribute** model, and the
-bottom two layers (`bindings/dotnet`, the Core C API) are used only as a backend hidden
-behind the framework — never directly exposed on the public API, and application code
-doesn't change even if they're replaced later. This backend boundary and data flow are
-explained separately by
-[internals/backend-dependency-policy](../../internals/backend-dependency-policy.en.md).
+Put the host framework you already use (ASP.NET Core · Spring Boot · NestJS · C++ host) at
+the bottom and register the ZLink Framework into it with `AddZLinkFramework` — the opposite
+of bringing in a new engine and moving to a separate ecosystem; all of this runs inside the
+framework you already use. On top of that, the only code you write is the **business logic**
+(Spot · Actor · handler), and the Framework exposes its own functionality through the
+**DI · hosted service · handler · attribute** model.
 
 The point where the application meets this stack is **one registration spot.** This is where
 you declare the MeshNode, fanout, and STREAM node.

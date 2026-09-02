@@ -172,6 +172,14 @@ share the same state without any separate synchronization. In relocation too, th
 its member Actors move together as one unit. On the other hand, one slow callback delays
 every subsequent callback for that Spot.
 
+Here is concretely how SpotWide handles many requests without locks. Every callback bound for
+one Spot (including other Actors' messages, timers, and lifecycle) passes through one common
+gate and runs one turn at a time on a single lane. Because no two turns run at the same moment,
+the handler mutates Spot and member-Actor state directly with plain code and no lock.
+
+<iframe class="zlink-diagram" src="/common/diagrams/06-spotwide-lockfree-en.html" title="SpotWide — lock-free serial execution" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/06-spotwide-lockfree-en.html" target="_blank">↗ View larger</a></p>
+
 Choose **`PerActor`** when you need per-Actor independent execution to get throughput. Treat
 the Spot itself as a stateless shell. Because different lanes run concurrently, keep state
 that multiple Actors change together, and the Spot-level schedule, in external storage like

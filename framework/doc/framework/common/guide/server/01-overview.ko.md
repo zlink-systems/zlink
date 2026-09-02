@@ -218,10 +218,17 @@ ZLink는 이 중 **연결·세션(STREAM), room·상태 단위(SPOT), 서버 간
   handler와 spot으로 직접 작성한다. 미리 만들어진 기능은 적지만, 로직의 소유권과
   자유도가 앱에 남는다.
 
-그리고 이 전부가 쓰던 프레임워크 안이다 — 엔진을 새로 들여와 별도 생태계로 옮겨가야
-하는 것과는 정반대 방향이다.
+ZLink는 언어마다 처음부터 다시 만드는 대신, 어려운 런타임을 담은 **native Core(C API)**
+하나를 두고 그 위를 언어별 계층으로 감싼다. 언어별 **`bindings`** 가 그 C API를 각 언어의
+소켓 API로 잇고, 그 위에 언어별 **ZLink Framework** 가 RouteMesh · SPOT · actor · STREAM
+같은 표면을 제공한다. 이렇게 얇은 3계층으로 나눈 이유는 **다중 언어 지원**이다 — Core를
+한 번만 구현하고 언어 표면만 갈아 끼우면 C++ · .NET · JVM · Node가 같은 코어를 공유한다.
+`bindings`와 Core는 프레임워크 내부 구현이라 public API에 노출되지 않고, 나중에 교체돼도
+application 코드는 바뀌지 않는다 — 이 backend 경계는
+[internals/backend-dependency-policy](../../internals/backend-dependency-policy.ko.md)가
+별도로 설명한다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/overview-stack.html" title="ZLink은 프레임워크 위의 라이브러리 계층" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/overview-stack.html" title="ZLink 계층 관계 — 다중 언어를 위한 얇은 3계층" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/overview-stack.html" target="_blank">↗ 크게 보기</a></p>
 
 **코드로 보면.** room 하나를 선언하고, 그 room의 진행 로직을 쓴다.
@@ -1010,100 +1017,16 @@ application에서는 "`services` mesh의 `orders` channel로 요청을 보낸다
 
 연결·설정 코드가 사라지고 남는 것은 handler와 channel 등록 몇 줄이다.
 
-### 3.3 아키텍처 — 계층 구조와 등록 지점
+### 3.3 계층 구조와 등록 지점
 
-=== "C#/.NET"
+<iframe class="zlink-diagram" src="/common/diagrams/01-layers.html" title="계층 구조 — host 위에 ZLink, 그 위에 비즈니스 로직" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-layers.html" target="_blank">↗ 크게 보기</a></p>
 
-    ```text
-    +-----------------------------------------------------------+
-    |  ASP.NET Core app                                         |
-    |  DI, configuration, logging, hosted services              |
-    +-----------------------------------------------------------+
-    |  ZLink Framework for .NET                                 |
-    |  RouteMesh, SPOT, actor, STREAM, location, monitoring     |
-    +-----------------------------------------------------------+
-    |  bindings/dotnet (backend adapter)                        |
-    |  raw DEALER/ROUTER/PUB/SUB/STREAM socket API               |
-    +-----------------------------------------------------------+
-    |  Core (C API, native)                                      |
-    +-----------------------------------------------------------+
-    ```
-
-=== "C++"
-
-    ```text
-    +-----------------------------------------------------------+
-    |  C++ application                                          |
-    |  DI, configuration, logging, hosted services              |
-    +-----------------------------------------------------------+
-    |  ZLink Framework for C++ (DI·config·HTTP 포함)              |
-    |  RouteMesh, SPOT, actor, STREAM, location, monitoring     |
-    +-----------------------------------------------------------+
-    |  bindings/cpp (backend adapter)                           |
-    |  raw DEALER/ROUTER/PUB/SUB/STREAM socket API               |
-    +-----------------------------------------------------------+
-    |  Core (C API, native)                                      |
-    +-----------------------------------------------------------+
-    ```
-
-=== "Java"
-
-    ```text
-    +-----------------------------------------------------------+
-    |  Spring Boot app                                          |
-    |  DI, configuration, logging, hosted services              |
-    +-----------------------------------------------------------+
-    |  ZLink Framework for Java                                 |
-    |  RouteMesh, SPOT, actor, STREAM, location, monitoring     |
-    +-----------------------------------------------------------+
-    |  bindings/java (backend adapter)                          |
-    |  raw DEALER/ROUTER/PUB/SUB/STREAM socket API               |
-    +-----------------------------------------------------------+
-    |  Core (C API, native)                                      |
-    +-----------------------------------------------------------+
-    ```
-
-=== "Kotlin"
-
-    ```text
-    +-----------------------------------------------------------+
-    |  Spring Boot app (Kotlin)                                 |
-    |  DI, configuration, logging, hosted services              |
-    +-----------------------------------------------------------+
-    |  ZLink Framework + Kotlin 레이어                             |
-    |  RouteMesh, SPOT, actor, STREAM, location, monitoring     |
-    +-----------------------------------------------------------+
-    |  bindings/java (backend adapter)                          |
-    |  raw DEALER/ROUTER/PUB/SUB/STREAM socket API               |
-    +-----------------------------------------------------------+
-    |  Core (C API, native)                                      |
-    +-----------------------------------------------------------+
-    ```
-
-=== "Node/TypeScript"
-
-    ```text
-    +-----------------------------------------------------------+
-    |  NestJS app                                               |
-    |  DI, configuration, logging, hosted services              |
-    +-----------------------------------------------------------+
-    |  ZLink Framework for Node.js                              |
-    |  RouteMesh, SPOT, actor, STREAM, location, monitoring     |
-    +-----------------------------------------------------------+
-    |  bindings/node (backend adapter)                          |
-    |  raw DEALER/ROUTER/PUB/SUB/STREAM socket API               |
-    +-----------------------------------------------------------+
-    |  Core (C API, native)                                      |
-    +-----------------------------------------------------------+
-    ```
-
-application이 짜는 코드는 맨 위 두 층이다. Framework는 자신의 기능을
-**DI · hosted service · handler · attribute** 모델로 제공하고, 아래 두 층
-(`bindings/dotnet`, Core C API)은 framework 뒤에 숨는 backend로만 쓰인다 —
-public API에 직접 노출되지 않으며, 나중에 교체돼도 application 코드는 바뀌지
-않는다. 이 backend 경계와 데이터 흐름은
-[internals/backend-dependency-policy](../../internals/backend-dependency-policy.ko.md)가
-별도로 설명한다.
+쓰던 host framework(ASP.NET Core · Spring Boot · NestJS · C++ host)를 바닥에 두고, 거기에
+ZLink Framework를 `AddZLinkFramework`로 등록한다 — 엔진을 새로 들여와 별도 생태계로
+옮겨가는 것과는 정반대로, 이 전부가 쓰던 프레임워크 안에서 돌아간다. 그 위에서 내가
+작성하는 건 맨 위 **비즈니스 로직**(Spot · Actor · handler)뿐이고, Framework는 자신의
+기능을 **DI · hosted service · handler · attribute** 모델로 제공한다.
 
 application이 이 스택과 만나는 지점은 **등록 코드 한 곳**이다. 여기서 MeshNode,
 fanout과 STREAM node를 선언한다.

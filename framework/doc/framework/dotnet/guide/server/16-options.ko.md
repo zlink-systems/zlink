@@ -312,7 +312,7 @@ weight 값의 범위는 `0..10000`이고 기본값은 `100`이다. 운영 흐름
 - 정확한 signature와 값 범위:
   [Topology 공개 인터페이스](../../../common/spec/server/languages/dotnet/interfaces/03-configuration-topology.ko.md) ·
   [Host 구성 인터페이스](../../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.ko.md)
-- 등록 지점과 계층 구조: [01-overview](01-overview.ko.md#33-아키텍처--계층-구조와-등록-지점)
+- 등록 지점과 계층 구조: [01-overview](01-overview.ko.md#33-계층-구조와-등록-지점)
 - 실행 중 관측과 운영: [11-monitoring](11-monitoring.ko.md) · [12-operations](12-operations.ko.md)
 
 ---

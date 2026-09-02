@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="generator" content="hand-authored svg (zlink docs)">
+<title>SpotWide — lock-free serial execution</title>
+<script>
+  (function () { try {
+    var p = new URLSearchParams(location.search).get('theme');
+    if (p === 'light' || p === 'dark') document.documentElement.setAttribute('data-theme', p);
+  } catch (e) {} })();
+</script>
+<style>
+  :root{
+    --ground:#FCFCFD; --ink:#171E26; --ink-soft:#46535F; --muted:#6E7B87;
+    --rule:#DFE4E9; --rule-soft:#EDF0F3; --surface:#F2F4F7;
+    --accent:#0E5C6B; --warn:#A85C26;
+    --mono:"IBM Plex Mono","SFMono-Regular",Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#10151A; --ink:#E7ECF1; --ink-soft:#B4BFC9; --muted:#8493A0;
+      --rule:#262E37; --rule-soft:#1D242C; --surface:#191F27;
+      --accent:#5FBFCE; --warn:#D9954F;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#10151A; --ink:#E7ECF1; --ink-soft:#B4BFC9; --muted:#8493A0;
+    --rule:#262E37; --rule-soft:#1D242C; --surface:#191F27;
+    --accent:#5FBFCE; --warn:#D9954F;
+  }
+  html,body{margin:0}
+  body{background:var(--ground); padding:14px 16px;}
+  .wrap{max-width:960px; margin:0 auto;}
+  svg{display:block; width:100%; height:auto; color:var(--ink-soft);
+       font-family:"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",system-ui,sans-serif;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<svg viewBox="0 0 900 372" role="img" aria-label="SpotWide execution model. Message requests arriving at once from several Actors pass through one shared gate and are serialized onto a single execution lane. Because only one turn runs at a time, the handler mutates Spot and member-Actor state directly with plain code and no lock. The timeline below shows each turn running in order without overlapping.">
+        <defs>
+          <marker id="sw-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z" fill="currentColor"/></marker>
+          <marker id="sw-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z" fill="var(--accent)"/></marker>
+        </defs>
+
+        <!-- eyebrows -->
+        <text x="94" y="30" text-anchor="middle" font-size="11" fill="var(--muted)">requests arriving at once</text>
+        <text x="330" y="30" text-anchor="middle" font-size="11" fill="var(--accent)">shared gate — lined up single-file</text>
+        <text x="668" y="30" text-anchor="middle" font-size="11" fill="var(--accent)">Spot · SpotWide</text>
+
+        <!-- sources -->
+        <rect x="18" y="52" width="152" height="28" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/><text x="94" y="70" text-anchor="middle" font-size="11" fill="currentColor">message · Actor A</text>
+        <rect x="18" y="94" width="152" height="28" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/><text x="94" y="112" text-anchor="middle" font-size="11" fill="currentColor">message · Actor B</text>
+        <rect x="18" y="136" width="152" height="28" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/><text x="94" y="154" text-anchor="middle" font-size="11" fill="currentColor">message · Actor C</text>
+        <text x="94" y="182" text-anchor="middle" font-size="10" fill="var(--muted)">( + timer · lifecycle )</text>
+
+        <!-- converge into gate -->
+        <path d="M170,66 L226,106" fill="none" stroke="currentColor" stroke-width="1.2" marker-end="url(#sw-ah)"/>
+        <path d="M170,108 L226,110" fill="none" stroke="currentColor" stroke-width="1.2" marker-end="url(#sw-ah)"/>
+        <path d="M170,150 L226,114" fill="none" stroke="currentColor" stroke-width="1.2" marker-end="url(#sw-ah)"/>
+
+        <!-- gate -->
+        <rect x="230" y="82" width="26" height="56" rx="3" fill="none" stroke="var(--accent)" stroke-width="2"/>
+        <text x="243" y="154" text-anchor="middle" font-size="10" fill="var(--accent)">gate</text>
+
+        <!-- single queue -->
+        <text x="330" y="86" text-anchor="middle" font-size="10" fill="var(--muted)">single queue (waiting)</text>
+        <rect x="286" y="98" width="26" height="22" rx="2" fill="none" stroke="currentColor" stroke-width="1"/><text x="299" y="113" text-anchor="middle" font-size="10" font-family="var(--mono)" fill="var(--ink-soft)">m₁</text>
+        <rect x="318" y="98" width="26" height="22" rx="2" fill="none" stroke="currentColor" stroke-width="1"/><text x="331" y="113" text-anchor="middle" font-size="10" font-family="var(--mono)" fill="var(--ink-soft)">m₂</text>
+        <rect x="350" y="98" width="26" height="22" rx="2" fill="none" stroke="currentColor" stroke-width="1"/><text x="363" y="113" text-anchor="middle" font-size="10" font-family="var(--mono)" fill="var(--ink-soft)">m₃</text>
+        <path d="M256,110 L284,110" fill="none" stroke="var(--accent)" stroke-width="1.4"/>
+        <path d="M380,110 L448,110" fill="none" stroke="var(--accent)" stroke-width="1.6" marker-end="url(#sw-aha)"/>
+
+        <!-- spot -->
+        <rect x="452" y="46" width="430" height="150" rx="6" fill="none" stroke="var(--accent)" stroke-width="2.2"/>
+        <text x="470" y="72" font-size="13" font-weight="700" fill="currentColor">Spot</text>
+        <text x="510" y="72" font-size="11" fill="var(--muted)">· owns the state</text>
+
+        <!-- single lane -->
+        <rect x="470" y="84" width="394" height="40" rx="3" fill="color-mix(in srgb,var(--accent) 9%,transparent)" stroke="var(--accent)" stroke-width="1"/>
+        <text x="482" y="99" font-size="10" fill="var(--accent)">single execution lane ×1</text>
+        <rect x="482" y="102" width="176" height="18" rx="2" fill="none" stroke="var(--accent)" stroke-width="1.2"/><text x="491" y="115" font-size="10.5" font-family="var(--mono)" fill="var(--accent)">▶ handle(m₀) running</text>
+        <text x="854" y="115" text-anchor="end" font-size="10.5" fill="var(--accent)">one turn at a time</text>
+
+        <!-- shared state + plain code -->
+        <rect x="470" y="132" width="394" height="52" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <text x="482" y="150" font-size="10.5" fill="var(--muted)">shared state · Spot + member Actors (no lock)</text>
+        <text x="482" y="172" font-size="12.5" font-family="var(--mono)"><tspan fill="currentColor">spot.state.count += 1;</tspan><tspan dx="12" fill="var(--accent)">// plain assignment, no lock</tspan></text>
+
+        <!-- ===== timeline ===== -->
+        <text x="44" y="244" font-size="11" fill="var(--muted)">execution order — turns never overlap</text>
+
+        <rect x="60" y="262" width="150" height="30" rx="3" fill="color-mix(in srgb,var(--accent) 10%,transparent)" stroke="var(--accent)" stroke-width="1.3"/><text x="135" y="281" text-anchor="middle" font-size="11" fill="var(--accent)">turn · Actor A</text>
+        <rect x="210" y="262" width="98" height="30" rx="3" fill="color-mix(in srgb,var(--accent) 10%,transparent)" stroke="var(--accent)" stroke-width="1.3"/><text x="259" y="281" text-anchor="middle" font-size="11" fill="var(--accent)">turn · C</text>
+        <rect x="308" y="262" width="168" height="30" rx="3" fill="color-mix(in srgb,var(--accent) 10%,transparent)" stroke="var(--accent)" stroke-width="1.3"/><text x="392" y="281" text-anchor="middle" font-size="11" fill="var(--accent)">turn · Actor B</text>
+        <rect x="476" y="262" width="110" height="30" rx="3" fill="color-mix(in srgb,var(--accent) 10%,transparent)" stroke="var(--accent)" stroke-width="1.3"/><text x="531" y="281" text-anchor="middle" font-size="11" fill="var(--accent)">turn · timer</text>
+
+        <line x1="46" y1="308" x2="742" y2="308" stroke="currentColor" stroke-width="1.2" marker-end="url(#sw-ah)"/>
+        <text x="752" y="312" font-size="10" fill="var(--muted)">time →</text>
+        <text x="46" y="336" font-size="11" fill="var(--accent)">the next turn starts only after the previous ends → no concurrent state access, so no lock is needed</text>
+      </svg>
+</div>
+<script>
+  function sz(){ try { if (window.frameElement)
+    window.frameElement.style.height = document.documentElement.scrollHeight + 'px'; } catch (e) {} }
+  window.addEventListener('load', sz);
+  window.addEventListener('resize', sz);
+  if (window.ResizeObserver) new ResizeObserver(sz).observe(document.body);
+  sz();
+</script>
+</body>
+</html>

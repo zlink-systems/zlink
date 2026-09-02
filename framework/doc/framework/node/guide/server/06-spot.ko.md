@@ -160,6 +160,14 @@ callback을 공통 gate 하나로 직렬화하므로, Spot instance와 member Ac
 단위로 함께 이동한다. 반면 오래 걸리는 callback 하나가 해당 Spot의 다음 callback
 전체를 지연시킨다.
 
+SpotWide가 여러 요청을 어떻게 락 없이 처리하는지 구체적으로 보면 이렇다. 한 Spot으로
+향하는 모든 callback(다른 Actor의 message · timer · lifecycle 포함)이 공통 gate 하나를 지나
+단일 레인에서 turn 하나씩 실행된다. 같은 순간에 실행되는 turn이 없으므로, handler는 Spot과
+member Actor의 상태를 락 없이 평범한 코드로 직접 만진다.
+
+<iframe class="zlink-diagram" src="/common/diagrams/06-spotwide-lockfree.html" title="SpotWide — 락 없는 순차 실행" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/06-spotwide-lockfree.html" target="_blank">↗ 크게 보기</a></p>
+
 **`PerActor`**는 Actor마다 독립적으로 실행해야 처리량을 확보할 수 있을 때 선택한다.
 Spot 자체는 stateless shell로 사용한다. 서로 다른 lane이 동시에 실행되므로 여러
 Actor가 함께 변경하는 상태와 Spot-level schedule은 Redis나 database 같은 외부
