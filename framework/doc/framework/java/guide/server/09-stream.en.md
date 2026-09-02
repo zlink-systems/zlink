@@ -200,8 +200,7 @@ The correlation used for request/response matching is protocol information and k
 working at `off`.
 
 ```java
-ZLinkStreamConnectorOptions.createDefault(endpoint)
-    .withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF);
+ZLinkStreamConnectorOptions.createDefault(endpoint).withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF);
 ```
 
 ## 6. Client Send And Request

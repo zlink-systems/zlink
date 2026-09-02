@@ -264,10 +264,7 @@ bringing in a new engine and moving to a separate ecosystem.
     var node = options.AddRouteMesh("game.room");
     node.Listen("tcp://0.0.0.0:9001");
     node.Channel("game.room").Server();     // A mesh has at least 1 logical membership
-    node.Objects().Server()
-        .AddSpotFactory<BingoRoomSpot>(
-            "room",
-            factory => factory.RecreateOnRelocation());
+    node.Objects().Server().AddSpotFactory<BingoRoomSpot>("room", factory => factory.RecreateOnRelocation());
     ```
 
     ```csharp
@@ -316,11 +313,7 @@ bringing in a new engine and moving to a separate ecosystem.
     ZLinkMeshNodeBuilder node = options.addRouteMesh("game.room");
     node.listen("tcp://0.0.0.0:9001");
     node.channelName("game.room").server();     // A mesh has at least 1 logical membership
-    node.objects().server()
-        .addSpotFactory(
-            "room",
-            BingoRoomSpot.class,
-            factory -> factory.recreateOnRelocation());
+    node.objects().server().addSpotFactory("room", BingoRoomSpot.class, factory -> factory.recreateOnRelocation());
     ```
 
     ```java
@@ -369,8 +362,7 @@ bringing in a new engine and moving to a separate ecosystem.
     const node = builder.addRouteMesh('game.room');
     node.listen('tcp://0.0.0.0:9001');
     node.channel('game.room').server();     // A mesh has at least 1 logical membership
-    node.objects().server()
-      .addSpotFactory('room', BingoRoomSpot, factory => factory.recreateOnRelocation());
+    node.objects().server().addSpotFactory('room', BingoRoomSpot, factory => factory.recreateOnRelocation());
     ```
 
     ```typescript

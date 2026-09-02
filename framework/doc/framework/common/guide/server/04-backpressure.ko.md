@@ -502,32 +502,28 @@ manual job 상한을 정한다. 큰 payload를 오래 유지하는 workload에�
 
     ```cpp
     // C++은 수준을 message flow log mode로 지정한다.
-    options.configure_dispatch ()
-      .message_flow (message_flow_log_mode_t::errors); // 기본값 — error와 backpressure를 기록한다.
+    options.configure_dispatch ().message_flow (message_flow_log_mode_t::errors);  // 기본값 — error와 backpressure를 기록한다.
     ```
 
 === "Java"
 
     ```java
     // Java는 수준을 message flow log mode로 지정한다.
-    options.configureDispatch()
-        .messageFlow(ZLinkMessageFlowLogMode.ERRORS); // 기본값 — error와 backpressure를 기록한다.
+    options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.ERRORS);  // 기본값 — error와 backpressure를 기록한다.
     ```
 
 === "Kotlin"
 
     ```kotlin
     // Kotlin은 Java 표면을 그대로 쓴다.
-    options.configureDispatch()
-        .messageFlow(ZLinkMessageFlowLogMode.ERRORS) // 기본값 — error와 backpressure를 기록한다.
+    options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.ERRORS)  // 기본값 — error와 backpressure를 기록한다.
     ```
 
 === "Node/TypeScript"
 
     ```typescript
     // Node는 수준을 message flow log mode로 지정한다.
-    builder.configureDispatch()
-      .messageFlow("errors"); // 기본값 — error와 backpressure를 기록한다.
+    builder.configureDispatch().messageFlow("errors");  // 기본값 — error와 backpressure를 기록한다.
     ```
 
 

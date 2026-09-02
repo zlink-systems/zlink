@@ -93,8 +93,7 @@ class hello_handler_t
 
 ```cpp
 app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-    auto mesh = options.add_route_mesh ("services")
-      .listen ("tcp://0.0.0.0:7102");                       // 자기 endpoint도 필요하다.
+    auto mesh = options.add_route_mesh ("services").listen ("tcp://0.0.0.0:7102");  // 자기 endpoint도 필요하다.
     mesh.channel_name ("greeting").client ();               // 호출만 하는 쪽은 client.
     mesh.peer_connections ().connect ("tcp://127.0.0.1:7101"); // 수동 연결 — server endpoint를 직접 적는다.
 
@@ -106,8 +105,7 @@ app.add_zlink_framework ([] (zlink_framework_options_t &options) {
 // 대상은 ChannelName 하나다. 어느 node가 처리하는지는 지정하지 않는다.
 task_t<std::string> hello_http_handler_t::handle (const std::string &name)
 {
-    auto reply = co_await _route.request_to_channel ("greeting", hello_t{name})
-                   .async<greeting_t> ();
+    auto reply = co_await _route.request_to_channel ("greeting", hello_t{name}).async<greeting_t> ();
     co_return reply.text;
 }
 ```
@@ -263,8 +261,7 @@ options.add_client_server_channel (sample_channels_t::api)
                        authenticate_player_res_t> ();
 
 // Play process: 인증 요청을 보낸다.
-options.add_client_server_channel (sample_channels_t::api)
-  .client ();
+options.add_client_server_channel (sample_channels_t::api).client ();
 ```
 
 Object 생성과 ClientServer 호출은 서로 다른 기능이다. 방 생성 전용 channel이나

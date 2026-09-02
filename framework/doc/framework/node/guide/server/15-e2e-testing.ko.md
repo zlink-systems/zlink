@@ -229,8 +229,7 @@ async function run(options: TicTacToeClientOptions, signal: AbortSignal): Promis
     'room should wait for the second player.');
 
   // 혼자 들어왔을 때 자기 입장 알림이 자기에게 오면 안 된다.
-  await client1.expectNone<PlayerJoinedNotify>(PacketNames.playerJoinedNotify)
-    .within(250).run(signal);
+  await client1.expectNone<PlayerJoinedNotify>(PacketNames.playerJoinedNotify).within(250).run(signal);
 
   // 4. 두 번째 player가 입장하면 방이 시작된다.
   await client2.connect(signal);

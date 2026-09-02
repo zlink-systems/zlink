@@ -444,8 +444,7 @@ part of the contract. Verifying only the success path leaves this path unverifie
     // Can't open a conversation before authenticating.
     bool failed = false;
     try {
-        co_await agent.request (open_conversation_req_t{"unauthenticated"})
-          .async<open_conversation_res_t> ();
+        co_await agent.request (open_conversation_req_t{"unauthenticated"}).async<open_conversation_res_t> ();
     } catch (const zlink::stream_connector::stream_error_t &error) {
         failed = error.code == zlink::stream_connector::error_code_t::remote_error;
     }
@@ -616,8 +615,7 @@ them together with `Task.WhenAll`.
 
     ```java
     // Bingo -- once both players have joined the room starts, and both clients get the same push.
-    var client1Started = client1.waitFor(BingoGameStartedNotify.class)
-        .submit(BingoGameStartedNotify.class);
+    var client1Started = client1.waitFor(BingoGameStartedNotify.class).submit(BingoGameStartedNotify.class);
     var client2Started = client2.waitFor(BingoGameStartedNotify.class)
         .submit(BingoGameStartedNotify.class);
 
@@ -746,8 +744,7 @@ move, in that order.
 
         // 3. Whoever connects first authenticates and enters the empty room.
         co_await client1.connect ().async ();
-        co_await client1.request (authenticate_req_t{options.x_actor_id})
-          .async<authenticate_res_t> ();
+        co_await client1.request (authenticate_req_t{options.x_actor_id}).async<authenticate_res_t> ();
         auto join1 = co_await join_game (client1, room.room_id); // Register wait -> send -> receive (see §3)
         ensure (join1.state.status == tictactoe_status_t::waiting_for_players);
 
@@ -758,8 +755,7 @@ move, in that order.
 
         // 4. Once the second player joins, the room starts and a push reaches the first player.
         co_await client2.connect ().async ();
-        co_await client2.request (authenticate_req_t{options.o_actor_id})
-          .async<authenticate_res_t> ();
+        co_await client2.request (authenticate_req_t{options.o_actor_id}).async<authenticate_res_t> ();
         auto join2 = co_await join_game (client2, room.room_id);
         ensure (join2.state.status == tictactoe_status_t::in_progress);
 
@@ -777,8 +773,7 @@ move, in that order.
     ```java
     public void run(TicTacToeClientOptions options) {
         // 1. Create a room through the gateway API and get the endpoint to connect to.
-        ZLinkHttpClient api = ZLinkHttpClient.create(options.apiUrl())
-            .timeout(options.httpTimeout()).build();
+        ZLinkHttpClient api = ZLinkHttpClient.create(options.apiUrl()).timeout(options.httpTimeout()).build();
         CreateGameHttpRes room = api.post("/games")
             .body(new CreateGameHttpReq(options.gameName()))
             .fetch(CreateGameHttpRes.class);
@@ -887,8 +882,7 @@ move, in that order.
         'room should wait for the second player.');
 
       // Being alone in the room, their own join notification shouldn't come back to them.
-      await client1.expectNone<PlayerJoinedNotify>(PacketNames.playerJoinedNotify)
-        .within(250).run(signal);
+      await client1.expectNone<PlayerJoinedNotify>(PacketNames.playerJoinedNotify).within(250).run(signal);
 
       // 4. Once the second player joins, the room starts.
       await client2.connect(signal);

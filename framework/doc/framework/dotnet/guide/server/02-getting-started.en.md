@@ -100,8 +100,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddZLinkFramework(options =>
 {
-    var mesh = options.AddRouteMesh("services")
-        .Listen("tcp://0.0.0.0:7102");                     // It also needs its own endpoint.
+    var mesh = options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7102");  // It also needs its own endpoint.
     mesh.Channel("greeting").Client();                     // The call-only side is Client.
     mesh.PeerConnections.Connect("tcp://127.0.0.1:7101");  // Manual connection — write the server endpoint directly.
 });
@@ -288,8 +287,7 @@ options.AddClientServerChannel(SampleChannels.Api)
         AuthenticatePlayerRes>();
 
 // Play process: sends the authentication request.
-options.AddClientServerChannel(SampleChannels.Api)
-    .Client();
+options.AddClientServerChannel(SampleChannels.Api).Client();
 ```
 
 Object creation and a ClientServer call are different features. No dedicated

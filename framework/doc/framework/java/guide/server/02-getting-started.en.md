@@ -99,8 +99,7 @@ public final class HelloHandler implements ZLinkRequestHandler<Hello, Greeting> 
 @Bean
 ZLinkFrameworkConfigurer zlink() {
     return options -> {
-        ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
-            .listen("tcp://0.0.0.0:7102");                  // It also needs its own endpoint.
+        ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102");  // It also needs its own endpoint.
         mesh.channelName("greeting").client();                  // The call-only side is Client.
         mesh.peerConnections().connect("tcp://127.0.0.1:7101"); // Manual connection — write the server endpoint directly.
     };
@@ -275,8 +274,7 @@ options.addClientServerChannel(SampleChannels.API)
         AuthenticatePlayerRes.class);
 
 // Play process: sends the authentication request.
-options.addClientServerChannel(SampleChannels.API)
-    .client();
+options.addClientServerChannel(SampleChannels.API).client();
 ```
 
 Object creation and a ClientServer call are different features. No dedicated

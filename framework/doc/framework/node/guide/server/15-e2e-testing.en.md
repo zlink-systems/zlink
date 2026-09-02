@@ -238,8 +238,7 @@ async function run(options: TicTacToeClientOptions, signal: AbortSignal): Promis
     'room should wait for the second player.');
 
   // Being alone in the room, their own join notification shouldn't come back to them.
-  await client1.expectNone<PlayerJoinedNotify>(PacketNames.playerJoinedNotify)
-    .within(250).run(signal);
+  await client1.expectNone<PlayerJoinedNotify>(PacketNames.playerJoinedNotify).within(250).run(signal);
 
   // 4. Once the second player joins, the room starts.
   await client2.connect(signal);

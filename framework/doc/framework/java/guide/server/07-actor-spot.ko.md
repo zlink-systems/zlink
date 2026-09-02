@@ -375,8 +375,7 @@ shutdown seal이 먼저면 `ShuttingDown`으로 끝난다.
 Actor가 어느 Spot과 node에 있는지 몰라도 ActorId로 메시지를 보낼 수 있다.
 
 ```java
-actorClient.sendToActor(playerId, new AwardExperience(10))
-    .submit().toCompletableFuture().join();
+actorClient.sendToActor(playerId, new AwardExperience(10)).submit().toCompletableFuture().join();
 
 PlayerProfile profile = actorClient
     .requestToActor(playerId, new GetPlayerProfile())

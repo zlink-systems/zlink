@@ -82,11 +82,9 @@ admission에서 하나만 Ready로 유지한다.
 const play = builder.addRouteMesh('play');
 play.listen(5501).setRoutingIdPrefix('play');
 
-play.objects().server()
-  .addSpotFactory('room', RoomSpot, (factory) => factory.recreateOnRelocation());
+play.objects().server().addSpotFactory('room', RoomSpot, (factory) => factory.recreateOnRelocation());
 
-play.channel('play.ops').server()
-  .addRequestHandler('GetNodeStatus', NodeStatusHandler);
+play.channel('play.ops').server().addRequestHandler('GetNodeStatus', NodeStatusHandler);
 ```
 
 Application은 Actor·Spot을 생성할 target Node RID나 endpoint를 지정하지 않는다. Framework가 stable type,

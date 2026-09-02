@@ -1108,8 +1108,7 @@ Actor가 어느 Spot과 node에 있는지 몰라도 ActorId로 메시지를 보�
 === "Java"
 
     ```java
-    actorClient.sendToActor(playerId, new AwardExperience(10))
-        .submit().toCompletableFuture().join();
+    actorClient.sendToActor(playerId, new AwardExperience(10)).submit().toCompletableFuture().join();
 
     PlayerProfile profile = actorClient
         .requestToActor(playerId, new GetPlayerProfile())

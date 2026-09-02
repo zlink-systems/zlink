@@ -1126,8 +1126,7 @@ You can send a message by ActorId without knowing which Spot or node the Actor i
 === "Java"
 
     ```java
-    actorClient.sendToActor(playerId, new AwardExperience(10))
-        .submit().toCompletableFuture().join();
+    actorClient.sendToActor(playerId, new AwardExperience(10)).submit().toCompletableFuture().join();
 
     PlayerProfile profile = actorClient
         .requestToActor(playerId, new GetPlayerProfile())

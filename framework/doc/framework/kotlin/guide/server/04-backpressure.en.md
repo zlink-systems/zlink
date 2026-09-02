@@ -369,8 +369,7 @@ Terminal reply/error completion identifiable before receive does not use this pe
 
 ```kotlin
 // Kotlin uses the Java surface as-is.
-options.configureDispatch()
-    .messageFlow(ZLinkMessageFlowLogMode.ERRORS) // Default — records errors and backpressure.
+options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.ERRORS)  // Default — records errors and backpressure.
 ```
 
 If `backpressured` shows up in the message flow record, it means waiting for a send slot

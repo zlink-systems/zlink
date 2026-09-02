@@ -407,8 +407,7 @@ The framework doesn't automatically open every discovered handler on every chann
 ```cpp
 options.handlers ().group ("api").add<get_profile_handler_t> ();  // Puts the handler in a group.
 auto mesh = options.add_route_mesh ("services");
-mesh.listen ("tcp://0.0.0.0:7101")
-  .set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
+mesh.listen ("tcp://0.0.0.0:7101").set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
 mesh.channel_name ("api").server ()      // server () is the role that receives handlers.
   .use_handler_group ("api");
 ```
@@ -420,8 +419,7 @@ role.
 
 ```cpp
 auto mesh = options.add_route_mesh ("services");
-mesh.listen ("tcp://0.0.0.0:7101")
-  .set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
+mesh.listen ("tcp://0.0.0.0:7101").set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
 
 mesh.channel_name ("api").server ()          // A channel this node handles.
   .add_request_handler<get_profile_handler_t, get_profile_request_t, get_profile_reply_t> ();
@@ -741,8 +739,7 @@ The same `Weight` is also set as an initial value at registration time.
 
 ```cpp
 auto mesh = options.add_route_mesh ("services");
-mesh.listen ("tcp://0.0.0.0:7101")
-  .set_routing_id (zlink::routing_id_t::from (std::string ("orders-1")));
+mesh.listen ("tcp://0.0.0.0:7101").set_routing_id (zlink::routing_id_t::from (std::string ("orders-1")));
 mesh.channel_name ("orders").server ().set_weight (30); // This channel role's starting weight
 ```
 
@@ -811,8 +808,7 @@ The calling node registers provider endpoints via location-store auto-connect or
 ```cpp
 // Processing node A -- a node registering the same ChannelName as server becomes a candidate.
 auto mesh = options.add_route_mesh ("media");
-mesh.listen ("tcp://0.0.0.0:5600")
-  .set_routing_id (zlink::routing_id_t::from (std::string ("resize")));
+mesh.listen ("tcp://0.0.0.0:5600").set_routing_id (zlink::routing_id_t::from (std::string ("resize")));
 mesh.channel_name ("image.resize").server ()
   .add_request_handler<resize_handler_t, resize_request_t, resize_reply_t> ();
 ```
@@ -885,8 +881,7 @@ pick where an Actor/Spot is created or to pin a business message to a specific s
 
 ```cpp
 auto mesh = options.add_route_mesh ("play");
-mesh.listen (play_router_endpoint)
-  .set_routing_id (zlink::routing_id_t::from (play_router_id));
+mesh.listen (play_router_endpoint).set_routing_id (zlink::routing_id_t::from (play_router_id));
 
 // A handler that returns the node's own operational status.
 mesh.add_route_request_handler<node_status_handler_t, get_node_status_t, node_status_t> (

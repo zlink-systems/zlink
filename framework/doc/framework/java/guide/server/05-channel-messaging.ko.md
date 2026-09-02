@@ -706,8 +706,7 @@ public final class AvroOrderSerializer implements ZLinkMessageSerializer {
     @Override
     public ZLinkMessage serialize(Object value, Class<?> type) {
         var buffer = new ByteArrayOutputStream();
-        new GenericDatumWriter<>(schema)
-            .write(value, EncoderFactory.get().binaryEncoder(buffer, null));
+        new GenericDatumWriter<>(schema).write(value, EncoderFactory.get().binaryEncoder(buffer, null));
         return ZLinkMessage.from(buffer.toByteArray());
     }
 

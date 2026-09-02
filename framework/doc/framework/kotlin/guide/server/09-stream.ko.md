@@ -197,8 +197,7 @@ outbound frame에 flow 식별자를 만들거나 부착하지 않아 관측 전�
 Request/response 매칭에 쓰는 correlation은 protocol 정보라 `off`에서도 그대로 동작한다.
 
 ```kotlin
-ZLinkStreamConnectorOptions.createDefault(endpoint)
-    .withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF)
+ZLinkStreamConnectorOptions.createDefault(endpoint).withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF)
 ```
 
 ## 6. Client send와 request

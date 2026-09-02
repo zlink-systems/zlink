@@ -134,8 +134,7 @@ stable type becomes a placement candidate.
 
 ```cpp
 auto mesh = options.add_route_mesh ("play");
-mesh.listen ("tcp://0.0.0.0:9001")
-  .set_routing_id (zlink::routing_id_t::from (std::string ("play")));
+mesh.listen ("tcp://0.0.0.0:9001").set_routing_id (zlink::routing_id_t::from (std::string ("play")));
 
 mesh.set_object_role (object_role_t::server)
   // Registers the Entry Spot an Actor is placed in first.

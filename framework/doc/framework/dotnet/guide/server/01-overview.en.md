@@ -199,10 +199,7 @@ bringing in a new engine and moving to a separate ecosystem.
 var node = options.AddRouteMesh("game.room");
 node.Listen("tcp://0.0.0.0:9001");
 node.Channel("game.room").Server();     // A mesh has at least 1 logical membership
-node.Objects().Server()
-    .AddSpotFactory<BingoRoomSpot>(
-        "room",
-        factory => factory.RecreateOnRelocation());
+node.Objects().Server().AddSpotFactory<BingoRoomSpot>("room", factory => factory.RecreateOnRelocation());
 ```
 
 ```csharp

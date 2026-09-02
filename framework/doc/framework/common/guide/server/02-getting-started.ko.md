@@ -357,8 +357,7 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
 
     builder.Services.AddZLinkFramework(options =>
     {
-        var mesh = options.AddRouteMesh("services")
-            .Listen("tcp://0.0.0.0:7102");                     // 자기 endpoint도 필요하다.
+        var mesh = options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7102");  // 자기 endpoint도 필요하다.
         mesh.Channel("greeting").Client();                     // 호출만 하는 쪽은 Client.
         mesh.PeerConnections.Connect("tcp://127.0.0.1:7101");  // 수동 연결 — server endpoint를 직접 적는다.
     });
@@ -385,8 +384,7 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
 
     ```cpp
     app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-        auto mesh = options.add_route_mesh ("services")
-          .listen ("tcp://0.0.0.0:7102");                       // 자기 endpoint도 필요하다.
+        auto mesh = options.add_route_mesh ("services").listen ("tcp://0.0.0.0:7102");  // 자기 endpoint도 필요하다.
         mesh.channel_name ("greeting").client ();               // 호출만 하는 쪽은 client.
         mesh.peer_connections ().connect ("tcp://127.0.0.1:7101"); // 수동 연결 — server endpoint를 직접 적는다.
 
@@ -398,8 +396,7 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
     // 대상은 ChannelName 하나다. 어느 node가 처리하는지는 지정하지 않는다.
     task_t<std::string> hello_http_handler_t::handle (const std::string &name)
     {
-        auto reply = co_await _route.request_to_channel ("greeting", hello_t{name})
-                       .async<greeting_t> ();
+        auto reply = co_await _route.request_to_channel ("greeting", hello_t{name}).async<greeting_t> ();
         co_return reply.text;
     }
     ```
@@ -410,8 +407,7 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
     @Bean
     ZLinkFrameworkConfigurer zlink() {
         return options -> {
-            ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
-                .listen("tcp://0.0.0.0:7102");                  // 자기 endpoint도 필요하다.
+            ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102");  // 자기 endpoint도 필요하다.
             mesh.channelName("greeting").client();                  // 호출만 하는 쪽은 Client.
             mesh.peerConnections().connect("tcp://127.0.0.1:7101"); // 수동 연결 — server endpoint를 직접 적는다.
         };
@@ -438,8 +434,7 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
     ```kotlin
     @Bean
     fun zlink(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
-        val mesh = options.addRouteMesh("services")
-            .listen("tcp://0.0.0.0:7102")                       // 자기 endpoint도 필요하다.
+        val mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102")  // 자기 endpoint도 필요하다.
         mesh.channelName("greeting").client()                       // 호출만 하는 쪽은 Client.
         mesh.peerConnections().connect("tcp://127.0.0.1:7101")  // 수동 연결 — server endpoint를 직접 적는다.
     }
@@ -463,8 +458,7 @@ Location store도 Redis도 없이, endpoint를 직접 적는 수동 연결로 re
     ZLinkModule.forRootFactory({
       useFactory: () => {
         const builder = zlinkFramework();
-        const mesh = builder.addRouteMesh('services')
-          .listen('tcp://0.0.0.0:7102');                        // 자기 endpoint도 필요하다.
+        const mesh = builder.addRouteMesh('services').listen('tcp://0.0.0.0:7102');  // 자기 endpoint도 필요하다.
         mesh.channel('greeting').client();                      // 호출만 하는 쪽은 client.
         mesh.peerConnections().connect('tcp://127.0.0.1:7101');   // 수동 연결 — server endpoint를 직접 적는다.
         return builder.build();
@@ -1018,8 +1012,7 @@ API 서버에 요청할 때 사용한다. Game Spot 생성에는 사용하지 �
             AuthenticatePlayerRes>();
 
     // Play process: 인증 요청을 보낸다.
-    options.AddClientServerChannel(SampleChannels.Api)
-        .Client();
+    options.AddClientServerChannel(SampleChannels.Api).Client();
     ```
 
 === "C++"
@@ -1034,8 +1027,7 @@ API 서버에 요청할 때 사용한다. Game Spot 생성에는 사용하지 �
                            authenticate_player_res_t> ();
 
     // Play process: 인증 요청을 보낸다.
-    options.add_client_server_channel (sample_channels_t::api)
-      .client ();
+    options.add_client_server_channel (sample_channels_t::api).client ();
     ```
 
 === "Java"
@@ -1051,8 +1043,7 @@ API 서버에 요청할 때 사용한다. Game Spot 생성에는 사용하지 �
             AuthenticatePlayerRes.class);
 
     // Play process: 인증 요청을 보낸다.
-    options.addClientServerChannel(SampleChannels.API)
-        .client();
+    options.addClientServerChannel(SampleChannels.API).client();
     ```
 
 === "Kotlin"
@@ -1068,8 +1059,7 @@ API 서버에 요청할 때 사용한다. Game Spot 생성에는 사용하지 �
             AuthenticatePlayerRes::class.java)
 
     // Play process: 인증 요청을 보낸다.
-    options.addClientServerChannel(SampleChannels.API)
-        .client()
+    options.addClientServerChannel(SampleChannels.API).client()
     ```
 
 === "Node/TypeScript"
@@ -1082,8 +1072,7 @@ API 서버에 요청할 때 사용한다. Game Spot 생성에는 사용하지 �
       .addRequestHandler(PacketNames.authenticatePlayerReq, AuthenticatePlayerHandler);
 
     // Play process: 인증 요청을 보낸다.
-    builder.addClientServerChannel(SampleChannels.api)
-      .client();
+    builder.addClientServerChannel(SampleChannels.api).client();
     ```
 
 Object 생성과 ClientServer 호출은 서로 다른 기능이다. 방 생성 전용 channel이나

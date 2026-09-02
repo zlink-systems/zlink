@@ -89,11 +89,9 @@ keep only one Ready.
 const play = builder.addRouteMesh('play');
 play.listen(5501).setRoutingIdPrefix('play');
 
-play.objects().server()
-  .addSpotFactory('room', RoomSpot, (factory) => factory.recreateOnRelocation());
+play.objects().server().addSpotFactory('room', RoomSpot, (factory) => factory.recreateOnRelocation());
 
-play.channel('play.ops').server()
-  .addRequestHandler('GetNodeStatus', NodeStatusHandler);
+play.channel('play.ops').server().addRequestHandler('GetNodeStatus', NodeStatusHandler);
 ```
 
 The application never specifies the target Node RID or endpoint to create an Actor/Spot on.

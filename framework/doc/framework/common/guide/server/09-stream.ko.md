@@ -360,8 +360,7 @@ one-shot reply token을 사용한다.
     task_t<void> handle (stream_t &stream, const ping_t &message)
     {
         // 같은 request correlation으로 한 번만 reply한다. request가 아니면 실패로 끝난다.
-        co_await stream.reply_packet (zlink::message_t::from_json (pong_t{message.sequence}))
-          .async ();
+        co_await stream.reply_packet (zlink::message_t::from_json (pong_t{message.sequence})).async ();
     }
     ```
 
@@ -603,15 +602,13 @@ Request/response 매칭에 쓰는 correlation은 protocol 정보라 `Off`에서�
 === "Java"
 
     ```java
-    ZLinkStreamConnectorOptions.createDefault(endpoint)
-        .withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF);
+    ZLinkStreamConnectorOptions.createDefault(endpoint).withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF);
     ```
 
 === "Kotlin"
 
     ```kotlin
-    ZLinkStreamConnectorOptions.createDefault(endpoint)
-        .withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF)
+    ZLinkStreamConnectorOptions.createDefault(endpoint).withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF)
     ```
 
 === "Node/TypeScript"

@@ -163,8 +163,7 @@ auto status_sequence =
 // 인증 전에는 대화를 열 수 없어야 한다.
 bool failed = false;
 try {
-    co_await agent.request (open_conversation_req_t{"unauthenticated"})
-      .async<open_conversation_res_t> ();
+    co_await agent.request (open_conversation_req_t{"unauthenticated"}).async<open_conversation_res_t> ();
 } catch (const zlink::stream_connector::stream_error_t &error) {
     failed = error.code == zlink::stream_connector::error_code_t::remote_error;
 }
@@ -234,8 +233,7 @@ task_t<void> run (const tictactoe_client_options_t &options)
 
     // 3. 먼저 접속한 쪽이 인증하고 빈 방에 들어간다.
     co_await client1.connect ().async ();
-    co_await client1.request (authenticate_req_t{options.x_actor_id})
-      .async<authenticate_res_t> ();
+    co_await client1.request (authenticate_req_t{options.x_actor_id}).async<authenticate_res_t> ();
     auto join1 = co_await join_game (client1, room.room_id); // 대기 등록 → send → 수신(§3)
     ensure (join1.state.status == tictactoe_status_t::waiting_for_players);
 
@@ -246,8 +244,7 @@ task_t<void> run (const tictactoe_client_options_t &options)
 
     // 4. 두 번째 player가 입장하면 방이 시작되고, 먼저 입장한 쪽에 push가 전달된다.
     co_await client2.connect ().async ();
-    co_await client2.request (authenticate_req_t{options.o_actor_id})
-      .async<authenticate_res_t> ();
+    co_await client2.request (authenticate_req_t{options.o_actor_id}).async<authenticate_res_t> ();
     auto join2 = co_await join_game (client2, room.room_id);
     ensure (join2.state.status == tictactoe_status_t::in_progress);
 

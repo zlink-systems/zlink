@@ -198,8 +198,7 @@ var statusSequence = statusSequenceStage.toCompletableFuture().join();
 
 ```java
 // Bingo — 두 player가 모두 입장하면 방이 시작되고, 두 client가 같은 push를 받는다.
-var client1Started = client1.waitFor(BingoGameStartedNotify.class)
-    .submit(BingoGameStartedNotify.class);
+var client1Started = client1.waitFor(BingoGameStartedNotify.class).submit(BingoGameStartedNotify.class);
 var client2Started = client2.waitFor(BingoGameStartedNotify.class)
     .submit(BingoGameStartedNotify.class);
 
@@ -218,8 +217,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
 ```java
 public void run(TicTacToeClientOptions options) {
     // 1. 관문 API로 방을 만들고 접속할 endpoint를 받는다.
-    ZLinkHttpClient api = ZLinkHttpClient.create(options.apiUrl())
-        .timeout(options.httpTimeout()).build();
+    ZLinkHttpClient api = ZLinkHttpClient.create(options.apiUrl()).timeout(options.httpTimeout()).build();
     CreateGameHttpRes room = api.post("/games")
         .body(new CreateGameHttpReq(options.gameName()))
         .fetch(CreateGameHttpRes.class);

@@ -366,8 +366,7 @@ done."
 
     builder.Services.AddZLinkFramework(options =>
     {
-        var mesh = options.AddRouteMesh("services")
-            .Listen("tcp://0.0.0.0:7102");                     // It also needs its own endpoint.
+        var mesh = options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7102");  // It also needs its own endpoint.
         mesh.Channel("greeting").Client();                     // The call-only side is Client.
         mesh.PeerConnections.Connect("tcp://127.0.0.1:7101");  // Manual connection — write the server endpoint directly.
     });
@@ -394,8 +393,7 @@ done."
 
     ```cpp
     app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-        auto mesh = options.add_route_mesh ("services")
-          .listen ("tcp://0.0.0.0:7102");                       // It also needs its own endpoint.
+        auto mesh = options.add_route_mesh ("services").listen ("tcp://0.0.0.0:7102");  // It also needs its own endpoint.
         mesh.channel_name ("greeting").client ();               // The call-only side is client.
         mesh.peer_connections ().connect ("tcp://127.0.0.1:7101"); // Manual connection — write the server endpoint directly.
 
@@ -407,8 +405,7 @@ done."
     // The target is just one ChannelName. Which node handles it isn't specified.
     task_t<std::string> hello_http_handler_t::handle (const std::string &name)
     {
-        auto reply = co_await _route.request_to_channel ("greeting", hello_t{name})
-                       .async<greeting_t> ();
+        auto reply = co_await _route.request_to_channel ("greeting", hello_t{name}).async<greeting_t> ();
         co_return reply.text;
     }
     ```
@@ -419,8 +416,7 @@ done."
     @Bean
     ZLinkFrameworkConfigurer zlink() {
         return options -> {
-            ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
-                .listen("tcp://0.0.0.0:7102");                  // It also needs its own endpoint.
+            ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102");  // It also needs its own endpoint.
             mesh.channelName("greeting").client();                  // The call-only side is Client.
             mesh.peerConnections().connect("tcp://127.0.0.1:7101"); // Manual connection — write the server endpoint directly.
         };
@@ -447,8 +443,7 @@ done."
     ```kotlin
     @Bean
     fun zlink(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
-        val mesh = options.addRouteMesh("services")
-            .listen("tcp://0.0.0.0:7102")                       // It also needs its own endpoint.
+        val mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102")  // It also needs its own endpoint.
         mesh.channelName("greeting").client()                       // The call-only side is Client.
         mesh.peerConnections().connect("tcp://127.0.0.1:7101")  // Manual connection — write the server endpoint directly.
     }
@@ -472,8 +467,7 @@ done."
     ZLinkModule.forRootFactory({
       useFactory: () => {
         const builder = zlinkFramework();
-        const mesh = builder.addRouteMesh('services')
-          .listen('tcp://0.0.0.0:7102');                        // It also needs its own endpoint.
+        const mesh = builder.addRouteMesh('services').listen('tcp://0.0.0.0:7102');  // It also needs its own endpoint.
         mesh.channel('greeting').client();                      // The call-only side is client.
         mesh.peerConnections().connect('tcp://127.0.0.1:7101');   // Manual connection — write the server endpoint directly.
         return builder.build();
@@ -1028,8 +1022,7 @@ authentication from the API server. It isn't used for Game Spot creation.
             AuthenticatePlayerRes>();
 
     // Play process: sends the authentication request.
-    options.AddClientServerChannel(SampleChannels.Api)
-        .Client();
+    options.AddClientServerChannel(SampleChannels.Api).Client();
     ```
 
 === "C++"
@@ -1044,8 +1037,7 @@ authentication from the API server. It isn't used for Game Spot creation.
                            authenticate_player_res_t> ();
 
     // Play process: sends the authentication request.
-    options.add_client_server_channel (sample_channels_t::api)
-      .client ();
+    options.add_client_server_channel (sample_channels_t::api).client ();
     ```
 
 === "Java"
@@ -1061,8 +1053,7 @@ authentication from the API server. It isn't used for Game Spot creation.
             AuthenticatePlayerRes.class);
 
     // Play process: sends the authentication request.
-    options.addClientServerChannel(SampleChannels.API)
-        .client();
+    options.addClientServerChannel(SampleChannels.API).client();
     ```
 
 === "Kotlin"
@@ -1078,8 +1069,7 @@ authentication from the API server. It isn't used for Game Spot creation.
             AuthenticatePlayerRes::class.java)
 
     // Play process: sends the authentication request.
-    options.addClientServerChannel(SampleChannels.API)
-        .client()
+    options.addClientServerChannel(SampleChannels.API).client()
     ```
 
 === "Node/TypeScript"
@@ -1092,8 +1082,7 @@ authentication from the API server. It isn't used for Game Spot creation.
       .addRequestHandler(PacketNames.authenticatePlayerReq, AuthenticatePlayerHandler);
 
     // Play process: sends the authentication request.
-    builder.addClientServerChannel(SampleChannels.api)
-      .client();
+    builder.addClientServerChannel(SampleChannels.api).client();
     ```
 
 Object creation and a ClientServer call are different features. No dedicated

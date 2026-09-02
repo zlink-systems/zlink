@@ -89,8 +89,7 @@ keep only one Ready.
 ZLinkMeshNodeBuilder play = options.addRouteMesh("play");
 play.listen(5501).setRoutingIdPrefix("play");
 
-play.objects().server()
-    .addSpotFactory("room", RoomSpot.class, factory -> factory.recreateOnRelocation());
+play.objects().server().addSpotFactory("room", RoomSpot.class, factory -> factory.recreateOnRelocation());
 
 play.channelName("play.ops").server()
     .addRequestHandler(NodeStatusHandler.class, GetNodeStatus.class, NodeStatus.class);

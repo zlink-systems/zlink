@@ -95,8 +95,7 @@ public final class HelloHandler implements ZLinkRequestHandler<Hello, Greeting> 
 @Bean
 ZLinkFrameworkConfigurer zlink() {
     return options -> {
-        ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
-            .listen("tcp://0.0.0.0:7102");                  // 자기 endpoint도 필요하다.
+        ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services").listen("tcp://0.0.0.0:7102");  // 자기 endpoint도 필요하다.
         mesh.channelName("greeting").client();                  // 호출만 하는 쪽은 Client.
         mesh.peerConnections().connect("tcp://127.0.0.1:7101"); // 수동 연결 — server endpoint를 직접 적는다.
     };
@@ -270,8 +269,7 @@ options.addClientServerChannel(SampleChannels.API)
         AuthenticatePlayerRes.class);
 
 // Play process: 인증 요청을 보낸다.
-options.addClientServerChannel(SampleChannels.API)
-    .client();
+options.addClientServerChannel(SampleChannels.API).client();
 ```
 
 Object 생성과 ClientServer 호출은 서로 다른 기능이다. 방 생성 전용 channel이나

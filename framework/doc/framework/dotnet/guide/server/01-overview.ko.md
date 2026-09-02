@@ -180,10 +180,7 @@ ZLink는 이 중 **연결·세션(STREAM), room·상태 단위(SPOT), 서버 간
 var node = options.AddRouteMesh("game.room");
 node.Listen("tcp://0.0.0.0:9001");
 node.Channel("game.room").Server();     // mesh는 최소 1개 logical membership을 갖는다
-node.Objects().Server()
-    .AddSpotFactory<BingoRoomSpot>(
-        "room",
-        factory => factory.RecreateOnRelocation());
+node.Objects().Server().AddSpotFactory<BingoRoomSpot>("room", factory => factory.RecreateOnRelocation());
 ```
 
 ```csharp

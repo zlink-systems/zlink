@@ -89,8 +89,7 @@ keep only one Ready.
 
 ```cpp
 auto play = options.add_route_mesh ("play");
-play.listen ("tcp://0.0.0.0:5501")
-  .set_routing_id (zlink::routing_id_t::from (std::string ("play-1")));
+play.listen ("tcp://0.0.0.0:5501").set_routing_id (zlink::routing_id_t::from (std::string ("play-1")));
 
 play.set_object_role (object_role_t::server)
   .add_spot_factory<room_spot_t> (

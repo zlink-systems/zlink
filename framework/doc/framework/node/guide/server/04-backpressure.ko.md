@@ -339,8 +339,7 @@ manual job 상한을 정한다. 큰 payload를 오래 유지하는 workload에�
 
 ```typescript
 // Node는 수준을 message flow log mode로 지정한다.
-builder.configureDispatch()
-  .messageFlow("errors"); // 기본값 — error와 backpressure를 기록한다.
+builder.configureDispatch().messageFlow("errors");  // 기본값 — error와 backpressure를 기록한다.
 ```
 
 message flow 기록에 `backpressured`가 남았다면 보낼 자리를 기다리는 일이 실제로 일어났다는

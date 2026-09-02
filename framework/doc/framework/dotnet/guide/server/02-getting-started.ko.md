@@ -97,8 +97,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddZLinkFramework(options =>
 {
-    var mesh = options.AddRouteMesh("services")
-        .Listen("tcp://0.0.0.0:7102");                     // 자기 endpoint도 필요하다.
+    var mesh = options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7102");  // 자기 endpoint도 필요하다.
     mesh.Channel("greeting").Client();                     // 호출만 하는 쪽은 Client.
     mesh.PeerConnections.Connect("tcp://127.0.0.1:7101");  // 수동 연결 — server endpoint를 직접 적는다.
 });
@@ -284,8 +283,7 @@ options.AddClientServerChannel(SampleChannels.Api)
         AuthenticatePlayerRes>();
 
 // Play process: 인증 요청을 보낸다.
-options.AddClientServerChannel(SampleChannels.Api)
-    .Client();
+options.AddClientServerChannel(SampleChannels.Api).Client();
 ```
 
 Object 생성과 ClientServer 호출은 서로 다른 기능이다. 방 생성 전용 channel이나

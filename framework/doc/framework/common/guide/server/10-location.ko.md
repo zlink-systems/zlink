@@ -148,13 +148,9 @@ admission에서 하나만 Ready로 유지한다.
             .Listen(5501)
             .SetRoutingIdPrefix("play");
 
-        play.Objects().Server()
-            .AddSpotFactory<RoomSpot>(
-                "room",
-                factory => factory.RecreateOnRelocation());
+        play.Objects().Server().AddSpotFactory<RoomSpot>("room", factory => factory.RecreateOnRelocation());
 
-        play.Channel("play.ops").Server()
-            .AddRequestHandler<NodeStatusHandler, GetNodeStatus, NodeStatus>();
+        play.Channel("play.ops").Server().AddRequestHandler<NodeStatusHandler, GetNodeStatus, NodeStatus>();
     });
     ```
 
@@ -162,8 +158,7 @@ admission에서 하나만 Ready로 유지한다.
 
     ```cpp
     auto play = options.add_route_mesh ("play");
-    play.listen ("tcp://0.0.0.0:5501")
-      .set_routing_id (zlink::routing_id_t::from (std::string ("play-1")));
+    play.listen ("tcp://0.0.0.0:5501").set_routing_id (zlink::routing_id_t::from (std::string ("play-1")));
 
     play.set_object_role (object_role_t::server)
       .add_spot_factory<room_spot_t> (
@@ -181,8 +176,7 @@ admission에서 하나만 Ready로 유지한다.
     ZLinkMeshNodeBuilder play = options.addRouteMesh("play");
     play.listen(5501).setRoutingIdPrefix("play");
 
-    play.objects().server()
-        .addSpotFactory("room", RoomSpot.class, factory -> factory.recreateOnRelocation());
+    play.objects().server().addSpotFactory("room", RoomSpot.class, factory -> factory.recreateOnRelocation());
 
     play.channelName("play.ops").server()
         .addRequestHandler(NodeStatusHandler.class, GetNodeStatus.class, NodeStatus.class);
@@ -207,11 +201,9 @@ admission에서 하나만 Ready로 유지한다.
     const play = builder.addRouteMesh('play');
     play.listen(5501).setRoutingIdPrefix('play');
 
-    play.objects().server()
-      .addSpotFactory('room', RoomSpot, (factory) => factory.recreateOnRelocation());
+    play.objects().server().addSpotFactory('room', RoomSpot, (factory) => factory.recreateOnRelocation());
 
-    play.channel('play.ops').server()
-      .addRequestHandler('GetNodeStatus', NodeStatusHandler);
+    play.channel('play.ops').server().addRequestHandler('GetNodeStatus', NodeStatusHandler);
     ```
 
 

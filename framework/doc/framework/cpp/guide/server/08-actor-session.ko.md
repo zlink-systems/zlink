@@ -63,8 +63,7 @@ if (!located)
 auto actor = co_await actors.bind_or_get (located.value ().ref ()).async ();
 
 // 현재 request의 one-shot reply를 제출한다.
-stream.reply_packet (zlink::message_t::from_json (authenticated_t{actor.actor_id ()}))
-  .async ();
+stream.reply_packet (zlink::message_t::from_json (authenticated_t{actor.actor_id ()})).async ();
 ```
 
 `bind`는 중복 bind를 오류로 처리한다. 인증 재전송처럼 이미 bind됐을 수 있는 흐름은

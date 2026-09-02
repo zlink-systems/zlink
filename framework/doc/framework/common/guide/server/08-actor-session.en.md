@@ -111,8 +111,7 @@ In its minimal shape, it looks like this.
     auto actor = co_await actors.bind_or_get (located.value ().ref ()).async ();
 
     // Submits the current request's one-shot reply.
-    stream.reply_packet (zlink::message_t::from_json (authenticated_t{actor.actor_id ()}))
-      .async ();
+    stream.reply_packet (zlink::message_t::from_json (authenticated_t{actor.actor_id ()})).async ();
     ```
 
 === "Java"

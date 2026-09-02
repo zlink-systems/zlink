@@ -100,8 +100,7 @@ export class HelloHandler implements ZLinkRequestHandler<Hello, Greeting> {
 ZLinkModule.forRootFactory({
   useFactory: () => {
     const builder = zlinkFramework();
-    const mesh = builder.addRouteMesh('services')
-      .listen('tcp://0.0.0.0:7102');                        // It also needs its own endpoint.
+    const mesh = builder.addRouteMesh('services').listen('tcp://0.0.0.0:7102');  // It also needs its own endpoint.
     mesh.channel('greeting').client();                      // The call-only side is client.
     mesh.peerConnections().connect('tcp://127.0.0.1:7101');   // Manual connection — write the server endpoint directly.
     return builder.build();
@@ -273,8 +272,7 @@ builder.addClientServerChannel(SampleChannels.api)
   .addRequestHandler(PacketNames.authenticatePlayerReq, AuthenticatePlayerHandler);
 
 // Play process: sends the authentication request.
-builder.addClientServerChannel(SampleChannels.api)
-  .client();
+builder.addClientServerChannel(SampleChannels.api).client();
 ```
 
 Object creation and a ClientServer call are different features. No dedicated

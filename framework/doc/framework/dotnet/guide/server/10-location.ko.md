@@ -92,13 +92,9 @@ services.AddZLinkFramework(options =>
         .Listen(5501)
         .SetRoutingIdPrefix("play");
 
-    play.Objects().Server()
-        .AddSpotFactory<RoomSpot>(
-            "room",
-            factory => factory.RecreateOnRelocation());
+    play.Objects().Server().AddSpotFactory<RoomSpot>("room", factory => factory.RecreateOnRelocation());
 
-    play.Channel("play.ops").Server()
-        .AddRequestHandler<NodeStatusHandler, GetNodeStatus, NodeStatus>();
+    play.Channel("play.ops").Server().AddRequestHandler<NodeStatusHandler, GetNodeStatus, NodeStatus>();
 });
 ```
 

@@ -390,8 +390,7 @@ framework는 발견한 handler를 모든 channel에 자동으로 열지 않는�
 ```cpp
 options.handlers ().group ("api").add<get_profile_handler_t> ();  // handler를 group에 넣는다.
 auto mesh = options.add_route_mesh ("services");
-mesh.listen ("tcp://0.0.0.0:7101")
-  .set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
+mesh.listen ("tcp://0.0.0.0:7101").set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
 mesh.channel_name ("api").server ()      // server ()가 handler를 받는 역할이다.
   .use_handler_group ("api");
 ```
@@ -402,8 +401,7 @@ mesh.channel_name ("api").server ()      // server ()가 handler를 받는 역�
 
 ```cpp
 auto mesh = options.add_route_mesh ("services");
-mesh.listen ("tcp://0.0.0.0:7101")
-  .set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
+mesh.listen ("tcp://0.0.0.0:7101").set_routing_id (zlink::routing_id_t::from (std::string ("api-1")));
 
 mesh.channel_name ("api").server ()          // 이 node가 처리하는 channel.
   .add_request_handler<get_profile_handler_t, get_profile_request_t, get_profile_reply_t> ();
@@ -698,8 +696,7 @@ mesh_options.channel ("orders").weight (100); // 정상 복귀
 
 ```cpp
 auto mesh = options.add_route_mesh ("services");
-mesh.listen ("tcp://0.0.0.0:7101")
-  .set_routing_id (zlink::routing_id_t::from (std::string ("orders-1")));
+mesh.listen ("tcp://0.0.0.0:7101").set_routing_id (zlink::routing_id_t::from (std::string ("orders-1")));
 mesh.channel_name ("orders").server ().set_weight (30); // 이 channel 역할의 시작 weight
 ```
 
@@ -765,8 +762,7 @@ options.codecs ().use (std::make_shared<avro_codec_extension_t> ());
 ```cpp
 // 처리 노드 A — 같은 ChannelName을 server로 등록한 node가 후보가 된다.
 auto mesh = options.add_route_mesh ("media");
-mesh.listen ("tcp://0.0.0.0:5600")
-  .set_routing_id (zlink::routing_id_t::from (std::string ("resize")));
+mesh.listen ("tcp://0.0.0.0:5600").set_routing_id (zlink::routing_id_t::from (std::string ("resize")));
 mesh.channel_name ("image.resize").server ()
   .add_request_handler<resize_handler_t, resize_request_t, resize_reply_t> ();
 ```
@@ -832,8 +828,7 @@ Node direct 호출은 `RoutingId`로 특정 MeshNode 하나를 지정한다. 이
 
 ```cpp
 auto mesh = options.add_route_mesh ("play");
-mesh.listen (play_router_endpoint)
-  .set_routing_id (zlink::routing_id_t::from (play_router_id));
+mesh.listen (play_router_endpoint).set_routing_id (zlink::routing_id_t::from (play_router_id));
 
 // 노드 자체의 운영 상태를 반환하는 handler다.
 mesh.add_route_request_handler<node_status_handler_t, get_node_status_t, node_status_t> (

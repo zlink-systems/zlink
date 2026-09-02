@@ -82,8 +82,7 @@ admission에서 하나만 Ready로 유지한다.
 ZLinkMeshNodeBuilder play = options.addRouteMesh("play");
 play.listen(5501).setRoutingIdPrefix("play");
 
-play.objects().server()
-    .addSpotFactory("room", RoomSpot.class, factory -> factory.recreateOnRelocation());
+play.objects().server().addSpotFactory("room", RoomSpot.class, factory -> factory.recreateOnRelocation());
 
 play.channelName("play.ops").server()
     .addRequestHandler(NodeStatusHandler.class, GetNodeStatus.class, NodeStatus.class);

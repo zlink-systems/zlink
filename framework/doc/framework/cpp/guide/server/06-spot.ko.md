@@ -129,8 +129,7 @@ Spot을 실행할 MeshNode는 Object Server role과 factory를 등록한다. 고
 
 ```cpp
 auto mesh = options.add_route_mesh ("play");
-mesh.listen ("tcp://0.0.0.0:9001")
-  .set_routing_id (zlink::routing_id_t::from (std::string ("play")));
+mesh.listen ("tcp://0.0.0.0:9001").set_routing_id (zlink::routing_id_t::from (std::string ("play")));
 
 mesh.set_object_role (object_role_t::server)
   // Actor가 처음 배치될 Entry Spot을 등록한다.

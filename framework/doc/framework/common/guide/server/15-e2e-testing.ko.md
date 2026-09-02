@@ -438,8 +438,7 @@ push가 섞여 들어와도 시나리오가 영향을 받지 않는다.
     // 인증 전에는 대화를 열 수 없어야 한다.
     bool failed = false;
     try {
-        co_await agent.request (open_conversation_req_t{"unauthenticated"})
-          .async<open_conversation_res_t> ();
+        co_await agent.request (open_conversation_req_t{"unauthenticated"}).async<open_conversation_res_t> ();
     } catch (const zlink::stream_connector::stream_error_t &error) {
         failed = error.code == zlink::stream_connector::error_code_t::remote_error;
     }
@@ -609,8 +608,7 @@ E2E는 대부분 같은 원인으로 간헐 실패한다. **행동을 먼저 하
 
     ```java
     // Bingo — 두 player가 모두 입장하면 방이 시작되고, 두 client가 같은 push를 받는다.
-    var client1Started = client1.waitFor(BingoGameStartedNotify.class)
-        .submit(BingoGameStartedNotify.class);
+    var client1Started = client1.waitFor(BingoGameStartedNotify.class).submit(BingoGameStartedNotify.class);
     var client2Started = client2.waitFor(BingoGameStartedNotify.class)
         .submit(BingoGameStartedNotify.class);
 
@@ -737,8 +735,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
 
         // 3. 먼저 접속한 쪽이 인증하고 빈 방에 들어간다.
         co_await client1.connect ().async ();
-        co_await client1.request (authenticate_req_t{options.x_actor_id})
-          .async<authenticate_res_t> ();
+        co_await client1.request (authenticate_req_t{options.x_actor_id}).async<authenticate_res_t> ();
         auto join1 = co_await join_game (client1, room.room_id); // 대기 등록 → send → 수신(§3)
         ensure (join1.state.status == tictactoe_status_t::waiting_for_players);
 
@@ -749,8 +746,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
 
         // 4. 두 번째 player가 입장하면 방이 시작되고, 먼저 입장한 쪽에 push가 전달된다.
         co_await client2.connect ().async ();
-        co_await client2.request (authenticate_req_t{options.o_actor_id})
-          .async<authenticate_res_t> ();
+        co_await client2.request (authenticate_req_t{options.o_actor_id}).async<authenticate_res_t> ();
         auto join2 = co_await join_game (client2, room.room_id);
         ensure (join2.state.status == tictactoe_status_t::in_progress);
 
@@ -768,8 +764,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
     ```java
     public void run(TicTacToeClientOptions options) {
         // 1. 관문 API로 방을 만들고 접속할 endpoint를 받는다.
-        ZLinkHttpClient api = ZLinkHttpClient.create(options.apiUrl())
-            .timeout(options.httpTimeout()).build();
+        ZLinkHttpClient api = ZLinkHttpClient.create(options.apiUrl()).timeout(options.httpTimeout()).build();
         CreateGameHttpRes room = api.post("/games")
             .body(new CreateGameHttpReq(options.gameName()))
             .fetch(CreateGameHttpRes.class);
@@ -878,8 +873,7 @@ timeout으로 표현한다. `Sleep`은 느린 장비에서 실패하고 빠른 �
         'room should wait for the second player.');
 
       // 혼자 들어왔을 때 자기 입장 알림이 자기에게 오면 안 된다.
-      await client1.expectNone<PlayerJoinedNotify>(PacketNames.playerJoinedNotify)
-        .within(250).run(signal);
+      await client1.expectNone<PlayerJoinedNotify>(PacketNames.playerJoinedNotify).within(250).run(signal);
 
       // 4. 두 번째 player가 입장하면 방이 시작된다.
       await client2.connect(signal);

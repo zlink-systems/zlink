@@ -107,8 +107,7 @@ target `NodeRid`를 직접 전달하지 않는다.
     auto actor = co_await actors.bind_or_get (located.value ().ref ()).async ();
 
     // 현재 request의 one-shot reply를 제출한다.
-    stream.reply_packet (zlink::message_t::from_json (authenticated_t{actor.actor_id ()}))
-      .async ();
+    stream.reply_packet (zlink::message_t::from_json (authenticated_t{actor.actor_id ()})).async ();
     ```
 
 === "Java"

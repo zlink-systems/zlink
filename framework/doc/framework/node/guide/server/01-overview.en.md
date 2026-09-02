@@ -199,8 +199,7 @@ bringing in a new engine and moving to a separate ecosystem.
 const node = builder.addRouteMesh('game.room');
 node.listen('tcp://0.0.0.0:9001');
 node.channel('game.room').server();     // A mesh has at least 1 logical membership
-node.objects().server()
-  .addSpotFactory('room', BingoRoomSpot, factory => factory.recreateOnRelocation());
+node.objects().server().addSpotFactory('room', BingoRoomSpot, factory => factory.recreateOnRelocation());
 ```
 
 ```typescript

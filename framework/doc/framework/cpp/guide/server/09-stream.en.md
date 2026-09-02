@@ -148,8 +148,7 @@ request, use the current dispatch's one-shot reply token.
 task_t<void> handle (stream_t &stream, const ping_t &message)
 {
     // Replies exactly once, using the same request correlation. Ends in failure if it isn't a request.
-    co_await stream.reply_packet (zlink::message_t::from_json (pong_t{message.sequence}))
-      .async ();
+    co_await stream.reply_packet (zlink::message_t::from_json (pong_t{message.sequence})).async ();
 }
 ```
 

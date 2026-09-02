@@ -393,8 +393,7 @@ first, the join ends in `Unavailable`; if the shutdown seal came first, it ends 
 You can send a message by ActorId without knowing which Spot or node the Actor is on.
 
 ```java
-actorClient.sendToActor(playerId, new AwardExperience(10))
-    .submit().toCompletableFuture().join();
+actorClient.sendToActor(playerId, new AwardExperience(10)).submit().toCompletableFuture().join();
 
 PlayerProfile profile = actorClient
     .requestToActor(playerId, new GetPlayerProfile())

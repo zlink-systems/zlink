@@ -339,8 +339,7 @@ manual job 상한을 정한다. 큰 payload를 오래 유지하는 workload에�
 
 ```kotlin
 // Kotlin은 Java 표면을 그대로 쓴다.
-options.configureDispatch()
-    .messageFlow(ZLinkMessageFlowLogMode.ERRORS) // 기본값 — error와 backpressure를 기록한다.
+options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.ERRORS)  // 기본값 — error와 backpressure를 기록한다.
 ```
 
 message flow 기록에 `backpressured`가 남았다면 보낼 자리를 기다리는 일이 실제로 일어났다는

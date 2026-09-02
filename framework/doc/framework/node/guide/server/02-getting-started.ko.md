@@ -97,8 +97,7 @@ export class HelloHandler implements ZLinkRequestHandler<Hello, Greeting> {
 ZLinkModule.forRootFactory({
   useFactory: () => {
     const builder = zlinkFramework();
-    const mesh = builder.addRouteMesh('services')
-      .listen('tcp://0.0.0.0:7102');                        // 자기 endpoint도 필요하다.
+    const mesh = builder.addRouteMesh('services').listen('tcp://0.0.0.0:7102');  // 자기 endpoint도 필요하다.
     mesh.channel('greeting').client();                      // 호출만 하는 쪽은 client.
     mesh.peerConnections().connect('tcp://127.0.0.1:7101');   // 수동 연결 — server endpoint를 직접 적는다.
     return builder.build();
@@ -269,8 +268,7 @@ builder.addClientServerChannel(SampleChannels.api)
   .addRequestHandler(PacketNames.authenticatePlayerReq, AuthenticatePlayerHandler);
 
 // Play process: 인증 요청을 보낸다.
-builder.addClientServerChannel(SampleChannels.api)
-  .client();
+builder.addClientServerChannel(SampleChannels.api).client();
 ```
 
 Object 생성과 ClientServer 호출은 서로 다른 기능이다. 방 생성 전용 channel이나

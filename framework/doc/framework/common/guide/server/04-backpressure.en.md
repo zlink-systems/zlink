@@ -532,32 +532,28 @@ Terminal reply/error completion identifiable before receive does not use this pe
 
     ```cpp
     // C++ sets the level as a message flow log mode.
-    options.configure_dispatch ()
-      .message_flow (message_flow_log_mode_t::errors); // Default — records errors and backpressure.
+    options.configure_dispatch ().message_flow (message_flow_log_mode_t::errors);  // Default — records errors and backpressure.
     ```
 
 === "Java"
 
     ```java
     // Java sets the level as a message flow log mode.
-    options.configureDispatch()
-        .messageFlow(ZLinkMessageFlowLogMode.ERRORS); // Default — records errors and backpressure.
+    options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.ERRORS);  // Default — records errors and backpressure.
     ```
 
 === "Kotlin"
 
     ```kotlin
     // Kotlin uses the Java surface as-is.
-    options.configureDispatch()
-        .messageFlow(ZLinkMessageFlowLogMode.ERRORS) // Default — records errors and backpressure.
+    options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.ERRORS)  // Default — records errors and backpressure.
     ```
 
 === "Node/TypeScript"
 
     ```typescript
     // Node sets the level as a message flow log mode.
-    builder.configureDispatch()
-      .messageFlow("errors"); // Default — records errors and backpressure.
+    builder.configureDispatch().messageFlow("errors");  // Default — records errors and backpressure.
     ```
 
 

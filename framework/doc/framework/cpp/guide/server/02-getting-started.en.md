@@ -96,8 +96,7 @@ class hello_handler_t
 
 ```cpp
 app.add_zlink_framework ([] (zlink_framework_options_t &options) {
-    auto mesh = options.add_route_mesh ("services")
-      .listen ("tcp://0.0.0.0:7102");                       // It also needs its own endpoint.
+    auto mesh = options.add_route_mesh ("services").listen ("tcp://0.0.0.0:7102");  // It also needs its own endpoint.
     mesh.channel_name ("greeting").client ();               // The call-only side is client.
     mesh.peer_connections ().connect ("tcp://127.0.0.1:7101"); // Manual connection — write the server endpoint directly.
 
@@ -109,8 +108,7 @@ app.add_zlink_framework ([] (zlink_framework_options_t &options) {
 // The target is just one ChannelName. Which node handles it isn't specified.
 task_t<std::string> hello_http_handler_t::handle (const std::string &name)
 {
-    auto reply = co_await _route.request_to_channel ("greeting", hello_t{name})
-                   .async<greeting_t> ();
+    auto reply = co_await _route.request_to_channel ("greeting", hello_t{name}).async<greeting_t> ();
     co_return reply.text;
 }
 ```
@@ -267,8 +265,7 @@ options.add_client_server_channel (sample_channels_t::api)
                        authenticate_player_res_t> ();
 
 // Play process: sends the authentication request.
-options.add_client_server_channel (sample_channels_t::api)
-  .client ();
+options.add_client_server_channel (sample_channels_t::api).client ();
 ```
 
 Object creation and a ClientServer call are different features. No dedicated

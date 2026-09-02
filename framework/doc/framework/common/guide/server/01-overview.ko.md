@@ -233,10 +233,7 @@ ZLink는 이 중 **연결·세션(STREAM), room·상태 단위(SPOT), 서버 간
     var node = options.AddRouteMesh("game.room");
     node.Listen("tcp://0.0.0.0:9001");
     node.Channel("game.room").Server();     // mesh는 최소 1개 logical membership을 갖는다
-    node.Objects().Server()
-        .AddSpotFactory<BingoRoomSpot>(
-            "room",
-            factory => factory.RecreateOnRelocation());
+    node.Objects().Server().AddSpotFactory<BingoRoomSpot>("room", factory => factory.RecreateOnRelocation());
     ```
 
     ```csharp
@@ -285,11 +282,7 @@ ZLink는 이 중 **연결·세션(STREAM), room·상태 단위(SPOT), 서버 간
     ZLinkMeshNodeBuilder node = options.addRouteMesh("game.room");
     node.listen("tcp://0.0.0.0:9001");
     node.channelName("game.room").server();     // mesh는 최소 1개 logical membership을 갖는다
-    node.objects().server()
-        .addSpotFactory(
-            "room",
-            BingoRoomSpot.class,
-            factory -> factory.recreateOnRelocation());
+    node.objects().server().addSpotFactory("room", BingoRoomSpot.class, factory -> factory.recreateOnRelocation());
     ```
 
     ```java
@@ -338,8 +331,7 @@ ZLink는 이 중 **연결·세션(STREAM), room·상태 단위(SPOT), 서버 간
     const node = builder.addRouteMesh('game.room');
     node.listen('tcp://0.0.0.0:9001');
     node.channel('game.room').server();     // mesh는 최소 1개 logical membership을 갖는다
-    node.objects().server()
-      .addSpotFactory('room', BingoRoomSpot, factory => factory.recreateOnRelocation());
+    node.objects().server().addSpotFactory('room', BingoRoomSpot, factory => factory.recreateOnRelocation());
     ```
 
     ```typescript

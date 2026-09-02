@@ -205,8 +205,7 @@ them together with `Task.WhenAll`.
 
 ```java
 // Bingo -- once both players have joined the room starts, and both clients get the same push.
-var client1Started = client1.waitFor(BingoGameStartedNotify.class)
-    .submit(BingoGameStartedNotify.class);
+var client1Started = client1.waitFor(BingoGameStartedNotify.class).submit(BingoGameStartedNotify.class);
 var client2Started = client2.waitFor(BingoGameStartedNotify.class)
     .submit(BingoGameStartedNotify.class);
 
@@ -227,8 +226,7 @@ move, in that order.
 ```java
 public void run(TicTacToeClientOptions options) {
     // 1. Create a room through the gateway API and get the endpoint to connect to.
-    ZLinkHttpClient api = ZLinkHttpClient.create(options.apiUrl())
-        .timeout(options.httpTimeout()).build();
+    ZLinkHttpClient api = ZLinkHttpClient.create(options.apiUrl()).timeout(options.httpTimeout()).build();
     CreateGameHttpRes room = api.post("/games")
         .body(new CreateGameHttpReq(options.gameName()))
         .fetch(CreateGameHttpRes.class);

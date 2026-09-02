@@ -736,8 +736,7 @@ class AvroOrderSerializer : ZLinkMessageSerializer {
 
     override fun serialize(value: Any, type: Class<*>): ZLinkMessage {
         val buffer = ByteArrayOutputStream()
-        GenericDatumWriter<Any>(schema)
-            .write(value, EncoderFactory.get().binaryEncoder(buffer, null))
+        GenericDatumWriter<Any>(schema).write(value, EncoderFactory.get().binaryEncoder(buffer, null))
         return ZLinkMessage.from(buffer.toByteArray())
     }
 

@@ -67,8 +67,7 @@ if (!located)
 auto actor = co_await actors.bind_or_get (located.value ().ref ()).async ();
 
 // Submits the current request's one-shot reply.
-stream.reply_packet (zlink::message_t::from_json (authenticated_t{actor.actor_id ()}))
-  .async ();
+stream.reply_packet (zlink::message_t::from_json (authenticated_t{actor.actor_id ()})).async ();
 ```
 
 `bind` treats a duplicate bind as an error. For a flow that might already be bound, like a
