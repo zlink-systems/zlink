@@ -41,43 +41,6 @@ pub(crate) fn close_unreceived_part(part: &mut MaybeUninit<ffi::zlink_msg_t>) {
     }
 }
 
-/// Take ownership of `part_count` messages from a native-owned array.
-pub(crate) fn take_parts(parts_ptr: *mut ffi::zlink_msg_t, part_count: usize) -> Vec<Message> {
-    let mut out = Vec::with_capacity(part_count);
-    take_parts_into(parts_ptr, part_count, &mut out);
-    out
-}
-
-/// Move native-owned parts into reusable caller-owned storage.
-pub(crate) fn take_parts_into(
-    parts_ptr: *mut ffi::zlink_msg_t,
-    part_count: usize,
-    out: &mut Vec<Message>,
-) {
-    out.clear();
-    if parts_ptr.is_null() || part_count == 0 {
-        return;
-    }
-    if out.capacity() < part_count {
-        out.reserve(part_count - out.capacity());
-    }
-    for i in 0..part_count {
-        unsafe {
-            // Move content from the library-owned array into our own zlink_msg_t.
-            // ptr::read would create a bitwise copy sharing the same internal
-            // storage, leading to double-free on drop. zlink_msg_move properly
-            // transfers ownership and leaves the source as an empty message.
-            let mut dest = MaybeUninit::<ffi::zlink_msg_t>::uninit();
-            ffi::zlink_msg_init(dest.as_mut_ptr());
-            ffi::zlink_msg_move(dest.as_mut_ptr(), parts_ptr.add(i));
-            out.push(Message::from_raw(dest.assume_init()));
-        }
-    }
-    unsafe {
-        ffi::zlink_multipart_close(parts_ptr, part_count);
-    }
-}
-
 // Short subscribe topics bypass heap allocation entirely (<=22 bytes live
 // inline).
 pub(crate) fn cstr_buf_to_smolstr(buf: &[i8], len: usize) -> smol_str::SmolStr {
@@ -98,7 +61,6 @@ pub(crate) fn routing_id_from_ptr(raw: *const ffi::zlink_routing_id_t) -> Option
 }
 
 type RecvBasicParts = Result<Option<Option<RoutingId>>, RecvError>;
-type RecvDealerParts = Result<Option<Option<u64>>, RecvError>;
 type RecvSubscribedParts = Result<Option<(Option<RoutingId>, smol_str::SmolStr)>, RecvError>;
 
 pub(crate) fn recv_basic_parts(
@@ -151,63 +113,6 @@ pub(crate) fn recv_basic_parts(
         parts.push(unsafe { Message::from_raw(part.assume_init()) });
         if has_more == ffi::zlink_part_flag_t::ZLINK_PART_FINAL {
             return Ok(Some(routing_id));
-        }
-        recv_flags = ffi::ZLINK_DONTWAIT;
-    }
-}
-
-pub(crate) fn recv_dealer_parts(
-    handle: *mut c_void,
-    flags: ffi::zlink_recv_flags_t,
-    parts: &mut Vec<Message>,
-) -> RecvDealerParts {
-    let mut request_seq = None;
-    let mut recv_flags = flags;
-    let mut received_any = false;
-
-    loop {
-        let mut message_type = 0u8;
-        let mut current_request_seq = 0u64;
-        let mut part = MaybeUninit::<ffi::zlink_msg_t>::uninit();
-        unsafe {
-            ffi::zlink_msg_init(part.as_mut_ptr());
-        }
-        let mut has_more = ffi::zlink_part_flag_t::ZLINK_PART_FINAL;
-        let rc = unsafe {
-            ffi::zlink_dealer_recv_part(
-                handle,
-                &mut message_type,
-                &mut current_request_seq,
-                part.as_mut_ptr(),
-                &mut has_more,
-                recv_flags,
-            )
-        };
-
-        if !received_any {
-            if rc == RecvResult::NoData as i32 {
-                close_unreceived_part(&mut part);
-                return Ok(None);
-            }
-            if rc != 0 {
-                close_unreceived_part(&mut part);
-                let errno = unsafe { ffi::zlink_errno() };
-                if errno == libc::EAGAIN {
-                    return Ok(None);
-                }
-                return Err(check_recv_rc(rc).unwrap_err());
-            }
-            request_seq = (current_request_seq != 0).then_some(current_request_seq);
-            parts.clear();
-            received_any = true;
-        } else if rc != 0 {
-            close_unreceived_part(&mut part);
-            return Err(check_recv_rc(rc).unwrap_err());
-        }
-
-        parts.push(unsafe { Message::from_raw(part.assume_init()) });
-        if has_more == ffi::zlink_part_flag_t::ZLINK_PART_FINAL {
-            return Ok(Some(request_seq));
         }
         recv_flags = ffi::ZLINK_DONTWAIT;
     }

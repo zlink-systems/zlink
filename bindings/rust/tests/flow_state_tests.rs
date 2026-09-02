@@ -32,11 +32,19 @@ fn dealer_accepts_receive_flow_state_and_is_idempotent() {
     let sock = ctx.dealer_socket().unwrap();
     let options = sock.common_options();
 
-    options.set_receive_flow_state(ReceiveFlowState::Paused).unwrap();
+    options
+        .set_receive_flow_state(ReceiveFlowState::Paused)
+        .unwrap();
     // Repeating the current state is a successful no-op, not an error.
-    options.set_receive_flow_state(ReceiveFlowState::Paused).unwrap();
-    options.set_receive_flow_state(ReceiveFlowState::Running).unwrap();
-    options.set_receive_flow_state(ReceiveFlowState::Running).unwrap();
+    options
+        .set_receive_flow_state(ReceiveFlowState::Paused)
+        .unwrap();
+    options
+        .set_receive_flow_state(ReceiveFlowState::Running)
+        .unwrap();
+    options
+        .set_receive_flow_state(ReceiveFlowState::Running)
+        .unwrap();
 }
 
 #[test]
@@ -45,10 +53,18 @@ fn router_accepts_receive_flow_state_and_is_idempotent() {
     let sock = ctx.router_socket().unwrap();
     let options = sock.common_options();
 
-    options.set_receive_flow_state(ReceiveFlowState::Paused).unwrap();
-    options.set_receive_flow_state(ReceiveFlowState::Paused).unwrap();
-    options.set_receive_flow_state(ReceiveFlowState::Running).unwrap();
-    options.set_receive_flow_state(ReceiveFlowState::Running).unwrap();
+    options
+        .set_receive_flow_state(ReceiveFlowState::Paused)
+        .unwrap();
+    options
+        .set_receive_flow_state(ReceiveFlowState::Paused)
+        .unwrap();
+    options
+        .set_receive_flow_state(ReceiveFlowState::Running)
+        .unwrap();
+    options
+        .set_receive_flow_state(ReceiveFlowState::Running)
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------------

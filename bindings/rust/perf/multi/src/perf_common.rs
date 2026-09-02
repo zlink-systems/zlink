@@ -813,8 +813,7 @@ pub fn open_connection_ready_monitor(socket: &dyn Monitorable) -> SocketMonitor 
 
 pub fn wait_monitor_ready(mon: &mut SocketMonitor, timeout: Duration, name: &str) {
     // The perf clients open the monitor before connect and wait after all
-    // sockets have been connected. Install-time callbacks do not replay an
-    // event already queued by Core, so consume the monitor queue directly and
+    // sockets have been connected. Consume the monitor queue directly and
     // also consult the public status snapshot for an event observed before the
     // first non-blocking receive.
     let deadline = Instant::now() + timeout;

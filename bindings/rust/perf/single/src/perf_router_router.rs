@@ -74,7 +74,7 @@ fn main() {
     sender
         .send(&target)
         .message(Message::try_from(b"PING").expect("router ping"))
-        .submit_sync(zlink::SendFlags::NONE)
+        .submit_sync()
         .expect("router handshake send");
     let mut handshake = zlink::Received::empty();
     if let Err(err) = receiver.recv(&mut handshake, zlink::RecvFlags::NONE) {
@@ -88,7 +88,7 @@ fn main() {
     receiver
         .send(&reply_rid)
         .message(Message::try_from(b"PONG").expect("router pong"))
-        .submit_sync(zlink::SendFlags::NONE)
+        .submit_sync()
         .expect("receiver handshake reply");
     let mut handshake_reply = zlink::Received::empty();
     if let Err(err) = sender.recv(&mut handshake_reply, zlink::RecvFlags::NONE) {

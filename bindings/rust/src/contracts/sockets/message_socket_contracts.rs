@@ -5,7 +5,7 @@ use crate::{
     BindError, CommonSocketOptions, ConfigError, ConnectError, DealerSocketOptions, Received,
     RecvError, RecvFlags,
 };
-use crate::{Empty, RequestOp, RoutedSendOp, RoutingId, SendOp};
+use crate::{Empty, RequestOp, RoutingId, SendOp};
 
 /// PAIR socket, a bidirectional one-to-one messaging socket.
 pub struct PairSocket {
@@ -28,7 +28,14 @@ impl PairSocket {
     /// A part is consumed on a successful submit (see [`SendOp`]).
     pub fn send(&self) -> SendOp<Empty> {
         let inner = crate::socket::pair_inner(self);
-        crate::operations::socket_send_op(inner.handle, inner.send_completions.clone())
+        crate::operations::socket_send_op(
+            inner.handle,
+            inner
+                .completion_owner
+                .as_ref()
+                .expect("PAIR completion owner")
+                .clone(),
+        )
     }
 
     /// Receives a message into caller-provided `out` storage, reusable across
@@ -146,14 +153,14 @@ impl PairSocket {
 impl DealerSocket {
     /// Begins a multipart send: add parts on the returned builder, then submit.
     /// A part is consumed on a successful submit (see [`SendOp`]).
-    pub fn send(&self) -> RoutedSendOp<Empty> {
+    pub fn send(&self) -> SendOp<Empty> {
         let inner = crate::socket::dealer_inner(self);
-        crate::operations::dealer_routed_send_op(
+        crate::operations::dealer_send_op(
             inner.routed_handle.as_ref().expect("DEALER handle").clone(),
             inner
-                .send_completions
+                .completion_owner
                 .as_ref()
-                .expect("DEALER send completions")
+                .expect("DEALER completion owner")
                 .clone(),
         )
     }
@@ -175,6 +182,11 @@ impl DealerSocket {
                 .routed_handle
                 .as_ref()
                 .expect("DEALER handle")
+                .clone(),
+            crate::socket::dealer_inner(self)
+                .completion_owner
+                .as_ref()
+                .expect("DEALER completion owner")
                 .clone(),
         )
     }

@@ -2,9 +2,58 @@
 
 use crate::internal::SocketStorage;
 use crate::{
-    BindError, CommonSocketOptions, ConfigError, ConnectError, Empty, HandlerError, Message,
+    BindError, CloseError, CommonSocketOptions, ConfigError, ConnectError, Empty, Message,
     Received, RecvError, RecvFlags, RoutingId, SendOp, StreamSocketOptions,
 };
+
+/// Reusable storage for one framed STREAM packet.
+pub struct StreamPacket {
+    routing_id: Option<RoutingId>,
+    header: Option<Message>,
+    body: Option<Message>,
+}
+
+impl Default for StreamPacket {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl StreamPacket {
+    pub fn empty() -> Self {
+        Self {
+            routing_id: None,
+            header: None,
+            body: None,
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.routing_id.is_none() && self.header.is_none() && self.body.is_none()
+    }
+    pub fn routing_id(&self) -> Option<&RoutingId> {
+        self.routing_id.as_ref()
+    }
+    pub fn header(&self) -> Option<&Message> {
+        self.header.as_ref()
+    }
+    pub fn body(&self) -> Option<&Message> {
+        self.body.as_ref()
+    }
+    pub fn close(self) -> Result<(), CloseError> {
+        Ok(())
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.routing_id = None;
+        self.header = None;
+        self.body = None;
+    }
+    pub(crate) fn replace(&mut self, routing_id: RoutingId, header: Message, body: Message) {
+        self.routing_id = Some(routing_id);
+        self.header = Some(header);
+        self.body = Some(body);
+    }
+}
 
 /// STREAM socket: exchanges framed packets with raw TCP peers addressed by
 /// routing id.
@@ -21,7 +70,15 @@ impl StreamSocket {
     /// [`SendOp`]).
     pub fn send(&self, target: &RoutingId) -> SendOp<Empty> {
         let inner = crate::socket::stream_inner(self);
-        crate::operations::stream_send_to_op(inner.handle, inner.send_completions.clone(), *target)
+        crate::operations::stream_send_to_op(
+            inner.handle,
+            inner
+                .completion_owner
+                .as_ref()
+                .expect("STREAM completion owner")
+                .clone(),
+            *target,
+        )
     }
 
     /// Receives a message into caller-provided `out` storage.
@@ -35,7 +92,11 @@ impl StreamSocket {
                 let inner = crate::socket::stream_inner(self);
                 out.set_stream_send_context(
                     inner.handle,
-                    inner.send_completions.clone(),
+                    inner
+                        .completion_owner
+                        .as_ref()
+                        .expect("STREAM completion owner")
+                        .clone(),
                     routing_id,
                 );
             }
@@ -43,20 +104,18 @@ impl StreamSocket {
         Ok(received)
     }
 
+    /// Receives one framed packet into reusable caller-owned storage.
+    pub fn recv_packet(&self, out: &mut StreamPacket, flags: RecvFlags) -> Result<bool, RecvError> {
+        crate::socket::recv_stream_packet(
+            crate::socket::stream_inner(self).handle,
+            out,
+            flags.bits(),
+        )
+    }
+
     /// Disconnects the peer identified by `peer_rid`.
     pub fn disconnect_rid(&self, peer_rid: &RoutingId) -> Result<(), ConnectError> {
         crate::socket::stream_inner(self).disconnect_rid(peer_rid)
-    }
-
-    /// Registers a handler invoked for each inbound framed packet with the
-    /// sender routing id, header, and body. The handler takes ownership of both
-    /// messages (dropped when it returns) and runs on a background dispatch
-    /// thread.
-    pub fn on_packet<F>(&mut self, handler: F) -> Result<(), HandlerError>
-    where
-        F: Fn(RoutingId, Message, Message) + Send + 'static,
-    {
-        crate::socket::stream_on_packet(self, handler)
     }
 
     /// Returns the typed options facade common to all socket types.

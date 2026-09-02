@@ -2,17 +2,15 @@ use std::ffi::{CStr, c_void};
 use std::mem::MaybeUninit;
 
 use crate::core_context::AutoHwmRecalcReason;
-use crate::error::{CloseError, ConfigError, HandlerError, RecvError};
+use crate::error::{CloseError, ConfigError, RecvError};
 use crate::ffi;
-use crate::internal::{CallbackBox, MonitorStorage};
+use crate::internal::MonitorStorage;
 use crate::message::RoutingId;
 use crate::monitor_contracts::{
     MonitorEvent, MonitorEventFlags, MonitorEventType, MonitorSourceKind, MonitorStatus,
     Monitorable, SocketMonitor, SocketMonitorOpenOptions,
 };
-use crate::native_errors::{
-    check_close_rc, check_config_rc, check_handler_rc, check_recv_rc, last_errno,
-};
+use crate::native_errors::{check_close_rc, check_config_rc, check_recv_rc, last_errno};
 
 // ---------------------------------------------------------------------------
 // MonitorEvent – typed socket monitor event
@@ -27,8 +25,6 @@ impl MonitorEvent {
             local_addr: cstr_array_to_string(&raw.local_addr),
             remote_addr: cstr_array_to_string(&raw.remote_addr),
             connection_id: raw.connection_id,
-            transport_pair_id: raw.transport_pair_id,
-            transport_pair_generation: raw.transport_pair_generation,
             transport_lane: raw.transport_lane,
             flags: MonitorEventFlags::from_raw(raw.flags),
         }
@@ -57,8 +53,6 @@ mod tests {
             local_addr: [0; 256],
             remote_addr: [0; 256],
             connection_id: 0xAAAA_BBBB_CCCC_DDDD,
-            transport_pair_id: 0x1111_2222_3333_4444,
-            transport_pair_generation: 7,
             transport_lane: 3,
             flags: MonitorEventFlags::CONNECTION_READY_EDGE.bits()
                 | MonitorEventFlags::SEND_FLOW_WRITABLE.bits(),
@@ -69,8 +63,6 @@ mod tests {
         assert_eq!(event.value, large_value);
         assert!(event.value > u64::from(u32::MAX));
         assert_eq!(event.connection_id, 0xAAAA_BBBB_CCCC_DDDD);
-        assert_eq!(event.transport_pair_id, 0x1111_2222_3333_4444);
-        assert_eq!(event.transport_pair_generation, 7);
         assert_eq!(event.transport_lane, 3);
         assert!(
             event
@@ -78,7 +70,11 @@ mod tests {
                 .contains(MonitorEventFlags::CONNECTION_READY_EDGE)
         );
         assert!(event.flags.contains(MonitorEventFlags::SEND_FLOW_WRITABLE));
-        assert!(!event.flags.contains(MonitorEventFlags::FLOW_STATE_STALE_EPOCH));
+        assert!(
+            !event
+                .flags
+                .contains(MonitorEventFlags::FLOW_STATE_STALE_EPOCH)
+        );
     }
 }
 
@@ -169,10 +165,7 @@ pub(crate) fn socket_monitor_open_with_options(
         ));
     }
     Ok(SocketMonitor {
-        inner: Box::new(MonitorStorage {
-            handle,
-            callback: None,
-        }),
+        inner: Box::new(MonitorStorage { handle }),
     })
 }
 
@@ -210,68 +203,15 @@ impl MonitorStorage {
         Ok(MonitorStatus::from_raw(&val))
     }
 
-    /// Install a callback handler for monitor events.
-    pub(crate) fn on_event<F>(&mut self, handler: F) -> Result<(), HandlerError>
-    where
-        F: Fn(&MonitorEvent) + Send + 'static,
-    {
-        let (cb, userdata) = CallbackBox::new(handler);
-        if let Some(previous) = self.callback.as_ref() {
-            previous.set_closing(true);
-        }
-
-        let rc = unsafe {
-            ffi::zlink_socket_monitor_handler(self.handle, monitor_trampoline::<F>, userdata)
-        };
-        if rc != 0 {
-            if let Some(previous) = self.callback.as_ref() {
-                previous.set_closing(false);
-            }
-            drop(cb);
-            return Err(check_handler_rc(rc).unwrap_err());
-        }
-        let previous = self.callback.replace(cb);
-        if let Some(previous) = previous {
-            crate::internal::release_callbacks(vec![previous]);
-        }
-        Ok(())
-    }
-
     pub(crate) fn close(&mut self) -> Result<(), CloseError> {
         if self.handle.is_null() {
             return Ok(());
         }
-        if let Some(callback) = self.callback.as_ref() {
-            callback.set_closing(true);
-        }
         let mut h = self.handle;
-        if let Err(error) = check_close_rc(unsafe { ffi::zlink_monitor_close(&mut h) }) {
-            if let Some(callback) = self.callback.as_ref() {
-                callback.set_closing(false);
-            }
-            return Err(error);
-        }
+        check_close_rc(unsafe { ffi::zlink_monitor_close(&mut h) })?;
         self.handle = std::ptr::null_mut();
-        if let Some(callback) = self.callback.take() {
-            crate::internal::release_callbacks(vec![callback]);
-        }
         Ok(())
     }
-}
-
-unsafe extern "C" fn monitor_trampoline<F: Fn(&MonitorEvent) + Send + 'static>(
-    event: *const ffi::zlink_monitor_event_t,
-    userdata: *mut c_void,
-) {
-    if event.is_null() {
-        return;
-    }
-    let _ = unsafe {
-        CallbackBox::invoke::<F, _>(userdata, |handler| {
-            let ev = MonitorEvent::from_raw(&*event);
-            handler(&ev);
-        })
-    };
 }
 
 impl Drop for MonitorStorage {
@@ -279,19 +219,12 @@ impl Drop for MonitorStorage {
         if self.handle.is_null() {
             return;
         }
-        if let Some(callback) = self.callback.as_ref() {
-            callback.set_closing(true);
-        }
-        let callback = self.callback.take().into_iter().collect();
         let mut handle = self.handle;
         let rc = unsafe { ffi::zlink_monitor_close(&mut handle) };
-        if rc == 0 {
-            crate::internal::release_callbacks(callback);
-        } else {
+        if rc != 0 {
             crate::internal::defer_native_close(
                 crate::internal::DeferredCloseKind::Monitor,
                 self.handle,
-                callback,
             );
         }
     }

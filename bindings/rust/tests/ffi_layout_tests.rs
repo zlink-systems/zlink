@@ -69,7 +69,10 @@ fn monitor_status_layout_matches_c_abi_v4() {
     );
     // The ABI-4 flow-state tail, in declared order.
     assert_eq!(offset_of!(ZlinkMonitorStatus, flow_paused_connections), 192);
-    assert_eq!(offset_of!(ZlinkMonitorStatus, flow_pause_applied_total), 200);
+    assert_eq!(
+        offset_of!(ZlinkMonitorStatus, flow_pause_applied_total),
+        200
+    );
     assert_eq!(
         offset_of!(ZlinkMonitorStatus, flow_resume_applied_total),
         208

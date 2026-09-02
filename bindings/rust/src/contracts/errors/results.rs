@@ -62,6 +62,8 @@ pub enum RequestResult {
     InvalidState = 111,
     /// The operation is not supported.
     NotSupported = 112,
+    /// The request could not be admitted because the outbound queue was full.
+    Backpressured = 113,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,7 +1,6 @@
 use crate::error::{
     BindError, BindResult, CloseError, CloseResult, ConfigError, ConfigResult, ConnectError,
-    ConnectResult, HandlerError, HandlerResult, RecvError, RecvResult, RequestError, RequestResult,
-    SubmitError, SubmitResult,
+    ConnectResult, RecvError, RecvResult, RequestError, RequestResult, SubmitError, SubmitResult,
 };
 use crate::ffi;
 
@@ -42,19 +41,6 @@ fn recv_result_from_errno(err: i32) -> RecvResult {
         libc::ENOTSUP => RecvResult::NotSupported,
         x if x == eopnotsupp() => RecvResult::NotSupported,
         _ => RecvResult::InternalError,
-    }
-}
-
-fn handler_result_from_errno(err: i32) -> HandlerResult {
-    match err {
-        0 => HandlerResult::Ok,
-        libc::EINVAL => HandlerResult::InvalidArgument,
-        libc::EBUSY => HandlerResult::Busy,
-        libc::ENOTSUP => HandlerResult::NotSupported,
-        x if x == eopnotsupp() => HandlerResult::NotSupported,
-        libc::EDEADLK => HandlerResult::Deadlock,
-        libc::EFAULT => HandlerResult::InvalidHandle,
-        _ => HandlerResult::InternalError,
     }
 }
 
@@ -110,10 +96,6 @@ pub(crate) fn submit_validation_error() -> SubmitError {
     SubmitError::new(SubmitResult::InvalidArgument, libc::EINVAL)
 }
 
-pub(crate) fn submit_not_supported_error() -> SubmitError {
-    SubmitError::new(SubmitResult::NotSupported, libc::ENOTSUP)
-}
-
 pub(crate) fn request_error_from_result(code: RequestResult) -> RequestError {
     let native_errno = match code {
         RequestResult::Ok => 0,
@@ -129,6 +111,7 @@ pub(crate) fn request_error_from_result(code: RequestResult) -> RequestError {
         RequestResult::InvalidArgument => libc::EINVAL,
         RequestResult::InvalidState => libc::EINVAL,
         RequestResult::NotSupported => libc::ENOTSUP,
+        RequestResult::Backpressured => libc::EAGAIN,
     };
     RequestError::new(code, native_errno)
 }
@@ -154,17 +137,6 @@ pub(crate) fn check_recv_rc(rc: i32) -> Result<(), RecvError> {
     } else {
         Err(RecvError::new(
             recv_result_from_errno(last_errno()),
-            last_errno(),
-        ))
-    }
-}
-
-pub(crate) fn check_handler_rc(rc: i32) -> Result<(), HandlerError> {
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(HandlerError::new(
-            handler_result_from_errno(last_errno()),
             last_errno(),
         ))
     }

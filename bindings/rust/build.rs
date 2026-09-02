@@ -38,10 +38,10 @@ fn main() {
         )))
     } else {
         match env::var_os("ZLINK_RUST_NATIVE_DIR") {
-        Some(path) => PathBuf::from(path),
-        None => manifest_dir
-            .join("native")
-            .join(format!("{os_dir}-{arch_dir}")),
+            Some(path) => PathBuf::from(path),
+            None => manifest_dir
+                .join("native")
+                .join(format!("{os_dir}-{arch_dir}")),
         }
     };
     if !native_dir.is_dir() {
@@ -57,11 +57,16 @@ fn main() {
     // candidate than the one packaged with this crate.
     let core_header = std::fs::read_to_string(core_include_dir.join("zlink.h"))
         .expect("approved Core zlink.h must be readable");
-    let core_version = ["MAJOR", "MINOR", "PATCH"].iter().map(|name| {
-        core_header.lines().find_map(|line| {
-            line.strip_prefix(&format!("#define ZLINK_VERSION_{name} "))
-        }).expect("approved Core zlink.h must define its version")
-    }).collect::<Vec<_>>().join(".");
+    let core_version = ["MAJOR", "MINOR", "PATCH"]
+        .iter()
+        .map(|name| {
+            core_header
+                .lines()
+                .find_map(|line| line.strip_prefix(&format!("#define ZLINK_VERSION_{name} ")))
+                .expect("approved Core zlink.h must define its version")
+        })
+        .collect::<Vec<_>>()
+        .join(".");
     if target_os == "windows" {
         let runtime = native_dir.join("zlink.dll");
         let import_library = native_dir.join("zlink.lib");
@@ -79,14 +84,15 @@ fn main() {
         if !runtime.is_file() || (!local_core && !versioned_runtime.is_file()) {
             panic!(
                 "Rust native runtime must contain libzlink.so{}: {}",
-                if local_core { "" } else { " and its exact versioned payload" },
+                if local_core {
+                    ""
+                } else {
+                    " and its exact versioned payload"
+                },
                 native_dir.display()
             );
         }
-        println!(
-            "cargo:rerun-if-changed={}",
-            runtime.display()
-        );
+        println!("cargo:rerun-if-changed={}", runtime.display());
         if versioned_runtime.is_file() {
             println!("cargo:rerun-if-changed={}", versioned_runtime.display());
         }

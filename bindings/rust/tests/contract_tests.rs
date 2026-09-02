@@ -9,16 +9,13 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 
 use zlink::{
-    ConfigResult, Context, DealerSocket, Message, POLLCOMPLETION, POLLIN, Poller, Received,
-    RecvFlags, RouterSocket, RoutingId, SendFlags, SubmitResult, has, version,
+    Context, DealerSocket, Message, POLLCOMPLETION, POLLIN, Poller, Received, RecvFlags,
+    RouterSocket, RoutingId, SubmitResult, has, version,
 };
 
 fn packaged_core_version() -> (i32, i32, i32) {
-    let header = std::fs::read_to_string(format!(
-        "{}/include/zlink.h",
-        env!("CARGO_MANIFEST_DIR")
-    ))
-    .expect("packaged Core header must be readable");
+    let header = std::fs::read_to_string(format!("{}/include/zlink.h", env!("CARGO_MANIFEST_DIR")))
+        .expect("packaged Core header must be readable");
     let component = |name: &str| -> i32 {
         header
             .lines()
@@ -247,9 +244,10 @@ fn all_socket_types_create_successfully() {
 fn request_reply_surface_exists() {
     let _dealer_request = DealerSocket::request;
     let _router_request = RouterSocket::request;
-    let _router_reply = |socket: &RouterSocket, rid: &RoutingId, seq: u64, msg: Message| {
-        socket.reply(rid, seq).message(msg).submit()
-    };
+    let _router_reply =
+        |socket: &RouterSocket, rid: &RoutingId, token: zlink::ReplyToken, msg: Message| {
+            socket.reply(rid, token).message(msg).submit()
+        };
 }
 
 #[test]
@@ -261,7 +259,7 @@ fn concurrent_multipart_publish_exposes_core_rejection_and_releases_parts() {
     let publisher = ctx.pub_socket().unwrap();
 
     let mut work = (0..WORKERS).map(|_| Vec::new()).collect::<Vec<_>>();
-    for worker in 0..WORKERS {
+    for (worker, worker_records) in work.iter_mut().enumerate() {
         for index in 0..PER_WORKER {
             let first_bytes = format!("record-{worker}-{index:03}-a").into_bytes();
             let second_bytes = format!("record-{worker}-{index:03}-b").into_bytes();
@@ -269,11 +267,14 @@ fn concurrent_multipart_publish_exposes_core_rejection_and_releases_parts() {
             let second = Message::try_from(second_bytes.as_slice()).unwrap();
             let first_owner = first.try_clone().unwrap();
             let second_owner = second.try_clone().unwrap();
-            let publish = publisher
-                .publish("contract")
-                .message(first)
-                .message(second);
-            work[worker].push((publish, first_owner, second_owner, first_bytes, second_bytes));
+            let publish = publisher.publish("contract").message(first).message(second);
+            worker_records.push((
+                publish,
+                first_owner,
+                second_owner,
+                first_bytes,
+                second_bytes,
+            ));
         }
     }
 
@@ -290,7 +291,8 @@ fn concurrent_multipart_publish_exposes_core_rejection_and_releases_parts() {
                     match publish.submit() {
                         Err(error)
                             if error.code() == SubmitResult::InvalidArgument
-                                && error.native_errno() == libc::EINVAL => {
+                                && error.native_errno() == libc::EINVAL =>
+                        {
                             assert_eq!(first.as_bytes(), first_bytes);
                             assert_eq!(second.as_bytes(), second_bytes);
                             assert_eq!(first.ref_count(), 1);
@@ -322,25 +324,68 @@ fn concurrent_multipart_publish_exposes_core_rejection_and_releases_parts() {
 }
 
 #[test]
-fn poller_modify_rejects_completion_ownership_changes() {
+fn poller_modify_transfers_completion_ownership() {
     let ctx = Context::new().unwrap();
     let dealer = ctx.dealer_socket().unwrap();
     let poller = Poller::new().unwrap();
 
     poller.add_socket(&dealer, POLLCOMPLETION, 1).unwrap();
-    let remove_completion = poller.modify_socket(&dealer, POLLIN).unwrap_err();
-    assert_eq!(remove_completion.code(), ConfigResult::InvalidArgument);
+    poller.modify_socket(&dealer, POLLIN).unwrap();
     poller.remove_socket(&dealer).unwrap();
 
     poller.add_socket(&dealer, POLLIN, 2).unwrap();
-    let add_completion = poller
+    poller
         .modify_socket(&dealer, POLLIN | POLLCOMPLETION)
-        .unwrap_err();
-    assert_eq!(add_completion.code(), ConfigResult::InvalidArgument);
+        .unwrap();
 }
 
 #[test]
-fn request_router_exposes_request_sequence() {
+fn pollcompletion_reports_only_after_request_future_is_settled() {
+    let ctx = Context::new().unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    router
+        .bind("inproc://rust-public-completion-owner")
+        .unwrap();
+    dealer
+        .connect("inproc://rust-public-completion-owner")
+        .unwrap();
+
+    let poller = Poller::new().unwrap();
+    poller.add_socket(&dealer, POLLCOMPLETION, 17).unwrap();
+    let responder = thread::spawn(move || {
+        let mut request = Received::empty();
+        assert!(router.recv(&mut request, RecvFlags::NONE).unwrap());
+        request
+            .reply()
+            .message(Message::try_from(b"poller-reply").unwrap())
+            .submit()
+            .unwrap();
+    });
+
+    let mut future = Box::pin(
+        dealer
+            .request()
+            .message(Message::try_from(b"poller-request").unwrap())
+            .timeout(std::time::Duration::from_secs(2))
+            .submit(),
+    );
+    assert!(test_support::poll_once(&mut future).is_pending());
+    let mut events = [zlink::PollEvent::default()];
+    assert_eq!(poller.wait(&mut events, 5_000).unwrap(), 1);
+    assert_eq!(events[0].slot, 17);
+    assert_ne!(events[0].revents & POLLCOMPLETION, 0);
+    let reply = test_support::block_on(future).unwrap();
+    assert_eq!(reply[0].as_bytes(), b"poller-reply");
+
+    poller.modify_socket(&dealer, POLLIN).unwrap();
+    poller.modify_socket(&dealer, POLLCOMPLETION).unwrap();
+    poller.remove_socket(&dealer).unwrap();
+    responder.join().unwrap();
+}
+
+#[test]
+fn ordinary_router_message_has_no_reply_token() {
     let ctx = Context::new().unwrap();
     let router_socket = ctx.router_socket().unwrap();
     let dealer_socket = ctx.dealer_socket().unwrap();
@@ -361,21 +406,94 @@ fn request_router_exposes_request_sequence() {
 
     let mut received = Received::empty();
     router_socket.recv(&mut received, RecvFlags::NONE).unwrap();
-    let request_seq = received.request_seq();
+    let reply_token = received.reply_token();
     assert_eq!(received.single_part().unwrap().as_bytes(), b"plain-data");
-    assert_eq!(request_seq, None);
+    assert_eq!(reply_token, None);
 }
 
 #[test]
-fn router_reply_with_non_empty_flags_fails_explicitly() {
+fn reply_token_rejects_a_different_router_owner_before_native_submit() {
     let ctx = Context::new().unwrap();
     let router = ctx.router_socket().unwrap();
-    let rid = RoutingId::from(b"peer-42");
-    let err = router
-        .reply(&rid, 1)
-        .message(Message::try_from(b"pong").unwrap())
-        .flags(SendFlags::DONT_WAIT)
+    let other_router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    router.bind("inproc://rust-reply-token-owner").unwrap();
+    dealer.connect("inproc://rust-reply-token-owner").unwrap();
+
+    let responder = std::thread::spawn(move || {
+        let mut request = Received::empty();
+        assert!(router.recv(&mut request, RecvFlags::NONE).unwrap());
+        let rid = *request.routing_id().expect("request routing id");
+        let token = request.reply_token().expect("request reply token");
+        assert_eq!(token, token.clone());
+        assert_eq!(format!("{token:?}"), "ReplyToken");
+
+        let error = other_router
+            .reply(&rid, token.clone())
+            .message(Message::try_from(b"wrong-owner").unwrap())
+            .submit()
+            .unwrap_err();
+        assert_eq!(error.code(), SubmitResult::InvalidArgument);
+
+        request
+            .reply()
+            .message(Message::try_from(b"right-owner").unwrap())
+            .submit()
+            .unwrap();
+    });
+
+    let reply = dealer
+        .request()
+        .message(Message::try_from(b"request").unwrap())
+        .timeout(std::time::Duration::from_secs(2))
+        .submit_sync()
+        .unwrap();
+    assert_eq!(reply[0].as_bytes(), b"right-owner");
+    responder.join().unwrap();
+}
+
+#[test]
+fn reply_token_from_closed_router_is_rejected_by_recreated_router() {
+    let ctx = Context::new().unwrap();
+    let mut original_router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    original_router
+        .bind("inproc://rust-stale-reply-token-owner")
+        .unwrap();
+    dealer
+        .connect("inproc://rust-stale-reply-token-owner")
+        .unwrap();
+
+    let (stale_tx, stale_rx) = std::sync::mpsc::channel();
+    let responder = std::thread::spawn(move || {
+        let mut request = Received::empty();
+        assert!(original_router.recv(&mut request, RecvFlags::NONE).unwrap());
+        let rid = *request.routing_id().expect("request routing id");
+        let token = request.reply_token().expect("request reply token");
+        request
+            .reply()
+            .message(Message::try_from(b"original-owner").unwrap())
+            .submit()
+            .unwrap();
+        original_router.close().unwrap();
+        stale_tx.send((rid, token)).unwrap();
+    });
+
+    let reply = dealer
+        .request()
+        .message(Message::try_from(b"request-before-recreate").unwrap())
+        .timeout(std::time::Duration::from_secs(2))
+        .submit_sync()
+        .unwrap();
+    assert_eq!(reply[0].as_bytes(), b"original-owner");
+    let (rid, stale_token) = stale_rx.recv().unwrap();
+    responder.join().unwrap();
+
+    let recreated_router = ctx.router_socket().unwrap();
+    let error = recreated_router
+        .reply(&rid, stale_token)
+        .message(Message::try_from(b"must-not-reach-native").unwrap())
         .submit()
         .unwrap_err();
-    assert_eq!(err.code(), SubmitResult::NotSupported);
+    assert_eq!(error.code(), SubmitResult::InvalidArgument);
 }

@@ -1,8 +1,8 @@
 //! Core-driven send-completion contracts for the asynchronous send terminals.
 //!
 //! `submit()` returns a runtime-independent `Future` whose completion is driven by
-//! `zlink_send_complete_handler`. The binding owns no thread, no park queue, no
-//! retry and no deadline timer; Core answers every operation exactly once.
+//! the socket completion queue. The binding owns no retry or deadline timer;
+//! Core answers every operation exactly once.
 
 mod test_support;
 
@@ -12,8 +12,7 @@ use std::thread;
 use std::time::Duration;
 
 use zlink::{
-    Context, Message, Received, RecvFlags, RequestResult, RoutingId, SendFlags, SubmitResult,
-    ZlinkError,
+    Context, Message, Received, RecvFlags, RequestResult, RoutingId, SubmitResult, ZlinkError,
 };
 
 const RECORD_HWM: u64 = 65_536 + 64;
@@ -24,7 +23,8 @@ fn large_filler(byte: u8) -> Message {
 
 /// Fills the outbound lane until at least one record is left as a Core-owned
 /// pending operation, and returns those still-pending futures.
-type PendingSend = std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), zlink::SubmitError>> + Send>>;
+type PendingSend =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), zlink::SubmitError>> + Send>>;
 
 fn saturate(mut submit: impl FnMut() -> PendingSend) -> Vec<PendingSend> {
     let mut pending = Vec::new();
@@ -47,7 +47,9 @@ fn inline_admission_resolves_the_future_on_its_first_poll() {
     let router = ctx.router_socket().unwrap();
     let dealer = ctx.dealer_socket().unwrap();
     router.bind("inproc://rust-send-complete-inline").unwrap();
-    dealer.connect("inproc://rust-send-complete-inline").unwrap();
+    dealer
+        .connect("inproc://rust-send-complete-inline")
+        .unwrap();
     thread::sleep(Duration::from_millis(75));
 
     let mut future = Box::pin(
@@ -120,50 +122,7 @@ fn backpressured_send_completes_when_the_reader_drains() {
 }
 
 #[test]
-fn per_operation_timeout_completes_a_parked_record() {
-    let ctx = Context::new().unwrap();
-    ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
-    dealer
-        .common_options()
-        .set_send_high_water_mark(RECORD_HWM)
-        .unwrap();
-    router
-        .common_options()
-        .set_receive_high_water_mark(RECORD_HWM)
-        .unwrap();
-    router.bind("inproc://rust-send-complete-timeout").unwrap();
-    dealer
-        .connect("inproc://rust-send-complete-timeout")
-        .unwrap();
-    thread::sleep(Duration::from_millis(75));
-
-    let pending = saturate(|| Box::pin(dealer.send().message(large_filler(b't')).submit()));
-    assert!(!pending.is_empty(), "test target did not reach HWM");
-
-    // The deadline is a per-operation Core option, not a binding timer.
-    let started = std::time::Instant::now();
-    let outcome = test_support::block_on(
-        dealer
-            .send()
-            .message(large_filler(b'x'))
-            .timeout(Duration::from_millis(250))
-            .submit(),
-    );
-    assert!(
-        outcome.is_err(),
-        "a record that never gets admitted must fail at its deadline"
-    );
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "the deadline must be Core-owned and prompt"
-    );
-    drop(pending);
-}
-
-#[test]
-fn dropping_a_pending_send_future_requests_cancellation() {
+fn dropping_a_pending_send_future_detaches_the_waiter() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
     let router = ctx.router_socket().unwrap();
@@ -177,7 +136,9 @@ fn dropping_a_pending_send_future_requests_cancellation() {
         .set_receive_high_water_mark(RECORD_HWM)
         .unwrap();
     router.bind("inproc://rust-send-complete-cancel").unwrap();
-    dealer.connect("inproc://rust-send-complete-cancel").unwrap();
+    dealer
+        .connect("inproc://rust-send-complete-cancel")
+        .unwrap();
     thread::sleep(Duration::from_millis(75));
 
     let pending = saturate(|| Box::pin(dealer.send().message(large_filler(b'd')).submit()));
@@ -185,9 +146,8 @@ fn dropping_a_pending_send_future_requests_cancellation() {
 
     let mut cancelled = Box::pin(dealer.send().message(large_filler(b'z')).submit());
     assert_eq!(test_support::poll_once(&mut cancelled), Poll::Pending);
-    // Drop requests `zlink_send_async_cancel`. The operation still completes
-    // exactly once inside Core; the binding keeps the op state alive until it
-    // does, so this must neither hang nor double-free.
+    // Drop detaches only the waiter. The operation still completes exactly
+    // once inside Core, and the socket registry retains state until cleanup.
     drop(cancelled);
     drop(pending);
 
@@ -370,77 +330,57 @@ fn request_sync_return_waits_for_reply() {
         .request()
         .message(Message::try_from(b"sync-request").unwrap())
         .timeout(Duration::from_secs(2))
-        .submit_sync(SendFlags::NONE)
+        .submit_sync()
         .unwrap();
     assert_eq!(reply[0].as_bytes(), b"sync-reply");
     replier.join().unwrap();
 }
 
 #[test]
-fn request_sync_callback_returns_after_admission_and_delivers_reply() {
+fn dropped_request_future_cleans_up_its_late_completion() {
     let ctx = Context::new().unwrap();
     let router = ctx.router_socket().unwrap();
     let dealer = ctx.dealer_socket().unwrap();
-    router.bind("inproc://rust-request-sync-callback").unwrap();
-    dealer.connect("inproc://rust-request-sync-callback").unwrap();
+    router.bind("inproc://rust-request-late-cleanup").unwrap();
+    dealer
+        .connect("inproc://rust-request-late-cleanup")
+        .unwrap();
     thread::sleep(Duration::from_millis(75));
 
-    let replier = thread::spawn(move || {
-        let mut request = Received::empty();
-        assert!(router.recv(&mut request, RecvFlags::NONE).unwrap());
-        request
-            .reply()
-            .message(Message::try_from(b"callback-reply").unwrap())
-            .submit()
-            .unwrap();
+    let responder = thread::spawn(move || {
+        for payload in [b"late-reply".as_slice(), b"next-reply".as_slice()] {
+            let mut request = Received::empty();
+            assert!(router.recv(&mut request, RecvFlags::NONE).unwrap());
+            request
+                .reply()
+                .message(Message::try_from(payload).unwrap())
+                .submit()
+                .unwrap();
+        }
     });
-    let (reply_tx, reply_rx) = mpsc::channel();
-    dealer
-        .request()
-        .message(Message::try_from(b"callback-request").unwrap())
-        .timeout(Duration::from_secs(2))
-        .on_reply(move |outcome| reply_tx.send(outcome).unwrap())
-        .submit_sync(SendFlags::DONT_WAIT)
-        .unwrap();
-    let reply = reply_rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
-    assert_eq!(reply[0].as_bytes(), b"callback-reply");
-    replier.join().unwrap();
-}
 
-#[test]
-fn request_sync_callback_dont_wait_reports_admission_backpressure() {
-    let ctx = Context::new().unwrap();
-    ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
-    dealer
-        .common_options()
-        .set_send_high_water_mark(RECORD_HWM)
-        .unwrap();
-    router
-        .common_options()
-        .set_receive_high_water_mark(RECORD_HWM)
-        .unwrap();
-    router
-        .bind("inproc://rust-request-sync-callback-backpressure")
-        .unwrap();
-    dealer
-        .connect("inproc://rust-request-sync-callback-backpressure")
-        .unwrap();
-    thread::sleep(Duration::from_millis(75));
+    let mut dropped = Box::pin(
+        dealer
+            .request()
+            .message(Message::try_from(b"drop-request").unwrap())
+            .timeout(Duration::from_secs(2))
+            .submit(),
+    );
+    assert!(matches!(
+        test_support::poll_once(&mut dropped),
+        Poll::Pending
+    ));
+    drop(dropped);
+    thread::sleep(Duration::from_millis(50));
 
-    let started = std::time::Instant::now();
-    let error = (0..256)
-        .find_map(|_| {
-            dealer
-                .request()
-                .message(large_filler(b'r'))
-                .timeout(Duration::from_secs(5))
-                .on_reply(|_| {})
-                .submit_sync(SendFlags::DONT_WAIT)
-                .err()
-        })
-        .expect("the undrained request lane did not reach HWM");
-    assert_eq!(error.code(), SubmitResult::Backpressured);
-    assert!(started.elapsed() < Duration::from_secs(2));
+    let reply = test_support::block_on(
+        dealer
+            .request()
+            .message(Message::try_from(b"next-request").unwrap())
+            .timeout(Duration::from_secs(2))
+            .submit(),
+    )
+    .unwrap();
+    assert_eq!(reply[0].as_bytes(), b"next-reply");
+    responder.join().unwrap();
 }

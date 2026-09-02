@@ -45,10 +45,7 @@ pub fn wait_connected(monitors: &[&SocketMonitor]) {
         loop {
             let event = monitor.recv().expect("monitor recv failed");
             if event.is_connection_ready()
-                || monitor
-                    .snapshot()
-                    .expect("monitor snapshot failed")
-                    .is_ready()
+                || monitor.status().expect("monitor status failed").is_ready()
             {
                 break;
             }
@@ -61,10 +58,7 @@ pub fn wait_stream_connected(monitor: &SocketMonitor) {
         let event = monitor.recv().expect("monitor recv failed");
         if event.is_accepted()
             || event.is_connection_ready()
-            || monitor
-                .snapshot()
-                .expect("monitor snapshot failed")
-                .is_ready()
+            || monitor.status().expect("monitor status failed").is_ready()
         {
             break;
         }

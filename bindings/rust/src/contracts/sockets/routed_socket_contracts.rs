@@ -5,7 +5,7 @@ use crate::{
     BindError, CommonSocketOptions, ConfigError, ConnectError, Received, RecvError, RecvFlags,
     RouterSocketOptions,
 };
-use crate::{Empty, ReplyOp, RequestOp, RoutedSendOp, RoutingId};
+use crate::{Empty, ReplyOp, ReplyToken, RequestOp, RoutingId, SendOp};
 
 /// ROUTER socket: routes messages to peers addressed by routing id, the
 /// server side of asynchronous request/reply.
@@ -20,14 +20,14 @@ impl RouterSocket {
     /// Begins a multipart send addressed to `target`: add parts on the returned
     /// builder, then submit. A part is consumed on a successful submit (see
     /// [`SendOp`]).
-    pub fn send(&self, target: &RoutingId) -> RoutedSendOp<Empty> {
+    pub fn send(&self, target: &RoutingId) -> SendOp<Empty> {
         let inner = crate::socket::router_inner(self);
-        crate::operations::socket_routed_send_op(
+        crate::operations::routed_send_op(
             inner.routed_handle.as_ref().expect("ROUTER handle").clone(),
             inner
-                .send_completions
+                .completion_owner
                 .as_ref()
-                .expect("ROUTER send completions")
+                .expect("ROUTER completion owner")
                 .clone(),
             *target,
         )
@@ -43,9 +43,14 @@ impl RouterSocket {
             inner.handle,
             inner.routed_handle.as_ref().expect("ROUTER handle").clone(),
             inner
-                .send_completions
+                .completion_owner
                 .as_ref()
-                .expect("ROUTER send completions")
+                .expect("ROUTER completion owner")
+                .clone(),
+            inner
+                .reply_owner
+                .as_ref()
+                .expect("ROUTER reply owner")
                 .clone(),
             flags.bits(),
             out,
@@ -61,21 +66,28 @@ impl RouterSocket {
                 .as_ref()
                 .expect("ROUTER handle")
                 .clone(),
+            crate::socket::router_inner(self)
+                .completion_owner
+                .as_ref()
+                .expect("ROUTER completion owner")
+                .clone(),
             *peer_rid,
         )
     }
 
-    /// Begins a reply to the request `request_seq` from peer `rid`: add parts,
+    /// Begins a reply to the request token from peer `rid`: add parts,
     /// then submit. Parts are consumed on a successful submit (see [`SendOp`]).
-    pub fn reply(&self, rid: &RoutingId, request_seq: u64) -> ReplyOp<Empty> {
+    pub fn reply(&self, rid: &RoutingId, reply_token: ReplyToken) -> ReplyOp<Empty> {
+        let inner = crate::socket::router_inner(self);
         crate::operations::router_reply_op(
-            crate::socket::router_inner(self)
-                .routed_handle
+            inner.routed_handle.as_ref().expect("ROUTER handle").clone(),
+            inner
+                .reply_owner
                 .as_ref()
-                .expect("ROUTER handle")
+                .expect("ROUTER reply owner")
                 .clone(),
             *rid,
-            request_seq,
+            reply_token,
         )
     }
 

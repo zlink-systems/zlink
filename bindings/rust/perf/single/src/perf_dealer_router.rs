@@ -58,7 +58,7 @@ fn main() {
     dealer
         .send()
         .message(Message::try_from(b"PING").expect("dealer ping"))
-        .submit_sync(zlink::SendFlags::NONE)
+        .submit_sync()
         .expect("dealer handshake send");
     let mut handshake = zlink::Received::empty();
     if let Err(err) = router.recv(&mut handshake, zlink::RecvFlags::NONE) {
@@ -72,7 +72,7 @@ fn main() {
     router
         .send(&reply_rid)
         .message(Message::try_from(b"PONG").expect("router pong"))
-        .submit_sync(zlink::SendFlags::NONE)
+        .submit_sync()
         .expect("router handshake reply");
     let mut handshake_reply = zlink::Received::empty();
     if let Err(err) = dealer.recv(&mut handshake_reply, zlink::RecvFlags::NONE) {

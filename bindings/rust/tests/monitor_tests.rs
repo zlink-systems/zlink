@@ -22,9 +22,18 @@ fn flow_state_event_constants_match_c_abi_and_are_in_all() {
     assert_eq!(SocketMonitorEventMask::ALL.bits(), 0x7FFFF);
 
     let all = SocketMonitorEventMask::ALL.bits();
-    assert_eq!(all & SocketMonitorEventMask::SEND_FLOW_PAUSED.bits(), 1 << 16);
-    assert_eq!(all & SocketMonitorEventMask::SEND_FLOW_RESUMED.bits(), 1 << 17);
-    assert_eq!(all & SocketMonitorEventMask::FLOW_STATE_STALE.bits(), 1 << 18);
+    assert_eq!(
+        all & SocketMonitorEventMask::SEND_FLOW_PAUSED.bits(),
+        1 << 16
+    );
+    assert_eq!(
+        all & SocketMonitorEventMask::SEND_FLOW_RESUMED.bits(),
+        1 << 17
+    );
+    assert_eq!(
+        all & SocketMonitorEventMask::FLOW_STATE_STALE.bits(),
+        1 << 18
+    );
 }
 
 #[test]
@@ -38,7 +47,10 @@ fn monitor_status_detail_flow_state_bit_matches_c_abi() {
     // `has_flow_state_detail()` is `MonitorStatus`'s only public surface for
     // the ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE (1 << 5) bit; assert it
     // agrees with the raw detail_flags mask bit-for-bit.
-    assert_eq!(snap.has_flow_state_detail(), snap.detail_flags & (1 << 5) != 0);
+    assert_eq!(
+        snap.has_flow_state_detail(),
+        snap.detail_flags & (1 << 5) != 0
+    );
 }
 
 #[test]
@@ -51,10 +63,14 @@ fn monitor_event_flag_constants_match_c_abi() {
     assert_eq!(MonitorEventFlags::NONE.bits(), 0);
     assert_eq!(MonitorEventFlags::CONNECTION_READY_EDGE.bits(), 1 << 0);
     assert_eq!(MonitorEventFlags::SEND_FLOW_WRITABLE.bits(), 1 << 1);
-    assert_eq!(MonitorEventFlags::FLOW_STATE_STALE_GENERATION.bits(), 1 << 2);
+    assert_eq!(
+        MonitorEventFlags::FLOW_STATE_STALE_GENERATION.bits(),
+        1 << 2
+    );
     assert_eq!(MonitorEventFlags::FLOW_STATE_STALE_EPOCH.bits(), 1 << 3);
 
-    let combined = MonitorEventFlags::SEND_FLOW_WRITABLE | MonitorEventFlags::FLOW_STATE_STALE_EPOCH;
+    let combined =
+        MonitorEventFlags::SEND_FLOW_WRITABLE | MonitorEventFlags::FLOW_STATE_STALE_EPOCH;
     assert!(combined.contains(MonitorEventFlags::SEND_FLOW_WRITABLE));
     assert!(combined.contains(MonitorEventFlags::FLOW_STATE_STALE_EPOCH));
     assert!(!combined.contains(MonitorEventFlags::CONNECTION_READY_EDGE));
@@ -95,8 +111,8 @@ fn socket_monitor_hwm_bytes_are_forwarded_exactly() {
 #[test]
 fn socket_monitor_event_exposes_full_payload_fields() {
     // Final gate (core-byte-hwm-flow-control-plan.ko.md): MonitorEvent used
-    // to narrow `value` to u32 and omit connection_id / transport_pair_id /
-    // transport_pair_generation / transport_lane / flags entirely. Confirm
+    // to narrow `value` to u32 and omit connection_id / transport_lane /
+    // flags entirely. Confirm
     // all of them are reachable, correctly typed, on a real event from a
     // live connection.
     let ctx = Context::new().unwrap();
@@ -116,8 +132,6 @@ fn socket_monitor_event_exposes_full_payload_fields() {
             saw_event = true;
             let _value: u64 = ev.value;
             let _connection_id: u64 = ev.connection_id;
-            let _transport_pair_id: u64 = ev.transport_pair_id;
-            let _transport_pair_generation: u64 = ev.transport_pair_generation;
             let _transport_lane: u32 = ev.transport_lane;
             let _flags: MonitorEventFlags = ev.flags;
             // Confirms `flags` really is `MonitorEventFlags`, not a raw
@@ -126,7 +140,10 @@ fn socket_monitor_event_exposes_full_payload_fields() {
             break;
         }
     }
-    assert!(saw_event, "expected at least one monitor event from a live connect");
+    assert!(
+        saw_event,
+        "expected at least one monitor event from a live connect"
+    );
 }
 
 #[test]
@@ -208,32 +225,4 @@ fn socket_monitor_status() {
     assert_eq!(snap.flow_resume_applied_total, 0);
     assert_eq!(snap.flow_state_stale_total, 0);
     assert_eq!(snap.flow_pause_duration_ms, 0);
-}
-
-#[test]
-fn socket_monitor_callback() {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
-
-    let ctx = Context::new().unwrap();
-    let server = ctx.pair_socket().unwrap();
-    server.bind("inproc://mon-callback").unwrap();
-
-    let mut mon = SocketMonitor::open(&server).unwrap();
-    let called = Arc::new(AtomicBool::new(false));
-    let called_clone = called.clone();
-
-    mon.on_event(move |_event| {
-        called_clone.store(true, Ordering::Relaxed);
-    })
-    .unwrap();
-
-    let client = ctx.pair_socket().unwrap();
-    client.connect("inproc://mon-callback").unwrap();
-
-    thread::sleep(Duration::from_millis(200));
-    // Callback may or may not have been called depending on timing
-    let _ = called.load(Ordering::Relaxed);
 }

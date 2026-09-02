@@ -32,12 +32,13 @@ pub(crate) fn router_inner_mut(socket: &mut RouterSocket) -> &mut SocketInner {
 pub(crate) fn recv_router_once(
     handle: *mut c_void,
     routed: std::sync::Arc<crate::internal::RoutedHandle>,
-    completions: std::sync::Arc<crate::internal::SendCompletions>,
+    completion_owner: std::sync::Arc<crate::internal::CompletionOwner>,
+    reply_owner: std::sync::Arc<crate::internal::RouterOwnerTag>,
     flags: u32,
     out: &mut Received,
 ) -> Result<bool, RecvError> {
     let mut source_rid = ptr::null();
-    let mut request_seq = 0u64;
+    let mut reply_token = 0u64;
     let mut recv_flags = flags;
     let received = {
         let parts = out.receive_scratch();
@@ -50,12 +51,12 @@ pub(crate) fn recv_router_once(
             }
             let mut has_more = ffi::zlink_part_flag_t::ZLINK_PART_FINAL;
             let mut current_source_rid = ptr::null();
-            let mut current_request_seq = 0u64;
+            let mut current_reply_token = 0u64;
             let rc = unsafe {
                 ffi::zlink_router_recv_part(
                     handle,
                     &mut current_source_rid,
-                    &mut current_request_seq,
+                    &mut current_reply_token,
                     part.as_mut_ptr(),
                     &mut has_more,
                     recv_flags,
@@ -75,7 +76,7 @@ pub(crate) fn recv_router_once(
                     return Err(check_recv_rc(rc).unwrap_err());
                 }
                 source_rid = current_source_rid;
-                request_seq = current_request_seq;
+                reply_token = current_reply_token;
                 parts.clear();
                 received_any = true;
             } else if rc != 0 {
@@ -90,14 +91,21 @@ pub(crate) fn recv_router_once(
                 } else {
                     unsafe { RoutingId::from_raw(*source_rid) }
                 };
-                break Some((rid, request_seq));
+                break Some((rid, reply_token));
             }
             recv_flags = ffi::ZLINK_DONTWAIT;
         }
     };
 
-    if let Some((routing_id, request_seq)) = received {
-        out.replace_router_parts(handle, routed, completions, routing_id, request_seq);
+    if let Some((routing_id, reply_token)) = received {
+        out.replace_router_parts(
+            handle,
+            routed,
+            completion_owner,
+            reply_owner,
+            routing_id,
+            reply_token,
+        );
         Ok(true)
     } else {
         Ok(false)

@@ -3,12 +3,12 @@ use std::ffi::c_void;
 use std::os::fd::RawFd;
 #[cfg(windows)]
 use std::os::windows::io::RawSocket as RawFd;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
-use crate::error::{ConfigError, HandlerError, RecvError};
+use crate::error::{ConfigError, RecvError};
 use crate::ffi;
-use crate::internal::{CallbackBox, PollerStorage, TimerStorage};
-use crate::native_errors::{check_config_rc, check_handler_rc, check_recv_rc, last_errno};
+use crate::internal::{PollerSocketRegistration, PollerStorage, TimerStorage};
+use crate::native_errors::{check_config_rc, check_recv_rc, last_errno};
 use crate::poller_contracts::{
     POLLCOMPLETION, PollEvent, PollItem, PollSourceKind, Pollable, Poller, Timer,
 };
@@ -37,53 +37,107 @@ impl PollerStorage {
         events: i16,
         slot: usize,
     ) -> Result<(), ConfigError> {
-        let handle = pollable_handle(socket)?;
-        check_config_rc(unsafe {
+        let (handle, completion_owner) = pollable_registration(socket)?;
+        let owner = self as *const Self as usize;
+        if events & POLLCOMPLETION != 0 {
+            let completion_owner = completion_owner.as_ref().ok_or_else(|| {
+                ConfigError::new(crate::ConfigResult::InvalidArgument, libc::EINVAL)
+            })?;
+            completion_owner.transfer_to_public(owner)?;
+        }
+        if let Err(error) = check_config_rc(unsafe {
             ffi::zlink_poller_add(self.handle, handle, slot as *mut c_void, events)
-        })?;
-        self.sockets
-            .lock()
-            .expect("poller sockets")
-            .insert(handle as usize, events);
+        }) {
+            if events & POLLCOMPLETION != 0 {
+                completion_owner
+                    .as_ref()
+                    .expect("completion owner")
+                    .transfer_to_runtime(owner);
+            }
+            return Err(error);
+        }
+        self.sockets.lock().expect("poller sockets").insert(
+            handle as usize,
+            PollerSocketRegistration {
+                events,
+                completion_owner,
+            },
+        );
         Ok(())
     }
 
-    /// Modify a regular readiness mask without changing completion ownership.
+    /// Modify readiness and atomically transfer completion ownership as needed.
     pub(crate) fn modify_socket(
         &self,
         socket: &dyn Pollable,
         events: i16,
     ) -> Result<(), ConfigError> {
-        let handle = pollable_handle(socket)?;
+        let (handle, completion_owner) = pollable_registration(socket)?;
         let previous = self
             .sockets
             .lock()
             .expect("poller sockets")
             .get(&(handle as usize))
-            .copied()
-            .unwrap_or(0);
-        if previous & POLLCOMPLETION != 0 || events & POLLCOMPLETION != 0 {
-            return Err(ConfigError::new(
-                crate::error::ConfigResult::InvalidArgument,
-                libc::EINVAL,
-            ));
+            .cloned();
+        let previous = previous
+            .ok_or_else(|| ConfigError::new(crate::ConfigResult::InvalidArgument, libc::EINVAL))?;
+        let had_completion = previous.events & POLLCOMPLETION != 0;
+        let wants_completion = events & POLLCOMPLETION != 0;
+        let owner = self as *const Self as usize;
+        if !had_completion && wants_completion {
+            let completion_owner = completion_owner
+                .as_ref()
+                .ok_or_else(|| ConfigError::new(crate::ConfigResult::InvalidState, libc::EINVAL))?;
+            completion_owner.transfer_to_public(owner)?;
         }
-        check_config_rc(unsafe { ffi::zlink_poller_modify(self.handle, handle, events) })?;
-        self.sockets
-            .lock()
-            .expect("poller sockets")
-            .insert(handle as usize, events);
+        if let Err(error) =
+            check_config_rc(unsafe { ffi::zlink_poller_modify(self.handle, handle, events) })
+        {
+            if !had_completion && wants_completion {
+                completion_owner
+                    .as_ref()
+                    .expect("completion owner")
+                    .transfer_to_runtime(owner);
+            }
+            return Err(error);
+        }
+        self.sockets.lock().expect("poller sockets").insert(
+            handle as usize,
+            PollerSocketRegistration {
+                events,
+                completion_owner,
+            },
+        );
+        if had_completion && !wants_completion {
+            previous
+                .completion_owner
+                .expect("completion owner")
+                .transfer_to_runtime(owner);
+        }
         Ok(())
     }
 
     /// Remove a socket from the poller.
     pub(crate) fn remove_socket(&self, socket: &dyn Pollable) -> Result<(), ConfigError> {
-        let handle = pollable_handle(socket)?;
+        let (handle, _) = pollable_registration(socket)?;
+        let registration = self
+            .sockets
+            .lock()
+            .expect("poller sockets")
+            .get(&(handle as usize))
+            .cloned();
         check_config_rc(unsafe { ffi::zlink_poller_remove(self.handle, handle) })?;
         self.sockets
             .lock()
             .expect("poller sockets")
             .remove(&(handle as usize));
+        if let Some(registration) = registration {
+            if registration.events & POLLCOMPLETION != 0 {
+                if let Some(owner) = registration.completion_owner {
+                    owner.transfer_to_runtime(self as *const Self as usize);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -177,8 +231,25 @@ impl PollerStorage {
         if rc == 0 {
             return Ok(0);
         }
-        for (dst, src) in events.iter_mut().zip(raw_events.iter()).take(rc as usize) {
-            *dst = PollEvent {
+        let registrations = self.sockets.lock().expect("poller sockets");
+        let mut written = 0usize;
+        for src in raw_events.iter().take(rc as usize) {
+            let mut revents = src.events;
+            if revents & POLLCOMPLETION != 0 {
+                let drained = registrations
+                    .get(&(src.socket as usize))
+                    .and_then(|registration| registration.completion_owner.as_ref())
+                    .map(|owner| owner.drain(true))
+                    .transpose()?
+                    .unwrap_or(0);
+                if drained == 0 {
+                    revents &= !POLLCOMPLETION;
+                }
+            }
+            if revents == 0 {
+                continue;
+            }
+            events[written] = PollEvent {
                 source_kind: match src.source_kind {
                     ffi::zlink_poller_source_kind_t::ZLINK_POLLER_SOURCE_FD => PollSourceKind::Fd,
                     ffi::zlink_poller_source_kind_t::ZLINK_POLLER_SOURCE_TIMER => {
@@ -188,10 +259,11 @@ impl PollerStorage {
                 },
                 fd: src.fd as RawFd,
                 slot: src.user_data as usize,
-                revents: src.events,
+                revents,
             };
+            written += 1;
         }
-        Ok(rc as usize)
+        Ok(written)
     }
 
     pub(crate) fn size(&self) -> i32 {
@@ -205,6 +277,15 @@ impl Drop for PollerStorage {
         unsafe {
             let mut h = self.handle;
             ffi::zlink_poller_destroy(&mut h);
+        }
+        let owner = self as *const Self as usize;
+        let registrations = self.sockets.get_mut().expect("poller sockets");
+        for registration in registrations.drain().map(|(_, value)| value) {
+            if registration.events & POLLCOMPLETION != 0 {
+                if let Some(completion_owner) = registration.completion_owner {
+                    completion_owner.transfer_to_runtime(owner);
+                }
+            }
         }
     }
 }
@@ -266,10 +347,7 @@ pub(crate) fn timer_new() -> Result<Timer, ConfigError> {
         ));
     }
     Ok(Timer {
-        inner: Arc::new(TimerStorage {
-            handle,
-            callback: std::sync::Mutex::new(None),
-        }),
+        inner: Arc::new(TimerStorage { handle }),
     })
 }
 
@@ -295,81 +373,16 @@ impl TimerStorage {
         }
         Ok(Some(count))
     }
-
-    pub(crate) fn on_fire<F>(
-        &self,
-        timer: Weak<TimerStorage>,
-        handler: F,
-    ) -> Result<(), HandlerError>
-    where
-        F: Fn(&Timer, u64) + Send + 'static,
-    {
-        let (cb, userdata) = CallbackBox::new(TimerCallback { timer, handler });
-        let mut callback = self.callback.lock().expect("timer callback");
-        if let Some(previous) = callback.as_ref() {
-            previous.set_closing(true);
-        }
-        let rc = unsafe { ffi::zlink_timer_handler(self.handle, timer_trampoline::<F>, userdata) };
-        if rc != 0 {
-            if let Some(previous) = callback.as_ref() {
-                previous.set_closing(false);
-            }
-            drop(cb);
-            return Err(check_handler_rc(rc).unwrap_err());
-        }
-        let previous = callback.replace(cb);
-        drop(callback);
-        if let Some(previous) = previous {
-            crate::internal::release_callbacks(vec![previous]);
-        }
-        Ok(())
-    }
-}
-
-struct TimerCallback<F> {
-    timer: Weak<TimerStorage>,
-    handler: F,
-}
-
-impl<F: Fn(&Timer, u64)> TimerCallback<F> {
-    fn invoke(&self, count: u64) {
-        let Some(inner) = self.timer.upgrade() else {
-            return;
-        };
-        let timer = Timer { inner };
-        (self.handler)(&timer, count);
-    }
-}
-
-unsafe extern "C" fn timer_trampoline<F: Fn(&Timer, u64) + Send + 'static>(
-    _timer: *mut c_void,
-    count: u64,
-    userdata: *mut c_void,
-) {
-    let _ = unsafe {
-        CallbackBox::invoke::<TimerCallback<F>, _>(userdata, |callback| {
-            callback.invoke(count);
-        })
-    };
 }
 
 impl Drop for TimerStorage {
     fn drop(&mut self) {
-        let mut callback_slot = self.callback.lock().expect("timer callback");
-        if let Some(callback) = callback_slot.as_ref() {
-            callback.set_closing(true);
-        }
-        let callback = callback_slot.take().into_iter().collect();
-        drop(callback_slot);
         let mut handle = self.handle;
         let rc = unsafe { ffi::zlink_timer_destroy(&mut handle) };
-        if rc == 0 {
-            crate::internal::release_callbacks(callback);
-        } else {
+        if rc != 0 {
             crate::internal::defer_native_close(
                 crate::internal::DeferredCloseKind::Timer,
                 self.handle,
-                callback,
             );
         }
     }
@@ -380,14 +393,22 @@ fn timer_native_handle(timer: &Timer) -> *mut c_void {
 }
 
 pub(crate) fn pollable_handle(source: &dyn Pollable) -> Result<*mut c_void, ConfigError> {
+    Ok(pollable_registration(source)?.0)
+}
+
+fn pollable_registration(
+    source: &dyn Pollable,
+) -> Result<(*mut c_void, Option<Arc<crate::internal::CompletionOwner>>), ConfigError> {
     let any = source.as_any();
     if let Some(socket) = any.downcast_ref::<crate::PairSocket>() {
-        return Ok(crate::socket::pair_handle(socket));
+        let inner = crate::socket::pair_inner(socket);
+        return Ok((inner.handle, inner.completion_owner.clone()));
     }
     macro_rules! downcast_socket {
         ($ty:ident, $inner:path) => {
             if let Some(socket) = any.downcast_ref::<crate::$ty>() {
-                return Ok($inner(socket).handle);
+                let inner = $inner(socket);
+                return Ok((inner.handle, inner.completion_owner.clone()));
             }
         };
     }

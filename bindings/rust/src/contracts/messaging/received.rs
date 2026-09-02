@@ -1,33 +1,75 @@
 use std::ffi::c_void;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use crate::error::{CloseError, RecvError, RecvResult};
 use crate::message::{Message, RoutingId};
 use crate::messaging_operations::{Empty, ReplyOp, SendOp};
 
-/// Route metadata and the native handle that owns the route.
-///
-/// Keeping these values together prevents the public routing id and the
-/// private send/reply target from diverging.
+/// Opaque capability for replying to one ROUTER request.
+#[derive(Clone)]
+pub struct ReplyToken {
+    owner: Arc<crate::internal::RouterOwnerTag>,
+    value: u64,
+}
+
+impl ReplyToken {
+    pub(crate) fn from_native(owner: Arc<crate::internal::RouterOwnerTag>, value: u64) -> Self {
+        Self { owner, value }
+    }
+
+    pub(crate) fn owner_matches(&self, owner: &Arc<crate::internal::RouterOwnerTag>) -> bool {
+        Arc::ptr_eq(&self.owner, owner)
+    }
+
+    pub(crate) fn value(&self) -> u64 {
+        self.value
+    }
+}
+
+impl PartialEq for ReplyToken {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value && Arc::ptr_eq(&self.owner, &other.owner)
+    }
+}
+
+impl Eq for ReplyToken {}
+
+impl Hash for ReplyToken {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (Arc::as_ptr(&self.owner) as usize).hash(state);
+        self.value.hash(state);
+    }
+}
+
+impl std::fmt::Debug for ReplyToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ReplyToken")
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct ReceivedRoute {
-    handle: Option<*mut c_void>,
-    routed: Option<std::sync::Arc<crate::internal::RoutedHandle>>,
-    completions: Option<std::sync::Arc<crate::internal::SendCompletions>>,
-    routing_id: RoutingId,
+    handle: *mut c_void,
+    routed: Option<Arc<crate::internal::RoutedHandle>>,
+    completion_owner: Arc<crate::internal::CompletionOwner>,
 }
 
 unsafe impl Send for ReceivedRoute {}
 
-/// A received message envelope: its routing metadata and message parts.
-///
-/// Owns its parts until the envelope is dropped or
-/// [`close`](Received::close)d. Reuse one instance across `recv` calls to
-/// avoid a per-receive allocation.
+pub(crate) type ReceivedSendTarget = (
+    *mut c_void,
+    Option<Arc<crate::internal::RoutedHandle>>,
+    Arc<crate::internal::CompletionOwner>,
+    RoutingId,
+);
+
+/// A reusable received-message envelope.
 pub struct Received {
-    /// The message parts, owned by this envelope.
     parts: Vec<Message>,
+    routing_id: Option<RoutingId>,
     route: Option<ReceivedRoute>,
-    request_seq: Option<u64>,
+    reply_token: Option<ReplyToken>,
     receive_scratch: Vec<Message>,
 }
 
@@ -38,16 +80,12 @@ impl Default for Received {
 }
 
 impl Received {
-    /// Create an empty `Received` for caller-provided storage.
-    ///
-    /// Hand the same instance to socket `recv` across calls to avoid the
-    /// per-recv allocation; the binding overwrites the internal state on
-    /// each successful receive.
     pub fn empty() -> Self {
         Self {
             parts: Vec::new(),
+            routing_id: None,
             route: None,
-            request_seq: None,
+            reply_token: None,
             receive_scratch: Vec::new(),
         }
     }
@@ -57,75 +95,50 @@ impl Received {
     }
 
     pub(crate) fn replace_received_parts(&mut self, routing_id: Option<RoutingId>) {
-        self.route = routing_id.map(|routing_id| ReceivedRoute {
-            handle: None,
-            routed: None,
-            completions: None,
-            routing_id,
-        });
-        self.request_seq = None;
-        std::mem::swap(&mut self.parts, &mut self.receive_scratch);
-    }
-
-    pub(crate) fn replace_dealer_parts(&mut self, request_seq: Option<u64>) {
+        self.routing_id = routing_id;
         self.route = None;
-        self.request_seq = request_seq;
+        self.reply_token = None;
         std::mem::swap(&mut self.parts, &mut self.receive_scratch);
     }
 
     pub(crate) fn replace_router_parts(
         &mut self,
         handle: *mut c_void,
-        routed: std::sync::Arc<crate::internal::RoutedHandle>,
-        completions: std::sync::Arc<crate::internal::SendCompletions>,
+        routed: Arc<crate::internal::RoutedHandle>,
+        completion_owner: Arc<crate::internal::CompletionOwner>,
+        reply_owner: Arc<crate::internal::RouterOwnerTag>,
         routing_id: RoutingId,
-        request_seq: u64,
+        reply_token: u64,
     ) {
         self.route = Some(ReceivedRoute {
-            handle: Some(handle),
+            handle,
             routed: Some(routed),
-            completions: Some(completions),
-            routing_id,
+            completion_owner,
         });
-        self.request_seq = (request_seq != 0).then_some(request_seq);
+        self.routing_id = Some(routing_id);
+        self.reply_token =
+            (reply_token != 0).then(|| ReplyToken::from_native(reply_owner, reply_token));
         std::mem::swap(&mut self.parts, &mut self.receive_scratch);
     }
 
-    /// Returns `true` when the envelope carries exactly one part.
     pub fn is_single_part(&self) -> bool {
         self.parts.len() == 1
     }
-
-    /// Returns the source routing id, when present.
     pub fn routing_id(&self) -> Option<&RoutingId> {
-        self.route.as_ref().map(|route| &route.routing_id)
+        self.routing_id.as_ref()
     }
-
-    /// Returns the request sequence, present when this envelope can be replied
-    /// to.
-    pub fn request_seq(&self) -> Option<u64> {
-        self.request_seq
+    pub fn reply_token(&self) -> Option<ReplyToken> {
+        self.reply_token.clone()
     }
-
-    /// Returns the message parts, owned by this envelope.
     pub fn parts(&self) -> &[Message] {
         &self.parts
     }
-
-    /// Returns the first part without transferring ownership; errors when the
-    /// envelope has no parts.
     pub fn first_part(&self) -> Result<&Message, RecvError> {
         self.parts.first().ok_or_else(recv_state_error)
     }
-
-    /// Consumes the envelope and returns its only part, transferring ownership;
-    /// errors unless it holds exactly one part.
     pub fn single_part(self) -> Result<Message, RecvError> {
         self.single_part_or_error()
     }
-
-    /// Consumes the envelope and returns its only part, transferring ownership;
-    /// errors unless it holds exactly one part.
     pub fn single_part_or_error(mut self) -> Result<Message, RecvError> {
         if self.parts.len() != 1 {
             return Err(recv_state_error());
@@ -135,29 +148,18 @@ impl Received {
             .next()
             .expect("single part"))
     }
-
-    /// Consumes the envelope and returns ownership of all its parts.
     pub fn into_parts(mut self) -> Vec<Message> {
         std::mem::take(&mut self.parts)
     }
-
-    /// Closes every part, releasing their payloads.
     pub fn close(mut self) -> Result<(), CloseError> {
         for part in &mut self.parts {
             part.close_now();
         }
         Ok(())
     }
-
-    /// Begins a reply to this request: add parts on the returned builder, then
-    /// submit. Parts are consumed on a successful submit (see [`SendOp`]). Only
-    /// valid for replyable envelopes (those with a request sequence).
     pub fn reply(&self) -> ReplyOp<Empty> {
         crate::received_operations::received_reply(self)
     }
-
-    /// Begins a send addressed to this envelope's source route: add parts, then
-    /// submit. Parts are consumed on a successful submit (see [`SendOp`]).
     pub fn send(&self) -> SendOp<Empty> {
         crate::received_operations::received_send(self)
     }
@@ -165,47 +167,42 @@ impl Received {
     pub(crate) fn set_stream_send_context(
         &mut self,
         handle: *mut c_void,
-        completions: Option<std::sync::Arc<crate::internal::SendCompletions>>,
+        completion_owner: Arc<crate::internal::CompletionOwner>,
         routing_id: RoutingId,
     ) {
         self.route = Some(ReceivedRoute {
-            handle: Some(handle),
+            handle,
             routed: None,
-            completions,
-            routing_id,
+            completion_owner,
         });
+        self.routing_id = Some(routing_id);
     }
 
-    #[allow(clippy::type_complexity)]
-    pub(crate) fn send_target(
-        &self,
-    ) -> Option<(
-        *mut c_void,
-        Option<std::sync::Arc<crate::internal::RoutedHandle>>,
-        Option<std::sync::Arc<crate::internal::SendCompletions>>,
-        RoutingId,
-    )> {
+    pub(crate) fn send_target(&self) -> Option<ReceivedSendTarget> {
         let route = self.route.as_ref()?;
         Some((
-            route.handle?,
+            route.handle,
             route.routed.clone(),
-            route.completions.clone(),
-            route.routing_id,
+            Arc::clone(&route.completion_owner),
+            *self.routing_id.as_ref()?,
         ))
     }
 
     pub(crate) fn reply_target(
         &self,
     ) -> Option<(
-        std::sync::Arc<crate::internal::RoutedHandle>,
+        Arc<crate::internal::RoutedHandle>,
+        Arc<crate::internal::RouterOwnerTag>,
         RoutingId,
-        u64,
+        ReplyToken,
     )> {
         let route = self.route.as_ref()?;
+        let token = self.reply_token.clone()?;
         Some((
             route.routed.as_ref()?.clone(),
-            route.routing_id,
-            self.request_seq?,
+            token.owner.clone(),
+            *self.routing_id.as_ref()?,
+            token,
         ))
     }
 }

@@ -4,15 +4,15 @@
 mod test_support;
 
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::Poll;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use zlink::{
-    Context, Message, Received, RecvFlags, RoutingId, SendFlags, SocketMonitor, SubscriptionEvent,
-    TopicMessage,
+    Context, Message, Received, RecvFlags, RoutingId, SendFlags, SocketMonitor, StreamPacket,
+    StreamRecvMode, SubscriptionEvent, TopicMessage,
 };
 
 #[test]
@@ -109,7 +109,7 @@ fn dealer_router_roundtrip() {
 }
 
 #[test]
-fn dealer_recv_reuse_preserves_typed_request_sequence() {
+fn dealer_recv_reuse_keeps_ordinary_messages_non_replyable() {
     let ctx = Context::new().unwrap();
     let router = ctx.router_socket().unwrap();
     let dealer = ctx.dealer_socket().unwrap();
@@ -140,24 +140,7 @@ fn dealer_recv_reuse_preserves_typed_request_sequence() {
     let mut received = Received::empty();
     assert!(dealer.recv(&mut received, RecvFlags::NONE).unwrap());
     assert_eq!(received.parts()[0].as_bytes(), b"ordinary");
-    assert_eq!(received.request_seq(), None);
-
-    let mut request = Box::pin(
-        router
-            .request(&dealer_rid)
-            .message(Message::try_from(b"typed-request").unwrap())
-            .timeout(Duration::from_millis(200))
-            .submit(),
-    );
-    assert!(matches!(
-        test_support::poll_once(&mut request),
-        Poll::Pending
-    ));
-
-    assert!(dealer.recv(&mut received, RecvFlags::NONE).unwrap());
-    assert_eq!(received.parts()[0].as_bytes(), b"typed-request");
-    assert!(received.request_seq().is_some());
-    assert!(test_support::block_on(request).is_err());
+    assert_eq!(received.reply_token(), None);
 }
 
 #[test]
@@ -187,7 +170,7 @@ fn router_recv_preserves_routing_id_and_multipart_payload() {
     assert_eq!(received.parts().len(), 2);
     assert_eq!(received.parts()[0].as_bytes(), b"part-1");
     assert_eq!(received.parts()[1].as_bytes(), b"part-2");
-    assert_eq!(received.request_seq(), None);
+    assert_eq!(received.reply_token(), None);
     assert!(!router.recv(&mut received, RecvFlags::DONT_WAIT).unwrap());
 }
 
@@ -234,16 +217,13 @@ fn try_send_explicit_outcome() {
     let ctx = Context::new().unwrap();
     let sock = ctx.pair_socket().unwrap();
     sock.bind("inproc://beh-try-send").unwrap();
-    // No peer connected. Core parks the record and the per-operation deadline
-    // is what resolves the Future -- the binding neither waits nor retries.
+    // No peer connected. Core owns the parked record; dropping the Future
+    // detaches only this waiter.
 
     let msg = Message::try_from(b"test").unwrap();
-    let _ = test_support::block_on(
-        sock.send()
-            .message(msg)
-            .timeout(Duration::from_millis(200))
-            .submit(),
-    );
+    let mut future = Box::pin(sock.send().message(msg).submit());
+    assert_eq!(test_support::poll_once(&mut future), Poll::Pending);
+    drop(future);
 }
 
 #[test]
@@ -272,7 +252,7 @@ fn xpub_try_receive_subscription_event_empty() {
 }
 
 // ---------------------------------------------------------------------------
-// Callback + send regression tests
+// Pull receive + send regression tests
 // ---------------------------------------------------------------------------
 
 fn tcp_endpoint() -> String {
@@ -282,11 +262,62 @@ fn tcp_endpoint() -> String {
     format!("tcp://127.0.0.1:{}", port)
 }
 
+fn write_framed_packet(stream: &mut std::net::TcpStream, body: &[u8]) {
+    let mut frame = Vec::with_capacity(6 + body.len());
+    frame.extend_from_slice(&0u16.to_be_bytes());
+    frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    frame.extend_from_slice(body);
+    stream.write_all(&frame).unwrap();
+    stream.flush().unwrap();
+}
+
+#[test]
+fn stream_packet_output_resets_and_reuses_without_double_close() {
+    let ctx = Context::new().unwrap();
+    let endpoint = tcp_endpoint();
+    let stream = ctx.stream_socket().unwrap();
+    stream
+        .stream_options()
+        .set_recv_mode(StreamRecvMode::Packet)
+        .unwrap();
+    let monitor = SocketMonitor::open(&stream).unwrap();
+    stream.bind(&endpoint).unwrap();
+
+    let mut raw = std::net::TcpStream::connect(endpoint.strip_prefix("tcp://").unwrap()).unwrap();
+    loop {
+        let event = monitor.recv().unwrap();
+        if event.is_accepted() || event.is_connection_ready() {
+            break;
+        }
+    }
+
+    let mut packet = StreamPacket::empty();
+    write_framed_packet(&mut raw, b"first");
+    assert!(stream.recv_packet(&mut packet, RecvFlags::NONE).unwrap());
+    assert_eq!(packet.body().unwrap().as_bytes(), b"first");
+
+    assert!(
+        !stream
+            .recv_packet(&mut packet, RecvFlags::DONT_WAIT)
+            .unwrap()
+    );
+    assert!(packet.is_empty());
+
+    write_framed_packet(&mut raw, b"second");
+    assert!(stream.recv_packet(&mut packet, RecvFlags::NONE).unwrap());
+    assert_eq!(packet.body().unwrap().as_bytes(), b"second");
+    packet.close().unwrap();
+}
+
 #[test]
 fn stream_backpressure_is_held_by_core_until_async_admission() {
     let ctx = Context::new().unwrap();
     let endpoint = tcp_endpoint();
     let stream = ctx.stream_socket().unwrap();
+    stream
+        .stream_options()
+        .set_recv_mode(zlink::StreamRecvMode::Raw)
+        .unwrap();
 
     const PAYLOAD_SIZE: usize = 4096;
     stream
@@ -310,13 +341,7 @@ fn stream_backpressure_is_held_by_core_until_async_admission() {
     let payload = vec![0x73; PAYLOAD_SIZE];
     for _ in 0..4096 {
         let message = Message::try_from(payload.as_slice()).unwrap();
-        let mut future = Box::pin(
-            stream
-                .send(&target)
-                .message(message)
-                .timeout(Duration::from_secs(5))
-                .submit(),
-        );
+        let mut future = Box::pin(stream.send(&target).message(message).submit());
         match test_support::poll_once(&mut future) {
             Poll::Ready(result) => {
                 result.unwrap();
@@ -337,8 +362,7 @@ fn stream_backpressure_is_held_by_core_until_async_admission() {
                             Err(error)
                                 if matches!(
                                     error.kind(),
-                                    std::io::ErrorKind::WouldBlock
-                                        | std::io::ErrorKind::TimedOut
+                                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                                 ) => {}
                             Err(error) => panic!("STREAM drain error: {error}"),
                         }
@@ -357,7 +381,7 @@ fn stream_backpressure_is_held_by_core_until_async_admission() {
 }
 
 #[test]
-fn dealer_router_send_from_callback() {
+fn dealer_router_pull_receive_then_send() {
     let ctx = Context::new().unwrap();
     let endpoint = tcp_endpoint();
 
@@ -366,8 +390,8 @@ fn dealer_router_send_from_callback() {
     let rid = RoutingId::from(b"dealer-cb-test");
     dealer.set_routing_id(&rid).unwrap();
 
-    // Establish connection before installing callback -- required for the
-    // router's internal routing-id handshake to complete in recv mode.
+    // Establish the connection before receiving so the router's internal
+    // routing-id handshake has completed.
     let router_mon = SocketMonitor::open(&router).unwrap();
     let dealer_mon = SocketMonitor::open(&dealer).unwrap();
     router.bind(&endpoint).unwrap();
@@ -409,7 +433,7 @@ fn dealer_router_send_from_callback() {
 }
 
 #[test]
-fn pair_send_from_callback() {
+fn pair_pull_receive_then_send() {
     let ctx = Context::new().unwrap();
     let endpoint = tcp_endpoint();
 

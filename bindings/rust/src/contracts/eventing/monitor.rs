@@ -2,7 +2,7 @@ use std::any::Any;
 use std::ops::{BitOr, BitOrAssign};
 
 use crate::core_context::AutoHwmRecalcReason;
-use crate::error::{CloseError, ConfigError, HandlerError, RecvError};
+use crate::error::{CloseError, ConfigError, RecvError};
 use crate::flags::RecvFlags;
 use crate::internal::MonitorStorage;
 use crate::routing_id::RoutingId;
@@ -107,11 +107,6 @@ pub struct MonitorEvent {
     pub remote_addr: String,
     /// A stable identifier for the underlying transport connection.
     pub connection_id: u64,
-    /// The paired DEALER/ROUTER completion-lane transport pair id, when the
-    /// event applies to one (core-byte-hwm-flow-control-plan.ko.md §5/§6).
-    pub transport_pair_id: u64,
-    /// The transport pair's generation, when `transport_pair_id` applies.
-    pub transport_pair_generation: u64,
     /// The transport lane index, when the event applies to one.
     pub transport_lane: u32,
     /// Event-specific detail flags; see [`MonitorEventFlags`].
@@ -242,8 +237,6 @@ pub struct MonitorStatus {
     pub flow_pause_duration_ms: u64,
 }
 
-fn ignore_monitor_event(_: &MonitorEvent) {}
-
 /// Monitor handle for observing socket lifecycle and connection events.
 ///
 /// The monitor is an independent observation plane that does not interfere
@@ -279,27 +272,6 @@ impl SocketMonitor {
     /// Read the current monitor status.
     pub fn status(&self) -> Result<MonitorStatus, ConfigError> {
         self.inner.status()
-    }
-
-    /// Returns a snapshot of the monitored socket's current status; an alias for
-    /// [`status`](Self::status).
-    pub fn snapshot(&self) -> Result<MonitorStatus, ConfigError> {
-        self.status()
-    }
-
-    /// Install a callback handler for monitor events.
-    ///
-    /// The callback runs on a background dispatch thread.
-    pub fn on_event<F>(&mut self, handler: F) -> Result<(), HandlerError>
-    where
-        F: Fn(&MonitorEvent) + Send + 'static,
-    {
-        self.inner.on_event(handler)
-    }
-
-    /// Returns a no-op event handler that ignores every event.
-    pub fn ignore_handler() -> fn(&MonitorEvent) {
-        ignore_monitor_event
     }
 
     /// Closes the monitor and releases its resources.

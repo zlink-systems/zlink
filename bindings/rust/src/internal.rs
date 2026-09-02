@@ -3,18 +3,20 @@
 //! Crate-private storage and lifecycle policies shared by public contracts and
 //! runtime implementations.
 
-mod callback_lifecycle;
+mod completion_owner;
 mod deferred_cleanup;
 mod handle_storage;
 mod message_storage;
 mod routed_handle;
-mod send_completion;
 
-pub(crate) use callback_lifecycle::CallbackBox;
-pub(crate) use deferred_cleanup::{DeferredCloseKind, defer_native_close, release_callbacks};
+pub(crate) use completion_owner::{CompletionEntry, CompletionKind, CompletionOwner};
+pub(crate) use deferred_cleanup::{DeferredCloseKind, defer_native_close};
 pub(crate) use handle_storage::{
-    ContextStorage, MonitorStorage, PollerStorage, SocketStorage, TimerStorage,
+    ContextStorage, MonitorStorage, PollerSocketRegistration, PollerStorage, SocketStorage,
+    TimerStorage,
 };
 pub(crate) use message_storage::MessageStorage;
-pub(crate) use routed_handle::{RoutedHandle, RoutedRole};
-pub(crate) use send_completion::{SendCompletionSlot, SendCompletions, send_complete_trampoline};
+pub(crate) use routed_handle::RoutedHandle;
+
+/// Heap identity shared by a ROUTER wrapper and every token it creates.
+pub(crate) struct RouterOwnerTag;

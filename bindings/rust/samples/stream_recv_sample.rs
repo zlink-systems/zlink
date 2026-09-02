@@ -13,6 +13,10 @@ fn main() {
     let ctx = Context::new().expect("context creation failed");
 
     let stream = ctx.stream_socket().expect("stream socket failed");
+    stream
+        .stream_options()
+        .set_recv_mode(zlink::StreamRecvMode::Raw)
+        .expect("set raw receive mode failed");
     stream.bind("tcp://127.0.0.1:0").expect("bind failed");
     let endpoint = stream.last_endpoint().expect("last_endpoint failed");
     let stream_mon = SocketMonitor::open(&stream).expect("stream monitor open failed");

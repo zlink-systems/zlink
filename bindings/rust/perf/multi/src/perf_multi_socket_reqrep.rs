@@ -187,7 +187,7 @@ pub fn run_server(config: ReqRepConfig) {
 }
 
 fn reply_request(received: &zlink::Received) {
-    if received.routing_id().is_none() || received.request_seq().is_none() {
+    if received.routing_id().is_none() || received.reply_token().is_none() {
         panic!("request is missing its reply route");
     }
     let payload = common::message_payload(received.parts());
@@ -200,9 +200,7 @@ fn reply_request(received: &zlink::Received) {
     let reply_payload = received.parts()[0]
         .try_clone()
         .expect("clone received reply payload");
-    let reply = received
-        .reply()
-        .message(reply_payload);
+    let reply = received.reply().message(reply_payload);
     let result = if common::measurement_part_count() == 2 {
         reply
             .message(Message::try_from(&[] as &[u8]).expect("empty reply tail"))
@@ -331,9 +329,9 @@ pub fn run_client(config: ReqRepConfig) {
             .iter()
             .any(|task_slot| requests.is_pending(*task_slot));
         if Instant::now() < active_deadline {
-            // Core queues request callbacks on the socket completion lane.
+            // Core queues request terminals on the socket completion lane.
             // Even after executor progress, a zero-time wait must drain that
-            // lane so the callback can wake its Future. Only a genuinely idle
+            // lane so the terminal can wake its Future. Only a genuinely idle
             // turn blocks, and then only until the active deadline.
             let wait_ms = if progressed {
                 0
@@ -435,8 +433,8 @@ fn process_completion(
         Err(error) if retryable_pre_admission(&error) => {
             (Instant::now() < active_deadline).then_some(request)
         }
-        // C's request callback treats request-domain completion failures as
-        // completed operations and continues driving the active window.
+        // Request-domain completion failures are terminal outcomes; keep
+        // driving the active window after accounting for them.
         Err(ZlinkError::Request(_)) => None,
         Err(error) => panic!("request failed: {error}"),
     }

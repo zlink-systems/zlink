@@ -1,6 +1,6 @@
 [package]
 name = "zlink"
-version = "0.15.2"
+version = "0.16.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Rust bindings for the zlink messaging library"
@@ -51,8 +51,8 @@ name = "stream_recv_sample"
 path = "samples/stream_recv_sample.rs"
 
 [[example]]
-name = "stream_packet_callback_sample"
-path = "samples/stream_packet_callback_sample.rs"
+name = "stream_packet_recv_sample"
+path = "samples/stream_packet_recv_sample.rs"
 
 [[example]]
 name = "monitor_recv_sample"

@@ -119,9 +119,9 @@ macro_rules! perf_submit_measurement {
         if $crate::common::measurement_part_count() == 2 {
             operation
                 .message(zlink::Message::try_from(&[] as &[u8]).expect("empty measurement tail"))
-                .submit_sync(zlink::SendFlags::NONE)
+                .submit_sync()
         } else {
-            operation.submit_sync(zlink::SendFlags::NONE)
+            operation.submit_sync()
         }
     }};
 }
@@ -301,23 +301,17 @@ where
 }
 
 pub fn wait_monitor_ready(mon: &mut SocketMonitor, timeout: Duration, name: &str) {
-    let (tx, rx) = mpsc::sync_channel::<Result<(), String>>(1);
-    mon.on_event(move |event| {
-        if event.is_connection_ready() {
-            let _ = tx.send(Ok(()));
+    let deadline = Instant::now() + timeout;
+    loop {
+        match mon.recv_with_flags(zlink::RecvFlags::DONT_WAIT) {
+            Ok(Some(event)) if event.is_connection_ready() => return,
+            Ok(Some(_)) | Ok(None) => {}
+            Err(err) => panic!("{name} monitor recv failed: {err}"),
         }
-    })
-    .unwrap_or_else(|err| panic!("{name} monitor handler install failed: {err}"));
-
-    match rx.recv_timeout(timeout) {
-        Ok(Ok(())) => {}
-        Ok(Err(err)) => panic!("{name} monitor recv failed: {err}"),
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            panic!("{name} connection-ready wait timed out after {:?}", timeout);
+        if Instant::now() >= deadline {
+            panic!("{name} connection-ready wait timed out after {timeout:?}");
         }
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            panic!("{name} monitor channel disconnected before connection-ready");
-        }
+        std::thread::yield_now();
     }
 }
 
@@ -640,7 +634,7 @@ where
 
 // -- Request/reply loop -----------------------------------------------------
 
-pub type RequestCallback = Box<dyn FnOnce(Result<Vec<Message>, ZlinkError>) + Send + 'static>;
+pub type RequestTerminal = Box<dyn FnOnce(Result<Vec<Message>, ZlinkError>) + Send + 'static>;
 
 fn record_reqrep_completion(
     outcome: Result<Vec<Message>, ZlinkError>,
@@ -685,8 +679,8 @@ fn drain_reqrep_completions(
     Ok(completed)
 }
 
-/// Continuously submits through the synchronous callback terminal until Core
-/// reports admission backpressure, then drains callbacks through
+/// Continuously submits through the synchronous request terminal until Core
+/// reports admission backpressure, then drains outcomes through
 /// `POLLCOMPLETION`. HWM alone determines the number of outstanding requests.
 pub fn run_reqrep<S>(
     config: &PerfConfig,
@@ -694,7 +688,7 @@ pub fn run_reqrep<S>(
     mut submit: S,
 ) -> Result<StatsResult, String>
 where
-    S: FnMut(Message, Duration, RequestCallback) -> Result<(), SubmitError>,
+    S: FnMut(Message, Duration, RequestTerminal) -> Result<(), SubmitError>,
 {
     let request_timeout = Duration::from_millis(env_or_u64("PERF_SINGLE_REQREP_TIMEOUT_MS", 200));
     let drain_timeout =
@@ -720,12 +714,12 @@ where
             config.size as u32,
             sequence,
         );
-        let callback_tx = completion_tx.clone();
+        let terminal_tx = completion_tx.clone();
         match submit(
             payload,
             request_timeout,
             Box::new(move |outcome| {
-                let _ = callback_tx.send(outcome);
+                let _ = terminal_tx.send(outcome);
             }),
         ) {
             Ok(()) => {
@@ -805,7 +799,7 @@ pub fn run_router_replier(router: RouterSocket) -> Result<(), String> {
         if request.parts().len() == 1 && is_stop_token(request.parts()[0].as_bytes()) {
             return Ok(());
         }
-        if request.routing_id().is_none() || request.request_seq().is_none() {
+        if request.routing_id().is_none() || request.reply_token().is_none() {
             continue;
         }
         let payload = message_payload(request.parts());

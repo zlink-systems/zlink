@@ -37,7 +37,7 @@ run_sample request_reply_future_sample
 run_sample pubsub_recv_sample
 run_sample dealer_router_recv_sample
 run_sample stream_recv_sample
-run_sample stream_packet_callback_sample
+run_sample stream_packet_recv_sample
 run_sample monitor_recv_sample
 
 echo ""

@@ -1,12 +1,11 @@
-use std::ffi::c_void;
-use std::mem::MaybeUninit;
+use std::ptr;
 
 use crate::core_context::Context;
-use crate::error::{ConfigError, HandlerError};
+use crate::error::{ConfigError, RecvError, RecvResult};
 use crate::ffi;
 use crate::message::{Message, RoutingId};
-use crate::native_errors::check_handler_rc;
-use crate::socket_contracts::StreamSocket;
+use crate::native_errors::check_recv_rc;
+use crate::stream_socket_contract::{StreamPacket, StreamSocket};
 
 use super::SocketInner;
 
@@ -24,76 +23,58 @@ impl StreamSocket {
 pub(crate) fn stream_inner(socket: &StreamSocket) -> &SocketInner {
     &socket.inner
 }
-
 pub(crate) fn stream_inner_mut(socket: &mut StreamSocket) -> &mut SocketInner {
     &mut socket.inner
 }
 
-pub(crate) fn stream_on_packet<F>(socket: &mut StreamSocket, handler: F) -> Result<(), HandlerError>
-where
-    F: Fn(RoutingId, Message, Message) + Send + 'static,
-{
-    let (cb, userdata) = super::CallbackBox::new(handler);
-    if let Some(previous) = stream_inner(socket).packet_cb.as_ref() {
-        previous.set_closing(true);
+pub(crate) fn recv_stream_packet(
+    handle: *mut std::ffi::c_void,
+    out: &mut StreamPacket,
+    flags: u32,
+) -> Result<bool, RecvError> {
+    out.reset();
+    let mut rid = ptr::null();
+    let mut header = std::mem::MaybeUninit::<ffi::zlink_msg_t>::uninit();
+    let mut body = std::mem::MaybeUninit::<ffi::zlink_msg_t>::uninit();
+    unsafe {
+        ffi::zlink_msg_init(header.as_mut_ptr());
+        ffi::zlink_msg_init(body.as_mut_ptr());
     }
     let rc = unsafe {
-        ffi::zlink_stream_packet_handler(
-            stream_inner(socket).handle,
-            stream_packet_trampoline::<F>,
-            userdata,
+        ffi::zlink_stream_recv_packet(
+            handle,
+            &mut rid,
+            header.as_mut_ptr(),
+            body.as_mut_ptr(),
+            flags,
         )
     };
-    if rc != 0 {
-        if let Some(previous) = stream_inner(socket).packet_cb.as_ref() {
-            previous.set_closing(false);
+    if rc == RecvResult::NoData as i32 || (rc != 0 && unsafe { ffi::zlink_errno() } == libc::EAGAIN)
+    {
+        unsafe {
+            ffi::zlink_msg_close(header.as_mut_ptr());
+            ffi::zlink_msg_close(body.as_mut_ptr());
         }
-        drop(cb);
-        return check_handler_rc(rc);
+        return Ok(false);
     }
-    let previous = stream_inner_mut(socket).packet_cb.replace(cb);
-    if let Some(previous) = previous {
-        crate::internal::release_callbacks(vec![previous]);
+    if rc != 0 {
+        unsafe {
+            ffi::zlink_msg_close(header.as_mut_ptr());
+            ffi::zlink_msg_close(body.as_mut_ptr());
+        }
+        return Err(check_recv_rc(rc).expect_err("failed packet receive"));
     }
-    Ok(())
-}
-
-fn take_message(raw: *mut ffi::zlink_msg_t) -> Message {
-    unsafe {
-        let mut dest = MaybeUninit::<ffi::zlink_msg_t>::uninit();
-        ffi::zlink_msg_init(dest.as_mut_ptr());
-        ffi::zlink_msg_move(dest.as_mut_ptr(), raw);
-        Message::from_raw(dest.assume_init())
+    if rid.is_null() {
+        unsafe {
+            ffi::zlink_msg_close(header.as_mut_ptr());
+            ffi::zlink_msg_close(body.as_mut_ptr());
+        }
+        return Err(RecvError::new(RecvResult::InternalError, libc::EPROTO));
     }
-}
-
-unsafe extern "C" fn stream_packet_trampoline<
-    F: Fn(RoutingId, Message, Message) + Send + 'static,
->(
-    _stream: *mut c_void,
-    source_rid: *const ffi::zlink_routing_id_t,
-    header: *mut ffi::zlink_msg_t,
-    body: *mut ffi::zlink_msg_t,
-    userdata: *mut c_void,
-) {
-    unsafe {
-        super::CallbackBox::invoke_or::<F, _>(
-            userdata,
-            |handler| {
-                let header = take_message(header);
-                let body = take_message(body);
-                if source_rid.is_null() {
-                    return;
-                }
-                let routing_id = RoutingId::from_raw(*source_rid);
-                handler(routing_id, header, body);
-            },
-            || {
-                // Core transfers both message parts to this callback.  A
-                // callback suppressed during close must still consume them.
-                take_message(header);
-                take_message(body);
-            },
-        )
-    };
+    out.replace(
+        unsafe { RoutingId::from_raw(*rid) },
+        unsafe { Message::from_raw(header.assume_init()) },
+        unsafe { Message::from_raw(body.assume_init()) },
+    );
+    Ok(true)
 }

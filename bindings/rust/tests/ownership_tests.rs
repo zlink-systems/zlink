@@ -1,5 +1,5 @@
 //! Ownership Tests – verify message ownership contracts across
-//! send, recv, close, and callback boundaries.
+//! send, recv, close, and pull-receive boundaries.
 
 mod test_support;
 
@@ -100,18 +100,12 @@ fn send_failure_does_not_leak() {
 
     let rid = RoutingId::from(b"ghost");
     let msg = Message::try_from(b"will-fail").unwrap();
-    let _ = test_support::block_on(
-        router
-            .send(&rid)
-            .message(msg)
-            .timeout(Duration::from_millis(200))
-            .submit(),
-    );
+    let _ = test_support::block_on(router.send(&rid).message(msg).submit());
     // msg is consumed regardless of success/failure – no native leak
 }
 
 #[test]
-fn multipart_recv_shape_matches_callback_shape() {
+fn repeated_multipart_recv_preserves_shape() {
     let ctx = Context::new().unwrap();
 
     // Direct recv path
@@ -143,10 +137,10 @@ fn multipart_recv_shape_matches_callback_shape() {
 
     // Direct recv path with the same frame ownership semantics.
     let a2 = ctx.pair_socket().unwrap();
-    a2.bind("inproc://own-shape-callback").unwrap();
+    a2.bind("inproc://own-shape-repeat").unwrap();
 
     let b2 = ctx.pair_socket().unwrap();
-    b2.connect("inproc://own-shape-callback").unwrap();
+    b2.connect("inproc://own-shape-repeat").unwrap();
     thread::sleep(Duration::from_millis(50));
 
     let parts = vec![
@@ -160,27 +154,27 @@ fn multipart_recv_shape_matches_callback_shape() {
         op = op.message(part);
     }
     test_support::block_on(op.submit()).unwrap();
-    let mut callback_received = Received::empty();
-    a2.recv(&mut callback_received, RecvFlags::NONE).unwrap();
-    let callback_data: Vec<Vec<u8>> = callback_received
+    let mut repeated = Received::empty();
+    a2.recv(&mut repeated, RecvFlags::NONE).unwrap();
+    let repeated_data: Vec<Vec<u8>> = repeated
         .parts()
         .iter()
         .map(|p| p.as_bytes().to_vec())
         .collect();
 
     // Both paths must see the same number of frames with the same content.
-    assert_eq!(direct_count, callback_data.len(), "frame count must match");
-    assert_eq!(direct_data, callback_data, "frame content must match");
+    assert_eq!(direct_count, repeated_data.len(), "frame count must match");
+    assert_eq!(direct_data, repeated_data, "frame content must match");
 }
 
 #[test]
-fn callback_receives_owned_parts() {
+fn pull_receive_owns_parts() {
     let ctx = Context::new().unwrap();
     let server = ctx.pair_socket().unwrap();
-    server.bind("inproc://own-callback").unwrap();
+    server.bind("inproc://own-pull-receive").unwrap();
 
     let client = ctx.pair_socket().unwrap();
-    client.connect("inproc://own-callback").unwrap();
+    client.connect("inproc://own-pull-receive").unwrap();
     thread::sleep(Duration::from_millis(50));
 
     let msg = Message::try_from(b"cb-payload").unwrap();

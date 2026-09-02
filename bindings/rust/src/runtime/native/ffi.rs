@@ -1,4 +1,4 @@
-//! Raw FFI declarations for the Core 0.13.1 public header set.
+//! Raw FFI declarations for the Core 0.16.0 public header set.
 //!
 //! This module is crate-private. The declarations intentionally contain only
 //! symbols present in the candidate `zlink.h` headers copied into this crate;
@@ -26,27 +26,22 @@ pub struct zlink_routing_id_t {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct zlink_routed_submit_target_t {
-    pub peer_rid: zlink_routing_id_t,
-    pub transport_pair_id: u64,
-    pub transport_pair_generation: u64,
-}
-
-/// Outcome of one Core-owned asynchronous send operation
-/// (`core/include/zlink/socket/api.h`). The value carries success or final
-/// failure only; Core owns any retry, so a completion is the last word on the
-/// operation.
-#[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum zlink_send_complete_result_t {
     ZLINK_SEND_ADMITTED = 0,
-    ZLINK_SEND_TIMED_OUT = 201,
     ZLINK_SEND_TERMINAL = 202,
 }
 
-/// Core-assigned, socket-local operation id. 0 is never a valid id.
-pub type zlink_send_op_id_t = u64;
+pub type zlink_completion_id_t = u64;
+pub type zlink_reply_token_t = u64;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum zlink_completion_kind_t {
+    ZLINK_COMPLETION_NONE = 0,
+    ZLINK_COMPLETION_SEND = 1,
+    ZLINK_COMPLETION_REQUEST = 2,
+}
 
 /// Receive-flow state for the paired DEALER/ROUTER completion lane
 /// (core-byte-hwm-flow-control-plan.ko.md §5). RUNNING and PAUSED are an
@@ -59,34 +54,35 @@ pub enum zlink_receive_flow_state_t {
     ZLINK_RECEIVE_FLOW_PAUSED = 1,
 }
 
-/// One Core send completion. `ZLINK_SEND_ADMITTED` means the record entered
-/// the Core send queue; it is not a peer delivery confirmation.
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
-pub struct zlink_send_complete_event_t {
-    pub op_id: zlink_send_op_id_t,
-    pub userdata: *mut c_void,
+pub struct zlink_completion_t {
+    pub struct_size: u32,
+    pub kind: zlink_completion_kind_t,
+    pub completion_id: zlink_completion_id_t,
+    pub user_context: *mut c_void,
     pub peer_rid: zlink_routing_id_t,
-    pub transport_pair_id: u64,
-    pub transport_pair_generation: u64,
-    pub result: zlink_send_complete_result_t,
-    pub terminal_errno: c_int,
+    pub send_result: zlink_send_complete_result_t,
+    pub send_terminal_errno: c_int,
+    pub request_result: zlink_request_result_t,
+    pub reply_parts: *mut zlink_msg_t,
+    pub reply_part_count: usize,
 }
 
-/// Submit options for one Core asynchronous send.
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-pub struct zlink_send_async_options_t {
-    /// Must be `size_of::<zlink_send_async_options_t>()`.
-    pub struct_size: u32,
-    /// Per-operation deadline in milliseconds. 0 means no deadline. This is a
-    /// per-operation value and is unrelated to `ZLINK_OPT_SNDTIMEO`.
-    pub timeout_ms: u32,
-    /// Returned unchanged in the completion event.
-    pub userdata: *mut c_void,
-    /// Exact routed target, or null. ROUTER requires a target; DEALER may pass
-    /// null and let Core commit one selection at submit time.
-    pub target: *const zlink_routed_submit_target_t,
+impl zlink_completion_t {
+    pub(crate) fn empty() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>() as u32,
+            kind: zlink_completion_kind_t::ZLINK_COMPLETION_NONE,
+            completion_id: 0,
+            user_context: std::ptr::null_mut(),
+            peer_rid: zlink_routing_id_t::empty(),
+            send_result: zlink_send_complete_result_t::ZLINK_SEND_ADMITTED,
+            send_terminal_errno: 0,
+            request_result: zlink_request_result_t::ZLINK_REQUEST_OK,
+            reply_parts: std::ptr::null_mut(),
+            reply_part_count: 0,
+        }
+    }
 }
 
 pub const ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1: u32 = 1;
@@ -285,6 +281,8 @@ pub enum zlink_option_t {
     ZLINK_OPT_SUBMIT_RETRY_MODE = 0x3037,
     ZLINK_OPT_SUBMIT_RETRY_TIMEOUT = 0x3038,
     ZLINK_OPT_SUBMIT_RETRY_ATTEMPTS = 0x3039,
+    ZLINK_OPT_PENDING_MAX_MSGS = 0x303A,
+    ZLINK_OPT_PENDING_MAX_BYTES = 0x303B,
     ZLINK_OPT_FD = 0x3007,
     ZLINK_OPT_EVENTS = 0x3008,
     ZLINK_OPT_TYPE = 0x3009,
@@ -335,11 +333,21 @@ pub enum zlink_sub_option_t {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum zlink_stream_option_t {
     ZLINK_STREAM_OPT_NOTIFY = 0x3501,
+    ZLINK_STREAM_OPT_RECV_MODE = 0x3502,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum zlink_stream_recv_mode_t {
+    ZLINK_STREAM_RECV_MODE_UNSPECIFIED = 0,
+    ZLINK_STREAM_RECV_MODE_RAW = 1,
+    ZLINK_STREAM_RECV_MODE_PACKET = 2,
 }
 
 pub type zlink_send_flags_t = u32;
 pub type zlink_recv_flags_t = u32;
 pub const ZLINK_DONTWAIT: zlink_send_flags_t = 0x0001;
+pub const ZLINK_RECV_DONTWAIT: zlink_recv_flags_t = 0x0001;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -351,19 +359,20 @@ pub enum zlink_part_flag_t {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum zlink_request_result_t {
-    ZLINK_REQUEST_RESULT_OK = 0,
-    ZLINK_REQUEST_RESULT_TIMED_OUT = 101,
-    ZLINK_REQUEST_RESULT_NOT_FOUND = 102,
-    ZLINK_REQUEST_RESULT_TERMINATED = 103,
-    ZLINK_REQUEST_RESULT_PROTOCOL_ERROR = 104,
-    ZLINK_REQUEST_RESULT_INTERNAL_ERROR = 105,
-    ZLINK_REQUEST_RESULT_REJECTED = 106,
-    ZLINK_REQUEST_RESULT_CONFLICT = 107,
-    ZLINK_REQUEST_RESULT_BUSY = 108,
-    ZLINK_REQUEST_RESULT_NOT_CONNECTED = 109,
-    ZLINK_REQUEST_RESULT_INVALID_ARGUMENT = 110,
-    ZLINK_REQUEST_RESULT_INVALID_STATE = 111,
-    ZLINK_REQUEST_RESULT_NOT_SUPPORTED = 112,
+    ZLINK_REQUEST_OK = 0,
+    ZLINK_REQUEST_TIMED_OUT = 101,
+    ZLINK_REQUEST_NOT_FOUND = 102,
+    ZLINK_REQUEST_TERMINATED = 103,
+    ZLINK_REQUEST_PROTOCOL_ERROR = 104,
+    ZLINK_REQUEST_INTERNAL_ERROR = 105,
+    ZLINK_REQUEST_REJECTED = 106,
+    ZLINK_REQUEST_CONFLICT = 107,
+    ZLINK_REQUEST_BUSY = 108,
+    ZLINK_REQUEST_NOT_CONNECTED = 109,
+    ZLINK_REQUEST_INVALID_ARGUMENT = 110,
+    ZLINK_REQUEST_INVALID_STATE = 111,
+    ZLINK_REQUEST_NOT_SUPPORTED = 112,
+    ZLINK_REQUEST_BACKPRESSURED = 113,
 }
 
 #[repr(C)]
@@ -421,8 +430,6 @@ pub struct zlink_monitor_event_t {
     pub local_addr: [c_char; 256],
     pub remote_addr: [c_char; 256],
     pub connection_id: u64,
-    pub transport_pair_id: u64,
-    pub transport_pair_generation: u64,
     pub transport_lane: u32,
     pub flags: u32,
 }
@@ -503,45 +510,21 @@ pub struct zlink_poller_event_t {
     pub events: i16,
 }
 
-// ---------------------------------------------------------------------------
-// Callback types
-// ---------------------------------------------------------------------------
-
-pub type zlink_stream_packet_handler_fn = unsafe extern "C" fn(
-    stream: *mut c_void,
-    source_rid: *const zlink_routing_id_t,
-    header: *mut zlink_msg_t,
-    body: *mut zlink_msg_t,
-    userdata: *mut c_void,
-);
-
-/// Core send completion callback. Exactly one completion runs for every
-/// operation that returned `ZLINK_SUBMIT_OK`, including operations admitted
-/// immediately (the callback can run inline inside `zlink_send_async`). The
-/// callback must only hand the completion to application state: calling any
-/// send, publish, or request entry point from inside it fails with `EDEADLK`.
-pub type zlink_send_complete_handler_fn = unsafe extern "C" fn(
-    subject: *mut c_void,
-    event: *const zlink_send_complete_event_t,
-    userdata: *mut c_void,
-);
-
-pub type zlink_reply_handler_fn = unsafe extern "C" fn(
-    result: zlink_request_result_t,
-    parts: *mut zlink_msg_t,
-    part_count: usize,
-    userdata: *mut c_void,
-);
-
-pub type zlink_monitor_handler_fn =
-    unsafe extern "C" fn(event: *const zlink_monitor_event_t, userdata: *mut c_void);
-pub type zlink_socket_monitor_handler_fn = zlink_monitor_handler_fn;
-
-pub type zlink_timer_handler_fn =
-    unsafe extern "C" fn(timer: *mut c_void, fire_count: u64, userdata: *mut c_void);
+impl zlink_poller_event_t {
+    pub(crate) fn empty() -> Self {
+        Self {
+            source_kind: zlink_poller_source_kind_t::ZLINK_POLLER_SOURCE_SOCKET,
+            socket: std::ptr::null_mut(),
+            fd: 0,
+            timer: std::ptr::null_mut(),
+            user_data: std::ptr::null_mut(),
+            events: 0,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
-// Functions exported by the Core 0.13.1 headers
+// Functions exported by the Core 0.16.0 headers
 // ---------------------------------------------------------------------------
 
 unsafe extern "C" {
@@ -591,29 +574,6 @@ unsafe extern "C" {
     pub fn zlink_multipart_close(parts: *mut zlink_msg_t, part_count: usize);
 
     pub fn zlink_socket(ctx: *mut c_void, typ: zlink_socket_type_t) -> *mut c_void;
-    pub fn zlink_stream_packet_handler(
-        stream: *mut c_void,
-        handler: zlink_stream_packet_handler_fn,
-        userdata: *mut c_void,
-    ) -> c_int;
-    pub fn zlink_send_complete_handler(
-        socket: *mut c_void,
-        handler: zlink_send_complete_handler_fn,
-        userdata: *mut c_void,
-    ) -> c_int;
-    pub fn zlink_send_async(
-        socket: *mut c_void,
-        parts: *mut zlink_msg_t,
-        part_count: usize,
-        options: *const zlink_send_async_options_t,
-        op_id_out: *mut zlink_send_op_id_t,
-    ) -> c_int;
-    pub fn zlink_send_async_cancel(socket: *mut c_void, op_id: zlink_send_op_id_t) -> c_int;
-    pub fn zlink_select_routed_submit_target(
-        socket: *mut c_void,
-        router_rid_or_null: *const zlink_routing_id_t,
-        target_out: *mut zlink_routed_submit_target_t,
-    ) -> c_int;
     pub fn zlink_close(socket: *mut c_void) -> c_int;
 
     pub fn zlink_set_option(
@@ -714,6 +674,8 @@ unsafe extern "C" {
         part: *mut zlink_msg_t,
         flags: zlink_send_flags_t,
         part_flag: zlink_part_flag_t,
+        user_context: *mut c_void,
+        completion_id_out: *mut zlink_completion_id_t,
     ) -> c_int;
     pub fn zlink_send_part_rid(
         socket: *mut c_void,
@@ -721,83 +683,30 @@ unsafe extern "C" {
         part: *mut zlink_msg_t,
         flags: zlink_send_flags_t,
         part_flag: zlink_part_flag_t,
+        user_context: *mut c_void,
+        completion_id_out: *mut zlink_completion_id_t,
     ) -> c_int;
-    pub fn zlink_send_part_transport_pair(
+    pub fn zlink_request_part(
         socket: *mut c_void,
-        target_rid: *const zlink_routing_id_t,
-        transport_pair_id: u64,
-        transport_pair_generation: u64,
-        part: *mut zlink_msg_t,
-        flags: zlink_send_flags_t,
-        part_flag: zlink_part_flag_t,
-    ) -> c_int;
-    pub fn zlink_dealer_request_part(
-        dealer: *mut c_void,
+        target_router_rid_or_null: *const zlink_routing_id_t,
         part: *mut zlink_msg_t,
         flags: zlink_send_flags_t,
         part_flag: zlink_part_flag_t,
         timeout_ms: u32,
-        handler: Option<zlink_reply_handler_fn>,
-        userdata: *mut c_void,
+        user_context: *mut c_void,
+        completion_id_out: *mut zlink_completion_id_t,
     ) -> c_int;
-    pub fn zlink_dealer_request_transport_pair_part(
-        dealer: *mut c_void,
-        target: *const zlink_routed_submit_target_t,
-        part: *mut zlink_msg_t,
-        flags: zlink_send_flags_t,
-        part_flag: zlink_part_flag_t,
-        timeout_ms: u32,
-        handler: Option<zlink_reply_handler_fn>,
-        userdata: *mut c_void,
-    ) -> c_int;
-    pub fn zlink_dealer_send_transport_pair_part(
-        dealer: *mut c_void,
-        target: *const zlink_routed_submit_target_t,
-        part: *mut zlink_msg_t,
-        flags: zlink_send_flags_t,
-        part_flag: zlink_part_flag_t,
-    ) -> c_int;
-    pub fn zlink_router_request_part(
+    pub fn zlink_reply_part(
         router: *mut c_void,
-        peer_rid: *const zlink_routing_id_t,
-        part: *mut zlink_msg_t,
-        flags: zlink_send_flags_t,
-        part_flag: zlink_part_flag_t,
-        timeout_ms: u32,
-        handler: Option<zlink_reply_handler_fn>,
-        userdata: *mut c_void,
-    ) -> c_int;
-    pub fn zlink_router_request_transport_pair_part(
-        router: *mut c_void,
-        peer_rid: *const zlink_routing_id_t,
-        transport_pair_id: u64,
-        transport_pair_generation: u64,
-        part: *mut zlink_msg_t,
-        flags: zlink_send_flags_t,
-        part_flag: zlink_part_flag_t,
-        timeout_ms: u32,
-        handler: Option<zlink_reply_handler_fn>,
-        userdata: *mut c_void,
-    ) -> c_int;
-    pub fn zlink_router_reply_part(
-        router: *mut c_void,
-        peer_rid: *const zlink_routing_id_t,
-        request_seq: u64,
+        source_rid: *const zlink_routing_id_t,
+        reply_token: zlink_reply_token_t,
         part: *mut zlink_msg_t,
         part_flag: zlink_part_flag_t,
     ) -> c_int;
     pub fn zlink_router_recv_part(
         router: *mut c_void,
         source_rid_out: *mut *const zlink_routing_id_t,
-        request_seq_out: *mut u64,
-        part_out: *mut zlink_msg_t,
-        has_more_out: *mut zlink_part_flag_t,
-        flags: zlink_recv_flags_t,
-    ) -> c_int;
-    pub fn zlink_dealer_recv_part(
-        dealer: *mut c_void,
-        message_type_out: *mut u8,
-        request_seq_out: *mut u64,
+        reply_token_out: *mut zlink_reply_token_t,
         part_out: *mut zlink_msg_t,
         has_more_out: *mut zlink_part_flag_t,
         flags: zlink_recv_flags_t,
@@ -845,15 +754,24 @@ unsafe extern "C" {
         flags: zlink_recv_flags_t,
     ) -> c_int;
 
+    pub fn zlink_stream_recv_packet(
+        stream: *mut c_void,
+        source_rid_out: *mut *const zlink_routing_id_t,
+        header_out: *mut zlink_msg_t,
+        body_out: *mut zlink_msg_t,
+        flags: zlink_recv_flags_t,
+    ) -> c_int;
+    pub fn zlink_completion_recv(
+        socket: *mut c_void,
+        completion_out: *mut zlink_completion_t,
+        flags: zlink_recv_flags_t,
+    ) -> c_int;
+    pub fn zlink_completion_close(completion: *mut zlink_completion_t);
+
     pub fn zlink_socket_monitor_open(
         socket: *mut c_void,
         options: *const zlink_socket_monitor_open_options_t,
     ) -> *mut c_void;
-    pub fn zlink_socket_monitor_handler(
-        monitor: *mut c_void,
-        handler: zlink_socket_monitor_handler_fn,
-        userdata: *mut c_void,
-    ) -> c_int;
     pub fn zlink_socket_monitor_recv(
         monitor: *mut c_void,
         out: *mut zlink_socket_monitor_event_t,
@@ -906,12 +824,6 @@ unsafe extern "C" {
     pub fn zlink_timer_start(timer: *mut c_void, interval_ns: u64, repeat_count: u64) -> c_int;
     pub fn zlink_timer_stop(timer: *mut c_void) -> c_int;
     pub fn zlink_timer_recv(timer: *mut c_void, fire_count_out: *mut u64) -> c_int;
-    pub fn zlink_timer_handler(
-        timer: *mut c_void,
-        handler: zlink_timer_handler_fn,
-        userdata: *mut c_void,
-    ) -> c_int;
-
     pub fn zlink_stopwatch_start() -> *mut c_void;
     pub fn zlink_stopwatch_intermediate(watch: *mut c_void) -> c_ulong;
     pub fn zlink_stopwatch_stop(watch: *mut c_void) -> c_ulong;

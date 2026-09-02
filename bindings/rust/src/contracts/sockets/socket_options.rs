@@ -80,6 +80,15 @@ pub enum ReceiveFlowState {
     Paused = 1,
 }
 
+/// Selects raw-message or framed-packet STREAM receive semantics.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamRecvMode {
+    Unspecified = 0,
+    Raw = 1,
+    Packet = 2,
+}
+
 /// Typed facade over the socket options shared by every socket type.
 pub struct CommonSocketOptions<'a> {
     inner: &'a SocketStorage,
@@ -355,6 +364,22 @@ impl<'a> StreamSocketOptions<'a> {
     /// Returns whether stream connect/disconnect notifications are enabled.
     pub fn notify(&self) -> Result<bool, ConfigError> {
         self.inner.notify()
+    }
+    pub fn recv_mode(&self) -> Result<StreamRecvMode, ConfigError> {
+        match self.inner.stream_recv_mode()? {
+            1 => Ok(StreamRecvMode::Raw),
+            2 => Ok(StreamRecvMode::Packet),
+            _ => Ok(StreamRecvMode::Unspecified),
+        }
+    }
+    pub fn set_recv_mode(&self, mode: StreamRecvMode) -> Result<(), ConfigError> {
+        if mode == StreamRecvMode::Unspecified {
+            return Err(ConfigError::new(
+                crate::ConfigResult::InvalidArgument,
+                libc::EINVAL,
+            ));
+        }
+        self.inner.set_stream_recv_mode(mode as i32)
     }
 }
 

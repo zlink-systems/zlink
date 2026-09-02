@@ -56,7 +56,7 @@ fn main() {
     requester
         .send()
         .message(Message::try_from(b"PING").expect("handshake ping"))
-        .submit_sync(zlink::SendFlags::NONE)
+        .submit_sync()
         .expect("handshake send");
     let mut handshake = Received::empty();
     replier
@@ -66,7 +66,7 @@ fn main() {
     handshake
         .send()
         .message(Message::try_from(b"PONG").expect("handshake pong"))
-        .submit_sync(zlink::SendFlags::NONE)
+        .submit_sync()
         .expect("handshake reply");
     let mut handshake_reply = Received::empty();
     requester
@@ -75,19 +75,22 @@ fn main() {
     assert_eq!(handshake_reply.parts()[0].as_bytes(), b"PONG");
 
     let replier_thread = std::thread::spawn(move || common::run_router_replier(replier));
-    let stats = common::run_reqrep(&config, &requester, |payload, timeout, callback| {
+    let stats = common::run_reqrep(&config, &requester, |payload, timeout, terminal| {
         let request = requester.request().message(payload);
-        if common::measurement_part_count() == 2 {
+        let outcome = if common::measurement_part_count() == 2 {
             request
                 .message(Message::new().expect("empty request tail"))
                 .timeout(timeout)
-                .on_reply(callback)
-                .submit_sync(zlink::SendFlags::DONT_WAIT)
+                .submit_sync()
         } else {
-            request
-                .timeout(timeout)
-                .on_reply(callback)
-                .submit_sync(zlink::SendFlags::DONT_WAIT)
+            request.timeout(timeout).submit_sync()
+        };
+        match outcome {
+            Err(zlink::ZlinkError::Submit(error)) => Err(error),
+            outcome => {
+                terminal(outcome);
+                Ok(())
+            }
         }
     })
     .expect("requester loop");
@@ -96,7 +99,7 @@ fn main() {
         requester
             .send()
             .message(message)
-            .submit_sync(zlink::SendFlags::NONE)
+            .submit_sync()
             .map(|()| true)
     });
     replier_thread

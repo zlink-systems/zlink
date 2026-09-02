@@ -87,22 +87,20 @@ pub use core_context::{
     AutoHwmProfile, AutoHwmRecalcReason, Context, ContextOptions, CoreHwmBudgetSnapshot,
 };
 pub use core_utilities::{AtomicCounter, Stopwatch, Thread};
-pub use domain::Received;
+pub use domain::{Received, ReplyToken};
 pub use error::{
     BindError, CloseError, ConfigError, ConnectError, HandlerError, RecvError, RequestError,
     SubmitError, ZlinkError,
 };
 pub use flags::{
     CommonSocketOptions, DealerSocketOptions, PubSocketOptions, ReceiveFlowState, RecvFlags,
-    RidDuplicatePolicy, RouterSocketOptions, SendFlags, StreamSocketOptions, SubSocketOptions,
-    SubmitRetryMode,
+    RidDuplicatePolicy, RouterSocketOptions, SendFlags, StreamRecvMode, StreamSocketOptions,
+    SubSocketOptions, SubmitRetryMode,
 };
 pub use message::Message;
 pub use message_socket_contracts::{DealerSocket, PairSocket};
 pub use messaging_operation_contracts::SendResult;
-pub use messaging_operations::{
-    Empty, PublishOp, Ready, ReplyOp, RequestCallbackOp, RequestOp, RoutedSendOp, SendOp,
-};
+pub use messaging_operations::{Empty, PublishOp, Ready, ReplyOp, RequestOp, SendOp};
 pub use messaging_subscription_event::SubscriptionEvent;
 pub use monitor_contracts::{
     MONITOR_EVENT_ALL, MONITOR_EVENT_CONNECTION_READY, MonitorEvent, MonitorEventFlags,
@@ -119,7 +117,7 @@ pub use results::{
 };
 pub use routed_socket_contracts::RouterSocket;
 pub use routing_id::RoutingId;
-pub use stream_socket_contract::StreamSocket;
+pub use stream_socket_contract::{StreamPacket, StreamSocket};
 pub use topic_message_contract::TopicMessage;
 
 pub fn version() -> (i32, i32, i32) {

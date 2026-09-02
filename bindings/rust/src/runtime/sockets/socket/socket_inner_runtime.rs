@@ -1,5 +1,4 @@
 use super::*;
-use std::sync::Arc;
 impl crate::internal::SocketStorage {
     pub(crate) fn create(
         ctx: &crate::core_context::Context,
@@ -12,52 +11,25 @@ impl crate::internal::SocketStorage {
                 last_errno(),
             ));
         }
-        let routed_role = match typ {
-            ffi::zlink_socket_type_t::ZLINK_SOCKET_DEALER => {
-                Some(crate::internal::RoutedRole::Dealer)
-            }
-            ffi::zlink_socket_type_t::ZLINK_SOCKET_ROUTER => {
-                Some(crate::internal::RoutedRole::Router)
-            }
-            _ => None,
-        };
-        let routed_handle =
-            routed_role.map(|role| crate::internal::RoutedHandle::new(handle, role));
+        let routed_handle = matches!(
+            typ,
+            ffi::zlink_socket_type_t::ZLINK_SOCKET_DEALER
+                | ffi::zlink_socket_type_t::ZLINK_SOCKET_ROUTER
+        )
+        .then(|| crate::internal::RoutedHandle::new(handle));
 
-        // `zlink_send_async` refuses a socket without a completion handler
-        // (EINVAL), so the handler is registered once, for the whole life of
-        // the socket, on every subject Core accepts for asynchronous send.
-        let (send_completions, send_complete_cb) = if supports_send_async(typ) {
-            let completions = crate::internal::SendCompletions::new();
-            let (callback, userdata) = CallbackBox::new(Arc::clone(&completions));
-            let rc = unsafe {
-                ffi::zlink_send_complete_handler(
-                    handle,
-                    crate::internal::send_complete_trampoline,
-                    userdata,
-                )
-            };
-            if rc != 0 {
-                let errno = last_errno();
-                drop(callback);
-                unsafe {
-                    ffi::zlink_close(handle);
-                }
-                return Err(ConfigError::new(
-                    crate::error::ConfigResult::InternalError,
-                    errno,
-                ));
-            }
-            (Some(completions), Some(callback))
+        let completion_owner = if supports_completion(typ) {
+            Some(crate::internal::CompletionOwner::new(handle))
         } else {
-            (None, None)
+            None
         };
+        let reply_owner = matches!(typ, ffi::zlink_socket_type_t::ZLINK_SOCKET_ROUTER)
+            .then(|| std::sync::Arc::new(crate::internal::RouterOwnerTag));
         Ok(Self {
             handle,
-            send_complete_cb,
-            send_completions,
+            completion_owner,
             routed_handle,
-            packet_cb: None,
+            reply_owner,
         })
     }
 
@@ -119,10 +91,10 @@ impl crate::internal::SocketStorage {
         out: &mut Received,
         flags: RecvFlags,
     ) -> Result<bool, RecvError> {
-        let request_seq = recv_dealer_parts(self.handle, flags.bits(), out.receive_scratch())?;
-        match request_seq {
-            Some(request_seq) => {
-                out.replace_dealer_parts(request_seq);
+        let routing_id = recv_basic_parts(self.handle, flags.bits(), out.receive_scratch())?;
+        match routing_id {
+            Some(routing_id) => {
+                out.replace_received_parts(routing_id);
                 Ok(true)
             }
             None => Ok(false),
@@ -590,35 +562,19 @@ impl crate::internal::SocketStorage {
         if self.handle.is_null() {
             return Ok(());
         }
-        // The send-completion handler stays open across `zlink_close`: Core
-        // completes every in-flight operation exactly once while closing, and
-        // those completions must still reach their `Future`.
-        for callback in self.packet_cb.iter() {
-            callback.set_closing(true);
+        if let Some(owner) = &self.completion_owner {
+            owner.shutdown();
         }
         let close_rc = if let Some(routed) = &self.routed_handle {
             routed.close_native()
         } else {
             unsafe { ffi::zlink_close(self.handle) }
         };
-        if let Err(error) = check_close_rc(close_rc) {
-            for callback in self.packet_cb.iter() {
-                callback.set_closing(false);
-            }
-            return Err(error);
-        }
+        check_close_rc(close_rc)?;
         if let Some(routed) = &self.routed_handle {
             routed.detach();
         }
-        if let Some(completions) = &self.send_completions {
-            completions.drain_terminal(libc::ECANCELED);
-        }
         self.handle = ptr::null_mut();
-        let callbacks = [self.send_complete_cb.take(), self.packet_cb.take()]
-            .into_iter()
-            .flatten()
-            .collect();
-        crate::internal::release_callbacks(callbacks);
         Ok(())
     }
 
@@ -921,6 +877,31 @@ impl crate::internal::SocketStorage {
         })?;
         Ok(value != 0)
     }
+
+    pub(crate) fn set_stream_recv_mode(&self, value: i32) -> Result<(), ConfigError> {
+        check_config_rc(unsafe {
+            ffi::zlink_set_stream_option(
+                self.handle,
+                ffi::zlink_stream_option_t::ZLINK_STREAM_OPT_RECV_MODE,
+                &value as *const i32 as *const c_void,
+                std::mem::size_of::<i32>(),
+            )
+        })
+    }
+
+    pub(crate) fn stream_recv_mode(&self) -> Result<i32, ConfigError> {
+        let mut value = 0i32;
+        let mut len = std::mem::size_of::<i32>();
+        check_config_rc(unsafe {
+            ffi::zlink_get_stream_option(
+                self.handle,
+                ffi::zlink_stream_option_t::ZLINK_STREAM_OPT_RECV_MODE,
+                &mut value as *mut i32 as *mut c_void,
+                &mut len,
+            )
+        })?;
+        Ok(value)
+    }
 }
 
 impl Drop for crate::internal::SocketStorage {
@@ -928,8 +909,8 @@ impl Drop for crate::internal::SocketStorage {
         if self.handle.is_null() {
             return;
         }
-        for callback in self.packet_cb.iter() {
-            callback.set_closing(true);
+        if let Some(owner) = &self.completion_owner {
+            owner.shutdown();
         }
         let rc = if let Some(routed) = &self.routed_handle {
             routed.close_native()
@@ -939,29 +920,16 @@ impl Drop for crate::internal::SocketStorage {
         if let Some(routed) = &self.routed_handle {
             routed.detach();
         }
-        if let Some(completions) = &self.send_completions {
-            completions.drain_terminal(libc::ECANCELED);
-        }
-        let callbacks = [self.send_complete_cb.take(), self.packet_cb.take()]
-            .into_iter()
-            .flatten()
-            .collect();
-        if rc == 0 {
-            crate::internal::release_callbacks(callbacks);
-        } else {
+        if rc != 0 {
             crate::internal::defer_native_close(
                 crate::internal::DeferredCloseKind::Socket,
                 self.handle,
-                callbacks,
             );
         }
     }
 }
 
-/// Socket subjects Core accepts for `zlink_send_async`
-/// (`core/include/zlink/socket/api.h`). PUB/XPUB answer `ENOTSUP`: publish is
-/// lossy and synchronous-only.
-fn supports_send_async(typ: ffi::zlink_socket_type_t) -> bool {
+fn supports_completion(typ: ffi::zlink_socket_type_t) -> bool {
     matches!(
         typ,
         ffi::zlink_socket_type_t::ZLINK_SOCKET_PAIR

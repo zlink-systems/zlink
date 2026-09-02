@@ -2,7 +2,7 @@ use std::any::Any;
 use std::os::fd::RawFd;
 use std::sync::Arc;
 
-use crate::error::{ConfigError, HandlerError, RecvError};
+use crate::error::{ConfigError, RecvError};
 use crate::internal::{PollerStorage, TimerStorage};
 
 pub(crate) mod private {
@@ -110,9 +110,8 @@ impl Poller {
 
     /// Modifies the event mask for a previously added socket.
     ///
-    /// A registration that adds or removes [`POLLCOMPLETION`] must instead be
-    /// removed and added again because completion processing has separate
-    /// ownership in Core.
+    /// Adding or removing [`POLLCOMPLETION`] transfers the socket drain owner
+    /// atomically with the native registration change.
     pub fn modify_socket(&self, socket: &dyn Pollable, events: i16) -> Result<(), ConfigError> {
         self.inner.modify_socket(socket, events)
     }
@@ -187,15 +186,5 @@ impl Timer {
     /// Receive a timer fire count. Returns `Ok(None)` when no data is available.
     pub fn recv(&self) -> Result<Option<u64>, RecvError> {
         self.inner.recv()
-    }
-
-    /// Registers a callback invoked on each expiration with the timer and the
-    /// cumulative fire count. The callback runs on a background dispatch thread.
-    pub fn on_fire<F>(&mut self, handler: F) -> Result<(), HandlerError>
-    where
-        F: Fn(&Timer, u64) + Send + 'static,
-    {
-        let timer = Arc::downgrade(&self.inner);
-        self.inner.on_fire(timer, handler)
     }
 }

@@ -7,8 +7,6 @@
 
 mod test_support;
 
-use std::time::Duration;
-
 use zlink::{
     AtomicCounter, Context, Message, MonitorEvent, Received, RecvError, RecvFlags,
     RidDuplicatePolicy, RoutingId, SendFlags, SendResult, SocketMonitor, Stopwatch, StreamSocket,
@@ -39,12 +37,7 @@ fn pair_socket_has_send_recv() {
 
     // PairSocket exposes: send (async terminal), recv
     let msg = Message::try_from(b"test").unwrap();
-    let _ = test_support::block_on(
-        sock.send()
-            .message(msg)
-            .timeout(Duration::from_millis(100))
-            .submit(),
-    );
+    assert_routed_send_future(sock.send().message(msg).submit());
     let mut received = Received::empty();
     let _ = sock.recv(&mut received, RecvFlags::DONT_WAIT);
 }
@@ -136,6 +129,9 @@ fn dealer_routed_submit_returns_future() {
 fn stream_socket_send_requires_routing_id() {
     let ctx = Context::new().unwrap();
     let sock = ctx.stream_socket().unwrap();
+    sock.stream_options()
+        .set_recv_mode(zlink::StreamRecvMode::Raw)
+        .unwrap();
     sock.bind("tcp://127.0.0.1:*").unwrap();
 
     let rid = RoutingId::from(b"client-001");
@@ -150,7 +146,7 @@ fn xpub_socket_has_subscription_event() {
     sock.bind("inproc://surface-xpub").unwrap();
 
     // XPubSocket: publish (synchronous terminal), receive_subscription_event.
-    // There is no `on_send_ready`; Core 0.13.1 reports accepted async sends by completion.
+    // There is no `on_send_ready`; Core 0.16.0 reports progress through pull completion.
     let mut event = SubscriptionEvent::empty();
     let _ = sock.receive_subscription_event(&mut event, RecvFlags::DONT_WAIT);
     let _publish = XPubSocket::publish;
@@ -253,10 +249,12 @@ fn stream_typed_options() {
     let options = sock.stream_options();
     options.set_notify(true).unwrap();
     assert!(options.notify().unwrap());
+    options.set_recv_mode(zlink::StreamRecvMode::Raw).unwrap();
+    assert_eq!(options.recv_mode().unwrap(), zlink::StreamRecvMode::Raw);
     let _set = StreamSocket::set_routing_id;
     let _get = StreamSocket::routing_id;
     let _disconnect_rid = StreamSocket::disconnect_rid;
-    let _on_packet = StreamSocket::on_packet::<fn(RoutingId, Message, Message)>;
+    let _recv_packet = StreamSocket::recv_packet;
 }
 
 #[test]
@@ -284,7 +282,6 @@ fn socket_monitor_has_recv() {
 
     // Monitor exposes recv()
     let _recv: fn(&SocketMonitor) -> Result<MonitorEvent, RecvError> = SocketMonitor::recv;
-    let _ignore: fn() -> fn(&MonitorEvent) = SocketMonitor::ignore_handler;
     let _ = mon;
 }
 

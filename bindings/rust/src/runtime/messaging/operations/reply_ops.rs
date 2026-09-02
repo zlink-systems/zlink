@@ -1,46 +1,48 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::marker::PhantomData;
+use std::sync::Arc;
 
-use crate::error::SubmitError;
+use crate::error::{SubmitError, SubmitResult};
 use crate::ffi;
-use crate::flags::SendFlags;
 use crate::message::RoutingId;
-use crate::messaging_operations::{Empty, MessageParts, ReplyOp, ReplyOpKind, ReplyOpStorage};
-use crate::native_errors::{check_submit_rc, submit_not_supported_error};
+use crate::messaging_operations::{Empty, MessageParts, ReplyOp, ReplyOpStorage};
+use crate::native_errors::{check_submit_rc, submit_error_from_errno};
 use crate::socket::submit_part_sequence;
 
 pub(crate) fn router_reply_op(
-    routed: std::sync::Arc<crate::internal::RoutedHandle>,
-    rid: RoutingId,
-    request_seq: u64,
+    routed: Arc<crate::internal::RoutedHandle>,
+    owner: Arc<crate::internal::RouterOwnerTag>,
+    target: RoutingId,
+    token: crate::ReplyToken,
 ) -> ReplyOp<Empty> {
     ReplyOp {
         inner: ReplyOpStorage {
             routed,
-            kind: ReplyOpKind::RouterReply { rid, request_seq },
+            owner,
+            target,
+            token,
             parts: MessageParts::default(),
-            flags: SendFlags::NONE,
         },
         _state: PhantomData,
     }
 }
 
 pub(crate) fn submit_reply(mut op: ReplyOpStorage) -> Result<(), SubmitError> {
-    if op.flags.bits() != 0 {
-        return Err(submit_not_supported_error());
+    if !op.token.owner_matches(&op.owner) {
+        return Err(SubmitError::new(
+            SubmitResult::InvalidArgument,
+            libc::EINVAL,
+        ));
     }
-
-    let ReplyOpKind::RouterReply { rid, request_seq } = &op.kind;
-    let rid = rid.as_raw() as *const ffi::zlink_routing_id_t;
-    let rc = op
-        .routed
-        .with_live_handle(|handle| {
-            submit_part_sequence(&mut op.parts, |part, part_flag, _| unsafe {
-                ffi::zlink_router_reply_part(handle, rid, *request_seq, part, part_flag)
-            })
-        })
-        .ok_or_else(|| crate::native_errors::submit_error_from_errno(libc::ECANCELED))??;
-    drop(op.parts);
+    let handle = op.routed.handle();
+    if handle.is_null() {
+        return Err(submit_error_from_errno(libc::ECANCELED));
+    }
+    let target = op.target.as_raw() as *const _;
+    let value = op.token.value();
+    let rc = submit_part_sequence(&mut op.parts, |part, part_flag, _| unsafe {
+        ffi::zlink_reply_part(handle, target, value, part, part_flag)
+    })?;
     check_submit_rc(rc)
 }
