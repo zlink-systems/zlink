@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { SubmitError, SubmitResult } from '../errors/errors';
-import type { ReplyOperation, RoutedSendOperation } from './operations';
+import type { ReplyOperation, SendOperation } from './operations';
 import { RoutingId } from '../core/routing_id';
 import { MessagePartsEnvelope } from './message_parts_envelope';
 
@@ -10,7 +10,71 @@ interface ReplyContext {
 }
 
 interface SendContext {
-  beginSend(): RoutedSendOperation;
+  beginSend(): SendOperation;
+}
+
+const replyTokenOwnerIds = new WeakMap<object, number>();
+const replyTokenValues = new WeakMap<ReplyToken, { owner: object; value: bigint }>();
+let nextReplyTokenOwnerId = 1;
+let makeReplyToken!: (owner: object, value: bigint) => ReplyToken;
+
+/** Opaque capability required to reply to one ROUTER request. */
+export class ReplyToken {
+  readonly #owner: object;
+  readonly #value: bigint;
+
+  private constructor(secret: symbol, owner: object, value: bigint) {
+    if (secret !== replyTokenSecret || value === 0n) {
+      throw new TypeError('ReplyToken values are created by ROUTER request receive');
+    }
+    this.#owner = owner;
+    this.#value = value;
+    replyTokenValues.set(this, { owner, value });
+    Object.freeze(this);
+  }
+
+  static {
+    makeReplyToken = (owner: object, value: bigint): ReplyToken =>
+      new ReplyToken(replyTokenSecret, owner, value);
+  }
+
+  equals(other: ReplyToken): boolean {
+    return other instanceof ReplyToken
+      && this.#owner === other.#owner
+      && this.#value === other.#value;
+  }
+
+  hashCode(): number {
+    let ownerId = replyTokenOwnerIds.get(this.#owner);
+    if (ownerId === undefined) {
+      ownerId = nextReplyTokenOwnerId++;
+      replyTokenOwnerIds.set(this.#owner, ownerId);
+    }
+    const valueHash = Number((this.#value ^ (this.#value >> 32n)) & 0xffffffffn);
+    return (Math.imul(ownerId, 0x9e3779b1) ^ valueHash) | 0;
+  }
+
+  toString(): 'ReplyToken' { return 'ReplyToken'; }
+
+}
+
+const replyTokenSecret = Symbol('ReplyToken');
+
+/** @internal Package-private receive factory; not exported from the package root. */
+export function createReplyToken(owner: object, value: bigint): ReplyToken {
+  return makeReplyToken(owner, value);
+}
+
+/** @internal */
+export function replyTokenOwnerMatches(token: ReplyToken, owner: object): boolean {
+  return replyTokenValues.get(token)?.owner === owner;
+}
+
+/** @internal */
+export function replyTokenNativeValue(token: ReplyToken): bigint {
+  const state = replyTokenValues.get(token);
+  if (!state) throw new TypeError('invalid ReplyToken');
+  return state.value;
 }
 
 function invalidReplyContextError(): SubmitError {
@@ -33,14 +97,10 @@ function invalidSendContextError(): SubmitError {
  * a per-receive allocation.
  */
 export class Received extends MessagePartsEnvelope {
-  /** Source transport identity available to exact raw relay paths. */
-  transportPairId?: bigint;
-  /** Source transport generation available to exact raw relay paths. */
-  transportPairGeneration?: bigint;
   /** The source routing id, or null when the receive path provides none. */
   routingId: RoutingId | null;
-  /** The request sequence, present when this envelope can be replied to. */
-  requestSeq: bigint | null;
+  /** Opaque reply capability, present only for a ROUTER REQUEST receive. */
+  replyToken: ReplyToken | null;
   private _replyContext: ReplyContext | null;
   private _sendContext: SendContext | null;
 
@@ -51,7 +111,7 @@ export class Received extends MessagePartsEnvelope {
     }
     super();
     this.routingId = null;
-    this.requestSeq = null;
+    this.replyToken = null;
     this._replyContext = null;
     this._sendContext = null;
   }
@@ -59,10 +119,10 @@ export class Received extends MessagePartsEnvelope {
   /**
    * Begin a reply to this request: add parts on the returned builder, then
    * submit. Parts are consumed on a successful submit. Throws when the envelope
-   * is not replyable (has no request sequence).
+   * is not replyable (has no reply token).
    */
   reply(): ReplyOperation {
-    if (!this.requestSeq || !this._replyContext) {
+    if (!this.replyToken || !this._replyContext) {
       throw invalidReplyContextError();
     }
     return this._replyContext.beginReply();
@@ -73,7 +133,7 @@ export class Received extends MessagePartsEnvelope {
    * submit. Parts are consumed on a successful submit. Throws when the envelope
    * carries no send context.
    */
-  send(): RoutedSendOperation {
+  send(): SendOperation {
     if (!this._sendContext) {
       throw invalidSendContextError();
     }

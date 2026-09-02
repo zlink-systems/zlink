@@ -12,39 +12,28 @@ async function main() {
     const endpoint = `tcp://127.0.0.1:${port}`;
     const ctx = zlink.createContext();
     const stream = zlink.createStreamSocket(ctx);
+    const packet = new zlink.StreamPacket();
     let client;
     try {
+        stream.options.recvMode = zlink.StreamRecvMode.Packet;
         stream.bind(endpoint);
         client = net.createConnection({ host: '127.0.0.1', port });
         await once(client, 'connect');
-        const received = await new Promise((resolve, reject) => {
-            try {
-                stream.setPacketHandler((sourceRid, header, body) => {
-                    resolve({ sourceRid, header, body });
-                });
-            }
-            catch (error) {
-                reject(error);
-                return;
-            }
-            const payload = Buffer.from('hello-stream');
-            client.write(frame(payload));
-        });
-        try {
-            assert.ok(received.sourceRid instanceof zlink.RoutingId);
-            assert.equal(received.header.data().length, 0);
-            assert.equal(received.body.data().toString(), 'hello-stream');
-            console.log('[stream/packet-callback] send: "hello-stream" -> recv: "hello-stream"');
+        client.write(frame(Buffer.from('hello-stream')));
+        for (let attempt = 0; attempt < 200; attempt += 1) {
+            if (stream.recvPacket(packet, zlink.RecvFlags.DontWait))
+                break;
+            await new Promise((resolve) => setTimeout(resolve, 2));
         }
-        finally {
-            received.header.close();
-            received.body.close();
-        }
+        assert.ok(packet.routingId instanceof zlink.RoutingId);
+        assert.equal(packet.header.data().length, 0);
+        assert.equal(packet.body.data().toString(), 'hello-stream');
+        console.log('[stream/packet] send: "hello-stream" -> recv: "hello-stream"');
     }
     finally {
-        if (client) {
+        packet.close();
+        if (client)
             client.destroy();
-        }
         stream.close();
         ctx.close();
     }

@@ -8,57 +8,46 @@ import {
 import type {
   ReplyOperation,
   ReplySubmitOperation,
-  RoutedSendOperation,
-  RoutedSendSubmitOperation,
+  SendOperation,
+  SendSubmitOperation,
 } from '../../contracts/messaging/operations';
-import { SendFlags } from '../../contracts/sockets/socket_constants';
-import { SendOperationBase } from './send_operation_base';
+import { PartOperationBase } from './send_operation_base';
 
 class RuntimeReceivedSendOperation
-  extends SendOperationBase<Message | BufferLike, Message>
-  implements RoutedSendOperation, RoutedSendSubmitOperation {
-  private _timeoutMs = 0;
+  extends PartOperationBase<Message | BufferLike, Message>
+  implements SendOperation, SendSubmitOperation {
 
   constructor(
-    private readonly _invoke: (parts: readonly Message[], flags: SendFlags) => void,
-    private readonly _invokeAsync: (parts: readonly Message[], timeoutMs: number) => Promise<void>
+    private readonly _invoke: (parts: readonly Message[]) => void,
+    private readonly _invokeAsync: (parts: readonly Message[]) => Promise<void>
   ) {
     super((message) => message instanceof Message ? message : Message.from(message));
   }
 
-  timeout(timeoutMs: number): this {
-    this.ensureOpen();
-    if (!Number.isInteger(timeoutMs) || timeoutMs < -1 || timeoutMs > 0x7fffffff) {
-      throw new RangeError('timeoutMs must be in the range -1..2147483647');
-    }
-    this._timeoutMs = timeoutMs;
-    return this;
-  }
-
   submit(): Promise<void> {
-    return this._invokeAsync(this.consumeParts(), this._timeoutMs);
+    return this._invokeAsync(this.consumeParts());
   }
 
-  submit_sync(flags: SendFlags): void {
+  submit_sync(): void {
     const parts = this.consumeParts();
-    this._invoke(parts, flags);
+    this._invoke(parts);
     for (const part of parts) consumeSubmittedMessage(part);
   }
 }
 
 class RuntimeReceivedReplyOperation
-  extends SendOperationBase<Message | BufferLike, Message | BufferLike>
+  extends PartOperationBase<Message | BufferLike, Message | BufferLike>
   implements ReplyOperation, ReplySubmitOperation {
-  private readonly _invoke: (parts: readonly (Message | BufferLike)[], flags: SendFlags) => void;
+  private readonly _invoke: (parts: readonly (Message | BufferLike)[]) => void;
 
-  constructor(invoke: (parts: readonly (Message | BufferLike)[], flags: SendFlags) => void) {
+  constructor(invoke: (parts: readonly (Message | BufferLike)[]) => void) {
     super((message) => message);
     this._invoke = invoke;
   }
 
   submit(): void {
     const parts = this.consumeParts();
-    this._invoke(parts, this._flags);
+    this._invoke(parts);
     for (const part of parts) {
       if (part instanceof Message) consumeSubmittedMessage(part);
     }
@@ -66,14 +55,14 @@ class RuntimeReceivedReplyOperation
 }
 
 export function createReceivedSendOperation(
-  invoke: (parts: readonly Message[], flags: SendFlags) => void,
-  invokeAsync: (parts: readonly Message[], timeoutMs: number) => Promise<void>
-): RoutedSendOperation {
+  invoke: (parts: readonly Message[]) => void,
+  invokeAsync: (parts: readonly Message[]) => Promise<void>
+): SendOperation {
   return new RuntimeReceivedSendOperation(invoke, invokeAsync);
 }
 
 export function createReceivedReplyOperation(
-  invoke: (parts: readonly (Message | BufferLike)[], flags: SendFlags) => void
+  invoke: (parts: readonly (Message | BufferLike)[]) => void
 ): ReplyOperation {
   return new RuntimeReceivedReplyOperation(invoke);
 }

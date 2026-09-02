@@ -58,9 +58,8 @@ export interface Poller {
   removeFd(fd: number): boolean;
   /**
    * Wait up to `timeoutMs` for sources to become ready, filling `events`; a
-   * negative timeout blocks indefinitely. Request callbacks registered by
-   * `submit_sync(..., callback)` are delivered synchronously before this call
-   * returns when `PollCompletion` is watched.
+   * negative timeout blocks indefinitely. A `PollCompletion` result means the
+   * binding drained and completely processed at least one native completion.
    */
   wait(events: PollEvents, timeoutMs: number): number;
   /** Close the poller and release its resources. */

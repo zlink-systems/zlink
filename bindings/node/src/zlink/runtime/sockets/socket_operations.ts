@@ -17,7 +17,6 @@ import {
   routedReceivedPrefersManagedBuffer,
 } from '../messaging/message_materializer';
 import {
-  normalizeMessageLikePayload,
   normalizeOperationPayload,
 } from '../buffers/message_conversion';
 import { normalizeRoutingId } from '../core/routing_id';
@@ -47,10 +46,8 @@ import {
   PublishOperation,
   RuntimeSendOperation,
 } from './socket_operation_builders';
-import { SendCompletionOwner } from '../messaging/send_completion';
+import { completionOwnerOf } from '../messaging/completion_owner';
 export {
-  ImmediateRoutedRuntimeSendOperation,
-  ManagedRoutedRuntimeSendOperation,
   PublishOperation,
   RuntimeReplyOperation,
   RuntimeRequestOperation,
@@ -82,36 +79,11 @@ export class ReceiveSocket extends ConnectableSocket {
 }
 
 export class SendSocket extends ReceiveSocket {
-  private readonly sendCompletion: SendCompletionOwner;
-
-  constructor(ctx: import('../core/context').RuntimeContext, type: number) {
-    super(ctx, type);
-    try {
-      this.sendCompletion = new SendCompletionOwner(getNativeHandle(this));
-    } catch (error) {
-      super.close();
-      throw error;
-    }
-  }
-
   send(): SendOperation {
     return new RuntimeSendOperation(
-      (payload, timeoutMs) => this.sendCompletion.submit(payload, timeoutMs, null),
-      (payload, flags) => this.sendDirect(payload, flags)
+      (payload) => completionOwnerOf(this).submitSend(payload, null),
+      (payload) => completionOwnerOf(this).sendSync(payload, null)
     );
-  }
-
-  private sendDirect(payload: MessageLike | readonly MessageLike[], flags: SendFlags): void {
-    const normalized = normalizeOperationPayload(payload);
-    try {
-      if (Array.isArray(normalized)) {
-        native.socketSendParts(getNativeHandle(this), normalized, flags | 0);
-      } else {
-        native.socketSend(getNativeHandle(this), normalized, flags | 0);
-      }
-    } catch (error) {
-      throw submitNativeError(error, flags, 'send failed');
-    }
   }
 }
 
@@ -208,72 +180,34 @@ export class SubscriberSocket extends ConnectableSocket {
 }
 
 export class RoutedMessageSocket extends ConnectableSocket {
+  protected readonly replyOwner = {};
   private readonly receivedOperations = {
-    send: (routingId: Buffer, parts: readonly Message[], flags: SendFlags) => {
-      if (!this.sendDirectRaw(routingId, parts, flags)) {
-        throw submitErrorFromResult(SubmitResult.Backpressured, 'send failed');
-      }
-    },
-    sendAsync: (routingId: Buffer, parts: readonly Message[], timeoutMs: number) =>
-      this.sendReceivedAsync(routingId, parts, timeoutMs),
-    reply: (routingId: Buffer, requestSeq: bigint,
-            parts: readonly Message[], flags: SendFlags) =>
-      this.replyToRoutedMessage(RoutingId.from(routingId), requestSeq, parts, flags),
+    replyOwner: this.replyOwner,
+    send: (routingId: Buffer, parts: readonly Message[]) =>
+      completionOwnerOf(this).sendSync(parts, routingId),
+    sendManaged: (routingId: Buffer, parts: readonly Message[]) =>
+      this.sendReceivedManaged(routingId, parts),
+    reply: (routingId: Buffer, token: import('../../contracts').ReplyToken,
+            parts: readonly Message[]) =>
+      this.replyToRoutedMessage(RoutingId.from(routingId), token, parts),
   };
-  protected sendDirect(routingId: RoutingId, payload: MessageLike | readonly MessageLike[], flags: SendFlags = SendFlags.None): boolean {
+  protected sendDirect(routingId: RoutingId, payload: MessageLike | readonly MessageLike[]): void {
     const normalizedRoutingId = normalizeRoutingId(routingId);
-    return this.sendDirectRaw(normalizedRoutingId, payload, flags);
-  }
-  protected sendDirectRaw(routingId: Buffer, payload: MessageLike | readonly MessageLike[], flags: SendFlags = SendFlags.None): boolean {
-    const normalized = normalizeMessageLikePayload(payload);
-    if ((flags | 0) & (SendFlags.DontWait | 0)) {
-      let result;
-      try {
-        result = Array.isArray(normalized)
-          ? native.socketSendRoutingNoWaitResultParts(getNativeHandle(this), routingId, normalized) as number
-          : native.socketSendRoutingNoWaitResult(getNativeHandle(this), routingId, normalized) as number;
-      } catch (error) {
-        throw submitNativeError(error, flags, 'send failed');
-      }
-      if (result === SubmitResult.Ok) return true;
-      if (result === SubmitResult.Backpressured) return false;
-      throw submitErrorFromResult(result as SubmitResult, 'send failed');
-    }
-    if (!Array.isArray(normalized)) {
-      try {
-        native.socketSendRouting(getNativeHandle(this), routingId, normalized, flags | 0);
-      } catch (error) {
-        throw submitNativeError(error, flags, 'send failed');
-      }
-      return true;
-    }
-    try {
-      native.socketSendRoutingParts(
-        getNativeHandle(this),
-        routingId,
-        normalized,
-        flags | 0
-      );
-    } catch (error) {
-      throw submitNativeError(error, flags, 'send failed');
-    }
-    return true;
+    completionOwnerOf(this).sendSync(payload, normalizedRoutingId);
   }
   protected replyToRoutedMessage(
     _sourceRid: RoutingId,
-    _requestSeq: bigint,
+    _replyToken: import('../../contracts').ReplyToken,
     _parts: readonly Message[],
-    _flags: SendFlags,
   ): void {
     throw submitErrorFromResult(
       SubmitResult.InvalidState,
       'request reply is only supported by RouterSocket'
     );
   }
-  protected sendReceivedAsync(
+  protected sendReceivedManaged(
     _routingId: Buffer,
     _parts: readonly Message[],
-    _timeoutMs: number
   ): Promise<void> {
     return Promise.reject(submitErrorFromResult(
       SubmitResult.InvalidState,

@@ -50,7 +50,7 @@ function handshakeRouterSender(port, control, status, sender, receiverRoutingId)
     while (!pingSent && process.hrtime.bigint() < deadlineNs) {
         try {
             sender.send(receiverRoutingId)
-                .message(Buffer.from('PING')).submit_sync(zlink.SendFlags.DontWait);
+                .message(Buffer.from('PING')).submit_sync();
             pingSent = true;
         }
         catch (error) {
@@ -119,18 +119,18 @@ function submitOnce(kind, socket, body, receiverRoutingId, topic) {
     }
     if (kind === 'router_router') {
         appendMeasurement(socket.send(receiverRoutingId), message)
-            .submit_sync(zlink.SendFlags.None);
+            .submit_sync();
         return true;
     }
     if (kind === 'dealer_router') {
-        appendMeasurement(socket.send(), message).submit_sync(zlink.SendFlags.None);
+        appendMeasurement(socket.send(), message).submit_sync();
         return true;
     }
     if (kind === 'dealer_dealer') {
-        appendMeasurement(socket.send(), message).submit_sync(zlink.SendFlags.None);
+        appendMeasurement(socket.send(), message).submit_sync();
         return true;
     }
-    appendMeasurement(socket.send(), message).submit_sync(zlink.SendFlags.None);
+    appendMeasurement(socket.send(), message).submit_sync();
     return true;
 }
 const sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
@@ -144,14 +144,14 @@ function submitStopOnce(kind, socket, receiverRoutingId, topic) {
     }
     if (kind === 'router_router') {
         socket.send(receiverRoutingId).message(STOP_TOKEN_BYTES)
-            .submit_sync(zlink.SendFlags.None);
+            .submit_sync();
         return;
     }
     if (kind === 'dealer_router' || kind === 'dealer_dealer') {
-        socket.send().message(STOP_TOKEN_BYTES).submit_sync(zlink.SendFlags.None);
+        socket.send().message(STOP_TOKEN_BYTES).submit_sync();
         return;
     }
-    socket.send().message(STOP_TOKEN_BYTES).submit_sync(zlink.SendFlags.None);
+    socket.send().message(STOP_TOKEN_BYTES).submit_sync();
 }
 function sendStopToken(kind, socket, receiverRoutingId, topic) {
     // PERF_SINGLE_TEST_POLICY § 1.4 / C send_stop_token_with_retry
@@ -218,8 +218,8 @@ function runReqRepReplier(router) {
             if (isStopTokenParts(received.parts)) {
                 return;
             }
-            if (received.requestSeq === null) {
-                throw new Error('request is missing request correlation metadata');
+            if (received.replyToken === null) {
+                throw new Error('request is missing its reply token');
             }
             const count = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
             if (received.parts.length !== count

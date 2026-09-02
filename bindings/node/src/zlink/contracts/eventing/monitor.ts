@@ -47,8 +47,7 @@ export const MonitorEventFlag = Object.freeze({
   SendFlowWritable: 0x2,
   /**
    * Set on `FlowStateStale` when the frame named a different connection
-   * generation. `value` carries the received generation;
-   * `transportPairGeneration` carries the current one.
+   * generation. `value` carries the received generation.
    */
   FlowStateStaleGeneration: 0x4,
   /**
@@ -144,10 +143,6 @@ export class MonitorEvent {
   readonly remoteAddr: string;
   /** Process-local identity of the physical transport attempt. */
   readonly connectionId: bigint;
-  /** Non-zero when the event belongs to a paired Application/Completion transport. */
-  readonly transportPairId: bigint;
-  /** Generation of the paired transport, or zero for an unpaired transport. */
-  readonly transportPairGeneration: bigint;
   /** The transport lane associated with the event: 0 Application, 1 Completion. */
   readonly transportLane: number;
   /** Event-specific flags, including the connection-ready edge flag. */
@@ -164,8 +159,6 @@ Object.freeze(MonitorEvent);
 export interface MonitorSocket {
   /** Receive the next monitor event, or null when `DontWait` is set and none is available. */
   recv(flags?: number): MonitorEvent | null;
-  /** Register a callback invoked for each monitor event on a background dispatch thread. */
-  onEvent(handler: (event: MonitorEvent) => void): void;
   /** Return a snapshot of the monitored socket's current status. */
   status(): MonitorStatus;
   /** Close the monitor and release its resources. */

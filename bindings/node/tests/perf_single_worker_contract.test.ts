@@ -151,7 +151,7 @@ test('single REQREP worker starts with complete data and echoes two parts', asyn
         .message(Buffer.alloc(1024, 7))
         .message(Buffer.alloc(0))
         .timeout(1_000)
-        .submit_sync(zlink.SendFlags.None);
+        .submit_sync();
       try {
         assert.equal(reply.length, 2);
         assert.equal(reply[0].data().length, 1024);
@@ -161,7 +161,7 @@ test('single REQREP worker starts with complete data and echoes two parts', asyn
       }
 
       const stop = routedClient ? client.send(serverRoutingId) : client.send();
-      stop.message(STOP_TOKEN_BYTES).submit_sync(zlink.SendFlags.None);
+      stop.message(STOP_TOKEN_BYTES).submit_sync();
       waitForWorkerStatus(worker, 4, 2_000);
     } finally {
       await closeSenderWorker(worker);

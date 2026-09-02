@@ -78,7 +78,7 @@ function socketTypeName(socketOrType) {
     }
   }
   const socket = socketOrType;
-  if (typeof socket.setPacketHandler === 'function') return 'stream';
+  if (typeof socket.recvPacket === 'function') return 'stream';
   if (typeof socket.reply === 'function') return 'router';
   if (typeof socket.request === 'function') return 'dealer';
   if (typeof socket.publish === 'function') return 'pub';

@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { RecvResult } from '../../contracts/errors/errors';
-import type { TimerHandler } from '../../contracts/eventing';
 import { RecvFlags } from '../../contracts/sockets/socket_constants';
 import {
   closeCall,
   configCall,
-  handlerCall,
   recvNativeError,
 } from '../errors/native_errors';
 import { requireNative } from '../native/native';
@@ -38,12 +36,6 @@ export class Timer extends NativeHandle {
       if (recvError.result === RecvResult.NoData) return null;
       throw recvError;
     }
-  }
-
-  onFire(handler: TimerHandler): void {
-    handlerCall('timer handler registration failed', () => {
-      requireNative().timerHandler(this._native, (fireCount: bigint) => handler(this, fireCount));
-    });
   }
 
   close(): void {

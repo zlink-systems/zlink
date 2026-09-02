@@ -24,12 +24,6 @@ function measurementPayload(parts) {
         return null;
     return parts[0];
 }
-function transientSubmit(error) {
-    return error instanceof zlink.SubmitError
-        && (error.result === zlink.SubmitResult.Backpressured
-            || error.result === zlink.SubmitResult.NotConnected
-            || error.result === zlink.SubmitResult.NotFound);
-}
 function requestOperation(client, routedClient, payload, timeoutMs) {
     const operation = routedClient ? client.request(SERVER_RID) : client.request();
     return appendMeasurement(operation, payload).timeout(timeoutMs);
@@ -37,7 +31,7 @@ function requestOperation(client, routedClient, payload, timeoutMs) {
 function routingProbe(client, routedClient, timeoutMs) {
     const expected = Buffer.from('__zlink_perf_reqrep_probe__');
     const parts = requestOperation(client, routedClient, expected, timeoutMs)
-        .submit_sync(zlink.SendFlags.None);
+        .submit_sync();
     try {
         const payload = measurementPayload(parts);
         return payload !== null && payload.data().equals(expected);
@@ -53,8 +47,6 @@ async function runSocketReqRep(msgSize, options, routedClient) {
     const client = routedClient ? zlink.createRouterSocket(ctx)
         : zlink.createDealerSocket(ctx);
     const clientMonitor = client.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
-    const completionPoller = zlink.createPoller();
-    const completionEvents = zlink.createPollEvents(1);
     let worker = null;
     try {
         applySocketPolicy(client, options);
@@ -84,7 +76,6 @@ async function runSocketReqRep(msgSize, options, routedClient) {
         if (!routingProbe(client, routedClient, requestTimeoutMs)) {
             throw new Error('request-reply routing probe failed');
         }
-        completionPoller.add(client, [zlink.PollEventFlag.PollCompletion], 0);
         const runId = createRunId(options.runId ?? 1);
         const activeStartNs = currentEpochNs();
         const activeStopNs = activeStartNs
@@ -98,63 +89,27 @@ async function runSocketReqRep(msgSize, options, routedClient) {
         });
         const payload = createPayload(msgSize);
         let seq = 1n;
-        let outstanding = 0;
-        let failure = null;
-        const observe = (error, parts) => {
+        while (currentEpochNs() < activeStopNs) {
+            stampPayload(payload, { phase: 1, runId, msgSize, seq });
+            const parts = requestOperation(client, routedClient, payload, requestTimeoutMs)
+                .submit_sync();
             try {
-                if (error)
-                    throw error;
                 const replyPayload = measurementPayload(parts);
                 collector.recordPayload(replyPayload ? replyPayload.data() : null, currentEpochNs());
             }
-            catch (error) {
-                if (!(error instanceof zlink.RequestError
-                    && error.result === zlink.RequestResult.TimedOut)) {
-                    failure = error;
-                }
-            }
             finally {
                 closeParts(parts);
-                outstanding -= 1;
             }
-        };
-        while (currentEpochNs() < activeStopNs && !failure) {
-            stampPayload(payload, { phase: 1, runId, msgSize, seq });
-            // A completion may be delivered inline from the same synchronous
-            // requester thread, so reserve the count before transferring ownership.
-            outstanding += 1;
-            let backpressured = false;
-            try {
-                requestOperation(client, routedClient, payload, requestTimeoutMs)
-                    .submit_sync(zlink.SendFlags.DontWait, observe);
-                seq += 1n;
-            }
-            catch (error) {
-                outstanding -= 1;
-                if (!transientSubmit(error))
-                    throw error;
-                backpressured = true;
-            }
-            // PollCompletion is the public synchronous completion-progress surface;
-            // its callback is delivered before wait() returns, without an event-loop
-            // or Promise hop.
-            completionPoller.wait(completionEvents, backpressured ? 25 : 0);
-        }
-        const drainStopNs = currentEpochNs() + 10000000000n;
-        while (outstanding > 0 && currentEpochNs() < drainStopNs && !failure) {
-            completionPoller.wait(completionEvents, 25);
-        }
-        if (failure || outstanding !== 0) {
-            throw failure ?? new Error('request drain timed out');
+            seq += 1n;
         }
         const stopOperation = routedClient ? client.send(SERVER_RID) : client.send();
-        stopOperation.message(STOP_TOKEN_BYTES).submit_sync(zlink.SendFlags.None);
+        stopOperation.message(STOP_TOKEN_BYTES).submit_sync();
         waitForWorkerStatus(worker, 4, 10_000);
         return collector.finish();
     }
     finally {
         await closeSenderWorker(worker);
-        for (const resource of [completionEvents, completionPoller, clientMonitor, client, ctx]) {
+        for (const resource of [clientMonitor, client, ctx]) {
             try {
                 resource?.close?.();
             }

@@ -16,21 +16,21 @@ Aligned Node bindings for `libzlink`.
 - publisher sockets: `publish(topic).message(...).submit()` (synchronous
   void-or-throw)
 - message sockets: async `send().message(...).submit()` (Core-completion Promise)
-  and sync `submit_sync(SendFlags)`,
+  and blocking `submit_sync()`,
   `recv(flags?)`
 - routed sockets: async `send(routingId).message(...).submit()`
-  (Core-completion Promise) and sync `submit_sync(SendFlags)`, `recv(flags?)`
+  (Core-completion Promise) and blocking `submit_sync()`, `recv(flags?)`
 - requests: async `request(...).message(...).submit()` returns
-  `Promise<Message[]>`; `submit_sync(flags)` returns `Message[]`, while
-  `submit_sync(flags, callback)` returns after admission and delivers the reply
-  to `(error, reply)`. `submit_sync(SendFlags.None)` can block the Node event
-  loop, so use it only when another execution context can make reply progress.
+  `Promise<Message[]>`; `submit_sync()` returns `Message[]`. The sync terminal
+  can block the Node event loop, so use it only when another execution context
+  can make reply progress.
 - subscriber sockets: `setSubscription(topicOrPattern)`,
   `unsetSubscription(topicOrPattern)`, `subscribe(topicMessage, flags?)`
 - `XPubSocket`: `receiveSubscriptionEvent(subscriptionEvent, flags?)`
 - `StreamSocket`: `setRoutingId()`, `getRoutingId()`, managed Core-completion
-  `send(routingId)`, immediate `trySend(routingId)`, `recv(flags?)`,
-  `onPacket(handler)`
+  `send(routingId)`, `recv(received, flags?)`, and reusable
+  `recvPacket(streamPacket, flags?)`; set `options.recvMode` to
+  `StreamRecvMode.Raw` or `StreamRecvMode.Packet` before bind/connect
 - TLS helpers: `setTlsServer(cert, key, requireClient?)`,
   `setTlsClient(ca, host, trust?)` on sockets, `Registry`, and `SpotNode`
 - canonical option facades:
@@ -43,8 +43,7 @@ Aligned Node bindings for `libzlink`.
 - context option facade: `ContextOptions`
 - socket option access: `socket.options.*`
 - monitors: `monitorOpen(events?, monitorHwmBytes?)` with default `ALL` events
-  and the Core-default queue HWM, then `recv(flags?)`,
-  `onEvent()`
+  and the Core-default queue HWM, then pull with `recv(flags?)`
 
 `Context.options` should be configured immediately after constructing the
 context and before creating sockets.
@@ -61,7 +60,8 @@ helpers on the canonical path.
 
 Canonical receive results are domain objects:
 
-- `Received`: `{ routingId: Buffer | null, parts: Message[] }`, with
+- `Received`: `{ routingId: RoutingId | null, replyToken: ReplyToken | null,
+  parts: Message[] }`, with
   `send(...)` for sending a normal routed message back over the original
   receive context and `reply(...)` for request-reply messages
 - `Subscribed`: `{ routingId: Buffer | null, topic: string, parts: Message[] }`
@@ -77,13 +77,13 @@ Not part of the canonical stream API contract:
 length-prefixed stream framing such as `len32be` is only a sample helper and
 is not exposed as a public `StreamSocket` method.
 
-## Callback Delivery
+## Pull Completion
 
-Send completion and request reply callbacks are installed once per socket and
-use N-API thread-safe functions only to deliver completion data into JavaScript.
-The callback does not submit, wait, retry, or own a binding queue. Stream packet,
-socket monitor, and timer callbacks retain their existing native callback
-delivery limits; there is no send-ready or publisher-admission callback surface.
+Awaitable send/request operations use the socket-local Core completion queue.
+The runtime drains it into Promises; a public poller watching
+`PollEventFlag.PollCompletion` temporarily owns that drain. Monitor, timer, and
+STREAM packet delivery are pull-only. There is no callback bridge or
+binding-owned retry queue.
 
 ## Service Surface
 
@@ -121,7 +121,7 @@ delivery limits; there is no send-ready or publisher-admission callback surface.
 
 `RegistryQueryClient` uses `connect()` and `snapshot(filter?)`.
 
-`SocketMonitor` uses `recv(flags?)`, `onEvent()`, `snapshot()`,
+`SocketMonitor` uses `recv(flags?)`, `status()`,
   `close()`.
 
 `*_READY_CHANGED` monitor events are readiness edge/state notifications.
@@ -147,7 +147,7 @@ cd bindings/node && npm run build
 cd bindings/node && npm run rebuild-native
 cd bindings/node && npm test
 cd bindings/node && npm run samples
-cd bindings/node && npm run perf:single -- --recv callback --pattern PAIR --warmup 0.2 --duration 0.5
+cd bindings/node && npm run perf:single -- --recv recv --pattern PAIR --warmup 0.2 --duration 0.5
 cd bindings/node && npm run perf:multi -- --recv recv --pattern STREAM --warmup 0.2 --duration 0.5
 ```
 
@@ -155,13 +155,13 @@ cd bindings/node && npm run perf:multi -- --recv recv --pattern STREAM --warmup 
 
 - single perf is implemented for `PAIR`, `PUBSUB`, `DEALER_DEALER`,
   `DEALER_ROUTER`, `ROUTER_ROUTER`, `SPOT`
-- single perf supports `--recv callback` only
+- single perf pull-mode migration is tracked with the Phase 7 benchmark work
 - multi perf is implemented for `MULTI_DEALER_DEALER`, `MULTI_PUBSUB`,
   `STREAM`
 - multi perf supports:
   - `MULTI_DEALER_DEALER`: `--recv recv`
   - `MULTI_PUBSUB`: `--recv recv`
-  - `STREAM`: `--recv recv|callback`
+  - `STREAM`: `--recv recv`
 - perf structure and review criteria are defined by
   [`bindings/README.md`](/home/hep7/project/kairos/zlink/doc/spec/bindings/README.md)
   and the shared policy docs under

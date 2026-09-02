@@ -14,8 +14,6 @@ interface MonitorEventState {
   localAddr: string;
   remoteAddr: string;
   connectionId: bigint;
-  transportPairId: bigint;
-  transportPairGeneration: bigint;
   transportLane: number;
   flags: number;
 }
@@ -29,8 +27,6 @@ export function createMonitorEvent(raw: MonitorEventValueRaw): MonitorEvent {
   state.localAddr = raw.localAddr ?? raw.local ?? '';
   state.remoteAddr = raw.remoteAddr ?? raw.remote ?? '';
   state.connectionId = raw.connectionId ?? 0n;
-  state.transportPairId = raw.transportPairId ?? 0n;
-  state.transportPairGeneration = raw.transportPairGeneration ?? 0n;
   state.transportLane = raw.transportLane ?? 0;
   state.flags = raw.flags ?? 0;
   return event;

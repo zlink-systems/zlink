@@ -2,7 +2,8 @@
 
 import { Received } from '../../contracts/messaging/received';
 import { Message } from '../../contracts/messaging/message';
-import type { ReplyOperation, RoutedSendOperation } from '../../contracts/messaging/operations';
+import type { ReplyOperation, SendOperation } from '../../contracts/messaging/operations';
+import type { ReplyToken } from '../../contracts/messaging/received';
 import { RoutingId } from '../../contracts/core/routing_id';
 import {
   closeMessageParts,
@@ -15,13 +16,13 @@ export interface ReplyContext {
 }
 
 export interface SendContext {
-  beginSend(): RoutedSendOperation;
+  beginSend(): SendOperation;
 }
 
 interface ReceivedState {
   parts: Message[];
   routingId: RoutingId | null;
-  requestSeq: bigint | null;
+  replyToken: ReplyToken | null;
   _replyContext: ReplyContext | null;
   _sendContext: SendContext | null;
 }
@@ -29,7 +30,7 @@ interface ReceivedState {
 export function createReceived(
   parts: readonly Message[],
   routingId: RoutingId | null = null,
-  requestSeq: bigint | null = null,
+  replyToken: ReplyToken | null = null,
   replyContext: ReplyContext | null = null,
   sendContext: SendContext | null = null
 ): Received {
@@ -38,7 +39,7 @@ export function createReceived(
     received,
     freezeMessageParts(parts),
     routingId,
-    requestSeq,
+    replyToken,
     replyContext,
     sendContext
   );
@@ -49,7 +50,7 @@ export function replaceReceived(
   target: Received,
   parts: Message[],
   routingId: RoutingId | null = null,
-  requestSeq: bigint | null = null,
+  replyToken: ReplyToken | null = null,
   replyContext: ReplyContext | null = null,
   sendContext: SendContext | null = null
 ): void {
@@ -64,7 +65,7 @@ export function replaceReceived(
   }
   state.parts = Object.isFrozen(parts) ? parts : freezeOwnedMessageParts(parts);
   state.routingId = routingId;
-  state.requestSeq = requestSeq;
+  state.replyToken = replyToken;
   state._replyContext = replyContext;
   state._sendContext = sendContext;
 }

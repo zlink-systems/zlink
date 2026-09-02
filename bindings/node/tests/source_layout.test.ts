@@ -78,65 +78,45 @@ test('package exports expose only the public root', () => {
   assert.deepEqual(forbiddenPackageExports(packageJson.exports), []);
 });
 
-test('Node async surfaces use Core completion callbacks and have no readiness admission files', () => {
+test('Node async surfaces use pull completion without callback bridges', () => {
   const nativeRoot = path.resolve(__dirname, '../../native/src');
   const sourceRoot = path.resolve(__dirname, '../../src/zlink');
   const gyp = fs.readFileSync(path.resolve(__dirname, '../../binding.gyp'), 'utf8');
   const nativeBridge = fs.readFileSync(path.join(nativeRoot, 'addon_core.cc'), 'utf8');
-  const requestBridge = fs.readFileSync(path.join(nativeRoot, 'addon_request_callbacks.cc'), 'utf8');
   const socketBinding = fs.readFileSync(
-    path.join(sourceRoot, 'runtime/native/binding_socket.ts'),
-    'utf8'
-  );
-  const sendCompletion = fs.readFileSync(
-    path.join(sourceRoot, 'runtime/messaging/send_completion.ts'),
-    'utf8'
-  );
+    path.join(sourceRoot, 'runtime/native/binding_socket.ts'), 'utf8');
+  const completionOwner = fs.readFileSync(
+    path.join(sourceRoot, 'runtime/messaging/completion_owner.ts'), 'utf8');
 
-  assert.equal(fs.existsSync(path.join(nativeRoot, 'addon_routed_admission.cc')), false);
-  assert.equal(fs.existsSync(path.join(sourceRoot, 'runtime/sockets/routed_admission.ts')), false);
-  assert.equal(fs.existsSync(path.join(sourceRoot, 'runtime/sockets/publisher_admission.ts')), false);
-  assert.equal(fs.existsSync(path.join(sourceRoot, 'runtime/messaging/request_progress.ts')), false);
-  assert.equal(gyp.includes('addon_routed_admission.cc'), false);
+  assert.equal(fs.existsSync(path.join(nativeRoot, 'addon_request_callbacks.cc')), false);
+  assert.equal(fs.existsSync(path.join(nativeRoot, 'addon_request_callbacks.h')), false);
+  assert.equal(gyp.includes('addon_request_callbacks.cc'), false);
   for (const symbol of [
-    'zlink_send_complete_handler',
+    'zlink_completion_recv',
+    'zlink_completion_close',
+    'socket_submit_send',
+    'socket_submit_request',
+    'socket_completion_recv',
+  ]) assert.ok(nativeBridge.includes(symbol), symbol);
+  for (const removed of [
     'zlink_send_async',
+    'zlink_send_complete_handler',
     'napi_create_threadsafe_function',
-    'socket_send_async',
-    'dealer_request',
-    'router_request'
-  ]) {
-    assert.ok(nativeBridge.includes(symbol), symbol);
-  }
-  assert.ok(requestBridge.includes('napi_call_threadsafe_function'));
-  assert.ok(socketBinding.includes('socketSendCompletionHandler'));
-  assert.ok(socketBinding.includes('socketSendAsync'));
-  assert.ok(sendCompletion.includes('new Map<bigint, PendingSend>()'));
-  assert.ok(nativeBridge.includes('struct send_completion_js_payload_t'));
-  assert.ok(nativeBridge.includes(
-    'std::unique_ptr<send_completion_js_payload_t> payload'
-  ));
-  assert.ok(nativeBridge.includes(
-    'tsfn, payload.get (), napi_tsfn_nonblocking'
-  ));
-  assert.ok(nativeBridge.includes(
-    'payload->completion = operation->completion'
-  ));
-  assert.ok(nativeBridge.includes(
-    'send_completion_delivery_accounting_t accounting'
-  ));
-  assert.ok(nativeBridge.indexOf('send_completion_delivery_accounting_t accounting')
-    < nativeBridge.indexOf('if (!env || !js_callback || !payload)'));
-  assert.equal(nativeBridge.includes('send_ready'), false);
-  assert.equal(nativeBridge.includes('routed_send_ready'), false);
-  assert.equal(socketBinding.includes('sendReady'), false);
+  ]) assert.equal(nativeBridge.includes(removed), false, removed);
+  assert.ok(socketBinding.includes('socketCompletionRecv'));
+  assert.ok(socketBinding.includes('socketSubmitSend'));
+  assert.ok(completionOwner.includes('class CompletionEntry'));
+  assert.ok(completionOwner.includes('byToken'));
+  assert.ok(completionOwner.includes('byId'));
+  assert.ok(completionOwner.includes('transferToPublic'));
+  assert.ok(nativeBridge.includes('completion_close_guard_t guard'));
 });
 
 test('native multipart replies use inline staging without changing rejection ownership', () => {
   const nativeBridge = fs.readFileSync(
     path.resolve(__dirname, '../../native/src/addon_core.cc'), 'utf8'
   );
-  for (const symbol of ['napi_value dealer_reply', 'napi_value router_reply']) {
+  for (const symbol of ['napi_value socket_reply']) {
     const start = nativeBridge.indexOf(symbol);
     assert.ok(start >= 0, symbol);
     const body = nativeBridge.slice(start, nativeBridge.indexOf('\nnapi_value ', start + symbol.length));
@@ -147,7 +127,7 @@ test('native multipart replies use inline staging without changing rejection own
   }
 });
 
-test('bindings samples stay on the Core 0.13.1 raw socket boundary', () => {
+test('bindings samples stay on the Core 0.16 raw socket boundary', () => {
   const sampleRoots = [
     path.resolve(__dirname, '../../samples'),
     path.resolve(__dirname, '../../../javascript/samples')

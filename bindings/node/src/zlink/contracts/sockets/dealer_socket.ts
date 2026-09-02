@@ -4,7 +4,7 @@ import type { RoutingId } from '../core';
 import type {
   Received,
   RequestOperation,
-  RoutedSendOperation,
+  SendOperation,
 } from '../messaging';
 import type { RecvFlags } from './socket_constants';
 import type { DealerSocketOptions } from './socket_options';
@@ -18,10 +18,9 @@ export interface DealerSocket extends ConnectableSocket {
   /** The DEALER-specific typed options facade. */
   readonly options: DealerSocketOptions;
   /** Begin a managed send; `submit()` resolves after Core accepts the record. */
-  send(): RoutedSendOperation;
+  send(): SendOperation;
   /** Receive a message into `result`; false for non-blocking no-data. */
   recv(result: Received, flags?: RecvFlags): boolean;
-  /** Receive while retaining the origin Core HWM credit for Framework use. */
   /**
    * Set the routing id that identifies this DEALER to its peers. Apply before
    * connecting so peers observe it from the first message.

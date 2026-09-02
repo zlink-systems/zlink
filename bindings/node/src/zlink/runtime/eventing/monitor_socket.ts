@@ -5,7 +5,6 @@ import { requireNative } from '../native/native';
 import {
   closeCall,
   configCall,
-  handlerCall,
   recvNativeError
 } from '../errors/native_errors';
 import { RecvFlags } from '../../contracts/sockets/socket_constants';
@@ -13,14 +12,11 @@ import {
   MonitorEvent,
   type MonitorStatus,
 } from '../../contracts/eventing';
-import type { SocketMonitorHandler } from '../../contracts/messaging';
 import { createMonitorEvent } from './monitor_event_state';
 import { materializeMonitorStatus } from './monitor_status';
 import type { MonitorEventValueRaw, MonitorStatusRaw } from './monitor_raw';
 
 export class MonitorSocket extends NativeHandle {
-  static readonly ignoreHandler: SocketMonitorHandler = () => {};
-
   constructor(native: unknown) {
     super(native);
   }
@@ -35,14 +31,6 @@ export class MonitorSocket extends NativeHandle {
     } catch (error) {
       throw recvNativeError(error, flags, 'monitor recv failed');
     }
-  }
-
-  onEvent(handler: SocketMonitorHandler): void {
-    handlerCall('monitor handler registration failed', () => {
-      requireNative().monitorHandler(this._native, (event: MonitorEventValueRaw) => {
-        handler(createMonitorEvent(event));
-      });
-    });
   }
 
   status(): MonitorStatus {

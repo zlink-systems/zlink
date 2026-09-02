@@ -60,14 +60,13 @@ export type SubmitRetryMode =
   typeof SubmitRetryMode[keyof typeof SubmitRetryMode];
 export type SubmitRetryModeValue = SubmitRetryMode;
 
-/** How a STREAM packet callback materializes its body Message. */
-export const StreamPacketBodyMaterialization = Object.freeze({
-  Native: 0,
-  Managed: 1
+/** STREAM receive representation. Unspecified cannot be assigned by callers. */
+export const StreamRecvMode = Object.freeze({
+  Unspecified: 0,
+  Raw: 1,
+  Packet: 2
 } as const);
-export type StreamPacketBodyMaterialization =
-  typeof StreamPacketBodyMaterialization[keyof typeof StreamPacketBodyMaterialization];
-export type StreamPacketBodyMaterializationValue = StreamPacketBodyMaterialization;
+export type StreamRecvMode = typeof StreamRecvMode[keyof typeof StreamRecvMode];
 
 /** Readiness conditions a poll source can be watched for or report (readable, writable, error). */
 export const PollEventFlag = Object.freeze({

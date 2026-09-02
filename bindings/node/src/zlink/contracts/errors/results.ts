@@ -19,7 +19,7 @@ export const SubmitResult = Object.freeze({
 } as const);
 export type SubmitResult = typeof SubmitResult[keyof typeof SubmitResult];
 
-/** The outcome of a request, as delivered to a request callback. */
+/** The terminal outcome of a request completion. */
 export const RequestResult = Object.freeze({
   Ok: 0,
   TimedOut: 101,

@@ -6,66 +6,40 @@ import type {
   NativeTopicMessageRaw,
   SubscriptionEntry
 } from './binding_types';
-
-export interface NativeSendCompletionEvent {
-  token: bigint;
-  result: number;
-  terminalErrno: number;
-}
-
-export interface NativeSendSubmitResult {
-  result: number;
-  nativeErrno: number;
-  inlineCompletion?: NativeSendCompletionEvent;
-}
+import type {
+  NativeCompletion,
+  NativeSubmitResult,
+  NativeSyncRequestResult,
+} from '../messaging/completion_owner';
 
 export interface SocketNativeBinding {
-  socketSendCompletionHandler: (
-    socket: NativeHandle,
-    handler: (event: NativeSendCompletionEvent) => void
-  ) => void;
-  socketSendAsync: (
+  socketSubmitSend: (
     socket: NativeHandle,
     parts: unknown,
-    timeoutMs: number,
     routingId: Buffer | null,
+    flags: number,
     token: bigint
-  ) => NativeSendSubmitResult;
-  dealerRequest: (
+  ) => NativeSubmitResult;
+  socketSubmitRequest: (
     socket: NativeHandle,
+    target: Buffer | null,
     parts: unknown,
-    token: bigint,
     timeoutMs: number,
-    flags?: number,
-    directCallback?: boolean
-  ) => { result: number; nativeErrno: number };
-  dealerRequestSync: (socket: NativeHandle, parts: unknown, timeoutMs: number, flags: number) =>
-    { result: number; nativeErrno: number; requestResult?: number; parts?: Buffer[] };
-  dealerReply: (
+    flags: number,
+    token: bigint
+  ) => NativeSubmitResult;
+  socketRequestSync: (
     socket: NativeHandle,
-    requestSeq: bigint,
-    parts: unknown
-  ) => void;
-  dealerRecvMessage: (
+    target: Buffer | null,
+    parts: unknown,
+    timeoutMs: number
+  ) => NativeSyncRequestResult;
+  socketCompletionRecv: (socket: NativeHandle, flags: number) => NativeCompletion | null;
+  socketReply: (socket: NativeHandle, sourceRid: Buffer, replyToken: bigint, parts: unknown) => void;
+  socketStreamRecvPacket: (
     socket: NativeHandle,
     flags: number
-  ) => NativeReceivedRaw | null;
-  dealerRecvMessageNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
-  routerRequest: (
-    socket: NativeHandle,
-    peerRid: Buffer,
-    parts: unknown,
-    token: bigint,
-    timeoutMs: number,
-    transportPairId?: bigint,
-    transportPairGeneration?: bigint,
-    flags?: number,
-    directCallback?: boolean
-  ) => { result: number; nativeErrno: number };
-  routerRequestSync: (socket: NativeHandle, peerRid: Buffer, parts: unknown, timeoutMs: number,
-    transportPairId: bigint, transportPairGeneration: bigint, flags: number) =>
-    { result: number; nativeErrno: number; requestResult?: number; parts?: Buffer[] };
-  socketRequestCompletionHandler: (socket: NativeHandle, handler: unknown) => void;
+  ) => { routingId: Buffer; header: Buffer; body: Buffer } | null;
   handleGetRoutingId: (handle: NativeHandle) => Buffer;
   handleSetRoutingId: (handle: NativeHandle, routingId: Buffer) => void;
   monitorOpen: (
@@ -84,30 +58,11 @@ export interface SocketNativeBinding {
     preferManagedSinglePart?: boolean,
     routingIdStorage?: Buffer | null
   ) => NativeReceivedRaw | null;
-  routerReply: (
-    socket: NativeHandle,
-    peerRid: Buffer,
-    requestSeq: bigint,
-    parts: unknown
-  ) => void;
-  routerSendTransportPair: (
-    socket: NativeHandle,
-    peerRid: Buffer,
-    transportPairId: bigint,
-    transportPairGeneration: bigint,
-    parts: unknown,
-    flags: number
-  ) => void;
   socketBind: (socket: NativeHandle, endpoint: string) => void;
   socketClose: (socket: NativeHandle) => void;
   socketConnect: (socket: NativeHandle, endpoint: string) => void;
   socketDisconnect: (socket: NativeHandle, endpoint: string) => void;
   socketDisconnectRid: (socket: NativeHandle, routingId: Buffer) => void;
-  socketDisconnectTransportPair: (
-    socket: NativeHandle,
-    transportPairId: bigint,
-    transportPairGeneration: bigint
-  ) => void;
   socketGetOpt: (socket: NativeHandle, option: number) => Buffer;
   socketNew: (ctx: NativeHandle, type: number) => NativeHandle;
   socketPublish: (
@@ -118,50 +73,6 @@ export interface SocketNativeBinding {
   ) => number;
   socketRecvMessage: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
   socketRecvMessageNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
-  socketSend: (socket: NativeHandle, payload: unknown, flags: number) => void;
-  socketSendNoWaitResult: (socket: NativeHandle, payload: unknown) => number;
-  socketSendNoWaitResultParts: (
-    socket: NativeHandle,
-    parts: readonly unknown[]
-  ) => number;
-  socketSendParts: (
-    socket: NativeHandle,
-    parts: readonly unknown[],
-    flags: number
-  ) => void;
-  socketSendRouting: (
-    socket: NativeHandle,
-    routingId: Buffer,
-    payload: unknown,
-    flags: number
-  ) => void;
-  socketSendRoutingParts: (
-    socket: NativeHandle,
-    routingId: Buffer,
-    parts: readonly unknown[],
-    flags: number
-  ) => void;
-  socketSendRoutingNoWaitResult: (
-    socket: NativeHandle,
-    routingId: Buffer,
-    payload: unknown
-  ) => number;
-  socketSendRoutingNoWaitResultParts: (
-    socket: NativeHandle,
-    routingId: Buffer,
-    parts: readonly unknown[]
-  ) => number;
-  socketStreamSendRoutingNoWaitResultParts: (
-    socket: NativeHandle,
-    routingId: Buffer,
-    parts: readonly unknown[]
-  ) => number;
-  socketStreamSendRoutingParts: (
-    socket: NativeHandle,
-    routingId: Buffer,
-    parts: readonly unknown[],
-    flags: number
-  ) => void;
   socketSetOpt: (socket: NativeHandle, option: number, value: Buffer) => void;
   socketSetReceiveFlowState: (socket: NativeHandle, state: number) => void;
   socketSetSubscription: (socket: NativeHandle, topic: string) => void;
@@ -176,12 +87,6 @@ export interface SocketNativeBinding {
     cert: string,
     key: string,
     requireClientCert: number
-  ) => void;
-  socketStreamAttach: (
-    socket: NativeHandle,
-    handler: (routingId: Buffer | null, header: Buffer, body: unknown) => number,
-    packetCount: number,
-    bodyMaterialization: number
   ) => void;
   socketSubscribeMessage: (
     socket: NativeHandle,

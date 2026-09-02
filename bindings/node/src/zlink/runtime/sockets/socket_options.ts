@@ -3,10 +3,10 @@
 import { Message, RoutingId, type MessageLike } from '../../contracts';
 import {
   RidDuplicatePolicy,
-  StreamPacketBodyMaterialization,
+  StreamRecvMode,
   type PollEventFlagValue,
   type RidDuplicatePolicy as RidDuplicatePolicyValue,
-  type StreamPacketBodyMaterialization as StreamPacketBodyMaterializationValue
+  type StreamRecvMode as StreamRecvModeValue
 } from '../../contracts/sockets/socket_constants';
 import { normalizeMessageLikePayload } from '../buffers/message_conversion';
 import { normalizeRoutingId } from '../core/routing_id';
@@ -192,10 +192,6 @@ export class RouterSocketOptions extends CommonSocketOptions {
 }
 
 export class StreamSocketOptions extends CommonSocketOptions {
-  private _packetBodyMaterialization: StreamPacketBodyMaterializationValue =
-    StreamPacketBodyMaterialization.Native;
-  private _packetHandlerAttached = false;
-
   /** @internal */
   private constructor(token: symbol, socket: SocketBase) { super(token, socket); }
   /** @internal */
@@ -204,22 +200,14 @@ export class StreamSocketOptions extends CommonSocketOptions {
   }
   get notify(): boolean { return this.readBool(SocketOption.STREAM_NOTIFY, 'notify'); }
   set notify(value: boolean) { this.writeBool(SocketOption.STREAM_NOTIFY, value); }
-  get packetBodyMaterialization(): StreamPacketBodyMaterializationValue {
-    return this._packetBodyMaterialization;
+  get recvMode(): StreamRecvModeValue {
+    return this.readInt32(SocketOption.STREAM_RECV_MODE, 'recvMode') as StreamRecvModeValue;
   }
-  set packetBodyMaterialization(value: StreamPacketBodyMaterializationValue) {
-    if (value !== StreamPacketBodyMaterialization.Native
-        && value !== StreamPacketBodyMaterialization.Managed) {
-      throw new RangeError('packetBodyMaterialization must be Native or Managed');
+  set recvMode(value: StreamRecvModeValue) {
+    if (value !== StreamRecvMode.Raw && value !== StreamRecvMode.Packet) {
+      throw new RangeError('recvMode must be StreamRecvMode.Raw or StreamRecvMode.Packet');
     }
-    if (this._packetHandlerAttached) {
-      throw new Error('packetBodyMaterialization cannot change after packet handler registration');
-    }
-    this._packetBodyMaterialization = value;
-  }
-  /** @internal */
-  markPacketHandlerAttached(): void {
-    this._packetHandlerAttached = true;
+    this.writeInt32(SocketOption.STREAM_RECV_MODE, value, 'recvMode');
   }
 }
 

@@ -14,10 +14,6 @@ export interface EventingNativeBinding {
   atomicCounterSet: (counter: NativeHandle, value: number) => void;
   atomicCounterValue: (counter: NativeHandle) => number;
   monitorClose: (monitor: NativeHandle) => void;
-  monitorHandler: (
-    monitor: NativeHandle,
-    handler: (event: MonitorEventValueRaw) => void
-  ) => void;
   monitorRecv: (monitor: NativeHandle) => MonitorEventValueRaw;
   monitorRecvNoWait: (monitor: NativeHandle) => MonitorEventValueRaw | null;
   monitorStatus: (monitor: NativeHandle) => MonitorStatusRaw;
@@ -59,10 +55,6 @@ export interface EventingNativeBinding {
   stopwatchStart: () => NativeHandle;
   stopwatchStop: (watch: NativeHandle) => number;
   timerDestroy: (timer: NativeHandle) => void;
-  timerHandler: (
-    timer: NativeHandle,
-    handler: (fireCount: bigint) => void
-  ) => void;
   timerNew: () => NativeHandle;
   timerRecv: (timer: NativeHandle, flags: number) => bigint | null;
   timerStart: (timer: NativeHandle, intervalNs: bigint, repeatCount: bigint) => void;

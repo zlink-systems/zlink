@@ -61,11 +61,6 @@ export interface ConnectableSocket extends Socket {
   disconnect(endpoint: string): void;
   /** Disconnect the peer identified by `routingId` rather than by address. */
   disconnectRid(routingId: RoutingId): void;
-  /**
-   * Disconnect only the transport pair identified by a monitor event.
-   * Another connection with the same routing id is not affected.
-   */
-  disconnectTransportPair(transportPairId: bigint, transportPairGeneration: bigint): void;
 }
 
 export type BaseSocket =

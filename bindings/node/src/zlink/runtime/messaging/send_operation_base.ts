@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
 
-import { SendFlags } from '../../contracts/sockets/socket_constants';
-
 export type OperationPayloadValue<T> = T | readonly T[];
 
 function identity<T>(value: T): T {
@@ -53,17 +51,5 @@ export class PartOperationBase<TInput, TStored = TInput> {
   protected consumeParts(): readonly TStored[] {
     const value = this.consumePayload();
     return Array.isArray(value) ? value as readonly TStored[] : [value as TStored];
-  }
-}
-
-/** Builder base for the immediate data-plane operations that still accept flags. */
-export class SendOperationBase<TInput, TStored = TInput>
-  extends PartOperationBase<TInput, TStored> {
-  protected _flags: SendFlags = SendFlags.None;
-
-  flags(flags: SendFlags): this {
-    this.ensureOpen();
-    this._flags = flags;
-    return this;
   }
 }

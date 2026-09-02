@@ -17,6 +17,10 @@ import { SOCKET_MONITOR_EVENT_ALL, type ReceiveFlowState } from '../../contracts
 import { normalizeRoutingId } from '../core/routing_id';
 import { MonitorSocket } from '../eventing/monitor_socket';
 import { validateUInt64 } from '../options/byte_values';
+import {
+  installCompletionOwner,
+  releaseCompletionOwner,
+} from '../messaging/completion_owner';
 
 export class SocketBase extends NativeHandle {
   constructor(ctx: Context, type: number) {
@@ -24,6 +28,7 @@ export class SocketBase extends NativeHandle {
     if (!this._native) {
       throw lastError('config', 'socket creation failed');
     }
+    installCompletionOwner(this, this._native);
   }
 
   bind(endpoint: string): void {
@@ -109,6 +114,7 @@ export class SocketBase extends NativeHandle {
 
   close(): void {
     if (!this._native) return;
+    releaseCompletionOwner(this);
     closeCall('socket close failed', () => {
       requireNative().socketClose(this._native);
     });
@@ -141,13 +147,4 @@ export class ConnectableSocket extends SocketBase {
     });
   }
 
-  disconnectTransportPair(transportPairId: bigint, transportPairGeneration: bigint): void {
-    connectCall('socket disconnect by transport pair failed', () => {
-      requireNative().socketDisconnectTransportPair(
-        getNativeHandle(this),
-        transportPairId,
-        transportPairGeneration
-      );
-    });
-  }
 }

@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
 
-/** Invoked on each timer expiration with the timer and the cumulative fire count; runs on a background dispatch thread. */
-export type TimerHandler = (timer: Timer, fireCount: bigint) => void;
-
 /** A timer that fires on an interval and can be polled or awaited. */
 export interface Timer {
   /** Start the timer firing once per `intervalNs` nanoseconds; `repeatCount` sets how many times it fires. */
@@ -11,8 +8,6 @@ export interface Timer {
   stop(): void;
   /** Receive the next expiration as the cumulative fire count, or null when none is pending. */
   recv(): bigint | null;
-  /** Register a callback invoked on each expiration; it runs on a background dispatch thread. */
-  onFire(handler: TimerHandler): void;
   /** Close the timer and release its resources. */
   close(): void;
 }

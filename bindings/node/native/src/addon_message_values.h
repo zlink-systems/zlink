@@ -235,9 +235,7 @@ inline napi_value create_buffer_copy_or_empty (napi_env env, const void *data, s
     return out;
 }
 
-// Receive materialization copies payload bytes into a JS-owned Buffer. STREAM
-// callbacks use move_message_to_native_frame_value() only when the socket has
-// explicitly selected native body storage.
+// Receive materialization copies payload bytes into a JS-owned Buffer.
 inline napi_value create_received_message_buffer (napi_env env, zlink_msg_t *msg)
 {
     return create_buffer_copy_or_empty (env, zlink_msg_data (msg), zlink_msg_size (msg));

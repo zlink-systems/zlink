@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import type { RoutingId } from '../core';
-import type { Received } from '../messaging';
-import type { ImmediateSendOperation, RoutedSendOperation } from '../messaging';
-import type { StreamPacketHandler } from '../messaging';
+import type { Received, SendOperation, StreamPacket } from '../messaging';
 import type { RecvFlags } from './socket_constants';
 import type { StreamSocketOptions } from './socket_options';
 import type { Socket } from './socket';
@@ -17,24 +15,13 @@ export interface StreamSocket extends Socket {
   readonly options: StreamSocketOptions;
   /**
    * Begin an exact-target managed send. `submit()` resolves only after Core
-   * accepts the record for the selected `(RID, pairId, generation)`.
+   * accepts the record for the routing id captured by this builder.
    */
-  send(routingId: RoutingId): RoutedSendOperation;
-  /** Begin an explicit immediate DONTWAIT-capable send. */
-  trySend(routingId: RoutingId): ImmediateSendOperation;
+  send(routingId: RoutingId): SendOperation;
   /** Receive a message into `result`; false when `RecvFlags.DontWait` is set and none is available. */
   recv(result: Received, flags?: RecvFlags): boolean;
-  /**
-   * Receive into `result` for a Framework backend while retaining dequeued
-   * Core HWM credit. Successful reuse or `result.close()` returns the credit;
-   * a native finalizer is the fallback if the result becomes unreachable.
-   */
-  /**
-   * Register the handler invoked for each inbound framed packet; the handler
-   * owns the messages it receives (see {@link StreamPacketHandler}) and runs on
-   * a background dispatch thread.
-   */
-  setPacketHandler(handler: StreamPacketHandler): void;
+  /** Receive one packet into reusable storage; false for non-blocking no-data. */
+  recvPacket(result: StreamPacket, flags?: RecvFlags): boolean;
   /**
    * Set the routing id that identifies this socket to its peers. Apply before
    * connecting so peers observe it from the first packet.
@@ -44,6 +31,4 @@ export interface StreamSocket extends Socket {
   getRoutingId(): RoutingId;
   /** Disconnect the peer identified by `routingId`. */
   disconnectRid(routingId: RoutingId): void;
-  /** Disconnect only the transport pair identified by a monitor event. */
-  disconnectTransportPair(transportPairId: bigint, transportPairGeneration: bigint): void;
 }

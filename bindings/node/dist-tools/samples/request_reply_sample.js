@@ -38,8 +38,8 @@ async function main() {
         routerSocket.recv(request);
         try {
             assert.equal(request.routingId.toBytes().toString(), 'request-reply-client');
-            assert.ok(typeof request.requestSeq === 'bigint');
-            routerSocket.reply(request.routingId, request.requestSeq)
+            assert.ok(request.replyToken instanceof zlink.ReplyToken);
+            routerSocket.reply(request.routingId, request.replyToken)
                 .message(Buffer.from('pong'))
                 .submit();
         }

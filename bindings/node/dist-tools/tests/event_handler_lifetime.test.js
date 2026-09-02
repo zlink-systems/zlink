@@ -3,18 +3,21 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
-test('send-completion callback queue does not keep the Node test worker alive', () => {
+test('pull completion owner does not keep an idle Node worker alive', () => {
     const context = zlink.createContext();
     const socket = zlink.createPairSocket(context);
     socket.close();
     context.shutdown();
     context.close();
 });
-test('monitor callback queue does not keep the Node test worker alive', () => {
+test('monitor and timer are pull-only', () => {
     const context = zlink.createContext();
     const socket = zlink.createPairSocket(context);
     const monitor = socket.monitorOpen();
-    monitor.onEvent(() => { });
+    const timer = zlink.createTimer();
+    require('node:assert/strict').equal(monitor.onEvent, undefined);
+    require('node:assert/strict').equal(timer.onFire, undefined);
+    timer.close();
     monitor.close();
     socket.close();
     context.shutdown();

@@ -1,232 +1,107 @@
 // SPDX-License-Identifier: MPL-2.0
 
-import { StreamSocketOptions } from './socket_options';
-import { SocketBase } from './socket_base';
-import { messageFromNativeBuffer, normalizeMessageLikePayload } from '../buffers/message_conversion';
-import { normalizeRoutingId } from '../core/routing_id';
-import {
-  ImmediateRoutedRuntimeSendOperation,
-  ManagedRoutedRuntimeSendOperation,
-} from './socket_operations';
-import { SendCompletionOwner } from '../messaging/send_completion';
-import { submitErrorFromResult } from './socket_submit_errors';
-import type { RuntimeContext as Context } from '../core/context';
-import {
-  configCall,
-  handlerCall,
-  recvNativeError,
-  submitNativeError,
-} from '../errors/native_errors';
-import { getNativeHandle } from '../handles/native_handle';
-import {
-  materializeReceived,
-  materializeReceivedInto,
-  nativeReceivedRoutingId,
-} from '../messaging/message_materializer';
-import { messageFromNativeFrame } from '../messaging/message_snapshot';
-import { requireNative } from '../native/native';
 import {
   Received,
   RoutingId,
+  StreamPacket,
   type Message,
-  type MessageLike,
+  type SendOperation,
 } from '../../contracts';
-import { SubmitResult } from '../../contracts/errors/errors';
-import { wrapRoutingId } from '../core/routing_id_conversion';
+import { streamPacketState } from '../../contracts/messaging/stream_packet';
+import { RecvFlags, SocketType as NativeSocketType } from '../../contracts/sockets/socket_constants';
+import { messageFromNativeBuffer } from '../buffers/message_conversion';
+import type { RuntimeContext as Context } from '../core/context';
+import { normalizeRoutingId } from '../core/routing_id';
+import { configCall, recvNativeError } from '../errors/native_errors';
+import { getNativeHandle } from '../handles/native_handle';
+import { completionOwnerOf } from '../messaging/completion_owner';
 import {
-  RecvFlags,
-  SendFlags,
-  SocketType as NativeSocketType,
-  StreamPacketBodyMaterialization
-} from '../../contracts/sockets/socket_constants';
-import type {
-  ImmediateSendOperation,
-  RoutedSendOperation,
-  StreamPacketHandler,
-} from '../../contracts/messaging';
+  materializeReceivedInto,
+  nativeReceivedRoutingId,
+} from '../messaging/message_materializer';
+import { requireNative } from '../native/native';
+import { SocketBase } from './socket_base';
+import { RuntimeSendOperation } from './socket_operations';
+import { StreamSocketOptions } from './socket_options';
 
 const native = requireNative();
 
 export class StreamSocket extends SocketBase {
   readonly options: StreamSocketOptions;
-  private readonly sendCompletion: SendCompletionOwner;
-  private readonly routedSend = {
-    submit: (routingId: Buffer,
-             parts: MessageLike | readonly MessageLike[], flags: SendFlags) =>
-      this.sendDirectRaw(routingId, parts, flags),
-  };
 
   constructor(ctx: Context) {
     super(ctx, NativeSocketType.STREAM);
     this.options = StreamSocketOptions.create(this);
-    try {
-      this.sendCompletion = new SendCompletionOwner(getNativeHandle(this));
-    } catch (error) {
-      super.close();
-      throw error;
-    }
-  }
-  send(routingId: RoutingId): RoutedSendOperation {
-    const target = normalizeRoutingId(routingId);
-    return new ManagedRoutedRuntimeSendOperation(
-      (selector, parts, timeoutMs) => {
-        if (Array.isArray(parts)) {
-          return Promise.reject(new TypeError(
-            'STREAM managed send accepts one FINAL message; submit frames separately'
-          ));
-        }
-        return this.sendCompletion.submit(parts, timeoutMs, selector);
-      },
-      (selector, parts, flags) => {
-        if (selector === null || !this.sendDirectRaw(selector, parts, flags)) {
-          throw submitErrorFromResult(
-            selector === null ? SubmitResult.InvalidArgument : SubmitResult.Backpressured,
-            'send failed'
-          );
-        }
-      },
-      target
-    );
-  }
-  trySend(routingId: RoutingId): ImmediateSendOperation {
-    return new ImmediateRoutedRuntimeSendOperation(
-      this.routedSend.submit,
-      normalizeRoutingId(routingId)
-    );
-  }
-  private sendDirectRaw(routingId: Buffer, payload: MessageLike | readonly MessageLike[], flags: SendFlags = SendFlags.None): boolean {
-    const normalized = normalizeMessageLikePayload(payload);
-    if ((flags | 0) & (SendFlags.DontWait | 0)) {
-      let result;
-      try {
-        result = Array.isArray(normalized)
-          ? native.socketStreamSendRoutingNoWaitResultParts(getNativeHandle(this), routingId, normalized) as number
-          : native.socketSendRoutingNoWaitResult(getNativeHandle(this), routingId, normalized) as number;
-      } catch (error) {
-        throw submitNativeError(error, flags, 'send failed');
-      }
-      if (result === SubmitResult.Ok) return true;
-      if (result === SubmitResult.Backpressured) return false;
-      throw submitErrorFromResult(result as SubmitResult, 'send failed');
-    }
-    try {
-      if (Array.isArray(normalized)) {
-        native.socketStreamSendRoutingParts(
-          getNativeHandle(this),
-          routingId,
-          normalized,
-          flags | 0
-        );
-      } else {
-        native.socketSendRouting(
-          getNativeHandle(this),
-          routingId,
-          normalized,
-          flags | 0
-        );
-      }
-    } catch (error) {
-      throw submitNativeError(error, flags, 'send failed');
-    }
-    return true;
-  }
-  recv(result: Received, flags?: RecvFlags): boolean;
-  recv(resultOrFlags: Received | RecvFlags = RecvFlags.None,
-      flags: RecvFlags = RecvFlags.None): Received | null | boolean {
-    const result = resultOrFlags instanceof Received ? resultOrFlags : null;
-    const recvFlags: RecvFlags = result ? flags : resultOrFlags as RecvFlags;
-    let raw;
-    try {
-      raw = ((recvFlags | 0) & (RecvFlags.DontWait | 0))
-        ? native.socketRecvMessageNoWait(getNativeHandle(this))
-        : native.socketRecvMessage(getNativeHandle(this), recvFlags | 0);
-    } catch (error) {
-      throw recvNativeError(error, recvFlags, 'recv failed');
-    }
-    if (raw == null) return result ? false : null;
-    const receivedRaw = raw;
-    const receivedRoutingId = nativeReceivedRoutingId(receivedRaw);
-    const send = (parts: readonly Message[], sendFlags: SendFlags): void => {
-        if (!receivedRoutingId) {
-          throw submitErrorFromResult(SubmitResult.InvalidState, 'missing routed send target');
-        }
-        if (!this.sendDirectRaw(receivedRoutingId, parts, sendFlags)) {
-          throw submitErrorFromResult(SubmitResult.Backpressured, 'send failed');
-        }
-      };
-    const sendAsync = (parts: readonly Message[], timeoutMs: number) => {
-      if (!receivedRoutingId) {
-        return Promise.reject(submitErrorFromResult(
-          SubmitResult.InvalidState,
-          'missing routed send target'
-        ));
-      }
-      return this.sendCompletion.submit(parts, timeoutMs, receivedRoutingId);
-    };
-    if (!result) return materializeReceived(receivedRaw, undefined, send, sendAsync);
-    materializeReceivedInto(result, receivedRaw, undefined, send, sendAsync);
-    return true;
-  }
-  setPacketHandler(handler: StreamPacketHandler): void {
-    handlerCall('stream packet handler registration failed', () => {
-      const bodyMaterialization = this.options.packetBodyMaterialization;
-      native.socketStreamAttach(
-        getNativeHandle(this),
-        (routingId: Buffer | null, headerRaw: unknown, bodyRaw: unknown) => {
-          const sourceRid = this.packetRoutingId(routingId);
-          if (!sourceRid) {
-            return 0;
-          }
-          const header = messageFromNativeFrame(headerRaw);
-          const body = bodyMaterialization ===
-            StreamPacketBodyMaterialization.Managed
-            ? messageFromNativeBuffer(bodyRaw as Buffer)
-            : messageFromNativeFrame(bodyRaw);
-          handler(sourceRid, header, body);
-          return 0;
-        },
-        1,
-        bodyMaterialization
-      );
-      this.options.markPacketHandlerAttached();
-    });
-  }
-  private packetRoutingId(routingId: Buffer | null): RoutingId | null {
-    if (!routingId || routingId.length === 0) {
-      return null;
-    }
-    return wrapRoutingId(routingId);
-  }
-  close(): void {
-    super.close();
-  }
-  setRoutingId(routingId: RoutingId): void {
-    const normalizedRoutingId = normalizeRoutingId(routingId);
-    configCall('routing id set failed', () => {
-      native.handleSetRoutingId(getNativeHandle(this), normalizedRoutingId);
-    });
-  }
-  getRoutingId(): RoutingId {
-    return RoutingId.from(
-      configCall('routing id get failed', () =>
-        native.handleGetRoutingId(getNativeHandle(this)) as Buffer
-      )
-    );
-  }
-  disconnectRid(routingId: RoutingId): void {
-    const normalizedRoutingId = normalizeRoutingId(routingId);
-    configCall('stream disconnect by routing id failed', () => {
-      native.socketDisconnectRid(getNativeHandle(this), normalizedRoutingId);
-    });
   }
 
-  disconnectTransportPair(transportPairId: bigint, transportPairGeneration: bigint): void {
-    configCall('stream disconnect by transport pair failed', () => {
-      native.socketDisconnectTransportPair(
-        getNativeHandle(this),
-        transportPairId,
-        transportPairGeneration
-      );
-    });
+  send(routingId: RoutingId): SendOperation {
+    const target = Buffer.from(normalizeRoutingId(routingId));
+    return new RuntimeSendOperation(
+      (parts) => completionOwnerOf(this).submitSend(parts, target),
+      (parts) => completionOwnerOf(this).sendSync(parts, target)
+    );
+  }
+
+  recv(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
+    let raw;
+    try {
+      raw = ((flags | 0) & (RecvFlags.DontWait | 0))
+        ? native.socketRecvMessageNoWait(getNativeHandle(this))
+        : native.socketRecvMessage(getNativeHandle(this), flags | 0);
+    } catch (error) {
+      throw recvNativeError(error, flags, 'recv failed');
+    }
+    if (raw == null) return false;
+    const routingId = nativeReceivedRoutingId(raw);
+    const sendSync = (parts: readonly Message[]): void => {
+      if (!routingId) throw new Error('missing routed send target');
+      completionOwnerOf(this).sendSync(parts, routingId);
+    };
+    const sendManaged = (parts: readonly Message[]): Promise<void> => {
+      if (!routingId) return Promise.reject(new Error('missing routed send target'));
+      return completionOwnerOf(this).submitSend(parts, routingId);
+    };
+    materializeReceivedInto(result, raw, sendSync, sendManaged);
+    return true;
+  }
+
+  recvPacket(result: StreamPacket, flags: RecvFlags = RecvFlags.None): boolean {
+    if (!(result instanceof StreamPacket)) {
+      throw new TypeError('result must be a StreamPacket');
+    }
+    const state = streamPacketState(result);
+    if (state._receiving) throw new Error('StreamPacket is already in use by recvPacket');
+    result.close();
+    state._receiving = true;
+    try {
+      const raw = native.socketStreamRecvPacket(getNativeHandle(this), flags | 0);
+      if (raw == null) return false;
+      state._routingId = RoutingId.from(raw.routingId);
+      state._header = messageFromNativeBuffer(raw.header);
+      state._body = messageFromNativeBuffer(raw.body);
+      return true;
+    } catch (error) {
+      result.close();
+      throw recvNativeError(error, flags, 'stream packet recv failed');
+    } finally {
+      state._receiving = false;
+    }
+  }
+
+  setRoutingId(routingId: RoutingId): void {
+    const normalized = normalizeRoutingId(routingId);
+    configCall('routing id set failed', () =>
+      native.handleSetRoutingId(getNativeHandle(this), normalized));
+  }
+
+  getRoutingId(): RoutingId {
+    return RoutingId.from(configCall('routing id get failed', () =>
+      native.handleGetRoutingId(getNativeHandle(this)) as Buffer));
+  }
+
+  disconnectRid(routingId: RoutingId): void {
+    const normalized = normalizeRoutingId(routingId);
+    configCall('stream disconnect by routing id failed', () =>
+      native.socketDisconnectRid(getNativeHandle(this), normalized));
   }
 }

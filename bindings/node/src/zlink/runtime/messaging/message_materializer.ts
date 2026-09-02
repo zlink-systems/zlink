@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: MPL-2.0
 
-import { SendFlags } from '../../contracts/sockets/socket_constants';
 import {
   Message,
   Received,
+  ReplyToken,
   RoutingId,
   TopicMessage,
   type MessageLike
 } from '../../contracts';
 import { hasObservedManagedReceiveData } from '../../contracts/messaging/message';
 import { normalizeRoutingId, routingIdFromOwnedBuffer } from '../core/routing_id';
+import {
+  createReplyToken,
+} from '../../contracts/messaging/received';
 import {
   messageFromOwnedBuffer,
   messageFromOwnedRoutedBuffer,
@@ -36,9 +39,7 @@ export interface NativeReceivedEnvelope {
   data?: Buffer;
   nativeMessage?: unknown;
   routingId?: Buffer | null;
-  requestSeq?: bigint | null;
-  transportPairId?: bigint;
-  transportPairGeneration?: bigint;
+  replyToken?: bigint | null;
 }
 
 /** Internal receive transfer: either an envelope or an unrouted native frame. */
@@ -62,15 +63,15 @@ function isNativeTopicMessageSinglePart(
 }
 
 export interface RoutedReceiveOperations {
-  send(routingId: Buffer, parts: readonly Message[], flags: SendFlags): void;
-  sendAsync(routingId: Buffer, parts: readonly Message[], timeoutMs: number): Promise<void>;
-  reply(routingId: Buffer, requestSeq: bigint,
-        parts: readonly MessageLike[], flags: SendFlags): void;
+  readonly replyOwner: object;
+  send(routingId: Buffer, parts: readonly Message[]): void;
+  sendManaged(routingId: Buffer, parts: readonly Message[]): Promise<void>;
+  reply(routingId: Buffer, token: ReplyToken, parts: readonly MessageLike[]): void;
 }
 
 interface RoutedReceiveContext {
   routingId: Buffer | null;
-  requestSeq: bigint | null;
+  replyToken: ReplyToken | null;
   operations: RoutedReceiveOperations;
   sendContext: { beginSend(): ReturnType<typeof createReceivedSendOperation> };
   replyContext: { beginReply(): ReturnType<typeof createReceivedReplyOperation> };
@@ -98,7 +99,7 @@ function envelopeOf(raw: NativeReceivedRaw): NativeReceivedEnvelope | null {
       || candidate.nativeMessage !== undefined
       || candidate.parts !== undefined
       || candidate.routingId !== undefined
-      || candidate.requestSeq !== undefined
+      || candidate.replyToken !== undefined
     ? candidate
     : null;
 }
@@ -167,40 +168,23 @@ function materializeTopicParts(raw: NativeTopicMessageEnvelope): Message[] {
   return materializeParts(raw.parts ?? []);
 }
 
-function hasReplyableRequestSeq(requestSeq: bigint | null): requestSeq is bigint {
-  return requestSeq !== null && requestSeq !== 0n;
-}
-
 export function materializeReceived(
   raw: NativeReceivedRaw,
-  reply?: (requestSeq: bigint, parts: readonly MessageLike[], flags: SendFlags) => void,
-  send?: (parts: readonly Message[], flags: SendFlags) => void,
-  sendAsync?: (parts: readonly Message[], timeoutMs: number) => Promise<void>
+  send?: (parts: readonly Message[]) => void,
+  sendManaged?: (parts: readonly Message[]) => Promise<void>
 ): Received {
   const envelope = envelopeOf(raw);
-  const requestSeq = envelope?.requestSeq ?? null;
   return createReceived(
     materializeReceivedParts(raw),
     wrapNativeRoutingId(envelope?.routingId ?? null),
-    requestSeq,
-    hasReplyableRequestSeq(requestSeq) && reply
-      ? {
-          beginReply() {
-            return createReceivedReplyOperation(
-              (parts: readonly MessageLike[], flags: SendFlags): void => {
-                reply(requestSeq, parts, flags);
-              }
-            );
-          }
-        }
-      : null,
-    send && sendAsync
+    null,
+    null,
+    send && sendManaged
       ? {
           beginSend() {
             return createReceivedSendOperation(
-              (parts: readonly Message[], flags: SendFlags): void => send(parts, flags),
-              (parts: readonly Message[], timeoutMs: number): Promise<void> =>
-                sendAsync(parts, timeoutMs)
+              (parts: readonly Message[]): void => send(parts),
+              (parts: readonly Message[]): Promise<void> => sendManaged(parts)
             );
           }
         }
@@ -211,46 +195,27 @@ export function materializeReceived(
 export function materializeReceivedInto(
   target: Received,
   raw: NativeReceivedRaw,
-  reply?: (requestSeq: bigint, parts: readonly MessageLike[], flags: SendFlags) => void,
-  send?: (parts: readonly Message[], flags: SendFlags) => void,
-  sendAsync?: (parts: readonly Message[], timeoutMs: number) => Promise<void>
+  send?: (parts: readonly Message[]) => void,
+  sendManaged?: (parts: readonly Message[]) => Promise<void>
 ): void {
   const envelope = envelopeOf(raw);
-  const requestSeq = envelope?.requestSeq ?? null;
   replaceReceived(
       target,
       materializeReceivedParts(raw),
       wrapNativeRoutingId(envelope?.routingId ?? null),
-      requestSeq,
-      hasReplyableRequestSeq(requestSeq) && reply
-        ? {
-            beginReply() {
-              return createReceivedReplyOperation(
-                (parts: readonly MessageLike[], flags: SendFlags): void => {
-                  reply(requestSeq, parts, flags);
-                }
-              );
-            }
-          }
-        : null,
-      send && sendAsync
+      null,
+      null,
+      send && sendManaged
         ? {
             beginSend() {
               return createReceivedSendOperation(
-                (parts: readonly Message[], flags: SendFlags): void => send(parts, flags),
-                (parts: readonly Message[], timeoutMs: number): Promise<void> =>
-                  sendAsync(parts, timeoutMs)
+                (parts: readonly Message[]): void => send(parts),
+                (parts: readonly Message[]): Promise<void> => sendManaged(parts)
               );
             }
           }
         : null
     );
-  const targetInternal = target as Received & {
-    transportPairId?: bigint;
-    transportPairGeneration?: bigint;
-  };
-  targetInternal.transportPairId = envelope?.transportPairId;
-  targetInternal.transportPairGeneration = envelope?.transportPairGeneration;
 }
 
 export function materializeRoutedReceivedInto(
@@ -266,7 +231,7 @@ export function materializeRoutedReceivedInto(
   if (!context) {
     context = {
       routingId: null,
-      requestSeq: null,
+      replyToken: null,
       operations,
       sendContext: {
         beginSend() {
@@ -274,29 +239,32 @@ export function materializeRoutedReceivedInto(
           const operations = context!.operations;
           if (routingId == null) throw new Error('missing routed send target');
           return createReceivedSendOperation(
-            (parts, flags) => operations.send(routingId, parts, flags),
-            (parts, timeoutMs) => operations.sendAsync(routingId, parts, timeoutMs)
+            (parts) => operations.send(routingId, parts),
+            (parts) => operations.sendManaged(routingId, parts)
           );
         }
       },
       replyContext: {
         beginReply() {
           const routingId = context!.routingId;
-          const requestSeq = context!.requestSeq;
+          const replyToken = context!.replyToken;
           const operations = context!.operations;
-          if (routingId == null || requestSeq == null || requestSeq === 0n) {
+          if (routingId == null || replyToken == null) {
             throw new Error('missing request reply target');
           }
-          return createReceivedReplyOperation((parts, flags) =>
-            operations.reply(routingId, requestSeq, parts, flags));
+          return createReceivedReplyOperation((parts) =>
+            operations.reply(routingId, replyToken, parts));
         }
       }
     };
     routedReceiveContexts.set(target, context);
   }
   context.routingId = envelope.routingId ?? null;
-  context.requestSeq = envelope.requestSeq ?? null;
   context.operations = operations;
+  const rawReplyToken = envelope.replyToken ?? 0n;
+  context.replyToken = rawReplyToken === 0n
+    ? null
+    : createReplyToken(operations.replyOwner, rawReplyToken);
   const routingId = context.routingId === null
     ? null
     : target.routingId !== null
@@ -307,16 +275,10 @@ export function materializeRoutedReceivedInto(
       target,
       materializeReceivedParts(raw),
       routingId,
-      context.requestSeq,
-      hasReplyableRequestSeq(context.requestSeq) ? context.replyContext : null,
+      context.replyToken,
+      context.replyToken ? context.replyContext : null,
       context.routingId == null ? null : context.sendContext
     );
-  const targetInternal = target as Received & {
-    transportPairId?: bigint;
-    transportPairGeneration?: bigint;
-  };
-  targetInternal.transportPairId = envelope.transportPairId;
-  targetInternal.transportPairGeneration = envelope.transportPairGeneration;
 }
 
 export function materializeTopicMessage(raw: NativeTopicMessageEnvelope): TopicMessage {

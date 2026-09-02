@@ -14,6 +14,7 @@ async function main() {
     const stream = zlink.createStreamSocket(ctx);
     let client;
     try {
+        stream.options.recvMode = zlink.StreamRecvMode.Raw;
         stream.bind(endpoint);
         client = net.createConnection({ host: '127.0.0.1', port });
         await once(client, 'connect');
@@ -25,7 +26,7 @@ async function main() {
             assert.ok(received.routingId instanceof zlink.RoutingId);
             const recv = received.parts[0].data().toString();
             assert.equal(recv, sent);
-            received.send().message(Buffer.from(sent)).submit();
+            await received.send().message(Buffer.from(sent)).submit();
             const [reply] = await once(client, 'data');
             assert.equal(reply.toString(), sent);
             console.log(`[stream/recv] send: "${sent}" \u2192 recv: "${recv}"`);

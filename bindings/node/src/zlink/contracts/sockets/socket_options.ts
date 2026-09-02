@@ -4,7 +4,7 @@ import type { Message, MessageLike } from '../messaging';
 import type { RoutingId } from '../core';
 import type {
   RidDuplicatePolicyValue,
-  StreamPacketBodyMaterializationValue
+  StreamRecvMode
 } from './socket_constants';
 
 /** Typed facade over the socket options shared by every socket type. */
@@ -81,8 +81,8 @@ export interface RouterSocketOptions extends CommonSocketOptions {
 export interface StreamSocketOptions extends CommonSocketOptions {
   /** Whether peer connect and disconnect events are delivered as messages. */
   notify: boolean;
-  /** How STREAM packet callbacks materialize the body Message. */
-  packetBodyMaterialization: StreamPacketBodyMaterializationValue;
+  /** Select RAW byte records or framed packet receive before bind/connect. */
+  recvMode: StreamRecvMode;
 }
 
 /** Typed facade over PUB/XPUB-specific socket options. */

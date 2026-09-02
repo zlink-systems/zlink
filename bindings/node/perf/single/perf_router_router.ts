@@ -51,7 +51,7 @@ function handshakeRouterReceiver(receiver) {
     }
 
     receiver.send(ping.routingId).message(Buffer.from('PONG'))
-      .submit_sync(zlink.SendFlags.None);
+      .submit_sync();
     return ping.routingId;
   } finally {
     ping.close();
@@ -85,7 +85,7 @@ function handshakeRouterReceiverWithRetry(receiver) {
     }
 
     receiver.send(ping.routingId).message(Buffer.from('PONG'))
-      .submit_sync(zlink.SendFlags.None);
+      .submit_sync();
     return ping.routingId;
   } finally {
     ping.close();
@@ -109,7 +109,7 @@ async function runRouterRouterBenchmark(msgSize, options) {
       configureSender: (socket) => socket.setRoutingId(zlink.RoutingId.from(SENDER_ID)),
       handshake: (sender, receiver) => {
         sender.send(RECEIVER_ROUTING_ID)
-          .message(Buffer.from('PING')).submit_sync(zlink.SendFlags.None);
+          .message(Buffer.from('PING')).submit_sync();
         const senderRid = handshakeRouterReceiver(receiver);
         const reply = new zlink.Received();
         sender.recv(reply);
@@ -127,7 +127,7 @@ async function runRouterRouterBenchmark(msgSize, options) {
       sendActive: (socket, payload, routingId) => {
         try {
           appendMeasurement(socket.send(routingId), payload)
-            .submit_sync(zlink.SendFlags.DontWait);
+            .submit_sync();
           return true;
         } catch (error) {
           if (error instanceof zlink.SubmitError
@@ -146,7 +146,7 @@ async function runRouterRouterBenchmark(msgSize, options) {
       },
       sendStop: (socket, routingId) => {
         socket.send(routingId).message(STOP_TOKEN_BYTES)
-          .submit_sync(zlink.SendFlags.None);
+          .submit_sync();
       },
     });
   }

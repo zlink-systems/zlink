@@ -16,7 +16,7 @@ samples=(
   "dist-tools/samples/pubsub_recv_sample.js"
   "dist-tools/samples/dealer_router_recv_sample.js"
   "dist-tools/samples/stream_recv_sample.js"
-  "dist-tools/samples/stream_packet_callback_sample.js"
+  "dist-tools/samples/stream_packet_sample.js"
   "dist-tools/samples/monitor_recv_sample.js"
 )
 

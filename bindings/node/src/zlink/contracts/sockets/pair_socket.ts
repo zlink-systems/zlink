@@ -20,9 +20,4 @@ export interface PairSocket extends ConnectableSocket {
    * `RecvFlags.DontWait` is set and no message is available.
    */
   recv(result: Received, flags?: RecvFlags): boolean;
-  /**
-   * Receive into `result` for a Framework backend while retaining dequeued
-   * Core HWM credit. Successful reuse or `result.close()` returns the credit;
-   * a native finalizer is the fallback if the result becomes unreachable.
-   */
 }

@@ -41,8 +41,8 @@ function receiveAndReply(router, received) {
       if (isStopTokenParts([payload])) {
         return true;
       }
-      if (received.requestSeq === null) {
-        throw new Error('request/reply server received payload without request sequence');
+      if (received.replyToken === null) {
+        throw new Error('request/reply server received payload without a reply token');
       }
       // A successful public reply consumes this received native Message.
       // Forward it directly rather than materializing a Buffer copy first.

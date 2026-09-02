@@ -8,7 +8,12 @@ import { requireNative } from '../native/native';
 export class PollEvents extends NativeHandle {
   private _readyCount = 0;
   private _nativeReadyCount = 0;
-  private _synthetic: ReadonlyArray<{ slot: number; revents: number }> = [];
+  private _synthetic: ReadonlyArray<{
+    sourceKind: number;
+    slot: number;
+    revents: number;
+    fd: number;
+  }> = [];
   readonly capacity: number;
 
   constructor(capacity: number) {
@@ -23,7 +28,9 @@ export class PollEvents extends NativeHandle {
 
   sourceKind(index: number): number {
     this.checkReadyIndex(index);
-    if (index >= this._nativeReadyCount) return 1;
+    if (index >= this._nativeReadyCount) {
+      return this._synthetic[index - this._nativeReadyCount].sourceKind;
+    }
     return requireNative().pollEventsSourceKind(this._native, index | 0) as number;
   }
 
@@ -45,7 +52,9 @@ export class PollEvents extends NativeHandle {
 
   fd(index: number): number {
     this.checkReadyIndex(index);
-    if (index >= this._nativeReadyCount) return -1;
+    if (index >= this._nativeReadyCount) {
+      return this._synthetic[index - this._nativeReadyCount].fd;
+    }
     return Number(requireNative().pollEventsFd(this._native, index | 0));
   }
 
@@ -66,7 +75,12 @@ export class PollEvents extends NativeHandle {
   /** @internal */
   markCombined(
     nativeCount: number,
-    entries: ReadonlyArray<{ slot: number; revents: number }>
+    entries: ReadonlyArray<{
+      sourceKind: number;
+      slot: number;
+      revents: number;
+      fd: number;
+    }>
   ): void {
     if (nativeCount < 0 || nativeCount + entries.length > this.capacity) {
       throw new RangeError('ready count out of range');

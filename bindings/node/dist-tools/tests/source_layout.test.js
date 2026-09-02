@@ -67,47 +67,41 @@ function forbiddenPackageExports(exportsValue) {
     const packageJson = JSON.parse(node_fs_1.default.readFileSync(node_path_1.default.resolve(__dirname, '../../package.json'), 'utf8'));
     strict_1.default.deepEqual(forbiddenPackageExports(packageJson.exports), []);
 });
-(0, node_test_1.default)('Node async surfaces use Core completion callbacks and have no readiness admission files', () => {
+(0, node_test_1.default)('Node async surfaces use pull completion without callback bridges', () => {
     const nativeRoot = node_path_1.default.resolve(__dirname, '../../native/src');
     const sourceRoot = node_path_1.default.resolve(__dirname, '../../src/zlink');
     const gyp = node_fs_1.default.readFileSync(node_path_1.default.resolve(__dirname, '../../binding.gyp'), 'utf8');
     const nativeBridge = node_fs_1.default.readFileSync(node_path_1.default.join(nativeRoot, 'addon_core.cc'), 'utf8');
-    const requestBridge = node_fs_1.default.readFileSync(node_path_1.default.join(nativeRoot, 'addon_request_callbacks.cc'), 'utf8');
     const socketBinding = node_fs_1.default.readFileSync(node_path_1.default.join(sourceRoot, 'runtime/native/binding_socket.ts'), 'utf8');
-    const sendCompletion = node_fs_1.default.readFileSync(node_path_1.default.join(sourceRoot, 'runtime/messaging/send_completion.ts'), 'utf8');
-    strict_1.default.equal(node_fs_1.default.existsSync(node_path_1.default.join(nativeRoot, 'addon_routed_admission.cc')), false);
-    strict_1.default.equal(node_fs_1.default.existsSync(node_path_1.default.join(sourceRoot, 'runtime/sockets/routed_admission.ts')), false);
-    strict_1.default.equal(node_fs_1.default.existsSync(node_path_1.default.join(sourceRoot, 'runtime/sockets/publisher_admission.ts')), false);
-    strict_1.default.equal(node_fs_1.default.existsSync(node_path_1.default.join(sourceRoot, 'runtime/messaging/request_progress.ts')), false);
-    strict_1.default.equal(gyp.includes('addon_routed_admission.cc'), false);
+    const completionOwner = node_fs_1.default.readFileSync(node_path_1.default.join(sourceRoot, 'runtime/messaging/completion_owner.ts'), 'utf8');
+    strict_1.default.equal(node_fs_1.default.existsSync(node_path_1.default.join(nativeRoot, 'addon_request_callbacks.cc')), false);
+    strict_1.default.equal(node_fs_1.default.existsSync(node_path_1.default.join(nativeRoot, 'addon_request_callbacks.h')), false);
+    strict_1.default.equal(gyp.includes('addon_request_callbacks.cc'), false);
     for (const symbol of [
-        'zlink_send_complete_handler',
-        'zlink_send_async',
-        'napi_create_threadsafe_function',
-        'socket_send_async',
-        'dealer_request',
-        'router_request'
-    ]) {
+        'zlink_completion_recv',
+        'zlink_completion_close',
+        'socket_submit_send',
+        'socket_submit_request',
+        'socket_completion_recv',
+    ])
         strict_1.default.ok(nativeBridge.includes(symbol), symbol);
-    }
-    strict_1.default.ok(requestBridge.includes('napi_call_threadsafe_function'));
-    strict_1.default.ok(socketBinding.includes('socketSendCompletionHandler'));
-    strict_1.default.ok(socketBinding.includes('socketSendAsync'));
-    strict_1.default.ok(sendCompletion.includes('new Map<bigint, PendingSend>()'));
-    strict_1.default.ok(nativeBridge.includes('struct send_completion_js_payload_t'));
-    strict_1.default.ok(nativeBridge.includes('std::unique_ptr<send_completion_js_payload_t> payload'));
-    strict_1.default.ok(nativeBridge.includes('tsfn, payload.get (), napi_tsfn_nonblocking'));
-    strict_1.default.ok(nativeBridge.includes('payload->completion = operation->completion'));
-    strict_1.default.ok(nativeBridge.includes('send_completion_delivery_accounting_t accounting'));
-    strict_1.default.ok(nativeBridge.indexOf('send_completion_delivery_accounting_t accounting')
-        < nativeBridge.indexOf('if (!env || !js_callback || !payload)'));
-    strict_1.default.equal(nativeBridge.includes('send_ready'), false);
-    strict_1.default.equal(nativeBridge.includes('routed_send_ready'), false);
-    strict_1.default.equal(socketBinding.includes('sendReady'), false);
+    for (const removed of [
+        'zlink_send_async',
+        'zlink_send_complete_handler',
+        'napi_create_threadsafe_function',
+    ])
+        strict_1.default.equal(nativeBridge.includes(removed), false, removed);
+    strict_1.default.ok(socketBinding.includes('socketCompletionRecv'));
+    strict_1.default.ok(socketBinding.includes('socketSubmitSend'));
+    strict_1.default.ok(completionOwner.includes('class CompletionEntry'));
+    strict_1.default.ok(completionOwner.includes('byToken'));
+    strict_1.default.ok(completionOwner.includes('byId'));
+    strict_1.default.ok(completionOwner.includes('transferToPublic'));
+    strict_1.default.ok(nativeBridge.includes('completion_close_guard_t guard'));
 });
 (0, node_test_1.default)('native multipart replies use inline staging without changing rejection ownership', () => {
     const nativeBridge = node_fs_1.default.readFileSync(node_path_1.default.resolve(__dirname, '../../native/src/addon_core.cc'), 'utf8');
-    for (const symbol of ['napi_value dealer_reply', 'napi_value router_reply']) {
+    for (const symbol of ['napi_value socket_reply']) {
         const start = nativeBridge.indexOf(symbol);
         strict_1.default.ok(start >= 0, symbol);
         const body = nativeBridge.slice(start, nativeBridge.indexOf('\nnapi_value ', start + symbol.length));
@@ -116,7 +110,7 @@ function forbiddenPackageExports(exportsValue) {
         strict_1.default.equal(body.includes('std::vector<zlink_msg_t> parts'), false, `${symbol} must not allocate a vector for multipart replies`);
     }
 });
-(0, node_test_1.default)('bindings samples stay on the Core 0.13.1 raw socket boundary', () => {
+(0, node_test_1.default)('bindings samples stay on the Core 0.16 raw socket boundary', () => {
     const sampleRoots = [
         node_path_1.default.resolve(__dirname, '../../samples'),
         node_path_1.default.resolve(__dirname, '../../../javascript/samples')

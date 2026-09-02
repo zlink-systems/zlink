@@ -8,7 +8,9 @@ export type {
 } from './message';
 export {
   Received,
+  ReplyToken,
 } from './received';
+export { StreamPacket } from './stream_packet';
 export {
   TopicMessage,
 } from './topic_message';

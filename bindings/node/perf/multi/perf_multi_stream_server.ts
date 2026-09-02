@@ -120,22 +120,14 @@ async function main() {
   const ctx = zlink.createContext();
   applyContextPolicy(ctx, 'server', 'MULTI_STREAM');
   const stream = zlink.createStreamSocket(ctx);
+  const packet = new zlink.StreamPacket();
   let rl = null;
   const pending = new Set();
   let sendFailure = null;
 
   try {
     applySocketPolicy(stream);
-    const bodyMaterialization =
-      (process.env.PERF_STREAM_PACKET_BODY_MATERIALIZATION ?? 'native').toLowerCase();
-    if (bodyMaterialization === 'managed') {
-      stream.options.packetBodyMaterialization =
-        zlink.StreamPacketBodyMaterialization.Managed;
-    } else if (bodyMaterialization !== 'native') {
-      throw new Error(
-        'PERF_STREAM_PACKET_BODY_MATERIALIZATION must be native or managed'
-      );
-    }
+    stream.options.recvMode = zlink.StreamRecvMode.Packet;
     configureTlsServer(stream, options.transport);
     const targetClients = resolveMultiStreamClientCount(
       options.clients,
@@ -165,24 +157,6 @@ async function main() {
       throw connectionError
         || new Error('stream server failed to bind before connection barrier');
     }
-    stream.setPacketHandler((sourceRid, header, body) => {
-      let reply;
-      try {
-        reply = {
-          routingId: zlink.RoutingId.from(sourceRid.toBytes()),
-          frame: packetFrame(header, body)
-        };
-      } finally {
-        header.close();
-        body.close();
-      }
-      const task = sendStream(stream, reply.routingId, reply.frame);
-      pending.add(task);
-      task.catch((error) => { sendFailure = error; })
-        .finally(() => {
-          pending.delete(task);
-        });
-    });
     rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
     const control = createStreamControlBarrier(rl, options.msgSize);
     console.log(`READY,${options.endpoint}`);
@@ -202,6 +176,17 @@ async function main() {
       console.log(`SERVER_START_READY,${options.msgSize}`);
 
       while (!control.stopRequested()) {
+        while (stream.recvPacket(packet, zlink.RecvFlags.DontWait)) {
+          const routingId = zlink.RoutingId.from(packet.routingId.toBytes());
+          const frame = packetFrame(packet.header, packet.body);
+          packet.close();
+          const task = sendStream(stream, routingId, frame);
+          pending.add(task);
+          task.catch((error) => { sendFailure = error; })
+            .finally(() => {
+              pending.delete(task);
+            });
+        }
         await sleepImmediate();
         if (sendFailure) throw sendFailure;
       }
@@ -211,6 +196,7 @@ async function main() {
     await Promise.all(pending);
   } finally {
     rl?.close();
+    packet.close();
     stream.close();
     ctx.close();
   }

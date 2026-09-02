@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import {
-  SendFlags,
-} from '../../contracts/sockets/socket_constants';
-import {
   SubmitError,
   SubmitResult,
 } from '../../contracts/errors/errors';
@@ -22,15 +19,4 @@ export function submitErrorFromNativeResult(
     new SubmitError(result as SubmitResult, nativeErrno),
     message
   );
-}
-
-export function normalizeReplyFlags(flags: SendFlags = SendFlags.None): SendFlags {
-  const normalized = flags | 0;
-  if (normalized !== SendFlags.None) {
-    throw submitErrorFromResult(
-      SubmitResult.NotSupported,
-      'reply flags are not supported by the current core library'
-    );
-  }
-  return normalized as SendFlags;
 }

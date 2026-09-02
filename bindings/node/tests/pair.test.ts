@@ -46,7 +46,7 @@ test('consumed message waits for deterministic cleanup before pool reuse', () =>
   receiver.connect('inproc://message-wrapper-pool-consumed');
 
   const consumed = zlink.Message.from('consumed');
-  sender.send().message(consumed).submit();
+  sender.send().message(consumed).submit_sync();
   const beforeCleanup = zlink.Message.from('before-cleanup');
   assert.notStrictEqual(beforeCleanup, consumed);
 
@@ -74,7 +74,7 @@ test('successful message send detaches the writable payload view', () => {
   const message = zlink.Message.allocate(4);
   const view = message.data();
   view.write('move');
-  sender.send().message(message).submit();
+  sender.send().message(message).submit_sync();
 
   assert.equal(view.byteLength, 0);
   assert.equal(recvText(receiver), 'move');
@@ -91,7 +91,7 @@ test('pair messaging uses Message and Received by default', () => {
 
   sender.bind('inproc://pair-contract');
   receiver.connect('inproc://pair-contract');
-  sender.send().message('ping').submit();
+  sender.send().message('ping').submit_sync();
 
   const received = new zlink.Received();
   receiver.recv(received);
@@ -160,7 +160,7 @@ test('pair nonblocking recv preserves order', () => {
   receiver.connect('inproc://pair-recv-order');
   poller.add(receiver, [zlink.PollEventFlag.PollIn], 17);
   for (let index = 0; index < 20; index += 1) {
-    sender.send().message(`message-${index}`).submit();
+    sender.send().message(`message-${index}`).submit_sync();
   }
 
   for (let index = 0; index < 20; index += 1) {
@@ -192,7 +192,7 @@ test('poller writes reusable event buffer and dispatches by slot', () => {
   sender.bind('inproc://node-poller-reusable');
   receiver.connect('inproc://node-poller-reusable');
   poller.add(receiver, [zlink.PollEventFlag.PollIn], 7);
-  sender.send().message('ready').submit();
+  sender.send().message('ready').submit_sync();
 
   const count = poller.wait(events, 2000);
   assert.equal(count, 1);
@@ -225,8 +225,8 @@ test('poller capacity limits written events without losing remaining readiness',
   receiver2.connect('inproc://node-poller-capacity-b');
   poller.add(receiver1, [zlink.PollEventFlag.PollIn], 101);
   poller.add(receiver2, [zlink.PollEventFlag.PollIn], 102);
-  sender1.send().message('a').submit();
-  sender2.send().message('b').submit();
+  sender1.send().message('a').submit_sync();
+  sender2.send().message('b').submit_sync();
 
   let count = poller.wait(events, 2000);
   assert.equal(count, 1);
@@ -267,7 +267,7 @@ test('poller modify remove and timeout follow core semantics', () => {
   receiver.connect('inproc://node-poller-modify-remove');
   poller.add(receiver, [zlink.PollEventFlag.PollIn], 31);
   poller.modify(receiver, []);
-  sender.send().message('hidden').submit();
+  sender.send().message('hidden').submit_sync();
   assert.equal(poller.wait(events, 20), 0);
 
   poller.modify(receiver, [zlink.PollEventFlag.PollIn]);
@@ -276,7 +276,7 @@ test('poller modify remove and timeout follow core semantics', () => {
   assert.equal(recvText(receiver), 'hidden');
 
   assert.equal(poller.remove(receiver), true);
-  sender.send().message('removed').submit();
+  sender.send().message('removed').submit_sync();
   assert.equal(poller.wait(events, 0), 0);
 
   events.close();
@@ -298,7 +298,7 @@ test('poller distinguishes socket and timer events in one buffer', () => {
   receiver.connect('inproc://node-poller-timer-socket');
   poller.add(receiver, [zlink.PollEventFlag.PollIn], 41);
   poller.add(timer, 42);
-  sender.send().message('socket').submit();
+  sender.send().message('socket').submit_sync();
   timer.start(5_000_000n, 1n);
 
   let sawSocket = false;
@@ -362,7 +362,7 @@ test('recvHandler delivers multipart Message instances', () => {
   sender.bind('inproc://pair-handler-contract');
   receiver.connect('inproc://pair-handler-contract');
 
-  sender.send().message('left').message('right').submit();
+  sender.send().message('left').message('right').submit_sync();
   const received = new zlink.Received();
   receiver.recv(received);
 
@@ -385,12 +385,12 @@ test('pair supports canonical builder send and caller-provided recv storage', ()
   sender.bind('inproc://pair-buffer-fast-path');
   receiver.connect('inproc://pair-buffer-fast-path');
 
-  sender.send().message(Buffer.from('buffer-ping')).submit();
+  sender.send().message(Buffer.from('buffer-ping')).submit_sync();
   const first = new zlink.Received();
   assert.equal(receiver.recv(first), true);
   assert.equal(first.singlePartOrThrow().data().toString(), 'buffer-ping');
 
-  sender.send().message(Buffer.from('buffer-pong')).submit();
+  sender.send().message(Buffer.from('buffer-pong')).submit_sync();
   const second = new zlink.Received();
   assert.equal(receiver.recv(second), true);
   assert.equal(second.singlePartOrThrow().data().toString(), 'buffer-pong');
@@ -409,14 +409,14 @@ test('pair single-part recv preserves payload semantics while reusing storage', 
   receiver.connect('inproc://pair-single-part-reuse');
 
   const received = new zlink.Received();
-  sender.send().message(Buffer.alloc(0)).submit();
+  sender.send().message(Buffer.alloc(0)).submit_sync();
   assert.equal(receiver.recv(received), true);
   const previous = received.singlePartOrThrow();
   assert.equal(previous.size(), 0);
   assert.equal(previous.refCount(), 1);
   assert.equal(previous.getProperty('Identity'), null);
 
-  sender.send().message('replacement').submit();
+  sender.send().message('replacement').submit_sync();
   assert.equal(receiver.recv(received), true);
   assert.equal(received.singlePartOrThrow().data().toString(), 'replacement');
 

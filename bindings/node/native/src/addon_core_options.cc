@@ -23,6 +23,8 @@ int set_socket_option (void *sock, int32_t opt, const void *data, size_t len)
             return zlink_set_dealer_option (sock, ZLINK_DEALER_OPT_WEIGHT, data, len);
         case ZLINK_STREAM_OPT_NOTIFY:
             return zlink_set_stream_option (sock, ZLINK_STREAM_OPT_NOTIFY, data, len);
+        case ZLINK_STREAM_OPT_RECV_MODE:
+            return zlink_set_stream_option (sock, ZLINK_STREAM_OPT_RECV_MODE, data, len);
         case ZLINK_PUB_OPT_VERBOSE:
             return zlink_set_pub_option (sock, ZLINK_PUB_OPT_VERBOSE, data, len);
         case ZLINK_PUB_OPT_VERBOSER:
@@ -69,6 +71,8 @@ int get_socket_option (void *sock, int32_t opt, void *data, size_t *len)
             return zlink_get_dealer_option (sock, ZLINK_DEALER_OPT_WEIGHT, data, len);
         case ZLINK_STREAM_OPT_NOTIFY:
             return zlink_get_stream_option (sock, ZLINK_STREAM_OPT_NOTIFY, data, len);
+        case ZLINK_STREAM_OPT_RECV_MODE:
+            return zlink_get_stream_option (sock, ZLINK_STREAM_OPT_RECV_MODE, data, len);
         case ZLINK_PUB_OPT_VERBOSE:
             return zlink_get_pub_option (sock, ZLINK_PUB_OPT_VERBOSE, data, len);
         case ZLINK_PUB_OPT_VERBOSER:

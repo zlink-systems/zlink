@@ -2,35 +2,26 @@
 
 import { Message, type MessageLike } from '../../contracts';
 import { consumeSubmittedMessage } from '../../contracts/messaging/message';
-import { SendFlags } from '../../contracts/sockets/socket_constants';
 import type {
-  ImmediateSendOperation,
-  ImmediateSendSubmitOperation,
   PublishOperation as PublishOperationContract,
   PublishSubmitOperation,
   RequestOperation,
-  RequestCallback,
   RequestSubmitOperation,
   ReplyOperation,
   ReplySubmitOperation,
-  RoutedSendOperation,
-  RoutedSendSubmitOperation,
   SendOperation,
   SendSubmitOperation,
 } from '../../contracts/messaging';
 import {
   PartOperationBase,
-  SendOperationBase,
   type OperationPayloadValue,
 } from '../messaging/send_operation_base';
 
 export type ManagedSendInvoker = (
-  parts: OperationPayloadValue<MessageLike>,
-  timeoutMs: number
+  parts: OperationPayloadValue<MessageLike>
 ) => Promise<void>;
 export type SyncSendInvoker = (
-  parts: OperationPayloadValue<MessageLike>,
-  flags: SendFlags
+  parts: OperationPayloadValue<MessageLike>
 ) => void;
 export type PublishInvoker = (
   topic: string,
@@ -41,28 +32,9 @@ export type RequestInvoker = (
   timeoutMs: number
 ) => Promise<Message[]>;
 export type SyncRequestInvoker = (
-  parts: OperationPayloadValue<MessageLike>, timeoutMs: number, flags: SendFlags
+  parts: OperationPayloadValue<MessageLike>, timeoutMs: number
 ) => Message[];
-export type CallbackRequestInvoker = (
-  parts: OperationPayloadValue<MessageLike>, timeoutMs: number, flags: SendFlags,
-  callback: RequestCallback
-) => void;
-export type ReplyInvoker = (parts: OperationPayloadValue<MessageLike>, flags: SendFlags) => void;
-export type ImmediateSendInvoker = (
-  routingId: Buffer,
-  parts: OperationPayloadValue<MessageLike>,
-  flags: SendFlags
-) => boolean;
-export type ManagedRoutedSendInvoker = (
-  routingId: Buffer | null,
-  parts: OperationPayloadValue<MessageLike>,
-  timeoutMs: number
-) => Promise<void>;
-export type SyncRoutedSendInvoker = (
-  routingId: Buffer | null,
-  parts: OperationPayloadValue<MessageLike>,
-  flags: SendFlags
-) => void;
+export type ReplyInvoker = (parts: OperationPayloadValue<MessageLike>) => void;
 
 function consumeSubmittedMessages(payload: OperationPayloadValue<MessageLike>): void {
   if (payload instanceof Message) {
@@ -76,82 +48,19 @@ function consumeSubmittedMessages(payload: OperationPayloadValue<MessageLike>): 
   }
 }
 
-function validateSendTimeout(timeoutMs: number): number {
-  if (!Number.isInteger(timeoutMs) || timeoutMs < -1 || timeoutMs > 0x7fffffff) {
-    throw new RangeError('timeoutMs must be in the range -1..2147483647');
-  }
-  return timeoutMs;
-}
-
 /** Core-completion-driven PAIR send builder. */
 export class RuntimeSendOperation
   extends PartOperationBase<MessageLike, MessageLike>
   implements SendOperation, SendSubmitOperation {
-  private _timeoutMs = 0;
-
   constructor(
     private readonly _invoke: ManagedSendInvoker,
     private readonly _invokeSync: SyncSendInvoker
   ) { super(); }
 
-  timeout(timeoutMs: number): this {
-    this.ensureOpen();
-    this._timeoutMs = validateSendTimeout(timeoutMs);
-    return this;
-  }
-
-  submit(): Promise<void> { return this._invoke(this.consumePayload(), this._timeoutMs); }
-  submit_sync(flags: SendFlags): void {
+  submit(): Promise<void> { return this._invoke(this.consumePayload()); }
+  submit_sync(): void {
     const payload = this.consumePayload();
-    this._invokeSync(payload, flags);
-    consumeSubmittedMessages(payload);
-  }
-}
-
-/** Immediate raw routed builder retained for STREAM trySend/relay paths. */
-export class ImmediateRoutedRuntimeSendOperation
-  extends SendOperationBase<MessageLike, MessageLike>
-  implements ImmediateSendOperation, ImmediateSendSubmitOperation {
-  private readonly _routingId: Buffer;
-
-  constructor(
-    private readonly _invoke: ImmediateSendInvoker,
-    routingId: Buffer
-  ) {
-    super();
-    this._routingId = routingId;
-  }
-
-  submit(): boolean {
-    const payload = this.consumePayload();
-    const accepted = this._invoke(this._routingId, payload, this._flags);
-    if (accepted) consumeSubmittedMessages(payload);
-    return accepted;
-  }
-}
-
-/** Core-completion-driven DEALER/ROUTER/STREAM routed send builder. */
-export class ManagedRoutedRuntimeSendOperation
-  extends PartOperationBase<MessageLike, MessageLike>
-  implements RoutedSendOperation, RoutedSendSubmitOperation {
-  private _timeoutMs = 0;
-
-  constructor(
-    private readonly _invoke: ManagedRoutedSendInvoker,
-    private readonly _invokeSync: SyncRoutedSendInvoker,
-    private readonly _routingId: Buffer | null
-  ) { super(); }
-
-  timeout(timeoutMs: number): this {
-    this.ensureOpen();
-    this._timeoutMs = validateSendTimeout(timeoutMs);
-    return this;
-  }
-
-  submit(): Promise<void> { return this._invoke(this._routingId, this.consumePayload(), this._timeoutMs); }
-  submit_sync(flags: SendFlags): void {
-    const payload = this.consumePayload();
-    this._invokeSync(this._routingId, payload, flags);
+    this._invokeSync(payload);
     consumeSubmittedMessages(payload);
   }
 }
@@ -179,8 +88,7 @@ export class RuntimeRequestOperation
 
   constructor(
     private readonly _invoke: RequestInvoker,
-    private readonly _invokeSync: SyncRequestInvoker,
-    private readonly _invokeCallback: CallbackRequestInvoker
+    private readonly _invokeSync: SyncRequestInvoker
   ) { super(); }
 
   timeout(timeoutMs: number): this {
@@ -199,23 +107,19 @@ export class RuntimeRequestOperation
     return this._invoke(this.consumePayload(), this._timeoutMs);
   }
 
-  submit_sync(flags: SendFlags): Message[];
-  submit_sync(flags: SendFlags, callback: RequestCallback): void;
-  submit_sync(flags: SendFlags, callback?: RequestCallback): Message[] | void {
-    const payload = this.consumePayload();
-    if (callback) return this._invokeCallback(payload, this._timeoutMs, flags, callback);
-    return this._invokeSync(payload, this._timeoutMs, flags);
+  submit_sync(): Message[] {
+    return this._invokeSync(this.consumePayload(), this._timeoutMs);
   }
 }
 
 export class RuntimeReplyOperation
-  extends SendOperationBase<MessageLike, MessageLike>
+  extends PartOperationBase<MessageLike, MessageLike>
   implements ReplyOperation, ReplySubmitOperation {
   constructor(private readonly _invoke: ReplyInvoker) { super(); }
 
   submit(): void {
     const payload = this.consumePayload();
-    this._invoke(payload, this._flags);
+    this._invoke(payload);
     consumeSubmittedMessages(payload);
   }
 }

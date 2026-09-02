@@ -148,7 +148,7 @@ function applySocketPolicy(socket, options: SingleSocketPolicyOptions = {}) {
 }
 
 function socketTypeName(socket) {
-  if (typeof socket.setPacketHandler === 'function') return 'stream';
+  if (typeof socket.recvPacket === 'function') return 'stream';
   if (typeof socket.reply === 'function') return 'router';
   if (typeof socket.request === 'function') return 'dealer';
   if (typeof socket.publish === 'function') return 'pub';
@@ -482,9 +482,9 @@ function isTransientSubmit(error) {
     || text.includes('Transport endpoint is not connected');
 }
 
-function sendSocketNoWait(socket, payload, flags = zlink.SendFlags.DontWait) {
+function sendSocketNoWait(socket, payload) {
   try {
-    appendMeasurement(socket.send(), payload).submit_sync(flags);
+    appendMeasurement(socket.send(), payload).submit_sync();
     return true;
   } catch (error) {
     if (isTransientSubmit(error)) {
@@ -494,14 +494,14 @@ function sendSocketNoWait(socket, payload, flags = zlink.SendFlags.DontWait) {
   }
 }
 
-function sendSocketRequired(socket, payload, flags = zlink.SendFlags.None) {
-  appendMeasurement(socket.send(), payload).submit_sync(flags);
+function sendSocketRequired(socket, payload) {
+  appendMeasurement(socket.send(), payload).submit_sync();
 }
 
 function sendSocketStopWithRetry(socket) {
   for (let retry = 0; retry < 100; retry += 1) {
     try {
-      socket.send().message(STOP_TOKEN_BYTES).submit_sync(zlink.SendFlags.None);
+      socket.send().message(STOP_TOKEN_BYTES).submit_sync();
       return;
     } catch (error) {
       if (!isTransientSubmit(error)) {

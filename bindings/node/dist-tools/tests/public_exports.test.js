@@ -46,7 +46,9 @@ test('public root exports raw capabilities without service projections', () => {
         'createTimer',
         'Received',
         'Message',
-        'StreamPacketBodyMaterialization'
+        'ReplyToken',
+        'StreamPacket',
+        'StreamRecvMode'
     ]) {
         assert.notEqual(zlink[name], undefined, name);
     }
