@@ -53,10 +53,8 @@ inline void print_server_metrics (const std::string &lib_name,
 
 zlink_close_result_t close_stream_server_fenced (void *server)
 {
-    // A STOP notification can race the final packet/completion callback
-    // epilogue. CLOSE_BUSY is the public lifecycle handoff signal; retrying
-    // that handoff yields until close can atomically reject new callbacks and
-    // fence every callback already owned by Core.
+    // CLOSE_BUSY is the public lifecycle handoff signal. Retry until the
+    // accepted close can fence every admitted socket operation.
     for (;;) {
         const zlink_close_result_t result = zlink_close (server);
         if (result != ZLINK_CLOSE_BUSY || zlink_errno () != EBUSY)
@@ -124,6 +122,16 @@ int main (int argc, char **argv)
     set_sockopt_int (server, ZLINK_OPT_RCVTIMEO, io_timeout_ms, "ZLINK_OPT_RCVTIMEO");
     const int nodelay = 1;
     set_sockopt_int (server, ZLINK_OPT_TCP_NODELAY, nodelay, "ZLINK_OPT_TCP_NODELAY");
+    const zlink_stream_recv_mode_t packet_mode = ZLINK_STREAM_RECV_MODE_PACKET;
+    if (zlink_set_stream_option (server, ZLINK_STREAM_OPT_RECV_MODE,
+                                 &packet_mode, sizeof (packet_mode))
+        != ZLINK_CONFIG_OK) {
+        if (bench_debug_enabled ())
+            std::cerr << "[multi-stream-server] PACKET mode setup failed errno="
+                      << zlink_errno () << std::endl;
+        zlink_close (server);
+        return 1;
+    }
 
     if (!setup_tls_server (server, transport)) {
         if (bench_debug_enabled ()) {
@@ -158,36 +166,6 @@ int main (int argc, char **argv)
 
     perf_stop_requested ().store (false, std::memory_order_release);
     perf_multi_stream::reset_session (&g_stream_session, server);
-    perf_multi_stream::packet_handler_context_t packet_handler_ctx;
-    packet_handler_ctx.session = &g_stream_session;
-    packet_handler_ctx.stop_token = k_stop_token;
-    // Install completion ownership before packet delivery can submit an echo.
-    if (zlink_send_complete_handler (
-          server, &perf_multi_stream::stream_send_complete_callback, &g_stream_session)
-        != ZLINK_HANDLER_OK) {
-        if (bench_debug_enabled ()) {
-            std::cerr << "[multi-stream-server] send completion handler install failed errno="
-                      << zlink_errno () << std::endl;
-        }
-        close_connect_monitor (connect_monitor);
-        const zlink_close_result_t close_result = close_stream_server_fenced (server);
-        if (close_result == ZLINK_CLOSE_OK)
-            perf_multi_stream::clear_session (&g_stream_session);
-        return 1;
-    }
-    if (zlink_stream_packet_handler (server, &perf_multi_stream::stream_packet_handler_callback,
-                                     &packet_handler_ctx)
-        != ZLINK_HANDLER_OK) {
-        if (bench_debug_enabled ()) {
-            std::cerr << "[multi-stream-server] packet handler install failed errno="
-                      << zlink_errno () << std::endl;
-        }
-        close_connect_monitor (connect_monitor);
-        const zlink_close_result_t close_result = close_stream_server_fenced (server);
-        if (close_result == ZLINK_CLOSE_OK)
-            perf_multi_stream::clear_session (&g_stream_session);
-        return 1;
-    }
     install_perf_signal_handlers ();
 
     std::cout << "READY," << endpoint << std::endl;
@@ -252,7 +230,8 @@ int main (int argc, char **argv)
         stdin_state->cv.notify_one ();
     });
 
-    const int loop_rc = perf_multi_stream::run_server_event_loop (&g_stream_session);
+    const int loop_rc =
+      perf_multi_stream::run_server_event_loop (&g_stream_session, k_stop_token);
 
     bool stdin_done = false;
     {
@@ -266,8 +245,8 @@ int main (int argc, char **argv)
     else
         stdin_watcher.detach ();
 
-    // Accepted close fences packet callbacks and Core-owned send completions
-    // before their stack/static userdata and the session socket are cleared.
+    // Accepted close fences admitted socket operations before the session
+    // socket pointer is cleared.
     const zlink_close_result_t close_rc = close_stream_server_fenced (server);
     const bool async_failed =
       g_stream_session.failed.load (std::memory_order_acquire)

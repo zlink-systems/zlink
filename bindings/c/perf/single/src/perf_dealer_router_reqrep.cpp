@@ -109,10 +109,11 @@ void run_dealer_router_reqrep (const std::string &transport,
     latency_stats_t latency;
     const bool ok = perf_single_reqrep::run_requester (
       requester.get (), &request_state, &payload, duration_s,
-      [&] (zlink_msg_t *part_, uint32_t timeout_ms_, zlink_reply_handler_fn handler_,
-           void *userdata_) {
+      [&] (zlink_msg_t *part_, uint32_t timeout_ms_, void *user_context_,
+           zlink_completion_id_t *completion_id_out_) {
           return perf_zlink_dealer_request_measurement_part (
-            requester.get (), part_, ZLINK_SEND_FLAGS_NONE, timeout_ms_, handler_, userdata_);
+            requester.get (), part_, ZLINK_SEND_FLAGS_NONE, timeout_ms_,
+            user_context_, completion_id_out_);
       },
       &completion_poller, &completed, &latency);
 

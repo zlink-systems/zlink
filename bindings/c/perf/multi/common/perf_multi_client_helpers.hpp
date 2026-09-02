@@ -134,9 +134,9 @@ inline int recv_one_message (
         return -1;
 
     int rc = -1;
-    uint64_t request_seq = 0;
+    zlink_reply_token_t reply_token = 0;
     if (router_surface) {
-        rc = ::zlink_router_recv_part (socket, &source_rid, &request_seq, &part,
+        rc = ::zlink_router_recv_part (socket, &source_rid, &reply_token, &part,
                                        &has_more, static_cast<zlink_recv_flags_t> (flags));
     } else {
         rc = ::zlink_recv_part (socket, &source_rid, &part, &has_more,
@@ -154,7 +154,7 @@ inline int recv_one_message (
                                                 ? ::perf_zlink_recv_next_router
                                                 : ::perf_zlink_recv_next_plain;
     if (router_surface
-        && ((source_rid && source_rid->size == 0) || request_seq != 0
+        && ((source_rid && source_rid->size == 0) || reply_token != 0
             || !::perf_zlink_recv_measurement_tail (
               socket, has_more, static_cast<zlink_recv_flags_t> (flags), recv_next))) {
         zlink_msg_close (&part);
@@ -482,14 +482,14 @@ inline int recv_one_message_header (void *socket,
         return -1;
 
     const zlink_routing_id_t *source_rid = NULL;
-    uint64_t request_seq = 0;
+    zlink_reply_token_t reply_token = 0;
     zlink_msg_t part;
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
     if (zlink_msg_init (&part) != 0)
         return -1;
     int rc = -1;
     if (router_surface) {
-        rc = ::zlink_router_recv_part (socket, &source_rid, &request_seq, &part,
+        rc = ::zlink_router_recv_part (socket, &source_rid, &reply_token, &part,
                                        &has_more, static_cast<zlink_recv_flags_t> (flags));
     } else {
         rc = ::zlink_recv_part (socket, &source_rid, &part, &has_more,
@@ -507,7 +507,7 @@ inline int recv_one_message_header (void *socket,
                                                 ? ::perf_zlink_recv_next_router
                                                 : ::perf_zlink_recv_next_plain;
     if (router_surface
-        && (request_seq != 0 || !::perf_zlink_recv_measurement_tail (
+        && (reply_token != 0 || !::perf_zlink_recv_measurement_tail (
           socket, has_more, static_cast<zlink_recv_flags_t> (flags), recv_next))) {
         zlink_msg_close (&part);
         errno = EPROTO;

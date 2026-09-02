@@ -5,6 +5,7 @@
 #include "../../common/streamclient/perf_stream_common.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 
@@ -28,9 +29,8 @@ struct session_t
     void *send_socket;
     std::atomic<unsigned long long> recv_count;
     std::atomic<unsigned long long> send_count;
-    // Includes a public zlink_send_async call until its immediate result is
-    // known and every Core-owned pending operation until its terminal
-    // completion callback runs.
+    // Counts DONTWAIT sends with a nonzero completion ID until their terminal
+    // records are pulled from the socket completion queue.
     std::atomic<unsigned long long> outstanding_count;
     std::atomic<unsigned long long> failure_count;
     std::atomic<int> first_failure_errno;
@@ -63,8 +63,7 @@ inline void clear_session (session_t *session)
 {
     if (!session)
         return;
-    // zlink_close() must have completed before this pointer is cleared. It
-    // fences both packet callbacks and Core-owned send completions.
+    // zlink_close() must have completed before this pointer is cleared.
     session->send_socket = NULL;
     session->stop_cv.notify_all ();
 }
@@ -98,12 +97,7 @@ inline void record_failure (session_t *session, int error_code)
     request_stop (session);
 }
 
-inline void begin_async_submission (session_t *session)
-{
-    session->outstanding_count.fetch_add (1, std::memory_order_acq_rel);
-}
-
-inline void finish_async_submission (session_t *session)
+inline void finish_pending_submission (session_t *session)
 {
     if (!session)
         return;
@@ -121,23 +115,21 @@ inline void record_immediate_admission (session_t *session)
     if (!session)
         return;
     session->send_count.fetch_add (1, std::memory_order_relaxed);
-    finish_async_submission (session);
 }
 
-inline void stream_send_complete_callback (
-  void *, const zlink_send_complete_event_t *event, void *userdata)
+inline bool record_send_completion (session_t *session,
+                                    const zlink_completion_t *completion)
 {
-    session_t *session = static_cast<session_t *> (userdata);
-    if (!session || !event)
-        return;
+    if (!session || !completion || completion->kind != ZLINK_COMPLETION_SEND
+        || completion->completion_id == 0 || completion->user_context != session)
+        return false;
 
-    // Completion is the final word for this operation. In particular, this
-    // callback never resubmits: Core owns admission wait and exact-route FIFO.
-    if (event->result == ZLINK_SEND_ADMITTED)
+    if (completion->send_result == ZLINK_SEND_ADMITTED)
         session->send_count.fetch_add (1, std::memory_order_relaxed);
     else
-        record_failure (session, event->terminal_errno);
-    finish_async_submission (session);
+        record_failure (session, completion->send_terminal_errno);
+    finish_pending_submission (session);
+    return true;
 }
 
 inline bool build_packet_frame (zlink_msg_t *packet_out,
@@ -173,35 +165,20 @@ inline bool submit_packet_async (session_t *session,
     if (!session || !session->send_socket || !rid || rid->size == 0 || !packet)
         return false;
 
-    // The packet callback's source RID is the complete STREAM routing target.
-    // Zero pair fields deliberately request Core's exact current-pair snapshot
-    // for that RID; the application does not maintain or poll a route queue.
-    zlink_routed_submit_target_t target;
-    std::memset (&target, 0, sizeof (target));
-    target.peer_rid = *rid;
-
-    zlink_send_async_options_t options;
-    std::memset (&options, 0, sizeof (options));
-    options.struct_size = sizeof (options);
-    options.target = &target;
-
-    // A non-zero operation may complete before zlink_send_async returns, so
-    // publish the accounting slot first. On SUBMIT_OK, Core owns packet even
-    // when admission is pending.
-    begin_async_submission (session);
-    zlink_send_op_id_t op_id = 0;
-    const zlink_submit_result_t result = zlink_send_async (
-      session->send_socket, packet, 1, &options, &op_id);
+    zlink_completion_id_t completion_id = 0;
+    const zlink_submit_result_t result = zlink_send_part_rid (
+      session->send_socket, rid, packet, ZLINK_SEND_FLAGS_DONTWAIT,
+      ZLINK_PART_FINAL, session, &completion_id);
     const int submit_errno = zlink_errno ();
     if (result != ZLINK_SUBMIT_OK) {
-        finish_async_submission (session);
-        (void) zlink_msg_close (packet);
         errno = submit_errno;
         return false;
     }
 
-    if (op_id == 0)
+    if (completion_id == 0)
         record_immediate_admission (session);
+    else
+        session->outstanding_count.fetch_add (1, std::memory_order_acq_rel);
     return true;
 }
 
@@ -232,52 +209,119 @@ inline bool handle_packet_message (session_t *session,
     return submit_packet_async (session, rid, &packet);
 }
 
-struct packet_handler_context_t
+inline bool drain_send_completions (session_t *session)
 {
-    packet_handler_context_t () : session (NULL), stop_token (NULL) {}
-
-    session_t *session;
-    const char *stop_token;
-};
-
-inline void stream_packet_handler_callback (void *,
-                                            const zlink_routing_id_t *rid,
-                                            zlink_msg_t *header_part,
-                                            zlink_msg_t *body_part,
-                                            void *userdata)
-{
-    packet_handler_context_t *ctx = static_cast<packet_handler_context_t *> (userdata);
-    if (!ctx || !ctx->session || !rid || !header_part || !body_part) {
-        if (header_part)
-            (void) zlink_msg_close (header_part);
-        if (body_part)
-            (void) zlink_msg_close (body_part);
-        return;
+    if (!session || !session->send_socket)
+        return false;
+    for (;;) {
+        zlink_completion_t completion;
+        std::memset (&completion, 0, sizeof (completion));
+        completion.struct_size = sizeof (completion);
+        const zlink_recv_result_t rc = zlink_completion_recv (
+          session->send_socket, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc == ZLINK_RECV_NO_DATA)
+            return true;
+        if (rc != ZLINK_RECV_OK)
+            return false;
+        const bool valid = record_send_completion (session, &completion);
+        zlink_completion_close (&completion);
+        if (!valid)
+            return false;
     }
-
-    if (!handle_packet_message (ctx->session, rid, header_part, body_part,
-                                ctx->stop_token))
-        record_failure (ctx->session, zlink_errno ());
-
-    (void) zlink_msg_close (header_part);
-    (void) zlink_msg_close (body_part);
 }
 
-inline int run_server_event_loop (session_t *session)
+inline bool drain_packets (session_t *session, const char *stop_token)
+{
+    if (!session || !session->send_socket)
+        return false;
+    for (;;) {
+        const zlink_routing_id_t *rid = NULL;
+        zlink_msg_t header_part;
+        zlink_msg_t body_part;
+        if (zlink_msg_init (&header_part) != 0)
+            return false;
+        if (zlink_msg_init (&body_part) != 0) {
+            zlink_msg_close (&header_part);
+            return false;
+        }
+        const zlink_recv_result_t rc = zlink_stream_recv_packet (
+          session->send_socket, &rid, &header_part, &body_part,
+          ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc == ZLINK_RECV_NO_DATA) {
+            zlink_msg_close (&header_part);
+            zlink_msg_close (&body_part);
+            return true;
+        }
+        if (rc != ZLINK_RECV_OK || !rid || rid->size == 0) {
+            zlink_msg_close (&header_part);
+            zlink_msg_close (&body_part);
+            return false;
+        }
+        const bool handled = handle_packet_message (
+          session, rid, &header_part, &body_part, stop_token);
+        zlink_msg_close (&header_part);
+        zlink_msg_close (&body_part);
+        if (!handled)
+            return false;
+        if (perf_stop_requested ().load (std::memory_order_acquire))
+            return true;
+    }
+}
+
+inline int run_server_event_loop (session_t *session, const char *stop_token)
 {
     if (!session || !session->send_socket) {
         errno = EINVAL;
         return 1;
     }
 
-    // Backpressured admission progress is Core-owned. This thread only waits
-    // for a real STOP/failure signal; there is no POLLOUT probe or timer retry.
-    std::unique_lock<std::mutex> lock (session->stop_mutex);
-    session->stop_cv.wait (lock, [session] {
-        return perf_stop_requested ().load (std::memory_order_acquire)
-               || session->failed.load (std::memory_order_acquire);
-    });
-    return session->failed.load (std::memory_order_acquire) ? 1 : 0;
+    void *poller = zlink_poller_new ();
+    if (!poller
+        || zlink_poller_add (poller, session->send_socket, session,
+                             static_cast<short> (ZLINK_POLLIN
+                                                 | ZLINK_POLLCOMPLETION))
+             != ZLINK_CONFIG_OK) {
+        if (poller)
+            zlink_poller_destroy (&poller);
+        return 1;
+    }
+
+    std::chrono::steady_clock::time_point drain_deadline =
+      std::chrono::steady_clock::time_point::max ();
+    while (!session->failed.load (std::memory_order_acquire)) {
+        const bool stopping = perf_stop_requested ().load (std::memory_order_acquire);
+        if (stopping && drain_deadline == std::chrono::steady_clock::time_point::max ())
+            drain_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (10);
+        if (stopping && outstanding_size (session) == 0)
+            break;
+        if (stopping && std::chrono::steady_clock::now () >= drain_deadline) {
+            record_failure (session, ETIMEDOUT);
+            break;
+        }
+
+        zlink_poller_event_t event;
+        std::memset (&event, 0, sizeof (event));
+        const int poll_rc = zlink_poller_wait (
+          poller, &event, 1, perf_aux_poll_wait_ms (), NULL);
+        if (poll_rc < 0) {
+            if (zlink_errno () == EINTR)
+                continue;
+            record_failure (session, zlink_errno ());
+            break;
+        }
+        if (poll_rc > 0 && (event.events & ZLINK_POLLCOMPLETION) != 0
+            && !drain_send_completions (session)) {
+            record_failure (session, zlink_errno ());
+            break;
+        }
+        if (!stopping && poll_rc > 0 && (event.events & ZLINK_POLLIN) != 0
+            && !drain_packets (session, stop_token)) {
+            record_failure (session, zlink_errno ());
+            break;
+        }
+    }
+    const bool poller_closed = zlink_poller_destroy (&poller) == ZLINK_CLOSE_OK;
+    return !poller_closed || session->failed.load (std::memory_order_acquire) ? 1 : 0;
 }
 
 } // namespace perf_multi_stream

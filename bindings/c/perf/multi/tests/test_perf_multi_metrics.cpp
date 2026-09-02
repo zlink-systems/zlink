@@ -287,30 +287,33 @@ void test_stream_async_admission_accounting ()
     perf_multi_stream::session_t session;
     reset_stream_session_for_test (&session);
 
-    // A non-zero operation can callback before zlink_send_async returns. The
-    // pre-published slot must still balance exactly once.
-    perf_multi_stream::begin_async_submission (&session);
-    zlink_send_complete_event_t admitted;
+    session.outstanding_count.store (1, std::memory_order_release);
+    zlink_completion_t admitted;
     std::memset (&admitted, 0, sizeof (admitted));
-    admitted.op_id = 7;
-    admitted.result = ZLINK_SEND_ADMITTED;
-    perf_multi_stream::stream_send_complete_callback (NULL, &admitted, &session);
+    admitted.struct_size = sizeof (admitted);
+    admitted.kind = ZLINK_COMPLETION_SEND;
+    admitted.completion_id = 7;
+    admitted.user_context = &session;
+    admitted.send_result = ZLINK_SEND_ADMITTED;
+    require_stream_test (perf_multi_stream::record_send_completion (&session, &admitted));
     require_stream_test (perf_multi_stream::outstanding_size (&session) == 0);
     require_stream_test (session.send_count.load (std::memory_order_acquire) == 1);
     require_stream_test (!session.failed.load (std::memory_order_acquire));
 
-    perf_multi_stream::begin_async_submission (&session);
     perf_multi_stream::record_immediate_admission (&session);
     require_stream_test (perf_multi_stream::outstanding_size (&session) == 0);
     require_stream_test (session.send_count.load (std::memory_order_acquire) == 2);
 
-    perf_multi_stream::begin_async_submission (&session);
-    zlink_send_complete_event_t terminal;
+    session.outstanding_count.store (1, std::memory_order_release);
+    zlink_completion_t terminal;
     std::memset (&terminal, 0, sizeof (terminal));
-    terminal.op_id = 8;
-    terminal.result = ZLINK_SEND_TERMINAL;
-    terminal.terminal_errno = EHOSTUNREACH;
-    perf_multi_stream::stream_send_complete_callback (NULL, &terminal, &session);
+    terminal.struct_size = sizeof (terminal);
+    terminal.kind = ZLINK_COMPLETION_SEND;
+    terminal.completion_id = 8;
+    terminal.user_context = &session;
+    terminal.send_result = ZLINK_SEND_TERMINAL;
+    terminal.send_terminal_errno = EHOSTUNREACH;
+    require_stream_test (perf_multi_stream::record_send_completion (&session, &terminal));
     require_stream_test (perf_multi_stream::outstanding_size (&session) == 0);
     require_stream_test (session.failure_count.load (std::memory_order_acquire) == 1);
     require_stream_test (
@@ -336,8 +339,9 @@ std::string read_stream_session_source ()
 void test_stream_async_send_has_no_application_retry_loop ()
 {
     const std::string source = read_stream_session_source ();
-    require_stream_test (source.find ("zlink_send_async (") != std::string::npos);
-    require_stream_test (source.find ("target.peer_rid = *rid") != std::string::npos);
+    require_stream_test (source.find ("zlink_send_part_rid (") != std::string::npos);
+    require_stream_test (source.find ("zlink_completion_recv (") != std::string::npos);
+    require_stream_test (source.find ("ZLINK_SEND_FLAGS_DONTWAIT") != std::string::npos);
     require_stream_test (source.find ("perf_zlink_send_rid_parts (")
                          == std::string::npos);
     require_stream_test (source.find ("EAGAIN") == std::string::npos);

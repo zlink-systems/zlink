@@ -25,7 +25,7 @@ inline zlink_submit_result_t perf_zlink_send_measurement_parts (
         return perf_zlink_send_parts (socket, payload, 1u, flags);
 
     const zlink_submit_result_t payload_rc =
-      zlink_send_part (socket, payload, flags, ZLINK_PART_MORE);
+      zlink_send_part (socket, payload, flags, ZLINK_PART_MORE, NULL, NULL);
     if (payload_rc != ZLINK_SUBMIT_OK)
         return payload_rc;
 
@@ -33,10 +33,7 @@ inline zlink_submit_result_t perf_zlink_send_measurement_parts (
     if (zlink_msg_init (&empty_part) != 0)
         return ZLINK_SUBMIT_INTERNAL_ERROR;
     const zlink_submit_result_t rc =
-      zlink_send_part (socket, &empty_part, flags, ZLINK_PART_FINAL);
-    if (rc == ZLINK_SUBMIT_OK)
-        return rc;
-    zlink_msg_close (&empty_part);
+      zlink_send_part (socket, &empty_part, flags, ZLINK_PART_FINAL, NULL, NULL);
     return rc;
 }
 
@@ -51,7 +48,8 @@ inline zlink_submit_result_t perf_zlink_send_parts (void *socket,
     for (size_t i = 0; i < part_count; ++i) {
         const zlink_part_flag_t part_flag =
           (i + 1 < part_count) ? ZLINK_PART_MORE : ZLINK_PART_FINAL;
-        const zlink_submit_result_t rc = zlink_send_part (socket, &parts[i], flags, part_flag);
+        const zlink_submit_result_t rc =
+          zlink_send_part (socket, &parts[i], flags, part_flag, NULL, NULL);
         if (rc != ZLINK_SUBMIT_OK)
             return rc;
     }
@@ -71,7 +69,7 @@ inline zlink_submit_result_t perf_zlink_send_rid_parts (void *socket,
         const zlink_part_flag_t part_flag =
           (i + 1 < part_count) ? ZLINK_PART_MORE : ZLINK_PART_FINAL;
         const zlink_submit_result_t rc =
-          zlink_send_part_rid (socket, target_rid, &parts[i], flags, part_flag);
+          zlink_send_part_rid (socket, target_rid, &parts[i], flags, part_flag, NULL, NULL);
         if (rc != ZLINK_SUBMIT_OK)
             return rc;
     }
@@ -88,7 +86,7 @@ inline zlink_submit_result_t perf_zlink_send_rid_measurement_parts (
         return perf_zlink_send_rid_parts (socket, target_rid, payload, 1u, flags);
 
     const zlink_submit_result_t payload_rc =
-      zlink_send_part_rid (socket, target_rid, payload, flags, ZLINK_PART_MORE);
+      zlink_send_part_rid (socket, target_rid, payload, flags, ZLINK_PART_MORE, NULL, NULL);
     if (payload_rc != ZLINK_SUBMIT_OK)
         return payload_rc;
 
@@ -96,10 +94,7 @@ inline zlink_submit_result_t perf_zlink_send_rid_measurement_parts (
     if (zlink_msg_init (&empty_part) != 0)
         return ZLINK_SUBMIT_INTERNAL_ERROR;
     const zlink_submit_result_t rc = zlink_send_part_rid (
-      socket, target_rid, &empty_part, flags, ZLINK_PART_FINAL);
-    if (rc == ZLINK_SUBMIT_OK)
-        return rc;
-    zlink_msg_close (&empty_part);
+      socket, target_rid, &empty_part, flags, ZLINK_PART_FINAL, NULL, NULL);
     return rc;
 }
 
@@ -150,71 +145,68 @@ inline zlink_submit_result_t perf_zlink_publish_measurement_parts (
 
 inline zlink_submit_result_t perf_zlink_dealer_request_measurement_part (
   void *dealer, zlink_msg_t *payload, zlink_send_flags_t flags,
-  uint32_t timeout_ms, zlink_reply_handler_fn handler, void *userdata)
+  uint32_t timeout_ms, void *user_context, zlink_completion_id_t *completion_id_out)
 {
     if (!dealer || !payload)
         return ZLINK_SUBMIT_INVALID_ARGUMENT;
     if (perf_measurement_part_count () == 1u)
-        return zlink_dealer_request_part (dealer, payload, flags, ZLINK_PART_FINAL,
-                                          timeout_ms, handler, userdata);
-    const zlink_submit_result_t payload_rc = zlink_dealer_request_part (
-      dealer, payload, flags, ZLINK_PART_MORE, 0, NULL, NULL);
+        return zlink_request_part (dealer, NULL, payload, flags, ZLINK_PART_FINAL,
+                                   timeout_ms, user_context, completion_id_out);
+    const zlink_submit_result_t payload_rc = zlink_request_part (
+      dealer, NULL, payload, flags, ZLINK_PART_MORE, 0, NULL, NULL);
     if (payload_rc != ZLINK_SUBMIT_OK)
         return payload_rc;
     zlink_msg_t empty_part;
     if (zlink_msg_init (&empty_part) != 0)
         return ZLINK_SUBMIT_INTERNAL_ERROR;
-    const zlink_submit_result_t rc = zlink_dealer_request_part (
-      dealer, &empty_part, flags, ZLINK_PART_FINAL, timeout_ms, handler, userdata);
-    if (rc != ZLINK_SUBMIT_OK)
-        zlink_msg_close (&empty_part);
+    const zlink_submit_result_t rc = zlink_request_part (
+      dealer, NULL, &empty_part, flags, ZLINK_PART_FINAL, timeout_ms,
+      user_context, completion_id_out);
     return rc;
 }
 
 inline zlink_submit_result_t perf_zlink_router_request_measurement_part (
   void *router, const zlink_routing_id_t *peer_rid, zlink_msg_t *payload,
-  zlink_send_flags_t flags, uint32_t timeout_ms, zlink_reply_handler_fn handler,
-  void *userdata)
+  zlink_send_flags_t flags, uint32_t timeout_ms, void *user_context,
+  zlink_completion_id_t *completion_id_out)
 {
     if (!router || !peer_rid || !payload)
         return ZLINK_SUBMIT_INVALID_ARGUMENT;
     if (perf_measurement_part_count () == 1u)
-        return zlink_router_request_part (router, peer_rid, payload, flags,
-                                          ZLINK_PART_FINAL, timeout_ms, handler, userdata);
-    const zlink_submit_result_t payload_rc = zlink_router_request_part (
+        return zlink_request_part (router, peer_rid, payload, flags,
+                                   ZLINK_PART_FINAL, timeout_ms, user_context,
+                                   completion_id_out);
+    const zlink_submit_result_t payload_rc = zlink_request_part (
       router, peer_rid, payload, flags, ZLINK_PART_MORE, 0, NULL, NULL);
     if (payload_rc != ZLINK_SUBMIT_OK)
         return payload_rc;
     zlink_msg_t empty_part;
     if (zlink_msg_init (&empty_part) != 0)
         return ZLINK_SUBMIT_INTERNAL_ERROR;
-    const zlink_submit_result_t rc = zlink_router_request_part (
-      router, peer_rid, &empty_part, flags, ZLINK_PART_FINAL, timeout_ms, handler, userdata);
-    if (rc != ZLINK_SUBMIT_OK)
-        zlink_msg_close (&empty_part);
+    const zlink_submit_result_t rc = zlink_request_part (
+      router, peer_rid, &empty_part, flags, ZLINK_PART_FINAL, timeout_ms,
+      user_context, completion_id_out);
     return rc;
 }
 
 inline zlink_submit_result_t perf_zlink_router_reply_measurement_part (
-  void *router, const zlink_routing_id_t *peer_rid, uint64_t request_seq,
+  void *router, const zlink_routing_id_t *peer_rid, zlink_reply_token_t reply_token,
   zlink_msg_t *payload)
 {
     if (!router || !peer_rid || !payload)
         return ZLINK_SUBMIT_INVALID_ARGUMENT;
     if (perf_measurement_part_count () == 1u)
-        return zlink_router_reply_part (router, peer_rid, request_seq, payload,
-                                        ZLINK_PART_FINAL);
-    const zlink_submit_result_t payload_rc = zlink_router_reply_part (
-      router, peer_rid, request_seq, payload, ZLINK_PART_MORE);
+        return zlink_reply_part (router, peer_rid, reply_token, payload,
+                                 ZLINK_PART_FINAL);
+    const zlink_submit_result_t payload_rc = zlink_reply_part (
+      router, peer_rid, reply_token, payload, ZLINK_PART_MORE);
     if (payload_rc != ZLINK_SUBMIT_OK)
         return payload_rc;
     zlink_msg_t empty_part;
     if (zlink_msg_init (&empty_part) != 0)
         return ZLINK_SUBMIT_INTERNAL_ERROR;
-    const zlink_submit_result_t rc = zlink_router_reply_part (
-      router, peer_rid, request_seq, &empty_part, ZLINK_PART_FINAL);
-    if (rc != ZLINK_SUBMIT_OK)
-        zlink_msg_close (&empty_part);
+    const zlink_submit_result_t rc = zlink_reply_part (
+      router, peer_rid, reply_token, &empty_part, ZLINK_PART_FINAL);
     return rc;
 }
 
@@ -320,8 +312,8 @@ inline zlink_recv_result_t
 perf_zlink_recv_next_router (void *socket, zlink_msg_t *part_out, zlink_part_flag_t *has_more_out)
 {
     const zlink_routing_id_t *source_node_rid = NULL;
-    uint64_t request_seq = 0;
-    return zlink_router_recv_part (socket, &source_node_rid, &request_seq, part_out, has_more_out,
+    zlink_reply_token_t reply_token = 0;
+    return zlink_router_recv_part (socket, &source_node_rid, &reply_token, part_out, has_more_out,
                                    ZLINK_RECV_FLAGS_DONTWAIT);
 }
 
@@ -365,7 +357,7 @@ inline zlink_recv_result_t perf_zlink_recv_parts (void *socket,
 inline zlink_recv_result_t
 perf_zlink_router_recv_parts (void *router,
                               const zlink_routing_id_t **source_node_rid_out,
-                              uint64_t *request_seq_out,
+                              zlink_reply_token_t *reply_token_out,
                               zlink_msg_t **parts_out,
                               size_t *part_count_out,
                               zlink_recv_flags_t flags)
@@ -380,7 +372,7 @@ perf_zlink_router_recv_parts (void *router,
         return ZLINK_RECV_INTERNAL_ERROR;
 
     const zlink_recv_result_t rc = zlink_router_recv_part (
-      router, source_node_rid_out, request_seq_out, &first, &has_more, flags);
+      router, source_node_rid_out, reply_token_out, &first, &has_more, flags);
     if (rc != ZLINK_RECV_OK) {
         zlink_msg_close (&first);
         return rc;

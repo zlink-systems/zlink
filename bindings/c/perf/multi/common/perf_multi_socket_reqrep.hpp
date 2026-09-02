@@ -127,12 +127,11 @@ inline bool is_transient_submit (zlink_submit_result_t rc, int err)
            || err == EINTR || err == ETIMEDOUT;
 }
 
-inline void on_request_reply (zlink_request_result_t result,
-                              zlink_msg_t *parts,
-                              size_t part_count,
-                              void *userdata)
+inline void record_request_completion (client_slot_t *slot,
+                                       zlink_request_result_t result,
+                                       zlink_msg_t *parts,
+                                       size_t part_count)
 {
-    client_slot_t *slot = static_cast<client_slot_t *> (userdata);
     if (!slot || !slot->owner)
         return;
 
@@ -202,38 +201,83 @@ inline bool submit_request (const endpoint_config_t &config,
     if (payload_size > 0)
         std::memcpy (zlink_msg_data (&part), slot->payload.data (), payload_size);
 
-    ++slot->outstanding;
+    zlink_completion_id_t completion_id = 0;
     zlink_submit_result_t rc = ZLINK_SUBMIT_INVALID_ARGUMENT;
     if (config.client_router_request) {
         if (!target_rid || target_rid->size == 0) {
             zlink_msg_close (&part);
-            --slot->outstanding;
             errno = EINVAL;
             return false;
         }
         rc = perf_zlink_router_request_measurement_part (
           slot->socket, target_rid, &part, ZLINK_SEND_FLAGS_DONTWAIT, timeout_ms,
-          on_request_reply, slot);
+          slot, &completion_id);
     } else {
         rc = perf_zlink_dealer_request_measurement_part (
           slot->socket, &part, ZLINK_SEND_FLAGS_DONTWAIT, timeout_ms,
-          on_request_reply, slot);
+          slot, &completion_id);
     }
 
-    if (rc == ZLINK_SUBMIT_OK) {
+    if (rc == ZLINK_SUBMIT_OK && completion_id != 0) {
+        ++slot->outstanding;
         ++slot->next_seq;
         return true;
     }
 
     const int err = zlink_errno ();
-    zlink_msg_close (&part);
-    --slot->outstanding;
+    if (rc == ZLINK_SUBMIT_OK) {
+        errno = EPROTO;
+        return false;
+    }
     if (is_transient_submit (rc, err)) {
         if (blocked_out)
             *blocked_out = true;
         return true;
     }
     return false;
+}
+
+inline bool drain_socket_completions (client_state_t *state, void *socket)
+{
+    if (!state || !socket)
+        return false;
+    for (;;) {
+        zlink_completion_t completion;
+        std::memset (&completion, 0, sizeof (completion));
+        completion.struct_size = sizeof (completion);
+        const zlink_recv_result_t rc = zlink_completion_recv (
+          socket, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc == ZLINK_RECV_NO_DATA)
+            return true;
+        if (rc != ZLINK_RECV_OK)
+            return false;
+        client_slot_t *slot = static_cast<client_slot_t *> (completion.user_context);
+        const bool valid = completion.kind == ZLINK_COMPLETION_REQUEST
+                           && completion.completion_id != 0 && slot
+                           && slot->owner == state && slot->socket == socket
+                           && slot->outstanding != 0;
+        if (valid) {
+            record_request_completion (slot, completion.request_result,
+                                       completion.reply_parts,
+                                       completion.reply_part_count);
+        }
+        zlink_completion_close (&completion);
+        if (!valid)
+            return false;
+    }
+}
+
+inline bool drain_ready_completions (client_state_t *state, int event_count)
+{
+    if (!state || event_count < 0)
+        return false;
+    for (int i = 0; i < event_count; ++i) {
+        const zlink_poller_event_t &event = state->events[static_cast<size_t> (i)];
+        if ((event.events & ZLINK_POLLCOMPLETION) != 0
+            && !drain_socket_completions (state, event.socket))
+            return false;
+    }
+    return true;
 }
 
 inline bool any_waiting_reply (const client_state_t &state)
@@ -265,8 +309,10 @@ inline bool drain_pending_replies (client_state_t *state, uint32_t request_timeo
                 continue;
             return false;
         }
+        if (!drain_ready_completions (state, event_count))
+            return false;
     }
-    return true;
+    return !any_waiting_reply (*state);
 }
 
 inline bool run_active_window (const endpoint_config_t &config,
@@ -334,6 +380,8 @@ inline bool run_active_window (const endpoint_config_t &config,
                 continue;
             return false;
         }
+        if (!drain_ready_completions (state, event_count))
+            return false;
     }
 
     if (state->fatal)
@@ -494,26 +542,25 @@ inline int run_client_benchmark (const endpoint_config_t &config,
 
 inline bool submit_router_reply_with_retry (void *server,
                                             const zlink_routing_id_t *source_rid,
-                                            uint64_t request_seq,
+                                            zlink_reply_token_t reply_token,
                                             zlink_msg_t *part)
 {
-    if (!server || !source_rid || request_seq == 0 || !part)
+    if (!server || !source_rid || reply_token == 0 || !part)
         return false;
 
     if (perf_measurement_part_count () == 2u) {
-        const zlink_submit_result_t payload_rc = zlink_router_reply_part (
-          server, source_rid, request_seq, part, ZLINK_PART_MORE);
+        const zlink_submit_result_t payload_rc = zlink_reply_part (
+          server, source_rid, reply_token, part, ZLINK_PART_MORE);
         if (payload_rc != ZLINK_SUBMIT_OK)
             return false;
         while (!perf_stop_requested ().load (std::memory_order_acquire)) {
             zlink_msg_t empty_part;
             if (zlink_msg_init (&empty_part) != 0)
                 return false;
-            const zlink_submit_result_t final_rc = zlink_router_reply_part (
-              server, source_rid, request_seq, &empty_part, ZLINK_PART_FINAL);
+            const zlink_submit_result_t final_rc = zlink_reply_part (
+              server, source_rid, reply_token, &empty_part, ZLINK_PART_FINAL);
             if (final_rc == ZLINK_SUBMIT_OK)
                 return true;
-            zlink_msg_close (&empty_part);
             if (final_rc != ZLINK_SUBMIT_BACKPRESSURED)
                 return false;
             zlink_pollitem_t item = {server, 0, ZLINK_POLLOUT, 0};
@@ -537,7 +584,7 @@ inline bool submit_router_reply_with_retry (void *server,
     }
 
     zlink_submit_result_t reply_rc =
-      zlink_router_reply_part (server, source_rid, request_seq, part, ZLINK_PART_FINAL);
+      zlink_reply_part (server, source_rid, reply_token, part, ZLINK_PART_FINAL);
     while (reply_rc == ZLINK_SUBMIT_BACKPRESSURED
            && !perf_stop_requested ().load (std::memory_order_acquire)) {
         zlink_pollitem_t item = {server, 0, ZLINK_POLLOUT, 0};
@@ -559,8 +606,8 @@ inline bool submit_router_reply_with_retry (void *server,
             reply_rc = ZLINK_SUBMIT_TERMINATED;
             break;
         }
-        reply_rc =
-          zlink_router_reply_part (server, source_rid, request_seq, &retry, ZLINK_PART_FINAL);
+        reply_rc = zlink_reply_part (
+          server, source_rid, reply_token, &retry, ZLINK_PART_FINAL);
     }
 
     zlink_msg_close (&retry_template);
@@ -582,14 +629,14 @@ inline server_recv_step_t reply_one_request (void *server,
                                              size_t *active_msg_size)
 {
     const zlink_routing_id_t *source_rid = NULL;
-    uint64_t request_seq = 0;
+    zlink_reply_token_t reply_token = 0;
     zlink_msg_t part;
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
     if (zlink_msg_init (&part) != 0)
         return server_recv_step_error;
 
     const int rc =
-      zlink_router_recv_part (server, &source_rid, &request_seq, &part,
+      zlink_router_recv_part (server, &source_rid, &reply_token, &part,
                               &has_more, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
     if (rc != 0) {
         const int err = zlink_errno ();
@@ -599,7 +646,7 @@ inline server_recv_step_t reply_one_request (void *server,
         return server_recv_step_error;
     }
 
-    if (!source_rid || source_rid->size == 0 || request_seq == 0
+    if (!source_rid || source_rid->size == 0 || reply_token == 0
         || !perf_zlink_recv_measurement_tail (
           server, has_more, ZLINK_RECV_FLAGS_DONTWAIT, perf_zlink_recv_next_router)) {
         zlink_msg_close (&part);
@@ -615,7 +662,7 @@ inline server_recv_step_t reply_one_request (void *server,
                                       socket_type);
     }
 
-    if (submit_router_reply_with_retry (server, source_rid, request_seq, &part))
+    if (submit_router_reply_with_retry (server, source_rid, reply_token, &part))
         return server_recv_step_replied;
 
     const int reply_err = zlink_errno ();

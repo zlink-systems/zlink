@@ -116,18 +116,6 @@ class socket_guard_t
         _socket (zlink_socket (ctx_, static_cast<zlink_socket_type_t> (type_)))
     {
     }
-    socket_guard_t (void *ctx_,
-                    int type_,
-                    zlink_socket_msg_handler_fn handler_,
-                    void *userdata_ = NULL) :
-        _socket (zlink_socket (ctx_, static_cast<zlink_socket_type_t> (type_)))
-    {
-        if (_socket && handler_
-            && zlink_recv_handler (_socket, handler_, userdata_) != ZLINK_HANDLER_OK) {
-            zlink_close (_socket);
-            _socket = NULL;
-        }
-    }
     ~socket_guard_t ()
     {
         if (_socket)

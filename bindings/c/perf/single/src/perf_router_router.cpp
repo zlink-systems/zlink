@@ -71,16 +71,16 @@ bool perform_router_router_handshake (void *receiver_,
                 return false;
         } else {
             const zlink_routing_id_t *source_rid = NULL;
-            uint64_t request_seq = 0;
+            zlink_reply_token_t reply_token = 0;
             zlink_msg_t part;
             zlink_part_flag_t has_more = ZLINK_PART_FINAL;
             if (zlink_msg_init (&part) != 0)
                 return false;
             const int recv_rc =
-              zlink_router_recv_part (receiver_, &source_rid, &request_seq, &part,
+              zlink_router_recv_part (receiver_, &source_rid, &reply_token, &part,
                                       &has_more, ZLINK_RECV_FLAGS_DONTWAIT);
             if (recv_rc == 0) {
-                connected = source_rid && source_rid->size > 0 && request_seq == 0
+                connected = source_rid && source_rid->size > 0 && reply_token == 0
                             && has_more == ZLINK_PART_FINAL && zlink_msg_size (&part) == 4
                             && std::memcmp (zlink_msg_data (&part), "PING", 4) == 0;
                 if (connected)
@@ -121,19 +121,19 @@ bool perform_router_router_handshake (void *receiver_,
     }
 
     const zlink_routing_id_t *source_rid = NULL;
-    uint64_t request_seq = 0;
+    zlink_reply_token_t reply_token = 0;
     zlink_msg_t part;
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
     if (zlink_msg_init (&part) != 0)
         return false;
-    if (zlink_router_recv_part (sender_, &source_rid, &request_seq, &part,
+    if (zlink_router_recv_part (sender_, &source_rid, &reply_token, &part,
                                 &has_more, ZLINK_RECV_FLAGS_NONE)
         != 0) {
         zlink_msg_close (&part);
         return false;
     }
 
-    const bool ok = source_rid && source_rid->size > 0 && request_seq == 0
+    const bool ok = source_rid && source_rid->size > 0 && reply_token == 0
                     && has_more == ZLINK_PART_FINAL && zlink_msg_size (&part) == 4
                     && std::memcmp (zlink_msg_data (&part), "PONG", 4) == 0;
     if (ok && target_rid_out_) {
@@ -151,12 +151,12 @@ void drain_router_socket (void *socket_)
 
     for (;;) {
         const zlink_routing_id_t *source_rid = NULL;
-        uint64_t request_seq = 0;
+        zlink_reply_token_t reply_token = 0;
         zlink_msg_t part;
         zlink_part_flag_t has_more = ZLINK_PART_FINAL;
         if (zlink_msg_init (&part) != 0)
             return;
-        if (zlink_router_recv_part (socket_, &source_rid, &request_seq, &part,
+        if (zlink_router_recv_part (socket_, &source_rid, &reply_token, &part,
                                     &has_more, ZLINK_RECV_FLAGS_DONTWAIT)
             != 0) {
             zlink_msg_close (&part);
@@ -273,13 +273,13 @@ int recv_router_router_header_flags (void *receiver_,
         *header_ok_out_ = false;
 
     const zlink_routing_id_t *source_rid = NULL;
-    uint64_t request_seq = 0;
+    zlink_reply_token_t reply_token = 0;
     zlink_msg_t part;
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
     if (zlink_msg_init (&part) != 0)
         return -1;
     const int rc =
-      zlink_router_recv_part (receiver_, &source_rid, &request_seq, &part,
+      zlink_router_recv_part (receiver_, &source_rid, &reply_token, &part,
                               &has_more, static_cast<zlink_recv_flags_t> (flags_));
     if (rc != 0) {
         const int err = zlink_errno ();
@@ -290,12 +290,12 @@ int recv_router_router_header_flags (void *receiver_,
     }
 
     const bool rid_ok = source_rid && source_rid->size > 0;
-    const bool shape_ok = rid_ok && request_seq == 0;
+    const bool shape_ok = rid_ok && reply_token == 0;
     if (!shape_ok) {
         if (bench_debug_enabled ()) {
             std::cerr << "[perf-router-router] invalid routed recv"
                       << " rid_size=" << static_cast<int> (source_rid ? source_rid->size : 0)
-                      << " request_seq=" << request_seq
+                      << " reply_token=" << reply_token
                       << " has_more=" << static_cast<int> (has_more) << std::endl;
         }
         zlink_msg_close (&part);

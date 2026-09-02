@@ -16,18 +16,18 @@ namespace
 bool recv_ping (void *server_, zlink_routing_id_t *client_rid_out_)
 {
     const zlink_routing_id_t *source_rid = NULL;
-    uint64_t request_seq = 0;
+    zlink_reply_token_t reply_token = 0;
     zlink_msg_t part;
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
     if (zlink_msg_init (&part) != 0)
         return false;
-    const int rc = zlink_router_recv_part (server_, &source_rid, &request_seq,
+    const int rc = zlink_router_recv_part (server_, &source_rid, &reply_token,
                                            &part, &has_more, ZLINK_RECV_FLAGS_DONTWAIT);
     if (rc != 0) {
         zlink_msg_close (&part);
         return false;
     }
-    const bool ok = source_rid && source_rid->size > 0 && request_seq == 0
+    const bool ok = source_rid && source_rid->size > 0 && reply_token == 0
                     && has_more == ZLINK_PART_FINAL && zlink_msg_size (&part) == 4
                     && std::memcmp (zlink_msg_data (&part), "PING", 4) == 0;
     if (ok && client_rid_out_) {
@@ -83,12 +83,12 @@ bool perform_handshake (void *server_,
     }
 
     const zlink_routing_id_t *source_rid = NULL;
-    uint64_t request_seq = 0;
+    zlink_reply_token_t reply_token = 0;
     zlink_msg_t part;
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
     if (zlink_msg_init (&part) != 0)
         return false;
-    if (zlink_router_recv_part (client_, &source_rid, &request_seq, &part,
+    if (zlink_router_recv_part (client_, &source_rid, &reply_token, &part,
                                 &has_more, ZLINK_RECV_FLAGS_NONE)
         != 0) {
         zlink_msg_close (&part);
@@ -96,7 +96,7 @@ bool perform_handshake (void *server_,
     }
     const bool ok = source_rid && source_rid->size == server_rid_->size
                     && std::memcmp (source_rid->data, server_rid_->data, source_rid->size) == 0
-                    && request_seq == 0
+                    && reply_token == 0
                     && has_more == ZLINK_PART_FINAL && zlink_msg_size (&part) == 4
                     && std::memcmp (zlink_msg_data (&part), "PONG", 4) == 0;
     zlink_msg_close (&part);
@@ -212,11 +212,11 @@ void run_router_router_reqrep (const std::string &transport,
     latency_stats_t latency;
     const bool ok = perf_single_reqrep::run_requester (
       requester.get (), &request_state, &payload, duration_s,
-      [&] (zlink_msg_t *part_, uint32_t timeout_ms_, zlink_reply_handler_fn handler_,
-           void *userdata_) {
+      [&] (zlink_msg_t *part_, uint32_t timeout_ms_, void *user_context_,
+           zlink_completion_id_t *completion_id_out_) {
           return perf_zlink_router_request_measurement_part (
             requester.get (), &server_rid, part_, ZLINK_SEND_FLAGS_NONE,
-            timeout_ms_, handler_, userdata_);
+            timeout_ms_, user_context_, completion_id_out_);
       },
       &completion_poller, &completed, &latency);
 

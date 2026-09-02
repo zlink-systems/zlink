@@ -132,13 +132,12 @@ inline bool init_routing_id_text (const char *text_, zlink_routing_id_t *rid_out
     return true;
 }
 
-inline void on_request_reply (zlink_request_result_t result_,
-                              zlink_msg_t *parts_,
-                              size_t part_count_,
-                              void *userdata_)
+inline void record_request_completion (request_state_t *state_,
+                                       zlink_request_result_t result_,
+                                       zlink_msg_t *parts_,
+                                       size_t part_count_)
 {
-    request_state_t *state = static_cast<request_state_t *> (userdata_);
-    if (!state)
+    if (!state_)
         return;
 
     const std::chrono::steady_clock::time_point completed_at =
@@ -147,8 +146,8 @@ inline void on_request_reply (zlink_request_result_t result_,
     if (result_ == ZLINK_REQUEST_OK && parts_
         && part_count_ == perf_measurement_part_count ()) {
         if (part_count_ == 2 && zlink_msg_size (&parts_[1]) != 0) {
-            state->fatal.store (true, std::memory_order_release);
-            state->in_flight.fetch_sub (1, std::memory_order_release);
+            state_->fatal.store (true, std::memory_order_release);
+            state_->in_flight.fetch_sub (1, std::memory_order_release);
             return;
         }
         perf_single_metric::header_t header;
@@ -156,27 +155,27 @@ inline void on_request_reply (zlink_request_result_t result_,
         if (perf_single_metric::decode_payload_header (zlink_msg_data (const_cast<zlink_msg_t *> (&part)),
                                                        zlink_msg_size (const_cast<zlink_msg_t *> (&part)),
                                                        &header)
-            && perf_single_metric::is_expected (header, state->run_id,
+            && perf_single_metric::is_expected (header, state_->run_id,
                                                 perf_single_metric::phase_active,
-                                                state->msg_size)
-            && completed_at < state->active_deadline) {
+                                                state_->msg_size)
+            && completed_at < state_->active_deadline) {
             const uint64_t now_ns = perf_single_metric::now_ns ();
             if (now_ns >= static_cast<uint64_t> (header.sent_ts_ns)) {
                 {
-                    std::lock_guard<std::mutex> guard (state->latency_mutex);
-                    state->latency.add (
+                    std::lock_guard<std::mutex> guard (state_->latency_mutex);
+                    state_->latency.add (
                       static_cast<double> (now_ns - static_cast<uint64_t> (header.sent_ts_ns)));
                 }
-                state->completed.fetch_add (1, std::memory_order_relaxed);
+                state_->completed.fetch_add (1, std::memory_order_relaxed);
             }
         }
     } else if (result_ != ZLINK_REQUEST_TIMED_OUT) {
         if (bench_debug_enabled ())
             std::cerr << "[perf-single-reqrep] request callback failed result=" << result_
                       << std::endl;
-        state->fatal.store (true, std::memory_order_release);
+        state_->fatal.store (true, std::memory_order_release);
     }
-    state->in_flight.fetch_sub (1, std::memory_order_release);
+    state_->in_flight.fetch_sub (1, std::memory_order_release);
 }
 
 template <typename SubmitFn>
@@ -200,14 +199,21 @@ inline submit_step_t submit_request (request_state_t *state_,
     if (!payload_->empty ())
         std::memcpy (zlink_msg_data (&part), payload_->data (), payload_->size ());
 
-    state_->in_flight.fetch_add (1, std::memory_order_release);
-    const zlink_submit_result_t rc = submit_fn_ (&part, timeout_ms_, on_request_reply, state_);
-    if (rc == ZLINK_SUBMIT_OK)
+    zlink_completion_id_t completion_id = 0;
+    const zlink_submit_result_t rc =
+      submit_fn_ (&part, timeout_ms_, state_, &completion_id);
+    if (rc == ZLINK_SUBMIT_OK && completion_id != 0) {
+        state_->in_flight.fetch_add (1, std::memory_order_release);
         return submit_step_submitted;
+    }
 
     const int err = zlink_errno ();
-    zlink_msg_close (&part);
-    state_->in_flight.fetch_sub (1, std::memory_order_release);
+    if (rc == ZLINK_SUBMIT_OK) {
+        if (bench_debug_enabled ())
+            std::cerr << "[perf-single-reqrep] successful request returned zero completion id"
+                      << std::endl;
+        return submit_step_fatal;
+    }
     if (rc == ZLINK_SUBMIT_BACKPRESSURED || err == EAGAIN || err == EWOULDBLOCK || err == EINTR
         || err == ETIMEDOUT || err == EHOSTUNREACH || err == ENOTCONN)
         return submit_step_blocked;
@@ -217,7 +223,38 @@ inline submit_step_t submit_request (request_state_t *state_,
     return submit_step_fatal;
 }
 
-inline bool poll_completion_once (void *poller_, long timeout_ms_)
+inline bool drain_request_completions (void *requester_, request_state_t *state_)
+{
+    if (!requester_ || !state_)
+        return false;
+    for (;;) {
+        zlink_completion_t completion;
+        std::memset (&completion, 0, sizeof (completion));
+        completion.struct_size = sizeof (completion);
+        const zlink_recv_result_t rc = zlink_completion_recv (
+          requester_, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc == ZLINK_RECV_NO_DATA)
+            return true;
+        if (rc != ZLINK_RECV_OK)
+            return false;
+        const bool valid = completion.kind == ZLINK_COMPLETION_REQUEST
+                           && completion.completion_id != 0
+                           && completion.user_context == state_;
+        if (valid) {
+            record_request_completion (state_, completion.request_result,
+                                       completion.reply_parts,
+                                       completion.reply_part_count);
+        }
+        zlink_completion_close (&completion);
+        if (!valid)
+            return false;
+    }
+}
+
+inline bool poll_completion_once (void *poller_,
+                                  void *requester_,
+                                  request_state_t *state_,
+                                  long timeout_ms_)
 {
     zlink_poller_event_t event;
     std::memset (&event, 0, sizeof (event));
@@ -225,7 +262,7 @@ inline bool poll_completion_once (void *poller_, long timeout_ms_)
     const int rc = zlink_poller_wait (poller_, &event, 1, timeout_ms_, &error);
     if (rc < 0)
         return zlink_errno () == EINTR;
-    return true;
+    return drain_request_completions (requester_, state_);
 }
 
 template <typename SubmitFn>
@@ -276,7 +313,7 @@ inline bool run_requester (void *requester_,
                 ++submitted_since_progress;
                 if (submitted_since_progress >= 64) {
                     submitted_since_progress = 0;
-                    if (!poll_completion_once (poller, 0)) {
+                    if (!poll_completion_once (poller, requester_, state_, 0)) {
                         state_->fatal.store (true, std::memory_order_release);
                         break;
                     }
@@ -294,7 +331,7 @@ inline bool run_requester (void *requester_,
             (void) perf_socket_poll (NULL, 0, 1);
             continue;
         }
-        if (!poll_completion_once (poller, 50)) {
+        if (!poll_completion_once (poller, requester_, state_, 50)) {
             state_->fatal.store (true, std::memory_order_release);
             break;
         }
@@ -304,7 +341,7 @@ inline bool run_requester (void *requester_,
                                 + std::chrono::milliseconds (drain_timeout_ms);
     while (state_->in_flight.load (std::memory_order_acquire) > 0
            && std::chrono::steady_clock::now () < drain_deadline) {
-        if (!poll_completion_once (poller, 50)) {
+        if (!poll_completion_once (poller, requester_, state_, 50)) {
             state_->fatal.store (true, std::memory_order_release);
             break;
         }
@@ -346,10 +383,10 @@ inline bool run_requester (void *requester_,
 
 inline int recv_router_request (void *router_,
                                 zlink_routing_id_t *source_rid_out_,
-                                uint64_t *request_seq_out_,
+                                zlink_reply_token_t *reply_token_out_,
                                 zlink_msg_t *payload_out_)
 {
-    if (!router_ || !source_rid_out_ || !request_seq_out_ || !payload_out_)
+    if (!router_ || !source_rid_out_ || !reply_token_out_ || !payload_out_)
         return -1;
 
     const zlink_routing_id_t *source_rid = NULL;
@@ -361,7 +398,7 @@ inline int recv_router_request (void *router_,
         return -1;
     }
     const zlink_recv_result_t rc =
-      zlink_router_recv_part (router_, &source_rid, request_seq_out_, payload_out_,
+      zlink_router_recv_part (router_, &source_rid, reply_token_out_, payload_out_,
                               &has_more, ZLINK_RECV_FLAGS_NONE);
     if (rc != ZLINK_RECV_OK) {
         zlink_msg_close (payload_out_);
@@ -381,7 +418,7 @@ inline int recv_router_request (void *router_,
             std::cerr << "[perf-single-reqrep] invalid router recv metadata source_rid="
                       << (source_rid ? static_cast<unsigned int> (source_rid->size) : 0)
                       << " has_more=" << has_more
-                      << " request_seq=" << *request_seq_out_ << std::endl;
+                      << " reply_token=" << *reply_token_out_ << std::endl;
         zlink_msg_close (payload_out_);
         return -1;
     }
@@ -397,9 +434,9 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
         return;
     while (!state_->stop.load (std::memory_order_acquire)) {
         zlink_routing_id_t source_rid;
-        uint64_t request_seq = 0;
+        zlink_reply_token_t reply_token = 0;
         zlink_msg_t request;
-        const int recv_rc = recv_router_request (router_, &source_rid, &request_seq, &request);
+        const int recv_rc = recv_router_request (router_, &source_rid, &reply_token, &request);
         if (recv_rc == 0)
             continue;
         if (recv_rc < 0) {
@@ -414,14 +451,14 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
             zlink_msg_close (&request);
             return;
         }
-        if (request_seq == 0) {
+        if (reply_token == 0) {
             zlink_msg_close (&request);
             continue;
         }
 
         if (perf_measurement_part_count () == 2u) {
-            zlink_submit_result_t payload_rc = zlink_router_reply_part (
-              router_, &source_rid, request_seq, &request, ZLINK_PART_MORE);
+            zlink_submit_result_t payload_rc = zlink_reply_part (
+              router_, &source_rid, reply_token, &request, ZLINK_PART_MORE);
             if (payload_rc != ZLINK_SUBMIT_OK) {
                 state_->fatal.store (true, std::memory_order_release);
                 return;
@@ -438,10 +475,8 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
                     state_->fatal.store (true, std::memory_order_release);
                     return;
                 }
-                final_rc = zlink_router_reply_part (
-                  router_, &source_rid, request_seq, &empty_part, ZLINK_PART_FINAL);
-                if (final_rc != ZLINK_SUBMIT_OK)
-                    zlink_msg_close (&empty_part);
+                final_rc = zlink_reply_part (
+                  router_, &source_rid, reply_token, &empty_part, ZLINK_PART_FINAL);
                 if (final_rc == ZLINK_SUBMIT_BACKPRESSURED)
                     std::this_thread::yield ();
             }
@@ -466,8 +501,8 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
             return;
         }
 
-        zlink_submit_result_t reply_rc = zlink_router_reply_part (
-          router_, &source_rid, request_seq, &request, ZLINK_PART_FINAL);
+        zlink_submit_result_t reply_rc = zlink_reply_part (
+          router_, &source_rid, reply_token, &request, ZLINK_PART_FINAL);
         if (reply_rc == ZLINK_SUBMIT_BACKPRESSURED) {
             const auto retry_deadline =
               std::chrono::steady_clock::now ()
@@ -486,8 +521,8 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
                     return;
                 }
                 std::this_thread::yield ();
-                reply_rc = zlink_router_reply_part (
-                  router_, &source_rid, request_seq, &retry, ZLINK_PART_FINAL);
+                reply_rc = zlink_reply_part (
+                  router_, &source_rid, reply_token, &retry, ZLINK_PART_FINAL);
             }
         }
         zlink_msg_close (&retry_template);

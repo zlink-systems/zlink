@@ -154,12 +154,6 @@ inline bool open_connect_monitor (void *socket_, connect_monitor_t &out_)
         delete state;
         return false;
     }
-    if (zlink_socket_monitor_handler (monitor, &connect_monitor_handler, state) != 0) {
-        zlink_monitor_close (&monitor);
-        delete state;
-        return false;
-    }
-
     set_sockopt_int (monitor, ZLINK_OPT_LINGER, 0, "ZLINK_OPT_LINGER");
 
     out_.monitor = monitor;
@@ -284,9 +278,25 @@ wait_for_socket_monitor_event (ready_monitor_t &monitor_, uint64_t success_event
     return false;
 }
 
+inline bool drain_connect_monitor (connect_monitor_t &monitor_)
+{
+    if (!monitor_.monitor || !monitor_.state)
+        return false;
+    for (;;) {
+        zlink_socket_monitor_event_t event;
+        const zlink_recv_result_t rc = zlink_socket_monitor_recv (
+          monitor_.monitor, &event, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc == ZLINK_RECV_NO_DATA)
+            return true;
+        if (rc != ZLINK_RECV_OK)
+            return false;
+        connect_monitor_handler (&event, monitor_.state);
+    }
+}
+
 inline int poll_connect_ready_count (connect_monitor_t &monitor_)
 {
-    if (!monitor_.state)
+    if (!monitor_.state || !drain_connect_monitor (monitor_))
         return 0;
 
     std::lock_guard<std::mutex> lock (monitor_.state->sync);
@@ -301,28 +311,37 @@ wait_connect_ready_count (connect_monitor_t &monitor_, size_t expected_ready_, i
     if (!monitor_.state)
         return false;
 
-    std::unique_lock<std::mutex> lock (monitor_.state->sync);
-    if (monitor_.state->error_code != 0)
-        return false;
-    if (connect_ready_count (monitor_.state) >= expected_ready_)
-        return true;
-
     const int bounded_timeout = timeout_ms_ > 0 ? timeout_ms_ : 0;
     if (bounded_timeout == 0)
         return false;
 
-    const bool signaled = monitor_.state->cv.wait_for (
-      lock, milliseconds_t (bounded_timeout), [&monitor_, expected_ready_] () {
-          return monitor_.state->error_code != 0
-                 || connect_ready_count (monitor_.state) >= expected_ready_;
-      });
-    if (!signaled && bench_debug_enabled ()) {
+    const steady_clock_t::time_point deadline =
+      steady_clock_t::now () + milliseconds_t (bounded_timeout);
+    while (steady_clock_t::now () < deadline) {
+        if (!drain_connect_monitor (monitor_))
+            return false;
+        {
+            std::lock_guard<std::mutex> lock (monitor_.state->sync);
+            if (monitor_.state->error_code != 0)
+                return false;
+            if (connect_ready_count (monitor_.state) >= expected_ready_)
+                return true;
+        }
+
+        zlink_pollitem_t item = {monitor_.monitor, 0, ZLINK_POLLIN, 0};
+        const long remaining_ms = std::chrono::duration_cast<milliseconds_t> (
+                                    deadline - steady_clock_t::now ())
+                                    .count ();
+        const int poll_rc = perf_socket_poll (&item, 1, remaining_ms > 0 ? remaining_ms : 1);
+        if (poll_rc < 0 && zlink_errno () != EINTR)
+            return false;
+    }
+    if (bench_debug_enabled ()) {
         std::cerr << "[perf-multi] connect ready timeout ready="
                   << monitor_.state->connection_ready_count << " expected=" << expected_ready_
                   << std::endl;
     }
-    return signaled && monitor_.state->error_code == 0
-           && connect_ready_count (monitor_.state) >= expected_ready_;
+    return false;
 }
 
 inline void close_connect_monitor (connect_monitor_t &monitor_)
