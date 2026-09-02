@@ -639,6 +639,13 @@ single·multi report를 cell key `(pattern, transport, 1024, metric)`로 비교�
 - Latency처럼 낮을수록 좋은 값: `candidate / baseline <= 1.05`
 - Baseline 0, 누락, 중복 cell, unexpected skip/fail: gate 실패
 
+Cell 단위 5%는 측정 오차 허용치다. 그 위에 집계 기준을 둔다(2026-09-03 확정): 같은
+`(pattern, transport)`에서 message size `64,256,1024,65536` 전부를 실행하고, size별 ratio의
+평균(gate 도구가 고정한 한 가지 평균)이 throughput·bandwidth는 `>= 1.0`, latency는 `<= 1.0`이어야
+한다. 즉 어떤 pattern·transport도 평균 성능이 직전 release보다 내려가면 안 되며, cell 판정과
+집계 판정이 모두 통과해야 gate를 통과한 것으로 본다. 따라서 위 명령의 `--msg-sizes 1024`는
+`--msg-sizes 64,256,1024,65536`으로 실행한다.
+
 경계 밖으로 실패한 cell은 같은 조건의 5-run pair를 두 번 더 실행하고 median-of-medians로
 환경 변동과 반복 회귀를 구분한다. 결과를 고르거나 실패 cell만 다른 옵션으로 실행하지 않는다.
 반복해도 5%를 넘게 나빠지면 release를 중단하고 profiler로 원인을 찾은 뒤 Phase 4의 성능
