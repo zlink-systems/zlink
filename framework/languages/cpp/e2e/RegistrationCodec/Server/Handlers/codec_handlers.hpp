@@ -25,7 +25,6 @@ class json_roundtrip_handler_t
 class json_golden_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using request_type = json_golden_req_t;
     using reply_type = json_golden_res_t;
 
@@ -55,7 +54,6 @@ class json_golden_handler_t
 class json_codec_send_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using message_type = json_codec_msg_t;
 
     explicit json_codec_send_handler_t (scenario_state_t &state) : _state (state) {}
@@ -87,7 +85,6 @@ class protobuf_roundtrip_handler_t
 class protobuf_codec_send_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using message_type = protobuf_codec_msg_t;
 
     explicit protobuf_codec_send_handler_t (scenario_state_t &state) : _state (state) {}
@@ -119,7 +116,6 @@ class messagepack_roundtrip_handler_t
 class messagepack_codec_send_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using message_type = messagepack_codec_msg_t;
 
     explicit messagepack_codec_send_handler_t (scenario_state_t &state) : _state (state) {}

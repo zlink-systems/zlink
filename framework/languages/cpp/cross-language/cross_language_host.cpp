@@ -428,7 +428,6 @@ int run_message_follow_host ()
 class profile_request_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<event_sink_t>;
     using request_type = test_host_profile_request_t;
     using reply_type = test_host_profile_reply_t;
 
@@ -447,7 +446,6 @@ class profile_request_handler_t
 class profile_send_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<event_sink_t>;
     using message_type = test_host_profile_send_t;
 
     explicit profile_send_handler_t (event_sink_t &sink) : _sink (sink) {}
@@ -465,7 +463,6 @@ class profile_send_handler_t
 class published_event_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<event_sink_t>;
     using event_type = test_host_published_event_t;
     static constexpr const char *topic_name = "profile.changed";
 
@@ -488,7 +485,6 @@ class published_event_handler_t
 class spot_route_request_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<event_sink_t>;
     using request_type = test_host_spot_route_request_t;
     using reply_type = test_host_spot_route_reply_t;
 
@@ -617,7 +613,6 @@ class spot_route_client_service_t final : public fw::hosted_service_t
 class raw_stream_session_t final : public fw::packet_stream_session_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<event_sink_t>;
 
     explicit raw_stream_session_t (event_sink_t &sink) : _sink (sink) {}
 

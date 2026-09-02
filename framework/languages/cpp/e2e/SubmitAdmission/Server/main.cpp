@@ -157,8 +157,6 @@ sa::admission_event_t as_event (const sa::admission_req_t &request)
 class admission_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<sa::handler_gate_t, sa::evidence_store_t>;
 
     admission_handler_t (sa::handler_gate_t &gate, sa::evidence_store_t &evidence) :
         _gate (gate), _evidence (evidence)
@@ -265,9 +263,6 @@ zlink::framework::task_t<void> observe_saturation_send (
 class saturation_send_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<sa::handler_gate_t,
-                                           saturation_probe_state_t>;
 
     saturation_send_handler_t (sa::handler_gate_t &gate,
                                saturation_probe_state_t &state) :
@@ -293,9 +288,6 @@ class saturation_send_handler_t
 class saturation_request_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<sa::handler_gate_t,
-                                           saturation_probe_state_t>;
 
     saturation_request_handler_t (sa::handler_gate_t &gate,
                                   saturation_probe_state_t &state) :
@@ -326,9 +318,6 @@ class saturation_request_handler_t
 class saturation_start_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                           saturation_probe_state_t>;
 
     saturation_start_handler_t (zlink::framework::route_client_t &routes,
                                 saturation_probe_state_t &state) :
@@ -401,8 +390,6 @@ class saturation_start_handler_t
 class saturation_status_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<saturation_probe_state_t>;
     explicit saturation_status_handler_t (saturation_probe_state_t &state) :
         _state (state)
     {
@@ -431,9 +418,6 @@ inline constexpr const char *owner_isolation_fast_channel =
 class owner_isolation_slow_send_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<sa::handler_gate_t,
-                                           saturation_probe_state_t>;
 
     owner_isolation_slow_send_handler_t (sa::handler_gate_t &gate,
                                          saturation_probe_state_t &state) :
@@ -459,9 +443,6 @@ class owner_isolation_slow_send_handler_t
 class owner_isolation_slow_request_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<sa::handler_gate_t,
-                                           saturation_probe_state_t>;
 
     owner_isolation_slow_request_handler_t (sa::handler_gate_t &gate,
                                             saturation_probe_state_t &state) :
@@ -492,8 +473,6 @@ class owner_isolation_slow_request_handler_t
 class owner_isolation_fast_request_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<saturation_probe_state_t>;
     explicit owner_isolation_fast_request_handler_t (
       saturation_probe_state_t &state) :
         _state (state)
@@ -519,8 +498,6 @@ class owner_isolation_fast_request_handler_t
 class owner_isolation_submit_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t>;
     explicit owner_isolation_submit_handler_t (
       zlink::framework::route_client_t &routes) :
         _routes (routes)
@@ -585,8 +562,6 @@ class owner_isolation_submit_handler_t
 class node_submit_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t>;
     using request_type = sa::node_submit_req_t;
     using reply_type = sa::admission_res_t;
 
@@ -608,8 +583,6 @@ class node_submit_handler_t
 class channel_submit_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t>;
     using request_type = sa::admission_req_t;
     using reply_type = sa::admission_res_t;
 
@@ -632,8 +605,6 @@ class channel_submit_handler_t
 class fanout_submit_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::publisher_t>;
     using request_type = sa::admission_req_t;
     using reply_type = sa::admission_res_t;
 
@@ -657,8 +628,6 @@ class fanout_submit_handler_t
 class client_server_admission_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<sa::handler_gate_t, sa::evidence_store_t>;
     using message_type = sa::admission_msg_t;
 
     client_server_admission_handler_t (sa::handler_gate_t &gate,
@@ -682,8 +651,6 @@ class client_server_admission_handler_t
 class client_server_submit_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = sa::admission_req_t;
     using reply_type = sa::admission_res_t;
 
@@ -706,7 +673,6 @@ class client_server_submit_handler_t
 class gate_close_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<sa::handler_gate_t>;
     explicit gate_close_handler_t (sa::handler_gate_t &gate) : _gate (gate) {}
 
     zlink::framework::http_response_t handle (const zlink::framework::http_request_t &)
@@ -722,7 +688,6 @@ class gate_close_handler_t
 class gate_open_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<sa::handler_gate_t>;
     explicit gate_open_handler_t (sa::handler_gate_t &gate) : _gate (gate) {}
 
     zlink::framework::http_response_t handle (const zlink::framework::http_request_t &)
@@ -738,7 +703,6 @@ class gate_open_handler_t
 class evidence_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<sa::evidence_store_t>;
     explicit evidence_handler_t (sa::evidence_store_t &evidence) : _evidence (evidence) {}
 
     zlink::framework::http_response_t handle (const zlink::framework::http_request_t &request)
@@ -757,8 +721,6 @@ class evidence_handler_t
 class ready_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_mesh_runtime_t>;
     explicit ready_handler_t (zlink::framework::route_mesh_runtime_t &runtime) :
         _runtime (runtime)
     {
@@ -813,8 +775,6 @@ class ready_handler_t
 class actor_route_ready_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_mesh_runtime_t>;
     explicit actor_route_ready_handler_t (zlink::framework::route_mesh_runtime_t &runtime) :
         _runtime (runtime)
     {
@@ -1000,8 +960,6 @@ class admission_actor_spot_t final
 class ensure_actor_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::session_actor_manager_t>;
     using request_type = sa::actor_ensure_req_t;
     using reply_type = sa::actor_ensure_res_t;
 
@@ -1041,8 +999,6 @@ class ensure_actor_handler_t
 class bound_session_submit_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::session_actor_manager_t>;
     using request_type = sa::actor_relay_req_t;
     using reply_type = sa::admission_res_t;
     explicit bound_session_submit_handler_t (zlink::framework::session_actor_manager_t &actors) :
@@ -1078,9 +1034,6 @@ class submit_admission_stream_session_t final :
     public zlink::framework::packet_stream_session_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<stream_gateway_state_t,
-                                          zlink::framework::session_actor_manager_t>;
 
     submit_admission_stream_session_t (stream_gateway_state_t &state,
                                        zlink::framework::session_actor_manager_t &actors) :
@@ -1208,7 +1161,6 @@ class submit_admission_stream_session_t final :
 class stream_send_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<stream_gateway_state_t>;
     using request_type = sa::admission_req_t;
     using reply_type = sa::admission_res_t;
 
@@ -1236,7 +1188,6 @@ class stream_send_handler_t
 class stream_backpressure_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<stream_gateway_state_t>;
 
     explicit stream_backpressure_handler_t (stream_gateway_state_t &state) : _state (state) {}
 
@@ -1307,7 +1258,6 @@ class stream_backpressure_handler_t
 class stream_ready_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<stream_gateway_state_t>;
 
     explicit stream_ready_handler_t (stream_gateway_state_t &state) : _state (state) {}
 
@@ -1326,7 +1276,6 @@ class stream_ready_handler_t
 class stream_gateway_evidence_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<stream_gateway_state_t>;
     explicit stream_gateway_evidence_handler_t (stream_gateway_state_t &state) : _state (state) {}
 
     zlink::framework::http_response_t handle (const zlink::framework::http_request_t &request)
@@ -1431,7 +1380,6 @@ class stream_peer_state_t
 class stream_peer_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<stream_peer_state_t>;
     using request_type = sa::admission_req_t;
     using reply_type = sa::admission_res_t;
     explicit stream_peer_request_handler_t (stream_peer_state_t &state) : _state (state) {}
@@ -1454,7 +1402,6 @@ class stream_peer_request_handler_t
 class stream_peer_sequential_reply_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<stream_peer_state_t>;
     using request_type = sa::admission_req_t;
     using reply_type = sa::admission_res_t;
     explicit stream_peer_sequential_reply_handler_t (stream_peer_state_t &state) :
@@ -1480,7 +1427,6 @@ class stream_peer_sequential_reply_handler_t
 class stream_peer_no_token_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<stream_peer_state_t>;
     using request_type = sa::admission_req_t;
     using reply_type = sa::admission_res_t;
     explicit stream_peer_no_token_handler_t (stream_peer_state_t &state) : _state (state) {}
@@ -1501,7 +1447,6 @@ class stream_peer_no_token_handler_t
 class stream_peer_bind_actor_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<stream_peer_state_t>;
     using request_type = sa::actor_bind_req_t;
     using reply_type = sa::actor_bind_res_t;
     explicit stream_peer_bind_actor_handler_t (stream_peer_state_t &state) : _state (state) {}
@@ -1517,7 +1462,6 @@ class stream_peer_bind_actor_handler_t
 class stream_peer_relay_actor_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<stream_peer_state_t>;
     using request_type = sa::actor_relay_req_t;
     using reply_type = sa::admission_res_t;
     explicit stream_peer_relay_actor_handler_t (stream_peer_state_t &state) : _state (state) {}
@@ -1533,7 +1477,6 @@ class stream_peer_relay_actor_handler_t
 class stream_peer_evidence_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<stream_peer_state_t>;
     explicit stream_peer_evidence_handler_t (stream_peer_state_t &state) : _state (state) {}
 
     zlink::framework::http_response_t handle (const zlink::framework::http_request_t &request)

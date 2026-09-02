@@ -518,8 +518,8 @@ must not be stored in a Spot field. Per-Actor execution resource
 belongs to Actor activation, is kept on a same-node Join, and is
 rebuilt at target activation after cross-node Join and relocation. A
 timer handler, a separate class, is built once per Spot activation and
-reused. If a timer handler declares `dependency_types`, the dependency
-is also resolved in the same Spot activation scope. On Spot close and
+reused. Its constructor dependency parameters are also resolved in the
+same Spot activation scope. On Spot close and
 source relocation, the handler and scope are cleaned up. At target
 activation, a new handler and scope are built. The application doesn't
 separately register a timer handler as a singleton/scoped/transient

@@ -76,9 +76,6 @@ class session_evidence_store_t
 class actor_session_t final : public fw::packet_stream_session_t
 {
   public:
-    using dependency_types =
-      fw::dependency_list_t<fw::session_actor_manager_t, fw::actor_directory_t,
-                            session_evidence_store_t, e2e::session_configuration_t>;
 
     actor_session_t (fw::session_actor_manager_t &actors,
                      fw::actor_directory_t &directory,
@@ -137,7 +134,6 @@ class actor_session_t final : public fw::packet_stream_session_t
 class evidence_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<session_evidence_store_t>;
     explicit evidence_handler_t (session_evidence_store_t &evidence) : _evidence (evidence) {}
 
     fw::http_response_t handle (const fw::http_request_t &)
@@ -154,7 +150,6 @@ class evidence_handler_t
 class evidence_wait_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<session_evidence_store_t>;
     using request_type = e2e::actor_call_req_t;
     using reply_type = e2e::actor_call_res_t;
     explicit evidence_wait_handler_t (session_evidence_store_t &evidence) : _evidence (evidence) {}

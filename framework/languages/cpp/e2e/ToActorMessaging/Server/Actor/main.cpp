@@ -181,8 +181,6 @@ class to_actor_e2e_spot_t
 class ensure_actor_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::actor_manager_t>;
     using request_type = e2e::actor_call_req_t;
     using reply_type = e2e::actor_call_res_t;
 
@@ -222,7 +220,6 @@ class ensure_actor_handler_t
 class evidence_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<evidence_store_t>;
 
     explicit evidence_handler_t (evidence_store_t &evidence) : _evidence (evidence) {}
 
@@ -240,8 +237,6 @@ class evidence_handler_t
 class push_actor_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::actor_client_t>;
     using request_type = e2e::actor_call_req_t;
     using reply_type = e2e::actor_call_res_t;
 

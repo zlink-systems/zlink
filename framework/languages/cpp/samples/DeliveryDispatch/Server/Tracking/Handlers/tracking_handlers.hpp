@@ -18,10 +18,6 @@ class delivery_status_changed_handler_t
   public:
     using request_type = delivery_status_changed_req_t;
     using reply_type = delivery_status_changed_res_t;
-    using dependency_types =
-      zlink::framework::dependency_list_t<evidence_store_t,
-                                          zlink::framework::actor_directory_t,
-                                          zlink::framework::actor_client_t>;
     static constexpr const char *topic_name = "DeliveryStatusChangedReq";
 
     delivery_status_changed_handler_t (evidence_store_t &evidence,

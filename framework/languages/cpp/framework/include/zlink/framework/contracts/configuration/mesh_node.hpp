@@ -56,8 +56,7 @@ void register_mesh_handler_service_for (std::shared_ptr<mesh_node_builder_state_
         if (services.contains (std::type_index (typeid (THandler)))) {
             return;
         }
-        injected_handler_registrar_t<
-          THandler, typename handler_dependencies_t<THandler>::type>::add (services);
+        injected_handler_registrar_t<THandler>::add (services);
     });
 }
 } // namespace detail

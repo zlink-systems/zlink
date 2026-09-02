@@ -58,29 +58,20 @@ struct mesh_node_builder_state_t;
 void drain_spot_node_executors (spot_node_builder_state_t &node);
 void cancel_spot_node_dispatch_queues (spot_node_builder_state_t &node);
 
-template <typename THandler, typename TDependencies> struct timer_handler_factory_t;
-
-template <typename THandler, typename... TDependencies>
-struct timer_handler_factory_t<THandler, dependency_list_t<TDependencies...>>
+template <typename THandler> struct timer_handler_factory_t
 {
     static std::shared_ptr<void> create (service_provider_t *services)
     {
-        if constexpr (sizeof...(TDependencies) == 0) {
-            static_assert (std::is_default_constructible_v<THandler>,
-                           "SPOT timer handler without dependency_types "
-                           "must be default constructible");
+        constexpr auto arity = injected_constructor_arity<THandler> ();
+        if constexpr (arity == 0) {
             return std::make_shared<THandler> ();
         } else {
-            static_assert (std::is_constructible_v<THandler, TDependencies &...>,
-                           "SPOT timer handler constructor must accept "
-                           "dependency_types by reference");
             if (services == nullptr) {
                 throw framework_exception_t (
                   framework_error_kind_t::not_configured,
                   "SPOT timer handler dependencies require an activation service scope");
             }
-            return std::make_shared<THandler> (
-              services->template get_required<TDependencies> ()...);
+            return make_injected_shared<THandler> (*services);
         }
     }
 };
@@ -1147,9 +1138,7 @@ class spot_context_t
         return add_timer_erased (
           std::move (name), period, std::move (options), std::type_index (typeid (THandler)),
           [] (service_provider_t *services) {
-              return detail::timer_handler_factory_t<
-                THandler,
-                typename detail::handler_dependencies_t<THandler>::type>::create (services);
+              return detail::timer_handler_factory_t<THandler>::create (services);
           },
           [] (void *spot, void *handler_instance, serializer_registry_t &serializers,
               const timer_tick_t &tick) {

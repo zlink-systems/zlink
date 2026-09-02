@@ -43,9 +43,6 @@ inline zlink::framework::http_response_t publish_from_query (
 class publish_event_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::publisher_t,
-                                          server::operational_evidence_store_t>;
 
     publish_event_handler_t (zlink::framework::publisher_t &publisher,
                              server::operational_evidence_store_t &evidence) :
@@ -66,9 +63,6 @@ class publish_event_handler_t
 class publish_missing_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::publisher_t,
-                                          server::operational_evidence_store_t>;
 
     publish_missing_handler_t (zlink::framework::publisher_t &publisher,
                                server::operational_evidence_store_t &evidence) :

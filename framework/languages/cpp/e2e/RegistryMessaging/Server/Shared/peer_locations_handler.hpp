@@ -11,7 +11,6 @@ namespace zlink::framework::e2e::registry_messaging
 class peer_locations_handler_t
 {
   public:
-    using dependency_types = dependency_list_t<location_runtime_query_t>;
 
     explicit peer_locations_handler_t (location_runtime_query_t &locations) :
         _locations (locations)

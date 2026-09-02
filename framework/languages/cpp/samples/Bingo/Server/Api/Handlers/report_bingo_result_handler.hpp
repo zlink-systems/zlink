@@ -17,7 +17,6 @@ class report_bingo_result_handler_t
   public:
     using request_type = report_bingo_result_req_t;
     using reply_type = report_bingo_result_res_t;
-    using dependency_types = dependency_list_t<bingo_player_record_store_t>;
     static constexpr const char *topic_name = "ReportBingoResultReq";
 
     report_bingo_result_handler_t (bingo_player_record_store_t &records, logger_t<> logger = {}) :

@@ -59,7 +59,6 @@ class evidence_store_t
 class evidence_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<evidence_store_t>;
 
     explicit evidence_handler_t (evidence_store_t &evidence) : _evidence (evidence) {}
 
@@ -77,7 +76,6 @@ class evidence_handler_t
 class evidence_wait_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<evidence_store_t>;
     using request_type = evidence_wait_req_t;
     using reply_type = std::vector<std::string>;
 

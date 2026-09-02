@@ -438,8 +438,6 @@ struct injected_game_http_handler_t
 {
     using request_type = create_game_http_handler_t::request_type;
     using reply_type = create_game_http_handler_t::reply_type;
-    using dependency_types =
-      zlink::framework::dependency_list_t<http_name_prefix_t, scoped_http_counter_t>;
 
     explicit injected_game_http_handler_t (http_name_prefix_t &prefix,
                                            scoped_http_counter_t &counter) :

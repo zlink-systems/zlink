@@ -568,8 +568,6 @@ void clear_dispatch_errors (
 class nested_request_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
 
     explicit nested_request_handler_t (zlink::framework::channel_client_t &client) :
         _client (client)
@@ -604,8 +602,6 @@ struct scoped_channel_dependency_t
 class scoped_channel_filter_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scoped_channel_dependency_t>;
 
     explicit scoped_channel_filter_t (
       scoped_channel_dependency_t &dependency) :
@@ -629,7 +625,6 @@ class scoped_channel_filter_t
 class scoped_channel_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scoped_channel_dependency_t>;
 
     explicit scoped_channel_handler_t (scoped_channel_dependency_t &dependency) :
         _dependency (dependency)

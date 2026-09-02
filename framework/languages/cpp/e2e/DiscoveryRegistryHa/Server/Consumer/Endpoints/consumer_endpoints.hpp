@@ -19,8 +19,6 @@ namespace zlink::framework::e2e::store_failure::consumer
 class profile_request_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_req_t;
     using reply_type = profile_res_t;
 
@@ -49,8 +47,6 @@ class profile_request_handler_t
 class profile_request_timeout_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
 
     explicit profile_request_timeout_handler_t (zlink::framework::channel_client_t &channels) :
         _channels (channels)
@@ -87,8 +83,6 @@ class profile_request_timeout_handler_t
 class query_status_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::location_runtime_query_t>;
 
     explicit query_status_handler_t (zlink::framework::location_runtime_query_t &query) :
         _query (query)
@@ -110,8 +104,6 @@ class query_status_handler_t
 class query_peers_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::location_runtime_query_t>;
 
     explicit query_peers_handler_t (zlink::framework::location_runtime_query_t &query) :
         _query (query)
@@ -148,7 +140,6 @@ class query_peers_handler_t
 class query_connections_handler_t
 {
   public:
-    using dependency_types = dependency_list_t<socket_evidence_store_t>;
 
     explicit query_connections_handler_t (socket_evidence_store_t &evidence) :
         _evidence (evidence)

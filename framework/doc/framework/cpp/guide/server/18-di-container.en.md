@@ -14,8 +14,8 @@ title: "18. DI Container · C++"
 
 The framework has a built-in ASP.NET Core-style DI (dependency injection) container.
 Register services with `service_collection_t`, and pull them out with `service_provider_t`.
-A handler only has to declare `dependency_types` and the framework auto-injects the
-constructor arguments.
+A handler only has to take dependencies as constructor parameters and the framework
+auto-injects them from the current scope.
 
 ## 1. Three Lifetimes
 
@@ -102,12 +102,12 @@ injection.
 
 ## 3. Automatic Handler Injection
 
-Declaring `dependency_types` on a channel/HTTP handler gets it constructor injection within
-the dispatch scope. There's no need to separately call `add_transient<T>()`. Spot packet and
-Actor payload handlers are Spot member functions, so they aren't registered as DI handler
-classes. A timer handler, being a separate class, is created once per Spot activation and
-reused across timer ticks in that same activation. A timer handler's `dependency_types` is
-also resolved within the Spot activation scope.
+A channel/HTTP handler receives constructor injection in the dispatch scope when its
+constructor takes dependencies. There's no need to separately call `add_transient<T>()`.
+Spot packet and Actor payload handlers are Spot member functions, so they aren't registered
+as DI handler classes. A timer handler, being a separate class, is created once per Spot
+activation and reused across timer ticks in that same activation. Its constructor parameters
+are also resolved within the Spot activation scope.
 
 ```cpp
 class create_game_http_handler_t
@@ -117,13 +117,7 @@ class create_game_http_handler_t
     using reply_type   = create_game_http_res_t;
     static constexpr const char *topic_name = "CreateGame";
 
-    // 1. Declare the types to depend on, in order
-    using dependency_types =
-      zlink::framework::dependency_list_t<
-        zlink::framework::request_client_t,
-        zlink::framework::logger_t<create_game_http_handler_t>>;
-
-    // 2. The constructor receives them in declaration order
+    // The Framework resolves these constructor parameters in this dispatch scope.
     explicit create_game_http_handler_t (
         zlink::framework::request_client_t &client,
         zlink::framework::logger_t<create_game_http_handler_t> &logger)
@@ -142,8 +136,8 @@ service reference only within the handler's own lifetime.
 
 ## 4. Built-In Framework Services
 
-Services the framework registers when the app runs, or auto-registers while processing
-`dependency_types`. Put the type you need in `dependency_types` to receive it via
+Services the framework registers when the app runs, or provides while it constructs a
+handler. Take the type you need as a handler constructor parameter to receive it through
 constructor injection.
 
 | Service | Description |
@@ -191,7 +185,7 @@ class season_scheduler_t : public zlink::framework::hosted_service_t
 | A pure config or read-only object with no shared state (topology, config) | **singleton** |
 | Infrastructure reused across the whole app, like a connection or client | **singleton** + an internal thread-safe implementation |
 | State that must be isolated per request (transaction, per-request context) | **scoped** |
-| A channel/HTTP handler — needs a new instance per request | **transient** (auto-registered via dependency_types) |
+| A channel/HTTP handler — needs a new instance per request | **transient** (auto-registered from its constructor) |
 | Mutable domain state (a game room, a conversation's state) | **Not DI — managed by SPOT** ([Chapter 6](06-spot.en.md)) |
 
 ## 7. Watch For Lifetime Mismatches — Captive Dependency

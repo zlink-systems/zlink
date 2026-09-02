@@ -177,7 +177,6 @@ std::string first_peer (const options_t &options)
 class create_actor_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::actor_manager_t, mesh_name_service_t>;
     create_actor_handler_t (fw::actor_manager_t &actors, mesh_name_service_t &mesh) :
         _actors (actors), _mesh (mesh) {}
 
@@ -220,7 +219,6 @@ class create_actor_handler_t
 class create_spot_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::spot_manager_t, mesh_name_service_t>;
     create_spot_handler_t (fw::spot_manager_t &spots, mesh_name_service_t &mesh) :
         _spots (spots), _mesh (mesh) {}
 
@@ -254,7 +252,6 @@ class create_spot_handler_t
 class probe_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::actor_client_t, fw::route_client_t>;
     probe_handler_t (fw::actor_client_t &actors, fw::route_client_t &routes) :
         _actors (actors), _routes (routes) {}
 
@@ -288,7 +285,6 @@ class probe_handler_t
 class find_actor_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::actor_directory_t>;
     explicit find_actor_handler_t (fw::actor_directory_t &directory) : _directory (directory) {}
 
     fw::task_t<fw::http_response_t> handle (const fw::http_request_t &request)
@@ -311,7 +307,6 @@ class find_actor_handler_t
 class find_spot_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::spot_manager_t>;
     explicit find_spot_handler_t (fw::spot_manager_t &spots) : _spots (spots) {}
 
     fw::task_t<fw::http_response_t> handle (const fw::http_request_t &request)
@@ -333,7 +328,6 @@ class find_spot_handler_t
 class mesh_status_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::route_mesh_runtime_t>;
     explicit mesh_status_handler_t (fw::route_mesh_runtime_t &runtime) : _runtime (runtime) {}
 
     fw::http_response_t handle (const fw::http_request_t &request)

@@ -56,7 +56,6 @@ inline e2e::state_res_t request_multi_node_state (zlink::framework::route_client
 class multi_node_route_ping_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using request_type = e2e::channel_control_ping_req_t;
     using reply_type = e2e::channel_control_ping_res_t;
 
@@ -76,8 +75,6 @@ class multi_node_route_ping_handler_t
 class multi_node_route_ping_proxy_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t,
-                                                                zlink::framework::route_client_t>;
 
     multi_node_route_ping_proxy_handler_t (scenario_state_t &state,
                                            zlink::framework::route_client_t &routes) :
@@ -115,8 +112,6 @@ class multi_node_route_ping_proxy_handler_t
 class multi_node_create_local_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<
-      scenario_state_t, zlink::framework::spot_manager_t>;
     using request_type = e2e::multi_node_create_spot_req_t;
     using reply_type = e2e::multi_node_create_spot_res_t;
 
@@ -178,7 +173,6 @@ class multi_node_create_local_handler_t
 class multi_node_state_member_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::route_client_t>;
     using request_type = e2e::multi_node_state_route_req_t;
     using reply_type = e2e::state_res_t;
 
@@ -200,9 +194,6 @@ class multi_node_state_member_handler_t
 class multi_node_state_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::route_client_t>;
     using request_type = e2e::multi_node_state_route_req_t;
     using reply_type = e2e::state_res_t;
 
@@ -236,9 +227,6 @@ class multi_node_state_route_handler_t
 class multi_node_create_user_local_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_manager_t>;
 
     multi_node_create_user_local_handler_t (scenario_state_t &state,
                                             zlink::framework::spot_manager_t &spots) :
@@ -283,9 +271,6 @@ class multi_node_create_user_local_handler_t
 class multi_node_spot_only_mesh_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_manager_t>;
 
     multi_node_spot_only_mesh_handler_t (scenario_state_t &state,
                                          zlink::framework::spot_manager_t &spots) :
@@ -350,9 +335,6 @@ class multi_node_spot_only_mesh_handler_t
 class multi_node_spot_only_join_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::session_actor_manager_t>;
 
     multi_node_spot_only_join_handler_t (scenario_state_t &state,
                                          zlink::framework::session_actor_manager_t &actors) :

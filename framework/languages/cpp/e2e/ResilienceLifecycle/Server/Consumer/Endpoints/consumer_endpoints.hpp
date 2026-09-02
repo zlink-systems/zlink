@@ -105,8 +105,6 @@ inline zlink::framework::location_role_t parse_topology_role (const std::string 
 class topology_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::client_server_runtime_t>;
 
     explicit topology_handler_t (zlink::framework::client_server_runtime_t &runtime) :
         _runtime (runtime)
@@ -129,8 +127,6 @@ class topology_handler_t
 class topology_wait_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::client_server_runtime_t>;
 
     explicit topology_wait_handler_t (zlink::framework::client_server_runtime_t &runtime) :
         _runtime (runtime)
@@ -208,7 +204,6 @@ inline profile_res_t request_profile_once (zlink::framework::channel_client_t &c
 class profile_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_req_t;
     using reply_type = profile_res_t;
 
@@ -229,7 +224,6 @@ class profile_request_handler_t
 class manual_profile_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_req_t;
     using reply_type = profile_res_t;
 
@@ -258,7 +252,6 @@ class manual_profile_request_handler_t
 class manual_b_profile_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_req_t;
     using reply_type = profile_res_t;
 
@@ -287,7 +280,6 @@ class manual_b_profile_request_handler_t
 class slow_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_req_t;
     using reply_type = request_failure_res_t;
 
@@ -316,7 +308,6 @@ class slow_request_handler_t
 class missing_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_req_t;
     using reply_type = request_failure_res_t;
 
@@ -345,7 +336,6 @@ class missing_request_handler_t
 class profile_command_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_msg_t;
     using reply_type = operation_status_t;
 
@@ -367,7 +357,6 @@ class profile_command_handler_t
 class missing_profile_command_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_msg_t;
     using reply_type = operation_status_t;
 
@@ -585,7 +574,6 @@ inline scenario_route_res_t request_route_with_recreated_mesh_host (
 class new_client_profile_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<consumer_options_t>;
     using request_type = profile_req_t;
     using reply_type = profile_res_t;
 
@@ -606,8 +594,6 @@ class new_client_profile_request_handler_t
 class recreated_mesh_request_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<consumer_options_t>;
     using request_type = scenario_route_req_t;
     using reply_type = scenario_route_res_t;
 

@@ -56,8 +56,6 @@ bool close_spot (zlink::framework::spot_manager_t &spots,
 class spot_lifecycle_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t, zlink::framework::spot_manager_t>;
     using request_type = e2e::lifecycle_req_t;
     using reply_type = e2e::lifecycle_res_t;
 
@@ -89,9 +87,6 @@ class spot_lifecycle_handler_t
 class ensure_actor_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::session_actor_manager_t>;
     using request_type = e2e::ensure_actor_req_t;
     using reply_type = e2e::ensure_actor_res_t;
 
@@ -134,9 +129,6 @@ class ensure_actor_handler_t
 class create_spot_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_manager_t>;
 
     create_spot_handler_t (scenario_state_t &state,
                            zlink::framework::spot_manager_t &spots) :
@@ -167,9 +159,6 @@ class create_spot_handler_t
 class create_alternate_spot_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_manager_t>;
 
     create_alternate_spot_handler_t (scenario_state_t &state,
                                      zlink::framework::spot_manager_t &spots) :
@@ -200,9 +189,6 @@ class create_alternate_spot_handler_t
 class lifecycle_spot_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_manager_t>;
 
     lifecycle_spot_handler_t (scenario_state_t &state,
                               zlink::framework::spot_manager_t &spots) :
@@ -237,9 +223,6 @@ class lifecycle_spot_handler_t
 class close_spot_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_manager_t>;
 
     close_spot_handler_t (scenario_state_t &state, zlink::framework::spot_manager_t &spots) :
         _state (state), _spots (spots)
@@ -271,10 +254,6 @@ class close_spot_handler_t
 class type_mismatch_spot_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_manager_t,
-                                          zlink::framework::session_actor_manager_t>;
 
     type_mismatch_spot_handler_t (scenario_state_t &state,
                                   zlink::framework::spot_manager_t &spots,

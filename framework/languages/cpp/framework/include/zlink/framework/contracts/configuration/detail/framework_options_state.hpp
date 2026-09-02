@@ -165,35 +165,18 @@ inline bool has_manual_connections (const manual_connection_map_t &connections_b
     return !manual_connections_for (connections_by_node, node_name, channel_name).empty ();
 }
 
-template <typename TSession, typename TDependencies> struct injected_stream_session_registrar_t;
-
-template <typename TDependency>
-void ensure_stream_dependency_registered (service_collection_t &services)
-{
-    if (services.contains (std::type_index (typeid (TDependency)))) {
-        return;
-    }
-    if constexpr (static_dependency_types<TDependency>
-                  || std::is_default_constructible_v<TDependency>) {
-        injected_stream_session_registrar_t<
-          TDependency, typename handler_dependencies_t<TDependency>::type>::add (services);
-    }
-}
-
-template <typename TSession, typename... TDependencies>
-struct injected_stream_session_registrar_t<TSession, dependency_list_t<TDependencies...>>
+template <typename TSession> struct injected_stream_session_registrar_t
 {
     static void add (service_collection_t &services)
     {
         if (services.contains (std::type_index (typeid (TSession)))) {
             return;
         }
-        (ensure_stream_dependency_registered<TDependencies> (services), ...);
-        if constexpr (sizeof...(TDependencies) == 0) {
-            services.add_scoped<TSession> ();
-        } else {
-            services.add_scoped<TSession, TDependencies...> ();
-        }
+        services.add_factory<TSession> (
+          [] (service_provider_t &provider) {
+              return make_injected_unique<TSession> (provider);
+          },
+          service_lifetime_t::scoped);
     }
 };
 

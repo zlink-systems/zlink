@@ -17,7 +17,6 @@ class get_player_record_handler_t
   public:
     using request_type = get_player_record_req_t;
     using reply_type = get_player_record_res_t;
-    using dependency_types = dependency_list_t<bingo_player_record_store_t>;
     static constexpr const char *topic_name = "GetPlayerRecordReq";
 
     get_player_record_handler_t (bingo_player_record_store_t &records, logger_t<> logger = {}) :

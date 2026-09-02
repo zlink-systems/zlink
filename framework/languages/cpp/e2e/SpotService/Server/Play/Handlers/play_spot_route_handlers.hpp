@@ -66,9 +66,6 @@ resolve_required_spot_id (zlink::framework::spot_manager_t &spots,
 class route_spot_state_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_manager_t>;
 
     route_spot_state_handler_t (zlink::framework::route_client_t &routes,
         zlink::framework::spot_manager_t &spots) :
@@ -107,9 +104,6 @@ class route_spot_state_handler_t
 class direct_spot_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_manager_t>;
 
     direct_spot_route_handler_t (zlink::framework::route_client_t &routes,
         zlink::framework::spot_manager_t &spots) :
@@ -146,9 +140,6 @@ class direct_spot_route_handler_t
 class direct_spot_command_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_manager_t>;
 
     direct_spot_command_route_handler_t (zlink::framework::route_client_t &routes,
         zlink::framework::spot_manager_t &spots) :
@@ -179,9 +170,6 @@ class direct_spot_command_route_handler_t
 class spot_stage_probe_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_manager_t>;
 
     spot_stage_probe_route_handler_t (zlink::framework::route_client_t &routes,
         zlink::framework::spot_manager_t &spots) :
@@ -220,10 +208,6 @@ class spot_stage_probe_route_handler_t
 class spot_stage_timer_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          scenario_state_t,
-                                          zlink::framework::spot_manager_t>;
 
     spot_stage_timer_route_handler_t (zlink::framework::route_client_t &routes,
                                       scenario_state_t &state,
@@ -261,9 +245,6 @@ class spot_stage_timer_route_handler_t
 class spot_state_command_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_manager_t>;
 
     spot_state_command_route_handler_t (zlink::framework::route_client_t &routes,
         zlink::framework::spot_manager_t &spots) :
@@ -294,8 +275,6 @@ class spot_state_command_route_handler_t
 class spot_publish_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::spot_publisher_client_t>;
 
     explicit spot_publish_route_handler_t (
       zlink::framework::spot_publisher_client_t &publisher) :
@@ -326,7 +305,6 @@ class spot_publish_route_handler_t
 class spot_publish_wait_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
 
     explicit spot_publish_wait_handler_t (scenario_state_t &state) : _state (state) {}
 
@@ -374,9 +352,6 @@ class spot_publish_wait_handler_t
 class spot_worker_start_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_manager_t>;
 
     spot_worker_start_route_handler_t (zlink::framework::route_client_t &routes,
         zlink::framework::spot_manager_t &spots) :
@@ -413,7 +388,6 @@ class spot_worker_start_route_handler_t
 class spot_worker_complete_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
 
     explicit spot_worker_complete_handler_t (scenario_state_t &state) : _state (state) {}
 
@@ -460,9 +434,6 @@ class spot_worker_complete_handler_t
 class spot_idle_close_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_manager_t>;
 
     spot_idle_close_route_handler_t (scenario_state_t &state,
                                      zlink::framework::spot_manager_t &spots) :
@@ -530,9 +501,6 @@ class spot_idle_close_route_handler_t
 class spot_overrun_start_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_manager_t>;
 
     spot_overrun_start_route_handler_t (scenario_state_t &state,
                                         zlink::framework::spot_manager_t &spots) :
@@ -569,9 +537,6 @@ class spot_overrun_start_route_handler_t
 class spot_slow_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_manager_t>;
 
     spot_slow_route_handler_t (zlink::framework::route_client_t &routes,
         zlink::framework::spot_manager_t &spots) :
@@ -605,9 +570,6 @@ class spot_slow_route_handler_t
 class spot_missing_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_manager_t>;
 
     spot_missing_route_handler_t (zlink::framework::route_client_t &routes,
         zlink::framework::spot_manager_t &spots) :
@@ -656,10 +618,6 @@ class spot_missing_route_handler_t
 class spot_missing_handler_request_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          scenario_state_t,
-                                          zlink::framework::spot_manager_t>;
 
     spot_missing_handler_request_handler_t (zlink::framework::route_client_t &routes,
                                             scenario_state_t &state,
@@ -697,10 +655,6 @@ class spot_missing_handler_request_handler_t
 class spot_missing_handler_command_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          scenario_state_t,
-                                          zlink::framework::spot_manager_t>;
 
     spot_missing_handler_command_handler_t (zlink::framework::route_client_t &routes,
                                             scenario_state_t &state,
@@ -738,9 +692,6 @@ class spot_missing_handler_command_handler_t
 class spot_missing_target_request_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_manager_t>;
 
     spot_missing_target_request_handler_t (zlink::framework::route_client_t &routes,
         zlink::framework::spot_manager_t &spots) :
@@ -779,9 +730,6 @@ class spot_missing_target_request_handler_t
 class spot_outbound_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_manager_t>;
 
     spot_outbound_route_handler_t (zlink::framework::route_client_t &routes,
         zlink::framework::spot_manager_t &spots) :
@@ -822,9 +770,6 @@ class spot_outbound_route_handler_t
 class spot_outbound_negative_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_manager_t>;
 
     spot_outbound_negative_route_handler_t (zlink::framework::route_client_t &routes,
         zlink::framework::spot_manager_t &spots) :
@@ -865,9 +810,6 @@ class spot_outbound_negative_route_handler_t
 class spot_to_spot_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_manager_t>;
 
     spot_to_spot_route_handler_t (zlink::framework::route_client_t &routes,
         zlink::framework::spot_manager_t &spots) :
@@ -909,9 +851,6 @@ class spot_to_spot_route_handler_t
 class spot_to_spot_timeout_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_manager_t>;
 
     spot_to_spot_timeout_route_handler_t (zlink::framework::route_client_t &routes,
         zlink::framework::spot_manager_t &spots) :
@@ -949,9 +888,6 @@ class spot_to_spot_timeout_route_handler_t
 class spot_to_spot_negative_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_manager_t>;
 
     spot_to_spot_negative_route_handler_t (zlink::framework::route_client_t &routes,
         zlink::framework::spot_manager_t &spots) :

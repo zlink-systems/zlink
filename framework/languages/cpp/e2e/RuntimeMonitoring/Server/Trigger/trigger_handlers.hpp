@@ -22,7 +22,6 @@ namespace zlink::framework::e2e::runtime_monitoring::trigger
 class profile_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_req_t;
     using reply_type = profile_res_t;
 
@@ -52,8 +51,6 @@ class profile_request_handler_t
 class service_b_request_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<trigger_options_t, server::evidence_store_t>;
     using request_type = profile_req_t;
     using reply_type = profile_res_t;
 
@@ -88,8 +85,6 @@ class service_b_request_handler_t
 class service_a_request_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<trigger_options_t, server::evidence_store_t>;
     using request_type = profile_req_t;
     using reply_type = profile_res_t;
 
@@ -124,8 +119,6 @@ class service_a_request_handler_t
 class throwing_request_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<trigger_options_t, server::evidence_store_t>;
     using request_type = profile_req_t;
     using reply_type = profile_res_t;
 
@@ -158,7 +151,6 @@ class throwing_request_handler_t
 class throw_stderr_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<trigger_options_t>;
 
     explicit throw_stderr_handler_t (const trigger_options_t &options) : _options (options) {}
 
@@ -178,7 +170,6 @@ class throw_stderr_handler_t
 class throw_stderr_wait_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<trigger_options_t>;
     using request_type = evidence_wait_req_t;
     using reply_type = std::vector<std::string>;
 
@@ -231,8 +222,6 @@ class missing_socket_validation_handler_t
 class handshake_failure_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<trigger_options_t, server::evidence_store_t>;
 
     handshake_failure_handler_t (const trigger_options_t &options,
                                  server::evidence_store_t &evidence) :

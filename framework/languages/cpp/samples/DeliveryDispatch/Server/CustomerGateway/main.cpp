@@ -157,7 +157,6 @@ class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
 class customer_gateway_session_t final : public packet_stream_session_t
 {
   public:
-    using dependency_types = dependency_list_t<customer_session_directory_t>;
 
     explicit customer_gateway_session_t (customer_session_directory_t &sessions) :
         _sessions (sessions)

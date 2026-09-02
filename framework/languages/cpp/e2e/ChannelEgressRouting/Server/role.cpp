@@ -259,11 +259,6 @@ fw::http_response_t json_response (nlohmann::json value, int status = 200)
 class channel_probe_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<evidence_store_t,
-                                                    role_state_t,
-                                                    role_options_t,
-                                                    fw::channel_client_t,
-                                                    fw::route_client_t>;
     using request_type = e2e::channel_probe_req_t;
     using reply_type = e2e::channel_probe_res_t;
 
@@ -352,7 +347,6 @@ class channel_probe_handler_t
 class workflow_spot_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<evidence_store_t>;
     using request_type = e2e::spot_workflow_req_t;
     using reply_type = e2e::spot_workflow_res_t;
 
@@ -374,7 +368,6 @@ class workflow_spot_handler_t
 class channel_probe_send_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<evidence_store_t>;
     using message_type = e2e::channel_probe_msg_t;
 
     explicit channel_probe_send_handler_t (evidence_store_t &evidence) : _evidence (evidence) {}
@@ -398,11 +391,6 @@ class channel_probe_send_handler_t
 class route_channel_probe_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<evidence_store_t,
-                                                    role_state_t,
-                                                    role_options_t,
-                                                    fw::channel_client_t,
-                                                    fw::route_client_t>;
 
     route_channel_probe_handler_t (evidence_store_t &evidence,
                                    role_state_t &state,
@@ -427,7 +415,6 @@ class route_channel_probe_handler_t
 class route_channel_probe_send_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<evidence_store_t>;
 
     explicit route_channel_probe_send_handler_t (evidence_store_t &evidence) :
         _handler (evidence)
@@ -538,7 +525,6 @@ class config12_timer_handler_t
 class request_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::channel_client_t, fw::route_client_t>;
 
     request_handler_t (fw::channel_client_t &channels, fw::route_client_t &routes) :
         _channels (channels), _routes (routes)
@@ -586,7 +572,6 @@ class request_handler_t
 class send_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::channel_client_t, fw::route_client_t>;
 
     send_handler_t (fw::channel_client_t &channels, fw::route_client_t &routes) :
         _channels (channels), _routes (routes)
@@ -625,7 +610,6 @@ class send_handler_t
 class evidence_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<evidence_store_t>;
     explicit evidence_handler_t (evidence_store_t &evidence) : _evidence (evidence) {}
     fw::http_response_t handle (const fw::http_request_t &) { return json_response (_evidence.snapshot ()); }
 
@@ -636,7 +620,6 @@ class evidence_handler_t
 class evidence_wait_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<evidence_store_t>;
     explicit evidence_wait_handler_t (evidence_store_t &evidence) : _evidence (evidence) {}
 
     fw::http_response_t handle (const fw::http_request_t &request)
@@ -656,7 +639,6 @@ class evidence_wait_handler_t
 class ready_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::route_mesh_runtime_t>;
 
     explicit ready_handler_t (fw::route_mesh_runtime_t &runtime) : _runtime (runtime) {}
 
@@ -704,7 +686,6 @@ fw::listener_kind_t listener_kind (std::string_view value)
 class listener_status_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::framework_runtime_t>;
 
     explicit listener_status_handler_t (fw::framework_runtime_t &runtime) : _runtime (runtime) {}
 
@@ -741,7 +722,6 @@ class listener_status_handler_t
 class client_server_status_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::client_server_runtime_t>;
 
     explicit client_server_status_handler_t (fw::client_server_runtime_t &runtime) :
         _runtime (runtime)
@@ -781,7 +761,6 @@ class client_server_status_handler_t
 class hold_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<role_state_t>;
     explicit hold_handler_t (role_state_t &state) : _state (state) {}
     fw::http_response_t handle (const fw::http_request_t &)
     {
@@ -796,7 +775,6 @@ class hold_handler_t
 class release_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<role_state_t>;
     explicit release_handler_t (role_state_t &state) : _state (state) {}
     fw::http_response_t handle (const fw::http_request_t &)
     {
@@ -811,7 +789,6 @@ class release_handler_t
 class shutdown_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<shutdown_state_t>;
     explicit shutdown_handler_t (shutdown_state_t &state) : _state (state) {}
     fw::http_response_t handle (const fw::http_request_t &)
     {
@@ -826,7 +803,6 @@ class shutdown_handler_t
 class spot_workflow_http_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::route_client_t>;
     explicit spot_workflow_http_handler_t (fw::route_client_t &routes) : _routes (routes) {}
 
     fw::task_t<fw::http_response_t> handle (const fw::http_request_t &request)

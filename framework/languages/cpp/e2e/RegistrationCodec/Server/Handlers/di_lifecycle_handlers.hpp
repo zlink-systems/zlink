@@ -11,8 +11,6 @@ namespace zlink::framework::e2e::registration_codec::server
 class scoped_lifecycle_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scoped_dependency_t, singleton_dependency_t>;
     using request_type = scoped_lifecycle_req_t;
     using reply_type = scoped_lifecycle_res_t;
 

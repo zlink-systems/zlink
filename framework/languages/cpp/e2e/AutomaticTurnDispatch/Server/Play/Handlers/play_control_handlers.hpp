@@ -29,9 +29,6 @@ ensure_probe_spot (zlink::framework::spot_manager_t &spots,
 class ensure_spot_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<evidence_store_t,
-                                          zlink::framework::spot_manager_t>;
     using request_type = ensure_spot_req_t;
     using reply_type = ensure_spot_res_t;
 
@@ -70,11 +67,6 @@ class ensure_spot_handler_t
 class bind_await_actors_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<evidence_store_t,
-                                          zlink::framework::spot_manager_t,
-                                          zlink::framework::actor_manager_t,
-                                          zlink::framework::session_actor_manager_t>;
     using request_type = bind_await_actors_req_t;
     using reply_type = bind_await_actors_res_t;
 
@@ -156,7 +148,6 @@ class bind_await_actors_handler_t
 class evidence_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<evidence_store_t>;
     using request_type = await_evidence_req_t;
     using reply_type = await_evidence_res_t;
 
@@ -175,7 +166,6 @@ class evidence_handler_t
 class evidence_wait_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<evidence_store_t>;
     using request_type = await_evidence_wait_req_t;
     using reply_type = await_evidence_res_t;
 

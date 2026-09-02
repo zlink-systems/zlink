@@ -71,7 +71,6 @@ inline workflow_res_t request_workflow (
 class batch_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = std::vector<profile_req_t>;
     using reply_type = std::vector<profile_res_t>;
 
@@ -98,7 +97,6 @@ class batch_request_handler_t
 class profile_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_req_t;
     using reply_type = profile_res_t;
 
@@ -123,7 +121,6 @@ class profile_request_handler_t
 class scale_in_transition_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_req_t;
     using reply_type = request_failure_res_t;
 
@@ -151,9 +148,6 @@ class scale_in_transition_handler_t
 class workflow_request_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<
-        zlink::framework::channel_client_t>;
     using request_type = workflow_req_t;
     using reply_type = workflow_res_t;
 
@@ -175,7 +169,6 @@ class workflow_request_handler_t
 class slow_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_req_t;
     using reply_type = request_failure_res_t;
 
@@ -204,7 +197,6 @@ class slow_request_handler_t
 class missing_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_req_t;
     using reply_type = request_failure_res_t;
 
@@ -233,7 +225,6 @@ class missing_request_handler_t
 class missing_command_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_msg_t;
     using reply_type = operation_status_t;
 
@@ -255,7 +246,6 @@ class missing_command_handler_t
 class payload_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = payload_req_t;
     using reply_type = payload_res_t;
 
@@ -287,7 +277,6 @@ class backpressure_reset_handler_t
 class backpressure_send_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_msg_t;
     using reply_type = backpressure_send_res_t;
 

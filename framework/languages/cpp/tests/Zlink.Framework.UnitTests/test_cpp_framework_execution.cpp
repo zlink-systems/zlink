@@ -201,8 +201,6 @@ struct timer_activation_spot_t
 
 struct timer_activation_handler_t
 {
-    using dependency_types =
-      zlink::framework::dependency_list_t<timer_activation_dependency_t>;
 
     explicit timer_activation_handler_t (
       timer_activation_dependency_t &dependency) :

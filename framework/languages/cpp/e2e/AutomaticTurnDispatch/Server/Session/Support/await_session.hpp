@@ -18,9 +18,6 @@ namespace yd = zlink::framework::e2e::automatic_turn_dispatch;
 class await_session_t final : public zlink::framework::packet_stream_session_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::session_actor_manager_t>;
 
     await_session_t (zlink::framework::route_client_t &routes,
                      zlink::framework::session_actor_manager_t &actors) :

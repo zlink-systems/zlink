@@ -12,8 +12,6 @@ namespace
 class spot_locations_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::location_runtime_query_t>;
 
     explicit spot_locations_handler_t (zlink::framework::location_runtime_query_t &locations) :
         _locations (locations)

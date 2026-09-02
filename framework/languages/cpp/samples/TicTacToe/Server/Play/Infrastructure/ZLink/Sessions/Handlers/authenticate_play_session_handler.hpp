@@ -24,7 +24,6 @@ using framework::message_t;
 class authenticate_play_session_handler_t
 {
   public:
-    using dependency_types = dependency_list_t<channel_client_t>;
 
     explicit authenticate_play_session_handler_t (channel_client_t &client) :
         _client (client)

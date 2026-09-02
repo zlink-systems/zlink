@@ -20,7 +20,6 @@ namespace
 class evidence_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
 
     explicit evidence_handler_t (scenario_state_t &state) : _state (state) {}
 
@@ -38,7 +37,6 @@ class evidence_handler_t
 class evidence_wait_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using request_type = e2e::evidence_wait_req_t;
     using reply_type = e2e::evidence_snapshot_t;
 

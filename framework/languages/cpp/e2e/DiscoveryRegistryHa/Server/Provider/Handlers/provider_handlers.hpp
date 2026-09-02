@@ -18,7 +18,6 @@ namespace zlink::framework::e2e::store_failure::provider
 class profile_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<provider_evidence_store_t>;
     using request_type = profile_req_t;
     using reply_type = profile_res_t;
 
@@ -42,7 +41,6 @@ class profile_request_handler_t
 class evidence_snapshot_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<provider_evidence_store_t>;
 
     explicit evidence_snapshot_handler_t (provider_evidence_store_t &evidence) :
         _evidence (evidence)
@@ -64,7 +62,6 @@ class evidence_snapshot_handler_t
 class evidence_wait_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<provider_evidence_store_t>;
     using request_type = evidence_wait_req_t;
     using reply_type = evidence_snapshot_t;
 
@@ -91,7 +88,6 @@ class evidence_wait_handler_t
 class query_status_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::location_runtime_query_t>;
 
     explicit query_status_handler_t (zlink::framework::location_runtime_query_t &query) :
         _query (query)
@@ -113,8 +109,6 @@ class query_status_handler_t
 class shutdown_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<provider_lifecycle_control_t>;
 
     explicit shutdown_handler_t (provider_lifecycle_control_t &lifecycle) :
         _lifecycle (lifecycle)
@@ -139,8 +133,6 @@ class drain_handler_t
   public:
     using request_type = operation_status_t;
     using reply_type = operation_status_t;
-    using dependency_types =
-      zlink::framework::dependency_list_t<provider_lifecycle_control_t>;
 
     explicit drain_handler_t (provider_lifecycle_control_t &lifecycle) :
         _lifecycle (lifecycle)

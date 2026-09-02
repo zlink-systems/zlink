@@ -245,7 +245,6 @@ class commerce_api_handlers_t
       public:                                                                                      \
         using request_type = req;                                                                  \
         using reply_type = res;                                                                    \
-        using dependency_types = dependency_list_t<commerce_api_handlers_t>;                       \
         static constexpr const char *topic_name = req::packet_name;                                \
         explicit name (commerce_api_handlers_t &handlers) : _handlers (handlers)                   \
         {                                                                                          \

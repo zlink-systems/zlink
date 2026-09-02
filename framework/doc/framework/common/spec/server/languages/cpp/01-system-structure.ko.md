@@ -130,8 +130,8 @@ public:
 
 - **의존성은 template 인자로 선언한다.** 인자가 없으면 **기본 생성자가 필요하다**(정적으로
   검증한다).
-- **`dependency_list_t<...>`로 handler의 의존성을 선언하면** framework가 그 타입들을 주입해
-  handler를 만든다.
+- **handler 생성자의 의존성 매개 변수만 선언하면** framework가 그 타입들을 주입해 handler를
+  만든다.
 - **`logger_t<TCategory>`는 framework 의존성이다** — `add_framework_dependency`로 자동 배선된다.
 
 ### 4.4 Resolve

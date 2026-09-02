@@ -240,10 +240,6 @@ class player_entry_spot_t : public entry_spot_t<player_actor_t>
 class gamequest_session_t final : public packet_stream_session_t
 {
   public:
-    using dependency_types = dependency_list_t<route_client_t,
-                                               game_api_store_t,
-                                               sample_topology_t,
-                                               session_actor_manager_t>;
 
     gamequest_session_t (route_client_t &routes,
                          game_api_store_t &store,
@@ -419,7 +415,6 @@ class gamequest_session_t final : public packet_stream_session_t
 class server_assertion_http_handler_t
 {
   public:
-    using dependency_types = dependency_list_t<game_api_store_t>;
     using request_type = server_assertion_req_t;
     using reply_type = server_assertion_res_t;
     static constexpr const char *topic_name = server_assertion_req_t::packet_name;

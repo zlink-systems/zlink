@@ -32,7 +32,6 @@ std::string gateway_error_kind_name (zlink::framework::framework_error_kind_t ki
 class gateway_evidence_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
 
     explicit gateway_evidence_handler_t (scenario_state_t &state) : _state (state) {}
 
@@ -50,8 +49,6 @@ class gateway_evidence_handler_t
 class gateway_publish_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<
-      scenario_state_t, zlink::framework::spot_publisher_client_t>;
 
     gateway_publish_handler_t (scenario_state_t &state,
                                zlink::framework::spot_publisher_client_t &publisher) :
@@ -91,10 +88,6 @@ class gateway_publish_handler_t
 class gateway_actor_push_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::actor_client_t,
-                                          zlink::framework::actor_directory_t>;
 
     gateway_actor_push_handler_t (scenario_state_t &state,
                                   zlink::framework::actor_client_t &actors,

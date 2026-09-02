@@ -33,7 +33,6 @@ inline workflow_res_t request_workflow (zlink::framework::channel_client_t &chan
 class evidence_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
 
     explicit evidence_handler_t (scenario_state_t &state) : _state (state) {}
 
@@ -51,7 +50,6 @@ class evidence_handler_t
 class http_workflow_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = workflow_req_t;
     using reply_type = workflow_res_t;
 

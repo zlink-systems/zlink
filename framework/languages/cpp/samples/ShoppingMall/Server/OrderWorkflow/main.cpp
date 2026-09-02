@@ -316,8 +316,6 @@ class planned_relocation_handler_t
   public:
     using request_type = planned_relocation_req_t;
     using reply_type = planned_relocation_res_t;
-    using dependency_types =
-      dependency_list_t<redis_state_store_t, workflow_instance_topology_t, spot_manager_t>;
     static constexpr const char *topic_name = request_type::packet_name;
 
     planned_relocation_handler_t (redis_state_store_t &store,

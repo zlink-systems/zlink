@@ -16,9 +16,6 @@ class create_game_http_handler_t
   public:
     using request_type = create_game_http_req_t;
     using reply_type = create_game_http_res_t;
-    using dependency_types = dependency_list_t<spot_manager_t,
-                                               sample_topology_t,
-                                               logger_t<create_game_http_handler_t>>;
     static constexpr const char *topic_name = "CreateGame";
 
     explicit create_game_http_handler_t (spot_manager_t &spots,

@@ -772,7 +772,6 @@ class ensure_support_user_actor_handler_t
   public:
     using request_type = ensure_support_user_actor_req_t;
     using reply_type = ensure_support_user_actor_res_t;
-    using dependency_types = dependency_list_t<actor_manager_t>;
     static constexpr const char *topic_name = "EnsureSupportUserActorReq";
 
     explicit ensure_support_user_actor_handler_t (actor_manager_t &actors) : _actors (actors) {}
@@ -801,8 +800,6 @@ class ensure_agent_conversation_handler_t
   public:
     using request_type = ensure_agent_conversation_req_t;
     using reply_type = ensure_agent_conversation_res_t;
-    using dependency_types =
-      dependency_list_t<actor_manager_t, actor_client_t, supportchat_conversation_runtime_t>;
     static constexpr const char *topic_name = "EnsureAgentConversationReq";
 
     ensure_agent_conversation_handler_t (actor_manager_t &actors,

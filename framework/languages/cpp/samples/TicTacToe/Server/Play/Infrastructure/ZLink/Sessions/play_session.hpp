@@ -20,8 +20,6 @@ using framework::message_t;
 class play_session_t final : public packet_stream_session_t
 {
   public:
-    using dependency_types =
-      dependency_list_t<session_actor_manager_t, authenticate_play_session_handler_t>;
 
     play_session_t (session_actor_manager_t &actors,
                     authenticate_play_session_handler_t &authenticate) :

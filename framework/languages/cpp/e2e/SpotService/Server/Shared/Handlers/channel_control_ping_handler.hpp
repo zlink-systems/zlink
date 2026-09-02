@@ -12,8 +12,6 @@ namespace e2e = zlink::framework::e2e::spot_service;
 class channel_control_ping_route_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t>;
 
     explicit channel_control_ping_route_handler_t (zlink::framework::route_client_t &routes) :
         _routes (routes)

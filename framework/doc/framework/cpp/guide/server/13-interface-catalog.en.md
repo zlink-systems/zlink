@@ -15,8 +15,7 @@ title: "13. Key Type Usage Index · C++"
 
 C++ framework type names use a `_t` suffix. It's fastest to read them by splitting
 **types the application creates directly** from **types injected via DI** — the former you
-inherit or declare, the latter you list in `dependency_types` and receive through the
-constructor.
+inherit or declare, and the latter you receive as constructor parameters.
 
 ## 1. Channel Messaging
 
@@ -26,7 +25,7 @@ The calling side receives a client injected via DI.
 class place_order_handler_t
 {
   public:
-    using dependency_types = dependency_list_t<route_client_t>;
+    explicit place_order_handler_t (route_client_t &client) : _client (client) {}
 
     task_t<order_placed_t> handle (const place_order_t &request)
     {
@@ -183,7 +182,7 @@ Usage of the observation surfaces is covered in [11. Monitoring](11-monitoring.e
 | --- | --- |
 | You inherit it | `spot_t` · `entry_spot_t` · `instance_spot_t` · `actor_t` · `packet_stream_session_t` |
 | Received via constructor (context) | The `spot_context_t` family · `actor_context_t` · `message_context_t` |
-| Injected via `dependency_types` | `route_client_t` · `publisher_t` · `actor_client_t` · `channel_client_t` · `spot_manager_t` · `actor_manager_t` · `logger_t<T>` |
+| Injected through a handler constructor | `route_client_t` · `publisher_t` · `actor_client_t` · `channel_client_t` · `spot_manager_t` · `actor_manager_t` · `logger_t<T>` |
 | A startup-phase builder returns it | The `mesh_node_builder_t` family · `stream_node_options_builder_t` |
 | A call returns it | `*_call_t` · `*_result_t` · `*_ref_t` |
 

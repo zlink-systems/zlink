@@ -272,9 +272,8 @@ public:
  dispatch scope에서 생성한다. Application이 같은 handler type을 service collection에
  다시 등록하지 않는다.
 - Spot packet·Actor payload handler는 Spot member function이므로 별도 service가 아니다.
- Timer handler class는 Spot activation scope에서 한 번 생성하며 같은 activation의 tick이
- 재사용한다. Timer handler의 `dependency_types`에 선언한 dependency만 해당 scope에서
- resolve한다.
+  Timer handler class는 Spot activation scope에서 한 번 생성하며 같은 activation의 tick이
+  재사용한다. Timer handler 생성자의 dependency 매개 변수는 해당 scope에서 resolve한다.
 - `Boost.Ext.DI` 같은 외부 DI 라이브러리는 public dependency로 두지 않는다.
 
 `scoped` lifetime은 raw transport 기능이 아니라 Framework가 소유하는 DI lifetime이다. Framework는
@@ -355,16 +354,15 @@ MeshNode는 ROUTER listen endpoint와 0개 이상의 [ChannelName](../../../00-f
 Node direct 전용 [MeshNode](../../../00-foundation/02-glossary.ko.md#meshnode)는 membership 없이 시작할 수 있고, Channel handler를 제공하는 MeshNode는
 Server membership을 하나 이상 등록해야 한다. 각 Server ChannelName은 request/send handler group을
 가질 수 있다. fanout subscriber는 publish handler group을 하나 이상 등록해야 한다.
-Channel·HTTP handler에 생성자 의존성이 있으면 `using dependency_types =
-zlink::framework::dependency_list_t<dep1_t, dep2_t>;`처럼 의존 타입을 명시한다. framework는
-각 dispatch scope에서 dependency와 handler를 생성한다. Handler를 singleton service로
-등록하지 않는다.
-`logger_t<THandler>`는 framework 기본 dependency다. handler가
-`dependency_types`에 `logger_t<THandler>`를 넣으면 사용자가 별도 service registration을
-작성하지 않아도 DI가 `.NET`의 `ILogger<T>`처럼 category logger를 주입한다. 로그 출력 대상은
-handler 등록이 아니라 `app.logging().use_console()`, `app.logging().use_file(...)` 같은
-host logging 설정에서 정한다. custom category가 필요하면 `logger_factory_t`를 dependency로
-받아 handler 내부에서 category logger를 만들 수 있다.
+Channel·HTTP handler에 생성자 의존성이 있으면 생성자 매개 변수로 `dep1_t &`, `dep2_t &`를
+받는다. framework는 각 dispatch scope에서 dependency를 resolve해 그 생성자로 handler를
+만든다. Handler를 singleton service로 등록하지 않는다.
+`logger_t<THandler>`는 framework 기본 dependency다. handler 생성자가
+`logger_t<THandler> &`를 받으면 사용자가 별도 service registration을 작성하지 않아도 DI가
+`.NET`의 `ILogger<T>`처럼 category logger를 주입한다. 로그 출력 대상은 handler 등록이 아니라
+`app.logging().use_console()`, `app.logging().use_file(...)` 같은 host logging 설정에서 정한다.
+custom category가 필요하면 `logger_factory_t`를 dependency로 받아 handler 내부에서 category
+logger를 만들 수 있다.
 
 ```cpp
 auto &options = app.add_zlink_framework();

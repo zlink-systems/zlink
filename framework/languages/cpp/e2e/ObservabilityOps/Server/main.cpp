@@ -338,8 +338,6 @@ class join_actor_handler_t
   public:
     using request_type = obs::join_actor_req_t;
     using reply_type = obs::join_actor_res_t;
-    using dependency_types =
-      fw::dependency_list_t<fw::session_actor_manager_t, server_options_t>;
 
     join_actor_handler_t (fw::session_actor_manager_t &actors,
                           server_options_t &options) :
@@ -377,7 +375,6 @@ class actor_ping_handler_t
   public:
     using request_type = obs::actor_ping_req_t;
     using reply_type = obs::actor_ping_res_t;
-    using dependency_types = fw::dependency_list_t<fw::actor_client_t, fw::actor_directory_t>;
 
     actor_ping_handler_t (fw::actor_client_t &actors, fw::actor_directory_t &directory) :
         _actors (actors), _directory (directory)
@@ -407,8 +404,6 @@ class actor_ping_handler_t
 class obs_session_t final : public fw::packet_stream_session_t
 {
   public:
-    using dependency_types =
-      fw::dependency_list_t<fw::route_client_t>;
 
     explicit obs_session_t (fw::route_client_t &routes) :
         _routes (routes)
@@ -444,11 +439,6 @@ class obs_session_t final : public fw::packet_stream_session_t
 class evidence_handler_t
 {
   public:
-    using dependency_types =
-      fw::dependency_list_t<observability_evidence_t,
-                            fw::location_runtime_query_t,
-                            fw::route_mesh_runtime_t,
-                            drain_control_t>;
 
     evidence_handler_t (observability_evidence_t &evidence,
                         fw::location_runtime_query_t &locations,
@@ -529,7 +519,6 @@ class action_handler_t
   public:
     using request_type = obs::obs_action_req_t;
     using reply_type = obs::obs_action_res_t;
-    using dependency_types = fw::dependency_list_t<fw::route_client_t>;
 
     explicit action_handler_t (fw::route_client_t &routes) :
         _routes (routes)
@@ -552,9 +541,6 @@ class create_room_handler_t
   public:
     using request_type = obs::create_room_req_t;
     using reply_type = obs::create_room_res_t;
-    using dependency_types =
-      fw::dependency_list_t<fw::spot_manager_t, drain_control_t,
-                            host_role_descriptor_t>;
 
     create_room_handler_t (fw::spot_manager_t &spots,
                            drain_control_t &drain,
@@ -599,7 +585,6 @@ class close_room_handler_t
   public:
     using request_type = obs::create_room_req_t;
     using reply_type = obs::create_room_res_t;
-    using dependency_types = fw::dependency_list_t<fw::spot_manager_t>;
 
     explicit close_room_handler_t (fw::spot_manager_t &spots) : _spots (spots) {}
 
@@ -623,7 +608,6 @@ class drain_handler_t
   public:
     using request_type = obs::drain_req_t;
     using reply_type = obs::create_room_res_t;
-    using dependency_types = fw::dependency_list_t<drain_control_t>;
 
     explicit drain_handler_t (drain_control_t &drain) : _drain (drain) {}
 

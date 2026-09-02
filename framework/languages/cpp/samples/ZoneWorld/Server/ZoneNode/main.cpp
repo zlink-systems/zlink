@@ -632,7 +632,6 @@ class announce_fanout_handler_t
 {
   public:
     using event_type = world_announce_event_t;
-    using dependency_types = fw::dependency_list_t<fw::route_client_t>;
     static constexpr const char *topic_name = names_t::announce_topic;
     explicit announce_fanout_handler_t (fw::route_client_t &routes) : _routes (routes) {}
     fw::task_t<void> handle (const world_announce_event_t &event,

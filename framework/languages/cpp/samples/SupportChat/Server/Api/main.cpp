@@ -63,7 +63,6 @@ class authenticate_user_handler_t
   public:
     using request_type = authenticate_user_req_t;
     using reply_type = authenticate_user_res_t;
-    using dependency_types = dependency_list_t<user_directory_t>;
     static constexpr const char *topic_name = authenticate_user_req_t::packet_name;
 
     explicit authenticate_user_handler_t (user_directory_t &users) : _users (users) {}
@@ -91,7 +90,6 @@ class open_conversation_api_handler_t
   public:
     using request_type = open_conversation_api_req_t;
     using reply_type = open_conversation_api_res_t;
-    using dependency_types = dependency_list_t<spot_manager_t>;
     static constexpr const char *topic_name = open_conversation_api_req_t::packet_name;
 
     explicit open_conversation_api_handler_t (spot_manager_t &spots) : _spots (spots) {}

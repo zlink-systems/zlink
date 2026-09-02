@@ -148,8 +148,8 @@ public:
 - **A dependency is declared as a template argument.** With no
   argument, **a default constructor is required** (statically
   verified).
-- **Declaring a handler's dependency with `dependency_list_t<...>`**
-  makes the framework inject those types and build the handler.
+- **Taking dependencies as a handler constructor's parameters** makes the framework inject
+  those types and build the handler.
 - **`logger_t<TCategory>` is a framework dependency** — it's
   auto-wired by `add_framework_dependency`.
 

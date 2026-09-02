@@ -27,8 +27,8 @@ Handlers split into two kinds by execution context, and their structure and life
 completely different.
 
 - **A node handler (channel/HTTP)** — an independent class. `request_type` /
-  `reply_type` / `topic_name` members are the contract, and it receives dependencies
-  through `dependency_types` + constructor injection. Its lifetime is **transient** (fresh
+  `reply_type` / `topic_name` members are the contract, and it receives dependencies as
+  constructor parameters. Its lifetime is **transient** (fresh
   per request), and its execution is **concurrent** (worker pool). That's why you don't put
   mutable domain state in a handler member.
 - **A Spot handler** — inherits `spot_t` or `entry_spot_t` and registers with
@@ -197,8 +197,8 @@ stateDiagram-v2
 ## 4. Configuration: DI Container / Entry Points / module_t
 
 - **DI container** — register with `add_singleton/scoped/transient` on
-  `options.services()`, and the consuming side receives it via `dependency_types` +
-  constructor injection (or `get_required<T>()`). The full API is in
+  `options.services()`, and a handler's consuming side receives it through constructor
+  injection (or `get_required<T>()`). The full API is in
   [Chapter 18, DI Container](18-di-container.en.md).
 - **Map of configuration surfaces** — the `app_t` entry points split by role:
 

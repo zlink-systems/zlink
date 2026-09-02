@@ -640,8 +640,7 @@ class http_options_builder_t
         if (_services->contains (std::type_index (typeid (THandler)))) {
             return;
         }
-        detail::injected_handler_registrar_t<
-          THandler, typename detail::handler_dependencies_t<THandler>::type>::add (*_services);
+        detail::injected_handler_registrar_t<THandler>::add (*_services);
     }
 
     /* Fulfills route DTO serializer registration at map_* time instead of

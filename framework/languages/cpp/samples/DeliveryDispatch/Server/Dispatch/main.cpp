@@ -268,11 +268,6 @@ class assign_delivery_handler_t
 {
   public:
     using message_type = assign_delivery_msg_t;
-    using dependency_types = dependency_list_t<dispatch_state_t,
-                                               courier_selection_policy_t,
-                                               actor_directory_t,
-                                               actor_client_t,
-                                               channel_client_t>;
     static constexpr const char *topic_name = "AssignDeliveryMsg";
 
     assign_delivery_handler_t (dispatch_state_t &state,
@@ -309,11 +304,6 @@ class offer_delivery_result_handler_t
 {
   public:
     using message_type = offer_delivery_result_msg_t;
-    using dependency_types = dependency_list_t<dispatch_state_t,
-                                               courier_selection_policy_t,
-                                               actor_directory_t,
-                                               actor_client_t,
-                                               channel_client_t>;
     static constexpr const char *topic_name = "OfferDeliveryResultMsg";
 
     offer_delivery_result_handler_t (dispatch_state_t &state,
@@ -458,7 +448,6 @@ class create_delivery_http_handler_t
   public:
     using request_type = create_delivery_req_t;
     using reply_type = create_delivery_res_t;
-    using dependency_types = dependency_list_t<channel_client_t>;
     static constexpr const char *topic_name = "CreateDeliveryReq";
 
     explicit create_delivery_http_handler_t (channel_client_t &channels) : _channels (channels) {}
@@ -485,7 +474,6 @@ class server_assertion_http_handler_t
   public:
     using request_type = server_assertion_req_t;
     using reply_type = server_assertion_res_t;
-    using dependency_types = dependency_list_t<evidence_store_t>;
     static constexpr const char *topic_name = "ServerAssertionReq";
 
     explicit server_assertion_http_handler_t (evidence_store_t &evidence) : _evidence (evidence) {}

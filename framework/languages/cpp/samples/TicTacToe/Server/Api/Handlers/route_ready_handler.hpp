@@ -17,8 +17,6 @@ using namespace framework;
 class route_ready_handler_t
 {
   public:
-    using dependency_types = dependency_list_t<route_mesh_runtime_t>;
-
     explicit route_ready_handler_t (route_mesh_runtime_t &runtime) :
         _runtime (runtime)
     {

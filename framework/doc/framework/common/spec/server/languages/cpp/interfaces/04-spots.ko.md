@@ -473,8 +473,8 @@ Entry Spot과 `PerActor` User Spot의 Spot member function은 서로 다른 Acto
 호출될 수 있으며 Spot field에 Actor별 state를 저장하면 안 된다. Actor별 실행 resource는
 Actor activation에 귀속하고 Same-node Join에서는 유지하며 cross-node Join과 relocation
 뒤 target activation에서 다시 만든다. 별도 class인 timer handler는 Spot activation마다
-한 번 만들고 재사용한다. Timer handler가 `dependency_types`를 선언하면 dependency도
-같은 Spot activation scope에서 resolve한다. Spot close와 source relocation에서는 handler와
+한 번 만들고 재사용한다. Timer handler 생성자의 dependency 매개 변수도 같은 Spot activation
+scope에서 resolve한다. Spot close와 source relocation에서는 handler와
 scope를 정리한다. Target activation에서는 새 handler와 scope를 만든다. Application이 timer
 handler를 singleton·scoped·transient service로 따로 등록하거나 lifetime을 선택하지 않는다.
 Public handler lifetime option은 제공하지 않는다.

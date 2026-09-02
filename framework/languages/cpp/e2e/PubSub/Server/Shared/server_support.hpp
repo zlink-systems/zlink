@@ -64,7 +64,6 @@ class operational_evidence_store_t
 class operational_evidence_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<operational_evidence_store_t>;
 
     explicit operational_evidence_handler_t (operational_evidence_store_t &evidence) :
         _evidence (evidence)
@@ -85,7 +84,6 @@ class operational_evidence_handler_t
 class operational_evidence_clear_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<operational_evidence_store_t>;
 
     explicit operational_evidence_clear_handler_t (operational_evidence_store_t &evidence) :
         _evidence (evidence)

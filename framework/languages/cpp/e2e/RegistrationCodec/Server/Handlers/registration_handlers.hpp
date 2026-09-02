@@ -11,7 +11,6 @@ namespace zlink::framework::e2e::registration_codec::server
 class auto_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using request_type = echo_auto_req_t;
     using reply_type = echo_auto_res_t;
 
@@ -30,7 +29,6 @@ class auto_request_handler_t
 class auto_send_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using message_type = echo_auto_msg_t;
 
     explicit auto_send_handler_t (scenario_state_t &state) : _state (state) {}
@@ -47,7 +45,6 @@ class auto_send_handler_t
 class attribute_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using request_type = echo_attr_req_t;
     using reply_type = echo_attr_res_t;
     explicit attribute_request_handler_t (scenario_state_t &state) : _state (state) {}
@@ -68,7 +65,6 @@ class attribute_request_handler_t
 class attribute_send_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using message_type = echo_attr_msg_t;
     explicit attribute_send_handler_t (scenario_state_t &state) : _state (state) {}
 
@@ -100,7 +96,6 @@ class manual_channel_request_handler_t
 class manual_channel_send_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using message_type = echo_manual_msg_t;
 
     explicit manual_channel_send_handler_t (scenario_state_t &state) : _state (state) {}

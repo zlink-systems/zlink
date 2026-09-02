@@ -446,7 +446,6 @@ std::string error_kind_name (const fw::framework_exception_t &error)
 class evidence_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<evidence_store_t>;
     explicit evidence_handler_t (evidence_store_t &evidence) : _evidence (evidence) {}
     fw::http_response_t handle (const fw::http_request_t &)
     {
@@ -460,7 +459,6 @@ class evidence_handler_t
 class evidence_wait_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<evidence_store_t>;
     explicit evidence_wait_handler_t (evidence_store_t &evidence) : _evidence (evidence) {}
     fw::http_response_t handle (const fw::http_request_t &request)
     {
@@ -476,7 +474,6 @@ class evidence_wait_handler_t
 class capture_gate_release_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<capture_gate_store_t>;
     explicit capture_gate_release_handler_t (capture_gate_store_t &gates) : _gates (gates) {}
     fw::http_response_t handle (const fw::http_request_t &request)
     {
@@ -492,7 +489,6 @@ class capture_gate_release_handler_t
 class create_spot_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::spot_manager_t>;
     explicit create_spot_handler_t (fw::spot_manager_t &spots) : _spots (spots) {}
     fw::task_t<fw::http_response_t> handle (const fw::http_request_t &http_request)
     {
@@ -511,7 +507,6 @@ class create_spot_handler_t
 class close_spot_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::spot_manager_t>;
     explicit close_spot_handler_t (fw::spot_manager_t &spots) : _spots (spots) {}
     fw::task_t<fw::http_response_t> handle (const fw::http_request_t &request)
     {
@@ -528,7 +523,6 @@ class close_spot_handler_t
 class create_actor_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::actor_manager_t, evidence_store_t>;
     create_actor_handler_t (fw::actor_manager_t &actor_manager, evidence_store_t &evidence) :
         _actor_manager (actor_manager), _evidence (evidence)
     {
@@ -566,7 +560,6 @@ class create_actor_handler_t
 class relocate_actor_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::actor_client_t, evidence_store_t>;
     relocate_actor_handler_t (fw::actor_client_t &actors, evidence_store_t &evidence) :
         _actors (actors), _evidence (evidence)
     {
@@ -596,7 +589,6 @@ class relocate_actor_handler_t
 class probe_actor_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::actor_client_t>;
     explicit probe_actor_handler_t (fw::actor_client_t &actors) : _actors (actors) {}
     fw::task_t<fw::http_response_t> handle (const fw::http_request_t &http_request)
     {
@@ -621,7 +613,6 @@ class probe_actor_handler_t
 class actor_ref_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::actor_directory_t>;
     explicit actor_ref_handler_t (fw::actor_directory_t &directory) : _directory (directory) {}
     fw::task_t<fw::http_response_t> handle (const fw::http_request_t &http_request)
     {
@@ -642,7 +633,6 @@ class actor_ref_handler_t
 class shutdown_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<shutdown_flag_t>;
     explicit shutdown_handler_t (shutdown_flag_t &flag) : _flag (flag) {}
     fw::http_response_t handle (const fw::http_request_t &)
     {

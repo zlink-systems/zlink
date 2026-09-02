@@ -19,7 +19,6 @@ namespace zlink::framework::e2e::resilience_lifecycle::provider
 class evidence_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<evidence_store_t>;
 
     explicit evidence_handler_t (evidence_store_t &evidence) : _evidence (evidence) {}
 
@@ -37,10 +36,6 @@ class evidence_handler_t
 class server_weight_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<
-      zlink::framework::channel_runtime_options_t,
-      evidence_store_t,
-      server_weight_state_t>;
 
     server_weight_handler_t (zlink::framework::channel_runtime_options_t &options,
                              evidence_store_t &evidence,
@@ -145,7 +140,6 @@ class shutdown_handler_t
 class weight_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<server_weight_state_t>;
 
     explicit weight_handler_t (server_weight_state_t &state) : _state (state) {}
 
@@ -163,7 +157,6 @@ class weight_handler_t
 class weight_wait_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<server_weight_state_t>;
 
     explicit weight_wait_handler_t (server_weight_state_t &state) : _state (state) {}
 
@@ -199,7 +192,6 @@ class weight_wait_handler_t
 class observer_fault_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<fault_state_t>;
 
     explicit observer_fault_handler_t (fault_state_t &state) : _state (state) {}
 
@@ -218,7 +210,6 @@ class observer_fault_handler_t
 class gray_fault_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<fault_state_t>;
 
     explicit gray_fault_handler_t (fault_state_t &state) : _state (state) {}
 
@@ -237,7 +228,6 @@ class gray_fault_handler_t
 class clear_fault_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<fault_state_t>;
 
     explicit clear_fault_handler_t (fault_state_t &state) : _state (state) {}
 

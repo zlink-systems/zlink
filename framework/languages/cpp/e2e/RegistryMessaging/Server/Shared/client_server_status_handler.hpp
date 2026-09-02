@@ -28,7 +28,6 @@ inline const char *client_server_state_name (
 class client_server_status_handler_t
 {
   public:
-    using dependency_types = dependency_list_t<client_server_runtime_t>;
 
     explicit client_server_status_handler_t (client_server_runtime_t &runtime) :
         _runtime (runtime)

@@ -11,7 +11,6 @@ namespace zlink::framework::e2e::registration_codec::server
 class filter_order_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<filter_order_state_t>;
     using request_type = filter_order_req_t;
     using reply_type = filter_order_res_t;
 
@@ -30,7 +29,6 @@ class filter_order_handler_t
 class first_filter_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<filter_order_state_t, scenario_state_t>;
 
     first_filter_t (filter_order_state_t &state, scenario_state_t &scenario_state) :
         _state (state), _scenario_state (scenario_state)
@@ -63,7 +61,6 @@ class first_filter_t
 class second_filter_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<filter_order_state_t>;
 
     explicit second_filter_t (filter_order_state_t &state) : _state (state) {}
 

@@ -17,7 +17,6 @@ namespace yd = zlink::framework::e2e::automatic_turn_dispatch;
 class delay_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<delay_state_t>;
     using request_type = yd::delay_req_t;
     using reply_type = yd::delay_res_t;
 

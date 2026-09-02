@@ -74,7 +74,6 @@ class place_order_handler_t
   public:
     using request_type = place_order_t;
     using reply_type = order_placed_t;
-    using dependency_types = dependency_list_t<order_store_t>;
     static constexpr const char *topic_name = "PlaceOrder";
 
     explicit place_order_handler_t (order_store_t &orders) : _orders (orders) {}
@@ -272,14 +271,17 @@ class get_profile_handler_t
   public:
     using request_type = get_profile_request_t;
     using reply_type = get_profile_reply_t;
-    using dependency_types = dependency_list_t<profile_store_t>;
     static constexpr const char *topic_name = "GetProfile";
+
+    explicit get_profile_handler_t (profile_store_t &store) : _store (store) {}
 
     task_t<get_profile_reply_t> handle (const get_profile_request_t &request)
     {
         auto profile = co_await _store.load (request.account_id);
         co_return get_profile_reply_t{profile.account_id, profile.nickname};
     }
+  private:
+    profile_store_t &_store;
 };
 
 // one-way send (no response)
@@ -332,8 +334,9 @@ class refresh_cache_handler_t
 {
   public:
     using request_type = refresh_user_cache_command_t;
-    using dependency_types = dependency_list_t<publisher_t>;
     static constexpr const char *topic_name = "RefreshCache";
+
+    explicit refresh_cache_handler_t (publisher_t &publisher) : _publisher (publisher) {}
 
     task_t<void> handle (const refresh_user_cache_command_t &command)
     {
@@ -472,7 +475,7 @@ mixed with RouteMesh handlers.
 class price_service_t
 {
   public:
-    using dependency_types = dependency_list_t<route_client_t>;
+    explicit price_service_t (route_client_t &client) : _client (client) {}
 
     task_t<double> get (const std::string &symbol)
     {
@@ -529,7 +532,7 @@ co_await client
 class profile_service_t
 {
   public:
-    using dependency_types = dependency_list_t<publisher_t>;
+    explicit profile_service_t (publisher_t &publisher) : _publisher (publisher) {}
 
     task_t<void> announce (const std::string &account_id)
     {
@@ -577,7 +580,7 @@ checks, metrics -- is gathered in one place with a handler filter.
 class audit_filter_t
 {
   public:
-    using dependency_types = dependency_list_t<logger_t<audit_filter_t>>;
+    explicit audit_filter_t (logger_t<audit_filter_t> &logger) : _logger (logger) {}
 
     task_t<void> invoke (handler_filter_context_t &context, // This dispatch's message info.
                          handler_filter_next_t next)        // Runs the next filter or handler.

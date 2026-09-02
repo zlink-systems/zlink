@@ -120,9 +120,6 @@ void from_json (const nlohmann::json &json, node_probe_t &value)
 class status_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<
-        zlink::framework::route_mesh_runtime_t>;
 
     explicit status_handler_t (
       zlink::framework::route_mesh_runtime_t &runtime) :
@@ -163,8 +160,6 @@ class status_handler_t
 class node_direct_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t>;
 
     explicit node_direct_handler_t (
       zlink::framework::route_client_t &routes) :

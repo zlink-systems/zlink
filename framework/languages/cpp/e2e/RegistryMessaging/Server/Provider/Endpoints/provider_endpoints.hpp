@@ -55,7 +55,6 @@ inline scenario_route_res_t request_route (zlink::framework::route_client_t &rou
 class evidence_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
 
     explicit evidence_handler_t (scenario_state_t &state) : _state (state) {}
 
@@ -73,7 +72,6 @@ class evidence_handler_t
 class http_profile_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_req_t;
     using reply_type = profile_res_t;
 
@@ -94,7 +92,6 @@ class http_profile_request_handler_t
 class http_profile_command_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
     using request_type = profile_msg_t;
     using reply_type = operation_status_t;
 
@@ -116,7 +113,6 @@ class http_profile_command_handler_t
 class http_route_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::route_client_t>;
     using request_type = scenario_route_req_t;
     using reply_type = scenario_route_res_t;
 
@@ -137,7 +133,6 @@ class http_route_request_handler_t
 class http_route_missing_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::route_client_t>;
     using request_type = scenario_route_req_t;
     using reply_type = request_failure_res_t;
 
@@ -164,8 +159,6 @@ class http_route_missing_handler_t
 class server_weight_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<
-      zlink::framework::channel_runtime_options_t>;
 
     explicit server_weight_handler_t (zlink::framework::channel_runtime_options_t &options) :
         _options (options)

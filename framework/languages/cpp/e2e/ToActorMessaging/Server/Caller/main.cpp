@@ -119,7 +119,6 @@ e2e::actor_call_res_t failed (const e2e::actor_call_req_t &request,
 class send_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::actor_client_t>;
     using request_type = e2e::actor_call_req_t;
     using reply_type = e2e::actor_call_res_t;
 
@@ -149,7 +148,6 @@ class send_handler_t
 class request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::actor_client_t>;
     using request_type = e2e::actor_call_req_t;
     using reply_type = e2e::actor_call_res_t;
 
@@ -180,8 +178,6 @@ class request_handler_t
 class location_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::actor_directory_t>;
     using request_type = e2e::actor_call_req_t;
     using reply_type = e2e::actor_call_res_t;
 
@@ -205,9 +201,6 @@ class location_handler_t
 class capture_ref_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::actor_directory_t,
-                                          captured_actor_refs_t>;
     using request_type = e2e::actor_call_req_t;
     using reply_type = e2e::actor_call_res_t;
 
@@ -237,9 +230,6 @@ class capture_ref_handler_t
 class request_captured_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::actor_client_t,
-                                          captured_actor_refs_t>;
     using request_type = e2e::actor_call_req_t;
     using reply_type = e2e::actor_call_res_t;
 
@@ -280,9 +270,6 @@ class request_captured_handler_t
 class destroy_captured_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::actor_manager_t,
-                                          captured_actor_refs_t>;
     using request_type = e2e::actor_call_req_t;
     using reply_type = e2e::actor_call_res_t;
 
@@ -317,8 +304,6 @@ class destroy_captured_handler_t
 class disconnect_routes_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<actor_route_connections_t>;
 
     explicit disconnect_routes_handler_t (actor_route_connections_t &routes) :
         _routes (routes)
@@ -340,8 +325,6 @@ class disconnect_routes_handler_t
 class reconnect_routes_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<actor_route_connections_t>;
 
     explicit reconnect_routes_handler_t (actor_route_connections_t &routes) :
         _routes (routes)
@@ -363,9 +346,6 @@ class reconnect_routes_handler_t
 class route_status_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<e2e::caller_configuration_t,
-                                          zlink::framework::route_mesh_runtime_t>;
 
     route_status_handler_t (const e2e::caller_configuration_t &configuration,
                             zlink::framework::route_mesh_runtime_t &runtime) :

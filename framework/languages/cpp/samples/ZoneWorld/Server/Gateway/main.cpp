@@ -18,7 +18,6 @@ namespace fw = zlink::framework;
 class game_session_t final : public fw::packet_stream_session_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::actor_client_t>;
 
     explicit game_session_t (fw::actor_client_t &actor_client) : _actor_client (actor_client) {}
 
@@ -174,8 +173,6 @@ class world_bootstrap_handler_t
   public:
     using request_type = world_bootstrap_req_t;
     using reply_type = world_bootstrap_res_t;
-    using dependency_types =
-      fw::dependency_list_t<fw::spot_manager_t, fw::actor_manager_t, fw::actor_client_t>;
     static constexpr const char *topic_name = "ZoneWorldBootstrapReq";
 
     world_bootstrap_handler_t (fw::spot_manager_t &spots,

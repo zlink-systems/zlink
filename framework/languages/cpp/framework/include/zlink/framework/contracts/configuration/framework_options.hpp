@@ -192,8 +192,7 @@ class handler_options_builder_t
         _state->add_handler_packet (group_name, detail::handler_group_kind_t::request, topic_name,
                                     detail::message_name<request_type> ());
 
-        detail::injected_handler_registrar_t<
-          THandler, typename detail::handler_dependencies_t<THandler>::type>::add (*_services);
+        detail::injected_handler_registrar_t<THandler>::add (*_services);
 
         auto *handlers = _handlers;
         add_serializers<request_type> ();
@@ -294,8 +293,7 @@ class handler_options_builder_t
         _state->add_handler_packet (group_name, detail::handler_group_kind_t::send, topic_name,
                                     detail::message_name<message_type> ());
 
-        detail::injected_handler_registrar_t<
-          THandler, typename detail::handler_dependencies_t<THandler>::type>::add (*_services);
+        detail::injected_handler_registrar_t<THandler>::add (*_services);
 
         auto *handlers = _handlers;
         add_serializers<message_type> ();
@@ -390,8 +388,7 @@ class handler_options_builder_t
         _state->add_handler_packet (group_name, detail::handler_group_kind_t::publish, topic_name,
                                     detail::message_name<event_type> ());
 
-        detail::injected_handler_registrar_t<
-          THandler, typename detail::handler_dependencies_t<THandler>::type>::add (*_services);
+        detail::injected_handler_registrar_t<THandler>::add (*_services);
 
         auto *handlers = _handlers;
         add_serializers<event_type> ();
@@ -1270,8 +1267,7 @@ class stream_node_options_builder_t
     {
         auto session_name = detail::stream_session_name<TSession> ();
         set_session_name (session_name);
-        detail::injected_stream_session_registrar_t<
-          TSession, typename detail::handler_dependencies_t<TSession>::type>::add (*_services);
+        detail::injected_stream_session_registrar_t<TSession>::add (*_services);
         _options->stream_session_factories[session_name] =
           [] (service_provider_t &provider) -> packet_stream_session_t & {
             return provider.get_required<TSession> ();
@@ -1656,8 +1652,7 @@ class zlink_framework_options_t
 
     template <typename TFilter> zlink_framework_options_t &use_filter ()
     {
-        detail::injected_handler_registrar_t<
-          TFilter, typename detail::handler_dependencies_t<TFilter>::type>::add (*_services);
+        detail::injected_handler_registrar_t<TFilter>::add (*_services);
         _handlers->use_filter<TFilter> ();
         return *this;
     }

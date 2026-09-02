@@ -12,7 +12,6 @@ namespace zlink::framework::e2e::pubsub::server::subscriber
 template <const char *Topic> class event_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<evidence_store_t>;
     using event_type = event_t;
     static constexpr const char *topic_name = Topic;
 

@@ -9,7 +9,6 @@ namespace zlink::framework::e2e::pubsub::server::subscriber
 class evidence_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<evidence_store_t>;
 
     explicit evidence_handler_t (evidence_store_t &state) : _state (state) {}
 
@@ -27,7 +26,6 @@ class evidence_handler_t
 class evidence_wait_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<evidence_store_t>;
     using request_type = zlink::framework::e2e::pubsub::evidence_wait_req_t;
     using reply_type = std::vector<std::string>;
 

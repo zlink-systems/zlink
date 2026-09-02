@@ -114,11 +114,6 @@ class create_game_http_handler_t {
 public:
     using request_type = create_game_http_req_t;
     using reply_type = create_game_http_res_t;
-    using dependency_types =
-      zlink::framework::dependency_list_t<
-        zlink::framework::request_client_t,
-        zlink::framework::logger_t<create_game_http_handler_t>>;
-
     explicit create_game_http_handler_t(
       zlink::framework::request_client_t &client,
       zlink::framework::logger_t<create_game_http_handler_t> &logger);
@@ -147,8 +142,8 @@ create_game_http_handler_t::handle(const create_game_http_req_t &request)
 }
 ```
 
-`request_type`, `reply_type`, `dependency_types`, `handle(...)` 규칙은 message handler와
-같게 유지한다. HTTP만 별도 생성자 주입 규칙을 만들지 않는다.
+`request_type`, `reply_type`, 생성자 의존성, `handle(...)` 규칙은 message handler와 같게
+유지한다. HTTP만 별도 생성자 주입 규칙을 만들지 않는다.
 
 지원해야 하는 HTTP handler signature 형식은 아래와 같다.
 
@@ -539,7 +534,7 @@ framework의 `http_request_t`, `http_response_t`와 `http_context_t`만 사용�
 | GET route | `options.http().map_get<handler_t>("/games/{id}")` |
 | request body binding | JSON serializer로 `request_type` 생성 |
 | route/query binding | route parameter와 query string을 `request_type`에 병합 |
-| dependency injection | `dependency_types` 기반 생성자 주입 |
+| dependency injection | 생성자 매개 변수 기반 자동 주입 |
 | middleware/filter | `options.http().use<TMiddleware>()`와 `http_context_t` |
 | 실행 중단 | host shutdown/drain 정책. public handler signature에는 기본 취소 인자를 노출하지 않음 |
 | typed reply | handler가 `reply_type` DTO 반환 |

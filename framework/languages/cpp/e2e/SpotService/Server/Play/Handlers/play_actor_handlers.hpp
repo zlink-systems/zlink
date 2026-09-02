@@ -33,9 +33,6 @@ inline std::string public_error_kind_name (zlink::framework::framework_error_kin
 class join_spot_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::session_actor_manager_t>;
     join_spot_handler_t (scenario_state_t &state,
                          zlink::framework::session_actor_manager_t &actors) :
         _state (state), _actors (actors)
@@ -92,7 +89,6 @@ class join_spot_handler_t
 class channel_echo_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using request_type = e2e::channel_echo_req_t;
     using reply_type = e2e::channel_echo_res_t;
 
@@ -118,7 +114,6 @@ class channel_echo_handler_t
 class channel_command_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using message_type = e2e::channel_msg_t;
 
     explicit channel_command_handler_t (scenario_state_t &state) : _state (state) {}
@@ -135,7 +130,6 @@ class channel_command_handler_t
 class channel_slow_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using request_type = e2e::channel_slow_req_t;
     using reply_type = e2e::channel_slow_res_t;
 
@@ -155,8 +149,6 @@ class channel_slow_handler_t
 class mutate_spot_state_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::session_actor_manager_t>;
 
     explicit mutate_spot_state_handler_t (zlink::framework::session_actor_manager_t &actors) :
         _actors (actors)
@@ -194,9 +186,6 @@ class mutate_spot_state_handler_t
 class complex_actor_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::session_actor_manager_t>;
 
     complex_actor_handler_t (scenario_state_t &state,
                              zlink::framework::session_actor_manager_t &actors) :
@@ -265,9 +254,6 @@ class complex_actor_handler_t
 class missing_actor_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::session_actor_manager_t>;
 
     missing_actor_handler_t (scenario_state_t &state,
                              zlink::framework::session_actor_manager_t &actors) :
@@ -330,11 +316,6 @@ class missing_actor_handler_t
 class remote_actor_flow_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::session_actor_manager_t,
-                                          play_a_owner_http_client_t,
-                                          play_b_owner_http_client_t>;
 
     remote_actor_flow_handler_t (scenario_state_t &state,
                                  zlink::framework::session_actor_manager_t &actors,
@@ -436,12 +417,6 @@ class remote_actor_flow_handler_t
 class remote_actor_request_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::route_client_t,
-                                          zlink::framework::session_actor_manager_t,
-                                          play_a_owner_http_client_t,
-                                          play_b_owner_http_client_t>;
 
     remote_actor_request_handler_t (scenario_state_t &state,
                                     zlink::framework::route_client_t &routes,
@@ -546,8 +521,6 @@ class remote_actor_request_handler_t
 class worker_spot_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::session_actor_manager_t>;
 
     explicit worker_spot_handler_t (zlink::framework::session_actor_manager_t &actors) :
         _actors (actors)

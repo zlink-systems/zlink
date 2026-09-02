@@ -846,9 +846,6 @@ struct automatic_handler_scope_dependency_t
 class automatic_handler_scope_filter_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<
-        automatic_handler_scope_dependency_t>;
 
     explicit automatic_handler_scope_filter_t (
       automatic_handler_scope_dependency_t &dependency) :
@@ -887,9 +884,6 @@ class automatic_scoped_request_handler_t
   public:
     using request_type = auto_connect_request_t;
     using reply_type = auto_connect_reply_t;
-    using dependency_types =
-      zlink::framework::dependency_list_t<
-        automatic_handler_scope_dependency_t>;
 
     explicit automatic_scoped_request_handler_t (
       automatic_handler_scope_dependency_t &dependency) :
@@ -921,9 +915,6 @@ class auto_connect_event_handler_t
   public:
     using event_type = auto_connect_event_t;
     static constexpr const char *topic_name = "profile.changed";
-    using dependency_types =
-      zlink::framework::dependency_list_t<
-        automatic_handler_scope_dependency_t>;
 
     explicit auto_connect_event_handler_t (
       automatic_handler_scope_dependency_t &dependency) :
@@ -956,9 +947,6 @@ class blocked_auto_connect_event_handler_t
   public:
     using event_type = blocked_auto_connect_event_t;
     static constexpr const char *topic_name = "profile.changed";
-    using dependency_types =
-      zlink::framework::dependency_list_t<
-        automatic_handler_scope_dependency_t>;
 
     explicit blocked_auto_connect_event_handler_t (
       automatic_handler_scope_dependency_t &) {}

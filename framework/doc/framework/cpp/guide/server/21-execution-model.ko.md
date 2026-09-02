@@ -24,7 +24,7 @@ C++ 코드에서 어떤 실행 모델과 수명주기로 나타나는지 설명�
 핸들러는 실행 컨텍스트에 따라 두 종류로 나뉘고, 구조와 수명이 완전히 다르다.
 
 - **노드 핸들러(채널·HTTP)** — 독립 클래스. `request_type` / `reply_type` /
-  `topic_name` 멤버가 계약이고, `dependency_types` + 생성자 주입으로 의존성을 받는다.
+  `topic_name` 멤버가 계약이고, 생성자 매개 변수로 의존성을 주입받는다.
   수명은 **transient**(요청마다 새로), 실행은 **동시**(worker 풀). 그래서 가변
   도메인 상태를 핸들러 멤버에 두지 않는다.
 - **Spot 핸들러** — `spot_t` 또는 `entry_spot_t`를 상속하고 `configure()`에서
@@ -189,8 +189,8 @@ stateDiagram-v2
 ## 4. 구성: DI 컨테이너 · 진입점 · module_t
 
 - **DI 컨테이너** — `options.services()` 에 `add_singleton/scoped/transient` 로
-  등록하고, 소비 측은 `dependency_types` + 생성자 주입(또는 `get_required<T>()`)으로
-  받는다. 전체 API 는 [18장 DI 컨테이너](18-di-container.ko.md).
+  등록하고, handler 소비 측은 생성자 주입(또는 `get_required<T>()`)으로 받는다. 전체 API 는
+  [18장 DI 컨테이너](18-di-container.ko.md).
 - **구성 표면 지도** — `app_t` 진입점이 역할별로 나뉜다:
 
   | 진입점 | 역할 | 다루는 장 |

@@ -226,8 +226,6 @@ class ops_state_t
 class report_node_status_handler_t
 {
   public:
-    using dependency_types =
-      fw::dependency_list_t<ops_state_t, ops_console_registry_t, ops_notification_queue_t>;
     report_node_status_handler_t (ops_state_t &state,
                                   ops_console_registry_t &consoles,
                                   ops_notification_queue_t &notifications) :
@@ -256,7 +254,6 @@ class report_node_status_handler_t
 class report_spot_event_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<ops_console_registry_t>;
     explicit report_spot_event_handler_t (ops_console_registry_t &consoles) : _consoles (consoles)
     {
     }
@@ -344,11 +341,6 @@ class ops_monitor_service_t final : public fw::hosted_service_t
 class ops_session_t final : public fw::packet_stream_session_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<ops_state_t,
-                                                   ops_console_registry_t,
-                                                   fw::publisher_t,
-                                                   fw::route_client_t,
-                                                   maintenance_store_t>;
 
     ops_session_t (ops_state_t &state,
                    ops_console_registry_t &consoles,

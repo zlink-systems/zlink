@@ -239,8 +239,6 @@ inline void failing_timer_handler_t::handle (monitoring_spot_t &,
 class profile_request_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<server::evidence_store_t>;
     using request_type = profile_req_t;
     using reply_type = profile_res_t;
 
@@ -265,8 +263,6 @@ class profile_request_handler_t
 class mesh_profile_request_dispatch_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<server::evidence_store_t>;
     using request_type = profile_req_t;
     using reply_type = profile_res_t;
 
@@ -295,9 +291,6 @@ class mesh_profile_request_dispatch_handler_t
 class mesh_application_gate_dispatch_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<
-      application_gate_t,
-      server::evidence_store_t>;
     using request_type = application_gate_req_t;
     using reply_type = application_gate_res_t;
 
@@ -327,8 +320,6 @@ class mesh_application_gate_dispatch_handler_t
 class application_gate_arm_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<application_gate_t>;
 
     explicit application_gate_arm_handler_t (application_gate_t &gate) :
         _gate (gate)
@@ -349,8 +340,6 @@ class application_gate_arm_handler_t
 class application_gate_wait_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<application_gate_t>;
 
     explicit application_gate_wait_handler_t (application_gate_t &gate) :
         _gate (gate)
@@ -372,8 +361,6 @@ class application_gate_wait_handler_t
 class application_gate_release_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<application_gate_t>;
 
     explicit application_gate_release_handler_t (application_gate_t &gate) :
         _gate (gate)
@@ -394,8 +381,6 @@ class application_gate_release_handler_t
 class message_flow_mode_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<app_reference_t>;
 
     explicit message_flow_mode_handler_t (app_reference_t &app) : _app (app.get ())
     {
@@ -425,9 +410,6 @@ class message_flow_mode_handler_t
 class mesh_profile_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<
-      zlink::framework::route_client_t,
-      server::evidence_store_t>;
 
     explicit mesh_profile_request_handler_t (
       zlink::framework::route_client_t &routes,
@@ -465,8 +447,6 @@ class mesh_profile_request_handler_t
 class mesh_application_gate_request_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t>;
 
     explicit mesh_application_gate_request_handler_t (
       zlink::framework::route_client_t &routes) :
@@ -499,8 +479,6 @@ class mesh_application_gate_request_handler_t
 class server_weight_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<
-      zlink::framework::channel_runtime_options_t, server::evidence_store_t>;
 
     server_weight_handler_t (zlink::framework::channel_runtime_options_t &options,
                              server::evidence_store_t &evidence) :
@@ -536,8 +514,6 @@ class server_weight_handler_t
 class create_spot_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<
-      zlink::framework::spot_manager_t, server::evidence_store_t>;
 
     create_spot_handler_t (zlink::framework::spot_manager_t &spots,
                            server::evidence_store_t &evidence) :
@@ -738,8 +714,6 @@ inline nlohmann::json location_object_json (
 class exact_location_object_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<
-      zlink::framework::location_runtime_query_t>;
 
     explicit exact_location_object_handler_t (
       zlink::framework::location_runtime_query_t &query) :
@@ -776,8 +750,6 @@ class exact_location_object_handler_t
 class list_location_objects_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<
-      zlink::framework::location_runtime_query_t>;
 
     explicit list_location_objects_handler_t (
       zlink::framework::location_runtime_query_t &query) :
@@ -828,8 +800,6 @@ class list_location_objects_handler_t
 class create_actor_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::actor_manager_t>;
 
     explicit create_actor_handler_t (zlink::framework::actor_manager_t &actors) :
         _actors (actors)
@@ -881,8 +851,6 @@ class create_actor_handler_t
 class delete_actor_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::actor_manager_t>;
 
     explicit delete_actor_handler_t (zlink::framework::actor_manager_t &actors) :
         _actors (actors)
@@ -910,8 +878,6 @@ class delete_actor_handler_t
 class create_subject_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<
-      zlink::framework::spot_manager_t>;
 
     explicit create_subject_handler_t (
       zlink::framework::spot_manager_t &spots) :
@@ -947,8 +913,6 @@ class create_subject_handler_t
 class close_subject_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<
-      zlink::framework::spot_manager_t>;
 
     explicit close_subject_handler_t (
       zlink::framework::spot_manager_t &spots) :
@@ -981,8 +945,6 @@ class close_subject_handler_t
 class publish_probe_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<
-      zlink::framework::spot_publisher_client_t>;
 
     explicit publish_probe_handler_t (
       zlink::framework::spot_publisher_client_t &publisher) :
@@ -1117,10 +1079,6 @@ class runtime_observation_store_t
 class runtime_observe_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<
-      zlink::framework::route_mesh_runtime_t,
-      runtime_observation_store_t,
-      server::evidence_store_t>;
 
     runtime_observe_handler_t (
       zlink::framework::route_mesh_runtime_t &runtime,
@@ -1148,10 +1106,6 @@ class runtime_observe_handler_t
 class runtime_observe_isolation_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<
-      zlink::framework::route_mesh_runtime_t,
-      runtime_observation_store_t,
-      server::evidence_store_t>;
 
     runtime_observe_isolation_handler_t (
       zlink::framework::route_mesh_runtime_t &runtime,
@@ -1177,8 +1131,6 @@ class runtime_observe_isolation_handler_t
 class runtime_snapshot_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_mesh_runtime_t>;
 
     explicit runtime_snapshot_handler_t (
       zlink::framework::route_mesh_runtime_t &runtime) :
@@ -1244,8 +1196,6 @@ class runtime_snapshot_handler_t
 class mesh_weight_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<
-      zlink::framework::route_mesh_runtime_options_t>;
 
     explicit mesh_weight_handler_t (
       zlink::framework::route_mesh_runtime_options_t &options) :
@@ -1278,8 +1228,6 @@ class mesh_weight_handler_t
 class runtime_validation_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_mesh_runtime_t>;
 
     explicit runtime_validation_handler_t (
       zlink::framework::route_mesh_runtime_t &runtime) :

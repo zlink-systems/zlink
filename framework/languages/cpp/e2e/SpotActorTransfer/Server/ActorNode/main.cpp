@@ -780,8 +780,6 @@ std::string error_kind_name (const fw::framework_exception_t &error);
 class transfer_session_t final : public fw::packet_stream_session_t
 {
   public:
-    using dependency_types =
-      fw::dependency_list_t<fw::session_actor_manager_t, fw::actor_directory_t>;
 
     transfer_session_t (fw::session_actor_manager_t &actors, fw::actor_directory_t &directory) :
         _actors (actors), _directory (directory)
@@ -900,7 +898,6 @@ std::string route_value (const fw::http_request_t &request, const char *key)
 class evidence_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<evidence_store_t>;
 
     explicit evidence_handler_t (evidence_store_t &evidence) : _evidence (evidence) {}
 
@@ -916,7 +913,6 @@ class evidence_handler_t
 class evidence_wait_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<evidence_store_t>;
 
     explicit evidence_wait_handler_t (evidence_store_t &evidence) : _evidence (evidence) {}
 
@@ -936,7 +932,6 @@ class evidence_wait_handler_t
 class joined_gate_release_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<joined_gate_store_t>;
 
     explicit joined_gate_release_handler_t (joined_gate_store_t &gates) : _gates (gates) {}
 
@@ -954,7 +949,6 @@ class joined_gate_release_handler_t
 class transfer_gate_release_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<transfer_gate_store_t>;
 
     explicit transfer_gate_release_handler_t (transfer_gate_store_t &gates) : _gates (gates) {}
 
@@ -972,7 +966,6 @@ class transfer_gate_release_handler_t
 class handler_gate_release_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<handler_gate_store_t>;
 
     explicit handler_gate_release_handler_t (handler_gate_store_t &gates) : _gates (gates) {}
 
@@ -990,7 +983,6 @@ class handler_gate_release_handler_t
 class create_spot_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::spot_manager_t, evidence_store_t>;
 
     create_spot_handler_t (fw::spot_manager_t &spots, evidence_store_t &evidence) :
         _spots (spots), _evidence (evidence)
@@ -1016,7 +1008,6 @@ class create_spot_handler_t
 class close_spot_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::spot_manager_t>;
 
     explicit close_spot_handler_t (fw::spot_manager_t &spots) : _spots (spots) {}
 
@@ -1035,8 +1026,6 @@ class close_spot_handler_t
 class create_actor_handler_t
 {
   public:
-    using dependency_types =
-      fw::dependency_list_t<fw::actor_manager_t, fw::session_actor_manager_t, evidence_store_t>;
 
     create_actor_handler_t (fw::actor_manager_t &actor_manager,
                             fw::session_actor_manager_t &session_actors,
@@ -1104,7 +1093,6 @@ fw::actor_ref_t require_actor_ref (fw::actor_directory_t &directory, const std::
 class actor_ref_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::actor_directory_t>;
 
     explicit actor_ref_handler_t (fw::actor_directory_t &directory) : _directory (directory) {}
 
@@ -1140,8 +1128,6 @@ std::string error_kind_name (const fw::framework_exception_t &error)
 class join_actor_handler_t
 {
   public:
-    using dependency_types =
-      fw::dependency_list_t<fw::actor_directory_t, fw::actor_client_t, evidence_store_t>;
 
     join_actor_handler_t (fw::actor_directory_t &directory,
                           fw::actor_client_t &actors,
@@ -1192,7 +1178,6 @@ class join_actor_handler_t
 class probe_actor_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::actor_directory_t, fw::actor_client_t>;
 
     probe_actor_handler_t (fw::actor_directory_t &directory, fw::actor_client_t &actors) :
         _directory (directory), _actors (actors)
@@ -1228,7 +1213,6 @@ class probe_actor_handler_t
 class probe_ref_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::actor_client_t>;
 
     explicit probe_ref_handler_t (fw::actor_client_t &actors) : _actors (actors) {}
 
@@ -1262,7 +1246,6 @@ class probe_ref_handler_t
 class send_ref_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::actor_client_t>;
 
     explicit send_ref_handler_t (fw::actor_client_t &actors) : _actors (actors) {}
 
@@ -1286,7 +1269,6 @@ class send_ref_handler_t
 class send_actor_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::actor_client_t>;
 
     explicit send_actor_handler_t (fw::actor_client_t &actors) : _actors (actors) {}
 
@@ -1305,7 +1287,6 @@ class send_actor_handler_t
 class bound_push_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::actor_directory_t, fw::actor_client_t>;
 
     bound_push_handler_t (fw::actor_directory_t &directory, fw::actor_client_t &actors) :
         _directory (directory), _actors (actors)
@@ -1336,7 +1317,6 @@ class shutdown_flag_t
 class shutdown_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<shutdown_flag_t>;
 
     explicit shutdown_handler_t (shutdown_flag_t &flag) : _flag (flag) {}
 
@@ -1353,7 +1333,6 @@ class shutdown_handler_t
 class relocation_store_activity_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<relocation_store_activity_t>;
 
     explicit relocation_store_activity_handler_t (relocation_store_activity_t &activity) :
         _activity (activity)

@@ -122,11 +122,6 @@ class create_game_http_handler_t {
 public:
     using request_type = create_game_http_req_t;
     using reply_type = create_game_http_res_t;
-    using dependency_types =
-      zlink::framework::dependency_list_t<
-        zlink::framework::request_client_t,
-        zlink::framework::logger_t<create_game_http_handler_t>>;
-
     explicit create_game_http_handler_t(
       zlink::framework::request_client_t &client,
       zlink::framework::logger_t<create_game_http_handler_t> &logger);
@@ -156,7 +151,7 @@ create_game_http_handler_t::handle(const create_game_http_req_t &request)
 }
 ```
 
-The `request_type`, `reply_type`, `dependency_types`, `handle(...)`
+The `request_type`, `reply_type`, constructor-dependency, `handle(...)`
 convention stays the same as a message handler. HTTP doesn't make a
 separate constructor injection convention.
 
@@ -601,7 +596,7 @@ use the framework's `http_request_t`, `http_response_t`, and
 | GET route | `options.http().map_get<handler_t>("/games/{id}")` |
 | Request body binding | Builds `request_type` with the JSON serializer |
 | Route/query binding | Merges route parameter and query string into `request_type` |
-| Dependency injection | Constructor injection based on `dependency_types` |
+| Dependency injection | Automatic injection based on constructor parameters |
 | Middleware/filter | `options.http().use<TMiddleware>()` and `http_context_t` |
 | Execution interruption | Host shutdown/drain policy. A default cancellation argument isn't exposed on the public handler signature |
 | Typed reply | The handler returns a `reply_type` DTO |

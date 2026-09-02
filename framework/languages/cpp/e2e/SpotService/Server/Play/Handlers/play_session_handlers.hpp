@@ -10,8 +10,6 @@ namespace e2e = zlink::framework::e2e::spot_service;
 class push_bound_session_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::session_actor_manager_t>;
 
     explicit push_bound_session_handler_t (zlink::framework::session_actor_manager_t &actors) :
         _actors (actors)

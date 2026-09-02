@@ -189,8 +189,8 @@ options.http ()
 
 - **Configuration** — CLI 인자, 환경 변수, JSON 파일을 우선순위 순서로 합성.
   `bind<T>()` 한 번으로 설정 섹션을 struct에 매핑한다.
-- **DI 컨테이너** — `dependency_types` 선언만으로 핸들러 생성자에 서비스가
-  자동 주입된다. singleton / scoped / transient 수명을 지원한다.
+- **DI 컨테이너** — 핸들러 생성자 매개 변수만으로 서비스가 자동 주입된다. singleton /
+  scoped / transient 수명을 지원한다.
 - **Logging** — `logger_t<TOwner>` DI로 받아 소스 이름이 자동 태그된 로그를
   남긴다.
 - **Monitoring / Health** — socket·discovery·spot·타이머 이벤트를 typed 구독으로

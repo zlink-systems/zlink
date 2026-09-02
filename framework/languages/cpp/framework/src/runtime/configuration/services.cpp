@@ -59,6 +59,7 @@ class service_scope_state_t
     service_scope_kind_t kind;
     bool closed = false;
     std::map<std::type_index, std::shared_ptr<void>> scoped_instances;
+    std::map<std::type_index, std::shared_ptr<void>> framework_dependencies;
     std::vector<std::shared_ptr<void>> transient_instances;
 };
 
@@ -114,6 +115,7 @@ void service_provider_t::close () noexcept
     if (_scope) {
         _scope->closed = true;
         _scope->scoped_instances.clear ();
+        _scope->framework_dependencies.clear ();
         _scope->transient_instances.clear ();
     }
 }
@@ -171,6 +173,29 @@ std::shared_ptr<void> service_provider_t::try_resolve (std::type_index type)
         return nullptr;
     }
     return resolve (type);
+}
+
+std::shared_ptr<void> service_provider_t::cached_framework_dependency (std::type_index type)
+{
+    if (is_closed ()) {
+        throw detail::make_boundary_exception (detail::boundary_error_t::shutdown,
+                                               "service provider is closed");
+    }
+    const auto found = _scope->framework_dependencies.find (type);
+    return found == _scope->framework_dependencies.end () ? nullptr : found->second;
+}
+
+std::shared_ptr<void>
+service_provider_t::cache_framework_dependency (std::type_index type,
+                                                std::shared_ptr<void> instance)
+{
+    if (is_closed ()) {
+        throw detail::make_boundary_exception (detail::boundary_error_t::shutdown,
+                                               "service provider is closed");
+    }
+    const auto [found, _] =
+      _scope->framework_dependencies.emplace (type, std::move (instance));
+    return found->second;
 }
 
 detail::service_scope_t::service_scope_t (service_provider_t provider) :

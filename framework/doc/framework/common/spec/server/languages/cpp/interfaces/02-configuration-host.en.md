@@ -313,10 +313,9 @@ The default construction rule is below.
  application doesn't register the same handler type to the service
  collection again.
 - A Spot packet/Actor payload handler is a Spot member function, so
- it isn't a separate service. A timer handler class is built once in
- the Spot activation scope, and the same activation's ticks reuse it.
- Only the dependency declared in the timer handler's
- `dependency_types` is resolved in that scope.
+  it isn't a separate service. A timer handler class is built once in
+  the Spot activation scope, and the same activation's ticks reuse it.
+  Its constructor dependency parameters are resolved in that scope.
 - An external DI library, such as `Boost.Ext.DI`, isn't put as a public
  dependency.
 
@@ -421,13 +420,12 @@ Node direct can start with no membership, and a MeshNode providing a
 Channel handler must register at least one Server membership. Each
 Server ChannelName can have a request/send handler group. A fanout
 subscriber must register at least one publish handler group.
-If a Channel/HTTP handler has a constructor dependency, it specifies
-the dependency type like
-`using dependency_types = zlink::framework::dependency_list_t<dep1_t, dep2_t>;`.
-The framework builds the dependency and handler in each dispatch
-scope. A handler isn't registered as a singleton service.
-`logger_t<THandler>` is a framework default dependency. If a handler
-puts `logger_t<THandler>` in `dependency_types`, DI injects the
+If a Channel/HTTP handler has constructor dependencies, it takes
+`dep1_t &`, `dep2_t &` as constructor parameters. The framework
+resolves the dependencies in each dispatch scope and constructs the
+handler with them. A handler isn't registered as a singleton service.
+`logger_t<THandler>` is a framework default dependency. When a
+handler constructor takes `logger_t<THandler> &`, DI injects the
 category logger like `.NET`'s `ILogger<T>` without the user writing a
 separate service registration. The log output target is decided by
 host logging configuration, such as `app.logging().use_console()`,

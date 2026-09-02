@@ -11,7 +11,6 @@ namespace zlink::framework::e2e::registry_messaging::workflow
 class workflow_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using request_type = workflow_req_t;
     using reply_type = workflow_res_t;
 

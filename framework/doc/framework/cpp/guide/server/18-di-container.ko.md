@@ -13,7 +13,8 @@ title: "18. DI 컨테이너 · C++"
 
 프레임워크는 ASP.NET Core 스타일의 DI(의존성 주입) 컨테이너를 내장한다.
 `service_collection_t`에 서비스를 등록하고, `service_provider_t`로 꺼낸다.
-핸들러는 `dependency_types`만 선언하면 프레임워크가 생성자 인자를 자동으로 주입한다.
+핸들러는 생성자 매개 변수로 의존성만 받으면 프레임워크가 현재 scope에서 이를 자동으로
+주입한다.
 
 ## 1. 수명(lifetime) 세 가지
 
@@ -96,11 +97,11 @@ options.services ().add_factory<http_client_t> (
 
 ## 3. 핸들러 자동 주입
 
-채널·HTTP 핸들러는 `dependency_types`를 선언하면 dispatch scope에서 생성자 주입을
+채널·HTTP 핸들러는 생성자 매개 변수로 의존성을 받으면 dispatch scope에서 생성자 주입을
 받는다. 별도로 `add_transient<T>()`를 호출할 필요가 없다. Spot packet과 Actor payload
 handler는 Spot member function이므로 DI handler class로 등록하지 않는다. 별도 class인
 timer handler는 Spot activation마다 한 번 만들고, 같은 activation의 timer tick에서
-재사용한다. Timer handler의 `dependency_types`도 Spot activation scope에서 resolve한다.
+재사용한다. Timer handler의 생성자 매개 변수도 Spot activation scope에서 resolve한다.
 
 ```cpp
 class create_game_http_handler_t
@@ -110,13 +111,7 @@ class create_game_http_handler_t
     using reply_type   = create_game_http_res_t;
     static constexpr const char *topic_name = "CreateGame";
 
-    // 1. 의존할 타입들을 순서대로 선언
-    using dependency_types =
-      zlink::framework::dependency_list_t<
-        zlink::framework::request_client_t,
-        zlink::framework::logger_t<create_game_http_handler_t>>;
-
-    // 2. 선언 순서대로 생성자가 받는다
+    // Framework가 이 dispatch scope에서 생성자 매개 변수를 resolve한다.
     explicit create_game_http_handler_t (
         zlink::framework::request_client_t &client,
         zlink::framework::logger_t<create_game_http_handler_t> &logger)
@@ -135,8 +130,8 @@ class create_game_http_handler_t
 
 ## 4. 프레임워크 내장 서비스
 
-앱 실행 시 프레임워크가 등록하거나, `dependency_types` 처리 중 자동 등록하는 서비스들이다.
-필요한 타입을 `dependency_types`에 넣으면 생성자 주입으로 받을 수 있다.
+앱 실행 시 프레임워크가 등록하거나, handler 생성자 주입 때 제공하는 서비스들이다.
+필요한 타입을 handler 생성자 매개 변수로 받으면 생성자 주입으로 사용할 수 있다.
 
 | 서비스 | 설명 |
 |--------|------|
@@ -181,7 +176,7 @@ class season_scheduler_t : public zlink::framework::hosted_service_t
 | 공유 상태가 없는 순수 설정·읽기 전용 객체 (topology, config) | **singleton** |
 | 연결·클라이언트 같이 앱 전체에서 재사용하는 인프라 | **singleton** + 내부 thread-safe 구현 |
 | 요청 단위로 격리해야 하는 상태 (트랜잭션, per-request context) | **scoped** |
-| 채널·HTTP 핸들러 — 요청마다 새 인스턴스 필요 | **transient** (dependency_types로 자동 등록) |
+| 채널·HTTP 핸들러 — 요청마다 새 인스턴스 필요 | **transient** (생성자에서 자동 등록) |
 | 가변 도메인 상태 (게임 룸, 대화 상태) | **DI 아님 — SPOT으로 관리** ([6장](06-spot.ko.md)) |
 
 ## 7. 수명 충돌 주의 — captive dependency

@@ -44,7 +44,6 @@ template <typename TValue> inline zlink::framework::http_response_t json_respons
 class evidence_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
 
     explicit evidence_handler_t (scenario_state_t &state) : _state (state) {}
 
@@ -62,7 +61,6 @@ class evidence_handler_t
 class registration_auto_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
 
     explicit registration_auto_handler_t (zlink::framework::channel_client_t &channels) :
         _channels (channels)
@@ -90,7 +88,6 @@ class registration_auto_handler_t
 class registration_attribute_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
 
     explicit registration_attribute_handler_t (zlink::framework::channel_client_t &channels) :
         _channels (channels)
@@ -118,7 +115,6 @@ class registration_attribute_handler_t
 class registration_manual_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
 
     explicit registration_manual_handler_t (zlink::framework::channel_client_t &channels) :
         _channels (channels)
@@ -146,7 +142,6 @@ class registration_manual_handler_t
 class registration_di_lifecycle_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
 
     explicit registration_di_lifecycle_handler_t (zlink::framework::channel_client_t &channels) :
         _channels (channels)
@@ -176,7 +171,6 @@ class registration_di_lifecycle_handler_t
 class registration_filter_order_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
 
     explicit registration_filter_order_handler_t (zlink::framework::channel_client_t &channels) :
         _channels (channels)
@@ -196,7 +190,6 @@ class registration_filter_order_handler_t
 class codec_roundtrip_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
 
     explicit codec_roundtrip_handler_t (zlink::framework::channel_client_t &channels) :
         _channels (channels)
@@ -235,7 +228,6 @@ class codec_roundtrip_handler_t
 class codec_json_golden_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
 
     explicit codec_json_golden_handler_t (zlink::framework::channel_client_t &channels) :
         _channels (channels)
@@ -272,7 +264,6 @@ class codec_json_golden_handler_t
 class codec_coexistence_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
 
     explicit codec_coexistence_handler_t (zlink::framework::channel_client_t &channels) :
         _channels (channels)
@@ -307,7 +298,6 @@ class codec_coexistence_handler_t
 class codec_mismatch_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
 
     explicit codec_mismatch_handler_t (zlink::framework::channel_client_t &channels) :
         _channels (channels)

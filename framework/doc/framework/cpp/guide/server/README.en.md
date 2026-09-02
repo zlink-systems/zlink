@@ -192,8 +192,8 @@ Built-in support for what a production server needs.
 
 - **Configuration** — composes CLI arguments, environment variables, and a JSON file in
   priority order. One call to `bind<T>()` maps a settings section onto a struct.
-- **DI container** — declaring `dependency_types` alone gets services auto-injected into a
-  handler's constructor. Supports singleton / scoped / transient lifetimes.
+- **DI container** — handler constructor parameters get services auto-injected. Supports
+  singleton / scoped / transient lifetimes.
 - **Logging** — inject a `logger_t<TOwner>` via DI and get logs auto-tagged with the source
   name.
 - **Monitoring / Health** — receive socket, discovery, spot, and timer events as typed

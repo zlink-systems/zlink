@@ -15,7 +15,7 @@ title: "13. 주요 타입 사용 색인 · C++"
 
 C++ framework의 타입 이름은 `_t` 접미사를 쓴다. **application이 직접 만드는 타입**과
 **DI로 주입받는 타입**을 구분해 읽으면 빠르다 — 전자는 상속하거나 선언하고, 후자는
-`dependency_types`에 적어 생성자로 받는다.
+생성자 매개 변수로 받는다.
 
 ## 1. Channel messaging
 
@@ -25,7 +25,7 @@ C++ framework의 타입 이름은 `_t` 접미사를 쓴다. **application이 직
 class place_order_handler_t
 {
   public:
-    using dependency_types = dependency_list_t<route_client_t>;
+    explicit place_order_handler_t (route_client_t &client) : _client (client) {}
 
     task_t<order_placed_t> handle (const place_order_t &request)
     {
@@ -180,7 +180,7 @@ store를 직접 구현할 일은 드물다. `store_*` · `blob_*` 계열은 그�
 | --- | --- |
 | 상속한다 | `spot_t` · `entry_spot_t` · `instance_spot_t` · `actor_t` · `packet_stream_session_t` |
 | 생성자로 받는다(context) | `spot_context_t` 계열 · `actor_context_t` · `message_context_t` |
-| `dependency_types`로 주입받는다 | `route_client_t` · `publisher_t` · `actor_client_t` · `channel_client_t` · `spot_manager_t` · `actor_manager_t` · `logger_t<T>` |
+| handler 생성자로 주입받는다 | `route_client_t` · `publisher_t` · `actor_client_t` · `channel_client_t` · `spot_manager_t` · `actor_manager_t` · `logger_t<T>` |
 | 시작 단계 builder가 돌려준다 | `mesh_node_builder_t` 계열 · `stream_node_options_builder_t` |
 | 호출이 돌려준다 | `*_call_t` · `*_result_t` · `*_ref_t` |
 

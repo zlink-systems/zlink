@@ -14,7 +14,6 @@ namespace zlink::framework::e2e::registry_messaging::provider
 class profile_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using request_type = profile_req_t;
     using reply_type = profile_res_t;
 
@@ -44,7 +43,6 @@ class profile_request_handler_t
 class profile_command_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using message_type = profile_msg_t;
 
     explicit profile_command_handler_t (scenario_state_t &state) : _state (state) {}
@@ -64,7 +62,6 @@ class profile_command_handler_t
 class payload_request_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using request_type = payload_req_t;
     using reply_type = payload_res_t;
 
@@ -88,7 +85,6 @@ class payload_request_handler_t
 class route_ping_handler_t
 {
   public:
-    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
     using request_type = scenario_route_req_t;
     using reply_type = scenario_route_res_t;
 

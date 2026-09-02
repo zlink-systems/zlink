@@ -231,7 +231,6 @@ fw::http_response_t json_response (nlohmann::json value, int status = 200)
 class ready_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::route_mesh_runtime_t>;
 
     explicit ready_handler_t (fw::route_mesh_runtime_t &runtime) : _runtime (runtime) {}
 
@@ -258,7 +257,6 @@ class ready_handler_t
 class evidence_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<evidence_store_t>;
 
     explicit evidence_handler_t (evidence_store_t &evidence) : _evidence (evidence) {}
 
@@ -278,7 +276,6 @@ class evidence_handler_t
 class lifecycle_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<evidence_store_t>;
 
     explicit lifecycle_handler_t (evidence_store_t &evidence) : _evidence (evidence) {}
 
@@ -294,7 +291,6 @@ class lifecycle_handler_t
 class shutdown_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<shutdown_state_t>;
 
     explicit shutdown_handler_t (shutdown_state_t &state) : _state (state) {}
 
@@ -311,7 +307,6 @@ class shutdown_handler_t
 class instance_request_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::route_client_t>;
 
     explicit instance_request_handler_t (fw::route_client_t &routes) : _routes (routes) {}
 
@@ -341,7 +336,6 @@ class instance_request_handler_t
 class instance_send_handler_t
 {
   public:
-    using dependency_types = fw::dependency_list_t<fw::route_client_t>;
 
     explicit instance_send_handler_t (fw::route_client_t &routes) : _routes (routes) {}
 

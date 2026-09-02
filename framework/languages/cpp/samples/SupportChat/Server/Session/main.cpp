@@ -24,7 +24,6 @@ inline constexpr const char *conversation_id_metadata_key = "ConversationId";
 class supportchat_session_t final : public packet_stream_session_t
 {
   public:
-    using dependency_types = dependency_list_t<channel_client_t, session_actor_manager_t>;
 
     supportchat_session_t (channel_client_t &channels, session_actor_manager_t &actors) :
         _channels (channels), _actors (actors)
