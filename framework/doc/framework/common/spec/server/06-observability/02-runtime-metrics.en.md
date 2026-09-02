@@ -65,8 +65,8 @@ don't walk queues or handlers to collect metrics.
 |---|---|---|---|---|
 | `zlink.host.core_hwm.effective_budget` | observable | `By` | none | Effective budget Core fixed at startup. |
 | `zlink.host.core_hwm.applied` | observable | `By` | none | Sum of ordinary directional queue HWMs, excluding completion. |
-| `zlink.host.core_hwm.accounted` | observable | `By` | `state` | Core current or epoch-peak accounted bytes. |
-| `zlink.host.core_hwm.completion_accounted` | observable | `By` | `state` | Completion current or epoch-peak accounted bytes. |
+| `zlink.host.core_hwm.accounted` | observable | `By` | `state` | Core current or epoch-peak accounted bytes, including DEALER-ROUTER reply bytes. |
+| `zlink.host.core_hwm.completion_accounted` | observable | `By` | `state` | Current or epoch-peak accounted bytes on the ROUTER-ROUTER [Completion connection](../00-foundation/02-glossary.en.md#completion-connection). Excludes DEALER-ROUTER reply bytes. |
 | `zlink.host.core_hwm.blocked_ratio` | observable | `{ppm}` | none | Blocked ratio from the Core snapshot. |
 | `zlink.host.application_job_queue.limit` | observable | `{job}` | none | Effective maximum fixed at startup. |
 | `zlink.host.application_job_queue.jobs` | observable | `{job}` | `state` | Aggregate by `reserved|queued|in_use|peak`. |
@@ -384,6 +384,11 @@ implementation or contract test.
   every language.
 - No mailbox/Spot/Actor-queue or per-turn metric exists, and collection
   doesn't walk every object or Store record.
+- A controlled DEALER-ROUTER reply byte delta appears in
+  `zlink.host.core_hwm.accounted` and not in
+  `zlink.host.core_hwm.completion_accounted`. ROUTER-ROUTER reply bytes appear
+  in the Completion metric, and metric names and labels don't change by
+  topology.
 
 **Label**
 

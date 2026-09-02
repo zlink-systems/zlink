@@ -466,9 +466,10 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
   `ZLINK_PUB_OPT_NODROP`의 backpressure는 동기 submit에서만 표면화한다.
 - Raw ROUTER/`received_t` reply의 terminal은
   `reply_submit_operation_t::submit() -> void`인 동기 one-shot이다. Terminal reply와 error
-  reply를 HWM 없는 completion lane에 native 호출 한 번으로 제출한다. HWM backpressure는
-  reply 결과가 아니며 `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`와 그 밖의
-  non-HWM submit 실패는 즉시 `submit_error_t`로 전달한다.
+  reply를 native 호출 한 번으로 제출한다. DEALER peer에는 Application HWM·PAUSED와
+  `SNDTIMEO`를 적용하여 `BACKPRESSURED`가 될 수 있고, ROUTER peer에는 HWM 없는 Completion
+  connection을 사용한다. `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`와 그 밖의 submit
+  실패는 즉시 `submit_error_t`로 전달한다.
 
 ## 64-bit byte HWM과 monitoring 계약
 
@@ -541,7 +542,7 @@ context-wide budget·accounting·queue count는 `core_hwm_budget_snapshot_t`에�
 `int` 기반 `enum class`이며 `running = 0`, `paused = 1`이다. 설정 함수는
 `socket_t::set_receive_flow_state(receive_flow_state_t)`다. 반환형은 `void`이고 C++ 에러
 정책을 따른다. 실패한 `zlink_config_result_t`는 그 result 값을 담은 `config_error_t`로
-던지므로, completion lane이 없는 socket의 `ZLINK_CONFIG_NOT_SUPPORTED`는 not-supported
+던지므로, receive-flow를 지원하지 않는 socket의 `ZLINK_CONFIG_NOT_SUPPORTED`는 not-supported
 result를 담은 `config_error_t`가 된다. 이미 유지하는 상태를 다시 설정하면 예외 없이
 정상 반환한다.
 
@@ -794,6 +795,8 @@ test 하나로 이어진다.
   정리한다.
 - Public poller owner에서 wait loop가 있을 때 completion-backed terminal이 진행하고,
   `pollcompletion`은 settle 또는 cleanup이 끝난 뒤에만 반환된다.
+- Raw reply를 DEALER peer로 제출해 HWM·PAUSED 대기가 만료하면 `submit_error_t`의
+  `BACKPRESSURED`가 관찰되고, ROUTER peer로 제출하면 Completion connection의 HWM-free 결과가 유지된다.
 
 **ReplyToken과 STREAM**
 

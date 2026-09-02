@@ -396,6 +396,13 @@ A request selects one ready Server and then builds
 whichever of reply, error, timeout, cancellation, or shutdown is confirmed
 first.
 
+If the Client DEALER doesn't receive earlier one-way DATA from the Server
+ROUTER in Core, or keeps receive flow `PAUSED`, a reply later on the same
+connection is also delayed. The ClientServer request timeout can therefore be
+decided before the reply, and the late reply after timeout is discarded under
+the existing first-terminal rule. A disconnect, allocation failure, or timeout
+can terminate first, so the reply is not guaranteed to arrive eventually.
+
 ```mermaid
 sequenceDiagram
     participant Caller
@@ -558,6 +565,16 @@ monitoring provides.
 - A Store failure doesn't immediately drop an already-ready connection.
 - After Store recovery, the target list is re-aligned with the latest
   revision and generation.
+
+**Request completion and the single FIFO**
+
+- If a Server sends a request reply after one-way DATA and the Client stops
+  receiving DATA or remains `PAUSED`, the configured timeout can end the
+  request. A late reply that arrives after DATA drains doesn't create a second
+  terminal.
+- After the reply reaches the Core physical head and Core identifies it as a
+  completion, it acquires no Application Job Queue permit, but it doesn't
+  bypass earlier DATA, Core HWM, or `PAUSED`.
 
 ---
 

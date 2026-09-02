@@ -378,8 +378,8 @@ kind와 sequence를 갖고 있어도 상대 socket과 `capture_`로 보내기 �
 양쪽은 같은 application part 수, 순서와 byte를 받지만, 다시 wire로 내보낸 frame의 kind는
 ordinary data다.
 
-Completion progress lane의 pending 상태와 reply target은 proxy가 연결하지 않는다. Request를
-proxy 너머에서 투명하게 완료하는 기능은 이 API의 계약이 아니며, proxy가 request-reply
+Request correlation과 reply target state는 proxy가 연결하지 않는다. Request를 proxy 너머에서
+투명하게 완료하는 기능은 이 API의 계약이 아니며, proxy가 request-reply
 metadata를 새로 만들거나 completion callback을 중계하지 않는다.
 
 **반환값:** proxy가 정상적으로 끝나면 `ZLINK_CONFIG_OK`, 그렇지 않으면
@@ -490,7 +490,8 @@ unit test 하나로 이어진다.
 - proxy는 loop가 끝날 때까지 호출 thread를 block하고, 정상적으로 끝나면 `ZLINK_CONFIG_OK`를 반환한다.
 - 전달한 핸들은 borrowed다 — proxy가 끝난 뒤에도 caller가 핸들을 소유하며 함수가 닫지 않는다.
 - Request, reply 또는 error reply kind의 raw fixture를 proxy에 보내면 상대 socket과 non-NULL capture socket은 같은 application multipart를 ordinary message로 받고, 이를 raw wire로 다시 보내면 kind가 data다.
-- Proxy는 completion progress lane을 중계하지 않으므로 proxy 반대편의 reply가 원래 request completion을 자동으로 완료하지 않는다.
+- DEALER-ROUTER가 single connection을 사용해도 proxy는 request correlation과 reply target state를
+  연결하지 않으므로 proxy 반대편의 reply가 원래 request completion을 자동으로 완료하지 않는다.
 
 **Sleep과 thread**
 - `zlink_sleep(n)`은 호출 thread를 최소 `n`초 동안 일시 중지한다.

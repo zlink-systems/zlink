@@ -79,11 +79,14 @@ unresolved correlation의 별도 lifecycle 한도로 재사용되지 않는다.
 
 ### 3.4 Completion progress lane
 
-DEALER·ROUTER의 [completion progress lane](../glossary.ko.md#completion-progress-lane)은
+ROUTER-ROUTER의 [completion progress lane](../glossary.ko.md#completion-progress-lane)은
 terminal reply와 error reply를 진행시키고, peer 사이의 receive-flow-state frame을
 동기화하는 별도 경로다. 이 lane에는 byte HWM, LWM, manual HWM과 Core budget
 reservation을 적용하지 않는다. Application pipe가 가득 차도 유효한 completion record와
 receive-flow-state frame은 connection이 유지되고 allocation이 성공하면 수용한다.
+
+DEALER-ROUTER에는 이 별도 connection이 없다. Reply·error reply byte는 DATA·REQUEST와 같은
+Application physical queue의 accounted byte에 포함되며 HWM과 peer PAUSED를 적용한다.
 
 Completion lane의 `SNDBUF`·`RCVBUF` 기본값 `-1`은 transport 종류와 관계없이 OS 기본값과
 autotuning을 유지한다. Application이 0 이상의 값을 명시하면 completion lane에는 최대 64 KiB로
@@ -103,6 +106,11 @@ memory 입력에서 계산해 application queue들의 HWM을 나눌 때 기준�
 Kernel buffer는 platform autotuning에 따라 증가할 수 있다. TLS는 record와 handshake storage를
 추가한다. Monitor snapshot은 적용된 HWM 계획을 보고하지만 allocator와 kernel overhead 전체를
 측정하지는 않는다.
+
+DEALER-ROUTER는 logical peer마다 physical connection 하나를 사용하므로 ROUTER-ROUTER보다 idle
+session·engine·file descriptor와 기반 kernel·TLS·WebSocket storage가 한 connection만큼 적다.
+이 차이는 Core budget을 process resident memory hard cap으로 바꾸지 않으며, kernel autotuning과
+TLS storage가 monitor snapshot 밖이라는 경계도 바꾸지 않는다.
 
 ## 5. Capacity planning
 
@@ -131,10 +139,17 @@ connection memory 관점에서 확인할 항목은 다음과 같다. 각 항목�
 **oversize와 completion**
 - 빈 application pipe에 socket 최대 message 크기 이내이며 HWM보다 큰 complete message를 보내면 한 건 수락되고, 그 뒤의 write는 중단된다.
 - 끝나지 않은 multipart에는 빈 pipe oversize 예외가 적용되지 않는다.
-- application pipe가 가득 찬 상태에서도 유효한 completion record는 connection이 유지되고 allocation이 성공하면 수용된다.
-- RUNNING·PAUSED receive-flow-state frame은 DEALER·ROUTER completion progress lane으로 동기화된다.
-- completion progress lane에는 byte HWM, LWM, manual HWM과 Core budget reservation이 적용되지 않는다.
+- ROUTER-ROUTER application pipe가 가득 찬 상태에서도 유효한 reply·error reply는 connection이
+  유지되고 allocation이 성공하면 Completion lane으로 수용된다.
+- RUNNING·PAUSED receive-flow-state frame은 DEALER-ROUTER에서 single Application connection의
+  Core control 경로로, ROUTER-ROUTER에서 Completion lane으로 동기화된다.
+- ROUTER-ROUTER completion progress lane에는 byte HWM, LWM, manual HWM과 Core budget reservation이 적용되지 않는다.
+- DEALER-ROUTER reply·error reply는 Application physical queue byte에 포함되고 HWM·PAUSED를
+  적용하며 Completion current·peak·pending 회계에는 포함되지 않는다.
 
 **측정**
 - monitor는 application queue·completion의 current byte와 oversize 허용 이력을 구분해 보고하고, retained-credit 호환 field는 항상 0으로 보고한다.
 - Core budget은 정상 상태의 pipe별 HWM 분배 기준이며 context 실제 사용량 hard cap으로 동작하지 않는다 (상세 admission 계약은 [Auto HWM](06-auto-hwm.ko.md) 소유).
+- 같은 transport에서 DEALER-ROUTER logical peer는 physical connection 하나, ROUTER-ROUTER는
+  두 개를 사용한다. Idle resource 감소를 관찰해도 allocator·kernel·TLS를 포함한 process hard cap은
+  제공되지 않는다.

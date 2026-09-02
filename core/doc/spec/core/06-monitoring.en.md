@@ -73,14 +73,16 @@ sequenceDiagram
 
 `connection_id` is a diagnostic and correlation value that identifies one physical
 transport attempt in the current process. It cannot be used as a send target or reconnect
-fence. When Application and Completion transports form one peer, `transport_lane`
-distinguishes the lanes. A transport without a separate Completion lane has the
-Application value.
+fence. `transport_lane` classifies the physical connection. Every physical event for
+DEALER-DEALER and DEALER-ROUTER has the Application value, and only the separate
+ROUTER-ROUTER Completion connection can have the Completion value. Other transports also
+have the Application value.
 
-However, `CONNECTION_READY` aggregates a peer whose two lanes are both ready as one public
-ready transport. It therefore emits exactly one ready edge and counts the peer only once
-in `value`. Learning the routing ID at different times on the two lanes does not split the
-peer into two ready transports.
+`CONNECTION_READY` aggregates count `1` for DEALER-DEALER and DEALER-ROUTER and count `2`
+for ROUTER-ROUTER as one logical peer. It therefore emits exactly one ready edge and counts
+the peer only once in `value`. Learning the routing ID at different times on the two
+ROUTER-ROUTER lanes does not split the peer into two ready transports, and readiness of only
+one lane does not increase the count.
 
 ### 3.2 `value` and `flags`
 
@@ -192,15 +194,23 @@ not guaranteed.
 `auto_hwm_send_blocked_ratio_ppm` is the fraction, in parts per million, of the socket's
 first send-admission attempts in the measurement epoch that were blocked by an application
 pipe HWM. Retries after the same submission wakes are not counted again. Transport I/O
-waits, the completion lane, and context-aggregate usage are excluded.
+waits, the ROUTER-ROUTER completion lane, and context-aggregate usage are excluded.
+
+The context Auto HWM snapshot uses ABI v1. DEALER-ROUTER reply bytes are included in
+`core_queue_accounted_bytes`, `current_accounted_bytes`, and, when applicable,
+`provisional_accounted_bytes`, `peak_accounted_bytes`, and `total_messaging_accounted_bytes`.
+They are not included in `completion_current_accounted_bytes`,
+`completion_peak_accounted_bytes`, `completion_pending_message_count`, or
+`active_completion_directional_queue_count`. [Auto HWM](systems/06-auto-hwm.en.md) owns the
+declarations and exact accounting for these fields.
 
 ### 6.4 Receive-Flow Statistics
 
-`ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` is set only for socket types that have a paired
-DEALER/ROUTER [completion lane](glossary.en.md#completion-progress-lane)—a separate path
-responsible only for progressing terminal replies and error replies. For other socket
-types, the bit is absent and all five fields are zero. These fields report the receive-flow
-state that the socket observes on its peers. The declaration comments in
+`ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` is set for DEALER and ROUTER sockets that support
+receive flow. This includes DEALER-DEALER and DEALER-ROUTER, which have no separate
+[completion lane](glossary.en.md#completion-progress-lane). For other socket types, the bit
+is absent and all five fields are zero. These fields report the receive-flow state that the
+socket observes on its peers. The declaration comments in
 [§7.5](#75-status-structure) define the exact increment and decrement rules for each field.
 
 The three counters (`flow_pause_applied_total`, `flow_resume_applied_total`, and
@@ -354,7 +364,7 @@ typedef enum zlink_monitor_status_detail_flag_e {  // See the §6.2 table for fi
   ZLINK_MONITOR_STATUS_DETAIL_RCV_PENDING_MSGS = 1u << 2,
   ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUDGET  = 1u << 3,
   ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUFFERS = 1u << 4,
-  ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE       = 1u << 5   // Only for types with a paired DEALER/ROUTER completion lane (§6.4)
+  ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE       = 1u << 5   // Only for DEALER and ROUTER, which support receive flow (§6.4)
 } zlink_monitor_status_detail_flag_e;
 
 typedef enum zlink_auto_hwm_recalc_reason_t {  // Values for auto_hwm_last_recalc_reason
@@ -541,12 +551,13 @@ and errno. Each item maps to one test.
   `HANDSHAKE_FAILED_PROTOCOL` is a `zlink_protocol_error_t` value, the `value` of
   `PEER_WEIGHT_CHANGED` is the new `0..10000` weight, and the `value` of another
   failure event is the errno for that failure.
-- For each peer whose two lanes are ready, the `CONNECTION_READY` ready edge
+- When count `1` for DEALER-DEALER or DEALER-ROUTER or count `2` for ROUTER-ROUTER becomes
+  ready as one logical peer, the `CONNECTION_READY` ready edge
   (`ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE`) occurs exactly once and contributes
   exactly once to the count in `value`. A ready-count event without the edge flag is a
   count snapshot.
-- Events for a transport without a Completion lane have the Application value in
-  `transport_lane`.
+- Every physical event for DEALER-DEALER and DEALER-ROUTER has the Application value in
+  `transport_lane`; only a ROUTER-ROUTER Completion physical event reports Completion.
 - `connection_id` is a diagnostic and correlation value; no public API uses it to select a
   send or reply target.
 
@@ -561,9 +572,13 @@ and errno. Each item maps to one test.
   `abi_version` set to `ZLINK_MONITOR_STATUS_ABI_VERSION`, and `struct_size` set to the full
   byte size of the returned ABI version.
 - Every optional field whose bit is absent from `detail_flags` is zero.
-- `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` is set only for socket types with a paired
-  DEALER/ROUTER completion lane. For other socket types, the bit is absent and all five flow
-  fields are zero.
+- `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` is set on DEALER-DEALER and DEALER-ROUTER count
+  `1` sockets and ROUTER-ROUTER count `2` sockets. For other socket types, the bit is absent
+  and all five flow fields are zero.
+- The Auto HWM snapshot uses ABI v1 with its defined field layout. Controlled DEALER-ROUTER
+  reply bytes appear only in Application accounting fields and
+  `total_messaging_accounted_bytes`, not in Completion current, peak, pending, or direction
+  counts.
 - The three flow counters increase monotonically over the socket lifetime and do not change
   when `zlink_ctx_reset_auto_hwm_budget_metrics` is called.
 - Core reads the pipe-total field group under one lock, so that group is internally

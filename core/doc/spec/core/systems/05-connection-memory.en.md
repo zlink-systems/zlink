@@ -81,11 +81,14 @@ the queue and is not reused as a separate lifecycle limit for unresolved correla
 
 ### 3.4 Completion progress lane
 
-The DEALER/ROUTER [completion progress lane](../glossary.en.md#completion-progress-lane) is a
+The ROUTER-ROUTER [completion progress lane](../glossary.en.md#completion-progress-lane) is a
 separate path that advances terminal replies and error replies and synchronizes receive-flow-state
 frames between peers. Byte HWM, LWM, manual HWM, and Core budget reservation do not apply to this
 lane. Even when an application pipe is full, valid completion records and receive-flow-state frames
 are admitted if the connection remains available and allocation succeeds.
+
+DEALER-ROUTER has no separate connection. Reply and error-reply bytes are included in the accounted
+bytes of the same Application physical queue as DATA and REQUEST and apply HWM and peer PAUSED.
 
 The completion lane preserves the `SNDBUF`/`RCVBUF` default of `-1`, leaving OS defaults and
 autotuning unchanged for every transport. When the application supplies a nonnegative value, Core
@@ -107,6 +110,12 @@ memory.
 
 Kernel buffers may grow according to platform autotuning. TLS adds record and handshake storage.
 Monitor snapshots report the applied HWM plan but do not measure all allocator and kernel overhead.
+
+Because DEALER-ROUTER uses one physical connection per logical peer, it uses one fewer idle session,
+engine, and file descriptor, and one connection less of underlying kernel, TLS, or WebSocket storage
+than ROUTER-ROUTER. This difference does not turn the Core budget into a hard cap on process resident
+memory or change the boundary that places kernel autotuning and TLS storage outside the monitor
+snapshot.
 
 ## 5. Capacity planning
 
@@ -139,11 +148,19 @@ maps to one test.
 
 - Sending an empty application pipe a complete message that is within the socket's maximum message size but larger than the HWM admits one message and then stops subsequent writes.
 - The empty-pipe oversize exception does not apply to an unfinished multipart message.
-- Even when an application pipe is full, a valid completion record is admitted if the connection remains available and allocation succeeds.
-- RUNNING and PAUSED receive-flow-state frames are synchronized through the DEALER/ROUTER completion progress lane.
-- Byte HWM, LWM, manual HWM, and Core budget reservation do not apply to the completion progress lane.
+- Even when a ROUTER-ROUTER application pipe is full, a valid reply or error reply is admitted on the
+  Completion lane if the connection remains available and allocation succeeds.
+- RUNNING and PAUSED receive-flow-state frames are synchronized over the single Application
+  connection's Core control path on DEALER-ROUTER and over the Completion lane on ROUTER-ROUTER.
+- Byte HWM, LWM, manual HWM, and Core budget reservation do not apply to the ROUTER-ROUTER
+  completion progress lane.
+- DEALER-ROUTER replies and error replies are included in Application physical-queue bytes and apply
+  HWM and PAUSED. They are not included in Completion current, peak, or pending accounting.
 
 **Measurement**
 
 - The monitor separately reports current bytes for application queues and completions, as well as oversize-admission history, and reports the retained-credit compatibility fields as zero.
 - The Core budget is the normal-state basis for distributing per-pipe HWM and does not act as a hard cap on actual context memory usage. [Auto HWM](06-auto-hwm.en.md) owns the detailed admission contract.
+- On the same transport, a DEALER-ROUTER logical peer uses one physical connection and a
+  ROUTER-ROUTER logical peer uses two. Observing the reduction in idle resources does not provide a
+  process hard cap that includes allocator, kernel, and TLS memory.

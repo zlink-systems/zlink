@@ -115,6 +115,9 @@ application ypipe 방향을 한 번만 등록하고 다음을 소유한다.
 같은 inproc ypipe를 두 endpoint가 관찰해도 한 방향으로만 집계한다. 새 pipe pair의 방향별
 예약 규칙은 다음과 같다.
 
+DEALER-ROUTER single pipe도 Application 방향 한 개로 등록한다. 별도 Completion pipe가 없어도
+Application water-filling의 방향 수를 추가하거나 줄이지 않는다.
+
 - application 방향: 역할별 하한을 원자적으로 예약한다. 두 방향을 모두 예약할 수 없으면 attach를 공개하기 전에 전체 예약을 거절하고 일부 방향만 등록하지 않는다.
 - 수동 방향도 attach 전에는 역할별 하한을 예약한다. 유한한 수동 HWM은 admission에 즉시
   적용하고, 다음 plan의 수동 예약 합계와 aggregate HWM 통계에 반영한다.
@@ -181,13 +184,21 @@ originQueueUsedBytes(queue) = physicalQueueAccountedBytes(queue)
 `application_accounted_bytes`·`outstanding_application_lease_count`·
 `deferred_origin_credit_bytes`·`retired_queue_count`는 항상 0이다.
 
-DEALER·ROUTER의 [completion progress lane](../glossary.ko.md#completion-progress-lane)에는 byte HWM, LWM, inproc HWM boost와
-legacy 256 KiB floor를 적용하지 않으며 위 water-filling 분모에서도 제외한다. 이
-lane은 terminal reply와 error reply의 진행성을 소유하고, peer 사이의
-receive-flow-state frame도 동기화한다. Completion lane은 HWM admission과 Core budget
-reservation에서 제외하지만 current·peak accounted byte와 pending message count를 별도로
-관찰한다. 이 값은 `total_messaging_accounted_bytes`에는 포함되고 application
-water-filling에는 포함되지 않는다.
+ROUTER-ROUTER의 [completion progress lane](../glossary.ko.md#completion-progress-lane)에는 byte
+HWM, LWM, inproc HWM boost와 legacy 256 KiB floor를 적용하지 않으며 위 water-filling
+분모에서도 제외한다. 이 lane은 terminal reply와 error reply의 진행성을 소유하고, peer 사이의
+receive-flow-state frame도 동기화한다. ROUTER-ROUTER Completion lane은 HWM admission과 Core
+budget reservation에서 제외하지만 current·peak accounted byte와 pending message count를 별도로
+관찰한다. 이 값은 `total_messaging_accounted_bytes`에는 포함되고 application water-filling에는
+포함되지 않는다.
+
+DEALER-ROUTER reply·error reply는 single Application queue의 byte다. 이 byte는
+`core_queue_accounted_bytes`·`current_accounted_bytes`, multipart이면
+`provisional_accounted_bytes`, `peak_accounted_bytes`와 `total_messaging_accounted_bytes`에
+포함된다. `application_accounted_bytes`는 예약값 `0`을 유지한다. DEALER-ROUTER reply는
+`completion_current_accounted_bytes`, `completion_peak_accounted_bytes`,
+`completion_pending_message_count`와 `active_completion_directional_queue_count`에 포함되지
+않는다. HWM 때문에 reply admission이 막힌 경우는 Application admission block으로 센다.
 
 ## 3. 함수
 
@@ -246,9 +257,9 @@ typedef struct zlink_auto_hwm_budget_snapshot_t {
   uint64_t current_accounted_bytes;             // core_queue_accounted_bytes와 동일
   uint64_t provisional_accounted_bytes;         // 미완료 multipart 예약분
   uint64_t peak_accounted_bytes;                // 현재 epoch 관측 최대
-  uint64_t completion_current_accounted_bytes;  // completion lane 현재 byte
-  uint64_t completion_peak_accounted_bytes;     // completion lane 최대 byte
-  uint64_t completion_pending_message_count;    // completion lane 대기 message 수
+  uint64_t completion_current_accounted_bytes;  // ROUTER-ROUTER completion lane 현재 byte
+  uint64_t completion_peak_accounted_bytes;     // ROUTER-ROUTER completion lane 최대 byte
+  uint64_t completion_pending_message_count;    // ROUTER-ROUTER completion lane 대기 message 수
   uint64_t total_messaging_accounted_bytes;     // application+completion accounted 합계
   uint64_t monitor_queue_applied_hwm_bytes;     // 열린 monitor 방향 HWM 합계
   uint64_t monitor_queue_accounted_bytes;       // monitor 방향 보유 byte 합계
@@ -257,7 +268,7 @@ typedef struct zlink_auto_hwm_budget_snapshot_t {
   uint64_t oversize_admission_count;            // 빈 queue oversize 예외 수락 수
   uint64_t largest_oversize_message_bytes;      // 그중 최대 message 크기
   uint64_t active_directional_queue_count;      // 활성 application 방향 수 (방향당 1회)
-  uint64_t active_completion_directional_queue_count;// 활성 completion 방향 수
+  uint64_t active_completion_directional_queue_count;// 활성 ROUTER-ROUTER completion 방향 수
   uint64_t active_send_queue_count;             // 마지막 plan의 send 관점 count
   uint64_t active_receive_queue_count;          // 마지막 plan의 receive 관점 count
   uint64_t outstanding_application_lease_count; // 예약 (항상 0)
@@ -312,7 +323,7 @@ total_instance_accounted_bytes =
     total_messaging_accounted_bytes + monitor_queue_accounted_bytes
 ```
 
-Completion queue에는 HWM이 없으므로 `total_instance_applied_hwm_bytes`에 더하지
+ROUTER-ROUTER Completion queue에는 HWM이 없으므로 `total_instance_applied_hwm_bytes`에 더하지
 않는다. 위 합계가 `uint64_t` 범위를 넘으면 `UINT64_MAX`로 포화하고
 `ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_OVERFLOW`를 설정한다.
 
@@ -471,9 +482,10 @@ HWM을 늘리면 현재 queue generation에 새 값을 적용한다. HWM을 줄�
 새 목표보다 크면 이미 받아들인 frame을 제거하지 않는다. 새 frame을 받지 않고 charge가
 목표 이하가 될 때까지 기다린 뒤 새 HWM을 적용한다.
 
-DEALER·ROUTER가 terminal reply와 error reply를 진행시키고 receive-flow-state frame을
-동기화하는 completion queue에는 application HWM을 적용하지 않는다. Monitor queue도
-application budget을 나누는 queue 목록에서 제외한다.
+ROUTER-ROUTER가 terminal reply와 error reply를 진행시키고 receive-flow-state frame을
+동기화하는 Completion queue에는 application HWM을 적용하지 않는다. DEALER-ROUTER reply와
+error reply는 DATA·REQUEST와 같은 Application queue의 HWM과 peer PAUSED를 적용한다. Monitor
+queue도 application budget을 나누는 queue 목록에서 제외한다.
 
 ### Pending request 수용
 
@@ -571,8 +583,22 @@ admission 결과, errno)만으로 관찰할 수 있는 동작이며, 각 항목�
 **HWM 변경**
 - HWM을 낮추면 이미 받은 frame은 유지되고, queue 보관량이 새 목표 아래로 drain된 뒤에 새 HWM이 admission에 적용된다.
 
-**제외 대상**
-- DEALER·ROUTER completion reply·receive-flow-state frame과 monitor 트래픽은 application send admission 결과와 snapshot의 `total_planned_hwm_bytes` 분모를 바꾸지 않는다.
+**Topology별 reply 회계**
+- Controlled DEALER-ROUTER reply를 queue에 남기면 그 byte delta가
+  `core_queue_accounted_bytes`·`current_accounted_bytes`, multipart이면
+  `provisional_accounted_bytes`, `peak_accounted_bytes`와
+  `total_messaging_accounted_bytes`에 나타난다. `application_accounted_bytes`는 `0`이다.
+- 같은 DEALER-ROUTER reply는 `completion_current_accounted_bytes`,
+  `completion_peak_accounted_bytes`, `completion_pending_message_count`와
+  `active_completion_directional_queue_count`에 나타나지 않는다. Application 방향 수는
+  Application directional queue만 반영한다.
+- ROUTER-ROUTER reply는 Completion current·peak·pending·direction count에 나타나고 Application
+  water-filling 분모와 HWM admission에는 들어가지 않는다.
+- DEALER-ROUTER reply가 HWM이나 PAUSED 때문에 admission되지 않으면 Application admission
+  backpressure로 관찰된다.
+- Receive-flow control과 monitor 트래픽은 application send admission 결과와 snapshot의
+  `total_planned_hwm_bytes` 분모를 바꾸지 않는다.
+- `zlink_auto_hwm_budget_snapshot_t`는 ABI v1과 정의된 field layout을 사용한다.
 
 **snapshot 불변성**
 - `zlink_ctx_get_auto_hwm_budget_snapshot`이나 `zlink_ctx_reset_auto_hwm_budget_metrics`를 호출해도 같은 send sequence의 수락·거부 결과가 동일하다.

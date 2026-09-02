@@ -82,6 +82,9 @@ Every ZMP frame begins with the following 8-byte header.
 | KIND | 3 | 1 | `0x00` data, `0x01` request, `0x02` reply, `0x03` error reply |
 | PAYLOAD SIZE | 4-7 | 4 | Application payload size excluding the sequence extension, Big Endian |
 
+`VERSION` is the version of the header byte layout and has the value `0x01`. Changes to the set of
+READY metadata properties do not change this value.
+
 An ordinary data frame places its payload immediately after this 8-byte header. The first
 frame with a request-reply kind appends an 8-byte unsigned Big Endian request sequence to
 form a 16-byte header.
@@ -123,26 +126,29 @@ following FLAGS combinations also produce `EPROTO`.
 
 ## 4. Handshake
 
-When a connection is established, the active side sends a HELLO frame followed by a READY
-frame. How a transport divides that byte sequence across writes or RFC 6455 binary messages
-does not affect ZMP frame ordering. The passive side of a paired DEALER·ROUTER transport first
-sends only HELLO, then sends its own READY after receiving the peer's READY. The passive side
-publishes local connection readiness and pair admission only after the transport write of that
-READY completes successfully. A failed READY write fails the handshake without publishing
-readiness. The active side begins exchanging data only after receiving the passive READY.
+On a connection other than DEALER or ROUTER, the active side sends a HELLO frame followed by a
+READY frame. How a transport divides that byte sequence across writes or RFC 6455 binary messages
+does not affect ZMP frame ordering.
+
+On a DEALER or ROUTER connection, both sides first send only HELLO, verify the peer socket type in
+HELLO, determine the lane count in [§4.1](#41-request-reply-lane), and then send READY. The engine
+holds READY while the active socket owner determines the count. Endpoint cancellation or expiry of
+`HANDSHAKE_IVL` cancels both the held READY and optional creation of the Completion connection. The
+passive side publishes local connection readiness only after its READY transport write completes
+successfully and socket lane-set admission and Application scheduler attachment finish. A failed
+READY write fails the handshake without publishing readiness.
 
 ```mermaid
 sequenceDiagram
     participant A as Active peer
     participant P as Passive peer
 
-    A->>P: HELLO
-    A->>P: READY
-    P->>A: HELLO
-    Note over P: Receive and validate peer READY
-    P->>A: READY
-    Note over P: Publish local readiness after READY write completes
-    Note over A: Begin data exchange after validating passive READY
+    A->>P: HELLO(socket type, RID)
+    P->>A: HELLO(socket type, RID)
+    Note over A,P: Determine lane count from both socket types
+    A->>P: READY(Lane-Count, Lane)
+    P->>A: READY(Lane-Count, Lane)
+    Note over A,P: Publish logical readiness after required lanes are validated and attached
 ```
 
 **HELLO frame**: consists, in order, of the control type (1 byte), socket type (1 byte),
@@ -160,7 +166,7 @@ Enabling `ZLINK_OPT_ZMP_METADATA` adds `Socket-Type` and, only when the socket t
 or ROUTER, also adds `Routing-Id`. A READY that uses metadata always includes
 `Zlink-Max-Message-Size`, whose value is an 8-byte unsigned 64-bit big-endian integer. A value of
 `0` means that no positive Application maximum is configured. This
-option is disabled by default. However, a paired DEALER·ROUTER transport always adds metadata
+option is disabled by default. However, a DEALER or ROUTER transport always adds metadata
 and the lane property from [§4.1](#41-request-reply-lane), regardless of this
 option.
 
@@ -172,22 +178,34 @@ option.
 
 ### 4.1 Request-reply lane
 
-One logical DEALER/ROUTER peer that uses request-reply has two physical transport
-connections.
+The physical connection count for a DEALER or ROUTER transport is determined from both socket
+types.
 
-| Lane | Traffic carried |
-|---|---|
-| Application | Ordinary application messages and requests |
-| Completion | Replies that complete requests already sent and receive-flow control |
+| Socket pair | Lane count | Physical lanes and traffic |
+|---|---:|---|
+| DEALER-DEALER | `1` | One Application lane carries DATA and Core control. Typed requests are unavailable. |
+| DEALER-ROUTER | `1` | One Application lane carries DATA, REQUEST, REPLY, error reply, FLOWSTATE, and WEIGHT. A typed request from ROUTER to DEALER is not allowed. |
+| ROUTER-ROUTER | `2` | The Application lane carries DATA, REQUEST, and WEIGHT; the Completion lane carries REPLY, error reply, and FLOWSTATE. |
 
-The READY frame on each connection contains `Zlink-Lane`. Its value is one byte:
-Application is `0`, and Completion is `1`. Physical connection IDs and generations are
-neither wire properties nor public targets. `Zlink-Lane` is an internal protocol property
-that distinguishes application traffic from completion traffic.
+A DEALER or ROUTER READY contains `Socket-Type`, `Routing-Id`, `Zlink-Lane-Count`, and `Zlink-Lane`
+regardless of this option. `Zlink-Lane-Count` is a one-byte `1` or `2` and must agree with the table above.
+`Zlink-Lane` is also one byte: Application is `0`, and Completion is `1`. Count `1` permits only
+lane `0`; count `2` permits lanes `0` and `1` exactly once each. The lane-count function returns the
+same value when the order of `(local socket type, peer socket type)` is reversed.
 
-The `Routing-Id` in READY is metadata used to verify that both connections belong to the same
-peer. The runtime exposes the synthetic routing-ID preamble used by a ROUTER to select that peer
-only on the Application lane. The Completion lane carries neither this preamble nor ordinary
+A missing `Zlink-Lane-Count` or `Zlink-Lane`, an invalid length or value, a mismatch between the
+calculated and advertised count, lane `1` with count `1`, or duplicate or incomplete lanes for
+count `2` within `HANDSHAKE_IVL` is a READY protocol error. Core closes the entire related lane set
+and does not publish logical readiness. The two count `2` connections must have the same socket
+type, `Routing-Id`, and count. An old READY lacks `Zlink-Lane-Count` and is rejected; there is no
+fallback to the old two-lane DEALER-ROUTER form or mixed-version shim. Socket patterns other than
+DEALER and ROUTER use one physical connection and send neither `Zlink-Lane-Count` nor `Zlink-Lane`.
+
+Physical connection IDs and generations are neither wire properties nor public targets.
+`Zlink-Lane` is an internal protocol property that classifies the physical connection. The
+`Routing-Id` in READY is metadata used to verify that the two count `2` connections belong to the
+same peer. The runtime exposes the synthetic routing-ID preamble used by a ROUTER to select that
+peer only on the Application lane. The Completion lane carries neither this preamble nor ordinary
 `data` records. If the Completion lane carries a record after READY, the first record must be a
 reply, error reply, or receive-flow control record.
 
@@ -216,28 +234,45 @@ Forbidden flag combinations and a CONTROL body above the independent limit remai
 protocol errors.
 
 A weight configured before bind or connect is synchronized with the peer scheduler only after the
-paired Application pipe is ready. A dynamic change also applies the new absolute value, including
+Application pipe is ready. A dynamic change also applies the new absolute value, including
 `0`, in both directions. If the value equals the last value advertised for the pipe, Core does not
 create another command. After reconnect, the new Application pipe re-advertises the current
 configured value when it becomes ready.
 
 A network `WEIGHT` command may bypass application HWM and remote PAUSE. It does not bypass the
-pair-ready hold or the atomic boundary of an Application multipart. While an Application multipart
+logical-ready hold or the atomic boundary of an Application multipart. While an Application multipart
 is open, the sender retains only the latest weight as fixed `uint32` state. After FINAL commits the
 multipart, or after rollback removes it, the sender appends and publishes that latest command only
 as the next record at the resulting message boundary.
 
-Application writes wait until both lanes have completed validation. Data received from an
-earlier connection is not attached to the new connection. A protocol error, identity
-mismatch, fence timeout, or terminal failure on one lane terminates both lanes. Reconnect
-revalidates both lanes and then resumes Application writes.
+FLOWSTATE also uses a separate pending slot that retains one latest absolute state. The FLOWSTATE
+and WEIGHT slots receive a new sequence from a shared monotonic enqueue counter on every update.
+When a new value of the same kind overwrites an earlier value, its sequence also moves to the time
+of the new update. At the next record boundary, Core appends only surviving slots in ascending
+sequence order. For example, after `FLOW(PAUSED) → WEIGHT → FLOW(RUNNING)`, Core omits PAUSED and
+writes RUNNING after WEIGHT. Both controls bypass Application HWM and remote PAUSED, but they do not
+bypass inactive or initial transport hold, overtake already committed records, or split an open
+multipart.
 
-FIFO ordering is guaranteed only within each lane. No ordering is guaranteed between the
-two lanes. Completion replies can be processed even when Application ingress is stopped by
-[backpressure](../glossary.en.md#backpressure), which limits additional submissions when
-receive processing falls behind. Relocation, session binding, and other higher-level
-protocols must use their own generation fences instead of relying on ordering between the
-two connections.
+Application writes wait until the expected lanes for the count have been validated and logical
+readiness is published. Count `1` also retains a local pair ID and generation. When an active
+connector's count `1` connection disconnects, Core increments the generation once and opens one
+Application connection. When one count `2` lane disconnects, Core closes both lanes and reopens them
+with the same new local generation. When the new generation becomes ready, Core resends the current
+absolute receive-flow state and discards REPLY and FLOWSTATE from the previous connection ID and
+generation.
+
+On a DEALER-ROUTER single connection, DATA, REQUEST, REPLY, and error reply use the same physical
+FIFO and Application byte HWM and jointly apply the peer's PAUSED state. FLOWSTATE and WEIGHT are
+Core controls, so they bypass HWM and remote PAUSED but do not overtake an already committed record
+or open multipart. On ROUTER-ROUTER, FIFO ordering is guaranteed only within each lane, and no
+ordering is guaranteed between the two lanes. Replies on the separate Completion lane can be
+processed even when Application ingress is stopped by
+[backpressure](../glossary.en.md#backpressure).
+
+On a DEALER-ROUTER single connection, DATA sent first by the ROUTER and a later REPLY or error reply
+use the same FIFO. If DEALER does not dequeue the preceding DATA or keeps local PAUSED in effect, the
+REPLY cannot overtake it and the request timeout can create the terminal completion first.
 
 ## 5. Request-reply kind and sequence
 
@@ -248,8 +283,8 @@ request-reply record.
 |---|---:|---|---|
 | data | `0x00` | None | The payload is received as an ordinary message. |
 | request | `0x01` | Nonzero 8-byte Big Endian value | ROUTER receive returns the payload and a public reply token. The wire value is not the public token. |
-| reply | `0x02` | Same value as the original request | The Completion lane creates a REQUEST completion for the corresponding pending request. |
-| error reply | `0x03` | Same value as the original request | The Completion lane converts errno in the first payload part into an error completion. |
+| reply | `0x02` | Same value as the original request | On DEALER-ROUTER, the physical head of the Application lane creates a REQUEST completion for the corresponding pending request; on ROUTER-ROUTER, the Completion lane creates it. |
+| error reply | `0x03` | Same value as the original request | The same peer-type-specific reply path converts errno in the first payload part into an error completion. |
 
 Only the first application frame of a multipart request-reply carries a request-reply kind
 and sequence. If the first frame has `MORE`, the second and subsequent frames use
@@ -287,14 +322,15 @@ sequenceDiagram
     R-->>R: Expose RID, reply token, and payload through router_recv_part
     R->>R: Resolve internal sequence N from reply token
     R->>R: Attach reply kind and sequence N to first reply payload
-    R->>R: Select Completion pipe by routing_id (local key)
+    R->>R: Select reply pipe by routing_id and peer type (local key)
     R->>D: [REPLY + sequence N][application reply payload]
     D->>D: Match pending[seq=N] → enqueue REQUEST completion
 ```
 
 In this diagram, the header layout visible on the wire is the contract defined by the kind and sequence
 rules above. `routing_id` is not a reply wire part; it is a local selection key that the ROUTER
-uses to choose the destination Completion pipe. Pending matching and completion enqueue are
+uses to choose the destination reply pipe. Core uses the current ready Application pipe for a
+DEALER peer and the current ready Completion pipe for a ROUTER peer. Pending matching and completion enqueue are
 implementation descriptions in [§9 Internal structure](#9-internal-structure).
 
 ## 6. Relationship to transport routing_id
@@ -400,12 +436,13 @@ After it restores metadata on the first application message, the socket runtime 
 these steps.
 
 1. Typed receive stores the source pipe and wire sequence of a request as a reply target.
-2. A reply or error reply on the Completion progress lane locates the pending request by
-   sequence.
+2. On DEALER-ROUTER, a reply or error reply that reaches the physical head of the Application
+   pipe locates the pending request by sequence. On ROUTER-ROUTER, a reply or error reply on the
+   Completion pipe does so.
 3. After moving the required values into runtime state, Core removes metadata before public
    payload export.
 
-The reply payload moves from the Completion pipe to the socket-local completion ready
+The reply payload moves from the physical pipe selected by peer type to the socket-local completion ready
 queue. Core acquires public `zlink_msg_t[]` storage before enqueue, and
 `zlink_completion_recv()` transfers its ownership to the caller. Timeout and other
 payloadless terminal results enter the same tagged queue.
@@ -493,34 +530,45 @@ and request-reply completion is verified through public `zlink_router_recv_part`
 
 **Handshake**
 
-- The active side sends a READY frame after HELLO without an intervening application frame.
-  The peer processes the same HELLO and READY in order whether their bytes occupy one WS/WSS
-  binary message or are split across multiple binary messages. The passive side of a paired
-  DEALER·ROUTER transport first sends HELLO, then sends its own READY after receiving the peer's READY.
-- The paired passive side does not publish local readiness or pair admission before its READY
-  transport write completes. A failed write fails the handshake without publishing readiness.
+- On a connection other than DEALER or ROUTER, the active side sends a READY frame after HELLO
+  without an intervening application frame. The peer processes the same HELLO and READY in order
+  whether their bytes occupy one WS/WSS binary message or are split across multiple binary
+  messages.
+- Both sides of a DEALER or ROUTER connection first send only HELLO, determine the lane count from
+  the peer socket type, and then send READY. Local readiness is not published before the READY write
+  and count-specific lane attachment complete; a failed write fails the handshake without
+  publishing readiness.
 - Each metadata property after READY control type `0x04` follows the layout
   `[name length:u8][name bytes][value length:u32 BE][value bytes]`.
 - When `ZLINK_OPT_ZMP_METADATA` has its default value (disabled), there are no metadata
   properties. Enabling it adds `Socket-Type` and the 8-byte big-endian
   `Zlink-Max-Message-Size`. `Routing-Id` is added only to DEALER·ROUTER READY frames.
-- A paired DEALER·ROUTER transport's READY always contains `Socket-Type`, `Routing-Id`, and
-  `Zlink-Lane` metadata, regardless of this option.
+- A DEALER or ROUTER transport's READY always contains `Socket-Type`, `Routing-Id`, one-byte
+  `Zlink-Lane-Count`, and one-byte `Zlink-Lane` metadata, regardless of this option.
 - The ERROR control type is `0x05`, and its body follows the layout
   `[type][error code:u8][reason length:u8][reason bytes]`.
 
 **Request-reply lane**
 
-- `Zlink-Lane` appears as one byte in both connections' READY frames: Application is `0`
-  and Completion is `1`.
-- Application writes are delivered after both lanes complete validation.
-- Data received from an earlier connection is not attached to the new connection.
-- A protocol error, identity mismatch, fence timeout, or terminal failure on one lane
-  terminates the entire pair.
-- Reconnect revalidates both lanes and then resumes Application writes.
-- FIFO ordering is observed only within each lane; no ordering is guaranteed between lanes.
-- Completion replies are processed even while Application ingress is stopped by
-  backpressure.
+- DEALER-DEALER and DEALER-ROUTER READY use count `1`, lane `0`; ROUTER-ROUTER READY uses count
+  `2`, with lanes `0` and `1` exactly once each. Reversing the bind and connect direction does not
+  change the count.
+- PAIR, STREAM, and the PUB-SUB family use one physical connection and send neither
+  `Zlink-Lane-Count` nor `Zlink-Lane`.
+- A missing Lane-Count, length `0` or `2`, value `0` or `3`, mismatch with the calculated count,
+  lane `1` for count `1`, or a duplicate or missing count `2` lane causes handshake protocol
+  failure and disconnect before payload delivery.
+- An old two-lane DEALER-ROUTER READY without Lane-Count does not become logically ready, and its
+  DATA does not appear on application receive.
+- Count `1` delivers Application writes after its one Application connection is validated; count
+  `2` delivers them after both lanes are validated. Failure of one count `2` lane terminates the
+  complete lane set, and reconnect validates both lanes again.
+- For both connect-before-bind and bind-before-connect, inproc determines the count only after both
+  endpoint types are known. Count `1` creates only the Application pipe; count `2` adds the
+  Completion pipe.
+- DATA, REQUEST, REPLY, and error reply on DEALER-ROUTER share one FIFO and Application HWM and
+  PAUSED state. On ROUTER-ROUTER, FIFO ordering is observed only within each lane and no ordering is
+  guaranteed between lanes.
 - A network peer-weight advertisement is an Application-lane frame with `CONTROL`,
   `KIND == 0x00`, and payload size `10`; its payload follows
   `[ASCII "WEIGHT":6][weight:u32 BE]`.
@@ -540,12 +588,15 @@ and request-reply completion is verified through public `zlink_router_recv_part`
 - If weights change more than once while an Application multipart is open, the peer receives that
   multipart without an interleaved control record and receives only the latest `WEIGHT` command at
   the next message boundary after FINAL commit or rollback.
-- Registering a completion poller before the first request on a network paired connection does not
-  terminate the pair; the following request and reply are each delivered once.
-- After an Application request is received on an inproc pair, the Completion pipe has no readable
+- If `FLOW(PAUSED) → WEIGHT → FLOW(RUNNING)` is submitted during an open multipart, only WEIGHT and
+  RUNNING appear in enqueue-sequence order after FINAL or rollback; PAUSED does not appear. Both
+  controls bypass HWM and remote PAUSED but do not bypass inactive or initial transport hold.
+- Registering a completion poller before the first request on a network DEALER or ROUTER connection
+  does not terminate the connection; the following request and reply are each delivered once.
+- After an Application request is received on an inproc ROUTER-ROUTER pair, the Completion pipe has no readable
   synthetic routing-ID record before a reply or receive-flow control record is written.
-- On network and inproc pairs, weights configured on both sides before bind or connect are applied
-  with their exact values to the peer scheduler after the paired Application pipe becomes ready;
+- On network and inproc connections, weights configured on both sides before bind or connect are applied
+  with their exact values to the peer scheduler after the Application pipe becomes ready;
   `0` is applied as a value.
 - Dynamically changing peer weights in both directions after a network or inproc pair is ready
   produces `PEER_WEIGHT_CHANGED` with the new value and that Application lane's
@@ -571,6 +622,11 @@ and request-reply completion is verified through public `zlink_router_recv_part`
 - Closing a stream before the base header, sequence extension, or payload finishes produces
   `EPROTO`, delivers no partial payload to application receive or completion, and terminates
   the connection.
+- If the ROUTER sends multipart DATA before the REPLY for the same request on DEALER-ROUTER, no
+  completion exists until DEALER dequeues the DATA `FINAL` part. After the last DATA part, the REPLY
+  appears as exactly one completion, and its payload does not appear in DATA receive.
+- If preceding DATA and PAUSED or HWM cause the request timeout to finish first, Core creates one
+  timeout completion. A late REPLY that arrives later does not create a second completion.
 
 **Completion**
 
@@ -584,6 +640,11 @@ and request-reply completion is verified through public `zlink_router_recv_part`
 **Transport and frame count**
 
 - TCP, IPC, TLS, WS, and WSS place request-reply kind and sequence at the same byte offsets.
+- A TCP raw acceptor observes one physical connection for DEALER-ROUTER and two for ROUTER-ROUTER.
+  IPC and inproc verify the same counts through endpoint and monitor lifecycle. TLS, WS, and WSS
+  verify D/R count `1` and R/R count `2` through their native listeners and monitors after their TLS
+  handshake or WebSocket upgrade rather than through a plain raw acceptor; an unsupported transport
+  is skipped explicitly.
 - On WS and WSS, placing a binary-message boundary inside the base header, sequence extension,
   or payload and sending the remaining bytes in the next binary message delivers one ZMP frame.
 - Placing two or more complete ZMP frames consecutively in one WS or WSS binary message makes

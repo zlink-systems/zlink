@@ -406,9 +406,9 @@ message to the opposite socket and to `capture_`. Both destinations therefore re
 application part count, order, and bytes, while a frame sent back to the wire has the ordinary data
 kind.
 
-The proxy does not bridge pending state or reply targets on the completion progress lane. This API
-does not transparently complete a request across a proxy, and the proxy neither creates
-request-reply metadata nor forwards completion records.
+The proxy does not bridge request correlation or reply-target state. This API does not
+transparently complete a request across a proxy, and the proxy neither creates request-reply
+metadata nor forwards completion records.
 
 **Returns:** `ZLINK_CONFIG_OK` when the proxy ends normally, or a
 `zlink_config_result_t` error otherwise. If a required handle is `NULL` or
@@ -553,7 +553,9 @@ values, and errno). Each item maps to one unit test.
 - The supplied handles are borrowed—the caller still owns them after the proxy
   ends, and the function does not close them.
 - When a raw fixture with request, reply, or error-reply kind is sent through the proxy, the opposite socket and a non-NULL capture socket receive the same application multipart as an ordinary message; sending it back to the raw wire produces the data kind.
-- Because the proxy does not bridge the completion progress lane, a reply on its far side does not automatically complete the original request.
+- Even though DEALER-ROUTER uses a single connection, the proxy does not bridge request
+  correlation or reply-target state, so a reply on its far side does not automatically
+  complete the original request.
 
 **Sleep and thread**
 

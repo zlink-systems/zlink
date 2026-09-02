@@ -431,10 +431,11 @@ artifact. The finished binding therefore keeps the following build rules.
   `ZLINK_PUB_OPT_NODROP` backpressure is surfaced only by synchronous submit.
 - The terminal for a raw ROUTER/`received_t` reply is the synchronous one-shot
   `reply_submit_operation_t::submit() -> void`. It submits a terminal reply or
-  error reply to the HWM-free completion lane with one native call. HWM
-  backpressure is not a reply result; `NOT_CONNECTED`, `TERMINATED`,
-  `INVALID_ARGUMENT`, and other non-HWM submit failures are delivered
-  immediately as `submit_error_t`.
+  error reply with one native call. A DEALER peer is subject to Application
+  HWM, `PAUSED`, and `SNDTIMEO`, so the result can be `BACKPRESSURED`; a ROUTER
+  peer uses the HWM-free Completion connection. `NOT_CONNECTED`, `TERMINATED`,
+  `INVALID_ARGUMENT`, and other submit failures are delivered immediately as
+  `submit_error_t`.
 
 ## 64-bit byte HWM and the monitoring contract
 
@@ -516,9 +517,9 @@ The binding exposes the Core receive-flow state as
 and `paused = 1`. `socket_t::set_receive_flow_state(receive_flow_state_t)`
 sets it. The method returns `void` and follows the C++ error policy: a failing
 `zlink_config_result_t` is thrown as a `config_error_t` carrying that result
-value, so `ZLINK_CONFIG_NOT_SUPPORTED` on a socket without a completion lane
-becomes a `config_error_t` with the not-supported result. Setting the state the
-socket already holds returns normally and throws nothing.
+value, so `ZLINK_CONFIG_NOT_SUPPORTED` on a socket that doesn't support receive
+flow becomes a `config_error_t` with the not-supported result. Setting the
+state the socket already holds returns normally and throws nothing.
 
 The observation surface follows the C contract, so the constant and metric
 names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
@@ -753,6 +754,9 @@ Each item maps to one contract test.
   native aggregate.
 - Under public poller ownership, a completion-backed terminal progresses when a wait loop runs, and
   `pollcompletion` returns only after settlement or cleanup finishes.
+- When HWM/`PAUSED` waiting expires for a raw reply submitted to a DEALER peer,
+  `submit_error_t` reports `BACKPRESSURED`; a reply submitted to a ROUTER peer
+  retains the HWM-free result of the Completion connection.
 
 **ReplyToken and STREAM**
 

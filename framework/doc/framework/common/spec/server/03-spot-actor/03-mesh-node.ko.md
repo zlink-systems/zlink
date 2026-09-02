@@ -384,8 +384,10 @@ NodeRid나 MeshName을 target으로 넘기지 않는다.
 optional initial Mesh와 stable type을 지정할 수 있다. Initial Mesh는 cold activation
 placement에만 사용하며 기존 owner의 현재 Mesh를 제한하거나 이동시키지 않는다.
 
-Application payload는 owner의 application turn에서 직렬로 처리한다. Request completion과
-liveness·admission·relocation·reply recovery service control은 기존 Completion connection에서 받는다.
+Application payload는 owner의 application turn에서 직렬로 처리한다. MeshNode peer는
+ROUTER-ROUTER이므로 Request completion과 liveness·admission·relocation·reply recovery service
+control을 별도 [Completion connection](../00-foundation/02-glossary.ko.md#completion-connection)에서 받는다. ClientServer DEALER-ROUTER의 single-lane 규칙은
+이 RouteMesh 경로에 적용하지 않는다.
 Core HWM 재시도는 binding operation별 completion으로 끝나며 Framework send-ready callback이나 waiter는 없다.
 Location reconcile과 reservation 같은 Framework 내부 작업도
 application handler가 대기 중이어도 진행한다. Actor·Spot lifecycle application callback은 application turn에서 실행한다.
@@ -462,6 +464,10 @@ runtime snapshot과 event)만으로 다음을 확인한다.
 - ChannelName handler와 RID direct handler의 namespace 및 context가 구분된다.
 - Draining node가 새 placement target이 되지 않고 accepted operation은 terminal 상태까지 진행한다.
 - Actor·Spot application 호출이 NodeRid나 owner token을 target으로 요구하지 않는다.
+- 두 MeshNode의 Application Job Queue가 모두 PAUSED여도 이미 시작한 cross-node request reply는
+  ROUTER-ROUTER Completion connection으로 진행해 timeout 전에 terminal completion을 만들 수 있다.
+- RouteMesh connection monitor는 logical peer마다 `CONNECTION_READY`를 한 번 보고하며 Completion
+  physical event만 Completion lane 값을 사용한다.
 
 ---
 

@@ -55,4 +55,8 @@ Auto HWM budget에 씌우는 상한이다. profile 고정 cap과 활성 queue �
 
 ### completion progress lane
 
-DEALER·ROUTER에서 terminal reply와 error reply의 진행만 담당하며 HWM admission과 budget 계산에서 빠지는 별도 경로다.
+ROUTER-ROUTER가 양방향 request wait cycle을 끊기 위해 사용하는 별도 physical connection이다.
+Terminal reply·error reply와 receive-flow control을 운반하며 HWM admission과 Application budget
+계산에서 빠진다. DEALER-ROUTER에는 이 lane이 없고 reply가 single Application connection을
+사용한다. `zlink_completion_recv()`가 소비하는 socket-local completion queue는 이 physical
+connection과 다른 개념이다.

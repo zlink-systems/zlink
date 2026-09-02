@@ -144,7 +144,9 @@ sequenceDiagram
 
 - Reply completion과 binding operation completion 같은 infrastructure 작업은 application
   turn과 분리되어 진행되므로, 해당 Spot이나 Actor의 다음 application message를 실행하지
-  않고도 현재 turn을 재개할 수 있다.
+  않고도 현재 turn을 재개할 수 있다. RouteMesh ROUTER-ROUTER reply는 별도 [Completion
+  connection](../00-foundation/02-glossary.ko.md#completion-connection)으로 이 경계에 도달한다. ClientServer DEALER-ROUTER reply는 infrastructure에서
+  처리되지만 single connection의 앞선 DATA와 HWM·PAUSED 뒤에서 늦을 수 있다.
 - Channel request의 target이 다른 mesh 그룹이나 ClientServer Channel이어도 이 규칙은
   같다. Framework는 선택한 송신 경로의 completion을 원래 Spot activation과 generation에
   연결한다.
@@ -467,8 +469,9 @@ Node는 event loop가 하나이므로 물리적으로 전용 자원을 만들 �
 [§1](#1-queue와-gate-분리-원칙)의 표대로 독립적으로 진행한다.
 
 - Payload decoding, user callback과 exception mapping은 application turn에서 처리한다.
-- Request completion과 bounded liveness·admission·relocation·reply recovery service
-  control은 기존 Completion connection에서 받는다. Core HWM 재시도 결과는 binding
+- RouteMesh request completion과 bounded liveness·admission·relocation·reply recovery service
+  control은 ROUTER-ROUTER Completion connection에서 받는다. ClientServer request completion은
+  DEALER-ROUTER single Application connection에서 Core가 reply로 식별한 뒤 받는다. Core HWM 재시도 결과는 binding
   operation별 completion으로 받으며 Framework service-wire `SendReady` record와
   구분한다.
 - Peer connection 상태 변경과 shutdown barrier도 infrastructure task에서 처리한다.
@@ -573,6 +576,10 @@ callback, handler 실행 순서를 관찰할 수 있는 side effect, application
 - Application handler를 대기시킨 상태에서 종료 절차가 진행된다.
 - Application handler를 대기시킨 상태에서 새 peer 연결이 수락된다.
 - 느린 상태 구독자가 message 처리 속도를 떨어뜨리지 않는다.
+- RouteMesh의 Application handler와 Application Job Queue를 PAUSED로 유지해도 이미 시작한
+  cross-node request reply가 ROUTER-ROUTER Completion connection으로 완료된다.
+- ClientServer에서 앞선 one-way DATA를 Client가 처리하지 않으면 같은 DEALER-ROUTER connection의
+  reply가 늦어 request timeout이 먼저 완료될 수 있으며 late reply는 두 번째 terminal을 만들지 않는다.
 
 ---
 

@@ -237,7 +237,7 @@ physical connection identity로 바뀌지 않는다. Completion drain, reservati
 
 ## 8. Receive flow state
 
-STREAM에는 paired DEALER/ROUTER completion lane이 없으므로 receive-flow 상태도 없다.
+STREAM은 receive-flow 대상 socket type이 아니다.
 `zlink_socket_set_receive_flow_state()`는 STREAM socket에 대해 `errno == ENOTSUP`과 함께
 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고 아무것도 바꾸지 않는다. 위에서 설명한 byte HWM,
 low water mark와 transport backpressure는 그대로 유지된다. STREAM socket의 monitor는

@@ -191,12 +191,14 @@ typedef enum zlink_receive_flow_state_t
 } zlink_receive_flow_state_t;
 ```
 
-DEALER와 ROUTER socket이 paired [completion progress lane](../glossary.ko.md#completion-progress-lane)으로
-자신에게 보내는 peer에게 알리는 receive-flow 상태다. `ZLINK_RECEIVE_FLOW_RUNNING`은
+DEALER와 ROUTER socket이 자신에게 보내는 peer에게 알리는 receive-flow 상태다. Count `1`인
+DEALER-DEALER와 DEALER-ROUTER는 single Application connection의 Core control 경로를 사용하고,
+count `2`인 ROUTER-ROUTER는 [completion progress lane](../glossary.ko.md#completion-progress-lane)을 사용한다.
+`ZLINK_RECEIVE_FLOW_RUNNING`은
 계속 보내라는 뜻이고 `ZLINK_RECEIVE_FLOW_PAUSED`는 이 socket으로 새 message를 보내지
 말라는 뜻이다. 이 값은 counter가 아니라 socket 전체에 적용되는 절대 상태이므로, 이미
-유지하는 상태를 다시 설정하면 아무것도 바꾸지 않고 성공한다. 이 lane은 DEALER와
-ROUTER에만 있으며 결과 동작은 [DEALER](06-dealer.ko.md)와
+유지하는 상태를 다시 설정하면 아무것도 바꾸지 않고 성공한다. Receive-flow는 DEALER와
+ROUTER에서만 지원하며 결과 동작은 [DEALER](06-dealer.ko.md)와
 [ROUTER](07-router.ko.md)가 소유한다.
 
 ### 송신 결과
@@ -410,10 +412,11 @@ control 중 하나를 유실할 수 있다. 따라서 DEALER는 부분적인 con
 알 수 없는 option이므로 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로 실패한다.
 pipe admission은 실제로 보관한 byte를 계산한다.
 
-HWM은 각 HWM-controlled application directional pipe에 적용한다. DEALER·ROUTER의
-completion progress lane은 terminal reply와
-error reply 전용이며 auto HWM, manual `SNDHWM`·`RCVHWM`, LWM과 Core budget reservation을
-적용하지 않는다. accounted byte가 limit에 도달하면 receiver가 충분한 byte credit을
+HWM은 각 HWM-controlled application directional pipe에 적용한다. DEALER-ROUTER의 DATA·REQUEST·
+REPLY·error reply는 single Application physical pipe에서 같은 HWM과 peer의 PAUSED 상태를
+적용한다. ROUTER-ROUTER의 completion progress lane만 terminal reply와 error reply에 auto HWM,
+manual `SNDHWM`·`RCVHWM`, LWM과 Core budget reservation을 적용하지 않는다. Accounted byte가
+limit에 도달하면 receiver가 충분한 byte credit을
 반환할 때까지 이후 write가 대기한다 — 이 제한 동작이
 [backpressure](../glossary.ko.md#backpressure)다. 비어 있는 pipe에는
 accounted 크기가 HWM보다 큰 message 한 건을 허용할 수 있다. 따라서 유효한 큰
@@ -667,20 +670,21 @@ byte-count option에는 `uint64_t` output buffer가 필요하고, 호출할 때
 
 ### zlink_socket_set_receive_flow_state
 
-이 socket의 receive-flow 상태를 설정하고 paired completion lane으로 동기화한다.
+이 socket의 receive-flow 상태를 설정하고 peer type별 Core control 경로로 동기화한다.
 
 ```c
 ZLINK_EXPORT zlink_config_result_t zlink_socket_set_receive_flow_state (
   void *handle_, zlink_receive_flow_state_t state_);
 ```
 
-`state_`를 socket 전체의 receive-flow 상태로 저장하고, paired DEALER/ROUTER
-completion lane으로 연결된 모든 peer에게 보낸다. 이 호출은 socket을 소유한
+`state_`를 socket 전체의 receive-flow 상태로 저장하고 모든 ready DEALER·ROUTER peer에게
+보낸다. Count `1`인 DEALER-DEALER·DEALER-ROUTER에는 single Application connection의 Core
+control 경로를, count `2`인 ROUTER-ROUTER에는 Completion connection을 사용한다. 이 호출은 socket을 소유한
 runtime thread가 local 상태를 저장한 시점에 완료되며 peer가 관측할 때까지
 기다리지 않는다. 현재 상태를 다시 설정하면 성공하고 새로 보내는 것은 없다.
 
 **반환값:** 성공 시 `ZLINK_CONFIG_OK`이며 현재 상태를 다시 설정한 경우도
-포함한다. completion lane이 없는 socket 유형은 `ZLINK_CONFIG_NOT_SUPPORTED`를
+포함한다. DEALER·ROUTER가 아닌 socket 유형은 `ZLINK_CONFIG_NOT_SUPPORTED`를
 반환하고 기존 byte HWM과 transport backpressure를 그대로 유지한다. 전체 결과
 표는 [Errors](../03-errors.ko.md)가 소유한다.
 
@@ -1008,11 +1012,16 @@ Reply timeout은 request record가 outbound local send queue에 admission된 시
 payload를 replay하지 않고 correlation과 이미 시작한 budget만 유지한다. Reply와 timeout 중
 pending correlation을 먼저 제거한 하나만 completion을 만들며 늦은 결과는 버린다.
 
+DEALER-ROUTER single connection에서 ROUTER가 먼저 보낸 DATA와 이후 REPLY·error reply는 같은
+FIFO를 사용한다. DEALER가 앞선 DATA를 dequeue하지 않거나 local PAUSED가 유지되면 REPLY는
+앞지르지 못하며 request timeout이 먼저 terminal completion을 만들 수 있다.
+
 `zlink_reply_part()`는 flags, timeout, context와 completion ID가 없는 synchronous admission
 함수다. 모든 호출은 `part_`를 소비한다. 첫 `MORE` 또는 `FINAL`에서 RID·token과 REQUEST
 complete 상태를 검증하고 token을 해당 reply sequence에 checkout한다. `MORE`는 staging과 checkout을
-유지한다. `FINAL`은 `SNDTIMEO`를 snapshot해 같은 logical source RID의 completion route admission을
-기다린다. Successful `FINAL`만 token을 소비한다.
+유지한다. `FINAL`은 `SNDTIMEO`를 snapshot해 같은 logical source RID의 reply route admission을
+기다린다. Source peer가 DEALER이면 현재 ready Application pipe를, ROUTER이면 현재 ready Completion
+pipe를 사용한다. Successful `FINAL`만 token을 소비한다.
 
 Reply wait 만료는 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, allocation failure는
 `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, 다른 runtime failure는
@@ -1041,6 +1050,10 @@ paused pipe를 round-robin으로 다시 진행하며 token을 자동 제거하�
 ### Completion pull과 ownership
 
 SEND와 REQUEST는 socket-local completion queue 하나를 사용한다.
+
+이 public completion queue는 transport의 Completion connection과 다른 개념이다.
+DEALER-ROUTER reply는 single Application connection의 physical head에 도달한 뒤 이 queue로
+이동하고, ROUTER-ROUTER reply는 별도 Completion connection에서 이 queue로 이동한다.
 
 ```c
 ZLINK_EXPORT zlink_recv_result_t zlink_completion_recv(
@@ -1160,9 +1173,10 @@ manual이면 더 작은 cap, 한쪽이 unlimited manual이고 다른 쪽이 auto
 사용한다. 양쪽이 unlimited면 admission은 unlimited로 유지하되 역할별 상한을 계산용으로
 한 번 예약한다.
 
-DEALER·ROUTER completion progress lane은 terminal reply와 error reply 전용이다. 이
+ROUTER-ROUTER completion progress lane은 terminal reply와 error reply 전용이다. 이
 lane에는 auto/manual HWM, LWM, inproc boost, 역할별 경계와 Core budget reservation을
-적용하지 않는다. auto HWM을 비활성화하면 live pipe의 마지막 applied HWM을 유지하고
+적용하지 않는다. DEALER-ROUTER reply는 Application pipe의 회계와 HWM을 사용한다.
+Auto HWM을 비활성화하면 live pipe의 마지막 applied HWM을 유지하고
 이후 automatic planning에서 제외한다.
 
 Core pipe low watermark는 `ceil(hwm_bytes / 2)`다. 이 값은 byte credit 반환을
@@ -1209,6 +1223,8 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 
 **HWM admission** ([Transport/Buffer](#transportbuffer) 참조)
 - accounted byte가 HWM에 도달하면 receiver가 byte credit을 반환할 때까지 이후 write가 대기한다.
+- DEALER-ROUTER의 REPLY·error reply는 DATA·REQUEST와 같은 Application physical HWM 및 peer
+  PAUSED 상태를 적용한다. ROUTER-ROUTER Completion lane의 REPLY·error reply만 이 HWM에서 제외한다.
 - 비어 있는 pipe는 admission 시점에 전체 accounted 크기를 아는 complete message 한 건을 HWM보다 크더라도 수락하고, 그 message도 `ZLINK_OPT_MAXMSGSIZE` 검사를 통과해야 하며, 한 건 수락 뒤의 write는 대기한다.
 - 최종 크기를 모르는 incremental multipart는 첫 `MORE` frame부터 일반 byte HWM이 적용된다.
 - 빈 frame도 charge가 0이 아니므로(payload + `sizeof(zlink_msg_t)`) 빈 frame만 반복 송신해도 HWM에 도달하고, frame이 pipe에서 빠지면 같은 charge가 돌아온다.
@@ -1267,6 +1283,12 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
   소비하고 live token은 처음부터 재시도할 수 있다.
 - Reply하지 않은 token은 자동 소비되지 않는다. Empty-message reply, logical RID 제거 또는 socket
   close가 slot을 해제한다.
+- DEALER-ROUTER에서 앞선 DATA의 `FINAL` part를 dequeue하지 않거나 local PAUSED를 유지하면 뒤의
+  REPLY가 physical head에 도달하지 못해 request timeout이 먼저 완료될 수 있다. 늦은 REPLY는 두 번째
+  completion을 만들지 않는다.
+- DEALER peer로 보내는 reply는 Application HWM·PAUSED와 `SNDTIMEO` admission을 적용하여
+  `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`으로 끝날 수 있다. ROUTER peer로 보내는 reply는 별도
+  Completion lane의 HWM-free admission을 유지한다.
 
 **Completion receive와 ownership**
 - Completion이 있으면 `ZLINK_POLLCOMPLETION`이 level-trigger되고 poller wait만으로 queue가 줄지
@@ -1294,7 +1316,10 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 
 **receive-flow 상태**
 - 현재 상태를 다시 설정하는 `zlink_socket_set_receive_flow_state`는 성공하고 새로 보내는 것이 없다.
-- completion lane이 없는 socket 유형은 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하며 기존 byte HWM과 transport backpressure를 유지한다.
+- Count `1`인 DEALER-DEALER·DEALER-ROUTER에서는 single Application connection의 Core control
+  경로로, count `2`인 ROUTER-ROUTER에서는 Completion connection으로 PAUSED·RUNNING을 전달하며
+  reconnect 뒤 추가 setter 호출 없이 현재 절대 상태를 다시 보낸다.
+- DEALER·ROUTER가 아닌 socket 유형은 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하며 기존 byte HWM과 transport backpressure를 유지한다.
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](../README.ko.md) | [이전: Runtime 경계](../08-runtime-boundary.ko.md) | [다음: PAIR](01-pair.ko.md)

@@ -197,14 +197,15 @@ typedef enum zlink_receive_flow_state_t
 } zlink_receive_flow_state_t;
 ```
 
-This is the receive-flow state a DEALER or ROUTER socket publishes to peers
-that send to it over the paired
+This is the receive-flow state a DEALER or ROUTER socket publishes to peers that send to it.
+Count `1` DEALER-DEALER and DEALER-ROUTER use the Core control path of the single Application
+connection, while count `2` ROUTER-ROUTER uses the
 [completion progress lane](../glossary.en.md#completion-progress-lane).
 `ZLINK_RECEIVE_FLOW_RUNNING`
 asks those peers to keep sending; `ZLINK_RECEIVE_FLOW_PAUSED` asks them to stop
 sending new messages to this socket. The value is an absolute socket-wide
 state, not a counter, so setting the state a socket already holds changes
-nothing and succeeds. Only DEALER and ROUTER have this lane;
+nothing and succeeds. Receive flow is supported only by DEALER and ROUTER;
 [DEALER](06-dealer.en.md) and [ROUTER](07-router.en.md) own the resulting
 behavior.
 
@@ -428,10 +429,11 @@ with `ZLINK_CONFIG_INVALID_ARGUMENT`. The unsupported socket option value
 `0x3034` is also unknown and fails with `ZLINK_CONFIG_INVALID_ARGUMENT` and `EINVAL`.
 Pipe admission accounts the actual retained bytes.
 
-HWM is applied to each HWM-controlled application directional pipe. The
-DEALER/ROUTER completion progress lane carries only terminal replies and error
-replies and applies no automatic HWM, manual `SNDHWM` or `RCVHWM`, LWM, or Core
-budget reservation. Once the accounted bytes reach the
+HWM is applied to each HWM-controlled application directional pipe. On DEALER-ROUTER, DATA,
+REQUEST, REPLY, and error reply use the same HWM and peer PAUSED state on the single Application
+physical pipe. Only the ROUTER-ROUTER completion progress lane carries terminal replies and error
+replies without automatic HWM, manual `SNDHWM` or `RCVHWM`, LWM, or Core budget reservation. Once
+the accounted bytes reach the
 limit, further writes wait until the receiver returns enough byte credit. This
 limiting behavior is [backpressure](../glossary.en.md#backpressure). An
 empty pipe may admit one message whose accounted size is larger than its HWM,
@@ -713,22 +715,23 @@ partially filling the value. On success `*optvallen_` stays `sizeof(uint64_t)`.
 
 ### zlink_socket_set_receive_flow_state
 
-Set this socket's receive-flow state and synchronise it to the paired
-completion lane.
+Set this socket's receive-flow state and synchronize it over the Core control path selected by peer
+type.
 
 ```c
 ZLINK_EXPORT zlink_config_result_t zlink_socket_set_receive_flow_state (
   void *handle_, zlink_receive_flow_state_t state_);
 ```
 
-Stores `state_` as the socket-wide receive-flow state and sends it to every
-peer connected over the paired DEALER/ROUTER completion lane. The call
+Stores `state_` as the socket-wide receive-flow state and sends it to every ready DEALER or ROUTER
+peer. Core uses the single Application connection's Core control path for count `1`
+DEALER-DEALER and DEALER-ROUTER, and the Completion connection for count `2` ROUTER-ROUTER. The call
 completes when the socket-owning runtime thread has stored the local state; it
 does not wait for any peer to observe it. Repeating the current state succeeds
 and sends nothing new.
 
 **Returns:** `ZLINK_CONFIG_OK` on success, including a repeat of the current
-state. A socket type without a completion lane returns
+state. A socket type other than DEALER or ROUTER returns
 `ZLINK_CONFIG_NOT_SUPPORTED` and keeps its byte HWM and transport backpressure
 unchanged. [Errors](../03-errors.en.md) owns the full result table.
 
@@ -1083,13 +1086,18 @@ correlation and the running budget remain. The first resolver to remove pending
 correlation, reply or timeout, creates the completion and discards the late
 result.
 
+On a DEALER-ROUTER single connection, DATA sent first by the ROUTER and a later REPLY or error reply
+use the same FIFO. If DEALER does not dequeue the preceding DATA or keeps local PAUSED in effect, the
+REPLY cannot overtake it and the request timeout can create the terminal completion first.
+
 `zlink_reply_part()` is a synchronous admission function without flags,
 timeout, context, or completion ID. Every call consumes `part_`. The first
 `MORE` or `FINAL` validates the RID, token, and completed REQUEST state, then
 checks out the token to the reply sequence. `MORE` preserves staging and the
-checkout. `FINAL` snapshots `SNDTIMEO` and waits for admission on the completion
-route to the same logical source RID. Only a successful `FINAL` consumes the
-token.
+checkout. `FINAL` snapshots `SNDTIMEO` and waits for admission on the reply
+route to the same logical source RID: the current ready Application pipe for a
+DEALER peer, or the current ready Completion pipe for a ROUTER peer. Only a
+successful `FINAL` consumes the token.
 
 Reply-wait expiration returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`;
 allocation failure returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM`; another
@@ -1126,6 +1134,10 @@ neither evicts a token automatically nor drops the REQUEST.
 ### Completion pull and ownership
 
 SEND and REQUEST share one socket-local completion queue.
+
+This public completion queue is distinct from the transport Completion connection. A
+DEALER-ROUTER reply moves to this queue after it reaches the physical head of the single Application
+connection; a ROUTER-ROUTER reply moves to this queue from the separate Completion connection.
 
 ```c
 ZLINK_EXPORT zlink_recv_result_t zlink_completion_recv(
@@ -1265,9 +1277,9 @@ unlimited-manual endpoint paired with an automatic endpoint uses the automatic
 plan. Two unlimited endpoints remain unlimited for admission while reserving
 the role maximum once for planning.
 
-The DEALER/ROUTER completion progress lane carries only terminal replies and
-error replies. It applies no automatic or manual HWM, LWM, inproc boost, role
-bounds, or Core budget reservation. Disabling automatic HWM preserves the last
+The ROUTER-ROUTER completion progress lane carries only terminal replies and error replies. It
+applies no automatic or manual HWM, LWM, inproc boost, role bounds, or Core budget reservation.
+DEALER-ROUTER replies use Application-pipe accounting and HWM. Disabling automatic HWM preserves the last
 applied HWM on live pipes and excludes them from subsequent automatic planning.
 
 The Core pipe low watermark is `ceil(hwm_bytes / 2)`. This value controls byte
@@ -1334,6 +1346,9 @@ connection, options, send/receive/completion functions, return values, and
 **HWM admission** (see [Transport/Buffer](#transportbuffer))
 - When accounted bytes reach the HWM, subsequent writes wait until the receiver
   returns byte credit.
+- On DEALER-ROUTER, REPLY and error reply apply the same Application physical HWM and peer PAUSED
+  state as DATA and REQUEST. Only REPLY and error reply on the ROUTER-ROUTER Completion lane are
+  excluded from this HWM.
 - An empty pipe accepts one complete message whose total accounted size is
   known at admission even when it exceeds the HWM. That message must still
   pass `ZLINK_OPT_MAXMSGSIZE`, and writes after the one accepted message wait.
@@ -1427,6 +1442,12 @@ connection, options, send/receive/completion functions, return values, and
   its part; a live token can be retried from the beginning.
 - A token without a reply is not consumed automatically. A zero-length-message
   reply, logical RID removal, or socket close releases its slot.
+- On DEALER-ROUTER, if the preceding DATA `FINAL` part is not dequeued or local PAUSED remains in
+  effect, a following REPLY cannot reach the physical head and the request timeout can complete
+  first. A late REPLY does not create a second completion.
+- A reply to a DEALER peer applies Application HWM, PAUSED, and `SNDTIMEO` admission and can end with
+  `ZLINK_SUBMIT_BACKPRESSURED` and `EAGAIN`. A reply to a ROUTER peer retains HWM-free admission on
+  the separate Completion lane.
 
 **Completion receive and ownership**
 - While a completion exists, `ZLINK_POLLCOMPLETION` is level-triggered and
@@ -1461,7 +1482,10 @@ connection, options, send/receive/completion functions, return values, and
 **Receive-flow state**
 - Setting the current state again with `zlink_socket_set_receive_flow_state`
   succeeds and sends nothing new.
-- A socket type without a completion lane returns
+- Count `1` DEALER-DEALER and DEALER-ROUTER carry PAUSED and RUNNING over the Core control path of
+  the single Application connection; count `2` ROUTER-ROUTER uses the Completion connection. After
+  reconnect, Core resends the current absolute state without another setter call.
+- A socket type other than DEALER or ROUTER returns
   `ZLINK_CONFIG_NOT_SUPPORTED` and preserves its existing byte HWM and
   transport backpressure.
 

@@ -41,6 +41,15 @@ DEALER는 `zlink_recv_part()`로 일반 DATA만 받는다. DEALER는 inbound typ
 reply하는 responder socket이 아니다. DEALER가 제출한 REQUEST의 reply·timeout·terminal 결과는
 일반 receive에 나타나지 않고 `zlink_completion_recv()`의 REQUEST record로 반환된다.
 
+DEALER-ROUTER single connection에서는 ROUTER가 보낸 DATA와 REPLY·error reply가 같은 inbound
+physical FIFO를 사용한다. Physical head가 DATA이면 public DATA receive가, REPLY·error reply이면
+socket-local completion queue가 그 record를 소비한다. REPLY는 `zlink_recv_part()`에 나타나지 않고
+DATA는 `zlink_completion_recv()`에 나타나지 않는다.
+
+DEALER-ROUTER single connection에서 ROUTER가 먼저 보낸 DATA와 이후 REPLY·error reply는 같은
+FIFO를 사용한다. DEALER가 앞선 DATA를 dequeue하지 않거나 local PAUSED가 유지되면 REPLY는
+앞지르지 못하며 request timeout이 먼저 terminal completion을 만들 수 있다.
+
 ```mermaid
 sequenceDiagram
     participant App as DEALER application
@@ -145,11 +154,10 @@ DEALER의 `ZLINK_POLLIN`은 DATA record를 수신할 수 있음을 뜻한다. Or
 
 ## 6. Receive flow state
 
-terminal reply와 error reply의 진행만 담당하는 별도 경로인
-[completion progress lane](../glossary.ko.md#completion-progress-lane)으로 ROUTER와 pair를 이룬
-DEALER는 자신에게 보내는 peer에게 전송을 멈추고
+DEALER 또는 ROUTER peer와 연결된 DEALER는 자신에게 보내는 peer에게 전송을 멈추고
 다시 시작하라고 요청할 수 있다. `zlink_socket_set_receive_flow_state()`는 socket 전체에
-적용되는 상태 하나를 저장하고 이 socket의 ready pair마다 completion lane으로 보낸다. 함수
+적용되는 상태 하나를 저장하고 각 ready count `1` Application connection의 Core control 경로로
+보낸다. 함수
 선언은 [Socket 공통](README.ko.md)이, 결과 표는 [Errors](../03-errors.ko.md)가 소유한다.
 
 이 상태는 counter가 아니라 절대값이다. `ZLINK_RECEIVE_FLOW_PAUSED`를 두 번 설정해도 pause는
@@ -166,7 +174,7 @@ identity가 일치하지 않는 frame은 public event 없이 내부에서 소비
 `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`을 설정한다. 따라서 이전 connection의 frame이
 그것을 대체한 connection에 적용되는 일은 없다.
 
-Pair가 ready가 되면 Core는 socket의 현재 상태를 새 completion lane으로 보낸다. 이 socket이
+Connection이 ready가 되면 Core는 socket의 현재 상태를 새 Application connection으로 보낸다. 이 socket이
 pause한 동안 연결하거나 재연결한 peer는 추가 호출 없이 pause를 알게 된다. 상태를 한 번도
 설정하지 않은 socket은 아무것도 보내지 않는다. 새 pair는 이미 RUNNING을 가정하기 때문이다.
 
@@ -237,7 +245,7 @@ DEALER와 ROUTER는 자기 값을 독립적으로 알리므로 각 방향은 상
 
 공개 weight 결과는 다음 순서를 따른다.
 
-1. Bind·connect 전에 설정한 값은 paired Application pipe가 ready 된 뒤 적용된다.
+1. Bind·connect 전에 설정한 값은 single Application pipe가 ready 된 뒤 적용된다.
 2. Dynamic 변경은 `0`을 포함한 새 절대값을 peer scheduler에 적용한다.
 3. 실제 값이 바뀌면 `PEER_WEIGHT_CHANGED`가 값과 Application lane·connection ID를 제공한다.
    같은 값을 반복 설정하면 event를 추가로 만들지 않는다.
@@ -247,7 +255,7 @@ Network wire, inproc 전달, CONTROL 크기 경계, multipart defer와 exact-pip
 소유권은 [ZMP request-reply lane](../protocol/01-zmp.ko.md#41-request-reply-lane),
 [decode](../protocol/01-zmp.ko.md#7-decode-유효성-검사),
 [peer-weight owner](../protocol/01-zmp.ko.md#peer-weight-control) 계약이 정의한다. 어느 transport
-경로도 public receive나 Completion lane에 weight record를 만들지 않는다.
+경로도 public receive나 socket-local completion queue에 weight record를 만들지 않는다.
 
 Multipart가 pipe를 선택한 뒤 적용값이 `0`이 되어도 그 message는 같은 pipe에서 FINAL까지
 완료한다. 다음 message 선택부터 그 pipe를 제외한다.
@@ -361,7 +369,7 @@ snapshot)만으로 다음을 확인한다. 각 항목은 test 하나로 이어�
 - Network와 inproc pair가 ready 된 뒤 양쪽 weight를 동적으로 바꾸면 monitor의
   `PEER_WEIGHT_CHANGED`가 새 값을 `value`로 제공하고, event의 transport lane과 `connection_id`는
   값을 적용한 Application pipe와 같다.
-- Weight를 설정하거나 동기화해도 public receive와 Completion lane에는 application record가
+- Weight를 설정하거나 동기화해도 public receive와 socket-local completion queue에는 record가
   추가되지 않으며, 같은 값을 다시 설정해도 monitor event가 중복 발생하지 않는다.
 - Application multipart가 열린 동안 weight를 여러 번 바꿔도 peer에는 multipart가 atomic record
   하나로 보이며, FINAL 또는 rollback 뒤에는 가장 최근 값만 반영된다.
@@ -404,6 +412,11 @@ snapshot)만으로 다음을 확인한다. 각 항목은 test 하나로 이어�
   Admission 뒤 disconnect는 payload를 replay하지 않으며 남은 monotonic budget을 reset하지 않는다.
 - SEND·REQUEST 공유 completion slot 포화는 flags와 관계없이 즉시
   `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`, completion 없음이다.
+- ROUTER가 multipart DATA를 먼저 보내고 같은 request의 REPLY를 보내면 DATA의 `FINAL` part를
+  dequeue하기 전에는 `ZLINK_POLLCOMPLETION`이 준비되지 않는다. 마지막 DATA part 뒤 REPLY는
+  정확히 한 REQUEST completion으로 나오며 reply payload는 DATA receive에 나타나지 않는다.
+- 앞선 DATA와 local PAUSED로 REPLY가 늦어 request timeout이 먼저 끝나면 timeout completion
+  하나만 반환하고, DATA를 drain한 뒤 도착한 late REPLY는 두 번째 completion을 만들지 않는다.
 
 **Receive**
 - Non-blocking `zlink_recv_part()` 호출에 받을 DATA가 없으면 `ZLINK_RECV_NO_DATA`와 `EAGAIN`을 반환한다.
@@ -423,6 +436,10 @@ snapshot)만으로 다음을 확인한다. 각 항목은 test 하나로 이어�
 - Flow-state frame에는 자신이 기록된 connection 범위의 flow epoch만 있고 public pair ID·generation field와 `Zlink-Pair-Id`·`Zlink-Pair-Generation` wire property가 없다. Core는 내부 connection identity가 일치하는 기록 connection에만 frame을 적용한다.
 - 대체된 connection의 frame을 포함해 identity가 일치하지 않는 frame은 public event 없이 내부에서 소비되고 `flow_state_stale_total`에만 반영된다. 같은 connection의 중복·역행 epoch는 적용되지 않고 `ZLINK_EVENT_FLOW_STATE_STALE`과 `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`으로 보고된다.
 - 이 socket이 pause한 동안 연결하거나 재연결한 peer는 추가 호출 없이 pause를 알게 되고, 상태를 한 번도 설정하지 않은 socket은 아무것도 보내지 않는다.
+- DEALER-DEALER와 DEALER-ROUTER 모두 receive-flow control을 single Application connection으로
+  전달하며 public receive나 socket-local completion queue에는 control record가 나타나지 않는다.
+- DEALER-ROUTER reconnect는 새 Application connection 하나로 현재 절대 상태를 다시 보내고,
+  이전 connection ID·generation의 REPLY와 FLOWSTATE는 현재 connection에 적용하지 않는다.
 - remote pause를 해제해도 그것만으로 다음 send가 성공하지 않는다. 차단된 non-blocking send는 계속 `errno == EAGAIN`과 함께 `ZLINK_SUBMIT_BACKPRESSURED`를 보고한다.
 - remote PAUSE는 다음 message 경계에서 적용된다 — 첫 byte가 이미 pipe에 도달했거나 첫 part가 이미 수락된 message는 남은 part를 끝까지 보낸다.
 - [Monitoring](../06-monitoring.ko.md) status snapshot에서 현재 pause 상태로 보는 peer 수, 적용한 pause·resume 전이 수, stale로 거부한 frame 수, 가장 최근에 끝난 pause의 길이를 관찰할 수 있다.

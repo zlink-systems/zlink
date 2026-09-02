@@ -88,6 +88,11 @@ generation이 바뀌면 새 intent로 다시 확인할 수 있다. Public monito
 
 Framework는 application message가 없어도 5초마다 다음 순서로 연결을 확인한다.
 
+RouteMesh는 ROUTER-ROUTER Application·[Completion connection](../00-foundation/02-glossary.ko.md#completion-connection)을 사용하고 ClientServer는
+DEALER-ROUTER single Application connection을 사용한다. Liveness probe와 ACK는 두 topology 모두
+application record이며 별도 completion control로 바꾸지 않는다. ClientServer에서는 앞선 DATA와
+HWM·PAUSED가 뒤의 liveness record도 늦출 수 있고, 이 문서의 15초 deadline이 그대로 적용된다.
+
 1. 아직 응답받지 못한 ID가 없으면 connection 안에서 0이 아닌 새 ID를 만든다.
 2. 해당 ID를 `livenessProbe`에 넣어 보낸다.
 3. 응답을 기다리는 동안 다음 주기가 오면 새 ID를 만들지 않고 같은 ID를 다시 보낸다.
@@ -330,8 +335,8 @@ trace에서만 제공한다.
 
 Host의 Application Job Queue pressure가 `paused`여도 그 사실만으로 route ready, host
 ready 또는 transport liveness를 바꾸지 않는다. 기존 topology별 progress 증거와 deadline이
-liveness를 판정한다. 여기서 설명한 receive-flow 적용 범위는 RouteMesh와 ClientServer의
-paired DEALER/ROUTER socket뿐이며 PUB/SUB와 STREAM은 제외한다. 새 대상 socket에는 현재
+liveness를 판정한다. Receive-flow는 RouteMesh의 ROUTER-ROUTER two-lane socket과
+ClientServer의 DEALER-ROUTER single-lane socket에 적용하며 PUB/SUB와 STREAM은 제외한다. 새 대상 socket에는 현재
 pressure 절대 상태를 적용한 뒤 route를 게시하며, `running`과 `paused` 모두 같은 순서를
 따른다.
 
@@ -351,6 +356,8 @@ handler에 도달하는 값, connection·runtime snapshot이 보여주는 상태
   즉시 반영한다.
 - Probe와 ACK는 application handler에 전달되지 않는다. 다른 inbound service frame은 peer
   deadline을 연장하지 않는다.
+- RouteMesh는 ROUTER-ROUTER 두 physical lane, ClientServer는 DEALER-ROUTER 한 physical lane을
+  사용하지만 probe와 ACK는 두 topology 모두 application record로 관찰되고 handler에 전달되지 않는다.
 
 **Fanout**
 

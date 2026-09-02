@@ -471,8 +471,14 @@ The following two cases legitimately use the sync terminal.
   requires. Waiting at HWM saturation is then an observable property of
   that public contract, not a violation.
 
-Publish and raw reply are HWM-free, so the synchronous terminal is
-canonical for them (owned by the binding spec).
+Publish is HWM-free and uses a synchronous terminal. Raw reply depends on peer
+topology. A RouteMesh ROUTER-ROUTER reply is HWM-free on the separate [Completion
+connection](../00-foundation/02-glossary.en.md#completion-connection). A raw reply from a ClientServer ROUTER to a Client DEALER is subject
+to HWM, `PAUSED`, and `SNDTIMEO` admission on the single Application connection,
+so it can end as `BACKPRESSURED`. The binding spec owns the synchronous one-shot
+terminal in both cases. After a raw reply enters the Framework completion queue,
+the Application Job Queue permit bypass and first-terminal rules continue to
+apply.
 
 ### Framework Typed Session Reply
 
@@ -571,6 +577,20 @@ reserved — are owned, with their rules, by §10/§11 and are not repeated here
   new generation was created, is not delivered to the new Spot.
 - The same request is not automatically resubmitted to a different owner after a timeout or
   connection failure.
+- In ClientServer DEALER-ROUTER, if earlier one-way DATA or `PAUSED`/HWM delays
+  a reply until the configured request timeout is decided first, the request
+  completes once with timeout and the late reply doesn't complete the caller
+  again.
+- In RouteMesh ROUTER-ROUTER, a raw reply for an already-started request can
+  progress on the separate Completion connection while the Application Job
+  Queue is `PAUSED`.
+
+**Raw reply admission**
+
+- A raw reply to a DEALER peer is subject to HWM, `PAUSED`, and `SNDTIMEO` on
+  the single Application connection, so it can be `BACKPRESSURED`.
+- A raw reply to a ROUTER peer retains HWM-free admission on the separate
+  Completion connection.
 
 **Completion confirmation and the ban on resending**
 

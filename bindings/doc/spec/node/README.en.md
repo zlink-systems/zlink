@@ -571,11 +571,12 @@ using TypeScript spelling.
 - DEALER/ROUTER request provides `submit_sync(): Message[]` and
   `submit(): Promise<Message[]>` and retains the builder's reply timeout.
 - The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
-  `ReplySubmitOperation.submit(): void`. It returns no Promise, enters no HWM-
-  managed path, and submits a terminal reply or error reply to the HWM-free
-  completion lane with one native call. HWM backpressure is not a reply result;
-  `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`, and other non-HWM submit
-  failures are thrown immediately as `SubmitError`.
+  `ReplySubmitOperation.submit(): void`. It returns no Promise and submits a
+  terminal reply or error reply with one native call. A DEALER peer is subject
+  to Application HWM, `PAUSED`, and `SNDTIMEO`, so the result can be
+  `BACKPRESSURED`; a ROUTER peer uses the HWM-free Completion connection.
+  `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`, and other submit failures
+  are thrown immediately as `SubmitError`.
 - PUB/XPUB `publish(topic).message(...).submit()` is a synchronous `void`
   terminal. The default PUB path is lossy and returns immediately on success;
   `NODROP` throws `SubmitError` immediately when it cannot admit the copy.
@@ -676,9 +677,9 @@ The binding exposes the Core receive-flow state as the frozen `ReceiveFlowState`
 constant object with `RUNNING: 0` and `PAUSED: 1`, and the matching value type.
 `Socket.setReceiveFlowState(state)` sets it. It returns `void` and follows the
 Node error policy: a non-zero native config result is raised as a `ZlinkError`
-of the config category carrying the native errno, so a socket without a
-completion lane raises the config-category error for not-supported. Setting the
-state the socket already holds returns normally.
+of the config category carrying the native errno, so a socket that doesn't
+support receive flow raises the config-category error for not-supported.
+Setting the state the socket already holds returns normally.
 
 The observation surface follows the C contract, so the constant and metric
 names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
@@ -957,6 +958,9 @@ poller events. Each item maps to one contract test.
   and releases the native aggregate.
 - A non-OK request completion exposes only a typed error and does not expose the error payload.
 - `PollCompletion` returns only after Promise settlement or detached cleanup finishes.
+- When HWM/`PAUSED` waiting expires for a raw reply submitted to a DEALER peer,
+  `SubmitError` reports `BACKPRESSURED`; a reply submitted to a ROUTER peer
+  retains the HWM-free result of the Completion connection.
 
 **ReplyToken and STREAM**
 

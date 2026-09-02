@@ -427,10 +427,12 @@ initial Mesh is only used for cold-activation placement, and doesn't
 restrict or move an existing owner's current Mesh.
 
 Application payload is processed serially on the owner's application turn.
-Request completion and service control such as liveness/admission/
-relocation/reply recovery are received on the existing Completion
-connection. Core HWM retry completes through each binding operation's
-completion; the framework has no send-ready callback or waiter. Internal
+MeshNode peers are ROUTER-ROUTER, so request completion and service control
+such as liveness/admission/relocation/reply recovery are received on the
+separate [Completion connection](../00-foundation/02-glossary.en.md#completion-connection). The single-lane rule for ClientServer
+DEALER-ROUTER doesn't apply to this RouteMesh path. Core HWM retry completes
+through each binding operation's completion; the framework has no send-ready
+callback or waiter. Internal
 Framework work such as location reconciliation and reservation proceeds even
 while an application handler is waiting. Actor/Spot lifecycle application
 callbacks run on the application turn. An application handler isn't run
@@ -530,6 +532,11 @@ runtime snapshot and event).
   operation proceeds to a terminal state.
 - Actor/Spot application calls don't require NodeRid or owner token as
   target.
+- Even when both MeshNodes' Application Job Queues are `PAUSED`, a reply for
+  an already-started cross-node request progresses through the ROUTER-ROUTER
+  Completion connection and can produce terminal completion before timeout.
+- RouteMesh connection monitoring reports `CONNECTION_READY` once per logical
+  peer, and only Completion physical events use the Completion lane value.
 
 ---
 

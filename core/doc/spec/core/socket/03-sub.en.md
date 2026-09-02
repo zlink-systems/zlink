@@ -69,10 +69,8 @@ Auto HWM.
 
 ## 4. Receive flow state
 
-DEALER and ROUTER have a paired [completion progress lane](../glossary.en.md#completion-progress-lane),
-a separate path responsible only for progressing terminal replies and error replies, and use that
-lane to report receive-flow state to peers that send to them. SUB has no paired DEALER/ROUTER
-completion lane, so it has no receive-flow state.
+DEALER and ROUTER report receive-flow state to peers that send to them. SUB is not a socket type that
+supports receive flow.
 
 - `zlink_socket_set_receive_flow_state()` returns `ZLINK_CONFIG_NOT_SUPPORTED` with
   `errno == ENOTSUP` for a SUB socket and changes nothing.

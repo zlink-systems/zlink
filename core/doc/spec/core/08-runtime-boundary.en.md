@@ -55,7 +55,7 @@ Core provides the following capabilities through its public C ABI.
 - Raw socket monitors, generic events, poll, and pollers
 - Generic timers, threads, stopwatches, atomic counters, and proxies
 - Request, handshake, and reconnect timeouts
-- Receive-flow state for paired DEALER/ROUTER sockets
+- Receive-flow state for DEALER and ROUTER sockets
 
 ## 3. Capabilities owned by Framework
 
@@ -78,12 +78,14 @@ Framework runtimes implement service contracts using only the public raw socket 
 language binding. There is no shared native service runtime for Framework, separate Core C
 SPI, private binding entry point, or language-neutral service C ABI.
 
-Core carries the receive-flow state of a paired DEALER/ROUTER socket in frames on the
-[completion progress lane](glossary.en.md#completion-progress-lane) (a separate path used
-only to progress terminal replies and error replies, hereafter the completion lane) and
-consumes those frames inside the runtime. [Auto HWM](systems/06-auto-hwm.en.md) owns the
-contract that excludes this lane from [HWM](glossary.en.md#hwm) admission and the Auto HWM
-budget. The public surface for this state consists of
+Core carries receive-flow state for DEALER-DEALER and DEALER-ROUTER in Core control frames
+on the single Application connection. For ROUTER-ROUTER, it carries the state on the
+[completion progress lane](glossary.en.md#completion-progress-lane) (a separate path that
+also progresses terminal replies and error replies, hereafter the completion lane). The
+runtime consumes both types of frame internally. [Auto HWM](systems/06-auto-hwm.en.md) owns
+the contract that excludes the ROUTER-ROUTER completion lane from
+[HWM](glossary.en.md#hwm) admission and the Auto HWM budget. The public surface for this
+state consists of
 `zlink_socket_set_receive_flow_state()` for configuration, three receive-flow monitor
 events for observation, and the receive-flow fields of the monitor status snapshot. There
 is no public API that receives, sends, encodes, or decodes a raw flow-state frame, and a
@@ -179,13 +181,19 @@ A Core connection identity is a raw observable value that distinguishes a physic
 lifetime. Core does not interpret it as a Mesh lifecycle generation, descriptor revision,
 Actor authority owner generation, or Location authority store version.
 
-In DEALER/ROUTER request-reply, one logical peer has Application and Completion transport
-connections. Before allowing Application writes, Core validates the pair ID, pair
-generation, lane, and peer identity of both connections. Failure of either lane terminates
-both lanes. Ordinary messages and requests use the Application lane, while replies use the
-Completion lane. Therefore, requests already sent can complete even while Application
-ingress is stopped by [backpressure](glossary.en.md#backpressure) (behavior that limits
-additional submissions from a sender when receiving cannot keep pace with processing).
+A DEALER-ROUTER logical peer uses one Application transport connection. DATA, REQUEST,
+REPLY, and error reply share the same physical FIFO, Application HWM, and PAUSED state. If
+the DEALER does not dequeue DATA sent first by the ROUTER, a later REPLY cannot overtake it
+and the request timeout can complete first. DEALER-DEALER also uses one Application
+connection and does not allow typed requests.
+
+A ROUTER-ROUTER logical peer uses Application and Completion transport connections. Before
+allowing Application writes, Core validates the pair ID, pair generation, lane, and peer
+identity of both connections. Failure of either lane terminates both lanes. Ordinary
+messages and requests use the Application lane, while replies use the Completion lane.
+Therefore, requests already sent can complete even while ROUTER-ROUTER Application ingress
+is stopped by [backpressure](glossary.en.md#backpressure) (behavior that limits additional
+submissions from a sender when receiving cannot keep pace with processing).
 
 Each lane retains payload only in its directional network pipe. Received application
 payload is not moved to a hidden PAIR queue, and reply payload is not copied to a completion
@@ -288,6 +296,11 @@ of public APIs. Each item maps to one check.
   receive-flow fields of the monitor status snapshot.
 - There is no public API that receives, sends, encodes, or decodes a raw flow-state frame,
   and a flow-state frame is not delivered to an application receive call.
+- DEALER-ROUTER uses one Application connection, while ROUTER-ROUTER uses Application and
+  Completion connections. Both topologies expose exactly one `CONNECTION_READY` per logical
+  peer.
+- Regardless of this topology difference, Framework runtimes use only the public Core raw
+  socket API and do not create or interpret raw FLOWSTATE directly.
 
 **Framework boundary**
 

@@ -74,6 +74,12 @@ record and the next `zlink_completion_recv()` can succeed. It can be registered
 alone or OR-ed with `ZLINK_POLLIN` and `ZLINK_POLLOUT`. Readiness remains set
 while records remain in the queue.
 
+On a DEALER-ROUTER single connection, a REPLY behind a preceding DATA record is not the physical head
+until the last part of that DATA record is dequeued. At that point only `ZLINK_POLLIN` may be ready and
+`ZLINK_POLLCOMPLETION` may not be ready. After the REPLY reaches the physical head and moves to the
+socket-local completion queue, the level-triggering and drain-through-`ZLINK_RECV_NO_DATA` rules above
+apply.
+
 `zlink_poller_wait()` does not remove completions or invoke callbacks. The event
 array does not contain operation payloads, and its capacity is unrelated to the
 number of completions. For each ready socket, the caller repeatedly invokes
@@ -286,6 +292,9 @@ and event-array contents. Each item maps to one unit test.
 - Wait returns `ZLINK_POLLCOMPLETION` while at least one completion record exists; calls to wait, add, modify, or remove alone do not reduce the queue.
 - Receiving the last record with DONTWAIT completion receive clears readiness; readiness remains set while records remain.
 - Completions are neither lost nor merged when their count exceeds event-array capacity; the caller drains each ready socket until `ZLINK_RECV_NO_DATA`.
+- If the physical head on a DEALER-ROUTER connection is multipart DATA, `ZLINK_POLLIN` can be ready while
+  `ZLINK_POLLCOMPLETION` for a following REPLY is not ready. Completion readiness is raised after the
+  DATA `FINAL` part is dequeued and the REPLY moves to the socket-local completion queue.
 
 **Lifetime**
 

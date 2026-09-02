@@ -68,10 +68,8 @@ budget 계산과 admission의 정확한 계약은 [Auto HWM](../systems/06-auto-
 
 ## 4. Receive flow state
 
-DEALER와 ROUTER는 terminal reply와 error reply의 진행만 담당하는 별도 경로인
-[completion progress lane](../glossary.ko.md#completion-progress-lane)을 짝으로 갖고,
-그 lane으로 자신에게 보내는 peer에게 receive-flow 상태를 알린다. SUB에는 이 paired
-DEALER/ROUTER completion lane이 없으므로 receive-flow 상태도 없다.
+DEALER와 ROUTER는 자신에게 보내는 peer에게 receive-flow 상태를 알린다. SUB은 receive-flow
+대상 socket type이 아니다.
 
 - `zlink_socket_set_receive_flow_state()`는 SUB socket에 대해 `errno == ENOTSUP`과
   함께 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고 아무것도 바꾸지 않는다.

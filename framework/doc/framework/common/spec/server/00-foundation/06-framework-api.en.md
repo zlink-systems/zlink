@@ -114,8 +114,12 @@ When a Core queue hands an application record to the binding, that Core byte cha
 The payload then follows the ordinary message lifetime from [Payload Ownership And
 Copying](../01-execution/05-payload-ownership-and-codec.en.md); it isn't Core HWM credit or a separate
 capacity token. Framework doesn't use retained receive to extend this charge through the
-handler or reply terminal. Reply and error-reply completion don't use the ordinary Core
-byte-HWM path or the Application Job Queue permit.
+handler or reply terminal. RouteMesh ROUTER-ROUTER replies and error replies
+use a separate [Completion connection](02-glossary.en.md#completion-connection) and don't traverse the ordinary Core
+byte-HWM path. ClientServer DEALER-ROUTER replies and error replies traverse the
+single Application connection's Core HWM and `PAUSED` state before Core
+identifies them as completions. In both topologies, once Core identifies the
+record as a completion, it doesn't use an Application Job Queue permit.
 
 The framework host instance limits the number of application jobs waiting for a handler to
 start using a separate permit. The root's inbound-dispatch options provide the following
@@ -630,9 +634,12 @@ checked at handler boundaries.
 The scheduler wakes on arrival when waiting for work to arrive. If a language runtime can't
 provide blocking wait or callback wakeup and uses periodic polling instead, that period is
 published in that language's documentation, since it becomes the best-case lower bound on
-one message's latency. Transport readiness isn't an application callback argument. Request
-completion and liveness/admission/relocation/reply-recovery service control are received on
-the existing Completion connection. The Core HWM retry result is received as per-operation binding
+one message's latency. Transport readiness isn't an application callback argument.
+RouteMesh request completion and liveness/admission/relocation/reply-recovery
+service control are received on the ROUTER-ROUTER Completion connection.
+ClientServer request completion is received after Core identifies a reply on
+the DEALER-ROUTER single Application connection, and can be delayed behind
+earlier DATA. The Core HWM retry result is received as per-operation binding
 completion. This infrastructure work proceeds in an execution area an application handler
 can't occupy. Jobs that call application callbacks, like Actor/Spot lifecycle, are processed
 in the application execution area.
@@ -1261,6 +1268,12 @@ conditions this section summarizes.
 - An Actor/Spot manager's `Find` returns only the current Ready ref for a global ID.
 - A location operational query returns only a bounded page respecting page size 1..1000 and
   an encoded page max of 4 MiB.
+- Even when all Application Job Queue permits are in use, a reply for an
+  already-started RouteMesh ROUTER-ROUTER request progresses on the Completion
+  connection.
+- After Core identifies a ClientServer DEALER-ROUTER reply as a completion, it
+  uses no Application Job Queue permit, but it doesn't bypass earlier DATA,
+  Core HWM, or `PAUSED`.
 
 **Handler registration and dispatch**
 

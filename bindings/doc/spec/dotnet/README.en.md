@@ -262,9 +262,11 @@ behavior are defined only by the immutable byte value.
 - A reply builder collects its payload and ends with `Submit()`.
 - The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
   `ReplySubmitOperation.Submit() -> void`. It submits a terminal reply or error
-  reply to the HWM-free completion lane with one native call. HWM backpressure
-  is not a reply result; `NotConnected`, `Terminated`, `InvalidArgument`, and
-  other non-HWM submit failures immediately throw `ZlinkSubmitException`.
+  reply with one native call. A DEALER peer is subject to Application HWM,
+  `PAUSED`, and `SNDTIMEO`, so the result can be `Backpressured`; a ROUTER peer
+  uses the HWM-free Completion connection. `NotConnected`, `Terminated`,
+  `InvalidArgument`, and other submit failures immediately throw
+  `ZlinkSubmitException`.
 - No single-payload shortcut overload is added under the same name as an operation's start method. `Send(Message)`, `Send(RoutingId, Message)`, `Publish(string, Message)`, `SendToChannel(string, Message)`, `SendToSpot(..., Message)` are not public contract members. A caller uses the builder terminal for that role; `Send(...).Message(message).Async()` is canonical for a DEALER/ROUTER routed send.
 - A multipart payload accumulates via repeated `Message(...)` calls. A `Messages(...)`-style convenience method is allowed, but since it is a public builder contract member, it lives in `Contracts/`.
 - `IDealerSocket` does not expose protocol envelope helpers such as `RequestFrame(...)` or `Reply(requestToken, parts)`. A dealer can start a request with `Request()`, but has no API-level peer routing id, so it cannot reply to an arbitrary token. Reply starts from a received request context, or from an explicit router/SPOT reply surface when the target context requires it.
@@ -503,8 +505,9 @@ The binding exposes the Core receive-flow state as the `ReceiveFlowState`
 enum with `Running = 0` and `Paused = 1`. `ISocket.SetReceiveFlowState(ReceiveFlowState)`
 sets it. The method returns `void` and follows the .NET error policy: a
 non-zero native `zlink_config_result_t` is thrown as a `ZlinkConfigException`
-whose `ErrorCode` is the matching `ConfigResult`, so a socket without a
-completion lane raises `ZlinkConfigException` with `ConfigResult.NotSupported`.
+whose `ErrorCode` is the matching `ConfigResult`, so a socket type that does not
+support receive flow (other than DEALER or ROUTER) raises `ZlinkConfigException`
+with `ConfigResult.NotSupported`.
 Setting the state the socket already holds returns normally.
 
 The observation surface follows the C contract, so the constant and metric
@@ -712,6 +715,9 @@ item maps to one contract test.
 - A non-OK request completion throws only the existing typed exception and does not expose the error
   payload.
 - Public poller `PollCompletion` returns only after Task settlement or detached cleanup finishes.
+- When HWM/`PAUSED` waiting expires for a raw reply submitted to a DEALER peer,
+  `ZlinkSubmitException` reports `Backpressured`; a reply submitted to a ROUTER
+  peer retains the HWM-free result of the Completion connection.
 
 **ReplyToken and STREAM**
 

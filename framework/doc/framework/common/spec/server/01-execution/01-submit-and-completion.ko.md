@@ -451,7 +451,12 @@ Framework runtime이 binding의 HWM-managed send 계열(PAIR send, routed send,
   유지를 요구하는 공개 동기 표면의 내부 구현. 이때 HWM 포화 시의 대기는 그 공개
   계약의 관측 가능한 특성이며 위반이 아니다.
 
-Publish와 raw reply는 HWM-free이므로 동기 terminal이 정본이다(binding 스펙 소유).
+Publish는 HWM-free이고 동기 terminal을 사용한다. Raw reply는 peer topology에 따라 다르다.
+RouteMesh ROUTER-ROUTER reply는 별도 [Completion connection](../00-foundation/02-glossary.ko.md#completion-connection)에서 HWM-free다. ClientServer
+ROUTER가 Client DEALER로 보내는 raw reply는 single Application connection의 HWM·PAUSED와
+`SNDTIMEO` admission을 적용하므로 `BACKPRESSURED`로 끝날 수 있다. 두 경우의 동기 one-shot
+terminal은 binding 스펙이 소유한다. Raw reply가 Framework completion queue에 들어간 뒤
+Application Job Queue permit을 우회하는 규칙과 first-terminal 규칙은 그대로 적용한다.
 
 ### Framework typed Session reply
 
@@ -543,6 +548,16 @@ dispatcher 자리 예약 시점)은 §10·§11이 규칙과 함께 소유하며 
 - Spot이 종료되거나 새 generation이 만들어진 뒤 도착한 이전 activation의 reply는
   새 Spot에 전달되지 않는다.
 - Timeout이나 연결 실패 뒤 같은 request가 다른 owner로 자동 재제출되지 않는다.
+- ClientServer DEALER-ROUTER에서 앞선 one-way DATA나 PAUSED·HWM 때문에 reply가 늦어 configured
+  request timeout이 먼저 확정되면 timeout 하나로 완료하고 late reply는 caller를 다시 완료시키지 않는다.
+- RouteMesh ROUTER-ROUTER에서 Application Job Queue가 PAUSED여도 이미 시작한 request의 raw reply는
+  별도 Completion connection으로 진행할 수 있다.
+
+**Raw reply admission**
+
+- DEALER peer로 보내는 raw reply는 single Application connection의 HWM·PAUSED와 `SNDTIMEO`를
+  적용해 `BACKPRESSURED`가 될 수 있다.
+- ROUTER peer로 보내는 raw reply는 별도 Completion connection의 HWM-free admission을 유지한다.
 
 **Completion 확정과 재전송 금지**
 

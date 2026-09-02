@@ -50,7 +50,7 @@ transport error, handshake failure, [Context](glossary.ko.md#context) 종료와 
 
 ## 4. Receive-flow event
 
-Paired DEALER/ROUTER socket은 peer의 receive-flow 상태를 monitor event 3개로 보고한다.
+Receive-flow를 지원하는 DEALER·ROUTER socket은 peer의 receive-flow 상태를 monitor event 3개로 보고한다.
 peer는 자신의 PAUSED·RUNNING 상태를 flow-state frame으로 알려 오고, Core는 이 상태를 이
 socket에서 그 peer로 이어지는 application pipe — socket과 peer 하나를 잇는 방향별
 message 통로 — 에 적용한다.
@@ -93,13 +93,18 @@ Queue overflow와 status counter의 정확한 계약은 [Monitoring](06-monitori
 open 시 지정한 event mask)만으로 다음을 확인한다. 각 항목은 unit test 하나로 이어진다.
 
 **Receive-flow event 발생**
-- Paired DEALER/ROUTER socket에서 peer 상태가 실제로 PAUSED와 RUNNING 사이를 오가면, 그 전이를 application pipe에 적용한 뒤 `ZLINK_EVENT_SEND_FLOW_PAUSED` 또는 `ZLINK_EVENT_SEND_FLOW_RESUMED`가 관찰된다.
+- DEALER-DEALER·DEALER-ROUTER single connection과 ROUTER-ROUTER two-lane connection에서 peer 상태가 실제로
+  PAUSED와 RUNNING 사이를 오가면, 그 전이를 application pipe에 적용한 뒤
+  `ZLINK_EVENT_SEND_FLOW_PAUSED` 또는 `ZLINK_EVENT_SEND_FLOW_RESUMED`가 관찰된다.
 - 일반 data frame, peer가 이미 유지하는 상태를 다시 요청한 경우, 아무것도 바꾸지 않는 flow-state frame에는 receive-flow event가 관찰되지 않는다.
 - 같은 connection의 flow epoch가 중복·역행해 frame을 거부하면 `ZLINK_EVENT_FLOW_STATE_STALE`이 관찰된다.
 
 **Event field와 flag**
 - PAUSED·RESUMED event의 `value`는 적용된 상태의 flow epoch이고, event는 PAUSED된 peer의
   `routing_id`, `connection_id`와 Application lane을 담는다.
+- 두 topology의 receive-flow event는 상태가 적용된 현재 Application pipe의 `connection_id`와
+  Application `transport_lane`을 보고한다. Flow-state frame이 ROUTER-ROUTER Completion
+  connection에서 왔더라도 event의 lane을 Completion으로 바꾸지 않는다.
 - remote pause를 해제한 결과 pipe가 실제로 writable일 때만 RESUMED event에 `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE`이 있다. byte HWM, transport wait, termination 같은 다른 원인이 pipe를 계속 막으면 이 flag가 없고, RESUMED event만으로 다음 send 수락이 보장되지 않는다.
 - STALE event의 `flags`에는 `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`이 있고 `value`는 받은
   epoch다. 현재 epoch는 같은 connection의 직전 PAUSED 또는 RESUMED event가 보고한 값과 같다.

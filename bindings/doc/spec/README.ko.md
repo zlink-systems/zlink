@@ -19,14 +19,6 @@ title: "바인딩 API 정책"
 > 언어별 인터페이스 시그니처와 사용 예는
 > `c/`, `cpp/`, `java/`, `dotnet/`, `node/`, `python/`, `go/`, `rust/` 를 참조한다.
 
-## 구현 전 초안
-
-- [바인딩 Message 객체와 ownership 공통 계약](draft/message-ownership.ko.md)은
-  Core 결과에 맞춘 `Message` ownership을 모든 binding에서 동일하게 제공하는 목표
-  계약이다. 기본 구현은 native frame을 직접 소유하며, 기존 perf에서 효과가 확인된 내부
-  최적화만 같은 public 동작을 유지하면서 허용한다. 현재 공개 계약이 아니며, 하단의 구현
-  gap을 해소한 뒤 정식 공통 spec으로 승격한다.
-
 | 절 | 다루는 내용 |
 |---|---|
 | [목적](#목적) | 이 문서의 범위와 Required/Target 표기 의미 |
@@ -1314,8 +1306,10 @@ deferred HWM과 pending/accounted 값은 byte 단위이고, binding은 Core ABI 
 
 ##### Receive ownership과 routed 완료
 
-Terminal reply와 error reply는 HWM이 없는 completion lane으로 전송한다. Binding은 이
-completion submit에 SNDHWM·RCVHWM, HWM readiness 대기나 backpressure retry를 적용하지 않는다.
+DEALER peer로 보내는 terminal reply와 error reply는 현재 ready Application pipe를 사용하여
+SNDHWM·RCVHWM, peer PAUSED와 `SNDTIMEO` admission을 적용하며 `BACKPRESSURED` result가
+가능하다. ROUTER peer로 보내는 reply는 현재 ready Completion pipe의 HWM-free admission을 사용한다.
+Binding은 peer type에 따른 Core native result를 전달하며 별도 retry나 readiness adapter를 만들지 않는다.
 
 Core byte HWM은 Core queue가 실제로 보관하는 physical frame charge, 즉 payload byte와
 `sizeof(zlink_msg_t)` metadata charge를 계산한다. Receive가 complete message를 dequeue해
@@ -1695,11 +1689,11 @@ surface 배치는 아래 `Actor Dispatch Policy` 절을 따른다.
    - 예외에는 `int code` (0–709 범위) 를 포함하여 호출자가 실패 원인을
      구분할 수 있게 한다.
    - 각 operation 계약이 허용하는 `BACKPRESSURED`, `NOT_CONNECTED`, `NOT_FOUND`
-     등의 실패는 예외로 전달한다. 이들은 반환값이 아니다. 단, raw terminal reply는
-     HWM 없는 completion lane을 사용하므로 `BACKPRESSURED`를 허용하지 않는다.
-   - terminal reply의 대상 경로가 없으면 실패는 `NOT_CONNECTED` (`ENOTCONN`) 다.
-     대상 completion pipe를 찾지 못한 경우와, 이미 선택한 대상이 reply를 커밋하는
-     도중 사라진 경우에 같은 규칙을 적용한다. 이는 backpressure가 아니므로 readiness
+   등의 실패는 예외로 전달한다. 이들은 반환값이 아니다. Raw terminal reply는 DEALER peer의
+   현재 ready Application pipe를 사용할 때 `BACKPRESSURED`를 허용하고, ROUTER peer의 현재 ready
+   Completion pipe를 사용할 때는 HWM backpressure를 허용하지 않는다.
+   - 현재 ready reply route가 없으면 terminal reply는 `NOT_CONNECTED` (`ENOTCONN`)로 실패한다.
+     이미 선택한 reply route가 reply를 커밋하는 도중 사라진 경우에도 같은 규칙을 적용한다. 이는 backpressure가 아니므로 readiness
      (`POLLOUT`) 가 서더라도 재시도가 가능해지지 않는다. 바인딩은 이 실패를 받은
      one-shot reply를 보관하거나 자동으로 다시 submit하지 않으며, 소유권 규칙에 따라
      이미 소비된 part를 호출자에게 되돌리지 않는다.
@@ -4056,9 +4050,10 @@ zlink 에서 사용하는 코드와 의미. 바인딩은 이 코드를 언어별
 | 12 | `INTERNAL_ERROR` | `EPROTO` 등 | 내부 실패 | 내부 submit 실패 (상세는 `zlink_errno()`) |
 
 이 enum은 submit 함수군이 공유하지만 모든 값이 모든 함수에 적용된다는 뜻은 아니다.
-`BACKPRESSURED`는 HWM-managed send, publish와 request submit에만 적용한다. Raw
-ROUTER/`Received` reply는 HWM 없는 completion lane에 한 번 제출하므로
-`BACKPRESSURED`를 반환하지 않는다.
+`BACKPRESSURED`는 HWM-managed send, publish와 request submit에 적용한다. Raw
+ROUTER/`Received` reply도 대상 peer가 DEALER이면 single Application connection의 HWM·PAUSED와
+`SNDTIMEO` admission 때문에 `BACKPRESSURED`를 반환할 수 있다. 대상 peer가 ROUTER이면 HWM 없는
+Completion connection에 한 번 제출하므로 HWM backpressure를 반환하지 않는다.
 
 ##### `zlink_request_result_t` (request completion callback)
 
@@ -4271,12 +4266,14 @@ request-reply 는 Per-Function Error Type Hierarchy 의 **`RequestError`**
 **reply 오류 (`SubmitError`):**
 
 Raw ROUTER/`Received` reply는 모든 high-level binding에서 동기 one-shot submit이다.
-Binding은 terminal reply와 error reply를 HWM 없는 completion lane에 native 호출 한 번으로
-제출한다. HWM backpressure는 reply 결과가 아니며, 아래의 non-HWM 실패는 즉시 전달한다.
+Binding은 terminal reply와 error reply를 native 호출 한 번으로 제출한다. DEALER peer에는
+Application HWM·PAUSED와 `SNDTIMEO`를 적용하고, ROUTER peer에는 HWM 없는 Completion connection을
+사용한다. 다음 결과를 즉시 전달한다.
 
 | 상황 | `reply()` |
 |------|-----------|
 | 성공 | 정상 반환 |
+| DEALER peer의 HWM·PAUSED 대기 만료 | `SubmitError(BACKPRESSURED)` |
 | not connected | `SubmitError(NOT_CONNECTED)` |
 | socket/context 종료 | `SubmitError(TERMINATED)` |
 | 잘못된 인자 | `SubmitError(INVALID_ARGUMENT)` |
@@ -5316,6 +5313,11 @@ framework adapter는 그 경로를 새 구현에 사용하면 안 된다.
 - Peer가 errno `EAGAIN` 또는 `ENOBUFS`인 유효한 wire error reply를 보내면 public request
   completion은 `BACKPRESSURED`에 해당하는 error가 되며, Public Result Enum 카탈로그의 non-OK
   값 66개가 모두 서로 구분된다.
+- DEALER peer로 보내는 raw reply가 Application HWM·PAUSED 때문에 `SNDTIMEO` 안에 admission되지
+  않으면 각 언어는 `BACKPRESSURED` submit error를 반환한다. ROUTER peer로 보내는 raw reply는
+  현재 ready Completion pipe의 HWM-free admission 결과를 반환한다.
+- 모든 binding은 receive-flow setter, request·reply, completion receive와 monitor signature를
+  제공한다. Lane count를 설정하거나 조회하는 public API는 없다.
 
 <!-- bindings-nav:start -->
 [스펙 목록](README.ko.md)

@@ -271,7 +271,10 @@ ZLINK_EXPORT zlink_submit_result_t zlink_reply_part(
 첫 `MORE` 또는 `FINAL`에서 RID·token·REQUEST-complete 상태를 검증하고 token을 reply sequence에
 원자적으로 checkout한다. Successful `MORE`는 part를 local staging하고 checkout을 유지하지만
 token을 소비하지 않는다. `FINAL`은 `ZLINK_OPT_SNDTIMEO`를 진입 시 snapshot해 같은 logical source
-RID의 completion route가 local admission될 때까지 기다린다. 기본값은 1,000 ms, `0`은 즉시,
+RID의 reply route가 local admission될 때까지 기다린다. Source peer가 DEALER이면 현재 ready
+Application pipe를, ROUTER이면 현재 ready
+[completion progress lane](../glossary.ko.md#completion-progress-lane)의 Completion pipe를 고른다. 기본값은
+1,000 ms, `0`은 즉시,
 `-1`은 무한 대기다. Successful `FINAL`만 registry의 token을 소비하며 requester application의
 수신이나 acceptance를 보장하지 않는다. Reply는 completion ID나 completion record를 만들지 않는다.
 
@@ -322,14 +325,15 @@ ROUTER의 `ZLINK_POLLIN`은 application queue에 admission된 DATA·REQUEST 또�
 
 ## 11. Receive flow state
 
-Completion lane으로 [DEALER](06-dealer.ko.md) peer와 pair를 이룬 ROUTER는 그 peer들에게 자신에게
+DEALER 또는 ROUTER peer와 연결된 ROUTER는 그 peer들에게 자신에게
 보내는 전송을 멈추고 다시 시작하라고 요청할 수 있다. `zlink_socket_set_receive_flow_state()`는
 socket 전체에 적용되는 상태 하나를 저장한다. 함수 선언은 [Socket 공통](README.ko.md)이, 결과 표는
 [Errors](../03-errors.ko.md)가 소유한다.
 
 이 상태는 routing ID가 아니라 socket에 속한다. Peer별 flow-state 호출은 없다. 한 번 호출하면
-이 ROUTER의 ready transport pair마다 completion lane으로 상태를 전달하므로 모든 peer가 같은
-상태를 받고, 나중에 ready가 된 peer도 새 completion lane으로 socket의 현재 상태를 받는다.
+이 ROUTER의 ready peer마다 상태를 전달하므로 모든 peer가 같은 상태를 받는다. DEALER peer에는
+single Application connection의 Core control 경로를, ROUTER peer에는 Completion connection을
+사용한다. 나중에 ready가 된 peer도 peer type에 따른 경로로 socket의 현재 상태를 받는다.
 Routing ID는 send의 목적지를 고르는 값이며 receive-flow 상태를 고르지 않는다.
 
 이 상태는 counter가 아니라 절대값이다. 현재 상태를 다시 설정하면 성공하고 아무것도 보내지
@@ -440,13 +444,16 @@ test 하나로 이어진다.
 
 **Reply**
 - `zlink_reply_part()`는 수신 record가 반환한 source RID와 opaque reply token을 사용하며 successful FINAL만 token을 소비한다.
-- Reply FINAL은 `SNDTIMEO`를 snapshot해 logical completion route의 local admission을 기다리고, timeout이면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`이면서 live token으로 전체 reply를 처음부터 재시도할 수 있다.
+- Reply FINAL은 `SNDTIMEO`를 snapshot해 logical reply route의 local admission을 기다리고, timeout이면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`이면서 live token으로 전체 reply를 처음부터 재시도할 수 있다.
 - 같은 token의 concurrent second sequence는 `ZLINK_SUBMIT_INVALID_STATE`+`EBUSY`로 second part만 소비하고 기존 checkout과 staging을 유지한다.
 - Physical disconnect·connection generation 변경·requester timeout은 token을 무효화하지 않고, logical RID 제거·responder close·context termination은 무효화한다.
 - Live token이 65,536개면 새 REQUEST를 조용히 drop하지 않고 해당 source의 read를 멈추며, slot 해제 뒤 round-robin으로 다시 진행한다.
 - Application queue가 비었고 모든 readable head가 token-blocked REQUEST이면 `ZLINK_POLLIN`이
   내려가며, slot 해제 뒤 source들을 round-robin으로 redrive해 starvation이 없다.
 - Reply submit은 completion ID나 completion record를 만들지 않는다.
+- DEALER peer에 대한 reply는 현재 ready Application pipe를 사용하고 HWM·PAUSED와 `SNDTIMEO`
+  admission을 적용하므로 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`이 될 수 있다. ROUTER peer에 대한
+  reply는 현재 ready Completion pipe를 사용하며 HWM-free admission을 적용한다.
 
 **Readiness**
 - `ZLINK_POLLIN`은 완전한 raw record를 수신할 수 있을 때 서고, `ZLINK_POLLOUT`은 backpressure 뒤 재시도 가치를 나타낼 뿐 다음 submit 성공을 보장하지 않는다.
@@ -454,7 +461,8 @@ test 하나로 이어진다.
 
 **Receive flow state**
 - 현재 상태를 다시 설정하면 성공하고 아무것도 보내지 않는다.
-- 한 번의 호출로 모든 ready transport pair가 같은 상태를 받고, 나중에 ready가 된 peer도 socket의 현재 상태를 받는다.
+- 한 번의 호출로 모든 ready peer가 같은 상태를 받는다. DEALER peer에는 Application connection,
+  ROUTER peer에는 Completion connection을 사용하며 나중에 ready가 된 peer도 socket의 현재 상태를 받는다.
 - Flow-state frame에는 자신이 기록된 connection 범위의 flow epoch만 있고 public pair ID·generation field와 `Zlink-Pair-Id`·`Zlink-Pair-Generation` wire property가 없다. Core는 내부 connection identity가 일치하는 기록 connection에만 frame을 적용한다.
 - 대체된 connection의 frame을 포함해 identity가 일치하지 않는 frame은 public event 없이 내부에서 소비되고 `flow_state_stale_total`에만 반영된다. 같은 connection의 중복·역행 epoch는 적용되지 않고 `ZLINK_EVENT_FLOW_STATE_STALE`과 `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`으로 보고된다.
 - peer가 재연결 전에 알린 상태는 그것을 대체한 connection에 적용되지 않는다.

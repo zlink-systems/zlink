@@ -247,7 +247,7 @@ the resulting behavior.
 | A DEALER or ROUTER handle and a state within the range of `zlink_receive_flow_state_t`. This includes setting the state that the socket already holds | `ZLINK_CONFIG_OK` | unspecified |
 | A handle that is `NULL`, is not a socket, or has already completed close teardown | `ZLINK_CONFIG_INVALID_HANDLE` | unspecified |
 | A state value outside the range of `zlink_receive_flow_state_t` | `ZLINK_CONFIG_INVALID_ARGUMENT` | `EINVAL` |
-| A socket type without a completion lane: PAIR, PUB, SUB, XPUB, XSUB, or STREAM | `ZLINK_CONFIG_NOT_SUPPORTED` | `ENOTSUP` |
+| A socket type that does not support receive flow: PAIR, PUB, SUB, XPUB, XSUB, or STREAM | `ZLINK_CONFIG_NOT_SUPPORTED` | `ENOTSUP` |
 | A concurrent close acquired socket admission before this call | `ZLINK_CONFIG_INVALID_STATE` | `ESHUTDOWN` |
 | The owning [Context](glossary.en.md#context) is terminating | `ZLINK_CONFIG_INTERNAL_ERROR` | `ETERM` |
 
@@ -607,6 +607,9 @@ function, the completion result from `zlink_completion_recv()`, `zlink_errno()`,
 - `zlink_socket_set_receive_flow_state()` returns the result and errno from the
   corresponding row in
   [§4.6](#46-receive-flow-state-configuration-result) for each condition.
+- DEALER supports `zlink_socket_set_receive_flow_state()` without a separate Completion lane and
+  returns `ZLINK_CONFIG_OK` for a valid state. PAIR, PUB, SUB, XPUB, XSUB, and STREAM return
+  `ZLINK_CONFIG_NOT_SUPPORTED` with `ENOTSUP` because those socket types do not support receive flow.
 - Setting the state that the socket already holds is a successful no-op that returns
   `ZLINK_CONFIG_OK`.
 - When the call races with a concurrent close, only

@@ -649,9 +649,10 @@ dropping the copy for a subscriber whose queue is full; `NODROP` returns an imme
 
 The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
 `ReplySubmitOperation.submit() -> void`. It creates no `CompletionStage`, accepts no send flags,
-and submits a terminal reply or error reply to the HWM-free completion lane with one native call. HWM
-backpressure is not a reply result. `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`, and
-other non-HWM submit failures are delivered immediately as `ZlinkSubmitException`.
+and submits a terminal reply or error reply with one native call. A DEALER peer is subject to
+Application HWM, `PAUSED`, and `SNDTIMEO`, so the result can be `BACKPRESSURED`; a ROUTER peer uses
+the HWM-free Completion connection. `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`, and other
+submit failures are delivered immediately as `ZlinkSubmitException`.
 
 ### Completion pull
 
@@ -843,8 +844,8 @@ enum with `RUNNING(0)` and `PAUSED(1)`. The public setter is the common
 socket-option facade method `receiveFlowState(ReceiveFlowState)`. It returns
 `void` and follows the Java error policy: a non-zero native result is thrown as
 a `ZlinkConfigException` carrying the matching `ConfigResult`, so a socket
-without a completion lane raises `ZlinkConfigException` with the not-supported
-result. A null argument raises `NullPointerException` before any native call.
+that doesn't support receive flow raises `ZlinkConfigException` with the
+not-supported result. A null argument raises `NullPointerException` before any native call.
 Setting the state the socket already holds returns normally.
 
 The observation surface follows the C contract, so the constant and metric
@@ -1141,6 +1142,9 @@ events. Each item maps to one contract test.
 - A non-OK request completion exposes only a typed request exception and does not expose the error
   payload.
 - `POLLCOMPLETION` returns only after stage settlement or detached cleanup finishes.
+- When HWM/`PAUSED` waiting expires for a raw reply submitted to a DEALER peer,
+  `ZlinkSubmitException` reports `BACKPRESSURED`; a reply submitted to a ROUTER
+  peer retains the HWM-free result of the Completion connection.
 
 **ReplyToken and STREAM**
 

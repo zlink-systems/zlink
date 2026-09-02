@@ -67,6 +67,11 @@ record가 하나 이상 있어 다음 `zlink_completion_recv()`가 성공할 수
 level-triggered readiness다. 단독으로 등록하거나 `ZLINK_POLLIN`, `ZLINK_POLLOUT`과 OR할 수
 있다. Queue에 record가 남아 있는 동안 readiness도 유지된다.
 
+DEALER-ROUTER single connection에서 앞선 DATA record의 마지막 part를 dequeue하기 전에는 뒤의
+REPLY가 physical head가 아니다. 이때 `ZLINK_POLLIN`만 준비되고 `ZLINK_POLLCOMPLETION`은
+준비되지 않을 수 있다. REPLY가 physical head에 도달해 socket-local completion queue로 이동한
+뒤에는 위 level-trigger와 `ZLINK_RECV_NO_DATA`까지 drain하는 규칙을 적용한다.
+
 `zlink_poller_wait()`는 completion을 제거하거나 callback을 호출하지 않는다. Event array에는
 operation payload를 넣지 않으며 event array 용량과 completion 개수는 관계가 없다. Caller는
 준비된 socket마다 `zlink_completion_recv(..., ZLINK_RECV_FLAGS_DONTWAIT)`를
@@ -272,6 +277,9 @@ array)만으로 다음을 확인한다. 각 항목은 unit test 하나로 이어
   readiness가 유지된다.
 - Event array 용량보다 completion이 많아도 record가 유실·병합되지 않으며, caller는 준비된 socket을
   `ZLINK_RECV_NO_DATA`까지 drain한다.
+- DEALER-ROUTER의 physical head가 multipart DATA이면 `ZLINK_POLLIN`이 준비될 수 있지만 그 뒤
+  REPLY의 `ZLINK_POLLCOMPLETION`은 준비되지 않는다. DATA의 `FINAL` part를 dequeue한 뒤 REPLY가
+  socket-local completion queue로 이동하면 completion readiness가 발생한다.
 
 **수명**
 - poller destroy 중 wait가 active이면 `ZLINK_CLOSE_BUSY`/`EBUSY`다.

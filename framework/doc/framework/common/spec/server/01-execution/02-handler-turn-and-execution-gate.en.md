@@ -162,7 +162,10 @@ A request sent within the same handler turn can be awaited.
 - Because infrastructure work such as reply completion and binding
   operation completion proceeds separately from the application turn, the
   current turn can resume without running the Spot's or Actor's next
-  application message.
+  application message. A RouteMesh ROUTER-ROUTER reply reaches this boundary
+  through the separate [Completion connection](../00-foundation/02-glossary.en.md#completion-connection). A ClientServer DEALER-ROUTER
+  reply is processed as infrastructure work, but can be delayed behind earlier
+  DATA, HWM, and `PAUSED` on the single connection.
 - This rule holds even when a Channel request's target is a different
   mesh group or ClientServer Channel. The Framework ties the completion of
   the chosen send path to the original Spot activation and generation.
@@ -557,10 +560,12 @@ infrastructure domain independently, as in the table in
 
 - Payload decoding, user callbacks, and exception mapping are handled on
   the application turn.
-- Request completion and bounded liveness/admission/relocation/reply
-  recovery service control arrive on the existing Completion connection.
-  Core HWM retry results arrive as the per-binding-operation completion and
-  are distinct from the Framework service-wire `SendReady` record.
+- RouteMesh request completion and bounded liveness/admission/relocation/reply
+  recovery service control arrive on the ROUTER-ROUTER Completion connection.
+  ClientServer request completion arrives after Core identifies a reply on the
+  DEALER-ROUTER single Application connection. Core HWM retry results arrive as
+  the per-binding-operation completion and are distinct from the Framework
+  service-wire `SendReady` record.
 - Peer connection state changes and the shutdown barrier are also handled
   on infrastructure tasks.
 - Infrastructure tasks must be able to proceed even while an application
@@ -698,6 +703,12 @@ confirmation condition" and are not listed here.
 - With an application handler kept waiting, a new peer connection is
   accepted.
 - A slow status subscriber does not slow down message processing speed.
+- Even while RouteMesh application handlers and the Application Job Queue are
+  `PAUSED`, a reply for an already-started cross-node request completes through
+  the ROUTER-ROUTER Completion connection.
+- In ClientServer, if the Client doesn't process earlier one-way DATA, the
+  reply on the same DEALER-ROUTER connection can be delayed until request
+  timeout completes first; the late reply doesn't create a second terminal.
 
 ---
 

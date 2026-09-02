@@ -67,14 +67,14 @@ sequenceDiagram
 ### 3.1 Connection과 lane 식별
 
 `connection_id`는 현재 프로세스에서 하나의 물리적 transport 시도를 식별하는 진단·correlation
-값이다. Send target이나 reconnect fence로 사용할 수 없다. Application과 Completion transport가
-한 peer를 구성하면 `transport_lane`으로 lane을 구분한다. 별도 Completion lane이 없는 transport의
-값은 Application이다.
+값이다. Send target이나 reconnect fence로 사용할 수 없다. `transport_lane`은 physical connection을
+분류한다. DEALER-DEALER와 DEALER-ROUTER의 모든 physical event는 Application이고, ROUTER-ROUTER의 별도
+Completion connection만 Completion 값을 낼 수 있다. 그 밖의 transport도 Application 값이다.
 
-단, `CONNECTION_READY`는 두 lane이 모두 준비된 peer를 하나의 공개 ready transport로
-집계하므로 ready edge를 정확히 한 번만 발생시키고 `value`에도 한 번만 센다. 두 lane이 서로
-다른 시점에 routing ID를 알게 되어도 두 ready
-transport로 나누지 않는다.
+`CONNECTION_READY`는 DEALER-DEALER·DEALER-ROUTER의 count `1`과 ROUTER-ROUTER의 count `2`를 모두 logical
+peer 하나로 집계하여 ready edge를 정확히 한 번만 발생시키고 `value`에도 한 번만 센다.
+ROUTER-ROUTER의 두 lane이 서로 다른 시점에 routing ID를 알게 되어도 두 ready transport로
+나누지 않으며, 한 lane만 ready이면 count를 늘리지 않는다.
 
 ### 3.2 `value`와 `flags`
 
@@ -181,13 +181,20 @@ flow counter 사이의 교차 일관성은 보장하지 않는다.
 
 `auto_hwm_send_blocked_ratio_ppm`은 측정 epoch에서 해당 socket의 최초 send admission 시도
 중 application pipe HWM 때문에 block된 비율이다. 같은 submit의 wake 뒤 재시도는 다시 세지
-않으며 transport I/O wait, completion lane과 context aggregate 사용량은 제외한다.
+않으며 transport I/O wait, ROUTER-ROUTER completion lane과 context aggregate 사용량은 제외한다.
+
+Context의 Auto HWM snapshot ABI version은 v1이다. DEALER-ROUTER reply byte는
+`core_queue_accounted_bytes`, `current_accounted_bytes`, 필요하면 `provisional_accounted_bytes`,
+`peak_accounted_bytes`와 `total_messaging_accounted_bytes`에 포함된다. 이 reply는
+`completion_current_accounted_bytes`, `completion_peak_accounted_bytes`,
+`completion_pending_message_count`와 `active_completion_directional_queue_count`에 포함되지
+않는다. 이 field의 선언과 정확한 회계는 [Auto HWM](systems/06-auto-hwm.ko.md)이 소유한다.
 
 ### 6.4 Receive-flow 통계
 
-`ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`는 paired DEALER/ROUTER
-[completion lane](glossary.ko.md#completion-progress-lane) — terminal reply와 error reply의
-진행만 담당하는 별도 경로 — 을 가진 socket 유형에서만 설정한다. 다른 socket 유형에서는 이
+`ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`는 receive-flow를 지원하는 DEALER·ROUTER socket에
+설정한다. 별도 [completion lane](glossary.ko.md#completion-progress-lane)이 없는
+DEALER-DEALER와 DEALER-ROUTER도 포함한다. 다른 socket 유형에서는 이
 bit가 없고 field 5개가 모두 0이다. 이 field는 해당 socket이 peer에서 관측한 receive-flow
 상태를 제공한다. 각 field의 정확한 증감 규칙은 [§7.5](#75-status-구조체)의 선언 주석이
 담는다.
@@ -343,7 +350,7 @@ typedef enum zlink_monitor_status_detail_flag_e {  // bit별 유효 field는 §6
   ZLINK_MONITOR_STATUS_DETAIL_RCV_PENDING_MSGS = 1u << 2,
   ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUDGET  = 1u << 3,
   ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUFFERS = 1u << 4,
-  ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE       = 1u << 5   // paired DEALER/ROUTER completion lane 유형에서만 (§6.4)
+  ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE       = 1u << 5   // receive-flow를 지원하는 DEALER·ROUTER에서만 (§6.4)
 } zlink_monitor_status_detail_flag_e;
 
 typedef enum zlink_auto_hwm_recalc_reason_t {  // auto_hwm_last_recalc_reason field 값
@@ -513,10 +520,12 @@ status snapshot, 반환값·errno)만으로 다음을 확인한다. 각 항목�
 
 **Event 내용**
 - `DISCONNECTED`의 `value`는 `zlink_disconnect_reason_t`, `HANDSHAKE_FAILED_PROTOCOL`의 `value`는 `zlink_protocol_error_t`, `PEER_WEIGHT_CHANGED`의 `value`는 새 `0..10000` weight, 다른 실패 event의 `value`는 해당 실패의 errno다.
-- 두 lane이 준비된 peer마다 `CONNECTION_READY`의 ready edge
+- DEALER-DEALER·DEALER-ROUTER count `1`과 ROUTER-ROUTER count `2`가 각각 logical peer 하나로 준비될 때마다
+  `CONNECTION_READY`의 ready edge
   (`ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE`)가 정확히 한 번 발생하고 `value`의 count에도
   한 번만 반영된다. Edge flag가 없는 ready count event는 count snapshot이다.
-- Completion lane이 없는 transport의 event는 `transport_lane`이 Application 값이다.
+- DEALER-DEALER·DEALER-ROUTER의 모든 physical event는 `transport_lane`이 Application이고, ROUTER-ROUTER의
+  Completion physical event만 Completion을 보고한다.
 - `connection_id`는 진단·correlation 값이며 이 값으로 send·reply target을 지정하는 public API는 없다.
 
 **Event data 소유권**
@@ -526,7 +535,11 @@ status snapshot, 반환값·errno)만으로 다음을 확인한다. 각 항목�
 **Status snapshot**
 - raw socket monitor status의 `source_kind`는 `ZLINK_MONITOR_SOURCE_SOCKET`, `abi_version`은 `ZLINK_MONITOR_STATUS_ABI_VERSION`, `struct_size`는 반환된 ABI version의 전체 byte 크기다.
 - `detail_flags`에 없는 bit의 선택 field는 모두 0이다.
-- `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`는 paired DEALER/ROUTER completion lane을 가진 socket 유형에서만 설정되며, 다른 socket 유형에서는 bit가 없고 flow field 5개가 모두 0이다.
+- `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`는 DEALER-DEALER·DEALER-ROUTER count `1`과 ROUTER-ROUTER count `2`
+  socket에 설정되며 다른 socket 유형에서는 bit가 없고 flow field 5개가 모두 0이다.
+- Auto HWM snapshot은 ABI v1과 정의된 field layout을 사용한다. Controlled DEALER-ROUTER reply byte는
+  Application accounting field와 `total_messaging_accounted_bytes`에만 반영되고 Completion
+  current·peak·pending·direction count에는 반영되지 않는다.
 - flow counter 3개는 socket 수명 동안 단조 증가하고, `zlink_ctx_reset_auto_hwm_budget_metrics`를 호출해도 바뀌지 않는다.
 - pipe 합계 field 군은 하나의 lock 안에서 읽어 군 내부에서 일관되며, Auto HWM field·flow counter는 별도 시점에 읽을 수 있어 field 군 사이의 교차 일관성은 보장하지 않는다.
 

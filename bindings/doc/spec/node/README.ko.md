@@ -530,10 +530,10 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
   제공하고 builder의 reply timeout을 유지한다.
 - Raw ROUTER/`Received` reply의 terminal은
   `ReplySubmitOperation.submit(): void`인 동기 one-shot이다. Promise를 반환하지 않고
-  HWM-managed 경로에 진입하지 않으며, terminal reply 또는 error reply를 HWM 없는
-  completion lane에 native 호출 한 번으로 제출한다. HWM backpressure는 reply 결과가
-  아니며 `NOT_CONNECTED`, `TERMINATED`,
-  `INVALID_ARGUMENT`와 그 밖의 non-HWM submit 실패는 즉시 `SubmitError`로 발생한다.
+  terminal reply 또는 error reply를 native 호출 한 번으로 제출한다. DEALER peer에는 Application
+  HWM·PAUSED와 `SNDTIMEO`를 적용하여 `BACKPRESSURED`가 될 수 있고, ROUTER peer에는 HWM 없는
+  Completion connection을 사용한다. `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`와 그 밖의
+  submit 실패는 즉시 `SubmitError`로 발생한다.
 - PUB/XPUB의 `publish(topic).message(...).submit()`은 동기 `void` 종단이다. 기본
   PUB 경로는 lossy이므로 성공 시 즉시 반환하며, NODROP option은 수락할 수 없을 때
   즉시 `SubmitError`를 발생시킨다. publish에는 `publishAsync`, binding-owned
@@ -624,7 +624,7 @@ peak를 current로 재기준화하며 epoch counter를 0으로 만든 뒤 `measu
 `RUNNING: 0`, `PAUSED: 1`이며 같은 이름의 값 타입도 함께 제공한다. 설정은
 `Socket.setReceiveFlowState(state)`다. 반환형은 `void`이고 Node 에러 정책을 따른다. 0이
 아닌 native config 결과는 native errno를 담은 config 범주의 `ZlinkError`로 발생시키므로,
-completion lane이 없는 socket은 not-supported에 해당하는 config 범주 오류를 발생시킨다.
+receive-flow를 지원하지 않는 socket은 not-supported에 해당하는 config 범주 오류를 발생시킨다.
 이미 유지하는 상태를 다시 설정하면 정상 반환한다.
 
 관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
@@ -890,6 +890,8 @@ Public TypeScript declaration, JavaScript result·error와 poller event만으로
   native aggregate를 정리한다.
 - Non-OK request completion은 typed error만 제공하고 error payload를 공개하지 않는다.
 - `PollCompletion`은 Promise settle 또는 detached cleanup이 끝난 뒤에만 반환된다.
+- Raw reply를 DEALER peer로 제출해 HWM·PAUSED 대기가 만료하면 `SubmitError`의
+  `BACKPRESSURED`가 관찰되고, ROUTER peer로 제출하면 Completion connection의 HWM-free 결과가 유지된다.
 
 **ReplyToken과 STREAM**
 

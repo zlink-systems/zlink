@@ -101,8 +101,11 @@ binding은 profile 비율을 적용하거나 budget을 connection 수로 나누�
 Core queue가 application record를 binding에 넘기면 해당 Core byte charge는 끝난다. 이후 payload는
 [Payload 소유권과 복사](../01-execution/05-payload-ownership-and-codec.ko.md)의 일반 message lifetime을 따르며 Core
 HWM credit이나 별도 capacity token이 아니다. Framework는 retained receive를 사용해 이 charge를
-handler 또는 reply terminal까지 연장하지 않는다. Reply와 error reply completion은 ordinary Core
-byte HWM 경로와 Application Job Queue permit을 사용하지 않는다.
+handler 또는 reply terminal까지 연장하지 않는다. RouteMesh ROUTER-ROUTER reply와 error reply는
+별도 [Completion connection](02-glossary.ko.md#completion-connection)을 사용하여 ordinary Core byte HWM 경로를 통과하지 않는다.
+ClientServer DEALER-ROUTER reply와 error reply는 single Application connection의 Core HWM·PAUSED를
+통과한 뒤 completion으로 식별된다. 두 topology 모두 completion으로 식별된 뒤에는 Application
+Job Queue permit을 사용하지 않는다.
 
 Framework host instance는 handler 시작을 기다리는 application job 수를 별도 permit으로 제한한다. Root의
 inbound-dispatch option은 다음 값을 제공한다.
@@ -552,9 +555,11 @@ handler 경계에서만 확인한다.
 
 Scheduler는 작업 도착을 기다릴 때 도착 기반으로 깨어난다. 언어 runtime이 blocking 대기나 callback
 wakeup을 제공하지 못해 주기적 확인을 사용하는 경우에는 그 주기를 언어별 문서에 공표한다. 그 주기가
-message 하나의 최선 지연 하한이 되기 때문이다. Transport readiness는 application callback 인자가 아니다. Request
-completion과 liveness·admission·relocation·reply recovery service control은 기존 Completion connection에서
-받는다. Core HWM 재시도 결과는 binding의 operation별 completion으로 받는다. 이 infrastructure 작업은 application handler가 점유할 수
+message 하나의 최선 지연 하한이 되기 때문이다. Transport readiness는 application callback 인자가 아니다.
+RouteMesh의 request completion과 liveness·admission·relocation·reply recovery service control은
+ROUTER-ROUTER Completion connection에서 받는다. ClientServer request completion은
+DEALER-ROUTER single Application connection에서 Core가 reply로 식별한 뒤 받으며 앞선 DATA 뒤에서
+늦을 수 있다. Core HWM 재시도 결과는 binding의 operation별 completion으로 받는다. 이 infrastructure 작업은 application handler가 점유할 수
 없는 실행 영역에서 진행한다. Actor·Spot lifecycle처럼 application callback을 호출하는 job은 application
 실행 영역에서 처리한다.
 
@@ -1096,6 +1101,10 @@ filter 실행 순서와 codec registry의 송수신 결과만으로 다음을 �
 - Actor·Spot manager의 `Find`는 global ID의 current Ready ref만 반환한다.
 - Location operational query는 page size 1..1000, encoded page 최대 4 MiB를 지키는 bounded page만
   반환한다.
+- Application Job Queue permit을 모두 사용해도 RouteMesh ROUTER-ROUTER의 이미 시작한 request
+  reply는 Completion connection으로 진행한다.
+- ClientServer DEALER-ROUTER reply가 Core에서 completion으로 식별된 뒤에는 Application Job Queue
+  permit을 사용하지 않지만, 앞선 DATA와 Core HWM·PAUSED를 건너뛰지는 않는다.
 
 **Handler 등록과 dispatch**
 

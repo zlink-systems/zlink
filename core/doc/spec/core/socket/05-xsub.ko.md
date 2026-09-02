@@ -242,9 +242,7 @@ handle 타입이 구독 조회를 지원하지 않으면 `ENOTSUP`.
 
 ## 5. Receive flow state
 
-XSUB에는 DEALER·ROUTER가 terminal reply의 진행에 쓰는 paired
-[completion progress lane](../glossary.ko.md#completion-progress-lane)이 없으므로
-receive-flow 상태도 없다. `zlink_socket_set_receive_flow_state()`는 XSUB socket에 대해
+XSUB은 receive-flow 대상 socket type이 아니다. `zlink_socket_set_receive_flow_state()`는 XSUB socket에 대해
 `errno == ENOTSUP`과 함께 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고 아무것도 바꾸지 않는다.
 [Socket 공통](README.ko.md)이 정의하는 byte [HWM](../glossary.ko.md#hwm)(queue에 유지할
 byte를 제한해 [backpressure](../glossary.ko.md#backpressure)를 적용하는 값)과

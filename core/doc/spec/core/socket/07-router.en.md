@@ -282,7 +282,10 @@ Every call consumes an initialized `part_`, regardless of result, and leaves it 
 The first `MORE` or `FINAL` validates the RID, token, and REQUEST-complete state and atomically checks
 out the token to one reply sequence. A successful `MORE` stages the part and retains the checkout but
 does not consume the token. FINAL snapshots `ZLINK_OPT_SNDTIMEO` on entry and waits for local admission
-on the same logical source RID's completion route. The default is 1,000 ms; `0` is immediate and `-1`
+on the same logical source RID's reply route. If the source peer is DEALER, Core selects the current
+ready Application pipe; if it is ROUTER, Core selects the current ready
+[completion progress lane](../glossary.en.md#completion-progress-lane) Completion pipe. The default is 1,000 ms;
+`0` is immediate and `-1`
 waits indefinitely. Only a successful FINAL consumes the registry token. It does not guarantee
 requester-application receipt or acceptance. Reply creates neither a completion ID nor a completion
 record.
@@ -336,15 +339,16 @@ submit succeeds. Results of SEND and REQUEST operations retained by Core are rec
 
 ## 11. Receive flow state
 
-A ROUTER paired with [DEALER](06-dealer.en.md) peers over a completion lane can ask those peers to
-stop and resume sending to it. `zlink_socket_set_receive_flow_state()` stores one socket-wide state.
+A ROUTER connected to a DEALER or ROUTER peer can ask those peers to stop and resume sending to it.
+`zlink_socket_set_receive_flow_state()` stores one socket-wide state.
 [Socket Common](README.en.md) owns the function declaration, and [Errors](../03-errors.en.md) owns
 the result table.
 
 The state belongs to the socket, not to a routing ID. There is no per-peer flow-state call. One call
-sends the state over the completion lane of every ready transport pair of this ROUTER, so every peer
-receives the same state. A peer that becomes ready later also receives the socket's current state
-over its new completion lane. A routing ID selects the destination of a send; it does not select a
+sends the state to every ready peer of this ROUTER, so every peer receives the same state. Core uses
+the single Application connection's Core control path for a DEALER peer and the Completion connection
+for a ROUTER peer. A peer that becomes ready later also receives the socket's current state over the
+path selected for its type. A routing ID selects the destination of a send; it does not select a
 receive-flow state.
 
 The state is an absolute value, not a counter. Setting the current state again succeeds and sends
@@ -460,12 +464,15 @@ and status snapshots. Each item maps to one test.
 
 **Reply**
 - `zlink_reply_part()` uses the source RID and opaque reply token returned by receive; only successful FINAL consumes the token.
-- Reply FINAL snapshots `SNDTIMEO` and waits for local admission on the logical completion route. Timeout returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, and a live token permits retrying the complete reply from its first part.
+- Reply FINAL snapshots `SNDTIMEO` and waits for local admission on the logical reply route. Timeout returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, and a live token permits retrying the complete reply from its first part.
 - A concurrent second sequence for the same token returns `ZLINK_SUBMIT_INVALID_STATE` with `EBUSY`, consumes only the second part, and preserves the existing checkout and staging.
 - Physical disconnect, connection-generation change, and requester timeout do not invalidate the token; logical RID removal, responder close, and context termination do.
 - When 65,536 tokens are live, Core stops reading a source whose head REQUEST needs a token instead of silently dropping it. Releasing a slot redrives sources in round-robin order.
 - If the application queue is empty and every readable head is a token-blocked REQUEST, `ZLINK_POLLIN` clears; slot release redrives sources without starvation.
 - Reply submit creates neither a completion ID nor a completion record.
+- A reply to a DEALER peer uses the current ready Application pipe and applies HWM, PAUSED, and
+  `SNDTIMEO` admission, so it can return `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`. A reply to a
+  ROUTER peer uses the current ready Completion pipe and applies HWM-free admission.
 
 **Readiness**
 - `ZLINK_POLLIN` is set for an admitted DATA or REQUEST, or a complete REQUEST that can reserve a token slot. It clears when all readable heads are token-blocked REQUEST records.
@@ -473,7 +480,9 @@ and status snapshots. Each item maps to one test.
 
 **Receive flow state**
 - Setting the current state again succeeds and sends nothing.
-- One call gives every ready transport pair the same state, and a peer that becomes ready later also receives the socket's current state.
+- One call gives every ready peer the same state. It uses the Application connection for a DEALER
+  peer and the Completion connection for a ROUTER peer, and a peer that becomes ready later also
+  receives the socket's current state.
 - A flow-state frame contains only the flow epoch scoped to the connection on which it was written. There is no public pair-ID or generation field and no `Zlink-Pair-Id` or `Zlink-Pair-Generation` wire property. Core applies the frame only to that connection by using internal connection identity.
 - A frame whose identity does not match, including a frame from a replaced connection, is consumed internally without a public event and increments only `flow_state_stale_total`. A duplicate or regressing epoch on the same connection is not applied and is reported as `ZLINK_EVENT_FLOW_STATE_STALE` with `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`.
 - State published by a peer before a reconnect is not applied to the replacement connection.

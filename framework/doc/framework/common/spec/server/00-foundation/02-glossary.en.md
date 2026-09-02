@@ -1004,6 +1004,17 @@ insufficient. It is not a public terminal result; Core handles HWM retry until t
 operation completes. Once Logical Multicast has started, per-target capacity
 shortfalls aren't aggregated into public results or publish-only monitoring.
 
+<a id="completion-connection"></a>
+### Completion connection
+
+A separate physical connection used by RouteMesh ROUTER-ROUTER peers to keep
+terminal replies, error replies, and receive-flow control progressing
+independently of bidirectional request wait cycles and Application HWM.
+ClientServer DEALER-ROUTER peers don't have this connection: replies share the
+single Application connection's FIFO, HWM, and `PAUSED` state with DATA.
+Framework request results and Core's socket-local completion queue are distinct
+from this physical connection.
+
 <a id="core-hwm-budget"></a>
 ### Core HWM budget
 

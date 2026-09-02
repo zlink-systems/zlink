@@ -68,10 +68,9 @@ therefore must resubmit the entire record from its first part using copies retai
 ## 3. Receive flow state
 
 [Socket Common](README.en.md) defines the receive-flow state and constants that DEALER and ROUTER
-sockets use to notify a peer to pause or resume receiving over the
-[completion lane](../glossary.en.md#completion-progress-lane).
+sockets use to notify a peer to pause or resume receiving.
 
-PAIR has no paired DEALER/ROUTER completion lane, so it has no receive-flow state.
+PAIR is not a socket type that supports receive flow.
 `zlink_socket_set_receive_flow_state()` returns `ZLINK_CONFIG_NOT_SUPPORTED` with `errno == ENOTSUP`
 for a PAIR socket and changes nothing. The byte [HWM](../glossary.en.md#hwm) (the byte limit retained
 by a queue), low water mark, and transport [backpressure](../glossary.en.md#backpressure) (restriction

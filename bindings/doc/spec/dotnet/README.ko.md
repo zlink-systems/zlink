@@ -304,9 +304,10 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
 - Reply builder는 payload를 모은 뒤 `Submit()`으로 끝난다.
 - Raw ROUTER/`Received` reply의 terminal은
   `ReplySubmitOperation.Submit() -> void`인 동기 one-shot이다. Terminal reply와 error
-  reply를 HWM 없는 completion lane에 native 호출 한 번으로 제출한다. HWM backpressure는
-  reply 결과가 아니며 `NotConnected`, `Terminated`, `InvalidArgument`와 그 밖의 non-HWM
-  submit 실패는 즉시 `ZlinkSubmitException`으로 전달한다.
+  reply를 native 호출 한 번으로 제출한다. DEALER peer에는 Application HWM·PAUSED와
+  `SNDTIMEO`를 적용하여 `Backpressured`가 될 수 있고, ROUTER peer에는 HWM 없는 Completion
+  connection을 사용한다. `NotConnected`, `Terminated`, `InvalidArgument`와 그 밖의 submit
+  실패는 즉시 `ZlinkSubmitException`으로 전달한다.
 - operation 시작 메서드와 같은 이름을 가진 single-payload 단축 오버로드를
   추가하지 않는다. `Send(Message)`, `Send(RoutingId, Message)`,
   `Publish(string, Message)`, `SendToChannel(string, Message)`,
@@ -589,8 +590,9 @@ target의 HWM credit을 기다리는 동안 request의 원래 deadline을 유지
 이 바인딩은 Core의 receive-flow 상태를 `ReceiveFlowState` enum으로 노출한다.
 `Running = 0`, `Paused = 1`이며 설정은 `ISocket.SetReceiveFlowState(ReceiveFlowState)`다.
 반환형은 `void`이고 .NET 에러 정책을 따른다. 0이 아닌 native `zlink_config_result_t`는
-해당 `ConfigResult`를 `ErrorCode`로 담은 `ZlinkConfigException`으로 던지므로, completion
-lane이 없는 socket은 `ConfigResult.NotSupported`를 담은 `ZlinkConfigException`을 발생시킨다.
+해당 `ConfigResult`를 `ErrorCode`로 담은 `ZlinkConfigException`으로 던지므로, receive-flow를
+지원하지 않는 socket type(DEALER·ROUTER 외)은 `ConfigResult.NotSupported`를 담은
+`ZlinkConfigException`을 발생시킨다.
 이미 유지하는 상태를 다시 설정하면 정상 반환한다.
 
 관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
@@ -818,6 +820,8 @@ test 하나로 이어진다.
   끝내지 않으며 native payload를 정리한다.
 - Non-OK request completion은 기존 typed exception만 발생시키고 error payload를 공개하지 않는다.
 - Public poller의 `PollCompletion`은 Task settle 또는 detached cleanup이 끝난 뒤에만 반환된다.
+- Raw reply를 DEALER peer로 제출해 HWM·PAUSED 대기가 만료하면 `ZlinkSubmitException`의
+  `Backpressured`가 관찰되고, ROUTER peer로 제출하면 Completion connection의 HWM-free 결과가 유지된다.
 
 **ReplyToken과 STREAM**
 

@@ -175,6 +175,13 @@ application byte HWM or lease exists. The framework projects the Core
 runtime snapshot unchanged and neither recomputes it nor uses it for a
 different meaning.
 
+Under this Core meaning, DEALER-ROUTER reply bytes are included in
+`core_queue_accounted_bytes`, current, provisional, peak, and total messaging,
+and are excluded from Completion current, peak, pending, and direction count.
+Only reply bytes on a ROUTER-ROUTER [Completion connection](../00-foundation/02-glossary.en.md#completion-connection) are included in the
+Completion fields. Framework status uses the topology-specific classification,
+field names, snapshot layout, and ABI version from the Core runtime snapshot.
+
 The application job queue snapshot lets you observe: configured
 profile/manual max; configured pause/resume percent; effective processor
 count/effective max; computed pause/resume permit count; reserved supply
@@ -485,6 +492,10 @@ or contract test.
   the point where its Message Follow route can be removed and each unit's
   cutover retransmission window ends, and neither judgment uses another
   node's clock.
+- Controlled ClientServer DEALER-ROUTER reply bytes appear in ordinary Core
+  HWM accounting and total messaging, and don't appear in Completion fields.
+  RouteMesh ROUTER-ROUTER reply bytes appear in Completion current, peak, and
+  pending.
 
 **Topology status**
 

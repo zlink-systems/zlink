@@ -123,6 +123,11 @@ callback turn마다 새 permit을 얻는다.
 않는다. 이 분리는 ordinary queue가 포화돼도 이미 시작한 operation의 terminal completion이
 진행되게 한다.
 
+ClientServer의 Client DEALER reply는 Framework permit을 얻기 전에 Core의 single Application
+connection FIFO와 byte HWM·PAUSED를 통과한다. 따라서 Core가 reply를 completion으로 식별한 뒤에는
+permit을 우회하지만, 이 우회가 앞선 DATA를 건너뛰거나 Core transport progress를 보장하지는
+않는다. RouteMesh ROUTER-ROUTER reply는 별도 [Completion connection](../00-foundation/02-glossary.ko.md#completion-connection)으로 이 permit 경계에 도달한다.
+
 Source마다 outstanding permit waiter는 하나이며 가장 오래 기다린 source
 순서로 handoff한다. Batch를 처리한 source는 대기열 tail로 이동한다.
 
@@ -259,9 +264,9 @@ resume permit count = floor(M * R / 100)
 `running`에서는 permits in use가 pause count 이상이면 `paused`로 전이하고, `paused`에서는
 resume count 이하이면 `running`으로 전이한다. 두 경계 사이에서는 현재 상태를 유지한다.
 
-- **Framework는 전이한 절대 상태를 RouteMesh와 ClientServer가 사용하는 paired
-  DEALER/ROUTER socket에만 적용한다.** PUB/SUB, Classic fanout과 STREAM은 이 연동 범위가
-  아니며 기존 Core byte HWM과 각 구조적 queue 상한을 유지한다.
+- **Framework는 전이한 절대 상태를 RouteMesh의 ROUTER-ROUTER two-lane socket과
+  ClientServer의 DEALER-ROUTER single-lane socket에만 적용한다.** PUB/SUB, Classic fanout과
+  STREAM은 이 연동 범위가 아니며 기존 Core byte HWM과 각 구조적 queue 상한을 유지한다.
 - **`PAUSED`는 Core HWM 값을 바꾸지 않는다.** Core는 remote-pause blocker와 local
   byte-HWM blocker를 독립적으로 합성한다. `RUNNING`은 remote-pause 원인만 제거하므로
   local HWM이 계속 full이면 send는 계속 대기한다. Pressure 상태 자체는 route ready나
@@ -389,6 +394,9 @@ pressure 상태 조회, socket receive-flow 절대 상태, [Runtime metric](../0
 - 확인에 실패한 send·request는 owner queue의 건수·byte·sequence 관측값을 바꾸지 않는다.
 - Shared permit이 모두 예약되면 ordinary ingress가 cancellable wait하고, terminal
   reply·error completion은 계속 진행한다.
+- ClientServer reply가 Core physical head에 도달해 completion으로 식별된 뒤에는 permit을 얻지
+  않지만, 앞선 one-way DATA는 ordinary permit을 얻기 전 Core에서 dequeue하지 않는다. Permit
+  우회가 Core single FIFO·HWM을 건너뛰지 않는다.
 - 한 연결이 계속 보내는 동안에도 다른 연결의 수신이 진행된다.
 - 수신 한도가 건수·byte·경과 시간 셋 중 먼저 닿는 것으로 끊기고, 다음 수신 회전이
   이번에 멈춘 연결의 다음부터 시작한다.
@@ -400,7 +408,7 @@ pressure 상태 조회, socket receive-flow 절대 상태, [Runtime metric](../0
 
 - 80% pause, 60% resume과 경계 사이 hysteresis가 정확하다.
 - 새 socket 동기화, close 경쟁과 stale transition이 최신 절대 상태를 깨지 않는다.
-- 지원 paired socket(RouteMesh·ClientServer)에만 receive-flow state를 적용한다.
+- RouteMesh ROUTER-ROUTER와 ClientServer DEALER-ROUTER socket에만 receive-flow state를 적용한다.
 
 **Backpressure와 Core HWM**
 
@@ -411,7 +419,9 @@ pressure 상태 조회, socket receive-flow 절대 상태, [Runtime metric](../0
   caller 결과를 바꾸지 않고 관측에만 남는다.
 - Core receive byte HWM이 찼을 때 sender까지 backpressure가 전달되며 record를 버리지
   않는다.
-- Completion supply는 ordinary permit 포화와 독립적으로 진행한다.
+- RouteMesh ROUTER-ROUTER Completion supply는 ordinary permit 포화와 독립적으로 진행한다.
+- ClientServer DEALER-ROUTER reply는 Core single FIFO의 앞선 DATA와 HWM·PAUSED 뒤에서 늦어질 수
+  있으며 configured request timeout이 먼저 끝나면 late reply가 두 번째 terminal을 만들지 않는다.
 - Framework가 retained receive, `send_ready` waiter 또는 별도 send retry를 사용하지
   않는다.
 

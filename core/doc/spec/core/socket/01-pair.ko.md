@@ -67,11 +67,10 @@ submit은 새 record의 첫 part로 시작한다. 따라서 재시도하려면 �
 
 ## 3. Receive flow state
 
-DEALER와 ROUTER socket이 [completion lane](../glossary.ko.md#completion-progress-lane)으로
-peer에게 수신 중단·재개를 알리는 receive-flow 상태와 그 상수는
+DEALER와 ROUTER socket이 peer에게 수신 중단·재개를 알리는 receive-flow 상태와 그 상수는
 [Socket 공통](README.ko.md)이 정의한다.
 
-PAIR에는 paired DEALER/ROUTER completion lane이 없으므로 receive-flow 상태도 없다.
+PAIR은 receive-flow 대상 socket type이 아니다.
 `zlink_socket_set_receive_flow_state()`는 PAIR socket에 대해 `errno == ENOTSUP`과 함께
 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고 아무것도 바꾸지 않는다.
 [Socket 공통](README.ko.md)이 소유하는 byte [HWM](../glossary.ko.md#hwm)(queue 보관 byte

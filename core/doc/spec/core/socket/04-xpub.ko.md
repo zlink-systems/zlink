@@ -233,7 +233,7 @@ subject `EINVAL`)는 `ZLINK_RECV_INTERNAL_ERROR`로 표면화되며, `zlink_errn
 
 ## 6. Receive flow state
 
-XPUB에는 paired DEALER/ROUTER completion lane이 없으므로 receive-flow 상태도 없다.
+XPUB은 receive-flow 대상 socket type이 아니다.
 `zlink_socket_set_receive_flow_state()`는 XPUB socket에 대해 `errno == ENOTSUP`과 함께
 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고 아무것도 바꾸지 않는다. 기존 byte HWM,
 low water mark와 transport backpressure는 그대로 유지된다. XPUB socket의 monitor는

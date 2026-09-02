@@ -1547,9 +1547,12 @@ preserves Core ABI values and flags unchanged.
 
 ##### Receive ownership and routed completion
 
-Terminal replies and error replies use the HWM-free completion lane. A binding
-applies no SNDHWM, RCVHWM, HWM-readiness wait, or backpressure retry to this
-completion submit.
+Terminal replies and error replies sent to a DEALER peer use the current ready
+Application pipe and are subject to SNDHWM, RCVHWM, peer `PAUSED`, and
+`SNDTIMEO` admission, so `BACKPRESSURED` is possible. Replies sent to a ROUTER
+peer use HWM-free admission on the current ready Completion pipe. A binding
+passes through Core's native result for the peer type and adds no separate retry
+or readiness adapter.
 
 Core byte HWM accounts the physical-frame charge retained by a Core queue:
 payload bytes plus the `sizeof(zlink_msg_t)` metadata charge. The charge ends
@@ -1998,12 +2001,13 @@ Every data-path function (`send`, `recv`, `request`, `reply`,
      caller can distinguish the failure cause.
    - Failures allowed by an operation's contract, including
      `BACKPRESSURED`, `NOT_CONNECTED`, and `NOT_FOUND`, are delivered as
-     exceptions. These are never return values. A raw terminal reply is the
-     exception: its HWM-free completion lane does not admit `BACKPRESSURED`.
-   - When a terminal reply has no target route, the failure is
-     `NOT_CONNECTED` (`ENOTCONN`). The same rule applies both when no
-     completion pipe is found for the target and when an already selected
-     target disappears while the reply is being committed. This is not
+     exceptions. These are never return values. A raw terminal reply admits
+     `BACKPRESSURED` when it uses the current ready Application pipe to a
+     DEALER peer, but does not admit HWM backpressure when it uses the current
+     ready Completion pipe to a ROUTER peer.
+   - When no current ready reply route exists, a terminal reply fails with
+     `NOT_CONNECTED` (`ENOTCONN`). The same rule applies when an already
+     selected reply route disappears while the reply is being committed. This is not
      backpressure, so readiness (`POLLOUT`) does not make a retry viable. A
      binding never retains such a one-shot reply nor resubmits it
      automatically, and it does not hand parts that were already consumed
@@ -4647,9 +4651,12 @@ and is not treated as an error.
 | 12 | `INTERNAL_ERROR` | `EPROTO`, and so on | internal failure | an internal submit failure (see `zlink_errno()` for detail) |
 
 This enum is shared by the submit function family; that does not make every
-value applicable to every function. `BACKPRESSURED` applies only to HWM-managed
-send, publish, and request submit. A raw ROUTER/`Received` reply makes one
-submission to the HWM-free completion lane and never returns `BACKPRESSURED`.
+value applicable to every function. `BACKPRESSURED` applies to HWM-managed
+send, publish, and request submit. A raw ROUTER/`Received` reply can also return
+`BACKPRESSURED` when the target peer is a DEALER because admission on the single
+Application connection is subject to HWM, `PAUSED`, and `SNDTIMEO`. When the
+target peer is a ROUTER, the reply makes one submission to the HWM-free
+Completion connection and does not return HWM backpressure.
 
 ##### `zlink_request_result_t` (request completion callback)
 
@@ -4869,13 +4876,15 @@ the errno classification.
 **Reply errors (`SubmitError`):**
 
 Raw ROUTER/`Received` reply is a synchronous one-shot submit in every
-high-level binding. It submits a terminal reply or error reply to the HWM-free
-completion lane with one native call. HWM backpressure is not a reply result;
-the non-HWM failures below are delivered immediately.
+high-level binding. It submits a terminal reply or error reply with one native
+call. Admission to a DEALER peer is subject to Application HWM, `PAUSED`, and
+`SNDTIMEO`; a ROUTER peer uses the HWM-free Completion connection. The following
+results are delivered immediately.
 
 | Situation | `reply()` |
 |------|-----------|
 | success | returns normally |
+| the HWM/`PAUSED` wait for a DEALER peer expires | `SubmitError(BACKPRESSURED)` |
 | not connected | `SubmitError(NOT_CONNECTED)` |
 | socket/context terminated | `SubmitError(TERMINATED)` |
 | invalid argument | `SubmitError(INVALID_ARGUMENT)` |
@@ -6137,6 +6146,13 @@ maps to one contract test.
 - When a peer sends a valid wire error reply with errno `EAGAIN` or `ENOBUFS`, public request
   completion produces the binding's `BACKPRESSURED` error, and all 66 non-OK values in the
   Public Result Enum Catalog remain distinguishable.
+- When a raw reply to a DEALER peer is not admitted within `SNDTIMEO` because
+  of Application HWM or `PAUSED`, each language returns `BACKPRESSURED`. A raw
+  reply to a ROUTER peer returns the HWM-free admission result of the current
+  ready Completion pipe.
+- Every binding provides receive-flow setter, request/reply,
+  completion-receive, and monitor signatures. No public API sets or queries the
+  lane count.
 
 <!-- bindings-nav:start -->
 [Spec index](README.en.md)

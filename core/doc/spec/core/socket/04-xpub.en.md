@@ -207,7 +207,7 @@ the detailed internal errno for diagnostics.
 
 ## 6. Receive Flow State
 
-XPUB has no paired DEALER/ROUTER completion lane, so it has no receive-flow state. `zlink_socket_set_receive_flow_state()` returns
+XPUB is not a socket type that supports receive flow. `zlink_socket_set_receive_flow_state()` returns
 `ZLINK_CONFIG_NOT_SUPPORTED` with `errno == ENOTSUP` for an XPUB socket and changes nothing. The existing byte HWM, low water mark, and
 transport backpressure remain in effect. A monitor for an XPUB socket does not set `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` and does not
 emit `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, or `ZLINK_EVENT_FLOW_STATE_STALE`.

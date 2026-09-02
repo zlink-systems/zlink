@@ -394,9 +394,10 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
 - PUB/XPUB `publish`와 ROUTER reply는 별도의 동기
   operation 계약을 유지한다. Raw ROUTER/`Received` reply의 terminal은
   `ReplyOp<Ready>::submit() -> Result<(), SubmitError>`인 one-shot이다. Native reply를
-  HWM 없는 completion lane에 한 번 호출해 terminal reply 또는 error reply를 제출한다.
-  HWM backpressure는 reply 결과가 아니며 `NOT_CONNECTED`, `TERMINATED`,
-  `INVALID_ARGUMENT`와 그 밖의 non-HWM submit 실패는 즉시 `Err(SubmitError)`로 반환한다.
+  한 번 호출해 terminal reply 또는 error reply를 제출한다. DEALER peer에는 Application
+  HWM·PAUSED와 `SNDTIMEO`를 적용하여 `BACKPRESSURED`가 될 수 있고, ROUTER peer에는 HWM 없는
+  Completion connection을 사용한다. `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`와 그 밖의
+  submit 실패는 즉시 `Err(SubmitError)`로 반환한다.
 
 ## Crate 레이아웃
 
@@ -461,7 +462,7 @@ version/size 불일치는 unsupported error다.
 `CommonSocketOptions::set_receive_flow_state(&self, value: ReceiveFlowState)
 -> Result<(), ConfigError>`다. Rust 에러 정책을 따른다. 성공은 `Ok(())`이고 실패는
 `Err(ConfigError)`인데, 이 바인딩은 `ConfigResult`를 반환된 result 코드가 아니라 native
-errno에서 도출한다. 따라서 completion lane이 없는 socket의 `ENOTSUP`은
+errno에서 도출한다. 따라서 receive-flow를 지원하지 않는 socket의 `ENOTSUP`은
 `ConfigResult::NotSupported`가 되고 `EINVAL`은 `ConfigResult::InvalidArgument`가 된다.
 이미 유지하는 상태를 다시 설정하면 `Ok(())`를 반환한다.
 
@@ -742,6 +743,9 @@ test 하나로 이어진다.
   정리한다.
 - Non-OK request completion은 typed `ZlinkError`만 제공하고 error payload를 공개하지 않는다.
 - `POLLCOMPLETION`은 Future settle 또는 detached cleanup이 끝난 뒤에만 반환된다.
+- Raw reply를 DEALER peer로 제출해 HWM·PAUSED 대기가 만료하면
+  `BACKPRESSURED` code를 가진 `Err(SubmitError)`가 관찰되고, ROUTER peer로 제출하면 Completion
+  connection의 HWM-free 결과가 유지된다.
 
 **ReplyToken과 STREAM**
 

@@ -236,7 +236,7 @@ batch나 configuration object를 동시에 사용한 경우다.
 | DEALER 또는 ROUTER handle과 `zlink_receive_flow_state_t` 범위 안의 state. Socket이 이미 유지하는 state를 다시 설정한 경우를 포함한다 | `ZLINK_CONFIG_OK` | 정의하지 않음 |
 | Handle이 NULL이거나 socket이 아니거나, close의 teardown이 이미 끝난 handle | `ZLINK_CONFIG_INVALID_HANDLE` | 정의하지 않음 |
 | `zlink_receive_flow_state_t` 범위 밖의 state 값 | `ZLINK_CONFIG_INVALID_ARGUMENT` | `EINVAL` |
-| Completion lane이 없는 socket 유형: PAIR, PUB, SUB, XPUB, XSUB, STREAM | `ZLINK_CONFIG_NOT_SUPPORTED` | `ENOTSUP` |
+| Receive-flow를 지원하지 않는 socket 유형: PAIR, PUB, SUB, XPUB, XSUB, STREAM | `ZLINK_CONFIG_NOT_SUPPORTED` | `ENOTSUP` |
 | 동시에 진행한 close가 이 호출보다 먼저 socket admission을 얻음 | `ZLINK_CONFIG_INVALID_STATE` | `ESHUTDOWN` |
 | 소유 [Context](glossary.ko.md#context)가 종료 중 | `ZLINK_CONFIG_INTERNAL_ERROR` | `ETERM` |
 
@@ -566,6 +566,9 @@ Hierarchy)를, 전체 enum 목록은 위의 [Result와 errno 대응](#result와-
 
 **Receive flow state**
 - `zlink_socket_set_receive_flow_state()`는 [§4.6](#46-receive-flow-state-설정-결과)의 각 조건에서 그 행의 result와 errno를 반환한다.
+- DEALER는 별도 Completion lane 없이도 `zlink_socket_set_receive_flow_state()`를 지원하며 유효한
+  상태에 `ZLINK_CONFIG_OK`를 반환한다. PAIR·PUB·SUB·XPUB·XSUB·STREAM은 socket type이
+  receive-flow 대상이 아니므로 `ZLINK_CONFIG_NOT_SUPPORTED`와 `ENOTSUP`을 반환한다.
 - Socket이 이미 유지하는 state를 다시 설정하면 `ZLINK_CONFIG_OK`로 성공하는 no-op다.
 - 동시에 진행하는 close와 경합하면 `ZLINK_CONFIG_INVALID_STATE`(`ESHUTDOWN`) 또는 `ZLINK_CONFIG_INVALID_HANDLE` 중 하나만 관측되고, 어느 쪽도 state를 일부만 적용하지 않는다.
 

@@ -62,5 +62,8 @@ caps, like filling them with water.
 
 ### completion progress lane
 
-A separate path in DEALER and ROUTER that handles progress only for terminal replies and error replies. It is
-excluded from HWM admission and budget calculation.
+A separate physical connection that ROUTER-ROUTER uses to break a bidirectional request wait cycle. It
+carries terminal replies, error replies, and receive-flow control and is excluded from HWM admission and
+Application budget calculation. DEALER-ROUTER has no such lane; replies use its single Application
+connection. This physical connection is distinct from the socket-local completion queue consumed by
+`zlink_completion_recv()`.

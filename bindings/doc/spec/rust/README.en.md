@@ -341,10 +341,11 @@ public crate items and re-exports.
   releases provisional-registry state and the native payload.
 - PUB/XPUB `publish` and ROUTER reply retain separate synchronous operation contracts. The raw
   ROUTER/`Received` reply terminal is the one-shot
-  `ReplyOp<Ready>::submit() -> Result<(), SubmitError>`. It submits a terminal reply or error reply to
-  the HWM-free completion lane with one native call. HWM backpressure is not a reply result;
-  `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`, and other non-HWM submit failures return
-  immediately as `Err(SubmitError)`.
+  `ReplyOp<Ready>::submit() -> Result<(), SubmitError>`. It submits a terminal reply or error reply
+  with one native call. A DEALER peer is subject to Application HWM, `PAUSED`, and `SNDTIMEO`, so the
+  result can be `BACKPRESSURED`; a ROUTER peer uses the HWM-free Completion connection.
+  `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`, and other submit failures return immediately as
+  `Err(SubmitError)`.
 
 ## Crate layout
 
@@ -415,7 +416,7 @@ enum with `Running = 0` and `Paused = 1`. The setter is
 facade. It follows the Rust error policy: success is `Ok(())`, and a failure is
 `Err(ConfigError)` whose `ConfigResult` this binding derives from the native
 errno rather than from the returned result code. `ENOTSUP` therefore becomes
-`ConfigResult::NotSupported` for a socket without a completion lane, and
+`ConfigResult::NotSupported` for a socket that doesn't support receive flow, and
 `EINVAL` becomes `ConfigResult::InvalidArgument`. Setting the state the socket
 already holds returns `Ok(())`.
 
@@ -669,6 +670,9 @@ item maps to one contract test.
   native aggregate.
 - A non-OK request completion exposes only typed `ZlinkError` and does not expose the error payload.
 - `POLLCOMPLETION` returns only after Future settlement or detached cleanup finishes.
+- When HWM/`PAUSED` waiting expires for a raw reply submitted to a DEALER peer,
+  `Err(SubmitError)` carries the `BACKPRESSURED` code; a reply submitted to a
+  ROUTER peer retains the HWM-free result of the Completion connection.
 
 **ReplyToken and STREAM**
 

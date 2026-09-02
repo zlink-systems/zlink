@@ -54,7 +54,7 @@ Core는 다음 기능을 공개 C ABI로 제공한다.
 - raw socket monitor, generic event, poll과 poller
 - generic timer, thread, stopwatch, atomic counter와 proxy
 - request, handshake와 reconnect timeout
-- Paired DEALER/ROUTER의 receive-flow 상태
+- DEALER·ROUTER의 receive-flow 상태
 
 ## 3. Framework가 소유하는 기능
 
@@ -76,11 +76,12 @@ Framework runtime은 언어 binding의 공개 raw socket API만 사용해 servic
 공통 native service runtime, 별도 Core C SPI, private binding 진입점과 language-neutral service C ABI를 두지
 않는다.
 
-Core는 paired DEALER/ROUTER socket의 receive-flow 상태를
+Core는 DEALER-DEALER와 DEALER-ROUTER socket의 receive-flow 상태를 single Application
+connection의 Core control frame으로 운반하고, ROUTER-ROUTER에서는
 [completion progress lane](glossary.ko.md#completion-progress-lane)(terminal reply와 error
-reply의 진행만 담당하는 별도 경로, 이하 completion lane)의 frame으로 운반하고 그 frame을
-runtime 내부에서 소비한다. 이 lane이 [HWM](glossary.ko.md#hwm) admission과 Auto HWM
-budget에서 제외되는 계약은 [Auto HWM](systems/06-auto-hwm.ko.md)이 소유한다. 이 상태의
+reply의 진행도 담당하는 별도 경로, 이하 completion lane)으로 운반한다. 두 frame은 runtime
+내부에서 소비한다. ROUTER-ROUTER completion lane이 [HWM](glossary.ko.md#hwm) admission과
+Auto HWM budget에서 제외되는 계약은 [Auto HWM](systems/06-auto-hwm.ko.md)이 소유한다. 이 상태의
 공개 표면은 설정용 `zlink_socket_set_receive_flow_state()`, 관측용 receive-flow monitor
 event 3개, monitor status snapshot의 receive-flow field다. Raw flow-state frame을 수신,
 송신, encode 또는 decode하는 공개 API는 없으며 flow-state frame은 application receive
@@ -165,13 +166,17 @@ Core connection identity는 physical lifetime을 구분하는 raw 관측 값이�
 generation, descriptor revision, Actor authority owner generation이나 Location authority store version으로
 해석하지 않는다.
 
-DEALER/ROUTER request-reply에서 하나의 logical peer는 Application과 Completion transport
-connection을 가진다. Core는 Application write를 허용하기 전에 두 connection의 pair ID,
-pair generation, lane과 peer identity를 검증한다. 한 lane이 실패하면 두 lane을 모두
-종료한다. 일반 message와 request는 Application lane을 사용하고 reply는 Completion
-lane을 사용한다. 따라서 Application ingress가
-[backpressure](glossary.ko.md#backpressure)(수신이 처리 속도를 따라오지 못할 때 sender의
-추가 제출을 제한하는 동작)로 중단되어도 이미 보낸 request를 완료할 수 있다.
+DEALER-ROUTER logical peer는 Application transport connection 하나를 사용한다. DATA·REQUEST·
+REPLY·error reply는 같은 physical FIFO와 Application HWM·PAUSED를 공유한다. ROUTER가 먼저 보낸
+DATA를 DEALER가 dequeue하지 않으면 뒤 REPLY가 앞지르지 못하며 request timeout이 먼저 완료될 수
+있다. DEALER-DEALER도 Application connection 하나를 사용하고 typed request는 허용하지 않는다.
+
+ROUTER-ROUTER logical peer는 Application과 Completion transport connection을 사용한다. Core는
+Application write를 허용하기 전에 두 connection의 pair ID, pair generation, lane과 peer identity를
+검증한다. 한 lane이 실패하면 두 lane을 모두 종료한다. 일반 message와 request는 Application
+lane을, reply는 Completion lane을 사용한다. 따라서 ROUTER-ROUTER Application ingress가
+[backpressure](glossary.ko.md#backpressure)(수신이 처리 속도를 따라오지 못할 때 sender의 추가
+제출을 제한하는 동작)로 중단되어도 이미 보낸 request를 완료할 수 있다.
 
 각 lane의 payload는 directional network pipe에만 보관한다. 수신한 application payload를
 숨은 PAIR queue로 옮기지 않으며 reply payload를 completion deque로 복사하지 않는다.
@@ -253,6 +258,10 @@ send·receive·monitor 결과)만으로 다음을 확인한다. 각 항목은 �
   monitor event 3개와 monitor status snapshot의 receive-flow field뿐이다.
 - Raw flow-state frame을 수신, 송신, encode 또는 decode하는 공개 API가 없고, flow-state
   frame이 application receive 호출로 전달되지 않는다.
+- DEALER-ROUTER는 single Application connection, ROUTER-ROUTER는 Application·Completion
+  connection을 사용하며 두 topology 모두 logical peer마다 `CONNECTION_READY`를 한 번만 관찰한다.
+- Framework runtime은 이 topology 차이와 관계없이 Core public raw socket API만 사용하고 raw
+  FLOWSTATE를 직접 만들거나 해석하지 않는다.
 
 **Framework 경계**
 - Framework runtime은 Core public raw surface만 사용한다.

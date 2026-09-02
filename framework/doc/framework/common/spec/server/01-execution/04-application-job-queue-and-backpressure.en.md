@@ -135,6 +135,13 @@ classified later and retroactively gain this bypass. This separation lets termin
 completions of operations already in progress continue while the ordinary queue is
 saturated.
 
+A reply to a ClientServer Client DEALER traverses Core's single Application
+connection FIFO and byte HWM/`PAUSED` before it reaches the Framework permit
+boundary. It bypasses the permit after Core identifies it as a completion, but
+that bypass neither skips earlier DATA nor guarantees Core transport progress.
+A RouteMesh ROUTER-ROUTER reply reaches this permit boundary through the
+separate [Completion connection](../00-foundation/02-glossary.en.md#completion-connection).
+
 Each source has one outstanding permit waiter, handed off in oldest-waiter
 order. A source that processed a batch moves to the tail of the queue.
 
@@ -294,10 +301,10 @@ satisfy `R < P`. In `running`, the state transitions to `paused` when permits in
 reach the pause count, and in `paused`, it transitions to `running` when they fall to
 the resume count. Between the two thresholds, the current state is retained.
 
-- **Framework applies the transitioned absolute state only to paired DEALER/ROUTER
-  sockets used by RouteMesh and ClientServer.** PUB/SUB, Classic fanout, and STREAM are
-  outside this integration and retain their existing Core byte HWM and structural queue
-  limits.
+- **Framework applies the transitioned absolute state only to RouteMesh
+  ROUTER-ROUTER two-lane sockets and ClientServer DEALER-ROUTER single-lane
+  sockets.** PUB/SUB, Classic fanout, and STREAM are outside this integration
+  and retain their existing Core byte HWM and structural queue limits.
 - **`PAUSED` does not change a Core HWM value.** Core independently composes a
   remote-pause blocker and a local byte-HWM blocker. `RUNNING` removes only the
   remote-pause reason, so a send remains waiting while local HWM is still full.
@@ -442,6 +449,10 @@ names — confirms the following. Each item leads to one contract test.
   count/byte/sequence values.
 - When all shared permits are reserved, ordinary ingress waits cancellably, and terminal
   reply/error completion continues to progress.
+- Once a ClientServer reply reaches the Core physical head and Core identifies
+  it as a completion, it acquires no permit. Earlier one-way DATA isn't dequeued
+  from Core before an ordinary permit is acquired, so the permit bypass doesn't
+  skip the Core single FIFO or HWM.
 - While one connection keeps sending, another connection's receiving still progresses.
 - The receive bound cuts off at whichever of count/bytes/elapsed time is hit first, and
   the next receive rotation starts right after the connection this one stopped at.
@@ -454,8 +465,8 @@ names — confirms the following. Each item leads to one contract test.
 - The 80% pause, 60% resume, and hysteresis between the thresholds are precise.
 - New-socket synchronization, close races, and stale transitions do not break the
   latest absolute state.
-- Receive-flow state is applied only to supported paired sockets (RouteMesh/
-  ClientServer).
+- Receive-flow state is applied only to RouteMesh ROUTER-ROUTER and
+  ClientServer DEALER-ROUTER sockets.
 
 **Backpressure and Core HWM**
 
@@ -469,7 +480,11 @@ names — confirms the following. Each item leads to one contract test.
   only as an observation.
 - When the Core receive byte HWM fills, backpressure is carried to the sender and a
   record is not dropped.
-- Completion supply progresses independently of ordinary permit saturation.
+- RouteMesh ROUTER-ROUTER Completion supply progresses independently of
+  ordinary permit saturation.
+- A ClientServer DEALER-ROUTER reply can be delayed behind earlier DATA,
+  HWM, and `PAUSED` in the Core single FIFO. If the configured request timeout
+  ends first, the late reply doesn't create a second terminal.
 - Framework does not use retained receive, a `send_ready` waiter, or a separate send
   retry.
 

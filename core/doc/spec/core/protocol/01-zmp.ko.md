@@ -78,6 +78,9 @@ runtime은 request 대상이나 pending completion을 찾은 뒤 public receive�
 | KIND | 3 | 1 | `0x00` data, `0x01` request, `0x02` reply, `0x03` error reply |
 | PAYLOAD SIZE | 4-7 | 4 | Sequence extension을 제외한 application payload 크기, Big Endian |
 
+`VERSION`은 header byte 배치의 version이며 값은 `0x01`이다. READY metadata property 집합이
+달라져도 이 값을 바꾸지 않는다.
+
 Ordinary data frame은 이 8 byte header 바로 뒤에 payload가 온다. Request-reply kind인 첫
 frame은 공통 header 뒤에 8 byte unsigned Big Endian request sequence를 붙여 16 byte
 header를 만든다.
@@ -119,26 +122,29 @@ kind는 `CONTROL`, `IDENTITY`, `SUBSCRIBE` 또는 `CANCEL`과 함께 사용할 �
 
 ## 4. Handshake
 
-연결이 만들어지면 active 쪽은 HELLO frame 뒤에 READY frame을 연속해서 보낸다. Transport가
-이 byte 열을 여러 write나 RFC 6455 binary message로 나누는 방법은 ZMP frame 순서에 영향을
-주지 않는다. Paired DEALER·ROUTER transport의 passive 쪽은 HELLO만 먼저 보내고, peer READY를
-수신한 뒤 자기 READY를 보낸다. Passive 쪽은 이 READY의 transport write가 성공적으로
-완료된 뒤에만 local connection readiness와 pair admission을 공개한다. READY write가
-실패하면 handshake를 실패로 끝내며 readiness를 공개하지 않는다. Active 쪽은 passive
-READY를 수신한 뒤에만 data 교환을 시작한다.
+DEALER·ROUTER가 아닌 연결에서 active 쪽은 HELLO frame 뒤에 READY frame을 연속해서 보낸다.
+Transport가 이 byte 열을 여러 write나 RFC 6455 binary message로 나누는 방법은 ZMP frame
+순서에 영향을 주지 않는다.
+
+DEALER·ROUTER 연결에서는 양쪽이 HELLO만 먼저 보내고 peer HELLO의 socket type을 확인한 뒤
+[§4.1](#41-request-reply-lane)의 lane count를 정하여 READY를 보낸다. Active socket owner가
+count를 정하는 동안 engine은 READY를 보류한다. Endpoint가 취소되거나 `HANDSHAKE_IVL`이
+끝나면 보류한 READY와 선택적인 Completion connection 생성을 함께 취소한다. Passive 쪽은
+자기 READY의 transport write가 성공적으로 완료되고 socket lane-set admission과 Application
+scheduler attach가 끝난 뒤에만 local connection readiness를 공개한다. READY write가 실패하면
+handshake를 실패로 끝내며 readiness를 공개하지 않는다.
 
 ```mermaid
 sequenceDiagram
     participant A as Active peer
     participant P as Passive peer
 
-    A->>P: HELLO
-    A->>P: READY
-    P->>A: HELLO
-    Note over P: peer READY 수신·검증
-    P->>A: READY
-    Note over P: READY write 완료 후 local readiness 공개
-    Note over A: passive READY 수신·검증 후 data 교환 시작
+    A->>P: HELLO(socket type, RID)
+    P->>A: HELLO(socket type, RID)
+    Note over A,P: 두 socket type으로 lane count 결정
+    A->>P: READY(Lane-Count, Lane)
+    P->>A: READY(Lane-Count, Lane)
+    Note over A,P: 필요한 lane 검증과 attach 뒤 logical readiness 공개
 ```
 
 **HELLO frame**: control type(1 byte), socket type(1 byte),
@@ -156,9 +162,8 @@ transport peer를 식별하는 byte 열이다.
 DEALER 또는 ROUTER일 때만 `Routing-Id`도 추가한다. Metadata를 사용하는 READY에는
 `Zlink-Max-Message-Size`를 항상 추가하며, 값은 unsigned 64-bit big-endian 8 byte다. 값 `0`은
 양수 Application maximum이 없음을 뜻한다.
-이 option의 기본값은 비활성화다. 다만 paired DEALER·ROUTER transport는 이 option과
-관계없이 metadata와 [§4.1](#41-request-reply-lane)의 lane property를 항상
-추가한다.
+이 option의 기본값은 비활성화다. 다만 DEALER·ROUTER transport는 이 option과 관계없이
+metadata와 [§4.1](#41-request-reply-lane)의 lane property를 항상 추가한다.
 
 **ERROR frame**: ERROR control type은 `0x05`다. Body는 다음 byte 순서로 구성한다.
 
@@ -168,24 +173,35 @@ DEALER 또는 ROUTER일 때만 `Routing-Id`도 추가한다. Metadata를 사용�
 
 ### 4.1 Request-reply lane
 
-Request-reply를 사용하는 하나의 logical DEALER/ROUTER peer는 두 physical transport
-connection을 사용한다.
+DEALER·ROUTER transport의 physical connection 수는 양쪽 socket type으로 정한다.
 
-| Lane | 전달하는 traffic |
-|---|---|
-| Application | 일반 application message와 request |
-| Completion | 이미 보낸 request를 완료하는 reply와 receive-flow control |
+| Socket 쌍 | Lane count | Physical lane과 traffic |
+|---|---:|---|
+| DEALER-DEALER | `1` | Application lane 하나가 DATA와 Core control을 운반한다. Typed request는 사용할 수 없다. |
+| DEALER-ROUTER | `1` | Application lane 하나가 DATA·REQUEST·REPLY·error reply와 FLOWSTATE·WEIGHT를 운반한다. ROUTER에서 DEALER로 보내는 typed request는 허용하지 않는다. |
+| ROUTER-ROUTER | `2` | Application lane은 DATA·REQUEST·WEIGHT를, Completion lane은 REPLY·error reply·FLOWSTATE를 운반한다. |
 
-두 connection의 READY frame에는 `Zlink-Lane`이 들어간다. 값은 한 byte이며 Application은
-`0`, Completion은 `1`이다. 물리 connection ID와 generation은 wire property나 public target이
-아니다. `Zlink-Lane`은 application traffic과 completion traffic을 구분하는 내부 protocol
-property다.
+DEALER·ROUTER READY에는 이 option과 관계없이 `Socket-Type`, `Routing-Id`, `Zlink-Lane-Count`와
+`Zlink-Lane`이 들어간다. `Zlink-Lane-Count`는 1 byte `1` 또는 `2`이며 위 표와 일치해야 한다.
+`Zlink-Lane`도 1 byte이고 Application은 `0`, Completion은 `1`이다. Count `1`에서는 lane `0`만,
+count `2`에서는 lane `0`과 `1`을 정확히 한 번씩 허용한다. Lane-count 함수는
+`(local socket type, peer socket type)`의 순서를 바꾸어도 같은 값을 반환한다.
 
-READY의 `Routing-Id`는 두 connection이 같은 peer에 속하는지 검증하는 metadata다. Runtime은
-ROUTER가 peer를 선택하는 synthetic routing-id preamble을 Application lane에만 제공한다.
-Completion lane은 이 preamble과 ordinary `data` record를 전달하지 않는다. READY 뒤
-Completion lane에 record가 들어오면 첫 record는 reply, error reply 또는 receive-flow
-control이어야 한다.
+`Zlink-Lane-Count`나 `Zlink-Lane`이 없거나 길이·값이 잘못된 경우, 계산한 count와 advertised
+count가 다른 경우, count `1`에 lane `1`이 온 경우, count `2`에서 lane이 중복되거나
+`HANDSHAKE_IVL` 안에 모두 오지 않은 경우에는 READY protocol error로 관련 lane set 전체를
+닫고 logical readiness를 공개하지 않는다. Count `2`의 두 connection은 socket type,
+`Routing-Id`와 count가 모두 같아야 한다. 구버전 READY에는 `Zlink-Lane-Count`가 없으므로
+연결을 거부하며, 기존 두-lane DEALER-ROUTER로 되돌리는 fallback이나 mixed-version shim은
+제공하지 않는다. DEALER·ROUTER가 아닌 socket pattern은 physical connection 하나를 사용하며
+`Zlink-Lane-Count`와 `Zlink-Lane`을 보내지 않는다.
+
+물리 connection ID와 generation은 wire property나 public target이 아니다. `Zlink-Lane`은
+physical connection을 분류하는 내부 protocol property다. READY의 `Routing-Id`는 count `2`의
+두 connection이 같은 peer에 속하는지 검증하는 metadata다. Runtime은 ROUTER가 peer를 선택하는
+synthetic routing-id preamble을 Application lane에만 제공한다. Completion lane은 이 preamble과
+ordinary `data` record를 전달하지 않는다. READY 뒤 Completion lane에 record가 들어오면 첫
+record는 reply, error reply 또는 receive-flow control이어야 한다.
 
 Peer-weight advertisement는 Application lane의 peer 선택만 제어한다. Network transport는
 Application connection의 ZMP `WEIGHT` command로 절대값 `0..10000`을 보내고, inproc은 상대
@@ -209,27 +225,42 @@ public receive에도 나타나지 않는다.
 
 금지된 flag 조합과 독립 상한을 넘은 CONTROL body는 계속 구조적인 protocol 오류다.
 
-Bind나 connect 전에 설정한 weight는 paired Application pipe가 준비된 뒤에만 상대 scheduler와
+Bind나 connect 전에 설정한 weight는 Application pipe가 준비된 뒤에만 상대 scheduler와
 동기화한다. Dynamic 변경도 양방향에서 `0`을 포함한 새 절대값을 적용한다. 같은 pipe에 마지막으로
 알린 값과 같으면 command를 다시 만들지 않는다. Reconnect 뒤 새 Application pipe가 ready가 되면
 현재 설정값을 그 pipe로 다시 알린다.
 
-Network `WEIGHT` command는 application HWM과 remote PAUSE를 우회할 수 있다. 그러나 pair-ready
+Network `WEIGHT` command는 application HWM과 remote PAUSE를 우회할 수 있다. 그러나 logical-ready
 hold와 한 Application multipart의 part 사이에 다른 record를 넣지 않는 atomic 경계는 우회하지
 않는다. Application multipart가 열린 동안 sender는 가장 최근 weight 하나만 고정된 `uint32`
 상태로 보관한다. FINAL이 multipart를 commit하거나 rollback이 multipart를 제거한 뒤, 그 결과로
 생긴 다음 message 경계에서만 가장 최근 command를 append하고 publish한다.
 
-Application write는 두 lane의 검증이 끝날 때까지 대기한다. 이전 connection에서 수신한 data를
-새 connection에 연결하지 않는다. 한 lane에서 protocol error, identity mismatch, fence timeout
-또는 terminal failure가 발생하면 두 lane을 종료한다. Reconnect는 두 lane을 다시 검증한 뒤
-Application write를 재개한다.
+FLOWSTATE도 가장 최근 절대 상태 하나를 보관하는 별도 pending slot을 사용한다. FLOWSTATE와
+WEIGHT slot은 update마다 공유 monotonic enqueue sequence를 새로 받고, 같은 kind의 새 값이 이전
+값을 덮으면 sequence도 새 update 시점으로 옮긴다. 다음 record 경계에서는 살아남은 slot만
+sequence 오름차순으로 append한다. 예를 들어 `FLOW(PAUSED) → WEIGHT → FLOW(RUNNING)`이면
+PAUSED는 쓰지 않고 WEIGHT 뒤에 RUNNING을 쓴다. 두 control은 Application HWM과 remote PAUSED를
+우회하지만 inactive·initial transport hold, 이미 commit한 record와 열린 multipart를 앞지르지
+않는다.
 
-FIFO 순서는 각 lane 안에서만 보장한다. 두 lane 사이의 순서는 보장하지 않는다.
-Application ingress가 수신 처리가 밀려 추가 제출을 제한하는
-[backpressure](../glossary.ko.md#backpressure)로 중단되어도 Completion reply를
-처리할 수 있다. Relocation, session binding과 그 밖의 상위 protocol은 두
-connection 사이의 순서에 의존하지 않고 자체 generation fence를 사용해야 한다.
+Application write는 count별 expected lane이 검증되고 logical readiness가 공개될 때까지
+대기한다. Count `1`도 local pair ID와 generation을 유지한다. Active connector의 count `1`
+connection이 끊기면 generation을 한 번 증가시키고 Application connection 하나만 다시 연다.
+Count `2`의 한 lane이 끊기면 두 lane을 모두 닫고 같은 새 local generation으로 다시 연다.
+새 generation이 ready가 되면 현재 receive-flow 절대 상태를 다시 보내며 이전 connection ID와
+generation의 REPLY와 FLOWSTATE는 폐기한다.
+
+DEALER-ROUTER single connection의 DATA·REQUEST·REPLY·error reply는 같은 physical FIFO와
+Application byte HWM을 사용하고 peer가 알린 PAUSED를 함께 적용한다. FLOWSTATE와 WEIGHT는 Core
+control이므로 HWM·remote PAUSED를 우회하지만 이미 commit한 record와 열린 multipart를
+앞지르지 않는다. ROUTER-ROUTER에서는 FIFO 순서를 각 lane 안에서만 보장하며 두 lane 사이의
+순서는 보장하지 않는다. Application ingress가 [backpressure](../glossary.ko.md#backpressure)로
+중단되어도 별도 Completion lane의 reply를 처리할 수 있다.
+
+DEALER-ROUTER single connection에서 ROUTER가 먼저 보낸 DATA와 이후 REPLY·error reply는 같은
+FIFO를 사용한다. DEALER가 앞선 DATA를 dequeue하지 않거나 local PAUSED가 유지되면 REPLY는
+앞지르지 못하며 request timeout이 먼저 terminal completion을 만들 수 있다.
 
 ## 5. Request-reply kind와 sequence
 
@@ -240,8 +271,8 @@ connection 사이의 순서에 의존하지 않고 자체 generation fence를 �
 |---|---:|---|---|
 | data | `0x00` | 없음 | Payload를 ordinary message로 받는다. |
 | request | `0x01` | 0이 아닌 8 byte Big Endian 값 | ROUTER receive가 payload와 public reply token을 반환한다. Wire 값은 public token이 아니다. |
-| reply | `0x02` | 원래 request와 같은 값 | Completion lane이 해당 pending request의 REQUEST completion을 만든다. |
-| error reply | `0x03` | 원래 request와 같은 값 | Completion lane이 첫 payload part의 errno를 오류 completion으로 바꾼다. |
+| reply | `0x02` | 원래 request와 같은 값 | DEALER-ROUTER에서는 Application lane의 physical head에서, ROUTER-ROUTER에서는 Completion lane에서 해당 pending request의 REQUEST completion을 만든다. |
+| error reply | `0x03` | 원래 request와 같은 값 | 같은 peer-type별 reply 경로가 첫 payload part의 errno를 오류 completion으로 바꾼다. |
 
 Multipart request-reply는 첫 application frame에만 request-reply kind와 sequence를
 기록한다. 첫 frame의 `MORE`가 설정되면 둘째 frame부터 `KIND == 0x00`이고, 마지막
@@ -278,13 +309,14 @@ sequenceDiagram
     R-->>R: router_recv_part로 RID·reply token·payload 공개
     R->>R: reply token으로 internal sequence N 조회
     R->>R: 첫 reply payload에 reply kind와 sequence N 연결
-    R->>R: routing_id로 Completion pipe 선택 (local key)
+    R->>R: routing_id와 peer type으로 reply pipe 선택 (local key)
     R->>D: [REPLY + sequence N][application reply payload]
     D->>D: pending[seq=N] 매칭 → REQUEST completion enqueue
 ```
 
 이 diagram에서 wire에 나타나는 header 배치는 위 kind와 sequence 규칙이 계약이다. `routing_id`는
-reply wire part가 아니라 ROUTER가 대상 Completion pipe를 고르는 local 선택 key다.
+reply wire part가 아니라 ROUTER가 대상 reply pipe를 고르는 local 선택 key다. DEALER peer에는
+현재 ready Application pipe를, ROUTER peer에는 현재 ready Completion pipe를 사용한다.
 Pending 매칭과 completion enqueue는 [§9 내부 구조](#9-내부-구조)의 구현 서술이다.
 
 ## 6. Transport routing_id와의 관계
@@ -381,10 +413,11 @@ Decoder는 validation, admission, payload와 submission 상태를 차례로 진�
 message에 metadata를 복원한 뒤 socket runtime이 다음처럼 처리한다.
 
 1. Typed receive의 request는 source pipe와 wire sequence를 reply target으로 저장한다.
-2. Completion progress lane의 reply와 error reply는 sequence로 pending request를 찾는다.
+2. DEALER-ROUTER에서는 Application pipe의 physical head에 도달한 reply와 error reply가,
+   ROUTER-ROUTER에서는 Completion pipe의 reply와 error reply가 sequence로 pending request를 찾는다.
 3. 필요한 값을 runtime state로 옮긴 뒤 public payload를 내보내기 전에 metadata를 제거한다.
 
-Reply payload는 Completion pipe에서 socket-local completion ready queue로 이동한다. Enqueue 전에
+Reply payload는 peer type에 따른 physical pipe에서 socket-local completion ready queue로 이동한다. Enqueue 전에
 public `zlink_msg_t[]` storage를 확보하며, `zlink_completion_recv()`는 그 ownership을 caller에게
 옮긴다. Timeout과 payload 없는 terminal 결과도 같은 tagged queue에 들어간다.
 
@@ -458,23 +491,30 @@ test 하나로 이어진다.
 - FLAGS bit 5~7, `CONTROL | IDENTITY`, `CONTROL | MORE`, `SUBSCRIBE | CANCEL`, SUBSCRIBE/CANCEL과 다른 flag의 조합을 수신하면 decoder가 `EPROTO`로 거부한다.
 
 **Handshake**
-- Active 쪽은 HELLO frame 뒤에 READY frame을 보내며 그 사이에 application frame을 넣지 않는다. 같은 byte 열을 WS·WSS binary message 하나에 넣거나 여러 binary message로 나눠도 peer가 같은 HELLO와 READY를 순서대로 처리한다. Paired DEALER·ROUTER transport의 passive 쪽은 HELLO를 먼저 보낸 뒤 peer READY 수신 후 자기 READY를 보낸다.
-- Paired passive 쪽은 자기 READY의 transport write가 완료되기 전에 local readiness나 pair admission을 공개하지 않는다. Write가 실패하면 readiness 없이 handshake가 실패한다.
+- DEALER·ROUTER가 아닌 active 쪽은 HELLO frame 뒤에 READY frame을 보내며 그 사이에 application frame을 넣지 않는다. 같은 byte 열을 WS·WSS binary message 하나에 넣거나 여러 binary message로 나눠도 peer가 같은 HELLO와 READY를 순서대로 처리한다.
+- DEALER·ROUTER 양쪽은 HELLO만 먼저 보내고 peer socket type으로 lane count를 정한 뒤 READY를 보낸다. READY write와 count별 lane attach가 끝나기 전에는 local readiness를 공개하지 않으며 write가 실패하면 readiness 없이 handshake가 실패한다.
 - READY control type `0x04` 뒤의 각 metadata property는 `[name length:u8][name bytes][value length:u32 BE][value bytes]` 배치를 따른다.
 - `ZLINK_OPT_ZMP_METADATA`가 기본값(비활성)이면 metadata property가 없고, 활성화하면 `Socket-Type`과 8 byte big-endian `Zlink-Max-Message-Size`가 추가된다. `Routing-Id`는 DEALER·ROUTER READY에만 추가된다.
-- paired DEALER·ROUTER transport의 READY에는 이 option과 관계없이 `Socket-Type`·`Routing-Id`와
-  `Zlink-Lane` metadata가 항상 있다.
+- DEALER·ROUTER transport의 READY에는 이 option과 관계없이 `Socket-Type`·`Routing-Id`, 1 byte
+  `Zlink-Lane-Count`와 1 byte `Zlink-Lane` metadata가 항상 있다.
 - ERROR control type은 `0x05`이며 body는 `[type][error code:u8][reason length:u8][reason bytes]` 배치를 따른다.
 
 **Request-reply lane**
-- 두 connection의 READY에 `Zlink-Lane`이 1 byte로 나타나며 Application은 `0`, Completion은
-  `1`이다.
-- Application write는 두 lane의 검증이 끝난 뒤에 전달된다.
-- 이전 connection에서 수신한 data는 새 connection에 연결되지 않는다.
-- 한 lane에서 protocol error, identity mismatch, fence timeout 또는 terminal failure가 발생하면 pair 전체가 종료된다.
-- reconnect하면 두 lane을 다시 검증한 뒤 Application write가 재개된다.
-- FIFO 순서는 각 lane 안에서만 관찰되며, 두 lane 사이의 순서는 보장되지 않는다.
-- Application ingress가 backpressure로 중단된 동안에도 Completion reply가 처리된다.
+- DEALER-DEALER와 DEALER-ROUTER의 READY는 count `1`, lane `0`이고 ROUTER-ROUTER의 READY는
+  count `2`, lane `0`·`1`을 각각 한 번 사용한다. Bind·connect 방향을 바꾸어도 count가 같다.
+- PAIR, STREAM과 PUB-SUB family는 physical connection 하나를 사용하고 `Zlink-Lane-Count`와
+  `Zlink-Lane`을 보내지 않는다. 이 pattern에서 두 property를 받으면 handshake protocol failure다.
+- Lane-Count 누락, 길이 0·2, 값 0·3, 계산값 불일치, count `1`의 lane `1`, count `2`의
+  duplicate·missing lane은 payload 전달 전에 handshake protocol failure와 disconnect를 만든다.
+- 구버전 two-lane DEALER-ROUTER READY에 Lane-Count가 없으면 logical ready가 되지 않고 DATA도
+  application receive에 나타나지 않는다.
+- Count `1`은 Application connection 하나가, count `2`는 두 lane이 모두 검증된 뒤 Application
+  write를 전달한다. Count `2`의 한 lane failure는 lane set 전체를 종료하며 reconnect 뒤 두 lane을
+  다시 검증한다.
+- Inproc은 connect-before-bind와 bind-before-connect 모두 두 endpoint type이 확인된 뒤 count를
+  정한다. Count `1`은 Application pipe 하나만, count `2`는 Completion pipe를 추가로 만든다.
+- DEALER-ROUTER의 DATA·REQUEST·REPLY·error reply는 한 FIFO와 Application HWM·PAUSED를 공유한다.
+  ROUTER-ROUTER의 FIFO 순서는 각 lane 안에서만 관찰되며 두 lane 사이의 순서는 보장되지 않는다.
 - Network peer-weight advertisement는 `CONTROL`, `KIND == 0x00`, payload size `10`인
   Application-lane frame이며 payload가 `[ASCII "WEIGHT":6][weight:u32 BE]` 배치를 따른다.
 - 양수 `ZLINK_OPT_MAXMSGSIZE`를 10 byte보다 작게 설정해도 READY, FLOWSTATE와 고정 10 byte
@@ -491,11 +531,14 @@ test 하나로 이어진다.
 - Application multipart가 열린 동안 weight를 여러 번 바꾸면 peer는 중간 control record 없이
   원래 multipart를 받고, FINAL commit 또는 rollback 뒤 다음 message 경계에서 가장 최근
   `WEIGHT` command 하나만 받는다.
-- Network paired connection에 첫 request를 보내기 전에 completion poller를 등록해도 pair가 종료되지
+- 열린 multipart 중 `FLOW(PAUSED) → WEIGHT → FLOW(RUNNING)`을 제출하면 FINAL 또는 rollback 뒤
+  WEIGHT와 RUNNING만 enqueue sequence 순서로 나타나고 PAUSED는 나타나지 않는다. 두 control은
+  HWM·remote PAUSED를 우회하지만 inactive·initial transport hold를 우회하지 않는다.
+- Network DEALER·ROUTER connection에 첫 request를 보내기 전에 completion poller를 등록해도 connection이 종료되지
   않으며, 이어지는 request와 reply가 각각 한 번 전달된다.
-- Inproc pair에서 application request를 받은 뒤 reply나 receive-flow control을 쓰기 전까지
+- Inproc ROUTER-ROUTER pair에서 application request를 받은 뒤 reply나 receive-flow control을 쓰기 전까지
   Completion pipe에는 읽을 수 있는 synthetic routing-id record가 없다.
-- Network와 inproc pair에서 bind·connect 전에 설정한 양쪽 weight는 paired Application pipe가
+- Network와 inproc connection에서 bind·connect 전에 설정한 양쪽 weight는 Application pipe가
   ready 된 뒤 상대 scheduler에 정확한 값으로 적용되며, `0`도 값으로 적용된다.
 - Network와 inproc pair가 ready 된 뒤 양쪽 peer weight를 동적으로 바꾸면
   `PEER_WEIGHT_CHANGED`가 새 값과 해당 Application lane의 `connection_id`를 제공하고,
@@ -515,6 +558,11 @@ test 하나로 이어진다.
   kind 또는 special frame을 수신하면 `EPROTO`로 connection을 종료하고 payload를 public receive나
   completion에 전달하지 않는다.
 - Base header, sequence extension 또는 payload를 끝내지 않고 stream을 닫으면 `EPROTO`이며 application receive나 completion에 부분 payload를 전달하지 않고 connection을 종료한다.
+- DEALER-ROUTER에서 ROUTER가 multipart DATA를 먼저 보내고 같은 request의 REPLY를 보내면 DEALER가
+  DATA의 `FINAL` part를 dequeue하기 전에는 completion이 없다. 마지막 DATA part 뒤 REPLY는 정확히
+  한 completion으로 나오며 reply payload는 DATA receive에 나타나지 않는다.
+- 앞선 DATA와 PAUSED 또는 HWM 때문에 request timeout이 먼저 끝나면 timeout completion 하나만
+  만들고, 이후 도착한 late reply는 두 번째 completion을 만들지 않는다.
 
 **완료**
 - 첫 reply 1건으로 high-level request가 완료된다.
@@ -525,6 +573,10 @@ test 하나로 이어진다.
 
 **Transport와 frame 수**
 - TCP, IPC, TLS, WS와 WSS에서 request-reply의 kind와 sequence가 같은 byte 위치에 나타난다.
+- TCP raw acceptor는 DEALER-ROUTER physical connection 하나와 ROUTER-ROUTER 두 개를 관찰한다.
+  IPC·inproc은 endpoint와 monitor lifecycle로 같은 count를 확인한다. TLS·WS·WSS는 평문 raw
+  acceptor가 아니라 각 TLS handshake·WebSocket upgrade를 통과한 native listener와 monitor로
+  D/R count `1`, R/R count `2`를 확인하며 지원하지 않는 transport는 명시적으로 skip한다.
 - WS와 WSS에서 base header, sequence extension 또는 payload 중간에 binary message 경계를 두고 나머지를 다음 binary message로 보내면 ZMP frame 하나가 전달된다.
 - WS와 WSS의 binary message 하나에 완전한 ZMP frame을 둘 이상 연속해서 보내면 decoder가 각 frame을 순서대로 한 번씩 전달한다.
 - WS와 WSS에서 빈 binary message를 보내면 payload나 frame이 전달되지 않고 connection은 다음 ZMP byte를 계속 처리한다.

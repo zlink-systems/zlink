@@ -57,8 +57,8 @@ handler를 순회하지 않는다.
 |---|---|---|---|---|
 | `zlink.host.core_hwm.effective_budget` | observable | `By` | 없음 | Core가 startup에서 확정한 effective budget이다. |
 | `zlink.host.core_hwm.applied` | observable | `By` | 없음 | Completion을 제외한 방향별 queue HWM의 합이다. |
-| `zlink.host.core_hwm.accounted` | observable | `By` | `state` | Core의 current 또는 epoch peak accounted bytes다. |
-| `zlink.host.core_hwm.completion_accounted` | observable | `By` | `state` | Completion current 또는 epoch peak accounted bytes다. |
+| `zlink.host.core_hwm.accounted` | observable | `By` | `state` | Core의 current 또는 epoch peak accounted bytes다. DEALER-ROUTER reply byte를 포함한다. |
+| `zlink.host.core_hwm.completion_accounted` | observable | `By` | `state` | ROUTER-ROUTER [Completion connection](../00-foundation/02-glossary.ko.md#completion-connection)의 current 또는 epoch peak accounted bytes다. DEALER-ROUTER reply byte는 포함하지 않는다. |
 | `zlink.host.core_hwm.blocked_ratio` | observable | `{ppm}` | 없음 | Core snapshot의 blocked ratio다. |
 | `zlink.host.application_job_queue.limit` | observable | `{job}` | 없음 | Startup에서 고정한 effective maximum이다. |
 | `zlink.host.application_job_queue.jobs` | observable | `{job}` | `state` | `reserved|queued|in_use|peak`별 aggregate다. |
@@ -342,6 +342,9 @@ storage와 histogram bucket을 구성하지 않는다.
 - 계기 이름, 종류, 단위와 허용 label value가 모든 언어에서 같다.
 - Mailbox·Spot·Actor queue와 turn 단위 metric이 존재하지 않으며, 수집을 위해 전체
   object나 Store record를 순회하지 않는다.
+- Controlled DEALER-ROUTER reply byte delta는 `zlink.host.core_hwm.accounted`에 나타나고
+  `zlink.host.core_hwm.completion_accounted`에는 나타나지 않는다. ROUTER-ROUTER reply byte는
+  Completion metric에 나타나며 metric 이름과 label은 topology에 따라 바뀌지 않는다.
 
 **Label**
 

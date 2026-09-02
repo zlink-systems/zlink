@@ -249,8 +249,7 @@ concurrently from multiple threads.
 
 ## 8. Receive flow state
 
-STREAM has no paired DEALER/ROUTER completion lane, so it has no receive-flow
-state. `zlink_socket_set_receive_flow_state()` returns
+STREAM is not a socket type that supports receive flow. `zlink_socket_set_receive_flow_state()` returns
 `ZLINK_CONFIG_NOT_SUPPORTED` with `errno == ENOTSUP` for a STREAM socket and
 changes nothing. The byte HWM, low water mark, and transport backpressure
 described above remain in effect. A STREAM socket monitor does not set

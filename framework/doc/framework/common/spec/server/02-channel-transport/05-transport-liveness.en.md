@@ -95,6 +95,13 @@ liveness/health failure aggregation.
 The framework checks the connection every 5 seconds, even with no application message, in
 the following order.
 
+RouteMesh uses ROUTER-ROUTER Application and [Completion connections](../00-foundation/02-glossary.en.md#completion-connection), while
+ClientServer uses one DEALER-ROUTER Application connection. In both topologies,
+liveness probes and ACKs are application records; they aren't converted into
+separate completion control. In ClientServer, earlier DATA and HWM/`PAUSED` can
+also delay a later liveness record, and this document's 15-second deadline still
+applies.
+
 1. If there's no ID still awaiting a response, builds a new non-zero ID within the
    connection.
 2. Sends that ID in a `livenessProbe`.
@@ -354,8 +361,9 @@ provided via a count-limited snapshot and trace.
 
 A host's Application Job Queue pressure being `paused` doesn't by itself change route
 readiness, host readiness, or transport liveness. Existing per-topology progress evidence and
-deadlines determine liveness. The receive-flow application described here is limited to
-paired DEALER/ROUTER sockets for RouteMesh and ClientServer; it excludes PUB/SUB and STREAM.
+deadlines determine liveness. Receive flow applies to RouteMesh ROUTER-ROUTER
+two-lane sockets and ClientServer DEALER-ROUTER single-lane sockets; it excludes
+PUB/SUB and STREAM.
 The runtime applies the current absolute pressure state to a new eligible socket before
 publishing its route; this ordering is the same for `running` and `paused`.
 
@@ -376,6 +384,9 @@ contract test.
   error take effect immediately.
 - Probe and ACK aren't delivered to an application handler. Other inbound service frames
   don't extend the peer deadline.
+- RouteMesh uses two physical ROUTER-ROUTER lanes and ClientServer uses one
+  physical DEALER-ROUTER lane, but probes and ACKs are observed as application
+  records in both topologies and aren't delivered to handlers.
 
 **Fanout**
 

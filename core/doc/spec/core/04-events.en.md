@@ -57,7 +57,7 @@ service topology or application payload.
 
 ## 4. Receive-flow event
 
-A paired DEALER/ROUTER socket reports its peer's receive-flow state with three
+DEALER and ROUTER sockets that support receive flow report their peer's receive-flow state with three
 monitor events. The peer communicates its PAUSED or RUNNING state in a
 flow-state frame, and Core applies that state to the application pipe from this
 socket to that peer—a directional message channel connecting one socket and one
@@ -111,13 +111,16 @@ event mask specified when opening a monitor. Each item maps to one unit test.
 
 **Receive-flow event occurrence**
 
-- When a peer state on a paired DEALER/ROUTER socket actually transitions between PAUSED and RUNNING, `ZLINK_EVENT_SEND_FLOW_PAUSED` or `ZLINK_EVENT_SEND_FLOW_RESUMED` is observed after Core applies that transition to the application pipe.
+- When a peer state on a DEALER-DEALER or DEALER-ROUTER single connection or a ROUTER-ROUTER two-lane connection actually transitions between PAUSED and RUNNING, `ZLINK_EVENT_SEND_FLOW_PAUSED` or `ZLINK_EVENT_SEND_FLOW_RESUMED` is observed after Core applies that transition to the application pipe.
 - No receive-flow event is observed for an ordinary data frame, a repeated request for the state the peer already maintains, or a flow-state frame that changes nothing.
 - `ZLINK_EVENT_FLOW_STATE_STALE` is observed when Core rejects a frame because the flow epoch is duplicate or regresses on the same connection.
 
 **Event fields and flags**
 
 - The `value` of a PAUSED or RESUMED event is the flow epoch of the applied state, and the event contains the paused peer's `routing_id`, `connection_id`, and Application lane.
+- Receive-flow events in both topologies report the `connection_id` and Application `transport_lane`
+  of the current Application pipe to which the state was applied. Even when a flow-state frame arrives
+  on a ROUTER-ROUTER Completion connection, the event lane does not change to Completion.
 - A RESUMED event contains `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` only when clearing the remote pause makes the pipe actually writable. The flag is absent if another cause, such as byte HWM, transport wait, or termination, continues to block the pipe, and a RESUMED event alone does not guarantee acceptance of the next send.
 - The `flags` of a STALE event contain `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`, and `value` is the received epoch. The current epoch equals the value reported by the preceding PAUSED or RESUMED event for the same connection.
 

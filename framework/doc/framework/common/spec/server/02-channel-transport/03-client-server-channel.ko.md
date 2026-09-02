@@ -348,6 +348,12 @@ Request는 ready Server 하나를 선택한 뒤
 timeout, cancellation 또는 shutdown 가운데 먼저 확정된 결과 하나로 request를
 완료한다.
 
+Client DEALER가 Server ROUTER의 앞선 one-way DATA를 Core에서 receive하지 않거나 receive-flow를
+PAUSED로 유지하면 같은 connection 뒤의 reply도 늦어진다. 따라서 ClientServer request timeout이
+reply보다 먼저 확정될 수 있으며, timeout 뒤 늦은 reply는 기존 first-terminal 규칙에 따라
+폐기된다. Disconnect, allocation failure와 timeout의 terminal 규칙이 먼저 끝날 수 있으므로
+reply가 결국 도착한다고 보장하지 않는다.
+
 ```mermaid
 sequenceDiagram
     participant Caller
@@ -488,6 +494,14 @@ Server descriptor 조회와 owner lease 상태, monitoring이 제공하는 conne
 - Handler가 다른 송신 경로를 호출해도 원래 request는 한 번만 완료된다.
 - Store 장애가 이미 ready인 연결을 즉시 끊지 않는다.
 - Store 복구 뒤 최신 revision과 generation으로 target 목록을 다시 맞춘다.
+
+**Request completion과 single FIFO**
+
+- Server가 one-way DATA 뒤에 request reply를 보내고 Client가 DATA receive를 멈추거나 PAUSED를
+  유지하면 configured timeout으로 request가 끝날 수 있다. DATA를 drain한 뒤 도착한 late reply는
+  두 번째 terminal을 만들지 않는다.
+- Reply가 Core physical head에 도달해 completion으로 식별된 뒤에는 Application Job Queue permit을
+  얻지 않지만 앞선 DATA와 Core HWM·PAUSED를 건너뛰지는 않는다.
 
 ---
 

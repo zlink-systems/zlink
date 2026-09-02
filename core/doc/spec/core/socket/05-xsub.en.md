@@ -256,9 +256,7 @@ small. `ENOTSUP` if the handle type does not support subscription queries.
 
 ## 5. Receive Flow State
 
-XSUB has no paired [completion progress lane](../glossary.en.md#completion-progress-lane)
-used by DEALER and ROUTER to advance terminal replies, so it has no receive-flow
-state. `zlink_socket_set_receive_flow_state()` returns
+XSUB is not a socket type that supports receive flow. `zlink_socket_set_receive_flow_state()` returns
 `ZLINK_CONFIG_NOT_SUPPORTED` with `errno == ENOTSUP` for an XSUB socket and
 changes nothing. The byte [HWM](../glossary.en.md#hwm) defined by [Socket
 Common](README.en.md) (the value that applies [backpressure](../glossary.en.md#backpressure)

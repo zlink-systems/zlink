@@ -43,6 +43,15 @@ receives or replies to inbound typed REQUEST records. Replies, timeouts, and ter
 REQUEST submitted by DEALER do not appear on ordinary receive; they are returned as REQUEST records
 from `zlink_completion_recv()`.
 
+On a DEALER-ROUTER single connection, DATA, REPLY, and error reply sent by the ROUTER use the same
+inbound physical FIFO. When the physical head is DATA, public DATA receive consumes the record; when
+it is REPLY or error reply, the socket-local completion queue consumes the record. REPLY does not
+appear in `zlink_recv_part()`, and DATA does not appear in `zlink_completion_recv()`.
+
+On a DEALER-ROUTER single connection, DATA sent first by the ROUTER and a later REPLY or error reply
+use the same FIFO. If DEALER does not dequeue the preceding DATA or keeps local PAUSED in effect, the
+REPLY cannot overtake it and the request timeout can create the terminal completion first.
+
 ```mermaid
 sequenceDiagram
     participant App as DEALER application
@@ -157,11 +166,9 @@ under `ZLINK_POLLIN`.
 
 ## 6. Receive flow state
 
-A DEALER paired with a ROUTER over the
-[completion progress lane](../glossary.en.md#completion-progress-lane), a separate path that handles
-progress only for terminal replies and error replies, can ask peers that send to it to stop and
-resume transmission. `zlink_socket_set_receive_flow_state()` stores one socket-wide state and sends
-it through the completion lane of every ready pair of this socket. [Socket Common](README.en.md)
+A DEALER connected to a DEALER or ROUTER peer can ask peers that send to it to stop and resume
+transmission. `zlink_socket_set_receive_flow_state()` stores one socket-wide state and sends it over
+the Core control path of every ready count `1` Application connection. [Socket Common](README.en.md)
 owns the function declaration, and [Errors](../03-errors.en.md) owns the result table.
 
 This state is an absolute value, not a counter. Setting `ZLINK_RECEIVE_FLOW_PAUSED` twice represents
@@ -179,9 +186,9 @@ applied and is reported as `ZLINK_EVENT_FLOW_STATE_STALE` with
 `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`. A frame from a previous connection is therefore
 never applied to the connection that replaced it.
 
-When a pair becomes ready, Core sends the socket's current state through the new completion lane. A
+When a connection becomes ready, Core sends the socket's current state over the new Application connection. A
 peer that connects or reconnects while this socket is paused learns the pause without another call.
-A socket that has never set a state sends nothing because a new pair already assumes RUNNING.
+A socket that has never set a state sends nothing because a new connection already assumes RUNNING.
 
 A remote PAUSE blocks transmission to that peer. It is an independent blocker that composes with
 existing blockers. Byte [HWM](../glossary.en.md#hwm), which caps bytes retained in a queue,
@@ -255,7 +262,7 @@ uses the value advertised by the other socket.
 
 The public weight result follows this order.
 
-1. A value set before bind or connect applies after the paired Application pipe becomes ready.
+1. A value set before bind or connect applies after the single Application pipe becomes ready.
 2. A dynamic change applies the new absolute value, including `0`, to the peer scheduler.
 3. An actual change emits `PEER_WEIGHT_CHANGED` with the value and the Application pipe's lane and
    connection ID. Repeating the same value emits no additional event.
@@ -266,7 +273,7 @@ lifetime and stale-delivery ownership are defined by the
 [ZMP request-reply lane](../protocol/01-zmp.en.md#41-request-reply-lane),
 [decode](../protocol/01-zmp.en.md#7-decode-validation), and
 [peer-weight owner](../protocol/01-zmp.en.md#peer-weight-control) contracts. Neither transport path
-creates a weight record on public receive or the Completion lane.
+creates a weight record on public receive or the socket-local completion queue.
 
 If the applied value becomes `0` after a multipart has selected a pipe, that message completes
 through FINAL on the same pipe. The next message selection excludes it.
@@ -386,8 +393,8 @@ Verify the following using only the public surface: DEALER option set/get, `zlin
 - Dynamically changing both weights after a network or inproc pair is ready produces
   `PEER_WEIGHT_CHANGED` with the new weight in `value`; the event transport lane and
   `connection_id` match the Application pipe to which the value was applied.
-- Setting or synchronizing weight adds no application record to public receive or the Completion
-  lane, and setting the same value again produces no duplicate monitor event.
+- Setting or synchronizing weight adds no record to public receive or the socket-local completion
+  queue, and setting the same value again produces no duplicate monitor event.
 - Changing weight more than once while an Application multipart is open preserves the peer-visible
   multipart as one atomic record, and only the latest value is reflected after FINAL or rollback.
 - If a pipe's remote weight becomes `0` after the first part of an Application multipart is
@@ -433,6 +440,13 @@ Verify the following using only the public surface: DEALER option set/get, `zlin
   disconnect after admission neither replays the payload nor resets the remaining monotonic budget.
 - Exhausting the shared SEND and REQUEST completion slots immediately returns
   `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, ID `0`, and no completion, regardless of flags.
+- If the ROUTER sends multipart DATA before the REPLY for the same request,
+  `ZLINK_POLLCOMPLETION` is not ready until the DATA `FINAL` part is dequeued. After the last DATA
+  part, the REPLY appears as exactly one REQUEST completion, and its payload does not appear in DATA
+  receive.
+- If preceding DATA and local PAUSED delay the REPLY until the request timeout completes first,
+  exactly one timeout completion is returned. A late REPLY that arrives after DATA is drained does
+  not create a second completion.
 
 **Receive**
 
@@ -455,6 +469,11 @@ Verify the following using only the public surface: DEALER option set/get, `zlin
 - A flow-state frame contains only the flow epoch scoped to the connection on which it was written. There is no public pair-ID or generation field and no `Zlink-Pair-Id` or `Zlink-Pair-Generation` wire property. Core applies the frame only to that connection by using internal connection identity.
 - A frame whose identity does not match, including a frame from a replaced connection, is consumed internally without a public event and increments only `flow_state_stale_total`. A duplicate or regressing epoch on the same connection is not applied and is reported as `ZLINK_EVENT_FLOW_STATE_STALE` with `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`.
 - A peer that connects or reconnects while this socket is paused learns the pause without another call, and a socket that has never set a state sends nothing.
+- DEALER-DEALER and DEALER-ROUTER both carry receive-flow control over the single Application
+  connection. No control record appears in public receive or the socket-local completion queue.
+- DEALER-ROUTER reconnect resends the current absolute state over one new Application connection;
+  REPLY and FLOWSTATE from the previous connection ID or generation do not apply to the current
+  connection.
 - Clearing remote pause does not by itself make the next send succeed. A blocked non-blocking send continues to report `ZLINK_SUBMIT_BACKPRESSURED` with `errno == EAGAIN`.
 - Remote PAUSE takes effect at the next message boundary—a message whose first byte has already reached the pipe or whose first part has already been accepted sends all remaining parts.
 - The [Monitoring](../06-monitoring.en.md) status snapshot exposes the number of peers currently seen as paused, the numbers of applied pause and resume transitions, the number of frames rejected as stale, and the duration of the most recently completed pause.

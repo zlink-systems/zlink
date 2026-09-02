@@ -147,6 +147,12 @@ ABI 호환을 위해 남은 reserved field이며 0.13.1 이후 항상 `0`이다.
 HWM이나 lease가 존재한다는 뜻이 아니다. Framework는 Core runtime snapshot을 그대로
 투영하며 다시 계산하거나 다른 의미로 사용하지 않는다.
 
+이 Core 의미에서 DEALER-ROUTER reply byte는 `core_queue_accounted_bytes`·current·provisional·
+peak와 total messaging에 포함되고 Completion current·peak·pending·direction count에는 포함되지
+않는다. ROUTER-ROUTER [Completion connection](../00-foundation/02-glossary.ko.md#completion-connection)의 reply byte만 Completion field에 포함된다. Framework
+status는 Core runtime snapshot의 topology별 분류, field 이름, snapshot layout과 ABI version을
+사용한다.
+
 Application job queue snapshot에서는 다음을 관찰할 수 있다 — configured profile·manual
 max, configured pause·resume percent, effective processor count·effective max, 계산된
 pause·resume permit count, reserved supply permits, queued application jobs, permits in
@@ -412,6 +418,9 @@ source로 ACK하지 않으며 target-local status와 trace에서 관찰한다.
 - `SafeToShutdown`은 모든 relocation unit의 Message Follow route 제거 가능 시점
   도달과 각 unit의 cutover 재전송 창 종료보다 먼저 게시되지 않으며, 두 판정에 다른
   node의 시각을 사용하지 않는다.
+- Controlled ClientServer DEALER-ROUTER reply byte는 Core HWM ordinary accounting과 total
+  messaging에 나타나고 Completion field에는 나타나지 않는다. RouteMesh ROUTER-ROUTER reply
+  byte는 Completion current·peak·pending에 나타난다.
 
 **Topology status**
 

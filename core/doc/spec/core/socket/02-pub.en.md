@@ -113,9 +113,7 @@ calculation and distribution contract.
 
 ## 5. Receive Flow State
 
-PUB has no paired DEALER/ROUTER
-[completion progress lane](../glossary.en.md#completion-progress-lane), so it
-has no receive-flow state. `zlink_socket_set_receive_flow_state()` returns
+PUB is not a socket type that supports receive flow. `zlink_socket_set_receive_flow_state()` returns
 `ZLINK_CONFIG_NOT_SUPPORTED` with `errno == ENOTSUP` for a PUB socket and
 changes nothing. The socket's byte HWM, low water mark, and transport
 backpressure remain in effect. A PUB socket monitor does not set

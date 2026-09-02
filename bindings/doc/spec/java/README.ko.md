@@ -632,9 +632,10 @@ lossy publish는 subscriber queue가 가득 차도 해당 subscriber 복사본�
 
 Raw ROUTER/`Received` reply의 terminal은
 `ReplySubmitOperation.submit() -> void`인 동기 one-shot이다. `CompletionStage`를
-반환하지 않고 terminal reply 또는 error reply를 HWM 없는 completion lane에 native 호출
-한 번으로 제출한다. HWM backpressure는 reply 결과가 아니며 `NOT_CONNECTED`,
-`TERMINATED`, `INVALID_ARGUMENT`와 그 밖의 non-HWM submit 실패는 즉시
+반환하지 않고 terminal reply 또는 error reply를 native 호출 한 번으로 제출한다. DEALER peer에는
+Application HWM·PAUSED와 `SNDTIMEO`를 적용하여 `BACKPRESSURED`가 될 수 있고, ROUTER peer에는
+HWM 없는 Completion connection을 사용한다. `NOT_CONNECTED`, `TERMINATED`,
+`INVALID_ARGUMENT`와 그 밖의 submit 실패는 즉시
 `ZlinkSubmitException`으로 전달한다.
 
 ### Completion pull
@@ -816,7 +817,7 @@ Java와 Kotlin은 같은 Java method를 호출한다. 별도 Kotlin adapter나 �
 `RUNNING(0)`, `PAUSED(1)`이며 공개 setter는 공통 socket option facade의
 `receiveFlowState(ReceiveFlowState)`다. 반환형은 `void`이고 Java 에러 정책을 따른다. 0이
 아닌 native 결과는 해당 `ConfigResult`를 담은 `ZlinkConfigException`으로 던지므로,
-completion lane이 없는 socket은 not-supported result를 담은 `ZlinkConfigException`을
+receive-flow를 지원하지 않는 socket은 not-supported result를 담은 `ZlinkConfigException`을
 발생시킨다. 인자가 null이면 native 호출 전에 `NullPointerException`이 발생한다. 이미
 유지하는 상태를 다시 설정하면 정상 반환한다.
 
@@ -1106,6 +1107,8 @@ Public Java interface, `CompletionStage`·exception과 poller event만으로 다
 - Stage cancellation 뒤 late completion은 stage를 다시 끝내지 않고 native payload를 정리한다.
 - Non-OK request completion은 typed request exception만 제공하고 error payload를 공개하지 않는다.
 - `POLLCOMPLETION`은 stage settle 또는 detached cleanup이 끝난 뒤에만 반환된다.
+- Raw reply를 DEALER peer로 제출해 HWM·PAUSED 대기가 만료하면 `ZlinkSubmitException`의
+  `BACKPRESSURED`가 관찰되고, ROUTER peer로 제출하면 Completion connection의 HWM-free 결과가 유지된다.
 
 **ReplyToken과 STREAM**
 

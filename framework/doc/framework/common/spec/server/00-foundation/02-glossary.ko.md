@@ -943,6 +943,15 @@ completion을 완료한다. Deadline이 먼저 끝나면 [DeadlineExceeded](#dea
 binding operation의 완료까지 HWM 재시도를 처리한다. Logical Multicast를 시작한 뒤에는 target별
 capacity 부족을 public 결과나 publish 전용 monitoring으로 집계하지 않는다.
 
+<a id="completion-connection"></a>
+### Completion connection
+
+RouteMesh의 ROUTER-ROUTER peer가 양방향 request wait cycle과 Application HWM에서 terminal
+reply·error reply, receive-flow control의 진행을 분리하기 위해 사용하는 별도 physical
+connection이다. ClientServer의 DEALER-ROUTER peer에는 이 connection이 없고 reply가 single
+Application connection의 DATA와 FIFO·HWM·PAUSED를 공유한다. Framework request 결과와 Core의
+socket-local completion queue는 이 physical connection과 다른 개념이다.
+
 <a id="core-hwm-budget"></a>
 ### Core HWM budget
 

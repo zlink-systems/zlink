@@ -90,6 +90,9 @@ The ABI v1 planner uses the context's physical directional queue registry. The r
 
 Even when two endpoints observe the same inproc ypipe, Core counts it only once per direction. A new pipe pair uses the following reservation rules for each direction.
 
+A DEALER-ROUTER single pipe is also registered as one Application direction. The absence of a
+separate Completion pipe neither adds nor removes a direction from Application water-filling.
+
 - Application direction: atomically reserves the role-specific minimum. If both directions cannot be reserved, Core rejects the entire reservation before publishing the attach and does not register only a subset of the directions.
 - Manual direction: also reserves the role-specific minimum before attach. A finite manual HWM applies to admission immediately and is included in the next plan's manual reservation sum and aggregate HWM statistics.
 - Direction with manual HWM `0`: admission remains unlimited, while the next plan uses the role-specific maximum as its calculation reservation and sets the flag that indicates the aggregate HWM is not finite.
@@ -138,7 +141,22 @@ Ordinary admission checks only this origin-local sum and that queue's applied HW
 
 `total_planned_hwm_bytes` is the sum of the current targets for application directions, and `total_applied_hwm_bytes` is the sum of the HWMs actually applied to live application directions. `core_queue_accounted_bytes` is the number of bytes currently held by Core queues, and `current_accounted_bytes` equals that value. The ABI compatibility fields for the removed retained-credit feature—`application_accounted_bytes`, `outstanding_application_lease_count`, `deferred_origin_credit_bytes`, and `retired_queue_count`—are always zero.
 
-The DEALER and ROUTER [completion progress lane](../glossary.en.md#completion-progress-lane) does not apply a byte HWM, LWM, inproc HWM boost, or the legacy 256 KiB floor, and it is excluded from the water-filling denominator above. This lane owns the progress of terminal replies and error replies and also synchronizes receive-flow-state frames between peers. The completion lane is excluded from HWM admission and Core budget reservation, but its current and peak accounted bytes and pending message count are observed separately. These values are included in `total_messaging_accounted_bytes` and excluded from application water-filling.
+The ROUTER-ROUTER [completion progress lane](../glossary.en.md#completion-progress-lane) does not
+apply a byte HWM, LWM, inproc HWM boost, or the legacy 256 KiB floor, and it is excluded from the
+water-filling denominator above. This lane owns the progress of terminal replies and error replies
+and also synchronizes receive-flow-state frames between peers. The ROUTER-ROUTER Completion lane is
+excluded from HWM admission and Core budget reservation, but its current and peak accounted bytes
+and pending message count are observed separately. These values are included in
+`total_messaging_accounted_bytes` and excluded from application water-filling.
+
+DEALER-ROUTER replies and error replies are bytes in the single Application queue. These bytes are
+included in `core_queue_accounted_bytes`, `current_accounted_bytes`, and, for a multipart record,
+`provisional_accounted_bytes`, as well as `peak_accounted_bytes` and
+`total_messaging_accounted_bytes`. `application_accounted_bytes` remains the reserved value `0`.
+DEALER-ROUTER replies are not included in `completion_current_accounted_bytes`,
+`completion_peak_accounted_bytes`, `completion_pending_message_count`, or
+`active_completion_directional_queue_count`. A reply admission blocked by HWM is counted as an
+Application admission block.
 
 ## 3. Functions
 
@@ -193,9 +211,9 @@ typedef struct zlink_auto_hwm_budget_snapshot_t {
   uint64_t current_accounted_bytes;             // equal to core_queue_accounted_bytes
   uint64_t provisional_accounted_bytes;         // reservation for incomplete multipart messages
   uint64_t peak_accounted_bytes;                // maximum observed in the current epoch
-  uint64_t completion_current_accounted_bytes;  // current bytes in completion lanes
-  uint64_t completion_peak_accounted_bytes;     // maximum bytes in completion lanes
-  uint64_t completion_pending_message_count;    // messages pending in completion lanes
+  uint64_t completion_current_accounted_bytes;  // current bytes in ROUTER-ROUTER completion lanes
+  uint64_t completion_peak_accounted_bytes;     // maximum bytes in ROUTER-ROUTER completion lanes
+  uint64_t completion_pending_message_count;    // messages pending in ROUTER-ROUTER completion lanes
   uint64_t total_messaging_accounted_bytes;     // application+completion accounted-byte sum
   uint64_t monitor_queue_applied_hwm_bytes;     // sum of HWMs for open monitor directions
   uint64_t monitor_queue_accounted_bytes;       // sum of bytes held by monitor directions
@@ -204,7 +222,7 @@ typedef struct zlink_auto_hwm_budget_snapshot_t {
   uint64_t oversize_admission_count;            // empty-queue oversize exceptions admitted
   uint64_t largest_oversize_message_bytes;      // largest such message
   uint64_t active_directional_queue_count;      // active application directions (counted once per direction)
-  uint64_t active_completion_directional_queue_count;// active completion directions
+  uint64_t active_completion_directional_queue_count;// active ROUTER-ROUTER completion directions
   uint64_t active_send_queue_count;             // send-perspective count in the last plan
   uint64_t active_receive_queue_count;          // receive-perspective count in the last plan
   uint64_t outstanding_application_lease_count; // reserved (always 0)
@@ -243,7 +261,9 @@ total_instance_accounted_bytes =
     total_messaging_accounted_bytes + monitor_queue_accounted_bytes
 ```
 
-Completion queues have no HWM, so they are not added to `total_instance_applied_hwm_bytes`. If either sum exceeds the `uint64_t` range, it saturates at `UINT64_MAX` and sets `ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_OVERFLOW`.
+ROUTER-ROUTER Completion queues have no HWM, so they are not added to
+`total_instance_applied_hwm_bytes`. If either sum exceeds the `uint64_t` range, it saturates at
+`UINT64_MAX` and sets `ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_OVERFLOW`.
 
 `peak_accounted_bytes` is the largest total observed in the current measurement epoch when a budget snapshot query or Auto HWM recalculation inspects the queues. It does not guarantee that it records values retained only briefly between two inspections.
 
@@ -351,7 +371,10 @@ Detaching or reconnecting a queue creates a new generation. HWM replanning and a
 
 Increasing the HWM applies the new value to the current queue generation. When the HWM is decreased and the unreturned charge is greater than the new target, Core does not remove frames already admitted. It stops accepting new frames, waits until the charge reaches or falls below the target, and then applies the new HWM.
 
-Application HWM does not apply to the completion queue through which DEALER and ROUTER advance terminal replies and error replies and synchronize receive-flow-state frames. Monitor queues are also excluded from the queue list used to distribute the application budget.
+Application HWM does not apply to the ROUTER-ROUTER Completion queue that advances terminal replies
+and error replies and synchronizes receive-flow-state frames. DEALER-ROUTER replies and error
+replies apply the same Application queue HWM and peer PAUSED as DATA and REQUEST. Monitor queues are
+also excluded from the queue list used to distribute the application budget.
 
 ### Pending-request admission
 
@@ -439,8 +462,22 @@ This section collects the items that workers must verify. These behaviors are ob
 **HWM changes**
 - Lowering the HWM preserves frames already admitted, and the new HWM applies to admission after the queued amount drains below the new target.
 
-**Excluded targets**
-- DEALER and ROUTER completion replies, receive-flow-state frames, and monitor traffic do not change application send admission results or the denominator of the snapshot's `total_planned_hwm_bytes`.
+**Reply accounting by topology**
+- When a controlled DEALER-ROUTER reply remains queued, its byte delta appears in
+  `core_queue_accounted_bytes`, `current_accounted_bytes`, and, for a multipart record,
+  `provisional_accounted_bytes`, as well as `peak_accounted_bytes` and
+  `total_messaging_accounted_bytes`. `application_accounted_bytes` remains `0`.
+- The same DEALER-ROUTER reply does not appear in `completion_current_accounted_bytes`,
+  `completion_peak_accounted_bytes`, `completion_pending_message_count`, or
+  `active_completion_directional_queue_count`. The Application direction count reports only
+  Application directional queues.
+- A ROUTER-ROUTER reply appears in Completion current, peak, pending, and direction counts and is
+  excluded from the Application water-filling denominator and HWM admission.
+- A DEALER-ROUTER reply that is not admitted because of HWM or PAUSED is observed as Application
+  admission backpressure.
+- Receive-flow control and monitor traffic do not change application send admission results or the
+  denominator of the snapshot's `total_planned_hwm_bytes`.
+- `zlink_auto_hwm_budget_snapshot_t` uses ABI v1 and its defined field layout.
 
 **Snapshot invariance**
 - Calling `zlink_ctx_get_auto_hwm_budget_snapshot` or `zlink_ctx_reset_auto_hwm_budget_metrics` does not change the admission or rejection result for the same send sequence.

@@ -105,9 +105,7 @@ profile은 Core memory budget 비율과 역할별 byte 경계를 선택하고, C
 
 ## 5. Receive flow state
 
-PUB에는 paired DEALER/ROUTER
-[completion lane](../glossary.ko.md#completion-progress-lane)이 없으므로 receive-flow
-상태도 없다. `zlink_socket_set_receive_flow_state()`는 PUB socket에 대해
+PUB은 receive-flow 대상 socket type이 아니다. `zlink_socket_set_receive_flow_state()`는 PUB socket에 대해
 `errno == ENOTSUP`과 함께 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고 아무것도 바꾸지
 않는다. 이 socket의 byte HWM, low water mark와 transport backpressure는 그대로
 유지된다. PUB socket의 monitor는 `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`를 설정하지
