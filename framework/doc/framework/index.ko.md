@@ -239,15 +239,15 @@ Instance Spot의 실제 동작은 [06-spot](cpp/guide/server/06-spot.ko.md)이 �
 동시에 수정하지 않도록 분산 락으로 순서를 지킨다. 실시간 기능 하나를 위해 본체에
 준하는 구성 요소(주황)가 추가된다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/index-existing.html" title="기존 방식 — 웹 서비스 + 실시간" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/index-existing.html" target="_blank">↗ 크게 보기</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing.html" title="기존 방식 — 배달 주문 앱" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-delivery-existing.html" target="_blank">↗ 크게 보기</a></p>
 
 **ZLink 방식.** 주황 조각이 전부 사라지고, node·actor·spot의 위치를 알려주는
 location store 하나가 남는다. 서버 간 호출과 실시간 전달은 runtime 간에 직접
 연결된다.
 
-<iframe class="zlink-diagram" src="/common/diagrams/index-zlink.html" title="ZLink 방식 — 웹 서비스 + 실시간" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/index-zlink.html" target="_blank">↗ 크게 보기</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink.html" title="ZLink 방식 — 배달 주문 앱" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-delivery-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
 sticky LB · WebSocket 서버 · pub/sub 경유 · 분산 락 · service discovery — 다섯 조각이
 **location store 하나**로 줄었다. Kafka·Redis 같은 기존 스택을 대체하는 것이 아니다

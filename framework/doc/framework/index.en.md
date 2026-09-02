@@ -246,15 +246,15 @@ and a distributed lock keeps order so multiple instances don't modify the same o
 once. Adding one real-time feature adds a set of components (orange) nearly as large as the
 main system.
 
-<iframe class="zlink-diagram" src="/common/diagrams/index-existing-en.html" title="Existing approach — web service + real-time" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/index-existing-en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing-en.html" title="Existing approach — web service + real-time" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-delivery-existing-en.html" target="_blank">↗ View larger</a></p>
 
 **The ZLink approach.** Every orange piece disappears, leaving one location store that
 tells you where nodes, actors, and spots live. Server-to-server calls and real-time
 delivery connect directly between runtimes.
 
-<iframe class="zlink-diagram" src="/common/diagrams/index-zlink-en.html" title="ZLink approach — web service + real-time" loading="lazy" style="width:100%;border:0"></iframe>
-<p><a href="/common/diagrams/index-zlink-en.html" target="_blank">↗ View larger</a></p>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink-en.html" title="ZLink approach — web service + real-time" loading="lazy" style="width:100%;border:0"></iframe>
+<p><a href="/common/diagrams/01-delivery-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 Sticky LB, WebSocket server, pub/sub relay, distributed lock, service discovery -- five
 pieces reduced to **one location store.** This doesn't replace an existing stack like Kafka
