@@ -133,10 +133,6 @@ static_assert ((static_cast<uint32_t> (zlink::monitor_event::all)
 static_assert (static_cast<uint32_t> (zlink::monitor_event_flag_t::send_flow_writable)
                  == ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE,
                "monitor_event_flag_t::send_flow_writable must equal the C flag bit");
-static_assert (
-  static_cast<uint32_t> (zlink::monitor_event_flag_t::flow_state_stale_generation)
-    == ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_GENERATION,
-  "monitor_event_flag_t::flow_state_stale_generation must equal the C flag bit");
 static_assert (static_cast<uint32_t> (zlink::monitor_event_flag_t::flow_state_stale_epoch)
                  == ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH,
                "monitor_event_flag_t::flow_state_stale_epoch must equal the C flag bit");
@@ -144,7 +140,7 @@ static_assert (static_cast<uint32_t> (zlink::monitor_event_flag_t::connection_re
                  == ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE,
                "monitor_event_flag_t::connection_ready_edge must equal the C flag bit");
 
-// The event type must surface flags/value/routing-id/pair-id/generation.
+// The event type surfaces only contract-owned logical fields.
 static_assert (std::is_same<decltype (zlink::monitor_event_t ().flags), std::uint32_t>::value,
                "monitor_event_t must expose flags as uint32_t");
 static_assert (std::is_same<decltype (zlink::monitor_event_t ().value), std::uint64_t>::value,
@@ -153,13 +149,6 @@ static_assert (
   std::is_same<decltype (zlink::monitor_event_t ().routing_id),
                std::optional<zlink::routing_id_t>>::value,
   "monitor_event_t must expose an optional routing_id");
-static_assert (
-  std::is_same<decltype (zlink::monitor_event_t ().transport_pair_id), std::uint64_t>::value,
-  "monitor_event_t must expose transport_pair_id");
-static_assert (
-  std::is_same<decltype (zlink::monitor_event_t ().transport_pair_generation),
-               std::uint64_t>::value,
-  "monitor_event_t must expose transport_pair_generation");
 
 // The status projection must expose the five flow metrics as uint64_t.
 static_assert (
@@ -247,7 +236,7 @@ void test_unsupported_socket_send_recv_is_unchanged ()
     assert_not_supported (left);
 
     zlink::message_t outbound = zlink_cpp_contract::make_message ("still-works");
-    assert (right.send ().message (outbound).submit ());
+    right.send ().message (outbound).submit ();
     zlink::message_t inbound;
     assert (left.recv (inbound) == 0);
     assert (inbound.to_string () == "still-works");
@@ -306,6 +295,7 @@ void test_existing_hwm_backpressure_is_unchanged ()
     zlink::socket_monitor_t right_monitor = right.monitor_open ();
 
     right.options ().send_hwm (zlink::byte_count_t::bytes (64));
+    right.options ().send_timeout (std::chrono::milliseconds (0));
 
     const std::string endpoint = zlink_cpp_contract::unique_inproc ("flow-state-hwm-smoke");
     left.bind (endpoint);
@@ -319,12 +309,15 @@ void test_existing_hwm_backpressure_is_unchanged ()
     const std::string payload (256, 'x');
     for (int i = 0; i < 4096; ++i) {
         zlink::message_t message = zlink_cpp_contract::make_message (payload);
-        if (!right.send ()
-               .message (message)
-               .flags (static_cast<int> (zlink::send_flags_t::dontwait))
-               .submit ()) {
-            backpressured = true;
-            break;
+        try {
+            right.send ().message (message).submit ();
+        }
+        catch (const zlink::submit_error_t &error) {
+            if (error.result () == zlink::submit_result_t::backpressured) {
+                backpressured = true;
+                break;
+            }
+            throw;
         }
     }
     assert (backpressured);

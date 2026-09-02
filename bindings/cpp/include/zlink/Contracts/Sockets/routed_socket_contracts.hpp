@@ -12,7 +12,7 @@ class router_socket_t : public routed_message_socket_t
   public:
     explicit router_socket_t (context_t &ctx_);
 
-    routed_send_operation_t send (const routing_id_t &target_rid_);
+    send_operation_t send (const routing_id_t &target_rid_);
 
     // Receive one message into a caller-provided received_t.
     // Returns 0 on success, a recv_result_t value on receive failure or no data, and -1 only for binding-local failure with errno set. The caller may keep a long-lived received_t
@@ -25,7 +25,7 @@ class router_socket_t : public routed_message_socket_t
               recv_flags_t flags_ = recv_flags_t::none);
 
     request_operation_t request (const routing_id_t &routing_id_);
-    reply_operation_t reply (const routing_id_t &routing_id_, uint64_t request_seq_);
+    reply_operation_t reply (const routing_id_t &routing_id_, reply_token_t reply_token_);
 
     void set_routing_id (const routing_id_t &routing_id_);
 

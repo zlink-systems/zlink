@@ -18,8 +18,8 @@ namespace detail
 struct recv_envelope_t
 {
     routing_id_t source_rid;
-    bool has_request_seq;
-    uint64_t request_seq;
+    bool has_reply_token;
+    zlink_reply_token_t reply_token;
     lazy_message_parts_t *parts;
 
     void bind (lazy_message_parts_t &parts_) noexcept { parts = &parts_; }
@@ -27,8 +27,8 @@ struct recv_envelope_t
     void reset () noexcept
     {
         source_rid = zlink::detail::unchecked_empty_routing_id ();
-        has_request_seq = false;
-        request_seq = 0;
+        has_reply_token = false;
+        reply_token = 0;
         if (parts)
             parts->prepare_receive ();
     }
@@ -41,46 +41,41 @@ struct recv_envelope_t
 
     recv_envelope_t () :
         source_rid (zlink::detail::unchecked_empty_routing_id ()),
-        has_request_seq (false),
-        request_seq (0),
+        has_reply_token (false),
+        reply_token (0),
         parts (nullptr)
     {
     }
 };
 
 inline int recv_router_part (void *socket_, const zlink_routing_id_t **source_rid_,
-                             uint64_t *request_seq_, zlink_msg_t *part_,
+                             zlink_reply_token_t *reply_token_, zlink_msg_t *part_,
                              zlink_part_flag_t *has_more_, recv_flags_t flags_)
 {
     return zlink_router_recv_part (
-      socket_, source_rid_, request_seq_, part_, has_more_,
+      socket_, source_rid_, reply_token_, part_, has_more_,
       static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
 }
 
-inline int recv_basic_part (void *socket_, bool use_dealer_recv_,
-  const zlink_routing_id_t **source_rid_, uint8_t *message_type_,
-  uint64_t *request_seq_, zlink_msg_t *part_,
+inline int recv_basic_part (void *socket_,
+  const zlink_routing_id_t **source_rid_, zlink_msg_t *part_,
   zlink_part_flag_t *has_more_, recv_flags_t flags_)
 {
     const zlink_recv_flags_t native_flags =
       static_cast<zlink_recv_flags_t> (static_cast<int> (flags_));
-    if (use_dealer_recv_)
-        return zlink_dealer_recv_part (socket_, message_type_, request_seq_,
-                                       part_, has_more_, native_flags);
     return zlink_recv_part (socket_, source_rid_, part_, has_more_, native_flags);
 }
 
 inline int recv_envelope (void *socket_,
                           recv_flags_t flags_,
                           recv_envelope_t &envelope_,
-                          bool use_router_recv_,
-                          bool use_dealer_recv_)
+                          bool use_router_recv_)
 {
     envelope_.reset ();
 
     if (use_router_recv_) {
         const zlink_routing_id_t *source_rid = nullptr;
-        uint64_t request_seq = 0;
+        zlink_reply_token_t reply_token = 0;
         zlink_part_flag_t has_more = ZLINK_PART_FINAL;
         message_t first_msg;
         if (!first_msg.valid ()) {
@@ -89,7 +84,7 @@ inline int recv_envelope (void *socket_,
         }
 
         const int first_rc = recv_router_part (
-          socket_, &source_rid, &request_seq, detail::native_handle (first_msg),
+          socket_, &source_rid, &reply_token, detail::native_handle (first_msg),
           &has_more, flags_);
         if (first_rc != ZLINK_RECV_OK) {
             return -1;
@@ -98,9 +93,9 @@ inline int recv_envelope (void *socket_,
 
         if (source_rid && source_rid->size > 0)
             envelope_.source_rid = zlink::detail::native_routing_id (*source_rid);
-        if (request_seq != 0) {
-            envelope_.has_request_seq = true;
-            envelope_.request_seq = request_seq;
+        if (reply_token != 0) {
+            envelope_.has_reply_token = true;
+            envelope_.reply_token = reply_token;
         }
 
         if (has_more == ZLINK_PART_FINAL) {
@@ -119,7 +114,7 @@ inline int recv_envelope (void *socket_,
 
             has_more = ZLINK_PART_FINAL;
             const int rc = recv_router_part (
-              socket_, &source_rid, &request_seq, detail::native_handle (next_msg),
+              socket_, &source_rid, &reply_token, detail::native_handle (next_msg),
               &has_more, flags_);
             if (rc != ZLINK_RECV_OK) {
                 return -1;
@@ -137,11 +132,8 @@ inline int recv_envelope (void *socket_,
             return -1;
 
         zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-        uint8_t message_type = 0;
-        uint64_t dealer_request_seq = 0;
         const int first_rc = recv_basic_part (
-          socket_, use_dealer_recv_, &source_rid, &message_type,
-          &dealer_request_seq, detail::native_handle (first_msg), &has_more, flags_);
+          socket_, &source_rid, detail::native_handle (first_msg), &has_more, flags_);
         if (first_rc != ZLINK_RECV_OK) {
             const int saved_errno = errno;
             first_msg.close ();
@@ -149,11 +141,6 @@ inline int recv_envelope (void *socket_,
             return first_rc;
         }
         refresh_payload_presence (first_msg);
-        if (dealer_request_seq != 0) {
-            envelope_.has_request_seq = true;
-            envelope_.request_seq = dealer_request_seq;
-        }
-
         if (has_more == ZLINK_PART_FINAL) {
             envelope_.receive_single_part (std::move (first_msg));
             if (source_rid && source_rid->size > 0)
@@ -169,8 +156,7 @@ inline int recv_envelope (void *socket_,
                 return -1;
 
             const int rc = recv_basic_part (
-              socket_, use_dealer_recv_, &source_rid, &message_type,
-              &dealer_request_seq, detail::native_handle (next_msg), &has_more, flags_);
+              socket_, &source_rid, detail::native_handle (next_msg), &has_more, flags_);
             if (rc != ZLINK_RECV_OK) {
                 const int saved_errno = errno;
                 next_msg.close ();

@@ -6,6 +6,7 @@
 #include <zlink/Contracts/Errors/errors.hpp>
 
 #include <Runtime/Messaging/operation_state.hpp>
+#include <Runtime/Messaging/received_access.hpp>
 
 namespace zlink
 {
@@ -37,19 +38,19 @@ topic_message_t::~topic_message_t ()
 }
 
 received_t::received_t (std::optional<routing_id_t> routing_id_,
-                        std::optional<uint64_t> request_seq_,
+                        std::optional<reply_token_t> reply_token_,
                         std::vector<message_t> parts_) :
     _routing_id (std::move (routing_id_)),
-    _request_seq (std::move (request_seq_)),
+    _reply_token (std::move (reply_token_)),
     _parts (std::move (parts_))
 {
 }
 
 received_t::received_t (std::optional<routing_id_t> routing_id_,
-                        std::optional<uint64_t> request_seq_,
+                        std::optional<reply_token_t> reply_token_,
                         message_t part_) :
     _routing_id (std::move (routing_id_)),
-    _request_seq (std::move (request_seq_)),
+    _reply_token (std::move (reply_token_)),
     _parts (std::move (part_))
 {
 }
@@ -174,17 +175,28 @@ message_t &topic_message_t::first_part ()
 // Send/reply builders retain the routing context encapsulated by received_t.
 send_operation_t received_t::send ()
 {
+    if (!detail::received_access_t::has_send_context (*this))
+        throw submit_error_t (submit_result_t::invalid_state, EINVAL);
     auto state_ptr = detail::acquire_state ();
-    state_ptr->kind = detail::operation_kind_t::received_send;
-    state_ptr->received.received = this;
+    state_ptr->kind = detail::operation_kind_t::raw_routed_send;
+    state_ptr->raw.socket = detail::received_access_t::send_handle (*this);
+    detail::bind_runtime_state (state_ptr->raw,
+                                detail::received_access_t::runtime (*this));
+    detail::cache_first_rid_native (state_ptr->raw.target, *_routing_id);
     return send_operation_t (std::move (state_ptr));
 }
 
 reply_operation_t received_t::reply ()
 {
+    if (!detail::received_access_t::has_reply_context (*this))
+        throw submit_error_t (submit_result_t::invalid_state, EINVAL);
     auto state_ptr = detail::acquire_state ();
-    state_ptr->kind = detail::operation_kind_t::received_reply;
-    state_ptr->received.received = this;
+    state_ptr->kind = detail::operation_kind_t::raw_reply;
+    state_ptr->raw.socket = detail::received_access_t::send_handle (*this);
+    detail::bind_runtime_state (state_ptr->raw,
+                                detail::received_access_t::runtime (*this));
+    state_ptr->raw.target.first_rid = *_routing_id;
+    state_ptr->reply.token = *_reply_token;
     return reply_operation_t (std::move (state_ptr));
 }
 

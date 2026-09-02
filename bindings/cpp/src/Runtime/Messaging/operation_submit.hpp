@@ -25,7 +25,9 @@ inline std::vector<message_t> take_send_parts (operation_state_t &state_)
     return parts;
 }
 
-inline bool submit_raw_send_state (operation_state_t &state_)
+inline bool submit_raw_send_state (operation_state_t &state_,
+                                   void *user_context_ = nullptr,
+                                   zlink_completion_id_t *completion_id_out_ = nullptr)
 {
     const auto throw_invalid_argument = [&] () {
         restore_single_send_part_to_source (state_);
@@ -33,11 +35,7 @@ inline bool submit_raw_send_state (operation_state_t &state_)
     };
     if (!state_.raw.socket)
         throw_invalid_argument ();
-    // Synchronous terminal: the submit cannot outlive the caller's statement,
-    // so the socket that owns this callback state is still the owner for the
-    // whole call. Only its liveness is checked; no ownership share is taken.
-    socket_callback_state_t *const callbacks = live_callback_state (state_.raw);
-    if (!callbacks) {
+    if (!share_runtime_state (state_.raw)) {
         restore_single_send_part_to_source (state_);
         throw submit_error_t (submit_result_t::invalid_state, EINVAL);
     }
@@ -60,12 +58,12 @@ inline bool submit_raw_send_state (operation_state_t &state_)
                       return zlink_send_part (
                         state_.raw.socket, part_out_,
                         static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
-                        part_flag_);
+                        part_flag_, user_context_, completion_id_out_);
                   case operation_kind_t::raw_routed_send:
                       return zlink_send_part_rid (
                         state_.raw.socket, first_rid, part_out_,
                         static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
-                        part_flag_);
+                        part_flag_, user_context_, completion_id_out_);
                   case operation_kind_t::raw_publish:
                       return zlink_publish_part (
                         state_.raw.socket, state_.raw.topic.c_str (), part_out_,
@@ -92,16 +90,21 @@ inline bool submit_raw_send_state (operation_state_t &state_)
     // the state pool is intended to retain it for the next builder chain.
     std::vector<message_t> &parts = state_.message.parts;
     const int raw_rc = zlink::detail::submit_message_parts (
-      parts, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
+      parts, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool is_final_) {
+          void *const context = is_final_ ? user_context_ : nullptr;
+          zlink_completion_id_t *const completion_id =
+            is_final_ ? completion_id_out_ : nullptr;
           switch (state_.kind) {
               case operation_kind_t::raw_send:
                   return zlink_send_part (
                     state_.raw.socket, part_out_,
-                    static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)), part_flag_);
+                    static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)), part_flag_,
+                    context, completion_id);
               case operation_kind_t::raw_routed_send:
                   return zlink_send_part_rid (
                     state_.raw.socket, first_rid, part_out_,
-                    static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)), part_flag_);
+                    static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)), part_flag_,
+                    context, completion_id);
               case operation_kind_t::raw_publish:
                   return zlink_publish_part (
                     state_.raw.socket, state_.raw.topic.c_str (), part_out_,

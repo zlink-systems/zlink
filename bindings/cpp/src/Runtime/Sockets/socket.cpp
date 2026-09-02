@@ -11,7 +11,7 @@
 #include <Runtime/Core/context_access.hpp>
 #include <Runtime/Options/option_ids.hpp>
 #include <Runtime/Sockets/socket_access.hpp>
-#include <Runtime/Sockets/socket_callback_state.hpp>
+#include <Runtime/Sockets/socket_runtime_state.hpp>
 #include <Runtime/Messaging/received_access.hpp>
 #include <Runtime/Native/subscription_reader.hpp>
 
@@ -35,6 +35,12 @@ const void *socket_access_t::native_handle (const socket_t &socket_) noexcept
     return socket_._socket ? detail::native_handle (*socket_._socket) : nullptr;
 }
 
+std::shared_ptr<socket_runtime_state_t> socket_access_t::runtime_state (
+  socket_t &socket_) noexcept
+{
+    return socket_._runtime;
+}
+
 routing_id_t routing_id_from_native_pointer (const void *native_) noexcept
 {
     const zlink_routing_id_t *rid = static_cast<const zlink_routing_id_t *> (native_);
@@ -45,6 +51,8 @@ routing_id_t routing_id_from_native_pointer (const void *native_) noexcept
 
 socket_t::~socket_t ()
 {
+    if (_runtime)
+        _runtime->completion->shutdown ();
     if (_socket)
         (void) _socket->close ();
 }
@@ -56,9 +64,12 @@ socket_t &socket_t::operator= (socket_t &&other_) noexcept
     if (this == &other_)
         return *this;
     if (_socket)
+        if (_runtime)
+            _runtime->completion->shutdown ();
+    if (_socket)
         (void) _socket->close ();
     _socket = std::move (other_._socket);
-    _callbacks = std::move (other_._callbacks);
+    _runtime = std::move (other_._runtime);
     _receive_envelope = std::move (other_._receive_envelope);
     _type = other_._type;
     return *this;
@@ -73,6 +84,8 @@ void socket_t::close ()
 {
     if (!_socket || !_socket->valid ())
         return;
+    if (_runtime)
+        _runtime->completion->shutdown ();
     const int rc = _socket->close ();
     if (rc != 0)
         throw close_error_t (static_cast<close_result_t> (rc), zlink_errno ());
@@ -145,7 +158,7 @@ void socket_t::set_receive_flow_state (receive_flow_state_t state_)
 
 socket_t::socket_t () noexcept :
     _socket (std::make_unique<detail::socket_handle_t> ()),
-    _callbacks (std::make_shared<detail::socket_callback_state_t> ()),
+    _runtime (),
     _type (socket_type::pair)
 {
 }
@@ -153,9 +166,12 @@ socket_t::socket_t () noexcept :
 socket_t::socket_t (context_t &ctx_, socket_type type_) :
     _socket (std::make_unique<detail::socket_handle_t> (
       zlink_socket (detail::native_handle (ctx_), static_cast<zlink_socket_type_t> (type_)), true)),
-    _callbacks (std::make_shared<detail::socket_callback_state_t> ()),
+    _runtime (),
     _type (type_)
 {
+    if (_socket->valid ())
+        _runtime = std::make_shared<detail::socket_runtime_state_t> (
+          detail::native_handle (*_socket));
 }
 
 int socket_t::send (message_t &part_, send_flags_t flags_)
@@ -164,7 +180,7 @@ int socket_t::send (message_t &part_, send_flags_t flags_)
       part_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_) {
           return zlink_send_part (detail::native_handle (*this), part_out_,
                                   static_cast<zlink_send_flags_t> (static_cast<int> (flags_)),
-                                  part_flag_);
+                                  part_flag_, nullptr, nullptr);
       });
 }
 
@@ -174,7 +190,7 @@ int socket_t::send (std::vector<message_t> &parts_, send_flags_t flags_)
       parts_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
           return zlink_send_part (detail::native_handle (*this), part_out_,
                                   static_cast<zlink_send_flags_t> (static_cast<int> (flags_)),
-                                  part_flag_);
+                                  part_flag_, nullptr, nullptr);
       });
 }
 
@@ -185,7 +201,8 @@ int socket_t::send (const routing_id_t &target_rid_, message_t &part_, send_flag
       part_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_) {
           return zlink_send_part_rid (
             detail::native_handle (*this), &target_rid, part_out_,
-            static_cast<zlink_send_flags_t> (static_cast<int> (flags_)), part_flag_);
+            static_cast<zlink_send_flags_t> (static_cast<int> (flags_)), part_flag_, nullptr,
+            nullptr);
       });
 }
 
@@ -198,7 +215,8 @@ int socket_t::send (const routing_id_t &target_rid_,
       parts_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
           return zlink_send_part_rid (
             detail::native_handle (*this), &target_rid, part_out_,
-            static_cast<zlink_send_flags_t> (static_cast<int> (flags_)), part_flag_);
+            static_cast<zlink_send_flags_t> (static_cast<int> (flags_)), part_flag_, nullptr,
+            nullptr);
       });
 }
 
@@ -223,12 +241,10 @@ int socket_t::receive_impl (
     // single reusable collection for this receive path.
     envelope.bind (detail::received_access_t::prepare_receive (received_));
     const bool use_router_recv = _type == socket_type::router;
-    const bool use_dealer_recv = _type == socket_type::dealer;
     int rc = -1;
     try {
         rc = detail::recv_envelope (
-          detail::native_handle (*this), flags_, envelope, use_router_recv,
-          use_dealer_recv);
+          detail::native_handle (*this), flags_, envelope, use_router_recv);
     }
     catch (...) {
         // A failed binding-side allocation must not leave earlier multipart
@@ -245,12 +261,12 @@ int socket_t::receive_impl (
     }
 
     detail::received_access_t::commit_receive_metadata (
-      received_, std::move (envelope.source_rid), envelope.has_request_seq,
-      envelope.request_seq);
+      received_, std::move (envelope.source_rid), envelope.has_reply_token,
+      envelope.reply_token, _runtime ? _runtime->reply_owner : nullptr);
     if (attach_routed_send_context_ && received_.routing_id ().has_value ())
         detail::received_access_t::set_socket_rid_send_context (received_,
                                                                 detail::native_handle (*this),
-                                                                _callbacks);
+                                                                _runtime);
     return 0;
 }
 
@@ -398,11 +414,11 @@ int socket_t::subscription_at (size_t index_, std::string &filter_, bool *is_pat
     return 0;
 }
 
-detail::socket_callback_state_t &socket_t::callback_state ()
+detail::socket_runtime_state_t &socket_t::runtime_state ()
 {
-    if (!_callbacks)
-        _callbacks = std::make_shared<detail::socket_callback_state_t> ();
-    return *_callbacks;
+    if (!_runtime)
+        throw config_error_t (config_result_t::invalid_handle, EINVAL);
+    return *_runtime;
 }
 
 int socket_t::set_routing_id_raw (std::span<const std::byte> data_)

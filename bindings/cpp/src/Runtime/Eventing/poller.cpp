@@ -7,6 +7,7 @@
 #include <Runtime/Eventing/poller_socket_cache.hpp>
 #include <Runtime/Eventing/timer_access.hpp>
 #include <Runtime/Sockets/socket_access.hpp>
+#include <Runtime/Sockets/socket_runtime_state.hpp>
 
 #include <zlink.h>
 
@@ -73,6 +74,10 @@ struct poller_t::impl
 
     void delete_items () noexcept
     {
+        for (const auto &item : items) {
+            if (item->owns_completion)
+                item->completion_owner->transfer_to_runtime (this);
+        }
         items.clear ();
         socket_item_indexes.clear ();
     }
@@ -88,12 +93,12 @@ struct poller_t::impl
 
     void destroy_noexcept () noexcept
     {
+        if (poller) {
+            void *handle = poller;
+            (void) zlink_poller_destroy (&handle);
+            poller = nullptr;
+        }
         clear_vectors ();
-        if (!poller)
-            return;
-        void *handle = poller;
-        (void) zlink_poller_destroy (&handle);
-        poller = nullptr;
     }
 
     void close ()
@@ -105,9 +110,9 @@ struct poller_t::impl
 
         void *handle = poller;
         const close_result_t result = static_cast<close_result_t> (zlink_poller_destroy (&handle));
-        detail::throw_if_failed<close_error_t> (result);
         poller = nullptr;
         clear_vectors ();
+        detail::throw_if_failed<close_error_t> (result);
     }
 
     int find_socket (const void *socket_handle_) const noexcept
@@ -151,7 +156,8 @@ struct poller_t::impl
     void add_socket (void *socket_handle_,
                      poll_event_flag_t events_,
                      std::uintptr_t slot_,
-                     bool native_poller_only_)
+                     bool native_poller_only_,
+                     std::shared_ptr<detail::completion_owner_t> completion_owner_ = {})
     {
         ensure_addable ();
         if (native_poller_only_)
@@ -165,10 +171,17 @@ struct poller_t::impl
         item->events = events_;
         item->slot = slot_;
         item->native_poller_only = native_poller_only_;
+        item->completion_owner = std::move (completion_owner_);
+        item->owns_completion = native_poller_only_ && item->completion_owner != nullptr;
+
+        if (item->owns_completion)
+            item->completion_owner->transfer_to_public (this);
 
         poller_item_t *raw_item = item.get ();
         const config_result_t rc = static_cast<config_result_t> (
           zlink_poller_add (poller, socket_handle_, raw_item, static_cast<short> (events_)));
+        if (rc != config_result_t::ok && item->owns_completion)
+            item->completion_owner->transfer_to_runtime (this);
         commit_added_item (std::move (item), rc);
         if (native_poller_only_)
             ++native_poller_item_count;
@@ -229,10 +242,28 @@ struct poller_t::impl
             return;
         }
 
+        poller_item_t &item = *items[static_cast<size_t> (index)];
+        const bool had_completion = item.owns_completion;
+        const bool wants_completion =
+          (static_cast<short> (events_)
+           & static_cast<short> (poll_event_flag_t::pollcompletion)) != 0;
+        std::shared_ptr<detail::completion_owner_t> owner = item.completion_owner;
+        if (!had_completion && wants_completion) {
+            if (!owner)
+                throw config_error_t (config_result_t::invalid_state, EINVAL);
+            owner->transfer_to_public (this);
+        }
+
         const config_result_t rc = static_cast<config_result_t> (
           zlink_poller_modify (poller, socket_handle_, static_cast<short> (events_)));
+        if (rc != config_result_t::ok && !had_completion && wants_completion)
+            owner->transfer_to_runtime (this);
         detail::throw_if_failed<config_error_t> (rc);
-        items[static_cast<size_t> (index)]->events = events_;
+        item.events = events_;
+        item.owns_completion = wants_completion;
+        item.native_poller_only = wants_completion;
+        if (had_completion && !wants_completion)
+            owner->transfer_to_runtime (this);
     }
 
     void modify_fd (int fd_, poll_event_flag_t events_)
@@ -259,8 +290,13 @@ struct poller_t::impl
           static_cast<config_result_t> (zlink_poller_remove (poller, socket_handle_));
         detail::throw_if_failed<config_error_t> (rc);
 
+        auto owner = items[static_cast<size_t> (index)]->completion_owner;
+        const bool owned_completion =
+          items[static_cast<size_t> (index)]->owns_completion;
         const bool native_only = items[static_cast<size_t> (index)]->native_poller_only;
         erase_item_at (index, native_only);
+        if (owned_completion)
+            owner->transfer_to_runtime (this);
         return true;
     }
 
@@ -342,9 +378,21 @@ struct poller_t::impl
             throw_poll_wait_failure (error, err);
         }
 
-        for (int i = 0; i < rc; ++i)
-            fill_event (events_[static_cast<size_t> (i)], native_events[static_cast<size_t> (i)]);
-        return static_cast<size_t> (rc);
+        size_t out = 0;
+        for (int i = 0; i < rc; ++i) {
+            zlink_poller_event_t native = native_events[static_cast<size_t> (i)];
+            const auto *item = static_cast<const poller_item_t *> (native.user_data);
+            if (item && item->owns_completion
+                && (native.events & static_cast<short> (poll_event_flag_t::pollcompletion))) {
+                const size_t processed = item->completion_owner->drain (true);
+                if (processed == 0)
+                    native.events &= ~static_cast<short> (poll_event_flag_t::pollcompletion);
+            }
+            if (native.events == 0)
+                continue;
+            fill_event (events_[out++], native);
+        }
+        return out;
     }
 
     void sync_socket_native_events_if_needed ()
@@ -440,7 +488,12 @@ void poller_t::add (socket_t &socket_, poll_event_flag_t events_, std::uintptr_t
 {
     const bool native_only =
       (static_cast<short> (events_) & static_cast<short> (poll_event_flag_t::pollcompletion)) != 0;
-    _impl->add_socket (zlink::detail::native_handle (socket_), events_, slot_, native_only);
+    std::shared_ptr<detail::completion_owner_t> owner;
+    const auto runtime = zlink::detail::runtime_state (socket_);
+    if (runtime)
+        owner = runtime->completion;
+    _impl->add_socket (zlink::detail::native_handle (socket_), events_, slot_, native_only,
+                       std::move (owner));
 }
 
 void poller_t::modify_fd (int fd_, poll_event_flag_t events_)

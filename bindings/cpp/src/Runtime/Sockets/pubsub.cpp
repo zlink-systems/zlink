@@ -22,17 +22,15 @@ namespace
 // reference: callback_state() allocates lazily, so the observable step order of
 // the pre-dedup code (topic validation first, then socket handle, then callback
 // state, then topic assignment) must be preserved exactly.
-template <class callback_state_fn_t>
 std::unique_ptr<detail::operation_state_t>
 make_publish_state (socket_t &socket_,
-                    const std::string &topic_id_,
-                    callback_state_fn_t &&callback_state_)
+                    const std::string &topic_id_)
 {
     detail::validate_no_embedded_null (topic_id_, "topic");
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_publish;
     state_ptr->raw.socket = detail::native_handle (socket_);
-    detail::bind_callback_state (state_ptr->raw, callback_state_ ());
+    detail::bind_runtime_state (state_ptr->raw, detail::runtime_state (socket_));
     state_ptr->raw.topic = topic_id_;
     return state_ptr;
 }
@@ -52,9 +50,7 @@ pub_socket_t::pub_socket_t (context_t &ctx_) : publisher_socket_t (ctx_, socket_
 
 publish_operation_t pub_socket_t::publish (const std::string &topic_id_)
 {
-    return publish_operation_t (make_publish_state (
-      *this, topic_id_,
-      [this] () -> detail::socket_callback_state_t & { return callback_state (); }));
+    return publish_operation_t (make_publish_state (*this, topic_id_));
 }
 
 xpub_socket_t::xpub_socket_t (context_t &ctx_) : publisher_socket_t (ctx_, socket_type::xpub)
@@ -63,9 +59,7 @@ xpub_socket_t::xpub_socket_t (context_t &ctx_) : publisher_socket_t (ctx_, socke
 
 publish_operation_t xpub_socket_t::publish (const std::string &topic_id_)
 {
-    return publish_operation_t (make_publish_state (
-      *this, topic_id_,
-      [this] () -> detail::socket_callback_state_t & { return callback_state (); }));
+    return publish_operation_t (make_publish_state (*this, topic_id_));
 }
 
 int xpub_socket_t::receive_subscription_event (subscription_event_t &out_, recv_flags_t flags_)

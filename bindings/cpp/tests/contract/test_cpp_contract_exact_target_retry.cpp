@@ -8,6 +8,8 @@
 
 #include "support.hpp"
 
+#include <Runtime/Sockets/socket_access.hpp>
+#include <zlink.h>
 #include <zlink/message/api.h>
 
 #include <atomic>
@@ -23,16 +25,17 @@ namespace
 
 bool send_dealer_dontwait (zlink::dealer_socket_t &dealer_, const std::string &payload_)
 {
-    zlink::message_t payload = zlink_cpp_contract::make_message (payload_);
-    try {
-        dealer_.send ().message (payload).flags (zlink::send_flags_t::dontwait).submit ();
-        return true;
-    }
-    catch (const zlink::submit_error_t &error) {
-        assert (error.result () == zlink::submit_result_t::backpressured);
-        assert (payload.valid ());
-        return false;
-    }
+    zlink_msg_t payload;
+    assert (zlink_msg_init_size (&payload, payload_.size ()) == 0);
+    std::memcpy (zlink_msg_data (&payload), payload_.data (), payload_.size ());
+    zlink_completion_id_t completion_id = 0;
+    const zlink_submit_result_t result = zlink_send_part (
+      zlink::detail::native_handle (dealer_), &payload, ZLINK_SEND_FLAGS_NONE,
+      ZLINK_PART_FINAL, nullptr, &completion_id);
+    (void) zlink_msg_close (&payload);
+    assert (completion_id == 0);
+    assert (result == ZLINK_SUBMIT_OK || result == ZLINK_SUBMIT_BACKPRESSURED);
+    return result == ZLINK_SUBMIT_OK;
 }
 
 bool fill_until_backpressured (zlink::dealer_socket_t &dealer_,
@@ -56,7 +59,7 @@ int test_blocking_routed_send_resumes_on_core_credit ()
     const uint64_t hwm = UINT64_C (65536) + sizeof (zlink_msg_t);
     dealer.options ().send_hwm (zlink::byte_count_t::bytes (hwm));
     router.options ().recv_hwm (zlink::byte_count_t::bytes (hwm));
-    dealer.options ().send_timeout (std::chrono::seconds (5));
+    dealer.options ().send_timeout (std::chrono::milliseconds (0));
 
     const std::string endpoint =
       zlink_cpp_contract::unique_inproc ("routed-send-resume");
@@ -69,6 +72,7 @@ int test_blocking_routed_send_resumes_on_core_credit ()
         std::fprintf (stderr, "could not reach the send HWM\n");
         return 1;
     }
+    dealer.options ().send_timeout (std::chrono::seconds (5));
 
     // Nothing but Core can release this submit: the binding has no reactor
     // thread, no retry queue, and no timer left to move it along.
@@ -144,6 +148,7 @@ int test_routed_send_without_credit_reports_backpressure ()
     router.bind (endpoint);
     dealer.connect (endpoint);
     std::this_thread::sleep_for (std::chrono::milliseconds (200));
+    dealer.options ().send_timeout (std::chrono::milliseconds (0));
 
     const std::string filler (65536, 'f');
     if (!fill_until_backpressured (dealer, filler)) {
@@ -157,9 +162,8 @@ int test_routed_send_without_credit_reports_backpressure ()
     try {
         dealer.send ()
           .message (payload)
-          .flags (zlink::send_flags_t::dontwait)
           .submit ();
-        std::fprintf (stderr, "DONTWAIT must fail immediately at the HWM\n");
+        std::fprintf (stderr, "blocking NONE must fail at the HWM timeout\n");
         return 2;
     }
     catch (const zlink::submit_error_t &error) {
@@ -171,7 +175,7 @@ int test_routed_send_without_credit_reports_backpressure ()
         }
     }
     if (std::chrono::steady_clock::now () - started >= std::chrono::seconds (2)) {
-        std::fprintf (stderr, "DONTWAIT did not return immediately\n");
+        std::fprintf (stderr, "blocking NONE exceeded the configured timeout\n");
         return 4;
     }
     // The C++ staging policy preserves the public lvalue even though Core

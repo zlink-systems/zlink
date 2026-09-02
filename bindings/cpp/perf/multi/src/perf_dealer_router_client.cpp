@@ -99,7 +99,7 @@ class dealer_router_client_bench_t
         // which runs to its deadline and never signals the relay server.
         // The server is terminated via the run_comparison.py stdin STOP
         // path (and SIGTERM fallback). dotnet removed its equivalent
-        // TrySendStopToken for the same reason.
+        // The stop token uses the same direct terminal for the same reason.
         co_return ok;
     }
 

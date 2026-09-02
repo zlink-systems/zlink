@@ -132,7 +132,7 @@ inline bool run_routed_echo_relay (zlink::router_socket_t &server,
             }
             if (!received.routing_id ().has_value ()
                 || received.routing_id ()->size () == 0
-                || received.request_seq ().has_value ()
+                || received.reply_token ().has_value ()
                 || !measurement_parts_valid (received.parts ())) {
                 replies.error.store (EPROTO, std::memory_order_release);
                 replies.failed.store (true, std::memory_order_release);

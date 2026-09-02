@@ -13,6 +13,7 @@ struct socket_access_t
 {
     static void *native_handle (socket_t &socket_) noexcept;
     static const void *native_handle (const socket_t &socket_) noexcept;
+    static std::shared_ptr<socket_runtime_state_t> runtime_state (socket_t &socket_) noexcept;
 };
 
 inline void *native_handle (socket_t &socket_) noexcept
@@ -23,6 +24,11 @@ inline void *native_handle (socket_t &socket_) noexcept
 inline const void *native_handle (const socket_t &socket_) noexcept
 {
     return socket_access_t::native_handle (socket_);
+}
+
+inline std::shared_ptr<socket_runtime_state_t> runtime_state (socket_t &socket_) noexcept
+{
+    return socket_access_t::runtime_state (socket_);
 }
 
 } // namespace detail

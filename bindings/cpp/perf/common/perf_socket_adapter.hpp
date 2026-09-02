@@ -881,9 +881,9 @@ class socket_t
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, pair_socket_t>::value) {
                 try {
-                    const bool sent =
-                      std::move (socket_.send ()).message (part_).flags (flags_).submit ();
-                    return bool_result_to_errno (sent);
+                    (void) flags_;
+                    std::move (socket_.send ()).message (part_).submit ();
+                    return 0;
                 }
                 catch (const binding_error_t &err) {
                     errno = err.internal_errno ();
@@ -902,11 +902,9 @@ class socket_t
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, stream_socket_t>::value) {
                 try {
-                    const bool sent = std::move (socket_.send (routing_id_))
-                                        .message (part_)
-                                        .flags (flags_)
-                                        .submit ();
-                    return bool_result_to_errno (sent);
+                    (void) flags_;
+                    std::move (socket_.send (routing_id_)).message (part_).submit ();
+                    return 0;
                 }
                 catch (const binding_error_t &err) {
                     errno = err.internal_errno ();
@@ -1143,13 +1141,22 @@ class socket_t
     }
 
     bool request_submit (message_t &part_, std::chrono::milliseconds timeout_,
-                         request_callback_t callback_, int flags_)
+                         std::function<void (request_result_t, std::vector<message_t>)> callback_,
+                         int flags_)
     {
         return visit ([&] (auto &socket_) -> bool {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, dealer_socket_t>::value) {
-                return std::move (socket_.request ()).message (part_)
-                  .timeout (timeout_).flags (flags_).submit (std::move (callback_));
+                (void) flags_;
+                try {
+                    callback_ (request_result_t::ok,
+                               std::move (socket_.request ()).message (part_)
+                                 .timeout (timeout_).submit ());
+                    return true;
+                } catch (const request_error_t &error) {
+                    callback_ (error.result (), {});
+                    return true;
+                }
             } else {
                 throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
             }
@@ -1158,13 +1165,22 @@ class socket_t
 
     bool request_submit (message_t &first_, message_t &second_,
                          std::chrono::milliseconds timeout_,
-                         request_callback_t callback_, int flags_)
+                         std::function<void (request_result_t, std::vector<message_t>)> callback_,
+                         int flags_)
     {
         return visit ([&] (auto &socket_) -> bool {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, dealer_socket_t>::value) {
-                return std::move (socket_.request ()).message (first_).message (second_)
-                  .timeout (timeout_).flags (flags_).submit (std::move (callback_));
+                (void) flags_;
+                try {
+                    callback_ (request_result_t::ok,
+                               std::move (socket_.request ()).message (first_).message (second_)
+                                 .timeout (timeout_).submit ());
+                    return true;
+                } catch (const request_error_t &error) {
+                    callback_ (error.result (), {});
+                    return true;
+                }
             } else {
                 throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
             }
@@ -1173,13 +1189,22 @@ class socket_t
 
     bool request_submit (const routing_id_t &target_rid_, message_t &part_,
                          std::chrono::milliseconds timeout_,
-                         request_callback_t callback_, int flags_)
+                         std::function<void (request_result_t, std::vector<message_t>)> callback_,
+                         int flags_)
     {
         return visit ([&] (auto &socket_) -> bool {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
-                return std::move (socket_.request (target_rid_)).message (part_)
-                  .timeout (timeout_).flags (flags_).submit (std::move (callback_));
+                (void) flags_;
+                try {
+                    callback_ (request_result_t::ok,
+                               std::move (socket_.request (target_rid_)).message (part_)
+                                 .timeout (timeout_).submit ());
+                    return true;
+                } catch (const request_error_t &error) {
+                    callback_ (error.result (), {});
+                    return true;
+                }
             } else {
                 throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
             }
@@ -1188,13 +1213,22 @@ class socket_t
 
     bool request_submit (const routing_id_t &target_rid_, message_t &first_,
                          message_t &second_, std::chrono::milliseconds timeout_,
-                         request_callback_t callback_, int flags_)
+                         std::function<void (request_result_t, std::vector<message_t>)> callback_,
+                         int flags_)
     {
         return visit ([&] (auto &socket_) -> bool {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
-                return std::move (socket_.request (target_rid_)).message (first_).message (second_)
-                  .timeout (timeout_).flags (flags_).submit (std::move (callback_));
+                (void) flags_;
+                try {
+                    callback_ (request_result_t::ok,
+                               std::move (socket_.request (target_rid_)).message (first_)
+                                 .message (second_).timeout (timeout_).submit ());
+                    return true;
+                } catch (const request_error_t &error) {
+                    callback_ (error.result (), {});
+                    return true;
+                }
             } else {
                 throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
             }
@@ -1246,27 +1280,6 @@ class socket_t
             }
             return -1;
         }
-    }
-
-    int
-    set_packet_handler (std::function<void (const routing_id_t &, message_t, message_t)> handler_)
-    {
-        return visit ([&] (auto &socket_) -> int {
-            using socket_type_t = typename std::decay<decltype (socket_)>::type;
-            if constexpr (std::is_same<socket_type_t, stream_socket_t>::value) {
-                try {
-                    socket_.set_packet_handler (std::move (handler_));
-                    return 0;
-                }
-                catch (const binding_error_t &err) {
-                    errno = err.internal_errno ();
-                    return -1;
-                }
-            } else {
-                errno = EOPNOTSUPP;
-                return -1;
-            }
-        });
     }
 
     int set_subscription (const std::string &filter_)

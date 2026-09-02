@@ -5,7 +5,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <optional>
 
@@ -56,8 +55,6 @@ class timer_t
     void stop ();
 
     std::optional<uint64_t> recv ();
-
-    void on_fire (std::function<void (uint64_t)> handler_);
 
     void close ();
 

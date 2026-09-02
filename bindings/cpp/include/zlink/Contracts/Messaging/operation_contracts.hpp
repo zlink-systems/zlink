@@ -31,7 +31,7 @@ template <typename T> class async_result_state_t
     virtual bool suspend (std::coroutine_handle<> continuation_,
                           async_continuation_scheduler_t scheduler_) = 0;
     virtual T take () = 0;
-    virtual bool cancel () noexcept = 0;
+    virtual void detach () noexcept = 0;
     virtual void abandon (std::coroutine_handle<> continuation_) noexcept = 0;
 };
 
@@ -43,7 +43,7 @@ template <> class async_result_state_t<void>
     virtual bool suspend (std::coroutine_handle<> continuation_,
                           async_continuation_scheduler_t scheduler_) = 0;
     virtual void take () = 0;
-    virtual bool cancel () noexcept = 0;
+    virtual void detach () noexcept = 0;
     virtual void abandon (std::coroutine_handle<> continuation_) noexcept = 0;
 };
 
@@ -51,15 +51,10 @@ struct async_result_access_t;
 } // namespace detail
 
 /// A move-only, single-consumer completion object for a binding operation.
-/// Awaiting suspends the coroutine without occupying the calling thread. If an
-/// unconsumed result or a suspended awaiter is destroyed, the binding requests
-/// cancellation of the operation. A request already accepted by Core may still
-/// run to its Core-owned terminal event so native reply resources can be released.
-/// For Core-driven messaging completions, the callback and resumed continuation
-/// run in Core's completion context unless the surrounding promise explicitly
-/// hands them to another executor. Destroying the socket or context from that
-/// callback or resumed continuation deadlocks; submitting send, publish, or
-/// request work from a completion callback fails with EDEADLK.
+/// Awaiting suspends the coroutine without occupying the calling thread.
+/// Destroying an unconsumed result detaches only the caller-side waiter. Core
+/// keeps ownership of an accepted operation and the socket-local completion
+/// drain releases a later native result.
 template <typename T> class async_result_t
 {
   private:
@@ -121,7 +116,7 @@ template <typename T> class async_result_t
     {
         if (this != &other_) {
             if (_state)
-                (void) _state->cancel ();
+                _state->detach ();
             _state = std::move (other_._state);
         }
         return *this;
@@ -133,12 +128,8 @@ template <typename T> class async_result_t
     ~async_result_t ()
     {
         if (_state)
-            (void) _state->cancel ();
+            _state->detach ();
     }
-
-    /// Requests cancellation before Core admission. Returns false when another
-    /// terminal event already won or Core owns the admitted request lifecycle.
-    bool cancel () noexcept { return _state && _state->cancel (); }
 
     awaiter_t operator co_await () &&
     {
@@ -187,7 +178,7 @@ namespace detail
 struct operation_state_t;
 } // namespace detail
 
-/// @brief Accepts further parts, flags, timeout, and send terminals.
+/// @brief Accepts further parts and the blocking or awaitable send terminal.
 /// @note Parts are consumed on a successful submit (see @ref send_operation_t).
 class send_submit_operation_t : private detail::operation_builder_base_t<
                                   detail::operation_state_t,
@@ -203,16 +194,11 @@ class send_submit_operation_t : private detail::operation_builder_base_t<
 
     send_submit_operation_t &&message (message_t &part_) &&;
     send_submit_operation_t &&message (message_t &&part_) &&;
-    send_submit_operation_t &&flags (int flags_) &&;
-    send_submit_operation_t &&timeout (std::chrono::milliseconds timeout_) &&;
     /// Submits the part sequence to Core on the calling thread. The wait
     /// bound is `SNDTIMEO` on the socket; the binding owns no deadline.
-    bool submit () &&;
-    /// Completes from Core's send-completion callback. The awaiting coroutine
-    /// resumes in that callback's context; the binding owns no thread, queue,
-    /// retry loop, or timer. Destroying the socket or context from the resumed
-    /// continuation deadlocks, and submitting from a completion callback fails
-    /// with EDEADLK.
+    void submit () &&;
+    /// Uses Core DONTWAIT admission and completes after the socket-local
+    /// completion drain has processed the native result.
     async_result_t<void> async () &&;
 
   private:
@@ -221,72 +207,6 @@ class send_submit_operation_t : private detail::operation_builder_base_t<
     using base_t::state;
 
     friend class send_operation_t;
-};
-
-/// @brief Accepts further parts, flags, timeout, and terminals of a DEALER/ROUTER send.
-class routed_send_submit_operation_t : private detail::operation_builder_base_t<
-                                         detail::operation_state_t,
-                                         detail::pooled_operation_state_policy_t>
-{
-    using base_t = detail::operation_builder_base_t<detail::operation_state_t,
-                                                    detail::pooled_operation_state_policy_t>;
-
-  public:
-    ~routed_send_submit_operation_t ();
-    routed_send_submit_operation_t (routed_send_submit_operation_t &&) noexcept;
-    routed_send_submit_operation_t &
-    operator= (routed_send_submit_operation_t &&) noexcept;
-
-    routed_send_submit_operation_t &&message (message_t &part_) &&;
-    routed_send_submit_operation_t &&message (message_t &&part_) &&;
-    /// Selects the synchronous submit mode. `none` lets Core block up to
-    /// `SNDTIMEO`; `dontwait` reports immediate backpressure as submit_error_t.
-    routed_send_submit_operation_t &&flags (int flags_) &&;
-    routed_send_submit_operation_t &&timeout (std::chrono::milliseconds timeout_) &&;
-
-    /// Submits the part sequence to Core on the calling thread. Core owns the
-    /// HWM contract: `none` blocks inside Core up to `SNDTIMEO`; `dontwait`
-    /// returns immediate backpressure as @ref submit_error_t. The binding
-    /// neither parks, retries, nor times the operation out. The parts stay
-    /// owned by the caller when the submit does not succeed.
-    void submit () &&;
-    /// Completes from Core's send-completion callback. The awaiting coroutine
-    /// resumes in that callback's context; destroying the socket or context
-    /// from it deadlocks, and submitting from a completion callback fails with
-    /// EDEADLK.
-    async_result_t<void> async () &&;
-
-  private:
-    using base_t::base_t;
-    using base_t::release_state_ptr;
-    using base_t::state;
-
-    friend class routed_send_operation_t;
-};
-
-/// @brief Builds a DEALER/ROUTER send.
-class routed_send_operation_t : private detail::operation_builder_base_t<
-                                  detail::operation_state_t,
-                                  detail::pooled_operation_state_policy_t>
-{
-    using base_t = detail::operation_builder_base_t<detail::operation_state_t,
-                                                    detail::pooled_operation_state_policy_t>;
-
-  public:
-    ~routed_send_operation_t ();
-    routed_send_operation_t (routed_send_operation_t &&) noexcept;
-    routed_send_operation_t &operator= (routed_send_operation_t &&) noexcept;
-
-    routed_send_submit_operation_t message (message_t &part_) &&;
-    routed_send_submit_operation_t message (message_t &&part_) &&;
-
-  private:
-    using base_t::base_t;
-    using base_t::release_state_ptr;
-    using base_t::state;
-
-    friend class zlink::dealer_socket_t;
-    friend class zlink::router_socket_t;
 };
 
 /// @brief Accepts further parts, flags, and the synchronous publish submit.
@@ -380,7 +300,7 @@ class send_operation_t : private detail::operation_builder_base_t<
     friend class zlink::received_t;
 };
 
-/// @brief Accepts further parts, timeout, and the three C++ request terminals.
+/// @brief Accepts further parts, reply timeout, and the two C++ request terminals.
 /// @note Parts are consumed on a successful submit (see @ref send_operation_t for the ownership model).
 class request_submit_operation_t : private detail::operation_builder_base_t<
                                      detail::operation_state_t,
@@ -396,7 +316,6 @@ class request_submit_operation_t : private detail::operation_builder_base_t<
 
     request_submit_operation_t &&message (message_t &part_) &&;
     request_submit_operation_t &&message (message_t &&part_) &&;
-    request_submit_operation_t &&flags (int flags_) &&;
     request_submit_operation_t &&timeout (std::chrono::milliseconds timeout_) &&;
     /// Submits the request to one exact target on the calling thread and
     /// returns a suspension that Core completes from its reply handler
@@ -407,10 +326,6 @@ class request_submit_operation_t : private detail::operation_builder_base_t<
     /// owns this wait; the binding creates no thread. Destroying the socket or
     /// context from a resumed continuation or callback deadlocks.
     std::vector<message_t> submit () &&;
-    /// Returns immediately after Core accepts the request. The callback fires
-    /// exactly once in Core's delivery context and owns successful reply parts.
-    /// Submitting from that callback fails with EDEADLK.
-    bool submit (request_callback_t callback_) &&;
 
   private:
     using base_t::base_t;
@@ -445,7 +360,7 @@ class request_operation_t : private detail::operation_builder_base_t<
     friend class zlink::router_socket_t;
 };
 
-/// @brief Accepts further parts, flags, and the terminal submit of a reply builder.
+/// @brief Accepts further parts and the synchronous terminal of a reply builder.
 /// @note Parts are consumed on a successful submit (see @ref send_operation_t for the ownership model).
 class reply_submit_operation_t : private detail::operation_builder_base_t<
                                    detail::operation_state_t,
@@ -460,7 +375,6 @@ class reply_submit_operation_t : private detail::operation_builder_base_t<
     reply_submit_operation_t &operator= (reply_submit_operation_t &&) noexcept;
 
     reply_submit_operation_t &&message (message_t &part_) &&;
-    reply_submit_operation_t &&flags (int flags_) &&;
     void submit () &&;
 
   private:

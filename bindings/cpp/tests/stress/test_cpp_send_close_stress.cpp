@@ -74,6 +74,7 @@ void run_round (int round_, int sender_count_, int attempts_per_sender_,
     zlink::context_t ctx;
     zlink::pair_socket_t receiver (ctx);
     zlink::pair_socket_t sender (ctx);
+    sender.options ().send_timeout (std::chrono::milliseconds (0));
     zlink::socket_monitor_t receiver_monitor = receiver.monitor_open ();
     zlink::socket_monitor_t sender_monitor = sender.monitor_open ();
 
@@ -143,19 +144,11 @@ void run_round (int round_, int sender_count_, int attempts_per_sender_,
                 bool accepted = false;
                 bool expected_failure = false;
                 try {
-                    accepted = multipart
-                      ? sender.send ()
-                          .message (first)
-                          .message (second)
-                          .message (third)
-                          .flags (static_cast<int> (zlink::send_flags_t::dontwait))
-                          .submit ()
-                      : sender.send ()
-                          .message (first)
-                          .flags (static_cast<int> (zlink::send_flags_t::dontwait))
-                          .submit ();
-                    if (!accepted)
-                        counts_.backpressured.fetch_add (1, std::memory_order_relaxed);
+                    if (multipart)
+                        sender.send ().message (first).message (second).message (third).submit ();
+                    else
+                        sender.send ().message (first).submit ();
+                    accepted = true;
                 }
                 catch (const zlink::submit_error_t &error) {
                     expected_failure = expected_submit_failure (error, counts_);

@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 #pragma once
 
+#include <zlink_enum.h>
+
 namespace zlink::detail
 {
 
@@ -85,7 +87,8 @@ enum class sub_option_id : int
 
 enum class stream_option_id : int
 {
-    notify = 13569
+    notify = ZLINK_STREAM_OPT_NOTIFY,
+    recv_mode = ZLINK_STREAM_OPT_RECV_MODE
 };
 
 } // namespace zlink::detail

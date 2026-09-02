@@ -92,8 +92,6 @@ class xpub_socket_t;
 class timer_t;
 class send_operation_t;
 class send_submit_operation_t;
-class routed_send_operation_t;
-class routed_send_submit_operation_t;
 class request_operation_t;
 class request_submit_operation_t;
 class reply_operation_t;

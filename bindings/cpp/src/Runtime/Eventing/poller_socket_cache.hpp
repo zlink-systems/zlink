@@ -14,6 +14,7 @@ namespace zlink
 {
 
 class timer_t;
+namespace detail { class completion_owner_t; }
 
 struct poller_item_t
 {
@@ -25,6 +26,8 @@ struct poller_item_t
     poll_event_flag_t events = poll_event_flag_t::none;
     std::uintptr_t slot = 0;
     bool native_poller_only = false;
+    std::shared_ptr<detail::completion_owner_t> completion_owner;
+    bool owns_completion = false;
 };
 
 struct socket_poll_cache_t

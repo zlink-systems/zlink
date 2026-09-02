@@ -62,7 +62,7 @@ class dealer_socket_t : public message_socket_t
   public:
     explicit dealer_socket_t (context_t &ctx_);
 
-    routed_send_operation_t send ();
+    send_operation_t send ();
 
     // Receive one message into a caller-provided received_t.
     // Returns 0 on success, a recv_result_t value on receive failure or no data, and -1 only for binding-local failure with errno set.

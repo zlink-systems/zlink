@@ -58,37 +58,6 @@ static_assert (static_cast<uint32_t> (zlink::monitor_status_detail::flow_state) 
                "monitor_status_detail::flow_state must match "
                "ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE");
 
-template <typename T> class has_on_event_t
-{
-  private:
-    template <typename U>
-    static auto test (int) -> decltype (std::declval<U &> ().on_event (
-                                          std::function<void (const zlink::monitor_event_t &)> ()),
-                                        std::true_type ());
-
-    template <typename> static std::false_type test (...);
-
-  public:
-    static const bool value = decltype (test<T> (0))::value;
-};
-
-static_assert (has_on_event_t<zlink::socket_monitor_t>::value,
-               "socket_monitor_t must expose on_event");
-
-template <typename T> class has_ignore_event_t
-{
-  private:
-    template <typename U>
-    static auto
-    test (int) -> decltype (U::ignore_event (std::declval<const zlink::monitor_event_t &> ()),
-                            std::true_type ());
-
-    template <typename> static std::false_type test (...);
-
-  public:
-    static const bool value = decltype (test<T> (0))::value;
-};
-
 template <typename T> class has_size_t
 {
   private:
@@ -101,8 +70,6 @@ template <typename T> class has_size_t
     static const bool value = decltype (test<T> (0))::value;
 };
 
-static_assert (has_ignore_event_t<zlink::socket_monitor_t>::value,
-               "socket_monitor_t must expose ignore_event");
 static_assert (has_size_t<zlink::poller_t>::value, "poller_t must expose size");
 
 template <typename T> class has_single_event_wait_t
@@ -164,25 +131,6 @@ static_assert (!has_tag_field_t<zlink::poll_event_t>::value,
                "poll_event_t must not expose object tag");
 static_assert (!has_raw_tag_field_t<zlink::poll_event_t>::value,
                "poll_event_t must not expose raw tag");
-
-struct monitor_callback_state_t
-{
-    std::mutex mutex;
-    std::condition_variable cv;
-    bool ready = false;
-    zlink::monitor_event_t event;
-};
-
-void socket_monitor_callback (monitor_callback_state_t &state_,
-                              const zlink::monitor_event_t &event_)
-{
-    {
-        std::lock_guard<std::mutex> lock (state_.mutex);
-        state_.event = event_;
-        state_.ready = true;
-    }
-    state_.cv.notify_one ();
-}
 
 bool wait_for_any_socket_monitor_event (zlink::socket_monitor_t &monitor_, int timeout_ms_)
 {
@@ -285,7 +233,7 @@ void test_socket_monitor_exposes_connection_identity ()
     assert (observed_ready);
 }
 
-void test_socket_monitor_ignore_event_and_poller_size ()
+void test_socket_monitor_and_poller_size ()
 {
     zlink::context_t ctx;
     zlink::pair_socket_t server (ctx);
@@ -295,8 +243,6 @@ void test_socket_monitor_ignore_event_and_poller_size ()
 
     poller.add (server, zlink::poll_event_flag_t::pollin, 1);
     assert (poller.size () == 1);
-
-    monitor.on_event (zlink::socket_monitor_t::ignore_event);
 
     server.bind ("tcp://127.0.0.1:*");
     const std::string endpoint = server.options ().last_endpoint ();
@@ -341,7 +287,7 @@ void test_poller_wait_buffer_returns_slot ()
     poller.add (left, zlink::poll_event_flag_t::pollin, 17);
 
     zlink::message_t first = zlink_cpp_contract::make_message ("first");
-    assert (right.send ().message (first).submit ());
+    right.send ().message (first).submit ();
     assert (poller.wait (events.data (), events.size (), std::chrono::milliseconds (2000)) == 1);
     assert (events[0].source_kind == zlink::poll_source_kind_t::socket);
     assert (events[0].slot == 17);
@@ -354,7 +300,7 @@ void test_poller_wait_buffer_returns_slot ()
 
     zlink::message_t second = zlink_cpp_contract::make_message ("second");
     poller.add (left, zlink::poll_event_flag_t::pollin, 23);
-    assert (right.send ().message (second).submit ());
+    right.send ().message (second).submit ();
     assert (poller.wait (events.data (), events.size (), std::chrono::milliseconds (2000)) == 1);
     assert (events[0].slot == 23);
 
@@ -382,7 +328,7 @@ void test_socket_only_poller_modify_rebuilds_cached_items ()
 
     std::vector<zlink::poll_event_t> events (1);
     zlink::message_t first = zlink_cpp_contract::make_message ("first");
-    assert (right.send ().message (first).submit ());
+    right.send ().message (first).submit ();
     assert (poller.wait (events.data (), events.size (), std::chrono::milliseconds (50)) == 0);
 
     poller.modify (left, zlink::poll_event_flag_t::pollin);
@@ -396,7 +342,7 @@ void test_socket_only_poller_modify_rebuilds_cached_items ()
     assert (inbound.to_string () == "first");
 
     zlink::message_t second = zlink_cpp_contract::make_message ("second");
-    assert (right.send ().message (second).submit ());
+    right.send ().message (second).submit ();
     assert (poller.wait (events.data (), events.size (), std::chrono::milliseconds (2000)) == 1);
     assert (events[0].slot == 11);
     assert (left.recv (inbound) == 0);
@@ -404,7 +350,7 @@ void test_socket_only_poller_modify_rebuilds_cached_items ()
 
     poller.modify (left, zlink::poll_event_flag_t::none);
     zlink::message_t third = zlink_cpp_contract::make_message ("third");
-    assert (right.send ().message (third).submit ());
+    right.send ().message (third).submit ();
     assert (poller.wait (events.data (), events.size (), std::chrono::milliseconds (50)) == 0);
 
     poller.modify (left, zlink::poll_event_flag_t::pollin);
@@ -435,8 +381,8 @@ void test_poller_capacity_leaves_remaining_ready_source ()
 
     zlink::message_t first = zlink_cpp_contract::make_message ("a");
     zlink::message_t second = zlink_cpp_contract::make_message ("b");
-    assert (sender1.send ().message (first).submit ());
-    assert (sender2.send ().message (second).submit ());
+    sender1.send ().message (first).submit ();
+    sender2.send ().message (second).submit ();
 
     std::vector<zlink::poll_event_t> events (1);
     assert (poller.wait (events.data (), events.size (), std::chrono::milliseconds (2000)) == 1);
@@ -477,7 +423,7 @@ void test_poller_remove_suppresses_ready_events ()
     assert (poller.remove (receiver));
 
     zlink::message_t message = zlink_cpp_contract::make_message ("removed");
-    assert (sender.send ().message (message).submit ());
+    sender.send ().message (message).submit ();
 
     zlink::poll_event_t event;
     assert (poller.wait (&event, 1, std::chrono::milliseconds (0)) == 0);
@@ -498,7 +444,7 @@ void test_poller_distinguishes_timer_and_socket_in_same_buffer ()
     poller.add (timer, 42);
 
     zlink::message_t message = zlink_cpp_contract::make_message ("socket");
-    assert (sender.send ().message (message).submit ());
+    sender.send ().message (message).submit ();
     timer.start (std::chrono::milliseconds (5), 1);
 
     std::vector<zlink::poll_event_t> events (2);
@@ -528,7 +474,7 @@ void test_poller_distinguishes_timer_and_socket_in_same_buffer ()
     assert (saw_timer);
 }
 
-void test_socket_monitor_on_event_callback ()
+void test_socket_monitor_remains_pull_only_after_move ()
 {
     zlink::context_t ctx;
     zlink::pair_socket_t server (ctx);
@@ -537,12 +483,6 @@ void test_socket_monitor_on_event_callback ()
     zlink::socket_monitor_t monitor = server.monitor_open ();
     assert (monitor.valid ());
 
-    monitor_callback_state_t callback_state;
-    monitor.on_event ([&callback_state] (const zlink::monitor_event_t &event) {
-        socket_monitor_callback (callback_state, event);
-    });
-    // Registration must survive a move; Core userdata cannot point at the
-    // moved-from socket_monitor_t object.
     zlink::socket_monitor_t moved_monitor = std::move (monitor);
 
     server.bind ("tcp://127.0.0.1:*");
@@ -550,13 +490,6 @@ void test_socket_monitor_on_event_callback ()
     endpoint = server.options ().last_endpoint ();
     assert (!endpoint.empty ());
     client.connect (endpoint);
-
-    {
-        std::unique_lock<std::mutex> lock (callback_state.mutex);
-        assert (callback_state.cv.wait_for (lock, std::chrono::seconds (2),
-                                            [&callback_state] { return callback_state.ready; }));
-    }
-    assert (static_cast<uint64_t> (callback_state.event.event) != 0u);
 
     bool monitor_status_ready = false;
     const std::chrono::steady_clock::time_point monitor_status_deadline =
@@ -581,12 +514,12 @@ int main ()
     test_socket_monitor_open_recv_snapshot ();
     test_socket_monitor_hwm_bytes_are_forwarded_exactly ();
     test_socket_monitor_exposes_connection_identity ();
-    test_socket_monitor_ignore_event_and_poller_size ();
+    test_socket_monitor_and_poller_size ();
     test_poller_wait_buffer_returns_slot ();
     test_socket_only_poller_modify_rebuilds_cached_items ();
     test_poller_capacity_leaves_remaining_ready_source ();
     test_poller_remove_suppresses_ready_events ();
     test_poller_distinguishes_timer_and_socket_in_same_buffer ();
-    test_socket_monitor_on_event_callback ();
+    test_socket_monitor_remains_pull_only_after_move ();
     return 0;
 }

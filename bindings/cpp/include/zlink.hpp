@@ -14,6 +14,7 @@
 #include "zlink/Contracts/Messaging/received.hpp"
 #include "zlink/Contracts/Messaging/topic_message.hpp"
 #include "zlink/Contracts/Messaging/subscription_event.hpp"
+#include "zlink/Contracts/Messaging/stream_packet.hpp"
 #include "zlink/Contracts/Messaging/operation_contracts.hpp"
 #include "zlink/Contracts/Sockets/socket_contracts.hpp"
 #include "zlink/Contracts/Sockets/message_socket_contracts.hpp"

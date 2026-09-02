@@ -12,7 +12,6 @@ namespace zlink
 struct timer_t::impl
 {
     void *handle = nullptr;
-    std::function<void (uint64_t)> handler;
 };
 
 namespace detail
@@ -86,20 +85,6 @@ std::optional<uint64_t> timer_t::recv ()
     if (result != recv_result_t::ok)
         throw recv_error_t (result, zlink_errno ());
     return std::optional<uint64_t> (fire_count);
-}
-
-void timer_t::on_fire (std::function<void (uint64_t)> handler_)
-{
-    _impl->handler = std::move (handler_);
-    detail::throw_if_failed<handler_error_t> (static_cast<handler_result_t> (zlink_timer_handler (
-      _impl->handle,
-      [] (void *, uint64_t fire_count_, void *userdata_) {
-          timer_t *self = static_cast<timer_t *> (userdata_);
-          if (!self || !self->_impl || !self->_impl->handler)
-              return;
-          self->_impl->handler (fire_count_);
-      },
-      this)));
 }
 
 void timer_t::close ()

@@ -57,12 +57,8 @@ enum class monitor_event_flag_t : uint32_t
     /// pipe actually writable; clear when another cause (byte HWM, transport
     /// wait or termination) still blocks it.
     send_flow_writable = 1u << 1,
-    /// Set on `flow_state_stale` when the frame named a different connection
-    /// generation. `value` then carries the received generation, and
-    /// `transport_pair_generation` carries the current one.
-    flow_state_stale_generation = 1u << 2,
     /// Set on `flow_state_stale` when the epoch did not advance inside the
-    /// current generation. `value` then carries the received epoch.
+    /// current connection. `value` then carries the received epoch.
     flow_state_stale_epoch = 1u << 3
 };
 
@@ -84,8 +80,6 @@ struct monitor_event_t
         event (monitor_event::closed),
         value (0),
         connection_id (0),
-        transport_pair_id (0),
-        transport_pair_generation (0),
         transport_lane (0),
         flags (0),
         routing_id (std::nullopt),
@@ -98,9 +92,6 @@ struct monitor_event_t
     std::uint64_t value;
     /* Identifies the physical transport attempt that emitted the event. */
     std::uint64_t connection_id;
-    /* Identifies the paired application/completion transport, when present. */
-    std::uint64_t transport_pair_id;
-    std::uint64_t transport_pair_generation;
     std::uint32_t transport_lane;
     std::uint32_t flags;
     std::optional<routing_id_t> routing_id;

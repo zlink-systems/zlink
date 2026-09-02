@@ -9,6 +9,7 @@ int main ()
     zlink::stream_socket_t server (ctx);
     zlink::socket_monitor_t server_monitor = server.monitor_open ();
     server.options ().notify (false);
+    server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
 
     server.bind ("tcp://127.0.0.1:0");
     const std::string endpoint = server.options ().last_endpoint ();

@@ -376,6 +376,7 @@ bool perf_stream_server (const std::string &lib_name, const std::string &transpo
         options.recv_timeout (std::chrono::milliseconds (io_timeout_ms));
         options.linger (std::chrono::milliseconds (0));
         options.tcp_no_delay (true);
+        options.recv_mode (zlink::stream_recv_mode_t::packet);
         if (!perf::multi::recalculate_auto_hwm (ctx))
             return false;
 
@@ -404,11 +405,9 @@ bool perf_stream_server (const std::string &lib_name, const std::string &transpo
         const std::shared_ptr<stream_handler_context_t> handler_context =
           std::make_shared<stream_handler_context_t> ();
         handler_context->server = &server;
-        server.set_packet_handler ([handler_context] (const zlink::routing_id_t &source_rid_,
-                                                      zlink::message_t header_,
-                                                      zlink::message_t body_) {
-            handle_packet (handler_context, source_rid_, header_, body_);
-        });
+        // Phase 7 will replace the former callback ingress with a public
+        // poller plus recv_packet() drain loop. Keep the benchmark buildable
+        // in Phase 6 without reintroducing a callback surface.
 
         perf::multi::print_ready (endpoint);
         // CLIENT_READY means the shared raw peer connected every requested

@@ -97,7 +97,9 @@ enum class recv_result_t : int
     terminated = 203,
     invalid_handle = 204,
     not_supported = 205,
-    internal_error = 206
+    internal_error = 206,
+    buffer_too_small = 207,
+    invalid_state = 208
 };
 
 } // namespace zlink

@@ -588,7 +588,7 @@ inline bool run_server (const config_t &config_,
             // PERF_POLICY / C parity: the reference server receives and echoes
             // one native part. Use the public single-part view so the C++ case
             // does not add vector materialization that is absent from C.
-            if (!measurement_parts_valid (received.parts ()) || !received.request_seq ().has_value ())
+            if (!measurement_parts_valid (received.parts ()) || !received.reply_token ().has_value ())
                 continue;
             zlink::message_t &part = received.parts ().front ();
             if (!submit_router_reply (received, part))

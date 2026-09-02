@@ -170,32 +170,33 @@ inline bool submit_callback_request (ClientSocket &client_,
                                      const zlink::routing_id_t &server_rid_,
                                      zlink::message_t &payload_,
                                      std::chrono::milliseconds timeout_,
-                                     zlink::request_callback_t callback_)
+                                     std::function<void (zlink::request_result_t,
+                                                         std::vector<zlink::message_t>)> callback_)
 {
-    if constexpr (std::is_same<ClientSocket, zlink::router_socket_t>::value) {
-        if (measurement_part_count () == 2) {
+    try {
+        std::vector<zlink::message_t> result;
+        if constexpr (std::is_same<ClientSocket, zlink::router_socket_t>::value) {
+            if (measurement_part_count () == 2) {
+                zlink::message_t tail = message_from_payload (NULL, 0);
+                result = std::move (client_.request (server_rid_).message (payload_))
+                           .message (tail).timeout (timeout_).submit ();
+            } else {
+                result = std::move (client_.request (server_rid_)).message (payload_)
+                           .timeout (timeout_).submit ();
+            }
+        } else if (measurement_part_count () == 2) {
             zlink::message_t tail = message_from_payload (NULL, 0);
-            return std::move (client_.request (server_rid_).message (payload_)).message (tail)
-              .timeout (timeout_)
-              .flags (static_cast<int> (zlink::send_flags_t::dontwait))
-              .submit (std::move (callback_));
+            result = std::move (client_.request ().message (payload_))
+                       .message (tail).timeout (timeout_).submit ();
+        } else {
+            result = std::move (client_.request ()).message (payload_)
+                       .timeout (timeout_).submit ();
         }
-        return std::move (client_.request (server_rid_)).message (payload_)
-          .timeout (timeout_)
-          .flags (static_cast<int> (zlink::send_flags_t::dontwait))
-          .submit (std::move (callback_));
-    } else {
-        if (measurement_part_count () == 2) {
-            zlink::message_t tail = message_from_payload (NULL, 0);
-            return std::move (client_.request ().message (payload_)).message (tail)
-              .timeout (timeout_)
-              .flags (static_cast<int> (zlink::send_flags_t::dontwait))
-              .submit (std::move (callback_));
-        }
-        return std::move (client_.request ()).message (payload_)
-          .timeout (timeout_)
-          .flags (static_cast<int> (zlink::send_flags_t::dontwait))
-          .submit (std::move (callback_));
+        callback_ (zlink::request_result_t::ok, std::move (result));
+        return true;
+    } catch (const zlink::request_error_t &error) {
+        callback_ (error.result (), {});
+        return true;
     }
 }
 
@@ -268,7 +269,7 @@ inline bool run_reqrep_pattern_impl (const reqrep_config_t &config_,
             if (received.parts ().size () == 1
                 && is_stop_token_message (received.parts ().front ()))
                 return;
-            if (!received.request_seq ().has_value ()
+            if (!received.reply_token ().has_value ()
                 || !measurement_parts_valid (received.parts ()))
                 continue;
             try {
@@ -351,7 +352,8 @@ inline bool run_reqrep_pattern_impl (const reqrep_config_t &config_,
             }
             request_state.in_flight.fetch_add (1, std::memory_order_release);
             try {
-                const zlink::request_callback_t callback =
+                const std::function<void (zlink::request_result_t,
+                                          std::vector<zlink::message_t>)> callback =
                   [&request_state] (zlink::request_result_t result,
                                     std::vector<zlink::message_t> parts) {
                       observe_request_completion (result, std::move (parts), &request_state);

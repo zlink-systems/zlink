@@ -16,7 +16,7 @@ using multipart_submit_t = decltype (
     .message (std::declval<zlink::message_t &> ())
     .submit ());
 
-static_assert (std::is_same<multipart_submit_t, bool>::value,
+static_assert (std::is_same<multipart_submit_t, void>::value,
                "the public C++ package must expose multipart send");
 static_assert (std::is_same<decltype (std::declval<zlink::received_t &> ().parts ()),
                             std::vector<zlink::message_t> &>::value,

@@ -146,15 +146,15 @@ inline int recv_single_part_routed_message (void *handle_,
         return -1;
 
     const zlink_routing_id_t *source_node_rid = nullptr;
-    uint64_t request_seq = 0;
+    zlink_reply_token_t reply_token = 0;
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
     const int rc = zlink_router_recv_part (
-      handle_, &source_node_rid, &request_seq, detail::native_handle (part_out_),
+      handle_, &source_node_rid, &reply_token, detail::native_handle (part_out_),
       &has_more, static_cast<zlink_recv_flags_t> (static_cast<int> (flags_)));
     if (rc != 0)
         return rc;
     refresh_payload_presence (part_out_);
-    if (has_more != ZLINK_PART_FINAL || request_seq != 0 || !source_node_rid
+    if (has_more != ZLINK_PART_FINAL || reply_token != 0 || !source_node_rid
         || source_node_rid->size == 0) {
         errno = has_more != ZLINK_PART_FINAL ? EMSGSIZE : EPROTO;
         return -1;

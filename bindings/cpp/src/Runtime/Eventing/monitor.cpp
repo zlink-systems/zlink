@@ -23,8 +23,6 @@ monitor_event_t make_monitor_event (const zlink_monitor_event_t &native_)
     event.event = static_cast<monitor_event> (native_.event);
     event.value = native_.value;
     event.connection_id = native_.connection_id;
-    event.transport_pair_id = native_.transport_pair_id;
-    event.transport_pair_generation = native_.transport_pair_generation;
     event.transport_lane = native_.transport_lane;
     event.flags = native_.flags;
     event.routing_id =
@@ -87,12 +85,6 @@ monitor_status_t make_monitor_status (const zlink_monitor_status_t &native_)
 struct socket_monitor_t::impl
 {
     void *handle = nullptr;
-    struct callback_state
-    {
-        std::function<void (const monitor_event_t &)> handler;
-    };
-    std::shared_ptr<callback_state> event_callback =
-      std::make_shared<callback_state> ();
 };
 
 namespace detail
@@ -150,27 +142,6 @@ socket_monitor_t socket_monitor_t::open (const socket_t &socket_,
     return out;
 }
 
-void socket_monitor_t::on_event (std::function<void (const monitor_event_t &)> handler_)
-{
-    if (!_impl || !_impl->handle)
-        throw handler_error_t (handler_result_t::invalid_handle, EINVAL);
-    _impl->event_callback->handler = std::move (handler_);
-    const auto result = zlink_socket_monitor_handler (
-        _impl->handle,
-        [] (const zlink_monitor_event_t *event_, void *userdata_) {
-            auto *state = static_cast<impl::callback_state *> (userdata_);
-            if (!state || !event_)
-                return;
-            const monitor_event_t event = make_monitor_event (*event_);
-            std::function<void (const monitor_event_t &)> handler = state->handler;
-            if (handler)
-                handler (event);
-        },
-        _impl->event_callback.get ());
-    detail::throw_if_failed<handler_error_t> (
-      static_cast<handler_result_t> (result));
-}
-
 std::optional<monitor_event_t> socket_monitor_t::recv (recv_flags_t flags_)
 {
     zlink_monitor_event_t event;
@@ -200,7 +171,6 @@ void socket_monitor_t::close ()
     if (result != close_result_t::ok)
         throw close_error_t (result, zlink_errno ());
     _impl->handle = nullptr;
-    _impl->event_callback->handler = nullptr;
 }
 
 void socket_monitor_t::close_noexcept () noexcept
@@ -210,7 +180,6 @@ void socket_monitor_t::close_noexcept () noexcept
     void *monitor = _impl->handle;
     (void) zlink_monitor_close (&monitor);
     _impl->handle = nullptr;
-    _impl->event_callback->handler = nullptr;
 }
 
 } // namespace zlink

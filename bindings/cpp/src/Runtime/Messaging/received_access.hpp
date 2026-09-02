@@ -3,15 +3,10 @@
 #define ZLINK_CPP_RUNTIME_MESSAGING_RECEIVED_ACCESS_HPP_INCLUDED
 
 #include <Runtime/Core/routing_id_access.hpp>
-#include <Runtime/Native/message_access.hpp>
-#include <Runtime/Native/native_send.hpp>
-#include <Runtime/Sockets/socket_callback_state.hpp>
-
+#include <Runtime/Sockets/socket_runtime_state.hpp>
 #include <zlink/Contracts/Messaging/received.hpp>
 
-namespace zlink
-{
-namespace detail
+namespace zlink::detail
 {
 
 struct received_access_t
@@ -19,213 +14,118 @@ struct received_access_t
     static lazy_message_parts_t &prepare_receive (received_t &received_) noexcept
     {
         received_._routing_id.reset ();
-        received_._request_seq.reset ();
-        received_._send_context_handle = 0;
-        received_._send_context_kind = received_t::send_context_kind_t::none;
-        received_._send_context_callbacks.reset ();
+        received_._reply_token.reset ();
+        clear_context (received_);
         return received_._parts;
     }
 
-    static void commit_receive_metadata (received_t &received_,
-                                         routing_id_t source_rid_,
-                                         bool has_request_seq_,
-                                         uint64_t request_seq_)
+    static reply_token_t make_reply_token (
+      const std::shared_ptr<const void> &owner_, uint64_t value_)
+    {
+        return reply_token_t (owner_, value_);
+    }
+
+    static bool token_owner_matches (const reply_token_t &token_,
+                                     const std::shared_ptr<const void> &owner_) noexcept
+    {
+        return token_._owner.get () == owner_.get ();
+    }
+
+    static uint64_t token_value (const reply_token_t &token_) noexcept
+    {
+        return token_._value;
+    }
+
+    static void commit_receive_metadata (
+      received_t &received_, routing_id_t source_rid_, bool has_reply_token_,
+      uint64_t reply_token_value_, const std::shared_ptr<const void> &reply_owner_)
     {
         received_._routing_id = zlink::detail::routing_id_empty (source_rid_)
                                   ? std::nullopt
                                   : std::optional<routing_id_t> (std::move (source_rid_));
-        received_._request_seq = has_request_seq_
-                                   ? std::optional<uint64_t> (request_seq_)
+        received_._reply_token = has_reply_token_
+                                   ? std::optional<reply_token_t> (
+                                       make_reply_token (reply_owner_, reply_token_value_))
                                    : std::nullopt;
     }
 
     static void assign (received_t &received_,
                         std::optional<routing_id_t> routing_id_,
-                        std::optional<uint64_t> request_seq_,
+                        std::optional<reply_token_t> reply_token_,
                         std::vector<message_t> &parts_)
     {
         received_._routing_id = std::move (routing_id_);
-        received_._request_seq = std::move (request_seq_);
+        received_._reply_token = std::move (reply_token_);
         received_._parts.replace (parts_);
-        received_._send_context_handle = 0;
-        received_._send_context_kind = received_t::send_context_kind_t::none;
-        received_._send_context_callbacks.reset ();
+        clear_context (received_);
     }
 
     static void assign (received_t &received_,
                         std::optional<routing_id_t> routing_id_,
-                        std::optional<uint64_t> request_seq_,
-                        message_t part_)
+                        std::optional<reply_token_t> reply_token_, message_t part_)
     {
         received_._routing_id = std::move (routing_id_);
-        received_._request_seq = std::move (request_seq_);
+        received_._reply_token = std::move (reply_token_);
         received_._parts.replace (std::move (part_));
-        received_._send_context_handle = 0;
-        received_._send_context_kind = received_t::send_context_kind_t::none;
-        received_._send_context_callbacks.reset ();
+        clear_context (received_);
     }
 
     static received_t make (std::optional<routing_id_t> routing_id_,
-                            std::optional<uint64_t> request_seq_,
+                            std::optional<reply_token_t> reply_token_,
                             std::vector<message_t> parts_)
     {
-        return received_t (std::move (routing_id_), std::move (request_seq_), std::move (parts_));
+        return received_t (std::move (routing_id_), std::move (reply_token_),
+                           std::move (parts_));
     }
 
     static received_t make (std::optional<routing_id_t> routing_id_,
-                            std::optional<uint64_t> request_seq_,
-                            message_t part_)
+                            std::optional<reply_token_t> reply_token_, message_t part_)
     {
-        return received_t (std::move (routing_id_), std::move (request_seq_), std::move (part_));
+        return received_t (std::move (routing_id_), std::move (reply_token_),
+                           std::move (part_));
     }
 
     static void set_socket_rid_send_context (
       received_t &received_, void *handle_,
-      const std::shared_ptr<socket_callback_state_t> &callbacks_)
+      const std::shared_ptr<socket_runtime_state_t> &runtime_)
     {
-        set_send_context (received_, handle_, received_t::send_context_kind_t::socket_rid,
-                          callbacks_);
+        received_._send_context_handle = reinterpret_cast<std::uintptr_t> (handle_);
+        received_._send_context_kind = received_t::send_context_kind_t::socket_rid;
+        received_._send_context_runtime = runtime_;
     }
 
     static bool has_send_context (const received_t &received_) noexcept
     {
         return received_._send_context_handle != 0
-               && received_._send_context_kind != received_t::send_context_kind_t::none
+               && received_._send_context_kind == received_t::send_context_kind_t::socket_rid
                && received_._routing_id.has_value ()
-               && !received_._send_context_callbacks.expired ();
+               && !received_._send_context_runtime.expired ();
     }
 
     static bool has_reply_context (const received_t &received_) noexcept
     {
-        return has_send_context (received_) && received_._request_seq.has_value ();
+        return has_send_context (received_) && received_._reply_token.has_value ();
     }
 
-    // Single-part send fast path: one native call, no intermediate vector.
-    static bool submit_direct_send (received_t &received_,
-                                    message_t &part_,
-                                    send_flags_t flags_,
-                                    submit_result_t &result_out_,
-                                    int &errno_out_)
+    static void *send_handle (const received_t &received_) noexcept
     {
-        if (!has_send_context (received_))
-            return false;
-
-        void *handle = reinterpret_cast<void *> (received_._send_context_handle);
-        const std::shared_ptr<socket_callback_state_t> callbacks =
-          received_._send_context_callbacks.lock ();
-        if (!callbacks)
-            return false;
-        const zlink_send_flags_t native_flags =
-          static_cast<zlink_send_flags_t> (static_cast<int> (flags_));
-        const zlink_routing_id_t routing_id =
-          zlink::detail::routing_id_native_value (*received_._routing_id);
-        zlink_submit_result_t rc = ZLINK_SUBMIT_INVALID_ARGUMENT;
-        switch (received_._send_context_kind) {
-            case received_t::send_context_kind_t::socket_rid:
-                rc = zlink_send_part_rid (handle, &routing_id, zlink::detail::native_handle (part_),
-                                          native_flags, ZLINK_PART_FINAL);
-                break;
-            default:
-                break;
-        }
-
-        result_out_ = static_cast<submit_result_t> (rc);
-        errno_out_ = zlink_errno ();
-        if (result_out_ == submit_result_t::ok)
-            zlink::detail::mark_sent (part_);
-        return true;
+        return reinterpret_cast<void *> (received_._send_context_handle);
     }
 
-    // HOT PATH: a single-part reply already has the native message and reply
-    // context needed for one part call. Keep vector construction and multipart
-    // iteration out of this path; submit_reply owns the multipart fallback.
-    static bool submit_direct_reply (received_t &received_,
-                                     message_t &part_,
-                                     submit_result_t &result_out_,
-                                     int &errno_out_)
+    static std::shared_ptr<socket_runtime_state_t> runtime (const received_t &received_)
     {
-        if (!has_reply_context (received_))
-            return false;
-
-        void *handle = reinterpret_cast<void *> (received_._send_context_handle);
-        const std::shared_ptr<socket_callback_state_t> callbacks =
-          received_._send_context_callbacks.lock ();
-        if (!callbacks)
-            return false;
-        const uint64_t request_seq = *received_._request_seq;
-        const zlink_routing_id_t routing_id =
-          zlink::detail::routing_id_native_value (*received_._routing_id);
-        zlink_submit_result_t rc = ZLINK_SUBMIT_INVALID_ARGUMENT;
-        switch (received_._send_context_kind) {
-            case received_t::send_context_kind_t::socket_rid:
-                rc = zlink_router_reply_part (handle, &routing_id, request_seq,
-                                              zlink::detail::native_handle (part_),
-                                              ZLINK_PART_FINAL);
-                break;
-            default:
-                break;
-        }
-
-        result_out_ = static_cast<submit_result_t> (rc);
-        errno_out_ = zlink_errno ();
-        if (result_out_ == submit_result_t::ok)
-            zlink::detail::mark_sent (part_);
-        return true;
-    }
-
-    // Multipart send: reconstructs the native submit from the stored context.
-    static bool
-    submit_send (received_t &received_, std::vector<message_t> &parts_, send_flags_t flags_)
-    {
-        const std::shared_ptr<socket_callback_state_t> callbacks =
-          received_._send_context_callbacks.lock ();
-        if (!callbacks)
-            throw submit_error_t (submit_result_t::invalid_state, EINVAL);
-        void *handle = reinterpret_cast<void *> (received_._send_context_handle);
-        const zlink_send_flags_t native_flags =
-          static_cast<zlink_send_flags_t> (static_cast<int> (flags_));
-        const zlink_routing_id_t routing_id =
-          zlink::detail::routing_id_native_value (*received_._routing_id);
-        return zlink::detail::submit_received_send_parts (
-          parts_, flags_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_) {
-              return zlink_send_part_rid (handle, &routing_id, part_out_, native_flags,
-                                          part_flag_);
-          });
-    }
-
-    // Reply: reconstructs the native reply submit from the stored context and
-    // request sequence.
-    static void
-    submit_reply (received_t &received_, std::vector<message_t> &parts_, send_flags_t flags_)
-    {
-        const std::shared_ptr<socket_callback_state_t> callbacks =
-          received_._send_context_callbacks.lock ();
-        if (!callbacks)
-            throw submit_error_t (submit_result_t::invalid_state, EINVAL);
-        void *handle = reinterpret_cast<void *> (received_._send_context_handle);
-        const uint64_t request_seq = *received_._request_seq;
-        const zlink_routing_id_t routing_id =
-          zlink::detail::routing_id_native_value (*received_._routing_id);
-        zlink::detail::submit_received_reply_parts (
-          parts_, flags_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_) {
-              return zlink_router_reply_part (handle, &routing_id, request_seq, part_out_,
-                                              part_flag_);
-          });
+        return received_._send_context_runtime.lock ();
     }
 
   private:
-    static void
-    set_send_context (received_t &received_, void *handle_,
-                      received_t::send_context_kind_t kind_,
-                      const std::shared_ptr<socket_callback_state_t> &callbacks_)
+    static void clear_context (received_t &received_) noexcept
     {
-        received_._send_context_handle = reinterpret_cast<std::uintptr_t> (handle_);
-        received_._send_context_kind = kind_;
-        received_._send_context_callbacks = callbacks_;
+        received_._send_context_handle = 0;
+        received_._send_context_kind = received_t::send_context_kind_t::none;
+        received_._send_context_runtime.reset ();
     }
 };
 
-} // namespace detail
-} // namespace zlink
+} // namespace zlink::detail
 
 #endif

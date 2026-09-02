@@ -521,9 +521,11 @@ inline bool send_payload_blocking (zlink::pair_socket_t &socket_,
     try {
         if (measurement_ && measurement_part_count () == 2) {
             zlink::message_t tail = message_from_payload (NULL, 0);
-            return std::move (socket_.send ().message (msg)).message (tail).submit ();
+            std::move (socket_.send ().message (msg)).message (tail).submit ();
+            return true;
         }
-        return socket_.send ().message (msg).submit ();
+        socket_.send ().message (msg).submit ();
+        return true;
     }
     catch (const zlink::binding_error_t &err) {
         errno = err.internal_errno ();
@@ -611,14 +613,13 @@ inline int send_payload_active (zlink::pair_socket_t &socket_,
         // operation_state_t defaults and resets flags to none.  Calling the
         // out-of-line flags(none) setter for every message adds C++-only
         // harness work while preserving no observable send semantics.
-        bool sent;
         if (measurement_ && measurement_part_count () == 2) {
             zlink::message_t tail = message_from_payload (NULL, 0);
-            sent = std::move (socket_.send ().message (msg)).message (tail).submit ();
+            std::move (socket_.send ().message (msg)).message (tail).submit ();
         } else {
-            sent = std::move (socket_.send ().message (msg)).submit ();
+            std::move (socket_.send ().message (msg)).submit ();
         }
-        return sent ? 1 : 0;
+        return 1;
     }
     catch (const zlink::binding_error_t &err) {
         errno = err.internal_errno ();

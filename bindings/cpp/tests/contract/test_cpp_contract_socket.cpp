@@ -274,7 +274,7 @@ void test_pair_send_recv_single_part ()
       right_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
 
     zlink::message_t outbound = zlink_cpp_contract::make_message ("ping");
-    assert (right.send ().message (outbound).submit ());
+    right.send ().message (outbound).submit ();
 
     zlink::received_t inbound;
     assert (left.recv (inbound) == 0);
@@ -299,7 +299,7 @@ void test_pair_send_recv_single_part_direct ()
       right_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
 
     zlink::message_t outbound = zlink_cpp_contract::make_message ("direct");
-    assert (right.send ().message (outbound).submit ());
+    right.send ().message (outbound).submit ();
 
     zlink::message_t inbound;
     assert (left.recv (inbound) == 0);
@@ -328,7 +328,7 @@ void test_pair_direct_recv_no_data_preserves_output ()
     assert (!invalid.valid ());
 }
 
-void test_dealer_routed_send_async_builder ()
+void test_dealer_unified_send_awaitable_builder ()
 {
     zlink::context_t ctx;
     zlink::router_socket_t router (ctx);
@@ -378,7 +378,7 @@ void test_pair_direct_recv_multipart_failure_preserves_output ()
 
     zlink::message_t first = zlink_cpp_contract::make_message ("first");
     zlink::message_t second = zlink_cpp_contract::make_message ("second");
-    assert (right.send ().message (first).message (second).submit ());
+    right.send ().message (first).message (second).submit ();
 
     zlink::message_t inbound = zlink_cpp_contract::make_message ("keep");
     const int rc = left.recv (inbound);
@@ -519,7 +519,7 @@ void test_router_recv_received_single_part_large ()
     assert (std::to_integer<unsigned char> (bytes[0]) == 0x7b);
     assert (std::to_integer<unsigned char> (bytes[payload_size - 1]) == 0x7b);
 
-    assert (inbound.send ().message (part).submit ());
+    inbound.send ().message (part).submit ();
 
     zlink::message_t echoed;
     assert (dealer.recv (echoed) == 0);
@@ -665,7 +665,7 @@ void test_pair_send_recv_multipart ()
     std::vector<zlink::message_t> outbound;
     outbound.push_back (zlink_cpp_contract::make_message ("one"));
     outbound.push_back (zlink_cpp_contract::make_message ("two"));
-    assert (right.send ().message (outbound[0]).message (outbound[1]).submit ());
+    right.send ().message (outbound[0]).message (outbound[1]).submit ();
 
     zlink::received_t inbound;
     assert (left.recv (inbound) == 0);
@@ -743,10 +743,7 @@ void test_concurrent_pair_multipart_exposes_core_rejection_and_returns_lvalues (
                 zlink::message_t third = zlink_cpp_contract::make_message (third_text);
 
                 try {
-                    if (!sender.send ().message (first).message (second).message (third).submit ()) {
-                        unexpected_results.fetch_add (1, std::memory_order_relaxed);
-                        continue;
-                    }
+                    sender.send ().message (first).message (second).message (third).submit ();
                     accepted.fetch_add (1, std::memory_order_relaxed);
                     if (first.valid () || second.valid () || third.valid ())
                         ownership_failures.fetch_add (1, std::memory_order_relaxed);
@@ -854,7 +851,7 @@ void test_pair_ipc_large_message_shutdown ()
     zlink::message_t outbound (payload_size);
     assert (outbound.valid ());
     std::memset (outbound.data (), 0x5a, payload_size);
-    assert (right.send ().message (outbound).submit ());
+    right.send ().message (outbound).submit ();
 
     zlink::received_t inbound;
     assert (left.recv (inbound) == 0);
@@ -869,7 +866,7 @@ int main ()
     test_pair_send_recv_single_part ();
     test_pair_send_recv_single_part_direct ();
     test_pair_direct_recv_no_data_preserves_output ();
-    test_dealer_routed_send_async_builder ();
+    test_dealer_unified_send_awaitable_builder ();
     test_pair_direct_recv_multipart_failure_preserves_output ();
     test_router_recv_single_part_direct ();
     test_router_send_builder_owns_target_rid ();

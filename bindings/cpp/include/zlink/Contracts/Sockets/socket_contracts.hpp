@@ -29,7 +29,7 @@ class socket_t;
 namespace detail
 {
 class socket_handle_t;
-struct socket_callback_state_t;
+struct socket_runtime_state_t;
 struct socket_access_t;
 struct recv_envelope_t;
 } // namespace detail
@@ -133,7 +133,7 @@ class socket_t
                                           recv_flags_t flags_ = recv_flags_t::none);
 
   protected:
-    detail::socket_callback_state_t &callback_state ();
+    detail::socket_runtime_state_t &runtime_state ();
 
     [[nodiscard]] int set_routing_id_raw (std::span<const std::byte> data_);
 
@@ -158,7 +158,7 @@ class socket_t
     friend struct detail::socket_access_t;
 
     std::unique_ptr<detail::socket_handle_t> _socket;
-    std::shared_ptr<detail::socket_callback_state_t> _callbacks;
+    std::shared_ptr<detail::socket_runtime_state_t> _runtime;
     std::unique_ptr<detail::recv_envelope_t> _receive_envelope;
     socket_type _type;
 };

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(zlink_cpp VERSION 0.15.2 LANGUAGES CXX)
+project(zlink_cpp VERSION 0.16.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -8,12 +8,12 @@ get_filename_component(ZLINK_CPP_BINDINGS_DIR "${CMAKE_CURRENT_LIST_DIR}" ABSOLU
 get_filename_component(ZLINK_REPO_ROOT_DIR "${ZLINK_CPP_BINDINGS_DIR}/../.." ABSOLUTE)
 
 set(ZLINK_CORE_DIR "${ZLINK_REPO_ROOT_DIR}/core" CACHE PATH "Path to zlink core")
-set(ZLINK_CPP_CORE_VERSION "0.15.1" CACHE STRING
+set(ZLINK_CPP_CORE_VERSION "0.16.0" CACHE STRING
     "Exact Core package version required by this C++ binding")
 set(ZLINK_CPP_CORE_BUILD_DIR "${ZLINK_REPO_ROOT_DIR}/core/build" CACHE PATH
     "Path to an existing zlink core build directory")
 set(ZLINK_CPP_CORE_PACKAGE_PREFIX "" CACHE PATH
-    "Path to an installed Zlink 0.15.1 Core release prefix")
+    "Path to an installed Zlink 0.16.0 Core release prefix")
 option(ZLINK_CPP_USE_CORE_BUILD_RUNTIME
   "Require the targeted core/build runtime instead of an installed Core package"
   OFF)
@@ -221,7 +221,7 @@ function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
 
   message(FATAL_ERROR
     "No zlink core runtime found for this platform. "
-    "Expected an installed Core 0.15.1 package, an existing libzlink target, "
+    "Expected an installed Core 0.16.0 package, an existing libzlink target, "
     "or a targeted source build under ${ZLINK_CPP_CORE_BUILD_DIR}.")
 endfunction()
 
@@ -261,7 +261,7 @@ add_library(zlink_cpp STATIC
   src/Runtime/Eventing/monitor.cpp
   src/Runtime/Eventing/timers.cpp
   src/Runtime/Messaging/message.cpp
-  src/Runtime/Messaging/async_continuation_dispatcher.cpp
+  src/Runtime/Messaging/completion_owner.cpp
   src/Runtime/Messaging/received.cpp
   src/Runtime/Messaging/reply_operations.cpp
   src/Runtime/Messaging/request_reply.cpp
@@ -456,7 +456,7 @@ if(ZLINK_CPP_BUILD_SAMPLES)
     dealer_router_recv_sample.cpp
     request_reply_async_sample.cpp
     stream_recv_sample.cpp
-    stream_packet_callback_sample.cpp
+    stream_packet_pull_sample.cpp
     monitor_recv_sample.cpp
   )
   file(GLOB ZLINK_CPP_SAMPLE_FILES CONFIGURE_DEPENDS

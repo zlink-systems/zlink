@@ -39,16 +39,14 @@ int main ()
     dealer.connect (endpoint);
     assert (detail::wait_connected (router_monitor, dealer_monitor, 2000, &router));
 
-    // 응답하는 쪽. 요청을 받아 같은 routing_id와 request_seq로 되돌려준다.
+    // 응답하는 쪽. 요청을 받아 캡슐화된 reply token으로 되돌려준다.
     std::future<void> responder = std::async (std::launch::async, [&] {
         zlink::received_t inbound;
         assert (router.recv (inbound) == 0);
         assert (inbound.routing_id ().has_value ());
-        assert (inbound.request_seq ().has_value ());
+        assert (inbound.reply_token ().has_value ());
         zlink::message_t reply = detail::make_message (detail::k_dealer_router_reply);
-        router.reply (*inbound.routing_id (), *inbound.request_seq ())
-          .message (reply)
-          .submit ();
+        inbound.reply ().message (reply).submit ();
         inbound.close ();
     });
 

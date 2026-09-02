@@ -46,6 +46,13 @@ enum class receive_flow_state_t : int
     paused = 1
 };
 
+enum class stream_recv_mode_t : int
+{
+    unspecified = 0,
+    raw = 1,
+    packet = 2
+};
+
 /// @brief The typed facade over socket options shared by every socket type.
 class common_socket_options_t
 {
@@ -148,6 +155,8 @@ class stream_socket_options_t : public common_socket_options_t
 
     bool notify () const;
     void notify (bool value);
+    stream_recv_mode_t recv_mode () const;
+    void recv_mode (stream_recv_mode_t mode);
 };
 
 /// @brief The typed facade over PUB/XPUB-specific socket options.

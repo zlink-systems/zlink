@@ -3,8 +3,6 @@
 
 #include "message.hpp"
 
-#include <functional>
-#include <vector>
 
 namespace zlink
 {
@@ -26,10 +24,5 @@ enum class request_result_t : int
     invalid_state = 111,
     not_supported = 112
 };
-
-/// @brief Receives request completion and reply payloads.
-/// @note On @c ok, the callback owns the messages in the vector and must call
-///       close() on each message.
-using request_callback_t = std::function<void (request_result_t, std::vector<message_t>)>;
 
 } // namespace zlink
