@@ -332,7 +332,7 @@ STREAM 소켓으로 원시 바이트를 주고받는 자립형 예제다(모든 
 === "C++"
 
     ```cpp
-    --8<-- "bindings/cpp/samples/stream_packet_callback_sample.cpp:doc"
+    --8<-- "bindings/cpp/samples/stream_packet_pull_sample.cpp:doc"
     ```
 
 === "C#/.NET"
@@ -356,13 +356,13 @@ STREAM 소켓으로 원시 바이트를 주고받는 자립형 예제다(모든 
 === "Python"
 
     ```python
-    --8<-- "bindings/python/samples/stream_packet_callback_sample.py:doc"
+    --8<-- "bindings/python/samples/stream_packet_recv_sample.py:doc"
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    --8<-- "bindings/node/samples/stream_packet_callback_sample.ts:doc"
+    --8<-- "bindings/node/samples/stream_packet_sample.ts:doc"
     ```
 
 === "JavaScript"
@@ -380,7 +380,7 @@ STREAM 소켓으로 원시 바이트를 주고받는 자립형 예제다(모든 
 === "Rust"
 
     ```rust
-    --8<-- "bindings/rust/samples/stream_packet_callback_sample.rs:doc"
+    --8<-- "bindings/rust/samples/stream_packet_recv_sample.rs:doc"
     ```
 
 ---
