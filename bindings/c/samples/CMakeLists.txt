@@ -67,8 +67,8 @@ add_c_sample(
   stream_recv_sample.c
 )
 add_c_sample(
-  sample_c_stream_packet_callback_sample
-  stream_packet_callback_sample.c
+  sample_c_stream_packet_recv_sample
+  stream_packet_recv_sample.c
 )
 add_c_sample(
   sample_c_monitor_recv_sample

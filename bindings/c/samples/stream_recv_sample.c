@@ -55,10 +55,10 @@ int main (void)
     sample.server = zlink_socket (ctx, ZLINK_SOCKET_STREAM);
     assert (sample.server != NULL);
 
-    int notify_off = 0;
-    assert (zlink_set_stream_option (sample.server, ZLINK_STREAM_OPT_NOTIFY, &notify_off,
-                                     sizeof (notify_off))
-            == 0);
+    const zlink_stream_recv_mode_t raw_mode = ZLINK_STREAM_RECV_MODE_RAW;
+    assert (zlink_set_stream_option (sample.server, ZLINK_STREAM_OPT_RECV_MODE, &raw_mode,
+                                     sizeof (raw_mode))
+            == ZLINK_CONFIG_OK);
 
     sample.server_monitor =
       open_socket_monitor (sample.server, ZLINK_SOCKET_MONITOR_EVENT_ACCEPTED);

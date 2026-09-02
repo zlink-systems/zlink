@@ -98,7 +98,7 @@ bool handle_router_once (
     if (payload_len > 0)
         std::memcpy (zlink_msg_data (&reply_part), payload_buf, payload_len);
     if (::zlink_send_part_rid (server, &target_rid, &reply_part, ZLINK_SEND_FLAGS_NONE,
-                               ZLINK_PART_FINAL)
+                               ZLINK_PART_FINAL, NULL, NULL)
         != ZLINK_SUBMIT_OK) {
         zlink_msg_close (&reply_part);
         return false;

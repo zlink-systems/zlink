@@ -54,7 +54,8 @@ bool send_rtt_message (void *socket, std::vector<unsigned char> &payload, uint64
         return false;
     if (!payload.empty ())
         std::memcpy (zlink_msg_data (&part), payload.data (), payload.size ());
-    if (::zlink_send_part_rid (socket, &target_rid, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL)
+    if (::zlink_send_part_rid (socket, &target_rid, &part, ZLINK_SEND_FLAGS_NONE,
+                               ZLINK_PART_FINAL, NULL, NULL)
         != ZLINK_SUBMIT_OK) {
         zlink_msg_close (&part);
         return false;

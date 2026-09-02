@@ -54,7 +54,8 @@ int main (void)
     CHECK (make_part (&failed, "keep-owned") == 0);
     zlink_routing_id_t unknown = routing_id_of_size (7);
     CHECK (
-      zlink_send_part_rid (router, &unknown, &failed, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL)
+      zlink_send_part_rid (router, &unknown, &failed, ZLINK_SEND_FLAGS_DONTWAIT,
+                           ZLINK_PART_FINAL, NULL, NULL)
       != ZLINK_SUBMIT_OK);
     CHECK (zlink_msg_close (&failed) == ZLINK_CONFIG_OK);
 

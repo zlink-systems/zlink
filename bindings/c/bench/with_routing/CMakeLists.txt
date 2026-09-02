@@ -12,7 +12,7 @@
 # 4. Run: ./core/bench/with_routing/run_benchmarks.sh --runs 3
 
 # --- zlink include ---
-set(RC_ZLINK_INCLUDE_DIR "${ZLINK_CORE_DIR}/include")
+set(RC_ZLINK_INCLUDE_DIR "${ZLINK_C_BINDINGS_DIR}/include")
 
 # --- libzmq (local dist inside libzmq/) ---
 set(RC_LIBZMQ_PLATFORM_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/libzmq/libzmq_dist/linux-x64")
@@ -44,8 +44,8 @@ else()
 endif()
 
 option(ZLINK_BUILD_WITH_ROUTING_ZLINK_BENCHES
-       "Build routing comparison benches that depend on synchronous recv APIs"
-       OFF)
+       "Build routing comparison benches through the C binding pull APIs"
+       ON)
 
 # ============================================================================
 # zlink benchmarks (always build when headers exist)
@@ -73,9 +73,6 @@ if(EXISTS "${RC_ZLINK_INCLUDE_DIR}/zlink.h")
         set_target_properties(bench_rc_zlink_client PROPERTIES
             BUILD_RPATH "${ZLINK_C_CORE_RUNTIME_DIR}"
             INSTALL_RPATH "${ZLINK_C_CORE_RUNTIME_DIR}")
-    else()
-        message(STATUS
-                "Skipping core/bench/with_routing zlink benches: they still rely on removed sync recv APIs under the direct-callback ABI.")
     endif()
 else()
     message(WARNING "zlink headers not found at ${RC_ZLINK_INCLUDE_DIR}")

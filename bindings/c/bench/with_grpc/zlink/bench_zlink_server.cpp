@@ -111,29 +111,29 @@ bool make_response_body (const zlink_msg_t *request_body, zlink_msg_t *reply_bod
 
 bool recv_multipart_body (void *router,
                           zlink_routing_id_t *rid_out,
-                          uint64_t *seq_out,
+                          zlink_reply_token_t *reply_token_out,
                           zlink_msg_t *body_out)
 {
     const zlink_routing_id_t *rid = nullptr;
-    uint64_t seq = 0;
+    zlink_reply_token_t reply_token = 0;
     zlink_part_flag_t more = ZLINK_PART_FINAL;
     zlink_msg_t header;
     if (zlink_msg_init (&header) != ZLINK_CONFIG_OK)
         return false;
 
     const int header_rc =
-      zlink_router_recv_part (router, &rid, &seq, &header, &more,
+      zlink_router_recv_part (router, &rid, &reply_token, &header, &more,
                               ZLINK_RECV_FLAGS_NONE);
     if (header_rc != ZLINK_RECV_OK) {
         zlink_msg_close (&header);
         return false;
     }
-    if (!rid || !rid_out || !seq_out) {
+    if (!rid || !rid_out || !reply_token_out) {
         zlink_msg_close (&header);
         return false;
     }
     *rid_out = *rid;
-    *seq_out = seq;
+    *reply_token_out = reply_token;
 
     if (more == ZLINK_PART_FINAL) {
         zlink_msg_move (body_out, &header);
@@ -143,16 +143,17 @@ bool recv_multipart_body (void *router,
 
     zlink_msg_close (&header);
     const zlink_routing_id_t *body_rid = nullptr;
-    uint64_t body_seq = 0;
+    zlink_reply_token_t body_reply_token = 0;
     const int body_rc =
-      zlink_router_recv_part (router, &body_rid, &body_seq, body_out, &more,
+      zlink_router_recv_part (router, &body_rid, &body_reply_token, body_out, &more,
                               ZLINK_RECV_FLAGS_NONE);
-    return body_rc == ZLINK_RECV_OK && more == ZLINK_PART_FINAL && body_rid && body_seq == seq;
+    return body_rc == ZLINK_RECV_OK && more == ZLINK_PART_FINAL && body_rid
+           && body_reply_token == reply_token;
 }
 
 bool reply_multipart (void *router,
                       const zlink_routing_id_t *rid,
-                      uint64_t seq,
+                      zlink_reply_token_t reply_token,
                       const zlink_msg_t *request_body)
 {
     zlink_msg_t parts[2];
@@ -164,10 +165,10 @@ bool reply_multipart (void *router,
     }
 
     zlink_submit_result_t rc =
-      zlink_router_reply_part (router, rid, seq, &parts[0], ZLINK_PART_MORE);
+      zlink_reply_part (router, rid, reply_token, &parts[0], ZLINK_PART_MORE);
     const bool header_submitted = rc == ZLINK_SUBMIT_OK;
     if (rc == ZLINK_SUBMIT_OK)
-        rc = zlink_router_reply_part (router, rid, seq, &parts[1], ZLINK_PART_FINAL);
+        rc = zlink_reply_part (router, rid, reply_token, &parts[1], ZLINK_PART_FINAL);
     if (rc != ZLINK_SUBMIT_OK) {
         zlink_msg_close (&parts[1]);
         if (!header_submitted)
@@ -187,10 +188,12 @@ bool send_multipart (void *router, const zlink_routing_id_t *rid, const zlink_ms
     }
 
     zlink_submit_result_t rc =
-      zlink_send_part_rid (router, rid, &parts[0], ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE);
+      zlink_send_part_rid (router, rid, &parts[0], ZLINK_SEND_FLAGS_NONE,
+                           ZLINK_PART_MORE, NULL, NULL);
     const bool header_submitted = rc == ZLINK_SUBMIT_OK;
     if (rc == ZLINK_SUBMIT_OK)
-        rc = zlink_send_part_rid (router, rid, &parts[1], ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+        rc = zlink_send_part_rid (router, rid, &parts[1], ZLINK_SEND_FLAGS_NONE,
+                                  ZLINK_PART_FINAL, NULL, NULL);
     if (rc != ZLINK_SUBMIT_OK) {
         zlink_msg_close (&parts[1]);
         if (!header_submitted)
@@ -203,16 +206,16 @@ void request_loop (void *router)
 {
     while (!g_stop.load ()) {
         zlink_routing_id_t rid {};
-        uint64_t seq = 0;
+        zlink_reply_token_t reply_token = 0;
         zlink_msg_t body;
         if (zlink_msg_init (&body) != 0)
             continue;
-        if (!recv_multipart_body (router, &rid, &seq, &body)) {
+        if (!recv_multipart_body (router, &rid, &reply_token, &body)) {
             zlink_msg_close (&body);
             continue;
         }
-        if (seq != 0)
-            (void) reply_multipart (router, &rid, seq, &body);
+        if (reply_token != 0)
+            (void) reply_multipart (router, &rid, reply_token, &body);
         zlink_msg_close (&body);
     }
 }
@@ -221,11 +224,11 @@ void send_loop (void *router)
 {
     while (!g_stop.load ()) {
         zlink_routing_id_t rid {};
-        uint64_t seq = 0;
+        zlink_reply_token_t reply_token = 0;
         zlink_msg_t body;
         if (zlink_msg_init (&body) != 0)
             continue;
-        (void) recv_multipart_body (router, &rid, &seq, &body);
+        (void) recv_multipart_body (router, &rid, &reply_token, &body);
         zlink_msg_close (&body);
     }
 }
@@ -234,15 +237,15 @@ void send_echo_loop (void *router)
 {
     while (!g_stop.load ()) {
         zlink_routing_id_t rid {};
-        uint64_t seq = 0;
+        zlink_reply_token_t reply_token = 0;
         zlink_msg_t body;
         if (zlink_msg_init (&body) != 0)
             continue;
-        if (!recv_multipart_body (router, &rid, &seq, &body)) {
+        if (!recv_multipart_body (router, &rid, &reply_token, &body)) {
             zlink_msg_close (&body);
             continue;
         }
-        if (seq == 0)
+        if (reply_token == 0)
             (void) send_multipart (router, &rid, &body);
         zlink_msg_close (&body);
     }

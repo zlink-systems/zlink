@@ -14,18 +14,18 @@ static void dealer_router_router_thread (void *arg_)
 {
     dealer_router_sample_t *sample = (dealer_router_sample_t *) arg_;
     const zlink_routing_id_t *source_node_rid = NULL;
-    uint64_t request_seq = 0;
+    zlink_reply_token_t reply_token = 0;
     zlink_msg_t part;
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
     zlink_msg_t reply;
 
     assert (zlink_msg_init (&part) == 0);
-    assert (zlink_router_recv_part (sample->router, &source_node_rid, &request_seq, &part,
+    assert (zlink_router_recv_part (sample->router, &source_node_rid, &reply_token, &part,
                                     &has_more, 0)
             == ZLINK_RECV_OK);
     assert (source_node_rid != NULL);
     assert (source_node_rid->size > 0);
-    assert (request_seq == 0);
+    assert (reply_token == 0);
     assert (has_more == ZLINK_PART_FINAL);
     assert (zlink_msg_size (&part) == strlen (k_dealer_router_request));
     assert (
@@ -34,7 +34,8 @@ static void dealer_router_router_thread (void *arg_)
     zlink_msg_close (&part);
 
     make_message (&reply, k_dealer_router_reply);
-    assert (zlink_send_part_rid (sample->router, source_node_rid, &reply, 0, ZLINK_PART_FINAL)
+    assert (zlink_send_part_rid (sample->router, source_node_rid, &reply, 0, ZLINK_PART_FINAL,
+                                 NULL, NULL)
             == ZLINK_SUBMIT_OK);
 }
 
@@ -47,7 +48,8 @@ static void dealer_router_dealer_thread (void *arg_)
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
 
     make_message (&outbound, k_dealer_router_request);
-    assert (zlink_send_part (sample->dealer, &outbound, 0, ZLINK_PART_FINAL) == ZLINK_SUBMIT_OK);
+    assert (zlink_send_part (sample->dealer, &outbound, 0, ZLINK_PART_FINAL, NULL, NULL)
+            == ZLINK_SUBMIT_OK);
 
     assert (zlink_msg_init (&part) == 0);
     assert (zlink_recv_part (sample->dealer, &rid, &part, &has_more, 0) == ZLINK_RECV_OK);

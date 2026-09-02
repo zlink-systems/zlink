@@ -120,9 +120,11 @@ bool make_payload_body_msg (size_t size,
     return zlink_c_bench::stamp_payload (payload, payload_size, run_id, phase, seq);
 }
 
-void on_reply (zlink_request_result_t result, zlink_msg_t *parts, size_t part_count, void *userdata)
+void on_reply (zlink_request_result_t result,
+               zlink_msg_t *parts,
+               size_t part_count,
+               callback_state_t *state)
 {
-    callback_state_t *state = static_cast<callback_state_t *> (userdata);
     if (state && result == ZLINK_REQUEST_OK && parts && part_count > 0) {
         zlink_c_bench::decoded_header_t header {};
         const zlink_msg_t *body_part = &parts[part_count - 1];
@@ -143,8 +145,6 @@ void on_reply (zlink_request_result_t result, zlink_msg_t *parts, size_t part_co
     }
     if (state)
         state->outstanding.fetch_sub (1, std::memory_order_release);
-    for (size_t i = 0; i < part_count; ++i)
-        zlink_msg_close (&parts[i]);
 }
 
 bool make_msg (size_t size, uint32_t run_id, zlink_c_bench::phase_t phase, uint64_t seq, zlink_msg_t *msg)
@@ -167,14 +167,33 @@ bool make_request_parts (size_t size,
     return true;
 }
 
-bool poll_once (void *poller, long timeout_ms)
+bool poll_once (void *poller, void *dealer, callback_state_t *state, long timeout_ms)
 {
     zlink_poller_event_t event {};
     zlink_config_result_t error = ZLINK_CONFIG_OK;
     const int rc = zlink_poller_wait (poller, &event, 1, timeout_ms, &error);
     if (rc < 0)
         return zlink_errno () == EINTR;
-    return true;
+    if (rc == 0 || (event.events & ZLINK_POLLCOMPLETION) == 0)
+        return true;
+
+    for (;;) {
+        zlink_completion_t completion {};
+        completion.struct_size = sizeof (completion);
+        const zlink_recv_result_t recv_result = zlink_completion_recv (
+          dealer, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (recv_result == ZLINK_RECV_NO_DATA)
+            return true;
+        if (recv_result != ZLINK_RECV_OK) {
+            if (state)
+                state->errors.fetch_add (1, std::memory_order_relaxed);
+            return false;
+        }
+        if (completion.kind == ZLINK_COMPLETION_REQUEST && completion.user_context == state)
+            on_reply (completion.request_result, completion.reply_parts,
+                      completion.reply_part_count, state);
+        zlink_completion_close (&completion);
+    }
 }
 
 bool submit_request_once (void *dealer,
@@ -195,12 +214,12 @@ bool submit_request_once (void *dealer,
     metrics->max_outstanding = std::max<uint64_t> (
       metrics->max_outstanding, cb->outstanding.load (std::memory_order_acquire));
     const uint64_t submit_start = zlink_c_bench::now_ns ();
-    zlink_submit_result_t rc =
-      zlink_dealer_request_part (dealer, &parts[0], flags, ZLINK_PART_MORE, 0, nullptr, nullptr);
+    zlink_submit_result_t rc = zlink_request_part (
+      dealer, NULL, &parts[0], flags, ZLINK_PART_MORE, 0, NULL, NULL);
     const bool header_submitted = rc == ZLINK_SUBMIT_OK;
     if (rc == ZLINK_SUBMIT_OK)
-        rc = zlink_dealer_request_part (dealer, &parts[1], flags, ZLINK_PART_FINAL, 5000,
-                                        on_reply, cb);
+        rc = zlink_request_part (dealer, NULL, &parts[1], flags, ZLINK_PART_FINAL,
+                                 5000, cb, NULL);
     const uint64_t submit_stop = zlink_c_bench::now_ns ();
     metrics->submit_wait_ms += submit_stop >= submit_start
                                  ? static_cast<double> (submit_stop - submit_start) / 1000000.0
@@ -223,13 +242,13 @@ bool submit_request_once (void *dealer,
     return false;
 }
 
-void drain_requests (void *poller, callback_state_t *cb)
+void drain_requests (void *poller, void *dealer, callback_state_t *cb)
 {
     const int drain_ms = zlink_c_bench::env_int ("DRAIN_TIMEOUT_MS", 5000);
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::milliseconds (drain_ms);
     while (cb->outstanding.load (std::memory_order_acquire) > 0
            && std::chrono::steady_clock::now () < deadline) {
-        (void) poll_once (poller, 50);
+        (void) poll_once (poller, dealer, cb, 50);
     }
 }
 
@@ -279,7 +298,7 @@ zlink_c_bench::result_t run_request_serial (void *dealer, void *poller, size_t s
     while (std::chrono::steady_clock::now () < deadline) {
         if (submit_request_once (dealer, size, run_id, seq++, ZLINK_SEND_FLAGS_NONE, &cb, &metrics)) {
             while (cb.outstanding.load (std::memory_order_acquire) > 0)
-                (void) poll_once (poller, 50);
+                (void) poll_once (poller, dealer, &cb, 50);
         }
     }
     const auto stop = std::chrono::steady_clock::now ();
@@ -314,16 +333,16 @@ zlink_c_bench::result_t run_request_window (void *dealer,
             submitted_any = true;
             if (++submitted_since_poll >= 64) {
                 submitted_since_poll = 0;
-                (void) poll_once (poller, 0);
+                (void) poll_once (poller, dealer, &cb, 0);
             }
         }
         if (!submitted_any && cb.outstanding.load (std::memory_order_acquire) == 0) {
             std::this_thread::sleep_for (std::chrono::milliseconds (1));
             continue;
         }
-        (void) poll_once (poller, 1);
+        (void) poll_once (poller, dealer, &cb, 1);
     }
-    drain_requests (poller, &cb);
+    drain_requests (poller, dealer, &cb);
     const auto stop = std::chrono::steady_clock::now ();
     return finish_request_result (scenario, size, start, stop, resources, &cb, &latency, metrics);
 }
@@ -349,10 +368,11 @@ zlink_c_bench::result_t run_send_loop (void *dealer,
             continue;
         }
         const uint64_t submit_start = zlink_c_bench::now_ns ();
-        zlink_submit_result_t rc = zlink_send_part (dealer, &parts[0], flags, ZLINK_PART_MORE);
+        zlink_submit_result_t rc =
+          zlink_send_part (dealer, &parts[0], flags, ZLINK_PART_MORE, NULL, NULL);
         const bool header_submitted = rc == ZLINK_SUBMIT_OK;
         if (rc == ZLINK_SUBMIT_OK)
-            rc = zlink_send_part (dealer, &parts[1], flags, ZLINK_PART_FINAL);
+            rc = zlink_send_part (dealer, &parts[1], flags, ZLINK_PART_FINAL, NULL, NULL);
         const uint64_t submit_stop = zlink_c_bench::now_ns ();
         submit_wait_ms += submit_stop >= submit_start
                             ? static_cast<double> (submit_stop - submit_start) / 1000000.0
@@ -411,10 +431,11 @@ zlink_c_bench::result_t run_send_send_serial (void *dealer, size_t size)
 
         const uint64_t submit_start = zlink_c_bench::now_ns ();
         zlink_submit_result_t send_rc =
-          zlink_send_part (dealer, &parts[0], ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE);
+          zlink_send_part (dealer, &parts[0], ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, NULL, NULL);
         const bool header_submitted = send_rc == ZLINK_SUBMIT_OK;
         if (send_rc == ZLINK_SUBMIT_OK)
-            send_rc = zlink_send_part (dealer, &parts[1], ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+            send_rc = zlink_send_part (dealer, &parts[1], ZLINK_SEND_FLAGS_NONE,
+                                       ZLINK_PART_FINAL, NULL, NULL);
         const uint64_t submit_stop = zlink_c_bench::now_ns ();
         submit_wait_ms += submit_stop >= submit_start
                             ? static_cast<double> (submit_stop - submit_start) / 1000000.0

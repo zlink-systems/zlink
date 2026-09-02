@@ -1,6 +1,6 @@
 #include "../common/stream_echo_common.hpp"
 
-#include "../../../../../../core/include/zlink.h"
+#include <zlink.h>
 
 #include <atomic>
 #include <array>
@@ -14,11 +14,6 @@
 #include <stdint.h>
 #include <mutex>
 #include <thread>
-
-extern "C" {
-typedef int (*zlink_stream_on_raw_fn) (const zlink_routing_id_t *, zlink_msg_t *);
-int zlink_stream_attach_raw (void *s_, zlink_stream_on_raw_fn on_raw_);
-}
 
 namespace
 {
@@ -54,8 +49,6 @@ struct server_options_t
 };
 
 static std::atomic<bool> *g_stop_flag = NULL;
-class zlink_stream_echo_server_t;
-static zlink_stream_echo_server_t *g_server_instance = NULL;
 
 void on_signal (int)
 {
@@ -181,6 +174,15 @@ class zlink_stream_echo_server_t
 
         apply_socket_tuning (server, opt);
 
+        const zlink_stream_recv_mode_t raw_mode = ZLINK_STREAM_RECV_MODE_RAW;
+        if (zlink_set_stream_option (server, ZLINK_STREAM_OPT_RECV_MODE, &raw_mode,
+                                     sizeof (raw_mode))
+            != ZLINK_CONFIG_OK) {
+            std::fprintf (stderr, "zlink stream: raw receive mode failed: %s\n",
+                          zlink_strerror (zlink_errno ()));
+            return 2;
+        }
+
         const std::string endpoint = make_endpoint (opt.host, opt.port);
         if (zlink_bind (server, endpoint.c_str ()) != 0) {
             std::fprintf (stderr, "zlink stream: bind failed: %s endpoint=%s\n",
@@ -188,20 +190,31 @@ class zlink_stream_echo_server_t
             return 2;
         }
 
-        g_server_instance = this;
-        if (zlink_stream_attach_raw (server, &zlink_stream_echo_server_t::on_raw_packet_static)
-            != 0) {
-            std::fprintf (stderr, "zlink stream: dispatch attach failed: %s\n",
-                          zlink_strerror (zlink_errno ()));
-            return 2;
-        }
-
         std::signal (SIGINT, on_signal);
         std::signal (SIGTERM, on_signal);
         g_stop_flag = &stop;
 
-        while (!stop.load (std::memory_order_acquire))
-            std::this_thread::sleep_for (std::chrono::milliseconds (200));
+        void *poller = zlink_poller_new ();
+        if (!poller || zlink_poller_add (poller, server, NULL, ZLINK_POLLIN) != ZLINK_CONFIG_OK) {
+            if (poller)
+                (void) zlink_poller_destroy (&poller);
+            std::fprintf (stderr, "zlink stream: pull poller setup failed: %s\n",
+                          zlink_strerror (zlink_errno ()));
+            return 2;
+        }
+        while (!stop.load (std::memory_order_acquire)) {
+            zlink_poller_event_t event;
+            std::memset (&event, 0, sizeof (event));
+            const int poll_rc = zlink_poller_wait (poller, &event, 1, 200, NULL);
+            if (poll_rc < 0 || (poll_rc == 1 && (event.events & ZLINK_POLLIN) != 0
+                                && !drain_raw_packets ())) {
+                (void) zlink_poller_destroy (&poller);
+                std::fprintf (stderr, "zlink stream: pull receive failed: %s\n",
+                              zlink_strerror (zlink_errno ()));
+                return 2;
+            }
+        }
+        (void) zlink_poller_destroy (&poller);
 
         std::printf ("%s\n", stream_echo::make_metric_line (
                                "zlink", opt.size, recv_msgs.load (std::memory_order_relaxed),
@@ -213,18 +226,6 @@ class zlink_stream_echo_server_t
     }
 
   private:
-    static int on_raw_packet_static (const zlink_routing_id_t *rid_, zlink_msg_t *msg_)
-    {
-        zlink_stream_echo_server_t *self = g_server_instance;
-        if (!self || !rid_ || !msg_) {
-            if (msg_)
-                (void) zlink_msg_close (msg_);
-            return 0;
-        }
-
-        return self->on_raw_packet (rid_, msg_);
-    }
-
     void mark_parse_error ()
     {
         parse_error.fetch_add (1, std::memory_order_relaxed);
@@ -254,7 +255,7 @@ class zlink_stream_echo_server_t
             recv_msgs.fetch_add (1, std::memory_order_relaxed);
             if (offset == 0 && frame_size == payload_size_ && frame_count == 0) {
                 if (zlink_send_part_rid (server, rid_, msg_, ZLINK_SEND_FLAGS_NONE,
-                                         ZLINK_PART_FINAL)
+                                         ZLINK_PART_FINAL, NULL, NULL)
                     != 0) {
                     send_error.fetch_add (1, std::memory_order_relaxed);
                     (void) zlink_msg_close (msg_);
@@ -269,7 +270,8 @@ class zlink_stream_echo_server_t
                 return true;
             }
             std::memcpy (zlink_msg_data (&reply), payload_ + offset, frame_size);
-            if (zlink_send_part_rid (server, rid_, &reply, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL)
+            if (zlink_send_part_rid (server, rid_, &reply, ZLINK_SEND_FLAGS_NONE,
+                                     ZLINK_PART_FINAL, NULL, NULL)
                 != 0) {
                 send_error.fetch_add (1, std::memory_order_relaxed);
                 (void) zlink_msg_close (&reply);
@@ -321,7 +323,7 @@ class zlink_stream_echo_server_t
             if (is_complete_stream_frame (payload, payload_size)) {
                 recv_msgs.fetch_add (1, std::memory_order_relaxed);
                 if (zlink_send_part_rid (server, rid_, msg_, ZLINK_SEND_FLAGS_NONE,
-                                         ZLINK_PART_FINAL)
+                                         ZLINK_PART_FINAL, NULL, NULL)
                     != 0) {
                     send_error.fetch_add (1, std::memory_order_relaxed);
                     (void) zlink_msg_close (msg_);
@@ -357,7 +359,8 @@ class zlink_stream_echo_server_t
             }
             std::memcpy (zlink_msg_data (&reply), frame.data, frame.size);
             recv_msgs.fetch_add (1, std::memory_order_relaxed);
-            if (zlink_send_part_rid (server, rid_, &reply, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL)
+            if (zlink_send_part_rid (server, rid_, &reply, ZLINK_SEND_FLAGS_NONE,
+                                     ZLINK_PART_FINAL, NULL, NULL)
                 != 0) {
                 send_error.fetch_add (1, std::memory_order_relaxed);
                 (void) zlink_msg_close (&reply);
@@ -371,14 +374,34 @@ class zlink_stream_echo_server_t
         return 0;
     }
 
+    bool drain_raw_packets ()
+    {
+        for (;;) {
+            const zlink_routing_id_t *rid = NULL;
+            zlink_msg_t msg;
+            if (zlink_msg_init (&msg) != ZLINK_CONFIG_OK)
+                return false;
+            const zlink_recv_result_t recv_result = zlink_recv_part (
+              server, &rid, &msg, &raw_has_more, ZLINK_RECV_FLAGS_DONTWAIT);
+            if (recv_result == ZLINK_RECV_NO_DATA) {
+                (void) zlink_msg_close (&msg);
+                return true;
+            }
+            if (recv_result != ZLINK_RECV_OK) {
+                (void) zlink_msg_close (&msg);
+                return false;
+            }
+            if (on_raw_packet (rid, &msg) != 0)
+                return false;
+        }
+    }
+
     void cleanup ()
     {
         if (server) {
             zlink_close (server);
             server = NULL;
         }
-        if (g_server_instance == this)
-            g_server_instance = NULL;
         if (ctx) {
             zlink_ctx_term (ctx);
             ctx = NULL;
@@ -396,6 +419,7 @@ class zlink_stream_echo_server_t
 
     std::atomic<bool> stop;
     std::array<frame_shard_t, k_frame_shard_count> frame_shards;
+    zlink_part_flag_t raw_has_more = ZLINK_PART_FINAL;
 };
 
 bool parse_options (int argc, char **argv, server_options_t &opt)

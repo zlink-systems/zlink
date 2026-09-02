@@ -38,7 +38,8 @@ int main (void)
 
     zlink_msg_t outbound;
     CHECK (make_part (&outbound, "hello-c") == 0);
-    CHECK (zlink_send_part (sender, &outbound, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL)
+    CHECK (zlink_send_part (sender, &outbound, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
+                            NULL, NULL)
            == ZLINK_SUBMIT_OK);
 
     zlink_msg_t inbound;

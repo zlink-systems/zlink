@@ -34,7 +34,8 @@ static void pair_sender_thread (void *arg_)
     zlink_msg_t outbound;
 
     make_message (&outbound, k_pair_payload);
-    assert (zlink_send_part (sample->client, &outbound, 0, ZLINK_PART_FINAL) == ZLINK_SUBMIT_OK);
+    assert (zlink_send_part (sample->client, &outbound, 0, ZLINK_PART_FINAL, NULL, NULL)
+            == ZLINK_SUBMIT_OK);
 }
 
 int main (void)

@@ -11,7 +11,6 @@
 #include <mutex>
 #include <set>
 #include <string>
-#include <thread>
 #include <vector>
 
 #if !defined(_WIN32)
@@ -33,6 +32,7 @@ typedef int zlink_connect_result_t;
 typedef int zlink_send_flags_t;
 typedef int zlink_recv_flags_t;
 typedef uint64_t zlink_socket_monitor_event_mask_t;
+typedef uint64_t zlink_reply_token_t;
 typedef zmq_msg_t zlink_msg_t;
 typedef enum zlink_part_flag_t
 {
@@ -96,10 +96,10 @@ inline size_t &recv_tls_next_index ()
     return index;
 }
 
-inline uint64_t &recv_tls_request_seq ()
+inline zlink_reply_token_t &recv_tls_reply_token ()
 {
-    static thread_local uint64_t request_seq = 0;
-    return request_seq;
+    static thread_local zlink_reply_token_t reply_token = 0;
+    return reply_token;
 }
 
 inline int recv_tls_push (zlink_msg_t *src_)
@@ -194,7 +194,7 @@ inline void recv_tls_reset ()
     count = 0;
     next_index = 0;
     std::memset (&recv_tls_source_rid (), 0, sizeof (zlink_routing_id_t));
-    recv_tls_request_seq () = 0;
+    recv_tls_reply_token () = 0;
 }
 }
 
@@ -208,13 +208,6 @@ typedef struct zlink_monitor_event_t
 } zlink_monitor_event_t;
 
 typedef zlink_monitor_event_t zlink_socket_monitor_event_t;
-typedef void (*zlink_socket_monitor_handler_fn) (const zlink_monitor_event_t *event_,
-                                                 void *userdata_);
-typedef void (*zlink_socket_msg_handler_fn) (const zlink_routing_id_t *source_rid_,
-                                             zlink_msg_t *parts_,
-                                             size_t part_count_,
-                                             void *userdata_);
-typedef void (*zlink_send_ready_handler_fn) (void *subject_, void *userdata_);
 
 typedef struct zlink_socket_monitor_open_options_t
 {
@@ -332,9 +325,6 @@ struct zlink_monitor_handle_t
     zlink_monitor_handle_t () :
         owner (NULL),
         monitor (NULL),
-        callback (NULL),
-        userdata (NULL),
-        stop (false),
         ready_count (0),
         socket_type (0)
     {
@@ -342,10 +332,6 @@ struct zlink_monitor_handle_t
 
     void *owner;
     void *monitor;
-    zlink_socket_monitor_handler_fn callback;
-    void *userdata;
-    std::thread worker;
-    std::atomic<bool> stop;
     std::atomic<uint32_t> ready_count;
     int socket_type;
 };
@@ -633,7 +619,7 @@ inline int zlink_std_compat_recv (void *s_,
     if (source_rid_out_)
         source_rid_out_->size = 0;
     std::memset (&zlink_std_compat::recv_tls_source_rid (), 0, sizeof (zlink_routing_id_t));
-    zlink_std_compat::recv_tls_request_seq () = 0;
+    zlink_std_compat::recv_tls_reply_token () = 0;
 
     int socket_type = 0;
     size_t socket_type_size = sizeof (socket_type);
@@ -701,14 +687,14 @@ inline int zlink_std_compat_recv (void *s_,
 
 inline int zlink_std_compat_router_recv (void *router_,
                                          const zlink_routing_id_t **peer_rid_out_,
-                                         uint64_t *request_seq_out_,
+                                         zlink_reply_token_t *reply_token_out_,
                                          zlink_msg_t **parts_out_,
                                          size_t *part_count_out_,
                                          zlink_recv_flags_t flags_)
 {
     static thread_local zlink_routing_id_t tls_peer_rid;
-    if (request_seq_out_)
-        *request_seq_out_ = 0;
+    if (reply_token_out_)
+        *reply_token_out_ = 0;
 
     const int rc = zlink_std_compat_recv (router_, &tls_peer_rid, parts_out_, part_count_out_,
                                           static_cast<zlink_send_flags_t> (flags_));
@@ -721,7 +707,7 @@ inline int zlink_std_compat_router_recv (void *router_,
     if (peer_rid_out_)
         *peer_rid_out_ = tls_peer_rid.size > 0 ? &tls_peer_rid : NULL;
     zlink_std_compat::recv_tls_source_rid () = tls_peer_rid;
-    zlink_std_compat::recv_tls_request_seq () = request_seq_out_ ? *request_seq_out_ : 0;
+    zlink_std_compat::recv_tls_reply_token () = reply_token_out_ ? *reply_token_out_ : 0;
     return 0;
 }
 
@@ -758,7 +744,7 @@ inline int zlink_recv_part (void *s_,
 
 inline int zlink_router_recv_part (void *router_,
                                    const zlink_routing_id_t **peer_rid_out_,
-                                   uint64_t *request_seq_out_,
+                                   zlink_reply_token_t *reply_token_out_,
                                    zlink_msg_t *part_out_,
                                    zlink_part_flag_t *has_more_out_,
                                    zlink_recv_flags_t flags_)
@@ -771,13 +757,13 @@ inline int zlink_router_recv_part (void *router_,
     if (zlink_std_compat::recv_tls_count () == 0) {
         zlink_msg_t *parts = NULL;
         size_t part_count = 0;
-        if (zlink_std_compat_router_recv (router_, peer_rid_out_, request_seq_out_, &parts,
+        if (zlink_std_compat_router_recv (router_, peer_rid_out_, reply_token_out_, &parts,
                                           &part_count, flags_)
             != 0) {
             if (peer_rid_out_)
                 *peer_rid_out_ = NULL;
-            if (request_seq_out_)
-                *request_seq_out_ = 0;
+            if (reply_token_out_)
+                *reply_token_out_ = 0;
             return -1;
         }
     }
@@ -787,8 +773,8 @@ inline int zlink_router_recv_part (void *router_,
                            ? &zlink_std_compat::recv_tls_source_rid ()
                            : NULL;
     }
-    if (request_seq_out_)
-        *request_seq_out_ = zlink_std_compat::recv_tls_request_seq ();
+    if (reply_token_out_)
+        *reply_token_out_ = zlink_std_compat::recv_tls_reply_token ();
     return zlink_std_compat::recv_tls_take_part (part_out_, has_more_out_);
 }
 
@@ -1011,25 +997,6 @@ inline int zlink_recv_monitor_event_raw (zlink_monitor_handle_t *handle_,
     return out_->event != 0 ? 0 : -1;
 }
 
-inline void zlink_monitor_thread_main (zlink_monitor_handle_t *handle_)
-{
-    while (handle_ && !handle_->stop.load (std::memory_order_acquire)) {
-        zlink_socket_monitor_event_t event;
-        if (zlink_recv_monitor_event_raw (handle_, &event) == 0) {
-            if (handle_->callback)
-                handle_->callback (&event, handle_->userdata);
-            continue;
-        }
-        const int err = zmq_errno ();
-        if (err == EAGAIN || err == EINTR) {
-            zmq_pollitem_t item = {handle_->monitor, 0, ZMQ_POLLIN, 0};
-            (void) zmq_poll (&item, 1, 5);
-            continue;
-        }
-        break;
-    }
-}
-
 inline void *zlink_socket_monitor_open (void *s_,
                                         const zlink_socket_monitor_open_options_t *options_)
 {
@@ -1096,22 +1063,6 @@ inline void *zlink_socket_monitor_open (void *s_,
     return handle;
 }
 
-inline int zlink_socket_monitor_handler (void *monitor_,
-                                         zlink_socket_monitor_handler_fn handler_,
-                                         void *userdata_)
-{
-    zlink_monitor_handle_t *handle = static_cast<zlink_monitor_handle_t *> (monitor_);
-    if (!handle) {
-        errno = EINVAL;
-        return -1;
-    }
-    handle->callback = handler_;
-    handle->userdata = userdata_;
-    if (handler_)
-        handle->worker = std::thread (&zlink_monitor_thread_main, handle);
-    return 0;
-}
-
 inline int zlink_socket_monitor_recv (void *monitor_,
                                       zlink_socket_monitor_event_t *out_,
                                       zlink_send_flags_t flags_)
@@ -1142,9 +1093,6 @@ inline int zlink_monitor_close (void **monitor_p_)
         std::lock_guard<std::mutex> lock (g_zlink_monitor_registry_sync);
         g_zlink_monitor_registry.erase (handle);
     }
-    handle->stop.store (true, std::memory_order_release);
-    if (handle->worker.joinable ())
-        handle->worker.join ();
     if (handle->owner)
         zmq_socket_monitor (handle->owner, NULL, 0);
     if (handle->monitor)
@@ -1253,23 +1201,6 @@ inline int zlink_poller_wait (void *poller_,
         ++out;
     }
     return out;
-}
-
-inline int zlink_recv_handler (void *socket_, zlink_socket_msg_handler_fn handler_, void *userdata_)
-{
-    (void) socket_;
-    (void) handler_;
-    (void) userdata_;
-    return 0;
-}
-
-inline int
-zlink_send_ready_handler (void *socket_, zlink_send_ready_handler_fn handler_, void *userdata_)
-{
-    (void) socket_;
-    (void) handler_;
-    (void) userdata_;
-    return 0;
 }
 
 #endif

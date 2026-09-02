@@ -25,7 +25,7 @@ else()
     file(GLOB STD_LIBZMQ_LIBRARY "${STD_LIBZMQ_ROOT}/lib/libzmq.so*")
 endif()
 
-set(ZLINK_INCLUDE_DIR "${ZLINK_CORE_DIR}/include")
+set(ZLINK_INCLUDE_DIR "${ZLINK_C_BINDINGS_DIR}/include")
 set(ZLINK_C_PERF_COMMON_DIR "${ZLINK_C_BINDINGS_DIR}/perf/common")
 set(ZLINK_C_PERF_STREAMCLIENT_DIR
     "${ZLINK_C_BINDINGS_DIR}/perf/common/streamclient")
