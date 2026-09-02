@@ -5,9 +5,6 @@ package systems.zlink.contracts.messaging;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletionStage;
-import java.util.function.BiConsumer;
-import systems.zlink.contracts.sockets.RequestResult;
-import systems.zlink.contracts.sockets.SendFlags;
 
 /** Accepts further parts, a timeout, and the asynchronous request terminal. */
 public interface RequestSubmitOperation
@@ -39,10 +36,6 @@ public interface RequestSubmitOperation
      */
     CompletionStage<List<Message>> submit();
 
-    /** Blocks for admission and reply according to {@code flags}. */
-    List<Message> submit_sync(SendFlags flags);
-
-    /** Returns after admission and delivers reply completion to the callback. */
-    void submit_sync(SendFlags flags,
-                     BiConsumer<RequestResult, List<Message>> callback);
+    /** Blocks with Core NONE until the reply or typed terminal error. */
+    List<Message> submit_sync();
 }

@@ -76,13 +76,13 @@ final class ReceivePlane {
             if (firstPart == null)
                 return false;
 
-            long requestSequence = scratch.requestSequenceOut.get(
+            long replyTokenValue = scratch.replyTokenValueOut.get(
                 ValueLayout.JAVA_LONG, 0);
-            boolean hasRequestSequence = requestSequence != 0L;
+            boolean hasReplyToken = replyTokenValue != 0L;
             if (!firstPart.more()) {
                 ContractAccess.receivedPopulateRoutedSinglePart(result,
-                    null, firstPart, requestSequence,
-                    hasRequestSequence, null, null);
+                    null, firstPart, replyTokenValue,
+                    hasReplyToken, null, null);
                 firstPart = null;
                 return true;
             }
@@ -93,8 +93,8 @@ final class ReceivePlane {
                     NativeErrno.EAGAIN);
             if (!secondPart.more()) {
                 RECEIVED_ACCESS.populateRoutedTwoParts(result, null,
-                    firstPart, secondPart, requestSequence,
-                    hasRequestSequence, null, null);
+                    firstPart, secondPart, replyTokenValue,
+                    hasReplyToken, null, null);
                 firstPart = null;
                 secondPart = null;
                 return true;
@@ -114,8 +114,8 @@ final class ReceivePlane {
             }
 
             Received fresh = InternalAccess.received((byte[]) null,
-                parts.toArray(Message[]::new), true, requestSequence,
-                hasRequestSequence, null, null);
+                parts.toArray(Message[]::new), true, replyTokenValue,
+                hasReplyToken, null, null);
             parts = null;
             try {
                 ContractAccess.receivedAdoptFrom(result, fresh);
@@ -397,11 +397,9 @@ final class ReceivePlane {
             boolean success = false;
             scratch.dealerMessageTypeOut.set(ValueLayout.JAVA_BYTE, 0,
                 (byte) 0);
-            scratch.requestSequenceOut.set(ValueLayout.JAVA_LONG, 0, 0L);
+            scratch.replyTokenValueOut.set(ValueLayout.JAVA_LONG, 0, 0L);
             try {
-                int rc = Native.dealerRecvPart(socket.handle(),
-                    scratch.dealerMessageTypeOut,
-                    scratch.requestSequenceOut,
+                int rc = Native.recv(socket.handle(), scratch.sourceRidOut,
                     InternalAccess.messageNativeHandle(part),
                     scratch.hasMoreOut, flags.getValue());
                 if (rc == RecvResult.OK.value()) {

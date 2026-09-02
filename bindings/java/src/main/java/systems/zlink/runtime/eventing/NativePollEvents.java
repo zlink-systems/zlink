@@ -9,6 +9,7 @@ import java.lang.foreign.ValueLayout;
 final class NativePollEvents {
     private static final long POLLER_EVENT_SIZE = 48;
     private static final long EVENT_SOURCE_KIND_OFFSET = 0;
+    private static final long EVENT_SOCKET_OFFSET = 8;
     private static final long EVENT_FD_OFFSET = 16;
     private static final long EVENT_USER_DATA_OFFSET = 32;
     private static final long EVENT_EVENTS_OFFSET = 40;
@@ -39,6 +40,16 @@ final class NativePollEvents {
     static int revents(MemorySegment state, int index) {
         return state.get(ValueLayout.JAVA_SHORT,
             offset(index, EVENT_EVENTS_OFFSET));
+    }
+
+    static void revents(MemorySegment state, int index, int value) {
+        state.set(ValueLayout.JAVA_SHORT,
+            offset(index, EVENT_EVENTS_OFFSET), (short) value);
+    }
+
+    static long socket(MemorySegment state, int index) {
+        return state.get(ValueLayout.ADDRESS,
+            offset(index, EVENT_SOCKET_OFFSET)).address();
     }
 
     static int fd(MemorySegment state, int index) {

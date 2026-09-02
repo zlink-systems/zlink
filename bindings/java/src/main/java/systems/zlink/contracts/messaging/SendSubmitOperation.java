@@ -2,8 +2,9 @@
 
 package systems.zlink.contracts.messaging;
 
-import systems.zlink.contracts.sockets.SendFlags;
-/** Accepts further parts, flags, and the terminal submit of a send builder. */
+import java.util.concurrent.CompletionStage;
+
+/** Accepts further parts and completes one captured-target send. */
 public interface SendSubmitOperation
   extends MessageBuilderStage<SendSubmitOperation> {
     /**
@@ -15,21 +16,9 @@ public interface SendSubmitOperation
      */
     SendSubmitOperation message(Message part);
 
-    /**
-     * Sets the send flags, replacing any previously set flags.
-     *
-     * @param flags the flags to apply at submit time
-     * @return this operation for chaining
-     */
-    SendSubmitOperation flags(SendFlags flags);
+    /** Submits with Core DONTWAIT and completes after native admission. */
+    CompletionStage<Void> submit();
 
-    /**
-     * Submits the accumulated parts.
-     *
-     * @return {@code true} when the parts were queued; {@code false} only when
-     *         {@link SendFlags#DONT_WAIT} is set and the send would have
-     *         blocked (back-pressure); other failures throw
-     *         {@link systems.zlink.contracts.errors.ZlinkException}
-     */
-    boolean submit();
+    /** Blocks in Core until local send-queue admission completes. */
+    void submit_sync();
 }

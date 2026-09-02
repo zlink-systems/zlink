@@ -132,7 +132,7 @@ final class PerfDealerDealer {
                     // the terminator.
                     PerfStopToken.sendWithRetry(() -> {
                         try (Message stop = PerfStopToken.newMessage()) {
-                            sender.send().message(stop).submit_sync(SendFlags.NONE);
+                            sender.send().message(stop).submit_sync();
                             return true;
                         }
                     }, "dealer/dealer");
@@ -163,9 +163,9 @@ final class PerfDealerDealer {
         try {
             if (PerfUtil.measurementPartCount() == 2) {
                 sender.send().message(active).message(PerfUtil.measurementTail())
-                    .submit_sync(SendFlags.NONE);
+                    .submit_sync();
             } else {
-                sender.send().message(active).submit_sync(SendFlags.NONE);
+                sender.send().message(active).submit_sync();
             }
             return true;
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {

@@ -8,6 +8,8 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.eventing.PollEvents;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
+import systems.zlink.contracts.messaging.ReplyToken;
+import systems.zlink.contracts.messaging.StreamPacket;
 import systems.zlink.contracts.messaging.SubscriptionEvent;
 import systems.zlink.contracts.messaging.TopicMessage;
 import systems.zlink.contracts.sockets.Socket;
@@ -23,8 +25,10 @@ import java.nio.ByteBuffer;
 import java.util.Objects;
 import java.util.List;
 import java.util.ServiceLoader;
+import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
-import java.util.function.BiFunction;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Non-exported bridge for runtime code that must fill contract-owned state.
@@ -41,6 +45,8 @@ public final class ContractAccess {
     private static volatile TopicMessageAccess topicMessageAccess;
     private static volatile MessageAccess messageAccess;
     private static volatile NativeMessageAccess nativeMessageAccess;
+    private static volatile ReplyTokenAccess replyTokenAccess;
+    private static volatile StreamPacketAccess streamPacketAccess;
 
     private ContractAccess() {
     }
@@ -119,6 +125,23 @@ public final class ContractAccess {
         String strerror(int errno);
     }
 
+    public interface ReplyTokenAccess {
+        ReplyToken create(Object owner, long value);
+
+        Object owner(ReplyToken token);
+
+        long value(ReplyToken token);
+    }
+
+    public interface StreamPacketAccess {
+        void begin(StreamPacket packet);
+
+        void complete(StreamPacket packet, RoutingId routingId,
+                      Message header, Message body);
+
+        void fail(StreamPacket packet);
+    }
+
     public interface ReceivedPartCursor extends AutoCloseable {
         Message nextPartOrNull();
 
@@ -127,20 +150,8 @@ public final class ContractAccess {
     }
 
     @FunctionalInterface
-    public interface RoutedSingleSendInvoker {
-        boolean submit(byte[] routingIdBytes, Message message,
-                       SendFlags flags);
-    }
-
-    @FunctionalInterface
-    public interface RoutedMultipartSendInvoker {
-        boolean submit(byte[] routingIdBytes, List<Message> messages,
-                       SendFlags flags);
-    }
-
-    @FunctionalInterface
     public interface RoutedReplyInvoker {
-        void submit(byte[] routingIdBytes, long requestSequence,
+        void submit(byte[] routingIdBytes, long replyTokenValue,
                     List<Message> messages);
     }
 
@@ -149,42 +160,42 @@ public final class ContractAccess {
 
         Received create(RoutingId routingId, Message[] parts,
                         boolean trustedParts,
-                        long requestSeq, boolean hasRequestSeq,
+                        long replyTokenValue, boolean hasReplyToken,
                         BiConsumer<List<Message>, SendFlags> replySender);
 
         Received create(RoutingId routingId, Message[] parts,
                         boolean trustedParts,
-                        long requestSeq, boolean hasRequestSeq,
+                        long replyTokenValue, boolean hasReplyToken,
                         BiConsumer<List<Message>, SendFlags> replySender,
                         Runnable onTerminalState);
 
         Received create(byte[] routingIdBytes, Message[] parts,
                         boolean trustedParts,
-                        long requestSeq, boolean hasRequestSeq,
+                        long replyTokenValue, boolean hasReplyToken,
                         BiConsumer<List<Message>, SendFlags> replySender,
                         Runnable onTerminalState);
 
-        Received create(RoutingId routingId, Message[] parts, long requestSeq,
-                        boolean hasRequestSeq,
+        Received create(RoutingId routingId, Message[] parts, long replyTokenValue,
+                        boolean hasReplyToken,
                         BiConsumer<List<Message>, SendFlags> replySender);
 
         Received createLazy(byte[] routingIdBytes, Message firstPart,
                             ReceivedPartCursor cursor,
-                            long requestSeq, boolean hasRequestSeq,
+                            long replyTokenValue, boolean hasReplyToken,
                             BiConsumer<List<Message>, SendFlags> replySender,
                             Runnable onTerminalState);
 
         Received createLazy(RoutingId routingId, Message firstPart,
                             ReceivedPartCursor cursor,
-                            long requestSeq, boolean hasRequestSeq,
+                            long replyTokenValue, boolean hasReplyToken,
                             BiConsumer<List<Message>, SendFlags> replySender,
                             Runnable onTerminalState);
 
         void populateRoutedSinglePart(Received received,
                                       byte[] routingIdBytes,
                                       Message singlePart,
-                                      long requestSequence,
-                                      boolean hasRequestSequence,
+                                      long replyTokenValue,
+                                      boolean hasReplyToken,
                                       BiConsumer<List<Message>, SendFlags>
                                           replySender,
                                       Runnable onTerminalState);
@@ -193,8 +204,8 @@ public final class ContractAccess {
                                     byte[] routingIdBytes,
                                     Message firstPart,
                                     Message secondPart,
-                                    long requestSequence,
-                                    boolean hasRequestSequence,
+                                    long replyTokenValue,
+                                    boolean hasReplyToken,
                                     BiConsumer<List<Message>, SendFlags>
                                         replySender,
                                     Runnable onTerminalState);
@@ -203,15 +214,10 @@ public final class ContractAccess {
 
         List<Message> takeParts(Received received);
 
-        void setSendSender(Received received,
-                           BiFunction<List<Message>, SendFlags, Boolean> sendSender);
-
-        void setSingleSendSender(Received received,
-                                 BiFunction<Message, SendFlags, Boolean> sendSender);
-
-        void setRoutedSenders(Received received,
-                              RoutedSingleSendInvoker singleSender,
-                              RoutedMultipartSendInvoker multipartSender);
+        void setSendSubmitters(
+            Received received,
+            Function<List<Message>, CompletionStage<Void>> submitter,
+            Consumer<List<Message>> blockingSubmitter);
 
         void setRoutedReplySender(Received received,
                                   RoutedReplyInvoker replySender);
@@ -220,8 +226,7 @@ public final class ContractAccess {
 
         void adoptFrom(Received target, Received source);
 
-        void setTransportPair(Received received, long transportPairId,
-                              long transportPairGeneration);
+        void setReplyTokenOwner(Received received, Object owner);
     }
 
     public interface SubscriptionEventAccess {
@@ -397,6 +402,40 @@ public final class ContractAccess {
         nativeMessageAccess = Objects.requireNonNull(access, "access");
     }
 
+    public static void register(ReplyTokenAccess access) {
+        replyTokenAccess = Objects.requireNonNull(access, "access");
+    }
+
+    public static void register(StreamPacketAccess access) {
+        streamPacketAccess = Objects.requireNonNull(access, "access");
+    }
+
+    public static ReplyToken replyToken(Object owner, long value) {
+        return replyTokenAccess().create(owner, value);
+    }
+
+    public static Object replyTokenOwner(ReplyToken token) {
+        return replyTokenAccess().owner(token);
+    }
+
+    public static long replyTokenValue(ReplyToken token) {
+        return replyTokenAccess().value(token);
+    }
+
+    public static void streamPacketBegin(StreamPacket packet) {
+        streamPacketAccess().begin(packet);
+    }
+
+    public static void streamPacketComplete(StreamPacket packet,
+                                            RoutingId routingId,
+                                            Message header, Message body) {
+        streamPacketAccess().complete(packet, routingId, header, body);
+    }
+
+    public static void streamPacketFail(StreamPacket packet) {
+        streamPacketAccess().fail(packet);
+    }
+
     public static void pollEventsMarkReadyCount(PollEvents events,
                                                 int readyCount) {
         pollEventsAccess().markReadyCount(events, readyCount);
@@ -536,62 +575,62 @@ public final class ContractAccess {
     }
 
     public static Received received(RoutingId routingId, Message[] parts,
-                                    long requestSeq,
-                                    boolean hasRequestSeq,
+                                    long replyTokenValue,
+                                    boolean hasReplyToken,
                                     BiConsumer<List<Message>, SendFlags> replySender) {
-        return receivedAccess().create(routingId, parts, requestSeq,
-            hasRequestSeq, replySender);
+        return receivedAccess().create(routingId, parts, replyTokenValue,
+            hasReplyToken, replySender);
     }
 
     public static Received received(RoutingId routingId, Message[] parts,
                                     boolean trustedParts,
-                                    long requestSeq,
-                                    boolean hasRequestSeq,
+                                    long replyTokenValue,
+                                    boolean hasReplyToken,
                                     BiConsumer<List<Message>, SendFlags> replySender) {
         return receivedAccess().create(routingId, parts, trustedParts,
-            requestSeq, hasRequestSeq, replySender);
+            replyTokenValue, hasReplyToken, replySender);
     }
 
     public static Received received(RoutingId routingId, Message[] parts,
                                     boolean trustedParts,
-                                    long requestSeq,
-                                    boolean hasRequestSeq,
+                                    long replyTokenValue,
+                                    boolean hasReplyToken,
                                     BiConsumer<List<Message>, SendFlags> replySender,
                                     Runnable onTerminalState) {
         return receivedAccess().create(routingId, parts, trustedParts,
-            requestSeq, hasRequestSeq, replySender, onTerminalState);
+            replyTokenValue, hasReplyToken, replySender, onTerminalState);
     }
 
     public static Received received(byte[] routingIdBytes, Message[] parts,
                                     boolean trustedParts,
-                                    long requestSeq,
-                                    boolean hasRequestSeq,
+                                    long replyTokenValue,
+                                    boolean hasReplyToken,
                                     BiConsumer<List<Message>, SendFlags> replySender,
                                     Runnable onTerminalState) {
         return receivedAccess().create(routingIdBytes, parts,
-            trustedParts, requestSeq, hasRequestSeq, replySender,
+            trustedParts, replyTokenValue, hasReplyToken, replySender,
             onTerminalState);
     }
 
     public static Received receivedLazy(byte[] routingIdBytes, Message firstPart,
                                         ReceivedPartCursor cursor,
-                                        long requestSeq,
-                                        boolean hasRequestSeq,
+                                        long replyTokenValue,
+                                        boolean hasReplyToken,
                                         BiConsumer<List<Message>, SendFlags> replySender,
                                         Runnable onTerminalState) {
         return receivedAccess().createLazy(routingIdBytes, firstPart, cursor,
-            requestSeq, hasRequestSeq, replySender,
+            replyTokenValue, hasReplyToken, replySender,
             onTerminalState);
     }
 
     public static Received receivedLazy(RoutingId routingId, Message firstPart,
                                         ReceivedPartCursor cursor,
-                                        long requestSeq,
-                                        boolean hasRequestSeq,
+                                        long replyTokenValue,
+                                        boolean hasReplyToken,
                                         BiConsumer<List<Message>, SendFlags> replySender,
                                         Runnable onTerminalState) {
         return receivedAccess().createLazy(routingId, firstPart, cursor,
-            requestSeq, hasRequestSeq, replySender, onTerminalState);
+            replyTokenValue, hasReplyToken, replySender, onTerminalState);
     }
 
     public static TopicMessage topicMessage(RoutingId routingId,
@@ -635,24 +674,12 @@ public final class ContractAccess {
         return receivedAccess().takeParts(received);
     }
 
-    public static void receivedSetSendSender(Received received,
-                                             BiFunction<List<Message>, SendFlags,
-                                                 Boolean> sendSender) {
-        receivedAccess().setSendSender(received, sendSender);
-    }
-
-    public static void receivedSetSingleSendSender(
+    public static void receivedSetSendSubmitters(
       Received received,
-      BiFunction<Message, SendFlags, Boolean> sendSender) {
-        receivedAccess().setSingleSendSender(received, sendSender);
-    }
-
-    public static void receivedSetRoutedSenders(
-      Received received,
-      RoutedSingleSendInvoker singleSender,
-      RoutedMultipartSendInvoker multipartSender) {
-        receivedAccess().setRoutedSenders(received, singleSender,
-            multipartSender);
+      Function<List<Message>, CompletionStage<Void>> submitter,
+      Consumer<List<Message>> blockingSubmitter) {
+        receivedAccess().setSendSubmitters(received, submitter,
+            blockingSubmitter);
     }
 
     public static void receivedSetRoutedReplySender(
@@ -669,24 +696,21 @@ public final class ContractAccess {
         receivedAccess().adoptFrom(target, source);
     }
 
-    public static void receivedSetTransportPair(
-      Received received,
-      long transportPairId,
-      long transportPairGeneration) {
-        receivedAccess().setTransportPair(received, transportPairId,
-            transportPairGeneration);
+    public static void receivedSetReplyTokenOwner(Received received,
+                                                   Object owner) {
+        receivedAccess().setReplyTokenOwner(received, owner);
     }
 
     public static void receivedPopulateRoutedSinglePart(
       Received received,
       byte[] routingIdBytes,
       Message singlePart,
-      long requestSequence,
-      boolean hasRequestSequence,
+      long replyTokenValue,
+      boolean hasReplyToken,
       BiConsumer<List<Message>, SendFlags> replySender,
       Runnable onTerminalState) {
         receivedAccess().populateRoutedSinglePart(received, routingIdBytes,
-            singlePart, requestSequence, hasRequestSequence,
+            singlePart, replyTokenValue, hasReplyToken,
             replySender, onTerminalState);
     }
 
@@ -695,12 +719,12 @@ public final class ContractAccess {
       byte[] routingIdBytes,
       Message firstPart,
       Message secondPart,
-      long requestSequence,
-      boolean hasRequestSequence,
+      long replyTokenValue,
+      boolean hasReplyToken,
       BiConsumer<List<Message>, SendFlags> replySender,
       Runnable onTerminalState) {
         receivedAccess().populateRoutedTwoParts(received, routingIdBytes,
-            firstPart, secondPart, requestSequence, hasRequestSequence,
+            firstPart, secondPart, replyTokenValue, hasReplyToken,
             replySender, onTerminalState);
     }
 
@@ -1042,6 +1066,22 @@ public final class ContractAccess {
             throw new IllegalStateException(
                 "missing contract access for native message runtime");
         return nativeMessageAccess;
+    }
+
+    private static ReplyTokenAccess replyTokenAccess() {
+        if (replyTokenAccess == null) load(ReplyToken.class);
+        if (replyTokenAccess == null)
+            throw new IllegalStateException(
+                "missing contract access for " + ReplyToken.class.getName());
+        return replyTokenAccess;
+    }
+
+    private static StreamPacketAccess streamPacketAccess() {
+        if (streamPacketAccess == null) load(StreamPacket.class);
+        if (streamPacketAccess == null)
+            throw new IllegalStateException(
+                "missing contract access for " + StreamPacket.class.getName());
+        return streamPacketAccess;
     }
 
     private static void load(Class<?> type) {

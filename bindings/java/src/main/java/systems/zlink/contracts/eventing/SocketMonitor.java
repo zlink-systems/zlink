@@ -9,11 +9,6 @@ import systems.zlink.contracts.sockets.RecvFlags;
  * The caller owns this resource and must close it.
  */
 public interface SocketMonitor extends AutoCloseable {
-    SocketMonitorHandler IGNORE_HANDLER = event -> {
-    };
-
-    void onEvent(SocketMonitorHandler handler);
-
     MonitorEvent recv();
 
     MonitorEvent recv(RecvFlags flags);

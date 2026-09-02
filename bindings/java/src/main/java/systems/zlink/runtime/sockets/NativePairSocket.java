@@ -8,7 +8,7 @@ import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
-import systems.zlink.contracts.messaging.AsyncSendOperation;
+import systems.zlink.contracts.messaging.SendOperation;
 import systems.zlink.runtime.messaging.MessageOperations;
 import java.util.List;
 final class NativePairSocket extends NativeSocketBase implements PairSocket {
@@ -24,11 +24,10 @@ final class NativePairSocket extends NativeSocketBase implements PairSocket {
         runtime().disconnectRid(routingId);
     }
 
-    public AsyncSendOperation send() {
-        return MessageOperations.asyncSend((parts, timeout) ->
-            runtime().sendAsync(parts, timeout),
-            (parts, flags) -> runtime().send(parts,
-                SendFlag.fromValue(flags.value())));
+    public SendOperation send() {
+        return MessageOperations.send(
+            parts -> runtime().submitSend(null, parts),
+            parts -> runtime().submitSendBlocking(null, parts));
     }
     SendResult sendNoWaitResult(Message part) { return runtime().sendNoWaitResult(part); }
     SendResult sendNoWaitResult(List<Message> parts) { return runtime().sendNoWaitResult(parts); }

@@ -31,8 +31,11 @@ import systems.zlink.contracts.sockets.RecvFlags;
 
 public class SocketConcurrencyStressTest {
     private static final int SENDER_THREADS = 4;
-    private static final int ATTEMPTS_PER_SENDER = 7_500;
-    private static final int CLOSE_AFTER_ATTEMPTS = 20_000;
+    // Pull completion performs an actual completion drain for every pending
+    // admission. Keep this a close/register race test rather than a benchmark;
+    // the perf projects own sustained-throughput coverage.
+    private static final int ATTEMPTS_PER_SENDER = 1_000;
+    private static final int CLOSE_AFTER_ATTEMPTS = 2_000;
 
     @Test
     public void concurrentSingleAndMultipartSendMixedWithClose()
@@ -161,9 +164,7 @@ public class SocketConcurrencyStressTest {
                 if (multipart) {
                     operation = operation.message(second).message(third);
                 }
-                completion = operation
-                    .timeout(Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS))
-                    .submit().toCompletableFuture();
+                completion = operation.submit().toCompletableFuture();
             } catch (ZlinkSubmitException | IllegalStateException failure) {
                 if (!closeStarted.get()
                     && !(failure instanceof ZlinkSubmitException)) {

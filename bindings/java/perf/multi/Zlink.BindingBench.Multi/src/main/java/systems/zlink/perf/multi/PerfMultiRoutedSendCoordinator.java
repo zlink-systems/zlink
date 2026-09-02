@@ -16,8 +16,8 @@ import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.perf.PerfSocketPollSet;
 
 /** Coordinates async send admission on one application thread. */
-final class PerfMultiRoutedSendCoordinator {
-    private PerfMultiRoutedSendCoordinator() {
+final class PerfMultiTargetCoordinator {
+    private PerfMultiTargetCoordinator() {
     }
 
     static void run(int socketCount,

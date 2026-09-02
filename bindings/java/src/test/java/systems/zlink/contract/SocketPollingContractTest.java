@@ -255,6 +255,8 @@ public class SocketPollingContractTest {
              StreamSocket server = ctx.createStreamSocket();
              Poller poller = Zlink.createPoller();
              java.net.Socket client = new java.net.Socket()) {
+            server.options().recvMode(
+                systems.zlink.contracts.sockets.StreamRecvMode.RAW);
             server.bind(endpoint);
             poller.add(server, 17L, PollEventFlags.POLLIN);
             client.connect(new InetSocketAddress("127.0.0.1", port),

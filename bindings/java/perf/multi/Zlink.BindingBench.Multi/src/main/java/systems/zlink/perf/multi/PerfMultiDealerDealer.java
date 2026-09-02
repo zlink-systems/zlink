@@ -181,7 +181,7 @@ final class PerfMultiDealerDealer {
             PerfControl.awaitStart(config.size(), "dealer/dealer client");
             long activeEnd = System.nanoTime()
                 + config.durationSeconds() * 1_000_000_000L;
-            PerfMultiRoutedSendCoordinator.runAdmissions(clients.size(),
+            PerfMultiTargetCoordinator.runAdmissions(clients.size(),
                 activeEnd,
                 index -> sendOneActive(clients.get(index), config.size(),
                     activeEnd),
@@ -232,11 +232,9 @@ final class PerfMultiDealerDealer {
             if (PerfUtil.measurementPartCount() == 2) {
                 return socket.send().message(payload)
                     .message(tail)
-                    .timeout(PerfMultiAsyncSendLoop.remainingTimeout(activeEnd))
                     .submit();
             }
             return socket.send().message(payload)
-                .timeout(PerfMultiAsyncSendLoop.remainingTimeout(activeEnd))
                 .submit();
         }
     }
@@ -249,7 +247,7 @@ final class PerfMultiDealerDealer {
         // the peer stopped draining its queue.
         while (true) {
             try (Message stop = PerfStopToken.newMessage()) {
-                socket.send().message(stop).submit_sync(SendFlags.NONE);
+                socket.send().message(stop).submit_sync();
                 return;
             } catch (ZlinkSubmitException ex) {
                 if (!isTransient(ex)) {

@@ -64,12 +64,6 @@ final class NativeSocketRuntime implements AutoCloseable {
         socketCore.disconnectRid(peerRid);
     }
 
-    public void disconnectTransportPair(long transportPairId,
-                                        long transportPairGeneration) {
-        socketCore.disconnectTransportPair(
-            transportPairId, transportPairGeneration);
-    }
-
     public static boolean inCallbackContext() {
         return SocketCore.inCallback();
     }
@@ -159,18 +153,6 @@ final class NativeSocketRuntime implements AutoCloseable {
     /** Disconnects the socket from the endpoint. */
     public void disconnect(String endpoint) {
         socketCore.disconnect(endpoint);
-    }
-
-    public void attachStreamPacket(StreamFramedPacketHandler handler) {
-        socketCore.attachStreamPacket(handler);
-    }
-
-    public void attachStreamPacket(StreamUInt32FramedPacketHandler handler) {
-        socketCore.attachStreamPacket(handler);
-    }
-
-    public void attachStreamPacket(StreamUInt32FramedNativeHandler handler) {
-        socketCore.attachStreamPacket(handler);
     }
 
     public void setSockOpt(int optionId, String optionName, byte[] value) {
@@ -303,145 +285,39 @@ final class NativeSocketRuntime implements AutoCloseable {
         return send(parts, SendFlag.NONE);
     }
 
-    CompletionStage<Void> sendAsync(List<Message> parts, Duration timeout) {
-        Objects.requireNonNull(parts, "parts");
+    CompletionStage<Void> submitSend(RoutingId target, List<Message> parts) {
         ensureOpen();
-        return socketCore.sendAsync(parts, timeout, MemorySegment.NULL);
+        return socketCore.completionOwner().submitSend(target, parts);
     }
 
-    CompletionStage<Void> sendAsync(RoutingId routingId,
-                                    List<Message> parts,
-                                    Duration timeout) {
-        Objects.requireNonNull(routingId, "routingId");
-        Objects.requireNonNull(parts, "parts");
+    void submitSendBlocking(RoutingId target, List<Message> parts) {
         ensureOpen();
-        if (socketTypeHint == SocketType.STREAM) {
-            try (Arena arena = Arena.ofConfined()) {
-                // STREAM requires the current transport-pair identity for
-                // its exact route; selecting it does not claim send credit.
-                MemorySegment target = selectRoutedTarget(arena, routingId);
-                return socketCore.sendAsync(parts, timeout, target);
-            }
-        }
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment target = selectRoutedTarget(arena, routingId);
-            return socketCore.sendAsync(parts, timeout, target);
-        }
+        socketCore.completionOwner().submitSendBlocking(target, parts);
     }
 
-    CompletionStage<Void> sendAsync(RoutingId routingId,
-                                    long transportPairId,
-                                    long transportPairGeneration,
-                                    List<Message> parts,
-                                    Duration timeout) {
-        Objects.requireNonNull(routingId, "routingId");
-        if (transportPairId == 0L || transportPairGeneration == 0L) {
-            throw new IllegalArgumentException(
-                "transport pair identity must be non-zero");
-        }
-        Objects.requireNonNull(parts, "parts");
+    CompletionStage<List<Message>> submitRequest(RoutingId target,
+                                                  List<Message> parts,
+                                                  Duration timeout) {
         ensureOpen();
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment target = allocateExactTarget(arena, routingId,
-                transportPairId, transportPairGeneration);
-            return socketCore.sendAsync(parts, timeout, target);
-        }
+        return socketCore.completionOwner().submitRequest(target, parts,
+            timeout);
     }
 
-    CompletionStage<List<Message>> requestAsync(CoreRequestSupport support,
-                                                RoutingId routingId,
-                                                long transportPairId,
-                                                long transportPairGeneration,
-                                                List<Message> parts,
-                                                Duration timeout) {
-        Objects.requireNonNull(support, "support");
-        Objects.requireNonNull(parts, "parts");
+    List<Message> submitRequestBlocking(RoutingId target,
+                                        List<Message> parts,
+                                        Duration timeout) {
         ensureOpen();
-        if (socketTypeHint == SocketType.ROUTER && routingId == null) {
-            throw new IllegalArgumentException("routingId is required");
-        }
-        boolean exact = transportPairId != 0L || transportPairGeneration != 0L;
-        if (exact && (transportPairId == 0L || transportPairGeneration == 0L)) {
-            throw new IllegalArgumentException(
-                "transport pair identity must be non-zero");
-        }
-        if (socketTypeHint == SocketType.DEALER && !exact) {
-            return support.submit(parts, timeout, MemorySegment.NULL,
-                systems.zlink.contracts.sockets.SendFlags.DONT_WAIT, false);
-        }
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment target = exact
-                ? allocateExactTarget(arena, routingId, transportPairId,
-                    transportPairGeneration)
-                : selectRoutedTarget(arena, routingId);
-            return support.submit(parts, timeout, target,
-                systems.zlink.contracts.sockets.SendFlags.DONT_WAIT, false);
-        }
+        return socketCore.completionOwner().submitRequestBlocking(target,
+            parts, timeout);
     }
 
-    CompletionStage<List<Message>> requestSync(CoreRequestSupport support,
-                                               RoutingId routingId,
-                                               long transportPairId,
-                                               long transportPairGeneration,
-                                               List<Message> parts,
-                                               Duration timeout,
-                                               systems.zlink.contracts.sockets.SendFlags flags) {
-        Objects.requireNonNull(support, "support");
-        Objects.requireNonNull(parts, "parts");
-        Objects.requireNonNull(flags, "flags");
+    void submitReply(RoutingId target, long token, List<Message> parts) {
         ensureOpen();
-        if (socketTypeHint == SocketType.ROUTER && routingId == null) {
-            throw new IllegalArgumentException("routingId is required");
-        }
-        boolean exact = transportPairId != 0L || transportPairGeneration != 0L;
-        if (exact && (transportPairId == 0L || transportPairGeneration == 0L)) {
-            throw new IllegalArgumentException(
-                "transport pair identity must be non-zero");
-        }
-        if (socketTypeHint == SocketType.DEALER && !exact) {
-            return support.submit(parts, timeout, MemorySegment.NULL, flags,
-                true);
-        }
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment target = exact
-                ? allocateExactTarget(arena, routingId, transportPairId,
-                    transportPairGeneration)
-                : selectRoutedTarget(arena, routingId);
-            return support.submit(parts, timeout, target, flags, true);
-        }
+        socketCore.completionOwner().submitReply(target, token, parts);
     }
 
-    private MemorySegment selectRoutedTarget(Arena arena, RoutingId routingId) {
-        MemorySegment selector = routingId == null
-            ? MemorySegment.NULL : NativeRoutingIds.allocate(arena, routingId);
-        MemorySegment target = arena.allocate(
-            NativeLayouts.ROUTED_SUBMIT_TARGET_LAYOUT);
-        int rc = Native.selectRoutedSubmitTarget(handle, selector, target);
-        if (rc != SubmitResult.OK.value()) {
-            int errno = Native.errno();
-            try {
-                throw new ZlinkSubmitException(SubmitResult.fromValue(rc), errno);
-            } catch (IllegalArgumentException ignored) {
-                throw ZlinkException.fromErrno(
-                    systems.zlink.contracts.errors.ErrorCategory.SUBMIT,
-                    errno);
-            }
-        }
-        return target;
-    }
-
-    private static MemorySegment allocateExactTarget(Arena arena,
-                                                      RoutingId routingId,
-                                                      long pairId,
-                                                      long generation) {
-        MemorySegment target = arena.allocate(
-            NativeLayouts.ROUTED_SUBMIT_TARGET_LAYOUT);
-        NativeRoutingIds.write(target, routingId);
-        target.set(ValueLayout.JAVA_LONG,
-            NativeLayouts.ROUTED_SUBMIT_TARGET_PAIR_ID_OFFSET, pairId);
-        target.set(ValueLayout.JAVA_LONG,
-            NativeLayouts.ROUTED_SUBMIT_TARGET_GENERATION_OFFSET, generation);
-        return target;
+    CompletionOwner completionOwner() {
+        return socketCore.completionOwner();
     }
 
     boolean send(List<Message> parts, SendFlag flags) {
@@ -510,18 +386,6 @@ final class NativeSocketRuntime implements AutoCloseable {
         Objects.requireNonNull(parts, "parts");
         sendParts(rid, parts, flags, false);
         return true;
-    }
-
-    boolean send(RoutingId rid, long transportPairId,
-                 long transportPairGeneration, List<Message> parts,
-                 SendFlag flags) {
-        if (transportPairId == 0L || transportPairGeneration == 0L) {
-            throw new IllegalArgumentException(
-                "transport pair identity must be non-zero");
-        }
-        return trySendResult(sendPlane.sendTransportPair(rid, transportPairId,
-            transportPairGeneration, parts,
-            Objects.requireNonNull(flags, "flags")));
     }
 
     SendResult sendNoWaitResult(RoutingId rid, Message part) {
@@ -699,10 +563,6 @@ final class NativeSocketRuntime implements AutoCloseable {
         return topicPlane.subscriptions();
     }
 
-    public void onReceive(SocketMessageHandler handler) {
-        socketCore.onReceive(handler);
-    }
-
     int send(byte[] data, int offset, int length, int sendFlags) {
         Objects.requireNonNull(data, "data");
         validateRange(data.length, offset, length, "data");
@@ -770,7 +630,7 @@ final class NativeSocketRuntime implements AutoCloseable {
     void closeInternal() {
         if (handle != null && handle.address() != 0) {
             if (own) {
-                int rc = Native.close(handle);
+                int rc = socketCore.closeNativeHandle();
                 if (rc != CloseResult.OK.value()) {
                     throw new ZlinkCloseException(CloseResult.fromValue(rc),
                         Native.errno());

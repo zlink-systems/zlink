@@ -17,14 +17,14 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class PerfMultiRoutedSendCoordinatorTest {
+class PerfMultiTargetCoordinatorTest {
     @Test
     void inlineTerminalsAdvanceOneSocketPerRoundUntilPending() {
         List<Integer> order = new ArrayList<>();
         AtomicReferenceArray<CompletableFuture<Void>> pending =
             new AtomicReferenceArray<>(3);
         int[] submissions = new int[3];
-        var admissions = new PerfMultiRoutedSendCoordinator.AdmissionRoundRobin(
+        var admissions = new PerfMultiTargetCoordinator.AdmissionRoundRobin(
             3, Long.MAX_VALUE, index -> {
                 order.add(index);
                 if (++submissions[index] == 1) {
@@ -56,7 +56,7 @@ class PerfMultiRoutedSendCoordinatorTest {
     void admissionOnlyModeBurstsInlineTerminalsUntilActualPending() {
         List<Integer> order = new ArrayList<>();
         int[] submissions = new int[2];
-        var admissions = new PerfMultiRoutedSendCoordinator.AdmissionRoundRobin(
+        var admissions = new PerfMultiTargetCoordinator.AdmissionRoundRobin(
             2, Long.MAX_VALUE, index -> {
                 order.add(index);
                 if (++submissions[index] == 1) {
@@ -76,7 +76,7 @@ class PerfMultiRoutedSendCoordinatorTest {
         Thread coordinatorThread = Thread.currentThread();
         List<Thread> submitThreads = new ArrayList<>();
         List<CompletableFuture<Void>> stages = new ArrayList<>();
-        var admissions = new PerfMultiRoutedSendCoordinator.AdmissionRoundRobin(
+        var admissions = new PerfMultiTargetCoordinator.AdmissionRoundRobin(
             1, Long.MAX_VALUE, index -> {
                 submitThreads.add(Thread.currentThread());
                 CompletableFuture<Void> stage = new CompletableFuture<>();
@@ -123,7 +123,7 @@ class PerfMultiRoutedSendCoordinatorTest {
 
         int[] submissions = {0};
         IllegalStateException failure = assertThrows(IllegalStateException.class,
-            () -> PerfMultiRoutedSendCoordinator.runAdmissions(1, activeEnd,
+            () -> PerfMultiTargetCoordinator.runAdmissions(1, activeEnd,
                 index -> {
                     submitThreads.add(Thread.currentThread());
                     submissions[0]++;

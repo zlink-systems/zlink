@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'systems.zlink'
-version = '0.15.2'
+version = '0.16.0'
 description = 'zlink Java bindings — high-performance async messaging library'
 
 java {
@@ -18,10 +18,6 @@ tasks.withType(Jar).configureEach {
     reproducibleFileOrder = true
 }
 
-def nativeOs = System.getProperty('os.name').toLowerCase()
-def nativeArch = System.getProperty('os.arch').toLowerCase()
-def nativeBridgeSupported = nativeOs.contains('linux')
-    && ['amd64', 'x86_64'].contains(nativeArch)
 def coreSource = System.getenv('ZLINK_CORE_SOURCE') ?: 'release'
 if (!['release', 'local'].contains(coreSource)) {
     throw new GradleException('ZLINK_CORE_SOURCE must be release or local')
@@ -48,13 +44,13 @@ def coreLinkDir = coreSource == 'local' && configuredCoreLibDir != null
     : null
 def generatedNativeResourcesDir = layout.buildDirectory.dir(
     'generated/zlink-native-resources/main')
-def bridgeOutputDir = layout.buildDirectory.dir(
+def nativeOutputDir = layout.buildDirectory.dir(
     'generated/zlink-native-resources/main/native/linux-x86_64')
 
 ['apiElements', 'runtimeElements'].each { configurationName ->
     configurations.named(configurationName) {
         attributes {
-            attribute(Attribute.of('systems.zlink.core.version', String), '0.15.1')
+            attribute(Attribute.of('systems.zlink.core.version', String), '0.16.0')
             attribute(Attribute.of('systems.zlink.core.soname', String),
                 'libzlink.so.0')
             attribute(Attribute.of('systems.zlink.core.provenance-sha256', String),
@@ -81,15 +77,8 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
 }
 
-tasks.register('buildZlinkJavaBridge', Exec) {
-    onlyIf { nativeBridgeSupported }
-    def source = new File(projectDir, 'native/src/zlink_java_reqrep_bridge.c')
-    def outputDir = bridgeOutputDir.get().asFile
-    def output = new File(outputDir, 'libzlink_java_bridge.so')
-    def javaHome = System.getProperty('java.home')
-    def jniIncludeDir = new File(javaHome, 'include')
-    def jniOsIncludeDir = new File(jniIncludeDir, 'linux')
-    inputs.file(source)
+tasks.register('prepareZlinkNativeResources') {
+    def outputDir = nativeOutputDir.get().asFile
     if (coreSource == 'local') {
         if (coreIncludeDir != null) {
             inputs.dir(coreIncludeDir)
@@ -103,13 +92,10 @@ tasks.register('buildZlinkJavaBridge', Exec) {
         inputs.file(new File(corePackagePrefix,
             'share/zlink/core-package-provenance.json'))
     }
-    inputs.dir(jniIncludeDir)
-    inputs.dir(jniOsIncludeDir)
-    outputs.files(output,
-        new File(outputDir, 'libzlink.so'),
+    outputs.files(new File(outputDir, 'libzlink.so'),
         new File(generatedNativeResourcesDir.get().asFile,
             'META-INF/zlink/core-package-provenance.json'))
-    doFirst {
+    doLast {
         if (coreSource == 'local') {
             if (coreIncludeDir == null || !coreIncludeDir.isAbsolute()
                 || coreLinkDir == null || !coreLinkDir.isAbsolute()) {
@@ -136,27 +122,11 @@ tasks.register('buildZlinkJavaBridge', Exec) {
                     rename { 'libzlink.so.0' }
                 }
             }
-            commandLine 'c++',
-                '-shared',
-                '-fPIC',
-                '-std=c++17',
-                '-O2',
-                '-pthread',
-                '-I', coreIncludeDir.absolutePath,
-                '-I', jniIncludeDir.absolutePath,
-                '-I', jniOsIncludeDir.absolutePath,
-                '-L', coreLinkDir.absolutePath,
-                '-Wl,-rpath,$ORIGIN',
-                '-Wl,--no-undefined',
-                '-o', output.absolutePath,
-                source.absolutePath,
-                '-Wl,--no-as-needed',
-                '-lzlink'
             return
         }
         if (corePackagePrefix == null || !corePackagePrefix.isAbsolute()) {
             throw new GradleException(
-                'ZLINK_CORE_PACKAGE_PREFIX must name an absolute Core 0.15.1 install prefix')
+                'ZLINK_CORE_PACKAGE_PREFIX must name an absolute Core 0.16.0 install prefix')
         }
         def includeDir = new File(corePackagePrefix, 'include')
         def linkDir = new File(corePackagePrefix, 'lib')
@@ -182,11 +152,11 @@ tasks.register('buildZlinkJavaBridge', Exec) {
             .digest(manifest.bytes).encodeHex().toString()
         def runtimeSha256 = java.security.MessageDigest.getInstance('SHA-256')
             .digest(runtime.bytes).encodeHex().toString()
-        if (metadata.version != '0.15.1') {
-            throw new GradleException('Core package must report version 0.15.1')
+        if (metadata.version != '0.16.0') {
+            throw new GradleException('Core package must report version 0.16.0')
         }
         def approved = approvedCorePackage
-        if (approved != null && (approved.version != '0.15.1'
+        if (approved != null && (approved.version != '0.16.0'
             || approved.prefix != corePackagePrefix.canonicalPath
             || approved.provenanceSha256 != manifestSha256
             || approved.runtime.sha256 != runtimeSha256
@@ -211,27 +181,11 @@ tasks.register('buildZlinkJavaBridge', Exec) {
             into new File(generatedNativeResourcesDir.get().asFile,
                 'META-INF/zlink')
         }
-        commandLine 'c++',
-            '-shared',
-            '-fPIC',
-            '-std=c++17',
-            '-O2',
-            '-pthread',
-            '-I', includeDir.absolutePath,
-            '-I', jniIncludeDir.absolutePath,
-            '-I', jniOsIncludeDir.absolutePath,
-            '-L', linkDir.absolutePath,
-            '-Wl,-rpath,$ORIGIN',
-            '-Wl,--no-undefined',
-            '-o', output.absolutePath,
-            source.absolutePath,
-            '-Wl,--no-as-needed',
-            '-lzlink'
     }
 }
 
 processResources {
-    dependsOn tasks.named('buildZlinkJavaBridge')
+    dependsOn tasks.named('prepareZlinkNativeResources')
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     // A published package must use only the runtime materialized from the
     // approved Core package. The source resource tree contains development
@@ -314,7 +268,7 @@ publishing {
                     }
                 }
                 properties = [
-                    'zlink.core.version': '0.15.1',
+                    'zlink.core.version': '0.16.0',
                     'zlink.core.soname': 'libzlink.so.0',
                     'zlink.core.abi-major': '0',
                     'zlink.core.provenance-sha256':

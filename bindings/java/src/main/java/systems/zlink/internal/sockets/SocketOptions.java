@@ -105,6 +105,12 @@ public final class SocketOptions {
     public static final SocketOptionKey<Integer> SUBMIT_RETRY_ATTEMPTS =
       SocketOptionKey.int32("SUBMIT_RETRY_ATTEMPTS",
         SocketOption.SUBMIT_RETRY_ATTEMPTS, true, true);
+    static final SocketOptionKey<Long> PENDING_MAX_MSGS =
+      SocketOptionKey.uint64("PENDING_MAX_MSGS",
+        SocketOption.PENDING_MAX_MSGS, true, true);
+    static final SocketOptionKey<Long> PENDING_MAX_BYTES =
+      SocketOptionKey.uint64("PENDING_MAX_BYTES",
+        SocketOption.PENDING_MAX_BYTES, true, true);
     public static final SocketOptionKey<Integer> XPUB_VERBOSE =
       SocketOptionKey.int32("XPUB_VERBOSE", SocketOption.XPUB_VERBOSE,
         true, true);
@@ -154,6 +160,9 @@ public final class SocketOptions {
 
     public static final SocketOptionKey<Integer> STREAM_NOTIFY =
       SocketOptionKey.int32("STREAM_NOTIFY", SocketOption.STREAM_NOTIFY,
+        true, true);
+    public static final SocketOptionKey<Integer> STREAM_RECV_MODE =
+      SocketOptionKey.int32("STREAM_RECV_MODE", SocketOption.STREAM_RECV_MODE,
         true, true);
     public static final SocketOptionKey<Integer> INVERT_MATCHING =
       SocketOptionKey.int32("INVERT_MATCHING", SocketOption.INVERT_MATCHING,
@@ -227,11 +236,12 @@ public final class SocketOptions {
         TCP_KEEPALIVE_CNT, TCP_KEEPALIVE_IDLE, TCP_KEEPALIVE_INTVL,
         TCP_NODELAY, IMMEDIATE, XPUB_VERBOSE, IPV6, PROBE_ROUTER,
         CONFLATE, RID_DUPLICATE_POLICY,
-        SUBMIT_RETRY_MODE, SUBMIT_RETRY_TIMEOUT, SUBMIT_RETRY_ATTEMPTS, TOS,
+        SUBMIT_RETRY_MODE, SUBMIT_RETRY_TIMEOUT, SUBMIT_RETRY_ATTEMPTS,
+        PENDING_MAX_MSGS, PENDING_MAX_BYTES, TOS,
         CONNECT_ROUTING_ID, CONNECT_ROUTING_ID_BYTES,
         HANDSHAKE_IVL, XPUB_NODROP, BLOCKY, XPUB_MANUAL,
         XPUB_WELCOME_MSG, XPUB_WELCOME_MSG_BYTES,
-        STREAM_NOTIFY, INVERT_MATCHING, XPUB_VERBOSER,
+        STREAM_NOTIFY, STREAM_RECV_MODE, INVERT_MATCHING, XPUB_VERBOSER,
         CONNECT_TIMEOUT, TCP_MAXRT, MULTICAST_MAXTPDU, USE_FD,
         BINDTODEVICE,
         TLS_CERT, TLS_KEY, TLS_CA, TLS_VERIFY,

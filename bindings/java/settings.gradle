@@ -3,8 +3,6 @@ include ':zlink-ext-netty'
 project(':zlink-ext-netty').projectDir = file('codec/zlink-ext-netty')
 include ':samples'
 project(':samples').projectDir = file('samples/Zlink.Samples')
-include ':kotlin-samples'
-project(':kotlin-samples').projectDir = file('../kotlin/samples')
 include ':kotlin-contract-test'
 project(':kotlin-contract-test').projectDir = file('kotlin-contract-test')
 include ':perf-single'

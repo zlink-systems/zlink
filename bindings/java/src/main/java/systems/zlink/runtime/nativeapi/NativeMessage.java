@@ -38,12 +38,6 @@ public final class NativeMessage {
             new String[] {"zlink_multipart_close", "zlink_msgv_close"},
             FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
     private static final MethodHandle MH_FREE = NativeSymbols.freeDowncall();
-    // Callback-based receive attaches a native msg handler. The Core raw API supports
-    // this only for raw STREAM subjects; other subjects fail with errno=ENOTSUP.
-    private static final MethodHandle MH_RECV_HANDLER = NativeSymbols.downcall(
-            "zlink_recv_handler",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-                    ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 
     private NativeMessage() {}
 
@@ -154,17 +148,6 @@ public final class NativeMessage {
             MH_MSGV_CLOSE.invokeExact(parts, count);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_multipart_close failed", t);
-        }
-    }
-
-    public static int recvHandler(MemorySegment socket,
-                                  MemorySegment handler,
-                                  MemorySegment userData) {
-        try {
-            return (int) MH_RECV_HANDLER.invokeExact(socket, handler,
-                userData);
-        } catch (Throwable t) {
-            throw new RuntimeException("zlink_recv_handler failed", t);
         }
     }
 

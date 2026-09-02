@@ -22,13 +22,11 @@ import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.internal.sockets.SocketOptionKey;
 import systems.zlink.contracts.sockets.DealerSocket;
 import systems.zlink.runtime.eventing.NativeTimer;
-import systems.zlink.runtime.sockets.SocketMessageHandler;
 import systems.zlink.runtime.messaging.ReceivedPartCursor;
 import java.lang.foreign.MemorySegment;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BiConsumer;
-import java.util.function.BiFunction;
 
 /**
  * Non-exported bridge from runtime code to contract-owned internals.
@@ -70,6 +68,9 @@ public final class InternalAccess {
         int getDealerIntOption(Socket socket, int option);
         int getRouterIntOption(Socket socket, int option);
         void setRouterIntOption(Socket socket, int option, int value);
+        void completionTransferToPublic(Socket socket);
+        void completionReleasePublic(Socket socket);
+        int completionDrain(Socket socket, boolean waitForSettlement);
         boolean inCallback();
         void enterCallback();
         void leaveCallback();
@@ -81,11 +82,10 @@ public final class InternalAccess {
         Received routerRecv(Object support, RecvFlags flags);
         boolean routerRecvInto(Object support, Received target,
                                RecvFlags flags);
-        void routerOnReceive(Object support, SocketMessageHandler handler);
         void routerReceiveBeginClose(Object support);
         void routerReceiveFinishClose(Object support);
         void routerReply(RouterSocket socket, RoutingId routingId,
-                         long requestSequence, List<Message> parts);
+                         long replyTokenValue, List<Message> parts);
     }
 
     public interface TimerAccess {
@@ -149,6 +149,19 @@ public final class InternalAccess {
 
     public static MemorySegment socketHandle(Socket socket) {
         return socketAccess().handle(socket);
+    }
+
+    public static void completionTransferToPublic(Socket socket) {
+        socketAccess().completionTransferToPublic(socket);
+    }
+
+    public static void completionReleasePublic(Socket socket) {
+        socketAccess().completionReleasePublic(socket);
+    }
+
+    public static int completionDrain(Socket socket,
+                                      boolean waitForSettlement) {
+        return socketAccess().completionDrain(socket, waitForSettlement);
     }
 
     public static void socketSetOption(Socket socket,
@@ -318,63 +331,63 @@ public final class InternalAccess {
     }
 
     public static Received received(RoutingId routingId, Message[] parts,
-                                    long requestSeq,
-                                    boolean hasRequestSeq,
+                                    long replyTokenValue,
+                                    boolean hasReplyToken,
                                     BiConsumer<List<Message>, SendFlags> replySender) {
-        return ContractAccess.received(routingId, parts, requestSeq,
-            hasRequestSeq, replySender);
+        return ContractAccess.received(routingId, parts, replyTokenValue,
+            hasReplyToken, replySender);
     }
 
     public static Received received(RoutingId routingId, Message[] parts,
                                     boolean trustedParts,
-                                    long requestSeq,
-                                    boolean hasRequestSeq,
+                                    long replyTokenValue,
+                                    boolean hasReplyToken,
                                     BiConsumer<List<Message>, SendFlags> replySender) {
         return ContractAccess.received(routingId, parts, trustedParts,
-            requestSeq, hasRequestSeq, replySender);
+            replyTokenValue, hasReplyToken, replySender);
     }
 
     public static Received received(RoutingId routingId, Message[] parts,
                                     boolean trustedParts,
-                                    long requestSeq,
-                                    boolean hasRequestSeq,
+                                    long replyTokenValue,
+                                    boolean hasReplyToken,
                                     BiConsumer<List<Message>, SendFlags> replySender,
                                     Runnable onTerminalState) {
         return ContractAccess.received(routingId, parts, trustedParts,
-            requestSeq, hasRequestSeq, replySender, onTerminalState);
+            replyTokenValue, hasReplyToken, replySender, onTerminalState);
     }
 
     public static Received received(byte[] routingIdBytes, Message[] parts,
                                     boolean trustedParts,
-                                    long requestSeq,
-                                    boolean hasRequestSeq,
+                                    long replyTokenValue,
+                                    boolean hasReplyToken,
                                     BiConsumer<List<Message>, SendFlags> replySender,
                                     Runnable onTerminalState) {
         return ContractAccess.received(routingIdBytes, parts,
-            trustedParts, requestSeq, hasRequestSeq, replySender,
+            trustedParts, replyTokenValue, hasReplyToken, replySender,
             onTerminalState);
     }
 
     public static Received receivedLazy(byte[] routingIdBytes,
                                         Message firstPart,
                                         ReceivedPartCursor cursor,
-                                        long requestSeq,
-                                        boolean hasRequestSeq,
+                                        long replyTokenValue,
+                                        boolean hasReplyToken,
                                         BiConsumer<List<Message>, SendFlags> replySender,
                                         Runnable onTerminalState) {
         return ContractAccess.receivedLazy(routingIdBytes, firstPart, cursor,
-            requestSeq, hasRequestSeq, replySender,
+            replyTokenValue, hasReplyToken, replySender,
             onTerminalState);
     }
 
     public static Received receivedLazy(RoutingId routingId, Message firstPart,
                                         ReceivedPartCursor cursor,
-                                        long requestSeq,
-                                        boolean hasRequestSeq,
+                                        long replyTokenValue,
+                                        boolean hasReplyToken,
                                         BiConsumer<List<Message>, SendFlags> replySender,
                                         Runnable onTerminalState) {
         return ContractAccess.receivedLazy(routingId, firstPart, cursor,
-            requestSeq, hasRequestSeq, replySender, onTerminalState);
+            replyTokenValue, hasReplyToken, replySender, onTerminalState);
     }
 
     public static TopicMessage topicMessage(RoutingId routingId,
@@ -401,12 +414,6 @@ public final class InternalAccess {
 
     public static List<Message> receivedTakeParts(Received received) {
         return ContractAccess.receivedTakeParts(received);
-    }
-
-    public static void receivedSetSendSender(Received received,
-                                             BiFunction<List<Message>, SendFlags,
-                                                 Boolean> sendSender) {
-        ContractAccess.receivedSetSendSender(received, sendSender);
     }
 
     public static boolean inCallback() {
@@ -436,11 +443,6 @@ public final class InternalAccess {
         return runtimeSocketAccess().routerRecvInto(support, target, flags);
     }
 
-    public static void routerOnReceive(Object support,
-                                       SocketMessageHandler handler) {
-        runtimeSocketAccess().routerOnReceive(support, handler);
-    }
-
     public static void routerReceiveBeginClose(Object support) {
         runtimeSocketAccess().routerReceiveBeginClose(support);
     }
@@ -450,8 +452,8 @@ public final class InternalAccess {
     }
 
     public static void routerReply(RouterSocket socket, RoutingId routingId,
-                                   long requestSequence, List<Message> parts) {
-        runtimeSocketAccess().routerReply(socket, routingId, requestSequence,
+                                   long replyTokenValue, List<Message> parts) {
+        runtimeSocketAccess().routerReply(socket, routingId, replyTokenValue,
             parts);
     }
 

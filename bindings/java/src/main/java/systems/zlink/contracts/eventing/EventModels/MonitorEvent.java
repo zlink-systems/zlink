@@ -13,21 +13,18 @@ import java.util.Optional;
  * @param localAddr the local address, if delivered with the event
  * @param remoteAddr the remote address, if delivered with the event
  * @param connectionId the process-local physical connection identity
- * @param transportPairId the paired application/completion transport identity
- * @param transportPairGeneration the generation of the transport pair
  * @param transportLane the Core transport lane value
  * @param flags event-specific Core flags
  */
 public record MonitorEvent(MonitorEventType event, long value,
                            Optional<RoutingId> routingId, String localAddr,
                            String remoteAddr, long connectionId,
-                           long transportPairId, long transportPairGeneration,
                            int transportLane, int flags) {
     public MonitorEvent(MonitorEventType event, long value,
                         Optional<RoutingId> routingId, String localAddr,
                         String remoteAddr) {
         this(event, value, routingId, localAddr, remoteAddr,
-             0L, 0L, 0L, 0, 0);
+             0L, 0, 0);
     }
 
     public MonitorEvent {

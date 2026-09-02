@@ -6,21 +6,13 @@ import systems.zlink.internal.sockets.SocketOptions;
 import systems.zlink.internal.sockets.SocketOptionValueType;
 
 import java.lang.foreign.Arena;
-import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.RejectedExecutionException;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.eventing.SocketMonitor;
-import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.*;
 import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
@@ -29,18 +21,10 @@ import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
-import systems.zlink.runtime.nativeapi.NativeMessage;
 import systems.zlink.runtime.nativeapi.RuntimeResources;
 import systems.zlink.runtime.nativeapi.CompletionDispatcher;
 
 final class SocketCore {
-    private static final FunctionDescriptor FD_RECV_CALLBACK =
-      FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS,
-        ValueLayout.JAVA_LONG, ValueLayout.ADDRESS);
-    private static final FunctionDescriptor FD_STREAM_PACKET_CALLBACK =
-      FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS,
-        ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS);
-
     /**
      * Tracks whether the current thread is executing inside a native callback
      * (recv handler, subscribe handler, or stream packet handler).
@@ -68,24 +52,18 @@ final class SocketCore {
     private Arena sendScratchArena = Arena.ofShared();
     private MemorySegment sendScratch = MemorySegment.NULL;
     private int sendScratchCapacity = NativeSocketRuntime.DEFAULT_IO_BUFFER_SIZE;
-    private SocketMessageHandler receiveHandler;
-    private final SendCompletionRegistry sendCompletions;
-    private StreamFramedPacketHandler streamFramedPacketHandler;
-    private StreamUInt32FramedPacketHandler streamUInt32FramedPacketHandler;
-    private StreamUInt32FramedNativeHandler streamUInt32FramedNativeHandler;
-    private final SocketCallbackSupport callbackSupport =
-      new SocketCallbackSupport(this);
-    private Arena receiveCallbackArena;
-    private Arena streamPacketCallbackArena;
+    private final CompletionOwner completionOwner;
+    private final CompletionDispatcher.CompletionLane completionLane;
     SocketCore(NativeSocketRuntime socket,
                CompletionDispatcher.CompletionLane completionLane) {
         this.socket = socket;
+        this.completionLane = completionLane;
         SocketType type = socket.socketTypeHint();
-        this.sendCompletions = type == SocketType.PAIR
+        this.completionOwner = type == SocketType.PAIR
             || type == SocketType.DEALER
             || type == SocketType.ROUTER
             || type == SocketType.STREAM
-            ? new SendCompletionRegistry(socket, completionLane) : null;
+            ? new CompletionOwner(socket, completionLane) : null;
     }
 
     void bind(String endpoint) {
@@ -139,19 +117,6 @@ final class SocketCore {
             if (rc != 0)
                 throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONNECT);
         }
-    }
-
-    void disconnectTransportPair(long transportPairId,
-                                 long transportPairGeneration) {
-        if (transportPairId == 0 || transportPairGeneration == 0) {
-            throw new IllegalArgumentException(
-                "transport pair identity must be non-zero");
-        }
-        int rc = Native.disconnectTransportPair(
-            socket.handle(), transportPairId, transportPairGeneration);
-        if (rc != 0)
-            throw ZlinkException.fromLastError(
-                systems.zlink.contracts.errors.ErrorCategory.CONNECT);
     }
 
     void setTlsServer(String certPem, String keyPem, boolean requireClientCert) {
@@ -270,71 +235,14 @@ final class SocketCore {
         return InternalAccess.monitorSocket(sock, true);
     }
 
-    void onReceive(SocketMessageHandler handler) {
-        Objects.requireNonNull(handler, "handler");
-        Arena arena = installCallback("handleReceiveCallback",
-            MethodType.methodType(void.class, MemorySegment.class,
-                MemorySegment.class, long.class, MemorySegment.class),
-            FD_RECV_CALLBACK, "zlink_recv_handler",
-            stub -> Native.recvHandler(socket.handle(), stub,
-                MemorySegment.NULL));
-        RuntimeResources.closeArena(receiveCallbackArena);
-        receiveCallbackArena = arena;
-        receiveHandler = handler;
-    }
-
-    java.util.concurrent.CompletionStage<Void> sendAsync(
-            java.util.List<Message> parts,
-            java.time.Duration timeout,
-            MemorySegment target) {
-        if (sendCompletions == null) {
-            throw new ZlinkSubmitException(SubmitResult.NOT_SUPPORTED,
-                NativeErrno.ENOTSUP);
-        }
-        return sendCompletions.submit(parts, timeout, target);
-    }
-
-    void attachStreamPacket(StreamFramedPacketHandler handler) {
-        Objects.requireNonNull(handler, "handler");
-        Arena arena = installCallback("handleStreamPacketCallback",
-            MethodType.methodType(void.class, MemorySegment.class,
-                MemorySegment.class, MemorySegment.class,
-                MemorySegment.class, MemorySegment.class),
-            FD_STREAM_PACKET_CALLBACK, "zlink_stream_packet_handler",
-            stub -> Native.streamPacketHandler(socket.handle(), stub));
-        RuntimeResources.closeArena(streamPacketCallbackArena);
-        streamPacketCallbackArena = arena;
-        streamFramedPacketHandler = handler;
-    }
-
-    void attachStreamPacket(StreamUInt32FramedPacketHandler handler) {
-        Objects.requireNonNull(handler, "handler");
-        Arena arena = installCallback("handleStreamPacketUInt32Callback",
-            MethodType.methodType(void.class, MemorySegment.class,
-                MemorySegment.class, MemorySegment.class,
-                MemorySegment.class, MemorySegment.class),
-            FD_STREAM_PACKET_CALLBACK, "zlink_stream_packet_handler",
-            stub -> Native.streamPacketHandler(socket.handle(), stub));
-        RuntimeResources.closeArena(streamPacketCallbackArena);
-        streamPacketCallbackArena = arena;
-        streamUInt32FramedPacketHandler = handler;
-    }
-
-    void attachStreamPacket(StreamUInt32FramedNativeHandler handler) {
-        Objects.requireNonNull(handler, "handler");
-        Arena arena = installCallback("handleStreamPacketUInt32NativeCallback",
-            MethodType.methodType(void.class, MemorySegment.class,
-                MemorySegment.class, MemorySegment.class,
-                MemorySegment.class, MemorySegment.class),
-            FD_STREAM_PACKET_CALLBACK, "zlink_stream_packet_handler",
-            stub -> Native.streamPacketHandler(socket.handle(), stub));
-        RuntimeResources.closeArena(streamPacketCallbackArena);
-        streamPacketCallbackArena = arena;
-        streamUInt32FramedNativeHandler = handler;
-    }
-
     void close() {
         socket.closeInternal();
+    }
+
+    int closeNativeHandle() {
+        return completionOwner == null
+            ? Native.close(socket.handle())
+            : completionOwner.closeNativeSocket();
     }
 
     MemorySegment ensureSendScratch(int length) {
@@ -352,260 +260,30 @@ final class SocketCore {
     void ensureOpen() {
         if (socket.handle() == null || socket.handle().address() == 0)
             throw new IllegalStateException("socket is closed");
-        ensureNoCallbackFailure();
-    }
-
-    void ensureNoCallbackFailure() {
-        callbackSupport.ensureNoFailure();
     }
 
     void dispatchCompletion(Runnable completion) {
-        if (sendCompletions == null) {
+        if (completionOwner == null) {
             throw new IllegalStateException(
                 "socket does not support completion dispatch");
         }
-        sendCompletions.dispatchCompletion(completion);
+        completionLane.dispatch(completion);
+    }
+
+    CompletionOwner completionOwner() {
+        if (completionOwner == null) {
+            throw new ZlinkSubmitException(SubmitResult.NOT_SUPPORTED,
+                NativeErrno.ENOTSUP);
+        }
+        return completionOwner;
     }
 
     void closeCommonState() {
-        receiveHandler = null;
-        streamFramedPacketHandler = null;
-        streamUInt32FramedPacketHandler = null;
-        streamUInt32FramedNativeHandler = null;
-        callbackSupport.close();
-        if (sendCompletions != null)
-            sendCompletions.close();
-        RuntimeResources.closeArena(receiveCallbackArena);
-        RuntimeResources.closeArena(streamPacketCallbackArena);
-        receiveCallbackArena = null;
-        streamPacketCallbackArena = null;
+        if (completionOwner != null)
+            completionOwner.close();
         RuntimeResources.closeArena(sendScratchArena);
         sendScratchArena = null;
         sendScratch = MemorySegment.NULL;
     }
 
-    private Arena installCallback(String callbackName,
-                                  MethodType callbackType,
-                                  FunctionDescriptor descriptor,
-                                  String nativeOperation,
-                                  SocketCallbackSupport.CallbackRegistration
-                                      registration) {
-        return callbackSupport.install(callbackName, callbackType, descriptor,
-            nativeOperation, registration);
-    }
-
-    MethodHandle callbackHandle(String name, MethodType type) {
-        try {
-            return MethodHandles.lookup().findVirtual(SocketCore.class, name, type)
-              .bindTo(this);
-        } catch (ReflectiveOperationException ex) {
-            throw new IllegalStateException("failed to bind callback " + name, ex);
-        }
-    }
-
-    private void handleReceiveCallback(MemorySegment sourceRid,
-                                       MemorySegment parts,
-                                       long partCount,
-                                       MemorySegment userdata) {
-        SocketMessageHandler handler = receiveHandler;
-        ExecutorService executor = callbackSupport.executor();
-        if (handler == null || executor == null)
-            return;
-        CallbackReceivedData snapshot = null;
-        try {
-            snapshot = snapshotReceive(sourceRid, parts, partCount);
-            CallbackReceivedData callbackSnapshot = snapshot;
-            executor.execute(() -> dispatchReceive(handler, callbackSnapshot));
-            snapshot = null;
-        } catch (RejectedExecutionException ex) {
-            recordCallbackFailure(ex);
-        } catch (RuntimeException ex) {
-            recordCallbackFailure(ex);
-        } finally {
-            closeSnapshot(snapshot);
-        }
-    }
-
-    private void dispatchReceive(SocketMessageHandler handler,
-                                 CallbackReceivedData snapshot) {
-        try {
-            Received received = materializeReceived(snapshot);
-            enterCallback();
-            try (received) {
-                handler.onMessage(received);
-            } finally {
-                leaveCallback();
-            }
-        } catch (RuntimeException ex) {
-            recordCallbackFailure(ex);
-        }
-    }
-
-    private void handleStreamPacketCallback(MemorySegment stream,
-                                            MemorySegment sourceRid,
-                                            MemorySegment header,
-                                            MemorySegment body,
-                                            MemorySegment userdata) {
-        StreamFramedPacketHandler handler = streamFramedPacketHandler;
-        if (handler == null)
-            return;
-        try {
-            dispatchStreamPacket(handler, readRoutingId(sourceRid),
-                InternalAccess.messageFromOwnedNative(header), InternalAccess.messageFromOwnedNative(body));
-        } catch (RuntimeException ex) {
-            recordCallbackFailure(ex);
-        }
-    }
-
-    private void handleStreamPacketUInt32Callback(MemorySegment stream,
-                                                  MemorySegment sourceRid,
-                                                  MemorySegment header,
-                                                  MemorySegment body,
-                                                  MemorySegment userdata) {
-        StreamUInt32FramedPacketHandler handler =
-            streamUInt32FramedPacketHandler;
-        if (handler == null)
-            return;
-        try {
-            dispatchStreamPacketUInt32(handler, readRoutingIdUInt32(sourceRid),
-                InternalAccess.messageFromOwnedNative(header), InternalAccess.messageFromOwnedNative(body));
-        } catch (RuntimeException ex) {
-            recordCallbackFailure(ex);
-        }
-    }
-
-    private void handleStreamPacketUInt32NativeCallback(MemorySegment stream,
-                                                        MemorySegment sourceRid,
-                                                        MemorySegment header,
-                                                        MemorySegment body,
-                                                        MemorySegment userdata) {
-        StreamUInt32FramedNativeHandler handler =
-            streamUInt32FramedNativeHandler;
-        if (handler == null)
-            return;
-        try {
-            dispatchStreamPacketUInt32Native(handler,
-                readRoutingIdUInt32(sourceRid), header, body);
-        } catch (RuntimeException ex) {
-            recordCallbackFailure(ex);
-        }
-    }
-
-    private void dispatchStreamPacket(StreamFramedPacketHandler handler,
-                                      RoutingId routingId,
-                                      Message header,
-                                      Message body) {
-        enterCallback();
-        try (header; body) {
-            handler.onPacket(routingId, header, body);
-        } catch (RuntimeException ex) {
-            recordCallbackFailure(ex);
-        } finally {
-            leaveCallback();
-        }
-    }
-
-    private void dispatchStreamPacketUInt32(StreamUInt32FramedPacketHandler handler,
-                                            int routingId,
-                                            Message header,
-                                            Message body) {
-        enterCallback();
-        try (header; body) {
-            handler.onPacket(routingId, header, body);
-        } catch (RuntimeException ex) {
-            recordCallbackFailure(ex);
-        } finally {
-            leaveCallback();
-        }
-    }
-
-    private void dispatchStreamPacketUInt32Native(
-      StreamUInt32FramedNativeHandler handler,
-      int routingId,
-      MemorySegment header,
-      MemorySegment body) {
-        enterCallback();
-        try {
-            handler.onPacket(routingId, header, body);
-        } catch (RuntimeException ex) {
-            recordCallbackFailure(ex);
-        } finally {
-            leaveCallback();
-        }
-    }
-
-    private CallbackReceivedData snapshotReceive(MemorySegment sourceRid,
-                                                 MemorySegment parts,
-                                                 long partCount) {
-        Message[] snapshotParts = InternalAccess.messageFromOwnedMessageVectorShared(parts,
-            partCount);
-        NativeMessage.multipartClose(parts, partCount);
-        return new CallbackReceivedData(readRoutingId(sourceRid), snapshotParts);
-    }
-
-    private static Received materializeReceived(CallbackReceivedData snapshot) {
-        return InternalAccess.received(snapshot.routingId(), snapshot.parts(),
-            true, 0L, false, null);
-    }
-
-    private RoutingId readRoutingId(MemorySegment sourceRid) {
-        if (sourceRid == null || sourceRid.address() == 0)
-            return null;
-        MemorySegment routingId = sourceRid.reinterpret(
-            NativeLayouts.ROUTING_ID_LAYOUT.byteSize());
-        int size = routingId.get(ValueLayout.JAVA_BYTE,
-            NativeLayouts.ROUTING_ID_SIZE_OFFSET) & 0xFF;
-        if (size == 0)
-            return null;
-        byte[] value = new byte[size];
-        MemorySegment.copy(routingId, NativeLayouts.ROUTING_ID_DATA_OFFSET,
-            MemorySegment.ofArray(value), 0, size);
-        return InternalAccess.routingIdFromTrusted(value);
-    }
-
-    private int readRoutingIdUInt32(MemorySegment sourceRid) {
-        if (sourceRid == null || sourceRid.address() == 0)
-            throw new IllegalStateException("missing routing id");
-        MemorySegment routingId = sourceRid.reinterpret(
-            NativeLayouts.ROUTING_ID_LAYOUT.byteSize());
-        int size = routingId.get(ValueLayout.JAVA_BYTE,
-            NativeLayouts.ROUTING_ID_SIZE_OFFSET) & 0xFF;
-        if (size != Integer.BYTES) {
-            throw new IllegalStateException(
-                "STREAM uint32 callback requires a 4-byte routing id");
-        }
-        return ((routingId.get(ValueLayout.JAVA_BYTE,
-            NativeLayouts.ROUTING_ID_DATA_OFFSET) & 0xFF) << 24)
-            | ((routingId.get(ValueLayout.JAVA_BYTE,
-                NativeLayouts.ROUTING_ID_DATA_OFFSET + 1) & 0xFF) << 16)
-            | ((routingId.get(ValueLayout.JAVA_BYTE,
-                NativeLayouts.ROUTING_ID_DATA_OFFSET + 2) & 0xFF) << 8)
-            | (routingId.get(ValueLayout.JAVA_BYTE,
-                NativeLayouts.ROUTING_ID_DATA_OFFSET + 3) & 0xFF);
-    }
-
-    private void recordCallbackFailure(RuntimeException failure) {
-        callbackSupport.recordFailure(failure);
-    }
-
-    private static void closeSnapshot(CallbackReceivedData snapshot) {
-        if (snapshot != null)
-            closeMessages(snapshot.parts());
-    }
-
-    private static void closeMessages(Message[] parts) {
-        if (parts == null)
-            return;
-        for (Message part : parts) {
-            if (part == null)
-                continue;
-            try {
-                part.close();
-            } catch (RuntimeException ignored) {
-            }
-        }
-    }
-
-    private record CallbackReceivedData(RoutingId routingId,
-                                        Message[] parts) {}
 }

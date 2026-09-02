@@ -71,7 +71,7 @@ final class PerfMultiSocketReqRep {
                             received.close();
                             continue;
                         }
-                        if (received.requestSeq().isEmpty()) {
+                        if (received.replyToken().isEmpty()) {
                             received.close();
                             continue;
                         }
@@ -245,11 +245,11 @@ final class PerfMultiSocketReqRep {
                 try (Message stop = PerfStopToken.newMessage()) {
                     if (routedClients) {
                         ((RouterSocket) client).send(SERVER_RID).message(stop)
-                            .submit_sync(SendFlags.NONE);
+                            .submit_sync();
                         return true;
                     }
                     ((DealerSocket) client).send().message(stop)
-                        .submit_sync(SendFlags.NONE);
+                        .submit_sync();
                     return true;
                 }
             }, "multi socket reqrep");
@@ -334,7 +334,7 @@ final class PerfMultiSocketReqRep {
         }
 
         private Message copyForSubmit(int index) {
-            // CoreRequestSupport copies source parts before it returns. A
+            // Request submission stages source parts before it returns. A
             // clone must therefore be independently owned, never shared with
             // a subsequent retry or template rewrite.
             return Message.from(templates[index]);

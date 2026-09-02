@@ -13,8 +13,6 @@ public interface ZlinkTimer extends AutoCloseable {
 
     long recv();
 
-    void onFire(TimerHandler handler);
-
     @Override
     void close();
 }

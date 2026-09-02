@@ -190,24 +190,28 @@ final class PerfSocketReqRep {
     private static void submit(Socket client, boolean routedClient,
                                Message request, Duration timeout,
                                BiConsumer<RequestResult, List<Message>> completion) {
+        java.util.concurrent.CompletionStage<List<Message>> stage;
         if (routedClient) {
             if (PerfUtil.measurementPartCount() == 2) {
-                ((RouterSocket) client).request(SERVER_RID).message(request)
+                stage = ((RouterSocket) client).request(SERVER_RID).message(request)
                     .message(PerfUtil.measurementTail()).timeout(timeout)
-                    .submit_sync(SendFlags.DONT_WAIT, completion);
+                    .submit();
             } else {
-                ((RouterSocket) client).request(SERVER_RID).message(request)
+                stage = ((RouterSocket) client).request(SERVER_RID).message(request)
                     .timeout(timeout)
-                    .submit_sync(SendFlags.DONT_WAIT, completion);
+                    .submit();
             }
         } else if (PerfUtil.measurementPartCount() == 2) {
-            ((DealerSocket) client).request().message(request)
+            stage = ((DealerSocket) client).request().message(request)
                 .message(PerfUtil.measurementTail()).timeout(timeout)
-                .submit_sync(SendFlags.DONT_WAIT, completion);
+                .submit();
         } else {
-            ((DealerSocket) client).request().message(request).timeout(timeout)
-                .submit_sync(SendFlags.DONT_WAIT, completion);
+            stage = ((DealerSocket) client).request().message(request)
+                .timeout(timeout).submit();
         }
+        stage.whenComplete((reply, failure) -> completion.accept(
+            failure == null ? RequestResult.OK : RequestResult.INTERNAL_ERROR,
+            failure == null ? reply : List.of()));
     }
 
     private static int remainingTimeoutMs(long deadline) {
@@ -243,7 +247,7 @@ final class PerfSocketReqRep {
                     stopped.set(true);
                     return;
                 }
-                if (received.requestSeq().isEmpty()) {
+                if (received.replyToken().isEmpty()) {
                     received.close();
                     continue;
                 }
@@ -294,11 +298,11 @@ final class PerfSocketReqRep {
         try (Message stop = PerfStopToken.newMessage()) {
             if (routedClient) {
                 ((RouterSocket) client).send(SERVER_RID).message(stop)
-                    .submit_sync(SendFlags.NONE);
+                    .submit_sync();
                 return true;
             }
             ((DealerSocket) client).send().message(stop)
-                .submit_sync(SendFlags.NONE);
+                .submit_sync();
             return true;
         } catch (ZlinkSubmitException ex) {
             if (ex.getResult() == SubmitResult.BACKPRESSURED

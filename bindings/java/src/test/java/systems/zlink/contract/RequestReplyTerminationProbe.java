@@ -56,7 +56,7 @@ public final class RequestReplyTerminationProbe {
 
                             routerSocket.recv(received, systems.zlink.contracts.sockets.RecvFlags.NONE);
                             log("server recv got");
-                            if (!received.requestSeq().isPresent()) {
+                            if (!received.replyToken().isPresent()) {
                                 throw new IllegalStateException("missing request seq");
                             }
                             log("server recv reply");
@@ -75,7 +75,7 @@ public final class RequestReplyTerminationProbe {
 
                         routerSocket.recv(received, systems.zlink.contracts.sockets.RecvFlags.NONE);
                         log("server recv got");
-                        if (!received.requestSeq().isPresent()) {
+                        if (!received.replyToken().isPresent()) {
                             throw new IllegalStateException("missing request seq");
                         }
                         log("server recv reply");

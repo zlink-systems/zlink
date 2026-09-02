@@ -127,7 +127,7 @@ final class PerfMultiDealerRouter {
                 socketsAsBase, PollEventFlags.POLLIN)) {
             long activeEnd = System.nanoTime()
                 + (long) config.durationSeconds() * 1_000_000_000L;
-            PerfMultiRoutedSendCoordinator.run(n, activeEnd, pollSet,
+            PerfMultiTargetCoordinator.run(n, activeEnd, pollSet,
                 index -> sendPayload(clients.get(index), msgSize, activeEnd),
                 index -> drainReplies(clients.get(index), msgSize, metrics,
                     replyBuffer, activeEnd),
@@ -149,11 +149,9 @@ final class PerfMultiDealerRouter {
                  ? PerfUtil.measurementTail() : null) {
             if (PerfUtil.measurementPartCount() == 2) {
                 return client.send().message(payload).message(tail)
-                    .timeout(PerfMultiAsyncSendLoop.remainingTimeout(activeEnd))
                     .submit();
             }
             return client.send().message(payload)
-                .timeout(PerfMultiAsyncSendLoop.remainingTimeout(activeEnd))
                 .submit();
         }
     }

@@ -55,7 +55,6 @@ public class MonitorBehaviorContractTest {
         assertTrue(hasPublicMethod(systems.zlink.contracts.eventing.SocketMonitor.class, "recv",
             systems.zlink.contracts.sockets.RecvFlags.class));
         assertTrue(Modifier.isPublic(SocketMonitor.class.getModifiers()));
-        assertNotNull(SocketMonitor.IGNORE_HANDLER);
     }
 
     private static boolean hasPublicMethod(Class<?> type, String name,

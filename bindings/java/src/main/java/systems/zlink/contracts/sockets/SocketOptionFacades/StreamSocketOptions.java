@@ -20,4 +20,14 @@ public final class StreamSocketOptions extends CommonSocketOptions {
     public void notify(boolean enabled) {
         ContractAccess.socketSetOption(socket, SocketOptions.STREAM_NOTIFY, enabled ? 1 : 0);
     }
+
+    public StreamRecvMode recvMode() {
+        return StreamRecvMode.fromValue(ContractAccess.socketGetOption(socket,
+            SocketOptions.STREAM_RECV_MODE));
+    }
+
+    public void recvMode(StreamRecvMode mode) {
+        ContractAccess.socketSetOption(socket, SocketOptions.STREAM_RECV_MODE,
+            java.util.Objects.requireNonNull(mode, "mode").value());
+    }
 }

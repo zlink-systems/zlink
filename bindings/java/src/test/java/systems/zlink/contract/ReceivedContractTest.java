@@ -77,69 +77,12 @@ public class ReceivedContractTest {
                     () -> inbound.parts().add(Message.from("x")));
                 assertArrayEquals("part-1".getBytes(StandardCharsets.UTF_8),
                     inbound.firstPart().toByteArray());
-                assertTrue(inbound.requestSeq().isEmpty());
+                assertTrue(inbound.replyToken().isEmpty());
                 ZlinkSubmitException ex = assertThrows(ZlinkSubmitException.class,
                     () -> inbound.reply()
                         .message(Message.from("ack"))
                         .submit());
                 assertEquals(SubmitResult.INVALID_STATE, ex.getResult());
-            }
-        }
-    }
-
-    @Test
-    public void dealerOrdinaryRecvPreservesTypedRequestSequence()
-        throws Exception {
-        TestSupport.assumeNative();
-
-        RoutingId dealerRid = RoutingId.from("dealer-ordinary-recv");
-        try (Context ctx = Zlink.createContext();
-             RouterSocket router = ctx.createRouterSocket();
-             DealerSocket dealer = ctx.createDealerSocket()) {
-            dealer.setRoutingId(dealerRid);
-            String endpoint = TestSupport.inprocEndpoint(
-                "dealer-ordinary-recv");
-            router.bind(endpoint);
-            dealer.connect(endpoint);
-
-            try (Message ready = Message.from("ready")) {
-                dealer.send().message(ready).submit()
-                    .toCompletableFuture().join();
-            }
-            try (Received ready = new Received()) {
-                assertTrue(router.recv(ready, RecvFlags.NONE));
-                assertArrayEquals(dealerRid.toBytes(), ready.getRoutingId()
-                    .orElseThrow().toBytes());
-            }
-
-            try (Message ordinary = Message.from("ordinary")) {
-                router.send(dealerRid).message(ordinary).submit()
-                    .toCompletableFuture().join();
-            }
-
-            try (Received request = new Received()) {
-                assertTrue(dealer.recv(request, RecvFlags.NONE));
-                assertEquals("ordinary",
-                    request.singlePartOrThrow().toUtf8String());
-                assertTrue(request.requestSeq().isEmpty());
-
-                var completion = router.request(dealerRid)
-                    .message(Message.from("typed-request"))
-                    .timeout(Duration.ofMillis(200))
-                    .submit();
-                assertTrue(dealer.recv(request, RecvFlags.NONE));
-                assertEquals("typed-request",
-                    request.singlePartOrThrow().toUtf8String());
-                assertTrue(request.requestSeq().isPresent());
-
-                ExecutionException timedOut = assertThrows(
-                    ExecutionException.class, () -> completion
-                        .toCompletableFuture()
-                        .get(TestSupport.DEFAULT_TIMEOUT_MS,
-                            TimeUnit.MILLISECONDS));
-                ZlinkRequestException failure =
-                    (ZlinkRequestException) timedOut.getCause();
-                assertEquals(RequestResult.TIMED_OUT, failure.getResult());
             }
         }
     }
@@ -173,11 +116,11 @@ public class ReceivedContractTest {
                 .timeout(Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS))
                 .submit();
             RoutingId replyTarget;
-            long replySequence;
+            systems.zlink.contracts.messaging.ReplyToken replySequence;
             try (Received inbound = new Received()) {
                 assertTrue(source.recv(inbound, RecvFlags.NONE));
                 replyTarget = inbound.getRoutingId().orElseThrow();
-                replySequence = inbound.requestSeq().orElseThrow();
+                replySequence = inbound.replyToken().orElseThrow();
                 assertEquals("caller-request",
                     inbound.singlePartOrThrow().toUtf8String());
             }

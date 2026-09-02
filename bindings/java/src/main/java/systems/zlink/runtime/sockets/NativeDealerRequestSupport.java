@@ -33,12 +33,6 @@ final class NativeDealerRequestSupport {
             }
 
             @Override
-            public void routerOnReceive(Object support,
-                                        SocketMessageHandler handler) {
-                ((NativeRouterReceiveSupport) support).onReceive(handler);
-            }
-
-            @Override
             public void routerReceiveBeginClose(Object support) {
                 ((NativeRouterReceiveSupport) support).beginClose();
             }
@@ -50,9 +44,12 @@ final class NativeDealerRequestSupport {
 
             @Override
             public void routerReply(RouterSocket socket, RoutingId routingId,
-                                    long requestSequence, List<Message> parts) {
-                NativeRouterRequestSupport.reply(socket, routingId,
-                    requestSequence, parts);
+                                    long replyTokenValue, List<Message> parts) {
+                if (!(socket instanceof NativeRouterSocket nativeSocket)) {
+                    throw new IllegalArgumentException(
+                        "router is not backed by the native runtime");
+                }
+                nativeSocket.submitReply(routingId, replyTokenValue, parts);
             }
 
         });

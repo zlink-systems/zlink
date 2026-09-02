@@ -7,6 +7,10 @@ import java.lang.foreign.ValueLayout;
 public final class NativeLayouts {
     private NativeLayouts() {}
 
+    private static long offset(MemoryLayout layout, String field) {
+        return layout.byteOffset(PathElement.groupElement(field));
+    }
+
     public static final MemoryLayout MESSAGE_LAYOUT = MemoryLayout
             .sequenceLayout(64, ValueLayout.JAVA_BYTE)
             .withByteAlignment(ValueLayout.ADDRESS.byteAlignment());
@@ -19,60 +23,37 @@ public final class NativeLayouts {
     public static final long ROUTING_ID_DATA_OFFSET = ROUTING_ID_LAYOUT.byteOffset(
             PathElement.groupElement("data"));
 
-    public static final MemoryLayout ROUTED_SUBMIT_TARGET_LAYOUT =
-            MemoryLayout.structLayout(
-                    ROUTING_ID_LAYOUT.withName("peer_rid"),
-                    ValueLayout.JAVA_LONG.withName("transport_pair_id"),
-                    ValueLayout.JAVA_LONG.withName(
-                            "transport_pair_generation"));
-    public static final long ROUTED_SUBMIT_TARGET_PAIR_ID_OFFSET =
-            ROUTED_SUBMIT_TARGET_LAYOUT.byteOffset(
-                    PathElement.groupElement("transport_pair_id"));
-    public static final long ROUTED_SUBMIT_TARGET_GENERATION_OFFSET =
-            ROUTED_SUBMIT_TARGET_LAYOUT.byteOffset(
-                    PathElement.groupElement("transport_pair_generation"));
-
-    public static final MemoryLayout SEND_ASYNC_OPTIONS_LAYOUT =
+    public static final MemoryLayout COMPLETION_LAYOUT =
             MemoryLayout.structLayout(
                     ValueLayout.JAVA_INT.withName("struct_size"),
-                    ValueLayout.JAVA_INT.withName("timeout_ms"),
-                    ValueLayout.ADDRESS.withName("userdata"),
-                    ValueLayout.ADDRESS.withName("target"));
-    public static final long SEND_ASYNC_OPTIONS_STRUCT_SIZE_OFFSET =
-            SEND_ASYNC_OPTIONS_LAYOUT.byteOffset(
-                    PathElement.groupElement("struct_size"));
-    public static final long SEND_ASYNC_OPTIONS_TIMEOUT_MS_OFFSET =
-            SEND_ASYNC_OPTIONS_LAYOUT.byteOffset(
-                    PathElement.groupElement("timeout_ms"));
-    public static final long SEND_ASYNC_OPTIONS_USERDATA_OFFSET =
-            SEND_ASYNC_OPTIONS_LAYOUT.byteOffset(
-                    PathElement.groupElement("userdata"));
-    public static final long SEND_ASYNC_OPTIONS_TARGET_OFFSET =
-            SEND_ASYNC_OPTIONS_LAYOUT.byteOffset(
-                    PathElement.groupElement("target"));
-
-    public static final MemoryLayout SEND_COMPLETE_EVENT_LAYOUT =
-            MemoryLayout.structLayout(
-                    ValueLayout.JAVA_LONG.withName("op_id"),
-                    ValueLayout.ADDRESS.withName("userdata"),
+                    ValueLayout.JAVA_INT.withName("kind"),
+                    ValueLayout.JAVA_LONG.withName("completion_id"),
+                    ValueLayout.ADDRESS.withName("user_context"),
                     ROUTING_ID_LAYOUT.withName("peer_rid"),
-                    ValueLayout.JAVA_LONG.withName("transport_pair_id"),
-                    ValueLayout.JAVA_LONG.withName(
-                            "transport_pair_generation"),
-                    ValueLayout.JAVA_INT.withName("result"),
-                    ValueLayout.JAVA_INT.withName("terminal_errno"));
-    public static final long SEND_COMPLETE_OP_ID_OFFSET =
-            SEND_COMPLETE_EVENT_LAYOUT.byteOffset(
-                    PathElement.groupElement("op_id"));
-    public static final long SEND_COMPLETE_USERDATA_OFFSET =
-            SEND_COMPLETE_EVENT_LAYOUT.byteOffset(
-                    PathElement.groupElement("userdata"));
-    public static final long SEND_COMPLETE_RESULT_OFFSET =
-            SEND_COMPLETE_EVENT_LAYOUT.byteOffset(
-                    PathElement.groupElement("result"));
-    public static final long SEND_COMPLETE_ERRNO_OFFSET =
-            SEND_COMPLETE_EVENT_LAYOUT.byteOffset(
-                    PathElement.groupElement("terminal_errno"));
+                    ValueLayout.JAVA_INT.withName("send_result"),
+                    ValueLayout.JAVA_INT.withName("send_terminal_errno"),
+                    ValueLayout.JAVA_INT.withName("request_result"),
+                    MemoryLayout.paddingLayout(4),
+                    ValueLayout.ADDRESS.withName("reply_parts"),
+                    ValueLayout.JAVA_LONG.withName("reply_part_count"));
+    public static final long COMPLETION_STRUCT_SIZE_OFFSET = offset(
+        COMPLETION_LAYOUT, "struct_size");
+    public static final long COMPLETION_KIND_OFFSET = offset(
+        COMPLETION_LAYOUT, "kind");
+    public static final long COMPLETION_ID_OFFSET = offset(
+        COMPLETION_LAYOUT, "completion_id");
+    public static final long COMPLETION_CONTEXT_OFFSET = offset(
+        COMPLETION_LAYOUT, "user_context");
+    public static final long COMPLETION_SEND_RESULT_OFFSET = offset(
+        COMPLETION_LAYOUT, "send_result");
+    public static final long COMPLETION_SEND_ERRNO_OFFSET = offset(
+        COMPLETION_LAYOUT, "send_terminal_errno");
+    public static final long COMPLETION_REQUEST_RESULT_OFFSET = offset(
+        COMPLETION_LAYOUT, "request_result");
+    public static final long COMPLETION_REPLY_PARTS_OFFSET = offset(
+        COMPLETION_LAYOUT, "reply_parts");
+    public static final long COMPLETION_REPLY_COUNT_OFFSET = offset(
+        COMPLETION_LAYOUT, "reply_part_count");
 
     public static final MemoryLayout CORE_HWM_BUDGET_SNAPSHOT_LAYOUT =
             MemoryLayout.structLayout(
@@ -273,8 +254,8 @@ public final class NativeLayouts {
             // diagnostic fields are not projected by the current Java event
             // record, but Core writes them before returning from recv.
             ValueLayout.JAVA_LONG_UNALIGNED.withName("connection_id"),
-            ValueLayout.JAVA_LONG_UNALIGNED.withName("transport_pair_id"),
-            ValueLayout.JAVA_LONG_UNALIGNED.withName("transport_pair_generation"),
+            ValueLayout.JAVA_LONG_UNALIGNED.withName("reserved_pair_id"),
+            ValueLayout.JAVA_LONG_UNALIGNED.withName("reserved_pair_epoch"),
             ValueLayout.JAVA_INT.withName("transport_lane"),
             ValueLayout.JAVA_INT.withName("flags"));
     public static final long MONITOR_EVENT_OFFSET = MONITOR_EVENT_LAYOUT.byteOffset(
@@ -289,10 +270,6 @@ public final class NativeLayouts {
             PathElement.groupElement("remote_addr"));
     public static final long MONITOR_CONNECTION_ID_OFFSET = MONITOR_EVENT_LAYOUT.byteOffset(
             PathElement.groupElement("connection_id"));
-    public static final long MONITOR_TRANSPORT_PAIR_ID_OFFSET = MONITOR_EVENT_LAYOUT.byteOffset(
-            PathElement.groupElement("transport_pair_id"));
-    public static final long MONITOR_TRANSPORT_PAIR_GENERATION_OFFSET = MONITOR_EVENT_LAYOUT.byteOffset(
-            PathElement.groupElement("transport_pair_generation"));
     public static final long MONITOR_TRANSPORT_LANE_OFFSET = MONITOR_EVENT_LAYOUT.byteOffset(
             PathElement.groupElement("transport_lane"));
     public static final long MONITOR_FLAGS_OFFSET = MONITOR_EVENT_LAYOUT.byteOffset(

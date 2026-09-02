@@ -65,6 +65,9 @@ final class SocketOptionRouter {
         if (optionId == SocketOptions.STREAM_NOTIFY.optionId()) {
             return new Route(Family.STREAM, 0x3501);
         }
+        if (optionId == SocketOptions.STREAM_RECV_MODE.optionId()) {
+            return new Route(Family.STREAM, 0x3502);
+        }
         return new Route(Family.COMMON, optionId);
     }
 

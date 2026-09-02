@@ -3,16 +3,18 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export ZLINK_CORE_SOURCE="${ZLINK_CORE_SOURCE:-local}"
 source "${ROOT_DIR}/../tools/local_core_runtime.sh"
+zlink_export_local_core_runtime
 if [[ "${ZLINK_CORE_SOURCE}" == "release" && "${ZLINK_CORE_PACKAGE_PREFIX:-}" != /* ]]; then
-  echo "ZLINK_CORE_PACKAGE_PREFIX must name the approved Core 0.15.1 install prefix" >&2
+  echo "ZLINK_CORE_PACKAGE_PREFIX must name the approved Core 0.16.0 install prefix" >&2
   exit 2
 fi
 TASKS=(
   ":test"
   ":integrationTest"
   ":zlink-ext-netty:test"
-  ":kotlin-samples:runAllKotlinSamples"
+  ":kotlin-contract-test:test"
 )
 LOG_DIR="${ROOT_DIR}/build/test-runner-logs"
 
@@ -48,9 +50,9 @@ print_report_hints() {
       report_dir="${ROOT_DIR}/codec/zlink-ext-netty/build/reports/tests/test"
       results_dir="${ROOT_DIR}/codec/zlink-ext-netty/build/test-results/test"
       ;;
-    ":kotlin-samples:runAllKotlinSamples")
-      report_dir="${ROOT_DIR}/../kotlin/samples/build/reports"
-      results_dir="${ROOT_DIR}/../kotlin/samples/build/test-results"
+    ":kotlin-contract-test:test")
+      report_dir="${ROOT_DIR}/kotlin-contract-test/build/reports/tests/test"
+      results_dir="${ROOT_DIR}/kotlin-contract-test/build/test-results/test"
       ;;
     "samples/run_samples.sh")
       report_dir="${ROOT_DIR}/samples/build/reports"

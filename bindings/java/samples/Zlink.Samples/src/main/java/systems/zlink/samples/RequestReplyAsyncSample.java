@@ -43,7 +43,7 @@ public final class RequestReplyAsyncSample {
                     if (!SampleSupport.DEALER_REQUEST.equals(request)) {
                         throw new IllegalStateException("unexpected request: " + request);
                     }
-                    if (received.requestSeq().isEmpty()) {
+                    if (received.replyToken().isEmpty()) {
                         throw new IllegalStateException("missing request sequence");
                     }
                     try (Message reply = Message.from(SampleSupport.DEALER_REPLY)) {

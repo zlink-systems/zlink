@@ -179,28 +179,6 @@ final class SocketSendPlane {
             parts);
     }
 
-    SendResult sendTransportPair(RoutingId routingId, long transportPairId,
-                                 long transportPairGeneration,
-                                 List<Message> parts, SendFlag flags) {
-        socket.ensureOpen();
-        Objects.requireNonNull(routingId, "routingId");
-        validateParts(parts);
-        ensureBlockingSendAllowed(flags);
-        PartSubmitter submitter = (part, partFlag) -> {
-            SendScratch scratch = sendScratch.get();
-            return Native.sendPartTransportPair(socket.handle(),
-                nativeRoutingId(scratch, routingId), transportPairId,
-                transportPairGeneration,
-                InternalAccess.messageNativeHandle(part), flags.getValue(),
-                partFlag);
-        };
-        if ((flags.getValue() & SendFlag.DONTWAIT.getValue()) != 0) {
-            return submitNoWaitParts(submitter, parts);
-        }
-        submitBlockingParts(submitter, parts);
-        return SendResult.SENT;
-    }
-
     void publishParts(String topicId, List<Message> parts,
                       SendFlag flags, boolean nonBlocking) {
         socket.ensureOpen();

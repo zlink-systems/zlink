@@ -34,11 +34,6 @@ final class LibraryLoader {
                     p = p.toAbsolutePath();
                 System.load(p.toString());
                 rememberLoaded(p);
-                if (!loadOptionalBridgeFromResources()) {
-                    loadOptionalBridgeFromDirectory(
-                        normalizeOs(System.getProperty("os.name")),
-                        p.getParent());
-                }
                 LOOKUP = combinedLookup();
                 return LOOKUP;
             }
@@ -48,11 +43,6 @@ final class LibraryLoader {
                 return LOOKUP;
             } catch (UnsatisfiedLinkError e) {
                 System.loadLibrary("zlink");
-                if (!loadOptionalBridgeFromResources()) {
-                    loadOptionalBridgeFromDirectory(
-                        normalizeOs(System.getProperty("os.name")),
-                        Path.of(System.getProperty("user.dir", ".")).toAbsolutePath());
-                }
                 LOOKUP = combinedLookup();
                 return LOOKUP;
             }
@@ -74,72 +64,11 @@ final class LibraryLoader {
             tmpDir.toFile().deleteOnExit();
             if ("windows".equals(os))
                 preloadWindowsDeps(tmpDir);
-            loadOptionalBridgeFromResources(os, arch, tmpDir);
             System.load(tmp.toAbsolutePath().toString());
             rememberLoaded(tmp);
-            loadOptionalBridgeFromDirectory(os, tmpDir);
         } catch (IOException e) {
             throw new UnsatisfiedLinkError("failed to load zlink native resource: " + e.getMessage());
         }
-    }
-
-    private static boolean loadOptionalBridgeFromResources() {
-        String os = normalizeOs(System.getProperty("os.name"));
-        String arch = normalizeArch(System.getProperty("os.arch"));
-        return loadOptionalBridgeFromResources(os, arch, null);
-    }
-
-    private static boolean loadOptionalBridgeFromResources(String os,
-                                                        String arch,
-                                                        Path targetDir) {
-        String resourcePath = resourcePath(os, arch, bridgeFileName(os));
-        try (InputStream in = LibraryLoader.class.getResourceAsStream(resourcePath)) {
-            if (in == null)
-                return false;
-            Path dir = targetDir != null
-                ? targetDir
-                : Files.createTempDirectory("zlink-java-bridge-");
-            Path tmp = dir.resolve(bridgeFileName(os));
-            Files.copy(in, tmp, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            tmp.toFile().deleteOnExit();
-            if (targetDir == null) {
-                dir.toFile().deleteOnExit();
-                System.load(tmp.toAbsolutePath().toString());
-                rememberLoaded(tmp);
-            }
-            return targetDir == null;
-        } catch (IOException e) {
-            throw new UnsatisfiedLinkError(
-                "failed to load zlink java bridge resource: " + e.getMessage());
-        }
-    }
-
-    private static void loadOptionalBridgeFromDirectory(String os, Path dir) {
-        Path bridge = dir.resolve(bridgeFileName(os));
-        if (!Files.exists(bridge)) {
-            Path generated = findGeneratedBridgeDir();
-            if (generated != null) {
-                bridge = generated.resolve(bridgeFileName(os));
-            }
-        }
-        if (Files.exists(bridge)) {
-            System.load(bridge.toAbsolutePath().toString());
-            rememberLoaded(bridge);
-        }
-    }
-
-    private static void loadFromDirectory(Path dir) {
-        String os = normalizeOs(System.getProperty("os.name"));
-        Path lib = dir.resolve(libraryFileName(os));
-        if (!Files.exists(lib)) {
-            throw new UnsatisfiedLinkError("zlink native library not found: " + lib);
-        }
-        if ("windows".equals(os)) {
-            preloadWindowsDeps(dir);
-        }
-        System.load(lib.toAbsolutePath().toString());
-        rememberLoaded(lib);
-        loadOptionalBridgeFromDirectory(os, dir);
     }
 
     private static void rememberLoaded(Path path) {
@@ -247,42 +176,8 @@ final class LibraryLoader {
         return "libzlink.so";
     }
 
-    private static String bridgeFileName(String os) {
-        if ("windows".equals(os))
-            return "zlink_java_bridge.dll";
-        if ("darwin".equals(os))
-            return "libzlink_java_bridge.dylib";
-        return "libzlink_java_bridge.so";
-    }
-
     private static String resourcePath(String os, String arch, String fileName) {
         return "/native/" + os + "-" + arch + "/" + fileName;
     }
 
-    private static Path findGeneratedBridgeDir() {
-        String os = normalizeOs(System.getProperty("os.name"));
-        String arch = normalizeArch(System.getProperty("os.arch"));
-        String relative = "build/generated/zlink-native-resources/main/native/"
-            + os + "-" + arch;
-        Path cwd = Path.of(System.getProperty("user.dir", ".")).toAbsolutePath();
-        String required = bridgeFileName(os);
-        Path local = cwd.resolve(relative).normalize();
-        if (Files.exists(local.resolve(required))) {
-            return local;
-        }
-        return findAncestorRelative(cwd, "bindings/java/" + relative, required);
-    }
-
-    private static Path findAncestorRelative(Path start, String relative,
-                                             String requiredFile) {
-        Path current = start;
-        while (current != null) {
-            Path candidate = current.resolve(relative).normalize();
-            if (Files.exists(candidate.resolve(requiredFile))) {
-                return candidate;
-            }
-            current = current.getParent();
-        }
-        return null;
-    }
 }

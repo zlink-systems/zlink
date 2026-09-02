@@ -9,13 +9,12 @@ import systems.zlink.contracts.sockets.*;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
+import systems.zlink.contracts.messaging.StreamPacket;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.messaging.RoutedSendOperation;
 import systems.zlink.contracts.messaging.SendOperation;
 import systems.zlink.runtime.messaging.MessageOperations;
 import systems.zlink.runtime.framework.FrameworkStreamOperations;
 import systems.zlink.runtime.nativeapi.InternalAccess;
-import systems.zlink.runtime.sockets.StreamUInt32FramedNativeHandler;
 import java.lang.foreign.MemorySegment;
 import java.time.Duration;
 import java.util.List;
@@ -25,8 +24,8 @@ import java.util.concurrent.CompletionStage;
 final class NativeStreamSocket extends NativeSocketBase implements StreamSocket {
     static {
         FrameworkStreamOperations.register((socket, routingId, parts, timeout) ->
-            ((NativeStreamSocket) socket).sendAsync(
-                routingId, parts, timeout));
+            ((NativeStreamSocket) socket).runtime().submitSend(
+                routingId, parts));
     }
 
     private final StreamSocketOptions options = ContractAccess.streamSocketOptions(this);
@@ -67,23 +66,9 @@ final class NativeStreamSocket extends NativeSocketBase implements StreamSocket 
     }
     public SendOperation send(RoutingId rid) {
         Objects.requireNonNull(rid, "rid");
-        return MessageOperations.send((parts, flags) -> runtime().send(rid,
-            parts, SendFlag.fromValue(flags.value())));
-    }
-
-    public RoutedSendOperation sendAsync(RoutingId rid) {
-        Objects.requireNonNull(rid, "rid");
-        return MessageOperations.routedSend((parts, timeout) ->
-            runtime().sendAsync(rid, parts, timeout),
-            (parts, flags) -> runtime().send(rid, parts,
-                SendFlag.fromValue(flags.value())));
-    }
-
-    private CompletionStage<Void> sendAsync(
-        RoutingId routingId,
-        List<Message> parts,
-        Duration timeout) {
-        return runtime().sendAsync(routingId, parts, timeout);
+        return MessageOperations.send(
+            parts -> runtime().submitSend(rid, parts),
+            parts -> runtime().submitSendBlocking(rid, parts));
     }
     /** Receives into caller-provided storage. */
     public boolean recv(Received result, RecvFlags flags) {
@@ -93,24 +78,48 @@ final class NativeStreamSocket extends NativeSocketBase implements StreamSocket 
         if (fresh == null) return false;
         ContractAccess.receivedAdoptFrom(result, fresh);
         result.getRoutingId().ifPresent(rid ->
-            InternalAccess.receivedSetSendSender(result, (parts, sendFlags) -> runtime().send(rid, parts,
-                SendFlag.fromValue(sendFlags.value()))));
+            ContractAccess.receivedSetSendSubmitters(result,
+                parts -> runtime().submitSend(rid, parts),
+                parts -> runtime().submitSendBlocking(rid, parts)));
         return true;
     }
-    public void onPacket(StreamPacketHandler handler) {
-        Objects.requireNonNull(handler, "handler");
-        runtime().attachStreamPacket((StreamFramedPacketHandler)
-            (routingId, header, body) -> handler.onPacket(routingId, header,
-                body));
-    }
-    void onFramedPacket(StreamFramedPacketHandler handler) {
-        runtime().attachStreamPacket(handler);
-    }
-    void onFramedPacket(StreamUInt32FramedPacketHandler handler) {
-        runtime().attachStreamPacket(handler);
-    }
-    void onFramedPacketNative(StreamUInt32FramedNativeHandler handler) {
-        runtime().attachStreamPacket(handler);
+    public boolean recvPacket(StreamPacket result, RecvFlags flags) {
+        Objects.requireNonNull(result, "result");
+        Objects.requireNonNull(flags, "flags");
+        ContractAccess.streamPacketBegin(result);
+        Message header = InternalAccess.messageAcquireReceive();
+        Message body = InternalAccess.messageAcquireReceive();
+        try (java.lang.foreign.Arena arena =
+                 java.lang.foreign.Arena.ofConfined()) {
+            MemorySegment ridOut = arena.allocate(
+                java.lang.foreign.ValueLayout.ADDRESS);
+            int rc = systems.zlink.runtime.nativeapi.Native.streamRecvPacket(
+                runtime().handle(), ridOut,
+                InternalAccess.messageNativeHandle(header),
+                InternalAccess.messageNativeHandle(body), flags.value());
+            if (rc == RecvResult.NO_DATA.value()) {
+                header.close();
+                body.close();
+                ContractAccess.streamPacketFail(result);
+                return false;
+            }
+            if (rc != RecvResult.OK.value()) {
+                throw new systems.zlink.contracts.errors.ZlinkRecvException(
+                    RecvResult.fromValue(rc),
+                    systems.zlink.runtime.nativeapi.Native.errno());
+            }
+            InternalAccess.messageFinishReceive(header, false);
+            InternalAccess.messageFinishReceive(body, false);
+            RoutingId rid = systems.zlink.runtime.nativeapi.NativeRoutingIds
+                .readOut(ridOut);
+            ContractAccess.streamPacketComplete(result, rid, header, body);
+            return true;
+        } catch (RuntimeException | Error failure) {
+            try { header.close(); } catch (RuntimeException ignored) { }
+            try { body.close(); } catch (RuntimeException ignored) { }
+            ContractAccess.streamPacketFail(result);
+            throw failure;
+        }
     }
     @Override
     public void close() {

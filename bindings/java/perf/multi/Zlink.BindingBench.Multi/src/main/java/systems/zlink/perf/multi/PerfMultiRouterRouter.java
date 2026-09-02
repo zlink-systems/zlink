@@ -132,7 +132,7 @@ final class PerfMultiRouterRouter {
                 socketsAsBase, PollEventFlags.POLLIN)) {
             long activeEnd = System.nanoTime()
                 + (long) durationSeconds * 1_000_000_000L;
-            PerfMultiRoutedSendCoordinator.run(n, activeEnd, pollSet,
+            PerfMultiTargetCoordinator.run(n, activeEnd, pollSet,
                 index -> sendPayload(clients.get(index), msgSize, activeEnd),
                 index -> drainReplies(clients.get(index), msgSize, metrics,
                     replyBuffer, activeEnd),
@@ -180,11 +180,9 @@ final class PerfMultiRouterRouter {
             if (PerfUtil.measurementPartCount() == 2) {
                 return client.send(SERVER_ID).message(payload)
                     .message(tail)
-                    .timeout(PerfMultiAsyncSendLoop.remainingTimeout(activeEnd))
                     .submit();
             }
             return client.send(SERVER_ID).message(payload)
-                .timeout(PerfMultiAsyncSendLoop.remainingTimeout(activeEnd))
                 .submit();
         }
     }

@@ -154,13 +154,7 @@ class RoutedMultipartAdmissionContractTest {
                 .submit().toCompletableFuture();
             completion.getNow(null);
             accepted.incrementAndGet();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (!(cause instanceof ZlinkSubmitException submit)
-                || submit.getResult() != SubmitResult.INVALID_ARGUMENT
-                || submit.getNativeErrno() != EINVAL) {
-                throw failure;
-            }
+        } catch (ZlinkSubmitException submit) {
             rejected.incrementAndGet();
             for (int part = 0; part < parts.size(); part++) {
                 assertEquals(prefix + part, parts.get(part).toUtf8String(),

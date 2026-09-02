@@ -7,6 +7,7 @@ import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.StreamSocket;
+import systems.zlink.contracts.sockets.StreamRecvMode;
 import java.nio.charset.StandardCharsets;
 
 public final class StreamRecvSample {
@@ -20,6 +21,7 @@ public final class StreamRecvSample {
              var monitor = server.monitorOpen(
                  systems.zlink.contracts.eventing.MonitorEventType.ACCEPTED,
                  systems.zlink.contracts.eventing.MonitorEventType.CONNECTION_READY)) {
+            server.options().recvMode(StreamRecvMode.RAW);
             server.bind(endpoint);
             try (var rawClient = SampleSupport.connectRawTcp(endpoint)) {
                 SampleSupport.waitStreamConnected(monitor);

@@ -288,7 +288,7 @@ final class PerfRouterRouter {
     private static void senderRouterSend(RouterSocket socket,
                                          RoutingId route,
                                          Message message) {
-        socket.send(route).message(message).submit_sync(SendFlags.NONE);
+        socket.send(route).message(message).submit_sync();
     }
 
     private static boolean trySendActive(RouterSocket sender, RoutingId route,
@@ -297,9 +297,9 @@ final class PerfRouterRouter {
             if (PerfUtil.measurementPartCount() == 2) {
                 sender.send(route).message(active)
                     .message(PerfUtil.measurementTail())
-                    .submit_sync(SendFlags.NONE);
+                    .submit_sync();
             } else {
-                sender.send(route).message(active).submit_sync(SendFlags.NONE);
+                sender.send(route).message(active).submit_sync();
             }
             return true;
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {
@@ -323,9 +323,9 @@ final class PerfRouterRouter {
             if (PerfUtil.measurementPartCount() == 2) {
                 sender.send(route).message(active)
                     .message(PerfUtil.measurementTail())
-                    .submit_sync(SendFlags.NONE);
+                    .submit_sync();
             } else {
-                sender.send(route).message(active).submit_sync(SendFlags.NONE);
+                sender.send(route).message(active).submit_sync();
             }
             return true;
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {

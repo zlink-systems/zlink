@@ -10,38 +10,14 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.RequestOperation;
-import systems.zlink.contracts.messaging.RoutedSendOperation;
+import systems.zlink.contracts.messaging.SendOperation;
 import systems.zlink.runtime.messaging.MessageOperations;
 import java.util.List;
 
 final class NativeDealerSocket extends NativeSocketBase implements DealerSocket {
     private final DealerSocketOptions options = ContractAccess.dealerSocketOptions(this);
-    private final CoreRequestSupport requestSupport;
-    private final MessageOperations.RoutedSendInvoker asyncSendInvoker =
-        (parts, timeout) -> runtime().sendAsync(parts, timeout);
-    private final MessageOperations.SyncSendInvoker syncSendInvoker =
-        (parts, flags) -> runtime().send(parts,
-            SendFlag.fromValue(flags.value()));
-    private final MessageOperations.RequestAsyncInvoker asyncRequestInvoker;
-    private final MessageOperations.RequestSyncInvoker syncRequestInvoker;
-
     NativeDealerSocket(Context ctx) {
         super(ctx, SocketType.DEALER);
-        try {
-            requestSupport = new CoreRequestSupport(runtime(), true);
-            asyncRequestInvoker = (parts, timeout) ->
-                runtime().requestAsync(requestSupport, null, 0L, 0L, parts,
-                    timeout);
-            syncRequestInvoker = (parts, timeout, flags) ->
-                runtime().requestSync(requestSupport, null, 0L, 0L, parts,
-                    timeout, flags);
-        } catch (RuntimeException error) {
-            try {
-                runtime().close();
-            } catch (RuntimeException ignored) {
-            }
-            throw error;
-        }
     }
 
     public void bind(String endpoint) { runtime().bind(endpoint); }
@@ -54,9 +30,10 @@ final class NativeDealerSocket extends NativeSocketBase implements DealerSocket 
     public void setRoutingId(RoutingId rid) { runtime().setRoutingId(rid); }
     public RoutingId getRoutingId() { return runtime().getRoutingId(); }
 
-    public RoutedSendOperation send() {
-        return MessageOperations.routedSend(asyncSendInvoker,
-            syncSendInvoker);
+    public SendOperation send() {
+        return MessageOperations.send(
+            parts -> runtime().submitSend(null, parts),
+            parts -> runtime().submitSendBlocking(null, parts));
     }
     SendResult sendNoWaitResult(Message part) {
         return runtime().sendNoWaitResult(part);
@@ -80,13 +57,10 @@ final class NativeDealerSocket extends NativeSocketBase implements DealerSocket 
         return runtime().recvInto(result, ReceiveFlag.fromValue(flags.value()));
     }
     public RequestOperation request() {
-        return MessageOperations.request(asyncRequestInvoker,
-            syncRequestInvoker);
-    }
-    @Override
-    public void close() {
-        runtime().close();
-        requestSupport.close();
+        return MessageOperations.request(
+            (parts, timeout) -> runtime().submitRequest(null, parts, timeout),
+            (parts, timeout) -> runtime().submitRequestBlocking(null, parts,
+                timeout));
     }
     @Override public DealerSocketOptions options() { return options; }
 
