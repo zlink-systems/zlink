@@ -2,6 +2,7 @@
 #include "../common/perf_single_latency.hpp"
 #include "../common/perf_single_metric_header.hpp"
 #include "../common/perf_single_monitor.hpp"
+#include "../common/perf_single_one_way.hpp"
 #include "../common/perf_single_phase.hpp"
 #include <zlink.h>
 
@@ -105,12 +106,12 @@ int recv_router_header_flags (void *router_,
         *header_ok_out_ = false;
 
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_reply_token_t reply_token = 0;
+    uint64_t request_seq = 0;
     zlink_msg_t part;
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
     if (zlink_msg_init (&part) != 0)
         return -1;
-    const int rc = zlink_router_recv_part (router_, &source_rid, &reply_token, &part, &has_more,
+    const int rc = zlink_router_recv_part (router_, &source_rid, &request_seq, &part, &has_more,
                                            static_cast<zlink_recv_flags_t> (flags_));
     if (rc != 0) {
         const int err = zlink_errno ();
@@ -120,11 +121,11 @@ int recv_router_header_flags (void *router_,
         return -1;
     }
 
-    if (!source_rid || source_rid->size == 0 || reply_token != 0) {
+    if (!source_rid || source_rid->size == 0 || request_seq != 0) {
         if (bench_debug_enabled ()) {
             std::cerr << "[perf-dealer-router] invalid routed recv"
                       << " rid_size=" << static_cast<int> (source_rid ? source_rid->size : 0)
-                      << " reply_token=" << reply_token
+                      << " request_seq=" << request_seq
                       << " has_more=" << static_cast<int> (has_more) << std::endl;
         }
         zlink_msg_close (&part);
@@ -188,51 +189,6 @@ bool send_dealer_stop_token (void *sender_)
         std::this_thread::sleep_for (std::chrono::milliseconds (1));
     }
     return false;
-}
-
-bool send_dealer_samples (void *sender_,
-                          std::vector<char> *payload_,
-                          dealer_router_recv_state_t *state_,
-                          int duration_s_,
-                          std::atomic<unsigned long long> *sent_count_)
-{
-    if (!sender_ || !payload_ || !state_ || !sent_count_)
-        return false;
-
-    const auto deadline =
-      std::chrono::steady_clock::now () + std::chrono::seconds (std::max (1, duration_s_));
-    uint64_t seq = 1;
-    while (std::chrono::steady_clock::now () < deadline) {
-        if (!perf_single_metric::stamp_payload (payload_->data (), payload_->size (),
-                                                state_->run_id, perf_single_metric::phase_active,
-                                                state_->msg_size, seq,
-                                                perf_single_metric::now_ns ())) {
-            return false;
-        }
-
-        zlink_msg_t part;
-        if (zlink_msg_init_size (&part, payload_->size ()) != 0)
-            return false;
-        if (!payload_->empty ())
-            std::memcpy (zlink_msg_data (&part), payload_->data (), payload_->size ());
-
-        if (perf_zlink_send_measurement_parts (sender_, &part, ZLINK_SEND_FLAGS_NONE) != 0) {
-            const int err = zlink_errno ();
-            if (bench_debug_enabled ()) {
-                std::cerr << "[perf-dealer-router] send failed err=" << err << std::endl;
-            }
-            if (err == EINTR || err == EAGAIN || err == EWOULDBLOCK || err == ETIMEDOUT) {
-                std::this_thread::sleep_for (std::chrono::milliseconds (1));
-                continue;
-            }
-            return false;
-        }
-
-        sent_count_->fetch_add (1, std::memory_order_release);
-        ++seq;
-    }
-
-    return true;
 }
 
 int send_dealer_probe_once (void *sender_,
@@ -324,108 +280,21 @@ bool run_active_phase (void *sender_,
                        latency_stats_t *latency_out_)
 {
     (void) use_nonblocking_recv_;
-    (void) recv_timeout_ms_;
-    if (!sender_ || !receiver_ || !payload_ || !state_ || !received_out_ || !latency_out_) {
-        return false;
-    }
-
-    state_->active_received.store (0, std::memory_order_release);
-    state_->latency = latency_stats_builder_t ();
-
-    std::atomic<unsigned long long> sent_count (0);
-    std::atomic<bool> sender_ok (true);
-    unsigned long long received = 0;
-    latency_stats_builder_t latency_builder;
-    poller_guard_t recv_poller;
-    if (!recv_poller.valid () || !recv_poller.add (receiver_, receiver_, ZLINK_POLLIN))
-        return false;
-
-    // PERF_SINGLE_TEST_POLICY § 1.4: sender thread emits active samples,
-    // then sends a wire-level stop token so the receiver loop terminates
-    // without consulting any atomic flag.
-    std::thread sender_thread ([&] () {
-        const bool active_ok =
-          send_dealer_samples (sender_, payload_, state_, duration_s_, &sent_count);
-        const bool stop_ok = send_dealer_stop_token (sender_);
-        sender_ok.store (active_ok && stop_ok, std::memory_order_release);
-    });
-
-    // PERF_SINGLE_TEST_POLICY § 1.1 and § 1.4: wait through the public
-    // poller with an infinite timeout, receive with DONTWAIT, and drain all
-    // currently ready routed parts. The wire-level stop token terminates the
-    // receiver after the active samples have arrived.
-    std::thread receiver_thread ([&] () {
-        while (true) {
-            zlink_poller_event_t event;
-            const int poll_rc = recv_poller.wait (&event, -1);
-            if (poll_rc < 0) {
-                const int err = zlink_errno ();
-                if (err == EINTR || err == EAGAIN)
-                    continue;
-                sender_ok.store (false, std::memory_order_release);
-                return;
-            }
-            if (poll_rc == 0)
-                continue;
-
-            perf_single_metric::header_t header;
-            bool header_ok = false;
-            const int recv_rc = recv_router_header_flags (
-              receiver_, state_->payload_size, ZLINK_DONTWAIT, &header, &header_ok);
-            if (recv_rc == dealer_router_recv_payload) {
-                if (header_ok && single_header_matches_run (*state_, header)) {
-                    ++received;
-                    latency_builder.add (single_latency_ns (header));
-                }
-            } else if (recv_rc == dealer_router_recv_stop) {
-                return;
-            } else if (recv_rc == dealer_router_recv_error) {
-                sender_ok.store (false, std::memory_order_release);
-                return;
-            }
-
-            for (;;) {
-                perf_single_metric::header_t burst_header;
-                bool burst_header_ok = false;
-                const int burst_rc = recv_router_header_flags (
-                  receiver_, state_->payload_size, ZLINK_DONTWAIT, &burst_header,
-                  &burst_header_ok);
-                if (burst_rc == dealer_router_recv_payload) {
-                    if (burst_header_ok && single_header_matches_run (*state_, burst_header)) {
-                        ++received;
-                        latency_builder.add (single_latency_ns (burst_header));
-                    }
-                    continue;
-                }
-                if (burst_rc == dealer_router_recv_again)
-                    break;
-                if (burst_rc == dealer_router_recv_stop)
-                    return;
-                sender_ok.store (false, std::memory_order_release);
-                return;
-            }
-        }
-    });
-
-    sender_thread.join ();
-    receiver_thread.join ();
-
-    if (!sender_ok.load (std::memory_order_acquire)) {
-        if (bench_debug_enabled ()) {
-            std::cerr << "[perf-dealer-router] active phase failed sent="
-                      << sent_count.load (std::memory_order_relaxed) << " received=" << received
-                      << std::endl;
-        }
-        return false;
-    }
-
-    *received_out_ = received;
-    if (*received_out_ == 0)
-        return false;
-    *latency_out_ = latency_builder.snapshot ();
-    if (latency_builder.count () == 0)
-        return false;
-    return true;
+    return perf_single_one_way::run_active_phase (
+      sender_, receiver_, payload_, state_, duration_s_, recv_timeout_ms_, "perf-dealer-router",
+      [] (void *sender, std::vector<char> *active_payload,
+          const dealer_router_recv_state_t &active_state, uint64_t seq) {
+          zlink_msg_t part;
+          if (!perf_single_one_way::init_active_payload_part (&part, active_payload, active_state,
+                                                              seq)) {
+              return perf_single_one_way::send_step_fatal;
+          }
+          return perf_single_one_way::send_socket_active_message (
+            sender, &part, ZLINK_SEND_FLAGS_NONE, true);
+      },
+      recv_router_header_flags,
+      [] (void *sender) { return send_dealer_stop_token (sender) ? 0 : -1; }, received_out_,
+      latency_out_);
 }
 
 } // namespace

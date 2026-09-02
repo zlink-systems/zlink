@@ -2,6 +2,7 @@
 #include "../common/perf_single_latency.hpp"
 #include "../common/perf_single_metric_header.hpp"
 #include "../common/perf_single_monitor.hpp"
+#include "../common/perf_single_one_way.hpp"
 #include "../common/perf_single_phase.hpp"
 #include <zlink.h>
 
@@ -71,16 +72,16 @@ bool perform_router_router_handshake (void *receiver_,
                 return false;
         } else {
             const zlink_routing_id_t *source_rid = NULL;
-            zlink_reply_token_t reply_token = 0;
+            uint64_t request_seq = 0;
             zlink_msg_t part;
             zlink_part_flag_t has_more = ZLINK_PART_FINAL;
             if (zlink_msg_init (&part) != 0)
                 return false;
             const int recv_rc =
-              zlink_router_recv_part (receiver_, &source_rid, &reply_token, &part,
+              zlink_router_recv_part (receiver_, &source_rid, &request_seq, &part,
                                       &has_more, ZLINK_RECV_FLAGS_DONTWAIT);
             if (recv_rc == 0) {
-                connected = source_rid && source_rid->size > 0 && reply_token == 0
+                connected = source_rid && source_rid->size > 0 && request_seq == 0
                             && has_more == ZLINK_PART_FINAL && zlink_msg_size (&part) == 4
                             && std::memcmp (zlink_msg_data (&part), "PING", 4) == 0;
                 if (connected)
@@ -121,19 +122,19 @@ bool perform_router_router_handshake (void *receiver_,
     }
 
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_reply_token_t reply_token = 0;
+    uint64_t request_seq = 0;
     zlink_msg_t part;
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
     if (zlink_msg_init (&part) != 0)
         return false;
-    if (zlink_router_recv_part (sender_, &source_rid, &reply_token, &part,
+    if (zlink_router_recv_part (sender_, &source_rid, &request_seq, &part,
                                 &has_more, ZLINK_RECV_FLAGS_NONE)
         != 0) {
         zlink_msg_close (&part);
         return false;
     }
 
-    const bool ok = source_rid && source_rid->size > 0 && reply_token == 0
+    const bool ok = source_rid && source_rid->size > 0 && request_seq == 0
                     && has_more == ZLINK_PART_FINAL && zlink_msg_size (&part) == 4
                     && std::memcmp (zlink_msg_data (&part), "PONG", 4) == 0;
     if (ok && target_rid_out_) {
@@ -151,12 +152,12 @@ void drain_router_socket (void *socket_)
 
     for (;;) {
         const zlink_routing_id_t *source_rid = NULL;
-        zlink_reply_token_t reply_token = 0;
+        uint64_t request_seq = 0;
         zlink_msg_t part;
         zlink_part_flag_t has_more = ZLINK_PART_FINAL;
         if (zlink_msg_init (&part) != 0)
             return;
-        if (zlink_router_recv_part (socket_, &source_rid, &reply_token, &part,
+        if (zlink_router_recv_part (socket_, &source_rid, &request_seq, &part,
                                     &has_more, ZLINK_RECV_FLAGS_DONTWAIT)
             != 0) {
             zlink_msg_close (&part);
@@ -273,13 +274,13 @@ int recv_router_router_header_flags (void *receiver_,
         *header_ok_out_ = false;
 
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_reply_token_t reply_token = 0;
+    uint64_t request_seq = 0;
     zlink_msg_t part;
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
     if (zlink_msg_init (&part) != 0)
         return -1;
     const int rc =
-      zlink_router_recv_part (receiver_, &source_rid, &reply_token, &part,
+      zlink_router_recv_part (receiver_, &source_rid, &request_seq, &part,
                               &has_more, static_cast<zlink_recv_flags_t> (flags_));
     if (rc != 0) {
         const int err = zlink_errno ();
@@ -290,12 +291,12 @@ int recv_router_router_header_flags (void *receiver_,
     }
 
     const bool rid_ok = source_rid && source_rid->size > 0;
-    const bool shape_ok = rid_ok && reply_token == 0;
+    const bool shape_ok = rid_ok && request_seq == 0;
     if (!shape_ok) {
         if (bench_debug_enabled ()) {
             std::cerr << "[perf-router-router] invalid routed recv"
                       << " rid_size=" << static_cast<int> (source_rid ? source_rid->size : 0)
-                      << " reply_token=" << reply_token
+                      << " request_seq=" << request_seq
                       << " has_more=" << static_cast<int> (has_more) << std::endl;
         }
         zlink_msg_close (&part);
@@ -362,54 +363,6 @@ bool send_router_stop_token (void *sender_, const zlink_routing_id_t *target_rid
         std::this_thread::sleep_for (std::chrono::milliseconds (1));
     }
     return false;
-}
-
-bool send_router_samples (void *sender_,
-                          std::vector<char> *payload_,
-                          router_router_recv_state_t *state_,
-                          int duration_s_,
-                          std::atomic<unsigned long long> *sent_count_)
-{
-    if (!sender_ || !payload_ || !state_ || !sent_count_)
-        return false;
-
-    const auto deadline =
-      std::chrono::steady_clock::now () + std::chrono::seconds (std::max (1, duration_s_));
-    uint64_t seq = 1;
-    while (std::chrono::steady_clock::now () < deadline) {
-        if (!perf_single_metric::stamp_payload (payload_->data (), payload_->size (),
-                                                state_->run_id, perf_single_metric::phase_active,
-                                                state_->msg_size, seq,
-                                                perf_single_metric::now_ns ())) {
-            return false;
-        }
-
-        zlink_msg_t part;
-        if (zlink_msg_init_size (&part, payload_->size ()) != 0)
-            return false;
-        if (!payload_->empty ())
-            std::memcpy (zlink_msg_data (&part), payload_->data (), payload_->size ());
-
-        if (perf_zlink_send_rid_measurement_parts (
-              sender_, &state_->target_rid, &part, ZLINK_SEND_FLAGS_NONE)
-            != 0) {
-            const int err = zlink_errno ();
-            if (bench_debug_enabled ()) {
-                std::cerr << "[perf-router-router] send failed err=" << err << std::endl;
-            }
-            if (err == EINTR || err == EAGAIN || err == EWOULDBLOCK || err == ETIMEDOUT
-                || err == EHOSTUNREACH || err == ENOTCONN) {
-                std::this_thread::sleep_for (std::chrono::milliseconds (1));
-                continue;
-            }
-            return false;
-        }
-
-        sent_count_->fetch_add (1, std::memory_order_release);
-        ++seq;
-    }
-
-    return true;
 }
 
 int send_router_probe_once (void *sender_,
@@ -507,72 +460,34 @@ bool run_active_phase (void *sender_,
                        latency_stats_t *latency_out_)
 {
     (void) use_nonblocking_recv_;
-    (void) recv_timeout_ms_;
-    if (!sender_ || !receiver_ || !payload_ || !state_ || !received_out_ || !latency_out_) {
-        return false;
-    }
+    return perf_single_one_way::run_active_phase (
+      sender_, receiver_, payload_, state_, duration_s_, recv_timeout_ms_, "perf-router-router",
+      [] (void *sender, std::vector<char> *active_payload,
+          const router_router_recv_state_t &active_state, uint64_t seq) {
+          zlink_msg_t part;
+          if (!perf_single_one_way::init_active_payload_part (&part, active_payload, active_state,
+                                                              seq)) {
+              return perf_single_one_way::send_step_fatal;
+          }
+          if (perf_zlink_send_rid_measurement_parts (
+                sender, &active_state.target_rid, &part, ZLINK_SEND_FLAGS_NONE)
+              == 0) {
+              return perf_single_one_way::send_step_sent;
+          }
 
-    state_->active_received.store (0, std::memory_order_release);
-    state_->latency = latency_stats_builder_t ();
-
-    std::atomic<unsigned long long> sent_count (0);
-    std::atomic<bool> sender_ok (true);
-    unsigned long long received = 0;
-    latency_stats_builder_t latency_builder;
-    // PERF_SINGLE_TEST_POLICY § 1.4: sender thread emits active samples,
-    // then sends a wire-level stop token so the receiver loop terminates
-    // without consulting any atomic flag.
-    std::thread sender_thread ([&] () {
-        const bool active_ok =
-          send_router_samples (sender_, payload_, state_, duration_s_, &sent_count);
-        const bool stop_ok = send_router_stop_token (sender_, &state_->target_rid);
-        sender_ok.store (active_ok && stop_ok, std::memory_order_release);
-    });
-
-    const int recv_flags = 0;
-    while (true) {
-        perf_single_metric::header_t header;
-        bool header_ok = false;
-        const int recv_rc =
-          recv_router_router_header_flags (receiver_, state_->payload_size, recv_flags, &header, &header_ok);
-        if (recv_rc == 1) {
-            if (header_ok && single_header_matches_run (*state_, header)) {
-                ++received;
-                latency_builder.add (single_latency_ns (header));
-            }
-            continue;
-        }
-        if (recv_rc == 0) {
-            continue;
-        }
-        if (recv_rc == 2)
-            break;
-        sender_ok.store (false, std::memory_order_release);
-        break;
-    }
-
-    sender_thread.join ();
-
-    if (!sender_ok.load (std::memory_order_acquire)) {
-        if (bench_debug_enabled ()) {
-            std::cerr << "[perf-router-router] active phase failed sent="
-                      << sent_count.load (std::memory_order_relaxed) << " received=" << received
-                      << std::endl;
-        }
-        return false;
-    }
-
-    *received_out_ = received;
-    if (*received_out_ == 0 || latency_builder.count () == 0) {
-        if (bench_debug_enabled ()) {
-            std::cerr << "[perf-router-router] no active samples sent="
-                      << sent_count.load (std::memory_order_relaxed) << " received=" << received
-                      << " latency_count=" << latency_builder.count () << std::endl;
-        }
-        return false;
-    }
-    *latency_out_ = latency_builder.snapshot ();
-    return true;
+          const int err = zlink_errno ();
+          zlink_msg_close (&part);
+          if (err == EINTR || err == EAGAIN || err == EWOULDBLOCK || err == ETIMEDOUT
+              || err == EHOSTUNREACH || err == ENOTCONN) {
+              return perf_single_one_way::send_step_retry;
+          }
+          return perf_single_one_way::send_step_fatal;
+      },
+      recv_router_router_header_flags,
+      [state_] (void *sender) {
+          return send_router_stop_token (sender, &state_->target_rid) ? 0 : -1;
+      },
+      received_out_, latency_out_);
 }
 
 } // namespace
