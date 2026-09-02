@@ -98,10 +98,12 @@ bool reqrep::remove_socket_pending_request_locked (
 bool reqrep::take_pending_reply_from_transport_locked (
   reqrep::socket_request_reply_state_t *state_,
   uint64_t request_seq_, uint64_t transport_pair_id_,
-  uint64_t transport_pair_generation_,
+  uint64_t transport_pair_generation_, zlink::pipe_t *source_pipe_,
+  uint64_t source_connection_id_,
   reqrep::pending_request_t *pending_out_)
 {
-    if (!state_ || request_seq_ == 0)
+    if (!state_ || !state_->socket || request_seq_ == 0 || !source_pipe_
+        || source_connection_id_ == 0)
         return false;
 
     pending_request_map_t::iterator pending =
@@ -109,12 +111,45 @@ bool reqrep::take_pending_reply_from_transport_locked (
     if (pending == state_->pending_requests.end ())
         return false;
 
-    // A ROUTER request may be addressed by an intended RID while the reply
-    // carries the peer's settled RID. The socket-unique sequence selects the
-    // aggregate; the physical transport pair remains the stale-peer fence.
+    // The submit-time pair remains the reply capability. Reconnect can keep
+    // the logical request record alive, but neither a replacement generation
+    // nor a frame queued on a retired source may consume it.
     if (pending->second.transport_pair_id != transport_pair_id_
         || pending->second.transport_pair_generation
-             != transport_pair_generation_)
+             != transport_pair_generation_
+        || source_pipe_->get_transport_pair_id () != transport_pair_id_
+        || source_pipe_->get_transport_pair_generation ()
+             != transport_pair_generation_
+        || source_pipe_->get_peer_socket_type ()
+             != ZLINK_CORE_SOCKET_ROUTER)
+        return false;
+
+    zlink::transport_lane_t reply_lane;
+    if (state_->socket_type == ZLINK_CORE_SOCKET_DEALER)
+        reply_lane = zlink::transport_lane_application;
+    else if (state_->socket_type == ZLINK_CORE_SOCKET_ROUTER)
+        reply_lane = zlink::transport_lane_completion;
+    else
+        return false;
+    zlink::pipe_t *current = NULL;
+    bool exact_source = false;
+    {
+        // engine_error() clears this source's connection id under the same
+        // lock. Pair-table selection and the frame-id comparison therefore
+        // form one identity decision: either the frame belongs to the live
+        // submit-time source, or teardown wins and the pending stays intact.
+        zlink::scoped_fast_lock_t generation_lock (
+          source_pipe_->transport_sync ());
+        current = state_->socket->retain_transport_pair_pipe (
+          transport_pair_id_, transport_pair_generation_, reply_lane);
+        exact_source = current == source_pipe_
+                       && source_pipe_->get_transport_connection_id ()
+                            == source_connection_id_;
+    }
+    if (!current)
+        return false;
+    current->release_lifetime_ref ();
+    if (!exact_source)
         return false;
     return take_pending_request (&state_->pending_requests, pending,
                                  pending_out_);

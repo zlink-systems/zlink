@@ -22,7 +22,40 @@ bool is_pair_pipe_lifetime_command (const zlink::command_t &cmd_)
     return cmd_.type == zlink::command_t::bind
            || cmd_.type == zlink::command_t::pipe_term_ack;
 }
+
+#ifdef ZLINK_BUILD_TESTS
+std::atomic<zlink::async_owner_transition_test_hook_fn>
+  async_owner_transition_test_hook (NULL);
+std::atomic<void *> async_owner_transition_test_hook_userdata (NULL);
+
+void invoke_async_owner_transition_test_hook (
+  zlink::async_owner_transition_test_point_t point_)
+{
+    const zlink::async_owner_transition_test_hook_fn hook =
+      async_owner_transition_test_hook.load (std::memory_order_acquire);
+    if (hook)
+        hook (point_, async_owner_transition_test_hook_userdata.load (
+                        std::memory_order_acquire));
 }
+#endif
+}
+
+#ifdef ZLINK_BUILD_TESTS
+void zlink::test_set_async_owner_transition_hook (
+  async_owner_transition_test_hook_fn hook_, void *userdata_)
+{
+    if (!hook_) {
+        async_owner_transition_test_hook.store (NULL,
+                                                std::memory_order_release);
+        async_owner_transition_test_hook_userdata.store (
+          NULL, std::memory_order_release);
+        return;
+    }
+    async_owner_transition_test_hook_userdata.store (
+      userdata_, std::memory_order_release);
+    async_owner_transition_test_hook.store (hook_, std::memory_order_release);
+}
+#endif
 
 void zlink::socket_base_t::reaper_mailbox_handler (void *arg_)
 {
@@ -398,11 +431,13 @@ void zlink::socket_base_t::wait_async_quiesced (int timeout_ms_)
 
 void zlink::socket_base_t::retain_async_command_processing ()
 {
-    monitor_runtime ().owns_async_command_processing.store (
-      false, std::memory_order_release);
+    scoped_lock_t progress_lock (_transport_pair_owner_progress_sync);
+    _async_command_processing_retained.store (true,
+                                               std::memory_order_release);
+    _async_command_processing_stop_requested = false;
 }
 
-int zlink::socket_base_t::ensure_async_command_processing ()
+int zlink::socket_base_t::ensure_async_command_processing (bool retain_)
 {
     socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
     socket_public_api_scope_t admission (lifecycle);
@@ -410,18 +445,234 @@ int zlink::socket_base_t::ensure_async_command_processing ()
         return -1;
 
     socket_public_api_lock_scope_t guard (lifecycle);
+    {
+        scoped_lock_t progress_lock (_transport_pair_owner_progress_sync);
+        if (retain_) {
+            _async_command_processing_retained.store (
+              true, std::memory_order_release);
+            _async_command_processing_stop_requested = false;
+        }
+        if (lifecycle.is_async_mailbox_active ())
+            return 0;
+
+        io_thread_t *io_thread = choose_io_thread (options.affinity);
+        if (!io_thread) {
+            errno = EAGAIN;
+            return -1;
+        }
+        if (start_async_mailbox_processing (io_thread) != 0)
+            return -1;
+    }
+    lifecycle.wait_async_started (1000);
+    return 0;
+}
+
+int zlink::socket_base_t::acquire_monitor_async_command_processing ()
+{
+    socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
+
+    // A temporary owner can be in the short stop->mailbox-detach interval.
+    // Do not install a second executor on the same mailbox; wait without the
+    // public API lock so the retiring handler can finish its command scope.
+    for (;;) {
+        bool wait_for_quiescence = false;
+        bool started_here = false;
+        {
+            socket_public_api_scope_t admission (lifecycle);
+            if (!admission.acquired ())
+                return -1;
+
+            socket_public_api_lock_scope_t guard (lifecycle);
+#ifdef ZLINK_BUILD_TESTS
+            invoke_async_owner_transition_test_hook (
+              async_owner_test_monitor_acquire_before_gate);
+#endif
+            scoped_lock_t progress_lock (
+              _transport_pair_owner_progress_sync);
+            if (lifecycle.is_async_quiesce_pending ()) {
+                wait_for_quiescence = true;
+            } else {
+                // The flag is a lease, not a record of which consumer happened
+                // to start the executor. Publishing it under the owner gate
+                // cancels an idle-stop request before that request can detach.
+                monitor_runtime ().owns_async_command_processing.store (
+                  true, std::memory_order_release);
+                _async_command_processing_stop_requested = false;
+                if (lifecycle.is_async_mailbox_active ())
+                    return 0;
+
+                io_thread_t *io_thread = choose_io_thread (options.affinity);
+                if (!io_thread) {
+                    monitor_runtime ().owns_async_command_processing.store (
+                      false, std::memory_order_release);
+                    errno = EAGAIN;
+                    return -1;
+                }
+                if (start_async_mailbox_processing (io_thread) != 0) {
+                    monitor_runtime ().owns_async_command_processing.store (
+                      false, std::memory_order_release);
+                    return -1;
+                }
+                started_here = true;
+            }
+        }
+
+        if (wait_for_quiescence) {
+            wait_async_quiesced (10000);
+            if (lifecycle.is_async_quiesce_pending ()) {
+                errno = EBUSY;
+                return -1;
+            }
+            continue;
+        }
+        if (started_here)
+            lifecycle.wait_async_started (1000);
+        return 0;
+    }
+}
+
+void zlink::socket_base_t::release_monitor_async_command_processing (
+  bool wait_for_quiescence_)
+{
+    {
+        scoped_lock_t progress_lock (_transport_pair_owner_progress_sync);
+        monitor_runtime_t &monitor = monitor_runtime ();
+        if (!monitor.owns_async_command_processing.exchange (
+              false, std::memory_order_acq_rel))
+            return;
+    }
+    LIBZLINK_UNUSED (wait_for_quiescence_);
+    request_unowned_async_command_processing_stop ();
+}
+
+void zlink::socket_base_t::request_unowned_async_command_processing_stop ()
+{
+    bool schedule_recheck = false;
+    {
+        scoped_lock_t progress_lock (_transport_pair_owner_progress_sync);
+        const bool leased =
+          monitor_runtime ().owns_async_command_processing.load (
+            std::memory_order_acquire)
+          || _transport_pair_owner_progress_refs != 0
+          || _async_command_processing_retained.load (
+            std::memory_order_acquire)
+          || _completion_poller_refs.load (std::memory_order_acquire) != 0;
+        if (leased || !lifecycle_coordinator ().is_async_mailbox_active ()) {
+            _async_command_processing_stop_requested = false;
+            return;
+        }
+        if (!_async_command_processing_stop_requested) {
+            _async_command_processing_stop_requested = true;
+            schedule_recheck = true;
+        }
+    }
+
+    if (!schedule_recheck)
+        return;
+
+    // signal() alone does not post an idle mailbox handler. A real no-op
+    // command makes the current executor revisit its idle detach boundary.
+    command_t wake;
+    memset (&wake, 0, sizeof (wake));
+    wake.destination = this;
+    wake.type = command_t::request_completion;
+    static_cast<mailbox_t *> (_mailbox)->send (wake);
+}
+
+bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
+{
+    bool stopped = false;
+    {
+        scoped_lock_t progress_lock (_transport_pair_owner_progress_sync);
+        const bool leased =
+          monitor_runtime ().owns_async_command_processing.load (
+            std::memory_order_acquire)
+          || _transport_pair_owner_progress_refs != 0
+          || _async_command_processing_retained.load (
+            std::memory_order_acquire)
+          || _completion_poller_refs.load (std::memory_order_acquire) != 0;
+        if (!_async_command_processing_stop_requested || leased
+            || !lifecycle_coordinator ().is_async_mailbox_active ()) {
+            if (leased)
+                _async_command_processing_stop_requested = false;
+            return false;
+        }
+
+#ifdef ZLINK_BUILD_TESTS
+        invoke_async_owner_transition_test_hook (
+          async_owner_test_idle_stop_gate_held);
+#endif
+
+        mailbox_t *const mailbox = static_cast<mailbox_t *> (_mailbox);
+        // Keep the owner gate across the final empty check, physical detach and
+        // lifecycle publication. An acquire therefore either cancels the
+        // request before this point or observes a completely detached executor
+        // and starts a new one; it can never borrow an executor already
+        // committed to stop.
+        if (!mailbox->detach_io_context_if_idle ())
+            return false;
+        lifecycle_coordinator ().stop_async_mailbox_processing (NULL);
+        lifecycle_coordinator ().mark_async_processing_stopped (NULL);
+        _async_command_processing_stop_requested = false;
+        // A new executor also takes the owner gate before installing itself, so
+        // release the old receive lease before making the detached state
+        // observable to that acquire.
+        receive_runtime ().release_receive_sync_from_async_owner ();
+        stopped = true;
+    }
+    if (stopped)
+        notify_receive_progress ();
+    return stopped;
+}
+
+int zlink::socket_base_t::acquire_transport_pair_owner_progress ()
+{
+    socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
+    socket_public_api_scope_t admission (lifecycle);
+    if (!admission.acquired ())
+        return -1;
+
+    socket_public_api_lock_scope_t guard (lifecycle);
+    scoped_lock_t progress_lock (_transport_pair_owner_progress_sync);
+    if (_transport_pair_owner_progress_refs != 0) {
+        ++_transport_pair_owner_progress_refs;
+        _async_command_processing_stop_requested = false;
+        return 0;
+    }
+
+    _transport_pair_owner_progress_refs = 1;
+    _async_command_processing_stop_requested = false;
     if (lifecycle.is_async_mailbox_active ())
         return 0;
 
     io_thread_t *io_thread = choose_io_thread (options.affinity);
     if (!io_thread) {
+        _transport_pair_owner_progress_refs = 0;
         errno = EAGAIN;
         return -1;
     }
-    if (start_async_mailbox_processing (io_thread) != 0)
+    if (start_async_mailbox_processing (io_thread) != 0) {
+        _transport_pair_owner_progress_refs = 0;
         return -1;
-    lifecycle.wait_async_started (1000);
+    }
+
+    // Do not wait for the handler here. This method is called from a session
+    // I/O callback and choose_io_thread() may select that same thread. The
+    // mailbox is already scheduled and will run after the callback returns.
     return 0;
+}
+
+void zlink::socket_base_t::release_transport_pair_owner_progress ()
+{
+    {
+        scoped_lock_t progress_lock (_transport_pair_owner_progress_sync);
+        if (_transport_pair_owner_progress_refs == 0)
+            return;
+        --_transport_pair_owner_progress_refs;
+        if (_transport_pair_owner_progress_refs != 0)
+            return;
+    }
+    request_unowned_async_command_processing_stop ();
 }
 
 void zlink::socket_base_t::process_stop ()
@@ -562,6 +813,8 @@ void zlink::socket_base_t::process_async_mailbox ()
             check_destroy ();
             return;
         }
+        if (stop_unowned_async_command_processing_at_idle ())
+            return;
         if (lifecycle_coordinator ().is_async_mailbox_active ()) {
             process_deferred_socket_msg_pipe_terminations ();
             //  This executor consumed the mailbox's primary notification

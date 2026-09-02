@@ -66,7 +66,8 @@ class ctx_inproc_registry_t
     static void connect_inproc_sockets (socket_base_t *bind_socket_,
                                         const options_t &bind_options_,
                                         const pending_connection_t &pending_connection_,
-                                        side side_);
+                                        side side_,
+                                        bool materialization_ = false);
 
     typedef std::map<std::string, endpoint_t> endpoints_t;
     typedef std::multimap<std::string, pending_connection_t> pending_connections_t;

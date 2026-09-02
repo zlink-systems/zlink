@@ -108,6 +108,9 @@ zlink::socket_base_t::socket_base_t (ctx_t *parent_, uint32_t tid_, int sid_) :
     _completion_poller_refs (0),
     _completion_poller_owner (NULL),
     _request_completion_pending (false),
+    _transport_pair_owner_progress_refs (0),
+    _async_command_processing_stop_requested (false),
+    _async_command_processing_retained (false),
     _auto_hwm_context_plan (),
     _auto_hwm_socket_plan (),
     _auto_hwm_last_recalc_ms (0),
@@ -120,6 +123,9 @@ zlink::socket_base_t::socket_base_t (ctx_t *parent_, uint32_t tid_, int sid_) :
     _flow_state_stale_total (0),
     _flow_last_pause_duration_ms (0),
     _local_peer_weight (100),
+    _public_part_receive_delivery_hold_active (false),
+    _public_part_receive_delivery_hold_pipe (NULL),
+    _public_part_receive_delivery_hold_key (0, 0),
     _local_receive_flow_state (flow_state::receive_flow_running),
     _local_receive_flow_epoch (0)
 {
@@ -571,6 +577,10 @@ int zlink::socket_base_t::xrecv_routed (msg_t *msg_,
     return rc;
 }
 
+
+void zlink::socket_base_t::xread_deactivated (pipe_t *)
+{
+}
 
 void zlink::socket_base_t::xread_activated (pipe_t *)
 {

@@ -189,7 +189,8 @@ bool wait_for_pub_delivery_ready_value_at_least (delivery_ready_value_probe_t *p
            && probe_->last_value >= expected_min_value_;
 }
 
-bool wait_for_monitor_ready_recv (void *monitor_, int timeout_ms_)
+bool wait_for_monitor_ready_recv (void *monitor_, int timeout_ms_,
+                                  zlink_monitor_event_t *event_out_ = NULL)
 {
     const auto deadline =
       std::chrono::steady_clock::now () + std::chrono::milliseconds (timeout_ms_);
@@ -203,8 +204,11 @@ bool wait_for_monitor_ready_recv (void *monitor_, int timeout_ms_)
             if (recv_monitor_event_from_socket (monitor_, &event, ZLINK_DONTWAIT) != 0) {
                 break;
             }
-            if (event.event == ZLINK_EVENT_CONNECTION_READY)
+            if (event.event == ZLINK_EVENT_CONNECTION_READY) {
+                if (event_out_)
+                    *event_out_ = event;
                 return true;
+            }
         }
     }
     return false;
@@ -246,7 +250,8 @@ bool wait_for_monitor_ready_recv_with_activity (void *monitor_,
                                                 void *activity_socket_,
                                                 int timeout_ms_,
                                                 unsigned char routing_id_[255],
-                                                size_t *routing_id_size_)
+                                                size_t *routing_id_size_,
+                                                zlink_monitor_event_t *event_out_ = NULL)
 {
     const int slice_ms = 200;
     return zlink_test_wait_until_step (timeout_ms_, slice_ms, [=] {
@@ -268,6 +273,8 @@ bool wait_for_monitor_ready_recv_with_activity (void *monitor_,
                 if (event.routing_id.size > 0)
                     memcpy (routing_id_, event.routing_id.data, event.routing_id.size);
             }
+            if (event_out_)
+                *event_out_ = event;
             return true;
         }
         return false;
@@ -827,10 +834,18 @@ void run_dealer_router_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t
 
     unsigned char routing_id[255];
     size_t routing_id_size = 0;
+    zlink_monitor_event_t server_ready;
+    memset (&server_ready, 0, sizeof (server_ready));
     const bool ready = wait_for_monitor_ready_recv_with_activity (
-      monitor, server, 3000, routing_id, &routing_id_size);
+      monitor, server, 3000, routing_id, &routing_id_size, &server_ready);
     TEST_ASSERT_TRUE (ready);
     TEST_ASSERT_TRUE (routing_id_size > 0);
+    TEST_ASSERT_EQUAL_UINT64 (1, server_ready.value);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            server_ready.transport_lane);
+    TEST_ASSERT_TRUE (
+      (server_ready.flags & ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE)
+      != 0);
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_send (client, "ping", 4, 0));
 
@@ -893,12 +908,17 @@ void run_router_router_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t
 
     unsigned char routing_id[255];
     size_t routing_id_size = 0;
+    zlink_monitor_event_t server_ready;
+    memset (&server_ready, 0, sizeof (server_ready));
     const bool ready = wait_for_monitor_ready_recv_with_activity (
-      monitor, server, 3000, routing_id, &routing_id_size);
+      monitor, server, 3000, routing_id, &routing_id_size, &server_ready);
     TEST_ASSERT_TRUE (ready);
     TEST_ASSERT_TRUE (routing_id_size > 0);
     TEST_ASSERT_EQUAL_INT (sizeof (client_id) - 1, static_cast<int> (routing_id_size));
     TEST_ASSERT_EQUAL_MEMORY (client_id, routing_id, routing_id_size);
+    TEST_ASSERT_EQUAL_UINT64 (1, server_ready.value);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            server_ready.transport_lane);
 
     TEST_ASSERT_EQUAL_INT (static_cast<int> (sizeof (server_id) - 1),
                            TEST_ASSERT_SUCCESS_ERRNO (zlink_send (
@@ -1124,10 +1144,9 @@ void test_monitor_context_snapshot_tracks_one_pending_event_exactly ()
     test_context_socket_close_zero_linger (server);
 }
 
-//  inproc has no engine handshake, so a paired transport reports its
-//  Application and Completion lane readiness from the socket itself. Both
-//  sockets must observe exactly one ready event per connection, whichever of
-//  bind and connect happens first.
+// Inproc has no engine handshake. A DEALER-ROUTER pair becomes ready from its
+// one Application pipe, and both sockets must observe exactly one logical
+// ready event whichever of bind and connect happens first.
 void run_inproc_dealer_router_ready (bool connect_before_bind_, const char *endpoint_)
 {
     void *server = test_context_socket (ZLINK_SOCKET_ROUTER);
@@ -1160,9 +1179,22 @@ void run_inproc_dealer_router_ready (bool connect_before_bind_, const char *endp
 
     unsigned char routing_id[255];
     size_t routing_id_size = 0;
+    zlink_monitor_event_t server_ready;
+    zlink_monitor_event_t client_ready;
+    memset (&server_ready, 0, sizeof (server_ready));
+    memset (&client_ready, 0, sizeof (client_ready));
     TEST_ASSERT_TRUE (wait_for_monitor_ready_recv_with_activity (
-      server_monitor, server, 3000, routing_id, &routing_id_size));
-    TEST_ASSERT_TRUE (wait_for_monitor_ready_recv (client_monitor, 3000));
+      server_monitor, server, 3000, routing_id, &routing_id_size,
+      &server_ready));
+    TEST_ASSERT_TRUE (
+      wait_for_monitor_ready_recv (client_monitor, 3000, &client_ready));
+
+    TEST_ASSERT_EQUAL_UINT64 (1, server_ready.value);
+    TEST_ASSERT_EQUAL_UINT64 (1, client_ready.value);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            server_ready.transport_lane);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            client_ready.transport_lane);
 
     TEST_ASSERT_EQUAL_UINT64 (0, count_extra_ready_events (server_monitor));
     TEST_ASSERT_EQUAL_UINT64 (0, count_extra_ready_events (client_monitor));
@@ -1295,11 +1327,21 @@ void run_ws_dealer_router_ready (bool secure_)
 
     unsigned char routing_id[255];
     size_t routing_id_size = 0;
+    zlink_monitor_event_t server_ready;
+    zlink_monitor_event_t client_ready;
+    memset (&server_ready, 0, sizeof (server_ready));
+    memset (&client_ready, 0, sizeof (client_ready));
     TEST_ASSERT_TRUE (wait_for_monitor_ready_recv_with_activity (
-      server_monitor, server, 5000, routing_id, &routing_id_size));
-    TEST_ASSERT_TRUE (wait_for_monitor_ready_recv (client_monitor, 5000));
+      server_monitor, server, 5000, routing_id, &routing_id_size,
+      &server_ready));
+    TEST_ASSERT_TRUE (
+      wait_for_monitor_ready_recv (client_monitor, 5000, &client_ready));
     TEST_ASSERT_EQUAL_UINT64 (sizeof (dealer_id) - 1, routing_id_size);
     TEST_ASSERT_EQUAL_MEMORY (dealer_id, routing_id, routing_id_size);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            server_ready.transport_lane);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            client_ready.transport_lane);
     TEST_ASSERT_EQUAL_UINT64 (0, count_extra_ready_events (server_monitor));
     TEST_ASSERT_EQUAL_UINT64 (0, count_extra_ready_events (client_monitor));
 
@@ -1352,12 +1394,12 @@ void test_inproc_two_dealers_ready_once_each ()
 }
 
 #if defined ZLINK_HAVE_WS
-void test_ws_dealer_router_ready_once_after_both_lanes ()
+void test_ws_dealer_router_ready_once_on_application_lane ()
 {
     run_ws_dealer_router_ready (false);
 }
 #if defined ZLINK_HAVE_WSS
-void test_wss_dealer_router_ready_once_after_both_lanes ()
+void test_wss_dealer_router_ready_once_on_application_lane ()
 {
     run_ws_dealer_router_ready (true);
 }
@@ -1517,9 +1559,9 @@ int main ()
     RUN_TEST (test_inproc_dealer_router_ready_after_pending_connect);
     RUN_TEST (test_inproc_two_dealers_ready_once_each);
 #if defined ZLINK_HAVE_WS
-    RUN_TEST (test_ws_dealer_router_ready_once_after_both_lanes);
+    RUN_TEST (test_ws_dealer_router_ready_once_on_application_lane);
 #if defined ZLINK_HAVE_WSS
-    RUN_TEST (test_wss_dealer_router_ready_once_after_both_lanes);
+    RUN_TEST (test_wss_dealer_router_ready_once_on_application_lane);
 #endif
 #endif
     RUN_TEST (test_router_router_ready_with_monitor_recv_and_socket_recv);

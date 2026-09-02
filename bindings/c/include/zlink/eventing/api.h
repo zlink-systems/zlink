@@ -156,8 +156,9 @@ typedef struct zlink_monitor_status_t
     /* Largest accounted message admitted by the empty-pipe oversize rule. */
     uint64_t oversize_message_admission_max_bytes;
 
-    /* Paired DEALER/ROUTER completion-lane receive-flow observation
-     * (core-byte-hwm-flow-control-plan.ko.md §6). Present since ABI 4. */
+    /* DEALER/ROUTER receive-flow observation for the affected Application
+     * pipe, independent of whether control uses a count-1 Application or
+     * count-2 Completion connection. Present since ABI 4. */
 
     /* Current count of application pipes this socket sees as remote-PAUSED. */
     uint64_t flow_paused_connections;

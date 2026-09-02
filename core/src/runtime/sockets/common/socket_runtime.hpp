@@ -68,19 +68,25 @@ struct socket_monitor_event_record_t
 
 struct socket_endpoint_pipe_t
 {
-    socket_endpoint_pipe_t () : endpoint (NULL), pipe (NULL), local_type (endpoint_type_none) {}
+    socket_endpoint_pipe_t () : endpoint (NULL), pipe (NULL), local_type (endpoint_type_none),
+                                transport_lane (transport_lane_application) {}
     socket_endpoint_pipe_t (own_t *endpoint_, pipe_t *pipe_, endpoint_type_t local_type_) :
-        endpoint (endpoint_), pipe (pipe_), local_type (local_type_)
+        endpoint (endpoint_), pipe (pipe_), local_type (local_type_),
+        transport_lane (transport_lane_application)
     {
     }
     socket_endpoint_pipe_t (own_t *endpoint_,
                             pipe_t *pipe_,
                             endpoint_type_t local_type_,
-                            const std::shared_ptr<transport_pair_state_t> &pair_state_) :
+                            const std::shared_ptr<transport_pair_state_t> &pair_state_,
+                            const std::shared_ptr<struct transport_pair_connect_intent_t> &intent_,
+                            transport_lane_t lane_) :
         endpoint (endpoint_),
         pipe (pipe_),
         local_type (local_type_),
-        transport_pair_state (pair_state_)
+        transport_pair_state (pair_state_),
+        transport_pair_connect_intent (intent_),
+        transport_lane (lane_)
     {
     }
 
@@ -91,8 +97,44 @@ struct socket_endpoint_pipe_t
     //  one endpoint can stop the whole pair from reconnecting. Both lanes of
     //  one connect share this state and the same endpoint key.
     std::shared_ptr<transport_pair_state_t> transport_pair_state;
+    std::shared_ptr<struct transport_pair_connect_intent_t>
+      transport_pair_connect_intent;
+    transport_lane_t transport_lane;
 };
 typedef std::multimap<std::string, socket_endpoint_pipe_t> socket_endpoints_t;
+
+//  Immutable connect-time inputs shared by the Application-first endpoint and
+//  its optional Completion child. Only the socket mailbox owner publishes the
+//  exact generation and owner connection that materialized that child.
+struct transport_pair_connect_intent_t
+{
+    transport_pair_connect_intent_t (
+      const std::string &endpoint_uri_, const std::string &protocol_,
+      const std::string &address_, const options_t &options_, uint64_t pair_id_,
+      const std::shared_ptr<transport_pair_state_t> &pair_state_) :
+        endpoint_uri (endpoint_uri_),
+        protocol (protocol_),
+        address (address_),
+        connect_options (options_),
+        pair_id (pair_id_),
+        pair_state (pair_state_),
+        completion_generation (0),
+        completion_owner_connection_id (0)
+    {
+    }
+
+    const std::string endpoint_uri;
+    const std::string protocol;
+    const std::string address;
+    const options_t connect_options;
+    const uint64_t pair_id;
+    const std::shared_ptr<transport_pair_state_t> pair_state;
+    // The Completion child is reusable across a shared reconnect, but its
+    // publication belongs to one exact Application owner generation at a time.
+    // A stale cancel must never retire a child already adopted by a newer one.
+    uint64_t completion_generation;
+    uint64_t completion_owner_connection_id;
+};
 
 class socket_inprocs_t
 {
@@ -200,8 +242,10 @@ struct socket_monitor_runtime_t
       transport_lane_t lane_,
       uint64_t pair_id_,
       uint64_t generation_);
-    void erase_transport_pair_readiness_for_endpoint (
-      const endpoint_uri_pair_t &endpoint_uri_pair_);
+    bool erase_transport_pair_readiness (
+      const endpoint_uri_pair_t &endpoint_uri_pair_,
+      uint64_t pair_id_,
+      uint64_t generation_);
     void reset_worker_state (uint64_t hwm_bytes_, uint64_t event_accounted_bytes_);
     void start_task (uint64_t task_id_);
     bool dequeue_worker_event_nowait (socket_monitor_event_record_t *out_);
@@ -798,6 +842,7 @@ class socket_lifecycle_coordinator_t
         async_processing_done (true),
         async_processing_started (false),
         async_quiesce_completed (false),
+        public_multipart_control_boundary (false),
         _previous_thread_public_api_sync_owner (NULL)
     {
     }
@@ -822,6 +867,9 @@ class socket_lifecycle_coordinator_t
     bool enter_public_api_and_lock_sync ();
     bool begin_close_or_fail_busy ();
     bool public_close_requested () const;
+    bool public_multipart_send_active () const;
+    void hold_public_multipart_control_boundary ();
+    void release_public_multipart_control_boundary ();
     bool public_api_sync_held () const;
     bool public_api_sync_owned_by_current_thread () const;
     void lock_public_api_sync ();
@@ -867,6 +915,10 @@ class socket_lifecycle_coordinator_t
     std::atomic<bool> async_processing_done;
     std::atomic<bool> async_processing_started;
     std::atomic<bool> async_quiesce_completed;
+    // Completion-aware part APIs stage a multipart locally.  Keep the
+    // control-ordering boundary alive while the multipart marker is handed
+    // off to the complete-record submit.
+    std::atomic<bool> public_multipart_control_boundary;
     mutex_t async_done_mu;
     condition_variable_t async_done_cv;
 

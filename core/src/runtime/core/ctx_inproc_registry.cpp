@@ -8,6 +8,7 @@
 #include "core/ctx.hpp"
 #include "core/msg.hpp"
 #include "core/pipe.hpp"
+#include "protocol/zmp_control.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "utils/err.hpp"
 
@@ -199,7 +200,8 @@ size_t zlink::ctx_inproc_registry_t::materialize_pending_for_socket (
     for (std::vector<pending_connection_t>::const_iterator it =
            pending_connections.begin ();
          it != pending_connections.end (); ++it)
-        connect_inproc_sockets (bind_socket_, bind_options, *it, bind_side);
+        connect_inproc_sockets (bind_socket_, bind_options, *it, bind_side,
+                                true);
     return pending_connections.size ();
 }
 
@@ -221,14 +223,42 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
   socket_base_t *bind_socket_,
   const options_t &bind_options_,
   const pending_connection_t &pending_connection_,
-  side side_)
+  side side_,
+  bool materialization_)
 {
     pending_connection_.bind_pipe->set_tid (bind_socket_->get_tid ());
 
+    const uint64_t pair_id =
+      pending_connection_.connect_pipe->get_transport_pair_id ();
+    const uint64_t pair_generation =
+      pending_connection_.connect_pipe->get_transport_pair_generation ();
+    const bool paired = pair_id != 0;
     const bool completion =
-      pending_connection_.connect_pipe->get_transport_pair_id () != 0
-      && pending_connection_.connect_pipe->get_transport_lane ()
-           == transport_lane_completion;
+      paired && pending_connection_.connect_pipe->get_transport_lane ()
+                  == transport_lane_completion;
+    unsigned char lane_count =
+      paired ? zmp_control::expected_transport_lane_count (
+                 pending_connection_.endpoint.options.type,
+                 bind_options_.type)
+             : 0;
+    // Closing a connect-first socket materializes its otherwise ownerless
+    // pending half through an internal PAIR helper solely so the pipe
+    // termination handshake can complete. It is not a negotiated peer.
+    if (paired && lane_count == 0 && materialization_)
+        lane_count = 1;
+    if (paired && lane_count == 0) {
+        pending_connection_.connect_pipe->terminate (false);
+        pending_connection_.bind_pipe->terminate (false);
+        if (side_ == bind_side)
+            bind_socket_->send_inproc_connected (
+              pending_connection_.endpoint.socket);
+        return;
+    }
+    if (paired) {
+        pending_connection_.connect_pipe->set_transport_lane_count (
+          lane_count);
+        pending_connection_.bind_pipe->set_transport_lane_count (lane_count);
+    }
 
     // Pending inproc Application connections stage one routing-id frame
     // before the bind socket is known. Completion lanes deliberately stage no
@@ -253,7 +283,17 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
             pending_connection_.endpoint.options.maxmsgsize)
         : 0);
 
-    if (pending_connection_.connect_pipe->get_transport_pair_id () != 0) {
+    pending_connection_.connect_pipe->set_peer_routing_id (
+      bind_options_.routing_id, bind_options_.routing_id_size);
+    pending_connection_.bind_pipe->set_peer_routing_id (
+      pending_connection_.endpoint.options.routing_id,
+      pending_connection_.endpoint.options.routing_id_size);
+    pending_connection_.connect_pipe->set_peer_socket_type (
+      bind_options_.type);
+    pending_connection_.bind_pipe->set_peer_socket_type (
+      pending_connection_.endpoint.options.type);
+
+    if (paired) {
         const uintptr_t bind_instance =
           reinterpret_cast<uintptr_t> (bind_socket_);
         const uintptr_t connect_instance =
@@ -314,6 +354,20 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
               bind_socket_, pending_connection_.bind_pipe, true))
             return;
         bind_socket_->emit_inproc_connection_ready (pending_connection_.bind_pipe);
+    }
+
+    if (!completion && lane_count == 2u) {
+        const std::string endpoint_uri =
+          pending_connection_.connect_pipe->get_endpoint_pair ().identifier ();
+        if (pending_connection_.endpoint.socket
+              ->materialize_inproc_completion_lane (
+                bind_socket_, bind_options_, endpoint_uri, pair_id,
+                pair_generation, side_ == bind_side)
+            != 0) {
+            pending_connection_.connect_pipe->terminate (false);
+            pending_connection_.bind_pipe->terminate (false);
+            return;
+        }
     }
 
     if (!completion

@@ -205,6 +205,28 @@ inline bool socket_types_compatible (int local_type_, int peer_type_)
     }
 }
 
+//  The physical lane topology is owned by the ZMP socket-pair contract, not by
+//  either endpoint in isolation. Keep this function symmetric: both peers run
+//  it after HELLO and must advertise the same READY Lane-Count without
+//  negotiation or a compatibility fallback.
+inline unsigned char expected_transport_lane_count (int local_type_,
+                                                     int peer_type_)
+{
+    const bool local_dealer = local_type_ == ZLINK_CORE_SOCKET_DEALER;
+    const bool local_router = local_type_ == ZLINK_CORE_SOCKET_ROUTER;
+    const bool peer_dealer = peer_type_ == ZLINK_CORE_SOCKET_DEALER;
+    const bool peer_router = peer_type_ == ZLINK_CORE_SOCKET_ROUTER;
+
+    if (!(local_dealer || local_router) || !(peer_dealer || peer_router))
+        return 0;
+    return local_router && peer_router ? 2u : 1u;
+}
+
+inline unsigned int expected_transport_ready_mask (unsigned char lane_count_)
+{
+    return lane_count_ == 1u ? 1u : lane_count_ == 2u ? 3u : 0u;
+}
+
 inline int parse_hello_frame (const unsigned char *data_,
                               size_t size_,
                               int local_type_,

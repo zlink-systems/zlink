@@ -371,6 +371,60 @@ void test_completion_pair_does_not_consume_application_reservation ()
     release_pipepair_queue_handles (&registry, &first, &second);
 }
 
+void test_single_lane_reply_is_application_accounting_only ()
+{
+    zlink::ctx_physical_queue_registry_t registry;
+    zlink::physical_queue_handle_t outbound;
+    zlink::physical_queue_handle_t inbound;
+    zlink::auto_hwm_budget_input_t input;
+    input.enabled = false;
+    zlink::auto_hwm_context_plan_t context;
+    zlink::auto_hwm_context_plan_make (input, &context);
+    TEST_ASSERT_EQUAL_INT (
+      0, registry.create_pipepair_queues (
+           0, 0, zlink::physical_queue_class_application,
+           zlink::auto_hwm_role_routed, false, context, &outbound, &inbound));
+
+    const uint64_t first_frame = 91;
+    const uint64_t final_frame = 37;
+    registry.account_provisional_frame (outbound, first_frame);
+
+    zlink::physical_queue_registry_snapshot_t provisional;
+    registry.snapshot (&provisional);
+    TEST_ASSERT_EQUAL_UINT64 (2,
+                              provisional.active_application_direction_count);
+    TEST_ASSERT_EQUAL_UINT64 (0,
+                              provisional.active_completion_direction_count);
+    TEST_ASSERT_EQUAL_UINT64 (
+      first_frame, provisional.application_provisional_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (
+      first_frame, provisional.application_current_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0,
+                              provisional.completion_current_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0,
+                              provisional.completion_pending_message_count);
+
+    // counted_message=true models a terminal reply. Its record kind does not
+    // reclassify a single Application physical queue as Completion.
+    registry.commit_message (outbound, final_frame, true, false);
+
+    zlink::physical_queue_registry_snapshot_t committed;
+    registry.snapshot (&committed);
+    TEST_ASSERT_EQUAL_UINT64 (
+      first_frame + final_frame, committed.application_current_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (
+      0, committed.application_provisional_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0,
+                              committed.completion_current_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0,
+                              committed.completion_peak_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0,
+                              committed.completion_pending_message_count);
+
+    registry.release_committed_frame (outbound, first_frame + final_frame, 0);
+    release_pipepair_queue_handles (&registry, &outbound, &inbound);
+}
+
 void test_policy_disabled_pair_does_not_consume_application_reservation ()
 {
     zlink::auto_hwm_budget_input_t input;
@@ -673,6 +727,7 @@ int main ()
     RUN_TEST (test_insufficient_budget_keeps_role_minima_visible);
     RUN_TEST (test_atomic_pair_minimum_reservation_has_one_linearization_winner);
     RUN_TEST (test_completion_pair_does_not_consume_application_reservation);
+    RUN_TEST (test_single_lane_reply_is_application_accounting_only);
     RUN_TEST (test_policy_disabled_pair_does_not_consume_application_reservation);
     RUN_TEST (test_last_endpoint_retirement_reconciles_record_owned_accounting);
     RUN_TEST (test_decoder_reservation_enforces_incremental_hwm_and_final_oversize);

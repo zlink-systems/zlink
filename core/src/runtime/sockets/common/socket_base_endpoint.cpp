@@ -15,6 +15,7 @@
 #include "core/pipe.hpp"
 #include "core/session_base.hpp"
 #include "core/transport_pair_policy.hpp"
+#include "protocol/zmp_control.hpp"
 #include "utils/random.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "transports/ipc/ipc_address.hpp"
@@ -54,7 +55,79 @@ uint64_t allocate_transport_pair_id ()
           reinterpret_cast<unsigned char *> (&pair_id), sizeof (pair_id));
     return pair_id;
 }
+
+#ifdef ZLINK_BUILD_TESTS
+std::atomic<zlink::transport_pair_owner_after_claim_test_hook_fn>
+  owner_after_claim_test_hook (NULL);
+std::atomic<void *> owner_after_claim_test_hook_userdata (NULL);
+
+struct deferred_transport_pair_owner_test_request_t
+{
+    deferred_transport_pair_owner_test_request_t () :
+        owner (NULL),
+        session (NULL),
+        peer_socket_type (0),
+        connection_id (0),
+        pair_id (0),
+        generation (0),
+        lane (0),
+        active (false)
+    {
+    }
+
+    zlink::socket_base_t *owner;
+    zlink::session_base_t *session;
+    int peer_socket_type;
+    uint64_t connection_id;
+    uint64_t pair_id;
+    uint64_t generation;
+    unsigned char lane;
+    bool active;
+};
+
+std::mutex deferred_owner_test_sync;
+deferred_transport_pair_owner_test_request_t deferred_owner_test_request;
+#endif
 }
+
+#ifdef ZLINK_BUILD_TESTS
+void zlink::test_set_transport_pair_owner_after_claim_hook (
+  transport_pair_owner_after_claim_test_hook_fn hook_, void *userdata_)
+{
+    if (!hook_) {
+        owner_after_claim_test_hook.store (NULL, std::memory_order_release);
+        owner_after_claim_test_hook_userdata.store (NULL,
+                                                    std::memory_order_release);
+        return;
+    }
+    owner_after_claim_test_hook_userdata.store (userdata_,
+                                                std::memory_order_release);
+    owner_after_claim_test_hook.store (hook_, std::memory_order_release);
+}
+
+bool zlink::socket_base_t::test_resume_deferred_transport_pair_owner_request ()
+{
+    deferred_transport_pair_owner_test_request_t request;
+    {
+        std::lock_guard<std::mutex> lock (deferred_owner_test_sync);
+        if (!deferred_owner_test_request.active
+            || deferred_owner_test_request.owner != this)
+            return false;
+        request = deferred_owner_test_request;
+        deferred_owner_test_request.active = false;
+        deferred_owner_test_request.owner = NULL;
+        deferred_owner_test_request.session = NULL;
+    }
+
+    // Requeue the exact original request. The session's pre-reserved decision
+    // seqnum keeps it alive, and the normal handler retires the socket command
+    // seqnum plus the owner-progress lease on every stale/canceled path.
+    send_transport_pair_owner_request (
+      this, request.session, request.peer_socket_type, request.connection_id,
+      request.pair_id, request.generation, request.lane);
+    return true;
+}
+#endif
 
 int zlink::socket_base_t::parse_uri (const char *uri_, std::string &scheme_, std::string &path_)
 {
@@ -179,12 +252,31 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
           options.type == ZLINK_CORE_SOCKET_DEALER || options.type == ZLINK_CORE_SOCKET_ROUTER;
         const uint64_t pair_id = paired_transport ? allocate_transport_pair_id () : 0;
         const uint64_t pair_generation = paired_transport ? 1 : 0;
-        const size_t lane_count = paired_transport ? 2 : 1;
+        const unsigned char transport_lane_count =
+          paired_transport && peer.socket
+            ? zmp_control::expected_transport_lane_count (options.type,
+                                                          peer.options.type)
+            : 0;
+        if (paired_transport && peer.socket && transport_lane_count == 0) {
+            // find_endpoint() pins the bind socket until the first bind
+            // command consumes that reservation. No lane is created for an
+            // incompatible peer, so release the reservation explicitly.
+            send_inproc_connected (peer.socket);
+            errno = EPROTONOSUPPORT;
+            return -1;
+        }
+        // A connect-first inproc cannot know the peer type yet. It creates
+        // only Application; the registry publishes the final lane count and
+        // materializes Completion if the later bind reveals ROUTER-ROUTER.
+        const size_t lane_count =
+          peer.socket && transport_lane_count == 2u ? 2u : 1u;
 
         const uint64_t sndhwm = options.sndhwm;
         const uint64_t rcvhwm = options.rcvhwm;
 
         const bool conflate = get_effective_conflate_option (options);
+        bool peer_seqnum_reserved = peer.socket != NULL;
+        pipe_t *paired_application_pipe = NULL;
         for (size_t lane_index = 0; lane_index < lane_count; ++lane_index) {
             const transport_lane_t lane =
               lane_index == 0 ? transport_lane_application
@@ -198,13 +290,19 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
                 : physical_queue_class_application;
             object_t *parents[2] = {this, peer.socket == NULL ? this : peer.socket};
             pipe_t *new_pipes[2] = {NULL, NULL};
-            uint64_t hwms[2] = {conflate ? 0 : sndhwm, conflate ? 0 : rcvhwm};
-            bool conflates[2] = {conflate, conflate};
-            const physical_queue_endpoint_policy_t local_attach_policy =
-              make_auto_hwm_queue_policy (
-                std::shared_ptr<physical_queue_record_t> (), true);
+            uint64_t hwms[2] = {
+              lane == transport_lane_completion || conflate ? 0 : sndhwm,
+              lane == transport_lane_completion || conflate ? 0 : rcvhwm};
+            bool conflates[2] = {
+              lane == transport_lane_application && conflate,
+              lane == transport_lane_application && conflate};
+            physical_queue_endpoint_policy_t local_attach_policy;
             physical_queue_endpoint_policy_t peer_attach_policy;
-            if (peer.socket)
+            if (lane == transport_lane_application) {
+                local_attach_policy = make_auto_hwm_queue_policy (
+                  std::shared_ptr<physical_queue_record_t> (), true);
+            }
+            if (lane == transport_lane_application && peer.socket)
                 peer_attach_policy = peer.socket->make_auto_hwm_queue_policy (
                   std::shared_ptr<physical_queue_record_t> (), false);
             const bool planning_enabled =
@@ -216,17 +314,20 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
                 : peer_attach_policy.role;
             rc = pipepair (parents, new_pipes, hwms, conflates, false, lane,
                            reservation_role, planning_enabled, queue_class);
-            if (rc != 0)
+            if (rc != 0) {
+                if (peer_seqnum_reserved)
+                    send_inproc_connected (peer.socket);
+                if (paired_application_pipe)
+                    paired_application_pipe->terminate (false);
                 return -1;
-
-            if (lane == transport_lane_completion) {
-                hwms[0] = 0;
-                hwms[1] = 0;
-                new_pipes[0]->set_hwms (hwms[1], hwms[0]);
-                new_pipes[1]->set_hwms (hwms[0], hwms[1]);
             }
+
             new_pipes[0]->set_transport_pair (lane, pair_id, pair_generation);
             new_pipes[1]->set_transport_pair (lane, pair_id, pair_generation);
+            if (paired_transport && transport_lane_count != 0) {
+                new_pipes[0]->set_transport_lane_count (transport_lane_count);
+                new_pipes[1]->set_transport_lane_count (transport_lane_count);
+            }
             // Inproc has no engine/session boundary that would normally
             // publish endpoint metadata.  Give both pipe halves the same
             // immutable logical endpoint identity before either half is
@@ -275,6 +376,7 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
                 }
                 options_t lane_options = options;
                 lane_options.transport_lane = lane;
+                lane_options.transport_lane_count = 0;
                 lane_options.transport_pair_id = pair_id;
                 lane_options.transport_pair_generation = pair_generation;
                 lane_options.transport_pair_initiator = true;
@@ -282,8 +384,6 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
                 connected_inproc_now =
                   pend_connection (std::string (endpoint_uri_), endpoint, new_pipes);
             } else {
-                if (lane_index > 0)
-                    peer.socket->inc_seqnum ();
                 if (lane == transport_lane_application
                     && peer.options.recv_routing_id)
                     send_routing_id (new_pipes[0], options);
@@ -313,7 +413,20 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
                     new_pipes[0]->hold_writes_until_transport_pair_ready ();
                     new_pipes[1]->hold_writes_until_transport_pair_ready ();
                 }
-                send_bind (peer.socket, new_pipes[1], false);
+                const bool bind_sent =
+                  send_bind (peer.socket, new_pipes[1], lane_index != 0);
+                if (!bind_sent) {
+                    if (peer_seqnum_reserved)
+                        send_inproc_connected (peer.socket);
+                    new_pipes[0]->terminate (false);
+                    new_pipes[1]->terminate (false);
+                    if (paired_application_pipe)
+                        paired_application_pipe->terminate (false);
+                    errno = ECANCELED;
+                    return -1;
+                }
+                if (lane_index == 0)
+                    peer_seqnum_reserved = false;
                 // send_bind() transfers paired pipe admission to the peer's
                 // mailbox. Its attach path publishes pair readiness after
                 // both lanes are validated and Router RID adoption completes;
@@ -327,6 +440,8 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
             if (connected_inproc_now)
                 emit_inproc_connection_ready (new_pipes[0]);
             endpoint_runtime ().inprocs.emplace (endpoint_uri_, new_pipes[0]);
+            if (paired_transport && lane == transport_lane_application)
+                paired_application_pipe = new_pipes[0];
         }
 
         endpoint_runtime ().set_last_endpoint (endpoint_uri_);
@@ -336,124 +451,223 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
     if (unlikely (0 != endpoint_runtime ().endpoints.count (endpoint_uri_)))
         return 0;
 
-    io_thread_t *io_thread = choose_io_thread_transport (options.affinity);
-    if (!io_thread) {
-        errno = EMTHREAD;
-        return -1;
-    }
-
-    const bool subscribe_to_all = false;
     const bool paired_transport =
       options.type == ZLINK_CORE_SOCKET_DEALER || options.type == ZLINK_CORE_SOCKET_ROUTER;
     const uint64_t pair_id = paired_transport ? allocate_transport_pair_id () : 0;
     const std::shared_ptr<transport_pair_state_t> pair_state =
       paired_transport ? std::make_shared<transport_pair_state_t> ()
                        : std::shared_ptr<transport_pair_state_t> ();
-    const uint64_t pair_generation =
-      pair_state ? pair_state->current_generation () : 0;
-    const size_t lane_count = paired_transport ? 2 : 1;
+    options_t lane_options = options;
+    if (paired_transport) {
+        lane_options.zmp_metadata = true;
+        lane_options.transport_lane = transport_lane_application;
+        lane_options.transport_lane_count = 0;
+        lane_options.transport_pair_id = pair_id;
+        lane_options.transport_pair_generation = pair_state->current_generation ();
+        lane_options.transport_pair_initiator = true;
+        lane_options.transport_pair_state = pair_state;
+    }
 
-    for (size_t lane_index = 0; lane_index < lane_count; ++lane_index) {
-        options_t lane_options = options;
-        if (paired_transport) {
-            lane_options.zmp_metadata = true;
-            lane_options.transport_lane =
-              lane_index == 0 ? transport_lane_application : transport_lane_completion;
-            lane_options.transport_pair_id = pair_id;
-            lane_options.transport_pair_generation = pair_generation;
-            lane_options.transport_pair_initiator = true;
-            lane_options.transport_pair_state = pair_state;
-            if (lane_options.transport_lane == transport_lane_completion) {
-                lane_options.sndhwm = 0;
-                lane_options.rcvhwm = 0;
-                lane_options.sndbuf =
-                  transport_pair_policy::completion_socket_buffer (lane_options.sndbuf);
-                lane_options.rcvbuf =
-                  transport_pair_policy::completion_socket_buffer (lane_options.rcvbuf);
-            }
+    const endpoint_uri_pair_t endpoint_pair =
+      make_unconnected_connect_endpoint_pair (endpoint_uri_);
+    const std::shared_ptr<transport_pair_connect_intent_t> intent =
+      paired_transport
+        ? std::make_shared<transport_pair_connect_intent_t> (
+            endpoint_uri_, protocol, address, options, pair_id, pair_state)
+        : std::shared_ptr<transport_pair_connect_intent_t> ();
+    io_thread_t *io_thread = choose_io_thread_transport (lane_options.affinity);
+    if (!io_thread) {
+        errno = EMTHREAD;
+        return -1;
+    }
+    return create_connect_session (protocol, address, endpoint_pair, io_thread,
+                                   lane_options, pair_state, intent);
+}
+
+int zlink::socket_base_t::materialize_inproc_completion_lane (
+  socket_base_t *bind_socket_, const options_t &bind_options_,
+  const std::string &endpoint_uri_, uint64_t pair_id_,
+  uint64_t pair_generation_, bool bind_side_direct_)
+{
+    if (!bind_socket_ || pair_id_ == 0 || pair_generation_ == 0
+        || zmp_control::expected_transport_lane_count (
+             options.type, bind_options_.type)
+             != 2u) {
+        errno = EPROTO;
+        return -1;
+    }
+
+    object_t *parents[2] = {this, bind_socket_};
+    pipe_t *new_pipes[2] = {NULL, NULL};
+    const uint64_t hwms[2] = {0, 0};
+    const bool conflates[2] = {false, false};
+    if (pipepair (parents, new_pipes, hwms, conflates, false,
+                  transport_lane_completion, auto_hwm_role_none, false,
+                  physical_queue_class_application)
+        != 0)
+        return -1;
+
+    new_pipes[0]->set_transport_pair (
+      transport_lane_completion, pair_id_, pair_generation_);
+    new_pipes[1]->set_transport_pair (
+      transport_lane_completion, pair_id_, pair_generation_);
+    new_pipes[0]->set_transport_lane_count (2);
+    new_pipes[1]->set_transport_lane_count (2);
+    new_pipes[0]->set_locally_initiated (true);
+    new_pipes[0]->set_endpoint_pair (
+      make_unconnected_connect_endpoint_pair (endpoint_uri_));
+    new_pipes[1]->set_endpoint_pair (
+      make_unconnected_bind_endpoint_pair (endpoint_uri_));
+    new_pipes[0]->set_max_message_bytes (
+      finite_max_message_bytes (bind_options_.maxmsgsize));
+    new_pipes[1]->set_max_message_bytes (
+      finite_max_message_bytes (options.maxmsgsize));
+    new_pipes[0]->set_peer_routing_id (bind_options_.routing_id,
+                                       bind_options_.routing_id_size);
+    new_pipes[1]->set_peer_routing_id (options.routing_id,
+                                       options.routing_id_size);
+    new_pipes[0]->set_peer_socket_type (bind_options_.type);
+    new_pipes[1]->set_peer_socket_type (options.type);
+    const uintptr_t bind_instance =
+      reinterpret_cast<uintptr_t> (bind_socket_);
+    const uintptr_t connect_instance = reinterpret_cast<uintptr_t> (this);
+    new_pipes[0]->set_transport_peer_identity (
+      reinterpret_cast<const unsigned char *> (&bind_instance),
+      sizeof (bind_instance));
+    new_pipes[1]->set_transport_peer_identity (
+      reinterpret_cast<const unsigned char *> (&connect_instance),
+      sizeof (connect_instance));
+
+    bool bind_sent = false;
+    if (bind_side_direct_) {
+        command_t cmd;
+        cmd.type = command_t::bind;
+        cmd.args.bind.pipe = new_pipes[1];
+        if (new_pipes[1]->retain_lifetime_ref ()) {
+            bind_socket_->inc_seqnum ();
+            bind_socket_->process_command (cmd);
+            bind_sent = true;
         }
+    } else {
+        bind_sent = new_pipes[0]->send_bind (
+          bind_socket_, new_pipes[1], true);
+    }
 
-        address_t *paddr = new (std::nothrow) address_t (protocol, address, this->get_ctx ());
-        alloc_assert (paddr);
-        if (resolve_connect_address (protocol, address, paddr) != 0) {
-            LIBZLINK_DELETE (paddr);
+    if (!bind_sent) {
+        new_pipes[0]->terminate (false);
+        new_pipes[1]->terminate (false);
+        errno = ECANCELED;
+        return -1;
+    }
+
+    attach_pipe (new_pipes[0], false, true, true);
+    emit_inproc_connection_ready (new_pipes[0]);
+    bind_socket_->emit_inproc_connection_ready (new_pipes[1]);
+    endpoint_runtime ().inprocs.emplace (endpoint_uri_.c_str (), new_pipes[0]);
+    return 0;
+}
+
+int zlink::socket_base_t::create_connect_session (
+  const std::string &protocol_, const std::string &address_,
+  const endpoint_uri_pair_t &endpoint_pair_, io_thread_t *io_thread_,
+  const options_t &lane_options_,
+  const std::shared_ptr<transport_pair_state_t> &pair_state_,
+  const std::shared_ptr<transport_pair_connect_intent_t> &intent_)
+{
+    address_t *paddr =
+      new (std::nothrow) address_t (protocol_, address_, this->get_ctx ());
+    alloc_assert (paddr);
+    if (resolve_connect_address (protocol_, address_, paddr) != 0) {
+        LIBZLINK_DELETE (paddr);
+        return -1;
+    }
+
+    return create_resolved_connect_session (
+      paddr, endpoint_pair_, io_thread_, lane_options_, pair_state_, intent_);
+}
+
+int zlink::socket_base_t::create_resolved_connect_session (
+  address_t *paddr, const endpoint_uri_pair_t &endpoint_pair_,
+  io_thread_t *io_thread_, const options_t &lane_options_,
+  const std::shared_ptr<transport_pair_state_t> &pair_state_,
+  const std::shared_ptr<transport_pair_connect_intent_t> &intent_)
+{
+    zlink_assert (paddr);
+    const bool paired_transport = pair_state_.get () != NULL;
+    const bool subscribe_to_all = false;
+    const uint64_t pair_id = paired_transport ? intent_->pair_id : 0;
+    const uint64_t pair_generation =
+      paired_transport ? pair_state_->current_generation () : 0;
+
+    session_base_t *session = session_base_t::create (
+      io_thread_, true, this, lane_options_, paddr);
+    errno_assert (session);
+    pipe_t *newpipe = NULL;
+
+    if (lane_options_.immediate != 1 || subscribe_to_all) {
+        object_t *parents[2] = {this, session};
+        pipe_t *new_pipes[2] = {NULL, NULL};
+        const bool conflate = get_effective_conflate_option (lane_options_);
+        uint64_t hwms[2] = {conflate ? 0 : lane_options_.sndhwm,
+                            conflate ? 0 : lane_options_.rcvhwm};
+        bool conflates[2] = {conflate, conflate};
+        const physical_queue_endpoint_policy_t attach_policy =
+          make_auto_hwm_queue_policy (
+            std::shared_ptr<physical_queue_record_t> (), true);
+        const int rc = pipepair (
+          parents, new_pipes, hwms, conflates, true,
+          lane_options_.transport_lane, attach_policy.role,
+          attach_policy.planning_enabled, physical_queue_class_application, 1);
+        if (rc != 0) {
+            const int pipepair_errno = errno;
+            std::string failed_endpoint;
+            paddr->to_string (failed_endpoint);
+            event_connect_delayed (
+              make_unconnected_connect_endpoint_pair (failed_endpoint),
+              pipepair_errno);
+            launch_child (session);
+            term_child (session);
+            errno = pipepair_errno;
             return -1;
         }
-
-        session_base_t *session =
-          session_base_t::create (io_thread, true, this, lane_options, paddr);
-        errno_assert (session);
-        pipe_t *newpipe = NULL;
-        endpoint_uri_pair_t endpoint_pair =
-          make_unconnected_connect_endpoint_pair (endpoint_uri_);
-
-        if (lane_options.immediate != 1 || subscribe_to_all) {
-            object_t *parents[2] = {this, session};
-            pipe_t *new_pipes[2] = {NULL, NULL};
-            const bool conflate = get_effective_conflate_option (lane_options);
-            uint64_t hwms[2] = {conflate ? 0 : lane_options.sndhwm,
-                                conflate ? 0 : lane_options.rcvhwm};
-            bool conflates[2] = {conflate, conflate};
-            const physical_queue_endpoint_policy_t attach_policy =
-              make_auto_hwm_queue_policy (
-                std::shared_ptr<physical_queue_record_t> (), true);
-            rc = pipepair (parents, new_pipes, hwms, conflates, true,
-                           lane_options.transport_lane, attach_policy.role,
-                           attach_policy.planning_enabled,
-                           physical_queue_class_application, 1);
-            if (rc != 0) {
-                const int pipepair_errno = errno;
-                std::string failed_endpoint;
-                paddr->to_string (failed_endpoint);
-                event_connect_delayed (
-                  make_unconnected_connect_endpoint_pair (failed_endpoint),
-                  pipepair_errno);
-                launch_child (session);
-                term_child (session);
-                errno = pipepair_errno;
-                return -1;
-            }
-            new_pipes[0]->set_transport_pair (
-              lane_options.transport_lane, pair_id, pair_generation);
-            new_pipes[1]->set_transport_pair (
-              lane_options.transport_lane, pair_id, pair_generation);
-            new_pipes[0]->set_locally_initiated (paired_transport);
-
-            // Publish immutable endpoint metadata before either endpoint is
-            // attached or the session child is launched. The engine publishes
-            // the live connection id independently after it is ready.
-            endpoint_uri_pair_t pipe_endpoint_pair = endpoint_pair;
-            pipe_endpoint_pair.connection_id = 0;
-            new_pipes[0]->set_endpoint_pair (
-              ZLINK_MOVE (pipe_endpoint_pair));
-
-            if (!paired_transport)
-                attach_pipe (new_pipes[0], subscribe_to_all, true);
-            else if (lane_options.transport_lane
-                     == transport_lane_application) {
-                new_pipes[0]->hold_writes_until_transport_pair_ready ();
-                attach_pipe (new_pipes[0], subscribe_to_all, true, false);
-            } else
-                new_pipes[0]->set_event_sink (this);
-            newpipe = new_pipes[0];
-            session->attach_pipe (new_pipes[1]);
+        new_pipes[0]->set_transport_pair (
+          lane_options_.transport_lane, pair_id, pair_generation);
+        new_pipes[1]->set_transport_pair (
+          lane_options_.transport_lane, pair_id, pair_generation);
+        if (lane_options_.transport_lane_count != 0) {
+            new_pipes[0]->set_transport_lane_count (
+              lane_options_.transport_lane_count);
+            new_pipes[1]->set_transport_lane_count (
+              lane_options_.transport_lane_count);
         }
+        new_pipes[0]->set_locally_initiated (paired_transport);
 
-        std::string last_endpoint;
-        paddr->to_string (last_endpoint);
-        if (lane_index == 0)
-            endpoint_runtime ().set_last_endpoint (last_endpoint);
-        //  Both lanes of a pair share one endpoint key. The endpoint map is a
-        //  multimap, so every endpoint-scoped operation - disconnect above all
-        //  - reaches the whole pair without knowing that lanes exist.
-        if (paired_transport)
-            add_transport_pair_endpoint (
-              endpoint_pair, static_cast<own_t *> (session), newpipe,
-              pair_state);
-        else
-            add_endpoint (endpoint_pair, static_cast<own_t *> (session),
-                          newpipe);
+        endpoint_uri_pair_t pipe_endpoint_pair = endpoint_pair_;
+        pipe_endpoint_pair.connection_id = 0;
+        new_pipes[0]->set_endpoint_pair (ZLINK_MOVE (pipe_endpoint_pair));
+
+        if (!paired_transport)
+            attach_pipe (new_pipes[0], subscribe_to_all, true);
+        else if (lane_options_.transport_lane == transport_lane_application) {
+            new_pipes[0]->hold_writes_until_transport_pair_ready ();
+            attach_pipe (new_pipes[0], subscribe_to_all, true, false);
+        } else
+            new_pipes[0]->set_event_sink (this);
+        newpipe = new_pipes[0];
+        session->attach_pipe (new_pipes[1]);
     }
+
+    std::string last_endpoint;
+    paddr->to_string (last_endpoint);
+    if (!paired_transport
+        || lane_options_.transport_lane == transport_lane_application)
+        endpoint_runtime ().set_last_endpoint (last_endpoint);
+    if (paired_transport)
+        add_transport_pair_endpoint (
+          endpoint_pair_, static_cast<own_t *> (session), newpipe, pair_state_,
+          intent_, lane_options_.transport_lane);
+    else
+        add_endpoint (endpoint_pair_, static_cast<own_t *> (session), newpipe);
     return 0;
 }
 
@@ -519,12 +733,195 @@ void zlink::socket_base_t::add_transport_pair_endpoint (
   const endpoint_uri_pair_t &endpoint_pair_,
   own_t *endpoint_,
   pipe_t *pipe_,
-  const std::shared_ptr<transport_pair_state_t> &pair_state_)
+  const std::shared_ptr<transport_pair_state_t> &pair_state_,
+  const std::shared_ptr<transport_pair_connect_intent_t> &intent_,
+  transport_lane_t lane_)
 {
     launch_child (endpoint_);
     endpoint_runtime ().endpoints.ZLINK_MAP_INSERT_OR_EMPLACE (
       endpoint_pair_.identifier (),
-      endpoint_pipe_t (endpoint_, pipe_, endpoint_pair_.local_type, pair_state_));
+      endpoint_pipe_t (endpoint_, pipe_, endpoint_pair_.local_type, pair_state_,
+                       intent_, lane_));
+}
+
+void zlink::socket_base_t::process_transport_pair_owner_request (
+  session_base_t *session_, int peer_socket_type_, uint64_t connection_id_,
+  uint64_t pair_id_, uint64_t generation_, unsigned char lane_)
+{
+    unsigned char lane_count = 0;
+    int decision_error = 0;
+    std::shared_ptr<transport_pair_connect_intent_t> intent;
+
+    if (!session_
+        || !session_->claim_transport_pair_owner_request (
+          connection_id_, pair_id_, generation_)) {
+        decision_error = ECANCELED;
+    } else if (is_terminating () || _ctx_terminated) {
+        decision_error = ETERM;
+    } else if (connection_id_ == 0 || pair_id_ == 0
+               || generation_ == 0
+               || (lane_ != transport_lane_application
+                   && lane_ != transport_lane_completion)) {
+        decision_error = EPROTO;
+    } else {
+        const transport_lane_t lane =
+          static_cast<transport_lane_t> (lane_);
+        for (endpoints_t::iterator it = endpoint_runtime ().endpoints.begin (),
+                                   end = endpoint_runtime ().endpoints.end ();
+             it != end; ++it) {
+            endpoint_pipe_t &entry = it->second;
+            if (entry.endpoint != static_cast<own_t *> (session_)
+                || entry.transport_lane != lane
+                || !entry.transport_pair_state
+                || !entry.transport_pair_connect_intent
+                || entry.transport_pair_connect_intent->pair_id != pair_id_
+                || entry.transport_pair_state
+                     != entry.transport_pair_connect_intent->pair_state
+                || entry.transport_pair_state->current_generation ()
+                     != generation_)
+                continue;
+            intent = entry.transport_pair_connect_intent;
+            break;
+        }
+        if (!intent) {
+            decision_error = ECANCELED;
+        } else {
+            lane_count = zmp_control::expected_transport_lane_count (
+              options.type, peer_socket_type_);
+            if (lane_count == 0
+                || (lane == transport_lane_completion && lane_count != 2u)
+                || !intent->pair_state->set_expected_lane_count (lane_count))
+                decision_error = EPROTO;
+        }
+    }
+
+#ifdef ZLINK_BUILD_TESTS
+    if (decision_error == 0) {
+        const transport_pair_owner_after_claim_test_hook_fn hook =
+          owner_after_claim_test_hook.load (std::memory_order_acquire);
+        if (hook
+            && hook (connection_id_, pair_id_, generation_,
+                     owner_after_claim_test_hook_userdata.load (
+                       std::memory_order_acquire))) {
+            std::lock_guard<std::mutex> lock (deferred_owner_test_sync);
+            zlink_assert (!deferred_owner_test_request.active);
+            deferred_owner_test_request.owner = this;
+            deferred_owner_test_request.session = session_;
+            deferred_owner_test_request.peer_socket_type = peer_socket_type_;
+            deferred_owner_test_request.connection_id = connection_id_;
+            deferred_owner_test_request.pair_id = pair_id_;
+            deferred_owner_test_request.generation = generation_;
+            deferred_owner_test_request.lane = lane_;
+            deferred_owner_test_request.active = true;
+            return;
+        }
+    }
+#endif
+
+    address_t *prepared_completion_address = NULL;
+    std::unique_ptr<options_t> completion_options;
+    io_thread_t *completion_io_thread = NULL;
+    endpoint_uri_pair_t completion_endpoint_pair;
+    bool completion_child_exists = false;
+    if (decision_error == 0 && lane_count == 2u
+        && lane_ == transport_lane_application) {
+        for (endpoints_t::const_iterator it =
+               endpoint_runtime ().endpoints.begin (),
+                                         end = endpoint_runtime ().endpoints.end ();
+             it != end; ++it) {
+            if (it->second.transport_pair_connect_intent == intent
+                && it->second.transport_lane == transport_lane_completion) {
+                completion_child_exists = true;
+                break;
+            }
+        }
+        if (!completion_child_exists) {
+            completion_options.reset (
+              new (std::nothrow) options_t (intent->connect_options));
+            alloc_assert (completion_options.get ());
+            completion_options->zmp_metadata = true;
+            completion_options->transport_lane = transport_lane_completion;
+            completion_options->transport_lane_count = 2;
+            completion_options->transport_pair_id = intent->pair_id;
+            completion_options->transport_pair_generation = generation_;
+            completion_options->transport_pair_initiator = true;
+            completion_options->transport_pair_state = intent->pair_state;
+            completion_options->sndhwm = 0;
+            completion_options->rcvhwm = 0;
+            completion_options->sndbuf =
+              transport_pair_policy::completion_socket_buffer (
+                completion_options->sndbuf);
+            completion_options->rcvbuf =
+              transport_pair_policy::completion_socket_buffer (
+                completion_options->rcvbuf);
+
+            completion_io_thread =
+              choose_io_thread_transport (completion_options->affinity);
+            if (!completion_io_thread)
+                decision_error = EMTHREAD;
+        }
+        if (decision_error == 0 && !completion_child_exists) {
+            completion_endpoint_pair = make_unconnected_connect_endpoint_pair (
+              intent->endpoint_uri.c_str ());
+            prepared_completion_address = new (std::nothrow) address_t (
+              intent->protocol, intent->address, this->get_ctx ());
+            alloc_assert (prepared_completion_address);
+            if (resolve_connect_address (
+                  intent->protocol, intent->address,
+                  prepared_completion_address)
+                != 0) {
+                LIBZLINK_DELETE (prepared_completion_address);
+                decision_error = errno != 0 ? errno : EIO;
+            }
+        }
+    }
+
+    std::unique_lock<std::mutex> owner_commit_guard;
+    std::unique_lock<std::mutex> pair_registration_guard;
+    if (decision_error == 0
+        && (!session_->commit_transport_pair_owner_request (
+              connection_id_, pair_id_, generation_, &owner_commit_guard)
+            || !intent->pair_state->acquire_owner_registration_lease (
+              generation_, &pair_registration_guard))) {
+        decision_error = ECANCELED;
+    }
+
+    if (decision_error == 0 && lane_count == 2u
+        && lane_ == transport_lane_application) {
+        if (!completion_child_exists) {
+            if (create_resolved_connect_session (
+                  prepared_completion_address, completion_endpoint_pair,
+                  completion_io_thread, *completion_options,
+                  intent->pair_state,
+                  intent)
+                != 0) {
+                prepared_completion_address = NULL;
+                decision_error = errno != 0 ? errno : EIO;
+            } else {
+                prepared_completion_address = NULL;
+            }
+        }
+        if (decision_error == 0) {
+            intent->completion_generation = generation_;
+            intent->completion_owner_connection_id = connection_id_;
+        }
+    }
+    LIBZLINK_DELETE (prepared_completion_address);
+
+    // Error decisions are committed too when the owner won the exact request.
+    // This lets the reserved response seqnum retire normally. A timeout that
+    // changed claimed to canceled first is deliberately left canceled.
+    if (session_ && !owner_commit_guard.owns_lock ())
+        (void) session_->commit_transport_pair_owner_request (
+          connection_id_, pair_id_, generation_, &owner_commit_guard);
+    if (pair_registration_guard.owns_lock ())
+        pair_registration_guard.unlock ();
+    if (owner_commit_guard.owns_lock ())
+        owner_commit_guard.unlock ();
+
+    send_transport_pair_owner_decision (
+      session_, connection_id_, pair_id_, generation_, lane_count,
+      decision_error);
 }
 
 void zlink::socket_base_t::add_endpoint (const endpoint_uri_pair_t &endpoint_pair_,

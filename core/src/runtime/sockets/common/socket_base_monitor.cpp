@@ -337,29 +337,17 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
     monitor.reset_worker_state (monitor_hwm_bytes_,
                                 socket_monitor_event_accounted_bytes ());
 
-    // A raw monitor is an independent consumer. Establish command ownership
-    // without monitor.sync held: process_stop() owns the command mutex before
-    // it detaches a monitor, so the inverse nesting would be a real deadlock.
-    const bool started_monitor_owner =
-      !lifecycle_coordinator ().is_async_mailbox_active ();
-    if (started_monitor_owner)
-        monitor.owns_async_command_processing.store (true,
-                                                      std::memory_order_release);
-    if (ensure_async_command_processing () != 0) {
-        if (started_monitor_owner)
-            monitor.owns_async_command_processing.store (
-              false, std::memory_order_release);
+    // A raw monitor is an independent consumer. Establish or reserve command
+    // ownership without monitor.sync held: process_stop() owns the command
+    // mutex before it detaches a monitor, so the inverse nesting would be a
+    // real deadlock.
+    if (acquire_monitor_async_command_processing () != 0) {
         monitor_socket->close ();
         return -1;
     }
 
     const auto release_monitor_owner = [&] () {
-        if (!monitor.owns_async_command_processing.exchange (
-              false, std::memory_order_acq_rel))
-            return;
-        stop_async_mailbox_processing ();
-        if (current_async_mailbox_dispatch_socket () != this)
-            wait_async_quiesced (10000);
+        release_monitor_async_command_processing (true);
     };
 
     control_runtime_t *runtime = get_ctx ()->control_runtime ();
@@ -413,11 +401,16 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
     return 0;
 }
 
-void zlink::socket_base_t::event_connected (const endpoint_uri_pair_t &endpoint_uri_pair_,
-                                            zlink::fd_t fd_)
+void zlink::socket_base_t::event_connected (
+  const endpoint_uri_pair_t &endpoint_uri_pair_,
+  zlink::fd_t fd_,
+  transport_lane_t transport_lane_,
+  uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_)
 {
     uint64_t values[1] = {static_cast<uint64_t> (fd_)};
-    event (endpoint_uri_pair_, NULL, 0, values, 1, ZLINK_EVENT_CONNECTED);
+    event (endpoint_uri_pair_, NULL, 0, values, 1, ZLINK_EVENT_CONNECTED, 0,
+           transport_lane_, transport_pair_id_, transport_pair_generation_);
 }
 
 void zlink::socket_base_t::event_connect_delayed (const endpoint_uri_pair_t &endpoint_uri_pair_,
@@ -484,9 +477,6 @@ void zlink::socket_base_t::event_disconnected (const endpoint_uri_pair_t &endpoi
                                                uint64_t transport_pair_id_,
                                                uint64_t transport_pair_generation_)
 {
-    if (monitor_runtime ().events_atomic.load (std::memory_order_acquire) == 0)
-        return;
-
     uint32_t ready_count = 0;
     bool changed = false;
     bool enqueue_disconnected = false;
@@ -495,8 +485,9 @@ void zlink::socket_base_t::event_disconnected (const endpoint_uri_pair_t &endpoi
     monitor_event_record_t ready_count_record;
     {
         scoped_lock_t lock (monitor_runtime ().sync);
-        monitor_runtime ().erase_transport_pair_readiness_for_endpoint (
-          endpoint_uri_pair_);
+        (void) monitor_runtime ().erase_transport_pair_readiness (
+          endpoint_uri_pair_, transport_pair_id_,
+          transport_pair_generation_);
         if (monitor_runtime ().events & ZLINK_EVENT_DISCONNECTED) {
             uint64_t values[1] = {reason_};
             enqueue_disconnected = build_monitor_event_record (
@@ -517,6 +508,8 @@ void zlink::socket_base_t::event_disconnected (const endpoint_uri_pair_t &endpoi
             changed = monitor_runtime ().erase_ready_connection_for_endpoint (
               endpoint_uri_pair_, &ready_count, transport_pair_id_,
               transport_pair_generation_);
+        if (!changed)
+            ready_count = monitor_runtime ().ready_count ();
 
         LIBZLINK_UNUSED (changed);
         if (monitor_runtime ().events & ZLINK_EVENT_CONNECTION_READY) {
@@ -525,7 +518,10 @@ void zlink::socket_base_t::event_disconnected (const endpoint_uri_pair_t &endpoi
               &ready_count_record, ZLINK_EVENT_CONNECTION_READY, ready_values,
               1, routing_id_, routing_id_size_, endpoint_uri_pair_);
             if (enqueue_ready_count) {
-                ready_count_record.transport_lane = transport_lane_;
+                // CONNECTION_READY is a logical peer aggregate even when this
+                // edge-less ready-count snapshot accompanies a physical
+                // Completion-lane disconnect.
+                ready_count_record.transport_lane = transport_lane_application;
                 ready_count_record.transport_pair_id = transport_pair_id_;
                 ready_count_record.transport_pair_generation =
                   transport_pair_generation_;
@@ -595,21 +591,48 @@ void zlink::socket_base_t::event_transport_pair_lane_ready (
   uint64_t pair_id_,
   uint64_t generation_)
 {
-    if ((monitor_runtime ().events_atomic.load (std::memory_order_acquire)
-         & ZLINK_EVENT_CONNECTION_READY)
-        == 0)
-        return;
-
+    LIBZLINK_UNUSED (routing_id_);
+    LIBZLINK_UNUSED (routing_id_size_);
     bool pair_ready = false;
     {
         scoped_lock_t lock (monitor_runtime ().sync);
         pair_ready = monitor_runtime ().mark_transport_pair_lane_ready (
           endpoint_uri_pair_, lane_, pair_id_, generation_);
     }
-    if (pair_ready)
-        event_connection_ready_changed (
-          endpoint_uri_pair_, routing_id_, routing_id_size_, lane_, pair_id_,
-          generation_);
+    if (!pair_ready)
+        return;
+
+    // CONNECTION_READY is a logical peer edge. The lane that happens to
+    // complete a count-two R/R pair may be Completion, but that physical lane
+    // must never own the logical event identity. Resolve and retain the
+    // admitted Application pipe after dropping monitor.sync, then publish the
+    // edge with its endpoint, RID, connection ID and lane.
+    pipe_t *application = NULL;
+    {
+        scoped_lock_t lock (_transport_pairs_sync);
+        const transport_pairs_t::const_iterator it = _transport_pairs.find (
+          transport_pair_key_t (pair_id_, generation_));
+        if (it != _transport_pairs.end () && it->second.ready
+            && it->second.application
+            && it->second.application->retain_lifetime_ref ())
+            application = it->second.application;
+    }
+    if (!application)
+        return;
+
+    endpoint_uri_pair_t endpoint_pair = application->get_endpoint_pair ();
+    endpoint_pair.connection_id = application->get_transport_connection_id ();
+    const blob_t &application_routing_id = application->get_routing_id ();
+    blob_t public_routing_id;
+    if (application_routing_id.size () > 0)
+        public_routing_id.set (application_routing_id.data (),
+                               application_routing_id.size ());
+    application->release_lifetime_ref ();
+    event_connection_ready_changed (
+      endpoint_pair,
+      public_routing_id.size () > 0 ? public_routing_id.data () : NULL,
+      public_routing_id.size (), transport_lane_application, pair_id_,
+      generation_);
 }
 
 void zlink::socket_base_t::emit_inproc_connection_ready (pipe_t *pipe_)
@@ -625,13 +648,36 @@ void zlink::socket_base_t::emit_inproc_connection_ready (pipe_t *pipe_)
     const unsigned char *routing_id_data = routing_id.size () > 0 ? routing_id.data () : NULL;
     const uint64_t pair_id = pipe_->get_transport_pair_id ();
     if (pair_id != 0) {
-        //  inproc has no engine handshake, so the socket reports lane
-        //  readiness itself. The pair-aware entry keeps the public contract of
-        //  one ready event per Application·Completion pair, exactly as the
-        //  engine transports report it.
-        event_transport_pair_lane_ready (endpoint_pair, routing_id_data, routing_id.size (),
-                                         pipe_->get_transport_lane (), pair_id,
-                                         pipe_->get_transport_pair_generation ());
+        const bool local_paired_type =
+          socket_type () == ZLINK_CORE_SOCKET_DEALER
+          || socket_type () == ZLINK_CORE_SOCKET_ROUTER;
+        const int peer_type = pipe_->get_peer_socket_type ();
+        const bool peer_paired_type = peer_type == ZLINK_CORE_SOCKET_DEALER
+                                      || peer_type == ZLINK_CORE_SOCKET_ROUTER;
+        // Closing a connect-before-bind endpoint can materialize its pending
+        // pipe through an internal PAIR solely to finish termination. That is
+        // not a negotiated logical peer and must not publish readiness.
+        if (!local_paired_type || !peer_paired_type)
+            return;
+
+        // Inproc has no engine handshake, so the socket reports readiness at
+        // the pipe admission boundary. Count-one pairs are complete when the
+        // Application pipe is ready; only count-two ROUTER-ROUTER pairs need
+        // the per-lane accumulator.
+        const unsigned char lane_count = pipe_->get_transport_lane_count ();
+        if (lane_count == 1u) {
+            if (pipe_->get_transport_lane () != transport_lane_application)
+                return;
+            event_connection_ready_changed (
+              endpoint_pair, routing_id_data, routing_id.size (),
+              transport_lane_application, pair_id,
+              pipe_->get_transport_pair_generation ());
+        } else if (lane_count == 2u) {
+            event_transport_pair_lane_ready (
+              endpoint_pair, routing_id_data, routing_id.size (),
+              pipe_->get_transport_lane (), pair_id,
+              pipe_->get_transport_pair_generation ());
+        }
         return;
     }
     event_connection_ready_changed (endpoint_pair, routing_id_data, routing_id.size ());
@@ -854,14 +900,11 @@ zlink::socket_base_t::detach_monitor_socket (bool send_monitor_stopped_event_)
         monitor.events = 0;
         monitor.lossy = true;
         release_async_owner =
-          monitor.owns_async_command_processing.exchange (
-            false, std::memory_order_acq_rel);
+          monitor.owns_async_command_processing.load (
+            std::memory_order_acquire);
     }
 
-    if (release_async_owner) {
-        stop_async_mailbox_processing ();
-        if (current_async_mailbox_dispatch_socket () != this)
-            wait_async_quiesced (10000);
-    }
+    if (release_async_owner)
+        release_monitor_async_command_processing (true);
     return monitor_socket;
 }

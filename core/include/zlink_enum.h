@@ -180,10 +180,11 @@ typedef enum zlink_stream_recv_mode_t
 } zlink_stream_recv_mode_t;
 
 /*
- * Receive-flow state for the paired DEALER/ROUTER completion lane
- * (core-byte-hwm-flow-control-plan.ko.md §5). RUNNING and PAUSED are an
- * absolute socket-wide state, not a counter: repeating the current value is
- * a successful no-op.
+ * Receive-flow state for paired DEALER/ROUTER sockets. The control path is the
+ * Application connection for DEALER-DEALER and DEALER-ROUTER, and the
+ * Completion connection for ROUTER-ROUTER. RUNNING and PAUSED are an absolute
+ * socket-wide state, not a counter: repeating the current value is a
+ * successful no-op.
  */
 typedef enum zlink_receive_flow_state_t
 {
@@ -239,10 +240,11 @@ typedef enum zlink_socket_monitor_event_e
     ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_PROTOCOL = 1u << 13,
     ZLINK_SOCKET_MONITOR_EVENT_HANDSHAKE_FAILED_AUTH = 1u << 14,
     ZLINK_SOCKET_MONITOR_EVENT_PEER_WEIGHT_CHANGED = 1u << 15,
-    //  Paired DEALER/ROUTER completion-lane receive-flow observation
-    //  (core-byte-hwm-flow-control-plan.ko.md §6). No event fires for a
-    //  normal data frame; these fire only on a PAUSED<->RUNNING transition or
-    //  a rejected stale/duplicate flow frame.
+    //  DEALER/ROUTER receive-flow observation. The control travels on the
+    //  Application connection for count-1 peers and the Completion connection
+    //  for count-2 peers; these events describe the affected Application pipe.
+    //  No event fires for a normal data frame; these fire only on a
+    //  PAUSED<->RUNNING transition or a rejected stale/duplicate flow frame.
     ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED = 1u << 16,
     ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_RESUMED = 1u << 17,
     ZLINK_SOCKET_MONITOR_EVENT_FLOW_STATE_STALE = 1u << 18,

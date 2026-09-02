@@ -51,7 +51,10 @@ class lb_t
                                  size_t peer_rid_size_,
                                  uint64_t transport_pair_id_,
                                  uint64_t transport_pair_generation_) const;
-    pipe_t *find_pipe_by_endpoint (const std::string &endpoint_) const;
+    pipe_t *find_pipe_by_endpoint (
+      const std::string &endpoint_,
+      connected_pipe_filter_fn filter_ = NULL,
+      void *filter_userdata_ = NULL) const;
 
     //  Sends the first frame to an already selected exact pipe. Multipart
     //  continuation then follows the ordinary _weighted_multipart_pipe fence.

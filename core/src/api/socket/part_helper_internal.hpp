@@ -109,6 +109,7 @@ struct recv_sequence_state_t
     std::string topic_id;
     recv_part_buffer_t buffered_parts;
     size_t next_part_index;
+    bool public_delivery_hold;
 };
 
 struct handle_state_t
@@ -145,6 +146,8 @@ int stage_recv_sequence (const std::shared_ptr<handle_state_t> &state_,
                          zlink_msg_t *parts_,
                          size_t part_count_,
                          std::thread::id owner_thread_);
+int adopt_recv_public_delivery_hold (
+  const std::shared_ptr<handle_state_t> &state_);
 void set_recv_metadata (recv_sequence_state_t *recv_,
                         const zlink_routing_id_t *source_node_rid_,
                         uint64_t request_seq_);
@@ -170,8 +173,9 @@ int take_recv_part (const std::shared_ptr<handle_state_t> &state_,
 void export_recv_metadata (const std::shared_ptr<handle_state_t> &state_,
                            const zlink_routing_id_t **source_node_rid_out_,
                            uint64_t *request_seq_out_);
-void reset_send_sequence (send_sequence_state_t *state_);
-void reset_recv_sequence (recv_sequence_state_t *state_);
+void reset_send_sequence (send_sequence_state_t *state_,
+                          bool notify_release_ = true);
+zlink::socket_base_t *reset_recv_sequence (recv_sequence_state_t *state_);
 int prepare_send_step (void *handle_,
                        const send_sequence_spec_t &spec_,
                        zlink::socket_base_t *sink_socket_,

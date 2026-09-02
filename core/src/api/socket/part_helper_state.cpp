@@ -139,14 +139,21 @@ void zlink::part_helper_internal::cleanup_handle (void *handle_)
         g_part_helper_state.erase (it);
     }
 
-    std::lock_guard<std::mutex> lock (state->mutex);
-    if (state->send.active && state->send.sink_socket
-        && prepare_send_scope_for_cleanup (&state->send)) {
-        (void) state->send.sink_socket->rollback_scoped (
-          *state->send.send_scope);
+    zlink::socket_base_t *held_receive_socket = NULL;
+    {
+        std::lock_guard<std::mutex> lock (state->mutex);
+        if (state->send.active && state->send.sink_socket
+            && prepare_send_scope_for_cleanup (&state->send)) {
+            (void) state->send.sink_socket->rollback_scoped (
+              *state->send.send_scope);
+        }
+        if (state->send.sink_socket)
+            state->send.sink_socket->clear_incremental_send_control_boundary ();
+        reset_send_sequence (&state->send, false);
+        held_receive_socket = reset_recv_sequence (&state->recv);
     }
-    reset_send_sequence (&state->send);
-    reset_recv_sequence (&state->recv);
+    if (held_receive_socket)
+        held_receive_socket->end_public_part_receive_delivery_hold ();
     errno = saved_errno;
 }
 
@@ -165,13 +172,20 @@ void zlink::part_helper_internal::cleanup_socket (socket_base_t *socket_)
     }
     socket_->clear_part_helper_state ();
 
-    std::lock_guard<std::mutex> lock (state->mutex);
-    if (state->send.active && state->send.sink_socket
-        && prepare_send_scope_for_cleanup (&state->send)) {
-        (void) state->send.sink_socket->rollback_scoped (
-          *state->send.send_scope);
+    zlink::socket_base_t *held_receive_socket = NULL;
+    {
+        std::lock_guard<std::mutex> lock (state->mutex);
+        if (state->send.active && state->send.sink_socket
+            && prepare_send_scope_for_cleanup (&state->send)) {
+            (void) state->send.sink_socket->rollback_scoped (
+              *state->send.send_scope);
+        }
+        if (state->send.sink_socket)
+            state->send.sink_socket->clear_incremental_send_control_boundary ();
+        reset_send_sequence (&state->send, false);
+        held_receive_socket = reset_recv_sequence (&state->recv);
     }
-    reset_send_sequence (&state->send);
-    reset_recv_sequence (&state->recv);
+    if (held_receive_socket)
+        held_receive_socket->end_public_part_receive_delivery_hold ();
     errno = saved_errno;
 }

@@ -7,6 +7,7 @@
 #include "protocol/decoder_allocators.hpp"
 #include "protocol/wire.hpp"
 #include "protocol/zmp_decoder.hpp"
+#include "protocol/zmp_control.hpp"
 #include "protocol/zmp_metadata.hpp"
 #include "protocol/zmp_protocol.hpp"
 
@@ -677,6 +678,7 @@ void test_metadata_add_basic_properties ()
     zlink::options_t options;
     options.type = ZLINK_CORE_SOCKET_ROUTER;
     options.transport_lane = zlink::transport_lane_completion;
+    options.transport_lane_count = 2;
     options.transport_pair_id = 17;
     options.transport_pair_generation = 23;
     const char *routing_id = "RID";
@@ -698,11 +700,89 @@ void test_metadata_add_basic_properties ()
     TEST_ASSERT_EQUAL_UINT8 (1,
                              static_cast<unsigned char> (
                                out["Zlink-Lane"][0]));
+    TEST_ASSERT_EQUAL_UINT64 (1, out.count ("Zlink-Lane-Count"));
+    TEST_ASSERT_EQUAL_UINT64 (1, out["Zlink-Lane-Count"].size ());
+    TEST_ASSERT_EQUAL_UINT8 (
+      2, static_cast<unsigned char> (out["Zlink-Lane-Count"][0]));
 
     zlink::transport_lane_t lane = zlink::transport_lane_application;
     TEST_ASSERT_EQUAL_INT (
       1, zlink::zmp_metadata::parse_transport_lane (out, &lane));
     TEST_ASSERT_EQUAL_INT (zlink::transport_lane_completion, lane);
+    unsigned char lane_count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      1, zlink::zmp_metadata::parse_transport_lane_count (
+           out, &lane_count));
+    TEST_ASSERT_EQUAL_UINT8 (2, lane_count);
+
+    zlink::options_t pair_options;
+    pair_options.type = ZLINK_CORE_SOCKET_PAIR;
+    std::vector<unsigned char> pair_buf;
+    zlink::zmp_metadata::add_basic_properties (pair_options, pair_buf);
+    zlink::metadata_t::dict_t pair_out;
+    TEST_ASSERT_EQUAL_INT (
+      0, zlink::zmp_metadata::parse (&pair_buf[0], pair_buf.size (),
+                                     pair_out));
+    TEST_ASSERT_EQUAL_UINT64 (0, pair_out.count ("Zlink-Lane"));
+    TEST_ASSERT_EQUAL_UINT64 (0, pair_out.count ("Zlink-Lane-Count"));
+}
+
+void test_metadata_lane_count_validation ()
+{
+    zlink::metadata_t::dict_t properties;
+    unsigned char lane_count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      0, zlink::zmp_metadata::parse_transport_lane_count (
+           properties, &lane_count));
+
+    properties["Zlink-Lane-Count"] = std::string (1, '\1');
+    TEST_ASSERT_EQUAL_INT (
+      1, zlink::zmp_metadata::parse_transport_lane_count (
+           properties, &lane_count));
+    TEST_ASSERT_EQUAL_UINT8 (1, lane_count);
+    properties["Zlink-Lane-Count"] = std::string (1, '\2');
+    TEST_ASSERT_EQUAL_INT (
+      1, zlink::zmp_metadata::parse_transport_lane_count (
+           properties, &lane_count));
+    TEST_ASSERT_EQUAL_UINT8 (2, lane_count);
+
+    const std::string invalid_values[] = {
+      std::string (), std::string (2, '\1'), std::string (1, '\0'),
+      std::string (1, '\3')};
+    for (size_t i = 0;
+         i != sizeof (invalid_values) / sizeof (invalid_values[0]); ++i) {
+        properties["Zlink-Lane-Count"] = invalid_values[i];
+        errno = 0;
+        TEST_ASSERT_EQUAL_INT (
+          -1, zlink::zmp_metadata::parse_transport_lane_count (
+                properties, &lane_count));
+        TEST_ASSERT_EQUAL_INT (EPROTO, errno);
+    }
+}
+
+void test_transport_lane_count_owner_is_symmetric ()
+{
+    using zlink::zmp_control::expected_transport_lane_count;
+    TEST_ASSERT_EQUAL_UINT8 (
+      1, expected_transport_lane_count (ZLINK_CORE_SOCKET_DEALER,
+                                        ZLINK_CORE_SOCKET_DEALER));
+    TEST_ASSERT_EQUAL_UINT8 (
+      1, expected_transport_lane_count (ZLINK_CORE_SOCKET_DEALER,
+                                        ZLINK_CORE_SOCKET_ROUTER));
+    TEST_ASSERT_EQUAL_UINT8 (
+      1, expected_transport_lane_count (ZLINK_CORE_SOCKET_ROUTER,
+                                        ZLINK_CORE_SOCKET_DEALER));
+    TEST_ASSERT_EQUAL_UINT8 (
+      2, expected_transport_lane_count (ZLINK_CORE_SOCKET_ROUTER,
+                                        ZLINK_CORE_SOCKET_ROUTER));
+    TEST_ASSERT_EQUAL_UINT8 (
+      0, expected_transport_lane_count (ZLINK_CORE_SOCKET_PAIR,
+                                        ZLINK_CORE_SOCKET_ROUTER));
+    TEST_ASSERT_EQUAL_UINT8 (
+      expected_transport_lane_count (ZLINK_CORE_SOCKET_DEALER,
+                                      ZLINK_CORE_SOCKET_ROUTER),
+      expected_transport_lane_count (ZLINK_CORE_SOCKET_ROUTER,
+                                      ZLINK_CORE_SOCKET_DEALER));
 }
 
 void test_shared_message_allocator_size_checks_overflow ()
@@ -886,6 +966,8 @@ int main (void)
     RUN_TEST (test_metadata_parse_valid);
     RUN_TEST (test_metadata_parse_invalid);
     RUN_TEST (test_metadata_add_basic_properties);
+    RUN_TEST (test_metadata_lane_count_validation);
+    RUN_TEST (test_transport_lane_count_owner_is_symmetric);
     RUN_TEST (test_shared_message_allocator_size_checks_overflow);
     RUN_TEST (test_shared_message_allocator_reuses_one_lifecycle_owned_spare);
     RUN_TEST (test_shared_message_allocator_rejects_mismatched_spare_capacity);

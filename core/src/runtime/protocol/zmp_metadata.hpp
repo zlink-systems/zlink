@@ -89,10 +89,37 @@ static inline void add_basic_properties (const options_t &options_,
 
     if (options_.type == ZLINK_CORE_SOCKET_DEALER
         || options_.type == ZLINK_CORE_SOCKET_ROUTER) {
+        zlink_assert (options_.transport_lane_count == 1u
+                      || options_.transport_lane_count == 2u);
+        const unsigned char lane_count = options_.transport_lane_count;
+        append_property (buf_, "Zlink-Lane-Count", &lane_count,
+                         sizeof (lane_count));
         const unsigned char lane =
           options_.transport_lane == transport_lane_completion ? 1u : 0u;
         append_property (buf_, "Zlink-Lane", &lane, sizeof (lane));
     }
+}
+
+static inline int parse_transport_lane_count (const properties_t &properties_,
+                                              unsigned char *lane_count_out_)
+{
+    const properties_t::const_iterator count_it =
+      properties_.find ("Zlink-Lane-Count");
+    if (count_it == properties_.end ())
+        return 0;
+    if (count_it->second.size () != 1) {
+        errno = EPROTO;
+        return -1;
+    }
+    const unsigned char count =
+      static_cast<unsigned char> (count_it->second[0]);
+    if (count != 1u && count != 2u) {
+        errno = EPROTO;
+        return -1;
+    }
+    if (lane_count_out_)
+        *lane_count_out_ = count;
+    return 1;
 }
 
 static inline int parse_max_message_size (const properties_t &properties_,

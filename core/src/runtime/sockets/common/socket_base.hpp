@@ -44,6 +44,25 @@ class pipe_t;
 class io_thread_t;
 class socket_base_t;
 class socket_public_handle_t;
+class session_base_t;
+
+#ifdef ZLINK_BUILD_TESTS
+typedef bool (*transport_pair_owner_after_claim_test_hook_fn) (
+  uint64_t connection_id_, uint64_t pair_id_, uint64_t generation_,
+  void *userdata_);
+void test_set_transport_pair_owner_after_claim_hook (
+  transport_pair_owner_after_claim_test_hook_fn hook_, void *userdata_);
+
+enum async_owner_transition_test_point_t
+{
+    async_owner_test_monitor_acquire_before_gate = 1,
+    async_owner_test_idle_stop_gate_held = 2
+};
+typedef void (*async_owner_transition_test_hook_fn) (
+  async_owner_transition_test_point_t point_, void *userdata_);
+void test_set_async_owner_transition_hook (
+  async_owner_transition_test_hook_fn hook_, void *userdata_);
+#endif
 
 namespace socket_reqrep_internal
 {
@@ -85,6 +104,7 @@ struct transport_pair_pipes_t
         application (NULL),
         completion (NULL),
         generation (0),
+        expected_lane_count (0),
         application_attached (false),
         application_validated (false),
         completion_validated (false),
@@ -101,6 +121,11 @@ struct transport_pair_pipes_t
     pipe_t *application;
     pipe_t *completion;
     uint64_t generation;
+    //  The READY handshake selects one immutable topology for this physical
+    //  pair. A value of 1 admits Application alone; 2 retains the historical
+    //  Application+Completion pair. Zero means no validated lane has been
+    //  admitted yet and is never a ready topology.
+    unsigned char expected_lane_count;
     bool application_attached;
     bool application_validated;
     bool completion_validated;
@@ -151,6 +176,36 @@ struct transport_pair_pipes_t
     };
     static const size_t pending_flow_slot_count = 2;
     pending_flow_slot_t pending_flow[pending_flow_slot_count];
+
+    unsigned int expected_lane_mask () const
+    {
+        return expected_lane_count == 1u ? 1u
+               : expected_lane_count == 2u ? 3u
+                                            : 0u;
+    }
+
+    unsigned int validated_lane_mask () const
+    {
+        return (application && application_validated ? 1u : 0u)
+               | (completion && completion_validated ? 2u : 0u);
+    }
+
+    bool accepts_lane_count (unsigned char lane_count_,
+                             transport_lane_t lane_) const
+    {
+        if ((lane_count_ != 1u && lane_count_ != 2u)
+            || (lane_ != transport_lane_application
+                && lane_ != transport_lane_completion)
+            || (lane_ == transport_lane_completion && lane_count_ != 2u))
+            return false;
+        return expected_lane_count == 0u
+               || expected_lane_count == lane_count_;
+    }
+
+    pipe_t *completion_source () const
+    {
+        return expected_lane_count == 1u ? application : completion;
+    }
 };
 
 struct accepted_transport_pair_identity_t
@@ -274,7 +329,7 @@ class socket_base_t : public own_t,
     //  its result mapping are a later step). RUNNING is 0 and PAUSED is 1.
     //  Returns 0 on success and -1 with errno set:
     //    EINVAL   state outside the enum
-    //    ENOTSUP  socket type without a completion lane
+    //    ENOTSUP  socket type without paired receive-flow control
     //    ETERM    context already terminated
     //  The completion boundary is the moment this socket stores the state.
     //  Fanout to the current pairs and synchronisation of a later pair both
@@ -290,10 +345,10 @@ class socket_base_t : public own_t,
     bool application_pipe_remote_flow_paused (
       uint64_t transport_pair_id_, uint64_t transport_pair_generation_) const;
     static bool socket_type_supports_receive_flow_state (int type_);
-    //  Classifies one completion-lane frame. Returns true when the frame was a
-    //  Core-internal flow-state frame and has been consumed, whether or not it
-    //  could be applied; the caller must then not pass it anywhere else.
-    bool consume_receive_flow_state_frame (pipe_t *completion_pipe_,
+    //  Classifies one topology-selected control frame. Returns true when the
+    //  frame was Core-internal FLOWSTATE and has been consumed, whether or not
+    //  it could be applied; the caller must then not pass it anywhere else.
+    bool consume_receive_flow_state_frame (pipe_t *source_pipe_,
                                            const zlink::msg_t &msg_);
 
   private:
@@ -331,6 +386,9 @@ class socket_base_t : public own_t,
     void test_deliver_late_flow_state (zlink::pipe_t *pipe_,
                                        bool paused_,
                                        uint64_t epoch_);
+    void test_consume_late_flow_state_frame (zlink::pipe_t *pipe_,
+                                             bool paused_,
+                                             uint64_t epoch_);
     bool test_set_pair_received_flow_state (uint64_t transport_pair_id_,
                                             uint64_t transport_pair_generation_,
                                             bool paused_);
@@ -342,6 +400,10 @@ class socket_base_t : public own_t,
       uint64_t *transport_pair_id_out_,
       uint64_t *transport_pair_generation_out_,
       bool *ready_out_ = NULL) const;
+    bool test_completion_pair_queued (
+      uint64_t transport_pair_id_,
+      uint64_t transport_pair_generation_) const;
+    int test_process_commands_only ();
     //  Reads the pipe's send-blocker causes without evaluating - and therefore
     //  without mutating - any of them.
     bool test_application_pipe_flow_probe (
@@ -381,6 +443,8 @@ class socket_base_t : public own_t,
       bool force_sync_, std::optional<socket_public_send_scope_t> *scope_out_);
     std::unique_ptr<socket_public_send_scope_t> begin_complete_send_scope (bool force_sync_);
     void notify_incremental_send_released ();
+    void hold_incremental_send_control_boundary ();
+    void clear_incremental_send_control_boundary ();
     std::unique_ptr<socket_public_api_scope_t> begin_public_api_scope ();
     int rollback ();
     int rollback_scoped (socket_public_send_scope_t &scope_);
@@ -422,6 +486,19 @@ class socket_base_t : public own_t,
     //  The caller releases the returned pipe exactly once.
     pipe_t *retain_completion_pipe_for_transport_pair (
       uint64_t transport_pair_id_, uint64_t transport_pair_generation_) const;
+    //  Exact ready-pair lookup used by topology-aware reply routing. The
+    //  returned pipe is pinned and must be released exactly once by the
+    //  caller. A Completion lookup on a count-1 pair returns NULL.
+    pipe_t *retain_transport_pair_pipe (
+      uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
+      transport_lane_t lane_) const;
+    //  Reconnect-aware lookup for a saved logical route. Selects the latest
+    //  ready pair that still matches peer RID and peer socket type, then pins
+    //  the requested physical lane. A physical reconnect may allocate a new
+    //  pair id, so pair identity is intentionally not part of this fallback.
+    virtual pipe_t *retain_current_transport_pair_pipe (
+      const zlink_routing_id_t *peer_rid_, int peer_socket_type_,
+      transport_lane_t lane_) const;
     void cache_completion_pipe_routing_id (pipe_t *application_pipe_);
     //  Request/reply submit entries write to transport pipes directly instead
     //  of going through send()/recv(). They have to drain pending socket
@@ -484,8 +561,22 @@ class socket_base_t : public own_t,
     //  replacement pair as its own admission.
     bool transport_pair_is_ready (uint64_t transport_pair_id_,
                                   uint64_t transport_pair_generation_) const;
-    int ensure_async_command_processing ();
+    int ensure_async_command_processing (bool retain_ = false);
     int ensure_completion_processing ();
+    // A monitor can borrow the temporary executor installed for a deferred
+    // transport-pair owner decision.  These helpers linearize that handoff
+    // with the final owner-progress lease so neither side stops an executor
+    // that the other has just adopted.
+    int acquire_monitor_async_command_processing ();
+    void release_monitor_async_command_processing (bool wait_for_quiescence_);
+    void request_unowned_async_command_processing_stop ();
+    bool stop_unowned_async_command_processing_at_idle ();
+    //  Active paired handshakes need one socket-owner mailbox turn after the
+    //  peer HELLO reveals its type. The lease installs an asynchronous owner
+    //  only while such decisions are outstanding; monitor, completion and
+    //  probe consumers can retain that owner independently.
+    int acquire_transport_pair_owner_progress ();
+    void release_transport_pair_owner_progress ();
     bool acquire_completion_poller (void *owner_);
     void release_completion_poller (void *owner_);
     bool acquire_poller_registration ();
@@ -504,6 +595,12 @@ class socket_base_t : public own_t,
     bool finish_completion_pipe_drain (uint64_t transport_pair_id_,
                                        uint64_t transport_pair_generation_,
                                        zlink::pipe_t *completion_pipe_);
+    //  A budgeted pipe yields at a whole-record boundary. Release only the
+    //  exact claimed source, then place remaining work at the queue tail so a
+    //  different ready pair gets an owner turn first.
+    bool requeue_completion_pipe_after_budget (
+      uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
+      zlink::pipe_t *completion_pipe_, bool receive_sync_held_);
     void drain_claimed_completion_pipe (uint64_t transport_pair_id_,
                                         uint64_t transport_pair_generation_,
                                         zlink::pipe_t *completion_pipe_);
@@ -545,6 +642,8 @@ class socket_base_t : public own_t,
     void flow_pause_released_on_termination (pipe_t *pipe_);
     void flow_state_applied (pipe_t *pipe_, bool paused_, uint64_t epoch_,
                              bool actual_writable_) ZLINK_FINAL;
+    void flow_state_received (pipe_t *source_pipe_, unsigned char state_,
+                              uint64_t epoch_) ZLINK_FINAL;
     void peer_weight_received (pipe_t *pipe_, uint32_t weight_) ZLINK_FINAL;
 
     int monitor (const char *endpoint_,
@@ -553,7 +652,12 @@ class socket_base_t : public own_t,
                  int type_,
                  uint64_t monitor_hwm_bytes_);
 
-    void event_connected (const endpoint_uri_pair_t &endpoint_uri_pair_, zlink::fd_t fd_);
+    void event_connected (
+      const endpoint_uri_pair_t &endpoint_uri_pair_,
+      zlink::fd_t fd_,
+      transport_lane_t transport_lane_ = transport_lane_application,
+      uint64_t transport_pair_id_ = 0,
+      uint64_t transport_pair_generation_ = 0);
     void event_connect_delayed (const endpoint_uri_pair_t &endpoint_uri_pair_, int err_);
     void event_connect_retried (const endpoint_uri_pair_t &endpoint_uri_pair_, int interval_);
     void event_listening (const endpoint_uri_pair_t &endpoint_uri_pair_, zlink::fd_t fd_);
@@ -587,6 +691,10 @@ class socket_base_t : public own_t,
       uint64_t generation_);
     void validate_inproc_connection (pipe_t *pipe_);
     void emit_inproc_connection_ready (pipe_t *pipe_);
+    int materialize_inproc_completion_lane (
+      socket_base_t *bind_socket_, const options_t &bind_options_,
+      const std::string &endpoint_uri_, uint64_t pair_id_,
+      uint64_t pair_generation_, bool bind_side_direct_);
 
     //  Query the state of a specific peer. The default implementation
     //  always returns an ENOTSUP error.
@@ -658,6 +766,13 @@ class socket_base_t : public own_t,
     std::shared_ptr<part_helper_internal::handle_state_t>
     set_part_helper_state (const std::shared_ptr<part_helper_internal::handle_state_t> &state_);
     void clear_part_helper_state ();
+    //  zlink_recv_part() buffers a complete physical DATA record before it
+    //  publishes the first part. On a count-1 pair, keep the following REPLY
+    //  private until that buffered public record reaches its FINAL part.
+    int begin_public_part_receive_delivery_hold ();
+    void bind_public_part_receive_delivery_hold (pipe_t *source_pipe_);
+    void end_public_part_receive_delivery_hold (
+      bool receive_sync_held_ = false);
 
     bool is_ctx_terminated () const;
 
@@ -788,7 +903,13 @@ class socket_base_t : public own_t,
                                             uint32_t *weight_out_) const;
     virtual uint32_t monitor_ready_count () const;
 
+    //  Reclassifies the next queued record on a ready count-1 Application
+    //  pipe. The caller already owns the receive runtime (public lease or
+    //  receive.sync). Returns true when completion work was queued.
+    bool reclassify_transport_pair_application_head (pipe_t *pipe_);
+
     //  i_pipe_events will be forwarded to these functions.
+    virtual void xread_deactivated (pipe_t *pipe_);
     virtual void xread_activated (pipe_t *pipe_);
     virtual void xwrite_activated (pipe_t *pipe_);
     virtual void xhiccuped (pipe_t *pipe_);
@@ -803,13 +924,13 @@ class socket_base_t : public own_t,
     void broadcast_local_peer_weight ();
     bool send_local_peer_weight (pipe_t *pipe_);
 
-    //  Completion-lane flow state. The frame is Core internal: it is written on
-    //  the completion lane as a command frame and consumed by the peer's Core,
-    //  so no application or Framework receive path can observe it.
-    void write_receive_flow_state_frame (pipe_t *completion_pipe_,
+    //  Topology-selected flow state. Count 1 stages a Core control on the
+    //  Application path; count 2 writes the historical Completion command.
+    //  Both are consumed by the peer Core and never reach public receive.
+    void write_receive_flow_state_frame (pipe_t *control_pipe_,
                                          unsigned char state_,
                                          uint64_t epoch_);
-    void sync_local_receive_flow_state_to_pair (pipe_t *completion_pipe_);
+    void sync_local_receive_flow_state_to_pair (pipe_t *control_pipe_);
 
     //  Delay actual destruction of the socket.
     void process_destroy () ZLINK_FINAL;
@@ -853,6 +974,7 @@ class socket_base_t : public own_t,
     mutex_t &receive_sync () { return receive_runtime ().sync; }
     //  A pipe became writable again: nudge the admit loop for that target.
     void notify_send_pending_writable (pipe_t *pipe_);
+    void flush_deferred_peer_controls ();
     //  A route ended: fail every pending record bound to that exact target.
     void fail_pull_send_pending_for_logical_target (
       const zlink_routing_id_t *peer_rid_, int terminal_errno_);
@@ -985,7 +1107,20 @@ class socket_base_t : public own_t,
       const endpoint_uri_pair_t &endpoint_pair_,
       own_t *endpoint_,
       pipe_t *pipe_,
-      const std::shared_ptr<transport_pair_state_t> &pair_state_);
+      const std::shared_ptr<transport_pair_state_t> &pair_state_,
+      const std::shared_ptr<transport_pair_connect_intent_t> &intent_,
+      transport_lane_t lane_);
+    int create_connect_session (
+      const std::string &protocol_, const std::string &address_,
+      const endpoint_uri_pair_t &endpoint_pair_, io_thread_t *io_thread_,
+      const options_t &lane_options_,
+      const std::shared_ptr<transport_pair_state_t> &pair_state_,
+      const std::shared_ptr<transport_pair_connect_intent_t> &intent_);
+    int create_resolved_connect_session (
+      address_t *paddr_, const endpoint_uri_pair_t &endpoint_pair_,
+      io_thread_t *io_thread_, const options_t &lane_options_,
+      const std::shared_ptr<transport_pair_state_t> &pair_state_,
+      const std::shared_ptr<transport_pair_connect_intent_t> &intent_);
 
     //  To be called after processing commands or invoking any command
     //  handlers explicitly. If required, it will deallocate the socket.
@@ -1057,6 +1192,7 @@ class socket_base_t : public own_t,
       receive_runtime_t::record_hook_fn contention_hook_, void *userdata_);
     void test_set_receive_command_sync_probe_hook (
       receive_runtime_t::command_sync_probe_hook_fn hook_, void *userdata_);
+    bool test_resume_deferred_transport_pair_owner_request ();
   private:
 #endif
     //  close / ctx term: fail every pending record fast. LINGER does not
@@ -1123,6 +1259,10 @@ class socket_base_t : public own_t,
     void process_bind (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void process_term (int linger_) ZLINK_FINAL;
     void process_term_endpoint (std::string *endpoint_) ZLINK_FINAL;
+    void process_transport_pair_owner_request (
+      zlink::session_base_t *session_, int peer_socket_type_,
+      uint64_t connection_id_, uint64_t pair_id_, uint64_t generation_,
+      unsigned char lane_) ZLINK_FINAL;
 
     void refresh_attached_pipe_hwms ();
     void update_pipe_options (int option_);
@@ -1156,6 +1296,10 @@ class socket_base_t : public own_t,
     std::atomic<uint32_t> _completion_poller_refs;
     std::atomic<void *> _completion_poller_owner;
     std::atomic<bool> _request_completion_pending;
+    mutable mutex_t _transport_pair_owner_progress_sync;
+    uint32_t _transport_pair_owner_progress_refs;
+    bool _async_command_processing_stop_requested;
+    std::atomic<bool> _async_command_processing_retained;
     //  Auto-HWM planning runs on the context control runtime while option
     //  updates and monitor snapshots run on public threads. Keep the socket
     //  plan and the option values used to derive it in one snapshot domain.
@@ -1197,6 +1341,9 @@ class socket_base_t : public own_t,
     accepted_transport_pairs_t _accepted_transport_pairs;
     std::deque<transport_pair_key_t> _ready_completion_pairs;
     std::set<transport_pair_key_t> _ready_completion_pair_set;
+    bool _public_part_receive_delivery_hold_active;
+    pipe_t *_public_part_receive_delivery_hold_pipe;
+    transport_pair_key_t _public_part_receive_delivery_hold_key;
     //  Socket-wide local receive-flow state, guarded by _transport_pairs_sync
     //  so pair fanout and new-pair synchronisation serialise against the same
     //  state. The epoch advances only on a real state change; a repeated call

@@ -385,6 +385,8 @@ int stage_public_send_part_locked (
             errno = EFAULT;
             return -1;
         }
+        if (state_->send.sink_socket)
+            state_->send.sink_socket->hold_incremental_send_control_boundary ();
         if (state_->send.send_scope)
             state_->send.send_scope->suspend_multipart_call ();
     } catch (...) {
@@ -428,7 +430,11 @@ int collect_public_send_record_locked (
                 return -1;
             }
             state_->send.buffered_parts.clear ();
-            zlink::part_helper_internal::reset_send_sequence (&state_->send);
+            // The complete-record submit below owns ordering after the local
+            // staging lease. Defer control-slot release until that admission
+            // attempt has finished so a control cannot overtake the record.
+            zlink::part_helper_internal::reset_send_sequence (&state_->send,
+                                                               false);
             return 0;
         }
     } catch (...) {
@@ -530,9 +536,11 @@ zlink_submit_result_t submit_completion_aware_part (
     }
 
     state_lock.unlock ();
-    return submit_public_send_record (
+    const zlink_submit_result_t result = submit_public_send_record (
       handle_, socket, target_rid_, record.data (), record.size (),
       spec_.flags, user_context_, completion_id_out_);
+    socket->notify_incremental_send_released ();
+    return result;
 }
 
 int send_socket_part_impl (bool,

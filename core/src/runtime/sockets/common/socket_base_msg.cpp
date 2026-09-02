@@ -469,7 +469,9 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
       pipe_message_admission_invalid;
 #ifdef ZLINK_BUILD_TESTS
     int injected_errno = 0;
+    bool submit_failure_was_injected = false;
     if (zlink::socket_submit_retry_fault::consume (&injected_errno)) {
+        submit_failure_was_injected = true;
         rc = -1;
         errno = injected_errno;
     } else
@@ -504,6 +506,39 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
         arm_send_recovery_after_backpressure ();
         errno = EAGAIN;
         return -1;
+    }
+    if (
+#ifdef ZLINK_BUILD_TESTS
+        !submit_failure_was_injected
+        &&
+#endif
+        errno != EAGAIN && is_submit_retry_errno (errno)
+        && (options.type == ZLINK_CORE_SOCKET_DEALER
+            || options.type == ZLINK_CORE_SOCKET_ROUTER)) {
+        // Application-first connect-before-bind keeps its count-unknown pipe
+        // out of FQ/LB until the binder resolves the peer type. Preserve the
+        // established public admission result for that live, held intent:
+        // DONTWAIT reports temporary backpressure, not a refused peer. A test
+        // fault represents the already-classified public failure and must not
+        // be reclassified by unrelated staged state. This is an error-only
+        // scan, so it does not thicken the steady-state send path.
+        bool staged_pair_intent = false;
+        {
+            scoped_lock_t lock (monitor_runtime ().sync);
+            const size_t count = endpoint_runtime ().attached_pipe_count ();
+            for (size_t i = 0; i != count; ++i) {
+                pipe_t *const pipe = endpoint_runtime ().attached_pipe (i);
+                if (pipe && pipe->get_transport_pair_id () != 0
+                    && pipe->get_transport_lane ()
+                         == transport_lane_application
+                    && pipe->get_transport_lane_count () == 0u) {
+                    staged_pair_intent = true;
+                    break;
+                }
+            }
+        }
+        if (staged_pair_intent)
+            errno = EAGAIN;
     }
     if (errno != EAGAIN && (flags_ & ZLINK_DONTWAIT) == 0
         && options.sndtimeo != 0 && !submit_retry_enabled (options, flags_)
@@ -615,8 +650,20 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
     const uint64_t end = timeout < 0 ? 0 : (_clock.now_ms () + timeout);
     // A mailbox-owned command path re-enters this socket to release byte
     // credit, so a blocking public send must let that command make progress.
+    // A paired connector starts its temporary mailbox owner only after HELLO
+    // reveals the peer type. A first blocking send can reach this wait while
+    // the Application pipe is still held, before that handoff is visible. If
+    // it keeps the lifecycle sync here, the session I/O callback cannot acquire
+    // the same sync to request the lane-count owner decision and the send waits
+    // until SNDTIMEO. Manual DEALER/ROUTER connects are paired transports, so
+    // release the sync for their pre-owner handshake window as well as for an
+    // owner that is already active.
+    const bool paired_connect_owner_may_start =
+      (options.type == ZLINK_CORE_SOCKET_DEALER
+       || options.type == ZLINK_CORE_SOCKET_ROUTER)
+      && socket_has_manual_connect_endpoints ();
     const bool retry_progress_owner_active =
-      async_mailbox_owns_commands ();
+      async_mailbox_owns_commands () || paired_connect_owner_may_start;
     const bool hold_sync_during_retry =
       send_scope.should_hold_sync_during_retry (retry_progress_owner_active);
 

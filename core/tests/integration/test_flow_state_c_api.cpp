@@ -86,7 +86,7 @@ zlink_monitor_status_t read_monitor_status (void *socket_)
 }
 
 //  One connected DEALER (sender) and ROUTER (receiver) over TCP, with the
-//  route already learned by the ROUTER and both transport-pair lanes ready.
+//  route already learned by the ROUTER and the count-1 transport pair ready.
 //  Mirrors test_flow_state_paired.cpp's fixture; kept local to this file so
 //  each integration test binary stays self-contained.
 struct paired_fixture_t
@@ -109,8 +109,8 @@ struct paired_fixture_t
           zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
         TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
 
-        //  One round trip so the ROUTER learns the route and both pairs are
-        //  ready on both ends.
+        //  One round trip so the ROUTER learns the route and the count-1 pair
+        //  is ready on both ends.
         send_string_expect_success (dealer, "hello", 0);
         char rid[256];
         const int rid_size = zlink_recv (router, rid, sizeof (rid), 0);
@@ -118,6 +118,7 @@ struct paired_fixture_t
         recv_string_expect_success (router, "hello", 0);
 
         TEST_ASSERT_TRUE (resolve_dealer_target ());
+        assert_single_lane ();
     }
 
     void setup_inproc (const char *endpoint_, uint64_t hwm_ = 0)
@@ -148,6 +149,7 @@ struct paired_fixture_t
           0, zlink_recv (router, rid, sizeof (rid), 0));
         recv_string_expect_success (router, "hello", 0);
         TEST_ASSERT_TRUE (resolve_dealer_target ());
+        assert_single_lane ();
     }
 
     bool resolve_dealer_target ()
@@ -175,8 +177,24 @@ struct paired_fixture_t
             router = test_context_socket_close_zero_linger (router);
     }
 
-    //  Delivers one hand-built frame to the DEALER exactly as the completion
-    //  lane would, then drains the socket mailbox so the pipe applies it.
+    void assert_single_lane ()
+    {
+        zlink::pipe_t *const application =
+          as_socket (dealer)->test_pair_pipe (pair_id, pair_generation, false);
+        TEST_ASSERT_NOT_NULL (application);
+        TEST_ASSERT_NULL (
+          as_socket (dealer)->test_pair_pipe (pair_id, pair_generation, true));
+        TEST_ASSERT_EQUAL_UINT (1u, application->get_transport_lane_count ());
+        TEST_ASSERT_EQUAL_INT (zlink::transport_lane_application,
+                               application->get_transport_lane ());
+        TEST_ASSERT_NULL (
+          as_socket (dealer)->completion_pipe_for_transport_pair (
+            pair_id, pair_generation));
+    }
+
+    //  Delivers one hand-built frame to the DEALER through the topology-selected
+    //  control source (Application for this count-1 pair), then drains the
+    //  socket mailbox so the pipe applies it.
     bool inject (uint8_t state_, uint64_t epoch_)
     {
         return inject_frame (state_, epoch_, true);
@@ -184,9 +202,9 @@ struct paired_fixture_t
 
     bool inject_frame (uint8_t state_, uint64_t epoch_, bool drain_)
     {
-        zlink::pipe_t *completion = as_socket (dealer)->completion_pipe_for_transport_pair (
-          pair_id, pair_generation);
-        TEST_ASSERT_NOT_NULL (completion);
+        zlink::pipe_t *control =
+          as_socket (dealer)->test_pair_pipe (pair_id, pair_generation, false);
+        TEST_ASSERT_NOT_NULL (control);
 
         zlink::flow_state::frame_t frame;
         frame.version = zlink::flow_state::frame_protocol_version;
@@ -197,9 +215,9 @@ struct paired_fixture_t
         TEST_ASSERT_EQUAL_INT (0, msg.init ());
         TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&msg, frame));
         msg.set_transport_connection_id (
-          completion->get_transport_connection_id ());
+          control->get_transport_connection_id ());
         const bool consumed =
-          as_socket (dealer)->consume_receive_flow_state_frame (completion, msg);
+          as_socket (dealer)->consume_receive_flow_state_frame (control, msg);
         TEST_ASSERT_EQUAL_INT (0, msg.close ());
         if (drain_)
             (void) as_socket (dealer)->process_submit_commands ();
@@ -280,10 +298,14 @@ bool inject_flow_for_target (void *socket_,
                              const zlink_routed_submit_target_t &target_,
                              uint8_t state_, uint64_t epoch_)
 {
-    zlink::pipe_t *completion =
-      as_socket (socket_)->completion_pipe_for_transport_pair (
-        target_.transport_pair_id, target_.transport_pair_generation);
-    TEST_ASSERT_NOT_NULL (completion);
+    zlink::pipe_t *control = as_socket (socket_)->test_pair_pipe (
+      target_.transport_pair_id, target_.transport_pair_generation, false);
+    TEST_ASSERT_NOT_NULL (control);
+    TEST_ASSERT_EQUAL_UINT (1u, control->get_transport_lane_count ());
+    TEST_ASSERT_EQUAL_INT (zlink::transport_lane_application,
+                           control->get_transport_lane ());
+    TEST_ASSERT_NULL (as_socket (socket_)->test_pair_pipe (
+      target_.transport_pair_id, target_.transport_pair_generation, true));
 
     zlink::flow_state::frame_t frame;
     frame.version = zlink::flow_state::frame_protocol_version;
@@ -293,9 +315,9 @@ bool inject_flow_for_target (void *socket_,
     TEST_ASSERT_EQUAL_INT (0, msg.init ());
     TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&msg, frame));
     msg.set_transport_connection_id (
-      completion->get_transport_connection_id ());
+      control->get_transport_connection_id ());
     const bool consumed =
-      as_socket (socket_)->consume_receive_flow_state_frame (completion, msg);
+      as_socket (socket_)->consume_receive_flow_state_frame (control, msg);
     TEST_ASSERT_EQUAL_INT (0, msg.close ());
     (void) as_socket (socket_)->process_submit_commands ();
     return consumed;
@@ -361,7 +383,7 @@ void test_out_of_range_state_is_invalid_argument ()
     test_context_socket_close_zero_linger (router);
 }
 
-//  PAIR, the PUB/SUB family and STREAM have no completion lane.
+//  PAIR, the PUB/SUB family and STREAM do not support receive-flow control.
 void test_unsupported_socket_types_report_not_supported ()
 {
     const int types[] = {ZLINK_SOCKET_PAIR, ZLINK_SOCKET_PUB, ZLINK_SOCKET_SUB,
@@ -1083,30 +1105,83 @@ void test_late_flow_state_from_a_terminated_pair_changes_nothing ()
 //  pipe is not the registered application pipe.
 void test_late_flow_state_from_a_foreign_pipe_changes_nothing ()
 {
-    paired_fixture_t fixture;
-    fixture.setup ();
+    const int zero = 0;
+    const char first_rid_text[] = "flow-c-api-router-a";
+    const char second_rid_text[] = "flow-c-api-router-b";
+    const char endpoint[] = "inproc://flow-c-api-foreign-completion";
+    void *first = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *second = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (first, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (second, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (
+      first, first_rid_text, sizeof (first_rid_text) - 1));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (
+      second, second_rid_text, sizeof (second_rid_text) - 1));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_router_option (second, ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID,
+                               first_rid_text, sizeof (first_rid_text) - 1));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (first, endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (second, endpoint));
+
+    send_string_expect_success (second, first_rid_text, ZLINK_SNDMORE);
+    send_string_expect_success (second, "prime", 0);
+    recv_string_expect_success (first, second_rid_text, 0);
+    recv_string_expect_success (first, "prime", 0);
+
+    zlink_routing_id_t first_rid;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_get_routing_id (first, &first_rid));
+    const zlink_routed_submit_target_t target =
+      select_router_target_eventually (second, &first_rid);
+    zlink::pipe_t *const application =
+      as_socket (second)->test_pair_pipe (target.transport_pair_id,
+                                          target.transport_pair_generation,
+                                          false);
+    zlink::pipe_t *const completion =
+      as_socket (second)->test_pair_pipe (target.transport_pair_id,
+                                          target.transport_pair_generation,
+                                          true);
+    TEST_ASSERT_NOT_NULL (application);
+    TEST_ASSERT_NOT_NULL (completion);
+    TEST_ASSERT_EQUAL_UINT (2u, application->get_transport_lane_count ());
+    TEST_ASSERT_EQUAL_UINT (2u, completion->get_transport_lane_count ());
+    TEST_ASSERT_EQUAL_INT (zlink::transport_lane_completion,
+                           completion->get_transport_lane ());
 
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
-      zlink_socket_set_receive_flow_state (fixture.router,
-                                           ZLINK_RECEIVE_FLOW_PAUSED));
-    TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (true));
+      zlink_socket_set_receive_flow_state (first, ZLINK_RECEIVE_FLOW_PAUSED));
+    bool paused = false;
+    const std::chrono::steady_clock::time_point pause_deadline =
+      deadline_in_ms (4000);
+    while (!deadline_expired (pause_deadline)) {
+        (void) as_socket (first)->process_submit_commands ();
+        (void) as_socket (second)->process_submit_commands ();
+        if (as_socket (second)->application_pipe_remote_flow_paused (
+              target.transport_pair_id, target.transport_pair_generation)) {
+            paused = true;
+            break;
+        }
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (paused);
 
-    const flow_metrics_t before = read_flow_metrics (fixture.dealer);
+    const flow_metrics_t before = read_flow_metrics (second);
     TEST_ASSERT_EQUAL_UINT64 (1, before.paused_connections);
 
-    zlink::pipe_t *completion = as_socket (fixture.dealer)->test_pair_pipe (
-      fixture.pair_id, fixture.pair_generation, true);
-    TEST_ASSERT_NOT_NULL (completion);
-
     test_monitor_probe_t probe;
-    void *monitor = open_test_monitor_probe (fixture.dealer, k_flow_events, &probe);
+    void *monitor = open_test_monitor_probe (second, k_flow_events, &probe);
 
-    //  The pair is alive and paused, but this is not its application pipe.
-    as_socket (fixture.dealer)->test_deliver_late_flow_state (completion, false, 51);
-    as_socket (fixture.dealer)->test_deliver_late_flow_state (completion, true, 52);
+    //  The count-2 pair is alive and paused, but the Completion source is not
+    //  the registered Application pipe whose blocker/accounting callback this
+    //  test hook models.
+    as_socket (second)->test_deliver_late_flow_state (completion, false, 51);
+    as_socket (second)->test_deliver_late_flow_state (completion, true, 52);
 
-    const flow_metrics_t after = read_flow_metrics (fixture.dealer);
+    const flow_metrics_t after = read_flow_metrics (second);
     TEST_ASSERT_EQUAL_UINT64 (before.paused_connections,
                               after.paused_connections);
     TEST_ASSERT_EQUAL_UINT64 (before.pause_applied, after.pause_applied);
@@ -1114,7 +1189,8 @@ void test_late_flow_state_from_a_foreign_pipe_changes_nothing ()
     TEST_ASSERT_TRUE (test_monitor_probe_wait_no_additional (&probe, 0, 200));
 
     close_test_monitor_probe (&monitor, &probe);
-    fixture.teardown ();
+    test_context_socket_close_zero_linger (second);
+    test_context_socket_close_zero_linger (first);
 }
 
 //  The gauge is socket-wide, so releasing it on termination has to be decided
@@ -1282,9 +1358,9 @@ void test_terminating_an_accounted_pause_releases_it_and_closes_the_duration ()
 //  recorded before the application lane was attached - is the same
 //  PAUSED<->RUNNING flip as one applied by the frame path, and has to be booked
 //  the same way. Which of the two paths applies a given cycle depends on the
-//  order the pair's two lanes are admitted in, so the assertion here is the
-//  invariant that holds for both: every pause raises exactly one PAUSED event
-//  and moves the total exactly once.
+//  order between count-1 Application admission and its queued control, so the
+//  invariant is unchanged: every pause raises exactly one PAUSED event and
+//  moves the total exactly once.
 void test_paused_pair_lifecycle_keeps_gauge_and_events_matched ()
 {
     const int zero = 0;
@@ -1444,49 +1520,70 @@ void test_flow_state_metrics_snapshot_and_reset ()
 int main ()
 {
     setup_test_environment ();
-    const char *h3_case = getenv ("ZLINK_TEST_CASE");
-    const bool h3_only = getenv ("ZLINK_H3_FLOW_ONLY") != NULL || h3_case;
-#define RUN_H3_CASE(NAME, TEST_FN)                                                                \
+    const char *selected_case = getenv ("ZLINK_TEST_CASE");
+    const bool h3_only = getenv ("ZLINK_H3_FLOW_ONLY") != NULL && !selected_case;
+#define RUN_FLOW_CASE(NAME, TEST_FN)                                                              \
     do {                                                                                          \
-        if (!h3_case || strcmp (h3_case, NAME) == 0)                                              \
+        if (!selected_case || strcmp (selected_case, NAME) == 0)                                 \
             RUN_TEST (TEST_FN);                                                                   \
     } while (false)
 
     UNITY_BEGIN ();
     if (!h3_only) {
-        RUN_TEST (test_valid_state_on_dealer_and_router_succeeds_and_is_idempotent);
-        RUN_TEST (test_null_or_invalid_handle_is_invalid_handle);
-        RUN_TEST (test_out_of_range_state_is_invalid_argument);
-        RUN_TEST (test_unsupported_socket_types_report_not_supported);
-        RUN_TEST (test_close_admitted_first_reports_invalid_state_or_handle);
-        RUN_TEST (test_close_races_with_set_receive_flow_state);
-        RUN_TEST (test_pause_and_resume_each_emit_exactly_one_event);
-        RUN_TEST (test_duplicate_frame_emits_stale_event);
-        RUN_TEST (test_data_traffic_emits_no_flow_events);
+        RUN_FLOW_CASE (
+          "test_valid_state_on_dealer_and_router_succeeds_and_is_idempotent",
+          test_valid_state_on_dealer_and_router_succeeds_and_is_idempotent);
+        RUN_FLOW_CASE ("test_null_or_invalid_handle_is_invalid_handle",
+                       test_null_or_invalid_handle_is_invalid_handle);
+        RUN_FLOW_CASE ("test_out_of_range_state_is_invalid_argument",
+                       test_out_of_range_state_is_invalid_argument);
+        RUN_FLOW_CASE ("test_unsupported_socket_types_report_not_supported",
+                       test_unsupported_socket_types_report_not_supported);
+        RUN_FLOW_CASE (
+          "test_close_admitted_first_reports_invalid_state_or_handle",
+          test_close_admitted_first_reports_invalid_state_or_handle);
+        RUN_FLOW_CASE ("test_close_races_with_set_receive_flow_state",
+                       test_close_races_with_set_receive_flow_state);
+        RUN_FLOW_CASE ("test_pause_and_resume_each_emit_exactly_one_event",
+                       test_pause_and_resume_each_emit_exactly_one_event);
+        RUN_FLOW_CASE ("test_duplicate_frame_emits_stale_event",
+                       test_duplicate_frame_emits_stale_event);
+        RUN_FLOW_CASE ("test_data_traffic_emits_no_flow_events",
+                       test_data_traffic_emits_no_flow_events);
     }
-    RUN_H3_CASE (
+    RUN_FLOW_CASE (
       "same-state",
       test_same_state_forward_epoch_and_repeated_local_set_emit_no_event);
-    RUN_H3_CASE (
+    RUN_FLOW_CASE (
       "resumed-stale",
       test_resumed_routing_id_and_epoch_stale_match_prior_transition);
-    RUN_H3_CASE (
+    RUN_FLOW_CASE (
       "hwm-resumed",
       test_resumed_while_hwm_blocked_is_not_writable_and_send_stays_rejected);
-    RUN_H3_CASE ("mask", test_flow_event_numeric_values_and_each_excluded_mask);
-    RUN_H3_CASE (
+    RUN_FLOW_CASE ("mask", test_flow_event_numeric_values_and_each_excluded_mask);
+    RUN_FLOW_CASE (
       "ordering",
       test_shared_monitor_preserves_explicit_commit_order_across_connections);
     if (!h3_only) {
-        RUN_TEST (test_pause_applied_by_pair_admission_is_booked);
-        RUN_TEST (test_late_flow_state_from_a_terminated_pair_changes_nothing);
-        RUN_TEST (test_late_flow_state_from_a_foreign_pipe_changes_nothing);
-        RUN_TEST (test_terminating_a_received_but_unapplied_pause_leaves_the_gauge_alone);
-        RUN_TEST (test_terminating_an_accounted_pause_releases_it_and_closes_the_duration);
-        RUN_TEST (test_paused_pair_lifecycle_keeps_gauge_and_events_matched);
-        RUN_TEST (test_flow_state_metrics_snapshot_and_reset);
+        RUN_FLOW_CASE ("test_pause_applied_by_pair_admission_is_booked",
+                       test_pause_applied_by_pair_admission_is_booked);
+        RUN_FLOW_CASE (
+          "test_late_flow_state_from_a_terminated_pair_changes_nothing",
+          test_late_flow_state_from_a_terminated_pair_changes_nothing);
+        RUN_FLOW_CASE ("test_late_flow_state_from_a_foreign_pipe_changes_nothing",
+                       test_late_flow_state_from_a_foreign_pipe_changes_nothing);
+        RUN_FLOW_CASE (
+          "test_terminating_a_received_but_unapplied_pause_leaves_the_gauge_alone",
+          test_terminating_a_received_but_unapplied_pause_leaves_the_gauge_alone);
+        RUN_FLOW_CASE (
+          "test_terminating_an_accounted_pause_releases_it_and_closes_the_duration",
+          test_terminating_an_accounted_pause_releases_it_and_closes_the_duration);
+        RUN_FLOW_CASE ("test_paused_pair_lifecycle_keeps_gauge_and_events_matched",
+                       test_paused_pair_lifecycle_keeps_gauge_and_events_matched);
+        RUN_FLOW_CASE ("test_flow_state_metrics_snapshot_and_reset",
+                       test_flow_state_metrics_snapshot_and_reset);
     }
     const int rc = UNITY_END ();
-#undef RUN_H3_CASE
+#undef RUN_FLOW_CASE
     return rc;
 }

@@ -132,6 +132,7 @@ zlink::options_t::options_t () :
     tcp_nodelay (1),
     zmp_metadata (false),
     transport_lane (transport_lane_application),
+    transport_lane_count (0),
     physical_queue_class (physical_queue_class_application),
     transport_pair_id (0),
     transport_pair_generation (0),

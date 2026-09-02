@@ -8,7 +8,8 @@ set(TEST_PTY_WRAPPER "${CMAKE_CURRENT_LIST_DIR}/run_under_pty.sh")
 set(REGISTERED_TESTS)
 set(SPLIT_ONLY_TEST_TARGETS
     test_backpressure_matrix
-    test_backpressure_oneway_matrix)
+    test_backpressure_oneway_matrix
+    test_dealer_router_single_lane_contract)
 set(INTEGRATION_TEST_ROOT "integration")
 set(E2E_TEST_ROOT "e2e")
 
@@ -108,6 +109,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_polling_contract
   ${INTEGRATION_TEST_ROOT}/test_phase3_completion_contract
   ${INTEGRATION_TEST_ROOT}/test_phase3_request_reply_contract
+  ${INTEGRATION_TEST_ROOT}/test_dealer_router_single_lane_contract
   ${INTEGRATION_TEST_ROOT}/test_zmp_request_reply
   ${INTEGRATION_TEST_ROOT}/test_router_handover
   ${INTEGRATION_TEST_ROOT}/test_router_mandatory
@@ -465,8 +467,8 @@ if(TARGET test_issue_566)
   set_tests_properties(test_issue_566 PROPERTIES TIMEOUT 30)
 endif()
 if(TARGET test_transport_matrix)
-  # DEALER/ROUTER use two physical connections, so TLS/WSS matrix cases
-  # perform twice as many transport handshakes.
+  # ROUTER/ROUTER uses two physical connections, so TLS/WSS matrix cases
+  # still perform twice as many transport handshakes as single-lane D/R.
 set_tests_properties(test_transport_matrix PROPERTIES TIMEOUT 120)
 set_tests_properties(test_router_concurrent_routed_recv PROPERTIES TIMEOUT 120)
 set_tests_properties(test_zmp_metadata PROPERTIES TIMEOUT 30)
@@ -738,6 +740,37 @@ set(H3_FLOW_CONTRACT_TEST_SPECS
     test_gap_h3_flow_event_mask=mask
     test_gap_h3_flow_ordering=ordering)
 
+set(DEALER_ROUTER_SINGLE_LANE_CONTRACT_TEST_SPECS
+    test_single_lane_wire_dr_count_one=test_sl_wire_dr_count_one_ready_metadata
+    test_single_lane_wire_rr_count_two=test_sl_wire_rr_count_two_ready_fence
+    test_single_lane_wire_nonpaired_count_one=test_sl_wire_nonpaired_patterns_omit_lane_metadata
+    test_single_lane_wire_symmetric_owner=test_sl_wire_symmetric_direction_and_inproc_order
+    test_single_lane_wire_mandatory_count=test_sl_wire_mandatory_lane_count_rejections
+    test_single_lane_wire_old_peer_rejected=test_sl_wire_old_peer_without_lane_count_rejected
+    test_single_lane_wire_transport_matrix=test_sl_wire_transport_matrix_counts
+    test_single_lane_request_reply_at_head=test_sl_request_reply_at_head_completion_only
+    test_single_lane_request_data_before_reply=test_sl_request_multipart_data_before_reply_fifo
+    test_single_lane_request_reply_before_data=test_sl_request_reply_before_data_destinations
+    test_single_lane_request_timeout_wins=test_sl_request_timeout_wins_once_over_late_reply
+    test_single_lane_request_reply_backpressure=test_sl_request_reply_submit_obeys_dr_backpressure
+    test_single_lane_request_rr_isolation=test_sl_request_rr_reply_isolated_from_application_pause
+    test_single_lane_request_type_restriction=test_sl_request_router_to_dealer_type_restriction
+    test_single_lane_flow_dr_application_path=test_sl_flow_dr_application_control_is_not_public_data
+    test_single_lane_flow_rr_completion_path=test_sl_flow_rr_completion_control_progresses_under_pause
+    test_single_lane_flow_normal_kind_gate=test_sl_flow_dr_normal_kinds_share_pause_and_hwm_gate
+    test_single_lane_flow_control_boundary=test_sl_flow_control_boundary_coalesces_latest_state
+    test_single_lane_flow_stale_generation=test_sl_flow_stale_generation_is_fenced
+    test_single_lane_flow_reconnect_resync=test_sl_flow_reconnect_resynchronizes_absolute_state
+    test_single_lane_flow_snapshot_accounting=test_sl_flow_snapshot_accounts_dr_reply_as_application
+    test_single_lane_monitor_lane_values=test_sl_monitor_lane_values_follow_topology
+    test_single_lane_monitor_logical_ready=test_sl_monitor_logical_ready_once_per_peer
+    test_single_lane_monitor_polling_split=test_sl_monitor_polling_separates_data_and_completion
+    test_single_lane_monitor_detach_count_one=test_sl_monitor_detach_count_one_has_single_lifecycle
+    test_single_lane_monitor_detach_count_two=test_sl_monitor_detach_count_two_retires_pair
+    test_single_lane_monitor_reply_reconnect=test_sl_monitor_reply_token_reconnect_uses_current_application
+    test_single_lane_monitor_status_abi=test_sl_monitor_status_abi_and_flow_detail_stable
+    test_single_lane_monitor_status_mask=test_sl_monitor_status_ready_is_independent_of_event_mask)
+
 if(TARGET test_stream_socket)
   add_env_case_suite(
     test_stream_socket
@@ -815,6 +848,31 @@ if(TARGET test_flow_state_c_api)
     ${H3_FLOW_CONTRACT_TEST_NAMES}
     PROPERTIES TIMEOUT 15)
 endif()
+if(TARGET test_dealer_router_single_lane_contract)
+  extract_case_names_from_specs(
+    DEALER_ROUTER_SINGLE_LANE_CONTRACT_CASES
+    DEALER_ROUTER_SINGLE_LANE_CONTRACT_TEST_SPECS)
+  assert_named_case_coverage(
+    "dealer-router single-lane contract"
+    "${CMAKE_CURRENT_LIST_DIR}/${INTEGRATION_TEST_ROOT}/test_dealer_router_single_lane_contract.cpp"
+    RUN_SINGLE_LANE_CONTRACT_TEST
+    DEALER_ROUTER_SINGLE_LANE_CONTRACT_CASES)
+  add_env_case_suite(
+    test_dealer_router_single_lane_contract
+    DEALER_ROUTER_SINGLE_LANE_CONTRACT_TEST_SPECS
+    DEALER_ROUTER_SINGLE_LANE_CONTRACT_TEST_NAMES)
+  set_zlink_network_case_properties(
+    DEALER_ROUTER_SINGLE_LANE_CONTRACT_TEST_NAMES
+    45)
+  set_tests_properties(
+    test_single_lane_wire_transport_matrix
+    PROPERTIES TIMEOUT 180)
+  set_tests_properties(
+    test_single_lane_wire_mandatory_count
+    test_single_lane_flow_reconnect_resync
+    test_single_lane_monitor_detach_count_two
+    PROPERTIES TIMEOUT 90)
+endif()
 
 set_zlink_scenario_properties(
   test_scenario_router_router_zlink_connect
@@ -868,7 +926,8 @@ list(REMOVE_ITEM INTEGRATION_SERIAL_TESTS ${E2E_SERIAL_TESTS} ${REGRESSION_SERIA
 list(APPEND INTEGRATION_SERIAL_TESTS
      ${BACKPRESSURE_MATRIX_INTEGRATION_TEST_NAMES}
      ${BACKPRESSURE_ONEWAY_INTEGRATION_TEST_NAMES}
-     ${H3_FLOW_CONTRACT_TEST_NAMES})
+     ${H3_FLOW_CONTRACT_TEST_NAMES}
+     ${DEALER_ROUTER_SINGLE_LANE_CONTRACT_TEST_NAMES})
 list(REMOVE_ITEM INTEGRATION_SERIAL_TESTS ${E2E_SERIAL_TESTS} ${REGRESSION_SERIAL_TESTS})
 list(REMOVE_DUPLICATES INTEGRATION_SERIAL_TESTS)
 

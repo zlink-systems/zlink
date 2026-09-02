@@ -332,10 +332,22 @@ void test_repeated_cross_direction_reconnect_uses_current_endpoint ()
         set_connect_routing_id (server, "Z");
         TEST_ASSERT_SUCCESS_ERRNO (
           zlink_connect (server, client_endpoint));
+
+        //  Establish the deterministically selected A -> Z direction before
+        //  creating its reciprocal standby. Otherwise a request can be
+        //  admitted on the briefly sole Z -> A route and then receive its
+        //  reply after both peers have converged to A -> Z. The requester
+        //  correctly fences that reply to the request's exact submit pair.
+        send_request_to_exercise_completion_path (
+          client, server, "A");
+
         set_connect_routing_id (client, "A");
         TEST_ASSERT_SUCCESS_ERRNO (
           zlink_connect (client, server_endpoint));
 
+        //  Let the reciprocal connection become the idle standby before the
+        //  request that exercises the repeated cross-direction lifecycle.
+        msleep (SETTLE_TIME);
         send_request_to_exercise_completion_path (
           client, server, "A");
 

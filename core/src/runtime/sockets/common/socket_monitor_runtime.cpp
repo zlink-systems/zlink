@@ -17,9 +17,10 @@ std::string make_monitor_ready_key (const zlink::endpoint_uri_pair_t &endpoint_u
         key = endpoint_uri_pair_.remote;
     key.push_back ('\0');
     if (transport_pair_id_ != 0) {
-        // Application and Completion are two physical lanes of one public
-        // ready transport.  They can learn the peer RID at different times,
-        // so a pair key must not split when one lane reports an empty RID.
+        // A paired transport has one public-ready identity whether it owns one
+        // Application lane or a ROUTER-ROUTER Application/Completion pair.
+        // The two ROUTER lanes can learn the peer RID at different times, so
+        // the ready key must not split when one lane reports an empty RID.
         key.append (reinterpret_cast<const char *> (&transport_pair_id_),
                     sizeof (transport_pair_id_));
         key.append (reinterpret_cast<const char *> (&transport_pair_generation_),
@@ -46,10 +47,11 @@ make_monitor_ready_endpoint_prefix (const zlink::endpoint_uri_pair_t &endpoint_u
     return prefix;
 }
 
-//  A transport pair is identified by its pair id and generation. The peer
-//  routing id is deliberately left out: the two lanes of one pair can learn
-//  the peer identity at different moments, and a key that included it would
-//  split the pair into two half-ready entries that never complete.
+// A count-two ROUTER-ROUTER pair is identified by its pair id and generation.
+// The peer routing id is deliberately left out: the two lanes can learn the
+// peer identity at different moments, and a key that included it would split
+// the pair into two half-ready entries that never complete. Count-one pairs do
+// not enter this accumulator.
 std::string make_transport_pair_ready_key (
   const zlink::endpoint_uri_pair_t &endpoint_uri_pair_,
   uint64_t pair_id_,
@@ -165,19 +167,16 @@ bool zlink::socket_monitor_runtime_t::mark_transport_pair_lane_ready (
     return true;
 }
 
-void zlink::socket_monitor_runtime_t::erase_transport_pair_readiness_for_endpoint (
-  const endpoint_uri_pair_t &endpoint_uri_pair_)
+bool zlink::socket_monitor_runtime_t::erase_transport_pair_readiness (
+  const endpoint_uri_pair_t &endpoint_uri_pair_,
+  uint64_t pair_id_,
+  uint64_t generation_)
 {
-    const std::string prefix =
-      make_monitor_ready_endpoint_prefix (endpoint_uri_pair_);
-    for (std::map<std::string, uint8_t>::iterator it =
-           transport_pair_ready_lanes.begin ();
-         it != transport_pair_ready_lanes.end ();) {
-        if (it->first.compare (0, prefix.size (), prefix) == 0)
-            it = transport_pair_ready_lanes.erase (it);
-        else
-            ++it;
-    }
+    if (pair_id_ == 0 || generation_ == 0)
+        return false;
+    return transport_pair_ready_lanes.erase (make_transport_pair_ready_key (
+             endpoint_uri_pair_, pair_id_, generation_))
+           != 0;
 }
 
 

@@ -415,7 +415,9 @@ void zlink::asio_ws_connecter_t::create_engine (fd_t fd_, const std::string &loc
     //  Shut down the connecter
     terminate ();
 
-    _socket_ptr->event_connected (endpoint_pair, fd_);
+    _socket_ptr->event_connected (
+      endpoint_pair, fd_, options.transport_lane, options.transport_pair_id,
+      options.transport_pair_generation);
 }
 
 bool zlink::asio_ws_connecter_t::tune_socket (fd_t fd_)

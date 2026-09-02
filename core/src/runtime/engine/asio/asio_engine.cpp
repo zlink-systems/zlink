@@ -1925,11 +1925,13 @@ void zlink::asio_engine_t::error (error_reason_t reason_)
     zlink::blob_t routing_id;
     if (_connection_facade.session)
         _connection_facade.session->snapshot_peer_routing_id (&routing_id);
-    _connection_facade.socket->event_disconnected (_endpoint_uri_pair, disconnect_reason,
-                                                   routing_id.data (), routing_id.size (),
-                                                   _connection_facade.session->transport_lane (),
-                                                   _connection_facade.session->transport_pair_id (),
-                                                   _connection_facade.session->transport_pair_generation ());
+    if (_connection_facade.session->try_claim_transport_disconnected_event ()) {
+        _connection_facade.socket->event_disconnected (
+          _endpoint_uri_pair, disconnect_reason, routing_id.data (),
+          routing_id.size (), _connection_facade.session->transport_lane (),
+          _connection_facade.session->transport_pair_id (),
+          _connection_facade.session->transport_pair_generation ());
+    }
     _connection_facade.session->flush ();
     _connection_facade.session->engine_error (!_connection_facade.handshaking, reason_);
     unplug ();

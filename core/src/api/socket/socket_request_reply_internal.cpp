@@ -26,6 +26,10 @@ size_t hash_combine (size_t seed_, size_t value_)
 std::atomic<int> g_request_reply_allocation_failpoint (
   request_reply_allocation_none);
 std::atomic<bool> g_request_reply_write_failure_after_prefix (false);
+std::mutex g_request_reply_write_prefix_hook_mutex;
+request_reply_write_after_prefix_hook_fn
+  g_request_reply_write_after_prefix_hook = NULL;
+void *g_request_reply_write_after_prefix_userdata = NULL;
 std::mutex g_request_reply_timeout_hook_mutex;
 request_reply_timeout_after_remove_hook_fn
   g_request_reply_timeout_after_remove_hook = NULL;
@@ -144,6 +148,7 @@ dealer_reply_target_t::dealer_reply_target_t () :
 router_reply_target_t::router_reply_target_t () :
     pipe (NULL),
     source_pipe_identity (NULL),
+    source_peer_socket_type (0),
     wire_request_seq (0),
     transport_pair_id (0),
     transport_pair_generation (0),
@@ -153,6 +158,7 @@ router_reply_target_t::router_reply_target_t () :
 
 router_reply_alias_key_t::router_reply_alias_key_t () :
     pipe (NULL),
+    source_peer_socket_type (0),
     transport_pair_id (0),
     transport_pair_generation (0),
     wire_request_seq (0)
@@ -162,7 +168,9 @@ router_reply_alias_key_t::router_reply_alias_key_t () :
 bool router_reply_alias_key_t::operator== (
   const router_reply_alias_key_t &other_) const
 {
-    return pipe == other_.pipe && transport_pair_id == other_.transport_pair_id
+    return pipe == other_.pipe
+           && source_peer_socket_type == other_.source_peer_socket_type
+           && transport_pair_id == other_.transport_pair_id
            && transport_pair_generation == other_.transport_pair_generation
            && wire_request_seq == other_.wire_request_seq;
 }
@@ -171,6 +179,8 @@ size_t router_reply_alias_key_hash_t::operator() (
   const router_reply_alias_key_t &key_) const
 {
     size_t seed = std::hash<zlink::pipe_t *> () (key_.pipe);
+    seed = hash_combine (
+      seed, std::hash<int> () (key_.source_peer_socket_type));
     seed = hash_combine (
       seed, std::hash<uint64_t> () (key_.transport_pair_id));
     seed = hash_combine (
@@ -367,6 +377,29 @@ bool test_take_request_reply_write_failure_after_prefix ()
 {
     return g_request_reply_write_failure_after_prefix.exchange (
       false, std::memory_order_acq_rel);
+}
+
+void test_set_request_reply_write_after_prefix_hook (
+  request_reply_write_after_prefix_hook_fn hook_, void *userdata_)
+{
+    std::lock_guard<std::mutex> lock (
+      g_request_reply_write_prefix_hook_mutex);
+    g_request_reply_write_after_prefix_userdata = userdata_;
+    g_request_reply_write_after_prefix_hook = hook_;
+}
+
+void test_invoke_request_reply_write_after_prefix_hook ()
+{
+    request_reply_write_after_prefix_hook_fn hook = NULL;
+    void *userdata = NULL;
+    {
+        std::lock_guard<std::mutex> lock (
+          g_request_reply_write_prefix_hook_mutex);
+        hook = g_request_reply_write_after_prefix_hook;
+        userdata = g_request_reply_write_after_prefix_userdata;
+    }
+    if (hook)
+        hook (userdata);
 }
 
 void test_set_request_reply_timeout_after_remove_hook (

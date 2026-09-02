@@ -15,6 +15,12 @@ namespace socket_reqrep_internal
 {
 namespace
 {
+#ifdef ZLINK_BUILD_TESTS
+std::atomic<completion_pipe_budget_exhausted_test_hook_fn>
+  completion_pipe_budget_exhausted_test_hook (NULL);
+std::atomic<void *> completion_pipe_budget_exhausted_test_hook_userdata (NULL);
+#endif
+
 enum completion_message_result_t
 {
     completion_message_accepted,
@@ -120,8 +126,8 @@ int publish_pull_reply_completion (
 
 completion_message_result_t complete_reply_from_transport (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
-  uint64_t transport_pair_id_,
-  uint64_t transport_pair_generation_,
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
+  zlink::pipe_t *source_pipe_, uint64_t source_connection_id_,
   uint8_t message_type_,
   uint64_t request_sequence_,
   zlink_msg_t *parts_,
@@ -147,7 +153,8 @@ completion_message_result_t complete_reply_from_transport (
         std::lock_guard<std::mutex> lock (state_->mutex);
         if (!take_pending_reply_from_transport_locked (
               state_.get (), request_sequence_, transport_pair_id_,
-              transport_pair_generation_, &pending)) {
+              transport_pair_generation_, source_pipe_,
+              source_connection_id_, &pending)) {
             zlink::request_reply::close_request_reply_parts (parts_, part_count_);
             return completion_message_accepted;
         }
@@ -180,14 +187,28 @@ void discard_completion_message_tail (zlink::pipe_t *pipe_, bool more_)
 
 }
 
-void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe_)
+completion_pipe_drain_result_t process_completion_pipe (
+  zlink::socket_base_t *socket_, zlink::pipe_t *pipe_)
 {
     if (!socket_ || !pipe_)
-        return;
+        return completion_pipe_drained;
 
     std::shared_ptr<socket_request_reply_state_t> state = socket_->request_reply_state ();
     request_reply_frame_buffer_t parts;
+    size_t completed_records = 0;
     while (true) {
+        if (pipe_->get_transport_lane_count () == 1u) {
+            const pipe_normalized_head_kind_t head =
+              pipe_->probe_normalized_head_kind ();
+            if (head == pipe_head_empty)
+                return completion_pipe_drained;
+            if (head == pipe_head_data || head == pipe_head_request)
+                return completion_pipe_public_head;
+            if (head == pipe_head_invalid) {
+                pipe_->terminate (false);
+                return completion_pipe_terminated;
+            }
+        }
         // Every exit below closes or consumes the current elements. Keep the
         // vector's storage for the lifetime of this drain so steady-state
         // completions do not allocate once the common part capacity is warm.
@@ -198,6 +219,7 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
         bool allocation_failed = false;
         uint8_t message_type = zlink::zmp_kind_data;
         uint64_t request_sequence = 0;
+        uint64_t source_connection_id = 0;
         while (!complete) {
             zlink::msg_t frame;
             const int init_rc = frame.init ();
@@ -209,7 +231,8 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
                 close_request_reply_frame_buffer (&parts);
                 if (truncated_message)
                     pipe_->terminate (false);
-                return;
+                return truncated_message ? completion_pipe_terminated
+                                         : completion_pipe_drained;
             }
 
             const unsigned char frame_flags = frame.flags ();
@@ -229,7 +252,7 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
                         discard_completion_message_tail (pipe_, true);
                         close_request_reply_frame_buffer (&parts);
                         pipe_->terminate (false);
-                        return;
+                        return completion_pipe_terminated;
                     }
                     flow_state_consumed = true;
                     complete = true;
@@ -241,10 +264,11 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
                 discard_completion_message_tail (pipe_, more);
                 close_request_reply_frame_buffer (&parts);
                 pipe_->terminate (false);
-                return;
+                return completion_pipe_terminated;
             }
 
             if (parts.empty ()) {
+                source_connection_id = frame.transport_connection_id ();
                 if (!zlink::request_reply::read_request_reply_metadata (
                       reinterpret_cast<const zlink_msg_t *> (&frame),
                       &message_type, &request_sequence)
@@ -256,24 +280,34 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
                     discard_completion_message_tail (pipe_, more);
                     close_request_reply_frame_buffer (&parts);
                     pipe_->terminate (false);
-                    return;
+                    return completion_pipe_terminated;
                 }
 
                 if (!more) {
                     if (complete_reply_from_transport (
                           state, pipe_->get_transport_pair_id (),
-                          pipe_->get_transport_pair_generation (),
+                          pipe_->get_transport_pair_generation (), pipe_,
+                          source_connection_id,
                           message_type, request_sequence,
                           reinterpret_cast<zlink_msg_t *> (&frame), 1)
                         == completion_message_protocol_error) {
                         pipe_->terminate (false);
-                        return;
+                        return completion_pipe_terminated;
                     }
                     completion_delivered_directly = true;
                     complete = true;
                     continue;
                 }
             } else {
+                if (frame.transport_connection_id ()
+                    != source_connection_id) {
+                    const int close_rc = frame.close ();
+                    errno_assert (close_rc == 0);
+                    discard_completion_message_tail (pipe_, more);
+                    close_request_reply_frame_buffer (&parts);
+                    pipe_->terminate (false);
+                    return completion_pipe_terminated;
+                }
                 uint8_t later_kind = zlink::zmp_kind_data;
                 uint64_t later_sequence = 0;
                 if (zlink::request_reply::read_request_reply_metadata (
@@ -284,7 +318,7 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
                     discard_completion_message_tail (pipe_, more);
                     close_request_reply_frame_buffer (&parts);
                     pipe_->terminate (false);
-                    return;
+                    return completion_pipe_terminated;
                 }
             }
 
@@ -305,26 +339,56 @@ void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe
             complete = !more;
         }
 
-        if (flow_state_consumed)
-            continue;
-        if (completion_delivered_directly)
-            continue;
         if (allocation_failed) {
             close_request_reply_frame_buffer (&parts);
-            continue;
+        } else if (!flow_state_consumed && !completion_delivered_directly) {
+            if (complete_reply_from_transport (
+                  state, pipe_->get_transport_pair_id (),
+                  pipe_->get_transport_pair_generation (), pipe_,
+                  source_connection_id, message_type,
+                  request_sequence, &parts[0],
+                  parts.size ())
+                == completion_message_protocol_error) {
+                pipe_->terminate (false);
+                return completion_pipe_terminated;
+            }
         }
 
-        if (complete_reply_from_transport (
-              state, pipe_->get_transport_pair_id (),
-              pipe_->get_transport_pair_generation (), message_type,
-              request_sequence, &parts[0],
-              parts.size ())
-            == completion_message_protocol_error) {
-            pipe_->terminate (false);
-            return;
+        //  Budget only at a record boundary. In particular, never yield after
+        //  a MORE part: another pipe may run between records, not inside one.
+        ++completed_records;
+        if (completed_records == completion_pipe_record_budget) {
+#ifdef ZLINK_BUILD_TESTS
+            const completion_pipe_budget_exhausted_test_hook_fn hook =
+              completion_pipe_budget_exhausted_test_hook.load (
+                std::memory_order_acquire);
+            if (hook)
+                hook (socket_, pipe_,
+                      completion_pipe_budget_exhausted_test_hook_userdata.load (
+                        std::memory_order_acquire));
+#endif
+            return completion_pipe_budget_exhausted;
         }
     }
 }
+
+#ifdef ZLINK_BUILD_TESTS
+void test_set_completion_pipe_budget_exhausted_hook (
+  completion_pipe_budget_exhausted_test_hook_fn hook_, void *userdata_)
+{
+    if (!hook_) {
+        completion_pipe_budget_exhausted_test_hook.store (
+          NULL, std::memory_order_release);
+        completion_pipe_budget_exhausted_test_hook_userdata.store (
+          NULL, std::memory_order_release);
+        return;
+    }
+    completion_pipe_budget_exhausted_test_hook_userdata.store (
+      userdata_, std::memory_order_release);
+    completion_pipe_budget_exhausted_test_hook.store (
+      hook_, std::memory_order_release);
+}
+#endif
 
 bool has_pending_request_work (const std::shared_ptr<socket_request_reply_state_t> &state_)
 {

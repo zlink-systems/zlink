@@ -4,6 +4,7 @@
 #define __ZLINK_SESSION_BASE_HPP_INCLUDED__
 
 #include <stdarg.h>
+#include <mutex>
 
 #include "core/own.hpp"
 #include "core/io_object.hpp"
@@ -69,9 +70,20 @@ class session_base_t : public own_t, public io_object_t, public i_pipe_events
     transport_lane_t transport_lane () const { return _transport_lane; }
     uint64_t transport_pair_id () const { return _transport_pair_id; }
     uint64_t transport_pair_generation () const { return _transport_pair_generation; }
+    // Serializes paired transport DISCONNECTED publication with the socket
+    // endpoint's explicit-termination fallback.
+    bool try_claim_transport_disconnected_event ();
     int set_peer_transport_pair (transport_lane_t lane_,
                                  uint64_t pair_id_,
                                  uint64_t generation_);
+    int set_transport_lane_count (unsigned char lane_count_);
+    int request_transport_pair_owner_decision (int peer_socket_type_);
+    bool claim_transport_pair_owner_request (uint64_t connection_id_,
+                                             uint64_t pair_id_,
+                                             uint64_t generation_);
+    bool commit_transport_pair_owner_request (
+      uint64_t connection_id_, uint64_t pair_id_, uint64_t generation_,
+      std::unique_lock<std::mutex> *commit_guard_out_);
     void set_peer_max_message_bytes (uint64_t max_message_bytes_);
 
   protected:
@@ -94,6 +106,7 @@ class session_base_t : public own_t, public io_object_t, public i_pipe_events
     void reconnect ();
     void retain_socket_pipe (zlink::pipe_t *pipe_);
     void release_socket_pipe ();
+    void release_transport_pair_owner_progress_if_held ();
     bool is_active_transport_pair () const;
     void start_transport_pair_reconnect (bool force_);
 
@@ -102,6 +115,9 @@ class session_base_t : public own_t, public io_object_t, public i_pipe_events
     void process_attach (zlink::i_engine *engine_) ZLINK_FINAL;
     void process_term (int linger_) ZLINK_FINAL;
     void process_conn_failed () ZLINK_OVERRIDE;
+    void process_transport_pair_owner_decision (
+      uint64_t connection_id_, uint64_t pair_id_, uint64_t generation_,
+      unsigned char lane_count_, int error_number_) ZLINK_OVERRIDE;
 
     //  i_poll_events handlers.
     void timer_event (int id_) ZLINK_FINAL;
@@ -153,6 +169,20 @@ class session_base_t : public own_t, public io_object_t, public i_pipe_events
     uint64_t _transport_pair_generation;
     bool _socket_pipe_bound;
     bool _transport_pair_reconnect_in_progress;
+    enum transport_pair_owner_request_state_t
+    {
+        transport_pair_owner_idle,
+        transport_pair_owner_pending,
+        transport_pair_owner_claimed,
+        transport_pair_owner_committed,
+        transport_pair_owner_canceled
+    };
+    std::mutex _transport_pair_owner_sync;
+    transport_pair_owner_request_state_t _transport_pair_owner_request_state;
+    uint64_t _transport_pair_owner_connection_id;
+    uint64_t _transport_pair_owner_pair_id;
+    uint64_t _transport_pair_owner_generation;
+    bool _transport_pair_owner_progress_held;
 
     //  I/O thread the session is living in. It will be used to plug in
     //  the engines into the same thread.

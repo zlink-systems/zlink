@@ -359,8 +359,8 @@ void test_matrix_tls ()
 
 int main ()
 {
-    // DEALER/ROUTER now establish two physical transport connections. The
-    // encrypted matrix therefore performs twice as many TLS handshakes.
+    // ROUTER/ROUTER establishes two physical transport connections. The
+    // encrypted R/R cells therefore perform twice as many TLS handshakes.
     setup_test_environment (120);
 
     UNITY_BEGIN ();

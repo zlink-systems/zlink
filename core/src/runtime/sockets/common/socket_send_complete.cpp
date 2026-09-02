@@ -619,7 +619,44 @@ void zlink::socket_base_t::notify_send_pending_writable (pipe_t *pipe_)
 
 void zlink::socket_base_t::notify_incremental_send_released ()
 {
+    lifecycle_coordinator ().release_public_multipart_control_boundary ();
+    flush_deferred_peer_controls ();
     notify_send_pending_writable (NULL);
+}
+
+void zlink::socket_base_t::hold_incremental_send_control_boundary ()
+{
+    lifecycle_coordinator ().hold_public_multipart_control_boundary ();
+}
+
+void zlink::socket_base_t::clear_incremental_send_control_boundary ()
+{
+    lifecycle_coordinator ().release_public_multipart_control_boundary ();
+}
+
+void zlink::socket_base_t::flush_deferred_peer_controls ()
+{
+    if (lifecycle_coordinator ().public_multipart_send_active ())
+        return;
+
+    std::vector<pipe_t *> targets;
+    {
+        scoped_lock_t lock (_transport_pairs_sync);
+        for (transport_pairs_t::const_iterator it = _transport_pairs.begin (),
+                                               end = _transport_pairs.end ();
+             it != end; ++it) {
+            pipe_t *const application = it->second.application;
+            pipe_t *const completion = it->second.completion;
+            if (application && application->retain_lifetime_ref ())
+                targets.push_back (application);
+            if (completion && completion->retain_lifetime_ref ())
+                targets.push_back (completion);
+        }
+    }
+    for (size_t i = 0; i != targets.size (); ++i) {
+        (void) targets[i]->flush_pending_peer_controls ();
+        targets[i]->release_lifetime_ref ();
+    }
 }
 
 void zlink::socket_base_t::fail_pull_send_pending_for_logical_target (

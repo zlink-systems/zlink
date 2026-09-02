@@ -63,6 +63,7 @@ zlink::asio_zmp_engine_t::asio_zmp_engine_t (fd_t fd_,
     _hello_body_len (0),
     _hello_send_size (0),
     _negotiated_transport_lane (options_.transport_lane),
+    _negotiated_transport_lane_count (options_.transport_lane_count),
     _negotiated_transport_pair_id (options_.transport_pair_id),
     _negotiated_transport_pair_generation (
       options_.transport_pair_generation),
@@ -88,6 +89,7 @@ zlink::asio_zmp_engine_t::asio_zmp_engine_t (fd_t fd_,
     _hello_body_len (0),
     _hello_send_size (0),
     _negotiated_transport_lane (options_.transport_lane),
+    _negotiated_transport_lane_count (options_.transport_lane_count),
     _negotiated_transport_pair_id (options_.transport_pair_id),
     _negotiated_transport_pair_generation (
       options_.transport_pair_generation),
@@ -116,6 +118,7 @@ zlink::asio_zmp_engine_t::asio_zmp_engine_t (
     _hello_body_len (0),
     _hello_send_size (0),
     _negotiated_transport_lane (options_.transport_lane),
+    _negotiated_transport_lane_count (options_.transport_lane_count),
     _negotiated_transport_pair_id (options_.transport_pair_id),
     _negotiated_transport_pair_generation (
       options_.transport_pair_generation),
@@ -235,8 +238,7 @@ void zlink::asio_zmp_engine_t::plug_internal ()
 {
     set_handshake_timer ();
 
-    const bool defer_ready =
-      paired_transport () && !_options.transport_pair_initiator;
+    const bool defer_ready = paired_transport ();
     if (defer_ready) {
         zmp_control::build_hello_frame (
           _options, _hello_send, sizeof (_hello_send), &_hello_send_size);
@@ -301,7 +303,7 @@ bool zlink::asio_zmp_engine_t::handshake ()
     //  Do not publish local pair admission until that reply has left the
     //  transport output buffer; otherwise the peer can observe readiness and
     //  send or close while this lane is still wire-incomplete.
-    if (paired_transport () && !_options.transport_pair_initiator
+    if (paired_transport ()
         && (!_ready_sent || _deferred_ready_pending || _outsize != 0)) {
         errno = EAGAIN;
         return false;
@@ -437,7 +439,64 @@ bool zlink::asio_zmp_engine_t::parse_hello (const unsigned char *data_, size_t s
     _peer_socket_type = result.peer_type;
     session ()->set_peer_socket_type (result.peer_type);
 
+    if (paired_transport ()) {
+        const unsigned char lane_count =
+          zmp_control::expected_transport_lane_count (_options.type,
+                                                      result.peer_type);
+        if (lane_count == 0
+            || (_options.transport_pair_initiator
+                && _options.transport_lane == transport_lane_completion
+                && lane_count != 2u)) {
+            set_last_error (zmp_error_internal,
+                            "transport lane topology invalid");
+            errno = EPROTO;
+            error (protocol_error);
+            return false;
+        }
+        if (_options.transport_pair_initiator) {
+            if (session ()->request_transport_pair_owner_decision (
+                  result.peer_type)
+                != 0) {
+                set_last_error (zmp_error_internal,
+                                "transport lane owner unavailable");
+                error (protocol_error);
+                return false;
+            }
+        } else {
+            _negotiated_transport_lane_count = lane_count;
+            if (session ()->set_transport_lane_count (lane_count) != 0) {
+                set_last_error (zmp_error_internal,
+                                "transport lane topology conflict");
+                error (protocol_error);
+                return false;
+            }
+        }
+    }
+
     return true;
+}
+
+void zlink::asio_zmp_engine_t::transport_lane_count_decided (
+  unsigned char lane_count_, int error_number_)
+{
+    if (error_number_ != 0 || (lane_count_ != 1u && lane_count_ != 2u)
+        || (_options.transport_lane == transport_lane_completion
+            && lane_count_ != 2u)) {
+        errno = error_number_ != 0 ? error_number_ : EPROTO;
+        set_last_error (zmp_error_internal,
+                        "transport lane owner rejected topology");
+        error (protocol_error);
+        return;
+    }
+
+    _negotiated_transport_lane_count = lane_count_;
+    if (session ()->set_transport_lane_count (lane_count_) != 0) {
+        set_last_error (zmp_error_internal,
+                        "transport lane topology conflict");
+        error (protocol_error);
+        return;
+    }
+    schedule_ready_reply (_options.transport_lane);
 }
 
 bool zlink::asio_zmp_engine_t::process_handshake_input ()
@@ -515,13 +574,25 @@ int zlink::asio_zmp_engine_t::process_ready_message (msg_t *msg_)
     transport_lane_t lane = transport_lane_application;
     const int lane_rc =
       zmp_metadata::parse_transport_lane (properties, &lane);
-    if (lane_rc < 0 || (paired_transport () && lane_rc == 0)
-        || (!paired_transport () && lane_rc != 0)) {
+    unsigned char lane_count = 0;
+    const int lane_count_rc =
+      zmp_metadata::parse_transport_lane_count (properties, &lane_count);
+    if (lane_rc < 0 || lane_count_rc < 0
+        || (paired_transport () && (lane_rc == 0 || lane_count_rc == 0))
+        || (!paired_transport () && (lane_rc != 0 || lane_count_rc != 0))) {
         set_last_error (zmp_error_internal, "transport pair metadata invalid");
+        errno = EPROTO;
         return -1;
     }
 
     if (lane_rc > 0) {
+        if (lane_count != _negotiated_transport_lane_count
+            || (lane_count == 1u && lane != transport_lane_application)) {
+            set_last_error (zmp_error_internal,
+                            "transport lane count mismatch");
+            errno = EPROTO;
+            return -1;
+        }
         const properties_t::const_iterator socket_type_it =
           properties.find ("Socket-Type");
         const properties_t::const_iterator routing_id_it =
@@ -593,6 +664,8 @@ void zlink::asio_zmp_engine_t::schedule_ready_reply (
     options_t response_options = _options;
     response_options.zmp_metadata = true;
     response_options.transport_lane = lane_;
+    response_options.transport_lane_count =
+      _negotiated_transport_lane_count;
     zmp_control::build_ready_frame (response_options, _deferred_ready_send);
     _deferred_ready_pending = true;
     if (_outsize == 0 && prepare_deferred_handshake_output ())

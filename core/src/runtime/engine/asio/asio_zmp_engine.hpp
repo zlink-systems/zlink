@@ -45,6 +45,8 @@ class asio_zmp_engine_t ZLINK_FINAL : public asio_engine_t
 
   protected:
     bool handshake () ZLINK_OVERRIDE;
+    void transport_lane_count_decided (unsigned char lane_count_,
+                                       int error_number_) ZLINK_OVERRIDE;
     void plug_internal () ZLINK_OVERRIDE;
     void error (error_reason_t reason_) ZLINK_OVERRIDE;
     bool handshake_timer_should_fail () ZLINK_OVERRIDE;
@@ -83,6 +85,7 @@ class asio_zmp_engine_t ZLINK_FINAL : public asio_engine_t
     std::vector<unsigned char> _deferred_ready_send;
     bool _deferred_ready_pending;
     transport_lane_t _negotiated_transport_lane;
+    unsigned char _negotiated_transport_lane_count;
     uint64_t _negotiated_transport_pair_id;
     uint64_t _negotiated_transport_pair_generation;
     int _peer_socket_type;

@@ -504,19 +504,18 @@ int send_public_router_reply_with_wait (
         if (validate_public_router_reply_checkout (request_state_) != 0)
             return -1;
 
-        zlink::pipe_t *const completion =
-          reqrep::retain_reply_completion_pipe (socket_, target_.pipe,
-                                                 peer_rid_);
-        if (completion) {
+        zlink::pipe_t *const reply_transport =
+          reqrep::retain_reply_transport_pipe (socket_, target_, peer_rid_);
+        if (reply_transport) {
             const int rc = reqrep::send_completion_staged_frames_on_pipe (
-              completion, staged_parts_, staged_part_count_, final_part_,
+              reply_transport, staged_parts_, staged_part_count_, final_part_,
               true);
             if (rc == 0)
                 return 0;
             if (errno != EAGAIN)
                 return -1;
             // A first-frame detach leaves every input part untouched. Keep
-            // waiting for the same logical RID within the entry snapshot.
+            // waiting for the same logical pair/RID within the entry snapshot.
         }
 
         const std::chrono::steady_clock::time_point now =
@@ -590,10 +589,55 @@ zlink_submit_result_t public_router_reply_submit (
     zlink::part_helper_internal::copy_routing_id (peer_rid_, &spec.rid1);
 
     std::shared_ptr<zlink::part_helper_internal::handle_state_t> state;
+    std::unique_lock<std::mutex> state_lock;
     bool first_part = false;
-    if (zlink::part_helper_internal::prepare_send_step (
-          router_, spec, handle_.socket, &state, &first_part)
-        != 0) {
+    const int prepare_rc =
+      zlink::part_helper_internal::prepare_send_step_locked (
+        router_, spec, handle_.socket, &state, &state_lock, &first_part,
+        part_flag_ == ZLINK_PART_MORE);
+    if (prepare_rc == 1) {
+        // A lone FINAL is one complete record, not an incremental multipart
+        // owner. In particular it may coexist with an async complete-record
+        // admission that has already incremented the lifecycle count; the
+        // socket sync below serializes their physical writes. Treating this as
+        // multipart would reject that ordinary race with EINVAL.
+        std::unique_ptr<zlink::socket_public_send_scope_t> complete_scope =
+          handle_.socket->begin_complete_send_scope (true);
+        if (!complete_scope) {
+            const int saved_errno = errno;
+            reqrep::abandon_public_router_reply_sequence (request_state);
+            zlink::part_helper_internal::consume_send_part (part_);
+            errno = saved_errno;
+            return zlink::submit_result_internal::from_errno (saved_errno);
+        }
+
+        if (message_has_group (part_)
+            || attach_request_reply_metadata (
+                 part_, zlink::request_reply::reply_type,
+                 target.wire_request_seq)
+                 != 0) {
+            const int saved_errno = errno != 0 ? errno : EINVAL;
+            reqrep::abandon_public_router_reply_sequence (request_state);
+            zlink::part_helper_internal::consume_send_part (part_);
+            errno = saved_errno;
+            return zlink::submit_result_internal::from_errno (saved_errno);
+        }
+
+        if (send_public_router_reply_with_wait (
+              handle_.socket, request_state, target, peer_rid_, NULL, 0, part_,
+              reply_timeout_ms, reply_started_at)
+            != 0) {
+            const int saved_errno = errno;
+            reqrep::abandon_public_router_reply_sequence (request_state);
+            zlink::part_helper_internal::consume_send_part (part_);
+            errno = saved_errno;
+            return zlink::submit_result_internal::from_errno (saved_errno);
+        }
+
+        commit_public_router_reply_sequence (request_state);
+        return ZLINK_SUBMIT_OK;
+    }
+    if (prepare_rc != 0) {
         const int saved_errno = errno;
         reqrep::abandon_public_router_reply_sequence (request_state);
         zlink::part_helper_internal::abort_current_non_publish_send_sequence (
@@ -602,6 +646,7 @@ zlink_submit_result_t public_router_reply_submit (
         errno = saved_errno;
         return zlink::submit_result_internal::from_errno (saved_errno);
     }
+    state_lock.unlock ();
 
     if (part_flag_ == ZLINK_PART_MORE) {
         if (first_part && message_has_group (part_)) {

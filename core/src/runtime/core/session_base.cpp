@@ -10,6 +10,7 @@
 #include "core/pipe.hpp"
 #include "utils/likely.hpp"
 #include "core/address.hpp"
+#include "sockets/common/socket_base.hpp"
 
 // ASIO-only build: Transport connecters are always included
 #include "transports/tcp/asio_tcp_connecter.hpp"
@@ -85,6 +86,11 @@ zlink::session_base_t::session_base_t (class io_thread_t *io_thread_,
       _transport_pair_generation (options_.transport_pair_generation),
       _socket_pipe_bound (false),
       _transport_pair_reconnect_in_progress (false),
+      _transport_pair_owner_request_state (transport_pair_owner_idle),
+      _transport_pair_owner_connection_id (0),
+      _transport_pair_owner_pair_id (0),
+      _transport_pair_owner_generation (0),
+      _transport_pair_owner_progress_held (false),
       _io_thread (io_thread_),
     _has_linger_timer (false),
     _addr (addr_)
@@ -157,6 +163,17 @@ void zlink::session_base_t::snapshot_peer_routing_id (blob_t *routing_id_) const
         routing_id_->clear ();
 }
 
+bool zlink::session_base_t::try_claim_transport_disconnected_event ()
+{
+    // Unpaired transports retain their historical engine-owned publication.
+    // Paired transports share the claim with socket-side pipe termination so
+    // an explicit disconnect, which need not report an engine error locally,
+    // still has one reliable physical event without duplicating a later error.
+    if (_transport_pair_id == 0 || !_socket_pipe)
+        return true;
+    return _socket_pipe->try_claim_transport_disconnected_event ();
+}
+
 int zlink::session_base_t::set_peer_transport_pair (transport_lane_t lane_,
                                                     uint64_t pair_id_,
                                                     uint64_t generation_)
@@ -182,6 +199,149 @@ int zlink::session_base_t::set_peer_transport_pair (transport_lane_t lane_,
     if (_pipe)
         _pipe->set_transport_pair (lane_, pair_id_, generation_);
     return 0;
+}
+
+int zlink::session_base_t::set_transport_lane_count (unsigned char lane_count_)
+{
+    if (lane_count_ != 1u && lane_count_ != 2u) {
+        errno = EPROTO;
+        return -1;
+    }
+    if (options.transport_lane_count != 0
+        && options.transport_lane_count != lane_count_) {
+        errno = EPROTO;
+        return -1;
+    }
+    options.transport_lane_count = lane_count_;
+    if (_pipe)
+        _pipe->set_transport_lane_count (lane_count_);
+    if (_socket_pipe)
+        _socket_pipe->set_transport_lane_count (lane_count_);
+    return 0;
+}
+
+int zlink::session_base_t::request_transport_pair_owner_decision (
+  int peer_socket_type_)
+{
+    if (!is_active_transport_pair () || !_engine) {
+        errno = EPROTO;
+        return -1;
+    }
+
+    const uint64_t connection_id = _engine->get_endpoint ().connection_id;
+    const uint64_t generation = _transport_pair_generation;
+    {
+        std::lock_guard<std::mutex> lock (_transport_pair_owner_sync);
+        if (_transport_pair_owner_request_state == transport_pair_owner_pending
+            || _transport_pair_owner_request_state
+                 == transport_pair_owner_claimed
+            || _transport_pair_owner_request_state
+                 == transport_pair_owner_committed) {
+            errno = EALREADY;
+            return -1;
+        }
+        _transport_pair_owner_request_state = transport_pair_owner_pending;
+        _transport_pair_owner_connection_id = connection_id;
+        _transport_pair_owner_pair_id = _transport_pair_id;
+        _transport_pair_owner_generation = generation;
+    }
+
+    if (_socket->acquire_transport_pair_owner_progress () != 0) {
+        const int progress_errno = errno;
+        std::lock_guard<std::mutex> lock (_transport_pair_owner_sync);
+        if (_transport_pair_owner_request_state == transport_pair_owner_pending
+            && _transport_pair_owner_connection_id == connection_id
+            && _transport_pair_owner_pair_id == _transport_pair_id
+            && _transport_pair_owner_generation == generation)
+            _transport_pair_owner_request_state = transport_pair_owner_idle;
+        errno = progress_errno;
+        return -1;
+    }
+    {
+        std::lock_guard<std::mutex> lock (_transport_pair_owner_sync);
+        _transport_pair_owner_progress_held = true;
+    }
+
+    // Reserve the response command before publishing the request. The socket
+    // owner sends exactly one decision on every path without incrementing this
+    // session again.
+    inc_seqnum ();
+    send_transport_pair_owner_request (
+      _socket, this, peer_socket_type_, connection_id, _transport_pair_id,
+      generation, static_cast<unsigned char> (_transport_lane));
+    return 0;
+}
+
+bool zlink::session_base_t::claim_transport_pair_owner_request (
+  uint64_t connection_id_, uint64_t pair_id_, uint64_t generation_)
+{
+    std::lock_guard<std::mutex> lock (_transport_pair_owner_sync);
+    if (_transport_pair_owner_request_state != transport_pair_owner_pending
+        || _transport_pair_owner_connection_id != connection_id_
+        || _transport_pair_owner_pair_id != pair_id_
+        || _transport_pair_owner_generation != generation_)
+        return false;
+    _transport_pair_owner_request_state = transport_pair_owner_claimed;
+    return true;
+}
+
+bool zlink::session_base_t::commit_transport_pair_owner_request (
+  uint64_t connection_id_, uint64_t pair_id_, uint64_t generation_,
+  std::unique_lock<std::mutex> *commit_guard_out_)
+{
+    if (!commit_guard_out_ || commit_guard_out_->owns_lock ())
+        return false;
+
+    std::unique_lock<std::mutex> guard (_transport_pair_owner_sync);
+    if (_transport_pair_owner_request_state != transport_pair_owner_claimed
+        || _transport_pair_owner_connection_id != connection_id_
+        || _transport_pair_owner_pair_id != pair_id_
+        || _transport_pair_owner_generation != generation_)
+        return false;
+
+    _transport_pair_owner_request_state = transport_pair_owner_committed;
+    *commit_guard_out_ = std::move (guard);
+    return true;
+}
+
+void zlink::session_base_t::process_transport_pair_owner_decision (
+  uint64_t connection_id_, uint64_t pair_id_, uint64_t generation_,
+  unsigned char lane_count_, int error_number_)
+{
+    {
+        std::lock_guard<std::mutex> lock (_transport_pair_owner_sync);
+        if (_transport_pair_owner_request_state
+              != transport_pair_owner_committed
+            || _transport_pair_owner_connection_id != connection_id_
+            || _transport_pair_owner_pair_id != pair_id_
+            || _transport_pair_owner_generation != generation_)
+            return;
+        _transport_pair_owner_request_state = transport_pair_owner_idle;
+    }
+
+    if (!_engine || _engine->get_endpoint ().connection_id != connection_id_
+        || _transport_pair_id != pair_id_
+        || _transport_pair_generation != generation_) {
+        release_transport_pair_owner_progress_if_held ();
+        return;
+    }
+    _engine->transport_lane_count_decided (lane_count_, error_number_);
+    if (error_number_ != 0)
+        release_transport_pair_owner_progress_if_held ();
+}
+
+void zlink::session_base_t::release_transport_pair_owner_progress_if_held ()
+{
+    bool release = false;
+    {
+        std::lock_guard<std::mutex> lock (_transport_pair_owner_sync);
+        if (_transport_pair_owner_progress_held) {
+            _transport_pair_owner_progress_held = false;
+            release = true;
+        }
+    }
+    if (release)
+        _socket->release_transport_pair_owner_progress ();
 }
 
 zlink::session_base_t::~session_base_t ()
@@ -360,12 +520,17 @@ void zlink::session_base_t::engine_ready ()
                 terminate ();
             }
             errno = pipepair_errno;
+            release_transport_pair_owner_progress_if_held ();
             return;
         }
         pipes[0]->set_transport_pair (
           _transport_lane, _transport_pair_id, _transport_pair_generation);
         pipes[1]->set_transport_pair (
           _transport_lane, _transport_pair_id, _transport_pair_generation);
+        if (options.transport_lane_count != 0) {
+            pipes[0]->set_transport_lane_count (options.transport_lane_count);
+            pipes[1]->set_transport_lane_count (options.transport_lane_count);
+        }
         pipes[1]->set_locally_initiated (_active);
         pipes[0]->set_max_message_bytes (
           options.maxmsgsize > 0 ? static_cast<uint64_t> (options.maxmsgsize) : 0);
@@ -435,10 +600,22 @@ void zlink::session_base_t::engine_ready ()
           _transport_lane, _transport_pair_generation);
         _transport_pair_reconnect_in_progress = false;
     }
+    // The bind command was queued before this release. The socket mailbox
+    // therefore admits the READY pipe and synchronizes its current control
+    // state before the temporary executor is allowed to stop.
+    release_transport_pair_owner_progress_if_held ();
 }
 
 void zlink::session_base_t::engine_error (bool handshaked_, zlink::i_engine::error_reason_t reason_)
 {
+    {
+        std::lock_guard<std::mutex> lock (_transport_pair_owner_sync);
+        if (_transport_pair_owner_request_state == transport_pair_owner_pending
+            || _transport_pair_owner_request_state
+                 == transport_pair_owner_claimed)
+            _transport_pair_owner_request_state = transport_pair_owner_canceled;
+    }
+    release_transport_pair_owner_progress_if_held ();
     if (_pipe)
         _pipe->set_transport_connection_id (0);
     //  Engine is dead. Let's forget about it.
@@ -500,6 +677,7 @@ void zlink::session_base_t::engine_error (bool handshaked_, zlink::i_engine::err
 void zlink::session_base_t::process_term (int linger_)
 {
     zlink_assert (!_pending);
+    release_transport_pair_owner_progress_if_held ();
 
     //  If the termination of the pipe happens before the term command is
     //  delivered there's nothing much to do. We can proceed with the

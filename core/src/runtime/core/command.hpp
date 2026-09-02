@@ -15,6 +15,7 @@ class own_t;
 struct i_engine;
 class pipe_t;
 class socket_base_t;
+class session_base_t;
 
 //  This structure defines the commands that can be sent between threads.
 
@@ -36,6 +37,8 @@ struct command_t
         peer_weight,
         send_pending,
         request_completion,
+        transport_pair_owner_request,
+        transport_pair_owner_decision,
         hiccup,
         pipe_term,
         pipe_term_ack,
@@ -134,6 +137,29 @@ struct command_t
         struct
         {
         } request_completion;
+
+        //  Asks the socket mailbox owner to decide the HELLO-derived physical
+        //  lane topology and, when required, create the Completion child.
+        struct
+        {
+            zlink::session_base_t *session;
+            int peer_socket_type;
+            uint64_t connection_id;
+            uint64_t pair_id;
+            uint64_t generation;
+            unsigned char lane;
+        } transport_pair_owner_request;
+
+        //  Returns the socket-owner decision to the requesting session. The
+        //  session pre-reserves this command's seqnum before sending the request.
+        struct
+        {
+            uint64_t connection_id;
+            uint64_t pair_id;
+            uint64_t generation;
+            unsigned char lane_count;
+            int error_number;
+        } transport_pair_owner_decision;
 
         //  Sent by pipe reader to writer after creating a new inpipe.
         //  The parameter is actually of type pipe_t::upipe_t, however,

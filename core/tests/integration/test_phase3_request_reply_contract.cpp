@@ -4,14 +4,18 @@
 #include "testutil_unity.hpp"
 
 #include "api/socket/socket_request_reply_internal.hpp"
+#include "../../src/runtime/sockets/common/socket_base.hpp"
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 SETUP_TEARDOWN_TESTCONTEXT
 
@@ -19,6 +23,66 @@ namespace
 {
 const int kWaitMilliseconds = 3000;
 const size_t kReplyTokenCapacity = 65536;
+
+zlink::socket_base_t *as_socket (void *socket_)
+{
+    return as_socket_handle (socket_).socket;
+}
+
+struct completion_budget_barrier_t
+{
+    completion_budget_barrier_t () :
+        socket (NULL),
+        pair_id (0),
+        generation (0),
+        entered (false),
+        released (false)
+    {
+    }
+
+    bool wait_until_entered (int timeout_ms_)
+    {
+        std::unique_lock<std::mutex> lock (mutex);
+        return changed.wait_for (
+          lock, std::chrono::milliseconds (timeout_ms_),
+          [this] { return entered; });
+    }
+
+    void release ()
+    {
+        std::lock_guard<std::mutex> lock (mutex);
+        released = true;
+        changed.notify_all ();
+    }
+
+    zlink::socket_base_t *socket;
+    uint64_t pair_id;
+    uint64_t generation;
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool entered;
+    bool released;
+};
+
+void completion_budget_barrier_hook (zlink::socket_base_t *socket_,
+                                     zlink::pipe_t *pipe_, void *userdata_)
+{
+    completion_budget_barrier_t *const barrier =
+      static_cast<completion_budget_barrier_t *> (userdata_);
+    if (!barrier || socket_ != barrier->socket || !pipe_
+        || pipe_->get_transport_pair_id () != barrier->pair_id
+        || pipe_->get_transport_pair_generation () != barrier->generation)
+        return;
+
+    //  One-shot before blocking: no later drain can retain stack userdata if a
+    //  test assertion aborts after this exact owner turn is released.
+    zlink::socket_reqrep_internal::
+      test_set_completion_pipe_budget_exhausted_hook (NULL, NULL);
+    std::unique_lock<std::mutex> lock (barrier->mutex);
+    barrier->entered = true;
+    barrier->changed.notify_all ();
+    barrier->changed.wait (lock, [barrier] { return barrier->released; });
+}
 
 bool should_run_phase3_request_test (const char *name_)
 {
@@ -77,6 +141,18 @@ void process_socket_commands_through_public_api (void *socket_)
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
       zlink_get_option (socket_, ZLINK_OPT_EVENTS, &events, &events_size));
+}
+
+zlink_auto_hwm_budget_snapshot_t read_auto_hwm_budget_snapshot ()
+{
+    zlink_auto_hwm_budget_snapshot_t snapshot;
+    memset (&snapshot, 0, sizeof (snapshot));
+    snapshot.abi_version = ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1;
+    snapshot.struct_size = sizeof (snapshot);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_ctx_get_auto_hwm_budget_snapshot (get_test_context (), &snapshot));
+    return snapshot;
 }
 
 zlink_routing_id_t make_rid (const char *value_)
@@ -282,6 +358,96 @@ router_part_t receive_router_part_eventually (void *router_)
     }
     TEST_FAIL_MESSAGE ("timed out waiting for ROUTER request part");
     return router_part_t ();
+}
+
+void wait_for_ready_pair (void *socket_, void *first_peer_progress_socket_,
+                          void *second_peer_progress_socket_,
+                          const zlink_routing_id_t &peer_rid_,
+                          uint64_t *pair_id_out_, uint64_t *generation_out_)
+{
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now ()
+      + std::chrono::milliseconds (kWaitMilliseconds);
+    while (std::chrono::steady_clock::now () < deadline) {
+        if (first_peer_progress_socket_)
+            process_socket_commands_through_public_api (
+              first_peer_progress_socket_);
+        if (second_peer_progress_socket_)
+            process_socket_commands_through_public_api (
+              second_peer_progress_socket_);
+        process_socket_commands_through_public_api (socket_);
+        zlink_routed_submit_target_t target;
+        memset (&target, 0, sizeof (target));
+        if (as_socket (socket_)->select_routed_submit_target (&peer_rid_,
+                                                              &target)
+              == 0
+            && target.transport_pair_id != 0
+            && target.transport_pair_generation != 0
+            && as_socket (socket_)->test_pair_pipe (
+                 target.transport_pair_id,
+                 target.transport_pair_generation, false)
+            && as_socket (socket_)->test_pair_pipe (
+                 target.transport_pair_id,
+                 target.transport_pair_generation, true)) {
+            *pair_id_out_ = target.transport_pair_id;
+            *generation_out_ = target.transport_pair_generation;
+            return;
+        }
+        msleep (1);
+    }
+    TEST_FAIL_MESSAGE ("timed out waiting for ready transport pair");
+}
+
+void wait_for_completion_pair_queued (void *socket_, uint64_t pair_id_,
+                                      uint64_t generation_)
+{
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now ()
+      + std::chrono::milliseconds (kWaitMilliseconds);
+    while (std::chrono::steady_clock::now () < deadline) {
+        process_socket_commands_through_public_api (socket_);
+        if (as_socket (socket_)->test_completion_pair_queued (
+              pair_id_, generation_))
+            return;
+        msleep (1);
+    }
+    TEST_FAIL_MESSAGE ("timed out waiting for queued completion pair");
+}
+
+bool wait_for_completion_lane_detached (void *socket_, uint64_t pair_id_,
+                                        uint64_t generation_)
+{
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now ()
+      + std::chrono::milliseconds (kWaitMilliseconds);
+    while (std::chrono::steady_clock::now () < deadline) {
+        //  This helper runs while the poller owner is paused at the budget
+        //  barrier. Process only mailbox lifecycle commands: querying EVENTS
+        //  here would itself enter completion draining and consume the source
+        //  whose stale requeue fence the test is trying to observe.
+        (void) as_socket (socket_)->test_process_commands_only ();
+        if (!as_socket (socket_)->test_pair_pipe (pair_id_, generation_, true))
+            return true;
+        msleep (1);
+    }
+    return false;
+}
+
+zlink_completion_id_t send_router_request_to (
+  void *router_, const zlink_routing_id_t &target_, const char *payload_,
+  void *user_context_)
+{
+    zlink_msg_t request;
+    init_part (&request, payload_);
+    zlink_completion_id_t completion_id = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_request_part (router_, &target_, &request, ZLINK_SEND_FLAGS_NONE,
+                          ZLINK_PART_FINAL, 120000, user_context_,
+                          &completion_id));
+    TEST_ASSERT_NOT_EQUAL (0, completion_id);
+    assert_part_consumed (&request);
+    return completion_id;
 }
 
 void assert_no_router_part_for (void *router_, int duration_ms_)
@@ -518,6 +684,123 @@ void test_dealer_router_public_request_reply_completion_and_token_consumption ()
     assert_empty_completion (completion);
     zlink_completion_close (&completion);
     assert_empty_completion (completion);
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
+void test_dealer_router_reply_remains_on_application_fifo_and_accounting ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (router);
+    TEST_ASSERT_NOT_NULL (dealer);
+    set_routing_id_text (router, "router-single-lane-accounting");
+    set_routing_id_text (dealer, "dealer-single-lane-accounting");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_BIND_OK,
+      zlink_bind (router,
+                  "inproc://phase3-single-lane-reply-accounting"));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONNECT_OK,
+      zlink_connect (dealer,
+                     "inproc://phase3-single-lane-reply-accounting"));
+    msleep (SETTLE_TIME);
+
+    const zlink_completion_id_t request_id =
+      send_public_request (dealer, "single-lane-accounting-request");
+    const router_part_t request = receive_router_part_eventually (router);
+    TEST_ASSERT_NOT_EQUAL (0, request.reply_token);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, request.part_flag);
+    TEST_ASSERT_EQUAL_STRING ("single-lane-accounting-request",
+                              request.payload.c_str ());
+
+    zlink_auto_hwm_budget_snapshot_t baseline;
+    TEST_ASSERT_TRUE (zlink_test_wait_until (kWaitMilliseconds, [&] {
+        baseline = read_auto_hwm_budget_snapshot ();
+        return baseline.current_accounted_bytes == 0
+               && baseline.active_directional_queue_count == 2
+               && baseline.active_completion_directional_queue_count == 0;
+    }));
+    TEST_ASSERT_EQUAL_UINT32 (ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1,
+                              baseline.abi_version);
+    TEST_ASSERT_EQUAL_UINT32 (sizeof (baseline), baseline.struct_size);
+    TEST_ASSERT_EQUAL_UINT64 (0, baseline.completion_current_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0, baseline.completion_peak_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0, baseline.completion_pending_message_count);
+
+    const char data[] = "data-before-single-lane-reply";
+    TEST_ASSERT_EQUAL_INT (
+      request.source_rid.size,
+      zlink_send (router, request.source_rid.data, request.source_rid.size,
+                  ZLINK_SNDMORE));
+    TEST_ASSERT_EQUAL_INT (sizeof (data) - 1,
+                           zlink_send (router, data, sizeof (data) - 1, 0));
+
+    zlink_auto_hwm_budget_snapshot_t data_queued;
+    TEST_ASSERT_TRUE (zlink_test_wait_until (kWaitMilliseconds, [&] {
+        data_queued = read_auto_hwm_budget_snapshot ();
+        return data_queued.current_accounted_bytes
+               > baseline.current_accounted_bytes;
+    }));
+
+    const char reply_payload[] = "single-lane-accounting-reply";
+    zlink_msg_t reply;
+    init_part (&reply, reply_payload);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_reply_part (router, &request.source_rid, request.reply_token,
+                        &reply, ZLINK_PART_FINAL));
+    assert_part_consumed (&reply);
+
+    zlink_auto_hwm_budget_snapshot_t reply_queued;
+    TEST_ASSERT_TRUE (zlink_test_wait_until (kWaitMilliseconds, [&] {
+        reply_queued = read_auto_hwm_budget_snapshot ();
+        return reply_queued.current_accounted_bytes
+               > data_queued.current_accounted_bytes;
+    }));
+    TEST_ASSERT_EQUAL_UINT64 (2,
+                              reply_queued.active_directional_queue_count);
+    TEST_ASSERT_EQUAL_UINT64 (
+      0, reply_queued.active_completion_directional_queue_count);
+    TEST_ASSERT_EQUAL_UINT64 (reply_queued.current_accounted_bytes,
+                              reply_queued.core_queue_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0, reply_queued.application_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0,
+                              reply_queued.provisional_accounted_bytes);
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT64 (reply_queued.current_accounted_bytes,
+                                         reply_queued.peak_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (
+      0, reply_queued.completion_current_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0,
+                              reply_queued.completion_peak_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0,
+                              reply_queued.completion_pending_message_count);
+    TEST_ASSERT_EQUAL_UINT64 (reply_queued.current_accounted_bytes,
+                              reply_queued.total_messaging_accounted_bytes);
+
+    // DATA and REPLY share the Application FIFO. A completion receive cannot
+    // skip the DATA head, so the reply charge remains visible until the public
+    // data receive advances that FIFO.
+    assert_no_completion_for (dealer, 20);
+    receive_dealer_data_eventually (dealer, data);
+
+    zlink_completion_t completion = receive_completion_eventually (dealer);
+    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, completion.kind);
+    TEST_ASSERT_EQUAL_UINT64 (request_id, completion.completion_id);
+    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, completion.request_result);
+    TEST_ASSERT_EQUAL_UINT64 (1, completion.reply_part_count);
+    TEST_ASSERT_EQUAL_STRING (
+      reply_payload, part_string (&completion.reply_parts[0]).c_str ());
+    zlink_completion_close (&completion);
+
+    zlink_auto_hwm_budget_snapshot_t drained;
+    TEST_ASSERT_TRUE (zlink_test_wait_until (kWaitMilliseconds, [&] {
+        drained = read_auto_hwm_budget_snapshot ();
+        return drained.current_accounted_bytes
+                 == baseline.current_accounted_bytes
+               && drained.completion_current_accounted_bytes == 0;
+    }));
 
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
@@ -2991,6 +3274,386 @@ void test_router_reply_checkout_second_sequence_and_mismatch_preserve_owner ()
     test_context_socket_close_zero_linger (first_dealer);
     test_context_socket_close_zero_linger (router);
 }
+
+void test_completion_pipe_budget_is_fair_and_stale_requeue_is_fenced ()
+{
+    const char *const endpoint_a =
+      "inproc://phase3-completion-budget-fairness-a";
+    const char *const endpoint_b =
+      "inproc://phase3-completion-budget-fairness-b";
+    const char *const requester_rid_text = "completion-budget-requester";
+    const char *const responder_a_rid_text = "completion-budget-a";
+    const char *const responder_b_rid_text = "completion-budget-b";
+    const size_t budget =
+      zlink::socket_reqrep_internal::completion_pipe_record_budget;
+    const size_t a_record_count = budget * 4;
+
+    void *requester = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *responder_a = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *responder_b = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_NOT_NULL (requester);
+    TEST_ASSERT_NOT_NULL (responder_a);
+    TEST_ASSERT_NOT_NULL (responder_b);
+    set_routing_id_text (requester, requester_rid_text);
+    set_routing_id_text (responder_a, responder_a_rid_text);
+    set_routing_id_text (responder_b, responder_b_rid_text);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_router_option (responder_a,
+                               ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID,
+                               requester_rid_text,
+                               strlen (requester_rid_text)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_router_option (responder_b,
+                               ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID,
+                               requester_rid_text,
+                               strlen (requester_rid_text)));
+    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK,
+                           zlink_bind (requester, endpoint_a));
+    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK,
+                           zlink_bind (requester, endpoint_b));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
+                           zlink_connect (responder_a, endpoint_a));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
+                           zlink_connect (responder_b, endpoint_b));
+
+    const zlink_routing_id_t responder_a_rid =
+      make_rid (responder_a_rid_text);
+    const zlink_routing_id_t responder_b_rid =
+      make_rid (responder_b_rid_text);
+    uint64_t pair_a_id = 0;
+    uint64_t pair_a_generation = 0;
+    uint64_t pair_b_id = 0;
+    uint64_t pair_b_generation = 0;
+
+    std::vector<int> contexts_a (a_record_count);
+    std::vector<zlink_completion_id_t> completion_ids_a;
+    std::vector<router_part_t> requests_a;
+    completion_ids_a.reserve (a_record_count);
+    requests_a.reserve (a_record_count);
+    for (size_t i = 0; i != a_record_count; ++i) {
+        contexts_a[i] = static_cast<int> (i);
+        completion_ids_a.push_back (send_router_request_to (
+          requester, responder_a_rid, "fairness-request-a",
+          &contexts_a[i]));
+        requests_a.push_back (receive_router_part_eventually (responder_a));
+        TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL,
+                               requests_a.back ().part_flag);
+    }
+
+    int context_b = 0x5b;
+    const zlink_completion_id_t completion_id_b = send_router_request_to (
+      requester, responder_b_rid, "fairness-request-b", &context_b);
+    const router_part_t request_b =
+      receive_router_part_eventually (responder_b);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, request_b.part_flag);
+
+    //  The first routed request on each connection also proves that both
+    //  inproc owners have adopted their Application and Completion halves.
+    //  Resolve the exact pair keys only after that owner progress has occurred.
+    wait_for_ready_pair (requester, responder_a, responder_b, responder_a_rid,
+                         &pair_a_id, &pair_a_generation);
+    wait_for_ready_pair (requester, responder_a, responder_b, responder_b_rid,
+                         &pair_b_id, &pair_b_generation);
+
+    //  Register the sole completion owner before any reply is emitted. This
+    //  lets the test establish A then B in the ready-pair deque without an
+    //  asynchronous owner consuming either source in between.
+    void *poller = zlink_poller_new ();
+    TEST_ASSERT_NOT_NULL (poller);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_poller_add (poller, requester, requester,
+                        ZLINK_POLLCOMPLETION));
+
+    //  Every A reply is multipart. The 64-unit budget therefore proves both
+    //  that a record is never split and that parts are not counted as records.
+    for (size_t i = 0; i != requests_a.size (); ++i) {
+        zlink_msg_t prefix;
+        init_part (&prefix, "fairness-a-prefix");
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_SUBMIT_OK,
+          zlink_reply_part (responder_a, &requests_a[i].source_rid,
+                            requests_a[i].reply_token, &prefix,
+                            ZLINK_PART_MORE));
+        assert_part_consumed (&prefix);
+
+        zlink_msg_t final;
+        init_part (&final, "fairness-a-final");
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_SUBMIT_OK,
+          zlink_reply_part (responder_a, &requests_a[i].source_rid,
+                            requests_a[i].reply_token, &final,
+                            ZLINK_PART_FINAL));
+        assert_part_consumed (&final);
+    }
+    wait_for_completion_pair_queued (requester, pair_a_id,
+                                     pair_a_generation);
+
+    zlink_msg_t reply_b;
+    init_part (&reply_b, "fairness-b-final");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_reply_part (responder_b, &request_b.source_rid,
+                        request_b.reply_token, &reply_b, ZLINK_PART_FINAL));
+    assert_part_consumed (&reply_b);
+    wait_for_completion_pair_queued (requester, pair_b_id,
+                                     pair_b_generation);
+
+    zlink_poller_event_t event;
+    memset (&event, 0, sizeof (event));
+    zlink_config_result_t poll_error = ZLINK_CONFIG_INTERNAL_ERROR;
+    TEST_ASSERT_EQUAL_INT (
+      1, zlink_poller_wait (poller, &event, 1, kWaitMilliseconds,
+                            &poll_error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, poll_error);
+    TEST_ASSERT_EQUAL_PTR (requester, event.socket);
+    TEST_ASSERT_TRUE ((event.events & ZLINK_POLLCOMPLETION) != 0);
+
+    for (size_t i = 0; i != budget; ++i) {
+        zlink_completion_t completion;
+        init_empty_completion (&completion);
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_RECV_OK,
+          zlink_completion_recv (requester, &completion,
+                                 ZLINK_RECV_FLAGS_DONTWAIT));
+        TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, completion.kind);
+        TEST_ASSERT_EQUAL_UINT64 (completion_ids_a[i],
+                                  completion.completion_id);
+        TEST_ASSERT_EQUAL_PTR (&contexts_a[i], completion.user_context);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, completion.request_result);
+        TEST_ASSERT_EQUAL_UINT64 (2, completion.reply_part_count);
+        TEST_ASSERT_EQUAL_STRING (
+          "fairness-a-prefix",
+          part_string (&completion.reply_parts[0]).c_str ());
+        TEST_ASSERT_EQUAL_STRING (
+          "fairness-a-final",
+          part_string (&completion.reply_parts[1]).c_str ());
+        zlink_completion_close (&completion);
+    }
+
+    //  A consumed exactly one 64-record turn. B must therefore be record 65,
+    //  while A's remaining three budgets sit at the ready-queue tail.
+    zlink_completion_t completion_b;
+    init_empty_completion (&completion_b);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_completion_recv (requester, &completion_b,
+                             ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_UINT64 (completion_id_b,
+                              completion_b.completion_id);
+    TEST_ASSERT_EQUAL_PTR (&context_b, completion_b.user_context);
+    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK,
+                           completion_b.request_result);
+    TEST_ASSERT_EQUAL_UINT64 (1, completion_b.reply_part_count);
+    TEST_ASSERT_EQUAL_STRING (
+      "fairness-b-final",
+      part_string (&completion_b.reply_parts[0]).c_str ());
+    zlink_completion_close (&completion_b);
+    TEST_ASSERT_TRUE (as_socket (requester)->test_completion_pair_queued (
+      pair_a_id, pair_a_generation));
+
+    //  A poller implementation may observe another mailbox edge before its
+    //  first wait returns. Remove every already-published A record before
+    //  installing the barrier; completion pulls do not own physical draining.
+    size_t next_a_completion = budget;
+    while (true) {
+        zlink_completion_t already_published;
+        init_empty_completion (&already_published);
+        errno = 0;
+        const zlink_recv_result_t result = zlink_completion_recv (
+          requester, &already_published, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (result == ZLINK_RECV_NO_DATA) {
+            TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+            assert_empty_completion (already_published);
+            break;
+        }
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, result);
+        TEST_ASSERT_LESS_THAN_UINT64 (a_record_count, next_a_completion);
+        TEST_ASSERT_EQUAL_UINT64 (completion_ids_a[next_a_completion],
+                                  already_published.completion_id);
+        TEST_ASSERT_EQUAL_PTR (&contexts_a[next_a_completion],
+                               already_published.user_context);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK,
+                               already_published.request_result);
+        TEST_ASSERT_EQUAL_UINT64 (2,
+                                  already_published.reply_part_count);
+        zlink_completion_close (&already_published);
+        ++next_a_completion;
+    }
+    TEST_ASSERT_TRUE (next_a_completion + budget <= a_record_count);
+    TEST_ASSERT_TRUE (as_socket (requester)->test_completion_pair_queued (
+      pair_a_id, pair_a_generation));
+
+    //  Pause the next A owner turn after its 64th whole record but before the
+    //  budget result can requeue the source. Detaching in that exact window
+    //  makes the stale generation fence deterministic.
+    completion_budget_barrier_t barrier;
+    barrier.socket = as_socket (requester);
+    barrier.pair_id = pair_a_id;
+    barrier.generation = pair_a_generation;
+    zlink::socket_reqrep_internal::
+      test_set_completion_pipe_budget_exhausted_hook (
+        completion_budget_barrier_hook, &barrier);
+
+    zlink_poller_event_t owner_event;
+    memset (&owner_event, 0, sizeof (owner_event));
+    zlink_config_result_t owner_poll_error = ZLINK_CONFIG_INTERNAL_ERROR;
+    int owner_poll_result = -1;
+    std::thread owner_turn ([&] {
+        owner_poll_result = zlink_poller_wait (
+          poller, &owner_event, 1, kWaitMilliseconds, &owner_poll_error);
+    });
+    const bool barrier_entered =
+      barrier.wait_until_entered (kWaitMilliseconds);
+    if (!barrier_entered) {
+        zlink::socket_reqrep_internal::
+          test_set_completion_pipe_budget_exhausted_hook (NULL, NULL);
+        barrier.release ();
+        owner_turn.join ();
+        TEST_FAIL_MESSAGE ("completion owner did not reach the budget barrier");
+    }
+
+    test_context_socket_close_zero_linger (responder_a);
+    responder_a = NULL;
+    const bool old_completion_detached = wait_for_completion_lane_detached (
+      requester, pair_a_id, pair_a_generation);
+    barrier.release ();
+    owner_turn.join ();
+    TEST_ASSERT_TRUE (old_completion_detached);
+    TEST_ASSERT_EQUAL_INT (1, owner_poll_result);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, owner_poll_error);
+    TEST_ASSERT_EQUAL_PTR (requester, owner_event.socket);
+    TEST_ASSERT_TRUE (
+      (owner_event.events & ZLINK_POLLCOMPLETION) != 0);
+
+    //  The in-flight owner may publish exactly the 64 records it completed
+    //  before the barrier. The detached source's remaining records must never
+    //  be consumed by a stale tail requeue.
+    const size_t after_barrier_completion = next_a_completion + budget;
+    for (size_t i = next_a_completion; i != after_barrier_completion; ++i) {
+        zlink_completion_t completion;
+        init_empty_completion (&completion);
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_RECV_OK,
+          zlink_completion_recv (requester, &completion,
+                                 ZLINK_RECV_FLAGS_DONTWAIT));
+        TEST_ASSERT_EQUAL_UINT64 (completion_ids_a[i],
+                                  completion.completion_id);
+        TEST_ASSERT_EQUAL_PTR (&contexts_a[i], completion.user_context);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, completion.request_result);
+        TEST_ASSERT_EQUAL_UINT64 (2, completion.reply_part_count);
+        zlink_completion_close (&completion);
+    }
+    std::vector<bool> detached_request_seen (a_record_count, false);
+    while (true) {
+        zlink_completion_t detached_completion;
+        init_empty_completion (&detached_completion);
+        errno = 0;
+        const zlink_recv_result_t detached_result = zlink_completion_recv (
+          requester, &detached_completion, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (detached_result == ZLINK_RECV_NO_DATA) {
+            TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+            assert_empty_completion (detached_completion);
+            break;
+        }
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, detached_result);
+        TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST,
+                               detached_completion.kind);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_NOT_FOUND,
+                               detached_completion.request_result);
+        TEST_ASSERT_EQUAL_UINT64 (0,
+                                  detached_completion.reply_part_count);
+        size_t matched = a_record_count;
+        for (size_t i = after_barrier_completion; i != a_record_count; ++i) {
+            if (completion_ids_a[i] == detached_completion.completion_id) {
+                matched = i;
+                break;
+            }
+        }
+        TEST_ASSERT_LESS_THAN_UINT64 (a_record_count, matched);
+        TEST_ASSERT_FALSE (detached_request_seen[matched]);
+        TEST_ASSERT_EQUAL_PTR (&contexts_a[matched],
+                               detached_completion.user_context);
+        detached_request_seen[matched] = true;
+        zlink_completion_close (&detached_completion);
+    }
+    TEST_ASSERT_FALSE (as_socket (requester)->test_completion_pair_queued (
+      pair_a_id, pair_a_generation));
+
+    void *replacement_a = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_NOT_NULL (replacement_a);
+    set_routing_id_text (replacement_a, responder_a_rid_text);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_router_option (replacement_a,
+                               ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID,
+                               requester_rid_text,
+                               strlen (requester_rid_text)));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
+                           zlink_connect (replacement_a, endpoint_a));
+
+    uint64_t replacement_pair_id = 0;
+    uint64_t replacement_generation = 0;
+    int replacement_context = 0x6a;
+    const zlink_completion_id_t replacement_completion_id =
+      send_router_request_to (requester, responder_a_rid,
+                              "replacement-request", &replacement_context);
+    const router_part_t replacement_request =
+      receive_router_part_eventually (replacement_a);
+    wait_for_ready_pair (requester, replacement_a, responder_b,
+                         responder_a_rid, &replacement_pair_id,
+                         &replacement_generation);
+    TEST_ASSERT_TRUE (replacement_pair_id != pair_a_id
+                      || replacement_generation != pair_a_generation);
+    zlink_msg_t replacement_reply;
+    init_part (&replacement_reply, "replacement-reply");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_reply_part (replacement_a, &replacement_request.source_rid,
+                        replacement_request.reply_token, &replacement_reply,
+                        ZLINK_PART_FINAL));
+    assert_part_consumed (&replacement_reply);
+    wait_for_completion_pair_queued (requester, replacement_pair_id,
+                                     replacement_generation);
+
+    memset (&event, 0, sizeof (event));
+    poll_error = ZLINK_CONFIG_INTERNAL_ERROR;
+    TEST_ASSERT_EQUAL_INT (
+      1, zlink_poller_wait (poller, &event, 1, kWaitMilliseconds,
+                            &poll_error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, poll_error);
+    TEST_ASSERT_FALSE (as_socket (requester)->test_completion_pair_queued (
+      pair_a_id, pair_a_generation));
+
+    zlink_completion_t replacement_completion;
+    init_empty_completion (&replacement_completion);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_completion_recv (requester, &replacement_completion,
+                             ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_UINT64 (replacement_completion_id,
+                              replacement_completion.completion_id);
+    TEST_ASSERT_EQUAL_PTR (&replacement_context,
+                           replacement_completion.user_context);
+    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK,
+                           replacement_completion.request_result);
+    TEST_ASSERT_EQUAL_UINT64 (1,
+                              replacement_completion.reply_part_count);
+    TEST_ASSERT_EQUAL_STRING (
+      "replacement-reply",
+      part_string (&replacement_completion.reply_parts[0]).c_str ());
+    zlink_completion_close (&replacement_completion);
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_poller_remove (poller, requester));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK,
+                           zlink_poller_destroy (&poller));
+    test_context_socket_close_zero_linger (replacement_a);
+    test_context_socket_close_zero_linger (responder_b);
+    test_context_socket_close_zero_linger (requester);
+}
 }
 
 int main ()
@@ -3008,6 +3671,8 @@ int main ()
       test_request_outputs_are_zeroed_and_parts_are_always_consumed);
     RUN_PHASE3_REQUEST_TEST (
       test_dealer_router_public_request_reply_completion_and_token_consumption);
+    RUN_PHASE3_REQUEST_TEST (
+      test_dealer_router_reply_remains_on_application_fifo_and_accounting);
     RUN_PHASE3_REQUEST_TEST (
       test_router_request_to_dealer_is_rejected_as_peer_type);
     RUN_PHASE3_REQUEST_TEST (
@@ -3066,6 +3731,8 @@ int main ()
       test_router_reply_final_waits_for_same_rid_reconnect);
     RUN_PHASE3_REQUEST_TEST (
       test_router_reply_checkout_second_sequence_and_mismatch_preserve_owner);
+    RUN_PHASE3_REQUEST_TEST (
+      test_completion_pipe_budget_is_fair_and_stale_requeue_is_fenced);
 
 #undef RUN_PHASE3_REQUEST_TEST
 

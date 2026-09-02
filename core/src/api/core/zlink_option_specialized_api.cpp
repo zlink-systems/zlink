@@ -67,7 +67,7 @@ zlink_config_result_t set_probe_option (zlink::socket_base_t *socket_,
     // A connection probe is emitted from xattach_pipe(). Keep command
     // progress active after connect so the bind command reaches that owner
     // even when the application is blocked receiving on the peer socket.
-    if (enabled != 0 && socket_->ensure_async_command_processing () != 0)
+    if (enabled != 0 && socket_->ensure_async_command_processing (true) != 0)
         return zlink::config_result_internal::from_errno (errno);
 
     return zlink::config_result_internal::from_rc (

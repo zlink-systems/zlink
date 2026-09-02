@@ -266,7 +266,9 @@ void zlink::asio_ipc_connecter_t::create_engine (fd_t fd_, const std::string &lo
 
     terminate ();
 
-    _socket_ptr->event_connected (endpoint_pair, fd_);
+    _socket_ptr->event_connected (
+      endpoint_pair, fd_, options.transport_lane, options.transport_pair_id,
+      options.transport_pair_generation);
 }
 
 void zlink::asio_ipc_connecter_t::close ()

@@ -8,6 +8,8 @@
 #include <map>
 #include <atomic>
 #include <memory>
+#include <mutex>
+#include <utility>
 
 #include "utils/atomic_ptr.hpp"
 #include "stddef.h"
@@ -56,6 +58,7 @@ struct transport_pair_state_t
     transport_pair_state_t () :
         generation (1),
         ready_lanes (0),
+        expected_lane_count (0),
         reset_active (false),
         reconnect_enabled (true)
     {
@@ -63,6 +66,7 @@ struct transport_pair_state_t
 
     uint64_t begin_reset ()
     {
+        std::lock_guard<std::mutex> registration_lock (registration_sync);
         bool expected = false;
         if (reset_active.compare_exchange_strong (expected, true,
                                                   std::memory_order_acq_rel)) {
@@ -73,6 +77,18 @@ struct transport_pair_state_t
             return next;
         }
         return generation.load (std::memory_order_acquire);
+    }
+
+    bool acquire_owner_registration_lease (
+      uint64_t generation_, std::unique_lock<std::mutex> *lease_out_)
+    {
+        if (!lease_out_ || lease_out_->owns_lock ())
+            return false;
+        std::unique_lock<std::mutex> lease (registration_sync);
+        if (generation_ == 0 || current_generation () != generation_)
+            return false;
+        *lease_out_ = std::move (lease);
+        return true;
     }
 
     uint64_t current_generation () const
@@ -88,8 +104,30 @@ struct transport_pair_state_t
           lane_ == transport_lane_completion ? 2u : 1u;
         const unsigned int ready =
           ready_lanes.fetch_or (lane_bit, std::memory_order_acq_rel) | lane_bit;
-        if (ready == 3u)
+        const unsigned int expected = expected_ready_mask ();
+        if (expected != 0 && (ready & expected) == expected)
             reset_active.store (false, std::memory_order_release);
+    }
+
+    bool set_expected_lane_count (unsigned char lane_count_)
+    {
+        if (lane_count_ != 1u && lane_count_ != 2u)
+            return false;
+        unsigned char expected = 0;
+        return expected_lane_count.compare_exchange_strong (
+                 expected, lane_count_, std::memory_order_acq_rel)
+               || expected == lane_count_;
+    }
+
+    unsigned char lane_count () const
+    {
+        return expected_lane_count.load (std::memory_order_acquire);
+    }
+
+    unsigned int expected_ready_mask () const
+    {
+        const unsigned char count = lane_count ();
+        return count == 1u ? 1u : count == 2u ? 3u : 0u;
     }
 
     void disable_reconnect ()
@@ -104,8 +142,13 @@ struct transport_pair_state_t
 
     std::atomic<uint64_t> generation;
     std::atomic<unsigned int> ready_lanes;
+    std::atomic<unsigned char> expected_lane_count;
     std::atomic<bool> reset_active;
     std::atomic<bool> reconnect_enabled;
+    // Serializes a generation reset against the short socket-owner commit that
+    // publishes an optional Completion child for that exact generation. Slow
+    // address resolution happens before this lease is acquired.
+    std::mutex registration_sync;
 };
 
 struct options_t
@@ -252,6 +295,7 @@ struct options_t
 
     // Internal request/reply connection-pair metadata.
     transport_lane_t transport_lane;
+    unsigned char transport_lane_count;
     physical_queue_class_t physical_queue_class;
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;

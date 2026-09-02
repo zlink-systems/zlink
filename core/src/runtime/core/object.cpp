@@ -88,6 +88,27 @@ void zlink::object_t::process_command (const command_t &cmd_)
         case command_t::request_completion:
             break;
 
+        case command_t::transport_pair_owner_request:
+            process_transport_pair_owner_request (
+              cmd_.args.transport_pair_owner_request.session,
+              cmd_.args.transport_pair_owner_request.peer_socket_type,
+              cmd_.args.transport_pair_owner_request.connection_id,
+              cmd_.args.transport_pair_owner_request.pair_id,
+              cmd_.args.transport_pair_owner_request.generation,
+              cmd_.args.transport_pair_owner_request.lane);
+            process_seqnum ();
+            break;
+
+        case command_t::transport_pair_owner_decision:
+            process_transport_pair_owner_decision (
+              cmd_.args.transport_pair_owner_decision.connection_id,
+              cmd_.args.transport_pair_owner_decision.pair_id,
+              cmd_.args.transport_pair_owner_decision.generation,
+              cmd_.args.transport_pair_owner_decision.lane_count,
+              cmd_.args.transport_pair_owner_decision.error_number);
+            process_seqnum ();
+            break;
+
         case command_t::stop:
             process_stop ();
             break;
@@ -278,6 +299,41 @@ void zlink::object_t::send_conn_failed (session_base_t *destination_)
     command_t cmd;
     cmd.destination = destination_;
     cmd.type = command_t::conn_failed;
+    send_command (cmd);
+}
+
+void zlink::object_t::send_transport_pair_owner_request (
+  socket_base_t *destination_, session_base_t *session_, int peer_socket_type_,
+  uint64_t connection_id_, uint64_t pair_id_, uint64_t generation_,
+  unsigned char lane_)
+{
+    destination_->inc_seqnum ();
+    command_t cmd;
+    memset (&cmd, 0, sizeof (cmd));
+    cmd.destination = destination_;
+    cmd.type = command_t::transport_pair_owner_request;
+    cmd.args.transport_pair_owner_request.session = session_;
+    cmd.args.transport_pair_owner_request.peer_socket_type = peer_socket_type_;
+    cmd.args.transport_pair_owner_request.connection_id = connection_id_;
+    cmd.args.transport_pair_owner_request.pair_id = pair_id_;
+    cmd.args.transport_pair_owner_request.generation = generation_;
+    cmd.args.transport_pair_owner_request.lane = lane_;
+    send_command (cmd);
+}
+
+void zlink::object_t::send_transport_pair_owner_decision (
+  session_base_t *destination_, uint64_t connection_id_, uint64_t pair_id_,
+  uint64_t generation_, unsigned char lane_count_, int error_number_)
+{
+    command_t cmd;
+    memset (&cmd, 0, sizeof (cmd));
+    cmd.destination = destination_;
+    cmd.type = command_t::transport_pair_owner_decision;
+    cmd.args.transport_pair_owner_decision.connection_id = connection_id_;
+    cmd.args.transport_pair_owner_decision.pair_id = pair_id_;
+    cmd.args.transport_pair_owner_decision.generation = generation_;
+    cmd.args.transport_pair_owner_decision.lane_count = lane_count_;
+    cmd.args.transport_pair_owner_decision.error_number = error_number_;
     send_command (cmd);
 }
 
@@ -560,6 +616,18 @@ void zlink::object_t::process_seqnum ()
 }
 
 void zlink::object_t::process_conn_failed ()
+{
+    zlink_assert (false);
+}
+
+void zlink::object_t::process_transport_pair_owner_request (
+  session_base_t *, int, uint64_t, uint64_t, uint64_t, unsigned char)
+{
+    zlink_assert (false);
+}
+
+void zlink::object_t::process_transport_pair_owner_decision (
+  uint64_t, uint64_t, uint64_t, unsigned char, int)
 {
     zlink_assert (false);
 }

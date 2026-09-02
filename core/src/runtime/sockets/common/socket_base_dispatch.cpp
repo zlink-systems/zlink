@@ -396,9 +396,19 @@ bool zlink::socket_base_t::deliver_local_peer_weight (pipe_t *pipe_,
         return false;
 
     //  A session consumes ZMP command frames before application delivery.
-    //  Inproc has no session, so deliver the same absolute policy through the
-    //  peer pipe's owner mailbox instead of writing application data.
+    //  Paired inproc still uses the same pipe-owned boundary staging, but
+    //  materialises its surviving controls as owner commands after preceding
+    //  Application records are published. Unpaired inproc has no multipart
+    //  pair policy and keeps its direct owner-command path.
     if (!pipe_->is_session_pipe ()) {
+        if (pipe_->get_transport_pair_id () != 0) {
+            if (pipe_->get_transport_pair_generation () == 0
+                || (pipe_->get_transport_lane_count () != 1u
+                    && pipe_->get_transport_lane_count () != 2u))
+                return false;
+            return pipe_->write_peer_weight_control_and_flush (
+              weight_, lifecycle_coordinator ().public_multipart_send_active ());
+        }
         pipe_t *const peer = pipe_->retain_peer_snapshot ();
         if (!peer)
             return false;
@@ -408,7 +418,8 @@ bool zlink::socket_base_t::deliver_local_peer_weight (pipe_t *pipe_,
         return sent;
     }
 
-    return pipe_->write_peer_weight_control_and_flush (weight_);
+    return pipe_->write_peer_weight_control_and_flush (
+      weight_, lifecycle_coordinator ().public_multipart_send_active ());
 }
 
 bool zlink::socket_base_t::send_local_peer_weight (pipe_t *pipe_)

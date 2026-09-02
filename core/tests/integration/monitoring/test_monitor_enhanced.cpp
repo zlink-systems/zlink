@@ -371,6 +371,10 @@ static void run_client_monitor_ready_disconnected_test (int client_type_, int se
     void *client = test_context_socket (client_type_);
     TEST_ASSERT_NOT_NULL (server);
     TEST_ASSERT_NOT_NULL (client);
+    const bool single_lane_dealer_pair =
+      client_type_ == ZLINK_SOCKET_DEALER
+      && (server_type_ == ZLINK_SOCKET_DEALER
+          || server_type_ == ZLINK_SOCKET_ROUTER);
 
     subscribe_all_if_needed (server, server_type_);
     subscribe_all_if_needed (client, client_type_);
@@ -385,21 +389,43 @@ static void run_client_monitor_ready_disconnected_test (int client_type_, int se
     zlink_socket_monitor_open_options_t opts;
     memset (&opts, 0, sizeof (opts));
     opts.events = ZLINK_EVENT_CONNECTION_READY | ZLINK_EVENT_DISCONNECTED;
+    if (single_lane_dealer_pair)
+        opts.events |= ZLINK_EVENT_CONNECTED;
     void *mon = zlink_socket_monitor_open (client, &opts);
     TEST_ASSERT_NOT_NULL (mon);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (mon, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
 
+    zlink_monitor_event_t connected;
+    if (single_lane_dealer_pair)
+        TEST_ASSERT_TRUE (
+          wait_for_event (mon, ZLINK_EVENT_CONNECTED, &connected));
+
     zlink_monitor_event_t ready;
     TEST_ASSERT_TRUE (wait_for_event (mon, ZLINK_EVENT_CONNECTION_READY, &ready));
     TEST_ASSERT_TRUE (ready.remote_addr[0] != '\0' || ready.local_addr[0] != '\0');
+    if (single_lane_dealer_pair) {
+        TEST_ASSERT_EQUAL_UINT (
+          ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+          connected.transport_lane);
+        TEST_ASSERT_EQUAL_UINT (
+          ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION, ready.transport_lane);
+        TEST_ASSERT_EQUAL_UINT64 (1, ready.value);
+        TEST_ASSERT_TRUE (
+          (ready.flags & ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE) != 0);
+    }
 
     test_context_socket_close_zero_linger (server);
 
     zlink_monitor_event_t disconnected;
     TEST_ASSERT_TRUE (wait_for_event (mon, ZLINK_EVENT_DISCONNECTED, &disconnected));
     TEST_ASSERT_TRUE (disconnected.remote_addr[0] != '\0' || disconnected.local_addr[0] != '\0');
+    if (single_lane_dealer_pair) {
+        TEST_ASSERT_EQUAL_UINT (
+          ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+          disconnected.transport_lane);
+    }
     if (ready.routing_id.size > 0 && disconnected.routing_id.size > 0) {
         TEST_ASSERT_TRUE (routing_id_equal (&ready.routing_id, &disconnected.routing_id));
     }
@@ -455,15 +481,29 @@ void test_monitor_open_and_connection_ready ()
     test_context_socket_close_zero_linger (server);
 }
 
-void test_passive_paired_ready_waits_for_ready_reply_write_drain ()
+void run_passive_paired_ready_waits_for_ready_reply_write_drain (
+  int client_type_, int server_type_, unsigned int expected_drain_arrivals_)
 {
-    void *server = test_context_socket (ZLINK_SOCKET_ROUTER);
-    void *client = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *server = test_context_socket (server_type_);
+    void *client = test_context_socket (client_type_);
     TEST_ASSERT_NOT_NULL (server);
     TEST_ASSERT_NOT_NULL (client);
 
     set_zero_linger (server);
     set_zero_linger (client);
+
+    if (client_type_ == ZLINK_SOCKET_ROUTER
+        && server_type_ == ZLINK_SOCKET_ROUTER) {
+        const char server_id[] = "PASSIVE";
+        const char client_id[] = "ACTIVE";
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_routing_id (server, server_id, sizeof (server_id) - 1));
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_routing_id (client, client_id, sizeof (client_id) - 1));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_set_router_option (
+          client, ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID, server_id,
+          sizeof (server_id) - 1));
+    }
 
     char endpoint[MAX_SOCKET_STRING];
     bind_loopback_ipv4 (server, endpoint, sizeof endpoint);
@@ -533,7 +573,7 @@ void test_passive_paired_ready_waits_for_ready_reply_write_drain ()
     TEST_ASSERT_TRUE (drain_reached);
     TEST_ASSERT_TRUE (pair_id != 0);
     TEST_ASSERT_TRUE (pair_generation != 0);
-    TEST_ASSERT_EQUAL_UINT (2, drain_arrivals);
+    TEST_ASSERT_EQUAL_UINT (expected_drain_arrivals_, drain_arrivals);
     TEST_ASSERT_TRUE (identity_consistent);
     TEST_ASSERT_EQUAL_UINT32 (0, ready_count_before);
     TEST_ASSERT_FALSE (pair_ready_before);
@@ -548,6 +588,18 @@ void test_passive_paired_ready_waits_for_ready_reply_write_drain ()
     TEST_ASSERT_TRUE (
       (ready_event.flags & ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE)
       != 0);
+}
+
+void test_passive_single_lane_ready_waits_for_ready_reply_write_drain ()
+{
+    run_passive_paired_ready_waits_for_ready_reply_write_drain (
+      ZLINK_SOCKET_DEALER, ZLINK_SOCKET_ROUTER, 1);
+}
+
+void test_passive_router_pair_ready_waits_for_both_ready_reply_write_drains ()
+{
+    run_passive_paired_ready_waits_for_ready_reply_write_drain (
+      ZLINK_SOCKET_ROUTER, ZLINK_SOCKET_ROUTER, 2);
 }
 
 void test_pair_monitor_ready_implies_first_bidirectional_delivery ()
@@ -729,13 +781,19 @@ void test_router_monitor_event_sequence_timing ()
     TEST_ASSERT_FALSE (probe.ready_before_accepted);
     TEST_ASSERT_TRUE (probe.accepted_seen);
     TEST_ASSERT_EQUAL_UINT (0, probe.accepted.routing_id.size);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            probe.accepted.transport_lane);
     TEST_ASSERT_TRUE (probe.ready_seen);
     TEST_ASSERT_TRUE (probe.ready.routing_id.size > 0);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            probe.ready.transport_lane);
 
     test_context_socket_close_zero_linger (client);
 
     TEST_ASSERT_TRUE (wait_for_sequence (mon, &probe, true, 5000));
     TEST_ASSERT_FALSE (probe.disconnected_before_ready);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
+                            probe.disconnected.transport_lane);
     if (probe.disconnected.routing_id.size > 0) {
         TEST_ASSERT_TRUE (
           routing_id_equal (&probe.ready.routing_id, &probe.disconnected.routing_id));
@@ -748,6 +806,12 @@ void test_router_monitor_event_sequence_timing ()
 void test_dealer_monitor_ready_and_disconnected ()
 {
     run_client_monitor_ready_disconnected_test (ZLINK_SOCKET_DEALER, ZLINK_SOCKET_ROUTER);
+}
+
+void test_dealer_dealer_monitor_ready_and_disconnected ()
+{
+    run_client_monitor_ready_disconnected_test (ZLINK_SOCKET_DEALER,
+                                                ZLINK_SOCKET_DEALER);
 }
 
 void test_pub_monitor_ready_and_disconnected ()
@@ -767,12 +831,14 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (test_auto_routing_id_generation);
     RUN_TEST (test_monitor_open_and_connection_ready);
-    RUN_TEST (test_passive_paired_ready_waits_for_ready_reply_write_drain);
+    RUN_TEST (test_passive_single_lane_ready_waits_for_ready_reply_write_drain);
+    RUN_TEST (test_passive_router_pair_ready_waits_for_both_ready_reply_write_drains);
     RUN_TEST (test_pair_monitor_ready_implies_first_bidirectional_delivery);
     RUN_TEST (test_dealer_router_monitor_ready_implies_first_bidirectional_delivery);
     RUN_TEST (test_peer_enumeration);
     RUN_TEST (test_router_monitor_event_sequence_timing);
     RUN_TEST (test_dealer_monitor_ready_and_disconnected);
+    RUN_TEST (test_dealer_dealer_monitor_ready_and_disconnected);
     RUN_TEST (test_pub_monitor_ready_and_disconnected);
     RUN_TEST (test_sub_monitor_ready_and_disconnected);
     return UNITY_END ();

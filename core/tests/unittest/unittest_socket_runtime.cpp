@@ -3,6 +3,7 @@
 #include "../testutil_unity.hpp"
 
 #include "core/mailbox.hpp"
+#include "sockets/common/socket_base.hpp"
 #include "sockets/common/socket_runtime.hpp"
 #include "utils/config.hpp"
 
@@ -16,6 +17,32 @@ void tearDown ()
 
 namespace
 {
+void test_transport_pair_expected_lane_masks ()
+{
+    zlink::transport_pair_pipes_t pair;
+    TEST_ASSERT_EQUAL_UINT32 (0u, pair.expected_lane_mask ());
+    TEST_ASSERT_FALSE (pair.accepts_lane_count (
+      0u, zlink::transport_lane_application));
+    TEST_ASSERT_TRUE (pair.accepts_lane_count (
+      1u, zlink::transport_lane_application));
+    TEST_ASSERT_FALSE (pair.accepts_lane_count (
+      1u, zlink::transport_lane_completion));
+    TEST_ASSERT_TRUE (pair.accepts_lane_count (
+      2u, zlink::transport_lane_application));
+    TEST_ASSERT_TRUE (pair.accepts_lane_count (
+      2u, zlink::transport_lane_completion));
+
+    pair.expected_lane_count = 1u;
+    TEST_ASSERT_EQUAL_UINT32 (1u, pair.expected_lane_mask ());
+    TEST_ASSERT_FALSE (pair.accepts_lane_count (
+      2u, zlink::transport_lane_application));
+
+    pair.expected_lane_count = 2u;
+    TEST_ASSERT_EQUAL_UINT32 (3u, pair.expected_lane_mask ());
+    TEST_ASSERT_FALSE (pair.accepts_lane_count (
+      1u, zlink::transport_lane_application));
+}
+
 zlink::endpoint_uri_pair_t make_bind_endpoint (const char *local_, const char *remote_)
 {
     return zlink::endpoint_uri_pair_t (local_, remote_, zlink::endpoint_type_bind);
@@ -101,6 +128,38 @@ void test_socket_monitor_runtime_erases_transport_pair_by_endpoint_when_rid_diff
     TEST_ASSERT_TRUE (runtime.erase_ready_connection (
       endpoint, routing_id_b, sizeof (routing_id_b), &ready_count, 12, 1));
     TEST_ASSERT_EQUAL_UINT32 (0u, runtime.ready_count ());
+}
+
+void test_socket_monitor_runtime_pair_readiness_cleanup_is_generation_scoped ()
+{
+    zlink::socket_monitor_runtime_t runtime;
+    const zlink::endpoint_uri_pair_t old_peer =
+      make_bind_endpoint ("tcp://127.0.0.1:5555", "tcp://peer-old");
+    const zlink::endpoint_uri_pair_t other_peer =
+      make_bind_endpoint ("tcp://127.0.0.1:5555", "tcp://peer-other");
+    const zlink::endpoint_uri_pair_t replacement =
+      make_bind_endpoint ("tcp://127.0.0.1:5555", "tcp://peer-replacement");
+
+    TEST_ASSERT_FALSE (runtime.mark_transport_pair_lane_ready (
+      old_peer, zlink::transport_lane_application, 11, 1));
+    TEST_ASSERT_FALSE (runtime.mark_transport_pair_lane_ready (
+      other_peer, zlink::transport_lane_application, 12, 1));
+    TEST_ASSERT_FALSE (runtime.mark_transport_pair_lane_ready (
+      replacement, zlink::transport_lane_application, 11, 2));
+
+    TEST_ASSERT_TRUE (
+      runtime.erase_transport_pair_readiness (old_peer, 11, 1));
+    TEST_ASSERT_FALSE (
+      runtime.erase_transport_pair_readiness (old_peer, 11, 1));
+
+    // A stale generation on one bound listener must not erase either another
+    // peer or the replacement generation waiting for its Completion lane.
+    TEST_ASSERT_TRUE (runtime.mark_transport_pair_lane_ready (
+      other_peer, zlink::transport_lane_completion, 12, 1));
+    TEST_ASSERT_TRUE (runtime.mark_transport_pair_lane_ready (
+      replacement, zlink::transport_lane_completion, 11, 2));
+    TEST_ASSERT_FALSE (runtime.mark_transport_pair_lane_ready (
+      old_peer, zlink::transport_lane_completion, 11, 1));
 }
 
 void test_socket_monitor_runtime_dequeues_enqueued_worker_event_nowait ()
@@ -547,9 +606,12 @@ void test_socket_public_send_scope_without_sync_keeps_inflight_admission ()
 int main (int argc, char **argv)
 {
     UNITY_BEGIN ();
+    RUN_TEST (test_transport_pair_expected_lane_masks);
     RUN_TEST (test_socket_monitor_runtime_tracks_ready_connections_once);
     RUN_TEST (test_socket_monitor_runtime_erases_only_matching_ready_connection);
     RUN_TEST (test_socket_monitor_runtime_erases_transport_pair_by_endpoint_when_rid_differs);
+    RUN_TEST (
+      test_socket_monitor_runtime_pair_readiness_cleanup_is_generation_scoped);
     RUN_TEST (test_socket_monitor_runtime_dequeues_enqueued_worker_event_nowait);
     RUN_TEST (test_socket_monitor_runtime_hwm_drops_lossy_events);
     RUN_TEST (test_socket_monitor_runtime_hwm_backpressures_reliable_events);

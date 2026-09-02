@@ -59,6 +59,37 @@ void test_completion_socket_buffer_preserves_default_and_caps_explicit_value ()
       zlink::transport_pair_policy::request_correlation_count_budget);
 }
 
+void test_router_reply_peer_type_snapshot_is_part_of_alias_identity ()
+{
+    using namespace zlink::socket_reqrep_internal;
+
+    router_reply_target_t dealer_target;
+    dealer_target.source_peer_socket_type = ZLINK_CORE_SOCKET_DEALER;
+    dealer_target.wire_request_seq = 17;
+    dealer_target.transport_pair_id = 23;
+    dealer_target.transport_pair_generation = 5;
+    const router_reply_target_t copied_target = dealer_target;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CORE_SOCKET_DEALER,
+                           copied_target.source_peer_socket_type);
+
+    router_reply_alias_key_t dealer_alias;
+    dealer_alias.source_peer_socket_type = ZLINK_CORE_SOCKET_DEALER;
+    dealer_alias.wire_request_seq = dealer_target.wire_request_seq;
+    dealer_alias.transport_pair_id = dealer_target.transport_pair_id;
+    dealer_alias.transport_pair_generation =
+      dealer_target.transport_pair_generation;
+    router_reply_alias_key_t router_alias = dealer_alias;
+    router_alias.source_peer_socket_type = ZLINK_CORE_SOCKET_ROUTER;
+
+    TEST_ASSERT_FALSE (dealer_alias == router_alias);
+    std::unordered_map<router_reply_alias_key_t, int,
+                       router_reply_alias_key_hash_t>
+      aliases;
+    aliases.emplace (dealer_alias, 1);
+    aliases.emplace (router_alias, 2);
+    TEST_ASSERT_EQUAL_UINT64 (2, aliases.size ());
+}
+
 struct timeout_barrier_t
 {
     timeout_barrier_t () : fired (false) {}
@@ -702,6 +733,8 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (
       test_completion_socket_buffer_preserves_default_and_caps_explicit_value);
+    RUN_TEST (
+      test_router_reply_peer_type_snapshot_is_part_of_alias_identity);
     RUN_TEST (test_zmp_encoder_rejects_payload_larger_than_u32);
     RUN_TEST (test_zmp_encoder_keeps_ordinary_data_header_at_eight_bytes);
     RUN_TEST (test_zmp_encoder_writes_request_sequence_extension_big_endian);

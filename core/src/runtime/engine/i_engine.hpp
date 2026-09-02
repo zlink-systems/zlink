@@ -45,6 +45,15 @@ struct i_engine
     virtual void restart_output () = 0;
 
     virtual const endpoint_uri_pair_t &get_endpoint () const = 0;
+
+    //  ZMP active DEALER/ROUTER sessions defer READY until their socket owner
+    //  has fixed the endpoint's lane topology. Other engines ignore this hook.
+    virtual void transport_lane_count_decided (unsigned char lane_count_,
+                                               int error_number_)
+    {
+        LIBZLINK_UNUSED (lane_count_);
+        LIBZLINK_UNUSED (error_number_);
+    }
 };
 }
 

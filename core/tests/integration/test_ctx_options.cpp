@@ -616,8 +616,10 @@ void test_auto_hwm_physical_queue_registry_counts_inproc_pair_once ()
     const zlink_auto_hwm_budget_snapshot_t snapshot =
       read_auto_hwm_budget_snapshot (ctx);
     TEST_ASSERT_EQUAL_UINT64 (2, snapshot.active_directional_queue_count);
+    // DEALER-ROUTER owns one physical Application lane. Completion records
+    // share that FIFO and therefore allocate no completion-class queue.
     TEST_ASSERT_EQUAL_UINT64 (
-      2, snapshot.active_completion_directional_queue_count);
+      0, snapshot.active_completion_directional_queue_count);
     TEST_ASSERT_EQUAL_UINT64 (2, snapshot.active_send_queue_count);
     TEST_ASSERT_EQUAL_UINT64 (2, snapshot.active_receive_queue_count);
     TEST_ASSERT_EQUAL_UINT64 (core_budget,
@@ -666,6 +668,45 @@ void test_auto_hwm_inproc_manual_endpoint_resolution_counts_queue_once ()
     test_context_socket_close (router);
 }
 
+void test_auto_hwm_inproc_pending_router_router_adds_completion_after_bind ()
+{
+    void *ctx = get_test_context ();
+    void *client = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *server = test_context_socket (ZLINK_SOCKET_ROUTER);
+    const char *endpoint =
+      "inproc://auto-hwm-pending-router-router-lanes";
+    const int timeout_ms = 1000;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_RCVTIMEO, &timeout_ms,
+                        sizeof (timeout_ms)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_routing_id (client, "CLIENT", 6));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_routing_id (server, "SERVER", 6));
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
+    zlink_auto_hwm_budget_snapshot_t snapshot =
+      read_auto_hwm_budget_snapshot (ctx);
+    TEST_ASSERT_EQUAL_UINT64 (2, snapshot.active_directional_queue_count);
+    TEST_ASSERT_EQUAL_UINT64 (
+      0, snapshot.active_completion_directional_queue_count);
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_auto_hwm_recalculate (ctx));
+    snapshot = read_auto_hwm_budget_snapshot (ctx);
+    TEST_ASSERT_EQUAL_UINT64 (2, snapshot.active_directional_queue_count);
+    TEST_ASSERT_EQUAL_UINT64 (
+      2, snapshot.active_completion_directional_queue_count);
+
+    send_string_expect_success (client, "SERVER", ZLINK_SNDMORE);
+    send_string_expect_success (client, "payload", 0);
+    recv_string_expect_success (server, "CLIENT", 0);
+    recv_string_expect_success (server, "payload", 0);
+
+    test_context_socket_close (client);
+    test_context_socket_close (server);
+}
+
 void test_auto_hwm_inproc_atomic_minimum_reservation_preserves_pending_connection ()
 {
     void *ctx = get_test_context ();
@@ -707,7 +748,7 @@ void test_auto_hwm_inproc_atomic_minimum_reservation_preserves_pending_connectio
     TEST_ASSERT_EQUAL_UINT64 (2,
                               before_bind.active_directional_queue_count);
     TEST_ASSERT_EQUAL_UINT64 (
-      2, before_bind.active_completion_directional_queue_count);
+      0, before_bind.active_completion_directional_queue_count);
     TEST_ASSERT_EQUAL_UINT64 (after_first_attach.budget_generation,
                               before_bind.budget_generation);
 
@@ -1066,6 +1107,7 @@ int main (void)
     RUN_TEST (test_auto_hwm_applied_limit_blocks_and_resumes_after_drain);
     RUN_TEST (test_auto_hwm_physical_queue_registry_counts_inproc_pair_once);
     RUN_TEST (test_auto_hwm_inproc_manual_endpoint_resolution_counts_queue_once);
+    RUN_TEST (test_auto_hwm_inproc_pending_router_router_adds_completion_after_bind);
     RUN_TEST (test_auto_hwm_inproc_atomic_minimum_reservation_preserves_pending_connection);
     RUN_TEST (test_removed_auto_hwm_message_unit_options_are_unknown);
     RUN_TEST (test_socket_option_auto_hwm_buffer_options_do_not_change_snapshot_contract);

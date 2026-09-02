@@ -177,8 +177,9 @@ ZLINK_EXPORT zlink_config_result_t zlink_get_sub_option (void *handle_,
                                                          size_t *optvallen_);
 
 /**
- * @brief Set this socket's local receive-flow state and synchronise it to
- * the paired DEALER/ROUTER completion lane (core-byte-hwm-flow-control-plan.ko.md §5).
+ * @brief Set this socket's local receive-flow state for a paired DEALER or
+ * ROUTER peer. DEALER-DEALER and DEALER-ROUTER pairs use their Application
+ * connection; ROUTER-ROUTER pairs use their Completion connection.
  *
  * RUNNING/PAUSED is an absolute state, not a counter: repeating the current
  * state succeeds and resynchronises nothing new. Completion is the point
@@ -189,8 +190,9 @@ ZLINK_EXPORT zlink_config_result_t zlink_get_sub_option (void *handle_,
  *   state). ZLINK_CONFIG_INVALID_HANDLE for a NULL or invalid handle.
  *   ZLINK_CONFIG_INVALID_ARGUMENT for a state outside
  *   zlink_receive_flow_state_t. ZLINK_CONFIG_NOT_SUPPORTED for a socket type
- *   other than DEALER/ROUTER, which has no completion lane and keeps its
- *   existing byte HWM and transport backpressure unchanged.
+ *   other than DEALER/ROUTER, which does not participate in paired receive
+ *   flow control and keeps its existing byte HWM and transport backpressure
+ *   unchanged.
  *   ZLINK_CONFIG_INVALID_STATE when a concurrent close is admitted first.
  */
 ZLINK_EXPORT zlink_config_result_t zlink_socket_set_receive_flow_state (

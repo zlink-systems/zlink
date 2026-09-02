@@ -13,8 +13,65 @@
 #include <unity.h>
 
 #include <string.h>
+#include <stdlib.h>
 
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <vector>
+
+namespace
+{
+bool should_run_ctx_destroy_test (const char *name_)
+{
+    const char *const selected = getenv ("ZLINK_TEST_CASE");
+    return !selected || !*selected || strcmp (selected, name_) == 0;
+}
+
+struct async_owner_transition_gate_t
+{
+    async_owner_transition_gate_t () :
+        idle_stop_entered (false),
+        monitor_acquire_entered (false),
+        release_idle_stop (false)
+    {
+    }
+
+    std::mutex sync;
+    std::condition_variable changed;
+    bool idle_stop_entered;
+    bool monitor_acquire_entered;
+    bool release_idle_stop;
+};
+
+void pause_async_owner_transition (
+  zlink::async_owner_transition_test_point_t point_, void *userdata_)
+{
+    async_owner_transition_gate_t *const gate =
+      static_cast<async_owner_transition_gate_t *> (userdata_);
+    std::unique_lock<std::mutex> lock (gate->sync);
+    if (point_ == zlink::async_owner_test_idle_stop_gate_held) {
+        gate->idle_stop_entered = true;
+        gate->changed.notify_all ();
+        gate->changed.wait (lock,
+                            [gate] { return gate->release_idle_stop; });
+    } else if (point_
+               == zlink::async_owner_test_monitor_acquire_before_gate) {
+        gate->monitor_acquire_entered = true;
+        gate->changed.notify_all ();
+    }
+}
+
+bool wait_async_owner_transition (async_owner_transition_gate_t *gate_,
+                                  bool async_owner_transition_gate_t::*field_)
+{
+    std::unique_lock<std::mutex> lock (gate_->sync);
+    return gate_->changed.wait_for (
+      lock, std::chrono::seconds (3),
+      [gate_, field_] { return gate_->*field_; });
+}
+}
 
 namespace zlink
 {
@@ -635,6 +692,10 @@ void test_terminating_lane_cannot_complete_delayed_pair_admission ()
       zlink::transport_lane_completion, pair_id, generation);
     completion[1]->set_transport_pair (
       zlink::transport_lane_completion, pair_id, generation);
+    application[0]->set_transport_lane_count (2);
+    application[1]->set_transport_lane_count (2);
+    completion[0]->set_transport_lane_count (2);
+    completion[1]->set_transport_lane_count (2);
     const unsigned char peer_identity = 0x2a;
     application[0]->set_transport_peer_identity (&peer_identity, 1);
     completion[0]->set_transport_peer_identity (&peer_identity, 1);
@@ -1121,6 +1182,114 @@ void test_monitor_and_hwm_update_race_peer_close ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx_handle));
 }
 
+void test_monitor_owner_start_waits_for_idle_detach_linearization ()
+{
+    void *ctx = zlink_ctx_new ();
+    void *source = ctx ? zlink_socket (ctx, ZLINK_SOCKET_PAIR) : NULL;
+    void *peer = ctx ? zlink_socket (ctx, ZLINK_SOCKET_PAIR) : NULL;
+    socket_handle_t source_handle = source ? as_socket_handle (source)
+                                           : socket_handle_t ();
+    const int zero = 0;
+    if (source)
+        (void) zlink_set_option (source, ZLINK_OPT_LINGER, &zero,
+                                 sizeof (zero));
+    if (peer)
+        (void) zlink_set_option (peer, ZLINK_OPT_LINGER, &zero,
+                                 sizeof (zero));
+
+    const bool owner_acquired =
+      source_handle.socket
+      && source_handle.socket->acquire_transport_pair_owner_progress () == 0;
+    async_owner_transition_gate_t gate;
+    std::atomic<bool> monitor_open_done (false);
+    void *monitor = NULL;
+    bool idle_stop_entered = false;
+    bool monitor_acquire_entered = false;
+    bool monitor_was_blocked_at_gate = false;
+
+    std::thread monitor_opener;
+    if (owner_acquired) {
+        zlink::test_set_async_owner_transition_hook (
+          &pause_async_owner_transition, &gate);
+        source_handle.socket->release_transport_pair_owner_progress ();
+        idle_stop_entered = wait_async_owner_transition (
+          &gate, &async_owner_transition_gate_t::idle_stop_entered);
+        if (idle_stop_entered) {
+            monitor_opener = std::thread ([&] {
+                zlink_socket_monitor_open_options_t options;
+                memset (&options, 0, sizeof (options));
+                options.events = ZLINK_EVENT_CONNECTION_READY;
+                monitor = zlink_socket_monitor_open (source, &options);
+                monitor_open_done.store (true, std::memory_order_release);
+            });
+            monitor_acquire_entered = wait_async_owner_transition (
+              &gate,
+              &async_owner_transition_gate_t::monitor_acquire_entered);
+            monitor_was_blocked_at_gate =
+              monitor_acquire_entered
+              && !monitor_open_done.load (std::memory_order_acquire);
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock (gate.sync);
+        gate.release_idle_stop = true;
+        gate.changed.notify_all ();
+    }
+    if (monitor_opener.joinable ())
+        monitor_opener.join ();
+    zlink::test_set_async_owner_transition_hook (NULL, NULL);
+
+    bool event_progressed_after_handoff = false;
+    if (monitor && source && peer) {
+        static const char endpoint[] =
+          "inproc://monitor-owner-idle-detach-linearization";
+        const bool connected = zlink_bind (source, endpoint) == ZLINK_BIND_OK
+                               && zlink_connect (peer, endpoint)
+                                    == ZLINK_CONNECT_OK;
+        const std::chrono::steady_clock::time_point deadline =
+          std::chrono::steady_clock::now () + std::chrono::seconds (3);
+        while (connected && std::chrono::steady_clock::now () < deadline) {
+            zlink_socket_monitor_event_t event;
+            memset (&event, 0, sizeof (event));
+            const zlink_recv_result_t rc = zlink_socket_monitor_recv (
+              monitor, &event, ZLINK_RECV_FLAGS_DONTWAIT);
+            if (rc == ZLINK_RECV_OK
+                && event.event == ZLINK_EVENT_CONNECTION_READY) {
+                event_progressed_after_handoff = true;
+                break;
+            }
+            msleep (1);
+        }
+    }
+
+    const bool monitor_opened = monitor != NULL;
+    int monitor_close_rc = ZLINK_CLOSE_OK;
+    if (monitor)
+        monitor_close_rc = zlink_monitor_close (&monitor);
+    source_handle = socket_handle_t ();
+    int peer_close_rc = ZLINK_CLOSE_OK;
+    int source_close_rc = ZLINK_CLOSE_OK;
+    int ctx_term_rc = 0;
+    if (peer)
+        peer_close_rc = zlink_close (peer);
+    if (source)
+        source_close_rc = zlink_close (source);
+    if (ctx)
+        ctx_term_rc = zlink_ctx_term (ctx);
+
+    TEST_ASSERT_TRUE (owner_acquired);
+    TEST_ASSERT_TRUE (idle_stop_entered);
+    TEST_ASSERT_TRUE (monitor_acquire_entered);
+    TEST_ASSERT_TRUE (monitor_was_blocked_at_gate);
+    TEST_ASSERT_TRUE (monitor_opened);
+    TEST_ASSERT_TRUE (event_progressed_after_handoff);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, monitor_close_rc);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, peer_close_rc);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, source_close_rc);
+    TEST_ASSERT_EQUAL_INT (0, ctx_term_rc);
+}
+
 void test_zlink_ctx_term_null_fails ()
 {
     int rc = zlink_ctx_term (NULL);
@@ -1147,27 +1316,41 @@ int main (void)
     setup_test_environment ();
 
     UNITY_BEGIN ();
-    RUN_TEST (test_pipe_lifetime_state_rejects_invalid_transitions);
-    RUN_TEST (test_pipe_lifetime_state_assigns_one_delete_owner);
-    RUN_TEST (test_ctx_destroy);
-    RUN_TEST (test_ctx_term_with_open_socket_monitors);
-    RUN_TEST (test_router_router_connection_ready);
-    RUN_TEST (test_ctx_shutdown);
-    RUN_TEST (test_ctx_shutdown_socket_opened_after);
-    RUN_TEST (test_ctx_shutdown_only_socket_opened_after);
-    RUN_TEST (test_ctx_term_rearms_reaper_when_last_socket_closes_during_restart);
-    RUN_TEST (test_pending_inproc_disconnect_releases_socket_before_context_term);
-    RUN_TEST (test_engine_less_session_releases_socket_term_ack_with_pending_message);
-    RUN_TEST (test_terminating_lane_cannot_complete_delayed_pair_admission);
-    RUN_TEST (test_reciprocal_pipe_ack_is_queued_before_local_completion);
-    RUN_TEST (test_concurrent_pipe_acks_detach_pair_once);
-    RUN_TEST (test_retained_peer_snapshot_outlives_concurrent_pipe_acks);
-    RUN_TEST (test_routing_id_snapshot_is_consistent_during_publication);
-    RUN_TEST (test_session_decoder_queue_accounting_publication);
-    RUN_TEST (test_monitor_and_hwm_update_race_peer_close);
-    RUN_TEST (test_zlink_ctx_term_null_fails);
-    RUN_TEST (test_zlink_term_null_fails);
-    RUN_TEST (test_zlink_ctx_shutdown_null_fails);
+#define RUN_CTX_DESTROY_TEST(test_)                                          \
+    do {                                                                     \
+        if (should_run_ctx_destroy_test (#test_))                            \
+            RUN_TEST (test_);                                                \
+    } while (false)
+
+    RUN_CTX_DESTROY_TEST (test_pipe_lifetime_state_rejects_invalid_transitions);
+    RUN_CTX_DESTROY_TEST (test_pipe_lifetime_state_assigns_one_delete_owner);
+    RUN_CTX_DESTROY_TEST (test_ctx_destroy);
+    RUN_CTX_DESTROY_TEST (test_ctx_term_with_open_socket_monitors);
+    RUN_CTX_DESTROY_TEST (test_router_router_connection_ready);
+    RUN_CTX_DESTROY_TEST (test_ctx_shutdown);
+    RUN_CTX_DESTROY_TEST (test_ctx_shutdown_socket_opened_after);
+    RUN_CTX_DESTROY_TEST (test_ctx_shutdown_only_socket_opened_after);
+    RUN_CTX_DESTROY_TEST (
+      test_ctx_term_rearms_reaper_when_last_socket_closes_during_restart);
+    RUN_CTX_DESTROY_TEST (
+      test_pending_inproc_disconnect_releases_socket_before_context_term);
+    RUN_CTX_DESTROY_TEST (
+      test_engine_less_session_releases_socket_term_ack_with_pending_message);
+    RUN_CTX_DESTROY_TEST (
+      test_terminating_lane_cannot_complete_delayed_pair_admission);
+    RUN_CTX_DESTROY_TEST (test_reciprocal_pipe_ack_is_queued_before_local_completion);
+    RUN_CTX_DESTROY_TEST (test_concurrent_pipe_acks_detach_pair_once);
+    RUN_CTX_DESTROY_TEST (test_retained_peer_snapshot_outlives_concurrent_pipe_acks);
+    RUN_CTX_DESTROY_TEST (test_routing_id_snapshot_is_consistent_during_publication);
+    RUN_CTX_DESTROY_TEST (test_session_decoder_queue_accounting_publication);
+    RUN_CTX_DESTROY_TEST (test_monitor_and_hwm_update_race_peer_close);
+    RUN_CTX_DESTROY_TEST (
+      test_monitor_owner_start_waits_for_idle_detach_linearization);
+    RUN_CTX_DESTROY_TEST (test_zlink_ctx_term_null_fails);
+    RUN_CTX_DESTROY_TEST (test_zlink_term_null_fails);
+    RUN_CTX_DESTROY_TEST (test_zlink_ctx_shutdown_null_fails);
+
+#undef RUN_CTX_DESTROY_TEST
 
     return UNITY_END ();
 }

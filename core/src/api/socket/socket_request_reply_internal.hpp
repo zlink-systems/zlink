@@ -29,8 +29,21 @@ class socket_base_t;
 namespace socket_reqrep_internal
 {
 static const size_t max_reply_target_slots = 65536;
+//  Bound one completion-pipe owner turn without cutting a multipart record.
+//  A whole-record budget trades a small amount of single-pipe throughput for
+//  bounded latency across ready transport pairs.
+static const size_t completion_pipe_record_budget = 64;
 
-void process_completion_pipe (zlink::socket_base_t *socket_, zlink::pipe_t *pipe_);
+enum completion_pipe_drain_result_t
+{
+    completion_pipe_drained,
+    completion_pipe_public_head,
+    completion_pipe_budget_exhausted,
+    completion_pipe_terminated
+};
+
+completion_pipe_drain_result_t process_completion_pipe (
+  zlink::socket_base_t *socket_, zlink::pipe_t *pipe_);
 struct pending_key_t
 {
     std::string peer_rid;
@@ -127,6 +140,7 @@ struct router_reply_target_t
 
     zlink::pipe_t *pipe;
     zlink::pipe_t *source_pipe_identity;
+    int source_peer_socket_type;
     uint64_t wire_request_seq;
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
@@ -138,6 +152,7 @@ struct router_reply_alias_key_t
     router_reply_alias_key_t ();
 
     zlink::pipe_t *pipe;
+    int source_peer_socket_type;
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
     uint64_t wire_request_seq;
@@ -200,7 +215,9 @@ int recv_dealer_message_direct (const socket_handle_t &handle_,
                                 size_t *part_count_out_,
                                 int flags_,
                                 zlink_msg_t *terminal_part_out_ = NULL,
-                                bool *terminal_part_returned_out_ = NULL);
+                                bool *terminal_part_returned_out_ = NULL,
+                                bool public_part_receive_ = false,
+                                bool *public_part_delivery_hold_out_ = NULL);
 int take_dealer_reply_target (const std::shared_ptr<socket_request_reply_state_t> &state_,
                               uint64_t request_token_,
                               dealer_reply_target_t *target_out_);
@@ -250,6 +267,9 @@ int send_completion_staged_frames (zlink::socket_base_t *socket_,
                                    zlink_msg_t *staged_parts_,
                                    size_t staged_part_count_,
                                    zlink_msg_t *final_part_);
+zlink::pipe_t *retain_reply_transport_pipe (
+  zlink::socket_base_t *socket_, const router_reply_target_t &target_,
+  const zlink_routing_id_t *peer_rid_);
 zlink::pipe_t *retain_reply_completion_pipe (
   zlink::socket_base_t *socket_, zlink::pipe_t *application_pipe_,
   const zlink_routing_id_t *peer_rid_);
@@ -276,8 +296,8 @@ bool remove_socket_pending_request_locked (socket_request_reply_state_t *state_,
 bool take_pending_reply_from_transport_locked (
   socket_request_reply_state_t *state_,
   uint64_t request_seq_,
-  uint64_t transport_pair_id_,
-  uint64_t transport_pair_generation_,
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
+  zlink::pipe_t *source_pipe_, uint64_t source_connection_id_,
   pending_request_t *pending_out_);
 bool take_next_socket_pending_request_for_logical_endpoint_locked (
   socket_request_reply_state_t *state_, const std::string &logical_endpoint_,
@@ -320,6 +340,9 @@ int drain_close_request_reply_socket (const socket_handle_t &handle_);
 void cleanup_request_reply_socket (const socket_handle_t &handle_);
 
 #ifdef ZLINK_BUILD_TESTS
+typedef void (*completion_pipe_budget_exhausted_test_hook_fn) (
+  zlink::socket_base_t *socket_, zlink::pipe_t *pipe_, void *userdata_);
+
 enum request_reply_allocation_failpoint_t
 {
     request_reply_allocation_none = 0,
@@ -333,6 +356,7 @@ enum request_reply_allocation_failpoint_t
 };
 
 typedef void (*request_reply_timeout_after_remove_hook_fn) (void *userdata_);
+typedef void (*request_reply_write_after_prefix_hook_fn) (void *userdata_);
 
 void test_set_request_reply_allocation_failpoint (
   request_reply_allocation_failpoint_t failpoint_);
@@ -340,8 +364,13 @@ void test_throw_request_reply_allocation_failpoint (
   request_reply_allocation_failpoint_t failpoint_);
 void test_set_request_reply_write_failure_after_prefix (bool enabled_);
 bool test_take_request_reply_write_failure_after_prefix ();
+void test_set_request_reply_write_after_prefix_hook (
+  request_reply_write_after_prefix_hook_fn hook_, void *userdata_);
+void test_invoke_request_reply_write_after_prefix_hook ();
 void test_set_request_reply_timeout_after_remove_hook (
   request_reply_timeout_after_remove_hook_fn hook_, void *userdata_);
+void test_set_completion_pipe_budget_exhausted_hook (
+  completion_pipe_budget_exhausted_test_hook_fn hook_, void *userdata_);
 #endif
 }
 }

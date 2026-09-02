@@ -238,6 +238,44 @@ pipe_t *router_t::find_transport_pair_pipe (
     return NULL;
 }
 
+pipe_t *router_t::retain_current_transport_pair_pipe (
+  const zlink_routing_id_t *peer_rid_, int peer_socket_type_,
+  transport_lane_t lane_) const
+{
+    if (!valid_routing_id (peer_rid_)
+        || (lane_ != transport_lane_application
+            && lane_ != transport_lane_completion))
+        return NULL;
+
+    const blob_t peer_rid (
+      const_cast<unsigned char *> (peer_rid_->data), peer_rid_->size,
+      reference_tag_t ());
+    std::lock_guard<std::mutex> route_lifecycle_lock (_out_pipes_sync);
+    const out_pipe_t *const current = lookup_out_pipe (peer_rid);
+    pipe_t *const application = current ? current->pipe : NULL;
+    if (!application
+        || application->get_transport_lane () != transport_lane_application
+        || application->get_peer_socket_type () != peer_socket_type_
+        || application->get_transport_pair_id () == 0
+        || application->get_transport_pair_generation () == 0)
+        return NULL;
+
+    pipe_t *const selected = socket_base_t::retain_transport_pair_pipe (
+      application->get_transport_pair_id (),
+      application->get_transport_pair_generation (), lane_);
+    if (!selected)
+        return NULL;
+
+    const bool valid =
+      selected->get_peer_socket_type () == peer_socket_type_
+      && selected->get_transport_connection_id () != 0;
+    if (!valid) {
+        selected->release_lifetime_ref ();
+        return NULL;
+    }
+    return selected;
+}
+
 bool router_t::emit_transport_pair_ready (pipe_t *pipe_)
 {
     endpoint_uri_pair_t endpoint_pair;

@@ -99,6 +99,14 @@ class object_t
     void send_reaped ();
     void send_done ();
     void send_conn_failed (zlink::session_base_t *destination_);
+    void send_transport_pair_owner_request (
+      zlink::socket_base_t *destination_, zlink::session_base_t *session_,
+      int peer_socket_type_, uint64_t connection_id_, uint64_t pair_id_,
+      uint64_t generation_, unsigned char lane_);
+    void send_transport_pair_owner_decision (
+      zlink::session_base_t *destination_, uint64_t connection_id_,
+      uint64_t pair_id_, uint64_t generation_, unsigned char lane_count_,
+      int error_number_);
 
 
     //  These handlers can be overridden by the derived objects. They are
@@ -126,6 +134,13 @@ class object_t
     virtual void process_reap (zlink::socket_base_t *socket_);
     virtual void process_reaped ();
     virtual void process_conn_failed ();
+    virtual void process_transport_pair_owner_request (
+      zlink::session_base_t *session_, int peer_socket_type_,
+      uint64_t connection_id_, uint64_t pair_id_, uint64_t generation_,
+      unsigned char lane_);
+    virtual void process_transport_pair_owner_decision (
+      uint64_t connection_id_, uint64_t pair_id_, uint64_t generation_,
+      unsigned char lane_count_, int error_number_);
 
 
     //  Special handler called after a command that requires a seqnum

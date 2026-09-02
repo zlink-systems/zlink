@@ -185,7 +185,8 @@ zlink::part_helper_internal::recv_sequence_state_t::recv_sequence_state_t () :
     transport_pair_generation (0),
     message_type (0),
     subscribed (0),
-    next_part_index (0)
+    next_part_index (0),
+    public_delivery_hold (false)
 {
     memset (&source_node_rid, 0, sizeof (source_node_rid));
 }
@@ -196,6 +197,24 @@ int zlink::part_helper_internal::validate_send_flags (zlink_send_flags_t flags_)
         errno = EINVAL;
         return -1;
     }
+    return 0;
+}
+
+int zlink::part_helper_internal::adopt_recv_public_delivery_hold (
+  const std::shared_ptr<handle_state_t> &state_)
+{
+    if (!state_) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    std::lock_guard<std::mutex> lock (state_->mutex);
+    if (!state_->recv.active || !state_->recv.source_socket
+        || state_->recv.public_delivery_hold) {
+        errno = EINVAL;
+        return -1;
+    }
+    state_->recv.public_delivery_hold = true;
     return 0;
 }
 
@@ -503,7 +522,8 @@ void zlink::part_helper_internal::export_recv_metadata (
         *request_seq_out_ = state_->recv.request_seq;
 }
 
-void zlink::part_helper_internal::reset_send_sequence (send_sequence_state_t *state_)
+void zlink::part_helper_internal::reset_send_sequence (
+  send_sequence_state_t *state_, bool notify_release_)
 {
     if (!state_)
         return;
@@ -521,14 +541,18 @@ void zlink::part_helper_internal::reset_send_sequence (send_sequence_state_t *st
     state_->sink_socket = NULL;
     state_->owner_thread = std::thread::id ();
 
-    if (had_send_scope && sink_socket)
+    if (notify_release_ && had_send_scope && sink_socket)
         sink_socket->notify_incremental_send_released ();
 }
 
-void zlink::part_helper_internal::reset_recv_sequence (recv_sequence_state_t *state_)
+zlink::socket_base_t *zlink::part_helper_internal::reset_recv_sequence (
+  recv_sequence_state_t *state_)
 {
     if (!state_)
-        return;
+        return NULL;
+
+    socket_base_t *const held_socket =
+      state_->public_delivery_hold ? state_->source_socket : NULL;
 
     for (size_t i = 0; i < state_->buffered_parts.size (); ++i)
         zlink_msg_close (&state_->buffered_parts[i]);
@@ -547,6 +571,8 @@ void zlink::part_helper_internal::reset_recv_sequence (recv_sequence_state_t *st
     state_->message_type = 0;
     state_->subscribed = 0;
     state_->topic_id.clear ();
+    state_->public_delivery_hold = false;
+    return held_socket;
 }
 
 int zlink::part_helper_internal::prepare_send_step (void *handle_,
@@ -670,6 +696,8 @@ void zlink::part_helper_internal::complete_send_step (const std::shared_ptr<hand
 
     std::lock_guard<std::mutex> lock (state_->mutex);
     if (part_flag_ == ZLINK_PART_MORE) {
+        if (state_->send.sink_socket)
+            state_->send.sink_socket->hold_incremental_send_control_boundary ();
         if (state_->send.send_scope)
             state_->send.send_scope->suspend_multipart_call ();
         return;
@@ -686,15 +714,13 @@ void zlink::part_helper_internal::complete_recv_step (const std::shared_ptr<hand
     if (!state_ || has_more_ != ZLINK_PART_FINAL)
         return;
 
-    std::lock_guard<std::mutex> lock (state_->mutex);
-    for (size_t i = 0; i < state_->recv.buffered_parts.size (); ++i)
-        zlink_msg_close (&state_->recv.buffered_parts[i]);
-    state_->recv.buffered_parts.clear ();
-    state_->recv.next_part_index = 0;
-    state_->recv.active = false;
-    state_->recv.family = recv_family_none;
-    state_->recv.source_socket = NULL;
-    state_->recv.owner_thread = std::thread::id ();
+    socket_base_t *held_socket = NULL;
+    {
+        std::lock_guard<std::mutex> lock (state_->mutex);
+        held_socket = reset_recv_sequence (&state_->recv);
+    }
+    if (held_socket)
+        held_socket->end_public_part_receive_delivery_hold ();
 }
 
 void zlink::part_helper_internal::abort_send_step (const std::shared_ptr<handle_state_t> &state_)
@@ -740,8 +766,13 @@ void zlink::part_helper_internal::abort_recv_step (const std::shared_ptr<handle_
     if (!state_)
         return;
 
-    std::lock_guard<std::mutex> lock (state_->mutex);
-    reset_recv_sequence (&state_->recv);
+    socket_base_t *held_socket = NULL;
+    {
+        std::lock_guard<std::mutex> lock (state_->mutex);
+        held_socket = reset_recv_sequence (&state_->recv);
+    }
+    if (held_socket)
+        held_socket->end_public_part_receive_delivery_hold ();
 }
 
 int zlink::part_helper_internal::reject_if_send_sequence_open (void *handle_)
@@ -764,6 +795,11 @@ void zlink::part_helper_internal::invalidate_recv_sequence (void *handle_)
     if (!state)
         return;
 
-    std::lock_guard<std::mutex> lock (state->mutex);
-    reset_recv_sequence (&state->recv);
+    socket_base_t *held_socket = NULL;
+    {
+        std::lock_guard<std::mutex> lock (state->mutex);
+        held_socket = reset_recv_sequence (&state->recv);
+    }
+    if (held_socket)
+        held_socket->end_public_part_receive_delivery_hold ();
 }

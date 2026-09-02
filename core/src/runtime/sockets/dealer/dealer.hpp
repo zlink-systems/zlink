@@ -86,6 +86,7 @@ class dealer_t : public socket_base_t
     bool xhas_in () ZLINK_OVERRIDE;
     bool xhas_out () ZLINK_OVERRIDE;
     int xrollback () ZLINK_OVERRIDE;
+    void xread_deactivated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xread_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xwrite_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xpipe_terminated (zlink::pipe_t *pipe_) ZLINK_OVERRIDE;

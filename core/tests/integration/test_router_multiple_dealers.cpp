@@ -3,6 +3,7 @@
 #include "testutil.hpp"
 #include "testutil_unity.hpp"
 #include "api/socket/socket_api_internal.hpp"
+#include "core/flow_state_frame.hpp"
 #include "core/object.hpp"
 #include "core/pipe.hpp"
 #include "sockets/internal/dist.hpp"
@@ -437,6 +438,12 @@ void test_peer_control_does_not_complete_open_application_multipart ()
       parents, pipes, hwms, conflate, true,
       zlink::transport_lane_application, zlink::auto_hwm_role_none, false,
       zlink::physical_queue_class_application, 0));
+    pipes[0]->set_transport_pair (zlink::transport_lane_application, 17, 1);
+    pipes[1]->set_transport_pair (zlink::transport_lane_application, 17, 1);
+    pipes[0]->set_transport_lane_count (1);
+    pipes[1]->set_transport_lane_count (1);
+    pipes[0]->set_peer_socket_type (ZLINK_CORE_SOCKET_ROUTER);
+    pipes[1]->set_peer_socket_type (ZLINK_CORE_SOCKET_DEALER);
     pipes[0]->set_max_message_bytes (12);
 
     pipe_cleanup_sink_t cleanup_sink;
@@ -449,12 +456,17 @@ void test_peer_control_does_not_complete_open_application_multipart ()
     first.set_flags (zlink::msg_t::more);
     TEST_ASSERT_TRUE (pipes[0]->write (&first));
 
+    TEST_ASSERT_TRUE (pipes[0]->write_flow_state_control_and_flush (
+      zlink::flow_state::receive_flow_paused, 1));
     static const unsigned char weight_command[] = {
       'W', 'E', 'I', 'G', 'H', 'T', 0, 0, 0, 7};
     TEST_ASSERT_TRUE (pipes[0]->write_peer_weight_control_and_flush (7));
+    TEST_ASSERT_TRUE (pipes[0]->write_flow_state_control_and_flush (
+      zlink::flow_state::receive_flow_running, 2));
 
     const uint64_t control_bytes =
-      sizeof (zlink::msg_t) + sizeof (weight_command);
+      2 * sizeof (zlink::msg_t) + sizeof (weight_command)
+      + zlink::flow_state::frame_size;
     TEST_ASSERT_EQUAL_UINT64 (0, pipes[0]->get_msgs_written ());
     TEST_ASSERT_EQUAL_UINT64 (0, pipes[0]->get_bytes_written ());
 
@@ -496,14 +508,25 @@ void test_peer_control_does_not_complete_open_application_multipart ()
     TEST_ASSERT_EQUAL_MEMORY (
       weight_command, received.data (), sizeof (weight_command));
     TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    zlink::flow_state::frame_t flow_frame;
+    TEST_ASSERT_EQUAL_INT (
+      zlink::flow_state::decode_ok,
+      zlink::flow_state::decode_frame (received, &flow_frame));
+    TEST_ASSERT_EQUAL_UINT8 (zlink::flow_state::receive_flow_running,
+                             flow_frame.state);
+    TEST_ASSERT_EQUAL_UINT64 (2, flow_frame.epoch);
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
     TEST_ASSERT_FALSE (pipes[1]->check_read ());
 
     const uint64_t application_bytes =
       2 * sizeof (zlink::msg_t) + first.size () + final.size ();
-    TEST_ASSERT_EQUAL_UINT64 (2, pipes[0]->get_msgs_written ());
+    TEST_ASSERT_EQUAL_UINT64 (3, pipes[0]->get_msgs_written ());
     TEST_ASSERT_EQUAL_UINT64 (
       control_bytes + application_bytes, pipes[0]->get_bytes_written ());
-    TEST_ASSERT_EQUAL_UINT64 (2, pipes[1]->get_msgs_read ());
+    TEST_ASSERT_EQUAL_UINT64 (3, pipes[1]->get_msgs_read ());
     TEST_ASSERT_EQUAL_UINT64 (
       control_bytes + application_bytes, pipes[1]->get_bytes_read ());
 
@@ -566,6 +589,106 @@ void test_peer_control_does_not_complete_open_application_multipart ()
                         &events_size));
     TEST_ASSERT_EQUAL_INT (2, cleanup_sink.terminated_count);
     close_sync_socket (owner_handle);
+}
+
+void test_peer_control_slots_reject_non_dealer_router_pipe ()
+{
+    const int ordinary_peer_types[] = {
+      ZLINK_CORE_SOCKET_PAIR, ZLINK_CORE_SOCKET_PUB,
+      ZLINK_CORE_SOCKET_SUB,  ZLINK_CORE_SOCKET_XPUB,
+      ZLINK_CORE_SOCKET_XSUB, ZLINK_CORE_SOCKET_STREAM};
+
+    for (size_t session_index = 0; session_index != 2; ++session_index) {
+        const bool session_pipe = session_index != 0;
+        for (size_t type_index = 0;
+             type_index
+             != sizeof (ordinary_peer_types) / sizeof (ordinary_peer_types[0]);
+             ++type_index) {
+            void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
+            zlink::object_t *owner = static_cast<zlink::object_t *> (
+              as_socket_handle (owner_handle).socket);
+            zlink::object_t *parents[] = {owner, owner};
+            const uint64_t hwms[] = {4096, 4096};
+            const bool conflates[] = {false, false};
+            zlink::pipe_t *pipes[2];
+            TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (
+              parents, pipes, hwms, conflates, session_pipe,
+              zlink::transport_lane_application, zlink::auto_hwm_role_none,
+              false, zlink::physical_queue_class_application,
+              session_pipe ? 0 : -1));
+
+            pipe_cleanup_sink_t cleanup_sink;
+            pipes[0]->set_event_sink (&cleanup_sink);
+            pipes[1]->set_event_sink (&cleanup_sink);
+
+            // Even malformed future plumbing that assigns pair-like identity
+            // to an ordinary socket must not enable D/R boundary controls.
+            // Cover both network/session and inproc owner-command flush paths.
+            pipes[0]->set_transport_pair (
+              zlink::transport_lane_application, 23, 1);
+            pipes[1]->set_transport_pair (
+              zlink::transport_lane_application, 23, 1);
+            pipes[0]->set_transport_lane_count (1);
+            pipes[1]->set_transport_lane_count (1);
+            pipes[0]->set_peer_socket_type (
+              ordinary_peer_types[type_index]);
+            pipes[1]->set_peer_socket_type (
+              ordinary_peer_types[type_index]);
+
+            zlink::msg_t first;
+            TEST_ASSERT_SUCCESS_ERRNO (first.init_size (3));
+            memcpy (first.data (), "ord", first.size ());
+            first.set_flags (zlink::msg_t::more);
+            TEST_ASSERT_TRUE (pipes[0]->write (&first));
+
+            errno = 0;
+            TEST_ASSERT_FALSE (
+              pipes[0]->write_peer_weight_control_and_flush (100));
+            TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+            errno = 0;
+            TEST_ASSERT_FALSE (pipes[0]->write_flow_state_control_and_flush (
+              zlink::flow_state::receive_flow_paused, 1));
+            TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+
+            zlink::msg_t final;
+            TEST_ASSERT_SUCCESS_ERRNO (final.init_size (3));
+            memcpy (final.data (), "ary", final.size ());
+            TEST_ASSERT_TRUE (pipes[0]->write_and_flush (&final));
+
+            zlink::msg_t received;
+            TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+            TEST_ASSERT_TRUE (pipes[1]->read (&received));
+            TEST_ASSERT_TRUE ((received.flags () & zlink::msg_t::more) != 0);
+            TEST_ASSERT_FALSE (
+              (received.flags () & zlink::msg_t::command) != 0);
+            TEST_ASSERT_EQUAL_MEMORY ("ord", received.data (),
+                                      received.size ());
+            TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+
+            TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+            TEST_ASSERT_TRUE (pipes[1]->read (&received));
+            TEST_ASSERT_FALSE (
+              (received.flags () & (zlink::msg_t::more | zlink::msg_t::command))
+              != 0);
+            TEST_ASSERT_EQUAL_MEMORY ("ary", received.data (),
+                                      received.size ());
+            TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+            TEST_ASSERT_FALSE (pipes[1]->check_read ());
+            TEST_ASSERT_EQUAL_UINT64 (1, pipes[0]->get_msgs_written ());
+
+            TEST_ASSERT_SUCCESS_ERRNO (first.close ());
+            TEST_ASSERT_SUCCESS_ERRNO (final.close ());
+            pipes[0]->terminate (false);
+            pipes[1]->terminate (false);
+            int events = 0;
+            size_t events_size = sizeof (events);
+            TEST_ASSERT_SUCCESS_ERRNO (
+              zlink_get_option (owner_handle, ZLINK_OPT_EVENTS, &events,
+                                &events_size));
+            TEST_ASSERT_EQUAL_INT (2, cleanup_sink.terminated_count);
+            close_sync_socket (owner_handle);
+        }
+    }
 }
 
 void test_weighted_lb_reactivation_keeps_configured_weight ()
@@ -1635,6 +1758,7 @@ int main ()
     RUN_TEST (test_unpaired_inproc_peer_weight_is_not_application_data);
     RUN_TEST (
       test_peer_control_does_not_complete_open_application_multipart);
+    RUN_TEST (test_peer_control_slots_reject_non_dealer_router_pipe);
     RUN_TEST (test_weighted_lb_reactivation_keeps_configured_weight);
     RUN_TEST (test_weight_zero_between_parts_preserves_selected_message);
     RUN_TEST (test_single_pipe_lb_rolls_back_byte_hwm_rejected_multipart);

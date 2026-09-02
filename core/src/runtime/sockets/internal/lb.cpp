@@ -290,13 +290,15 @@ zlink::pipe_t *zlink::lb_t::find_connected_pipe (
 }
 
 zlink::pipe_t *zlink::lb_t::find_pipe_by_endpoint (
-  const std::string &endpoint_) const
+  const std::string &endpoint_, connected_pipe_filter_fn filter_,
+  void *filter_userdata_) const
 {
     if (endpoint_.empty ())
         return NULL;
     for (pipes_t::size_type i = 0; i < _pipes.size (); ++i) {
         pipe_t *const pipe = _pipes[i];
-        if (pipe && pipe->get_endpoint_pair ().identifier () == endpoint_)
+        if (pipe && pipe->get_endpoint_pair ().identifier () == endpoint_
+            && (!filter_ || filter_ (pipe, filter_userdata_)))
             return pipe;
     }
     return NULL;

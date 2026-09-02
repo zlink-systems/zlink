@@ -83,6 +83,7 @@ class router_t : public routing_socket_base_t
     bool xhas_in () ZLINK_OVERRIDE;
     size_t xredrive_reply_token_waiters (size_t max_pipes_) ZLINK_OVERRIDE;
     bool xhas_out () ZLINK_OVERRIDE;
+    void xread_deactivated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xread_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xpipe_terminated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xsocket_msg_pipe_terminated (zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
@@ -94,6 +95,9 @@ class router_t : public routing_socket_base_t
         return terminate_out_pipe_by_routing_id (peer_rid_);
     }
     int get_peer_state (const void *routing_id_, size_t routing_id_size_) const ZLINK_FINAL;
+    pipe_t *retain_current_transport_pair_pipe (
+      const zlink_routing_id_t *peer_rid_, int peer_socket_type_,
+      transport_lane_t lane_) const ZLINK_OVERRIDE;
 #ifdef ZLINK_BUILD_TESTS
     uint32_t test_peer_weight (zlink::pipe_t *pipe_) const;
 #endif

@@ -52,6 +52,21 @@ enum pipe_message_admission_t : int
     pipe_message_admission_invalid
 };
 
+//  Normalized kind of the first queued application frame. This deliberately
+//  separates an empty queue from malformed request/reply metadata so callers
+//  can route public receive and socket-local completion work without removing
+//  the frame that owns the decision.
+enum pipe_normalized_head_kind_t
+{
+    pipe_head_empty = 0,
+    pipe_head_data,
+    pipe_head_request,
+    pipe_head_reply,
+    pipe_head_error_reply,
+    pipe_head_control,
+    pipe_head_invalid
+};
+
 //  Reports whether applying a remote receive-flow state actually changed the
 //  pipe's own paused/running record. A stale or duplicate frame that
 //  apply_remote_flow_state() already rejected reports no_transition, so the
@@ -131,6 +146,18 @@ struct i_pipe_events
         LIBZLINK_UNUSED (paused_);
         LIBZLINK_UNUSED (epoch_);
         LIBZLINK_UNUSED (actual_writable_);
+    }
+
+    //  Delivers a FLOWSTATE owner command that arrived on an inproc count-2
+    //  Completion pipe. Socket sinks validate that exact source against the
+    //  ready pair, then forward the state to the pair's Application pipe;
+    //  other pipe owners ignore it.
+    virtual void flow_state_received (zlink::pipe_t *source_pipe_,
+                                      unsigned char state_, uint64_t epoch_)
+    {
+        LIBZLINK_UNUSED (source_pipe_);
+        LIBZLINK_UNUSED (state_);
+        LIBZLINK_UNUSED (epoch_);
     }
 
     //  Delivers one peer-weight control command on the destination pipe's
@@ -242,6 +269,11 @@ class pipe_t ZLINK_FINAL : public object_t,
 
     //  Returns true if there is at least one message to read in the pipe.
     bool check_read ();
+
+    //  Classifies the first queued frame without consuming it. Untyped frames
+    //  are DATA. Typed frames require a recognized request/reply kind and a
+    //  nonzero request sequence; malformed metadata is INVALID.
+    pipe_normalized_head_kind_t probe_normalized_head_kind ();
 
     //  Reads a message to the underlying pipe.
     bool read (msg_t *msg_);
@@ -390,7 +422,21 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  boundary, or stages the weight behind an open multipart and appends it
     //  only after final commit/rollback. Policy bypasses Application HWM and
     //  remote PAUSE, but never the pair hold or ypipe commit boundary.
-    bool write_peer_weight_control_and_flush (uint32_t weight_);
+    bool write_peer_weight_control_and_flush (uint32_t weight_,
+                                              bool defer_flush_ = false);
+
+    //  FLOWSTATE uses the topology-selected control connection: Application
+    //  for count 1 and Completion for count 2. Keep its latest absolute value
+    //  in a slot independent from WEIGHT, then publish surviving controls in
+    //  enqueue order at the next record boundary. The control bypasses HWM and
+    //  remote PAUSE, but never inactive state, the initial pair hold, or an
+    //  open multipart.
+    bool write_flow_state_control_and_flush (unsigned char state_,
+                                             uint64_t epoch_,
+                                             bool defer_flush_ = false);
+    // Publishes controls deliberately staged above pipe-local multipart state
+    // once the socket-level public multipart lease has ended.
+    bool flush_pending_peer_controls ();
 
     //  Writes a message and flushes it downstream under the same pipe lock.
     //  Use this for final single-part send hot paths to avoid paying for
@@ -467,11 +513,17 @@ class pipe_t ZLINK_FINAL : public object_t,
     const endpoint_uri_pair_t &get_endpoint_pair () const;
     void set_transport_connection_id (uint64_t connection_id_);
     uint64_t get_transport_connection_id () const;
+    // Claims the one physical DISCONNECTED monitor edge owned by this socket
+    // endpoint. The transport error path and explicit local termination can
+    // race; only the winner publishes the event.
+    bool try_claim_transport_disconnected_event ();
     uint64_t get_route_incarnation_id () const;
     void set_transport_pair (transport_lane_t lane_,
                              uint64_t pair_id_,
                              uint64_t generation_);
+    void set_transport_lane_count (unsigned char lane_count_);
     transport_lane_t get_transport_lane () const;
+    unsigned char get_transport_lane_count () const;
     bool uses_registry_accounting () const;
     uint64_t get_transport_pair_id () const;
     uint64_t get_transport_pair_generation () const;
@@ -548,9 +600,16 @@ class pipe_t ZLINK_FINAL : public object_t,
     void release_discarded_pipe_accounting (upipe_t *pipe_,
                                             const std::shared_ptr<physical_queue_record_t> &queue_);
     bool append_outbound_frame_bytes_unlocked (const msg_t *msg_);
-    bool stage_peer_control_unlocked (uint32_t weight_);
-    bool append_pending_peer_control_unlocked ();
-    bool flush_pending_peer_control_unlocked ();
+    bool peer_control_slots_enabled_unlocked () const;
+    uint64_t next_peer_control_sequence_unlocked ();
+    bool stage_peer_weight_control_unlocked (uint32_t weight_);
+    bool stage_flow_state_control_unlocked (unsigned char state_,
+                                            uint64_t epoch_);
+    bool append_pending_peer_controls_unlocked ();
+    bool dispatch_pending_inproc_controls_unlocked ();
+    bool flush_pending_peer_controls_unlocked ();
+    bool pending_peer_controls_unlocked () const;
+    void discard_pending_peer_controls_unlocked ();
     bool can_commit_bytes_unlocked (uint64_t message_bytes_,
                                     uint64_t payload_bytes_,
                                     bool allow_empty_pipe_exception_) const;
@@ -769,6 +828,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     std::shared_ptr<physical_queue_record_t> _in_physical_queue;
     std::shared_ptr<physical_queue_record_t> _out_physical_queue;
     transport_lane_t _transport_lane;
+    std::atomic<unsigned char> _transport_lane_count;
     const bool _registry_accounting;
     uint64_t _transport_pair_id;
     uint64_t _transport_pair_generation;
@@ -776,13 +836,20 @@ class pipe_t ZLINK_FINAL : public object_t,
     std::atomic<int> _peer_socket_type;
     std::atomic<uint64_t> _peer_weight_connection_id;
     std::atomic<uint32_t> _peer_weight;
+    std::atomic<bool> _transport_disconnected_event_claimed;
 
     // Disconnect msg
     msg_t _disconnect_msg;
-    // Latest absolute peer weight deferred behind an open Application
-    // multipart. UINT32_MAX means no pending command. Four bytes avoid adding
-    // a msg_t to every pipe; the wire frame is materialised only on append.
+    // Latest absolute controls deferred behind an open Application multipart.
+    // Each update moves its slot to a shared monotonic sequence. Wire frames
+    // (or inproc owner commands) are materialised only at the next boundary.
     uint32_t _pending_peer_weight;
+    uint64_t _pending_peer_weight_sequence;
+    unsigned char _pending_flow_state;
+    uint64_t _pending_flow_state_epoch;
+    uint64_t _pending_flow_state_sequence;
+    bool _pending_flow_state_valid;
+    uint64_t _pending_peer_control_sequence;
     mutable fast_mutex_t _out_sync;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (pipe_t)

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
-//  Paired DEALER/ROUTER completion-lane flow state. The state frame, the
+//  Paired DEALER/ROUTER topology-selected flow state. The state frame, the
 //  socket-wide local state and the remote-PAUSE send blocker are Core internal
 //  in this step, so the tests drive the internal C++ surface directly.
 
@@ -25,10 +25,32 @@
 
 SETUP_TEARDOWN_TESTCONTEXT
 
+namespace zlink
+{
+class session_termination_test_access_t
+{
+  public:
+    static void attach_socket_pipe (socket_base_t *socket_, pipe_t *pipe_)
+    {
+        socket_->attach_pipe (pipe_);
+    }
+};
+}
+
 namespace
 {
 const int k_running = zlink::flow_state::receive_flow_running;
 const int k_paused = zlink::flow_state::receive_flow_paused;
+
+class passive_flow_pipe_sink_t : public zlink::i_pipe_events
+{
+  public:
+    void read_activated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+    void write_activated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+    void hiccuped (zlink::pipe_t *) ZLINK_OVERRIDE {}
+    void pipe_peer_terminated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+    void pipe_terminated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+};
 
 zlink::socket_base_t *as_socket (void *socket_)
 {
@@ -52,6 +74,22 @@ bool deadline_expired (const std::chrono::steady_clock::time_point &deadline_)
 std::chrono::steady_clock::time_point deadline_in_ms (int ms_)
 {
     return std::chrono::steady_clock::now () + std::chrono::milliseconds (ms_);
+}
+
+void assert_dealer_router_single_lane (void *socket_,
+                                       uint64_t pair_id_,
+                                       uint64_t generation_)
+{
+    zlink::pipe_t *const application =
+      as_socket (socket_)->test_pair_pipe (pair_id_, generation_, false);
+    TEST_ASSERT_NOT_NULL (application);
+    TEST_ASSERT_NULL (
+      as_socket (socket_)->test_pair_pipe (pair_id_, generation_, true));
+    TEST_ASSERT_EQUAL_UINT (1u, application->get_transport_lane_count ());
+    TEST_ASSERT_EQUAL_INT (zlink::transport_lane_application,
+                           application->get_transport_lane ());
+    TEST_ASSERT_NULL (as_socket (socket_)->completion_pipe_for_transport_pair (
+      pair_id_, generation_));
 }
 
 //  One connected DEALER (sender) and ROUTER (receiver) over TCP, with the
@@ -103,8 +141,8 @@ struct paired_fixture_t
                                 sizeof (dealer_sndhwm_)));
         TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
 
-        //  One round trip so the ROUTER learns the route and both pairs are
-        //  ready on both ends.
+        //  One round trip so the ROUTER learns the route and the count-1 pair
+        //  is ready on both ends.
         send_string_expect_success (dealer, "hello", 0);
         char rid[256];
         const int rid_size = zlink_recv (router, rid, sizeof (rid), 0);
@@ -113,6 +151,7 @@ struct paired_fixture_t
         peer_rid.assign (rid, static_cast<size_t> (rid_size));
 
         TEST_ASSERT_TRUE (resolve_dealer_target ());
+        assert_dealer_router_single_lane (dealer, pair_id, pair_generation);
     }
 
     bool resolve_dealer_target ()
@@ -166,14 +205,14 @@ struct paired_fixture_t
             router = test_context_socket_close_zero_linger (router);
     }
 
-    //  Delivers one hand-built frame to the DEALER exactly as the completion
-    //  lane would, then drains the socket mailbox so the pipe applies it.
+    //  Delivers one hand-built frame to the DEALER through the topology-selected
+    //  control source (Application for this count-1 pair), then drains the
+    //  socket mailbox so the pipe applies it.
     bool inject (uint8_t version_, uint8_t state_, uint64_t epoch_)
     {
-        zlink::pipe_t *completion =
-          as_socket (dealer)->completion_pipe_for_transport_pair (
-            pair_id, pair_generation);
-        TEST_ASSERT_NOT_NULL (completion);
+        zlink::pipe_t *control =
+          as_socket (dealer)->test_pair_pipe (pair_id, pair_generation, false);
+        TEST_ASSERT_NOT_NULL (control);
 
         zlink::flow_state::frame_t frame;
         frame.version = zlink::flow_state::frame_protocol_version;
@@ -184,21 +223,20 @@ struct paired_fixture_t
         TEST_ASSERT_EQUAL_INT (0, msg.init ());
         TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&msg, frame));
         msg.set_transport_connection_id (
-          completion->get_transport_connection_id ());
+          control->get_transport_connection_id ());
         static_cast<unsigned char *> (
           msg.data ())[zlink::flow_state::frame_name_size] = version_;
         const bool consumed =
-          as_socket (dealer)->consume_receive_flow_state_frame (completion, msg);
+          as_socket (dealer)->consume_receive_flow_state_frame (control, msg);
         TEST_ASSERT_EQUAL_INT (0, msg.close ());
         return consumed;
     }
 
     bool inject_from_other_connection (uint8_t state_, uint64_t epoch_)
     {
-        zlink::pipe_t *completion =
-          as_socket (dealer)->completion_pipe_for_transport_pair (
-            pair_id, pair_generation);
-        TEST_ASSERT_NOT_NULL (completion);
+        zlink::pipe_t *control =
+          as_socket (dealer)->test_pair_pipe (pair_id, pair_generation, false);
+        TEST_ASSERT_NOT_NULL (control);
 
         zlink::flow_state::frame_t frame;
         frame.state = state_;
@@ -206,11 +244,11 @@ struct paired_fixture_t
         zlink::msg_t msg;
         TEST_ASSERT_EQUAL_INT (0, msg.init ());
         TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&msg, frame));
-        const uint64_t current = completion->get_transport_connection_id ();
+        const uint64_t current = control->get_transport_connection_id ();
         TEST_ASSERT_TRUE (current != 0);
         msg.set_transport_connection_id (current == UINT64_MAX ? 1 : current + 1);
         const bool consumed =
-          as_socket (dealer)->consume_receive_flow_state_frame (completion, msg);
+          as_socket (dealer)->consume_receive_flow_state_frame (control, msg);
         TEST_ASSERT_EQUAL_INT (0, msg.close ());
         return consumed;
     }
@@ -343,8 +381,9 @@ size_t drain_router (void *router_)
     return drained;
 }
 
-//  PAIR, the PUB/SUB family and STREAM have no completion lane. The internal
-//  entry reports not-supported and their existing send behaviour is unchanged.
+//  PAIR, the PUB/SUB family and STREAM do not support receive-flow control. The
+//  internal entry reports not-supported and their existing send behaviour is
+//  unchanged.
 void test_unsupported_socket_types_report_not_supported ()
 {
     const int types[] = {ZLINK_SOCKET_PAIR, ZLINK_SOCKET_PUB, ZLINK_SOCKET_SUB,
@@ -407,8 +446,8 @@ void test_invalid_state_is_rejected ()
     test_context_socket_close_zero_linger (dealer);
 }
 
-//  End to end over the real completion lane: the receiver's socket-wide state
-//  reaches the sender and blocks it, and RUNNING releases it.
+//  End to end over the real count-1 Application control path: the receiver's
+//  socket-wide state reaches the sender and blocks it, and RUNNING releases it.
 void test_remote_pause_blocks_sender_and_resume_releases_it ()
 {
     paired_fixture_t fixture;
@@ -765,8 +804,9 @@ void test_generation_change_resets_the_epoch_sequence ()
     fixture.teardown ();
 }
 
-// A flow frame is valid only between completion messages. If it appears after
-// a reply part carrying MORE, the pair is malformed and the outstanding
+// A flow frame is valid only at a record boundary. If it appears after a reply
+// part carrying MORE on the count-1 Application FIFO, the pair is malformed and
+// the outstanding request cannot complete successfully.
 void init_empty_completion (zlink_completion_t *completion_)
 {
     memset (completion_, 0, sizeof (*completion_));
@@ -816,13 +856,17 @@ void test_flow_frame_cannot_complete_a_truncated_reply ()
       0, as_socket (router)->select_routed_submit_target (&rid_value, &target));
     TEST_ASSERT_TRUE (target.transport_pair_id != 0);
 
-    zlink::pipe_t *router_completion =
-      as_socket (router)->completion_pipe_for_transport_pair (
-        target.transport_pair_id, target.transport_pair_generation);
-    TEST_ASSERT_NOT_NULL (router_completion);
+    zlink::pipe_t *router_control = as_socket (router)->test_pair_pipe (
+      target.transport_pair_id, target.transport_pair_generation, false);
+    TEST_ASSERT_NOT_NULL (router_control);
+    TEST_ASSERT_EQUAL_UINT (1u, router_control->get_transport_lane_count ());
+    TEST_ASSERT_EQUAL_INT (zlink::transport_lane_application,
+                           router_control->get_transport_lane ());
+    TEST_ASSERT_NULL (as_socket (router)->test_pair_pipe (
+      target.transport_pair_id, target.transport_pair_generation, true));
     TEST_ASSERT_FALSE_MESSAGE (
-      router_completion->check_read (),
-      "Completion lane retained an Application routing-id preamble");
+      router_control->check_read (),
+      "Application control source retained a routing-id preamble");
 
     zlink::msg_t reply_head;
     TEST_ASSERT_EQUAL_INT (0, reply_head.init_size (4));
@@ -831,7 +875,7 @@ void test_flow_frame_cannot_complete_a_truncated_reply ()
       0, reply_head.set_request_reply_metadata (
            zlink::request_reply::reply_type, request_seq));
     reply_head.set_flags (zlink::msg_t::more);
-    TEST_ASSERT_TRUE (router_completion->write (&reply_head));
+    TEST_ASSERT_TRUE (router_control->write (&reply_head));
     TEST_ASSERT_EQUAL_INT (0, reply_head.init ());
     TEST_ASSERT_EQUAL_INT (0, reply_head.close ());
 
@@ -843,13 +887,13 @@ void test_flow_frame_cannot_complete_a_truncated_reply ()
     TEST_ASSERT_EQUAL_INT (0, flow.init ());
     TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&flow, frame));
     flow.set_transport_connection_id (
-      router_completion->get_transport_connection_id ());
-    TEST_ASSERT_TRUE (router_completion->write_and_flush (&flow));
+      router_control->get_transport_connection_id ());
+    TEST_ASSERT_TRUE (router_control->write_and_flush (&flow));
     TEST_ASSERT_EQUAL_INT (0, flow.init ());
     TEST_ASSERT_EQUAL_INT (0, flow.close ());
 
-    //  Drive the client's completion drain. The truncated reply must never
-    //  be reported as a successful reply.
+    //  Drive the client's socket-local completion drain. The truncated reply
+    //  must never be reported as a successful reply.
     zlink_completion_t completion;
     init_empty_completion (&completion);
     for (int i = 0; i < 400; ++i) {
@@ -865,9 +909,9 @@ void test_flow_frame_cannot_complete_a_truncated_reply ()
         TEST_ASSERT_TRUE (completion.request_result != ZLINK_REQUEST_OK);
     zlink_completion_close (&completion);
 
-    // A misplaced flow frame is not applied. The malformed completion pair is
-    // removed instead, and its sibling teardown supplies the normal
-    // disconnect result for any still-pending request.
+    // A misplaced flow frame is not applied. The malformed count-1 pair is
+    // removed instead, and teardown supplies the normal disconnect result for
+    // any still-pending request.
     bool old_pair_removed = false;
     const std::chrono::steady_clock::time_point removal_deadline =
       deadline_in_ms (4000);
@@ -877,8 +921,9 @@ void test_flow_frame_cannot_complete_a_truncated_reply ()
         // applied before checking that the malformed pair was removed.
         process_socket_commands_through_public_api (dealer);
         process_socket_commands_through_public_api (router);
-        if (!as_socket (dealer)->completion_pipe_for_transport_pair (
-              target.transport_pair_id, target.transport_pair_generation)) {
+        if (!as_socket (dealer)->test_pair_pipe (
+              target.transport_pair_id, target.transport_pair_generation,
+              false)) {
             old_pair_removed = true;
             break;
         }
@@ -965,54 +1010,79 @@ void test_epoch_wraparound_forces_a_new_connection_generation ()
 
 //  A pair-ready resync is an absolute state and is not repeated until it
 //  changes. If it overtakes peer registration, hold it by candidate connection
-//  without accepting or reporting it, then promote only the completion
+//  without accepting or reporting it, then promote only the topology-selected
 //  connection that wins validation.
 void test_flow_frame_before_registration_is_promoted_after_validation ()
 {
     const int zero = 0;
-    char endpoint[MAX_SOCKET_STRING];
-
-    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_option (router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
-    bind_loopback_ipv4 (router, endpoint, sizeof endpoint);
-    //  Stored before the DEALER exists, so the ROUTER's ready-resync races the
-    //  DEALER's own pair admission.
-    TEST_ASSERT_EQUAL_INT (
-      0, as_socket (router)->set_local_receive_flow_state (k_paused));
-
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
+    zlink::socket_base_t *const dealer_socket = as_socket (dealer);
 
-    //  Only the ROUTER runs, so its resync reaches the DEALER I/O thread before
-    //  the DEALER socket thread admits the pair. Poll the test-only buffer
-    //  directly: observing it does not process the DEALER mailbox.
-    bool buffered = false;
+    // Construct the exact state between transport validation and socket-owner
+    // admission instead of racing the I/O thread against the socket mailbox.
+    // READY and the following FLOWSTATE share a count-1 FIFO, but decoding the
+    // latter and processing the former's bind command are allowed in either
+    // order. This explicit pre-attach pipe makes the buffering branch stable.
+    zlink::object_t *parents[2] = {dealer_socket, dealer_socket};
+    zlink::pipe_t *pipes[2] = {NULL, NULL};
+    const uint64_t hwms[2] = {4096, 4096};
+    const bool conflates[2] = {false, false};
+    TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (
+      parents, pipes, hwms, conflates, false,
+      zlink::transport_lane_application));
+
+    const uint64_t pair_id = 91;
+    const uint64_t generation = 7;
+    const unsigned char peer_identity[] = {'r', 'o', 'u', 't', 'e', 'r'};
+    for (size_t i = 0; i < 2; ++i) {
+        pipes[i]->set_transport_pair (zlink::transport_lane_application,
+                                      pair_id, generation);
+        pipes[i]->set_transport_lane_count (1);
+    }
+    pipes[0]->set_peer_socket_type (ZLINK_CORE_SOCKET_ROUTER);
+    pipes[1]->set_peer_socket_type (ZLINK_CORE_SOCKET_DEALER);
+    pipes[0]->set_peer_routing_id (peer_identity, sizeof (peer_identity));
+    pipes[0]->set_transport_peer_identity (peer_identity,
+                                           sizeof (peer_identity));
+    pipes[0]->hold_writes_until_transport_pair_ready ();
+    passive_flow_pipe_sink_t peer_sink;
+    pipes[1]->set_event_sink (&peer_sink);
+
+    const uint64_t source_connection_id =
+      pipes[0]->get_transport_connection_id ();
+    TEST_ASSERT_TRUE (source_connection_id != 0);
+    zlink::flow_state::frame_t paused_frame;
+    paused_frame.state = zlink::flow_state::receive_flow_paused;
+    paused_frame.epoch = 1;
+    zlink::msg_t paused_msg;
+    TEST_ASSERT_SUCCESS_ERRNO (paused_msg.init ());
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::flow_state::init_frame (&paused_msg, paused_frame));
+    paused_msg.set_transport_connection_id (source_connection_id);
+    TEST_ASSERT_TRUE (
+      dealer_socket->consume_receive_flow_state_frame (pipes[0], paused_msg));
+    TEST_ASSERT_SUCCESS_ERRNO (paused_msg.close ());
+
     bool buffered_paused = false;
     uint64_t buffered_epoch = 0;
     uint64_t buffered_pair_id = 0;
     uint64_t buffered_generation = 0;
     uint64_t buffered_source_connection_id = 0;
-    const std::chrono::steady_clock::time_point buffer_deadline =
-      deadline_in_ms (4000);
-    while (!deadline_expired (buffer_deadline)) {
-        (void) as_socket (router)->process_submit_commands ();
-        if (as_socket (dealer)->test_pending_flow_buffered (
-              &buffered_paused, &buffered_epoch, &buffered_pair_id,
-              &buffered_generation, &buffered_source_connection_id)) {
-            buffered = true;
-            break;
-        }
-        msleep (1);
-    }
-    TEST_ASSERT_TRUE (buffered);
+    TEST_ASSERT_TRUE (dealer_socket->test_pending_flow_buffered (
+      &buffered_paused, &buffered_epoch, &buffered_pair_id,
+      &buffered_generation, &buffered_source_connection_id));
     TEST_ASSERT_TRUE (buffered_paused);
     TEST_ASSERT_EQUAL_UINT64 (1, buffered_epoch);
-    TEST_ASSERT_TRUE (buffered_source_connection_id != 0);
-    TEST_ASSERT_FALSE (as_socket (dealer)->remote_receive_flow_paused (
-      buffered_pair_id, buffered_generation));
+    TEST_ASSERT_EQUAL_UINT64 (pair_id, buffered_pair_id);
+    TEST_ASSERT_EQUAL_UINT64 (generation, buffered_generation);
+    TEST_ASSERT_EQUAL_UINT64 (source_connection_id,
+                              buffered_source_connection_id);
+    TEST_ASSERT_FALSE (
+      dealer_socket->test_pair_is_ready (pair_id, generation));
+    TEST_ASSERT_FALSE (
+      dealer_socket->remote_receive_flow_paused (pair_id, generation));
 
     //  A foreign candidate with a newer epoch cannot overwrite the real
     //  connection's one-shot PAUSE.
@@ -1020,44 +1090,39 @@ void test_flow_frame_before_registration_is_promoted_after_validation ()
       buffered_source_connection_id == UINT64_MAX
         ? 1
         : buffered_source_connection_id + 1;
-    TEST_ASSERT_TRUE (as_socket (dealer)->test_buffer_flow_frame (
-      buffered_pair_id, buffered_generation, foreign_connection_id, false,
-      buffered_epoch + 8));
+    TEST_ASSERT_TRUE (dealer_socket->test_buffer_flow_frame (
+      pair_id, generation, foreign_connection_id, false, buffered_epoch + 8));
 
-    zlink_routed_submit_target_t target;
-    memset (&target, 0, sizeof (target));
-    bool promoted = false;
-    const std::chrono::steady_clock::time_point deadline = deadline_in_ms (4000);
-    while (!deadline_expired (deadline)) {
-        if (as_socket (dealer)->select_routed_submit_target (NULL, &target) == 0
-            && target.transport_pair_id != 0
-            && as_socket (dealer)->application_pipe_remote_flow_paused (
-                 target.transport_pair_id, target.transport_pair_generation)) {
-            promoted = true;
-            break;
-        }
-        (void) as_socket (router)->process_submit_commands ();
-        msleep (1);
-    }
-    TEST_ASSERT_TRUE (promoted);
-    TEST_ASSERT_EQUAL_UINT64 (buffered_pair_id, target.transport_pair_id);
-    TEST_ASSERT_EQUAL_UINT64 (buffered_generation,
-                              target.transport_pair_generation);
+    zlink::session_termination_test_access_t::attach_socket_pipe (
+      dealer_socket, pipes[0]);
+    TEST_ASSERT_TRUE (dealer_socket->test_pair_is_ready (pair_id, generation));
+    TEST_ASSERT_TRUE (
+      dealer_socket->remote_receive_flow_paused (pair_id, generation));
+    TEST_ASSERT_TRUE (dealer_socket->application_pipe_remote_flow_paused (
+      pair_id, generation));
     TEST_ASSERT_FALSE (
-      as_socket (dealer)->test_pending_flow_buffered (NULL, NULL));
+      dealer_socket->test_pending_flow_buffered (NULL, NULL));
     TEST_ASSERT_TRUE (stays_blocked (dealer, 100));
 
     //  The next state advances normally after promotion and releases sends.
-    TEST_ASSERT_EQUAL_INT (
-      0, as_socket (router)->set_local_receive_flow_state (k_running));
+    zlink::flow_state::frame_t running_frame;
+    running_frame.state = zlink::flow_state::receive_flow_running;
+    running_frame.epoch = 2;
+    zlink::msg_t running_msg;
+    TEST_ASSERT_SUCCESS_ERRNO (running_msg.init ());
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::flow_state::init_frame (&running_msg, running_frame));
+    running_msg.set_transport_connection_id (source_connection_id);
+    TEST_ASSERT_TRUE (
+      dealer_socket->consume_receive_flow_state_frame (pipes[0], running_msg));
+    TEST_ASSERT_SUCCESS_ERRNO (running_msg.close ());
     bool converged = false;
     const std::chrono::steady_clock::time_point converge_deadline =
       deadline_in_ms (4000);
     while (!deadline_expired (converge_deadline)) {
-        (void) as_socket (router)->process_submit_commands ();
-        (void) as_socket (dealer)->process_submit_commands ();
-        if (!as_socket (dealer)->application_pipe_remote_flow_paused (
-              target.transport_pair_id, target.transport_pair_generation)) {
+        (void) dealer_socket->process_submit_commands ();
+        if (!dealer_socket->application_pipe_remote_flow_paused (
+              pair_id, generation)) {
             converged = true;
             break;
         }
@@ -1066,8 +1131,15 @@ void test_flow_frame_before_registration_is_promoted_after_validation ()
     TEST_ASSERT_TRUE (converged);
     TEST_ASSERT_TRUE (wait_for_send_success (dealer, 5000));
 
+    zlink::msg_t delivered;
+    TEST_ASSERT_SUCCESS_ERRNO (delivered.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&delivered));
+    TEST_ASSERT_SUCCESS_ERRNO (delivered.close ());
+
+    pipes[0]->terminate (false);
+    pipes[1]->terminate (false);
+    process_socket_commands_through_public_api (dealer);
     test_context_socket_close_zero_linger (dealer);
-    test_context_socket_close_zero_linger (router);
 }
 
 //  Round 2, R1. A receiver that consumes a sub-LWM message while more data
@@ -1236,9 +1308,10 @@ void test_router_peer_state_reports_remote_pause ()
     test_context_socket_close_zero_linger (router);
 }
 
-// On a local pair the flow frame is queued on the completion pipe instead of
-// being intercepted by a session. A standalone flow frame is consumed before
-// the next reply kind is dispatched, and both effects remain observable.
+// On a local count-1 pair the flow frame and reply share the Application pipe
+// instead of being intercepted by a session. A standalone flow frame is
+// consumed before the next reply kind is dispatched, and both effects remain
+// observable without leaking either record through public receive.
 void test_flow_frame_before_reply_is_consumed_on_a_local_pair ()
 {
     paired_fixture_t fixture;
@@ -1267,11 +1340,12 @@ void test_flow_frame_before_reply_is_consumed_on_a_local_pair ()
     TEST_ASSERT_TRUE (request_seq != 0);
     zlink_multipart_close (parts, part_count);
 
-    zlink::pipe_t *router_completion =
-      as_socket (fixture.router)
-        ->completion_pipe_for_transport_pair (fixture.pair_id,
-                                              fixture.pair_generation);
-    TEST_ASSERT_NOT_NULL (router_completion);
+    zlink::pipe_t *router_control = as_socket (fixture.router)->test_pair_pipe (
+      fixture.pair_id, fixture.pair_generation, false);
+    TEST_ASSERT_NOT_NULL (router_control);
+    TEST_ASSERT_EQUAL_UINT (1u, router_control->get_transport_lane_count ());
+    TEST_ASSERT_EQUAL_INT (zlink::transport_lane_application,
+                           router_control->get_transport_lane ());
 
     zlink::flow_state::frame_t frame;
     frame.version = zlink::flow_state::frame_protocol_version;
@@ -1281,8 +1355,8 @@ void test_flow_frame_before_reply_is_consumed_on_a_local_pair ()
     TEST_ASSERT_EQUAL_INT (0, flow.init ());
     TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&flow, frame));
     flow.set_transport_connection_id (
-      router_completion->get_transport_connection_id ());
-    TEST_ASSERT_TRUE (router_completion->write_and_flush (&flow));
+      router_control->get_transport_connection_id ());
+    TEST_ASSERT_TRUE (router_control->write_and_flush (&flow));
     TEST_ASSERT_EQUAL_INT (0, flow.init ());
     TEST_ASSERT_EQUAL_INT (0, flow.close ());
 
@@ -1292,7 +1366,9 @@ void test_flow_frame_before_reply_is_consumed_on_a_local_pair ()
     TEST_ASSERT_EQUAL_INT (
       0, reply.set_request_reply_metadata (
            zlink::request_reply::reply_type, request_seq));
-    TEST_ASSERT_TRUE (router_completion->write_and_flush (&reply));
+    reply.set_transport_connection_id (
+      router_control->get_transport_connection_id ());
+    TEST_ASSERT_TRUE (router_control->write_and_flush (&reply));
     TEST_ASSERT_EQUAL_INT (0, reply.init ());
     TEST_ASSERT_EQUAL_INT (0, reply.close ());
 
@@ -1327,10 +1403,10 @@ void test_flow_frame_before_reply_is_consumed_on_a_local_pair ()
     fixture.teardown ();
 }
 
-//  Peer-weight advertisements affect only Application scheduling. Inproc has
-//  no session command interceptor, so a Completion-lane WEIGHT would otherwise
-//  be read as an invalid completion record and tear down the pair.
-void test_peer_weight_change_does_not_write_the_completion_pipe ()
+//  Peer-weight advertisements are Core control on the same count-1 Application
+//  pipe. They must be consumed at a boundary without becoming public data or
+//  interfering with socket-local reply completion.
+void test_peer_weight_change_does_not_leak_to_public_receive ()
 {
     paired_fixture_t fixture;
     fixture.setup (0, "peer_weight_completion_lane");
@@ -1341,12 +1417,13 @@ void test_peer_weight_change_does_not_write_the_completion_pipe ()
       zlink_set_router_option (fixture.router, ZLINK_ROUTER_OPT_WEIGHT,
                                &weight, sizeof (weight)));
 
-    zlink::pipe_t *dealer_completion =
-      as_socket (fixture.dealer)
-        ->completion_pipe_for_transport_pair (fixture.pair_id,
-                                              fixture.pair_generation);
-    TEST_ASSERT_NOT_NULL (dealer_completion);
-    TEST_ASSERT_FALSE (dealer_completion->check_read ());
+    zlink::pipe_t *dealer_control = as_socket (fixture.dealer)->test_pair_pipe (
+      fixture.pair_id, fixture.pair_generation, false);
+    TEST_ASSERT_NOT_NULL (dealer_control);
+    TEST_ASSERT_EQUAL_UINT (1u, dealer_control->get_transport_lane_count ());
+    TEST_ASSERT_EQUAL_INT (zlink::transport_lane_application,
+                           dealer_control->get_transport_lane ());
+    TEST_ASSERT_FALSE (dealer_control->check_read ());
 
     zlink_msg_t request;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&request, 4));
@@ -1402,9 +1479,8 @@ void test_peer_weight_change_does_not_write_the_completion_pipe ()
     TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, completion.request_result);
     zlink_completion_close (&completion);
     TEST_ASSERT_NOT_NULL (
-      as_socket (fixture.dealer)
-        ->completion_pipe_for_transport_pair (fixture.pair_id,
-                                              fixture.pair_generation));
+      as_socket (fixture.dealer)->test_pair_pipe (
+        fixture.pair_id, fixture.pair_generation, false));
 
     fixture.teardown ();
 }
@@ -1514,22 +1590,24 @@ void test_inproc_peer_weight_is_owner_control_in_both_directions ()
     TEST_ASSERT_EQUAL_INT (-1, zlink_recv (fixture.router, raw, sizeof (raw),
                                            ZLINK_DONTWAIT));
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-    zlink::pipe_t *dealer_completion =
-      as_socket (fixture.dealer)
-        ->completion_pipe_for_transport_pair (fixture.pair_id,
-                                              fixture.pair_generation);
+    zlink::pipe_t *dealer_control = as_socket (fixture.dealer)->test_pair_pipe (
+      fixture.pair_id, fixture.pair_generation, false);
     uint64_t router_pair_id = 0;
     uint64_t router_generation = 0;
     TEST_ASSERT_TRUE (resolve_router_pair_identity (
       &fixture, &router_pair_id, &router_generation));
-    zlink::pipe_t *router_completion =
-      as_socket (fixture.router)
-        ->completion_pipe_for_transport_pair (router_pair_id,
-                                              router_generation);
-    TEST_ASSERT_NOT_NULL (dealer_completion);
-    TEST_ASSERT_NOT_NULL (router_completion);
-    TEST_ASSERT_FALSE (dealer_completion->check_read ());
-    TEST_ASSERT_FALSE (router_completion->check_read ());
+    zlink::pipe_t *router_control = as_socket (fixture.router)->test_pair_pipe (
+      router_pair_id, router_generation, false);
+    TEST_ASSERT_NOT_NULL (dealer_control);
+    TEST_ASSERT_NOT_NULL (router_control);
+    TEST_ASSERT_EQUAL_UINT (1u, dealer_control->get_transport_lane_count ());
+    TEST_ASSERT_EQUAL_UINT (1u, router_control->get_transport_lane_count ());
+    TEST_ASSERT_NULL (as_socket (fixture.dealer)->test_pair_pipe (
+      fixture.pair_id, fixture.pair_generation, true));
+    TEST_ASSERT_NULL (as_socket (fixture.router)->test_pair_pipe (
+      router_pair_id, router_generation, true));
+    TEST_ASSERT_FALSE (dealer_control->check_read ());
+    TEST_ASSERT_FALSE (router_control->check_read ());
 
     close_test_monitor_probe (&router_monitor, &router_probe);
     close_test_monitor_probe (&dealer_monitor, &dealer_probe);
@@ -1629,75 +1707,170 @@ void test_network_peer_weight_keeps_wire_control_and_exact_pair_state ()
       &fixture, static_cast<uint32_t> (router_weight),
       static_cast<uint32_t> (dealer_weight)));
 
-    zlink::pipe_t *dealer_completion =
-      as_socket (fixture.dealer)
-        ->completion_pipe_for_transport_pair (fixture.pair_id,
-                                              fixture.pair_generation);
+    zlink::pipe_t *dealer_control = as_socket (fixture.dealer)->test_pair_pipe (
+      fixture.pair_id, fixture.pair_generation, false);
     uint64_t router_pair_id = 0;
     uint64_t router_generation = 0;
     TEST_ASSERT_TRUE (resolve_router_pair_identity (
       &fixture, &router_pair_id, &router_generation));
-    zlink::pipe_t *router_completion =
-      as_socket (fixture.router)
-        ->completion_pipe_for_transport_pair (router_pair_id,
-                                              router_generation);
-    TEST_ASSERT_NOT_NULL (dealer_completion);
-    TEST_ASSERT_NOT_NULL (router_completion);
-    TEST_ASSERT_FALSE (dealer_completion->check_read ());
-    TEST_ASSERT_FALSE (router_completion->check_read ());
+    zlink::pipe_t *router_control = as_socket (fixture.router)->test_pair_pipe (
+      router_pair_id, router_generation, false);
+    TEST_ASSERT_NOT_NULL (dealer_control);
+    TEST_ASSERT_NOT_NULL (router_control);
+    TEST_ASSERT_EQUAL_UINT (1u, dealer_control->get_transport_lane_count ());
+    TEST_ASSERT_EQUAL_UINT (1u, router_control->get_transport_lane_count ());
+    TEST_ASSERT_NULL (as_socket (fixture.dealer)->test_pair_pipe (
+      fixture.pair_id, fixture.pair_generation, true));
+    TEST_ASSERT_NULL (as_socket (fixture.router)->test_pair_pipe (
+      router_pair_id, router_generation, true));
+    TEST_ASSERT_FALSE (dealer_control->check_read ());
+    TEST_ASSERT_FALSE (router_control->check_read ());
     fixture.teardown ();
 }
 
-//  Review finding 5. Pair id and generation are the same on both lanes of a
-//  pair, so they cannot on their own tell a completion-lane frame from an
-//  application-lane one. A FLOWSTATE that arrives on the application lane must
-//  be dropped: otherwise a peer could pause a route over the data lane and, by
-//  advancing the epoch there, make the real completion-lane state unusable.
-void test_flow_frame_on_the_application_lane_is_rejected ()
+//  The negotiated lane count selects the only legal FLOWSTATE source. A count-1
+//  DEALER-ROUTER pair accepts Application; a count-2 ROUTER-ROUTER pair rejects
+//  Application and accepts Completion. Rejection must not consume the epoch.
+void test_flow_frame_uses_count_selected_control_lane ()
 {
-    paired_fixture_t fixture;
-    fixture.setup ();
+    {
+        paired_fixture_t fixture;
+        fixture.setup ();
 
-    zlink::pipe_t *application = as_socket (fixture.dealer)
-                                   ->test_pair_pipe (fixture.pair_id,
-                                                     fixture.pair_generation,
-                                                     false);
-    TEST_ASSERT_NOT_NULL (application);
+        zlink::pipe_t *const application =
+          as_socket (fixture.dealer)
+            ->test_pair_pipe (fixture.pair_id, fixture.pair_generation, false);
+        TEST_ASSERT_NOT_NULL (application);
+        TEST_ASSERT_EQUAL_UINT (1u, application->get_transport_lane_count ());
+        TEST_ASSERT_NULL (as_socket (fixture.dealer)->test_pair_pipe (
+          fixture.pair_id, fixture.pair_generation, true));
 
-    zlink::flow_state::frame_t frame;
-    frame.version = zlink::flow_state::frame_protocol_version;
-    frame.state = k_paused;
-    frame.epoch = 7;
+        zlink::flow_state::frame_t frame;
+        frame.version = zlink::flow_state::frame_protocol_version;
+        frame.state = k_paused;
+        frame.epoch = 7;
+        zlink::msg_t msg;
+        TEST_ASSERT_EQUAL_INT (0, msg.init ());
+        TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&msg, frame));
+        msg.set_transport_connection_id (
+          application->get_transport_connection_id ());
+        TEST_ASSERT_TRUE (
+          as_socket (fixture.dealer)
+            ->consume_receive_flow_state_frame (application, msg));
+        TEST_ASSERT_EQUAL_INT (0, msg.close ());
+        TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (true));
 
-    zlink::msg_t msg;
-    TEST_ASSERT_EQUAL_INT (0, msg.init ());
-    TEST_ASSERT_EQUAL_INT (0, zlink::flow_state::init_frame (&msg, frame));
-    msg.set_transport_connection_id (
-      application->get_transport_connection_id ());
-    //  Consumed - it is a flow frame and must never reach another handler -
-    //  but not applied.
-    TEST_ASSERT_TRUE (
-      as_socket (fixture.dealer)
-        ->consume_receive_flow_state_frame (application, msg));
-    TEST_ASSERT_EQUAL_INT (0, msg.close ());
-
-    for (int i = 0; i < 100; ++i) {
-        (void) as_socket (fixture.dealer)->process_submit_commands ();
-        msleep (1);
+        fixture.teardown ();
     }
-    TEST_ASSERT_FALSE (as_socket (fixture.dealer)->remote_receive_flow_paused (
-      fixture.pair_id, fixture.pair_generation));
-    TEST_ASSERT_FALSE (
-      as_socket (fixture.dealer)->application_pipe_remote_flow_paused (
-        fixture.pair_id, fixture.pair_generation));
 
-    //  The rejected frame must not have consumed the epoch either: the same
-    //  epoch arriving on the completion lane is still the real state.
-    TEST_ASSERT_TRUE (fixture.inject (
-      zlink::flow_state::frame_protocol_version, k_paused, 7));
-    TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (true));
+    {
+        const int zero = 0;
+        const char first_rid_text[] = "flow-router-a";
+        const char second_rid_text[] = "flow-router-b";
+        const char endpoint[] = "inproc://flow-state-count-two-source";
+        void *first = test_context_socket (ZLINK_SOCKET_ROUTER);
+        void *second = test_context_socket (ZLINK_SOCKET_ROUTER);
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_option (first, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_option (second, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (
+          first, first_rid_text, sizeof (first_rid_text) - 1));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (
+          second, second_rid_text, sizeof (second_rid_text) - 1));
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_CONFIG_OK,
+          zlink_set_router_option (second,
+                                   ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID,
+                                   first_rid_text,
+                                   sizeof (first_rid_text) - 1));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (first, endpoint));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (second, endpoint));
 
-    fixture.teardown ();
+        send_string_expect_success (second, first_rid_text, ZLINK_SNDMORE);
+        send_string_expect_success (second, "prime", 0);
+        recv_string_expect_success (first, second_rid_text, 0);
+        recv_string_expect_success (first, "prime", 0);
+
+        zlink_routing_id_t first_rid;
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                               zlink_get_routing_id (first, &first_rid));
+        zlink_routed_submit_target_t target;
+        memset (&target, 0, sizeof (target));
+        bool resolved = false;
+        const std::chrono::steady_clock::time_point deadline =
+          deadline_in_ms (2000);
+        while (!deadline_expired (deadline)) {
+            if (as_socket (second)->select_routed_submit_target (&first_rid,
+                                                                 &target)
+                  == 0
+                && target.transport_pair_id != 0) {
+                resolved = true;
+                break;
+            }
+            msleep (1);
+        }
+        TEST_ASSERT_TRUE (resolved);
+
+        zlink::pipe_t *const application =
+          as_socket (second)->test_pair_pipe (target.transport_pair_id,
+                                              target.transport_pair_generation,
+                                              false);
+        zlink::pipe_t *const completion =
+          as_socket (second)->test_pair_pipe (target.transport_pair_id,
+                                              target.transport_pair_generation,
+                                              true);
+        TEST_ASSERT_NOT_NULL (application);
+        TEST_ASSERT_NOT_NULL (completion);
+        TEST_ASSERT_EQUAL_UINT (2u, application->get_transport_lane_count ());
+        TEST_ASSERT_EQUAL_UINT (2u, completion->get_transport_lane_count ());
+        TEST_ASSERT_EQUAL_INT (zlink::transport_lane_application,
+                               application->get_transport_lane ());
+        TEST_ASSERT_EQUAL_INT (zlink::transport_lane_completion,
+                               completion->get_transport_lane ());
+        TEST_ASSERT_EQUAL_PTR (
+          completion,
+          as_socket (second)->completion_pipe_for_transport_pair (
+            target.transport_pair_id, target.transport_pair_generation));
+
+        zlink::flow_state::frame_t frame;
+        frame.version = zlink::flow_state::frame_protocol_version;
+        frame.state = k_paused;
+        frame.epoch = 7;
+        zlink::msg_t application_msg;
+        TEST_ASSERT_EQUAL_INT (0, application_msg.init ());
+        TEST_ASSERT_EQUAL_INT (
+          0, zlink::flow_state::init_frame (&application_msg, frame));
+        application_msg.set_transport_connection_id (
+          application->get_transport_connection_id ());
+        TEST_ASSERT_TRUE (
+          as_socket (second)->consume_receive_flow_state_frame (
+            application, application_msg));
+        TEST_ASSERT_EQUAL_INT (0, application_msg.close ());
+        for (int i = 0; i != 50; ++i) {
+            (void) as_socket (second)->process_submit_commands ();
+            msleep (1);
+        }
+        TEST_ASSERT_FALSE (as_socket (second)->remote_receive_flow_paused (
+          target.transport_pair_id, target.transport_pair_generation));
+
+        zlink::msg_t completion_msg;
+        TEST_ASSERT_EQUAL_INT (0, completion_msg.init ());
+        TEST_ASSERT_EQUAL_INT (
+          0, zlink::flow_state::init_frame (&completion_msg, frame));
+        completion_msg.set_transport_connection_id (
+          completion->get_transport_connection_id ());
+        TEST_ASSERT_TRUE (
+          as_socket (second)->consume_receive_flow_state_frame (
+            completion, completion_msg));
+        TEST_ASSERT_EQUAL_INT (0, completion_msg.close ());
+        TEST_ASSERT_TRUE (wait_for_pipe_pause (
+          second, target.transport_pair_id, target.transport_pair_generation,
+          true));
+
+        test_context_socket_close_zero_linger (second);
+        test_context_socket_close_zero_linger (first);
+    }
 }
 
 //  Review finding 3. A classic ROUTER send accepts the routing-ID part without
@@ -1923,32 +2096,40 @@ void test_no_application_recv_returns_a_flow_frame ()
 int main ()
 {
     setup_test_environment ();
+    const char *selected_case = getenv ("ZLINK_TEST_CASE");
+#define RUN_FLOW_CASE(TEST_FN)                                                                    \
+    do {                                                                                          \
+        if (!selected_case || strcmp (selected_case, #TEST_FN) == 0)                             \
+            RUN_TEST (TEST_FN);                                                                   \
+    } while (false)
 
     UNITY_BEGIN ();
-    RUN_TEST (test_unsupported_socket_types_report_not_supported);
-    RUN_TEST (test_invalid_state_is_rejected);
-    RUN_TEST (test_remote_pause_blocks_sender_and_resume_releases_it);
-    RUN_TEST (test_local_hwm_and_remote_pause_are_independent);
-    RUN_TEST (test_pause_mid_multipart_preserves_atomicity);
-    RUN_TEST (test_duplicate_and_stale_frames_are_ignored);
-    RUN_TEST (test_new_and_reconnected_pairs_receive_the_latest_state);
-    RUN_TEST (test_flow_state_epoch_edge_cases);
-    RUN_TEST (test_generation_change_resets_the_epoch_sequence);
-    RUN_TEST (test_flow_frame_cannot_complete_a_truncated_reply);
-    RUN_TEST (test_epoch_zero_is_refused_by_the_pipe_command);
-    RUN_TEST (test_epoch_wraparound_forces_a_new_connection_generation);
-    RUN_TEST (test_flow_frame_before_registration_is_promoted_after_validation);
-    RUN_TEST (test_resume_rereads_credit_published_before_the_waiter_was_armed);
-    RUN_TEST (test_router_peer_state_reports_remote_pause);
-    RUN_TEST (test_flow_frame_before_reply_is_consumed_on_a_local_pair);
-    RUN_TEST (test_peer_weight_change_does_not_write_the_completion_pipe);
-    RUN_TEST (test_inproc_peer_weight_is_owner_control_in_both_directions);
-    RUN_TEST (test_peer_weight_update_is_safe_for_async_readers);
-    RUN_TEST (test_network_peer_weight_keeps_wire_control_and_exact_pair_state);
-    RUN_TEST (test_flow_frame_on_the_application_lane_is_rejected);
-    RUN_TEST (test_router_routing_id_part_holds_message_atomicity_across_pause);
-    RUN_TEST (test_resume_while_hwm_full_still_recovers_through_byte_credit);
-    RUN_TEST (test_stale_flow_state_command_cannot_override_a_newer_epoch);
-    RUN_TEST (test_no_application_recv_returns_a_flow_frame);
-    return UNITY_END ();
+    RUN_FLOW_CASE (test_unsupported_socket_types_report_not_supported);
+    RUN_FLOW_CASE (test_invalid_state_is_rejected);
+    RUN_FLOW_CASE (test_remote_pause_blocks_sender_and_resume_releases_it);
+    RUN_FLOW_CASE (test_local_hwm_and_remote_pause_are_independent);
+    RUN_FLOW_CASE (test_pause_mid_multipart_preserves_atomicity);
+    RUN_FLOW_CASE (test_duplicate_and_stale_frames_are_ignored);
+    RUN_FLOW_CASE (test_new_and_reconnected_pairs_receive_the_latest_state);
+    RUN_FLOW_CASE (test_flow_state_epoch_edge_cases);
+    RUN_FLOW_CASE (test_generation_change_resets_the_epoch_sequence);
+    RUN_FLOW_CASE (test_flow_frame_cannot_complete_a_truncated_reply);
+    RUN_FLOW_CASE (test_epoch_zero_is_refused_by_the_pipe_command);
+    RUN_FLOW_CASE (test_epoch_wraparound_forces_a_new_connection_generation);
+    RUN_FLOW_CASE (test_flow_frame_before_registration_is_promoted_after_validation);
+    RUN_FLOW_CASE (test_resume_rereads_credit_published_before_the_waiter_was_armed);
+    RUN_FLOW_CASE (test_router_peer_state_reports_remote_pause);
+    RUN_FLOW_CASE (test_flow_frame_before_reply_is_consumed_on_a_local_pair);
+    RUN_FLOW_CASE (test_peer_weight_change_does_not_leak_to_public_receive);
+    RUN_FLOW_CASE (test_inproc_peer_weight_is_owner_control_in_both_directions);
+    RUN_FLOW_CASE (test_peer_weight_update_is_safe_for_async_readers);
+    RUN_FLOW_CASE (test_network_peer_weight_keeps_wire_control_and_exact_pair_state);
+    RUN_FLOW_CASE (test_flow_frame_uses_count_selected_control_lane);
+    RUN_FLOW_CASE (test_router_routing_id_part_holds_message_atomicity_across_pause);
+    RUN_FLOW_CASE (test_resume_while_hwm_full_still_recovers_through_byte_credit);
+    RUN_FLOW_CASE (test_stale_flow_state_command_cannot_override_a_newer_epoch);
+    RUN_FLOW_CASE (test_no_application_recv_returns_a_flow_frame);
+    const int rc = UNITY_END ();
+#undef RUN_FLOW_CASE
+    return rc;
 }

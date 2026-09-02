@@ -78,6 +78,45 @@ void discard_subscribe_payload_tail (zlink::socket_base_t *socket_)
     }
 }
 
+class public_part_delivery_hold_owner_t
+{
+  public:
+    explicit public_part_delivery_hold_owner_t (
+      zlink::socket_base_t *socket_) :
+        _socket (socket_),
+        _active (false)
+    {
+    }
+
+    ~public_part_delivery_hold_owner_t ()
+    {
+        if (_active && _socket)
+            _socket->end_public_part_receive_delivery_hold ();
+    }
+
+    void activate (bool active_) { _active = active_; }
+
+    int transfer_to (
+      const std::shared_ptr<zlink::part_helper_internal::handle_state_t>
+        &state_)
+    {
+        if (!_active)
+            return 0;
+        if (zlink::part_helper_internal::adopt_recv_public_delivery_hold (
+              state_)
+            != 0)
+            return -1;
+        _active = false;
+        return 0;
+    }
+
+  private:
+    zlink::socket_base_t *_socket;
+    bool _active;
+
+    ZLINK_NON_COPYABLE_NOR_MOVABLE (public_part_delivery_hold_owner_t)
+};
+
 }
 
 zlink_recv_result_t zlink_recv_part (void *s_,
@@ -110,6 +149,9 @@ zlink_recv_result_t zlink_recv_part (void *s_,
       zlink::socket_reqrep_internal::socket_request_reply_state_t>
       request_state;
     zlink::socket_base_t *recv_source_socket = handle.socket;
+    bool public_part_delivery_hold_acquired = false;
+    public_part_delivery_hold_owner_t public_delivery_hold_owner (
+      handle.socket);
     auto recv_parts_once = [&] (zlink_routing_id_t *source_rid_,
                                 zlink_msg_t **parts_,
                                 size_t *part_count_,
@@ -124,7 +166,8 @@ zlink_recv_result_t zlink_recv_part (void *s_,
             return zlink::socket_reqrep_internal::recv_dealer_message_direct (
               handle, request_state, false, &message_type, &request_seq,
               parts_, part_count_, static_cast<int> (recv_flags_), terminal_part_out_,
-              terminal_part_returned_out_);
+              terminal_part_returned_out_, true,
+              &public_part_delivery_hold_acquired);
         }
         if (terminal_part_returned_out_)
             *terminal_part_returned_out_ = false;
@@ -159,6 +202,8 @@ zlink_recv_result_t zlink_recv_part (void *s_,
                              part_out_, &terminal_part_returned)
             != 0)
             return zlink::recv_result_internal::from_errno (errno);
+        public_delivery_hold_owner.activate (
+          public_part_delivery_hold_acquired);
 
         if (terminal_part_returned) {
             if (source_rid_out_)
@@ -204,6 +249,10 @@ zlink_recv_result_t zlink_recv_part (void *s_,
             zlink::part_helper_internal::abort_recv_step (helper_state);
             return zlink::recv_result_internal::from_errno (errno);
         }
+        if (public_delivery_hold_owner.transfer_to (helper_state) != 0) {
+            zlink::part_helper_internal::abort_recv_step (helper_state);
+            return zlink::recv_result_internal::from_errno (errno);
+        }
         if (helper_state->recv.buffered_parts.empty ()) {
             zlink::part_helper_internal::abort_recv_step (helper_state);
             errno = EPROTO;
@@ -245,6 +294,8 @@ zlink_recv_result_t zlink_recv_part (void *s_,
             zlink::part_helper_internal::abort_recv_step (helper_state);
             return zlink::recv_result_internal::from_errno (errno);
         }
+        public_delivery_hold_owner.activate (
+          public_part_delivery_hold_acquired);
 
         if (!parts || part_count == 0) {
             zlink::part_helper_internal::abort_recv_step (helper_state);
@@ -278,6 +329,10 @@ zlink_recv_result_t zlink_recv_part (void *s_,
           &source_rid, 0, parts, part_count, std::this_thread::get_id ());
         zlink_multipart_close (parts, part_count);
         if (stage_rc != 0) {
+            zlink::part_helper_internal::abort_recv_step (helper_state);
+            return zlink::recv_result_internal::from_errno (errno);
+        }
+        if (public_delivery_hold_owner.transfer_to (helper_state) != 0) {
             zlink::part_helper_internal::abort_recv_step (helper_state);
             return zlink::recv_result_internal::from_errno (errno);
         }

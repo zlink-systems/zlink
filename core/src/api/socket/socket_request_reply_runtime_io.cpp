@@ -174,6 +174,73 @@ struct reply_target_receive_admission_t
     }
 };
 
+class public_part_delivery_hold_failure_guard_t
+{
+  public:
+    explicit public_part_delivery_hold_failure_guard_t (
+      socket_base_t *socket_) :
+        socket (socket_),
+        armed (false)
+    {
+    }
+
+    ~public_part_delivery_hold_failure_guard_t ()
+    {
+        if (armed && socket)
+            socket->end_public_part_receive_delivery_hold ();
+    }
+
+    void arm () { armed = true; }
+    void release () { armed = false; }
+
+  private:
+    socket_base_t *socket;
+    bool armed;
+
+    ZLINK_NON_COPYABLE_NOR_MOVABLE (
+      public_part_delivery_hold_failure_guard_t)
+};
+
+struct public_part_delivery_hold_admission_t
+{
+    public_part_delivery_hold_admission_t (
+      socket_base_t *socket_,
+      public_part_delivery_hold_failure_guard_t *failure_guard_) :
+        socket (socket_),
+        failure_guard (failure_guard_)
+    {
+    }
+
+    static int prepare (void *userdata_)
+    {
+        public_part_delivery_hold_admission_t *self =
+          static_cast<public_part_delivery_hold_admission_t *> (userdata_);
+        if (!self || !self->socket) {
+            errno = EFAULT;
+            return -1;
+        }
+        const int rc =
+          self->socket->begin_public_part_receive_delivery_hold ();
+        if (rc == 0 && self->failure_guard)
+            self->failure_guard->arm ();
+        return rc;
+    }
+
+    static void rollback (void *userdata_)
+    {
+        public_part_delivery_hold_admission_t *self =
+          static_cast<public_part_delivery_hold_admission_t *> (userdata_);
+        if (self && self->socket) {
+            self->socket->end_public_part_receive_delivery_hold (true);
+            if (self->failure_guard)
+                self->failure_guard->release ();
+        }
+    }
+
+    socket_base_t *socket;
+    public_part_delivery_hold_failure_guard_t *failure_guard;
+};
+
 static inline int ensure_reply_target_receive_reservation (
   const socket_handle_t &handle_, bool is_request_,
   std::shared_ptr<socket_request_reply_state_t> *state_,
@@ -217,6 +284,7 @@ static router_reply_alias_key_t router_reply_alias_key (
 {
     router_reply_alias_key_t key;
     key.pipe = target_.source_pipe_identity;
+    key.source_peer_socket_type = target_.source_peer_socket_type;
     key.transport_pair_id = target_.transport_pair_id;
     key.transport_pair_generation = target_.transport_pair_generation;
     key.wire_request_seq = target_.wire_request_seq;
@@ -745,10 +813,17 @@ bool take_router_reply_target (
     router_reply_target_map_t::iterator it =
       state_->router_reply_targets.find (key_);
     if (it == state_->router_reply_targets.end () || it->second.checked_out
-        || it->second.wire_request_seq == 0)
+        || it->second.wire_request_seq == 0
+        || (it->second.source_peer_socket_type != ZLINK_CORE_SOCKET_DEALER
+            && it->second.source_peer_socket_type
+                 != ZLINK_CORE_SOCKET_ROUTER))
         return false;
     if (it->second.pipe
-        && (it->second.pipe->get_transport_pair_id ()
+        && (it->second.pipe->get_transport_lane ()
+              != transport_lane_application
+            || it->second.pipe->get_peer_socket_type ()
+                 != it->second.source_peer_socket_type
+            || it->second.pipe->get_transport_pair_id ()
               != it->second.transport_pair_id
             || it->second.pipe->get_transport_pair_generation ()
                  != it->second.transport_pair_generation
@@ -1178,6 +1253,8 @@ int recv_router_message_direct (const socket_handle_t &handle_,
                 router_reply_target_t target;
                 target.pipe = source_pipe;
                 target.source_pipe_identity = source_pipe;
+                target.source_peer_socket_type =
+                  source_pipe->get_peer_socket_type ();
                 target.wire_request_seq = wire_sequence;
                 target.transport_pair_id = transport_pair_id;
                 target.transport_pair_generation =
@@ -1302,7 +1379,8 @@ int recv_dealer_message_direct (
   size_t *part_count_out_,
   int flags_,
   zlink_msg_t *terminal_part_out_,
-  bool *terminal_part_returned_out_)
+  bool *terminal_part_returned_out_, bool public_part_receive_,
+  bool *public_part_delivery_hold_out_)
 {
     if (!handle_.socket || !message_type_out_ || !request_seq_out_
         || !parts_out_ || !part_count_out_) {
@@ -1311,13 +1389,31 @@ int recv_dealer_message_direct (
     }
     if (terminal_part_returned_out_)
         *terminal_part_returned_out_ = false;
+    if (public_part_delivery_hold_out_)
+        *public_part_delivery_hold_out_ = false;
+    if (public_part_receive_ && !public_part_delivery_hold_out_) {
+        errno = EFAULT;
+        return -1;
+    }
 
+    //  The record scope must release receive.sync before an error guard wakes
+    //  the suppressed head, so declare the guard first (destruction is
+    //  reverse-order). A successful call transfers the exact hold outward.
+    public_part_delivery_hold_failure_guard_t public_delivery_hold_guard (
+      handle_.socket);
     zlink::socket_receive_record_scope_t receive_record_scope;
     std::shared_ptr<socket_request_reply_state_t> request_state = state_;
     reply_target_reservation_t reply_target_reservation;
     reply_target_receive_admission_t receive_admission (
       handle_, &request_state, &reply_target_reservation, typed_receive_);
-    if (typed_receive_) {
+    public_part_delivery_hold_admission_t public_delivery_hold_admission (
+      handle_.socket, &public_delivery_hold_guard);
+    if (public_part_receive_) {
+        receive_record_scope.set_admission (
+          &public_part_delivery_hold_admission_t::prepare,
+          &public_part_delivery_hold_admission_t::rollback,
+          &public_delivery_hold_admission);
+    } else if (typed_receive_) {
         receive_record_scope.set_admission (
           &reply_target_receive_admission_t::prepare,
           &reply_target_receive_admission_t::rollback, &receive_admission);
@@ -1341,6 +1437,8 @@ int recv_dealer_message_direct (
     received_pipe_pin_t source_pipe_pin (source_pipe);
     if (first_recv_rc != 0)
         return -1;
+    if (public_part_receive_)
+        handle_.socket->bind_public_part_receive_delivery_hold (source_pipe);
 
     const bool first_has_more =
       (current.flags () & zlink::msg_t::more) != 0;
@@ -1468,6 +1566,10 @@ int recv_dealer_message_direct (
     published_reply_guard.release ();
     *message_type_out_ = exported_type;
     *request_seq_out_ = exported_seq;
+    if (public_part_receive_) {
+        *public_part_delivery_hold_out_ = true;
+        public_delivery_hold_guard.release ();
+    }
     return 0;
 }
 
@@ -1524,7 +1626,7 @@ int send_request_reply_message (const socket_handle_t &handle_,
 
     // Replies bypass send()/recv(), so this entry has to drain pending socket
     // commands itself. Otherwise an activate-write command can leave the
-    // completion pipe backpressured across every retry.
+    // selected reply transport backpressured across every retry.
     if (handle_.socket->process_submit_commands () != 0) {
         const int saved_errno = errno;
         zlink::request_reply::consume_send_frames_from (
@@ -1562,9 +1664,22 @@ int send_request_reply_message (const socket_handle_t &handle_,
         return -1;
     }
 
-    const int rc = send_completion_staged_frames (
-      handle_.socket, target.pipe, peer_rid_, staged_parts_,
-      staged_part_count_, final_part_);
+    zlink::pipe_t *const reply_transport = retain_reply_transport_pipe (
+      handle_.socket, target, peer_rid_);
+    if (!reply_transport) {
+        const int saved_errno = errno;
+        restore_router_reply_target (reply_state, reply_key);
+        if (target.pipe)
+            target.pipe->release_lifetime_ref ();
+        zlink::request_reply::consume_send_frames_from (
+          staged_parts_, 0, staged_part_count_);
+        zlink::request_reply::consume_send_frame (final_part_);
+        errno = saved_errno;
+        return -1;
+    }
+
+    const int rc = send_completion_staged_frames_on_pipe (
+      reply_transport, staged_parts_, staged_part_count_, final_part_, false);
     if (rc != 0) {
         const int saved_errno = errno;
         restore_router_reply_target (reply_state, reply_key);
@@ -1579,6 +1694,52 @@ int send_request_reply_message (const socket_handle_t &handle_,
         target.pipe->release_lifetime_ref ();
     errno = 0;
     return 0;
+}
+
+zlink::pipe_t *retain_reply_transport_pipe (
+  zlink::socket_base_t *socket_, const router_reply_target_t &target_,
+  const zlink_routing_id_t *peer_rid_)
+{
+    if (!socket_ || !zlink::valid_routing_id (peer_rid_)
+        || target_.transport_pair_id == 0
+        || target_.transport_pair_generation == 0
+        || (target_.source_peer_socket_type != ZLINK_CORE_SOCKET_DEALER
+            && target_.source_peer_socket_type != ZLINK_CORE_SOCKET_ROUTER)) {
+        errno = EPROTO;
+        return NULL;
+    }
+
+    const transport_lane_t lane =
+      target_.source_peer_socket_type == ZLINK_CORE_SOCKET_DEALER
+        ? transport_lane_application
+        : transport_lane_completion;
+    // The logical reply token survives reconnect, but the physical transport
+    // never does. Resolve every FINAL through the socket's current route
+    // owner: on ROUTER this also excludes an active duplicate-RID standby,
+    // while DEALER selects the latest ready pair for the settled peer.
+    zlink::pipe_t *const selected =
+      socket_->retain_current_transport_pair_pipe (
+        peer_rid_, target_.source_peer_socket_type, lane);
+    if (!selected) {
+        errno = ENOTCONN;
+        return NULL;
+    }
+
+    const bool current_route =
+      selected->get_transport_lane () == lane
+      && selected->get_peer_socket_type () == target_.source_peer_socket_type
+      && selected->get_transport_pair_id () != 0
+      && selected->get_transport_pair_generation () != 0
+      && selected->get_transport_connection_id () != 0
+      && selected->is_lifecycle_active ();
+    if (!current_route) {
+        selected->release_lifetime_ref ();
+        errno = ENOTCONN;
+        return NULL;
+    }
+
+    errno = 0;
+    return selected;
 }
 
 zlink::pipe_t *retain_reply_completion_pipe (
@@ -1624,49 +1785,74 @@ int send_completion_staged_frames_on_pipe (
 
     int rc = 0;
     const size_t total_part_count = staged_part_count_ + 1;
-    // Every part in one logical reply belongs to the same transport
-    // connection, even if the pipe's identity changes during teardown.
-    const uint64_t transport_connection_id =
-      completion_->get_transport_connection_id ();
-    for (size_t i = 0; i < total_part_count; ++i) {
-        zlink_msg_t *part =
-          i < staged_part_count_ ? &staged_parts_[i] : final_part_;
-        zlink::msg_t *msg = reinterpret_cast<zlink::msg_t *> (part);
-        if (i + 1 < total_part_count)
-            msg->set_flags (zlink::msg_t::more);
-        else
-            msg->reset_flags (zlink::msg_t::more);
-        msg->set_transport_connection_id (transport_connection_id);
-        bool written = false;
-#ifdef ZLINK_BUILD_TESTS
-        const bool force_failure =
-          i != 0 && test_take_request_reply_write_failure_after_prefix ();
-        if (!force_failure)
-#endif
-            written = i + 1 < total_part_count
-                        ? completion_->write (msg)
-                        : completion_->write_and_flush (msg);
-        if (!written) {
-            completion_->rollback ();
-            if (!(preserve_initial_failure_ && i == 0)) {
-                if (i < staged_part_count_) {
-                    zlink::request_reply::consume_send_frames_from (
-                      staged_parts_, i, staged_part_count_);
-                    zlink::request_reply::consume_send_frame (final_part_);
-                } else
-                    zlink::request_reply::consume_send_frame (final_part_);
+    {
+        // engine_error() clears the connection id under this same generation
+        // lock. Hold it from the snapshot through the terminal flush so either
+        // the complete reply precedes that error, or no input frame moves and
+        // the caller observes retryable EAGAIN.
+        zlink::scoped_fast_lock_t transport_generation_lock (
+          completion_->transport_sync ());
+        const uint64_t transport_connection_id =
+          completion_->get_transport_connection_id ();
+        if (transport_connection_id == 0
+            || !completion_->is_lifecycle_active ()) {
+            if (!preserve_initial_failure_) {
+                zlink::request_reply::consume_send_frames_from (
+                  staged_parts_, 0, staged_part_count_);
+                zlink::request_reply::consume_send_frame (final_part_);
             }
-            // Before the first frame moves, a disappearing completion route
-            // is retryable within the caller's SNDTIMEO budget. Once a prefix
-            // moved, rollback prevents wire admission but its ownership is no
-            // longer reconstructable here; surface the exact runtime failure
-            // and let the application retry its retained complete reply.
-            errno = preserve_initial_failure_ && i == 0 ? EAGAIN : EIO;
+            errno = EAGAIN;
             rc = -1;
-            break;
         }
-        const int init_rc = zlink_msg_init (part);
-        errno_assert (init_rc == 0);
+
+        // Every part in one logical reply belongs to the same transport
+        // connection. This helper also accepts a DEALER-facing Application
+        // pipe; its ordinary write admission supplies HWM and PAUSED behavior.
+        for (size_t i = 0; rc == 0 && i < total_part_count; ++i) {
+            zlink_msg_t *part =
+              i < staged_part_count_ ? &staged_parts_[i] : final_part_;
+            zlink::msg_t *msg = reinterpret_cast<zlink::msg_t *> (part);
+            if (i + 1 < total_part_count)
+                msg->set_flags (zlink::msg_t::more);
+            else
+                msg->reset_flags (zlink::msg_t::more);
+            msg->set_transport_connection_id (transport_connection_id);
+            bool written = false;
+#ifdef ZLINK_BUILD_TESTS
+            const bool force_failure =
+              i != 0 && test_take_request_reply_write_failure_after_prefix ();
+            if (!force_failure)
+#endif
+                written = i + 1 < total_part_count
+                            ? completion_->write (msg)
+                            : completion_->write_and_flush (msg);
+            if (!written) {
+                completion_->rollback ();
+                if (!(preserve_initial_failure_ && i == 0)) {
+                    if (i < staged_part_count_) {
+                        zlink::request_reply::consume_send_frames_from (
+                          staged_parts_, i, staged_part_count_);
+                        zlink::request_reply::consume_send_frame (final_part_);
+                    } else
+                        zlink::request_reply::consume_send_frame (final_part_);
+                }
+                // Before the first frame moves, a disappearing completion
+                // route is retryable within the caller's SNDTIMEO budget.
+                // Once a prefix moved, rollback prevents wire admission but
+                // its ownership is no longer reconstructable here; surface
+                // the exact runtime failure and let the application retry its
+                // retained complete reply.
+                errno = preserve_initial_failure_ && i == 0 ? EAGAIN : EIO;
+                rc = -1;
+                break;
+            }
+#ifdef ZLINK_BUILD_TESTS
+            if (i == 0 && total_part_count > 1)
+                test_invoke_request_reply_write_after_prefix_hook ();
+#endif
+            const int init_rc = zlink_msg_init (part);
+            errno_assert (init_rc == 0);
+        }
     }
     if (rc == 0)
         errno = 0;

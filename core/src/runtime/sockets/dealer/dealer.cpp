@@ -42,6 +42,8 @@ bool zlink::dealer_t::routed_submit_candidate (pipe_t *pipe_, void *userdata_)
 {
     dealer_t *const dealer = static_cast<dealer_t *> (userdata_);
     return dealer && pipe_ && pipe_->get_routing_id ().size () != 0
+           && pipe_->is_lifecycle_active ()
+           && pipe_->get_transport_connection_id () != 0
            && dealer->transport_pair_application_ready (pipe_);
 }
 
@@ -53,7 +55,11 @@ bool zlink::dealer_t::request_router_peer (pipe_t *pipe_, void *userdata_)
 
 bool zlink::dealer_t::request_submit_candidate (pipe_t *pipe_, void *userdata_)
 {
-    return request_router_peer (pipe_, userdata_);
+    dealer_t *const dealer = static_cast<dealer_t *> (userdata_);
+    return dealer && request_router_peer (pipe_, userdata_)
+           && pipe_->is_lifecycle_active ()
+           && pipe_->get_transport_connection_id () != 0
+           && dealer->transport_pair_application_ready (pipe_);
 }
 
 void zlink::dealer_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool locally_initiated_)
@@ -241,7 +247,10 @@ int zlink::dealer_t::xsend_configured_endpoint (
 {
     if (pipe_out_)
         *pipe_out_ = NULL;
-    pipe_t *const pipe = _lb.find_pipe_by_endpoint (endpoint_);
+    pipe_t *const pipe = _lb.find_pipe_by_endpoint (
+      endpoint_, request_only_ ? &dealer_t::request_submit_candidate
+                               : &dealer_t::routed_submit_candidate,
+      this);
     if (!pipe) {
         errno = EAGAIN;
         return -1;
@@ -387,6 +396,11 @@ void zlink::dealer_t::xread_activated (pipe_t *pipe_)
     _fq.activated (pipe_);
 }
 
+void zlink::dealer_t::xread_deactivated (pipe_t *pipe_)
+{
+    _fq.deactivate (pipe_);
+}
+
 void zlink::dealer_t::xwrite_activated (pipe_t *pipe_)
 {
     _lb.activated (pipe_);
@@ -409,7 +423,14 @@ int zlink::dealer_t::sendpipe (
 
 int zlink::dealer_t::recvpipe (msg_t *msg_, pipe_t **pipe_)
 {
-    return _fq.recvpipe (msg_, pipe_);
+    pipe_t *source = NULL;
+    const int rc = _fq.recvpipe (msg_, &source);
+    if (pipe_)
+        *pipe_ = rc == 0 ? source : NULL;
+    if (rc == 0 && source
+        && (msg_->flags () & msg_t::more) == 0)
+        (void) reclassify_transport_pair_application_head (source);
+    return rc;
 }
 
 int zlink::dealer_t::apply_peer_weight (pipe_t *pipe_, uint32_t weight_)
