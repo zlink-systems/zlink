@@ -368,7 +368,7 @@ submit_simple_part (void *handle_,
     return ZLINK_SUBMIT_OK;
 }
 
-int stage_public_send_part (
+int stage_public_send_part_locked (
   const std::shared_ptr<zlink::part_helper_internal::handle_state_t> &state_,
   zlink_msg_t *part_)
 {
@@ -377,7 +377,6 @@ int stage_public_send_part (
         return -1;
     }
     try {
-        std::lock_guard<std::mutex> lock (state_->mutex);
         zlink_msg_t &slot = state_->send.buffered_parts.append_uninitialized ();
         zlink_msg_init (&slot);
         if (zlink_msg_move (&slot, part_) != 0) {
@@ -386,6 +385,8 @@ int stage_public_send_part (
             errno = EFAULT;
             return -1;
         }
+        if (state_->send.send_scope)
+            state_->send.send_scope->suspend_multipart_call ();
     } catch (...) {
         errno = ENOMEM;
         return -1;
@@ -393,9 +394,10 @@ int stage_public_send_part (
     return 0;
 }
 
-int collect_public_send_record (
+int collect_public_send_record_locked (
   const std::shared_ptr<zlink::part_helper_internal::handle_state_t> &state_,
-  zlink_msg_t *final_part_, std::vector<zlink_msg_t> *record_)
+  zlink_msg_t *final_part_,
+  zlink::part_helper_internal::send_part_buffer_t *record_)
 {
     if (!state_ || !final_part_ || !record_) {
         errno = EFAULT;
@@ -404,7 +406,6 @@ int collect_public_send_record (
 
     size_t initialized = 0;
     try {
-        std::lock_guard<std::mutex> lock (state_->mutex);
         const size_t prefix_count = state_->send.buffered_parts.size ();
         record_->resize (prefix_count + 1);
         for (; initialized < record_->size (); ++initialized) {
@@ -426,6 +427,8 @@ int collect_public_send_record (
                 errno = EFAULT;
                 return -1;
             }
+            state_->send.buffered_parts.clear ();
+            zlink::part_helper_internal::reset_send_sequence (&state_->send);
             return 0;
         }
     } catch (...) {
@@ -440,7 +443,8 @@ int collect_public_send_record (
     return -1;
 }
 
-void consume_public_send_record (std::vector<zlink_msg_t> *record_)
+void consume_public_send_record (
+  zlink::part_helper_internal::send_part_buffer_t *record_)
 {
     if (!record_)
         return;
@@ -480,18 +484,20 @@ zlink_submit_result_t submit_completion_aware_part (
   const zlink::part_helper_internal::send_sequence_spec_t &spec_)
 {
     zlink::socket_base_t *const socket = handle_.socket;
-    if (part_flag_ == ZLINK_PART_FINAL
-        && !zlink::part_helper_internal::send_sequence_active (socket)) {
+
+    std::shared_ptr<zlink::part_helper_internal::handle_state_t> state;
+    std::unique_lock<std::mutex> state_lock;
+    bool first_part = false;
+    const int prepare_rc =
+      zlink::part_helper_internal::prepare_send_step_locked (
+        public_handle_, spec_, socket, &state, &state_lock, &first_part,
+        part_flag_ == ZLINK_PART_MORE);
+    if (prepare_rc == 1) {
         return submit_public_send_record (
           handle_, socket, target_rid_, part_, 1, spec_.flags,
           user_context_, completion_id_out_);
     }
-
-    std::shared_ptr<zlink::part_helper_internal::handle_state_t> state;
-    bool first_part = false;
-    if (zlink::part_helper_internal::prepare_send_step (
-          public_handle_, spec_, socket, &state, &first_part)
-        != 0) {
+    if (prepare_rc != 0) {
         const int saved_errno = errno;
         zlink::part_helper_internal::abort_current_non_publish_send_sequence (
           public_handle_);
@@ -501,30 +507,29 @@ zlink_submit_result_t submit_completion_aware_part (
     }
 
     if (part_flag_ == ZLINK_PART_MORE) {
-        if (stage_public_send_part (state, part_) != 0) {
+        if (stage_public_send_part_locked (state, part_) != 0) {
             const int saved_errno = errno;
+            state_lock.unlock ();
             zlink::part_helper_internal::abort_send_step (state);
             zlink::part_helper_internal::consume_send_part (part_);
             errno = saved_errno;
             return zlink::submit_result_internal::from_errno (saved_errno);
         }
-        zlink::part_helper_internal::complete_send_step (state,
-                                                         ZLINK_PART_MORE);
         return ZLINK_SUBMIT_OK;
     }
 
-    std::vector<zlink_msg_t> record;
-    if (collect_public_send_record (state, part_, &record) != 0) {
+    zlink::part_helper_internal::send_part_buffer_t record;
+    if (collect_public_send_record_locked (state, part_, &record) != 0) {
         const int saved_errno = errno;
         consume_public_send_record (&record);
+        state_lock.unlock ();
         zlink::part_helper_internal::abort_send_step (state);
         zlink::part_helper_internal::consume_send_part (part_);
         errno = saved_errno;
         return zlink::submit_result_internal::from_errno (saved_errno);
     }
 
-    zlink::part_helper_internal::complete_send_step (state,
-                                                     ZLINK_PART_FINAL);
+    state_lock.unlock ();
     return submit_public_send_record (
       handle_, socket, target_rid_, record.data (), record.size (),
       spec_.flags, user_context_, completion_id_out_);

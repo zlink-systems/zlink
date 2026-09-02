@@ -42,6 +42,50 @@ bool retryable_pull_target_errno (int err_)
     return err_ == EAGAIN || err_ == ENOTCONN || err_ == EHOSTUNREACH;
 }
 
+void close_send_part_array (zlink_msg_t *parts_, size_t part_count_)
+{
+    const int saved_errno = errno;
+    for (size_t i = 0; i != part_count_; ++i) {
+        zlink::msg_t *msg = reinterpret_cast<zlink::msg_t *> (&parts_[i]);
+        if (msg->check ()) {
+            const int rc = msg->close ();
+            errno_assert (rc == 0);
+        }
+    }
+    errno = saved_errno;
+}
+
+int copy_send_part_array (zlink_msg_t *parts_,
+                          size_t part_count_,
+                          zlink_msg_t *copies_)
+{
+    size_t initialized = 0;
+    for (; initialized != part_count_; ++initialized) {
+        zlink::msg_t *copy =
+          reinterpret_cast<zlink::msg_t *> (&copies_[initialized]);
+        if (copy->init () != 0)
+            break;
+    }
+    if (initialized != part_count_) {
+        const int saved_errno = errno;
+        close_send_part_array (copies_, initialized);
+        errno = saved_errno;
+        return -1;
+    }
+
+    for (size_t i = 0; i != part_count_; ++i) {
+        zlink::msg_t *copy = reinterpret_cast<zlink::msg_t *> (&copies_[i]);
+        zlink::msg_t *source = reinterpret_cast<zlink::msg_t *> (&parts_[i]);
+        if (copy->copy (*source) != 0) {
+            const int saved_errno = errno;
+            close_send_part_array (copies_, part_count_);
+            errno = saved_errno;
+            return -1;
+        }
+    }
+    return 0;
+}
+
 }
 
 bool zlink::socket_type_supports_send_completion (int type_)
@@ -55,13 +99,7 @@ void zlink::socket_base_t::close_send_parts (
   std::vector<zlink_msg_t> *parts_)
 {
     const int saved_errno = errno;
-    for (size_t i = 0; i != parts_->size (); ++i) {
-        msg_t *msg = reinterpret_cast<msg_t *> (&(*parts_)[i]);
-        if (msg->check ()) {
-            const int rc = msg->close ();
-            errno_assert (rc == 0);
-        }
-    }
+    close_send_part_array (parts_->data (), parts_->size ());
     parts_->clear ();
     errno = saved_errno;
 }
@@ -76,31 +114,13 @@ int zlink::socket_base_t::copy_send_parts (
         return -1;
     }
 
-    size_t initialized = 0;
-    for (; initialized != part_count_; ++initialized) {
-        msg_t *copy = reinterpret_cast<msg_t *> (&(*copies_)[initialized]);
-        if (copy->init () != 0)
-            break;
-    }
-    if (initialized != part_count_) {
-        const int saved_errno = errno;
-        copies_->resize (initialized);
-        close_send_parts (copies_);
-        errno = saved_errno;
-        return -1;
-    }
+    if (copy_send_part_array (parts_, part_count_, copies_->data ()) == 0)
+        return 0;
 
-    for (size_t i = 0; i != part_count_; ++i) {
-        msg_t *copy = reinterpret_cast<msg_t *> (&(*copies_)[i]);
-        msg_t *source = reinterpret_cast<msg_t *> (&parts_[i]);
-        if (copy->copy (*source) != 0) {
-            const int saved_errno = errno;
-            close_send_parts (copies_);
-            errno = saved_errno;
-            return -1;
-        }
-    }
-    return 0;
+    const int saved_errno = errno;
+    copies_->clear ();
+    errno = saved_errno;
+    return -1;
 }
 
 bool zlink::socket_base_t::has_send_pending () const
@@ -408,12 +428,34 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
     // retry starts at frame zero; no independent record can inherit a prefix.
     // STREAM rejects multipart before this path, so every supported async
     // framed socket uses the same attempt ownership rule.
+    const size_t inline_attempt_capacity = 4;
+    if (count <= inline_attempt_capacity) {
+        zlink_msg_t attempt_parts[inline_attempt_capacity];
+        if (copy_send_part_array (parts_, count, attempt_parts) != 0)
+            return -1;
+        const int rc = attempt (attempt_parts, true);
+        const int saved_errno = errno;
+        // Every successful xsend detaches its input by reinitializing it as an
+        // empty message. Only a failed or partial attempt can still own refs.
+        if (rc != 0)
+            close_send_part_array (attempt_parts, count);
+        errno = saved_errno;
+        return rc;
+    }
+
     std::vector<zlink_msg_t> attempt_parts;
-    if (copy_send_parts (parts_, count, &attempt_parts) != 0)
+    try {
+        attempt_parts.resize (count);
+    } catch (...) {
+        errno = ENOMEM;
+        return -1;
+    }
+    if (copy_send_part_array (parts_, count, attempt_parts.data ()) != 0)
         return -1;
     const int rc = attempt (attempt_parts.data (), true);
     const int saved_errno = errno;
-    close_send_parts (&attempt_parts);
+    if (rc != 0)
+        close_send_part_array (attempt_parts.data (), count);
     errno = saved_errno;
     return rc;
 }

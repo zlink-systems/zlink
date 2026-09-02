@@ -302,8 +302,7 @@ int zlink::socket_base_t::send_completion_submit_blocking (
 
     socket_send_pending_runtime_t &pending = send_pending_runtime ();
     logical_send_wait_guard_t logical_wait (&pending, &target);
-    if (!logical_wait.acquire ())
-        return -1;
+    bool logical_wait_registered = false;
 
     const auto normalize_wait_failure = [&] (int err_) -> int {
         return err_ == ECANCELED
@@ -328,11 +327,32 @@ int zlink::socket_base_t::send_completion_submit_blocking (
               socket_send_admission_complete);
             if (!physical_scope.acquired ())
                 return -1;
-            admission_rc = try_admit_send_parts_scoped (
-              parts_, part_count_, target, has_target, physical_scope, NULL,
-              false, NULL, NULL, false);
+            if (process_commands (0, true) == 0) {
+                admission_rc = try_admit_send_parts_scoped (
+                  parts_, part_count_, target, has_target, physical_scope,
+                  NULL, true, NULL, NULL, false);
+            }
             admission_errno = errno;
-            physical_scope.unlock_sync ();
+
+            // Most blocking sends admit immediately. Register a logical
+            // waiter only once the call will actually release the lifecycle
+            // sync and wait. Keeping registration inside the physical scope
+            // preserves the detach/removal fence: a terminal handoff cannot
+            // slip between the failed admission and waiter publication.
+            if (admission_rc != 0
+                && retryable_logical_send_errno (admission_errno)
+                && !logical_wait_registered) {
+                if (logical_wait.acquire ()) {
+                    logical_wait_registered = true;
+                } else {
+                    admission_errno = errno;
+                }
+            }
+            // A successful admission can release the sync bit and inflight
+            // count together in the scope destructor. A failed attempt must
+            // drop only the sync bit before it waits for progress.
+            if (admission_rc != 0)
+                physical_scope.unlock_sync ();
         }
         if (admission_rc == 0)
             return 0;

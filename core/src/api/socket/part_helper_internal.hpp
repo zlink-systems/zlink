@@ -66,6 +66,12 @@ struct send_sequence_spec_t
     uint64_t transport_pair_generation;
 };
 
+// Keep common short send records inline. Larger multipart records retain the
+// same ownership model and spill through inline_msg_buffer_t's dynamic path.
+const size_t inline_send_part_capacity = 4;
+typedef zlink::socket_internal::inline_msg_buffer_t<inline_send_part_capacity>
+  send_part_buffer_t;
+
 struct send_sequence_state_t
 {
     send_sequence_state_t ();
@@ -74,7 +80,7 @@ struct send_sequence_state_t
     send_sequence_spec_t spec;
     zlink::socket_base_t *sink_socket;
     std::optional<zlink::socket_public_send_scope_t> send_scope;
-    zlink::socket_internal::inline_msg_buffer_t<4> buffered_parts;
+    send_part_buffer_t buffered_parts;
     std::thread::id owner_thread;
 };
 
@@ -171,6 +177,16 @@ int prepare_send_step (void *handle_,
                        zlink::socket_base_t *sink_socket_,
                        std::shared_ptr<handle_state_t> *state_out_,
                        bool *first_part_out_);
+// Returns 1 without creating a sequence when start_if_inactive_ is false and
+// no sequence is active. On success, lock_out_ keeps the state mutex held so a
+// caller can stage or collect the part in the same linearized state step.
+int prepare_send_step_locked (void *handle_,
+                              const send_sequence_spec_t &spec_,
+                              zlink::socket_base_t *sink_socket_,
+                              std::shared_ptr<handle_state_t> *state_out_,
+                              std::unique_lock<std::mutex> *lock_out_,
+                              bool *first_part_out_,
+                              bool start_if_inactive_);
 int prepare_recv_step (void *handle_,
                        recv_family_t family_,
                        zlink::socket_base_t *source_socket_,

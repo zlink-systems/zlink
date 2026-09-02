@@ -58,6 +58,96 @@ bool prepare_send_scope_for_rollback (
     // bit and roll the staged prefix back without re-entering public lifecycle.
     return state_->send_scope->lock_multipart_for_close_cleanup ();
 }
+
+int prepare_send_step_state_locked (
+  zlink::part_helper_internal::handle_state_t *state_,
+  const zlink::part_helper_internal::send_sequence_spec_t &spec_,
+  zlink::socket_base_t *sink_socket_, bool *first_part_out_,
+  bool start_if_inactive_)
+{
+    const std::thread::id current_thread = std::this_thread::get_id ();
+    if (state_->send.active && state_->send.owner_thread != current_thread) {
+        if (zlink::part_helper_internal::routed_part_debug_enabled ()) {
+            std::fprintf (stderr,
+                          "[routed-part-debug] prepare_send_step busy "
+                          "family=%d active_family=%d same_thread=0\n",
+                          static_cast<int> (spec_.family),
+                          static_cast<int> (state_->send.spec.family));
+        }
+        errno = EINVAL;
+        return -1;
+    }
+
+    try {
+        if (!state_->send.active) {
+            if (!start_if_inactive_)
+                return 1;
+
+            zlink::part_helper_internal::send_sequence_spec_t committed_spec =
+              spec_;
+            std::optional<zlink::socket_public_send_scope_t> send_scope;
+            if (!create_send_scope (sink_socket_, spec_, &send_scope))
+                return -1;
+
+            state_->send.spec = std::move (committed_spec);
+            state_->send.sink_socket = sink_socket_;
+            state_->send.send_scope.emplace (std::move (*send_scope));
+            state_->send.owner_thread = current_thread;
+            state_->send.active = true;
+            *first_part_out_ = true;
+        } else {
+            bool commit_upgraded_spec = false;
+            zlink::part_helper_internal::send_sequence_spec_t committed_spec;
+            if (!zlink::part_helper_internal::send_spec_equals (
+                  state_->send.spec, spec_)) {
+                zlink::part_helper_internal::send_sequence_spec_t upgraded =
+                  state_->send.spec;
+                upgraded.timeout_ms = spec_.timeout_ms;
+                upgraded.request_seq = spec_.request_seq;
+                upgraded.pending_cookie = spec_.pending_cookie;
+                const bool can_upgrade_staged_request =
+                  state_->send.spec.request_like && spec_.request_like
+                  && state_->send.spec.request_seq == 0 && spec_.request_seq != 0
+                  && zlink::part_helper_internal::send_spec_equals (upgraded,
+                                                                    spec_);
+                if (can_upgrade_staged_request) {
+                    committed_spec = spec_;
+                    commit_upgraded_spec = true;
+                } else {
+                    if (zlink::part_helper_internal::routed_part_debug_enabled ()) {
+                        std::fprintf (
+                          stderr,
+                          "[routed-part-debug] prepare_send_step spec "
+                          "mismatch family=%d active_family=%d\n",
+                          static_cast<int> (spec_.family),
+                          static_cast<int> (state_->send.spec.family));
+                    }
+                    errno = EINVAL;
+                    return -1;
+                }
+            }
+            if (!state_->send.send_scope
+                || !state_->send.send_scope->resume_multipart_call ()) {
+                if (!state_->send.send_scope)
+                    errno = EFAULT;
+                return -1;
+            }
+            if (commit_upgraded_spec) {
+                try {
+                    state_->send.spec = std::move (committed_spec);
+                } catch (...) {
+                    state_->send.send_scope->suspend_multipart_call ();
+                    throw;
+                }
+            }
+            *first_part_out_ = false;
+        }
+    } catch (const std::bad_alloc &) {
+        errno = ENOMEM;
+        return -1;
+    }
+    return 0;
+}
 }
 
 zlink::part_helper_internal::send_sequence_spec_t::send_sequence_spec_t () :
@@ -481,89 +571,43 @@ int zlink::part_helper_internal::prepare_send_step (void *handle_,
         return -1;
 
     std::lock_guard<std::mutex> lock (state->mutex);
-    const std::thread::id current_thread = std::this_thread::get_id ();
-    if (state->send.active && state->send.owner_thread != current_thread) {
-        if (routed_part_debug_enabled ()) {
-            std::fprintf (stderr,
-                          "[routed-part-debug] prepare_send_step busy "
-                          "family=%d active_family=%d same_thread=0\n",
-                          static_cast<int> (spec_.family),
-                          static_cast<int> (state->send.spec.family));
-        }
-        errno = EINVAL;
+    if (prepare_send_step_state_locked (state.get (), spec_, sink_socket_,
+                                        first_part_out_, true)
+        != 0)
         return -1;
-    }
-
-    try {
-        if (!state->send.active) {
-            // Copy every potentially allocating part of the sequence before
-            // publishing an active state.  A failed copy must leave an open
-            // publish sequence untouched (and a new sequence inactive).
-            send_sequence_spec_t committed_spec = spec_;
-            std::optional<zlink::socket_public_send_scope_t> send_scope;
-            if (!create_send_scope (sink_socket_, spec_, &send_scope))
-                return -1;
-
-            state->send.spec = std::move (committed_spec);
-            state->send.sink_socket = sink_socket_;
-            state->send.send_scope.emplace (std::move (*send_scope));
-            state->send.owner_thread = current_thread;
-            state->send.active = true;
-            *first_part_out_ = true;
-        } else {
-            bool commit_upgraded_spec = false;
-            send_sequence_spec_t committed_spec;
-            if (!send_spec_equals (state->send.spec, spec_)) {
-                send_sequence_spec_t upgraded = state->send.spec;
-                upgraded.timeout_ms = spec_.timeout_ms;
-                upgraded.request_seq = spec_.request_seq;
-                upgraded.pending_cookie = spec_.pending_cookie;
-                const bool can_upgrade_staged_request =
-                  state->send.spec.request_like && spec_.request_like
-                  && state->send.spec.request_seq == 0 && spec_.request_seq != 0
-                  && send_spec_equals (upgraded, spec_);
-                if (can_upgrade_staged_request) {
-                    // As above, do not mutate the active sequence until copying
-                    // the replacement specification and resuming this public
-                    // call have both succeeded.
-                    committed_spec = spec_;
-                    commit_upgraded_spec = true;
-                } else {
-                    if (routed_part_debug_enabled ()) {
-                        std::fprintf (stderr,
-                                      "[routed-part-debug] prepare_send_step spec "
-                                      "mismatch family=%d active_family=%d\n",
-                                      static_cast<int> (spec_.family),
-                                      static_cast<int> (state->send.spec.family));
-                    }
-                    errno = EINVAL;
-                    return -1;
-                }
-            }
-            // The multipart marker remains owned between calls, while each
-            // part call gets its own lifecycle token and short sync section.
-            if (!state->send.send_scope
-                || !state->send.send_scope->resume_multipart_call ()) {
-                if (!state->send.send_scope)
-                    errno = EFAULT;
-                return -1;
-            }
-            if (commit_upgraded_spec) {
-                try {
-                    state->send.spec = std::move (committed_spec);
-                } catch (...) {
-                    state->send.send_scope->suspend_multipart_call ();
-                    throw;
-                }
-            }
-            *first_part_out_ = false;
-        }
-    } catch (const std::bad_alloc &) {
-        errno = ENOMEM;
-        return -1;
-    }
 
     *state_out_ = state;
+    return 0;
+}
+
+int zlink::part_helper_internal::prepare_send_step_locked (
+  void *handle_, const send_sequence_spec_t &spec_,
+  zlink::socket_base_t *sink_socket_,
+  std::shared_ptr<handle_state_t> *state_out_,
+  std::unique_lock<std::mutex> *lock_out_, bool *first_part_out_,
+  bool start_if_inactive_)
+{
+    LIBZLINK_UNUSED (handle_);
+    if (!state_out_ || !lock_out_ || !first_part_out_ || !sink_socket_) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    std::shared_ptr<handle_state_t> state =
+      start_if_inactive_ ? find_or_create_socket_state (sink_socket_)
+                         : find_socket_state (sink_socket_);
+    if (!state)
+        return start_if_inactive_ ? -1 : 1;
+
+    std::unique_lock<std::mutex> lock (state->mutex);
+    const int rc = prepare_send_step_state_locked (
+      state.get (), spec_, sink_socket_, first_part_out_,
+      start_if_inactive_);
+    if (rc != 0)
+        return rc;
+
+    *state_out_ = state;
+    *lock_out_ = std::move (lock);
     return 0;
 }
 
