@@ -539,3 +539,16 @@ Phase 12.2 cross-language E2E 실행(-v 없이, driver 직접) 결과: **.NET su
 공통=**.NET SUBSCRIBER(pub/sub·fanout) 수신만 실패**. dotnet channel(req/reply)·CoreCLR 정상, cross-manifest dotnet-framework=source-tree(현재 전환 framework). → **dotnet 전환(7e655e3703)의 SUB pull-receive drain 회귀**. unit(57/57)·ClientServer(35/35)은 cross-language SUB 미커버 → cross-language 게이트가 검출(게이트 가치 실증).
 **주의(감독관 착오 정정)**: 1차 실행 실패는 내 driver의 ulimit -v(dotnet CoreCLR OOM 0x8007000E/137) 아티팩트였음 → -v 제거 후 재실행해서 진짜 회귀 분리. cross-language는 dotnet CoreCLR 띄우므로 **-v 절대 금지**([[zlink-env-test-quirks]] 재확인).
 **대응**: dotnet SUB-receive 진단+수정 subagent(sonnet, framework/languages/dotnet만, Core면 보고). 수정 후 cross-language 재실행 확인→커밋(7e655e3703 후속). Phase 11 dotnet 커밋은 이 회귀 포함 상태였으므로 follow-up 수정 필요.
+
+## D-074 (2026-09-04 03:5x) dotnet PUB/SUB 수신 회귀 수정(codex sol ultra) + binding 근본원인 follow-up
+codex sol ultra(재로그인 후 codex 복구, hep7@naver.com). 근본원인 확정: **dotnet binding 버그** — `bindings/dotnet/src/
+Zlink/Runtime/Eventing/Poller.cs:39-42`가 PollCompletion 요청 여부와 무관하게 `SocketKernel.Completion` 조회, `SocketKernel.cs:
+28-38`은 SUB에 NotSupportedException(PAIR/DEALER/ROUTER/STREAM만 completion 지원) → `poller.Add(SUB,PollIn)`가 등록 전 예외 →
+subscriber 루프가 Wait/Subscribe/dispatch 미도달(READY이나 silent). Phase11 `7e655e3703`은 SUB코드 무변경, binding 0.15.2→
+0.16.0 bump만 했고 새 binding의 이 거동이 회귀 유발. category (a) 확정, (b)(c)(d) 배제.
+**수정(framework-scoped, 커밋 후속)**: `ZLinkBackendSocketPoller.Create`가 ISubSocket을 분기해 completion 미조회 `ZlinkPoll.Poll`
+read-only adapter 사용, Router/Dealer/Stream IPoller 유지. 1파일, 임시로그 제거(rg 0). 검증: cpp publisher→.NET·node publisher→
+.NET 수신, **C++ 전체 32-stage cross-language smoke 통과**, fanout+ClientServer 37/37. 감독관 diff 재검증 완료.
+**FOLLOW-UP(정식 근본 수정)**: `bindings/dotnet Poller.Add`가 PollCompletion 요청 시에만 Kernel.Completion 조회하도록 binding
+수정(그러면 framework 워크어라운드 불필요, 타 언어 binding도 동일 잠재버그 점검). binding 레이어(Phase 6)라 별도 pass/B 조율.
+**주의**: cpp/java 샘플 authenticate 회귀는 DEALER/ROUTER(completion 지원)라 이 SUB-poller 이슈와 **별개** — 다음 진단 대상.
