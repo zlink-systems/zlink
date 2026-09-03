@@ -440,15 +440,35 @@ inline bool run_measurement_window (const endpoint_config_t &config,
             return false;
     }
 
-    if (state->fatal)
+    if (state->fatal) {
+        std::cerr << "[perf-multi-socket-reqrep] fatal during window size=" << msg_size
+                  << " errno=" << errno << std::endl;
         return false;
-    if (!drain_pending_replies (state, request_timeout_ms))
+    }
+    if (!drain_pending_replies (state, request_timeout_ms)) {
+        size_t waiting_slots = 0;
+        unsigned long long waiting_requests = 0;
+        for (size_t i = 0; i < state->slots.size (); ++i) {
+            if (state->slots[i].outstanding > 0) {
+                ++waiting_slots;
+                waiting_requests += state->slots[i].outstanding;
+            }
+        }
+        std::cerr << "[perf-multi-socket-reqrep] drain timeout size=" << msg_size
+                  << " waiting_slots=" << waiting_slots << "/" << state->slots.size ()
+                  << " waiting_requests=" << waiting_requests
+                  << " request_timeout_ms=" << request_timeout_ms
+                  << " replies=" << state->active_reply_count << std::endl;
         return false;
+    }
 
     *reply_count_out = state->active_reply_count;
     *latency_out = capture_latency ? state->latency.snapshot () : bench_latency_stats_t ();
-    if (capture_latency && state->latency.count () == 0)
+    if (capture_latency && state->latency.count () == 0) {
+        std::cerr << "[perf-multi-socket-reqrep] no latency samples size=" << msg_size
+                  << " replies=" << state->active_reply_count << std::endl;
         return false;
+    }
     return true;
 }
 

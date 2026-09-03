@@ -149,7 +149,8 @@ void zlink::router_t::xread_activated (pipe_t *pipe_)
     if (pipe_ && pipe_->get_transport_pair_id () != 0
         && pipe_->get_transport_lane () == transport_lane_application
         && pipe_->get_transport_lane_count () == 1u
-        && pipe_->transport_pair_application_ready_cached ()) {
+        && pipe_->transport_pair_application_ready_cached ()
+        && pipe_->router_route_binding_token () != 0) {
         // Pair admission already adopted and registered this exact pipe.
         // Reclassification only changes its FQ partition; route identity and
         // generation tables cannot have changed while the ready cache holds.
@@ -207,7 +208,8 @@ void zlink::router_t::xread_deactivated (pipe_t *pipe_)
     if (pipe_ && pipe_->get_transport_pair_id () != 0
         && pipe_->get_transport_lane () == transport_lane_application
         && pipe_->get_transport_lane_count () == 1u
-        && pipe_->transport_pair_application_ready_cached ()) {
+        && pipe_->transport_pair_application_ready_cached ()
+        && pipe_->router_route_binding_token () != 0) {
         _fq.deactivate (pipe_);
         return;
     }

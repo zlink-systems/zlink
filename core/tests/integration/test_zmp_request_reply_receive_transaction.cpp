@@ -484,6 +484,67 @@ void test_router_record_fences_mailbox_read_activation ()
       ctx->wait_for_socket_count_at_most (0, 5000));
 }
 
+void test_count1_router_adopts_anonymous_pipe_on_first_activation ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_NOT_NULL (router);
+    socket_handle_t handle = as_socket_handle (router);
+
+    zlink::object_t *parents[2] = {handle.socket, handle.socket};
+    zlink::pipe_t *pipes[2] = {NULL, NULL};
+    const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
+    const bool conflates[2] = {false, false};
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflates, true));
+
+    passive_pipe_sink_t peer_sink;
+    pipes[1]->set_event_sink (&peer_sink);
+    pipes[0]->set_transport_pair (zlink::transport_lane_application, 701, 1);
+    pipes[1]->set_transport_pair (zlink::transport_lane_application, 701, 1);
+    pipes[0]->set_transport_lane_count (1);
+    pipes[1]->set_transport_lane_count (1);
+    pipes[0]->set_peer_socket_type (ZLINK_CORE_SOCKET_DEALER);
+    pipes[1]->set_peer_socket_type (ZLINK_CORE_SOCKET_ROUTER);
+
+    // Pair admission makes the count-1 Application lane ready before the
+    // session has published its routing-id frame. The initial ROUTER attach
+    // must therefore retain the pipe as anonymous, not register it in FQ.
+    zlink::session_termination_test_access_t::attach_socket_pipe (
+      handle.socket, pipes[0]);
+    TEST_ASSERT_TRUE (pipes[0]->transport_pair_application_ready_cached ());
+    TEST_ASSERT_FALSE (pipes[0]->public_receive_active_cached ());
+    TEST_ASSERT_EQUAL_UINT64 (0, pipes[0]->router_route_binding_token ());
+
+    // Publishing the routing id sends the sole activate_read edge. That edge
+    // must take the anonymous adoption path even though the count-1 ready cache
+    // is already true; otherwise FQ activation is a no-op and the request stays
+    // unread forever.
+    write_internal_router_identity (pipes[1], "late-identity-peer");
+    write_internal_request_record (pipes[1], 303, "late-identity");
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::session_termination_test_access_t::process_socket_commands (
+        handle.socket));
+    TEST_ASSERT_TRUE (pipes[0]->router_route_binding_token () != 0);
+    TEST_ASSERT_TRUE (pipes[0]->public_receive_active_cached ());
+
+    receive_result_t received;
+    receive_router_record (handle, &received);
+    assert_two_part_record (received, "late-identity");
+    TEST_ASSERT_TRUE (received.sequence != 0);
+
+    pipes[0]->terminate (false);
+    pipes[1]->terminate (false);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::session_termination_test_access_t::process_socket_commands (
+        handle.socket));
+    handle = socket_handle_t ();
+    test_context_socket_close_zero_linger (router);
+    zlink::ctx_t *ctx =
+      static_cast<zlink::ctx_t *> (get_test_context ());
+    TEST_ASSERT_SUCCESS_ERRNO (
+      ctx->wait_for_socket_count_at_most (0, 5000));
+}
+
 void test_blocking_command_wait_ignores_stale_shared_poller_signal ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
@@ -1040,6 +1101,7 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (test_router_holds_whole_record_receive_transaction);
     RUN_TEST (test_router_record_fences_mailbox_read_activation);
+    RUN_TEST (test_count1_router_adopts_anonymous_pipe_on_first_activation);
     RUN_TEST (test_blocking_command_wait_ignores_stale_shared_poller_signal);
     RUN_TEST (test_command_wait_preserves_signal_only_edges);
     RUN_TEST (test_blocking_process_commands_returns_on_signal_only_edge);
