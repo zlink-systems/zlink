@@ -435,3 +435,27 @@ ECONNREFUSED 구분 불가로 m6a/m6b 단일 분류 공유, m6b assertion을 m6a
 submit_error catch에 not_found→route_unavailable 추가)는 blast radius(다른 not_found 경로)로 신중 — 별도 판단.
 **잔여 진단 미완(서브에이전트 background 핸드오프로 중단)**: (2)dotnet handover err101(Core vs framework 미판별),
 (3)STREAM-001(D-004 stale 여부 미확인). codex 한도아웃 지속.
+
+## D-067 (2026-09-03 23:5x) STREAM-001 판정 + Phase11 잔여 정리
+**STREAM-001**(test_cpp_framework_target_contract.cpp:2330-2353): source-scanning contract(코드 문자열 패턴 grep —
+stream_send_call_t timeout·_submit(header,payload,_timeout)·pending.emplace(...timeout.async())·co_await·async_submit_runtime
+부재 등). Phase11 pull 전환으로 stream submit/await 패턴이 바뀌어 grep 기대 어긋남 → **D-004 계열 in-scope Phase11 test-side
+갱신**(production 버그 아님). 계약 패턴을 pull-model 코드에 맞춰 갱신 필요(node test 전환과 동류, 소량).
+
+### Phase 11 잔여 최종 분류 (커밋 가부)
+| 항목 | 판정 | blocker? |
+|---|---|---|
+| cpp M6A line176 | pre-existing known-broken(baseline 재현, core 0.11.1) | NO |
+| cpp M6B line1343 | pre-existing latent 분류gap(alias fix가 노출), followup | NO |
+| cpp M6C | **alias fix로 PASS** | 해소 |
+| cpp STREAM-001 | in-scope test-side 계약 패턴 갱신(D-004) | 소량 작업 |
+| cpp E2E inventory 278 | known-broken 목록 | NO |
+| dotnet liveness | **guard fix로 PASS** | 해소 |
+| dotnet ClientServer/focused | 35/35·57/57 | 해소 |
+| dotnet handover err101 | 별개 버그, Core vs framework 미판별(canonical actor-join OPEN RULING 연관) | 진단 필요 |
+| dotnet ContractTests drift(4) | pre-existing(Actors owner·StreamDiagnostics) | NO |
+| dotnet ConfigureCoreHwm E2E | known-broken | NO |
+| node full | 1552/1556(B-defect fix), 2 chromium 환경 | NO(환경) |
+| java | 1205/1207(2 known monitor-gap) | NO |
+**남은 실작업**: STREAM-001 계약 갱신(소량), handover 진단(Core/framework 판별). 나머지는 documented followup/known-broken.
+이후 언어별 framework 전환 커밋(185파일)→Phase12·13. codex Sep7까지 아웃.
