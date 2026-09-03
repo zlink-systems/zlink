@@ -60,6 +60,14 @@ operation별 admission 결과는 part send의 completion ID와 `zlink_completion
 readiness bit가 아니다. `ZLINK_HAVE_POLLER == 1`은 이 public poller API가 build에
 포함되었음을 뜻한다.
 
+Readiness는 level-trigger이므로 wake도 level에 따른다. 등록한 source의 readiness가 거짓에서
+참으로 바뀌면, 그 source로 `zlink_poller_wait()` 또는 `zlink_poll()`에서 대기 중인 caller는
+timeout이 남아 있어도 그 시점에 깨어난다. 그 전이를 만든 command를 caller 대신 Core 내부
+thread(I/O thread, async command owner, 임시 transport owner)가 처리했더라도 이 보장은 같다.
+Readiness가 참인데 caller가 timeout까지 잠드는 것(lost wake)은 계약 위반이며, 구현은 내부
+owner가 detach하거나 command를 소비한 뒤 public poller의 notification descriptor를 다시 무장해
+이를 지킨다.
+
 ## 4. Completion polling
 
 `ZLINK_POLLCOMPLETION`은 PAIR·DEALER·ROUTER·STREAM의 socket-local completion queue에

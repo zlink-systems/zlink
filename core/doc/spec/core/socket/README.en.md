@@ -165,7 +165,11 @@ observes another peer with the same routing id. The option value is an
 new duplicate pipe. Under `ZLINK_RID_DUPLICATE_HANDOVER`, a reconnecting pipe
 in the same direction takes over the existing pipe. If pipes in opposite
 directions collide, both peers compare their routing IDs and choose the same
-single direction.
+single direction. A request already admitted on the direction that loses that
+choice does not carry over to the chosen direction: its reply is stopped by the
+fence bound to the exact transport pair of the submit, the request never
+completes through it, and the request ends exactly once through its own
+timeout. The caller resubmits after the handover.
 
 This option is meaningful only for sockets that can observe a peer-advertised
 routing id. STREAM assigns its own 4-byte connection routing ids, so this

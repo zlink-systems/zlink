@@ -66,6 +66,15 @@ operation-specific admission results.
 application stack buffers; it is not a readiness bit. `ZLINK_HAVE_POLLER == 1`
 means that this public poller API is included in the build.
 
+Readiness is level-triggered, and so is the wake-up. When the readiness of a registered source
+changes from false to true, a caller waiting on that source in `zlink_poller_wait()` or
+`zlink_poll()` wakes at that point even if timeout remains. The guarantee is the same when the
+command that produced the transition was processed by a Core-internal thread (an I/O thread, the
+async command owner, a temporary transport owner) instead of the caller. A caller that sleeps
+until its timeout while readiness is true (a lost wake) is a contract violation; the
+implementation keeps the guarantee by re-arming the public poller's notification descriptor
+whenever an internal owner detaches or consumes commands on the socket's behalf.
+
 ## 4. Completion polling
 
 `ZLINK_POLLCOMPLETION` is level-triggered readiness indicating that a PAIR,

@@ -159,7 +159,10 @@ routing id가 들어왔을 때의 정책을 정한다. 값은 `int`로 설정하
 `ZLINK_RID_DUPLICATE_REJECT`는 기존 pipe를 유지하고 새 중복 pipe를 등록하지
 않는다. `ZLINK_RID_DUPLICATE_HANDOVER`에서는 같은 방향에서 다시 연결한 pipe가
 기존 pipe를 인수한다. 서로 반대 방향의 pipe가 충돌하면 두 peer의 routing id를
-비교해 양쪽이 같은 방향 하나를 선택한다.
+비교해 양쪽이 같은 방향 하나를 선택한다. 그 선택으로 물러나는 방향에서 이미 admit된
+request는 선택된 방향으로 이어지지 않는다. 그 request의 reply는 submit 시점의 exact
+transport pair에 묶인 fence에 걸려 request를 완료하지 못하고, request는 자기 timeout으로
+정확히 한 번 종결된다. Caller는 handover 뒤 다시 보낸다.
 
 이 옵션은 peer가 광고한 routing id를 관찰할 수 있는 socket에서만 의미가
 있다. STREAM은 server가 연결별 4-byte routing id를 직접 만들기 때문에
