@@ -72,6 +72,8 @@ D-021~D-047이며, 이 절은 그 요약이다.
 
 ### 0.3a 두 머신 분담 (2026-09-03 사용자 결정)
 
+머신 B의 실행 계획은 [`core-send-dontwait-completion-0.16.0-plan-b.ko.md`](core-send-dontwait-completion-0.16.0-plan-b.ko.md)가 소유한다.
+
 Core 2차 job은 원래 머신(A, `ulalax-home`)에서 재개해 완료한다(D-048). 그 뒤 두 머신이 나눠 진행하고
 Phase 11 전에 합류한다. 모든 B 작업은 branch에서 하고 PR로 main에 합친다.
 
