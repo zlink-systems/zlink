@@ -23,6 +23,7 @@ GATE_SCRIPT="${CANDIDATE_ROOT}/bindings/c/perf/perf_regression_gate.py"
 ONLY=""
 CELLS=""
 MSG_SIZES="64,256,1024,65536"
+RUNS="${SWEEP2_RUNS:-1}"
 RETRY_FAILED=0
 CELL_FILTER_MATCHED=0
 
@@ -236,7 +237,7 @@ run_runner() {
       --pattern "$pattern" \
       --transports "$transport" \
       --msg-sizes "$MSG_SIZES" \
-      --runs 1 \
+      --runs "$RUNS" \
       --results-tag "$tag" \
       --results-dir "$report_root"
   ) 2>&1 | tee -a "$LOG_FILE" | tee "$output"
