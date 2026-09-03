@@ -403,3 +403,21 @@ ReceiveLoop 완료). dotnet 에이전트(sonnet)가 찾은 실제 버그 = Conne
 ClientServer 35/35. 1파일(ZLinkClientServerClientRuntime.cs).
 **다음**: 4언어 패키지 재빌드(새 lib sha256 gate, 이전 43ddbc2f→변경) → cpp M6B/M6C(M6B는 line1343 이월 예상)·dotnet
 handover(alias fix로 해소 기대)·node 재검증. node B-defect fix(sonnet): Detailed 추가+setDiagnosticsLevelAsync interface 제거.
+
+## D-065 (2026-09-03 23:0x) 패키지 재빌드+재검증 결과 (alias fix e3d5c5b79f 효과 확인)
+rebuild+reverify(sonnet). **sha256 gate PASS**: 새 lib `63336fb50769e8ad693c511413d91aba66eae7a1b8fbd5beaa6cfc0f9e2080fa`
+(이전 43ddbc2f)가 9개 소비처(core/build·install prefix·nuget/maven/npm 패키지·bindings native·node prebuilds·
+node_modules·NUGET 캐시) 전부 동일, lib-copy 트랩 없음. core ctest 135/135.
+**alias fix 효과**:
+- cpp: **M6C now PASS**(이전 FAIL). **M6B는 line390→line1343 전진**(verify_remote_bound_session_bind_classifies_
+  retryable_outcomes, deadline_exceeded — 예측된 이월 signature). M6A(line176 complete_bound_session_bind) 여전히 FAIL.
+  framework-contract 8/10(STREAM-001·E2E inventory 278, pre-existing).
+- dotnet: **liveness now PASS**(guard fix 효과), ClientServer 35/35, focused 57/57. **handover(err101) 여전히 FAIL**
+  → alias fix로 미해소, 별개 버그 확정(D-061 재판정 대상).
+- java: 1207, 2 fail=known M6A monitor-gap(회귀 없음, baseline 유지).
+- node: full suite background 실행 중(B-defect fix 반영, 결과 대기).
+**autostash 발견(무관)**: stash@{0}=autostash **2026-09-01 15:47 생성**(세션 2일 전 pre-existing orphan, 사용자 09-01
+작업). 41파일(Bingo 샘플·dist-tools·contract test), 일부 이미 커밋(stash==HEAD) 일부 2일치 old dirty. **내 세션 무관·
+건드리지 않음**(drop/apply 금지). 내 세션 작업(dotnet guard·node fix·core alias·185 framework)은 전건 무결 확인.
+**잔여 Phase11 blocker 3**: (1)M6A line176 — known-broken vs 회귀 판정 필요(메모리 대조), (2)M6B line1343 deadline_exceeded
+진단, (3)dotnet handover err101 별개 버그 진단. codex 한도아웃 → Claude 서브에이전트/직접 판정.
