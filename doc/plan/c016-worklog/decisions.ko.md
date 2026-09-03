@@ -531,3 +531,11 @@ reply는 "그 RID의 현재 ready pipe"(=새 connection)로 가면 된다.
 PendingNativeTerminalReply)를 우회. 실제 framework엔 재drive 메커니즘 존재. → **framework/test followup**(Core 아님).
 **귀결**: **이번 캠페인 Core 버그 2건(mesh a339149dbb·alias e3d5c5b79f) 모두 수정·push 완료로 확정**. handover는 Core 무관.
 [[canonical-actor-join-app-reply-contract]] OPEN RULING(reply-token binding)= **logical RID로 종결**.
+
+## D-073 (2026-09-04 02:4x) cross-language E2E가 dotnet PUB/SUB subscribe 수신 회귀 검출 (R)
+Phase 12.2 cross-language E2E 실행(-v 없이, driver 직접) 결과: **.NET subscriber가 PUB/SUB 이벤트 미수신(deterministic R)**.
+- cpp smoke: C++ publisher→.NET channel-subscriber, .NET READY하나 미수신(runDir dotnet-subscriber.events 빈파일, cpp-publisher는 발행). "timed out waiting for 'profile.changed:cpp-publish'".
+- node smoke: Node publisher→.NET fanout subscriber, publishUntilFileText 반복발행에도 미수신 "expected event text did not appear".
+공통=**.NET SUBSCRIBER(pub/sub·fanout) 수신만 실패**. dotnet channel(req/reply)·CoreCLR 정상, cross-manifest dotnet-framework=source-tree(현재 전환 framework). → **dotnet 전환(7e655e3703)의 SUB pull-receive drain 회귀**. unit(57/57)·ClientServer(35/35)은 cross-language SUB 미커버 → cross-language 게이트가 검출(게이트 가치 실증).
+**주의(감독관 착오 정정)**: 1차 실행 실패는 내 driver의 ulimit -v(dotnet CoreCLR OOM 0x8007000E/137) 아티팩트였음 → -v 제거 후 재실행해서 진짜 회귀 분리. cross-language는 dotnet CoreCLR 띄우므로 **-v 절대 금지**([[zlink-env-test-quirks]] 재확인).
+**대응**: dotnet SUB-receive 진단+수정 subagent(sonnet, framework/languages/dotnet만, Core면 보고). 수정 후 cross-language 재실행 확인→커밋(7e655e3703 후속). Phase 11 dotnet 커밋은 이 회귀 포함 상태였으므로 follow-up 수정 필요.
