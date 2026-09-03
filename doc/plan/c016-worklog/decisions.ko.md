@@ -479,3 +479,18 @@ in-flight request를 handover 시 새 connection으로 마이그레이션 → **
 결함 아니라 canonical actor-join의 request-across-handover 설계 미결(OPEN RULING)**. 이 설계 방향(captured reply route가
 물리 handover를 건너 원본 요청자에게 배달돼야 하는가)은 사용자 스펙-권한 영역 → **documented followup, 사용자 설계 판정
 대기**. [[canonical-actor-join-app-reply-contract]]·activationRecoveryState OPEN RULING과 동일 계열. Phase11 blocker 아님.
+
+## D-069 (2026-09-04 00:3x) Phase 11 완료·push (framework 4언어 전환)
+STREAM-001 gate 갱신(sonnet, target_contract 통과) 후 4언어 framework 전환 커밋·push:
+- cpp `b32d4cae64`(42파일): backend/runtime pull 전환, e2e/CMake/STREAM-001 gate. mesh vertical·M6C·contract green.
+- dotnet `7e655e3703`(30파일): runtime pull 전환 + liveness admission-Hello 중복 가드(_currentAdmission). liveness 20/20·
+  ClientServer 35/35·focused 57/57.
+- java `e65abaf7ac`(68파일): runtime pull 전환 + e2e/gradle. 1205/1207(2 known monitor-gap).
+- node `360181172f`(46파일): runtime pull 전환 + test double 전환 + stream-connector 스펙 정렬(Detailed 추가·async 제거) +
+  0.16.0 소비. 1552/1556(2 chromium 환경).
+제외(Phase11 아님): bindings/ 21(세션 전 pre-existing + native sync 산출물), scripts/ 3, node_modules/.artifacts.
+**Phase 11 documented followups**(baseline/known, 회귀 아님): M6A(pre-existing SIGABRT), M6B line1343(pre-existing 분류gap,
+alias fix가 노출), dotnet handover err101(canonical actor-join OPEN RULING=spec-design gap, D-068), chromium SIGTRAP(환경),
+E2E inventory 278(known-broken), java monitor-edge gap(binding followup). autostash(09-01)는 무관·보존.
+**남은 phase(A머신)**: Phase 12(framework unit/E2E/cross-language — unit은 reverify서 검증됨), Phase 13(7 samples pull),
+Phase 9 tag(B의 sweep2 PASS+posddd merge 대기), Phase 10 package. codex Sep7까지 아웃.
