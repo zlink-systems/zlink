@@ -16,7 +16,7 @@ namespace
 bool recv_ping (void *server_, zlink_routing_id_t *client_rid_out_)
 {
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_reply_token_t reply_token = 0;
+    uint64_t reply_token = 0;
     zlink_msg_t part;
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
     if (zlink_msg_init (&part) != 0)
@@ -83,7 +83,7 @@ bool perform_handshake (void *server_,
     }
 
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_reply_token_t reply_token = 0;
+    uint64_t reply_token = 0;
     zlink_msg_t part;
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
     if (zlink_msg_init (&part) != 0)
@@ -212,12 +212,21 @@ void run_router_router_reqrep (const std::string &transport,
     latency_stats_t latency;
     const bool ok = perf_single_reqrep::run_requester (
       requester.get (), &request_state, &payload, duration_s,
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
+      [&] (zlink_msg_t *part_, uint32_t timeout_ms_, zlink_reply_handler_fn handler_,
+           void *userdata_) {
+          return perf_zlink_router_request_measurement_part (
+            requester.get (), &server_rid, part_, ZLINK_SEND_FLAGS_NONE,
+            timeout_ms_, handler_, userdata_);
+      },
+#else
       [&] (zlink_msg_t *part_, uint32_t timeout_ms_, void *user_context_,
            zlink_completion_id_t *completion_id_out_) {
           return perf_zlink_router_request_measurement_part (
             requester.get (), &server_rid, part_, ZLINK_SEND_FLAGS_NONE,
             timeout_ms_, user_context_, completion_id_out_);
       },
+#endif
       &completion_poller, &completed, &latency);
 
     const bool stop_ok =

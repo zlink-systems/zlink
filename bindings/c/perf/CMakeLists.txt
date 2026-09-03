@@ -13,6 +13,13 @@ get_filename_component(ZLINK_REPO_ROOT_DIR "${ZLINK_C_BINDINGS_DIR}/../.." ABSOL
 
 set(PERF_BINDINGS_C_INCLUDE_DIR "${ZLINK_C_BINDINGS_DIR}/include")
 
+include(CheckCXXSourceCompiles)
+set(CMAKE_REQUIRED_INCLUDES "${PERF_BINDINGS_C_INCLUDE_DIR}")
+check_cxx_source_compiles(
+    "#include <zlink.h>\nint main() { zlink_completion_t completion; (void) completion; return 0; }"
+    PERF_ZLINK_HAS_COMPLETION_RECORD_API)
+unset(CMAKE_REQUIRED_INCLUDES)
+
 set(PERF_EXTERNAL_INCLUDE_DIR "${ZLINK_REPO_ROOT_DIR}/core/external")
 if(NOT EXISTS "${PERF_EXTERNAL_INCLUDE_DIR}")
     set(PERF_EXTERNAL_INCLUDE_DIR "${ZLINK_REPO_ROOT_DIR}/external")
@@ -46,6 +53,9 @@ function(add_current_bench_single name source)
         ${PERF_EXTERNAL_INCLUDE_DIR})
     target_compile_options(${name} PRIVATE ${PERF_CXX_FLAGS})
     target_compile_features(${name} PRIVATE cxx_std_11)
+    if(NOT PERF_ZLINK_HAS_COMPLETION_RECORD_API)
+        target_compile_definitions(${name} PRIVATE PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API=1)
+    endif()
     configure_current_bench_runtime(${name})
 endfunction()
 
@@ -77,6 +87,9 @@ function(add_current_bench_multi name source)
         ${PERF_BENCH_MULTI_COMMON_DIR})
     target_compile_options(${name} PRIVATE ${PERF_CXX_FLAGS})
     target_compile_features(${name} PRIVATE cxx_std_11)
+    if(NOT PERF_ZLINK_HAS_COMPLETION_RECORD_API)
+        target_compile_definitions(${name} PRIVATE PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API=1)
+    endif()
     configure_current_bench_runtime(${name})
 endfunction()
 

@@ -126,9 +126,10 @@ def emit_result_lines(combo_results: Dict[Tuple[str, str, int], ComboRecord]) ->
         ]
 
         for metric_name, value in metrics:
+            precision = 6 if metric_name.startswith("latency") else 3
             print(
                 f"RESULT,current,{pattern},{transport},{size},"
-                f"{metric_name},{value:.3f}"
+                f"{metric_name},{value:.{precision}f}"
             )
 
 

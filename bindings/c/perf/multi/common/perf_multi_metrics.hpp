@@ -228,12 +228,12 @@ inline void print_result (const std::string &lib_type,
               << ",bandwidth," << std::fixed << std::setprecision (3) << bandwidth_mb_s
               << std::endl;
     std::cout << "RESULT," << lib_type << "," << pattern << "," << transport << "," << size
-              << ",latency," << std::fixed << std::setprecision (3) << latency_ms << std::endl;
+              << ",latency," << std::fixed << std::setprecision (6) << latency_ms << std::endl;
     std::cout << "RESULT," << lib_type << "," << pattern << "," << transport << "," << size
-              << ",latency_p95," << std::fixed << std::setprecision (3) << latency_p95_ms
+              << ",latency_p95," << std::fixed << std::setprecision (6) << latency_p95_ms
               << std::endl;
     std::cout << "RESULT," << lib_type << "," << pattern << "," << transport << "," << size
-              << ",latency_p99," << std::fixed << std::setprecision (3) << latency_p99_ms
+              << ",latency_p99," << std::fixed << std::setprecision (6) << latency_p99_ms
               << std::endl;
 }
 
