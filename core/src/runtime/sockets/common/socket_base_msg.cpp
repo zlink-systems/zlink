@@ -352,6 +352,24 @@ bool zlink::socket_base_t::begin_public_send_scope (
     return true;
 }
 
+bool zlink::socket_base_t::begin_complete_send_scope (
+  bool force_sync_, std::optional<socket_public_send_scope_t> *scope_out_)
+{
+    if (!scope_out_) {
+        errno = EFAULT;
+        return false;
+    }
+
+    LIBZLINK_UNUSED (force_sync_);
+    scope_out_->emplace (lifecycle_coordinator (), true,
+                         socket_send_admission_complete);
+    if (!(*scope_out_)->acquired ()) {
+        scope_out_->reset ();
+        return false;
+    }
+    return true;
+}
+
 std::unique_ptr<zlink::socket_public_send_scope_t>
 zlink::socket_base_t::begin_complete_send_scope (bool force_sync_)
 {
@@ -408,7 +426,10 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                                   routed_send_attempt_identity_t
                                                     *attempt_identity_out_,
                                                   uint64_t
-                                                    expected_route_incarnation_id_)
+                                                    expected_route_incarnation_id_,
+                                                  bool
+                                                    manage_public_send_recovery_,
+                                                  bool request_only_)
 {
     zlink_assert (send_scope.acquired ());
     if (connection_id_out_)
@@ -432,7 +453,8 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
         // xsend has already rolled back the staged prefix. Never retry only
         // the failed continuation. Preserve its cause (for example EMSGSIZE,
         // EAGAIN or EHOSTUNREACH) for the public result mapper.
-        dispatch_runtime ().clear_send_recovery_pending ();
+        if (manage_public_send_recovery_)
+            dispatch_runtime ().clear_send_recovery_pending ();
         if (report_multipart_abort_ || (flags_ & ZLINK_DONTWAIT)
             || options.sndtimeo == 0)
             return -1;
@@ -457,7 +479,8 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
     if (!commands_already_processed_) {
         rc = process_commands (0, true);
         if (unlikely (rc != 0)) {
-            dispatch_runtime ().clear_send_recovery_pending ();
+            if (manage_public_send_recovery_)
+                dispatch_runtime ().clear_send_recovery_pending ();
             return -1;
         }
     }
@@ -483,7 +506,8 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                expected_transport_pair_generation_,
                                &first_admission, observer_, observer_userdata_,
                                attempt_identity_out_,
-                               expected_route_incarnation_id_)
+                               expected_route_incarnation_id_,
+                               request_only_)
                : xsend_pipe (msg_, pipe_out_, &first_admission, observer_,
                              observer_userdata_);
     if (record_context_admission_ && rc != 0
@@ -491,7 +515,11 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
         _auto_hwm_send_blocked_attempts.fetch_add (
           1, std::memory_order_relaxed);
     if (rc == 0) {
-        dispatch_runtime ().clear_send_recovery_pending ();
+        if (manage_public_send_recovery_) {
+            send_pending_runtime ().completion_capacity_blocked.store (
+              false, std::memory_order_release);
+            dispatch_runtime ().clear_send_recovery_pending ();
+        }
         return 0;
     }
     if (unlikely (rc == -2))
@@ -503,7 +531,16 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
         // and prevent it from making the progress that releases the capacity.
         // Publish the normal recovery edge, but return backpressure immediately
         // regardless of the ordinary send flags.
-        arm_send_recovery_after_backpressure ();
+        // Correlation capacity is independent of pipe writability.  Do not
+        // reconcile this edge with transport_has_out(): a writable pipe can
+        // still be request-full and would otherwise publish false POLLOUT.
+        if (manage_public_send_recovery_) {
+            const bool was_pending =
+              dispatch_runtime ().send_recovery_pending ();
+            dispatch_runtime ().mark_send_recovery_pending ();
+            if (!was_pending)
+                static_cast<mailbox_t *> (_mailbox)->signal ();
+        }
         errno = EAGAIN;
         return -1;
     }
@@ -550,14 +587,17 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
         // endpoint waits for that attach just as it waits for HWM credit.
         errno = EAGAIN;
     }
-    if (unlikely (errno != EAGAIN) && submit_retry_enabled (options, flags_)
+    if (manage_public_send_recovery_ && unlikely (errno != EAGAIN)
+        && submit_retry_enabled (options, flags_)
         && is_submit_retry_errno (errno) && xsubmit_retry_allowed (target_rid_, errno)) {
         const uint64_t end = _clock.now_ms () + effective_submit_retry_timeout (options);
         int attempts_left = options.submit_retry_attempts;
         int last_errno = errno;
-        dispatch_runtime ().mark_send_recovery_pending ();
-        if (transport_has_out ())
-            dispatch_runtime ().mark_send_recovery_ready ();
+        if (manage_public_send_recovery_) {
+            dispatch_runtime ().mark_send_recovery_pending ();
+            if (transport_has_out ())
+                dispatch_runtime ().mark_send_recovery_ready ();
+        }
         while (attempts_left > 0) {
             const uint64_t now = _clock.now_ms ();
             if (now >= end)
@@ -576,7 +616,8 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                 rc = process_commands (
                   static_cast<int> (attempt_at - before_wait), false);
                 if (unlikely (rc != 0)) {
-                    dispatch_runtime ().clear_send_recovery_pending ();
+                    if (manage_public_send_recovery_)
+                        dispatch_runtime ().clear_send_recovery_pending ();
                     return -1;
                 }
             } while (_clock.now_ms () < attempt_at);
@@ -601,13 +642,18 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                        expected_transport_pair_generation_, NULL,
                                        observer_, observer_userdata_,
                                        attempt_identity_out_,
-                                       expected_route_incarnation_id_)
+                                       expected_route_incarnation_id_,
+                                       request_only_)
                        : xsend_pipe (msg_, pipe_out_, NULL, observer_,
                                      observer_userdata_);
             if (unlikely (rc == -2))
                 return finish_multipart_abort ();
             if (rc == 0) {
-                dispatch_runtime ().clear_send_recovery_pending ();
+                if (manage_public_send_recovery_) {
+                    send_pending_runtime ().completion_capacity_blocked.store (
+                      false, std::memory_order_release);
+                    dispatch_runtime ().clear_send_recovery_pending ();
+                }
                 return 0;
             }
             if (errno != EAGAIN)
@@ -631,18 +677,18 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
             // caller, but keep the recovery edge armed until an application
             // pipe attaches or becomes writable.  Clearing the pending bit
             // here loses the first-target wake after ECONNREFUSED.
-            arm_send_recovery_after_backpressure ();
+            if (manage_public_send_recovery_)
+                arm_send_recovery_after_backpressure ();
         } else {
-            dispatch_runtime ().clear_send_recovery_pending ();
+            if (manage_public_send_recovery_)
+                dispatch_runtime ().clear_send_recovery_pending ();
         }
         errno = failure_errno;
         return -1;
     }
     if ((flags_ & ZLINK_DONTWAIT) || options.sndtimeo == 0) {
-        const bool was_pending = dispatch_runtime ().send_recovery_pending ();
-        dispatch_runtime ().mark_send_recovery_pending ();
-        if (!was_pending)
-            static_cast<mailbox_t *> (_mailbox)->signal ();
+        if (manage_public_send_recovery_)
+            arm_send_recovery_after_backpressure ();
         return -1;
     }
 
@@ -673,7 +719,8 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
     while (true) {
         rc = process_commands (timeout, false);
         if (unlikely (rc != 0)) {
-            dispatch_runtime ().clear_send_recovery_pending ();
+            if (manage_public_send_recovery_)
+                dispatch_runtime ().clear_send_recovery_pending ();
             return -1;
         }
         if (!hold_sync_during_retry)
@@ -685,13 +732,18 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                expected_transport_pair_generation_, NULL,
                                observer_, observer_userdata_,
                                attempt_identity_out_,
-                               expected_route_incarnation_id_)
+                               expected_route_incarnation_id_,
+                               request_only_)
                : xsend_pipe (msg_, pipe_out_, NULL, observer_,
                              observer_userdata_);
         if (unlikely (rc == -2))
             return finish_multipart_abort ();
         if (rc == 0) {
-            dispatch_runtime ().clear_send_recovery_pending ();
+            if (manage_public_send_recovery_) {
+                send_pending_runtime ().completion_capacity_blocked.store (
+                  false, std::memory_order_release);
+                dispatch_runtime ().clear_send_recovery_pending ();
+            }
             break;
         }
         if (errno != EAGAIN && is_submit_retry_errno (errno)
@@ -705,13 +757,12 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
         if (!hold_sync_during_retry)
             send_scope.release_sync_for_retry ();
         if (unlikely (errno != EAGAIN)) {
-            dispatch_runtime ().clear_send_recovery_pending ();
+            if (manage_public_send_recovery_)
+                dispatch_runtime ().clear_send_recovery_pending ();
             return -1;
         }
-        const bool was_pending = dispatch_runtime ().send_recovery_pending ();
-        dispatch_runtime ().mark_send_recovery_pending ();
-        if (!was_pending)
-            static_cast<mailbox_t *> (_mailbox)->signal ();
+        if (manage_public_send_recovery_)
+            arm_send_recovery_after_backpressure ();
         if (timeout > 0) {
             timeout = static_cast<int> (end - _clock.now_ms ());
             if (timeout <= 0) {
@@ -879,7 +930,8 @@ int zlink::socket_base_t::recv_common (
             rc = xrecv_pipe (msg_, pipe_out_);
         else if (mode_ == receive_runtime_t::mode_routed)
             rc = xrecv_routed (
-              msg_, source_rid_out_, connection_id_out_, pipe_out_);
+              msg_, source_rid_out_, connection_id_out_, pipe_out_, NULL,
+              NULL, NULL);
         else
             rc = xrecv (msg_);
         // Socket-specific readers may expose the pipe they attempted before
@@ -988,6 +1040,7 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
                                       bool pin_source_pipe_out_,
                                       uint64_t *transport_pair_id_out_,
                                       uint64_t *transport_pair_generation_out_,
+                                      uint64_t *route_binding_token_out_,
                                       socket_receive_record_scope_t *record_scope_,
                                       pipe_t::read_admission_fn *admission_,
                                       void *admission_userdata_)
@@ -1002,6 +1055,8 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
         *transport_pair_id_out_ = 0;
     if (transport_pair_generation_out_)
         *transport_pair_generation_out_ = 0;
+    if (route_binding_token_out_)
+        *route_binding_token_out_ = 0;
     if (unlikely (_ctx_terminated)) {
         errno = ETERM;
         return -1;
@@ -1020,7 +1075,8 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
     const auto recv_once = [&] () -> int {
         const int rc = xrecv_routed (msg_, source_rid_out_, connection_id_out_,
                                      source_pipe_out_, admission_,
-                                     admission_userdata_);
+                                     admission_userdata_,
+                                     route_binding_token_out_);
         if (rc != 0 && source_pipe_out_)
             *source_pipe_out_ = NULL;
         if (rc == 0 && source_pipe_out_ && *source_pipe_out_) {

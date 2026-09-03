@@ -160,7 +160,6 @@ completion_message_result_t complete_reply_from_transport (
         }
     }
     release_socket_pending_request_correlation (&pending);
-    zlink::request_timeout::cancel (pending.timeout_task);
 
     (void) publish_pull_reply_completion (
       state_, &pending, message_type_, parts_, part_count_);
@@ -419,7 +418,6 @@ void fail_pending_requests_for_logical_endpoint (
         if (!found)
             break;
         release_socket_pending_request_correlation (&not_found);
-        zlink::request_timeout::cancel (not_found.timeout_task);
         (void) publish_pending_request_completion (
           state_, &not_found, ZLINK_REQUEST_NOT_FOUND, NULL, 0);
     }
@@ -445,7 +443,6 @@ void fail_pending_requests_for_logical_rid (
         if (!found)
             break;
         release_socket_pending_request_correlation (&not_found);
-        zlink::request_timeout::cancel (not_found.timeout_task);
         (void) publish_pending_request_completion (
           state_, &not_found, ZLINK_REQUEST_NOT_FOUND, NULL, 0);
     }
@@ -465,9 +462,12 @@ int drain_close_request_reply_socket (const socket_handle_t &handle_)
 
     {
         std::lock_guard<std::mutex> lock (state->mutex);
+        state->public_router_reply_checkout_token.store (
+          0, std::memory_order_release);
         state->closing = true;
     }
-    abandon_public_router_reply_sequence (state);
+    cancel_socket_pending_timeouts (state);
+    abandon_public_router_reply_sequence (state, 0);
 
     while (true) {
         pending_request_t pending;
@@ -480,7 +480,6 @@ int drain_close_request_reply_socket (const socket_handle_t &handle_)
         if (!found)
             break;
         release_socket_pending_request_correlation (&pending);
-        zlink::request_timeout::cancel (pending.timeout_task);
         // Public close discards unresolved and unread pull records; it is not
         // a completion-producing drain phase.
         release_pending_request_completion (state, &pending);
@@ -506,9 +505,12 @@ void cleanup_request_reply_socket (const socket_handle_t &handle_)
     if (state) {
         {
             std::lock_guard<std::mutex> state_lock (state->mutex);
+            state->public_router_reply_checkout_token.store (
+              0, std::memory_order_release);
             state->closing = true;
         }
-        abandon_public_router_reply_sequence (state);
+        cancel_socket_pending_timeouts (state);
+        abandon_public_router_reply_sequence (state, 0);
         while (true) {
             pending_request_t pending;
             bool found = false;
@@ -520,11 +522,12 @@ void cleanup_request_reply_socket (const socket_handle_t &handle_)
             if (!found)
                 break;
             release_socket_pending_request_correlation (&pending);
-            zlink::request_timeout::cancel (pending.timeout_task);
             release_pending_request_completion (state, &pending);
         }
         {
             std::lock_guard<std::mutex> state_lock (state->mutex);
+            state->public_router_reply_checkout_token.store (
+              0, std::memory_order_release);
             state->closing = true;
             state->dealer_reply_targets.clear ();
             clear_router_reply_targets_locked (state.get ());

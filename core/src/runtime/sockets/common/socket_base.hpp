@@ -56,7 +56,9 @@ void test_set_transport_pair_owner_after_claim_hook (
 enum async_owner_transition_test_point_t
 {
     async_owner_test_monitor_acquire_before_gate = 1,
-    async_owner_test_idle_stop_gate_held = 2
+    async_owner_test_idle_stop_gate_held = 2,
+    async_owner_test_explicit_stop_before_detach = 3,
+    async_owner_test_transport_acquire_waiting_for_quiesce = 4
 };
 typedef void (*async_owner_transition_test_hook_fn) (
   async_owner_transition_test_point_t point_, void *userdata_);
@@ -88,7 +90,8 @@ struct socket_request_reply_bridge_t
 {
     socket_request_reply_bridge_t () :
         request_reply_state_present (false),
-        part_helper_state_present (false)
+        part_helper_state_present (false),
+        part_helper_send_active_flag (false)
     {
     }
 
@@ -96,6 +99,7 @@ struct socket_request_reply_bridge_t
     std::shared_ptr<part_helper_internal::handle_state_t> part_helper_state;
     std::atomic<bool> request_reply_state_present;
     std::atomic<bool> part_helper_state_present;
+    std::atomic<bool> part_helper_send_active_flag;
 };
 
 struct transport_pair_pipes_t
@@ -441,6 +445,8 @@ class socket_base_t : public own_t,
     bool retain_received_source_pipe_ref (pipe_t *pipe_) const;
     bool begin_public_send_scope (
       bool force_sync_, std::optional<socket_public_send_scope_t> *scope_out_);
+    bool begin_complete_send_scope (
+      bool force_sync_, std::optional<socket_public_send_scope_t> *scope_out_);
     std::unique_ptr<socket_public_send_scope_t> begin_complete_send_scope (bool force_sync_);
     void notify_incremental_send_released ();
     void hold_incremental_send_control_boundary ();
@@ -461,6 +467,7 @@ class socket_base_t : public own_t,
                      bool pin_source_pipe_out_ = false,
                      uint64_t *transport_pair_id_out_ = NULL,
                      uint64_t *transport_pair_generation_out_ = NULL,
+                     uint64_t *route_binding_token_out_ = NULL,
                      zlink::socket_receive_record_scope_t *record_scope_ = NULL,
                      pipe_t::read_admission_fn *admission_ = NULL,
                      void *admission_userdata_ = NULL);
@@ -511,7 +518,16 @@ class socket_base_t : public own_t,
     //  such as activate_write / pair-ready lands), then drain it. The bounded
     //  wait primitive for public submit paths that must retry without
     //  sleeping through a fixed slice.
-    int wait_submit_progress (int timeout_ms_);
+    uint64_t observe_submit_progress () const;
+    int wait_submit_progress (uint64_t observed_epoch_, int timeout_ms_,
+                              bool *owner_progress_held_);
+    int wait_submit_progress (socket_public_send_scope_t &send_scope_,
+                              uint64_t observed_epoch_, int timeout_ms_,
+                              bool *owner_progress_held_);
+    // Publish an admission-relevant route/credit transition to a blocked
+    // request-reply submitter. The waiter check keeps ordinary transitions
+    // out of the condition-variable mutex.
+    void notify_submit_progress ();
     int close ();
     int close (int handoff_timeout_ms_);
     // Reserve close before the public wrapper tears down request state.
@@ -522,7 +538,20 @@ class socket_base_t : public own_t,
                                 size_t part_count_,
                                 const zlink_routing_id_t *target_rid_,
                                 void *user_context_,
-                                zlink_completion_id_t *completion_id_out_);
+                                zlink_completion_id_t *completion_id_out_,
+                                const routed_send_target_key_t
+                                  *committed_target_ = NULL,
+                                bool admission_gate_preacquired_ = false);
+    // An incremental PAIR/DEALER send already owns the socket's multipart
+    // admission scope at FINAL. Reuse that scope for the common immediate
+    // whole-record attempt; EAGAIN leaves every input untouched so the caller
+    // can release the multipart marker and enter the ordinary pending path.
+    int try_immediate_completion_send_scoped (
+      zlink_msg_t *parts_, size_t part_count_,
+      socket_public_send_scope_t &send_scope_,
+      routed_send_target_key_t *fallback_target_out_ = NULL,
+      bool *fallback_target_valid_out_ = NULL,
+      bool *admission_gate_retained_out_ = NULL);
     int send_completion_submit_blocking (
       zlink_msg_t *parts_, size_t part_count_,
       const zlink_routing_id_t *target_rid_or_null_);
@@ -533,6 +562,7 @@ class socket_base_t : public own_t,
       void *admission_observer_userdata_,
       send_pending_request_resolved_fn resolved_,
       send_pending_request_cleanup_fn cleanup_,
+      send_pending_request_promote_fn promote_,
       void *resolution_context_, bool *pending_out_);
     int request_admission_submit_blocking (
       zlink_msg_t *parts_, size_t part_count_,
@@ -543,6 +573,8 @@ class socket_base_t : public own_t,
     // only to the pull completion queue or an internal REQUEST admission hook.
     void drive_send_pending ();
     bool has_send_pending () const;
+    void mark_send_completion_capacity_blocked ();
+    void notify_send_completion_capacity_available ();
     int reserve_shared_pending_record (uint64_t charge_bytes_);
     void release_shared_pending_record (uint64_t charge_bytes_);
     socket_completion::queue_state_t &completion_runtime ()
@@ -594,6 +626,12 @@ class socket_base_t : public own_t,
     //  owned drain points, because a pipe that was made readable while no
     //  owner was draining does not report readiness again.
     void process_ready_completion_pipes ();
+    //  Count-1 private heads use a pipe-owned intrusive MPSC queue. Publication
+    //  retains both the pipe object and its inbound ypipe, so physical detach
+    //  may invalidate readiness without making a queued pointer unsafe.
+    bool enqueue_count1_completion_pipe (zlink::pipe_t *pipe_);
+    void discard_count1_completion_ready_pipes ();
+    bool release_count1_completion_drain (zlink::pipe_t *pipe_);
     //  Finish one Completion-pipe drain without losing an activation that
     //  raced the final empty read. Returns true when this owner reclaimed the
     //  exact pair and must drain it again.
@@ -771,6 +809,8 @@ class socket_base_t : public own_t,
     std::shared_ptr<part_helper_internal::handle_state_t>
     set_part_helper_state (const std::shared_ptr<part_helper_internal::handle_state_t> &state_);
     void clear_part_helper_state ();
+    bool part_helper_send_active () const;
+    void set_part_helper_send_active (bool active_);
     //  zlink_recv_part() buffers a complete physical DATA record before it
     //  publishes the first part. On a count-1 pair, keep the following REPLY
     //  private until that buffered public record reaches its FINAL part.
@@ -832,7 +872,8 @@ class socket_base_t : public own_t,
                               void *observer_userdata_ = NULL,
                               routed_send_attempt_identity_t
                                 *attempt_identity_out_ = NULL,
-                              uint64_t expected_route_incarnation_id_ = 0);
+                              uint64_t expected_route_incarnation_id_ = 0,
+                              bool request_only_ = false);
     //  Hot-path pair for the single-part blocking send: pick the pipe the
     //  load balancer would commit to, then admit one frame to exactly that
     //  pipe. Both run under one send scope, so the pointer never outlives
@@ -840,6 +881,10 @@ class socket_base_t : public own_t,
     //  routing report ENOTSUP and the caller uses the general path.
     virtual int xselect_routed_submit_pipe (pipe_t **pipe_out_,
                                             bool request_only_);
+    // REQUEST route history is needed only if direct admission falls back to
+    // a configured-endpoint retry. Keep its string/map work off the selected
+    // pipe fast path.
+    virtual int xcommit_request_submit_pipe (pipe_t *pipe_);
     virtual int xsend_selected_pipe (pipe_t *pipe_, msg_t *msg_, int flags_,
                                      bool request_only_,
                                      pipe_message_admission_t *admission_out_,
@@ -902,7 +947,8 @@ class socket_base_t : public own_t,
                               uint64_t *connection_id_out_,
                               zlink::pipe_t **source_pipe_out_ = NULL,
                               pipe_t::read_admission_fn *admission_ = NULL,
-                              void *admission_userdata_ = NULL);
+                              void *admission_userdata_ = NULL,
+                              uint64_t *route_binding_token_out_ = NULL);
     virtual int xterm_peer_rid (const zlink_routing_id_t *peer_rid_);
     int xterm_transport_pair (uint64_t transport_pair_id_,
                               uint64_t transport_pair_generation_);
@@ -922,8 +968,11 @@ class socket_base_t : public own_t,
 
     //  Reclassifies the next queued record on a ready count-1 Application
     //  pipe. The caller already owns the receive runtime (public lease or
-    //  receive.sync). Returns true when completion work was queued.
-    bool reclassify_transport_pair_application_head (pipe_t *pipe_);
+    //  receive.sync). Normally true means completion work was queued. With
+    //  claim_private_head_ true it instead means the current completion owner
+    //  reclaimed a private head directly after an empty-read race.
+    bool reclassify_transport_pair_application_head (
+      pipe_t *pipe_, bool claim_private_head_ = false);
 
     //  i_pipe_events will be forwarded to these functions.
     virtual void xread_deactivated (pipe_t *pipe_);
@@ -992,6 +1041,7 @@ class socket_base_t : public own_t,
     //  A pipe became writable again: nudge the admit loop for that target.
     void notify_send_pending_writable (pipe_t *pipe_);
     void flush_deferred_peer_controls ();
+    void mark_deferred_peer_controls ();
     //  A route ended: fail every pending record bound to that exact target.
     void fail_pull_send_pending_for_logical_target (
       const zlink_routing_id_t *peer_rid_, int terminal_errno_);
@@ -1023,6 +1073,10 @@ class socket_base_t : public own_t,
     int get_events_for_poller (int events_, uint32_t *out_,
                                bool transport_output_);
 
+    bool has_stable_completion_processing_owner () const;
+    void invalidate_completion_processing_owner ();
+    void publish_completion_processing_owner ();
+
     // Direct public send currently shares one scope between single-part and
     // logical multipart wrappers. Keep the admission/sync decision and the
     // blocking retry runner behind one internal boundary so future structural
@@ -1043,7 +1097,9 @@ class socket_base_t : public own_t,
                                 void *observer_userdata_ = NULL,
                                 routed_send_attempt_identity_t
                                   *attempt_identity_out_ = NULL,
-                                uint64_t expected_route_incarnation_id_ = 0);
+                                uint64_t expected_route_incarnation_id_ = 0,
+                                bool manage_public_send_recovery_ = true,
+                                bool request_only_ = false);
 
     enum
     {
@@ -1072,6 +1128,10 @@ class socket_base_t : public own_t,
     const monitor_runtime_t &monitor_runtime () const { return _runtime.monitor_runtime; }
     dispatch_bridge_t &dispatch_runtime () { return _runtime.dispatch_bridge; }
     const dispatch_bridge_t &dispatch_runtime () const { return _runtime.dispatch_bridge; }
+    socket_submit_progress_runtime_t &submit_progress_runtime ()
+    {
+        return _runtime.submit_progress_runtime;
+    }
     socket_send_pending_runtime_t &send_pending_runtime ()
     {
         return _runtime.send_pending_runtime;
@@ -1241,7 +1301,10 @@ class socket_base_t : public own_t,
       bool commands_already_processed_ = false,
       pipe_write_observer_fn observer_ = NULL,
       void *observer_userdata_ = NULL,
-      bool request_admission_ = false);
+      bool request_admission_ = false,
+      bool manage_public_send_recovery_ = true,
+      const zlink_routing_id_t *transient_target_rid_ = NULL,
+      zlink::pipe_t *transient_selected_pipe_ = NULL);
     void finish_send_pending (send_pending_record_t *record_,
                               zlink_send_complete_result_t result_,
                               int terminal_errno_);
@@ -1262,7 +1325,12 @@ class socket_base_t : public own_t,
                              void *admission_observer_userdata_ = NULL,
                              send_pending_request_resolved_fn request_resolved_ = NULL,
                              send_pending_request_cleanup_fn request_cleanup_ = NULL,
-                             void *request_resolution_context_ = NULL);
+                             void *request_resolution_context_ = NULL,
+                             const routed_send_target_key_t
+                               *committed_target_ = NULL,
+                             bool admission_gate_preacquired_ = false,
+                             send_pending_request_promote_fn
+                               request_promote_ = NULL);
     static void reaper_mailbox_handler (void *arg_);
     static void reaper_mailbox_pre_post (void *arg_);
     static void async_mailbox_handler (void *arg_);
@@ -1310,6 +1378,11 @@ class socket_base_t : public own_t,
     //  Serializes completion drains and the async-worker/public-poller owner
     //  transition.
     mutable mutex_t _completion_owner_sync;
+    // Even generations denote no stable completion owner (or an ownership
+    // handoff); odd generations denote an installed public-poller or retained
+    // async owner. A request can validate the same odd generation twice and
+    // avoid both owner locks in the steady state.
+    std::atomic<uint32_t> _completion_processing_owner_generation;
     std::atomic<uint32_t> _completion_poller_refs;
     std::atomic<void *> _completion_poller_owner;
     std::atomic<bool> _request_completion_pending;
@@ -1358,6 +1431,11 @@ class socket_base_t : public own_t,
     accepted_transport_pairs_t _accepted_transport_pairs;
     std::deque<transport_pair_key_t> _ready_completion_pairs;
     std::set<transport_pair_key_t> _ready_completion_pair_set;
+    //  Lock-free producer head for count-1 shared Application pipes. The
+    //  completion owner atomically detaches one finite batch and reverses it to
+    //  preserve FIFO publication order; requeues therefore belong to the next
+    //  bounded owner turn.
+    std::atomic<pipe_t *> _ready_count1_completion_pipes;
     std::atomic<bool> _public_part_receive_delivery_hold_active;
     pipe_t *_public_part_receive_delivery_hold_pipe;
     transport_pair_key_t _public_part_receive_delivery_hold_key;

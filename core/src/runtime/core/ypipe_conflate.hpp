@@ -87,12 +87,17 @@ template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T
 
     //  Reads an item from the pipe. Returns false if there is no value.
     //  available.
-    bool read (T *value_)
+    bool read (T *value_, bool *prefetched_batch_exhausted_ = NULL)
     {
+        if (prefetched_batch_exhausted_)
+            *prefetched_batch_exhausted_ = false;
         if (!check_read ())
             return false;
 
-        return dbuffer.read (value_);
+        const bool consumed = dbuffer.read (value_);
+        if (consumed && prefetched_batch_exhausted_)
+            *prefetched_batch_exhausted_ = true;
+        return consumed;
     }
 
     //  Applies the function fn to the first element in the pipe
@@ -100,13 +105,26 @@ template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T
     //  The pipe mustn't be empty or the function crashes.
     bool probe (bool (*fn_) (const T &)) { return dbuffer.probe (fn_); }
 
-    ypipe_read_result_t
-    read_if (T *value_, bool (*fn_) (const T &, void *), void *userdata_)
+    bool probe_if_published (void (*fn_) (const T &, void *),
+                             void *userdata_)
     {
+        //  dbuffer's read-side lock observes the already-published front
+        //  without changing reader_awake.
+        return dbuffer.probe_if_published (fn_, userdata_);
+    }
+
+    ypipe_read_result_t
+    read_if (T *value_, bool (*fn_) (const T &, void *), void *userdata_,
+             bool *prefetched_batch_exhausted_ = NULL)
+    {
+        if (prefetched_batch_exhausted_)
+            *prefetched_batch_exhausted_ = false;
         const ypipe_read_result_t result =
           dbuffer.read_if (value_, fn_, userdata_);
         if (result == ypipe_read_empty)
             reader_awake = false;
+        if (result == ypipe_read_consumed && prefetched_batch_exhausted_)
+            *prefetched_batch_exhausted_ = true;
         return result;
     }
 

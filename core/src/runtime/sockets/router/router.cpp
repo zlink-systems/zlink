@@ -259,6 +259,7 @@ void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
                      _anonymous_pipes.count (pipe_) != 0 ? 1 : 0);
         }
         if (0 == _anonymous_pipes.erase (pipe_)) {
+            pipe_->invalidate_router_route_binding ();
             erase_out_pipe (pipe_);
             rollback_outbound = true;
             if (pipe_ == _current_out) {
@@ -274,11 +275,13 @@ void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
             zlink_assert (standby_out);
             const bool locally_initiated = standby_out->locally_initiated;
             const uint32_t peer_weight = standby_out->weight;
+            standby_to_promote->invalidate_router_route_binding ();
             erase_out_pipe (standby_to_promote);
             standby_to_promote->set_router_socket_routing_id (
               standby_routing_id);
             add_out_pipe (ZLINK_MOVE (standby_routing_id),
                           standby_to_promote, locally_initiated);
+            standby_to_promote->publish_router_route_binding ();
             out_pipe_t *const promoted =
               lookup_out_pipe (standby_to_promote->get_routing_id ());
             zlink_assert (promoted && promoted->pipe == standby_to_promote);

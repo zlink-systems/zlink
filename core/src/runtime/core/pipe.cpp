@@ -47,7 +47,7 @@ struct normalized_head_probe_t
     zlink::pipe_normalized_head_kind_t kind;
 };
 
-bool probe_normalized_head (const zlink::msg_t &msg_, void *userdata_)
+void probe_normalized_head (const zlink::msg_t &msg_, void *userdata_)
 {
     normalized_head_probe_t *const probe =
       static_cast<normalized_head_probe_t *> (userdata_);
@@ -58,19 +58,19 @@ bool probe_normalized_head (const zlink::msg_t &msg_, void *userdata_)
     // boundary and never activated on the public receive path.
     if ((msg_.flags () & zlink::msg_t::command) != 0) {
         probe->kind = zlink::pipe_head_control;
-        return false;
+        return;
     }
 
     unsigned char wire_kind = zlink::zmp_kind_data;
     uint64_t request_sequence = 0;
     if (!msg_.get_request_reply_metadata (&wire_kind, &request_sequence)) {
         probe->kind = zlink::pipe_head_data;
-        return false;
+        return;
     }
 
     if (request_sequence == 0) {
         probe->kind = zlink::pipe_head_invalid;
-        return false;
+        return;
     }
 
     switch (wire_kind) {
@@ -87,8 +87,11 @@ bool probe_normalized_head (const zlink::msg_t &msg_, void *userdata_)
             probe->kind = zlink::pipe_head_invalid;
             break;
     }
-    return false;
 }
+
+const unsigned char head_reclassify_idle = 0;
+const unsigned char head_reclassify_armed = 1;
+const unsigned char head_reclassify_queued = 2;
 }
 #include <ctime>
 
@@ -302,6 +305,11 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _out_pipe (outpipe_),
     _in_active (true),
     _out_active (true),
+    _public_receive_active (false),
+    _head_reclassify_wake (head_reclassify_idle),
+    _count1_completion_ready_state (count1_completion_idle),
+    _count1_completion_ready_next (NULL),
+    _out_complete_record_pending (false),
     _transport_pair_write_held (false),
     _remote_flow_paused (false),
     _request_correlation_waiting (false),
@@ -347,6 +355,7 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _sink (NULL),
     _state (active),
     _delay (true),
+    _router_route_binding_token (0),
     _connection_ready_event_emitted (false),
     _lifetime (),
     _inbound_read_lifetime (),
@@ -360,6 +369,7 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _transport_lane (transport_lane_application),
     _transport_lane_count (0),
     _transport_pair_application_ready (false),
+    _transport_pair_completion_pipe (NULL),
     _state_active (true),
     _registry_accounting (registry_accounting_),
     _transport_pair_id (0),
@@ -382,6 +392,14 @@ zlink::pipe_t::pipe_t (object_t *parent_,
 
 zlink::pipe_t::~pipe_t ()
 {
+    // Pair teardown normally clears this before the Application pipe can
+    // become terminal. Keep destruction self-contained for rejected or
+    // partially attached pairs as well.
+    if (_transport_pair_completion_pipe) {
+        pipe_t *const completion = _transport_pair_completion_pipe;
+        _transport_pair_completion_pipe = NULL;
+        completion->release_lifetime_ref ();
+    }
     retire_physical_queue_endpoints ();
     _disconnect_msg.close ();
 }
@@ -561,6 +579,49 @@ bool zlink::pipe_t::transport_pair_application_ready_cached () const
       std::memory_order_acquire);
 }
 
+void zlink::pipe_t::set_transport_pair_completion_pipe (pipe_t *completion_)
+{
+    if (completion_) {
+        const bool retained = completion_->retain_lifetime_ref ();
+        zlink_assert (retained);
+        if (!retained)
+            completion_ = NULL;
+    }
+
+    pipe_t *previous = NULL;
+    {
+        scoped_fast_lock_t lock (_out_sync);
+        previous = _transport_pair_completion_pipe;
+        _transport_pair_completion_pipe = completion_;
+    }
+
+    if (previous)
+        previous->release_lifetime_ref ();
+}
+
+zlink::pipe_t *zlink::pipe_t::retain_transport_pair_completion_pipe () const
+{
+    if (!transport_pair_application_ready_cached ())
+        return NULL;
+
+    scoped_fast_lock_t lock (_out_sync);
+    if (!transport_pair_application_ready_cached ()
+        || !_transport_pair_completion_pipe
+        || !_transport_pair_completion_pipe->retain_lifetime_ref ())
+        return NULL;
+    return _transport_pair_completion_pipe;
+}
+
+bool zlink::pipe_t::public_receive_active_cached () const
+{
+    return _public_receive_active.load (std::memory_order_acquire);
+}
+
+void zlink::pipe_t::set_public_receive_active_cached (bool active_)
+{
+    _public_receive_active.store (active_, std::memory_order_release);
+}
+
 void zlink::pipe_t::set_event_sink (i_pipe_events *sink_)
 {
     // A paired transport assigns the socket-side sink before handshake so a
@@ -592,6 +653,31 @@ void zlink::pipe_t::snapshot_routing_id (blob_t *routing_id_) const
     zlink_assert (routing_id_);
     scoped_fast_lock_t lock (const_cast<fast_mutex_t &> (_out_sync));
     routing_id_->set_deep_copy (_router_socket_routing_id);
+}
+
+void zlink::pipe_t::invalidate_router_route_binding ()
+{
+    const uint64_t current =
+      _router_route_binding_token.load (std::memory_order_relaxed);
+    if ((current & 1u) != 0)
+        _router_route_binding_token.store (current + 1,
+                                           std::memory_order_release);
+}
+
+void zlink::pipe_t::publish_router_route_binding ()
+{
+    const uint64_t current =
+      _router_route_binding_token.load (std::memory_order_relaxed);
+    if ((current & 1u) == 0)
+        _router_route_binding_token.store (current + 1,
+                                           std::memory_order_release);
+}
+
+uint64_t zlink::pipe_t::router_route_binding_token () const
+{
+    const uint64_t token =
+      _router_route_binding_token.load (std::memory_order_acquire);
+    return (token & 1u) != 0 ? token : 0;
 }
 
 const zlink::blob_t &zlink::pipe_t::get_routing_id () const
@@ -832,8 +918,13 @@ void zlink::pipe_t::apply_physical_queue_hwm_plan ()
     }
     _hwm = planned_out_hwm ();
     const uint64_t applied_in = applied_in_hwm ();
+    const uint64_t planned_in = planned_in_hwm ();
     _inhwm.store (applied_in, std::memory_order_relaxed);
-    _lwm.store (apply_lwm_hint (applied_in, compute_lwm (applied_in),
+    // The writer enforces its planned HWM immediately while a shrink can keep
+    // the physical queue's applied accounting limit temporarily higher. Base
+    // credit wakeups on that same planned window; otherwise LWM can exceed the
+    // writer's whole window and delay progress until SNDTIMEO.
+    _lwm.store (apply_lwm_hint (planned_in, compute_lwm (planned_in),
                                 _lwm_hint),
                 std::memory_order_relaxed);
 }
@@ -841,13 +932,15 @@ void zlink::pipe_t::apply_physical_queue_hwm_plan ()
 void zlink::pipe_t::refresh_inbound_lwm_from_physical_queue ()
 {
     const uint64_t applied_in = applied_in_hwm ();
-    if (_inhwm.load (std::memory_order_relaxed) == applied_in)
+    const uint64_t planned_in = planned_in_hwm ();
+    const uint64_t lwm = apply_lwm_hint (
+      planned_in, compute_lwm (planned_in), _lwm_hint);
+    if (_inhwm.load (std::memory_order_relaxed) == applied_in
+        && _lwm.load (std::memory_order_relaxed) == lwm)
         return;
     scoped_fast_lock_t lock (_out_sync);
     _inhwm.store (applied_in, std::memory_order_relaxed);
-    _lwm.store (apply_lwm_hint (applied_in, compute_lwm (applied_in),
-                                _lwm_hint),
-                std::memory_order_relaxed);
+    _lwm.store (lwm, std::memory_order_relaxed);
 }
 
 uint64_t zlink::pipe_t::get_oversize_message_admission_count () const
@@ -994,21 +1087,20 @@ zlink::pipe_t::probe_normalized_head_kind ()
 {
     if (unlikely (_state != active && _state != waiting_for_delimiter))
         return pipe_head_empty;
-    if (unlikely (!_in_active)) {
-        if (!_in_pipe->check_read ())
-            return pipe_head_empty;
-        _in_active = true;
-    }
+
+    // Arm before observing publication. If the writer publishes first, the
+    // non-sleeping probe below sees it. If it publishes later, flush changes
+    // this marker to queued and sends one explicit activation.
+    _head_reclassify_wake.store (head_reclassify_armed,
+                                 std::memory_order_seq_cst);
 
     normalized_head_probe_t probe = {pipe_head_invalid};
-    msg_t untouched;
-    const ypipe_read_result_t read_result =
-      _in_pipe->read_if (&untouched, &probe_normalized_head, &probe);
-    zlink_assert (read_result != ypipe_read_consumed);
-    if (read_result == ypipe_read_empty) {
-        _in_active = false;
+    if (!_in_pipe->probe_if_published (&probe_normalized_head, &probe))
         return pipe_head_empty;
-    }
+
+    _in_active = true;
+    _head_reclassify_wake.store (head_reclassify_idle,
+                                 std::memory_order_release);
     return probe.kind;
 }
 
@@ -1122,7 +1214,9 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
         _in_active = true;
     }
 
+    bool prefetched_batch_exhausted = false;
     while (true) {
+        prefetched_batch_exhausted = false;
         // Raw terminal and private bookkeeping frames do not need a
         // whole-record lease. Classify and conditionally dequeue them in the
         // same queue operation that runs admission for record starts.
@@ -1130,7 +1224,8 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
             pipe_read_admission_probe_t probe = {this, admission_, userdata_, 0,
                                                  errno};
             const ypipe_read_result_t read_result =
-              _in_pipe->read_if (msg_, &invoke_pipe_record_admission, &probe);
+              _in_pipe->read_if (msg_, &invoke_pipe_record_admission, &probe,
+                                 &prefetched_batch_exhausted);
             if (read_result != ypipe_read_consumed) {
                 if (probe.result != 0 && admission_failed_out_)
                     *admission_failed_out_ = true;
@@ -1152,7 +1247,7 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
                     get_ctx ()->_physical_queue_registry.release_committed_frame (
                       _in_physical_queue, frame_bytes, counted_messages);
                 }
-                account_inbound_frame (msg_);
+                account_inbound_frame (msg_, prefetched_batch_exhausted);
                 if (admission_failed_out_)
                     *admission_failed_out_ = true;
                 if (admission_consumed_out_)
@@ -1160,7 +1255,7 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
                 errno = saved_errno;
                 return true;
             }
-        } else if (!_in_pipe->read (msg_)) {
+        } else if (!_in_pipe->read (msg_, &prefetched_batch_exhausted)) {
             _in_active = false;
             return false;
         }
@@ -1171,7 +1266,7 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
                 get_ctx ()->_physical_queue_registry.release_committed_frame (
                   _in_physical_queue, frame_accounted_bytes (msg_),
                   counted_pending_message_ref (*msg_));
-            account_inbound_frame (msg_);
+            account_inbound_frame (msg_, prefetched_batch_exhausted);
             const int rc = msg_->close ();
             zlink_assert (rc == 0);
         } else {
@@ -1191,7 +1286,7 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
         get_ctx ()->_physical_queue_registry.release_committed_frame (
           _in_physical_queue, frame_bytes, counted_messages);
     }
-    account_inbound_frame (msg_);
+    account_inbound_frame (msg_, prefetched_batch_exhausted);
 
     return true;
 }
@@ -1253,10 +1348,22 @@ int zlink::pipe_t::reserve_inbound_decoder_frame (
         if (_hwm > 0 && !allow_empty_exception
             && (candidate_bytes == UINT64_MAX || in_flight > _hwm
                 || candidate_bytes > _hwm - in_flight)) {
-            _out_active = false;
-            _waiting_for_byte_credit.store (true, std::memory_order_release);
-            errno = EAGAIN;
-            return -1;
+            arm_hwm_credit_wait_unlocked ();
+            refresh_peer_credit_snapshot_unlocked ();
+            const uint64_t refreshed_in_flight =
+              _bytes_written > _peers_bytes_read
+                ? _bytes_written - _peers_bytes_read
+                : 0;
+            const bool refreshed_ready =
+              candidate_bytes != UINT64_MAX
+              && refreshed_in_flight <= _hwm
+              && candidate_bytes <= _hwm - refreshed_in_flight;
+            if (refreshed_ready)
+                clear_hwm_credit_wait_unlocked ();
+            else {
+                errno = EAGAIN;
+                return -1;
+            }
         }
     }
 
@@ -1306,8 +1413,7 @@ int zlink::pipe_t::reserve_inbound_decoder_frame (
     //  Mark the exact writer as waiting before rechecking its physical
     //  direction. A credit return racing this transition will either observe
     //  the waiter or be visible to this second admission attempt.
-    _out_active = false;
-    _waiting_for_byte_credit.store (true, std::memory_order_release);
+    arm_hwm_credit_wait_unlocked ();
     refresh_peer_credit_snapshot_unlocked ();
     decoder_frame_reservation_request_t request;
     request.payload_bytes = payload_bytes_;
@@ -1317,8 +1423,7 @@ int zlink::pipe_t::reserve_inbound_decoder_frame (
     rc = get_ctx ()->_physical_queue_registry.reserve_decoder_frame (
       _out_physical_queue, request, reservation_storage_, reservation_out_);
     if (rc == 0) {
-        _out_active = true;
-        _waiting_for_byte_credit.store (false, std::memory_order_release);
+        clear_hwm_credit_wait_unlocked ();
         if (track_multipart_ && (msg_flags_ & msg_t::more) != 0)
             _decoder_multipart_started_empty =
               multipart_started_empty;
@@ -1383,6 +1488,7 @@ int zlink::pipe_t::write_reserved_decoder_frame (
                                : _bytes_written + message_bytes;
             if (!msg_->is_routing_id () && !msg_->is_credential ())
                 ++_msgs_written;
+            _out_complete_record_pending = true;
             if (oversize) {
                 ++_oversize_message_admission_count;
                 _oversize_message_admission_max_bytes =
@@ -1449,6 +1555,7 @@ int zlink::pipe_t::write_reserved_decoder_frame (
                            : _bytes_written + message_bytes;
         if (!msg_->is_routing_id () && !msg_->is_credential ())
             ++_msgs_written;
+        _out_complete_record_pending = true;
         if (oversize) {
             ++_oversize_message_admission_count;
             _oversize_message_admission_max_bytes =
@@ -1745,13 +1852,32 @@ bool zlink::pipe_t::write_state_ready_unlocked (
     return admission == pipe_message_admission_ready;
 }
 
+void zlink::pipe_t::arm_hwm_credit_wait_unlocked ()
+{
+    _out_active = false;
+    _waiting_for_byte_credit.store (true, std::memory_order_release);
+    // Pair the waiter publication with the following peer-credit sample. A
+    // racing reader either observes the waiter and emits activate_write, or
+    // its already-published credit is consumed by the writer's recheck.
+    std::atomic_thread_fence (std::memory_order_seq_cst);
+}
+
+void zlink::pipe_t::clear_hwm_credit_wait_unlocked ()
+{
+    _out_active = true;
+    _waiting_for_byte_credit.store (false, std::memory_order_release);
+}
+
 bool zlink::pipe_t::hwm_credit_ready_unlocked (
   pipe_message_admission_t *admission_out_)
 {
     if (check_hwm_with_peer_snapshot_unlocked ())
         return true;
-    _out_active = false;
-    _waiting_for_byte_credit.store (true, std::memory_order_release);
+    arm_hwm_credit_wait_unlocked ();
+    if (check_hwm_with_peer_snapshot_unlocked ()) {
+        clear_hwm_credit_wait_unlocked ();
+        return true;
+    }
     if (admission_out_)
         *admission_out_ = pipe_message_admission_hwm_full;
     return false;
@@ -1774,14 +1900,21 @@ zlink::pipe_write_status_t zlink::pipe_t::check_write_status ()
     //  HWM admission sets _out_active=false until the peer returns write
     //  credit. The route still exists during that interval, so callers must
     //  keep reporting capacity pressure rather than an unreachable peer.
+    // Once an HWM refusal has made the pipe inactive, only the queued
+    // activate_write command may restore it. A passive scheduler probe that
+    // clears this state would suppress the matching write_activated callback
+    // and strand the pipe outside its load balancer.
     if (unlikely (!_out_active))
         return pipe_write_hwm_full;
 
     const bool full = !check_hwm_with_peer_snapshot_unlocked ();
 
     if (unlikely (full)) {
-        _out_active = false;
-        _waiting_for_byte_credit.store (true, std::memory_order_release);
+        arm_hwm_credit_wait_unlocked ();
+        if (check_hwm_with_peer_snapshot_unlocked ()) {
+            clear_hwm_credit_wait_unlocked ();
+            return pipe_write_ready;
+        }
         return pipe_write_hwm_full;
     }
 
@@ -1872,6 +2005,7 @@ void zlink::pipe_t::test_flow_probe (bool *out_active_,
                               ? _bytes_written - _peers_bytes_read
                               : 0;
 }
+
 #endif
 
 #ifdef ZLINK_BUILD_TESTS
@@ -2243,6 +2377,7 @@ bool zlink::pipe_t::append_pending_peer_controls_unlocked ()
             : _bytes_written + control_bytes;
         if (_msgs_written != UINT64_MAX)
             ++_msgs_written;
+        _out_complete_record_pending = true;
         const int reset_rc = command.init ();
         errno_assert (reset_rc == 0);
 
@@ -2403,6 +2538,12 @@ bool zlink::pipe_t::flush_pending_peer_controls ()
     return flush_pending_peer_controls_unlocked ();
 }
 
+bool zlink::pipe_t::has_pending_peer_controls ()
+{
+    scoped_fast_lock_t lock (_out_sync);
+    return pending_peer_controls_unlocked ();
+}
+
 bool zlink::pipe_t::write_and_flush (
   const msg_t *msg_, pipe_message_admission_t *admission_out_)
 {
@@ -2489,15 +2630,20 @@ bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
 
         if (unlikely (!can_commit_bytes_with_peer_snapshot_unlocked (
                         frame_bytes, payload_bytes, true))) {
+            bool credit_ready = false;
             if (_bytes_written > _peers_bytes_read) {
-                _out_active = false;
-                _waiting_for_byte_credit.store (true,
-                                                 std::memory_order_release);
+                arm_hwm_credit_wait_unlocked ();
+                credit_ready = can_commit_bytes_with_peer_snapshot_unlocked (
+                  frame_bytes, payload_bytes, true);
+                if (credit_ready)
+                    clear_hwm_credit_wait_unlocked ();
             }
-            errno = EAGAIN;
-            if (admission_out_)
-                *admission_out_ = pipe_message_admission_hwm_full;
-            return false;
+            if (!credit_ready) {
+                errno = EAGAIN;
+                if (admission_out_)
+                    *admission_out_ = pipe_message_admission_hwm_full;
+                return false;
+            }
         }
 
         _out_pipe->write (*msg_, false);
@@ -2515,6 +2661,7 @@ bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
                            : _bytes_written + frame_bytes;
         if (!msg_->is_routing_id () && !msg_->is_credential ())
             ++_msgs_written;
+        _out_complete_record_pending = true;
         if (admission_out_)
             *admission_out_ = pipe_message_admission_ready;
         publish_session_outbound_accounting_unlocked (false);
@@ -2623,10 +2770,18 @@ void zlink::pipe_t::flush ()
 
 void zlink::pipe_t::process_activate_read ()
 {
+    bool explicit_reclassify = false;
+    if (_head_reclassify_wake.load (std::memory_order_acquire)
+        != head_reclassify_idle)
+        explicit_reclassify =
+          _head_reclassify_wake.exchange (head_reclassify_idle,
+                                          std::memory_order_acq_rel)
+          != head_reclassify_idle;
     bool notify = false;
     {
         scoped_fast_lock_t lock (_out_sync);
-        if (!_in_active && (_state == active || _state == waiting_for_delimiter)) {
+        if ((!_in_active || explicit_reclassify)
+            && (_state == active || _state == waiting_for_delimiter)) {
             _in_active = true;
             notify = true;
         }
@@ -2739,6 +2894,7 @@ void zlink::pipe_t::process_hiccup (void *pipe_, uint64_t generation_)
         _out_active = !_transport_pair_write_held;
         _out_generation = generation_;
         _msgs_written = 0;
+        _out_complete_record_pending = false;
         _bytes_written = 0;
         _peers_msgs_read = 0;
         _peers_bytes_read = 0;
@@ -3114,10 +3270,12 @@ void zlink::pipe_t::set_hwms (uint64_t inhwm_, uint64_t outhwm_)
     // install a stale target captured before a newer update.
     scoped_fast_lock_t lock (_out_sync);
     in = get_ctx ()->_physical_queue_registry.applied_hwm (in_queue);
+    const uint64_t planned_in =
+      get_ctx ()->_physical_queue_registry.planned_hwm (in_queue);
     out = get_ctx ()->_physical_queue_registry.planned_hwm (out_queue);
     _inhwm.store (in, std::memory_order_relaxed);
     const uint64_t lwm = apply_lwm_hint (
-      in, compute_lwm (in), _lwm_hint);
+      planned_in, compute_lwm (planned_in), _lwm_hint);
     _lwm.store (lwm, std::memory_order_relaxed);
     _hwm = out;
 }
@@ -3128,9 +3286,9 @@ void zlink::pipe_t::set_lwm_hint (uint64_t lwm_hint_)
     _lwm_hint = _transport_lane == transport_lane_completion
                   ? 0
                   : (lwm_hint_ > 0 ? lwm_hint_ : 0);
+    const uint64_t planned_in = planned_in_hwm ();
     _lwm.store (
-      apply_lwm_hint (_inhwm.load (std::memory_order_relaxed),
-                      compute_lwm (_inhwm.load (std::memory_order_relaxed)),
+      apply_lwm_hint (planned_in, compute_lwm (planned_in),
                       _lwm_hint),
       std::memory_order_relaxed);
 }
@@ -3152,8 +3310,14 @@ zlink::pipe_t::check_hwm_for_message (const msg_t *msg_)
         return pipe_message_admission_inactive;
     if (_transport_pair_write_held)
         return pipe_message_admission_transport_wait;
-    if (!_out_active || !check_hwm_with_peer_snapshot_unlocked ())
+    if (!_out_active)
         return pipe_message_admission_hwm_full;
+    if (!check_hwm_with_peer_snapshot_unlocked ()) {
+        arm_hwm_credit_wait_unlocked ();
+        if (!check_hwm_with_peer_snapshot_unlocked ())
+            return pipe_message_admission_hwm_full;
+        clear_hwm_credit_wait_unlocked ();
+    }
     if (msg_->is_delimiter ())
         return pipe_message_admission_ready;
 
@@ -3175,11 +3339,19 @@ zlink::pipe_t::check_hwm_for_message (const msg_t *msg_)
           !more
             && (_out_incomplete_bytes == 0
                 || _out_multipart_started_empty))) {
+        bool credit_ready = false;
         if (_bytes_written > _peers_bytes_read) {
-            _out_active = false;
-            _waiting_for_byte_credit.store (true, std::memory_order_release);
+            arm_hwm_credit_wait_unlocked ();
+            credit_ready = can_commit_bytes_with_peer_snapshot_unlocked (
+              _out_incomplete_bytes + frame_bytes, prospective_payload,
+              !more
+                && (_out_incomplete_bytes == 0
+                    || _out_multipart_started_empty));
+            if (credit_ready)
+                clear_hwm_credit_wait_unlocked ();
         }
-        return pipe_message_admission_hwm_full;
+        if (!credit_ready)
+            return pipe_message_admission_hwm_full;
     }
     return pipe_message_admission_ready;
 }
@@ -3535,28 +3707,39 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
         _out_multipart_started_empty =
           _bytes_written <= _peers_bytes_read;
     }
-    if ((commits_bytes || enforce_incremental_hwm_) && enforce_hwm_
-        && !can_commit_bytes_with_peer_snapshot_unlocked (
-          _out_incomplete_bytes, _out_incomplete_payload_bytes,
-          !more
-            && (incomplete_before == 0 || _out_multipart_started_empty))) {
+    bool commit_credit_ready =
+      !(commits_bytes || enforce_incremental_hwm_) || !enforce_hwm_
+      || can_commit_bytes_with_peer_snapshot_unlocked (
+        _out_incomplete_bytes, _out_incomplete_payload_bytes,
+        !more
+          && (incomplete_before == 0 || _out_multipart_started_empty));
+    if (!commit_credit_ready) {
         const bool exceeds_max_message_size =
           _max_message_bytes != 0
           && _out_incomplete_payload_bytes > _max_message_bytes;
-        _out_incomplete_bytes = incomplete_before;
-        _out_incomplete_payload_bytes = payload_before;
-        _out_multipart_started_empty = multipart_started_empty_before;
         if (!exceeds_max_message_size
             && _bytes_written > _peers_bytes_read) {
-            _out_active = false;
-            _waiting_for_byte_credit.store (true, std::memory_order_release);
+            arm_hwm_credit_wait_unlocked ();
+            commit_credit_ready =
+              can_commit_bytes_with_peer_snapshot_unlocked (
+                _out_incomplete_bytes, _out_incomplete_payload_bytes,
+                !more
+                  && (incomplete_before == 0
+                      || _out_multipart_started_empty));
+            if (commit_credit_ready)
+                clear_hwm_credit_wait_unlocked ();
         }
-        errno = exceeds_max_message_size ? EMSGSIZE : EAGAIN;
-        if (admission_out_)
-            *admission_out_ = exceeds_max_message_size
-                                ? pipe_message_admission_too_large
-                                : pipe_message_admission_hwm_full;
-        return false;
+        if (!commit_credit_ready) {
+            _out_incomplete_bytes = incomplete_before;
+            _out_incomplete_payload_bytes = payload_before;
+            _out_multipart_started_empty = multipart_started_empty_before;
+            errno = exceeds_max_message_size ? EMSGSIZE : EAGAIN;
+            if (admission_out_)
+                *admission_out_ = exceeds_max_message_size
+                                    ? pipe_message_admission_too_large
+                                    : pipe_message_admission_hwm_full;
+            return false;
+        }
     }
 
     if (_registry_accounting) {
@@ -3620,6 +3803,7 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
             if (!msg_->is_routing_id () && !msg_->is_credential ())
                 ++_msgs_written;
         }
+        _out_complete_record_pending = true;
         _out_incomplete_bytes = 0;
         _out_incomplete_payload_bytes = 0;
         _out_multipart_started_empty = false;
@@ -3635,7 +3819,8 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
     return true;
 }
 
-void zlink::pipe_t::account_inbound_frame (const msg_t *msg_)
+void zlink::pipe_t::account_inbound_frame (
+  const msg_t *msg_, bool prefetched_batch_exhausted_)
 {
     const bool completes_multipart = _in_incomplete_bytes != 0;
     const uint64_t frame_bytes = frame_accounted_bytes (msg_);
@@ -3681,13 +3866,42 @@ void zlink::pipe_t::account_inbound_frame (const msg_t *msg_)
     const uint64_t credit_delta = _bytes_read - _last_credit_bytes_read;
     const uint64_t lwm = _lwm.load (std::memory_order_relaxed);
     const bool lwm_reached = lwm > 0 && credit_delta >= lwm;
+    bool waiter_lwm_reached = false;
     bool blocked_writer_drained = false;
     pipe_t *const peer = get_peer ();
-    if (!lwm_reached && credit_delta > 0 && peer
-        && peer->_waiting_for_byte_credit.load (std::memory_order_acquire))
-        blocked_writer_drained = _in_pipe && !_in_pipe->check_read ();
+    if (!lwm_reached && credit_delta > 0 && peer) {
+        const bool writer_waiting =
+          peer->_waiting_for_byte_credit.load (std::memory_order_acquire);
+        if (writer_waiting) {
+            // A deferred physical-queue shrink intentionally leaves applied
+            // accounting above the planned HWM, and endpoint plan application
+            // can race a later replan. The peer already enforces the planned
+            // value, so a blocked writer must use that same window for credit
+            // wakeups instead of waiting for a stale, larger cached LWM.
+            const uint64_t planned_in = planned_in_hwm ();
+            const uint64_t planned_lwm =
+              planned_in == 0
+                ? 1
+                : apply_lwm_hint (planned_in, compute_lwm (planned_in),
+                                  _lwm_hint);
+            waiter_lwm_reached = credit_delta >= planned_lwm;
+            if (!waiter_lwm_reached)
+                blocked_writer_drained = prefetched_batch_exhausted_;
+        } else if (prefetched_batch_exhausted_) {
+            // Close the only permanent sub-LWM lost-wake window. The writer
+            // publishes its waiter and executes the matching fence before it
+            // re-reads these counters. If this drained reader ran first, that
+            // re-read observes the credit; if the writer ran first, this
+            // second waiter load observes it and emits activate_write.
+            std::atomic_thread_fence (std::memory_order_seq_cst);
+            blocked_writer_drained =
+              peer->_waiting_for_byte_credit.load (
+                std::memory_order_acquire);
+        }
+    }
     const bool credit_boundary =
-      credit_delta > 0 && (lwm_reached || blocked_writer_drained);
+      credit_delta > 0
+      && (lwm_reached || waiter_lwm_reached || blocked_writer_drained);
     if (credit_boundary) {
         _last_credit_bytes_read = _bytes_read;
         send_activate_write (peer, _in_generation, _msgs_read,
@@ -3831,9 +4045,22 @@ void zlink::pipe_t::flush_unlocked ()
     // the peer owner mailbox in the same surviving-slot order.
     if (publish_pending_controls && _session_pipe)
         (void) append_pending_peer_controls_unlocked ();
+    const bool completed_record = _out_complete_record_pending;
+    _out_complete_record_pending = false;
     const bool sleeping = _out_pipe && !_out_pipe->flush ();
-    if (sleeping)
-        send_activate_read (get_peer ());
+    pipe_t *const peer = get_peer ();
+    bool explicit_reclassify = false;
+    if (completed_record && peer
+        && peer->_head_reclassify_wake.load (std::memory_order_acquire)
+             == head_reclassify_armed) {
+        unsigned char expected = head_reclassify_armed;
+        explicit_reclassify =
+          peer->_head_reclassify_wake.compare_exchange_strong (
+            expected, head_reclassify_queued, std::memory_order_acq_rel,
+            std::memory_order_acquire);
+    }
+    if (sleeping || explicit_reclassify)
+        send_activate_read (peer);
     if (publish_pending_controls && !_session_pipe)
         (void) dispatch_pending_inproc_controls_unlocked ();
 }

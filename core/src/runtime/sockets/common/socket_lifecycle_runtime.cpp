@@ -329,6 +329,19 @@ void zlink::socket_lifecycle_coordinator_t::release_public_multipart_control_bou
     public_multipart_control_boundary.store (false, std::memory_order_release);
 }
 
+void zlink::socket_lifecycle_coordinator_t::mark_deferred_peer_controls ()
+{
+    deferred_peer_controls_pending.store (true, std::memory_order_release);
+}
+
+bool zlink::socket_lifecycle_coordinator_t::take_deferred_peer_controls ()
+{
+    if (!deferred_peer_controls_pending.load (std::memory_order_acquire))
+        return false;
+    return deferred_peer_controls_pending.exchange (
+      false, std::memory_order_acq_rel);
+}
+
 bool zlink::socket_lifecycle_coordinator_t::public_api_sync_held () const
 {
     return (public_api_state.load (std::memory_order_acquire) & public_api_sync_bit) != 0;

@@ -43,14 +43,53 @@ void destroy_live_chain (zlink::socket_completion::reservation_t *head_)
     while (head_) {
         zlink::socket_completion::reservation_t *next = head_->all_next;
         close_completion_payload (&head_->completion);
-        delete head_;
+        if (head_->heap_owned)
+            delete head_;
         head_ = next;
     }
+}
+
+void destroy_cached_chain (zlink::socket_completion::reservation_t *head_)
+{
+    while (head_) {
+        zlink::socket_completion::reservation_t *next = head_->ready_next;
+        if (head_->heap_owned)
+            delete head_;
+        head_ = next;
+    }
+}
+
+void reset_reservation (
+  zlink::socket_completion::reservation_t *node_)
+{
+    memset (&node_->completion, 0, sizeof (node_->completion));
+    node_->completion.struct_size = sizeof (node_->completion);
+    node_->ready_next = NULL;
+    node_->all_previous = NULL;
+    node_->all_next = NULL;
+    node_->ready = false;
+}
+
+zlink::socket_completion::reservation_t *cache_released_locked (
+  zlink::socket_completion::queue_state_t *state_,
+  zlink::socket_completion::reservation_t *node_)
+{
+    reset_reservation (node_);
+    if (state_->cached >= zlink::socket_completion::max_cached_reservations)
+        return node_;
+    node_->ready_next = state_->cached_head;
+    state_->cached_head = node_;
+    ++state_->cached;
+    return NULL;
 }
 }
 
 zlink::socket_completion::reservation_t::reservation_t () :
-    ready_next (NULL), all_previous (NULL), all_next (NULL), ready (false)
+    ready_next (NULL),
+    all_previous (NULL),
+    all_next (NULL),
+    ready (false),
+    heap_owned (true)
 {
     memset (&completion, 0, sizeof (completion));
     completion.struct_size = sizeof (completion);
@@ -60,15 +99,24 @@ zlink::socket_completion::queue_state_t::queue_state_t () :
     ready_head (NULL),
     ready_tail (NULL),
     all_head (NULL),
+    cached_head (NULL),
     outstanding (0),
+    cached (0),
     next_id (1),
     lifecycle_errno (0)
 {
+    for (size_t i = 0; i != inline_cached_reservations; ++i) {
+        inline_cache[i].heap_owned = false;
+        inline_cache[i].ready_next = cached_head;
+        cached_head = &inline_cache[i];
+        ++cached;
+    }
 }
 
 zlink::socket_completion::queue_state_t::~queue_state_t ()
 {
     destroy_live_chain (all_head);
+    destroy_cached_chain (cached_head);
 }
 
 int zlink::socket_completion::reserve (
@@ -100,10 +148,17 @@ int zlink::socket_completion::reserve (
     // Capacity and sequence exhaustion are contract outcomes, independent of
     // allocator state. Allocate only after those checks while retaining the
     // same mutex so the accepted reservation cannot race the 65,536 bound.
-    reservation_t *node = new (std::nothrow) reservation_t ();
-    if (!node) {
-        errno = ENOMEM;
-        return -1;
+    reservation_t *node = state_->cached_head;
+    if (node) {
+        state_->cached_head = node->ready_next;
+        --state_->cached;
+        reset_reservation (node);
+    } else {
+        node = new (std::nothrow) reservation_t ();
+        if (!node) {
+            errno = ENOMEM;
+            return -1;
+        }
     }
 
     node->completion.kind = kind_;
@@ -134,8 +189,17 @@ void zlink::socket_completion::release (queue_state_t *state_,
             return;
         unlink_live_locked (state_, reservation_);
     }
+
+    // Closing a message may invoke an application-owned free callback. Keep
+    // that callback outside the queue mutex so it can safely re-enter public
+    // completion APIs. The socket operation still owns the detached node.
     close_completion_payload (&reservation_->completion);
-    delete reservation_;
+    reservation_t *released = NULL;
+    {
+        std::lock_guard<std::mutex> lock (state_->mutex);
+        released = cache_released_locked (state_, reservation_);
+    }
+    delete released;
 }
 
 namespace
@@ -237,8 +301,9 @@ int zlink::socket_completion::recv (queue_state_t *state_,
     *completion_out_ = node->completion;
     node->completion.reply_parts = NULL;
     node->completion.reply_part_count = 0;
+    reservation_t *released = cache_released_locked (state_, node);
     lock.unlock ();
-    delete node;
+    delete released;
     errno = 0;
     return 0;
 }

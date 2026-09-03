@@ -18,6 +18,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <limits>
 #include <mutex>
 
@@ -88,6 +89,168 @@ void test_router_reply_peer_type_snapshot_is_part_of_alias_identity ()
     aliases.emplace (dealer_alias, 1);
     aliases.emplace (router_alias, 2);
     TEST_ASSERT_EQUAL_UINT64 (2, aliases.size ());
+}
+
+void test_router_reply_rid_owner_preserves_full_public_identity ()
+{
+    using namespace zlink::socket_reqrep_internal;
+
+    unsigned char first_rid[255];
+    unsigned char second_rid[255];
+    memset (first_rid, 0xa5, sizeof (first_rid));
+    memcpy (second_rid, first_rid, sizeof (second_rid));
+    second_rid[sizeof (second_rid) - 1] = 0x5a;
+
+    fixed_routing_id_key_t first;
+    fixed_routing_id_key_t first_copy;
+    fixed_routing_id_key_t second;
+    first.assign (first_rid, sizeof (first_rid));
+    first_copy.assign (first_rid, sizeof (first_rid));
+    second.assign (second_rid, sizeof (second_rid));
+
+    TEST_ASSERT_EQUAL_UINT64 (sizeof (first_rid), first.size ());
+    TEST_ASSERT_TRUE (first == first_copy);
+    TEST_ASSERT_FALSE (first == second);
+
+    std::unordered_map<fixed_routing_id_key_t, size_t,
+                       fixed_routing_id_key_hash_t>
+      owners;
+    ++owners.emplace (first, 0).first->second;
+    ++owners.emplace (first_copy, 0).first->second;
+    ++owners.emplace (second, 0).first->second;
+    TEST_ASSERT_EQUAL_UINT64 (2, owners.size ());
+    TEST_ASSERT_EQUAL_UINT64 (2, owners.find (first)->second);
+    TEST_ASSERT_EQUAL_UINT64 (1, owners.find (second)->second);
+}
+
+void test_request_reply_intrusive_stores_spill_reuse_and_errno ()
+{
+    using namespace zlink::socket_reqrep_internal;
+
+    pending_request_store_t pending_requests;
+    for (uint64_t key = 1; key <= 64; ++key) {
+        pending_request_t pending;
+        pending.identity.request_seq = key;
+        pending.identity.cookie = key;
+        TEST_ASSERT_TRUE (
+          pending_requests.emplace (key, std::move (pending)).second);
+    }
+    pending_request_t spill_pending;
+    spill_pending.identity.request_seq = 65;
+    spill_pending.identity.cookie = 65;
+    errno = ENOMEM;
+    std::pair<pending_request_store_t::iterator, bool> pending_spill =
+      pending_requests.emplace (65, std::move (spill_pending));
+    TEST_ASSERT_TRUE (pending_spill.second);
+    TEST_ASSERT_EQUAL_INT (0, errno);
+    TEST_ASSERT_EQUAL_UINT64 (65, pending_requests.size ());
+
+    pending_request_t duplicate_pending;
+    duplicate_pending.identity.request_seq = 65;
+    duplicate_pending.identity.cookie = 66;
+    errno = ENOMEM;
+    const std::pair<pending_request_store_t::iterator, bool>
+      pending_duplicate =
+        pending_requests.emplace (65, std::move (duplicate_pending));
+    TEST_ASSERT_FALSE (pending_duplicate.second);
+    TEST_ASSERT_TRUE (pending_duplicate.first == pending_requests.end ());
+    TEST_ASSERT_EQUAL_INT (EEXIST, errno);
+
+    pending_request_store_t::node_t *const pending_spill_node =
+      &*pending_spill.first;
+    pending_requests.erase (pending_spill.first);
+    pending_request_t replacement_pending;
+    replacement_pending.identity.request_seq = 66;
+    replacement_pending.identity.cookie = 66;
+    errno = ENOMEM;
+    const std::pair<pending_request_store_t::iterator, bool>
+      pending_replacement =
+        pending_requests.emplace (66, std::move (replacement_pending));
+    TEST_ASSERT_TRUE (pending_replacement.second);
+    TEST_ASSERT_EQUAL_PTR (pending_spill_node, &*pending_replacement.first);
+    TEST_ASSERT_EQUAL_INT (0, errno);
+    TEST_ASSERT_EQUAL_UINT64 (65, pending_requests.size ());
+
+    typedef reply_target_store_t<dealer_reply_target_t> dealer_store_t;
+    dealer_store_t dealer_targets;
+    for (uint64_t key = 1; key <= 64; ++key) {
+        dealer_reply_target_t target;
+        target.request_seq = key;
+        TEST_ASSERT_TRUE (dealer_targets.emplace (key, target).second);
+    }
+    dealer_reply_target_t spill_dealer;
+    spill_dealer.request_seq = 65;
+    errno = ENOMEM;
+    std::pair<dealer_store_t::iterator, bool> dealer_spill =
+      dealer_targets.emplace (65, spill_dealer);
+    TEST_ASSERT_TRUE (dealer_spill.second);
+    TEST_ASSERT_EQUAL_INT (0, errno);
+    TEST_ASSERT_EQUAL_UINT64 (65, dealer_targets.size ());
+
+    dealer_reply_target_t duplicate_dealer;
+    duplicate_dealer.request_seq = 650;
+    errno = ENOMEM;
+    const std::pair<dealer_store_t::iterator, bool> dealer_duplicate =
+      dealer_targets.emplace (65, duplicate_dealer);
+    TEST_ASSERT_FALSE (dealer_duplicate.second);
+    TEST_ASSERT_TRUE (dealer_duplicate.first == dealer_targets.end ());
+    TEST_ASSERT_EQUAL_INT (EEXIST, errno);
+
+    dealer_store_t::node_t *const dealer_spill_node = &*dealer_spill.first;
+    dealer_targets.erase (dealer_spill.first);
+    dealer_reply_target_t replacement_dealer;
+    replacement_dealer.request_seq = 66;
+    errno = ENOMEM;
+    const std::pair<dealer_store_t::iterator, bool> dealer_replacement =
+      dealer_targets.emplace (66, replacement_dealer);
+    TEST_ASSERT_TRUE (dealer_replacement.second);
+    TEST_ASSERT_EQUAL_PTR (dealer_spill_node, &*dealer_replacement.first);
+    TEST_ASSERT_EQUAL_INT (0, errno);
+    TEST_ASSERT_EQUAL_UINT64 (65, dealer_targets.size ());
+
+    typedef reply_target_store_t<router_reply_target_t> router_store_t;
+    router_store_t router_targets;
+    for (uint64_t key = 1; key <= 64; ++key) {
+        const unsigned char rid_byte = static_cast<unsigned char> (key);
+        router_reply_target_t target;
+        target.peer_rid.assign (&rid_byte, sizeof (rid_byte));
+        target.wire_request_seq = key;
+        TEST_ASSERT_TRUE (router_targets.emplace (key, target).second);
+    }
+    const unsigned char spill_rid = 65;
+    router_reply_target_t spill_router;
+    spill_router.peer_rid.assign (&spill_rid, sizeof (spill_rid));
+    spill_router.wire_request_seq = 65;
+    errno = ENOMEM;
+    std::pair<router_store_t::iterator, bool> router_spill =
+      router_targets.emplace (65, spill_router);
+    TEST_ASSERT_TRUE (router_spill.second);
+    TEST_ASSERT_EQUAL_INT (0, errno);
+    TEST_ASSERT_EQUAL_UINT64 (65, router_targets.size ());
+
+    router_reply_target_t duplicate_router;
+    duplicate_router.wire_request_seq = 650;
+    errno = ENOMEM;
+    const std::pair<router_store_t::iterator, bool> router_duplicate =
+      router_targets.emplace (65, duplicate_router);
+    TEST_ASSERT_FALSE (router_duplicate.second);
+    TEST_ASSERT_TRUE (router_duplicate.first == router_targets.end ());
+    TEST_ASSERT_EQUAL_INT (EEXIST, errno);
+
+    router_store_t::node_t *const router_spill_node = &*router_spill.first;
+    router_targets.erase (router_spill.first);
+    const unsigned char replacement_rid = 66;
+    router_reply_target_t replacement_router;
+    replacement_router.peer_rid.assign (&replacement_rid,
+                                        sizeof (replacement_rid));
+    replacement_router.wire_request_seq = 66;
+    errno = ENOMEM;
+    const std::pair<router_store_t::iterator, bool> router_replacement =
+      router_targets.emplace (66, replacement_router);
+    TEST_ASSERT_TRUE (router_replacement.second);
+    TEST_ASSERT_EQUAL_PTR (router_spill_node, &*router_replacement.first);
+    TEST_ASSERT_EQUAL_INT (0, errno);
+    TEST_ASSERT_EQUAL_UINT64 (65, router_targets.size ());
 }
 
 struct timeout_barrier_t
@@ -502,13 +665,15 @@ void test_pending_aggregate_wrap_and_stale_cookie_are_fenced ()
     TEST_ASSERT_SUCCESS_ERRNO (arm_socket_pending_request_timeout (state, stale_token));
     {
         std::lock_guard<std::mutex> lock (state->mutex);
-        const std::unordered_map<uint64_t, pending_request_t>::const_iterator current =
+        const pending_request_store_t::const_iterator current =
           state->pending_requests.find (stale_token.identity.request_seq);
         TEST_ASSERT_TRUE (current != state->pending_requests.end ());
         TEST_ASSERT_EQUAL_UINT64 (reused_identity.cookie,
                                   current->second.identity.cookie);
         TEST_ASSERT_EQUAL_UINT64 (0, current->second.transport_pair_id);
-        TEST_ASSERT_FALSE (current->second.timeout_task);
+        TEST_ASSERT_EQUAL_UINT64 (0,
+                                  current->second.timeout_deadline_ns);
+        TEST_ASSERT_FALSE (state->pending_timeout_task);
     }
 
     std::shared_ptr<zlink::request_timeout::task_t> stale_timeout;
@@ -530,6 +695,79 @@ void test_pending_aggregate_wrap_and_stale_cookie_are_fenced ()
     TEST_ASSERT_TRUE (remove_socket_pending_request_locked (
       state.get (), reused_request.identity, &removed));
     TEST_ASSERT_TRUE (state->pending_requests.empty ());
+}
+
+void test_pending_timeout_task_is_reused_and_only_replaced_for_earlier_deadline ()
+{
+    using namespace zlink::socket_reqrep_internal;
+    std::shared_ptr<socket_request_reply_state_t> state (
+      new socket_request_reply_state_t (NULL, ZLINK_CORE_SOCKET_DEALER));
+
+    pending_request_t first;
+    first.identity.request_seq = 1;
+    first.identity.cookie = 1;
+    pending_request_token_t first_token;
+    first_token.identity = first.identity;
+    first_token.resolved_timeout_ms = 20000;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      add_socket_pending_request_locked (state.get (), std::move (first)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      arm_socket_pending_request_timeout (state, first_token));
+    std::shared_ptr<zlink::request_timeout::task_t> first_task;
+    {
+        std::lock_guard<std::mutex> lock (state->mutex);
+        first_task = state->pending_timeout_task;
+        TEST_ASSERT_NOT_NULL (first_task.get ());
+        TEST_ASSERT_NOT_EQUAL (
+          0, state->pending_requests.find (1)->second.timeout_deadline_ns);
+    }
+
+    pending_request_t removed;
+    {
+        std::lock_guard<std::mutex> lock (state->mutex);
+        TEST_ASSERT_TRUE (remove_socket_pending_request_locked (
+          state.get (), first_token.identity, &removed));
+    }
+
+    pending_request_t later;
+    later.identity.request_seq = 2;
+    later.identity.cookie = 2;
+    pending_request_token_t later_token;
+    later_token.identity = later.identity;
+    later_token.resolved_timeout_ms = 30000;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      add_socket_pending_request_locked (state.get (), std::move (later)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      arm_socket_pending_request_timeout (state, later_token));
+    {
+        std::lock_guard<std::mutex> lock (state->mutex);
+        TEST_ASSERT_EQUAL_PTR (first_task.get (),
+                               state->pending_timeout_task.get ());
+        TEST_ASSERT_TRUE (remove_socket_pending_request_locked (
+          state.get (), later_token.identity, &removed));
+    }
+
+    pending_request_t earlier;
+    earlier.identity.request_seq = 3;
+    earlier.identity.cookie = 3;
+    pending_request_token_t earlier_token;
+    earlier_token.identity = earlier.identity;
+    earlier_token.resolved_timeout_ms = 10000;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      add_socket_pending_request_locked (state.get (), std::move (earlier)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      arm_socket_pending_request_timeout (state, earlier_token));
+    {
+        std::lock_guard<std::mutex> lock (state->mutex);
+        TEST_ASSERT_NOT_NULL (state->pending_timeout_task.get ());
+        TEST_ASSERT_TRUE (first_task.get ()
+                          != state->pending_timeout_task.get ());
+        TEST_ASSERT_TRUE (remove_socket_pending_request_locked (
+          state.get (), earlier_token.identity, &removed));
+    }
+
+    cancel_socket_pending_timeouts (state);
+    TEST_ASSERT_FALSE (state->pending_timeout_task);
 }
 
 void test_suspended_request_multipart_preserves_pending_cookie ()
@@ -735,6 +973,8 @@ int main ()
       test_completion_socket_buffer_preserves_default_and_caps_explicit_value);
     RUN_TEST (
       test_router_reply_peer_type_snapshot_is_part_of_alias_identity);
+    RUN_TEST (test_router_reply_rid_owner_preserves_full_public_identity);
+    RUN_TEST (test_request_reply_intrusive_stores_spill_reuse_and_errno);
     RUN_TEST (test_zmp_encoder_rejects_payload_larger_than_u32);
     RUN_TEST (test_zmp_encoder_keeps_ordinary_data_header_at_eight_bytes);
     RUN_TEST (test_zmp_encoder_writes_request_sequence_extension_big_endian);
@@ -748,6 +988,8 @@ int main ()
     RUN_TEST (test_recv_sequence_buffers_two_parts_inline_and_rolls_back_oom);
     RUN_TEST (test_zero_request_timeout_resolves_to_implementation_default);
     RUN_TEST (test_pending_aggregate_wrap_and_stale_cookie_are_fenced);
+    RUN_TEST (
+      test_pending_timeout_task_is_reused_and_only_replaced_for_earlier_deadline);
     RUN_TEST (test_suspended_request_multipart_preserves_pending_cookie);
     RUN_TEST (test_pending_cookie_wrap_skips_zero);
     RUN_TEST (test_pending_insert_failure_releases_completion_reservation);

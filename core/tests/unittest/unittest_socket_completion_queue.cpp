@@ -158,6 +158,41 @@ void test_completion_id_wrap_rejects_zero_without_reserving ()
                               zlink::socket_completion::outstanding (&state));
 }
 
+void test_dequeued_reservation_is_recycled_with_clean_metadata ()
+{
+    zlink::socket_completion::queue_state_t state;
+    zlink_routing_id_t peer;
+    memset (&peer, 0, sizeof (peer));
+    peer.size = 3;
+    memcpy (peer.data, "RID", 3);
+
+    zlink::socket_completion::reservation_t *first = NULL;
+    zlink_completion_id_t first_id = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink::socket_completion::reserve (
+      &state, ZLINK_COMPLETION_REQUEST, reinterpret_cast<void *> (1), &peer,
+      &first, &first_id));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink::socket_completion::publish_request (
+      &state, first, ZLINK_REQUEST_TIMED_OUT, NULL, 0));
+
+    zlink_completion_t completion;
+    memset (&completion, 0, sizeof (completion));
+    completion.struct_size = sizeof (completion);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink::socket_completion::recv (
+      &state, &completion, ZLINK_RECV_FLAGS_DONTWAIT, 0));
+    TEST_ASSERT_EQUAL_UINT64 (first_id, completion.completion_id);
+
+    zlink::socket_completion::reservation_t *second = NULL;
+    zlink_completion_id_t second_id = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink::socket_completion::reserve (
+      &state, ZLINK_COMPLETION_SEND, NULL, NULL, &second, &second_id));
+    TEST_ASSERT_EQUAL_PTR (first, second);
+    TEST_ASSERT_NOT_EQUAL (first_id, second_id);
+    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_SEND, second->completion.kind);
+    TEST_ASSERT_NULL (second->completion.user_context);
+    TEST_ASSERT_EQUAL_UINT8 (0, second->completion.peer_rid.size);
+    zlink::socket_completion::release (&state, second);
+}
+
 int main ()
 {
     UNITY_BEGIN ();
@@ -165,5 +200,6 @@ int main ()
       test_shared_completion_reservations_have_a_finite_admission_limit);
     RUN_TEST (test_published_reservation_is_held_until_public_dequeue);
     RUN_TEST (test_completion_id_wrap_rejects_zero_without_reserving);
+    RUN_TEST (test_dequeued_reservation_is_recycled_with_clean_metadata);
     return UNITY_END ();
 }

@@ -3,6 +3,8 @@
 #include "testutil.hpp"
 #include "testutil_unity.hpp"
 
+#include "api/socket/socket_api_internal.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -613,6 +615,94 @@ void test_pair_pending_completion_is_level_triggered_single_owner_and_reusable (
     test_context_socket_close_zero_linger (receiver);
 }
 
+void test_pair_pending_send_redrives_without_a_later_sender_call ()
+{
+    void *sender = NULL;
+    void *receiver = NULL;
+    setup_pair ("inproc://phase3-pending-autonomous-redrive", &sender,
+                &receiver, true);
+
+    zlink_completion_id_t pending_id = 0;
+    (void) submit_until_pending (sender, NULL, &pending_id);
+    TEST_ASSERT_NOT_EQUAL (0, pending_id);
+
+    socket_handle_t sender_handle = as_socket_handle (sender);
+    TEST_ASSERT_NOT_NULL (sender_handle.socket);
+    TEST_ASSERT_TRUE (sender_handle.socket->has_send_pending ());
+
+    // Return enough reader credit to cross the pipe LWM, then make no public
+    // call on the sender. Its retained mailbox owner must consume
+    // activate_write and drive the accepted record on its own.
+    const std::chrono::steady_clock::time_point drain_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (3);
+    size_t drained = 0;
+    while (std::chrono::steady_clock::now () < drain_deadline
+           && drained < kMaxFillAttempts) {
+        if (recv_one_pair_part (receiver)) {
+            ++drained;
+            continue;
+        }
+        if (drained != 0)
+            break;
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE (drained != 0);
+
+    const std::chrono::steady_clock::time_point redrive_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (3);
+    while (sender_handle.socket->has_send_pending ()
+           && std::chrono::steady_clock::now () < redrive_deadline)
+        msleep (1);
+    TEST_ASSERT_FALSE_MESSAGE (
+      sender_handle.socket->has_send_pending (),
+      "accepted SEND still required a later public sender call to redrive");
+
+    zlink_completion_t completion;
+    init_empty_completion (&completion);
+    const std::chrono::steady_clock::time_point completion_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (3);
+    while (std::chrono::steady_clock::now () < completion_deadline) {
+        const zlink_recv_result_t result = zlink_completion_recv (
+          sender, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (result == ZLINK_RECV_OK)
+            break;
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, result);
+        TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+        msleep (1);
+    }
+    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_SEND, completion.kind);
+    TEST_ASSERT_EQUAL_UINT64 (pending_id, completion.completion_id);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.send_result);
+    zlink_completion_close (&completion);
+
+    sender_handle = socket_handle_t ();
+    test_context_socket_close_zero_linger (sender);
+    test_context_socket_close_zero_linger (receiver);
+}
+
+void test_completion_recv_rejects_dirty_zero_size_routing_id ()
+{
+    void *socket = test_context_socket (ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_NOT_NULL (socket);
+
+    zlink_completion_t completion;
+    init_empty_completion (&completion);
+    completion.peer_rid.data[sizeof (completion.peer_rid.data) - 1] = 0x5a;
+
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_INVALID_STATE,
+      zlink_completion_recv (socket, &completion,
+                             ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (EINVAL, zlink_errno ());
+    TEST_ASSERT_EQUAL_UINT8 (0, completion.peer_rid.size);
+    TEST_ASSERT_EQUAL_UINT8 (
+      0x5a,
+      completion.peer_rid.data[sizeof (completion.peer_rid.data) - 1]);
+
+    test_context_socket_close_zero_linger (socket);
+}
+
 void test_completion_recv_timeout_and_context_termination_keep_output_empty ()
 {
     void *context = zlink_ctx_new ();
@@ -906,6 +996,57 @@ void test_public_completion_reservation_limit_releases_only_after_recv ()
     TEST_ASSERT_EQUAL_UINT64 (0, rejected_id);
     assert_part_consumed (&rejected);
 
+    // A caller that hit the shared completion cap can still make immediate
+    // ID-0 progress after all older pending sends admit and the transport
+    // becomes writable. Keep the receiver active while the caller waits just
+    // as a real peer would be; POLLOUT must not depend on draining the
+    // completion queue first.
+    std::atomic<bool> stop_drainer (false);
+    std::atomic<int> drainer_error (0);
+    std::thread drainer ([&] {
+        while (!stop_drainer.load (std::memory_order_acquire)) {
+            zlink_msg_t part;
+            if (zlink_msg_init (&part) != ZLINK_CONFIG_OK) {
+                drainer_error.store (EFAULT, std::memory_order_release);
+                return;
+            }
+            zlink_part_flag_t has_more = ZLINK_PART_MORE;
+            const zlink_recv_result_t result = zlink_recv_part (
+              receiver, NULL, &part, &has_more,
+              ZLINK_RECV_FLAGS_DONTWAIT);
+            const int recv_errno = zlink_errno ();
+            if (zlink_msg_close (&part) != ZLINK_CONFIG_OK) {
+                drainer_error.store (EFAULT, std::memory_order_release);
+                return;
+            }
+            if (result == ZLINK_RECV_OK)
+                continue;
+            if (result != ZLINK_RECV_NO_DATA || recv_errno != EAGAIN) {
+                drainer_error.store (recv_errno != 0 ? recv_errno : EIO,
+                                     std::memory_order_release);
+                return;
+            }
+            std::this_thread::yield ();
+        }
+    });
+    zlink_pollitem_t writable = {sender, 0, ZLINK_POLLOUT, 0};
+    const int writable_count = zlink_poll (&writable, 1, 5000, NULL);
+    stop_drainer.store (true, std::memory_order_release);
+    drainer.join ();
+    TEST_ASSERT_EQUAL_INT (0, drainer_error.load (std::memory_order_acquire));
+    TEST_ASSERT_EQUAL_INT (1, writable_count);
+    TEST_ASSERT_TRUE ((writable.revents & ZLINK_POLLOUT) != 0);
+
+    zlink_msg_t immediate;
+    init_part (&immediate, "capacity-full-immediate");
+    zlink_completion_id_t immediate_id = UINT64_MAX;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_part (sender, &immediate, ZLINK_SEND_FLAGS_DONTWAIT,
+                       ZLINK_PART_FINAL, NULL, &immediate_id));
+    TEST_ASSERT_EQUAL_UINT64 (0, immediate_id);
+    assert_part_consumed (&immediate);
+
     while (recv_one_pair_part (receiver)) {
     }
     const int recv_timeout_ms = 5000;
@@ -923,15 +1064,9 @@ void test_public_completion_reservation_limit_releases_only_after_recv ()
     TEST_ASSERT_EQUAL_UINT64 (first_pending_id, completion.completion_id);
     zlink_completion_close (&completion);
 
-    zlink_msg_t accepted;
-    init_part (&accepted, "capacity-reused");
     zlink_completion_id_t accepted_id = 0;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (sender, &accepted, ZLINK_SEND_FLAGS_DONTWAIT,
-                       ZLINK_PART_FINAL, NULL, &accepted_id));
+    (void) submit_until_pending (sender, NULL, &accepted_id);
     TEST_ASSERT_NOT_EQUAL (0, accepted_id);
-    assert_part_consumed (&accepted);
 
     const std::chrono::steady_clock::time_point admitted_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (3);
@@ -1304,12 +1439,27 @@ void test_router_pending_detach_reconnect_has_one_completion_and_no_replay ()
     assert_part_consumed (&prime);
     receive_router_data_eventually (server, "prime");
 
-    TEST_ASSERT_NOT_EQUAL (0,
-                           submit_routed_until_pending (client, &target_rid));
     const char *const marker = "phase3-detach-reconnect-marker";
+    zlink_msg_t pending_prefix;
+    init_part (&pending_prefix, "pending-prefix");
+    zlink_completion_id_t prefix_id = UINT64_MAX;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_part_rid (client, &target_rid, &pending_prefix,
+                           ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_MORE, NULL,
+                           &prefix_id));
+    TEST_ASSERT_EQUAL_UINT64 (0, prefix_id);
+    assert_part_consumed (&pending_prefix);
+
     zlink_msg_t pending_marker;
     init_part (&pending_marker, marker);
     zlink_completion_id_t marker_id = 0;
+    // Autonomous pending redrive can turn a transient HWM-full observation
+    // writable before the following marker call. Hold physical admission in
+    // retryable backpressure until detach so this test deterministically
+    // exercises the pending-record reconnect path it names.
+    zlink_test_set_submit_retry_fault (static_cast<int> (kMaxFillAttempts),
+                                       EAGAIN);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_send_part_rid (client, &target_rid, &pending_marker,
@@ -1320,6 +1470,7 @@ void test_router_pending_detach_reconnect_has_one_completion_and_no_replay ()
 
     test_context_socket_close_zero_linger (server);
     msleep (30);
+    zlink_test_set_submit_retry_fault (0, 0);
     TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK,
                            zlink_bind (replacement, endpoint));
 
@@ -1416,6 +1567,10 @@ int main ()
       test_accepted_dontwait_allocation_and_runtime_failures_are_terminal);
     RUN_PHASE3_COMPLETION_TEST (
       test_pair_pending_completion_is_level_triggered_single_owner_and_reusable);
+    RUN_PHASE3_COMPLETION_TEST (
+      test_pair_pending_send_redrives_without_a_later_sender_call);
+    RUN_PHASE3_COMPLETION_TEST (
+      test_completion_recv_rejects_dirty_zero_size_routing_id);
     RUN_PHASE3_COMPLETION_TEST (
       test_completion_recv_timeout_and_context_termination_keep_output_empty);
     RUN_PHASE3_COMPLETION_TEST (

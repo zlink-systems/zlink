@@ -55,6 +55,10 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     //  Returns true once for a command batch that woke an inactive receiver.
     //  Callers use this only as a fast-path hint; recv() remains authoritative.
     bool take_command_pending_hint ();
+    bool has_command_pending_hint () const
+    {
+        return _command_pending_hint.load (std::memory_order_acquire);
+    }
     //  A public poller may consume the primary notification while an async
     //  command owner applies the corresponding socket state. The command pipe
     //  remains authoritative even if that notification is consumed before

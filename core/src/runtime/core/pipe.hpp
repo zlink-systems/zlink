@@ -213,6 +213,11 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  retain the zero-overhead get_routing_id() view.
     void snapshot_routing_id (blob_t *routing_id_) const;
     const blob_t &get_routing_id () const;
+    // ROUTER publishes an allocation-free exact-route fence for reply tokens.
+    // Odd values identify a current RID binding; even values are unpublished.
+    void invalidate_router_route_binding ();
+    void publish_router_route_binding ();
+    uint64_t router_route_binding_token () const;
     pipe_t *get_peer () const;
     //  Returns a lifetime-pinned peer snapshot for control/monitor paths. The
     //  caller must release_lifetime_ref() after its last dereference.
@@ -437,6 +442,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     // Publishes controls deliberately staged above pipe-local multipart state
     // once the socket-level public multipart lease has ended.
     bool flush_pending_peer_controls ();
+    bool has_pending_peer_controls ();
 
     //  Writes a message and flushes it downstream under the same pipe lock.
     //  Use this for final single-part send hot paths to avoid paying for
@@ -530,6 +536,16 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  path so per-message routing does not take that mutex.
     void set_transport_pair_application_ready (bool ready_);
     bool transport_pair_application_ready_cached () const;
+    //  A ready count-2 Application lane owns a retained pointer to its
+    //  Completion sibling. Replies can snapshot that sibling under the
+    //  Application pipe's existing outbound lock instead of resolving the
+    //  pair table on every message. Readiness is cleared before this cache is
+    //  detached, so a racing reader either obtains a lifetime pin or retries
+    //  through the canonical route owner.
+    void set_transport_pair_completion_pipe (pipe_t *completion_);
+    pipe_t *retain_transport_pair_completion_pipe () const;
+    bool public_receive_active_cached () const;
+    void set_public_receive_active_cached (bool active_);
     bool uses_registry_accounting () const;
     uint64_t get_transport_pair_id () const;
     uint64_t get_transport_pair_generation () const;
@@ -557,6 +573,13 @@ class pipe_t ZLINK_FINAL : public object_t,
   private:
     friend class ctx_physical_queue_registry_t;
     friend class socket_base_t;
+
+    enum count1_completion_ready_state_t
+    {
+        count1_completion_idle = 0,
+        count1_completion_queued,
+        count1_completion_draining
+    };
 
     //  Type of the underlying lock-free pipe.
     typedef ypipe_base_t<msg_t> upipe_t;
@@ -598,6 +621,8 @@ class pipe_t ZLINK_FINAL : public object_t,
       pipe_message_admission_t *admission_out_) const;
     bool hwm_credit_ready_unlocked (
       pipe_message_admission_t *admission_out_);
+    void arm_hwm_credit_wait_unlocked ();
+    void clear_hwm_credit_wait_unlocked ();
     void rollback_unlocked (bool publish_peer_control_ = true);
     void flush_unlocked ();
     static uint64_t committed_frame_accounted_bytes_ref (const msg_t &msg_);
@@ -626,7 +651,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool check_hwm_with_peer_snapshot_unlocked ();
     void refresh_peer_credit_snapshot_unlocked ();
     pipe_t *retain_peer_snapshot_unlocked () const;
-    void account_inbound_frame (const msg_t *msg_);
+    void account_inbound_frame (const msg_t *msg_,
+                                bool prefetched_batch_exhausted_);
     void snapshot_outbound_queue_accounting (const pipe_t *reader_,
                                              uint64_t *provisional_out_,
                                              uint64_t *committed_out_) const;
@@ -672,6 +698,27 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Can the pipe be read from / written to?
     bool _in_active;
     bool _out_active;
+    //  Mirrors membership in the socket's active public receive partition.
+    //  The socket owner publishes transitions here so count-1 head
+    //  reclassification can avoid scheduler and route-table work when the
+    //  classification did not change.
+    std::atomic<bool> _public_receive_active;
+    //  A count-1 reader arms this before a non-sleeping head probe. The
+    //  writer changes armed->queued when it publishes a later record and
+    //  sends one explicit activate_read even if the underlying ypipe reader
+    //  is still awake.
+    std::atomic<unsigned char> _head_reclassify_wake;
+    //  Ready count-1 Application pipes carry private completion records on the
+    //  same physical FIFO as public DATA/REQUEST. The socket's completion-ready
+    //  queue owns one object and one inbound-reader reference while this state
+    //  is queued. Only the completion owner changes queued->draining; a later
+    //  whole-record reclassification either returns it to idle or republishes
+    //  it at the ready-queue tail.
+    std::atomic<unsigned char> _count1_completion_ready_state;
+    std::atomic<pipe_t *> _count1_completion_ready_next;
+    //  Guarded by _out_sync. True after at least one complete record was
+    //  appended and before the flush that publishes it.
+    bool _out_complete_record_pending;
     bool _transport_pair_write_held;
     //  Remote receive-flow state applied on this pipe's own thread. Guarded by
     //  _out_sync, exactly like _transport_pair_write_held.
@@ -781,6 +828,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Routing id of the writer. Used uniquely by the reader side.
     blob_t _router_socket_routing_id;
     blob_t _transport_peer_identity;
+    std::atomic<uint64_t> _router_route_binding_token;
     std::atomic<bool> _connection_ready_event_emitted;
     class lifetime_state_t
     {
@@ -836,6 +884,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     transport_lane_t _transport_lane;
     std::atomic<unsigned char> _transport_lane_count;
     std::atomic<bool> _transport_pair_application_ready;
+    pipe_t *_transport_pair_completion_pipe;
     //  Lock-free mirror of `_state == active`. `_state` only ever leaves
     //  `active`, so every transition clears this flag under `_out_sync` and
     //  readers never need that lock.

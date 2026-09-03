@@ -86,15 +86,25 @@ int zlink::socket_base_t::set_local_receive_flow_state (int state_)
         }
     }
 
+    bool deferred_control = false;
     for (size_t i = 0; i < targets.size (); ++i) {
         if (wrapped)
             targets[i]->terminate (false);
-        else
-            (void) targets[i]->write_flow_state_control_and_flush (
-              state, epoch,
-              defer_application_controls
-                && targets[i]->get_transport_lane_count () == 1u);
+        else {
+            const bool defer = defer_application_controls
+                               && targets[i]->get_transport_lane_count () == 1u;
+            if (targets[i]->write_flow_state_control_and_flush (
+                  state, epoch, defer)
+                && defer)
+                deferred_control = true;
+        }
         targets[i]->release_lifetime_ref ();
+    }
+    if (deferred_control) {
+        mark_deferred_peer_controls ();
+        // Close the producer-after-FINAL race even when no async command owner
+        // or later public socket call exists to consume the mailbox hint.
+        flush_deferred_peer_controls ();
     }
     return 0;
 }

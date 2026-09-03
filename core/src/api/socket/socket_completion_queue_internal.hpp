@@ -17,6 +17,12 @@ namespace socket_completion
 // A reservation is counted from successful FINAL acceptance until the public
 // completion record is dequeued.  Terminal publication is allocation-free.
 static const size_t max_outstanding_completions = 65536;
+// Keep a bounded set of dequeued/cancelled reservation nodes. Request
+// completions are normally consumed and replaced continuously, so recycling
+// the nodes removes allocator traffic without retaining memory proportional
+// to the configured outstanding limit.
+static const size_t inline_cached_reservations = 64;
+static const size_t max_cached_reservations = max_outstanding_completions;
 
 struct reservation_t
 {
@@ -27,6 +33,7 @@ struct reservation_t
     reservation_t *all_previous;
     reservation_t *all_next;
     bool ready;
+    bool heap_owned;
 };
 
 struct queue_state_t
@@ -39,7 +46,10 @@ struct queue_state_t
     reservation_t *ready_head;
     reservation_t *ready_tail;
     reservation_t *all_head;
+    reservation_t *cached_head;
+    reservation_t inline_cache[inline_cached_reservations];
     size_t outstanding;
+    size_t cached;
     uint64_t next_id;
     int lifecycle_errno;
 };

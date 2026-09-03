@@ -86,6 +86,7 @@ void zlink::fq_t::attach (pipe_t *pipe_)
     _pipes.push_back (pipe_);
     _pipes.swap (_active, _pipes.size () - 1);
     _active++;
+    pipe_->set_public_receive_active_cached (true);
 }
 
 void zlink::fq_t::deactivate (pipe_t *pipe_)
@@ -95,11 +96,14 @@ void zlink::fq_t::deactivate (pipe_t *pipe_)
     pipes_t::size_type index = 0;
     if (!try_get_pipe_index (pipe_, &index))
         return;
-    if (index >= _active)
+    if (index >= _active) {
+        pipe_->set_public_receive_active_cached (false);
         return;
+    }
 
     _active--;
     _pipes.swap (index, _active);
+    pipe_->set_public_receive_active_cached (false);
     if (_current == _active)
         _current = 0;
 }
@@ -132,6 +136,7 @@ void zlink::fq_t::pipe_terminated (pipe_t *pipe_)
         _active--;
         _pipes.swap (index, _active);
     }
+    pipe_->set_public_receive_active_cached (false);
     _pipes.erase (pipe_);
     normalize_state ();
 
@@ -157,12 +162,15 @@ void zlink::fq_t::activated (pipe_t *pipe_)
         return;
     if (record_admission_blocked (pipe_))
         return;
-    if (index < _active)
+    if (index < _active) {
+        pipe_->set_public_receive_active_cached (true);
         return;
+    }
 
     //  Move the pipe to the list of active pipes.
     _pipes.swap (index, _active);
     _active++;
+    pipe_->set_public_receive_active_cached (true);
 }
 
 bool zlink::fq_t::block_current_for_record_admission ()
@@ -372,6 +380,7 @@ int zlink::fq_t::recvpipe_internal (
         //  spurious protocol failure to callers.
         if (_more) {
             _more = false;
+            current_pipe->set_public_receive_active_cached (false);
             _active--;
             _pipes.swap (_current, _active);
             if (_current == _active)
@@ -386,6 +395,7 @@ int zlink::fq_t::recvpipe_internal (
             return -1;
         }
 
+        current_pipe->set_public_receive_active_cached (false);
         _active--;
         _pipes.swap (_current, _active);
         if (_current == _active)
@@ -420,6 +430,7 @@ bool zlink::fq_t::has_in ()
             return true;
 
         //  Deactivate the pipe.
+        _pipes[_current]->set_public_receive_active_cached (false);
         _active--;
         _pipes.swap (_current, _active);
         if (_current == _active)
@@ -455,6 +466,7 @@ bool zlink::fq_t::has_in_with_record_admission (
             // hiding them as a readiness miss.
             return true;
 
+        _pipes[_current]->set_public_receive_active_cached (false);
         _active--;
         _pipes.swap (_current, _active);
         if (_current == _active)
