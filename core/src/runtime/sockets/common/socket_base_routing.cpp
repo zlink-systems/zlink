@@ -182,21 +182,6 @@ int zlink::routing_socket_base_t::terminate_out_pipe_by_routing_id (
     return 0;
 }
 
-zlink::routing_socket_base_t::out_pipe_t
-zlink::routing_socket_base_t::try_erase_out_pipe (const blob_t &routing_id_)
-{
-    const out_pipes_t::iterator it = _out_pipes.find (routing_id_);
-    out_pipe_t res = {NULL, false, false, 0};
-    if (it != _out_pipes.end ()) {
-        res = it->second;
-        if (it->second.pipe != NULL && it->second.active && it->second.weight > 0)
-            --_writable_weighted_out_pipes;
-        _out_pipe_index.erase (it->second.pipe);
-        _out_pipes.erase (it);
-    }
-    return res;
-}
-
 void zlink::routing_socket_base_t::mark_out_pipe_active (out_pipe_t *out_pipe_)
 {
     if (!out_pipe_ || out_pipe_->active)

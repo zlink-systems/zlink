@@ -3,52 +3,16 @@
 #include "utils/precompiled.hpp"
 
 #include "sockets/router/router.hpp"
+#include "sockets/router/router_debug.hpp"
 
 #include "core/c_api_copy_internal.hpp"
 #include "core/pipe.hpp"
 #include "protocol/wire.hpp"
-#include "utils/debug_log.hpp"
 #include "utils/routing_id.hpp"
 
 #include <algorithm>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
-
-namespace
-{
-const bool router_debug_on = zlink::debug_env_enabled ("ZLINK_ROUTER_DEBUG");
-
-void format_blob_routing_id_debug (const zlink::blob_t &routing_id_, char *buf_, size_t buf_size_)
-{
-    if (!buf_ || buf_size_ == 0)
-        return;
-    if (routing_id_.size () == 0) {
-        std::snprintf (buf_, buf_size_, "<empty>");
-        return;
-    }
-
-    size_t used = 0;
-    for (size_t i = 0; i < routing_id_.size () && used + 4 < buf_size_; ++i) {
-        const unsigned char c = routing_id_.data ()[i];
-        const int rc = std::snprintf (buf_ + used, buf_size_ - used, "%c%02X",
-                                      (c >= 32 && c <= 126) ? static_cast<char> (c) : '.',
-                                      static_cast<unsigned> (c));
-        if (rc <= 0)
-            break;
-        used += static_cast<size_t> (rc);
-        if (i + 1 < routing_id_.size () && used + 2 < buf_size_) {
-            buf_[used++] = ' ';
-            buf_[used] = '\0';
-        }
-    }
-}
-
-bool router_debug_enabled ()
-{
-    return router_debug_on;
-}
-}
 
 namespace zlink
 {
@@ -222,7 +186,7 @@ pipe_t *router_t::find_transport_pair_pipe (
         && current->pipe->get_transport_lane () == transport_lane_application
         && current->pipe->get_transport_pair_id () == transport_pair_id_
         && current->pipe->get_transport_pair_generation () == transport_pair_generation_) {
-        if (router_debug_enabled ())
+        if (router_debug::enabled ())
             fprintf (stderr, "router pair lookup: current pipe=%p pair=%llu/%llu\\n",
                      static_cast<void *> (current->pipe),
                      static_cast<unsigned long long> (transport_pair_id_),
@@ -445,9 +409,10 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
             return true;
         }
 
-        if (router_debug_enabled ()) {
+        if (router_debug::enabled ()) {
             char rid_text[160];
-            format_blob_routing_id_debug (routing_id_, rid_text, sizeof (rid_text));
+            router_debug::format_routing_id (routing_id_, rid_text,
+                                             sizeof (rid_text));
             fprintf (stderr,
                      "router identify_peer: replace duplicate rid=%s existing_local=%d "
                      "new_local=%d\n",
@@ -492,9 +457,10 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
     pipe_->publish_router_route_binding ();
     if (actions_)
         actions_->cache_completion = true;
-    if (router_debug_enabled ()) {
+    if (router_debug::enabled ()) {
         char rid_text[160];
-        format_blob_routing_id_debug (pipe_->get_routing_id (), rid_text, sizeof (rid_text));
+        router_debug::format_routing_id (
+          pipe_->get_routing_id (), rid_text, sizeof (rid_text));
         fprintf (stderr, "router identify_peer: add out pipe rid=%s\n", rid_text);
     }
     return true;

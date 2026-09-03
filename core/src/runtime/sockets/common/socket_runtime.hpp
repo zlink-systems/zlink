@@ -117,9 +117,7 @@ struct transport_pair_connect_intent_t
         address (address_),
         connect_options (options_),
         pair_id (pair_id_),
-        pair_state (pair_state_),
-        completion_generation (0),
-        completion_owner_connection_id (0)
+        pair_state (pair_state_)
     {
     }
 
@@ -129,11 +127,6 @@ struct transport_pair_connect_intent_t
     const options_t connect_options;
     const uint64_t pair_id;
     const std::shared_ptr<transport_pair_state_t> pair_state;
-    // The Completion child is reusable across a shared reconnect, but its
-    // publication belongs to one exact Application owner generation at a time.
-    // A stale cancel must never retire a child already adopted by a newer one.
-    uint64_t completion_generation;
-    uint64_t completion_owner_connection_id;
 };
 
 class socket_inprocs_t
@@ -795,6 +788,10 @@ struct socket_send_pending_runtime_t
     std::map<routed_send_target_key_t, send_logical_wait_state_t>
       logical_waits;
     std::map<zlink_send_op_id_t, send_pending_record_t *> by_op;
+    // Reused only by the admission-gate owner. drive_send_pending keeps the
+    // active prefix local so a new drive call begins unblocked without
+    // destroying retained string/vector capacity.
+    std::vector<routed_send_target_key_t> blocked_targets_scratch;
     std::atomic<uint64_t> pending_msgs;
     //  Incremented after every queue insertion.  The admission driver uses
     //  this to close the empty-scan/gate-release handoff window without
@@ -854,7 +851,7 @@ struct socket_submit_progress_runtime_t
         epoch (0),
         waiters (0),
         public_command_wait_owner_active (false),
-        public_command_wait_owner_epoch (0)
+        public_command_wait_owner_retirement_epoch (0)
     {
     }
 
@@ -866,7 +863,7 @@ struct socket_submit_progress_runtime_t
     // blocked public sender to drain mailbox commands; concurrent senders stay
     // on the epoch/CV channel until that owner publishes progress or retires.
     bool public_command_wait_owner_active;
-    uint64_t public_command_wait_owner_epoch;
+    uint64_t public_command_wait_owner_retirement_epoch;
 };
 
 class socket_lifecycle_coordinator_t

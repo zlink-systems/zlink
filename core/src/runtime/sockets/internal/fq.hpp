@@ -7,7 +7,6 @@
 #include <set>
 
 #include "utils/array.hpp"
-#include "utils/blob.hpp"
 #include "core/pipe.hpp"
 
 namespace zlink
@@ -37,7 +36,6 @@ class fq_t
     void deactivate (pipe_t *pipe_);
     void activated (pipe_t *pipe_);
     void pipe_terminated (pipe_t *pipe_);
-    void arm_dispatch ();
 
     int recv (msg_t *msg_);
     int recvpipe (msg_t *msg_, pipe_t **pipe_);
@@ -45,8 +43,6 @@ class fq_t
       msg_t *msg_, pipe_t **pipe_, pipe_t::read_admission_fn *admission_,
       void *userdata_);
     bool has_in ();
-    bool has_in_with_record_admission (
-      pipe_t::read_admission_fn *admission_, void *userdata_);
     size_t redrive_record_admission (size_t max_pipes_);
 
 #ifdef ZLINK_BUILD_TESTS
@@ -57,6 +53,8 @@ class fq_t
 
   private:
     bool try_get_pipe_index (pipe_t *pipe_, pipes_t::size_type *index_out_);
+    void deactivate_at (pipes_t::size_type index_);
+    void deactivate_current_after_read_miss ();
     template <bool WithAdmission>
     int recvpipe_internal (msg_t *msg_, pipe_t **pipe_,
                            pipe_t::read_admission_fn *admission_,

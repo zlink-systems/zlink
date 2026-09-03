@@ -4,57 +4,6 @@
 
 #include "core/mailbox.hpp"
 #include "sockets/common/socket_base.hpp"
-#include "utils/likely.hpp"
-
-int zlink::socket_base_t::set_peer_weight (uint32_t weight_)
-{
-    if (weight_ > max_peer_weight) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
-    socket_public_api_scope_t admission (lifecycle);
-    if (!admission.acquired ())
-        return -1;
-
-    if (unlikely (_ctx_terminated)) {
-        errno = ETERM;
-        return -1;
-    }
-
-    {
-        socket_public_api_lock_scope_t guard (lifecycle);
-        if (_local_peer_weight.load (std::memory_order_relaxed) == weight_)
-            return 0;
-        _local_peer_weight.store (weight_, std::memory_order_relaxed);
-        options.peer_weight = static_cast<int> (weight_);
-        xlocal_peer_weight_changed ();
-    }
-    return 0;
-}
-
-int zlink::socket_base_t::get_peer_weight (uint32_t *weight_out_) const
-{
-    if (!weight_out_) {
-        errno = EFAULT;
-        return -1;
-    }
-
-    socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
-    socket_public_api_scope_t admission (lifecycle);
-    if (!admission.acquired ())
-        return -1;
-
-    if (unlikely (_ctx_terminated)) {
-        errno = ETERM;
-        return -1;
-    }
-
-    socket_public_api_lock_scope_t guard (lifecycle);
-    *weight_out_ = _local_peer_weight.load (std::memory_order_relaxed);
-    return 0;
-}
 
 uint32_t zlink::socket_base_t::local_peer_weight () const
 {

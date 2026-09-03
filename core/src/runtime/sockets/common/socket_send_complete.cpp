@@ -2,12 +2,10 @@
 
 // Core-owned pull-completion SEND and internal REQUEST admission.
 //
-//  The mechanism is the blocking send's own wait loop with two substitutions:
-//  the thread that retries is the socket's async mailbox owner instead of the
-//  caller, and the exit is a completion notification instead of a condvar
-//  return. Nothing here invents a new admission rule - every record is
-//  admitted through the same send_direct_with_retry() entry, so it competes
-//  for the same byte high-water mark as a synchronous send.
+//  Async retries use the blocking send's frame admission rules, with the
+//  socket mailbox owner driving retries and completion replacing the caller
+//  wake. PAIR may publish through a success-only whole-record shortcut; every
+//  refusal falls back to the frame path that owns errno, wait and rollback.
 
 #include "utils/precompiled.hpp"
 
@@ -20,7 +18,7 @@
 #include "utils/macros.hpp"
 #include "utils/routing_id.hpp"
 
-#include <set>
+#include <algorithm>
 
 namespace
 {
@@ -41,6 +39,38 @@ bool retryable_pull_target_errno (int err_)
     // exactly like HWM pressure, until an explicit logical-target removal or
     // another permanent cause completes it.
     return err_ == EAGAIN || err_ == ENOTCONN || err_ == EHOSTUNREACH;
+}
+
+bool contains_routed_send_target (
+  const std::vector<zlink::routed_send_target_key_t> &targets_,
+  size_t target_count_, const zlink::routed_send_target_key_t &target_)
+{
+    const std::vector<zlink::routed_send_target_key_t>::const_iterator end =
+      targets_.begin () + target_count_;
+    const std::vector<zlink::routed_send_target_key_t>::const_iterator found =
+      std::lower_bound (targets_.begin (), end, target_);
+    return found != end && !(target_ < *found);
+}
+
+void append_routed_send_target (
+  std::vector<zlink::routed_send_target_key_t> *targets_,
+  size_t *target_count_, const zlink::routed_send_target_key_t &target_)
+{
+    const size_t insert_at = static_cast<size_t> (
+      std::lower_bound (targets_->begin (),
+                        targets_->begin () + *target_count_, target_)
+      - targets_->begin ());
+    if (insert_at != *target_count_
+        && !(target_ < (*targets_)[insert_at]))
+        return;
+    if (*target_count_ == targets_->size ())
+        targets_->push_back (target_);
+    else
+        (*targets_)[*target_count_] = target_;
+    std::rotate (targets_->begin () + insert_at,
+                 targets_->begin () + *target_count_,
+                 targets_->begin () + *target_count_ + 1);
+    ++*target_count_;
 }
 
 void close_send_part_array (zlink_msg_t *parts_, size_t part_count_)
@@ -141,17 +171,9 @@ void zlink::socket_base_t::destroy_send_pending_record (
                                     record_->completion_reservation);
         record_->completion_reservation = NULL;
     }
-    //  Parts are closed the same way a synchronous send consumes them: close
-    //  is correct after admission too, because the pipe holds its own
-    //  reference to the frame content.
-    for (size_t i = 0; i != record_->parts.size (); ++i) {
-        msg_t *msg = reinterpret_cast<msg_t *> (&record_->parts[i]);
-        if (msg->check ()) {
-            const int rc = msg->close ();
-            errno_assert (rc == 0);
-        }
-    }
-    record_->parts.clear ();
+    // Close is correct after admission too because the pipe retains its own
+    // frame-content reference.
+    close_send_parts (&record_->parts);
     if (record_->request_cleanup && record_->request_resolution_context)
         record_->request_cleanup (record_->request_resolution_context);
     record_->request_resolution_context = NULL;
@@ -261,6 +283,13 @@ void zlink::socket_base_t::mark_send_completion_capacity_blocked ()
     }
 }
 
+void zlink::socket_base_t::clear_public_send_recovery_state ()
+{
+    send_pending_runtime ().completion_capacity_blocked.store (
+      false, std::memory_order_release);
+    dispatch_runtime ().clear_send_recovery_pending ();
+}
+
 void zlink::socket_base_t::notify_send_completion_capacity_available ()
 {
     socket_send_pending_runtime_t &pending = send_pending_runtime ();
@@ -353,33 +382,33 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
     }
 
     const size_t count = part_count_;
-    bool pair_commands_observed = commands_already_processed_;
-    bool pair_fast_record_valid =
+    bool submit_commands_processed = commands_already_processed_;
+    bool pair_complete_record_eligible =
       count > 1 && options.type == ZLINK_CORE_SOCKET_PAIR && !has_target_
       && !transient_target_rid_ && !transient_selected_pipe_
       && target_.logical_endpoint.empty () && !observer_
       && !request_admission_
       && !socket_submit_retry_fault::pending ();
-    if (pair_fast_record_valid) {
+    if (pair_complete_record_eligible) {
         for (size_t i = 0; i != count; ++i) {
             msg_t *const part = reinterpret_cast<msg_t *> (&parts_[i]);
             if (!part->check ()
                 || part->size ()
                      > static_cast<size_t> (UINT32_MAX)) {
-                pair_fast_record_valid = false;
+                pair_complete_record_eligible = false;
                 break;
             }
         }
     }
-    if (pair_fast_record_valid) {
+    if (pair_complete_record_eligible) {
         if (unlikely (_ctx_terminated)) {
             errno = ETERM;
             return -1;
         }
-        if (!pair_commands_observed) {
+        if (!submit_commands_processed) {
             if (process_submit_commands () != 0)
                 return -1;
-            pair_commands_observed = true;
+            submit_commands_processed = true;
         }
         if (unlikely (_ctx_terminated)) {
             errno = ETERM;
@@ -395,154 +424,126 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
               reinterpret_cast<msg_t *> (parts_), count)) {
             _auto_hwm_send_attempts.fetch_add (
               static_cast<uint64_t> (count), std::memory_order_relaxed);
-            if (manage_public_send_recovery_) {
-                send_pending_runtime ().completion_capacity_blocked.store (
-                  false, std::memory_order_release);
-                dispatch_runtime ().clear_send_recovery_pending ();
-            }
+            if (manage_public_send_recovery_)
+                clear_public_send_recovery_state ();
             return 0;
         }
     }
 
-    const auto attempt = [&] (bool copy_each_part_) -> int {
-        zlink_routing_id_t rid;
-        if (transient_target_rid_) {
-            rid = *transient_target_rid_;
-        } else if (has_target_) {
-            memset (&rid, 0, sizeof (rid));
-            copy_routing_id_from_bytes (target_.peer_rid.data (),
-                                        target_.peer_rid.size (), &rid);
-        }
+    zlink_routing_id_t rid;
+    if (transient_target_rid_) {
+        rid = *transient_target_rid_;
+    } else if (has_target_) {
+        memset (&rid, 0, sizeof (rid));
+        copy_routing_id_from_bytes (target_.peer_rid.data (),
+                                    target_.peer_rid.size (), &rid);
+    }
 
-        for (size_t i = 0; i != count; ++i) {
-            const int flags =
-              ZLINK_DONTWAIT | (i + 1 < count ? ZLINK_SNDMORE : 0);
-            // PAIR leaves a failed FINAL untouched and rolls its prefix back.
-            // Pass that FINAL directly so a successful record does not create
-            // and release an otherwise redundant message owner. Prefix parts
-            // still need retry copies because a later frame can reject the
-            // complete record. Other socket types retain defensive copies:
-            // for example, ROUTER can consume a successful no-route drop, and
-            // an observer can reject after a pipe accepted the frame.
-            const bool copy_attempt_part =
-              copy_each_part_
-              && (i + 1 < count || options.type != ZLINK_CORE_SOCKET_PAIR
-                  || observer_ != NULL);
-            zlink_msg_t attempt_part;
-            msg_t *msg = reinterpret_cast<msg_t *> (
-              copy_attempt_part ? &attempt_part : &parts_[i]);
-            if (copy_attempt_part) {
-                if (msg->init () != 0) {
-                    const int init_errno = errno;
-                    if (i != 0)
-                        (void) rollback_scoped (scope);
-                    errno = init_errno;
-                    return -1;
-                }
-                msg_t *const source =
-                  reinterpret_cast<msg_t *> (&parts_[i]);
-                if (msg->copy (*source) != 0) {
-                    const int copy_errno = errno;
-                    const int close_rc = msg->close ();
-                    errno_assert (close_rc == 0);
-                    if (i != 0)
-                        (void) rollback_scoped (scope);
-                    errno = copy_errno;
-                    return -1;
-                }
-            }
-            //  A routed target selects and pins the application pipe at the
-            //  beginning of a logical record.  The socket's xsend path owns
-            //  the continuation state after that first part: ROUTER keeps
-            //  `_current_out`/`_more_out`, while DEALER keeps the load
-            //  balancer's multipart pipe. Continue through ordinary xsend so
-            //  the whole record remains one gated sequence.
-            const bool routed_start =
-              (has_target_ || transient_target_rid_) && i == 0;
-            pipe_t *const selected_pipe = transient_selected_pipe_;
-            const bool selected_pipe_start = i == 0 && selected_pipe != NULL;
-            const bool configured_endpoint_start =
-              i == 0 && !selected_pipe_start
-              && !target_.logical_endpoint.empty ();
-            const bool observe_commit = observer_ && i + 1 == count;
-            // One complete PAIR record owns a single public send scope. The
-            // first frame is its command-observation point; polling the same
-            // mailbox again before FINAL only repeats throttle bookkeeping
-            // while the multipart marker and send sync still exclude another
-            // physical sender.
-            const bool frame_commands_already_processed =
-              pair_commands_observed
-              || (options.type == ZLINK_CORE_SOCKET_PAIR && i != 0);
-            const int rc = selected_pipe_start
-              ? xsend_selected_pipe (
-                  selected_pipe, msg, flags, request_admission_,
-                  NULL, observe_commit ? observer_ : NULL,
-                  observe_commit ? observer_userdata_ : NULL)
-              : configured_endpoint_start
-              ? xsend_configured_endpoint (
-                  target_.logical_endpoint, msg, flags, request_admission_,
-                  attempted_pipe_out_, NULL,
-                  observe_commit ? observer_ : NULL,
-                  observe_commit ? observer_userdata_ : NULL)
-              : routed_start
-                ? send_direct_with_retry (
-                    &rid, msg, flags, scope, NULL,
-                    0, false,
-                    attempted_pipe_out_, target_.transport_pair_id,
-                    target_.transport_pair_generation, true,
-                    frame_commands_already_processed,
-                    observe_commit ? observer_ : NULL,
-                    observe_commit ? observer_userdata_ : NULL,
-                    NULL,
-                    target_.route_incarnation_id,
-                    manage_public_send_recovery_, request_admission_)
-                : send_direct_with_retry (
-                    NULL, msg, flags, scope, NULL, 0, false, NULL, 0, 0,
-                    true, frame_commands_already_processed,
-                    observe_commit ? observer_ : NULL,
-                    observe_commit ? observer_userdata_ : NULL, NULL, 0,
-                    manage_public_send_recovery_);
-            if (rc == 0)
-                continue;
-
-            const int failure_errno = errno;
-            if (copy_attempt_part && msg->check ()) {
-                const int close_rc = msg->close ();
-                errno_assert (close_rc == 0);
-            }
-            if (i == 0) {
-                //  Nothing reached the pipe, so the record is untouched.
-                //  Backpressure keeps it reserved; a route failure completes
-                //  it with that cause. Lifecycle refusals are the exception:
-                //  close and context termination own the pending terminal.
-                errno = failure_errno == ESHUTDOWN || failure_errno == ETERM
-                          ? EAGAIN
-                          : failure_errno;
-                return -1;
-            }
-
-            //  Drop the half-written physical attempt before releasing the
-            //  scope. Framed sockets can discover byte HWM on a continuation.
-            //  An async record has a pristine Core-owned shadow, so retain
-            //  EAGAIN and retry the complete record after the credit wake.
-            (void) rollback_scoped (scope);
-            errno = copy_each_part_ && failure_errno == EAGAIN
-                      ? EAGAIN
-                      : failure_errno == EAGAIN ? ECONNABORTED
-                                                : failure_errno;
+    // The fallback admits multipart records frame by frame. Copy only the
+    // current prefix/final frame when rollback may need the pristine source;
+    // single-part sends transfer the source directly.
+    const bool multipart_attempt = count > 1;
+    for (size_t i = 0; i != count; ++i) {
+        const int flags =
+          ZLINK_DONTWAIT | (i + 1 < count ? ZLINK_SNDMORE : 0);
+        // PAIR leaves a failed FINAL untouched and rolls its prefix back.
+        // Pass that FINAL directly so a successful record does not create
+        // and release an otherwise redundant message owner. Prefix parts
+        // still need retry copies because a later frame can reject the
+        // complete record. Other socket types retain defensive copies:
+        // for example, ROUTER can consume a successful no-route drop, and
+        // an observer can reject after a pipe accepted the frame.
+        const bool copy_attempt_part =
+          multipart_attempt
+          && (i + 1 < count || options.type != ZLINK_CORE_SOCKET_PAIR
+              || observer_ != NULL);
+        zlink_msg_t attempt_part;
+        msg_t *msg = reinterpret_cast<msg_t *> (
+          copy_attempt_part ? &attempt_part : &parts_[i]);
+        if (copy_attempt_part
+            && copy_send_part_array (&parts_[i], 1, &attempt_part) != 0) {
+            const int copy_errno = errno;
+            if (i != 0)
+                (void) rollback_scoped (scope);
+            errno = copy_errno;
             return -1;
         }
-        return 0;
-    };
+        //  A routed target selects and pins the application pipe at the
+        //  beginning of a logical record.  The socket's xsend path owns
+        //  the continuation state after that first part: ROUTER keeps
+        //  `_current_out`/`_more_out`, while DEALER keeps the load
+        //  balancer's multipart pipe. Continue through ordinary xsend so
+        //  the whole record remains one gated sequence.
+        const bool routed_start =
+          (has_target_ || transient_target_rid_) && i == 0;
+        pipe_t *const selected_pipe = transient_selected_pipe_;
+        const bool selected_pipe_start = i == 0 && selected_pipe != NULL;
+        const bool configured_endpoint_start =
+          i == 0 && !selected_pipe_start && !target_.logical_endpoint.empty ();
+        const bool observe_commit = observer_ && i + 1 == count;
+        // One complete PAIR record owns a single public send scope. The first
+        // frame is its command-observation point; polling the same mailbox
+        // again before FINAL only repeats throttle bookkeeping while the
+        // multipart marker and send sync still exclude another physical
+        // sender.
+        const bool frame_commands_already_processed =
+          submit_commands_processed
+          || (options.type == ZLINK_CORE_SOCKET_PAIR && i != 0);
+        const int rc = selected_pipe_start
+                         ? xsend_selected_pipe (
+                             selected_pipe, msg, flags, request_admission_,
+                             NULL, observe_commit ? observer_ : NULL,
+                             observe_commit ? observer_userdata_ : NULL)
+                       : configured_endpoint_start
+                         ? xsend_configured_endpoint (
+                             target_.logical_endpoint, msg, flags,
+                             request_admission_, attempted_pipe_out_, NULL,
+                             observe_commit ? observer_ : NULL,
+                             observe_commit ? observer_userdata_ : NULL)
+                       : routed_start
+                         ? send_direct_with_retry (
+                             &rid, msg, flags, scope, NULL, 0, false,
+                             attempted_pipe_out_, target_.transport_pair_id,
+                             target_.transport_pair_generation, true,
+                             frame_commands_already_processed,
+                             observe_commit ? observer_ : NULL,
+                             observe_commit ? observer_userdata_ : NULL, NULL,
+                             target_.route_incarnation_id,
+                             manage_public_send_recovery_, request_admission_)
+                         : send_direct_with_retry (
+                             NULL, msg, flags, scope, NULL, 0, false, NULL, 0,
+                             0, true, frame_commands_already_processed,
+                             observe_commit ? observer_ : NULL,
+                             observe_commit ? observer_userdata_ : NULL, NULL,
+                             0, manage_public_send_recovery_);
+        if (rc == 0)
+            continue;
 
-    if (count == 1)
-        return attempt (false);
+        const int failure_errno = errno;
+        if (copy_attempt_part && msg->check ()) {
+            const int close_rc = msg->close ();
+            errno_assert (close_rc == 0);
+        }
+        if (i == 0) {
+            //  Nothing reached the pipe, so the record is untouched.
+            //  Backpressure keeps it reserved; a route failure completes
+            //  it with that cause. Lifecycle refusals are the exception:
+            //  close and context termination own the pending terminal.
+            errno = failure_errno == ESHUTDOWN || failure_errno == ETERM
+                      ? EAGAIN
+                      : failure_errno;
+            return -1;
+        }
 
-    // PAIR, DEALER and ROUTER admit a multipart record frame by frame. Copy
-    // only the frame currently being attempted so a later HWM refusal can
-    // roll the prefix back while the source record remains pristine. This
-    // keeps the retry path allocation-free for every part count.
-    return attempt (true);
+        //  Drop the half-written physical attempt before releasing the scope.
+        //  Framed sockets can discover byte HWM on a continuation. An async
+        //  record has a pristine Core-owned shadow, so retain EAGAIN and retry
+        //  the complete record after the credit wake.
+        (void) rollback_scoped (scope);
+        errno = failure_errno;
+        return -1;
+    }
+    return 0;
 }
 
 //  Admit whatever the current pipe state allows. Head-of-line within a target
@@ -558,7 +559,12 @@ void zlink::socket_base_t::drive_send_pending ()
           std::memory_order_acquire))
         return;
 
-    std::set<routed_send_target_key_t> blocked;
+    // Only the admission-gate owner accesses this scratch storage. Its logical
+    // size is local to this drive call, while constructed key capacity survives
+    // repeated backpressure cycles.
+    std::vector<routed_send_target_key_t> &blocked_targets =
+      pending.blocked_targets_scratch;
+    size_t blocked_target_count = 0;
     uint64_t observed_redrive_epoch =
       pending.redrive_epoch.load (std::memory_order_acquire);
     while (true) {
@@ -573,7 +579,9 @@ void zlink::socket_base_t::drive_send_pending ()
                 const std::map<routed_send_target_key_t,
                                send_inline_attempt_state_t>::const_iterator
                   inline_attempt = pending.inline_attempts.find (it->first);
-                if (it->second.empty () || blocked.count (it->first) != 0
+                if (it->second.empty ()
+                    || contains_routed_send_target (
+                      blocked_targets, blocked_target_count, it->first)
                     || (inline_attempt != pending.inline_attempts.end ()
                         && inline_attempt->second.active))
                     continue;
@@ -612,7 +620,7 @@ void zlink::socket_base_t::drive_send_pending ()
                       reacquire_expected, true, std::memory_order_acq_rel,
                       std::memory_order_acquire)) {
                     if (redrive_requested)
-                        blocked.clear ();
+                        blocked_target_count = 0;
                     observed_redrive_epoch = latest_redrive_epoch;
                     continue;
                 }
@@ -637,7 +645,8 @@ void zlink::socket_base_t::drive_send_pending ()
             if (deferred_terminal_errno == 0 && retry_later) {
                 record->claimed = false;
                 try {
-                    blocked.insert (record->target);
+                    append_routed_send_target (
+                      &blocked_targets, &blocked_target_count, record->target);
                 } catch (...) {
                     //  A failed bookkeeping allocation must not escape
                     //  through a public C entry point or strand the admission
@@ -660,7 +669,7 @@ void zlink::socket_base_t::drive_send_pending ()
                               std::memory_order_acq_rel,
                               std::memory_order_acquire)) {
                             if (redrive_requested)
-                                blocked.clear ();
+                                blocked_target_count = 0;
                             observed_redrive_epoch = latest_redrive_epoch;
                             continue;
                         }
@@ -670,7 +679,7 @@ void zlink::socket_base_t::drive_send_pending ()
                 const uint64_t latest_redrive_epoch =
                   pending.redrive_epoch.load (std::memory_order_acquire);
                 if (latest_redrive_epoch != observed_redrive_epoch) {
-                    blocked.clear ();
+                    blocked_target_count = 0;
                     observed_redrive_epoch = latest_redrive_epoch;
                 }
             }

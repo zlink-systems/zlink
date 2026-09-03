@@ -3,7 +3,6 @@
 #include "utils/precompiled.hpp"
 
 #include <algorithm>
-#include <vector>
 
 #include "sockets/internal/fq.hpp"
 #include "core/pipe.hpp"
@@ -108,9 +107,26 @@ void zlink::fq_t::deactivate (pipe_t *pipe_)
         return;
     }
 
+    deactivate_at (index);
+}
+
+void zlink::fq_t::deactivate_at (pipes_t::size_type index_)
+{
+    pipe_t *const pipe = _pipes[index_];
     _active--;
-    _pipes.swap (index, _active);
-    publish_pipe_receive_activity (pipe_, false);
+    _pipes.swap (index_, _active);
+    publish_pipe_receive_activity (pipe, false);
+    if (_current == _active)
+        _current = 0;
+}
+
+void zlink::fq_t::deactivate_current_after_read_miss ()
+{
+    // Publish the miss against the current source before rotating the active
+    // partition; routed receive activity observes that source identity.
+    publish_pipe_receive_activity (_pipes[_current], false);
+    _active--;
+    _pipes.swap (_current, _active);
     if (_current == _active)
         _current = 0;
 }
@@ -139,11 +155,10 @@ void zlink::fq_t::pipe_terminated (pipe_t *pipe_)
 
     //  Remove the pipe from the list; adjust number of active pipes
     //  accordingly.
-    if (index < _active) {
-        _active--;
-        _pipes.swap (index, _active);
-    }
-    publish_pipe_receive_activity (pipe_, false);
+    if (index < _active)
+        deactivate_at (index);
+    else
+        publish_pipe_receive_activity (pipe_, false);
     _pipes.erase (pipe_);
     normalize_state ();
 
@@ -212,7 +227,7 @@ bool zlink::fq_t::block_current_for_record_admission ()
     // next eligible source must start a fresh FQ record instead of inheriting
     // this source's multipart pin.
     _more = false;
-    deactivate (pipe);
+    deactivate_at (_current);
     return true;
 }
 
@@ -234,32 +249,6 @@ size_t zlink::fq_t::redrive_record_admission (size_t max_pipes_)
         ++redriven;
     }
     return redriven;
-}
-
-void zlink::fq_t::arm_dispatch ()
-{
-    normalize_state ();
-
-    std::vector<pipe_t *> pipes;
-    pipes.reserve (_pipes.size ());
-    for (pipes_t::size_type i = 0; i < _pipes.size (); ++i)
-        pipes.push_back (_pipes[i]);
-
-    for (size_t i = 0; i < pipes.size (); ++i) {
-        pipe_t *pipe = pipes[i];
-        if (!pipe)
-            continue;
-
-        if (pipe->check_read ()) {
-            // A read-activation command may still be pending when dispatch is
-            // installed. Activate readable inactive pipes immediately so the
-            // installation drain consumes messages already in the pipe.
-            activated (pipe);
-        } else {
-            // Empty active pipes must produce a future read-activation edge.
-            deactivate (pipe);
-        }
-    }
 }
 
 int zlink::fq_t::recv (msg_t *msg_)
@@ -387,11 +376,7 @@ int zlink::fq_t::recvpipe_internal (
         //  spurious protocol failure to callers.
         if (_more) {
             _more = false;
-            publish_pipe_receive_activity (current_pipe, false);
-            _active--;
-            _pipes.swap (_current, _active);
-            if (_current == _active)
-                _current = 0;
+            deactivate_current_after_read_miss ();
             rc = msg_->init ();
             errno_assert (rc == 0);
             // A false read while pinned can be the pipe delimiter being
@@ -402,11 +387,7 @@ int zlink::fq_t::recvpipe_internal (
             return -1;
         }
 
-        publish_pipe_receive_activity (current_pipe, false);
-        _active--;
-        _pipes.swap (_current, _active);
-        if (_current == _active)
-            _current = 0;
+        deactivate_current_after_read_miss ();
     }
 
     //  No message is available. Initialise the output parameter
@@ -436,48 +417,7 @@ bool zlink::fq_t::has_in ()
         if (_pipes[_current]->check_read ())
             return true;
 
-        //  Deactivate the pipe.
-        publish_pipe_receive_activity (_pipes[_current], false);
-        _active--;
-        _pipes.swap (_current, _active);
-        if (_current == _active)
-            _current = 0;
-    }
-
-    return false;
-}
-
-bool zlink::fq_t::has_in_with_record_admission (
-  pipe_t::read_admission_fn *admission_, void *userdata_)
-{
-    normalize_state ();
-
-    if (_multipart_abort_pending || _more)
-        return true;
-
-    while (_active > 0) {
-        bool admission_failed = false;
-        if (_pipes[_current]->check_read_with_record_admission (
-              admission_, userdata_, &admission_failed))
-            return true;
-
-        const int saved_errno = errno;
-        if (admission_failed && saved_errno == EAGAIN) {
-            if (!block_current_for_record_admission ())
-                return false;
-            errno = 0;
-            continue;
-        }
-        if (admission_failed)
-            // Let the receive path surface non-capacity failures instead of
-            // hiding them as a readiness miss.
-            return true;
-
-        publish_pipe_receive_activity (_pipes[_current], false);
-        _active--;
-        _pipes.swap (_current, _active);
-        if (_current == _active)
-            _current = 0;
+        deactivate_current_after_read_miss ();
     }
 
     return false;

@@ -39,28 +39,26 @@ int zlink::dealer_t::sendpipe_to (
                             observer_userdata_);
 }
 
+bool zlink::dealer_t::active_submit_candidate (dealer_t *dealer_, pipe_t *pipe_)
+{
+    return pipe_->is_lifecycle_active ()
+           && pipe_->get_transport_connection_id () != 0
+           && dealer_->transport_pair_application_ready (pipe_);
+}
+
 bool zlink::dealer_t::routed_submit_candidate (pipe_t *pipe_, void *userdata_)
 {
     dealer_t *const dealer = static_cast<dealer_t *> (userdata_);
     return dealer && pipe_ && pipe_->get_routing_id ().size () != 0
-           && pipe_->is_lifecycle_active ()
-           && pipe_->get_transport_connection_id () != 0
-           && dealer->transport_pair_application_ready (pipe_);
-}
-
-bool zlink::dealer_t::request_router_peer (pipe_t *pipe_, void *userdata_)
-{
-    LIBZLINK_UNUSED (userdata_);
-    return pipe_ && pipe_->get_peer_socket_type () == ZLINK_CORE_SOCKET_ROUTER;
+           && active_submit_candidate (dealer, pipe_);
 }
 
 bool zlink::dealer_t::request_submit_candidate (pipe_t *pipe_, void *userdata_)
 {
     dealer_t *const dealer = static_cast<dealer_t *> (userdata_);
-    return dealer && request_router_peer (pipe_, userdata_)
-           && pipe_->is_lifecycle_active ()
-           && pipe_->get_transport_connection_id () != 0
-           && dealer->transport_pair_application_ready (pipe_);
+    return dealer && pipe_
+           && pipe_->get_peer_socket_type () == ZLINK_CORE_SOCKET_ROUTER
+           && active_submit_candidate (dealer, pipe_);
 }
 
 void zlink::dealer_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool locally_initiated_)
@@ -149,7 +147,7 @@ int zlink::dealer_t::xgetsockopt (int option_, void *optval_, size_t *optvallen_
 int zlink::dealer_t::xsend (
   msg_t *msg_, pipe_message_admission_t *admission_out_)
 {
-    return sendpipe (msg_, NULL, admission_out_);
+    return _lb.sendpipe (msg_, NULL, admission_out_);
 }
 
 int zlink::dealer_t::xsend_pipe (
@@ -157,8 +155,8 @@ int zlink::dealer_t::xsend_pipe (
   pipe_message_admission_t *admission_out_,
   pipe_write_observer_fn observer_, void *observer_userdata_)
 {
-    return sendpipe (msg_, pipe_out_, admission_out_, observer_,
-                     observer_userdata_);
+    return _lb.sendpipe (msg_, pipe_out_, admission_out_, observer_,
+                         observer_userdata_);
 }
 
 int zlink::dealer_t::xsend_routed (
@@ -282,8 +280,15 @@ int zlink::dealer_t::xsend_selected_pipe (
   pipe_message_admission_t *admission_out_, pipe_write_observer_fn observer_,
   void *observer_userdata_)
 {
-    //  Same admission rules as xsend_configured_endpoint, applied to a pipe
-    //  the caller selected under the current send scope.
+    return send_selected_pipe (pipe_, msg_, flags_, request_only_, NULL,
+                               admission_out_, observer_, observer_userdata_);
+}
+
+int zlink::dealer_t::send_selected_pipe (
+  pipe_t *pipe_, msg_t *msg_, int flags_, bool request_only_,
+  pipe_t **pipe_out_, pipe_message_admission_t *admission_out_,
+  pipe_write_observer_fn observer_, void *observer_userdata_)
+{
     if (!pipe_) {
         errno = EAGAIN;
         return -1;
@@ -301,6 +306,8 @@ int zlink::dealer_t::xsend_selected_pipe (
         errno = EAGAIN;
         return -1;
     }
+    if (pipe_out_)
+        *pipe_out_ = pipe_;
     return sendpipe_to (
       pipe_, msg_, flags_, admission_out_, observer_, observer_userdata_);
 }
@@ -320,24 +327,8 @@ int zlink::dealer_t::xsend_configured_endpoint (
         errno = EAGAIN;
         return -1;
     }
-    if (request_only_
-        && pipe->get_peer_socket_type () != ZLINK_CORE_SOCKET_ROUTER) {
-        errno = EPROTOTYPE;
-        return -1;
-    }
-    if (_lb.weight (pipe) == 0) {
-        errno = ECONNREFUSED;
-        return -1;
-    }
-    if (!transport_pair_application_ready (pipe)) {
-        errno = EAGAIN;
-        return -1;
-    }
-    if (pipe_out_)
-        *pipe_out_ = pipe;
-    return sendpipe_to (
-      pipe, msg_, flags_,
-      admission_out_, observer_, observer_userdata_);
+    return send_selected_pipe (pipe, msg_, flags_, request_only_, pipe_out_,
+                               admission_out_, observer_, observer_userdata_);
 }
 
 int zlink::dealer_t::xselect_request_submit_target (
@@ -431,8 +422,7 @@ void zlink::dealer_t::xforget_request_route_endpoint (
 
 int zlink::dealer_t::xrecv (msg_t *msg_)
 {
-    pipe_t *pipe = NULL;
-    return recvpipe (msg_, &pipe);
+    return recvpipe (msg_, NULL);
 }
 
 int zlink::dealer_t::xrecv_pipe (msg_t *msg_, pipe_t **pipe_out_)
@@ -477,15 +467,6 @@ void zlink::dealer_t::xpipe_terminated (pipe_t *pipe_)
     _lb.pipe_terminated (pipe_);
 }
 
-int zlink::dealer_t::sendpipe (
-  msg_t *msg_, pipe_t **pipe_,
-  pipe_message_admission_t *admission_out_,
-  pipe_write_observer_fn observer_, void *observer_userdata_)
-{
-    return _lb.sendpipe (msg_, pipe_, admission_out_, observer_,
-                         observer_userdata_);
-}
-
 int zlink::dealer_t::recvpipe (msg_t *msg_, pipe_t **pipe_)
 {
     pipe_t *source = NULL;
@@ -509,16 +490,7 @@ int zlink::dealer_t::apply_peer_weight (pipe_t *pipe_, uint32_t weight_)
 
     const bool changed = _lb.weight (pipe_) != weight_;
     _lb.set_weight (pipe_, weight_);
-    if (pipe_->get_peer_socket_type () == ZLINK_CORE_SOCKET_ROUTER) {
-        const std::string &endpoint =
-          pipe_->get_endpoint_pair ().identifier ();
-        request_route_history_map_t::iterator route =
-          _request_route_history.find (endpoint);
-        if (route != _request_route_history.end ())
-            route->second.weight = weight_;
-        else
-            remember_request_route (pipe_, weight_);
-    }
+    update_request_route_weight (pipe_, weight_);
     if (!changed)
         return 1;
     // A weight transition is an admission edge for an exact pending send.
@@ -533,17 +505,23 @@ void zlink::dealer_t::initialize_peer_weight (pipe_t *pipe_, uint32_t weight_)
 {
     if (pipe_ && _lb.contains (pipe_)) {
         _lb.set_weight (pipe_, weight_);
-        if (pipe_->get_peer_socket_type () == ZLINK_CORE_SOCKET_ROUTER) {
-            const std::string &endpoint =
-              pipe_->get_endpoint_pair ().identifier ();
-            request_route_history_map_t::iterator route =
-              _request_route_history.find (endpoint);
-            if (route != _request_route_history.end ())
-                route->second.weight = weight_;
-            else
-                remember_request_route (pipe_, weight_);
-        }
+        update_request_route_weight (pipe_, weight_);
     }
+}
+
+void zlink::dealer_t::update_request_route_weight (pipe_t *pipe_,
+                                                   uint32_t weight_)
+{
+    if (pipe_->get_peer_socket_type () != ZLINK_CORE_SOCKET_ROUTER)
+        return;
+
+    const std::string &endpoint = pipe_->get_endpoint_pair ().identifier ();
+    request_route_history_map_t::iterator route =
+      _request_route_history.find (endpoint);
+    if (route != _request_route_history.end ())
+        route->second.weight = weight_;
+    else
+        remember_request_route (pipe_, weight_);
 }
 
 void zlink::dealer_t::remember_request_route (pipe_t *pipe_, uint32_t weight_)

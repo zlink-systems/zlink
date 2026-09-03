@@ -5,23 +5,15 @@
 #include "core/c_api_copy_internal.hpp"
 #include "utils/macros.hpp"
 #include "sockets/router/router.hpp"
+#include "sockets/router/router_debug.hpp"
 #include "core/pipe.hpp"
 #include "protocol/zmp_protocol.hpp"
 #include "utils/err.hpp"
-#include "utils/debug_log.hpp"
 
-#include <cstdlib>
 #include <cstdio>
 
 namespace
 {
-const bool router_debug_on = zlink::debug_env_enabled ("ZLINK_ROUTER_DEBUG");
-
-bool router_debug_enabled ()
-{
-    return router_debug_on;
-}
-
 int probe_router_reply_token_admission (zlink::pipe_t *,
                                         const zlink::msg_t &msg_,
                                         void *userdata_)
@@ -37,39 +29,6 @@ int probe_router_reply_token_admission (zlink::pipe_t *,
         return 0;
     errno = EAGAIN;
     return -1;
-}
-
-void format_routing_id_debug (const zlink_routing_id_t *rid_, char *buf_, size_t buf_size_)
-{
-    if (!buf_ || buf_size_ == 0)
-        return;
-
-    if (!rid_ || rid_->size == 0) {
-        std::snprintf (buf_, buf_size_, "<empty>");
-        return;
-    }
-
-    size_t used = 0;
-    for (size_t i = 0; i < rid_->size && used + 4 < buf_size_; ++i) {
-        const unsigned char c = rid_->data[i];
-        const int rc = std::snprintf (buf_ + used, buf_size_ - used, "%c%02X",
-                                      (c >= 32 && c <= 126) ? static_cast<char> (c) : '.',
-                                      static_cast<unsigned> (c));
-        if (rc <= 0)
-            break;
-        used += static_cast<size_t> (rc);
-        if (i + 1 < rid_->size && used + 2 < buf_size_) {
-            buf_[used++] = ' ';
-            buf_[used] = '\0';
-        }
-    }
-}
-
-void format_blob_routing_id_debug (const zlink::blob_t &routing_id_, char *buf_, size_t buf_size_)
-{
-    zlink_routing_id_t rid;
-    zlink::copy_routing_id_from_bytes (routing_id_.data (), routing_id_.size (), &rid);
-    format_routing_id_debug (&rid, buf_, buf_size_);
 }
 
 }
@@ -144,7 +103,7 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
         std::lock_guard<std::mutex> route_lifecycle_lock (_out_pipes_sync);
         const bool routing_id_ok = identify_peer (
           pipe_, locally_initiated_, &adoption_actions, initial_weight);
-        if (router_debug_enabled ()) {
+        if (router_debug::enabled ()) {
             fprintf (stderr, "router xattach_pipe: pipe=%p local=%d routing_id_ok=%d lane=%d pair=%llu/%llu\n",
                      static_cast<void *> (pipe_), locally_initiated_ ? 1 : 0,
                      routing_id_ok ? 1 : 0,
@@ -200,10 +159,10 @@ void zlink::router_t::xread_activated (pipe_t *pipe_)
         std::lock_guard<std::mutex> route_lifecycle_lock (_out_pipes_sync);
         const std::map<pipe_t *, bool>::iterator it =
           _anonymous_pipes.find (pipe_);
-        if (router_debug_enabled ()) {
+        if (router_debug::enabled ()) {
             char rid_text[160];
-            format_blob_routing_id_debug (pipe_->get_routing_id (), rid_text,
-                                          sizeof (rid_text));
+            router_debug::format_routing_id (
+              pipe_->get_routing_id (), rid_text, sizeof (rid_text));
             fprintf (stderr, "router xread_activated: pipe=%p anonymous=%d pipe_rid=%s lane=%d pair=%llu/%llu\n",
                      static_cast<void *> (pipe_),
                      it != _anonymous_pipes.end () ? 1 : 0, rid_text,
@@ -216,7 +175,7 @@ void zlink::router_t::xread_activated (pipe_t *pipe_)
         } else {
             const bool routing_id_ok = identify_peer (
               pipe_, it->second, &adoption_actions, initial_weight);
-            if (router_debug_enabled ()) {
+            if (router_debug::enabled ()) {
                 fprintf (stderr, "router xread_activated identify_peer: pipe=%p ok=%d\n",
                          static_cast<void *> (pipe_), routing_id_ok ? 1 : 0);
             }
@@ -259,6 +218,17 @@ void zlink::router_t::reset_current_in_after_multipart_abort ()
     _more_in = false;
 }
 
+void zlink::router_t::finish_current_in_record ()
+{
+    pipe_t *const completed_pipe = _current_in;
+    if (_terminate_current_in && _current_in) {
+        _current_in->terminate (true);
+        _terminate_current_in = false;
+    }
+    _current_in = NULL;
+    (void) reclassify_transport_pair_application_head (completed_pipe);
+}
+
 int zlink::router_t::xrecv (msg_t *msg_)
 {
     return xrecv_pipe (msg_, NULL);
@@ -282,16 +252,8 @@ int zlink::router_t::xrecv_pipe (msg_t *msg_, pipe_t **pipe_out_)
         }
         _more_in = (msg_->flags () & msg_t::more) != 0;
 
-        if (!_more_in) {
-            pipe_t *const completed_pipe = _current_in;
-            if (_terminate_current_in) {
-                _current_in->terminate (true);
-                _terminate_current_in = false;
-            }
-            _current_in = NULL;
-            (void) reclassify_transport_pair_application_head (
-              completed_pipe);
-        }
+        if (!_more_in)
+            finish_current_in_record ();
         return 0;
     }
 
@@ -313,16 +275,8 @@ int zlink::router_t::xrecv_pipe (msg_t *msg_, pipe_t **pipe_out_)
     if (_more_in) {
         _more_in = (msg_->flags () & msg_t::more) != 0;
 
-        if (!_more_in) {
-            pipe_t *const completed_pipe = _current_in;
-            if (_terminate_current_in) {
-                _current_in->terminate (true);
-                _terminate_current_in = false;
-            }
-            _current_in = NULL;
-            (void) reclassify_transport_pair_application_head (
-              completed_pipe);
-        }
+        if (!_more_in)
+            finish_current_in_record ();
     } else {
         rc = _prefetched_msg.move (*msg_);
         errno_assert (rc == 0);
@@ -399,14 +353,7 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
                     errno_assert (rc == 0);
                     _routing_id_sent = false;
                     _more_in = false;
-                    pipe_t *const completed_pipe = _current_in;
-                    if (_terminate_current_in && _current_in) {
-                        _current_in->terminate (true);
-                        _terminate_current_in = false;
-                    }
-                    _current_in = NULL;
-                    (void) reclassify_transport_pair_application_head (
-                      completed_pipe);
+                    finish_current_in_record ();
                 }
                 errno = saved_errno;
                 return -1;
@@ -433,16 +380,8 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
         _routing_id_sent = true;
         _more_in = (msg_->flags () & msg_t::more) != 0;
 
-        if (!_more_in) {
-            pipe_t *const completed_pipe = _current_in;
-            if (_terminate_current_in) {
-                _current_in->terminate (true);
-                _terminate_current_in = false;
-            }
-            _current_in = NULL;
-            (void) reclassify_transport_pair_application_head (
-              completed_pipe);
-        }
+        if (!_more_in)
+            finish_current_in_record ();
         return 0;
     }
 
@@ -477,15 +416,8 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
         *source_pipe_out_ = _current_in;
 
     _more_in = (msg_->flags () & msg_t::more) != 0;
-    if (!_more_in) {
-        pipe_t *const completed_pipe = _current_in;
-        if (_terminate_current_in) {
-            _current_in->terminate (true);
-            _terminate_current_in = false;
-        }
-        _current_in = NULL;
-        (void) reclassify_transport_pair_application_head (completed_pipe);
-    }
+    if (!_more_in)
+        finish_current_in_record ();
     return 0;
 }
 

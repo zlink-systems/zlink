@@ -3,8 +3,6 @@
 #ifndef __ZLINK_DIST_HPP_INCLUDED__
 #define __ZLINK_DIST_HPP_INCLUDED__
 
-#include <vector>
-
 #include "utils/array.hpp"
 #include "utils/macros.hpp"
 

@@ -233,36 +233,6 @@ int zlink::socket_base_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
     return 0;
 }
 
-int zlink::socket_base_t::xterm_transport_pair (
-  uint64_t transport_pair_id_, uint64_t transport_pair_generation_)
-{
-    std::vector<pipe_t *> pipes;
-    snapshot_attached_pipes (&pipes);
-
-    size_t match_count = 0;
-    for (size_t i = 0; i < pipes.size (); ++i) {
-        pipe_t *pipe = pipes[i];
-        if (!pipe || pipe->get_transport_pair_id () != transport_pair_id_
-            || pipe->get_transport_pair_generation () != transport_pair_generation_)
-            continue;
-        const std::string endpoint = pipe->get_endpoint_pair ().identifier ();
-        const std::pair<endpoints_t::iterator, endpoints_t::iterator> range =
-          endpoint_runtime ().endpoints.equal_range (endpoint);
-        for (endpoints_t::iterator it = range.first; it != range.second; ++it) {
-            if (it->second.transport_pair_state)
-                it->second.transport_pair_state->disable_reconnect ();
-        }
-        pipe->terminate (false);
-        ++match_count;
-    }
-
-    if (match_count == 0) {
-        errno = ENOENT;
-        return -1;
-    }
-    return 0;
-}
-
 void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
                                         bool subscribe_to_all_,
                                         bool locally_initiated_,
@@ -1977,26 +1947,6 @@ zlink::socket_base_t::completion_pipe_for_application (pipe_t *application_pipe_
 }
 
 zlink::pipe_t *
-zlink::socket_base_t::application_pipe_for_completion (pipe_t *completion_pipe_) const
-{
-    if (!completion_pipe_)
-        return NULL;
-    const transport_pair_key_t pair_key (
-      completion_pipe_->get_transport_pair_id (),
-      completion_pipe_->get_transport_pair_generation ());
-    scoped_lock_t lock (_transport_pairs_sync);
-    transport_pairs_t::const_iterator it = _transport_pairs.find (pair_key);
-    if (it == _transport_pairs.end () || !it->second.ready
-        || it->second.completion != completion_pipe_)
-        return NULL;
-    //  Pinned for the same reason as completion_pipe_for_application; the
-    //  caller releases the pin after its last dereference.
-    pipe_t *application = it->second.application;
-    return application && application->retain_lifetime_ref () ? application
-                                                              : NULL;
-}
-
-zlink::pipe_t *
 zlink::socket_base_t::completion_pipe_for_peer (const zlink_routing_id_t *peer_rid_) const
 {
     if (!peer_rid_ || peer_rid_->size == 0)
@@ -2036,22 +1986,6 @@ zlink::pipe_t *zlink::socket_base_t::completion_pipe_for_transport_pair (
     return it == _transport_pairs.end () || !it->second.ready
              ? NULL
              : it->second.completion;
-}
-
-zlink::pipe_t *zlink::socket_base_t::retain_completion_pipe_for_transport_pair (
-  uint64_t transport_pair_id_, uint64_t transport_pair_generation_) const
-{
-    if (transport_pair_id_ == 0 || transport_pair_generation_ == 0)
-        return NULL;
-    scoped_lock_t lock (_transport_pairs_sync);
-    const transport_pair_key_t key (transport_pair_id_,
-                                    transport_pair_generation_);
-    transport_pairs_t::const_iterator it = _transport_pairs.find (key);
-    if (it == _transport_pairs.end () || !it->second.ready)
-        return NULL;
-    pipe_t *const completion = it->second.completion;
-    return completion && completion->retain_lifetime_ref () ? completion
-                                                             : NULL;
 }
 
 zlink::pipe_t *zlink::socket_base_t::retain_transport_pair_pipe (

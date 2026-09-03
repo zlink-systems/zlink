@@ -5,15 +5,10 @@
 
 #include <map>
 #include <mutex>
-#include <set>
-#include <vector>
 
 #include "sockets/common/socket_base.hpp"
-#include "core/session_base.hpp"
-#include "utils/stdint.hpp"
 #include "utils/blob.hpp"
 #include "core/msg.hpp"
-#include "core/ctx_physical_queue_registry.hpp"
 #include "sockets/internal/fq.hpp"
 
 namespace zlink
@@ -141,7 +136,18 @@ class router_t : public routing_socket_base_t
     void copy_router_pipe_source_rid (
       pipe_t *pipe_, zlink_routing_id_t *out_,
       uint64_t *route_binding_token_out_) const;
+    void finish_current_in_record ();
     void reset_current_in_after_multipart_abort ();
+    void select_current_out_pipe (pipe_t *pipe_)
+    {
+        _current_out = pipe_;
+        _current_out_connection_id = pipe_->get_transport_connection_id ();
+    }
+    void clear_current_out_pipe ()
+    {
+        _current_out = NULL;
+        _current_out_connection_id = 0;
+    }
     pipe_t *find_transport_pair_pipe (const zlink_routing_id_t *target_rid_,
                                       uint64_t transport_pair_id_,
                                       uint64_t transport_pair_generation_) const;

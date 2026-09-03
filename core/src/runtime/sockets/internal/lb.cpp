@@ -51,6 +51,10 @@ zlink::lb_t::~lb_t ()
 
 void zlink::lb_t::attach (pipe_t *pipe_, uint32_t initial_weight_)
 {
+    const pipes_t::size_type attached_count = _pipes.size () + 1;
+    _ordered.reserve (attached_count);
+    _select_scratch.reserve (attached_count);
+    _request_limited_scratch.reserve (attached_count);
     _pipes.push_back (pipe_);
     pipe_entry_t entry;
     entry.weight = std::min (initial_weight_, max_peer_weight);
@@ -131,15 +135,7 @@ void zlink::lb_t::set_weight (pipe_t *pipe_, uint32_t weight_)
         // Weight is a message-selection policy. An already selected multipart
         // stays pinned to its exact pipe through FINAL; only later messages
         // observe the zero-weight deactivation.
-        if (index < _active) {
-            _active--;
-            _pipes.swap (index, _active);
-            if (_current == _active)
-                _current = 0;
-            else if (_current > index && _current <= _active)
-                --_current;
-            mark_selection_dirty ();
-        }
+        deactivate_at (index);
         return;
     }
 
@@ -167,14 +163,7 @@ bool zlink::lb_t::has_positive_weight_pipe () const
 
 bool zlink::lb_t::contains (pipe_t *pipe_) const
 {
-    if (!pipe_)
-        return false;
-
-    for (pipes_t::size_type i = 0; i < _pipes.size (); ++i) {
-        if (_pipes[i] == pipe_)
-            return true;
-    }
-    return false;
+    return pipe_ && _entries.find (pipe_) != _entries.end ();
 }
 
 #ifdef ZLINK_BUILD_TESTS
@@ -203,8 +192,6 @@ int zlink::lb_t::select_connected_pipe (pipe_t **pipe_out_,
     std::vector<candidate_t> &connected = _select_scratch;
     connected.clear ();
     bool has_positive_weight = false;
-    if (connected.capacity () < _pipes.size ())
-        connected.reserve (_pipes.size ());
     for (pipes_t::size_type i = 0; i < _pipes.size (); ++i) {
         entries_t::iterator entry = _entries.find (_pipes[i]);
         if (entry == _entries.end () || entry->second.weight == 0)
@@ -359,15 +346,19 @@ int zlink::lb_t::sendpipe_to (
 
 void zlink::lb_t::deactivate (pipe_t *pipe_)
 {
-    const pipes_t::size_type index = _pipes.index (pipe_);
-    if (index >= _active)
+    deactivate_at (_pipes.index (pipe_));
+}
+
+void zlink::lb_t::deactivate_at (pipes_t::size_type index_)
+{
+    if (index_ >= _active)
         return;
 
     _active--;
-    _pipes.swap (index, _active);
+    _pipes.swap (index_, _active);
     if (_current == _active)
         _current = 0;
-    else if (_current > index && _current <= _active)
+    else if (_current > index_ && _current <= _active)
         --_current;
     mark_selection_dirty ();
 }
@@ -385,7 +376,6 @@ void zlink::lb_t::rebuild_selection_order ()
         return;
 
     _ordered.clear ();
-    _ordered.reserve (_active);
     for (pipes_t::size_type i = 0; i < _active; ++i) {
         const entries_t::iterator entry_it = _entries.find (_pipes[i]);
         if (entry_it == _entries.end ())
@@ -394,6 +384,15 @@ void zlink::lb_t::rebuild_selection_order ()
     }
     std::sort (_ordered.begin (), _ordered.end (), candidate_order_t ());
     _order_dirty = false;
+}
+
+void zlink::lb_t::restore_request_limited_pipes ()
+{
+    for (std::vector<pipe_t *>::const_iterator it =
+           _request_limited_scratch.begin ();
+         it != _request_limited_scratch.end (); ++it)
+        activated (*it);
+    _request_limited_scratch.clear ();
 }
 
 const zlink::lb_t::candidate_t *zlink::lb_t::select_weighted_pipe (uint32_t *total_weight_out_)
@@ -535,8 +534,7 @@ int zlink::lb_t::sendpipe (
             if (write_admission == pipe_message_admission_request_full) {
                 errno = EAGAIN;
             } else if (write_admission != pipe_message_admission_too_large) {
-                _active = 0;
-                mark_selection_dirty ();
+                deactivate_at (0);
                 errno = EAGAIN;
             }
             return -1;
@@ -558,7 +556,7 @@ int zlink::lb_t::sendpipe (
     //  Every first frame runs the same selection procedure. Equal weights are
     //  not a special case: the procedure alternates on its own.
     if (!_more) {
-        std::vector<pipe_t *> request_limited;
+        _request_limited_scratch.clear ();
         while (_active > 0) {
             uint32_t total_weight = 0;
             const candidate_t *candidate = select_weighted_pipe (&total_weight);
@@ -582,10 +580,7 @@ int zlink::lb_t::sendpipe (
                 //  Running values move only for a write that happened, so a
                 //  retried selection never applies the same step twice.
                 commit_weighted_selection (entry, total_weight);
-                for (std::vector<pipe_t *>::const_iterator it =
-                       request_limited.begin ();
-                     it != request_limited.end (); ++it)
-                    activated (*it);
+                restore_request_limited_pipes ();
                 if (pipe_)
                     *pipe_ = pipe;
                 _more = more;
@@ -597,10 +592,7 @@ int zlink::lb_t::sendpipe (
 
             if (observer_ && errno == ECANCELED
                 && write_admission == pipe_message_admission_invalid) {
-                for (std::vector<pipe_t *>::const_iterator it =
-                       request_limited.begin ();
-                     it != request_limited.end (); ++it)
-                    activated (*it);
+                restore_request_limited_pipes ();
                 if (admission_out_)
                     *admission_out_ = write_admission;
                 return -1;
@@ -610,17 +602,14 @@ int zlink::lb_t::sendpipe (
             //  the next one would only drop healthy pipes.
             if (write_admission == pipe_message_admission_too_large)
             {
-                for (std::vector<pipe_t *>::const_iterator it =
-                       request_limited.begin ();
-                     it != request_limited.end (); ++it)
-                    activated (*it);
+                restore_request_limited_pipes ();
                 if (admission_out_)
                     *admission_out_ = pipe_message_admission_too_large;
                 return -1;
             }
 
             if (write_admission == pipe_message_admission_request_full) {
-                request_limited.push_back (pipe);
+                _request_limited_scratch.push_back (pipe);
                 deactivate (pipe);
                 rebuild_selection_order ();
                 continue;
@@ -637,12 +626,10 @@ int zlink::lb_t::sendpipe (
             rebuild_selection_order ();
         }
 
-        for (std::vector<pipe_t *>::const_iterator it =
-               request_limited.begin ();
-             it != request_limited.end (); ++it)
-            activated (*it);
+        const bool request_limited = !_request_limited_scratch.empty ();
+        restore_request_limited_pipes ();
         if (admission_out_) {
-            if (!request_limited.empty ())
+            if (request_limited)
                 *admission_out_ = pipe_message_admission_request_full;
             else if (any_hwm_blocked_pipe ())
                 *admission_out_ = pipe_message_admission_hwm_full;
@@ -694,12 +681,7 @@ int zlink::lb_t::sendpipe (
             && write_admission == pipe_message_admission_hwm_full)
             *admission_out_ = pipe_message_admission_hwm_full;
 
-        _active--;
-        if (_current < _active)
-            _pipes.swap (_current, _active);
-        else
-            _current = 0;
-        mark_selection_dirty ();
+        deactivate_at (_current);
     }
 
     //  If there are no pipes we cannot send the message.
@@ -760,8 +742,7 @@ bool zlink::lb_t::has_out ()
         if (_pipes[0]->check_write ())
             return true;
 
-        _active = 0;
-        mark_selection_dirty ();
+        deactivate_at (0);
         return false;
     }
 
@@ -771,11 +752,7 @@ bool zlink::lb_t::has_out ()
             return true;
 
         //  Deactivate the pipe.
-        _active--;
-        _pipes.swap (_current, _active);
-        mark_selection_dirty ();
-        if (_current == _active)
-            _current = 0;
+        deactivate_at (_current);
     }
 
     return false;

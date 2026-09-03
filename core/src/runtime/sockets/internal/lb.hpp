@@ -137,12 +137,17 @@ class lb_t
     //  Reused by select_connected_pipe so a per-send selection does not
     //  allocate. Only valid for the duration of one call.
     std::vector<candidate_t> _select_scratch;
+    //  Pipes skipped only because their per-pipe request limit is full. The
+    //  first-frame selection restores them before returning.
+    std::vector<pipe_t *> _request_limited_scratch;
     pipe_t *_weighted_multipart_pipe;
 
+    void deactivate_at (pipes_t::size_type index_);
     void deactivate (pipe_t *pipe_);
     bool any_hwm_blocked_pipe ();
     void mark_selection_dirty ();
     void rebuild_selection_order ();
+    void restore_request_limited_pipes ();
 
     //  Returns the candidate the selection procedure picks next without
     //  mutating any running value, and reports the total candidate weight the

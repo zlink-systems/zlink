@@ -14,15 +14,6 @@
 
 namespace
 {
-#ifdef ZLINK_BUILD_TESTS
-std::atomic<bool> g_fail_next_recv_pipe_pin (false);
-
-bool consume_recv_pipe_pin_failpoint ()
-{
-    return g_fail_next_recv_pipe_pin.exchange (false, std::memory_order_acq_rel);
-}
-#endif
-
 void prepare_direct_send_message (zlink::msg_t *msg_, int flags_)
 {
     msg_->reset_flags (zlink::msg_t::more);
@@ -155,21 +146,10 @@ bool receive_multipart_abort_as_no_data (int rc_,
 }
 }
 
-#ifdef ZLINK_BUILD_TESTS
-void zlink::socket_base_t::test_fail_next_recv_pipe_pin ()
-{
-    g_fail_next_recv_pipe_pin.store (true, std::memory_order_release);
-}
-#endif
-
 bool zlink::socket_base_t::retain_received_source_pipe_ref (pipe_t *pipe_) const
 {
     if (!pipe_)
         return false;
-#ifdef ZLINK_BUILD_TESTS
-    if (consume_recv_pipe_pin_failpoint ())
-        return false;
-#endif
     return pipe_->retain_lifetime_ref ();
 }
 
@@ -230,23 +210,6 @@ int zlink::socket_base_t::send_routed_complete_record (
         return -1;
 
     return send_routed_scoped (target_rid_, msg_, flags_, send_scope);
-}
-
-int zlink::socket_base_t::send_routed_transport_pair (
-  const zlink_routing_id_t *target_rid_, uint64_t transport_pair_id_,
-  uint64_t transport_pair_generation_, msg_t *msg_, int flags_)
-{
-    // This entry point always owns one complete record. Mark it as such so it
-    // can serialize with an internal async-admission retry without being
-    // mistaken for the first part of an incremental multipart sequence.
-    socket_public_send_scope_t send_scope (
-      lifecycle_coordinator (), true, socket_send_admission_complete);
-    if (!send_scope.acquired ())
-        return -1;
-
-    return send_routed_scoped (
-      target_rid_, msg_, flags_, send_scope, NULL, 0, NULL,
-      transport_pair_id_, transport_pair_generation_);
 }
 
 int zlink::socket_base_t::select_routed_submit_target (
@@ -384,20 +347,6 @@ zlink::socket_base_t::begin_complete_send_scope ()
     return send_scope;
 }
 
-std::unique_ptr<zlink::socket_public_api_scope_t>
-zlink::socket_base_t::begin_public_api_scope ()
-{
-    std::unique_ptr<socket_public_api_scope_t> scope (
-      new (std::nothrow) socket_public_api_scope_t (lifecycle_coordinator ()));
-    if (!scope) {
-        errno = ENOMEM;
-        return std::unique_ptr<socket_public_api_scope_t> ();
-    }
-    if (!scope->acquired ())
-        return std::unique_ptr<socket_public_api_scope_t> ();
-    return scope;
-}
-
 bool zlink::socket_base_t::xsubmit_retry_allowed (const zlink_routing_id_t *target_rid_,
                                                   int err_) const
 {
@@ -512,11 +461,8 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
         _auto_hwm_send_blocked_attempts.fetch_add (
           1, std::memory_order_relaxed);
     if (rc == 0) {
-        if (manage_public_send_recovery_) {
-            send_pending_runtime ().completion_capacity_blocked.store (
-              false, std::memory_order_release);
-            dispatch_runtime ().clear_send_recovery_pending ();
-        }
+        if (manage_public_send_recovery_)
+            clear_public_send_recovery_state ();
         return 0;
     }
     if (unlikely (rc == -2))
@@ -646,11 +592,8 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
             if (unlikely (rc == -2))
                 return finish_multipart_abort ();
             if (rc == 0) {
-                if (manage_public_send_recovery_) {
-                    send_pending_runtime ().completion_capacity_blocked.store (
-                      false, std::memory_order_release);
-                    dispatch_runtime ().clear_send_recovery_pending ();
-                }
+                if (manage_public_send_recovery_)
+                    clear_public_send_recovery_state ();
                 return 0;
             }
             if (errno != EAGAIN)
@@ -736,11 +679,8 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
         if (unlikely (rc == -2))
             return finish_multipart_abort ();
         if (rc == 0) {
-            if (manage_public_send_recovery_) {
-                send_pending_runtime ().completion_capacity_blocked.store (
-                  false, std::memory_order_release);
-                dispatch_runtime ().clear_send_recovery_pending ();
-            }
+            if (manage_public_send_recovery_)
+                clear_public_send_recovery_state ();
             break;
         }
         if (errno != EAGAIN && is_submit_retry_errno (errno)
@@ -937,14 +877,8 @@ int zlink::socket_base_t::recv_common (
         // failure path look pinned to its caller.
         if (rc != 0 && pipe_out_)
             *pipe_out_ = NULL;
-        bool pin_failed = false;
-#ifdef ZLINK_BUILD_TESTS
         if (rc == 0 && pin_pipe_out_ && pipe_out_ && *pipe_out_
-            && consume_recv_pipe_pin_failpoint ())
-            pin_failed = true;
-#endif
-        if (rc == 0 && pin_pipe_out_ && pipe_out_ && *pipe_out_
-            && (pin_failed || !(*pipe_out_)->retain_lifetime_ref ())) {
+            && !(*pipe_out_)->retain_lifetime_ref ()) {
             *pipe_out_ = NULL;
             // The frame was already consumed. Preserve successful receive
             // ownership and let the request/reply reader reject a request
@@ -1084,16 +1018,9 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
                 *transport_pair_generation_out_ =
                   (*source_pipe_out_)->get_transport_pair_generation ();
         }
-        bool pin_failed = false;
-#ifdef ZLINK_BUILD_TESTS
-        if (rc == 0 && pin_source_pipe_out_ && source_pipe_out_
-            && *source_pipe_out_ && consume_recv_pipe_pin_failpoint ())
-            pin_failed = true;
-#endif
         if (rc == 0 && pin_source_pipe_out_ && source_pipe_out_
             && *source_pipe_out_
-            && (pin_failed || !retain_received_source_pipe_ref (
-                                 *source_pipe_out_))) {
+            && !retain_received_source_pipe_ref (*source_pipe_out_)) {
             *source_pipe_out_ = NULL;
             // Do not turn a consumed frame into an unowned failure result.
             // The request/reply reader handles a null live-source reference;

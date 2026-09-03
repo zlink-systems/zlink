@@ -32,10 +32,6 @@
 #include "sockets/common/socket_runtime.hpp"
 #include "zlink.h"
 
-extern "C" {
-void zlink_free_event (void *data_, void *hint_);
-}
-
 namespace zlink
 {
 class ctx_t;
@@ -44,6 +40,7 @@ class pipe_t;
 class io_thread_t;
 class socket_base_t;
 class socket_public_handle_t;
+class submit_progress_wait_scope_t;
 class session_base_t;
 
 #ifdef ZLINK_BUILD_TESTS
@@ -249,6 +246,7 @@ class socket_base_t : public own_t,
 {
     friend class reaper_t;
     friend class socket_public_handle_t;
+    friend class submit_progress_wait_scope_t;
 #ifdef ZLINK_BUILD_TESTS
     friend class session_termination_test_access_t;
 #endif
@@ -286,8 +284,6 @@ class socket_base_t : public own_t,
     int connect (const char *endpoint_uri_);
     int term_endpoint (const char *endpoint_uri_);
     int term_peer_rid (const zlink_routing_id_t *peer_rid_);
-    int term_transport_pair (uint64_t transport_pair_id_,
-                             uint64_t transport_pair_generation_);
     int send (zlink::msg_t *msg_, int flags_);
     int send_complete_record (zlink::msg_t *msg_, int flags_);
     // Internal helper for logical multipart wrappers that already hold the
@@ -303,14 +299,6 @@ class socket_base_t : public own_t,
     int send_routed_complete_record (const zlink_routing_id_t *target_rid_,
                                      zlink::msg_t *msg_,
                                      int flags_);
-    // Submit to the exact transport pair selected by
-    // select_routed_submit_target(). A replacement peer with the same RID
-    // must not receive an operation parked for the previous generation.
-    int send_routed_transport_pair (const zlink_routing_id_t *target_rid_,
-                                    uint64_t transport_pair_id_,
-                                    uint64_t transport_pair_generation_,
-                                    zlink::msg_t *msg_,
-                                    int flags_);
     int send_routed_scoped (const zlink_routing_id_t *target_rid_,
                             zlink::msg_t *msg_,
                             int flags_,
@@ -440,10 +428,9 @@ class socket_base_t : public own_t,
     //  reachable without performing 2^64 state changes.
     void test_set_local_receive_flow_epoch (uint64_t epoch_);
     uint64_t test_local_receive_flow_epoch () const;
-    void test_fail_next_recv_pipe_pin ();
 #endif
-    // Pins an inbound source pipe while preserving the receive-path test
-    // failpoint used to prove that no reply target escapes an unowned source.
+    // Pins an inbound source pipe so no reply target escapes an unowned
+    // source.
     bool retain_received_source_pipe_ref (pipe_t *pipe_) const;
     bool begin_public_send_scope (
       std::optional<socket_public_send_scope_t> *scope_out_);
@@ -453,7 +440,6 @@ class socket_base_t : public own_t,
     void notify_incremental_send_released ();
     void hold_incremental_send_control_boundary ();
     void clear_incremental_send_control_boundary ();
-    std::unique_ptr<socket_public_api_scope_t> begin_public_api_scope ();
     int rollback ();
     int rollback_scoped (socket_public_send_scope_t &scope_);
     int recv (zlink::msg_t *msg_, int flags_,
@@ -478,23 +464,18 @@ class socket_base_t : public own_t,
     // scope only after the complete record has been assembled and published.
     int recv_record_continuation (
       zlink::msg_t *msg_, zlink::socket_receive_record_scope_t &record_scope_);
-    //  These three return a pipe whose lifetime is PINNED: they take a
+    //  These lookups return a pipe whose lifetime is PINNED: they take a
     //  lifetime ref while the transport-pair table is locked, because the
     //  table slot is the only thing that proves the pipe is still alive and
     //  the caller dereferences the result after the table is unlocked. Every
     //  caller must call release_lifetime_ref () after its last dereference,
     //  including on its error paths.
     pipe_t *completion_pipe_for_application (pipe_t *application_pipe_) const;
-    pipe_t *application_pipe_for_completion (pipe_t *completion_pipe_) const;
     pipe_t *completion_pipe_for_peer (const zlink_routing_id_t *peer_rid_) const;
     //  Borrowed predicate view. Do not dereference the result after another
     //  executor can process pipe termination.
     pipe_t *completion_pipe_for_transport_pair (uint64_t transport_pair_id_,
                                                 uint64_t transport_pair_generation_) const;
-    //  Pinned transport-pair lookup for callers that dereference the result.
-    //  The caller releases the returned pipe exactly once.
-    pipe_t *retain_completion_pipe_for_transport_pair (
-      uint64_t transport_pair_id_, uint64_t transport_pair_generation_) const;
     //  Exact ready-pair lookup used by topology-aware reply routing. The
     //  returned pipe is pinned and must be released exactly once by the
     //  caller. A Completion lookup on a count-1 pair returns NULL.
@@ -546,8 +527,9 @@ class socket_base_t : public own_t,
                                 bool admission_gate_preacquired_ = false);
     // An incremental PAIR/DEALER send already owns the socket's multipart
     // admission scope at FINAL. Reuse that scope for the common immediate
-    // whole-record attempt; EAGAIN leaves every input untouched so the caller
-    // can release the multipart marker and enter the ordinary pending path.
+    // whole-record attempt; EAGAIN retains every input's ownership and content
+    // so the caller can release the multipart marker and enter the ordinary
+    // pending path.
     int try_immediate_completion_send_scoped (
       zlink_msg_t *parts_, size_t part_count_,
       socket_public_send_scope_t &send_scope_,
@@ -576,6 +558,7 @@ class socket_base_t : public own_t,
     void drive_send_pending ();
     bool has_send_pending () const;
     void mark_send_completion_capacity_blocked ();
+    void clear_public_send_recovery_state ();
     void notify_send_completion_capacity_available ();
     socket_completion::queue_state_t &completion_runtime ()
     {
@@ -720,7 +703,6 @@ class socket_base_t : public own_t,
                              uint64_t transport_pair_generation_ = 0);
     void event_handshake_failed_no_detail (const endpoint_uri_pair_t &endpoint_uri_pair_, int err_);
     void event_handshake_failed_protocol (const endpoint_uri_pair_t &endpoint_uri_pair_, int err_);
-    void event_handshake_failed_auth (const endpoint_uri_pair_t &endpoint_uri_pair_, int err_);
     void event_connection_ready_changed (const endpoint_uri_pair_t &endpoint_uri_pair_,
                                          const unsigned char *routing_id_,
                                          size_t routing_id_size_,
@@ -769,7 +751,6 @@ class socket_base_t : public own_t,
                                 uint64_t current_epoch_,
                                 uint64_t pair_id_,
                                 pipe_t *application_pipe_);
-    auto_hwm_socket_plan_t prepare_auto_hwm_socket_plan (const auto_hwm_context_plan_t &context_);
     void collect_auto_hwm_queue_policies (
       std::vector<physical_queue_endpoint_policy_t> *out_);
     physical_queue_endpoint_policy_t make_auto_hwm_queue_policy (
@@ -778,17 +759,10 @@ class socket_base_t : public own_t,
     void apply_physical_auto_hwm_plan (const auto_hwm_context_plan_t &context_,
                                        uint32_t recalc_reason_);
     void refresh_auto_hwm_policy (bool force_apply_ = false);
-    void set_auto_hwm_role (auto_hwm_role_t role_);
     void set_auto_hwm_policy_enabled (bool enabled_);
     int configure_internal_monitor_queue (uint64_t hwm_bytes_);
-    bool monitor_has_attached_pipes () const;
-    void socket_peer_remote_endpoints (std::vector<std::string> *out_);
-    void socket_bound_endpoints (std::set<std::string> *out_) const;
     bool socket_has_endpoint_history () const;
-    bool socket_has_attached_pipes () const;
     bool socket_has_manual_connect_endpoints () const;
-    int set_peer_weight (uint32_t weight_);
-    int get_peer_weight (uint32_t *weight_out_) const;
     uint32_t local_peer_weight () const;
     int socket_id () const;
     std::shared_ptr<socket_reqrep_internal::socket_request_reply_state_t>
@@ -966,8 +940,6 @@ class socket_base_t : public own_t,
                               void *admission_userdata_ = NULL,
                               uint64_t *route_binding_token_out_ = NULL);
     virtual int xterm_peer_rid (const zlink_routing_id_t *peer_rid_);
-    int xterm_transport_pair (uint64_t transport_pair_id_,
-                              uint64_t transport_pair_generation_);
     virtual void xsocket_msg_pipe_terminated (zlink::pipe_t *pipe_);
     virtual int xpeer_command (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
     virtual void xlocal_peer_weight_changed ();
@@ -1051,9 +1023,6 @@ class socket_base_t : public own_t,
                      uint64_t *connection_id_out_,
                      bool pin_pipe_out_ = false,
                      zlink::socket_receive_record_scope_t *record_scope_ = NULL);
-    // Concrete receive algorithms may fence their socket-specific queue state,
-    // but the receive runtime and its ownership protocol remain base-owned.
-    mutex_t &receive_sync () { return receive_runtime ().sync; }
     //  A pipe became writable again: nudge the admit loop for that target.
     void notify_send_pending_writable (pipe_t *pipe_);
     void flush_deferred_peer_controls ();
@@ -1067,9 +1036,6 @@ class socket_base_t : public own_t,
       const zlink_routing_id_t *peer_rid_);
     void fail_pull_request_pending_for_logical_endpoint (
       const std::string &endpoint_);
-    void emit_socket_monitor_value_event (uint64_t event_,
-                                          uint64_t value_,
-                                          const endpoint_uri_pair_t &endpoint_uri_pair_);
     void emit_peer_weight_changed (pipe_t *pipe_, uint32_t weight_,
                                    const blob_t *public_routing_id_ = NULL);
     void snapshot_attached_pipes (std::vector<pipe_t *> *out_);
@@ -1127,7 +1093,6 @@ class socket_base_t : public own_t,
     typedef zlink::socket_monitor_event_record_t monitor_event_record_t;
     typedef zlink::socket_endpoint_pipe_t endpoint_pipe_t;
     typedef zlink::socket_endpoints_t endpoints_t;
-    typedef zlink::socket_inprocs_t inprocs_t;
     typedef zlink::socket_endpoint_runtime_t endpoint_runtime_t;
     typedef zlink::socket_command_runtime_t command_runtime_t;
     typedef zlink::socket_receive_runtime_t receive_runtime_t;
@@ -1177,7 +1142,6 @@ class socket_base_t : public own_t,
                  uint64_t transport_pair_generation_ = 0);
     // Socket event data dispatch
     static void monitor_task_main (void *arg_);
-    static void monitor_delivery_ready_pump (void *arg_);
     void pump_monitor_events ();
     void enqueue_monitor_event (const monitor_event_record_t &record_);
     bool build_monitor_event_record (monitor_event_record_t *out_,
@@ -1254,6 +1218,18 @@ class socket_base_t : public own_t,
                           bool throttle_,
                           bool force_if_command_pending_ = false,
                           const uint64_t *observed_command_wait_epoch_ = NULL);
+    enum submit_command_progress_mode_t
+    {
+        submit_command_progress_failed = -1,
+        submit_command_progress_wait,
+        submit_command_progress_synchronous,
+        submit_command_progress_retry_owner
+    };
+    submit_command_progress_mode_t prepare_pair_submit_command_progress (
+      int timeout_ms_, bool another_public_owner_,
+      bool *owner_progress_held_);
+    submit_command_progress_mode_t prepare_retained_submit_command_progress (
+      int timeout_ms_, bool *owner_progress_held_);
     bool try_inc_mailbox_ref ();
     void inc_mailbox_ref ();
     void dec_mailbox_ref ();
@@ -1295,8 +1271,7 @@ class socket_base_t : public own_t,
     //  apply - it covers bytes already admitted, and a pending record is by
     //  definition not admitted yet.
     void fail_all_send_pending (int terminal_errno_);
-    //  Claim/finish helpers used by the admit loop.
-    bool claim_send_pending_head (send_pending_record_t **out_);
+    //  Finish helpers used by the admit loop.
     int try_admit_send_pending (send_pending_record_t *record_);
     int select_routed_submit_target_internal (
       const zlink_routing_id_t *router_rid_or_null_,
@@ -1324,6 +1299,52 @@ class socket_base_t : public own_t,
       bool manage_public_send_recovery_ = true,
       const zlink_routing_id_t *transient_target_rid_ = NULL,
       zlink::pipe_t *transient_selected_pipe_ = NULL);
+    struct submit_timeout_budget_t;
+    struct completion_submit_wait_context_t;
+    struct request_submit_selection_t;
+    enum dealer_completion_fast_result_t
+    {
+        dealer_completion_fast_failed = -1,
+        dealer_completion_fast_select_required,
+        dealer_completion_fast_admitted,
+        dealer_completion_fast_target_committed
+    };
+    enum request_admission_fast_result_t
+    {
+        request_admission_fast_failed = -1,
+        request_admission_fast_select_required,
+        request_admission_fast_admitted,
+        request_admission_fast_target_selected
+    };
+    dealer_completion_fast_result_t try_dealer_completion_submit_fast (
+      zlink_msg_t *parts_, size_t part_count_,
+      std::optional<routed_send_target_key_t> *target_out_);
+    int wait_for_dealer_completion_submit_target (
+      completion_submit_wait_context_t &wait_,
+      std::optional<routed_send_target_key_t> *target_out_);
+    int wait_for_completion_submit_admission (
+      zlink_msg_t *parts_, size_t part_count_,
+      const routed_send_target_key_t *committed_dealer_target_or_null_,
+      const zlink_routing_id_t *transient_routed_target_or_null_,
+      completion_submit_wait_context_t &wait_);
+    request_admission_fast_result_t try_request_admission_submit_fast (
+      zlink_msg_t *parts_, size_t part_count_,
+      const zlink_routing_id_t *target_rid_or_null_,
+      pipe_write_observer_fn admission_observer_,
+      void *admission_observer_userdata_,
+      request_submit_selection_t *selection_out_);
+    int prepare_request_submit_target (
+      const zlink_routing_id_t *target_rid_or_null_,
+      request_admission_fast_result_t fast_result_,
+      submit_timeout_budget_t &timeout_,
+      request_submit_selection_t *selection_,
+      routed_send_target_key_t *target_out_);
+    int wait_for_request_submit_admission (
+      zlink_msg_t *parts_, size_t part_count_,
+      const routed_send_target_key_t &target_,
+      pipe_write_observer_fn admission_observer_,
+      void *admission_observer_userdata_,
+      submit_timeout_budget_t &timeout_);
     void finish_send_pending (send_pending_record_t *record_,
                               zlink_send_complete_result_t result_,
                               int terminal_errno_);
@@ -1389,8 +1410,6 @@ class socket_base_t : public own_t,
     clock_t _clock;
     mutable socket_runtime_t _runtime;
     socket_request_reply_bridge_t _request_reply_bridge;
-    auto_hwm_role_t _auto_hwm_role;
-    bool _auto_hwm_role_override;
     bool _auto_hwm_policy_enabled;
     bool _manual_sndhwm;
     bool _manual_rcvhwm;
@@ -1523,7 +1542,6 @@ class routing_socket_base_t : public socket_base_t
     const out_pipe_t *lookup_out_pipe (const blob_t &routing_id_) const;
     void erase_out_pipe (const pipe_t *pipe_);
     int terminate_out_pipe_by_routing_id (const zlink_routing_id_t *peer_rid_);
-    out_pipe_t try_erase_out_pipe (const blob_t &routing_id_);
     void mark_out_pipe_active (out_pipe_t *out_pipe_);
     void mark_out_pipe_inactive (out_pipe_t *out_pipe_);
     void update_out_pipe_weight (out_pipe_t *out_pipe_, uint32_t weight_);
@@ -1537,17 +1555,6 @@ class routing_socket_base_t : public socket_base_t
     {
         return NULL;
     }
-    template <typename Func> bool any_of_out_pipes (Func func_)
-    {
-        bool res = false;
-        for (out_pipes_t::iterator it = _out_pipes.begin (), end = _out_pipes.end ();
-             it != end && !res; ++it) {
-            res |= func_ (it->second);
-        }
-
-        return res;
-    }
-
   private:
     //  Outbound pipes indexed by the peer IDs.
     typedef std::map<blob_t, out_pipe_t> out_pipes_t;
