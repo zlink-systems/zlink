@@ -54,16 +54,21 @@ D-021~D-047이며, 이 절은 그 요약이다.
 
 ### 0.3 지금 돌고 있는 것과 미커밋 상태
 
-- 머신 `ulalax-home`(WSL)에서 codex sol ultra job `c016-hotpath-phase2`(브리프
-  `c016-worklog/briefs/hotpath-phase2.prompt`)가 Core 2차 성능 수정(D multi wake 유실 3종, A part_helper 층, B REQREP,
-  C ws/wss completion backpressure 순환 + timeout 콜백 O(N²)) 중이며 최종 gate·sweep 단계다. 진행 파일
-  `~/project/zlink-work/c016/hotpath-phase2-progress.md`, 요약 `hotpath-phase2-summary.md`.
-- 그 job의 working tree(core 39파일 +3.6k/−0.8k)는 **미커밋**. 백업 스냅샷 브랜치
-  `wip/hotpath-phase2-snapshot-20260903`(origin)에 11:15 시점 상태를 push했다.
-- 완료 처리 절차(그 머신의 세션이 수행): ① 요약·BLOCKERS 검토 ② 감독관 gate 재실행(`cmake --build core/build`,
-  `ctest` 전체, `test_single_lane_*` ×2, raw mirror cmp 12, `git diff --check`, cpp·python smoke) ③
-  `tools/sweep2.sh --only single` + `--only multi`로 4-size 집계 판정 ④ 파일 명시 add로 커밋·push ⑤ 수정 건별
-  spec-gap 분류(D-046) — 특히 "completion poller owner의 blocking request" 계약 문안.
+- Core 2차 성능 수정 ultra job(`c016-hotpath-phase2`, 브리프 `c016-worklog/briefs/hotpath-phase2.prompt`)은 머신
+  `ulalax-home`에서 D multi wake 유실 3종·A part_helper 층·B REQREP·C ws completion-backpressure 순환 + timeout 콜백
+  O(N²) 수정과 임시 계측 제거까지 마친 뒤, "completion-poller/backpressure 결정적 회귀 테스트 추가" 단계에서
+  **감독관이 중단**했다(2026-09-03, 사용자 지시: 새 머신에서 이어서). 진행 기록
+  `c016-worklog/hotpath-phase2-progress.md`, 변경 파일 43개 목록 `c016-worklog/hotpath-phase2-files.txt`.
+- 그 working tree(core 43파일 +3,733/−829)는 **미커밋**이며 branch `wip/hotpath-phase2-snapshot-20260903`(origin)에
+  중단 시점 그대로 있다.
+- **새 머신에서 이어받는 절차**: ① §0.4로 환경 구성 ② `git fetch origin wip/hotpath-phase2-snapshot-20260903 &&
+  git checkout main && git checkout origin/wip/hotpath-phase2-snapshot-20260903 -- core bindings/c/include
+  bindings/cpp/include bindings/go/include bindings/rust/include`로 스냅샷을 working tree에 적용(커밋하지 않음; `git
+  status -- core`로 43파일 확인) ③ sol ultra job을 `c016-worklog/briefs/hotpath-phase2-resume.prompt`로 기동 ④ 완료
+  후 감독관 gate 재실행(`cmake --build core/build`, `ctest` 전체, `test_single_lane_*` ×2, raw mirror cmp 12,
+  `git diff --check`, cpp·python smoke) ⑤ `tools/sweep2.sh --only single` + `--only multi` 4-size 집계 판정 ⑥ 파일
+  명시 add로 커밋·push ⑦ 수정 건별 spec-gap 분류(D-046) — 특히 "completion poller owner의 blocking request"
+  계약 문안.
 - 그 뒤 순서: hotpath gate 도구 job(`briefs/hotpath-gate.prompt`, 최종 트리 기준값) → posddd 리팩토링 job
   (`briefs/posddd-refactor.prompt`, worktree 분리 병렬) → wake 불변식 테스트 job(`briefs/wake-invariant-tests.prompt`)
   → Phase 7 → 9 → 10 → 11(사용자 조율) → 12 → 13.

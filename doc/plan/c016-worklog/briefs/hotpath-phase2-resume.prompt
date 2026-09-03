@@ -1,0 +1,12 @@
+역할: zlink Core(/home/hep7/project/zlink, main) 핫패스 성능 회귀 2차 수정을 **이어서 완료**하는 구현자(큰 이슈, sol ultra). 이전 job은 다른 머신에서 마무리 직전(회귀 테스트 추가 단계)에 중단됐고, 그 working tree는 branch `wip/hotpath-phase2-snapshot-20260903`(origin)에 스냅샷으로 있다. 감독관이 그 스냅샷을 현재 working tree에 적용해 두었다(`git status -- core`로 43파일 변경을 확인; **restore/reset/checkout 금지**).
+
+먼저 읽을 것: 원 브리프 doc/plan/c016-worklog/briefs/hotpath-phase2.prompt(목표·규칙·gate 전부 그대로 적용), 이전 job 진행 기록 doc/plan/c016-worklog/hotpath-phase2-progress.md(무엇을 어디까지 했는지 — D 3종 wake 수정·A 공통 send 축소·B REQREP(소켓당 deadline task·RID 키·completion commit fast path)·C ws completion-backpressure 순환 + timeout 콜백 O(N²) 수정까지 완료, 임시 계측 제거 완료, "completion-poller/backpressure 결정적 회귀 테스트 추가 중"에서 중단), 변경 파일 목록 doc/plan/c016-worklog/hotpath-phase2-files.txt, 판정 기록 doc/plan/c016-worklog/decisions.ko.md(D-036~D-047), **정식 스펙 core/doc/spec/core/systems/10-hot-path.ko.md §3(금지 7항)·§4(캐시/후퇴)·§5(gate)** — 이 스펙은 규범이며 위반이 남아 있으면 같은 job에서 고친다.
+
+남은 작업:
+1. 트리 상태 파악: 빌드가 되는지(`cmake --build core/build -j4`) 먼저 확인. 중단 시점의 미완성 편집(회귀 테스트)이 있으면 완성한다 — completion poller가 async owner를 quiesce한 채 blocking request를 보낼 때 reply가 timeout 전에 `POLLCOMPLETION`으로 관측되는 결정적 케이스.
+2. 스펙 §3 대조: 변경한 핫패스 함수에 §3 위반(할당·문자열·table lookup+mutex·조건 없는 부가작업·reader 재우는 probe·고정 sleep·signaler 재무장 누락)이 남아 있는지 점검하고 §4 형태로 고친다.
+3. Gate 전부 green(원 브리프와 동일): build, `ctest --test-dir core/build -j2` 전체(기준 134 + 이전 job이 추가한 테스트), `test_single_lane_*` ×2, raw mirror cmp 12(`bindings/{c,cpp,go,rust}/include`), `git diff --check`, `bash bindings/cpp/tests/run_tests.sh`, `ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh`.
+4. 성능 판정(사용자 확정 기준, D-040): `$ZLINK_WORK/c016/sweep2.sh --only single` 및 `--only multi`(size 64·256·1024·65536, cell 5% + (pattern,transport) 기하평균 ≥1.0/≤1.0). baseline worktree는 plan §0.4 절차로 미리 만들어져 있어야 한다(없으면 감독관에게 BLOCKERS). 측정 중 다른 빌드·테스트가 돌지 않게 `ps -eo comm | grep -E '^(perf_|python3|cc1plus|lto1)$'`가 비어 있을 때만 측정. 미달 cell은 원인을 실증해 수정하고 재측정한다(gate 완화·이월 금지).
+5. 완료 시 `$ZLINK_WORK/c016/hotpath-phase2-summary.md`에 원인별 실증·수정(파일별)·gate 결과·sweep2 표(single 42 + multi 28, cell·집계)·BLOCKERS·spec-gap 후보(특히 "completion poller owner의 blocking request" 계약 문안 제안). 진행은 `hotpath-phase2-progress.md`에 이어서 append.
+
+절대 규칙(원 브리프와 동일): doc/**·core/doc/** 수정 금지, framework/**·bindings/<lang>/ 소스 수정 금지(raw mirror 동기화만), scripts/local-package/** 실행 금지, git commit/push/reset/restore/checkout 금지, `hotpath_reference.json` 수정 금지, `ulimit -v 16777216`, 임시 계측 제거, 새 옵션·제어점·계약 완화 금지.

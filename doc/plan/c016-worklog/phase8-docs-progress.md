@@ -1,0 +1,7 @@
+2026-09-02 Core and binding public surfaces, the Phase 8 inventory, and the nine required decisions were reviewed; document edits are in progress.
+2026-09-02 Core guide/reference pairs and C++/.NET/Go/Java/Node/Python/Rust guide/reference groups were updated to the pull-completion model; Go public-poller ownership text was withheld.
+2026-09-02 r2 restart: rejected whole-file replacement was discarded; branch, dirty scope, authority documents, and all seven binding poller wait/drain implementations were rechecked before surgical edits.
+2026-09-02 r2 Core group: updated 32 paired guide/reference files in place; retained every chapter structure and converted send/request completion, reply-token, STREAM mode, and poller-drain passages to the current C surface (1034 insertions, 1081 deletions; 1.05 ratio).
+2026-09-02 r2 Binding guide group: C++/.NET/Go/Java/Node/Python/Rust index guides and Go godoc updated surgically for current terminal, token, STREAM, and poller-owner rules.
+2026-09-02 r2 Binding reference group: C++/.NET/Go/Java/Node/Python/Rust messaging, sockets, eventing, errors, and requested README targets updated; Core monitor/timer callback drift found by follow-up search and corrected without removing sections.
+2026-09-02 r2 Validation/summary group: 116-file line/numstat table reconciled to HEAD, all 38 deletion-heavy example replacements explained, Phase 9 stale scan classified 169 subscription-event false positives and 0 stale hits, and scoped diff/heading/parity gates passed.
