@@ -2,6 +2,11 @@
 
 #include "support.hpp"
 
+#include "../../src/Runtime/Sockets/socket_access.hpp"
+
+#include <zlink.h>
+#include <zlink/message/api.h>
+
 #include <atomic>
 #include <barrier>
 #include <cerrno>
@@ -707,6 +712,9 @@ void test_concurrent_pair_multipart_exposes_core_rejection_and_returns_lvalues (
     zlink::context_t ctx;
     zlink::pair_socket_t receiver (ctx);
     zlink::pair_socket_t sender (ctx);
+    constexpr uint64_t k_hwm_bytes = 64u * 1024u * 1024u;
+    sender.options ().send_hwm (zlink::byte_count_t::bytes (k_hwm_bytes));
+    receiver.options ().recv_hwm (zlink::byte_count_t::bytes (k_hwm_bytes));
     zlink::socket_monitor_t receiver_monitor = receiver.monitor_open ();
     zlink::socket_monitor_t sender_monitor = sender.monitor_open ();
 
@@ -718,6 +726,72 @@ void test_concurrent_pair_multipart_exposes_core_rejection_and_returns_lvalues (
       receiver_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
     assert (zlink_cpp_contract::wait_for_socket_monitor_event (
       sender_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
+
+    // Hold an open multipart sequence across the contender submit so rejection
+    // and lvalue restoration do not depend on a scheduler-created overlap.
+    zlink_msg_t held_first;
+    const std::string held_first_text = "held:0";
+    assert (zlink_msg_init_size (&held_first, held_first_text.size ()) == ZLINK_CONFIG_OK);
+    std::memcpy (zlink_msg_data (&held_first), held_first_text.data (), held_first_text.size ());
+    assert (zlink_send_part (zlink::detail::native_handle (sender), &held_first,
+                             ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, nullptr, nullptr)
+            == ZLINK_SUBMIT_OK);
+    assert (zlink_msg_close (&held_first) == ZLINK_CONFIG_OK);
+
+    const std::string rejected_first_text = "rejected:0";
+    const std::string rejected_second_text = "rejected:1";
+    const std::string rejected_third_text = "rejected:2";
+    zlink::message_t rejected_first =
+      zlink_cpp_contract::make_message (rejected_first_text);
+    zlink::message_t rejected_second =
+      zlink_cpp_contract::make_message (rejected_second_text);
+    zlink::message_t rejected_third =
+      zlink_cpp_contract::make_message (rejected_third_text);
+    zlink::submit_result_t deterministic_result = zlink::submit_result_t::ok;
+    int deterministic_errno = 0;
+    bool deterministic_unexpected_exception = false;
+    std::thread deterministic_contender ([&] {
+        try {
+            sender.send ()
+              .message (rejected_first)
+              .message (rejected_second)
+              .message (rejected_third)
+              .submit ();
+        }
+        catch (const zlink::submit_error_t &error) {
+            deterministic_result = error.result ();
+            deterministic_errno = error.internal_errno ();
+        }
+        catch (...) {
+            deterministic_unexpected_exception = true;
+        }
+    });
+    deterministic_contender.join ();
+
+    assert (!deterministic_unexpected_exception);
+    assert (deterministic_result == zlink::submit_result_t::invalid_argument);
+    assert (deterministic_errno == EINVAL);
+    assert (rejected_first.valid ());
+    assert (rejected_first.to_string () == rejected_first_text);
+    assert (rejected_second.valid ());
+    assert (rejected_second.to_string () == rejected_second_text);
+    assert (rejected_third.valid ());
+    assert (rejected_third.to_string () == rejected_third_text);
+
+    zlink_msg_t held_final;
+    const std::string held_final_text = "held:1";
+    assert (zlink_msg_init_size (&held_final, held_final_text.size ()) == ZLINK_CONFIG_OK);
+    std::memcpy (zlink_msg_data (&held_final), held_final_text.data (), held_final_text.size ());
+    assert (zlink_send_part (zlink::detail::native_handle (sender), &held_final,
+                             ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, nullptr, nullptr)
+            == ZLINK_SUBMIT_OK);
+    assert (zlink_msg_close (&held_final) == ZLINK_CONFIG_OK);
+
+    zlink::received_t held_inbound;
+    assert (receiver.recv (held_inbound) == 0);
+    assert (held_inbound.parts ().size () == 2);
+    assert (held_inbound.parts ()[0].to_string () == held_first_text);
+    assert (held_inbound.parts ()[1].to_string () == held_final_text);
 
     constexpr int k_sender_count = 8;
     constexpr int k_attempts_per_sender = 2000;
@@ -772,7 +846,6 @@ void test_concurrent_pair_multipart_exposes_core_rejection_and_returns_lvalues (
     const int accepted_count = accepted.load (std::memory_order_relaxed);
     const int rejected_count = rejected.load (std::memory_order_relaxed);
     assert (accepted_count + rejected_count == k_sender_count * k_attempts_per_sender);
-    assert (rejected_count > 0);
     assert (ownership_failures.load (std::memory_order_relaxed) == 0);
     assert (unexpected_results.load (std::memory_order_relaxed) == 0);
 
