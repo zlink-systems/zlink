@@ -74,9 +74,12 @@ void format_blob_routing_id_debug (const zlink::blob_t &routing_id_, char *buf_,
 
 }
 
-void zlink::router_t::copy_router_pipe_source_rid (pipe_t *pipe_,
-                                                    zlink_routing_id_t *out_) const
+void zlink::router_t::copy_router_pipe_source_rid (
+  pipe_t *pipe_, zlink_routing_id_t *out_,
+  uint64_t *route_binding_token_out_) const
 {
+    if (route_binding_token_out_)
+        *route_binding_token_out_ = 0;
     if (!out_)
         return;
 
@@ -96,6 +99,9 @@ void zlink::router_t::copy_router_pipe_source_rid (pipe_t *pipe_,
       standby != _standby_pipes.end () ? &standby->second : &pipe_->get_routing_id ();
     if (routing_id->size () > 0) {
         copy_routing_id_from_bytes (routing_id->data (), routing_id->size (), out_);
+        if (route_binding_token_out_)
+            *route_binding_token_out_ =
+              pipe_->router_route_binding_token ();
     }
     // Only registered ROUTER scheduler endpoints reach the receive path. An
     // empty local route is therefore not repaired by dereferencing the peer:
@@ -174,6 +180,17 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
 
 void zlink::router_t::xread_activated (pipe_t *pipe_)
 {
+    if (pipe_ && pipe_->get_transport_pair_id () != 0
+        && pipe_->get_transport_lane () == transport_lane_application
+        && pipe_->get_transport_lane_count () == 1u
+        && pipe_->transport_pair_application_ready_cached ()) {
+        // Pair admission already adopted and registered this exact pipe.
+        // Reclassification only changes its FQ partition; route identity and
+        // generation tables cannot have changed while the ready cache holds.
+        _fq.activated (pipe_);
+        return;
+    }
+
     bool route_adopted = false;
     route_adoption_actions_t adoption_actions;
     {
@@ -221,6 +238,14 @@ void zlink::router_t::xread_activated (pipe_t *pipe_)
 
 void zlink::router_t::xread_deactivated (pipe_t *pipe_)
 {
+    if (pipe_ && pipe_->get_transport_pair_id () != 0
+        && pipe_->get_transport_lane () == transport_lane_application
+        && pipe_->get_transport_lane_count () == 1u
+        && pipe_->transport_pair_application_ready_cached ()) {
+        _fq.deactivate (pipe_);
+        return;
+    }
+
     std::lock_guard<std::mutex> route_lifecycle_lock (_out_pipes_sync);
     if (_anonymous_pipes.find (pipe_) == _anonymous_pipes.end ())
         _fq.deactivate (pipe_);
@@ -320,12 +345,15 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
                                   uint64_t *connection_id_out_,
                                   pipe_t **source_pipe_out_,
                                   pipe_t::read_admission_fn *admission_,
-                                  void *admission_userdata_)
+                                  void *admission_userdata_,
+                                  uint64_t *route_binding_token_out_)
 {
     if (connection_id_out_)
         *connection_id_out_ = 0;
     if (source_pipe_out_)
         *source_pipe_out_ = NULL;
+    if (route_binding_token_out_)
+        *route_binding_token_out_ = 0;
     if (_prefetched) {
         // A generic receive may have prefetched this frame before the routed
         // API asks for it. It is no longer in the pipe queue, but admission
@@ -391,7 +419,8 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
             errno_assert (init_rc == 0);
         }
         if (source_rid_out_)
-            copy_router_pipe_source_rid (_current_in, source_rid_out_);
+            copy_router_pipe_source_rid (
+              _current_in, source_rid_out_, route_binding_token_out_);
         if (connection_id_out_ && _current_in)
             *connection_id_out_ =
               _prefetched_msg.transport_connection_id ();
@@ -435,10 +464,12 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
     if (!_more_in) {
         _current_in = pipe;
         if (source_rid_out_)
-            copy_router_pipe_source_rid (pipe, source_rid_out_);
+            copy_router_pipe_source_rid (
+              pipe, source_rid_out_, route_binding_token_out_);
         _routing_id_sent = true;
     } else if (_current_in && source_rid_out_) {
-        copy_router_pipe_source_rid (_current_in, source_rid_out_);
+        copy_router_pipe_source_rid (
+          _current_in, source_rid_out_, route_binding_token_out_);
     }
     if (connection_id_out_)
         *connection_id_out_ = msg_->transport_connection_id ();

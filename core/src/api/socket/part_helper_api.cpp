@@ -59,6 +59,89 @@ bool prepare_send_scope_for_rollback (
     return state_->send_scope->lock_multipart_for_close_cleanup ();
 }
 
+void assign_send_sequence_spec (
+  zlink::part_helper_internal::send_sequence_spec_t *destination_,
+  const zlink::part_helper_internal::send_sequence_spec_t &source_)
+{
+    destination_->family = source_.family;
+    destination_->flags = source_.flags;
+    destination_->timeout_ms = source_.timeout_ms;
+    destination_->request_seq = source_.request_seq;
+    destination_->pending_cookie = source_.pending_cookie;
+    destination_->has_rid1 = source_.has_rid1;
+    destination_->has_rid2 = source_.has_rid2;
+    if (source_.has_rid1)
+        zlink::part_helper_internal::copy_routing_id (&source_.rid1,
+                                                       &destination_->rid1);
+    if (source_.has_rid2)
+        zlink::part_helper_internal::copy_routing_id (&source_.rid2,
+                                                       &destination_->rid2);
+    destination_->has_text1 = source_.has_text1;
+    destination_->has_text2 = source_.has_text2;
+    if (source_.has_text1)
+        destination_->text1 = source_.text1;
+    else
+        destination_->text1.clear ();
+    if (source_.has_text2)
+        destination_->text2 = source_.text2;
+    else
+        destination_->text2.clear ();
+    destination_->request_like = source_.request_like;
+    destination_->transport_pair_id = source_.transport_pair_id;
+    destination_->transport_pair_generation =
+      source_.transport_pair_generation;
+}
+
+bool send_spec_matches_after_request_upgrade (
+  const zlink::part_helper_internal::send_sequence_spec_t &active_,
+  const zlink::part_helper_internal::send_sequence_spec_t &incoming_)
+{
+    using zlink::part_helper_internal::routing_id_equals;
+    if (active_.family != incoming_.family
+        || active_.flags != incoming_.flags
+        || active_.has_rid1 != incoming_.has_rid1
+        || active_.has_rid2 != incoming_.has_rid2
+        || active_.has_text1 != incoming_.has_text1
+        || active_.has_text2 != incoming_.has_text2
+        || active_.request_like != incoming_.request_like
+        || active_.transport_pair_id != incoming_.transport_pair_id
+        || active_.transport_pair_generation
+             != incoming_.transport_pair_generation)
+        return false;
+    if (active_.has_rid1
+        && !routing_id_equals (active_.rid1, incoming_.rid1))
+        return false;
+    if (active_.has_rid2
+        && !routing_id_equals (active_.rid2, incoming_.rid2))
+        return false;
+    if (active_.has_text1 && active_.text1 != incoming_.text1)
+        return false;
+    if (active_.has_text2 && active_.text2 != incoming_.text2)
+        return false;
+    return true;
+}
+
+void clear_send_sequence_spec (
+  zlink::part_helper_internal::send_sequence_spec_t *spec_)
+{
+    spec_->family = zlink::part_helper_internal::send_family_none;
+    spec_->flags = ZLINK_SEND_FLAGS_NONE;
+    spec_->timeout_ms = 0;
+    spec_->request_seq = 0;
+    spec_->pending_cookie = 0;
+    spec_->rid1.size = 0;
+    spec_->rid2.size = 0;
+    spec_->has_rid1 = false;
+    spec_->has_rid2 = false;
+    spec_->text1.clear ();
+    spec_->text2.clear ();
+    spec_->has_text1 = false;
+    spec_->has_text2 = false;
+    spec_->request_like = false;
+    spec_->transport_pair_id = 0;
+    spec_->transport_pair_generation = 0;
+}
+
 int prepare_send_step_state_locked (
   zlink::part_helper_internal::handle_state_t *state_,
   const zlink::part_helper_internal::send_sequence_spec_t &spec_,
@@ -66,6 +149,7 @@ int prepare_send_step_state_locked (
   bool start_if_inactive_)
 {
     const std::thread::id current_thread = std::this_thread::get_id ();
+    bool advertised_new_sequence = false;
     if (state_->send.active && state_->send.owner_thread != current_thread) {
         if (zlink::part_helper_internal::routed_part_debug_enabled ()) {
             std::fprintf (stderr,
@@ -83,35 +167,47 @@ int prepare_send_step_state_locked (
             if (!start_if_inactive_)
                 return 1;
 
-            zlink::part_helper_internal::send_sequence_spec_t committed_spec =
-              spec_;
             std::optional<zlink::socket_public_send_scope_t> send_scope;
-            if (!create_send_scope (sink_socket_, spec_, &send_scope))
+            // Publish the helper marker while its state mutex is still held.
+            // A concurrent FINAL fast path that observes it must join the
+            // helper path and block on this same mutex; publishing only after
+            // create_send_scope() left a marker-to-state admission gap.
+            sink_socket_->set_part_helper_send_active (true);
+            advertised_new_sequence = true;
+            if (!create_send_scope (sink_socket_, spec_, &send_scope)) {
+                const int scope_errno = errno;
+                sink_socket_->set_part_helper_send_active (false);
+                // A Core-owned pending-send retry briefly uses the complete
+                // admission slot.  It is backpressure, not a malformed new
+                // multipart sequence.  Publish a retryable POLLOUT edge so a
+                // DONTWAIT caller cannot turn that internal race into EINVAL.
+                if (scope_errno == EINVAL
+                    && spec_.flags == ZLINK_SEND_FLAGS_DONTWAIT) {
+                    sink_socket_->arm_send_recovery_after_backpressure ();
+                    errno = EAGAIN;
+                } else {
+                    errno = scope_errno;
+                }
                 return -1;
+            }
 
-            state_->send.spec = std::move (committed_spec);
+            assign_send_sequence_spec (&state_->send.spec, spec_);
             state_->send.sink_socket = sink_socket_;
             state_->send.send_scope.emplace (std::move (*send_scope));
             state_->send.owner_thread = current_thread;
             state_->send.active = true;
+            advertised_new_sequence = false;
             *first_part_out_ = true;
         } else {
             bool commit_upgraded_spec = false;
-            zlink::part_helper_internal::send_sequence_spec_t committed_spec;
             if (!zlink::part_helper_internal::send_spec_equals (
                   state_->send.spec, spec_)) {
-                zlink::part_helper_internal::send_sequence_spec_t upgraded =
-                  state_->send.spec;
-                upgraded.timeout_ms = spec_.timeout_ms;
-                upgraded.request_seq = spec_.request_seq;
-                upgraded.pending_cookie = spec_.pending_cookie;
                 const bool can_upgrade_staged_request =
                   state_->send.spec.request_like && spec_.request_like
                   && state_->send.spec.request_seq == 0 && spec_.request_seq != 0
-                  && zlink::part_helper_internal::send_spec_equals (upgraded,
-                                                                    spec_);
+                  && send_spec_matches_after_request_upgrade (
+                    state_->send.spec, spec_);
                 if (can_upgrade_staged_request) {
-                    committed_spec = spec_;
                     commit_upgraded_spec = true;
                 } else {
                     if (zlink::part_helper_internal::routed_part_debug_enabled ()) {
@@ -134,7 +230,7 @@ int prepare_send_step_state_locked (
             }
             if (commit_upgraded_spec) {
                 try {
-                    state_->send.spec = std::move (committed_spec);
+                    assign_send_sequence_spec (&state_->send.spec, spec_);
                 } catch (...) {
                     state_->send.send_scope->suspend_multipart_call ();
                     throw;
@@ -143,6 +239,8 @@ int prepare_send_step_state_locked (
             *first_part_out_ = false;
         }
     } catch (const std::bad_alloc &) {
+        if (advertised_new_sequence)
+            sink_socket_->set_part_helper_send_active (false);
         errno = ENOMEM;
         return -1;
     }
@@ -340,12 +438,7 @@ bool zlink::part_helper_internal::send_sequence_active (void *handle_)
 
 bool zlink::part_helper_internal::send_sequence_active (socket_base_t *socket_)
 {
-    std::shared_ptr<handle_state_t> state = find_socket_state (socket_);
-    if (!state)
-        return false;
-
-    std::lock_guard<std::mutex> lock (state->mutex);
-    return state->send.active;
+    return socket_ && socket_->part_helper_send_active ();
 }
 
 int zlink::part_helper_internal::stage_recv_sequence (const std::shared_ptr<handle_state_t> &state_,
@@ -535,11 +628,14 @@ void zlink::part_helper_internal::reset_send_sequence (
     socket_base_t *const sink_socket = state_->sink_socket;
     const bool had_send_scope = static_cast<bool> (state_->send_scope);
 
-    state_->spec = send_sequence_spec_t ();
+    clear_send_sequence_spec (&state_->spec);
     state_->send_scope.reset ();
     state_->active = false;
     state_->sink_socket = NULL;
     state_->owner_thread = std::thread::id ();
+
+    if (sink_socket)
+        sink_socket->set_part_helper_send_active (false);
 
     if (notify_release_ && had_send_scope && sink_socket)
         sink_socket->notify_incremental_send_released ();
@@ -695,6 +791,15 @@ void zlink::part_helper_internal::complete_send_step (const std::shared_ptr<hand
         return;
 
     std::lock_guard<std::mutex> lock (state_->mutex);
+    complete_send_step_locked (state_.get (), part_flag_);
+}
+
+void zlink::part_helper_internal::complete_send_step_locked (
+  handle_state_t *state_, zlink_part_flag_t part_flag_)
+{
+    if (!state_)
+        return;
+
     if (part_flag_ == ZLINK_PART_MORE) {
         if (state_->send.sink_socket)
             state_->send.sink_socket->hold_incremental_send_control_boundary ();
@@ -706,6 +811,36 @@ void zlink::part_helper_internal::complete_send_step (const std::shared_ptr<hand
         return;
 
     reset_send_sequence (&state_->send);
+}
+
+int zlink::part_helper_internal::take_buffered_send_record (
+  const std::shared_ptr<handle_state_t> &state_, send_part_buffer_t *parts_out_)
+{
+    if (!state_ || !parts_out_ || !parts_out_->empty ()) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    std::lock_guard<std::mutex> lock (state_->mutex);
+    return take_buffered_send_record_locked (state_.get (), parts_out_);
+}
+
+int zlink::part_helper_internal::take_buffered_send_record_locked (
+  handle_state_t *state_, send_part_buffer_t *parts_out_)
+{
+    if (!state_ || !parts_out_ || !parts_out_->empty ()) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (!state_->send.active || state_->send.buffered_parts.empty ()
+        || state_->send.owner_thread != std::this_thread::get_id ()) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    parts_out_->take_from (&state_->send.buffered_parts);
+    reset_send_sequence (&state_->send);
+    return 0;
 }
 
 void zlink::part_helper_internal::complete_recv_step (const std::shared_ptr<handle_state_t> &state_,

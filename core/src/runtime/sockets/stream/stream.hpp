@@ -48,7 +48,8 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
                       void *observer_userdata_ = NULL,
                       routed_send_attempt_identity_t
                         *attempt_identity_out_ = NULL,
-                      uint64_t expected_route_incarnation_id_ = 0)
+                      uint64_t expected_route_incarnation_id_ = 0,
+                      bool request_only_ = false)
       ZLINK_OVERRIDE;
     int xselect_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,

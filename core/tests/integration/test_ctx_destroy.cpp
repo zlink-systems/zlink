@@ -34,7 +34,10 @@ struct async_owner_transition_gate_t
     async_owner_transition_gate_t () :
         idle_stop_entered (false),
         monitor_acquire_entered (false),
-        release_idle_stop (false)
+        explicit_stop_entered (false),
+        transport_acquire_waiting (false),
+        release_idle_stop (false),
+        release_explicit_stop (false)
     {
     }
 
@@ -42,7 +45,10 @@ struct async_owner_transition_gate_t
     std::condition_variable changed;
     bool idle_stop_entered;
     bool monitor_acquire_entered;
+    bool explicit_stop_entered;
+    bool transport_acquire_waiting;
     bool release_idle_stop;
+    bool release_explicit_stop;
 };
 
 void pause_async_owner_transition (
@@ -59,6 +65,17 @@ void pause_async_owner_transition (
     } else if (point_
                == zlink::async_owner_test_monitor_acquire_before_gate) {
         gate->monitor_acquire_entered = true;
+        gate->changed.notify_all ();
+    } else if (point_
+               == zlink::async_owner_test_explicit_stop_before_detach) {
+        gate->explicit_stop_entered = true;
+        gate->changed.notify_all ();
+        gate->changed.wait (lock,
+                            [gate] { return gate->release_explicit_stop; });
+    } else if (
+      point_
+      == zlink::async_owner_test_transport_acquire_waiting_for_quiesce) {
+        gate->transport_acquire_waiting = true;
         gate->changed.notify_all ();
     }
 }
@@ -258,6 +275,21 @@ class session_termination_test_access_t
     static bool socket_destroyed (socket_base_t *socket_)
     {
         return socket_->lifecycle_coordinator ().is_destroyed ();
+    }
+
+    static bool async_mailbox_active (socket_base_t *socket_)
+    {
+        return socket_->lifecycle_coordinator ().is_async_mailbox_active ();
+    }
+
+    static bool async_quiesce_pending (socket_base_t *socket_)
+    {
+        return socket_->lifecycle_coordinator ().is_async_quiesce_pending ();
+    }
+
+    static void wait_async_started (socket_base_t *socket_)
+    {
+        socket_->lifecycle_coordinator ().wait_async_started (1000);
     }
 };
 }
@@ -1290,6 +1322,135 @@ void test_monitor_owner_start_waits_for_idle_detach_linearization ()
     TEST_ASSERT_EQUAL_INT (0, ctx_term_rc);
 }
 
+void test_transport_owner_start_waits_for_explicit_async_quiesce ()
+{
+    void *ctx = zlink_ctx_new ();
+    void *source = ctx ? zlink_socket (ctx, ZLINK_SOCKET_PAIR) : NULL;
+    socket_handle_t source_handle = source ? as_socket_handle (source)
+                                           : socket_handle_t ();
+    const int zero = 0;
+    if (source)
+        (void) zlink_set_option (source, ZLINK_OPT_LINGER, &zero,
+                                 sizeof (zero));
+
+    const bool initial_owner_started =
+      source_handle.socket
+      && source_handle.socket->ensure_async_command_processing (true) == 0;
+    async_owner_transition_gate_t gate;
+    int completion_owner_token = 0;
+    bool completion_poller_acquired = false;
+    int transport_acquire_rc = -1;
+    int transport_acquire_errno = 0;
+    std::atomic<bool> completion_acquire_done (false);
+    std::atomic<bool> transport_acquire_done (false);
+    bool explicit_stop_entered = false;
+    bool transport_waiting_for_quiesce = false;
+    bool transport_was_blocked_before_detach = false;
+
+    std::thread completion_acquirer;
+    std::thread transport_acquirer;
+    if (initial_owner_started) {
+        zlink::test_set_async_owner_transition_hook (
+          &pause_async_owner_transition, &gate);
+        completion_acquirer = std::thread ([&] {
+            completion_poller_acquired =
+              source_handle.socket->acquire_completion_poller (
+                &completion_owner_token);
+            completion_acquire_done.store (true, std::memory_order_release);
+        });
+        explicit_stop_entered = wait_async_owner_transition (
+          &gate, &async_owner_transition_gate_t::explicit_stop_entered);
+        if (explicit_stop_entered) {
+            transport_acquirer = std::thread ([&] {
+                transport_acquire_rc =
+                  source_handle.socket->acquire_transport_pair_owner_progress ();
+                transport_acquire_errno = errno;
+                transport_acquire_done.store (true,
+                                              std::memory_order_release);
+            });
+            transport_waiting_for_quiesce = wait_async_owner_transition (
+              &gate,
+              &async_owner_transition_gate_t::transport_acquire_waiting);
+            transport_was_blocked_before_detach =
+              transport_waiting_for_quiesce
+              && !transport_acquire_done.load (std::memory_order_acquire);
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock (gate.sync);
+        gate.release_explicit_stop = true;
+        gate.changed.notify_all ();
+    }
+    if (completion_acquirer.joinable ())
+        completion_acquirer.join ();
+    if (transport_acquirer.joinable ())
+        transport_acquirer.join ();
+    zlink::test_set_async_owner_transition_hook (NULL, NULL);
+
+    const bool completion_wait_finished =
+      completion_acquire_done.load (std::memory_order_acquire);
+    const bool transport_wait_finished =
+      transport_acquire_done.load (std::memory_order_acquire);
+    const bool replacement_owner_active =
+      transport_acquire_rc == 0
+      && zlink::session_termination_test_access_t::async_mailbox_active (
+        source_handle.socket)
+      && !zlink::session_termination_test_access_t::async_quiesce_pending (
+        source_handle.socket);
+
+    bool command_progressed_after_handoff = false;
+    if (replacement_owner_active) {
+        zlink::session_termination_test_access_t::wait_async_started (
+          source_handle.socket);
+        source_handle.socket->acknowledge_request_completion_notification ();
+        uint64_t drains_before = 0;
+        source_handle.socket->test_receive_owner_snapshot (
+          NULL, NULL, &drains_before);
+        source_handle.socket->notify_request_completion ();
+
+        const std::chrono::steady_clock::time_point deadline =
+          std::chrono::steady_clock::now () + std::chrono::seconds (3);
+        while (std::chrono::steady_clock::now () < deadline) {
+            uint64_t drains_after = 0;
+            source_handle.socket->test_receive_owner_snapshot (
+              NULL, NULL, &drains_after);
+            if (drains_after > drains_before) {
+                command_progressed_after_handoff = true;
+                break;
+            }
+            msleep (1);
+        }
+    }
+
+    if (transport_acquire_rc == 0)
+        source_handle.socket->release_transport_pair_owner_progress ();
+    if (completion_poller_acquired)
+        source_handle.socket->release_completion_poller (
+          &completion_owner_token);
+    source_handle = socket_handle_t ();
+    int source_close_rc = ZLINK_CLOSE_OK;
+    int ctx_term_rc = 0;
+    if (source)
+        source_close_rc = zlink_close (source);
+    if (ctx)
+        ctx_term_rc = zlink_ctx_term (ctx);
+
+    TEST_ASSERT_TRUE (initial_owner_started);
+    TEST_ASSERT_TRUE (explicit_stop_entered);
+    TEST_ASSERT_TRUE (transport_waiting_for_quiesce);
+    TEST_ASSERT_TRUE (transport_was_blocked_before_detach);
+    TEST_ASSERT_TRUE (completion_wait_finished);
+    TEST_ASSERT_TRUE (completion_poller_acquired);
+    TEST_ASSERT_TRUE (transport_wait_finished);
+    TEST_ASSERT_EQUAL_INT_MESSAGE (0, transport_acquire_rc,
+                                   strerror (transport_acquire_errno));
+    TEST_ASSERT_TRUE (replacement_owner_active);
+    TEST_ASSERT_TRUE (command_progressed_after_handoff);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, source_close_rc);
+    TEST_ASSERT_EQUAL_INT (0, ctx_term_rc);
+}
+
 void test_zlink_ctx_term_null_fails ()
 {
     int rc = zlink_ctx_term (NULL);
@@ -1346,6 +1507,8 @@ int main (void)
     RUN_CTX_DESTROY_TEST (test_monitor_and_hwm_update_race_peer_close);
     RUN_CTX_DESTROY_TEST (
       test_monitor_owner_start_waits_for_idle_detach_linearization);
+    RUN_CTX_DESTROY_TEST (
+      test_transport_owner_start_waits_for_explicit_async_quiesce);
     RUN_CTX_DESTROY_TEST (test_zlink_ctx_term_null_fails);
     RUN_CTX_DESTROY_TEST (test_zlink_term_null_fails);
     RUN_CTX_DESTROY_TEST (test_zlink_ctx_shutdown_null_fails);

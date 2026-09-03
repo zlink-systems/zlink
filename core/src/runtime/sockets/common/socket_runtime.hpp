@@ -294,6 +294,7 @@ struct socket_receive_runtime_t
 
     socket_receive_runtime_t () :
         async_command_handoff_pending (false),
+        command_drain_active (false),
         receive_owner (receive_owner_available),
         progress_epoch (0),
         waiters (0)
@@ -314,6 +315,9 @@ struct socket_receive_runtime_t
 
     mutex_t command_owner_sync;
     std::atomic<bool> async_command_handoff_pending;
+    // Published before the command owner clears the mailbox pending hint and
+    // retained until every claimed command-side state change is visible.
+    std::atomic<bool> command_drain_active;
     // The async mailbox executor mutates receive-side socket state under
     // `sync`.  These operations own the transition from a lock-free public
     // receive lease to that exclusive owner; callers do not manipulate the
@@ -671,6 +675,13 @@ typedef void (*send_pending_request_resolved_fn) (void *context_,
                                                   bool admitted_,
                                                   int terminal_errno_);
 typedef void (*send_pending_request_cleanup_fn) (void *context_);
+// Promote a submit-call-owned REQUEST observer/resolution context only when
+// admission has actually fallen back to a pending record. On success the
+// pending record owns both returned pointers and releases the resolution
+// context through send_pending_request_cleanup_fn.
+typedef int (*send_pending_request_promote_fn) (
+  void *inline_context_, void **pending_observer_userdata_out_,
+  void **pending_resolution_context_out_);
 
 //  One pending nonblocking SEND/REQUEST admission record. Core owns every
 //  part in `parts` after the public submit returns ZLINK_SUBMIT_OK.
@@ -766,6 +777,7 @@ struct socket_send_pending_runtime_t
         enqueue_epoch (0),
         redrive_epoch (0),
         pending_bytes (0),
+        completion_capacity_blocked (false),
         failing (false)
     {
     }
@@ -802,9 +814,14 @@ struct socket_send_pending_runtime_t
     //  while the current driver still owns admission_gate.
     std::atomic<uint64_t> redrive_epoch;
     uint64_t pending_bytes;
+    // Set only after the unified completion reservation limit rejects a
+    // public submit. Unlike pipe HWM, this condition can recover either when
+    // a completion is dequeued or when every older pending record admits and
+    // a new submit can take the immediate-id-0 path.
+    std::atomic<bool> completion_capacity_blocked;
     //  Set once close or context termination has failed every pending record.
     //  New submits are refused from that point on.
-    bool failing;
+    std::atomic<bool> failing;
 };
 
 struct socket_dispatch_bridge_t
@@ -835,6 +852,19 @@ struct socket_dispatch_bridge_t
     pipe_t *deferred_socket_msg_termination_tail;
 };
 
+// Reply submitters that encounter physical backpressure wait for socket state
+// to be applied, rather than merely for its command to be enqueued. The atomic
+// waiter count keeps the ordinary command path out of this mutex and CV.
+struct socket_submit_progress_runtime_t
+{
+    socket_submit_progress_runtime_t () : epoch (0), waiters (0) {}
+
+    mutex_t sync;
+    condition_variable_t cv;
+    std::atomic<uint64_t> epoch;
+    std::atomic<uint32_t> waiters;
+};
+
 class socket_lifecycle_coordinator_t
 {
   public:
@@ -850,6 +880,7 @@ class socket_lifecycle_coordinator_t
         async_processing_started (false),
         async_quiesce_completed (false),
         public_multipart_control_boundary (false),
+        deferred_peer_controls_pending (false),
         _previous_thread_public_api_sync_owner (NULL)
     {
     }
@@ -877,6 +908,8 @@ class socket_lifecycle_coordinator_t
     bool public_multipart_send_active () const;
     void hold_public_multipart_control_boundary ();
     void release_public_multipart_control_boundary ();
+    void mark_deferred_peer_controls ();
+    bool take_deferred_peer_controls ();
     bool public_api_sync_held () const;
     bool public_api_sync_owned_by_current_thread () const;
     void lock_public_api_sync ();
@@ -926,6 +959,7 @@ class socket_lifecycle_coordinator_t
     // control-ordering boundary alive while the multipart marker is handed
     // off to the complete-record submit.
     std::atomic<bool> public_multipart_control_boundary;
+    std::atomic<bool> deferred_peer_controls_pending;
     mutex_t async_done_mu;
     condition_variable_t async_done_cv;
 
@@ -1036,6 +1070,7 @@ struct socket_runtime_t
     socket_receive_runtime_t receive_runtime;
     socket_monitor_runtime_t monitor_runtime;
     socket_dispatch_bridge_t dispatch_bridge;
+    socket_submit_progress_runtime_t submit_progress_runtime;
     socket_send_pending_runtime_t send_pending_runtime;
     socket_completion::queue_state_t completion_runtime;
     socket_lifecycle_coordinator_t lifecycle_coordinator;

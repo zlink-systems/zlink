@@ -32,10 +32,13 @@ namespace
 class pipe_cleanup_sink_t : public zlink::i_pipe_events
 {
   public:
-    pipe_cleanup_sink_t () : terminated_count (0) {}
+    pipe_cleanup_sink_t () : terminated_count (0), write_activated_count (0) {}
 
     void read_activated (zlink::pipe_t *) ZLINK_OVERRIDE {}
-    void write_activated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+    void write_activated (zlink::pipe_t *) ZLINK_OVERRIDE
+    {
+        ++write_activated_count;
+    }
     void hiccuped (zlink::pipe_t *) ZLINK_OVERRIDE {}
     void pipe_peer_terminated (zlink::pipe_t *) ZLINK_OVERRIDE {}
     void pipe_terminated (zlink::pipe_t *) ZLINK_OVERRIDE
@@ -44,6 +47,7 @@ class pipe_cleanup_sink_t : public zlink::i_pipe_events
     }
 
     int terminated_count;
+    int write_activated_count;
 };
 
 void *create_sync_socket (int type_)
@@ -1378,6 +1382,77 @@ void test_physical_queue_deferred_shrink_applies_on_drain ()
     close_sync_socket (owner_handle);
 }
 
+void test_deferred_shrink_wakes_writer_at_planned_lwm ()
+{
+    void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (
+      as_socket_handle (owner_handle).socket);
+    zlink::object_t *parents[] = {owner, owner};
+    const uint64_t frame_bytes = sizeof (zlink::msg_t) + 1;
+    const uint64_t initial_hwm = frame_bytes * 8;
+    const uint64_t shrink_target = frame_bytes * 4;
+    const uint64_t hwms[] = {initial_hwm, initial_hwm};
+    const bool conflate[] = {false, false};
+    zlink::pipe_t *pipes[2];
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflate));
+
+    pipe_cleanup_sink_t cleanup_sink;
+    pipes[0]->set_event_sink (&cleanup_sink);
+    pipes[1]->set_event_sink (&cleanup_sink);
+
+    for (size_t i = 0; i != 8; ++i) {
+        zlink::msg_t frame;
+        TEST_ASSERT_SUCCESS_ERRNO (frame.init_size (1));
+        TEST_ASSERT_TRUE (pipes[0]->write_and_flush (&frame));
+        TEST_ASSERT_SUCCESS_ERRNO (frame.close ());
+    }
+    TEST_ASSERT_EQUAL_UINT64 (initial_hwm, pipes[0]->get_bytes_written ());
+
+    //  Shrink only the reader's inbound target. The writer still has the
+    //  original 8C admission window, so the planned 2C credit wake can make
+    //  it writable while six frames remain in flight.
+    pipes[1]->set_hwms (shrink_target, initial_hwm);
+    TEST_ASSERT_EQUAL_UINT64 (shrink_target, pipes[0]->planned_out_hwm ());
+    TEST_ASSERT_EQUAL_UINT64 (initial_hwm, pipes[0]->applied_out_hwm ());
+    TEST_ASSERT_EQUAL_UINT64 (shrink_target, pipes[1]->planned_in_hwm ());
+    TEST_ASSERT_EQUAL_UINT64 (initial_hwm, pipes[1]->applied_in_hwm ());
+
+    zlink::msg_t blocked;
+    TEST_ASSERT_SUCCESS_ERRNO (blocked.init_size (1));
+    TEST_ASSERT_FALSE (pipes[0]->write_and_flush (&blocked));
+
+    for (size_t i = 0; i != 2; ++i) {
+        zlink::msg_t received;
+        TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+        TEST_ASSERT_TRUE (pipes[1]->read (&received));
+        TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    }
+    //  Two frame-charges reach planned LWM (2C), while the queue still has
+    //  six frames. The old applied-LWM calculation (4C) would not activate.
+    TEST_ASSERT_TRUE (pipes[1]->check_read ());
+    process_socket_control_commands (owner_handle);
+    TEST_ASSERT_EQUAL_INT (1, cleanup_sink.write_activated_count);
+
+    for (size_t i = 2; i != 6; ++i) {
+        zlink::msg_t received;
+        TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+        TEST_ASSERT_TRUE (pipes[1]->read (&received));
+        TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    }
+    TEST_ASSERT_TRUE (pipes[1]->check_read ());
+
+    TEST_ASSERT_SUCCESS_ERRNO (blocked.close ());
+    pipes[0]->terminate (false);
+    pipes[1]->terminate (false);
+    int events = 0;
+    size_t events_size = sizeof (events);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (owner_handle, ZLINK_OPT_EVENTS, &events, &events_size));
+    TEST_ASSERT_EQUAL_INT (2, cleanup_sink.terminated_count);
+    close_sync_socket (owner_handle);
+}
+
 void test_completion_pipe_does_not_apply_hwm_admission ()
 {
     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
@@ -1746,6 +1821,113 @@ void test_write_failure_restores_candidate_after_recovery ()
     harness.teardown (lb);
 }
 
+void test_passive_hwm_probe_does_not_consume_write_activation ()
+{
+    void *writer_owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
+    void *reader_owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
+    zlink::object_t *writer_owner = static_cast<zlink::object_t *> (
+      as_socket_handle (writer_owner_handle).socket);
+    zlink::object_t *reader_owner = static_cast<zlink::object_t *> (
+      as_socket_handle (reader_owner_handle).socket);
+    TEST_ASSERT_NOT_EQUAL (writer_owner->get_tid (), reader_owner->get_tid ());
+    zlink::object_t *parents[] = {writer_owner, reader_owner};
+    const uint64_t frame_bytes = sizeof (zlink::msg_t) + 1;
+    const uint64_t hwms[] = {frame_bytes, frame_bytes};
+    const bool conflate[] = {false, false};
+    zlink::pipe_t *pipes[2];
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflate));
+
+    class activating_sink_t : public zlink::i_pipe_events
+    {
+      public:
+        explicit activating_sink_t (zlink::lb_t *lb_) :
+            lb (lb_), write_activated_count (0), terminated_count (0)
+        {
+        }
+
+        void read_activated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+        void write_activated (zlink::pipe_t *pipe_) ZLINK_OVERRIDE
+        {
+            ++write_activated_count;
+            lb->activated (pipe_);
+        }
+        void hiccuped (zlink::pipe_t *) ZLINK_OVERRIDE {}
+        void pipe_peer_terminated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+        void pipe_terminated (zlink::pipe_t *) ZLINK_OVERRIDE
+        {
+            ++terminated_count;
+        }
+
+        zlink::lb_t *lb;
+        int write_activated_count;
+        int terminated_count;
+    };
+
+    zlink::lb_t lb;
+    activating_sink_t sink (&lb);
+    pipes[0]->set_event_sink (&sink);
+    pipes[1]->set_event_sink (&sink);
+    lb.attach (pipes[0]);
+
+    zlink::msg_t first;
+    TEST_ASSERT_SUCCESS_ERRNO (first.init_size (1));
+    TEST_ASSERT_SUCCESS_ERRNO (lb.send (&first));
+    TEST_ASSERT_SUCCESS_ERRNO (first.close ());
+
+    zlink::msg_t blocked;
+    TEST_ASSERT_SUCCESS_ERRNO (blocked.init_size (1));
+    zlink::pipe_message_admission_t admission =
+      zlink::pipe_message_admission_invalid;
+    TEST_ASSERT_EQUAL_INT (-1, lb.send (&blocked, &admission));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+    TEST_ASSERT_EQUAL_INT (zlink::pipe_message_admission_hwm_full, admission);
+    TEST_ASSERT_SUCCESS_ERRNO (blocked.close ());
+
+    zlink::msg_t received;
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+
+    // Model the interval after peer credit publication and before the owner
+    // processes its matching activate_write command. This passive all-pipes
+    // classification probe must not make the pipe active behind lb_t's back.
+    zlink::msg_t probe;
+    TEST_ASSERT_SUCCESS_ERRNO (probe.init_size (1));
+    admission = zlink::pipe_message_admission_invalid;
+    const int probe_rc = lb.send (&probe, &admission);
+    const int probe_errno = errno;
+    const zlink::pipe_message_admission_t probe_admission = admission;
+    TEST_ASSERT_SUCCESS_ERRNO (probe.close ());
+
+    process_socket_control_commands (writer_owner_handle);
+    process_socket_control_commands (writer_owner_handle);
+    const int activation_count = sink.write_activated_count;
+
+    zlink::msg_t recovered;
+    TEST_ASSERT_SUCCESS_ERRNO (recovered.init_size (1));
+    const int recovered_rc = lb.send (&recovered);
+    TEST_ASSERT_SUCCESS_ERRNO (recovered.close ());
+
+    lb.pipe_terminated (pipes[0]);
+    pipes[0]->terminate (false);
+    pipes[1]->terminate (false);
+    for (int i = 0; i != 3; ++i) {
+        process_socket_control_commands (writer_owner_handle);
+        process_socket_control_commands (reader_owner_handle);
+    }
+    TEST_ASSERT_EQUAL_INT (2, sink.terminated_count);
+    close_sync_socket (reader_owner_handle);
+    close_sync_socket (writer_owner_handle);
+
+    TEST_ASSERT_EQUAL_INT (-1, probe_rc);
+    TEST_ASSERT_EQUAL_INT (EAGAIN, probe_errno);
+    TEST_ASSERT_EQUAL_INT (zlink::pipe_message_admission_hwm_full,
+                           probe_admission);
+    TEST_ASSERT_EQUAL_INT (1, activation_count);
+    TEST_ASSERT_EQUAL_INT (0, recovered_rc);
+}
+
 int main ()
 {
     setup_test_environment ();
@@ -1769,6 +1951,7 @@ int main ()
     RUN_TEST (test_drained_pipe_oversize_multipart_uses_fresh_peer_credit);
     RUN_TEST (test_physical_queue_snapshot_accounts_multipart_once);
     RUN_TEST (test_physical_queue_deferred_shrink_applies_on_drain);
+    RUN_TEST (test_deferred_shrink_wakes_writer_at_planned_lwm);
     RUN_TEST (test_completion_pipe_does_not_apply_hwm_admission);
     RUN_TEST (test_conflate_replacement_releases_physical_queue_charge);
     RUN_TEST (test_weighted_selection_spreads_consecutive_picks);
@@ -1779,5 +1962,6 @@ int main ()
     RUN_TEST (test_weighted_selection_keeps_ratio_across_pipe_changes);
     RUN_TEST (test_weighted_selection_converges_to_wide_range_ratio);
     RUN_TEST (test_write_failure_restores_candidate_after_recovery);
+    RUN_TEST (test_passive_hwm_probe_does_not_consume_write_activation);
     return UNITY_END ();
 }

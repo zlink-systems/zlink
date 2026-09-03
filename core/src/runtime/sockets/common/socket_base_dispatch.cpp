@@ -81,23 +81,124 @@ int zlink::socket_base_t::peer_command_from_io (msg_t *msg_, pipe_t *pipe_)
     return rc;
 }
 
+bool zlink::socket_base_t::has_stable_completion_processing_owner () const
+{
+    const uint32_t generation =
+      _completion_processing_owner_generation.load (std::memory_order_acquire);
+    return (generation & 1u) != 0
+           && _completion_processing_owner_generation.load (
+                std::memory_order_acquire)
+                == generation;
+}
+
+// Stable publications follow a canonical owner-field recheck while holding
+// _completion_owner_sync. Invalidation is allowed to be conservative: the
+// next request falls back to both owner locks and republishes the live owner.
+void zlink::socket_base_t::invalidate_completion_processing_owner ()
+{
+    uint32_t generation =
+      _completion_processing_owner_generation.load (std::memory_order_relaxed);
+    while ((generation & 1u) != 0
+           && !_completion_processing_owner_generation.compare_exchange_weak (
+             generation, generation + 1, std::memory_order_acq_rel,
+             std::memory_order_relaxed)) {
+    }
+}
+
+void zlink::socket_base_t::publish_completion_processing_owner ()
+{
+    uint32_t generation =
+      _completion_processing_owner_generation.load (std::memory_order_relaxed);
+    while ((generation & 1u) == 0
+           && !_completion_processing_owner_generation.compare_exchange_weak (
+             generation, generation + 1, std::memory_order_release,
+             std::memory_order_relaxed)) {
+    }
+}
+
 int zlink::socket_base_t::ensure_completion_processing ()
 {
-    scoped_lock_t owner_lock (_completion_owner_sync);
-    if (_completion_poller_refs.load (std::memory_order_acquire) != 0)
+    if (has_stable_completion_processing_owner ())
         return 0;
-    retain_async_command_processing ();
-    if (lifecycle_coordinator ().is_async_mailbox_active ())
+
+    socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
+    for (;;) {
+        bool wait_for_quiescence = false;
+        bool started_here = false;
+        {
+            scoped_lock_t owner_lock (_completion_owner_sync);
+            scoped_lock_t progress_lock (
+              _transport_pair_owner_progress_sync);
+
+            // A public completion owner can be between its stop request and
+            // the old executor's physical mailbox detach. Do not treat either
+            // its poller reference or the inactive lifecycle bit as a stable
+            // owner until that detach has published completion.
+            if (lifecycle.is_async_quiesce_pending ()) {
+                wait_for_quiescence = true;
+            } else if (_completion_poller_refs.load (
+                         std::memory_order_acquire)
+                       != 0) {
+                publish_completion_processing_owner ();
+                return 0;
+            } else {
+                // The progress gate keeps an active owner from entering its
+                // idle detach while we publish the retained lease. Keep this
+                // steady request path to the same release store as before;
+                // only the cold owner-start path needs the prior value for a
+                // failure rollback.
+                if (lifecycle.is_async_mailbox_active ()) {
+                    _async_command_processing_retained.store (
+                      true, std::memory_order_release);
+                    _async_command_processing_stop_requested = false;
+                    publish_completion_processing_owner ();
+                    return 0;
+                }
+
+                const bool retained_before =
+                  _async_command_processing_retained.load (
+                    std::memory_order_acquire);
+                _async_command_processing_retained.store (
+                  true, std::memory_order_release);
+                _async_command_processing_stop_requested = false;
+
+                io_thread_t *io_thread = choose_io_thread (options.affinity);
+                if (!io_thread) {
+                    // Retention is a lease on a usable command owner, not a
+                    // record that an owner start was merely attempted. Restore
+                    // the prior state so a later 0 -> 1 pending transition can
+                    // retry acquisition after this cold failure.
+                    if (!retained_before)
+                        _async_command_processing_retained.store (
+                          false, std::memory_order_release);
+                    errno = EAGAIN;
+                    return -1;
+                }
+                if (start_async_mailbox_processing (io_thread) != 0) {
+                    const int start_errno = errno;
+                    if (!retained_before)
+                        _async_command_processing_retained.store (
+                          false, std::memory_order_release);
+                    errno = start_errno;
+                    return -1;
+                }
+                publish_completion_processing_owner ();
+                started_here = true;
+            }
+        }
+
+        if (wait_for_quiescence) {
+            wait_async_quiesced (10000);
+            if (lifecycle.is_async_quiesce_pending ()) {
+                errno = EBUSY;
+                return -1;
+            }
+            continue;
+        }
+        if (started_here)
+            lifecycle.wait_async_started (1000);
         return 0;
-    io_thread_t *io_thread = choose_io_thread (options.affinity);
-    if (!io_thread) {
-        errno = EAGAIN;
-        return -1;
     }
-    if (start_async_mailbox_processing (io_thread) != 0)
-        return -1;
-    lifecycle_coordinator ().wait_async_started (1000);
-    return 0;
 }
 
 bool zlink::socket_base_t::acquire_completion_poller (void *owner_)
@@ -118,22 +219,36 @@ bool zlink::socket_base_t::acquire_completion_poller (void *owner_)
             errno = EBUSY;
             return false;
         }
+        quiesce_async_owner =
+          lifecycle_coordinator ().is_async_mailbox_active ()
+          && current_async_mailbox_dispatch_socket () != this;
+        if (quiesce_async_owner)
+            invalidate_completion_processing_owner ();
+
         const uint32_t previous =
           _completion_poller_refs.fetch_add (1, std::memory_order_acq_rel);
         zlink_assert (previous == 0);
-        quiesce_async_owner =
-          previous == 0
-          && lifecycle_coordinator ().is_async_mailbox_active ()
-          && current_async_mailbox_dispatch_socket () != this;
-        if (quiesce_async_owner)
+        if (quiesce_async_owner) {
             stop_async_mailbox_processing ();
+        } else {
+            publish_completion_processing_owner ();
+        }
     }
     //  With no async completion consumer, the public poller can process mailbox
     //  commands and completions itself.  Quiescing the second mailbox owner
     //  also keeps normal receive readiness single-threaded while the poller
     //  registration exists.
-    if (quiesce_async_owner)
+    if (quiesce_async_owner) {
         wait_async_quiesced (10000);
+        // The wait runs outside the drain fence. Recheck the exact owner and
+        // completed detach under that fence before making it visible to the
+        // request fast path.
+        scoped_lock_t owner_lock (_completion_owner_sync);
+        if (_completion_poller_owner.load (std::memory_order_acquire) == owner_
+            && _completion_poller_refs.load (std::memory_order_acquire) != 0
+            && !lifecycle_coordinator ().is_async_quiesce_pending ())
+            publish_completion_processing_owner ();
+    }
     errno = 0;
     return true;
 }
@@ -144,6 +259,13 @@ void zlink::socket_base_t::release_completion_poller (void *owner_)
     {
         scoped_lock_t owner_lock (_completion_owner_sync);
         void *expected = owner_;
+        if (_completion_poller_owner.load (std::memory_order_acquire)
+            != expected)
+            return;
+        // Invalidate while the old owner is still canonical. A fast request
+        // that observed the preceding odd generation therefore linearizes
+        // before this handoff, never in the ownerless pointer/ref interval.
+        invalidate_completion_processing_owner ();
         if (!_completion_poller_owner.compare_exchange_strong (
               expected, NULL, std::memory_order_acq_rel,
               std::memory_order_acquire))
@@ -152,6 +274,16 @@ void zlink::socket_base_t::release_completion_poller (void *owner_)
           _completion_poller_refs.fetch_sub (1, std::memory_order_acq_rel);
         zlink_assert (previous == 1);
         resume = previous == 1;
+        if (resume && lifecycle_coordinator ().is_async_mailbox_active ()
+            && !lifecycle_coordinator ().is_async_quiesce_pending ()) {
+            scoped_lock_t progress_lock (
+              _transport_pair_owner_progress_sync);
+            if (lifecycle_coordinator ().is_async_mailbox_active ()
+                && !lifecycle_coordinator ().is_async_quiesce_pending ()
+                && _async_command_processing_retained.load (
+                     std::memory_order_acquire))
+                publish_completion_processing_owner ();
+        }
     }
     if (resume)
         resume_completion_processing_if_needed ();
@@ -174,7 +306,9 @@ void zlink::socket_base_t::notify_request_completion ()
     // One pending command is sufficient until the completion owner consumes
     // it. A real mailbox command, rather than signal() alone, also schedules
     // the async owner and closes the enqueue-vs-reschedule lost-wake window.
-    if (_request_completion_pending.exchange (true, std::memory_order_acq_rel))
+    const bool already_pending =
+      _request_completion_pending.exchange (true, std::memory_order_acq_rel);
+    if (already_pending)
         return;
     command_t wake;
     memset (&wake, 0, sizeof (wake));
@@ -237,8 +371,16 @@ const zlink_routing_id_t *zlink::socket_base_t::last_recv_source_rid_view () con
 void zlink::socket_base_t::arm_send_recovery_after_backpressure ()
 {
     const bool was_pending = dispatch_runtime ().send_recovery_pending ();
+    const bool was_ready = dispatch_runtime ().send_recovery_ready ();
     dispatch_runtime ().mark_send_recovery_pending ();
-    if (!was_pending)
+    // The writable edge may have been consumed by a temporary mailbox owner
+    // immediately before this EAGAIN armed recovery. Recheck the transport
+    // after publishing pending so that state becomes a level-ready poll edge
+    // instead of waiting for a second pipe transition that may never come.
+    if (transport_has_out ())
+        dispatch_runtime ().mark_send_recovery_ready ();
+    if (!was_pending
+        || (!was_ready && dispatch_runtime ().send_recovery_ready ()))
         static_cast<mailbox_t *> (_mailbox)->signal ();
 }
 
@@ -406,8 +548,13 @@ bool zlink::socket_base_t::deliver_local_peer_weight (pipe_t *pipe_,
                 || (pipe_->get_transport_lane_count () != 1u
                     && pipe_->get_transport_lane_count () != 2u))
                 return false;
-            return pipe_->write_peer_weight_control_and_flush (
-              weight_, lifecycle_coordinator ().public_multipart_send_active ());
+            const bool defer =
+              lifecycle_coordinator ().public_multipart_send_active ();
+            const bool sent =
+              pipe_->write_peer_weight_control_and_flush (weight_, defer);
+            if (sent && defer)
+                mark_deferred_peer_controls ();
+            return sent;
         }
         pipe_t *const peer = pipe_->retain_peer_snapshot ();
         if (!peer)
@@ -418,8 +565,13 @@ bool zlink::socket_base_t::deliver_local_peer_weight (pipe_t *pipe_,
         return sent;
     }
 
-    return pipe_->write_peer_weight_control_and_flush (
-      weight_, lifecycle_coordinator ().public_multipart_send_active ());
+    const bool defer =
+      lifecycle_coordinator ().public_multipart_send_active ();
+    const bool sent =
+      pipe_->write_peer_weight_control_and_flush (weight_, defer);
+    if (sent && defer)
+        mark_deferred_peer_controls ();
+    return sent;
 }
 
 bool zlink::socket_base_t::send_local_peer_weight (pipe_t *pipe_)
@@ -432,30 +584,41 @@ bool zlink::socket_base_t::send_local_peer_weight (pipe_t *pipe_)
         return false;
 
     const uint64_t pair_id = pipe_->get_transport_pair_id ();
-    if (pair_id == 0)
-        return deliver_local_peer_weight (pipe_, local_peer_weight ());
+    if (pair_id == 0) {
+        const bool sent =
+          deliver_local_peer_weight (pipe_, local_peer_weight ());
+        if (sent)
+            flush_deferred_peer_controls ();
+        return sent;
+    }
 
     const uint64_t pair_generation =
       pipe_->get_transport_pair_generation ();
     if (pair_generation == 0)
         return false;
-    scoped_lock_t pair_lock (_transport_pairs_sync);
-    const transport_pair_key_t key (pair_id, pair_generation);
-    const transport_pairs_t::iterator it = _transport_pairs.find (key);
-    if (it == _transport_pairs.end () || !it->second.ready
-        || it->second.application != pipe_
-        || !pipe_->transport_pair_writes_released ())
-        return false;
-    const uint32_t weight = local_peer_weight ();
-    if (it->second.local_peer_weight_advertised == weight)
-        return true;
+    {
+        scoped_lock_t pair_lock (_transport_pairs_sync);
+        const transport_pair_key_t key (pair_id, pair_generation);
+        const transport_pairs_t::iterator it = _transport_pairs.find (key);
+        if (it == _transport_pairs.end () || !it->second.ready
+            || it->second.application != pipe_
+            || !pipe_->transport_pair_writes_released ())
+            return false;
+        const uint32_t weight = local_peer_weight ();
+        if (it->second.local_peer_weight_advertised == weight)
+            return true;
 
-    //  Holding the pair policy record across enqueue/write serializes a
-    //  pair-ready resync with a concurrent dynamic option update. The delivery
-    //  helpers take only pipe/ctx locks and never re-enter this pair table.
-    if (!deliver_local_peer_weight (pipe_, weight))
-        return false;
-    it->second.local_peer_weight_advertised = weight;
+        // Holding the pair policy record across enqueue/write serializes a
+        // pair-ready resync with a concurrent dynamic option update. Deferred
+        // control flushing itself happens after this table lock is released.
+        if (!deliver_local_peer_weight (pipe_, weight))
+            return false;
+        it->second.local_peer_weight_advertised = weight;
+    }
+    // FINAL may have released the multipart boundary between the pipe write
+    // and flag publication. Recheck synchronously once no pair-table lock is
+    // held; the FINAL path owns the complementary ordering.
+    flush_deferred_peer_controls ();
     return true;
 }
 

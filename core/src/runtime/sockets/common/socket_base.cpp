@@ -105,6 +105,7 @@ zlink::socket_base_t::socket_base_t (ctx_t *parent_, uint32_t tid_, int sid_) :
     _auto_hwm_policy_enabled (true),
     _manual_sndhwm (false),
     _manual_rcvhwm (false),
+    _completion_processing_owner_generation (0),
     _completion_poller_refs (0),
     _completion_poller_owner (NULL),
     _request_completion_pending (false),
@@ -123,6 +124,7 @@ zlink::socket_base_t::socket_base_t (ctx_t *parent_, uint32_t tid_, int sid_) :
     _flow_state_stale_total (0),
     _flow_last_pause_duration_ms (0),
     _local_peer_weight (100),
+    _ready_count1_completion_pipes (NULL),
     _public_part_receive_delivery_hold_active (false),
     _public_part_receive_delivery_hold_pipe (NULL),
     _public_part_receive_delivery_hold_key (0, 0),
@@ -354,6 +356,11 @@ static void copy_routing_id (zlink_routing_id_t *out_, const zlink::blob_t &rout
 
 zlink::socket_base_t::~socket_base_t ()
 {
+    //  A detached count-1 pair can leave a stale ready entry after its final
+    //  completion owner has stopped. The intrusive queue owns the pipe and its
+    //  inbound ypipe independently of transport-pair teardown; release those
+    //  final pins before destroying the socket mailbox.
+    discard_count1_completion_ready_pipes ();
     scoped_lock_t lock (monitor_runtime ().sync);
     stop_monitor ();
 
@@ -435,7 +442,8 @@ int zlink::socket_base_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                                        void *observer_userdata_,
                                        routed_send_attempt_identity_t
                                          *attempt_identity_out_,
-                                       uint64_t expected_route_incarnation_id_)
+                                       uint64_t expected_route_incarnation_id_,
+                                       bool request_only_)
 {
     LIBZLINK_UNUSED (target_rid_);
     LIBZLINK_UNUSED (msg_);
@@ -449,6 +457,7 @@ int zlink::socket_base_t::xsend_routed (const zlink_routing_id_t *target_rid_,
     LIBZLINK_UNUSED (expected_transport_pair_id_);
     LIBZLINK_UNUSED (expected_transport_pair_generation_);
     LIBZLINK_UNUSED (expected_route_incarnation_id_);
+    LIBZLINK_UNUSED (request_only_);
     LIBZLINK_UNUSED (observer_);
     LIBZLINK_UNUSED (observer_userdata_);
     if (admission_out_)
@@ -463,6 +472,13 @@ int zlink::socket_base_t::xselect_routed_submit_pipe (pipe_t **pipe_out_,
     LIBZLINK_UNUSED (request_only_);
     if (pipe_out_)
         *pipe_out_ = NULL;
+    errno = ENOTSUP;
+    return -1;
+}
+
+int zlink::socket_base_t::xcommit_request_submit_pipe (pipe_t *pipe_)
+{
+    LIBZLINK_UNUSED (pipe_);
     errno = ENOTSUP;
     return -1;
 }
@@ -587,7 +603,8 @@ int zlink::socket_base_t::xrecv_routed (msg_t *msg_,
                                        uint64_t *connection_id_out_,
                                        pipe_t **source_pipe_out_,
                                        pipe_t::read_admission_fn *admission_,
-                                       void *admission_userdata_)
+                                       void *admission_userdata_,
+                                       uint64_t *route_binding_token_out_)
 {
     LIBZLINK_UNUSED (admission_);
     LIBZLINK_UNUSED (admission_userdata_);
@@ -597,6 +614,8 @@ int zlink::socket_base_t::xrecv_routed (msg_t *msg_,
         *connection_id_out_ = 0;
     if (source_pipe_out_)
         *source_pipe_out_ = NULL;
+    if (route_binding_token_out_)
+        *route_binding_token_out_ = 0;
 
     const int rc = xrecv (msg_);
     if (rc == 0 && source_rid_out_)

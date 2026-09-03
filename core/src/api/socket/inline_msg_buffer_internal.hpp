@@ -90,6 +90,37 @@ template <size_t InlineCapacity> class inline_msg_buffer_t
     zlink_msg_t &operator[] (size_t index_) { return _data[index_]; }
     const zlink_msg_t &operator[] (size_t index_) const { return _data[index_]; }
 
+    // Transfer the live opaque handles without reinitializing or moving each
+    // message. The destination must be empty. Heap storage is stolen; inline
+    // storage is bitwise-relocated, which is valid by the class invariant
+    // above. Clearing the source size transfers close responsibility exactly
+    // once while leaving it ready for the next record.
+    void take_from (inline_msg_buffer_t *source_)
+    {
+        if (!source_ || source_ == this || !empty ())
+            return;
+        if (source_->_data != source_->_inline_storage) {
+            if (_data != _inline_storage)
+                delete[] _data;
+            _data = source_->_data;
+            _size = source_->_size;
+            _capacity = source_->_capacity;
+            source_->_data = source_->_inline_storage;
+            source_->_size = 0;
+            source_->_capacity = InlineCapacity;
+            return;
+        }
+        if (_data != _inline_storage)
+            delete[] _data;
+        std::copy (source_->_inline_storage,
+                   source_->_inline_storage + source_->_size,
+                   _inline_storage);
+        _data = _inline_storage;
+        _size = source_->_size;
+        _capacity = InlineCapacity;
+        source_->_size = 0;
+    }
+
   private:
     zlink_msg_t _inline_storage[InlineCapacity];
     zlink_msg_t *_data;

@@ -212,6 +212,7 @@ void zlink::socket_base_t::finish_send_pending (
     bool request_admission = false;
     send_pending_request_resolved_fn request_resolved = NULL;
     void *request_resolution_context = NULL;
+    bool pending_became_empty = false;
     {
         scoped_lock_t lock (pending.sync);
         std::map<routed_send_target_key_t,
@@ -234,6 +235,7 @@ void zlink::socket_base_t::finish_send_pending (
           pending.pending_msgs.load (std::memory_order_relaxed);
         pending.pending_msgs.store (pending_count > 0 ? pending_count - 1 : 0,
                                     std::memory_order_release);
+        pending_became_empty = pending_count == 1;
         pending.pending_bytes = pending.pending_bytes > record_->charge_bytes
                                   ? pending.pending_bytes
                                       - record_->charge_bytes
@@ -245,6 +247,13 @@ void zlink::socket_base_t::finish_send_pending (
         request_resolution_context = record_->request_resolution_context;
         pull_reservation = record_->completion_reservation;
         record_->completion_reservation = NULL;
+    }
+    if (pending_became_empty
+        && pending.completion_capacity_blocked.load (
+          std::memory_order_acquire)
+        && transport_has_out ()) {
+        dispatch_runtime ().mark_send_recovery_ready ();
+        static_cast<mailbox_t *> (_mailbox)->signal ();
     }
     if (request_admission) {
         if (request_resolved)
@@ -266,6 +275,40 @@ void zlink::socket_base_t::finish_send_pending (
                                         pull_reservation);
         destroy_send_pending_record (record_);
     }
+}
+
+void zlink::socket_base_t::mark_send_completion_capacity_blocked ()
+{
+    socket_send_pending_runtime_t &pending = send_pending_runtime ();
+    pending.completion_capacity_blocked.store (true,
+                                               std::memory_order_release);
+    dispatch_runtime ().mark_send_recovery_pending ();
+    // A completion consumer can release the first slot after reserve() reports
+    // EAGAIN but before this recovery marker is fully armed.  Publish the
+    // marker first and then re-sample the authoritative queue count: either the
+    // consumer observes completion_capacity_blocked and notifies us, or this
+    // check observes its released slot.  Without the re-sample, the consumer's
+    // ready edge can be overwritten by mark_send_recovery_pending() above.
+    const bool completion_capacity_available =
+      socket_completion::outstanding (&completion_runtime ())
+      < socket_completion::max_outstanding_completions;
+    if (completion_capacity_available
+        || (pending.pending_msgs.load (std::memory_order_acquire) == 0
+            && transport_has_out ())) {
+        dispatch_runtime ().mark_send_recovery_ready ();
+        static_cast<mailbox_t *> (_mailbox)->signal ();
+    }
+}
+
+void zlink::socket_base_t::notify_send_completion_capacity_available ()
+{
+    socket_send_pending_runtime_t &pending = send_pending_runtime ();
+    if (!pending.completion_capacity_blocked.exchange (
+          false, std::memory_order_acq_rel))
+        return;
+    dispatch_runtime ().mark_send_recovery_pending ();
+    dispatch_runtime ().mark_send_recovery_ready ();
+    static_cast<mailbox_t *> (_mailbox)->signal ();
 }
 
 //  Physically submit one record. Returns 0 on admission, -1 with errno set
@@ -330,7 +373,7 @@ int zlink::socket_base_t::try_admit_send_parts (
     return try_admit_send_parts_scoped (
       parts_, part_count_, target_, has_target_, scope, NULL,
       commands_already_processed_, observer_, observer_userdata_,
-      request_admission_);
+      request_admission_, record_ == NULL);
 }
 
 int zlink::socket_base_t::try_admit_send_parts_scoped (
@@ -338,7 +381,10 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
   const routed_send_target_key_t &target_, bool has_target_,
   socket_public_send_scope_t &scope, pipe_t **attempted_pipe_out_,
   bool commands_already_processed_, pipe_write_observer_fn observer_,
-  void *observer_userdata_, bool request_admission_)
+  void *observer_userdata_, bool request_admission_,
+  bool manage_public_send_recovery_,
+  const zlink_routing_id_t *transient_target_rid_,
+  pipe_t *transient_selected_pipe_)
 {
     if (!parts_ || part_count_ == 0 || !scope.acquired ()) {
         errno = EFAULT;
@@ -350,7 +396,9 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
                               bool retry_whole_on_backpressure_) -> int {
         zlink_routing_id_t rid;
         memset (&rid, 0, sizeof (rid));
-        if (has_target_)
+        if (transient_target_rid_)
+            rid = *transient_target_rid_;
+        else if (has_target_)
             copy_routing_id_from_bytes (target_.peer_rid.data (),
                                         target_.peer_rid.size (), &rid);
 
@@ -365,16 +413,19 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
             //  `_current_out`/`_more_out`, while DEALER keeps the load
             //  balancer's multipart pipe. Continue through ordinary xsend so
             //  the whole record remains one gated sequence.
-            const bool routed_start = has_target_ && i == 0;
-            const bool selected_pipe_start =
-              i == 0 && target_.selected_pipe != NULL;
+            const bool routed_start =
+              (has_target_ || transient_target_rid_) && i == 0;
+            pipe_t *const selected_pipe = transient_selected_pipe_
+                                            ? transient_selected_pipe_
+                                            : target_.selected_pipe;
+            const bool selected_pipe_start = i == 0 && selected_pipe != NULL;
             const bool configured_endpoint_start =
               i == 0 && !selected_pipe_start
               && !target_.logical_endpoint.empty ();
             const bool observe_commit = observer_ && i + 1 == count;
             const int rc = selected_pipe_start
               ? xsend_selected_pipe (
-                  target_.selected_pipe, msg, flags, request_admission_,
+                  selected_pipe, msg, flags, request_admission_,
                   NULL, observe_commit ? observer_ : NULL,
                   observe_commit ? observer_userdata_ : NULL)
               : configured_endpoint_start
@@ -391,13 +442,16 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
                     target_.transport_pair_generation, true,
                     commands_already_processed_,
                     observe_commit ? observer_ : NULL,
-                    observe_commit ? observer_userdata_ : NULL, NULL,
-                    target_.route_incarnation_id)
+                    observe_commit ? observer_userdata_ : NULL,
+                    NULL,
+                    target_.route_incarnation_id,
+                    manage_public_send_recovery_, request_admission_)
                 : send_direct_with_retry (
                     NULL, msg, flags, scope, NULL, 0, false, NULL, 0, 0,
                     true, commands_already_processed_,
                     observe_commit ? observer_ : NULL,
-                    observe_commit ? observer_userdata_ : NULL);
+                    observe_commit ? observer_userdata_ : NULL, NULL, 0,
+                    manage_public_send_recovery_);
             if (rc == 0)
                 continue;
 
@@ -473,6 +527,8 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
 void zlink::socket_base_t::drive_send_pending ()
 {
     socket_send_pending_runtime_t &pending = send_pending_runtime ();
+    if (pending.pending_msgs.load (std::memory_order_acquire) == 0)
+        return;
     bool gate_expected = false;
     if (!pending.admission_gate.compare_exchange_strong (
           gate_expected, true, std::memory_order_acq_rel,
@@ -611,8 +667,10 @@ void zlink::socket_base_t::drive_send_pending ()
 void zlink::socket_base_t::notify_send_pending_writable (pipe_t *pipe_)
 {
     LIBZLINK_UNUSED (pipe_);
+    socket_send_pending_runtime_t &pending = send_pending_runtime ();
+    if (pending.pending_msgs.load (std::memory_order_acquire) == 0)
+        return;
     {
-        socket_send_pending_runtime_t &pending = send_pending_runtime ();
         scoped_lock_t lock (pending.sync);
         if (pending.by_op.empty ())
             return;
@@ -644,8 +702,12 @@ void zlink::socket_base_t::clear_incremental_send_control_boundary ()
 
 void zlink::socket_base_t::flush_deferred_peer_controls ()
 {
-    if (lifecycle_coordinator ().public_multipart_send_active ())
+    if (!lifecycle_coordinator ().take_deferred_peer_controls ())
         return;
+    if (lifecycle_coordinator ().public_multipart_send_active ()) {
+        lifecycle_coordinator ().mark_deferred_peer_controls ();
+        return;
+    }
 
     std::vector<pipe_t *> targets;
     {
@@ -661,10 +723,20 @@ void zlink::socket_base_t::flush_deferred_peer_controls ()
                 targets.push_back (completion);
         }
     }
+    bool remains_pending = false;
     for (size_t i = 0; i != targets.size (); ++i) {
         (void) targets[i]->flush_pending_peer_controls ();
+        remains_pending = targets[i]->has_pending_peer_controls ()
+                          || remains_pending;
         targets[i]->release_lifetime_ref ();
     }
+    if (remains_pending)
+        lifecycle_coordinator ().mark_deferred_peer_controls ();
+}
+
+void zlink::socket_base_t::mark_deferred_peer_controls ()
+{
+    lifecycle_coordinator ().mark_deferred_peer_controls ();
 }
 
 void zlink::socket_base_t::fail_pull_send_pending_for_logical_target (
@@ -787,7 +859,7 @@ void zlink::socket_base_t::fail_all_send_pending (int terminal_errno_)
     socket_send_pending_runtime_t &pending = send_pending_runtime ();
     {
         scoped_lock_t lock (pending.sync);
-        pending.failing = true;
+        pending.failing.store (true, std::memory_order_release);
         for (std::map<routed_send_target_key_t,
                       send_logical_wait_state_t>::iterator wait =
                pending.logical_waits.begin ();

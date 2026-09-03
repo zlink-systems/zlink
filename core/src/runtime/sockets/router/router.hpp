@@ -55,7 +55,8 @@ class router_t : public routing_socket_base_t
                       void *observer_userdata_ = NULL,
                       routed_send_attempt_identity_t
                         *attempt_identity_out_ = NULL,
-                      uint64_t expected_route_incarnation_id_ = 0)
+                      uint64_t expected_route_incarnation_id_ = 0,
+                      bool request_only_ = false)
       ZLINK_OVERRIDE;
     int xselect_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
@@ -79,7 +80,8 @@ class router_t : public routing_socket_base_t
                       uint64_t *connection_id_out_,
                       zlink::pipe_t **source_pipe_out_ = NULL,
                       pipe_t::read_admission_fn *admission_ = NULL,
-                      void *admission_userdata_ = NULL) ZLINK_OVERRIDE;
+                      void *admission_userdata_ = NULL,
+                      uint64_t *route_binding_token_out_ = NULL) ZLINK_OVERRIDE;
     bool xhas_in () ZLINK_OVERRIDE;
     size_t xredrive_reply_token_waiters (size_t max_pipes_) ZLINK_OVERRIDE;
     bool xhas_out () ZLINK_OVERRIDE;
@@ -136,8 +138,9 @@ class router_t : public routing_socket_base_t
     bool duplicate_pipe_should_replace (const out_pipe_t &existing_outpipe_,
                                         const blob_t &routing_id_,
                                         bool locally_initiated_) const;
-    void copy_router_pipe_source_rid (pipe_t *pipe_,
-                                      zlink_routing_id_t *out_) const;
+    void copy_router_pipe_source_rid (
+      pipe_t *pipe_, zlink_routing_id_t *out_,
+      uint64_t *route_binding_token_out_) const;
     void reset_current_in_after_multipart_abort ();
     pipe_t *find_transport_pair_pipe (const zlink_routing_id_t *target_rid_,
                                       uint64_t transport_pair_id_,

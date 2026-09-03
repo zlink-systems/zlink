@@ -387,6 +387,8 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
                     reject_pipes[2] = pair.completion;
                 } else {
                     pair.ready = true;
+                    pair.application->set_transport_pair_completion_pipe (
+                      pair.expected_lane_count == 2u ? pair.completion : NULL);
                     pair.application->set_transport_pair_application_ready (
                       true);
                     ready_application = pair.application;
@@ -981,7 +983,10 @@ void zlink::socket_base_t::resume_completion_processing_if_needed ()
 
     std::shared_ptr<socket_reqrep_internal::socket_request_reply_state_t> socket_state =
       request_reply_state ();
-    if (socket_state && socket_reqrep_internal::has_pending_request_work (socket_state)) {
+    if (has_send_pending ()
+        || (socket_state
+            && socket_reqrep_internal::has_pending_request_work (
+              socket_state))) {
         (void) ensure_completion_processing ();
     }
 }
@@ -1064,17 +1069,102 @@ bool zlink::socket_base_t::completion_drain_permitted () const
     return tls_completion_drain_owner == this;
 }
 
-bool zlink::socket_base_t::reclassify_transport_pair_application_head (
-  pipe_t *pipe_)
+bool zlink::socket_base_t::enqueue_count1_completion_pipe (pipe_t *pipe_)
 {
     if (!pipe_ || pipe_->get_transport_pair_id () == 0
         || pipe_->get_transport_lane () != transport_lane_application
-        || pipe_->get_transport_lane_count () != 1u)
+        || pipe_->get_transport_lane_count () != 1u
+        || !pipe_->transport_pair_application_ready_cached ())
+        return false;
+
+    //  The ready queue outlives a transport-pair table slot. Pin both the pipe
+    //  object and its independently retired inbound ypipe before publishing the
+    //  intrusive node, then let a stale detach be filtered by the ready cache at
+    //  the consumer boundary.
+    if (!pipe_->retain_lifetime_ref ())
+        return false;
+    if (!pipe_->retain_inbound_read_ref ()) {
+        pipe_->release_lifetime_ref ();
+        return false;
+    }
+
+    unsigned char expected = pipe_t::count1_completion_idle;
+    if (!pipe_->_count1_completion_ready_state.compare_exchange_strong (
+          expected, pipe_t::count1_completion_queued,
+          std::memory_order_acq_rel, std::memory_order_acquire)) {
+        pipe_->release_inbound_read_ref ();
+        pipe_->release_lifetime_ref ();
+        return false;
+    }
+
+    //  Readiness can be invalidated after the first cache load but before the
+    //  node becomes visible. No consumer can see it yet, so cancel this local
+    //  publication synchronously and return both pins.
+    if (!pipe_->transport_pair_application_ready_cached ()) {
+        pipe_->_count1_completion_ready_state.store (
+          pipe_t::count1_completion_idle, std::memory_order_release);
+        pipe_->release_inbound_read_ref ();
+        pipe_->release_lifetime_ref ();
+        return false;
+    }
+
+    pipe_t *head =
+      _ready_count1_completion_pipes.load (std::memory_order_acquire);
+    do {
+        pipe_->_count1_completion_ready_next.store (
+          head, std::memory_order_relaxed);
+    } while (!_ready_count1_completion_pipes.compare_exchange_weak (
+      head, pipe_, std::memory_order_release, std::memory_order_acquire));
+    return true;
+}
+
+bool zlink::socket_base_t::release_count1_completion_drain (pipe_t *pipe_)
+{
+    if (!pipe_)
+        return false;
+    unsigned char expected = pipe_t::count1_completion_draining;
+    return pipe_->_count1_completion_ready_state.compare_exchange_strong (
+      expected, pipe_t::count1_completion_idle, std::memory_order_acq_rel,
+      std::memory_order_acquire);
+}
+
+void zlink::socket_base_t::discard_count1_completion_ready_pipes ()
+{
+    pipe_t *pipe =
+      _ready_count1_completion_pipes.exchange (NULL, std::memory_order_acq_rel);
+    while (pipe) {
+        pipe_t *const next = pipe->_count1_completion_ready_next.load (
+          std::memory_order_relaxed);
+        pipe->_count1_completion_ready_next.store (NULL,
+                                                    std::memory_order_relaxed);
+        unsigned char expected = pipe_t::count1_completion_queued;
+        const bool released =
+          pipe->_count1_completion_ready_state.compare_exchange_strong (
+            expected, pipe_t::count1_completion_idle,
+            std::memory_order_acq_rel, std::memory_order_acquire);
+        zlink_assert (released);
+        pipe->release_inbound_read_ref ();
+        pipe->release_lifetime_ref ();
+        pipe = next;
+    }
+}
+
+bool zlink::socket_base_t::reclassify_transport_pair_application_head (
+  pipe_t *pipe_, bool claim_private_head_)
+{
+    if (!pipe_ || pipe_->get_transport_pair_id () == 0
+        || pipe_->get_transport_lane () != transport_lane_application
+        || pipe_->get_transport_lane_count () != 1u
+        || !pipe_->transport_pair_application_ready_cached ())
         return false;
 
     const transport_pair_key_t key (pipe_->get_transport_pair_id (),
                                     pipe_->get_transport_pair_generation ());
-    {
+    //  A ready count-1 Application pipe answers the common topology question
+    //  from its admission-time cache. Only an actual public delivery hold
+    //  needs the pair table to validate and pin the held generation.
+    if (_public_part_receive_delivery_hold_active.load (
+          std::memory_order_acquire)) {
         scoped_lock_t lock (_transport_pairs_sync);
         transport_pairs_t::const_iterator it = _transport_pairs.find (key);
         if (it == _transport_pairs.end () || !it->second.ready
@@ -1096,11 +1186,13 @@ bool zlink::socket_base_t::reclassify_transport_pair_application_head (
     const pipe_normalized_head_kind_t head =
       pipe_->probe_normalized_head_kind ();
     if (head == pipe_head_data || head == pipe_head_request) {
-        xread_activated (pipe_);
+        if (!pipe_->public_receive_active_cached ())
+            xread_activated (pipe_);
         return false;
     }
 
-    xread_deactivated (pipe_);
+    if (pipe_->public_receive_active_cached ())
+        xread_deactivated (pipe_);
     if (head == pipe_head_empty)
         return false;
     if (head == pipe_head_invalid) {
@@ -1108,19 +1200,16 @@ bool zlink::socket_base_t::reclassify_transport_pair_application_head (
         return false;
     }
 
-    bool queued = false;
-    {
-        scoped_lock_t lock (_transport_pairs_sync);
-        transport_pairs_t::iterator it = _transport_pairs.find (key);
-        if (it != _transport_pairs.end () && it->second.ready
-            && it->second.expected_lane_count == 1u
-            && it->second.completion_source () == pipe_
-            && !it->second.draining
-            && _ready_completion_pair_set.insert (key).second) {
-            _ready_completion_pairs.push_back (key);
-            queued = true;
-        }
+    if (claim_private_head_) {
+        if (!pipe_->transport_pair_application_ready_cached ())
+            return false;
+        unsigned char expected = pipe_t::count1_completion_idle;
+        return pipe_->_count1_completion_ready_state.compare_exchange_strong (
+          expected, pipe_t::count1_completion_draining,
+          std::memory_order_acq_rel, std::memory_order_acquire);
     }
+
+    const bool queued = enqueue_count1_completion_pipe (pipe_);
     if (queued)
         notify_request_completion ();
     return queued;
@@ -1233,9 +1322,18 @@ bool zlink::socket_base_t::test_completion_pair_queued (
   uint64_t transport_pair_id_, uint64_t transport_pair_generation_) const
 {
     scoped_lock_t lock (_transport_pairs_sync);
-    return _ready_completion_pair_set.count (transport_pair_key_t (
-             transport_pair_id_, transport_pair_generation_))
-           != 0;
+    const transport_pair_key_t key (transport_pair_id_,
+                                    transport_pair_generation_);
+    const transport_pairs_t::const_iterator it = _transport_pairs.find (key);
+    if (it == _transport_pairs.end () || !it->second.ready)
+        return false;
+    pipe_t *const source = it->second.completion_source ();
+    if (source && source->get_transport_lane_count () == 1u
+        && source->get_transport_lane () == transport_lane_application)
+        return source->_count1_completion_ready_state.load (
+                 std::memory_order_acquire)
+               == pipe_t::count1_completion_queued;
+    return _ready_completion_pair_set.count (key) != 0;
 }
 
 int zlink::socket_base_t::test_process_commands_only ()
@@ -1246,6 +1344,54 @@ int zlink::socket_base_t::test_process_commands_only ()
 
 void zlink::socket_base_t::process_ready_completion_pipes ()
 {
+    //  Producers publish count-1 private heads without the transport-pair table
+    //  mutex. Detach one finite MPSC batch and reverse its Treiber order so the
+    //  oldest publication drains first. A budget requeue is published only
+    //  after this exchange and therefore belongs to the next owner turn.
+    pipe_t *published =
+      _ready_count1_completion_pipes.exchange (NULL, std::memory_order_acq_rel);
+    pipe_t *count1_ready = NULL;
+    while (published) {
+        pipe_t *const next = published->_count1_completion_ready_next.load (
+          std::memory_order_relaxed);
+        published->_count1_completion_ready_next.store (
+          count1_ready, std::memory_order_relaxed);
+        count1_ready = published;
+        published = next;
+    }
+
+    while (count1_ready) {
+        pipe_t *const completion = count1_ready;
+        count1_ready = completion->_count1_completion_ready_next.load (
+          std::memory_order_relaxed);
+        // Clear the detached-list link before publishing draining. A budget
+        // requeue may reuse this exact intrusive node while the current owner
+        // still holds the old queue references.
+        completion->_count1_completion_ready_next.store (
+          NULL, std::memory_order_relaxed);
+
+        unsigned char expected = pipe_t::count1_completion_queued;
+        const bool claimed =
+          completion->_count1_completion_ready_state.compare_exchange_strong (
+            expected, pipe_t::count1_completion_draining,
+            std::memory_order_acq_rel, std::memory_order_acquire);
+        zlink_assert (claimed);
+
+        if (completion->transport_pair_application_ready_cached ()
+            && completion->get_transport_pair_id () != 0
+            && completion->get_transport_lane () == transport_lane_application
+            && completion->get_transport_lane_count () == 1u) {
+            drain_claimed_completion_pipe (
+              completion->get_transport_pair_id (),
+              completion->get_transport_pair_generation (), completion);
+        } else {
+            const bool released = release_count1_completion_drain (completion);
+            zlink_assert (released);
+        }
+        completion->release_inbound_read_ref ();
+        completion->release_lifetime_ref ();
+    }
+
     //  Drain one claimed pipe at a time with the table unlocked: draining runs
     //  the application's reply handler, which may call back into this socket.
     //  The iterative form also avoids an allocation after a pipe was pinned.
@@ -1304,6 +1450,18 @@ bool zlink::socket_base_t::finish_completion_pipe_drain (
     if (!completion_pipe_)
         return false;
 
+    if (completion_pipe_->get_transport_lane_count () == 1u
+        && completion_pipe_->get_transport_lane ()
+             == transport_lane_application) {
+        if (!release_count1_completion_drain (completion_pipe_))
+            return false;
+        // Reclassification handles PUBLIC/empty transitions as well as the
+        // private case. If a private record raced the final empty read, claim it
+        // directly for this owner rather than round-tripping through the queue.
+        return reclassify_transport_pair_application_head (completion_pipe_,
+                                                            true);
+    }
+
     const transport_pair_key_t pair_key (transport_pair_id_,
                                          transport_pair_generation_);
     bool exact_pair = false;
@@ -1323,13 +1481,7 @@ bool zlink::socket_base_t::finish_completion_pipe_drain (
     }
     if (!exact_pair)
         return false;
-    if (completion_pipe_->get_transport_lane_count () == 1u) {
-        const pipe_normalized_head_kind_t head =
-          completion_pipe_->probe_normalized_head_kind ();
-        if (head != pipe_head_reply && head != pipe_head_error_reply
-            && head != pipe_head_control)
-            return false;
-    } else if (!completion_pipe_->check_read ()) {
+    if (!completion_pipe_->check_read ()) {
         return false;
     }
 
@@ -1353,6 +1505,20 @@ bool zlink::socket_base_t::requeue_completion_pipe_after_budget (
     if (!completion_pipe_)
         return false;
 
+    if (completion_pipe_->get_transport_lane_count () == 1u
+        && completion_pipe_->get_transport_lane ()
+             == transport_lane_application) {
+        if (!release_count1_completion_drain (completion_pipe_))
+            return false;
+        const bool queued =
+          reclassify_transport_pair_application_head (completion_pipe_);
+        if (receive_sync_held_)
+            notify_receive_progress_locked ();
+        else
+            notify_receive_progress ();
+        return queued;
+    }
+
     const transport_pair_key_t pair_key (transport_pair_id_,
                                          transport_pair_generation_);
     {
@@ -1363,16 +1529,6 @@ bool zlink::socket_base_t::requeue_completion_pipe_after_budget (
             || !it->second.draining)
             return false;
         it->second.draining = false;
-    }
-
-    if (completion_pipe_->get_transport_lane_count () == 1u) {
-        const bool queued = reclassify_transport_pair_application_head (
-          completion_pipe_);
-        if (receive_sync_held_)
-            notify_receive_progress_locked ();
-        else
-            notify_receive_progress ();
-        return queued;
     }
 
     if (!completion_pipe_->check_read ())
@@ -1413,9 +1569,13 @@ void zlink::socket_base_t::drain_claimed_completion_pipe (
                 this, completion_pipe_);
             if (result
                 == socket_reqrep_internal::completion_pipe_public_head) {
-                const transport_pair_key_t key (
-                  transport_pair_id_, transport_pair_generation_);
-                {
+                if (count1_application) {
+                    const bool released =
+                      release_count1_completion_drain (completion_pipe_);
+                    zlink_assert (released);
+                } else {
+                    const transport_pair_key_t key (
+                      transport_pair_id_, transport_pair_generation_);
                     scoped_lock_t lock (_transport_pairs_sync);
                     transport_pairs_t::iterator it =
                       _transport_pairs.find (key);
@@ -1432,8 +1592,11 @@ void zlink::socket_base_t::drain_claimed_completion_pipe (
                 return;
             }
             if (result
-                == socket_reqrep_internal::completion_pipe_terminated)
+                == socket_reqrep_internal::completion_pipe_terminated) {
+                if (count1_application)
+                    (void) release_count1_completion_drain (completion_pipe_);
                 return;
+            }
             if (result
                 == socket_reqrep_internal::completion_pipe_budget_exhausted) {
                 (void) requeue_completion_pipe_after_budget (
@@ -1562,11 +1725,20 @@ void zlink::socket_base_t::write_activated (pipe_t *pipe_)
         if (credit_recovery || flow_recovery)
             notify_send_pending_writable (pipe_);
     }
+    const socket_send_pending_runtime_t &pending = send_pending_runtime ();
+    const bool completion_capacity_wait =
+      pending.completion_capacity_blocked.load (std::memory_order_acquire);
     if (dispatch_runtime ().send_recovery_pending ()
-        && !dispatch_runtime ().send_recovery_ready ()) {
+        && !dispatch_runtime ().send_recovery_ready ()
+        && (!completion_capacity_wait
+            || pending.pending_msgs.load (std::memory_order_acquire) == 0)) {
         dispatch_runtime ().mark_send_recovery_ready ();
         static_cast<mailbox_t *> (_mailbox)->signal ();
     }
+    // This callback is reached only after a pipe removed a real write blocker
+    // (byte credit, remote flow, or the initial pair hold). It can also run
+    // directly during inproc pair admission, outside process_commands().
+    notify_submit_progress ();
 }
 
 void zlink::socket_base_t::hiccuped (pipe_t *pipe_)
@@ -1639,9 +1811,12 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
             // detach ends it immediately; retaining the surviving sibling only
             // keeps teardown/lifetime state, never a usable ready pair.
             pair_it->second.ready = false;
-            if (pair_it->second.application)
+            if (pair_it->second.application) {
                 pair_it->second.application
                   ->set_transport_pair_application_ready (false);
+                pair_it->second.application
+                  ->set_transport_pair_completion_pipe (NULL);
+            }
             pair_it->second.draining = false;
             _ready_completion_pair_set.erase (transport_pair_key_t (
               pair_id, pipe_->get_transport_pair_generation ()));

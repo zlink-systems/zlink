@@ -15,13 +15,10 @@ namespace
 {
 bool empty_routing_id (const zlink_routing_id_t &rid_)
 {
+    static const uint8_t zero_data[sizeof (rid_.data)] = {};
     if (rid_.size != 0)
         return false;
-    for (size_t i = 0; i < sizeof (rid_.data); ++i) {
-        if (rid_.data[i] != 0)
-            return false;
-    }
-    return true;
+    return memcmp (rid_.data, zero_data, sizeof (rid_.data)) == 0;
 }
 
 bool empty_completion (const zlink_completion_t &completion_)
@@ -143,10 +140,10 @@ zlink_recv_result_t zlink_completion_recv (
 
     // Pending SEND admission and wire REQUEST replies need a command owner
     // even when the application uses blocking pull without a poller.
-    if (!zlink::socket_completion::has_ready (
-          &handle.socket->completion_runtime ())
-        && flags_ != ZLINK_RECV_FLAGS_DONTWAIT
-        && handle.socket->receive_timeout_ms () != 0) {
+    if (flags_ != ZLINK_RECV_FLAGS_DONTWAIT
+        && handle.socket->receive_timeout_ms () != 0
+        && !zlink::socket_completion::has_ready (
+          &handle.socket->completion_runtime ())) {
         const int progress_rc = handle.socket->ensure_completion_processing ();
         if (progress_rc != 0 && errno != EAGAIN)
             return zlink::recv_result_internal::from_errno (errno);
@@ -156,6 +153,8 @@ zlink_recv_result_t zlink_completion_recv (
           &handle.socket->completion_runtime (), completion_out_, flags_,
           handle.socket->receive_timeout_ms ()) != 0)
         return zlink::recv_result_internal::from_errno (errno);
+
+    handle.socket->notify_send_completion_capacity_available ();
 
     return ZLINK_RECV_OK;
 }

@@ -199,6 +199,19 @@ int prepare_recv_step (void *handle_,
                        zlink::socket_base_t **active_source_socket_out_);
 void complete_send_step (const std::shared_ptr<handle_state_t> &state_,
                          zlink_part_flag_t part_flag_);
+// The caller must hold state_->mutex. These variants let a public part entry
+// prepare, stage, and suspend/reset one helper step without dropping and
+// reacquiring the same state lock.
+void complete_send_step_locked (handle_state_t *state_,
+                                zlink_part_flag_t part_flag_);
+// Transfer a fully staged record out of the incremental helper and close the
+// helper scope in one state-lock turn. The destination must be empty.
+int take_buffered_send_record (
+  const std::shared_ptr<handle_state_t> &state_,
+  send_part_buffer_t *parts_out_);
+// The caller must hold state_->mutex.
+int take_buffered_send_record_locked (handle_state_t *state_,
+                                      send_part_buffer_t *parts_out_);
 void complete_recv_step (const std::shared_ptr<handle_state_t> &state_,
                          zlink_part_flag_t has_more_);
 void abort_send_step (const std::shared_ptr<handle_state_t> &state_);

@@ -290,7 +290,7 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
   pipe_message_admission_t *admission_out_,
   pipe_write_observer_fn observer_, void *observer_userdata_,
   routed_send_attempt_identity_t *attempt_identity_out_,
-  uint64_t expected_route_incarnation_id_)
+  uint64_t expected_route_incarnation_id_, bool request_only_)
 {
     std::unique_lock<std::mutex> route_lifecycle_lock (
       _out_pipes_sync);
@@ -338,6 +338,13 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
             errno = ECONNREFUSED;
             return -1;
         }
+        if (request_only_
+            && scoped_pipe->get_peer_socket_type ()
+                 != ZLINK_CORE_SOCKET_ROUTER) {
+            _more_out = false;
+            errno = EPROTOTYPE;
+            return -1;
+        }
         _current_out = scoped_pipe;
         _current_out_connection_id = _current_out->get_transport_connection_id ();
         if (expected_connection_id_ != 0
@@ -356,6 +363,11 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         out_pipe = lookup_out_pipe (
           blob_t (const_cast<unsigned char *> (target_rid_->data),
                   target_rid_->size, zlink::reference_tag_t ()));
+        if (request_only_ && (!out_pipe || !out_pipe->pipe)) {
+            _more_out = false;
+            errno = ENOENT;
+            return -1;
+        }
     }
     if (scoped_pipe && _more_out) {
         const pipe_message_admission_t write_admission =
@@ -386,6 +398,30 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                          static_cast<unsigned> (target_rid_->size));
             }
             return -1;
+        }
+        if (request_only_) {
+            pipe_t *const request_pipe = out_pipe->pipe;
+            const uint64_t pair_id =
+              request_pipe->get_transport_pair_id ();
+            if (pair_id != 0) {
+                if (request_pipe->get_transport_pair_generation () == 0
+                    || !transport_pair_application_ready (request_pipe)) {
+                    _more_out = false;
+                    errno = EHOSTUNREACH;
+                    return -1;
+                }
+            } else if (request_pipe->get_transport_connection_id () == 0
+                       || !request_pipe->is_lifecycle_active ()) {
+                _more_out = false;
+                errno = EHOSTUNREACH;
+                return -1;
+            }
+            if (request_pipe->get_peer_socket_type ()
+                != ZLINK_CORE_SOCKET_ROUTER) {
+                _more_out = false;
+                errno = EPROTOTYPE;
+                return -1;
+            }
         }
         _current_out = out_pipe->pipe;
         _current_out_connection_id =

@@ -5,8 +5,12 @@
 
 #include <zlink.h>
 
+#include <atomic>
+#include <cerrno>
+#include <cstring>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <set>
 #include <string>
 #include <thread>
@@ -25,6 +29,7 @@ namespace zlink
 {
 class pipe_t;
 class socket_base_t;
+enum pipe_message_admission_t : int;
 
 namespace socket_reqrep_internal
 {
@@ -44,18 +49,34 @@ enum completion_pipe_drain_result_t
 
 completion_pipe_drain_result_t process_completion_pipe (
   zlink::socket_base_t *socket_, zlink::pipe_t *pipe_);
-struct pending_key_t
-{
-    std::string peer_rid;
-    uint64_t request_seq;
 
-    bool operator== (const pending_key_t &other_) const;
-    bool operator< (const pending_key_t &other_) const;
+// Public routing ids are bounded by zlink_routing_id_t. Keep reply-token keys
+// inline so a normal 16-byte RID never allocates a std::string on receive,
+// checkout, validation, or erase.
+struct fixed_routing_id_key_t
+{
+    fixed_routing_id_key_t ();
+    fixed_routing_id_key_t (const fixed_routing_id_key_t &other_);
+    fixed_routing_id_key_t &operator= (
+      const fixed_routing_id_key_t &other_);
+
+    void assign (const void *data_, size_t size_);
+    void clear ();
+    bool empty () const;
+    size_t size () const;
+    const unsigned char *data () const;
+    size_t hash () const;
+    bool operator== (const fixed_routing_id_key_t &other_) const;
+    bool operator< (const fixed_routing_id_key_t &other_) const;
+
+  private:
+    uint8_t _size;
+    unsigned char _data[255];
 };
 
-struct pending_key_hash_t
+struct fixed_routing_id_key_hash_t
 {
-    size_t operator() (const pending_key_t &key_) const;
+    size_t operator() (const fixed_routing_id_key_t &key_) const;
 };
 
 struct pending_request_identity_t
@@ -113,8 +134,7 @@ struct pending_request_t
     pending_request_identity_t identity;
     // Stable logical owner snapshots. Physical pair identity is only a stale
     // reply fence; explicit endpoint/RID removal resolves by these values.
-    std::string logical_endpoint;
-    std::string logical_rid;
+    fixed_routing_id_key_t logical_rid;
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
     request_correlation_lease_t correlation;
@@ -122,7 +142,129 @@ struct pending_request_t
     //  its ephemeral arm token without reinterpreting the current socket policy.
     uint32_t resolved_timeout_ms;
     zlink::socket_completion::reservation_t *pull_completion;
-    std::shared_ptr<zlink::request_timeout::task_t> timeout_task;
+    //  Zero until physical admission commits. Armed requests retain only
+    //  their absolute deadline; one socket-owned task covers the aggregate.
+    uint64_t timeout_deadline_ns;
+};
+
+// Socket-owned intrusive request index. The common 64 outstanding records
+// live inline; higher concurrency grows in fixed slabs that remain available
+// for the socket lifetime. Hash buckets and live iteration are intrusive, so
+// steady request admission/removal never allocates a map node.
+class pending_request_store_t
+{
+  public:
+    struct node_t
+    {
+        node_t ();
+
+        uint64_t first;
+        pending_request_t second;
+        node_t *bucket_next;
+        node_t *live_previous;
+        node_t *live_next;
+        node_t *free_next;
+    };
+
+    class const_iterator;
+    class iterator
+    {
+      public:
+        iterator (node_t *node_ = NULL) : _node (node_) {}
+        node_t &operator* () const { return *_node; }
+        node_t *operator-> () const { return _node; }
+        iterator &operator++ ()
+        {
+            _node = _node ? _node->live_next : NULL;
+            return *this;
+        }
+        bool operator== (const iterator &other_) const
+        {
+            return _node == other_._node;
+        }
+        bool operator!= (const iterator &other_) const
+        {
+            return !(*this == other_);
+        }
+
+      private:
+        friend class pending_request_store_t;
+        friend class const_iterator;
+        node_t *_node;
+    };
+
+    class const_iterator
+    {
+      public:
+        const_iterator (const node_t *node_ = NULL) : _node (node_) {}
+        const_iterator (const iterator &other_) : _node (other_._node) {}
+        const node_t &operator* () const { return *_node; }
+        const node_t *operator-> () const { return _node; }
+        const_iterator &operator++ ()
+        {
+            _node = _node ? _node->live_next : NULL;
+            return *this;
+        }
+        bool operator== (const const_iterator &other_) const
+        {
+            return _node == other_._node;
+        }
+        bool operator!= (const const_iterator &other_) const
+        {
+            return !(*this == other_);
+        }
+
+      private:
+        friend class pending_request_store_t;
+        const node_t *_node;
+    };
+
+    pending_request_store_t ();
+    ~pending_request_store_t ();
+
+    std::pair<iterator, bool> emplace (uint64_t request_seq_,
+                                      pending_request_t &&pending_);
+    iterator find (uint64_t request_seq_);
+    const_iterator find (uint64_t request_seq_) const;
+    size_t count (uint64_t request_seq_) const;
+    iterator begin () { return iterator (_live_head); }
+    const_iterator begin () const { return const_iterator (_live_head); }
+    iterator end () { return iterator (); }
+    const_iterator end () const { return const_iterator (); }
+    iterator erase (iterator position_);
+    bool empty () const { return _size == 0; }
+    size_t size () const { return _size; }
+
+  private:
+    enum
+    {
+        inline_node_count = 64,
+        slab_node_count = 64,
+        bucket_count = 1024
+    };
+    struct slab_t
+    {
+        slab_t () : next (NULL) {}
+        node_t nodes[slab_node_count];
+        slab_t *next;
+    };
+
+    static size_t bucket_for (uint64_t request_seq_);
+    void add_free_nodes (node_t *nodes_, size_t count_);
+    bool grow ();
+
+    node_t *_buckets[bucket_count];
+    node_t _inline_nodes[inline_node_count];
+    node_t *_free_head;
+    node_t *_live_head;
+    node_t *_live_tail;
+    slab_t *_slabs;
+    size_t _size;
+    size_t _capacity;
+
+    pending_request_store_t (const pending_request_store_t &) = delete;
+    pending_request_store_t &operator= (
+      const pending_request_store_t &) = delete;
 };
 
 struct dealer_reply_target_t
@@ -138,13 +280,16 @@ struct router_reply_target_t
 {
     router_reply_target_t ();
 
+    fixed_routing_id_key_t peer_rid;
     zlink::pipe_t *pipe;
     zlink::pipe_t *source_pipe_identity;
     int source_peer_socket_type;
     uint64_t wire_request_seq;
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
+    uint64_t route_binding_token;
     bool checked_out;
+    bool revoked;
 };
 
 struct router_reply_alias_key_t
@@ -165,6 +310,250 @@ struct router_reply_alias_key_hash_t
     size_t operator() (const router_reply_alias_key_t &key_) const;
 };
 
+template <typename T> class reply_target_store_t
+{
+  public:
+    struct node_t
+    {
+        node_t () : first (0), bucket_next (NULL), live_previous (NULL),
+                    live_next (NULL), free_next (NULL), alias_next (NULL) {}
+        uint64_t first;
+        T second;
+        node_t *bucket_next;
+        node_t *live_previous;
+        node_t *live_next;
+        node_t *free_next;
+        // Router targets also participate in the socket-owned physical-alias
+        // index. Dealer targets leave this null.
+        node_t *alias_next;
+    };
+
+    class const_iterator;
+    class iterator
+    {
+      public:
+        iterator (node_t *node_ = NULL) : _node (node_) {}
+        node_t &operator* () const { return *_node; }
+        node_t *operator-> () const { return _node; }
+        iterator &operator++ ()
+        {
+            _node = _node ? _node->live_next : NULL;
+            return *this;
+        }
+        bool operator== (const iterator &other_) const
+        {
+            return _node == other_._node;
+        }
+        bool operator!= (const iterator &other_) const
+        {
+            return !(*this == other_);
+        }
+
+      private:
+        friend class reply_target_store_t<T>;
+        friend class const_iterator;
+        node_t *_node;
+    };
+
+    class const_iterator
+    {
+      public:
+        const_iterator (const node_t *node_ = NULL) : _node (node_) {}
+        const_iterator (const iterator &other_) : _node (other_._node) {}
+        const node_t &operator* () const { return *_node; }
+        const node_t *operator-> () const { return _node; }
+        const_iterator &operator++ ()
+        {
+            _node = _node ? _node->live_next : NULL;
+            return *this;
+        }
+        bool operator== (const const_iterator &other_) const
+        {
+            return _node == other_._node;
+        }
+        bool operator!= (const const_iterator &other_) const
+        {
+            return !(*this == other_);
+        }
+
+      private:
+        friend class reply_target_store_t<T>;
+        const node_t *_node;
+    };
+
+    reply_target_store_t () : _free_head (NULL), _live_head (NULL),
+                              _live_tail (NULL), _slabs (NULL), _size (0),
+                              _capacity (inline_node_count)
+    {
+        memset (_buckets, 0, sizeof (_buckets));
+        add_free_nodes (_inline_nodes, inline_node_count);
+    }
+
+    ~reply_target_store_t ()
+    {
+        while (_slabs) {
+            slab_t *const next = _slabs->next;
+            delete _slabs;
+            _slabs = next;
+        }
+    }
+
+    std::pair<iterator, bool> emplace (uint64_t key_, const T &value_)
+    {
+        if (key_ == 0 || find (key_) != end ()) {
+            errno = EEXIST;
+            return std::make_pair (end (), false);
+        }
+        if (!_free_head && !grow ())
+            return std::make_pair (end (), false);
+        node_t *const node = _free_head;
+        _free_head = node->free_next;
+        node->free_next = NULL;
+        node->first = key_;
+        node->second = value_;
+        const size_t bucket = bucket_for (key_);
+        node->bucket_next = _buckets[bucket];
+        _buckets[bucket] = node;
+        node->live_previous = _live_tail;
+        node->live_next = NULL;
+        if (_live_tail)
+            _live_tail->live_next = node;
+        else
+            _live_head = node;
+        _live_tail = node;
+        ++_size;
+        errno = 0;
+        return std::make_pair (iterator (node), true);
+    }
+
+    iterator find (uint64_t key_)
+    {
+        node_t *node = key_ ? _buckets[bucket_for (key_)] : NULL;
+        while (node && node->first != key_)
+            node = node->bucket_next;
+        return iterator (node);
+    }
+    const_iterator find (uint64_t key_) const
+    {
+        const node_t *node = key_ ? _buckets[bucket_for (key_)] : NULL;
+        while (node && node->first != key_)
+            node = node->bucket_next;
+        return const_iterator (node);
+    }
+    size_t count (uint64_t key_) const
+    {
+        return find (key_) == end () ? 0 : 1;
+    }
+    iterator begin () { return iterator (_live_head); }
+    const_iterator begin () const { return const_iterator (_live_head); }
+    iterator end () { return iterator (); }
+    const_iterator end () const { return const_iterator (); }
+    bool empty () const { return _size == 0; }
+    size_t size () const { return _size; }
+
+    iterator erase (iterator position_)
+    {
+        node_t *const node = position_._node;
+        if (!node)
+            return end ();
+        node_t *const next = node->live_next;
+        const size_t bucket = bucket_for (node->first);
+        node_t **link = &_buckets[bucket];
+        while (*link && *link != node)
+            link = &(*link)->bucket_next;
+        if (*link == node)
+            *link = node->bucket_next;
+        if (node->live_previous)
+            node->live_previous->live_next = node->live_next;
+        else
+            _live_head = node->live_next;
+        if (node->live_next)
+            node->live_next->live_previous = node->live_previous;
+        else
+            _live_tail = node->live_previous;
+        node->first = 0;
+        node->second = T ();
+        node->bucket_next = NULL;
+        node->live_previous = NULL;
+        node->live_next = NULL;
+        node->alias_next = NULL;
+        node->free_next = _free_head;
+        _free_head = node;
+        zlink_assert (_size != 0);
+        --_size;
+        return iterator (next);
+    }
+    size_t erase (uint64_t key_)
+    {
+        iterator found = find (key_);
+        if (found == end ())
+            return 0;
+        erase (found);
+        return 1;
+    }
+    void clear ()
+    {
+        while (!empty ())
+            erase (begin ());
+    }
+
+  private:
+    enum { inline_node_count = 64, slab_node_count = 64,
+           bucket_count = 1024 };
+    struct slab_t
+    {
+        slab_t () : next (NULL) {}
+        node_t nodes[slab_node_count];
+        slab_t *next;
+    };
+    static size_t bucket_for (uint64_t key_)
+    {
+        key_ ^= key_ >> 33;
+        key_ *= UINT64_C (0xff51afd7ed558ccd);
+        key_ ^= key_ >> 33;
+        key_ *= UINT64_C (0xc4ceb9fe1a85ec53);
+        key_ ^= key_ >> 33;
+        return static_cast<size_t> (key_)
+               & static_cast<size_t> (bucket_count - 1);
+    }
+    void add_free_nodes (node_t *nodes_, size_t count_)
+    {
+        for (size_t i = 0; i != count_; ++i) {
+            nodes_[i].free_next = _free_head;
+            _free_head = &nodes_[i];
+        }
+    }
+    bool grow ()
+    {
+        if (_capacity >= max_reply_target_slots) {
+            errno = EAGAIN;
+            return false;
+        }
+        slab_t *const slab = new (std::nothrow) slab_t ();
+        if (!slab) {
+            errno = ENOMEM;
+            return false;
+        }
+        slab->next = _slabs;
+        _slabs = slab;
+        add_free_nodes (slab->nodes, slab_node_count);
+        _capacity += slab_node_count;
+        return true;
+    }
+
+    node_t *_buckets[bucket_count];
+    node_t _inline_nodes[inline_node_count];
+    node_t *_free_head;
+    node_t *_live_head;
+    node_t *_live_tail;
+    slab_t *_slabs;
+    size_t _size;
+    size_t _capacity;
+
+    reply_target_store_t (const reply_target_store_t &) = delete;
+    reply_target_store_t &operator= (const reply_target_store_t &) = delete;
+};
+
 struct socket_request_reply_state_t : public zlink::request_reply_runtime::sequence_state_t
 {
     explicit socket_request_reply_state_t (zlink::socket_base_t *socket_, int socket_type_);
@@ -176,21 +565,25 @@ struct socket_request_reply_state_t : public zlink::request_reply_runtime::seque
     // socket-owned cookie fences local observers, timeout callbacks and send
     // failures after a forced sequence wrap/reuse.
     uint64_t next_pending_cookie;
-    std::unordered_map<uint64_t, pending_request_t> pending_requests;
-    std::unordered_map<uint64_t, dealer_reply_target_t> dealer_reply_targets;
-    std::unordered_map<pending_key_t, router_reply_target_t, pending_key_hash_t>
-      router_reply_targets;
-    std::unordered_map<router_reply_alias_key_t, uint64_t,
-                       router_reply_alias_key_hash_t>
-      router_reply_aliases;
+    pending_request_store_t pending_requests;
+    std::shared_ptr<zlink::request_timeout::task_t> pending_timeout_task;
+    uint64_t pending_timeout_deadline_ns;
+    uint64_t pending_timeout_generation;
+    bool pending_timeout_dispatching;
+    reply_target_store_t<dealer_reply_target_t> dealer_reply_targets;
+    reply_target_store_t<router_reply_target_t> router_reply_targets;
+    enum { router_reply_alias_bucket_count = 1024 };
+    reply_target_store_t<router_reply_target_t>::node_t
+      *router_reply_alias_buckets[router_reply_alias_bucket_count];
     size_t reply_target_slots;
     size_t reply_target_reservations;
     size_t reply_target_checkouts;
     uint64_t dealer_next_reply_token;
     uint64_t router_next_reply_token;
+    std::atomic<uint64_t> public_router_reply_checkout_token;
     bool public_router_reply_active;
     std::thread::id public_router_reply_owner;
-    pending_key_t public_router_reply_key;
+    uint64_t public_router_reply_token;
     router_reply_target_t public_router_reply_target;
     bool closing;
 };
@@ -233,14 +626,18 @@ void forget_dealer_reply_targets_for_pipe (
   zlink::pipe_t *application_pipe_);
 bool take_router_reply_target (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
-  const pending_key_t &key_,
+  uint64_t request_token_, const zlink_routing_id_t *peer_rid_,
+  router_reply_target_t *target_out_);
+bool take_router_reply_target_locked (
+  socket_request_reply_state_t *state_, uint64_t request_token_,
+  const zlink_routing_id_t *peer_rid_,
   router_reply_target_t *target_out_);
 void restore_router_reply_target (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
-  const pending_key_t &key_);
+  uint64_t request_token_);
 void commit_router_reply_target (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
-  const pending_key_t &key_);
+  uint64_t request_token_);
 void revoke_router_reply_target (const socket_handle_t &handle_,
                                  const zlink_routing_id_t *peer_rid_,
                                  uint64_t request_seq_);
@@ -252,7 +649,11 @@ void revoke_router_reply_targets_for_rid (
   const zlink_routing_id_t *peer_rid_);
 void clear_router_reply_targets_locked (socket_request_reply_state_t *state_);
 void abandon_public_router_reply_sequence (
-  const std::shared_ptr<socket_request_reply_state_t> &state_);
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  uint64_t expected_token_);
+void commit_public_router_reply_sequence (
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  uint64_t expected_token_);
 int send_request_reply_message (const socket_handle_t &handle_,
                                 const zlink_routing_id_t *peer_rid_,
                                 zlink_msg_t *staged_parts_,
@@ -276,7 +677,8 @@ zlink::pipe_t *retain_reply_completion_pipe (
 int send_completion_staged_frames_on_pipe (
   zlink::pipe_t *completion_pipe_, zlink_msg_t *staged_parts_,
   size_t staged_part_count_, zlink_msg_t *final_part_,
-  bool preserve_initial_failure_);
+  bool preserve_initial_failure_,
+  zlink::pipe_message_admission_t *first_admission_out_ = NULL);
 std::shared_ptr<socket_request_reply_state_t>
 find_or_create_request_reply_state (const socket_handle_t &handle_);
 std::shared_ptr<socket_request_reply_state_t>
@@ -319,6 +721,8 @@ int schedule_socket_pending_timeout (
 int arm_socket_pending_request_timeout (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   const pending_request_token_t &token_);
+void cancel_socket_pending_timeouts (
+  const std::shared_ptr<socket_request_reply_state_t> &state_);
 int ensure_socket_pull_pending_request (
   const socket_handle_t &handle_, uint32_t timeout_ms_,
   const zlink_routing_id_t *peer_rid_, void *user_context_,

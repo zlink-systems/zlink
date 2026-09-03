@@ -1006,12 +1006,13 @@ int zlink::stream_t::xsend_routed (
   pipe_message_admission_t *admission_out_,
   pipe_write_observer_fn observer_, void *observer_userdata_,
   routed_send_attempt_identity_t *attempt_identity_out_,
-  uint64_t expected_route_incarnation_id_)
+  uint64_t expected_route_incarnation_id_, bool request_only_)
 {
     LIBZLINK_UNUSED (expected_connection_id_);
     LIBZLINK_UNUSED (observer_);
     LIBZLINK_UNUSED (observer_userdata_);
     LIBZLINK_UNUSED (expected_route_incarnation_id_);
+    LIBZLINK_UNUSED (request_only_);
     if (connection_id_out_)
         *connection_id_out_ = 0;
     if (pipe_out_)

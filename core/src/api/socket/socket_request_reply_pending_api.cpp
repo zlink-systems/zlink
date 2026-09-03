@@ -13,8 +13,7 @@ namespace reqrep = zlink::socket_reqrep_internal;
 
 namespace
 {
-typedef std::unordered_map<uint64_t, reqrep::pending_request_t>
-  pending_request_map_t;
+typedef reqrep::pending_request_store_t pending_request_map_t;
 
 bool pending_identity_matches (
   const reqrep::pending_request_t &pending_,
@@ -72,7 +71,8 @@ int reqrep::add_socket_pending_request_locked (
         return -1;
     }
     if (!inserted) {
-        errno = EALREADY;
+        if (errno != ENOMEM && errno != EAGAIN)
+            errno = EALREADY;
         return -1;
     }
     return 0;
@@ -124,32 +124,44 @@ bool reqrep::take_pending_reply_from_transport_locked (
              != ZLINK_CORE_SOCKET_ROUTER)
         return false;
 
-    zlink::transport_lane_t reply_lane;
-    if (state_->socket_type == ZLINK_CORE_SOCKET_DEALER)
-        reply_lane = zlink::transport_lane_application;
-    else if (state_->socket_type == ZLINK_CORE_SOCKET_ROUTER)
-        reply_lane = zlink::transport_lane_completion;
-    else
+    const bool router_requester =
+      state_->socket_type == ZLINK_CORE_SOCKET_ROUTER;
+    if (!router_requester
+        && state_->socket_type != ZLINK_CORE_SOCKET_DEALER)
         return false;
-    zlink::pipe_t *current = NULL;
-    bool exact_source = false;
-    {
-        // engine_error() clears this source's connection id under the same
-        // lock. Pair-table selection and the frame-id comparison therefore
-        // form one identity decision: either the frame belongs to the live
-        // submit-time source, or teardown wins and the pending stays intact.
-        zlink::scoped_fast_lock_t generation_lock (
-          source_pipe_->transport_sync ());
-        current = state_->socket->retain_transport_pair_pipe (
-          transport_pair_id_, transport_pair_generation_, reply_lane);
-        exact_source = current == source_pipe_
-                       && source_pipe_->get_transport_connection_id ()
-                            == source_connection_id_;
-    }
-    if (!current)
+
+    // Admission already pins the exact Application pipe in the correlation
+    // lease. Pair readiness is published on that pipe and cleared on the first
+    // physical lane detach, so the ordinary reply does not need to find and
+    // retain the same pair through the socket table again.
+    zlink::pipe_t *const application = pending->second.correlation.pipe ();
+    const unsigned char expected_lane_count = router_requester ? 2u : 1u;
+    const zlink::transport_lane_t expected_source_lane =
+      router_requester ? zlink::transport_lane_completion
+                       : zlink::transport_lane_application;
+    if (!application
+        || application->get_transport_lane ()
+             != zlink::transport_lane_application
+        || application->get_transport_lane_count () != expected_lane_count
+        || application->get_transport_pair_id () != transport_pair_id_
+        || application->get_transport_pair_generation ()
+             != transport_pair_generation_
+        || application->get_peer_socket_type () != ZLINK_CORE_SOCKET_ROUTER
+        || !application->transport_pair_application_ready_cached ()
+        || !application->is_lifecycle_active ()
+        || source_pipe_->get_transport_lane () != expected_source_lane
+        || source_pipe_->get_transport_lane_count () != expected_lane_count
+        || (!router_requester && source_pipe_ != application))
         return false;
-    current->release_lifetime_ref ();
-    if (!exact_source)
+
+    // engine_error() clears this source's connection id under the same lock.
+    // Keep validation and pending removal in one generation decision: either
+    // this frame consumes the submit-time request, or teardown wins and leaves
+    // the pending record intact for its terminal owner.
+    zlink::scoped_fast_lock_t generation_lock (source_pipe_->transport_sync ());
+    if (source_pipe_->get_transport_connection_id () != source_connection_id_
+        || !source_pipe_->is_lifecycle_active ()
+        || !application->transport_pair_application_ready_cached ())
         return false;
     return take_pending_request (&state_->pending_requests, pending,
                                  pending_out_);
@@ -165,7 +177,17 @@ bool reqrep::take_next_socket_pending_request_for_logical_endpoint_locked (
     for (pending_request_map_t::iterator pending =
            state_->pending_requests.begin ();
          pending != state_->pending_requests.end (); ++pending) {
-        if (pending->second.logical_endpoint == logical_endpoint_)
+        // DEALER requests have no logical RID. Their correlation lease pins
+        // the selected pipe until terminal completion, and endpoint metadata
+        // on that pipe is immutable after publication. Reuse that stable
+        // owner instead of allocating one endpoint string per request.
+        zlink::pipe_t *const correlation_pipe =
+          pending->second.logical_rid.empty ()
+            ? pending->second.correlation.pipe ()
+            : NULL;
+        if (correlation_pipe
+            && correlation_pipe->get_endpoint_pair ().identifier ()
+                 == logical_endpoint_)
             return take_pending_request (&state_->pending_requests, pending,
                                          pending_out_);
     }
@@ -239,7 +261,6 @@ bool reqrep::erase_socket_pending_request (
     reqrep::pending_request_t pending;
     if (reqrep::remove_socket_pending_request (state_, identity_, &pending)) {
         reqrep::release_socket_pending_request_correlation (&pending);
-        zlink::request_timeout::cancel (pending.timeout_task);
         reqrep::release_pending_request_completion (state_, &pending);
         return true;
     }
@@ -347,65 +368,5 @@ int reqrep::ensure_socket_pull_pending_request (
     token_out_->resolved_timeout_ms = resolved_timeout_ms;
     *completion_id_out_ = completion_id;
     errno = 0;
-    return 0;
-}
-
-int reqrep::arm_socket_pending_request_timeout (
-  const std::shared_ptr<socket_request_reply_state_t> &state_,
-  const reqrep::pending_request_token_t &token_)
-{
-    if (!state_ || token_.identity.request_seq == 0
-        || token_.identity.cookie == 0) {
-        errno = EFAULT;
-        return -1;
-    }
-
-    std::shared_ptr<zlink::request_timeout::task_t> task;
-    if (reqrep::schedule_socket_pending_timeout (
-          state_, token_.identity, token_.resolved_timeout_ms, &task)
-        != 0) {
-        // The request record is already physically committed when this is
-        // called, so timeout-allocation failure cannot be reported as a
-        // submit failure: the caller's payload has transferred and the peer
-        // may receive it. Resolve the admitted request through its normal
-        // completion channel instead.
-        reqrep::pending_request_t pending;
-        bool removed = false;
-        {
-            // Another arm may already own the live timeout. Its later schedule
-            // failure must not resolve this admitted request as an error.
-            std::lock_guard<std::mutex> lock (state_->mutex);
-            pending_request_map_t::const_iterator current =
-              state_->pending_requests.find (token_.identity.request_seq);
-            if (current != state_->pending_requests.end ()
-                && pending_identity_matches (current->second, token_.identity)
-                && !current->second.timeout_task) {
-                removed = reqrep::remove_socket_pending_request_locked (
-                  state_.get (), token_.identity, &pending);
-            }
-        }
-        if (removed) {
-            reqrep::release_socket_pending_request_correlation (&pending);
-            (void) reqrep::publish_pending_request_completion (
-              state_, &pending, ZLINK_REQUEST_INTERNAL_ERROR, NULL, 0);
-        }
-        errno = 0;
-        return 0;
-    }
-
-    bool installed = false;
-    {
-        std::lock_guard<std::mutex> lock (state_->mutex);
-        pending_request_map_t::iterator pending =
-          state_->pending_requests.find (token_.identity.request_seq);
-        if (pending != state_->pending_requests.end ()
-            && pending_identity_matches (pending->second, token_.identity)
-            && !pending->second.timeout_task) {
-            pending->second.timeout_task = task;
-            installed = true;
-        }
-    }
-    if (!installed && task)
-        zlink::request_timeout::cancel (task);
     return 0;
 }

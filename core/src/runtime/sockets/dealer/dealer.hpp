@@ -61,10 +61,12 @@ class dealer_t : public socket_base_t
                       void *observer_userdata_ = NULL,
                       routed_send_attempt_identity_t
                         *attempt_identity_out_ = NULL,
-                      uint64_t expected_route_incarnation_id_ = 0)
+                      uint64_t expected_route_incarnation_id_ = 0,
+                      bool request_only_ = false)
       ZLINK_OVERRIDE;
     int xselect_routed_submit_pipe (pipe_t **pipe_out_,
                                     bool request_only_) ZLINK_OVERRIDE;
+    int xcommit_request_submit_pipe (pipe_t *pipe_) ZLINK_OVERRIDE;
     int xsend_selected_pipe (pipe_t *pipe_, msg_t *msg_, int flags_,
                              bool request_only_,
                              pipe_message_admission_t *admission_out_,

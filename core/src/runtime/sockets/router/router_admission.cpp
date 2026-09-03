@@ -434,6 +434,7 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
             blob_t standby_routing_id (buf, sizeof buf);
             blob_t original_routing_id (
               routing_id_.data (), routing_id_.size ());
+            pipe_->invalidate_router_route_binding ();
             pipe_->set_router_socket_routing_id (
               standby_routing_id);
             add_out_pipe (
@@ -462,6 +463,7 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
         pipe_t *const old_pipe = existing_outpipe->pipe;
         const bool old_locally_initiated = existing_outpipe->locally_initiated;
         const uint32_t old_peer_weight = existing_outpipe->weight;
+        old_pipe->invalidate_router_route_binding ();
         erase_out_pipe (old_pipe);
         old_pipe->set_router_socket_routing_id (new_routing_id);
         add_out_pipe (ZLINK_MOVE (new_routing_id), old_pipe, old_locally_initiated);
@@ -483,9 +485,11 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
             actions_->terminate_pipe = old_pipe;
     }
 
+    pipe_->invalidate_router_route_binding ();
     pipe_->set_router_socket_routing_id (routing_id_);
     add_out_pipe (ZLINK_MOVE (routing_id_), pipe_, locally_initiated_,
                   initial_weight_);
+    pipe_->publish_router_route_binding ();
     if (actions_)
         actions_->cache_completion = true;
     if (router_debug_enabled ()) {
@@ -509,6 +513,10 @@ void router_t::finish_route_adoption (pipe_t *adopted_pipe_,
     if (actions_->cache_completion) {
         cache_completion_pipe_routing_id (adopted_pipe_);
         actions_->cache_completion = false;
+        // RID adoption can happen directly for an inproc attach as well as
+        // from an activate-read command. A reply waiting on a temporarily
+        // absent logical route must observe either transition immediately.
+        notify_submit_progress ();
     }
 }
 

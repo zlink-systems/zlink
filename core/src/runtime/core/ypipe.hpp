@@ -123,8 +123,11 @@ template <typename T, int N> class ypipe_t ZLINK_FINAL : public ypipe_base_t<T>
 
     //  Reads an item from the pipe. Returns false if there is no value.
     //  available.
-    bool read (T *value_)
+    bool read (T *value_, bool *prefetched_batch_exhausted_ = NULL)
     {
+        if (prefetched_batch_exhausted_)
+            *prefetched_batch_exhausted_ = false;
+
         //  Try to prefetch a value.
         if (!check_read ())
             return false;
@@ -133,6 +136,8 @@ template <typename T, int N> class ypipe_t ZLINK_FINAL : public ypipe_base_t<T>
         //  Return it to the caller.
         *value_ = _queue.front ();
         _queue.pop ();
+        if (prefetched_batch_exhausted_)
+            *prefetched_batch_exhausted_ = &_queue.front () == _r;
         return true;
     }
 
@@ -148,9 +153,29 @@ template <typename T, int N> class ypipe_t ZLINK_FINAL : public ypipe_base_t<T>
         return (*fn_) (_queue.front ());
     }
 
-    ypipe_read_result_t
-    read_if (T *value_, bool (*fn_) (const T &, void *), void *userdata_)
+    bool probe_if_published (void (*fn_) (const T &, void *),
+                             void *userdata_)
     {
+        if (&_queue.front () == _r || !_r) {
+            //  A NULL->NULL CAS is an atomic read on every atomic_ptr_t
+            //  backend. Unlike check_read(), it never replaces the current
+            //  front with NULL and therefore cannot put the reader to sleep.
+            T *const published = _c.cas (NULL, NULL);
+            if (!published || published == &_queue.front ())
+                return false;
+            _r = published;
+        }
+
+        (*fn_) (_queue.front (), userdata_);
+        return true;
+    }
+
+    ypipe_read_result_t
+    read_if (T *value_, bool (*fn_) (const T &, void *), void *userdata_,
+             bool *prefetched_batch_exhausted_ = NULL)
+    {
+        if (prefetched_batch_exhausted_)
+            *prefetched_batch_exhausted_ = false;
         if (!check_read ())
             return ypipe_read_empty;
         if (!(*fn_) (_queue.front (), userdata_))
@@ -158,6 +183,8 @@ template <typename T, int N> class ypipe_t ZLINK_FINAL : public ypipe_base_t<T>
 
         *value_ = _queue.front ();
         _queue.pop ();
+        if (prefetched_batch_exhausted_)
+            *prefetched_batch_exhausted_ = &_queue.front () == _r;
         return ypipe_read_consumed;
     }
 

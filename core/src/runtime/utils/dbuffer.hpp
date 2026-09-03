@@ -136,6 +136,16 @@ template <> class dbuffer_t<msg_t>
         return (*fn_) (*_front);
     }
 
+    bool probe_if_published (void (*fn_) (const msg_t &, void *),
+                             void *userdata_)
+    {
+        scoped_lock_t lock (_sync);
+        if (!_has_msg)
+            return false;
+        (*fn_) (*_front, userdata_);
+        return true;
+    }
+
     ypipe_read_result_t
     read_if (msg_t *value_, bool (*fn_) (const msg_t &, void *), void *userdata_)
     {

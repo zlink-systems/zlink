@@ -168,9 +168,10 @@ int zlink::dealer_t::xsend_routed (
   pipe_message_admission_t *admission_out_,
   pipe_write_observer_fn observer_, void *observer_userdata_,
   routed_send_attempt_identity_t *attempt_identity_out_,
-  uint64_t expected_route_incarnation_id_)
+  uint64_t expected_route_incarnation_id_, bool request_only_)
 {
     LIBZLINK_UNUSED (expected_route_incarnation_id_);
+    LIBZLINK_UNUSED (request_only_);
     if (admission_out_)
         *admission_out_ = pipe_message_admission_invalid;
     if (connection_id_out_)
@@ -255,20 +256,23 @@ int zlink::dealer_t::xselect_routed_submit_pipe (pipe_t **pipe_out_,
       this);
     if (rc != 0)
         return -1;
-    if (request_only_) {
-        //  Keep the request route history that the general selection path
-        //  maintains, so a later disconnected wait still knows this route.
-        const std::string &endpoint =
-          (*pipe_out_)->get_endpoint_pair ().identifier ();
-        if (endpoint.empty ()) {
-            *pipe_out_ = NULL;
-            errno = EHOSTUNREACH;
-            return -1;
-        }
-        if (_request_route_history.find (endpoint)
-            == _request_route_history.end ())
-            remember_request_route (*pipe_out_, _lb.weight (*pipe_out_));
+    return 0;
+}
+
+int zlink::dealer_t::xcommit_request_submit_pipe (pipe_t *pipe_)
+{
+    if (!pipe_) {
+        errno = EFAULT;
+        return -1;
     }
+    const std::string &endpoint = pipe_->get_endpoint_pair ().identifier ();
+    if (endpoint.empty ()) {
+        errno = EHOSTUNREACH;
+        return -1;
+    }
+    if (_request_route_history.find (endpoint)
+        == _request_route_history.end ())
+        remember_request_route (pipe_, _lb.weight (pipe_));
     return 0;
 }
 

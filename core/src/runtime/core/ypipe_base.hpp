@@ -61,10 +61,18 @@ template <typename T> class ypipe_base_t
     virtual bool unwrite (T *value_) = 0;
     virtual bool flush () = 0;
     virtual bool check_read () = 0;
-    virtual bool read (T *value_) = 0;
+    virtual bool read (T *value_,
+                       bool *prefetched_batch_exhausted_ = NULL) = 0;
     virtual bool probe (bool (*fn_) (const T &)) = 0;
+    //  Inspect an item that is already visible to the reader without
+    //  publishing the ypipe sleep marker. Implementations may extend the
+    //  reader's prefetched range only when the writer has already published
+    //  one; an empty probe must leave the reader awake.
+    virtual bool probe_if_published (void (*fn_) (const T &, void *),
+                                     void *userdata_) = 0;
     virtual ypipe_read_result_t
-    read_if (T *value_, bool (*fn_) (const T &, void *), void *userdata_) = 0;
+    read_if (T *value_, bool (*fn_) (const T &, void *), void *userdata_,
+             bool *prefetched_batch_exhausted_ = NULL) = 0;
 };
 }
 

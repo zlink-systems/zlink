@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <atomic>
 #include <string.h>
 #include <thread>
 
@@ -31,6 +32,12 @@ void set_errno_on_free (void *, void *hint_)
 {
     ++*static_cast<int *> (hint_);
     errno = E2BIG;
+}
+
+void count_free (void *, void *hint_)
+{
+    static_cast<std::atomic<int> *> (hint_)->fetch_add (
+      1, std::memory_order_relaxed);
 }
 }
 
@@ -400,6 +407,69 @@ void test_request_reply_failures_consume_final_part ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&dealer_reply));
 }
 
+void test_blocking_multipart_request_releases_caller_parts_once ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    const char *const endpoint = "inproc://helper-ownership-blocking-request";
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (router, endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
+    msleep (SETTLE_TIME);
+
+    std::atomic<int> first_frees (0);
+    std::atomic<int> final_frees (0);
+    char first_data[] = "request-first";
+    char final_data[] = "request-final";
+    zlink_msg_t first;
+    zlink_msg_t final;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_msg_init_data (&first, first_data, sizeof (first_data) - 1,
+                           &count_free, &first_frees));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_msg_init_data (&final, final_data, sizeof (final_data) - 1,
+                           &count_free, &final_frees));
+
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_request_part (dealer, NULL, &first, ZLINK_SEND_FLAGS_NONE,
+                          ZLINK_PART_MORE, 0, NULL, NULL));
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&first));
+
+    zlink_completion_id_t completion_id = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_request_part (dealer, NULL, &final, ZLINK_SEND_FLAGS_NONE,
+                          ZLINK_PART_FINAL, 5000, NULL, &completion_id));
+    TEST_ASSERT_NOT_EQUAL (0, completion_id);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&final));
+
+    const zlink_routing_id_t *source_rid = NULL;
+    zlink_reply_token_t reply_token = 0;
+    zlink_part_flag_t part_flag = ZLINK_PART_FINAL;
+    zlink_msg_t received;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&received));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_router_recv_part (router, &source_rid, &reply_token, &received,
+                              &part_flag, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, part_flag);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&received));
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&received));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_router_recv_part (router, &source_rid, &reply_token, &received,
+                              &part_flag, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, part_flag);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&received));
+
+    TEST_ASSERT_EQUAL_INT (1, first_frees.load (std::memory_order_relaxed));
+    TEST_ASSERT_EQUAL_INT (1, final_frees.load (std::memory_order_relaxed));
+
+    test_context_socket_close (router);
+    test_context_socket_close (dealer);
+}
+
 void test_recv_part_returns_caller_owned_message_handle ()
 {
     void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
@@ -449,6 +519,7 @@ int main (void)
     RUN_TEST (test_publish_prevalidation_failures_preserve_open_sequence);
     RUN_TEST (test_consuming_failure_preserves_result_errno_from_free_callback);
     RUN_TEST (test_request_reply_failures_consume_final_part);
+    RUN_TEST (test_blocking_multipart_request_releases_caller_parts_once);
     RUN_TEST (test_recv_part_returns_caller_owned_message_handle);
     const int rc = UNITY_END ();
     fflush (NULL);
