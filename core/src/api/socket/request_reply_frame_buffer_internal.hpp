@@ -10,8 +10,8 @@ namespace zlink
 {
 namespace socket_reqrep_internal
 {
-// Keep common application multiparts inline while a typed receive or
-// completion lane collects one logical message. Only unusually large
+// Keep common application multiparts inline while a request/reply-aware
+// receive or completion drain collects one logical message. Only unusually large
 // application multiparts need dynamic storage.
 const size_t inline_request_reply_frame_capacity = 8;
 typedef zlink::socket_internal::inline_msg_buffer_t<inline_request_reply_frame_capacity>
@@ -28,12 +28,6 @@ inline void close_request_reply_frame_buffer (
           frames_->data (), 0, frames_->size ());
     frames_->clear ();
 }
-}
-
-inline void close_msg_frames (
-  socket_reqrep_internal::request_reply_frame_buffer_t *frames_)
-{
-    socket_reqrep_internal::close_request_reply_frame_buffer (frames_);
 }
 }
 

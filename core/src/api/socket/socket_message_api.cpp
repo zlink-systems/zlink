@@ -8,7 +8,6 @@
 #include "api/message/recv_result_internal.hpp"
 #include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
-#include "core/c_api_copy_internal.hpp"
 #include "core/recv_internal.hpp"
 
 namespace
@@ -145,9 +144,6 @@ zlink_recv_result_t zlink_recv_part (void *s_,
     const int type = socket_type (handle);
     const bool expose_source_rid = type == ZLINK_CORE_SOCKET_STREAM;
     const bool dealer_request_surface = type == ZLINK_CORE_SOCKET_DEALER;
-    const std::shared_ptr<
-      zlink::socket_reqrep_internal::socket_request_reply_state_t>
-      request_state;
     zlink::socket_base_t *recv_source_socket = handle.socket;
     bool public_part_delivery_hold_acquired = false;
     public_part_delivery_hold_owner_t public_delivery_hold_owner (
@@ -159,13 +155,10 @@ zlink_recv_result_t zlink_recv_part (void *s_,
                                 zlink_msg_t *terminal_part_out_,
                                 bool *terminal_part_returned_out_) -> int {
         if (dealer_request_surface) {
-            uint8_t message_type = 0;
-            uint64_t request_seq = 0;
             if (source_rid_)
                 source_rid_->size = 0;
             return zlink::socket_reqrep_internal::recv_dealer_message_direct (
-              handle, request_state, false, &message_type, &request_seq,
-              parts_, part_count_, static_cast<int> (recv_flags_), terminal_part_out_,
+              handle, parts_, part_count_, static_cast<int> (recv_flags_), terminal_part_out_,
               terminal_part_returned_out_, true,
               &public_part_delivery_hold_acquired);
         }
@@ -251,11 +244,6 @@ zlink_recv_result_t zlink_recv_part (void *s_,
             zlink::part_helper_internal::abort_recv_step (helper_state);
             return zlink::recv_result_internal::from_errno (errno);
         }
-        if (helper_state->recv.buffered_parts.empty ()) {
-            zlink::part_helper_internal::abort_recv_step (helper_state);
-            errno = EPROTO;
-            return zlink::recv_result_internal::from_errno (errno);
-        }
         if (zlink::part_helper_internal::take_recv_part (helper_state, part_out_, has_more_out_)
             != 0) {
             zlink::part_helper_internal::abort_recv_step (helper_state);
@@ -275,7 +263,7 @@ zlink_recv_result_t zlink_recv_part (void *s_,
     bool first_part = false;
     zlink::socket_base_t *source_socket = NULL;
     if (zlink::part_helper_internal::prepare_recv_step (
-          zlink::part_helper_internal::recv_family_basic, recv_source_socket, &helper_state,
+          zlink::part_helper_internal::recv_family_basic, recv_source_socket, helper_state,
           &first_part, &source_socket)
         != 0) {
         return zlink::recv_result_internal::from_errno (errno);
@@ -332,11 +320,6 @@ zlink_recv_result_t zlink_recv_part (void *s_,
         }
         if (public_delivery_hold_owner.transfer_to (helper_state) != 0) {
             zlink::part_helper_internal::abort_recv_step (helper_state);
-            return zlink::recv_result_internal::from_errno (errno);
-        }
-        if (helper_state->recv.buffered_parts.empty ()) {
-            zlink::part_helper_internal::abort_recv_step (helper_state);
-            errno = EPROTO;
             return zlink::recv_result_internal::from_errno (errno);
         }
         if (zlink::part_helper_internal::take_recv_part (helper_state, part_out_, has_more_out_)
@@ -521,7 +504,7 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
         zlink::socket_base_t *source_socket = NULL;
         if (zlink::part_helper_internal::prepare_recv_step (
               zlink::part_helper_internal::recv_family_subscribe, handle.socket,
-              &helper_state, &first_part, &source_socket)
+              helper_state, &first_part, &source_socket)
             != 0) {
             const int saved_errno = errno;
             close_buffered_recv_parts (&buffered_parts);

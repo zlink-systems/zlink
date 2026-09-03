@@ -82,13 +82,10 @@ template <size_t InlineCapacity> class inline_msg_buffer_t
     size_t capacity () const { return _capacity; }
 
     zlink_msg_t *data () { return _data; }
-    const zlink_msg_t *data () const { return _data; }
 
     zlink_msg_t &back () { return _data[_size - 1]; }
-    const zlink_msg_t &back () const { return _data[_size - 1]; }
 
     zlink_msg_t &operator[] (size_t index_) { return _data[index_]; }
-    const zlink_msg_t &operator[] (size_t index_) const { return _data[index_]; }
 
     // Transfer the live opaque handles without reinitializing or moving each
     // message. The destination must be empty. Heap storage is stolen; inline

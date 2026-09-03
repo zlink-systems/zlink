@@ -16,10 +16,7 @@ zlink_bind_result_t zlink_bind (void *s_, const char *addr_)
     socket_handle_t handle = as_socket_handle (s_);
     if (!handle.socket)
         return zlink::bind_result_internal::from_errno (errno);
-    const int rc = handle.socket->bind (addr_);
-    if (rc != 0)
-        return zlink::bind_result_internal::from_rc (rc);
-    return zlink::bind_result_internal::from_rc (rc);
+    return zlink::bind_result_internal::from_rc (handle.socket->bind (addr_));
 }
 
 zlink_connect_result_t zlink_connect (void *s_, const char *addr_)
@@ -27,10 +24,8 @@ zlink_connect_result_t zlink_connect (void *s_, const char *addr_)
     socket_handle_t handle = as_socket_handle (s_);
     if (!handle.socket)
         return zlink::connect_result_internal::from_errno (errno);
-    const int rc = handle.socket->connect (addr_);
-    if (rc != 0)
-        return zlink::connect_result_internal::from_rc (rc);
-    return zlink::connect_result_internal::from_rc (rc);
+    return zlink::connect_result_internal::from_rc (
+      handle.socket->connect (addr_));
 }
 
 zlink_connect_result_t zlink_unbind (void *s_, const char *addr_)
@@ -84,7 +79,7 @@ zlink_config_result_t zlink_proxy (void *frontend_, void *backend_, void *captur
 
 bool zlink_has (const char *capability_)
 {
-    if (strcmp (capability_, "tcp") == 0)
+    if (strcmp (capability_, zlink::protocol_name::tcp) == 0)
         return true;
 #if defined(ZLINK_HAVE_IPC)
     if (strcmp (capability_, zlink::protocol_name::ipc) == 0)

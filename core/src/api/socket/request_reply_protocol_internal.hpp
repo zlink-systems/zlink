@@ -134,13 +134,6 @@ inline void consume_send_frames_from (zlink_msg_t *parts_, size_t start_index_, 
         consume_send_frame (&parts_[i]);
 }
 
-inline void close_request_reply_parts (zlink_msg_t *parts_, size_t part_count_)
-{
-    if (!parts_)
-        return;
-    zlink_multipart_close (parts_, part_count_);
-}
-
 }
 }
 

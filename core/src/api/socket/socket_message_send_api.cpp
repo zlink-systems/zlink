@@ -2,10 +2,8 @@
 
 #include "utils/precompiled.hpp"
 
-#include <climits>
 #include <new>
 
-#include "api/monitoring/poller_api_internal.hpp"
 #include "api/socket/socket_api_internal.hpp"
 #include "api/socket/socket_message_api_internal.hpp"
 #include "api/socket/part_helper_internal.hpp"
@@ -13,9 +11,6 @@
 #include "api/message/submit_result_internal.hpp"
 #include "core/msg.hpp"
 #include "core/multipart_send_txn.hpp"
-#include "utils/err.hpp"
-#include "utils/debug_log.hpp"
-#include "utils/likely.hpp"
 #include "utils/routing_id.hpp"
 
 namespace
@@ -47,19 +42,6 @@ int validate_send_parts (zlink_msg_t *parts_, size_t part_count_)
     return 0;
 }
 
-void consume_checked_core_msg (zlink::msg_t *msg_)
-{
-    if (!msg_ || !msg_->check ())
-        return;
-
-    const int saved_errno = errno;
-    const int close_rc = msg_->close ();
-    errno_assert (close_rc == 0);
-    const int init_rc = msg_->init ();
-    errno_assert (init_rc == 0);
-    errno = saved_errno;
-}
-
 bool try_extract_router_target_rid (const zlink_msg_t *part_, zlink_routing_id_t *out_)
 {
     if (!part_ || !out_)
@@ -76,18 +58,6 @@ bool try_extract_router_target_rid (const zlink_msg_t *part_, zlink_routing_id_t
     out_->size = static_cast<uint8_t> (size);
     memcpy (out_->data, msg->data (), size);
     return true;
-}
-
-int s_sendmsg (const socket_handle_t &handle_, zlink_msg_t *msg_, zlink_send_flags_t flags_)
-{
-    size_t sz = zlink_msg_size (msg_);
-    int rc = handle_.socket->send_complete_record (
-      reinterpret_cast<zlink::msg_t *> (msg_), flags_);
-    if (unlikely (rc < 0))
-        return -1;
-
-    size_t max_msgsz = INT_MAX;
-    return static_cast<int> (sz < max_msgsz ? sz : max_msgsz);
 }
 
 int validate_send_flags (int flags_)
@@ -118,50 +88,38 @@ int send_stream_message (const socket_handle_t &handle_,
                          zlink_msg_t *msg_,
                          zlink_send_flags_t flags_)
 {
-    if (!handle_.socket)
-        return -1;
-
-    if (!msg_) {
-        errno = EINVAL;
-        return -1;
-    }
-
     zlink::msg_t *core_msg = reinterpret_cast<zlink::msg_t *> (msg_);
     if (!core_msg->check ()) {
         errno = EFAULT;
         return -1;
     }
 
-    if (!is_stream_type (handle_)) {
-        errno = EINVAL;
-        return -1;
-    }
-
     uint32_t routing_id = 0;
     if (!parse_stream_routing_id (rid_, &routing_id)) {
         const int err = errno;
-        consume_checked_core_msg (core_msg);
+        zlink::request_reply::consume_send_frame (msg_);
         errno = err;
         return -1;
     }
 
     // A complete routed STREAM send takes the route-shard branch before the
-    // legacy multipart state in stream_t::xsend. s_sendmsg's lifecycle scope
-    // already serializes send/close; taking the wrapper mutex here would
+    // legacy multipart state in stream_t::xsend. send_complete_record() owns
+    // the lifecycle scope; taking the wrapper mutex here would
     // invert it with mailbox command ownership during pipe termination.
     if (core_msg->set_routing_id (routing_id) != 0) {
         const int err = errno;
-        consume_checked_core_msg (core_msg);
+        zlink::request_reply::consume_send_frame (msg_);
         errno = err;
         return -1;
     }
 
     const zlink_send_flags_t base_flags = static_cast<zlink_send_flags_t> (flags_ & ZLINK_DONTWAIT);
-    const int send_rc = s_sendmsg (handle_, reinterpret_cast<zlink_msg_t *> (core_msg), base_flags);
+    const int send_rc =
+      handle_.socket->send_complete_record (core_msg, base_flags);
     if (send_rc < 0) {
         const int err = errno;
         if (err != EAGAIN)
-            consume_checked_core_msg (core_msg);
+            zlink::request_reply::consume_send_frame (msg_);
         errno = err;
         return -1;
     }
@@ -200,8 +158,9 @@ int send_socket_unrouted_parts (const socket_handle_t &handle_,
     }
 
     if (part_count_ == 1) {
-        const int rc = s_sendmsg (handle_, &parts_[0],
-                                  static_cast<zlink_send_flags_t> (flags_ & ZLINK_DONTWAIT));
+        const int rc = handle_.socket->send_complete_record (
+          reinterpret_cast<zlink::msg_t *> (&parts_[0]),
+          static_cast<zlink_send_flags_t> (flags_ & ZLINK_DONTWAIT));
         if (rc < 0)
             return -1;
         errno = 0;
@@ -356,7 +315,7 @@ zlink_submit_result_t submit_publish_part (
     return ZLINK_SUBMIT_OK;
 }
 
-int stage_public_send_part_locked (
+int append_public_send_part_locked (
   zlink::part_helper_internal::handle_state_t *state_,
   zlink_msg_t *part_)
 {
@@ -373,10 +332,6 @@ int stage_public_send_part_locked (
             errno = EFAULT;
             return -1;
         }
-        if (state_->send.sink_socket)
-            state_->send.sink_socket->hold_incremental_send_control_boundary ();
-        if (state_->send.send_scope)
-            state_->send.send_scope->suspend_multipart_call ();
     } catch (...) {
         errno = ENOMEM;
         return -1;
@@ -384,45 +339,13 @@ int stage_public_send_part_locked (
     return 0;
 }
 
-int append_public_send_final_locked (
-  zlink::part_helper_internal::handle_state_t *state_,
-  zlink_msg_t *final_part_)
-{
-    if (!state_ || !final_part_) {
-        errno = EFAULT;
-        return -1;
-    }
-
-    try {
-        zlink_msg_t &final_slot =
-          state_->send.buffered_parts.append_uninitialized ();
-        if (zlink_msg_init (&final_slot) != 0) {
-            state_->send.buffered_parts.pop_back ();
-            errno = ENOMEM;
-            return -1;
-        }
-        if (zlink_msg_move (&final_slot, final_part_) != 0) {
-            zlink_msg_close (&final_slot);
-            state_->send.buffered_parts.pop_back ();
-            errno = EFAULT;
-            return -1;
-        }
-        return 0;
-    } catch (...) {
-        errno = ENOMEM;
-    }
-    return -1;
-}
-
 void consume_public_send_record (
   zlink::part_helper_internal::send_part_buffer_t *record_)
 {
     if (!record_)
         return;
-    const int saved_errno = errno;
-    for (size_t i = 0; i < record_->size (); ++i)
-        zlink::part_helper_internal::consume_send_part (&(*record_)[i]);
-    errno = saved_errno;
+    zlink::request_reply::consume_send_frames_from (
+      record_->data (), 0, record_->size ());
 }
 
 zlink_submit_result_t submit_public_send_record (
@@ -444,8 +367,8 @@ zlink_submit_result_t submit_public_send_record (
           parts_, part_count_, target_rid_);
     }
     const int saved_errno = errno;
-    for (size_t i = 0; i < part_count_; ++i)
-        zlink::part_helper_internal::consume_send_part (&parts_[i]);
+    zlink::request_reply::consume_send_frames_from (
+      parts_, 0, part_count_);
     errno = saved_errno;
     return zlink::submit_result_internal::from_rc (rc);
 }
@@ -481,7 +404,7 @@ zlink_submit_result_t submit_completion_aware_part (
     }
 
     if (part_flag_ == ZLINK_PART_MORE) {
-        if (stage_public_send_part_locked (state, part_) != 0) {
+        if (append_public_send_part_locked (state, part_) != 0) {
             const int saved_errno = errno;
             state_lock.unlock ();
             zlink::part_helper_internal::abort_send_step (state);
@@ -489,10 +412,12 @@ zlink_submit_result_t submit_completion_aware_part (
             errno = saved_errno;
             return zlink::submit_result_internal::from_errno (saved_errno);
         }
+        zlink::part_helper_internal::complete_send_step_locked (
+          state, ZLINK_PART_MORE);
         return ZLINK_SUBMIT_OK;
     }
 
-    if (append_public_send_final_locked (state, part_) != 0) {
+    if (append_public_send_part_locked (state, part_) != 0) {
         const int saved_errno = errno;
         state_lock.unlock ();
         zlink::part_helper_internal::abort_send_step (state);
@@ -760,8 +685,9 @@ zlink_submit_result_t zlink_send_part_rid (void *s_,
     zlink::part_helper_internal::send_sequence_spec_t spec;
     spec.family = zlink::part_helper_internal::send_family_send_rid;
     spec.flags = flags_;
-    spec.has_rid1 = true;
-    zlink::part_helper_internal::copy_routing_id (target_rid_, &spec.rid1);
+    spec.has_routing_id = true;
+    zlink::part_helper_internal::copy_routing_id (
+      target_rid_, &spec.routing_id);
     return submit_completion_aware_part (
       s_, socket_guard, target_rid_, part_, part_flag_, user_context_,
       completion_id_out_, spec);
@@ -799,7 +725,7 @@ zlink_submit_result_t zlink_publish_part (void *subject_,
     // with the entry's existing socket pin, leaving helper state for actual
     // multipart sequences.
     if (part_flag_ == ZLINK_PART_FINAL
-        && !zlink::part_helper_internal::send_sequence_active (socket)) {
+        && !socket->part_helper_send_active ()) {
         const int rc = publish_socket_parts (socket_guard, topic_id_, part_, 1,
                                              flags_);
         const int saved_errno = errno;

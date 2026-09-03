@@ -9,10 +9,8 @@
 #include <string>
 #include <string_view>
 #include <thread>
-#include <vector>
 
 #include "sockets/common/socket_runtime.hpp"
-#include "core/ctx_physical_queue_registry.hpp"
 #include "api/socket/inline_msg_buffer_internal.hpp"
 #include <zlink.h>
 
@@ -51,8 +49,8 @@ struct send_sequence_spec_t
     uint32_t timeout_ms;
     uint64_t request_seq;
     uint64_t pending_cookie;
-    zlink_routing_id_t rid1;
-    bool has_rid1;
+    zlink_routing_id_t routing_id;
+    bool has_routing_id;
     std::string_view topic;
     bool has_topic;
     bool request_like;
@@ -116,15 +114,14 @@ int validate_part_flag (zlink_part_flag_t part_flag_);
 bool routing_id_equals (const zlink_routing_id_t &lhs_, const zlink_routing_id_t &rhs_);
 void copy_routing_id (const zlink_routing_id_t *src_, zlink_routing_id_t *dest_);
 void consume_send_part (zlink_msg_t *part_);
+bool try_rollback_send_scope_locked (send_sequence_state_t *state_);
 bool send_spec_equals (const send_sequence_spec_t &lhs_, const send_sequence_spec_t &rhs_);
 bool routed_part_debug_enabled ();
 void trace_routed_part_prepare_failed (send_family_t family_, int err_);
 void trace_routed_part_send_failed (send_family_t family_, bool first_part_, int err_);
-std::shared_ptr<handle_state_t> find_handle_state (void *handle_);
 std::shared_ptr<handle_state_t> find_or_create_socket_state (zlink::socket_base_t *socket_);
 std::shared_ptr<handle_state_t> find_socket_state (zlink::socket_base_t *socket_);
 bool recv_sequence_active (const std::shared_ptr<handle_state_t> &state_);
-bool send_sequence_active (zlink::socket_base_t *socket_);
 int stage_recv_sequence (const std::shared_ptr<handle_state_t> &state_,
                          recv_family_t family_,
                          zlink::socket_base_t *source_socket_,
@@ -132,15 +129,14 @@ int stage_recv_sequence (const std::shared_ptr<handle_state_t> &state_,
                          uint64_t request_seq_,
                          zlink_msg_t *parts_,
                          size_t part_count_,
-                         std::thread::id owner_thread_);
+                         std::thread::id owner_thread_,
+                         uint64_t transport_pair_id_ = 0,
+                         uint64_t transport_pair_generation_ = 0);
 int adopt_recv_public_delivery_hold (
   const std::shared_ptr<handle_state_t> &state_);
 void set_recv_metadata (recv_sequence_state_t *recv_,
                         const zlink_routing_id_t *source_node_rid_,
                         uint64_t request_seq_);
-void set_recv_transport_pair (recv_sequence_state_t *recv_,
-                               uint64_t transport_pair_id_,
-                               uint64_t transport_pair_generation_);
 int buffer_recv_parts (recv_sequence_state_t *recv_,
                        zlink_msg_t *parts_,
                        size_t part_count_);
@@ -175,7 +171,7 @@ int prepare_send_step_locked (const send_sequence_spec_t &spec_,
                               bool start_if_inactive_);
 int prepare_recv_step (recv_family_t family_,
                        zlink::socket_base_t *source_socket_,
-                       std::shared_ptr<handle_state_t> *state_inout_,
+                       const std::shared_ptr<handle_state_t> &state_,
                        bool *first_part_out_,
                        zlink::socket_base_t **active_source_socket_out_);
 void complete_send_step (const std::shared_ptr<handle_state_t> &state_,

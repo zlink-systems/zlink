@@ -7,22 +7,7 @@
 #include <new>
 
 #include "api/socket/part_helper_internal.hpp"
-#include "api/socket/socket_api_internal.hpp"
 #include "sockets/common/socket_base.hpp"
-
-namespace
-{
-bool prepare_send_scope_for_cleanup (
-  zlink::part_helper_internal::send_sequence_state_t *send_)
-{
-    if (!send_ || !send_->send_scope)
-        return false;
-    return send_->send_scope->acquired ()
-           || send_->send_scope->resume_multipart_call ()
-           || send_->send_scope->lock_multipart_for_close_cleanup ();
-}
-
-}
 
 std::shared_ptr<zlink::part_helper_internal::handle_state_t>
 zlink::part_helper_internal::find_socket_state (socket_base_t *socket_)
@@ -55,14 +40,6 @@ zlink::part_helper_internal::find_or_create_socket_state (socket_base_t *socket_
     return socket_->set_part_helper_state (state);
 }
 
-std::shared_ptr<zlink::part_helper_internal::handle_state_t>
-zlink::part_helper_internal::find_handle_state (void *handle_)
-{
-    socket_handle_t handle = as_socket_handle (handle_);
-    return handle.socket ? find_socket_state (handle.socket)
-                         : std::shared_ptr<handle_state_t> ();
-}
-
 void zlink::part_helper_internal::cleanup_socket (socket_base_t *socket_)
 {
     const int saved_errno = errno;
@@ -81,11 +58,8 @@ void zlink::part_helper_internal::cleanup_socket (socket_base_t *socket_)
     zlink::socket_base_t *held_receive_socket = NULL;
     {
         std::lock_guard<std::mutex> lock (state->mutex);
-        if (state->send.active && state->send.sink_socket
-            && prepare_send_scope_for_cleanup (&state->send)) {
-            (void) state->send.sink_socket->rollback_scoped (
-              *state->send.send_scope);
-        }
+        if (state->send.active)
+            (void) try_rollback_send_scope_locked (&state->send);
         if (state->send.sink_socket)
             state->send.sink_socket->clear_incremental_send_control_boundary ();
         reset_send_sequence (&state->send, false);

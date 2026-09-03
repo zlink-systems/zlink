@@ -16,11 +16,8 @@ extern "C" void zlink_socket_request_reply_cleanup (void *socket_)
 
 extern "C" int zlink_router_enable_request_reply_receive (void *router_)
 {
-    if (reqrep::validate_socket_type (router_, ZLINK_CORE_SOCKET_ROUTER) != 0)
-        return -1;
-
     socket_handle_t handle = as_socket_handle (router_);
-    if (!handle.socket)
+    if (reqrep::validate_socket_type (handle, ZLINK_CORE_SOCKET_ROUTER) != 0)
         return -1;
 
     std::shared_ptr<reqrep::socket_request_reply_state_t> state =

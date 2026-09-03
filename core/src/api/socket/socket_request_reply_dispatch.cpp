@@ -129,14 +129,14 @@ completion_message_result_t complete_reply_from_transport (
   uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
   zlink::pipe_t *source_pipe_, uint64_t source_connection_id_,
   uint8_t message_type_,
-  uint64_t request_sequence_,
+  uint64_t request_seq_,
   zlink_msg_t *parts_,
   size_t part_count_)
 {
-    if (!parts_ || part_count_ == 0 || request_sequence_ == 0
+    if (!parts_ || part_count_ == 0 || request_seq_ == 0
         || (message_type_ != zlink::request_reply::reply_type
             && message_type_ != zlink::request_reply::error_reply_type)) {
-        zlink::request_reply::close_request_reply_parts (parts_, part_count_);
+        zlink_multipart_close (parts_, part_count_);
         return completion_message_protocol_error;
     }
 
@@ -144,7 +144,7 @@ completion_message_result_t complete_reply_from_transport (
     // payload must not retain transport metadata.
     zlink::request_reply::clear_request_reply_metadata (&parts_[0]);
     if (!state_) {
-        zlink::request_reply::close_request_reply_parts (parts_, part_count_);
+        zlink_multipart_close (parts_, part_count_);
         return completion_message_accepted;
     }
 
@@ -152,14 +152,14 @@ completion_message_result_t complete_reply_from_transport (
     {
         std::lock_guard<std::mutex> lock (state_->mutex);
         if (!take_pending_reply_from_transport_locked (
-              state_.get (), request_sequence_, transport_pair_id_,
+              state_.get (), request_seq_, transport_pair_id_,
               transport_pair_generation_, source_pipe_,
               source_connection_id_, &pending)) {
-            zlink::request_reply::close_request_reply_parts (parts_, part_count_);
+            zlink_multipart_close (parts_, part_count_);
             return completion_message_accepted;
         }
     }
-    release_socket_pending_request_correlation (&pending);
+    pending.correlation.release ();
 
     (void) publish_pull_reply_completion (
       state_, &pending, message_type_, parts_, part_count_);
@@ -209,7 +209,7 @@ completion_pipe_drain_result_t process_completion_pipe (
             }
         }
         // Every exit below closes or consumes the current elements. Keep the
-        // vector's storage for the lifetime of this drain so steady-state
+        // buffer storage for the lifetime of this drain so steady-state
         // completions do not allocate once the common part capacity is warm.
         parts.clear ();
         bool complete = false;
@@ -398,6 +398,28 @@ bool has_pending_request_work (const std::shared_ptr<socket_request_reply_state_
     return !state_->pending_requests.empty ();
 }
 
+template <typename TakePending>
+static void fail_matching_pending_requests (
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  TakePending take_pending_)
+{
+    const int saved_errno = errno;
+    while (true) {
+        pending_request_t not_found;
+        bool found = false;
+        {
+            std::lock_guard<std::mutex> lock (state_->mutex);
+            found = take_pending_ (state_.get (), &not_found);
+        }
+        if (!found)
+            break;
+        not_found.correlation.release ();
+        (void) publish_pending_request_completion (
+          state_, &not_found, ZLINK_REQUEST_NOT_FOUND, NULL, 0);
+    }
+    errno = saved_errno;
+}
+
 void fail_pending_requests_for_logical_endpoint (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   const std::string &logical_endpoint_)
@@ -405,23 +427,12 @@ void fail_pending_requests_for_logical_endpoint (
     if (!state_ || logical_endpoint_.empty ())
         return;
 
-    const int saved_errno = errno;
-    while (true) {
-        pending_request_t not_found;
-        bool found = false;
-        {
-            std::lock_guard<std::mutex> lock (state_->mutex);
-            found =
-              take_next_socket_pending_request_for_logical_endpoint_locked (
-                state_.get (), logical_endpoint_, &not_found);
-        }
-        if (!found)
-            break;
-        release_socket_pending_request_correlation (&not_found);
-        (void) publish_pending_request_completion (
-          state_, &not_found, ZLINK_REQUEST_NOT_FOUND, NULL, 0);
-    }
-    errno = saved_errno;
+    fail_matching_pending_requests (
+      state_, [&logical_endpoint_] (socket_request_reply_state_t *state,
+                                    pending_request_t *pending) {
+          return take_next_socket_pending_request_for_logical_endpoint_locked (
+            state, logical_endpoint_, pending);
+      });
 }
 
 void fail_pending_requests_for_logical_rid (
@@ -431,22 +442,47 @@ void fail_pending_requests_for_logical_rid (
     if (!state_ || !logical_rid_ || logical_rid_->size == 0)
         return;
 
-    const int saved_errno = errno;
+    fail_matching_pending_requests (
+      state_, [logical_rid_] (socket_request_reply_state_t *state,
+                              pending_request_t *pending) {
+          return take_next_socket_pending_request_for_logical_rid_locked (
+            state, logical_rid_, pending);
+      });
+}
+
+static void discard_request_reply_state_for_close (
+  const std::shared_ptr<socket_request_reply_state_t> &state_)
+{
+    {
+        std::lock_guard<std::mutex> lock (state_->mutex);
+        state_->public_router_reply_checkout_token.store (
+          0, std::memory_order_release);
+        state_->closing = true;
+    }
+    cancel_socket_pending_timeouts (state_);
+    abandon_public_router_reply_sequence (state_, 0);
+
     while (true) {
-        pending_request_t not_found;
+        pending_request_t pending;
         bool found = false;
         {
             std::lock_guard<std::mutex> lock (state_->mutex);
-            found = take_next_socket_pending_request_for_logical_rid_locked (
-              state_.get (), logical_rid_, &not_found);
+            found = take_next_socket_pending_request_locked (state_.get (),
+                                                             &pending);
         }
         if (!found)
             break;
-        release_socket_pending_request_correlation (&not_found);
-        (void) publish_pending_request_completion (
-          state_, &not_found, ZLINK_REQUEST_NOT_FOUND, NULL, 0);
+        pending.correlation.release ();
+        // Close discards unresolved and unread pull records; it does not
+        // publish a completion after sealing the socket lifecycle.
+        release_pending_request_completion (state_, &pending);
     }
-    errno = saved_errno;
+
+    std::lock_guard<std::mutex> lock (state_->mutex);
+    state_->dealer_reply_targets.clear ();
+    clear_router_reply_targets_locked (state_.get ());
+    state_->reply_target_slots =
+      state_->reply_target_reservations + state_->reply_target_checkouts;
 }
 
 int drain_close_request_reply_socket (const socket_handle_t &handle_)
@@ -460,39 +496,7 @@ int drain_close_request_reply_socket (const socket_handle_t &handle_)
     if (!state)
         return 0;
 
-    {
-        std::lock_guard<std::mutex> lock (state->mutex);
-        state->public_router_reply_checkout_token.store (
-          0, std::memory_order_release);
-        state->closing = true;
-    }
-    cancel_socket_pending_timeouts (state);
-    abandon_public_router_reply_sequence (state, 0);
-
-    while (true) {
-        pending_request_t pending;
-        bool found = false;
-        {
-            std::lock_guard<std::mutex> lock (state->mutex);
-            found = take_next_socket_pending_request_locked (state.get (),
-                                                             &pending);
-        }
-        if (!found)
-            break;
-        release_socket_pending_request_correlation (&pending);
-        // Public close discards unresolved and unread pull records; it is not
-        // a completion-producing drain phase.
-        release_pending_request_completion (state, &pending);
-    }
-
-    {
-        std::lock_guard<std::mutex> lock (state->mutex);
-        state->dealer_reply_targets.clear ();
-        clear_router_reply_targets_locked (state.get ());
-        state->reply_target_slots =
-          state->reply_target_reservations + state->reply_target_checkouts;
-    }
-
+    discard_request_reply_state_for_close (state);
     return 0;
 }
 
@@ -502,39 +506,8 @@ void cleanup_request_reply_socket (const socket_handle_t &handle_)
         return;
 
     std::shared_ptr<socket_request_reply_state_t> state = handle_.socket->request_reply_state ();
-    if (state) {
-        {
-            std::lock_guard<std::mutex> state_lock (state->mutex);
-            state->public_router_reply_checkout_token.store (
-              0, std::memory_order_release);
-            state->closing = true;
-        }
-        cancel_socket_pending_timeouts (state);
-        abandon_public_router_reply_sequence (state, 0);
-        while (true) {
-            pending_request_t pending;
-            bool found = false;
-            {
-                std::lock_guard<std::mutex> state_lock (state->mutex);
-                found = take_next_socket_pending_request_locked (state.get (),
-                                                                 &pending);
-            }
-            if (!found)
-                break;
-            release_socket_pending_request_correlation (&pending);
-            release_pending_request_completion (state, &pending);
-        }
-        {
-            std::lock_guard<std::mutex> state_lock (state->mutex);
-            state->public_router_reply_checkout_token.store (
-              0, std::memory_order_release);
-            state->closing = true;
-            state->dealer_reply_targets.clear ();
-            clear_router_reply_targets_locked (state.get ());
-            state->reply_target_slots =
-              state->reply_target_reservations + state->reply_target_checkouts;
-        }
-    }
+    if (state)
+        discard_request_reply_state_for_close (state);
     handle_.socket->clear_request_reply_state ();
 }
 }

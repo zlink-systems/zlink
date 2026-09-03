@@ -13,15 +13,6 @@ namespace reqrep = zlink::socket_reqrep_internal;
 
 namespace
 {
-typedef reqrep::pending_request_store_t pending_request_map_t;
-
-bool pending_identity_matches (
-  const reqrep::pending_request_t &pending_,
-  const reqrep::pending_request_identity_t &identity_)
-{
-    return pending_.identity == identity_;
-}
-
 uint64_t allocate_pending_cookie_locked (
   reqrep::socket_request_reply_state_t *state_)
 {
@@ -34,8 +25,8 @@ uint64_t allocate_pending_cookie_locked (
     return cookie;
 }
 
-bool take_pending_request (pending_request_map_t *pending_requests_,
-                           pending_request_map_t::iterator pending_,
+bool take_pending_request (reqrep::pending_request_store_t *pending_requests_,
+                           reqrep::pending_request_store_t::iterator pending_,
                            reqrep::pending_request_t *pending_out_)
 {
     if (!pending_requests_ || pending_ == pending_requests_->end ())
@@ -86,10 +77,10 @@ bool reqrep::remove_socket_pending_request_locked (
     if (!state_ || identity_.request_seq == 0 || identity_.cookie == 0)
         return false;
 
-    pending_request_map_t::iterator pending =
+    reqrep::pending_request_store_t::iterator pending =
       state_->pending_requests.find (identity_.request_seq);
     if (pending == state_->pending_requests.end ()
-        || !pending_identity_matches (pending->second, identity_))
+        || !(pending->second.identity == identity_))
         return false;
     return take_pending_request (&state_->pending_requests, pending,
                                  pending_out_);
@@ -106,7 +97,7 @@ bool reqrep::take_pending_reply_from_transport_locked (
         || source_connection_id_ == 0)
         return false;
 
-    pending_request_map_t::iterator pending =
+    reqrep::pending_request_store_t::iterator pending =
       state_->pending_requests.find (request_seq_);
     if (pending == state_->pending_requests.end ())
         return false;
@@ -174,7 +165,7 @@ bool reqrep::take_next_socket_pending_request_for_logical_endpoint_locked (
 {
     if (!state_ || logical_endpoint_.empty ())
         return false;
-    for (pending_request_map_t::iterator pending =
+    for (reqrep::pending_request_store_t::iterator pending =
            state_->pending_requests.begin ();
          pending != state_->pending_requests.end (); ++pending) {
         // DEALER requests have no logical RID. Their correlation lease pins
@@ -201,7 +192,7 @@ bool reqrep::take_next_socket_pending_request_for_logical_rid_locked (
 {
     if (!state_ || !logical_rid_ || logical_rid_->size == 0)
         return false;
-    for (pending_request_map_t::iterator pending =
+    for (reqrep::pending_request_store_t::iterator pending =
            state_->pending_requests.begin ();
          pending != state_->pending_requests.end (); ++pending) {
         if (pending->second.logical_rid.size () == logical_rid_->size
@@ -236,10 +227,10 @@ int reqrep::lookup_socket_pending_request (
     }
 
     std::lock_guard<std::mutex> lock (state_->mutex);
-    pending_request_map_t::const_iterator pending =
+    reqrep::pending_request_store_t::const_iterator pending =
       state_->pending_requests.find (identity_.request_seq);
     if (pending == state_->pending_requests.end ()
-        || !pending_identity_matches (pending->second, identity_)) {
+        || !(pending->second.identity == identity_)) {
         errno = EINVAL;
         return -1;
     }
@@ -260,7 +251,7 @@ bool reqrep::erase_socket_pending_request (
 
     reqrep::pending_request_t pending;
     if (reqrep::remove_socket_pending_request (state_, identity_, &pending)) {
-        reqrep::release_socket_pending_request_correlation (&pending);
+        pending.correlation.release ();
         reqrep::release_pending_request_completion (state_, &pending);
         return true;
     }
@@ -279,10 +270,10 @@ bool reqrep::record_socket_pending_transport_pair_identity (
         return false;
 
     std::lock_guard<std::mutex> lock (state_->mutex);
-    pending_request_map_t::iterator pending =
+    reqrep::pending_request_store_t::iterator pending =
       state_->pending_requests.find (identity_.request_seq);
     if (pending == state_->pending_requests.end ()
-        || !pending_identity_matches (pending->second, identity_))
+        || !(pending->second.identity == identity_))
         return false;
     pending->second.transport_pair_id = transport_pair_id_;
     pending->second.transport_pair_generation = transport_pair_generation_;

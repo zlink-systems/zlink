@@ -2,22 +2,18 @@
 
 #include "utils/precompiled.hpp"
 
-#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <mutex>
 #include <thread>
-#include <unordered_map>
-#include <vector>
 
 #include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/socket/part_helper_internal.hpp"
-#include "api/monitoring/poller_api_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
+#include "api/socket/socket_request_reply_pending_internal.hpp"
 #include "api/socket/socket_request_reply_submit_internal.hpp"
 #include "api/message/request_result_internal.hpp"
 #include "api/message/submit_result_internal.hpp"
-#include "core/multipart_send_txn.hpp"
 #include "core/msg.hpp"
 #include "core/pipe.hpp"
 #include "utils/routing_id.hpp"
@@ -42,8 +38,8 @@ struct pending_pair_observer_t
     // values so reconnect/redrive never dereferences the submitting stack.
     std::shared_ptr<reqrep::socket_request_reply_state_t> state;
     reqrep::pending_request_identity_t identity;
-    // The publication lock stays held from prepare through finish. The map
-    // entry therefore cannot be erased or invalidated before commit, so keep
+    // The publication lock stays held from prepare through finish. The
+    // pending entry therefore cannot be erased or invalidated before commit, so keep
     // the resolved entry instead of hashing the same sequence twice.
     reqrep::pending_request_t *pending;
     uint64_t accounted_bytes;
@@ -158,7 +154,6 @@ bool publish_pending_pair_before_flush (
 
 struct pending_request_admission_context_t
 {
-    std::shared_ptr<reqrep::socket_request_reply_state_t> state;
     reqrep::pending_request_token_t token;
     pending_pair_observer_t observer;
 };
@@ -168,24 +163,24 @@ void resolve_pending_request_admission (void *userdata_, bool admitted_,
 {
     pending_request_admission_context_t *const context =
       static_cast<pending_request_admission_context_t *> (userdata_);
-    if (!context || !context->state)
+    if (!context || !context->observer.state)
         return;
 
     if (admitted_) {
-        (void) reqrep::arm_socket_pending_request_timeout (context->state,
-                                                           context->token);
+        (void) reqrep::arm_socket_pending_request_timeout (
+          context->observer.state, context->token);
         return;
     }
 
     reqrep::pending_request_t pending;
     if (!reqrep::remove_socket_pending_request (
-          context->state, context->token.identity, &pending))
+          context->observer.state, context->token.identity, &pending))
         return;
 
-    reqrep::release_socket_pending_request_correlation (&pending);
+    pending.correlation.release ();
     const int completion_errno = terminal_errno_ != 0 ? terminal_errno_ : EIO;
     (void) reqrep::publish_pending_request_completion (
-      context->state, &pending,
+      context->observer.state, &pending,
       zlink::request_result_internal::from_errno (completion_errno), NULL, 0);
 }
 
@@ -241,7 +236,6 @@ int submit_pull_dontwait_request (
     }
 
     pending_request_admission_context_t context;
-    context.state = state_;
     context.token = token_;
     context.observer.state = state_;
     context.observer.identity = token_.identity;
@@ -335,11 +329,10 @@ int checkout_public_router_reply_target (
         return -1;
     }
 
-    try {
 #ifdef ZLINK_BUILD_TESTS
+    try {
         reqrep::test_throw_request_reply_allocation_failpoint (
           reqrep::request_reply_allocation_reply_key);
-#endif
     } catch (...) {
         // A continuation already owns the token checkout. Allocation failure
         // aborts that sequence and must make the live token available to a
@@ -355,6 +348,7 @@ int checkout_public_router_reply_target (
         errno = ENOMEM;
         return -1;
     }
+#endif
 
     if (state_->public_router_reply_active) {
         const reqrep::fixed_routing_id_key_t &active_rid =
@@ -501,8 +495,6 @@ int send_public_router_reply_with_wait (
         const int wait_rc = socket_->wait_submit_progress (
           send_scope_, observed_progress, wait_ms,
           progress_owner.held_state ());
-        const int wait_errno = errno;
-        errno = wait_errno;
         if (wait_rc != 0)
             return -1;
     }
@@ -537,10 +529,7 @@ zlink_submit_result_t public_router_reply_submit (
           request_state, peer_rid_, reply_token_, &target)
         != 0) {
         const int saved_errno = errno;
-        if (saved_errno == EINVAL) {
-            zlink::part_helper_internal::abort_current_non_publish_send_sequence (
-              router_);
-        } else if (saved_errno != EBUSY) {
+        if (saved_errno != EBUSY) {
             zlink::part_helper_internal::abort_current_non_publish_send_sequence (
               router_);
         }
@@ -553,8 +542,9 @@ zlink_submit_result_t public_router_reply_submit (
     spec.family = zlink::part_helper_internal::send_family_router_reply;
     spec.request_like = true;
     spec.request_seq = reply_token_;
-    spec.has_rid1 = true;
-    zlink::part_helper_internal::copy_routing_id (peer_rid_, &spec.rid1);
+    spec.has_routing_id = true;
+    zlink::part_helper_internal::copy_routing_id (
+      peer_rid_, &spec.routing_id);
 
     zlink::part_helper_internal::handle_state_t *state = NULL;
     std::unique_lock<std::mutex> state_lock;
@@ -725,35 +715,8 @@ zlink_submit_result_t request_part_common (
   zlink::part_helper_internal::send_family_t family_,
   zlink_completion_id_t *completion_id_out_)
 {
-    if (completion_id_out_)
-        *completion_id_out_ = 0;
-    if (zlink::part_helper_internal::validate_part_flag (part_flag_) != 0) {
-        zlink::part_helper_internal::abort_current_non_publish_send_sequence (handle_);
-        zlink::part_helper_internal::consume_send_part (part_);
-        return zlink::submit_result_internal::from_errno (errno);
-    }
-    if (reqrep::validate_request_send_flags (flags_) != 0) {
-        zlink::part_helper_internal::abort_current_non_publish_send_sequence (handle_);
-        zlink::part_helper_internal::consume_send_part (part_);
-        return zlink::submit_result_internal::from_errno (errno);
-    }
-    if (part_flag_ == ZLINK_PART_MORE
-        && (timeout_ms_ != 0 || user_context_ != NULL)) {
-        zlink::part_helper_internal::abort_current_non_publish_send_sequence (handle_);
-        zlink::part_helper_internal::consume_send_part (part_);
-        errno = EINVAL;
-        return zlink::submit_result_internal::from_errno (errno);
-    }
-
-    if (!socket_handle_.socket) {
-        zlink::part_helper_internal::abort_current_non_publish_send_sequence (handle_);
-        zlink::part_helper_internal::consume_send_part (part_);
-        errno = EFAULT;
-        return zlink::submit_result_internal::from_errno (errno);
-    }
-
     zlink::msg_t *core_part = reinterpret_cast<zlink::msg_t *> (part_);
-    if (!part_ || !core_part->check ()) {
+    if (!core_part->check ()) {
         zlink::part_helper_internal::abort_current_non_publish_send_sequence (handle_);
         zlink::part_helper_internal::consume_send_part (part_);
         errno = EFAULT;
@@ -766,8 +729,9 @@ zlink_submit_result_t request_part_common (
     spec.timeout_ms = timeout_ms_;
     spec.request_like = true;
     if (peer_rid_) {
-        spec.has_rid1 = true;
-        zlink::part_helper_internal::copy_routing_id (peer_rid_, &spec.rid1);
+        spec.has_routing_id = true;
+        zlink::part_helper_internal::copy_routing_id (
+          peer_rid_, &spec.routing_id);
     }
 
     std::shared_ptr<zlink::part_helper_internal::handle_state_t> helper_state;
@@ -911,9 +875,8 @@ zlink_submit_result_t request_part_common (
           zlink::submit_result_internal::from_errno (errno);
         zlink::part_helper_internal::abort_current_non_publish_send_sequence (handle_);
         zlink::part_helper_internal::consume_send_part (part_);
-        return spec.request_seq != 0
-                 ? finish_request_submit_failure (request_state, pending_token.identity, failure)
-                 : failure;
+        return finish_request_submit_failure (
+          request_state, pending_token.identity, failure);
     }
 
     if (part_flag_ == ZLINK_PART_MORE) {
@@ -970,7 +933,7 @@ zlink_submit_result_t request_part_common (
     // request_admission_submit takes its own complete-record public send
     // scope. Transfer the staged opaque handles into inline storage and close
     // the incremental scope in the same helper-state lock turn. The ordinary
-    // two-part request therefore performs neither a vector allocation nor a
+    // two-part request therefore performs neither a dynamic allocation nor a
     // second init/move pass.
     zlink::part_helper_internal::send_part_buffer_t request_parts;
     if (zlink::part_helper_internal::take_buffered_send_record_locked (
