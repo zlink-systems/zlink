@@ -532,6 +532,13 @@ void zlink::session_base_t::engine_ready ()
             pipes[1]->set_transport_lane_count (options.transport_lane_count);
         }
         pipes[1]->set_locally_initiated (_active);
+        //  Re-apply the CONNECT_ROUTING_ID alias captured at connect time to the
+        //  socket-side pipe of every (re)materialization, keyed by the stable
+        //  transport pair id. Reconnect and IMMEDIATE=1 first-connect both reach
+        //  the routing socket only here, so without this the replacement route
+        //  would silently fall back to the peer identity.
+        if (_active && _transport_lane == transport_lane_application)
+            _socket->apply_pending_connect_routing_id (_transport_pair_id, pipes[1]);
         pipes[0]->set_max_message_bytes (
           options.maxmsgsize > 0 ? static_cast<uint64_t> (options.maxmsgsize) : 0);
         pipes[1]->set_max_message_bytes (_peer_max_message_bytes);
@@ -571,8 +578,12 @@ void zlink::session_base_t::engine_ready ()
             // socket endpoint before send_bind transfers its ownership.
             pipes[0]->set_peer_routing_id (_pending_peer_routing_id.data (),
                                            _pending_peer_routing_id.size ());
-            pipes[1]->set_peer_routing_id (_pending_peer_routing_id.data (),
-                                           _pending_peer_routing_id.size ());
+            //  Never clobber a CONNECT_ROUTING_ID alias already bound to the
+            //  socket-side pipe; the session-side pipe still carries the peer
+            //  identity for disconnect reporting.
+            if (pipes[1]->get_routing_id ().size () == 0)
+                pipes[1]->set_peer_routing_id (_pending_peer_routing_id.data (),
+                                               _pending_peer_routing_id.size ());
             if (_transport_pair_id != 0)
                 pipes[1]->set_transport_peer_identity (
                   _pending_peer_routing_id.data (), _pending_peer_routing_id.size ());

@@ -332,15 +332,14 @@ bool router_t::identify_peer (pipe_t *pipe_, bool locally_initiated_,
     msg_t msg;
     blob_t routing_id;
 
-    if (locally_initiated_ && connect_routing_id_is_set ()) {
-        const std::string connect_routing_id = extract_connect_routing_id ();
-        routing_id.set (reinterpret_cast<const unsigned char *> (connect_routing_id.c_str ()),
-                        connect_routing_id.length ());
-    } else if (locally_initiated_ && pipe_->get_routing_id ().size () != 0) {
-        //  A reconnect has already consumed the one-shot connect routing ID.
-        //  The new Application pipe retains that ID so the replacement route
-        //  uses the same public identity instead of waiting for an identity
-        //  frame that paired transports do not send.
+    if (locally_initiated_ && pipe_->get_routing_id ().size () != 0) {
+        //  A locally initiated Application pipe carries its route identity on
+        //  the pipe before admission: either the CONNECT_ROUTING_ID alias
+        //  snapshotted for this connect and re-applied across reconnect, or the
+        //  peer identity published during the handshake. Adopt it directly
+        //  instead of waiting for an identity frame that paired transports do
+        //  not send. This keeps the alias bound to its own pipe rather than a
+        //  socket-global slot that a later connect could steal.
         const blob_t &retained_routing_id = pipe_->get_routing_id ();
         routing_id.set (retained_routing_id.data (), retained_routing_id.size ());
     } else {
