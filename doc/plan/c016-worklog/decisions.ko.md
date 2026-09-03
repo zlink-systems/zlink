@@ -354,3 +354,21 @@ local admission 안 됨 → **defect**(pure spec gap도, invalid framework patte
 못 기다림/못 찾음, (b)framework: HELLO 재admission 후 reply re-drive 누락 or 테스트 타이밍. Core 결함이면
 감독관 권한으로 수정·push(B merge). dotnet liveness(D-060: framework typed-request 오용)와 함께 dotnet 진단
 job으로 처리 예정. [[canonical-actor-join-app-reply-contract]]·actor-authority OPEN RULING과 연관 가능.
+
+## D-062 (2026-09-03 21:2x) cpp M6B/M6C 진단 결과 → Core CONNECT_ROUTING_ID next-connect alias 결함
+cpp DIAGNOSE-ONLY job(sol ultra) 결과(c016/cpp-m6bc-diagnose.md, primary source 재검증 완료): M6B(line390 old-route
+admission)·M6C(production relocation terminal blocked/restore_failed) 둘 다 **(a) production 결함**이나 원인은
+Phase 11 framework reply-token diff가 **아니라 Core**. 확인: `socket_base_routing.cpp:34-51`이 alias를 socket-global
+단일 `_connect_routing_id`(socket_base.hpp:1517)에 저장, `extract_connect_routing_id()`(67-72)가 move+clear로 소비,
+소비 시점이 connect가 아니라 pipe-identify(`router_admission.cpp:335-336`). intent는 connect 시점 생성
+(`socket_base_endpoint.cpp:~473`). back-to-back different-RID connect에서 첫 endpoint pipe가 두 번째 setter 뒤
+identify되면 첫 endpoint가 둘째 RID 취득 → directed route 소실. 스펙 위반 `07-router.ko.md:118-121`(alias=다음
+connect pipe 바인딩). **주의: "0.16.0 회귀" 아님** — 0.15.1 baseline 실측 없음(그 기록은 stale CMake cache 노트).
+구조적 결함이 0.16.0 admission 타이밍에 노출.
+판정: Core 수정(감독관 권한, B merge). 제약 5파일(socket_base_routing/socket_base.hpp/socket_base_endpoint/
+router_admission/session_base)+신규 contract test 2개(우선=set-alias→connect→disconnect→reconnect→same RID route;
+2번째=back-to-back). **blast radius=session_base.cpp:121 preserve_connect_routing_id(reconnect)** 반드시 커버.
+리팩토링 금지(B posddd 43파일 브랜치 merge 마찰 최소화). Core fix job(sol ultra) 투입.
+**후속 시퀀싱 주의(advisor)**: (1) M6B는 race 안 나면 line1343 다른 assertion → Core fix로 cpp 완료 아님, "fix→cpp
+commit" 금지. (2) Core fix 후 4언어 패키지 재빌드(sha256 gate) 필요. (3) handover err101도 같은 alias 오귀속 가능성
+→ Core fix 후 ActorCreateCompletion_AfterHandoverHello_UsesCapturedReplyRoute **먼저 재실행**, dotnet job은 liveness만.
