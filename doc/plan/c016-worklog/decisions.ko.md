@@ -670,3 +670,12 @@ wake 소비 조건 / memory-order 분기). 2차 job c016-reqrep-stall-r2(hunk �
 `router_route_binding_token() != 0` fence(2줄). 결정적 회귀 테스트 test_count1_router_adopts_anonymous_pipe_on_first_activation
 (synthetic pipe/mailbox harness, sleep 없음). job 자체 직접 비교 10/10 성공. origin/main이 6/6 통과한 것은 8b6c2aa906의 타이밍
 변화가 발현 확률을 높였기 때문으로 보며, 결함 자체는 main에도 있음(A에 통보 필요). 2차 job(r2) 취소.
+
+## D-B67 (2026-09-04 07:40, 머신 B, 사용자 지시) origin/main 머지 → 검증 → main 머지
+사용자: "main 최신화 후 머지, 이상 없으면 다시 main에 머지". 전체 70 cell 판정은 19 cell 진행 시점(PAIR 6·PUBSUB 6·DEALER_DEALER
+6·DEALER_ROUTER 1; throughput 집계 전부 PASS, tail 집계 미달 PAIR/ws·PUBSUB/tcp·DEALER_DEALER tcp/tls/wss/ipc, DEALER_DEALER/tcp는
+mean latency 집계 1.061로 실제 후보)에서 중단(sweep2-results.run3-partial-19cell.md 보관). origin/main(504d39fc6e, +26) 머지:
+충돌은 decisions.ko.md 번호(A의 D-060~075 vs B의 D-054~066)뿐 → B 항목을 D-B54~B66으로 개명. 주의: A가 perf runner를 0.16.0
+pull API로 포팅(cc81390c9b)해 baseline(0.15.1)에는 그 소스를 복사할 수 없음(zlink_send_part 시그니처 상이) → baseline worktree는
+B의 이전 벤치(two-phase·6자리)를 유지, python(gate·run_comparison)만 동기화. 머지 트리 gate → 10× REQREP 재현 → 1024B 비교 →
+main 머지. 전체 cell 판정은 머지된 main 트리에서 이어서 수행.
