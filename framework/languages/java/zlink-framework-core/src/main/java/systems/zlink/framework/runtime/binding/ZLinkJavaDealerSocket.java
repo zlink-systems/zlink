@@ -50,11 +50,20 @@ final class ZLinkJavaDealerSocket
 
     @Override
     public synchronized ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
-        try (Received result = new Received()) {
-            return ZLinkJavaSocketSupport.recvOrNoData(
-                    () -> socket.recv(result, ZLinkJavaSocketSupport.map(mode)))
-                ? ZLinkJavaSocketSupport.fromReceived(result)
-                : null;
+        Received result = new Received();
+        boolean transferred = false;
+        try {
+            if (!ZLinkJavaSocketSupport.recvOrNoData(
+                    () -> socket.recv(result, ZLinkJavaSocketSupport.map(mode)))) {
+                return null;
+            }
+            ZLinkBackendReceived received = ZLinkJavaSocketSupport.fromReceived(result);
+            transferred = true;
+            return received;
+        } finally {
+            if (!transferred) {
+                result.close();
+            }
         }
     }
 

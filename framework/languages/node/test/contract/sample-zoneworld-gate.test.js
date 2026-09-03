@@ -133,11 +133,11 @@ test('ZoneWorld replacements start empty and prove on-demand creation after the 
 
   assert.match(
     runner,
-    /target-after-failure'[\s\S]*?bootstrapZones:\s*false[\s\S]*?topology=ready node=\$\{targetNode\.nodeId\} zones=/
+    /target-after-failure'[\s\S]*?allowEmptyZoneSet:\s*true[\s\S]*?waitForExactLogLine\([\s\S]*?'target-after-failure',[\s\S]*?topology=ready node=\$\{targetNode\.nodeId\} zones=/
   );
   assert.match(
     runner,
-    /target-after-maintenance'[\s\S]*?bootstrapZones:\s*false[\s\S]*?topology=ready node=\$\{targetNode\.nodeId\} zones=/
+    /target-after-maintenance'[\s\S]*?allowEmptyZoneSet:\s*true[\s\S]*?waitForExactLogLine\([\s\S]*?'target-after-maintenance',[\s\S]*?topology=ready node=\$\{targetNode\.nodeId\} zones=/
   );
   assert.match(runner, /specialClientConfig\([\s\S]*?'G4',[\s\S]*?targetNode\.nodeId/);
   assert.match(runner, /specialClientConfig\([\s\S]*?'G3',[\s\S]*?targetNode\.nodeId/);

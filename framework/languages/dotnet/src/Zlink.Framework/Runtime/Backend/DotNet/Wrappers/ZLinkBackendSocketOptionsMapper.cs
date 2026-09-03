@@ -18,7 +18,12 @@ internal static class ZLinkBackendSocketOptionsMapper
         if (config.ReceiveTimeout is not null)
             options.ReceiveTimeout = config.ReceiveTimeout;
         if (config.SendTimeout is not null)
-            options.SendTimeout = config.SendTimeout;
+        {
+            options.SubmitRetryMode = SubmitRetryMode.LocalFailure;
+            options.SubmitRetryTimeoutMilliseconds = checked(
+                (int)Math.Ceiling(config.SendTimeout.Value.TotalMilliseconds));
+            options.SubmitRetryAttempts = 16;
+        }
         if (config.ConnectTimeout is not null)
             options.ConnectTimeout = config.ConnectTimeout;
         if (config.HandshakeInterval is not null)

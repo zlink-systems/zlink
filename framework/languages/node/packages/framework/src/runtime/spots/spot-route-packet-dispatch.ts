@@ -43,7 +43,7 @@ import { zlinkMetadataByteLength, zlinkSerialWorkOptions } from '../execution/se
 import { REMOTE_ACTOR_JOIN_PACKET } from './spot-remote-codec';
 import {
   appendRouteReplyParts,
-  isReplyableRequestSeq,
+  hasReplyToken,
   submitRouteReply
 } from './spot-route-replies';
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
@@ -114,7 +114,7 @@ export class ZLinkSpotRoutePacketDispatch {
       return false;
     }
     const registrations = this.options.packetHandlers.get(envelope.packetName ?? '');
-    const replyable = isReplyableRequestSeq(received.requestSeq);
+    const replyable = hasReplyToken(received.replyToken);
     const action = replyable
       ? ZLinkDispatchErrorAction.ReplyError
       : ZLinkDispatchErrorAction.Drop;
@@ -128,7 +128,7 @@ export class ZLinkSpotRoutePacketDispatch {
         channelName: envelope.header.channelName,
         spotId: this.options.nativeSpotId,
         sourceRid: received.routingId === null ? undefined : String(received.routingId),
-        correlationId: envelope.header.correlationId ?? received.requestSeq?.toString(),
+        correlationId: envelope.header.correlationId ?? undefined,
         flowId: envelope.header.flowId,
         flowOrigin: envelope.header.flowOrigin
       });
@@ -152,7 +152,7 @@ export class ZLinkSpotRoutePacketDispatch {
       contentType: envelope.header.contentType,
       packetName: envelope.packetName!,
       metadata: zlinkMessageMetadata(envelope.header.metadata),
-      correlationId: envelope.header.correlationId ?? received.requestSeq?.toString()
+      correlationId: envelope.header.correlationId ?? undefined
     };
     try {
       let response: unknown;
@@ -206,7 +206,7 @@ export class ZLinkSpotRoutePacketDispatch {
         channelName: envelope.header.channelName,
         spotId: this.options.nativeSpotId,
         sourceRid: received.routingId === null ? undefined : String(received.routingId),
-        correlationId: envelope.header.correlationId ?? received.requestSeq?.toString(),
+        correlationId: envelope.header.correlationId ?? undefined,
         flowId: envelope.header.flowId,
         flowOrigin: envelope.header.flowOrigin,
         error
@@ -232,7 +232,7 @@ export class ZLinkSpotRoutePacketDispatch {
     received: BackendReceived,
     envelope: ZLinkSpotDirectEnvelope
   ): Promise<void> {
-    const replyable = envelope.kind === ZLinkChannelMessageKind.Request && isReplyableRequestSeq(received.requestSeq);
+    const replyable = envelope.kind === ZLinkChannelMessageKind.Request && hasReplyToken(received.replyToken);
     const messageKind = replyable ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send;
     const action = replyable ? ZLinkDispatchErrorAction.ReplyError : ZLinkDispatchErrorAction.Drop;
     const registrations = this.options.packetHandlers.get(envelope.packetName ?? '');
@@ -268,7 +268,7 @@ export class ZLinkSpotRoutePacketDispatch {
             channelName: envelope.channelName,
             packetName: envelope.packetName!,
             metadata: zlinkMessageMetadata(envelope.metadata),
-            correlationId: received.requestSeq?.toString()
+            correlationId: undefined
           });
         }
       }, zlinkSerialWorkOptions(

@@ -1,14 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Threading;
 using Systems.Zlink;
 using static PerfRunner;
 
 internal static class PerfMultiPubSubClient
 {
-    private const int ReceivePollTimeoutMs = 100;
-
     internal static int Run(PerfOptions options)
     {
         int size = Math.Max(1, options.Size);
@@ -106,88 +103,73 @@ internal static class PerfMultiPubSubClient
         // no separate stop deadline / timer cap (PERF_MULTI § 1.3.1).
         long benchDeadlineTicks = Stopwatch.GetTimestamp()
             + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
-        using var poller = Zlink.CreatePoller();
-        var events = new PollEvent[activeClients.Count];
         var subscribedMessages = new TopicMessage[activeClients.Count];
         for (int i = 0; i < activeClients.Count; i++)
         {
-            poller.Add(activeClients[i], PollEventFlags.PollIn, (nuint)i);
             subscribedMessages[i] = new TopicMessage();
         }
 
         try
         {
             bool phaseDone = false;
+            int nextClient = 0;
             while (!phaseDone)
             {
                 if (Stopwatch.GetTimestamp() >= benchDeadlineTicks)
                     break;
 
-                int readyCount = WaitForReadReady(poller, events,
-                    benchDeadlineTicks);
-                if (readyCount <= 0)
+                int i = nextClient;
+                nextClient = (nextClient + 1) % activeClients.Count;
+                TopicMessage subscribed = subscribedMessages[i];
+                if (!TrySubscribe((ISubSocket)activeClients[i], subscribed,
+                        RecvFlags.None))
                     continue;
 
-                for (int readyOffset = 0; readyOffset < readyCount; readyOffset++)
+                do
                 {
-                    nuint slot = events[readyOffset].Slot;
-                    if (slot > (nuint)int.MaxValue
-                        || (int)slot >= activeClients.Count
-                        || (events[readyOffset].Revents & PollEventFlags.PollIn) == 0)
+                    if (subscribed.Parts.Count == 1
+                        && IsStopTokenPayload(subscribed.FirstPart()
+                            .AsReadOnlySpan()))
+                    {
+                        phaseDone = true;
+                        break;
+                    }
+                    if (!PerfSocketIo.TryMeasurementPayload(subscribed.Parts,
+                            out Message payloadPart))
+                        continue;
+                    ReadOnlySpan<byte> body = payloadPart.AsReadOnlySpan();
+
+                    long recvTicks = Stopwatch.GetTimestamp();
+                    if (recvTicks > benchDeadlineTicks)
+                        continue;
+
+                    bool headerOk = PerfRunner.TryDecodeMetricHeader(body,
+                        out PerfMetricHeader header);
+                    if (!headerOk
+                        || header.RunId != expectedRunId
+                        || header.MsgSize != (uint)msgSize)
                     {
                         continue;
                     }
 
-                    int i = (int)slot;
-                    TopicMessage subscribed = subscribedMessages[i];
-                    while (true)
+                    if (header.Phase == (uint)PerfPhase.Active)
                     {
-                        if (!TrySubscribeNoWait((ISubSocket)activeClients[i],
-                                subscribed))
-                            break;
-
-                        if (subscribed.Parts.Count == 1
-                            && IsStopTokenPayload(subscribed.FirstPart()
-                                .AsReadOnlySpan()))
+                        measureCount++;
+                        if (header.SentTsNs > 0)
                         {
-                            phaseDone = true;
-                            break;
-                        }
-                        if (!PerfSocketIo.TryMeasurementPayload(subscribed.Parts,
-                                out Message payloadPart))
-                            continue;
-                        ReadOnlySpan<byte> body = payloadPart.AsReadOnlySpan();
-
-                        long recvTicks = Stopwatch.GetTimestamp();
-                        if (recvTicks > benchDeadlineTicks)
-                            continue;
-
-                        bool headerOk = PerfRunner.TryDecodeMetricHeader(body,
-                            out PerfMetricHeader header);
-                        if (!headerOk
-                            || header.RunId != expectedRunId
-                            || header.MsgSize != (uint)msgSize)
-                        {
-                            continue;
-                        }
-
-                        if (header.Phase == (uint)PerfPhase.Active)
-                        {
-                            measureCount++;
-                            if (header.SentTsNs > 0)
-                            {
-                                AddLatencySample(activeLatSamples,
-                                    ref activeSampleSeen, ref activeSampleSum,
-                                    latencySampleCap, ref rng, header);
-                            }
-                        }
-                        else if (header.Phase == (uint)PerfPhase.Cooldown)
-                        {
-                            phaseDone = true;
-                            break;
+                            AddLatencySample(activeLatSamples,
+                                ref activeSampleSeen, ref activeSampleSum,
+                                latencySampleCap, ref rng, header);
                         }
                     }
+                    else if (header.Phase == (uint)PerfPhase.Cooldown)
+                    {
+                        phaseDone = true;
+                        break;
+                    }
                 }
+                while (TrySubscribe((ISubSocket)activeClients[i], subscribed,
+                    RecvFlags.DontWait));
             }
         }
         finally
@@ -211,31 +193,6 @@ internal static class PerfMultiPubSubClient
             measureCount, activeSampleSeen);
     }
 
-    // Matches C perf_multi_pubsub_client.cpp: poll for at most 100ms and
-    // leave the active receive phase at its deadline even if a stop token is
-    // delayed behind queued PUB/SUB traffic.
-    private static int WaitForReadReady(IPoller poller, PollEvent[] events,
-        long deadlineTicks)
-    {
-        long remainingTicks = deadlineTicks - Stopwatch.GetTimestamp();
-        if (remainingTicks <= 0)
-            return 0;
-
-        long remainingMs = (remainingTicks * 1000L
-            + Stopwatch.Frequency - 1) / Stopwatch.Frequency;
-        int timeoutMs = (int)Math.Min(ReceivePollTimeoutMs,
-            Math.Max(1L, Math.Min(int.MaxValue, remainingMs)));
-        try
-        {
-            return poller.Wait(events, TimeSpan.FromMilliseconds(timeoutMs));
-        }
-        catch (ZlinkException ex) when (IsWouldBlock(ex.NativeErrno)
-                                        || IsInterrupted(ex.NativeErrno))
-        {
-            return 0;
-        }
-    }
-
     private static void AddLatencySample(List<double> samples,
         ref long sampleSeen, ref double sampleSum, int latencySampleCap,
         ref uint rng, PerfMetricHeader header)
@@ -249,12 +206,12 @@ internal static class PerfMultiPubSubClient
             ref sampleSeen, ref sampleSum, latencySampleCap, ref rng);
     }
 
-    private static bool TrySubscribeNoWait(ISubSocket socket,
-        TopicMessage result)
+    private static bool TrySubscribe(ISubSocket socket, TopicMessage result,
+        RecvFlags flags)
     {
         try
         {
-            return socket.Subscribe(result, RecvFlags.DontWait);
+            return socket.Subscribe(result, flags);
         }
         catch (ZlinkException ex) when (IsWouldBlock(ex.NativeErrno)
                                         || IsInterrupted(ex.NativeErrno))

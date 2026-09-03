@@ -801,6 +801,24 @@ class socket_base_t : public own_t,
 
     bool is_ctx_terminated () const;
 
+    //  CONNECT_ROUTING_ID (next-connect alias) binding. A routing socket
+    //  snapshots the alias synchronously at zlink_connect(), keyed by the
+    //  transport pair id of that connect, then re-applies it to the locally
+    //  initiated Application pipe at every (re)materialization so the alias
+    //  binds to its own pipe instead of a shared socket-global slot. The base
+    //  socket has no alias concept, so these are no-ops here and overridden by
+    //  routing_socket_base_t; session_base reaches them through _socket.
+    virtual void snapshot_pending_connect_routing_id (uint64_t /*transport_pair_id_*/)
+    {
+    }
+    virtual void apply_pending_connect_routing_id (uint64_t /*transport_pair_id_*/,
+                                                   pipe_t * /*pipe_*/)
+    {
+    }
+    virtual void forget_pending_connect_routing_id (uint64_t /*transport_pair_id_*/)
+    {
+    }
+
   protected:
     socket_base_t (zlink::ctx_t *parent_, uint32_t tid_, int sid_);
     ~socket_base_t () ZLINK_OVERRIDE;
@@ -1524,8 +1542,10 @@ class routing_socket_base_t : public socket_base_t
     void xwrite_activated (pipe_t *pipe_) ZLINK_FINAL;
 
     // own methods
-    std::string extract_connect_routing_id ();
-    bool connect_routing_id_is_set () const;
+    void snapshot_pending_connect_routing_id (uint64_t transport_pair_id_) ZLINK_OVERRIDE;
+    void apply_pending_connect_routing_id (uint64_t transport_pair_id_,
+                                           pipe_t *pipe_) ZLINK_OVERRIDE;
+    void forget_pending_connect_routing_id (uint64_t transport_pair_id_) ZLINK_OVERRIDE;
 
     struct out_pipe_t
     {
@@ -1566,7 +1586,16 @@ class routing_socket_base_t : public socket_base_t
     size_t _writable_weighted_out_pipes;
 
     // Next assigned name on a zlink_connect() call used by ROUTER socket type.
+    // Holds the alias only in the window between the setsockopt and the
+    // zlink_connect() that snapshots it into _pending_connect_routing_id.
     std::string _connect_routing_id;
+
+    // Per-connect snapshots of the CONNECT_ROUTING_ID alias, keyed by the
+    // transport pair id allocated for that connect. The pair id is stable
+    // across reconnect (only the generation changes) so the alias re-binds to
+    // each replacement Application pipe. Pair ids are monotonic and never
+    // reused, so stale entries can never collide with a later connect.
+    std::map<uint64_t, std::string> _pending_connect_routing_id;
 };
 }
 

@@ -33,9 +33,8 @@ using raw_send_stage_trace_t =
 struct raw_received_t
 {
     raw_bytes_t source_routing_id;
-    std::optional<std::uint64_t> request_sequence;
+    std::optional<zlink::reply_token_t> reply_token;
     raw_message_t parts;
-    std::shared_ptr<zlink::received_t> retained;
 };
 
 enum class raw_request_result_t

@@ -541,6 +541,7 @@ test('production ClientServer outbound socket selection uses admitted descriptor
       return {
         nativeInstance: {},
         onEvent() {},
+        drain() { return 0; },
         async dispose() {}
       };
     }
@@ -665,7 +666,7 @@ test('automatic and manual ClientServer sources share one physical connection un
       {},
       {
         openSocketMonitor() {
-          return { nativeInstance: {}, onEvent() {}, async dispose() {} };
+          return { nativeInstance: {}, onEvent() {}, drain() { return 0; }, async dispose() {} };
         }
       }
     );
@@ -739,6 +740,7 @@ test('manual ClientServer endpoints use dedicated monitored admission and reconn
         return {
           nativeInstance: {},
           onEvent(handler) { monitorHandler = handler; },
+          drain() { return 0; },
           async dispose() {}
         };
       }
@@ -805,6 +807,7 @@ test('manual ClientServer reconnect fences a late admission from the previous ph
         return {
           nativeInstance: {},
           onEvent(handler) { monitorHandler = handler; },
+          drain() { return 0; },
           async dispose() {}
         };
       }
@@ -876,7 +879,7 @@ test('ClientServer liveness ACK is fenced to the current probe and application t
     {},
     {
       openSocketMonitor() {
-        return { nativeInstance: {}, onEvent() {}, async dispose() {} };
+        return { nativeInstance: {}, onEvent() {}, drain() { return 0; }, async dispose() {} };
       }
     },
     error => diagnostics.push(error)
@@ -930,7 +933,7 @@ test('ClientServer pushed descriptor updates reject stale and conflicting revisi
     {},
     {
       openSocketMonitor() {
-        return { nativeInstance: {}, onEvent() {}, async dispose() {} };
+        return { nativeInstance: {}, onEvent() {}, drain() { return 0; }, async dispose() {} };
       }
     }
   );
@@ -1015,7 +1018,7 @@ test('ClientServer reserved hello is consumed before application dispatch and re
   let pushed;
   let received = {
     parts: [hello],
-    requestSeq: 1n,
+    replyToken: {},
     routingId: 'client-a',
     close() { hello.close(); }
   };
@@ -1026,7 +1029,7 @@ test('ClientServer reserved hello is consumed before application dispatch and re
       received = undefined;
       return value;
     },
-    reply(_routingId, _requestSeq, message) {
+    reply(_routingId, _replyToken, message) {
       reply = Buffer.from(message.data());
     },
     async send(_routingId, message) {
@@ -1124,7 +1127,7 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
   }));
   sockets.tryHandleClientServerControl('orders', {
     parts: [hello],
-    requestSeq: 1n,
+    replyToken: {},
     routingId: 'client-a'
   }, router);
   hello.close();
@@ -1142,7 +1145,7 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
   );
   assert.equal(sockets.tryHandleClientServerControl('orders', {
     parts: [wrongAck],
-    requestSeq: null,
+    replyToken: null,
     routingId: 'client-b'
   }, router), true);
   wrongAck.close();
@@ -1475,7 +1478,7 @@ function readyWaitSockets(requestTimeoutMs) {
     {},
     {
       openSocketMonitor() {
-        return { nativeInstance: {}, onEvent() {}, async dispose() {} };
+        return { nativeInstance: {}, onEvent() {}, drain() { return 0; }, async dispose() {} };
       }
     }
   );

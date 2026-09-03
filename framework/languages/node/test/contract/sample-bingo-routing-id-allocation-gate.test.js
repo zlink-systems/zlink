@@ -22,14 +22,14 @@ test('Bingo uses generated routing-id prefixes without slot allocation or fixed 
   }
 });
 
-test('Bingo rolling replacement uses readiness and drain evidence', () => {
+test('Bingo starts the client only after peer and mesh readiness evidence', () => {
   const runner = read('samples/Bingo.Ts/Runner/sample-runner.mjs');
-  assert.match(runner, /play-replacement/);
-  assert.match(runner, /SIGUSR2/);
-  assert.match(runner, /bingo-drain result=drained/);
-  assert.match(runner, /marker = 'bingo-room-status'/);
-  assert.match(runner, /\$\{marker\} state=1 readyPeers=/);
-  assert.match(read('samples/Bingo.Ts/Server/Configuration/room-router-readiness-handler.ts'), /placement=\$\{status\.placement\.isAvailable\}/);
+  assert.match(runner, /bingo-ready kind=peer-route node=play-a peer=play-b/);
+  assert.match(runner, /bingo-ready kind=peer-route node=play-b peer=play-a/);
+  assert.match(runner, /waitMeshReady\(ctx, 'api-a', 'matchmaking'\)/);
+  assert.match(runner, /waitMeshReady\(ctx, 'session-b', 'room'\)/);
+  assert.match(runner, /ctx\.runBrowser\(/);
   assert.doesNotMatch(runner, /bingo-room-peer ConnectionReady remote=/);
+  assert.doesNotMatch(runner, /play-replacement|SIGUSR2|bingo-drain result=drained/);
   assert.doesNotMatch(runner, /WaitingForSlot|routing allocation|slot=|generation=/);
 });

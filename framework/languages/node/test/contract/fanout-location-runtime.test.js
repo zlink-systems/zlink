@@ -48,6 +48,7 @@ test('fanout publishers use dedicated SUB sockets and isolate readiness, protoco
           nativeInstance: {},
           onEvent(handler) { monitorHandlers.set(subscriber.id, handler); },
           recv() {},
+          drain() { return 0; },
           async dispose() {}
         };
       }
@@ -290,6 +291,7 @@ test('automatic fanout reconciles dedicated descriptors by publisher RID and lif
           nativeInstance: {},
           onEvent() {},
           recv() {},
+          drain() { return 0; },
           async dispose() {}
         };
       }

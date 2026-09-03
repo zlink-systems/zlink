@@ -11,46 +11,16 @@ internal static class ZLinkChannelReplyWriter
         ZLinkCodecRegistryBuilder? codecs = null)
     {
         var replyParts = ZLinkEnvelopeCodec.EncodeParts(header, body, bodyType, codecs);
-        var routingId = received.RoutingId
-                        ?? throw new InvalidOperationException("Request reply requires a routing id.");
-        ReplyParts(router, routingId, received.RequestSeq, replyParts);
-    }
-
-    public static void ReplyEnvelope(
-        IRouterSocket router,
-        RoutingId routingId,
-        ulong? requestSeq,
-        ZLinkEnvelopeHeader header,
-        object? body,
-        Type? bodyType,
-        ZLinkCodecRegistryBuilder? codecs = null)
-    {
-        var replyParts = ZLinkEnvelopeCodec.EncodeParts(header, body, bodyType, codecs);
-        ReplyParts(router, routingId, requestSeq, replyParts);
-    }
-
-    public static void ReplyRawEnvelope(
-        IRouterSocket router,
-        RoutingId routingId,
-        ulong? requestSeq,
-        ZLinkEnvelopeHeader header,
-        Message body)
-    {
-        var replyParts = ZLinkEnvelopeCodec.EncodeRawBodyParts(header, body);
-        ReplyParts(router, routingId, requestSeq, replyParts);
+        ReplyParts(received.Reply(), replyParts);
     }
 
     private static void ReplyParts(
-        IRouterSocket router,
-        RoutingId routingId,
-        ulong? requestSeq,
+        ReplyOperation reply,
         IReadOnlyList<Message> replyParts)
     {
         try
         {
-            router.Reply(routingId, requestSeq ?? 0UL)
-                .Messages(replyParts)
-                .Submit();
+            reply.Messages(replyParts).Submit();
         }
         finally
         {

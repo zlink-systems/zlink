@@ -23,7 +23,6 @@ public interface ZLinkBackendStreamSocket
     void setMaxMessageSize(long value);
 
     /** Enables Core STREAM connect/disconnect notifications before bind. */
-    void enableNotifications();
 
     /** Receives one raw STREAM record, or {@code null} when no record is ready. */
     ZLinkBackendStreamReceived recv();

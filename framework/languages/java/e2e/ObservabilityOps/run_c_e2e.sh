@@ -22,7 +22,7 @@ config_dir="${log_dir}/config"
 repo_root="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
 obs_build="${HOME}/.cache/zlink/java-e2e/ObservabilityOps"
 gradle_cache="${HOME}/.cache/zlink/java-e2e/ObservabilityOps-gradle-cache"
-default_core_lib="${repo_root}/core/build/lib/libzlink.so"
+default_core_lib="${repo_root}/.artifacts/wsl/install/zlink-core/0.16.0/lib/libzlink.so"
 pids=()
 REDIS_CONTAINER=""
 

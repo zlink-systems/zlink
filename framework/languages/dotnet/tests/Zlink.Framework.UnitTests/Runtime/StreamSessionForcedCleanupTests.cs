@@ -233,7 +233,7 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
-    public async Task Native_Callbacks_Are_Offloaded_Serialized_Per_Session_And_Parallel_Across_Sessions()
+    public async Task Polled_Packets_Are_Offloaded_Serialized_Per_Session_And_Parallel_Across_Sessions()
     {
         var registration = new ZLinkFrameworkRegistration();
         var lifetime = new SessionOrderingLifetime();
@@ -281,8 +281,8 @@ public sealed class StreamSessionForcedCleanupTests
             await lifetime.WaitConnectedAsync(first);
             await lifetime.WaitConnectedAsync(second);
 
-            // The native callback returns even though this session's dispatch
-            // remains blocked on its own serial executor.
+            // The native poll loop keeps draining even though this session's
+            // dispatch remains blocked on its own serial executor.
             EmitJson(socket, first, new SessionOrderingMessage());
             await lifetime.WaitDispatchStartedAsync(first);
             Assert.False(lifetime.IsDispatchCompleted(first));
@@ -291,7 +291,7 @@ public sealed class StreamSessionForcedCleanupTests
             // place ahead of that terminal even while an earlier callback is
             // still occupying the session's serial executor.
             EmitJson(socket, first, new SessionOrderingMessage());
-            await WaitUntilAsync(() => socket.DequeuedPartCount >= 2);
+            await WaitUntilAsync(() => socket.DequeuedPacketCount >= 2);
 
             // A separate session has a separate serial executor and therefore
             // completes while the first session remains blocked.
@@ -420,9 +420,10 @@ public sealed class StreamSessionForcedCleanupTests
         try
         {
             node.Start();
-            socket.EnqueueRawPart(
+            socket.EnqueuePacket(
                 badPeer,
-                [0, 0, 0xff, 0xff, 0xff, 0xff]);
+                [],
+                new byte[(64 * 1024) + 1]);
             await socket.DisconnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
             monitor.Emit(new ZLinkBackendSocketMonitorEvent(
@@ -447,7 +448,7 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
-    public async Task Unidentified_stream_part_does_not_stop_ingress_for_other_peers()
+    public async Task Unidentified_stream_packet_does_not_stop_ingress_for_other_peers()
     {
         var registration = new ZLinkFrameworkRegistration();
         var lifetime = new SessionOrderingLifetime();
@@ -476,8 +477,8 @@ public sealed class StreamSessionForcedCleanupTests
         try
         {
             node.Start();
-            socket.EnqueueUnidentifiedRawPart([0, 0, 0xff]);
-            await socket.UnidentifiedPartConsumed.Task.WaitAsync(
+            socket.EnqueueUnidentifiedPacket([0, 0, 0xff], []);
+            await socket.UnidentifiedPacketConsumed.Task.WaitAsync(
                 TimeSpan.FromSeconds(2));
 
             monitor.Emit(new ZLinkBackendSocketMonitorEvent(
@@ -499,7 +500,7 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
-    public async Task Stream_receive_reassembles_a_frame_across_multipart_parts()
+    public async Task Stream_receive_dispatches_a_complete_native_packet()
     {
         var registration = new ZLinkFrameworkRegistration();
         var lifetime = new SessionOrderingLifetime();
@@ -534,20 +535,7 @@ public sealed class StreamSessionForcedCleanupTests
                 "local",
                 "remote",
                 0));
-            var encoded = ZLinkStreamFrameCodec.Encode(
-                ZLinkStreamProtocolDefaults.EncodeHeader(
-                    new ZlinkStreamHeader(
-                        ZlinkStreamMessageKind.Send,
-                        ZlinkStreamCodec.Json,
-                        ZlinkStreamHeaderFlags.None,
-                        null,
-                        nameof(SessionOrderingMessage),
-                        ZlinkStreamMetadata.Empty)).Span,
-                ZLinkStreamPacketPayloadCodec.EncodeJson(
-                    new SessionOrderingMessage(),
-                    typeof(SessionOrderingMessage)));
-            socket.EnqueueRawPart(routingId, encoded.AsSpan(0, 3), hasMore: true);
-            socket.EnqueueRawPart(routingId, encoded.AsSpan(3), hasMore: false);
+            EmitJson(socket, routingId, new SessionOrderingMessage());
 
             await lifetime.WaitDispatchCompletedAsync(routingId);
             Assert.Equal(0, socket.DisconnectCount);
@@ -560,7 +548,7 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
-    public async Task Stream_receive_retains_payload_owner_after_a_later_frame_parse_failure_until_the_admitted_handler_finishes()
+    public async Task Later_packet_parse_failure_does_not_abort_an_admitted_handler()
     {
         var registration = new ZLinkFrameworkRegistration();
         var lifetime = new SessionOrderingLifetime();
@@ -586,7 +574,6 @@ public sealed class StreamSessionForcedCleanupTests
             runner,
             "test");
         var routingId = RoutingId.From("session-a");
-        var payloadOwner = new CountingPayloadOwner();
         try
         {
             node.Start();
@@ -598,21 +585,18 @@ public sealed class StreamSessionForcedCleanupTests
                 0));
             await lifetime.WaitConnectedAsync(routingId);
 
-            var validFrame = EncodeJsonFrame(new SessionOrderingMessage());
-            byte[] invalidSecondPrefix = [0, 0, 0x80, 0, 0, 0];
-            socket.EnqueueRetainedRawPart(
+            EmitJson(socket, routingId, new SessionOrderingMessage());
+            socket.EnqueuePacket(
                 routingId,
-                validFrame.Concat(invalidSecondPrefix).ToArray(),
-                payloadOwner);
+                [],
+                new byte[(64 * 1024) + 1]);
 
             await lifetime.WaitDispatchStartedAsync(routingId);
             await WaitUntilAsync(() => socket.DisconnectCount == 1);
-            Assert.Equal(0, payloadOwner.DisposeCount);
+            Assert.False(lifetime.IsDispatchCompleted(routingId));
 
             lifetime.ReleaseFirst.TrySetResult();
             await lifetime.WaitDispatchCompletedAsync(routingId);
-            await WaitUntilAsync(() => payloadOwner.DisposeCount == 1);
-            Assert.Equal(1, payloadOwner.DisposeCount);
         }
         finally
         {
@@ -627,9 +611,8 @@ public sealed class StreamSessionForcedCleanupTests
     {
         var registration = new ZLinkFrameworkRegistration();
         var lifetime = new SessionOrderingLifetime();
-        // This path cannot classify an application frame before RecvPart. A
-        // single bounded receive reservation preserves the HWM test's
-        // one-message overshoot while preventing a second raw receive.
+        // Packet pull occurs only after a managed application-job permit is
+        // reserved; serial dispatch still preserves per-session ordering.
         ZLinkFrameworkRuntime runtime = null!;
         var services = new ServiceCollection()
             .AddSingleton(registration)
@@ -686,7 +669,7 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
-    public async Task Stream_receive_keeps_multipart_and_next_packet_owned_until_serial_dispatch()
+    public async Task Stream_receive_reserves_managed_queue_permit_before_native_packet_pull()
     {
         var registration = new ZLinkFrameworkRegistration();
         var lifetime = new SessionOrderingLifetime();
@@ -703,6 +686,13 @@ public sealed class StreamSessionForcedCleanupTests
             new ZLinkRuntimeErrorSink(),
             CancellationToken.None,
             runtime.ExecutionOwner);
+        using var applicationJobQueue = new ZLinkApplicationJobQueue(
+            ZLinkApplicationJobQueueCapacityResolver.Resolve(
+                ZLinkApplicationJobQueueProfile.Balanced,
+                128,
+                1));
+        socket.BeforeRecvPacket = () =>
+            applicationJobQueue.GetStatus().PermitsInUse > 0;
         var node = new ZLinkStreamNodeRuntime(
             "stream-hwm-multipart-batch",
             provider,
@@ -710,17 +700,11 @@ public sealed class StreamSessionForcedCleanupTests
             monitor,
             typeof(SessionOrderingSession),
             runner,
-            "test");
+            "test",
+            applicationJobQueue: applicationJobQueue);
         var routingId = RoutingId.From("session-a");
         try
         {
-            var firstFrame = EncodeJsonFrame(new SessionOrderingMessage());
-            var secondFrame = EncodeJsonFrame(new SessionOrderingMessage());
-            var thirdFrame = EncodeJsonFrame(new SessionOrderingMessage());
-            var firstPart = new byte[firstFrame.Length + 1];
-            firstFrame.CopyTo(firstPart, 0);
-            secondFrame.AsSpan(0, 1).CopyTo(firstPart.AsSpan(firstFrame.Length));
-
             node.Start();
             monitor.Emit(new ZLinkBackendSocketMonitorEvent(
                 ZLinkSocketNativeEventType.ConnectionReady,
@@ -728,18 +712,12 @@ public sealed class StreamSessionForcedCleanupTests
                 "local",
                 "remote",
                 0));
-            socket.EnqueueRawPart(routingId, firstPart, hasMore: true);
-            for (var part = 1; part < 64; part++)
-                socket.EnqueueRawPart(routingId, [], hasMore: true);
+            for (var packet = 0; packet < 4; packet++)
+                EmitJson(socket, routingId, new SessionOrderingMessage());
 
-            await WaitUntilAsync(() => socket.DequeuedPartCount >= 1);
             await lifetime.WaitDispatchStartedAsync(routingId);
-            await WaitUntilAsync(() => socket.DequeuedPartCount >= 64);
-            Assert.Equal(64, socket.DequeuedPartCount);
-
-            socket.EnqueueRawPart(routingId, secondFrame.AsSpan(1), hasMore: false);
-            socket.EnqueueRawPart(routingId, thirdFrame, hasMore: false);
-            await WaitUntilAsync(() => socket.DequeuedPartCount >= 66);
+            await WaitUntilAsync(() => socket.DequeuedPacketCount >= 4);
+            Assert.True(socket.AllPullsHadPermit);
             Assert.Equal(
                 1,
                 lifetime.Events(routingId).Count(static value => value == "dispatch-start"));
@@ -747,7 +725,7 @@ public sealed class StreamSessionForcedCleanupTests
             lifetime.ReleaseFirst.TrySetResult();
             await WaitUntilAsync(
                 () => lifetime.Events(routingId)
-                    .Count(static value => value == "dispatch-end") >= 3);
+                    .Count(static value => value == "dispatch-end") >= 4);
         }
         finally
         {
@@ -2074,13 +2052,13 @@ public sealed class StreamSessionForcedCleanupTests
     {
         private readonly System.Collections.Concurrent.ConcurrentQueue<(
             RoutingId? RoutingId,
-            Message Part,
-            bool HasMore,
-            IDisposable? PayloadOwner)>
-            _receivedParts = new();
+            Message Header,
+            Message Payload)>
+            _receivedPackets = new();
         private readonly AutoResetEvent _receiveSignal = new(false);
-        private int _recvPartCount;
-        private int _dequeuedPartCount;
+        private int _recvPacketCount;
+        private int _dequeuedPacketCount;
+        private int _pullWithoutPermit;
         public bool BlockDisconnect { get; init; }
         public bool BlockDispose { get; init; }
         public Exception? DisposeFailure { get; init; }
@@ -2115,12 +2093,16 @@ public sealed class StreamSessionForcedCleanupTests
         public TaskCompletionSource AllowSendAsync { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public TaskCompletionSource UnidentifiedPartConsumed { get; } =
+        public TaskCompletionSource UnidentifiedPacketConsumed { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public int RecvPartCount => Volatile.Read(ref _recvPartCount);
+        public int RecvPacketCount => Volatile.Read(ref _recvPacketCount);
 
-        public int DequeuedPartCount => Volatile.Read(ref _dequeuedPartCount);
+        public int DequeuedPacketCount => Volatile.Read(ref _dequeuedPacketCount);
+
+        public Func<bool>? BeforeRecvPacket { get; set; }
+
+        public bool AllPullsHadPermit => Volatile.Read(ref _pullWithoutPermit) == 0;
 
         public void Bind(string endpoint) { }
 
@@ -2128,57 +2110,28 @@ public sealed class StreamSessionForcedCleanupTests
 
         public IZLinkBackendSocketPoller CreateReceivePoller() =>
             new TestStreamSocketPoller(
-                () => !_receivedParts.IsEmpty,
+                () => !_receivedPackets.IsEmpty,
                 _receiveSignal);
 
-        public bool RecvPart(
-            out RoutingId? sourceRoutingId,
-            out Message? part,
-            out bool hasMore,
-            RecvFlags flags = RecvFlags.None)
-        {
-            Interlocked.Increment(ref _recvPartCount);
-            if (_receivedParts.TryDequeue(out var received))
-            {
-                Interlocked.Increment(ref _dequeuedPartCount);
-                if (_receivedParts.IsEmpty)
-                    _receiveSignal.Reset();
-                sourceRoutingId = received.RoutingId;
-                if (received.RoutingId is null)
-                    UnidentifiedPartConsumed.TrySetResult();
-                part = received.Part;
-                hasMore = received.HasMore;
-                received.PayloadOwner?.Dispose();
-                return true;
-            }
-
-            sourceRoutingId = null;
-            part = null;
-            hasMore = false;
-            return false;
-        }
-
-        public bool Recv(
+        public bool RecvPacket(
             out ZLinkBackendStreamReceive? received,
             RecvFlags flags = RecvFlags.None)
         {
-            Interlocked.Increment(ref _recvPartCount);
-            if (_receivedParts.TryDequeue(out var part))
+            Interlocked.Increment(ref _recvPacketCount);
+            if (BeforeRecvPacket is { } beforeRecvPacket
+                && !beforeRecvPacket())
+                Interlocked.Exchange(ref _pullWithoutPermit, 1);
+            if (_receivedPackets.TryDequeue(out var packet))
             {
-                Interlocked.Increment(ref _dequeuedPartCount);
-                if (_receivedParts.IsEmpty)
+                Interlocked.Increment(ref _dequeuedPacketCount);
+                if (_receivedPackets.IsEmpty)
                     _receiveSignal.Reset();
-                if (part.RoutingId is null)
-                    UnidentifiedPartConsumed.TrySetResult();
+                if (packet.RoutingId is null)
+                    UnidentifiedPacketConsumed.TrySetResult();
                 received = new ZLinkBackendStreamReceive(
-                    part.RoutingId,
-                    new[] { part.Part },
-                    part.HasMore,
-                    part.PayloadOwner is null
-                        ? part.Part
-                        : new RetainedPartOwner(
-                            part.Part,
-                            part.PayloadOwner));
+                    packet.RoutingId,
+                    packet.Header,
+                    packet.Payload);
                 return true;
             }
 
@@ -2186,53 +2139,29 @@ public sealed class StreamSessionForcedCleanupTests
             return false;
         }
 
-        public void EnqueueRawPart(
+        public void EnqueuePacket(
             RoutingId routingId,
-            ReadOnlySpan<byte> bytes,
-            bool hasMore = false) =>
-            EnqueuePart(routingId, Message.From(bytes), hasMore);
+            ReadOnlySpan<byte> header,
+            ReadOnlySpan<byte> payload) =>
+            EnqueuePacket(routingId, Message.From(header), Message.From(payload));
 
-        public void EnqueueRetainedRawPart(
-            RoutingId routingId,
-            ReadOnlySpan<byte> bytes,
-            IDisposable payloadOwner,
-            bool hasMore = false) =>
-            EnqueuePart(
-                routingId,
-                Message.From(bytes),
-                hasMore,
-                payloadOwner);
+        public void EnqueueUnidentifiedPacket(
+            ReadOnlySpan<byte> header,
+            ReadOnlySpan<byte> payload) =>
+            EnqueuePacket(null, Message.From(header), Message.From(payload));
 
-        public void EnqueueUnidentifiedRawPart(ReadOnlySpan<byte> bytes) =>
-            EnqueuePart(null, Message.From(bytes), false);
-
-        private void EnqueuePart(
+        private void EnqueuePacket(
             RoutingId? routingId,
-            Message part,
-            bool hasMore,
-            IDisposable? payloadOwner = null)
+            Message header,
+            Message payload)
         {
-            _receivedParts.Enqueue((
-                routingId,
-                part,
-                hasMore,
-                payloadOwner));
+            _receivedPackets.Enqueue((routingId, header, payload));
             _receiveSignal.Set();
         }
 
         public void Emit(RoutingId routingId, Message header, Message payload)
         {
-            try
-            {
-                var frame = ZLinkStreamFrameCodec.Encode(
-                    header.AsReadOnlySpan(), payload.AsReadOnlySpan());
-                EnqueuePart(routingId, Message.From(frame), false);
-            }
-            finally
-            {
-                header.Dispose();
-                payload.Dispose();
-            }
+            EnqueuePacket(routingId, header, payload);
         }
 
         public bool Send(RoutingId routingId, Message payload, SendFlags flags)
@@ -2302,37 +2231,16 @@ public sealed class StreamSessionForcedCleanupTests
             Interlocked.Increment(ref _disposeCount);
             DisposeStarted.TrySetResult();
             if (BlockDispose) await AllowDispose.Task.ConfigureAwait(false);
-            while (_receivedParts.TryDequeue(out var received))
+            while (_receivedPackets.TryDequeue(out var received))
             {
-                received.Part.Dispose();
-                received.PayloadOwner?.Dispose();
+                received.Header.Dispose();
+                received.Payload.Dispose();
             }
             _receiveSignal.Set();
             if (DisposeFailure is not null)
                 System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(DisposeFailure).Throw();
         }
 
-        private sealed class RetainedPartOwner(
-            Message part,
-            IDisposable payloadOwner) : IDisposable
-        {
-            private Message? _part = part;
-            private IDisposable? _payloadOwner = payloadOwner;
-
-            public void Dispose()
-            {
-                try
-                {
-                    Interlocked.Exchange(ref _part, null)?.Dispose();
-                }
-                finally
-                {
-                    Interlocked.Exchange(
-                        ref _payloadOwner,
-                        null)?.Dispose();
-                }
-            }
-        }
     }
 
     private sealed class CountingPayloadOwner : IDisposable
@@ -2379,8 +2287,6 @@ public sealed class StreamSessionForcedCleanupTests
                 _eventSignal.WaitOne(timeout);
             return !_events.IsEmpty;
         }
-
-        public void OnEvent(Action<ZLinkBackendSocketMonitorEvent> handler) { }
 
         public void Emit(ZLinkBackendSocketMonitorEvent monitorEvent)
         {

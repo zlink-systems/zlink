@@ -1,15 +1,17 @@
 //! Shared perf utilities - metric header, latency stats, phase control.
 
 use std::fs;
+use std::future::Future;
 use std::io;
 use std::path::Path;
-use std::sync::{Arc, Mutex, mpsc};
+use std::pin::pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context as TaskContext, Poll, Waker};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use zlink::{
-    Context, DealerSocket, Message, POLLCOMPLETION, PairSocket, PollEvent, Pollable, Poller,
-    PubSocket, RequestResult, RouterSocket, SocketMonitor, SubSocket, SubmitError, SubmitResult,
-    ZlinkError,
+    Context, DealerSocket, Message, PairSocket, PubSocket, RequestResult, RouterSocket,
+    SocketMonitor, SubSocket, SubmitError, SubmitResult, ZlinkError,
 };
 
 // -- Metric header (29 bytes) ------------------------------------------------
@@ -93,6 +95,9 @@ pub fn is_valid_message(data: &[u8], expected_size: usize) -> bool {
 }
 
 pub fn message_payload<'a>(parts: &'a [Message]) -> &'a [u8] {
+    if parts.len() == 1 && is_stop_token(parts[0].as_bytes()) {
+        return parts[0].as_bytes();
+    }
     let expected = if std::env::var("PERF_PART_COUNT").ok().as_deref() == Some("1") {
         1
     } else {
@@ -117,13 +122,29 @@ macro_rules! perf_submit_measurement {
     ($operation:expr, $payload:expr) => {{
         let operation = $operation.message($payload);
         if $crate::common::measurement_part_count() == 2 {
-            operation
-                .message(zlink::Message::try_from(&[] as &[u8]).expect("empty measurement tail"))
-                .submit_sync()
+            $crate::common::submit_now(
+                operation
+                    .message(
+                        zlink::Message::try_from(&[] as &[u8]).expect("empty measurement tail"),
+                    )
+                    .submit(),
+            )
         } else {
-            operation.submit_sync()
+            $crate::common::submit_now(operation.submit())
         }
     }};
+}
+
+pub fn submit_now<F>(future: F) -> Result<(), SubmitError>
+where
+    F: Future<Output = Result<(), SubmitError>>,
+{
+    let mut future = pin!(future);
+    let mut context = TaskContext::from_waker(Waker::noop());
+    match future.as_mut().poll(&mut context) {
+        Poll::Ready(result) => result,
+        Poll::Pending => Ok(()),
+    }
 }
 
 pub fn now_ns() -> u64 {
@@ -608,9 +629,9 @@ where
 }
 
 // -- Send loop ---------------------------------------------------------------
-// Core single perf uses blocking send in the sender thread.
-// The sender must not set a send timeout – blocking is the intended behavior
-// so that natural backpressure throttles the sender.
+// Core 0.16 one-way sends use DONTWAIT admission in the sender thread. The
+// returned Future is polled once above; pending terminals are detached and
+// drained by the binding completion owner.
 
 /// One-way send loop: active only.
 /// `send_fn` returns false when nonblocking send cannot accept a message yet.
@@ -626,6 +647,9 @@ where
         encode_header(msg.data_mut(), phase, msg_size as u32, seq);
         if send_fn(msg) {
             seq += 1;
+            if std::env::var("PERF_SMOKE").ok().as_deref() == Some("1") {
+                poll_idle(Duration::from_millis(1));
+            }
         } else {
             continue;
         }
@@ -633,8 +657,6 @@ where
 }
 
 // -- Request/reply loop -----------------------------------------------------
-
-pub type RequestTerminal = Box<dyn FnOnce(Result<Vec<Message>, ZlinkError>) + Send + 'static>;
 
 fn record_reqrep_completion(
     outcome: Result<Vec<Message>, ZlinkError>,
@@ -663,50 +685,18 @@ fn record_reqrep_completion(
     Ok(())
 }
 
-fn drain_reqrep_completions(
-    completions: &mpsc::Receiver<Result<Vec<Message>, ZlinkError>>,
-    outstanding: &mut usize,
-    expected_size: usize,
-    stats: &mut LatencyStats,
-    count_active: bool,
-) -> Result<usize, String> {
-    let mut completed = 0;
-    while let Ok(outcome) = completions.try_recv() {
-        *outstanding = outstanding.saturating_sub(1);
-        record_reqrep_completion(outcome, expected_size, stats, count_active)?;
-        completed += 1;
-    }
-    Ok(completed)
-}
-
-/// Continuously submits through the synchronous request terminal until Core
-/// reports admission backpressure, then drains outcomes through
-/// `POLLCOMPLETION`. HWM alone determines the number of outstanding requests.
-pub fn run_reqrep<S>(
-    config: &PerfConfig,
-    requester: &dyn Pollable,
-    mut submit: S,
-) -> Result<StatsResult, String>
+/// Run sequential requests through the public synchronous request terminal.
+pub fn run_reqrep<S>(config: &PerfConfig, mut submit: S) -> Result<StatsResult, String>
 where
-    S: FnMut(Message, Duration, RequestTerminal) -> Result<(), SubmitError>,
+    S: FnMut(Message, Duration) -> Result<Vec<Message>, ZlinkError>,
 {
     let request_timeout = Duration::from_millis(env_or_u64("PERF_SINGLE_REQREP_TIMEOUT_MS", 200));
-    let drain_timeout =
-        Duration::from_millis(env_or_u64("PERF_SINGLE_REQREP_DRAIN_TIMEOUT_MS", 10_000));
     let payload_size = config.size.max(HEADER_SIZE);
     let active_deadline = Instant::now() + Duration::from_secs(config.duration_seconds.max(1));
-    let poller = Poller::new().map_err(|error| error.to_string())?;
-    poller
-        .add_socket(requester, POLLCOMPLETION, 0)
-        .map_err(|error| error.to_string())?;
-    let mut poll_events = [PollEvent::default(); 1];
-    let (completion_tx, completion_rx) = mpsc::channel();
-    let mut outstanding = 0usize;
     let mut stats = LatencyStats::new();
     let mut sequence = 1u64;
 
     while Instant::now() < active_deadline {
-        let mut submitted = false;
         let mut payload = Message::with_size(payload_size).map_err(|error| error.to_string())?;
         encode_header(
             payload.data_mut(),
@@ -714,71 +704,9 @@ where
             config.size as u32,
             sequence,
         );
-        let terminal_tx = completion_tx.clone();
-        match submit(
-            payload,
-            request_timeout,
-            Box::new(move |outcome| {
-                let _ = terminal_tx.send(outcome);
-            }),
-        ) {
-            Ok(()) => {
-                outstanding += 1;
-                sequence = sequence.wrapping_add(1);
-                submitted = true;
-            }
-            Err(error) if error.code() == SubmitResult::Backpressured => {}
-            Err(error) => {
-                return Err(format!("request admission failed: {error}"));
-            }
-        }
-
-        drain_reqrep_completions(
-            &completion_rx,
-            &mut outstanding,
-            config.size,
-            &mut stats,
-            true,
-        )?;
-        if Instant::now() < active_deadline {
-            let remaining_ms = if submitted {
-                0
-            } else {
-                active_deadline
-                    .saturating_duration_since(Instant::now())
-                    .as_millis()
-                    .clamp(1, 50) as i64
-            };
-            poller
-                .wait(&mut poll_events, remaining_ms)
-                .map_err(|error| error.to_string())?;
-        }
-    }
-
-    let drain_deadline = Instant::now() + drain_timeout;
-    while outstanding != 0 && Instant::now() < drain_deadline {
-        drain_reqrep_completions(
-            &completion_rx,
-            &mut outstanding,
-            config.size,
-            &mut stats,
-            false,
-        )?;
-        if outstanding != 0 {
-            let remaining_ms = drain_deadline
-                .saturating_duration_since(Instant::now())
-                .as_millis()
-                .clamp(1, i64::MAX as u128) as i64;
-            poller
-                .wait(&mut poll_events, remaining_ms)
-                .map_err(|error| error.to_string())?;
-        }
-    }
-    if outstanding != 0 {
-        return Err(format!(
-            "request completion drain timed out with {} in flight",
-            outstanding
-        ));
+        let outcome = submit(payload, request_timeout);
+        record_reqrep_completion(outcome, config.size, &mut stats, true)?;
+        sequence = sequence.wrapping_add(1);
     }
 
     let result = stats.finish();

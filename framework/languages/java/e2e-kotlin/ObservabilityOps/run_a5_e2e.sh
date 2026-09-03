@@ -12,7 +12,7 @@ log_dir="${SCRIPT_DIR}/logs/${run_id}-a5"
 repo_root="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
 build_dir="${ZLINK_KOTLIN_OBSERVABILITY_A5_BUILD_DIR:-${HOME}/.cache/zlink/kotlin-e2e/ObservabilityOps-a5}"
 gradle_cache="${ZLINK_KOTLIN_OBSERVABILITY_A5_GRADLE_CACHE:-${HOME}/.cache/zlink/kotlin-e2e/ObservabilityOps-a5-gradle-cache}"
-default_core_lib="${repo_root}/core/build/lib/libzlink.so"
+default_core_lib="${repo_root}/.artifacts/wsl/install/zlink-core/0.16.0/lib/libzlink.so"
 pids=()
 REDIS_CONTAINER=""
 mkdir -p "${log_dir}"

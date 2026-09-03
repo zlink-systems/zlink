@@ -313,7 +313,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             stream.setMaxMessageSize(streamNode.socketConfig().maxMessageSize());
             // Notification records must be enabled before bind. Framework
             // ingress below uses recv mode and never registers onPacket.
-            stream.enableNotifications();
             for (String bindEndpoint : streamNode.bindEndpoints()) {
                 trace(STREAM_TRACE ? "stream-node bind node=" + streamNode.name() + " endpoint=" + bindEndpoint : null);
                 stream.bind(bindEndpoint);
@@ -705,14 +704,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final class StreamReceiveLoop implements AutoCloseable {
         private final StreamNodeRegistration streamNode;
         private final ZLinkBackendStreamSocket stream;
-        private final Map<RoutingId, StreamReceiveState> receiveStates =
-            new HashMap<>();
-        private final Set<RoutingId> ignoredPeers = new HashSet<>();
         private final ZLinkStateLane receiveStateLane = new ZLinkStateLane();
-        private long receiveStateCursor;
         private boolean closed;
-        private boolean capacitySignal;
-        private AutoCloseable capacityRegistration;
 
         private StreamReceiveLoop(
             StreamNodeRegistration streamNode,
@@ -722,22 +715,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
 
         private void start() {
-            try {
-                receiveExecutor.execute(this::runLoop);
-            } catch (RuntimeException rejected) {
-                AutoCloseable registration = inReceiveStateLane(() -> {
-                    AutoCloseable current = capacityRegistration;
-                    capacityRegistration = null;
-                    return current;
-                });
-                if (registration != null) {
-                    try {
-                        registration.close();
-                    } catch (Exception ignored) {
-                    }
-                }
-                throw rejected;
-            }
+            receiveExecutor.execute(this::runLoop);
         }
 
         private StreamNodeRegistration streamNode() {
@@ -745,68 +723,53 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
 
         private void removePeer(RoutingId routingId) {
-            StreamReceiveState state = inReceiveStateLane(
-                () -> removePeerCore(routingId));
-            if (state != null) {
-                state.close();
-            }
+            // PACKET mode has no per-peer partial assembler state.
         }
 
         @Override
         public void close() {
-            ReceiveLoopCloseState closeState = inReceiveStateLane(this::closeCore);
-            if (closeState == null) {
-                return;
-            }
-            if (closeState.registration() != null) {
-                try {
-                    closeState.registration().close();
-                } catch (Exception ignored) {
-                }
-            }
-            closeState.states().forEach(StreamReceiveState::close);
+            inReceiveStateLane(() -> {
+                closed = true;
+                return null;
+            });
         }
 
         private void runLoop() {
             while (!isClosed()) {
                 try {
-                    ZLinkReceiveBatchBudget dispatchBatch =
-                        new ZLinkReceiveBatchBudget();
-                    if (!flushReceiveStates(dispatchBatch)) {
-                        if (!awaitCapacity()) {
-                            return;
-                        }
-                        continue;
-                    }
-                    if (!dispatchBatch.canReceiveNext()) {
-                        continue;
-                    }
                     if (!stream.waitForReadable(RECEIVE_POLL_TIMEOUT)) {
                         continue;
                     }
                     if (isClosed()) {
                         return;
                     }
-                    ZLinkReceiveBatchBudget transportBatch =
-                        new ZLinkReceiveBatchBudget();
-                    while (transportBatch.canReceiveNext()
-                        && dispatchBatch.canReceiveNext()) {
-                        if (transportBatch.messageCount() > 0
-                            && !stream.waitForReadable(Duration.ZERO)) {
+                    ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
+                    boolean pulledPacket = false;
+                    while (batch.canReceiveNext()) {
+                        if (pulledPacket && !stream.waitForReadable(Duration.ZERO)) {
                             break;
+                        }
+                        systems.zlink.framework.runtime.internal.dispatch
+                            .ZLinkApplicationJobQueue.Permit permit;
+                        try {
+                            permit = applicationJobQueue.acquireBlocking();
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            return;
                         }
                         ZLinkBackendStreamReceived received = stream.recv();
                         if (received == null) {
+                            permit.abandonReservation();
                             break;
                         }
-                        transportBatch.record(ZLinkReceiveBatchBudget.bytesOf(
-                            received.parts()));
+                        pulledPacket = true;
                         boolean transferred = false;
                         try {
-                            transferred = processReceived(received, dispatchBatch);
+                            transferred = processReceived(received, permit, batch);
                         } finally {
                             if (!transferred) {
                                 received.close();
+                                permit.abandonReservation();
                             }
                         }
                     }
@@ -821,182 +784,47 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             }
         }
 
-        private boolean awaitCapacity() {
-            return !isClosed();
-        }
-
-        private boolean flushReceiveStates(ZLinkReceiveBatchBudget batch) {
-            ReceiveStateSnapshot stateSnapshot = inReceiveStateLane(
-                this::receiveStateSnapshotCore);
-            List<StreamReceiveState> snapshot = stateSnapshot.states();
-            if (snapshot.isEmpty()) {
-                return true;
-            }
-            int cursor = stateSnapshot.cursor();
-            for (int offset = 0;
-                offset < snapshot.size() && batch.canReceiveNext();
-                offset++) {
-                StreamReceiveState state = snapshot.get(cursor);
-                cursor = (cursor + 1) % snapshot.size();
-                int nextCursor = cursor;
-                inReceiveStateLane(() -> {
-                    receiveStateCursor = nextCursor;
-                    return null;
-                });
-                try {
-                    if (state.closed()) {
-                        continue;
-                    }
-                    if (!drainReceiveState(state, batch)) {
-                        return false;
-                    }
-                } catch (RuntimeException | Error failure) {
-                    isolatePeer(state.routingId(), failure);
-                }
-            }
-            return true;
-        }
-
         private boolean processReceived(
             ZLinkBackendStreamReceived received,
+            systems.zlink.framework.runtime.internal.dispatch
+                .ZLinkApplicationJobQueue.Permit permit,
             ZLinkReceiveBatchBudget batch) {
             RoutingId routingId = received.routingId().orElse(null);
             if (routingId == null) {
-                LOGGER.warning("STREAM receive did not provide a source routing id or part: "
+                LOGGER.warning("STREAM packet did not provide a source routing id: "
                     + streamNode.name());
                 return false;
             }
-            List<Message> parts = received.parts();
             if (isClosed()) {
                 return false;
             }
-            if (parts.isEmpty()) {
-                isolatePeer(
-                    routingId,
-                    new IllegalArgumentException(
-                        "STREAM receive did not provide a message part"));
-                return false;
-            }
-            if (parts.size() == 1
-                && parts.getFirst().size() == 0
-                && !parts.getFirst().more()) {
-                NotificationState notification = inReceiveStateLane(
-                    () -> takeNotificationStateCore(routingId));
-                if (notification.ignored()) {
-                    trace(STREAM_TRACE ? "stream-node ignored quarantined peer notification node="
-                        + streamNode.name() + " routingId=" + routingId : null);
-                    return false;
-                }
-                try {
-                    handleNotification(routingId, notification.state());
-                } catch (RuntimeException | Error failure) {
-                    isolatePeer(routingId, failure);
-                }
-                return false;
-            }
-            StreamReceiveState state = inReceiveStateLane(
-                () -> getOrCreateReceiveStateCore(routingId));
-            if (state == null) {
-                return false;
-            }
-            boolean transferred = false;
             try {
-                if (!state.append(parts, received)) {
-                    return false;
-                }
-                transferred = true;
-                drainReceiveState(state, batch);
-            } catch (RuntimeException | Error failure) {
-                isolatePeer(routingId, failure);
-            }
-            return transferred;
-        }
-
-        private boolean drainReceiveState(
-            StreamReceiveState state,
-            ZLinkReceiveBatchBudget batch) {
-            while (true) {
-                if (!batch.canReceiveNext()) {
-                    return true;
-                }
-                ZLinkStreamInboundFrame frame = state.claimFrame();
-                if (frame == null) {
-                    return true;
-                }
-                long bytes = frame.header().size()
-                    + (long) frame.payload().size();
-                if (!tryAdmitFrame(state.routingId(), frame)) {
-                    state.retain(frame);
-                    return false;
-                }
-                batch.record(bytes);
-            }
-        }
-
-        private boolean tryAdmitFrame(
-            RoutingId routingId,
-            ZLinkStreamInboundFrame frame) {
-            try {
-                if (isClosed()) {
-                    frame.close();
-                    return true;
-                }
                 ZLinkStreamHeader header = ZLinkStreamHeaderCodec.decodeOrPlain(
-                    frame.header().toByteArray());
-                if (header.kind() != ZLinkStreamMessageKind.CONTROL) {
-                    if (draining) {
-                        sendSessionClosing(stream, routingId);
-                        frame.close();
-                        return true;
-                    }
+                    received.header().toByteArray());
+                long messageBytes = received.header().size()
+                    + (long) received.body().size();
+                long maxMessageSize = streamNode.socketConfig().maxMessageSize();
+                if (maxMessageSize > 0 && messageBytes > maxMessageSize) {
+                    throw new ZLinkStreamMessageTooLargeException(
+                        "STREAM packet exceeds MaxMessageSize");
                 }
-                boolean ordinaryApplication =
-                    header.kind() == ZLinkStreamMessageKind.SEND
-                        || header.kind() == ZLinkStreamMessageKind.REQUEST;
-                systems.zlink.framework.runtime.internal.dispatch
-                    .ZLinkApplicationJobQueue.Permit permit = null;
-                if (ordinaryApplication) {
-                    try {
-                        permit = applicationJobQueue.acquireBlocking();
-                    } catch (InterruptedException interrupted) {
-                        Thread.currentThread().interrupt();
-                        frame.close();
-                        return true;
-                    }
-                }
-                try (var ignored = permit == null
-                    ? (systems.zlink.framework.runtime.internal.dispatch
-                        .ZLinkApplicationJobContext.Scope) () -> { }
-                    : systems.zlink.framework.runtime.internal.dispatch
+                try (var ignored = systems.zlink.framework.runtime.internal.dispatch
                         .ZLinkApplicationJobContext.enter(permit)) {
                     dispatchToSession(
                         streamNode,
                         routingId,
                         header,
-                        frame.payload()).whenComplete(
-                            (ignoredResult, error) -> frame.close());
+                        received.body()).whenComplete(
+                            (ignoredResult, error) -> received.close());
                 } finally {
-                    if (permit != null) {
-                        permit.abandonReservation();
-                    }
+                    permit.abandonReservation();
                 }
+                batch.record(messageBytes);
                 return true;
             } catch (RuntimeException | Error failure) {
-                frame.close();
-                throw failure;
+                isolatePeer(routingId, failure);
+                return false;
             }
-        }
-
-        private void handleNotification(
-            RoutingId routingId,
-            StreamReceiveState state) {
-            if (state != null) {
-                state.close();
-            }
-            ZLinkBackendStreamSocket currentStream = stream;
-            trace(STREAM_TRACE ? "stream-node notification node=" + streamNode.name()
-                + " routingId=" + routingId : null);
-            dispatchStreamNotification(streamNode, currentStream, routingId);
         }
 
         private void isolatePeer(RoutingId routingId, Throwable failure) {
@@ -1008,11 +836,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             String reason = messageTooLarge
                 ? "EMSGSIZE"
                 : "malformed STREAM frame";
-            StreamReceiveState state = inReceiveStateLane(
-                () -> removePeerCore(routingId));
-            if (state != null) {
-                state.close();
-            }
             SessionState session = removeSessionState(streamNode, routingId);
             try {
                 sendSessionClosing(
@@ -1061,51 +884,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             return inReceiveStateLane(() -> closed);
         }
 
-        private StreamReceiveState removePeerCore(RoutingId routingId) {
-            ignoredPeers.add(routingId);
-            return receiveStates.remove(routingId);
-        }
-
-        private ReceiveLoopCloseState closeCore() {
-            if (closed) {
-                return null;
-            }
-            closed = true;
-            capacitySignal = true;
-            AutoCloseable registration = capacityRegistration;
-            capacityRegistration = null;
-            List<StreamReceiveState> states = List.copyOf(receiveStates.values());
-            receiveStates.clear();
-            ignoredPeers.clear();
-            return new ReceiveLoopCloseState(registration, states);
-        }
-
-        private ReceiveStateSnapshot receiveStateSnapshotCore() {
-            List<StreamReceiveState> states = new ArrayList<>(receiveStates.values());
-            states.sort((left, right) ->
-                left.routingId().toString().compareTo(right.routingId().toString()));
-            int cursor = states.isEmpty()
-                ? 0
-                : (int) Math.floorMod(receiveStateCursor, states.size());
-            return new ReceiveStateSnapshot(states, cursor);
-        }
-
-        private NotificationState takeNotificationStateCore(RoutingId routingId) {
-            if (ignoredPeers.remove(routingId)) {
-                return new NotificationState(true, null);
-            }
-            return new NotificationState(false, receiveStates.remove(routingId));
-        }
-
-        private StreamReceiveState getOrCreateReceiveStateCore(RoutingId routingId) {
-            if (closed || ignoredPeers.contains(routingId)) {
-                return null;
-            }
-            return receiveStates.computeIfAbsent(
-                routingId,
-                ignored -> new StreamReceiveState(routingId));
-        }
-
         private <T> T inReceiveStateLane(Supplier<T> work) {
             try {
                 return receiveStateLane.runAsync(work).toCompletableFuture().join();
@@ -1119,138 +897,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 }
                 throw failure;
             }
-        }
-
-        private final class StreamReceiveState implements AutoCloseable {
-            private final RoutingId routingId;
-            private final ZLinkStreamReceiveBuffer buffer =
-                new ZLinkStreamReceiveBuffer(
-                    streamNode.socketConfig().maxMessageSize());
-            private final ZLinkStateLane receiveStateLane = new ZLinkStateLane();
-            private ZLinkStreamInboundFrame pending;
-            private boolean closed;
-
-            private StreamReceiveState(RoutingId routingId) {
-                this.routingId = routingId;
-            }
-
-            private RoutingId routingId() {
-                return routingId;
-            }
-
-            private boolean closed() {
-                return inReceiveStateLane(() -> closed);
-            }
-
-            private boolean append(
-                List<Message> parts,
-                ZLinkBackendStreamReceived received) {
-                return inReceiveStateLane(() -> appendCore(parts, received));
-            }
-
-            private ZLinkStreamInboundFrame claimFrame() {
-                return inReceiveStateLane(this::claimFrameCore);
-            }
-
-            private void retain(ZLinkStreamInboundFrame frame) {
-                try {
-                    if (inReceiveStateLane(() -> retainCore(frame))) {
-                        frame.close();
-                    }
-                } catch (IllegalStateException failure) {
-                    frame.close();
-                    throw failure;
-                }
-            }
-
-            @Override
-            public void close() {
-                ReceiveStateCloseState closeState = inReceiveStateLane(this::closeCore);
-                if (closeState == null) {
-                    return;
-                }
-                if (closeState.pending() != null) {
-                    closeState.pending().close();
-                }
-                buffer.close();
-            }
-
-            private boolean appendCore(
-                List<Message> parts,
-                ZLinkBackendStreamReceived received) {
-                if (closed) {
-                    return false;
-                }
-                buffer.append(parts, received);
-                return true;
-            }
-
-            private ZLinkStreamInboundFrame claimFrameCore() {
-                if (closed) {
-                    return null;
-                }
-                if (pending != null) {
-                    ZLinkStreamInboundFrame claimed = pending;
-                    pending = null;
-                    return claimed;
-                }
-                return buffer.tryTakeFrame();
-            }
-
-            private boolean retainCore(ZLinkStreamInboundFrame frame) {
-                if (closed) {
-                    return true;
-                }
-                if (pending != null) {
-                    throw new IllegalStateException(
-                        "STREAM peer already has a pending frame");
-                }
-                pending = frame;
-                return false;
-            }
-
-            private ReceiveStateCloseState closeCore() {
-                if (closed) {
-                    return null;
-                }
-                closed = true;
-                ZLinkStreamInboundFrame currentPending = pending;
-                pending = null;
-                return new ReceiveStateCloseState(currentPending);
-            }
-
-            private <T> T inReceiveStateLane(Supplier<T> work) {
-                try {
-                    return receiveStateLane.runAsync(work).toCompletableFuture().join();
-                } catch (java.util.concurrent.CompletionException failure) {
-                    Throwable cause = failure.getCause();
-                    if (cause instanceof RuntimeException runtimeFailure) {
-                        throw runtimeFailure;
-                    }
-                    if (cause instanceof Error error) {
-                        throw error;
-                    }
-                    throw failure;
-                }
-            }
-        }
-
-        private record ReceiveLoopCloseState(
-            AutoCloseable registration,
-            List<StreamReceiveState> states) {
-        }
-
-        private record ReceiveStateSnapshot(
-            List<StreamReceiveState> states,
-            int cursor) {
-        }
-
-        private record NotificationState(
-            boolean ignored,
-            StreamReceiveState state) {
-        }
-
-        private record ReceiveStateCloseState(ZLinkStreamInboundFrame pending) {
         }
 
     }

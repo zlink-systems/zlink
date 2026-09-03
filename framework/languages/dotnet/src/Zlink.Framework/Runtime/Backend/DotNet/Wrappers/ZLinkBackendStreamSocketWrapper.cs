@@ -69,6 +69,7 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
 
     public void Bind(string endpoint)
     {
+        _socket.Options.ReceiveMode = StreamReceiveMode.Packet;
         _socket.Bind(endpoint);
     }
 
@@ -77,45 +78,63 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         _socket.SetTlsServer(certPath, keyPath, requireClientCert);
     }
 
-    public bool RecvPart(
-        out RoutingId? sourceRoutingId,
-        out Message? part,
-        out bool hasMore,
-        RecvFlags flags = RecvFlags.None) =>
-        _socket.RecvPart(out sourceRoutingId, out part, out hasMore, flags);
-
-    public bool Recv(
+    public bool RecvPacket(
         out ZLinkBackendStreamReceive? received,
         RecvFlags flags = RecvFlags.None)
     {
-        var envelope = Received.Create();
+        var packet = StreamPacket.Create();
         try
         {
-            if (!_socket.Recv(envelope, flags))
+            if (!_socket.RecvPacket(packet, flags))
             {
-                envelope.Dispose();
+                packet.Dispose();
                 received = null;
                 return false;
             }
 
+            var routingId = packet.RoutingId;
+            var header = packet.Header is { } receivedHeader
+                ? Message.From(receivedHeader.AsReadOnlySpan())
+                : null;
+            Message? body = null;
+            try
+            {
+                body = packet.Body is { } receivedBody
+                    ? Message.From(receivedBody.AsReadOnlySpan())
+                    : null;
+            }
+            catch
+            {
+                header?.Dispose();
+                throw;
+            }
+            packet.Dispose();
             received = new ZLinkBackendStreamReceive(
-                envelope.RoutingId,
-                envelope.Parts,
-                hasMore: false,
-                envelope);
+                routingId,
+                header,
+                body);
             return true;
         }
         catch
         {
-            envelope.Dispose();
+            packet.Dispose();
             throw;
         }
     }
 
     public bool Send(RoutingId routingId, Message payload, SendFlags flags)
     {
-        return AwaitStateLane(_lane.RunAsync(
-            () => _socket.TrySend(routingId).Message(payload).Flags(flags).Submit()));
+        try
+        {
+            AwaitStateLane(_lane.RunAsync(
+                () => _socket.Send(routingId).Message(payload).Submit()));
+            return true;
+        }
+        catch (ZlinkSubmitException exception)
+            when (exception.Result == ZlinkSubmitException.ErrorCode.Backpressured)
+        {
+            return false;
+        }
     }
 
     public async ValueTask SendAsync(
@@ -131,8 +150,17 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
 
     public bool Send(RoutingId routingId, IReadOnlyList<Message> parts, SendFlags flags)
     {
-        return AwaitStateLane(_lane.RunAsync(
-            () => _socket.TrySend(routingId).Messages(parts).Flags(flags).Submit()));
+        try
+        {
+            AwaitStateLane(_lane.RunAsync(
+                () => _socket.Send(routingId).Messages(parts).Submit()));
+            return true;
+        }
+        catch (ZlinkSubmitException exception)
+            when (exception.Result == ZlinkSubmitException.ErrorCode.Backpressured)
+        {
+            return false;
+        }
     }
 
     public void DisconnectPeer(RoutingId routingId)
@@ -306,5 +334,8 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
     }
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
+        operation.GetAwaiter().GetResult();
+
+    private static void AwaitStateLane(ValueTask operation) =>
         operation.GetAwaiter().GetResult();
 }

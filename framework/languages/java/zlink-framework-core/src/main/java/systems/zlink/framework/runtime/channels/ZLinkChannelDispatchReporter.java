@@ -10,6 +10,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSu
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -19,6 +20,82 @@ final class ZLinkChannelDispatchReporter {
     private final ZLinkDispatchErrorReporter reporter;
     ZLinkChannelDispatchReporter(ZLinkDispatchErrorReporter reporter) {
         this.reporter = reporter;
+    }
+
+    void replyError(
+        ZLinkBackendRouterSocket router,
+        ZLinkBackendReceived received,
+        ZLinkDispatchErrorSurface surface,
+        ZLinkDispatchMessageKind kind,
+        ZLinkDispatchErrorReason reason,
+        String packetName,
+        String channelName,
+        String sourceRid,
+        Throwable error) {
+        replyError(
+            router, received, surface, kind, reason, packetName,
+            channelName, sourceRid, null, error);
+    }
+
+    void replyError(
+        ZLinkBackendRouterSocket router,
+        ZLinkBackendReceived received,
+        ZLinkDispatchErrorSurface surface,
+        ZLinkDispatchMessageKind kind,
+        ZLinkDispatchErrorReason reason,
+        String packetName,
+        String channelName,
+        String sourceRid,
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+        Throwable error) {
+        if (received.hasDirectReplyPath()) {
+            replyError(
+                received, surface, kind, reason, packetName, channelName,
+                sourceRid, requestHeader, error);
+            return;
+        }
+        replyError(
+            router,
+            received.routingId().orElseThrow(),
+            received.requestSeq().orElseThrow(),
+            surface, kind, reason, packetName, channelName, sourceRid,
+            requestHeader, error);
+    }
+
+    void replyError(
+        ZLinkBackendReceived received,
+        ZLinkDispatchErrorSurface surface,
+        ZLinkDispatchMessageKind kind,
+        ZLinkDispatchErrorReason reason,
+        String packetName,
+        String channelName,
+        String sourceRid,
+        Throwable error) {
+        replyError(
+            received, surface, kind, reason, packetName, channelName,
+            sourceRid, null, error);
+    }
+
+    void replyError(
+        ZLinkBackendReceived received,
+        ZLinkDispatchErrorSurface surface,
+        ZLinkDispatchMessageKind kind,
+        ZLinkDispatchErrorReason reason,
+        String packetName,
+        String channelName,
+        String sourceRid,
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+        Throwable error) {
+        Throwable cause = unwrap(error);
+        List<Message> reply = ZLinkFrameworkErrorReply.create(
+            requestHeader,
+            frameworkErrorKind(error),
+            errorText(reason, packetName, cause),
+            java.util.Map.of());
+        replyRawAndClose(received, reply);
+        report(
+            surface, kind, reason, ZLinkDispatchErrorAction.REPLY_ERROR,
+            packetName, channelName, sourceRid, cause);
     }
 
     void replyError(
@@ -129,6 +206,31 @@ final class ZLinkChannelDispatchReporter {
 
     static void replyAndClose(
         ZLinkBackendRouterSocket router,
+        ZLinkBackendReceived received,
+        Message reply) {
+        if (received.hasDirectReplyPath()) {
+            replyAndClose(received, reply);
+        } else {
+            replyAndClose(
+                router,
+                received.routingId().orElseThrow(),
+                received.requestSeq().orElseThrow(),
+                reply);
+        }
+    }
+
+    static void replyAndClose(
+        ZLinkBackendReceived received,
+        Message reply) {
+        try {
+            received.reply(List.of(reply));
+        } finally {
+            reply.close();
+        }
+    }
+
+    static void replyAndClose(
+        ZLinkBackendRouterSocket router,
         RoutingId routingId,
         long requestSeq,
         Message reply) {
@@ -144,6 +246,43 @@ final class ZLinkChannelDispatchReporter {
      * envelope reply echoing the request identifiers (shared cross-language
      * wire); a legacy raw request keeps the raw single-part reply.
      */
+    static void replyPayloadAndClose(
+        ZLinkBackendRouterSocket router,
+        ZLinkBackendReceived received,
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+        Message reply) {
+        if (received.hasDirectReplyPath()) {
+            replyPayloadAndClose(received, requestHeader, reply);
+        } else {
+            replyPayloadAndClose(
+                router,
+                received.routingId().orElseThrow(),
+                received.requestSeq().orElseThrow(),
+                requestHeader,
+                reply);
+        }
+    }
+
+    static void replyPayloadAndClose(
+        ZLinkBackendReceived received,
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+        Message reply) {
+        if (requestHeader == null) {
+            replyAndClose(received, reply);
+            return;
+        }
+        Message replyHeader = systems.zlink.framework.runtime.messaging
+            .ZLinkChannelEnvelope.encodeHeader(
+                systems.zlink.framework.runtime.messaging
+                    .ZLinkChannelEnvelope.reply(requestHeader));
+        try {
+            received.reply(List.of(replyHeader, reply));
+        } finally {
+            replyHeader.close();
+            reply.close();
+        }
+    }
+
     static void replyPayloadAndClose(
         ZLinkBackendRouterSocket router,
         RoutingId routingId,
@@ -163,6 +302,16 @@ final class ZLinkChannelDispatchReporter {
         } finally {
             replyHeader.close();
             reply.close();
+        }
+    }
+
+    static void replyRawAndClose(
+        ZLinkBackendReceived received,
+        List<Message> reply) {
+        try {
+            received.reply(reply);
+        } finally {
+            reply.forEach(Message::close);
         }
     }
 

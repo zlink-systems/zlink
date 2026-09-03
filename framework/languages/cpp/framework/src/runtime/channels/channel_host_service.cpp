@@ -184,9 +184,8 @@ class channel_host_service_t::server_loop_t
     struct completed_reply_t
     {
         std::optional<zlink::routing_id_t> routing_id;
-        std::uint64_t request_seq = 0;
+        std::optional<zlink::reply_token_t> reply_token;
         zlink::framework::runtime::messaging::message_parts_t parts;
-        std::shared_ptr<zlink::received_t> retained_request;
     };
 
     void dispatch_async (std::shared_ptr<zlink::received_t> received,
@@ -197,7 +196,7 @@ class channel_host_service_t::server_loop_t
             std::move (permit));
         application_job->mark_queued ();
         auto routing_id = received->routing_id ();
-        const auto request_seq = received->request_seq ();
+        const auto reply_token = received->reply_token ();
         auto request_parts =
           zlink::framework::runtime::messaging::message_parts_t (
             detail::backend::copy_binding_messages (received->parts ()));
@@ -205,8 +204,9 @@ class channel_host_service_t::server_loop_t
           zlink::framework::runtime::messaging::message_parts_t> (
             std::move (request_parts));
         const auto rejection_routing_id = routing_id;
-        auto work = [this, routing_id = std::move (routing_id), request_seq,
-                     received = std::move (received), shared_parts,
+        received->close ();
+        auto work = [this, routing_id = std::move (routing_id), reply_token,
+                     shared_parts,
                      application_job] () mutable {
             try {
             detail::channel_packet_dispatcher_t dispatcher (_runtime);
@@ -217,13 +217,13 @@ class channel_host_service_t::server_loop_t
               *_handlers, [application_job] {
                   application_job->release_for_handler_entry ();
               });
-            if (!reply || reply.value ().size () == 0 || !routing_id || !request_seq) {
+            if (!reply || reply.value ().size () == 0 || !routing_id || !reply_token) {
                 return;
             }
             std::lock_guard<std::mutex> reply_lock (_replies_mutex);
             _replies.push_back (completed_reply_t{
-              std::move (routing_id), *request_seq,
-              std::move (reply.value ()), std::move (received)});
+              std::move (routing_id), std::move (reply_token),
+              std::move (reply.value ())});
             }
             catch (...) {
             }
@@ -236,7 +236,7 @@ class channel_host_service_t::server_loop_t
 
     void reply (completed_reply_t completed)
     {
-        if (!completed.routing_id || completed.request_seq == 0 || completed.parts.size () == 0) {
+        if (!completed.routing_id || !completed.reply_token || completed.parts.size () == 0) {
             return;
         }
         std::vector<zlink::message_t> copied;
@@ -245,7 +245,7 @@ class channel_host_service_t::server_loop_t
             copied.push_back (completed.parts[index]);
         }
         auto operation =
-          _router->reply (*completed.routing_id, completed.request_seq).message (copied[0]);
+          _router->reply (*completed.routing_id, *completed.reply_token).message (copied[0]);
         for (std::size_t index = 1; index < copied.size (); ++index) {
             operation = std::move (operation).message (copied[index]);
         }

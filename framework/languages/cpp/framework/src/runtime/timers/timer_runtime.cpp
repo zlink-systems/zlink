@@ -114,13 +114,14 @@ timer_t spot_context_t::add_timer_erased (std::string name,
         if (const auto coordinator = _state->ensure_spot_serial_executor ())
             state->serial_queue = coordinator->timer_queue (state->name);
     }
-    state->native_timer = std::make_unique<zlink::timer_t> ();
+    state->native_timer = std::make_unique<detail::core_timer_drain_loop_t> ();
     auto context = _state;
     const auto timer_queue = state->serial_queue;
-    state->native_timer->on_fire ([context, state, timer_queue] (std::uint64_t fire_count) {
-        detail::timer_runtime_t::post_fire_count (context, state, timer_queue, fire_count);
-    });
-    state->native_timer->start (period, std::numeric_limits<std::uint64_t>::max ());
+    state->native_timer->start (
+      period, std::numeric_limits<std::uint64_t>::max (),
+      [context, state, timer_queue] (std::uint64_t fire_count) {
+          detail::timer_runtime_t::post_fire_count (context, state, timer_queue, fire_count);
+      });
     _state->timers.push_back (state);
     return timer_t (state);
 }

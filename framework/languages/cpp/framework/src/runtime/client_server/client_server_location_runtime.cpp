@@ -1241,7 +1241,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                     return message_flow_event_t{
                       message_flow_outcome_t::received,
                       dispatch_error_surface_t::channel,
-                      record.request_sequence
+                      record.reply_token
                         ? dispatch_message_kind_t::request
                         : dispatch_message_kind_t::send,
                       payload.packet_name,
@@ -1257,7 +1257,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                     return message_flow_event_t{
                       message_flow_outcome_t::admitted,
                       dispatch_error_surface_t::channel,
-                      record.request_sequence
+                      record.reply_token
                         ? dispatch_message_kind_t::request
                         : dispatch_message_kind_t::send,
                       payload.packet_name,
@@ -1274,7 +1274,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                     _services,
                     zlink::framework::detail::service_scope_kind_t::
                       handler_invocation);
-                if (record.request_sequence) {
+                if (record.reply_token) {
                     auto reply = _channel_runtime.dispatch_request (
                       record.owner, {}, payload.packet_name,
                       scope.provider (), *_serializers, *_handlers,
@@ -1343,14 +1343,14 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                   _channel_runtime.dispatch_options_ref (),
                   record,
                   record.parts.size () > 1 ? "<decoded>" : "<unknown>",
-                  record.request_sequence
+                  record.reply_token
                     ? dispatch_message_kind_t::request
                     : dispatch_message_kind_t::send,
-                  record.request_sequence
+                  record.reply_token
                     ? dispatch_error_action_t::reply_error
                     : dispatch_error_action_t::drop,
                   error);
-                if (record.request_sequence) {
+                if (record.reply_token) {
                     pending_reply.reset ();
                     pending_failure_reply = error;
                 }
@@ -1363,14 +1363,14 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                   _channel_runtime.dispatch_options_ref (),
                   record,
                   record.parts.size () > 1 ? "<decoded>" : "<unknown>",
-                  record.request_sequence
+                  record.reply_token
                     ? dispatch_message_kind_t::request
                     : dispatch_message_kind_t::send,
-                  record.request_sequence
+                  record.reply_token
                     ? dispatch_error_action_t::reply_error
                     : dispatch_error_action_t::drop,
                   failure);
-                if (record.request_sequence) {
+                if (record.reply_token) {
                     pending_reply.reset ();
                     pending_failure_reply = failure;
                 }
@@ -1383,14 +1383,14 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                   _channel_runtime.dispatch_options_ref (),
                   record,
                   record.parts.size () > 1 ? "<decoded>" : "<unknown>",
-                  record.request_sequence
+                  record.reply_token
                     ? dispatch_message_kind_t::request
                     : dispatch_message_kind_t::send,
-                  record.request_sequence
+                  record.reply_token
                     ? dispatch_error_action_t::reply_error
                     : dispatch_error_action_t::drop,
                   failure);
-                if (record.request_sequence) {
+                if (record.reply_token) {
                     pending_reply.reset ();
                     pending_failure_reply = failure;
                 }

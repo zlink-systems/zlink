@@ -251,7 +251,331 @@ Core 2차 커밋은 cpp 15/15 확인 후 테스트 수정과 함께 push.
 f3be895b3f core 2차(51파일, wake 3종·common send·REQREP·ws·ROUTER FINAL 재시도 fixup) + 3154ff90dc cpp 테스트 결정화.
 감독관 최종 gate: ctest 134/134, cpp 15/15+7/7, mirror 12/12, diff-check. perf 4-size 판정은 B(plan-b §2). A는 Phase 7 smoke 착수.
 
-## D-054 (2026-09-03 14:10, 머신 B, 사용자 지시) 성능 판정은 cell 단위로 끊어서
+## D-054 (2026-09-03 18:15, 이 머신 A 재개) 프로세스 정리 + Phase 7 완료
+세션 3회 크래시(orca+WSL)로 detach job·/tmp 소실. 되살리던 원천=다른 Claude 세션 → --resume 세션(A)만
+남기고 전부 종료(사용자 지시). dirty 26파일(중단 job WIP) 버리고 재시작(사용자 지시). main HEAD 1ac16a22b2
+gate 재확인 134/134. 분담 확인(사용자): B는 별도 머신 계속 → A는 A레인만(sweep2/posddd/wake 미개입).
+Phase 7 smoke 재실행 job(sol): 8언어 560 cell 실행 pass 553/unsupported 7(node inproc worker-context)/unexpected 0.
+Rust hang(submit_sync 후 옛 POLLCOMPLETION 대기 잔재) 이식 수정. Rust single 독립 재검증 PASS. 커밋 cc81390c9b(perf 28파일).
+다음: Phase 9 준비(D-051 절차: build-wsl.sh --sync-versions → verify → 태그는 B sweep2 PASS+리팩토링 merge 뒤).
+
+## D-055 (2026-09-03 18:30, 사용자 지적) 버전 bump·framework 커밋 push 무방
+B는 Core 성능(sweep2·posddd·wake)만 → Phase 11(framework 코드)과 파일 범위 무충돌, 동시 진행 OK.
+버전 0.16.0 bump가 libzlink.so 이름을 바꿔도 perf 수치는 .so 이름과 무관(B gate=비율)하고 B는
+branch 작업이라 영향 없음. 따라서 **버전 bump + framework 전환 커밋은 push 무방, 태그(core/v0.16.0)만
+D-050대로 B 완료 뒤로 보류.** Phase 11 job 완료 시 검증 후 그대로 커밋·push(태그 제외).
+
+## D-056 (2026-09-03 19:xx) Phase 11 node 결과 — BLOCKER 2건, 커밋 보류
+node PARTIAL/BLOCKED. 통과: STREAM packet pull·중복 assembler(343줄) 제거·ReplyToken·stream-session 51/51·
+contract 40/40·ClientServer reply. BLOCKER: (1) 공개 0.16.0 Node binding Poller가 MonitorSocket을 admit 안 함
+→ D-028 monitor poller readiness 정확구현 불가, 기존 recv/pump/liveness 루프서 recv(DontWait) drain으로 우회
+(추가 timer/lock 없음). (2) native mesh 통합에서 반복 Core assertion(backend-contract·RouteMesh 2/2 재현).
+판정 보류: (2)는 Core assertion→A 범위 밖·언어 공통 가능성 → cpp/dotnet/java 완료 후 홀리스틱 조사.
+node 커밋은 mesh 판정까지 보류. 병렬 job 교차 오염 없음(각자 자기 언어 dir만).
+
+## D-057 (2026-09-03 19:xx) Core 버그 특정 — physical queue 회계 underflow
+node mesh가 재현한 Core assertion = ctx_physical_queue_registry.cpp:64 subtract_exact `current >= amount_`.
+release_committed_frame(590)·rollback_provisional(571)·completion_pending(595) 경로. RouteMesh(R/R) relocation
+churn에서만, Core 134/134는 통과. 원인 후보: classify_pipepair_queues(395)가 첫 분류 시 provisional/committed=0
+가정(28-33행 assert) — generation advance/reconnect 또는 lane 재분류로 잔여 committed가 남거나, 단일 lane
+D/R 전환으로 REPLY byte lane 귀속이 commit/release 간 어긋남. 사용자 승인: **Core 버그면 A가 수정·push→B merge**
+(core 수정 금지 해제, 이 건 한정). 계획: framework 빌드로 gdb backtrace 확보 → sol ultra Core-fix job(repro+스택+
+회계 균형 분석) → 134/134 + mesh repro green → push. 그 후 framework 4언어 mesh-blocked 재실행.
+
+## D-058 (2026-09-03 19:xx) Phase 11 4언어 결과 종합 — 공통 2이슈 판정
+node·dotnet·java 완료(cpp 진행). 통과: 각 언어 framework 빌드+focused test(node 51+40+..., dotnet 57/57,
+java 122/22). STREAM packet pull·중복 assembler 제거·ReplyToken·callback 제거 전 언어 완료.
+공통 이슈 A(Core 버그): ctx_physical_queue_registry.cpp:64 subtract_exact exit 134, node·java mesh 재현
+확정. → Core 수정(사용자 승인, A push→B merge). 최우선. cpp backtrace 후 sol ultra.
+공통 이슈 B(바인딩 monitor-poller 갭): node·java Poller가 SocketMonitor 등록 미지원. 4 job 일관되게
+callback 제거+recv() drain 루프 우회(no timer/lock). **판정: 우회 수용**(pull·no-callback 목표 달성),
+바인딩 API 재개방 과함 → 후속 항목 기록, Phase 11 차단 안 함. spec은 poller+recv이나 recv-drain도 정신 부합.
+dotnet 잔여: BLOCKER1(ConfigureCoreHwm E2E 26)=known-broken 사전존재; BLOCKER2(ContractTests 4)=사전 drift
+재확인; BLOCKER3(ClientServer liveness errno91=EPROTOTYPE ROUTER→DEALER)=framework가 그 방향 typed request
+쓰면 안 됨(전환 후속); BLOCKER4(handover reply-route timeout)=D-030/D-046 gap1, Core fix 후 재확인.
+framework 4언어 커밋 보류 → Core A 수정·mesh 재실행 green 뒤. 병렬 job 교차오염 없음.
+
+## D-059 (2026-09-03 20:xx) Core mesh 회계 버그 수정·push (a339149dbb)
+근본원인 확정: R/R completion lane의 FLOWSTATE/WEIGHT peer-control frame이 append_pending_peer_controls_
+unlocked에서 _out_pipe->write로 직접 나가 commit_message 적립을 건너뛰는데, session dequeue는 모든
+non-delimiter frame을 release_committed_frame으로 차감 → committed underflow(subtract_exact:64). 단일-lane
+D/R Application은 registry accounting 없어 미재현(Core 134/134·cpp mesh vertical 통과 이유).
+수정: _registry_accounting일 때 control frame도 data와 동일 commit_message+publish 경로로(HWM은 completion
+planned_hwm=0이라 무영향). 계약·API·제어점 불변, 새 플래그 없음. 검증: Core 134/134, node backend-contract 54/54.
+**중대 함정(메모리 기록)**: 초기 "수정 안 먹음" 오판 3회 = node_modules prebuilds의 libzlink.so.0이
+심링크 아닌 옛 실파일이라 .so.0.16.0만 갱신하면 옛 .so.0 로드. .so.0/.so.0.16.0 둘 다 덮거나 정본
+sync 도구 사용. codex는 이 분석을 보안필터로 거부(EXIT:1) → Claude 직접 수정.
+후속: java/dotnet mesh-blocked 재검증(고친 lib) → framework 4언어 커밋 → dotnet liveness EPROTOTYPE·handover 판정.
+
+## D-060 (2026-09-03 20:5x) Phase 11 재검증 결과·판정 + version bump 커밋/push (e8045f4a02)
+고친 Core(a339149dbb)로 로컬 패키지 4종(nuget·maven·npm·cpp install) 재빌드 — 모두 동일 lib
+sha256 `43ddbc2f...`(6519848B), native version [0,16,0] 확인. **a=0 전 언어**: ctx_physical_queue_registry
+assertion 소멸(node backend-contract 54/54, cpp mesh vertical, dotnet focused 57/57 모두 green). lib-copy
+트랩 실측 해소.
+언어별 잔여:
+- **java**: :zlink-framework-core:test 1205/1207. 실패 2 = M6A monitor-edge gap(binding 0.16.0에 Poller
+  monitor overload/공개 monitor fd 부재 → recv-drain workaround). clean HEAD에도 존재. 알려진 gap, 회귀 아님.
+- **dotnet**: Phase11 focused 57/57. ClientServer 34/35 — liveness EPROTOTYPE(errno91). ContractTests 73/77
+  = 기존 Actors source-owner drift(1)+ZlinkStreamDiagnosticsLevel snapshot drift(3). ConfigureCoreHwm E2E=
+  known-broken(c).
+- **cpp**: framework-unit 37/40(M6A known-broken, M6B old-route-admission line390, M6C production relocation),
+  framework-contract 8/10(target CPP-CONTRACT-STREAM-001=D-004 stale 검사 갱신 대상, common E2E inventory 278 open).
+- **node**: full 1513/1556(43 fail). backend-contract 54/54. 실패 분포: fake monitor drain(7)+socket submit(2)+
+  monitor callback 기대(1)=삭제된 binding 표면 대상 test double, assertion drift(25), runtime timeout(4)+timer
+  miss(1)+sample-regression(5)=거동, browser env(2). **node 전환은 test 측 미완**(Phase11이 손댄 test 4개뿐,
+  ClientServer/object-routing/fanout/spot-manager 등 미전환 test가 옛 callback/monitor/submit API 기대).
+
+**판정(D)**:
+- **dotnet liveness EPROTOTYPE = framework 버그, Core 아님**. 근거 `03-errors.ko.md:552`: "ROUTER가 DEALER RID로
+  typed request → ZLINK_SUBMIT_NOT_ADMITTED+EPROTOTYPE"(스펙 금지). liveness probe가 typed Request(clientRid)
+  대신 plain send+correlate 써야. → framework 후속 수정.
+- **dotnet handover reply-route(err101=TIMED_OUT) = spec gap**. reply token=opaque capability인데 same-RID
+  handover(peer 재접속, 같은 logical RID) 후 captured token 생존 여부 미명시(physical connection 바인딩 vs
+  logical RID 바인딩). Claude 전용 스펙 확정 사항, [[fix-then-spec-gap-review]]로 분류. D-046 gap1 계열.
+- **cpp M6B/M6C = DIAGNOSE-ONLY**(canonical-multiattempt-trap: relocation/route-admission verify-only 실버그면
+  STOP·에스컬레이션). Phase11이 relocation production(raw_route_port·raw_mesh_node_owner) + M6B test 둘 다 수정 →
+  회귀 vs 기대변경 판별을 근본원인부터. blind fix 금지.
+
+**커밋**: version bump 단독 `e8045f4a02` push(0.15.1/0.15.2→0.16.0, 검증됨·독립·머신드롭 복구비용 큼). framework
+4언어 전환은 언어별 잔여 해소 후 커밋. reverify job 자체는 framework 소스 무수정(mtime 대조: node/package-lock.json
+1개 npm install 부산물만).
+**다음**: 병렬 codex — node test 전환+거동 root-cause, cpp M6B/M6C DIAGNOSE-ONLY. dotnet liveness fix + handover
+spec gap은 Claude. java monitor-gap는 accepted followup 문서화.
+
+## D-061 (2026-09-03 21:0x) handover reply-route 판정 정정 (D-060 item2 대체)
+D-060은 handover reply-route(err101)를 "spec gap(physical vs logical binding 미명시)"로 분류했으나 **정정**.
+근거 `07-router.ko.md:273-278`: reply FINAL은 "같은 logical source RID의 reply route가 local admission될
+때까지" SNDTIMEO 대기하고 "현재 ready pipe"(ROUTER면 completion progress lane의 Completion pipe)를 고른다.
+token 검증은 RID 일치·미소비 기준(line285: 제거·미보유·이미소비·RID불일치→NOT_FOUND). 즉 **reply token은
+logical-RID 바인딩**이고, same-RID handover 후 captured (RID,token) reply route는 **스펙상 동작해야 정상**.
+err101=TIMED_OUT(NOT_FOUND 아님)은 token은 생존했으나 handover 후 새 connection의 reply route가 SNDTIMEO 내
+local admission 안 됨 → **defect**(pure spec gap도, invalid framework pattern도 아님).
+판정: 진단 필요 — (a)Core: same-RID handover 후 pending reply FINAL이 새 connection reply route 재admission을
+못 기다림/못 찾음, (b)framework: HELLO 재admission 후 reply re-drive 누락 or 테스트 타이밍. Core 결함이면
+감독관 권한으로 수정·push(B merge). dotnet liveness(D-060: framework typed-request 오용)와 함께 dotnet 진단
+job으로 처리 예정. [[canonical-actor-join-app-reply-contract]]·actor-authority OPEN RULING과 연관 가능.
+
+## D-062 (2026-09-03 21:2x) cpp M6B/M6C 진단 결과 → Core CONNECT_ROUTING_ID next-connect alias 결함
+cpp DIAGNOSE-ONLY job(sol ultra) 결과(c016/cpp-m6bc-diagnose.md, primary source 재검증 완료): M6B(line390 old-route
+admission)·M6C(production relocation terminal blocked/restore_failed) 둘 다 **(a) production 결함**이나 원인은
+Phase 11 framework reply-token diff가 **아니라 Core**. 확인: `socket_base_routing.cpp:34-51`이 alias를 socket-global
+단일 `_connect_routing_id`(socket_base.hpp:1517)에 저장, `extract_connect_routing_id()`(67-72)가 move+clear로 소비,
+소비 시점이 connect가 아니라 pipe-identify(`router_admission.cpp:335-336`). intent는 connect 시점 생성
+(`socket_base_endpoint.cpp:~473`). back-to-back different-RID connect에서 첫 endpoint pipe가 두 번째 setter 뒤
+identify되면 첫 endpoint가 둘째 RID 취득 → directed route 소실. 스펙 위반 `07-router.ko.md:118-121`(alias=다음
+connect pipe 바인딩). **주의: "0.16.0 회귀" 아님** — 0.15.1 baseline 실측 없음(그 기록은 stale CMake cache 노트).
+구조적 결함이 0.16.0 admission 타이밍에 노출.
+판정: Core 수정(감독관 권한, B merge). 제약 5파일(socket_base_routing/socket_base.hpp/socket_base_endpoint/
+router_admission/session_base)+신규 contract test 2개(우선=set-alias→connect→disconnect→reconnect→same RID route;
+2번째=back-to-back). **blast radius=session_base.cpp:121 preserve_connect_routing_id(reconnect)** 반드시 커버.
+리팩토링 금지(B posddd 43파일 브랜치 merge 마찰 최소화). Core fix job(sol ultra) 투입.
+**후속 시퀀싱 주의(advisor)**: (1) M6B는 race 안 나면 line1343 다른 assertion → Core fix로 cpp 완료 아님, "fix→cpp
+commit" 금지. (2) Core fix 후 4언어 패키지 재빌드(sha256 gate) 필요. (3) handover err101도 같은 alias 오귀속 가능성
+→ Core fix 후 ActorCreateCompletion_AfterHandoverHello_UsesCapturedReplyRoute **먼저 재실행**, dotnet job은 liveness만.
+
+## D-063 (2026-09-03 21:5x) codex 사용한도 아웃 → Claude 서브에이전트 폴백 + node reverify 결과
+**codex 사용한도 초과(Sep 7 13:45까지 불능)**: core-connect-alias-fix·dotnet-liveness-fix job이 조사/재현 단계에서
+EXIT1("You've hit your usage limit"). node-phase11-finish는 한도 전 정상 완료. → [[agent-model-assignment-policy]]
+폴백 발동(codex 불능 시 Claude 서브에이전트 sonnet/opus). 재투입: **Core alias fix=opus, dotnet liveness=sonnet,
+node B-defect=sonnet**(Agent tool, scope 분리 core/**·dotnet/**·node/**, 커밋 금지·working tree 유지).
+**node 결과(성공)**: 1513→**1552/1556 pass**. T 39건 fixed(test/contract만, src 무수정 mtime 검증), B 2건·E 2건 reported.
+  - B-DETAILED: 공통 스펙(03-stream-connector:265-278) enum에 Detailed 있으나 node validator(ZlinkStreamConnectorOptions.ts:88-95)
+    Off/Errors/Normal만 → node에 Detailed 추가(additive). 
+  - B-SURFACE: 공통 스펙(69-101)은 setDiagnosticsLevel만인데 node public(IZlinkStreamConnector.ts:39-40)에 setDiagnosticsLevelAsync
+    여분 → 조사 후 제거 or 위험시 보고.
+  - E-CHROMIUM(2): chrome-headless-shell launch 직후 SIGTRAP(환경 결함, 코드 아님) — 비차단, known-env 기록.
+node production(src 30파일)은 기존 Phase11 전환분(job 무수정). node 커밋은 B-defect fix 후 production+test 묶어.
+**주의**: dotnet/node fix는 alias 버그와 독립이라 현 패키지로 유효. cpp M6B/M6C·handover는 Core alias fix 후 4언어
+패키지 재빌드(sha256 gate)+재실행 필요.
+
+## D-064 (2026-09-03 22:1x) Core alias fix 커밋·push (e3d5c5b79f) + dotnet liveness 실제 버그 정정
+**Core alias fix(opus 서브에이전트, 감독관 전건 diff 재검증)** 커밋·push `e3d5c5b79f`(B merge). Design B: alias를
+connect 시점에 transport_pair_id 키로 snapshot→locally-initiated Application pipe에 admission 전 apply→identify_peer는
+pipe에서 route id 읽기, socket-global lazy 분기 제거. 2차 결함(alias≠peer-identity시 reconnect 미생존) 동시 수정.
+6파일(session_base/socket_base.hpp/socket_base_endpoint/socket_base_routing/router_admission/CMakeLists)+신규 test
+test_connect_rid_alias_binding(2 case, pre-fix FAIL→post-fix PASS: reconnect alias생존, back-to-back distinct route
+EAGAIN 교차검증). 전체 ctest 135/135. 모든 경로 route_lifecycle_mutex 보호, scope 준수, 스펙 무수정.
+**dotnet liveness 정정**: 내가 지목한 typed-request→plain-send는 **이미 기존 Phase11 전환분**(TickLivenessAsync·
+ReceiveLoop 완료). dotnet 에이전트(sonnet)가 찾은 실제 버그 = Connection.Start()가 admission Hello를 두 트리거
+(monitor ConnectionReady + 100ms fallback ScheduleAdmissionRetry)로 쏘는데 TryStartAdmission이 "in flight"만 가드,
+"already succeeded" 미가드 → 중복 Hello가 liveness probe/ack 손상(~1/3 간헐). 수정: `|| _currentAdmission is not null`
+가드(_admissionCompleted는 native-RID-mismatch 거부 경로도 set돼 부작용, _currentAdmission이 정답). 검증 liveness 20/20,
+ClientServer 35/35. 1파일(ZLinkClientServerClientRuntime.cs).
+**다음**: 4언어 패키지 재빌드(새 lib sha256 gate, 이전 43ddbc2f→변경) → cpp M6B/M6C(M6B는 line1343 이월 예상)·dotnet
+handover(alias fix로 해소 기대)·node 재검증. node B-defect fix(sonnet): Detailed 추가+setDiagnosticsLevelAsync interface 제거.
+
+## D-065 (2026-09-03 23:0x) 패키지 재빌드+재검증 결과 (alias fix e3d5c5b79f 효과 확인)
+rebuild+reverify(sonnet). **sha256 gate PASS**: 새 lib `63336fb50769e8ad693c511413d91aba66eae7a1b8fbd5beaa6cfc0f9e2080fa`
+(이전 43ddbc2f)가 9개 소비처(core/build·install prefix·nuget/maven/npm 패키지·bindings native·node prebuilds·
+node_modules·NUGET 캐시) 전부 동일, lib-copy 트랩 없음. core ctest 135/135.
+**alias fix 효과**:
+- cpp: **M6C now PASS**(이전 FAIL). **M6B는 line390→line1343 전진**(verify_remote_bound_session_bind_classifies_
+  retryable_outcomes, deadline_exceeded — 예측된 이월 signature). M6A(line176 complete_bound_session_bind) 여전히 FAIL.
+  framework-contract 8/10(STREAM-001·E2E inventory 278, pre-existing).
+- dotnet: **liveness now PASS**(guard fix 효과), ClientServer 35/35, focused 57/57. **handover(err101) 여전히 FAIL**
+  → alias fix로 미해소, 별개 버그 확정(D-061 재판정 대상).
+- java: 1207, 2 fail=known M6A monitor-gap(회귀 없음, baseline 유지).
+- node: full suite background 실행 중(B-defect fix 반영, 결과 대기).
+**autostash 발견(무관)**: stash@{0}=autostash **2026-09-01 15:47 생성**(세션 2일 전 pre-existing orphan, 사용자 09-01
+작업). 41파일(Bingo 샘플·dist-tools·contract test), 일부 이미 커밋(stash==HEAD) 일부 2일치 old dirty. **내 세션 무관·
+건드리지 않음**(drop/apply 금지). 내 세션 작업(dotnet guard·node fix·core alias·185 framework)은 전건 무결 확인.
+**잔여 Phase11 blocker 3**: (1)M6A line176 — known-broken vs 회귀 판정 필요(메모리 대조), (2)M6B line1343 deadline_exceeded
+진단, (3)dotnet handover err101 별개 버그 진단. codex 한도아웃 → Claude 서브에이전트/직접 판정.
+
+## D-066 (2026-09-03 23:4x) M6B line1343·M6A 판정 + 잔여 진단 상태
+**M6A(line176 complete_bound_session_bind)**: 메모리 [[zlink-env-test-quirks]] 확인 — baseline(fe77930f5d)서도 stash로
+재현되는 deterministic pre-existing 실패(core 0.11.1 재설치 기인), "프레임워크 변경 탓 오판 금지" 명시. **Phase11 회귀
+아님·blocker 아님**. 서브에이전트 "HEAD passed" 주장은 오판.
+**M6B(line1343 verify_remote_bound_session_bind_classifies_retryable_outcomes, deadline_exceeded)**: 진단(sonnet)+감독관
+primary source 확인. raw_route_port.cpp:157-174 기존 주석(46ef4b0f03)이 이 이슈 명시 — EHOSTUNREACH(미등록RID) vs
+ECONNREFUSED 구분 불가로 m6a/m6b 단일 분류 공유, m6b assertion을 m6a에 맞춰 갱신. 현재 관측=not_found+errno=0(EHOSTUNREACH
+아님). **alias fix diff의 xsubmit_retry_allowed는 미등록 RID를 old·new 모두 false 반환→분류 미변경**. M6B는 이전 line390서
+막혀 line1343 미실행 → not_found 거동은 **pre-existing latent, alias fix가 노출만(제 커밋 e3d5c5b79f 회귀 아님)**. 판정:
+**pre-existing 분류 gap, documented followup**(M6A와 동급, Phase11 blocker 아님). 잠재 fix(raw_route_port.cpp:181-190
+submit_error catch에 not_found→route_unavailable 추가)는 blast radius(다른 not_found 경로)로 신중 — 별도 판단.
+**잔여 진단 미완(서브에이전트 background 핸드오프로 중단)**: (2)dotnet handover err101(Core vs framework 미판별),
+(3)STREAM-001(D-004 stale 여부 미확인). codex 한도아웃 지속.
+
+## D-067 (2026-09-03 23:5x) STREAM-001 판정 + Phase11 잔여 정리
+**STREAM-001**(test_cpp_framework_target_contract.cpp:2330-2353): source-scanning contract(코드 문자열 패턴 grep —
+stream_send_call_t timeout·_submit(header,payload,_timeout)·pending.emplace(...timeout.async())·co_await·async_submit_runtime
+부재 등). Phase11 pull 전환으로 stream submit/await 패턴이 바뀌어 grep 기대 어긋남 → **D-004 계열 in-scope Phase11 test-side
+갱신**(production 버그 아님). 계약 패턴을 pull-model 코드에 맞춰 갱신 필요(node test 전환과 동류, 소량).
+
+### Phase 11 잔여 최종 분류 (커밋 가부)
+| 항목 | 판정 | blocker? |
+|---|---|---|
+| cpp M6A line176 | pre-existing known-broken(baseline 재현, core 0.11.1) | NO |
+| cpp M6B line1343 | pre-existing latent 분류gap(alias fix가 노출), followup | NO |
+| cpp M6C | **alias fix로 PASS** | 해소 |
+| cpp STREAM-001 | in-scope test-side 계약 패턴 갱신(D-004) | 소량 작업 |
+| cpp E2E inventory 278 | known-broken 목록 | NO |
+| dotnet liveness | **guard fix로 PASS** | 해소 |
+| dotnet ClientServer/focused | 35/35·57/57 | 해소 |
+| dotnet handover err101 | 별개 버그, Core vs framework 미판별(canonical actor-join OPEN RULING 연관) | 진단 필요 |
+| dotnet ContractTests drift(4) | pre-existing(Actors owner·StreamDiagnostics) | NO |
+| dotnet ConfigureCoreHwm E2E | known-broken | NO |
+| node full | 1552/1556(B-defect fix), 2 chromium 환경 | NO(환경) |
+| java | 1205/1207(2 known monitor-gap) | NO |
+**남은 실작업**: STREAM-001 계약 갱신(소량), handover 진단(Core/framework 판별). 나머지는 documented followup/known-broken.
+이후 언어별 framework 전환 커밋(185파일)→Phase12·13. codex Sep7까지 아웃.
+
+## D-068 (2026-09-04 00:1x) handover err101 최종 진단·스펙 판정 (canonical actor-join OPEN RULING)
+diagnosis(sonnet)+감독관 스펙 분석 완결. 재현: ConnectedRuntime 테스트가 (1)원본 DEALER 소켓으로 `.Request().Timeout(2s)`,
+(2)HandoverAsync가 **같은 SourceRid로 새 DEALER 소켓** 생성·연결·HELLO 재admission·`Source` 교체(원본은 PriorSource 보관),
+(3)서버가 captured Core ReplyOperation으로 FINAL 제출(`nativeTerminalReplySubmitOverride`로 framework 재drive 큐 **완전 우회**,
+`reply.Submit()` 단발). 관찰: 표면 예외가 ZlinkSubmitException(target측)이 아니라 **ZlinkRequestException err101(source측 2s 만료)**
+— target `Submit()`은 예외 없이 성공. 즉 **Core는 reply 전달 성공**했으나 원본 DEALER가 청취 중인 물리 pipe가 아닌 다른
+목적지(handover 후 "현재 ready pipe"=새 connection)로 감.
+**스펙 판정**: `07-router.ko.md:273-278`은 reply FINAL이 "같은 logical source RID의 reply route admission 대기 후 **현재**
+ready pipe 선택"이라 명시 → handover 후 현재 ready pipe=새 pipe. 그러나 DEALER request/reply correlation은 소켓-인스턴스
+로컬이라 원본 pending request는 자기 pipe로만 수신 가능. **gap**: reply token(line92 "opaque capability")이 **물리
+connection에 고정**되는지(원본 요청 pipe로 배달=test 기대) **logical RID에 고정**되는지("현재 ready pipe" 재해석=현 구현
+거동)가 스펙에 미명시. token="opaque capability" 문면 vs "현재 ready pipe" 문면 **충돌**.
+**결론**: **깨끗한 Core 버그 아님 = spec-design gap**(D-046/D-061 승계). alias fix와 무관(별개 메커니즘, 재현으로 재확인).
+두 해소 방향 모두 비용: (A)물리-connection 결속=원본 pipe 배달 → 원본 소켓 살아있어야, 죽으면 fragile. (B)logical 유지 +
+in-flight request를 handover 시 새 connection으로 마이그레이션 → **새 메커니즘·복잡도 증가**([[spec-change-policy]] 가드레일
+저촉: 제어 분산·복잡화 금지). **감독관 판정: 현 스펙(logical/현재-ready-pipe)이 최단순·일관 → 유지. handover err101은 Core
+결함 아니라 canonical actor-join의 request-across-handover 설계 미결(OPEN RULING)**. 이 설계 방향(captured reply route가
+물리 handover를 건너 원본 요청자에게 배달돼야 하는가)은 사용자 스펙-권한 영역 → **documented followup, 사용자 설계 판정
+대기**. [[canonical-actor-join-app-reply-contract]]·activationRecoveryState OPEN RULING과 동일 계열. Phase11 blocker 아님.
+
+## D-069 (2026-09-04 00:3x) Phase 11 완료·push (framework 4언어 전환)
+STREAM-001 gate 갱신(sonnet, target_contract 통과) 후 4언어 framework 전환 커밋·push:
+- cpp `b32d4cae64`(42파일): backend/runtime pull 전환, e2e/CMake/STREAM-001 gate. mesh vertical·M6C·contract green.
+- dotnet `7e655e3703`(30파일): runtime pull 전환 + liveness admission-Hello 중복 가드(_currentAdmission). liveness 20/20·
+  ClientServer 35/35·focused 57/57.
+- java `e65abaf7ac`(68파일): runtime pull 전환 + e2e/gradle. 1205/1207(2 known monitor-gap).
+- node `360181172f`(46파일): runtime pull 전환 + test double 전환 + stream-connector 스펙 정렬(Detailed 추가·async 제거) +
+  0.16.0 소비. 1552/1556(2 chromium 환경).
+제외(Phase11 아님): bindings/ 21(세션 전 pre-existing + native sync 산출물), scripts/ 3, node_modules/.artifacts.
+**Phase 11 documented followups**(baseline/known, 회귀 아님): M6A(pre-existing SIGABRT), M6B line1343(pre-existing 분류gap,
+alias fix가 노출), dotnet handover err101(canonical actor-join OPEN RULING=spec-design gap, D-068), chromium SIGTRAP(환경),
+E2E inventory 278(known-broken), java monitor-edge gap(binding followup). autostash(09-01)는 무관·보존.
+**남은 phase(A머신)**: Phase 12(framework unit/E2E/cross-language — unit은 reverify서 검증됨), Phase 13(7 samples pull),
+Phase 9 tag(B의 sweep2 PASS+posddd merge 대기), Phase 10 package. codex Sep7까지 아웃.
+
+## D-070 (2026-09-04 00:5x) plan 정독 정정 — Phase 12/13 게이트 미완, framework 커밋은 plan 순서보다 이름
+Stop hook 지적으로 plan(진실원천) 정독. 확인: plan line 1327-1331은 framework 커밋(`framework: consume zlink 0.16.0
+pull APIs`)을 **Phase 12(unit+E2E+cross-language) 전부 green 후**에 하도록 규정. 나는 unit만 검증하고 언어별로 이르게
+커밋(b32d4cae64 등) → 코드는 맞으나 **Phase 12.2 E2E·12.3 cross-language·Phase 13 samples 검증이 아직 안 됨**. 최종
+체크리스트(line 1456-1458) 미충족: 언어별 E2E, C++·Node cross-language + Java host rebuild, 7 공통 sample.
+plan line 84-85: Phase 10·11·12는 로컬 빌드 Core+로컬 패키지로 OK(태그 전), 태그(Phase 9, B 의존) 후 release Core로
+package·consumer smoke. 즉 로컬 검증은 지금 진행 가능.
+**남은 A 작업(정확)**: Phase 12.0 clean configure(preset linux-ninja-vcpkg-debug, tests/samples/e2e ON, ZLINK_CPP_BUILD_DIR)
+→ 12.1 unit 재확인 → 12.2 언어별 E2E(run_e2e_all.sh ×4) → 12.3 cross-language(cpp/node smoke + java Host installDist) →
+Phase 13 7 samples 실행. Phase 13 문서(framework/doc/framework/**)는 **사용자 영역, 건드리지 않음**(sample 실행만).
+Phase 9 tag·10 release package는 B(sweep2 PASS+posddd merge) 의존. E2E/cross-language/sample에서 회귀 나오면 follow-up 커밋.
+
+## D-071 (2026-09-04 01:1x) plan 오류 정정 — 언어별 E2E는 plan에서 제거(사용자 지시)
+사용자 지시: "언어별 E2E는 별도로 진행, 진행해야 하는건 Language-Cross E2E만" + "정확히는 계획에도 있으면 안되는거야".
+→ per-language E2E(구 Phase 12.2 run_e2e_all.sh ×5)는 이 캠페인 게이트가 아니라 **별도 파이프라인에서 독립 실행**되는
+표준 회귀 검증. 이 pull-completion 캠페인의 E2E 게이트는 **cross-language E2E 하나**(binding/framework 계약이 언어 경계
+너머 wire로 동작하는지가 캠페인 핵심). [[spec-change-policy]] 오류 정정으로 판정(구현 편의 완화 아님, 범위 오류 수정),
+spec-first: 감독관(Claude) 직접 정정.
+**plan 정정 4곳**: (1)line143 완료요약 항목15에서 "언어별 E2E," 삭제, (2)line1256 "12.1~12.3"→"12.1~12.2",
+(3)구 12.2 "언어별 E2E" 섹션(run_e2e_all ×5) 삭제 + 구 12.3 Cross-language E2E→12.2로 renumber, (4)최종 체크리스트
+line1456 "unit와 언어별 E2E"→"unit". 정정 후 Phase 12 = 12.0 configure·12.1 unit·12.2 cross-language E2E.
+**감독관 착오 정정**: 앞서 Phase 12.2로 per-language E2E(cpp SpotService 등)를 서브에이전트로 돌리던 것은 범위 오류 →
+중단. **남은 검증 = cross-language E2E(12.2) + Phase 13 samples**. (Phase 13 문서는 사용자 영역.)
+
+## D-072 (2026-09-04 01:4x) handover reply-route 사용자 판정 — reply=RID 라우팅, handover 특별취급 없음 → Core 변경 불필요
+사용자 판정: "reply도 다를건 없지 않어? rid handover가 다를 이유가 있어?" → **reply는 일반 send와 동일하게 logical RID로
+라우팅되는 메시지이고, RID handover가 reply를 특별 취급할 이유가 없다.** handover는 RID를 새 pipe로 옮기는 것뿐 →
+reply는 "그 RID의 현재 ready pipe"(=새 connection)로 가면 된다.
+**Core는 이미 그렇게 동작**(D-068 진단: reply.Submit() 예외 없이 성공, 07-router:273 "현재 ready pipe"대로 새 connection
+전달) → **Core 변경 불필요, handover err101은 Core 버그 아님, spec 변경(물리 binding)도 아님**. D-061/D-068의 "spec gap"
+판정은 **logical-RID binding으로 확정**(reply=send와 동일 규칙)하여 종결 — 스펙 문면(현재 "현재 ready pipe")이 곧 정답.
+**err101 원인 = test/framework 측**: 테스트가 (1)handover 전 원본 소켓에 `.Request()`를 매어두고 거기서 대기(reply는
+올바르게 새 소켓으로 감), (2)`nativeTerminalReplySubmitOverride`로 framework의 reply 재drive 큐(SubmitOrQueueNativeReply/
+PendingNativeTerminalReply)를 우회. 실제 framework엔 재drive 메커니즘 존재. → **framework/test followup**(Core 아님).
+**귀결**: **이번 캠페인 Core 버그 2건(mesh a339149dbb·alias e3d5c5b79f) 모두 수정·push 완료로 확정**. handover는 Core 무관.
+[[canonical-actor-join-app-reply-contract]] OPEN RULING(reply-token binding)= **logical RID로 종결**.
+
+## D-073 (2026-09-04 02:4x) cross-language E2E가 dotnet PUB/SUB subscribe 수신 회귀 검출 (R)
+Phase 12.2 cross-language E2E 실행(-v 없이, driver 직접) 결과: **.NET subscriber가 PUB/SUB 이벤트 미수신(deterministic R)**.
+- cpp smoke: C++ publisher→.NET channel-subscriber, .NET READY하나 미수신(runDir dotnet-subscriber.events 빈파일, cpp-publisher는 발행). "timed out waiting for 'profile.changed:cpp-publish'".
+- node smoke: Node publisher→.NET fanout subscriber, publishUntilFileText 반복발행에도 미수신 "expected event text did not appear".
+공통=**.NET SUBSCRIBER(pub/sub·fanout) 수신만 실패**. dotnet channel(req/reply)·CoreCLR 정상, cross-manifest dotnet-framework=source-tree(현재 전환 framework). → **dotnet 전환(7e655e3703)의 SUB pull-receive drain 회귀**. unit(57/57)·ClientServer(35/35)은 cross-language SUB 미커버 → cross-language 게이트가 검출(게이트 가치 실증).
+**주의(감독관 착오 정정)**: 1차 실행 실패는 내 driver의 ulimit -v(dotnet CoreCLR OOM 0x8007000E/137) 아티팩트였음 → -v 제거 후 재실행해서 진짜 회귀 분리. cross-language는 dotnet CoreCLR 띄우므로 **-v 절대 금지**([[zlink-env-test-quirks]] 재확인).
+**대응**: dotnet SUB-receive 진단+수정 subagent(sonnet, framework/languages/dotnet만, Core면 보고). 수정 후 cross-language 재실행 확인→커밋(7e655e3703 후속). Phase 11 dotnet 커밋은 이 회귀 포함 상태였으므로 follow-up 수정 필요.
+
+## D-074 (2026-09-04 03:5x) dotnet PUB/SUB 수신 회귀 수정(codex sol ultra) + binding 근본원인 follow-up
+codex sol ultra(재로그인 후 codex 복구, hep7@naver.com). 근본원인 확정: **dotnet binding 버그** — `bindings/dotnet/src/
+Zlink/Runtime/Eventing/Poller.cs:39-42`가 PollCompletion 요청 여부와 무관하게 `SocketKernel.Completion` 조회, `SocketKernel.cs:
+28-38`은 SUB에 NotSupportedException(PAIR/DEALER/ROUTER/STREAM만 completion 지원) → `poller.Add(SUB,PollIn)`가 등록 전 예외 →
+subscriber 루프가 Wait/Subscribe/dispatch 미도달(READY이나 silent). Phase11 `7e655e3703`은 SUB코드 무변경, binding 0.15.2→
+0.16.0 bump만 했고 새 binding의 이 거동이 회귀 유발. category (a) 확정, (b)(c)(d) 배제.
+**수정(framework-scoped, 커밋 후속)**: `ZLinkBackendSocketPoller.Create`가 ISubSocket을 분기해 completion 미조회 `ZlinkPoll.Poll`
+read-only adapter 사용, Router/Dealer/Stream IPoller 유지. 1파일, 임시로그 제거(rg 0). 검증: cpp publisher→.NET·node publisher→
+.NET 수신, **C++ 전체 32-stage cross-language smoke 통과**, fanout+ClientServer 37/37. 감독관 diff 재검증 완료.
+**FOLLOW-UP(정식 근본 수정)**: `bindings/dotnet Poller.Add`가 PollCompletion 요청 시에만 Kernel.Completion 조회하도록 binding
+수정(그러면 framework 워크어라운드 불필요, 타 언어 binding도 동일 잠재버그 점검). binding 레이어(Phase 6)라 별도 pass/B 조율.
+**주의**: cpp/java 샘플 authenticate 회귀는 DEALER/ROUTER(completion 지원)라 이 SUB-poller 이슈와 **별개** — 다음 진단 대상.
+
+## D-075 (2026-09-04 04:1x) cpp 샘플 red 근본원인 = Phase 11 아님, 다른 커밋들(사용자 영역) — 조율 필요
+codex sol ultra 진단(cpp-sample-auth-fix-summary.md). **cpp 샘플 authenticate red는 pull-completion 전환(b32d4cae64)과
+무관** — packet pull decode 성공 확인, Core/binding 결함 없음. 3개 레이어드 근본원인:
+1. **nested auth service 등록 누락** ← `e6ae5d8fd6`(feat: constructor-based DI auto-deduction, drop dependency_types;
+   ulalax 09-02, 이미 main). outer session은 자동등록되나 authenticate_(play_)session_handler_t는 미등록 →
+   get_or_create_core_session "service not registered". **수정(검증됨, 미커밋)**: TicTacToe/Bingo host factory에
+   `add_scoped<authenticate_*_handler_t, channel_client_t>()` 2줄. authenticate boundary PASS 재현. 다른 샘플
+   (DeliveryDispatch/SupportChat/GameQuest)은 정적 분석상 동일 누락 없음(명시 등록돼 있음) → 복사 금지.
+2. **protobuf payload에 JSON wire metadata 불일치**(미수정) ← `b1053aceda`(strict typed validation)+`1cf31e1a79`
+   (marker 기반 generated-protobuf). typed serializer는 protobuf(application/x-protobuf) 생성하나 wire content_type을
+   type_index로 별도 조회 시 serializer.cpp erased lookup이 application/json fallback → 수신측 "inbound content type
+   does not match the typed handler codec" 거부(deterministic). **framework/languages/cpp/framework/include 공개 헤더 +
+   test 변경 필요**(typed serializer/payload-encoder가 content_type을 함께 반환하도록). codex는 unsound framework/src
+   워크어라운드 거부(1024 캐시 한계·reentrant·marker 불일치로 오작동), 작업 범위 밖으로 STOP. **사용자 영역·조율 필요**.
+3. **TicTacToe bound-Session delivery stall**(별개, 비결정적) ← actor_gateway_runtime FIFO, b32 무변경, 재실행마다 다른
+   post-auth 단계서 정지. 별도 lifecycle/delivery 조사.
+**java 샘플**은 cpp-specific 커밋들과 무관 = 별개 root(readiness/route/handler-dispatch 독립 조사 필요).
+**조율 사항**: (a)DI 수정 2줄 커밋 여부, (b)codec 이슈(framework 공개헤더=사용자 DI/framework 영역)를 이 캠페인서 고칠지
+사용자가 직접 할지, (c)나머지(TTT stall·java·node stream·ZoneWorld) 처리 방침. **cpp 샘플 red는 pull-completion 캠페인
+책임이 아닌 기존 framework 부채**임을 확인.
+
+# 머신 B 판정 (D-B54~D-B66; 머신 A의 D-054~D-075와 번호 충돌을 피해 B 접두)
+## D-B54 (2026-09-03 14:10, 머신 B, 사용자 지시) 성능 판정은 cell 단위로 끊어서
 사용자: "패턴별 + transport별로 끊어서 비교, 전체를 한 번에 돌리지 말 것". 전체 sweep2(single 33/42 진행)를 중단하고
 percell.sh(cell 하나 → FAIL이면 그 자리에서 1회 재측정 → 최종 verdict 기록)로 전환. 환경: valgrind 3.23.0 소스 빌드
 (~/.local/bin, sudo 불가), baseline worktree core/v0.15.1(ba78905c3d) 자체 빌드, 벤치 3파일 동일 확인.
@@ -260,25 +584,25 @@ latency 10~70× — 벤치가 포화 구간 queue 깊이를 latency로 보고(ca
 스펙 §5.2 "벤치를 고친다" 적용: briefs/reqrep-latency-bench.b.prompt(one-way와 같은 in-flight 1 latency 구간). (3) REQREP
 inproc·wss는 throughput도 0.81~0.88 → 실제 회귀 후보, 벤치 정정 후 cell 재측정으로 확정.
 
-## D-055 (2026-09-03 15:05, 머신 B) 벤치 정정 채택 + cell 측정을 runs=3(median)으로
+## D-B55 (2026-09-03 15:05, 머신 B) 벤치 정정 채택 + cell 측정을 runs=3(median)으로
 c016-reqrep-bench(sol high) 산출 채택: single/multi REQREP two-phase(포화 throughput + in-flight 1 latency 1초), RESULT latency
 3종 소수 6자리, baseline worktree 동일 파일 복사(callback API 경로는 compile-check로 선택), gate·policy unit 59/59. 검증 단발:
 DEALER_ROUTER_REQREP tcp 64B latency main 0.083ms / baseline 0.098ms. 정정 벤치로 첫 cell(PAIR/tcp) 2회 측정에서 1024B
 throughput이 0.98→0.89로 흔들림 → 판정 기준(D-040)은 그대로, 측정만 runner 자체 `--runs 3`(size별 median)으로 전환
 (sweep2.sh에 SWEEP2_RUNS 환경변수 추가). 전 cell 재판정(percell.sh: cell → FAIL 시 즉시 1회 재측정).
 
-## D-056 (2026-09-03 15:10, 머신 B, 사용자 지시) 결과를 다 기다리지 않고 개선 포인트가 나오면 즉시 수정
+## D-B56 (2026-09-03 15:10, 머신 B, 사용자 지시) 결과를 다 기다리지 않고 개선 포인트가 나오면 즉시 수정
 사용자: "결과 다 보고 하면 늦다. 개선 포인트 나오면 바로 개선하고, 개선되면 다음 측정". 판정 기준 재확인: size cell 5%는 허용
 오차, (pattern,transport) size 합계(기하평균)가 baseline보다 낮으면 개선 대상. 개선은 posddd 리팩토링과 같이(성능 이득 없어도
 구조 개선이면 채택, D-044), codex sol ultra. 벤치 정정 커밋 1e91505a14(perf/phase2-judge). 정정 벤치·runs=3 판정 7 cell 후 배치
 중단, 개선 대상: PAIR/tcp(1024B thr 0.95, p95/p99 집계 1.01~1.05), PAIR/ws·wss(thr 집계 0.989~0.995), PAIR/inproc(64K latency
 p95 3.3~3.8×). 경계: PAIR/tls·ipc, PUBSUB/tcp p99 단일 size. job c016-perf-improve-r1(briefs/perf-improve-posddd-r1.b.prompt).
 
-## D-057 (2026-09-03 18:25, 머신 B, 사용자 승인) 남은 cell은 runs=1 스크리닝 → FAIL만 runs=3 확인
+## D-B57 (2026-09-03 18:25, 머신 B, 사용자 승인) 남은 cell은 runs=1 스크리닝 → FAIL만 runs=3 확인
 측정 시간이 병목(runs=3 + 재측정 = cell당 3.5~7분, 70 cell 4~5h). 판정 기준은 그대로 두고 측정 절차만: runs=1로 스크리닝해 PASS면
 확정, FAIL cell만 runs=3으로 1회 확인 측정. 확인된 FAIL을 묶어 개선 job 투입.
 
-## D-058 (2026-09-03 21:05, 머신 B, 사용자 지시) 순서 변경 — 리팩토링 먼저, 성능은 1024B 경량 비교로 동행
+## D-B58 (2026-09-03 21:05, 머신 B, 사용자 지시) 순서 변경 — 리팩토링 먼저, 성능은 1024B 경량 비교로 동행
 사용자: "리팩토링 먼저. 성능 회귀는 ROUTER_ROUTER·SENDSEND·REQREP 1024B만 비교하면서, 그 다음 성능 갭 채우기". 브랜치·worktree 추가
 금지("여기서 계속") → perf/phase2-judge 트리에서 모듈 범위별 job을 순서대로(rf1 api/socket → rf2 sockets common/dealer/router/
 internal → rf3 pipe/ypipe/mailbox → rf4 wake 불변식 테스트), 각 job 뒤 tools의 light_perf.sh(1024B, 8 cell)로 비교 후 커밋.
@@ -289,7 +613,7 @@ internal → rf3 pipe/ypipe/mailbox → rf4 wake 불변식 테스트), 각 job �
 cell·집계 PASS(tcp thr 집계 1.20, lat 0.83), ws/ipc/PUBSUB tcp는 tail 단일 cell이 run마다 다른 size로 이동(WSL2 drift) — 이 시점에서
 중단하고 감독관 gate 후 커밋. D-045 재발(단일 5h job) 기록: 이후 job은 원인 하나·1.5h 상한.
 
-## D-059 (2026-09-03 21:10, 머신 B) 리팩토링 전 1024B 경량 비교(commit 10cc586a83 vs core/v0.15.1, runs=1)
+## D-B59 (2026-09-03 21:10, 머신 B) 리팩토링 전 1024B 경량 비교(commit 10cc586a83 vs core/v0.15.1, runs=1)
 | cell | thr | lat | p95 | p99 |
 |---|---|---|---|---|
 | single ROUTER_ROUTER/tcp | 0.937 | 0.963 | 0.868 | 0.913 |
@@ -305,41 +629,41 @@ multi SENDSEND latency 1.1~2.1×(포화 latency — multi SENDSEND 벤치는 REQ
 multi ROUTER_ROUTER_REQREP thr 0.86. 주의: candidate multi DEALER_ROUTER_REQREP 1024B가 1회 FAIL(report에 원인 없음, 재실행 PASS)
 → 간헐 실패 여부를 조용한 구간에서 5회 반복해 확인해야 함.
 
-## D-060 (2026-09-04 00:35, 머신 B) rf1(api/socket) 채택·커밋
+## D-B60 (2026-09-04 00:35, 머신 B) rf1(api/socket) 채택·커밋
 c016-posddd-rf1(sol ultra, 21:03~) +607/−1478. 감독관 gate 전부 green. 1024B 경량 비교(vs 0.15.1): single ROUTER_ROUTER/tcp thr
 0.94→1.01, REQREP 1.05/1.09, multi REQREP 1.22/0.96 — 리팩토링 전 대비 나빠진 cell 없음. multi SENDSEND latency(2.1→3.2×)는 포화
 latency 지표로 run 간 편차가 커서 성능 갭 단계에서 벤치 측정 방식과 함께 다룬다. 커밋은 항목별 분리 대신 1건(hunk 겹침, 시간
 우선; 요약에 항목별 파일 묶음 기록). BLOCKERS 16건(범위 밖 test/runtime 이동 필요)은 rf2·rf3에서 해당 범위 것을 처리.
 
-## D-061 (2026-09-04, 머신 B) rf2(runtime/sockets) 채택·커밋
+## D-B61 (2026-09-04, 머신 B) rf2(runtime/sockets) 채택·커밋
 c016-posddd-rf2(sol ultra) +1304/−1689. 감독관 gate 전부 green. 1024B 비교(vs 0.15.1): single thr 1.03~1.22, multi 0.95~1.29 —
 rf1 대비 나빠진 cell 없음(tail 단일 run 편차만). BLOCKERS 3건 중 pipe 2건은 rf3 브리프에 이관, socket_send_pending_submit.cpp
 물리 분리(CMake 등록)는 후속.
 
-## D-062 (2026-09-04 02:30, 머신 B, 사용자 지시) PR은 하나로, 시간 단축
+## D-B62 (2026-09-04 02:30, 머신 B, 사용자 지시) PR은 하나로, 시간 단축
 사용자: "PR 하나로. 너무 오래 걸린다." → 플랜 §7의 3-PR 대신 perf/phase2-judge 단일 PR. 단축: hotpath gate 도구 job을 rf3와 병렬
 (core/build-hp), rf4는 rf3 직후 병렬(core/build-wk). 70 cell 4-size 전체 판정은 PR 뒤 별도(태그 전 필수, D-050)로 이동 — PR 본문에는
 1024B 경량 비교 표(리팩토링 전/후, 회귀 없음)를 넣는다.
 
-## D-063 (2026-09-04, 머신 B) rf3·hotpath gate 도구 커밋
+## D-B63 (2026-09-04, 머신 B) rf3·hotpath gate 도구 커밋
 rf3(pipe/ypipe/mailbox) 341974c4d6 +206/−357: gate green(test_backpressure_oneway_matrix_single_socket 1회 load timeout → 단독 2회
 4.6s PASS; 최종 gate에서 10회 반복 재확인 예정). hotpath gate 도구 커밋: 결정성 3회 ±0.06%, 인위 회귀 3.8× FAIL 확인, 기준값은
 감독관이 커밋 트리에서 --update-reference로 재생성(job 값과 0.02% 이내 일치). ctest 135. rf4(wake 테스트) 진행 중.
 
-## D-064 (2026-09-04, 머신 B) candidate multi DEALER_ROUTER_REQREP 간헐 실패 = Core completion 정지 회귀
+## D-B64 (2026-09-04, 머신 B) candidate multi DEALER_ROUTER_REQREP 간헐 실패 = Core completion 정지 회귀
 runner 반복 9회 중 5회 client exit 1(baseline 9/9 성공). 벤치에 진단 출력 추가 후: 포화 구간 뒤 drain에서 client socket 1~3개가
 3,094~11,703건 outstanding을 들고 정지(reply·200ms timeout completion 모두 1초 내 미도착). 다른 97~99 socket 정상. 이전 runner는
 drain을 요구하지 않아 검출 못 했고(정정 벤치의 two-phase가 드러냄), 1024B 경량 비교의 '-'가 이것. PR 전 수정 필수 →
 sol ultra job c016-reqrep-stall(briefs/reqrep-completion-stall.b.prompt, 1.5h 상한). 최종 gate(138/138·backpressure ×10)는 green.
 
-## D-065 (2026-09-04 05:05, 머신 B) 정지 회귀 상류 경계 확정 + origin/main 무결 확인
+## D-B65 (2026-09-04 05:05, 머신 B) 정지 회귀 상류 경계 확정 + origin/main 무결 확인
 1차 job(c016-reqrep-stall, 1.5h 상한): 정지 경계 = server session→ROUTER application pipe가 ROUTER에서 한 frame도 소비되지 않은 채
 (peer_read=0) 4MiB HWM에서 영구 정지; client 정지는 하류 backpressure. completion cache·timeout task·sub-LWM wake·client reader
 wake·수동 HWM 가설 실증 배제. Core diff 0으로 종료. 감독관: origin/main(1ac16a22b2)을 zlink-main-check에 빌드해 같은 벤치로
 6/6 성공 → 원인은 이 브랜치의 Core 커밋(8b6c2aa906 최우선: activate_read armed-flag gate / FQ publication opt-in / reclassify
 wake 소비 조건 / memory-order 분기). 2차 job c016-reqrep-stall-r2(hunk 단위 A/B 10회씩, 근본 수정 + 결정적 회귀 테스트).
 
-## D-066 (2026-09-04 05:10, 머신 B) 정지 회귀 근본 원인·수정
+## D-B66 (2026-09-04 05:10, 머신 B) 정지 회귀 근본 원인·수정
 1차 job이 상한 직전 확정: f3be895b3f의 ROUTER count-1 `xread_activated`/`xread_deactivated` fast path가 route-binding token을 확인하지
 않아, pair admission이 ready cache를 먼저 세운 anonymous pipe(identity 프레임이 나중에 오는 경우)를 adopted/FQ 등록된 것으로 오판 →
 첫 activation이 미등록 `_fq.activated()` no-op으로 소비되고 slow identity adoption을 영구히 잃음(peer_read=0). 수정: 두 fast path에

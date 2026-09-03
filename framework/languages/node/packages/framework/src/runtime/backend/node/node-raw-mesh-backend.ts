@@ -3,7 +3,6 @@ import {
   Message,
   RoutingId as BindingRoutingId,
   RequestResult,
-  SendFlags,
   SubmitResult,
   type RequestResult as RequestResultValue,
   type StreamSocket,
@@ -1995,15 +1994,15 @@ class RawStreamSessionService implements StreamSessionService {
     const target = this.sessionTargets.get(sessionRid);
     if (target === undefined) return false;
     try {
-      const operation = this.stream.trySend(target as unknown as BindingRoutingId);
+      const operation = this.stream.send(target as unknown as BindingRoutingId);
       const parts = decodeMultipartBuffers(decodeApplicationPayloadView(payload).payload);
       if (parts.length === 0) return false;
       let submit = operation.message(parts[0]!);
       for (let index = 1; index < parts.length; index++) {
         submit = submit.message(parts[index]!);
       }
-      const delivered = submit.flags(SendFlags.DontWait).submit();
-      return delivered;
+      submit.submit_sync();
+      return true;
     } catch {
       // A client may close its STREAM between the binding lookup and this
       // one-way delivery. Treat that transport transition as a closed

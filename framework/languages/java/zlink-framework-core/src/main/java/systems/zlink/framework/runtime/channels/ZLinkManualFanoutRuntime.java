@@ -228,8 +228,10 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
                 return;
             }
             if (monitor != null) {
-                monitor.onEvent(event -> onMonitorEvent(
-                    candidate, event.event()));
+                ZLinkSocketMonitorDrainLoop.start(
+                    "zlink-manual-fanout-monitor",
+                    monitor,
+                    event -> onMonitorEvent(candidate, event.event()));
             }
             // A close reservation observes the lane claim before it closes
             // the socket, so callbacks never retain an unregistered

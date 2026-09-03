@@ -46,10 +46,6 @@ public sealed class BackendMonitorWrapperTests
     {
         public RecvFlags? LastRecvFlags { get; private set; }
 
-        public void OnEvent(Action<MonitorEvent> handler)
-        {
-        }
-
         public MonitorEvent? Recv(RecvFlags flags = RecvFlags.None)
         {
             LastRecvFlags = flags;

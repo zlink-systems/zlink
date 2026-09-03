@@ -385,6 +385,8 @@ async def send_routed(
     measurement=True,
     method="send",
     _yield_after_submit=True,
+    _sync=False,
+    _deadline=None,
 ):
     while True:
         try:
@@ -396,7 +398,10 @@ async def send_routed(
                 op.messages(*payload)
             else:
                 op.message(payload)
-            await op.submit()
+            if _sync:
+                op.submit_sync()
+            else:
+                await op.submit()
             # Core may admit inline (op_id == 0), in which case awaiting the
             # public terminal does not suspend this coroutine. Always yield
             # one turn for continuous send loops so receive progress cannot
@@ -409,6 +414,8 @@ async def send_routed(
         except _submit_error_type() as exc:
             if exc.result != _submit_backpressured_result():
                 raise
+            if _deadline is not None and time.perf_counter() >= _deadline:
+                return False
             # No operation was accepted, so rebuild the public builder after
             # one cooperative event-loop turn. Core/HWM still owns depth;
             # this adds no retry timer, application window, or pending queue.

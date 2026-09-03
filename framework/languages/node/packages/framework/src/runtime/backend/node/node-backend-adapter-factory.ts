@@ -14,6 +14,7 @@ import type {
   ZLinkBackendRouterSocket,
   ZLinkBackendSocket,
   ZLinkBackendSocketMonitor,
+  ZLinkBackendStreamPacket,
   ZLinkBackendStreamSocket,
   ZLinkBackendSubscriberSocket,
   ZLinkChannelBackendAdapter,
@@ -91,7 +92,13 @@ class ZLinkNodeChannelBackendAdapter implements ZLinkChannelBackendAdapter {
 
 class ZLinkNodeStreamBackendAdapter implements ZLinkStreamBackendAdapter {
   createStreamSocket(context: ZLinkBackendContext): ZLinkBackendStreamSocket {
-    return wrapSocket(zlink.createStreamSocket(asNodeContext(context))) as unknown as ZLinkBackendStreamSocket;
+    const socket = zlink.createStreamSocket(asNodeContext(context));
+    socket.options.recvMode = zlink.StreamRecvMode.Packet;
+    return wrapSocket(socket) as unknown as ZLinkBackendStreamSocket;
+  }
+
+  createStreamPacket(): ZLinkBackendStreamPacket {
+    return new zlink.StreamPacket() as ZLinkBackendStreamPacket;
   }
 
   createReadablePoller(socket: ZLinkBackendStreamSocket): ZLinkBackendReadablePoller {

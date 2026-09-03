@@ -500,7 +500,8 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                 subscriber,
                 monitor);
             Connection candidate = connection;
-            monitor.onEvent(event -> {
+            ZLinkSocketMonitorDrainLoop.start(
+                "zlink-fanout-location-monitor", monitor, event -> {
                 if (isReadyEvent(event.event())) {
                     inStateLane(() -> {
                         if (connections.get(connectionId) == candidate
@@ -512,7 +513,7 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                 } else if (isTerminatedEvent(event.event())) {
                     remove(connectionId, candidate, null);
                 }
-            });
+                });
             boolean accepted = inStateLane(() -> {
                 boolean current = running
                     && epoch == lifecycleEpoch

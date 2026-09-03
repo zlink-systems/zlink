@@ -639,7 +639,7 @@ export class ZLinkChannelSocketRegistry {
    * same way the reference `SelectReady()` does.
    *
    * Every attempt yields to the event loop between polls. ClientServer admission completes on the
-   * monitor callbacks that the backend poll timer pumps, so a synchronous wait would starve the
+   * monitor drains that the backend poll timer pumps, so a synchronous wait would starve the
    * admission it is waiting for and burn the whole bound before failing anyway. That is this
    * execution model's form of the hazard the JVM mirror avoids by not holding the admission
    * monitor across its sleep.
@@ -650,6 +650,7 @@ export class ZLinkChannelSocketRegistry {
   ): Promise<ZLinkBackendDealerSocket | undefined> {
     const deadline = Date.now() + this.clientServerReadyWaitBoundMs(channelName);
     for (;;) {
+      this.drainSocketMonitors();
       const dealer = this.clientDealerForOutbound(channelName);
       if (dealer !== undefined) return dealer;
       if (Date.now() >= deadline) return undefined;
@@ -718,11 +719,7 @@ export class ZLinkChannelSocketRegistry {
         }
         handlers.add(next);
       },
-      recv: () => {
-        throw new ZLinkConfigurationException(
-          'ClientServer aggregate monitoring supports event callbacks only.'
-        );
-      },
+      drain: () => 0,
       dispose: async () => {
         disposed = true;
         if (handler !== undefined) {
@@ -795,7 +792,7 @@ export class ZLinkChannelSocketRegistry {
     channelName: string,
     received: {
       readonly parts: readonly Message[];
-      readonly requestSeq: bigint | null;
+      readonly replyToken: unknown | null;
       readonly routingId: unknown;
     },
     router: ZLinkBackendRouterSocket
@@ -808,11 +805,11 @@ export class ZLinkChannelSocketRegistry {
       const record = decodeClientServerControl(first.data());
       if (record.kind === 'livenessProbe'
         && received.parts.length === 1
-        && received.requestSeq !== null) {
+        && received.replyToken !== null) {
         reply = encodeClientServerLivenessAck(record.probeId);
       } else if (record.kind === 'livenessAck'
         && received.parts.length === 1
-        && received.requestSeq === null) {
+        && received.replyToken === null) {
         if (!this.acceptClientServerServerLivenessAck(
           channelName,
           String(received.routingId),
@@ -827,7 +824,7 @@ export class ZLinkChannelSocketRegistry {
         return true;
       } else if (record.kind !== 'hello'
         || received.parts.length !== 1
-        || received.requestSeq === null) {
+        || received.replyToken === null) {
         reply = encodeClientServerReject(1);
       } else {
         const descriptor = this.clientServerServerDescriptors.get(channelName);
@@ -854,10 +851,10 @@ export class ZLinkChannelSocketRegistry {
     } catch {
       reply = encodeClientServerReject(1);
     }
-    if (received.requestSeq !== null) {
+    if (received.replyToken !== null) {
       const message = RuntimeMessage.from(reply);
       try {
-        router.reply(received.routingId as RoutingId, received.requestSeq, message);
+        router.reply(received.routingId as RoutingId, received.replyToken, message);
       } finally {
         message.close();
       }
@@ -866,6 +863,7 @@ export class ZLinkChannelSocketRegistry {
   }
 
   tickClientServerLiveness(nowMs = performance.now()): void {
+    this.drainSocketMonitors();
     for (const connection of new Set(this.clientServerConnections.values())) {
       const connectionId = connection.readyConnectionId
         ?? connection.aliases.values().next().value as string | undefined;
@@ -1099,11 +1097,7 @@ export class ZLinkChannelSocketRegistry {
         }
         handlers.add(next);
       },
-      recv: () => {
-        throw new ZLinkConfigurationException(
-          'Aggregated fanout monitoring is callback-only.'
-        );
-      },
+      drain: () => 0,
       dispose: async () => {
         disposed = true;
         if (handler !== undefined) {
@@ -1358,6 +1352,10 @@ export class ZLinkChannelSocketRegistry {
       100
     );
     this.clientServerLivenessTimer.unref();
+  }
+
+  private drainSocketMonitors(): void {
+    for (const monitor of this.ownedMonitors) monitor.drain();
   }
 
   private removeReadyConnection(connectionId: string): void {

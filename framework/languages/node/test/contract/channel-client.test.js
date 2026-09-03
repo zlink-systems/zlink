@@ -46,7 +46,7 @@ const { resolveModuleProviders } = require('./helpers/nestjs-test-utils');
 const reservedPorts = new Set();
 
 test.afterEach(async () => {
-  // Native socket teardown completes its monitor callbacks asynchronously.
+  // Native socket teardown becomes observable to the monitor drain asynchronously.
   await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
@@ -190,7 +190,7 @@ test('raw RouteMesh applies current receive-flow state before bind and unregiste
     setReceiveFlowState(state) { calls.push(`flow:${state}`); },
     bind() { calls.push('bind'); },
     localEndpoint() { return 'tcp://127.0.0.1:9404'; },
-    monitor() { return { statusReady() { return true; }, close() { calls.push('monitor:close'); } }; },
+    monitor() { return { drain() { return 0; }, statusReady() { return true; }, close() { calls.push('monitor:close'); } }; },
     close() { calls.push('router:close'); }
   };
   const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({
@@ -255,7 +255,7 @@ test('raw RouteMesh receive-flow controller preserves the latest reentrant trans
     },
     bind() { calls.push('bind'); },
     localEndpoint() { return 'tcp://127.0.0.1:9405'; },
-    monitor() { return { statusReady() { return true; }, close() {} }; },
+    monitor() { return { drain() { return 0; }, statusReady() { return true; }, close() {} }; },
     close() {}
   };
   const runtime = new RawServiceMeshRuntime({
@@ -308,7 +308,7 @@ test('raw RouteMesh reports a receive-flow configuration failure once', async ()
     },
     bind() {},
     localEndpoint() { return 'tcp://127.0.0.1:9406'; },
-    monitor() { return { statusReady() { return true; }, close() {} }; },
+    monitor() { return { drain() { return 0; }, statusReady() { return true; }, close() {} }; },
     close() {}
   };
   const runtime = new RawServiceMeshRuntime({
@@ -959,10 +959,11 @@ test('route packet dispatcher sends channel envelopes to route handlers before S
     }))),
     zlink.Message.from(Buffer.from(JSON.stringify({ mode: 'two-player' })))
   ];
+  const replyToken = {};
   const router = {
-    reply(routingId, requestSeq) {
+    reply(routingId, token) {
       assert.equal(String(routingId), 'api-node');
-      assert.equal(requestSeq, 7n);
+      assert.equal(token, replyToken);
       return {
         message(message) {
           replyParts.push(message);
@@ -977,7 +978,7 @@ test('route packet dispatcher sends channel envelopes to route handlers before S
     await dispatcher.dispatch({
       parts,
       routingId: 'api-node',
-      requestSeq: 7n
+      replyToken
     }, router);
 
     assert.equal(bridgeCalls, 0);
@@ -1315,9 +1316,9 @@ test('ZLinkChannelClient request/reply round-trips through public binding socket
     assert.equal(envelope.header.channelName, 'api');
     assert.equal(envelope.header.messageName, 'Ping');
     assert.deepEqual(envelope.body, { value: 'ping' });
-    assert.equal(typeof request.requestSeq, 'bigint');
+    assert.notEqual(request.replyToken, null);
     submitRawReplyMultipart(
-      router.reply(request.routingId, request.requestSeq),
+      router.reply(request.routingId, request.replyToken),
       encodeDotnetEnvelope({
         ...envelope.header,
         kind: 2,
@@ -2238,7 +2239,7 @@ test('ZLinkFrameworkRuntimeHost waits for in-flight channel dispatch before clos
       errorMessage: null
     }, { value: 'wait' }).map(fakeMessagePart),
     routingId: 'client-node',
-    requestSeq: 1n,
+    replyToken: {},
     close() {
       calls.push('received:close');
       this.parts.forEach((part) => part.close());
@@ -3344,18 +3345,14 @@ test('ZLinkRoutePacketDispatcher invokes routed send and request handlers', asyn
   const ctx = zlink.createContext();
   const localRouter = zlink.createRouterSocket(ctx);
   const remoteDealer = zlink.createDealerSocket(ctx);
-  const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
+  const endpoint = `inproc://route-dispatch-${process.pid}-${Date.now()}`;
   const events = [];
 
   try {
     localRouter.setRoutingId(zlink.RoutingId.from('node-a'));
     remoteDealer.setRoutingId(zlink.RoutingId.from('node-b'));
-    localRouter.options.probe = true;
-    remoteDealer.options.probe = true;
     localRouter.bind(endpoint);
     remoteDealer.connect(endpoint);
-    const probe = await recvRouterMessage(localRouter);
-    probe.close();
     const dispatcher = new framework.ZLinkRoutePacketDispatcher({
       routerChannelId: 'mesh',
       dispatchErrors: noDispatchErrorReporter(),
@@ -3415,10 +3412,16 @@ test('ZLinkRoutePacketDispatcher invokes routed send and request handlers', asyn
       }, { value: 'ping' })
     );
     const request = await recvRouterMessage(localRouter);
-    await dispatcher.dispatch(request, localRouter);
-    request.close();
+    assert.notEqual(request.replyToken, null);
+    await dispatcher.dispatch(request, {
+      reply() {
+        return request.reply();
+      }
+    });
+    assert.match(events[1], /^request:mesh:RoutePing:ping$/);
 
     const reply = await withTimeout(replyPromise, 1000, 'route dispatcher reply');
+    request.close();
     const envelope = decodeDotnetEnvelope(reply);
     assert.equal(envelope.header.kind, 2);
     assert.deepEqual(envelope.body, { value: 'pong' });
@@ -3432,11 +3435,12 @@ test('ZLinkRoutePacketDispatcher invokes routed send and request handlers', asyn
   }
 });
 
-test('ZLinkRoutePacketDispatcher drops route requests without reply sequence without throwing', async () => {
+test('ZLinkRoutePacketDispatcher drops route requests without a reply token without throwing', async () => {
   const reported = [];
   const dispatcher = new framework.ZLinkRoutePacketDispatcher({
     routerChannelId: 'mesh',
     dispatchErrors: {
+      flow: { flowCreationEnabled() { return false; } },
       report(event) {
         reported.push(event);
       }
@@ -3469,13 +3473,13 @@ test('ZLinkRoutePacketDispatcher drops route requests without reply sequence wit
   await dispatcher.dispatch({
     parts,
     routingId: 'node-b',
-    requestSeq: null,
+    replyToken: null,
     send() {
       throw new Error('send path must not be used for request');
     }
   }, {
     reply() {
-      throw new Error('reply path must not be used without requestSeq');
+      throw new Error('reply path must not be used without a reply token');
     }
   });
 
@@ -3506,7 +3510,7 @@ test('ZLinkRoutePacketDispatcher forwards SPOT-addressed route frames to local S
     parts,
     routingId: 'node-b',
     spotId: 'room-1',
-    requestSeq: null,
+    replyToken: null,
     send() {
       return captureRawMultipart(forwarded, () => submitted);
     }
@@ -3542,7 +3546,7 @@ test('ZLinkChannelRequestDispatcher propagates SPOT delivery submit failure', as
     parts: [fakeMessagePart(Buffer.from('spot-frame'))],
     routingId: 'node-b',
     spotId: 'room-1',
-    requestSeq: null,
+    replyToken: null,
     send() {
       return captureRawMultipart([], async () => {
         throw failure;
@@ -3627,11 +3631,11 @@ test('ZLinkRoutePacketDispatcher lets route bridge handle SPOT-addressed bridge 
     dispatchErrors: noDispatchErrorReporter(),
     handlers: [],
     spotRouteBridge: {
-      handleRouterReceived(channelName, sourceNodeRid, requestSeq, parts) {
+      handleRouterReceived(channelName, sourceNodeRid, correlation, parts) {
         handled.push({
           channelName,
           sourceNodeRid,
-          requestSeq,
+          correlation,
           parts: parts.map((part) => part.data().toString())
         });
         return true;
@@ -3648,7 +3652,7 @@ test('ZLinkRoutePacketDispatcher lets route bridge handle SPOT-addressed bridge 
     parts,
     routingId: 'node-b',
     spotId: 'room-1',
-    requestSeq: 7n,
+    replyToken: {},
     send() {
       throw new Error('direct SPOT delivery must not run for bridge frames');
     }
@@ -3661,7 +3665,7 @@ test('ZLinkRoutePacketDispatcher lets route bridge handle SPOT-addressed bridge 
   assert.deepEqual(handled, [{
     channelName: 'mesh',
     sourceNodeRid: 'node-b',
-    requestSeq: 7n,
+    correlation: 0n,
     parts: ['__zlink.routed_spot.egress.request', 'room-1', 'payload']
   }]);
 });
@@ -4033,7 +4037,7 @@ test('ZLinkChannelRequestDispatcher replies error and reports provider record fo
   await dispatcher.dispatch({
     parts,
     routingId: 'client-1',
-    requestSeq: 7n
+    replyToken: {}
   }, router);
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -4090,7 +4094,7 @@ test('ZLinkChannelRequestDispatcher rejects filter short circuit without seriali
   await dispatcher.dispatch({
     parts,
     routingId: 'client-1',
-    requestSeq: 8n
+    replyToken: {}
   }, {
     reply() {
       return captureMultipart(replies);
@@ -4111,7 +4115,7 @@ test('ZLinkChannelRequestDispatcher rejects filter short circuit without seriali
   assert.notEqual(replyEnvelope.body, 'filter-reply');
 });
 
-test('ZLinkChannelRequestDispatcher drops requests without reply sequence without invoking handlers', async () => {
+test('ZLinkChannelRequestDispatcher drops requests without a reply token without invoking handlers', async () => {
   telemetry.reset();
   const events = telemetry.records;
   let handlerInvocations = 0;
@@ -4145,10 +4149,10 @@ test('ZLinkChannelRequestDispatcher drops requests without reply sequence withou
   await dispatcher.dispatch({
     parts,
     routingId: 'client-1',
-    requestSeq: null
+    replyToken: null
   }, {
     reply() {
-      assert.fail('request without requestSeq must not create a reply operation');
+      assert.fail('request without a reply token must not create a reply operation');
     }
   });
   await new Promise((resolve) => setImmediate(resolve));
@@ -4220,7 +4224,7 @@ test('DERR-006 ZLinkChannelRequestDispatcher replies error and reports provider 
   await dispatcher.dispatch({
     parts,
     routingId: 'client-1',
-    requestSeq: 11n
+    replyToken: {}
   }, router);
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -4257,7 +4261,7 @@ test('DERR-006 ZLinkChannelRequestDispatcher replies error and reports provider 
       errorMessage: null
     }, { value: 'after-decode-error' }).map(fakeMessagePart),
     routingId: 'client-1',
-    requestSeq: 12n
+    replyToken: {}
   }, router);
   const afterEnvelope = decodeDotnetEnvelope(replies);
   assert.equal(afterEnvelope.header.kind, 2);
@@ -4281,15 +4285,16 @@ test('ZLinkChannelRequestDispatcher submits error replies directly to the comple
   const router = {
     attempts: 0,
     routingId: undefined,
-    requestSeq: undefined,
-    reply(routingId, requestSeq) {
+    replyToken: undefined,
+    reply(routingId, replyToken) {
       this.attempts += 1;
       this.routingId = routingId;
-      this.requestSeq = requestSeq;
+      this.replyToken = replyToken;
       return captureMultipart(replies);
     }
   };
 
+  const replyToken = {};
   await dispatcher.dispatch({
     parts: encodeDotnetEnvelope({
       kind: 1,
@@ -4303,12 +4308,12 @@ test('ZLinkChannelRequestDispatcher submits error replies directly to the comple
       errorMessage: null
     }, { value: 'boom' }).map(fakeMessagePart),
     routingId: 'client-1',
-    requestSeq: 17n
+    replyToken
   }, router);
 
   assert.equal(router.attempts, 1);
   assert.equal(router.routingId, 'client-1');
-  assert.equal(router.requestSeq, 17n);
+  assert.equal(router.replyToken, replyToken);
   assert.equal(replies.length, 2);
   const replyEnvelope = decodeDotnetEnvelope(replies);
   assert.equal(replyEnvelope.header.kind, 5);
@@ -4429,7 +4434,7 @@ test('DERR-009 ZLinkChannelRequestDispatcher writes structured dispatch errors t
         errorMessage: null
       }, { value: 'missing' }).map(fakeMessagePart),
       routingId: 'client-1',
-      requestSeq: 21n
+      replyToken: {}
     }, router);
     await dispatcher.dispatch({
       parts: [
@@ -4450,7 +4455,7 @@ test('DERR-009 ZLinkChannelRequestDispatcher writes structured dispatch errors t
         fakeMessagePart(Buffer.from('{'))
       ],
       routingId: 'client-1',
-      requestSeq: 22n
+      replyToken: {}
     }, router);
     await dispatcher.dispatch({
       parts: encodeDotnetEnvelope({
@@ -4465,7 +4470,7 @@ test('DERR-009 ZLinkChannelRequestDispatcher writes structured dispatch errors t
         errorMessage: null
       }, { value: 'boom' }).map(fakeMessagePart),
       routingId: 'client-1',
-      requestSeq: 23n
+      replyToken: {}
     }, router);
   assert.equal(events.length, 3);
   assert.deepEqual(events.map((event) => event.eventId), [
@@ -5115,7 +5120,7 @@ function spotForwardRecord(label, submit) {
     parts: [fakeMessagePart(Buffer.from(label))],
     routingId: 'source-node',
     spotId: `spot-${label}`,
-    requestSeq: null,
+    replyToken: null,
     send() {
       return captureRawMultipart([], submit);
     },
@@ -5130,7 +5135,7 @@ function submitRequestMultipart(operation, parts) {
   for (let index = 1; index < parts.length; index++) {
     current = current.message(parts[index]);
   }
-  return current.submit();
+  return current.timeout(1000).submit();
 }
 
 function withTimeout(promise, timeoutMs, label) {

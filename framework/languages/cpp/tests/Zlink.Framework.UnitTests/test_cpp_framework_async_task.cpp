@@ -97,7 +97,7 @@ class native_async_state_t final : public zlink::detail::async_result_state_t<in
     }
 
     int take () override { return value; }
-    bool cancel () noexcept override { return false; }
+    void detach () noexcept override {}
     void abandon (std::coroutine_handle<> continuation_) noexcept override
     {
         std::lock_guard<std::mutex> lock (mutex);

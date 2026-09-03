@@ -106,10 +106,10 @@ export class ZLinkChannelRequestDispatcher {
     parts: readonly Message[];
     routingId: unknown;
     spotId?: unknown;
-    requestSeq: bigint | null;
+    replyToken: unknown | null;
     send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
   }, router: {
-    reply(routingId: unknown, requestSeq: bigint): ZLinkMultipartReplyOperation;
+    reply(routingId: unknown, replyToken: unknown): ZLinkMultipartReplyOperation;
   }, signal?: AbortSignal, decodedHeader?: ZLinkChannelEnvelopeHeader): Promise<boolean | void> {
     if (received.spotId !== null && received.spotId !== undefined) {
       if (received.send === undefined) {
@@ -125,17 +125,17 @@ export class ZLinkChannelRequestDispatcher {
     try {
       envelope = decodeChannelEnvelope(received.parts, decodedHeader, this.flowEnabled());
     } catch (error) {
-      const requestSeq = received.requestSeq;
+      const replyToken = received.replyToken;
       const info = inspectMalformedChannelHeader(received.parts, this.flowEnabled());
       await this.pipeline.dispatchMalformed({
         info,
         error,
-        transportRequest: requestSeq !== null,
-        writeProtocolError: requestSeq === null
+        transportRequest: replyToken !== null,
+        writeProtocolError: replyToken === null
           ? undefined
           : protocolError => this.submitReply(
               appendParts(
-                router.reply(received.routingId, requestSeq),
+                router.reply(received.routingId, replyToken),
                 encodeChannelErrorReplyParts(
                   malformedProtocolErrorRequestHeader(this.options.channelName, info),
                   protocolError
@@ -188,12 +188,12 @@ export class ZLinkChannelRequestDispatcher {
       flowId: envelope.header.flowId,
       flowOrigin: envelope.header.flowOrigin
     };
-    if (received.requestSeq === null) {
+    if (received.replyToken === null) {
       this.pipeline.dropMissingReplyPath(requestFields);
       return;
     }
 
-    const requestSeq = received.requestSeq;
+    const replyToken = received.replyToken;
     const handler = this.options.handlers.get(packetName);
     const context: ZLinkMessageContext = {
       meshName: this.options.meshName,
@@ -213,14 +213,14 @@ export class ZLinkChannelRequestDispatcher {
       missingHandlerMessage: `No channel request handler is registered for '${this.options.channelName}:${packetName}'.`,
       writeReply: reply => this.submitReply(
         appendParts(
-          router.reply(received.routingId, requestSeq),
+          router.reply(received.routingId, replyToken),
           encodeChannelReplyParts(envelope.header, reply, this.options.codecs)
         ),
         signal
       ),
       writeError: error => this.submitReply(
         appendParts(
-          router.reply(received.routingId, requestSeq),
+          router.reply(received.routingId, replyToken),
           encodeChannelErrorReplyParts(envelope.header, error)
         ),
         signal
@@ -503,7 +503,7 @@ export class ZLinkRoutePacketDispatcher {
     parts: readonly Message[];
     routingId: unknown;
     spotId?: unknown;
-    requestSeq: bigint | null;
+    replyToken: unknown | null;
     send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
   }): boolean | Promise<void> {
     const channelHeader = tryDecodeChannelHeader(received.parts, this.flowEnabled());
@@ -513,7 +513,7 @@ export class ZLinkRoutePacketDispatcher {
       && this.spotRouteBridge.handleRouterReceived(
         this.routerChannelId,
         received.routingId as RoutingId,
-        received.requestSeq ?? 0n,
+        0n,
         received.parts
       )
     ) {
@@ -532,10 +532,10 @@ export class ZLinkRoutePacketDispatcher {
     parts: readonly Message[];
     routingId: unknown;
     spotId?: unknown;
-    requestSeq: bigint | null;
+    replyToken: unknown | null;
     send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
   }, router: {
-    reply(routingId: unknown, requestSeq: bigint): ZLinkMultipartReplyOperation;
+    reply(routingId: unknown, replyToken: unknown): ZLinkMultipartReplyOperation;
   }, signal?: AbortSignal, decodedHeader?: ZLinkChannelEnvelopeHeader, infrastructureChecked = false): Promise<boolean | void> {
     const channelHeader = decodedHeader ?? tryDecodeChannelHeader(received.parts, this.flowEnabled());
     if (!infrastructureChecked) {
@@ -552,18 +552,18 @@ export class ZLinkRoutePacketDispatcher {
     try {
       envelope = decodeChannelEnvelope(received.parts, channelHeader, this.flowEnabled());
     } catch (error) {
-      const requestSeq = received.requestSeq;
+      const replyToken = received.replyToken;
       const info = inspectMalformedChannelHeader(received.parts, this.flowEnabled());
       await this.pipeline.dispatchMalformed({
         info,
         error,
-        transportRequest: requestSeq !== null,
+        transportRequest: replyToken !== null,
         sourceRid: String(received.routingId),
-        writeProtocolError: requestSeq === null
+        writeProtocolError: replyToken === null
           ? undefined
           : protocolError => this.submitReply(
               appendParts(
-                router.reply(received.routingId, requestSeq),
+                router.reply(received.routingId, replyToken),
                 encodeChannelErrorReplyParts(
                   malformedProtocolErrorRequestHeader(this.routerChannelId, info),
                   protocolError
@@ -605,7 +605,7 @@ export class ZLinkRoutePacketDispatcher {
       return;
     }
 
-    if (received.requestSeq === null) {
+    if (received.replyToken === null) {
       this.pipeline.dropMissingReplyPath({
         messageKind: ZLinkDispatchMessageKind.Request,
         packetName,
@@ -626,7 +626,7 @@ export class ZLinkRoutePacketDispatcher {
       flowOrigin: envelope.header.flowOrigin
     };
     const handler = this.requestHandlers.get(packetName);
-    const requestSeq = received.requestSeq;
+    const replyToken = received.replyToken;
     const codecs = codecsForFrameworkPacket(packetName, this.codecs);
     await this.pipeline.dispatchRequest({
       fields: requestFields,
@@ -638,13 +638,13 @@ export class ZLinkRoutePacketDispatcher {
       missingHandlerMessage: `No routed request handler is registered for '${this.routerChannelId}:${packetName}'.`,
       writeReply: reply => this.submitReply(
         appendParts(
-          router.reply(received.routingId, requestSeq),
+          router.reply(received.routingId, replyToken),
           encodeChannelReplyParts(envelope.header, reply, codecs)
         )
       ),
       writeError: error => this.submitReply(
         appendParts(
-          router.reply(received.routingId, requestSeq),
+          router.reply(received.routingId, replyToken),
           encodeChannelErrorReplyParts(envelope.header, error)
         )
       )

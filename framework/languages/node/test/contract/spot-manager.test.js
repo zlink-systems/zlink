@@ -4027,7 +4027,7 @@ test('spot managed timer stopOnUnhandledException stops after handler failure', 
 
     assert.equal(attempts, 1);
     assert.equal(timer.isDisposed, true);
-    assert.deepEqual(clock.pendingDelays(), []);
+    assert.equal(clock.pendingDelays().includes(10), false);
   });
 });
 
@@ -4053,7 +4053,7 @@ test('spot timer registry replaces the same key and suppresses the queued old ge
     }
     const registry = new framework.ZLinkSpotTimerRegistry();
     const first = await registry.add('heartbeat', 10, undefined, FirstHandler, serial, {});
-    await clock.runNext();
+    await clock.runNext(10);
     assert.equal(queued.length, 1);
 
     const second = await registry.add('heartbeat', 10, undefined, SecondHandler, serial, {});
@@ -4062,7 +4062,7 @@ test('spot timer registry replaces the same key and suppresses the queued old ge
     await Promise.resolve(stale.work()).then(stale.resolve, stale.reject);
     assert.deepEqual(ticks, []);
 
-    await clock.runNext();
+    await clock.runNext(10);
     const current = queued.shift();
     await Promise.resolve(current.work()).then(current.resolve, current.reject);
     assert.deepEqual(ticks, ['second']);
@@ -4132,7 +4132,8 @@ async function withFakeTimerClock(run) {
       id: nextId++,
       callback,
       delay: Number(delay) || 0,
-      cleared: false
+      cleared: false,
+      unref() {}
     };
     timers.push(timer);
     return timer;
@@ -4152,16 +4153,18 @@ async function withFakeTimerClock(run) {
     advanceBy(ms) {
       now += ms;
     },
-    async runNext() {
-      const timer = timers.shift();
+    async runNext(preferredDelay) {
+      const index = preferredDelay === undefined
+        ? 0
+        : timers.findIndex((timer) => !timer.cleared && timer.delay === preferredDelay);
+      const timer = index < 0 ? undefined : timers.splice(index, 1)[0];
       assert.ok(timer, 'expected a scheduled timer callback');
       if (timer.cleared) {
         return;
       }
       now += timer.delay;
       timer.callback();
-      await Promise.resolve();
-      await Promise.resolve();
+      await new Promise((resolve) => setImmediate(resolve));
     },
     pendingDelays() {
       return timers

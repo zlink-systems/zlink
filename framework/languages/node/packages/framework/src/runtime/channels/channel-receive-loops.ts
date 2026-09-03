@@ -53,11 +53,11 @@ interface ZLinkChannelRequestDispatchLoop {
       readonly parts: readonly Message[];
       readonly routingId: unknown;
       readonly spotId?: unknown;
-      readonly requestSeq: bigint | null;
+      readonly replyToken: unknown | null;
       readonly send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
     },
     router: ZLinkBackendRouterSocket & {
-      reply(routingId: unknown, requestSeq: bigint): ZLinkMultipartReplyOperation;
+      reply(routingId: unknown, replyToken: unknown): ZLinkMultipartReplyOperation;
     },
     signal?: AbortSignal,
     decodedHeader?: ZLinkChannelEnvelopeHeader
@@ -84,7 +84,7 @@ interface ZLinkRoutePacketDispatchLoop {
     readonly parts: readonly Message[];
     readonly routingId: unknown;
     readonly spotId?: unknown;
-    readonly requestSeq: bigint | null;
+    readonly replyToken: unknown | null;
     readonly send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
   }): boolean | Promise<void>;
   dispatch(
@@ -92,10 +92,10 @@ interface ZLinkRoutePacketDispatchLoop {
       readonly parts: readonly Message[];
       readonly routingId: unknown;
       readonly spotId?: unknown;
-      readonly requestSeq: bigint | null;
+      readonly replyToken: unknown | null;
     },
     router: {
-      reply(routingId: unknown, requestSeq: bigint): ZLinkMultipartReplyOperation;
+      reply(routingId: unknown, replyToken: unknown): ZLinkMultipartReplyOperation;
     },
     signal?: AbortSignal,
     decodedHeader?: ZLinkChannelEnvelopeHeader,
@@ -108,7 +108,7 @@ interface ZLinkChannelInfrastructureHandler {
     received: {
       readonly parts: readonly Message[];
       readonly routingId: unknown;
-      readonly requestSeq: bigint | null;
+      readonly replyToken: unknown | null;
     },
     router: ZLinkBackendRouterSocket
   ): boolean;
@@ -212,7 +212,7 @@ export class ZLinkChannelReceiveLoop {
   constructor(
     private readonly channelName: string,
     private readonly router: ZLinkBackendRouterSocket & {
-      reply(routingId: unknown, requestSeq: bigint): ZLinkMultipartReplyOperation;
+      reply(routingId: unknown, replyToken: unknown): ZLinkMultipartReplyOperation;
     },
     private readonly dispatcher: ZLinkChannelRequestDispatchLoop,
     private readonly spotRouteBridge: ZLinkBackendSpotRouteBridge | undefined,
@@ -361,7 +361,7 @@ export class ZLinkChannelReceiveLoop {
     parts: readonly Message[];
     routingId: unknown;
     spotId?: unknown;
-    requestSeq: bigint | null;
+    replyToken: unknown | null;
     send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
     close(): void;
   }, signal?: AbortSignal, decodedHeader?: ZLinkChannelEnvelopeHeader, infrastructureChecked = false, releaseRawReceive?: () => void): Promise<void> {
@@ -395,7 +395,7 @@ export class ZLinkChannelReceiveLoop {
   private classify(received: {
     parts: readonly Message[];
     routingId: unknown;
-    requestSeq: bigint | null;
+    replyToken: unknown | null;
   }):
     | { readonly kind: 'consumed'; readonly closeReceived: boolean }
     | { readonly kind: 'application'; readonly decodedHeader?: ZLinkChannelEnvelopeHeader } {
@@ -408,7 +408,7 @@ export class ZLinkChannelReceiveLoop {
       && this.spotRouteBridge?.handleRouterReceived(
         this.channelName,
         received.routingId as RoutingId,
-        received.requestSeq ?? 0n,
+        0n,
         received.parts
       ) === true
     ) {
@@ -639,7 +639,7 @@ export class ZLinkRouteReceiveLoop {
 
   constructor(
     private readonly router: ZLinkBackendRouterSocket & {
-      reply(routingId: unknown, requestSeq: bigint): ZLinkMultipartReplyOperation;
+      reply(routingId: unknown, replyToken: unknown): ZLinkMultipartReplyOperation;
     },
     private readonly dispatcher: ZLinkRoutePacketDispatchLoop,
     private readonly poller: ZLinkBackendReadablePoller,
@@ -796,7 +796,7 @@ export class ZLinkRouteReceiveLoop {
     parts: readonly Message[];
     routingId: unknown;
     spotId?: unknown;
-    requestSeq: bigint | null;
+    replyToken: unknown | null;
     close(): void;
   }, signal?: AbortSignal, infrastructureChecked = false, releaseRawReceive?: () => void): Promise<void> {
     let closeReceived = true;

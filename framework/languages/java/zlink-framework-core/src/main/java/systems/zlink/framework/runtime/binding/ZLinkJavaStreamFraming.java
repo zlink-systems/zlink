@@ -36,7 +36,8 @@ final class ZLinkJavaStreamFraming {
                 Map.of()),
             payload.body()));
         try {
-            return operation.message(frame).flags(flags).submit();
+            return ZLinkJavaSocketSupport.submitSync(
+                operation, List.of(frame));
         } finally {
             frame.close();
         }
@@ -49,7 +50,8 @@ final class ZLinkJavaStreamFraming {
         SendFlags flags) {
         Message frame = frame(header, parts);
         try {
-            return operation.message(frame).flags(flags).submit();
+            return ZLinkJavaSocketSupport.submitSync(
+                operation, List.of(frame));
         } finally {
             frame.close();
         }

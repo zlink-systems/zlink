@@ -118,7 +118,7 @@ public sealed partial class UnhandledDispatchPolicyTests
                     null);
                 try
                 {
-                    publisher.TryPublish("events.child").Messages(parts).Submit();
+                    TryPublishParts(publisher, "events.child", parts);
                 }
                 finally
                 {
@@ -441,7 +441,7 @@ public sealed partial class UnhandledDispatchPolicyTests
                 null);
             try
             {
-                publisher.TryPublish("events").Messages(parts).Submit();
+                TryPublishParts(publisher, "events", parts);
             }
             finally
             {
@@ -630,6 +630,19 @@ public sealed partial class UnhandledDispatchPolicyTests
         await runner.StopAsync();
     }
 
+    private static bool TryPublishParts(
+        IPublisherSocket publisher,
+        string topic,
+        IReadOnlyList<Message> parts)
+    {
+        if (parts.Count == 0)
+            throw new ArgumentException("At least one message part is required.", nameof(parts));
+        var submit = publisher.TryPublish(topic).Message(parts[0]);
+        for (var index = 1; index < parts.Count; index++)
+            submit = submit.Message(parts[index]);
+        return submit.Submit();
+    }
+
     private static async Task<Received> ReceiveAsync(
         IRouterSocket router,
         TimeSpan timeout)
@@ -719,7 +732,7 @@ public sealed partial class UnhandledDispatchPolicyTests
                 var parts = CreateParts();
                 try
                 {
-                    publisher.TryPublish("events.child").Messages(parts).Submit();
+                    TryPublishParts(publisher, "events.child", parts);
                 }
                 finally
                 {

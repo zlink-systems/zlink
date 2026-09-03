@@ -64,16 +64,57 @@ void zlink::routing_socket_base_t::xwrite_activated (pipe_t *pipe_)
     mark_out_pipe_active (&index_it->second->second);
 }
 
-std::string zlink::routing_socket_base_t::extract_connect_routing_id ()
+void zlink::routing_socket_base_t::snapshot_pending_connect_routing_id (
+  uint64_t transport_pair_id_)
 {
-    std::string res = ZLINK_MOVE (_connect_routing_id);
+    std::unique_lock<std::mutex> route_lifecycle_lock;
+    if (std::mutex *const sync = route_lifecycle_mutex ())
+        route_lifecycle_lock = std::unique_lock<std::mutex> (*sync);
+    if (transport_pair_id_ == 0)
+        return;
+    // One-shot: the alias belongs to this connect only. Move it out of the
+    // socket-global slot so a later connect without a fresh alias cannot
+    // inherit it, and so the async pipe-identify no longer races a later
+    // setter that would steal the alias for the wrong pipe.
+    if (_connect_routing_id.empty ()) {
+        _pending_connect_routing_id.erase (transport_pair_id_);
+        return;
+    }
+    _pending_connect_routing_id[transport_pair_id_] =
+      ZLINK_MOVE (_connect_routing_id);
     _connect_routing_id.clear ();
-    return res;
 }
 
-bool zlink::routing_socket_base_t::connect_routing_id_is_set () const
+void zlink::routing_socket_base_t::apply_pending_connect_routing_id (
+  uint64_t transport_pair_id_, pipe_t *pipe_)
 {
-    return !_connect_routing_id.empty ();
+    if (!pipe_ || transport_pair_id_ == 0)
+        return;
+    std::unique_lock<std::mutex> route_lifecycle_lock;
+    if (std::mutex *const sync = route_lifecycle_mutex ())
+        route_lifecycle_lock = std::unique_lock<std::mutex> (*sync);
+    const std::map<uint64_t, std::string>::const_iterator it =
+      _pending_connect_routing_id.find (transport_pair_id_);
+    if (it == _pending_connect_routing_id.end () || it->second.empty ())
+        return;
+    // The alias is the local route identity for this connect and must win over
+    // any peer identity already published on the pipe (inproc sets the peer
+    // routing id before this point). RID adoption reads it back through
+    // get_routing_id().
+    blob_t alias (reinterpret_cast<const unsigned char *> (it->second.data ()),
+                  it->second.size ());
+    pipe_->set_router_socket_routing_id (alias);
+}
+
+void zlink::routing_socket_base_t::forget_pending_connect_routing_id (
+  uint64_t transport_pair_id_)
+{
+    if (transport_pair_id_ == 0)
+        return;
+    std::unique_lock<std::mutex> route_lifecycle_lock;
+    if (std::mutex *const sync = route_lifecycle_mutex ())
+        route_lifecycle_lock = std::unique_lock<std::mutex> (*sync);
+    _pending_connect_routing_id.erase (transport_pair_id_);
 }
 
 void zlink::routing_socket_base_t::add_out_pipe (blob_t routing_id_,
@@ -234,10 +275,26 @@ bool zlink::routing_socket_base_t::xsubmit_retry_allowed (const zlink_routing_id
     if (outpipe)
         return outpipe->locally_initiated;
 
-    if (_connect_routing_id.size () == routing_id.size ()
-        && (_connect_routing_id.empty ()
-            || memcmp (_connect_routing_id.data (), routing_id.data (),
-                       routing_id.size ()) == 0))
+    // A locally initiated route whose Application pipe has not been admitted
+    // yet (still connecting or reconnecting) is retry-eligible. Match either a
+    // per-connect snapshot taken at zlink_connect(), or the socket-global slot
+    // in the window before the connect that snapshots it.
+    for (std::map<uint64_t, std::string>::const_iterator it =
+           _pending_connect_routing_id.begin (),
+           end = _pending_connect_routing_id.end ();
+         it != end; ++it) {
+        if (!it->second.empty () && it->second.size () == routing_id.size ()
+            && memcmp (it->second.data (), routing_id.data (),
+                       routing_id.size ())
+                 == 0)
+            return true;
+    }
+
+    if (!_connect_routing_id.empty ()
+        && _connect_routing_id.size () == routing_id.size ()
+        && memcmp (_connect_routing_id.data (), routing_id.data (),
+                   routing_id.size ())
+             == 0)
         return true;
 
     return _submit_retry_local_rids.count (routing_id) != 0;

@@ -1,4 +1,5 @@
 package systems.zlink.framework.runtime.streams;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
@@ -94,12 +95,9 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
-    void usesRecvModeAndPreservesTheSourceRoutingId() throws Exception {
+    void pullsOneCompletePacketAndPreservesTheSourceRoutingId() throws Exception {
         FakeStream stream = new FakeStream();
-        stream.enqueue(PEER_A, new byte[0]);
-        byte[] frame = frame("segmented", "{}");
-        stream.enqueue(PEER_A, Arrays.copyOfRange(frame, 0, 4));
-        stream.enqueue(PEER_A, Arrays.copyOfRange(frame, 4, frame.length));
+        stream.enqueue(PEER_A, frame("packet", "{}"));
 
         ZLinkStreamRuntime runtime = start(stream, 0);
         runtimes.add(runtime);
@@ -107,11 +105,9 @@ final class ZLinkStreamRuntimeIngressTest {
         TestSession session = awaitSession();
         assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
         assertEquals(PEER_A, session.context.routingId().orElseThrow());
-        assertTrue(stream.notificationsEnabled);
-        assertTrue(stream.boundAfterNotifications);
-        assertTrue(stream.successfulReceives.get() >= 3);
-        assertTrue(stream.readinessWaits.get() >= 3);
-        assertEquals(List.of("segmented"), session.packetNames);
+        assertTrue(stream.successfulReceives.get() >= 1);
+        assertTrue(stream.readinessWaits.get() >= 1);
+        assertEquals(List.of("packet"), session.packetNames);
     }
 
     @Test
@@ -159,17 +155,15 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
-    void retainsOneRawReceiveThroughEveryHandlerTerminalAndThenProgresses()
+    void retainsEachPacketOwnerThroughItsHandlerTerminalAndThenProgresses()
         throws Exception {
         TestSession.holdFirstDispatch = true;
-        byte[] first = frame("first-retained", "a");
-        byte[] second = frame("second-retained", "b");
-        byte[] combined = new byte[first.length + second.length];
-        System.arraycopy(first, 0, combined, 0, first.length);
-        System.arraycopy(second, 0, combined, first.length, second.length);
         AtomicInteger ownerCloses = new AtomicInteger();
         FakeStream stream = new FakeStream();
-        stream.enqueueTracked(PEER_A, combined, ownerCloses);
+        stream.enqueueTracked(
+            PEER_A, frame("first-retained", "a"), ownerCloses);
+        stream.enqueueTracked(
+            PEER_A, frame("second-retained", "b"), ownerCloses);
 
         ZLinkStreamRuntime runtime = start(stream, 1);
         runtimes.add(runtime);
@@ -181,7 +175,7 @@ final class ZLinkStreamRuntimeIngressTest {
 
         session.firstDispatch.complete(null);
         assertTrue(session.secondDispatchLatch.await(5, TimeUnit.SECONDS));
-        awaitValue(ownerCloses, 1);
+        awaitValue(ownerCloses, 2);
         assertEquals(
             List.of("first-retained", "second-retained"),
             session.packetNames);
@@ -226,10 +220,10 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
-    void segmentedOversizeRecordsEmsgsizeAndDisconnectsThePeer() throws Exception {
+    void oversizePacketRecordsEmsgsizeAndDisconnectsThePeer() throws Exception {
         FakeStream stream = new FakeStream();
         byte[] oversize = frame("oversize", "x".repeat(512));
-        stream.enqueue(PEER_A, Arrays.copyOf(oversize, 6));
+        stream.enqueue(PEER_A, oversize);
         stream.enqueue(PEER_B, frame("good", "{}"));
 
         ZLinkStreamRuntime runtime = start(stream, 0, 256);
@@ -286,24 +280,7 @@ final class ZLinkStreamRuntimeIngressTest {
     void sessionConstructionFailureDoesNotStopAnotherPeer() throws Exception {
         TestSession.failNextConstruction = true;
         FakeStream stream = new FakeStream();
-        stream.enqueue(PEER_A, new byte[0]);
-        stream.enqueue(PEER_B, frame("good", "{}"));
-
-        ZLinkStreamRuntime runtime = start(stream, 0);
-        runtimes.add(runtime);
-
-        TestSession session = awaitSession();
-        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
-        assertEquals(1, TestSession.createdCount.get());
-        assertEquals(PEER_B, session.context.routingId().orElseThrow());
-        assertEquals(List.of("good"), session.packetNames);
-    }
-
-    @Test
-    void ignoredPeerNotificationDoesNotCreatePhantomSession() throws Exception {
-        FakeStream stream = new FakeStream();
-        stream.enqueue(PEER_A, ZLinkStreamFrameCodec.encode(new byte[0], new byte[0]));
-        stream.enqueue(PEER_A, new byte[0]);
+        stream.enqueue(PEER_A, frame("first-construction", "{}"));
         stream.enqueue(PEER_B, frame("good", "{}"));
 
         ZLinkStreamRuntime runtime = start(stream, 0);
@@ -1078,37 +1055,66 @@ final class ZLinkStreamRuntimeIngressTest {
         private volatile boolean ignoreFirstReceiveInterrupt;
         private volatile boolean failHeartbeatPongSend;
         private final AtomicInteger closeCalls = new AtomicInteger();
-        private boolean notificationsEnabled;
-        private boolean boundAfterNotifications;
         private ZLinkBackendStreamErrorHandler errorHandler;
 
         private void enqueue(RoutingId routingId, byte[] bytes) {
-            Message part = Message.from(bytes);
-            received.add(new ZLinkBackendStreamReceived(
-                Optional.of(routingId),
-                List.of(part),
-                part::close));
+            enqueuePacket(routingId, bytes, null);
         }
 
         private void enqueueTracked(
             RoutingId routingId,
             byte[] bytes,
             AtomicInteger ownerCloses) {
-            Message part = Message.from(bytes);
-            received.add(new ZLinkBackendStreamReceived(
-                Optional.of(routingId),
-                List.of(part),
-                () -> {
-                    part.close();
-                    ownerCloses.incrementAndGet();
-                }));
+            enqueuePacket(routingId, bytes, ownerCloses);
         }
 
         private void enqueueEmptyParts(RoutingId routingId) {
+            Message header = Message.from(new byte[0]);
+            Message body = Message.from(new byte[0]);
             received.add(new ZLinkBackendStreamReceived(
                 Optional.of(routingId),
-                List.of(),
-                () -> { }));
+                header,
+                body,
+                () -> {
+                    header.close();
+                    body.close();
+                }));
+        }
+
+        private void enqueuePacket(
+            RoutingId routingId,
+            byte[] bytes,
+            AtomicInteger ownerCloses) {
+            ByteBuffer encoded = ByteBuffer.wrap(bytes);
+            int headerSize = bytes.length >= 6
+                ? Short.toUnsignedInt(encoded.getShort())
+                : bytes.length;
+            int bodySize = bytes.length >= 6
+                ? encoded.getInt()
+                : 0;
+            boolean complete = headerSize >= 0 && bodySize >= 0
+                && bytes.length == 6L + headerSize + bodySize;
+            byte[] headerBytes;
+            byte[] bodyBytes;
+            if (complete) {
+                headerBytes = new byte[headerSize];
+                bodyBytes = new byte[bodySize];
+                encoded.get(headerBytes);
+                encoded.get(bodyBytes);
+            } else {
+                headerBytes = bytes.clone();
+                bodyBytes = new byte[0];
+            }
+            Message header = Message.from(headerBytes);
+            Message body = Message.from(bodyBytes);
+            received.add(new ZLinkBackendStreamReceived(
+                Optional.of(routingId), header, body, () -> {
+                    header.close();
+                    body.close();
+                    if (ownerCloses != null) {
+                        ownerCloses.incrementAndGet();
+                    }
+                }));
         }
 
         private void blockFirstReceive() {
@@ -1122,14 +1128,11 @@ final class ZLinkStreamRuntimeIngressTest {
 
         @Override public String name() { return "fake-stream"; }
         @Override public void close() { closeCalls.incrementAndGet(); }
-        @Override public void bind(String endpoint) {
-            boundAfterNotifications = notificationsEnabled;
-        }
+        @Override public void bind(String endpoint) { }
         @Override public void setTlsServer(
             String certificatePath, String keyPath,
             boolean requireClientCertificate) { }
         @Override public void setMaxMessageSize(long value) { }
-        @Override public void enableNotifications() { notificationsEnabled = true; }
         @Override public boolean waitForReadable(Duration timeout) {
             readinessWaits.incrementAndGet();
             boolean readable = !received.isEmpty();

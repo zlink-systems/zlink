@@ -16,11 +16,13 @@ test('Bingo runner proves room leave and actor destroy lifecycle boundaries', ()
   for (const actorId of ['player-1', 'player-2']) {
     assert.match(runner, new RegExp(`bingo-lifecycle room-leave actor=${actorId}`));
   }
-  assert.match(runner, /waitPlayLog\(ctx, 'bingo-lifecycle entry-destroy-complete actor=player-1'\)/);
-  assert.match(runner, /waitPlayLog\(ctx, 'bingo-lifecycle entry-destroy-complete actor=player-2'\)/);
-  assert.match(runner, /assertPlayLogCount\(ctx, 'bingo-lifecycle entry-leave actor=player-1', 1\)/);
-  assert.match(runner, /assertPlayLogCount\(ctx, 'bingo-lifecycle entry-leave actor=player-2', 1\)/);
-  assert.match(runner, /assertPlayLogCount\(ctx, 'bingo-record reported actor=observer', 0\)/);
+  assert.match(runner, /\['bingo-lifecycle entry-destroy-complete actor=player-1', 1\]/);
+  assert.match(runner, /\['bingo-lifecycle entry-destroy-complete actor=player-2', 1\]/);
+  assert.match(runner, /\['bingo-lifecycle entry-leave actor=player-1', 1\]/);
+  assert.match(runner, /\['bingo-lifecycle entry-leave actor=player-2', 1\]/);
+  assert.match(runner, /\['bingo-record reported actor=observer', 0\]/);
+  assert.match(runner, /waitCombinedLog\(ctx, \['play-a', 'play-b'\], marker\)/);
+  assert.match(runner, /assertCombinedLogCount\(ctx, \['play-a', 'play-b'\], marker, expected\)/);
   assert.match(runner, /bingo-lifecycle session-disconnect actor=player-1 destroy=false/);
   assert.match(runner, /bingo-lifecycle session-disconnect actor=player-2 destroy=false/);
 

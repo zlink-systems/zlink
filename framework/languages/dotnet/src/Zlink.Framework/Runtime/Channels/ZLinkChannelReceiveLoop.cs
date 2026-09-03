@@ -45,7 +45,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                     if (!router.Recv(received, RecvFlags.DontWait))
                         continue;
 
-                    if (received.RequestSeq is null
+                    if (received.ReplyToken is null
                         && received.Parts.Count == 1
                         && received.Parts[0].Size == 0)
                         continue;
@@ -188,8 +188,8 @@ internal sealed class ZLinkChannelReceiveLoop(
             identity.RecordLivenessProbe(sourceRid);
             var ack =
                 ZLinkClientServerControlProtocol.EncodeLivenessAck(probeId);
-            if (received.RequestSeq is not null)
-                ReplyOwned(router, sourceRid, received.RequestSeq, ack);
+            if (received.ReplyToken is not null)
+                ReplyOwned(router, sourceRid, received.ReplyToken, ack);
             else
                 await SendOwnedAsync(
                         router,
@@ -223,7 +223,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                     NormalizedEffectiveMaxMessageBytes = negotiatedMaximumMessageBytes
                 })
             : ZLinkClientServerControlProtocol.EncodeReject(reason: 1);
-        if (ReplyOwned(router, sourceRid, received.RequestSeq, reply)
+        if (ReplyOwned(router, sourceRid, received.ReplyToken, reply)
             && accepted)
             await identity.AdmitPeerAsync(sourceRid, negotiatedMaximumMessageBytes)
                 .ConfigureAwait(false);
@@ -232,10 +232,10 @@ internal sealed class ZLinkChannelReceiveLoop(
     private static bool ReplyOwned(
         IRouterSocket router,
         RoutingId sourceRid,
-        ulong? requestSeq,
+        ReplyToken? replyToken,
         Message reply)
     {
-        if (requestSeq is not { } value)
+        if (replyToken is not { } value)
         {
             reply.Dispose();
             return false;

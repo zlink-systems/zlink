@@ -123,7 +123,7 @@ export class ZLinkManagedStream implements ZLinkStream {
   ): Promise<ZLinkSubmitResult> {
     try {
       throwIfAborted(signal);
-      await this.socket.sendAsync(this.backendRoutingId(), payload, timeoutMs);
+      await this.socket.submit(this.backendRoutingId(), payload, timeoutMs);
       return { status: ZLinkSubmitStatus.Submitted };
     } catch (error) {
       if (isBackendNotConnectedError(error)) return { status: ZLinkSubmitStatus.Backpressured };
@@ -171,7 +171,7 @@ export class ZLinkManagedStream implements ZLinkStream {
     this.markTransportClosed();
     const closing = NativeMessage.from(encodeSessionClosingFrame(diagnostic, reason));
     try {
-      await this.socket.sendAsync(this.backendRoutingId(), closing);
+      await this.socket.submit(this.backendRoutingId(), closing);
     } finally {
       closing.close();
     }

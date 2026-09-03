@@ -144,7 +144,6 @@
         <Compile Include="Runtime/StoreRecordGoldenTests.cs"/>
         <Compile Include="Runtime/SessionActorCoordinatorTests.cs"/>
         <Compile Include="Runtime/StreamWireInteropTests.cs"/>
-        <Compile Include="Runtime/ZLinkStreamReceiveBufferTests.cs"/>
         <Compile Include="Runtime/StreamSessionLivenessTests.cs"/>
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.cs"/>
         <Compile Include="Runtime/StreamFlowEndToEndTests.cs"/>

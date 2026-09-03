@@ -14,7 +14,6 @@ idea {
 }
 
 val junitVersion = "5.10.2"
-val localCoreRuntime = rootProject.file("../../../core/build/lib/libzlink.so")
 
 subprojects {
     group = rootProject.group
@@ -110,9 +109,6 @@ subprojects {
         tasks.withType<Test>().configureEach {
             useJUnitPlatform()
             jvmArgs("--enable-native-access=ALL-UNNAMED")
-            if (localCoreRuntime.isFile) {
-                environment("ZLINK_LIBRARY_PATH", localCoreRuntime.absolutePath)
-            }
         }
 
         fun registerSourceSetTestTask(taskName: String, sourceSetName: String) {

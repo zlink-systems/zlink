@@ -28,8 +28,6 @@ namespace
 static const char *k_pattern = "MULTI_STREAM";
 static const char k_stop_token[] = "__zlink_perf_stop__";
 static std::atomic<bool> g_stop_requested (false);
-static std::mutex g_stop_mutex;
-static std::condition_variable g_stop_cv;
 
 struct queued_packet_t
 {
@@ -101,7 +99,6 @@ struct handler_guard_t
 inline void request_stop ()
 {
     g_stop_requested.store (true, std::memory_order_release);
-    g_stop_cv.notify_all ();
 }
 
 inline void on_signal (int)
@@ -330,12 +327,58 @@ void wait_for_stop_stdin ()
     request_stop ();
 }
 
-void run_server_event_loop ()
+bool run_server_pull_loop (const std::shared_ptr<stream_handler_context_t> &ctx_)
 {
-    std::unique_lock<std::mutex> stop_lock (g_stop_mutex);
-    g_stop_cv.wait (stop_lock, [] () {
-        return g_stop_requested.load (std::memory_order_acquire);
-    });
+    zlink::poller_t poller;
+    poller.add (*ctx_->server, zlink::poll_event_flag_t::pollin, 0);
+    zlink::poll_event_t event;
+
+    while (!g_stop_requested.load (std::memory_order_acquire)
+           && !ctx_->failed.load (std::memory_order_acquire)) {
+        try {
+            if (poller.wait (&event, 1, std::chrono::milliseconds (200)) == 0)
+                continue;
+        }
+        catch (const zlink::binding_error_t &error) {
+            if (error.internal_errno () == EINTR)
+                continue;
+            debug_send_failure (error.internal_errno ());
+            ctx_->failed.store (true, std::memory_order_release);
+            break;
+        }
+
+        if ((static_cast<short> (event.revents)
+             & static_cast<short> (zlink::poll_event_flag_t::pollin)) == 0)
+            continue;
+
+        while (!g_stop_requested.load (std::memory_order_acquire)) {
+            zlink::stream_packet_t packet;
+            try {
+                if (!ctx_->server->recv_packet (packet, zlink::recv_flags_t::dontwait))
+                    break;
+            }
+            catch (const zlink::recv_error_t &error) {
+                const int err = error.internal_errno ();
+                if (error.result () == zlink::recv_result_t::no_data || err == EAGAIN
+                    || err == EWOULDBLOCK || err == EINTR)
+                    break;
+                debug_send_failure (err);
+                ctx_->failed.store (true, std::memory_order_release);
+                request_stop ();
+                break;
+            }
+
+            if (!packet.routing_id ().has_value () || packet.routing_id ()->size () == 0) {
+                debug_send_failure (EPROTO);
+                ctx_->failed.store (true, std::memory_order_release);
+                request_stop ();
+                break;
+            }
+            handle_packet (ctx_, *packet.routing_id (), packet.header (), packet.body ());
+        }
+    }
+
+    return !ctx_->failed.load (std::memory_order_acquire);
 }
 
 } // namespace
@@ -405,10 +448,6 @@ bool perf_stream_server (const std::string &lib_name, const std::string &transpo
         const std::shared_ptr<stream_handler_context_t> handler_context =
           std::make_shared<stream_handler_context_t> ();
         handler_context->server = &server;
-        // Phase 7 will replace the former callback ingress with a public
-        // poller plus recv_packet() drain loop. Keep the benchmark buildable
-        // in Phase 6 without reintroducing a callback surface.
-
         perf::multi::print_ready (endpoint);
         // CLIENT_READY means the shared raw peer connected every requested
         // session and applied this size. Consume the server-side monitor
@@ -436,8 +475,7 @@ bool perf_stream_server (const std::string &lib_name, const std::string &transpo
         std::thread stdin_watcher (&wait_for_stop_stdin);
         stdin_watcher.detach ();
 
-        std::thread event_loop_thread (&run_server_event_loop);
-        event_loop_thread.join ();
+        run_server_pull_loop (handler_context);
         close_packet_queue (handler_context);
         dispatcher_thread.join ();
 

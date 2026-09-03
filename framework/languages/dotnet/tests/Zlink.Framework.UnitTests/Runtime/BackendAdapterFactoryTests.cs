@@ -110,7 +110,7 @@ public sealed class BackendAdapterFactoryTests
         using (var reply = Message.From("reply"))
             router.Reply(
                     Assert.IsType<RoutingId>(received.RoutingId),
-                    Assert.IsType<ulong>(received.RequestSeq))
+                    Assert.IsType<ReplyToken>(received.ReplyToken))
                 .Message(reply)
                 .Submit();
 

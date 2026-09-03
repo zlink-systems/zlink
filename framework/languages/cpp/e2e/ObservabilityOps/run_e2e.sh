@@ -9,7 +9,7 @@ FRAMEWORK_DIR="$(cd "$ROOT_DIR/../.." && pwd)"
 source "$ROOT_DIR/../redis-common.sh"
 zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
 zlink_cpp_e2e_install_cleanup_trap
-BUILD_DIR="$FRAMEWORK_DIR/build"
+BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-$FRAMEWORK_DIR/build}"
 SCENARIO="${1:-all}"
 LOCAL_READINESS_TIMEOUT_SECONDS=3
 LOCAL_READINESS_POLL_SECONDS=0.1

@@ -14,7 +14,7 @@ test('loaded node binding package provides a native artifact for the current pla
   assert.ok(artifact, 'expected a native addon artifact for the current platform');
 });
 
-test('loaded node binding monitor callback carries a STREAM peer routing id', async () => {
+test('loaded node binding monitor pull carries a STREAM peer routing id', async () => {
   const port = await reservePort();
   const context = zlink.createContext();
   const stream = zlink.createStreamSocket(context);
@@ -23,14 +23,8 @@ test('loaded node binding monitor callback carries a STREAM peer routing id', as
     zlink.MonitorEventType.Disconnected
   ]);
   const client = new net.Socket();
-  let disconnected;
-  monitor.onEvent((event) => {
-    if (event.event === zlink.MonitorEventType.Disconnected) {
-      disconnected = event;
-    }
-  });
-
   try {
+    stream.options.recvMode = zlink.StreamRecvMode.Raw;
     stream.bind(`tcp://127.0.0.1:${port}`);
     await new Promise((resolve, reject) => {
       client.once('error', reject);
@@ -43,9 +37,9 @@ test('loaded node binding monitor callback carries a STREAM peer routing id', as
     client.end();
     await once(client, 'close');
 
-    const event = await waitFor(() => disconnected);
-    assert.ok(event, 'expected the installed native addon to deliver the disconnect callback');
-    assert.ok(event.routingId, 'expected the disconnect callback to identify the STREAM peer');
+    const event = await waitFor(() => recvMonitorEvent(monitor, zlink.MonitorEventType.Disconnected));
+    assert.ok(event, 'expected the installed native addon to expose the disconnect monitor record');
+    assert.ok(event.routingId, 'expected the disconnect monitor record to identify the STREAM peer');
     assert.ok(event.routingId.size > 0);
   } finally {
     client.destroy();
@@ -66,6 +60,18 @@ function activeNativeArtifact() {
     }
   }
   return null;
+}
+
+function recvMonitorEvent(monitor, expectedType) {
+  try {
+    const event = monitor.recv(zlink.RecvFlags.DontWait);
+    return event?.event === expectedType ? event : undefined;
+  } catch (error) {
+    if (error instanceof zlink.RecvError && error.result === zlink.RecvResult.NoData) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 async function reservePort() {

@@ -27,6 +27,7 @@ import type {
   ZLinkBackendSocketMonitor,
   ZLinkBackendSocketMonitorEvent,
   ZLinkBackendReadablePoller,
+  ZLinkBackendStreamPacket,
   ZLinkBackendStreamSocket
 } from '../backend/contracts';
 import type { ZLinkMeshCompletionTable } from '../backend/mesh-completion-table';
@@ -51,10 +52,6 @@ import { createSessionDispatchContext, DefaultZLinkSessionContext } from './sess
 import { ZLinkSessionSerialExecutor } from './session-serial-executor';
 import type { ZLinkApplicationWorkClaim } from '../admission';
 import { ownedMessage } from './stream-message-utils';
-import {
-  ZLinkStreamFrameReassembler,
-  type ZLinkRetainedStreamOwner
-} from './stream-frame-reassembler';
 import type { ServiceActorRef } from '../foundation/service-stateful-registry';
 import type { ServiceRetiredBoundSessionRouteFence } from '../foundation/service-stateful-wire-codec';
 import type {
@@ -79,22 +76,14 @@ interface ZLinkStreamLivenessClock {
   clearTimer(timer: unknown): void;
 }
 
+interface ZLinkRetainedStreamOwner {
+  close(): void;
+}
+
 interface ZLinkStreamLivenessOptions {
   readonly livenessClock?: ZLinkStreamLivenessClock;
   readonly acceptNewSession?: () => boolean;
   readonly claimApplicationWork?: () => ZLinkApplicationWorkClaim;
-}
-
-interface ZLinkStreamReceiveState {
-  readonly routingId: unknown;
-  readonly session: ZLinkStreamSessionRuntime;
-  readonly assembler: ZLinkStreamFrameReassembler;
-}
-
-interface ZLinkStreamReceived {
-  readonly parts: readonly Message[];
-  readonly routingId: unknown;
-  close(): void;
 }
 
 const systemLivenessClock: ZLinkStreamLivenessClock = {
@@ -163,6 +152,7 @@ export interface ZLinkStreamSessionRuntimeOptions {
 export interface ZLinkStreamSessionNodeRuntimeOptions extends ZLinkStreamSessionRuntimeOptions {
   /** Readiness is checked before each nonblocking Framework recv. */
   readonly readablePoller: ZLinkBackendReadablePoller;
+  readonly createPacket: () => ZLinkBackendStreamPacket;
   readonly nodeName?: string;
   readonly monitor?: ZLinkBackendSocketMonitor;
   readonly applicationJobQueue: ApplicationJobQueuePort;
@@ -894,8 +884,7 @@ function streamShutdownDropMessageKind(kind: ZLinkStreamMessageKind): ZLinkDispa
 
 export class ZLinkStreamSessionNodeRuntime {
   private readonly sessions = new Map<string, ZLinkStreamSessionRuntime>();
-  private readonly receiveStates = new Map<string, ZLinkStreamReceiveState>();
-  private readonly readyReceiveStates = new Set<ZLinkStreamReceiveState>();
+  private readonly availablePackets: ZLinkBackendStreamPacket[] = [];
   private readonly pendingConnectionMetadata: Array<{
     readonly localAddr?: string;
     readonly remoteAddr?: string;
@@ -920,24 +909,15 @@ export class ZLinkStreamSessionNodeRuntime {
   private receiveLoop: Promise<void> | undefined;
   private readonly receiveIdleWaiter = new ZLinkStreamIdleWaiter(5);
   private receiveWorkSinceYield = 0;
-  private readonly maxMessageSize: number;
-
   constructor(
     private readonly options: ZLinkStreamSessionNodeRuntimeOptions & ZLinkStreamLivenessOptions
-  ) {
-    const maxMessageSize = options.socket.maxMessageSize;
-    this.maxMessageSize = Number.isSafeInteger(maxMessageSize) && maxMessageSize >= 0
-      ? maxMessageSize
-      : 0;
-  }
+  ) {}
 
   start(): void {
     if (this.stopped || this.receiveLoop !== undefined) {
       return;
     }
-    this.options.monitor?.onEvent((event) => {
-      this.onMonitorEvent(event);
-    });
+    this.options.monitor?.onEvent(event => this.onMonitorEvent(event));
     const running = this.runReceiveLoop(this.receiveAbortController.signal)
       .catch((error) => {
         if (!this.stopped) {
@@ -954,7 +934,6 @@ export class ZLinkStreamSessionNodeRuntime {
 
   markDisconnected(routingId: unknown, error?: unknown): void {
     const sessionId = streamSessionIdFromRoutingId(routingId);
-    this.removeReceiveState(sessionId);
     this.sessions.get(sessionId)?.enqueueDisconnected(error);
   }
 
@@ -970,11 +949,7 @@ export class ZLinkStreamSessionNodeRuntime {
       await this.receiveLoop;
       const sessions = [...this.sessions.values()];
       this.sessions.clear();
-      for (const state of this.receiveStates.values()) {
-        state.assembler.clear();
-      }
-      this.receiveStates.clear();
-      this.readyReceiveStates.clear();
+      for (const packet of this.availablePackets.splice(0)) packet.close();
       this.unaddressedMonitorSessions.length = 0;
       this.unaddressedMonitorSessionHead = 0;
       this.unaddressedMonitorSessionCount = 0;
@@ -995,67 +970,47 @@ export class ZLinkStreamSessionNodeRuntime {
 
   private async runReceiveLoop(signal: AbortSignal): Promise<void> {
     while (!this.isReceiveStopped(signal)) {
-      let bufferedFrames: { readonly progressed: boolean; readonly frameCount: number };
+      this.drainMonitorEvents();
+      let permit: ApplicationJobPermitPort | undefined;
+      let packet: ZLinkBackendStreamPacket | undefined;
+      let packetTransferred = false;
       try {
-        bufferedFrames = await this.drainBufferedFrames(signal);
-      } catch (error) {
-        if (!this.isReceiveStopped(signal)) {
-          this.options.onError?.(error);
-          this.receiveWorkSinceYield = 0;
-          await this.waitReceiveLoopIdle();
+        permit = await this.options.applicationJobQueue.acquire(signal);
+        if (this.isReceiveStopped(signal)) {
+          permit.releaseAfterInternalProcessing();
+          break;
         }
-        continue;
-      }
-      if (bufferedFrames.progressed) {
-        this.receiveWorkSinceYield += Math.max(1, bufferedFrames.frameCount);
-        if (
-          this.receiveWorkSinceYield >= ZLINK_STREAM_RECEIVE_FRAME_BATCH_LIMIT
-          && !this.isReceiveStopped(signal)
-        ) {
-          this.receiveWorkSinceYield = 0;
-          await new Promise<void>((resolve) => setImmediate(resolve));
-        }
-        continue;
-      }
-      let received: ZLinkStreamReceived | undefined;
-      try {
         if (!this.options.readablePoller.wait(0)) {
+          permit.releaseAfterInternalProcessing();
           await this.waitReceiveLoopIdle();
           continue;
         }
-        received = this.options.socket.recv(ZLINK_RECV_DONT_WAIT);
+        packet = this.takePacket();
+        if (!this.options.socket.recvPacket(packet, ZLINK_RECV_DONT_WAIT)) {
+          permit.releaseAfterInternalProcessing();
+          this.recyclePacket(packet);
+          await this.waitReceiveLoopIdle();
+          continue;
+        }
+        packetTransferred = true;
+        this.acceptPacket(packet, permit);
+        packet = undefined;
+        permit = undefined;
       } catch (error) {
-        if (!this.isReceiveStopped(signal)) {
+        if (!packetTransferred) permit?.releaseAfterInternalProcessing();
+        if (packet !== undefined && !packetTransferred) this.recyclePacket(packet);
+        if (!this.isReceiveStopped(signal) && !packetTransferred) {
           this.options.onError?.(error);
+          this.receiveWorkSinceYield = 0;
+          await this.waitReceiveLoopIdle();
+        } else if (!this.isReceiveStopped(signal)) {
           this.receiveWorkSinceYield = 0;
           await this.waitReceiveLoopIdle();
         }
         continue;
       }
-      if (received === undefined) {
-        this.receiveWorkSinceYield = 0;
-        await this.waitReceiveLoopIdle();
-        continue;
-      }
-      let receivedFrameCount = 0;
-      let closeUntransferredReceived = () => received.close();
-      try {
-        receivedFrameCount = await this.onReceived(received, () => {
-          closeUntransferredReceived = () => {};
-        }, signal);
-      } catch (error) {
-        this.handleReceiveError(
-          received.routingId,
-          error instanceof Error ? error : new Error(String(error))
-        );
-      } finally {
-        try {
-          closeUntransferredReceived();
-        } catch (error) {
-          this.options.onError?.(error);
-        }
-      }
-      this.receiveWorkSinceYield += Math.max(1, receivedFrameCount);
+
+      this.receiveWorkSinceYield += 1;
       if (
         this.receiveWorkSinceYield >= ZLINK_STREAM_RECEIVE_FRAME_BATCH_LIMIT
         && !this.isReceiveStopped(signal)
@@ -1066,214 +1021,105 @@ export class ZLinkStreamSessionNodeRuntime {
     }
   }
 
-  private async onReceived(
-    received: ZLinkStreamReceived,
-    onOwnershipTransferred: () => void,
-    signal: AbortSignal
-  ): Promise<number> {
-    if (this.stopped) {
-      return 0;
-    }
-    const routingId = received.routingId;
-    if (routingId === null || routingId === undefined) {
-      this.options.onError?.(new Error('STREAM recv did not provide a source routing id.'));
-      return 0;
-    }
-    this.activityVersion += 1;
-    const session = this.getOrCreateSession(routingId);
-    if (session === undefined) {
-      return 0;
-    }
-    this.applyPendingConnectionMetadata(session);
-    let state = this.receiveStates.get(session.stream.sessionId);
-    if (state !== undefined && state.session !== session) {
-      this.removeReceiveState(session.stream.sessionId);
-      state = undefined;
-    }
-    state ??= {
-      routingId,
-      session,
-      assembler: new ZLinkStreamFrameReassembler()
-    };
-    this.receiveStates.set(session.stream.sessionId, state);
+  private acceptPacket(
+    packet: ZLinkBackendStreamPacket,
+    permit: ApplicationJobPermitPort
+  ): void {
+    const routingId = packet.routingId;
+    const header = packet.header;
+    const body = packet.body;
+    let releasePermitOnFailure = true;
+    let packetTransferred = false;
+    let payload: Message | undefined;
+    let session: ZLinkStreamSessionRuntime | undefined;
     try {
-      onOwnershipTransferred();
-      state.assembler.appendRetained(received.parts, received);
-    } catch (error) {
-      this.handleMalformedFrame(
-        state,
-        error instanceof Error ? error : new Error(String(error))
+      if (routingId === null || header === null || body === null) {
+        throw new Error('STREAM packet did not provide routing id, header, and body.');
+      }
+
+      this.activityVersion += 1;
+      session = this.getOrCreateSession(routingId);
+      if (session === undefined) return;
+      this.applyPendingConnectionMetadata(session);
+      const decodedHeader = decodeStreamHeader(
+        header.data(),
+        this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
       );
-      return 0;
-    }
-    const drained = await this.drainReceiveState(
-      state,
-      ZLINK_STREAM_RECEIVE_FRAME_BATCH_LIMIT,
-      signal
-    );
-    this.updateReadyState(state, drained.progressed);
-    return drained.frameCount;
-  }
-
-  private async drainBufferedFrames(
-    signal: AbortSignal
-  ): Promise<{ readonly progressed: boolean; readonly frameCount: number }> {
-    let progressed = false;
-    let frameCount = 0;
-    while (frameCount < ZLINK_STREAM_RECEIVE_FRAME_BATCH_LIMIT) {
-      const next = this.readyReceiveStates.values().next();
-      if (next.done === true) break;
-      const state = next.value;
-      this.readyReceiveStates.delete(state);
-      if (this.receiveStates.get(state.session.stream.sessionId) !== state) continue;
-      try {
-        const drained = await this.drainReceiveState(
-          state,
-          ZLINK_STREAM_RECEIVE_FRAME_BATCH_LIMIT - frameCount,
-          signal
-        );
-        frameCount += drained.frameCount;
-        progressed = drained.progressed || progressed;
-        this.updateReadyState(state, drained.progressed);
-      } catch (error) {
-        progressed = true;
-        this.handleReceiveError(
-          state.routingId,
-          error instanceof Error ? error : new Error(String(error))
-        );
-      }
-    }
-    return { progressed, frameCount };
-  }
-
-  private async drainReceiveState(
-    state: ZLinkStreamReceiveState,
-    frameLimit: number,
-    signal: AbortSignal
-  ): Promise<{ readonly progressed: boolean; readonly frameCount: number }> {
-    let progressed = false;
-    let frameCount = 0;
-    while (frameCount < frameLimit) {
-      if (state.session.isDisconnected) {
-        this.removeReceiveState(state.session.stream.sessionId);
-        return { progressed: true, frameCount };
-      }
-      const result = state.assembler.next(this.maxMessageSize);
-      if (result.kind === 'incomplete') {
-        return { progressed, frameCount };
-      }
-      if (result.kind === 'malformed') {
-        this.handleMalformedFrame(state, result.error);
-        return { progressed: true, frameCount };
-      }
-      let decodedHeader: ZLinkStreamFrameHeader;
-      try {
-        decodedHeader = decodeStreamHeader(
-          result.frame.header,
-          this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
-        );
-      } catch (error) {
-        result.frame.close();
-        this.handleMalformedFrame(
-          state,
-          error instanceof Error ? error : new Error(String(error))
-        );
-        return { progressed: true, frameCount };
-      }
+      payload = ownedMessage(body.data());
       const terminalCompletion = decodedHeader.kind === ZLinkStreamMessageKind.Response
         || decodedHeader.kind === ZLinkStreamMessageKind.Error;
-      let applicationJobPermit: ApplicationJobPermitPort | undefined;
-      if (!terminalCompletion) {
-        try {
-          applicationJobPermit = await this.options.applicationJobQueue.acquire(signal);
-        } catch (error) {
-          result.frame.close();
-          if (this.isReceiveStopped(signal)) {
-            return { progressed: true, frameCount };
-          }
-          throw error;
-        }
+      const applicationPermit = terminalCompletion ? undefined : permit;
+      if (terminalCompletion) {
+        permit.releaseAfterInternalProcessing();
+        releasePermitOnFailure = false;
+      } else {
         if (
           decodedHeader.kind === ZLinkStreamMessageKind.Send
           || decodedHeader.kind === ZLinkStreamMessageKind.Request
         ) {
-          applicationJobPermit.markApplicationQueued();
+          permit.markApplicationQueued();
         }
       }
-      try {
-        const payload = ownedMessage(result.frame.payload);
-        state.session.enqueuePacket(
-          payload,
-          decodedHeader,
-          result.frame,
-          applicationJobPermit
-        );
-      } catch (error) {
-        applicationJobPermit?.releaseAfterInternalProcessing();
-        result.frame.close();
-        throw error;
+      const owner: ZLinkRetainedStreamOwner = {
+        close: () => this.recyclePacket(packet)
+      };
+      session.enqueuePacket(payload, decodedHeader, owner, applicationPermit);
+      releasePermitOnFailure = false;
+      payload = undefined;
+      packetTransferred = true;
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (routingId !== null && session !== undefined) {
+        this.handleMalformedPacket(routingId, session, failure);
+      } else {
+        this.options.onError?.(failure);
+        if (routingId !== null) {
+          try {
+            this.options.socket.disconnectPeer(routingId);
+          } catch (disconnectError) {
+            this.options.onError?.(disconnectError);
+          }
+        }
       }
-      progressed = true;
-      frameCount += 1;
+      throw failure;
+    } finally {
+      if (!packetTransferred) {
+        if (releasePermitOnFailure) permit.releaseAfterInternalProcessing();
+        payload?.close();
+        this.recyclePacket(packet);
+      }
     }
-    return { progressed, frameCount };
   }
 
-  private updateReadyState(state: ZLinkStreamReceiveState, progressed: boolean): void {
-    if (
-      this.receiveStates.get(state.session.stream.sessionId) === state
-      && state.assembler.hasPendingBytes
-      && progressed
-    ) {
-      this.readyReceiveStates.add(state);
-      return;
-    }
-    this.readyReceiveStates.delete(state);
+  private takePacket(): ZLinkBackendStreamPacket {
+    return this.availablePackets.pop() ?? this.options.createPacket();
   }
 
-  private removeReceiveState(sessionId: string): void {
-    const state = this.receiveStates.get(sessionId);
-    if (state === undefined) return;
-    this.receiveStates.delete(sessionId);
-    this.readyReceiveStates.delete(state);
-    state.assembler.clear();
+  private recyclePacket(packet: ZLinkBackendStreamPacket): void {
+    packet.close();
+    if (!this.stopped) this.availablePackets.push(packet);
   }
 
-  private handleMalformedFrame(state: ZLinkStreamReceiveState, error: Error): void {
-    this.removeReceiveState(state.session.stream.sessionId);
+  private drainMonitorEvents(): void {
+    this.options.monitor?.drain();
+  }
+
+  private handleMalformedPacket(
+    routingId: unknown,
+    session: ZLinkStreamSessionRuntime,
+    error: Error
+  ): void {
     this.options.onError?.(error);
-    try {
-      this.options.socket.disconnectPeer(state.routingId as RoutingId);
-    } catch (disconnectError) {
-      this.options.onError?.(disconnectError);
-    }
-    state.session.enqueueDisconnected(error);
-  }
-
-  private isReceiveStopped(signal: AbortSignal): boolean {
-    return this.stopped || signal.aborted;
-  }
-
-  private handleReceiveError(routingId: unknown, error: Error): void {
-    let sessionId: string;
-    try {
-      sessionId = streamSessionIdFromRoutingId(routingId);
-    } catch {
-      this.options.onError?.(error);
-      return;
-    }
-    const state = this.receiveStates.get(sessionId);
-    if (state !== undefined) {
-      this.handleMalformedFrame(state, error);
-      return;
-    }
     try {
       this.options.socket.disconnectPeer(routingId as RoutingId);
     } catch (disconnectError) {
       this.options.onError?.(disconnectError);
     }
-    this.sessions.get(sessionId)?.enqueueDisconnected(error);
-    this.options.onError?.(error);
+    session.enqueueDisconnected(error);
+  }
+
+  private isReceiveStopped(signal: AbortSignal): boolean {
+    return this.stopped || signal.aborted;
   }
 
   private onMonitorEvent(event: ZLinkBackendSocketMonitorEvent): void {
@@ -1318,7 +1164,6 @@ export class ZLinkStreamSessionNodeRuntime {
           const session = this.resolveMonitorSession(event);
           const error = new Error(`Stream disconnected: ${event.nativeEvent}/${event.value}`);
           if (session !== undefined) {
-            this.removeReceiveState(session.stream.sessionId);
             session.enqueueDisconnected(error);
             return;
           }
@@ -1553,9 +1398,6 @@ export class ZLinkStreamSessionNodeRuntime {
       (sessionId, session) => {
         if (this.sessions.get(sessionId) === session) {
           this.sessions.delete(sessionId);
-        }
-        if (this.receiveStates.get(sessionId)?.session === session) {
-          this.removeReceiveState(sessionId);
         }
       }
     );

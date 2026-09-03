@@ -75,22 +75,15 @@ fn main() {
     assert_eq!(handshake_reply.parts()[0].as_bytes(), b"PONG");
 
     let replier_thread = std::thread::spawn(move || common::run_router_replier(replier));
-    let stats = common::run_reqrep(&config, &requester, |payload, timeout, terminal| {
+    let stats = common::run_reqrep(&config, |payload, timeout| {
         let request = requester.request().message(payload);
-        let outcome = if common::measurement_part_count() == 2 {
+        if common::measurement_part_count() == 2 {
             request
                 .message(Message::new().expect("empty request tail"))
                 .timeout(timeout)
                 .submit_sync()
         } else {
             request.timeout(timeout).submit_sync()
-        };
-        match outcome {
-            Err(zlink::ZlinkError::Submit(error)) => Err(error),
-            outcome => {
-                terminal(outcome);
-                Ok(())
-            }
         }
     })
     .expect("requester loop");

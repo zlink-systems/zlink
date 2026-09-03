@@ -1,5 +1,4 @@
 import asyncio
-import os
 import sys
 import time
 from contextlib import ExitStack
@@ -72,53 +71,17 @@ async def main(argv=None):
                             index,
                         )
 
-                    async def send_loop(index, current_sock):
-                        nonlocal seq
-                        while time.perf_counter() < active_deadline:
+                    while time.perf_counter() < active_deadline:
+                        for index, current_sock in enumerate(sockets):
                             seq += 1
                             await send_routed(
                                 current_sock,
                                 stamp_payload(
                                     payloads[index], phase=1, run_id=run_id, seq=seq
                                 ),
+                                _sync=True,
+                                _deadline=active_deadline,
                             )
-
-                    send_tasks = [
-                        asyncio.create_task(send_loop(index, current_sock))
-                        for index, current_sock in enumerate(sockets)
-                    ]
-                    send_completion = asyncio.gather(*send_tasks)
-                    send_drain_deadline = active_deadline + max(
-                        0.001,
-                        float(
-                            os.environ.get(
-                                "PERF_MULTI_SEND_DRAIN_TIMEOUT_MS", "1000"
-                            )
-                        )
-                        / 1000.0,
-                    )
-                    while time.perf_counter() < active_deadline or (
-                        not send_completion.done()
-                        and time.perf_counter() < send_drain_deadline
-                    ):
-                        if (
-                            send_completion.done()
-                            and send_completion.exception() is not None
-                        ):
-                            raise send_completion.exception()
-                        wait_deadline = (
-                            active_deadline
-                            if time.perf_counter() < active_deadline
-                            else send_drain_deadline
-                        )
-                        remaining_ms = int(
-                            (wait_deadline - time.perf_counter()) * 1000
-                        )
-                        if remaining_ms <= 0:
-                            break
-                        # Public send awaitables drive admission progress.
-                        # Receive probing must not block their event loop on a
-                        # periodic timer.
                         ready_count = safe_poll(poller, poll_events, 0)
                         for offset in range(ready_count):
                             index = poll_events.slot(offset)
@@ -154,18 +117,7 @@ async def main(argv=None):
                                         received += 1
                                         if latency is not None:
                                             latency_sampler.add(latency / 2.0)
-                        # Drain every reply that is already ready before
-                        # yielding to the per-socket send loops. Yielding once
-                        # per message gives this single receive coordinator
-                        # only one turn for every full round of send tasks.
                         await asyncio.sleep(0)
-                    if not send_completion.done():
-                        send_completion.cancel()
-                        await asyncio.gather(send_completion, return_exceptions=True)
-                        raise RuntimeError(
-                            "multi dealer-router send admission drain timed out"
-                        )
-                    await send_completion
                 if received == 0:
                     raise RuntimeError(
                         "multi dealer-router benchmark did not receive any active reply"

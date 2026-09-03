@@ -7,7 +7,7 @@ import {
   decodeRemoteBoundSessionSend
 } from './spot-remote-route-codec';
 import {
-  isReplyableRequestSeq,
+  hasReplyToken,
   submitRoutePayloadReply,
   submitRouteReply
 } from './spot-route-replies';
@@ -72,7 +72,7 @@ export class ZLinkSpotRoutedBoundSessionDispatch {
           boundSessionSend.actorPacketTarget
         )
       );
-      if (isReplyableRequestSeq(received.requestSeq)) {
+      if (hasReplyToken(received.replyToken)) {
         submitRoutePayloadReply(received, boundSessionSend.envelope, { ok: true });
       }
       return true;
@@ -121,7 +121,7 @@ export class ZLinkSpotRoutedBoundSessionDispatch {
   }
 
   private replyOk(received: BackendReceived): void {
-    if (!isReplyableRequestSeq(received.requestSeq)) {
+    if (!hasReplyToken(received.replyToken)) {
       return;
     }
     submitRouteReply(

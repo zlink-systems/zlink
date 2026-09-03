@@ -1,30 +1,28 @@
 package systems.zlink.framework.runtime.internal.backend;
 
-import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 
 /**
- * One raw STREAM receive result owned by the framework receive loop.
- *
- * <p>The message list is the binding's ordered multipart view. Each message
- * keeps its native {@link Message#more()} flag so the caller can distinguish
- * the final part without entering the binding's private receive machinery.</p>
+ * One complete PACKET-mode STREAM result owned by the framework receive loop.
  */
 public final class ZLinkBackendStreamReceived implements AutoCloseable {
     private final Optional<RoutingId> routingId;
-    private final List<Message> parts;
+    private final Message header;
+    private final Message body;
     private final Runnable closeAction;
     private boolean closed;
 
     public ZLinkBackendStreamReceived(
         Optional<RoutingId> routingId,
-        List<Message> parts,
+        Message header,
+        Message body,
         Runnable closeAction) {
         this.routingId = routingId == null ? Optional.empty() : routingId;
-        this.parts = Objects.requireNonNull(parts, "parts");
+        this.header = Objects.requireNonNull(header, "header");
+        this.body = Objects.requireNonNull(body, "body");
         this.closeAction = Objects.requireNonNull(closeAction, "closeAction");
     }
 
@@ -32,8 +30,12 @@ public final class ZLinkBackendStreamReceived implements AutoCloseable {
         return routingId;
     }
 
-    public List<Message> parts() {
-        return parts;
+    public Message header() {
+        return header;
+    }
+
+    public Message body() {
+        return body;
     }
 
     @Override

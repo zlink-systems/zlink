@@ -1392,13 +1392,7 @@ public sealed class ClientServerChannelRuntimeTests
                     "plaintext",
                     1024 * 1024,
                     mismatchedNotation));
-            router.Reply(
-                    hello.RoutingId
-                        ?? throw new InvalidOperationException(
-                            "missing client routing id"),
-                    hello.RequestSeq
-                        ?? throw new InvalidOperationException(
-                            "missing request sequence"))
+            hello.Reply()
                 .Message(admission)
                 .Submit();
 
@@ -1533,7 +1527,7 @@ public sealed class ClientServerChannelRuntimeTests
             storage => router.Recv(storage, RecvFlags.DontWait),
             TimeSpan.FromSeconds(2));
         var sourceRid = Assert.IsType<RoutingId>(inbound.RoutingId);
-        var requestSeq = Assert.IsType<ulong>(inbound.RequestSeq);
+        var replyToken = Assert.IsType<ReplyToken>(inbound.ReplyToken);
         var admit = ZLinkClientServerControlProtocol.EncodeAdmission(
             new ZLinkClientServerControlProtocol.Admission(
                 "work",
@@ -1545,7 +1539,7 @@ public sealed class ClientServerChannelRuntimeTests
                 "plaintext",
                 4096,
                 endpoint));
-        router.Reply(sourceRid, requestSeq).Message(admit).Submit();
+        router.Reply(sourceRid, replyToken).Message(admit).Submit();
         ZLinkMessageParts.DisposeAll(await admissionTask);
 
         var probe =
@@ -1594,23 +1588,17 @@ public sealed class ClientServerChannelRuntimeTests
                     "missing client routing id");
             using var probe =
                 ZLinkClientServerControlProtocol.EncodeLivenessProbe(17);
-            var reply = await router.Request(clientRid)
+            await router.Send(clientRid)
                 .Message(probe)
-                .Timeout(TimeSpan.FromSeconds(2))
-                .Async(CancellationToken.None)
-                .WaitAsync(TimeSpan.FromSeconds(3));
-            try
-            {
-                Assert.True(
-                    ZLinkClientServerControlProtocol.TryDecodeLivenessAck(
-                        reply,
-                        out var probeId));
-                Assert.Equal(17UL, probeId);
-            }
-            finally
-            {
-                ZLinkMessageParts.DisposeAll(reply);
-            }
+                .Async(CancellationToken.None);
+            using var reply = await PollReceivedAsync(
+                storage => TryReceive(router, storage),
+                TimeSpan.FromSeconds(3));
+            Assert.True(
+                ZLinkClientServerControlProtocol.TryDecodeLivenessAck(
+                    reply.Parts,
+                    out var probeId));
+            Assert.Equal(17UL, probeId);
 
             using var draining =
                 ZLinkClientServerControlProtocol.EncodeUpdate(
@@ -1811,13 +1799,7 @@ public sealed class ClientServerChannelRuntimeTests
                 "plaintext",
                 1024 * 1024,
                 endpoint));
-        router.Reply(
-                hello.RoutingId
-                ?? throw new InvalidOperationException(
-                    "missing client routing id"),
-                hello.RequestSeq
-                ?? throw new InvalidOperationException(
-                    "missing request sequence"))
+        hello.Reply()
             .Message(admission)
             .Submit();
     }

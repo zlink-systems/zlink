@@ -613,6 +613,38 @@ bool runner_generated_config_files_are_private_and_cleaned (const std::filesyste
     return ok;
 }
 
+bool cpp_runners_prefer_the_selected_build_directory (const std::filesystem::path &root)
+{
+    bool ok = true;
+    const std::filesystem::path runner_roots[] = {
+      root / "e2e", root / "samples", root / "cross-language"};
+    for (const auto &runner_root : runner_roots) {
+        for (const auto &entry : std::filesystem::recursive_directory_iterator (runner_root)) {
+            if (!entry.is_regular_file () || entry.path ().extension () != ".sh")
+                continue;
+            const auto relative = std::filesystem::relative (entry.path (), root);
+            if (path_contains_segment (relative, "SubmitAdmission"))
+                continue;
+            std::ifstream input (entry.path ());
+            const std::string content ((std::istreambuf_iterator<char> (input)),
+                                       std::istreambuf_iterator<char> ());
+            if (content.find ("BUILD_DIR=") != std::string::npos
+                && content.find ("${ZLINK_CPP_BUILD_DIR:-") == std::string::npos) {
+                std::cerr << "C++ runner BUILD_DIR must prefer ZLINK_CPP_BUILD_DIR: "
+                          << entry.path () << '\n';
+                ok = false;
+            }
+            if (content.find ("$CPP_DIR/build/linux-ninja-vcpkg-debug")
+                != std::string::npos) {
+                std::cerr << "C++ runner dependency path bypasses the selected BUILD_DIR: "
+                          << entry.path () << '\n';
+                ok = false;
+            }
+        }
+    }
+    return ok;
+}
+
 /* 공통 설정 정책 §2.1과 Config 11 §2: server 역할은 설정 값으로 한 실행 파일을
  * 전환하지 않고 역할별 진입점으로 구성한다. Client 시나리오도 역할 host와 분리한다. */
 bool observability_ops_uses_role_specific_entrypoints (const std::filesystem::path &root)
@@ -1824,6 +1856,7 @@ int main ()
     ok &= sample_server_code_does_not_block_on_task_result (root);
     ok &= sample_and_e2e_code_does_not_read_the_environment (root);
     ok &= runner_generated_config_files_are_private_and_cleaned (root);
+    ok &= cpp_runners_prefer_the_selected_build_directory (root);
     ok &= observability_ops_uses_role_specific_entrypoints (root);
     ok &= spot_actor_transfer_uses_role_specific_entrypoints (root);
     ok &= affected_e2e_clients_own_each_scenario_in_a_file (root);

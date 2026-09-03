@@ -43,7 +43,7 @@ final class ZLinkChannelMessageDispatcher {
         ZLinkBackendRouterSocket router,
         ZLinkBackendReceived received) {
         if (isProbeFrame(received.parts())) {
-            received.parts().forEach(Message::close);
+            received.close();
             return;
         }
         //  Spec 27 §4: decode and install the inbound flow pair (or start a new
@@ -56,12 +56,10 @@ final class ZLinkChannelMessageDispatcher {
             } catch (PayloadDecodeDispatchException invalidFlow) {
                 String packetName = received.parts().isEmpty()
                     ? null : received.parts().getFirst().toUtf8String();
-                if (received.routingId().isPresent()
-                    && received.requestSeq().isPresent()) {
+                if (received.routingId().isPresent() && received.isRequest()) {
                     errors.replyError(
                         router,
-                        received.routingId().orElseThrow(),
-                        received.requestSeq().orElseThrow(),
+                        received,
                         ZLinkDispatchErrorSurface.CHANNEL,
                         ZLinkDispatchMessageKind.REQUEST,
                         ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED,
@@ -80,7 +78,11 @@ final class ZLinkChannelMessageDispatcher {
                         null,
                         invalidFlow);
                 }
-                received.parts().forEach(Message::close);
+                if (received.isRequest()) {
+                    received.closeParts();
+                } else {
+                    received.close();
+                }
                 return;
             }
         }
@@ -92,7 +94,7 @@ final class ZLinkChannelMessageDispatcher {
             if (ZLinkFrameworkErrorReply.isPacketName(packet.packetName())) {
                 errors.report(
                     ZLinkDispatchErrorSurface.CLASSIC_FANOUT,
-                    received.requestSeq().isPresent()
+                    received.isRequest()
                         ? ZLinkDispatchMessageKind.REQUEST
                         : ZLinkDispatchMessageKind.SEND,
                     ZLinkDispatchErrorReason.HANDLER_MISSING,
@@ -116,19 +118,17 @@ final class ZLinkChannelMessageDispatcher {
                 return;
             }
             String contentType = ZLinkChannelContentTypeFrame.decode(received.parts());
-            RoutingId routingId = received.routingId().get();
-            if (received.requestSeq().isEmpty()) {
+            if (!received.isRequest()) {
                 dispatchSend(channelName, packet, contentType);
                 return;
             }
             ChannelRequestHandlerRegistration registration =
                 registry.requestHandler(channelName, packet.packetName());
-            long requestSeq = received.requestSeq().get();
+            long requestSeq = received.requestSeq().orElse(0L);
             if (registration == null) {
                 errors.replyError(
                     router,
-                    routingId,
-                    requestSeq,
+                    received,
                     ZLinkDispatchErrorSurface.CHANNEL,
                     ZLinkDispatchMessageKind.REQUEST,
                     ZLinkDispatchErrorReason.HANDLER_MISSING,
@@ -142,14 +142,18 @@ final class ZLinkChannelMessageDispatcher {
             dispatchRequestHandler(
                 channelName,
                 router,
-                routingId,
+                received,
                 requestSeq,
                 packet,
                 registration,
                 contentType);
         } finally {
             flowScope.close();
-            received.parts().forEach(Message::close);
+            if (received.isRequest()) {
+                received.closeParts();
+            } else {
+                received.close();
+            }
         }
     }
 
@@ -321,7 +325,7 @@ final class ZLinkChannelMessageDispatcher {
     private void dispatchRequestHandler(
         String channelName,
         ZLinkBackendRouterSocket router,
-        RoutingId routingId,
+        ZLinkBackendReceived received,
         long requestSeq,
         ParsedPacket packet,
         ChannelRequestHandlerRegistration registration,
@@ -360,8 +364,7 @@ final class ZLinkChannelMessageDispatcher {
                                         if (error != null) {
                                             errors.replyError(
                                                 router,
-                                                routingId,
-                                                requestSeq,
+                                                received,
                                                 ZLinkDispatchErrorSurface.CHANNEL,
                                                 ZLinkDispatchMessageKind.REQUEST,
                                                 ZLinkChannelDispatchReporter.reasonFrom(error),
@@ -372,8 +375,7 @@ final class ZLinkChannelMessageDispatcher {
                                         } else {
                                             ZLinkChannelDispatchReporter.replyAndClose(
                                                 router,
-                                                routingId,
-                                                requestSeq,
+                                                received,
                                                 reply);
                                             traceFlow(
                                                 ZLinkMessageFlowOutcome.REPLIED,

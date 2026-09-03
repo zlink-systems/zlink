@@ -534,7 +534,7 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
     }
 
     if (validation != stateful_error_t::none) {
-        if (record.request_sequence && record.correlation) {
+        if (record.reply_token && record.correlation) {
             // moving replies with the retryable relocation terminal
             // (conflict + spotMoving maps to a retryable unavailable on the
             // requester), so the session owner keeps redelivery ownership.
@@ -589,7 +589,7 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
         }
     }
     catch (const protocol::service_wire_error_t &) {
-        if (record.request_sequence && record.correlation) {
+        if (record.reply_token && record.correlation) {
             claim_guard.dismiss ();
             reply_failure_then_release_claim (
               *_transport,
@@ -631,7 +631,7 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
         enqueued = stateful_error_t::backpressured;
     }
     if (enqueued != stateful_error_t::none) {
-        if (record.request_sequence && record.correlation) {
+        if (record.reply_token && record.correlation) {
             claim_guard.dismiss ();
             reply_failure_then_release_claim (
               *_transport,
@@ -774,7 +774,7 @@ task_t<bool> raw_stateful_dispatch_t::complete_relocated_source_async (
             || found->first.kind != owner.kind
             || found->first.key != owner.key
             || !found->second.request
-            || !found->second.transport.request_sequence
+            || !found->second.transport.reply_token
             || !found->second.transport.correlation
             || !found->second.transport.operation
             || *found->second.transport.operation
@@ -785,7 +785,7 @@ task_t<bool> raw_stateful_dispatch_t::complete_relocated_source_async (
                   return entry.first.kind == owner.kind
                          && entry.first.key == owner.key
                          && entry.second.request
-                         && entry.second.transport.request_sequence
+                         && entry.second.transport.reply_token
                          && entry.second.transport.correlation
                          && entry.second.transport.operation
                          && *entry.second.transport.operation

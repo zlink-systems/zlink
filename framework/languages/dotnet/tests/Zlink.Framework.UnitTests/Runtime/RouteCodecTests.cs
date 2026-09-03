@@ -200,10 +200,9 @@ public sealed class RouteCodecTests
             .Timeout(TimeSpan.FromSeconds(2))
             .Async();
         using var received = await ReceiveAsync(router, TimeSpan.FromSeconds(2));
-        ZLinkChannelReplyWriter.ReplyEnvelope(
+        ZLinkChannelReplyWriter.ReplyRequest(
             router,
-            Assert.IsType<RoutingId>(received.RoutingId),
-            Assert.IsType<ulong>(received.RequestSeq),
+            received,
             ZLinkChannelReplyWriter.CreateReplyHeader(
                 ZLinkMessageKind.Response,
                 "play",

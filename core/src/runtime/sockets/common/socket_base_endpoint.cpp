@@ -251,6 +251,8 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
         const bool paired_transport =
           options.type == ZLINK_CORE_SOCKET_DEALER || options.type == ZLINK_CORE_SOCKET_ROUTER;
         const uint64_t pair_id = paired_transport ? allocate_transport_pair_id () : 0;
+        if (paired_transport)
+            snapshot_pending_connect_routing_id (pair_id);
         const uint64_t pair_generation = paired_transport ? 1 : 0;
         const unsigned char transport_lane_count =
           paired_transport && peer.socket
@@ -436,6 +438,12 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
                 connected_inproc_now = true;
             }
 
+            // Bind the connect-time alias to the socket-side pipe. Inproc has
+            // already published the peer identity above; the alias is the local
+            // route identity and must win, so this runs after that publication
+            // and before admission.
+            if (paired_transport && lane == transport_lane_application)
+                apply_pending_connect_routing_id (pair_id, new_pipes[0]);
             attach_pipe (new_pipes[0], false, true, connected_inproc_now);
             if (connected_inproc_now)
                 emit_inproc_connection_ready (new_pipes[0]);
@@ -454,6 +462,11 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
     const bool paired_transport =
       options.type == ZLINK_CORE_SOCKET_DEALER || options.type == ZLINK_CORE_SOCKET_ROUTER;
     const uint64_t pair_id = paired_transport ? allocate_transport_pair_id () : 0;
+    // Capture the CONNECT_ROUTING_ID alias synchronously, bound to this
+    // connect's transport pair id, before a later connect can overwrite the
+    // socket-global slot.
+    if (paired_transport)
+        snapshot_pending_connect_routing_id (pair_id);
     const std::shared_ptr<transport_pair_state_t> pair_state =
       paired_transport ? std::make_shared<transport_pair_state_t> ()
                        : std::shared_ptr<transport_pair_state_t> ();
@@ -649,6 +662,9 @@ int zlink::socket_base_t::create_resolved_connect_session (
         if (!paired_transport)
             attach_pipe (new_pipes[0], subscribe_to_all, true);
         else if (lane_options_.transport_lane == transport_lane_application) {
+            // Bind the connect-time alias to this pipe before admission so RID
+            // adoption reads it from the pipe rather than a shared slot.
+            apply_pending_connect_routing_id (pair_id, new_pipes[0]);
             new_pipes[0]->hold_writes_until_transport_pair_ready ();
             attach_pipe (new_pipes[0], subscribe_to_all, true, false);
         } else
@@ -1000,6 +1016,9 @@ int zlink::socket_base_t::term_endpoint_internal (const char *endpoint_uri_)
         //  and redial an endpoint the caller has just removed.
         if (it->second.transport_pair_state)
             it->second.transport_pair_state->disable_reconnect ();
+        if (it->second.transport_pair_connect_intent)
+            forget_pending_connect_routing_id (
+              it->second.transport_pair_connect_intent->pair_id);
         if (it->second.pipe != NULL)
             it->second.pipe->terminate (false);
         term_child (it->second.endpoint);

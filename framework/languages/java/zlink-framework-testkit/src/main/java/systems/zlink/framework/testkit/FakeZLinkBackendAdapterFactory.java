@@ -59,7 +59,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResul
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitorHandler;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitorEvent;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchEvent;
@@ -1599,7 +1598,6 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
         @Override public void setMaxMessageSize(long value) {
             record("setMaxMessageSize." + value);
         }
-        @Override public void enableNotifications() { record("enableNotifications"); }
         @Override public boolean waitForReadable(Duration timeout) {
             try {
                 return readable.tryAcquire(timeout.toNanos(), TimeUnit.NANOSECONDS);
@@ -1640,19 +1638,16 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
         @Override public boolean relayBoundActor(RoutingId sessionRid, String actorId, ZLinkStreamHeader header, List<Message> parts, SendFlags flags) { record("relayBoundActor." + actorId + "." + header.codec() + "." + header.packetName()); return true; }
 
         void dispatchPacket(RoutingId routingId, Message header, Message payload) {
-            byte[] headerBytes = header.toByteArray();
-            byte[] payloadBytes = payload.toByteArray();
-            byte[] frame = ByteBuffer.allocate(6 + headerBytes.length + payloadBytes.length)
-                .putShort((short) headerBytes.length)
-                .putInt(payloadBytes.length)
-                .put(headerBytes)
-                .put(payloadBytes)
-                .array();
-            Message raw = Message.from(frame);
+            Message packetHeader = Message.from(header);
+            Message packetBody = Message.from(payload);
             received.add(new ZLinkBackendStreamReceived(
                 Optional.of(routingId),
-                List.of(raw),
-                raw::close));
+                packetHeader,
+                packetBody,
+                () -> {
+                    packetHeader.close();
+                    packetBody.close();
+                }));
             readable.release();
         }
 
@@ -1678,7 +1673,6 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
             super(calls, "socketMonitor");
         }
 
-        @Override public void onEvent(ZLinkBackendSocketMonitorHandler handler) { record("onEvent"); }
         @Override public ZLinkBackendSocketMonitorEvent recv() { return null; }
     }
 

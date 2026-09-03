@@ -59,6 +59,7 @@ fn main() {
             |msg| match perf_submit_measurement!(sender.send(), msg) {
                 Ok(()) => true,
                 Err(err) if err.code() == SubmitResult::NotConnected => false,
+                Err(err) if common::is_single_send_retry_error(&err) => false,
                 Err(err) => panic!("active send: {err}"),
             },
         );

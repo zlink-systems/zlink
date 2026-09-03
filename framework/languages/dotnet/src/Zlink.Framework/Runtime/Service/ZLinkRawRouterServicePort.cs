@@ -225,7 +225,7 @@ internal sealed class ZLinkRawRouterEnvelope : IDisposable
 
     internal IReadOnlyList<Message> Parts => _received.Parts;
 
-    internal bool CanReply => _received.RequestSeq.HasValue;
+    internal bool CanReply => _received.ReplyToken is not null;
 
     internal void Reply(IReadOnlyList<ReadOnlyMemory<byte>> parts)
     {

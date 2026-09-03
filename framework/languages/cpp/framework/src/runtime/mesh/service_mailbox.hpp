@@ -14,10 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace zlink
-{
-class received_t;
-}
+#include <zlink/Contracts/Messaging/received.hpp>
 
 namespace zlink::framework::runtime::mesh
 {
@@ -48,12 +45,11 @@ struct service_mailbox_record_t
     service_mailbox_domain_t domain;
     std::vector<std::vector<std::uint8_t>> parts;
     std::vector<std::uint8_t> source_routing_id{};
-    std::optional<std::uint64_t> request_sequence = std::nullopt;
+    std::optional<zlink::reply_token_t> reply_token = std::nullopt;
     std::optional<std::uint64_t> correlation = std::nullopt;
     std::uint64_t source_node_generation = 0;
     std::optional<std::pair<std::uint64_t, std::uint64_t>> operation;
     std::optional<service_bound_session_source_t> bound_session_source;
-    std::shared_ptr<zlink::received_t> retained;
     std::function<void ()> before_application_handler;
 };
 

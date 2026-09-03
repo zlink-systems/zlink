@@ -16,11 +16,6 @@ internal sealed class ZLinkBackendSocketMonitorWrapper(ISocketMonitor nativeMoni
         return ZlinkPoll.Poll(_monitors, milliseconds) > 0;
     }
 
-    public void OnEvent(Action<ZLinkBackendSocketMonitorEvent> handler)
-    {
-        nativeMonitor.OnEvent(monitorEvent => handler(monitorEvent.ToFramework()));
-    }
-
     public bool TryRecv(out ZLinkBackendSocketMonitorEvent monitorEvent)
     {
         var nativeEvent = nativeMonitor.Recv(RecvFlags.DontWait);

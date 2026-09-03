@@ -139,7 +139,7 @@ void verify_stateful_claim_releases_after_one_shot_reply_terminal ()
          protocol::encode_application_payload (
            {"ActorRequest", "application/json", bytes ("request")})},
         source_routing_id,
-        request_sequence,
+        std::nullopt,
         correlation,
         source_generation,
         std::make_pair (operation.high, operation.low)}));
@@ -243,7 +243,7 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
         mesh::service_mailbox_domain_t::application,
         {request_header_bytes, bytes ("request")},
         source_routing_id,
-        request_sequence,
+        std::nullopt,
         correlation}));
     assert (server.mailbox ().try_enqueue (
       mesh::service_mailbox_record_t{
@@ -321,7 +321,7 @@ void verify_stateful_ingest_rejection_releases_on_one_shot_terminal ()
         mesh::service_mailbox_domain_t::application,
         {{0xff}, {0x00}},
         source_routing_id,
-        71,
+        std::nullopt,
         81,
         1}));
     assert (target.mailbox ().try_enqueue (
