@@ -39,12 +39,12 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     };
 
     mailbox_t ();
-    ~mailbox_t ();
+    ~mailbox_t () ZLINK_OVERRIDE;
 
     fd_t get_fd () const;
-    void send (const command_t &cmd_);
+    void send (const command_t &cmd_) ZLINK_OVERRIDE;
     void signal ();
-    int recv (command_t *cmd_, int timeout_);
+    int recv (command_t *cmd_, int timeout_) ZLINK_OVERRIDE;
     //  Classifies the next command without removing it. Only the serialized
     //  command owner may call this receiver-side operation.
     command_probe_result_t probe_command (
@@ -77,7 +77,6 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
                          void *handler_arg_,
                          mailbox_pre_post_t pre_post_ = NULL);
     void schedule_if_needed ();
-    void schedule_if_needed_unlocked ();
     bool reschedule_if_needed ();
     bool detach_io_context_if_idle ();
 
@@ -103,6 +102,10 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
 #endif
 
   private:
+    bool activate_if_command_pending ();
+    void schedule_if_needed_unlocked ();
+    void signal_registered_pollers_unlocked ();
+
     //  The pipe to store actual commands.
     typedef ypipe_t<command_t, command_pipe_granularity> cpipe_t;
     cpipe_t _cpipe;

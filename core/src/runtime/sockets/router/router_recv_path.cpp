@@ -46,12 +46,19 @@ void zlink::router_t::copy_router_pipe_source_rid (
     if (!pipe_)
         return;
 
+    size_t routing_id_size = 0;
+    if (pipe_->try_copy_router_route_binding (
+          out_->data, sizeof (out_->data), &routing_id_size,
+          route_binding_token_out_)) {
+        out_->size = static_cast<uint8_t> (routing_id_size);
+        return;
+    }
+
     std::lock_guard<std::mutex> route_lifecycle_lock (
       _out_pipes_sync);
-    //  A reciprocal duplicate keeps its physical pipe under an internal
-    //  standby ID, while the application-facing peer identity remains the
-    //  original node routing ID. Request replies still retain source_pipe,
-    //  so normalizing this metadata does not change the selected transport.
+    //  A first-ever duplicate standby has no pipe-owned source snapshot until
+    //  topology admission publishes its original RID. Keep the route table as
+    //  the correctness fallback for that cold handover case.
     const std::map<pipe_t *, blob_t>::const_iterator standby =
       _standby_pipes.find (pipe_);
     const blob_t *routing_id =

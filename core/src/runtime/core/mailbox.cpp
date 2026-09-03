@@ -57,24 +57,16 @@ void zlink::mailbox_t::send (const command_t &cmd_)
         if (_command_waiters != 0)
             _command_wait_cv.broadcast ();
     }
-    bool send_primary_signaler = true;
     if (!ok) {
         //  Publish the command before its wakeup. Commands appended while the
         //  receiver is active are consumed by that drain and need no hint.
         _command_pending_hint.store (true, std::memory_order_release);
-        // Signal all registered signalers for ZLINK_INTERNAL_OPT_FD support
-        for (std::vector<signaler_t *>::iterator it = _signalers.begin (), end = _signalers.end ();
-             it != end; ++it) {
-            (*it)->send ();
-        }
-        send_primary_signaler =
-          _signalers.empty () || _primary_signaler_required.load (std::memory_order_acquire);
-        if (send_primary_signaler)
+        signal_registered_pollers_unlocked ();
+        if (_signalers.empty ()
+            || _primary_signaler_required.load (std::memory_order_acquire))
             _signaler.send ();
-        //  Stage 1 (plan 7.1): the scheduling decision needs the same mutex
-        //  this critical section already holds, and send() runs once per
-        //  command. Doing it here removes one mutex round trip per command
-        //  instead of dropping and retaking _sync in schedule_if_needed().
+        //  Scheduling shares the command publication lock so a handler cannot
+        //  race the transition from an empty queue to pending work.
         schedule_if_needed_unlocked ();
     }
     _sync.unlock ();
@@ -99,10 +91,7 @@ void zlink::mailbox_t::signal ()
         //  command. Preserve one such edge across waiter registration.
         _command_wait_signal_pending = true;
     }
-    for (std::vector<signaler_t *>::iterator it = _signalers.begin (), end = _signalers.end ();
-         it != end; ++it) {
-        (*it)->send ();
-    }
+    signal_registered_pollers_unlocked ();
     if (_signalers.empty () || _primary_signaler_required.load (std::memory_order_acquire))
         _signaler.send ();
     _sync.unlock ();
@@ -113,10 +102,7 @@ int zlink::mailbox_t::recv (command_t *cmd_, int timeout_)
     //  An async command owner and a public socket poller can observe the same
     //  primary descriptor. Consult the command pipe first so a poller that
     //  consumed the wake cannot strand an already-published command.
-    if (!_active && _cpipe.check_read ()) {
-        (void) _signaler.recv_failable ();
-        _active = true;
-    }
+    (void) activate_if_command_pending ();
 
     if (!_active) {
         signaler_t *shared_signaler = NULL;
@@ -182,11 +168,7 @@ zlink::mailbox_t::command_probe_result_t zlink::mailbox_t::probe_command (
     //  Mirror recv()'s nonblocking receiver-state transition, including the
     //  primary wake drain. A sender can only append after this probe, so a
     //  matched front remains the next command until the command owner pops it.
-    if (!_active && _cpipe.check_read ()) {
-        (void) _signaler.recv_failable ();
-        _active = true;
-    }
-    if (!_active)
+    if (!activate_if_command_pending ())
         return command_probe_empty;
     if (!_cpipe.check_read ()) {
         _active = false;
@@ -195,6 +177,17 @@ zlink::mailbox_t::command_probe_result_t zlink::mailbox_t::probe_command (
 
     return _cpipe.probe (predicate_) ? command_probe_match
                                      : command_probe_other;
+}
+
+bool zlink::mailbox_t::activate_if_command_pending ()
+{
+    if (!_active && _cpipe.check_read ()) {
+        //  The command pipe is authoritative when a public poller consumed
+        //  the shared descriptor edge before the command owner arrived.
+        (void) _signaler.recv_failable ();
+        _active = true;
+    }
+    return _active;
 }
 
 uint64_t zlink::mailbox_t::begin_command_wait_observation ()
@@ -389,11 +382,16 @@ void zlink::mailbox_t::rearm_primary_signaler ()
 void zlink::mailbox_t::signal_pollers ()
 {
     _sync.lock ();
-    for (std::vector<signaler_t *>::iterator it = _signalers.begin (), end = _signalers.end ();
-         it != end; ++it) {
-        (*it)->send ();
-    }
+    signal_registered_pollers_unlocked ();
     _sync.unlock ();
+}
+
+void zlink::mailbox_t::signal_registered_pollers_unlocked ()
+{
+    for (std::vector<signaler_t *>::iterator it = _signalers.begin (),
+                                             end = _signalers.end ();
+         it != end; ++it)
+        (*it)->send ();
 }
 
 void zlink::mailbox_t::clear_signalers ()

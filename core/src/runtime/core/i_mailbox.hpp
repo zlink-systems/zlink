@@ -4,12 +4,12 @@
 #define __ZLINK_I_MAILBOX_HPP_INCLUDED__
 
 #include "utils/macros.hpp"
-#include "utils/stdint.hpp"
 
 namespace zlink
 {
-//  Interface to be implemented by mailbox.
+struct command_t;
 
+//  Interface to be implemented by mailbox.
 class i_mailbox
 {
   public:

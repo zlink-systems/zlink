@@ -9,7 +9,6 @@
 #include "core/auto_hwm_policy.hpp"
 #include "core/ctx_physical_queue_registry.hpp"
 #include "core/ypipe_base.hpp"
-#include "utils/config.hpp"
 #include "core/object.hpp"
 #include "utils/stdint.hpp"
 #include "utils/array.hpp"
@@ -32,14 +31,6 @@ enum pipe_write_observer_phase_t
 };
 typedef bool (*pipe_write_observer_fn) (
   pipe_t *pipe_, void *userdata_, pipe_write_observer_phase_t phase_);
-
-enum pipe_write_status_t
-{
-    pipe_write_ready = 0,
-    pipe_write_hwm_full,
-    pipe_write_transport_wait,
-    pipe_write_inactive
-};
 
 enum pipe_message_admission_t : int
 {
@@ -213,10 +204,16 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  retain the zero-overhead get_routing_id() view.
     void snapshot_routing_id (blob_t *routing_id_) const;
     const blob_t &get_routing_id () const;
-    // ROUTER publishes an allocation-free exact-route fence for reply tokens.
-    // Odd values identify a current RID binding; even values are unpublished.
+    // ROUTER publishes the application-facing source RID once per physical
+    // pipe. Current-route publication follows it with an exact-route fence;
+    // odd tokens identify a current binding and even tokens are unpublished.
+    void publish_router_route_source (
+      const blob_t &router_route_source_routing_id_);
     void invalidate_router_route_binding ();
     void publish_router_route_binding ();
+    bool try_copy_router_route_binding (
+      unsigned char *routing_id_out_, size_t routing_id_capacity_,
+      size_t *routing_id_size_out_, uint64_t *token_out_) const;
     uint64_t router_route_binding_token () const;
     pipe_t *get_peer () const;
     //  Returns a lifetime-pinned peer snapshot for control/monitor paths. The
@@ -235,8 +232,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     void record_peer_weight (uint64_t connection_id_, uint32_t weight_);
     bool record_peer_weight_if_current (uint64_t connection_id_,
                                         uint32_t weight_);
-    bool peer_weight (uint32_t *weight_out_,
-                      uint64_t *connection_id_out_ = NULL) const;
+    bool peer_weight (uint32_t *weight_out_) const;
     uint64_t get_snd_pending_msgs () const;
     uint64_t get_rcv_pending_msgs_approx () const;
     uint64_t get_snd_pending_bytes () const;
@@ -259,16 +255,11 @@ class pipe_t ZLINK_FINAL : public object_t,
     uint64_t get_oversize_message_admission_count () const;
     uint64_t get_oversize_message_admission_max_bytes () const;
     void reset_oversize_message_admission_metrics ();
-    uint64_t get_connected_time () const;
     void refresh_write_credit (uint64_t peer_msgs_read_, uint64_t peer_bytes_read_);
     bool mark_stream_connect_event_emitted ();
-    void reset_stream_connect_event_emitted ();
     bool mark_connection_ready_event_emitted ();
-    void reset_connection_ready_event_emitted ();
     stream_packet_state_t &stream_packet_state ();
-    const stream_packet_state_t &stream_packet_state () const;
     fast_mutex_t &transport_sync ();
-    void reset_stream_packet_state ();
     void close_stream_route ();
     bool stream_route_closed () const;
 
@@ -297,13 +288,6 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool read_with_record_admission (
       msg_t *msg_, read_admission_fn *admission_, void *userdata_,
       bool *admission_failed_out_, bool *admission_consumed_out_);
-    //  Probes the queued head without consuming it. When the head starts a
-    //  record, admission_ decides whether that record is currently
-    //  receivable. This is used by level readiness and fair-queue skipping so
-    //  a capacity-blocked REQUEST cannot make POLLIN lie or stall other pipes.
-    bool check_read_with_record_admission (
-      read_admission_fn *admission_, void *userdata_,
-      bool *admission_failed_out_);
     int reserve_inbound_decoder_frame (
       uint64_t payload_bytes_, unsigned char msg_flags_, bool track_multipart_,
       decoder_frame_reservation_t *reservation_storage_,
@@ -318,9 +302,6 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  function returns false.
     bool check_write ();
 
-    //  Checks whether messages can be written to the pipe and reports whether
-    //  failure was caused by HWM or inactive pipe state.
-    pipe_write_status_t check_write_status ();
     pipe_message_admission_t check_write_admission ();
 
     //  Consumes the HWM-credit wake marker. Transport-pair activation also
@@ -579,6 +560,16 @@ class pipe_t ZLINK_FINAL : public object_t,
         count1_completion_draining
     };
 
+    enum lifecycle_state_t
+    {
+        active,
+        delimiter_received,
+        waiting_for_delimiter,
+        term_ack_sent,
+        term_req_sent1,
+        term_req_sent2
+    };
+
     //  Type of the underlying lock-free pipe.
     typedef ypipe_base_t<msg_t> upipe_t;
 
@@ -617,6 +608,10 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool remote_flow_blocked_unlocked () const;
     bool write_state_ready_unlocked (
       pipe_message_admission_t *admission_out_) const;
+    bool admit_write_unlocked (
+      pipe_message_admission_t *admission_out_);
+    bool admit_owner_started_write_unlocked (
+      pipe_message_admission_t *admission_out_);
     bool hwm_credit_ready_unlocked (
       pipe_message_admission_t *admission_out_);
     void arm_hwm_credit_wait_unlocked ();
@@ -661,7 +656,10 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool read_internal (msg_t *msg_, read_admission_fn *admission_,
                         void *userdata_, bool *admission_failed_out_,
                         bool *admission_consumed_out_);
-    void refresh_inbound_lwm_from_physical_queue ();
+    void publish_router_route_source_unlocked (
+      const blob_t &router_route_source_routing_id_);
+    void transition_to_inactive_state_unlocked (lifecycle_state_t state_);
+    void acknowledge_peer_termination_unlocked (lifecycle_state_t state_);
 
     //  Constructor is private. Pipe can only be created using
     //  pipepair function.
@@ -782,8 +780,6 @@ class pipe_t ZLINK_FINAL : public object_t,
     uint64_t _max_message_bytes;
     uint64_t _oversize_message_admission_count;
     uint64_t _oversize_message_admission_max_bytes;
-    uint64_t _connected_time;
-
     //  Last received peer's msgs_read. The actual number in the peer
     //  can be higher at the moment.
     uint64_t _peers_msgs_read;
@@ -798,26 +794,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Sink to send events to.
     i_pipe_events *_sink;
 
-    //  States of the pipe endpoint:
-    //  active: common state before any termination begins,
-    //  delimiter_received: delimiter was read from pipe before
-    //      term command was received,
-    //  waiting_for_delimiter: term command was already received
-    //      from the peer but there are still pending messages to read,
-    //  term_ack_sent: all pending messages were already read and
-    //      all we are waiting for is ack from the peer,
-    //  term_req_sent1: 'terminate' was explicitly called by the user,
-    //  term_req_sent2: user called 'terminate' and then we've got
-    //      term command from the peer as well.
-    enum
-    {
-        active,
-        delimiter_received,
-        waiting_for_delimiter,
-        term_ack_sent,
-        term_req_sent1,
-        term_req_sent2
-    } _state;
+    lifecycle_state_t _state;
 
     //  If true, we receive all the pending inbound messages before
     //  terminating. If false, we terminate immediately when the peer
@@ -826,6 +803,10 @@ class pipe_t ZLINK_FINAL : public object_t,
 
     //  Routing id of the writer. Used uniquely by the reader side.
     blob_t _router_socket_routing_id;
+    //  Immutable application-facing identity for this physical ROUTER pipe.
+    //  The release/acquire flag makes its blob storage lock-free to readers.
+    blob_t _router_route_source_routing_id;
+    std::atomic<bool> _router_route_source_published;
     blob_t _transport_peer_identity;
     std::atomic<uint64_t> _router_route_binding_token;
     std::atomic<bool> _connection_ready_event_emitted;
@@ -915,8 +896,6 @@ class pipe_t ZLINK_FINAL : public object_t,
 };
 
 void send_routing_id (pipe_t *pipe_, const options_t &options_);
-
-void send_hello_msg (pipe_t *pipe_, const options_t &options_);
 }
 
 #endif
