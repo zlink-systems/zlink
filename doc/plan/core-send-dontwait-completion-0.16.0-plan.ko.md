@@ -82,8 +82,9 @@ Phase 11 전에 합류한다. 모든 B 작업은 branch에서 하고 PR로 main�
 | Phase 9 준비(`--sync-versions` dry-run, stale 심볼 rg, release commit 초안) | posddd 리팩토링(`briefs/posddd-refactor.prompt`, worktree 분리 병렬) + wake 불변식 테스트(`briefs/wake-invariant-tests.prompt`) → 비회귀 sweep2 → PR |
 | B의 sweep2 PASS(및 리팩토링 merge 여부 결정) 후 → Phase 9 태그·GH 빌드 → 10 → 11(사용자 범위 조율) → 12 → 13 | |
 
-규칙: release 태그는 sweep2 PASS 뒤에만 찍는다(Phase 9 조건). 측정 중인 머신에서는 다른 빌드·테스트를 돌리지 않는다.
-리팩토링을 0.16.0에 포함할지(태그 전 merge) 0.16.1로 보낼지는 사용자 결정 사항(감독관 권고: 태그 전 merge).
+규칙: release 태그(Phase 9)는 **posddd 리팩토링 merge + sweep2 PASS 뒤에만** 찍는다(사용자 결정 D-050). 그 전의
+Phase 10·11·12는 로컬 빌드 Core와 로컬 패키지로 진행하고, 태그 후 release Core로 패키지 생성과 consumer smoke를
+한 번 다시 확인한다. 측정 중인 머신에서는 다른 빌드·테스트를 돌리지 않는다.
 
 ### 0.4 새 머신에서 재개하는 절차
 
