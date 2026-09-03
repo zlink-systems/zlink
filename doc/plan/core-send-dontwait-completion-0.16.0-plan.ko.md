@@ -140,7 +140,7 @@ Phase 10·11·12는 로컬 빌드 Core와 로컬 패키지로 진행하고, 태�
     배치한 뒤 clean consumer와 version provenance를 확인한다.
 14. Framework C++·.NET·Java·Kotlin·Node가 source가 아닌 로컬 binding package `0.16.0`을
     소비하고, Core callback bridge와 언어별 STREAM 6-byte assembler를 pull 경로로 바꾼다.
-15. Framework unit test, 언어별 E2E, cross-language E2E와 공통 sample 일곱 개가 모두 통과한다.
+15. Framework unit test, cross-language E2E와 공통 sample 일곱 개가 모두 통과한다.
 16. 기능별 green gate 뒤 POSDDD·성능·불필요 코드 정리를 수행하고 관련 회귀 test를 다시
     통과시킨 뒤 검토 가능한 단위로 commit·push한다.
 
@@ -1253,7 +1253,7 @@ backpressure와 ownership을 한 runtime owner 안에 둔다. Refactor 뒤 focus
 
 Clean workspace에서 `CMakePresets.json`의 Linux vcpkg Debug preset을 사용한다. `VCPKG_ROOT`와
 Phase 10의 C++ 0.16.0 local install을 먼저 확인하고 test·sample·E2E target을 모두 켠다.
-아래 `ZLINK_CPP_BUILD_DIR`는 같은 shell에서 12.1~12.3과 Phase 13 sample까지 유지한다.
+아래 `ZLINK_CPP_BUILD_DIR`는 같은 shell에서 12.1~12.2와 Phase 13 sample까지 유지한다.
 
 ```bash
 test -n "${VCPKG_ROOT:-}"
@@ -1296,18 +1296,7 @@ dotnet test \
 C++ build의 contract/foundation target도 포함됐는지 test 목록으로 확인한다. Kotlin은 Java binding과
 runtime을 공유하지만 Kotlin exact interface·coroutine fixture를 별도로 확인한다.
 
-#### 12.2 언어별 E2E
-
-```bash
-ZLINK_CPP_BUILD_DIR="$ZLINK_CPP_BUILD_DIR" \
-  bash framework/languages/cpp/e2e/run_e2e_all.sh
-bash framework/languages/dotnet/e2e/run_e2e_all.sh
-bash framework/languages/java/e2e/run_e2e_all.sh
-bash framework/languages/java/e2e-kotlin/run_e2e_all.sh
-bash framework/languages/node/e2e/run_e2e_all.sh
-```
-
-#### 12.3 Cross-language E2E
+#### 12.2 Cross-language E2E
 
 Java host를 먼저 다시 만든다.
 
@@ -1453,7 +1442,7 @@ unrelated 모듈을 정리하지 않는다. 불필요 코드 제거는 callback�
 - [ ] Core `core/v0.16.0` release asset, checksum과 provenance를 확인했다.
 - [ ] Binding package 여덟 개가 local artifact 경로에 있고 clean consumer가 Core 0.16.0을 load한다.
 - [ ] Framework가 local binding package 0.16.0만 소비한다.
-- [ ] Framework C++·.NET·Java/Kotlin·Node unit와 언어별 E2E가 통과한다.
+- [ ] Framework C++·.NET·Java/Kotlin·Node unit가 통과한다.
 - [ ] C++·Node cross-language runner와 Java host rebuild가 통과한다.
 - [ ] C++·.NET·Java/Kotlin·Node에서 공통 sample 일곱 개가 모두 정상 종료한다.
 - [ ] 계획된 green commit과 push, Core release tag가 완료됐고 외부 binding registry는 publish하지 않았다.

@@ -506,3 +506,15 @@ package·consumer smoke. 즉 로컬 검증은 지금 진행 가능.
 → 12.1 unit 재확인 → 12.2 언어별 E2E(run_e2e_all.sh ×4) → 12.3 cross-language(cpp/node smoke + java Host installDist) →
 Phase 13 7 samples 실행. Phase 13 문서(framework/doc/framework/**)는 **사용자 영역, 건드리지 않음**(sample 실행만).
 Phase 9 tag·10 release package는 B(sweep2 PASS+posddd merge) 의존. E2E/cross-language/sample에서 회귀 나오면 follow-up 커밋.
+
+## D-071 (2026-09-04 01:1x) plan 오류 정정 — 언어별 E2E는 plan에서 제거(사용자 지시)
+사용자 지시: "언어별 E2E는 별도로 진행, 진행해야 하는건 Language-Cross E2E만" + "정확히는 계획에도 있으면 안되는거야".
+→ per-language E2E(구 Phase 12.2 run_e2e_all.sh ×5)는 이 캠페인 게이트가 아니라 **별도 파이프라인에서 독립 실행**되는
+표준 회귀 검증. 이 pull-completion 캠페인의 E2E 게이트는 **cross-language E2E 하나**(binding/framework 계약이 언어 경계
+너머 wire로 동작하는지가 캠페인 핵심). [[spec-change-policy]] 오류 정정으로 판정(구현 편의 완화 아님, 범위 오류 수정),
+spec-first: 감독관(Claude) 직접 정정.
+**plan 정정 4곳**: (1)line143 완료요약 항목15에서 "언어별 E2E," 삭제, (2)line1256 "12.1~12.3"→"12.1~12.2",
+(3)구 12.2 "언어별 E2E" 섹션(run_e2e_all ×5) 삭제 + 구 12.3 Cross-language E2E→12.2로 renumber, (4)최종 체크리스트
+line1456 "unit와 언어별 E2E"→"unit". 정정 후 Phase 12 = 12.0 configure·12.1 unit·12.2 cross-language E2E.
+**감독관 착오 정정**: 앞서 Phase 12.2로 per-language E2E(cpp SpotService 등)를 서브에이전트로 돌리던 것은 범위 오류 →
+중단. **남은 검증 = cross-language E2E(12.2) + Phase 13 samples**. (Phase 13 문서는 사용자 영역.)
