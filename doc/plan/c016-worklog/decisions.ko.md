@@ -341,3 +341,16 @@ assertion 소멸(node backend-contract 54/54, cpp mesh vertical, dotnet focused 
 1개 npm install 부산물만).
 **다음**: 병렬 codex — node test 전환+거동 root-cause, cpp M6B/M6C DIAGNOSE-ONLY. dotnet liveness fix + handover
 spec gap은 Claude. java monitor-gap는 accepted followup 문서화.
+
+## D-061 (2026-09-03 21:0x) handover reply-route 판정 정정 (D-060 item2 대체)
+D-060은 handover reply-route(err101)를 "spec gap(physical vs logical binding 미명시)"로 분류했으나 **정정**.
+근거 `07-router.ko.md:273-278`: reply FINAL은 "같은 logical source RID의 reply route가 local admission될
+때까지" SNDTIMEO 대기하고 "현재 ready pipe"(ROUTER면 completion progress lane의 Completion pipe)를 고른다.
+token 검증은 RID 일치·미소비 기준(line285: 제거·미보유·이미소비·RID불일치→NOT_FOUND). 즉 **reply token은
+logical-RID 바인딩**이고, same-RID handover 후 captured (RID,token) reply route는 **스펙상 동작해야 정상**.
+err101=TIMED_OUT(NOT_FOUND 아님)은 token은 생존했으나 handover 후 새 connection의 reply route가 SNDTIMEO 내
+local admission 안 됨 → **defect**(pure spec gap도, invalid framework pattern도 아님).
+판정: 진단 필요 — (a)Core: same-RID handover 후 pending reply FINAL이 새 connection reply route 재admission을
+못 기다림/못 찾음, (b)framework: HELLO 재admission 후 reply re-drive 누락 or 테스트 타이밍. Core 결함이면
+감독관 권한으로 수정·push(B merge). dotnet liveness(D-060: framework typed-request 오용)와 함께 dotnet 진단
+job으로 처리 예정. [[canonical-actor-join-app-reply-contract]]·actor-authority OPEN RULING과 연관 가능.
