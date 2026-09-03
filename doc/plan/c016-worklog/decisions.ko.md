@@ -250,3 +250,99 @@ Core 2차 커밋은 cpp 15/15 확인 후 테스트 수정과 함께 push.
 ## D-053 (2026-09-03 13:55) Core 2차 커밋·push — B 시작 신호
 f3be895b3f core 2차(51파일, wake 3종·common send·REQREP·ws·ROUTER FINAL 재시도 fixup) + 3154ff90dc cpp 테스트 결정화.
 감독관 최종 gate: ctest 134/134, cpp 15/15+7/7, mirror 12/12, diff-check. perf 4-size 판정은 B(plan-b §2). A는 Phase 7 smoke 착수.
+
+## D-054 (2026-09-03 14:10, 머신 B, 사용자 지시) 성능 판정은 cell 단위로 끊어서
+사용자: "패턴별 + transport별로 끊어서 비교, 전체를 한 번에 돌리지 말 것". 전체 sweep2(single 33/42 진행)를 중단하고
+percell.sh(cell 하나 → FAIL이면 그 자리에서 1회 재측정 → 최종 verdict 기록)로 전환. 환경: valgrind 3.23.0 소스 빌드
+(~/.local/bin, sudo 불가), baseline worktree core/v0.15.1(ba78905c3d) 자체 빌드, 벤치 3파일 동일 확인.
+1차 관찰: (1) 대부분 cell의 FAIL은 latency_p95/p99 단일 size(1µs 해상도) — 재측정 대상. (2) REQREP 6 transport 전부
+latency 10~70× — 벤치가 포화 구간 queue 깊이를 latency로 보고(candidate가 Byte HWM까지 ≈9,500 in-flight vs baseline ≈160).
+스펙 §5.2 "벤치를 고친다" 적용: briefs/reqrep-latency-bench.b.prompt(one-way와 같은 in-flight 1 latency 구간). (3) REQREP
+inproc·wss는 throughput도 0.81~0.88 → 실제 회귀 후보, 벤치 정정 후 cell 재측정으로 확정.
+
+## D-055 (2026-09-03 15:05, 머신 B) 벤치 정정 채택 + cell 측정을 runs=3(median)으로
+c016-reqrep-bench(sol high) 산출 채택: single/multi REQREP two-phase(포화 throughput + in-flight 1 latency 1초), RESULT latency
+3종 소수 6자리, baseline worktree 동일 파일 복사(callback API 경로는 compile-check로 선택), gate·policy unit 59/59. 검증 단발:
+DEALER_ROUTER_REQREP tcp 64B latency main 0.083ms / baseline 0.098ms. 정정 벤치로 첫 cell(PAIR/tcp) 2회 측정에서 1024B
+throughput이 0.98→0.89로 흔들림 → 판정 기준(D-040)은 그대로, 측정만 runner 자체 `--runs 3`(size별 median)으로 전환
+(sweep2.sh에 SWEEP2_RUNS 환경변수 추가). 전 cell 재판정(percell.sh: cell → FAIL 시 즉시 1회 재측정).
+
+## D-056 (2026-09-03 15:10, 머신 B, 사용자 지시) 결과를 다 기다리지 않고 개선 포인트가 나오면 즉시 수정
+사용자: "결과 다 보고 하면 늦다. 개선 포인트 나오면 바로 개선하고, 개선되면 다음 측정". 판정 기준 재확인: size cell 5%는 허용
+오차, (pattern,transport) size 합계(기하평균)가 baseline보다 낮으면 개선 대상. 개선은 posddd 리팩토링과 같이(성능 이득 없어도
+구조 개선이면 채택, D-044), codex sol ultra. 벤치 정정 커밋 1e91505a14(perf/phase2-judge). 정정 벤치·runs=3 판정 7 cell 후 배치
+중단, 개선 대상: PAIR/tcp(1024B thr 0.95, p95/p99 집계 1.01~1.05), PAIR/ws·wss(thr 집계 0.989~0.995), PAIR/inproc(64K latency
+p95 3.3~3.8×). 경계: PAIR/tls·ipc, PUBSUB/tcp p99 단일 size. job c016-perf-improve-r1(briefs/perf-improve-posddd-r1.b.prompt).
+
+## D-057 (2026-09-03 18:25, 머신 B, 사용자 승인) 남은 cell은 runs=1 스크리닝 → FAIL만 runs=3 확인
+측정 시간이 병목(runs=3 + 재측정 = cell당 3.5~7분, 70 cell 4~5h). 판정 기준은 그대로 두고 측정 절차만: runs=1로 스크리닝해 PASS면
+확정, FAIL cell만 runs=3으로 1회 확인 측정. 확인된 FAIL을 묶어 개선 job 투입.
+
+## D-058 (2026-09-03 21:05, 머신 B, 사용자 지시) 순서 변경 — 리팩토링 먼저, 성능은 1024B 경량 비교로 동행
+사용자: "리팩토링 먼저. 성능 회귀는 ROUTER_ROUTER·SENDSEND·REQREP 1024B만 비교하면서, 그 다음 성능 갭 채우기". 브랜치·worktree 추가
+금지("여기서 계속") → perf/phase2-judge 트리에서 모듈 범위별 job을 순서대로(rf1 api/socket → rf2 sockets common/dealer/router/
+internal → rf3 pipe/ypipe/mailbox → rf4 wake 불변식 테스트), 각 job 뒤 tools의 light_perf.sh(1024B, 8 cell)로 비교 후 커밋.
+개선 job c016-perf-improve-r1(15:08~21:00, sol ultra) 감독관 중단: 원인 5개 실증·수정(POLLIN probe helper mutex → atomic cache;
+첫 HWM 대기 후 async owner 잔존 → 직접 owner 선출/retire; prefetched batch tail을 drain으로 오인한 sub-LWM 조기 wake; count-1 D/R
+재분류 검사가 모든 PAIR flush에 실행 → peer type gate·FQ publication opt-in; PAIR 2-frame whole-record 경로 + WS 출력 batch 16KiB
+한정) + 벤치 결함 1개 추가 정정(one-way in-flight 1 ack 경계) + posddd 정리 일부(−792/+476 시점). 최종 sweep: PAIR/tcp·inproc 전
+cell·집계 PASS(tcp thr 집계 1.20, lat 0.83), ws/ipc/PUBSUB tcp는 tail 단일 cell이 run마다 다른 size로 이동(WSL2 drift) — 이 시점에서
+중단하고 감독관 gate 후 커밋. D-045 재발(단일 5h job) 기록: 이후 job은 원인 하나·1.5h 상한.
+
+## D-059 (2026-09-03 21:10, 머신 B) 리팩토링 전 1024B 경량 비교(commit 10cc586a83 vs core/v0.15.1, runs=1)
+| cell | thr | lat | p95 | p99 |
+|---|---|---|---|---|
+| single ROUTER_ROUTER/tcp | 0.937 | 0.963 | 0.868 | 0.913 |
+| single ROUTER_ROUTER/inproc | 1.292 | 0.522 | 0.308 | 0.812 |
+| single DEALER_ROUTER_REQREP/tcp | 1.035 | 0.838 | 0.712 | 0.816 |
+| single ROUTER_ROUTER_REQREP/tcp | 1.157 | 0.808 | 0.761 | 0.787 |
+| multi DEALER_ROUTER_SENDSEND/tcp | 0.952 | 2.149 | 2.422 | 2.570 |
+| multi ROUTER_ROUTER_SENDSEND/tcp | 0.998 | 1.137 | 1.117 | 1.238 |
+| multi DEALER_ROUTER_REQREP/tcp | (candidate 1회 FAIL, 재실행 1.553) | 0.90 | 0.93 | 0.95 |
+| multi ROUTER_ROUTER_REQREP/tcp | 0.857 | 1.102 | 1.118 | 1.112 |
+관찰: single REQREP·inproc은 크게 개선. 개선 후보(리팩토링 뒤 성능 갭 단계에서 처리): single ROUTER_ROUTER/tcp 1024B thr 0.94,
+multi SENDSEND latency 1.1~2.1×(포화 latency — multi SENDSEND 벤치는 REQREP 정정 대상이 아니었음; 벤치 측정 방식 재확인 필요),
+multi ROUTER_ROUTER_REQREP thr 0.86. 주의: candidate multi DEALER_ROUTER_REQREP 1024B가 1회 FAIL(report에 원인 없음, 재실행 PASS)
+→ 간헐 실패 여부를 조용한 구간에서 5회 반복해 확인해야 함.
+
+## D-060 (2026-09-04 00:35, 머신 B) rf1(api/socket) 채택·커밋
+c016-posddd-rf1(sol ultra, 21:03~) +607/−1478. 감독관 gate 전부 green. 1024B 경량 비교(vs 0.15.1): single ROUTER_ROUTER/tcp thr
+0.94→1.01, REQREP 1.05/1.09, multi REQREP 1.22/0.96 — 리팩토링 전 대비 나빠진 cell 없음. multi SENDSEND latency(2.1→3.2×)는 포화
+latency 지표로 run 간 편차가 커서 성능 갭 단계에서 벤치 측정 방식과 함께 다룬다. 커밋은 항목별 분리 대신 1건(hunk 겹침, 시간
+우선; 요약에 항목별 파일 묶음 기록). BLOCKERS 16건(범위 밖 test/runtime 이동 필요)은 rf2·rf3에서 해당 범위 것을 처리.
+
+## D-061 (2026-09-04, 머신 B) rf2(runtime/sockets) 채택·커밋
+c016-posddd-rf2(sol ultra) +1304/−1689. 감독관 gate 전부 green. 1024B 비교(vs 0.15.1): single thr 1.03~1.22, multi 0.95~1.29 —
+rf1 대비 나빠진 cell 없음(tail 단일 run 편차만). BLOCKERS 3건 중 pipe 2건은 rf3 브리프에 이관, socket_send_pending_submit.cpp
+물리 분리(CMake 등록)는 후속.
+
+## D-062 (2026-09-04 02:30, 머신 B, 사용자 지시) PR은 하나로, 시간 단축
+사용자: "PR 하나로. 너무 오래 걸린다." → 플랜 §7의 3-PR 대신 perf/phase2-judge 단일 PR. 단축: hotpath gate 도구 job을 rf3와 병렬
+(core/build-hp), rf4는 rf3 직후 병렬(core/build-wk). 70 cell 4-size 전체 판정은 PR 뒤 별도(태그 전 필수, D-050)로 이동 — PR 본문에는
+1024B 경량 비교 표(리팩토링 전/후, 회귀 없음)를 넣는다.
+
+## D-063 (2026-09-04, 머신 B) rf3·hotpath gate 도구 커밋
+rf3(pipe/ypipe/mailbox) 341974c4d6 +206/−357: gate green(test_backpressure_oneway_matrix_single_socket 1회 load timeout → 단독 2회
+4.6s PASS; 최종 gate에서 10회 반복 재확인 예정). hotpath gate 도구 커밋: 결정성 3회 ±0.06%, 인위 회귀 3.8× FAIL 확인, 기준값은
+감독관이 커밋 트리에서 --update-reference로 재생성(job 값과 0.02% 이내 일치). ctest 135. rf4(wake 테스트) 진행 중.
+
+## D-064 (2026-09-04, 머신 B) candidate multi DEALER_ROUTER_REQREP 간헐 실패 = Core completion 정지 회귀
+runner 반복 9회 중 5회 client exit 1(baseline 9/9 성공). 벤치에 진단 출력 추가 후: 포화 구간 뒤 drain에서 client socket 1~3개가
+3,094~11,703건 outstanding을 들고 정지(reply·200ms timeout completion 모두 1초 내 미도착). 다른 97~99 socket 정상. 이전 runner는
+drain을 요구하지 않아 검출 못 했고(정정 벤치의 two-phase가 드러냄), 1024B 경량 비교의 '-'가 이것. PR 전 수정 필수 →
+sol ultra job c016-reqrep-stall(briefs/reqrep-completion-stall.b.prompt, 1.5h 상한). 최종 gate(138/138·backpressure ×10)는 green.
+
+## D-065 (2026-09-04 05:05, 머신 B) 정지 회귀 상류 경계 확정 + origin/main 무결 확인
+1차 job(c016-reqrep-stall, 1.5h 상한): 정지 경계 = server session→ROUTER application pipe가 ROUTER에서 한 frame도 소비되지 않은 채
+(peer_read=0) 4MiB HWM에서 영구 정지; client 정지는 하류 backpressure. completion cache·timeout task·sub-LWM wake·client reader
+wake·수동 HWM 가설 실증 배제. Core diff 0으로 종료. 감독관: origin/main(1ac16a22b2)을 zlink-main-check에 빌드해 같은 벤치로
+6/6 성공 → 원인은 이 브랜치의 Core 커밋(8b6c2aa906 최우선: activate_read armed-flag gate / FQ publication opt-in / reclassify
+wake 소비 조건 / memory-order 분기). 2차 job c016-reqrep-stall-r2(hunk 단위 A/B 10회씩, 근본 수정 + 결정적 회귀 테스트).
+
+## D-066 (2026-09-04 05:10, 머신 B) 정지 회귀 근본 원인·수정
+1차 job이 상한 직전 확정: f3be895b3f의 ROUTER count-1 `xread_activated`/`xread_deactivated` fast path가 route-binding token을 확인하지
+않아, pair admission이 ready cache를 먼저 세운 anonymous pipe(identity 프레임이 나중에 오는 경우)를 adopted/FQ 등록된 것으로 오판 →
+첫 activation이 미등록 `_fq.activated()` no-op으로 소비되고 slow identity adoption을 영구히 잃음(peer_read=0). 수정: 두 fast path에
+`router_route_binding_token() != 0` fence(2줄). 결정적 회귀 테스트 test_count1_router_adopts_anonymous_pipe_on_first_activation
+(synthetic pipe/mailbox harness, sleep 없음). job 자체 직접 비교 10/10 성공. origin/main이 6/6 통과한 것은 8b6c2aa906의 타이밍
+변화가 발현 확률을 높였기 때문으로 보며, 결함 자체는 main에도 있음(A에 통보 필요). 2차 job(r2) 취소.

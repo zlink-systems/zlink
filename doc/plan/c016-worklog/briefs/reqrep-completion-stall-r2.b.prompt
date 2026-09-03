@@ -1,0 +1,20 @@
+역할: zlink Core(/home/hep7hep7/project/zlink, branch perf/phase2-judge, 여기서 직접 작업) 회귀 수정자(sol ultra, 시간 상한 1.5시간). 1차 job의 조사 결과를 이어받아 근본 원인을 고친다.
+
+확정된 사실(1차 job 요약 $ZLINK_WORK/c016/reqrep-completion-stall-summary.md, 진행 reqrep-completion-stall-progress.md — 먼저 읽을 것):
+- 증상: multi DEALER_ROUTER_REQREP tcp 1024B, client 100개 포화 후 drain에서 client socket 1~4개가 수천 건 미완(재현율 ~60%).
+- 상류 정지 경계: **server의 session→ROUTER application pipe 하나가 ROUTER에서 단 한 frame도 소비되지 않은 채(peer_read=0) 4MiB HWM에 도달해 영구 정지**한다. 즉 ROUTER(FQ)가 그 pipe의 첫 read activation을 받지 못했거나 받고도 읽지 않는다. client 쪽 정지는 그 하류 backpressure다(completion/timeout 가설은 실증 배제됨).
+- 배제됨: rf1 completion cache, timeout task, sub-LWM prefetch-tail wake 복원, client reader wake 추가, 수동 HWM.
+- **origin/main(1ac16a22b2, phase-2 커밋 f3be895b3f 포함)은 같은 벤치로 6/6 성공** — 감독관이 /home/hep7hep7/project/zlink-main-check 에 빌드해 둠(core/build/lib/libzlink.so, 비교·A/B용 읽기 전용). 따라서 원인은 이 브랜치의 Core 커밋 4개 중 하나: 8b6c2aa906(PAIR 개선; 첫 1024B 경량 비교가 이미 이 커밋 직후 실패했으므로 **최우선**), d80ba60c9b(rf1), 23bb5a968f(rf2), 341974c4d6(rf3).
+- 8b6c2aa906 안의 유력 후보(모두 ROUTER 수신 경로에 닿음): (a) core/src/runtime/core/pipe.cpp `activate_read`/`process_activate_read` 재구성 — "일반 activate_read는 먼저 비활성 입력을 복구" 분기와 "duplicate activate-read를 local armed flag로 먼저 gate" 변경: armed flag가 stale이면 첫 activation이 영영 안 가는 lost-first-activation과 부합(peer_read=0); (b) fq.cpp의 receive-activity publication opt-in(`fq_t::publish_receive_activity`) — ROUTER는 opt-in이지만 publication 시점/순서가 바뀌었는지; (c) count-1 D/R head-reclassification을 peer type으로 gate한 `peer_uses_routed_protocol_unlocked` 분기와 `_head_reclassify_wake` 소비 조건 축소(조건 불충족 시 wake 플래그가 소비되지 않고 남음); (d) `_public_receive_active`·inbound frame counter store의 memory-order 정적 분기(release→relaxed로 잘못 떨어지면 reader가 게시를 못 봄).
+
+작업 절차: (1) 위 후보를 `git show 8b6c2aa906 -- core/src/runtime/core/pipe.cpp core/src/runtime/sockets/internal/fq.cpp core/src/runtime/sockets/internal/fq.hpp` 로 읽고, 후보별로 그 hunk만 이전 동작으로 되돌린 A/B 빌드를 만들어 재현 명령 10회로 실패율을 비교한다(전체 revert 아님; 각 A/B 후 원복). LTO 재링크 시간을 줄이려면 `cmake --build core/build --target libzlink -j4` 처럼 라이브러리만 빌드하고 벤치는 그 .so를 동적 로드하므로 test 재링크는 최종 gate 때만 한다. (2) 실패율이 0/10으로 떨어지는 후보가 원인이다; 그 변경의 의도(성능)를 보존하면서 lost activation을 닫는 근본 수정을 한다(예: armed flag는 command 발송 성공 뒤에만 set, 소비되지 않은 reclassify wake는 남기지 않기, publication 순서 복구). (3) 재현을 결정적 회귀 테스트로 core/tests/integration/ 에 추가(ROUTER가 새 connection의 첫 request를 timeout 전에 수신하는 것을 100 connection 반복으로 검증, sleep 금지, CMake 등록). (4) 계측·A/B 흔적 전부 제거.
+
+재현 명령(각 ~15초):
+  ulimit -v 16777216 && export ZLINK_WORK=/home/hep7hep7/project/zlink-work
+  for i in $(seq 1 10); do bindings/c/perf/run_benchmarks_multi.sh --pattern DEALER_ROUTER_REQREP --transports tcp --msg-sizes 1024 --runs 1 --results-tag r2-$i --results-dir $ZLINK_WORK/c016/light-results/stall-r2 > $ZLINK_WORK/c016/light-results/stall-r2-$i.log 2>&1; echo "run$i rc=$?"; grep -m1 -A1 '^## Failures' $ZLINK_WORK/c016/light-results/stall-r2-$i.log | tail -1 | grep -oE 'drain timeout.*' | cut -c1-120; done
+
+Gate(전부 green, `ulimit -v 16777216`): `cmake --build core/build -j4`; 재현 명령 10회 연속 rc=0; `ctest --test-dir core/build -j2` 전체(138 + 신규); `ctest -L wake-invariant -j1` ×3; `ctest -R hotpath_gate`(기준값 ±5% — 수정이 hot path 명령어 수를 바꾸면 수치를 요약에 적고 기준값은 건드리지 않는다); raw mirror cmp 12; `git diff --check`.
+
+절대 규칙: doc/**·core/doc/** 수정 금지. framework/**·bindings/<lang>/ 소스 수정 금지(bindings/c/perf/** 진단 유지). scripts/local-package/** 실행 금지. git commit/push/reset/checkout/stash 금지(A/B는 편집으로만, 반드시 원복). hotpath_reference.json 수정 금지. 공개 API·ABI·계약 변경 금지. /home/hep7hep7/project/zlink-main-check 는 읽기·실행만.
+
+완료 시 /home/hep7hep7/project/zlink-work/c016/reqrep-completion-stall-r2-summary.md 에 A/B 표(후보별 실패율)·원인·수정(파일별)·gate·추가 테스트·BLOCKERS. 진행은 reqrep-completion-stall-r2-progress.md 에 단계마다 append.
