@@ -372,3 +372,18 @@ router_admission/session_base)+신규 contract test 2개(우선=set-alias→conn
 **후속 시퀀싱 주의(advisor)**: (1) M6B는 race 안 나면 line1343 다른 assertion → Core fix로 cpp 완료 아님, "fix→cpp
 commit" 금지. (2) Core fix 후 4언어 패키지 재빌드(sha256 gate) 필요. (3) handover err101도 같은 alias 오귀속 가능성
 → Core fix 후 ActorCreateCompletion_AfterHandoverHello_UsesCapturedReplyRoute **먼저 재실행**, dotnet job은 liveness만.
+
+## D-063 (2026-09-03 21:5x) codex 사용한도 아웃 → Claude 서브에이전트 폴백 + node reverify 결과
+**codex 사용한도 초과(Sep 7 13:45까지 불능)**: core-connect-alias-fix·dotnet-liveness-fix job이 조사/재현 단계에서
+EXIT1("You've hit your usage limit"). node-phase11-finish는 한도 전 정상 완료. → [[agent-model-assignment-policy]]
+폴백 발동(codex 불능 시 Claude 서브에이전트 sonnet/opus). 재투입: **Core alias fix=opus, dotnet liveness=sonnet,
+node B-defect=sonnet**(Agent tool, scope 분리 core/**·dotnet/**·node/**, 커밋 금지·working tree 유지).
+**node 결과(성공)**: 1513→**1552/1556 pass**. T 39건 fixed(test/contract만, src 무수정 mtime 검증), B 2건·E 2건 reported.
+  - B-DETAILED: 공통 스펙(03-stream-connector:265-278) enum에 Detailed 있으나 node validator(ZlinkStreamConnectorOptions.ts:88-95)
+    Off/Errors/Normal만 → node에 Detailed 추가(additive). 
+  - B-SURFACE: 공통 스펙(69-101)은 setDiagnosticsLevel만인데 node public(IZlinkStreamConnector.ts:39-40)에 setDiagnosticsLevelAsync
+    여분 → 조사 후 제거 or 위험시 보고.
+  - E-CHROMIUM(2): chrome-headless-shell launch 직후 SIGTRAP(환경 결함, 코드 아님) — 비차단, known-env 기록.
+node production(src 30파일)은 기존 Phase11 전환분(job 무수정). node 커밋은 B-defect fix 후 production+test 묶어.
+**주의**: dotnet/node fix는 alias 버그와 독립이라 현 패키지로 유효. cpp M6B/M6C·handover는 Core alias fix 후 4언어
+패키지 재빌드(sha256 gate)+재실행 필요.
