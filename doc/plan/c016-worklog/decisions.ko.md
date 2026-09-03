@@ -494,3 +494,15 @@ alias fix가 노출), dotnet handover err101(canonical actor-join OPEN RULING=sp
 E2E inventory 278(known-broken), java monitor-edge gap(binding followup). autostash(09-01)는 무관·보존.
 **남은 phase(A머신)**: Phase 12(framework unit/E2E/cross-language — unit은 reverify서 검증됨), Phase 13(7 samples pull),
 Phase 9 tag(B의 sweep2 PASS+posddd merge 대기), Phase 10 package. codex Sep7까지 아웃.
+
+## D-070 (2026-09-04 00:5x) plan 정독 정정 — Phase 12/13 게이트 미완, framework 커밋은 plan 순서보다 이름
+Stop hook 지적으로 plan(진실원천) 정독. 확인: plan line 1327-1331은 framework 커밋(`framework: consume zlink 0.16.0
+pull APIs`)을 **Phase 12(unit+E2E+cross-language) 전부 green 후**에 하도록 규정. 나는 unit만 검증하고 언어별로 이르게
+커밋(b32d4cae64 등) → 코드는 맞으나 **Phase 12.2 E2E·12.3 cross-language·Phase 13 samples 검증이 아직 안 됨**. 최종
+체크리스트(line 1456-1458) 미충족: 언어별 E2E, C++·Node cross-language + Java host rebuild, 7 공통 sample.
+plan line 84-85: Phase 10·11·12는 로컬 빌드 Core+로컬 패키지로 OK(태그 전), 태그(Phase 9, B 의존) 후 release Core로
+package·consumer smoke. 즉 로컬 검증은 지금 진행 가능.
+**남은 A 작업(정확)**: Phase 12.0 clean configure(preset linux-ninja-vcpkg-debug, tests/samples/e2e ON, ZLINK_CPP_BUILD_DIR)
+→ 12.1 unit 재확인 → 12.2 언어별 E2E(run_e2e_all.sh ×4) → 12.3 cross-language(cpp/node smoke + java Host installDist) →
+Phase 13 7 samples 실행. Phase 13 문서(framework/doc/framework/**)는 **사용자 영역, 건드리지 않음**(sample 실행만).
+Phase 9 tag·10 release package는 B(sweep2 PASS+posddd merge) 의존. E2E/cross-language/sample에서 회귀 나오면 follow-up 커밋.
