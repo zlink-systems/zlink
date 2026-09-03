@@ -552,3 +552,24 @@ read-only adapter 사용, Router/Dealer/Stream IPoller 유지. 1파일, 임시�
 **FOLLOW-UP(정식 근본 수정)**: `bindings/dotnet Poller.Add`가 PollCompletion 요청 시에만 Kernel.Completion 조회하도록 binding
 수정(그러면 framework 워크어라운드 불필요, 타 언어 binding도 동일 잠재버그 점검). binding 레이어(Phase 6)라 별도 pass/B 조율.
 **주의**: cpp/java 샘플 authenticate 회귀는 DEALER/ROUTER(completion 지원)라 이 SUB-poller 이슈와 **별개** — 다음 진단 대상.
+
+## D-075 (2026-09-04 04:1x) cpp 샘플 red 근본원인 = Phase 11 아님, 다른 커밋들(사용자 영역) — 조율 필요
+codex sol ultra 진단(cpp-sample-auth-fix-summary.md). **cpp 샘플 authenticate red는 pull-completion 전환(b32d4cae64)과
+무관** — packet pull decode 성공 확인, Core/binding 결함 없음. 3개 레이어드 근본원인:
+1. **nested auth service 등록 누락** ← `e6ae5d8fd6`(feat: constructor-based DI auto-deduction, drop dependency_types;
+   ulalax 09-02, 이미 main). outer session은 자동등록되나 authenticate_(play_)session_handler_t는 미등록 →
+   get_or_create_core_session "service not registered". **수정(검증됨, 미커밋)**: TicTacToe/Bingo host factory에
+   `add_scoped<authenticate_*_handler_t, channel_client_t>()` 2줄. authenticate boundary PASS 재현. 다른 샘플
+   (DeliveryDispatch/SupportChat/GameQuest)은 정적 분석상 동일 누락 없음(명시 등록돼 있음) → 복사 금지.
+2. **protobuf payload에 JSON wire metadata 불일치**(미수정) ← `b1053aceda`(strict typed validation)+`1cf31e1a79`
+   (marker 기반 generated-protobuf). typed serializer는 protobuf(application/x-protobuf) 생성하나 wire content_type을
+   type_index로 별도 조회 시 serializer.cpp erased lookup이 application/json fallback → 수신측 "inbound content type
+   does not match the typed handler codec" 거부(deterministic). **framework/languages/cpp/framework/include 공개 헤더 +
+   test 변경 필요**(typed serializer/payload-encoder가 content_type을 함께 반환하도록). codex는 unsound framework/src
+   워크어라운드 거부(1024 캐시 한계·reentrant·marker 불일치로 오작동), 작업 범위 밖으로 STOP. **사용자 영역·조율 필요**.
+3. **TicTacToe bound-Session delivery stall**(별개, 비결정적) ← actor_gateway_runtime FIFO, b32 무변경, 재실행마다 다른
+   post-auth 단계서 정지. 별도 lifecycle/delivery 조사.
+**java 샘플**은 cpp-specific 커밋들과 무관 = 별개 root(readiness/route/handler-dispatch 독립 조사 필요).
+**조율 사항**: (a)DI 수정 2줄 커밋 여부, (b)codec 이슈(framework 공개헤더=사용자 DI/framework 영역)를 이 캠페인서 고칠지
+사용자가 직접 할지, (c)나머지(TTT stall·java·node stream·ZoneWorld) 처리 방침. **cpp 샘플 red는 pull-completion 캠페인
+책임이 아닌 기존 framework 부채**임을 확인.
