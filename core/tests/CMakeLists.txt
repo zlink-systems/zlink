@@ -1028,3 +1028,36 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 30
     LABELS "unittest")
 endif()
+
+# Deterministic public-API instruction-count gate for the Core hot paths.
+add_executable(hotpath_bench perf/hotpath_bench.cpp)
+target_link_libraries(
+  hotpath_bench
+  libzlink-static ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
+find_path(
+  VALGRIND_INCLUDE_DIR
+  valgrind/callgrind.h
+  HINTS "$ENV{HOME}/.local/include")
+if(VALGRIND_INCLUDE_DIR)
+  target_include_directories(hotpath_bench PRIVATE "${VALGRIND_INCLUDE_DIR}")
+endif()
+
+find_program(
+  VALGRIND_EXECUTABLE
+  valgrind
+  HINTS "$ENV{HOME}/.local/bin")
+if(VALGRIND_EXECUTABLE AND Python3_Interpreter_FOUND)
+  add_test(
+    NAME hotpath_gate
+    COMMAND
+      ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/perf/hotpath_gate.py
+      --bench $<TARGET_FILE:hotpath_bench>
+      --reference ${CMAKE_CURRENT_SOURCE_DIR}/perf/hotpath_reference.json
+      --valgrind ${VALGRIND_EXECUTABLE})
+  set_tests_properties(
+    hotpath_gate
+    PROPERTIES
+      LABELS "hotpath"
+      TIMEOUT 600)
+endif()
