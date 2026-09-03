@@ -47,7 +47,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitorEvent;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitorHandler;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
@@ -571,25 +570,26 @@ final class ZLinkFanoutLocationRuntimeTest {
     }
 
     private static final class Monitor implements ZLinkBackendSocketMonitor {
-        private ZLinkBackendSocketMonitorHandler handler;
+        private final LinkedBlockingQueue<ZLinkBackendSocketMonitorEvent> events =
+            new LinkedBlockingQueue<>();
         private final AtomicInteger closeCalls = new AtomicInteger();
         private final CompletableFuture<Void> handlerReady =
             new CompletableFuture<>();
 
         private void emit(String event) {
-            handler.handle(new ZLinkBackendSocketMonitorEvent(
+            events.add(new ZLinkBackendSocketMonitorEvent(
                 event, Optional.empty(), "", ""));
         }
 
         @Override
-        public void onEvent(ZLinkBackendSocketMonitorHandler value) {
-            handler = value;
-            handlerReady.complete(null);
-        }
-
-        @Override
         public ZLinkBackendSocketMonitorEvent recv() {
-            return null;
+            handlerReady.complete(null);
+            try {
+                return events.take();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("monitor receive interrupted", interrupted);
+            }
         }
 
         @Override

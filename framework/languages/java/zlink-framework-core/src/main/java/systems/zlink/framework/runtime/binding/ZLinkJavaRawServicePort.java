@@ -17,6 +17,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
+import systems.zlink.contracts.messaging.ReplyToken;
 import systems.zlink.contracts.messaging.RequestSubmitOperation;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RouterSocket;
@@ -91,24 +92,12 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         RouterSocket router,
         RoutingId target,
         List<byte[]> frames) {
-        return send(router, target, 0L, 0L, frames);
-    }
-
-    CompletionStage<Void> send(
-        RouterSocket router,
-        RoutingId target,
-        long transportPairId,
-        long transportPairGeneration,
-        List<byte[]> frames) {
-        return inStateLane(() -> sendOnLane(
-            router, target, transportPairId, transportPairGeneration, frames));
+        return inStateLane(() -> sendOnLane(router, target, frames));
     }
 
     private CompletionStage<Void> sendOnLane(
         RouterSocket router,
         RoutingId target,
-        long transportPairId,
-        long transportPairGeneration,
         List<byte[]> frames) {
         ensureOwnedOnLane(router);
         Objects.requireNonNull(target, "target");
@@ -120,10 +109,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             .toList();
         boolean submitted = false;
         try {
-            var send = transportPairId == 0 || transportPairGeneration == 0
-                ? router.send(target)
-                : router.send(target, transportPairId,
-                    transportPairGeneration);
+            var send = router.send(target);
             var submit = send.message(messages.getFirst());
             for (int index = 1; index < messages.size(); index++) {
                 submit.message(messages.get(index));
@@ -160,25 +146,13 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         RoutingId target,
         List<byte[]> frames,
         Duration timeout) {
-        return request(router, target, 0L, 0L, frames, timeout);
-    }
-
-    CompletionStage<List<byte[]>> request(
-        RouterSocket router,
-        RoutingId target,
-        long transportPairId,
-        long transportPairGeneration,
-        List<byte[]> frames,
-        Duration timeout) {
         return inStateLane(() -> requestOnLane(
-            router, target, transportPairId, transportPairGeneration, frames, timeout));
+            router, target, frames, timeout));
     }
 
     private CompletionStage<List<byte[]>> requestOnLane(
         RouterSocket router,
         RoutingId target,
-        long transportPairId,
-        long transportPairGeneration,
         List<byte[]> frames,
         Duration timeout) {
         ensureOwnedOnLane(router);
@@ -192,10 +166,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             .toList();
         boolean submitted = false;
         try {
-            var request = transportPairId == 0 || transportPairGeneration == 0
-                ? router.request(target)
-                : router.request(target, transportPairId,
-                    transportPairGeneration);
+            var request = router.request(target);
             RequestSubmitOperation submit = request.message(messages.getFirst());
             for (int index = 1; index < messages.size(); index++) {
                 submit.message(messages.get(index));
@@ -223,7 +194,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     void reply(
         RouterSocket router,
         RoutingId target,
-        long requestSequence,
+        ReplyToken requestSequence,
         List<byte[]> frames) {
         inStateLane(() -> {
             replyOnLane(router, target, requestSequence, frames);
@@ -234,17 +205,16 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     private void replyOnLane(
         RouterSocket router,
         RoutingId target,
-        long requestSequence,
+        ReplyToken requestSequence,
         List<byte[]> frames) {
         ensureOwnedOnLane(router);
-        if (requestSequence <= 0 || frames.isEmpty()) {
+        if (requestSequence == null || frames.isEmpty()) {
             throw new IllegalArgumentException(
                 "service reply requires request sequence and frames");
         }
         List<Message> messages = frames.stream()
             .map(frame -> Message.from(Objects.requireNonNull(frame, "frame")))
             .toList();
-        boolean submitted = false;
         try {
             var submit = router.reply(target, requestSequence)
                 .message(messages.getFirst());
@@ -252,11 +222,8 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 submit.message(messages.get(index));
             }
             submit.submit();
-            submitted = true;
         } finally {
-            if (!submitted) {
-                Message.closeAll(messages);
-            }
+            Message.closeAll(messages);
         }
     }
 
@@ -291,9 +258,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             List<byte[]> frames = received.parts().stream().map(Message::toByteArray).toList();
             Inbound inbound = new Inbound(
                 source,
-                received.requestSeq().orElse(null),
-                received.transportPairId(),
-                received.transportPairGeneration(),
+                received.replyToken().orElse(null),
                 frames,
                 received);
             transferred = true;
@@ -368,9 +333,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
 
     record Inbound(
         RoutingId source,
-        Long requestSequence,
-        long transportPairId,
-        long transportPairGeneration,
+        ReplyToken requestSequence,
         List<byte[]> frames,
         Received received) implements AutoCloseable {
         Inbound {

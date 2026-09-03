@@ -703,7 +703,6 @@ final class ZLinkSessionActorBindingContractTest {
         @Override public void setTlsServer(String certificatePath, String keyPath,
                                            boolean requireClientCertificate) { }
         @Override public void setMaxMessageSize(long value) { }
-        @Override public void enableNotifications() { }
         @Override public void disconnectPeer(RoutingId routingId) {
             disconnectedPeers++;
         }

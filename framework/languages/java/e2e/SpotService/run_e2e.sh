@@ -76,7 +76,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 repo_root="$(cd ../../../../.. && pwd)"
-default_core_lib="${repo_root}/core/build/lib/libzlink.so"
+default_core_lib="${repo_root}/.artifacts/wsl/install/zlink-core/0.16.0/lib/libzlink.so"
 mkdir -p "${log_dir}"
 echo "log_dir=${log_dir}"
 SCENARIO="${1:-all}"

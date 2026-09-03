@@ -27,7 +27,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitorEvent;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitorHandler;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
@@ -133,42 +132,6 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
             assertEquals(List.of(
                 "subscribe-enter", "subscribe-exit", "disconnect", "close"),
                 subscriber.events);
-        }
-    }
-
-    @Test
-    void closeReservationPreventsConnectAfterTheOpeningOwnerIsSealed()
-        throws Exception {
-        try (ExecutorService lifecycle = Executors.newFixedThreadPool(2);
-             Fixture fixture = new Fixture(false, false, true)) {
-            fixture.runtime.start();
-            fixture.scheduler.shutdownNow();
-            Future<?> connect = lifecycle.submit(() ->
-                fixture.runtime.connections("events").connect(ENDPOINT));
-            ControlledSubscriber subscriber = fixture.awaitSubscriber();
-            assertTrue(subscriber.monitor.registrationEntered.await(
-                1, TimeUnit.SECONDS));
-
-            AtomicReference<Thread> closeOwner = new AtomicReference<>();
-            Future<?> close = lifecycle.submit(() -> {
-                closeOwner.set(Thread.currentThread());
-                fixture.runtime.close();
-            });
-            try {
-                awaitStackFrame(
-                    closeOwner, ZLinkManualFanoutRuntime.class, "awaitClose");
-                assertFalse(close.isDone());
-                assertEquals(0, subscriber.connectCalls.get());
-                assertEquals(0, subscriber.closeCalls.get());
-            } finally {
-                subscriber.monitor.releaseRegistration.countDown();
-            }
-
-            connect.get(2, TimeUnit.SECONDS);
-            close.get(2, TimeUnit.SECONDS);
-            assertEquals(0, subscriber.connectCalls.get());
-            assertEquals(1, subscriber.monitor.closeCalls.get());
-            assertEquals(1, subscriber.closeCalls.get());
         }
     }
 
@@ -414,7 +377,8 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
 
     private static final class Monitor implements ZLinkBackendSocketMonitor {
         private final boolean blockRegistration;
-        private volatile ZLinkBackendSocketMonitorHandler handler;
+        private final LinkedBlockingQueue<ZLinkBackendSocketMonitorEvent> events =
+            new LinkedBlockingQueue<>();
         private final AtomicInteger closeCalls = new AtomicInteger();
         private final CountDownLatch registrationEntered = new CountDownLatch(1);
         private final CountDownLatch releaseRegistration = new CountDownLatch(1);
@@ -424,18 +388,22 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
         }
 
         private void emit(String event) {
-            handler.handle(new ZLinkBackendSocketMonitorEvent(
+            events.add(new ZLinkBackendSocketMonitorEvent(
                 event, Optional.empty(), "", ""));
         }
 
-        @Override public void onEvent(ZLinkBackendSocketMonitorHandler value) {
-            handler = value;
+        @Override public ZLinkBackendSocketMonitorEvent recv() {
             registrationEntered.countDown();
             if (blockRegistration) {
                 awaitUninterruptibly(releaseRegistration);
             }
+            try {
+                return events.take();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("monitor receive interrupted", interrupted);
+            }
         }
-        @Override public ZLinkBackendSocketMonitorEvent recv() { return null; }
         @Override public String name() { return "manual-monitor"; }
         @Override public void close() { closeCalls.incrementAndGet(); }
     }

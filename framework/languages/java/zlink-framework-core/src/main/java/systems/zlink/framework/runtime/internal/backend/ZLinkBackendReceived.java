@@ -106,6 +106,8 @@ public final class ZLinkBackendReceived implements AutoCloseable {
     public Optional<RoutingId> routingId() { return routingId; }
     public Optional<String> spotId() { return spotId; }
     public Optional<Long> requestSeq() { return requestSeq; }
+    public boolean isRequest() { return requestSeq.isPresent() || reply != null; }
+    public boolean hasDirectReplyPath() { return reply != null; }
     public List<Message> parts() { return parts; }
     public Consumer<List<Message>> reply() { return reply; }
     public Runnable closeAction() { return closeAction; }

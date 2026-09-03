@@ -21,12 +21,13 @@ import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.messaging.Received;
+import systems.zlink.contracts.messaging.StreamPacket;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.StreamSocket;
+import systems.zlink.contracts.sockets.StreamRecvMode;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.runtime.framework.FrameworkStreamOperations;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorBindOperation;
@@ -88,6 +89,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         BoundSessionLifecycle boundSessionLifecycle,
         Runnable nativeClose) {
         this.socket = socket;
+        this.socket.options().recvMode(StreamRecvMode.PACKET);
         this.meshNode = meshNode;
         this.boundSessionSink = boundSessionSink;
         this.boundSessionLifecycle = boundSessionLifecycle;
@@ -138,12 +140,6 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             return null;
         });
     }
-    @Override public void enableNotifications() {
-        inStateLane(() -> {
-            socket.options().notify(true);
-            return null;
-        });
-    }
     @Override public boolean waitForReadable(Duration timeout) {
         return receivePoller.waitForReadable(timeout);
     }
@@ -152,15 +148,16 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     }
 
     private ZLinkBackendStreamReceived recvOnLane() {
-        Received received = new Received();
+        StreamPacket received = new StreamPacket();
         boolean transferred = false;
         try {
-            if (!socket.recv(received, RecvFlags.DONT_WAIT)) {
+            if (!socket.recvPacket(received, RecvFlags.DONT_WAIT)) {
                 return null;
             }
             ZLinkBackendStreamReceived result = new ZLinkBackendStreamReceived(
-                received.getRoutingId(),
-                received.parts(),
+                received.routingId(),
+                received.header(),
+                received.body(),
                 received::close);
             transferred = true;
             return result;
@@ -180,8 +177,19 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         inStateLane(() -> {
         closeMonitor();
         monitor = socket.monitorOpen(MonitorEventType.DISCONNECTED);
-        monitor.onEvent(event -> event.routingId().ifPresent(routingId ->
-            handler.handle(routingId, 0, event.event().name())));
+        Thread.ofVirtual()
+            .name("zlink-stream-monitor")
+            .start(() -> {
+                while (!closed.get()) {
+                    try {
+                        var event = monitor.recv();
+                        event.routingId().ifPresent(routingId ->
+                            handler.handle(routingId, 0, event.event().name()));
+                    } catch (RuntimeException closedOrFailed) {
+                        return;
+                    }
+                }
+            });
             return null;
         });
     }
@@ -213,7 +221,8 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             throw new IllegalArgumentException(
                 "bound Session push requires one encoded STREAM frame");
         }
-        return socket.send(routingId).message(parts.getFirst()).flags(flags).submit();
+        return ZLinkJavaSocketSupport.submitSync(
+            socket.send(routingId), parts);
     }
 
     CompletionStage<Void> sendBoundSessionPushAsync(

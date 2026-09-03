@@ -46,11 +46,20 @@ final class ZLinkJavaRouterSocket
 
     @Override
     public ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
-        try (Received result = new Received()) {
-            return ZLinkJavaSocketSupport.recvOrNoData(
-                    () -> socket.recv(result, ZLinkJavaSocketSupport.map(mode)))
-                ? ZLinkJavaSocketSupport.fromReceived(result)
-                : null;
+        Received result = new Received();
+        boolean transferred = false;
+        try {
+            if (!ZLinkJavaSocketSupport.recvOrNoData(
+                    () -> socket.recv(result, ZLinkJavaSocketSupport.map(mode)))) {
+                return null;
+            }
+            ZLinkBackendReceived received = ZLinkJavaSocketSupport.fromReceived(result);
+            transferred = true;
+            return received;
+        } finally {
+            if (!transferred) {
+                result.close();
+            }
         }
     }
 
@@ -74,7 +83,8 @@ final class ZLinkJavaRouterSocket
 
     @Override
     public synchronized void reply(RoutingId routingId, long requestSeq, List<Message> parts) {
-        ZLinkJavaSocketSupport.submitReply(socket.reply(routingId, requestSeq), parts);
+        throw new UnsupportedOperationException(
+            "native ROUTER replies require the opaque ReplyToken retained by the receive record");
     }
 
     @Override public synchronized void disconnectPeer(RoutingId routingId) {

@@ -852,7 +852,8 @@ public final class ZLinkChannelRuntime
             ZLinkBackendSocketMonitor monitor =
                 clientServerMonitoringBackend.openSocketMonitor(dealer);
             sockets.registerClientServerMonitor(connectionId, monitor);
-            monitor.onEvent(event -> {
+            ZLinkSocketMonitorDrainLoop.start(
+                "zlink-client-server-monitor", monitor, event -> {
                 if (isConnectionReady(event.event())) {
                     ZLinkChannelSocketRegistry.AdmissionFence fence =
                         sockets.clientServerTransportReady(
@@ -869,7 +870,7 @@ public final class ZLinkChannelRuntime
                     sockets.clientServerTransportTerminated(
                         connectionId, dealer);
                 }
-            });
+                });
             dealer.connect(endpoint);
         } catch (RuntimeException failure) {
             sockets.removeClientServerConnection(connectionId, dealer);

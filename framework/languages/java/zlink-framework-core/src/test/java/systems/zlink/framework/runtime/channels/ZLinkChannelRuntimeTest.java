@@ -1518,7 +1518,8 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
-    void processLocalClientServerUsesManagedAdmissionAndDescriptorUpdates() {
+    void processLocalClientServerUsesManagedAdmissionAndDescriptorUpdates()
+        throws Exception {
         String endpoint = "tcp://127.0.0.1:40501";
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addClientServerChannel("orders").client();
@@ -1535,7 +1536,20 @@ final class ZLinkChannelRuntimeTest {
             options.registration(),
             new ZLinkJsonMessageSerializer(),
             handlers())) {
-            ManagedAdmissionDealer local = backend.admissionDealer();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+            ManagedAdmissionDealer local = null;
+            while (local == null && System.nanoTime() < deadline) {
+                local = backend.dealers.stream()
+                    .filter(dealer -> dealer.admissionRequests == 1)
+                    .findFirst()
+                    .orElse(null);
+                if (local == null) {
+                    Thread.sleep(1);
+                }
+            }
+            if (local == null) {
+                throw new AssertionError("managed admission did not start");
+            }
 
             assertEquals(List.of(endpoint), local.connected);
             assertEquals(1, local.admissionRequests);
@@ -1706,18 +1720,16 @@ final class ZLinkChannelRuntimeTest {
         public ZLinkMonitoringBackendAdapter createMonitoringAdapter(
             ZLinkBackendAdapterOptions options) {
             return socket -> new ZLinkBackendSocketMonitor() {
-                @Override
-                public void onEvent(ZLinkBackendSocketMonitorHandler handler) {
-                    handler.handle(new ZLinkBackendSocketMonitorEvent(
-                        "CONNECTION_READY",
-                        Optional.empty(),
-                        "",
-                        ""));
-                }
+                private boolean emitted;
 
                 @Override
-                public ZLinkBackendSocketMonitorEvent recv() {
-                    return null;
+                public synchronized ZLinkBackendSocketMonitorEvent recv() {
+                    if (emitted) {
+                        throw new IllegalStateException("monitor closed");
+                    }
+                    emitted = true;
+                    return new ZLinkBackendSocketMonitorEvent(
+                        "CONNECTION_READY", Optional.empty(), "", "");
                 }
 
                 @Override

@@ -12,7 +12,7 @@ redis_container_owned=0
 run_id="$(date +%Y%m%d-%H%M%S)-$$"
 log_dir="$(pwd)/logs/${run_id}"
 repo_root="$(cd ../../../../.. && pwd)"
-default_core_lib="${repo_root}/core/build/lib/libzlink.so"
+default_core_lib="${repo_root}/.artifacts/wsl/install/zlink-core/0.16.0/lib/libzlink.so"
 mkdir -p "${log_dir}"
 echo "log_dir=${log_dir}"
 SCENARIO="${1:-all}"

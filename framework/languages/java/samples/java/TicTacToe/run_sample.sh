@@ -41,7 +41,7 @@ for settings in ApiSettings PlaySettings; do
   fi
 done
 
-core_lib="$(cd ../../../../../.. && pwd)/core/build/lib/libzlink.so"
+core_lib="$(cd ../../../../../.. && pwd)/.artifacts/wsl/install/zlink-core/0.16.0/lib/libzlink.so"
 if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${core_lib}" ]]; then
   export ZLINK_LIBRARY_PATH="${core_lib}"
 fi

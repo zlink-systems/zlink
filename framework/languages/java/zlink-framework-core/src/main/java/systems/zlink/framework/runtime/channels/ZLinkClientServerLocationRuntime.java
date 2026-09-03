@@ -523,7 +523,8 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
             sockets.registerClientServerMonitor(connectionId, monitor);
             Connection acceptedConnection = connection;
             ZLinkBackendDealerSocket acceptedDealer = dealer;
-            monitor.onEvent(event -> {
+            ZLinkSocketMonitorDrainLoop.start(
+                "zlink-client-server-location-monitor", monitor, event -> {
                     if (isConnectionReady(event.event())) {
                         ZLinkChannelSocketRegistry.AdmissionFence fence =
                             sockets.clientServerTransportReady(
@@ -544,7 +545,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                             return null;
                         });
                     }
-            });
+                });
             dealer.connect(descriptor.endpoint());
         } catch (Throwable failure) {
             if (connection != null) {

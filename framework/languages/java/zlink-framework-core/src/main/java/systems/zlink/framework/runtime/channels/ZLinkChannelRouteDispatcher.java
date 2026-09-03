@@ -52,7 +52,7 @@ final class ZLinkChannelRouteDispatcher {
         ZLinkBackendRouterSocket router,
         ZLinkBackendReceived received) {
         if (isProbeFrame(received.parts())) {
-            received.parts().forEach(Message::close);
+            received.close();
             return;
         }
         //  Spec 27 §4: decode and install the inbound flow pair (or start a new
@@ -65,12 +65,10 @@ final class ZLinkChannelRouteDispatcher {
             } catch (PayloadDecodeDispatchException invalidFlow) {
                 String packetName = received.parts().isEmpty()
                     ? null : received.parts().getFirst().toUtf8String();
-                if (received.routingId().isPresent()
-                    && received.requestSeq().isPresent()) {
+                if (received.routingId().isPresent() && received.isRequest()) {
                     errors.replyError(
                         router,
-                        received.routingId().orElseThrow(),
-                        received.requestSeq().orElseThrow(),
+                        received,
                         ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
                         ZLinkDispatchMessageKind.REQUEST,
                         ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED,
@@ -89,7 +87,11 @@ final class ZLinkChannelRouteDispatcher {
                         null,
                         invalidFlow);
                 }
-                received.parts().forEach(Message::close);
+                if (received.isRequest()) {
+                    received.closeParts();
+                } else {
+                    received.close();
+                }
                 return;
             }
         }
@@ -106,12 +108,10 @@ final class ZLinkChannelRouteDispatcher {
             } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
                 //  A JSON-object first frame that is not a valid shared
                 //  envelope is a protocol error (C++ decode parity).
-                if (received.routingId().isPresent()
-                    && received.requestSeq().isPresent()) {
+                if (received.routingId().isPresent() && received.isRequest()) {
                     errors.replyError(
                         router,
-                        received.routingId().orElseThrow(),
-                        received.requestSeq().orElseThrow(),
+                        received,
                         ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
                         ZLinkDispatchMessageKind.REQUEST,
                         ZLinkDispatchErrorReason.INVALID_FRAME,
@@ -136,7 +136,7 @@ final class ZLinkChannelRouteDispatcher {
                 || (packet.header() != null && packet.header().isError())) {
                 errors.report(
                     ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
-                    received.requestSeq().isPresent()
+                    received.isRequest()
                         ? ZLinkDispatchMessageKind.REQUEST
                         : ZLinkDispatchMessageKind.SEND,
                     ZLinkDispatchErrorReason.HANDLER_MISSING,
@@ -163,12 +163,13 @@ final class ZLinkChannelRouteDispatcher {
                 ? packet.header().contentType()
                 : ZLinkChannelContentTypeFrame.decode(received.parts());
             RoutingId source = received.routingId().get();
-            if (received.requestSeq().isEmpty()) {
+            if (!received.isRequest()) {
                 dispatchSend(channelName, source, packet, contentType);
                 return;
             }
-            long requestSeq = received.requestSeq().get();
-            if (dispatchInternalRequest(channelName, router, source, requestSeq, packet)) {
+            long requestSeq = received.requestSeq().orElse(0L);
+            if (dispatchInternalRequest(
+                    channelName, router, received, source, packet)) {
                 return;
             }
             ChannelRouteRequestHandlerRegistration registration =
@@ -176,8 +177,7 @@ final class ZLinkChannelRouteDispatcher {
             if (registration == null) {
                 errors.replyError(
                     router,
-                    source,
-                    requestSeq,
+                    received,
                     ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
                     ZLinkDispatchMessageKind.REQUEST,
                     ZLinkDispatchErrorReason.HANDLER_MISSING,
@@ -198,6 +198,7 @@ final class ZLinkChannelRouteDispatcher {
             dispatchRequestHandler(
                 channelName,
                 router,
+                received,
                 source,
                 requestSeq,
                 packet,
@@ -205,7 +206,11 @@ final class ZLinkChannelRouteDispatcher {
                 contentType);
         } finally {
             flowScope.close();
-            received.parts().forEach(Message::close);
+            if (received.isRequest()) {
+                received.closeParts();
+            } else {
+                received.close();
+            }
         }
     }
 
@@ -252,7 +257,7 @@ final class ZLinkChannelRouteDispatcher {
         } catch (RuntimeException error) {
             errors.report(
                 ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
-                received.requestSeq().isPresent()
+                received.isRequest()
                     ? ZLinkDispatchMessageKind.REQUEST
                     : ZLinkDispatchMessageKind.SEND,
                 ZLinkDispatchErrorReason.INVALID_FRAME,
@@ -270,8 +275,8 @@ final class ZLinkChannelRouteDispatcher {
     private boolean dispatchInternalRequest(
         String channelName,
         ZLinkBackendRouterSocket router,
+        ZLinkBackendReceived received,
         RoutingId source,
-        long requestSeq,
         ParsedPacket packet) {
         ZLinkChannelRuntime.RouteInternalRequestHandler handler =
             registry.internalRequest(packet.packetName());
@@ -283,8 +288,7 @@ final class ZLinkChannelRouteDispatcher {
             handler.handle(source, payload)
                 .thenAccept(reply -> ZLinkChannelDispatchReporter.replyAndClose(
                     router,
-                    source,
-                    requestSeq,
+                    received,
                     reply))
                 .whenComplete((ignored, error) -> payload.close()));
         return true;
@@ -293,6 +297,7 @@ final class ZLinkChannelRouteDispatcher {
     private void dispatchRequestHandler(
         String channelName,
         ZLinkBackendRouterSocket router,
+        ZLinkBackendReceived received,
         RoutingId source,
         long requestSeq,
         ParsedPacket packet,
@@ -320,8 +325,7 @@ final class ZLinkChannelRouteDispatcher {
                                         if (error != null) {
                                             errors.replyError(
                                                 router,
-                                                source,
-                                                requestSeq,
+                                                received,
                                                 ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
                                                 ZLinkDispatchMessageKind.REQUEST,
                                                 ZLinkChannelDispatchReporter.reasonFrom(error),
@@ -333,8 +337,7 @@ final class ZLinkChannelRouteDispatcher {
                                         } else {
                                             ZLinkChannelDispatchReporter.replyPayloadAndClose(
                                                 router,
-                                                source,
-                                                requestSeq,
+                                                received,
                                                 packet.header(),
                                                 reply);
                                             traceFlow(

@@ -15,7 +15,7 @@ SCENARIO="${1:-all}"
 e2e_start_order="$(zlink_e2e_start_order_mode "$@")"
 echo "start_order=${e2e_start_order}"
 repo_root="$(cd ../../../../.. && pwd)"
-default_core_lib="${repo_root}/core/build/lib/libzlink.so"
+default_core_lib="${repo_root}/.artifacts/wsl/install/zlink-core/0.16.0/lib/libzlink.so"
 mkdir -p "${log_dir}"
 echo "log_dir=${log_dir}"
 if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${default_core_lib}" ]]; then

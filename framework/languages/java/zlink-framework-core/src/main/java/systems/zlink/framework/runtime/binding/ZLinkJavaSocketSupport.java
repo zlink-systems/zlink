@@ -7,12 +7,10 @@ import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.messaging.AsyncSendOperation;
 import systems.zlink.contracts.messaging.PublishOperation;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.ReplyOperation;
 import systems.zlink.contracts.messaging.RequestOperation;
-import systems.zlink.contracts.messaging.RoutedSendOperation;
 import systems.zlink.contracts.messaging.SendOperation;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
@@ -49,34 +47,24 @@ final class ZLinkJavaSocketSupport {
     }
 
     static CompletionStage<Void> submit(
-        RoutedSendOperation operation,
-        List<Message> parts) {
-        var submit = operation.message(parts.get(0));
-        for (int i = 1; i < parts.size(); i++) {
-            submit.message(parts.get(i));
-        }
-        return submit.submit();
-    }
-
-    static CompletionStage<Void> submit(
-        AsyncSendOperation operation,
-        List<Message> parts) {
-        var submit = operation.message(parts.get(0));
-        for (int i = 1; i < parts.size(); i++) {
-            submit.message(parts.get(i));
-        }
-        return submit.submit();
-    }
-
-    static boolean submit(
         SendOperation operation,
-        List<Message> parts,
-        SendFlags flags) {
+        List<Message> parts) {
         var submit = operation.message(parts.get(0));
         for (int i = 1; i < parts.size(); i++) {
             submit.message(parts.get(i));
         }
-        return submit.flags(flags).submit();
+        return submit.submit();
+    }
+
+    static boolean submitSync(
+        SendOperation operation,
+        List<Message> parts) {
+        var submit = operation.message(parts.get(0));
+        for (int i = 1; i < parts.size(); i++) {
+            submit.message(parts.get(i));
+        }
+        submit.submit_sync();
+        return true;
     }
 
     static void submit(
@@ -121,12 +109,21 @@ final class ZLinkJavaSocketSupport {
     }
 
     static ZLinkBackendReceived fromReceived(Received received) {
+        boolean hasReplyToken = received.replyToken().isPresent();
         return new ZLinkBackendReceived(
             received.getRoutingId(),
             Optional.empty(),
-            received.requestSeq(),
+            Optional.empty(),
             received.parts().stream().map(Message::from).toList(),
-            replyParts -> submitReply(received.reply(), replyParts),
+            hasReplyToken
+                ? replyParts -> {
+                    try {
+                        submitReply(received.reply(), replyParts);
+                    } finally {
+                        received.close();
+                    }
+                }
+                : null,
             received::close);
     }
 }

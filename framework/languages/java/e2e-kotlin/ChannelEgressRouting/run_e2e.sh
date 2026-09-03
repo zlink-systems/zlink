@@ -78,7 +78,7 @@ trap 'exit 143' TERM
 
 if [[ -z "${ZLINK_LIBRARY_PATH:-}" ]]; then
   repo_root="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
-  default_core_lib="${repo_root}/core/build/lib/libzlink.so"
+  default_core_lib="${repo_root}/.artifacts/wsl/install/zlink-core/0.16.0/lib/libzlink.so"
   [[ -f "${default_core_lib}" ]] && export ZLINK_LIBRARY_PATH="${default_core_lib}"
 fi
 
