@@ -231,3 +231,22 @@ B(다른 머신, branch): sweep2 4-size 판정 → hotpath gate 도구 → posdd
 ## D-050 (2026-09-03 11:10, 사용자 결정) release는 리팩토링 이후
 Phase 9 태그 = posddd 리팩토링 merge + sweep2 PASS 뒤. 그 전 Phase 10~12는 로컬 빌드로 진행, 태그 후 release Core로
 패키지·consumer smoke 재확인.
+
+## D-051 (2026-09-03 12:25) Core 2차 트리 기능 gate 실패 2건 → 집중 수정 job
+r2 job(resume, 1h12m 무보고 상태로 34파일 +2,468/−452 추가 편집)을 중단하고 감독관 gate 실행: ctest 133/134
+(test_reconnect_options: blocking_directed_send_retries_multipart_final_frame FAIL), cpp smoke test_cpp_contract_socket 120s
+Timeout. 판별: reconnect_options는 r2 델타(router_send_path 등 34파일)가 원인(스냅샷 78a718에선 PASS), cpp_contract_socket
+timeout은 r1 상태(43파일)에서도 재현 → 2차 본체 결함. 트리 백업 6323fbf(→ wip 브랜치 갱신). sol ultra 집중 job
+c016-phase2-fixup(perf 측정 없음, 기능 gate 전부 green 요구). B 시작 신호(커밋·push)는 이 job 뒤로 밀림.
+- (Phase 9 준비, 12:35) 공개 표면 stale 심볼 0건(rg, subscription_event 오탐 제외). 0.15.1 잔존 = VERSION·core/CMakeLists.txt만
+  (바인딩 매니페스트는 Phase 6에서 0.16.0). Phase 9는 `scripts/local-package/build-wsl.sh --sync-versions` → verify → 태그.
+
+## D-052 (2026-09-03 13:20) fixup 결과 판정
+회귀 1(ROUTER directed multipart FINAL 재시도): 근본 수정 1파일(+17) PASS(5회 반복). 회귀 2(cpp test_cpp_contract_socket
+hang): 감독관이 테스트 원문 정독 → 8×2,000×3-part(3.4MB)를 receiver drain 전에 보내는 테스트 결함(HWM 1MiB 포화, 이전엔
+EINVAL 거절 13k/16k로 우연히 통과). Core 정상. 바인딩 테스트 수정 sol job(c016-cpp-test-fix: 수동 HWM + 거절 assert 결정화).
+Core 2차 커밋은 cpp 15/15 확인 후 테스트 수정과 함께 push.
+
+## D-053 (2026-09-03 13:55) Core 2차 커밋·push — B 시작 신호
+f3be895b3f core 2차(51파일, wake 3종·common send·REQREP·ws·ROUTER FINAL 재시도 fixup) + 3154ff90dc cpp 테스트 결정화.
+감독관 최종 gate: ctest 134/134, cpp 15/15+7/7, mirror 12/12, diff-check. perf 4-size 판정은 B(plan-b §2). A는 Phase 7 smoke 착수.

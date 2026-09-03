@@ -33,7 +33,7 @@ D-021~D-047이며, 이 절은 그 요약이다.
 | 0~4 Core pull-completion | 완료 | `bb66e85376`, `04ecca54d1` |
 | lane 우회 과제(A안, 삽입) | 완료 | 설계 `5ae80894e7`, 스펙 `157aaf837e`, Core `8b40b3feb2`, READY enum `c2d5f33438` |
 | 5.1 STREAM 16-cell | 완료 | (이전 세션) |
-| 5.2 성능 비교 | **진행 중** — 회귀 수정 1차 `1344022a3e`, 2차 ultra job 진행 중(아래 0.3) | |
+| 5.2 성능 비교 | 회귀 수정 1차 `1344022a3e`, 2차 `f3be895b3f` 커밋 완료(기능 gate green). **4-size 성능 판정은 머신 B pending**(plan-b §2) | |
 | 6 bindings | 완료 | `90d42d887c`…`405b147a5c`, 주석 `0a002f089f` |
 | 7 binding perf smoke | 미착수 (드라이버 `c016-worklog/tools/phase7-smoke.sh`) | |
 | 8 가이드 | 완료 | `53b8282e3b` |
@@ -54,14 +54,11 @@ D-021~D-047이며, 이 절은 그 요약이다.
 
 ### 0.3 지금 돌고 있는 것과 미커밋 상태
 
-- Core 2차 성능 수정 ultra job(`c016-hotpath-phase2`, 브리프 `c016-worklog/briefs/hotpath-phase2.prompt`)은 머신
-  `ulalax-home`에서 D multi wake 유실 3종·A part_helper 층·B REQREP·C ws completion-backpressure 순환 + timeout 콜백
-  O(N²) 수정과 임시 계측 제거까지 마친 뒤 "completion-poller/backpressure 결정적 회귀 테스트 추가" 단계에서 한 번
-  중단됐고(2026-09-03 10:40), 사용자 결정(D-048)으로 **같은 머신에서 재개 브리프
-  `c016-worklog/briefs/hotpath-phase2-resume.prompt`로 다시 실행 중**이다(scope `c016-hotpath-phase2-r2`). 진행 기록
-  `c016-worklog/hotpath-phase2-progress.md`, 변경 파일 43개 목록 `c016-worklog/hotpath-phase2-files.txt`. 중단 시점
-  스냅샷은 branch `wip/hotpath-phase2-snapshot-20260903`(origin)에 있다(다른 머신에서 이어받아야 할 때만 사용:
-  `git checkout origin/wip/hotpath-phase2-snapshot-20260903 -- core bindings/{c,cpp,go,rust}/include`, 커밋하지 않음).
+- Core 2차 성능 수정은 **커밋 `f3be895b3f`로 완료**(D-053, 2026-09-03 13:55). 경로: ultra job(D wake 3종·A 공통
+  send·B REQREP·C ws) → resume job → 감독관 gate에서 기능 회귀 2건 발견 → fixup job(ROUTER directed multipart FINAL
+  재시도 Core 수정 1파일) + cpp contract test 결정화(`3154ff90dc`, 테스트 결함) → 최종 gate ctest 134/134·cpp 15/15.
+  기록: `c016-worklog/hotpath-phase2-progress.md`, `phase2-fixup-summary.md`, `cpp-contract-socket-test-summary.md`.
+  스냅샷 브랜치 `wip/hotpath-phase2-snapshot-20260903`는 더 이상 필요 없다(삭제 가능).
 - 완료 처리(§0.3a 분담대로 A가 수행): ① 요약·BLOCKERS 검토 ② 감독관 기능 gate(`cmake --build core/build`, `ctest`
   전체, `test_single_lane_*` ×2, raw mirror cmp 12, `git diff --check`, cpp·python smoke) ③ 파일 명시 add로 커밋·push
   (perf 판정은 B가 `tools/sweep2.sh`로 수행, §0.1에 pending 표기) ④ 수정 건별 spec-gap 분류(D-046) — 특히
