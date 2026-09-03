@@ -89,10 +89,10 @@ owns the contract for each option.
 
 One STREAM handle explicitly selects one of the following modes before bind or connect.
 
-| Receive mode | Activation | Delivery form |
-|---|---|---|
-| RAW | Set `ZLINK_STREAM_RECV_MODE_RAW` | Receive raw byte records with `zlink_recv_part()` |
-| PACKET | Set `ZLINK_STREAM_RECV_MODE_PACKET` | Receive header/body packets with `zlink_stream_recv_packet()` |
+| When to use it | Receive mode | Activation | Delivery form |
+|---|---|---|---|
+| The application handles a framing-free raw byte stream directly | RAW | Set `ZLINK_STREAM_RECV_MODE_RAW` | Receive raw byte records with `zlink_recv_part()` |
+| An application protocol with `header + body` framing needs packet-sized delivery | PACKET | Set `ZLINK_STREAM_RECV_MODE_PACKET` | Receive header/body packets with `zlink_stream_recv_packet()` |
 
 RAW permits only `zlink_recv_part()`, and PACKET permits only
 `zlink_stream_recv_packet()`. The other receive family returns

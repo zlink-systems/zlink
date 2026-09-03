@@ -43,7 +43,8 @@ Core가 memory 입력에서 계산해, application queue들의 HWM을 나눌 때
 
 ### generation
 
-같은 방향 queue를 다시 만들 때 이전 것과 구분하는 버전 번호다.
+같은 방향 queue나 transport pair를 다시 만들 때 이전 것과 구분하는 버전 번호다. Reconnect마다
+증가하며, 이전 generation의 REPLY·FLOWSTATE는 새 generation에서 폐기한다.
 
 ### effective cap
 

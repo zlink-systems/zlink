@@ -402,7 +402,7 @@ A request that lacks capacity under the work budget or count limit returns
 publishes no part on the wire and does not invoke its handler. Capacity exhaustion on one pair does
 not block another pair or ordinary sends on the same pipe. Reply, timeout, disconnect, and close
 return the work and count reservations together. When a terminal reply or timeout returns the
-reservations, it wakes request-submit recovery on the exact pipe owner.
+reservations, it wakes request-submit recovery on the pipe owner that held that reservation.
 
 ### Message-Path Cost Limits
 
@@ -451,7 +451,7 @@ This section collects the items that workers must verify. These behaviors are ob
 - An empty queue admits one complete message of known total size even above HWM and rejects a second oversize message.
 - An unknown-size multipart blocks further `MORE` frames from the point HWM is exceeded. However, it admits the final frame of a multipart that started on an empty queue even when the frame exceeds HWM, and this exception does not apply to an intermediate `MORE` frame. After the multipart is discarded, the snapshot's `provisional_accounted_bytes` returns to 0.
 - When the peer dequeues a request, physical-queue current bytes and writer credit return even while the request remains unresolved. Pending work and count reservations remain through reply or timeout but are not added to Application-HWM accounting or physical-queue snapshots. Exhaustion returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` immediately regardless of send flags or `SNDTIMEO`.
-- A pair whose live work charge and unresolved count are both zero admits one request larger than the work budget and blocks the next unresolved request. Reply or timeout makes the exact pair admissible again; another pair and ordinary send continue while one pair is full.
+- A pair whose live work charge and unresolved count are both zero admits one request larger than the work budget and blocks the next unresolved request. Reply or timeout makes that same pair admissible again; another pair and ordinary send continue while one pair is full.
 - With either a sufficient Application byte limit or HWM `0`, one 64 KiB request succeeds and a second unresolved request blocks at the 32 MiB work budget. Completing the first request admits the next request.
 - Even while work budget remains, 16,384 unresolved requests cause the next request to block immediately. A terminal reply or timeout for one request admits the next request.
 

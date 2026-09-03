@@ -159,16 +159,20 @@ ZLINK_EXPORT zlink_submit_result_t zlink_publish_part (
 운반한다. NULL이 아니면 `topic_id_`는 NUL로 끝나며 내부 NUL이 없는 byte
 문자열이어야 한다. 종료 NUL 앞의 모든 byte가 topic이며 Core가 이 byte를
 message 앞의 topic frame으로 추가한다.
+
 별도의 topic 전용 최대 길이는 없으며 topic byte도 message와 storage 크기 제한에
 포함된다. 크기 제한을 넘으면 `ZLINK_SUBMIT_INVALID_ARGUMENT`와 `EMSGSIZE`,
 topic frame용 storage를 확보하지 못하면 `ZLINK_SUBMIT_OUT_OF_MEMORY`와 `ENOMEM`을
 반환한다.
+
 `ZLINK_PART_MORE`로 시작한 multipart message는 같은 thread에서 같은 topic과
 flag를 사용해 `ZLINK_PART_FINAL`까지 이어서 전송한다.
 
 이 함수는 성공과 실패 모두에서 `part_`의 내용을 소비한다. 같은 내용을
 다시 사용할 가능성이 있으면 호출 전에 복사하고, 소비된 `zlink_msg_t`는
-재사용하기 전에 초기화해야 한다. non-blocking 발행은 `flags_`에
+재사용하기 전에 초기화해야 한다.
+
+non-blocking 발행은 `flags_`에
 `ZLINK_DONTWAIT`를 전달하며, 즉시 진행할 수 없으면
 `ZLINK_SUBMIT_BACKPRESSURED`를 반환한다.
 
@@ -209,8 +213,10 @@ recv 모드에서 다음 구독 이벤트를 수신한다. 성공 시
 `*subscribed_out_`는
 subscribe이면 1, unsubscribe이면 0이다. `topic_id_buf_` /
 `*topic_id_len_out_`에 topic byte가 기록된다(binary-safe).
+
 이 storage는 socket별이 아니라 호출 thread별로 공유되므로 routing ID 값을 후속 호출 이후에도
 보관하려면 반환 즉시 복사해야 한다.
+
 호출자는 `topic_id_capacity_`로 buffer 크기를 전달하며,
 topic이 용량을 초과하면 `*topic_id_len_out_`에 필요한 topic byte 길이를 기록하고
 `errno = EMSGSIZE`로 실패한다. 이때 구독 event는 이미 queue에서 dequeue되었으며,

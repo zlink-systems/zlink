@@ -34,6 +34,7 @@ The following documents own the related contracts.
 | Publisher that handles subscription events directly | [XPUB](04-xpub.en.md) |
 | Auto HWM budget calculation and distribution | [Auto HWM](../systems/06-auto-hwm.en.md) |
 | Submit results and errno mapping | [Errors](../03-errors.en.md#result-and-errno-mapping) |
+| The `zlink_socket_set_receive_flow_state` function declaration and the flow-related fields in the monitor status snapshot | [Socket Common](README.en.md), [Monitoring](../06-monitoring.en.md) |
 
 ## 2. Delivery Loss and Backpressure
 
@@ -113,10 +114,12 @@ calculation and distribution contract.
 
 ## 5. Receive Flow State
 
-PUB is not a socket type that supports receive flow. `zlink_socket_set_receive_flow_state()` returns
-`ZLINK_CONFIG_NOT_SUPPORTED` with `errno == ENOTSUP` for a PUB socket and
+PUB is not a socket type that supports receive flow. Calling
+[`zlink_socket_set_receive_flow_state()`](README.en.md#zlink_socket_set_receive_flow_state) on a
+PUB socket returns `ZLINK_CONFIG_NOT_SUPPORTED` with `errno == ENOTSUP` and
 changes nothing. The socket's byte HWM, low water mark, and transport
-backpressure remain in effect. A PUB socket monitor does not set
+backpressure remain in effect. The PUB socket monitor status, owned by
+[Monitoring](../06-monitoring.en.md), does not set
 `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` and does not emit
 `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, or
 `ZLINK_EVENT_FLOW_STATE_STALE`.

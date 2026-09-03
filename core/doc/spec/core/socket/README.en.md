@@ -166,10 +166,10 @@ new duplicate pipe. Under `ZLINK_RID_DUPLICATE_HANDOVER`, a reconnecting pipe
 in the same direction takes over the existing pipe. If pipes in opposite
 directions collide, both peers compare their routing IDs and choose the same
 single direction. A request already admitted on the direction that loses that
-choice does not carry over to the chosen direction: its reply is stopped by the
-fence bound to the exact transport pair of the submit, the request never
-completes through it, and the request ends exactly once through its own
-timeout. The caller resubmits after the handover.
+choice does not carry over to the chosen direction: its reply stays scoped to
+the transport pair that was active at submit time, so it cannot complete
+through the new direction, and the request instead ends exactly once through
+its own timeout. The caller resubmits after the handover.
 
 This option is meaningful only for sockets that can observe a peer-advertised
 routing id. STREAM assigns its own 4-byte connection routing ids, so this
@@ -948,7 +948,9 @@ diagnostics.
 Sockets for which Core selects the logical target, such as PAIR and DEALER,
 use `zlink_send_part()`. Sockets for which the caller supplies a routing ID,
 such as ROUTER and STREAM, use `zlink_send_part_rid()`. A physical connection
-ID or generation is not a public target. `zlink_publish_part()` on PUB and XPUB
+ID, or the [generation](../glossary.en.md#generation) that distinguishes a
+recreated queue from its predecessor, is not a public target.
+`zlink_publish_part()` on PUB and XPUB
 does not produce completions.
 
 ```c
@@ -1267,9 +1269,10 @@ the effective reduction until retained bytes fall below the new limit, then
 applies the deferred shrink immediately.
 
 Automatic HWM uses the context Core memory budget, profile role bounds, and a
-registry of unique physical directional queues. The registry records one
-inproc ypipe once rather than once per endpoint and identifies it with a stable
-queue ID and generation. After manual reservations, bounded
+registry of [directional queues](../glossary.en.md#directional-queue) — physical
+queues for one application direction, counted once even when two endpoints
+observe the same direction. The registry records one inproc ypipe once rather
+than once per endpoint and identifies it with a stable queue ID and generation. After manual reservations, bounded
 [water-filling](../glossary.en.md#water-filling) starts each physical queue at
 its role minimum and raises unsaturated queues to
 their role maximum. Division remainders are granted one byte at a time in

@@ -513,7 +513,8 @@ Work budget 또는 count 한도가 부족한 request는 send flags와 `SNDTIMEO`
 `ZLINK_SUBMIT_BACKPRESSURED`와 `EAGAIN`으로 끝나며, wire에 part를 공개하지 않고 handler를
 호출하지 않는다. 한 pair의 한도 부족은 다른 pair나 같은 pipe의 ordinary send를 막지 않는다.
 Reply, timeout, disconnect와 close는 work·count reservation을 함께 반환한다. Terminal reply나
-timeout으로 reservation이 반환되면 exact pipe owner에서 request submit recovery를 다시 깨운다.
+timeout으로 reservation이 반환되면 그 reservation을 갖고 있던 바로 그 pipe owner에서 request submit
+recovery를 다시 깨운다.
 
 ### Message 처리 경로의 비용 제한
 
@@ -572,7 +573,7 @@ admission 결과, errno)만으로 관찰할 수 있는 동작이며, 각 항목�
 - 빈 queue는 전체 크기를 아는 complete message 1건을 HWM 초과여도 수락하고, 두 번째 oversize는 거부한다.
 - 미리 크기를 모르는 multipart의 `MORE` frame은 HWM 초과 지점부터 막힌다. 다만 빈 queue에서 시작한 multipart의 final frame은 HWM을 넘더라도 수락하며, 이 예외는 중간 `MORE` frame에 적용하지 않는다. Multipart를 폐기한 뒤 snapshot의 `provisional_accounted_bytes`는 0으로 돌아온다.
 - Peer가 request를 dequeue하면 unresolved 상태여도 physical queue current와 writer credit은 반환된다. Pending work·count reservation은 reply·timeout까지 유지되지만 Application HWM 회계나 snapshot의 physical queue current에는 더해지지 않는다. 한도 부족은 send flags와 `SNDTIMEO`에 관계없이 즉시 `ZLINK_SUBMIT_BACKPRESSURED`·`EAGAIN`이다.
-- Live work charge와 unresolved count가 모두 0인 pair는 work budget보다 큰 request 한 건을 허용하며, unresolved 상태의 다음 request는 막힌다. Reply·timeout 뒤 exact pair가 다시 수용하고, 한 pair가 막혀도 다른 pair와 ordinary send는 진행한다.
+- Live work charge와 unresolved count가 모두 0인 pair는 work budget보다 큰 request 한 건을 허용하며, unresolved 상태의 다음 request는 막힌다. Reply·timeout 뒤 그 request가 속한 바로 그 pair가 다시 수용하고, 한 pair가 막혀도 다른 pair와 ordinary send는 진행한다.
 - 충분한 Application byte 한도와 HWM `0`에서 모두 64 KiB request 한 건은 성공하고, unresolved 상태의 두 번째 request는 32 MiB work budget에서 막힌다. 한 건을 완료하면 다음 request가 성공한다.
 - Work budget이 남아 있어도 unresolved request 16,384건이 있으면 다음 request는 즉시 막힌다. 한 request가 terminal reply나 timeout으로 완료되면 다음 request가 성공한다.
 

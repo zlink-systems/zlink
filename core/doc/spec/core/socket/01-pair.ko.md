@@ -75,10 +75,9 @@ PAIR은 receive-flow 대상 socket type이 아니다.
 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고 아무것도 바꾸지 않는다.
 [Socket 공통](README.ko.md)이 소유하는 byte [HWM](../glossary.ko.md#hwm)(queue 보관 byte
 상한), low water mark와 transport [backpressure](../glossary.ko.md#backpressure)(sender의 추가
-제출 제한)는 그대로 유지된다. PAIR socket의 monitor는
-`ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`를 설정하지 않고
-`ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`,
-`ZLINK_EVENT_FLOW_STATE_STALE`를 발생시키지 않는다.
+제출 제한)는 그대로 유지된다. PAIR socket의 monitor는 receive-flow 상태를 보고하지 않는다 —
+관찰 가능한 세부 항목은
+[§5 「Receive flow state 부재」](#5-구현-및-contract-test-검증-요구)가 정리한다.
 
 ## 4. 함수
 
@@ -101,11 +100,12 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part (
 
 이 함수는 성공과 실패 모두에서 `part_`의 내용을 소비한다. 같은 내용을 다시 사용할 가능성이
 있으면 호출 전에 복사해야 하며, 소비된 `zlink_msg_t`를 다시 사용하려면 먼저 초기화해야
-한다. `flags_`에는 `ZLINK_SEND_FLAGS_NONE` 또는 `ZLINK_SEND_FLAGS_DONTWAIT`를 전달한다. `NONE FINAL`은
-호출 진입 시 `SNDTIMEO`를 snapshot해 local queue admission까지 기다리고 ID `0`과 completion
-없음으로 끝난다. `DONTWAIT FINAL`은 즉시 admission되면 ID `0`이고, Core가 pending으로
-보관하면 nonzero ID와 SEND completion 한 건을 만든다. Optional ID output과 context의 정확한
-규칙은 [Socket 공통](README.ko.md#part-send와-pending-admission)을 따른다.
+한다. `flags_`에는 `ZLINK_SEND_FLAGS_NONE` 또는 `ZLINK_SEND_FLAGS_DONTWAIT`를 전달한다. `NONE
+FINAL`은 호출 진입 시 `SNDTIMEO`를 snapshot해 local queue admission까지 기다리고, `DONTWAIT
+FINAL`은 기다리지 않는다. 두 경로가 반환하는 ID와 completion은
+[§5 「part 흐름」](#5-구현-및-contract-test-검증-요구)이 관찰 결과로 정리한다. Optional ID
+output과 context의 정확한 규칙은 [Socket 공통](README.ko.md#part-send와-pending-admission)을
+따른다.
 
 **반환값:** 성공 시 `ZLINK_SUBMIT_OK`, 실패 시 원인을 나타내는 `zlink_submit_result_t` 값.
 전체 대응은 [errno map](../03-errors.ko.md#result와-errno-대응)을 따른다.
@@ -168,10 +168,10 @@ Admission 뒤에는 application payload의 별도 replay copy를 유지하지 �
 
 **part 흐름**
 - 단일 part message를 `ZLINK_PART_FINAL`로 보내면 수신 측 `*has_more_out_`은 `ZLINK_PART_FINAL`이다.
-- multipart message를 보내면 수신 측은 마지막 전 part에서 `ZLINK_PART_MORE`, 마지막 part에서 `ZLINK_PART_FINAL`을 관찰한다.
-- `DONTWAIT FINAL`이 즉시 admission되면 ID `0`과 completion 없음이고, Core가 pending으로
-  보관하면 nonzero ID의 SEND completion을 정확히 한 번 반환한다. Pending·completion 상한 때문에
-  Core가 보관하지 못하면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`이다.
+- multipart message를 보내면 수신 측은 마지막 part 이전의 모든 part에서 `ZLINK_PART_MORE`를, 마지막 part에서 `ZLINK_PART_FINAL`을 관찰한다.
+- `DONTWAIT FINAL`이 즉시 admission되면 ID `0`과 completion 없음이다.
+- `DONTWAIT FINAL`을 Core가 pending으로 보관하면 nonzero ID의 SEND completion을 정확히 한 번 반환한다.
+- Pending·completion 상한 때문에 Core가 `DONTWAIT FINAL`을 보관하지 못하면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`이다.
 - `ZLINK_RECV_FLAGS_DONTWAIT` 수신에 데이터가 없으면 `ZLINK_RECV_NO_DATA`와 `EAGAIN`을 반환한다.
 
 **record 원자성**

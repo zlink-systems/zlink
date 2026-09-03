@@ -45,10 +45,10 @@ errno is unspecified after success.
 ```c
 #define ZLINK_HAUSNUMERO 156384712      // Base value for ZLink extended errno values
 
-#define EFSM            (ZLINK_HAUSNUMERO + 51)
-#define ENOCOMPATPROTO  (ZLINK_HAUSNUMERO + 52)
-#define ETERM           (ZLINK_HAUSNUMERO + 53)
-#define EMTHREAD        (ZLINK_HAUSNUMERO + 54)
+#define EFSM            (ZLINK_HAUSNUMERO + 51)  // disallowed request state transition
+#define ENOCOMPATPROTO  (ZLINK_HAUSNUMERO + 52)  // incompatible protocol reply
+#define ETERM           (ZLINK_HAUSNUMERO + 53)  // Context terminated
+#define EMTHREAD        (ZLINK_HAUSNUMERO + 54)  // forbidden thread usage
 
 #ifndef ESTALE
 #define ESTALE          (ZLINK_HAUSNUMERO + 19)  // stale handle
@@ -380,7 +380,7 @@ Each socket document defines input ownership and socket-specific detailed condit
 | `ZLINK_REQUEST_PROTOCOL_ERROR` | `EPROTO`, `ENOCOMPATPROTO` | Malformed or incompatible reply |
 | `ZLINK_REQUEST_INTERNAL_ERROR` | preserved errno | Internal failure without another terminal category |
 | `ZLINK_REQUEST_REJECTED` | `EACCES`, `ECONNREFUSED`, `ECANCELED` | Peer or admission rejection |
-| `ZLINK_REQUEST_CONFLICT` | `EEXIST`, `ESTALE` | Request correlation or generation conflict |
+| `ZLINK_REQUEST_CONFLICT` | `EEXIST`, `ESTALE` | Request correlation conflict (`EEXIST`) or transport pair [generation](glossary.en.md#generation) mismatch (`ESTALE`) |
 | `ZLINK_REQUEST_BUSY` | `EBUSY` | An active request lifecycle exists |
 | `ZLINK_REQUEST_NOT_CONNECTED` | `ENOTCONN`, `EHOSTUNREACH` | Terminal route is disconnected |
 | `ZLINK_REQUEST_INVALID_ARGUMENT` | `EINVAL`, `EFAULT` | Asynchronous validation failure |

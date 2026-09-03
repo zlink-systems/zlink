@@ -15,10 +15,10 @@ title: "Core POSD module structure"
 
 ## 1. Goal
 
-POSD (*A Philosophy of Software Design*) is the design principle of creating deep modules that
-hide implementation complexity behind narrow public interfaces. Core follows this principle by
-hiding transport, connection, pipe, and protocol complexity behind a narrow raw
-[socket](../glossary.en.md#socket) C ABI. A socket is an endpoint that sends and receives messages.
+The design principle of creating deep modules that hide implementation complexity behind narrow
+public interfaces is called POSD (*A Philosophy of Software Design*). Core follows this principle
+by hiding transport, connection, pipe, and protocol complexity behind a narrow raw
+[socket](../glossary.en.md#socket) (an endpoint that sends and receives messages) C ABI.
 Core does not re-expose application service semantics as Core helpers or options.
 
 > **Contract ownership** — This entire document is an implementation description, not a contract
@@ -40,11 +40,11 @@ its row.
 
 | Layer | Responsibility |
 |---|---|
-| Public C API | Arguments, handles, ownership, and result mapping |
-| Socket semantics | Routing by socket type, multipart behavior, and request correlation |
-| Runtime core | Context, sessions, pipes, mailbox commands, and lifecycle |
-| Engine | ZMP and RAW framing and handshake |
-| Transport | TCP, WebSocket, IPC, inproc, and TLS I/O |
+| Public C API | Validates arguments, manages handles, expresses ownership, and maps internal results to C API results |
+| Socket semantics | Decides routing per socket type, handles multipart behavior, and manages request correlation |
+| Runtime core | Manages contexts, sessions, pipes, and mailbox commands, and drives their lifecycle |
+| Engine | Performs ZMP and RAW framing and handshake |
+| Transport | Performs I/O over TCP, WebSocket, IPC, inproc, and TLS |
 
 The boundaries apply in both directions. The public API does not branch directly on transport types
 or protocol parsers. The runtime core does not know policies specific to socket types, and engines do

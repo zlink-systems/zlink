@@ -80,3 +80,7 @@ Core 공개 계약 변경은 다음 순서로 진행한다.
 한국어와 영문 문서는 heading 순서, C signature, enum·struct field와 숫자 값, 기본값, result,
 ownership, thread safety와 link 대상이 같아야 한다. 한 문서에만 존재하는 public 계약은 유효한
 Core 계약으로 인정하지 않는다.
+
+<!-- zlink-nav:start -->
+[Core 스펙 목차](README.ko.md) | [이전: 개요](README.ko.md) | [다음: Context](01-context.ko.md)
+<!-- zlink-nav:end -->

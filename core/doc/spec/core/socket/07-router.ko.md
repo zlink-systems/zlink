@@ -135,8 +135,8 @@ ROUTER와 DEALER는 자기 값을 독립적으로 알리므로 각 방향은 상
    같은 값을 반복 설정하면 event를 추가로 만들지 않는다.
 4. Reconnect 뒤에는 현재 설정값을 새 connection에 적용한다.
 
-Network wire, inproc 전달, CONTROL 크기 경계, multipart defer와 exact-pipe lifetime·stale 전달
-소유권은 [ZMP request-reply lane](../protocol/01-zmp.ko.md#41-request-reply-lane),
+Network wire, inproc 전달, CONTROL 크기 경계, multipart defer와 선택한 그 pipe의 lifetime·stale
+전달 소유권은 [ZMP request-reply lane](../protocol/01-zmp.ko.md#41-request-reply-lane),
 [decode](../protocol/01-zmp.ko.md#7-decode-유효성-검사),
 [peer-weight owner](../protocol/01-zmp.ko.md#peer-weight-control) 계약이 정의한다. 어느 transport
 경로도 public receive나 Completion lane에 weight record를 만들지 않는다.
@@ -244,7 +244,7 @@ ZLINK_EXPORT zlink_recv_result_t zlink_router_recv_part(
 
 `has_more_out_ == ZLINK_PART_MORE`이면 다음 호출로 같은 record의 다음 part를 받아야 한다.
 `ZLINK_PART_FINAL`이면 record 수신이 끝난다. Reply가 필요한지는
-[§2](#2-raw-receive-record-구분)의 output 조합으로 판단한다.
+[§2](#2-data와-request-receive)의 output 조합으로 판단한다.
 
 반환한 payload에는 internal request metadata가 없다. Multipart request의 첫 part에서 얻은
 routing ID와 opaque reply token은 같은 record의 나머지 part에 반복해서 반환하되,

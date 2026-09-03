@@ -554,3 +554,7 @@ status snapshot, 반환값·errno)만으로 다음을 확인한다. 각 항목�
 - 양수 `monitor_hwm_bytes`는 변환 없이 정확한 SNDHWM·RCVHWM과 worker admission 상한으로 사용되고, `0`은 unlimited가 아니라 Core가 계산한 기본 byte 값을 선택한다([§5](#5-monitor-queue의-byte-예산)).
 - worker는 event count가 아니라 실제 record의 accounted byte로 수용을 판단하고, 빈 queue의 oversize record 한 건 규칙을 동일하게 적용한다.
 - monitor queue의 Auto HWM planning 제외와 context budget snapshot 집계의 검증은 [Auto HWM](systems/06-auto-hwm.ko.md#5-구현-및-contract-test-검증-요구)가 소유한다.
+
+<!-- zlink-nav:start -->
+[Core 스펙 목차](README.ko.md) | [이전: Polling](05-polling.ko.md) | [다음: Utilities](07-utilities.ko.md)
+<!-- zlink-nav:end -->

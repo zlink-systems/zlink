@@ -42,10 +42,10 @@ bindings 개발자다. 이 문서는 "공개 함수의 typed result와 thread-lo
 ```c
 #define ZLINK_HAUSNUMERO 156384712      // zlink 확장 errno의 기준값
 
-#define EFSM            (ZLINK_HAUSNUMERO + 51)
-#define ENOCOMPATPROTO  (ZLINK_HAUSNUMERO + 52)
-#define ETERM           (ZLINK_HAUSNUMERO + 53)
-#define EMTHREAD        (ZLINK_HAUSNUMERO + 54)
+#define EFSM            (ZLINK_HAUSNUMERO + 51)  // 허용하지 않는 request state 전이
+#define ENOCOMPATPROTO  (ZLINK_HAUSNUMERO + 52)  // 호환되지 않는 protocol reply
+#define ETERM           (ZLINK_HAUSNUMERO + 53)  // Context 종료
+#define EMTHREAD        (ZLINK_HAUSNUMERO + 54)  // 금지한 thread 사용
 
 #ifndef ESTALE
 #define ESTALE          (ZLINK_HAUSNUMERO + 19)  // stale handle
@@ -363,7 +363,7 @@ transport·internal failure 순서로 하나를 반환한다. 성공한 함수�
 | `ZLINK_REQUEST_PROTOCOL_ERROR` | `EPROTO`, `ENOCOMPATPROTO` | malformed 또는 호환되지 않는 reply |
 | `ZLINK_REQUEST_INTERNAL_ERROR` | 보존된 errno | 다른 terminal 분류가 없는 내부 실패 |
 | `ZLINK_REQUEST_REJECTED` | `EACCES`, `ECONNREFUSED`, `ECANCELED` | peer 또는 admission 거절 |
-| `ZLINK_REQUEST_CONFLICT` | `EEXIST`, `ESTALE` | request correlation 또는 generation 충돌 |
+| `ZLINK_REQUEST_CONFLICT` | `EEXIST`, `ESTALE` | request correlation 충돌(`EEXIST`) 또는 transport pair [generation](glossary.ko.md#generation) 불일치(`ESTALE`) |
 | `ZLINK_REQUEST_BUSY` | `EBUSY` | active request lifecycle 존재 |
 | `ZLINK_REQUEST_NOT_CONNECTED` | `ENOTCONN`, `EHOSTUNREACH` | terminal route 단절 |
 | `ZLINK_REQUEST_INVALID_ARGUMENT` | `EINVAL`, `EFAULT` | asynchronous validation 실패 |

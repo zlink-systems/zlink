@@ -112,8 +112,8 @@ throughput과 달리 결정적이라 재측정이 필요 없다. 측정 cell과 
 
 ### 5.2 Release 비교 gate
 
-직전 Core release와의 C perf 비교(plan Phase 5.2, `bindings/c/perf/perf_regression_gate.py`)는
-두 단계로 판정한다.
+직전 Core release와의 C perf 비교는 `bindings/c/perf/perf_regression_gate.py`가 수행하며, 두
+단계로 판정한다. Release 준비 절차는 이 gate를 인용하고, 이 절이 판정 기준을 소유한다.
 
 1. Cell(pattern, transport, size, metric) 단위 5%는 측정 오차 허용치다: throughput·bandwidth
    `>= 0.95`, latency `<= 1.05`.

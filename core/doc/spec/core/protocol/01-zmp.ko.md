@@ -129,7 +129,9 @@ Transport가 이 byte 열을 여러 write나 RFC 6455 binary message로 나누�
 DEALER·ROUTER 연결에서는 양쪽이 HELLO만 먼저 보내고 peer HELLO의 socket type을 확인한 뒤
 [§4.1](#41-request-reply-lane)의 lane count를 정하여 READY를 보낸다. Active socket owner가
 count를 정하는 동안 engine은 READY를 보류한다. Endpoint가 취소되거나 `HANDSHAKE_IVL`이
-끝나면 보류한 READY와 선택적인 Completion connection 생성을 함께 취소한다. Passive 쪽은
+끝나면 보류한 READY와, ROUTER-ROUTER 쌍의 두 번째 physical connection으로 application data
+대신 reply와 receive-flow control을 나르는 선택적인
+[Completion connection](../glossary.ko.md#completion-progress-lane) 생성을 함께 취소한다. Passive 쪽은
 자기 READY의 transport write가 성공적으로 완료되고 socket lane-set admission과 Application
 scheduler attach가 끝난 뒤에만 local connection readiness를 공개한다. READY write가 실패하면
 handshake를 실패로 끝내며 readiness를 공개하지 않는다.
@@ -230,7 +232,8 @@ Bind나 connect 전에 설정한 weight는 Application pipe가 준비된 뒤에�
 알린 값과 같으면 command를 다시 만들지 않는다. Reconnect 뒤 새 Application pipe가 ready가 되면
 현재 설정값을 그 pipe로 다시 알린다.
 
-Network `WEIGHT` command는 application HWM과 remote PAUSE를 우회할 수 있다. 그러나 logical-ready
+Network `WEIGHT` command는 queue admission을 제한하는 application
+[HWM](../glossary.ko.md#hwm)과 remote PAUSE를 우회할 수 있다. 그러나 logical-ready
 hold와 한 Application multipart의 part 사이에 다른 record를 넣지 않는 atomic 경계는 우회하지
 않는다. Application multipart가 열린 동안 sender는 가장 최근 weight 하나만 고정된 `uint32`
 상태로 보관한다. FINAL이 multipart를 commit하거나 rollback이 multipart를 제거한 뒤, 그 결과로
@@ -423,23 +426,24 @@ public `zlink_msg_t[]` storage를 확보하며, `zlink_completion_recv()`는 그
 
 ### Peer-weight control
 
-수신한 exact Application pipe가 상대의 최신 절대 weight를 소유한다. Scheduler mutation과
+값을 받은 바로 그 Application pipe — 같은 peer로 가는 다른 pipe가 아니라 지금 이 command를
+받은 물리 pipe — 가 상대의 최신 절대 weight를 소유한다. Scheduler mutation과
 `PEER_WEIGHT_CHANGED` monitor event는 그 pipe의 owner thread에서만 처리하며, pair table의
 pending slot은 값을 소유하지 않는다.
 
 전달은 다음 순서로 진행된다.
 
 1. Network session은 ZMP `WEIGHT` command를 decode하고, inproc sender는 typed `uint32` weight를
-   넘겨 상대 exact Application pipe owner를 대상으로 지정한다.
+   넘겨 상대의 그 Application pipe owner를 대상으로 지정한다.
 2. Owner command는 그 pipe를 retain하고 값을 받은 해당 물리 연결 ID를 캡처한다.
-3. Command 처리 시 exact pipe의 active lifetime, Application lane과 캡처한 연결 ID가 현재 값과
+3. Command 처리 시 그 pipe의 active lifetime, Application lane과 캡처한 연결 ID가 현재 값과
    같은지 검증한 뒤 값을 그 pipe에 기록한다.
 4. 같은 pipe가 ready 상태가 되고 선택 가능한 route로 attach되면 scheduler가 기록값을 읽어
    적용한다.
 5. 실제 적용값이 바뀌면 `PEER_WEIGHT_CHANGED`를 만든다. Event의 `value`는 새 weight이고 lane은
    Application이며 `connection_id`는 값을 적용한 pipe의 물리 connection을 식별한다.
 
-Pipe 종료나 connection ID 불일치는 바로 그 exact pipe의 stale command만 폐기한다. Duplicate
+Pipe 종료나 connection ID 불일치는 바로 그 pipe의 stale command만 폐기한다. Duplicate
 standby로 남은 pipe는 자기 최신 값을 유지하므로 나중에 같은 pipe가 선택되면 그 값을 적용한다.
 이 보장은 모든 standby나 교체 route가 이전에 기록한 상태를 버린다고 확대하지 않는다.
 

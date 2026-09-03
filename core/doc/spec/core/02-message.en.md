@@ -150,9 +150,15 @@ message. The library invokes this function when the message data buffer is no lo
 ## 6. Functions
 
 The following input rule applies to every `zlink_msg_*` function: if a handle is `NULL` or a
-message is invalid (uninitialized or already closed), the function sets `errno == EFAULT`. A
-function returning `zlink_config_result_t` returns `ZLINK_CONFIG_INVALID_HANDLE`,
-`zlink_msg_data` returns `NULL`, `zlink_msg_size` returns `0`, and `zlink_msg_refcnt` returns `-1`.
+message is invalid (uninitialized or already closed), the function sets `errno == EFAULT`. Each
+function then returns the following value.
+
+| Function | Return value |
+|---|---|
+| A function returning `zlink_config_result_t` | `ZLINK_CONFIG_INVALID_HANDLE` |
+| `zlink_msg_data` | `NULL` |
+| `zlink_msg_size` | `0` |
+| `zlink_msg_refcnt` | `-1` |
 
 ### zlink_msg_init
 

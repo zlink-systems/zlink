@@ -67,9 +67,9 @@ identity 불일치로 내부 폐기하는 flow-state frame도 public monitor eve
 
 | Event | `value` | `flags` | 다른 field |
 |---|---|---|---|
-| `ZLINK_EVENT_SEND_FLOW_PAUSED` | 적용된 상태의 flow epoch | 없음 | PAUSED된 peer의 `routing_id`, `connection_id`, Application lane |
+| `ZLINK_EVENT_SEND_FLOW_PAUSED` | 적용된 상태의 flow epoch | 없음 | PAUSED된 peer의 `routing_id`, `connection_id`, Application `transport_lane` |
 | `ZLINK_EVENT_SEND_FLOW_RESUMED` | 적용된 상태의 flow epoch | remote pause를 해제한 결과 pipe가 실제로 writable이면 `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` | PAUSED와 동일 |
-| `ZLINK_EVENT_FLOW_STATE_STALE` | 받은 flow epoch | `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` | 해당 peer의 `routing_id`, `connection_id`, Application lane |
+| `ZLINK_EVENT_FLOW_STATE_STALE` | 받은 flow epoch | `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` | 해당 peer의 `routing_id`, `connection_id`, Application `transport_lane` |
 
 byte [HWM](glossary.ko.md#hwm), transport wait, termination 같은 다른 원인이 계속 pipe를
 막고 있으면 `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE`이 없다. 따라서 RESUMED event만으로
@@ -101,7 +101,7 @@ open 시 지정한 event mask)만으로 다음을 확인한다. 각 항목은 un
 
 **Event field와 flag**
 - PAUSED·RESUMED event의 `value`는 적용된 상태의 flow epoch이고, event는 PAUSED된 peer의
-  `routing_id`, `connection_id`와 Application lane을 담는다.
+  `routing_id`, `connection_id`와 Application `transport_lane`을 담는다.
 - 두 topology의 receive-flow event는 상태가 적용된 현재 Application pipe의 `connection_id`와
   Application `transport_lane`을 보고한다. Flow-state frame이 ROUTER-ROUTER Completion
   connection에서 왔더라도 event의 lane을 Completion으로 바꾸지 않는다.

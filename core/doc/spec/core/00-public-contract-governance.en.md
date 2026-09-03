@@ -86,3 +86,7 @@ A Core public contract change follows this order.
 The Korean and English documents must have the same heading order, C signatures, enum and struct
 fields and numeric values, defaults, results, ownership, thread-safety rules, and link targets. A
 public contract present in only one language is not recognized as a valid Core contract.
+
+<!-- zlink-nav:start -->
+[Core Spec Index](README.en.md) | [Previous: Overview](README.en.md) | [Next: Context](01-context.en.md)
+<!-- zlink-nav:end -->

@@ -45,9 +45,10 @@ boundary without exposing allocator selection.
 ## 4. Multipart atomicity
 
 A multipart send sequence that groups multiple frames (parts) into one logical message remains one logical
-queue operation. The send code for each [socket](../glossary.en.md#socket) type delegates transaction handling
-to the common multipart path, so callers do not have to duplicate partial-failure cleanup for disposing of the
-remaining parts when a sequence fails midway.
+queue operation. The send code for each [socket](../glossary.en.md#socket) type delegates the handling of this
+sequence as a single unit, start to finish, to the common multipart path. If a sequence fails midway, the
+common path disposes of the parts it has not yet sent, so each socket type's send code does not need to
+implement that cleanup separately.
 
 ## 5. Typed socket surface
 
@@ -57,6 +58,6 @@ payload frames.
 
 ## 6. Eventing separation
 
-The poller reports readiness—the state in which it is worthwhile for a source to proceed with receive or send—
-the monitor reports transport/protocol transitions, and the generic timer reports time events. These three
-mechanisms do not interpret application payloads.
+The poller reports readiness (the state in which it is worthwhile for a source to proceed with receive or
+send), the monitor reports transport/protocol transitions, and the generic timer reports time events. These
+three mechanisms do not interpret application payloads.

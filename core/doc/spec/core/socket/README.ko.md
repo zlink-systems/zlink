@@ -160,9 +160,9 @@ routing id가 들어왔을 때의 정책을 정한다. 값은 `int`로 설정하
 않는다. `ZLINK_RID_DUPLICATE_HANDOVER`에서는 같은 방향에서 다시 연결한 pipe가
 기존 pipe를 인수한다. 서로 반대 방향의 pipe가 충돌하면 두 peer의 routing id를
 비교해 양쪽이 같은 방향 하나를 선택한다. 그 선택으로 물러나는 방향에서 이미 admit된
-request는 선택된 방향으로 이어지지 않는다. 그 request의 reply는 submit 시점의 exact
-transport pair에 묶인 fence에 걸려 request를 완료하지 못하고, request는 자기 timeout으로
-정확히 한 번 종결된다. Caller는 handover 뒤 다시 보낸다.
+request는 선택된 방향으로 이어지지 않는다. 그 request의 reply는 submit 시점에 사용한 바로 그
+transport pair로만 전달되도록 제한되어 있어 request를 완료하지 못하고, request는 자기
+timeout으로 정확히 한 번 종결된다. Caller는 handover 뒤 다시 보낸다.
 
 이 옵션은 peer가 광고한 routing id를 관찰할 수 있는 socket에서만 의미가
 있다. STREAM은 server가 연결별 4-byte routing id를 직접 만들기 때문에
@@ -894,7 +894,8 @@ lifecycle 소유권 충돌은 `ZLINK_CONNECT_BUSY`다. `zlink_errno()`는
 
 PAIR·DEALER처럼 Core가 논리 target을 고르는 socket은 `zlink_send_part()`를 사용한다.
 ROUTER·STREAM처럼 caller가 routing ID를 지정하는 socket은 `zlink_send_part_rid()`를 사용한다.
-물리 connection ID나 generation은 public target이 아니다. PUB·XPUB의
+물리 connection ID나, 같은 방향 queue를 다시 만들 때 이전 것과 구분하는
+[generation](../glossary.ko.md#generation)은 public target이 아니다. PUB·XPUB의
 `zlink_publish_part()`는 completion 대상이 아니다.
 
 ```c
@@ -1164,8 +1165,9 @@ bitmask로 관찰할 이벤트를 선택한다. `options_->monitor_hwm_bytes`가
 유지하지 않는다. runtime에서 HWM을 줄여도 이미 queue에 있는 message는 제거하지 않는다.
 보관 byte가 새 limit 아래로 감소하는 순간 deferred shrink를 적용한다.
 
-automatic HWM은 context의 Core memory budget, profile 역할 경계와 고유 physical
-directional queue registry를 사용한다. registry는 같은 inproc ypipe를 endpoint마다
+automatic HWM은 context의 Core memory budget, profile 역할 경계와, 두 endpoint가 같은
+방향을 관찰해도 한 번만 집계하는 [directional queue](../glossary.ko.md#directional-queue)
+registry를 사용한다. registry는 같은 inproc ypipe를 endpoint마다
 중복 등록하지 않고 stable queue ID와 generation으로 한 번만 센다. manual reservation을
 뺀 budget은 역할별 하한에서 시작해 상한에 도달하지 않은 physical queue에 bounded
 [water-filling](../glossary.ko.md#water-filling)으로 나눈다. 나눗셈 remainder는

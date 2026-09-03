@@ -107,12 +107,15 @@ typedef enum zlink_ctx_option_t
 ```c
 typedef enum zlink_auto_hwm_profile_t
 {
-    ZLINK_AUTO_HWM_PROFILE_COMPACT = 0,
-    ZLINK_AUTO_HWM_PROFILE_LOW_LATENCY = 1,
-    ZLINK_AUTO_HWM_PROFILE_BALANCED = 2,
-    ZLINK_AUTO_HWM_PROFILE_THROUGHPUT = 3
+    ZLINK_AUTO_HWM_PROFILE_COMPACT = 0,      // memory 비율이 가장 작다 — 메모리를 아껴야 할 때
+    ZLINK_AUTO_HWM_PROFILE_LOW_LATENCY = 1,  // queue를 짧게 유지해 지연을 줄인다
+    ZLINK_AUTO_HWM_PROFILE_BALANCED = 2,     // 기본값. memory와 처리량을 절충한다
+    ZLINK_AUTO_HWM_PROFILE_THROUGHPUT = 3    // memory 비율이 가장 크다 — 대용량 처리가 우선일 때
 } zlink_auto_hwm_profile_t;
 ```
+
+각 profile의 정확한 memory 비율, 고정 cap과 역할별 하한·상한은
+[Auto HWM §2](systems/06-auto-hwm.ko.md#2-auto-hwm-budget-계산)가 소유한다.
 
 > **참고:** `ZLINK_SOCKET_LIMIT`과 `ZLINK_THREAD_PRIORITY`는 enum 값 `3`을
 > 공유한다. 현재 공개 C ABI의 옵션 조회는 값 `3`을 읽기 전용

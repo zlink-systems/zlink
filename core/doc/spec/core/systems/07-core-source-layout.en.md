@@ -60,9 +60,10 @@ The public API facade in `src/api/` calls the socket-semantics layer, and the so
 uses the runtime core's shared connection and pipe mechanisms. Engines and transports do not know
 the application meaning of socket types. Lower layers do not include headers from higher layers.
 
-Core source does not contain MeshName, ChannelName, application mailboxes, Spot, Actor, Location
-Store, or service lifecycle state. It also does not add a separate native seam for Framework
-convenience.
+MeshName, ChannelName, application mailboxes, Spot, Actor, Location Store, and service lifecycle
+state are concepts owned by Framework, the higher layer that provides application services on top
+of Core ([POSD Module Structure](08-posd-module-structure.en.md) §3). Core source does not contain
+these concepts. It also does not add a separate native seam for Framework convenience.
 
 ## 4. Public Include Rules
 

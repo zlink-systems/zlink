@@ -81,7 +81,9 @@ connection의 Core control frame으로 운반하고, ROUTER-ROUTER에서는
 [completion progress lane](glossary.ko.md#completion-progress-lane)(terminal reply와 error
 reply의 진행도 담당하는 별도 경로, 이하 completion lane)으로 운반한다. 두 frame은 runtime
 내부에서 소비한다. ROUTER-ROUTER completion lane이 [HWM](glossary.ko.md#hwm) admission과
-Auto HWM budget에서 제외되는 계약은 [Auto HWM](systems/06-auto-hwm.ko.md)이 소유한다. 이 상태의
+[Auto HWM budget](glossary.ko.md#auto-hwm-budget)(Core가 memory 입력에서 계산해 application
+queue들의 HWM을 나눌 때 기준으로 삼는 byte 총량)에서 제외되는 계약은
+[Auto HWM](systems/06-auto-hwm.ko.md)이 소유한다. 이 상태의
 공개 표면은 설정용 `zlink_socket_set_receive_flow_state()`, 관측용 receive-flow monitor
 event 3개, monitor status snapshot의 receive-flow field다. Raw flow-state frame을 수신,
 송신, encode 또는 decode하는 공개 API는 없으며 flow-state frame은 application receive
@@ -267,3 +269,7 @@ send·receive·monitor 결과)만으로 다음을 확인한다. 각 항목은 �
 - Framework runtime은 Core public raw surface만 사용한다.
 - Core public API와 implementation에 ChannelName, service dispatch, Spot, Actor, transfer와
   maintenance 의미가 없다.
+
+<!-- zlink-nav:start -->
+[Core 스펙 목차](README.ko.md) | [이전: Utilities](07-utilities.ko.md) | [다음: 소켓 개요](socket/README.ko.md)
+<!-- zlink-nav:end -->

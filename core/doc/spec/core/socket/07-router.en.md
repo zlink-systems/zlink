@@ -142,8 +142,8 @@ The public weight result follows this order.
    connection ID. Repeating the same value emits no additional event.
 4. Reconnect applies the current configured value to the new connection.
 
-The network wire, inproc delivery, CONTROL size boundary, multipart deferral, and exact-pipe
-lifetime and stale-delivery ownership are defined by the
+The network wire, inproc delivery, CONTROL size boundary, multipart deferral, and the lifetime and
+stale-delivery ownership of that selected pipe are defined by the
 [ZMP request-reply lane](../protocol/01-zmp.en.md#41-request-reply-lane),
 [decode](../protocol/01-zmp.en.md#7-decode-validation), and
 [peer-weight owner](../protocol/01-zmp.en.md#peer-weight-control) contracts. Neither transport path

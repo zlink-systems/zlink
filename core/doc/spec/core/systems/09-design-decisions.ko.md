@@ -45,9 +45,10 @@ transport connection 하나를 나타내는 내부 객체다. Engine과 session�
 
 여러 frame(part)을 하나의 논리적 message로 묶어 보내는 multipart send sequence는 하나의
 논리적 queue operation으로 유지된다. message를 주고받는 endpoint인
-[socket](../glossary.ko.md#socket)의 종류별 send code는 transaction 처리를 공통 multipart
-경로에 맡겨, sequence가 중간에 실패했을 때 남은 part를 정리하는 partial failure cleanup을
-caller가 반복하지 않게 한다.
+[socket](../glossary.ko.md#socket) 종류별 send code는 이 sequence를 시작부터 끝까지 하나의
+단위로 다루는 처리를 공통 multipart 경로에 맡긴다. sequence가 중간에 실패하면 공통 경로가
+아직 보내지 않은 나머지 part를 정리하므로, 각 socket 종류의 send code가 그 정리를 따로
+구현하지 않아도 된다.
 
 ## 5. Typed socket surface
 

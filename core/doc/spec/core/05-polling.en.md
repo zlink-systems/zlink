@@ -57,8 +57,11 @@ type is as follows.
 For a raw socket with multiple peers, `ZLINK_POLLOUT` is aggregate readiness
 for the socket. The event does not identify which routing ID or transport pair
 became writable and can be raised because another peer has capacity. Therefore,
-after a nonblocking submit to one target reports backpressure, observing
-`ZLINK_POLLOUT` does not guarantee that the next submit to that target succeeds.
+after a nonblocking submit to one target reports
+[backpressure](glossary.en.md#backpressure) (behavior that limits additional
+submissions from a sender when the downstream cannot keep pace with processing),
+observing `ZLINK_POLLOUT` does not guarantee that the next submit to that target
+succeeds.
 Use the part-send completion ID and `zlink_completion_recv()` to distinguish
 operation-specific admission results.
 
@@ -319,3 +322,7 @@ and event-array contents. Each item maps to one unit test.
 Caller serialization of add, modify, remove, and wait on one poller is a usage
 precondition ([§5](#5-source-lifetime-and-serialization)); concurrent use of
 different pollers is allowed.
+
+<!-- zlink-nav:start -->
+[Core Spec Index](README.en.md) | [Previous: Events](04-events.en.md) | [Next: Monitoring](06-monitoring.en.md)
+<!-- zlink-nav:end -->

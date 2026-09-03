@@ -87,10 +87,10 @@ PACKET과 `NOTIFY=1`은 함께 사용할 수 없다. 두 설정 중 나중 호�
 
 한 STREAM handle은 bind나 connect 전에 다음 mode 가운데 하나를 명시적으로 고른다.
 
-| 수신 모드 | 활성화 방법 | 전달 형태 |
-|---|---|---|
-| RAW | `ZLINK_STREAM_RECV_MODE_RAW` 설정 | `zlink_recv_part()`로 raw byte record를 받는다 |
-| PACKET | `ZLINK_STREAM_RECV_MODE_PACKET` 설정 | `zlink_stream_recv_packet()`으로 header/body packet을 받는다 |
+| 언제 쓰는가 | 수신 모드 | 활성화 방법 | 전달 형태 |
+|---|---|---|---|
+| Application이 framing 없는 raw byte stream을 직접 다룰 때 | RAW | `ZLINK_STREAM_RECV_MODE_RAW` 설정 | `zlink_recv_part()`로 raw byte record를 받는다 |
+| `header + body` framing이 있는 application protocol을 packet 단위로 받을 때 | PACKET | `ZLINK_STREAM_RECV_MODE_PACKET` 설정 | `zlink_stream_recv_packet()`으로 header/body packet을 받는다 |
 
 RAW는 `zlink_recv_part()`만, PACKET은 `zlink_stream_recv_packet()`만 허용한다. 다른 recv
 family는 `ZLINK_RECV_NOT_SUPPORTED`, `errno == ENOTSUP`이다. Receive mode는

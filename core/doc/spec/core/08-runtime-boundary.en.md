@@ -84,7 +84,10 @@ on the single Application connection. For ROUTER-ROUTER, it carries the state on
 also progresses terminal replies and error replies, hereafter the completion lane). The
 runtime consumes both types of frame internally. [Auto HWM](systems/06-auto-hwm.en.md) owns
 the contract that excludes the ROUTER-ROUTER completion lane from
-[HWM](glossary.en.md#hwm) admission and the Auto HWM budget. The public surface for this
+[HWM](glossary.en.md#hwm) admission and the
+[Auto HWM budget](glossary.en.md#auto-hwm-budget) (the byte total Core computes from memory
+inputs and uses as the basis for dividing HWM among application queues). The public surface
+for this
 state consists of
 `zlink_socket_set_receive_flow_state()` for configuration, three receive-flow monitor
 events for observation, and the receive-flow fields of the monitor status snapshot. There
@@ -307,3 +310,7 @@ of public APIs. Each item maps to one check.
 - Framework runtimes use only the public Core raw surface.
 - Core public APIs and implementation contain no ChannelName, service dispatch, Spot,
   Actor, transfer, or maintenance semantics.
+
+<!-- zlink-nav:start -->
+[Core Spec Index](README.en.md) | [Previous: Utilities](07-utilities.en.md) | [Next: Socket Overview](socket/README.en.md)
+<!-- zlink-nav:end -->

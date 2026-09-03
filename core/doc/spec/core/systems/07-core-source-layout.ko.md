@@ -59,9 +59,10 @@ session·pipe·message runtime을 구현한다.
 runtime core의 공통 connection·pipe 메커니즘을 사용한다. Engine과 transport는 socket
 type의 application 의미를 알지 못한다. 하위 계층은 상위 계층 header를 include하지 않는다.
 
-Core source에는 MeshName, ChannelName, application mailbox, Spot, Actor, Location Store와
-service lifecycle 상태를 두지 않는다. Framework 편의를 위한 별도 native seam도 추가하지
-않는다.
+MeshName, ChannelName, application mailbox, Spot, Actor, Location Store와 service lifecycle
+상태는 Core 위에서 application service를 제공하는 상위 계층인 Framework가 소유하는 개념이다
+([POSD module 구조](08-posd-module-structure.ko.md) §3). Core source에는 이 개념들을 두지
+않는다. Framework 편의를 위한 별도 native seam도 추가하지 않는다.
 
 ## 4. Public include 규칙
 

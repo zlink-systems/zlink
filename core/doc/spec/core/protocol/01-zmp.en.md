@@ -133,7 +133,9 @@ does not affect ZMP frame ordering.
 On a DEALER or ROUTER connection, both sides first send only HELLO, verify the peer socket type in
 HELLO, determine the lane count in [§4.1](#41-request-reply-lane), and then send READY. The engine
 holds READY while the active socket owner determines the count. Endpoint cancellation or expiry of
-`HANDSHAKE_IVL` cancels both the held READY and optional creation of the Completion connection. The
+`HANDSHAKE_IVL` cancels both the held READY and optional creation of the [Completion
+connection](../glossary.en.md#completion-progress-lane) — the second physical connection of a
+ROUTER-ROUTER pair, which carries replies and receive-flow control instead of application data. The
 passive side publishes local connection readiness only after its READY transport write completes
 successfully and socket lane-set admission and Application scheduler attachment finish. A failed
 READY write fails the handshake without publishing readiness.
@@ -239,7 +241,8 @@ Application pipe is ready. A dynamic change also applies the new absolute value,
 create another command. After reconnect, the new Application pipe re-advertises the current
 configured value when it becomes ready.
 
-A network `WEIGHT` command may bypass application HWM and remote PAUSE. It does not bypass the
+A network `WEIGHT` command may bypass application [HWM](../glossary.en.md#hwm) — the byte limit
+that a queue applies to admission — and remote PAUSE. It does not bypass the
 logical-ready hold or the atomic boundary of an Application multipart. While an Application multipart
 is open, the sender retains only the latest weight as fixed `uint32` state. After FINAL commits the
 multipart, or after rollback removes it, the sender appends and publishes that latest command only
@@ -449,24 +452,25 @@ payloadless terminal results enter the same tagged queue.
 
 ### Peer-weight control
 
-The exact receiving Application pipe owns the latest absolute remote weight. Scheduler mutation and
+The specific Application pipe that received the command — not another pipe to the same peer —
+owns the latest absolute remote weight. Scheduler mutation and
 the `PEER_WEIGHT_CHANGED` monitor event occur only on its owner thread; no pair-table pending slot
 owns the value.
 
 Delivery proceeds in this order.
 
 1. A network session decodes a ZMP `WEIGHT` command, or an inproc sender passes a typed `uint32`
-   weight, and targets the peer's exact Application pipe owner.
+   weight, and targets that Application pipe's owner.
 2. The owner command retains that pipe and captures the physical connection ID for which the value
    was received.
-3. Command processing verifies the exact pipe's active lifetime, Application lane, and current
+3. Command processing verifies that pipe's active lifetime, Application lane, and current
    match with the captured connection ID before recording the value on that pipe.
 4. When the same pipe becomes ready and is attached as a selectable route, the scheduler reads and
    applies its recorded value.
 5. An actual applied change emits `PEER_WEIGHT_CHANGED`. The event `value` is the new weight, its
    lane is Application, and its `connection_id` identifies the pipe's physical connection.
 
-Termination or a connection-ID mismatch discards only that exact pipe's stale command. A pipe that
+Termination or a connection-ID mismatch discards only that pipe's stale command. A pipe that
 remains as a duplicate standby retains its own latest value, so it applies if that same pipe is
 selected later. This guarantee does not make the broader claim that every standby or replacement
 route discards previously recorded state.

@@ -122,8 +122,9 @@ run" must appear in the report and does not count as green.
 
 ### 5.2 Release comparison gate
 
-The C perf comparison against the previous Core release (plan Phase 5.2,
-`bindings/c/perf/perf_regression_gate.py`) is judged in two stages.
+The C perf comparison against the previous Core release is performed by
+`bindings/c/perf/perf_regression_gate.py` and judged in two stages. Release procedures cite this
+gate; this section owns the criteria.
 
 1. The 5% per cell (pattern, transport, size, metric) is the measurement tolerance:
    throughput and bandwidth `>= 0.95`, latency `<= 1.05`.

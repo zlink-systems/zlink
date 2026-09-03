@@ -148,13 +148,19 @@ ZLINK_EXPORT zlink_submit_result_t zlink_publish_part (
 
 When `topic_id_ == NULL`, the first message frame carries the topic according to the wire-prefix convention. Otherwise, `topic_id_` must
 be a NUL-terminated byte string with no embedded NUL. Every byte before the terminating NUL is the topic, and Core prepends these bytes as
-the topic frame. There is no separate topic-specific maximum length; topic bytes count toward the message and storage size limits.
+the topic frame.
+
+There is no separate topic-specific maximum length; topic bytes count toward the message and storage size limits.
 Exceeding the size limit returns `ZLINK_SUBMIT_INVALID_ARGUMENT` with `EMSGSIZE`, while failure to allocate topic-frame storage returns
-`ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM`. A multipart message started with `ZLINK_PART_MORE` continues on the same thread with the same
+`ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM`.
+
+A multipart message started with `ZLINK_PART_MORE` continues on the same thread with the same
 topic and flags through `ZLINK_PART_FINAL`.
 
 This function consumes the content of `part_` on both success and failure. If the same content may be needed again, copy it before the
-call, and initialize a consumed `zlink_msg_t` before reuse. Pass `ZLINK_DONTWAIT` in `flags_` for non-blocking publish; a call that cannot
+call, and initialize a consumed `zlink_msg_t` before reuse.
+
+Pass `ZLINK_DONTWAIT` in `flags_` for non-blocking publish; a call that cannot
 proceed immediately returns `ZLINK_SUBMIT_BACKPRESSURED`.
 
 Core stages successful intermediate parts as one publish record until `ZLINK_PART_FINAL` succeeds. If an intermediate or final submit in
@@ -186,8 +192,12 @@ ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
 Receives the next subscription event in recv mode. On success, `source_rid_out_` is an optional output that may be NULL. When it is not
 NULL, `*source_rid_out_` is set to the library-owned routing ID pointer for the subscribing peer. The pointer remains valid until the next
 successful `zlink_xpub_recv_part` call on any XPUB on the same thread. `*subscribed_out_` is 1 for subscribe or 0 for unsubscribe, and
-`topic_id_buf_` / `*topic_id_len_out_` receive the topic bytes (binary-safe). This storage is shared per calling thread rather than per
-socket, so copy the routing ID immediately if its value must be retained across subsequent calls. The caller supplies the buffer size via
+`topic_id_buf_` / `*topic_id_len_out_` receive the topic bytes (binary-safe).
+
+This storage is shared per calling thread rather than per
+socket, so copy the routing ID immediately if its value must be retained across subsequent calls.
+
+The caller supplies the buffer size via
 `topic_id_capacity_`. If the topic exceeds the capacity, the function writes the required topic-byte length to `*topic_id_len_out_` and
 fails with `errno = EMSGSIZE`. The subscription event has already been dequeued in this case and cannot be received again with a larger
 buffer.

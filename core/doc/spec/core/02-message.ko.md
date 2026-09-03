@@ -148,9 +148,15 @@ callback 타입이다. message data buffer가 더 이상 필요하지 않을 때
 ## 6. 함수
 
 모든 `zlink_msg_*` 함수에 공통인 입력 규칙: handle이 `NULL`이거나 message가 유효하지
-않으면(미초기화·이미 close) `errno == EFAULT`를 설정하고, `zlink_config_result_t`를
-반환하는 함수는 `ZLINK_CONFIG_INVALID_HANDLE`을, `zlink_msg_data`는 `NULL`을,
-`zlink_msg_size`는 `0`을, `zlink_msg_refcnt`는 `-1`을 반환한다.
+않으면(미초기화·이미 close) `errno == EFAULT`를 설정한다. 이때 각 함수가 반환하는 값은
+다음과 같다.
+
+| 함수 | 반환값 |
+|---|---|
+| `zlink_config_result_t`를 반환하는 함수 | `ZLINK_CONFIG_INVALID_HANDLE` |
+| `zlink_msg_data` | `NULL` |
+| `zlink_msg_size` | `0` |
+| `zlink_msg_refcnt` | `-1` |
 
 ### zlink_msg_init
 

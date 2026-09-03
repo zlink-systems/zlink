@@ -56,7 +56,7 @@ SUB의 수신 queue가 유지할 byte 상한([HWM](../glossary.ko.md#hwm))은 ap
 정하지 않으면 context의 [Auto HWM](../glossary.ko.md#auto-hwm-budget) 정책이 자동으로
 계산한다.
 
-SUB는 context auto HWM 정책에서 `recv_ingress` policy class로 분류된다. 활성
+SUB는 context auto HWM 정책에서 `recv_ingress` 역할로 분류된다. 활성
 auto-HWM profile은 Core memory budget 비율과 역할별 byte 경계를 선택하고, Core는
 그 budget을 고유 physical [directional queue](../glossary.ko.md#directional-queue)에
 분배한다. 기본 profile은 `balanced`다. 사용자가 `RCVHWM`을 직접 설정하면 그
@@ -266,6 +266,9 @@ handle 타입이 구독 조회를 지원하지 않으면 `ENOTSUP`.
 **구독 목록 조회**
 - 읽기 전용 `ZLINK_SUB_OPT_TOPICS_COUNT`를 `zlink_get_sub_option`으로 읽으면 구독된 topic 수가 `int`로 반환된다.
 - `zlink_subscription_at`의 0-기반 `index_`는 등록 순서가 아니라 filter byte 열로 정렬한 snapshot 순서를 따른다.
+  이 snapshot은 호출마다 새로 만들며 `ZLINK_SUB_OPT_TOPICS_COUNT` 조회와 원자적으로 묶이지 않는다. 두 호출 사이에
+  subscription이 바뀌면 같은 `index_`가 다른 filter를 가리키거나 `ENOENT`가 될 수 있으므로, 목록을 읽는 동안에는
+  caller가 subscription 변경을 직렬화한다.
 - 성공 시 `filter_out_`에는 filter byte만 기록되고 종료 NUL은 기록되지 않는다. `*filter_len_inout_`은 그 byte 길이며 `filter_out_`은 C 문자열이 아니다.
 - `is_pattern_out_`은 NULL을 허용하는 선택 output이다. 제공하면 모든 raw 구독이 byte-prefix filter이므로 `0`이 기록된다.
 - buffer가 작으면 필요한 길이를 `*filter_len_inout_`에 기록하고 `ZLINK_CONFIG_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. `filter_out_`에 부분 데이터를 쓰지 않고 `*is_pattern_out_`도 바꾸지 않으며, 같은 `index_`를 충분한 buffer로 다시 조회할 수 있다.

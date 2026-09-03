@@ -156,8 +156,8 @@ DEALER의 `ZLINK_POLLIN`은 DATA record를 수신할 수 있음을 뜻한다. Or
 
 DEALER 또는 ROUTER peer와 연결된 DEALER는 자신에게 보내는 peer에게 전송을 멈추고
 다시 시작하라고 요청할 수 있다. `zlink_socket_set_receive_flow_state()`는 socket 전체에
-적용되는 상태 하나를 저장하고 각 ready count `1` Application connection의 Core control 경로로
-보낸다. 함수
+적용되는 상태 하나를 저장한다. DEALER의 transport pair는 count `1`이므로, Core는 ready 상태인
+peer마다 그 Application connection의 control 경로로 이 상태를 보낸다. 함수
 선언은 [Socket 공통](README.ko.md)이, 결과 표는 [Errors](../03-errors.ko.md)가 소유한다.
 
 이 상태는 counter가 아니라 절대값이다. `ZLINK_RECEIVE_FLOW_PAUSED`를 두 번 설정해도 pause는
@@ -251,8 +251,8 @@ DEALER와 ROUTER는 자기 값을 독립적으로 알리므로 각 방향은 상
    같은 값을 반복 설정하면 event를 추가로 만들지 않는다.
 4. Reconnect 뒤에는 현재 설정값을 새 connection에 적용한다.
 
-Network wire, inproc 전달, CONTROL 크기 경계, multipart defer와 exact-pipe lifetime·stale 전달
-소유권은 [ZMP request-reply lane](../protocol/01-zmp.ko.md#41-request-reply-lane),
+Network wire, inproc 전달, CONTROL 크기 경계, multipart defer와 선택한 그 pipe의 lifetime·stale
+전달 소유권은 [ZMP request-reply lane](../protocol/01-zmp.ko.md#41-request-reply-lane),
 [decode](../protocol/01-zmp.ko.md#7-decode-유효성-검사),
 [peer-weight owner](../protocol/01-zmp.ko.md#peer-weight-control) 계약이 정의한다. 어느 transport
 경로도 public receive나 socket-local completion queue에 weight record를 만들지 않는다.

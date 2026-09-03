@@ -167,8 +167,9 @@ under `ZLINK_POLLIN`.
 ## 6. Receive flow state
 
 A DEALER connected to a DEALER or ROUTER peer can ask peers that send to it to stop and resume
-transmission. `zlink_socket_set_receive_flow_state()` stores one socket-wide state and sends it over
-the Core control path of every ready count `1` Application connection. [Socket Common](README.en.md)
+transmission. `zlink_socket_set_receive_flow_state()` stores one socket-wide state. Because a DEALER's
+transport pair has count `1`, Core sends that state, for every ready peer, over the control path of
+that peer's Application connection. [Socket Common](README.en.md)
 owns the function declaration, and [Errors](../03-errors.en.md) owns the result table.
 
 This state is an absolute value, not a counter. Setting `ZLINK_RECEIVE_FLOW_PAUSED` twice represents
@@ -268,8 +269,8 @@ The public weight result follows this order.
    connection ID. Repeating the same value emits no additional event.
 4. Reconnect applies the current configured value to the new connection.
 
-The network wire, inproc delivery, CONTROL size boundary, multipart deferral, and exact-pipe
-lifetime and stale-delivery ownership are defined by the
+The network wire, inproc delivery, CONTROL size boundary, multipart deferral, and the lifetime and
+stale-delivery ownership of that selected pipe are defined by the
 [ZMP request-reply lane](../protocol/01-zmp.en.md#41-request-reply-lane),
 [decode](../protocol/01-zmp.en.md#7-decode-validation), and
 [peer-weight owner](../protocol/01-zmp.en.md#peer-weight-control) contracts. Neither transport path

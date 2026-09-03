@@ -48,7 +48,7 @@ endpoints observe the same direction.
 
 ### generation
 
-A version number that distinguishes a recreated queue in the same direction from its predecessor.
+A version number that distinguishes a recreated queue in the same direction, or a recreated transport pair, from its predecessor. It increases on every reconnect, and REPLY and FLOWSTATE frames of an earlier generation are discarded in the new one.
 
 ### effective cap
 

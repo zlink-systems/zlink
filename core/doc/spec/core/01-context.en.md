@@ -119,12 +119,15 @@ typedef enum zlink_ctx_option_t
 ```c
 typedef enum zlink_auto_hwm_profile_t
 {
-    ZLINK_AUTO_HWM_PROFILE_COMPACT = 0,
-    ZLINK_AUTO_HWM_PROFILE_LOW_LATENCY = 1,
-    ZLINK_AUTO_HWM_PROFILE_BALANCED = 2,
-    ZLINK_AUTO_HWM_PROFILE_THROUGHPUT = 3
+    ZLINK_AUTO_HWM_PROFILE_COMPACT = 0,      // Smallest memory share — use when memory is tight
+    ZLINK_AUTO_HWM_PROFILE_LOW_LATENCY = 1,  // Keeps queues short to reduce latency
+    ZLINK_AUTO_HWM_PROFILE_BALANCED = 2,     // Default. Trades off memory against throughput
+    ZLINK_AUTO_HWM_PROFILE_THROUGHPUT = 3    // Largest memory share — use for high-volume traffic
 } zlink_auto_hwm_profile_t;
 ```
+
+The exact memory share, fixed cap, and per-role bounds of each profile are
+owned by [Auto HWM §2](systems/06-auto-hwm.en.md#2-auto-hwm-budget-calculation).
 
 > **Note:** `ZLINK_SOCKET_LIMIT` and `ZLINK_THREAD_PRIORITY` share the enum
 > value `3`. In the current public C ABI the option lookup resolves value `3`

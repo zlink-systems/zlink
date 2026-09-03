@@ -79,9 +79,9 @@ event carries the following values.
 
 | Event | `value` | `flags` | Other fields |
 |---|---|---|---|
-| `ZLINK_EVENT_SEND_FLOW_PAUSED` | flow epoch of the applied state | none | `routing_id`, `connection_id`, and Application lane of the paused peer |
+| `ZLINK_EVENT_SEND_FLOW_PAUSED` | flow epoch of the applied state | none | `routing_id`, `connection_id`, and Application `transport_lane` of the paused peer |
 | `ZLINK_EVENT_SEND_FLOW_RESUMED` | flow epoch of the applied state | `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` if clearing the remote pause makes the pipe actually writable | same as PAUSED |
-| `ZLINK_EVENT_FLOW_STATE_STALE` | received flow epoch | `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` | `routing_id`, `connection_id`, and Application lane of the peer |
+| `ZLINK_EVENT_FLOW_STATE_STALE` | received flow epoch | `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` | `routing_id`, `connection_id`, and Application `transport_lane` of the peer |
 
 `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` is absent if another cause, such
 as byte [HWM](glossary.en.md#hwm), transport wait, or termination, still blocks
@@ -117,7 +117,7 @@ event mask specified when opening a monitor. Each item maps to one unit test.
 
 **Event fields and flags**
 
-- The `value` of a PAUSED or RESUMED event is the flow epoch of the applied state, and the event contains the paused peer's `routing_id`, `connection_id`, and Application lane.
+- The `value` of a PAUSED or RESUMED event is the flow epoch of the applied state, and the event contains the paused peer's `routing_id`, `connection_id`, and Application `transport_lane`.
 - Receive-flow events in both topologies report the `connection_id` and Application `transport_lane`
   of the current Application pipe to which the state was applied. Even when a flow-state frame arrives
   on a ROUTER-ROUTER Completion connection, the event lane does not change to Completion.

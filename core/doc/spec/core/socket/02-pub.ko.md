@@ -32,6 +32,7 @@ PUB는 발행 전용 [socket](../glossary.ko.md#socket)이다. message 앞에 �
 | 구독 이벤트를 직접 다루는 publisher | [XPUB](04-xpub.ko.md) |
 | Auto HWM budget 계산과 분배 | [Auto HWM](../systems/06-auto-hwm.ko.md) |
 | submit result와 errno 대응 | [Errors](../03-errors.ko.md#result와-errno-대응) |
+| `zlink_socket_set_receive_flow_state` 함수 선언과 monitor status snapshot의 flow 관련 field | [Socket 공통](README.ko.md), [Monitoring](../06-monitoring.ko.md) |
 
 ## 2. 전달 손실과 backpressure
 
@@ -105,11 +106,13 @@ profile은 Core memory budget 비율과 역할별 byte 경계를 선택하고, C
 
 ## 5. Receive flow state
 
-PUB은 receive-flow 대상 socket type이 아니다. `zlink_socket_set_receive_flow_state()`는 PUB socket에 대해
-`errno == ENOTSUP`과 함께 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고 아무것도 바꾸지
-않는다. 이 socket의 byte HWM, low water mark와 transport backpressure는 그대로
-유지된다. PUB socket의 monitor는 `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`를 설정하지
-않고 `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`,
+PUB은 receive-flow 대상 socket type이 아니다.
+[`zlink_socket_set_receive_flow_state()`](README.ko.md#zlink_socket_set_receive_flow_state)를
+PUB socket에 호출하면 `errno == ENOTSUP`과 함께 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고
+아무것도 바꾸지 않는다. 이 socket의 byte HWM, low water mark와 transport backpressure는
+그대로 유지된다. [Monitoring](../06-monitoring.ko.md)이 소유하는 PUB socket의 monitor
+status는 `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`를 설정하지 않고
+`ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`,
 `ZLINK_EVENT_FLOW_STATE_STALE`를 발생시키지 않는다.
 
 ## 6. Pub 옵션 (`zlink_pub_option_t`)

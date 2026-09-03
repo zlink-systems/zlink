@@ -602,3 +602,7 @@ and errno. Each item maps to one test.
 - [Auto HWM](systems/06-auto-hwm.en.md#5-implementation-and-contract-test-verification-requirements)
   owns verification of monitor-queue exclusion from Auto HWM planning and context budget
   snapshot aggregation.
+
+<!-- zlink-nav:start -->
+[Core Spec Index](README.en.md) | [Previous: Polling](05-polling.en.md) | [Next: Utilities](07-utilities.en.md)
+<!-- zlink-nav:end -->

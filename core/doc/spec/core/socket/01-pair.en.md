@@ -75,9 +75,9 @@ PAIR is not a socket type that supports receive flow.
 for a PAIR socket and changes nothing. The byte [HWM](../glossary.en.md#hwm) (the byte limit retained
 by a queue), low water mark, and transport [backpressure](../glossary.en.md#backpressure) (restriction
 on additional submissions by the sender) owned by [Socket Common](README.en.md) remain in effect. A
-PAIR socket's monitor does not set `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` and does not emit
-`ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, or
-`ZLINK_EVENT_FLOW_STATE_STALE`.
+PAIR socket's monitor does not report receive-flow state —
+[§5 ("Absence of receive flow state")](#5-implementation-and-contract-test-verification-requirements)
+lists the observable detail.
 
 ## 4. Functions
 
@@ -102,9 +102,9 @@ atomicity.
 This function consumes the content of `part_` on both success and failure. If the same content may be
 needed again, copy it before the call. Initialize a consumed `zlink_msg_t` before reusing it. Pass
 `ZLINK_SEND_FLAGS_NONE` or `ZLINK_SEND_FLAGS_DONTWAIT` in `flags_`. A `NONE FINAL` call snapshots
-`SNDTIMEO` on entry, waits through local queue admission, and finishes with ID `0` and no
-completion. A `DONTWAIT FINAL` call has ID `0` if admission is immediate; if Core retains it as
-pending, it has a nonzero ID and produces one SEND completion. [Socket Common](README.en.md#part-send-and-pending-admission)
+`SNDTIMEO` on entry and waits through local queue admission; a `DONTWAIT FINAL` call does not wait.
+[§5 ("Part flow")](#5-implementation-and-contract-test-verification-requirements) states the ID and
+completion each path observably returns. [Socket Common](README.en.md#part-send-and-pending-admission)
 owns the exact optional ID-output and context rules.
 
 **Returns:** `ZLINK_SUBMIT_OK` on success; otherwise a `zlink_submit_result_t` value that identifies
@@ -171,7 +171,9 @@ and errno). Each item maps to one test.
 **Part flow**
 - When a single-part message is sent with `ZLINK_PART_FINAL`, the receiver observes `ZLINK_PART_FINAL` in `*has_more_out_`.
 - For a multipart message, the receiver observes `ZLINK_PART_MORE` on every part before the last and `ZLINK_PART_FINAL` on the last part.
-- If `DONTWAIT FINAL` is admitted immediately, it returns ID `0` and no completion. If Core retains it as pending, exactly one SEND completion is returned for its nonzero ID. If the pending or completion bound prevents retention, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and ID `0`.
+- If `DONTWAIT FINAL` is admitted immediately, it returns ID `0` and no completion.
+- If Core retains `DONTWAIT FINAL` as pending, exactly one SEND completion is returned for its nonzero ID.
+- If the pending or completion bound prevents Core from retaining `DONTWAIT FINAL`, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and ID `0`.
 - A `ZLINK_RECV_FLAGS_DONTWAIT` receive with no available data returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
 
 **Record atomicity**

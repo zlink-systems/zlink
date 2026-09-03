@@ -57,7 +57,7 @@ Unless the application sets it directly, the context [Auto HWM budget](../glossa
 policy automatically calculates the byte limit ([HWM](../glossary.en.md#hwm)) retained by the SUB
 receive queue.
 
-SUB is classified as the `recv_ingress` policy class by the context Auto HWM policy. The active
+SUB is classified as the `recv_ingress` role by the context Auto HWM policy. The active
 Auto HWM profile selects the Core memory-budget ratio and the per-role byte boundaries, and Core
 distributes that budget among unique physical [directional queues](../glossary.en.md#directional-queue).
 The default profile is `balanced`. If the user sets `RCVHWM` directly, that application direction is
@@ -270,7 +270,10 @@ and get, `zlink_subscribe_part` results, return values, and errno. Each item map
 - Reading the read-only `ZLINK_SUB_OPT_TOPICS_COUNT` through `zlink_get_sub_option` returns the
   number of subscribed topics as an `int`.
 - The zero-based `index_` for `zlink_subscription_at` follows snapshot order sorted by filter bytes,
-  not registration order.
+  not registration order. Each call takes a fresh snapshot, and that snapshot is not atomic with a
+  `ZLINK_SUB_OPT_TOPICS_COUNT` query: if subscriptions change between the two calls, the same `index_`
+  may name a different filter or fail with `ENOENT`, so the caller serializes subscription changes
+  while it reads the list.
 - On success, `filter_out_` contains only the filter bytes and no terminating NUL.
   `*filter_len_inout_` is that byte length, and `filter_out_` is not a C string.
 - `is_pattern_out_` is an optional output and may be NULL. When provided, it receives `0` because

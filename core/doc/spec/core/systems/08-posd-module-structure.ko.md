@@ -38,11 +38,11 @@ Core 소스는 다음 다섯 계층으로 나뉜다. 각 계층은 자기 행의
 
 | 계층 | 책임 |
 |---|---|
-| Public C API | argument, handle, ownership과 result mapping |
-| Socket semantics | socket type별 routing, multipart와 request correlation |
-| Runtime core | context, session, pipe, mailbox command와 lifecycle |
-| Engine | ZMP·RAW framing과 handshake |
-| Transport | TCP, WebSocket, IPC, inproc과 TLS I/O |
+| Public C API | argument를 검증하고, handle을 다루고, ownership을 표현하고, 내부 결과를 C API result로 변환한다 |
+| Socket semantics | socket type별로 routing을 정하고, multipart를 처리하고, request correlation을 관리한다 |
+| Runtime core | context, session, pipe와 mailbox command를 다루고 lifecycle을 관리한다 |
+| Engine | ZMP·RAW framing과 handshake를 수행한다 |
+| Transport | TCP, WebSocket, IPC, inproc과 TLS로 I/O를 수행한다 |
 
 경계는 양방향으로 지킨다. Public API가 transport type이나 protocol parser를 직접 분기하지
 않는다. Runtime core는 socket type별 정책을 알지 않으며, engine은 application payload
