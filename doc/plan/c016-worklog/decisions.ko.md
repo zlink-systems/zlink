@@ -250,3 +250,94 @@ Core 2차 커밋은 cpp 15/15 확인 후 테스트 수정과 함께 push.
 ## D-053 (2026-09-03 13:55) Core 2차 커밋·push — B 시작 신호
 f3be895b3f core 2차(51파일, wake 3종·common send·REQREP·ws·ROUTER FINAL 재시도 fixup) + 3154ff90dc cpp 테스트 결정화.
 감독관 최종 gate: ctest 134/134, cpp 15/15+7/7, mirror 12/12, diff-check. perf 4-size 판정은 B(plan-b §2). A는 Phase 7 smoke 착수.
+
+## D-054 (2026-09-03 18:15, 이 머신 A 재개) 프로세스 정리 + Phase 7 완료
+세션 3회 크래시(orca+WSL)로 detach job·/tmp 소실. 되살리던 원천=다른 Claude 세션 → --resume 세션(A)만
+남기고 전부 종료(사용자 지시). dirty 26파일(중단 job WIP) 버리고 재시작(사용자 지시). main HEAD 1ac16a22b2
+gate 재확인 134/134. 분담 확인(사용자): B는 별도 머신 계속 → A는 A레인만(sweep2/posddd/wake 미개입).
+Phase 7 smoke 재실행 job(sol): 8언어 560 cell 실행 pass 553/unsupported 7(node inproc worker-context)/unexpected 0.
+Rust hang(submit_sync 후 옛 POLLCOMPLETION 대기 잔재) 이식 수정. Rust single 독립 재검증 PASS. 커밋 cc81390c9b(perf 28파일).
+다음: Phase 9 준비(D-051 절차: build-wsl.sh --sync-versions → verify → 태그는 B sweep2 PASS+리팩토링 merge 뒤).
+
+## D-055 (2026-09-03 18:30, 사용자 지적) 버전 bump·framework 커밋 push 무방
+B는 Core 성능(sweep2·posddd·wake)만 → Phase 11(framework 코드)과 파일 범위 무충돌, 동시 진행 OK.
+버전 0.16.0 bump가 libzlink.so 이름을 바꿔도 perf 수치는 .so 이름과 무관(B gate=비율)하고 B는
+branch 작업이라 영향 없음. 따라서 **버전 bump + framework 전환 커밋은 push 무방, 태그(core/v0.16.0)만
+D-050대로 B 완료 뒤로 보류.** Phase 11 job 완료 시 검증 후 그대로 커밋·push(태그 제외).
+
+## D-056 (2026-09-03 19:xx) Phase 11 node 결과 — BLOCKER 2건, 커밋 보류
+node PARTIAL/BLOCKED. 통과: STREAM packet pull·중복 assembler(343줄) 제거·ReplyToken·stream-session 51/51·
+contract 40/40·ClientServer reply. BLOCKER: (1) 공개 0.16.0 Node binding Poller가 MonitorSocket을 admit 안 함
+→ D-028 monitor poller readiness 정확구현 불가, 기존 recv/pump/liveness 루프서 recv(DontWait) drain으로 우회
+(추가 timer/lock 없음). (2) native mesh 통합에서 반복 Core assertion(backend-contract·RouteMesh 2/2 재현).
+판정 보류: (2)는 Core assertion→A 범위 밖·언어 공통 가능성 → cpp/dotnet/java 완료 후 홀리스틱 조사.
+node 커밋은 mesh 판정까지 보류. 병렬 job 교차 오염 없음(각자 자기 언어 dir만).
+
+## D-057 (2026-09-03 19:xx) Core 버그 특정 — physical queue 회계 underflow
+node mesh가 재현한 Core assertion = ctx_physical_queue_registry.cpp:64 subtract_exact `current >= amount_`.
+release_committed_frame(590)·rollback_provisional(571)·completion_pending(595) 경로. RouteMesh(R/R) relocation
+churn에서만, Core 134/134는 통과. 원인 후보: classify_pipepair_queues(395)가 첫 분류 시 provisional/committed=0
+가정(28-33행 assert) — generation advance/reconnect 또는 lane 재분류로 잔여 committed가 남거나, 단일 lane
+D/R 전환으로 REPLY byte lane 귀속이 commit/release 간 어긋남. 사용자 승인: **Core 버그면 A가 수정·push→B merge**
+(core 수정 금지 해제, 이 건 한정). 계획: framework 빌드로 gdb backtrace 확보 → sol ultra Core-fix job(repro+스택+
+회계 균형 분석) → 134/134 + mesh repro green → push. 그 후 framework 4언어 mesh-blocked 재실행.
+
+## D-058 (2026-09-03 19:xx) Phase 11 4언어 결과 종합 — 공통 2이슈 판정
+node·dotnet·java 완료(cpp 진행). 통과: 각 언어 framework 빌드+focused test(node 51+40+..., dotnet 57/57,
+java 122/22). STREAM packet pull·중복 assembler 제거·ReplyToken·callback 제거 전 언어 완료.
+공통 이슈 A(Core 버그): ctx_physical_queue_registry.cpp:64 subtract_exact exit 134, node·java mesh 재현
+확정. → Core 수정(사용자 승인, A push→B merge). 최우선. cpp backtrace 후 sol ultra.
+공통 이슈 B(바인딩 monitor-poller 갭): node·java Poller가 SocketMonitor 등록 미지원. 4 job 일관되게
+callback 제거+recv() drain 루프 우회(no timer/lock). **판정: 우회 수용**(pull·no-callback 목표 달성),
+바인딩 API 재개방 과함 → 후속 항목 기록, Phase 11 차단 안 함. spec은 poller+recv이나 recv-drain도 정신 부합.
+dotnet 잔여: BLOCKER1(ConfigureCoreHwm E2E 26)=known-broken 사전존재; BLOCKER2(ContractTests 4)=사전 drift
+재확인; BLOCKER3(ClientServer liveness errno91=EPROTOTYPE ROUTER→DEALER)=framework가 그 방향 typed request
+쓰면 안 됨(전환 후속); BLOCKER4(handover reply-route timeout)=D-030/D-046 gap1, Core fix 후 재확인.
+framework 4언어 커밋 보류 → Core A 수정·mesh 재실행 green 뒤. 병렬 job 교차오염 없음.
+
+## D-059 (2026-09-03 20:xx) Core mesh 회계 버그 수정·push (a339149dbb)
+근본원인 확정: R/R completion lane의 FLOWSTATE/WEIGHT peer-control frame이 append_pending_peer_controls_
+unlocked에서 _out_pipe->write로 직접 나가 commit_message 적립을 건너뛰는데, session dequeue는 모든
+non-delimiter frame을 release_committed_frame으로 차감 → committed underflow(subtract_exact:64). 단일-lane
+D/R Application은 registry accounting 없어 미재현(Core 134/134·cpp mesh vertical 통과 이유).
+수정: _registry_accounting일 때 control frame도 data와 동일 commit_message+publish 경로로(HWM은 completion
+planned_hwm=0이라 무영향). 계약·API·제어점 불변, 새 플래그 없음. 검증: Core 134/134, node backend-contract 54/54.
+**중대 함정(메모리 기록)**: 초기 "수정 안 먹음" 오판 3회 = node_modules prebuilds의 libzlink.so.0이
+심링크 아닌 옛 실파일이라 .so.0.16.0만 갱신하면 옛 .so.0 로드. .so.0/.so.0.16.0 둘 다 덮거나 정본
+sync 도구 사용. codex는 이 분석을 보안필터로 거부(EXIT:1) → Claude 직접 수정.
+후속: java/dotnet mesh-blocked 재검증(고친 lib) → framework 4언어 커밋 → dotnet liveness EPROTOTYPE·handover 판정.
+
+## D-060 (2026-09-03 20:5x) Phase 11 재검증 결과·판정 + version bump 커밋/push (e8045f4a02)
+고친 Core(a339149dbb)로 로컬 패키지 4종(nuget·maven·npm·cpp install) 재빌드 — 모두 동일 lib
+sha256 `43ddbc2f...`(6519848B), native version [0,16,0] 확인. **a=0 전 언어**: ctx_physical_queue_registry
+assertion 소멸(node backend-contract 54/54, cpp mesh vertical, dotnet focused 57/57 모두 green). lib-copy
+트랩 실측 해소.
+언어별 잔여:
+- **java**: :zlink-framework-core:test 1205/1207. 실패 2 = M6A monitor-edge gap(binding 0.16.0에 Poller
+  monitor overload/공개 monitor fd 부재 → recv-drain workaround). clean HEAD에도 존재. 알려진 gap, 회귀 아님.
+- **dotnet**: Phase11 focused 57/57. ClientServer 34/35 — liveness EPROTOTYPE(errno91). ContractTests 73/77
+  = 기존 Actors source-owner drift(1)+ZlinkStreamDiagnosticsLevel snapshot drift(3). ConfigureCoreHwm E2E=
+  known-broken(c).
+- **cpp**: framework-unit 37/40(M6A known-broken, M6B old-route-admission line390, M6C production relocation),
+  framework-contract 8/10(target CPP-CONTRACT-STREAM-001=D-004 stale 검사 갱신 대상, common E2E inventory 278 open).
+- **node**: full 1513/1556(43 fail). backend-contract 54/54. 실패 분포: fake monitor drain(7)+socket submit(2)+
+  monitor callback 기대(1)=삭제된 binding 표면 대상 test double, assertion drift(25), runtime timeout(4)+timer
+  miss(1)+sample-regression(5)=거동, browser env(2). **node 전환은 test 측 미완**(Phase11이 손댄 test 4개뿐,
+  ClientServer/object-routing/fanout/spot-manager 등 미전환 test가 옛 callback/monitor/submit API 기대).
+
+**판정(D)**:
+- **dotnet liveness EPROTOTYPE = framework 버그, Core 아님**. 근거 `03-errors.ko.md:552`: "ROUTER가 DEALER RID로
+  typed request → ZLINK_SUBMIT_NOT_ADMITTED+EPROTOTYPE"(스펙 금지). liveness probe가 typed Request(clientRid)
+  대신 plain send+correlate 써야. → framework 후속 수정.
+- **dotnet handover reply-route(err101=TIMED_OUT) = spec gap**. reply token=opaque capability인데 same-RID
+  handover(peer 재접속, 같은 logical RID) 후 captured token 생존 여부 미명시(physical connection 바인딩 vs
+  logical RID 바인딩). Claude 전용 스펙 확정 사항, [[fix-then-spec-gap-review]]로 분류. D-046 gap1 계열.
+- **cpp M6B/M6C = DIAGNOSE-ONLY**(canonical-multiattempt-trap: relocation/route-admission verify-only 실버그면
+  STOP·에스컬레이션). Phase11이 relocation production(raw_route_port·raw_mesh_node_owner) + M6B test 둘 다 수정 →
+  회귀 vs 기대변경 판별을 근본원인부터. blind fix 금지.
+
+**커밋**: version bump 단독 `e8045f4a02` push(0.15.1/0.15.2→0.16.0, 검증됨·독립·머신드롭 복구비용 큼). framework
+4언어 전환은 언어별 잔여 해소 후 커밋. reverify job 자체는 framework 소스 무수정(mtime 대조: node/package-lock.json
+1개 npm install 부산물만).
+**다음**: 병렬 codex — node test 전환+거동 root-cause, cpp M6B/M6C DIAGNOSE-ONLY. dotnet liveness fix + handover
+spec gap은 Claude. java monitor-gap는 accepted followup 문서화.
