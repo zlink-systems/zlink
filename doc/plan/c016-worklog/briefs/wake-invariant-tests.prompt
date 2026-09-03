@@ -1,0 +1,12 @@
+역할: zlink Core(/home/hep7/project/zlink, main) wake/activation 불변식 테스트 suite 작성자(sol). 스펙 core/doc/spec/core/05-polling.ko.md §3 "Readiness는 level-trigger이므로 wake도 level에 따른다 … lost wake는 계약 위반" 조항을 결정적 contract test로 고정한다. 0.16.0에서 실제로 발생한 wake 유실 4종을 각각 재현·검증하는 케이스가 포함돼야 한다(근거: c016/hotpath-phase2-summary.md, decisions.md D-036·D-039, 커밋 1344022a3e 및 후속 Core 커밋의 메시지).
+
+케이스(최소):
+1. monitor open → CONNECTION_READY → monitor close 직후 첫 메시지: 수신 측 `zlink_poll`/`zlink_poller_wait`가 timeout(예: 2000ms) 전에 POLLIN을 보고해야 함(count-1 DEALER→ROUTER inproc·tcp, count-2 ROUTER↔ROUTER inproc). 감독관 재현 c016/rr7.cpp 참조.
+2. HWM 거절 후 POLLOUT 회복: DONTWAIT send가 EAGAIN(HWM)으로 막힌 상태에서 peer가 drain하면 송신 측 poller가 timeout 전에 POLLOUT을 보고. 임시 async owner가 활성인 조건(예: transport pair 핸드셰이크 중 owner, 또는 monitor open 상태)과 비활성 조건 둘 다.
+3. HWM LWM 전이 경쟁: planned HWM shrink(8C→4C) 후 LWM(2C) 통과 시 blocked writer가 활성화 통지를 받음(ultra job이 test_router_multiple_dealers에 넣은 케이스가 있으면 그 executable에서 재사용, 없으면 신설).
+4. completion-owner quiesce vs 임시 owner 기동 직렬화: 공개 completion poller 등록/해제와 blocking request send가 교차할 때 reply completion이 timeout 전에 `POLLCOMPLETION`으로 관측됨.
+5. 일반 불변식: 각 socket 타입·transport(inproc·tcp·ipc)에서 "readiness 거짓→참 전이 후 대기 중 poller가 N ms 안에 깨어남"을 반복(예: 200회) 검증하는 스트레스 케이스 1개(플레이크 방지: 넉넉한 상한, 실패 시 어느 반복에서 몇 ms 걸렸는지 출력).
+
+절대 규칙: doc/**·core/src/** 수정 금지(테스트만: core/tests/integration/ 신규 파일 + core/tests/CMakeLists.txt 등록, 기존 ctest label 규칙 준수). framework/**·bindings/** 금지. scripts/local-package/** 금지. git 쓰기 금지. `ulimit -v 16777216`. 테스트는 결정적이어야 하며(sleep 기반 타이밍 추정 금지, 이벤트/monitor/poller로 동기화), 5회 반복 green 확인.
+
+Gate: `cmake --build core/build -j4`; 신규 executable 5회 반복 PASS; `ctest --test-dir core/build -j2` 전체 PASS. 완료 시 c016/wake-invariant-tests-summary.md(케이스별 검증 대상·파일:line·반복 결과), 진행은 wake-invariant-tests-progress.md.

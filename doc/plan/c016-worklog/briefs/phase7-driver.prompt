@@ -1,0 +1,10 @@
+역할: zlink(/home/hep7/project/zlink) binding perf smoke 드라이버 작성자. 저장소는 **읽기 전용**으로만 조사한다. 산출물은 /home/hep7/project/zlink-work/c016/phase7-smoke.sh 와 /home/hep7/project/zlink-work/c016/phase7-driver-summary.md 뿐. 저장소 안에 파일 생성·수정 금지, git 쓰기 금지, 빌드·perf 실행 금지(다른 job이 core/build 사용 중; `--help`·`bash -n`만 허용). scripts/local-package/** 실행 금지.
+
+목적: plan doc/plan/core-send-dontwait-completion-0.16.0-plan.ko.md "Phase 7 — Binding perf 전체 smoke"(901~988행)를 그대로 자동화. 사용자 판정(D-026): **smoke 전용** — 수치 판정 없음, unexpected skip/fail/hang 없음만 확인.
+
+요구:
+1. plan의 명령 블록(C, C++, .NET, Go, Java/Kotlin, Node, Python, Rust 각 single+multi, `--duration 1 --runs 1`, multi `--clients 1`, go/rust/python `--smoke`)을 언어별 함수로 옮긴다. 각 runner의 실제 `--help`를 읽어 옵션명이 plan과 다르면 runner 기준으로 맞추고 summary에 차이를 기록한다.
+2. plan 요구대로 각 runner가 출력하는 Core runtime absolute path·version·SHA-256(또는 runner가 내는 identity 정보)을 파싱해 결과에 기록한다. Node runner `--help`는 빌드를 유발할 수 있으므로 preflight 1회만.
+3. 언어별 expected cell 수(runner manifest/`--pattern ALL` 확장 × transports)를 계산하고, 실행 결과에서 pass / expected UNSUPPORTED(언어 manifest와 일치할 때만) / unexpected skip·fail·hang 을 분류한다. 각 runner 호출은 `timeout 1200`으로 감싸 hang을 실패로 기록한다.
+4. `--only c,cpp,...` 옵션, 언어별 재개(이미 PASS인 언어는 건너뜀), 결과는 /home/hep7/project/zlink-work/c016/phase7-results.md 에 언어별 표(runner | expected | pass | unsupported | unexpected | report 경로 | runtime identity)로 append, 로그는 phase7-smoke.log. 실패해도 다음 언어로 진행.
+5. 각 언어의 perf 결과 파일 위치·report 경로 판별 방법을 실제 runner 스크립트에서 확인해 summary에 file:line 근거로 기록. 미확정 사항은 summary의 QUESTIONS에.

@@ -1,0 +1,11 @@
+역할: zlink(/home/hep7/project/zlink, main) C++ binding 헤더 **주석 전용** 수정자. 코드·시그니처·enum 값은 절대 바꾸지 않는다.
+
+배경: Core는 DEALER-DEALER·DEALER-ROUTER가 Application connection 하나(count 1), ROUTER-ROUTER만 Application+Completion(count 2)을 쓰도록 바뀌었다(정식 스펙 core/doc/spec/core/socket/README.*, 06-dealer, 07-router, 04-events, 06-monitoring; Core public header 주석은 core/include/zlink/socket/api.h:179-199, core/include/zlink/eventing/api.h:159-177, core/include/zlink_enum.h:243-250 에 이미 socket type 기준으로 갱신됨 — 이 문구를 기준으로 삼는다). 다음 C++ projection 헤더 4곳에 "paired DEALER/ROUTER completion lane" 류의 낡은 설명이 남아 있다:
+- bindings/cpp/include/zlink/Contracts/Eventing/status.hpp:134-136
+- bindings/cpp/include/zlink/Contracts/Eventing/events.hpp:37-39
+- bindings/cpp/include/zlink/Contracts/Sockets/socket_options.hpp:38-42
+- bindings/cpp/include/zlink/Contracts/Sockets/socket_contracts.hpp:73-79
+
+작업: 위 4곳(및 같은 4파일 안에서 `rg -n -i 'completion lane|completion-lane|paired DEALER'`로 추가 발견되는 주석)을 Core 헤더 주석과 같은 의미로 고친다 — receive-flow는 socket type(DEALER/ROUTER)이 지원하며, 제어는 count-1 peer에서는 Application connection, count-2(ROUTER-ROUTER)에서는 Completion connection으로 흐르고 event는 영향받는 Application pipe를 기술한다. 다른 언어 binding(dotnet/java/node/python/go/rust)의 소스 주석에도 같은 낡은 문구가 있는지 `rg -n -i 'completion lane|completion-lane' bindings --glob '!**/include/zlink*' --glob '!**/build/**' --glob '!**/node_modules/**' --glob '!**/target/**' --glob '!**/bench/**' --glob '!**/doc/**'`로 조사해, **주석/docstring이면 같은 방식으로 고치고** 코드 문자열·테스트 fixture·API 이름이면 손대지 말고 요약에 보고.
+
+절대 규칙: 주석·docstring 외 어떤 토큰도 변경 금지. doc/**·core/**·framework/** 수정 금지. 빌드·테스트 금지(perf 측정 진행 중 — CPU 사용 금지). git 쓰기 금지. scripts/local-package/** 실행 금지. 완료 시 /home/hep7/project/zlink-work/c016/b2-cpp-comments-summary.md 에 변경 파일:line 목록과 미수정 보고 항목을 적고 `git diff --stat`·`git diff --check` 결과를 붙인다.

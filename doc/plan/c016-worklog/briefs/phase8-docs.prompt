@@ -1,0 +1,19 @@
+역할: zlink(/home/hep7/project/zlink, main) Core·binding 사용자 가이드/레퍼런스 갱신 작성자 (plan doc/plan/core-send-dontwait-completion-0.16.0-plan.ko.md Phase 8).
+
+입력(진실원천, 읽기만):
+- 수정 대상 인벤토리: /home/hep7/project/zlink-work/c016/phase8-inventory.md — 여기 나열된 파일·file:line·판정을 그대로 작업 목록으로 쓴다. 인벤토리에 없는 문서는 손대지 않는다(발견하면 요약에 보고만).
+- 정식 스펙: core/doc/spec/core/** (socket README, 06-dealer, 07-router, 08-stream, 05-polling, 04-events, 06-monitoring 등), 계약 draft doc/plan/core-socket-send-recv-completion-0.16.0-spec-draft.ko.md, lane 설계 doc/plan/dealer-router-single-lane-design.ko.md §3.2·§3.4.
+- 현행 public 표면: core/include/zlink/socket/api.h, core/include/zlink_enum.h, 각 binding의 contracts(인벤토리 §2 "Authoritative public-surface comparison"에 경로 있음).
+- 예제 코드 출처: bindings/c/samples/**, 각 binding의 samples·contract fixture·tests. 가이드 코드 예제는 여기서 실제 컴파일·실행되는 호출을 인용한다(새로 지어내지 않음).
+
+수정 허용 경로(이 외 절대 금지): core/doc/guide/**, core/doc/reference/**, core/README*, bindings/doc/guide/**, bindings/doc/reference/**, bindings/<lang>/README*(README.godoc.md·README.typedoc.md 포함). **금지**: core/doc/spec/**, doc/**, framework/**, 모든 소스 코드·헤더·테스트·샘플·perf. git 쓰기 금지. 빌드·테스트 실행 금지(core/build 다른 job 사용 중).
+
+작성 원칙:
+1. 인벤토리 A(제거 심볼) hit은 현행 API로 교체, B(의미 stale) hit은 pull-completion 모델·1-lane D/R 모델로 서술을 고친다. 문장은 짧고 사실만. "callback" "handler" "request_seq" "SEND_PENDING" "completion lane(DEALER-ROUTER 맥락)" 잔존 0을 목표로 하되, 스펙이 아직 completion lane을 쓰는 R/R 맥락은 유지.
+2. plan Phase 8의 9개 사용 판단(인벤토리 §3 표)을 각각 한 곳의 Core 가이드에 정본으로 쓰고, 각 binding 가이드는 언어 표현(Task/Future/Promise/awaitable, ReplyToken 타입명)만 바꿔 같은 규칙을 진술한다. 9번(public PollCompletion 소유 시 wait() loop 지속)은 인벤토리 BLOCKER 2대로 **각 binding 소스에서 실제 동작을 확인한 뒤** 서술하고, 확인 못 한 언어는 쓰지 말고 요약에 보고.
+3. ko/en 동시 수정, 같은 내용·같은 구조. `03-5-stream` 쌍처럼 parity가 깨진 파일은 양쪽을 같은 모델로 다시 맞춘다.
+4. 링크: 각 가이드의 스펙·interface index·검증 class 링크는 실제 존재하는 경로만. 상대경로 깨짐 0.
+5. `git diff --check` 통과(공백 오류 0). 파일 끝 개행 유지. 문서의 기존 heading 구조·앵커는 유지(외부 링크 보호).
+6. 인벤토리 BLOCKER 1(zlink_enum.h 주석)은 코드 소유이므로 무시하고 문서는 socket type 기준으로 쓴다.
+
+완료 시 /home/hep7/project/zlink-work/c016/phase8-docs-summary.md 에: 수정 파일 목록(쌍 단위), 9개 판단 항목별 정본 위치, 잔존 grep 결과(위 stale 토큰 재검색 명령과 hit 수), 확인 못 해 보류한 항목, 발견한 인벤토리 외 stale 문서. 진행 중 파일 그룹 단위로 /home/hep7/project/zlink-work/c016/phase8-docs-progress.md 에 한 줄씩 append.

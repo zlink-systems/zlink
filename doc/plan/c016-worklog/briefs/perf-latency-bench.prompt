@@ -1,0 +1,10 @@
+역할: zlink C perf runner(/home/hep7/project/zlink/bindings/c/perf) latency 측정 결함 수정자. 범위는 bindings/c/perf/** 뿐(core/**·doc/**·framework/**·다른 binding 수정 금지). git 쓰기 금지. scripts/local-package/** 실행 금지. `ulimit -v 16777216` 아래에서만 실행. 다른 perf 측정과 겹치지 않도록 실행 전 `ps -eo comm | grep -E '^(perf_|python3)$'`가 비어 있을 때만 벤치를 돌리고, 검증은 `--duration 1 --runs 1`의 짧은 실행으로만 한다(절대값은 다른 job이 잰다).
+
+문제(감독관 실증): single one-way 벤치(PAIR·PUBSUB·DEALER_DEALER·DEALER_ROUTER·ROUTER_ROUTER)의 latency는 송신 시각 헤더→수신 시각 차이인데, 송신 루프에 pacing이 없고(`bindings/c/perf/single/common/perf_single_one_way.hpp` `send_active_samples`: 가능한 한 빨리 송신, EAGAIN 시 1ms sleep) 송신이 수신보다 빠르면 HWM 앞 queue 깊이가 그대로 latency로 잡힌다. 실측: PAIR inproc baseline 0.15.1 throughput 919k·latency 0.20ms vs candidate 1,011k·0.72ms — 더 빠른 송신이 latency 3.5배로 보임. 즉 one-way cell의 latency는 "queue 깊이"를 재고 있어 per-message 지연 비교에 쓸 수 없다.
+
+작업:
+1. one-way cell의 latency를 **비포화 조건**에서 재도록 고친다. 기존 측정(포화 throughput 구간)은 유지하고, 별도 짧은 latency 구간을 추가: 송신을 수신 확인에 맞춰 pacing(예: in-flight 상한 1~N, 또는 고정 rate로 throughput의 50% 이하)한 상태에서 송신→수신 시각 차이의 mean/p95/p99를 잰다. 어느 방식을 택하든 baseline worktree(/home/hep7/project/zlink-perf-core-0.15.1)의 runner에도 **동일 소스 변경을 그대로 적용**할 수 있어야 한다(두 runner의 측정 방식이 같아야 비교 가능 — plan 5.2 요구). 변경은 perf source 파일 단위로 baseline worktree에 복사 가능하게 작성하고, 요약에 복사 절차(파일 목록·cp 명령)를 적는다.
+2. REQREP cell의 latency는 왕복이라 그대로 둔다(변경 금지).
+3. report 포맷·`perf_regression_gate.py`의 cell key는 유지한다(latency 3종 컬럼 그대로, 값만 비포화 측정으로). gate 도구·unit test(`bindings/c/perf/tests/test_perf_regression_gate.py`)가 계속 통과해야 한다.
+4. 검증: main과 baseline worktree 양쪽에 변경을 적용한 뒤 PAIR inproc·tcp, DEALER_DEALER inproc을 `--duration 1 --runs 1`로 각각 실행해 latency가 queue 깊이가 아닌 값(양쪽 모두 sub-ms급, 서로 5% 근처)으로 나오는지 확인하고 표로 남긴다. baseline worktree에 적용한 변경은 검증 후 **그대로 둔다**(감독관이 확인·정리).
+5. 요약 /home/hep7/project/zlink-work/c016/perf-latency-bench-summary.md: 설계(어떤 pacing), 변경 파일, 양쪽 측정 표, 복사 절차, QUESTIONS. 진행은 perf-latency-bench-progress.md 에 append.

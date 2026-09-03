@@ -20,6 +20,70 @@ fast path가 이미 있다. 이 작업은 재전송 protocol을 새로 만드는
 부분을 걷어내는 작업이다. 다만 `zlink_completion_recv()`와 STREAM packet pull queue는 기존
 처리를 공개 pull 모델로 전달하는 새 adapter이므로 contract test와 ownership 검증이 필요하다.
 
+## 0. 진행 상태와 재개 지침 (2026-09-03 11:20 갱신)
+
+새 머신·새 세션은 이 절과 [`c016-worklog/`](c016-worklog/README.ko.md)(판정 기록 `decisions.ko.md`,
+브리프, 드라이버, job 요약)만 읽으면 이어서 진행할 수 있다. 판정의 진실원천은 `decisions.ko.md`
+D-021~D-047이며, 이 절은 그 요약이다.
+
+### 0.1 Phase 상태
+
+| Phase | 상태 | 근거 커밋 |
+|---|---|---|
+| 0~4 Core pull-completion | 완료 | `bb66e85376`, `04ecca54d1` |
+| lane 우회 과제(A안, 삽입) | 완료 | 설계 `5ae80894e7`, 스펙 `157aaf837e`, Core `8b40b3feb2`, READY enum `c2d5f33438` |
+| 5.1 STREAM 16-cell | 완료 | (이전 세션) |
+| 5.2 성능 비교 | **진행 중** — 회귀 수정 1차 `1344022a3e`, 2차 ultra job 진행 중(아래 0.3) | |
+| 6 bindings | 완료 | `90d42d887c`…`405b147a5c`, 주석 `0a002f089f` |
+| 7 binding perf smoke | 미착수 (드라이버 `c016-worklog/tools/phase7-smoke.sh`) | |
+| 8 가이드 | 완료 | `53b8282e3b` |
+| 9~13 | 미착수 (11·13 착수 전 framework 범위를 사용자와 조율) | |
+| 재발 방지(스펙·gate) | 핫패스 스펙 `7a98705d80`, wake·handover 스펙 `3278e724f0`, gate 집계 `5fe9a287fb`, latency 벤치 `f5a62c4b3f`, 스펙 감사 `6ad504c382` | |
+
+### 0.2 확정된 판정 규칙 (요약)
+
+- Phase 5 합격 = cell(pattern·transport·size·metric) 5% 이내 **그리고** (pattern, transport)의 size
+  `64,256,1024,65536` 기하평균 ≥ 1.0(latency ≤ 1.0). 두 판정 모두 PASS. gate 완화·이월 제안 금지(D-025·D-040·D-038).
+- one-way latency는 포화 queue 깊이가 아니라 in-flight 1 구간으로 잰다(`f5a62c4b3f`, baseline worktree에도 같은 3파일 적용).
+- Phase 7 = smoke 전용(D-026), Phase 8 완료, Phase 11 ≈ 1시간 규모(D-028).
+- 구현은 codex sol, 고난도는 sol ultra; 감독관 직접 구현 금지; 리뷰·판정은 감독관 직접(D-038·D-047).
+- Core 소스를 고치는 모든 job은 스펙 [Core hot path](../../core/doc/spec/core/systems/10-hot-path.ko.md) §3·§5를
+  필수 인용하고 `hotpath_gate`(도구 job 예정) + release 비교 gate를 green으로 만든다(D-046).
+- 재발 방지 5조치(D-046): hotpath gate 필수, 메시지 경로 캐시화(posddd 리팩토링), 설계 문서 "메시지 경로 영향" 절 의무,
+  Core 커밋 서브시스템 단위 분할, wake 불변식 결정적 테스트 suite.
+
+### 0.3 지금 돌고 있는 것과 미커밋 상태
+
+- 머신 `ulalax-home`(WSL)에서 codex sol ultra job `c016-hotpath-phase2`(브리프
+  `c016-worklog/briefs/hotpath-phase2.prompt`)가 Core 2차 성능 수정(D multi wake 유실 3종, A part_helper 층, B REQREP,
+  C ws/wss completion backpressure 순환 + timeout 콜백 O(N²)) 중이며 최종 gate·sweep 단계다. 진행 파일
+  `~/project/zlink-work/c016/hotpath-phase2-progress.md`, 요약 `hotpath-phase2-summary.md`.
+- 그 job의 working tree(core 39파일 +3.6k/−0.8k)는 **미커밋**. 백업 스냅샷 브랜치
+  `wip/hotpath-phase2-snapshot-20260903`(origin)에 11:15 시점 상태를 push했다.
+- 완료 처리 절차(그 머신의 세션이 수행): ① 요약·BLOCKERS 검토 ② 감독관 gate 재실행(`cmake --build core/build`,
+  `ctest` 전체, `test_single_lane_*` ×2, raw mirror cmp 12, `git diff --check`, cpp·python smoke) ③
+  `tools/sweep2.sh --only single` + `--only multi`로 4-size 집계 판정 ④ 파일 명시 add로 커밋·push ⑤ 수정 건별
+  spec-gap 분류(D-046) — 특히 "completion poller owner의 blocking request" 계약 문안.
+- 그 뒤 순서: hotpath gate 도구 job(`briefs/hotpath-gate.prompt`, 최종 트리 기준값) → posddd 리팩토링 job
+  (`briefs/posddd-refactor.prompt`, worktree 분리 병렬) → wake 불변식 테스트 job(`briefs/wake-invariant-tests.prompt`)
+  → Phase 7 → 9 → 10 → 11(사용자 조율) → 12 → 13.
+
+### 0.4 새 머신에서 재개하는 절차
+
+1. `git clone`/`git pull origin main`. 이 절의 최신 커밋 이후 상태인지 `git log --oneline -5`로 확인한다.
+2. `~/project/zlink-work/c016/`를 만들고 `doc/plan/c016-worklog/`를 복사한다(`export ZLINK_WORK=~/project/zlink-work`).
+3. Core 빌드: `cmake -S core -B core/build -DZLINK_BUILD_TESTS=ON -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release && cmake --build core/build -j`.
+4. Perf baseline worktree: `git worktree add --detach ~/project/zlink-perf-core-0.15.1 core/v0.15.1`, 그 안에서
+   `cmake -S core -B core/build -DZLINK_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release && cmake --build core/build -j`, 그리고
+   main의 `bindings/c/perf/single/common/perf_single_one_way.hpp`,
+   `bindings/c/perf/single/src/perf_dealer_router.cpp`, `perf_router_router.cpp` 3파일을 같은 경로로 복사한다
+   (측정 방식 동일화, `f5a62c4b3f`). `--core-version`은 쓰지 않는다.
+5. 성능 판정은 baseline과 candidate를 같은 머신에서 짝으로 재는 상대 비교이므로 어느 머신이든 되지만, 측정 중에는
+   그 머신에서 빌드·테스트를 돌리지 않는다. 판정 도구: `tools/sweep2.sh`(4 size, `perf_regression_gate.py` 집계).
+6. Core 2차 수정이 아직 push되지 않았다면(0.3) `wip/hotpath-phase2-snapshot-20260903`에서 이어받거나 완료를 기다린다.
+7. codex 기동은 `systemd-run --user --scope --unit=<이름> -p MemoryMax=24G -p OOMPolicy=continue`로, 로그·진행 파일은
+   `$ZLINK_WORK/c016/`에 둔다. 브리프는 `briefs/`의 원문을 그대로 쓴다.
+
 ## 1. 완료 결과
 
 작업은 다음 결과를 모두 충족해야 끝난다.

@@ -1,0 +1,11 @@
+역할: zlink C perf 회귀 gate 확장 구현자. 범위: bindings/c/perf/perf_regression_gate.py, bindings/c/perf/tests/test_perf_regression_gate.py, /home/hep7/project/zlink-work/c016/sweep2.sh(저장소 밖 드라이버 — 기존 sweep.sh는 다른 job이 실행 중이므로 **수정하지 말고** sweep.sh를 복사해 sweep2.sh로 만든다). 그 외 수정 금지(core/**·doc/**·framework/**·다른 binding). git 쓰기 금지. scripts/local-package/** 실행 금지. 벤치 실행 금지(다른 job이 측정 중) — gate 도구는 기존 report 파일(c016/runner-results/**/report/*.txt)과 unit test 픽스처로만 검증.
+
+기준(사용자 확정, plan doc/plan/core-send-dontwait-completion-0.16.0-plan.ko.md §5.2 갱신본 참조):
+1. cell(pattern, transport, size, metric) 단위: throughput·bandwidth ≥0.95, latency ≤1.05 (기존 유지).
+2. **집계**: 같은 (pattern, transport)에서 size 64·256·1024·65536 전부의 ratio를 모아 **평균이 throughput·bandwidth ≥1.0, latency ≤1.0**이어야 PASS. 평균은 **기하평균**으로 고정(비율의 평균이므로), 도구 --help와 출력에 명시. size가 하나라도 누락되면 그 (pattern, transport)는 집계 FAIL(누락 명시). cell 판정과 집계 판정 둘 다 PASS일 때만 exit 0.
+
+작업:
+A. perf_regression_gate.py: 여러 size의 report를 입력받을 수 있게 확장(예: `--baseline-single` / `--candidate-single`을 반복 지정하거나 디렉터리/glob 허용, multi도 동일). 출력: cell 표 + (pattern, transport, metric)별 집계 표(size별 ratio, 기하평균, verdict). 기존 인자 호환 유지.
+B. unit test: 집계 PASS/FAIL, size 누락 FAIL, 기하평균 계산, 인자 호환 케이스 추가. `python3 -m pytest bindings/c/perf/tests -q` 또는 기존 실행 방식으로 green.
+C. sweep2.sh(sweep.sh 복사본): `--msg-sizes` 옵션(기본 `64,256,1024,65536`), cell 단위로 baseline→candidate 즉시 짝비교는 유지하되 한 (pattern, transport) cell 안에서 4 size를 한 runner 호출로 실행(`--msg-sizes 64,256,1024,65536`), gate에는 그 report 쌍을 넘겨 cell+집계 판정을 받아 결과 표에 `agg=<geomean>` 컬럼 추가. 재개(resume) 동작 유지. `bash -n` 통과 + 기존 report 파일로 gate 호출 경로 dry-run 확인(벤치 실행 없이).
+완료 시 /home/hep7/project/zlink-work/c016/gate-aggregate-summary.md 에 변경 파일·인터페이스·테스트 결과·QUESTIONS. 진행은 gate-aggregate-progress.md 에 append.

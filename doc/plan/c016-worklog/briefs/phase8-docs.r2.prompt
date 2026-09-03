@@ -1,0 +1,23 @@
+역할: zlink(/home/hep7/project/zlink, main) Core·binding 사용자 가이드/레퍼런스의 **stale 구절 외과적 수정** 작성자 (plan doc/plan/core-send-dontwait-completion-0.16.0-plan.ko.md Phase 8).
+
+경고 — 직전 시도는 반려됐다: 98개 문서의 챕터 본문을 11줄짜리 동일 요약으로 통째 교체해 19,967줄을 삭제했다(반려 diff: /home/hep7/project/zlink-work/c016/phase8-docs-r1-rejected.diff — 읽어서 무엇을 하면 안 되는지 확인). 이번 작업의 절대 규칙:
+- **기존 문서의 구조·heading·섹션·예제·표·링크는 모두 보존한다.** 수정은 stale한 문장·코드 줄·심볼을 현행 모델로 **바꾸는** 것이지 지우는 것이 아니다. 섹션 삭제 금지. 파일을 새로 쓰기 금지.
+- 파일별 `git diff --numstat`에서 **삭제 줄 수가 삽입 줄 수를 초과하면 안 된다**(예외: 제거된 API 전용 예제 블록 하나를 현행 API 예제로 대체하며 줄이 줄어드는 경우 — 요약에 file별로 사유 기재). 전체 합계 삭제가 삽입의 1.2배를 넘으면 스스로 중단하고 되돌린 뒤 보고.
+- 완료 전 각 파일에 대해 `git show HEAD:<f> | wc -l` 대비 현재 줄 수를 요약 표에 적는다. 20% 이상 줄어든 파일은 사유 필수.
+
+입력(진실원천, 읽기만):
+- 수정 대상 인벤토리: /home/hep7/project/zlink-work/c016/phase8-inventory.md — file:line 단위 hit 목록. 이 hit들을 고치는 것이 작업이다. 추가 대상 2건: `bindings/doc/reference/rust/README.{ko,en}.md`의 "RequestOp::submit callback-only" 서술, `bindings/doc/reference/{cpp,dotnet,java,node,python}/05-errors.{ko,en}.md`의 callback/handler 서술(현행 completion 모델로 문장 교체).
+- 정식 스펙: core/doc/spec/core/** (socket README·06-dealer·07-router·08-stream·05-polling·04-events·06-monitoring), 계약 draft doc/plan/core-socket-send-recv-completion-0.16.0-spec-draft.ko.md, lane 설계 doc/plan/dealer-router-single-lane-design.ko.md §3.2·§3.4.
+- 현행 public 표면: core/include/zlink/socket/api.h, core/include/zlink_enum.h, 각 binding contracts(인벤토리 §2 경로).
+- 코드 예제 출처: bindings/c/samples/**, 각 binding samples·contract fixture·tests. 예제는 실제 컴파일·실행되는 호출을 인용해 **기존 예제 블록을 같은 자리에서 대체**한다.
+
+수정 허용 경로(이 외 절대 금지): core/doc/guide/**, core/doc/reference/**, core/README*, bindings/doc/guide/**, bindings/doc/reference/**, bindings/<lang>/README*(godoc·typedoc 포함). **금지**: core/doc/spec/**, doc/**, framework/**, 모든 소스·헤더·테스트·샘플·perf. git 쓰기 금지(diff/numstat/show 조회만). 빌드·테스트 금지(core/build 다른 job 사용 중).
+
+작성 원칙:
+1. 인벤토리 A(제거 심볼) hit → 같은 자리에서 현행 API 이름·시그니처·예제로 교체. B(의미 stale) hit → 해당 문장/단락만 pull-completion·1-lane D/R 모델로 고쳐 쓴다. 인접한 정상 문단은 손대지 않는다.
+2. plan Phase 8의 9개 사용 판단(인벤토리 §3)은 각각 **가장 관련 있는 기존 섹션 안에** 문단 또는 소절로 추가한다(Core 가이드/레퍼런스에 정본 1곳, 각 binding 가이드에 언어 표현으로 짧게). 9번(public PollCompletion 소유 시 wait() loop 지속)은 각 binding poller 소스에서 실제 동작 확인 후 서술, 확인 안 되면 보류·보고.
+3. ko/en 동시·동일 구조. `03-5-stream` 쌍처럼 parity가 깨진 파일은 양쪽에 같은 수정을 적용해 맞춘다.
+4. 링크는 실제 존재 경로만. `git diff --check` 통과. 파일 끝 개행 유지.
+5. 인벤토리 BLOCKER 1(zlink_enum.h 주석)은 코드 소유 → 문서는 socket type 기준으로 쓴다.
+
+완료 시 /home/hep7/project/zlink-work/c016/phase8-docs-summary.md 에(기존 내용 덮어쓰기): 파일별 표(경로 | HEAD 줄 수 | 현재 줄 수 | +/- | 사유), 9개 판단 항목별 정본 위치, stale 토큰 재검색 명령과 hit 수(false positive 구분), 보류 항목. 진행 중 파일 그룹마다 /home/hep7/project/zlink-work/c016/phase8-docs-progress.md 에 한 줄 append.
