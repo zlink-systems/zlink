@@ -679,3 +679,16 @@ mean latency 집계 1.061로 실제 후보)에서 중단(sweep2-results.run3-par
 pull API로 포팅(cc81390c9b)해 baseline(0.15.1)에는 그 소스를 복사할 수 없음(zlink_send_part 시그니처 상이) → baseline worktree는
 B의 이전 벤치(two-phase·6자리)를 유지, python(gate·run_comparison)만 동기화. 머지 트리 gate → 10× REQREP 재현 → 1024B 비교 →
 main 머지. 전체 cell 판정은 머지된 main 트리에서 이어서 수행.
+
+## D-076 (2026-09-04 05:xx) cpp codec fix 커밋 + B core merge 통합 + B-core 재검증 착수
+**cpp codec content_type fix 커밋(180323e6fa, 로컬)**: 공개 계약 `serialized_payload_t`+`serialize_with_content_type()`
+(bytes와 그 serializer의 content_type 함께 반환)로 generated protobuf가 wire에 x-protobuf를 싣도록. erased type_index 조회
+제거. 16파일(공개헤더 serializer/channel/actor 3 + runtime 5 + test 5 + CMake + 새 private test-access header). focused 6/6·
+sample_parity 통과·Bingo authenticate codec mismatch 0·cross-language C++↔.NET/Node codec stage 통과. 감독관 공개헤더 재검증.
+잔여: Bingo `submit card` STREAM timeout(별개), cross-language browser=chromium(E).
+**B core merge 통합**: 사용자 통지 — B의 core posddd/perf가 origin/main(8d58b7f891)에 머지됨(진행 중). 내 Core 수정 3건
+(mesh·alias·version) origin/main에 생존 확인. working tree pre-existing dirty(bindings 버전헤더[B가 동일 커밋]·node dist-tools·
+scripts·native sync·09-01 autostash)는 **사용자 작업 아님(사용자 확인 "내가 한게 아니라 정리해도 돼")** → git restore로 정리
+(내 커밋 무손실). `git pull --no-rebase`로 merge commit `bebbc7b925` 생성(충돌 0, codec=framework/cpp vs B=core/bindings/docs).
+**B core 재검증 착수(codex sol)**: 새 core 재빌드+sha256 gate+framework 재검증(codec Bingo·dotnet SUB cross-language·4언어
+focused). B posddd는 동작보존 의도라 회귀 없어야 하나 재빌드 필수. 재검증 green 확인 후 merge push(broken main 방지).
