@@ -634,6 +634,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private bool _retryScheduled;
         private Task? _controlTask;
         private Task? _livenessTask;
+        private Task? _monitorTask;
         private Task? _reconnectTask;
         private bool _reconnectInProgress;
         private readonly Action<Connection, string> _onAdmitted;
@@ -678,7 +679,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             ZLinkChannelBundleFactory.ApplySocketConfig(Socket.Options, socketConfig);
             Socket.Options.Probe = false;
             _monitor = monitoring.OpenSocketMonitor(Socket);
-            _monitor.OnEvent(OnMonitorEvent);
             _receiveFlowRegistration =
                 applicationJobQueue.RegisterReceiveFlowSocket(Socket);
         }
@@ -828,6 +828,21 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
         internal void Start()
         {
+            RunState(() =>
+            {
+                if (_monitorTask is null)
+                {
+                    using (ExecutionContext.SuppressFlow())
+                        _monitorTask = Task.Factory.StartNew(
+                                static state =>
+                                    ((Connection)state!).RunMonitorLoopAsync(),
+                                this,
+                                CancellationToken.None,
+                                TaskCreationOptions.LongRunning,
+                                TaskScheduler.Default)
+                            .Unwrap();
+                }
+            });
             lock (_socketLifecycleGate)
             {
                 if (RunState(() => _disposed))
@@ -873,8 +888,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             Task[] retryTasks;
             Task? controlTask;
             Task? livenessTask;
+            Task? monitorTask;
             Task? reconnectTask;
-            (admissionTasks, retryTasks, controlTask, livenessTask, reconnectTask) =
+            (admissionTasks, retryTasks, controlTask, livenessTask, monitorTask, reconnectTask) =
                 RunState(() =>
                 {
                 admissionTasks = _admissionTasks.ToArray();
@@ -884,6 +900,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     retryTasks,
                     _controlTask,
                     _livenessTask,
+                    _monitorTask,
                     _reconnectTask);
                 });
             foreach (var admissionTask in admissionTasks)
@@ -905,6 +922,11 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 await failures.CaptureAsync(
                         () => new ValueTask(
                             IgnoreCancellationAsync(livenessTask)))
+                    .ConfigureAwait(false);
+            if (monitorTask is not null)
+                await failures.CaptureAsync(
+                        () => new ValueTask(
+                            IgnoreCancellationAsync(monitorTask)))
                     .ConfigureAwait(false);
             if (reconnectTask is not null)
                 await failures.CaptureAsync(
@@ -1011,13 +1033,55 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
         }
 
+        private async Task RunMonitorLoopAsync()
+        {
+            var cancellationToken = _admissionStop.Token;
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    if (!_monitor.Wait(ControlReceivePollInterval))
+                        continue;
+                    while (_monitor.TryRecv(out var monitorEvent))
+                        OnMonitorEvent(monitorEvent);
+                }
+                catch (OperationCanceledException)
+                    when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (ObjectDisposedException)
+                {
+                    return;
+                }
+                await Task.Yield();
+            }
+        }
+
         private void TryStartAdmission()
         {
             ulong physicalGeneration;
             ulong attempt;
             RunState(() =>
             {
-                if (_disposed || _admissionStarted)
+                // Start() schedules a fenced fallback admission attempt
+                // alongside the monitor's ConnectionReady-triggered attempt so
+                // readiness does not depend on which notification arrives
+                // first (see Start()). Once one of them has actually admitted
+                // this physical generation (a real Admission decoded off the
+                // wire, recorded as _currentAdmission), the other must be a
+                // no-op: firing a second Hello request after admission
+                // already succeeded pushes a redundant control-plane request
+                // that races with whatever the now-admitted connection is
+                // doing (e.g. the liveness probe/ack exchange), corrupting
+                // message ordering on the peer. This deliberately does not
+                // gate on _admissionCompleted/_rejected: those also flip true
+                // on the ConnectionReady handler's native-routing-id mismatch
+                // guard, which fires without ever attempting a Hello and must
+                // not block the still-pending real admission attempt.
+                if (_disposed
+                    || _admissionStarted
+                    || _currentAdmission is not null)
                     return;
                 _admissionStarted = true;
                 physicalGeneration = _physicalGeneration;
@@ -1304,7 +1368,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         var ack =
                             ZLinkClientServerControlProtocol.EncodeLivenessAck(
                                 probeId);
-                        if (received.RequestSeq is not null)
+                        if (received.ReplyToken is not null)
                             ReplyOwned(received, ack);
                         else
                             await SendOwnedAsync(ack, cancellationToken)

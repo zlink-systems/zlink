@@ -102,6 +102,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             $"inproc://first-{suffix}");
         await WireAdmissionFixture.WaitUntilAsync(
             () => target.Status().AdmittedPeerCount == 1);
+        using var firstAdmission = await WireAdmissionFixture.ReceiveAsync(firstSource);
         _ = SendRequestAsync(
             firstSource,
             CreateDirectRequest(
@@ -122,6 +123,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             $"inproc://second-{suffix}");
         await WireAdmissionFixture.WaitUntilAsync(
             () => target.Status().AdmittedPeerCount == 2);
+        using var secondAdmission = await WireAdmissionFixture.ReceiveAsync(secondSource);
 
         var reply = await SendRequestAsync(
             secondSource,
@@ -376,6 +378,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                     MeshName,
                     $"inproc://{sourceOwner}");
                 await WaitUntilAsync(() => targetNode.MeshStatus().AdmittedPeerCount == 1);
+                using var admission = await ReceiveAsync(source);
                 return new WireAdmissionFixture(
                     sourceContext,
                     source,
@@ -468,6 +471,20 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                     await Task.Delay(10);
                 }
             }
+        }
+
+        internal static async Task<Received> ReceiveAsync(IDealerSocket source)
+        {
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+            while (DateTime.UtcNow < deadline)
+            {
+                var received = Received.Create();
+                if (source.Recv(received, RecvFlags.DontWait))
+                    return received;
+                received.Dispose();
+                await Task.Delay(10);
+            }
+            throw new TimeoutException("Route admission reply was not received.");
         }
 
         internal static async Task WaitUntilAsync(Func<bool> condition)

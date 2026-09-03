@@ -63,7 +63,7 @@ internal readonly record struct ZLinkTransportPairIdentity(
     ulong Id,
     ulong Generation)
 {
-    internal bool IsValid => Id != 0 && Generation != 0;
+    internal bool IsValid => Id != 0;
 }
 
 internal sealed class ZLinkNativeReplyPeerEpoch

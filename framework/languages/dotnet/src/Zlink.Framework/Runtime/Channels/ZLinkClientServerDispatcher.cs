@@ -132,7 +132,7 @@ internal sealed class ZLinkClientServerDispatcher(
                 createIfAbsent: false);
             dispatchErrors.Report(new ZLinkDispatchFailure(
                 ZLinkDispatchErrorSurface.Channel,
-                received.RequestSeq.HasValue
+                received.ReplyToken is not null
                     ? ZLinkDispatchMessageKind.Request
                     : ZLinkDispatchMessageKind.Send,
                 ZLinkDispatchErrorReason.InvalidFrame,
@@ -205,8 +205,7 @@ internal sealed class ZLinkClientServerDispatcher(
     {
         replyGate.TryInvoke(() =>
         {
-            if (received.RoutingId is not { } sourceRid
-                || received.RequestSeq is not { } requestSeq)
+            if (received.ReplyToken is null)
                 return;
 
             var reply = ZLinkEnvelopeCodec.EncodeParts(
@@ -238,9 +237,7 @@ internal sealed class ZLinkClientServerDispatcher(
             }
             try
             {
-                router.Reply(sourceRid, requestSeq)
-                    .Messages(reply)
-                    .Submit();
+                received.Reply().Messages(reply).Submit();
             }
             finally
             {

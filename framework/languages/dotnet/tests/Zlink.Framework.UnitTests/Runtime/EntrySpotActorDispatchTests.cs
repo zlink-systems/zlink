@@ -9994,15 +9994,11 @@ public sealed partial class EntrySpotActorDispatchTests
             string keyPath,
             bool requireClientCert) { }
 
-        public bool RecvPart(
-            out RoutingId? sourceRoutingId,
-            out Message? part,
-            out bool hasMore,
+        public bool RecvPacket(
+            out ZLinkBackendStreamReceive? received,
             RecvFlags flags = RecvFlags.None)
         {
-            sourceRoutingId = null;
-            part = null;
-            hasMore = false;
+            received = null;
             return false;
         }
 
@@ -10060,15 +10056,11 @@ public sealed partial class EntrySpotActorDispatchTests
             string keyPath,
             bool requireClientCert) { }
 
-        public bool RecvPart(
-            out RoutingId? sourceRoutingId,
-            out Message? part,
-            out bool hasMore,
+        public bool RecvPacket(
+            out ZLinkBackendStreamReceive? received,
             RecvFlags flags = RecvFlags.None)
         {
-            sourceRoutingId = null;
-            part = null;
-            hasMore = false;
+            received = null;
             return false;
         }
 

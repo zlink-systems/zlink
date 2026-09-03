@@ -4110,7 +4110,7 @@ public sealed class StatefulServiceRuntimeTests
     {
         using var request = await ReceiveRouterRequestAsync(target);
         var sourceRid = Assert.IsType<RoutingId>(request.RoutingId);
-        var requestSeq = Assert.IsType<ulong>(request.RequestSeq);
+        var replyToken = Assert.IsType<ReplyToken>(request.ReplyToken);
         var protocolErrors = monitor.Status().ProtocolErrors;
         using (var rawReply = Message.From(ZLinkServiceWireCodec.EncodeReply(
                    operationId.Low,
@@ -4127,7 +4127,7 @@ public sealed class StatefulServiceRuntimeTests
                       && record.OperationId == operationId);
 
         using var reply = Message.From(nativeTerminal);
-        target.Reply(sourceRid, requestSeq).Message(reply).Submit();
+        target.Reply(sourceRid, replyToken).Message(reply).Submit();
         return DrainCompletion(source, operationId).Record;
     }
 
@@ -4158,7 +4158,7 @@ public sealed class StatefulServiceRuntimeTests
                 continue;
             }
             if (received.MessageType == ReceivedMessageType.Request
-                && received.RequestSeq.HasValue)
+                && received.ReplyToken is not null)
                 return received;
             received.Dispose();
         }

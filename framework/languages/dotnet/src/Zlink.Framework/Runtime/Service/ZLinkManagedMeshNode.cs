@@ -65,6 +65,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly Dictionary<ulong, Peer> _peersByIntent = new();
     private readonly Dictionary<RoutingId, Peer> _peersByRid = new();
     private readonly Dictionary<RoutingId, ZLinkMeshPeerExpectation> _peerExpectations = new();
+    private readonly Dictionary<RoutingId, ZLinkTransportPairIdentity>
+        _transportPairsByRid = [];
     // Invalid epochs remain as retired-pair tombstones until this node stops.
     // Core does not order monitor and Router-data queues, so a momentarily
     // empty receive queue cannot prove that pre-disconnect data will not arrive.
@@ -301,7 +303,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (ReceiveTimeout is { } receiveTimeout)
                     socket.Options.ReceiveTimeout = receiveTimeout;
                 if (SendTimeout is { } timeout)
-                    socket.Options.SendTimeout = timeout;
+                {
+                    socket.Options.SubmitRetryMode = SubmitRetryMode.LocalFailure;
+                    socket.Options.SubmitRetryTimeoutMilliseconds = checked(
+                        (int)Math.Ceiling(timeout.TotalMilliseconds));
+                    socket.Options.SubmitRetryAttempts = 16;
+                }
                 socket.SetRoutingId(_routingId);
                 var configuredBindEndpoint = _bindEndpoint;
                 socket.Bind(configuredBindEndpoint);
@@ -312,7 +319,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         StringComparison.Ordinal))
                     _advertisedEndpoint = _bindEndpoint;
 
-                socketMonitor = socket.MonitorOpen(SocketEvent.Disconnected);
+                socketMonitor = socket.MonitorOpen(
+                    SocketEvent.ConnectionReady | SocketEvent.Disconnected);
 
                 poller = Systems.Zlink.Zlink.CreatePoller();
                 poller.Add(
@@ -2936,6 +2944,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             foreach (var epoch in _nativeReplyEpochsByTransportPair.Values)
                 epoch.Invalidate();
             _nativeReplyEpochsByTransportPair.Clear();
+            _transportPairsByRid.Clear();
         });
         while (_pendingNativeTerminalReplies.TryDequeue(out var pendingReply))
             pendingReply.Dispose();
@@ -5119,7 +5128,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             or ServiceWireConstants.Command.Update)
         {
             if (!transportPair.IsValid)
-                return false;
+                return RunState(() =>
+                {
+                    if (!_peersByRid.TryGetValue(sourceRid, out var peer)
+                        || !peer.Admitted)
+                        return command is ServiceWireConstants.Command.Hello
+                            or ServiceWireConstants.Command.Admit;
+                    return true;
+                });
             return RunState(() =>
             {
                 if (_nativeReplyEpochsByTransportPair.TryGetValue(
@@ -5146,7 +5162,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
 
         if (command == ServiceWireConstants.Command.Reject)
-            return transportPair.IsValid;
+            return true;
 
         return RunState(() => _peersByRid.TryGetValue(sourceRid, out var peer)
                 && peer.Admitted
@@ -5310,11 +5326,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private bool ProcessInfrastructureControl(
         RoutingId sourceRid,
         ZLinkTransportPairIdentity transportPair,
-        ulong? requestSequence,
+        ReplyToken? replyToken,
         IReadOnlyList<Message> parts,
         byte[] head,
         Func<ReplyOperation> captureNativeReply,
-        Func<RoutedSendOperation> captureSourceSend)
+        Func<SendOperation> captureSourceSend)
     {
         if (ZLinkServiceWireCodec.TryDecodeBoundSessionReplaced(
                 head,
@@ -5359,7 +5375,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 out var liveness,
                 out _))
         {
-            ProcessLiveness(sourceRid, requestSequence, liveness);
+            ProcessLiveness(sourceRid, replyToken, liveness);
             return true;
         }
         if (ZLinkServiceWireCodec.TryDecodeRouteAdmission(
@@ -5428,7 +5444,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (ZLinkServiceWireCodec.TryDecodeRelocationPrepare(
                 head, out var relocationPrepare, out _))
         {
-            if (requestSequence is null)
+            if (replyToken is null)
             {
                 Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
                 return true;
@@ -5559,9 +5575,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             Publish(MeshMonitorEventKind.ProtocolError);
             return false;
         }
-        var transportPair = new ZLinkTransportPairIdentity(
-            received.TransportPairId,
-            received.TransportPairGeneration);
+        var transportPair = RunState(() =>
+            _transportPairsByRid.TryGetValue(sourceRid, out var current)
+                ? current
+                : default);
 
         var head = received.Parts[0].ToArray();
         if (head.Length >= 5
@@ -5588,7 +5605,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 && ProcessInfrastructureControl(
                     sourceRid,
                     transportPair,
-                    received.RequestSeq,
+                    received.ReplyToken,
                     received.Parts,
                     head,
                     received.Reply,
@@ -5617,10 +5634,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (IsCanonicalActorJoinHeader(head))
         {
             if (received.MessageType != ReceivedMessageType.Request
-                || received.RequestSeq is null)
+                || received.ReplyToken is null)
             {
                 // Command 28 owns a Core request window. A one-way ingress has
-                // no request sequence on which command 20 can terminate it.
+                // no opaque reply capability on which command 20 can terminate it.
                 Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
                 return false;
             }
@@ -5664,7 +5681,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 out _))
         {
             if (received.MessageType != ReceivedMessageType.Request
-                || received.RequestSeq is null)
+                || received.ReplyToken is null)
             {
                 Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
                 return false;
@@ -5683,7 +5700,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 out _))
         {
             if (received.MessageType != ReceivedMessageType.Request
-                || received.RequestSeq is null)
+                || received.ReplyToken is null)
             {
                 Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
                 return false;
@@ -5816,7 +5833,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             or ServiceWireConstants.Command.ChannelRequest;
         if (request
             && (received.MessageType != ReceivedMessageType.Request
-                || received.RequestSeq is null))
+                || received.ReplyToken is null))
         {
             // RouteMesh 11 requests use Core's request window. Accepting the old
             // raw request envelope would put its reply back on the Application
@@ -5836,19 +5853,30 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? replyHandler = null;
         if (request)
         {
-            var requestSeq = received.RequestSeq!.Value;
+            var nativeReply = received.Reply();
+            ReplySubmitOperation? preparedReply = null;
+            Message[]? preparedReplyWire = null;
             var replied = 0;
             replyHandler = (replyParts, _) =>
             {
                 if (Interlocked.CompareExchange(ref replied, 1, 0) != 0)
                     return SubmitResult.InvalidState;
-                var result = SendNativeApplicationReply(
-                    sourceRid,
-                    requestSeq,
-                    application.Correlation,
-                    replyParts);
-                if (result != SubmitResult.Ok)
+                if (preparedReply is null)
+                    (preparedReply, preparedReplyWire) = PrepareNativeTerminalReply(
+                        sourceRid,
+                        nativeReply,
+                        application.Correlation,
+                        RequestResult.Ok,
+                        0,
+                        replyParts);
+                var result = SubmitNativeTerminalReply(preparedReply);
+                if (result == SubmitResult.Backpressured)
                     Volatile.Write(ref replied, 0);
+                else if (preparedReplyWire is not null)
+                {
+                    ZLinkMessageParts.DisposeAll(preparedReplyWire);
+                    preparedReplyWire = null;
+                }
                 return result;
             };
         }
@@ -6749,7 +6777,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var request = operation.IsRequest;
         if (request
             && (received.MessageType != ReceivedMessageType.Request
-                || received.RequestSeq is null))
+                || received.ReplyToken is null))
         {
             // Command 39 requests own a Core request window. Accepting a raw
             // envelope would put the terminal back on the Application path.
@@ -6943,7 +6971,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             or ServiceWireConstants.Command.ActorRequest;
         if (request
             && (received.MessageType != ReceivedMessageType.Request
-                || received.RequestSeq is null))
+                || received.ReplyToken is null))
         {
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
             return false;
@@ -8220,7 +8248,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkTransportPairIdentity transportPair,
         ServiceWireConstants.Command command,
         ZLinkServiceWireCodec.AdmissionRecord admission,
-        RoutedSendOperation? admissionResponse) =>
+        SendOperation? admissionResponse) =>
         RunState(() => ProcessAdmissionCore(
             sourceRid,
             transportPair,
@@ -8233,7 +8261,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkTransportPairIdentity transportPair,
         ServiceWireConstants.Command command,
         ZLinkServiceWireCodec.AdmissionRecord admission,
-        RoutedSendOperation? admissionResponse)
+        SendOperation? admissionResponse)
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"mesh_peer_admission_received local={_routingId} peer={sourceRid} "
@@ -8520,7 +8548,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void ProcessLiveness(
         RoutingId sourceRid,
-        ulong? requestSequence,
+        ReplyToken? replyToken,
         ZLinkServiceWireCodec.LivenessRecord record)
     {
         if (record.Command == ServiceWireConstants.Command.LivenessProbe)
@@ -8538,8 +8566,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var acknowledgement = ZLinkServiceWireCodec.EncodeLiveness(
                 ServiceWireConstants.Command.LivenessAck,
                 record.ProbeId);
-            if (requestSequence is { } sequence)
-                SendInfrastructureReply(sourceRid, sequence, acknowledgement);
+            if (replyToken is { } token)
+                SendInfrastructureReply(sourceRid, token, acknowledgement);
             else
                 SendControl(
                     peer.PhysicalRoutingId,
@@ -8560,7 +8588,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private bool SendInfrastructureReply(
         RoutingId target,
-        ulong requestSequence,
+        ReplyToken replyToken,
         byte[] head)
     {
         Message? message = null;
@@ -8573,7 +8601,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (socket is null
                     || _activeSocketGeneration != _lifecycleGeneration)
                     return false;
-                socket.Reply(target, requestSequence).Message(message).Submit();
+                socket.Reply(target, replyToken).Message(message).Submit();
                 message = null;
             }
             return true;
@@ -8698,11 +8726,31 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         var routingId = value.RoutingId ?? default;
         var transportPair = new ZLinkTransportPairIdentity(
-            value.TransportPairId,
-            value.TransportPairGeneration);
+            value.ConnectionId,
+            value.TransportLane);
+        if (value.Event == MonitorEventType.ConnectionReady)
+        {
+            if (routingId.IsEmpty || !transportPair.IsValid)
+                return;
+            RunState(() =>
+            {
+                _transportPairsByRid[routingId] = transportPair;
+                if (_peersByRid.TryGetValue(routingId, out var peer))
+                    AttachTransportPair(peer, transportPair);
+            });
+            return;
+        }
         if (value.Event != MonitorEventType.Disconnected
             || (routingId.IsEmpty && !transportPair.IsValid))
             return;
+
+        if (!routingId.IsEmpty)
+            RunState(() =>
+            {
+                if (_transportPairsByRid.TryGetValue(routingId, out var current)
+                    && current == transportPair)
+                    _transportPairsByRid.Remove(routingId);
+            });
 
         _transportDisconnects.Enqueue(
             new TransportDisconnect(routingId, transportPair));
@@ -10076,19 +10124,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return SubmitResult.Ok;
     }
 
-    private SubmitResult SendNativeApplicationReply(
-        RoutingId targetRid,
-        ulong requestSeq,
-        ulong correlation,
-        IReadOnlyList<Message> parts) =>
-        SendNativeTerminalReply(
-            targetRid,
-            requestSeq,
-            correlation,
-            RequestResult.Ok,
-            0,
-            parts);
-
     private (ReplySubmitOperation Submit, Message[] Wire)
         PrepareNativeTerminalReply(
         RoutingId targetRid,
@@ -10192,13 +10227,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private SubmitResult SubmitOrQueueNativeReply(
         PendingNativeTerminalReply pending)
     {
-        // The ReplyOperation captured from the request is the exact Core reply
-        // route. A replacement pair does not retire it while its physical pair
-        // remains live, but an exact pair disconnect must fence even the first
-        // late submit so Core cannot fall back to the new same-RID pipe.
-        var submit = pending.PeerEpoch is null
-            ? SubmitNativeTerminalReply(pending.Submit)
-            : SubmitNativeTerminalReplyIfCurrent(pending);
+        // The opaque ReplyOperation is Core's exact reply-route capability.
+        // Always let Core decide its first terminal attempt; monitor delivery
+        // may precede a retained reply route's final submission during a
+        // same-RID handover. The peer epoch only bounds later backpressure
+        // retries.
+        var submit = SubmitNativeTerminalReply(pending.Submit);
         if (submit == SubmitResult.Backpressured)
         {
             if (CanRetryNativeTerminalReply(pending))
@@ -10258,73 +10292,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             Publish(
                 MeshMonitorEventKind.ProtocolError,
                 peerRid: pending.TargetRid);
-    }
-
-    private SubmitResult SendNativeTerminalReply(
-        RoutingId targetRid,
-        ulong requestSeq,
-        ulong correlation,
-        RequestResult result,
-        uint failureCode,
-        IReadOnlyList<Message> parts)
-    {
-        var wire = new List<ReadOnlyMemory<byte>>(parts.Count == 0 ? 1 : 2)
-        {
-            ZLinkServiceWireCodec.EncodeReply(
-                correlation,
-                (int)result,
-                failureCode)
-        };
-        if (parts.Count != 0)
-            wire.Add(ZLinkApplicationPayloadEnvelopeCodec
-                .EncodeFrameworkMultipart(parts));
-        return SendNativeReply(targetRid, requestSeq, wire);
-    }
-
-    private SubmitResult SendNativeReply(
-        RoutingId targetRid,
-        ulong requestSeq,
-        IReadOnlyList<ReadOnlyMemory<byte>> parts)
-    {
-        var wire = new Message[parts.Count];
-        var created = 0;
-        try
-        {
-            for (; created < parts.Count; created++)
-                wire[created] = Message.From(parts[created]);
-            lock (_socketGate)
-            {
-                var socket = _socket;
-                if (socket is null
-                    || _activeSocketGeneration != _lifecycleGeneration)
-                    return SubmitResult.Terminated;
-                socket.Reply(targetRid, requestSeq).Messages(wire).Submit();
-            }
-            return SubmitResult.Ok;
-        }
-        catch (ObjectDisposedException)
-        {
-            return SubmitResult.Terminated;
-        }
-        catch (ZlinkSubmitException exception)
-        {
-            return exception.Result == ZlinkSubmitException.ErrorCode.Backpressured
-                ? SubmitResult.Backpressured
-                : SubmitResult.Terminated;
-        }
-        catch (ZlinkException)
-        {
-            return SubmitResult.Terminated;
-        }
-        catch (Exception)
-        {
-            return SubmitResult.Terminated;
-        }
-        finally
-        {
-            for (var index = 0; index < created; index++)
-                wire[index].Dispose();
-        }
     }
 
     private SubmitResult SendTerminalReply(
@@ -11048,7 +11015,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private void SendAdmission(
         Peer peer,
         ServiceWireConstants.Command command,
-        RoutedSendOperation? exactResponse = null)
+        SendOperation? exactResponse = null)
     {
         if (_lane.IsOnLane)
         {
@@ -11061,7 +11028,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private void SendAdmissionCore(
         Peer peer,
         ServiceWireConstants.Command command,
-        RoutedSendOperation? exactResponse)
+        SendOperation? exactResponse)
     {
         if (_socket is null)
             return;
@@ -11106,7 +11073,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ulong connectionGeneration,
         ServiceWireConstants.Command command,
         byte[] head,
-        RoutedSendOperation? exactFirstAttempt = null)
+        SendOperation? exactFirstAttempt = null)
     {
         if (!TryGetInfrastructureControlCommand([head], out var encodedCommand)
             || encodedCommand != command
@@ -11172,7 +11139,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ControlSendKey key,
         ControlSendState state,
         byte[] head,
-        RoutedSendOperation? exactFirstAttempt,
+        SendOperation? exactFirstAttempt,
         CancellationToken cancellationToken)
     {
         try
@@ -11237,7 +11204,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     }
 
     private async Task TrySendExactControlAsync(
-        RoutedSendOperation exactSend,
+        SendOperation exactSend,
         byte[] head,
         CancellationToken cancellationToken)
     {
@@ -11364,7 +11331,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private sealed record ControlSendAttempt(
         byte[] Head,
-        RoutedSendOperation? ExactFirstAttempt);
+        SendOperation? ExactFirstAttempt);
 
     private void ClosePeerAfterControlSendFailure(
         RoutingId physicalRoutingId,
@@ -12694,12 +12661,8 @@ internal sealed class ZLinkManagedStreamSessionService(
         var retained = parts.Select(Message.From).ToArray();
         try
         {
-            return stream.TrySend(sessionRid)
-                .Messages(retained)
-                .Flags(flags)
-                .Submit()
-                ? SubmitResult.Ok
-                : SubmitResult.Backpressured;
+            stream.Send(sessionRid).Messages(retained).Submit();
+            return SubmitResult.Ok;
         }
         catch (ZlinkException)
         {

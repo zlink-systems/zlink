@@ -276,6 +276,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             await source.Send().Message(hello).Async(CancellationToken.None);
 
         await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 1);
+        using var admission = await ReceiveAsync(source);
 
         var acceptedRequest = CreateRequest(
             correlation: 41,
@@ -477,7 +478,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
     }
 
     [Fact]
-    public async Task CanonicalActorJoinRequest_PendingReplyIsDiscardedAfterInboundDisconnectAndReconnect()
+    public async Task CanonicalActorJoinRequest_LateFirstTerminalUsesOpaqueReplyThenStopsRetrying()
     {
         var attempts = 0;
         await using var runtime = await ConnectedRuntime.CreateAsync(_ =>
@@ -510,13 +511,13 @@ public sealed class CanonicalActorJoinIngressReplyTests
         var attemptsAtDiscard = Volatile.Read(ref attempts);
         await runtime.ReconnectAsync();
         Assert.Equal(
-            SubmitResult.Terminated,
+            SubmitResult.Backpressured,
             staleIngress.ReplyTerminal(
                 RequestResult.InternalError,
                 (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
-        Assert.Equal(attemptsAtDiscard, Volatile.Read(ref attempts));
+        Assert.Equal(attemptsAtDiscard + 1, Volatile.Read(ref attempts));
         await Task.Delay(150);
-        Assert.Equal(attemptsAtDiscard, Volatile.Read(ref attempts));
+        Assert.Equal(attemptsAtDiscard + 1, Volatile.Read(ref attempts));
         Assert.Equal(
             SubmitResult.InvalidState,
             pendingIngress.ReplyJoin(
@@ -652,8 +653,10 @@ public sealed class CanonicalActorJoinIngressReplyTests
     }
 
     [Fact]
-    public async Task RouterMonitor_HandoverReportsExactTransportPairIdentity()
+    public async Task RouterMonitor_HandoverReportsCurrentConnectionIdentity()
     {
+        Assert.Null(typeof(MonitorEvent).GetProperty("TransportPairId"));
+        Assert.Null(typeof(MonitorEvent).GetProperty("TransportPairGeneration"));
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var router = context.CreateRouterSocket();
         router.Options.Handover = true;
@@ -671,11 +674,6 @@ public sealed class CanonicalActorJoinIngressReplyTests
         var firstReady = await ReceiveMonitorEventAsync(
             monitor,
             MonitorEventType.ConnectionReady);
-        Assert.Equal(sourceRid, firstReady.RoutingId);
-        Assert.True(firstReady.Flags.HasFlag(
-            MonitorEventFlags.ConnectionReadyEdge));
-        Assert.NotEqual(0UL, firstReady.TransportPairId);
-        Assert.NotEqual(0UL, firstReady.TransportPairGeneration);
 
         await using var replacement = context.CreateDealerSocket();
         replacement.SetRoutingId(sourceRid);
@@ -683,22 +681,20 @@ public sealed class CanonicalActorJoinIngressReplyTests
         var replacementReady = await ReceiveMonitorEventAsync(
             monitor,
             MonitorEventType.ConnectionReady);
+
+        Assert.Equal(sourceRid, firstReady.RoutingId);
         Assert.Equal(sourceRid, replacementReady.RoutingId);
-        Assert.True(replacementReady.Flags.HasFlag(
-            MonitorEventFlags.ConnectionReadyEdge));
+        Assert.NotEqual(0UL, firstReady.ConnectionId);
         Assert.NotEqual(
-            (firstReady.TransportPairId, firstReady.TransportPairGeneration),
-            (replacementReady.TransportPairId,
-                replacementReady.TransportPairGeneration));
+            (firstReady.ConnectionId, firstReady.TransportLane),
+            (replacementReady.ConnectionId, replacementReady.TransportLane));
 
         await first.DisposeAsync();
         var disconnected = await ReceiveMonitorEventAsync(
             monitor,
             MonitorEventType.Disconnected);
-        Assert.Equal(firstReady.TransportPairId, disconnected.TransportPairId);
-        Assert.Equal(
-            firstReady.TransportPairGeneration,
-            disconnected.TransportPairGeneration);
+        Assert.Equal(firstReady.ConnectionId, disconnected.ConnectionId);
+        Assert.Equal(firstReady.TransportLane, disconnected.TransportLane);
     }
 
     [Fact]
@@ -1224,6 +1220,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
 
             await WaitUntilAsync(() =>
                 target.Status().AdmittedPeerCount == 1);
+            using var admission = await ReceiveAsync(source);
             return new ConnectedRuntime(
                 context,
                 target,

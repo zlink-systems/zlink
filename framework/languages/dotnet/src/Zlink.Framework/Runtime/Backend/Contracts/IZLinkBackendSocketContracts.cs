@@ -1,7 +1,7 @@
 namespace Zlink.Framework.Runtime.Backend.Contracts;
 
 // STREAM keeps a semantic adapter because Framework coordinates actor binding,
-// multipart receive state, and mesh completions through one lifecycle boundary.
+// packet receive ownership, and mesh completions through one lifecycle boundary.
 // Ordinary DEALER, ROUTER, PUB, and SUB channels use the binding interfaces
 // directly; duplicating those interfaces here would add no domain meaning.
 internal interface IZLinkBackendStreamSocket : IAsyncDisposable
@@ -18,35 +18,9 @@ internal interface IZLinkBackendStreamSocket : IAsyncDisposable
 
     void SetTlsServer(string certPath, string keyPath, bool requireClientCert);
 
-    bool RecvPart(
-        out RoutingId? sourceRoutingId,
-        out Message? part,
-        out bool hasMore,
-        RecvFlags flags = RecvFlags.None);
-
-    bool Recv(
+    bool RecvPacket(
         out ZLinkBackendStreamReceive? received,
-        RecvFlags flags = RecvFlags.None)
-    {
-        if (!RecvPart(
-                out var sourceRoutingId,
-                out var part,
-                out var hasMore,
-                flags))
-        {
-            received = null;
-            return false;
-        }
-
-        received = new ZLinkBackendStreamReceive(
-            sourceRoutingId,
-            part is null
-                ? Array.Empty<Message>()
-                : new[] { part },
-            hasMore,
-            part);
-        return true;
-    }
+        RecvFlags flags = RecvFlags.None);
 
     bool Send(
         RoutingId routingId,
@@ -100,19 +74,35 @@ internal interface IZLinkBackendStreamSocket : IAsyncDisposable
 
 internal sealed class ZLinkBackendStreamReceive(
     RoutingId? sourceRoutingId,
-    IReadOnlyList<Message> parts,
-    bool hasMore,
-    IDisposable? owner) : IDisposable
+    Message? header,
+    Message? payload) : IDisposable
 {
-    private IDisposable? _owner = owner;
+    private Message? _header = header;
+    private Message? _payload = payload;
 
     internal RoutingId? SourceRoutingId { get; } = sourceRoutingId;
 
-    internal IReadOnlyList<Message> Parts { get; } = parts;
+    internal bool HasPacket => _header is not null && _payload is not null;
 
-    internal bool HasMore { get; } = hasMore;
+    internal long ByteLength => checked(
+        (long)(_header?.Size ?? 0) + (_payload?.Size ?? 0));
 
-    public void Dispose() => Interlocked.Exchange(ref _owner, null)?.Dispose();
+    internal (Message Header, Message Payload) TakePacket()
+    {
+        if (_header is null || _payload is null)
+            throw new InvalidDataException(
+                "A Core STREAM packet must contain one header and one payload.");
+        var packet = (_header, _payload);
+        _header = null;
+        _payload = null;
+        return packet;
+    }
+
+    public void Dispose()
+    {
+        Interlocked.Exchange(ref _header, null)?.Dispose();
+        Interlocked.Exchange(ref _payload, null)?.Dispose();
+    }
 }
 
 internal interface IZLinkBackendSocketMonitor : IAsyncDisposable
@@ -120,8 +110,6 @@ internal interface IZLinkBackendSocketMonitor : IAsyncDisposable
     bool Wait(TimeSpan timeout) =>
         throw new NotSupportedException(
             "The backend socket monitor does not provide a poll wait.");
-
-    void OnEvent(Action<ZLinkBackendSocketMonitorEvent> handler);
 
     bool TryRecv(out ZLinkBackendSocketMonitorEvent monitorEvent);
 }
