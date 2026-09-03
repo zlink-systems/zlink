@@ -1604,7 +1604,7 @@ int main ()
 
     auto native_server_done = std::async (std::launch::async, [&] () -> int {
         zlink::received_t native_received;
-        if (native_server.recv (native_received) != 0 || !native_received.request_seq ()
+        if (native_server.recv (native_received) != 0 || !native_received.reply_token ()
             || native_received.parts ().size () != native_request_parts.size ()) {
             return 76;
         }
@@ -1664,7 +1664,7 @@ int main ()
     auto native_bus_server_done = std::async (std::launch::async, [&] () -> int {
         for (int request_index = 0; request_index < 2; ++request_index) {
             zlink::received_t native_received;
-            if (native_bus_server.recv (native_received) != 0 || !native_received.request_seq ()) {
+            if (native_bus_server.recv (native_received) != 0 || !native_received.reply_token ()) {
                 return 80;
             }
             const auto native_dispatch_reply = packet_dispatcher.dispatch_server_message (

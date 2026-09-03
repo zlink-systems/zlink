@@ -250,13 +250,12 @@ std::optional<raw_received_t> raw_route_port_t::receive_if_ready (
     if (!_received.routing_id ()) {
         throw std::runtime_error ("raw ROUTER receive omitted source routing id");
     }
-    auto retained = std::make_shared<zlink::received_t> (std::move (_received));
-    _received = {};
-    auto source_routing_id = retained->routing_id ()->to_bytes ();
-    auto request_sequence = retained->request_seq ();
-    auto parts = copy_binding_parts (retained->parts ());
-    return raw_received_t{std::move (source_routing_id), request_sequence,
-                          std::move (parts), std::move (retained)};
+    auto source_routing_id = _received.routing_id ()->to_bytes ();
+    auto reply_token = _received.reply_token ();
+    auto parts = copy_binding_parts (_received.parts ());
+    _received.close ();
+    return raw_received_t{std::move (source_routing_id), std::move (reply_token),
+                          std::move (parts)};
 }
 
 std::optional<raw_received_t> raw_route_port_t::try_receive ()
@@ -267,7 +266,7 @@ std::optional<raw_received_t> raw_route_port_t::try_receive ()
 bool raw_route_port_t::reply (
   const raw_received_t &request, const raw_message_t &parts)
 {
-    if (request.source_routing_id.empty () || !request.request_sequence
+    if (request.source_routing_id.empty () || !request.reply_token
         || parts.empty ()) {
         throw std::invalid_argument (
           "raw route reply requires request context and message parts");
@@ -277,11 +276,9 @@ bool raw_route_port_t::reply (
         return false;
     auto messages = materialize_binding_parts (parts);
     auto operation = std::move (
-      request.retained
-        ? request.retained->reply ()
-        : _socket->reply (
-            zlink::routing_id_t::from (request.source_routing_id),
-            *request.request_sequence))
+      _socket->reply (
+        zlink::routing_id_t::from (request.source_routing_id),
+        *request.reply_token))
                        .message (messages[0]);
     for (std::size_t index = 1; index < messages.size (); ++index)
         operation = std::move (operation).message (messages[index]);

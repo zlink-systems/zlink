@@ -2,7 +2,7 @@
 #pragma once
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
-#include <zlink/Contracts/Eventing/timers.hpp>
+#include "runtime/timers/core_timer_drain_loop.hpp"
 
 #include <chrono>
 #include <memory>
@@ -49,19 +49,16 @@ class async_delay_timer_t
             std::lock_guard lock (registry_mutex ());
             registry ()[key] = timer;
         }
-        timer->_timer.on_fire ([key, source] (std::uint64_t) mutable {
-            /* The native timer invokes on_fire from its own internal
-             * dispatch thread. Resuming the coroutine synchronously here
+        timer->_timer.start (
+          duration > std::chrono::milliseconds::zero ()
+            ? duration
+            : std::chrono::milliseconds (1),
+          1, [key, source] (std::uint64_t) mutable {
+            /* Resuming the coroutine synchronously on the drain loop
              * would run the rest of request_erased's retry loop (another
              * network submit, possibly another delay) on that thread,
-             * starving every other timer in the process; destroying `this`
-             * (via the registry erase below) from inside that same callback
-             * can also self-join the timer's internal thread, the hazard
-             * remote_actor_commit_deadline_t guards against in
-             * spot_runtime.cpp. A fresh, throwaway thread sidesteps both:
-             * the coroutine resumes off the timer thread, and by the time
-             * the timer is destroyed nothing is still executing inside its
-             * own fire callback. */
+             * and destroying this owner from the drain thread would
+             * self-join. A fresh, throwaway thread avoids both hazards. */
             std::thread ([key, source] () mutable {
                 source->complete (result_t<void>::success ());
                 std::shared_ptr<async_delay_timer_t> owner;
@@ -75,12 +72,7 @@ class async_delay_timer_t
                 }
                 // owner (and its zlink::timer_t) destructs here.
             }).detach ();
-        });
-        timer->_timer.start (
-          duration > std::chrono::milliseconds::zero ()
-            ? duration
-            : std::chrono::milliseconds (1),
-          1);
+          });
         return pending;
     }
 
@@ -99,7 +91,7 @@ class async_delay_timer_t
         return registry;
     }
 
-    zlink::timer_t _timer;
+    core_timer_drain_loop_t _timer;
 };
 
 /* co_await zlink::framework::detail::delay(50ms); suspends the calling

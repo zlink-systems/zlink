@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CPP_DIR="$(cd "$ROOT_DIR/../.." && pwd)"
-BUILD_DIR="${BUILD_DIR:-$CPP_DIR/build}"
+BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-${BUILD_DIR:-$CPP_DIR/build}}"
 source "$ROOT_DIR/../redis-common.sh"
 zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
 zlink_cpp_e2e_install_cleanup_trap
@@ -78,7 +78,7 @@ for component in Framework StreamConnector FrameworkDependency; do
   cmake --install "$BUILD_DIR" --component "$component" --prefix "$PACKAGE_ROOT" >/dev/null
 done
 
-VCPKG_PREFIX="$CPP_DIR/build/linux-ninja-vcpkg-debug/vcpkg_installed/x64-linux"
+VCPKG_PREFIX="$BUILD_DIR/vcpkg_installed/x64-linux"
 if [[ ! -f "$VCPKG_PREFIX/share/protobuf/protobuf-config.cmake" ]]; then
   echo "C++ framework dependency prefix is missing: $VCPKG_PREFIX" >&2
   exit 1

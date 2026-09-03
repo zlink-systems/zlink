@@ -2339,7 +2339,13 @@ int main ()
              "_submit (header, payload, _timeout)")
              != std::string::npos
         && stream_host.find (
-             "pending.emplace (std::move (operation).timeout (*timeout).async ())")
+             "_core_socket->options ().send_timeout (*timeout);")
+             != std::string::npos
+        && stream_host.find (
+             "_core_socket->send (rid).message (std::move (frame)).async ()")
+             != std::string::npos
+        && stream_host.find (
+             "_core_socket->options ().send_timeout (configured_timeout);")
              != std::string::npos
         && stream_host.find (
              "co_await std::move (*pending)")

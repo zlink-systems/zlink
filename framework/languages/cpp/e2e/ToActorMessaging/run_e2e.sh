@@ -5,7 +5,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/../redis-common.sh"
 zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
 zlink_cpp_e2e_install_cleanup_trap
-BUILD_DIR="$SCRIPT_DIR/../../build"
+BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-$SCRIPT_DIR/../../build}"
 SCENARIO="all"
 E2E_START_ORDER="forward"
 REDIS_ENDPOINT=""

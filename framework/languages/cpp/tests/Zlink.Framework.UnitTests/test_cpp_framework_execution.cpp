@@ -5105,20 +5105,19 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         return false;
     }
 
-    // Destroying the deadline owner must happen after the native timer callback
-    // returns. A second timer proves the shared scheduler remains available.
+    // Destroying the deadline owner must leave timer readiness draining usable.
+    // A second timer proves the polling path remains available.
     std::mutex probe_mutex;
     std::condition_variable probe_changed;
     bool probe_fired = false;
-    zlink::timer_t probe_timer;
-    probe_timer.on_fire ([&] (std::uint64_t) {
+    zlink::framework::detail::core_timer_drain_loop_t probe_timer;
+    probe_timer.start (std::chrono::milliseconds (1), 1, [&] (std::uint64_t) {
         {
             std::lock_guard lock (probe_mutex);
             probe_fired = true;
         }
         probe_changed.notify_all ();
     });
-    probe_timer.start (std::chrono::milliseconds (1), 1);
     {
         std::unique_lock lock (probe_mutex);
         if (!probe_changed.wait_for (

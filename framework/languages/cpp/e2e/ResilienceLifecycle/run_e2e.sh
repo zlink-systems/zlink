@@ -6,7 +6,7 @@ CPP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/../redis-common.sh"
 zlink_cpp_e2e_acquire_run_lock "${BASH_SOURCE[0]}" "$@"
 zlink_cpp_e2e_install_cleanup_trap
-BUILD_DIR="${BUILD_DIR:-$CPP_DIR/build}"
+BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-${BUILD_DIR:-$CPP_DIR/build}}"
 SCENARIO="${*:-all}"
 SCENARIO="${SCENARIO// /,}"
 

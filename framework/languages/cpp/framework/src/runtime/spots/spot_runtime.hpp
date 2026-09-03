@@ -14,6 +14,7 @@
 #include "runtime/operations/exactly_once_table.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/maintenance_runtime.hpp"
+#include "runtime/timers/core_timer_drain_loop.hpp"
 
 #include <zlink/framework/contracts/actors/actor.hpp>
 
@@ -22,7 +23,6 @@
 #include <zlink/framework/contracts/locations/resolvers.hpp>
 #include <zlink/framework/contracts/monitoring/route_mesh_runtime.hpp>
 #include <zlink/framework/contracts/workers/worker.hpp>
-#include <zlink/Contracts/Eventing/timers.hpp>
 
 #include <atomic>
 #include <cassert>
@@ -117,7 +117,7 @@ class spot_node_builder_state_t
     std::shared_ptr<monitoring_runtime_state_t> monitoring;
     std::chrono::milliseconds one_way_send_timeout{std::chrono::seconds (1)};
     std::chrono::milliseconds instance_spot_idle_timeout{0};
-    std::unique_ptr<zlink::timer_t> instance_spot_idle_timer;
+    std::unique_ptr<core_timer_drain_loop_t> instance_spot_idle_timer;
     std::atomic_bool stopping{false};
     std::map<std::string, spot_id_t> actor_spot_ids;
     std::map<std::string, std::uint64_t> actor_generations;

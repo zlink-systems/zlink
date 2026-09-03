@@ -4470,7 +4470,7 @@ void verify_raw_spot_and_actor_routing ()
         protocol::encode_application_payload (
           {"ActorPacket", "application/json", bytes ("bound")})},
        source_descriptor.node_routing_id,
-       91,
+       std::nullopt,
        91,
        source_descriptor.lifecycle_generation,
        std::make_pair (bound_operation.high, bound_operation.low)}));
@@ -4543,7 +4543,7 @@ void verify_raw_spot_and_actor_routing ()
         protocol::encode_application_payload (
           {"ActorPacket", "application/json", bytes ("unfenced")})},
        source_descriptor.node_routing_id,
-       92,
+       std::nullopt,
        92,
        source_descriptor.lifecycle_generation,
        std::make_pair (unfenced_operation.high, unfenced_operation.low),
@@ -4571,7 +4571,7 @@ void verify_raw_spot_and_actor_routing ()
         protocol::encode_application_payload (
           {"ActorPacket", "application/json", bytes ("tailless")})},
        source_descriptor.node_routing_id,
-       93,
+       std::nullopt,
        93,
        source_descriptor.lifecycle_generation,
        std::make_pair (tailless_operation.high, tailless_operation.low),
@@ -4745,7 +4745,7 @@ void verify_relocated_source_reply_failure_keeps_terminal_record ()
          protocol::encode_application_payload (
            {"ActorPacket", "application/json", bytes ("request")})},
         unreachable_source,
-        1,
+        std::nullopt,
         99,
         1,
         std::make_pair (operation.high, operation.low)}));

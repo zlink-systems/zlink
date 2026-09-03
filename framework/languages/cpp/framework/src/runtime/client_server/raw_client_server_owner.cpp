@@ -476,7 +476,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
             //  without a request sequence cannot be answered and is a
             //  protocol error.
             if (received->parts.size () != 1
-                || !received->request_sequence) {
+                || !received->reply_token) {
                 co_return client_server_pump_result_t::protocol_error;
             }
             const auto client =
@@ -556,7 +556,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
                 //  A request-framed probe is acknowledged on its reply leg;
                 //  a raw probe keeps the raw routed ACK.
                 bool ack_sent = false;
-                if (received->request_sequence) {
+                if (received->reply_token) {
                     ack_sent = port->reply (*received, ack_message);
                 } else {
                     ack_sent = co_await port->send (
@@ -613,7 +613,7 @@ raw_client_server_server_t::enqueue_application_record (
         return client_server_pump_result_t::protocol_error;
     }
     if (envelope.kind == messaging::message_kind_t::request) {
-        if (!received.request_sequence) {
+        if (!received.reply_token) {
             return client_server_pump_result_t::protocol_error;
         }
     } else if (envelope.kind != messaging::message_kind_t::command) {
@@ -627,10 +627,9 @@ raw_client_server_server_t::enqueue_application_record (
                  + std::to_string (static_cast<int> (envelope.kind))
                  + " packet=" + envelope.message_name + " client="
                  + routing_id_label (received.source_routing_id)
-                 + " request_seq="
-                 + (received.request_sequence
-                      ? std::to_string (*received.request_sequence)
-                      : std::string ("-"));
+                 + " reply_token="
+                 + (received.reply_token ? std::string ("present")
+                                         : std::string ("-"));
       });
     if (application_permit)
         application_permit->mark_queued ();
@@ -639,12 +638,11 @@ raw_client_server_server_t::enqueue_application_record (
       mesh::service_mailbox_domain_t::application,
       std::move (received.parts),
       std::move (received.source_routing_id),
-      received.request_sequence,
+      received.reply_token,
       std::nullopt,
       0,
       std::nullopt,
       std::nullopt,
-      std::move (received.retained),
       [permit = std::move (application_permit)] () mutable {
           if (!permit)
               return;
@@ -720,8 +718,9 @@ bool raw_client_server_server_t::reply (
   const mesh::service_mailbox_record_t &request,
   const protocol::application_payload_t &payload)
 {
-    if (request.source_routing_id.empty () || !request.request_sequence
-        || request.parts.empty ()) {
+    if (request.source_routing_id.empty () || !request.reply_token)
+        return false;
+    if (request.parts.empty ()) {
         throw std::invalid_argument (
           "ClientServer reply requires request context");
     }
@@ -744,8 +743,7 @@ bool raw_client_server_server_t::reply (
       writer.reply_raw_envelope (
         header, zlink::message_t::from (payload.payload)));
     const auto delivered = port->reply (
-      {request.source_routing_id, request.request_sequence, {},
-       request.retained},
+      {request.source_routing_id, request.reply_token, {}},
       parts);
     trace_client_server_lazy (
       "server-reply",
@@ -753,10 +751,9 @@ bool raw_client_server_server_t::reply (
           return "channel=" + request_header.value ().channel_name
                  + " packet=" + request_header.value ().message_name
                  + " client=" + routing_id_label (request.source_routing_id)
-                 + " request_seq="
-                 + (request.request_sequence
-                      ? std::to_string (*request.request_sequence)
-                      : std::string ("-"))
+                 + " reply_token="
+                 + (request.reply_token ? std::string ("present")
+                                        : std::string ("-"))
                  + " delivered=" + (delivered ? "true" : "false");
       });
     return delivered;
@@ -766,8 +763,9 @@ bool raw_client_server_server_t::reply (
   const mesh::service_mailbox_record_t &request,
   const framework_exception_t &error)
 {
-    if (request.source_routing_id.empty () || !request.request_sequence
-        || request.parts.empty ()) {
+    if (request.source_routing_id.empty () || !request.reply_token)
+        return false;
+    if (request.parts.empty ()) {
         throw std::invalid_argument (
           "ClientServer reply requires request context");
     }
@@ -791,8 +789,7 @@ bool raw_client_server_server_t::reply (
         zlink::message_t::from (
           std::vector<std::uint8_t>{'n', 'u', 'l', 'l'})));
     return port->reply (
-      {request.source_routing_id, request.request_sequence, {},
-       request.retained},
+      {request.source_routing_id, request.reply_token, {}},
       parts);
 }
 

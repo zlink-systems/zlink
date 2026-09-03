@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/streams/stream_host_service.hpp"
-#include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/transport/listener_identity.hpp"
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/dispatch/receive_batch_budget.hpp"
@@ -16,7 +15,9 @@
 
 #include <nlohmann/json.hpp>
 #include <zlink/Contracts/Eventing/poller.hpp>
+#include <zlink/Contracts/Errors/errors.hpp>
 #include <zlink/Contracts/Messaging/operation_contracts.hpp>
+#include <zlink/Contracts/Messaging/stream_packet.hpp>
 #include <zlink/Contracts/Sockets/stream_socket.hpp>
 
 #include <boost/asio/ip/tcp.hpp>
@@ -830,125 +831,6 @@ void validate_stream_frame_size (std::size_t header_size,
     }
 }
 
-struct raw_core_stream_frame_t
-{
-    std::vector<std::uint8_t> header;
-    zlink::message_t payload;
-    std::vector<std::shared_ptr<zlink::received_t>> retained;
-};
-
-class malformed_core_stream_frame_t final : public std::runtime_error
-{
-  public:
-    explicit malformed_core_stream_frame_t (const char *message) : std::runtime_error (message) {}
-};
-
-class core_stream_frame_assembler_t
-{
-  public:
-    explicit core_stream_frame_assembler_t (std::int64_t max_message_size) :
-        _max_message_size (max_message_size)
-    {
-    }
-
-    struct frame_view_t
-    {
-        std::size_t header_size = 0;
-        std::size_t payload_size = 0;
-        std::size_t frame_size = 0;
-        std::span<const std::uint8_t> header;
-    };
-
-    std::optional<frame_view_t> peek () const
-    {
-        if (_bytes.size () < 6) {
-            return std::nullopt;
-        }
-
-        const auto header_size = (static_cast<std::size_t> (_bytes[0]) << 8)
-                                 | static_cast<std::size_t> (_bytes[1]);
-        const auto payload_size = (static_cast<std::size_t> (_bytes[2]) << 24)
-                                  | (static_cast<std::size_t> (_bytes[3]) << 16)
-                                  | (static_cast<std::size_t> (_bytes[4]) << 8)
-                                  | static_cast<std::size_t> (_bytes[5]);
-        validate_stream_frame_size (header_size, payload_size, _max_message_size);
-        if (header_size > std::numeric_limits<std::size_t>::max () - payload_size
-            || 6u > std::numeric_limits<std::size_t>::max () - header_size - payload_size) {
-            throw malformed_core_stream_frame_t ("STREAM frame size overflows the local size type");
-        }
-        const auto frame_size = 6u + header_size + payload_size;
-        if (_bytes.size () < frame_size) {
-            return std::nullopt;
-        }
-        return frame_view_t{
-          header_size,
-          payload_size,
-          frame_size,
-          std::span<const std::uint8_t> (_bytes.data () + 6, header_size)};
-    }
-
-    void append (std::span<const std::byte> part,
-                 std::shared_ptr<zlink::received_t> retained)
-    {
-        if (part.empty ()) {
-            return;
-        }
-        if (_bytes.size () > std::numeric_limits<std::size_t>::max () - part.size ()) {
-            throw malformed_core_stream_frame_t (
-              "STREAM receive buffer size overflows the local size type");
-        }
-        const auto *begin = reinterpret_cast<const std::uint8_t *> (part.data ());
-        _bytes.insert (_bytes.end (), begin, begin + part.size ());
-        _retained.push_back ({part.size (), std::move (retained)});
-    }
-
-    std::optional<raw_core_stream_frame_t> next ()
-    {
-        const auto view = peek ();
-        if (!view) {
-            return std::nullopt;
-        }
-
-        std::vector<std::uint8_t> header (view->header.begin (), view->header.end ());
-        const auto payload_begin = reinterpret_cast<const std::byte *> (
-          _bytes.data () + 6 + view->header_size);
-        auto payload = zlink::message_t::from (
-          std::span<const std::byte> (payload_begin, view->payload_size));
-        std::vector<std::shared_ptr<zlink::received_t>> retained;
-        std::size_t consumed = view->frame_size;
-        while (consumed > 0) {
-            auto &segment = _retained.front ();
-            retained.push_back (segment.owner);
-            const auto used = std::min (consumed, segment.remaining);
-            consumed -= used;
-            segment.remaining -= used;
-            if (segment.remaining == 0) {
-                _retained.pop_front ();
-            }
-        }
-        _bytes.erase (_bytes.begin (), _bytes.begin () + view->frame_size);
-        return raw_core_stream_frame_t{
-          std::move (header), std::move (payload), std::move (retained)};
-    }
-
-    void reset () noexcept
-    {
-        _bytes.clear ();
-        _retained.clear ();
-    }
-
-  private:
-    struct retained_segment_t
-    {
-        std::size_t remaining;
-        std::shared_ptr<zlink::received_t> owner;
-    };
-
-    std::int64_t _max_message_size;
-    std::vector<std::uint8_t> _bytes;
-    std::deque<retained_segment_t> _retained;
-};
-
 } // namespace
 
 class stream_host_service_t::listener_t
@@ -1593,12 +1475,21 @@ class stream_host_service_t::listener_t
                   framework_error_kind_t::unavailable,
                   "Core STREAM socket is stopped");
             }
-            auto operation =
-              _core_socket->send (rid).message (std::move (frame));
+            const auto configured_timeout =
+              _core_socket->options ().send_timeout ();
             if (timeout)
-                pending.emplace (std::move (operation).timeout (*timeout).async ());
-            else
-                pending.emplace (std::move (operation).async ());
+                _core_socket->options ().send_timeout (*timeout);
+            try {
+                pending.emplace (
+                  _core_socket->send (rid).message (std::move (frame)).async ());
+            }
+            catch (...) {
+                if (timeout)
+                    _core_socket->options ().send_timeout (configured_timeout);
+                throw;
+            }
+            if (timeout)
+                _core_socket->options ().send_timeout (configured_timeout);
         }
         co_await std::move (*pending);
         trace_stream_host (
@@ -1663,23 +1554,20 @@ class stream_host_service_t::listener_t
               std::make_unique<zlink::stream_socket_t> (_mesh_node->native_context ());
             _core_socket->options ().max_message_size (zlink::byte_size_t::bytes (
               _stream.max_message_size > 0 ? _stream.max_message_size : -1));
+            _core_socket->options ().recv_mode (zlink::stream_recv_mode_t::packet);
             _core_monitor = std::make_unique<zlink::socket_monitor_t> (
               _core_socket->monitor_open (zlink::monitor_event::disconnected));
-            _core_monitor->on_event ([this] (const zlink::monitor_event_t &event) {
-                if (event.event == zlink::monitor_event::disconnected && event.routing_id)
-                    close_core_session (*event.routing_id, "client_close");
-            });
             _core_socket->bind (_stream.bind_endpoint);
             _bound_endpoint = _core_socket->options ().last_endpoint ();
             mark_started ();
             zlink::poller_t poller;
             poller.add (*_core_socket, zlink::poll_event_flag_t::pollin, 1);
+            poller.add (*_core_monitor, zlink::poll_event_flag_t::pollin, 2);
             _core_wake_timer.attach (poller);
             _core_application_supply =
               std::make_unique<application_supply_slot_t> (
                 _application_jobs,
                 [this] { _core_wake_timer.signal (); });
-            zlink::received_t received;
             try {
                 while (!_stop->load (std::memory_order_acquire)) {
                     /* Deferred close intents recorded by completion
@@ -1687,14 +1575,6 @@ class stream_host_service_t::listener_t
                      * here, on the Core loop with no session lock held. */
                     drain_pending_core_disconnects ();
                     receive_batch_budget_t batch;
-                    // Frames retained by an earlier batch are drained before
-                    // waiting for another Core receive. This prevents a peer
-                    // whose application HWM is full from retaining work that
-                    // could otherwise be processed for another peer.
-                    process_core_frames (batch);
-                    if (batch.exhausted ()) {
-                        continue;
-                    }
 
                     zlink::poll_event_t event;
                     /* The Core poller has no cross-thread close wake contract.
@@ -1718,38 +1598,67 @@ class stream_host_service_t::listener_t
                     if ((revents & pollerr) != 0 && (revents & pollin) == 0)
                         break;
 
+                    if (event.slot == 2) {
+                        for (;;) {
+                            auto monitor_event =
+                              _core_monitor->recv (zlink::recv_flags_t::dontwait);
+                            if (!monitor_event)
+                                break;
+                            if (monitor_event->event
+                                  == zlink::monitor_event::disconnected
+                                && monitor_event->routing_id) {
+                                close_core_session (
+                                  *monitor_event->routing_id, "client_close");
+                            }
+                        }
+                        continue;
+                    }
+                    if (event.slot != 1 || (revents & pollin) == 0)
+                        continue;
+
+                    // Reserve Framework capacity before pulling exactly one
+                    // Core packet. Leaving the packet in Core while capacity
+                    // is unavailable preserves Core RCVHWM backpressure.
+                    _core_application_supply->ensure_waiter ();
+                    auto reserved = _core_application_supply->take ();
+                    if (!reserved)
+                        continue;
+
                     // POLLIN guarantees that a receive is worthwhile. DONTWAIT
                     // also makes a stale readiness event harmless: it yields
                     // ZLINK_RECV_NO_DATA and the loop re-arms the poller.
-                    const int receive_result =
-                      _core_socket->recv (received, zlink::recv_flags_t::dontwait);
-                    if (receive_result != 0) {
-                        const int receive_errno = errno;
-                        received.close ();
-                        if (_stop->load (std::memory_order_acquire)
-                            || receive_result
-                                 == static_cast<int> (zlink::recv_result_t::terminated)) {
-                            break;
-                        }
-                        if (receive_result == static_cast<int> (zlink::recv_result_t::no_data)) {
+                    zlink::stream_packet_t packet;
+                    try {
+                        if (!_core_socket->recv_packet (
+                              packet, zlink::recv_flags_t::dontwait)) {
                             continue;
                         }
-                        if (receive_result == -1 && receive_errno == EMSGSIZE) {
-                            trace_stream_host ("core-recv-size-rejected", _stream, std::nullopt,
+                    }
+                    catch (const zlink::recv_error_t &error) {
+                        if (_stop->load (std::memory_order_acquire)
+                            || error.result () == zlink::recv_result_t::terminated) {
+                            break;
+                        }
+                        if (error.internal_errno () == EMSGSIZE) {
+                            trace_stream_host ("core-recv-size-rejected", _stream,
+                                               std::nullopt,
                                                "errno=EMSGSIZE limit="
                                                  + std::to_string (_stream.max_message_size));
                             continue;
                         }
-                        throw std::runtime_error ("Framework STREAM recv failed");
+                        throw;
                     }
-                    detail::backend::binding_received_release_t received_release (
-                      received);
-                    auto retained = std::make_shared<zlink::received_t> (received);
-                    process_core_received (*retained, retained, batch);
-                    if (received.routing_id ()) {
+                    const auto routing_id = packet.routing_id ();
+                    const auto header_bytes = packet.header ().size ();
+                    const auto payload_bytes = packet.body ().size ();
+                    process_core_packet (packet, std::move (*reserved), batch);
+                    if (routing_id) {
                         trace_stream_host ("core-recv", _stream, std::nullopt,
-                                           "rid=" + received.routing_id ()->to_hex () + " parts="
-                                             + std::to_string (received.parts ().size ()));
+                                           "rid=" + routing_id->to_hex ()
+                                             + " header_bytes="
+                                             + std::to_string (header_bytes)
+                                             + " payload_bytes="
+                                             + std::to_string (payload_bytes));
                     }
                 }
             }
@@ -1783,8 +1692,6 @@ class stream_host_service_t::listener_t
                 _core_socket.reset ();
             }
         }
-        _core_frame_assemblers.clear ();
-        _core_frame_routing_ids.clear ();
     }
 
     bool begin_actor_binding_replacement (
@@ -2504,8 +2411,6 @@ class stream_host_service_t::listener_t
             ++_core_sessions_revision;
         }
         _core_sessions_changed.notify_all ();
-        _core_frame_assemblers.erase (key);
-        _core_frame_routing_ids.erase (key);
         if (!current)
             return;
 
@@ -2689,8 +2594,8 @@ class stream_host_service_t::listener_t
         }
     }
 
-    bool dispatch_core_frame (const zlink::routing_id_t &rid,
-                              raw_core_stream_frame_t frame,
+    bool dispatch_core_packet (const zlink::routing_id_t &rid,
+                              zlink::message_t payload,
                               stream_header_t header,
                               std::shared_ptr<application_job_queue_t::permit_t>
                                 application_permit)
@@ -2707,7 +2612,7 @@ class stream_host_service_t::listener_t
         trace_stream_host (
           "core-frame", _stream, header,
           "rid=" + rid.to_hex ()
-            + " payload_bytes=" + std::to_string (frame.payload.size ()));
+            + " payload_bytes=" + std::to_string (payload.size ()));
         if (header.kind () == stream_message_kind_t::control) {
             std::lock_guard session_lock (current->gate);
             if (current->connected) {
@@ -2737,11 +2642,9 @@ class stream_host_service_t::listener_t
                 detail::session_actor_manager_access_t::set_codec (
                   *current->actors, header.codec ());
                 auto dispatched = _runtime.dispatch_packet_async (
-                  *current->session, current->stream, header, frame.payload,
-                  [this, current, rid, header,
-                   retained = std::move (frame.retained)]
+                  *current->session, current->stream, header, payload,
+                  [this, current, rid, header]
                   (const result_t<void> &result) {
-                      static_cast<void> (retained);
                       trace_stream_host (
                         "core-dispatch-complete", _stream, header,
                         std::string ("result=")
@@ -2814,130 +2717,36 @@ class stream_host_service_t::listener_t
         return true;
     }
 
-    void process_core_frames (receive_batch_budget_t &budget)
+    bool process_core_packet (
+      zlink::stream_packet_t &packet,
+      application_job_queue_t::permit_t permit,
+      receive_batch_budget_t &budget)
     {
-        if (!budget.can_receive () || _core_frame_assemblers.empty ()) {
-            return;
+        if (!packet.routing_id ()) {
+            return false;
         }
-
-        std::vector<std::string> keys;
-        keys.reserve (_core_frame_assemblers.size ());
-        for (const auto &[key, _] : _core_frame_assemblers) {
-            keys.push_back (key);
-        }
-        std::size_t start = 0;
-        if (!_core_frame_cursor.empty ()) {
-            const auto next = std::upper_bound (
-              keys.begin (), keys.end (), _core_frame_cursor);
-            start = static_cast<std::size_t> (next - keys.begin ());
-            if (start == keys.size ()) {
-                start = 0;
-            }
-        }
-
-        // Visit each Core peer at most once per batch. The cursor continues
-        // from the last visited peer on the next batch.
-        for (std::size_t offset = 0;
-             offset < keys.size () && budget.can_receive (); ++offset) {
-            const auto &key = keys[(start + offset) % keys.size ()];
-            _core_frame_cursor = key;
-            const auto assembler_found = _core_frame_assemblers.find (key);
-            const auto rid_found = _core_frame_routing_ids.find (key);
-            if (assembler_found == _core_frame_assemblers.end ()
-                || rid_found == _core_frame_routing_ids.end ()) {
-                continue;
-            }
-
-            auto &assembler = assembler_found->second;
-            const auto view = assembler.peek ();
-            if (!view) {
-                continue;
-            }
-
-            const auto rid = rid_found->second;
-            const std::vector<std::uint8_t> header_bytes (
-              view->header.begin (), view->header.end ());
-            auto decoded = _runtime.decode_header (header_bytes);
-            if (!decoded) {
-                disconnect_core_peer (rid, "protocol_error");
-                _core_frame_assemblers.erase (key);
-                _core_frame_routing_ids.erase (key);
-                continue;
-            }
-
-            std::shared_ptr<application_job_queue_t::permit_t>
-              application_permit;
-            if (decoded.value ().kind () == stream_message_kind_t::send
-                || decoded.value ().kind ()
-                     == stream_message_kind_t::request) {
-                _core_application_supply->ensure_waiter ();
-                auto reserved = _core_application_supply->take ();
-                if (!reserved)
-                    continue;
-                application_permit = std::make_shared<
-                  application_job_queue_t::permit_t> (
-                    std::move (*reserved));
-            }
-
-            auto frame = assembler.next ();
-            if (!frame) {
-                continue;
-            }
-            if (application_permit)
-                application_permit->mark_queued ();
-            const auto frame_bytes = view->frame_size;
-            const bool dispatched = dispatch_core_frame (
-              rid, std::move (*frame), std::move (decoded.value ()),
-              std::move (application_permit));
-            budget.account (frame_bytes);
-            if (!dispatched) {
-                _core_frame_assemblers.erase (key);
-                _core_frame_routing_ids.erase (key);
-            }
-        }
-    }
-
-    void process_core_received (zlink::received_t &received,
-                                std::shared_ptr<zlink::received_t> retained,
-                                receive_batch_budget_t &budget)
-    {
-        if (!received.routing_id ()) {
-            return;
-        }
-        const auto rid = *received.routing_id ();
-        const auto key = core_session_key (rid);
-        auto [assembler_found, inserted] = _core_frame_assemblers.try_emplace (
-          key, _stream.max_message_size);
-        (void) inserted;
-        auto &assembler = assembler_found->second;
-        _core_frame_routing_ids.insert_or_assign (key, rid);
-        try {
-            for (const auto &part : received.parts ()) {
-                assembler.append (part.bytes (), retained);
-            }
-            process_core_frames (budget);
-        }
-        catch (const stream_message_size_exceeded_t &error) {
-            trace_stream_host (
-              "core-recv-size-rejected", _stream, std::nullopt,
-              "errno=EMSGSIZE limit=" + std::to_string (error.max_message_size ())
-                + " header_bytes=" + std::to_string (error.header_size ())
-                + " payload_bytes=" + std::to_string (error.payload_size ())
-                + " rid=" + rid.to_hex ());
+        const auto rid = *packet.routing_id ();
+        auto header_bytes = packet.header ().to_bytes ();
+        auto decoded = _runtime.decode_header (header_bytes);
+        if (!decoded) {
             disconnect_core_peer (rid, "protocol_error");
-            _core_frame_assemblers.erase (key);
-            _core_frame_routing_ids.erase (key);
+            return false;
         }
-        catch (const malformed_core_stream_frame_t &) {
-            disconnect_core_peer (rid, "protocol_error");
-            _core_frame_assemblers.erase (key);
-            _core_frame_routing_ids.erase (key);
+
+        const auto frame_bytes = 6u + header_bytes.size () + packet.body ().size ();
+        std::shared_ptr<application_job_queue_t::permit_t> application_permit;
+        if (decoded.value ().kind () == stream_message_kind_t::send
+            || decoded.value ().kind () == stream_message_kind_t::request) {
+            permit.mark_queued ();
+            application_permit = std::make_shared<application_job_queue_t::permit_t> (
+              std::move (permit));
         }
-        catch (const std::exception &) {
-            disconnect_core_peer (rid, "protocol_error");
-            _core_frame_assemblers.erase (key);
-            _core_frame_routing_ids.erase (key);
-        }
+        auto payload = std::move (packet.body ());
+        const bool dispatched = dispatch_core_packet (
+          rid, std::move (payload), std::move (decoded.value ()),
+          std::move (application_permit));
+        budget.account (frame_bytes);
+        return dispatched;
     }
 
     void close_core_sessions (
@@ -2947,7 +2756,6 @@ class stream_host_service_t::listener_t
     {
         struct retiring_core_session_t
         {
-            std::string session_key;
             std::string retirement_id;
             std::shared_ptr<core_session_t> session;
         };
@@ -2962,15 +2770,13 @@ class stream_host_service_t::listener_t
                 auto retirement_id = current->stream.session_id ();
                 _retired_core_sessions.emplace (retirement_id, current);
                 sessions.push_back (
-                  retiring_core_session_t{key, std::move (retirement_id), current});
+                  retiring_core_session_t{std::move (retirement_id), current});
             }
             _core_sessions.clear ();
             ++_core_sessions_revision;
         }
         _core_sessions_changed.notify_all ();
         for (auto &retiring : sessions) {
-            _core_frame_assemblers.erase (retiring.session_key);
-            _core_frame_routing_ids.erase (retiring.session_key);
             begin_core_session_close (
               std::move (retiring.retirement_id),
               std::move (retiring.session), close_reason,
@@ -3987,9 +3793,6 @@ class stream_host_service_t::listener_t
       _retired_core_sessions;
     std::condition_variable _core_sessions_changed;
     std::uint64_t _core_sessions_revision = 0;
-    std::map<std::string, core_stream_frame_assembler_t> _core_frame_assemblers;
-    std::map<std::string, zlink::routing_id_t> _core_frame_routing_ids;
-    std::string _core_frame_cursor;
     stream_receive_scheduler_t _receive_scheduler;
     std::mutex _workers_mutex;
     std::vector<std::thread> _workers;

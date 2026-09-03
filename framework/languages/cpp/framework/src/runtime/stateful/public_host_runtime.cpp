@@ -4174,7 +4174,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     continue;
                 }
                 if (wire.kind == protocol::command::relocationPrepare) {
-                    if (mailbox_record.parts.empty () || !mailbox_record.request_sequence
+                    if (mailbox_record.parts.empty () || !mailbox_record.reply_token
                         || !session_route_owner_resolver)
                         continue;
                     const auto control =
@@ -5555,20 +5555,20 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                 terminal (0, 0, true);
             }
             catch (const protocol::service_wire_error_t &) {
-                if (mailbox_record.request_sequence && mailbox_record.correlation)
+                if (mailbox_record.reply_token && mailbox_record.correlation)
                     (void) _transport->reply_failure (
                       mailbox_record, 104,
                       static_cast<std::uint32_t> (
                         protocol::framework_error_code::requestProtocolError));
             }
             catch (const std::exception &) {
-                if (mailbox_record.request_sequence && mailbox_record.correlation)
+                if (mailbox_record.reply_token && mailbox_record.correlation)
                     (void) _transport->reply_failure (
                       mailbox_record, 105,
                       static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed));
             }
             catch (...) {
-                if (mailbox_record.request_sequence && mailbox_record.correlation)
+                if (mailbox_record.reply_token && mailbox_record.correlation)
                     (void) _transport->reply_failure (
                       mailbox_record, 105,
                       static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed));
@@ -5970,7 +5970,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
                       mailbox_record.parts.front (), wire.kind);
                     record.actor_route = actor.target;
                     record.message_follow_hop_count = actor.message_follow_hop_count;
-                    record.reply_route_id = mailbox_record.request_sequence.value_or (0);
+                    record.reply_route_id = actor.correlation.value_or (0);
                     if (mailbox_record.bound_session_source) {
                         record.source_session_rid = zlink::routing_id_t::from (
                           mailbox_record.bound_session_source->session_routing_id);
@@ -6015,7 +6015,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
                 application_dispatch_started = true;
             }
             catch (const protocol::service_wire_error_t &) {
-                if (mailbox_record.request_sequence && mailbox_record.correlation) {
+                if (mailbox_record.reply_token && mailbox_record.correlation) {
                     (void) _transport->reply_failure (
                       mailbox_record, 104,
                       static_cast<std::uint32_t> (

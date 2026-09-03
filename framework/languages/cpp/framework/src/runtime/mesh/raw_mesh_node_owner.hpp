@@ -527,7 +527,6 @@ class raw_mesh_node_owner_t
     std::deque<pending_admission_t> _pending_admissions;
     std::size_t _pending_admission_bytes = 0;
     std::size_t _last_pump_bytes = 0;
-    std::shared_ptr<zlink::received_t> _received_owner_for_enqueue;
     std::shared_ptr<foundation::operation_registry_t> _operations;
     std::map<std::vector<std::uint8_t>, service_node_descriptor_t,
              raw_mesh_byte_vector_less_t>

@@ -3,8 +3,8 @@
 
 #include <zlink/framework/contracts/spots/spot.hpp>
 #include <zlink/framework/contracts/timers/timer.hpp>
-#include <zlink/Contracts/Eventing/timers.hpp>
 #include "runtime/execution/serial_execution_queue.hpp"
+#include "runtime/timers/core_timer_drain_loop.hpp"
 
 #include <functional>
 #include <deque>
@@ -30,7 +30,7 @@ class timer_state_t
     std::type_index handler_type{typeid (void)};
     std::weak_ptr<void> handler_instance;
     handler_invoker_t handler_invoker;
-    std::unique_ptr<zlink::timer_t> native_timer;
+    std::unique_ptr<core_timer_drain_loop_t> native_timer;
     std::shared_ptr<runtime::serial_execution_queue_t> serial_queue;
     std::uint64_t delivery_index = 0;
     std::uint64_t last_scheduled_index = 0;

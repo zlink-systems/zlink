@@ -1660,7 +1660,7 @@ void verify_client_server_independent_raw_path ()
     auto request_claim = server.mailbox ().try_claim (
       mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (request_claim && request_claim->records.size () == 1);
-    assert (request_claim->records.front ().request_sequence);
+    assert (request_claim->records.front ().reply_token);
     assert (server.reply (
       request_claim->records.front (),
       {"ClientServerReply", "application/json", bytes ("reply")}));
@@ -2162,7 +2162,7 @@ void verify_raw_owner_node_send_and_liveness ()
       mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (request_claim && request_claim->records.size () == 1);
     const auto &request_record = request_claim->records.front ();
-    assert (request_record.request_sequence);
+    assert (request_record.reply_token);
     assert (request_record.correlation);
     assert (protocol::decode_node_request_header (
               request_record.parts.front ())

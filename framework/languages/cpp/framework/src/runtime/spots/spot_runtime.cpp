@@ -30,6 +30,7 @@
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 #include "runtime/timers/timer_runtime.hpp"
+#include "runtime/timers/core_timer_drain_loop.hpp"
 
 #include <zlink/framework/contracts/channels/call.hpp>
 
@@ -411,7 +412,10 @@ class remote_actor_commit_deadline_t final
         auto owner = std::shared_ptr<remote_actor_commit_deadline_t> (
           new remote_actor_commit_deadline_t (std::move (executor), std::move (expired)));
         std::weak_ptr<remote_actor_commit_deadline_t> weak_owner = owner;
-        owner->_timer.on_fire ([weak_owner] (std::uint64_t) {
+        const auto now = std::chrono::steady_clock::now ();
+        owner->_timer.start (
+          deadline > now ? deadline - now : std::chrono::nanoseconds (1), 1,
+          [weak_owner] (std::uint64_t) {
             if (auto active = weak_owner.lock (); active && !active->post_fire ()) {
                 /* The node executor only rejects after shutdown begins. Move
                  * the last callback owner to a different thread so native
@@ -420,9 +424,7 @@ class remote_actor_commit_deadline_t final
                     active->fire ();
                 }).detach ();
             }
-        });
-        const auto now = std::chrono::steady_clock::now ();
-        owner->_timer.start (deadline > now ? deadline - now : std::chrono::nanoseconds (1), 1);
+          });
         return owner;
     }
 
@@ -498,7 +500,7 @@ class remote_actor_commit_deadline_t final
     }
 
     std::mutex _mutex;
-    zlink::timer_t _timer;
+    detail::core_timer_drain_loop_t _timer;
     std::weak_ptr<runtime::offload_executor_t> _executor;
     std::function<void ()> _expired;
     bool _cancelled = false;
@@ -12457,15 +12459,15 @@ void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node
         attach_native_spot (context);
     if (plan.create_idle_timer) {
         auto weak_state = std::weak_ptr<spot_node_builder_state_t> (_state);
-        auto timer = std::make_unique<zlink::timer_t> ();
-        timer->on_fire ([weak_state] (std::uint64_t) {
+        auto timer = std::make_unique<detail::core_timer_drain_loop_t> ();
+        timer->start (plan.idle_timeout,
+                      std::numeric_limits<std::uint64_t>::max (),
+                      [weak_state] (std::uint64_t) {
             if (auto state = weak_state.lock ()) {
                 if (!state->stopping.load (std::memory_order_acquire))
                     spot_node_runtime_t (std::move (state)).evict_idle_spots ();
             }
-        });
-        timer->start (plan.idle_timeout,
-                      std::numeric_limits<std::uint64_t>::max ());
+          });
         _state->lane.run ([&] {
             if (!_state->instance_spot_idle_timer)
                 _state->instance_spot_idle_timer = std::move (timer);
@@ -12475,7 +12477,7 @@ void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node
 
 void spot_node_runtime_t::detach_native_node ()
 {
-    zlink::timer_t *idle_timer = nullptr;
+    detail::core_timer_drain_loop_t *idle_timer = nullptr;
     auto native_spots = _state->lane.run ([&] {
         std::vector<std::shared_ptr<service::spot_t>> result;
         idle_timer = _state->instance_spot_idle_timer.get ();
