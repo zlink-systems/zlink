@@ -26,27 +26,6 @@ namespace reqrep = zlink::socket_reqrep_internal;
 
 namespace
 {
-class submit_progress_owner_guard_t
-{
-  public:
-    explicit submit_progress_owner_guard_t (zlink::socket_base_t *socket_) :
-        _socket (socket_), _held (false)
-    {
-    }
-
-    ~submit_progress_owner_guard_t ()
-    {
-        if (_held)
-            _socket->release_transport_pair_owner_progress ();
-    }
-
-    bool *held_state () { return &_held; }
-
-  private:
-    zlink::socket_base_t *_socket;
-    bool _held;
-};
-
 struct pending_pair_observer_t
 {
     pending_pair_observer_t () :
@@ -332,34 +311,6 @@ zlink_submit_result_t finish_request_submit_failure (
     return failure_;
 }
 
-int send_dealer_reply_to_target (zlink::socket_base_t *socket_,
-                                 const reqrep::dealer_reply_target_t &target_,
-                                 zlink::part_helper_internal::handle_state_t *helper_state_,
-                                 zlink_msg_t *final_part_)
-{
-    if (!target_.pipe || !helper_state_ || !final_part_ || target_.request_seq == 0) {
-        errno = EFAULT;
-        return -1;
-    }
-
-    return reqrep::send_completion_staged_frames (
-      socket_, target_.pipe, NULL,
-      helper_state_->send.buffered_parts.empty ()
-        ? NULL
-        : &helper_state_->send.buffered_parts[0],
-      helper_state_->send.buffered_parts.size (), final_part_);
-}
-
-void release_dealer_reply_target_pipe (
-  const reqrep::dealer_reply_target_t &target_)
-{
-    if (!target_.pipe)
-        return;
-    const int saved_errno = errno;
-    target_.pipe->release_lifetime_ref ();
-    errno = saved_errno;
-}
-
 bool message_has_group (const zlink_msg_t *part_);
 int attach_request_reply_metadata (zlink_msg_t *part_,
                                    uint8_t message_type_,
@@ -489,7 +440,7 @@ int send_public_router_reply_with_wait (
       infinite
         ? std::chrono::steady_clock::time_point::max ()
         : started_at_ + std::chrono::milliseconds (timeout_ms_);
-    submit_progress_owner_guard_t progress_owner (socket_);
+    zlink::transport_pair_owner_progress_scope_t progress_owner (socket_);
 
     for (;;) {
         if (socket_->is_ctx_terminated ()) {
@@ -605,12 +556,12 @@ zlink_submit_result_t public_router_reply_submit (
     spec.has_rid1 = true;
     zlink::part_helper_internal::copy_routing_id (peer_rid_, &spec.rid1);
 
-    std::shared_ptr<zlink::part_helper_internal::handle_state_t> state;
+    zlink::part_helper_internal::handle_state_t *state = NULL;
     std::unique_lock<std::mutex> state_lock;
     bool first_part = false;
     const int prepare_rc =
       zlink::part_helper_internal::prepare_send_step_locked (
-        router_, spec, handle_.socket, &state, &state_lock, &first_part,
+        spec, handle_.socket, &state, &state_lock, &first_part,
         part_flag_ == ZLINK_PART_MORE);
     if (prepare_rc == 1) {
         // A lone FINAL is one complete record, not an incremental multipart
@@ -619,8 +570,7 @@ zlink_submit_result_t public_router_reply_submit (
         // socket sync below serializes their physical writes. Treating this as
         // multipart would reject that ordinary race with EINVAL.
         std::optional<zlink::socket_public_send_scope_t> complete_scope;
-        if (!handle_.socket->begin_complete_send_scope (
-              true, &complete_scope)) {
+        if (!handle_.socket->begin_complete_send_scope (&complete_scope)) {
             const int saved_errno = errno;
             reqrep::abandon_public_router_reply_sequence (
               request_state, reply_token_);
@@ -679,7 +629,7 @@ zlink_submit_result_t public_router_reply_submit (
             errno = EINVAL;
             return ZLINK_SUBMIT_INVALID_ARGUMENT;
         }
-        if (reqrep::stage_request_payload_part (state.get (), part_) != 0) {
+        if (reqrep::stage_request_payload_part (state, part_) != 0) {
             const int saved_errno = errno;
             state_lock.unlock ();
             reqrep::abandon_public_router_reply_sequence (
@@ -690,7 +640,7 @@ zlink_submit_result_t public_router_reply_submit (
             return zlink::submit_result_internal::from_errno (saved_errno);
         }
         zlink::part_helper_internal::complete_send_step_locked (
-          state.get (), ZLINK_PART_MORE);
+          state, ZLINK_PART_MORE);
         return ZLINK_SUBMIT_OK;
     }
 
@@ -845,11 +795,11 @@ zlink_submit_result_t request_part_common (
             errno = EINVAL;
             return ZLINK_SUBMIT_INVALID_ARGUMENT;
         }
-        std::shared_ptr<zlink::part_helper_internal::handle_state_t> state;
+        zlink::part_helper_internal::handle_state_t *state = NULL;
         std::unique_lock<std::mutex> state_lock;
         bool first_part = false;
         if (zlink::part_helper_internal::prepare_send_step_locked (
-              handle_, spec, socket_handle_.socket, &state, &state_lock,
+              spec, socket_handle_.socket, &state, &state_lock,
               &first_part, true)
             != 0) {
             zlink::part_helper_internal::abort_current_non_publish_send_sequence (handle_);
@@ -857,7 +807,7 @@ zlink_submit_result_t request_part_common (
             return zlink::submit_result_internal::from_errno (errno);
         }
 
-        if (reqrep::stage_request_payload_part (state.get (), part_) != 0) {
+        if (reqrep::stage_request_payload_part (state, part_) != 0) {
             const int saved_errno = errno;
             state_lock.unlock ();
             zlink::part_helper_internal::abort_send_step (state);
@@ -867,7 +817,7 @@ zlink_submit_result_t request_part_common (
         }
 
         zlink::part_helper_internal::complete_send_step_locked (
-          state.get (), ZLINK_PART_MORE);
+          state, ZLINK_PART_MORE);
         return ZLINK_SUBMIT_OK;
     }
 
@@ -950,11 +900,11 @@ zlink_submit_result_t request_part_common (
         return ZLINK_SUBMIT_OK;
     }
 
-    std::shared_ptr<zlink::part_helper_internal::handle_state_t> state;
+    zlink::part_helper_internal::handle_state_t *state = NULL;
     std::unique_lock<std::mutex> state_lock;
     bool first_part = false;
     if (zlink::part_helper_internal::prepare_send_step_locked (
-          handle_, spec, socket_handle_.socket, &state, &state_lock,
+          spec, socket_handle_.socket, &state, &state_lock,
           &first_part, true)
         != 0) {
         const zlink_submit_result_t failure =
@@ -974,7 +924,7 @@ zlink_submit_result_t request_part_common (
             errno = EINVAL;
             return ZLINK_SUBMIT_INVALID_ARGUMENT;
         }
-        if (reqrep::stage_request_payload_part (state.get (), part_) != 0) {
+        if (reqrep::stage_request_payload_part (state, part_) != 0) {
             const int saved_errno = errno;
             state_lock.unlock ();
             zlink::part_helper_internal::abort_send_step (state);
@@ -986,7 +936,7 @@ zlink_submit_result_t request_part_common (
         }
 
         zlink::part_helper_internal::complete_send_step_locked (
-          state.get (), ZLINK_PART_MORE);
+          state, ZLINK_PART_MORE);
         return ZLINK_SUBMIT_OK;
     }
 
@@ -1006,7 +956,7 @@ zlink_submit_result_t request_part_common (
           zlink::submit_result_internal::from_errno (saved_errno));
     }
 
-    if (reqrep::stage_request_payload_part (state.get (), part_) != 0) {
+    if (reqrep::stage_request_payload_part (state, part_) != 0) {
         const int saved_errno = errno;
         state_lock.unlock ();
         zlink::part_helper_internal::abort_send_step (state);
@@ -1024,7 +974,7 @@ zlink_submit_result_t request_part_common (
     // second init/move pass.
     zlink::part_helper_internal::send_part_buffer_t request_parts;
     if (zlink::part_helper_internal::take_buffered_send_record_locked (
-          state.get (), &request_parts)
+          state, &request_parts)
         != 0) {
         const int saved_errno = errno;
         state_lock.unlock ();

@@ -1582,15 +1582,6 @@ void zlink::pipe_t::release_decoder_frame_reservation (
     reservation->active = false;
 }
 
-void zlink::pipe_t::finish_direct_decoder_frame (
-  unsigned char msg_flags_)
-{
-    if ((msg_flags_ & msg_t::more) != 0)
-        return;
-    scoped_optional_fast_lock_t lock (_session_pipe ? NULL : &_out_sync);
-    _decoder_multipart_started_empty = false;
-}
-
 bool zlink::pipe_t::check_write ()
 {
     return check_write_status () == pipe_write_ready;
@@ -2189,15 +2180,6 @@ bool zlink::pipe_t::write (
     return write_message_unlocked (msg_, true, true, admission_out_);
 }
 
-bool zlink::pipe_t::write_no_hwm_check (const msg_t *msg_)
-{
-    scoped_fast_lock_t lock (_out_sync);
-    if (unlikely (!_out_active || _state != active))
-        return false;
-
-    return write_message_unlocked (msg_, false);
-}
-
 bool zlink::pipe_t::write_routing_id_and_flush (const msg_t *msg_)
 {
     if (!msg_ || !msg_->is_routing_id ()) {
@@ -2249,11 +2231,8 @@ bool zlink::pipe_t::peer_control_slots_enabled_unlocked () const
 {
     const unsigned char lane_count =
       _transport_lane_count.load (std::memory_order_acquire);
-    const int peer_type =
-      _peer_socket_type.load (std::memory_order_acquire);
     if (_transport_pair_id == 0 || _transport_pair_generation == 0
-        || (peer_type != ZLINK_CORE_SOCKET_DEALER
-            && peer_type != ZLINK_CORE_SOCKET_ROUTER))
+        || !peer_uses_routed_protocol_unlocked ())
         return false;
 
     if (lane_count == 1u)
@@ -2262,6 +2241,14 @@ bool zlink::pipe_t::peer_control_slots_enabled_unlocked () const
         return _transport_lane == transport_lane_application
                || _transport_lane == transport_lane_completion;
     return false;
+}
+
+bool zlink::pipe_t::peer_uses_routed_protocol_unlocked () const
+{
+    const int peer_type =
+      _peer_socket_type.load (std::memory_order_acquire);
+    return peer_type == ZLINK_CORE_SOCKET_DEALER
+           || peer_type == ZLINK_CORE_SOCKET_ROUTER;
 }
 
 void zlink::pipe_t::discard_pending_peer_controls_unlocked ()
@@ -2563,6 +2550,60 @@ bool zlink::pipe_t::write_and_flush (
     return true;
 }
 
+bool zlink::pipe_t::try_write_complete_record_and_flush (
+  const msg_t *parts_, size_t part_count_)
+{
+    if (!parts_ || part_count_ < 2)
+        return false;
+
+    scoped_fast_lock_t lock (_out_sync);
+    if (unlikely (!write_state_ready_unlocked (NULL))
+        || _registry_accounting || _conflate || !_out_pipe
+        || _out_incomplete_bytes != 0
+        || _out_incomplete_payload_bytes != 0
+        || _out_multipart_started_empty || _out_owner_message_started
+        || _out_owner_message_start_pending)
+        return false;
+
+    uint64_t record_bytes = 0;
+    uint64_t payload_bytes = 0;
+    for (size_t i = 0; i != part_count_; ++i) {
+        const msg_t &part = parts_[i];
+        const bool expected_more = i + 1 < part_count_;
+        if (!part.check ()
+            || ((part.flags () & msg_t::more) != 0) != expected_more
+            || part.is_delimiter () || part.is_join () || part.is_leave ()
+            || part.is_routing_id () || part.is_credential ())
+            return false;
+
+        const uint64_t frame_bytes = frame_accounted_bytes (&part);
+        const uint64_t part_payload = static_cast<uint64_t> (part.size ());
+        if (frame_bytes == UINT64_MAX
+            || UINT64_MAX - record_bytes < frame_bytes
+            || UINT64_MAX - payload_bytes < part_payload)
+            return false;
+        record_bytes += frame_bytes;
+        payload_bytes += part_payload;
+    }
+
+    // This subset deliberately excludes the empty-pipe oversize exception.
+    // The generic path owns incremental HWM refusal, waiter publication, and
+    // retry/rollback whenever the whole record is not already admissible.
+    if ((_max_message_bytes != 0 && payload_bytes > _max_message_bytes)
+        || !can_commit_bytes_with_peer_snapshot_unlocked (
+          record_bytes, payload_bytes, false))
+        return false;
+
+    for (size_t i = 0; i != part_count_; ++i) {
+        const bool written =
+          write_message_unlocked (&parts_[i], false, false, NULL);
+        zlink_assert (written);
+        LIBZLINK_UNUSED (written);
+    }
+    flush_unlocked ();
+    return true;
+}
+
 bool zlink::pipe_t::write_no_recursive_hwm_check (
   const msg_t *msg_, pipe_message_admission_t *admission_out_)
 {
@@ -2574,25 +2615,6 @@ bool zlink::pipe_t::write_no_recursive_hwm_check (
         return false;
 
     return write_message_unlocked (msg_, true, false, admission_out_);
-}
-
-bool zlink::pipe_t::write_and_flush_no_recursive_hwm_check (
-  const msg_t *msg_, pipe_message_admission_t *admission_out_)
-{
-    scoped_fast_lock_t lock (_out_sync);
-    if (unlikely (!write_state_ready_unlocked (admission_out_)))
-        return false;
-
-    if (unlikely (!hwm_credit_ready_unlocked (admission_out_)))
-        return false;
-
-    const bool more = (msg_->flags () & msg_t::more) != 0;
-    if (!write_message_unlocked (msg_, true, false, admission_out_))
-        return false;
-    if (!more)
-        flush_unlocked ();
-
-    return true;
 }
 
 bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
@@ -2770,20 +2792,28 @@ void zlink::pipe_t::flush ()
 
 void zlink::pipe_t::process_activate_read ()
 {
-    bool explicit_reclassify = false;
-    if (_head_reclassify_wake.load (std::memory_order_acquire)
-        != head_reclassify_idle)
-        explicit_reclassify =
-          _head_reclassify_wake.exchange (head_reclassify_idle,
-                                          std::memory_order_acq_rel)
-          != head_reclassify_idle;
     bool notify = false;
     {
         scoped_fast_lock_t lock (_out_sync);
-        if ((!_in_active || explicit_reclassify)
-            && (_state == active || _state == waiting_for_delimiter)) {
-            _in_active = true;
-            notify = true;
+        if (_state == active || _state == waiting_for_delimiter) {
+            if (!_in_active) {
+                _in_active = true;
+                notify = true;
+            } else if (_head_reclassify_wake.load (
+                         std::memory_order_acquire)
+                         != head_reclassify_idle
+                       && peer_uses_routed_protocol_unlocked ()
+                       && _transport_pair_id != 0
+                       && _transport_lane == transport_lane_application
+                       && _transport_lane_count.load (
+                            std::memory_order_acquire)
+                            == 1u
+                       && (!_session_pipe || !_session_io_writer)) {
+                notify =
+                  _head_reclassify_wake.exchange (
+                    head_reclassify_idle, std::memory_order_acq_rel)
+                  != head_reclassify_idle;
+            }
         }
     }
     if (notify)
@@ -3857,11 +3887,13 @@ void zlink::pipe_t::account_inbound_frame (
     // synchronizes-with edge. A multipart completion does need to stay after
     // the visible prefix reset, so retain release ordering for that rarer
     // transition.
-    const std::memory_order completed_order =
-      completes_multipart ? std::memory_order_release
-                          : std::memory_order_relaxed;
-    _published_msgs_read.store (_msgs_read, completed_order);
-    _published_bytes_read.store (_bytes_read, completed_order);
+    if (completes_multipart) {
+        _published_msgs_read.store (_msgs_read, std::memory_order_release);
+        _published_bytes_read.store (_bytes_read, std::memory_order_release);
+    } else {
+        _published_msgs_read.store (_msgs_read, std::memory_order_relaxed);
+        _published_bytes_read.store (_bytes_read, std::memory_order_relaxed);
+    }
 
     const uint64_t credit_delta = _bytes_read - _last_credit_bytes_read;
     const uint64_t lwm = _lwm.load (std::memory_order_relaxed);
@@ -3870,8 +3902,16 @@ void zlink::pipe_t::account_inbound_frame (
     bool blocked_writer_drained = false;
     pipe_t *const peer = get_peer ();
     if (!lwm_reached && credit_delta > 0 && peer) {
-        const bool writer_waiting =
+        bool writer_waiting =
           peer->_waiting_for_byte_credit.load (std::memory_order_acquire);
+        if (!writer_waiting && prefetched_batch_exhausted_) {
+            // Close the sub-LWM drain race against the writer's matching
+            // waiter-before-credit fence. Either this second load observes
+            // the waiter or the writer's credit recheck observes our update.
+            std::atomic_thread_fence (std::memory_order_seq_cst);
+            writer_waiting = peer->_waiting_for_byte_credit.load (
+              std::memory_order_acquire);
+        }
         if (writer_waiting) {
             // A deferred physical-queue shrink intentionally leaves applied
             // accounting above the planned HWM, and endpoint plan application
@@ -3885,18 +3925,19 @@ void zlink::pipe_t::account_inbound_frame (
                 : apply_lwm_hint (planned_in, compute_lwm (planned_in),
                                   _lwm_hint);
             waiter_lwm_reached = credit_delta >= planned_lwm;
-            if (!waiter_lwm_reached)
-                blocked_writer_drained = prefetched_batch_exhausted_;
-        } else if (prefetched_batch_exhausted_) {
-            // Close the only permanent sub-LWM lost-wake window. The writer
-            // publishes its waiter and executes the matching fence before it
-            // re-reads these counters. If this drained reader ran first, that
-            // re-read observes the credit; if the writer ran first, this
-            // second waiter load observes it and emits activate_write.
-            std::atomic_thread_fence (std::memory_order_seq_cst);
-            blocked_writer_drained =
-              peer->_waiting_for_byte_credit.load (
-                std::memory_order_acquire);
+            if (!waiter_lwm_reached && prefetched_batch_exhausted_) {
+                // This is the rare blocked-writer fallback below the planned
+                // LWM. Verify that the published queue is actually drained;
+                // a prefetched batch boundary alone does not mean that the
+                // next batch is absent and must not trigger a premature wake.
+                // The non-sleeping probe also preserves the hot-path rule that
+                // a preview never publishes the ypipe sleep marker.
+                normalized_head_probe_t next_head = {pipe_head_invalid};
+                blocked_writer_drained =
+                  _in_pipe
+                  && !_in_pipe->probe_if_published (&probe_normalized_head,
+                                                    &next_head);
+            }
         }
     }
     const bool credit_boundary =
@@ -4048,9 +4089,17 @@ void zlink::pipe_t::flush_unlocked ()
     const bool completed_record = _out_complete_record_pending;
     _out_complete_record_pending = false;
     const bool sleeping = _out_pipe && !_out_pipe->flush ();
-    pipe_t *const peer = get_peer ();
+    const bool reclassify_candidate =
+      !sleeping && completed_record
+      && peer_uses_routed_protocol_unlocked ()
+      && _transport_pair_id != 0
+      && _transport_lane == transport_lane_application
+      && _transport_lane_count.load (std::memory_order_acquire) == 1u
+      && (!_session_pipe || _session_io_writer);
+    pipe_t *const peer =
+      sleeping || reclassify_candidate ? get_peer () : NULL;
     bool explicit_reclassify = false;
-    if (completed_record && peer
+    if (reclassify_candidate && peer
         && peer->_head_reclassify_wake.load (std::memory_order_acquire)
              == head_reclassify_armed) {
         unsigned char expected = head_reclassify_armed;

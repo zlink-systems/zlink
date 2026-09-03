@@ -787,30 +787,6 @@ void commit_dealer_reply_target (
     --state_->reply_target_slots;
 }
 
-void revoke_dealer_reply_target (const socket_handle_t &handle_,
-                                 uint64_t request_token_)
-{
-    if (!handle_.socket || request_token_ == 0)
-        return;
-
-    const std::shared_ptr<socket_request_reply_state_t> state =
-      find_request_reply_state (handle_);
-    if (!state)
-        return;
-
-    std::lock_guard<std::mutex> lock (state->mutex);
-    dealer_reply_target_map_t::iterator it =
-      state->dealer_reply_targets.find (request_token_);
-    if (it == state->dealer_reply_targets.end ())
-        return;
-    zlink_assert (!it->second.checked_out);
-    if (it->second.checked_out)
-        return;
-    state->dealer_reply_targets.erase (it);
-    zlink_assert (state->reply_target_slots > 0);
-    --state->reply_target_slots;
-}
-
 void forget_dealer_reply_targets_for_pipe (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   zlink::pipe_t *application_pipe_)
@@ -1214,9 +1190,7 @@ int recv_router_message_direct (const socket_handle_t &handle_,
     // the lazy request/reply bridge.
     zlink::socket_receive_record_scope_t receive_record_scope;
     std::shared_ptr<socket_request_reply_state_t> state =
-      handle_.socket->has_request_reply_state ()
-        ? handle_.socket->request_reply_state ()
-        : std::shared_ptr<socket_request_reply_state_t> ();
+      handle_.socket->request_reply_state ();
     reply_target_reservation_t reply_target_reservation;
     reply_target_receive_admission_t receive_admission (
       handle_, &state, &reply_target_reservation, true);

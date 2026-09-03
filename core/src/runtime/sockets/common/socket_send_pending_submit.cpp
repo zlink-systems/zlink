@@ -135,27 +135,6 @@ class logical_send_wait_guard_t
     bool _acquired;
 };
 
-class submit_progress_owner_guard_t
-{
-  public:
-    explicit submit_progress_owner_guard_t (zlink::socket_base_t *socket_) :
-        _socket (socket_), _held (false)
-    {
-    }
-
-    ~submit_progress_owner_guard_t ()
-    {
-        if (_held)
-            _socket->release_transport_pair_owner_progress ();
-    }
-
-    bool *held_state () { return &_held; }
-
-  private:
-    zlink::socket_base_t *_socket;
-    bool _held;
-};
-
 bool retryable_logical_send_errno (int err_)
 {
     return err_ == EAGAIN || err_ == ENOTCONN || err_ == EHOSTUNREACH;
@@ -277,12 +256,28 @@ int zlink::socket_base_t::try_immediate_completion_send_scoped (
         return -1;
     }
 
-    bool gate_expected = false;
-    if (!pending.admission_gate.compare_exchange_strong (
-          gate_expected, true, std::memory_order_acq_rel,
-          std::memory_order_acquire)) {
-        errno = EAGAIN;
-        return -1;
+    // A blocking PAIR continuation still owns both the public multipart
+    // marker and the socket send sync. No new complete sender can reach
+    // physical admission in that interval. When the pending state and gate
+    // are already clean, avoid taking and releasing a second socket-wide
+    // atomic owner solely for this in-scope attempt. DONTWAIT must retain the
+    // gate because an EAGAIN handoff can publish pending work after returning
+    // from this function; DEALER also needs it for target ordering.
+    const bool pair_scope_owns_admission =
+      options.type == ZLINK_CORE_SOCKET_PAIR
+      && admission_gate_retained_out_ == NULL && send_scope_.sync_locked ()
+      && send_scope_.multipart_marker_owned ()
+      && !pending.admission_gate.load (std::memory_order_acquire);
+    bool admission_gate_owned = false;
+    if (!pair_scope_owns_admission) {
+        bool gate_expected = false;
+        if (!pending.admission_gate.compare_exchange_strong (
+              gate_expected, true, std::memory_order_acq_rel,
+              std::memory_order_acquire)) {
+            errno = EAGAIN;
+            return -1;
+        }
+        admission_gate_owned = true;
     }
 
     pipe_t *selected_pipe = NULL;
@@ -323,24 +318,27 @@ int zlink::socket_base_t::try_immediate_completion_send_scoped (
             *fallback_target_out_ = routed_send_target_key_t (
               rid.data (), rid.size (), 0, 0, 0, logical_endpoint);
             if (logical_endpoint.empty ()) {
-                pending.admission_gate.store (false,
-                                              std::memory_order_release);
+                if (admission_gate_owned)
+                    pending.admission_gate.store (
+                      false, std::memory_order_release);
                 errno = EHOSTUNREACH;
                 return -1;
             }
             *fallback_target_valid_out_ = true;
         } catch (...) {
-            pending.admission_gate.store (false,
-                                          std::memory_order_release);
+            if (admission_gate_owned)
+                pending.admission_gate.store (false,
+                                              std::memory_order_release);
             errno = ENOMEM;
             return -1;
         }
     }
-    const bool retain_gate = rc != 0 && saved_errno == EAGAIN
+    const bool retain_gate = admission_gate_owned && rc != 0
+                             && saved_errno == EAGAIN
                              && admission_gate_retained_out_;
     if (retain_gate)
         *admission_gate_retained_out_ = true;
-    else
+    else if (admission_gate_owned)
         pending.admission_gate.store (false, std::memory_order_release);
     if (rc == 0)
         pending.completion_capacity_blocked.store (
@@ -382,7 +380,7 @@ int zlink::socket_base_t::send_completion_submit_blocking (
     const int timeout_snapshot = options.sndtimeo;
     const uint64_t deadline =
       timeout_snapshot < 0 ? 0 : _clock.now_ms () + timeout_snapshot;
-    submit_progress_owner_guard_t progress_owner (this);
+    transport_pair_owner_progress_scope_t progress_owner (this);
 
     std::optional<routed_send_target_key_t> target;
     bool has_target = false;
@@ -1144,7 +1142,6 @@ int zlink::socket_base_t::send_pending_submit (
             errno = ENOMEM;
             return -1;
         }
-        target.selected_pipe = NULL;
         has_target = true;
     } else try {
         if (options.type == ZLINK_CORE_SOCKET_ROUTER

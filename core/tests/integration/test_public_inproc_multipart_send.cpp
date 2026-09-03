@@ -698,6 +698,17 @@ void test_public_inproc_pair_send_is_safe_from_multiple_threads ()
     void *left = test_context_socket (ZLINK_SOCKET_PAIR);
     void *right = test_context_socket (ZLINK_SOCKET_PAIR);
 
+    // Admit only one tiny record before requiring receiver progress. Both
+    // senders must therefore share the public command-owner handoff instead
+    // of completing entirely in the pipe's initial capacity.
+    const uint64_t hwm_bytes = 1;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (left, ZLINK_OPT_RCVHWM, &hwm_bytes,
+                        sizeof (hwm_bytes)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (right, ZLINK_OPT_SNDHWM, &hwm_bytes,
+                        sizeof (hwm_bytes)));
+
     TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (left, "inproc://public_inproc_pair_concurrent_send"));
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_connect (right, "inproc://public_inproc_pair_concurrent_send"));

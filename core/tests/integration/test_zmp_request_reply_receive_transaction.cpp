@@ -537,6 +537,8 @@ void test_command_wait_preserves_signal_only_edges ()
     mailbox.signal ();
     TEST_ASSERT_EQUAL_INT (0, mailbox.wait_for_command_signal (100));
 
+    const uint64_t epoch_before_registered_wait =
+      mailbox.begin_command_wait_observation ();
     std::atomic<int> wait_rc (-2);
     std::thread waiter ([&] {
         wait_rc.store (mailbox.wait_for_command_signal (-1),
@@ -554,6 +556,12 @@ void test_command_wait_preserves_signal_only_edges ()
     TEST_ASSERT_TRUE_MESSAGE (
       registered, "command waiter did not register before signal-only wake");
     TEST_ASSERT_EQUAL_INT (0, wait_rc.load (std::memory_order_acquire));
+    TEST_ASSERT_EQUAL_INT_MESSAGE (
+      0,
+      mailbox.wait_for_command_signal (100,
+                                       &epoch_before_registered_wait),
+      "a registered waiter consumed the wake before an epoch observer");
+    mailbox.end_command_wait_observation ();
 
     const std::chrono::steady_clock::time_point timeout_started =
       std::chrono::steady_clock::now ();
@@ -818,7 +826,7 @@ void test_close_commands_wait_for_parked_multipart_cleanup_sync ()
 
     std::optional<zlink::socket_public_send_scope_t> multipart_scope;
     const bool scope_admitted =
-      handle.socket->begin_public_send_scope (false, &multipart_scope);
+      handle.socket->begin_public_send_scope (&multipart_scope);
     TEST_ASSERT_TRUE_MESSAGE (
       scope_admitted,
       "multipart send scope was not admitted");

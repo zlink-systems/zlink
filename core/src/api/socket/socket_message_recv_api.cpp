@@ -377,7 +377,7 @@ zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
         bool first_part = false;
         zlink::socket_base_t *source_socket = NULL;
         if (zlink::part_helper_internal::prepare_recv_step (
-              xpub_, zlink::part_helper_internal::recv_family_xpub,
+              zlink::part_helper_internal::recv_family_xpub,
               handle.socket, &helper_state, &first_part, &source_socket)
             != 0)
             return zlink::recv_result_internal::from_errno (errno);

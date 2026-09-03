@@ -7,6 +7,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -29,9 +30,7 @@ enum send_family_t
     send_family_publish,
     send_family_router_request,
     send_family_dealer_request,
-    send_family_router_reply,
-    send_family_dealer_request_frame,
-    send_family_dealer_reply
+    send_family_router_reply
 };
 
 enum recv_family_t
@@ -40,8 +39,7 @@ enum recv_family_t
     recv_family_basic,
     recv_family_subscribe,
     recv_family_xpub,
-    recv_family_router,
-    recv_family_dealer
+    recv_family_router
 };
 
 struct send_sequence_spec_t
@@ -54,16 +52,10 @@ struct send_sequence_spec_t
     uint64_t request_seq;
     uint64_t pending_cookie;
     zlink_routing_id_t rid1;
-    zlink_routing_id_t rid2;
     bool has_rid1;
-    bool has_rid2;
-    std::string text1;
-    std::string text2;
-    bool has_text1;
-    bool has_text2;
+    std::string_view topic;
+    bool has_topic;
     bool request_like;
-    uint64_t transport_pair_id;
-    uint64_t transport_pair_generation;
 };
 
 // Keep common short send records inline. Larger multipart records retain the
@@ -78,6 +70,7 @@ struct send_sequence_state_t
 
     bool active;
     send_sequence_spec_t spec;
+    std::string topic_storage;
     zlink::socket_base_t *sink_socket;
     std::optional<zlink::socket_public_send_scope_t> send_scope;
     send_part_buffer_t buffered_parts;
@@ -104,7 +97,6 @@ struct recv_sequence_state_t
     uint64_t request_seq;
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
-    uint8_t message_type;
     int subscribed;
     std::string topic_id;
     recv_part_buffer_t buffered_parts;
@@ -128,15 +120,10 @@ bool send_spec_equals (const send_sequence_spec_t &lhs_, const send_sequence_spe
 bool routed_part_debug_enabled ();
 void trace_routed_part_prepare_failed (send_family_t family_, int err_);
 void trace_routed_part_send_failed (send_family_t family_, bool first_part_, int err_);
-void trace_routed_part_first_send (const zlink_routing_id_t &rid_,
-                                   zlink_msg_t *part_,
-                                   zlink_send_flags_t flags_);
-std::shared_ptr<handle_state_t> find_or_create_handle_state (void *handle_);
 std::shared_ptr<handle_state_t> find_handle_state (void *handle_);
 std::shared_ptr<handle_state_t> find_or_create_socket_state (zlink::socket_base_t *socket_);
 std::shared_ptr<handle_state_t> find_socket_state (zlink::socket_base_t *socket_);
 bool recv_sequence_active (const std::shared_ptr<handle_state_t> &state_);
-bool send_sequence_active (void *handle_);
 bool send_sequence_active (zlink::socket_base_t *socket_);
 int stage_recv_sequence (const std::shared_ptr<handle_state_t> &state_,
                          recv_family_t family_,
@@ -170,56 +157,45 @@ int take_recv_part (const std::shared_ptr<handle_state_t> &state_,
                     uint64_t *request_seq_out_,
                     uint64_t *transport_pair_id_out_,
                     uint64_t *transport_pair_generation_out_);
-void export_recv_metadata (const std::shared_ptr<handle_state_t> &state_,
-                           const zlink_routing_id_t **source_node_rid_out_,
-                           uint64_t *request_seq_out_);
 void reset_send_sequence (send_sequence_state_t *state_,
                           bool notify_release_ = true);
 zlink::socket_base_t *reset_recv_sequence (recv_sequence_state_t *state_);
-int prepare_send_step (void *handle_,
-                       const send_sequence_spec_t &spec_,
+int prepare_send_step (const send_sequence_spec_t &spec_,
                        zlink::socket_base_t *sink_socket_,
                        std::shared_ptr<handle_state_t> *state_out_,
                        bool *first_part_out_);
 // Returns 1 without creating a sequence when start_if_inactive_ is false and
 // no sequence is active. On success, lock_out_ keeps the state mutex held so a
 // caller can stage or collect the part in the same linearized state step.
-int prepare_send_step_locked (void *handle_,
-                              const send_sequence_spec_t &spec_,
+int prepare_send_step_locked (const send_sequence_spec_t &spec_,
                               zlink::socket_base_t *sink_socket_,
-                              std::shared_ptr<handle_state_t> *state_out_,
+                              handle_state_t **state_out_,
                               std::unique_lock<std::mutex> *lock_out_,
                               bool *first_part_out_,
                               bool start_if_inactive_);
-int prepare_recv_step (void *handle_,
-                       recv_family_t family_,
+int prepare_recv_step (recv_family_t family_,
                        zlink::socket_base_t *source_socket_,
                        std::shared_ptr<handle_state_t> *state_inout_,
                        bool *first_part_out_,
                        zlink::socket_base_t **active_source_socket_out_);
 void complete_send_step (const std::shared_ptr<handle_state_t> &state_,
                          zlink_part_flag_t part_flag_);
+void complete_send_step (handle_state_t *state_,
+                         zlink_part_flag_t part_flag_);
 // The caller must hold state_->mutex. These variants let a public part entry
 // prepare, stage, and suspend/reset one helper step without dropping and
 // reacquiring the same state lock.
 void complete_send_step_locked (handle_state_t *state_,
                                 zlink_part_flag_t part_flag_);
-// Transfer a fully staged record out of the incremental helper and close the
-// helper scope in one state-lock turn. The destination must be empty.
-int take_buffered_send_record (
-  const std::shared_ptr<handle_state_t> &state_,
-  send_part_buffer_t *parts_out_);
 // The caller must hold state_->mutex.
 int take_buffered_send_record_locked (handle_state_t *state_,
                                       send_part_buffer_t *parts_out_);
 void complete_recv_step (const std::shared_ptr<handle_state_t> &state_,
                          zlink_part_flag_t has_more_);
+void abort_send_step (handle_state_t *state_);
 void abort_send_step (const std::shared_ptr<handle_state_t> &state_);
 void abort_current_non_publish_send_sequence (void *handle_);
 void abort_recv_step (const std::shared_ptr<handle_state_t> &state_);
-int reject_if_send_sequence_open (void *handle_);
-void invalidate_recv_sequence (void *handle_);
-void cleanup_handle (void *handle_);
 void cleanup_socket (zlink::socket_base_t *socket_);
 }
 }

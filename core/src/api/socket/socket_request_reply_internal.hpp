@@ -619,8 +619,6 @@ void restore_dealer_reply_target (const std::shared_ptr<socket_request_reply_sta
 void commit_dealer_reply_target (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   uint64_t request_token_);
-void revoke_dealer_reply_target (const socket_handle_t &handle_,
-                                 uint64_t request_token_);
 void forget_dealer_reply_targets_for_pipe (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   zlink::pipe_t *application_pipe_);

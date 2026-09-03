@@ -1453,6 +1453,72 @@ void test_deferred_shrink_wakes_writer_at_planned_lwm ()
     close_sync_socket (owner_handle);
 }
 
+void test_prefetched_batch_tail_does_not_wake_blocked_writer_before_lwm ()
+{
+    void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (
+      as_socket_handle (owner_handle).socket);
+    zlink::object_t *parents[] = {owner, owner};
+    const uint64_t frame_bytes = sizeof (zlink::msg_t) + 1;
+    const uint64_t hwm = frame_bytes * 8;
+    const uint64_t hwms[] = {hwm, hwm};
+    const bool conflate[] = {false, false};
+    zlink::pipe_t *pipes[2];
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflate));
+
+    pipe_cleanup_sink_t cleanup_sink;
+    pipes[0]->set_event_sink (&cleanup_sink);
+    pipes[1]->set_event_sink (&cleanup_sink);
+
+    // Prefetch the first published batch, then publish the rest of the HWM
+    // window as a second batch. Reading the first frame reaches the prefetched
+    // batch tail, but the pipe is not drained and credit is still below LWM.
+    zlink::msg_t frame;
+    TEST_ASSERT_SUCCESS_ERRNO (frame.init_size (1));
+    TEST_ASSERT_TRUE (pipes[0]->write_and_flush (&frame));
+    TEST_ASSERT_SUCCESS_ERRNO (frame.close ());
+    TEST_ASSERT_TRUE (pipes[1]->check_read ());
+
+    for (size_t i = 1; i != 8; ++i) {
+        TEST_ASSERT_SUCCESS_ERRNO (frame.init_size (1));
+        TEST_ASSERT_TRUE (pipes[0]->write_and_flush (&frame));
+        TEST_ASSERT_SUCCESS_ERRNO (frame.close ());
+    }
+
+    zlink::msg_t blocked;
+    TEST_ASSERT_SUCCESS_ERRNO (blocked.init_size (1));
+    TEST_ASSERT_FALSE (pipes[0]->write_and_flush (&blocked));
+
+    zlink::msg_t received;
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    process_socket_control_commands (owner_handle);
+    TEST_ASSERT_EQUAL_INT (0, cleanup_sink.write_activated_count);
+
+    // The fourth consumed frame reaches the normal LWM and produces exactly
+    // one writer activation while the second published batch remains readable.
+    for (size_t i = 1; i != 4; ++i) {
+        TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+        TEST_ASSERT_TRUE (pipes[1]->read (&received));
+        TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    }
+    process_socket_control_commands (owner_handle);
+    TEST_ASSERT_EQUAL_INT (1, cleanup_sink.write_activated_count);
+    TEST_ASSERT_TRUE (pipes[1]->check_read ());
+
+    TEST_ASSERT_SUCCESS_ERRNO (blocked.close ());
+    pipes[0]->terminate (false);
+    pipes[1]->terminate (false);
+    int events = 0;
+    size_t events_size = sizeof (events);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (owner_handle, ZLINK_OPT_EVENTS, &events, &events_size));
+    TEST_ASSERT_EQUAL_INT (2, cleanup_sink.terminated_count);
+    close_sync_socket (owner_handle);
+}
+
 void test_completion_pipe_does_not_apply_hwm_admission ()
 {
     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
@@ -1952,6 +2018,8 @@ int main ()
     RUN_TEST (test_physical_queue_snapshot_accounts_multipart_once);
     RUN_TEST (test_physical_queue_deferred_shrink_applies_on_drain);
     RUN_TEST (test_deferred_shrink_wakes_writer_at_planned_lwm);
+    RUN_TEST (
+      test_prefetched_batch_tail_does_not_wake_blocked_writer_before_lwm);
     RUN_TEST (test_completion_pipe_does_not_apply_hwm_admission);
     RUN_TEST (test_conflate_replacement_releases_physical_queue_charge);
     RUN_TEST (test_weighted_selection_spreads_consecutive_picks);

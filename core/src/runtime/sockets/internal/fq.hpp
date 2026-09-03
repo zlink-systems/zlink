@@ -21,7 +21,14 @@ class msg_t;
 class fq_t
 {
   public:
-    fq_t ();
+    enum receive_activity_publication_t
+    {
+        keep_receive_activity_local,
+        publish_receive_activity
+    };
+
+    explicit fq_t (
+      receive_activity_publication_t publication_ = keep_receive_activity_local);
     ~fq_t ();
 
     typedef array_t<pipe_t, 1> pipes_t;
@@ -56,6 +63,7 @@ class fq_t
                            void *userdata_);
     bool block_current_for_record_admission ();
     bool record_admission_blocked (pipe_t *pipe_) const;
+    void publish_pipe_receive_activity (pipe_t *pipe_, bool active_) const;
     void normalize_state ();
     pipes_t _pipes;
 
@@ -74,6 +82,10 @@ class fq_t
     //  transient receive miss before another pipe may become the source of a
     //  new message, so callers can discard the incomplete record.
     bool _multipart_abort_pending;
+
+    // Only routed count-1 receive paths consume pipe-level FQ activity.
+    // Other patterns keep this bookkeeping local to the fair queue.
+    const receive_activity_publication_t _receive_activity_publication;
 
     // Capacity-blocked record heads remain queued on their source pipe. Keep
     // them outside the active FQ partition until the registry owner releases

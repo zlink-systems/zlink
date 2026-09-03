@@ -89,28 +89,6 @@ void revoke_staged_router_receive_publication (
       handle_, source_rid_present ? &source_node_rid : NULL, request_seq);
 }
 
-void revoke_dealer_receive_publication (const socket_handle_t &handle_,
-                                        uint64_t request_seq_)
-{
-    const int saved_errno = errno;
-    reqrep::revoke_dealer_reply_target (handle_, request_seq_);
-    errno = saved_errno;
-}
-
-void revoke_staged_dealer_receive_publication (
-  const socket_handle_t &handle_,
-  const std::shared_ptr<zlink::part_helper_internal::handle_state_t> &state_)
-{
-    if (!state_)
-        return;
-    uint64_t request_seq = 0;
-    {
-        std::lock_guard<std::mutex> lock (state_->mutex);
-        request_seq = state_->recv.request_seq;
-    }
-    revoke_dealer_receive_publication (handle_, request_seq);
-}
-
 void maybe_fail_receive_part_stage ()
 {
 #ifdef ZLINK_BUILD_TESTS
@@ -149,13 +127,8 @@ static zlink_recv_result_t router_recv_part_impl (
     if (reqrep::validate_socket_type (handle, ZLINK_CORE_SOCKET_ROUTER) != 0)
         return zlink::recv_result_internal::from_errno (errno);
 
-    // ROUTER is a native socket handle here, so its optional multipart state
-    // is owned by the socket. Do not route the steady-state raw role through
-    // the generic foreign-handle registry.
     std::shared_ptr<zlink::part_helper_internal::handle_state_t> helper_state =
-      handle.socket->has_part_helper_state ()
-        ? handle.socket->part_helper_state ()
-        : std::shared_ptr<zlink::part_helper_internal::handle_state_t> ();
+      handle.socket->part_helper_state ();
 
     const bool recv_sequence_active =
       zlink::part_helper_internal::recv_sequence_active (helper_state);
@@ -281,7 +254,7 @@ static zlink_recv_result_t router_recv_part_impl (
     zlink::socket_base_t *source_socket = handle.socket;
     bool first_part = false;
     if (zlink::part_helper_internal::prepare_recv_step (
-          router_, zlink::part_helper_internal::recv_family_router, source_socket, &helper_state,
+          zlink::part_helper_internal::recv_family_router, source_socket, &helper_state,
           &first_part, &source_socket)
         != 0) {
         return zlink::recv_result_internal::from_errno (errno);

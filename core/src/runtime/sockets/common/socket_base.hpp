@@ -91,7 +91,8 @@ struct socket_request_reply_bridge_t
     socket_request_reply_bridge_t () :
         request_reply_state_present (false),
         part_helper_state_present (false),
-        part_helper_send_active_flag (false)
+        part_helper_send_active_flag (false),
+        part_helper_recv_ready_flag (false)
     {
     }
 
@@ -100,6 +101,7 @@ struct socket_request_reply_bridge_t
     std::atomic<bool> request_reply_state_present;
     std::atomic<bool> part_helper_state_present;
     std::atomic<bool> part_helper_send_active_flag;
+    std::atomic<bool> part_helper_recv_ready_flag;
 };
 
 struct transport_pair_pipes_t
@@ -444,10 +446,10 @@ class socket_base_t : public own_t,
     // failpoint used to prove that no reply target escapes an unowned source.
     bool retain_received_source_pipe_ref (pipe_t *pipe_) const;
     bool begin_public_send_scope (
-      bool force_sync_, std::optional<socket_public_send_scope_t> *scope_out_);
+      std::optional<socket_public_send_scope_t> *scope_out_);
     bool begin_complete_send_scope (
-      bool force_sync_, std::optional<socket_public_send_scope_t> *scope_out_);
-    std::unique_ptr<socket_public_send_scope_t> begin_complete_send_scope (bool force_sync_);
+      std::optional<socket_public_send_scope_t> *scope_out_);
+    std::unique_ptr<socket_public_send_scope_t> begin_complete_send_scope ();
     void notify_incremental_send_released ();
     void hold_incremental_send_control_boundary ();
     void clear_incremental_send_control_boundary ();
@@ -575,8 +577,6 @@ class socket_base_t : public own_t,
     bool has_send_pending () const;
     void mark_send_completion_capacity_blocked ();
     void notify_send_completion_capacity_available ();
-    int reserve_shared_pending_record (uint64_t charge_bytes_);
-    void release_shared_pending_record (uint64_t charge_bytes_);
     socket_completion::queue_state_t &completion_runtime ()
     {
         return _runtime.completion_runtime;
@@ -606,13 +606,15 @@ class socket_base_t : public own_t,
     // that the other has just adopted.
     int acquire_monitor_async_command_processing ();
     void release_monitor_async_command_processing (bool wait_for_quiescence_);
-    void request_unowned_async_command_processing_stop ();
+    void request_unowned_async_command_processing_stop (
+      bool wait_for_quiescence_ = false);
     bool stop_unowned_async_command_processing_at_idle ();
     //  Active paired handshakes need one socket-owner mailbox turn after the
     //  peer HELLO reveals its type. The lease installs an asynchronous owner
     //  only while such decisions are outstanding; monitor, completion and
     //  probe consumers can retain that owner independently.
     int acquire_transport_pair_owner_progress ();
+    int acquire_transport_pair_owner_progress_for_submit (int timeout_ms_);
     void release_transport_pair_owner_progress ();
     bool acquire_completion_poller (void *owner_);
     void release_completion_poller (void *owner_);
@@ -791,7 +793,6 @@ class socket_base_t : public own_t,
     int socket_id () const;
     std::shared_ptr<socket_reqrep_internal::socket_request_reply_state_t>
     request_reply_state () const;
-    bool has_request_reply_state () const;
     std::shared_ptr<socket_reqrep_internal::socket_request_reply_state_t>
     set_request_reply_state (
       const std::shared_ptr<socket_reqrep_internal::socket_request_reply_state_t> &state_);
@@ -805,12 +806,17 @@ class socket_base_t : public own_t,
     void revoke_router_reply_targets_for_rid (
       const zlink_routing_id_t *peer_rid_);
     std::shared_ptr<part_helper_internal::handle_state_t> part_helper_state () const;
-    bool has_part_helper_state () const;
+    // Borrowed helper state is valid only while the caller pins this socket's
+    // public handle. The socket keeps the immutable shared owner until final
+    // destruction; close only withdraws the publication bit.
+    part_helper_internal::handle_state_t *borrow_part_helper_state () const;
     std::shared_ptr<part_helper_internal::handle_state_t>
     set_part_helper_state (const std::shared_ptr<part_helper_internal::handle_state_t> &state_);
     void clear_part_helper_state ();
     bool part_helper_send_active () const;
     void set_part_helper_send_active (bool active_);
+    bool part_helper_recv_ready () const;
+    void set_part_helper_recv_ready (bool ready_);
     //  zlink_recv_part() buffers a complete physical DATA record before it
     //  publishes the first part. On a count-1 pair, keep the following REPLY
     //  private until that buffered public record reaches its FINAL part.
@@ -855,6 +861,16 @@ class socket_base_t : public own_t,
     virtual int xsend (
       zlink::msg_t *msg_,
       pipe_message_admission_t *admission_out_ = NULL);
+    // Concrete sockets may commit a complete record in one pipe-owned
+    // transaction. False means no frame was published or source ownership
+    // transferred, and the caller must use the ordinary per-frame path.
+    virtual bool xtry_send_complete_record (zlink::msg_t *parts_,
+                                            size_t part_count_)
+    {
+        LIBZLINK_UNUSED (parts_);
+        LIBZLINK_UNUSED (part_count_);
+        return false;
+    }
     virtual int xsend_pipe (
       zlink::msg_t *msg_, zlink::pipe_t **pipe_out_,
       pipe_message_admission_t *admission_out_ = NULL,
@@ -1011,7 +1027,7 @@ class socket_base_t : public own_t,
                                  const std::string &address_,
                                  address_t *paddr_) const;
     int start_async_mailbox_processing (io_thread_t *io_thread_);
-    void stop_async_mailbox_processing ();
+    bool stop_async_mailbox_processing (bool require_unowned_ = false);
     void wait_async_quiesced (int timeout_ms_);
     static void resolve_socket_msg_source_rid (pipe_t *pipe_, zlink_routing_id_t *out_);
 
@@ -1076,6 +1092,8 @@ class socket_base_t : public own_t,
     bool has_stable_completion_processing_owner () const;
     void invalidate_completion_processing_owner ();
     void publish_completion_processing_owner ();
+    int acquire_transport_pair_owner_progress_with_timeout (
+      int timeout_ms_, int timeout_errno_);
 
     // Direct public send currently shares one scope between single-part and
     // logical multipart wrappers. Keep the admission/sync decision and the
@@ -1234,7 +1252,8 @@ class socket_base_t : public own_t,
     //  throttled skip backed by a mailbox command hint.
     int process_commands (int timeout_,
                           bool throttle_,
-                          bool force_if_command_pending_ = false);
+                          bool force_if_command_pending_ = false,
+                          const uint64_t *observed_command_wait_epoch_ = NULL);
     bool try_inc_mailbox_ref ();
     void inc_mailbox_ref ();
     void dec_mailbox_ref ();
@@ -1447,6 +1466,32 @@ class socket_base_t : public own_t,
     uint64_t _local_receive_flow_epoch;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (socket_base_t)
+};
+
+//  Blocking submit paths may temporarily retain the executor that owns
+//  transport-pair command progress. Keep that lease release in one shared
+//  scope so every early return follows the same ownership rule.
+class transport_pair_owner_progress_scope_t
+{
+  public:
+    explicit transport_pair_owner_progress_scope_t (socket_base_t *socket_) :
+        _socket (socket_), _held (false)
+    {
+    }
+
+    ~transport_pair_owner_progress_scope_t ()
+    {
+        if (_held)
+            _socket->release_transport_pair_owner_progress ();
+    }
+
+    bool *held_state () { return &_held; }
+
+  private:
+    socket_base_t *_socket;
+    bool _held;
+
+    ZLINK_NON_COPYABLE_NOR_MOVABLE (transport_pair_owner_progress_scope_t)
 };
 
 class routing_socket_base_t : public socket_base_t

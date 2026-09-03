@@ -7,6 +7,7 @@
 #include "engine/asio/asio_zmp_engine.hpp"
 #include "engine/asio/asio_raw_engine.hpp"
 #include "engine/asio/asio_poller.hpp"
+#include "transports/ws/ws_batch_policy.hpp"
 #include "transports/tls/ssl_context_helper.hpp"
 #include "transports/ws/ws_transport.hpp"
 #if defined ZLINK_HAVE_WSS
@@ -295,7 +296,10 @@ void zlink::asio_ws_listener_t::create_engine (fd_t fd_)
     }
 
     const bool is_stream = options.type == ZLINK_CORE_SOCKET_STREAM;
-    const options_t &engine_options = options;
+    options_t engine_options = options;
+    if (!is_stream)
+        engine_options.out_batch_size =
+          zlink::ws_batch_policy::zmp_send_batch_size ();
     i_engine *engine = NULL;
 #if defined ZLINK_HAVE_WSS
     if (_secure) {

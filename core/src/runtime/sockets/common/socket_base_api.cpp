@@ -1017,7 +1017,7 @@ bool zlink::socket_base_t::has_in ()
     //  one buffered part per call. Once a multipart prefix is exposed, the
     //  remaining parts stay level-ready even though xhas_in() has already
     //  advanced to the next physical record (which may be a private REPLY).
-    if (has_part_helper_state ()) {
+    if (part_helper_recv_ready ()) {
         const std::shared_ptr<part_helper_internal::handle_state_t> state =
           part_helper_state ();
         if (state) {

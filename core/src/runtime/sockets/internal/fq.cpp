@@ -26,11 +26,12 @@ void zlink::fq_t::set_recv_test_hook (recv_test_hook_fn hook_, void *userdata_)
 }
 #endif
 
-zlink::fq_t::fq_t () :
+zlink::fq_t::fq_t (receive_activity_publication_t publication_) :
     _active (0),
     _current (0),
     _more (false),
-    _multipart_abort_pending (false)
+    _multipart_abort_pending (false),
+    _receive_activity_publication (publication_)
 {
 }
 
@@ -45,6 +46,12 @@ bool zlink::fq_t::record_admission_blocked (pipe_t *pipe_) const
     return pipe_
            && _record_admission_blocked_set.find (pipe_)
                 != _record_admission_blocked_set.end ();
+}
+
+void zlink::fq_t::publish_pipe_receive_activity (pipe_t *pipe_, bool active_) const
+{
+    if (_receive_activity_publication == publish_receive_activity)
+        pipe_->set_public_receive_active_cached (active_);
 }
 
 bool zlink::fq_t::try_get_pipe_index (pipe_t *pipe_, pipes_t::size_type *index_out_)
@@ -86,7 +93,7 @@ void zlink::fq_t::attach (pipe_t *pipe_)
     _pipes.push_back (pipe_);
     _pipes.swap (_active, _pipes.size () - 1);
     _active++;
-    pipe_->set_public_receive_active_cached (true);
+    publish_pipe_receive_activity (pipe_, true);
 }
 
 void zlink::fq_t::deactivate (pipe_t *pipe_)
@@ -97,13 +104,13 @@ void zlink::fq_t::deactivate (pipe_t *pipe_)
     if (!try_get_pipe_index (pipe_, &index))
         return;
     if (index >= _active) {
-        pipe_->set_public_receive_active_cached (false);
+        publish_pipe_receive_activity (pipe_, false);
         return;
     }
 
     _active--;
     _pipes.swap (index, _active);
-    pipe_->set_public_receive_active_cached (false);
+    publish_pipe_receive_activity (pipe_, false);
     if (_current == _active)
         _current = 0;
 }
@@ -136,7 +143,7 @@ void zlink::fq_t::pipe_terminated (pipe_t *pipe_)
         _active--;
         _pipes.swap (index, _active);
     }
-    pipe_->set_public_receive_active_cached (false);
+    publish_pipe_receive_activity (pipe_, false);
     _pipes.erase (pipe_);
     normalize_state ();
 
@@ -163,14 +170,14 @@ void zlink::fq_t::activated (pipe_t *pipe_)
     if (record_admission_blocked (pipe_))
         return;
     if (index < _active) {
-        pipe_->set_public_receive_active_cached (true);
+        publish_pipe_receive_activity (pipe_, true);
         return;
     }
 
     //  Move the pipe to the list of active pipes.
     _pipes.swap (index, _active);
     _active++;
-    pipe_->set_public_receive_active_cached (true);
+    publish_pipe_receive_activity (pipe_, true);
 }
 
 bool zlink::fq_t::block_current_for_record_admission ()
@@ -380,7 +387,7 @@ int zlink::fq_t::recvpipe_internal (
         //  spurious protocol failure to callers.
         if (_more) {
             _more = false;
-            current_pipe->set_public_receive_active_cached (false);
+            publish_pipe_receive_activity (current_pipe, false);
             _active--;
             _pipes.swap (_current, _active);
             if (_current == _active)
@@ -395,7 +402,7 @@ int zlink::fq_t::recvpipe_internal (
             return -1;
         }
 
-        current_pipe->set_public_receive_active_cached (false);
+        publish_pipe_receive_activity (current_pipe, false);
         _active--;
         _pipes.swap (_current, _active);
         if (_current == _active)
@@ -430,7 +437,7 @@ bool zlink::fq_t::has_in ()
             return true;
 
         //  Deactivate the pipe.
-        _pipes[_current]->set_public_receive_active_cached (false);
+        publish_pipe_receive_activity (_pipes[_current], false);
         _active--;
         _pipes.swap (_current, _active);
         if (_current == _active)
@@ -466,7 +473,7 @@ bool zlink::fq_t::has_in_with_record_admission (
             // hiding them as a readiness miss.
             return true;
 
-        _pipes[_current]->set_public_receive_active_cached (false);
+        publish_pipe_receive_activity (_pipes[_current], false);
         _active--;
         _pipes.swap (_current, _active);
         if (_current == _active)

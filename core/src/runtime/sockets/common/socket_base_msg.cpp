@@ -333,14 +333,13 @@ int zlink::socket_base_t::send_routed_scoped (const zlink_routing_id_t *target_r
 }
 
 bool zlink::socket_base_t::begin_public_send_scope (
-  bool force_sync_, std::optional<socket_public_send_scope_t> *scope_out_)
+  std::optional<socket_public_send_scope_t> *scope_out_)
 {
     if (!scope_out_) {
         errno = EFAULT;
         return false;
     }
 
-    LIBZLINK_UNUSED (force_sync_);
     // Incremental multipart owns pipe-local staged state across public calls;
     // every socket send also fences socket-owned pipe selection/lifetime.
     scope_out_->emplace (lifecycle_coordinator (), true,
@@ -353,14 +352,13 @@ bool zlink::socket_base_t::begin_public_send_scope (
 }
 
 bool zlink::socket_base_t::begin_complete_send_scope (
-  bool force_sync_, std::optional<socket_public_send_scope_t> *scope_out_)
+  std::optional<socket_public_send_scope_t> *scope_out_)
 {
     if (!scope_out_) {
         errno = EFAULT;
         return false;
     }
 
-    LIBZLINK_UNUSED (force_sync_);
     scope_out_->emplace (lifecycle_coordinator (), true,
                          socket_send_admission_complete);
     if (!(*scope_out_)->acquired ()) {
@@ -371,9 +369,8 @@ bool zlink::socket_base_t::begin_complete_send_scope (
 }
 
 std::unique_ptr<zlink::socket_public_send_scope_t>
-zlink::socket_base_t::begin_complete_send_scope (bool force_sync_)
+zlink::socket_base_t::begin_complete_send_scope ()
 {
-    LIBZLINK_UNUSED (force_sync_);
     std::unique_ptr<socket_public_send_scope_t> send_scope (
       new (std::nothrow) socket_public_send_scope_t (
         lifecycle_coordinator (), true,

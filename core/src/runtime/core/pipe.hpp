@@ -312,7 +312,6 @@ class pipe_t ZLINK_FINAL : public object_t,
       msg_t *msg_, decoder_frame_reservation_t **reservation_);
     void release_decoder_frame_reservation (
       decoder_frame_reservation_t **reservation_);
-    void finish_direct_decoder_frame (unsigned char msg_flags_);
 
     //  Checks whether messages can be written to the pipe. If the pipe is
     //  closed or if writing the message would cause high watermark the
@@ -413,10 +412,6 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool write (const msg_t *msg_,
                 pipe_message_admission_t *admission_out_ = NULL);
 
-    //  Writes a message assuming HWM was already checked by caller.
-    //  Still validates pipe active/termination state.
-    bool write_no_hwm_check (const msg_t *msg_);
-
     // Writes the transport's routing-id setup frame even while a paired
     // Application lane is held for Completion-lane validation.
     bool write_routing_id_and_flush (const msg_t *msg_);
@@ -450,13 +445,16 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool write_and_flush (const msg_t *msg_,
                           pipe_message_admission_t *admission_out_ = NULL);
 
+    //  Success-only fast path for an ordinary complete application record.
+    //  Returns false without publishing any frame when the current pipe mode
+    //  or credit requires the generic per-frame admission path. The caller
+    //  transfers source ownership only after a true result.
+    bool try_write_complete_record_and_flush (const msg_t *parts_,
+                                              size_t part_count_);
+
     //  Writes a message with the HWM check performed under the already-held
     //  pipe lock without re-entering check_hwm().
     bool write_no_recursive_hwm_check (
-      const msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL);
-
-    //  Writes and flushes with the same non-recursive HWM check variant.
-    bool write_and_flush_no_recursive_hwm_check (
       const msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL);
 
     //  Fast path for a single non-routing-id message that is always flushed.
@@ -631,6 +629,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     void release_discarded_pipe_accounting (upipe_t *pipe_,
                                             const std::shared_ptr<physical_queue_record_t> &queue_);
     bool append_outbound_frame_bytes_unlocked (const msg_t *msg_);
+    bool peer_uses_routed_protocol_unlocked () const;
     bool peer_control_slots_enabled_unlocked () const;
     uint64_t next_peer_control_sequence_unlocked ();
     bool stage_peer_weight_control_unlocked (uint32_t weight_);

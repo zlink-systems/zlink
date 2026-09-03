@@ -186,9 +186,7 @@ zlink_recv_result_t zlink_recv_part (void *s_,
         return zlink::recv_result_internal::from_errno (errno);
 
     std::shared_ptr<zlink::part_helper_internal::handle_state_t> existing_state =
-      handle.socket->has_part_helper_state ()
-        ? handle.socket->part_helper_state ()
-        : std::shared_ptr<zlink::part_helper_internal::handle_state_t> ();
+      handle.socket->part_helper_state ();
     const bool recv_sequence_active =
       zlink::part_helper_internal::recv_sequence_active (existing_state);
 
@@ -277,7 +275,7 @@ zlink_recv_result_t zlink_recv_part (void *s_,
     bool first_part = false;
     zlink::socket_base_t *source_socket = NULL;
     if (zlink::part_helper_internal::prepare_recv_step (
-          s_, zlink::part_helper_internal::recv_family_basic, recv_source_socket, &helper_state,
+          zlink::part_helper_internal::recv_family_basic, recv_source_socket, &helper_state,
           &first_part, &source_socket)
         != 0) {
         return zlink::recv_result_internal::from_errno (errno);
@@ -522,7 +520,7 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
         bool first_part = false;
         zlink::socket_base_t *source_socket = NULL;
         if (zlink::part_helper_internal::prepare_recv_step (
-              subject_, zlink::part_helper_internal::recv_family_subscribe, handle.socket,
+              zlink::part_helper_internal::recv_family_subscribe, handle.socket,
               &helper_state, &first_part, &source_socket)
             != 0) {
             const int saved_errno = errno;

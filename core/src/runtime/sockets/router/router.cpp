@@ -61,6 +61,7 @@ static bool router_debug_enabled ()
 
 zlink::router_t::router_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     routing_socket_base_t (parent_, tid_, sid_),
+    _fq (fq_t::publish_receive_activity),
     _prefetched (false),
     _routing_id_sent (false),
     _current_in (NULL),

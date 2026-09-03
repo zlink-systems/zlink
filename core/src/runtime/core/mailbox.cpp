@@ -22,6 +22,7 @@ zlink::mailbox_t::mailbox_t ()
     _command_pending_hint.store (false, std::memory_order_release);
     _command_wait_epoch = 0;
     _command_waiters = 0;
+    _command_wait_observers = 0;
     _command_wait_signal_pending = false;
     _primary_signaler_required.store (false, std::memory_order_release);
 }
@@ -48,15 +49,19 @@ void zlink::mailbox_t::send (const command_t &cmd_)
     _sync.lock ();
     _cpipe.write (cmd_, false);
     const bool ok = _cpipe.flush ();
+    //  A command can join an already-active receiver without producing a
+    //  primary signal. Preserve that edge only while a slow-path owner is
+    //  observing the drain/wait handoff; ordinary commands pay no epoch work.
+    if (_command_wait_observers != 0 || _command_waiters != 0) {
+        ++_command_wait_epoch;
+        if (_command_waiters != 0)
+            _command_wait_cv.broadcast ();
+    }
     bool send_primary_signaler = true;
     if (!ok) {
         //  Publish the command before its wakeup. Commands appended while the
         //  receiver is active are consumed by that drain and need no hint.
         _command_pending_hint.store (true, std::memory_order_release);
-        if (_command_waiters != 0) {
-            ++_command_wait_epoch;
-            _command_wait_cv.broadcast ();
-        }
         // Signal all registered signalers for ZLINK_INTERNAL_OPT_FD support
         for (std::vector<signaler_t *>::iterator it = _signalers.begin (), end = _signalers.end ();
              it != end; ++it) {
@@ -85,10 +90,11 @@ bool zlink::mailbox_t::take_command_pending_hint ()
 void zlink::mailbox_t::signal ()
 {
     _sync.lock ();
-    if (_command_waiters != 0) {
+    if (_command_wait_observers != 0 || _command_waiters != 0)
         ++_command_wait_epoch;
+    if (_command_waiters != 0) {
         _command_wait_cv.broadcast ();
-    } else {
+    } else if (_command_wait_observers == 0) {
         //  signal() also transfers command ownership without enqueueing a
         //  command. Preserve one such edge across waiter registration.
         _command_wait_signal_pending = true;
@@ -191,7 +197,25 @@ zlink::mailbox_t::command_probe_result_t zlink::mailbox_t::probe_command (
                                      : command_probe_other;
 }
 
-int zlink::mailbox_t::wait_for_command_signal (int timeout_)
+uint64_t zlink::mailbox_t::begin_command_wait_observation ()
+{
+    _sync.lock ();
+    ++_command_wait_observers;
+    const uint64_t epoch = _command_wait_epoch;
+    _sync.unlock ();
+    return epoch;
+}
+
+void zlink::mailbox_t::end_command_wait_observation ()
+{
+    _sync.lock ();
+    zlink_assert (_command_wait_observers != 0);
+    --_command_wait_observers;
+    _sync.unlock ();
+}
+
+int zlink::mailbox_t::wait_for_command_signal (
+  int timeout_, const uint64_t *observed_epoch_)
 {
     clock_t clock;
     const uint64_t deadline =
@@ -202,7 +226,8 @@ int zlink::mailbox_t::wait_for_command_signal (int timeout_)
     //  send() publishes this hint under the same mutex before deciding
     //  whether a registered waiter needs a CV wake. This closes the enqueue
     //  versus waiter-registration race without adding work to active sends.
-    if (_command_pending_hint.load (std::memory_order_acquire)
+    if ((observed_epoch_ && _command_wait_epoch != *observed_epoch_)
+        || _command_pending_hint.load (std::memory_order_acquire)
         || _command_wait_signal_pending) {
         _command_wait_signal_pending = false;
         _sync.unlock ();
@@ -351,6 +376,8 @@ void zlink::mailbox_t::remove_signaler (signaler_t *signaler_)
 
 void zlink::mailbox_t::rearm_primary_signaler ()
 {
+    if (!_primary_signaler_required.load (std::memory_order_acquire))
+        return;
     _sync.lock ();
     //  This edge exists only for callers that obtained the primary fd. Avoid
     //  a signaler syscall for async-owned sockets that have no public poller.

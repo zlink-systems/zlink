@@ -234,7 +234,7 @@ class complete_record_admission_guard_t
         _scope ()
     {
         if (socket_)
-            _scope = socket_->begin_complete_send_scope (false);
+            _scope = socket_->begin_complete_send_scope ();
     }
 
     ~complete_record_admission_guard_t ()

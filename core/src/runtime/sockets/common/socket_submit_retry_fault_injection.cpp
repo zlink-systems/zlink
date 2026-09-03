@@ -19,6 +19,12 @@ extern "C" void zlink_test_set_submit_retry_fault (int count_, int err_)
     g_submit_retry_faults_remaining.store (count_ < 0 ? 0 : count_, std::memory_order_relaxed);
 }
 
+bool zlink::socket_submit_retry_fault::pending ()
+{
+    return g_submit_retry_faults_remaining.load (std::memory_order_relaxed)
+           > 0;
+}
+
 bool zlink::socket_submit_retry_fault::consume (int *err_out_)
 {
     int remaining = g_submit_retry_faults_remaining.load (std::memory_order_relaxed);

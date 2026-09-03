@@ -786,7 +786,7 @@ void test_suspended_request_multipart_preserves_pending_cookie ()
     std::shared_ptr<handle_state_t> helper_state;
     bool first_part = false;
     TEST_ASSERT_SUCCESS_ERRNO (prepare_send_step (
-      dealer, staged, handle.socket, &helper_state, &first_part));
+      staged, handle.socket, &helper_state, &first_part));
     TEST_ASSERT_TRUE (first_part);
     complete_send_step (helper_state, ZLINK_PART_MORE);
 
@@ -795,7 +795,7 @@ void test_suspended_request_multipart_preserves_pending_cookie ()
     resumed.request_seq = 77;
     resumed.pending_cookie = 991;
     TEST_ASSERT_SUCCESS_ERRNO (prepare_send_step (
-      dealer, resumed, handle.socket, &helper_state, &first_part));
+      resumed, handle.socket, &helper_state, &first_part));
     TEST_ASSERT_FALSE (first_part);
     {
         std::lock_guard<std::mutex> lock (helper_state->mutex);

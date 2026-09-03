@@ -177,31 +177,6 @@ bool zlink::lb_t::contains (pipe_t *pipe_) const
     return false;
 }
 
-bool zlink::lb_t::has_matching_pipe (connected_pipe_filter_fn filter_,
-                                     void *filter_userdata_) const
-{
-    if (!filter_)
-        return !_entries.empty ();
-    for (entries_t::const_iterator it = _entries.begin ();
-         it != _entries.end (); ++it) {
-        if (it->first && filter_ (it->first, filter_userdata_))
-            return true;
-    }
-    return false;
-}
-
-bool zlink::lb_t::has_positive_matching_pipe (
-  connected_pipe_filter_fn filter_, void *filter_userdata_) const
-{
-    for (entries_t::const_iterator it = _entries.begin ();
-         it != _entries.end (); ++it) {
-        if (it->first && it->second.weight > 0
-            && (!filter_ || filter_ (it->first, filter_userdata_)))
-            return true;
-    }
-    return false;
-}
-
 #ifdef ZLINK_BUILD_TESTS
 size_t zlink::lb_t::test_weight_count (uint32_t weight_) const
 {
