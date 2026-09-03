@@ -421,3 +421,17 @@ node_modules·NUGET 캐시) 전부 동일, lib-copy 트랩 없음. core ctest 13
 건드리지 않음**(drop/apply 금지). 내 세션 작업(dotnet guard·node fix·core alias·185 framework)은 전건 무결 확인.
 **잔여 Phase11 blocker 3**: (1)M6A line176 — known-broken vs 회귀 판정 필요(메모리 대조), (2)M6B line1343 deadline_exceeded
 진단, (3)dotnet handover err101 별개 버그 진단. codex 한도아웃 → Claude 서브에이전트/직접 판정.
+
+## D-066 (2026-09-03 23:4x) M6B line1343·M6A 판정 + 잔여 진단 상태
+**M6A(line176 complete_bound_session_bind)**: 메모리 [[zlink-env-test-quirks]] 확인 — baseline(fe77930f5d)서도 stash로
+재현되는 deterministic pre-existing 실패(core 0.11.1 재설치 기인), "프레임워크 변경 탓 오판 금지" 명시. **Phase11 회귀
+아님·blocker 아님**. 서브에이전트 "HEAD passed" 주장은 오판.
+**M6B(line1343 verify_remote_bound_session_bind_classifies_retryable_outcomes, deadline_exceeded)**: 진단(sonnet)+감독관
+primary source 확인. raw_route_port.cpp:157-174 기존 주석(46ef4b0f03)이 이 이슈 명시 — EHOSTUNREACH(미등록RID) vs
+ECONNREFUSED 구분 불가로 m6a/m6b 단일 분류 공유, m6b assertion을 m6a에 맞춰 갱신. 현재 관측=not_found+errno=0(EHOSTUNREACH
+아님). **alias fix diff의 xsubmit_retry_allowed는 미등록 RID를 old·new 모두 false 반환→분류 미변경**. M6B는 이전 line390서
+막혀 line1343 미실행 → not_found 거동은 **pre-existing latent, alias fix가 노출만(제 커밋 e3d5c5b79f 회귀 아님)**. 판정:
+**pre-existing 분류 gap, documented followup**(M6A와 동급, Phase11 blocker 아님). 잠재 fix(raw_route_port.cpp:181-190
+submit_error catch에 not_found→route_unavailable 추가)는 blast radius(다른 not_found 경로)로 신중 — 별도 판단.
+**잔여 진단 미완(서브에이전트 background 핸드오프로 중단)**: (2)dotnet handover err101(Core vs framework 미판별),
+(3)STREAM-001(D-004 stale 여부 미확인). codex 한도아웃 지속.
