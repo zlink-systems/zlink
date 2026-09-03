@@ -109,96 +109,44 @@ def _routing_probe(requester, routing_id, timeout_s):
 
 def _run_requester(requester, routing_id, payload, *, run_id, msg_size, duration_s):
     timeout_s = max(0.001, resolve_single_reqrep_timeout_ms() / 1000.0)
-    drain_timeout_s = max(0.001, resolve_single_reqrep_drain_timeout_ms() / 1000.0)
     latency = LatencySampler(resolve_single_latency_sample_cap())
     active_end = time.perf_counter() + duration_s
-    outstanding = 0
     seq = 1
     completed = 0
-    fatal = None
-
-    def on_reply(parts, error):
-        nonlocal outstanding, completed, fatal
-        completed_at = time.perf_counter()
-        outstanding -= 1
-        if error is not None:
-            if not (
-                isinstance(error, zlink.RequestError)
-                and error.result == zlink.RequestResult.TIMED_OUT
-            ) and fatal is None:
-                fatal = error
-            return
+    while time.perf_counter() < active_end:
+        stamped = stamp_payload(payload, phase=1, run_id=run_id, seq=seq)
         try:
+            parts = _request_operation_sync(
+                requester, routing_id, measurement_parts(stamped), timeout_s
+            )
+        except zlink.RequestError as exc:
+            if exc.result == zlink.RequestResult.TIMED_OUT:
+                continue
+            raise
+        try:
+            completed_at = time.perf_counter()
             reply_bytes = tuple(part.to_bytes() for part in parts)
             data = measurement_payload(reply_bytes)
             header = None if data is None else decode_header(data)
             now_ns = time.time_ns()
             if (
-                data is None
-                or len(data) != msg_size
-                or header is None
-                or header["magic"] != HEADER_MAGIC
-                or header["run_id"] != run_id
-                or header["phase"] != 1
-                or header["msg_size"] != msg_size
-                or header["sent_ts_ns"] <= 0
-                or now_ns < header["sent_ts_ns"]
-                or completed_at >= active_end
+                data is not None
+                and len(data) == msg_size
+                and header is not None
+                and header["magic"] == HEADER_MAGIC
+                and header["run_id"] == run_id
+                and header["phase"] == 1
+                and header["msg_size"] == msg_size
+                and header["sent_ts_ns"] > 0
+                and now_ns >= header["sent_ts_ns"]
+                and completed_at < active_end
             ):
-                return
-            completed += 1
-            latency.add(float(now_ns - header["sent_ts_ns"]))
+                completed += 1
+                latency.add(float(now_ns - header["sent_ts_ns"]))
         finally:
             _close_messages(parts)
+        seq += 1
 
-    with zlink.create_poller() as poller:
-        poll_events = zlink.create_poll_events(1)
-        poller.add_socket(requester, zlink.PollEventFlag.POLLCOMPLETION, 0)
-        while time.perf_counter() < active_end and fatal is None:
-            backpressured = False
-            submitted_since_progress = 0
-            while time.perf_counter() < active_end and fatal is None:
-                stamped = stamp_payload(payload, phase=1, run_id=run_id, seq=seq)
-                operation = (
-                    requester.request()
-                    if routing_id is None
-                    else requester.request(routing_id)
-                )
-                outstanding += 1
-                try:
-                    operation.messages(*measurement_parts(stamped)).timeout(
-                        timeout_s
-                    ).submit_sync(
-                        flags=zlink.SendFlags.DONT_WAIT,
-                        callback=on_reply,
-                    )
-                except zlink.SubmitError as exc:
-                    outstanding -= 1
-                    if not _transient_submit_result(exc.result):
-                        raise
-                    backpressured = True
-                    break
-                seq += 1
-                submitted_since_progress += 1
-                if submitted_since_progress >= 64:
-                    # Completion callbacks run when this requester-owned
-                    # poller is progressed. Interleave a non-blocking poll
-                    # with submission so an auto-HWM that remains writable
-                    # for the whole active phase cannot defer every reply
-                    # until after the active cutoff.
-                    poller.wait(poll_events, 0)
-                    submitted_since_progress = 0
-            if outstanding and (backpressured or time.perf_counter() >= active_end):
-                poller.wait(poll_events, 25)
-
-        drain_end = time.perf_counter() + drain_timeout_s
-        while outstanding and time.perf_counter() < drain_end:
-            poller.wait(poll_events, 25)
-
-    if outstanding:
-        raise RuntimeError("request completion drain timed out")
-    if fatal is not None:
-        raise fatal
     if completed == 0 or latency.count == 0:
         raise RuntimeError("request-reply benchmark completed no active round trips")
     return result_metrics(

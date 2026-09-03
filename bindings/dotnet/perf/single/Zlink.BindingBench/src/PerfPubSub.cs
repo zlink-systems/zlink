@@ -87,7 +87,8 @@ internal static class PerfPubSub
         byte[] payload, int msgSize, int durationSeconds, int recvTimeoutMs,
         int latencyCap, out long receivedOut, out List<double> latencySamples)
     {
-        _ = recvTimeoutMs;
+        receiver.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(
+            Math.Max(1, recvTimeoutMs));
         long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
 
         long received = 0;
@@ -96,12 +97,9 @@ internal static class PerfPubSub
         long sampleSeen = 0;
         uint rng = 0xA341316Cu;
 
-        // PERF_SINGLE_TEST_POLICY § 1.4 / C parity: the receiver waits on a
-        // public poller, performs a DontWait subscribe, drains the available
-        // burst, and exits only on the wire-level stop token.
-        using var poller = Zlink.CreatePoller();
-        var events = new PollEvent[1];
-        poller.Add(receiver, PollEventFlags.PollIn, 0);
+        // The .NET poller completion owner is only available on async-send
+        // sockets. SUB is receive-only, so use the public blocking pull with
+        // the configured receive timeout, then drain the available burst.
         using var maybe = new TopicMessage();
         bool stopReceived = false;
         Exception? sendError = null;
@@ -138,10 +136,10 @@ internal static class PerfPubSub
         {
             while (!stopReceived)
             {
-                if (!WaitForInputSignalDriven(poller, events))
+                if (!TrySubscribe(receiver, maybe, RecvFlags.None))
                     continue;
 
-                while (TrySubscribeNonBlocking(receiver, maybe))
+                do
                 {
                     if (string.Equals(maybe.Topic, Topic,
                             StringComparison.Ordinal))
@@ -172,6 +170,8 @@ internal static class PerfPubSub
                         }
                     }
                 }
+                while (!stopReceived
+                    && TrySubscribe(receiver, maybe, RecvFlags.DontWait));
             }
         }
         catch (Exception ex)
@@ -189,12 +189,12 @@ internal static class PerfPubSub
         return received > 0 && latencySamples.Count > 0;
     }
 
-    private static bool TrySubscribeNonBlocking(ISubSocket receiver,
-        TopicMessage result)
+    private static bool TrySubscribe(ISubSocket receiver, TopicMessage result,
+        RecvFlags flags)
     {
         try
         {
-            return receiver.Subscribe(result, RecvFlags.DontWait);
+            return receiver.Subscribe(result, flags);
         }
         catch (ZlinkRecvException ex)
             when (ex.Result == ZlinkRecvException.ErrorCode.NoData

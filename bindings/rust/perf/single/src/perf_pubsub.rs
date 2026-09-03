@@ -64,9 +64,14 @@ fn main() {
                     .publish("P")
                     .message(msg)
                     .message(Message::try_from(&[] as &[u8]).expect("empty measurement tail"))
+                    .flags(zlink::SendFlags::DONT_WAIT)
                     .submit()
             } else {
-                pub_sock.publish("P").message(msg).submit()
+                pub_sock
+                    .publish("P")
+                    .message(msg)
+                    .flags(zlink::SendFlags::DONT_WAIT)
+                    .submit()
             } {
                 Ok(()) => true,
                 Err(err)

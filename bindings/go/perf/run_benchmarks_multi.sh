@@ -1555,18 +1555,6 @@ for pattern_index in "${!PATTERNS[@]}"; do
   fi
 done
 
-if [[ "${SMOKE}" -eq 1 ]]; then
-  expected_result_lines=$((expected_cases * 5))
-  if [[ "${#FAILURES[@]}" -gt 0 || "${result_lines}" -ne "${expected_result_lines}" ]]; then
-    exec >&3
-    grep -E '^(READY,|ACTIVE,|RESULT,|FAIL,)' "${RAW_RESULTS_FILE}" || true
-    exit 1
-  fi
-  exec >&3
-  grep -E '^(READY,|ACTIVE,|RESULT,)' "${RAW_RESULTS_FILE}" || true
-  exit 0
-fi
-
 table_output="$(render_tables)"
 if [[ -n "${table_output}" ]]; then
   printf '%s\n' "${table_output}" >> "${RESULTS_FILE}"

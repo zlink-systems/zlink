@@ -3,7 +3,6 @@
 package systems.zlink.perf.multi;
 
 import java.util.List;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import systems.zlink.contracts.core.RoutingId;
@@ -85,26 +84,18 @@ final class PerfMultiRoutedRelay {
                                     Message source,
                                     AtomicBoolean stopRequested,
                                     AtomicReference<Throwable> failure) {
-        CompletionStage<Void> stage;
         try (Message payload = Message.from(source);
              Message tail = PerfUtil.measurementPartCount() == 2
                  ? PerfUtil.measurementTail() : null) {
             if (tail != null) {
-                stage = server.send(routingId).message(payload).message(tail)
-                    .submit();
+                server.send(routingId).message(payload).message(tail)
+                    .submit_sync();
             } else {
-                stage = server.send(routingId).message(payload).submit();
+                server.send(routingId).message(payload).submit_sync();
             }
         } catch (Throwable error) {
             recordFailure(error, stopRequested, failure);
-            return;
         }
-
-        stage.whenComplete((ignored, error) -> {
-            if (error != null) {
-                recordFailure(error, stopRequested, failure);
-            }
-        });
     }
 
     private static void recordFailure(Throwable error,

@@ -855,8 +855,16 @@ if has_results:
             emit(f"RESULT,current,{p},{tr},{sz},{metric},{mv[metric]:.3f}")
 
 status = "complete" if expected_result_lines == actual_result_lines else "partial"
+planned_cells = sum(len(transports) for _, transports in plan) * len(plan_sizes) * runs
+success_count = actual_result_lines // len(all_metrics)
+fail_count = len(failures)
+unsupported_count = max(0, planned_cells - success_count - fail_count)
 emit("")
 emit("## Completion")
+emit(f"- success: {success_count}")
+emit(f"- unsupported: {unsupported_count}")
+emit("- skip: 0")
+emit(f"- fail: {fail_count}")
 emit(f"- status: {status}")
 emit(f"- expected_result_lines: {expected_result_lines}")
 emit(f"- actual_result_lines: {actual_result_lines}")

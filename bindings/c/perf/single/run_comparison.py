@@ -1508,6 +1508,10 @@ def main() -> int:
         1 for record in combo_results.values() if record.status == "unsupported"
     )
     skip_combo_count = sum(1 for record in combo_results.values() if record.status == "skip")
+    success_combo_count = sum(
+        1 for record in combo_results.values() if record.status == "success"
+    )
+    fail_combo_count = sum(1 for record in combo_results.values() if record.status == "fail")
     expected_result_lines = max(
         0,
         (requested_combo_count - unsupported_combo_count - skip_combo_count)
@@ -1527,6 +1531,10 @@ def main() -> int:
         print("\n## Result Data")
         emit_result_lines(combo_results)
     print("\n## Completion")
+    print(f"- success: {success_combo_count}")
+    print(f"- unsupported: {unsupported_combo_count}")
+    print(f"- skip: {skip_combo_count}")
+    print(f"- fail: {fail_combo_count}")
     print(f"- status: {completion_status}")
     print(f"- expected_result_lines: {expected_result_lines}")
     print(f"- actual_result_lines: {actual_result_lines}")
