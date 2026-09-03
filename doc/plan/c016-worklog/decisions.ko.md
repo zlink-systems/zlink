@@ -459,3 +459,23 @@ stream_send_call_t timeout·_submit(header,payload,_timeout)·pending.emplace(..
 | java | 1205/1207(2 known monitor-gap) | NO |
 **남은 실작업**: STREAM-001 계약 갱신(소량), handover 진단(Core/framework 판별). 나머지는 documented followup/known-broken.
 이후 언어별 framework 전환 커밋(185파일)→Phase12·13. codex Sep7까지 아웃.
+
+## D-068 (2026-09-04 00:1x) handover err101 최종 진단·스펙 판정 (canonical actor-join OPEN RULING)
+diagnosis(sonnet)+감독관 스펙 분석 완결. 재현: ConnectedRuntime 테스트가 (1)원본 DEALER 소켓으로 `.Request().Timeout(2s)`,
+(2)HandoverAsync가 **같은 SourceRid로 새 DEALER 소켓** 생성·연결·HELLO 재admission·`Source` 교체(원본은 PriorSource 보관),
+(3)서버가 captured Core ReplyOperation으로 FINAL 제출(`nativeTerminalReplySubmitOverride`로 framework 재drive 큐 **완전 우회**,
+`reply.Submit()` 단발). 관찰: 표면 예외가 ZlinkSubmitException(target측)이 아니라 **ZlinkRequestException err101(source측 2s 만료)**
+— target `Submit()`은 예외 없이 성공. 즉 **Core는 reply 전달 성공**했으나 원본 DEALER가 청취 중인 물리 pipe가 아닌 다른
+목적지(handover 후 "현재 ready pipe"=새 connection)로 감.
+**스펙 판정**: `07-router.ko.md:273-278`은 reply FINAL이 "같은 logical source RID의 reply route admission 대기 후 **현재**
+ready pipe 선택"이라 명시 → handover 후 현재 ready pipe=새 pipe. 그러나 DEALER request/reply correlation은 소켓-인스턴스
+로컬이라 원본 pending request는 자기 pipe로만 수신 가능. **gap**: reply token(line92 "opaque capability")이 **물리
+connection에 고정**되는지(원본 요청 pipe로 배달=test 기대) **logical RID에 고정**되는지("현재 ready pipe" 재해석=현 구현
+거동)가 스펙에 미명시. token="opaque capability" 문면 vs "현재 ready pipe" 문면 **충돌**.
+**결론**: **깨끗한 Core 버그 아님 = spec-design gap**(D-046/D-061 승계). alias fix와 무관(별개 메커니즘, 재현으로 재확인).
+두 해소 방향 모두 비용: (A)물리-connection 결속=원본 pipe 배달 → 원본 소켓 살아있어야, 죽으면 fragile. (B)logical 유지 +
+in-flight request를 handover 시 새 connection으로 마이그레이션 → **새 메커니즘·복잡도 증가**([[spec-change-policy]] 가드레일
+저촉: 제어 분산·복잡화 금지). **감독관 판정: 현 스펙(logical/현재-ready-pipe)이 최단순·일관 → 유지. handover err101은 Core
+결함 아니라 canonical actor-join의 request-across-handover 설계 미결(OPEN RULING)**. 이 설계 방향(captured reply route가
+물리 handover를 건너 원본 요청자에게 배달돼야 하는가)은 사용자 스펙-권한 영역 → **documented followup, 사용자 설계 판정
+대기**. [[canonical-actor-join-app-reply-contract]]·activationRecoveryState OPEN RULING과 동일 계열. Phase11 blocker 아님.
