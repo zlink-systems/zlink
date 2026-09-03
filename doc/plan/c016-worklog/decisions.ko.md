@@ -387,3 +387,19 @@ node B-defect=sonnet**(Agent tool, scope 분리 core/**·dotnet/**·node/**, 커
 node production(src 30파일)은 기존 Phase11 전환분(job 무수정). node 커밋은 B-defect fix 후 production+test 묶어.
 **주의**: dotnet/node fix는 alias 버그와 독립이라 현 패키지로 유효. cpp M6B/M6C·handover는 Core alias fix 후 4언어
 패키지 재빌드(sha256 gate)+재실행 필요.
+
+## D-064 (2026-09-03 22:1x) Core alias fix 커밋·push (e3d5c5b79f) + dotnet liveness 실제 버그 정정
+**Core alias fix(opus 서브에이전트, 감독관 전건 diff 재검증)** 커밋·push `e3d5c5b79f`(B merge). Design B: alias를
+connect 시점에 transport_pair_id 키로 snapshot→locally-initiated Application pipe에 admission 전 apply→identify_peer는
+pipe에서 route id 읽기, socket-global lazy 분기 제거. 2차 결함(alias≠peer-identity시 reconnect 미생존) 동시 수정.
+6파일(session_base/socket_base.hpp/socket_base_endpoint/socket_base_routing/router_admission/CMakeLists)+신규 test
+test_connect_rid_alias_binding(2 case, pre-fix FAIL→post-fix PASS: reconnect alias생존, back-to-back distinct route
+EAGAIN 교차검증). 전체 ctest 135/135. 모든 경로 route_lifecycle_mutex 보호, scope 준수, 스펙 무수정.
+**dotnet liveness 정정**: 내가 지목한 typed-request→plain-send는 **이미 기존 Phase11 전환분**(TickLivenessAsync·
+ReceiveLoop 완료). dotnet 에이전트(sonnet)가 찾은 실제 버그 = Connection.Start()가 admission Hello를 두 트리거
+(monitor ConnectionReady + 100ms fallback ScheduleAdmissionRetry)로 쏘는데 TryStartAdmission이 "in flight"만 가드,
+"already succeeded" 미가드 → 중복 Hello가 liveness probe/ack 손상(~1/3 간헐). 수정: `|| _currentAdmission is not null`
+가드(_admissionCompleted는 native-RID-mismatch 거부 경로도 set돼 부작용, _currentAdmission이 정답). 검증 liveness 20/20,
+ClientServer 35/35. 1파일(ZLinkClientServerClientRuntime.cs).
+**다음**: 4언어 패키지 재빌드(새 lib sha256 gate, 이전 43ddbc2f→변경) → cpp M6B/M6C(M6B는 line1343 이월 예상)·dotnet
+handover(alias fix로 해소 기대)·node 재검증. node B-defect fix(sonnet): Detailed 추가+setDiagnosticsLevelAsync interface 제거.
