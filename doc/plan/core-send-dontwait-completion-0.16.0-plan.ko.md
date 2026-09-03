@@ -56,22 +56,34 @@ D-021~D-047이며, 이 절은 그 요약이다.
 
 - Core 2차 성능 수정 ultra job(`c016-hotpath-phase2`, 브리프 `c016-worklog/briefs/hotpath-phase2.prompt`)은 머신
   `ulalax-home`에서 D multi wake 유실 3종·A part_helper 층·B REQREP·C ws completion-backpressure 순환 + timeout 콜백
-  O(N²) 수정과 임시 계측 제거까지 마친 뒤, "completion-poller/backpressure 결정적 회귀 테스트 추가" 단계에서
-  **감독관이 중단**했다(2026-09-03, 사용자 지시: 새 머신에서 이어서). 진행 기록
-  `c016-worklog/hotpath-phase2-progress.md`, 변경 파일 43개 목록 `c016-worklog/hotpath-phase2-files.txt`.
-- 그 working tree(core 43파일 +3,733/−829)는 **미커밋**이며 branch `wip/hotpath-phase2-snapshot-20260903`(origin)에
-  중단 시점 그대로 있다.
-- **새 머신에서 이어받는 절차**: ① §0.4로 환경 구성 ② `git fetch origin wip/hotpath-phase2-snapshot-20260903 &&
-  git checkout main && git checkout origin/wip/hotpath-phase2-snapshot-20260903 -- core bindings/c/include
-  bindings/cpp/include bindings/go/include bindings/rust/include`로 스냅샷을 working tree에 적용(커밋하지 않음; `git
-  status -- core`로 43파일 확인) ③ sol ultra job을 `c016-worklog/briefs/hotpath-phase2-resume.prompt`로 기동 ④ 완료
-  후 감독관 gate 재실행(`cmake --build core/build`, `ctest` 전체, `test_single_lane_*` ×2, raw mirror cmp 12,
-  `git diff --check`, cpp·python smoke) ⑤ `tools/sweep2.sh --only single` + `--only multi` 4-size 집계 판정 ⑥ 파일
-  명시 add로 커밋·push ⑦ 수정 건별 spec-gap 분류(D-046) — 특히 "completion poller owner의 blocking request"
-  계약 문안.
+  O(N²) 수정과 임시 계측 제거까지 마친 뒤 "completion-poller/backpressure 결정적 회귀 테스트 추가" 단계에서 한 번
+  중단됐고(2026-09-03 10:40), 사용자 결정(D-048)으로 **같은 머신에서 재개 브리프
+  `c016-worklog/briefs/hotpath-phase2-resume.prompt`로 다시 실행 중**이다(scope `c016-hotpath-phase2-r2`). 진행 기록
+  `c016-worklog/hotpath-phase2-progress.md`, 변경 파일 43개 목록 `c016-worklog/hotpath-phase2-files.txt`. 중단 시점
+  스냅샷은 branch `wip/hotpath-phase2-snapshot-20260903`(origin)에 있다(다른 머신에서 이어받아야 할 때만 사용:
+  `git checkout origin/wip/hotpath-phase2-snapshot-20260903 -- core bindings/{c,cpp,go,rust}/include`, 커밋하지 않음).
+- 완료 처리(§0.3a 분담대로 A가 수행): ① 요약·BLOCKERS 검토 ② 감독관 기능 gate(`cmake --build core/build`, `ctest`
+  전체, `test_single_lane_*` ×2, raw mirror cmp 12, `git diff --check`, cpp·python smoke) ③ 파일 명시 add로 커밋·push
+  (perf 판정은 B가 `tools/sweep2.sh`로 수행, §0.1에 pending 표기) ④ 수정 건별 spec-gap 분류(D-046) — 특히
+  "completion poller owner의 blocking request" 계약 문안.
 - 그 뒤 순서: hotpath gate 도구 job(`briefs/hotpath-gate.prompt`, 최종 트리 기준값) → posddd 리팩토링 job
   (`briefs/posddd-refactor.prompt`, worktree 분리 병렬) → wake 불변식 테스트 job(`briefs/wake-invariant-tests.prompt`)
   → Phase 7 → 9 → 10 → 11(사용자 조율) → 12 → 13.
+
+### 0.3a 두 머신 분담 (2026-09-03 사용자 결정)
+
+Core 2차 job은 원래 머신(A, `ulalax-home`)에서 재개해 완료한다(D-048). 그 뒤 두 머신이 나눠 진행하고
+Phase 11 전에 합류한다. 모든 B 작업은 branch에서 하고 PR로 main에 합친다.
+
+| 머신 A | 머신 B |
+|---|---|
+| Core 2차 완료 → 감독관 기능 gate → 커밋·push(§0.1 표에 "perf 판정 pending" 표기) | pull → §0.4 환경 → `tools/sweep2.sh` 4-size 판정(single+multi) → 미달 cell 수정·재판정 |
+| Phase 7 smoke | hotpath gate 도구 job(`briefs/hotpath-gate.prompt`, 기준값 = 판정 통과 트리) |
+| Phase 9 준비(`--sync-versions` dry-run, stale 심볼 rg, release commit 초안) | posddd 리팩토링(`briefs/posddd-refactor.prompt`, worktree 분리 병렬) + wake 불변식 테스트(`briefs/wake-invariant-tests.prompt`) → 비회귀 sweep2 → PR |
+| B의 sweep2 PASS(및 리팩토링 merge 여부 결정) 후 → Phase 9 태그·GH 빌드 → 10 → 11(사용자 범위 조율) → 12 → 13 | |
+
+규칙: release 태그는 sweep2 PASS 뒤에만 찍는다(Phase 9 조건). 측정 중인 머신에서는 다른 빌드·테스트를 돌리지 않는다.
+리팩토링을 0.16.0에 포함할지(태그 전 merge) 0.16.1로 보낼지는 사용자 결정 사항(감독관 권고: 태그 전 merge).
 
 ### 0.4 새 머신에서 재개하는 절차
 

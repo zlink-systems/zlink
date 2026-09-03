@@ -218,3 +218,12 @@ ultra job과 파일 충돌 없음(doc 전용).
   (REQUEST_CONFLICT generation, 06-dealer flow-state 문장, 01-zmp Completion connection 정의, glossary generation, 10-hot-path
   plan 참조 제거, 03-sub subscription_at 원자성). 이월(에이전트 보고): 디렉터리 전반 하단 nav 누락 관례, 01-pair/06/07의 §4.3
   산문-검증 중복, 선언-동작 순서 편차, PUB option enum 기본값 주석 — 계약 위험 없는 편집이라 다음 문서 패스에서 처리.
+
+## D-048 (2026-09-03 10:55, 사용자 지시) 이 머신에서 계속
+"아니다. 여기서 일단 진행해야겠다" → 중단했던 Core 2차 job을 resume 브리프(hotpath-phase2-resume.prompt)로 재기동
+(c016-hotpath-phase2-r2). 트리는 중단 시점 그대로(43파일, 스냅샷과 동일). 완료 후 §0.3 절차(gate → sweep2 → 커밋·push).
+
+## D-049 (2026-09-03 11:05, 사용자 결정) 두 머신 분담
+A(이 머신): Core 2차 완료·기능 gate·커밋 → Phase 7 smoke → Phase 9 준비 → (B의 sweep2 PASS 후) 9 태그 → 10 → 11 → 12 → 13.
+B(다른 머신, branch): sweep2 4-size 판정 → hotpath gate 도구 → posddd 리팩토링 + wake 테스트 → 비회귀 sweep2 → PR.
+합류점 Phase 11 전. 태그는 sweep2 PASS 뒤에만. 리팩토링의 0.16.0 포함 여부는 사용자 결정 대기(권고: 태그 전 merge).
