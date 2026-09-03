@@ -36,6 +36,8 @@ class session_server_host_factory_t
         auto &options = app.add_zlink_framework ();
         options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
         options.codecs ().use (zlink::framework_codecs::protobuf ());
+        options.services ().add_scoped<authenticate_session_handler_t,
+                                        channel_client_t> ();
         options.add_location_store<redis::redis_location_store_t> ()
           .set_connection_string (topology.redis_endpoint)
           .set_key_prefix (topology.redis_key_prefix + "location:");
