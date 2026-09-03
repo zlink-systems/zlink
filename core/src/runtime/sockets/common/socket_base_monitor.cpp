@@ -9,7 +9,6 @@
 #include "core/control_runtime.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "utils/debug_log.hpp"
-#include "utils/sleep.hpp"
 #include "zlink.h"
 
 namespace
@@ -215,28 +214,6 @@ bool zlink::socket_base_t::has_attached_pipes () const
 {
     scoped_lock_t lock (monitor_runtime ().sync);
     return endpoint_runtime ().has_attached_pipes ();
-}
-
-bool zlink::socket_base_t::monitor_has_attached_pipes () const
-{
-    return has_attached_pipes ();
-}
-
-void zlink::socket_base_t::socket_peer_remote_endpoints (std::vector<std::string> *out_)
-{
-    if (!out_)
-        return;
-
-    process_commands (0, false);
-    out_->clear ();
-    scoped_lock_t lock (monitor_runtime ().sync);
-    out_->reserve (endpoint_runtime ().attached_pipe_count ());
-    for (size_t i = 0, size = endpoint_runtime ().attached_pipe_count (); i != size; ++i) {
-        pipe_t *pipe = endpoint_runtime ().attached_pipe (i);
-        const std::string &remote = pipe->get_endpoint_pair ().remote;
-        if (!remote.empty ())
-            out_->push_back (remote);
-    }
 }
 
 void zlink::socket_base_t::snapshot_attached_pipes (std::vector<pipe_t *> *out_)
@@ -550,13 +527,6 @@ void zlink::socket_base_t::event_handshake_failed_protocol (
     event (endpoint_uri_pair_, NULL, 0, values, 1, ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL);
 }
 
-void zlink::socket_base_t::event_handshake_failed_auth (
-  const endpoint_uri_pair_t &endpoint_uri_pair_, int err_)
-{
-    uint64_t values[1] = {static_cast<uint64_t> (err_)};
-    event (endpoint_uri_pair_, NULL, 0, values, 1, ZLINK_EVENT_HANDSHAKE_FAILED_AUTH);
-}
-
 void zlink::socket_base_t::event_connection_ready_changed (
   const endpoint_uri_pair_t &endpoint_uri_pair_,
   const unsigned char *routing_id_,
@@ -692,13 +662,6 @@ void zlink::socket_base_t::validate_inproc_connection (pipe_t *pipe_)
     // pair admission only after the registry has assigned the immutable peer
     // instance identity to this lane.
     attach_pipe (pipe_, false, true, true);
-}
-
-void zlink::socket_base_t::emit_socket_monitor_value_event (
-  uint64_t event_, uint64_t value_, const endpoint_uri_pair_t &endpoint_uri_pair_)
-{
-    uint64_t values[1] = {value_};
-    event (endpoint_uri_pair_, NULL, 0, values, 1, event_);
 }
 
 void zlink::socket_base_t::emit_peer_weight_changed (

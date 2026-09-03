@@ -10,9 +10,8 @@
 #include "utils/allocator.hpp"
 #include "utils/err.hpp"
 
-namespace
-{
-void close_completion_payload (zlink_completion_t *completion_)
+void zlink::socket_completion::release_payload (
+  zlink_completion_t *completion_)
 {
     if (!completion_ || !completion_->reply_parts)
         return;
@@ -23,26 +22,33 @@ void close_completion_payload (zlink_completion_t *completion_)
     completion_->reply_part_count = 0;
 }
 
-void unlink_live_locked (zlink::socket_completion::queue_state_t *state_,
-                         zlink::socket_completion::reservation_t *node_)
+namespace
 {
-    if (node_->all_previous)
-        node_->all_previous->all_next = node_->all_next;
+void unlink_outstanding_locked (
+  zlink::socket_completion::queue_state_t *state_,
+  zlink::socket_completion::reservation_t *node_)
+{
+    if (node_->outstanding_previous)
+        node_->outstanding_previous->outstanding_next =
+          node_->outstanding_next;
     else
-        state_->all_head = node_->all_next;
-    if (node_->all_next)
-        node_->all_next->all_previous = node_->all_previous;
-    node_->all_previous = NULL;
-    node_->all_next = NULL;
+        state_->outstanding_head = node_->outstanding_next;
+    if (node_->outstanding_next)
+        node_->outstanding_next->outstanding_previous =
+          node_->outstanding_previous;
+    node_->outstanding_previous = NULL;
+    node_->outstanding_next = NULL;
     zlink_assert (state_->outstanding > 0);
     --state_->outstanding;
 }
 
-void destroy_live_chain (zlink::socket_completion::reservation_t *head_)
+void destroy_outstanding_chain (
+  zlink::socket_completion::reservation_t *head_)
 {
     while (head_) {
-        zlink::socket_completion::reservation_t *next = head_->all_next;
-        close_completion_payload (&head_->completion);
+        zlink::socket_completion::reservation_t *next =
+          head_->outstanding_next;
+        zlink::socket_completion::release_payload (&head_->completion);
         if (head_->heap_owned)
             delete head_;
         head_ = next;
@@ -65,12 +71,12 @@ void reset_reservation (
     memset (&node_->completion, 0, sizeof (node_->completion));
     node_->completion.struct_size = sizeof (node_->completion);
     node_->ready_next = NULL;
-    node_->all_previous = NULL;
-    node_->all_next = NULL;
+    node_->outstanding_previous = NULL;
+    node_->outstanding_next = NULL;
     node_->ready = false;
 }
 
-zlink::socket_completion::reservation_t *cache_released_locked (
+zlink::socket_completion::reservation_t *recycle_reservation_locked (
   zlink::socket_completion::queue_state_t *state_,
   zlink::socket_completion::reservation_t *node_)
 {
@@ -86,8 +92,8 @@ zlink::socket_completion::reservation_t *cache_released_locked (
 
 zlink::socket_completion::reservation_t::reservation_t () :
     ready_next (NULL),
-    all_previous (NULL),
-    all_next (NULL),
+    outstanding_previous (NULL),
+    outstanding_next (NULL),
     ready (false),
     heap_owned (true)
 {
@@ -98,12 +104,13 @@ zlink::socket_completion::reservation_t::reservation_t () :
 zlink::socket_completion::queue_state_t::queue_state_t () :
     ready_head (NULL),
     ready_tail (NULL),
-    all_head (NULL),
+    outstanding_head (NULL),
     cached_head (NULL),
     outstanding (0),
     cached (0),
     next_id (1),
-    lifecycle_errno (0)
+    lifecycle_errno (0),
+    ready_available (false)
 {
     for (size_t i = 0; i != inline_cached_reservations; ++i) {
         inline_cache[i].heap_owned = false;
@@ -115,7 +122,7 @@ zlink::socket_completion::queue_state_t::queue_state_t () :
 
 zlink::socket_completion::queue_state_t::~queue_state_t ()
 {
-    destroy_live_chain (all_head);
+    destroy_outstanding_chain (outstanding_head);
     destroy_cached_chain (cached_head);
 }
 
@@ -152,7 +159,6 @@ int zlink::socket_completion::reserve (
     if (node) {
         state_->cached_head = node->ready_next;
         --state_->cached;
-        reset_reservation (node);
     } else {
         node = new (std::nothrow) reservation_t ();
         if (!node) {
@@ -166,10 +172,10 @@ int zlink::socket_completion::reserve (
     node->completion.user_context = user_context_;
     if (peer_rid_)
         node->completion.peer_rid = *peer_rid_;
-    node->all_next = state_->all_head;
-    if (state_->all_head)
-        state_->all_head->all_previous = node;
-    state_->all_head = node;
+    node->outstanding_next = state_->outstanding_head;
+    if (state_->outstanding_head)
+        state_->outstanding_head->outstanding_previous = node;
+    state_->outstanding_head = node;
     ++state_->outstanding;
 
     *reservation_out_ = node;
@@ -187,25 +193,25 @@ void zlink::socket_completion::release (queue_state_t *state_,
         std::lock_guard<std::mutex> lock (state_->mutex);
         if (reservation_->ready)
             return;
-        unlink_live_locked (state_, reservation_);
+        unlink_outstanding_locked (state_, reservation_);
     }
 
     // Closing a message may invoke an application-owned free callback. Keep
     // that callback outside the queue mutex so it can safely re-enter public
     // completion APIs. The socket operation still owns the detached node.
-    close_completion_payload (&reservation_->completion);
-    reservation_t *released = NULL;
+    release_payload (&reservation_->completion);
+    reservation_t *node_to_delete = NULL;
     {
         std::lock_guard<std::mutex> lock (state_->mutex);
-        released = cache_released_locked (state_, reservation_);
+        node_to_delete = recycle_reservation_locked (state_, reservation_);
     }
-    delete released;
+    delete node_to_delete;
 }
 
 namespace
 {
-int publish_locked (zlink::socket_completion::queue_state_t *state_,
-                    zlink::socket_completion::reservation_t *reservation_)
+int enqueue_ready (zlink::socket_completion::queue_state_t *state_,
+                   zlink::socket_completion::reservation_t *reservation_)
 {
     if (!state_ || !reservation_) {
         errno = EFAULT;
@@ -220,6 +226,7 @@ int publish_locked (zlink::socket_completion::queue_state_t *state_,
         errno = EALREADY;
         return -1;
     }
+    const bool was_empty = state_->ready_head == NULL;
     reservation_->ready = true;
     reservation_->ready_next = NULL;
     if (state_->ready_tail)
@@ -227,6 +234,8 @@ int publish_locked (zlink::socket_completion::queue_state_t *state_,
     else
         state_->ready_head = reservation_;
     state_->ready_tail = reservation_;
+    if (was_empty)
+        state_->ready_available.store (true, std::memory_order_release);
     state_->changed.notify_all ();
     errno = 0;
     return 0;
@@ -243,7 +252,7 @@ int zlink::socket_completion::publish_send (
     }
     reservation_->completion.send_result = result_;
     reservation_->completion.send_terminal_errno = terminal_errno_;
-    return publish_locked (state_, reservation_);
+    return enqueue_ready (state_, reservation_);
 }
 
 int zlink::socket_completion::publish_request (
@@ -257,7 +266,7 @@ int zlink::socket_completion::publish_request (
     reservation_->completion.request_result = result_;
     reservation_->completion.reply_parts = parts_;
     reservation_->completion.reply_part_count = part_count_;
-    return publish_locked (state_, reservation_);
+    return enqueue_ready (state_, reservation_);
 }
 
 int zlink::socket_completion::recv (queue_state_t *state_,
@@ -293,17 +302,20 @@ int zlink::socket_completion::recv (queue_state_t *state_,
 
     reservation_t *node = state_->ready_head;
     state_->ready_head = node->ready_next;
-    if (!state_->ready_head)
+    if (!state_->ready_head) {
         state_->ready_tail = NULL;
+        state_->ready_available.store (false, std::memory_order_release);
+    }
     node->ready_next = NULL;
-    unlink_live_locked (state_, node);
+    unlink_outstanding_locked (state_, node);
 
     *completion_out_ = node->completion;
     node->completion.reply_parts = NULL;
     node->completion.reply_part_count = 0;
-    reservation_t *released = cache_released_locked (state_, node);
+    reservation_t *node_to_delete =
+      recycle_reservation_locked (state_, node);
     lock.unlock ();
-    delete released;
+    delete node_to_delete;
     errno = 0;
     return 0;
 }
@@ -312,8 +324,7 @@ bool zlink::socket_completion::has_ready (queue_state_t *state_)
 {
     if (!state_)
         return false;
-    std::lock_guard<std::mutex> lock (state_->mutex);
-    return state_->ready_head != NULL;
+    return state_->ready_available.load (std::memory_order_acquire);
 }
 
 size_t zlink::socket_completion::outstanding (queue_state_t *state_)
@@ -338,5 +349,6 @@ void zlink::socket_completion::close (queue_state_t *state_,
     // close race after the lifecycle gate was sealed.
     state_->ready_head = NULL;
     state_->ready_tail = NULL;
+    state_->ready_available.store (false, std::memory_order_release);
     state_->changed.notify_all ();
 }

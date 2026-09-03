@@ -35,6 +35,7 @@ struct request_state_t
         in_flight (0),
         next_seq (1),
         fatal (false),
+        capture_latency (false),
         latency ()
     {
     }
@@ -47,6 +48,7 @@ struct request_state_t
     std::atomic<int> in_flight;
     std::atomic<unsigned long long> next_seq;
     std::atomic<bool> fatal;
+    bool capture_latency;
     std::mutex latency_mutex;
     latency_stats_builder_t latency;
 };
@@ -108,13 +110,13 @@ inline void print_reqrep_result (const std::string &lib_type,
               << ",bandwidth," << std::fixed << std::setprecision (3) << bandwidth_mb_s
               << std::endl;
     std::cout << "RESULT," << lib_type << "," << pattern << "," << transport << "," << size
-              << ",latency," << std::fixed << std::setprecision (3)
+              << ",latency," << std::fixed << std::setprecision (6)
               << (latency.mean_ns / 1000000.0) << std::endl;
     std::cout << "RESULT," << lib_type << "," << pattern << "," << transport << "," << size
-              << ",latency_p95," << std::fixed << std::setprecision (3)
+              << ",latency_p95," << std::fixed << std::setprecision (6)
               << (latency.p95_ns / 1000000.0) << std::endl;
     std::cout << "RESULT," << lib_type << "," << pattern << "," << transport << "," << size
-              << ",latency_p99," << std::fixed << std::setprecision (3)
+              << ",latency_p99," << std::fixed << std::setprecision (6)
               << (latency.p99_ns / 1000000.0) << std::endl;
 }
 
@@ -161,7 +163,7 @@ inline void record_request_completion (request_state_t *state_,
             && completed_at < state_->active_deadline) {
             const uint64_t now_ns = perf_single_metric::now_ns ();
             if (now_ns >= static_cast<uint64_t> (header.sent_ts_ns)) {
-                {
+                if (state_->capture_latency) {
                     std::lock_guard<std::mutex> guard (state_->latency_mutex);
                     state_->latency.add (
                       static_cast<double> (now_ns - static_cast<uint64_t> (header.sent_ts_ns)));
@@ -177,6 +179,17 @@ inline void record_request_completion (request_state_t *state_,
     }
     state_->in_flight.fetch_sub (1, std::memory_order_release);
 }
+
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
+inline void on_request_reply (zlink_request_result_t result_,
+                              zlink_msg_t *parts_,
+                              size_t part_count_,
+                              void *userdata_)
+{
+    record_request_completion (static_cast<request_state_t *> (userdata_), result_, parts_,
+                               part_count_);
+}
+#endif
 
 template <typename SubmitFn>
 inline submit_step_t submit_request (request_state_t *state_,
@@ -199,6 +212,17 @@ inline submit_step_t submit_request (request_state_t *state_,
     if (!payload_->empty ())
         std::memcpy (zlink_msg_data (&part), payload_->data (), payload_->size ());
 
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
+    state_->in_flight.fetch_add (1, std::memory_order_release);
+    const zlink_submit_result_t rc =
+      submit_fn_ (&part, timeout_ms_, on_request_reply, state_);
+    if (rc == ZLINK_SUBMIT_OK)
+        return submit_step_submitted;
+
+    const int err = zlink_errno ();
+    zlink_msg_close (&part);
+    state_->in_flight.fetch_sub (1, std::memory_order_release);
+#else
     zlink_completion_id_t completion_id = 0;
     const zlink_submit_result_t rc =
       submit_fn_ (&part, timeout_ms_, state_, &completion_id);
@@ -214,6 +238,7 @@ inline submit_step_t submit_request (request_state_t *state_,
                       << std::endl;
         return submit_step_fatal;
     }
+#endif
     if (rc == ZLINK_SUBMIT_BACKPRESSURED || err == EAGAIN || err == EWOULDBLOCK || err == EINTR
         || err == ETIMEDOUT || err == EHOSTUNREACH || err == ENOTCONN)
         return submit_step_blocked;
@@ -223,6 +248,7 @@ inline submit_step_t submit_request (request_state_t *state_,
     return submit_step_fatal;
 }
 
+#if !defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
 inline bool drain_request_completions (void *requester_, request_state_t *state_)
 {
     if (!requester_ || !state_)
@@ -250,6 +276,7 @@ inline bool drain_request_completions (void *requester_, request_state_t *state_
             return false;
     }
 }
+#endif
 
 inline bool poll_completion_once (void *poller_,
                                   void *requester_,
@@ -262,7 +289,138 @@ inline bool poll_completion_once (void *poller_,
     const int rc = zlink_poller_wait (poller_, &event, 1, timeout_ms_, &error);
     if (rc < 0)
         return zlink_errno () == EINTR;
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
+    (void) requester_;
+    (void) state_;
+    return true;
+#else
     return drain_request_completions (requester_, state_);
+#endif
+}
+
+template <typename SubmitFn>
+inline bool run_request_phase (void *requester_,
+                               request_state_t *state_,
+                               std::vector<char> *payload_,
+                               int duration_s_,
+                               unsigned long long max_in_flight_,
+                               bool capture_latency_,
+                               SubmitFn submit_fn_,
+                               void *poller_,
+                               unsigned long long *completed_out_,
+                               latency_stats_t *latency_out_)
+{
+    if (!requester_ || !state_ || !payload_ || !poller_ || !completed_out_ || !latency_out_)
+        return false;
+
+    state_->completed.store (0, std::memory_order_release);
+    state_->in_flight.store (0, std::memory_order_release);
+    state_->next_seq.store (1, std::memory_order_release);
+    state_->fatal.store (false, std::memory_order_release);
+    state_->capture_latency = capture_latency_;
+    {
+        std::lock_guard<std::mutex> guard (state_->latency_mutex);
+        state_->latency = latency_stats_builder_t (state_->latency_sample_cap);
+    }
+
+    const uint32_t timeout_ms = resolve_request_timeout_ms ();
+    const int drain_timeout_ms = resolve_completion_drain_timeout_ms ();
+    const auto deadline = std::chrono::steady_clock::now ()
+                          + std::chrono::seconds (std::max (1, duration_s_));
+    state_->active_deadline = deadline;
+    while (std::chrono::steady_clock::now () < deadline
+           && !state_->fatal.load (std::memory_order_acquire)) {
+        bool submitted_any = false;
+        unsigned int submitted_since_progress = 0;
+        // Submit continuously until the public request API reports
+        // backpressure.  The socket HWM, rather than a runner-side window,
+        // owns the outstanding request depth.
+        while (std::chrono::steady_clock::now () < deadline) {
+            if (max_in_flight_ > 0
+                && static_cast<unsigned long long> (
+                     state_->in_flight.load (std::memory_order_acquire))
+                     >= max_in_flight_)
+                break;
+            const submit_step_t step = submit_request (state_, payload_, submit_fn_, timeout_ms);
+            if (step == submit_step_submitted) {
+                submitted_any = true;
+                ++submitted_since_progress;
+                if (submitted_since_progress >= 64) {
+                    submitted_since_progress = 0;
+                    if (!poll_completion_once (poller_, requester_, state_, 0)) {
+                        state_->fatal.store (true, std::memory_order_release);
+                        break;
+                    }
+                }
+                continue;
+            }
+            if (step == submit_step_blocked)
+                break;
+            state_->fatal.store (true, std::memory_order_release);
+            break;
+        }
+        if (state_->fatal.load (std::memory_order_acquire))
+            break;
+        if (!submitted_any && state_->in_flight.load (std::memory_order_acquire) == 0) {
+            (void) perf_socket_poll (NULL, 0, 1);
+            continue;
+        }
+        if (!poll_completion_once (poller_, requester_, state_, 50)) {
+            state_->fatal.store (true, std::memory_order_release);
+            break;
+        }
+    }
+
+    const auto drain_deadline = std::chrono::steady_clock::now ()
+                                + std::chrono::milliseconds (drain_timeout_ms);
+    while (state_->in_flight.load (std::memory_order_acquire) > 0
+           && std::chrono::steady_clock::now () < drain_deadline) {
+        if (!poll_completion_once (poller_, requester_, state_, 50)) {
+            state_->fatal.store (true, std::memory_order_release);
+            break;
+        }
+    }
+
+    if (state_->fatal.load (std::memory_order_acquire)) {
+        if (bench_debug_enabled ())
+            std::cerr << "[perf-single-reqrep] requester fatal after completion poll"
+                      << std::endl;
+        return false;
+    }
+    if (state_->in_flight.load (std::memory_order_acquire) != 0) {
+        if (bench_debug_enabled ())
+            std::cerr << "[perf-single-reqrep] completion drain timed out in_flight="
+                      << state_->in_flight.load (std::memory_order_acquire)
+                      << " completed=" << state_->completed.load (std::memory_order_acquire)
+                      << std::endl;
+        return false;
+    }
+
+    *completed_out_ = state_->completed.load (std::memory_order_relaxed);
+    if (*completed_out_ == 0) {
+        if (bench_debug_enabled ())
+            std::cerr << "[perf-single-reqrep] no completed request" << std::endl;
+        return false;
+    }
+    if (capture_latency_) {
+        std::lock_guard<std::mutex> guard (state_->latency_mutex);
+        if (state_->latency.count () == 0)
+            return false;
+        *latency_out_ = state_->latency.snapshot ();
+    } else {
+        *latency_out_ = latency_stats_t ();
+    }
+    return true;
+}
+
+inline int latency_phase_duration_seconds ()
+{
+    return 1;
+}
+
+inline unsigned long long latency_phase_max_in_flight ()
+{
+    return 1;
 }
 
 template <typename SubmitFn>
@@ -288,102 +446,30 @@ inline bool run_requester (void *requester_,
         return false;
     }
 
-    state_->completed.store (0, std::memory_order_release);
-    state_->in_flight.store (0, std::memory_order_release);
-    state_->next_seq.store (1, std::memory_order_release);
-    state_->fatal.store (false, std::memory_order_release);
-    state_->latency = latency_stats_builder_t (state_->latency_sample_cap);
-
-    const uint32_t timeout_ms = resolve_request_timeout_ms ();
-    const int drain_timeout_ms = resolve_completion_drain_timeout_ms ();
-    const auto deadline = std::chrono::steady_clock::now ()
-                          + std::chrono::seconds (std::max (1, duration_s_));
-    state_->active_deadline = deadline;
-    while (std::chrono::steady_clock::now () < deadline
-           && !state_->fatal.load (std::memory_order_acquire)) {
-        bool submitted_any = false;
-        unsigned int submitted_since_progress = 0;
-        // Submit continuously until the public request API reports
-        // backpressure.  The socket HWM, rather than a runner-side window,
-        // owns the outstanding request depth.
-        while (std::chrono::steady_clock::now () < deadline) {
-            const submit_step_t step = submit_request (state_, payload_, submit_fn_, timeout_ms);
-            if (step == submit_step_submitted) {
-                submitted_any = true;
-                ++submitted_since_progress;
-                if (submitted_since_progress >= 64) {
-                    submitted_since_progress = 0;
-                    if (!poll_completion_once (poller, requester_, state_, 0)) {
-                        state_->fatal.store (true, std::memory_order_release);
-                        break;
-                    }
-                }
-                continue;
-            }
-            if (step == submit_step_blocked)
-                break;
-            state_->fatal.store (true, std::memory_order_release);
-            break;
-        }
-        if (state_->fatal.load (std::memory_order_acquire))
-            break;
-        if (!submitted_any && state_->in_flight.load (std::memory_order_acquire) == 0) {
-            (void) perf_socket_poll (NULL, 0, 1);
-            continue;
-        }
-        if (!poll_completion_once (poller, requester_, state_, 50)) {
-            state_->fatal.store (true, std::memory_order_release);
-            break;
-        }
-    }
-
-    const auto drain_deadline = std::chrono::steady_clock::now ()
-                                + std::chrono::milliseconds (drain_timeout_ms);
-    while (state_->in_flight.load (std::memory_order_acquire) > 0
-           && std::chrono::steady_clock::now () < drain_deadline) {
-        if (!poll_completion_once (poller, requester_, state_, 50)) {
-            state_->fatal.store (true, std::memory_order_release);
-            break;
-        }
-    }
-
     // The caller owns the replier thread, so it closes this poller after the
     // replier has stopped. Destroying a completion poller while the peer can
     // still publish replies can stall the measured shutdown path.
     *completion_poller_out_ = poller;
-    if (state_->fatal.load (std::memory_order_acquire)) {
-        if (bench_debug_enabled ())
-            std::cerr << "[perf-single-reqrep] requester fatal after completion poll"
-                      << std::endl;
-        return false;
-    }
-    if (state_->in_flight.load (std::memory_order_acquire) != 0) {
-        if (bench_debug_enabled ())
-            std::cerr << "[perf-single-reqrep] completion drain timed out in_flight="
-                      << state_->in_flight.load (std::memory_order_acquire)
-                      << " completed=" << state_->completed.load (std::memory_order_acquire)
-                      << std::endl;
+
+    latency_stats_t ignored_latency;
+    if (!run_request_phase (requester_, state_, payload_, duration_s_, 0, false, submit_fn_,
+                            poller, completed_out_, &ignored_latency)) {
         return false;
     }
 
-    *completed_out_ = state_->completed.load (std::memory_order_relaxed);
-    if (*completed_out_ == 0) {
-        if (bench_debug_enabled ())
-            std::cerr << "[perf-single-reqrep] no completed request" << std::endl;
-        return false;
-    }
-    {
-        std::lock_guard<std::mutex> guard (state_->latency_mutex);
-        if (state_->latency.count () == 0)
-            return false;
-        *latency_out_ = state_->latency.snapshot ();
-    }
-    return true;
+    // Phase 1 has drained every saturated request completion. Phase 2 keeps
+    // exactly one request in flight and timestamps the next request only after
+    // the preceding REQUEST completion has been received.
+    unsigned long long latency_completed = 0;
+    return run_request_phase (
+      requester_, state_, payload_, latency_phase_duration_seconds (),
+      latency_phase_max_in_flight (), true, submit_fn_, poller, &latency_completed,
+      latency_out_);
 }
 
 inline int recv_router_request (void *router_,
                                 zlink_routing_id_t *source_rid_out_,
-                                zlink_reply_token_t *reply_token_out_,
+                                uint64_t *reply_token_out_,
                                 zlink_msg_t *payload_out_)
 {
     if (!router_ || !source_rid_out_ || !reply_token_out_ || !payload_out_)
@@ -434,7 +520,7 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
         return;
     while (!state_->stop.load (std::memory_order_acquire)) {
         zlink_routing_id_t source_rid;
-        zlink_reply_token_t reply_token = 0;
+        uint64_t reply_token = 0;
         zlink_msg_t request;
         const int recv_rc = recv_router_request (router_, &source_rid, &reply_token, &request);
         if (recv_rc == 0)
@@ -457,7 +543,11 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
         }
 
         if (perf_measurement_part_count () == 2u) {
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
+            zlink_submit_result_t payload_rc = zlink_router_reply_part (
+#else
             zlink_submit_result_t payload_rc = zlink_reply_part (
+#endif
               router_, &source_rid, reply_token, &request, ZLINK_PART_MORE);
             if (payload_rc != ZLINK_SUBMIT_OK) {
                 state_->fatal.store (true, std::memory_order_release);
@@ -475,7 +565,11 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
                     state_->fatal.store (true, std::memory_order_release);
                     return;
                 }
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
+                final_rc = zlink_router_reply_part (
+#else
                 final_rc = zlink_reply_part (
+#endif
                   router_, &source_rid, reply_token, &empty_part, ZLINK_PART_FINAL);
                 if (final_rc == ZLINK_SUBMIT_BACKPRESSURED)
                     std::this_thread::yield ();
@@ -501,7 +595,11 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
             return;
         }
 
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
+        zlink_submit_result_t reply_rc = zlink_router_reply_part (
+#else
         zlink_submit_result_t reply_rc = zlink_reply_part (
+#endif
           router_, &source_rid, reply_token, &request, ZLINK_PART_FINAL);
         if (reply_rc == ZLINK_SUBMIT_BACKPRESSURED) {
             const auto retry_deadline =
@@ -521,7 +619,11 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
                     return;
                 }
                 std::this_thread::yield ();
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
+                reply_rc = zlink_router_reply_part (
+#else
                 reply_rc = zlink_reply_part (
+#endif
                   router_, &source_rid, reply_token, &retry, ZLINK_PART_FINAL);
             }
         }

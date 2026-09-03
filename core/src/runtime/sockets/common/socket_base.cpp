@@ -6,7 +6,6 @@
 #include <new>
 
 #include "sockets/common/socket_base.hpp"
-#include "core/c_api_copy_internal.hpp"
 #include "core/ctx.hpp"
 #include "core/flow_state_frame.hpp"
 #include "core/mailbox.hpp"
@@ -100,8 +99,6 @@ zlink::socket_base_t::socket_base_t (ctx_t *parent_, uint32_t tid_, int sid_) :
     _tag (0xbaddecaf),
     _ctx_terminated (false),
     _runtime (),
-    _auto_hwm_role (auto_hwm_role_none),
-    _auto_hwm_role_override (false),
     _auto_hwm_policy_enabled (true),
     _manual_sndhwm (false),
     _manual_rcvhwm (false),
@@ -149,17 +146,6 @@ zlink::socket_base_t::socket_base_t (ctx_t *parent_, uint32_t tid_, int sid_) :
     _mailbox = m;
 }
 
-void zlink::socket_base_t::set_auto_hwm_role (auto_hwm_role_t role_)
-{
-    {
-        scoped_lock_t lock (_auto_hwm_sync);
-        _auto_hwm_role = role_;
-        _auto_hwm_role_override = role_ != auto_hwm_role_none;
-        _auto_hwm_last_recalc_reason = ZLINK_AUTO_HWM_RECALC_REASON_ROLE_CHANGE;
-    }
-    refresh_auto_hwm_policy ();
-}
-
 void zlink::socket_base_t::set_auto_hwm_policy_enabled (bool enabled_)
 {
     {
@@ -191,20 +177,11 @@ int zlink::socket_base_t::configure_internal_monitor_queue (
 }
 
 zlink::auto_hwm_socket_plan_t
-zlink::socket_base_t::prepare_auto_hwm_socket_plan (const auto_hwm_context_plan_t &context_)
-{
-    scoped_lock_t auto_hwm_lock (_auto_hwm_sync);
-    return prepare_auto_hwm_socket_plan_locked (context_);
-}
-
-zlink::auto_hwm_socket_plan_t
 zlink::socket_base_t::prepare_auto_hwm_socket_plan_locked (
   const auto_hwm_context_plan_t &context_)
 {
-    auto_hwm_role_t role = _auto_hwm_role_override ? _auto_hwm_role : auto_hwm_role_none;
-    if (role == auto_hwm_role_none)
-        role = auto_hwm_default_role_for_socket_type (options.type);
-    _auto_hwm_role = role;
+    const auto_hwm_role_t role =
+      auto_hwm_default_role_for_socket_type (options.type);
 
     size_t application_pipe_count = 0;
     uint64_t pending_bytes = 0;
@@ -251,11 +228,6 @@ void zlink::socket_base_t::collect_auto_hwm_queue_policies (
     if (!out_)
         return;
     scoped_lock_t auto_hwm_lock (_auto_hwm_sync);
-    auto_hwm_role_t role =
-      _auto_hwm_role_override ? _auto_hwm_role : auto_hwm_role_none;
-    if (role == auto_hwm_role_none)
-        role = auto_hwm_default_role_for_socket_type (options.type);
-    _auto_hwm_role = role;
 
     scoped_lock_t lock (monitor_runtime ().sync);
     const size_t count = endpoint_runtime ().attached_pipe_count ();
@@ -286,9 +258,7 @@ zlink::socket_base_t::make_auto_hwm_queue_policy_locked (
 {
     physical_queue_endpoint_policy_t policy;
     policy.queue = queue_;
-    policy.role = _auto_hwm_role_override
-                    ? _auto_hwm_role
-                    : auto_hwm_default_role_for_socket_type (options.type);
+    policy.role = auto_hwm_default_role_for_socket_type (options.type);
     policy.writer = writer_;
     policy.manual = writer_ ? _manual_sndhwm : _manual_rcvhwm;
     policy.planning_enabled = _auto_hwm_policy_enabled;
@@ -347,11 +317,6 @@ void zlink::socket_base_t::refresh_auto_hwm_policy (bool force_apply_)
     if (!ctx)
         return;
     ctx->schedule_auto_hwm_recalculate ();
-}
-
-static void copy_routing_id (zlink_routing_id_t *out_, const zlink::blob_t &routing_id_)
-{
-    zlink::copy_routing_id_from_bytes (routing_id_.data (), routing_id_.size (), out_);
 }
 
 zlink::socket_base_t::~socket_base_t ()

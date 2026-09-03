@@ -11,19 +11,15 @@
 #include <memory>
 #include <mutex>
 #include <new>
-#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
-#include <vector>
 
 #include "api/socket/request_reply_runtime_core.hpp"
 #include "api/socket/request_timeout_scheduler_internal.hpp"
 #include "api/socket/socket_api_internal.hpp"
 #include "api/socket/socket_completion_queue_internal.hpp"
-#include "core/ctx_physical_queue_registry.hpp"
 
 namespace zlink
 {
@@ -61,13 +57,11 @@ struct fixed_routing_id_key_t
       const fixed_routing_id_key_t &other_);
 
     void assign (const void *data_, size_t size_);
-    void clear ();
     bool empty () const;
     size_t size () const;
     const unsigned char *data () const;
     size_t hash () const;
     bool operator== (const fixed_routing_id_key_t &other_) const;
-    bool operator< (const fixed_routing_id_key_t &other_) const;
 
   private:
     uint8_t _size;
@@ -116,7 +110,6 @@ struct request_correlation_lease_t
     void adopt (zlink::pipe_t *pipe_, uint64_t accounted_bytes_);
     void release ();
     zlink::pipe_t *pipe () const;
-    uint64_t accounted_bytes () const;
 
   private:
     zlink::pipe_t *_pipe;
@@ -328,7 +321,6 @@ template <typename T> class reply_target_store_t
         node_t *alias_next;
     };
 
-    class const_iterator;
     class iterator
     {
       public:
@@ -351,34 +343,7 @@ template <typename T> class reply_target_store_t
 
       private:
         friend class reply_target_store_t<T>;
-        friend class const_iterator;
         node_t *_node;
-    };
-
-    class const_iterator
-    {
-      public:
-        const_iterator (const node_t *node_ = NULL) : _node (node_) {}
-        const_iterator (const iterator &other_) : _node (other_._node) {}
-        const node_t &operator* () const { return *_node; }
-        const node_t *operator-> () const { return _node; }
-        const_iterator &operator++ ()
-        {
-            _node = _node ? _node->live_next : NULL;
-            return *this;
-        }
-        bool operator== (const const_iterator &other_) const
-        {
-            return _node == other_._node;
-        }
-        bool operator!= (const const_iterator &other_) const
-        {
-            return !(*this == other_);
-        }
-
-      private:
-        friend class reply_target_store_t<T>;
-        const node_t *_node;
     };
 
     reply_target_store_t () : _free_head (NULL), _live_head (NULL),
@@ -433,21 +398,8 @@ template <typename T> class reply_target_store_t
             node = node->bucket_next;
         return iterator (node);
     }
-    const_iterator find (uint64_t key_) const
-    {
-        const node_t *node = key_ ? _buckets[bucket_for (key_)] : NULL;
-        while (node && node->first != key_)
-            node = node->bucket_next;
-        return const_iterator (node);
-    }
-    size_t count (uint64_t key_) const
-    {
-        return find (key_) == end () ? 0 : 1;
-    }
     iterator begin () { return iterator (_live_head); }
-    const_iterator begin () const { return const_iterator (_live_head); }
     iterator end () { return iterator (); }
-    const_iterator end () const { return const_iterator (); }
     bool empty () const { return _size == 0; }
     size_t size () const { return _size; }
 
@@ -482,14 +434,6 @@ template <typename T> class reply_target_store_t
         zlink_assert (_size != 0);
         --_size;
         return iterator (next);
-    }
-    size_t erase (uint64_t key_)
-    {
-        iterator found = find (key_);
-        if (found == end ())
-            return 0;
-        erase (found);
-        return 1;
     }
     void clear ()
     {
@@ -578,7 +522,6 @@ struct socket_request_reply_state_t : public zlink::request_reply_runtime::seque
     size_t reply_target_slots;
     size_t reply_target_reservations;
     size_t reply_target_checkouts;
-    uint64_t dealer_next_reply_token;
     uint64_t router_next_reply_token;
     std::atomic<uint64_t> public_router_reply_checkout_token;
     bool public_router_reply_active;
@@ -588,10 +531,9 @@ struct socket_request_reply_state_t : public zlink::request_reply_runtime::seque
     bool closing;
 };
 
-uint64_t allocate_dealer_reply_token (socket_request_reply_state_t *state_);
 int recv_router_message_direct (const socket_handle_t &handle_,
                                 const zlink_routing_id_t **source_node_rid_out_,
-                                uint64_t *request_seq_out_,
+                                uint64_t *reply_token_out_,
                                 zlink_msg_t **parts_out_,
                                 size_t *part_count_out_,
                                 int flags_,
@@ -600,10 +542,6 @@ int recv_router_message_direct (const socket_handle_t &handle_,
                                 uint64_t *transport_pair_id_out_ = NULL,
                                 uint64_t *transport_pair_generation_out_ = NULL);
 int recv_dealer_message_direct (const socket_handle_t &handle_,
-                                const std::shared_ptr<socket_request_reply_state_t> &state_,
-                                bool typed_receive_,
-                                uint8_t *message_type_out_,
-                                uint64_t *request_seq_out_,
                                 zlink_msg_t **parts_out_,
                                 size_t *part_count_out_,
                                 int flags_,
@@ -611,31 +549,14 @@ int recv_dealer_message_direct (const socket_handle_t &handle_,
                                 bool *terminal_part_returned_out_ = NULL,
                                 bool public_part_receive_ = false,
                                 bool *public_part_delivery_hold_out_ = NULL);
-int take_dealer_reply_target (const std::shared_ptr<socket_request_reply_state_t> &state_,
-                              uint64_t request_token_,
-                              dealer_reply_target_t *target_out_);
-void restore_dealer_reply_target (const std::shared_ptr<socket_request_reply_state_t> &state_,
-                                  uint64_t request_token_);
-void commit_dealer_reply_target (
-  const std::shared_ptr<socket_request_reply_state_t> &state_,
-  uint64_t request_token_);
-void revoke_dealer_reply_target (const socket_handle_t &handle_,
-                                 uint64_t request_token_);
 void forget_dealer_reply_targets_for_pipe (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   zlink::pipe_t *application_pipe_);
-bool take_router_reply_target (
-  const std::shared_ptr<socket_request_reply_state_t> &state_,
-  uint64_t request_token_, const zlink_routing_id_t *peer_rid_,
-  router_reply_target_t *target_out_);
 bool take_router_reply_target_locked (
   socket_request_reply_state_t *state_, uint64_t request_token_,
   const zlink_routing_id_t *peer_rid_,
   router_reply_target_t *target_out_);
 void restore_router_reply_target (
-  const std::shared_ptr<socket_request_reply_state_t> &state_,
-  uint64_t request_token_);
-void commit_router_reply_target (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   uint64_t request_token_);
 void revoke_router_reply_target (const socket_handle_t &handle_,
@@ -654,14 +575,6 @@ void abandon_public_router_reply_sequence (
 void commit_public_router_reply_sequence (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   uint64_t expected_token_);
-int send_request_reply_message (const socket_handle_t &handle_,
-                                const zlink_routing_id_t *peer_rid_,
-                                zlink_msg_t *staged_parts_,
-                                size_t staged_part_count_,
-                                zlink_msg_t *final_part_,
-                                zlink_send_flags_t flags_,
-                                uint8_t message_type_,
-                                uint64_t request_seq_);
 int send_completion_staged_frames (zlink::socket_base_t *socket_,
                                    zlink::pipe_t *application_pipe_,
                                    const zlink_routing_id_t *peer_rid_,
@@ -730,9 +643,6 @@ int ensure_socket_pull_pending_request (
   std::shared_ptr<socket_request_reply_state_t> *state_out_,
   pending_request_token_t *token_out_,
   zlink_completion_id_t *completion_id_out_);
-void queue_socket_pending_timeout_completion (
-  const std::shared_ptr<socket_request_reply_state_t> &state_, pending_request_t *pending_);
-void release_socket_pending_request_correlation (pending_request_t *pending_);
 bool has_pending_request_work (const std::shared_ptr<socket_request_reply_state_t> &state_);
 void fail_pending_requests_for_logical_endpoint (
   const std::shared_ptr<socket_request_reply_state_t> &state_,

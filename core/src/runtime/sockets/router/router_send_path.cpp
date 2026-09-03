@@ -3,49 +3,11 @@
 #include "utils/precompiled.hpp"
 
 #include "sockets/router/router.hpp"
+#include "sockets/router/router_debug.hpp"
 #include "utils/likely.hpp"
 #include "utils/err.hpp"
-#include "utils/debug_log.hpp"
 
-#include <cstdlib>
 #include <cstdio>
-
-namespace
-{
-const bool router_debug_on = zlink::debug_env_enabled ("ZLINK_ROUTER_DEBUG");
-
-bool router_debug_enabled ()
-{
-    return router_debug_on;
-}
-
-void format_routing_id_debug (const zlink_routing_id_t *rid_, char *buf_, size_t buf_size_)
-{
-    if (!buf_ || buf_size_ == 0)
-        return;
-
-    if (!rid_ || rid_->size == 0) {
-        std::snprintf (buf_, buf_size_, "<empty>");
-        return;
-    }
-
-    size_t used = 0;
-    for (size_t i = 0; i < rid_->size && used + 4 < buf_size_; ++i) {
-        const unsigned char c = rid_->data[i];
-        const int rc = std::snprintf (buf_ + used, buf_size_ - used, "%c%02X",
-                                      (c >= 32 && c <= 126) ? static_cast<char> (c) : '.',
-                                      static_cast<unsigned> (c));
-        if (rc <= 0)
-            break;
-        used += static_cast<size_t> (rc);
-        if (i + 1 < rid_->size && used + 2 < buf_size_) {
-            buf_[used++] = ' ';
-            buf_[used] = '\0';
-        }
-    }
-}
-
-}
 
 int zlink::router_t::xsend (
   msg_t *msg_, pipe_message_admission_t *admission_out_)
@@ -80,9 +42,7 @@ int zlink::router_t::send_with_observer (
                     errno = ECONNREFUSED;
                     return -1;
                 }
-                _current_out = out_pipe->pipe;
-                _current_out_connection_id =
-                  _current_out->get_transport_connection_id ();
+                select_current_out_pipe (out_pipe->pipe);
 
                 const pipe_message_admission_t write_admission =
                   _current_out->admit_owner_message_start ();
@@ -99,14 +59,13 @@ int zlink::router_t::send_with_observer (
                     if (admission_out_)
                         *admission_out_ = write_admission;
                     mark_out_pipe_inactive (out_pipe);
-                    _current_out = NULL;
-                    _current_out_connection_id = 0;
+                    clear_current_out_pipe ();
 
                     if (_mandatory) {
                         _more_out = false;
                         errno = pipe_full || transport_wait ? EAGAIN
                                                             : EHOSTUNREACH;
-                        if (router_debug_enabled ()) {
+                        if (router_debug::enabled ()) {
                             fprintf (stderr, "router xsend: pipe not writable size=%zu errno=%d\n",
                                      msg_->size (), errno);
                         }
@@ -116,7 +75,7 @@ int zlink::router_t::send_with_observer (
             } else if (_mandatory) {
                 _more_out = false;
                 errno = EHOSTUNREACH;
-                if (router_debug_enabled ()) {
+                if (router_debug::enabled ()) {
                     fprintf (stderr, "router xsend: no out pipe rid_size=%zu errno=%d\n",
                              msg_->size (), errno);
                 }
@@ -133,7 +92,7 @@ int zlink::router_t::send_with_observer (
         return 0;
     }
 
-    if (router_debug_enabled ()) {
+    if (router_debug::enabled ()) {
         fprintf (stderr, "router xsend continuation: pipe=%p size=%zu more=%d\\n",
                  static_cast<void *> (_current_out), msg_ ? msg_->size () : 0,
                  (msg_->flags () & msg_t::more) != 0 ? 1 : 0);
@@ -151,8 +110,7 @@ int zlink::router_t::send_with_observer (
         // before invoking the observer, so they retain the explicit pin.
         const bool release_route_for_write = observer_ != NULL;
         if (release_route_for_write && !write_pipe->retain_lifetime_ref ()) {
-            _current_out = NULL;
-            _current_out_connection_id = 0;
+            clear_current_out_pipe ();
             _more_out = false;
             errno = EHOSTUNREACH;
             return -1;
@@ -164,10 +122,8 @@ int zlink::router_t::send_with_observer (
         // A terminal frame does not need _current_out after this point. Clear
         // it while the route table is still protected. Observer-backed sends
         // then keep only the lifetime pin; ordinary sends retain this fence.
-        if (!next_more_out && _current_out == write_pipe) {
-            _current_out = NULL;
-            _current_out_connection_id = 0;
-        }
+        if (!next_more_out && _current_out == write_pipe)
+            clear_current_out_pipe ();
         if (release_route_for_write)
             route_lifecycle_lock.unlock ();
         const bool ok =
@@ -176,7 +132,7 @@ int zlink::router_t::send_with_observer (
                 msg_, observer_, observer_userdata_, &write_admission)
             : write_pipe->write_owner_started_message (
                 msg_, &write_admission);
-        if (router_debug_enabled ())
+        if (router_debug::enabled ())
             fprintf (stderr, "router xsend write: pipe=%p ok=%d more=%d\\n",
                      static_cast<void *> (write_pipe), ok ? 1 : 0,
                      next_more_out ? 1 : 0);
@@ -193,10 +149,8 @@ int zlink::router_t::send_with_observer (
         if (unlikely (!ok)) {
             if (observer_ && errno == ECANCELED
                 && write_admission == pipe_message_admission_invalid) {
-                if (_current_out == write_pipe) {
-                    _current_out = NULL;
-                    _current_out_connection_id = 0;
-                }
+                if (_current_out == write_pipe)
+                    clear_current_out_pipe ();
                 _more_out = false;
                 route_lifecycle_lock.unlock ();
                 if (release_route_for_write)
@@ -213,13 +167,11 @@ int zlink::router_t::send_with_observer (
             if (write_admission != pipe_message_admission_request_full
                 && current_out_pipe && current_out_pipe->pipe == write_pipe)
                 mark_out_pipe_inactive (current_out_pipe);
-            if (router_debug_enabled ()) {
+            if (router_debug::enabled ()) {
                 fprintf (stderr, "router xsend: drop message size=%zu\n", msg_->size ());
             }
-            if (_current_out == write_pipe) {
-                _current_out = NULL;
-                _current_out_connection_id = 0;
-            }
+            if (_current_out == write_pipe)
+                clear_current_out_pipe ();
             if (_mandatory) {
                 _more_out = false;
                 errno = write_admission == pipe_message_admission_too_large
@@ -248,7 +200,7 @@ int zlink::router_t::send_with_observer (
         if (release_route_for_write)
             write_pipe->release_lifetime_ref ();
     } else {
-        if (router_debug_enabled ()) {
+        if (router_debug::enabled ()) {
             fprintf (stderr, "router xsend: no current out, drop size=%zu\n", msg_->size ());
         }
         const int rc = msg_->close ();
@@ -307,7 +259,7 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
 
     _more_out = (msg_->flags () & msg_t::more) != 0;
 
-    if (router_debug_enabled ()) {
+    if (router_debug::enabled ()) {
         fprintf (stderr,
                  "router xsend_routed enter: rid_size=%u pair=%llu/%llu size=%zu more=%d\\n",
                  static_cast<unsigned> (target_rid_ ? target_rid_->size : 0),
@@ -345,12 +297,10 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
             errno = EPROTOTYPE;
             return -1;
         }
-        _current_out = scoped_pipe;
-        _current_out_connection_id = _current_out->get_transport_connection_id ();
+        select_current_out_pipe (scoped_pipe);
         if (expected_connection_id_ != 0
             && _current_out_connection_id != expected_connection_id_) {
-            _current_out = NULL;
-            _current_out_connection_id = 0;
+            clear_current_out_pipe ();
             _more_out = false;
             errno = EHOSTUNREACH;
             return -1;
@@ -375,8 +325,7 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         if (write_admission != pipe_message_admission_ready) {
             if (admission_out_)
                 *admission_out_ = write_admission;
-            _current_out = NULL;
-            _current_out_connection_id = 0;
+            clear_current_out_pipe ();
             if (connection_id_out_)
                 *connection_id_out_ = 0;
             if (pipe_out_)
@@ -393,7 +342,7 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         if (out_pipe->weight == 0) {
             _more_out = false;
             errno = ECONNREFUSED;
-            if (router_debug_enabled ()) {
+            if (router_debug::enabled ()) {
                 fprintf (stderr, "router xsend_routed: draining rid_size=%u\n",
                          static_cast<unsigned> (target_rid_->size));
             }
@@ -423,13 +372,10 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                 return -1;
             }
         }
-        _current_out = out_pipe->pipe;
-        _current_out_connection_id =
-          _current_out->get_transport_connection_id ();
+        select_current_out_pipe (out_pipe->pipe);
         if (expected_connection_id_ != 0
             && _current_out_connection_id != expected_connection_id_) {
-            _current_out = NULL;
-            _current_out_connection_id = 0;
+            clear_current_out_pipe ();
             _more_out = false;
             errno = EHOSTUNREACH;
             return -1;
@@ -453,8 +399,7 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
             if (admission_out_)
                 *admission_out_ = write_admission;
             mark_out_pipe_inactive (out_pipe);
-            _current_out = NULL;
-            _current_out_connection_id = 0;
+            clear_current_out_pipe ();
             if (connection_id_out_)
                 *connection_id_out_ = 0;
             if (pipe_out_)
@@ -464,7 +409,7 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                 _more_out = false;
                 errno = pipe_full || transport_wait ? EAGAIN
                                                      : EHOSTUNREACH;
-                if (router_debug_enabled ()) {
+                if (router_debug::enabled ()) {
                     fprintf (stderr,
                              "router xsend_routed: pipe not writable rid_size=%u errno=%d\n",
                              static_cast<unsigned> (target_rid_->size), errno);
@@ -480,9 +425,10 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         //  and every single-part exact ROUTER submit failed with EHOSTUNREACH.
         _more_out = false;
         errno = EHOSTUNREACH;
-        if (router_debug_enabled ()) {
+        if (router_debug::enabled ()) {
             char rid_text[160];
-            format_routing_id_debug (target_rid_, rid_text, sizeof (rid_text));
+            router_debug::format_routing_id (target_rid_, rid_text,
+                                             sizeof (rid_text));
             fprintf (stderr, "router xsend_routed: no out pipe rid_size=%u rid=%s\n",
                      static_cast<unsigned> (target_rid_->size), rid_text);
         }
@@ -494,8 +440,7 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
             || _current_out->get_transport_pair_generation () != 0
             || _current_out->get_route_incarnation_id ()
                  != expected_route_incarnation_id_)) {
-        _current_out = NULL;
-        _current_out_connection_id = 0;
+        clear_current_out_pipe ();
         _more_out = false;
         if (connection_id_out_)
             *connection_id_out_ = 0;
@@ -526,8 +471,7 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         // sends retain a pin before dropping that fence.
         const bool release_route_for_write = observer_ != NULL;
         if (release_route_for_write && !write_pipe->retain_lifetime_ref ()) {
-            _current_out = NULL;
-            _current_out_connection_id = 0;
+            clear_current_out_pipe ();
             if (connection_id_out_)
                 *connection_id_out_ = 0;
             if (pipe_out_)
@@ -536,7 +480,7 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
             errno = EHOSTUNREACH;
             return -1;
         }
-        if (router_debug_enabled ()) {
+        if (router_debug::enabled ()) {
             fprintf (stderr, "router xsend_routed selected: pipe=%p lane=%d pair=%llu/%llu\\n",
                      static_cast<void *> (write_pipe),
                      static_cast<int> (write_pipe->get_transport_lane ()),
@@ -551,10 +495,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         // selected route state before the write. Observer-backed sends keep
         // the pipe valid with their lifetime pin; ordinary sends retain the
         // route fence.
-        if (!write_more && _current_out == write_pipe) {
-            _current_out = NULL;
-            _current_out_connection_id = 0;
-        }
+        if (!write_more && _current_out == write_pipe)
+            clear_current_out_pipe ();
         if (release_route_for_write)
             route_lifecycle_lock.unlock ();
         const bool ok =
@@ -576,10 +518,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         if (unlikely (!ok)) {
             if (observer_ && errno == ECANCELED
                 && write_admission == pipe_message_admission_invalid) {
-                if (_current_out == write_pipe) {
-                    _current_out = NULL;
-                    _current_out_connection_id = 0;
-                }
+                if (_current_out == write_pipe)
+                    clear_current_out_pipe ();
                 if (connection_id_out_)
                     *connection_id_out_ = 0;
                 if (pipe_out_)
@@ -600,14 +540,12 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
             if (write_admission != pipe_message_admission_request_full
                 && current_out_pipe && current_out_pipe->pipe == write_pipe)
                 mark_out_pipe_inactive (current_out_pipe);
-            if (router_debug_enabled ()) {
+            if (router_debug::enabled ()) {
                 fprintf (stderr, "router xsend_routed: write failed rid_size=%u\n",
                          static_cast<unsigned> (target_rid_->size));
             }
-            if (_current_out == write_pipe) {
-                _current_out = NULL;
-                _current_out_connection_id = 0;
-            }
+            if (_current_out == write_pipe)
+                clear_current_out_pipe ();
             if (connection_id_out_)
                 *connection_id_out_ = 0;
             if (pipe_out_)

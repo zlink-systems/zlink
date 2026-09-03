@@ -5,11 +5,11 @@
 #include <atomic>
 #include <memory>
 #include <new>
+#include <vector>
 #include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "core/pipe.hpp"
 #include "sockets/common/socket_base.hpp"
-#include "utils/routing_id.hpp"
 
 namespace zlink
 {
@@ -82,11 +82,6 @@ void fixed_routing_id_key_t::assign (const void *data_, size_t size_)
     memcpy (_data, data_, size_);
 }
 
-void fixed_routing_id_key_t::clear ()
-{
-    _size = 0;
-}
-
 bool fixed_routing_id_key_t::empty () const
 {
     return _size == 0;
@@ -122,14 +117,6 @@ bool fixed_routing_id_key_t::operator== (
 {
     return _size == other_._size
            && (_size == 0 || memcmp (_data, other_._data, _size) == 0);
-}
-
-bool fixed_routing_id_key_t::operator< (
-  const fixed_routing_id_key_t &other_) const
-{
-    const size_t common = std::min (size (), other_.size ());
-    const int compared = common == 0 ? 0 : memcmp (_data, other_._data, common);
-    return compared < 0 || (compared == 0 && _size < other_._size);
 }
 
 size_t fixed_routing_id_key_hash_t::operator() (
@@ -194,11 +181,6 @@ void request_correlation_lease_t::release ()
 zlink::pipe_t *request_correlation_lease_t::pipe () const
 {
     return _pipe;
-}
-
-uint64_t request_correlation_lease_t::accounted_bytes () const
-{
-    return _accounted_bytes;
 }
 
 pending_request_t::pending_request_t () :
@@ -434,7 +416,6 @@ socket_request_reply_state_t::socket_request_reply_state_t (zlink::socket_base_t
     reply_target_slots (0),
     reply_target_reservations (0),
     reply_target_checkouts (0),
-    dealer_next_reply_token (1),
     router_next_reply_token (1),
     public_router_reply_checkout_token (0),
     public_router_reply_active (false),
@@ -557,11 +538,12 @@ void on_socket_request_timeout (void *userdata_)
 
     pending_request_t pending;
     if (remove_socket_pending_request (ctx->state, ctx->identity, &pending)) {
-        release_socket_pending_request_correlation (&pending);
+        pending.correlation.release ();
 #ifdef ZLINK_BUILD_TESTS
         invoke_request_reply_timeout_after_remove_hook ();
 #endif
-        queue_socket_pending_timeout_completion (ctx->state, &pending);
+        (void) publish_pending_request_completion (
+          ctx->state, &pending, ZLINK_REQUEST_TIMED_OUT, NULL, 0);
     }
 }
 
@@ -576,7 +558,7 @@ bool resolve_aggregate_timeout_request (
   pending_request_t *pending_, aggregate_timeout_resolution_t resolution_,
   uint64_t generation_)
 {
-    release_socket_pending_request_correlation (pending_);
+    pending_->correlation.release ();
     if (resolution_ == aggregate_timeout_timed_out) {
 #ifdef ZLINK_BUILD_TESTS
         invoke_request_reply_timeout_after_remove_hook ();
@@ -596,7 +578,8 @@ bool resolve_aggregate_timeout_request (
     }
 
     if (resolution_ == aggregate_timeout_timed_out)
-        queue_socket_pending_timeout_completion (state_, pending_);
+        (void) publish_pending_request_completion (
+          state_, pending_, ZLINK_REQUEST_TIMED_OUT, NULL, 0);
     else
         (void) publish_pending_request_completion (
           state_, pending_, ZLINK_REQUEST_INTERNAL_ERROR, NULL, 0);
@@ -767,7 +750,7 @@ void on_socket_aggregate_request_timeout (void *userdata_)
 
         ++it;
         for (; it != due.end (); ++it) {
-            release_socket_pending_request_correlation (&*it);
+            it->correlation.release ();
             it->pull_completion = NULL;
         }
         dispatch_canceled = true;
@@ -809,12 +792,6 @@ void on_socket_aggregate_request_timeout (void *userdata_)
         dispatch_aggregate_timeouts_one_by_one (state, ctx->generation);
 }
 
-}
-
-void release_socket_pending_request_correlation (pending_request_t *pending_)
-{
-    if (pending_)
-        pending_->correlation.release ();
 }
 
 bool remove_socket_pending_request (const std::shared_ptr<socket_request_reply_state_t> &state_,
@@ -892,7 +869,7 @@ int arm_socket_pending_request_timeout (
     if (replaced_task)
         zlink::request_timeout::cancel (replaced_task);
     if (removed) {
-        release_socket_pending_request_correlation (&failed);
+        failed.correlation.release ();
         (void) publish_pending_request_completion (
           state_, &failed, ZLINK_REQUEST_INTERNAL_ERROR, NULL, 0);
     }
@@ -916,16 +893,6 @@ void cancel_socket_pending_timeouts (
     }
     if (task)
         zlink::request_timeout::cancel (task);
-}
-
-void queue_socket_pending_timeout_completion (
-  const std::shared_ptr<socket_request_reply_state_t> &state_,
-  pending_request_t *pending_)
-{
-    if (!pending_)
-        return;
-    (void) publish_pending_request_completion (
-      state_, pending_, ZLINK_REQUEST_TIMED_OUT, NULL, 0);
 }
 
 std::shared_ptr<socket_request_reply_state_t>
@@ -953,7 +920,7 @@ find_or_create_request_reply_state (const socket_handle_t &handle_)
 std::shared_ptr<socket_request_reply_state_t>
 find_request_reply_state (const socket_handle_t &handle_)
 {
-    return handle_.socket && handle_.socket->has_request_reply_state ()
+    return handle_.socket
              ? handle_.socket->request_reply_state ()
              : std::shared_ptr<socket_request_reply_state_t> ();
 }

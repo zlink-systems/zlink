@@ -1344,6 +1344,10 @@ void test_transport_owner_start_waits_for_explicit_async_quiesce ()
     std::atomic<bool> completion_acquire_done (false);
     std::atomic<bool> transport_acquire_done (false);
     bool explicit_stop_entered = false;
+    int submit_budget_acquire_rc = -2;
+    int submit_budget_acquire_errno = 0;
+    std::chrono::milliseconds submit_budget_elapsed (0);
+    bool submit_budget_waited_for_quiesce = false;
     bool transport_waiting_for_quiesce = false;
     bool transport_was_blocked_before_detach = false;
 
@@ -1361,6 +1365,23 @@ void test_transport_owner_start_waits_for_explicit_async_quiesce ()
         explicit_stop_entered = wait_async_owner_transition (
           &gate, &async_owner_transition_gate_t::explicit_stop_entered);
         if (explicit_stop_entered) {
+            const std::chrono::steady_clock::time_point started =
+              std::chrono::steady_clock::now ();
+            submit_budget_acquire_rc =
+              source_handle.socket
+                ->acquire_transport_pair_owner_progress_for_submit (30);
+            submit_budget_acquire_errno = errno;
+            submit_budget_elapsed =
+              std::chrono::duration_cast<std::chrono::milliseconds> (
+                std::chrono::steady_clock::now () - started);
+            if (submit_budget_acquire_rc == 0)
+                source_handle.socket->release_transport_pair_owner_progress ();
+            {
+                std::lock_guard<std::mutex> lock (gate.sync);
+                submit_budget_waited_for_quiesce =
+                  gate.transport_acquire_waiting;
+                gate.transport_acquire_waiting = false;
+            }
             transport_acquirer = std::thread ([&] {
                 transport_acquire_rc =
                   source_handle.socket->acquire_transport_pair_owner_progress ();
@@ -1438,6 +1459,13 @@ void test_transport_owner_start_waits_for_explicit_async_quiesce ()
 
     TEST_ASSERT_TRUE (initial_owner_started);
     TEST_ASSERT_TRUE (explicit_stop_entered);
+    TEST_ASSERT_TRUE (submit_budget_waited_for_quiesce);
+    TEST_ASSERT_EQUAL_INT (-1, submit_budget_acquire_rc);
+    TEST_ASSERT_EQUAL_INT (EAGAIN, submit_budget_acquire_errno);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT64 (15,
+                                        submit_budget_elapsed.count ());
+    TEST_ASSERT_LESS_OR_EQUAL_INT64 (500,
+                                     submit_budget_elapsed.count ());
     TEST_ASSERT_TRUE (transport_waiting_for_quiesce);
     TEST_ASSERT_TRUE (transport_was_blocked_before_detach);
     TEST_ASSERT_TRUE (completion_wait_finished);

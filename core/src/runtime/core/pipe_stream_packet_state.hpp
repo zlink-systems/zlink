@@ -49,8 +49,6 @@ enum stream_packet_allocation_failpoint_t
     stream_packet_allocation_body_view
 };
 
-void test_set_stream_packet_allocation_failpoint (
-  stream_packet_allocation_failpoint_t failpoint_);
 bool test_consume_stream_packet_allocation_failpoint (
   stream_packet_allocation_failpoint_t failpoint_);
 #endif

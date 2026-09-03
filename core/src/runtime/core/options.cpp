@@ -88,7 +88,7 @@ static int do_setsockopt_string_allow_empty_strict (const void *const optval_,
 }
 
 const uint64_t default_hwm_bytes = ZLINK_HWM_BYTES_DFLT;
-const int default_batch_size = 8192; // 32768;// //16384;
+const int default_batch_size = 8192;
 
 zlink::options_t::options_t () :
     sndhwm (default_hwm_bytes),

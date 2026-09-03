@@ -109,12 +109,20 @@ void run_dealer_router_reqrep (const std::string &transport,
     latency_stats_t latency;
     const bool ok = perf_single_reqrep::run_requester (
       requester.get (), &request_state, &payload, duration_s,
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
+      [&] (zlink_msg_t *part_, uint32_t timeout_ms_, zlink_reply_handler_fn handler_,
+           void *userdata_) {
+          return perf_zlink_dealer_request_measurement_part (
+            requester.get (), part_, ZLINK_SEND_FLAGS_NONE, timeout_ms_, handler_, userdata_);
+      },
+#else
       [&] (zlink_msg_t *part_, uint32_t timeout_ms_, void *user_context_,
            zlink_completion_id_t *completion_id_out_) {
           return perf_zlink_dealer_request_measurement_part (
             requester.get (), part_, ZLINK_SEND_FLAGS_NONE, timeout_ms_,
             user_context_, completion_id_out_);
       },
+#endif
       &completion_poller, &completed, &latency);
 
     const bool stop_ok = perf_single_reqrep::send_stop_to_router (requester.get ());

@@ -12,15 +12,11 @@ namespace zlink
 //  Adapter for dbuffer, to plug it in instead of a queue for the sake
 //  of implementing the conflate socket option, which, if set, makes
 //  the receiving side to discard all incoming messages but the last one.
-//
-//  reader_awake flag is needed here to mimic ypipe delicate behaviour
-//  around the reader being asleep (see 'c' pointer being NULL in ypipe.hpp)
 
 template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T>
 {
   public:
-    //  Initialises the pipe.
-    ypipe_conflate_t () : reader_awake (false) {}
+    ypipe_conflate_t () {}
 
     //  Following function (write) deliberately copies uninitialised data
     //  when used with zlink_msg. Initialising the VSM body for
@@ -69,20 +65,15 @@ template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T
     // There are no incomplete items for conflate ypipe
     bool unwrite (T *) { return false; }
 
-    //  Flush is no-op for conflate ypipe. Reader asleep behaviour
-    //  is as of the usual ypipe.
-    //  Returns false if the reader thread is sleeping. In that case,
-    //  caller is obliged to wake the reader up before using the pipe again.
-    bool flush () { return reader_awake; }
+    //  dbuffer has no atomic reader-sleep handshake. Requesting a wake for
+    //  every publication prevents a writer from losing a concurrent empty
+    //  observation by the reader.
+    bool flush () { return false; }
 
     //  Check whether item is available for reading.
     bool check_read ()
     {
-        const bool res = dbuffer.check_read ();
-        if (!res)
-            reader_awake = false;
-
-        return res;
+        return dbuffer.check_read ();
     }
 
     //  Reads an item from the pipe. Returns false if there is no value.
@@ -100,16 +91,11 @@ template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T
         return consumed;
     }
 
-    //  Applies the function fn to the first element in the pipe
-    //  and returns the value returned by the fn.
-    //  The pipe mustn't be empty or the function crashes.
-    bool probe (bool (*fn_) (const T &)) { return dbuffer.probe (fn_); }
-
     bool probe_if_published (void (*fn_) (const T &, void *),
                              void *userdata_)
     {
         //  dbuffer's read-side lock observes the already-published front
-        //  without changing reader_awake.
+        //  without changing receiver state.
         return dbuffer.probe_if_published (fn_, userdata_);
     }
 
@@ -121,8 +107,6 @@ template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T
             *prefetched_batch_exhausted_ = false;
         const ypipe_read_result_t result =
           dbuffer.read_if (value_, fn_, userdata_);
-        if (result == ypipe_read_empty)
-            reader_awake = false;
         if (result == ypipe_read_consumed && prefetched_batch_exhausted_)
             *prefetched_batch_exhausted_ = true;
         return result;
@@ -130,7 +114,6 @@ template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T
 
   protected:
     dbuffer_t<T> dbuffer;
-    bool reader_awake;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (ypipe_conflate_t)
 };

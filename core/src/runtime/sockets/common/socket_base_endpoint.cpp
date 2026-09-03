@@ -687,20 +687,6 @@ int zlink::socket_base_t::create_resolved_connect_session (
     return 0;
 }
 
-void zlink::socket_base_t::socket_bound_endpoints (std::set<std::string> *out_) const
-{
-    if (!out_)
-        return;
-
-    out_->clear ();
-    for (endpoints_t::const_iterator it = endpoint_runtime ().endpoints.begin (),
-                                     end = endpoint_runtime ().endpoints.end ();
-         it != end; ++it) {
-        if (it->second.local_type == endpoint_type_bind)
-            out_->insert (it->first);
-    }
-}
-
 bool zlink::socket_base_t::socket_has_endpoint_history () const
 {
     return !endpoint_runtime ().last_endpoint_uri ().empty ();
@@ -715,11 +701,6 @@ bool zlink::socket_base_t::socket_has_manual_connect_endpoints () const
             return true;
     }
     return false;
-}
-
-bool zlink::socket_base_t::socket_has_attached_pipes () const
-{
-    return has_attached_pipes ();
 }
 
 std::string zlink::socket_base_t::resolve_tcp_addr (std::string endpoint_uri_pair_,
@@ -917,10 +898,6 @@ void zlink::socket_base_t::process_transport_pair_owner_request (
                 prepared_completion_address = NULL;
             }
         }
-        if (decision_error == 0) {
-            intent->completion_generation = generation_;
-            intent->completion_owner_connection_id = connection_id_;
-        }
     }
     LIBZLINK_DELETE (prepared_completion_address);
 
@@ -1089,29 +1066,4 @@ int zlink::socket_base_t::term_peer_rid (const zlink_routing_id_t *peer_rid_)
         return -1;
 
     return xterm_peer_rid (peer_rid_);
-}
-
-int zlink::socket_base_t::term_transport_pair (
-  uint64_t transport_pair_id_, uint64_t transport_pair_generation_)
-{
-    if (transport_pair_id_ == 0 || transport_pair_generation_ == 0) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    socket_public_api_scope_t admission (lifecycle_coordinator ());
-    if (!admission.acquired ())
-        return -1;
-    socket_public_api_lock_scope_t guard (lifecycle_coordinator ());
-
-    if (unlikely (_ctx_terminated)) {
-        errno = ETERM;
-        return -1;
-    }
-
-    const int rc = process_commands (0, false);
-    if (unlikely (rc != 0))
-        return -1;
-
-    return xterm_transport_pair (transport_pair_id_, transport_pair_generation_);
 }

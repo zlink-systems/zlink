@@ -4225,9 +4225,10 @@ def emit_result_lines(result_map):
     for key in sorted(result_map.keys()):
         pattern, transport, size, metric = key
         value = result_map[key]
+        precision = 6 if metric.startswith("latency") else 3
         print(
             f"RESULT,current,{display_pattern_name(pattern)},"
-            f"{transport},{size},{metric},{value:.3f}"
+            f"{transport},{size},{metric},{value:.{precision}f}"
         )
 
 

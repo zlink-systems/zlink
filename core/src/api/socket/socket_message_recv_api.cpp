@@ -3,7 +3,6 @@
 #include "utils/precompiled.hpp"
 
 #include <string.h>
-#include <stdlib.h>
 
 #include "api/socket/socket_api_internal.hpp"
 #include "api/socket/socket_message_api_internal.hpp"
@@ -23,11 +22,6 @@ inline void reset_routing_id_output (zlink_routing_id_t *source_rid_out_)
 {
     if (source_rid_out_)
         source_rid_out_->size = 0;
-}
-
-bool is_direct_public_recv_fast_type (int type_)
-{
-    return type_ == ZLINK_CORE_SOCKET_PAIR || type_ == ZLINK_CORE_SOCKET_DEALER;
 }
 
 int recv_socket_subscribe_parts (const socket_handle_t &handle_,
@@ -100,9 +94,8 @@ int recv_socket_parts (const socket_handle_t &handle_,
                        size_t *part_count_out_,
                        zlink_send_flags_t flags_)
 {
-    // Hot path: PAIR/DEALER single-part public recv reaches here on every
-    // message in with_zmq single. Keep single-part export lean and do not
-    // accidentally fold it back into a heavier multipart path.
+    // Hot path: PAIR single-part public recv reaches here on every message in
+    // with_zmq single. Keep its export out of the multipart path.
     if (!handle_.socket) {
         errno = EFAULT;
         return -1;
@@ -131,20 +124,13 @@ int recv_socket_parts (const socket_handle_t &handle_,
     // token, and rejects a later kind consistently with the wire decoder.
     if (type == ZLINK_CORE_SOCKET_DEALER) {
         reset_routing_id_output (source_rid_out_);
-        uint8_t message_type = zlink::zmp_kind_data;
-        uint64_t request_seq = 0;
-        const std::shared_ptr<
-          zlink::socket_reqrep_internal::socket_request_reply_state_t>
-          no_request_state;
         return zlink::socket_reqrep_internal::recv_dealer_message_direct (
-          handle_, no_request_state, false, &message_type, &request_seq,
-          parts_out_, part_count_out_, static_cast<int> (flags_));
+          handle_, parts_out_, part_count_out_, static_cast<int> (flags_));
     }
 
-    const bool routed_router_payload = type == ZLINK_CORE_SOCKET_ROUTER && source_rid_out_ != NULL;
-    const bool strip_recv_routing_id = type == ZLINK_CORE_SOCKET_STREAM || routed_router_payload;
+    const bool strip_recv_routing_id = type == ZLINK_CORE_SOCKET_STREAM;
     const bool direct_public_recv_fast =
-      !strip_recv_routing_id && !source_rid_out_ && is_direct_public_recv_fast_type (type);
+      type == ZLINK_CORE_SOCKET_PAIR && !source_rid_out_;
 
     if (direct_public_recv_fast) {
         zlink_msg_t *first_slot = NULL;
@@ -171,12 +157,7 @@ int recv_socket_parts (const socket_handle_t &handle_,
 
     zlink_msg_t first;
     zlink_msg_init (&first);
-    if (type == ZLINK_CORE_SOCKET_ROUTER && source_rid_out_) {
-        if (zlink::recv_msg_routed_socket (handle_.socket, &first, source_rid_out_, flags_) < 0) {
-            zlink_msg_close (&first);
-            return -1;
-        }
-    } else if (zlink::recv_msg_socket (handle_.socket, type, &first, flags_) < 0) {
+    if (zlink::recv_msg_socket (handle_.socket, type, &first, flags_) < 0) {
         zlink_msg_close (&first);
         return -1;
     }
@@ -185,7 +166,7 @@ int recv_socket_parts (const socket_handle_t &handle_,
         handle_.socket->copy_last_recv_source_rid (source_rid_out_);
 
     if (!zlink::msg_frame_has_more (first)) {
-        if (strip_recv_routing_id && !routed_router_payload) {
+        if (strip_recv_routing_id) {
             zlink_msg_close (&first);
             errno = 0;
             return 0;
@@ -197,19 +178,18 @@ int recv_socket_parts (const socket_handle_t &handle_,
         if (type == ZLINK_CORE_SOCKET_STREAM && source_rid_out_)
             zlink::copy_routing_id_from_msg (first, source_rid_out_);
 
-        if (!routed_router_payload) {
-            zlink_msg_close (&first);
+        zlink_msg_close (&first);
 
-            zlink_msg_t payload;
-            zlink_msg_init (&payload);
-            const int payload_rc = zlink::recv_followup_msg_socket (handle_.socket, &payload);
-            if (payload_rc < 0) {
-                zlink_msg_close (&payload);
-                return -1;
-            }
-            return zlink::export_payload_msg_sequence (
-              handle_.socket, &payload, parts_out_, part_count_out_, true);
+        zlink_msg_t payload;
+        zlink_msg_init (&payload);
+        const int payload_rc =
+          zlink::recv_followup_msg_socket (handle_.socket, &payload);
+        if (payload_rc < 0) {
+            zlink_msg_close (&payload);
+            return -1;
         }
+        return zlink::export_payload_msg_sequence (
+          handle_.socket, &payload, parts_out_, part_count_out_, true);
     }
 
     return zlink::export_payload_msg_sequence (
@@ -377,8 +357,8 @@ zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
         bool first_part = false;
         zlink::socket_base_t *source_socket = NULL;
         if (zlink::part_helper_internal::prepare_recv_step (
-              xpub_, zlink::part_helper_internal::recv_family_xpub,
-              handle.socket, &helper_state, &first_part, &source_socket)
+              zlink::part_helper_internal::recv_family_xpub,
+              handle.socket, helper_state, &first_part, &source_socket)
             != 0)
             return zlink::recv_result_internal::from_errno (errno);
         if (!first_part) {

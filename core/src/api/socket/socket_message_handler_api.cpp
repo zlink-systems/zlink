@@ -2,18 +2,15 @@
 
 #include "utils/precompiled.hpp"
 
-#include "api/monitoring/poller_api_internal.hpp"
 #include "api/socket/socket_api_internal.hpp"
 #include "api/message/recv_result_internal.hpp"
-#include "api/socket/socket_request_reply_internal.hpp"
 #include "api/socket/socket_completion_queue_internal.hpp"
 #include "core/msg.hpp"
 #include "sockets/stream/stream.hpp"
-#include "utils/allocator.hpp"
 
 namespace
 {
-bool empty_routing_id (const zlink_routing_id_t &rid_)
+bool is_zero_initialized_routing_id (const zlink_routing_id_t &rid_)
 {
     static const uint8_t zero_data[sizeof (rid_.data)] = {};
     if (rid_.size != 0)
@@ -21,13 +18,13 @@ bool empty_routing_id (const zlink_routing_id_t &rid_)
     return memcmp (rid_.data, zero_data, sizeof (rid_.data)) == 0;
 }
 
-bool empty_completion (const zlink_completion_t &completion_)
+bool is_initialized_empty_completion (const zlink_completion_t &completion_)
 {
     return completion_.struct_size == sizeof (zlink_completion_t)
            && completion_.kind == static_cast<zlink_completion_kind_t> (0)
            && completion_.completion_id == 0
            && completion_.user_context == NULL
-           && empty_routing_id (completion_.peer_rid)
+           && is_zero_initialized_routing_id (completion_.peer_rid)
            && completion_.send_result
                 == static_cast<zlink_send_complete_result_t> (0)
            && completion_.send_terminal_errno == 0
@@ -37,7 +34,7 @@ bool empty_completion (const zlink_completion_t &completion_)
            && completion_.reply_part_count == 0;
 }
 
-bool initialized_empty_message (zlink_msg_t *message_)
+bool is_initialized_empty_message (zlink_msg_t *message_)
 {
     if (!message_)
         return false;
@@ -71,8 +68,8 @@ zlink_recv_result_t zlink_stream_recv_packet (
     }
     if (validate_recv_flags (flags_) != 0)
         return zlink::recv_result_internal::from_errno (errno);
-    if (header_out_ == body_out_ || !initialized_empty_message (header_out_)
-        || !initialized_empty_message (body_out_)) {
+    if (header_out_ == body_out_ || !is_initialized_empty_message (header_out_)
+        || !is_initialized_empty_message (body_out_)) {
         errno = EINVAL;
         return ZLINK_RECV_INVALID_STATE;
     }
@@ -105,7 +102,7 @@ zlink_recv_result_t zlink_completion_recv (
         errno = EFAULT;
         return ZLINK_RECV_INVALID_HANDLE;
     }
-    if (!empty_completion (*completion_out_)) {
+    if (!is_initialized_empty_completion (*completion_out_)) {
         errno = EINVAL;
         return ZLINK_RECV_INVALID_STATE;
     }
@@ -123,7 +120,7 @@ zlink_recv_result_t zlink_completion_recv (
         return ZLINK_RECV_NOT_SUPPORTED;
     }
 
-    // A DONTWAIT pull is itself a socket progress point.  Drain commands
+    // A completion pull is itself a socket progress point. Drain commands
     // before driving pending SEND records so a physical detach/reconnect can
     // replace the pipe behind the same logical target.  If context shutdown
     // was observed, prefer an already-published completion; otherwise surface
@@ -165,11 +162,7 @@ void zlink_completion_close (zlink_completion_t *completion_)
         || completion_->struct_size != sizeof (zlink_completion_t))
         return;
 
-    if (completion_->reply_parts) {
-        zlink_multipart_close (completion_->reply_parts,
-                               completion_->reply_part_count);
-        zlink::dealloc (completion_->reply_parts);
-    }
+    zlink::socket_completion::release_payload (completion_);
 
     memset (completion_, 0, sizeof (*completion_));
     completion_->struct_size = sizeof (zlink_completion_t);

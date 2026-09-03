@@ -393,12 +393,36 @@ void test_mailbox_pending_hint_distinguishes_commands_from_plain_signals ()
     errno = 0;
     TEST_ASSERT_EQUAL_INT (-1, mailbox.recv (&command, 0));
     TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+    TEST_ASSERT_EQUAL_INT (0, mailbox.wait_for_command_signal (0));
 
+    // Leave the receiver active, then append a command while a direct-owner
+    // observation is live. The command has no primary wake or pending hint,
+    // so the epoch must preserve the edge even after another owner consumes it.
     mailbox.send (command);
     TEST_ASSERT_TRUE (mailbox.take_command_pending_hint ());
+    TEST_ASSERT_EQUAL_INT (0, mailbox.recv (&command, 0));
+    const uint64_t epoch_before_send =
+      mailbox.begin_command_wait_observation ();
+    mailbox.send (command);
     TEST_ASSERT_FALSE (mailbox.take_command_pending_hint ());
     TEST_ASSERT_EQUAL_INT (0, mailbox.recv (&command, 0));
     TEST_ASSERT_EQUAL_INT (zlink::command_t::stop, command.type);
+    TEST_ASSERT_EQUAL_INT (
+      0, mailbox.wait_for_command_signal (0, &epoch_before_send));
+    mailbox.end_command_wait_observation ();
+
+    // With no observer or registered waiter, an active-receiver command does
+    // not touch slow-path epoch bookkeeping.
+    const uint64_t epoch_without_interest =
+      mailbox.begin_command_wait_observation ();
+    mailbox.end_command_wait_observation ();
+    mailbox.send (command);
+    TEST_ASSERT_EQUAL_INT (0, mailbox.recv (&command, 0));
+    const uint64_t epoch_after_unobserved_send =
+      mailbox.begin_command_wait_observation ();
+    TEST_ASSERT_EQUAL_UINT64 (epoch_without_interest,
+                              epoch_after_unobserved_send);
+    mailbox.end_command_wait_observation ();
 }
 
 void test_mailbox_command_survives_primary_signaler_drain ()

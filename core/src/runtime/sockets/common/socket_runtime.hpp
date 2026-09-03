@@ -117,9 +117,7 @@ struct transport_pair_connect_intent_t
         address (address_),
         connect_options (options_),
         pair_id (pair_id_),
-        pair_state (pair_state_),
-        completion_generation (0),
-        completion_owner_connection_id (0)
+        pair_state (pair_state_)
     {
     }
 
@@ -129,11 +127,6 @@ struct transport_pair_connect_intent_t
     const options_t connect_options;
     const uint64_t pair_id;
     const std::shared_ptr<transport_pair_state_t> pair_state;
-    // The Completion child is reusable across a shared reconnect, but its
-    // publication belongs to one exact Application owner generation at a time.
-    // A stale cancel must never retire a child already adopted by a newer one.
-    uint64_t completion_generation;
-    uint64_t completion_owner_connection_id;
 };
 
 class socket_inprocs_t
@@ -616,8 +609,7 @@ struct routed_send_target_key_t
     routed_send_target_key_t () :
         transport_pair_id (0),
         transport_pair_generation (0),
-        route_incarnation_id (0),
-        selected_pipe (NULL)
+        route_incarnation_id (0)
     {
     }
     routed_send_target_key_t (const void *routing_id_,
@@ -633,8 +625,7 @@ struct routed_send_target_key_t
         logical_endpoint (logical_endpoint_),
         transport_pair_id (transport_pair_id_),
         transport_pair_generation (transport_pair_generation_),
-        route_incarnation_id (route_incarnation_id_),
-        selected_pipe (NULL)
+        route_incarnation_id (route_incarnation_id_)
     {
     }
 
@@ -662,11 +653,6 @@ struct routed_send_target_key_t
     // independent of the mutable network connection id, so an engine reset
     // cannot orphan pending work and a replacement pipe cannot consume it.
     uint64_t route_incarnation_id;
-    // Transient, not part of the key: a DEALER pipe already selected under
-    // the send scope that owns this attempt. The first frame of the record
-    // goes to it directly instead of resolving `logical_endpoint`. Only set
-    // by the blocking-send fast path and never stored in a pending queue.
-    pipe_t *selected_pipe;
 };
 
 // Internal REQUEST admission hooks. The resolver runs only after one pending
@@ -802,6 +788,10 @@ struct socket_send_pending_runtime_t
     std::map<routed_send_target_key_t, send_logical_wait_state_t>
       logical_waits;
     std::map<zlink_send_op_id_t, send_pending_record_t *> by_op;
+    // Reused only by the admission-gate owner. drive_send_pending keeps the
+    // active prefix local so a new drive call begins unblocked without
+    // destroying retained string/vector capacity.
+    std::vector<routed_send_target_key_t> blocked_targets_scratch;
     std::atomic<uint64_t> pending_msgs;
     //  Incremented after every queue insertion.  The admission driver uses
     //  this to close the empty-scan/gate-release handoff window without
@@ -857,12 +847,23 @@ struct socket_dispatch_bridge_t
 // waiter count keeps the ordinary command path out of this mutex and CV.
 struct socket_submit_progress_runtime_t
 {
-    socket_submit_progress_runtime_t () : epoch (0), waiters (0) {}
+    socket_submit_progress_runtime_t () :
+        epoch (0),
+        waiters (0),
+        public_command_wait_owner_active (false),
+        public_command_wait_owner_retirement_epoch (0)
+    {
+    }
 
     mutex_t sync;
     condition_variable_t cv;
     std::atomic<uint64_t> epoch;
     std::atomic<uint32_t> waiters;
+    // Protected by sync. A PAIR with no asynchronous executor elects one
+    // blocked public sender to drain mailbox commands; concurrent senders stay
+    // on the epoch/CV channel until that owner publishes progress or retires.
+    bool public_command_wait_owner_active;
+    uint64_t public_command_wait_owner_retirement_epoch;
 };
 
 class socket_lifecycle_coordinator_t
@@ -909,6 +910,10 @@ class socket_lifecycle_coordinator_t
     void hold_public_multipart_control_boundary ();
     void release_public_multipart_control_boundary ();
     void mark_deferred_peer_controls ();
+    bool deferred_peer_controls_pending_cached () const
+    {
+        return deferred_peer_controls_pending.load (std::memory_order_acquire);
+    }
     bool take_deferred_peer_controls ();
     bool public_api_sync_held () const;
     bool public_api_sync_owned_by_current_thread () const;

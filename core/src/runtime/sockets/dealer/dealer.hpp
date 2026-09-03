@@ -7,7 +7,6 @@
 #include <string>
 
 #include "sockets/common/socket_base.hpp"
-#include "core/session_base.hpp"
 #include "sockets/internal/fq.hpp"
 #include "sockets/internal/lb.hpp"
 
@@ -100,20 +99,20 @@ class dealer_t : public socket_base_t
     void xwrite_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xpipe_terminated (zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
 
-    //  Send and recv - knowing which pipe was used.
-    int sendpipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_,
-                  pipe_message_admission_t *admission_out_ = NULL,
-                  pipe_write_observer_fn observer_ = NULL,
-                  void *observer_userdata_ = NULL);
     int recvpipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_);
 
   private:
+    static bool active_submit_candidate (dealer_t *dealer_, pipe_t *pipe_);
     static bool routed_submit_candidate (pipe_t *pipe_, void *userdata_);
-    static bool request_router_peer (pipe_t *pipe_, void *userdata_);
     static bool request_submit_candidate (pipe_t *pipe_, void *userdata_);
+    int send_selected_pipe (
+      pipe_t *pipe_, msg_t *msg_, int flags_, bool request_only_,
+      pipe_t **pipe_out_, pipe_message_admission_t *admission_out_,
+      pipe_write_observer_fn observer_, void *observer_userdata_);
     int apply_peer_weight (pipe_t *pipe_, uint32_t weight_) ZLINK_OVERRIDE;
     void initialize_peer_weight (pipe_t *pipe_,
                                  uint32_t weight_) ZLINK_OVERRIDE;
+    void update_request_route_weight (pipe_t *pipe_, uint32_t weight_);
     void remember_request_route (pipe_t *pipe_, uint32_t weight_);
 
     struct request_route_history_t

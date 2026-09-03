@@ -349,6 +349,23 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
         self.assertEqual(RC.REQUIRED_RESULT_METRICS, tuple(name for name, _ in tier1_metrics(1.0)))
         self.assertEqual(RC.REQUIRED_RESULT_METRIC_COUNT, 5)
 
+    def test_result_lines_keep_latency_at_six_decimal_places(self):
+        result_map = {
+            ("MULTI_DEALER_ROUTER_REQREP", "tcp", 64, "throughput"): 123.456789,
+            ("MULTI_DEALER_ROUTER_REQREP", "tcp", 64, "latency"): 0.006789,
+        }
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            RC.emit_result_lines(result_map)
+        self.assertIn(
+            "RESULT,current,DEALER_ROUTER_REQREP,tcp,64,throughput,123.457",
+            output.getvalue(),
+        )
+        self.assertIn(
+            "RESULT,current,DEALER_ROUTER_REQREP,tcp,64,latency,0.006789",
+            output.getvalue(),
+        )
+
     def test_multi_default_msg_sizes_include_64b(self):
         self.assertEqual(
             RC.MSG_SIZES,

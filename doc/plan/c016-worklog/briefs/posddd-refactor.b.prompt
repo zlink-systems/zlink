@@ -1,0 +1,20 @@
+역할: zlink Core(/home/hep7hep7/project/zlink, main) posddd 리팩토링 수행자(큰 이슈). 성능 회귀 수정(1344022a3e + 후속 커밋)으로 손댄 핫패스 모듈을 대상으로 **동작을 보존하면서** 구조를 정리한다. 성능 이득이 없어도 구조 개선이면 채택한다. 사용자 지시: "posddd 리팩토링, 불필요한 코드 정리, 성능 개선이 없어도 구조 개선이 있으면 채택".
+
+읽을 것(먼저): doc/principal/dev/posddd.ko.md 전체(특히 hot path·책임 분리·불필요 코드 절), core/doc/spec/core/systems/10-hot-path.{ko}.md(§2 범위·§3 금지·§4 캐시/후퇴·§5 gate), core/doc/spec/core/systems/08-posd-module-structure.ko.md, 07-core-source-layout.ko.md, 직전 커밋들의 diff(`git log --oneline -8`, `git show --stat`).
+
+대상 모듈(우선순위): core/src/api/socket/socket_message_send_api.cpp·part_helper_*, core/src/runtime/sockets/common/socket_send_pending_submit.cpp·socket_send_complete.cpp·socket_base_api.cpp·socket_base_lifecycle.cpp·socket_base_endpoint.cpp, core/src/api/socket/socket_request_reply_*.cpp, core/src/runtime/core/pipe.{hpp,cpp}, core/src/runtime/sockets/dealer/*, router/*, internal/lb.*.
+
+정리 항목(각각 실제 근거를 찾아 적용; 추정으로 지우지 않음):
+1. **불필요 코드**: pull-completion·single-lane 전환 뒤 더 이상 호출되지 않는 함수·분기·필드·옵션(`rg`로 호출자 0 확인), 남아 있는 구 경로(예: endpoint 문자열 재해석이 fast path로 대체된 뒤 죽은 분기, 요청당 timer 경로 잔재, 임시 owner 관련 중복 플래그), 주석 처리된 코드, 사용되지 않는 include/typedef.
+2. **중복·pass-through**: 같은 검사를 반복하는 헬퍼(예: `transport_pair_application_ready` 류 조건 재검사), 한 줄 위임만 하는 래퍼, 같은 rollback/close 루틴의 사본(`close_send_part_array` 류) → 한 곳으로.
+3. **책임 분리(posddd)**: 한 함수가 선택·admit·대기·후퇴를 다 하는 곳(`send_completion_submit_blocking`, `request_admission_submit_blocking`, `send_public_router_reply_with_wait`)은 "선택/admit fast path"와 "commit된 endpoint 대기 루프"를 분리해 읽히게 하고, 상태 캐시 게시 지점(pair admission/detach)을 한 곳으로 모은다. 파일이 책임 경계와 어긋나면 07-core-source-layout에 맞춰 이동(파일 이동은 git mv, include 방향 유지).
+4. **명명·주석**: 이번 수정에서 붙은 이름(`xsend_selected_pipe`, `wait_submit_progress`, `_state_active` 등)이 기존 명명 규칙과 어긋나면 맞춘다. 주석은 "왜"만 남기고 구현 반복 설명은 지운다.
+5. 핫패스 스펙 §3 위반이 남아 있으면(할당·문자열·table lookup·조건 없는 부가 작업) 같은 커밋 범위에서 §4 형태로 고친다 — 단 이건 동작 보존 범위 안에서만.
+
+절대 규칙: doc/**·core/doc/** 수정 금지(스펙 §2 표 갱신이 필요하면 요약 BLOCKERS에 제안). framework/**·bindings/<lang>/ 소스 수정 금지(raw header mirror 동기화만). scripts/local-package/** 실행 금지. git commit/push/reset/restore/checkout 금지. `hotpath_reference.json` 수정 금지. 공개 API·ABI·enum·계약 변경 금지. 모든 빌드·테스트·perf는 `ulimit -v 16777216`. 다른 perf 측정과 겹치지 않게 시작 전 `ps -eo comm | grep -E '^(perf_|python3)$'` 확인. **동작 변경 금지** — 리팩토링과 동작 변경이 섞이면 동작 변경은 하지 말고 BLOCKERS에 적는다.
+
+Gate(전부 green): `cmake --build core/build -j4`; `ctest --test-dir core/build -j2` 전체(hotpath_gate 있으면 포함, 기준값 ±5% 안); `test_single_lane_*` ×2; raw mirror cmp 12; `git diff --check`; `bash bindings/cpp/tests/run_tests.sh`; `ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh`; perf 비회귀: `/home/hep7hep7/project/zlink-work/c016/tools/sweep2.sh --only single`(4 size, 집계 판정) 전 cell PASS 유지 — 리팩토링 전 결과(감독관이 남긴 sweep2-results.md)와 비교해 나빠진 cell이 없어야 함.
+
+완료 시 /home/hep7hep7/project/zlink-work/c016/posddd-refactor-summary.md 에: 항목별 변경(삭제 함수/필드 목록과 "호출자 0" 근거, 분리·이동한 책임, 명명 변경 표), 줄 수 증감, gate 결과, BLOCKERS(동작 변경이 필요해 보류한 것). 진행은 posddd-refactor-progress.md 에 append.
+
+환경 메모(머신 B): 작업 트리는 이 프롬프트가 지정한 worktree 경로(아래 "담당 worktree")이며 그 경로 밖은 읽기만 한다. sweep2 비회귀 비교는 감독관이 수행하므로 job은 기능 gate(ctest·hotpath_gate·mirror·diff-check)까지만 돌린다. hotpath_gate는 `ctest --test-dir <worktree>/core/build -R hotpath_gate`. valgrind는 /home/hep7hep7/.local/bin. RAM 11GB: 빌드 -j4, ctest -j2. 다른 job이 같은 머신에서 병렬로 도니 perf 측정(sweep)은 하지 않는다.

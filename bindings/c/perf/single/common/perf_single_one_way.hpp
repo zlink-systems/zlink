@@ -336,10 +336,15 @@ inline bool run_measurement_phase (void *sender_,
               recv_header_fn_ (receiver_, state_->payload_size, ZLINK_DONTWAIT, &header,
                                &header_ok);
             if (recv_rc == recv_result_payload) {
+                unsigned long long drained_latency_samples = 0;
                 if (header_ok && single_header_matches_run (*state_, header)) {
-                    state_->active_received.fetch_add (1, std::memory_order_release);
-                    if (capture_latency_)
+                    if (capture_latency_) {
                         state_->latency.add (single_latency_ns (header));
+                        ++drained_latency_samples;
+                    } else {
+                        state_->active_received.fetch_add (
+                          1, std::memory_order_release);
+                    }
                 }
 
                 for (;;) {
@@ -351,16 +356,35 @@ inline bool run_measurement_phase (void *sender_,
                     if (burst_rc == recv_result_payload) {
                         if (burst_header_ok
                             && single_header_matches_run (*state_, burst_header)) {
-                            state_->active_received.fetch_add (1, std::memory_order_release);
-                            if (capture_latency_)
+                            if (capture_latency_) {
                                 state_->latency.add (single_latency_ns (burst_header));
+                                ++drained_latency_samples;
+                            } else {
+                                state_->active_received.fetch_add (
+                                  1, std::memory_order_release);
+                            }
                         }
                         continue;
                     }
-                    if (burst_rc == recv_result_again)
+                    if (burst_rc == recv_result_again) {
+                        // In-flight-1 latency samples must all traverse the
+                        // same receive cycle. Publish the acknowledgement only
+                        // after DONTWAIT has drained the socket to EAGAIN, so
+                        // the next send cannot join the current warm drain and
+                        // bypass the public poller wake being measured.
+                        if (capture_latency_ && drained_latency_samples != 0)
+                            state_->active_received.fetch_add (
+                              drained_latency_samples,
+                              std::memory_order_release);
                         break;
-                    if (burst_rc == recv_result_stop)
+                    }
+                    if (burst_rc == recv_result_stop) {
+                        if (capture_latency_ && drained_latency_samples != 0)
+                            state_->active_received.fetch_add (
+                              drained_latency_samples,
+                              std::memory_order_release);
                         return;
+                    }
                     sender_ok.store (false, std::memory_order_release);
                     return;
                 }

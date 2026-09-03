@@ -17,6 +17,214 @@ zlink::socket_base_t *&async_mailbox_dispatch_socket_tls ()
     return socket;
 }
 
+class wait_timeout_budget_t
+{
+  public:
+    wait_timeout_budget_t (zlink::clock_t &clock_, int timeout_ms_) :
+        _clock (clock_),
+        _timeout_ms (timeout_ms_),
+        _deadline_ms (timeout_ms_ > 0
+                        ? clock_.now_ms ()
+                            + static_cast<uint64_t> (timeout_ms_)
+                        : 0)
+    {
+    }
+
+    bool remaining (int *remaining_ms_) const
+    {
+        zlink_assert (remaining_ms_);
+        *remaining_ms_ = _timeout_ms;
+        if (_timeout_ms <= 0)
+            return true;
+
+        const uint64_t now = _clock.now_ms ();
+        if (now >= _deadline_ms)
+            return false;
+        *remaining_ms_ = static_cast<int> (_deadline_ms - now);
+        return true;
+    }
+
+    bool expired () const
+    {
+        int remaining_ms = 0;
+        return _timeout_ms > 0 && !remaining (&remaining_ms);
+    }
+
+  private:
+    zlink::clock_t &_clock;
+    const int _timeout_ms;
+    const uint64_t _deadline_ms;
+};
+
+}
+
+// Owns one submit waiter registration and, when elected, the complete
+// temporary public command-owner lifetime. The thread-local identity is
+// required because command dispatch can publish submit progress recursively;
+// only the owner of this exact socket must suppress the self-wake.
+namespace zlink
+{
+class submit_progress_wait_scope_t
+{
+  public:
+    submit_progress_wait_scope_t (
+      zlink::socket_submit_progress_runtime_t &progress_,
+      zlink::mailbox_t &mailbox_, zlink::socket_base_t *socket_,
+      uint64_t observed_progress_epoch_, bool owner_progress_held_) :
+        _progress (progress_),
+        _mailbox (mailbox_),
+        _socket (socket_),
+        _observed_progress_epoch (observed_progress_epoch_),
+        _observed_public_owner_retirement_epoch (0),
+        _observed_mailbox_epoch (0),
+        _previous_thread_owner (NULL),
+        _progress_already_observed (false),
+        _owns_public_commands (false),
+        _another_public_owner (false),
+        _mailbox_observation_active (false),
+        _command_drain_started (false)
+    {
+        zlink::scoped_lock_t lock (_progress.sync);
+        _progress.waiters.fetch_add (1, std::memory_order_seq_cst);
+        if (_progress.epoch.load (std::memory_order_seq_cst)
+            != _observed_progress_epoch) {
+            _progress_already_observed = true;
+            return;
+        }
+
+        const bool may_own_public_commands =
+          _socket->options.type == ZLINK_CORE_SOCKET_PAIR
+          && !owner_progress_held_
+          && !_socket->async_mailbox_owns_commands ();
+        if (may_own_public_commands) {
+            if (!_progress.public_command_wait_owner_active) {
+                _observed_mailbox_epoch =
+                  _mailbox.begin_command_wait_observation ();
+                _mailbox_observation_active = true;
+                if (_progress.epoch.load (std::memory_order_seq_cst)
+                    == _observed_progress_epoch) {
+                    _progress.public_command_wait_owner_active = true;
+                    _owns_public_commands = true;
+                } else {
+                    _mailbox.end_command_wait_observation ();
+                    _mailbox_observation_active = false;
+                    _progress_already_observed = true;
+                    return;
+                }
+            } else {
+                _another_public_owner = true;
+            }
+        }
+        _observed_public_owner_retirement_epoch =
+          _progress.public_command_wait_owner_retirement_epoch;
+    }
+
+    ~submit_progress_wait_scope_t ()
+    {
+        const int saved_errno = errno;
+        retire_public_command_owner ();
+        _progress.waiters.fetch_sub (1, std::memory_order_seq_cst);
+        errno = saved_errno;
+    }
+
+    bool progress_already_observed () const
+    {
+        return _progress_already_observed;
+    }
+
+    bool owns_public_commands () const
+    {
+        return _owns_public_commands;
+    }
+
+    bool another_public_owner () const
+    {
+        return _another_public_owner;
+    }
+
+    uint64_t observed_public_owner_retirement_epoch () const
+    {
+        return _observed_public_owner_retirement_epoch;
+    }
+
+    const uint64_t *observed_mailbox_epoch () const
+    {
+        return &_observed_mailbox_epoch;
+    }
+
+    void begin_public_command_drain ()
+    {
+        zlink_assert (_owns_public_commands);
+        zlink_assert (!_command_drain_started);
+        _previous_thread_owner =
+          current_owner_socket_tls ();
+        current_owner_socket_tls () = _socket;
+        _command_drain_started = true;
+    }
+
+    bool retire_public_command_owner ()
+    {
+        if (!_owns_public_commands)
+            return false;
+
+        if (_command_drain_started)
+            _mailbox.rearm_primary_signaler ();
+        if (_mailbox_observation_active) {
+            _mailbox.end_command_wait_observation ();
+            _mailbox_observation_active = false;
+        }
+        if (_command_drain_started) {
+            current_owner_socket_tls () =
+              _previous_thread_owner;
+            _command_drain_started = false;
+        }
+
+        bool observed_real_progress = false;
+        {
+            zlink::scoped_lock_t lock (_progress.sync);
+            observed_real_progress =
+              _progress.epoch.load (std::memory_order_seq_cst)
+              != _observed_progress_epoch;
+            _progress.public_command_wait_owner_active = false;
+            ++_progress.public_command_wait_owner_retirement_epoch;
+            _progress.cv.broadcast ();
+        }
+        _owns_public_commands = false;
+        return observed_real_progress;
+    }
+
+    static zlink::socket_base_t *current_public_command_owner_socket ()
+    {
+        return current_owner_socket_tls ();
+    }
+
+  private:
+    static zlink::socket_base_t *&current_owner_socket_tls ()
+    {
+        static thread_local zlink::socket_base_t *socket = NULL;
+        return socket;
+    }
+
+    zlink::socket_submit_progress_runtime_t &_progress;
+    zlink::mailbox_t &_mailbox;
+    zlink::socket_base_t *const _socket;
+    const uint64_t _observed_progress_epoch;
+    uint64_t _observed_public_owner_retirement_epoch;
+    uint64_t _observed_mailbox_epoch;
+    zlink::socket_base_t *_previous_thread_owner;
+    bool _progress_already_observed;
+    bool _owns_public_commands;
+    bool _another_public_owner;
+    bool _mailbox_observation_active;
+    bool _command_drain_started;
+
+    ZLINK_NON_COPYABLE_NOR_MOVABLE (submit_progress_wait_scope_t)
+};
+}
+
+namespace
+{
+
 bool is_pair_pipe_lifetime_command (const zlink::command_t &cmd_)
 {
     return cmd_.type == zlink::command_t::bind
@@ -148,14 +356,14 @@ void zlink::socket_base_t::start_reaping (poller_t *poller_)
 }
 
 int zlink::socket_base_t::process_commands (
-  int timeout_, bool throttle_, bool force_if_command_pending_)
+  int timeout_, bool throttle_, bool force_if_command_pending_,
+  const uint64_t *observed_command_wait_epoch_)
 {
     receive_runtime_t &receive = receive_runtime ();
     socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
     mailbox_t *const mailbox = static_cast<mailbox_t *> (_mailbox);
     const bool async_executor = current_async_mailbox_dispatch_socket () == this;
-    const uint64_t wait_deadline =
-      timeout_ > 0 ? _clock.now_ms () + static_cast<uint64_t> (timeout_) : 0;
+    const wait_timeout_budget_t wait_budget (_clock, timeout_);
     bool pair_pipe_lifetime_sync_required = false;
     bool woke_since_last_claim = false;
     command_drain_active_guard_t command_drain_active (
@@ -369,14 +577,12 @@ int zlink::socket_base_t::process_commands (
         // Blocking recv must not retain public API synchronization while it
         // sleeps. A notification is only a hint; the next loop claims the
         // command under API -> command-owner -> receive lock order.
-        int wait_timeout = timeout_;
-        if (timeout_ > 0) {
-            const uint64_t now = _clock.now_ms ();
-            if (now >= wait_deadline)
-                return 0;
-            wait_timeout = static_cast<int> (wait_deadline - now);
-        }
-        if (mailbox->wait_for_command_signal (wait_timeout) != 0) {
+        int wait_timeout = 0;
+        if (!wait_budget.remaining (&wait_timeout))
+            return 0;
+        if (mailbox->wait_for_command_signal (
+              wait_timeout, observed_command_wait_epoch_)
+            != 0) {
             if (errno == EINTR)
                 return -1;
             zlink_assert (errno == EAGAIN);
@@ -419,6 +625,46 @@ uint64_t zlink::socket_base_t::observe_submit_progress () const
       std::memory_order_acquire);
 }
 
+zlink::socket_base_t::submit_command_progress_mode_t
+zlink::socket_base_t::prepare_pair_submit_command_progress (
+  int timeout_ms_, bool another_public_owner_,
+  bool *owner_progress_held_)
+{
+    if (another_public_owner_)
+        return submit_command_progress_wait;
+
+    const int rc = acquire_transport_pair_owner_progress_for_submit (
+      timeout_ms_);
+    if (rc == 0) {
+        *owner_progress_held_ = true;
+        return submit_command_progress_wait;
+    }
+    return errno == EAGAIN ? submit_command_progress_retry_owner
+                           : submit_command_progress_failed;
+}
+
+zlink::socket_base_t::submit_command_progress_mode_t
+zlink::socket_base_t::prepare_retained_submit_command_progress (
+  int timeout_ms_, bool *owner_progress_held_)
+{
+    // Routed/request-reply backpressure is steady-state transport work, so its
+    // async executor remains installed instead of restarting at every credit
+    // edge.
+    retain_async_command_processing ();
+    const int rc = acquire_transport_pair_owner_progress_for_submit (
+      timeout_ms_);
+    if (rc == 0) {
+        *owner_progress_held_ = true;
+        return submit_command_progress_wait;
+    }
+    if (errno != EAGAIN)
+        return submit_command_progress_failed;
+
+    // Zero-I/O-thread inproc sockets have no async executor to borrow. Ask the
+    // caller to recompute its remaining entry budget before draining commands.
+    return submit_command_progress_synchronous;
+}
+
 int zlink::socket_base_t::wait_submit_progress (
   uint64_t observed_epoch_, int timeout_ms_,
   bool *owner_progress_held_)
@@ -427,62 +673,104 @@ int zlink::socket_base_t::wait_submit_progress (
         errno = EFAULT;
         return -1;
     }
+    const wait_timeout_budget_t wait_budget (_clock, timeout_ms_);
+    socket_submit_progress_runtime_t &progress = submit_progress_runtime ();
+    mailbox_t &mailbox = *static_cast<mailbox_t *> (_mailbox);
 
-    socket_submit_progress_runtime_t &progress =
-      submit_progress_runtime ();
-    {
-        scoped_lock_t lock (progress.sync);
-        progress.waiters.fetch_add (1, std::memory_order_seq_cst);
-    }
+    while (true) {
+        submit_progress_wait_scope_t wait_scope (
+          progress, mailbox, this, observed_epoch_,
+          *owner_progress_held_);
+        if (wait_scope.progress_already_observed ())
+            return 0;
 
-    int rc = 0;
-    bool synchronous_progress = false;
-    if (!*owner_progress_held_) {
-        // Once a public reply actually blocks, command progress is part of the
-        // socket's steady-state transport work. Keep its executor for the
-        // socket lifetime instead of detaching and restarting it at every HWM
-        // recovery edge.
-        retain_async_command_processing ();
-        rc = acquire_transport_pair_owner_progress ();
-        if (rc == 0)
-            *owner_progress_held_ = true;
-        else if (errno == EAGAIN) {
-            // A zero-I/O-thread context is valid for inproc. With no async
-            // executor available, this public caller becomes the temporary
-            // command owner while its send scope is unlocked. This preserves
-            // finite/infinite SNDTIMEO semantics without polling slices.
-            rc = process_commands (timeout_ms_, false);
-            synchronous_progress = true;
+        if (wait_scope.owns_public_commands ()) {
+            int owner_wait_timeout = 0;
+            if (!wait_budget.remaining (&owner_wait_timeout)) {
+                wait_scope.retire_public_command_owner ();
+                errno = EAGAIN;
+                return -1;
+            }
+
+            wait_scope.begin_public_command_drain ();
+            const int rc = process_commands (
+              owner_wait_timeout, false, false,
+              wait_scope.observed_mailbox_epoch ());
+            const int process_errno = errno;
+            const bool observed_real_progress =
+              wait_scope.retire_public_command_owner ();
+            if (rc == 0 && !observed_real_progress && timeout_ms_ > 0
+                && wait_budget.expired ()) {
+                errno = EAGAIN;
+                return -1;
+            }
+            errno = process_errno;
+            return rc;
         }
-    }
 
-    if (rc == 0 && !synchronous_progress) {
-        const uint64_t deadline =
-          timeout_ms_ > 0
-            ? _clock.now_ms () + static_cast<uint64_t> (timeout_ms_)
-            : 0;
-        progress.sync.lock ();
-        while (progress.epoch.load (std::memory_order_seq_cst)
-               == observed_epoch_) {
-            int wait_timeout = timeout_ms_;
-            if (timeout_ms_ > 0) {
-                const uint64_t now = _clock.now_ms ();
-                if (now >= deadline) {
+        int rc = 0;
+        submit_command_progress_mode_t command_progress =
+          submit_command_progress_wait;
+        if (!*owner_progress_held_) {
+            int owner_wait_timeout = 0;
+            if (!wait_budget.remaining (&owner_wait_timeout)) {
+                errno = EAGAIN;
+                return -1;
+            }
+            command_progress = options.type == ZLINK_CORE_SOCKET_PAIR
+              ? prepare_pair_submit_command_progress (
+                  owner_wait_timeout, wait_scope.another_public_owner (),
+                  owner_progress_held_)
+              : prepare_retained_submit_command_progress (
+                  owner_wait_timeout, owner_progress_held_);
+            if (command_progress == submit_command_progress_failed)
+                return -1;
+            if (command_progress == submit_command_progress_retry_owner) {
+                if (timeout_ms_ == 0 || wait_budget.expired ()) {
+                    errno = EAGAIN;
+                    return -1;
+                }
+                continue;
+            }
+            if (command_progress == submit_command_progress_synchronous) {
+                int fallback_timeout = 0;
+                if (!wait_budget.remaining (&fallback_timeout)) {
+                    errno = EAGAIN;
+                    return -1;
+                }
+                rc = process_commands (fallback_timeout, false);
+                if (rc != 0)
+                    return -1;
+            }
+        }
+
+        if (command_progress != submit_command_progress_synchronous) {
+            progress.sync.lock ();
+            while (progress.epoch.load (std::memory_order_seq_cst)
+                   == observed_epoch_
+                   && progress.public_command_wait_owner_retirement_epoch
+                        == wait_scope.observed_public_owner_retirement_epoch ()) {
+                int wait_timeout = 0;
+                if (!wait_budget.remaining (&wait_timeout)) {
                     errno = EAGAIN;
                     rc = -1;
                     break;
                 }
-                wait_timeout = static_cast<int> (deadline - now);
+                rc = progress.cv.wait (&progress.sync, wait_timeout);
+                if (rc != 0)
+                    break;
             }
-            rc = progress.cv.wait (&progress.sync, wait_timeout);
-            if (rc != 0)
-                break;
+            progress.sync.unlock ();
+            if (rc == 0
+                && progress.epoch.load (std::memory_order_seq_cst)
+                     == observed_epoch_
+                && wait_budget.expired ()) {
+                errno = EAGAIN;
+                rc = -1;
+            }
         }
-        progress.sync.unlock ();
+        return rc;
     }
-
-    progress.waiters.fetch_sub (1, std::memory_order_seq_cst);
-    return rc;
 }
 
 int zlink::socket_base_t::wait_submit_progress (
@@ -512,8 +800,17 @@ void zlink::socket_base_t::notify_submit_progress ()
     if (waiters == 0)
         return;
 
-    scoped_lock_t lock (progress.sync);
-    progress.cv.broadcast ();
+    bool signal_public_command_wait_owner = false;
+    {
+        scoped_lock_t lock (progress.sync);
+        signal_public_command_wait_owner =
+          progress.public_command_wait_owner_active
+          && submit_progress_wait_scope_t::current_public_command_owner_socket ()
+               != this;
+        progress.cv.broadcast ();
+    }
+    if (signal_public_command_wait_owner)
+        static_cast<mailbox_t *> (_mailbox)->signal ();
 }
 
 #ifdef ZLINK_BUILD_TESTS
@@ -606,7 +903,8 @@ int zlink::socket_base_t::start_async_mailbox_processing (io_thread_t *io_thread
     return rc;
 }
 
-void zlink::socket_base_t::stop_async_mailbox_processing ()
+bool zlink::socket_base_t::stop_async_mailbox_processing (
+  bool require_unowned_)
 {
     receive_runtime_t &receive = receive_runtime ();
     {
@@ -617,6 +915,19 @@ void zlink::socket_base_t::stop_async_mailbox_processing ()
         // coordinator directly because it already holds this gate.
         scoped_lock_t progress_lock (
           _transport_pair_owner_progress_sync);
+        if (require_unowned_
+            && (monitor_runtime ().owns_async_command_processing.load (
+                  std::memory_order_acquire)
+                || _transport_pair_owner_progress_refs != 0
+                || _async_command_processing_retained.load (
+                  std::memory_order_acquire)
+                || _completion_poller_refs.load (
+                  std::memory_order_acquire)
+                     != 0
+                || !lifecycle_coordinator ().is_async_mailbox_active ()
+                || lifecycle_coordinator ().is_async_quiesce_pending ()))
+            return false;
+        _async_command_processing_stop_requested = false;
         scoped_lock_t command_owner (receive.command_owner_sync);
         if (_completion_poller_refs.load (std::memory_order_acquire) == 0)
             invalidate_completion_processing_owner ();
@@ -624,7 +935,15 @@ void zlink::socket_base_t::stop_async_mailbox_processing ()
           static_cast<mailbox_t *> (_mailbox));
     }
     notify_receive_progress ();
-    static_cast<mailbox_t *> (_mailbox)->signal ();
+    // A signal alone cannot close the running-handler/reschedule race. Queue
+    // a real no-op so the current handler either observes it or mailbox send
+    // posts a replacement that completes the quiesce handoff.
+    command_t wake;
+    memset (&wake, 0, sizeof (wake));
+    wake.destination = this;
+    wake.type = command_t::request_completion;
+    static_cast<mailbox_t *> (_mailbox)->send (wake);
+    return true;
 }
 
 void zlink::socket_base_t::wait_async_quiesced (int timeout_ms_)
@@ -638,12 +957,16 @@ void zlink::socket_base_t::wait_async_quiesced (int timeout_ms_)
     if (!lifecycle.is_async_quiesce_pending ())
         return;
 
-    scoped_lock_t lock (lifecycle.async_done_mu);
     const int wait_timeout_ms =
       timeout_ms_ < 0 ? -1 : timeout_ms_ > 0 ? timeout_ms_ : 2000;
+    const wait_timeout_budget_t wait_budget (_clock, wait_timeout_ms);
+    scoped_lock_t lock (lifecycle.async_done_mu);
     while (lifecycle.is_async_quiesce_pending ()) {
+        int remaining_timeout = 0;
+        if (!wait_budget.remaining (&remaining_timeout))
+            break;
         const int rc = lifecycle.async_done_cv.wait (
-          &lifecycle.async_done_mu, wait_timeout_ms);
+          &lifecycle.async_done_mu, remaining_timeout);
         if (rc != 0)
             break;
     }
@@ -780,12 +1103,21 @@ void zlink::socket_base_t::release_monitor_async_command_processing (
               false, std::memory_order_acq_rel))
             return;
     }
-    LIBZLINK_UNUSED (wait_for_quiescence_);
-    request_unowned_async_command_processing_stop ();
+    request_unowned_async_command_processing_stop (wait_for_quiescence_);
 }
 
-void zlink::socket_base_t::request_unowned_async_command_processing_stop ()
+void zlink::socket_base_t::request_unowned_async_command_processing_stop (
+  bool wait_for_quiescence_)
 {
+    socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
+    if (wait_for_quiescence_
+        && current_async_mailbox_dispatch_socket () != this) {
+        const bool stop_started = stop_async_mailbox_processing (true);
+        if (stop_started || lifecycle.is_async_quiesce_pending ())
+            wait_async_quiesced (10000);
+        return;
+    }
+
     bool schedule_recheck = false;
     {
         scoped_lock_t progress_lock (_transport_pair_owner_progress_sync);
@@ -820,6 +1152,7 @@ void zlink::socket_base_t::request_unowned_async_command_processing_stop ()
 
 bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
 {
+    socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
     bool stopped = false;
     {
         scoped_lock_t progress_lock (_transport_pair_owner_progress_sync);
@@ -831,7 +1164,7 @@ bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
             std::memory_order_acquire)
           || _completion_poller_refs.load (std::memory_order_acquire) != 0;
         if (!_async_command_processing_stop_requested || leased
-            || !lifecycle_coordinator ().is_async_mailbox_active ()) {
+          || !lifecycle.is_async_mailbox_active ()) {
             if (leased)
                 _async_command_processing_stop_requested = false;
             return false;
@@ -851,13 +1184,13 @@ bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
         if (!mailbox->detach_io_context_if_idle ())
             return false;
         invalidate_completion_processing_owner ();
-        lifecycle_coordinator ().stop_async_mailbox_processing (NULL);
+        lifecycle.stop_async_mailbox_processing (NULL);
         _async_command_processing_stop_requested = false;
         // A new executor also takes the owner gate before installing itself, so
         // release the old receive lease before making the detached state
         // observable to that acquire.
         receive_runtime ().release_receive_sync_from_async_owner ();
-        lifecycle_coordinator ().mark_async_processing_stopped (NULL);
+        lifecycle.mark_async_processing_stopped (NULL);
         //  This executor consumed the primary notification descriptor while
         //  it drained the commands that led here (for example the
         //  activate_read of the first message after a monitor closed). The
@@ -874,8 +1207,29 @@ bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
 
 int zlink::socket_base_t::acquire_transport_pair_owner_progress ()
 {
+    return acquire_transport_pair_owner_progress_with_timeout (10000,
+                                                                EBUSY);
+}
+
+int zlink::socket_base_t::acquire_transport_pair_owner_progress_for_submit (
+  int timeout_ms_)
+{
+    return acquire_transport_pair_owner_progress_with_timeout (timeout_ms_,
+                                                                EAGAIN);
+}
+
+int zlink::socket_base_t::acquire_transport_pair_owner_progress_with_timeout (
+  int timeout_ms_, int timeout_errno_)
+{
     socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
+    const wait_timeout_budget_t wait_budget (_clock, timeout_ms_);
     for (;;) {
+        int remaining_timeout = 0;
+        if (timeout_ms_ == 0
+            || !wait_budget.remaining (&remaining_timeout)) {
+            errno = timeout_errno_;
+            return -1;
+        }
         bool wait_for_quiescence = false;
         {
             socket_public_api_scope_t admission (lifecycle);
@@ -924,9 +1278,13 @@ int zlink::socket_base_t::acquire_transport_pair_owner_progress ()
             invoke_async_owner_transition_test_hook (
               async_owner_test_transport_acquire_waiting_for_quiesce);
 #endif
-            wait_async_quiesced (10000);
+            if (!wait_budget.remaining (&remaining_timeout)) {
+                errno = timeout_errno_;
+                return -1;
+            }
+            wait_async_quiesced (remaining_timeout);
             if (lifecycle.is_async_quiesce_pending ()) {
-                errno = EBUSY;
+                errno = timeout_errno_;
                 return -1;
             }
         }

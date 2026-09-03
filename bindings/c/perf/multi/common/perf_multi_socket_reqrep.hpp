@@ -75,6 +75,7 @@ struct client_state_t
         active_msg_size (0),
         active_deadline_ns (0),
         active_reply_count (0),
+        capture_latency (false),
         fatal (false),
         slots (),
         events (),
@@ -87,6 +88,7 @@ struct client_state_t
     size_t active_msg_size;
     uint64_t active_deadline_ns;
     unsigned long long active_reply_count;
+    bool capture_latency;
     bool fatal;
     // Every socket is registered on one POLLCOMPLETION poller. The benchmark
     // thread therefore owns submission, reply callbacks, and metrics.
@@ -167,8 +169,20 @@ inline void record_request_completion (client_slot_t *slot,
     const double sample_ns =
       static_cast<double> (now_ns - static_cast<uint64_t> (header.sent_ts_ns)) * 0.5;
     ++state->active_reply_count;
-    state->latency.add (sample_ns);
+    if (state->capture_latency)
+        state->latency.add (sample_ns);
 }
+
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
+inline void on_request_reply (zlink_request_result_t result,
+                              zlink_msg_t *parts,
+                              size_t part_count,
+                              void *userdata)
+{
+    record_request_completion (static_cast<client_slot_t *> (userdata), result, parts,
+                               part_count);
+}
+#endif
 
 inline bool submit_request (const endpoint_config_t &config,
                             client_slot_t *slot,
@@ -201,8 +215,35 @@ inline bool submit_request (const endpoint_config_t &config,
     if (payload_size > 0)
         std::memcpy (zlink_msg_data (&part), slot->payload.data (), payload_size);
 
-    zlink_completion_id_t completion_id = 0;
     zlink_submit_result_t rc = ZLINK_SUBMIT_INVALID_ARGUMENT;
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
+    ++slot->outstanding;
+    if (config.client_router_request) {
+        if (!target_rid || target_rid->size == 0) {
+            zlink_msg_close (&part);
+            --slot->outstanding;
+            errno = EINVAL;
+            return false;
+        }
+        rc = perf_zlink_router_request_measurement_part (
+          slot->socket, target_rid, &part, ZLINK_SEND_FLAGS_DONTWAIT, timeout_ms,
+          on_request_reply, slot);
+    } else {
+        rc = perf_zlink_dealer_request_measurement_part (
+          slot->socket, &part, ZLINK_SEND_FLAGS_DONTWAIT, timeout_ms,
+          on_request_reply, slot);
+    }
+
+    if (rc == ZLINK_SUBMIT_OK) {
+        ++slot->next_seq;
+        return true;
+    }
+
+    const int err = zlink_errno ();
+    zlink_msg_close (&part);
+    --slot->outstanding;
+#else
+    zlink_completion_id_t completion_id = 0;
     if (config.client_router_request) {
         if (!target_rid || target_rid->size == 0) {
             zlink_msg_close (&part);
@@ -229,6 +270,7 @@ inline bool submit_request (const endpoint_config_t &config,
         errno = EPROTO;
         return false;
     }
+#endif
     if (is_transient_submit (rc, err)) {
         if (blocked_out)
             *blocked_out = true;
@@ -237,6 +279,7 @@ inline bool submit_request (const endpoint_config_t &config,
     return false;
 }
 
+#if !defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
 inline bool drain_socket_completions (client_state_t *state, void *socket)
 {
     if (!state || !socket)
@@ -266,11 +309,16 @@ inline bool drain_socket_completions (client_state_t *state, void *socket)
             return false;
     }
 }
+#endif
 
 inline bool drain_ready_completions (client_state_t *state, int event_count)
 {
     if (!state || event_count < 0)
         return false;
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
+    (void) event_count;
+    return true;
+#else
     for (int i = 0; i < event_count; ++i) {
         const zlink_poller_event_t &event = state->events[static_cast<size_t> (i)];
         if ((event.events & ZLINK_POLLCOMPLETION) != 0
@@ -278,6 +326,7 @@ inline bool drain_ready_completions (client_state_t *state, int event_count)
             return false;
     }
     return true;
+#endif
 }
 
 inline bool any_waiting_reply (const client_state_t &state)
@@ -315,13 +364,16 @@ inline bool drain_pending_replies (client_state_t *state, uint32_t request_timeo
     return !any_waiting_reply (*state);
 }
 
-inline bool run_active_window (const endpoint_config_t &config,
-                               client_state_t *state,
-                               const multi_bench_settings_t &settings,
-                               uint32_t run_id,
-                               size_t msg_size,
-                               unsigned long long *reply_count_out,
-                               bench_latency_stats_t *latency_out)
+inline bool run_measurement_window (const endpoint_config_t &config,
+                                    client_state_t *state,
+                                    const multi_bench_settings_t &settings,
+                                    uint32_t run_id,
+                                    size_t msg_size,
+                                    int duration_seconds,
+                                    size_t max_in_flight_per_client,
+                                    bool capture_latency,
+                                    unsigned long long *reply_count_out,
+                                    bench_latency_stats_t *latency_out)
 {
     if (!state || !state->poller || !reply_count_out || !latency_out) {
         errno = EINVAL;
@@ -340,8 +392,9 @@ inline bool run_active_window (const endpoint_config_t &config,
     state->active_msg_size = msg_size;
     state->active_deadline_ns =
       perf_multi_metric::now_ns ()
-      + static_cast<uint64_t> (std::max (1, settings.duration_seconds)) * 1000000000ULL;
+      + static_cast<uint64_t> (std::max (1, duration_seconds)) * 1000000000ULL;
     state->active_reply_count = 0;
+    state->capture_latency = capture_latency;
     state->latency.reset ();
     for (size_t i = 0; i < state->slots.size (); ++i)
         state->slots[i].outstanding = 0;
@@ -352,7 +405,7 @@ inline bool run_active_window (const endpoint_config_t &config,
 
     const std::chrono::steady_clock::time_point deadline =
       std::chrono::steady_clock::now ()
-      + std::chrono::seconds (std::max (1, settings.duration_seconds));
+      + std::chrono::seconds (std::max (1, duration_seconds));
     const uint32_t request_timeout_ms =
       static_cast<uint32_t> (bench_timeout_ms_from_env ("PERF_MULTI_REQREP_TIMEOUT_MS", 200));
 
@@ -360,6 +413,9 @@ inline bool run_active_window (const endpoint_config_t &config,
         bool submitted = false;
         for (size_t i = 0; i < state->slots.size (); ++i) {
             client_slot_t &slot = state->slots[i];
+            if (max_in_flight_per_client > 0
+                && slot.outstanding >= max_in_flight_per_client)
+                continue;
             bool blocked = false;
             if (!submit_request (config, &slot, target_rid_ptr, run_id, msg_size,
                                  request_timeout_ms, &blocked)) {
@@ -384,14 +440,70 @@ inline bool run_active_window (const endpoint_config_t &config,
             return false;
     }
 
-    if (state->fatal)
+    if (state->fatal) {
+        std::cerr << "[perf-multi-socket-reqrep] fatal during window size=" << msg_size
+                  << " errno=" << errno << std::endl;
         return false;
-    if (!drain_pending_replies (state, request_timeout_ms))
+    }
+    if (!drain_pending_replies (state, request_timeout_ms)) {
+        size_t waiting_slots = 0;
+        unsigned long long waiting_requests = 0;
+        for (size_t i = 0; i < state->slots.size (); ++i) {
+            if (state->slots[i].outstanding > 0) {
+                ++waiting_slots;
+                waiting_requests += state->slots[i].outstanding;
+            }
+        }
+        std::cerr << "[perf-multi-socket-reqrep] drain timeout size=" << msg_size
+                  << " waiting_slots=" << waiting_slots << "/" << state->slots.size ()
+                  << " waiting_requests=" << waiting_requests
+                  << " request_timeout_ms=" << request_timeout_ms
+                  << " replies=" << state->active_reply_count << std::endl;
         return false;
+    }
 
     *reply_count_out = state->active_reply_count;
-    *latency_out = state->latency.snapshot ();
+    *latency_out = capture_latency ? state->latency.snapshot () : bench_latency_stats_t ();
+    if (capture_latency && state->latency.count () == 0) {
+        std::cerr << "[perf-multi-socket-reqrep] no latency samples size=" << msg_size
+                  << " replies=" << state->active_reply_count << std::endl;
+        return false;
+    }
     return true;
+}
+
+inline int latency_phase_duration_seconds ()
+{
+    return 1;
+}
+
+inline size_t latency_phase_max_in_flight_per_client ()
+{
+    return 1;
+}
+
+inline bool run_active_window (const endpoint_config_t &config,
+                               client_state_t *state,
+                               const multi_bench_settings_t &settings,
+                               uint32_t run_id,
+                               size_t msg_size,
+                               unsigned long long *reply_count_out,
+                               bench_latency_stats_t *latency_out)
+{
+    bench_latency_stats_t ignored_latency;
+    if (!run_measurement_window (config, state, settings, run_id, msg_size,
+                                 settings.duration_seconds, 0, false, reply_count_out,
+                                 &ignored_latency)) {
+        return false;
+    }
+
+    // Phase 1 drains all saturated request completions before Phase 2 starts.
+    // During Phase 2 each client timestamps a new request only after its
+    // preceding REQUEST completion has reduced outstanding to zero.
+    unsigned long long latency_reply_count = 0;
+    return run_measurement_window (
+      config, state, settings, run_id, msg_size, latency_phase_duration_seconds (),
+      latency_phase_max_in_flight_per_client (), true, &latency_reply_count, latency_out);
 }
 
 inline bool setup_client_state (const endpoint_config_t &config,
@@ -542,14 +654,18 @@ inline int run_client_benchmark (const endpoint_config_t &config,
 
 inline bool submit_router_reply_with_retry (void *server,
                                             const zlink_routing_id_t *source_rid,
-                                            zlink_reply_token_t reply_token,
+                                            uint64_t reply_token,
                                             zlink_msg_t *part)
 {
     if (!server || !source_rid || reply_token == 0 || !part)
         return false;
 
     if (perf_measurement_part_count () == 2u) {
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
+        const zlink_submit_result_t payload_rc = zlink_router_reply_part (
+#else
         const zlink_submit_result_t payload_rc = zlink_reply_part (
+#endif
           server, source_rid, reply_token, part, ZLINK_PART_MORE);
         if (payload_rc != ZLINK_SUBMIT_OK)
             return false;
@@ -557,7 +673,11 @@ inline bool submit_router_reply_with_retry (void *server,
             zlink_msg_t empty_part;
             if (zlink_msg_init (&empty_part) != 0)
                 return false;
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
+            const zlink_submit_result_t final_rc = zlink_router_reply_part (
+#else
             const zlink_submit_result_t final_rc = zlink_reply_part (
+#endif
               server, source_rid, reply_token, &empty_part, ZLINK_PART_FINAL);
             if (final_rc == ZLINK_SUBMIT_OK)
                 return true;
@@ -583,8 +703,13 @@ inline bool submit_router_reply_with_retry (void *server,
         return false;
     }
 
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
+    zlink_submit_result_t reply_rc =
+      zlink_router_reply_part (server, source_rid, reply_token, part, ZLINK_PART_FINAL);
+#else
     zlink_submit_result_t reply_rc =
       zlink_reply_part (server, source_rid, reply_token, part, ZLINK_PART_FINAL);
+#endif
     while (reply_rc == ZLINK_SUBMIT_BACKPRESSURED
            && !perf_stop_requested ().load (std::memory_order_acquire)) {
         zlink_pollitem_t item = {server, 0, ZLINK_POLLOUT, 0};
@@ -606,7 +731,11 @@ inline bool submit_router_reply_with_retry (void *server,
             reply_rc = ZLINK_SUBMIT_TERMINATED;
             break;
         }
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
+        reply_rc = zlink_router_reply_part (
+#else
         reply_rc = zlink_reply_part (
+#endif
           server, source_rid, reply_token, &retry, ZLINK_PART_FINAL);
     }
 
@@ -629,7 +758,7 @@ inline server_recv_step_t reply_one_request (void *server,
                                              size_t *active_msg_size)
 {
     const zlink_routing_id_t *source_rid = NULL;
-    zlink_reply_token_t reply_token = 0;
+    uint64_t reply_token = 0;
     zlink_msg_t part;
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
     if (zlink_msg_init (&part) != 0)

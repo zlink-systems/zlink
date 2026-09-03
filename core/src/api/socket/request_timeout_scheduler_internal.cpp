@@ -20,7 +20,8 @@ namespace request_timeout
 {
 namespace
 {
-typedef std::multimap<uint64_t, std::shared_ptr<struct task_t>> schedule_map_t;
+typedef std::multimap<uint64_t, std::shared_ptr<struct task_t>>
+  tasks_by_deadline_t;
 const uint64_t idle_exit_wait_ns = static_cast<uint64_t> (100) * static_cast<uint64_t> (1000000);
 #ifdef ZLINK_BUILD_TESTS
 std::atomic<uint64_t> cancel_notification_count (0);
@@ -33,12 +34,10 @@ struct task_t
         registered (false),
         canceled (false),
         firing (false),
-        completed (false),
-        deadline_ns (0),
         handler (NULL),
         cleanup (NULL),
         userdata (NULL),
-        schedule_it (schedule_map_t::iterator ())
+        deadline_it (tasks_by_deadline_t::iterator ())
     {
     }
 
@@ -53,16 +52,14 @@ struct task_t
     bool registered;
     bool canceled;
     bool firing;
-    bool completed;
     //  Lets cancel() detect a self-cancel from inside the firing handler
     //  (an operation completing itself on timeout) and skip the wait that
     //  would otherwise deadlock on its own completion.
     std::thread::id firing_thread;
-    uint64_t deadline_ns;
     handler_fn handler;
     cleanup_fn cleanup;
     void *userdata;
-    schedule_map_t::iterator schedule_it;
+    tasks_by_deadline_t::iterator deadline_it;
 };
 
 namespace
@@ -71,7 +68,7 @@ struct scheduler_state_t
 {
     std::mutex mutex;
     std::condition_variable cv;
-    schedule_map_t schedule;
+    tasks_by_deadline_t tasks_by_deadline;
     std::thread thread;
     uint64_t next_wake_ns;
     bool started;
@@ -97,11 +94,11 @@ void run_timeout_loop ()
         std::shared_ptr<task_t> task;
         {
             std::unique_lock<std::mutex> lock (state.mutex);
-            while (state.schedule.empty ()) {
+            while (state.tasks_by_deadline.empty ()) {
                 state.next_wake_ns = monotonic_now_ns () + idle_exit_wait_ns;
                 if (state.cv.wait_for (lock, std::chrono::nanoseconds (idle_exit_wait_ns))
                       == std::cv_status::timeout
-                    && state.schedule.empty ()) {
+                    && state.tasks_by_deadline.empty ()) {
                     state.next_wake_ns = 0;
                     state.started = false;
                     return;
@@ -109,11 +106,12 @@ void run_timeout_loop ()
             }
 
             for (;;) {
-                if (state.schedule.empty ())
+                if (state.tasks_by_deadline.empty ())
                     break;
 
                 const uint64_t now_ns = monotonic_now_ns ();
-                const schedule_map_t::iterator next = state.schedule.begin ();
+                const tasks_by_deadline_t::iterator next =
+                  state.tasks_by_deadline.begin ();
                 if (next->first > now_ns) {
                     state.next_wake_ns = next->first;
                     state.cv.wait_for (lock, std::chrono::nanoseconds (next->first - now_ns));
@@ -121,9 +119,9 @@ void run_timeout_loop ()
                 }
 
                 task = next->second;
-                state.schedule.erase (next);
+                state.tasks_by_deadline.erase (next);
                 task->registered = false;
-                task->schedule_it = schedule_map_t::iterator ();
+                task->deadline_it = tasks_by_deadline_t::iterator ();
                 break;
             }
         }
@@ -135,7 +133,7 @@ void run_timeout_loop ()
         void *userdata = NULL;
         {
             std::lock_guard<std::mutex> lock (task->mutex);
-            if (!task->canceled && !task->completed) {
+            if (!task->canceled) {
                 task->firing = true;
                 task->firing_thread = std::this_thread::get_id ();
                 handler = task->handler;
@@ -151,7 +149,6 @@ void run_timeout_loop ()
         {
             std::lock_guard<std::mutex> lock (task->mutex);
             task->firing = false;
-            task->completed = true;
             task->cv.notify_all ();
         }
     }
@@ -173,17 +170,17 @@ schedule (uint32_t timeout_ms_, handler_fn handler_, void *userdata_, cleanup_fn
         task->cleanup = cleanup_;
         task->userdata = userdata_;
         userdata_adopted = true;
-        task->deadline_ns = deadline_after_ms (timeout_ms_);
+        const uint64_t deadline_ns = deadline_after_ms (timeout_ms_);
 
         {
             scheduler_state_t &state = scheduler_state ();
             std::lock_guard<std::mutex> lock (state.mutex);
-            // Hot path: only wake the scheduler when this request becomes the next
-            // deadline. Notifying on every request reintroduces cross-thread wake
-            // churn in high-rate request/reply workloads.
+            // Wake only when this task becomes the next deadline. Later tasks
+            // can share the scheduler's existing sleep without cross-thread
+            // wake churn.
             const bool should_notify =
               state.next_wake_ns == 0
-              || task->deadline_ns < state.next_wake_ns;
+              || deadline_ns < state.next_wake_ns;
             //  The liveness check must share this critical section with the
             //  insert: the scheduler thread commits its idle exit under the same
             //  lock, so checking `started` in a separate lock hold can strand the
@@ -196,8 +193,8 @@ schedule (uint32_t timeout_ms_, handler_fn handler_, void *userdata_, cleanup_fn
                 state.thread.detach ();
                 state.started = true;
             }
-            task->schedule_it =
-              state.schedule.insert (std::make_pair (task->deadline_ns, task));
+            task->deadline_it = state.tasks_by_deadline.insert (
+              std::make_pair (deadline_ns, task));
             task->registered = true;
             if (!starting && should_notify)
                 state.cv.notify_all ();
@@ -221,18 +218,17 @@ void cancel (const std::shared_ptr<task_t> &task_)
     {
         std::lock_guard<std::mutex> schedule_lock (state.mutex);
         if (task_->registered) {
-            if (task_->schedule_it != state.schedule.end ()) {
-                const bool was_earliest =
-                  task_->schedule_it == state.schedule.begin ();
-                state.schedule.erase (task_->schedule_it);
-                // Removing the earliest task can only move the next deadline
-                // later, so the scheduler's existing wait remains safe. Wake
-                // only when the queue became empty so its bounded idle-exit
-                // lifecycle is not delayed until the canceled deadline.
-                notify_scheduler = was_earliest && state.schedule.empty ();
-            }
+            const bool was_earliest =
+              task_->deadline_it == state.tasks_by_deadline.begin ();
+            state.tasks_by_deadline.erase (task_->deadline_it);
+            // Removing the earliest task can only move the next deadline
+            // later, so the scheduler's existing wait remains safe. Wake only
+            // when the queue became empty so its bounded idle-exit lifecycle
+            // is not delayed until the canceled deadline.
+            notify_scheduler =
+              was_earliest && state.tasks_by_deadline.empty ();
             task_->registered = false;
-            task_->schedule_it = schedule_map_t::iterator ();
+            task_->deadline_it = tasks_by_deadline_t::iterator ();
         }
     }
     if (notify_scheduler) {
@@ -246,7 +242,6 @@ void cancel (const std::shared_ptr<task_t> &task_)
     task_->canceled = true;
     while (task_->firing && task_->firing_thread != std::this_thread::get_id ())
         task_->cv.wait (lock);
-    task_->completed = true;
 }
 
 #ifdef ZLINK_BUILD_TESTS

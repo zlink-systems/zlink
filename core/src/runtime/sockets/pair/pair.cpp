@@ -115,6 +115,27 @@ int zlink::pair_t::xsend (
     return 0;
 }
 
+bool zlink::pair_t::xtry_send_complete_record (msg_t *parts_,
+                                               size_t part_count_)
+{
+    if (!parts_ || part_count_ < 2 || !_pipe)
+        return false;
+#ifdef ZLINK_BUILD_TESTS
+    // Preserve the per-frame test interception contract by falling back to
+    // xsend whenever a test has installed its gate hook.
+    if (g_pair_xsend_gate_hook.load (std::memory_order_acquire))
+        return false;
+#endif
+    if (!_pipe->try_write_complete_record_and_flush (parts_, part_count_))
+        return false;
+
+    for (size_t i = 0; i != part_count_; ++i) {
+        const int rc = parts_[i].init ();
+        errno_assert (rc == 0);
+    }
+    return true;
+}
+
 int zlink::pair_t::xrollback ()
 {
     if (_pipe)

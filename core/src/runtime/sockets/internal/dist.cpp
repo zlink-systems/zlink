@@ -54,16 +54,18 @@ bool zlink::dist_t::has_pipe (pipe_t *pipe_)
 
 void zlink::dist_t::match (pipe_t *pipe_)
 {
+    const pipes_t::size_type index = _pipes.index (pipe_);
+
     //  If pipe is already matching do nothing.
-    if (_pipes.index (pipe_) < _matching)
+    if (index < _matching)
         return;
 
     //  If the pipe isn't eligible, ignore it.
-    if (_pipes.index (pipe_) >= _eligible)
+    if (index >= _eligible)
         return;
 
     //  Mark the pipe as matching.
-    _pipes.swap (_pipes.index (pipe_), _matching);
+    _pipes.swap (index, _matching);
     _matching++;
     _matching_hwm_cache_valid = false;
 }

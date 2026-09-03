@@ -1,0 +1,23 @@
+역할: zlink Core posddd 리팩토링 수행자(sol ultra). 작업 트리: /home/hep7hep7/project/zlink (branch perf/phase2-judge, 여기서 직접 작업). **수정은 아래 "담당 범위" 파일로 한정한다.** 범위 밖 파일은 읽기만 한다(다른 범위는 다음 job이 순서대로 맡는다). 범위 밖 수정이 꼭 필요하면 BLOCKERS에 "파일:함수 — 필요한 변경" 형태로 적는다.
+
+목표(사용자 지시): posddd 기반 리팩토링. 불필요한 코드 정리, 중복·pass-through 제거, 책임 분리, 명명 정합. **성능 개선이 없어도 구조 개선이 있으면 채택.** 동작 보존(공개 API·ABI·enum·계약 불변; 동작 변경이 필요해 보이면 하지 말고 BLOCKERS에).
+
+먼저 읽을 것: doc/principal/dev/posddd.ko.md 전체, core/doc/spec/core/systems/08-posd-module-structure.ko.md, 07-core-source-layout.ko.md, core/doc/spec/core/systems/10-hot-path.ko.md(§2 범위·§3 금지 7항·§4 캐시/후퇴 — 위반이 담당 범위에 남아 있으면 §4 형태로 고친다, 단 동작 보존 안에서), 최근 Core 커밋(`git log --oneline -6`, `git show --stat HEAD`)의 diff.
+
+정리 항목(각각 실제 근거를 찾아 적용; 추정으로 지우지 않음):
+1. 불필요 코드: 호출자 0인 함수·분기·필드·옵션(`rg`로 전 트리 확인, 담당 범위 밖 호출자도 포함), 구 경로 잔재, 주석 처리 코드, 미사용 include/typedef.
+2. 중복·pass-through: 같은 검사를 반복하는 헬퍼, 한 줄 위임 래퍼, 같은 rollback/close 루틴 사본 → 한 곳으로.
+3. 책임 분리(posddd): 한 함수가 선택·admit·대기·후퇴를 다 하는 곳은 "fast path"와 "commit된 endpoint 대기 루프"로 분리해 읽히게. 상태 캐시 게시 지점은 한 곳으로. 파일이 책임 경계와 어긋나면 07-core-source-layout에 맞춰 이동(git mv 대신 새 파일 생성+구 파일 삭제로; include 방향 유지) — 단 담당 범위 안에서만.
+4. 명명·주석: 기존 명명 규칙과 어긋난 이름은 맞춘다. 주석은 "왜"만 남기고 구현 반복 설명은 지운다.
+5. 핫패스 §3 위반 잔존 시 §4 형태로 정리(동작 보존 범위 안에서만).
+
+Gate(전부 green, `ulimit -v 16777216`, core/build 사용): `cmake --build core/build -j4`; `ctest --test-dir core/build -j2` 전체(기준 134); `git diff --check`; raw mirror cmp 12(`for l in c cpp go rust; do for h in zlink_enum.h zlink/socket/api.h zlink/eventing/api.h; do cmp -s core/include/$h bindings/$l/include/$h || echo MIRROR DIFF $l/$h; done; done`). 알려진 flake: test_single_lane_flow_snapshot_accounting 드문 즉시 실패 → 단독 재실행 1회. **perf 측정은 하지 않는다**(감독관이 job 뒤 1024B 경량 비교로 수행). 바인딩 테스트(cpp/python)도 감독관 몫.
+
+절대 규칙: doc/**·core/doc/** 수정 금지. framework/**·bindings/** 수정 금지(raw header mirror 동기화만 예외). scripts/local-package/** 실행 금지. git commit/push/reset/restore/checkout/stash 금지. hotpath_reference.json 수정 금지. 공개 API·ABI·계약 변경 금지. 새 옵션·제어점 금지. 빌드 -j4, ctest -j2 (RAM 11GB).
+
+완료 시 /home/hep7hep7/project/zlink-work/c016/posddd-rf3-summary.md 에: 항목별 변경(삭제 함수/필드 목록과 "호출자 0" 근거, 분리·이동한 책임, 명명 변경 표), 줄 수 증감, gate 결과, BLOCKERS(범위 밖 필요 변경·동작 변경 보류). 진행은 /home/hep7hep7/project/zlink-work/c016/posddd-rf3-progress.md 에 단계마다 append. 커밋은 감독관이 항목별(불필요 코드 제거 / 책임 분리 / 명명)로 나누므로 변경을 항목별로 구분해 요약에 파일 목록을 적는다.
+
+담당 범위:
+core/src/runtime/core/pipe.cpp·pipe.hpp·pipe_stream_packet_state.hpp·ypipe.hpp·ypipe_base.hpp·ypipe_conflate.hpp·mailbox.cpp·mailbox.hpp·i_mailbox.hpp·session_base_pipe_io.cpp. 그 밖은 읽기만. 이 범위는 핫패스 핵심이므로 특히 §3 위반과 wake 계약(05-polling §3 lost-wake 금지)을 보존 근거와 함께 정리한다.
+
+앞선 job이 넘긴 이 범위의 항목(근거는 $ZLINK_WORK/c016/posddd-rf2-summary.md BLOCKERS): (1) `pipe_t::check_read_with_record_admission` — tracked runtime 호출자 0(선언/정의만) → 삭제. (2) `router_recv_path.cpp:router_t::copy_router_pipe_source_rid`의 receive hot path에 남은 `_out_pipes_sync`+`_standby_pipes.find`를 대체할 pipe-owned route-binding snapshot(topology 시점에 게시, receive 경로는 atomic 읽기만) — pipe 쪽 필드/게시 API를 이 job이 제공하고, router 쪽 호출은 범위 밖이므로 요약에 "호출 교체 지점"으로 적는다(동작 보존 확인이 되면 router_recv_path.cpp 한 지점만 함께 바꾸는 것은 허용). (3) rf1 요약의 pipe 관련 항목이 있으면 같이 본다($ZLINK_WORK/c016/posddd-rf1-summary.md).

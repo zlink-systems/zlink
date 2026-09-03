@@ -1,66 +1,26 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
 #include "utils/precompiled.hpp"
-#include "core/c_api_copy_internal.hpp"
 #include "utils/macros.hpp"
 #include "sockets/router/router.hpp"
+#include "sockets/router/router_debug.hpp"
 #include "core/pipe.hpp"
-#include "protocol/wire.hpp"
 #include "utils/random.hpp"
-#include "utils/likely.hpp"
 #include "utils/err.hpp"
 #include "utils/debug_log.hpp"
-#include <cstdlib>
 #include <cstdio>
+
+const bool zlink::router_debug::enabled_flag =
+  zlink::debug_env_enabled ("ZLINK_ROUTER_DEBUG");
 
 namespace
 {
-const bool router_debug_on = zlink::debug_env_enabled ("ZLINK_ROUTER_DEBUG");
 const int router_transport_write_batch_size = 16 * 1024;
-
-void format_routing_id_debug (const zlink_routing_id_t *rid_, char *buf_, size_t buf_size_)
-{
-    if (!buf_ || buf_size_ == 0) {
-        return;
-    }
-
-    if (!rid_ || rid_->size == 0) {
-        std::snprintf (buf_, buf_size_, "<empty>");
-        return;
-    }
-
-    size_t used = 0;
-    for (size_t i = 0; i < rid_->size && used + 4 < buf_size_; ++i) {
-        const unsigned char c = rid_->data[i];
-        const int rc = std::snprintf (buf_ + used, buf_size_ - used, "%c%02X",
-                                      (c >= 32 && c <= 126) ? static_cast<char> (c) : '.',
-                                      static_cast<unsigned> (c));
-        if (rc <= 0)
-            break;
-        used += static_cast<size_t> (rc);
-        if (i + 1 < rid_->size && used + 2 < buf_size_) {
-            buf_[used++] = ' ';
-            buf_[used] = '\0';
-        }
-    }
-}
-
-void format_blob_routing_id_debug (const zlink::blob_t &routing_id_, char *buf_, size_t buf_size_)
-{
-    zlink_routing_id_t rid;
-    zlink::copy_routing_id_from_bytes (routing_id_.data (), routing_id_.size (), &rid);
-    format_routing_id_debug (&rid, buf_, buf_size_);
-}
-
-}
-
-static bool router_debug_enabled ()
-{
-    return router_debug_on;
 }
 
 zlink::router_t::router_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     routing_socket_base_t (parent_, tid_, sid_),
+    _fq (fq_t::publish_receive_activity),
     _prefetched (false),
     _routing_id_sent (false),
     _current_in (NULL),
@@ -249,10 +209,10 @@ void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
             }
         }
 
-        if (router_debug_enabled ()) {
+        if (router_debug::enabled ()) {
             char rid_text[160];
-            format_blob_routing_id_debug (pipe_->get_routing_id (), rid_text,
-                                          sizeof (rid_text));
+            router_debug::format_routing_id (
+              pipe_->get_routing_id (), rid_text, sizeof (rid_text));
             fprintf (stderr,
                      "router xpipe_terminated: pipe=%p rid=%s anonymous=%d\n",
                      static_cast<void *> (pipe_), rid_text,
@@ -263,8 +223,7 @@ void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
             erase_out_pipe (pipe_);
             rollback_outbound = true;
             if (pipe_ == _current_out) {
-                _current_out = NULL;
-                _current_out_connection_id = 0;
+                clear_current_out_pipe ();
                 _more_out = false;
             }
         }
@@ -300,8 +259,7 @@ int zlink::router_t::xrollback ()
           _out_pipes_sync);
         if (_current_out && _current_out->retain_lifetime_ref ())
             rollback_pipe = _current_out;
-        _current_out = NULL;
-        _current_out_connection_id = 0;
+        clear_current_out_pipe ();
         _more_out = false;
     }
     if (rollback_pipe) {

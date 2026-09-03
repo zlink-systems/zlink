@@ -11,9 +11,8 @@ namespace zlink
 {
 struct multipart_send_facade_t
 {
-    static socket_public_send_scope_t make_scope (socket_base_t *socket_, bool force_sync_)
+    static socket_public_send_scope_t make_scope (socket_base_t *socket_)
     {
-        LIBZLINK_UNUSED (force_sync_);
         return socket_public_send_scope_t (socket_->lifecycle_coordinator (), true,
                                            socket_send_admission_complete);
     }
@@ -303,7 +302,7 @@ int zlink::logical_multipart_send (socket_base_t *socket_,
     }
 
     zlink::socket_public_send_scope_t send_scope =
-      zlink::multipart_send_facade_t::make_scope (socket_, true);
+      zlink::multipart_send_facade_t::make_scope (socket_);
     if (!send_scope.acquired ())
         return -1;
 
@@ -328,7 +327,7 @@ int zlink::logical_multipart_send_tracked (socket_base_t *socket_,
     }
 
     zlink::socket_public_send_scope_t send_scope =
-      zlink::multipart_send_facade_t::make_scope (socket_, true);
+      zlink::multipart_send_facade_t::make_scope (socket_);
     if (!send_scope.acquired ())
         return -1;
 
@@ -359,7 +358,7 @@ int zlink::logical_multipart_send_routed_tracked (
     }
 
     zlink::socket_public_send_scope_t send_scope =
-      zlink::multipart_send_facade_t::make_scope (socket_, true);
+      zlink::multipart_send_facade_t::make_scope (socket_);
     if (!send_scope.acquired ())
         return -1;
 
@@ -380,7 +379,7 @@ int zlink::logical_multipart_send_routed (socket_base_t *socket_,
     }
 
     zlink::socket_public_send_scope_t send_scope =
-      zlink::multipart_send_facade_t::make_scope (socket_, true);
+      zlink::multipart_send_facade_t::make_scope (socket_);
     if (!send_scope.acquired ())
         return -1;
 
@@ -406,7 +405,7 @@ int zlink::logical_multipart_send_prefixed (socket_base_t *socket_,
     }
 
     zlink::socket_public_send_scope_t send_scope =
-      zlink::multipart_send_facade_t::make_scope (socket_, false);
+      zlink::multipart_send_facade_t::make_scope (socket_);
     if (!send_scope.acquired ())
         return -1;
 
@@ -428,7 +427,7 @@ int zlink::logical_multipart_send_prefixed_frame (socket_base_t *socket_,
     }
 
     zlink::socket_public_send_scope_t send_scope =
-      zlink::multipart_send_facade_t::make_scope (socket_, false);
+      zlink::multipart_send_facade_t::make_scope (socket_);
     if (!send_scope.acquired ())
         return -1;
 
@@ -451,7 +450,7 @@ int zlink::logical_multipart_send_routed_prefixed_frame (socket_base_t *socket_,
     }
 
     zlink::socket_public_send_scope_t send_scope =
-      zlink::multipart_send_facade_t::make_scope (socket_, true);
+      zlink::multipart_send_facade_t::make_scope (socket_);
     if (!send_scope.acquired ())
         return -1;
 
@@ -497,7 +496,7 @@ int zlink::logical_multipart_send_prefixed_frames (socket_base_t *socket_,
     }
 
     zlink::socket_public_send_scope_t send_scope =
-      zlink::multipart_send_facade_t::make_scope (socket_, false);
+      zlink::multipart_send_facade_t::make_scope (socket_);
     if (!send_scope.acquired ())
         return -1;
 
@@ -525,7 +524,7 @@ int zlink::logical_multipart_send_routed_prefixed_frames (socket_base_t *socket_
     }
 
     zlink::socket_public_send_scope_t send_scope =
-      zlink::multipart_send_facade_t::make_scope (socket_, true);
+      zlink::multipart_send_facade_t::make_scope (socket_);
     if (!send_scope.acquired ())
         return -1;
 
@@ -553,7 +552,7 @@ int zlink::logical_multipart_publish (socket_base_t *socket_,
     }
 
     zlink::socket_public_send_scope_t send_scope =
-      zlink::multipart_send_facade_t::make_scope (socket_, true);
+      zlink::multipart_send_facade_t::make_scope (socket_);
     if (!send_scope.acquired ())
         return -1;
 
@@ -577,7 +576,7 @@ int zlink::logical_multipart_publish_frame (socket_base_t *socket_,
     }
 
     zlink::socket_public_send_scope_t send_scope =
-      zlink::multipart_send_facade_t::make_scope (socket_, true);
+      zlink::multipart_send_facade_t::make_scope (socket_);
     if (!send_scope.acquired ())
         return -1;
 

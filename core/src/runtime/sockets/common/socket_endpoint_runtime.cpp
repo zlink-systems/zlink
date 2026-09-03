@@ -62,6 +62,9 @@ void zlink::socket_endpoint_runtime_t::store_last_recv_source_rid (
 
 void zlink::socket_endpoint_runtime_t::clear_last_recv_source_rid ()
 {
+    if (!last_recv_source_rid_valid)
+        return;
+
     memset (&last_recv_source_rid, 0, sizeof (last_recv_source_rid));
     last_recv_source_rid_valid = false;
 }

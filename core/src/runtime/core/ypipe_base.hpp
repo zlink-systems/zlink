@@ -26,9 +26,7 @@ enum ypipe_read_result_t
     ypipe_read_consumed
 };
 
-// ypipe_base abstracts ypipe and ypipe_conflate specific
-// classes, one is selected according to a the conflate
-// socket option
+//  Common queue contract for ordinary and conflating pipes.
 
 template <typename T> class ypipe_base_t
 {
@@ -63,7 +61,6 @@ template <typename T> class ypipe_base_t
     virtual bool check_read () = 0;
     virtual bool read (T *value_,
                        bool *prefetched_batch_exhausted_ = NULL) = 0;
-    virtual bool probe (bool (*fn_) (const T &)) = 0;
     //  Inspect an item that is already visible to the reader without
     //  publishing the ypipe sleep marker. Implementations may extend the
     //  reader's prefetched range only when the writer has already published
