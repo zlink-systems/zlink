@@ -1377,6 +1377,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_actor_gateway
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway.cpp
     "framework-unit;framework-regression;framework-actor;stream")
+  target_link_libraries(test_cpp_framework_actor_gateway PRIVATE
+    zlink::framework_codec_protobuf)
   target_include_directories(test_cpp_framework_actor_gateway PRIVATE
     ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_app_host PRIVATE zlink::http_client)
@@ -1580,6 +1582,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_channel_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp
     "framework-unit;framework-regression;channel")
+  target_link_libraries(test_cpp_framework_channel_messaging PRIVATE
+    zlink::framework_codec_protobuf)
   add_zlink_framework_test(
     test_cpp_framework_channel_reply_admission
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_reply_admission.cpp

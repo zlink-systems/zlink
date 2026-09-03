@@ -837,14 +837,15 @@ namespace
 
 runtime::messaging::message_parts_t
 encode_route_payload_parts (runtime::messaging::envelope_header_t header,
-                            std::type_index payload_type,
+                            std::type_index,
                             const route_client_t::payload_encoder_t &encode_payload,
                             serializer_registry_t &serializers)
 {
-    header.content_type = serializers.content_type (payload_type);
+    auto serialized = encode_payload (serializers);
+    header.content_type = std::move (serialized.content_type);
     runtime::messaging::envelope_codec_t envelope;
     return envelope.encode_raw_body_parts (
-      header, detail::encoded_payload_to_raw (encode_payload (serializers)));
+      header, detail::encoded_payload_to_raw (serialized.payload));
 }
 
 } // namespace

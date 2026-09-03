@@ -604,8 +604,8 @@ bound_session_send_call_t bound_session_t::send (const message_t &payload)
 
 bound_session_send_call_t bound_session_t::send_typed (
   std::string packet_name,
-  std::type_index message_type,
-  std::function<encoded_payload_t (serializer_registry_t &)> encode_payload)
+  std::type_index,
+  std::function<serialized_payload_t (serializer_registry_t &)> encode_payload)
 {
     if (!_state || !_state->serializers) {
         return bound_session_send_call_t (send_call_t (
@@ -613,9 +613,9 @@ bound_session_send_call_t bound_session_t::send_typed (
                                    "bound session send requires a serializer registry")));
     }
     try {
-        auto payload = detail::encoded_payload_to_raw (encode_payload (*_state->serializers));
-        const auto codec =
-          detail::stream_codec_from_content_type (_state->serializers->content_type (message_type));
+        auto serialized = encode_payload (*_state->serializers);
+        auto payload = detail::encoded_payload_to_raw (serialized.payload);
+        const auto codec = detail::stream_codec_from_content_type (serialized.content_type);
         return send_erased (std::move (packet_name), codec, payload);
     }
     catch (const framework_exception_t &error) {

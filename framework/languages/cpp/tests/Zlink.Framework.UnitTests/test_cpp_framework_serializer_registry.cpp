@@ -2,14 +2,16 @@
 
 #include <zlink/framework.hpp>
 
+#include "runtime/codecs/serializer_test_access.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
 #include <fstream>
-#include <memory>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #ifndef ZLINK_CODEC_SELECTION_CONFORMANCE_PATH
 #error "codec selection conformance fixture path is required"
@@ -18,6 +20,45 @@
 #ifndef ZLINK_PAYLOAD_OWNERSHIP_CONFORMANCE_PATH
 #error "payload ownership conformance fixture path is required"
 #endif
+
+namespace serializer_registry_test
+{
+
+struct cache_overflow_registration_key_t
+{
+};
+
+struct cache_overflow_payload_t
+{
+};
+
+} // namespace serializer_registry_test
+
+namespace zlink::framework::detail
+{
+
+template <>
+struct extension_serializer_traits_t<
+  serializer_registry_test::cache_overflow_payload_t,
+  void>
+{
+    static constexpr bool available = true;
+    using registration_key_type =
+      serializer_registry_test::cache_overflow_registration_key_t;
+    using payload_type = serializer_registry_test::cache_overflow_payload_t;
+
+    static serializer_t<payload_type> make_serializer ()
+    {
+        return serializer_t<payload_type> (
+          [] (const payload_type &) {
+              return encoded_payload_t::from_string ("cache-payload");
+          },
+          [] (const encoded_payload_t &) { return payload_type{}; },
+          "application/x-cache-overflow");
+    }
+};
+
+} // namespace zlink::framework::detail
 
 namespace
 {
@@ -53,6 +94,16 @@ struct decode_other_t
 };
 
 struct decode_failure_t
+{
+    int value{};
+};
+
+struct nested_inner_t
+{
+    int value{};
+};
+
+struct nested_outer_t
 {
     int value{};
 };
@@ -539,6 +590,69 @@ int main ()
         || first_failure.empty ()
         || repeated_failure != first_failure) {
         return 31;
+    }
+
+    // The selected serializer owns both outputs. A nested serializer selection
+    // must not replace the outer serializer's media type.
+    zlink::framework::serializer_registry_t nested_serializers;
+    nested_serializers.add<nested_inner_t> (
+      [] (const nested_inner_t &value) {
+          return zlink::framework::encoded_payload_t::from_string (
+            "inner:" + std::to_string (value.value));
+      },
+      [] (const zlink::framework::encoded_payload_t &) { return nested_inner_t{}; },
+      "application/x-nested-inner");
+    nested_serializers.add<nested_outer_t> (
+      [&nested_serializers] (const nested_outer_t &value) {
+          auto nested = nested_serializers.get<nested_inner_t> ()
+                          .serialize_with_content_type ({value.value});
+          if (nested.content_type != "application/x-nested-inner") {
+              throw std::runtime_error ("nested serializer selected the wrong content type");
+          }
+          return std::move (nested.payload);
+      },
+      [] (const zlink::framework::encoded_payload_t &) { return nested_outer_t{}; },
+      "application/x-nested-outer");
+    const auto nested_encoded = nested_serializers.get<nested_outer_t> ()
+                                  .serialize_with_content_type ({37});
+    if (nested_encoded.content_type != "application/x-nested-outer"
+        || nested_encoded.payload.to_string () != "inner:37") {
+        return 32;
+    }
+
+    // Exercise the same uncached return path used after the default 1,024-entry
+    // capacity is full without instantiating 1,025 serializer template types.
+    static_assert (zlink::framework::detail::serializer_send_type_cache_capacity
+                   == 1024);
+    zlink::framework::serializer_registry_t capacity_serializers;
+    capacity_serializers.add<
+      serializer_registry_test::cache_overflow_registration_key_t> (
+      [] (const serializer_registry_test::cache_overflow_registration_key_t &) {
+          return zlink::framework::encoded_payload_t{};
+      },
+      [] (const zlink::framework::encoded_payload_t &) {
+          return serializer_registry_test::cache_overflow_registration_key_t{};
+      },
+      "application/x-cache-extension");
+    capacity_serializers.add<payload_t> (
+      [] (const payload_t &value) {
+          return zlink::framework::encoded_payload_t::from_string (
+            std::to_string (value.value));
+      },
+      [] (const zlink::framework::encoded_payload_t &payload) {
+          return payload_t{std::stoi (payload.to_string ())};
+      },
+      "application/x-cache-filler");
+    zlink::framework::detail::serializer_registry_test_access_t::
+      set_resolved_serializer_cache_capacity (
+        capacity_serializers, 1);
+    (void) capacity_serializers.get<payload_t> ();
+    const auto overflow_encoded = capacity_serializers
+                                    .get<serializer_registry_test::cache_overflow_payload_t> ()
+                                    .serialize_with_content_type ({});
+    if (overflow_encoded.content_type != "application/x-cache-overflow"
+        || overflow_encoded.payload.to_string () != "cache-payload") {
+        return 33;
     }
 
     return 0;

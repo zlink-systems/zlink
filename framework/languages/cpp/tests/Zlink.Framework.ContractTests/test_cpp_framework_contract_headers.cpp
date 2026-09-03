@@ -1892,9 +1892,11 @@ int main ()
     google::protobuf::StringValue protobuf_value;
     protobuf_value.set_value ("direct-protobuf");
     const auto protobuf_serializer = protobuf_serializers.get<google::protobuf::StringValue> ();
-    const auto protobuf_bytes = protobuf_serializer.serialize (protobuf_value);
-    const auto protobuf_round_trip = protobuf_serializer.deserialize (protobuf_bytes);
+    const auto protobuf_encoded =
+      protobuf_serializer.serialize_with_content_type (protobuf_value);
+    const auto protobuf_round_trip = protobuf_serializer.deserialize (protobuf_encoded.payload);
     if (protobuf_serializer.content_type () != "application/x-protobuf"
+        || protobuf_encoded.content_type != protobuf_serializer.content_type ()
         || protobuf_round_trip.value () != "direct-protobuf"
         || zlink::framework::detail::message_name<google::protobuf::StringValue> ()
              != "StringValue") {

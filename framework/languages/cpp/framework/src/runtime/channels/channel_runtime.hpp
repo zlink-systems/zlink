@@ -80,7 +80,8 @@ class route_client_runtime_t
           std::move (address.spot_id), address.spot_generation,
           detail::message_name<TRequest> (), std::type_index (typeid (TRequest)),
           [request_value] (serializer_registry_t &serializers) {
-              return serializers.template get<TRequest> ().serialize (*request_value);
+              return serializers.template get<TRequest> ().serialize_with_content_type (
+                *request_value);
           },
           timeout, {});
         try {
@@ -142,12 +143,12 @@ class channel_runtime_state_t
     using instance_spot_send_t = std::function<task_t<result_t<void>> (
       const spot_id_t &, const spot_activation_intent_t &,
       const std::string &, std::type_index,
-      std::function<encoded_payload_t (serializer_registry_t &)>,
+      std::function<serialized_payload_t (serializer_registry_t &)>,
       const std::map<std::string, std::string> &)>;
     using instance_spot_request_t = std::function<task_t<zlink::message_t> (
       const spot_id_t &, const spot_activation_intent_t &,
       std::string, std::type_index,
-      std::function<encoded_payload_t (serializer_registry_t &)>,
+      std::function<serialized_payload_t (serializer_registry_t &)>,
       std::chrono::milliseconds,
       std::map<std::string, std::string>)>;
     using mesh_node_send_t = std::function<task_t<result_t<void>> (

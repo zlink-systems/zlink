@@ -1787,8 +1787,8 @@ void app_t::_apply_zlink_framework ()
           [select_instance_target, make_activation, serializers = &_state->serializers,
            dispatch = options.dispatch_options ()] (
             const spot_id_t &spot_id, const detail::spot_activation_intent_t &intent,
-            const std::string &packet_name, std::type_index message_type,
-            std::function<encoded_payload_t (serializer_registry_t &)> encode_payload,
+            const std::string &packet_name, std::type_index,
+            std::function<serialized_payload_t (serializer_registry_t &)> encode_payload,
             const std::map<std::string, std::string> &metadata) -> task_t<result_t<void>> {
               auto flow_scope = runtime::flow_context_t::enter_current_or_create (
                 flow_origin_t::application, detail::message_flow_tracer_t (dispatch).mode ());
@@ -1800,9 +1800,9 @@ void app_t::_apply_zlink_framework ()
               auto metadata_frame = detail::mesh_metadata_codec_t::encode (metadata);
               auto header = make_activation (selected.value (), spot_id, false,
                                              !metadata_frame.empty (), std::chrono::seconds (30));
-              const auto payload = encode_payload (*serializers);
+              const auto serialized = encode_payload (*serializers);
               runtime::protocol::application_payload_t application_payload{
-                packet_name, serializers->content_type (message_type), payload.to_bytes ()};
+                packet_name, serialized.content_type, serialized.payload.to_bytes ()};
               if (flow && !flow->flow_id.empty ()) {
                   application_payload.flow_id = flow->flow_id;
                   application_payload.flow_origin = flow->origin;
@@ -1829,8 +1829,8 @@ void app_t::_apply_zlink_framework ()
           [select_instance_target, make_activation, serializers = &_state->serializers,
            dispatch = options.dispatch_options ()] (
             const spot_id_t &spot_id, const detail::spot_activation_intent_t &intent,
-            std::string packet_name, std::type_index request_type,
-            std::function<encoded_payload_t (serializer_registry_t &)> encode_payload,
+            std::string packet_name, std::type_index,
+            std::function<serialized_payload_t (serializer_registry_t &)> encode_payload,
             std::chrono::milliseconds timeout,
             std::map<std::string, std::string> metadata) -> task_t<zlink::message_t> {
               auto flow_scope = runtime::flow_context_t::enter_current_or_create (
@@ -1843,9 +1843,9 @@ void app_t::_apply_zlink_framework ()
               auto metadata_frame = detail::mesh_metadata_codec_t::encode (metadata);
               auto header = make_activation (selected.value (), spot_id, true,
                                              !metadata_frame.empty (), timeout);
-              const auto payload = encode_payload (*serializers);
+              const auto serialized = encode_payload (*serializers);
               runtime::protocol::application_payload_t application_payload{
-                packet_name, serializers->content_type (request_type), payload.to_bytes ()};
+                packet_name, serialized.content_type, serialized.payload.to_bytes ()};
               if (flow && !flow->flow_id.empty ()) {
                   application_payload.flow_id = flow->flow_id;
                   application_payload.flow_origin = flow->origin;

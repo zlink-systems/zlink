@@ -36,6 +36,8 @@ class serializer_registry_state_t
     runtime::offload_executor_t resolved_serializers_lane_executor;
     runtime::state_lane_t resolved_serializers_lane{
       resolved_serializers_lane_executor};
+    std::atomic_size_t resolved_serializer_cache_capacity{
+      serializer_send_type_cache_capacity};
     std::atomic_bool frozen{false};
     std::size_t next_registration = 1;
 };
@@ -194,7 +196,9 @@ serializer_registry_t::cache_serializer (
     if (const auto found = current->find (type); found != current->end ())
         return found->second;
 
-    if (current->size () >= detail::serializer_send_type_cache_capacity)
+    if (current->size ()
+        >= _state->resolved_serializer_cache_capacity.load (
+          std::memory_order_acquire))
         return serializer;
 
     auto next = std::make_shared<detail::serializer_registry_state_t::
@@ -227,6 +231,13 @@ void serializer_registry_t::invalidate_cached_serializer (
                                 published,
                                 std::memory_order_release);
     }).get ();
+}
+
+void serializer_registry_t::set_resolved_serializer_cache_capacity_for_tests (
+  std::size_t capacity) noexcept
+{
+    _state->resolved_serializer_cache_capacity.store (
+      capacity, std::memory_order_release);
 }
 
 void serializer_registry_t::freeze () noexcept

@@ -160,7 +160,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       [&] (const zlink::framework::spot_id_t &spot_id,
            const zlink::framework::detail::spot_activation_intent_t &intent,
            const std::string &, std::type_index,
-           std::function<zlink::framework::encoded_payload_t (
+           std::function<zlink::framework::serialized_payload_t (
              zlink::framework::serializer_registry_t &)>,
            const std::map<std::string, std::string> &)
         -> zlink::framework::task_t<zlink::framework::result_t<void>> {

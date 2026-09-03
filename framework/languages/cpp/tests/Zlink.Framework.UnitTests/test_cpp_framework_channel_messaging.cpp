@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include <zlink/framework.hpp>
+#include <zlink/codecs/protobuf.hpp>
 
 #include "runtime/channels/channel_packet_dispatcher.hpp"
 #include "runtime/configuration/endpoint_connections.hpp"
@@ -38,6 +39,8 @@
 #include <zlink/Contracts/Sockets/message_socket_contracts.hpp>
 #include <zlink/Contracts/Sockets/results.hpp>
 #include <zlink/Contracts/Sockets/routed_socket_contracts.hpp>
+
+#include <google/protobuf/wrappers.pb.h>
 
 #include <algorithm>
 #include <atomic>
@@ -1156,6 +1159,67 @@ int main ()
       serializers, "application/x-zlink-test-reply");
     add_int_serializer<event_t> (
       serializers, "application/x-zlink-test-event");
+
+    // A generated protobuf type is selected through the extension marker, not
+    // a per-message registry entry. The ClientServer wire metadata must come
+    // from the same typed serializer that produced the bytes.
+    zlink::framework::serializer_registry_t protobuf_serializers;
+    zlink::framework::codec_registration_context_t protobuf_registration (
+      protobuf_serializers);
+    zlink::framework_codecs::protobuf ().register_framework_codecs (
+      protobuf_registration);
+    zlink::framework::zlink_builder_t protobuf_client_builder;
+    protobuf_client_builder.channel ("protobuf-client")
+      .enable_client ()
+      .connect ("tcp://127.0.0.1:1");
+    auto protobuf_client_runtime =
+      zlink::framework::detail::channel_runtime_t::from (
+        protobuf_client_builder.message_bus ());
+    protobuf_client_runtime.bind_serializers (protobuf_serializers);
+    std::string observed_protobuf_packet_name;
+    std::string observed_protobuf_content_type;
+    std::string observed_protobuf_payload;
+    bool protobuf_strict_decode_succeeded = false;
+    protobuf_client_runtime.bind_client_server_transport (
+      "protobuf-client",
+      [] (std::string, std::string, zlink::message_t,
+          std::chrono::milliseconds) {
+          return zlink::framework::task_t<void> (
+            zlink::framework::result_t<void>::success ());
+      },
+      [&] (std::string packet_name, std::string content_type,
+           zlink::message_t payload, std::chrono::milliseconds) {
+          observed_protobuf_packet_name = std::move (packet_name);
+          observed_protobuf_content_type = content_type;
+          observed_protobuf_payload = payload.to_string ();
+          const auto decoded = zlink::framework::detail::
+            deserialize_typed_payload<google::protobuf::StringValue> (
+              protobuf_serializers, payload, content_type);
+          protobuf_strict_decode_succeeded = decoded.value () == "direct-protobuf";
+          const auto reply = protobuf_serializers
+                               .get<google::protobuf::StringValue> ()
+                               .serialize (decoded);
+          return zlink::framework::task_t<zlink::message_t> (
+            zlink::framework::result_t<zlink::message_t>::success (
+              zlink::framework::detail::encoded_payload_to_raw (reply)));
+      });
+    google::protobuf::StringValue protobuf_request;
+    protobuf_request.set_value ("direct-protobuf");
+    const auto expected_protobuf_payload =
+      protobuf_serializers.get<google::protobuf::StringValue> ()
+        .serialize (protobuf_request)
+        .to_string ();
+    const auto protobuf_reply = protobuf_client_builder.message_bus ()
+                                  .request ("protobuf-client", protobuf_request)
+                                  .async<google::protobuf::StringValue> ()
+                                  .result ();
+    if (!protobuf_reply || protobuf_reply.value ().value () != "direct-protobuf"
+        || observed_protobuf_packet_name != "StringValue"
+        || observed_protobuf_content_type != "application/x-protobuf"
+        || observed_protobuf_payload != expected_protobuf_payload
+        || !protobuf_strict_decode_succeeded) {
+        return 413;
+    }
 
     zlink::framework::detail::channel_runtime_t::from (outbound_only.message_bus ())
       .bind_serializers (serializers);

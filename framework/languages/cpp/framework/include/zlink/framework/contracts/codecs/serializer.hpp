@@ -29,6 +29,7 @@ namespace detail
 inline constexpr std::size_t serializer_send_type_cache_capacity = 1024;
 class serializer_registry_state_t;
 struct serializer_registry_access_t;
+struct serializer_registry_test_access_t;
 encoded_payload_t encoded_payload_from_raw (const zlink::message_t &message);
 zlink::message_t encoded_payload_to_raw (const encoded_payload_t &payload);
 
@@ -152,6 +153,15 @@ class encoded_payload_t
     std::optional<std::span<const std::byte>> _borrowed_bytes;
 };
 
+/// Encoded bytes and the media type chosen by the same typed serializer.
+/// Keeping these values together prevents an erased type lookup from selecting
+/// different wire metadata after serialization.
+struct serialized_payload_t
+{
+    encoded_payload_t payload;
+    std::string content_type;
+};
+
 namespace detail
 {
 inline encoded_payload_t encoded_payload_from_raw (const zlink::message_t &message)
@@ -192,6 +202,11 @@ template <typename T> class serializer_t
                                                  detail::failure_origin_t::payload_encode,
                                                  "payload serialization failed");
         }
+    }
+
+    serialized_payload_t serialize_with_content_type (const T &value) const
+    {
+        return serialized_payload_t{serialize (value), _state->content_type};
     }
 
     T deserialize (const encoded_payload_t &payload) const
@@ -323,6 +338,7 @@ class serializer_registry_t
 
   private:
     friend struct detail::serializer_registry_access_t;
+    friend struct detail::serializer_registry_test_access_t;
     friend class codec_registration_context_t;
 
     template <typename T>
@@ -355,6 +371,7 @@ class serializer_registry_t
     std::shared_ptr<const void> cache_serializer (std::type_index type,
                                                   std::shared_ptr<const void> serializer) const;
     void invalidate_cached_serializer (std::type_index type) noexcept;
+    void set_resolved_serializer_cache_capacity_for_tests (std::size_t capacity) noexcept;
     void freeze () noexcept;
     std::size_t begin_registration ();
 
