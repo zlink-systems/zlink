@@ -2369,7 +2369,20 @@ bool zlink::pipe_t::append_pending_peer_controls_unlocked ()
         // a replacement ypipe.
         command.set_transport_connection_id (get_transport_connection_id ());
         const uint64_t control_bytes = frame_accounted_bytes (&command);
-        _out_pipe->write (command, false);
+        //  A peer-control frame is later dequeued and released through the
+        //  same physical-queue registry path as data frames, so commit its
+        //  charge here to keep committed accounting balanced. The completion
+        //  lane that carries these controls has planned_hwm 0, so this commit
+        //  does not impose a byte HWM on control frames. Application-lane pipes
+        //  without registry accounting keep the plain write and no release.
+        if (_registry_accounting) {
+            get_ctx ()->_physical_queue_registry.commit_message (
+              _out_physical_queue, control_bytes,
+              counted_pending_message_ref (command), false);
+            publish_outbound_frame_unlocked (command, false);
+        } else {
+            _out_pipe->write (command, false);
+        }
         _bytes_written =
           control_bytes == UINT64_MAX
               || UINT64_MAX - _bytes_written < control_bytes
