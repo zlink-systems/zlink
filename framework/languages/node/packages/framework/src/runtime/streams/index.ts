@@ -264,6 +264,7 @@ export class ZLinkStreamRuntimeManager {
       const runtime = new ZLinkStreamSessionNodeRuntimeCore({
         nodeName,
         socket,
+        createPacket: () => streamAdapter.createStreamPacket(),
         readablePoller,
         applicationJobQueue: this.applicationJobQueue,
         nativeSessionService,

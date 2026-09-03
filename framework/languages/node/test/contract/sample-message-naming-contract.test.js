@@ -52,7 +52,8 @@ test('sample wire names describe the framework call method', () => {
   assert.match(supportMessages, /class ConversationCreateReq\b/);
 
   const shoppingClient = read('samples/ShoppingMall.Ts/Client/shoppingmall-client-scenario.ts');
-  assert.match(shoppingClient, /type VersionFenceRes\b/);
+  assert.match(shoppingClient, /ContinueOrderWorkflowRes/);
+  assert.match(shoppingClient, /RebuildOrderProjectionRes/);
   assert.doesNotMatch(shoppingClient, /VersionFenceResult/);
 });
 

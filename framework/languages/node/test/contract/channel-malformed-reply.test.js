@@ -63,7 +63,8 @@ async function withMalformedChannelReply(endpoint, replyParts, expectedError) {
     );
     const reply = client.requestToChannel('api', ping()).timeout(1000).submit();
     const request = await receive(router);
-    submitMultipart(router.reply(request.routingId, request.requestSeq), replyParts);
+    assert.notEqual(request.replyToken, null);
+    submitMultipart(router.reply(request.routingId, request.replyToken), replyParts);
     await assert.rejects(() => withTimeout(reply, 1000), expectedError);
     request.close();
   } finally {

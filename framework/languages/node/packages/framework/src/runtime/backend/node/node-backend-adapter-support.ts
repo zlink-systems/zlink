@@ -6,16 +6,6 @@ export const zlink = loadBinding() as ZLinkBindingModule;
 
 export type ZLinkBindingOperation = { [key: string]: (...args: unknown[]) => unknown };
 
-export interface ZLinkBindingImmediateSendOperation {
-  message(message: unknown): ZLinkBindingImmediateSendSubmitOperation;
-}
-
-interface ZLinkBindingImmediateSendSubmitOperation {
-  message(message: unknown): ZLinkBindingImmediateSendSubmitOperation;
-  flags(flags: number): ZLinkBindingImmediateSendSubmitOperation;
-  submit(): boolean;
-}
-
 export interface ZLinkBindingAsyncSendOperation {
   message(message: unknown): ZLinkBindingAsyncSendSubmitOperation;
 }
@@ -40,19 +30,8 @@ interface ZLinkBindingReplySubmitOperation {
 
 interface ZLinkBindingAsyncSendSubmitOperation {
   message(message: unknown): ZLinkBindingAsyncSendSubmitOperation;
-  timeout(timeoutMs: number): ZLinkBindingAsyncSendSubmitOperation;
   submit(): Promise<void>;
-  submit_sync(flags: number): void;
-}
-
-export interface ZLinkBindingRoutedSendOperation {
-  message(message: unknown): ZLinkBindingRoutedSendSubmitOperation;
-}
-
-interface ZLinkBindingRoutedSendSubmitOperation {
-  message(message: unknown): ZLinkBindingRoutedSendSubmitOperation;
-  submit(): Promise<void>;
-  submit_sync(flags: number): void;
+  submit_sync(): void;
 }
 
 export interface ZLinkBindingRequestOperation {
@@ -86,24 +65,6 @@ export function isPollerInterruptedError(error: unknown): boolean {
 
 function isNativeBadAddress(error: { nativeErrno?: unknown; message?: unknown }): boolean {
   return error.nativeErrno === 14 || /Bad address/i.test(String(error.message ?? ''));
-}
-
-export function submitBindingImmediateSend(
-  operation: ZLinkBindingImmediateSendOperation,
-  payload: unknown,
-  flags: number
-): boolean {
-  try {
-    let current: ZLinkBindingImmediateSendSubmitOperation | undefined;
-    const parts = Array.isArray(payload) ? payload : [payload];
-    for (const part of parts.length === 0 ? [Buffer.alloc(0)] : parts) {
-      const nativePart = toNativeMessageLike(part);
-      current = current === undefined ? operation.message(nativePart) : current.message(nativePart);
-    }
-    return current!.flags(flags).submit();
-  } catch (error) {
-    throw translateBindingResultError(error);
-  }
 }
 
 export function submitBindingPublish(
@@ -142,8 +103,7 @@ export function submitBindingReply(
 
 export async function submitBindingAsyncSend(
   operation: ZLinkBindingAsyncSendOperation,
-  payload: unknown,
-  timeoutMs?: number
+  payload: unknown
 ): Promise<void> {
   try {
     let current: ZLinkBindingAsyncSendSubmitOperation | undefined;
@@ -153,7 +113,6 @@ export async function submitBindingAsyncSend(
       current = current === undefined ? operation.message(nativePart) : current.message(nativePart);
     }
     current ??= operation.message(Buffer.alloc(0));
-    if (timeoutMs !== undefined) current = current.timeout(timeoutMs);
     await current.submit();
   } catch (error) {
     throw translateBindingResultError(error);
@@ -162,13 +121,9 @@ export async function submitBindingAsyncSend(
 
 export function submitBindingSyncSend(
   operation: ZLinkBindingAsyncSendOperation,
-  payload: unknown,
-  flags: number
+  payload: unknown
 ): void {
   try {
-    if ((flags & zlink.SendFlags.DontWait) === 0) {
-      throw new TypeError('Framework sync send requires SendFlags.DontWait.');
-    }
     let current: ZLinkBindingAsyncSendSubmitOperation | undefined;
     const parts = Array.isArray(payload) ? payload : [payload];
     for (const part of parts) {
@@ -176,45 +131,7 @@ export function submitBindingSyncSend(
       current = current === undefined ? operation.message(nativePart) : current.message(nativePart);
     }
     current ??= operation.message(Buffer.alloc(0));
-    current.submit_sync(flags);
-  } catch (error) {
-    throw translateBindingResultError(error);
-  }
-}
-
-export async function submitBindingRoutedSend(
-  operation: ZLinkBindingRoutedSendOperation,
-  payload: unknown
-): Promise<void> {
-  try {
-    let current: ZLinkBindingRoutedSendSubmitOperation | undefined;
-    const parts = Array.isArray(payload) ? payload : [payload];
-    for (const part of parts.length === 0 ? [Buffer.alloc(0)] : parts) {
-      const nativePart = toNativeMessageLike(part);
-      current = current === undefined ? operation.message(nativePart) : current.message(nativePart);
-    }
-    await current!.submit();
-  } catch (error) {
-    throw translateBindingResultError(error);
-  }
-}
-
-export function submitBindingSyncRoutedSend(
-  operation: ZLinkBindingRoutedSendOperation,
-  payload: unknown,
-  flags: number
-): void {
-  try {
-    if ((flags & zlink.SendFlags.DontWait) === 0) {
-      throw new TypeError('Framework sync routed send requires SendFlags.DontWait.');
-    }
-    let current: ZLinkBindingRoutedSendSubmitOperation | undefined;
-    const parts = Array.isArray(payload) ? payload : [payload];
-    for (const part of parts.length === 0 ? [Buffer.alloc(0)] : parts) {
-      const nativePart = toNativeMessageLike(part);
-      current = current === undefined ? operation.message(nativePart) : current.message(nativePart);
-    }
-    current!.submit_sync(flags);
+    current.submit_sync();
   } catch (error) {
     throw translateBindingResultError(error);
   }

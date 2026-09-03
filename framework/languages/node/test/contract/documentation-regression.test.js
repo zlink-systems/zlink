@@ -277,10 +277,10 @@ test('typescript stream connector specification matches the browser package decl
 test('canonical common spec owns server semantics without the deleted duplicate tree', () => {
   const deletedSpecRoot = path.join(workspaceRoot, '..', '..', 'doc', 'framework', 'spec');
   const required = [
-    '07-channel-topology.ko.md',
-    '15-spot-actor.ko.md',
-    '19-stream-session.ko.md',
-    '29-transport-liveness.ko.md'
+    '02-channel-transport/01-channel-topology.ko.md',
+    '03-spot-actor/05-spot-actor-membership.ko.md',
+    '04-session/01-stream-session.ko.md',
+    '02-channel-transport/05-transport-liveness.ko.md'
   ];
 
   assert.equal(fs.existsSync(deletedSpecRoot), false);

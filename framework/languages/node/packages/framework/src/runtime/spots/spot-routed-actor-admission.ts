@@ -69,7 +69,7 @@ export class ZLinkSpotRoutedActorAdmission {
   constructor(private readonly options: ZLinkSpotRoutedActorAdmissionOptions) {}
 
   async admit(received: BackendReceived): Promise<boolean> {
-    if (received.requestSeq === null) {
+    if (received.replyToken === null) {
       return false;
     }
     const decoded = this.decodeRemoteActorJoinRequest(received.parts, received);

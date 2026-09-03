@@ -91,6 +91,7 @@ export function validateDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel | un
     && level !== ZlinkStreamDiagnosticsLevel.Off
     && level !== ZlinkStreamDiagnosticsLevel.Errors
     && level !== ZlinkStreamDiagnosticsLevel.Normal
+    && level !== ZlinkStreamDiagnosticsLevel.Detailed
   ) {
     throw connectorError(ZlinkStreamErrorCode.ConfigurationError, 'DiagnosticsLevel is invalid.');
   }

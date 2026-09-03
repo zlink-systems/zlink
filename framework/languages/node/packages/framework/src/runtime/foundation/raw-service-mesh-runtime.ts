@@ -129,8 +129,6 @@ interface PhysicalConnectionCandidate {
   readonly discriminator: string;
   readonly localAddress: string;
   readonly remoteAddress: string;
-  readonly transportPairId?: bigint;
-  readonly transportPairGeneration?: bigint;
 }
 
 const livenessCodec = createServiceWireCodec({
@@ -167,8 +165,8 @@ export class RawServiceMeshRuntime {
   private readonly unresolvedConnectionCandidates: PhysicalConnectionCandidate[] = [];
   private readonly connectionIds = new Map<string, string>();
   /**
-   * The monitor callback updates this fence before the event reaches the
-   * normal runtime drain. `null` means that the last observed pair is no
+   * The monitor drain updates this fence before the event reaches the
+   * normal runtime handler. `null` means that the last observed pair is no
    * longer usable by the application route.
    */
   private readonly monitorConnectionStates = new Map<string, string | null>();
@@ -233,29 +231,8 @@ export class RawServiceMeshRuntime {
       };
       this.topology.publishLocal(next);
       this.descriptor = next;
-      this.monitor = router.monitor(event => {
-        this.observeMonitorEvent(event);
-        if (this.monitorEvents.length < MAX_PENDING_MONITOR_EVENTS) {
-          this.monitorEvents.push(event);
-        } else {
-          // Keep one latest transition per physical connection when the
-          // normal drain is delayed. This bounds storage without replacing an
-          // unrelated connection's transition.
-          const existingIndex = this.monitorEvents.findIndex(candidate =>
-            sameMonitorConnection(candidate, event)
-          );
-          if (existingIndex >= 0) {
-            this.monitorEvents[existingIndex] = event;
-          } else {
-            // Preserve the newest lifecycle edge when unrelated connections
-            // saturate the bounded queue; stale edges are less useful than
-            // the current edge and will be reconciled by the next monitor
-            // drain.
-            this.monitorEvents.shift();
-            this.monitorEvents.push(event);
-          }
-        }
-      });
+      this.monitor = router.monitor();
+      this.pullMonitorEvents();
       this.host = host;
       this.router = router;
     } catch (error) {
@@ -580,15 +557,10 @@ export class RawServiceMeshRuntime {
     if (record.requestSequence === undefined) {
       throw new TypeError('Service reply requires a request sequence.');
     }
-    if (record.reply !== undefined) {
-      record.reply(parts);
-    } else {
-      this.requireStarted().reply(
-        record.sourceRoute ?? record.sourceRoutingId,
-        record.requestSequence,
-        parts
-      );
+    if (record.reply === undefined) {
+      throw new TypeError('Service reply requires an opaque reply capability.');
     }
+    record.reply(parts);
   }
 
   reply(
@@ -605,28 +577,13 @@ export class RawServiceMeshRuntime {
       );
       return;
     }
-    if (request.reply !== undefined) {
-      request.reply([
-        encodeReplyHeader(request.correlation!, terminalResult, failureCode),
-        ...(terminalResult === 0 ? [encodeApplicationPayload(payload)] : [])
-      ]);
-      return;
-    }
-    if (
-      request.sourceRoutingId === undefined
-      || request.requestSequence === undefined
-      || request.correlation === undefined
-    ) {
+    if (request.reply === undefined || request.correlation === undefined) {
       throw new TypeError('Reply requires a request mailbox record.');
     }
-    this.requireStarted().reply(
-      request.sourceRoute ?? request.sourceRoutingId,
-      request.requestSequence,
-      [
-        encodeReplyHeader(request.correlation, terminalResult, failureCode),
-        ...(terminalResult === 0 ? [encodeApplicationPayload(payload)] : [])
-      ]
-    );
+    request.reply([
+      encodeReplyHeader(request.correlation, terminalResult, failureCode),
+      ...(terminalResult === 0 ? [encodeApplicationPayload(payload)] : [])
+    ]);
   }
 
   async pumpOne(
@@ -634,6 +591,7 @@ export class RawServiceMeshRuntime {
     observe?: RawServicePumpObserver
   ): Promise<RawServicePumpResult> {
     const router = this.requireStarted();
+    this.pullMonitorEvents();
     let permit: ApplicationJobPermitPort;
     try {
       permit = await this.applicationJobQueue.acquire(this.applicationJobStop.signal);
@@ -672,6 +630,24 @@ export class RawServiceMeshRuntime {
     }
   }
 
+  private pullMonitorEvents(): void {
+    this.monitor?.drain(event => {
+      this.observeMonitorEvent(event);
+      if (this.monitorEvents.length < MAX_PENDING_MONITOR_EVENTS) {
+        this.monitorEvents.push(event);
+        return;
+      }
+      const existingIndex = this.monitorEvents.findIndex(candidate =>
+        sameMonitorConnection(candidate, event)
+      );
+      if (existingIndex >= 0) this.monitorEvents[existingIndex] = event;
+      else {
+        this.monitorEvents.shift();
+        this.monitorEvents.push(event);
+      }
+    });
+  }
+
   private reportProtocolError(
     received: import('../backend/node/node-raw-binding-port').ZLinkRawReceivedRecord
   ): void {
@@ -702,15 +678,8 @@ export class RawServiceMeshRuntime {
         RequestResult.ProtocolError,
         ServiceWireFrameworkErrorCode.requestProtocolError
       )];
-      if (received.reply !== undefined) {
-        received.reply(reply);
-      } else {
-        this.requireStarted().reply(
-          received.sourceRoute,
-          received.requestSeq,
-          reply
-        );
-      }
+      if (received.reply === undefined) return false;
+      received.reply(reply);
       return true;
     } catch (error) {
       if (error instanceof ServiceWireProtocolError) return false;
@@ -763,9 +732,7 @@ export class RawServiceMeshRuntime {
         }
         const connection = this.currentConnectionCandidate(
           received.sourceRid,
-          descriptor.advertisedEndpoint,
-          received.transportPairId,
-          received.transportPairGeneration
+          descriptor.advertisedEndpoint
         );
         const result = this.admitPeer(
           descriptor,
@@ -983,8 +950,9 @@ export class RawServiceMeshRuntime {
   }
 
   async drainMonitorEvents(nowMs = performance.now()): Promise<number> {
+    this.pullMonitorEvents();
     let handled = 0;
-    // Detach the current batch so monitor callbacks that run while an event is
+    // Detach the current batch so monitor pulls that run while an event is
     // being handled append to the next batch without copying or reindexing it.
     const events = this.monitorEvents;
     this.monitorEvents = this.monitorDrainBuffer;
@@ -1006,7 +974,6 @@ export class RawServiceMeshRuntime {
           continue;
         }
         if (!this.acceptsExpectedMonitorEndpoint(nodeRoutingId, event)) {
-          this.disconnectUnexpectedMonitorPair(event);
           continue;
         }
         const candidate = this.createConnectionCandidate(nodeRoutingId, event);
@@ -1034,28 +1001,7 @@ export class RawServiceMeshRuntime {
               await this.announcePeer(nodeRoutingId);
               continue;
             }
-            if (existingPeer.connectionId.startsWith('unmonitored:')
-              && candidate.transportPairId !== undefined
-              && candidate.transportPairGeneration !== undefined) {
-              // The fallback endpoint admission can precede the physical
-              // pair READY edge. Retain the pair as provisional evidence and
-              // announce over that pair so the peer descriptor admission can
-              // promote the semantic route before an application request.
-              let provisionalCandidates = this.connectionCandidates.get(nodeRoutingId);
-              if (provisionalCandidates === undefined) {
-                provisionalCandidates = new Map();
-                this.connectionCandidates.set(nodeRoutingId, provisionalCandidates);
-              }
-              provisionalCandidates.set(candidate.connectionId, candidate);
-              await this.announcePeer(nodeRoutingId);
-              continue;
-            }
-            const sameTransportPair = existingCandidate !== undefined
-              && candidate.transportPairId !== undefined
-              && candidate.transportPairGeneration !== undefined
-              && existingCandidate.transportPairId === candidate.transportPairId
-              && existingCandidate.transportPairGeneration === candidate.transportPairGeneration;
-            if (sameTransportPair) {
+            if (existingCandidate?.connectionId === candidate.connectionId) {
               this.removeConnectionCandidate(nodeRoutingId, candidate.connectionId);
               this.monitorConnectionStates.set(nodeRoutingId, existingPeer.connectionId);
               continue;
@@ -1064,7 +1010,7 @@ export class RawServiceMeshRuntime {
             // A second physical candidate may be admitted only after the
             // current lease expires; this also prevents a late old-process
             // reconnect from replacing the ready replacement by arrival order.
-            this.disconnectUnexpectedMonitorPair(candidate);
+            this.removeConnectionCandidate(nodeRoutingId, candidate.connectionId);
             continue;
           }
           // Keep the physical candidate until the wire descriptor decides
@@ -1338,22 +1284,14 @@ export class RawServiceMeshRuntime {
         connection.connectionId,
         nowMs
       );
-      if (connection.transportPairId !== undefined
-        && connection.transportPairGeneration !== undefined) {
-        this.monitorConnectionStates.set(
-          descriptor.nodeRoutingId,
-          connection.connectionId
-        );
-      }
+      this.monitorConnectionStates.set(
+        descriptor.nodeRoutingId,
+        connection.connectionId
+      );
       if (previous !== undefined && previous.connectionId !== connection.connectionId) {
         const previousCandidate = this.connectionCandidates
           .get(descriptor.nodeRoutingId)?.get(previous.connectionId);
         if (previousCandidate !== undefined) {
-          const sameTransportPair = connection.transportPairId !== undefined
-            && connection.transportPairGeneration !== undefined
-            && previousCandidate.transportPairId === connection.transportPairId
-            && previousCandidate.transportPairGeneration === connection.transportPairGeneration;
-          if (!sameTransportPair) this.disconnectUnexpectedMonitorPair(previousCandidate);
           this.removeConnectionCandidate(
             descriptor.nodeRoutingId,
             previousCandidate.connectionId
@@ -1371,7 +1309,6 @@ export class RawServiceMeshRuntime {
         previous.connectionId
       );
       if (connection.connectionId !== previous.connectionId) {
-        this.disconnectUnexpectedMonitorPair(connection);
         this.removeConnectionCandidate(
           descriptor.nodeRoutingId,
           connection.connectionId
@@ -1383,47 +1320,8 @@ export class RawServiceMeshRuntime {
 
   private currentConnectionCandidate(
     nodeRoutingId: string,
-    advertisedEndpoint: string,
-    transportPairId?: bigint,
-    transportPairGeneration?: bigint
+    advertisedEndpoint: string
   ): PhysicalConnectionCandidate {
-    if (transportPairId !== undefined
-      && transportPairGeneration !== undefined
-      && transportPairId !== 0n
-      && transportPairGeneration !== 0n) {
-      const candidates = this.connectionCandidates.get(nodeRoutingId);
-      const exactId = JSON.stringify([
-        nodeRoutingId,
-        'transport-pair',
-        transportPairId.toString(),
-        transportPairGeneration.toString()
-      ]);
-      const exact = candidates?.get(exactId);
-      if (exact !== undefined) return exact;
-      const localRid = this.topology.localDescriptor().nodeRoutingId;
-      const endpointOnly = this.endpointOnlyPeers.has(advertisedEndpoint);
-      const direction: PhysicalConnectionDirection = this.expectedPeers.has(nodeRoutingId)
-        ? 'outbound'
-        : endpointOnly
-          ? localRid.localeCompare(nodeRoutingId) <= 0 ? 'outbound' : 'inbound'
-          : 'inbound';
-      const initiator = endpointOnly && localRid.localeCompare(nodeRoutingId) > 0
-        ? nodeRoutingId
-        : direction === 'outbound' ? localRid : nodeRoutingId;
-      const candidate: PhysicalConnectionCandidate = {
-        connectionId: exactId,
-        direction,
-        discriminator: `initiator:${initiator}`,
-        localAddress: '',
-        remoteAddress: advertisedEndpoint,
-        transportPairId,
-        transportPairGeneration
-      };
-      const exactCandidates = candidates ?? new Map<string, PhysicalConnectionCandidate>();
-      if (candidates === undefined) this.connectionCandidates.set(nodeRoutingId, exactCandidates);
-      exactCandidates.set(exactId, candidate);
-      return candidate;
-    }
     let connectionId = this.connectionIds.get(nodeRoutingId);
     let candidate = connectionId === undefined
       ? undefined
@@ -1496,9 +1394,7 @@ export class RawServiceMeshRuntime {
         ? `unknown:${monitorConnectionId(event, nodeRoutingId)}`
         : `initiator:${initiator}`,
       localAddress: event.localAddress,
-      remoteAddress: event.remoteAddress,
-      transportPairId: event.transportPairId,
-      transportPairGeneration: event.transportPairGeneration
+      remoteAddress: event.remoteAddress
     };
   }
 
@@ -1519,9 +1415,7 @@ export class RawServiceMeshRuntime {
       direction,
       discriminator: `unresolved:${connectionId}`,
       localAddress: event.localAddress,
-      remoteAddress: event.remoteAddress,
-      transportPairId: event.transportPairId,
-      transportPairGeneration: event.transportPairGeneration
+      remoteAddress: event.remoteAddress
     };
   }
 
@@ -1613,27 +1507,6 @@ export class RawServiceMeshRuntime {
       || expected.endpoint === event.remoteAddress;
   }
 
-  private disconnectUnexpectedMonitorPair(
-    event: Pick<ZLinkRawMonitorRecord, 'transportPairId' | 'transportPairGeneration'>
-  ): void {
-    const router = this.router;
-    if (
-      router?.disconnectTransportPair === undefined
-      || typeof event.transportPairId !== 'bigint'
-      || typeof event.transportPairGeneration !== 'bigint'
-      || event.transportPairId === 0n
-      || event.transportPairGeneration === 0n
-    ) return;
-    try {
-      router.disconnectTransportPair(
-        event.transportPairId,
-        event.transportPairGeneration
-      );
-    } catch (error) {
-      if (!isAlreadyDisconnectedError(error)) throw error;
-    }
-  }
-
   private retireNotRequiredExpectedPeer(
     nodeRoutingId: string,
     advertisedEndpoint?: string
@@ -1694,11 +1567,7 @@ export class RawServiceMeshRuntime {
     }
     if (event.event === MONITOR_DISCONNECTED
       && this.monitorConnectionStates.get(nodeRoutingId) === connectionId
-      && this.topology.peer(nodeRoutingId)?.connectionId === connectionId
-      && (event.transportPairId === undefined
-        || event.transportPairGeneration === undefined
-        || event.transportPairId === 0n
-        || event.transportPairGeneration === 0n)) {
+      && this.topology.peer(nodeRoutingId)?.connectionId === connectionId) {
       this.monitorConnectionStates.set(nodeRoutingId, null);
     }
   }
@@ -1763,19 +1632,6 @@ function monitorConnectionId(
   event: ZLinkRawMonitorRecord,
   resolvedNodeRoutingId = event.routingId ?? ''
 ): string {
-  if (
-    event.transportPairId !== undefined
-    && event.transportPairGeneration !== undefined
-    && event.transportPairId !== 0n
-    && event.transportPairGeneration !== 0n
-  ) {
-    return JSON.stringify([
-      resolvedNodeRoutingId,
-      'transport-pair',
-      event.transportPairId.toString(),
-      event.transportPairGeneration.toString()
-    ]);
-  }
   if (event.connectionId !== undefined && event.connectionId !== 0n) {
     return JSON.stringify([
       resolvedNodeRoutingId,

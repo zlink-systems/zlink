@@ -91,7 +91,7 @@ export interface ZLinkBackendReceived {
   readonly parts: readonly Message[];
   readonly routingId: unknown | null;
   readonly spotId?: unknown;
-  readonly requestSeq: bigint | null;
+  readonly replyToken: unknown | null;
   send?(): ZLinkBackendSendBuilder;
   reply(): ZLinkBackendReplyBuilder;
   close(): void;

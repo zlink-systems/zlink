@@ -27,7 +27,7 @@ test('node binding exposes the raw public API required by the framework runtime'
   }
 });
 
-test('node binding public API covers raw socket monitor and stream wrappers', () => {
+test('node binding public API covers pull monitors and STREAM packet receive', () => {
   const context = zlink.createContext();
   const closeables = [];
 
@@ -45,8 +45,10 @@ test('node binding public API covers raw socket monitor and stream wrappers', ()
     assert.equal(router.attachDiscovery, undefined);
     assert.equal(publisher.attachDiscovery, undefined);
     assert.equal(subscriber.attachDiscovery, undefined);
-    assert.equal(typeof stream.setPacketHandler, 'function');
-    assert.equal(typeof monitor.onEvent, 'function');
+    assert.equal(stream.setPacketHandler, undefined);
+    assert.equal(typeof stream.recvPacket, 'function');
+    assert.equal(typeof zlink.StreamPacket, 'function');
+    assert.equal(monitor.onEvent, undefined);
     assert.equal(typeof monitor.recv, 'function');
     assert.equal(typeof monitor.status, 'function');
   } finally {

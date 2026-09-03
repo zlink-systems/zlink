@@ -23,7 +23,7 @@ import {
 import { decodeRoutingId as decodeWireRoutingId, routingIdsEqual } from '../routing-id';
 import type { ZLinkRemoteActorPacketRelay } from './spot-remote-route-codec';
 import {
-  isReplyableRequestSeq,
+  hasReplyToken,
   submitSpotRouteBridgeReply
 } from './spot-route-replies';
 import type { ZLinkActorPacketDelivery } from './spot-actor-packet-dispatch';
@@ -101,7 +101,7 @@ export class ZLinkSpotActorPacketRelayDispatch {
                 sessionRid: binding.sessionRid
               }
         );
-        if (isReplyableRequestSeq(received.requestSeq)) {
+        if (hasReplyToken(received.replyToken)) {
           submitSpotRouteBridgeReply(received, actorPacketRelay.envelope, {
             ok: true,
             response: { acknowledged: true }
@@ -123,7 +123,7 @@ export class ZLinkSpotActorPacketRelayDispatch {
       //  or error) through that original route via actorResponseSender/
       //  actorErrorSender instead of returning it locally, where it would
       //  be discarded. Non-follow relays keep the synchronous-return path.
-      const outerReplyable = isReplyableRequestSeq(received.requestSeq);
+      const outerReplyable = hasReplyToken(received.replyToken);
       const followedBoundSessionReply =
         !outerReplyable
         && actorPacketRelay.messageFollowContext !== undefined
@@ -136,12 +136,12 @@ export class ZLinkSpotActorPacketRelayDispatch {
         fallbackActorRef: actorPacketRelay.actorRef
       });
       const actorPacketTarget = this.actorPacketTarget(actorPacketRelay.actorId);
-      if (isReplyableRequestSeq(received.requestSeq)) {
+      if (hasReplyToken(received.replyToken)) {
         submitSpotRouteBridgeReply(received, actorPacketRelay.envelope, { ok: true, response, actorPacketTarget });
       }
       return true;
     } catch (error) {
-      if (isReplyableRequestSeq(received.requestSeq)) {
+      if (hasReplyToken(received.replyToken)) {
         submitSpotRouteBridgeReply(received, actorPacketRelay.envelope, {
           ok: false,
           error: error instanceof Error ? error.message : String(error),

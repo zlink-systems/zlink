@@ -15,12 +15,13 @@ import {
   type MonitorEvent,
   type MonitorSocket,
   type ReplyOperation,
+  type ReplyToken,
   type ReplySubmitOperation,
   type RequestOperation,
   type RequestSubmitOperation,
   type RouterSocket,
-  type RoutedSendOperation,
-  type RoutedSendSubmitOperation,
+  type SendOperation,
+  type SendSubmitOperation,
   type Socket
 } from '@zlink-systems/zlink';
 import { isPollerInterruptedError } from './node-backend-adapter-support';
@@ -160,12 +161,11 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
     );
   }
 
-  monitor(handler: (event: ZLinkRawMonitorRecord) => void): ZLinkRawMonitorPort {
+  monitor(): ZLinkRawMonitorPort {
     this.requireOpen();
     const nativeMonitor = this.socket.monitorOpen();
     const port = new NodeRawMonitorPort(nativeMonitor, () => this.monitors.delete(port));
     this.monitors.add(port);
-    nativeMonitor.onEvent(event => handler(copyMonitorEvent(event)));
     return port;
   }
 
@@ -224,8 +224,7 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
   }
 
   protected receiveRecord(
-    dontWait: boolean,
-    reply?: RawReceivedReply
+    dontWait: boolean
   ): ZLinkRawReceivedRecord | undefined {
     const timeoutMs = dontWait ? 0 : -1;
     try {
@@ -239,23 +238,17 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
       if (isPollerInterruptedError(error)) return undefined;
       throw error;
     }
-    return receiveRecord(this.socket as never, true, reply);
+    return receiveRecord(this.socket as never, true);
   }
 }
 
 class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLinkRawRouterPort {
+  private nextIncomingRequestSequence = 1n;
   disconnectRid(routingId: string): void {
     this.requireOpen();
     (this.socket as RouterSocket & {
       disconnectRid(value: BindingRoutingId): void;
     }).disconnectRid(bindingRoutingId(routingId));
-  }
-
-  disconnectTransportPair(transportPairId: bigint, transportPairGeneration: bigint): void {
-    this.requireOpen();
-    (this.socket as RouterSocket & {
-      disconnectTransportPair(id: bigint, generation: bigint): void;
-    }).disconnectTransportPair(transportPairId, transportPairGeneration);
   }
 
   constructor(socket: RouterSocket) {
@@ -303,17 +296,23 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
 
   receive(dontWait = false): ZLinkRawReceivedRecord | undefined {
     this.requireOpen();
-    return this.receiveRecord(dontWait, (targetRid, requestSeq, parts) => {
-      this.reply(targetRid, requestSeq, parts);
-    });
-  }
-
-  reply(targetRid: string | Uint8Array, requestSeq: bigint, parts: readonly Uint8Array[]): void {
-    this.requireOpen();
-    appendReplyParts(
-      this.socket.reply(bindingRoutingId(targetRid), requestSeq),
-      parts
-    ).submit();
+    return receiveRecord(
+      this.socket,
+      dontWait,
+      () => {
+        const current = this.nextIncomingRequestSequence;
+        this.nextIncomingRequestSequence = current === BigInt(Number.MAX_SAFE_INTEGER)
+          ? 1n
+          : current + 1n;
+        return current;
+      },
+      (targetRid, replyToken, parts) => {
+        appendReplyParts(
+          this.socket.reply(bindingRoutingId(targetRid), replyToken),
+          parts
+        ).submit();
+      }
+    );
   }
 }
 
@@ -357,6 +356,17 @@ class NodeRawMonitorPort implements ZLinkRawMonitorPort {
     return this.monitor.status().isReady();
   }
 
+  drain(handler: (event: ZLinkRawMonitorRecord) => void): number {
+    if (this.closed) throw new Error('Raw monitor is closed.');
+    let count = 0;
+    for (;;) {
+      const event = this.monitor.recv(RecvFlags.DontWait);
+      if (event === null) return count;
+      handler(copyMonitorEvent(event));
+      count += 1;
+    }
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -366,9 +376,9 @@ class NodeRawMonitorPort implements ZLinkRawMonitorPort {
 }
 
 function appendSendParts(
-  operation: RoutedSendOperation,
+  operation: SendOperation,
   parts: readonly Uint8Array[]
-): RoutedSendSubmitOperation {
+): SendSubmitOperation {
   requireParts(parts);
   let next = operation.message(parts[0]);
   for (let index = 1; index < parts.length; index += 1) {
@@ -408,14 +418,15 @@ function requireParts(parts: readonly Uint8Array[]): [Uint8Array, ...Uint8Array[
 
 type RawReceivedReply = (
   targetRid: Uint8Array,
-  requestSeq: bigint,
+  replyToken: ReplyToken,
   parts: readonly Uint8Array[]
 ) => void;
 
 function receiveRecord(
   socket: Pick<RouterSocket | DealerSocket, 'recv'>,
   dontWait: boolean,
-  reply: RawReceivedReply | undefined
+  nextRequestSequence?: () => bigint,
+  reply?: RawReceivedReply
 ): ZLinkRawReceivedRecord | undefined {
   const received = new Received();
   if (!socket.recv(
@@ -429,22 +440,17 @@ function receiveRecord(
   try {
     const sourceRid = received.routingId?.toString() ?? '';
     const sourceRoute = received.routingId?.toBytes() ?? Buffer.alloc(0);
-    const requestSeq = received.requestSeq;
-    const transportPairId = received.transportPairId;
-    const transportPairGeneration = received.transportPairGeneration;
-    const receivedReply = requestSeq === null
+    const requestSeq = received.replyToken === null ? undefined : nextRequestSequence?.();
+    const replyToken = received.replyToken;
+    const receivedReply = replyToken === null
       ? undefined
       : reply === undefined
         ? received.reply()
-        : (parts: readonly Uint8Array[]) => {
-            reply(sourceRoute, requestSeq, parts);
-          };
+        : (parts: readonly Uint8Array[]) => reply(sourceRoute, replyToken, parts);
     return {
       sourceRid,
       sourceRoute,
-      ...(requestSeq === null ? {} : { requestSeq }),
-      ...(transportPairId === undefined ? {} : { transportPairId }),
-      ...(transportPairGeneration === undefined ? {} : { transportPairGeneration }),
+      ...(requestSeq === undefined ? {} : { requestSeq }),
       ...(receivedReply === undefined
         ? {}
         : {
@@ -502,8 +508,6 @@ function copyMonitorEvent(event: MonitorEvent): ZLinkRawMonitorRecord {
     localAddress: event.localAddr,
     remoteAddress: event.remoteAddr,
     connectionId: event.connectionId,
-    transportPairId: event.transportPairId,
-    transportPairGeneration: event.transportPairGeneration,
     transportLane: event.transportLane,
     flags: event.flags
   };

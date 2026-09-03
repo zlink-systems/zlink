@@ -449,7 +449,7 @@ test('managed stream delegates each call timeout to binding-owned admission', as
     sendHighWaterMark: 16,
     onSendReady() {},
     send() { return true; },
-    async sendAsync(_routingId, _payload, timeoutMs) {
+    async submit(_routingId, _payload, timeoutMs) {
       observed.push(timeoutMs);
     },
     disconnectPeer() {},
@@ -6311,7 +6311,7 @@ test('bound-session response keeps its stream route during an ownership refresh'
   socket.send = () => {
     throw new Error('bound-session response must use the async stream terminal');
   };
-  socket.sendAsync = async (_sessionRid, message) => {
+  socket.submit = async (_sessionRid, message) => {
     written.push(bytesOf(message));
   };
   socket.unbindActor = async () => { unbindCount += 1; };
@@ -8524,6 +8524,7 @@ function fakeStream(sessionId, routingId) {
 function createStreamRuntime(options) {
   return new framework.ZLinkStreamSessionNodeRuntime({
     readablePoller: readyPoller(),
+    createPacket: () => new FakeStreamPacket(),
     applicationJobQueue: new ApplicationJobQueue(
       resolveApplicationJobQueueConfiguration()
     ),
@@ -8893,7 +8894,7 @@ class FakeStreamSocket {
     return true;
   }
 
-  async sendAsync(...args) {
+  async submit(...args) {
     this.sends.push(args);
   }
 
@@ -8921,23 +8922,44 @@ class FakeStreamSocket {
     return true;
   }
 
-  recv() {
-    return this.received.shift();
+  recvPacket(packet) {
+    const received = this.received.shift();
+    if (received === undefined) return false;
+    packet.fill(received);
+    return true;
   }
 
   emitFrame(routingId, header, payload) {
-    const frame = protocolCodecs.ZlinkStreamFrameCodec.encode(
-      bytesOf(header),
-      bytesOf(payload)
-    );
     this.received.push({
       routingId,
-      parts: [zlink.Message.from(frame)],
-      close() {}
+      header: zlink.Message.from(bytesOf(header)),
+      body: zlink.Message.from(bytesOf(payload))
     });
   }
 
   async dispose() {}
+}
+
+class FakeStreamPacket {
+  constructor() {
+    this.current = undefined;
+  }
+
+  get routingId() { return this.current?.routingId ?? null; }
+  get header() { return this.current?.header ?? null; }
+  get body() { return this.current?.body ?? null; }
+
+  fill(received) {
+    this.close();
+    this.current = received;
+  }
+
+  close() {
+    const current = this.current;
+    this.current = undefined;
+    current?.header?.close();
+    current?.body?.close();
+  }
 }
 
 class FakeSpotNode {

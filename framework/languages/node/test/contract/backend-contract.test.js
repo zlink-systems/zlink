@@ -14,7 +14,7 @@ const {
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const {
   isPollerInterruptedError,
-  submitBindingImmediateSend
+  submitBindingSyncSend
 } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
 const { wrapSocket } = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
 const {
@@ -115,20 +115,15 @@ test('poller interruption is treated as an empty progress turn', () => {
   );
 });
 
-test('binding immediate send preserves blocking None for public synchronous stream writes', () => {
-  const appliedFlags = [];
+test('binding synchronous send uses the flag-free finalized terminal', () => {
   const submittedParts = [];
   const submit = {
     message(part) {
       submittedParts.push(Buffer.from(part));
       return this;
     },
-    flags(flags) {
-      appliedFlags.push(flags);
-      return this;
-    },
-    submit() {
-      return true;
+    submit_sync() {
+      return undefined;
     }
   };
   const operation = {
@@ -138,12 +133,8 @@ test('binding immediate send preserves blocking None for public synchronous stre
     }
   };
 
-  assert.equal(submitBindingImmediateSend(operation, Buffer.from('blocking'), 0), true);
-  assert.equal(
-    submitBindingImmediateSend(operation, Buffer.from('nonblocking'), zlink.SendFlags.DontWait),
-    true
-  );
-  assert.deepEqual(appliedFlags, [0, zlink.SendFlags.DontWait]);
+  assert.equal(submitBindingSyncSend(operation, Buffer.from('blocking')), undefined);
+  assert.equal(submitBindingSyncSend(operation, Buffer.from('nonblocking')), undefined);
   assert.deepEqual(submittedParts.map((part) => part.toString()), ['blocking', 'nonblocking']);
 });
 

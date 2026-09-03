@@ -416,7 +416,7 @@ test('node common-spec samples expose buildable scenario entrypoints', () => {
       '@zlink-systems/sample-shoppingmall-ts',
       'shoppingmall-client-scenario.ts',
       'ShoppingMallClientScenario',
-      'PASS ShoppingMall.Ts',
+      'shoppingmall=completed',
       [
         'Server/ApiA/main.ts',
         'Server/ApiB/main.ts',
@@ -647,7 +647,7 @@ test('GameQuest TypeScript sample uses framework channel topology', () => {
   assert.match(questDomain, /decide\(event: GameplayEventEnvelope/);
   assert.match(messageContracts, /class JoinSessionRes \{[\s\S]*?playerId: string[\s\S]*?activeQuests/);
   assert.match(messageContracts, /class GameplayMsg \{[\s\S]*?payload: GameplayEventPayload/);
-  assert.match(messageContracts, /class ClosePlayerQuestReq/);
+  assert.match(messageContracts, /class ClosePlayerQuestMsg/);
   assert.match(messageContracts, /type StoredQuestEvent = \{[\s\S]*?type: string[\s\S]*?payload: Record<string, unknown>/);
   assert.doesNotMatch(messageContracts, /TextEncoder|TextDecoder|decodeGameplayPayload|payload: number\[\]/);
   assert.match(playerQuestProvisioner, /\.requestToSpot\(questMissionSpotId\(playerId\), request\)/);
@@ -670,7 +670,7 @@ test('GameQuest TypeScript sample uses framework channel topology', () => {
   assert.match(questDomain, /type: 'QuestCompleted'/);
   assert.match(questDomain, /type: 'QuestRewardGranted'/);
   assert.doesNotMatch(questStore, /TextEncoder|TextDecoder|encodePayload/);
-  assert.match(clientScenario, /closeOwnerA\.closed \|\| closeOwnerB\.closed/);
+  assert.match(clientScenario, /closeOwner\.accepted/);
   assert.match(serverMain, /playerQuests\.deactivate\(playerId\)/);
   assert.match(questDomain, /class PlayerQuestAggregate/);
   assert.match(questDomain, /conditionDecision/);
@@ -738,9 +738,9 @@ test('ShoppingMall TypeScript sample uses framework channel topology', () => {
   assert.match(clientMain, /ZLinkHttpClient\.create\(config\.apiAHttpUrl\)/);
   assert.match(clientMain, /ZLinkHttpClient\.create\(config\.apiBHttpUrl\)/);
   assert.match(clientScenario, /\.post\('\/orders\/start'\)/);
-  assert.match(clientScenario, /\.get\(`\/orders\/\$\{orderId\}`\)/);
-  assert.match(clientScenario, /shoppingmall-payment-failure=completed/);
-  assert.match(clientScenario, /\.post\('\/self-check\/assert'\)/);
+  assert.match(clientScenario, /\.get\(`\/orders\/\$\{encodeURIComponent\(orderId\)\}`\)/);
+  assert.match(clientMain, /shoppingmall=completed/);
+  assert.match(sampleRunner, /'\/self-check\/assert'/);
   assert.doesNotMatch(clientScenario, /requestToChannel|SampleNames\.orderWorkflowRouteChannel|SAMPLE_ENDPOINT|support::request_line/);
   assert.match(commerceApiModule, /zlinkFramework\(\)/);
   assert.match(commerceApiModule, /\.addRouteMesh\(SampleNames\.orderWorkflowSpotMesh\)/);
@@ -1160,16 +1160,22 @@ test('node samples do not hide readiness with sleeps or pre-ready pings', () => 
     'samples/Bingo.Ts/run_sample.ps1',
     'samples/Bingo.Ts/run_sample.sh',
     'samples/DeliveryDispatch.Ts/Client/deliverydispatch-client-scenario.ts',
+    'samples/DeliveryDispatch.Ts/Runner/sample-runner.mjs',
     'samples/DeliveryDispatch.Ts/Server/DispatchCenter/dispatch-worker.ts',
     'samples/GameQuest.Ts/Client/gamequest-client-scenario.ts',
+    'samples/GameQuest.Ts/Runner/sample-runner.mjs',
     'samples/GameQuest.Ts/Server/GameApi/gamequest-session.ts',
     'samples/GameQuest.Ts/Server/GameApi/Infrastructure/ZLink/gameplay-event-publisher.ts',
     'samples/SupportChat.Ts/Client/supportchat-client-scenario.ts',
+    'samples/SupportChat.Ts/Runner/sample-runner.mjs',
     'samples/SupportChat.Ts/Server/Probe/main.ts',
     'samples/SupportChat.Ts/Server/Support/notification-delivery-log.ts',
     'samples/SupportChat.Ts/Server/runtime-support.ts',
     'samples/ShoppingMall.Ts/Client/shoppingmall-client-scenario.ts',
-    'samples/ShoppingMall.Ts/Server/CommerceApi/Infrastructure/ZLink/zlink-order-workflow-router.ts'
+    'samples/ShoppingMall.Ts/Runner/sample-runner.mjs',
+    'samples/ShoppingMall.Ts/Server/bootstrap.ts',
+    'samples/ShoppingMall.Ts/Server/CommerceApi/Infrastructure/ZLink/zlink-order-workflow-router.ts',
+    'samples/ZoneWorld/Client/main.ts'
   ]);
   for (const file of sampleSourceFiles(samplesRoot)) {
     if (allowedTimingFiles.has(relativePath(workspaceRoot, file))) {

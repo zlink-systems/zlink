@@ -515,7 +515,6 @@ export interface ZLinkBackendDealerSocket extends ZLinkBackendConnectableSocket 
 export interface ZLinkBackendReplyOperation {
   message(message: unknown): ZLinkBackendReplyOperation;
   submit(): void;
-  flags(flags: ZLinkBackendSendFlags): { submit(): void };
 }
 
 export interface ZLinkBackendSendOperation {
@@ -562,8 +561,8 @@ export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket 
     timeoutMs?: number
   ): Promise<readonly Message[]>;
   disconnectPeer(routingId: RoutingId): void;
-  reply(routingId: RoutingId, requestSeq: bigint): ZLinkBackendReplyOperation;
-  reply(routingId: RoutingId, requestSeq: bigint, message: Message | readonly Message[]): void;
+  reply(routingId: RoutingId, replyToken: unknown): ZLinkBackendReplyOperation;
+  reply(routingId: RoutingId, replyToken: unknown, message: Message | readonly Message[]): void;
 }
 
 export interface ZLinkBackendPublisherSocket extends ZLinkBackendSocket {
@@ -581,15 +580,22 @@ export interface ZLinkBackendReadablePoller {
   dispose(): void;
 }
 
+export interface ZLinkBackendStreamPacket {
+  readonly routingId: RoutingId | null;
+  readonly header: Message | null;
+  readonly body: Message | null;
+  close(): void;
+}
+
 export interface ZLinkBackendStreamSocket extends ZLinkBackendSocket {
   readonly sendTimeoutMs: number;
   readonly sendHighWaterMark: number;
-  /** Framework stream ingress uses this bound while assembling raw recv parts. */
+  /** Framework stream ingress uses this bound for packet payload validation. */
   maxMessageSize: number;
   setTlsServer(cert: string, key: string, requireClientCert?: boolean): void;
-  recv(flags?: ZLinkBackendRecvFlags): Received | undefined;
+  recvPacket(packet: ZLinkBackendStreamPacket, flags?: ZLinkBackendRecvFlags): boolean;
   send(routingId: RoutingId, payload: Message | readonly Message[], flags: ZLinkBackendSendFlags): boolean;
-  sendAsync(routingId: RoutingId, payload: Message | readonly Message[], timeoutMs?: number): Promise<void>;
+  submit(routingId: RoutingId, payload: Message | readonly Message[], timeoutMs?: number): Promise<void>;
   disconnectPeer(routingId: RoutingId): void;
   bindActor(
     sessionRid: RoutingId,
@@ -613,7 +619,7 @@ export interface ZLinkBackendStreamSocket extends ZLinkBackendSocket {
 
 export interface ZLinkBackendSocketMonitor extends ZLinkBackendObject {
   onEvent(handler: (event: ZLinkBackendSocketMonitorEvent) => void): void;
-  recv(): ZLinkBackendSocketMonitorEvent;
+  drain(): number;
   dispose(): Promise<void>;
 }
 
@@ -628,7 +634,7 @@ export interface ZLinkBackendSpotRouteBridge extends ZLinkBackendObject {
   handleRouterReceived(
     channelName: string,
     sourceNodeRid: RoutingId,
-    requestSeq: bigint | number,
+    correlation: bigint | number,
     parts: readonly MessageLike[]
   ): boolean;
   dispose(): Promise<void>;
@@ -739,6 +745,7 @@ export interface ZLinkMeshBackendAdapter {
 
 export interface ZLinkStreamBackendAdapter {
   createStreamSocket(context: ZLinkBackendContext): ZLinkBackendStreamSocket;
+  createStreamPacket(): ZLinkBackendStreamPacket;
   createReadablePoller(socket: ZLinkBackendStreamSocket): ZLinkBackendReadablePoller;
 }
 

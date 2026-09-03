@@ -106,8 +106,8 @@ export function appendRouteReplyParts(
   return current;
 }
 
-export function isReplyableRequestSeq(requestSeq: bigint | null): requestSeq is bigint {
-  return requestSeq !== null && requestSeq !== 0n;
+export function hasReplyToken(replyToken: unknown | null): boolean {
+  return replyToken !== null;
 }
 
 function requireRoutedActorJoinEnvelope(
