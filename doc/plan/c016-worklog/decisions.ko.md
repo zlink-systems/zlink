@@ -518,3 +518,16 @@ spec-first: 감독관(Claude) 직접 정정.
 line1456 "unit와 언어별 E2E"→"unit". 정정 후 Phase 12 = 12.0 configure·12.1 unit·12.2 cross-language E2E.
 **감독관 착오 정정**: 앞서 Phase 12.2로 per-language E2E(cpp SpotService 등)를 서브에이전트로 돌리던 것은 범위 오류 →
 중단. **남은 검증 = cross-language E2E(12.2) + Phase 13 samples**. (Phase 13 문서는 사용자 영역.)
+
+## D-072 (2026-09-04 01:4x) handover reply-route 사용자 판정 — reply=RID 라우팅, handover 특별취급 없음 → Core 변경 불필요
+사용자 판정: "reply도 다를건 없지 않어? rid handover가 다를 이유가 있어?" → **reply는 일반 send와 동일하게 logical RID로
+라우팅되는 메시지이고, RID handover가 reply를 특별 취급할 이유가 없다.** handover는 RID를 새 pipe로 옮기는 것뿐 →
+reply는 "그 RID의 현재 ready pipe"(=새 connection)로 가면 된다.
+**Core는 이미 그렇게 동작**(D-068 진단: reply.Submit() 예외 없이 성공, 07-router:273 "현재 ready pipe"대로 새 connection
+전달) → **Core 변경 불필요, handover err101은 Core 버그 아님, spec 변경(물리 binding)도 아님**. D-061/D-068의 "spec gap"
+판정은 **logical-RID binding으로 확정**(reply=send와 동일 규칙)하여 종결 — 스펙 문면(현재 "현재 ready pipe")이 곧 정답.
+**err101 원인 = test/framework 측**: 테스트가 (1)handover 전 원본 소켓에 `.Request()`를 매어두고 거기서 대기(reply는
+올바르게 새 소켓으로 감), (2)`nativeTerminalReplySubmitOverride`로 framework의 reply 재drive 큐(SubmitOrQueueNativeReply/
+PendingNativeTerminalReply)를 우회. 실제 framework엔 재drive 메커니즘 존재. → **framework/test followup**(Core 아님).
+**귀결**: **이번 캠페인 Core 버그 2건(mesh a339149dbb·alias e3d5c5b79f) 모두 수정·push 완료로 확정**. handover는 Core 무관.
+[[canonical-actor-join-app-reply-contract]] OPEN RULING(reply-token binding)= **logical RID로 종결**.
