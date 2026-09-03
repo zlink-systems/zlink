@@ -1061,3 +1061,33 @@ if(VALGRIND_EXECUTABLE AND Python3_Interpreter_FOUND)
       LABELS "hotpath"
       TIMEOUT 600)
 endif()
+
+# Level-triggered wake/lost-wake contract suite. Keep the two exact internal
+# race reproducers in their owning executables and expose them as focused gates
+# beside the public poll/poller matrix.
+add_executable(
+  test_wake_invariants
+  ${INTEGRATION_TEST_ROOT}/test_wake_invariants.cpp)
+target_link_libraries(test_wake_invariants ${TESTUTIL_LIB})
+
+add_test(NAME test_wake_invariants COMMAND test_wake_invariants)
+add_test(
+  NAME test_wake_invariant_hwm_lwm_shrink
+  COMMAND test_router_multiple_dealers)
+add_test(
+  NAME test_wake_invariant_completion_owner
+  COMMAND
+    ${CMAKE_COMMAND} -E env
+    ZLINK_TEST_CASE=test_blocking_request_send_drains_owned_completions_to_break_hwm_cycle
+    $<TARGET_FILE:test_phase3_request_reply_contract>)
+
+set_tests_properties(
+  test_wake_invariants
+  test_wake_invariant_hwm_lwm_shrink
+  test_wake_invariant_completion_owner
+  PROPERTIES
+    RUN_SERIAL TRUE
+    TIMEOUT 180
+    SKIP_RETURN_CODE 77
+    RESOURCE_LOCK "${NETWORK_INTEGRATION_RESOURCE_LOCK}"
+    LABELS "integration;regression;serial;wake-invariant")
