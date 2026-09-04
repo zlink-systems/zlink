@@ -6,8 +6,8 @@ title: "Message Flow Tracing"
 
 [Observability topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 02. Runtime Metrics](02-runtime-metrics.en.md) · [Next: 04. Request Correlation](04-flow-correlation.en.md)
 
-> Defines the per-message progress record (trace) and its attributes and
-> record level. The ownership split among this topic's four documents
+> Defines the per-message progress record (trace), its attributes, and its
+> recording level. The ownership split among this topic's four documents
 > follows
 > [the topic table of contents "2. Documents In This Topic"](README.en.md#2-documents-in-this-topic).
 
@@ -45,7 +45,7 @@ are the same in every language.
 
 ### 2.1 Message Flow Stages
 
-| `phase` | Processing boundary this record means |
+| `phase` | Processing boundary represented by this record |
 |---|---|
 | `received` | The message arrived at the framework's receive/dispatch boundary. |
 | `admitted` | The target application queue accepted the message. |
@@ -105,7 +105,7 @@ The framework applies §2.1's stages at the following boundaries.
 - Request timeout, cancellation, runtime termination, and handler
   dispatch error
 
-A wrapper and transport don't duplicate the same terminal trace. A
+A wrapper and a transport don't duplicate the same terminal trace. A
 request has exactly one terminal record per surface. Actor payload isn't
 recorded as a Spot's handler dispatch stage.
 
@@ -115,7 +115,7 @@ Every record uses the following closed values and inclusion conditions.
 So records built in different languages can be searched and compared
 under the same criteria.
 
-### 3.1 Closed Values Shared By Every Language
+### 3.1 Closed Values Shared by Every Language
 
 The value indicating which processing method a message uses — send,
 request, response, error, or control — is called
@@ -139,10 +139,10 @@ or drop, `reason` is one of the following values.
 `backpressure`, `stale_target`, `target_closed`, `shutdown`,
 `location_unavailable`, `activation_rejected`, `activation_timeout`.
 
-The last three each mean: an Instance Spot's location couldn't be found;
-new Spot creation was declined; and creation wasn't finished within the
-time limit. Instance Spot close and lease fencing are recorded as
-`target_closed`.
+The last three values respectively mean that an Instance Spot's location
+couldn't be found, new Spot creation was declined, or creation wasn't
+finished within the time limit. Instance Spot close and lease fencing are
+recorded as `target_closed`.
 
 `zlink.dispatch_error` always uses `outcome=failed`. `reason` is one of
 the following values.
@@ -172,7 +172,7 @@ the following values.
 | `mesh_name` | Included when there's a Node direct or RouteMesh scope. |
 | `server_rid` | Included when a ClientServer target was selected. |
 | `source_rid`, `target_rid` | Included when a routed hop has that identity. |
-| `packet_name` | Included when there's a [packet name](../00-foundation/02-glossary.en.md#packet-name) finding a typed handler. |
+| `packet_name` | Included when there's a [packet name](../00-foundation/02-glossary.en.md#packet-name) used to find a typed handler. |
 | `topic`, `spot_id`, `actor_id` | Included when that surface uses a logical target. |
 | `instance_spot_type`, `activation_state` | Included when Instance Spot processing has that value. |
 | `correlation_id` | Included when linking a request and terminal reply. |
@@ -184,13 +184,13 @@ the following values.
 finding a handler or selecting a target. A trace doesn't include payload,
 application [metadata values](../00-foundation/02-glossary.en.md#metadata-snapshot),
 native handle, raw frame, or an exception object. When recording an error
-description as a string, it's bounded within an implementation-defined
-maximum length, and doesn't include a secret or stack trace.
+description as a string, it's limited to an implementation-defined maximum
+length and doesn't include a secret or stack trace.
 
 #### Structured Log Substitute Notation
 
-An implementation providing a structured log instead uses the `zlink
-flow:` prefix and the following keys as-is.
+An implementation providing a structured log as a substitute uses the
+`zlink flow:` prefix and the following keys as-is.
 
 `event`, `phase`, `surface`, `kind`, `mesh`, `channel`, `channel_route`,
 `source_rid`, `target_rid`, `server_rid`, `packet`, `topic`, `spot`,
@@ -205,7 +205,7 @@ Classic fanout subscriber has no handler, the subscriber process records
 logger provider. That record has no `channel_route_kind` and isn't
 returned as a per-publisher delivery result.
 
-## 4. How The Application Sets The Recording Scope — Level And Sampling
+## 4. How the Application Sets the Recording Scope — Level and Sampling
 
 The application sets the diagnostics level to one of four values.
 
@@ -219,7 +219,7 @@ The application sets the diagnostics level to one of four values.
 The default is `Errors`. The message size setting only adds byte size,
 not payload content. Diagnostics level doesn't turn off metric recording.
 
-Sampling rate is the ratio of normal flows to record, in range
+Sampling rate is the ratio of normal flows to record, in the range
 `0.0..1.0`. A value outside the range is treated as a startup or public
 argument error. The framework selects normal flows using a hash of
 `flow_id`, so every hop of the same flow is either all recorded or all
@@ -246,7 +246,7 @@ public interface IZLinkDiagnosticsOptions
 ```csharp
 options.ConfigureDispatch().Diagnostics
     .SetLevel(ZLinkDiagnosticsLevel.Normal) // records errors and the main processing boundaries.
-    .SetSampleRate(0.1)                     // selects the same normal flow together, recording only 10%.
+    .SetSampleRate(0.1)                     // selects each normal flow as a whole and records only 10%.
     .IncludeMessageSizes(false);            // records neither payload content nor byte size.
 ```
 
@@ -254,12 +254,12 @@ Public configuration only provides level, sampling rate, and whether to
 include message size. Exporter, logger provider, and storage backend are
 owned by standard telemetry configuration.
 
-## 5. Changing The Record Level At Runtime And The Cost Rule
+## 5. Changing the Record Level at Runtime and the Cost Rule
 
 The application can change diagnostics level without restarting the
 process. The level specified at startup is the initial value, and a
-runtime change applies together to every Node, Channel, Spot, Actor, and
-STREAM processing in the process. A separate toggle per surface isn't
+runtime change applies to all Node, Channel, Spot, Actor, and STREAM
+processing in the process. A separate toggle per surface isn't
 provided. Each language's public interface must provide runtime
 control to read and change the process's current level.
 
@@ -271,7 +271,7 @@ telemetry queue before the change can be delivered or discarded. Turning
 the level back on doesn't later build records for a previous processing
 stage.
 
-**At `Off`, the per-message hot path eliminates the very cost of building
+**At `Off`, the per-message hot path eliminates even the cost of building
 a log message.** Beyond reading and branching on the current level, no
 trace-only work happens.
 
@@ -288,25 +288,25 @@ So an implementation that only blocks output at the log provider doesn't
 satisfy the `Off` contract. It must exit at the first trace branch on the
 message hot path, not right before the provider call.
 
-**The per-message hot path wraps the check with `if (enabled(outcome))`
+**The per-message tracing hot path is wrapped in `if (enabled(outcome))`,
 so it builds neither an event nor a lambda.** A rare transition, such as
 failure or abort, only builds an event via a lazy form
 (`trace(outcome, build)` / `traceLazy`), after the check passes. The lazy
 form removes the `if` at the call site but still allocates one lambda
 (C++ inlines it, so there's no allocation), so on the hot path even the
-lazy form is wrapped in one more `if` to block even lambda creation. A
-call site that assembles a string before the gate isn't built.
+lazy form is wrapped in one more `if` to block even lambda creation. No
+call site assembles a string before the gate.
 
 **Language-specific discretion** — how the gate is expressed differs by
 language. C++ uses a template lambda, .NET uses an interpolated-string
 handler and `Func<>`, Java uses `Supplier<>`, Node uses a thunk. As long
-as the observed result is the same — that when tracing is off, none of
-string/event/lambda is built, so the cost is zero — the method is
-discretionary. The criterion for confirming this discretion is checking,
-by call-site code, that after adding a new trace, that path builds none
-of string/event/lambda while tracing is off.
+as the observed result is the same — that when tracing is off, no string,
+event, or lambda is built, so the cost is zero — the method is
+discretionary. The criterion for this discretion is confirmation in the
+call-site code that, after adding a new trace, the path builds no string,
+event, or lambda while tracing is off.
 
-## 6. Completion, Failure, And Lifetime
+## 6. Completion, Failure, and Lifetime
 
 A trace's `sent`, `admitted`, handler completion, and reply receipt are
 different completion boundaries. Whether the trace record itself
@@ -322,9 +322,9 @@ increment `zlink.observability.events.overflow`. Provider failure isn't a
 message operation failure.
 
 An implementation logging a provider failure limits how many times the
-same error is recorded. It doesn't call the same provider to build this
-log's trace again. Without a provider, it avoids an allocation made just
-for the trace.
+same error is recorded. It doesn't call the same provider again to create
+a trace for this log. Without a provider, it avoids an allocation made
+just for the trace.
 
 When the provider failure itself is recorded, the implementation uses the
 application's fallback logger or process stderr, not the failed provider.
@@ -344,10 +344,10 @@ request or replay.
 
 ## 7. Verification Requirements
 
-The following is confirmed using only the public surface —
+The following is verified using only the public surface —
 `event_id`, `phase`, `surface`/`message_kind`/`outcome`/`reason`/`action`,
 attribute keys, and the diagnostics level/sampling rate configuration
-interface. Each item leads to one contract test.
+interface. Each item corresponds to one contract test.
 
 **Closed values and attributes**
 
@@ -383,7 +383,7 @@ interface. Each item leads to one contract test.
 - A path not recording due to level or sampling doesn't copy
   payload/metadata or build a raw event DTO.
 - After adding a new trace and turning tracing off, call-site code
-  confirms that path builds none of string/event/lambda (the
+  confirms that path builds no string, event, or lambda (the
   confirmation criterion for §5's language-specific discretion).
 
 **Provider and public interface**

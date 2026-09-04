@@ -6,18 +6,18 @@ title: "Channel Messaging"
 
 [Channel·Transport topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 01. RouteMesh Topology](01-channel-topology.en.md) · [Next: 03. ClientServer Channel](03-client-server-channel.en.md)
 
-> Defines the common contract of Channel messaging for Node direct, which sends to a
+> Defines the common Channel messaging contract for Node direct, which sends to a
 > specific [MeshNode](../00-foundation/02-glossary.en.md#meshnode), and ChannelName select-one, which
 > selects one Server by [ChannelName](../00-foundation/02-glossary.en.md#channelname).
 
-## 1. Node Direct And ChannelName Select-One Overview, Common API Example
+## 1. Node Direct and ChannelName Select-One Overview, Common API Example
 
 The two methods differ in the target the application specifies and the scope the
 framework selects from.
 
 | Method | Value the application specifies | How the framework decides the actual target |
 |---|---|---|
-| [Node direct](../00-foundation/02-glossary.en.md#node-direct) | Specifies [MeshName](../00-foundation/02-glossary.en.md#meshname) — the name identifying one [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) physical connection group, the scope in which several MeshNodes participate to exchange Channel messages with nodes — and the target node's RID. | Only uses a ready [MeshNode](../00-foundation/02-glossary.en.md#meshnode) on the RouteMesh of the same MeshName that exactly matches the specified RID and isn't Object Client. Doesn't switch to a different RID. |
+| [Node direct](../00-foundation/02-glossary.en.md#node-direct) | Specifies [MeshName](../00-foundation/02-glossary.en.md#meshname) — the name identifying one [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) physical connection group, the scope in which several MeshNodes participate and exchange node and Channel messages — and the target node's RID. | Only uses a ready [MeshNode](../00-foundation/02-glossary.en.md#meshnode) on the RouteMesh of the same MeshName that exactly matches the specified RID and isn't Object Client. Doesn't switch to a different RID. |
 | [ChannelName](../00-foundation/02-glossary.en.md#channelname) select-one | Specifies one `ChannelName`. | Finds the send path registered for ChannelName in the current process. On a [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) path, selects one [ready](../00-foundation/02-glossary.en.md#ready) Server membership for that ChannelName; on a ClientServer path, selects one ready server. |
 
 ChannelName isn't a socket or endpoint name. It's a logical address for finding one
@@ -78,7 +78,7 @@ MatchReply reply = await routeClient
     .Async<MatchReply>(cancellationToken); // waits for the selected Server handler's reply.
 ```
 
-## 2. How To Select A Target — Node Direct
+## 2. How to Select a Target — Node Direct
 
 Node direct keeps the caller-specified `MeshName` and target RID as-is. It only sends
 a message to a MeshNode satisfying all of the following conditions.
@@ -102,11 +102,11 @@ under the same configuration generation. If a caller specifies an Object Client 
 as a Node direct target, it isn't switched to a different target — it ends with
 `NotFound`.
 
-## 3. How To Select A Target — ChannelName Select-One, Selection Order (Weighted Round-Robin)
+## 3. How to Select a Target — ChannelName Select-One, Selection Order (Weighted Round-Robin)
 
 [ChannelName select-one](../00-foundation/02-glossary.en.md#select-one) is a method of selecting one
-Server, among several, to receive the current call. The framework processes the
-following order as one operation.
+Server, among several, to receive the current call. The framework performs the
+following sequence as one operation.
 
 A target preparing to terminate or move to a different host is excluded from new call
 selection first, but can finish already-accepted work within a set time. This state —
@@ -137,9 +137,9 @@ following procedure. The accumulator starts at `0`.
 2. Picks the candidate with the largest accumulator. On a tie, picks the one earlier
    in **ascending candidate identifier order**. The identifier differs by topology —
    a RouteMesh path uses [NodeRid](../00-foundation/02-glossary.en.md#meshnode); a ClientServer
-   path uses Server RID. Comparison compares the identifier's byte sequence as
-   unsigned values from the front, and if one is a prefix of the other, the shorter
-   one comes first. Using a different value pointing at the same target — like
+   path uses Server RID. The identifier's byte sequence is compared as unsigned
+   values from the beginning, and if one is a prefix of the other, the shorter one
+   comes first. Using a different value pointing at the same target — like
    connection path or registration source — as the identifier causes the order to
    diverge between implementations.
 3. Subtracts the sum of every candidate's weight from the picked candidate's
@@ -230,7 +230,7 @@ send. Normal completion means the selected send path's source-local queue accept
 the message. The framework doesn't return acceptance status, the selected RID, or
 server identity as an application result.
 
-### The Candidate List And Selection Order Are Prepared Ahead At Change Time
+### The Candidate List and Selection Order Are Prepared in Advance Whenever State Changes
 
 - **The candidate list is rebuilt only when peer state changes; the call path only
   reads it.** If every call scanned all peers to check weight and drain conditions,
@@ -277,14 +277,14 @@ server identity as an application result.
     candidate list and the selection order are prepared together ahead of time,
     and a call only reads them.
 
-### Framework Picks The Target And Core Manages The Connection
+### Framework Picks the Target and Core Manages the Connection
 
 Both the MeshNode (RouteMesh) path and the ChannelName select-one path have the
 framework pick the target. RouteMesh picks a logical node and sends directly to
 that NodeRid; ChannelName select-one picks one of the candidate servers and submits
 over that server's dedicated connection. In both paths, the target is decided
-first, and the message is sent over a connection that already exists, so no room
-to pick is left for the underlying transport at that moment.
+first, and the message is sent over a connection that already exists, leaving the
+underlying transport no target choice at that moment.
 
 The manual connection fallback, used only for a channel where a ClientServer
 transport isn't registered, is different. This path advertises all candidate
@@ -305,13 +305,13 @@ actual selection is made by Core's load balancer.
 - **Connection order can't be used to steer Core's choice.** Even if the candidate
   list is rotated so the computed winner comes first, the moment the receiving
   side puts that order into its own set, the order information is lost. Core
-  doesn't promise connection order, so this approach doesn't make the selection
-  result apply.
+  doesn't promise connection order, so this approach can't enforce the selection
+  result.
 
 For the manual connection fallback path to meet this contract, Core's load
 balancer would need to produce the same order as the
 [Weighted Round-Robin Selection Order](#weighted-round-robin-selection-order) — the
-framework can't close off this path's selection procedure on its own.
+framework can't complete this path's selection procedure on its own.
 
 ## 4. An Unregistered ChannelName
 
@@ -356,7 +356,7 @@ the previous target may have already run the work.
 A one-way send's acceptance moment, and a request's final completion condition, are
 defined by [Async Execution Policy](../01-execution/01-submit-and-completion.en.md).
 
-## 6. How To Find And Run A Handler (Namespace, Context Information)
+## 6. How to Find and Run a Handler (Namespace, Context Information)
 
 Node direct and ChannelName handlers register in different
 [handler namespaces](../00-foundation/02-glossary.en.md#handler-namespace).
@@ -419,7 +419,7 @@ precise full signature is defined by
 [.NET Channel Messaging Interface](../languages/dotnet/interfaces/04-channel-messaging.en.md) and
 [.NET Configuration Interface](../languages/dotnet/interfaces/03-configuration-topology.en.md).
 
-### Information Provided In The Handler Context
+### Information Provided in the Handler Context
 
 The Channel handler and filter context provide the following information.
 
@@ -441,11 +441,11 @@ Physical information the handler doesn't need for business processing — like
 RouteMesh or ClientServer kind, endpoint, and selection result — is left in
 monitoring.
 
-### Spot And Actor Payloads Use A Separate Target API
+### Spot and Actor Payloads Use a Separate Target API
 
-Node direct; the direct call to a [Spot](../00-foundation/02-glossary.en.md#spot) — a logical
-instance with an address and state, reachable through the same global ID even after the executing
-node changes — known as Spot direct; and Actor direct are different addressing methods, and their
+Node direct, Spot direct — the direct call to a [Spot](../00-foundation/02-glossary.en.md#spot), a
+logical instance with an address and state that remains reachable through the same global ID even
+after the executing node changes — and Actor direct are different addressing methods, and their
 handlers aren't mixed either.
 
 A message sent via Node direct is processed by the specified MeshNode's Node direct
@@ -458,10 +458,10 @@ logical address that identifies a Spot — or ActorId from the start.
 The framework preserves the request's reply route and correlation. An application
 handler doesn't directly build a source endpoint or internal route frame.
 
-## 7. The Boundary With Classic Fanout (Reserved Liveness Beacon Topic)
+## 7. The Boundary with Classic Fanout (Reserved Liveness Beacon Topic)
 
-Classic fanout is a feature delivering events to subscribers, over a separate
-PUB/SUB socket, whose connection and subscription are both ready. It doesn't share
+Classic fanout delivers events over a separate PUB/SUB socket to subscribers whose
+connections and subscriptions are both ready. It doesn't share
 a target set with RouteMesh ChannelName select-one or Spot Logical Multicast.
 
 [Classic fanout](../00-foundation/02-glossary.en.md#classic-fanout) doesn't provide the following
@@ -482,10 +482,10 @@ Spot's [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast)
 PUB/SUB socket — it delivers to each participating node over the MeshNode
 connection, so it isn't subject to this loss rule.
 
-### The Topic Reserved For The Framework's Connection-Liveness Check Cannot Be Used
+### The Topic Reserved for the Framework's Connection-Liveness Check Cannot Be Used
 
-The framework checks whether a subscriber keeps receiving the signal a publisher
-sends, within a fixed time, on a Classic fanout connection. Checking whether a
+On a Classic fanout connection, the framework checks whether a subscriber continues
+to receive the publisher's signal within a fixed time limit. Checking whether a
 connected peer's signal keeps arriving is called liveness checking.
 
 The publisher periodically sends an internal signal so connection status can be
@@ -508,8 +508,8 @@ A topic that differs in length or by even one byte, as shown below, can be used.
 
 A subscriber doesn't treat this topic's signal as an application event. Since the
 framework only uses it to check connection status, a registered fanout handler
-isn't run, and it isn't published to message-flow observation, which records
-application message delivery flow either. The byte format of this
+isn't run, nor does the framework publish it to message-flow observation, which
+records application message delivery flow. The byte format of this
 [liveness beacon](../00-foundation/02-glossary.en.md#liveness-beacon) and the time criterion for
 judging a connection lost are defined by
 [Transport Liveness](05-transport-liveness.en.md).
@@ -518,7 +518,7 @@ A Spot's Channel-scoped [Logical Multicast](../00-foundation/02-glossary.en.md#l
 and its publish completion contract are owned by
 [Spot Messaging "4. Channel-Scoped Logical Multicast"](../03-spot-actor/02-spot-messaging.en.md#4-channel-scoped-logical-multicast).
 
-### Classic Fanout's Interface And Usage Example
+### Classic Fanout's Interface and Usage Example
 
 Classic fanout doesn't select one Server, like a ChannelName request does. It
 delivers an event to subscribers connected to the publisher whose subscription to
@@ -558,7 +558,7 @@ public interface IZLinkFanoutHandler<in TEvent>
 ```
 
 The following example shows building a `"system-events"` fanout channel and
-processing a `SystemNotice` the publisher sent, in the subscriber's
+processing a `SystemNotice` sent by the publisher in the subscriber's
 `SystemNoticeHandler`.
 
 ```csharp
@@ -586,7 +586,7 @@ The precise full signature is defined by
 [.NET Channel Messaging Interface](../languages/dotnet/interfaces/04-channel-messaging.en.md) and
 [.NET Configuration Interface](../languages/dotnet/interfaces/03-configuration-topology.en.md).
 
-## 8. Failure And Termination
+## 8. Failure and Termination
 
 | Condition | Result |
 |---|---|
@@ -620,9 +620,9 @@ public call.
 The full termination order is defined by
 [Graceful Drain](../05-location-relocation/05-host-relocation-flow.en.md).
 
-## 9. Metadata And Observation
+## 9. Metadata and Observation
 
-### Application Metadata Travels Together With The Message
+### Application Metadata Travels Together with the Message
 
 Application metadata is small key-value information sent separately from business
 payload. Setting metadata on a Node direct or ChannelName send/request call
@@ -684,7 +684,7 @@ Metadata's public contract is as follows.
 
 | Item | Contract |
 |---|---|
-| Key and value | UTF-8, and don't contain NUL. |
+| Key and value | UTF-8 and contain no NUL. |
 | Total size | At most 1024 bytes, including encoded key, value, and structural overhead. |
 | Setting the same key multiple times | The last value is sent. |
 | Reading in a handler | Provided as an unchangeable snapshot; the application copies it to keep it after the handler turn ends. |
@@ -722,7 +722,7 @@ Observability information must distinguish the following values.
 | Drain state | Indicates why a target was excluded from new selection. |
 
 This physical identifier isn't added to the Channel handler context. Packet
-payload, or a business identifier with too large a value space, isn't used as a
+payload, or a business identifier whose value space is too large, isn't used as a
 metric label.
 
 ## 10. Verification Requirements

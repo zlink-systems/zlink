@@ -1,8 +1,8 @@
 ---
-title: "Layering Boundaries And Identifiers"
+title: "Layering Boundaries and Identifiers"
 ---
 
-# Layering Boundaries And Identifiers
+# Layering Boundaries and Identifiers
 
 [Foundation topic index](README.en.md) · [Spec index](../README.en.md) · [Previous: 07. Framework Error Model](07-framework-error-model.en.md)
 
@@ -11,7 +11,7 @@ title: "Layering Boundaries And Identifiers"
 > criteria for separating identifiers.
 
 The contract for the shutdown procedure and order is owned by [Complete Host Relocation
-Flow](../05-location-relocation/05-host-relocation-flow.en.md), and the identifier's format and lifetime is owned
+Flow](../05-location-relocation/05-host-relocation-flow.en.md), and the format and lifetime of identifiers are owned
 by the [glossary](02-glossary.en.md). This chapter defines the structure that satisfies
 that contract, and a conflict between this chapter and that contract is a defect.
 
@@ -21,11 +21,11 @@ throughout the codebase and are therefore difficult to change later. If identifi
 different lifetimes are merged, the scope and period in which the value is valid can no
 longer be determined.
 
-## 1. Keep The Binding Boundary Semantic
+## 1. Keep the Binding Boundary Semantic
 
 **Every language implementation follows the same responsibility graph.** The graph is
 defined by semantic ownership and runtime cost, not by a binding's type names, package
-layout, or syntax. A binding changes on a cycle separate from Framework — if the binding
+layout, or syntax. A binding evolves on a cycle separate from the Framework — if the binding
 type and its ownership rules are scattered through the public contract, a binding change
 becomes an API-wide edit, and if every binding method is hidden behind a one-to-one class,
 the code gains more names without hiding any meaning.
@@ -65,7 +65,7 @@ when meanings match, and let an adapter handle a verified mismatch in one place.
 operation classification, POSDDD review gate, and performance gate below provide the
 criteria for that choice.
 
-### Classify The Operation
+### Classify the Operation
 
 Classify the operation, not the language or the binding class.
 
@@ -170,7 +170,7 @@ performance characteristics are the same regardless of the language's expression
 confirmation criteria are the operation classification table, the POSDDD review gate, and
 the performance gate above.
 
-## 2. Don't Put Shutdown Per Topology
+## 2. Don't Put Shutdown per Topology
 
 - **Put one host runtime per process, and put the per-topology runtime — such as
   [RouteMesh](02-glossary.en.md#routemesh)·ClientServer·fanout·STREAM, where multiple
@@ -195,17 +195,17 @@ the performance gate above.
 Internal verification condition — whether the shutdown path has no code that branches by
 checking a concrete type is confirmed by code review.
 
-### Don't Put Shutdown Logic In The Host Integration Layer
+### Don't Put Shutdown Logic in the Host Integration Layer
 
 - **Shutdown coordination is not put in a host integration layer such as a web framework
   integration package.** Putting shutdown coordination in the integration package prevents
-  the runtime from completing its own cleanup by itself. In a spot that does not use that
+  the runtime from completing its own cleanup by itself. In an environment that does not use that
   integration — a console host, a test, a different framework — shutdown then behaves
   differently, or doesn't happen at all. The integration layer only connects the runtime's
   start and stop to the host lifecycle, and what to clean up in what order is owned by the
   runtime.
 
-### Don't Implement The Same Protocol Twice
+### Don't Implement the Same Protocol Twice
 
 - **The client connection library and the framework do not implement the same protocol
   stack separately.** If the same protocol stack is implemented separately by each,
@@ -224,13 +224,13 @@ is confirmed in [§7 Verification Requirement](#7-verification-requirement).
 
 ## 3. Shutdown Carries Two Intents
 
-A shutdown request carries an intent of a different nature. Merging it into one makes even
+Shutdown requests carry two distinct intents. Merging them into one makes even
 an urgent shutdown wait for a relocation to finish.
 
 | Intent | What It Does | When |
 |---|---|---|
 | Shutdown after relocation | Moves this node's objects to a different node, then goes down | A planned shutdown, like deployment/scale-down |
-| Immediate shutdown | Cleans up only what's in progress with no move, then goes down | An urgent shutdown |
+| Immediate shutdown | Does not move objects; cleans up only what's in progress, then goes down | An urgent shutdown |
 
 - **If requests of the same kind overlap, the side whose conditions match joins the
   procedure already in progress; if the conditions differ, it is rejected.** If the mode
@@ -238,7 +238,7 @@ an urgent shutdown wait for a relocation to finish.
   doesn't wait and ends with `Blocked/OperationInProgress`
   ([Complete Host Relocation Flow 「6. Concurrent Calls And
   Cancellation」](../05-location-relocation/05-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation)).
-  If two procedures of the same kind run overlapped with different conditions, which
+  If two procedures of the same kind overlap with different conditions, which
   result is final cannot be decided.
 
 - **If Relocate and Shutdown overlap, shutdown wins, and the side waiting for relocation
@@ -264,7 +264,7 @@ Since the rejected result isn't stored, requesting again checks from the start
 ([Complete Host Relocation Flow 「6. Concurrent Calls And
 Cancellation」](../05-location-relocation/05-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation)).
 
-If there is not a single target to move, it succeeds even with no node to receive it. Here
+If there is nothing to move, it succeeds even with no node to receive it. Here
 too, the host state transition and new-work blocking are the same as any other relocation
 ([Complete Host Relocation Flow 「5.1 When There's No Target
 Yet」](../05-location-relocation/05-host-relocation-flow.en.md#51-when-theres-no-target-yet)).
@@ -302,28 +302,28 @@ flowchart TB
 Neither failure branch ends the host. Shutdown only happens if the caller separately
 requests it. §4 below starts from this diagram's `CLEAN`.
 
-## 4. Fix The Cleanup Order
+## 4. Fix the Cleanup Order
 
 - **The side that built a resource closes it.** While a child uses its parent's resource,
   it keeps a reference guaranteeing that the parent isn't closed yet. An outgoing
   reference must be checkable for whether it's already closed and whether the generation
   matches.
 
-- **Cleanup happens in the following order.** Without a fixed order, a shutdown bug that
-  isn't reproducible arises, differing every run.
+- **Cleanup happens in the following order.** Without a fixed order, shutdown bugs vary
+  between runs and cannot be reproduced.
 
 1. Block new application work and new public calls.
 2. Publish shutdown-in-progress to the location store so other nodes exclude this node
    from candidates.
-3. Finish an already-accepted work item and in-progress call up to a set time.
+3. Finish already-accepted work and in-progress calls up to a set time.
 4. Run the callback notifying the object of the shutdown reason.
-5. Stop the object timer and session connection, and general observation emission. Keep a
-   spot for the final notification.
-6. Stop the peer connection and receive endpoint, and the transport layer callback.
+5. Stop object timers, session connections, and general observation emission. Keep the
+   final-notification path available.
+6. Stop peer connections, receive endpoints, and transport-layer callbacks.
 7. Drain the execution queue or cancel it within a set time.
-8. Close the provider and transport layer resource.
+8. Close provider and transport-layer resources.
 9. Publish the final state and shutdown notification, and complete the observation
-   subscriber and waiter.
+   subscribers and waiters.
 
 ```mermaid
 flowchart TB
@@ -363,23 +363,24 @@ If the timer and session are stopped first, what the callback needs is already g
   not started.** Because the publish is the last signal that this node has ended, anything
   newly started after it conflicts with a state already announced as finished.
 
-## 5. Registration Declarations Are Validated Only Once, At Startup
+## 5. Registration Declarations Are Validated Only Once, at Startup
 
 - **A registration declaration is validated at startup, and does not change after passing
-  validation.** If it could change while running, every lookup point would have to ask
-  back whether the current value is valid. That cost is incurred per message, and it
-  becomes impossible to know which point-in-time's configuration processed which message.
+  validation.** If it could change while running, every lookup point would have to recheck
+  whether the current value is valid. That cost is incurred per message, and it becomes
+  impossible to know which version of the configuration was used to process each message.
 
-What validation must catch is a contradiction knowable before start — registering the same
-name twice, a channel with no handler, a mutually exclusive option combination.
-Discovering this after start means some messages have already been processed.
+Validation must catch contradictions that can be detected before startup — registering the
+same name twice, a channel with no handler, and mutually exclusive option combinations.
+Discovering these after startup means some messages have already been processed.
 
-- **If validation fails, it does not start.** Starting with only part registered makes it
-  impossible to predict what messages the part that failed to register might receive.
+- **If validation fails, it does not start.** If startup proceeds with only a partial
+  registration, it is impossible to predict which messages could reach the part that
+  failed to register.
 
 ## 6. Identifiers Are Not Merged
 
-- **A value with a different lifetime and scope is kept as a different identifier.**
+- **Values with different lifetimes and scopes are kept as distinct identifiers.**
   Merging them makes it impossible to judge in what scope and period the value is valid.
 
 | Identifier | Valid Until |
@@ -389,12 +390,12 @@ Discovering this after start means some messages have already been processed.
 | Node lifecycle generation | Increases per restart |
 | Channel name | Only meaningful within that process |
 | Object ID | The object's lifetime |
-| Object generation | Increases every time the same ID is built again |
+| Object generation | Increases every time the same ID is re-created |
 | In-progress call identifier | Until that call ends |
 | Physical connection identifier | Until the connection drops |
 
-Which layer can know each identifier follows its valid scope. The mesh layer needs to know
-only the mesh name; the node layer knows that plus its own RID and lifecycle generation.
+The valid scope of each identifier determines which layers may know it. The mesh layer
+needs to know only the mesh name; the node layer knows that plus its own RID and lifecycle generation.
 Below that, the channel name has meaning only within that process; the object layer knows
 the object ID and generation; and only the innermost individual call/connection layer
 knows the in-progress call identifier and the physical connection identifier. An inner
@@ -429,13 +430,13 @@ flowchart TB
     MESH --> NODE --> PROC --> OBJ --> CALL
 ```
 
-### Why Not Make Uniqueness A Single Value
+### Why Not Make Uniqueness a Single Value
 
 If the in-progress call identifier is kept as a number that only increases within a
-process, after a node restarts, the same number comes up again. A late reply to a call
+process, the same number is reused after a node restarts. A late reply to a call
 sent before restart can match a different call after restart.
 
-- **There is also a way to solve this by making the value itself large, but uniqueness is
+- **This could also be solved by making the value itself large, but uniqueness is
   secured with a combination instead** — the `(sending node's RID, that node's lifecycle
   generation, call identifier)` combination. The value's length and internal format are
   not a public contract, so they can differ per language.
@@ -444,7 +445,7 @@ sent before restart can match a different call after restart.
   formats creates code that converts between them, and knowing which path uses which
   format requires tracing the call graph.
 
-### Typing Only Part Leaves The Rest As A String
+### Typing Only Part Leaves the Rest as a String
 
 Making only node RID a dedicated type, or keeping every identifier as a plain string,
 creates the following problems.
@@ -457,12 +458,12 @@ requires building several candidates with different case and hexadecimal notatio
 checking them one at a time, that means the representation changed when crossing a
 boundary. It also adds the cost of building candidates for every value.
 
-- **Keep each identifier as its own dedicated type, and fix one representation.** If a
-  spot must handle it as a string, convert only once at that boundary.
+- **Keep each identifier as its own dedicated type, and use one representation.** If a
+  boundary must handle it as a string, convert only once there.
 
-### Watch Out For Name Collision
+### Watch Out for Name Collision
 
-`OperationId` is already a public term referring to **the value that handles Actor Join
+`OperationId` is already a public term referring to **the value used to process Actor Join
 completion without duplication**
 ([glossary](02-glossary.en.md#actor-join-operationid)). Using the same name for the
 in-progress call identifier mixes the two concepts in the document and the code. The
@@ -472,17 +473,17 @@ implementation code uses a different name.
 
 - **The physical connection identifier, store record version, and the execution queue's
   internal sequence number are not put in a public DTO.** These values are only used by
-  the runtime to re-confirm the same target, and the moment they go outside, the
+  the runtime to re-confirm the same target, and once they are exposed, the
   application starts depending on that value's stability.
 
-Internal verification condition — whether each identifier has a dedicated type and there
-is no code comparing multiple representations for a value comparison, and whether the
-in-progress call identifier format is one within the runtime, is confirmed by code review.
+Internal verification condition — whether each identifier has a dedicated type, whether
+no code compares multiple representations of a value, and whether there is only one
+in-progress call identifier format within the runtime is confirmed by code review.
 
 ## 7. Verification Requirement
 
-The following is confirmed through interface observation of the public surface (the
-binding public API·public contract signature, the shutdown·relocation·startup public
+The following requirements are verified through interface observation of the public
+surface (the binding public API·public contract signature, the shutdown·relocation·startup public
 operation and its result, the registration declaration API, and the throughput·latency·
 allocation·lock contention observed by each language's benchmark) and through static
 checks of that public surface's signature·DTO composition. Each item maps to one test or
@@ -518,9 +519,9 @@ one static check.
   change after starting.
 - If validation fails, it does not start with only part registered.
 
-**Identifiers (Interface Observation And Static Check)**
+**Identifiers (Interface Observation and Static Check)**
 
-- A call the same node sends after restarting does not match a pre-restart call by the
+- A call sent by the same node after restarting does not match a pre-restart call by the
   same identifier (interface observation).
 - The physical connection identifier, store record version, and execution queue internal
   sequence number do not appear in a public DTO (static check).
@@ -528,8 +529,8 @@ one static check.
 Conditions that can only be confirmed through internal structure — whether binding-facing
 code uses only the binding public API, whether the code has no pass-through wrapper,
 concrete-type branching, or duplicate protocol implementation, whether each identifier has
-a dedicated type with one representation, and whether the call identifier format is one
-within the runtime — are owned by §1, §2, and §6 as an "internal verification condition"
+a dedicated type with one representation, and whether there is only one call identifier
+format within the runtime — are owned by §1, §2, and §6 as an "internal verification condition"
 in each rule paragraph, and are not repeated here.
 
 ---

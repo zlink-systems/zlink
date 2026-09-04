@@ -27,7 +27,7 @@ extension. An extension is a host-level policy — it isn't passed repeatedly in
 business handler or individual send/request call. An API that handles raw bytes
 directly is used only for transport inspection and codec extension implementation.
 
-## 2. Message Kinds And Completion
+## 2. Message Kinds and Completion
 
 The public interface that starts each interaction, and how its target is selected,
 is owned by the [Interaction Model](04-interaction-model.en.md). This section
@@ -70,11 +70,12 @@ A CAS loser never
 sends the creation request as a regular message. The content reference is kept
 until Ready commit or fenced failure cleanup finishes.
 
-[ObjectGeneration](02-glossary.en.md#objectgeneration), the provider-issued value
-indicating the order in which the authority owner changed within the same object
-incarnation, [AuthorityOwnerGeneration](02-glossary.en.md#authorityownergeneration),
-attempt, and the owner lease token are used only for Store fencing and never
-included in the application message payload or handler context.
+[ObjectGeneration](02-glossary.en.md#objectgeneration),
+[AuthorityOwnerGeneration](02-glossary.en.md#authorityownergeneration) (the
+provider-issued value indicating the order in which the authority owner changed
+within the same object incarnation), attempt, and the owner lease token are used
+only for Store fencing and never included in the application message payload or
+handler context.
 
 ## 3. MessageContext
 
@@ -174,10 +175,10 @@ opaque state bytes returned by an Actor or Spot relocation adapter.
 ## 6. Application Metadata
 
 Application metadata is a small key-value snapshot carried separately from the
-business payload. Node direct, [ChannelName](02-glossary.en.md#channelname), the
-way a send or request is delivered to a Spot by designating one global
-[Spot ID](02-glossary.en.md#spot-id) — [Spot direct](02-glossary.en.md#spot-direct)
-— Actor, and STREAM send/request all use the same contract.
+business payload. Node direct, [ChannelName](02-glossary.en.md#channelname),
+[Spot direct](02-glossary.en.md#spot-direct) (the delivery of a send or request to
+a Spot by designating one global [Spot ID](02-glossary.en.md#spot-id)), Actor, and
+STREAM send/request all use the same contract.
 
 | Item | Contract |
 |---|---|
@@ -211,7 +212,7 @@ passed the current handler's metadata. Trace information that needs
 auto-propagation is managed as a separate framework field by
 [Message Flow Correlation](../06-observability/04-flow-correlation.en.md).
 
-## 8. Ownership And Size Limits
+## 8. Ownership and Size Limits
 
 The caller owns the outbound builder and payload until the submit call returns.
 Once the framework accepts the submit, it keeps the needed payload/metadata
@@ -241,12 +242,12 @@ caller's payload object or native buffer lifetime, the framework's service runti
 pins the immutable encoded payload in the content store. After Ready or fenced
 failure, it releases, once, the payload storage owned by that attempt.
 
-The payload's max size (by encoded size) follows the target transport's, the byte
-cap on the complete transport message a listener can receive,
-[`MaxMessageSize`](02-glossary.en.md#maxmessagesize). This value is defined per transport by the
-[Framework API](06-framework-api.en.md). If the whole message exceeds this limit,
-no part of it is delivered, and the entire submit or receive fails. Per-target
-submission and result aggregation for Logical Multicast are defined by
+The payload's max size (by encoded size) follows the target transport's
+[`MaxMessageSize`](02-glossary.en.md#maxmessagesize), the byte cap on the complete
+transport message a listener can receive. This value is defined per transport by
+the [Framework API](06-framework-api.en.md). If the whole message exceeds this
+limit, no part of it is delivered, and the entire submit or receive fails.
+Per-target submission and result aggregation for Logical Multicast are defined by
 [Spot Messaging](../03-spot-actor/02-spot-messaging.en.md).
 
 ## 9. Verification Requirements

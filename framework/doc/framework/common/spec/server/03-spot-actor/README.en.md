@@ -1,16 +1,16 @@
 ---
-title: "Spot And Actor"
+title: "Spot and Actor"
 ---
 
-# Spot And Actor
+# Spot and Actor
 
 [Spec table of contents](../README.en.md) · [Next: 01. Spot Model](01-spot-model.en.md)
 
-> From a Message that starts with only a SpotId or an ActorId, to finding the
-> current owner, to landing in that Actor's queue — this topic covers the three
+> From a Message that starts with only a SpotId or an ActorId through finding the
+> current owner and landing in that Actor's queue, this topic covers the three
 > Spot kinds (Entry · User · Instance), the identity, membership, and
-> relocation of the Actors that live on them, and the path a message actually
-> travels to arrive.
+> relocation of the Actors that run on them, and the path a message actually
+> takes to reach its destination.
 
 ## 1. What This Topic Covers
 
@@ -34,13 +34,13 @@ lookup and routing, and the internal implementation of object kinds.
 
 | Party | Decides / owns |
 |---|---|
-| Application | The Actor/Spot creation intent ([Instance intent](../00-foundation/02-glossary.en.md#instance-intent)), the message target sent by global ID, and the specific `ActorRef` used for Session bind. It does not directly specify the address or route of the [Owner](../00-foundation/02-glossary.en.md#owner) — the MeshNode that actually runs the Actor or Spot. |
+| Application | Determines the Actor/Spot creation intent ([Instance intent](../00-foundation/02-glossary.en.md#instance-intent)), the message target sent by global ID, and the specific `ActorRef` used for Session bind. It does not directly specify the address or route of the [Owner](../00-foundation/02-glossary.en.md#owner) — the MeshNode that actually runs the Actor or Spot. |
 | Framework (source runtime) | Resolves a global ID to an owner route, manages the positive route cache, and after relocation reroutes messages that arrive at the previous route via Message Follow. |
 | Framework (target runtime) | Confirms it is the current owner, that the object is Ready, and that local admission is possible, then enqueues the message on the application queue. |
-| [Location Store](../00-foundation/02-glossary.en.md#location-store) | The store that lets multiple nodes confirm each Spot's current owner and status; it records the current owner, incarnation, owner generation, and lease for each Spot/Actor as the authority. |
-| MeshNode/relocation runtime | Selects placement candidates for objects, and performs target selection and readiness judgment for join/relocation. |
+| [Location Store](../00-foundation/02-glossary.en.md#location-store) | The store that lets multiple nodes confirm each Spot's current owner and status; it records the current owner, incarnation, owner generation, and lease for each Spot/Actor as authoritative state. |
+| MeshNode/relocation runtime | Selects placement candidates for objects and determines the target and its readiness for join/relocation. |
 
-## 3. The Flow, In One Picture
+## 3. The Flow, in One Picture
 
 ```mermaid
 flowchart TB
@@ -54,14 +54,14 @@ flowchart TB
     E -- "yes" --> G["Enqueue on the Actor queue"]
 ```
 
-This diagram shows only the one logical path a message sent by global ID takes
+This diagram shows only one logical path a message sent by global ID takes
 to find its owner and reach the queue. The path to an Actor bound to a
 Session, and the path a request reply travels back, are defined by
 [08. Spot/Actor Routing](08-routing.en.md) §1; the sequence in which an Actor joins a
 Spot is defined by
 [05. Spot And Actor Membership](05-spot-actor-membership.en.md).
 
-## 4. Documents In This Topic
+## 4. Documents in This Topic
 
 | Document | Covers |
 |---|---|
@@ -76,7 +76,7 @@ Spot is defined by
 | [09. Object Kind And Activation](09-object-lifecycle.en.md) | An implementation spec covering how to distinguish object kinds in code, cold activation, cleanup targets, and memory accounting. |
 | [10. Spot Timer](10-spot-timer.en.md) | Defines the contract for the repeating and delayed callbacks a Spot registers — timer generation and cancel, the overrun policy when a tick falls behind, and an implementation whose resources do not grow in proportion to the number of registrations. |
 
-## 5. Find By Question
+## 5. Find by Question
 
 | Question | Where the answer should be |
 |---|---|
@@ -93,7 +93,7 @@ Spot is defined by
 | Where do messages go during relocation? | [05. Spot And Actor Membership](05-spot-actor-membership.en.md) · [08. Spot/Actor Routing](08-routing.en.md) §2.5 |
 | After an Actor/Spot has moved, what happens to a message that arrives at the previous route? | [08. Spot/Actor Routing](08-routing.en.md) §2.5 · [09. Object Kind And Activation](09-object-lifecycle.en.md) §4 |
 | When is a running object cleaned up, and what prevents reuse? | [09. Object Kind And Activation](09-object-lifecycle.en.md) §5·§6 |
-| What happens when a Spot timer falls behind, and why does registering more of them not add resources? | [10. Spot Timer](10-spot-timer.en.md) |
+| What happens when a Spot timer falls behind, and how many can be registered without increasing resource use? | [10. Spot Timer](10-spot-timer.en.md) |
 | Is location re-resolved on every message, or is a cache used? | [08. Spot/Actor Routing](08-routing.en.md) §2.2 |
 | On failure, what is left behind (`NotFound`, `Unavailable`, `InvalidOperation` …)? | The failure/observation section of each document |
 | What must be preserved when layering a higher-level model, such as room or stage, on top of Spot? | [07. Stage Wrapper On Spot](07-stage-wrapper-on-spot.en.md) |
@@ -125,4 +125,3 @@ Spot is defined by
 ---
 
 [Spec table of contents](../README.en.md) · [Next: 01. Spot Model](01-spot-model.en.md)
-</content>

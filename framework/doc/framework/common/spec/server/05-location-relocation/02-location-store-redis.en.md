@@ -1,8 +1,8 @@
 ---
-title: "Location Store Provider SPI And The Official Redis Implementation"
+title: "Location Store Provider SPI and the Official Redis Implementation"
 ---
 
-# Location Store Provider SPI And The Official Redis Implementation
+# Location Store Provider SPI and the Official Redis Implementation
 
 [Location And Relocation topic index](README.en.md) · [Spec index](../README.en.md) · [Previous: 01. Location Runtime](01-location-runtime.en.md) · [Next: 03. Relocation Store (Redis)](03-relocation-store-redis.en.md)
 
@@ -10,12 +10,12 @@ title: "Location Store Provider SPI And The Official Redis Implementation"
 > commit, page-bounded snapshot), and the key/byte format the official Redis
 > implementation must follow for cross-language interoperability.
 
-## 1. Scope And Audience
+## 1. Scope and Audience
 
-The storage that holds the current owner and state of a
+The [Location Store](../00-foundation/02-glossary.en.md#location-store) holds
+the current owner and state of a
 [Spot](../00-foundation/02-glossary.en.md#spot) — a logical target that
-receives messages — and an Actor, so multiple nodes can check them together,
-is the [Location Store](../00-foundation/02-glossary.en.md#location-store).
+receives messages — and an Actor so multiple nodes can check them together.
 This document defines the public SPI a developer implementing that provider
 must follow. The provider stores opaque keys and bytes the
 framework builds. Condition checks and changes across several keys apply as
@@ -44,13 +44,13 @@ Lua script splitting or connection management — is called out explicitly at
 the end of §9, and that part is updated in the document, not the code, if the
 implementation changes.
 
-## 2. Responsibilities Of The Public SPI
+## 2. Responsibilities of the Public SPI
 
 The Location Store SPI only provides the following three operation groups.
 
 | Operation group | Result the provider guarantees |
 |---|---|
-| Direct read | Returns the current bytes, provider version, optional expiry, and `StoreNow` for one opaque key, as a single observation. |
+| Exact read | Returns the current bytes, provider version, optional expiry, and `StoreNow` for one opaque key, as a single observation. |
 | Conditional atomic batch | Applies every mutation as one commit, only if every condition is true. |
 | Snapshot scan | Continues reading a [snapshot](../00-foundation/02-glossary.en.md#snapshot) fixed at the first page, with a fixed page size and opaque cursor. |
 
@@ -91,7 +91,7 @@ The formal shape in other languages follows the
 Registration examples for both Stores are kept only in
 [Location Runtime §2](01-location-runtime.en.md#2-roles-and-responsibilities--provider-vs-framework).
 
-## 3. Key, Value, Version, And Clock
+## 3. Key, Value, Version, and Clock
 
 | Item | Contract |
 |---|---|
@@ -100,7 +100,7 @@ Registration examples for both Stores are kept only in
 | Version | Opaque UTF-8 `1..4096` bytes the provider issues. The framework doesn't interpret the value's size or internal makeup. |
 | `StoreNow` | The provider wall clock that read, commit, and scan pages use as reference. TTL and expiry correctness only use this time. |
 
-A direct read returns `Missing(StoreNow)` or
+An exact read returns `Missing(StoreNow)` or
 `Found(bytes, version, optional expiry, StoreNow)`. An expired value is
 returned as `Missing`. The provider doesn't change bytes, or reuse them in a
 different result buffer, while a consumer is using a read result.
@@ -110,7 +110,7 @@ doesn't interpret a domain counter or provide a separate generation API.
 
 ## 4. Conditional Atomic Batch
 
-A write request is made of a condition set and a mutation set.
+A write request consists of a condition set and a mutation set.
 
 - `Missing(key)` is true only if the key doesn't exist or has expired.
 - `Version(key, expected)` is true only if the current version equals
@@ -133,7 +133,7 @@ The following bounds apply to a batch.
 - `Applied` returns each `Put`'s opaque version and the single `StoreNow`
   observed at commit.
 
-A whole User Spot participant set isn't put into a single batch. The
+The entire User Spot participant set isn't put into a single batch. The
 framework pre-stores immutable inventory chunks bounded to at most 1,024
 entries per relocation-target-list page and 1 MiB encoded — this page bound
 is a separate figure from the CAS batch's unique-key-total bound above, and
@@ -147,14 +147,15 @@ inventory chunk, participant, or aggregate.
 
 ## 5. Size-Bounded Snapshot Scan
 
-Snapshot scan lets recovery and maintenance read framework records at a
-bounded size.
+Snapshot scan lets recovery and maintenance read framework records within
+size bounds.
 
 - Prefix is UTF-8 `0..1024` bytes and is compared byte-for-byte, case-sensitive,
   the same way as a key.
 - The first page request has no cursor. The provider builds a bounded
   snapshot and returns an opaque cursor if there's a next page.
-- The next page for the same cursor only reads the snapshot fixed initially.
+- The next page for the same cursor reads only the snapshot fixed by the
+  first-page request.
 - Page limit is `1..1000`, and encoded page size is at most 4 MiB.
 - Cursor is opaque UTF-8 `1..4096` bytes.
 - If the snapshot no longer exists or the cursor is invalid, `Expired` is
@@ -162,20 +163,20 @@ bounded size.
 
 On receiving `Expired`, the framework discards the previous page result and
 re-reads from the first page. Since a scan item is only a recovery candidate,
-it's re-checked with a direct read and expected-version condition before
+it's re-checked with an exact read and expected-version condition before
 mutation.
 
 Cursor encoding, snapshot retention structure, and whether Redis `SCAN` is
 used are provider implementation details — whatever the Redis provider
 chooses is irrelevant to this contract (§9).
 
-## 6. Cancellation, Result Loss, And Errors
+## 6. Cancellation, Result Loss, and Errors
 
 Cancellation before an operation starts blocks I/O and commit from starting.
 If cancellation, timeout, or a transport error occurs after an operation
 starts, whether it committed can be unclear. The provider doesn't assume
 success or `Conflict` in this case. The framework must be able to reconstruct
-the result via a direct read and expected version.
+the result via an exact read and expected version.
 
 An input bound violation, and a caller error specifying the same key twice
 within conditions or mutations, are per-language argument validation errors.
@@ -188,14 +189,14 @@ Input bytes must not change until the async operation finishes. If the
 provider needs to keep them afterward, it copies them. A success result's
 bytes must stay stable while the consumer uses them.
 
-## 7. Registration And Provider Instance Lifetime
+## 7. Registration and Provider Instance Lifetime
 
 The provider instance's registration conditions and the framework root's
 ownership follow
 [Location Runtime §2](01-location-runtime.en.md#2-roles-and-responsibilities--provider-vs-framework).
 In a configuration where the framework owns instance lifetime, it's disposed
 exactly once after every runtime and background operation using the Store
-finishes. Preventing duplicate dispose when several Stores share a physical
+finishes. Preventing duplicate disposal when several Stores share a physical
 connection is the provider implementation's responsibility.
 
 This registration condition is an SPI contract independent of provider kind.
@@ -218,7 +219,7 @@ non-Redis provider, or a provider that uses Redis but isn't the official
 extension, only needs to satisfy the SPI in §2~§6 and doesn't need to follow
 this key format.
 
-The following logical keys are one cross-language contract; they are not
+The following logical keys form one cross-language contract; they are not
 provider versions or Redis implementation counters. Each counter issues an
 [OwnerLeaseGeneration](../00-foundation/02-glossary.en.md#owner-lease-generation)
 value, which distinguishes the host process lifecycle the current owner
@@ -251,7 +252,7 @@ logical counter the same `{zlink-location-v3}` hash slot automatically.
 Counter logical keys remain outside the `authority\0` and descriptor
 scan-preimage prefixes.
 
-**Operations clean break:** flush once per Store the physical opaque keys
+**Operational clean break:** flush once per Store the physical opaque keys
 computed as SHA-256 of these retired logical literals:
 `zlink:v11:counter:object`, `zlink:v11:counter:authority-owner`,
 `zlink:v11:authority:object-generation-counter`,
@@ -262,16 +263,15 @@ prefix.
 
 ## 9. The Official Redis Provider — 5-Record Opaque Storage Format
 
-A [MeshNode descriptor](../00-foundation/02-glossary.en.md#meshnode-descriptor) —
-the registration a [MeshNode](../00-foundation/02-glossary.en.md#meshnode)
-(a runtime node that sends or receives messages)
-publishes for automatic discovery, so other nodes
-can find its identity and connection information — an owner lease,
-ClientServer server descriptor, fanout
-publisher descriptor, and authority record must use the same opaque record
-representation regardless of language — otherwise a record one language
-writes can't be read by another. These five records **must** follow this
-storage scheme.
+A [MeshNode](../00-foundation/02-glossary.en.md#meshnode) — a runtime node that
+sends or receives messages — publishes a
+[MeshNode descriptor](../00-foundation/02-glossary.en.md#meshnode-descriptor)
+for automatic discovery so other nodes can find its identity and connection
+information. That descriptor, an owner lease, a ClientServer server descriptor,
+a fanout publisher descriptor, and an authority record must use the same
+opaque record representation regardless of language — otherwise a record one
+language writes can't be read by another. These five records **must** follow
+this storage scheme.
 
 The Redis key is `{prefix}:{zlink-location-v3}:opaque:{sha256hex(preimage)}`,
 where `{prefix}` is the key namespace the provider specifies at registration
@@ -343,14 +343,14 @@ capability interface.
 
 ## 10. Verification Requirements
 
-Public surface — the return values of the Location Store SPI's three
-operations, and the key/value bytes the official Redis provider verifies
-with the store record golden fixture — alone confirm the following. Each
-item maps to one test.
+The following requirements are verified solely through the public surface:
+the return values of the Location Store SPI's three operations and the
+key/value bytes that the official Redis provider verifies with the store
+record golden fixture. Each item maps to one test.
 
-**SPI (Common To Every Provider)**
+**SPI (Common to Every Provider)**
 
-- A direct read returns bytes, version, optional expiry, and `StoreNow` as one
+- An exact read returns bytes, version, optional expiry, and `StoreNow` as one
   observation.
 - An expired value is `Missing` by the provider clock, and a durable value is
   kept until explicit delete.
@@ -362,7 +362,7 @@ item maps to one test.
 - The cursor round-trips opaquely up to 4,096 bytes, and pages respect the
   1,000-item/4 MiB bound.
 - After cancellation or result loss, whether it committed can be
-  reconstructed via a direct read and version.
+  reconstructed via an exact read and version.
 - The Redis provider's public declaration has no authority/reservation/
   aggregate DTO, script, or key-layout type.
 - The Location Store and Relocation Store can each be registered and used

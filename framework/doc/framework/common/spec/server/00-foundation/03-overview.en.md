@@ -6,11 +6,11 @@ title: "Framework Overview"
 
 [Foundation topic index](README.en.md) · [Spec index](../README.en.md) · [Previous: 02. Framework Messaging Glossary](02-glossary.en.md) · [Next: 04. Interaction Model](04-interaction-model.en.md)
 
-> Defines what upper layer the Framework is, what basic concepts that identify
-> mesh and channel scopes refer to, and how a message target is decided and
-> which execution owner it is delivered to.
+> Defines what the Framework does as an upper layer, what the basic concepts that identify
+> mesh and channel scopes refer to, how a message target is selected, and which execution
+> owner receives it.
 
-## 1. What The Framework Does
+## 1. What the Framework Does
 
 The ZLink Framework is the upper layer that connects a typed message handler, mesh and
 channel messaging, [Spot](02-glossary.en.md#spot), Actor, connection sessions, PUB/SUB-style
@@ -26,19 +26,19 @@ broadcast, and the location runtime to an application host's lifecycle and DI.
   a different binary.
 - **Java and Kotlin share one JVM runtime.**
 
-## 2. MeshName, ChannelName, And RouteMesh
+## 2. MeshName, ChannelName, and RouteMesh
 
 [RouteMesh](02-glossary.en.md#routemesh) is the physical connection scope of the
 [MeshNode](02-glossary.en.md#meshnode)s that share the same
 [MeshName](02-glossary.en.md#meshname) — the name that identifies the physical mesh and RID
-namespace that can message each other.
+namespace within which they can message each other.
 
 One MeshNode has one routing ID and one ROUTER endpoint.
 
 A MeshNode that
 provides a channel handler participates as a Server in one or more immutable
-[ChannelName](02-glossary.en.md#channelname)s — the name that identifies the Channel scope a
-message is sent to.
+[ChannelName](02-glossary.en.md#channelname)s — names that identify the Channel scopes to which
+messages are sent.
 
 A call-only MeshNode, or one dedicated to
 [Node direct](02-glossary.en.md#node-direct) — sending by designating a MeshName and target RID
@@ -67,20 +67,20 @@ Messaging on a MeshNode is distinguished by how the target is selected.
 - [Node direct](02-glossary.en.md#node-direct) designates one RID within the same MeshName.
 - A channel send/request finds a process-local send path by ChannelName, and selects one [ready](02-glossary.en.md#ready) target among that RouteMesh's members or that ClientServer's servers.
 - Spot [Logical Multicast](02-glossary.en.md#logical-multicast) targets the remote MeshNodes of a ChannelName and their node-local Spot [subscriptions](02-glossary.en.md#subscription).
-- A Spot or Actor message designates a global logical address that identifies a Spot,
-  [Spot ID](02-glossary.en.md#spot-id), or an Actor ID. The Framework looks up which node
-  currently holds that ID from the value recorded in the Location Store, then places the
-  message on the mailbox of the object on that node. The value that records "who currently
+- A Spot or Actor message designates either a [Spot ID](02-glossary.en.md#spot-id) — the global
+  logical address that identifies a Spot — or an Actor ID. The Framework uses the value
+  recorded in the Location Store to look up which node currently holds that ID, then places
+  the message in the mailbox of the object on that node. The value that records "who currently
   holds it" is called [authority](02-glossary.en.md#authority).
 - Spot/Actor create and get-or-create are explicit manager operations the application calls
-  directly. The Framework picks the node to create on by object role, remaining capacity,
-  [stable type](02-glossary.en.md#stable-type), and per-node placement weight, then returns an
-  immutable ref once the object is ready to receive messages.
+  directly. The Framework selects a node for creation based on the object role, remaining
+  capacity, [stable type](02-glossary.en.md#stable-type), and per-node placement weight, then
+  returns an immutable ref once the object is ready to receive messages.
 
 **Selection and submit are one operation.** An application does not
-receive a peer list or a selected RID and repeat send calls itself.
+receive a peer list or a selected RID and then repeat separate send calls.
 
-## 4. Logical Multicast And Classic Fanout
+## 4. Logical Multicast and Classic Fanout
 
 Spot Logical Multicast delivers an event to a logical Spot whose
 location can change, such as a room, stage, or zone. The sending
@@ -93,23 +93,23 @@ sequenceDiagram
     participant A as Remote MeshNode A
     participant B as Remote MeshNode B
 
-    Note over Src: Also submits independently to the local Spot queue
+    Note over Src: Submits independently to the local Spot queue as well
     Src->>A: One routed message (ROUTER send)
     A->>A: Checks node-local Spot subscriptions
-    Note over A: When multiple Spots match,<br/>they share a storage reference and each is enqueued
+    Note over A: When multiple Spots match,<br/>a shared storage reference is enqueued in each queue
     Src->>B: One routed message (ROUTER send)
     B->>B: Checks node-local Spot subscriptions
-    Note over Src,B: Even if the send to B fails,<br/>it does not cancel the acceptance of the send to A
+    Note over Src,B: Even if the send to B fails,<br/>the submit already accepted by A is not canceled
 ```
 
-- **When multiple Spots match on the same node, they share a reference
-  to the immutable message storage and each is enqueued to its own Spot
-  queue.** This is so the message body is not duplicated once per Spot.
+- **When multiple Spots match on the same node, a reference to the
+  immutable message storage is shared and enqueued in each Spot's
+  queue.** This avoids duplicating the message body once per Spot.
 - **The HWM, send timeout, and backpressure of a remote send follow the
   ordinary ROUTER rules as-is.** This is because Logical Multicast does
   not have a separate flow-control path.
-- **A later target's failure does not cancel a submit an earlier target
-  already accepted.** This is because each target is submitted
+- **A later target's failure does not cancel a submit already accepted
+  by an earlier target.** This is because each target is submitted
   independently.
 
 [Classic fanout](02-glossary.en.md#classic-fanout) is an independent
@@ -123,8 +123,8 @@ and has finished subscription setup.
   configured without a location store.** A host that does not need a
   MeshNode or Spot can also use this method.
 - **Classic fanout does not guarantee storage or replay.** It delivers
-  only events published after the connection and subscription are
-  finished.
+  only events published after connection and subscription setup is
+  complete.
 
 ## 5. Execution Owner
 
@@ -134,9 +134,9 @@ owns the state.
 | [Owner](02-glossary.en.md#owner) | Responsibility |
 |---|---|
 | Node | RID direct and ChannelName handlers, node-initiated completions |
-| Spot | [Spot direct](02-glossary.en.md#spot-direct) — send/request delivered by one global Spot ID — Logical Multicast subscription, timers, and Spot state. An Instance Spot uses only direct and timer, not Actor [membership](02-glossary.en.md#membership) or Logical Multicast subscription. |
+| Spot | [Spot direct](02-glossary.en.md#spot-direct) (send/request delivery using one global Spot ID), Logical Multicast subscriptions, timers, and Spot state. An Instance Spot uses only direct messaging and timers, not Actor [membership](02-glossary.en.md#membership) or Logical Multicast subscriptions. |
 | Actor | Actor direct messages, Actor lifecycle, and the per-Actor mailbox |
-| [STREAM session](02-glossary.en.md#stream-session) — the server-side execution unit kept alive from accepting one STREAM connection until it closes | Connection lifecycle, packet dispatch, and Actor-binding ingress |
+| [STREAM session](02-glossary.en.md#stream-session) — the server-side execution unit maintained from acceptance of one STREAM connection until that connection closes | Connection lifecycle, packet dispatch, and Actor-binding ingress |
 
 - **An application is not required to redistribute a Spot or Actor
   message from a Node handler.** This is because the Framework service
@@ -153,7 +153,7 @@ Automatic discovery uses a [location store](02-glossary.en.md#location-store)'s
 
 - **RouteMesh looks up a MeshNode descriptor with the same MeshName, and
   a ClientServer client looks up a dedicated server descriptor with the
-  same ChannelName.** Neither descriptor is substituted for the other.
+  same ChannelName.** Neither descriptor can substitute for the other.
 - **A host that uses an Object Client/Server role or distributed
   discovery explicitly registers the official Redis location store
   instance.**
@@ -173,7 +173,7 @@ one-way service boundary that does not need Node direct, Spot, Actor,
 or Logical Multicast. The detailed roles and discovery contract are
 owned by [ClientServer Channel](../02-channel-transport/03-client-server-channel.en.md).
 
-## 7. What The Framework Hides
+## 7. What the Framework Hides
 
 The Framework internally manages transport address selection, peer
 reconnect, multipart framing, packet codec, reply correlation, and the
@@ -189,19 +189,19 @@ Using only the public messaging API (node direct, channel send/request,
 Spot Logical Multicast, Spot/Actor message, classic fanout
 publish/subscribe, manual peer registration), verify the following.
 
-**Target Selection And Submit**
+**Target Selection and Submit**
 
 - Target selection and submit finish in one call — the caller does not
-  receive a peer list or a selected RID and repeat send calls itself.
+  receive a peer list or a selected RID and then repeat separate send calls.
 - In Spot Logical Multicast, even if the send to a later target fails,
   the submit for an earlier target that was already accepted is not
   canceled.
 
 **Classic Fanout**
 
-- A classic fanout subscriber receives only events published after the
-  connection and subscription are finished — an event published before
-  that is not redelivered.
+- A classic fanout subscriber receives only events published after
+  connection and subscription setup is complete — an event published
+  before then is not redelivered.
 
 **Connection Admission**
 

@@ -8,7 +8,7 @@ title: "Location Runtime"
 
 > Defines how the Framework finds an application object's current location and moves it to another node.
 
-## 1. Location Overview — Responsibilities Of The Two Stores
+## 1. Location Overview — Responsibilities of the Two Stores
 
 The unit that runs message handlers and Actors is called a
 [Spot](../00-foundation/02-glossary.en.md#spot). An Actor can belong to an Entry Spot or a User Spot.
@@ -23,8 +23,8 @@ The node currently processing one Actor/Spot is called the
 [owner](../00-foundation/02-glossary.en.md#owner). **The Framework manages this so there are never two
 owners at once.** The store holding the current owner and location so multiple nodes can
 check it together is called the [Location Store](../00-foundation/02-glossary.en.md#location-store).
-Creating and initializing a new Instance Spot from its first message, when there's no
-running instance yet, is called
+Creating and initializing a new Instance Spot from its first message when no instance is
+running is called
 [cold activation](../00-foundation/02-glossary.en.md#cold-activation). The store holding this
 cold activation's creation record and the completion records of requests that finish after
 relocation is called the [Relocation Store](../00-foundation/02-glossary.en.md#relocation-store).
@@ -37,7 +37,7 @@ The SPI a store implementer must follow is defined by the
 explains the order in which the Framework uses the two Stores and the state it must keep
 on failure.
 
-### 1.1 Results The Framework Guarantees
+### 1.1 Results the Framework Guarantees
 
 The Framework guarantees the following results.
 
@@ -60,7 +60,7 @@ not failover but a required check to avoid creating two owners.
 The Core transport only carries bytes — it doesn't interpret Actor/Spot location,
 creation, or relocation state.
 
-### 1.2 Information The Two Stores Store Separately
+### 1.2 Information the Two Stores Store Separately
 
 The Framework stores location-decision information and recovery payloads in different
 Stores.
@@ -135,8 +135,8 @@ provider for reads and "all-or-nothing" writes.
 A runtime node that sends or receives messages within a connection group of several
 participating runtime nodes is called a
 [MeshNode](../00-foundation/02-glossary.en.md#meshnode). Among the registration info a host
-publishes to the Location Store with its network address and running state, the MeshNode's
-own is the
+publishes to the Location Store with its network address and running state, the information
+for the MeshNode itself is called the
 [MeshNode descriptor](../00-foundation/02-glossary.en.md#meshnode-descriptor), and what a
 classic fanout publisher publishes is the
 [fanout publisher descriptor](../00-foundation/02-glossary.en.md#fanout-publisher-descriptor).
@@ -193,7 +193,7 @@ restates, in §8–§9, the records and conditions the Location Store records am
    the regular route is installed while dispatch stays closed. Required lifecycle
    callbacks finish before application message processing starts.
 8. The source waits for no completion reply after sending cutover and keeps Message
-   Follow. The payload original kept in memory is cleaned up after cutover submit
+   Follow. The original payload kept in memory is cleaned up after cutover submit
    finishes.
 
 **The handoff payload and the owner change aren't bundled into one distributed transaction
@@ -221,7 +221,7 @@ condition. Transport readiness to send a message, the existence of node informat
 an Actor/Spot's current owner are different conditions. The Framework confirms every
 needed condition before sending a request or placing a new object.
 
-## 2. Roles And Responsibilities — Provider vs. Framework
+## 2. Roles and Responsibilities — Provider vs. Framework
 
 Location Store and Relocation Store are each registered exactly once in the Framework
 configuration. **The two Stores aren't bundled into one interface or a Redis-only
@@ -233,29 +233,29 @@ send or receive messages. The
 [Object Client role](../00-foundation/02-glossary.en.md#object-client-and-object-server-role) can
 request Spot creation/lookup and messages. The
 [Object Server role](../00-foundation/02-glossary.en.md#object-client-and-object-server-role) provides,
-in addition to this, the function that creates a Spot and its lifecycle. This function,
+in addition to this, a function for creating a Spot and the associated lifecycle. This function,
 which the application registers and the Framework calls when creating an object, is
 called a [factory](../00-foundation/02-glossary.en.md#factory).
 
 **A MeshNode with object role `Client` or `Server` requires a Location Store.** Without a
-Store, it ends as a startup configuration error before opening a network socket. The
+Store, startup fails with a configuration error before a network socket is opened. The
 Framework doesn't create a substitute in-process Store. A MeshNode with role `None`
 doesn't provide object create, find, message, or factory.
 
-The way that decides how application state is restored when moving an object to another
-node is called a [relocation policy](../00-foundation/02-glossary.en.md#relocation-policy).
+The mechanism that determines how application state is restored when moving an object to
+another node is called a [relocation policy](../00-foundation/02-glossary.en.md#relocation-policy).
 `RecreateOnRelocation` creates a new instance without application state, and
 [PreserveStateWith](../00-foundation/02-glossary.en.md#preserve-state-relocation-policy) restores stored
 application state.
 
 **A Framework configuration with even one `RecreateOnRelocation` or `PreserveStateWith`
 policy registered on an Object Server factory, or even one Instance Spot factory
-registered, must register exactly one Relocation Store.** Missing or more than one is a
-startup configuration error before socket bind. A Relocation Store is only unnecessary
+registered, must register exactly one Relocation Store.** Registering none or more than one
+is a startup configuration error before socket bind. A Relocation Store is only unnecessary
 when there's no Instance Spot factory and every factory is `DisableRelocation`.
 
 Once registration succeeds, the Framework is responsible for terminating the Store
-instance. It finishes work using the Store first, then disposes the instance exactly
+instance. It first finishes work that uses the Store, then disposes of the instance exactly
 once. If the two Stores share the same database connection, the provider decides when to
 close the connection.
 
@@ -270,9 +270,9 @@ services.AddZLinkFramework(options =>
 });
 ```
 
-### 2.1 Package Principles Shared By The Two SPIs
+### 2.1 Package Principles Shared by the Two SPIs
 
-The operation list for the Location Store SPI and the Relocation Store SPI is
+The operation lists for the Location Store SPI and the Relocation Store SPI are
 defined by [02](02-location-store-redis.en.md#2-responsibilities-of-the-public-spi) and
 [03](03-relocation-store-redis.en.md#2-public-spi-and-responsibility-boundary)
 respectively. The package boundary the two SPIs share is as follows.
@@ -289,9 +289,9 @@ respectively. The package boundary the two SPIs share is as follows.
   scripts, and private record encoding aren't exposed on the SPI either — this boundary
   is what makes §1.2's "the provider doesn't interpret meaning" hold.
 
-## 3. Values Distinguishing Re-Creation Of The Same ID From An Owner Change
+## 3. Values Distinguishing Re-Creation of the Same ID from an Owner Change
 
-### 3.1 Distinguishing Whether The Host Process Restarted
+### 3.1 Distinguishing Whether the Host Process Restarted
 
 For as long as one host process runs, the Framework uses the `(OwnerId, LeaseGeneration)`
 combination. **On a process restart, it issues a combination different from the previous
@@ -315,7 +315,7 @@ over an expired one. Extending expiry and normal release don't change the value.
 counter reaches `2^63-1`, it's `GenerationExhausted`. Retrying this result doesn't
 succeed, and it doesn't change the Store record or counter.
 
-### 3.2 Object Re-Creation And Owner Change Use Different Generation Numbers
+### 3.2 Object Re-Creation and Owner Change Use Different Generation Numbers
 
 The formal record in the Location Store deciding an Actor/Spot's current owner and change
 generation is called [authority](../00-foundation/02-glossary.en.md#authority). Authority uses the
@@ -343,7 +343,7 @@ Repeated calls give the same result. The Framework records that authority as an 
 state and doesn't send a network command. The counter isn't reset to 0 or reused past the
 range.
 
-### 3.3 Values Stored In The Current Location Record
+### 3.3 Values Stored in the Current Location Record
 
 Nodes registered under the same name participate in one RouteMesh connection group. This
 group name is called a [MeshName](../00-foundation/02-glossary.en.md#meshname). It's used to choose
@@ -357,8 +357,8 @@ must match exactly, including case, to be the same ID. Unicode normalization and
 conversion aren't applied. Spot kind is one of `Entry | User | Instance`. MeshName is the
 current placement location and isn't part of the identity key.
 
-The string, fixed when registering a factory, chosen to point at the same object type
-regardless of language, is called a [stable type](../00-foundation/02-glossary.en.md#stable-type).
+A string chosen when registering a factory to identify the same object type regardless of
+language is called a [stable type](../00-foundation/02-glossary.en.md#stable-type).
 
 | Stored item | Contract |
 |---|---|
@@ -386,7 +386,7 @@ or deletes the record, conditioned on the first-read `StoreVersion`. If the reco
 doesn't exist, only the time the Store read is returned. A temporary `StoreVersion` or
 generation isn't created for a nonexistent record.
 
-### 3.4 How Different Languages Read And Write The Same Redis Record
+### 3.4 How Different Languages Read and Write the Same Redis Record
 
 MeshNode descriptor, owner lease, ClientServer server descriptor, fanout publisher
 descriptor, and authority record (§4, §3.2, §3.3) must be written to Redis through the
@@ -538,15 +538,15 @@ Each language implementation must run a conformance test against the shared gold
 fixture that verifies the opaque record's key derivation and value byte representation
 (§12).
 
-## 4. Finding Running Nodes And Their Capabilities
+## 4. Finding Running Nodes and Their Capabilities
 
 A host publishes its network address, running state, and capabilities to the Store. This
 information is called a [descriptor](../00-foundation/02-glossary.en.md#descriptor). A MeshNode,
 ClientServer server, and fanout publisher each publish their own descriptor, which
 includes the current host-run combination.
 
-The feature by which the Framework reads this information from the Store and
-automatically configures needed connections is called
+The feature that lets the Framework read this information from the Store and
+automatically configure the necessary connections is called
 [automatic discovery](../00-foundation/02-glossary.en.md#automatic-discovery). After reading a
 descriptor page, the Framework directly checks whether that host's owner lease is still
 valid.
@@ -614,11 +614,11 @@ channels and fanout channels is checked via
 [Runtime Status Query And Operational Diagnostics "5. Topology State — RouteMesh, ClientServer, Automatic Fanout"](../06-observability/01-runtime-monitoring.en.md#5-topology-state--routemesh-clientserver-automatic-fanout)
 (quoted again in §7.4).
 
-## 5. Blocking A Previous Owner's New Work When The Store Connection Drops
+## 5. Blocking a Previous Owner's New Work When the Store Connection Drops
 
 If a host that fails to renew its owner lease keeps accepting new work, it can process
 concurrently with the new owner. To prevent this, each host computes "the last time it
-can accept new work" from the Store response time. This time is called the
+can accept new work" from the timestamp returned by the Store. This time is called the
 [local admission deadline](../00-foundation/02-glossary.en.md#deadline).
 
 **Every host using a Location Store validates the following relationship at startup**,
@@ -641,7 +641,7 @@ deadline.
 
 The Framework computes remaining time from the `StoreNow` and `ExpiresAt` of a
 successful register/read/renew result. It uses the local monotonic time before and after
-the Store request together, to account for network delay. **A single owner-lease renewal
+the Store request together to account for network delay. **A single owner-lease renewal
 refreshes the host-wide local admission deadline. A per-object deadline can't extend this
 time.**
 
@@ -655,18 +655,18 @@ value, the following new work isn't accepted.
 | Work confirming factory/restore results in the Store |
 | Relocation source/target state changes and capacity reservation |
 
-Processing and cleanup of the result of work already accepted by the local queue can
+Processing and cleanup of results from work already accepted into the local queue can
 proceed within a separate deadline. But no new Store change is made with expired owner
 eligibility.
 
-## 6. Reading And Changing The Current Location Record
+## 6. Reading and Changing the Current Location Record
 
 `Reserve`, `Preserve`, `NewOwner`, `Commit`, and `Abort` are names of the operations the
 Framework uses internally to change a location record. They aren't public methods on the
 Store provider. The Framework builds the needed conditions and change content and runs
 them as an all-or-nothing Store request.
 
-### 6.1 Read And CAS
+### 6.1 Read and CAS
 
 Reading authority returns `Missing(StoreNow)` if the record doesn't exist, or
 `Found(currentRecord, StoreNow)` with the current value. Changing an existing record uses
@@ -699,10 +699,10 @@ the authority key, first-read `StoreVersion`, source/target owner, and current c
 all together. On success, the `StoreVersion` the reservation expects is also updated in
 the same request. Owner, capacity, and reservation state are kept.
 
-### 6.2 Reading Multiple Pages As A List From The Same Point In Time
+### 6.2 Reading Multiple Pages as a List from the Same Point in Time
 
-A recovery task reads a Store record across multiple pages. **The list from the moment
-the first page started reading must be kept through the last page.** One page is
+A recovery task reads a Store record across multiple pages. **The list as it existed when
+reading of the first page began must be preserved through the last page.** One page is
 `1..1000` entries and stored size is at most 4 MiB.
 
 The first request has no next-page value. Subsequent values are non-empty, at most 4,096
@@ -714,7 +714,7 @@ candidate for change. The Framework re-reads that key and only changes it if the
 first read is unchanged. How the provider manages a same-point-in-time list, delete
 markers, and cleaning up stale data isn't part of the public contract.
 
-## 7. Creating An Actor Or User Spot
+## 7. Creating an Actor or User Spot
 
 Actor and User Spot are created via the Manager's `Create` or `GetOrCreate`. Instance
 Spot doesn't use a separate create API. When there's no Instance Spot, the node that
@@ -814,7 +814,7 @@ and the original request isn't automatically resubmitted to a different owner. R
 creation only completes once it receives command 20's `Existing | Created | Rejected`,
 the correct ref, and an optional application reply.
 
-### 7.1 First-Creating An Instance Spot On The Node That Received The Message
+### 7.1 First-Creating an Instance Spot on the Node That Received the Message
 
 A regular message sent to a Spot address only targets an already-`Ready` Spot. Only when
 it's marked as an Instance Spot request and the Spot doesn't exist does the target node
@@ -859,7 +859,7 @@ pre-create an owner or generation.
 The target checks the Location Store and the in-process Instance Spot list together. If
 it's already the `Ready` owner of the same generation, it uses the existing queue. Only
 when no record exists does it store the first message in the Relocation Store and secure
-a `Creating` record with capacity together. If multiple targets try at the same time, only
+a `Creating` record together with capacity. If multiple targets try at the same time, only
 the one that succeeds runs the factory.
 
 Even after recording `Ready`, the stored data is kept until the first message's execution
@@ -869,8 +869,8 @@ stored data. Only after the handler-completion record is stored does it record t
 use in the Location Store and delete the payload. The source doesn't resend the first
 message.
 
-This recovery info can only be left when first creating a `Ready` Instance Spot. It isn't
-used for Actor, other Spot kinds, `Creating`, `Closing`, `Relocating`, or host relocation.
+This recovery info may remain only during the initial creation of a `Ready` Instance Spot.
+It isn't used for Actor, other Spot kinds, `Creating`, `Closing`, `Relocating`, or host relocation.
 
 | When the process terminated | Handling by the restarted Framework |
 |---|---|
@@ -884,7 +884,7 @@ instance of a previous generation. If it's a User Spot or a different type, it's
 `TypeMismatch`. No separate owner change is allowed between location confirmation and
 message delivery.
 
-### 7.2 Finding The Current Object And Changing Only The Matching Generation
+### 7.2 Finding the Current Object and Changing Only the Matching Generation
 
 The Manager's `Find(global ID)` returns only the current `Ready` object and doesn't
 create a new one. ActorRef and SpotRef contain the global ID, `ObjectGeneration`,
@@ -906,7 +906,7 @@ target's host run generation, operation ID, `SpotRef`, `AuthorityOwnerGeneration
 Actor membership, and move state all match. Command 20 returns the `closed` result
 exactly once. This result isn't replaced by a separate Store query or application packet.
 
-### 7.3 Delivering A Message Arriving At A Previous Owner To The New Owner
+### 7.3 Delivering a Message Arriving at a Previous Owner to the New Owner
 
 The Framework can briefly cache a `Ready` location. The cache stores ID,
 `ObjectGeneration`, `AuthorityOwnerGeneration`, `StoreVersion`, owner lease, node run
@@ -917,7 +917,7 @@ expiry.
 
 A message arriving at the previous owner right after a move can be delivered to the new
 owner. This feature is called Message Follow, and its period, `MessageFollowDuration`,
-defaults to 30 seconds. A value of 0 turns off cache or delivery respectively. Using both
+defaults to 30 seconds. A value of 0 disables caching or delivery, respectively. Using both
 features, the cache retention time must be at least 5 seconds shorter than the delivery
 period. An invalid configuration is a configuration error.
 
@@ -928,7 +928,7 @@ There's no cap on the amount retainable per move. The existing operation ID,
 `ObjectGeneration`, payload, and reply route are kept unchanged. A cycle is
 `Unavailable`, and a generation mismatch is `InvalidOperation`.
 
-### 7.4 Querying The Current Location From Operational Tools
+### 7.4 Querying the Current Location from Operational Tools
 
 Operational tools can query the current location by ActorId or SpotId. A list per object
 kind and stable type can also be read by page. This result is for checking operational
@@ -967,9 +967,9 @@ checked via
 (§4). Object location lookup is separate from this enumeration and answers only by
 ActorId/SpotId.
 
-## 8. What This Store Does When Moving An Actor Or Spot To Another Node
+## 8. What This Store Does When Moving an Actor or Spot to Another Node
 
-The single source for the source/target handoff and queue order that Actors and Spots
+The single source of truth for the source/target handoff and queue order that Actors and Spots
 share is [Complete Actor And Spot Relocation Flow](04-relocation-flow.en.md). This
 section specifies only the records, generations, and target-only CAS conditions the
 Location Store owns among them. It covers moving an Entry Spot Actor, a `PerActor` User
@@ -1020,7 +1020,7 @@ sequenceDiagram
     end
 ```
 
-### 8.1 Values Distinguishing The Same Move And Target Request
+### 8.1 Values Distinguishing the Same Move and Target Request
 
 | Value | Purpose |
 |---|---|
@@ -1088,7 +1088,7 @@ Store updates the relocation operation ID and source/target Actor counts togethe
 confirm the sum matches the total membership count. `PerActor` User Spot relocation is
 only recorded as `Completed` once the last Actor and source relay finish.
 
-### 8.2 Which Node Is Owner At Each Stage
+### 8.2 Which Node Is Owner at Each Stage
 
 Neither the source nor the Session owner writes the Location Store based on target
 selection or a timeout.
@@ -1128,7 +1128,7 @@ Target factory and `Restore` finish before recording `Prepared`. The order of qu
 merge, regular-route switch, callback, and dispatch opening is defined by
 [04 "4. Normal Processing Order"](04-relocation-flow.en.md).
 
-## 9. Restore, Completion Records, And Their Relationship To The Store
+## 9. Restore, Completion Records, and Their Relationship to the Store
 
 Queue stopping, the number of concurrent moves, payload composition, and timer/Session
 handling are defined by
@@ -1137,7 +1137,7 @@ chunking, the transfer budget, and transfer failure rules are defined by
 [Complete Actor And Spot Relocation Flow](04-relocation-flow.en.md). This section only
 defines which data the Location Store recognizes as the basis for restore.
 
-### 9.1 When Restore Data Becomes The Official Data
+### 9.1 When Restore Data Becomes the Official Data
 
 The Restore conversation establishes that "these bytes are this move's official
 snapshot." The Restore request declares the payload's total length, chunk count, and
@@ -1153,7 +1153,7 @@ Location Store doesn't point at the payload's location or checksum.
 | `Captured` | Capture completion and the list content checksum. No payload location is recorded. | The source must be keeping the whole payload in memory. |
 | `Prepared` | Target attempt number and target owner information | Target's payload assembly and checksum verification, Restore, and relocation temporary queue registration must finish. |
 | Owner change | Target owner and membership | Restore must finish and the CAS for one object or the whole User Spot must succeed. The same authority CAS owns normal host-capacity accounting, but there is no relocation-specific reservation handshake. |
-| `Completed` | Target dispatch and required lifecycle are open, and required Session route updates were sent | There is no separate target completion reply, and it doesn't wait for all relay through the previous address to end. Message Follow handles late relay. |
+| `Completed` | Target dispatch and required lifecycle are open, and required Session route updates were sent | There is no separate target completion reply, and it doesn't wait for all relay through the previous address to end. Message Follow handles late relay (§7.3). |
 
 The target puts into assembly only chunks whose binding values match the Restore
 request. If the assembled payload's checksum differs from the declared value, or the
@@ -1194,14 +1194,14 @@ The target reads the current location directly by object ID and the expected
 restore preparation aren't started. The whole location-information object isn't copied
 into a network command.
 
-### 9.2 When The Target Starts Accepting New Messages
+### 9.2 When the Target Starts Accepting New Messages
 
 While running factory and `Restore`, the target holds new messages in the relocation
 temporary queue and doesn't deliver them to the application handler. If Restore is
 retried within the same target process, the failed instance is discarded and a new one
 is created. An application callback must not break state even if it receives the same
 input again. The Framework doesn't guarantee that a change a callback made to an external
-system ran exactly once. If the target process terminates, a different runtime doesn't
+system occurs exactly once. If the target process terminates, a different runtime doesn't
 automatically resume Restore with the same payload.
 
 **The target only becomes `Ready` once all of the following conditions are met.**
@@ -1214,7 +1214,7 @@ automatically resume Restore with the same payload.
   regular route.
 - Required lifecycle callbacks have finished and application dispatch is open.
 
-Removing the source ingress-hold original, changing the location record to `Completed`,
+Removing the original source ingress hold, changing the location record to `Completed`,
 and applying the Session Actor command 44 route update don't block target application
 message processing. The running source and target runtime each continue this follow-up
 work independently.
@@ -1230,7 +1230,7 @@ finish. It doesn't wait for every member Actor's move. Actor direct resolve uses
 Actor's current owner and Ready state, and doesn't guess an Actor still on the source as
 being on the target.
 
-### 9.3 Handling A Request That Finished After The Source Changed
+### 9.3 Handling a Request That Finished After the Source Changed
 
 | Value | Purpose |
 |---|---|
@@ -1240,7 +1240,7 @@ being on the target.
 | Key for the stored completion result | Uses `RelocationId`, source request information, and `OperationId` together. |
 
 `OperationId` and `ReplyRouteId` are non-zero and not reused within the same source host
-run. It's an error the runtime can't proceed past if all values are exhausted.
+run. Exhausting all values is an error from which the runtime cannot proceed.
 
 The Framework stores each object's completion result in object order. It doesn't insert
 the same source request information and `OperationId` twice. **It stores the new
@@ -1267,16 +1267,16 @@ payload and reply bytes are retained for 24 hours.
 Explicit cancellation before the relay-ready reply is accepted follows this order.
 
 1. The source keeps not accepting new work.
-2. Discards the target temporary queue's work without running it. Restores the source
-   ingress-hold original and saved existing work to the source queue in original order.
+2. The Framework discards the target temporary queue's work without running it. It restores
+   the original source ingress hold and saved existing work to the source queue in original order.
 3. If a bound Session exists, sends command 44 abort one-way. What the Session owner
    does in this abort — releasing the matching seal and the order it submits held
    messages — is defined by
    [Session and Actor Binding "8. The Session's Responsibility During Actor Relocation"](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation).
    All that matters here is that it doesn't wait for an apply reply.
 4. Cleans up secured target space and the target's in-progress chunk-assembly staging.
-5. Without reading or writing the Location Store, keeps source owner, generation, and
-   space in use; removes only the move's progress info.
+5. Without reading or writing the Location Store, the Framework keeps source owner,
+   generation, and space in use; it removes only the move's progress info.
 6. The source starts accepting new work again.
 
 The source must not accept new work before the cleanup above finishes.
@@ -1285,7 +1285,7 @@ The source must not accept new work before the cleanup above finishes.
 regardless of the cutover-submit result.** If the target CAS fails, it removes the target
 object and queue, and the Session cleans up under its own timeout.
 
-## 10. When A Store Response Isn't Received
+## 10. When a Store Response Isn't Received
 
 If the Framework doesn't receive the result of a Store request, it doesn't guess success
 or failure. It re-checks the Store with the same key and first-read version. This rule
@@ -1324,14 +1324,14 @@ at all. If cancellation, timeout, or a provider error happens after starting the
 whether the Store changed is unknown. In this case the Framework re-reads the same key
 and expected `StoreVersion` to confirm the result, and only retries if needed.
 
-A Relocation Store write must be re-readable or re-storable with the same reference the
-Framework fixed in advance. Payload not pointed to by the Location Store is deleted after
-retention ends. If a provider keeps input bytes even after an async request finishes, it
-must make a copy. Bytes returned as a success result must not change afterward.
+A Relocation Store write must support being read or stored again using the same reference
+the Framework fixed in advance. Payload not pointed to by the Location Store is deleted
+after retention ends. If a provider keeps input bytes even after an async request finishes,
+it must make a copy. Bytes returned as a success result must not change afterward.
 
 **Payloads stored in the Relocation Store — the Instance Spot cold-activation record and
 pending-request completion records — are stored first and re-verified. Only afterward
-does the Location Store CAS to point at that reference.** When replacing a payload too,
+does the Location Store CAS to point at that reference.** When replacing a payload,
 the new payload is stored and verified first, then reference, checksum, and entry count
 are changed together. On deletion, the Location Store first records the end of reference
 use, then the payload is deleted. The two Stores don't need to be bundled in a
@@ -1343,7 +1343,7 @@ payload is permanently missing or the checksum differs, it's `DataLost`. The run
 records the error in the current location record. It doesn't roll back an already-changed
 owner and membership to the source, or guess and use a different payload.
 
-## 11. Cleaning Up Store Records When A Host Shuts Down
+## 11. Cleaning Up Store Records When a Host Shuts Down
 
 The state and final result of host commands are defined by
 [Complete Host Relocation Flow](05-host-relocation-flow.en.md). This section only
@@ -1368,7 +1368,7 @@ If the deadline passes, a `ForceStopped` result completes exactly once. Timers, 
 callbacks, reconnection work, and observers must not outlive the runtime resources the
 Framework owns.
 
-## 12. Implementation And Contract-Test Verification Requirements
+## 12. Implementation and Contract-Test Verification Requirements
 
 The following is confirmed using only the public surface — the results of the Location
 Store SPI (`ReadAsync`/`WriteAsync`/`ScanAsync`) and the Relocation Store SPI
@@ -1412,7 +1412,7 @@ against the store record golden fixture. Each item maps to one test.
   exactly once.
 - The `Creating` record and securing/using/returning space are each handled as one Store
   request, and the same space info isn't duplicated in Framework-internal bytes.
-- In the first creation of an Instance Spot, the source doesn't pre-create an owner, only
+- During the initial creation of an Instance Spot, the source doesn't pre-create an owner, only
   one target runs the factory, and the first message and recovery info are stored before
   `Ready` (§7.1).
 

@@ -65,11 +65,11 @@ create/get-or-create, and close/destroy and membership transactions using an
 `ActorRef`/`SpotRef`, are also each defined by its own lifecycle
 document.
 
-## 2. How To Send To A Spot/Actor By Global ID
+## 2. How to Send to a Spot/Actor by Global ID
 
-### 2.1 The Order For Finding The Current Owner
+### 2.1 The Order for Finding the Current Owner
 
-Sending a send or request to one Spot by specifying a single global Spot ID
+Sending a one-way message or request to one Spot by specifying a single global Spot ID
 is called [Spot direct](../00-foundation/02-glossary.en.md#spot-direct). A Spot direct call
 takes a global Spot ID, and an Actor direct call takes a global Actor ID. The
 source runtime converts the ID into an actual owner route before submitting
@@ -124,7 +124,7 @@ doesn't specify the following values as a message target.
 - `ActorRef` or `SpotRef`
 - The Actor's current Spot ID
 
-### 2.2 The Condition For Using A Recent Ready Route
+### 2.2 The Condition for Using a Recent Ready Route
 
 The source runtime can briefly keep a Ready owner route confirmed from the
 Location Store. This is called the positive route cache. This information
@@ -136,12 +136,12 @@ Redis) on every call; this cache reduces that cost.
 | Item to check | Contract |
 |---|---|
 | Information kept in the cache | The [positive route cache](../00-foundation/02-glossary.en.md#positive-route-cache) keeps the global object ID, [`ObjectGeneration`](../00-foundation/02-glossary.en.md#objectgeneration) — a number distinguishing different incarnations of the same logical ID — [`AuthorityOwnerGeneration`](../00-foundation/02-glossary.en.md#authorityownergeneration) — a number marking the order in which the authority owner changed within the same incarnation — `StoreVersion`, owner lease, node lifecycle, and owner route. |
-| Usable duration | Only used until the earlier of the current owner lease's local admission deadline and `RouteCacheMaxAge`. |
+| Usable duration | The cache entry is used only until the earlier of the current owner lease's local admission deadline and `RouteCacheMaxAge`. |
 | Reason it's kept | Caching only the route and dropping the fence would mean sending to a stale owner without knowing it — this is why the owner route and the fence values needed for the acceptance judgment are kept together. |
 | Default setting | `RouteCacheMaxAge` defaults to 15 seconds. `0` means the route cache isn't used. |
 | Results not stored | `Missing`, `Creating`, and Store failure aren't cached. A previous failure alone doesn't end the next call. Caching this state would turn a brief failure into an outage lasting as long as the cache lifetime. |
 | Conditions for immediate invalidation | An entry is removed on confirming a larger `StoreVersion`, a stale-route result, a Store recovery event, owner-lease invalidation, or a **relay notification**. |
-| Relay notification | [Message Follow](../00-foundation/02-glossary.en.md#message-follow) — delivering a message that still arrives at the previous owner, after an Actor or Spot has moved to a different MeshNode, on to the new owner instead — hands the message to the new owner and notifies the original sending runtime. The notified runtime removes that entry and re-queries the owner on the next call. |
+| Relay notification | [Message Follow](../00-foundation/02-glossary.en.md#message-follow) forwards a message that still arrives at the previous owner after an Actor or Spot has moved to a different MeshNode to the new owner, then notifies the original sending runtime. The notified runtime removes that entry and re-queries the owner on the next call. |
 | Runtime setting change | A changed `RouteCacheMaxAge` applies starting from new cache entries. It doesn't extend an existing entry's lifetime to the new value. |
 
 A relay notification is a framework-owned infrastructure record and doesn't
@@ -175,7 +175,7 @@ after the lifecycle component that owns authority release completes that
 release — without this order, an object still being cleaned up would look as
 if it already didn't exist.
 
-### 2.3 Preserving The Admission Fence Even For Manual Object Peer Connections
+### 2.3 Preserving the Admission Fence Even for Manual Object Peer Connections
 
 A Location Store object-peer descriptor contains an endpoint, RID, lifecycle
 generation, and security identity. A manually configured endpoint supplies
@@ -183,7 +183,7 @@ only an intent to connect.
 
 **When the runtime associates this endpoint with a descriptor and uses it as
 an object peer, it must also pass all descriptor values the handshake needs
-to transport.** The scope where multiple MeshNodes participate to exchange
+to transport.** The scope where multiple MeshNodes participate in exchanging
 node and Channel messages is called a
 [RouteMesh](../00-foundation/02-glossary.en.md#routemesh); its formal peer handshake
 contract is owned by [RouteMesh topology](../02-channel-transport/01-channel-topology.en.md).
@@ -217,7 +217,7 @@ an already-Ready object.
 Since `Missing`, `Creating`, and Store failure aren't cached, the next call
 re-checks the current state at that time.
 
-### 2.5 A Message Arriving At A Previous Owner Route
+### 2.5 A Message Arriving at a Previous Owner Route
 
 Even after committing an object relocation, a message can arrive on a
 previous route left in the cache. The previous owner only relays the same
@@ -235,7 +235,7 @@ negotiated message bound.
 isn't used. If both `RouteCacheMaxAge` and Message Follow duration are
 positive, cache max age must be at least 5 seconds shorter than Message
 Follow duration — because the cache must expire before the detour path
-closes. A runtime-changed Message Follow duration applies starting from new
+closes. A Message Follow duration changed at runtime applies starting from new
 relocations.
 
 Relay preserves the original operation ID, `ObjectGeneration`, payload, and
@@ -267,7 +267,7 @@ the following order.
 2. Relays the source ingress hold's messages to this queue, preserving
    original operation identity and reply route.
 3. Once Restore finishes, runs the owner CAS. The source keeps the ingress
-   hold original until the target dispatch switchover finishes, and keeps
+   the original ingress hold until the target dispatch switchover finishes, and keeps
    relaying messages on the previous route to the target temporary queue.
 4. Puts the previous queue and accepted journal into the real Actor queue
    first, then moves the temporary queue's work in behind it.
@@ -286,8 +286,8 @@ kept before and after the relay.
 The framework doesn't automatically resubmit a failed current operation to a
 new owner found in the Location Store. Only the next call re-finds the
 current owner from the cache or Location Store. This rule prevents an
-operation whose execution status is unknown from running duplicated across
-two owners.
+operation whose execution status is unknown from being executed by both
+owners.
 
 **Where a move meets the cache — a performance cliff.** When an object moves
 to a different node, the route left in the cache points at the old owner. A
@@ -354,7 +354,7 @@ operation's payload, reply route, and terminal completion continue to be
 managed by their existing owners, so suppression state neither creates nor
 changes the original operation's terminal result.
 
-### 2.6 Where ObjectGeneration Is Used And Where It's Not
+### 2.6 Where ObjectGeneration Is Used and Where It's Not
 
 A regular Actor/Spot message only uses the global logical ID as target. An
 Actor send/request delivers to the current Ready object `ActorId` points to;
@@ -384,17 +384,17 @@ The result differs based on what happened to the owner after resolve.
 In both cases, the framework **doesn't automatically resend** the failed
 operation to the new owner. Only when the application starts a new call is
 the logical ID's current Ready owner re-confirmed. This rule prevents an
-operation whose execution status is unknown from running duplicated across
-two owners.
+operation whose execution status is unknown from being executed by both
+owners.
 
 Applying this distinction lets Actor and Instance Spot use the same
 messaging rule. **The logical ID sets an application message's target, and
 `ObjectGeneration` only restricts control that changes a specific
 incarnation's state.**
 
-## 3. How To Relay To An Actor Bound To A Session
+## 3. How to Relay to an Actor Bound to a Session
 
-### 3.1 The Route Is Stored At Bind Time
+### 3.1 The Route Is Stored at Bind Time
 
 A session relay doesn't resolve the Actor ID per message. It verifies the
 Actor route once at bind time, stores it on the Session owner, and uses that
@@ -412,7 +412,7 @@ information for subsequent relays.
 +----------------------------------------------------------------------+
 ```
 
-The current Actor owner delivery path a Session owner keeps for a specific
+The current Actor owner delivery path that a Session owner keeps for a specific
 Actor binding is called the binding route.
 
 Bind uses the location of the `ActorRef` the caller submitted as the
@@ -450,7 +450,7 @@ journal after switching, and doesn't record the binding route in the
 Location Store or Relocation Store. On an atomic replacement under the same
 owner, the previous identity's tombstone must not remove the new identity.
 
-### 3.2 Sending A Message Using The Stored Route
+### 3.2 Sending a Message Using the Stored Route
 
 Once bind finishes, the following work uses the stored route.
 
@@ -472,7 +472,7 @@ The Location Store and Relocation Store don't store or update the binding
 route. This route is owned by the Session owner runtime. Updating the direct
 route cache doesn't automatically change the Session binding route.
 
-### 3.3 Changing The Stored Route After Actor Relocation
+### 3.3 Changing the Stored Route After Actor Relocation
 
 Even if the Actor moves to a different MeshNode, the physical STREAM
 connection and Session object are kept on the Session owner process. The
@@ -481,7 +481,7 @@ duplicated to the target Actor process.
 
 Even during relocation, the Session owner doesn't guess a new Actor route by
 querying the Location Store. Only after the target Actor of the same
-`ObjectGeneration` finishes the following order is a new route delivered to
+`ObjectGeneration` completes the following steps. The new route is then delivered to
 the Session owner.
 
 1. After the source Actor's current handler ends and target preflight succeeds, a bound
@@ -494,7 +494,7 @@ the Session owner.
    rules for the [relocation state chunk](../00-foundation/02-glossary.en.md#relocation-state-chunk),
    the transfer unit, and checksum are defined by
    [Complete Actor And Spot Relocation Flow](../05-location-relocation/04-relocation-flow.en.md). Once ready, it
-   sends source the relay-reception-ready reply.
+   sends the source the relay-reception-ready reply.
 3. Only Actor messages arriving at source after Capture enter ingress hold and are relayed
    on the same ordered connection into the pre-boundary relay span. Saved queue work and
    timers aren't relayed. Source sends cutover one-way after the current relay prefix.
@@ -518,8 +518,8 @@ A route update is only allowed for an Actor relocation matching the
 under the same Actor ID, the existing binding isn't switched to the new
 Actor — the application must start a new bind with the new `ActorRef`.
 
-The route, location snapshot, token, and generation of a different Actor on
-the same Session not included in the relocation are kept. The physical
+For a different Actor on the same Session that isn't included in the relocation,
+the route, location snapshot, token, and generation are kept. The physical
 STREAM connection is also kept as-is. Command 44 has no application reply,
 and the target Actor processes messages once dispatch opens. A message
 arriving on the previous route is delivered to the target Actor by the
@@ -527,19 +527,19 @@ source Message Follow route. The application doesn't rebind to learn about
 the relocation.
 
 On an explicit relocation failure before relay-ready is accepted, the target temporary
-queue is discarded and source Actor queue and admission are restored without re-reading
+queue is discarded, and the source Actor queue and admission are restored without re-reading
 the Location Store. If a bound Session seal exists, source coordinator sends command 44 abort one-way so held
 messages are submitted to source route and only the matching seal is released. After
-relay-ready, it isn't rolled back to source route or snapshot regardless of the cutover-submit
-result. Source Message Follow delivers
+relay-ready, the runtime doesn't roll back to the source route or snapshot, regardless of the
+cutover-submit result. Source Message Follow delivers
 a message on the previous route to target. If the target process terminates, a different
 runtime doesn't automatically take over the route update.
 
-## 4. How A Request's Reply Returns
+## 4. How a Request's Reply Returns
 
-### 4.1 A Reply Doesn't Start A New Address Lookup
+### 4.1 A Reply Doesn't Start a New Address Lookup
 
-When the source runtime submits a request, it builds together the internal
+When the source runtime submits a request, it builds both the internal
 path the reply will return on and the identifying value linking an arriving
 reply to the original request.
 
@@ -568,7 +568,7 @@ metadata is key-value information delivered together with business payload.
 Request metadata isn't auto-copied to a reply, and a regular reply doesn't
 provide a metadata setter.
 
-### 4.2 Resuming A Request Started From A Spot
+### 4.2 Resuming a Request Started from a Spot
 
 If a request started from a Spot, the source runtime preserves the
 following information together with request correlation.
@@ -585,12 +585,12 @@ payload, the original reply route and correlation are preserved. Operation
 ID is a value distinguishing duplicate work and doesn't substitute for the
 reply route.
 
-### 4.3 When The Reply Route Isn't Usable
+### 4.3 When the Reply Route Isn't Usable
 
-The framework completes a handler/decode failure, for a request whose reply
-route can be restored, with a structured error reply. Not being able to
-restore the reply route doesn't mean it bypasses this by finding the
-requester's Spot/Actor ID or a new owner in the Location Store. That failure
+For a request whose reply route can be restored, the framework completes a
+handler/decode failure with a structured error reply. An unrestorable reply
+route doesn't cause the framework to bypass that failure by finding the requester's
+Spot/Actor ID or a new owner in the Location Store. That failure
 follows the drop, structured-log, and metric contract set by the
 [Interaction Model](../00-foundation/04-interaction-model.en.md#10-handler-failure).
 
@@ -600,7 +600,7 @@ resubmitted to a different owner. A request completes with exactly one
 terminal result — whichever of reply, error, timeout, cancellation, or
 shutdown is confirmed first.
 
-## 5. Implementation And Contract-Test Verification Requirements
+## 5. Implementation and Contract-Test Verification Requirements
 
 Confirm the following using only the public surface — the Spot/Actor direct
 starter method, the bind/relay method, reply completion, and the result tag
@@ -656,10 +656,9 @@ the route resolver returns rather than the Location Store.
 
 - A reply uses the request's reply route and correlation, and doesn't
   query the requester's logical ID from the Location Store.
-- application metadata doesn't substitute for owner route or reply route,
+- Application metadata doesn't substitute for owner route or reply route,
   and request metadata isn't auto-copied to a reply.
 
 ---
 
 [Spot And Actor topic index](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 07. Stage Wrapper On Spot](07-stage-wrapper-on-spot.en.md) · [Next: 09. Object Kind And Activation](09-object-lifecycle.en.md)
-</content>

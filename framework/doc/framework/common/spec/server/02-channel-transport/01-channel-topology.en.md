@@ -8,11 +8,11 @@ title: "RouteMesh Topology"
 
 > Defines how to configure the physical connections of a
 > [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) — the scope in which several MeshNodes
-> participate to exchange Channel messages with nodes — and
+> participate and exchange node and Channel messages — and
 > [ChannelName](../00-foundation/02-glossary.en.md#channelname)'s logical membership in ZLink
 > Framework.
 
-## 1. RouteMesh Topology Overview — Values The Application Configures And Results The Framework Produces
+## 1. RouteMesh Topology Overview — Values the Application Configures and Results the Framework Produces
 
 This document's target audience is developers implementing or reviewing topology
 registration and startup validation.
@@ -85,14 +85,14 @@ public interface IZLinkMeshNodeSocketConfig
 }
 ```
 
-## 2. MeshName And MeshNode
+## 2. MeshName and MeshNode
 
 Nodes that need to communicate with each other participate in a
 [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) using the same `MeshName`. MeshName
 distinguishes both the physical connection scope and the scope within which
 [routing ID](../00-foundation/02-glossary.en.md#routing-id) must be unique.
 
-Only one MeshNode of the same MeshName can be registered in the same process.
+Only one MeshNode with the same MeshName can be registered in the same process.
 Multiple MeshNodes of different MeshNames can be registered. Each MeshNode builds a
 separate physical connection network with the peers belonging to its own MeshName.
 
@@ -116,14 +116,14 @@ One MeshNode has the following values.
 |---|---|
 | MeshName | Sets which RouteMesh this node participates in. |
 | Routing ID | Identifies the node within the same RouteMesh. |
-| ROUTER endpoint | The address a different MeshNode directly connects to this node with. |
+| ROUTER endpoint | The address at which a different MeshNode connects directly to this node. |
 
 The framework confirms the endpoint to provide to other nodes after actually binding
 the ROUTER endpoint, and publishes a
 [MeshNode descriptor](../00-foundation/02-glossary.en.md#meshnode-descriptor). A MeshNode descriptor
 is RouteMesh-specific connection information recorded in the
 [Location Store](../00-foundation/02-glossary.en.md#location-store) — a store that keeps a target's
-current owner and state so several nodes can check it together — so a different node can find this
+current owner and state so multiple nodes can check them together — so a different node can find this
 MeshNode and verify the connection.
 
 This registration information includes MeshName, RID, lifecycle generation,
@@ -133,7 +133,7 @@ registration information and then re-verify identity and lifecycle on the transp
 handshake before using the connection as ready. Routing ID, MeshName, and endpoint
 identity don't change while the MeshNode is running.
 
-## 3. ChannelName Role And Membership (Client/Server, Registration Interface)
+## 3. ChannelName Role and Membership (Client/Server, Registration Interface)
 
 `ChannelName` is a name the application uses to specify the logical target of a
 Channel send and request. The same ChannelName can be registered by Servers in
@@ -213,7 +213,7 @@ again for the same ChannelName. `SetWeight(0)` isn't an API that turns Server ro
 into Client. Server membership is kept, but only excluded from new select-one and
 Logical Multicast remote target selection.
 
-## 4. When A Call Can Start Without A Local Server
+## 4. When a Call Can Start Without a Local Server
 
 If a MeshNode doesn't need to be a target receiving Channel messages, the ChannelName
 doesn't need to be registered with the `Server` role. For this MeshNode to start a
@@ -221,13 +221,13 @@ call under a specific ChannelName, register that ChannelName with the `Client` r
 The `Server` role for the same ChannelName must be registered on a remote MeshNode of
 the same MeshName that will process the message.
 
-`Client` and `Server` role aren't settings that create a separate socket. Both roles
+`Client` and `Server` roles aren't settings that create a separate socket. Both roles
 use the current MeshNode's same ROUTER and peer connections. The difference is
 whether membership is published to the Channel target list, and whether a handler and
 selection weight are provided.
 
 A MeshNode with object role `Client` only starts object calls and isn't assigned Actors or
-[Spots](../00-foundation/02-glossary.en.md#spot) — a Spot being a logical instance with an address
+[Spots](../00-foundation/02-glossary.en.md#spot) — a Spot is a logical instance with an address
 and state, reachable through the same global ID even after the executing node changes. This restriction doesn't apply to the RouteMesh Channel role. So an
 Object Client can also register Channel `Client` or `Server` role. Registering the
 Channel `Server` role makes it a target processing that ChannelName's messages.
@@ -278,7 +278,7 @@ require a fake Server ChannelName or a weight-0 membership to start a MeshNode.
 <a id="physical-routemesh-diagram"></a>
 ### RouteMesh's Physical Connection
 
-First, looking only at physical connections: MeshNodes of the same MeshName directly
+First, consider only the physical connections: MeshNodes of the same MeshName directly
 connect a ROUTER for each needed pair. A connection is skipped only when both
 MeshNodes are Object Client and neither has RouteMesh Channel Server membership.
 
@@ -298,7 +298,7 @@ flowchart LR
 ```
 
 The three MeshNodes aren't all named `game-mesh` — the `MeshName` value distinguishing
-their RouteMesh is all `game-mesh`. Each MeshNode's transport identity, RID, differs:
+their RouteMesh is `game-mesh` for all three. Each MeshNode's transport identity, RID, differs:
 `node-a`, `node-b`, `node-c`.
 
 Object Client B and C both connect to Object Server A but not to each other.
@@ -312,19 +312,19 @@ connected to the three MeshNodes above. An application in the same process can s
 `admin-mesh` to start a separate call on the RouteMesh this MeshNode belongs to, but
 the framework doesn't automatically relay `game-mesh` messages to this MeshNode.
 
-Node direct works when sending to a target on this physical connection network that
-isn't Object Client. An application Node direct handler can't be registered on an
+Node direct works when the target on this physical connection network isn't an Object
+Client. An application Node direct handler can't be registered on an
 Object Client. If that RID is specified as target, the framework doesn't switch to a
 different node or create a Client pair connection — it ends with no target. Channel
 role and Channel weight don't participate in RID selection.
 
 <a id="logical-channel-diagram"></a>
-### The Channel Relationship Configured On Top Of Physical RouteMesh
+### The Channel Relationship Configured on Top of the Physical RouteMesh
 
 ChannelName doesn't create a new socket or peer connection. An already-connected
 MeshNode additionally registers a `Client` or `Server` role for each ChannelName.
 
-**A Caller That Registered Only The Client Role**
+**A Caller That Registered Only the Client Role**
 
 If only the `match` Client role is registered on the current MeshNode, this node can
 start `match` calls but isn't included in the target candidates. The framework
@@ -353,13 +353,13 @@ The diagram shows an example where server B was selected for this call. Servers 
 through D all registered the `match` Server role under the same MeshName, but with
 different RIDs and weights. The diagram omits RID and weight for clarity.
 
-Every call, the framework selects exactly one of the four candidates, reflecting
+For every call, the framework selects exactly one of the four candidates, reflecting
 weight. The other Servers with no arrow are also selection candidates but don't
 receive this call's message. This behavior isn't a multicast to all four Servers.
 
-**A Caller That Registered The Server Role**
+**A Caller That Registered the Server Role**
 
-`Client` and `Server` role aren't registered simultaneously for the same ChannelName,
+`Client` and `Server` roles aren't registered simultaneously for the same ChannelName,
 since `Server` role already includes the functionality to start a Channel call.
 
 If the `match` Server role is registered on the current MeshNode, it can start a
@@ -386,8 +386,8 @@ flowchart LR
 ```
 
 The left circle represents the send capability included in server A's Server role,
-not a separately registered Client role. Server A starts the call and, as it starts
-it, also becomes a candidate for its own RouteMesh call. The diagram shows the case
+not a separately registered Client role. Server A starts the call and also becomes a
+candidate for its own RouteMesh call. The diagram shows the case
 where the self node was selected.
 
 If a remote Server is selected, it uses the existing RouteMesh peer connection from
@@ -409,7 +409,7 @@ a new physical connection.
 Server membership satisfying the same condition, and is separately defined by
 [Spot Messaging](../03-spot-actor/02-spot-messaging.en.md).
 
-## 5. Values That Can Change At Runtime (Weight)
+## 5. Values That Can Change at Runtime (Weight)
 
 The Client and Server role list can't be changed after startup. Only a Server
 membership's weight can be changed at runtime, within `0..10000`, with a default of
@@ -418,7 +418,7 @@ configuration and at runtime change.
 
 The framework applies readiness, capacity, and drain conditions first, then computes
 the sum of remaining candidates' positive weight using at least a 64-bit integer. It
-only uses the ratio computed so this sum doesn't overflow for target selection.
+only uses the ratio computed so that this sum doesn't overflow for target selection.
 
 A [weight](../00-foundation/02-glossary.en.md#weight) change only applies to the following.
 
@@ -434,7 +434,7 @@ revision and endpoint are framework-internal values for judging stale registrati
 information and connections, so they aren't included in public status. The
 application doesn't use a monitoring value as a weight-change target.
 
-## 6. In One Process, A ChannelName Has Only One Send Path
+## 6. In One Process, a ChannelName Has Only One Send Path
 
 A ChannelName must point to only one physical Channel topology in one process.
 Registering the same name under different topologies as follows fails startup.
@@ -443,7 +443,7 @@ Registering the same name under different topologies as follows fails startup.
 - Registered on both RouteMesh and ClientServer at once
 - Registered on both ClientServer and fanout at once
 
-RouteMesh keeps the existing conflict rule of re-registering the same ChannelName in
+RouteMesh keeps the existing conflict rule for re-registering the same ChannelName in
 the same process. ClientServer's registration key is `(ChannelName, Role)`. So one
 `Client` role and one `Server` role can each be registered for the same ChannelName in
 the same process. The two registrations share one ClientServer topology and target
@@ -462,7 +462,7 @@ aren't registered on one host at the same time. The previous host is shut down b
 starting a host configured with the new topology. The framework doesn't provide live
 migration, message relay, or pending-request transfer between two send paths.
 
-## 7. The Value That Distinguishes A Channel Handler
+## 7. The Value That Distinguishes a Channel Handler
 
 A Channel handler is distinguished by the `(ChannelName, message kind, packet
 identity)` combination. Since ChannelName alone can determine the current process's
@@ -472,7 +472,7 @@ A Node direct handler registers in a separate route scope built from MeshName an
 RID. So a Channel handler and a Node direct handler don't conflict even using the
 same packet name.
 
-## 8. RouteMesh Peer Connection And Discovery (Automatic RID Comparison, Manual, Descriptor-Based)
+## 8. RouteMesh Peer Connection and Discovery (Automatic RID Comparison, Manual, Descriptor-Based)
 
 Ready MeshNodes of the same MeshName connect directly for each needed pair. With `N`
 nodes, each MeshNode ROUTER manages at most `N-1` peer connections. A pair where both
@@ -484,11 +484,11 @@ automatically connect to a MeshNode of a different MeshName. Adding a ChannelNam
 doesn't create a new physical connection between MeshNodes of the same MeshName
 either.
 
-### Automatic: Only The MeshNode With The Smaller RID Starts The Connection
+### Automatic: Only the MeshNode with the Smaller RID Starts the Connection
 
 In Automatic RouteMesh, even if two MeshNodes discover each other, both sides don't
-start the connection at the same time. The two MeshNodes compare RID's canonical byte
-order the same way, and only the MeshNode with the smaller RID starts the connection
+start the connection at the same time. The two MeshNodes compare their RIDs using the
+same canonical byte order, and only the MeshNode with the smaller RID starts the connection
 to the other endpoint.
 
 Automatic discovery first checks the local and remote descriptors' Object role. If
@@ -507,8 +507,8 @@ socket before ready. It doesn't repeat background reconnect for the same endpoin
 configuration generation. If endpoint, expected RID, or configuration generation
 changes, it can be re-checked once with a new intent.
 
-An endpoint remains only a connection intent when a manual endpoint is used with a
-Location Store descriptor for an object peer path too. When the framework matches the
+An endpoint remains only a connection intent when a manual endpoint is also used with a
+Location Store descriptor for an object peer path. When the framework matches the
 endpoint to a descriptor, it puts the descriptor's RID, positive lifecycle generation,
 and security identity into the handshake's expected values together. A fallback that
 passes only the endpoint and RID, using generation `0` or treating the RID as the
@@ -532,7 +532,7 @@ The peer handshake checks the following information.
 | Information checked | Purpose of the check |
 |---|---|
 | MeshName and RID | Confirms it's the correct peer of the same RouteMesh. |
-| [Lifecycle generation](../00-foundation/02-glossary.en.md#lifecycle-generation) | Distinguishes a stale connection from before a restart from the current connection. |
+| [Lifecycle generation](../00-foundation/02-glossary.en.md#lifecycle-generation) | Distinguishes the current connection from a stale connection left over from before a restart. |
 | [Descriptor revision](../00-foundation/02-glossary.en.md#descriptor-revision) | Selects the more recent weight information within the same lifecycle. |
 | Object role | Confirms whether both nodes are Object Client. |
 | Server ChannelName set and weight | Judges whether a connection is needed even for an Object Client pair, and confirms which ChannelName this peer is a target for. The set can be empty, and even a weight-`0` membership is Server capability. |
@@ -544,9 +544,9 @@ identity, the connection isn't made ready.
 
 [Lifecycle generation](../00-foundation/02-glossary.en.md#lifecycle-generation) is a non-zero
 internal identifying value. A larger number alone isn't judged as a new lifecycle —
-only whether the values match is compared.
+only whether the values match is considered.
 
-When an Automatic MeshNode restarts, it uses a new RID and new generation. In manual
+When an Automatic MeshNode restarts, it uses a new RID and a new generation. In manual
 topology using a fixed RID, a new generation's connection is only made ready after
 satisfying all of the following conditions.
 
@@ -558,7 +558,7 @@ satisfying all of the following conditions.
 A late-arriving frame or event from a previous generation can't change the current
 connection.
 
-### Changing Weight Does Not Remake The Connection
+### Changing Weight Does Not Remake the Connection
 
 [Descriptor revision](../00-foundation/02-glossary.en.md#descriptor-revision) is a monotonically
 increasing number, starting at 1, distinguishing the version of weight information
@@ -576,7 +576,7 @@ When the owner changes weight, it's reflected in the following order.
 Even if an update is lost, the next Location Store poll or handshake re-confirms the
 latest revision. A weight change alone doesn't rebuild the peer connection.
 
-## 9. How To Find A Peer Endpoint (Automatic/Manual, Host Relocate Constraints)
+## 9. How to Find a Peer Endpoint (Automatic/Manual, Host Relocate Constraints)
 
 There are two ways to obtain a peer endpoint: automatic and manual.
 
@@ -601,7 +601,7 @@ there's no ready connection.
 
 Manual mode can be used for regular messaging and for
 [Shutdown](../00-foundation/02-glossary.en.md#shutdown) — the state where the runtime is terminating
-and no longer accepts new operation admission — but can't be used for host `Relocate`'s zero-downtime
+and no longer accepts new operation admission — but not for host `Relocate`'s zero-downtime
 handoff. This is because the framework can't
 distribute the replacement endpoint to every participating host and client and
 confirm the actual connection is ready. If even one manual connection exists in the
@@ -615,9 +615,9 @@ distributed [Spot](../00-foundation/02-glossary.en.md#spot)/Actor addressing or 
 used, a Redis Location Store is needed even if the peer endpoint is registered
 manually.
 
-## 10. Ready State And Channel Target Selection
+## 10. Ready State and Channel Target Selection
 
-A MeshNode only becomes ready once all of the following preparation finishes.
+A MeshNode only becomes ready once all of the following preparations are complete.
 
 1. ROUTER listener bind
 2. Preparing the admission function that checks and accepts peer connections
@@ -646,7 +646,7 @@ A draining MeshNode is excluded from new ChannelName selection and Logical Multi
 remote targets. The termination rule for already-submitted work and RID direct is
 defined by [Graceful drain](../05-location-relocation/05-host-relocation-flow.en.md).
 
-## 11. RouteMesh SS Message Size And Mailbox Ceiling
+## 11. RouteMesh SS Message Size and Mailbox Ceiling
 
 A RouteMesh MeshNode has no Framework-level
 [MaxMessageSize](../00-foundation/02-glossary.en.md#maxmessagesize) startup setting — the byte
@@ -679,7 +679,7 @@ listener message-size setting; the StreamNode Core STREAM inbound cap is defined
 [STREAM session](../00-foundation/02-glossary.en.md#stream-session) — the server-side execution unit
 kept from accepting one STREAM client connection until it closes.
 
-## 12. The Boundary With Classic Fanout
+## 12. The Boundary with Classic Fanout
 
 [Classic fanout](../00-foundation/02-glossary.en.md#classic-fanout) is a separate feature using an
 independent PUB/SUB socket. It doesn't participate in RouteMesh
@@ -753,8 +753,8 @@ select-one returns. Each item leads to one contract test.
 - Automatic RouteMesh first excludes, via descriptor, a pair where both sides are
   Object Client with no RouteMesh Channel Server membership. For the rest, only the
   MeshNode with the smaller RID starts a pairwise connect.
-- Manual RouteMesh also ends only a pair confirming the same condition at handshake
-  with `NotRequired`, closes it before ready, and doesn't retry the same
+- Manual RouteMesh also ends only the affected pair with `NotRequired` after confirming
+  the same condition at handshake, closes it before ready, and doesn't retry the same
   configuration generation.
 - RouteMesh Channel Server membership creates a connection requirement even at weight
   `0`. Channel Client membership, ClientServer, and classic fanout aren't included in

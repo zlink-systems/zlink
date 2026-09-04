@@ -45,7 +45,7 @@ title: "Service Wire Protocol"
 > when those topics are rewritten. This chapter performs only sentence-level cleanup and
 > does not move any section.
 
-## 1. Schema And Generation Boundary
+## 1. Schema and Generation Boundary
 
 ### Normative Generation Authority
 
@@ -66,7 +66,7 @@ cross-language conformance mechanism: every generated codec, and every
 transitional handwritten codec until its swap, must accept and produce the same
 declared bytes and failures.
 
-### Normative Format By Layer
+### Normative Format by Layer
 
 | Layer | Normative format | Owner and interpretation |
 |---|---|---|
@@ -77,7 +77,8 @@ declared bytes and failures.
 
 ### Machine-Readable Schema Conventions
 
-The generator input is the existing schema, not an inferred language model. Its
+The generator input is the existing schema, not a model inferred separately
+for each language. Its
 `types` array declares named layouts: primitives and enums use `encoding` and
 `values`; ordered fixed fields use `kind: "struct"` with declaration-order
 `fields`; counted sequences use `kind: "vector"` with `countType` and `item`;
@@ -127,7 +128,7 @@ fixed by the same schema and golden fixtures.
 - MeshName is not part of the key — it is stored only as the authority payload's current placement attribute.
 - Percent encoding leaves RFC 3986 unreserved bytes as-is and represents everything else as uppercase hex.
 
-## 2. Record Framing And Decode
+## 2. Record Framing and Decode
 
 ### Frame Layout
 
@@ -176,7 +177,7 @@ These flags can be used only on commands that the schema permits or requires.
 An undefined flag, an unexpected frame count, a conditional tail, or a
 trailing byte is rejected as a protocol error before application dispatch.
 
-### Decode Validation And Size Limits
+### Decode Validation and Size Limits
 
 - The decoder checks the complete record length, item count, UTF-8 validity, and every bound before allocating.
 - A metadata frame cannot exceed 1,024 bytes.
@@ -335,7 +336,7 @@ The sender's dedicated suppression registry uses the complete source and target 
 as its key. Its state moves through `idle → inFlight → sentUntilExpiry`, and only a send
 failure returns it from `inFlight` to `idle`. Route-cache expiry or replacement also removes
 the marker. The registry does not own the original operation's payload, reply route, or
-terminal completion. [45. Target Selection And Route Cache](../03-spot-actor/08-routing.en.md#2-how-to-send-to-a-spotactor-by-global-id)
+terminal completion. [45. Target Selection and Route Cache](../03-spot-actor/08-routing.en.md#2-how-to-send-to-a-spotactor-by-global-id)
 shows the state flow.
 
 ### 3.2 Bound Session Replacement Notification
@@ -350,7 +351,7 @@ applies only a record matching the retired identity. The Framework closes the co
 `100 ms` after the callback reaches a successful or failed terminal; an empty outbound queue does
 not shorten this delay.
 
-## 4. Admission And Connection Fence
+## 4. Admission and Connection Fence
 
 ### Admission Procedure
 
@@ -446,16 +447,16 @@ the payload and converts it to a typed value under that profile. This document d
 set; parser choice, buffer reuse, and transport delivery of the original UTF-8 bytes remain internal
 implementation details.
 
-### Relocation Adapter State Is Outside The Profile
+### Relocation Adapter State Is Outside the Profile
 
 Application state returned by an Actor/Spot relocation adapter is not
 subject to this profile. The Framework stores relocation state as opaque
 bytes, and does not perform JSON parsing or compare a state contract ID or
 an application-specific version.
 
-## 7. Durable Authority And Explicit Creation
+## 7. Durable Authority and Explicit Creation
 
-### Generation And Authority
+### Generation and Authority
 
 - Store-backed authority keeps the provider-issued `StoreVersion`,
   [`ObjectGeneration`](../00-foundation/02-glossary.en.md#objectgeneration) — the number that
@@ -497,7 +498,7 @@ object role creates neither authority nor a hidden local runtime.
 ## 8. Instance Spot Cold Activation Recovery
 
 The recovery scope and caller-visible result are defined by
-[Failure Handling And Failover Scope §4.4](../05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
+[Failure Handling and Failover Scope §4.4](../05-location-relocation/06-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
 This section describes only the wire-record, durable-root, and scan structure
 that implements that scope.
 
@@ -537,7 +538,7 @@ If a kind `2` route's operation identity or metadata presence/bytes differ
 from the ZLIA's target Mesh/stable type/descriptor version/deadline, it is
 rejected as a protocol error before reservation.
 
-### Target Host Scan And Recovery
+### Target Host Scan and Recovery
 
 - During the startup first scan and a rate-limited background scan, the target host resumes any Pending record it owns, or a Ready Instance activation recovery root that points to an incomplete first operation. The authority's target node RID and lifecycle generation must exactly match the current host.
 - The scan and late control records converge on a single local barrier, keyed by object key, object/owner generation, and owner lease.
@@ -555,7 +556,7 @@ The recovery pointer is removed in the following order:
   creating and initializing a new Instance Spot when authority is Missing and the caller
   specified Instance intent — recovery failure seals the local barrier, terminal-processes
   the request exactly once, and records a one-way drop event.
-- It is then deleted only once the fence value matches, in an order that reads the deleted result back to reconcile.
+- It is then deleted only when the fence value matches, and the deletion result is read back for reconciliation.
 - If the process ends before the delete, the target scan can safely re-run the retry-safe factory.
 - No new activation starts before `Missing` is confirmed.
 
@@ -565,7 +566,7 @@ The recovery pointer is removed in the following order:
 
 - A User Spot remote create uses command 47.
 - After a generic Reserve, the source sends a correlation/operation ID, the source node lifecycle, the global Spot RID/stable type, and the provider-issued reservation fence and deadline to a single specified target.
-- The reservation fence together preserves the expected StoreVersion, object/owner generation, target node lifecycle/owner lease, and pending capacity.
+- The reservation fence preserves the expected StoreVersion, object/owner generation, target node lifecycle/owner lease, and pending capacity together.
 - Since the target reads the immutable content of the Pending creation projection from the Location Store, command 47 carries no application payload or metadata.
 
 #### Command 48 — Remote Close
@@ -584,7 +585,7 @@ Both operations return their results in the command 20 reply envelope.
 - The source operation table guarantees terminal-once by source RID/lifecycle and operation ID.
 - Neither Location row polling nor a control message built from an application packet substitutes for a reply.
 
-## 9. Maintenance Capture And Relocation Envelope
+## 9. Maintenance Capture and Relocation Envelope
 
 ### Actor Join Request Envelope
 
@@ -598,10 +599,10 @@ runtime that needs such an id generates and keeps it locally, not on the wire.
 Sending or receiving command 28 as a one-way record instead of a request/reply pair is
 outside this operation's contract; the receiver rejects it as a protocol error before
 application dispatch, per the rules in
-[2. Record Framing And Decode](#2-record-framing-and-decode).
+[2. Record Framing and Decode](#2-record-framing-and-decode).
 Receiver-side admission semantics — parking behind an existing preparation and the
 later-attempt-wins rule described in
-[15. Spot And Actor Model §4.2](../03-spot-actor/05-spot-actor-membership.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node) —
+[15. Spot and Actor Model §4.2](../03-spot-actor/05-spot-actor-membership.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node) —
 key on the actor identity carried in this body, not on any language-internal id.
 
 When the join-accepted reply carries an application reply, the target wraps it in the
@@ -616,7 +617,7 @@ delivers the sole part as the application reply, without interpreting the part b
 another envelope. The only reply metadata the source exposes to the caller is the
 profile's fixed outer content type, or none — it must not reconstruct another value, such
 as the request's content type. Framing other than this profile — nesting the part in an
-additional envelope, or exposing un-unwrapped inner bytes directly — is outside this
+additional envelope, or exposing the still-wrapped inner bytes directly — is outside this
 operation's contract.
 
 #### Receiver Stable-Type Resolution
@@ -650,14 +651,14 @@ command 20 reply, never a silent drop: a missing or unreadable row is `Unavailab
 (Store unavailable) or `NotFound` (never created / already retired); any fence field that
 does not match is a stale/mismatch protocol terminal; an unknown `stableType` (no local
 factory) is a typed rejection. A generation compared here is a bounded generation and is
-matched only by whether the values are equal, never by numeric ordering (§12).
+compared only for equality, never by numeric ordering (§12).
 
 The lease value the source places in the fence's `expectedOwnerLeaseGeneration` is the
 Actor's current Location owner lease, not a bound-Session token; an unbound Actor still
 carries its owner lease, and a bound Session adds only the seal/route-update legs, so a
 receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
 
-### Session Seal And Source Relay
+### Session Seal and Source Relay
 
 - Before stopping source application dispatch, the relocation coordinator seals a bound
   Session binding with command 42. Command 43 reports the seal result.
@@ -670,7 +671,7 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   target temporary queue. This uses ordering and retransmission of the same TCP
   connection, without a per-message ACK or durable journal.
 
-### Relocation Manifest And Direct Chunk Transfer
+### Relocation Manifest and Direct Chunk Transfer
 
 - Source sends command 40, `relocationPrepare`, as `[request]` to request temporary-queue
   installation and declare the payload manifest for the transfer that follows. Its body
@@ -710,8 +711,8 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   target replaces any partial staged batch wholesale rather than appending. The
   retransmission window equals `RelocationCutoverWaitTimeout` (default 1,000 ms,
   configurable). After the window elapses, the existing CAS fallback in the next
-  subsection applies with no further blind retry beyond a Warning and a counter
-  increment.
+  subsection applies with only a Warning and a counter increment, and no further blind
+  retry.
 - The source stores application state, queue work not yet executed before relocation,
   and timer information for direct transfer. Native timer handles and callback
   continuations aren't encoded.
@@ -724,7 +725,7 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   `request` keeps its existing operation identity, correlation, deadline, and caller
   retry.
 
-### CRC-32C Convention And Capability
+### CRC-32C Convention and Capability
 
 - Every checksum listed in `relocationTransferChecksumProfile` (`payloadChecksumCrc32c`,
   `boundaryChecksumCrc32c`, and the chunk/manifest checksums used by
@@ -750,7 +751,7 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   not originate; now that the Store-backed canonical receiver exists in all four runtimes,
   origination is unified across all four.)
 
-### Target CAS And Retained Store Roles
+### Target CAS and Retained Store Roles
 
 - After chunk assembly and temporary queue registration finish, receipt of cutover starts
   the target CAS of Location Store owner and membership from source to target. If cutover
@@ -777,14 +778,14 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   cannot reactivate the terminal `RelocationId`.
 - After successful CAS, the move isn't rolled back to the source.
 
-## 10. Relocation, Actor Membership, And Ready
+## 10. Relocation, Actor Membership, and Ready
 
 ### `RelocationId`
 
 `RelocationId` is a non-zero 128-bit value made by the runtime. It distinguishes
 repeated control messages for the same relocation and isn't exposed to the application.
 
-### Authority And Target-Only CAS
+### Authority and Target-Only CAS
 
 Before CAS, the source is owner. The target has only a prepared instance after Restore
 while waiting for cutover or the 1,000 ms fallback, and doesn't run application messages. The target
@@ -797,7 +798,7 @@ target changes all or none in one conditional batch. Relocation adds no separate
 capacity gate for participant count, relay record count, or bytes. Existing Store
 provider and transport frame/page size limits still apply.
 
-### Post-Commit Queue And Ready
+### Post-Commit Queue and Ready
 
 After CAS succeeds, the target opens queue and lifecycle in this order.
 
@@ -813,8 +814,8 @@ connections. Only order accepted into the target queue is preserved. After the
 or Spot and manages its application queue — changes, Message Follow sends messages
 arriving at the old address to the target.
 
-After cutover submit reaches a success or failure terminal, the source doesn't wait for
-a target completion response. Only an explicit target failure before relay-ready is
+After the cutover submission reaches a success or failure terminal, the source
+doesn't wait for a target completion response. Only an explicit target failure before relay-ready is
 accepted aborts and restores source queue and Session seal. A later submit failure doesn't
 restore source. A late or duplicate cutover only records a `late_cutover` Warning and doesn't mutate state
 again. When the 1,000 ms fallback opens the queue, the contract doesn't guarantee that
@@ -826,7 +827,7 @@ late relay runs before new direct target messages.
   binding.
 - Command 42 seals the current binding; command 43 returns only the seal-install
   result. Command 43 carries no Session-message sequence or high-water.
-- Command 44 is sent by target runtime for the session-route update and by source coordinator for an abort
+- Command 44 is sent by the target runtime for the session-route update and by the source coordinator for an abort
   before relay-ready is accepted. The route update carries relocation identity, current binding generation,
   ActorId/ObjectGeneration, and target route. The Session owner doesn't re-read the
   Location Store or Actor authority mirror.
@@ -848,7 +849,7 @@ join, host relocation, Message Follow, and callback paths don't repeat these dec
 
 ## 11. Request Terminal Identity
 
-### `OperationId` And `ReplyRouteId`
+### `OperationId` and `ReplyRouteId`
 
 - `OperationId` is a non-zero identity made of two `u64` words (`high`, `low`).
   `ReplyRouteId` is a separate non-zero `u64`. Both are unique within the source owner's
@@ -879,14 +880,14 @@ retention period.
 - Cleanup releases the reference from Location authority, then performs the Relocation Store delete.
 - A published reference's permanent missing state, a checksum mismatch, or an inventory digest mismatch is a non-retriable `RelocationDataLost`, and does not roll back a committed owner/membership back to the source.
 
-### `SendReady` Record And Binding Completion
+### `SendReady` Record and Binding Completion
 
 The schema's Framework service-wire `SendReady` record kind `12` is service control. Core 0.13's
 per-operation `send_completion` and the binding awaitable are a separate contract that reports
 HWM-retry completion. Retiring the binding readiness callback does not remove the service-wire
 record or its schema value.
 
-## Wire Records And Shared Capacity
+## Wire Records and Shared Capacity
 
 A wire command does not grant bypass; ordinary control and malformed records also use shared permits. [Receive and Dispatch Loop](../01-execution/04-application-job-queue-and-backpressure.en.md) owns pre-classification permits; [Payload Ownership](../01-execution/05-payload-ownership-and-codec.en.md) owns ordinary record-storage lifetime.
 
@@ -895,19 +896,19 @@ A wire command does not grant bypass; ordinary control and malformed records als
 The schema self-test, the golden-fixture decode results of the generated codecs, and the
 checked-in codec tables alone confirm the following.
 
-**Schema And Codec**
+**Schema and Codec**
 - The generated output and the checked-in codec tables match the schema.
 - Every runtime produces the same value and failure from the `framework-json-v1` golden fixture for typed application messages.
 
-**Decode And Admission**
+**Decode and Admission**
 - A record with an incomplete length, item count, UTF-8 validity, enum/flag value, or topology direction is rejected as a protocol error before application dispatch and never reaches the application.
 - An `update` with a lower `DescriptorRevision` within the same lifecycle, or with different bytes at the same revision, is rejected as a protocol error; resending the same revision with the same bytes leaves state unchanged (idempotent).
 - Inbound traffic other than probe/ACK does not extend the probe round-trip deadline.
 
-**Relocation Transfer And CAS**
+**Relocation Transfer and CAS**
 - Connection-bound accepted work never ends up in a relocation envelope.
 - A checksum mismatch on an assembled `relocationState` stage is an explicit failure — never a blind retry and never a partial-assembly restore.
-- If the digest of the participant list the store knows about differs from the list relocation recorded, it ends as `RelocationDataLost`.
+- If the digest of the participant list the store knows about differs from the list recorded for the relocation, it ends as `RelocationDataLost`.
 - Actor relocation commit changes the owner and the target Entry Spot membership atomically.
 - Ready is never published before the owner commit, the restore/replay and timer restoration, the queue merge, and the dispatch switch have finished.
 - Relocation adapter bytes are never interpreted as JSON or as a typed state contract.

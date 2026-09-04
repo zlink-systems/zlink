@@ -1,15 +1,15 @@
 # Framework Common Spec
 
 The documents in this directory describe the Framework's common public
-contract. Each document self-contains the inputs, state, normal flow, and
-failure/completion conditions its implementation and contract tests need.
+contract. Each document defines the inputs, state, normal flow, and
+failure/completion conditions required by its implementation and contract tests.
 
 This directory and the per-language interfaces are the single authority
 for the Framework public contract. The documents in this directory form two
 layers (the "Layer" column in the topic tables below). The **contract** layer
 defines the behavior the application observes, and the **implementation spec**
-layer defines the structural decisions every language's service runtime
-follows in common so that it delivers that contract with the same result. A
+layer defines the common structural decisions that every language's service
+runtime follows to deliver that contract with the same result. A
 single document can carry both layers, in which case each sentence states
 which one it is. The implementation spec adds no new public behavior, but it
 is normative for runtimes — breaking a decision changes what the application
@@ -106,7 +106,7 @@ runtime must follow in common.
 | [03. cancellation-and-shutdown](01-execution/03-cancellation-and-shutdown.en.md) | How do cancellation and shutdown treat work already accepted | Contract |
 | [10. spot-timer](03-spot-actor/10-spot-timer.en.md) | When does a Spot timer run, and what happens to a late tick | Contract+Implementation |
 | [04. application-job-queue-and-backpressure](01-execution/04-application-job-queue-and-backpressure.en.md) | Under overload, what is blocked first, and what does the application observe | Contract+Implementation |
-| [05. payload-ownership-and-codec](01-execution/05-payload-ownership-and-codec.en.md) | How many times is a message's bytes copied from the socket to the handler | Contract+Implementation |
+| [05. payload-ownership-and-codec](01-execution/05-payload-ownership-and-codec.en.md) | How many times are a message's bytes copied from the socket to the handler | Contract+Implementation |
 
 The shared-permit rule carried over from the session topic is owned as a
 single contract sentence by `05`'s "Ordinary ingress permit order" section.
@@ -121,7 +121,7 @@ liveness checks, and the byte/command format on the wire.
 |---|---|---|
 | [01. channel-topology](02-channel-transport/01-channel-topology.en.md) | How are RouteMesh's physical connections and ChannelName's logical membership structured | Contract |
 | [02. channel-messaging](02-channel-transport/02-channel-messaging.en.md) | How do Node-direct and ChannelName select-one each choose a target | Contract |
-| [03. client-server-channel](02-channel-transport/03-client-server-channel.en.md) | How does a Server respond with a handler to a request a Client started | Contract |
+| [03. client-server-channel](02-channel-transport/03-client-server-channel.en.md) | How does a Server respond through a handler to a request initiated by a Client | Contract |
 | [04. network-listener-identity](02-channel-transport/04-network-listener-identity.en.md) | Why do a listener's bind address and advertised address differ, and when is each used | Contract |
 | [05. transport-liveness](02-channel-transport/05-transport-liveness.en.md) | How is a remote connection's liveness checked, and how is it reconnected when it drops | Contract+Implementation |
 | [06. wire-protocol](02-channel-transport/06-wire-protocol.en.md) | What bytes and commands actually pass between nodes | Implementation spec |
@@ -135,12 +135,12 @@ re-queried.
 
 | Document | Question It Answers | Layer |
 |---|---|---|
-| [01. spot-model](03-spot-actor/01-spot-model.en.md) | When is each Entry/User/Instance Spot created, and what do they share and not share | Contract |
+| [01. spot-model](03-spot-actor/01-spot-model.en.md) | When is each Entry/User/Instance Spot created, what do they have in common, and how do they differ | Contract |
 | [02. spot-messaging](03-spot-actor/02-spot-messaging.en.md) | What path does a message sent to a Spot take to reach the actual Spot | Contract |
 | [03. mesh-node](03-spot-actor/03-mesh-node.en.md) | What is a MeshNode's identity, its object-placement conditions, and its startup order | Contract |
 | [04. actor-model](03-spot-actor/04-actor-model.en.md) | How are an Actor's identity, location, message queue, and lifecycle defined | Contract |
 | [05. spot-actor-membership](03-spot-actor/05-spot-actor-membership.en.md) | How is an Actor created, and in what order do Spot membership and relocation happen | Contract |
-| [06. spot-address-messaging](03-spot-actor/06-spot-address-messaging.en.md) | How is a global SpotId created and looked up, and how is that Spot called directly | Contract |
+| [06. spot-address-messaging](03-spot-actor/06-spot-address-messaging.en.md) | How is a global SpotId created and looked up, and how is that Spot invoked directly | Contract |
 | [07. stage-wrapper-on-spot](03-spot-actor/07-stage-wrapper-on-spot.en.md) | How is a higher-level execution model such as room or stage built on top of the Spot contract | Contract |
 | [08. routing](03-spot-actor/08-routing.en.md) | When does a message to a Spot or Actor re-query location, and when not | Contract+Implementation |
 | [09. object-lifecycle](03-spot-actor/09-object-lifecycle.en.md) | How does code distinguish the three Spot kinds, and when is a missing object created | Implementation spec |
@@ -184,10 +184,10 @@ and the cost rule for leaving tracing on is defined by
 
 | Document | Question It Answers | Layer |
 |---|---|---|
-| [01. runtime-monitoring](06-observability/01-runtime-monitoring.en.md) | How does an operator query the Framework runtime's current state and find a cause in the log | Contract |
+| [01. runtime-monitoring](06-observability/01-runtime-monitoring.en.md) | How does an operator query the Framework runtime's current state and find the cause in the logs | Contract |
 | [02. runtime-metrics](06-observability/02-runtime-metrics.en.md) | What are the names, units, and labels of the metrics for throughput, waiting, and failure | Contract |
 | [03. message-flow-tracing](06-observability/03-message-flow-tracing.en.md) | How does one confirm how far a single message got and where it failed | Contract |
-| [04. flow-correlation](06-observability/04-flow-correlation.en.md) | How is a request and its reply, or a business flow chained across several messages, identified | Contract |
+| [04. flow-correlation](06-observability/04-flow-correlation.en.md) | How are a request and its reply, or a business flow chained across several messages, identified | Contract |
 
 ## Per-Language Interfaces
 
@@ -246,7 +246,7 @@ document split across several new documents, the section ranges are given.
 | `02-overview` | [00-foundation/03-overview](00-foundation/03-overview.en.md) |
 | `03-interaction-model` | [00-foundation/04-interaction-model](00-foundation/04-interaction-model.en.md) |
 | `04-message-model` | [00-foundation/05-message-model](00-foundation/05-message-model.en.md) |
-| `05-async-execution-policy` | §1.1–§1.4·§2·§6 → [01-execution/01-submit-and-completion](01-execution/01-submit-and-completion.en.md) · §1.1(Yield)·§3·§3.1 → [02-handler-turn-and-execution-gate](01-execution/02-handler-turn-and-execution-gate.en.md) · §4 → [03-cancellation-and-shutdown](01-execution/03-cancellation-and-shutdown.en.md) · §5 → [04-spot-timer](03-spot-actor/10-spot-timer.en.md) · §10 → [05-application-job-queue-and-backpressure](01-execution/04-application-job-queue-and-backpressure.en.md) |
+| `05-async-execution-policy` | §1.1–§1.4·§2·§6 → [01-execution/01-submit-and-completion](01-execution/01-submit-and-completion.en.md) · §1.1(Yield)·§3·§3.1 → [02-handler-turn-and-execution-gate](01-execution/02-handler-turn-and-execution-gate.en.md) · §4 → [03-cancellation-and-shutdown](01-execution/03-cancellation-and-shutdown.en.md) · §5 → [03-spot-actor/10-spot-timer](03-spot-actor/10-spot-timer.en.md) · §10 → [01-execution/04-application-job-queue-and-backpressure](01-execution/04-application-job-queue-and-backpressure.en.md) |
 | `06-framework-api` | [00-foundation/06-framework-api](00-foundation/06-framework-api.en.md) |
 | `07-channel-topology` | [02-channel-transport/01-channel-topology](02-channel-transport/01-channel-topology.en.md) |
 | `08-channel-messaging` | [02-channel-transport/02-channel-messaging](02-channel-transport/02-channel-messaging.en.md) |

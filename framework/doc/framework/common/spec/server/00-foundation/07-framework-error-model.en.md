@@ -6,10 +6,9 @@ title: "Framework Error Model"
 
 [Foundation topic index](README.en.md) · [Spec index](../README.en.md) · [Previous: 06. Framework API](06-framework-api.en.md) · [Next: 08. Layering Boundaries And Identifiers](08-layering.en.md)
 
-> The shared error the Framework delivers to an Application when `Send`, `Request`, and a
-> lifecycle operation fail.
-> Defines `ErrorKind`, the completion/failure boundary of Send and Request, and the retry
-> judgment rule.
+> Defines the shared `ErrorKind` that the Framework delivers to an Application when `Send`,
+> `Request`, or a lifecycle operation fails, the completion/failure boundaries of Send and
+> Request, and the rules for deciding whether to retry.
 
 ## 1. Scope
 
@@ -17,9 +16,9 @@ This document defines the shared error the Framework delivers to an Application 
 `Request`, or a lifecycle operation fails. An error represents a failure category an
 Application must distinguish, not an internal function or state-machine step.
 
-The Framework does not provide a retry-or-not signal alongside an error. An Application
-checks the operation's completion condition, idempotency, and business state before deciding
-whether to start a new operation.
+The Framework does not provide an indication of whether to retry alongside an error. An
+Application checks the operation's completion condition, idempotency, and business state
+before deciding whether to start a new operation.
 
 ## 2. The Shared `ErrorKind`
 
@@ -32,7 +31,7 @@ convention. The value `0` is also a valid error value.
 | 1 | `AlreadyExists` | The same identity or registration already exists. |
 | 2 | `TypeMismatch` | The stable type differs from the requested Application type. |
 | 3 | `NotConfigured` | The required role, handler, or Store isn't registered. |
-| 4 | `Rejected` | A Framework admission, filter, or runtime policy without a typed result rejected the operation. |
+| 4 | `Rejected` | A Framework admission, filter, or runtime policy rejected the operation without producing a typed result. |
 | 5 | `Unavailable` | The target, route, Store, or worker is currently unavailable. |
 | 6 | `CapacityExceeded` | Placement, a queue, or a bounded resource has no room. |
 | 7 | [`DeadlineExceeded`](02-glossary.en.md#deadlineexceeded) | The operation did not complete within its set deadline. |
@@ -50,18 +49,18 @@ The five server packages and the HTTP client package share these 13 kinds. A per
 interface document defines only the enum name and the exception/result representation — it
 does not add a kind or a retry boolean.
 
-## 3. Errors Checkable Before The Call
+## 3. Errors Checkable Before the Call
 
-A problem checkable right at the call site — such as an invalid argument or an
+A problem that can be checked immediately at the call site — such as an invalid argument or an
 already-closed handle — is delivered as that language's standard argument or
 invalid-operation error. A startup configuration error is also delivered as a per-language
 configuration exception. Neither of these is turned into a remote error reply.
 
 A Framework failure discovered while waiting on outbound queue acceptance, route resolution,
-or a remote reply is delivered as a per-language Framework exception, or as a `result`'s
+or a remote reply is delivered as a per-language Framework exception or as a `result`'s
 `ErrorKind`.
 
-## 4. `Send` Completion And Failure
+## 4. `Send` Completion and Failure
 
 `Send` completes with no return value once the source runtime's outbound queue accepts the
 message. This point does not mean the target handler has processed the message.
@@ -73,12 +72,12 @@ message. This point does not mean the target handler has processed the message.
 | The outbound queue doesn't accept the message before the send timeout | `DeadlineExceeded` |
 | The runtime has stopped new admission | `ShuttingDown` |
 
-Even if target activation, admission, or handler execution fails after `Send` completes, it
-does not change the result of the already-completed call. The Framework records this failure
+Even if target activation, admission, or handler execution fails after `Send` completes, that
+failure does not change the result of the already-completed call. The Framework records it
 in metrics, logs, and the message-flow trace, and does not automatically resubmit the same
 message to a different target.
 
-## 5. `Request` Completion And Failure
+## 5. `Request` Completion and Failure
 
 `Request` completes normally when it receives a typed reply. When a normal reply can't be
 produced, it completes exactly once with one of the following `ErrorKind`s.
@@ -95,12 +94,12 @@ produced, it completes exactly once with one of the following `ErrorKind`s.
 different resources.
 
 - **`CapacityExceeded` means the source couldn't secure a local bounded resource it owns.**
-  A slot to hold the reply, an operation-table entry, and a Spot/Actor queue within the same
-  runtime are this resource — because the submitting side and the queue are in the same
-  process, the source owns it.
+  That resource is a slot to hold the reply, an operation-table entry, or a
+  Spot/Actor queue within the same runtime — because the submitting side and the queue are in
+  the same process, the source owns it.
 - **`Unavailable` means the failure came from another node's queue being full.** A target's
   queue state is not expressed as `CapacityExceeded`. The line between the two kinds is
-  "does this runtime own the failed resource," and a caller uses this distinction to judge
+  whether this runtime owns the failed resource, and a caller uses this distinction to judge
   what to retry.
 - **This distinction applies only to a queue.** When a target node's placement capacity is
   insufficient, that's an admission decision, not a queue, so `CapacityExceeded` is correct
@@ -125,7 +124,7 @@ Cancellation is delivered as that language's cancelled awaitable. `DeadlineExcee
 cancellation mean the caller has stopped waiting for the reply. They don't mean the remote
 handler never ran, and a reply that arrives late does not produce a second result.
 
-## 6. Typed Results And `Rejected`
+## 6. Typed Results and `Rejected`
 
 For an operation whose contract has `Accepted` and `Rejected`, such as Actor create or join,
 the Application callback's decision is returned as a typed result. In this case, `Rejected`
@@ -156,16 +155,16 @@ different logical target.
 ## 8. Application Job Queue Saturation
 
 For the [Application job queue](02-glossary.en.md#application-job-queue) — the shared
-supply-permit queue a framework host instance holds until an application callback actually
-starts — a manual queue value outside `1..2,147,483,647`, or a calculation overflow, is a
-configuration error before socket bind.
+supply-permit queue that a Framework host instance holds until an application callback
+actually starts — a manual queue value outside `1..2,147,483,647`, or a calculation overflow,
+is a configuration error before socket bind.
 
 A runtime shared-cap shortage is a cancellable wait, not a public error, typed reject, or
 drop reason.
 
-Only a structural-limit violation of the [owner](02-glossary.en.md#owner) — the MeshNode that
-currently actually executes the Actor or Spot — uses the existing owner error; the two
-conditions are not mixed.
+The existing owner error is used only for a violation of the structural limit of the
+[owner](02-glossary.en.md#owner) — the MeshNode that currently actually executes the Actor or
+Spot — and the two conditions are not mixed.
 
 ## 9. Verification Requirements
 

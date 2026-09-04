@@ -1,8 +1,8 @@
 ---
-title: "Handler Turn And Execution Gate"
+title: "Handler Turn and Execution Gate"
 ---
 
-# Handler Turn And Execution Gate
+# Handler Turn and Execution Gate
 
 [Execution topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 01. Submit And Completion](01-submit-and-completion.en.md) · [Next: 03. Cancellation And Shutdown](03-cancellation-and-shutdown.en.md)
 
@@ -14,7 +14,7 @@ title: "Handler Turn And Execution Gate"
 > carries the execution structure that satisfies that contract as rules
 > every language runtime must follow.
 
-## 1. Separating Queue From Gate
+## 1. Separating Queue from Gate
 
 The runtime's work splits along two axes. One is the split between "where
 you line up" (queue) and "who currently holds the right to run" (gate,
@@ -110,11 +110,11 @@ wait on each other.
 - In no case do two application turns on the same execution gate run at the
   same time.
 
-## 3. Gate And Claim On `Yield`
+## 3. Gate and Claim on `Yield`
 
-`Yield` is offered only for the Channel/Spot/Actor request, CPU/I/O worker,
-and Actor/Spot create/get-or-create calls run on a `SpotWide` User Spot or
-Instance Spot. `Yield` for create/get-or-create is not a rule that widens
+On a `SpotWide` User Spot or Instance Spot, `Yield` is offered only for
+Channel/Spot/Actor requests, CPU/I/O workers, and Actor/Spot
+create/get-or-create calls. `Yield` for create/get-or-create is not a rule that widens
 the naming scope — it is a separate object-execution special case.
 
 | Call kind | `SpotWide` User Spot/Instance Spot | Entry Spot/`PerActor`/Entry Actor/Node/Channel handler |
@@ -155,7 +155,7 @@ sequenceDiagram
     Note over AQ: Releases the Actor A queue claim
 ```
 
-## 4. Waiting And Returning Within The Same Turn
+## 4. Waiting and Returning Within the Same Turn
 
 A request sent within the same handler turn can be awaited.
 
@@ -213,13 +213,13 @@ Calling it anywhere else ends in failure before the remote request goes
 out, before the queue changes. If it fails after the request has gone out,
 only a side effect is left remotely and the caller receives a failure.
 
-## 5. Actor Join And The `Defer()` Completion Boundary
+## 5. Actor Join and the `Defer()` Completion Boundary
 
 Actor Join is not subject to Messaging/Worker terminator naming. Inside a
 handler, a synchronous `Defer()` is called once to register a barrier that
 runs after the handler terminal.
 
-### The Nature Of `Defer()`
+### The Nature of `Defer()`
 
 `Defer()` is not an API that starts an async operation immediately. It is a
 synchronous terminal that registers an intent and an inactive queue barrier
@@ -228,7 +228,7 @@ it is an ordinary function with no result, and does not return an
 awaitable, promise, or coroutine. It does not start target I/O, and does
 not release the Spot gate or the Actor FIFO claim.
 
-### The Difference Between `Defer()` And `Yield`
+### The Difference Between `Defer()` and `Yield`
 
 | Function | What it does when called | Current execution right |
 |---|---|---|
@@ -241,7 +241,7 @@ existing rule prohibiting `Yield` on `PerActor` and Entry does not change
 either. The Join call is not offered an ordinary async terminal, `Yield`,
 or a one-way terminal.
 
-### Barrier Activation And Disposal
+### Barrier Activation and Disposal
 
 - A handler may register a Join before `Yield`, or in a continuation after
   `Yield`.
@@ -294,16 +294,16 @@ Actor Join is not subject to the terminator naming of
 [01. Submit And Completion](01-submit-and-completion.en.md) — this section
 owns the completion boundary.
 
-## 6. The Trap In Acquiring Processing Authority (Implementation)
+## 6. The Trap in Acquiring Processing Authority (Implementation)
 
 Execution authority can be built either by chaining the next work to the
 completion of the previous one, or with a lock and a queue. Use whichever
 fits the language. But each implementation approach comes with its own
 constraints.
 
-**Acquisition doubles as exclusivity acquisition.** Only one processing
+**Acquiring it also acquires exclusivity.** Only one processing
 authority per owner exists at a time. Each processing authority is given a
-non-reusable number, used to decide whether a late completion belongs to
+non-reusable number used to decide whether a late completion belongs to
 it — this fencing number is an internal confirmation condition.
 
 **Handing work off between threads rules out thread-bound storage.**
@@ -315,8 +315,8 @@ porting code that assumes a fixed thread and stores context in
 thread-local storage makes the context disappear when the next work item
 runs on another thread.
 
-**Running in place when the queue is full is not an option.** Substituting
-a submission failure with running right there instead makes it run
+**Running in place when the queue is full is not an option.** Running work
+in place instead of reporting a submission failure makes it run
 concurrently with work already in progress, which erases the premise of
 serial execution entirely. The result is split by submission family, which
 runtime the queue lives in, and whether the call's public result has
@@ -326,17 +326,17 @@ owns this criterion).
 
 | Family | Queue location | Result |
 |---|---|---|
-| Send/one-way | Same runtime | Waits until the send timeout. If even the internal waiting slot is full, the Framework exception raised when an operation's completion condition isn't met by its deadline, [`DeadlineExceeded`](../00-foundation/02-glossary.en.md#deadlineexceeded) |
+| Send/one-way | Same runtime | Waits until the send timeout. If even the internal waiting slot is full, it fails with [`DeadlineExceeded`](../00-foundation/02-glossary.en.md#deadlineexceeded), the Framework exception raised when an operation's completion condition isn't met by its deadline |
 | Send/one-way | Different node | There's no result. It has already completed, so it only shows up as an observation |
 | Publish (before start) | Same runtime | Waits. If it can't secure a slot, `DeadlineExceeded` |
 | Publish (after start) | Local target in the same runtime | Skips without waiting. It has already completed |
-| Request | Same runtime | Doesn't wait, `CapacityExceeded` |
-| Request | Different node | Doesn't wait, `Unavailable` |
+| Request | Same runtime | Doesn't wait; `CapacityExceeded` |
+| Request | Different node | Doesn't wait; `Unavailable` |
 | Control claim | Same runtime | A separate bound. Exceeding it gives `CapacityExceeded` |
 | Control claim | Different node | `Unavailable` |
 | Send-side backpressure | — | Core waits and completes the binding operation. The Framework has no send-ready waiter |
 
-The standard that splits waiting from finishing immediately is whether the
+The criterion that distinguishes waiting from finishing immediately is whether the
 caller can receive a result and judge from it. A Request can receive one,
 so it doesn't wait; the send family can't receive one, so it waits. Running
 in place is never an option, in any case.
@@ -358,8 +358,8 @@ rejected with `InvalidOperation` before submission. An eligible call on a
 `SpotWide` User Spot or Instance Spot that selects `Yield` first releases
 the current shared gate, so this is not reentrancy.
 
-What's prohibited is the public operation. Split out exactly what's
-prohibited as follows.
+The prohibition applies to public operations. The following table
+distinguishes exactly which are prohibited.
 
 | Call | Verdict |
 |---|---|
@@ -372,7 +372,7 @@ prohibited as follows.
 "Before submission" matters. If it fails after the request has gone out,
 only a side effect is left remotely and the caller receives a failure.
 
-## 7. Lane Separation And Priority (Implementation)
+## 7. Lane Separation and Priority (Implementation)
 
 Keep **two FIFO lanes** per owner.
 
@@ -397,7 +397,7 @@ involved here.
 | Ceiling | Fairness between what | Unit counted |
 |---|---|---|
 | owner occupancy bound | Between different owners | Time |
-| lifecycle consecutive-execution bound | Between the two lanes of the same owner | Number of turns the lifecycle lane was picked consecutively |
+| lifecycle consecutive-execution bound | Between the two lanes of the same owner | Number of consecutive turns in which the lifecycle lane was picked |
 
 The default owner-occupancy time budget is 10 ms, and the lifecycle lane
 may be selected for at most 8 consecutive turns. The time budget is
@@ -429,7 +429,7 @@ share count/byte reservation or admission state with each other.
 Already-accepted lifecycle work can still be enqueued and run even when
 the application FIFO is full.
 
-## 8. Cleanup And The Turn Boundary (Implementation)
+## 8. Cleanup and the Turn Boundary (Implementation)
 
 Deferred post-processing can overlap the next turn when it runs in the
 following order after work finishes.
@@ -447,10 +447,10 @@ state, seriality breaks.
 put back on the queue as new work.** Post-processing that runs outside the
 authority is only allowed to avoid touching that owner's state.
 
-## 9. Time Budget And Batch Processing (Implementation)
+## 9. Time Budget and Batch Processing (Implementation)
 
 Once processing authority is taken, several items are processed in a row
-within a fixed time budget. After finishing each item, budget is checked;
+within a fixed time budget. After finishing each item, the budget is checked;
 if it remains, the next item is processed, otherwise authority is
 released.
 
@@ -466,7 +466,7 @@ bound (default 10 ms), and whether the same value applies even where each
 execution unit already has a separated gate, as in `PerActor`, remains a
 spec-gap candidate.
 
-## 10. Execution Resources Do Not Scale With The Number Of Spots (Implementation)
+## 10. Execution Resources Do Not Scale with the Number of Spots (Implementation)
 
 **Execution resources are proportional to core count, not Spot count.** How
 execution authority is built is free, but attaching a dedicated execution
@@ -484,7 +484,7 @@ same authority.
 
 **Resources are allocated per process, and don't grow with topology or
 Spot count.** Infrastructure work is mostly short and non-blocking, so it's
-covered by fewer resources than application.
+covered by fewer resources than application work.
 
 **The contract is not "a dedicated thread" but "infrastructure progresses
 whenever application is entirely waiting."** This is because the four
@@ -512,14 +512,14 @@ event loop. So the contract is split as follows.
 resources under this contract. The criterion isn't the data type but
 **whether it progresses after yielding.**
 
-## 11. Making The Two Synchronization Points Cheap (Implementation)
+## 11. Making the Two Synchronization Points Cheap (Implementation)
 
 In `SpotWide`, an Actor message passes through two points — enqueuing onto
 the Actor queue, and acquiring the shared authority. Neither point can be
 eliminated, so the cost is lowered instead.
 
 **Don't put an independent lock on the Actor queue.** In `SpotWide`, only
-one thing runs at a time anyway, so the side dequeuing already holds the
+one thing runs at a time anyway, so the dequeuing side already holds the
 authority. Only the enqueuing side needs protection.
 
 **Make uncontended authority acquisition finish in a single atomic
@@ -552,7 +552,7 @@ are the same across both approaches, and the confirmation criterion is
 whether that language's documentation records which one was chosen — the
 first value to check when comparing performance.
 
-## 13. Separating Application Progress From Infrastructure Progress
+## 13. Separating Application Progress from Infrastructure Progress
 
 Each language's service runtime advances the application domain and the
 infrastructure domain independently, as in the table in
@@ -577,8 +577,8 @@ The two domains are separated per owner as physically distinct FIFOs — the
 specific bounds and priority rules are owned by
 [§7](#7-lane-separation-and-priority-implementation).
 
-**Which region is currently executing is confirmed by a context marker,
-and a wrong combination ends in failure without waiting.** If an
+**A context marker confirms which region is currently executing, and an
+invalid combination fails without waiting.** If an
 infrastructure-only work item is called from an application context, or the
 reverse, the point of splitting the two regions disappears — treating it as
 a wait would deadlock, and letting it pass through would break the
@@ -602,7 +602,7 @@ not cut the stream, and conversely, it does not slow down message
 processing either ([Runtime State And Operational Diagnostics 「3. Querying
 Current State And Observing Changes」](../06-observability/01-runtime-monitoring.en.md)).
 
-## 14. Object Placement And Activation
+## 14. Object Placement and Activation
 
 Object placement and activation follow these rules:
 
@@ -618,7 +618,7 @@ Object placement and activation follow these rules:
 
 Instance cold activation follows this order.
 
-1. Fix the durable inbox's first record.
+1. Finalize the durable inbox's first record.
 2. Commit [`Ready`](../00-foundation/02-glossary.en.md#ready) — the state where object
    creation and initialization and the Location Store record are finished, so it can
    receive application messages — which includes the recovery root and cursor.
@@ -647,10 +647,10 @@ non-use of thread-local, lock count, independence of execution resources
 from Spot count) are owned by each rule paragraph as an "internal
 confirmation condition" and are not listed here.
 
-**Yield And Reentrancy**
+**Yield and Reentrancy**
 
-- Calls that allow `Yield` in a `SpotWide` context, and calls it is not
-  offered for, are split as in the table in
+- Calls that allow `Yield` in a `SpotWide` context, and calls for which it is
+  not offered, are split as in the table in
   [§3](#3-gate-and-claim-on-yield).
 - After a `SpotWide` member Actor calls `Yield`, the same Actor's next
   record does not run first, while other Actor/Spot handlers/timers do
@@ -661,7 +661,7 @@ confirmation condition" and are not listed here.
 - A call that waited with `Yield` in an eligible context resumes, after
   completion, in a new turn at the back of the original queue.
 
-**Actor Join And `Defer()`**
+**Actor Join and `Defer()`**
 
 - `Defer()` returns as a synchronous function with no result, and does not
   start target I/O until the handler ends normally.
@@ -673,7 +673,7 @@ confirmation condition" and are not listed here.
 - Calling `Defer()` after the registration scope has closed ends in
   `InvalidOperation`.
 
-**Handler Order And Lane**
+**Handler Order and Lane**
 
 - In a `SpotWide` Spot, two handlers of different Actors never run at the
   same time; in a `PerActor` Spot, handlers of different Actors run at the
@@ -686,8 +686,8 @@ confirmation condition" and are not listed here.
 - Work submitted while the queue is full does not run in place and
   completes as in the table in
   [§6](#6-the-trap-in-acquiring-processing-authority-implementation).
-- Lifecycle lane work does not consume the application lane's bound
-  together, and when both lanes are ready together, the lifecycle lane
+- Lifecycle lane work does not count against the application lane's bound,
+  and when both lanes are ready, the lifecycle lane
   runs first.
 - Even if lifecycle work keeps arriving without a break, an application
   turn runs within finite time.
@@ -695,7 +695,7 @@ confirmation condition" and are not listed here.
 - Post-processing does not overlap the execution of the next work item and
   does not change owner state twice.
 
-**Application And Infrastructure Progress**
+**Application and Infrastructure Progress**
 
 - With an application handler kept waiting, that call's timeout fires.
 - With an application handler kept waiting, the shutdown procedure

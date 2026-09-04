@@ -24,16 +24,15 @@ remote connections) may need two addresses for different purposes.
 [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) (the scope in which multiple
 MeshNodes participate to exchange node-to-node and Channel messages),
 [ClientServer Channel](../00-foundation/02-glossary.en.md#clientserver-channel) (the
-one-directional service boundary where the Client starts a send/request and the
+unidirectional service boundary where the Client starts a send/request and the
 Server runs the handler and replies), classic fanout publisher, and STREAM
 server all use the same process-default network values. If a specific
 listener needs a different value, specify a listener override.
 
-The HTTP listener uses the server hosting package's URL contract, and
-isn't a target for the automatic [Location Store](../00-foundation/02-glossary.en.md#location-store)
+The HTTP listener uses the server hosting package's URL contract and
+isn't subject to the automatic [Location Store](../00-foundation/02-glossary.en.md#location-store)
 (a store that keeps each Spot's current owner and state where multiple nodes
-can check it together) record this document
-describes.
+can check it together) recording described in this document.
 
 The C# code below is reference material showing how the common contract
 appears in the .NET public API. It doesn't require the same signature in
@@ -116,7 +115,7 @@ options
     .Listen(); // binds to port 0 and publishes the actual port to the MeshNode descriptor.
 ```
 
-## 2. Process Defaults And Listener Override
+## 2. Process Defaults and Listener Override
 
 The Framework root has process-default `BindHost` and `AdvertiseHost`.
 
@@ -157,20 +156,19 @@ connections on multiple local network interfaces.
 
 If BindHost is a wildcard, AdvertiseHost must be specified.
 
-- **If the address to connect from remote can't be confirmed, startup
+- **If the address that remote processes connect to can't be confirmed, startup
   fails before publishing the endpoint or discovery record.** A wildcard
-  BindHost alone can't determine the single address remote will connect
-  to.
+  BindHost alone can't determine the single address that a remote process
+  will connect to.
 
-## 3. How The Port Is Finalized
+## 3. How the Port Is Finalized
 
-A listener can use a fixed port or let the framework choose an empty
-port. If bound to port `0`, the operating system chooses an empty port
+A listener can use a fixed port or let the framework choose an available
+port. If bound to port `0`, the operating system chooses an available port
 and the framework reads the actual bound port.
 
-The following diagram shows how the port the bind finalizes at the
-physical layer leads to the advertised endpoint the remote peer actually
-sees.
+The following diagram shows how the port finalized by the bind at the
+physical layer becomes the advertised endpoint the remote peer actually sees.
 
 ```mermaid
 flowchart LR
@@ -193,22 +191,22 @@ Location Store) listener uses port `0`. The
 framework confirms the actual port and records it in the descriptor, so
 a remote process can connect.
 
-In manual mode, if there's no separate discovery source to tell the
+In manual mode, if there's no separate discovery source to provide the
 endpoint, both the server listen endpoint and the client remote endpoint
 must be specified explicitly.
 
 - **Wildcard host and port `0` can only be used for local bind input.**
-  If they remain in a place remote reads, such as a
+  If they remain in a location that remote processes read, such as a
   [Location Store](../00-foundation/02-glossary.en.md#location-store) record or manual
   peer configuration, it's a startup configuration error, because remote
   must only read a confirmed value it can actually connect to.
 
-### 3.1 Listener State The Publisher Checks
+### 3.1 Listener State the Publisher Checks
 
 A publisher application can confirm the endpoint the current listener
-provides to remote processes through a listener state query the
-publisher capability provides. This query only succeeds after the host
-has started and the listener bind has finished. The returned port isn't
+provides to remote processes through the listener state query provided by the
+publisher capability. This query only succeeds after the host
+has started and the listener has finished binding. The returned port isn't
 the port entered in configuration — it's the bound port the operating
 system actually chose.
 
@@ -222,16 +220,16 @@ descriptor.
 If the listener restarts, the endpoint in the query result may change.
 
 - **The application doesn't copy this value into subscriber
-  configuration.** It only uses it as observation material to confirm
+  configuration.** It only uses the value to observe
   whether an automatic subscriber is following the current descriptor.
 
 The common query identifies a local listener by its listener kind and
 configured name. Its result contains the kind, name, advertised endpoint,
 and observation time. The query is successful only after that listener has
-completed bind; an unknown listener or a listener that has not completed
-bind is a configuration error. The precise method and value types are fixed
-by each language interface, but every implementation exposes the same four
-listener kinds: `ROUTE_MESH`, `CLIENT_SERVER`, `FANOUT`, and `STREAM`.
+completed binding; querying an unknown listener or a listener that has not
+completed binding is a configuration error. The precise method and value types
+are fixed by each language interface, but every implementation exposes the same
+four listener kinds: `ROUTE_MESH`, `CLIENT_SERVER`, `FANOUT`, and `STREAM`.
 
 ## 4. Record Per Listener Kind
 
@@ -242,7 +240,7 @@ configuration that matches the listener kind, such as a RouteMesh
 [MeshNode](../00-foundation/02-glossary.en.md#meshnode) (a runtime node that participates in
 a RouteMesh to send or receive messages between nodes).
 
-| Listener | Where it's provided to remote | Where it must not be recorded |
+| Listener | Where it is provided to remote processes | Where it must not be recorded |
 |---|---|---|
 | RouteMesh MeshNode | Records the endpoint in the [MeshNode descriptor](../00-foundation/02-glossary.en.md#meshnode-descriptor) identified by [MeshName](../00-foundation/02-glossary.en.md#meshname) (the name that identifies one RouteMesh physical connection group) and RID. | Not recorded in the ClientServer Server descriptor. |
 | ClientServer Server | Records the endpoint in the [ClientServer Server descriptor](../00-foundation/02-glossary.en.md#clientserver-server-descriptor) identified by ChannelName and Server identity. | Not recorded in the MeshNode descriptor or a [Spot](../00-foundation/02-glossary.en.md#spot) (a logical instance with an address and state)/Actor location row. |
@@ -260,9 +258,9 @@ uses via application configuration.
 
 A STREAM endpoint isn't automatically published to the Location Store.
 
-## 5. Listener Restart And Lifecycle
+## 5. Listener Restart and Lifecycle
 
-If a listener whose AdvertiseHost or actual bound port changed restarts,
+If a listener restarts after its AdvertiseHost or actual bound port has changed,
 the new endpoint and new lifecycle generation are recorded together in
 the same
 [descriptor revision](../00-foundation/02-glossary.en.md#descriptor-revision).
@@ -270,17 +268,17 @@ the same
 - **Changing only the endpoint doesn't keep the previous
   [lifecycle generation](../00-foundation/02-glossary.en.md#lifecycle-generation).** A
   remote runtime confirms that the identity and generation read from the
-  descriptor match the actual transport connection's values before using
-  it as ready.
+  descriptor match the actual transport connection's values before treating
+  the connection as ready.
 
-Even if RouteMesh, ClientServer, and classic fanout listeners are on the
+Even if RouteMesh, ClientServer, and classic fanout listeners are in the
 same process, each listener has its own descriptor and lifecycle
 generation.
 
 One listener's endpoint change isn't interpreted as a generation change
 for a different topology.
 
-## 6. System-Wide Transport RID And Spot ID Policy
+## 6. System-Wide Transport RID and Spot ID Policy
 
 This section covers a system-wide identity issuance policy — including
 MeshNode RID, the Framework diagnostic prefix, and Entry
@@ -300,18 +298,18 @@ binary RID with the RFC 4122 UUID v4 bit layout. The framework also uses
 UUID v4 as the random identity for automatic RID. A Framework topology
 that needs a diagnostic prefix represents the UUID as a 36-character
 lowercase canonical string and uses the UTF-8 value with the prefix
-attached as the RID. A value that's transport identity, like MeshNode,
-explicitly sets the complete UTF-8 RID on the Core socket. A value that's
-logical identity, like Entry Spot, isn't set on the Core socket — it's
+attached as the RID. A transport identity, such as a MeshNode RID, is
+explicitly set as the complete UTF-8 RID on the Core socket. A logical
+identity, such as an Entry Spot ID, isn't set on the Core socket — it's
 recorded in the descriptor and Location Store authority.
 
 | Category | Issuance and representation |
 |---|---|
 | Core raw socket automatic RID | 16-byte binary UUID v4 |
-| RID the framework issues that provides a diagnostic prefix | `<prefix>-<lowercase-canonical-uuid-v4>` |
+| Framework-issued RID with a diagnostic prefix | `<prefix>-<lowercase-canonical-uuid-v4>` |
 | Entry Spot ID | `<prefix>-entry-<lowercase-canonical-uuid-v4>` |
 | Fixed transport RID the caller specifies | A 1..255-byte binary-safe opaque value Core's `RoutingId` allows |
-| User/Instance Spot ID the caller specifies | A string compared verbatim, case-sensitive, UTF-8 encoded size 1..255 bytes |
+| User/Instance Spot ID the caller specifies | A string compared verbatim, case-sensitive, with a UTF-8-encoded size of 1..255 bytes |
 | STREAM connection RID | A connection-local 4-byte RID the Core STREAM contract issues |
 
 When a different Framework topology provides both automatic RID and a
@@ -320,24 +318,24 @@ handling rule. Each topology's namespace, descriptor key, and default
 prefix are determined by that topology's document. UUID format isn't
 enforced on caller-provided RID and STREAM connection RID.
 
-### 6.1 Diagnostic Prefix And UUID Representation
+### 6.1 Diagnostic Prefix and UUID Representation
 
 The RID of a MeshNode participating in automatic discovery is transport
-identity the framework newly generates per lifecycle. The caller can only
+identity that the Framework generates anew for each lifecycle. The caller can only
 specify a readable prefix for diagnostics.
 
 | Item | Limit |
 |---|---|
-| Prefix characters | Only ASCII `A-Z`, `a-z`, `0-9`, `.`, `_`, `-` allowed. |
+| Prefix characters | Only ASCII `A-Z`, `a-z`, `0-9`, `.`, `_`, `-` are allowed. |
 | Prefix length | `1..64` characters. |
 | UUID | RFC 4122 UUID v4 represented as a 36-character lowercase canonical string in `8-4-4-4-12` digit groups. |
-| Full RID | The format `prefix-<uuid-v4>`, at most 255 UTF-8 bytes. |
+| Full RID | Uses the format `prefix-<uuid-v4>` and is at most 255 UTF-8 bytes. |
 
 Prefix and UUID are diagnostic information. They aren't interpreted as
 application identity, object placement, shard, or a stable host name
 persisting across a restart.
 
-### 6.2 RID Collision And Lifecycle
+### 6.2 RID Collision and Lifecycle
 
 When publishing a MeshNode descriptor, the Location Store checks whether
 the same `(MeshName, RID)` is already in use.
@@ -369,16 +367,16 @@ MeshNode RID:    <prefix>-<node-uuid-v4>
 Entry Spot ID:  <prefix>-entry-<entry-uuid-v4>
 ```
 
-The MeshNode and Entry Spot each generate a separate UUID v4. The fact
-that the two UUIDs differ isn't used as grounds for judging the
-relationship between the node and the Entry Spot. The full Entry Spot ID
+The MeshNode and Entry Spot each generate a separate UUID v4. The difference
+between the two UUIDs isn't used to determine the relationship between the
+node and the Entry Spot. The full Entry Spot ID
 must be at most 255 UTF-8 bytes, and if the prefix is omitted, the same
-default diagnostic prefix used for the MeshNode's automatic RID is used
-together. The same Entry Spot ID is kept for the same MeshNode lifecycle,
+default diagnostic prefix used for the MeshNode's automatic RID is also used.
+The same Entry Spot ID is kept for the same MeshNode lifecycle,
 and a new UUID-based Spot ID is issued on a replacement lifecycle.
 
-- **If an active conflict of the global Spot ID authority is confirmed in
-  the Location Store, it doesn't generate a new UUID or retry the
+- **If the Location Store confirms an active conflict in the global Spot ID
+  authority, the Framework doesn't generate a new UUID or retry the
   reservation — it ends immediately with a startup configuration error.**
   The MeshNode descriptor publishes the mapping between the lifecycle
   generation and that Entry Spot ID. Actor placement, Entry Spot
@@ -388,13 +386,13 @@ and a new UUID-based Spot ID is issued on a replacement lifecycle.
 `<prefix>-entry-<lowercase-canonical-uuid-v4>` is reserved for the Entry
 Spot identity the Framework issues.
 
-- **If a caller specifies this format as a User/Instance Spot ID, it's
+- **If a caller specifies this format as a User/Instance Spot ID, the ID is
   rejected with `InvalidOperation` before the Location Store or factory
   runs.** The prefix and `entry` marker are diagnostic information, not a
   stable host identity, shard, or application domain identifier.
 
-The namespace and descriptor key of ClientServer and classic fanout
-identity follow each topology's own contract.
+ClientServer and classic fanout identity namespaces and descriptor keys follow
+their respective topology contracts.
 
 ## 7. Kubernetes Deployment
 
@@ -405,8 +403,8 @@ In Kubernetes, the following values can be used as AdvertiseHost.
 
 - **A listener that needs to distinguish individual RID,
   [Server identity](../00-foundation/02-glossary.en.md#server-identity), weight, message
-  admission, and drain doesn't substitute multiple pods with one generic
-  Service virtual address.** A remote runtime must be able to discover
+  admission, and drain doesn't use one generic Service virtual address to
+  represent multiple pods.** A remote runtime must be able to discover
   and connect to each pod endpoint separately.
 
 ## 8. Verification Requirements
@@ -416,7 +414,7 @@ listener state query, the endpoint recorded in the
 MeshNode/ClientServer/fanout descriptor, and the RID/Spot ID issuance
 result.
 
-**Bind And Advertise**
+**Bind and Advertise**
 
 - RouteMesh, ClientServer, classic fanout, and STREAM listeners apply
   process defaults and listener override priority the same way.
@@ -425,7 +423,7 @@ result.
 - Wildcard host and port 0 don't remain in a remote endpoint or Location
   Store record.
 
-**Descriptor Recording And Restart**
+**Descriptor Recording and Restart**
 
 - RouteMesh, ClientServer, and fanout endpoints are recorded in different
   descriptor kinds.
@@ -434,7 +432,7 @@ result.
 - On a restart where the advertised endpoint changed, only the new
   generation becomes [ready](../00-foundation/02-glossary.en.md#ready).
 
-**RID And Spot ID Issuance**
+**RID and Spot ID Issuance**
 
 - The Core raw socket's automatic RID uses a 16-byte binary UUID v4.
 - The Framework automatic MeshNode RID uses the prefix and lowercase
@@ -453,7 +451,7 @@ result.
 
 **Kubernetes Deployment**
 
-- Multiple pods using the same container port connect directly with
+- Multiple pods using the same container port are directly reachable at
   different AdvertiseHosts.
 
 ---

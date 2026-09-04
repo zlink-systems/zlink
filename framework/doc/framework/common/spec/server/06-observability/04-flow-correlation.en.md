@@ -1,8 +1,8 @@
 ---
-title: "Request Correlation And Business Flow Identification"
+title: "Request Correlation and Business Flow Identification"
 ---
 
-# Request Correlation And Business Flow Identification
+# Request Correlation and Business Flow Identification
 
 [Observability topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 03. Message Flow Tracing](03-message-flow-tracing.en.md)
 
@@ -27,13 +27,13 @@ hops and fan-out branches started from the same cause is `flow_id`.
 
 This document only defines the creation, format, propagation, ownership,
 and lifetime of these three fields. The ownership and size of metadata
-the application sends with a message is defined by
+the application sends with a message are defined by
 [Message Model](../00-foundation/05-message-model.en.md). The condition for including a
-field in trace and sampling are defined by
+field in a trace and sampling are defined by
 [03. Message Flow Tracing](03-message-flow-tracing.en.md). The three
 fields are framework-managed context — not an application metadata key.
 
-## 2. The Role Of The Two Identifiers
+## 2. The Role of the Two Identifiers
 
 | Identifier | Scope it links | Who creates it | Valid period |
 |---|---|---|---|
@@ -63,11 +63,11 @@ request to a different target is called a
 kept if it continues from the same cause. A `correlation_id` isn't built
 for a one-way message with no reply.
 
-## 3. Format And Ownership
+## 3. Format and Ownership
 
 | Field | Format and value range |
 |---|---|
-| `correlation_id` | A framework-built opaque ASCII value, `1..64 bytes`. Can't be duplicated among requests concurrently pending within the same lifecycle of the runtime that built the value. |
+| `correlation_id` | A framework-built opaque ASCII value, `1..64 bytes`. It can't be duplicated among requests concurrently pending within the same lifecycle of the runtime that built the value. |
 | `flow_id` | A UUIDv7 written in lowercase with hyphens, exactly `36 ASCII bytes`. |
 | `flow_origin` | One of `inbound`, `timer`, `application`, `lifecycle`. The value fixed when the flow was first built is kept across subsequent hops. |
 
@@ -75,7 +75,7 @@ The application doesn't interpret or assemble these three values.
 `flow_id` and `flow_origin` must exist together or be absent together.
 
 A malformed `flow_id`, a zero-byte-length `correlation_id`, or flow
-information with only one of the two fields present, is a protocol
+information with only one of the two fields present is a protocol
 error.
 
 | Where the invalid value arrives | How the framework completes it |
@@ -161,7 +161,7 @@ request. In this case the original `correlation_id` is kept. If tracing
 is on, `flow_id` and `flow_origin` are also kept. Once the target queue
 accepts the message, the framework doesn't automatically resend it.
 
-## 6. Async Work And Execution Context
+## 6. Async Work and Execution Context
 
 The framework preserves the current flow context in an async
 continuation it's waiting on. Context isn't implicitly delivered to a
@@ -175,7 +175,7 @@ public interface to explicitly capture context. The current flow isn't
 guessed from a process-global variable, thread ID, or a mutable
 connector field.
 
-## 7. Reply And Failure
+## 7. Reply and Failure
 
 A Response and error preserve the request's `correlation_id`. If
 tracing is on at the moment the reply is built and a request flow
@@ -206,7 +206,7 @@ Sharing the same `flow_id` doesn't authorize a retry. Whether to retry
 and whether to issue a new `correlation_id` follows that messaging
 surface's contract.
 
-## 8. Observability And Privacy
+## 8. Observability and Privacy
 
 Tracing records `correlation_id`, `flow_id`, and `flow_origin`. The
 precise inclusion condition and structured-log key are defined by
@@ -221,9 +221,9 @@ doesn't change the format and ownership the framework set.
 
 ## 9. Verification Requirements
 
-The following is confirmed using only the public surface — the
-request/reply exchanging `correlation_id`/`flow_id`/`flow_origin`, and
-the public interface capturing execution context. Each item leads to
+The following is confirmed using only the public surface: the
+request/reply exchange of `correlation_id`/`flow_id`/`flow_origin` and
+the public interface for capturing execution context. Each item leads to
 one contract test.
 
 **Correlation and reply**
