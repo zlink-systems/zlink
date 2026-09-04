@@ -90,5 +90,57 @@ rust 실행기 spin 제거(172k → 259k), python 7.9k → 20k. 표는 인계 �
 - [ ] 0.15.1 대비 재측정 표(D-B8x)
 - [ ] PUBSUB allocator abort 원인·수정
 - [ ] 리팩토링 패스 커밋
-- [ ] bindings 성능 측정·개선(0.17.0 계획 §9)
+- [ ] bindings 성능 측정·개선 — §6 실행 계획대로(계획서 §9 표 채움)
 - [ ] 인계 문서 최종 갱신(REQUEST 계약·해시), 아침 요약
+
+## 6. bindings 성능 계획(0.17.0) 실행 계획
+
+[`bindings-library-performance-improvement-plan-core-0.17.0.ko.md`](../perf/perf/bindings-0.17.0/bindings-library-performance-improvement-plan-core-0.17.0.ko.md)
+(이하 "계획서")를 §3의 2~5단계가 끝난 뒤 다음 순서로 실행한다. 계획서 §7.4의 20단계 작업 순서와 §7.5~§7.7 gate를 그대로 따르고,
+이 절은 머신 B가 그것을 어떤 도구·job·커밋 단위로 수행하는지만 정한다.
+
+### 6.1 시작 조건 (계획서 §1·§4·§6)
+
+- main에 Core REQUEST 계약 B, bindings 8개의 REQUEST 포팅, C perf REQREP 러너가 모두 커밋돼 있고 §3-4 재측정 표(D-B8x)가 기록돼
+  있어야 한다. 측정 runtime은 `core/build`의 `libzlink.so.0.17.0`(Release+LTO), 모든 러너에 `ZLINK_CORE_SOURCE=local`.
+  release asset이 발행되면 계획서 §1대로 `--core-version 0.17.0`으로 전환하고 C 기준값을 한 번 다시 잰다.
+- inventory gate(계획서 §4): 언어별 runner가 등록한 pattern/transport 목록을 뽑아 계획서 §9 상세 표와 일치시킨다. 등록되지 않은
+  pattern은 표에서 제외하고 그 사실을 §11에 한 줄 남긴다. 이 gate는 codex sol medium job 하나(읽기·표 정리)로 처리한다.
+- 재현 환경 manifest(계획서 §6): CPU/메모리(11 GB)/커널/컴파일러/런타임 버전을 `log/2026-09-xx-environment.md`에 기록한다.
+- 측정 중 규칙: 한 번에 perf 프로세스 하나, 다른 빌드·job·사용자 perf 없음(load average를 결과와 함께 기록), `--pin-cpu` 미사용.
+
+### 6.2 단위와 순서 (계획서 §7.0·§7.4)
+
+- 언어 순서: C++ → .NET → Java → Node → Go → Rust → Python(계획서 §7.4-3). 한 번에 한 언어, 한 pattern, 한 transport.
+- 한 (언어, pattern, transport) 단위의 절차:
+  1. C 해당 pattern smoke → 같은 조건으로 binding smoke(계획서 §7.1).
+  2. C 전 size 측정 직후 binding before 측정(paired, 계획서 §7.3). 결과 report 경로와 비율을 계획서 §9 표에 기록.
+  3. 미달 셀이 있으면 **자체 개선 pass**: 가이드 §2 체크리스트(즉시 성공 경로 무할당·무복사, 거절 경로 O(1) 등록, drain/wake spin
+     없음, 수신 direct reply)를 코드로 판정하고 수정 → after 1회 측정. 이 pass는 codex sol high job(브리프는 `bindings-review-template.prompt`
+     형식에 pattern·transport·미달 셀·before 수치를 넣어 생성, 3분 생존 감시).
+  4. **2차 pass**: read-only 리뷰(codex sol high 또는 Claude 서브에이전트)로 계약 보존 후보를 받아 적용 → after 1회 측정. 후보가 없으면
+     no-go를 `log/`에 기록(계획서 §7.4-11).
+  5. 대표 셀 회귀 gate + 표준 테스트·샘플·perf 스모크(계획서 §7.4-13, §7.6) → 채택한 변경만 커밋·push.
+  6. aggregate 통과여도 POSDDD·hot-path 검토 1회(계획서 §7.4-14) → 채택 시 별도 커밋.
+  7. transport 완료 기록 → 다음 transport; pattern의 모든 transport 확정 → 계획서 §9·§11 갱신 커밋·push → 다음 pattern(§7.4-15~18).
+- 언어 전환 gate(계획서 §7.5·§7.4-19~20): 해당 언어의 Single·Multi 모든 pattern이 완료 또는 `보류`로 확정되고 report와 표가 대조된 뒤에만
+  다음 언어로 간다.
+
+### 6.3 판정·기록 (계획서 §2·§8·§11)
+
+- 목표 비율과 latency 목표는 계획서 §2.1·§2.2 표를 그대로 쓴다(이 문서에 복제하지 않는다). 셀 판정은 C 대비 throughput 비율과 평균
+  latency, aggregate는 transport별 size 비율의 평균.
+- 측정 표에는 계획서 §8 형식으로 report 경로·조건·load average·판정만 남기고, 실행 명령·프로파일·후보 검토는 `doc/perf/perf/bindings-0.17.0/log/`에
+  날짜·언어별 파일로 기록한다. 5% 이상 효과가 확인된 기법은 가이드 §3 표에도 반영한다.
+- 러너 자체의 변경(scheduler·drain·fairness)은 library 최적화 효과와 합산하지 않는다(계획서 §5, 가이드 §5).
+
+### 6.4 예상 소요와 병렬성
+
+- 한 언어당 Multi 5 pattern × 4 transport × 5 size + Single을 paired로 재면 측정만 2~3시간, 개선 pass가 붙으면 언어당 반나절이다.
+  측정은 직렬(정책)이지만 개선 pass의 코드 작업은 측정하지 않는 시간에 다른 언어의 리뷰 job과 병렬로 진행할 수 있다.
+- 우선순위는 A가 쓰는 순서(C++·.NET·Java·Node)와 계획서 순서가 같으므로 그대로 따른다.
+
+### 6.5 완료 조건 (계획서 §12)
+
+계획서 §12의 조건(모든 언어의 Single·Multi pattern이 통과 또는 근거 있는 보류, §9·§10·§11 표가 report와 일치, 채택한 변경이 모두
+push됨)을 만족하면 이 캠페인의 bindings 성능 항목을 닫고, 결과 요약을 `c016-worklog/decisions.ko.md`에 D-B 항목으로 남긴다.
