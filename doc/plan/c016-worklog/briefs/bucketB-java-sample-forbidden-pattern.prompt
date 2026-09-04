@@ -1,0 +1,46 @@
+# Job: java samples — the aggregate gate's forbidden-pattern scan (`run_samples.sh:102`) fails on two `sleep` sites; remove both sleeps with proper synchronisation
+
+You are a codex sub-agent under a Claude supervisor. Two small items, 1 h cap. Read `AGENTS.md` (root)
+§2/§3/§4.1, `framework/AGENTS.md`, `framework/languages/java/AGENTS.md`, and
+`doc/plan/c016-worklog/gate-final-java-samples-3-summary.md`. Never modify `core/**`, `bindings/**`,
+any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages' trees,
+`framework/languages/shared_sample/**`, `framework/languages/java/samples/run_samples.sh` (the scan
+rule is the contract — do not relax it); never lower an assertion; do not commit. Env:
+`TMPDIR=/dev/shm/zlink-tmp-java`, `flock -w7200 /tmp/zlink-jvm-gate.lock` around every gradle/sample
+invocation, never export a directory-valued `ZLINK_LIBRARY_PATH`; do not rebuild Core/local packages.
+
+## Facts
+- Round-3 aggregate: all 14 Java/Kotlin samples completed, then the final scan
+  `rg -n "$FORBIDDEN_SAMPLE_PATTERN" "$SAMPLES_DIR" -g '*.java' -g '*.kt'` matched two sites
+  (`zlink-work/c016/logs/gate-final-java-3-aggregate.log:1062-1064`). Read the pattern definition at
+  the top of `framework/languages/java/samples/run_samples.sh` and the sample guide's rule it encodes
+  (`framework/doc/framework/java/guide/**` samples section, read-only) so the replacement follows the
+  intended convention (samples must not poll with sleeps; wait on the framework's completion/lifecycle
+  primitives).
+  1. `framework/languages/java/samples/java/DeliveryDispatch/Server/Dispatch/src/test/java/systems/zlink/samples/deliverydispatch/server/dispatch/DispatchWorkerDeadlineTest.java:59`
+     — `TimeUnit.MILLISECONDS.sleep(SampleTimings.CourierDecisionTimeout.toMillis() + 100)` added by the
+     campaign commit `ed156f5983` (courier offer deadline starts after the status publish). Replace
+     the wall-clock sleep with a deterministic wait: e.g. a controllable clock/scheduler injected into
+     the worker, or waiting on the expiry queue with a bounded timed poll (`offers.takeExpired()`
+     semantics — check how the worker publishes expiry) so the assertion "status publication time
+     must not consume the courier decision timeout" is preserved without sleeping.
+  2. `framework/languages/java/samples/java/TicTacToe/Client/src/main/java/systems/zlink/samples/tictactoe/client/TicTacToeClientScenario.java:306`
+     — a `Thread.sleep(100)` polling loop waiting for "runner lifecycle completion" (since
+     `e4442b8456`, 2026-08-30). Replace the polling with the proper wait on whatever signals lifecycle
+     completion (a `CompletionStage`/latch from the framework runtime, or a `WatchService` if it polls a
+     file the runner writes) with the same overall deadline and the same `IllegalStateException` on
+     timeout. Compare with the Kotlin TicTacToe client and the other languages' TicTacToe clients for
+     the established pattern (read-only).
+- Do not touch other `sleep` sites the scan does not flag.
+
+## Verify
+- The scan line from `run_samples.sh:102` run directly against `framework/languages/java/samples`:
+  no matches (exit 1 from rg = clean).
+- DeliveryDispatch sample unit tests (the Dispatch server module's gradle test task) green;
+  `bash framework/languages/java/samples/java/DeliveryDispatch/run_sample.sh` 1× and
+  `bash framework/languages/java/samples/java/TicTacToe/run_sample.sh` 3× (its lifecycle wait is on
+  the path) from the repo root, all with completion markers and exit 0.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-java-sample-forbidden-pattern-summary.md`: the rule, both diffs and
+why the assertion/behaviour is preserved, results, BLOCKERS.
