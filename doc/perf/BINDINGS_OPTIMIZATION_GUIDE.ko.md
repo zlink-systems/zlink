@@ -24,7 +24,7 @@ credit 회복 시 `ZLINK_COMPLETION_WRITABLE`, callback 없음, pull 방식 comp
   항목이다.
 - binding 최적화는 C baseline 대비 비율로 판정한다. 언어 간 절대값 비교는 순위가 아니라 병목
   분리를 위한 표본이다. 목표 비율과 측정 범위는
-  [bindings-library-performance-improvement-plan-core-0.15.0.ko.md](perf/bindings-0.15.0/bindings-library-performance-improvement-plan-core-0.15.0.ko.md)를 따른다.
+  [bindings-library-performance-improvement-plan-core-0.17.0.ko.md](perf/bindings-0.17.0/bindings-library-performance-improvement-plan-core-0.17.0.ko.md)를 따른다.
 - 표준 측정 명령은 각 binding의 `perf/run_benchmarks.sh`(single)와
   `perf/run_benchmarks_multi.sh`(multi)이며 규칙은 [PERF_POLICY.md](PERF_POLICY.md)다.
 
