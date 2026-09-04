@@ -5,13 +5,12 @@ messaging.** ZLink Framework provides a messaging layer that meets that need, fu
 integrated on top of `ASP.NET Core`, Spring Boot, NestJS, and a C++ host — the way Spring
 MVC sits on top of Spring. There's no need to move to a separate runtime.
 
-The area where this need shows up most clearly is real-time games, but it isn't limited to
-that. Any system that keeps in-memory state like rooms, sessions, or players spread across
-multiple servers and has to deliver it to clients in real time absorbs, into this one
-layer, the complexity that an existing web service otherwise takes on when it bolts on
-real-time features.
+This need is most apparent in real-time games, but it isn't limited to them. For any system
+that distributes in-memory state such as rooms, sessions, or players across multiple
+servers and must deliver it to clients in real time, this one layer absorbs the complexity
+that an existing web service otherwise takes on when it adds real-time features.
 
-## The Purpose Of ZLink Framework
+## The Purpose of ZLink Framework
 
 !!! note "Why there's never been a standard real-time messaging framework until now"
 
@@ -40,13 +39,13 @@ real-time features.
 
 ## In Code
 
-Code that, **inside a dungeon room**, defeats a boss and reflects part of the reward on the
-player's guild too. The first is the player-side handler — it applies the kill reward to
-the player, then sends a request to the guild. The second is the handler on the receiving
-guild Instance Spot — it applies it as-is, with no synchronization. Both things show up at
-once. **There's no lock** — both handlers are already processed serially, each inside its
-own spot. And **the async call reads like synchronous code** — the request the player side
-sends to the guild is just the next line, with no callback or futures composition.
+This code runs **inside a dungeon room**: when a boss is defeated, it applies part of the
+reward to the player's guild as well. The first handler runs on the player side — it applies
+the kill reward to the player, then sends a request to the guild. The second handles that
+request in the guild Instance Spot, applying it without synchronization. This makes two
+things clear. **There's no lock** — both handlers already run serially inside their own
+spots. And **the async call reads like synchronous code** — the player-side request to the
+guild is just the next line, with no callback or futures composition.
 
 === "C#/.NET"
 
@@ -246,14 +245,14 @@ and a distributed lock keeps order so multiple instances don't modify the same o
 once. Adding one real-time feature adds a set of components (orange) nearly as large as the
 main system.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing-en.html" title="Existing approach — web service + real-time" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing-en.html" title="Existing approach — food-delivery order app" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-delivery-existing-en.html" target="_blank">↗ View larger</a></p>
 
 **The ZLink approach.** Every orange piece disappears, leaving one location store that
 tells you where nodes, actors, and spots live. Server-to-server calls and real-time
 delivery connect directly between runtimes.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink-en.html" title="ZLink approach — web service + real-time" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink-en.html" title="ZLink approach — food-delivery order app" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-delivery-zlink-en.html" target="_blank">↗ View larger</a></p>
 
 Sticky LB, WebSocket server, pub/sub relay, distributed lock, service discovery -- five
@@ -286,7 +285,7 @@ clients in real time.
 | Order workflow | Take order -> process by stage -> change status -> notify | Per-order serial processing with no distributed lock |
 | Delivery dispatch | Dispatch request -> assign/accept -> track status -> real-time push | Serial processing of dispatch status, real-time location push |
 
-## Choosing A Language
+## Choosing a Language
 
 The guide is **fully self-contained per language.** Inside the guide for the language you
 pick, there's only that language's code, and you read it start to finish within it. The

@@ -1,4 +1,4 @@
-# 7. Actor And Spot
+# 7. Actor and Spot
 
 > **The documents that own this chapter's contract** —
 > [Actor Model](../../../common/spec/server/03-spot-actor/04-actor-model.en.md) and
@@ -11,8 +11,8 @@ An Actor is a stateful object found by a global string `ActorId`. Right after cr
 exists in the Object Server's Entry Spot. Once an application handler schedules a join, it
 moves to a User Spot.
 
-An Actor's location and its client session binding are separate pieces of state. An Actor's
-and Spot's membership persists even when no client is connected. Session binding is covered
+An Actor's location and its client session binding are separate pieces of state. Actor–Spot
+membership persists even when no client is connected. Session binding is covered
 in [the next document](08-actor-session.en.md).
 
 ## 1. Registration
@@ -96,7 +96,7 @@ via host `Relocate`.
 | `RecreateOnRelocation()` | Creates a new instance with the same logical identity. Pending messages and timers are preserved, but application state isn't restored. |
 | `PreserveStateWith<TAdapter>()` | Restores the `byte[]` the adapter saved onto the new instance. The Framework queue and timers are preserved as well. |
 
-## 2. Creating An Actor
+## 2. Creating an Actor
 
 `Create` fails if the same ActorId already exists. `GetOrCreate` returns `Existing` if a
 Ready Actor of the same type already exists. The caller never specifies the target node.
@@ -682,12 +682,12 @@ A User Spot accepts or rejects a join request first. Once accepted and membershi
     ```
 
 
-## 5. When A Join Actually Runs
+## 5. When a Join Actually Runs
 
 ### What `Defer()` Does
 
-`Defer()` **schedules a join on the current handler instead of running it now.** At the
-call, the Framework fixes three things — an immutable snapshot of the join request, the
+`Defer()` **schedules a join on the current handler instead of running it now.** When it is
+called, the Framework fixes three things — an immutable snapshot of the join request, the
 absolute deadline computed from `Timeout(...)`, and the barrier to run once this handler
 finishes.
 
@@ -702,7 +702,7 @@ What happens to the scheduled barrier depends on how the handler ends.
 Calling it after the handler finishes, or from a background task detached from the handler,
 is `InvalidOperation`.
 
-**Where it can be called is fixed.**
+**It can be called only from specific contexts.**
 
 | Can call it | Can't call it |
 | --- | --- |
@@ -714,7 +714,7 @@ is `InvalidOperation`.
 
 Calling it from the right column is `InvalidOperation`. **The Framework doesn't guarantee
 catching a detached task in every language** — it might not be discovered before the handler
-finishes, so simply don't call it from that spot in the first place.
+finishes, so simply don't call it from there in the first place.
 
 Calling `Defer()` twice in the same call is `InvalidOperation`, and if that Actor already
 has a different membership transition in flight, it's `Unavailable`. **If an Actor already
@@ -734,10 +734,10 @@ right there is what a join actually does.
   its queue's jobs one at a time. If the currently executing handler waits for the join to
   complete, this Actor's follow-up work needed for that join to finish (the lifecycle
   callback after the membership commit) ends up waiting in the same queue.
-- **The execution subject at completion time can change.** If a cross-node join succeeds,
+- **The Actor executing at completion time can change.** If a cross-node join succeeds,
   the one that receives the `Accepted` callback is **the target node's Actor.** The source
-  Actor, where the current handler is, is already being cleaned up by that point, so the
-  very shape of "receive the result inside this handler" doesn't hold.
+  Actor, where the current handler is, is already being cleaned up by that point, so
+  receiving the result inside this handler isn't possible.
 
 So the contract **separates registration from execution.** The handler schedules the join
 and ends normally, and the Framework starts location lookup and Store work after that. The
@@ -747,7 +747,7 @@ current Actor job's execution order from getting tangled with the join-completio
 Once the barrier is activated, an ordinary message that arrives after it never runs ahead of
 the completion callback. That Actor's ordinary processing waits until the join finishes.
 
-### Registration And Receiving The Result
+### Registration and Receiving the Result
 
 Schedule the join from an Actor handler. The handler is a separate class that receives a
 one-way packet addressed to a member Actor
@@ -1073,7 +1073,7 @@ There's a ceiling on how much one handler can schedule.
 part of it registered and the rest was dropped. The request and reply ceilings are
 independent and aren't computed as a combined total.
 
-### Don't Send A Request To A Scheduled Actor
+### Don't Send a Request to a Scheduled Actor
 
 Sending a request **from the same handler** to an Actor that already has a `Defer()` barrier
 attached, and waiting for the reply, creates a **circular wait.** The request waits behind
@@ -1084,14 +1084,14 @@ The Framework rejects this request with `InvalidOperation` **before it's ever su
 It ends in an error instead of hanging, so if you see this error, check whether the
 scheduled target and the request's target are the same Actor.
 
-### When A Scheduled Join Doesn't Survive
+### When a Scheduled Join Doesn't Survive
 
 The schedule and its barrier **exist only in the current process's memory.** If the process
 goes down before the join runs or is reflected in the Store, that schedule isn't replayed.
 The Actor's location and membership stay exactly as they were — it never ends up half-moved.
 
 If it overlaps with `Relocate` or `Shutdown`, **whichever settled first wins.** If the join
-already took its spot, maintenance waits until the join finishes; if the relocation seal came
+started first, maintenance waits until the join finishes; if the relocation seal came
 first, the join ends in `Unavailable`; if the shutdown seal came first, it ends in
 `ShuttingDown`.
 
