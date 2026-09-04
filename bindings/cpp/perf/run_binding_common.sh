@@ -138,6 +138,7 @@ ensure_core_runtime_not_stale() {
   local build_dir="${1:-${OFFICIAL_BUILD_DIR}}"
   local command_name="${2:-run_benchmarks.sh}"
   local core_build_dir=""
+  local core_source_dir="${ROOT_DIR}/core"
   local runtime_lib=""
   local newer_source=""
   core_build_dir="$(resolve_configured_core_build_dir "${build_dir}")"
@@ -156,10 +157,19 @@ ensure_core_runtime_not_stale() {
     return 1
   fi
 
+  # A binding worktree may intentionally link core/build from the main
+  # checkout. Compare that runtime with the source tree that owns the resolved
+  # build directory; worktree checkout mtimes do not describe its freshness.
+  local build_owner_source=""
+  build_owner_source="$(dirname "${core_build_dir}")"
+  if [[ -d "${build_owner_source}/src" && -d "${build_owner_source}/include" ]]; then
+    core_source_dir="${build_owner_source}"
+  fi
+
   newer_source="$(
     find \
-      "${ROOT_DIR}/core/src" \
-      "${ROOT_DIR}/core/include" \
+      "${core_source_dir}/src" \
+      "${core_source_dir}/include" \
       -type f -newer "${runtime_lib}" -print -quit 2>/dev/null || true
   )"
   if [[ -n "${newer_source}" ]]; then

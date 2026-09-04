@@ -118,8 +118,10 @@ int main ()
     const std::size_t provisional = request_reply.find (
       "register_entry (entry)", blocking_terminal);
     const std::size_t native_submit = request_reply.find (
-      "submit_request_native (", provisional);
+      "submit_raw_request_state (", provisional);
     assert (blocking_terminal != std::string::npos
+            && provisional != std::string::npos
+            && native_submit != std::string::npos
             && provisional < native_submit);
 
     assert (all.find ("std::this_thread::sleep_for") == std::string::npos);
@@ -129,6 +131,16 @@ int main ()
     assert (completion_owner.find ("ZLINK_RECV_NO_DATA") != std::string::npos);
     assert (completion_owner.find ("completion_guard_t guard") != std::string::npos);
     assert (completion_owner.find ("settle_if_joined") != std::string::npos);
+    const std::size_t request_attempt = completion_owner.find (
+      "submit_request_attempt (bool initial_)");
+    const std::size_t request_refused = completion_owner.find (
+      "if (!admitted)", request_attempt);
+    const std::size_t request_snapshot = completion_owner.find (
+      "own_async_send_parts", request_refused);
+    assert (request_attempt != std::string::npos
+            && request_refused != std::string::npos
+            && request_snapshot != std::string::npos
+            && request_refused < request_snapshot);
 
     assert_public_contract_includes_only (cpp_root / "samples");
     return 0;

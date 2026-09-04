@@ -63,10 +63,10 @@ struct client_completion_state_t
     bench_latency_sampler_t latency;
 };
 
-enum class logical_admission_t
+enum class logical_launch_t
 {
     launching,
-    admitted,
+    owned_by_operation,
     retry,
     fatal
 };
@@ -75,12 +75,12 @@ struct logical_request_t
 {
     logical_request_t () :
         payload (),
-        admission (logical_admission_t::launching)
+        launch (logical_launch_t::launching)
     {
     }
 
     std::vector<char> payload;
-    std::atomic<logical_admission_t> admission;
+    std::atomic<logical_launch_t> launch;
 };
 
 struct bind_application_ready_queue_t
@@ -104,14 +104,16 @@ template <typename SocketT> struct client_slot_t
     client_slot_t () :
         socket (),
         logical (),
-        pre_admission_pending (false),
+        operation_active (false),
+        retry_payload_stamped (false),
         next_seq (1)
     {
     }
 
     std::unique_ptr<SocketT> socket;
     logical_request_t logical;
-    bool pre_admission_pending;
+    std::atomic<bool> operation_active;
+    bool retry_payload_stamped;
     uint64_t next_seq;
 };
 
@@ -205,19 +207,19 @@ template <typename SocketT> class client_bench_t
 
         while (std::chrono::steady_clock::now () < deadline
                && !_completion->fatal.load (std::memory_order_acquire)) {
-            bool admitted = false;
+            bool launched = false;
             for (size_t i = 0; i < _slots.size (); ++i) {
-                bool slot_admitted = false;
-                if (!launch_request (*_slots[i], slot_admitted)) {
+                bool slot_launched = false;
+                if (!launch_request (*_slots[i], slot_launched)) {
                     _completion->fatal.store (true, std::memory_order_release);
                     signal_change (_completion);
                     break;
                 }
-                admitted = admitted || slot_admitted;
+                launched = launched || slot_launched;
             }
             if (_completion->fatal.load (std::memory_order_acquire))
                 break;
-            if (admitted) {
+            if (launched) {
                 (void) _ready_queue.run_ready_round ();
             } else if (std::chrono::steady_clock::now () < deadline) {
                 const auto wake_deadline = std::min (
@@ -298,36 +300,43 @@ template <typename SocketT> class client_bench_t
         }
     }
 
-    bool launch_request (client_slot_t<SocketT> &slot_, bool &admitted_)
+    bool launch_request (client_slot_t<SocketT> &slot_, bool &launched_)
     {
-        admitted_ = false;
-        if (!slot_.pre_admission_pending) {
+        launched_ = false;
+        // REQUEST async now owns both the pre-admission WRITABLE wait and the
+        // post-admission reply wait. Keep each benchmark client slot as one
+        // closed request/reply lifecycle instead of interpreting async()
+        // return as admission and building an unbounded retained-payload queue.
+        if (slot_.operation_active.load (std::memory_order_acquire))
+            return true;
+        if (!slot_.retry_payload_stamped) {
             const uint64_t sent_ns = perf_metric::now_ns ();
             if (!perf_metric::stamp_payload (
                   slot_.logical.payload.data (), slot_.logical.payload.size (),
                   _completion->run_id, perf_metric::phase_active, _msg_size,
                   slot_.next_seq, sent_ns))
                 return false;
-            slot_.pre_admission_pending = true;
+            slot_.retry_payload_stamped = true;
         }
 
-        slot_.logical.admission.store (logical_admission_t::launching,
-                                       std::memory_order_release);
-        submit_async_request (_ready_queue, *slot_.socket, _target_rid, &slot_.logical,
+        slot_.logical.launch.store (logical_launch_t::launching,
+                                    std::memory_order_release);
+        submit_async_request (_ready_queue, *slot_.socket, _target_rid,
+                              &slot_.logical, &slot_.operation_active,
                               std::chrono::milliseconds (
                                 std::max (1, _settings.rcvtimeo_ms)),
                               _completion);
-        switch (slot_.logical.admission.load (std::memory_order_acquire)) {
-            case logical_admission_t::admitted:
+        switch (slot_.logical.launch.load (std::memory_order_acquire)) {
+            case logical_launch_t::owned_by_operation:
                 ++slot_.next_seq;
-                slot_.pre_admission_pending = false;
-                admitted_ = true;
+                slot_.retry_payload_stamped = false;
+                launched_ = true;
                 return true;
-            case logical_admission_t::retry:
+            case logical_launch_t::retry:
                 return true;
-            case logical_admission_t::fatal:
+            case logical_launch_t::fatal:
                 return false;
-            case logical_admission_t::launching:
+            case logical_launch_t::launching:
                 return false;
         }
         return false;
@@ -402,6 +411,7 @@ template <typename SocketT> class client_bench_t
       perf::application_ready_queue_t &ready_queue_, SocketT &socket_,
       const zlink::routing_id_t &target_rid_,
       logical_request_t *logical_,
+      std::atomic<bool> *operation_active_,
       std::chrono::milliseconds timeout_,
       std::shared_ptr<client_completion_state_t> completion_)
     {
@@ -411,8 +421,8 @@ template <typename SocketT> class client_bench_t
               std::as_bytes (std::span<const char> (
                 logical_->payload.data (), logical_->payload.size ())));
             if (!request.valid ()) {
-                logical_->admission.store (logical_admission_t::fatal,
-                                            std::memory_order_release);
+                logical_->launch.store (logical_launch_t::fatal,
+                                         std::memory_order_release);
                 completion_->fatal.store (true, std::memory_order_release);
                 signal_change (completion_);
                 co_return;
@@ -421,11 +431,13 @@ template <typename SocketT> class client_bench_t
             operation.emplace (
               begin_request (socket_, target_rid_, std::move (request), timeout_));
             completion_->outstanding.fetch_add (1, std::memory_order_release);
-            logical_->admission.store (logical_admission_t::admitted,
-                                        std::memory_order_release);
+            operation_active_->store (true, std::memory_order_release);
+            logical_->launch.store (logical_launch_t::owned_by_operation,
+                                     std::memory_order_release);
             signal_change (completion_);
-            // Post-admission: operation owns the submitted request. This
-            // coroutine must not read the reusable slot/logical buffer again.
+            // The async operation owns the request across any WRITABLE waits,
+            // resubmission, and the final REQUEST completion. This coroutine
+            // must not read the reusable slot/logical buffer again.
             try {
                 std::vector<zlink::message_t> reply = co_await std::move (*operation);
                 observe_reply (completion_, reply);
@@ -437,44 +449,45 @@ template <typename SocketT> class client_bench_t
             catch (...) {
                 completion_->fatal.store (true, std::memory_order_release);
             }
+            operation_active_->store (false, std::memory_order_release);
             completion_->outstanding.fetch_sub (1, std::memory_order_release);
             signal_change (completion_);
             co_return;
         }
         catch (const zlink::request_error_t &err) {
             if (err.result () == zlink::request_result_t::timed_out) {
-                logical_->admission.store (logical_admission_t::retry,
-                                            std::memory_order_release);
+                logical_->launch.store (logical_launch_t::retry,
+                                         std::memory_order_release);
             } else {
-                logical_->admission.store (logical_admission_t::fatal,
-                                            std::memory_order_release);
+                logical_->launch.store (logical_launch_t::fatal,
+                                         std::memory_order_release);
                 completion_->fatal.store (true, std::memory_order_release);
             }
         }
         catch (const zlink::submit_error_t &err) {
             if (err.result () == zlink::submit_result_t::backpressured
                 || transient (err.internal_errno ())) {
-                logical_->admission.store (logical_admission_t::retry,
-                                            std::memory_order_release);
+                logical_->launch.store (logical_launch_t::retry,
+                                         std::memory_order_release);
             } else {
-                logical_->admission.store (logical_admission_t::fatal,
-                                            std::memory_order_release);
+                logical_->launch.store (logical_launch_t::fatal,
+                                         std::memory_order_release);
                 completion_->fatal.store (true, std::memory_order_release);
             }
         }
         catch (const zlink::binding_error_t &err) {
             if (transient (err.internal_errno ())) {
-                logical_->admission.store (logical_admission_t::retry,
-                                            std::memory_order_release);
+                logical_->launch.store (logical_launch_t::retry,
+                                         std::memory_order_release);
             } else {
-                logical_->admission.store (logical_admission_t::fatal,
-                                            std::memory_order_release);
+                logical_->launch.store (logical_launch_t::fatal,
+                                         std::memory_order_release);
                 completion_->fatal.store (true, std::memory_order_release);
             }
         }
         catch (...) {
-            logical_->admission.store (logical_admission_t::fatal,
-                                        std::memory_order_release);
+            logical_->launch.store (logical_launch_t::fatal,
+                                     std::memory_order_release);
             completion_->fatal.store (true, std::memory_order_release);
         }
         signal_change (completion_);

@@ -268,10 +268,10 @@ inline void restore_send_parts_to_sources (operation_state_t &state_,
     state_.message.part_sources.clear ();
 }
 
-// An awaitable send can outlive the builder expression and every message_t
-// passed to it. Move the single-part fast-path source into operation-owned
-// storage before the first DONTWAIT attempt; multipart builders already keep
-// their parts in the operation state.
+// An awaitable send or request can outlive the builder expression and every
+// message_t passed to it. Move the single-part fast-path source into
+// operation-owned storage when a retry must outlive the initial DONTWAIT
+// attempt; multipart builders already keep their parts in the operation state.
 inline void own_async_send_parts (operation_state_t &state_)
 {
     if (state_.message.single_part_source
@@ -283,7 +283,7 @@ inline void own_async_send_parts (operation_state_t &state_)
 
 // Once an awaitable has returned in the backpressured state, no caller-owned
 // message object may be retained by the retry state. The operation now owns the
-// exact logical packet until admission or terminal failure.
+// exact logical send or request until admission or terminal failure.
 inline void detach_async_send_sources (operation_state_t &state_) noexcept
 {
     state_.message.single_part_source = nullptr;

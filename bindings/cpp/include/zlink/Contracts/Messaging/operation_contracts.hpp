@@ -317,10 +317,10 @@ class request_submit_operation_t : private detail::operation_builder_base_t<
     request_submit_operation_t &&message (message_t &part_) &&;
     request_submit_operation_t &&message (message_t &&part_) &&;
     request_submit_operation_t &&timeout (std::chrono::milliseconds timeout_) &&;
-    /// Submits the request to one exact target on the calling thread and
-    /// returns a suspension that Core completes from its reply handler
-    /// callback. The reply deadline is Core-owned
-    /// (`ZLINK_REQUEST_TIMED_OUT`); the binding owns no timer and no worker.
+    /// Makes one DONTWAIT admission attempt. On backpressure, retains the
+    /// request and resumes only from its exact WRITABLE token before retrying.
+    /// After admission, Core completes the suspension with the reply or request
+    /// terminal. The binding owns no retry timer or worker.
     async_result_t<std::vector<message_t>> async () &&;
     /// Blocks the caller until Core's reply callback completes. The caller
     /// owns this wait; the binding creates no thread. Destroying the socket or

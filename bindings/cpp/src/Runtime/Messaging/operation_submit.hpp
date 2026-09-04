@@ -4,6 +4,7 @@
 
 #include "operation_state.hpp"
 #include "operation_detail.hpp"
+#include "../Core/duration_conversion.hpp"
 #include "../Native/native_message_parts.hpp"
 
 namespace zlink
@@ -139,6 +140,95 @@ inline bool submit_raw_send_state (operation_state_t &state_,
         throw submit_error_t (rc, submit_errno);
     }
     return true;
+}
+
+inline bool submit_raw_request_state (
+  operation_state_t &state_, void *user_context_,
+  zlink_completion_id_t *completion_id_out_,
+  bool restore_sources_on_failure_ = true)
+{
+    const auto restore_sources = [&] () noexcept {
+        if (restore_sources_on_failure_)
+            restore_async_send_sources (state_);
+    };
+    const auto throw_invalid_argument = [&] () {
+        restore_sources ();
+        throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+    };
+
+    if (!state_.raw.socket
+        || (state_.kind != operation_kind_t::raw_request
+            && state_.kind != operation_kind_t::raw_routed_request)
+        || !completion_id_out_)
+        throw_invalid_argument ();
+    if (!share_runtime_state (state_.raw)) {
+        restore_sources ();
+        throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
+    }
+
+    const zlink_routing_id_t *const target =
+      state_.kind == operation_kind_t::raw_routed_request
+        ? target_first_rid_native (state_.raw.target)
+        : nullptr;
+    if (state_.kind == operation_kind_t::raw_routed_request && !target)
+        throw_invalid_argument ();
+
+    const uint32_t timeout =
+      state_.timeout > std::chrono::milliseconds::zero ()
+        ? native_timeout_ms (state_.timeout)
+        : 0u;
+    *completion_id_out_ = 0;
+    auto submit_part = [&] (zlink_msg_t *part_, zlink_part_flag_t part_flag_,
+                            bool is_final_) {
+        return zlink_request_part (
+          state_.raw.socket, target, part_,
+          static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
+          part_flag_, is_final_ ? timeout : 0u,
+          is_final_ ? user_context_ : nullptr,
+          is_final_ ? completion_id_out_ : nullptr);
+    };
+
+    int raw_result = -1;
+    if (state_.message.single_part.has_value ()
+        || state_.message.single_part_source) {
+        message_t &part = send_single_part (state_);
+        if (!part.valid ())
+            throw_invalid_argument ();
+        raw_result = submit_borrowed_message_part (
+          part, [&] (zlink_msg_t *native_, zlink_part_flag_t flag_) {
+              return submit_part (native_, flag_, true);
+          });
+    } else {
+        raw_result = submit_message_parts (
+          state_.message.parts,
+          [&] (zlink_msg_t *native_, zlink_part_flag_t flag_, bool final_) {
+              return submit_part (native_, flag_, final_);
+          });
+    }
+
+    const int submit_errno = zlink_errno ();
+    if (raw_result == -1) {
+        restore_sources ();
+        throw submit_error_t (submit_result_from_errno (submit_errno),
+                              submit_errno);
+    }
+
+    const submit_result_t result = static_cast<submit_result_t> (raw_result);
+    if (result == submit_result_t::ok) {
+        if (*completion_id_out_ == 0) {
+            restore_sources ();
+            throw submit_error_t (submit_result_t::internal_error, EPROTO);
+        }
+        return true;
+    }
+
+    if (state_.flags == send_flags_t::dontwait
+        && result == submit_result_t::backpressured
+        && submit_errno == EAGAIN && *completion_id_out_ != 0)
+        return false;
+
+    restore_sources ();
+    throw submit_error_t (result, submit_errno);
 }
 
 } // namespace detail

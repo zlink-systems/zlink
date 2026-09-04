@@ -508,6 +508,7 @@ if(ZLINK_CPP_BUILD_TESTS)
     test_cpp_contract_message.cpp
     test_cpp_contract_socket.cpp
     test_cpp_contract_request_reply.cpp
+    test_cpp_contract_request_writable_retry.cpp
     test_cpp_contract_exact_target_retry.cpp
     test_cpp_contract_exact_request_target.cpp
     test_cpp_contract_options.cpp

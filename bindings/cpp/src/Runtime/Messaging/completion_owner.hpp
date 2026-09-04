@@ -32,12 +32,16 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
       std::unique_ptr<operation_state_t> send_operation_);
     explicit completion_entry_t (
       std::shared_ptr<async_operation_state_t<std::vector<message_t>>> request_result_);
+    completion_entry_t (
+      std::shared_ptr<async_operation_state_t<std::vector<message_t>>> request_result_,
+      std::unique_ptr<operation_state_t> request_operation_);
     ~completion_entry_t ();
 
     completion_entry_t (const completion_entry_t &) = delete;
     completion_entry_t &operator= (const completion_entry_t &) = delete;
 
     bool start_send ();
+    void start_request ();
     void publish (uint64_t completion_id_) noexcept;
     void fail_submit () noexcept;
     bool capture (zlink_completion_t &completion_) noexcept;
@@ -48,18 +52,22 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
 
   private:
     bool submit_send_attempt (bool initial_);
+    bool submit_request_attempt (bool initial_);
     void fail_send (std::exception_ptr failure_) noexcept;
+    void fail_request (std::exception_ptr failure_) noexcept;
     void settle_if_joined (std::unique_lock<std::mutex> &lock_) noexcept;
 
     kind_t _kind;
     std::shared_ptr<async_operation_state_t<void>> _send_result;
     std::unique_ptr<operation_state_t> _send_operation;
     std::shared_ptr<async_operation_state_t<std::vector<message_t>>> _request_result;
+    std::unique_ptr<operation_state_t> _request_operation;
     std::mutex _mutex;
     std::condition_variable _changed;
     std::vector<message_t> _reply_parts;
     std::exception_ptr _failure;
     uint64_t _completion_id = 0;
+    bool _request_waiting_writable = false;
     bool _published = false;
     bool _captured = false;
     bool _settled = false;

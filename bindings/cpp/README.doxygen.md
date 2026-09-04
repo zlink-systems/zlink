@@ -25,7 +25,7 @@ bindings/cpp/doxygen/html/index.html
 - `message_t` diagnostics expose `ref_count()`
 - `socket_monitor_t` is the public monitoring wrapper for socket-level events and snapshots
 
-## DONTWAIT send and completions
+## DONTWAIT send, request, and completions
 
 At the raw API boundary, a DONTWAIT send that cannot be admitted returns
 `ZLINK_SUBMIT_BACKPRESSURED`, sets `errno` to `EAGAIN`, and returns a nonzero
@@ -49,7 +49,15 @@ packet. Once an attempt is admitted, the async result completes without waiting
 for a SEND completion. This event-loop path creates no binding-owned OS thread,
 sleep, or timer.
 
-REQUEST processing is unchanged and continues to use `pollcompletion` for its
-reply completion. `ZLINK_OPT_PENDING_MAX_MSGS` and
-`ZLINK_OPT_PENDING_MAX_BYTES` limit REQUEST pending admission only; their
-numeric values remain ABI-stable and they are no-ops for SEND.
+A DONTWAIT REQUEST uses the same admission wait-token path. An immediate
+admission returns a nonzero REQUEST completion ID and starts the reply timeout.
+If Core instead returns `BACKPRESSURED`, the C++ async terminal retains the
+request parts, waits for its exact WRITABLE token, and resubmits the same request.
+Only after admission does it wait for the existing REQUEST reply, timeout, or
+terminal completion. A terminal WRITABLE record is surfaced as a typed submit
+failure. The blocking request terminal continues to use Core's blocking
+admission path.
+
+`ZLINK_OPT_PENDING_MAX_MSGS` and `ZLINK_OPT_PENDING_MAX_BYTES` retain their
+numeric values and stored values for ABI compatibility, but are otherwise
+ignored. Core has no pre-admission REQUEST pending pool.
