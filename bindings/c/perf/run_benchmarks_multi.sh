@@ -431,9 +431,15 @@ build_core_runtime() {
     bash "${NORMALIZE_TIMESTAMPS_SH}" "${core_build_dir}" || true
   fi
   if [[ "${IS_WINDOWS}" -eq 1 ]]; then
-    cmake --build "${core_build_dir}" --config Release
+    cmake --build "${core_build_dir}" --config Release --target libzlink
   else
-    cmake --build "${core_build_dir}" -j"${jobs}"
+    # Delegate to the repository build script so build policy lives in one
+    # place; --lib-only rebuilds the runtime without relinking test executables.
+    if [[ "$(normalize_cmake_path "${core_build_dir}")" == "$(normalize_cmake_path "${ROOT_DIR}/core/build")" ]]; then
+      JOBS="${jobs}" bash "${ROOT_DIR}/scripts/build-core.sh" release --lib-only
+    else
+      cmake --build "${core_build_dir}" -j"${jobs}" --target libzlink
+    fi
   fi
 }
 
