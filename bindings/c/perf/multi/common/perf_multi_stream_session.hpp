@@ -215,11 +215,41 @@ inline bool build_packet_frame (zlink_msg_t *packet_out,
     return true;
 }
 
+// Snapshot the refused framed bytes only after Core reported backpressure:
+// the message handle is consumed by every submit, but the received header and
+// body parts outlive the attempt, so the admitted hot path copies nothing.
+inline bool retain_packet_bytes (session_t *session,
+                                 const zlink_routing_id_t *rid,
+                                 const zlink_msg_t *header_part,
+                                 const zlink_msg_t *body_part)
+{
+    if (!session || !rid || !header_part || !body_part)
+        return false;
+    const size_t header_size = zlink_msg_size (const_cast<zlink_msg_t *> (header_part));
+    const size_t body_size = zlink_msg_size (const_cast<zlink_msg_t *> (body_part));
+    session->retained_packet.resize (6 + header_size + body_size);
+    unsigned char *dst = session->retained_packet.data ();
+    dst[0] = static_cast<unsigned char> ((header_size >> 8) & 0xFF);
+    dst[1] = static_cast<unsigned char> (header_size & 0xFF);
+    perf_stream_common::perf_stream_store_u32_be (dst + 2, static_cast<uint32_t> (body_size));
+    if (header_size > 0)
+        std::memcpy (dst + 6, zlink_msg_data (const_cast<zlink_msg_t *> (header_part)),
+                     header_size);
+    if (body_size > 0)
+        std::memcpy (dst + 6 + header_size, zlink_msg_data (const_cast<zlink_msg_t *> (body_part)),
+                     body_size);
+    session->retained_rid = *rid;
+    return true;
+}
+
 inline bool submit_packet_async (session_t *session,
                                  const zlink_routing_id_t *rid,
-                                 zlink_msg_t *packet)
+                                 zlink_msg_t *packet,
+                                 const zlink_msg_t *header_part,
+                                 const zlink_msg_t *body_part)
 {
     if (!session || !session->send_socket || !rid || rid->size == 0 || !packet
+        || !header_part || !body_part
         || session->wait_token != 0 || !session->retained_packet.empty ()
         || outstanding_size (session) != 0) {
         errno = EBUSY;
@@ -231,10 +261,6 @@ inline bool submit_packet_async (session_t *session,
         errno = EINVAL;
         return false;
     }
-    const unsigned char *packet_data =
-      static_cast<const unsigned char *> (zlink_msg_data (packet));
-    session->retained_packet.assign (packet_data, packet_data + packet_size);
-    session->retained_rid = *rid;
 
     zlink_completion_id_t wait_token = 0;
     const zlink_submit_result_t result = zlink_send_part_rid (
@@ -242,13 +268,17 @@ inline bool submit_packet_async (session_t *session,
       ZLINK_PART_FINAL, session->send_socket, &wait_token);
     const int submit_errno = result == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
     if (result == ZLINK_SUBMIT_OK && wait_token == 0) {
-        release_retained_packet (session);
         record_immediate_admission (session);
         return true;
     }
     if (result == ZLINK_SUBMIT_BACKPRESSURED
         && (submit_errno == EAGAIN || submit_errno == EWOULDBLOCK)
         && wait_token != 0) {
+        if (!retain_packet_bytes (session, rid, header_part, body_part)) {
+            release_retained_packet (session);
+            errno = EINVAL;
+            return false;
+        }
         session->wait_token = wait_token;
         session->retry_ready = false;
         session->pollout_suppressed = false;
@@ -335,9 +365,9 @@ inline bool handle_packet_message (session_t *session,
     if (!build_packet_frame (&packet, header_part, body_part))
         return false;
 
-    // Keep the exact packet bytes and route before the one DONTWAIT attempt;
-    // the message handle is consumed regardless of admission outcome.
-    const bool submitted = submit_packet_async (session, rid, &packet);
+    // The message handle is consumed regardless of admission outcome; the
+    // exact bytes are rebuilt from header/body only when Core refuses it.
+    const bool submitted = submit_packet_async (session, rid, &packet, header_part, body_part);
     const int submit_errno = !submitted || outstanding_size (session) != 0
                                ? zlink_errno ()
                                : 0;
@@ -447,6 +477,7 @@ inline int run_server_event_loop (session_t *session, const char *stop_token)
         return 1;
     }
 
+    short registered_events = session_poll_events (session, true);
     std::chrono::steady_clock::time_point drain_deadline =
       std::chrono::steady_clock::time_point::max ();
     while (!session->failed.load (std::memory_order_acquire)) {
@@ -460,11 +491,16 @@ inline int run_server_event_loop (session_t *session, const char *stop_token)
             break;
         }
 
-        if (zlink_poller_modify (poller, session->send_socket,
-                                 session_poll_events (session, !stopping))
-            != ZLINK_CONFIG_OK) {
-            record_failure (session, zlink_errno ());
-            break;
+        // POLLIN/POLLOUT interest changes only around a live wait token or
+        // the stop edge; skip the poller call on the steady admitted path.
+        const short desired_events = session_poll_events (session, !stopping);
+        if (desired_events != registered_events) {
+            if (zlink_poller_modify (poller, session->send_socket, desired_events)
+                != ZLINK_CONFIG_OK) {
+                record_failure (session, zlink_errno ());
+                break;
+            }
+            registered_events = desired_events;
         }
 
         zlink_poller_event_t event;

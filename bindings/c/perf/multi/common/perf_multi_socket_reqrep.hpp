@@ -294,6 +294,12 @@ inline bool drain_socket_completions (client_state_t *state, void *socket)
             return true;
         if (rc != ZLINK_RECV_OK)
             return false;
+        // A DONTWAIT handshake send that met backpressure left a wait token
+        // whose WRITABLE record shares this queue. Nothing waits on it here.
+        if (completion.kind == ZLINK_COMPLETION_WRITABLE) {
+            zlink_completion_close (&completion);
+            continue;
+        }
         client_slot_t *slot = static_cast<client_slot_t *> (completion.user_context);
         const bool valid = completion.kind == ZLINK_COMPLETION_REQUEST
                            && completion.completion_id != 0 && slot

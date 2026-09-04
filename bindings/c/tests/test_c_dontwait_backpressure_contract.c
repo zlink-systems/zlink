@@ -119,6 +119,65 @@ static int fill_until_backpressured (void *router,
     return __LINE__;
 }
 
+/* Same fill, but the caller declines the token handle. Core still reserves the
+   wait token for the refused attempt. */
+static int fill_until_backpressured_null_id (void *router,
+                                             const zlink_routing_id_t *target,
+                                             const void *payload,
+                                             size_t payload_size,
+                                             size_t *accepted_out)
+{
+    size_t attempt;
+    for (attempt = 0; attempt != MAX_FILL_ATTEMPTS; ++attempt) {
+        zlink_msg_t part;
+        CHECK (init_part (&part, payload, payload_size) == 0);
+
+        errno = 0;
+        const zlink_submit_result_t result =
+          zlink_send_part_rid (router, target, &part, ZLINK_SEND_FLAGS_DONTWAIT,
+                               ZLINK_PART_FINAL, NULL, NULL);
+        const int submit_errno = zlink_errno ();
+        CHECK (check_part_consumed (&part) == 0);
+
+        if (result == ZLINK_SUBMIT_BACKPRESSURED) {
+            CHECK (submit_errno == EAGAIN);
+            CHECK (attempt != 0);
+            *accepted_out = attempt;
+            return 0;
+        }
+        CHECK (result == ZLINK_SUBMIT_OK);
+    }
+
+    return __LINE__;
+}
+
+/* Pull the queue to NO_DATA and require exactly one WRITABLE record. */
+static int receive_single_writable (void *router, zlink_completion_t *record_out)
+{
+    int seen = 0;
+    for (;;) {
+        zlink_completion_t completion;
+        memset (&completion, 0, sizeof (completion));
+        completion.struct_size = sizeof (completion);
+        errno = 0;
+        const zlink_recv_result_t result =
+          zlink_completion_recv (router, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (result == ZLINK_RECV_NO_DATA) {
+            CHECK (errno == EAGAIN);
+            zlink_completion_close (&completion);
+            break;
+        }
+        CHECK (result == ZLINK_RECV_OK);
+        CHECK (!seen);
+        CHECK (completion.kind == ZLINK_COMPLETION_WRITABLE);
+        *record_out = completion;
+        seen = 1;
+        zlink_completion_close (&completion);
+    }
+    CHECK (seen);
+    return 0;
+}
+
 int main (void)
 {
     static const char dealer_name[] = "c-dontwait-backpressure-peer";
@@ -271,6 +330,63 @@ int main (void)
     CHECK (zlink_poll (&no_duplicate, 1, 20, &no_duplicate_error) == 0);
     CHECK (no_duplicate_error == ZLINK_CONFIG_OK);
     CHECK (no_duplicate.revents == 0);
+
+    /* Declining the token handle does not decline the token: the refused
+       attempt still publishes one WRITABLE (nonzero ID, NULL context, same
+       RID) on this queue, so REQUEST completion consumers that share the
+       queue must classify records by kind instead of failing on it. */
+    size_t accepted_without_handle = 0;
+    CHECK (fill_until_backpressured_null_id (router, &target, logical_payload,
+                                             sizeof (logical_payload),
+                                             &accepted_without_handle) == 0);
+    CHECK (accepted_without_handle != 0);
+    CHECK (check_no_completion (router) == 0);
+    for (index = 0; index != accepted_without_handle; ++index)
+        CHECK (receive_part (dealer, logical_payload, sizeof (logical_payload)) == 0);
+    memset (&event, 0, sizeof (event));
+    poller_error = ZLINK_CONFIG_INTERNAL_ERROR;
+    CHECK (zlink_poller_wait (poller, &event, 1, 5000, &poller_error) == 1);
+    CHECK (poller_error == ZLINK_CONFIG_OK);
+    CHECK ((event.events & ZLINK_POLLCOMPLETION) == ZLINK_POLLCOMPLETION);
+    zlink_completion_t anonymous_writable;
+    memset (&anonymous_writable, 0, sizeof (anonymous_writable));
+    CHECK (receive_single_writable (router, &anonymous_writable) == 0);
+    CHECK (anonymous_writable.completion_id != 0);
+    CHECK (anonymous_writable.completion_id != wait_token);
+    CHECK (anonymous_writable.user_context == NULL);
+    CHECK (anonymous_writable.peer_rid.size == target.size);
+    CHECK (memcmp (anonymous_writable.peer_rid.data, target.data, target.size) == 0);
+    CHECK (anonymous_writable.send_result == ZLINK_SEND_ADMITTED);
+    CHECK (anonymous_writable.send_terminal_errno == 0);
+    CHECK (check_no_completion (router) == 0);
+
+    /* Explicit target removal retires a live token as TERMINAL/ENOENT with the
+       same token, context and RID; a waiter must observe it as a failure
+       instead of waiting for credit that can no longer arrive. */
+    size_t accepted_before_removal = 0;
+    zlink_completion_id_t removal_token = 0;
+    CHECK (fill_until_backpressured (router, &target, logical_payload,
+                                     sizeof (logical_payload), &operation_context,
+                                     &accepted_before_removal, &removal_token) == 0);
+    CHECK (removal_token != 0);
+    CHECK (removal_token != wait_token);
+    CHECK (check_no_completion (router) == 0);
+    CHECK (zlink_disconnect_rid (router, &target) == ZLINK_CONNECT_OK);
+    memset (&event, 0, sizeof (event));
+    poller_error = ZLINK_CONFIG_INTERNAL_ERROR;
+    CHECK (zlink_poller_wait (poller, &event, 1, 5000, &poller_error) == 1);
+    CHECK (poller_error == ZLINK_CONFIG_OK);
+    CHECK ((event.events & ZLINK_POLLCOMPLETION) == ZLINK_POLLCOMPLETION);
+    zlink_completion_t terminal_writable;
+    memset (&terminal_writable, 0, sizeof (terminal_writable));
+    CHECK (receive_single_writable (router, &terminal_writable) == 0);
+    CHECK (terminal_writable.completion_id == removal_token);
+    CHECK (terminal_writable.user_context == &operation_context);
+    CHECK (terminal_writable.peer_rid.size == target.size);
+    CHECK (memcmp (terminal_writable.peer_rid.data, target.data, target.size) == 0);
+    CHECK (terminal_writable.send_result == ZLINK_SEND_TERMINAL);
+    CHECK (terminal_writable.send_terminal_errno == ENOENT);
+    CHECK (check_no_completion (router) == 0);
 
     CHECK (zlink_poller_remove (poller, router) == ZLINK_CONFIG_OK);
     CHECK (zlink_poller_destroy (&poller) == ZLINK_CLOSE_OK);

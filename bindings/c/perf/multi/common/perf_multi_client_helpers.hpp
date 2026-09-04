@@ -434,30 +434,46 @@ inline send_status_t send_echo_message (void *socket,
                                     completion_id_out);
 }
 
-inline bool retain_echo_send (send_wait_slot_t *slot,
-                              const zlink_routing_id_t *target_rid,
-                              const std::vector<char> &payload,
-                              size_t payload_size,
-                              bool router_send)
+// One DONTWAIT attempt straight from the caller's stamped buffer. Core keeps
+// only the wait token under backpressure, so the refused bytes are snapshotted
+// at rejection time; the admitted hot path copies nothing beyond the part.
+inline send_status_t submit_echo_send (send_wait_slot_t *slot,
+                                       const zlink_routing_id_t *target_rid,
+                                       std::vector<char> &payload,
+                                       size_t payload_size,
+                                       bool router_send)
 {
     if (!slot || !slot->socket || slot->retained || payload_size > payload.size ()
         || (router_send && (!target_rid || target_rid->size == 0))) {
         errno = EINVAL;
-        return false;
+        return send_error;
     }
 
-    slot->retained_payload.assign (payload.begin (), payload.begin () + payload_size);
-    slot->retained_payload_size = payload_size;
-    slot->router_send = router_send;
-    if (router_send)
-        slot->target_rid = *target_rid;
-    else
-        std::memset (&slot->target_rid, 0, sizeof (slot->target_rid));
-    slot->retained = true;
-    slot->retry_ready = false;
-    slot->pollout_suppressed = false;
-    slot->wait_token = 0;
-    return true;
+    zlink_completion_id_t wait_token = 0;
+    const send_status_t status = send_echo_message (
+      slot->socket, target_rid, payload, payload_size, router_send, true, slot->socket,
+      &wait_token);
+    if (status == send_ok) {
+        ++slot->replies;
+        return send_ok;
+    }
+    if (status == send_blocked) {
+        const int blocked_errno = errno;
+        slot->retained_payload.assign (payload.begin (), payload.begin () + payload_size);
+        slot->retained_payload_size = payload_size;
+        slot->router_send = router_send;
+        if (router_send)
+            slot->target_rid = *target_rid;
+        else
+            std::memset (&slot->target_rid, 0, sizeof (slot->target_rid));
+        slot->retained = true;
+        slot->retry_ready = false;
+        slot->pollout_suppressed = false;
+        slot->wait_token = wait_token;
+        errno = blocked_errno;
+        return send_blocked;
+    }
+    return send_error;
 }
 
 inline send_status_t submit_retained_send (send_wait_slot_t *slot)
@@ -1301,12 +1317,8 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
                     break;
                 }
 
-                if (!retain_echo_send (&slot, target_rid_ptr, send_payload,
-                                       payload_size, client_router_send)) {
-                    fatal_error = true;
-                    break;
-                }
-                const send_status_t send_rc = submit_retained_send (&slot);
+                const send_status_t send_rc = submit_echo_send (
+                  &slot, target_rid_ptr, send_payload, payload_size, client_router_send);
                 if (send_rc == send_ok) {
                     ++sequence;
                     submitted = true;

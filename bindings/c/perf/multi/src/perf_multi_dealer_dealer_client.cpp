@@ -36,7 +36,7 @@ struct dd_send_slot_t
 {
     dd_send_slot_t () :
         socket (NULL), wait_token (0), retained (false), retry_ready (false),
-        retained_payload ()
+        pollout_suppressed (false), retained_payload ()
     {
     }
 
@@ -44,6 +44,10 @@ struct dd_send_slot_t
     zlink_completion_id_t wait_token;
     bool retained;
     bool retry_ready;
+    // DEALER POLLOUT is an aggregate hint. After one NO_DATA pull it is
+    // dropped from the interest set so a writable peer cannot spin the loop;
+    // the token's WRITABLE record still wakes POLLCOMPLETION.
+    bool pollout_suppressed;
     std::vector<char> retained_payload;
 };
 
@@ -93,7 +97,7 @@ inline bool create_client_sockets (ctx_guard_t &ctx,
 inline short dd_slot_events (const dd_send_slot_t &slot)
 {
     short events = static_cast<short> (ZLINK_POLLIN | ZLINK_POLLCOMPLETION);
-    if (slot.wait_token != 0)
+    if (slot.wait_token != 0 && !slot.pollout_suppressed)
         events = static_cast<short> (events | ZLINK_POLLOUT);
     return events;
 }
@@ -147,6 +151,7 @@ inline void clear_retained_message (dd_send_slot_t *slot)
     slot->wait_token = 0;
     slot->retained = false;
     slot->retry_ready = false;
+    slot->pollout_suppressed = false;
     slot->retained_payload.clear ();
 }
 
@@ -199,6 +204,7 @@ inline send_status_t submit_retained_message (dd_send_slot_t *slot)
         && (err == EAGAIN || err == EWOULDBLOCK) && wait_token != 0) {
         slot->wait_token = wait_token;
         slot->retry_ready = false;
+        slot->pollout_suppressed = false;
         errno = err;
         return send_status_blocked;
     }
@@ -246,6 +252,7 @@ inline bool record_dd_writable (dd_send_slot_t *slot,
     }
 
     slot->wait_token = 0;
+    slot->pollout_suppressed = false;
     if (completion.send_result == ZLINK_SEND_ADMITTED
         && completion.send_terminal_errno == 0) {
         slot->retry_ready = true;
@@ -269,8 +276,11 @@ inline bool drain_dd_writable (dd_send_state_t *state, dd_send_slot_t *slot)
         completion.struct_size = sizeof (completion);
         const zlink_recv_result_t rc = zlink_completion_recv (
           slot->socket, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
-        if (rc == ZLINK_RECV_NO_DATA)
+        if (rc == ZLINK_RECV_NO_DATA) {
+            if (slot->wait_token != 0)
+                slot->pollout_suppressed = true;
             break;
+        }
         if (rc != ZLINK_RECV_OK)
             return false;
 

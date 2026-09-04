@@ -44,6 +44,7 @@ struct server_send_state_t
         poller (NULL),
         wait_token (0),
         retry_ready (false),
+        pollout_suppressed (false),
         retained_latency_ack_payload (),
         event ()
     {
@@ -54,6 +55,9 @@ struct server_send_state_t
     void *poller;
     zlink_completion_id_t wait_token;
     bool retry_ready;
+    // DEALER POLLOUT is an aggregate hint; drop it after one NO_DATA pull so
+    // another writable peer cannot spin the loop. WRITABLE wakes POLLCOMPLETION.
+    bool pollout_suppressed;
     std::vector<char> retained_latency_ack_payload;
     zlink_poller_event_t event;
 };
@@ -63,7 +67,7 @@ inline short server_send_events (const server_send_state_t &state)
     short events = ZLINK_POLLCOMPLETION;
     if (state.wait_token == 0)
         events = static_cast<short> (events | ZLINK_POLLIN);
-    else
+    else if (!state.pollout_suppressed)
         events = static_cast<short> (events | ZLINK_POLLOUT);
     return events;
 }
@@ -112,6 +116,7 @@ inline void clear_retained_latency_ack (server_send_state_t *state)
         return;
     state->wait_token = 0;
     state->retry_ready = false;
+    state->pollout_suppressed = false;
     state->retained_latency_ack_payload.clear ();
 }
 
@@ -147,6 +152,7 @@ inline bool submit_retained_latency_ack (server_send_state_t *state)
         && wait_token != 0) {
         state->wait_token = wait_token;
         state->retry_ready = false;
+        state->pollout_suppressed = false;
         if (!update_server_send_events (state))
             return false;
         errno = submit_errno;
@@ -223,6 +229,7 @@ inline bool record_server_writable (server_send_state_t *state,
     }
 
     state->wait_token = 0;
+    state->pollout_suppressed = false;
     if (completion.send_result == ZLINK_SEND_ADMITTED
         && completion.send_terminal_errno == 0) {
         state->retry_ready = true;
@@ -245,8 +252,14 @@ inline bool drain_server_writable (server_send_state_t *state)
         completion.struct_size = sizeof (completion);
         const zlink_recv_result_t rc = zlink_completion_recv (
           state->socket, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
-        if (rc == ZLINK_RECV_NO_DATA)
+        if (rc == ZLINK_RECV_NO_DATA) {
+            if (state->wait_token != 0 && !state->pollout_suppressed) {
+                state->pollout_suppressed = true;
+                if (!update_server_send_events (state))
+                    return false;
+            }
             break;
+        }
         if (rc != ZLINK_RECV_OK)
             return false;
 

@@ -263,6 +263,12 @@ inline bool drain_request_completions (void *requester_, request_state_t *state_
             return true;
         if (rc != ZLINK_RECV_OK)
             return false;
+        // A DONTWAIT handshake send that met backpressure left a wait token
+        // whose WRITABLE record shares this queue. Nothing waits on it here.
+        if (completion.kind == ZLINK_COMPLETION_WRITABLE) {
+            zlink_completion_close (&completion);
+            continue;
+        }
         const bool valid = completion.kind == ZLINK_COMPLETION_REQUEST
                            && completion.completion_id != 0
                            && completion.user_context == state_;
