@@ -1,12 +1,14 @@
 # A 인계 — DONTWAIT send 계약 변경 (0.17.0, 판정 D-B79)
 
-작성: 머신 B, 2026-09-04 15:10 / 개정 16:00 (계약 B로 확정) / **개정 18:40 (Core·바인딩 커밋, 인계)**.
+작성: 머신 B, 2026-09-04 15:10 / 개정 16:00 (계약 B로 확정) / 개정 18:40 (Core·바인딩 커밋, 인계) / **개정 2026-09-05 05:45 (REQUEST 통일 완료, perf 정책 복원 완료, 최종)**.
 상태: Core 커밋 `50d77800f2`(main), 스펙 갱신 커밋(이 문서와 같은 커밋), 바인딩 cpp/node/dotnet 커밋 `4f503b76d3`, java 커밋 `7927c582c2`,
 0.17.0 범프 커밋 `70a9998998`, c `f9d0eb84d9`, rust `85eb9425a1`, python `5240947587`, go `4ff46b5bae`.
 리뷰(버그·핫패스·스모크) 커밋: c `fc0562cef4`, rust `9f2342cf27`, dotnet `8b52bb66ba`, cpp `5a42a363c7`, go `c6fdad2194`,
 python `cd5b4a163e`, node `a9eb6c5a77`, java `b72622bb2d`. 리뷰 결과 표는 §6.
 **REQUEST도 같은 계약으로 통일(D-B85, 2026-09-05)**: Core `7d8205a028`, 스펙 `ea934d0e97`, bindings dotnet `2099bb045a`(병합), java `a06260f507`,
-node `b145f86501`, cpp `e0860723bc`; c/go/rust/python은 진행 중. 계약 요약은 §7. 계약의 최종 문장은 `core/doc/spec/core/socket/README.ko.md`
+node `b145f86501`, cpp `e0860723bc`, python `78eed9ce96`, rust `9728a0e081`, go `7afa27e72b`, c 계약 테스트 `ba615d3137`(C perf REQREP 러너 `0f9c329764`).
+Core 후속: SUB session use-after-free 수정 `29add0ac81`, 단일 파트 REPLY 64 KiB 수정 `5e26e72806`, 토큰 경로 리팩토링 `900ea8319e`(hotpath ±0.04%).
+C++ hot-path pass 1·2 `86b897abf7`·`e6dd88fbc6`(공개 API 불변). 계약 요약은 §7. 계약의 최종 문장은 `core/doc/spec/core/socket/README.ko.md`
 "Part send" 절이며 아래 표는 요약이다.
 
 ## 1. 바뀌는 계약 (사용자 확정, B안)
@@ -65,7 +67,9 @@ node `b145f86501`, cpp `e0860723bc`; c/go/rust/python은 진행 중. 계약 요�
 - [x] 0.17.0 범프 커밋 `70a9998998`
 - [x] bindings c/go/rust/python 포팅 — 위 해시
 - [x] bindings 8개 독립 리뷰(계약 a–h, 핫패스, 테스트·샘플·perf single/multi 스모크) — §6 (java는 후속 커밋)
-- [ ] perf multi 정책 복원(§1.2 모델 + WRITABLE drain) + before/after 표, `doc/perf/PERF_MULTI_TEST_POLICY.md` §1.2 문단 — 진행 중
+- [x] perf multi 정책 복원(§1.2 모델 + WRITABLE drain) + before/after 표 — C 러너 SEND 토큰 모델·REQREP 토큰 모델(`e5770ec569`, `0f9c329764`), ws/wss REQREP 제출 턴 수정 `21746768ca`(D-B89); Core 0.17.0 vs 0.15.1 판정 D-B87/D-B88(`doc/plan/core-0.17.0-dontwait-contract-and-perf-plan-b.ko.md` §2)
+- [x] REQUEST 계약 통일(D-B85) — 8 bindings 모두 커밋(위 해시), Core `7d8205a028`, 스펙 `ea934d0e97`
+- [ ] bindings 0.17.0 성능 계획 실행(C++ 진행 중, 이후 .NET → Java → Node → Go → Rust → Python) — `doc/perf/perf/bindings-0.17.0/bindings-library-performance-improvement-plan-core-0.17.0.ko.md` §9·§11. A에는 영향 없음(공개 API 불변, hot-path만)
 
 ## 6. 바인딩 리뷰 결과 (2026-09-04 저녁, 각 바인딩 독립 리뷰 job)
 
