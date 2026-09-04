@@ -1092,3 +1092,11 @@ server·client를 C 러너 의미에 맞춤)은 별도 트랙·별도 report로 
 1. DD 1024B mean +35%(계약 B의 거절→WRITABLE 왕복 잔여): (c) 현 상태 유지. (a)/(b)는 공개 계약 변경이라 사용자 결정 없이는 하지 않는다. 꼬리 latency(p95/p99)는 0.15.1 수준으로 회복됨(`89ed9be356`).
 2. 4096B 포화 구간 p95/p99 +30%(auto-HWM 예산·I/O batching): Core 별도 과제로 조사 job(sol high) — 러너·바인딩과 무관한 Core 정책이므로 bindings 계획 뒤 슬롯이 나면 착수.
 3. PUBSUB 메모리 손상 1회: SUB session use-after-free로 확정·수정 완료(`29add0ac81`).
+
+## D-B93 (2026-09-05 08:45, 머신 B) D-087 수정 — Java 네이티브 라이브러리를 콘텐츠 해시 캐시 경로에서 로드
+`LibraryLoader.loadFromResources()`가 JVM마다 `zlink-native-*` temp 디렉터리에 84 MB를 복사하고 `deleteOnExit`에만 의존하던 것을
+`${ZLINK_JAVA_NATIVE_CACHE:-$HOME/.cache/zlink/native}/<sha256>/<libFile>`로 바꿈(스트리밍 SHA-256, 같은 크기 파일 존재 시 복사 생략,
+`<libFile>.<pid>.tmp` + ATOMIC_MOVE로 동시 JVM 경합 처리, 크기 불일치 시 재추출, 캐시 불가 시 기존 temp 방식 fallback, Windows deps도 같은
+디렉터리). `ZLINK_LIBRARY_PATH` 우선순위·`LOADED_LIBRARY_PATHS` 의미 유지. spec(`bindings/doc/spec/java`)에는 로더 경로 계약 없음(파일 목록만) → spec gap 없음.
+회귀 테스트 `LibraryLoaderTest`(캐시 재사용·temp 증가 0 / 손상 시 재추출 / 캐시 불가 시 fallback 로드 — 별도 JVM probe). gate(JDK 22): `tests/run_tests.sh`
+117/117, samples 7/7, `git diff --check`. job 요약 `java-d087-summary.md`. 커밋 `37af8073a7`(A는 이 커밋 뒤 로컬 패키지 재빌드).
