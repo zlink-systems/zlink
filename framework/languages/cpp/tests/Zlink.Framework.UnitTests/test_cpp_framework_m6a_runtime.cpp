@@ -1502,7 +1502,9 @@ void verify_client_server_plain_hello_is_rejected ()
     zlink::dealer_socket_t dealer (*context);
     dealer.set_routing_id (zlink::routing_id_t::from (bytes ("client-p")));
     dealer.connect (server.endpoint ());
-    zlink::framework::detail::backend::raw_dealer_port_t port (dealer);
+    zlink::poller_t dealer_poller;
+    zlink::framework::detail::backend::raw_dealer_port_t port (
+      dealer, nullptr, &dealer_poller);
     const zlink::framework::detail::backend::raw_message_t hello_message{
       protocol::encode_client_server_client_admission (
         protocol::command::hello,
@@ -1511,16 +1513,17 @@ void verify_client_server_plain_hello_is_rejected ()
          16u * 1024u * 1024u})};
     const auto send_deadline = std::chrono::steady_clock::now () + 5s;
     bool sent = false;
-    while (!sent && std::chrono::steady_clock::now () < send_deadline) {
-        try {
-            sent = await_task (port.send (hello_message));
-        }
-        catch (const std::exception &) {
-            /* The physical connection may not be ready yet. */
-        }
-        if (!sent)
-            std::this_thread::sleep_for (10ms);
+    auto send_task = port.send (hello_message);
+    while (!send_task.await_ready ()
+           && std::chrono::steady_clock::now () < send_deadline) {
+        /* The binding's DONTWAIT send keeps an unready-target wait token.
+         * Its public poller owner must drain WRITABLE before the awaitable
+         * can resubmit and settle. */
+        zlink::poll_event_t event;
+        (void) dealer_poller.wait (&event, 1, 10ms);
     }
+    if (send_task.await_ready ())
+        sent = send_task.result ().value ();
     assert (sent);
 
     const auto deadline = std::chrono::steady_clock::now () + 5s;
