@@ -1,0 +1,54 @@
+# Job: dotnet — cross-language `.NET client -> C++ spot-route host` ends `Unavailable` (origin=unspecified)
+
+You are a codex sub-agent under a Claude supervisor. One cause per job, 1.5 h cap. Read `AGENTS.md`
+(root) §2/§3/§4.1, `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`. Never modify
+`core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`; never lower
+an assertion; do not commit.
+
+## Established facts
+- Evidence: `doc/plan/c016-worklog/c-cross-language-e2e-2-summary.md` (§Cross-language) and preserved
+  run dirs `/dev/shm/zlink-tmp-dotnet/tmp.l2zVAJPTeF`, `/dev/shm/zlink-tmp-dotnet/tmp.FYuDiwbtVL`, log
+  `zlink-work/c016/logs/c-e2e-2-06-cpp-cross-all-rerun.log`.
+- The all-stage runner `framework/languages/cpp/cross-language/run_cross_language_smoke.sh` with
+  `ZLINK_CPP_BUILD_DIR=/home/hep7/project/zlink/framework/languages/cpp/build/linux-ninja-c-e2e`
+  (0.17.0 C++ host, freshly built): C++↔.NET channel request both ways, fanout both ways, stream both
+  ways PASS; **C++ client → .NET spot-route host PASS** (reply/not_found/rejected events); then
+  **.NET client → C++ spot-route host FAIL**: the .NET TestHost
+  (`framework/languages/dotnet/cross-language/Zlink.Framework.TestHost/Program.cs:913`) retried for 15 s
+  with `Unavailable`/`DeadlineExceeded` and wrote `spot-route-error|kind=unavailable|origin=unspecified`
+  (`Program.cs:919-932`); the C++ host was ready but `cpp-spotroute-host.events` stayed empty (no
+  request reached it). No BACKPRESSURED/EAGAIN or unsettled awaitable was recorded. The route call goes
+  through `ZLinkRouteClient.cs:403 EnsureKnownRouteMeshPeer` before the binding submit; the binding's
+  async REQUEST DONTWAIT submit site is `bindings/dotnet/src/Zlink/Runtime/Messaging/CompletionOwner.cs:164`.
+- Core main includes D-B85 (`7d8205a028`): a DONTWAIT REQUEST can return BACKPRESSURED + wait token
+  (SEND rules, ROUTER no-route → NOT_CONNECTED). The .NET binding's REQUEST port for that is NOT done
+  (B's job). If you prove the failure is a BACKPRESSURED/EAGAIN request that the binding does not
+  resubmit, STOP and report it as the D-B85 dependency with exact evidence — do not work around it.
+- The dotnet framework tree may contain an uncommitted fix from the previous job
+  (`bucketB-dotnet-handover-resend`, see its summary if present) — keep it.
+- dotnet env block (never `--artifacts-path`, never `ulimit -v`; unset any directory-valued
+  `ZLINK_LIBRARY_PATH` before running Java peers):
+  `export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}`
+- Reproduce with the single stage if the runner supports a stage selector
+  (`ZLINK_CPP_CROSS_LANGUAGE_STAGE=...` — read the runner's stage list); keep run dirs
+  (`ZLINK_CPP_CROSS_KEEP_RUN_DIR=1`). Turn on the .NET message-flow file listener
+  (`<EventFilePath>.flow`, root AGENTS §4.1) and `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1` (TestHost is a
+  console process, so stderr is visible) before adding any temporary probe.
+
+## What to do
+1. Find where `Unavailable` originates: peer admission/known-peer check (`EnsureKnownRouteMeshPeer`),
+   location/spot-route resolution against the C++ host's descriptor, or the native request path.
+   Compare with the passing `C++ → .NET` direction and with the passing `.NET → Java/Node` spot-route
+   directions (java-cross selector 4/4) — what differs for a C++ host target (descriptor fields,
+   capability/object_kind naming, security identity, mesh name, RID encoding)?
+2. Decide the owner (dotnet framework vs cpp host vs runner) and match the spec
+   (`framework/doc/framework/common/spec/server/` spot messaging / location chapters, wire protocol
+   schema `framework/runtime/protocol/service-wire-v1.schema.json`). If the cpp host is at fault, STOP
+   and report (another job owns cpp).
+3. Fix minimally in `framework/languages/dotnet/**` (framework or TestHost), add a regression test
+   where the unit suite can pin it, remove probes, re-run the stage 3× green and then the all-stage
+   runner once (report where it stops next, if anywhere).
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-dotnet-cross-spotroute-summary.md`: origin of `Unavailable` with
+`file:line` and trace, classification, fix + spec clause, regression test, commands + results, BLOCKERS.

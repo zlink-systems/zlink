@@ -1,0 +1,35 @@
+# Job: node samples — ZoneWorld `vite` dependency (env) and SupportChat browser stream timeout
+
+You are a codex sub-agent under a Claude supervisor. Two items, do them in order; 1.5 h cap. Read
+`AGENTS.md` (root) §2/§3/§4.1. Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, `framework/languages/{cpp,dotnet,java}/**`; never lower
+an assertion; do not commit.
+
+## Facts (`doc/plan/c016-worklog/gate-samples-java-node-summary.md`)
+- Node samples 5/7 on Core main. Failing:
+  1. **ZoneWorld (D)**: `ERR_MODULE_NOT_FOUND: Cannot find package 'vite'` at the shared-browser build
+     step (`samples/ZoneWorld/Runner/sample-runner.mjs:716,768` → `framework/languages/shared_sample/zoneworld/client/vite.config.ts`).
+     Find how the repo expects that client's dependencies to be installed (its own package.json /
+     lockfile / a runner install step / a documented command in the sample README or
+     `framework/doc/framework/node/guide/server/14-samples*.md` — read only) and perform the documented
+     install. If no documented route exists, do the minimal `npm install` in that client directory and
+     record it as an environment step in the summary (do not edit package manifests).
+  2. **SupportChat (B)**: `SupportChat.Ts browser scenario failed: ZlinkStreamException: Wait for stream
+     message timed out.` after Chromium launched (`scripts/browser-e2e/run-sample.mjs:63`,
+     `samples/run-sample.mjs:147`). Earlier tonight the node cross-language smoke's browser stream
+     stages passed (`c-cross-language-e2e-2-summary.md`), so the stream connector itself works in
+     Chromium; find which stream message the SupportChat scenario waits for and why it never arrives
+     (server side not sending, wrong topic/session, or a timeout budget). Use existing tracing first
+     (node OTel flow exporter, `ZLINK_DEBUG_FRAMEWORK_RELOCATION=1`). Note Core main includes D-B85 (a
+     DONTWAIT REQUEST may return BACKPRESSURED + token; the node binding's REQUEST port for that is NOT
+     done yet, B's job) — if the stall is a request whose submit returned BACKPRESSURED/EAGAIN and the
+     binding never resubmits, STOP and classify as (E) with the exact site.
+- Env: `TMPDIR=/dev/shm/zlink-tmp-node`, `flock -w7200 /tmp/zlink-node-gate.lock`, Docker OK,
+  Playwright Chromium in `~/.cache/ms-playwright` and `framework/languages/node/.cache/ms-playwright`.
+  Do not rebuild Core or local packages; do not `npm install` at the framework root again.
+
+## Deliverable
+`doc/plan/c016-worklog/gate-samples-node-fix-summary.md`: the ZoneWorld install route used and the
+re-run result; SupportChat root cause with `file:line`/trace, classification, minimal fix in
+`framework/languages/node/**` (framework or sample harness) + regression, re-run 2×; final 7-sample
+table; BLOCKERS.

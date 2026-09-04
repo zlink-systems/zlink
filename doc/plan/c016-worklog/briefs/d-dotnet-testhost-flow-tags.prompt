@@ -1,0 +1,31 @@
+# Job: dotnet TestHost — node cross-language smoke fails because the .NET message-flow file listener reads Activity tags that are null
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1 h cap. Read `AGENTS.md` (root)
+§2/§4.1 and `framework/AGENTS.md` 디버깅 절. Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`; do not commit.
+
+## Established facts
+- `framework/languages/node/cross-language/run_cross_language_smoke.sh` (log
+  `zlink-work/c016/logs/c-e2e-2-07-node-cross.log`): the application path completed
+  (`dispatch:dotnet-to-node, reply:sent`), but `node_dotnet_smoke.js:895-906 assertFlowLog()` failed —
+  all four `.flow` lines were `packet=<null> flow=<null> origin=<null>`. The .NET TestHost listener
+  `framework/languages/dotnet/cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs:36-41`
+  reads Activity tags `packet_name`, `flow_id`, `flow_origin`.
+- The spec for message-flow tracing is
+  `framework/doc/framework/common/spec/server/06-observability/03-message-flow-tracing.ko.md` and
+  `04-flow-correlation.ko.md` (attribute names are contract). Determine whether the .NET runtime's
+  Activity attributes were renamed (find where `Zlink.Framework` sets flow tags — grep `flow_id`,
+  `packet_name`, `flow_origin`, `ActivitySource`) or the TestHost listener uses stale names, or the
+  listener is attached to the wrong Activity level (`Normal`/`Detailed`).
+- Owner is `framework/languages/dotnet/**` (runtime tags must match the spec; the TestHost must read
+  the spec names). If the runtime emits names that differ from the spec, STOP and report the exact
+  spec clause vs. emitted name — that is a spec-conformance finding for the supervisor.
+- dotnet env block as in the other dotnet briefs (never `--artifacts-path`, never `ulimit -v`).
+  Reproduce with the node smoke (needs Docker, Playwright — both available).
+
+## What to do
+1. Diff the emitted Activity tag names against the spec and the listener; fix the wrong side inside
+   `framework/languages/dotnet/**` minimally; add/adjust a unit or contract test that pins the tag
+   names to the spec; re-run the node cross-language smoke 2× green.
+2. Deliverable: `doc/plan/c016-worklog/d-dotnet-testhost-flow-tags-summary.md` — cause with
+   `file:line`, spec clause, fix, test, commands + results, BLOCKERS.

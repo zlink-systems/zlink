@@ -1,0 +1,41 @@
+# Job: run the 7 common samples for java and node (plan §D) and classify every failure
+
+You are a codex sub-agent under a Claude supervisor. Execution/classification job. Read `AGENTS.md`
+(root) §2/§4. Do not modify source, tests, or anything under `core/**`, `bindings/**`, any
+`doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, `framework/languages/{cpp,dotnet}/**`.
+Another job is editing `framework/languages/dotnet/**` — never build or run the .NET tree.
+
+## Environment (prepared — do NOT rebuild Core or local packages)
+- Core `core/build-dev` (main incl. D-B85), local packages under `.artifacts/wsl/` (fresh),
+  Docker Desktop WSL integration on (`redis:7.2-alpine` pulled), redis-server on 127.0.0.1:6379,
+  Playwright Chromium installed both in `~/.cache/ms-playwright` and the node project cache
+  `framework/languages/node/.cache/ms-playwright` (v1234 headless shell). Node `node_modules` installed
+  and `npm run build` done. Java Host `installDist` done earlier.
+- `TMPDIR=/dev/shm/zlink-tmp-<lang>` (mkdir -p). Locks: `flock -w7200 /tmp/zlink-jvm-gate.lock`,
+  `flock -w7200 /tmp/zlink-node-gate.lock`. Java: do NOT export a directory-valued
+  `ZLINK_LIBRARY_PATH` (Java interprets it as a file; caused UnsatisfiedLinkError in a prior run).
+- The cpp samples already passed 7/7 with `ZLINK_CPP_BUILD_DIR=/home/hep7/project/zlink/framework/languages/cpp/build/linux-ninja-c-e2e`
+  (`doc/plan/c016-worklog/c-cross-language-e2e-2-summary.md`) — do not re-run cpp.
+
+## What to run
+1. **java**: find the sample runner (`framework/languages/java/samples/` — `run_samples.sh` or the
+   per-sample `run_sample.sh` via `runner-common.sh`) and run all 7 common samples (TicTacToe, Bingo,
+   DeliveryDispatch, SupportChat, GameQuest, ShoppingMall, ZoneWorld). Record per-sample exit code and
+   duration. Known: an earlier run stopped with play-a `TEARDOWN_FAILED` — if it recurs, capture the
+   exact teardown error and whether the sample's functional assertions had already passed.
+2. **node**: `framework/languages/node/samples/` runner (`run-sample.mjs` / `run_samples.sh`); run all
+   7. Known items: SupportChat browser harness (`scripts/browser-e2e/connector-driver.mjs:34`
+   chromium launch) — Chromium is now installed, so verify whether it passes; ZoneWorld needs
+   `samples/ZoneWorld/dist` built — use the sample's own build step if the runner does not.
+3. If a sample runner needs `docker` and the socket is denied, report exactly (do not chmod).
+
+## Classify every failure: (A) DONTWAIT/backpressure, (B) terminal/error classification,
+(C) known pre-existing (name the prior evidence file:line), (D) environment/runner,
+(E) D-B85 binding-port dependency (REQUEST submit BACKPRESSURED/EAGAIN or an awaitable that never
+settles — capture the exact site; do not patch). Verify (C) by exact assertion, not counts.
+
+## Deliverable
+`doc/plan/c016-worklog/gate-samples-java-node-summary.md`: per language a 7-row table (sample,
+result, exit, duration), every failure bucketed with the first failing assertion/log excerpt and
+`file:line`, exact commands, logs under `zlink-work/c016/logs/gate-samples-<lang>-*.log`, BLOCKERS.
+Do not commit.
