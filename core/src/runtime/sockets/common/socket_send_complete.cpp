@@ -233,14 +233,17 @@ int zlink::socket_base_t::register_send_writable_wait (
     zlink_assert (reservation);
 
     // Pair the writer's linked wait record with every credit/attach wake: a
-    // wake that ran first is observed by the readiness recheck, while a wake
-    // that runs later finds the fully linked token in the queue-owned FIFO.
+    // wake that already ran is observed by the readiness recheck, while a
+    // queued or later wake finds the fully linked token in the queue-owned
+    // FIFO. Do not synchronously drain the mailbox here. A queued wake already
+    // owns a mailbox notification, and draining it once per HWM refusal turns
+    // credit recovery across many sockets into a serialized submit-side loop.
     std::atomic_thread_fence (std::memory_order_seq_cst);
     bool ready = false;
     {
         socket_public_send_scope_t readiness_scope (
           lifecycle_coordinator (), true);
-        if (readiness_scope.acquired () && process_submit_commands () == 0)
+        if (readiness_scope.acquired ())
             ready = xsend_writable_target_ready (
               routed ? target_rid_or_null_ : NULL);
     }
