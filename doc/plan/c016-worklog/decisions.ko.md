@@ -819,3 +819,24 @@ cancel dispatch/work→detach/release)로 callback settle 후 instance 해제. Z
 per-language G4도 각 framework에 있을 수 있음(cpp처럼). **Core 후속**: physical disconnect가 pending request 즉시 settle 안 함
 (G4는 deadline 대기 후 framework서 Unavailable 분류; 즉시 settlement는 Core 소유). **감시**: ZoneNode/Bingo play-a SIGSEGV
 during cleanup(non-fatal, PASS이나 은닉 크래시).
+
+## D-084 (2026-09-04 finding, 미수정) .NET Gateway state-lane 결함 — 크로스랭귀지 ZoneWorld job(usage-limit 중단) 산출 진단
+codex sol ultra가 .NET ZoneWorld G4 재현 중 heap-dump로 확정한 **.NET 고유 framework 버그**(cpp ZoneWorld 패턴과 별개).
+**증상**: proxy 8-byte parser 수정 후에도 G4 fresh probe가 첫 응답 뒤 간헐 `Heartbeat timed out` FAIL.
+**근본원인(heap 확정)**: 종료된 `g4-crash-*` binding으로 들어온 remote push 27개가 `ZLinkBackendStreamSocketWrapper.Send`의
+state-lane **동기 대기**에 적체 → 같은 state lane에서 fresh session의 heartbeat pong도 막힘 → session serial queue의 다음
+application request 대기(정지). `CleanupAsync`가 disconnect notification 완료 **전에** binding을 유지하는 순서 결함과 연결됨.
+**증거**: `zlink-work/c016/zoneworld-xlang-evidence/dotnet-g4-gateway-dump`, `dotnet-g4-loop-hang-1.dmp`.
+**분류**: cross-language ZoneWorld 포팅과 분리된 별도 트랙(.NET 전용). 크로스랭귀지 ZoneWorld WIP는 patch+stash로 대피
+(`zlink-work/c016/zoneworld-xlang-dotnet-wip.patch`, stash@{0}), codex 계정 리셋 후 cpp-대칭 최소 변경으로 재스코프해 재개.
+**연관**: state-lane 동기 Send가 종료 binding에서 무한 대기하는 건 [[api-intuitive-readiness]] 정신과도 배치 — 후속 판정 대상.
+
+## D-085 (2026-09-04, 사용자 지시 "바로 커밋 푸시해") 크로스랭귀지 ZoneWorld v2 포팅 완료·검증·커밋
+codex sol ultra(계정 리셋 후 재실행, ~1h50m). cpp golden `2f1de0b56d` 3부를 .NET/Java/Node에 **cpp-대칭 최소 포팅**. Claude가
+전 언어 diff 증분 리뷰 + 종료-검증(protected 경로 미접촉·whitespace clean·매핑 확인). **8파일 +147/−28**:
+- **.NET(3)**: proxy 8B-sequence 파서 + `ZLinkManagedMeshNode.cs`(transfer-route: `NormalizeActorJoinRequestFailure`, `HasAdmittedPeer`, edge-less ConnectionReady skip) + `ZLinkActorRemoteJoiner.cs`(wire: DeadlineExceeded+미admitted→Unavailable, 기존 `MatchesAdmittedNodeLifecycle` 재사용).
+- **Java(3)**: proxy + `ZLinkActorSpotJoinCall.java`(G4 매핑, transfer-route는 이미 삭제돼 wire만) + `ZLinkJavaRawMeshNode.java`(edge-less ConnectionReady의 cleanup/close 제거 = cpp "무시" 정렬). `NotConnected`→`ZLinkFrameworkErrorKind.UNAVAILABLE`.
+- **Node(2)**: proxy + `actor-local-native-join.ts`(`remoteActorJoinFailureException`: DeadlineExceeded+미admitted→`RouteNotConnected`, inline has-admitted-peer). part 3는 node 이미 `isConnectionReadyEdge` 보유로 불필요.
+**검증(권위=별도 프로세스+redis ZoneWorld 시나리오)**: .NET B8 3/3·G4 join 3/3(fresh probe 0/3=**D-084 .NET 전용**, 추격 안 함) / **Java B8 3/3·G4 완전 3/3**(fresh-owner proof) / **Node B8 3/3·G4 완전 3/3**(16 fresh actor). framework 유닛/contract는 **before=after 동일**(신규 회귀 0): .NET contract 73/4·unit 환경(STREAM bind/StartAsync 포트경합) pre-existing, Java M6A 2·doc-regression 1 pre-existing, Node matrix 동일.
+**D-084 교차 실증**: .NET만 fresh probe 실패, Java·Node 동일 경로 완전 통과 → **D-084는 Core/크로스언어 아닌 .NET Gateway state-lane 전용 확정**.
+**별도 결함(추격 안 함, 기록만)**: Node `sample-regression`(browser SupportChat 자가검증) 1건 pre-existing(before=after), ZoneWorld 무관. **후속 nit**: node `peer.state===3` 매직넘버(ADMITTED 상수화 권장). **규율**: 1차 job의 7파일 sprawl 재발 없음, codex가 포트오염 자가규명·part3 spec-correctness(06-monitoring + node/java 선례) 확인. 요약 `zlink-work/c016/zoneworld-xlang-v2-summary.md`.

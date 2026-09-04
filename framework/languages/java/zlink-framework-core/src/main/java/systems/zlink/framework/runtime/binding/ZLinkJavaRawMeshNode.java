@@ -125,8 +125,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     private static final Logger LOGGER =
         Logger.getLogger(ZLinkJavaRawMeshNode.class.getName());
     private static final int PREFIX_BYTES = 5;
-    // Core sets this flag only on the CONNECTION_READY edge. A paired
-    // CONNECTION_READY event without it is the physical close snapshot.
+    // Core sets this flag only on the CONNECTION_READY edge. An event without
+    // it is a count snapshot and cannot admit a physical candidate.
     private static final int CONNECTION_READY_EDGE_FLAG = 1;
     private static final int MAX_INFRASTRUCTURE_CONTROL_PARTS = 64;
     private static final long MAX_INFRASTRUCTURE_CONTROL_BYTES = 256L * 1024;
@@ -6754,8 +6754,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             if (event.event() == MonitorEventType.CONNECTION_READY) {
                 RoutingId peerRid = peer.orElseThrow();
                 if (!isConnectionReadyEdge(event)) {
-                    cleanupTerminalTransport(event, peerRid);
-                    markPeerIntentsClosed(event, peerRid);
                     continue;
                 }
                 markPeerIntentsActive(event, peerRid);

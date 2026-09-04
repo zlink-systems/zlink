@@ -11,7 +11,7 @@ import type {
   ZLinkActorJoinOperationId,
   ZLinkMessageSerializer,
 } from '../../contracts';
-import { ZLinkSpotKind } from '../../contracts';
+import { ZLinkFrameworkErrorKind, ZLinkSpotKind } from '../../contracts';
 import type { ZLinkActorJoinRuntimeResult } from './actor-runtime-contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type {
@@ -419,7 +419,9 @@ export class ZLinkLocalNativeActorJoin {
       //  (spec 32-framework-error-model:83-118); an OK terminal with no join
       //  control is a protocol violation.
       throw admission.terminalResult !== 0 || admission.failureErrno !== 0
-        ? wireReplyFailureException(
+        ? remoteActorJoinFailureException(
+            node,
+            target,
             admission.terminalResult,
             admission.failureErrno,
             message
@@ -445,7 +447,9 @@ export class ZLinkLocalNativeActorJoin {
     }
     if (admission.terminalResult !== 0 || admission.failureErrno !== 0) {
       closeMeshCompletion(admission);
-      throw wireReplyFailureException(
+      throw remoteActorJoinFailureException(
+        node,
+        target,
         admission.terminalResult,
         admission.failureErrno,
         `Actor admission failed for '${actor.context.actorId}' with result '${admission.terminalResult}' and errno '${admission.failureErrno}'.`
@@ -634,6 +638,36 @@ function canonicalHandoffRelocationId(handoffId: string): string {
   }
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}`
     + `-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function remoteActorJoinFailureException(
+  node: ZLinkBackendMeshNode,
+  target: ZLinkSpotRouteTarget,
+  terminalResult: number,
+  failureErrno: number,
+  message: string
+) {
+  const failure = wireReplyFailureException(terminalResult, failureErrno, message);
+  const targetGeneration = target.targetNodeGeneration;
+  if (
+    failure.kind === ZLinkFrameworkErrorKind.DeadlineExceeded
+    && targetGeneration !== undefined
+    && targetGeneration !== 0n
+    && !node.peers().some((peer) =>
+      peer.state === 3
+      && peer.routingId !== null
+      && routingIdsEqual(
+        peer.routingId,
+        target.targetNodeRid
+      )
+      && peer.lifecycleGeneration === targetGeneration)
+  ) {
+    return createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+      'wire Actor join target RouteMesh peer became unavailable'
+    );
+  }
+  return failure;
 }
 
 function runtimeActorMeshName(

@@ -524,18 +524,36 @@ internal sealed class ZLinkActorRemoteJoiner(
                             + $"node_gen={snapshot.NodeGeneration} "
                             + $"authority_gen={snapshot.AuthorityOwnerGeneration} "
                             + $"lease_gen={snapshot.OwnerLeaseGeneration}");
-                        var replyParts = await runtime.RequestToSpotViaRouterChannelAsync(
-                                snapshot.RouterChannelId,
+                        IReadOnlyList<Message> replyParts;
+                        try
+                        {
+                            replyParts = await runtime.RequestToSpotViaRouterChannelAsync(
+                                    snapshot.RouterChannelId,
+                                    snapshot.NodeRid,
+                                    snapshot.SpotId,
+                                    (ulong)snapshot.Generation,
+                                    snapshot.NodeGeneration,
+                                    snapshot.AuthorityOwnerGeneration,
+                                    snapshot.OwnerLeaseGeneration,
+                                    admissionParts,
+                                    requestTimeout,
+                                    token)
+                                .ConfigureAwait(false);
+                        }
+                        catch (ZLinkFrameworkException error) when (
+                            error.Kind == ZLinkFrameworkErrorKind.DeadlineExceeded
+                            && snapshot.NodeGeneration != 0
+                            && !ZLinkFrameworkRuntime.MatchesAdmittedNodeLifecycle(
+                                sourceNode.Node.MeshStatus(),
+                                sourceNode.Node.MeshPeers(),
                                 snapshot.NodeRid,
-                                snapshot.SpotId,
-                                (ulong)snapshot.Generation,
-                                snapshot.NodeGeneration,
-                                snapshot.AuthorityOwnerGeneration,
-                                snapshot.OwnerLeaseGeneration,
-                                admissionParts,
-                                requestTimeout,
-                                token)
-                            .ConfigureAwait(false);
+                                snapshot.NodeGeneration))
+                        {
+                            throw new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.Unavailable,
+                                "Actor transfer route target RouteMesh peer became unavailable.",
+                                innerException: error);
+                        }
                         ZLinkFrameworkDebugLog.SpotDiscovery(
                             $"admit_reply_received actor={actor.Context.ActorId}");
                         var reply = ZLinkRemoteActorJoinPackets.DecodeAdmissionReplyAndDispose(

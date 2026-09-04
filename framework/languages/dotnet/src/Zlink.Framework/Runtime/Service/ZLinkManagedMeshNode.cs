@@ -2320,6 +2320,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         operation.ActorJoinOrigin = new ActorJoinOrigin(
             actor,
             request.TargetNodeRid,
+            request.TargetNodeGeneration,
             request.TargetSpotId,
             request.TargetSpotGeneration,
             request.ContentType);
@@ -3397,6 +3398,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             operation.ActorJoinOrigin = new ActorJoinOrigin(
                 actorRef,
                 targetNodeRid,
+                targetAuthority.TargetNodeGeneration,
                 targetSpotId,
                 targetSpotGeneration,
                 ZLinkEnvelopeCodec.DefaultContentType);
@@ -8730,6 +8732,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             value.TransportLane);
         if (value.Event == MonitorEventType.ConnectionReady)
         {
+            // Core also publishes connection-ready count snapshots with the
+            // edge flag clear. Only a rising edge may admit a physical peer.
+            if ((value.Flags & MonitorEventFlags.ConnectionReadyEdge) == 0)
+                return;
             if (routingId.IsEmpty || !transportPair.IsValid)
                 return;
             RunState(() =>
@@ -9847,7 +9853,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             {
                 CompleteManagedOperation(
                     pending,
-                    result,
+                    NormalizeActorJoinRequestFailure(pending, result),
                     0,
                     Array.Empty<Message>());
                 return;
@@ -10590,16 +10596,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         });
         if (removed && pending.TryComplete())
         {
+            var result = NormalizeActorJoinRequestFailure(
+                pending,
+                RequestResult.TimedOut);
             if (pending.AwaitedCompletion is { } awaitedCompletion)
                 awaitedCompletion.TrySetResult(
                     new ManagedRequestCompletion(
-                        RequestResult.TimedOut,
+                        result,
                         Array.Empty<Message>()));
             else
                 EnqueueCompletion(
                     pending.OperationId,
                     pending.Kind,
-                    (int)RequestResult.TimedOut,
+                    (int)result,
                     0,
                     Array.Empty<Message>());
         }
@@ -11578,6 +11587,31 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 : 0);
     }
 
+    private RequestResult NormalizeActorJoinRequestFailure(
+        PendingOperation pending,
+        RequestResult result)
+    {
+        if (result != RequestResult.TimedOut
+            || pending.ActorJoinOrigin is not { } origin
+            || HasAdmittedPeer(
+                origin.TargetNodeRid,
+                origin.TargetNodeGeneration))
+            return result;
+
+        return RequestResult.NotConnected;
+    }
+
+    private bool HasAdmittedPeer(
+        RoutingId peerRid,
+        ulong lifecycleGeneration) =>
+        lifecycleGeneration != 0
+        && RunState(() =>
+            _peersByRid.TryGetValue(peerRid, out var peer)
+            && peer.Admitted
+            && peer.State == MeshPeerState.Admitted
+            && peer.Admission is not null
+            && peer.LifecycleGeneration == lifecycleGeneration);
+
     private void RemovePeer(Peer peer, bool disconnect)
     {
         var wasAdmitted = peer.Admitted;
@@ -12044,6 +12078,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly record struct ActorJoinOrigin(
         ActorRef Actor,
         RoutingId TargetNodeRid,
+        ulong TargetNodeGeneration,
         string TargetSpotId,
         ulong TargetSpotGeneration,
         string ReplyContentType);

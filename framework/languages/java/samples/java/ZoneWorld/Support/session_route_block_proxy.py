@@ -8,7 +8,9 @@ import socketserver
 import threading
 
 ZMP_HEADER_SIZE = 8
+ZMP_REQUEST_SEQUENCE_SIZE = 8
 ZMP_FLAG_MORE = 0x01
+ZMP_REQUEST_REPLY_KINDS = frozenset((0x01, 0x02, 0x03))
 WIRE_MAGIC = bytes((90, 77))
 SESSION_RELOCATION_ROUTE = 44
 
@@ -19,11 +21,15 @@ class FrameParser:
         while len(self.buffer) >= ZMP_HEADER_SIZE:
             if self.buffer[0] != 0x5A or self.buffer[1] != 0x01:
                 raise ValueError("unexpected ZMP frame header")
-            flags = self.buffer[2]; size = int.from_bytes(self.buffer[4:8], "big")
-            total = ZMP_HEADER_SIZE + size
+            flags = self.buffer[2]; kind = self.buffer[3]
+            size = int.from_bytes(self.buffer[4:8], "big")
+            header_size = ZMP_HEADER_SIZE
+            if kind in ZMP_REQUEST_REPLY_KINDS:
+                header_size += ZMP_REQUEST_SEQUENCE_SIZE
+            total = header_size + size
             if len(self.buffer) < total: break
             raw = bytes(self.buffer[:total]); del self.buffer[:total]
-            frames.append((raw, flags, raw[ZMP_HEADER_SIZE:]))
+            frames.append((raw, flags, raw[header_size:]))
         return frames
 
 def is_command_44(body):
