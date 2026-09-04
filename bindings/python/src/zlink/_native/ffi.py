@@ -24,6 +24,7 @@ ZLINK_SEND_ADMITTED = 0
 ZLINK_SEND_TERMINAL = 202
 ZLINK_COMPLETION_SEND = 1
 ZLINK_COMPLETION_REQUEST = 2
+ZLINK_COMPLETION_WRITABLE = 3
 
 
 class ZlinkCompletion(ctypes.Structure):
@@ -180,7 +181,7 @@ ZLINK_DONTWAIT = 1
 
 
 class _Lib:
-    """Own the Core 0.16.0 raw symbol and layout declaration used by Python."""
+    """Own the Core 0.17.0 raw symbol and layout declaration used by Python."""
 
     def __init__(self):
         self.lib = load_native_library(self._bind_loaded)

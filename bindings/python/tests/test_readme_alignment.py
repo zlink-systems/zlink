@@ -18,6 +18,8 @@ class ReadmeAlignmentTests(unittest.TestCase):
         self.assertIn("ref_count", readme)
         self.assertIn("StreamPacket", readme)
         self.assertIn("ReplyToken", readme)
+        self.assertIn("CompletionKind", readme)
+        self.assertIn("WRITABLE", readme)
         self.assertIn("POLLCOMPLETION", readme)
         self.assertIn("pull-only", readme)
         self.assertIn("receive_subscription_event", readme)
@@ -34,6 +36,11 @@ class ReadmeAlignmentTests(unittest.TestCase):
         self.assertNotIn("RegistryQueryClient", readme)
         self.assertIn("XPubSocket", readme)
         self.assertIn("tests/run_tests.sh", readme)
+
+        pending_start = readme.index("ZLINK_OPT_PENDING_MAX_MSGS")
+        pending_contract = readme[pending_start : pending_start + 320]
+        self.assertIn("ZLINK_OPT_PENDING_MAX_BYTES", pending_contract)
+        self.assertIn("REQUEST-only", pending_contract)
 
     def test_test_runner_script_exists_in_tests_directory(self):
         script = ROOT / "tests" / "run_tests.sh"

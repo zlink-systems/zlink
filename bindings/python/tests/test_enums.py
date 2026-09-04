@@ -32,6 +32,16 @@ class EnumValueTests(unittest.TestCase):
         self.assertEqual(int(zlink.SubmitResult.BACKPRESSURED), 1)
         self.assertEqual(int(zlink.SubmitResult.INTERNAL_ERROR), 12)
 
+    def test_completion_kind_values(self):
+        expected = {
+            zlink.CompletionKind.SEND: 1,
+            zlink.CompletionKind.REQUEST: 2,
+            zlink.CompletionKind.WRITABLE: 3,
+        }
+        for kind, value in expected.items():
+            self.assertEqual(int(kind), value)
+            self.assertIsInstance(kind, int)
+
     def test_request_recv_handler_close_bind_connect_config_results(self):
         self.assertEqual(int(zlink.RequestResult.OK), 0)
         self.assertEqual(int(zlink.RequestResult.PROTOCOL_ERROR), 104)

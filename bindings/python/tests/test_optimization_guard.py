@@ -59,6 +59,14 @@ def test_raw_hot_path_keeps_gil_release_and_part_failure_cleanup():
     assert "for (Py_ssize_t j = i; j < prepared.count; ++j)" in native_text
 
 
+def test_async_completion_runtime_uses_no_thread_or_timer_polling():
+    completion_text = (
+        SRC / "_runtime" / "messaging" / "routed_async.py"
+    ).read_text(encoding="utf-8")
+    for forbidden in ("threading.Thread", "asyncio.sleep", "call_later"):
+        assert forbidden not in completion_text, forbidden
+
+
 def test_native_send_builders_do_not_allocate_factory_closures():
     socket_text = (
         SRC / "_runtime" / "sockets" / "socket_base_impl.py"

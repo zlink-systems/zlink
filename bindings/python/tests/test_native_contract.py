@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "zlink"
 
 
-def test_ffi_layouts_are_the_core_0_16_layouts():
+def test_ffi_layouts_are_the_core_0_17_layouts():
     assert (ctypes.sizeof(ZlinkMsg), ctypes.alignment(ZlinkMsg)) == (64, 8)
     assert (ctypes.sizeof(ZlinkRoutingId), ctypes.alignment(ZlinkRoutingId)) == (256, 1)
     assert (ctypes.sizeof(ZlinkCompletion), ctypes.alignment(ZlinkCompletion)) == (312, 8)

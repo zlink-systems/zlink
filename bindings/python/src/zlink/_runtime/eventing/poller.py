@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
 
 import ctypes
+import time
 
 from ...contracts.errors.codes import CloseResult, ConfigResult
 from ...contracts.errors.errors import CloseError, ConfigError, RecvError
@@ -157,34 +158,66 @@ class NativePoller:
     def wait(self, events, timeout_ms):
         if not isinstance(events, PollEvents):
             raise TypeError("events must be PollEvents")
-        error_out = ctypes.c_int()
-        ready = lib().zlink_poller_wait(
-            self._handle,
-            events._events,
-            events.capacity,
-            int(timeout_ms),
-            ctypes.byref(error_out),
+        timeout_ms = int(timeout_ms)
+        deadline = (
+            time.monotonic() + timeout_ms / 1000.0 if timeout_ms > 0 else None
         )
-        if ready < 0:
-            _raise_result_error(RecvError, RecvResult, error_out.value, lib().zlink_errno())
-        output_index = 0
-        for index in range(int(ready)):
-            native = events._events[index]
-            if (
-                int(native.source_kind) == int(PollSourceKind.SOCKET)
-                and int(native.events) & int(PollEventFlag.POLLCOMPLETION)
-            ):
-                registration = self._socket_registrations.get(int(native.socket or 0))
-                owner = None if registration is None else registration[2]
-                if owner is not None and owner.drain(wait_for_publish=True) == 0:
-                    native.events = int(native.events) & ~int(PollEventFlag.POLLCOMPLETION)
-            if int(native.events) == 0:
-                continue
-            if output_index != index:
-                events._events[output_index] = native
-            output_index += 1
-        events._mark_ready_count(output_index)
-        return output_index
+        native_timeout = timeout_ms
+        while True:
+            error_out = ctypes.c_int()
+            ready = lib().zlink_poller_wait(
+                self._handle,
+                events._events,
+                events.capacity,
+                native_timeout,
+                ctypes.byref(error_out),
+            )
+            if ready < 0:
+                _raise_result_error(
+                    RecvError,
+                    RecvResult,
+                    error_out.value,
+                    lib().zlink_errno(),
+                )
+            output_index = 0
+            for index in range(int(ready)):
+                native = events._events[index]
+                native_flags = int(native.events)
+                if int(native.source_kind) == int(PollSourceKind.SOCKET):
+                    registration = self._socket_registrations.get(
+                        int(native.socket or 0)
+                    )
+                    owner = None if registration is None else registration[2]
+                    completion_ready = bool(
+                        native_flags & int(PollEventFlag.POLLCOMPLETION)
+                    )
+                    writable_retry_ready = bool(
+                        native_flags & int(PollEventFlag.POLLOUT)
+                    ) and owner is not None and owner.has_managed_writable_wait()
+                    if owner is not None and (
+                        completion_ready or writable_retry_ready
+                    ):
+                        drained = owner.drain(self)
+                        if completion_ready and drained.request_count == 0:
+                            native_flags &= ~int(PollEventFlag.POLLCOMPLETION)
+                            native.events = native_flags
+                if native_flags == 0:
+                    continue
+                if output_index != index:
+                    events._events[output_index] = native
+                output_index += 1
+            events._mark_ready_count(output_index)
+            if output_index != 0 or timeout_ms == 0 or ready == 0:
+                return output_index
+
+            # A WRITABLE-only record is internal send progress. If the caller
+            # watched only POLLCOMPLETION, keep waiting for a REQUEST record
+            # within the original deadline instead of returning a false event.
+            if deadline is not None:
+                remaining_ms = int((deadline - time.monotonic()) * 1000.0)
+                if remaining_ms <= 0:
+                    return 0
+                native_timeout = remaining_ms
 
     def close(self):
         if not self._handle:

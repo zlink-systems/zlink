@@ -27,7 +27,12 @@ class SendOp(_FluentMessageOp, Protocol):
     def messages(self, *payloads) -> "SendOp": ...
 
     def submit(self) -> Awaitable[None]:
-        """Submit without blocking and await Core admission completion."""
+        """Submit with event-loop-managed DONTWAIT backpressure retry.
+
+        Each attempt is nonblocking. Immediate admission completes without a
+        SEND completion; ``BACKPRESSURED``/``EAGAIN`` waits for the matching
+        WRITABLE token before resubmitting the same packet.
+        """
         ...
 
     def submit_sync(self) -> None:

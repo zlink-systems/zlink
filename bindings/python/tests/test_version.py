@@ -34,8 +34,9 @@ class VersionTests(unittest.TestCase):
                     s1.bind(endpoint)
                     s2.connect(endpoint)
                     payload = b"ping"
-                    # PAIR send is HWM-managed and ASYNC-classified (Core
-                    # Core pull completion); `submit()` returns an awaitable.
+                    # PAIR `submit()` is managed: immediate admission has no
+                    # completion, while backpressure waits for WRITABLE and
+                    # retries the same packet.
                     asyncio.run(s1.send().message(payload).submit())
                     received = zlink.create_received()
                     self.assertTrue(s2.recv_into(received))

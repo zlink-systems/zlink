@@ -5,21 +5,27 @@ import errno
 import pickle
 import socket as py_socket
 import struct
-import threading
 import time
+import uuid
 from unittest.mock import patch
 
 import pytest
 import zlink
 from zlink._native.ffi import (
     ZLINK_COMPLETION_REQUEST,
-    ZLINK_COMPLETION_SEND,
+    ZLINK_COMPLETION_WRITABLE,
+    ZLINK_DONTWAIT,
     ZLINK_SEND_ADMITTED,
+    ZLINK_SEND_TERMINAL,
     ZlinkCompletion,
     ZlinkMsg,
 )
 from zlink._runtime.eventing.poller import NativePoller
-from zlink._runtime.messaging.routed_async import CompletionOwner, _CompletionEntry
+from zlink._runtime.messaging.routed_async import (
+    CompletionOwner,
+    _CompletionEntry,
+    _SendEntry,
+)
 from zlink._runtime.sockets.socket_base_impl import RouterSocket
 from zlink.contracts.messaging.received import _reply_token_from_native
 
@@ -32,14 +38,41 @@ class _CompletionCloser:
         self.closed += 1
 
 
-def _completion(kind, *, request_result=0, context=None):
+def _completion(
+    kind,
+    *,
+    completion_id=0,
+    request_result=0,
+    context=None,
+    peer_rid=None,
+    send_result=ZLINK_SEND_ADMITTED,
+    terminal_errno=0,
+):
     value = ZlinkCompletion()
     value.struct_size = ctypes.sizeof(ZlinkCompletion)
     value.kind = kind
+    value.completion_id = completion_id
     value.user_context = context
-    value.send_result = ZLINK_SEND_ADMITTED
+    if peer_rid is not None:
+        peer_rid = bytes(peer_rid)
+        value.peer_rid.size = len(peer_rid)
+        value.peer_rid.data[: len(peer_rid)] = peer_rid
+    value.send_result = send_result
+    value.send_terminal_errno = terminal_errno
     value.request_result = request_result
     return value
+
+
+def _native_routing_id_bytes(native):
+    size = int(native.size)
+    return None if size == 0 else bytes(native.data[:size])
+
+
+async def _next_event_loop_turn():
+    loop = asyncio.get_running_loop()
+    ready = loop.create_future()
+    loop.call_soon(ready.set_result, None)
+    await ready
 
 
 def test_reply_token_is_private_immutable_and_owner_bound():
@@ -139,12 +172,18 @@ def test_stream_packet_receive_success_no_data_reset_and_reuse():
                 packet.close()
 
 
-def test_completion_capture_before_submit_return_joins_once():
+def test_request_completion_capture_before_submit_return_joins_once():
     async def exercise():
-        entry = _CompletionEntry(ZLINK_COMPLETION_SEND, asyncio.get_running_loop())
+        entry = _CompletionEntry(ZLINK_COMPLETION_REQUEST, asyncio.get_running_loop())
         closer = _CompletionCloser()
         with patch("zlink._runtime.messaging.routed_async.lib", return_value=closer):
-            entry.capture(_completion(ZLINK_COMPLETION_SEND))
+            entry.capture(
+                _completion(
+                    ZLINK_COMPLETION_REQUEST,
+                    completion_id=17,
+                    context=entry.context,
+                )
+            )
             assert not entry.future.done()
             entry.publish(17)
             await entry.wait_async()
@@ -176,7 +215,11 @@ def test_cancelled_wait_keeps_native_operation_and_late_completion_cleans_once()
         with pytest.raises(asyncio.CancelledError):
             await waiter
 
-        completion = _completion(ZLINK_COMPLETION_REQUEST)
+        completion = _completion(
+            ZLINK_COMPLETION_REQUEST,
+            completion_id=23,
+            context=entry.context,
+        )
         parts = (ZlinkMsg * 1)()
         completion.reply_part_count = 1
         completion.reply_parts = parts
@@ -208,6 +251,8 @@ def test_non_ok_request_completion_is_typed_error_without_payload():
         entry.capture(
             _completion(
                 ZLINK_COMPLETION_REQUEST,
+                completion_id=31,
+                context=entry.context,
                 request_result=int(zlink.RequestResult.TIMED_OUT),
             )
         )
@@ -218,16 +263,317 @@ def test_non_ok_request_completion_is_typed_error_without_payload():
     assert closer.closed == 1
 
 
-def test_provisional_registry_exists_before_final_submission():
+@pytest.mark.parametrize("mismatch", ("token", "context", "rid"))
+def test_writable_completion_rejects_mismatched_send_correlation(mismatch):
+    target = b"expected-route"
     socket = type("Socket", (), {"_handle": 1})()
     owner = CompletionOwner(socket)
-    owner._start_runtime_owner_locked = lambda: None
-    entry = _CompletionEntry(ZLINK_COMPLETION_SEND)
-    owner._register(entry)
-    assert owner._entries[entry.context] is entry
-    entry.fail_submit()
-    owner._unregister(entry)
-    assert owner._entries == {}
+    entry = _SendEntry(None, target, (b"payload",))
+    assert entry.await_writable(71)
+    completion = _completion(
+        ZLINK_COMPLETION_WRITABLE,
+        completion_id=71,
+        context=entry.context,
+        peer_rid=target,
+    )
+    if mismatch == "token":
+        completion.completion_id = 72
+    elif mismatch == "context":
+        completion.user_context = entry.context + 1
+    else:
+        replacement = b"different-route"
+        completion.peer_rid.size = len(replacement)
+        completion.peer_rid.data[: len(replacement)] = replacement
+
+    closer = _CompletionCloser()
+    with (
+        patch("zlink._runtime.messaging.routed_async.lib", return_value=closer),
+        patch.object(owner, "_attempt_send") as retry,
+    ):
+        owner._capture_writable(entry, completion)
+
+    retry.assert_not_called()
+    assert entry.settled
+    assert isinstance(entry._error, zlink.SubmitError)
+    assert entry._error.result == zlink.SubmitResult.INTERNAL_ERROR
+    assert closer.closed == 1
+
+
+@pytest.mark.parametrize(
+    ("native_errno", "expected_result"),
+    (
+        (errno.ENOENT, zlink.SubmitResult.NOT_FOUND),
+        (
+            getattr(errno, "ESHUTDOWN", errno.ECANCELED),
+            zlink.SubmitResult.TERMINATED,
+        ),
+        (int(zlink.ErrorCode.ETERM), zlink.SubmitResult.TERMINATED),
+    ),
+)
+def test_terminal_writable_is_typed_and_never_retried(
+    native_errno, expected_result
+):
+    target = b"terminal-route"
+    socket = type("Socket", (), {"_handle": 1})()
+    owner = CompletionOwner(socket)
+    entry = _SendEntry(None, target, (b"payload",))
+    assert entry.await_writable(81)
+    completion = _completion(
+        ZLINK_COMPLETION_WRITABLE,
+        completion_id=81,
+        context=entry.context,
+        peer_rid=target,
+        send_result=ZLINK_SEND_TERMINAL,
+        terminal_errno=native_errno,
+    )
+
+    closer = _CompletionCloser()
+    with (
+        patch("zlink._runtime.messaging.routed_async.lib", return_value=closer),
+        patch.object(owner, "_attempt_send") as retry,
+    ):
+        assert not owner._capture_writable(entry, completion)
+
+    retry.assert_not_called()
+    assert entry.settled
+    assert entry._error.result == expected_result
+    assert entry._error.native_errno == native_errno
+    assert closer.closed == 1
+
+
+def test_public_routed_send_without_route_has_no_wait_token():
+    async def exercise():
+        with zlink.create_context() as context:
+            with zlink.create_router_socket(context) as router:
+                router.options.linger_ms = 0
+                owner = router._completion_owner
+                native_submit = owner._submit_parts
+                submissions = []
+
+                def observe(*args, **kwargs):
+                    result = native_submit(*args, **kwargs)
+                    submissions.append(result)
+                    return result
+
+                missing = zlink.RoutingId.from_(b"missing-route")
+                with (
+                    patch.object(owner, "_submit_parts", side_effect=observe),
+                    pytest.raises(zlink.SubmitError) as raised,
+                ):
+                    await router.send(missing).message(b"payload").submit()
+
+                assert raised.value.result == zlink.SubmitResult.NOT_CONNECTED
+                assert raised.value.native_errno == errno.EHOSTUNREACH
+                assert submissions == [
+                    (int(zlink.SubmitResult.NOT_CONNECTED), errno.EHOSTUNREACH, 0)
+                ]
+                assert not owner._entries
+                assert not owner._entries_by_id
+
+    asyncio.run(exercise())
+
+
+def test_public_managed_routed_send_retries_after_exact_writable_completion():
+    async def exercise():
+        context = zlink.create_context()
+        context.options.auto_hwm_enabled = False
+        router = zlink.create_router_socket(context)
+        dealer = zlink.create_dealer_socket(context)
+        poller = zlink.create_poller()
+        tasks = []
+        try:
+            router.options.linger_ms = 0
+            dealer.options.linger_ms = 0
+            router.options.immediate = True
+            router.options.send_high_water_mark = 512
+            dealer.options.receive_high_water_mark = 512
+            router.router_options.mandatory = True
+
+            peer = zlink.RoutingId.from_(
+                f"python-managed-peer-{uuid.uuid4().hex}"
+            )
+            dealer.set_routing_id(peer)
+            endpoint = f"inproc://python-managed-writable-{uuid.uuid4().hex}"
+            router.bind(endpoint)
+            dealer.connect(endpoint)
+
+            # Blocking traffic is the pipe-attach barrier; no timing delay is
+            # needed before the DONTWAIT HWM exercise.
+            dealer.send().message(b"route-ready").submit_sync()
+            route_ready = zlink.create_received()
+            try:
+                assert router.recv_into(route_ready)
+                assert route_ready.routing_id == peer
+                target = route_ready.routing_id
+            finally:
+                route_ready.close()
+
+            events = zlink.create_poll_events(1)
+            poller.add_socket(
+                router,
+                zlink.PollEventFlag.POLLOUT
+                | zlink.PollEventFlag.POLLCOMPLETION,
+                79,
+            )
+
+            owner = router._completion_owner
+            native_submit = owner._submit_parts
+            native_capture = owner._capture_writable
+            submit_records = []
+            writable_records = []
+
+            def observe_submit(
+                submit_target,
+                native_parts,
+                flags,
+                entry=None,
+                timeout_ms=None,
+            ):
+                result = native_submit(
+                    submit_target,
+                    native_parts,
+                    flags,
+                    entry,
+                    timeout_ms,
+                )
+                submit_records.append(
+                    {
+                        "context": 0 if entry is None else entry.context,
+                        "target": (
+                            None
+                            if submit_target is None
+                            else bytes(submit_target)
+                        ),
+                        "result": result[0],
+                        "errno": result[1],
+                        "completion_id": result[2],
+                        "flags": int(flags),
+                    }
+                )
+                return result
+
+            def observe_writable(entry, completion):
+                writable_records.append(
+                    {
+                        "kind": int(completion.kind),
+                        "completion_id": int(completion.completion_id),
+                        "context": int(completion.user_context or 0),
+                        "target": _native_routing_id_bytes(completion.peer_rid),
+                        "send_result": int(completion.send_result),
+                        "terminal_errno": int(completion.send_terminal_errno),
+                    }
+                )
+                return native_capture(entry, completion)
+
+            accepted = []
+            pending = None
+            blocked_source = None
+            blocked_payload = None
+            with (
+                patch.object(owner, "_submit_parts", side_effect=observe_submit),
+                patch.object(
+                    owner, "_capture_writable", side_effect=observe_writable
+                ),
+            ):
+                for index in range(512):
+                    payload = bytearray(
+                        index.to_bytes(4, "little") + b"x" * 60
+                    )
+                    expected = bytes(payload)
+                    task = asyncio.create_task(
+                        router.send(target).message(payload).submit()
+                    )
+                    tasks.append(task)
+                    await _next_event_loop_turn()
+                    if task.done():
+                        await task
+                        accepted.append(expected)
+                        continue
+                    pending = task
+                    blocked_source = payload
+                    blocked_payload = expected
+                    break
+
+                assert accepted
+                assert pending is not None, "send HWM did not backpressure"
+                blocked = next(
+                    record
+                    for record in submit_records
+                    if record["result"]
+                    == int(zlink.SubmitResult.BACKPRESSURED)
+                )
+                assert blocked["errno"] == errno.EAGAIN
+                assert blocked["completion_id"] != 0
+                assert blocked["context"] != 0
+                assert blocked["target"] == target.to_bytes()
+                assert blocked["flags"] == ZLINK_DONTWAIT
+
+                # The managed operation owns an immutable packet snapshot while
+                # waiting; caller mutation cannot alter the retry payload.
+                blocked_source[:] = b"z" * len(blocked_source)
+                assert poller.wait(events, 0) == 0
+
+                for expected in accepted:
+                    received = zlink.create_received()
+                    try:
+                        assert dealer.recv_into(received)
+                        assert received.to_bytes_list() == [expected]
+                    finally:
+                        received.close()
+
+                assert poller.wait(events, 5000) == 1
+                assert events.slot(0) == 79
+                assert events.has_event(0, zlink.PollEventFlag.POLLOUT)
+                assert not events.has_event(
+                    0, zlink.PollEventFlag.POLLCOMPLETION
+                )
+                await pending
+
+                assert len(writable_records) == 1
+                writable = writable_records[0]
+                assert writable["kind"] == int(zlink.CompletionKind.WRITABLE)
+                assert writable["completion_id"] == blocked["completion_id"]
+                assert writable["context"] == blocked["context"]
+                assert writable["target"] == blocked["target"]
+                assert writable["send_result"] == ZLINK_SEND_ADMITTED
+                assert writable["terminal_errno"] == 0
+
+                blocked_index = submit_records.index(blocked)
+                retry_records = submit_records[blocked_index + 1 :]
+                assert len(retry_records) == 1
+                retry = retry_records[0]
+                assert retry["context"] == blocked["context"]
+                assert retry["target"] == blocked["target"]
+                assert retry["result"] == int(zlink.SubmitResult.OK)
+                assert retry["errno"] == 0
+                assert retry["completion_id"] == 0
+                assert retry["flags"] == ZLINK_DONTWAIT
+
+                retried = zlink.create_received()
+                try:
+                    assert dealer.recv_into(retried)
+                    assert retried.to_bytes_list() == [blocked_payload]
+                finally:
+                    retried.close()
+                duplicate = zlink.create_received()
+                try:
+                    assert not dealer.recv_into(
+                        duplicate, flags=zlink.RecvFlags.DONT_WAIT
+                    )
+                finally:
+                    duplicate.close()
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            poller.close()
+            dealer.close()
+            router.close()
+            context.close()
+
+    asyncio.run(exercise())
 
 
 def test_public_poller_atomically_takes_and_returns_completion_owner():

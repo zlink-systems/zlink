@@ -379,6 +379,8 @@ class _CompletionSocket:
         if owner is not None:
             owner.shutdown()
         super().close()
+        if owner is not None:
+            owner.finish_shutdown()
 
 
 class PairSocket(_CompletionSocket, _EndpointSocket, _MessageSocket):

@@ -26,6 +26,12 @@ class RecvFlags(IntEnum):
     NONE = 0
     DONT_WAIT = 1
 
+class CompletionKind(IntEnum):
+    """Socket completion record kinds; ``SEND`` is retained for ABI compatibility."""
+    SEND = 1
+    REQUEST = 2
+    WRITABLE = 3
+
 class SubmitResult(IntEnum):
     """The outcome of submitting a send or publish."""
     OK = 0
@@ -112,6 +118,7 @@ __all__ = [
     "SocketType",
     "SendFlags",
     "RecvFlags",
+    "CompletionKind",
     "SubmitResult",
     "RequestResult",
     "RecvResult",

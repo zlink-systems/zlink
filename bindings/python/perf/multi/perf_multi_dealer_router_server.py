@@ -25,11 +25,11 @@ async def main(argv=None):
     args = parse_server_args(argv or sys.argv[1:])
     endpoint = benchmark_endpoint(args.transport, "multi-dealer-router")
     stop = threading.Event()
-    # ROUTER routed send is HWM-managed: `submit()` returns an awaitable
-    # completed by Core pull completion. The binding owns no retry queue or POLLOUT
-    # readiness-hint (`send_ready` semantics is abolished), so each reply is
-    # a fire-and-forget task instead of a manually-queued DONTWAIT retry
-    # driven by POLLOUT.
+    # ROUTER routed send is HWM-managed: `submit()` owns the DONTWAIT retry
+    # state. After backpressure it retains the packet and target, waits for
+    # event-loop POLLOUT, drains through NO_DATA, and retries only for the
+    # matching WRITABLE token/context/RID. The benchmark only tracks the
+    # returned task; it does not add a second retry queue.
     pending_tasks = set()
     send_errors = []
     on_send_done = make_relay_send_done_callback(pending_tasks, send_errors)
@@ -63,8 +63,8 @@ async def main(argv=None):
                         if send_errors:
                             raise send_errors[0]
                         # Pending public send awaitables and stdin share this
-                        # event loop. Probe receive readiness without a timer;
-                        # cooperative turns below are their wake path.
+                        # event loop. The completion owner drives retries from
+                        # POLLOUT; cooperative turns preserve scheduler fairness.
                         ready_count = safe_poll(poller, poll_events, 0)
                         for offset in range(ready_count):
                             if poll_events.slot(offset) != 0 or not (

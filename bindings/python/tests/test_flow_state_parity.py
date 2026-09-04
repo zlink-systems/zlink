@@ -100,8 +100,8 @@ class ReceiveFlowStateUnsupportedSocketTests(unittest.TestCase):
                         raised.exception.result, zlink.ConfigResult.NOT_SUPPORTED
                     )
                     # Existing send/recv behavior is unchanged by the rejected call.
-                    # PAIR send is HWM-managed and ASYNC-classified; `submit()`
-                    # returns an awaitable backed by Core pull completion.
+                    # PAIR `submit()` admits inline without a SEND completion,
+                    # or waits for WRITABLE and retries when backpressured.
                     self.assertIsNone(
                         asyncio.run(left.send().message(b"still-works").submit())
                     )

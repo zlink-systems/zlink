@@ -351,24 +351,6 @@ def recv_nonblocking(sock, *, method="recv", storage=None):
         raise
 
 
-_SUBMIT_ERROR = None
-_SUBMIT_BACKPRESSURED = None
-
-
-def _submit_error_type():
-    global _SUBMIT_ERROR
-    if _SUBMIT_ERROR is None:
-        _SUBMIT_ERROR = _require_zlink().SubmitError
-    return _SUBMIT_ERROR
-
-
-def _submit_backpressured_result():
-    global _SUBMIT_BACKPRESSURED
-    if _SUBMIT_BACKPRESSURED is None:
-        _SUBMIT_BACKPRESSURED = _require_zlink().SubmitResult.BACKPRESSURED
-    return _SUBMIT_BACKPRESSURED
-
-
 def measurement_part_count():
     return 1 if os.environ.get("PERF_PART_COUNT") == "1" else 2
 
@@ -388,38 +370,28 @@ async def send_routed(
     _sync=False,
     _deadline=None,
 ):
-    while True:
-        try:
-            send_method = getattr(sock, method)
-            op = send_method() if routing_id is None else send_method(routing_id)
-            if measurement and not isinstance(payload, (list, tuple)):
-                op.messages(*measurement_parts(payload))
-            elif isinstance(payload, (list, tuple)):
-                op.messages(*payload)
-            else:
-                op.message(payload)
-            if _sync:
-                op.submit_sync()
-            else:
-                await op.submit()
-            # Core may admit inline (op_id == 0), in which case awaiting the
-            # public terminal does not suspend this coroutine. Always yield
-            # one turn for continuous send loops so receive progress cannot
-            # be starved for the entire active phase. One-shot routed echo
-            # tasks already have a scheduling yield at their creation site
-            # and opt out to avoid yielding twice for one reply.
-            if _yield_after_submit:
-                await asyncio.sleep(0)
-            return True
-        except _submit_error_type() as exc:
-            if exc.result != _submit_backpressured_result():
-                raise
-            if _deadline is not None and time.perf_counter() >= _deadline:
-                return False
-            # No operation was accepted, so rebuild the public builder after
-            # one cooperative event-loop turn. Core/HWM still owns depth;
-            # this adds no retry timer, application window, or pending queue.
-            await asyncio.sleep(0)
+    del _deadline  # The managed operation owns WRITABLE retry until terminal.
+    send_method = getattr(sock, method)
+    op = send_method() if routing_id is None else send_method(routing_id)
+    if measurement and not isinstance(payload, (list, tuple)):
+        op.messages(*measurement_parts(payload))
+    elif isinstance(payload, (list, tuple)):
+        op.messages(*payload)
+    else:
+        op.message(payload)
+    if _sync:
+        op.submit_sync()
+    else:
+        await op.submit()
+
+    # Immediate admission does not suspend the coroutine. Yield one scheduler
+    # turn for continuous send loops without a sleep or timer.
+    if _yield_after_submit:
+        loop = asyncio.get_running_loop()
+        resumed = loop.create_future()
+        loop.call_soon(resumed.set_result, None)
+        await resumed
+    return True
 
 
 

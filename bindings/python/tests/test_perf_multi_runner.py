@@ -509,7 +509,7 @@ class PerfMultiRunnerTests(unittest.TestCase):
             {zlink.SubmitResult.BACKPRESSURED},
         )
 
-    def test_routed_send_rebuilds_after_immediate_admission_backpressure(self):
+    def test_routed_send_propagates_backpressure_without_external_retry(self):
         class SendOperation:
             def __init__(self, owner):
                 self.owner = owner
@@ -538,11 +538,10 @@ class PerfMultiRunnerTests(unittest.TestCase):
                 return SendOperation(self)
 
         socket = Socket()
-        self.assertTrue(asyncio.run(send_routed(socket, b"payload")))
-        self.assertEqual(
-            socket.attempts,
-            [(b"payload", b""), (b"payload", b"")],
-        )
+        with self.assertRaises(zlink.SubmitError) as raised:
+            asyncio.run(send_routed(socket, b"payload"))
+        self.assertEqual(raised.exception.result, zlink.SubmitResult.BACKPRESSURED)
+        self.assertEqual(socket.attempts, [(b"payload", b"")])
 
     def test_inline_routed_admission_yields_to_concurrent_progress(self):
         events = []
@@ -600,7 +599,7 @@ class PerfMultiRunnerTests(unittest.TestCase):
         asyncio.run(scenario())
         self.assertEqual(events, ["submit", "send-done", "receive-progress"])
 
-    def test_one_shot_routed_reply_keeps_backpressure_retry_yield(self):
+    def test_one_shot_routed_reply_propagates_backpressure_without_retry_yield(self):
         events = []
 
         class SendOperation:
@@ -625,25 +624,14 @@ class PerfMultiRunnerTests(unittest.TestCase):
             def send(self):
                 return SendOperation(self)
 
-        async def scenario():
-            socket = Socket()
-
-            async def send_once():
-                await send_routed(
-                    socket, b"payload", _yield_after_submit=False
-                )
-                events.append("send-done")
-
-            async def receive_progress():
-                events.append("receive-progress")
-
-            await asyncio.gather(send_once(), receive_progress())
-
-        asyncio.run(scenario())
-        self.assertEqual(
-            events,
-            ["submit-1", "receive-progress", "submit-2", "send-done"],
-        )
+        socket = Socket()
+        with self.assertRaises(zlink.SubmitError) as raised:
+            asyncio.run(
+                send_routed(socket, b"payload", _yield_after_submit=False)
+            )
+        self.assertEqual(raised.exception.result, zlink.SubmitResult.BACKPRESSURED)
+        self.assertEqual(socket.attempts, 1)
+        self.assertEqual(events, ["submit-1"])
 
     def test_active_message_latency_validates_and_decodes_once(self):
         payload = stamp_payload(new_payload(64), phase=1, run_id=7, seq=11)

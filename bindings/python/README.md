@@ -1,6 +1,6 @@
 # Python Binding
 
-Python wrapper for the Core 0.16.0 raw messaging contract. The normative
+Python wrapper for the Core 0.17.0 raw messaging contract. The normative
 public surface is `bindings/doc/spec/python/README.ko.md`; repository policy
 and the socket capability matrix live in `bindings/README.md`, and the native
 ABI comes from `core/include/zlink.h`.
@@ -14,21 +14,39 @@ facades, `Message.ref_count()`, `RoutingId`, `Received`, `ReplyToken`, and
 ## Completion contract
 
 `SendOp.submit_sync()` uses Core's blocking `NONE` path. `SendOp.submit()` is
-awaitable and uses Core `DONTWAIT`; a socket-local drain owner converts pull
-completion records into the terminal result. `RequestOp` provides the same two
-terminals and preserves `timeout()`. Cancelling an awaitable detaches only the
-caller wait: the Core operation continues and late completion payload is still
-closed.
+awaitable and makes one Core `DONTWAIT` admission attempt. Immediate admission
+returns completion ID `0` and produces no SEND completion. On
+`BACKPRESSURED`/`EAGAIN`, Core retains only a nonzero wait token, the user
+context, and the target; the binding retains the exact packet and target needed
+for retry because Core does not retain the payload.
+
+The socket-local owner waits for event-loop `POLLOUT`, drains the completion
+queue through `NO_DATA`, and resubmits the same packet only for a
+`CompletionKind.WRITABLE` record with the same token, context, and routing ID.
+WRITABLE grants permission to retry; it is not successful SEND notification.
+The awaitable completes only when a retry is admitted. This path uses no
+binding-owned OS thread, sleep, or timer.
+
+`RequestOp` keeps its existing synchronous and awaitable terminals, matching
+`CompletionKind.REQUEST` records, and preserves `timeout()`. Cancelling an
+awaitable detaches only the caller wait: the socket-local owner continues the
+required retry or completion cleanup and closes late completion payloads.
 
 ROUTER request receive supplies an opaque, owner-bound `ReplyToken`. Only the
 originating router accepts it, and `ReplyOp.submit()` has no flags. PUB/XPUB
 publication remains separate as synchronous `PublishOp`; only that operation
 retains `SendFlags`. Receive no-data is selected with `RecvFlags.DONT_WAIT`.
 
-`PollEventFlag.POLLCOMPLETION` transfers completion draining to the public
-poller while registered. A reported completion event means at least one live
-or detached operation was fully processed, not merely that native bytes were
-ready.
+A public poller driving pending operations registers both
+`PollEventFlag.POLLOUT` and `PollEventFlag.POLLCOMPLETION`. The latter transfers
+completion draining to that poller while registered; callers keep polling until
+their SEND and REQUEST awaitables settle. A REQUEST record may settle a request,
+while a WRITABLE record only advances the matching SEND retry.
+
+The raw ABI options `ZLINK_OPT_PENDING_MAX_MSGS` and
+`ZLINK_OPT_PENDING_MAX_BYTES` are REQUEST-only limits for DONTWAIT records
+waiting for admission. Ordinary SEND ignores them, and the typed Python socket
+options do not expose them as SEND retry limits.
 
 ## Pull receive and eventing
 

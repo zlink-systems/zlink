@@ -56,6 +56,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
             "ReplyToken",
             "StreamPacket",
             "StreamRecvMode",
+            "CompletionKind",
         ):
             self.assertTrue(hasattr(zlink, name), name)
         self.assertFalse(hasattr(zlink.Message, "get_property"))
@@ -169,7 +170,9 @@ class CoreApiAlignmentTests(unittest.TestCase):
                 with zlink.create_pair_socket(ctx) as right:
                     left.bind("inproc://python-core-11-pair")
                     right.connect("inproc://python-core-11-pair")
-                    # PAIR awaitable send uses Core DONTWAIT plus pull completion.
+                    # Immediate DONTWAIT admission has ID 0 and no SEND
+                    # completion; the managed awaitable only waits when Core
+                    # returns a WRITABLE token.
                     self.assertIsNone(
                         asyncio.run(
                             left.send().messages(b"first", b"second").submit()
@@ -310,35 +313,10 @@ class CoreApiAlignmentTests(unittest.TestCase):
                     self.assertEqual(len(received), 0)
 
                     async def send_first_record_when_connected():
-                        # DEALER awaitable send is HWM-managed; bindings own no retry,
-                        # so an admission attempt made before the `connect()`
-                        # pipe has attached surfaces immediately instead of
-                        # being queued. Retry the bounded connect race here.
-                        #
-                        # Single part only: a >1-part DEALER record through
-                        # the Core submit operation (target committed at
-                        # submit time) never admits under this Core contract
-                        # build — every attempt reports
-                        # `SubmitResult.NOT_FOUND`/`EHOSTUNREACH` even long
-                        # after the pipe is connected, while the identical
-                        # single-part record admits immediately. Reproduced
-                        # and reported in doc/perf/perf/bindings-0.12.0/log/
-                        # 2026-08-24-python-realignment.md; out of scope
-                        # here (bindings/python cannot patch core/).
-                        for _ in range(200):
-                            try:
-                                return await (
-                                    dealer.send().message(b"first").submit()
-                                )
-                            except zlink.SubmitError as error:
-                                if error.result not in (
-                                    zlink.SubmitResult.NOT_CONNECTED,
-                                    zlink.SubmitResult.NOT_FOUND,
-                                    zlink.SubmitResult.BACKPRESSURED,
-                                ):
-                                    raise
-                                await asyncio.sleep(0.001)
-                        raise AssertionError("dealer did not connect")
+                        # A pre-attach DEALER attempt receives a WRITABLE wait
+                        # token. The managed awaitable resumes on POLLOUT,
+                        # drains that exact token, and resubmits this packet.
+                        return await dealer.send().message(b"first").submit()
 
                     self.assertIsNone(asyncio.run(send_first_record_when_connected()))
                     self.assertTrue(router.recv_into(received))
