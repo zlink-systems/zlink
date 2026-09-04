@@ -506,16 +506,36 @@ inline bool drain_pending_replies (const endpoint_config_t &config,
     return !any_waiting_reply (*state) && !any_retained_request (*state);
 }
 
+inline size_t request_submit_progress_quantum (size_t msg_size,
+                                                size_t client_count,
+                                                bool websocket_transport)
+{
+    // Bound submission work between completion-poller turns by bytes. This
+    // controls only when completions are progressed: it neither caps
+    // outstanding requests nor waits for a reply before submitting more.
+    if (client_count == 0)
+        return 0;
+    if (!websocket_transport)
+        return client_count;
+    const size_t progress_quantum_bytes = 32 * 1024;
+    const size_t payload_size =
+      std::max<size_t> (msg_size, perf_multi_metric::header_size ());
+    return std::min (client_count,
+                     std::max<size_t> (1, progress_quantum_bytes / payload_size));
+}
+
 inline bool run_measurement_window (const endpoint_config_t &config,
                                     client_state_t *state,
                                     const multi_bench_settings_t &settings,
+                                    bool websocket_transport,
                                     uint32_t run_id,
                                     size_t msg_size,
                                     int duration_seconds,
                                     unsigned long long *reply_count_out,
                                     bench_latency_stats_t *latency_out)
 {
-    if (!state || !state->poller || !reply_count_out || !latency_out) {
+    if (!state || !state->poller || state->slots.empty () || !reply_count_out
+        || !latency_out) {
         errno = EINVAL;
         return false;
     }
@@ -539,9 +559,13 @@ inline bool run_measurement_window (const endpoint_config_t &config,
     for (size_t i = 0; i < state->slots.size (); ++i)
         state->slots[i].outstanding = 0;
     state->fatal = false;
-    for (size_t i = 0; i < state->slots.size (); ++i) {
+    for (size_t i = 0; i < state->slots.size (); ++i)
         state->slots[i].next_seq = 1;
-    }
+
+    size_t submit_cursor = 0;
+    const size_t submit_count =
+      request_submit_progress_quantum (msg_size, state->slots.size (),
+                                        websocket_transport);
 
     const std::chrono::steady_clock::time_point deadline =
       std::chrono::steady_clock::now ()
@@ -551,7 +575,8 @@ inline bool run_measurement_window (const endpoint_config_t &config,
 
     while (std::chrono::steady_clock::now () < deadline && !state->fatal) {
         bool submitted = false;
-        for (size_t i = 0; i < state->slots.size (); ++i) {
+        for (size_t offset = 0; offset < submit_count; ++offset) {
+            const size_t i = (submit_cursor + offset) % state->slots.size ();
             client_slot_t &slot = state->slots[i];
             bool blocked = false;
             if (!submit_request (config, &slot, target_rid_ptr, run_id, msg_size,
@@ -562,6 +587,7 @@ inline bool run_measurement_window (const endpoint_config_t &config,
             if (!blocked)
                 submitted = true;
         }
+        submit_cursor = (submit_cursor + submit_count) % state->slots.size ();
         if (state->fatal)
             break;
         const int wait_ms = submitted ? 0 : poll_timeout_until (deadline, 50);
@@ -614,13 +640,15 @@ inline bool run_measurement_window (const endpoint_config_t &config,
 inline bool run_active_window (const endpoint_config_t &config,
                                client_state_t *state,
                                const multi_bench_settings_t &settings,
+                               bool websocket_transport,
                                uint32_t run_id,
                                size_t msg_size,
                                unsigned long long *reply_count_out,
                                bench_latency_stats_t *latency_out)
 {
     return run_measurement_window (
-      config, state, settings, run_id, msg_size, settings.duration_seconds,
+      config, state, settings, websocket_transport, run_id, msg_size,
+      settings.duration_seconds,
       reply_count_out, latency_out);
 }
 
@@ -736,13 +764,15 @@ inline int run_client_benchmark (const endpoint_config_t &config,
         return 1;
     }
 
+    const bool websocket_transport = transport == "ws" || transport == "wss";
+
     for (size_t si = 0; si < msg_sizes.size (); ++si) {
         const size_t msg_size = msg_sizes[si];
         const uint32_t run_id = perf_multi_client::next_metric_run_id ();
         unsigned long long reply_count = 0;
         bench_latency_stats_t latency;
-        if (!run_active_window (config, &state, settings, run_id, msg_size, &reply_count,
-                                &latency)) {
+        if (!run_active_window (config, &state, settings, websocket_transport,
+                                run_id, msg_size, &reply_count, &latency)) {
             close_client_state (&state);
             return 1;
         }

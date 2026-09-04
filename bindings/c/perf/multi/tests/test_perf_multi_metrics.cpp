@@ -1,5 +1,6 @@
 #include "perf_multi_client_helpers.hpp"
 #include "perf_multi_relay_server.hpp"
+#include "perf_multi_socket_reqrep.hpp"
 #include "perf_multi_stream_session.hpp"
 #include "perf_multi_weighted_latency.hpp"
 #include "../../common/streamclient/perf_stream_common.hpp"
@@ -210,6 +211,19 @@ void test_one_way_writable_retry_state ()
     assert (!slot.retained);
     assert (slot.wait_token == 0);
     assert (errno == EHOSTUNREACH);
+}
+
+void test_reqrep_submit_progress_quantum_is_byte_bounded ()
+{
+    using perf_multi_socket_reqrep::request_submit_progress_quantum;
+
+    assert (request_submit_progress_quantum (1024, 100, true) == 32);
+    assert (request_submit_progress_quantum (4096, 100, true) == 8);
+    assert (request_submit_progress_quantum (8192, 100, true) == 4);
+    assert (request_submit_progress_quantum (65536, 100, true) == 1);
+    assert (request_submit_progress_quantum (4096, 4, true) == 4);
+    assert (request_submit_progress_quantum (4096, 0, true) == 0);
+    assert (request_submit_progress_quantum (4096, 100, false) == 100);
 }
 
 void test_weighted_child_aggregation ()
@@ -440,6 +454,7 @@ int main ()
     test_zero_sample_cap_preserves_exact_mean ();
     test_relay_submit_error_classification ();
     test_one_way_writable_retry_state ();
+    test_reqrep_submit_progress_quantum_is_byte_bounded ();
     test_weighted_child_aggregation ();
     test_weighted_sample_population_uses_latency_count ();
     test_count_duration_and_bandwidth ();
