@@ -57,7 +57,7 @@
 - [ ] 4언어 framework unit (gate-v2, D-B85 바인딩 반영 패키지): **A/B 실패 0**.
       java 1213/2 = pre-existing M6A 2건만(F 1건 `EntrySpotActorDispatchTests…staleTerminal`은 하네스 drain barrier 수정 `2b1d0c794c`);
       node 1552/5 → C 4(ZoneWorld dist 미빌드 3·lint 1) + F 2 수정 완료(`2ceb137abe`);
-      cpp gate-v2 63/69 → stream-connector fixture(RAW mode before bind, spec 08-stream §2) `dbfcf7d6fe`·lz4 packaging `20b94c3457`·package-test config `4573c09a2a` 수정 후 잔여 = inventory 278(C)·m6b 1909 flake(C); **최종 cpp ctest(리팩토링 후) 68/69 = inventory 278만, m6b flake 미발생, package consumer 2건 pass**; node 최종 `npm test`는 lint `spot-timer.ts:137`(C)에서 중단 → lint 1줄 수정 + 전체 runtime gate job 진행 중;
+      cpp gate-v2 63/69 → stream-connector fixture(RAW mode before bind, spec 08-stream §2) `dbfcf7d6fe`·lz4 packaging `20b94c3457`·package-test config `4573c09a2a` 수정 후 잔여 = inventory 278(C)·m6b 1909 flake(C); **최종 cpp ctest(리팩토링 후) 68/69 = inventory 278만, m6b flake 미발생, package consumer 2건 pass**; **node 최종 표준 `npm test`(build·typecheck·lint·runtime) 1536/0, lint 0 errors** — `spot-timer.ts:137` 1줄 수정 후(ZoneWorld dist 3건·two-process·Chromium 항목 모두 green);
       dotnet 전체 unit gate: v3 852/1/1hang → v4 → v5 1917/2 → **v6 1919/0 + Canonical 15/15** → **v7(TicTacToe 수정 포함) 1920/0 + Canonical 15/15, hang 0** (36분짜리 D-068 sibling만 제외). 커밋: 승인 rework `b28eb24270`, ClientServer 재연결 `25952a76bc`, fixture DEALER 누수 `6b77ba013f`, inbound peer 재사용 `ebff5b3e1b`.
       relay fail = 늦은 loser `ConnectionReady`가 survivor의 RID→pair 인덱스를 덮어 command 33이 `current_source=False`로 폐기(수정, 15/15);
       hang = fixed-RID handover 테스트 fixture 경합(`RouteAdmission_HandoverStartsFreshLivenessDeadline`, 이전 DEALER reconnect intent 유지) — fixture 수정(8/8).
