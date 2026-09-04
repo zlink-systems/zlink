@@ -221,9 +221,6 @@ mkdocs build --strict   # doc/site에서 실행
 재구성했다. 옛 번호로 문서를 찾던 링크나 기억은 아래 표로 새 위치를 찾는다. 한 옛 문서가
 여러 새 문서로 나뉜 경우 절 범위를 함께 적는다.
 
-옛 문서 자체는 지우지 않고 [`archive/`](archive/)에 보관한다. 규범 계약은 아래 표의 새
-문서가 소유하며, `archive/`의 문서는 이력을 확인할 때만 본다.
-
 | 옛 문서 | 새 위치 |
 |---|---|
 | `00-public-contract-governance` | [00-foundation/01-public-contract-governance](00-foundation/01-public-contract-governance.ko.md) |

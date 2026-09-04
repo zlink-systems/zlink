@@ -239,10 +239,6 @@ number (`00` through `52`), into topic directories. A link or memory keyed on
 an old number finds the new location in the table below. Where an old
 document split across several new documents, the section ranges are given.
 
-The old documents have not been deleted; they are preserved in
-[`archive/`](archive/). The new documents in the table below own the normative
-contract, and the documents in `archive/` are only for reviewing history.
-
 | Old Document | New Location |
 |---|---|
 | `00-public-contract-governance` | [00-foundation/01-public-contract-governance](00-foundation/01-public-contract-governance.en.md) |
