@@ -1072,3 +1072,10 @@ framework test의 2 s 기대치가 이 분포 안에 있어 handover 계열 test
 **임시 조치(A)**: 30분 넘은 디렉터리 주기 삭제 monitor. **제안(B)**: 추출 위치를 콘텐츠 해시 기반 고정 경로(예 `~/.cache/zlink/native/<sha256>/libzlink.so`)로 바꾸고
 동일 해시가 있으면 재사용(복사 생략) — JVM당 복사·누수 모두 사라지고 `System.load` 경로 안정. 회귀: 두 JVM 연속 로드 시 temp 디렉터리 수 증가 0 검증.
 
+
+## D-B90 (2026-09-05 06:30, 머신 B) C++ Multi PUBSUB 러너 parity 차이 — library 판정과 분리, 사용자 확인 뒤 러너 수정
+C++ Multi PUBSUB tcp는 두 pass(자체·Sol 리뷰) 뒤 `보류(81.5%)`. 리뷰가 확인한 러너 차이(library 효과 아님): (1) C multi PUBSUB server는
+client START 뒤 size마다 auto-HWM을 재계산·적용, C++ server는 bind/connect 전 1회(report server SNDHWM 1 MiB vs 4 MiB 불일치의 원인);
+(2) SUB filter C `""` vs C++ `"bench"`; (3) C++ client의 topic 문자열·routing-id size 추가 검사; (4) deadline/100 ms poll 규칙.
+lossy PUBSUB에서는 이 차이가 drop·keep-up을 직접 바꾼다. 결정: library 판정은 `보류`로 닫고, 러너 parity 수정(C++ multi PUBSUB
+server·client를 C 러너 의미에 맞춤)은 별도 트랙·별도 report로 재판정(가이드 §5). 러너 변경이라 사용자 확인 뒤 진행.
