@@ -64,3 +64,63 @@ test('command 48 transport retry preserves its operation ID and close fence', as
   assert.deepEqual(requests[1], requests[0]);
   runtime.close();
 });
+
+test('command 48 reserves deadline for terminal replay after a transport timeout', async () => {
+  const requests: Buffer[] = [];
+  const attemptTimeouts: number[] = [];
+  const raw = {
+    setServiceIngress() {},
+    async requestService(
+      _targetNodeRid: string,
+      parts: readonly Uint8Array[],
+      timeoutMs: number
+    ): Promise<readonly Buffer[]> {
+      const head = Buffer.from(parts[0]!);
+      requests.push(head);
+      attemptTimeouts.push(timeoutMs);
+      if (requests.length === 1) {
+        await new Promise(resolve => setTimeout(resolve, timeoutMs));
+        throw new Error('simulated reply timeout');
+      }
+      const decoded = decodeStatefulHeader(head);
+      assert.equal(decoded.kind, 'userSpotClose');
+      return [
+        encodeStatefulReply(
+          decoded.correlation,
+          RequestResult.Ok,
+          0,
+          { kind: 'userSpotClose', closed: true }
+        )
+      ];
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'source-node', 17n);
+
+  try {
+    const result = await runtime.requestUserSpotClose(
+      'target-node',
+      {
+        sourceNodeRid: 'source-node',
+        sourceNodeGeneration: 17n,
+        target: {
+          spotId: 'timeout-replay-spot',
+          objectGeneration: 19n,
+          targetNodeRid: 'target-node',
+          targetNodeGeneration: 23n,
+          authorityOwnerGeneration: 29n,
+          expectedStoreVersion: 'version-31'
+        },
+        deadlineUnixMs: BigInt(Date.now() + 500)
+      },
+      500
+    );
+
+    assert.equal(result.terminalResult, RequestResult.Ok);
+    assert.deepEqual(result.tail, { kind: 'userSpotClose', closed: true });
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests[1], requests[0]);
+    assert(attemptTimeouts[0]! > 0 && attemptTimeouts[0]! < 500);
+  } finally {
+    runtime.close();
+  }
+});
