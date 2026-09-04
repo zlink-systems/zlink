@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const {
   CompletionEntry,
   CompletionOwner,
+  completionPumpDelayMs,
 } = require('../../dist/zlink/runtime/messaging/completion_owner');
 const {
   RequestError,
@@ -42,6 +43,21 @@ test('successful send settles without publishing a SEND completion id', async ()
 
 test('native context termination maps to a terminated send result', () => {
   assert.equal(mapNativeErrno('submit', 156384765), SubmitResult.Terminated);
+});
+
+test('native socket shutdown maps WRITABLE terminal to a terminated send result', () => {
+  assert.equal(mapNativeErrno('submit', 108), SubmitResult.Terminated);
+});
+
+test('missing routed target maps WRITABLE terminal to a not-found send result', () => {
+  assert.equal(mapNativeErrno('submit', 2), SubmitResult.NotFound);
+});
+
+test('completion polling backs off instead of spinning at zero timeout', () => {
+  assert.deepEqual(
+    Array.from({ length: 7 }, (_, idlePolls) => completionPumpDelayMs(idlePolls)),
+    [0, 1, 2, 4, 8, 8, 8]
+  );
 });
 
 test('native context termination preserves REQUEST terminated semantics', () => {

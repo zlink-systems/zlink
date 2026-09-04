@@ -40,7 +40,8 @@ Successful SEND admission returns completion ID `0` and publishes no SEND
 completion. For async `submit()`, a DONTWAIT `SubmitResult.Backpressured` result
 with `EAGAIN` contains a nonzero wait token while Core retains no payload. The
 Node runtime keeps the submit-time packet snapshot. When no public poller owns
-completion draining, it performs nonblocking probes on event-loop turns. When
+completion draining, it performs nonblocking probes with a short adaptive
+event-loop backoff. When
 `PollEventFlag.PollOut` is ready, it pulls the completion queue. A
 `CompletionKind.Writable` record must match the token, user context, and target
 routing ID before the runtime resubmits that packet. Caller mutation after

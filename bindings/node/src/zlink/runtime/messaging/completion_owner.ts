@@ -53,10 +53,17 @@ export interface NativeSyncRequestResult extends NativeSubmitResult {
 type CompletionKind = 'send' | 'request';
 
 interface SendRetryState {
-  sourcePayload: OperationPayloadValue<MessageLike> | null;
-  nativePayload: ReturnType<typeof normalizeOperationPayload>;
+  readonly nativePayload: ReturnType<typeof normalizeOperationPayload>;
   readonly routingId: Buffer | null;
-  snapshotted: boolean;
+}
+
+const RESOLVED_SEND = Promise.resolve();
+const MAX_IDLE_PUMP_DELAY_MS = 8;
+
+/** @internal Exponential event-loop backoff for the Core API's pull-only queue. */
+export function completionPumpDelayMs(idlePolls: number): number {
+  if (idlePolls <= 0) return 0;
+  return Math.min(MAX_IDLE_PUMP_DELAY_MS, 2 ** Math.min(idlePolls - 1, 3));
 }
 
 function snapshotRetryPart(part: MessageLike): Buffer {
@@ -198,8 +205,12 @@ export class CompletionOwner {
   private nextToken = 1n;
   private publicOwner: object | null = null;
   private pumpScheduled = false;
+  private idlePumpPolls = 0;
+  private pumpHandle: ReturnType<typeof setImmediate> | ReturnType<typeof setTimeout> | null = null;
+  private pumpUsesTimeout = false;
   private runtimePoller: NativeHandle | null = null;
   private runtimeEvents: NativeHandle | null = null;
+  private managedWritableWaitCount = 0;
   private closed = false;
 
   constructor(private readonly handle: NativeHandle) {}
@@ -208,21 +219,79 @@ export class CompletionOwner {
     payload: OperationPayloadValue<MessageLike>,
     routingId: Buffer | null
   ): Promise<void> {
-    const entry = this.register<void>('send', false);
+    if (this.closed) throw submitError(SubmitResult.InvalidState, 0, 'socket is closed');
+    const token = this.nextToken++;
     let nativePayload: ReturnType<typeof normalizeOperationPayload>;
     try {
       nativePayload = normalizeOperationPayload(payload);
     } catch (error) {
-      this.failEntry(entry, submitNativeError(error, DONTWAIT, 'send submit failed'));
-      return entry.promise;
+      return Promise.reject(submitNativeError(error, DONTWAIT, 'send submit failed'));
     }
-    this.sendRetries.set(entry.token, {
-      sourcePayload: payload,
-      nativePayload,
+
+    let result: NativeSubmitResult;
+    try {
+      result = this.native.socketSubmitSend(
+        this.handle,
+        nativePayload,
+        routingId,
+        DONTWAIT,
+        token
+      ) as NativeSubmitResult;
+    } catch (error) {
+      return Promise.reject(submitNativeError(error, DONTWAIT, 'send submit failed'));
+    }
+
+    if (result.result === SubmitResult.Ok) {
+      try {
+        consumeSubmittedMessages(payload);
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      if (result.completionId !== 0n) {
+        return Promise.reject(submitError(
+          SubmitResult.InternalError,
+          result.nativeErrno,
+          'successful send returned a completion token'
+        ));
+      }
+      return RESOLVED_SEND;
+    }
+
+    if (result.result !== SubmitResult.Backpressured) {
+      return Promise.reject(submitError(
+        result.result,
+        result.nativeErrno,
+        'send submit failed'
+      ));
+    }
+    if (!isWouldBlock(result.nativeErrno) || result.completionId === 0n) {
+      return Promise.reject(submitError(
+        SubmitResult.Backpressured,
+        result.nativeErrno,
+        'backpressured send did not return an EAGAIN wait token'
+      ));
+    }
+
+    let retryPayload: ReturnType<typeof normalizeOperationPayload>;
+    try {
+      // Core retains no SEND payload. Copy only after actual rejection, before
+      // returning control to user code, so later caller mutation is invisible.
+      retryPayload = snapshotRetryPayload(payload);
+      consumeSubmittedMessages(payload);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+
+    const entry = new CompletionEntry<void>(token, 'send', false);
+    entry.awaitWritable(result.completionId);
+    this.byToken.set(token, entry as CompletionEntry<unknown>);
+    this.byId.set(result.completionId, entry as CompletionEntry<unknown>);
+    this.sendRetries.set(token, {
+      nativePayload: retryPayload,
       routingId: routingId === null ? null : Buffer.from(routingId),
-      snapshotted: false,
     });
-    this.attemptSend(entry);
+    this.managedWritableWaitCount += 1;
+    this.schedulePump();
     return entry.promise;
   }
 
@@ -335,6 +404,7 @@ export class CompletionOwner {
   transferToRuntime(owner: object): void {
     if (this.publicOwner !== owner) return;
     this.publicOwner = null;
+    this.idlePumpPolls = 0;
     this.schedulePump();
   }
 
@@ -351,11 +421,7 @@ export class CompletionOwner {
   }
 
   hasManagedWritableWait(): boolean {
-    for (const token of this.sendRetries.keys()) {
-      const entry = this.byToken.get(token);
-      if (entry && !entry.settled && entry.completionId !== 0n) return true;
-    }
-    return false;
+    return this.managedWritableWaitCount !== 0;
   }
 
   close(): void {
@@ -370,6 +436,16 @@ export class CompletionOwner {
     this.byToken.clear();
     this.byId.clear();
     this.sendRetries.clear();
+    this.managedWritableWaitCount = 0;
+    if (this.pumpHandle !== null) {
+      if (this.pumpUsesTimeout) {
+        clearTimeout(this.pumpHandle as ReturnType<typeof setTimeout>);
+      } else {
+        clearImmediate(this.pumpHandle as ReturnType<typeof setImmediate>);
+      }
+      this.pumpHandle = null;
+      this.pumpScheduled = false;
+    }
     this.closeRuntimePoller();
   }
 
@@ -467,7 +543,6 @@ export class CompletionOwner {
     }
 
     if (result.result === SubmitResult.Ok) {
-      if (!this.consumeSendSource(entry, retry)) return;
       if (result.completionId !== 0n) {
         this.failEntry(entry, submitError(
           SubmitResult.InternalError,
@@ -490,31 +565,6 @@ export class CompletionOwner {
         ));
         return;
       }
-      if (!retry.snapshotted) {
-        const sourcePayload = retry.sourcePayload;
-        if (sourcePayload === null) {
-          this.failEntry(entry, submitError(
-            SubmitResult.InternalError,
-            0,
-            'send source payload is missing before retry snapshot'
-          ));
-          return;
-        }
-        try {
-          // Core deliberately retains no payload on back-pressure. Take the
-          // cold-path copy before returning control to user code so retries
-          // cannot observe later caller mutation.
-          retry.nativePayload = snapshotRetryPayload(sourcePayload);
-          retry.snapshotted = true;
-        } catch (error) {
-          this.failEntry(entry, error);
-          return;
-        }
-        // The Promise now owns the immutable snapshot. End Message ownership
-        // immediately and drop every source reference before yielding; a
-        // pooled wrapper may be reused while this send waits for WRITABLE.
-        if (!this.consumeSendSource(entry, retry)) return;
-      }
       if (entry.completionId !== 0n) this.byId.delete(entry.completionId);
       entry.awaitWritable(result.completionId);
       this.byId.set(result.completionId, entry);
@@ -529,22 +579,6 @@ export class CompletionOwner {
     ));
   }
 
-  private consumeSendSource(
-    entry: CompletionEntry<unknown>,
-    retry: SendRetryState
-  ): boolean {
-    const sourcePayload = retry.sourcePayload;
-    retry.sourcePayload = null;
-    if (sourcePayload === null) return true;
-    try {
-      consumeSubmittedMessages(sourcePayload);
-      return true;
-    } catch (error) {
-      this.failEntry(entry, error);
-      return false;
-    }
-  }
-
   private failEntry(entry: CompletionEntry<unknown>, error: unknown): void {
     entry.fail(error);
     this.removeIfSettled(entry);
@@ -554,17 +588,21 @@ export class CompletionOwner {
     if (!entry.settled) return;
     this.byToken.delete(entry.token);
     if (entry.completionId !== 0n) this.byId.delete(entry.completionId);
-    this.sendRetries.delete(entry.token);
+    if (this.sendRetries.delete(entry.token)) {
+      this.managedWritableWaitCount -= 1;
+    }
   }
 
   private schedulePump(): void {
     if (this.closed || this.publicOwner || this.pumpScheduled || this.byToken.size === 0) return;
     this.pumpScheduled = true;
-    setImmediate(() => {
+    const run = (): void => {
       this.pumpScheduled = false;
+      this.pumpHandle = null;
       if (this.closed || this.publicOwner || this.byToken.size === 0) return;
+      let processed = 0;
       try {
-        this.pollAndDrain();
+        processed = this.pollAndDrain();
       } catch (error) {
         const nativeErrno = readErrno();
         const message = nativeErrorMessage(error, 'completion poll failed');
@@ -580,13 +618,27 @@ export class CompletionOwner {
         this.byToken.clear();
         this.byId.clear();
         this.sendRetries.clear();
+        this.managedWritableWaitCount = 0;
+        this.closeRuntimePoller();
         return;
       }
-      if (this.byToken.size > 0) this.schedulePump();
-    });
+      this.idlePumpPolls = processed === 0
+        ? Math.min(this.idlePumpPolls + 1, 4)
+        : 0;
+      if (this.byToken.size > 0) {
+        this.schedulePump();
+      } else {
+        this.closeRuntimePoller();
+      }
+    };
+    const delayMs = completionPumpDelayMs(this.idlePumpPolls);
+    this.pumpUsesTimeout = delayMs !== 0;
+    this.pumpHandle = delayMs === 0
+      ? setImmediate(run)
+      : setTimeout(run, delayMs);
   }
 
-  private pollAndDrain(): void {
+  private pollAndDrain(): number {
     this.ensureRuntimePoller();
     const count = this.native.pollerWaitInto(
       this.runtimePoller,
@@ -594,11 +646,12 @@ export class CompletionOwner {
       1,
       0
     ) as number;
-    if (count <= 0) return;
+    if (count <= 0) return 0;
     const events = this.native.pollEventsRevents(this.runtimeEvents, 0) as number;
     if ((events & (PollEventFlag.PollOut | PollEventFlag.PollCompletion)) !== 0) {
-      this.drain();
+      return this.drain();
     }
+    return 0;
   }
 
   private ensureRuntimePoller(): void {

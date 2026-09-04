@@ -47,6 +47,21 @@ test('send submit is Promise-based while submit_sync is flag-free', async () => 
         closeAll(context, sender, receiver);
     }
 });
+test('routed send without a route fails immediately and preserves Message ownership', async () => {
+    const context = zlink.createContext();
+    const router = zlink.createRouterSocket(context);
+    const payload = zlink.Message.from('no-route');
+    router.options.mandatory = true;
+    try {
+        await assert.rejects(router.send(zlink.RoutingId.from('missing-peer')).message(payload).submit(), (error) => error instanceof zlink.SubmitError
+            && error.result === zlink.SubmitResult.NotConnected);
+        assert.equal(payload.getString(), 'no-route');
+    }
+    finally {
+        payload.close();
+        closeAll(context, router);
+    }
+});
 test('request Promise settles from a pulled completion', async () => {
     const context = zlink.createContext();
     const router = zlink.createRouterSocket(context);

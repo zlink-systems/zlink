@@ -89,8 +89,8 @@ retains the submit-time packet snapshot. Later caller-side buffer mutation does
 not change a pending retry. A `Message` input is consumed immediately after the
 binding takes that snapshot, so the retry does not keep the caller's wrapper
 alive until the Promise resolves. When no public poller owns completion
-draining, the runtime performs a nonblocking probe on each Node event-loop
-turn. When `PollEventFlag.PollOut` is ready, it pulls the socket-local
+draining, the runtime performs nonblocking probes with a short adaptive
+event-loop backoff. When `PollEventFlag.PollOut` is ready, it pulls the socket-local
 completion queue until no more completion data is available. A
 `CompletionKind.Writable` record must match the token, user context, and target
 routing ID before the runtime submits the same packet again. The Promise

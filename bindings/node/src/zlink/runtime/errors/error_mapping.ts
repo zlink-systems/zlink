@@ -45,6 +45,7 @@ export function mapNativeErrno(category: NativeErrorCategory, errno: number): nu
         case 111: return SubmitResult.NotAdmitted;
         case 2: return SubmitResult.NotFound;
         case 125:
+        case 108:
         case ETERM: return SubmitResult.Terminated;
         case 14: return SubmitResult.InvalidHandle;
         case 22: return SubmitResult.InvalidArgument;

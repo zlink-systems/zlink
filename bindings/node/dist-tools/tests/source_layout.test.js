@@ -102,8 +102,10 @@ function forbiddenPackageExports(exportsValue) {
     strict_1.default.ok(completionOwner.includes('PollEventFlag.PollOut'));
     strict_1.default.ok(completionOwner.includes('awaitWritable'));
     strict_1.default.ok(completionOwner.includes('transferToPublic'));
+    strict_1.default.ok(completionOwner.includes('completionPumpDelayMs'));
     strict_1.default.equal(completionOwner.includes('COMPLETION_SEND'), false);
-    strict_1.default.equal(completionOwner.includes('setTimeout('), false);
+    strict_1.default.equal(completionOwner.includes('setInterval('), false);
+    strict_1.default.equal(completionOwner.includes('Atomics.wait'), false);
     strict_1.default.ok(poller.includes('POLLER_SOURCE_SOCKET'));
     strict_1.default.ok(poller.includes('_socketRegistrationsByToken'));
     strict_1.default.ok(poller.includes('owner.drain(this)'));

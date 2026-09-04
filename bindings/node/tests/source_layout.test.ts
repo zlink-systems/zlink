@@ -115,8 +115,10 @@ test('Node requests and writable send retries use pull completion without callba
   assert.ok(completionOwner.includes('PollEventFlag.PollOut'));
   assert.ok(completionOwner.includes('awaitWritable'));
   assert.ok(completionOwner.includes('transferToPublic'));
+  assert.ok(completionOwner.includes('completionPumpDelayMs'));
   assert.equal(completionOwner.includes('COMPLETION_SEND'), false);
-  assert.equal(completionOwner.includes('setTimeout('), false);
+  assert.equal(completionOwner.includes('setInterval('), false);
+  assert.equal(completionOwner.includes('Atomics.wait'), false);
   assert.ok(poller.includes('POLLER_SOURCE_SOCKET'));
   assert.ok(poller.includes('_socketRegistrationsByToken'));
   assert.ok(poller.includes('owner.drain(this)'));
