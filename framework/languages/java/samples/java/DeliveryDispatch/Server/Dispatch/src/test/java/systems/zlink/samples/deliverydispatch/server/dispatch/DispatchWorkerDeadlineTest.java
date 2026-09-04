@@ -4,8 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
@@ -34,10 +36,11 @@ final class DispatchWorkerDeadlineTest {
 
     private static void assertDeadlineStartsAtSend(boolean reassign) throws Exception {
         CompletableFuture<Messages.DeliveryStatusChangedRes> statusReply = new CompletableFuture<>();
+        MutableClock clock = new MutableClock(Instant.parse("2026-09-05T00:00:00Z"));
         AtomicReference<Instant> sendTime = new AtomicReference<>();
-        DeliveryOfferStore offers = new DeliveryOfferStore();
+        DeliveryOfferStore offers = new DeliveryOfferStore(clock);
         DispatchWorker worker = new DispatchWorker(
-            delayedStatusClient(statusReply), recordingActorClient(sendTime), offers);
+            delayedStatusClient(statusReply), recordingActorClient(sendTime, clock), offers);
         Messages.AssignDeliveryMsg request = new Messages.AssignDeliveryMsg(
             reassign ? "delivery-reassign" : "delivery-first",
             "customer-1",
@@ -56,7 +59,7 @@ final class DispatchWorkerDeadlineTest {
             expectedAttempt = 1;
         }
 
-        TimeUnit.MILLISECONDS.sleep(SampleTimings.CourierDecisionTimeout.toMillis() + 100);
+        clock.advance(SampleTimings.CourierDecisionTimeout.plusMillis(100));
         assertTrue(offers.takeExpired().isEmpty(),
             "status publication time must not consume the courier decision timeout");
         assertTrue(sendTime.get() == null, "the courier send must wait for status publication");
@@ -107,11 +110,13 @@ final class DispatchWorkerDeadlineTest {
         };
     }
 
-    private static ZLinkActorClient recordingActorClient(AtomicReference<Instant> sendTime) {
+    private static ZLinkActorClient recordingActorClient(
+        AtomicReference<Instant> sendTime,
+        Clock clock) {
         return new ZLinkActorClient() {
             @Override
             public ZLinkActorSendCall sendToActor(String actorId, Object message) {
-                sendTime.set(Instant.now());
+                sendTime.set(clock.instant());
                 return new ZLinkActorSendCall() {
                     @Override
                     public ZLinkActorSendCall metadata(String key, String value) {
@@ -130,5 +135,32 @@ final class DispatchWorkerDeadlineTest {
                 throw new UnsupportedOperationException();
             }
         };
+    }
+
+    private static final class MutableClock extends Clock {
+        private Instant current;
+
+        private MutableClock(Instant current) {
+            this.current = current;
+        }
+
+        private void advance(Duration duration) {
+            current = current.plus(duration);
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneId.of("UTC");
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return Clock.fixed(current, zone);
+        }
+
+        @Override
+        public Instant instant() {
+            return current;
+        }
     }
 }

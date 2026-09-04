@@ -1,8 +1,12 @@
 package systems.zlink.samples.tictactoe.client;
 
 import java.net.URI;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardWatchEventKinds;
+import java.nio.file.WatchKey;
+import java.nio.file.WatchService;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -299,11 +303,28 @@ public final class TicTacToeClientScenario {
 
         Path releaseFile = Path.of(completionFile).toAbsolutePath().normalize();
         long deadlineNanos = System.nanoTime() + Duration.ofSeconds(60).toNanos();
-        while (System.nanoTime() < deadlineNanos) {
+        try (WatchService watcher = FileSystems.getDefault().newWatchService()) {
+            releaseFile.getParent().register(watcher, StandardWatchEventKinds.ENTRY_CREATE);
             if (Files.exists(releaseFile)) {
                 return;
             }
-            Thread.sleep(100);
+
+            long remainingNanos;
+            while ((remainingNanos = deadlineNanos - System.nanoTime()) > 0) {
+                WatchKey key = watcher.poll(remainingNanos, java.util.concurrent.TimeUnit.NANOSECONDS);
+                if (key == null) {
+                    break;
+                }
+                boolean completionCreated = key.pollEvents().stream()
+                    .anyMatch(event -> releaseFile.getFileName().equals(event.context()));
+                boolean valid = key.reset();
+                if ((completionCreated || !valid) && Files.exists(releaseFile)) {
+                    return;
+                }
+            }
+            if (Files.exists(releaseFile)) {
+                return;
+            }
         }
         throw new IllegalStateException("Timed out waiting for runner lifecycle completion.");
     }

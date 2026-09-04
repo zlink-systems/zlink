@@ -1,5 +1,6 @@
 package systems.zlink.samples.deliverydispatch.server.dispatch;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -16,6 +17,15 @@ import systems.zlink.samples.deliverydispatch.shared.contracts.Messages;
 public final class DeliveryOfferStore {
     private final Object gate = new Object();
     private final Map<String, MutableOffer> offers = new HashMap<>();
+    private final Clock clock;
+
+    public DeliveryOfferStore() {
+        this(Clock.systemUTC());
+    }
+
+    DeliveryOfferStore(Clock clock) {
+        this.clock = clock;
+    }
 
     /** Records a new offer and returns its attempt number. */
     public int offer(Messages.AssignDeliveryMsg request, int candidateIndex, Duration timeout) {
@@ -25,7 +35,7 @@ public final class DeliveryOfferStore {
             offer.request = request;
             offer.candidateIndex = candidateIndex;
             offer.attempt += 1;
-            offer.deadline = Instant.now().plus(timeout);
+            offer.deadline = clock.instant().plus(timeout);
             offer.settled = false;
             return offer.attempt;
         }
@@ -49,7 +59,7 @@ public final class DeliveryOfferStore {
 
     /** The offers whose deadline has passed. The sweeper reassigns them. */
     public List<DeliveryOffer> takeExpired() {
-        Instant now = Instant.now();
+        Instant now = clock.instant();
         synchronized (gate) {
             List<DeliveryOffer> expired = new ArrayList<>();
             for (MutableOffer offer : offers.values()) {
