@@ -53,7 +53,7 @@
 
 ### D. 최종 게이트 (plan line 143: framework unit + cross-language E2E + 7 samples 전부 green)
 - [ ] 4언어 framework unit: DONTWAIT 회귀 0, 잔여는 pre-existing만 — java unit 1207/2·contract 26/1 = pre-existing 3건 동일 assertion 확인(`gate-node-java-summary.md`); node 1532/6(신규 B 1건 + 환경 D 5건, lint C); cpp·dotnet §B 진행 중
-- [ ] 7 samples × 4언어 green — **cpp 7/7 green**; dotnet·java·node 미실행
+- [ ] 7 samples × 4언어 green — **cpp 7/7**; node 5/7(ZoneWorld `vite` 환경 D, SupportChat 브라우저 stream timeout B — job); java 1/7(TicTacToe·SupportChat TEARDOWN_FAILED·Bingo session-disconnect = pre-existing C, DeliveryDispatch·GameQuest·ZoneWorld timeout = B, D-B85 binding-port 의존 여부 판정 job); dotnet 미실행(handover job 종료 후)
 - [ ] cross-language E2E green
 - [ ] 최종 커밋+푸시
 

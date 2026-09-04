@@ -1,0 +1,50 @@
+# Job: java samples — root-cause the timeout cluster (DeliveryDispatch / GameQuest / ZoneWorld) on Core main (D-B85)
+
+You are a codex sub-agent under a Claude supervisor. One cause per job, 1.5 h cap. Read `AGENTS.md`
+(root) §2/§3/§4.1, `framework/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, `framework/languages/{cpp,dotnet,node}/**`; never lower
+an assertion; do not commit.
+
+## Established facts
+- `doc/plan/c016-worklog/gate-samples-java-node-summary.md`: Java samples 1/7 on current Core main
+  (includes D-B85 `7d8205a028`: DONTWAIT REQUEST may return BACKPRESSURED + wait token and must be
+  resubmitted on WRITABLE — **the Java binding's REQUEST port for this is NOT done yet, B's job**).
+  Baseline `seven-samples-green-v1` (4bad5ac979, 2026-08-29) had all 7 green; the Java unit gate
+  earlier tonight (before D-B85 landed) was 1207/2 with only the 3 known pre-existing failures.
+- Failures: TicTacToe/SupportChat `TEARDOWN_FAILED` and Bingo `session-disconnect` = known (C,
+  `handoff-2026-09-04/fw-gate-java-summary.md:57-62`, `decisions.ko.md:808`) — out of scope here.
+  **In scope (B)**: DeliveryDispatch `CompletionException: TimeoutException` (client stream sequence,
+  `DeliveryDispatchClientScenario.java:64-73`), GameQuest `Ensure failed` (`GameQuestClientScenario.java:215`,
+  server-evidence assertion), ZoneWorld `moveTo` timeout (`ScenarioSupport.java:142`, `Scenarios.java:64-68`).
+  Logs `zlink-work/c016/logs/gate-samples-java-*.log`, role logs under `zlink-work/c016/logs/{sample-*,...}`.
+- Two candidate mechanisms, decide with evidence, do not guess:
+  (E) **D-B85 dependency**: a Java framework request (`submit()` on the binding request builder) gets
+  `BACKPRESSURED`/`EAGAIN` + token from the new Core and the old Java binding never resubmits → the
+  request never completes → client-visible timeout. Prove by capturing the binding's native submit
+  result at the first stalled request (Java: `ZLINK_JAVA_STREAM_TRACE=1`, framework message-flow
+  listener per root AGENTS §4.1; add a temporary probe in the *framework* request port if needed and
+  remove it). If proven, STOP: write the exact site/result and classify as E — the fix is B's binding
+  port, not framework.
+  (B-handover) the reciprocal ROUTER handover losing-direction timeout (core socket README §4: request
+  admitted on the losing direction times out once; caller must resend) — see
+  `doc/plan/dontwait-0.17.0-framework-completion.ko.md` §B-1. If the Java framework submits before the
+  handover settles or lacks the resend, that is a framework fix (parity with node's terminal-replay
+  loop and cpp's bilateral survivor handling).
+  Or something else (stream sequence path, sample scenario).
+- Env: `TMPDIR=/dev/shm/zlink-tmp-java`, `flock -w7200 /tmp/zlink-jvm-gate.lock`, Java needs
+  `ZLINK_LIBRARY_PATH` as a FILE (`/home/hep7/project/zlink/.artifacts/wsl/install/zlink-core/0.17.0/lib/libzlink.so`)
+  or unset; Docker available. Do not rebuild Core or local packages.
+
+## What to do
+1. Start with the fastest failing sample (DeliveryDispatch, ~48 s). Reproduce 2×. Trace where the
+   first request/stream sequence stalls and what the binding returned for it.
+2. Decide E vs framework vs sample. For a framework cause, fix minimally in
+   `framework/languages/java/**` with a regression test in `zlink-framework-core` tests; re-run the
+   affected samples 2× and the focused unit tests.
+3. Check whether GameQuest and ZoneWorld share the same cause (do not spread into three causes; report
+   the others as candidates if different).
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-java-samples-summary.md`: the captured binding result at the stall,
+classification (E / framework / sample), fix + spec clause + regression test if framework, sample
+re-run table, commands, BLOCKERS.

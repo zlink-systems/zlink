@@ -24,7 +24,7 @@ function createClient(endpoint: string, label: string): ZlinkStreamConnector {
     codec: connector.zlinkStreamJsonCodec,
     dispatchMode: connector.ZlinkStreamDispatchMode.Immediate,
     requestTimeoutMs: 5000,
-    waitTimeoutMs: 10000,
+    waitTimeoutMs: 20000,
     heartbeat: { enabled: false }
   });
   client.observeInbound((observation) => {

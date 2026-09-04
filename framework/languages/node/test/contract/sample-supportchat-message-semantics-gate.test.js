@@ -30,3 +30,18 @@ test('SupportChat distinguishes conversation message and join semantics', () => 
   assert.doesNotMatch(contracts, /SetTypingReq|setTypingReq/);
   assert.match(client, /PacketNames\.setTypingMsg/);
 });
+
+test('SupportChat browser lifecycle leaves time to arm idle and resume waiters', () => {
+  const timings = fs.readFileSync(path.join(
+    root,
+    'samples/SupportChat.Ts/Server/Configuration/sample-names.ts'
+  ), 'utf8');
+  const client = fs.readFileSync(path.join(
+    root,
+    'samples/SupportChat.Ts/Client/main.ts'
+  ), 'utf8');
+
+  assert.match(timings, /idleTimeout: 10000/);
+  assert.match(timings, /closeGraceTimeout: 2000/);
+  assert.match(client, /waitTimeoutMs: 20000/);
+});
