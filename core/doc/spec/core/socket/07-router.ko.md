@@ -146,12 +146,9 @@ Network wire, inproc 전달, CONTROL 크기 경계, multipart defer와 선택한
 Multipart가 pipe를 선택한 뒤 적용값이 `0`이 되어도 그 message는 같은 pipe에서 FINAL까지
 완료한다. 다음 message 선택부터 그 pipe를 제외한다.
 
-Remote weight가 실제로 바뀌면 admission 전 pending인 DONTWAIT request와 wait token이 있는
-DONTWAIT send를 다시 평가한다. Message 시작 전에 weight가 `0`이 되면 pending REQUEST의
-completion은 `ZLINK_SEND_TERMINAL`이고 `send_terminal_errno == ECONNREFUSED`다. SEND wait
-token은 weight가 `0`이 되어도 끝나지 않는다. `0`에서 양수로 바뀌면 그 RID의 SEND wait token에
-`ZLINK_COMPLETION_WRITABLE` record를 발행하고, pending REQUEST는 다른 write-activation event
-없이 재시도할 수 있다.
+Remote weight가 실제로 바뀌면 wait token이 있는 DONTWAIT send와 request를 다시 평가한다. Wait
+token은 weight가 `0`이 되어도 끝나지 않는다. `0`에서 양수로 바뀌면 그 RID의 SEND·REQUEST wait
+token에 `ZLINK_COMPLETION_WRITABLE` record를 발행한다.
 
 Active duplicate는 standby 동안 자기 최신 값을 보관하고 나중에 같은 pipe가 선택되면 사용한다.
 Application 최대값을 10 byte보다 작게 설정해도 pair readiness·FLOWSTATE·WEIGHT 전달은 막히지
@@ -204,22 +201,31 @@ ZLINK_EXPORT zlink_submit_result_t zlink_request_part(
 
 `target_router_rid_or_null_`은 target ROUTER의 non-NULL logical RID여야 한다. DEALER RID를
 지정하면 `ZLINK_SUBMIT_NOT_ADMITTED`+`EPROTOTYPE`이며 같은 RID의 DATA send는 허용한다.
-Routing map에 RID가 없으면 `ZLINK_SUBMIT_NOT_FOUND`+`ENOENT`다.
+Routing map에 RID가 없으면 `NONE`은 `ZLINK_SUBMIT_NOT_FOUND`+`ENOENT`, `DONTWAIT`은
+`ZLINK_SUBMIT_NOT_CONNECTED`+`EHOSTUNREACH`이며 wait token을 만들지 않는다.
 
 `MORE`는 `timeout_ms_ == 0`, `user_context_ == NULL`이어야 한다. Optional ID output은 다른
-validation 전에 `0`이 되며 successful `FINAL`은 nonzero ID를 반환한다. Core는 request를 wire에
-공개하기 전에 SEND·REQUEST 공유 completion slot과 ID를 확보한다. Slot 포화는 flags와 관계없이
-즉시 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`, completion 없음이다.
+validation 전에 `0`이 되며 admission된 `FINAL`은 nonzero REQUEST ID를 반환한다. Core는 request를
+wire에 공개하기 전에 SEND·REQUEST 공유 completion slot과 ID를 확보한다. Slot 포화는 flags와
+관계없이 즉시 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`, completion 없음이다.
 
 `NONE FINAL`은 임시 reservation 뒤 `SNDTIMEO` 안에서 same-RID local admission을 기다린다.
 Admission 전 실패는 reservation을 반납하고 ID `0`, completion 없음으로 동기 종료한다.
-`DONTWAIT FINAL`은 pending pool이 허용하면 admission 전 record도 Core가 소유하고 nonzero
-REQUEST ID를 반환한다. 이 단계는 SEND completion을 만들지 않는다.
+
+`DONTWAIT FINAL`은 same-RID admission을 한 번만 시도하며 admission 전에 Core가 record를 소유하는
+상태는 없다. 즉시 admission되면 nonzero REQUEST ID를 반환한다. HWM·byte credit·flow pause에 의한
+backpressure이거나 RID의 route가 있으나 아직 준비되지 않은 경우(transport pair 미준비, weight `0`)에는
+`ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID를 target으로 하는 nonzero wait token을 반환하며 Core는
+request payload를 보관하지 않는다. 그 RID에 write credit이 생기면 같은 token·context·`peer_rid`의
+`ZLINK_COMPLETION_WRITABLE` record 한 건이 뒤따르고 caller는 같은 request를 다시 제출한다. 다른
+RID의 credit은 이 token을 발행하지 않는다. Mandatory route가 없는 RID는
+`ZLINK_SUBMIT_NOT_CONNECTED`+`EHOSTUNREACH`, ID `0`, token 없음이다.
 
 `timeout_ms_ == 0`은 `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS`의 기본 5,000 ms를 snapshot한다.
-Reply timeout은 outbound local admission부터 시작하며 admission 전 pending 시간은 포함하지
-않는다. Admission 뒤 disconnect가 발생해도 payload를 replay하지 않고 correlation과 남은
-monotonic budget만 유지한다. Reply·timeout·terminal 중 하나만 REQUEST completion을 만든다.
+Reply timeout은 outbound local admission, 즉 `ZLINK_SUBMIT_OK` 반환부터 시작하며 wait token이
+유지되는 동안은 시작하지 않는다. Admission 뒤 disconnect가 발생해도 payload를 replay하지 않고
+correlation과 남은 monotonic budget만 유지한다. Reply·timeout·terminal 중 하나만 REQUEST
+completion을 만든다.
 
 ```mermaid
 sequenceDiagram
@@ -414,11 +420,9 @@ test 하나로 이어진다.
   하나로 보이며, FINAL 또는 rollback 뒤에는 가장 최근 값만 반영된다.
 - Application multipart의 첫 part를 받은 뒤 pipe의 remote weight가 `0`이 되어도 같은 pipe가
   FINAL까지 남은 part를 전달하고, 다음 message 선택부터 제외된다.
-- Remote weight 변경은 같은 logical RID에 admission 전 pending인 DONTWAIT REQUEST와 wait token이
-  있는 DONTWAIT SEND를 다시 평가한다. Message 시작 전에 weight가 `0`이 되면 pending REQUEST의
-  completion은 `ZLINK_SEND_TERMINAL`이고 `send_terminal_errno == ECONNREFUSED`이며 SEND wait
-  token은 끝나지 않는다. `0`에서 양수로 바뀌면 그 RID의 SEND wait token에 WRITABLE record가
-  발행되고 pending REQUEST는 다른 write-activation event 없이 재시도할 수 있다.
+- Remote weight 변경은 같은 logical RID에 wait token이 있는 DONTWAIT SEND와 REQUEST를 다시
+  평가한다. Weight가 `0`이 되어도 wait token은 끝나지 않는다. `0`에서 양수로 바뀌면 그 RID의
+  SEND·REQUEST wait token에 WRITABLE record가 발행된다.
 - Application 최대값을 10 byte보다 작게 설정해도 pair readiness·FLOWSTATE와 peer 선택·monitor로
   관찰하는 weight 변경은 막히지 않는다.
 - Reconnect 뒤 peer 선택과 monitor는 새 connection의 현재 weight를 반영한다. Active standby를
@@ -456,10 +460,11 @@ test 하나로 이어진다.
 - Multipart 첫 part가 수용된 뒤 실패하면 전체 record가 rollback되어 peer에 부분 record가 보이지 않는다.
 
 **Request completion**
-- Successful FINAL은 nonzero ID를 반환하고 reply·timeout·terminal 중 하나를 정확히 한 REQUEST completion으로 반환하며 submit 실패는 ID `0`과 completion 없음으로 끝난다.
+- Admission된 FINAL은 nonzero REQUEST ID를 반환하고 reply·timeout·terminal 중 하나를 정확히 한 REQUEST completion으로 반환하며 wait token 없는 submit 실패는 ID `0`과 completion 없음으로 끝난다.
+- DONTWAIT FINAL은 admission을 한 번만 시도한다. Backpressure나 준비되지 않은 route(transport pair 미준비, weight `0`)는 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID의 nonzero wait token을 반환하고, 같은 token·context·`peer_rid`의 WRITABLE record 뒤 caller가 같은 request를 다시 제출한다. Mandatory route가 없는 RID는 `ZLINK_SUBMIT_NOT_CONNECTED`+`EHOSTUNREACH`, ID `0`, token 없음이다.
 - 마지막 호출의 `timeout_ms_ == 0`은 `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS` 기본값을 사용한다.
 - 유효한 error reply는 errno를 매핑한 non-OK `zlink_request_result_t`와 errno part 뒤의 payload를 completion에 보존하며, malformed errno part는 `ZLINK_REQUEST_PROTOCOL_ERROR`와 payload 없음으로 완료한다.
-- Request timeout은 local admission부터 시작하고 admission 전 pending 시간은 포함하지 않으며, admission 뒤 disconnect는 payload를 replay하거나 monotonic budget을 reset하지 않는다.
+- Request timeout은 local admission부터 시작하고 wait token이 유지되는 동안은 시작하지 않으며, admission 뒤 disconnect는 payload를 replay하거나 monotonic budget을 reset하지 않는다.
 - 공유 completion slot 포화는 flags와 관계없이 즉시 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`, completion 없음으로 실패한다.
 
 **Reply**

@@ -97,13 +97,13 @@ Ordinary `zlink_send_part()`에서는 peer가 받아들인 message에만 선택 
 크기 제한을 넘어 거부된 message는 어느 후보든 같은 이유로 거부하므로 다른 후보로 다시 시도하지
 않는다.
 
-`NONE FINAL`이 admission을 기다리거나 `DONTWAIT` request가 pending일 때는 `FINAL`에서
-configured endpoint 하나를 고정한다. Ordinary DATA send는 호환되는 양수-weight logical route,
-typed request는 handshake에서 ROUTER로 확인된 양수-weight logical route에서 고른다. HWM이나
-일시적인 disconnect 때문에 기다리는 동안 다른 endpoint로 바꾸지 않는다.
+`NONE FINAL`이 admission을 기다릴 때는 `FINAL`에서 configured endpoint 하나를 고정한다. Ordinary
+DATA send는 호환되는 양수-weight logical route, typed request는 handshake에서 ROUTER로 확인된
+양수-weight logical route에서 고른다. HWM이나 일시적인 disconnect 때문에 기다리는 동안 다른
+endpoint로 바꾸지 않는다.
 
-`DONTWAIT FINAL` ordinary send는 endpoint를 고정하지 않는다. 한 번의 admission 시도에서 쓰기
-여유가 있는 후보가 없으면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 nonzero wait token을
+`DONTWAIT FINAL` ordinary send와 request는 endpoint를 고정하지 않는다. 한 번의 admission 시도에서
+쓰기 여유가 있는 후보가 없으면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 nonzero wait token을
 반환하며, token의 target은 후보 peer 집합 전체다. 어느 후보든 쓰기 여유를 알리거나 새 peer가
 연결되면 Core는 `ZLINK_COMPLETION_WRITABLE` record를 하나 발행하고, 다시 제출하면 그 시점의
 선택 절차로 peer를 다시 고른다. 연결 직후 peer가 `0`개여도 wait token을 받는다.
@@ -270,12 +270,9 @@ Network wire, inproc 전달, CONTROL 크기 경계, multipart defer와 선택한
 Multipart가 pipe를 선택한 뒤 적용값이 `0`이 되어도 그 message는 같은 pipe에서 FINAL까지
 완료한다. 다음 message 선택부터 그 pipe를 제외한다.
 
-Remote weight가 실제로 바뀌면 admission 전 pending인 DONTWAIT request와 wait token이 있는
-DONTWAIT send를 다시 평가한다. Message 시작 전에 weight가 `0`이 되면 pending REQUEST의
-completion은 `ZLINK_SEND_TERMINAL`이고 `send_terminal_errno == ECONNREFUSED`다. SEND wait
-token은 weight가 `0`이 되어도 끝나지 않는다. `0`에서 양수로 바뀌면 SEND wait token에
-`ZLINK_COMPLETION_WRITABLE` record를 발행하고, pending REQUEST는 다른 write-activation event
-없이 재시도할 수 있다.
+Remote weight가 실제로 바뀌면 wait token이 있는 DONTWAIT send와 request를 다시 평가한다. Wait
+token은 weight가 `0`이 되어도 끝나지 않는다. `0`에서 양수로 바뀌면 SEND·REQUEST wait token에
+`ZLINK_COMPLETION_WRITABLE` record를 발행한다.
 
 Active duplicate는 standby 동안 자기 최신 값을 보관하고 나중에 같은 pipe가 선택되면 사용한다.
 Application 최대값을 10 byte보다 작게 설정해도 pair readiness·FLOWSTATE·WEIGHT 전달은 막히지
@@ -328,8 +325,8 @@ ZLINK_EXPORT zlink_submit_result_t zlink_request_part(
 ```
 
 DEALER는 target 인자에 `NULL`을 요구한다. `MORE`는 `timeout_ms_ == 0`,
-`user_context_ == NULL`이어야 한다. Successful `FINAL`은 nonzero ID를 반환하고 reply·timeout·
-terminal 중 한 REQUEST completion을 정확히 한 번 만든다. `timeout_ms_ == 0`은
+`user_context_ == NULL`이어야 한다. Admission된 `FINAL`은 nonzero REQUEST ID를 반환하고
+reply·timeout·terminal 중 한 REQUEST completion을 정확히 한 번 만든다. `timeout_ms_ == 0`은
 `ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS`의 값인 기본 5,000 ms를 snapshot한다.
 `FINAL`의 `user_context_`는 `NONE`과 `DONTWAIT` 모두에서 NULL 또는 opaque pointer를 받으며
 successful completion에 그대로 반환한다.
@@ -338,12 +335,20 @@ successful completion에 그대로 반환한다.
 후보에는 남지만 request 후보에서는 제외한다. Known ROUTER가 없으면
 `ZLINK_SUBMIT_NOT_CONNECTED`+`ENOTCONN`, known ROUTER가 있으나 모두 weight `0`이면
 `ZLINK_SUBMIT_NOT_ADMITTED`+`ECONNREFUSED`다. `NONE FINAL`은 `SNDTIMEO` 안에서 unknown
-endpoint의 handshake와 eligible ROUTER를 기다린 뒤 같은 판정식을 적용한다. `DONTWAIT FINAL`은
-즉시 같은 판정식을 적용한다. Detached positive-weight known ROUTER를 선택한 경우에만 그 configured
-endpoint에 pending되며 `FINAL`에서 고른 endpoint를 operation 종료까지 바꾸지 않는다.
+endpoint의 handshake와 eligible ROUTER를 기다린 뒤 이 판정식을 적용한다. `NONE FINAL`이 detached
+positive-weight known ROUTER를 선택한 경우에만 그 configured endpoint에서 기다리며 `FINAL`에서 고른
+endpoint를 operation 종료까지 바꾸지 않는다.
 
-Reply timeout은 local send queue admission부터 시작한다. Admission 전 DONTWAIT pending은 같은
-endpoint에 다시 시도하고 timeout을 시작하지 않는다. Admission 뒤 disconnect가 발생하면 payload를
+`DONTWAIT FINAL`은 admission을 한 번만 시도하고 endpoint를 고정하지 않는다. Eligible ROUTER가
+없거나(known ROUTER 없음, 모두 weight `0`, connect 직후 peer `0`개) 선택한 ROUTER에 쓰기 여유가
+없으면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 nonzero wait token을 반환하며, token의 target은
+request 후보 집합 전체다. Core는 request payload를 보관하지 않는다. 어느 후보든 쓰기 여유를
+알리거나, ROUTER로 확인된 peer가 연결되거나, weight가 `0`에서 양수로 바뀌면 Core는
+`ZLINK_COMPLETION_WRITABLE` record를 하나 발행하고, caller가 같은 request를 다시 제출하면 그 시점의
+선택 절차로 ROUTER를 다시 고른다.
+
+Reply timeout은 local send queue admission, 즉 `ZLINK_SUBMIT_OK` 반환부터 시작한다. Wait token이
+유지되는 동안은 timeout이 시작되지 않는다. Admission 뒤 disconnect가 발생하면 payload를
 replay하지 않고 correlation과 남은 monotonic budget만 유지한다. Completion ownership과 close는
 [Socket 공통](README.ko.md#completion-pull과-ownership)을 따른다.
 
@@ -393,11 +398,9 @@ snapshot)만으로 다음을 확인한다. 각 항목은 test 하나로 이어�
   하나로 보이며, FINAL 또는 rollback 뒤에는 가장 최근 값만 반영된다.
 - Application multipart의 첫 part를 받은 뒤 pipe의 remote weight가 `0`이 되어도 같은 pipe가
   FINAL까지 남은 part를 전달하고, 다음 message 선택부터 제외된다.
-- Remote weight 변경은 admission 전 pending인 DONTWAIT REQUEST와 wait token이 있는 DONTWAIT
-  SEND를 다시 평가한다. Message 시작 전에 weight가 `0`이 되면 pending REQUEST의 completion은
-  `ZLINK_SEND_TERMINAL`이고 `send_terminal_errno == ECONNREFUSED`이며 SEND wait token은 끝나지
-  않는다. `0`에서 양수로 바뀌면 SEND wait token에 WRITABLE record가 발행되고 pending REQUEST는
-  다른 write-activation event 없이 재시도할 수 있다.
+- Remote weight 변경은 wait token이 있는 DONTWAIT SEND와 REQUEST를 다시 평가한다. Weight가 `0`이
+  되어도 wait token은 끝나지 않는다. `0`에서 양수로 바뀌면 SEND·REQUEST wait token에 WRITABLE
+  record가 발행된다.
 - Application 최대값을 10 byte보다 작게 설정해도 pair readiness·FLOWSTATE와 peer 선택·monitor로
   관찰하는 weight 변경은 막히지 않는다.
 - Reconnect 뒤 peer 선택과 monitor는 새 connection의 현재 weight를 반영한다. Active standby를
@@ -410,9 +413,7 @@ snapshot)만으로 다음을 확인한다. 각 항목은 test 하나로 이어�
 - 같은 peer와 같은 가중치로 설정하고 후보 식별자가 서로 다른 두 process는 같은 선택 순서를 낸다.
 - 재연결한 peer는 누적값 `0`에서 다시 시작하고 정렬 위치는 이전과 같다.
 - 쓰기 여유가 없어 message를 받지 못한 peer는 그 message에 한해서만 후보에서 빠지고, 여유를 다시 알리면 유지된 누적값에서 이어간다.
-- DONTWAIT REQUEST가 pending으로 전환되면 FINAL에서 고른 configured endpoint를 고정하고,
-  HWM이나 reconnect를 기다리는 동안 다른 endpoint로 바꾸지 않는다.
-- DONTWAIT SEND는 endpoint를 고정하지 않는다. 쓰기 여유가 있는 후보가 없으면
+- DONTWAIT SEND와 REQUEST는 endpoint를 고정하지 않는다. 쓰기 여유가 있는 후보가 없으면
   `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 nonzero wait token을 반환하고, 어느 후보든 쓰기
   여유를 알리거나 새 peer가 연결되면 WRITABLE record 하나가 발행되며, 다시 제출하면 peer를
   다시 고른다. peer가 `0`개여도 wait token을 받는다.
@@ -426,12 +427,15 @@ snapshot)만으로 다음을 확인한다. 각 항목은 test 하나로 이어�
 **Request와 completion**
 - Request FINAL이 `ZLINK_SUBMIT_OK`이면 nonzero ID를 반환하고 reply·timeout·terminal 중 하나를
   REQUEST completion으로 정확히 한 번 반환한다. Submit 실패는 ID `0`이고 completion이 없다.
-- Known positive-weight ROUTER가 없으면 `ZLINK_SUBMIT_NOT_CONNECTED`+`ENOTCONN`, known ROUTER가
-  있지만 모두 weight `0`이면 `ZLINK_SUBMIT_NOT_ADMITTED`+`ECONNREFUSED`다. DEALER peer는
-  typed request 후보가 아니다.
-- `NONE`은 `SNDTIMEO` 안에서 eligible ROUTER가 생기기를 기다리고, `DONTWAIT`은 즉시 판정한다.
-  FINAL에서 고른 configured endpoint는 reconnect 동안 바뀌지 않는다.
-- Request timeout은 local queue admission부터 시작하고 admission 전 pending 시간은 포함하지 않는다.
+- `NONE`은 `SNDTIMEO` 안에서 eligible ROUTER가 생기기를 기다린 뒤 known positive-weight ROUTER가
+  없으면 `ZLINK_SUBMIT_NOT_CONNECTED`+`ENOTCONN`, known ROUTER가 있지만 모두 weight `0`이면
+  `ZLINK_SUBMIT_NOT_ADMITTED`+`ECONNREFUSED`다. DEALER peer는 typed request 후보가 아니다. FINAL에서
+  고른 configured endpoint는 reconnect 동안 바뀌지 않는다.
+- `DONTWAIT`은 admission을 한 번만 시도하고 endpoint를 고정하지 않는다. Eligible ROUTER가 없거나
+  쓰기 여유가 없으면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 nonzero wait token을 반환하고 Core는
+  payload를 보관하지 않는다. WRITABLE record 뒤 caller가 같은 request를 다시 제출하면 ROUTER를 다시
+  선택한다.
+- Request timeout은 local queue admission부터 시작하고 wait token이 유지되는 동안은 시작하지 않는다.
   Admission 뒤 disconnect는 payload를 replay하지 않으며 남은 monotonic budget을 reset하지 않는다.
 - SEND wait token과 REQUEST가 공유하는 completion reservation이 포화하면 REQUEST FINAL은 flags와
   관계없이 즉시 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`, completion 없음이고, DONTWAIT

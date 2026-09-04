@@ -154,12 +154,9 @@ creates a weight record on public receive or the Completion lane.
 If the applied value becomes `0` after a multipart has selected a pipe, that message completes
 through FINAL on the same pipe. The next message selection excludes it.
 
-An actual remote-weight change re-evaluates an admission-pending DONTWAIT request and a DONTWAIT send
-that holds a wait token. If the weight becomes `0` before the message begins, the pending REQUEST
-completion is `ZLINK_SEND_TERMINAL` with `send_terminal_errno == ECONNREFUSED`; a SEND wait token
-does not end when the weight becomes `0`. A change from `0` to a positive value publishes a
-`ZLINK_COMPLETION_WRITABLE` record for that RID's SEND wait token, and a pending REQUEST may retry
-without another write-activation event.
+An actual remote-weight change re-evaluates a DONTWAIT send or request that holds a wait token. A
+wait token does not end when the weight becomes `0`. A change from `0` to a positive value publishes
+a `ZLINK_COMPLETION_WRITABLE` record for that RID's SEND or REQUEST wait token.
 
 An active duplicate keeps its own latest value while standby and uses it if that same pipe is
 selected later. Setting the Application maximum below 10 bytes does not prevent pair readiness,
@@ -214,24 +211,34 @@ ZLINK_EXPORT zlink_submit_result_t zlink_request_part(
 
 `target_router_rid_or_null_` must be the non-NULL logical RID of a target ROUTER. A DEALER RID
 returns `ZLINK_SUBMIT_NOT_ADMITTED` with `EPROTOTYPE`; DATA send to the same RID remains allowed.
-An RID absent from the routing map returns `ZLINK_SUBMIT_NOT_FOUND` with `ENOENT`.
+For an RID absent from the routing map, `NONE` returns `ZLINK_SUBMIT_NOT_FOUND` with `ENOENT` and
+`DONTWAIT` returns `ZLINK_SUBMIT_NOT_CONNECTED` with `EHOSTUNREACH` without creating a wait token.
 
 A `MORE` call requires `timeout_ms_ == 0` and `user_context_ == NULL`. The optional ID output is set
-to `0` before other validation; a successful FINAL returns a nonzero ID. Before publishing the
+to `0` before other validation; an admitted FINAL returns a nonzero REQUEST ID. Before publishing the
 request on the wire, Core reserves an ID and one of the shared SEND and REQUEST completion slots.
 Slot exhaustion immediately returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, ID `0`, and no
 completion, regardless of flags.
 
 `NONE FINAL` uses a temporary reservation and waits within `SNDTIMEO` for same-RID local admission.
 A pre-admission failure releases the reservation and ends synchronously with ID `0` and no
-completion. If the pending pool permits it, `DONTWAIT FINAL` transfers ownership of a pre-admission
-record to Core and returns a nonzero REQUEST ID. This stage does not create a SEND completion.
+completion.
+
+`DONTWAIT FINAL` makes one same-RID admission attempt; there is no state in which Core owns the
+record before admission. Immediate admission returns a nonzero REQUEST ID. Backpressure from HWM,
+byte credit, or flow pause, or a route for the RID that exists but is not ready yet (transport pair
+not ready, weight `0`), returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token
+whose target is that RID; Core retains no request payload. When that RID has write credit again,
+exactly one `ZLINK_COMPLETION_WRITABLE` record with the same token, context, and `peer_rid` follows,
+and the caller resubmits the same request. Credit on another RID does not publish this token. A
+RID with no mandatory route returns `ZLINK_SUBMIT_NOT_CONNECTED` with `EHOSTUNREACH`, ID `0`, and
+no token.
 
 `timeout_ms_ == 0` snapshots the `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS` value, whose default is
-5,000 ms. The reply timeout starts at outbound local admission and excludes time pending before
-admission. A disconnect after admission does not replay the payload; Core retains only correlation
-and the remaining monotonic budget. Exactly one of reply, timeout, and terminal creates the REQUEST
-completion.
+5,000 ms. The reply timeout starts at outbound local admission, that is, when `ZLINK_SUBMIT_OK` is
+returned, and does not start while a wait token is outstanding. A disconnect after admission does
+not replay the payload; Core retains only correlation and the remaining monotonic budget. Exactly
+one of reply, timeout, and terminal creates the REQUEST completion.
 
 ```mermaid
 sequenceDiagram
@@ -438,12 +445,9 @@ and status snapshots. Each item maps to one test.
 - If a pipe's remote weight becomes `0` after the first part of an Application multipart is
   accepted, the same pipe carries every remaining part through FINAL and is excluded starting with
   the next message selection.
-- A remote-weight change re-evaluates an admission-pending DONTWAIT REQUEST and a DONTWAIT SEND
-  holding a wait token for the same logical RID: if the weight becomes `0` before the message
-  begins, the pending REQUEST completion is `ZLINK_SEND_TERMINAL` with
-  `send_terminal_errno == ECONNREFUSED`, and the SEND wait token does not end; a change from `0` to
-  a positive value publishes a WRITABLE record for that RID's SEND wait token and permits the
-  pending REQUEST to retry without another write-activation event.
+- A remote-weight change re-evaluates a DONTWAIT SEND or REQUEST holding a wait token for the same
+  logical RID. The wait token does not end when the weight becomes `0`; a change from `0` to a
+  positive value publishes a WRITABLE record for that RID's SEND or REQUEST wait token.
 - Setting an Application maximum below 10 bytes does not prevent pair readiness, FLOWSTATE, or
   weight changes observed through peer selection and monitoring.
 - After reconnect, peer selection and monitoring reflect the current weight on the new connection.
@@ -479,10 +483,11 @@ and status snapshots. Each item maps to one test.
 - A failure after the first multipart part is accepted rolls back the complete record, so no partial record becomes visible to the peer.
 
 **Request completion**
-- A successful FINAL returns a nonzero ID and exactly one REQUEST completion for reply, timeout, or terminal; a failed submit returns ID `0` and no completion.
+- An admitted FINAL returns a nonzero REQUEST ID and exactly one REQUEST completion for reply, timeout, or terminal; a failed submit without a wait token returns ID `0` and no completion.
+- A DONTWAIT FINAL makes one admission attempt. Backpressure or a route that is not ready (transport pair not ready, weight `0`) returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token for that RID, and the caller resubmits the same request after the WRITABLE record with the same token, context, and `peer_rid`. A RID with no mandatory route returns `ZLINK_SUBMIT_NOT_CONNECTED` with `EHOSTUNREACH`, ID `0`, and no token.
 - If the last call uses `timeout_ms_ == 0`, it uses the `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS` default.
 - A valid error reply preserves a non-OK `zlink_request_result_t` mapped from errno and the payload after the errno part in the completion; a malformed errno part completes with `ZLINK_REQUEST_PROTOCOL_ERROR` and no payload.
-- The request timeout starts at local admission and excludes time pending before admission; a disconnect after admission neither replays the payload nor resets the monotonic budget.
+- The request timeout starts at local admission and does not start while a wait token is outstanding; a disconnect after admission neither replays the payload nor resets the monotonic budget.
 - Shared completion-slot exhaustion immediately returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, ID `0`, and no completion, regardless of flags.
 
 **Reply**
