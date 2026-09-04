@@ -1,0 +1,32 @@
+# Job: java framework — SUB sockets are registered with POLLCOMPLETION on the receive poller (spec 05-polling forbids it) → thousands of NOT_SUPPORTED exceptions per zone node
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1 h cap. Read `AGENTS.md` (root)
+§2/§3, `framework/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, other languages' trees; do not commit. Another job
+(`bucketB-java-zoneworld-2`) works on `ZLinkJavaRawServicePort` / the mesh receive loop concurrently —
+keep your change to the receive-poller registration and the subscriber socket.
+
+## Facts (`doc/plan/c016-worklog/bucketB-java-zoneworld-summary.md` §"확인한 runtime 결함")
+- `4d263e66b9` made `ZLinkJavaSocketReceivePoller.ensureRegistered()` register every socket with
+  `POLLIN|POLLOUT|POLLCOMPLETION` (`.../runtime/binding/ZLinkJavaSocketReceivePoller.java:40-54`).
+  SUB sockets have no completion queue; Core polling spec allows POLLCOMPLETION only for
+  PAIR/DEALER/ROUTER/STREAM and ends unsupported source events with NOT_SUPPORTED/ENOTSUP
+  (`core/doc/spec/core/05-polling.ko.md:85-90`, `:282-284`). Result: `ZLinkFanoutLocationRuntime`
+  logged `fanout location tick failed` 3,262 / 3,006 / 2,144 times (~10 ms interval) in the three
+  ZoneWorld zone nodes (`zlink-work/c016/logs/bucketB-java-zoneworld-current-prefix2/zone-node-1.log:19-39`,
+  first stack at `SocketCore.completionOwner()`).
+- The previous job prototyped: SUB poller registers `POLLIN` only (constructor flag in
+  `ZLinkJavaSocketReceivePoller`, `ZLinkJavaSubscriberSocket` passing false) plus regression test
+  `subscriberReadinessDoesNotClaimAnUnsupportedCompletionQueue` (passed), then reverted it under the
+  one-cause rule. Re-implement it cleanly: the registration should follow the socket kind (only
+  sockets that own a completion queue register POLLOUT|POLLCOMPLETION), matching how cpp/dotnet/node
+  register SUB (`4644af9d03 framework/dotnet: poll SUB sockets without claiming completion ownership`
+  is the dotnet precedent — read it for parity).
+- Env: `cd framework/languages/java && TMPDIR=/dev/shm/zlink-tmp-java flock -w7200 /tmp/zlink-jvm-gate.lock ./gradlew --no-daemon :zlink-framework-core:test --tests '*ReceiveOwner*' --tests '*Subscriber*'`;
+  then a ZoneWorld zone-node smoke: `cd samples/java/ZoneWorld && ./run_sample.sh ZW-G1` with
+  `ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/.artifacts/wsl/install/zlink-core/0.17.0/lib/libzlink.so`
+  and confirm `fanout location tick failed` count is 0 in the zone-node logs.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-java-sub-pollcompletion-summary.md`: change `file:line`, spec clause,
+parity reference, regression test, exception count before/after, focused test results, BLOCKERS.

@@ -50,7 +50,7 @@
 - [x] cpp 샘플 신뢰성 있는 실행 — 별도 build dir `build/linux-ninja-c-e2e`(protobuf include 수정 커밋) 에서 **7/7 PASS**(`c-cross-language-e2e-2-summary.md`)
 - [x] cross-language E2E: C++ host stale 문제는 caller가 `ZLINK_CPP_BUILD_DIR` 미지정이 원인(runner는 이미 우선 계약) — 0.17 host로 재실행. C++↔.NET·C++↔Node messaging/flow/stream PASS, C++→.NET spot-route PASS.
       `.NET→C++ spot-route` `Unavailable` = .NET RouteMesh admission 후보 선택 결함(unilateral 연결의 Hello를 새 inbound로 오인해 유일한 outbound 폐기; cpp `raw_mesh_node_owner.cpp:445-476` fallback과 parity) → 수정(미커밋, dotnet 전체 unit gate 후 커밋) 후 **cpp all-stage runner 32/32 PASS**(Java↔C++·relocation·User-Spot Join 포함).
-      잔여: node smoke의 .NET TestHost flow Activity tag 불일치(D) — job 진행 중
+      node smoke flow tag = node 하네스가 spec attribute 이름 대신 log 축약 key를 읽던 문제 → `4135d4edf6`; node smoke 12/12 stage PASS(마지막 Redis stage는 미복원 test project = 환경, `dotnet restore` 완료)
 - [x] `java-cross` selector(Java↔Node/.NET) 4/4 통과. Java↔C++ 방향은 all-stage runner 후반이라 위 .NET→C++ 실패 해소 후 실행
 
 ### D. 최종 게이트 (plan line 143: framework unit + cross-language E2E + 7 samples 전부 green)
@@ -60,7 +60,9 @@
       cpp gate-v2 63/69 → stream-connector fixture(RAW mode before bind, spec 08-stream §2) `dbfcf7d6fe`·lz4 packaging `20b94c3457`·package-test config `4573c09a2a` 수정 후 잔여 = inventory 278(C)·m6b 1909 flake(C);
       dotnet 전체 unit gate 감독관 실행 중(handover 수정 커밋 대기)
 - [ ] 7 samples × 4언어 green — **cpp 7/7**; **node 7/7**(SupportChat budget `2e3b1b47e4`, ZoneWorld entry html `c67deb44e0`, runner PASS marker `2ceb137abe`);
-      java: TicTacToe·SupportChat·DeliveryDispatch(`ed156f5983`+teardown `6682ae0db1`)·GameQuest(heartbeat `dc9fe76100`)·ShoppingMall = 5/7 green, Bingo 재실행 중, ZoneWorld job 진행 중; dotnet 7 samples 미실행(dotnet 커밋 후)
+      java: TicTacToe·SupportChat·DeliveryDispatch(`ed156f5983`+teardown `6682ae0db1`)·GameQuest(heartbeat `dc9fe76100`)·ShoppingMall = 5/7 green, Bingo 재실행 중;
+      ZoneWorld 미해결 — gateway에서 mesh actor-create reply 994 ms·bound send admission 2.008 s 지연(양자화된 wake-up gap 의심, `bucketB-java-zoneworld-summary.md`), 부수 결함 SUB socket POLLCOMPLETION 등록(spec 05-polling 위반, 수천 건 NOT_SUPPORTED) → job 2건 진행 중;
+      dotnet 7 samples 미실행(dotnet 커밋 후)
 - [ ] cross-language E2E green
 - [ ] 최종 커밋+푸시
 
