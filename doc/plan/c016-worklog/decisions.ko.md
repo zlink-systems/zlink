@@ -1099,4 +1099,4 @@ server·client를 C 러너 의미에 맞춤)은 별도 트랙·별도 report로 
 `<libFile>.<pid>.tmp` + ATOMIC_MOVE로 동시 JVM 경합 처리, 크기 불일치 시 재추출, 캐시 불가 시 기존 temp 방식 fallback, Windows deps도 같은
 디렉터리). `ZLINK_LIBRARY_PATH` 우선순위·`LOADED_LIBRARY_PATHS` 의미 유지. spec(`bindings/doc/spec/java`)에는 로더 경로 계약 없음(파일 목록만) → spec gap 없음.
 회귀 테스트 `LibraryLoaderTest`(캐시 재사용·temp 증가 0 / 손상 시 재추출 / 캐시 불가 시 fallback 로드 — 별도 JVM probe). gate(JDK 22): `tests/run_tests.sh`
-117/117, samples 7/7, `git diff --check`. job 요약 `java-d087-summary.md`. 커밋: 아래 해시(A는 이 커밋 뒤 로컬 패키지 재빌드).
+117/117, samples 7/7, `git diff --check`. job 요약 `java-d087-summary.md`. 커밋 `37af8073a7`(A는 이 커밋 뒤 로컬 패키지 재빌드).
