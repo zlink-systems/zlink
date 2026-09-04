@@ -37,6 +37,16 @@ impl MessageParts {
     pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Message> {
         self.first.iter_mut().chain(self.rest.iter_mut())
     }
+
+    pub(crate) fn try_clone(&self) -> Result<Self, crate::ConfigError> {
+        let first = self.first.as_ref().map(Message::try_clone).transpose()?;
+        let rest = self
+            .rest
+            .iter()
+            .map(Message::try_clone)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { first, rest })
+    }
 }
 
 /// A multipart HWM-managed send builder.
@@ -138,7 +148,13 @@ first_part!(ReplyOp);
 more_parts!(ReplyOp);
 
 impl SendOp<Ready> {
-    /// Starts a nonblocking Core submit and resolves from the socket completion queue.
+    /// Starts nonblocking admission attempts and resolves when Core admits the
+    /// packet.
+    ///
+    /// An immediately admitted SEND has completion ID zero and resolves on the
+    /// first poll. Under backpressure the future retains the packet, waits for
+    /// its exact WRITABLE token through the socket poller, and retries the same
+    /// packet. No ordinary SEND completion is produced.
     pub fn submit(self) -> impl std::future::Future<Output = Result<(), SubmitError>> + Send {
         crate::operations::submit_send(self.inner)
     }

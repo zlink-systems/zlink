@@ -141,9 +141,14 @@ where
 {
     let mut future = pin!(future);
     let mut context = TaskContext::from_waker(Waker::noop());
-    match future.as_mut().poll(&mut context) {
-        Poll::Ready(result) => result,
-        Poll::Pending => Ok(()),
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(result) => return result,
+            // Preserve this exact packet and token until WRITABLE drives its
+            // retry. Replacing it with another one-shot attempt would leak a
+            // growing set of payload-free wait-token sinks under sustained HWM.
+            Poll::Pending => std::thread::yield_now(),
+        }
     }
 }
 
@@ -629,9 +634,8 @@ where
 }
 
 // -- Send loop ---------------------------------------------------------------
-// Core 0.16 one-way sends use DONTWAIT admission in the sender thread. The
-// returned Future is polled once above; pending terminals are detached and
-// drained by the binding completion owner.
+// One-way sends use the managed Future in the sender thread. Each packet stays
+// owned by that Future across WRITABLE and is retried before the next sequence.
 
 /// One-way send loop: active only.
 /// `send_fn` returns false when nonblocking send cannot accept a message yet.

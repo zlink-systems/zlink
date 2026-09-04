@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Generic multipart operation storage for the raw Core 0.16.0 socket surface.
+//! Generic multipart operation storage for the raw Core 0.17.0 socket surface.
 //!
 //! The operation builders keep message and completion ownership in this module.
 //! Socket contracts only select a raw operation kind; they do not carry routing

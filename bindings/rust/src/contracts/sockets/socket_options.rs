@@ -64,7 +64,8 @@ pub enum RidDuplicatePolicy {
 pub enum SubmitRetryMode {
     /// Never retry; a failed submit fails immediately.
     Off = 0,
-    /// Retry when the submit fails locally, such as under back-pressure.
+    /// Retry selected local connection failures. DONTWAIT backpressure is
+    /// reported as EAGAIN and is not covered by this Core option.
     LocalFailure = 1,
 }
 
@@ -245,8 +246,8 @@ impl<'a> CommonSocketOptions<'a> {
     pub fn reconnect_interval_max(&self) -> Result<Duration, ConfigError> {
         self.inner.reconnect_interval_max()
     }
-    /// Sets whether a submit that fails locally (such as under back-pressure) is
-    /// retried; see [`SubmitRetryMode`].
+    /// Sets whether selected local connection failures are retried; DONTWAIT
+    /// backpressure is excluded. See [`SubmitRetryMode`].
     pub fn set_submit_retry_mode(&self, value: SubmitRetryMode) -> Result<(), ConfigError> {
         self.inner.set_submit_retry_mode(value as i32)
     }

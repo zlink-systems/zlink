@@ -235,10 +235,12 @@ impl PollerStorage {
         let mut written = 0usize;
         for src in raw_events.iter().take(rc as usize) {
             let mut revents = src.events;
-            if revents & POLLCOMPLETION != 0 {
-                let drained = registrations
-                    .get(&(src.socket as usize))
-                    .and_then(|registration| registration.completion_owner.as_ref())
+            let registration = registrations.get(&(src.socket as usize));
+            if revents & (crate::POLLOUT | POLLCOMPLETION) != 0
+                && registration.is_some_and(|item| item.events & POLLCOMPLETION != 0)
+            {
+                let drained = registration
+                    .and_then(|item| item.completion_owner.as_ref())
                     .map(|owner| owner.drain(true))
                     .transpose()?
                     .unwrap_or(0);

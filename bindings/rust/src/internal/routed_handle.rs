@@ -2,10 +2,9 @@
 
 //! Shared ownership of one DEALER/ROUTER native handle.
 //!
-//! This is a handle holder only. It owns no thread, no queue, no retry policy
-//! and no deadline timer. The 0.16.0 contract makes the binding a pure Core
-//! wrapper and hands every send completion, every HWM wait and every deadline
-//! to Core.
+//! This is a handle holder only. It owns no thread, queue, retry policy, or
+//! deadline timer. SEND retry state belongs to the operation/completion owner;
+//! REQUEST deadlines remain owned by Core.
 
 use std::ffi::c_void;
 use std::sync::Arc;

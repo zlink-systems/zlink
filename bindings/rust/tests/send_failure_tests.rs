@@ -1,12 +1,12 @@
-//! Send Failure Contract Tests – verify that blocking send failures surface
-//! as errors and non-blocking sends return explicit outcomes.
+//! Send failure contracts for blocking terminals, managed DONTWAIT sends, and
+//! one-shot DONTWAIT publish.
 
 mod test_support;
 
 use std::thread;
 use std::time::Duration;
 
-use zlink::{Context, Message, RoutingId, SendFlags};
+use zlink::{Context, Message, RoutingId, SendFlags, SubmitResult};
 
 #[test]
 fn sync_blocking_terminal_admits_a_send() {
@@ -59,26 +59,22 @@ fn async_terminal_still_completes_after_sync_terminal_is_added() {
 }
 
 #[test]
-fn blocking_send_failure_surfaces_error() {
+fn routed_send_to_missing_target_is_immediately_not_connected() {
     // ROUTER with mandatory=true, no connected peers
     let ctx = Context::new().unwrap();
     let router = ctx.router_socket().unwrap();
     router.bind("inproc://sf-router-mandatory").unwrap();
     router.router_options().set_mandatory(true).unwrap();
-    router
-        .common_options()
-        .set_send_timeout(Duration::from_millis(100))
-        .unwrap();
-
     let rid = RoutingId::from(b"nonexistent-peer");
     let msg = Message::try_from(b"will-fail").unwrap();
-    let result = test_support::block_on(router.send(&rid).message(msg).submit());
-
-    // Must be an error, not silently swallowed
-    assert!(
-        result.is_err(),
-        "blocking send to nonexistent peer must fail"
-    );
+    let mut future = Box::pin(router.send(&rid).message(msg).submit());
+    let error = match test_support::poll_once(&mut future) {
+        std::task::Poll::Ready(Err(error)) => error,
+        std::task::Poll::Ready(Ok(())) => panic!("missing route was admitted"),
+        std::task::Poll::Pending => panic!("missing route incorrectly returned a wait token"),
+    };
+    assert_eq!(error.code(), SubmitResult::NotConnected);
+    assert_eq!(error.native_errno(), libc::EHOSTUNREACH);
 }
 
 #[test]
@@ -109,11 +105,12 @@ fn blocking_publish_failure_surfaces_error() {
 }
 
 #[test]
-fn send_without_peer_stays_core_owned_when_waiter_detaches() {
+fn send_without_peer_keeps_only_a_payload_free_token_after_drop() {
     let ctx = Context::new().unwrap();
     let sock = ctx.pair_socket().unwrap();
     sock.bind("inproc://sf-try-send-nr").unwrap();
-    // No peer connected
+    // No peer connected: Core keeps the wait token and the Future retains the
+    // payload until this explicit drop.
 
     let msg = Message::try_from(b"data").unwrap();
     let mut future = Box::pin(sock.send().message(msg).submit());

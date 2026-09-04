@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crate::error::{RequestError, RequestResult, SubmitError, SubmitResult, ZlinkError};
 use crate::ffi;
-use crate::internal::{CompletionEntry, CompletionKind, CompletionOwner, RoutedHandle};
+use crate::internal::{CompletionEntry, CompletionOwner, RoutedHandle};
 use crate::message::{Message, RoutingId};
 use crate::messaging_operations::{Empty, MessageParts, RequestOp, RequestOpStorage};
 use crate::native_errors::{check_submit_rc, submit_error_from_errno};
@@ -53,6 +53,7 @@ pub(crate) fn submit_routed_request(
     RequestFuture {
         operation: Some(operation),
         entry: None,
+        owner: None,
         finished: false,
     }
 }
@@ -62,7 +63,7 @@ pub(crate) fn submit_routed_request_sync(
 ) -> Result<Vec<Message>, ZlinkError> {
     validate_request(&operation)?;
     let owner = Arc::clone(&operation.completion_owner);
-    let (entry, user_context) = owner.register(CompletionKind::Request)?;
+    let (entry, user_context) = owner.register_request()?;
     let completion_id = match submit_request_parts(&mut operation, 0, user_context) {
         Ok(id) => id,
         Err(error) => {
@@ -75,12 +76,27 @@ pub(crate) fn submit_routed_request_sync(
         return Err(RequestError::new(RequestResult::InternalError, libc::EPROTO).into());
     }
     entry.publish(completion_id);
-    Ok(entry.wait_request()?)
+    loop {
+        if entry.is_settled() {
+            return Ok(entry
+                .wait_request_or_progress()
+                .expect("settled request outcome")?);
+        }
+        match owner.drive_send_reactor()? {
+            true => std::thread::yield_now(),
+            false => {
+                if let Some(outcome) = entry.wait_request_or_progress() {
+                    return Ok(outcome?);
+                }
+            }
+        }
+    }
 }
 
 struct RequestFuture {
     operation: Option<RequestOpStorage>,
     entry: Option<Arc<CompletionEntry>>,
+    owner: Option<Arc<CompletionOwner>>,
     finished: bool,
 }
 
@@ -100,7 +116,7 @@ impl Future for RequestFuture {
                 return Poll::Ready(Err(error.into()));
             }
             let owner = Arc::clone(&operation.completion_owner);
-            let (entry, user_context) = match owner.register(CompletionKind::Request) {
+            let (entry, user_context) = match owner.register_request() {
                 Ok(registered) => registered,
                 Err(error) => {
                     self.finished = true;
@@ -124,6 +140,7 @@ impl Future for RequestFuture {
                     return Poll::Ready(Err(error.into()));
                 }
             }
+            self.owner = Some(owner);
             self.entry = Some(entry);
         }
 
@@ -141,7 +158,30 @@ impl Future for RequestFuture {
                 self.finished = true;
                 Poll::Ready(Err(error.into()))
             }
-            Poll::Pending => Poll::Pending,
+            Poll::Pending => {
+                let self_driven = match self
+                    .owner
+                    .as_ref()
+                    .expect("request completion owner")
+                    .drive_send_reactor()
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        if let (Some(owner), Some(entry)) = (&self.owner, &self.entry) {
+                            let captured = entry.detach();
+                            if captured {
+                                owner.unregister(Arc::as_ptr(entry) as *mut std::ffi::c_void);
+                            }
+                        }
+                        self.finished = true;
+                        return Poll::Ready(Err(error.into()));
+                    }
+                };
+                if self_driven {
+                    cx.waker().wake_by_ref();
+                }
+                Poll::Pending
+            }
         }
     }
 }
@@ -150,7 +190,12 @@ impl Drop for RequestFuture {
     fn drop(&mut self) {
         if !self.finished {
             if let Some(entry) = &self.entry {
-                entry.detach();
+                let captured = entry.detach();
+                if captured {
+                    if let Some(owner) = &self.owner {
+                        owner.unregister(Arc::as_ptr(entry) as *mut std::ffi::c_void);
+                    }
+                }
             }
         }
     }

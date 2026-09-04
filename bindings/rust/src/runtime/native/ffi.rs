@@ -1,4 +1,4 @@
-//! Raw FFI declarations for the Core 0.16.0 public header set.
+//! Raw FFI declarations for the Core 0.17.0 public header set.
 //!
 //! This module is crate-private. The declarations intentionally contain only
 //! symbols present in the candidate `zlink.h` headers copied into this crate;
@@ -41,6 +41,7 @@ pub enum zlink_completion_kind_t {
     ZLINK_COMPLETION_NONE = 0,
     ZLINK_COMPLETION_SEND = 1,
     ZLINK_COMPLETION_REQUEST = 2,
+    ZLINK_COMPLETION_WRITABLE = 3,
 }
 
 /// Receive-flow state for DEALER/ROUTER sockets. Control uses the Application
@@ -283,6 +284,8 @@ pub enum zlink_option_t {
     ZLINK_OPT_SUBMIT_RETRY_MODE = 0x3037,
     ZLINK_OPT_SUBMIT_RETRY_TIMEOUT = 0x3038,
     ZLINK_OPT_SUBMIT_RETRY_ATTEMPTS = 0x3039,
+    // ABI-retained REQUEST pending-admission limits. Ordinary SEND ignores
+    // both values.
     ZLINK_OPT_PENDING_MAX_MSGS = 0x303A,
     ZLINK_OPT_PENDING_MAX_BYTES = 0x303B,
     ZLINK_OPT_FD = 0x3007,
@@ -527,7 +530,7 @@ impl zlink_poller_event_t {
 }
 
 // ---------------------------------------------------------------------------
-// Functions exported by the Core 0.16.0 headers
+// Functions exported by the Core 0.17.0 headers
 // ---------------------------------------------------------------------------
 
 unsafe extern "C" {

@@ -8,7 +8,7 @@
 mod test_support;
 
 use zlink::{
-    AtomicCounter, Context, Message, MonitorEvent, Received, RecvError, RecvFlags,
+    AtomicCounter, CompletionKind, Context, Message, MonitorEvent, Received, RecvError, RecvFlags,
     RidDuplicatePolicy, RoutingId, SendFlags, SendResult, SocketMonitor, Stopwatch, StreamSocket,
     SubmitRetryMode, SubscriptionEvent, Thread, TopicMessage, XPubSocket,
 };
@@ -146,7 +146,7 @@ fn xpub_socket_has_subscription_event() {
     sock.bind("inproc://surface-xpub").unwrap();
 
     // XPubSocket: publish (synchronous terminal), receive_subscription_event.
-    // There is no `on_send_ready`; Core 0.16.0 reports progress through pull completion.
+    // PUB/XPUB publish never creates SEND or WRITABLE completions.
     let mut event = SubscriptionEvent::empty();
     let _ = sock.receive_subscription_event(&mut event, RecvFlags::DONT_WAIT);
     let _publish = XPubSocket::publish;
@@ -298,4 +298,11 @@ fn send_result_is_explicit_enum() {
     assert!(sent.is_sent());
     assert!(!bp.is_sent());
     assert!(!nr.is_sent());
+}
+
+#[test]
+fn completion_kind_exposes_writable_abi_value() {
+    assert_eq!(CompletionKind::Send as i32, 1);
+    assert_eq!(CompletionKind::Request as i32, 2);
+    assert_eq!(CompletionKind::Writable as i32, 3);
 }

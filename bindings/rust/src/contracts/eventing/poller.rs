@@ -11,9 +11,15 @@ pub(crate) mod private {
 
 /// Poll event flag: the source is readable (a receive will not block).
 pub const POLLIN: i16 = 1;
-/// Poll event flag: the source is writable (a send will not block).
+/// Poll event flag: socket-wide writable readiness is present.
+///
+/// For a DONTWAIT SEND this aggregate level hint can represent an unread
+/// WRITABLE record. The binding pulls the completion queue and resumes only
+/// operations whose exact token, context, and routed target match.
 pub const POLLOUT: i16 = 2;
-/// Poll event flag: an asynchronous operation completed.
+/// Poll event flag: a completion queue record is available. REQUEST uses this
+/// for its terminal result; SEND backpressure is resumed by WRITABLE on
+/// [`POLLOUT`].
 pub const POLLCOMPLETION: i16 = 32;
 
 /// A built-in socket source that can be registered with a [`Poller`].
@@ -99,6 +105,9 @@ impl Poller {
 
     /// Registers `socket` to be watched for `events`; `slot` is a caller token
     /// echoed back in the matching [`PollEvent`].
+    ///
+    /// Register both [`POLLOUT`] and [`POLLCOMPLETION`] when this poller owns
+    /// progress for managed SEND futures.
     pub fn add_socket(
         &self,
         socket: &dyn Pollable,
@@ -110,8 +119,9 @@ impl Poller {
 
     /// Modifies the event mask for a previously added socket.
     ///
-    /// Adding or removing [`POLLCOMPLETION`] transfers the socket drain owner
-    /// atomically with the native registration change.
+    /// Adding or removing [`POLLCOMPLETION`] transfers the socket completion
+    /// drain owner atomically with the native registration change. Register
+    /// [`POLLOUT`] with it when this poller drives backpressured SEND futures.
     pub fn modify_socket(&self, socket: &dyn Pollable, events: i16) -> Result<(), ConfigError> {
         self.inner.modify_socket(socket, events)
     }
@@ -151,6 +161,10 @@ impl Poller {
     /// Waits up to `timeout_ms` milliseconds for sources to become ready,
     /// writing up to `events.len()` results into `events`; a negative timeout
     /// blocks indefinitely. Returns the number of ready sources written.
+    /// Before returning a socket's [`POLLOUT`] or [`POLLCOMPLETION`] event,
+    /// the owning poller pulls completion records through NO_DATA so matching
+    /// WRITABLE waiters can retry and REQUEST waiters retain their existing
+    /// completion behavior.
     pub fn wait(&self, events: &mut [PollEvent], timeout_ms: i64) -> Result<usize, RecvError> {
         self.inner.wait(events, timeout_ms)
     }

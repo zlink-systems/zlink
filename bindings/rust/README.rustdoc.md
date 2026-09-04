@@ -22,9 +22,48 @@ bindings/rust/target/doc/zlink/index.html
 - Domain objects (`Message`, error types, enums)
 - FFI internals (`zlink::ffi`) are private and excluded
 
-The current approved crate payload contains the Core 0.16.0 ABI with the 0.16.0
+The current approved crate payload contains the Core 0.17.0 ABI with the 0.17.0
 Linux x86_64 runtime. Other target triples fail during build until a matching native
 runtime has passed the Core package provenance and clean-consumer checks.
+
+## DONTWAIT SEND and WRITABLE
+
+- A DONTWAIT SEND makes one admission attempt. Immediate admission succeeds
+  with completion ID `0`; Core does not enqueue a SEND completion.
+- HWM, missing credit, flow pause, or an existing-but-unready target returns
+  `SubmitResult::Backpressured` with `EAGAIN` and a nonzero wait token. Core
+  retains the token, user context, and target, but never the payload.
+- Once the target can accept another attempt, Core enqueues
+  `CompletionKind::Writable` and wakes pollers with `POLLOUT`. WRITABLE grants
+  one retry; it is not notification that the original SEND succeeded.
+- ROUTER and STREAM sends to a routing ID that has no route fail as
+  `SubmitResult::NotConnected` without a wait token.
+
+`SendOp::submit()` implements the managed asynchronous form. It retains the
+exact multipart packet, pulls completion records through NO_DATA after
+`POLLOUT`, matches the token, user context, and routed target, then resubmits
+that packet. A repeated backpressure result arms the new token and repeats the
+same state transition. The private path is driven by nonblocking executor turns
+and creates no SEND worker thread, sleep, or timer.
+
+Registering a socket with a public `Poller` for `POLLCOMPLETION` transfers
+completion-queue ownership to that poller. Include `POLLOUT` in the mask and
+keep calling `Poller::wait()` while it drives backpressured SEND futures.
+REQUEST/reply continues to use `CompletionKind::Request` and
+`POLLCOMPLETION`; successful REQUEST FINAL still reserves a nonzero completion
+ID and completes with its reply or terminal result.
+
+`CompletionKind::Send` remains public with ABI value `1`, but it is reserved:
+ordinary SEND success never produces that record. `CompletionKind::Request`
+is `2`, and `CompletionKind::Writable` is `3`. PUB/XPUB publish remains a
+synchronous one-shot and produces neither SEND nor WRITABLE completions;
+`SendFlags::DONT_WAIT` backpressure is returned as `SubmitError` with
+`SubmitResult::Backpressured` and native `EAGAIN`.
+
+The ABI-retained `ZLINK_OPT_PENDING_MAX_MSGS` and
+`ZLINK_OPT_PENDING_MAX_BYTES` values limit only Core-owned DONTWAIT REQUEST
+pending admission. Ordinary SEND ignores them, and the typed Rust socket
+option surface does not expose them as SEND controls.
 
 ## Context Thread Safety
 

@@ -30,9 +30,9 @@ pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
 
 /// Polls a future once with a waker that does nothing.
 ///
-/// Core send operations only reach the wire when the returned `Future` is
-/// polled, so a test that needs a Core-owned *pending* operation has to poll it
-/// at least once without awaiting the result.
+/// SEND operations only make their first DONTWAIT admission attempt when the
+/// returned `Future` is polled. A test that needs a live WRITABLE wait token
+/// must therefore poll it at least once without awaiting the result.
 #[allow(dead_code)]
 pub(crate) fn poll_once<F: Future + Unpin>(future: &mut F) -> Poll<F::Output> {
     struct NoopWake;

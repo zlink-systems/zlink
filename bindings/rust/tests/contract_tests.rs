@@ -350,6 +350,25 @@ fn pollcompletion_reports_only_after_request_future_is_settled() {
     dealer
         .connect("inproc://rust-public-completion-owner")
         .unwrap();
+    dealer
+        .common_options()
+        .set_send_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    router
+        .common_options()
+        .set_receive_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+
+    // Complete a blocking data handshake before the first DONTWAIT REQUEST.
+    // This removes transport attachment from the completion-owner assertion.
+    dealer
+        .send()
+        .message(Message::try_from(b"ready").unwrap())
+        .submit_sync()
+        .unwrap();
+    let mut ready = Received::empty();
+    assert!(router.recv(&mut ready, RecvFlags::NONE).unwrap());
+    assert_eq!(ready.single_part().unwrap().as_bytes(), b"ready");
 
     let poller = Poller::new().unwrap();
     poller.add_socket(&dealer, POLLCOMPLETION, 17).unwrap();
@@ -419,6 +438,13 @@ fn reply_token_rejects_a_different_router_owner_before_native_submit() {
     let dealer = ctx.dealer_socket().unwrap();
     router.bind("inproc://rust-reply-token-owner").unwrap();
     dealer.connect("inproc://rust-reply-token-owner").unwrap();
+    dealer
+        .send()
+        .message(Message::try_from(b"ready").unwrap())
+        .submit_sync()
+        .unwrap();
+    let mut ready = Received::empty();
+    assert!(router.recv(&mut ready, RecvFlags::NONE).unwrap());
 
     let responder = std::thread::spawn(move || {
         let mut request = Received::empty();
@@ -463,6 +489,13 @@ fn reply_token_from_closed_router_is_rejected_by_recreated_router() {
     dealer
         .connect("inproc://rust-stale-reply-token-owner")
         .unwrap();
+    dealer
+        .send()
+        .message(Message::try_from(b"ready").unwrap())
+        .submit_sync()
+        .unwrap();
+    let mut ready = Received::empty();
+    assert!(original_router.recv(&mut ready, RecvFlags::NONE).unwrap());
 
     let (stale_tx, stale_rx) = std::sync::mpsc::channel();
     let responder = std::thread::spawn(move || {

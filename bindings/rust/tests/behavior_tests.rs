@@ -4,8 +4,6 @@
 mod test_support;
 
 use std::io::{Read, Write};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::Poll;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -213,12 +211,12 @@ fn sub_try_subscribe_empty() {
 }
 
 #[test]
-fn try_send_explicit_outcome() {
+fn send_without_peer_retains_packet_until_writable_or_drop() {
     let ctx = Context::new().unwrap();
     let sock = ctx.pair_socket().unwrap();
     sock.bind("inproc://beh-try-send").unwrap();
-    // No peer connected. Core owns the parked record; dropping the Future
-    // detaches only this waiter.
+    // With no peer, Core returns a wait token but keeps no payload. The Future
+    // owns the packet until it is retried or dropped.
 
     let msg = Message::try_from(b"test").unwrap();
     let mut future = Box::pin(sock.send().message(msg).submit());
@@ -310,7 +308,7 @@ fn stream_packet_output_resets_and_reuses_without_double_close() {
 }
 
 #[test]
-fn stream_backpressure_is_held_by_core_until_async_admission() {
+fn stream_backpressure_retries_the_retained_packet_after_writable() {
     let ctx = Context::new().unwrap();
     let endpoint = tcp_endpoint();
     let stream = ctx.stream_socket().unwrap();
@@ -347,37 +345,30 @@ fn stream_backpressure_is_held_by_core_until_async_admission() {
                 result.unwrap();
             }
             Poll::Pending => {
-                let stop = Arc::new(AtomicBool::new(false));
-                let reader_stop = Arc::clone(&stop);
-                raw.set_read_timeout(Some(Duration::from_millis(50)))
-                    .unwrap();
-                let mut reader = raw.try_clone().unwrap();
-                let drain = thread::spawn(move || {
-                    let deadline = Instant::now() + Duration::from_secs(5);
-                    let mut buffer = [0u8; 64 * 1024];
-                    while !reader_stop.load(Ordering::Acquire) && Instant::now() < deadline {
-                        match reader.read(&mut buffer) {
-                            Ok(0) => break,
-                            Ok(_) => {}
-                            Err(error)
-                                if matches!(
-                                    error.kind(),
-                                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                                ) => {}
-                            Err(error) => panic!("STREAM drain error: {error}"),
-                        }
+                raw.set_nonblocking(true).unwrap();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let mut buffer = [0u8; 64 * 1024];
+                loop {
+                    match raw.read(&mut buffer) {
+                        Ok(0) => panic!("STREAM peer closed while returning credit"),
+                        Ok(_) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(error) => panic!("STREAM drain error: {error}"),
                     }
-                });
-
-                test_support::block_on(future).unwrap();
-                stop.store(true, Ordering::Release);
-                drain.join().unwrap();
-                return;
+                    match test_support::poll_once(&mut future) {
+                        Poll::Ready(result) => {
+                            result.unwrap();
+                            return;
+                        }
+                        Poll::Pending if Instant::now() < deadline => thread::yield_now(),
+                        Poll::Pending => panic!("STREAM WRITABLE retry timed out"),
+                    }
+                }
             }
         }
     }
 
-    panic!("STREAM send did not enter Core's pending queue");
+    panic!("STREAM send did not return a WRITABLE wait token");
 }
 
 #[test]

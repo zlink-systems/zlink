@@ -4,13 +4,14 @@
 pub enum SubmitResult {
     /// The operation succeeded.
     Ok = 0,
-    /// Refused because the outbound queue was full.
+    /// Refused by HWM, missing credit, flow pause, or an existing target that
+    /// is not ready for another admission attempt.
     Backpressured = 1,
-    /// No connected peer was available for the operation.
+    /// No connected peer or requested ROUTER/STREAM route was available.
     NotConnected = 2,
     /// The target was not found.
     NotFound = 3,
-    /// The context was terminated while the operation was in flight.
+    /// The context or socket lifecycle terminated the operation.
     Terminated = 4,
     /// The target handle was invalid or already closed.
     InvalidHandle = 5,

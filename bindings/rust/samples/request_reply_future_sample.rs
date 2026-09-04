@@ -28,6 +28,18 @@ fn main() {
     drop(router_monitor);
     drop(dealer_monitor);
 
+    // A data round trip is the transport barrier for the first REQUEST; the
+    // monitor edge alone may precede request-route attachment.
+    dealer_socket
+        .send()
+        .message(Message::try_from(b"ready").expect("barrier message failed"))
+        .submit_sync()
+        .expect("barrier send failed");
+    let mut barrier = zlink::Received::empty();
+    router_socket
+        .recv(&mut barrier, zlink::RecvFlags::NONE)
+        .expect("barrier recv failed");
+
     let (request_done_tx, request_done_rx) = mpsc::channel();
     let expected_routing_id = routing_id;
     let router_thread = router_socket;

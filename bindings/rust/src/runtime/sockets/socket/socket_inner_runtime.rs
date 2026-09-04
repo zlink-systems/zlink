@@ -563,13 +563,17 @@ impl crate::internal::SocketStorage {
         if self.handle.is_null() {
             return Ok(());
         }
-        if let Some(owner) = &self.completion_owner {
-            owner.shutdown();
-        }
-        let close_rc = if let Some(routed) = &self.routed_handle {
-            routed.close_native()
+        let close_native = || {
+            if let Some(routed) = &self.routed_handle {
+                routed.close_native()
+            } else {
+                unsafe { ffi::zlink_close(self.handle) }
+            }
+        };
+        let close_rc = if let Some(owner) = &self.completion_owner {
+            owner.shutdown_with(close_native)
         } else {
-            unsafe { ffi::zlink_close(self.handle) }
+            close_native()
         };
         check_close_rc(close_rc)?;
         if let Some(routed) = &self.routed_handle {
@@ -910,13 +914,17 @@ impl Drop for crate::internal::SocketStorage {
         if self.handle.is_null() {
             return;
         }
-        if let Some(owner) = &self.completion_owner {
-            owner.shutdown();
-        }
-        let rc = if let Some(routed) = &self.routed_handle {
-            routed.close_native()
+        let close_native = || {
+            if let Some(routed) = &self.routed_handle {
+                routed.close_native()
+            } else {
+                unsafe { ffi::zlink_close(self.handle) }
+            }
+        };
+        let rc = if let Some(owner) = &self.completion_owner {
+            owner.shutdown_with(close_native)
         } else {
-            unsafe { ffi::zlink_close(self.handle) }
+            close_native()
         };
         if let Some(routed) = &self.routed_handle {
             routed.detach();

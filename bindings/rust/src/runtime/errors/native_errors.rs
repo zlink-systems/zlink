@@ -14,7 +14,7 @@ pub(crate) fn submit_result_from_errno(err: i32) -> SubmitResult {
         libc::EAGAIN => SubmitResult::Backpressured,
         libc::ENOTCONN | libc::EHOSTUNREACH => SubmitResult::NotConnected,
         libc::ENOENT => SubmitResult::NotFound,
-        libc::ECANCELED => SubmitResult::Terminated,
+        libc::ECANCELED | libc::ESHUTDOWN => SubmitResult::Terminated,
         x if x == eterm() => SubmitResult::Terminated,
         libc::EFAULT => SubmitResult::InvalidHandle,
         libc::EINVAL => SubmitResult::InvalidArgument,

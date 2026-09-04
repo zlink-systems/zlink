@@ -99,7 +99,7 @@ pub use flags::{
 };
 pub use message::Message;
 pub use message_socket_contracts::{DealerSocket, PairSocket};
-pub use messaging_operation_contracts::SendResult;
+pub use messaging_operation_contracts::{CompletionKind, SendResult};
 pub use messaging_operations::{Empty, PublishOp, Ready, ReplyOp, RequestOp, SendOp};
 pub use messaging_subscription_event::SubscriptionEvent;
 pub use monitor_contracts::{

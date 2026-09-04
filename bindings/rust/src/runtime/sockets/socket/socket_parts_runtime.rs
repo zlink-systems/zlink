@@ -6,10 +6,9 @@ use super::*;
 
 /// Submit message parts directly from their owned `Message` storage.
 ///
-/// Core consumes each `zlink_msg_t` according to the socket contract. Keeping
-/// the initialized FFI record inside `Message` avoids a second native array
-/// allocation and lets `Message::Drop` close a STREAM part that remains owned
-/// by the caller after `EAGAIN`.
+/// Core consumes each `zlink_msg_t` on every result, including DONTWAIT
+/// backpressure. Callers that may retry must therefore submit cloned attempt
+/// records and retain the logical packet separately.
 pub(crate) fn submit_part_sequence(
     parts: &mut crate::messaging_operations::MessageParts,
     mut submit: impl FnMut(*mut ffi::zlink_msg_t, ffi::zlink_part_flag_t, bool) -> i32,
