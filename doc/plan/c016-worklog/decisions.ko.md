@@ -1031,3 +1031,11 @@ NOT_CONNECTED(토큰 없음). blocking NONE의 DEALER NOT_CONNECTED/NOT_ADMITTED
 REQUEST 계약 B로 64K REQREP latency 68~127 ms → 2.1~2.4 ms(0.15.1 1.2 ms)로 해소, DR_REQREP 처리량 +17~41%. 남은 latency 격차:
 DD 64/256/1024B mean 3~3.5배·1.6배, REQREP 1024B +50%, 64K 약 2배 — throughput은 우위이나 gate의 latency geomean ≤ 1.0은 미달.
 다음: RR_REQREP 65536B 처리량 원인 job, 그 뒤 latency 잔여(D-B83 항목 1·2와 함께 사용자 결정).
+
+## D-B88 (2026-09-05 03:10, 머신 B) RR_REQREP 64K 원인·수정 — single-part REPLY의 transport lock 보유
+원인: single-part REPLY를 completion pipe에 넣을 때 `transport_sync`(transport generation lock)를 잡고 64K frame의 write_and_flush가 끝날
+때까지 유지 → ROUTER requester는 별도 completion lane을 써서 100 client의 reply write가 직렬화. 토큰/WRITABLE 경로는 배제(거절·WRITABLE 수
+RR 72,469 = DR 70,293 수준, readiness 비용 동등, 재시도 0), callgrind 명령 수 증가 없음, 락 제거 A/B +6.9%. 수정 `5e26e72806`: single-part
+REPLY는 pipe의 `_out_sync` 안에서 generation 확인 + write/flush를 한 임계구역으로, multipart는 기존 lock 유지, `engine_error`는 peer writer
+`_out_sync`도 잡고 connection id를 0으로. 결과(64K, runs=3 중앙값): RR 29.2 vs 0.15.1 30.5 Kops/s = **−4.4%(허용)**, DR +2.2%. hotpath_gate
+4 cell PASS(≤1.0), dev 140/141(load flake 1건 단독 5/5). 남은 것: latency mean 격차(RR 1.77 vs 1.03 ms 등, D-B83·D-B87).
