@@ -20,12 +20,13 @@ returns completion ID `0` and produces no SEND completion. On
 context, and the target; the binding retains the exact packet and target needed
 for retry because Core does not retain the payload.
 
-The socket-local owner waits for event-loop `POLLOUT`, drains the completion
-queue through `NO_DATA`, and resubmits the same packet only for a
+The socket-local owner blocks a daemon worker on Core `POLLCOMPLETION`, drains
+the completion queue through `NO_DATA`, and resubmits the same packet only for a
 `CompletionKind.WRITABLE` record with the same token, context, and routing ID.
 WRITABLE grants permission to retry; it is not successful SEND notification.
-The awaitable completes only when a retry is admitted. This path uses no
-binding-owned OS thread, sleep, or timer.
+The awaitable completes only when a retry is admitted. A wake FD transfers
+ownership to a public poller and stops lifecycle waits; the worker uses no
+fixed sleep, timer, or zero-time polling.
 
 `RequestOp` keeps its existing synchronous and awaitable terminals, matching
 `CompletionKind.REQUEST` records, and preserves `timeout()`. Cancelling an

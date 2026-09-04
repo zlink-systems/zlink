@@ -724,6 +724,15 @@ def _status_kind(output):
     return "fail"
 
 
+def _run_pattern_captured(*args):
+    """Keep process-control failures distinct from any partial RESULT output."""
+
+    try:
+        return _run_pattern(*args), False
+    except SystemExit as exc:
+        return str(exc).strip(), True
+
+
 def _stdout_queue(proc):
     existing = getattr(proc, "_zlink_stdout_queue", None)
     if existing is not None:
@@ -1077,6 +1086,8 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
                     output="\n".join(stdout_chunks),
                     stderr=client_stderr,
                 )
+            if pattern == "PUBSUB" and server.poll() is None:
+                _write_control_line(server, "STOP")
             try:
                 server.wait(timeout=shutdown_grace_s)
             except subprocess.TimeoutExpired:
@@ -1403,23 +1414,26 @@ def main(argv=None):
                     # force it here.
                     case_env["PERF_MULTI_MSG_UNIT_BYTES"] = str(msg_size)
                     case_ordinal += 1
-                    try:
-                        output = _run_pattern(
-                            args, case_env, pattern, transport, msg_size, transport_clients
-                        )
-                    except SystemExit as exc:
-                        output = str(exc).strip()
-                    status_kind = _status_kind(output)
+                    output, case_failed = _run_pattern_captured(
+                        args, case_env, pattern, transport, msg_size, transport_clients
+                    )
+                    status_kind = "fail" if case_failed else _status_kind(output)
                     if status_kind == "fail":
                         fail_count += 1
                         transport_failures += 1
                         if fail_fast:
                             stop_early = True
-                    if output:
+                    if output and not case_failed:
                         emitted_chunks.append(output)
                         status_lines.extend(_parse_status_lines(output))
                         run_outputs[msg_size].append(output)
-                    metrics = _result_metrics_for_case(output, pattern, transport, msg_size)
+                    metrics = (
+                        {}
+                        if case_failed
+                        else _result_metrics_for_case(
+                            output, pattern, transport, msg_size
+                        )
+                    )
                     if metrics:
                         transport_all_unsupported = False
                         _append_line(sections, _metric_row(pattern, msg_size, metrics))
@@ -1461,28 +1475,31 @@ def main(argv=None):
                         # OVERRIDES; do NOT force it here.
                         case_env["PERF_MULTI_MSG_UNIT_BYTES"] = str(msg_size)
                         case_ordinal += 1
-                        try:
-                            output = _run_pattern(
-                                args,
-                                case_env,
-                                pattern,
-                                transport,
-                                msg_size,
-                                transport_clients,
-                            )
-                        except SystemExit as exc:
-                            output = str(exc).strip()
-                        status_kind = _status_kind(output)
+                        output, case_failed = _run_pattern_captured(
+                            args,
+                            case_env,
+                            pattern,
+                            transport,
+                            msg_size,
+                            transport_clients,
+                        )
+                        status_kind = "fail" if case_failed else _status_kind(output)
                         if status_kind == "fail":
                             fail_count += 1
                             transport_failures += 1
                             if fail_fast:
                                 stop_early = True
-                        if output:
+                        if output and not case_failed:
                             emitted_chunks.append(output)
                             status_lines.extend(_parse_status_lines(output))
                             run_outputs[msg_size].append(output)
-                        metrics = _result_metrics_for_case(output, pattern, transport, msg_size)
+                        metrics = (
+                            {}
+                            if case_failed
+                            else _result_metrics_for_case(
+                                output, pattern, transport, msg_size
+                            )
+                        )
                         if metrics:
                             transport_all_unsupported = False
                             _append_line(
@@ -1578,7 +1595,11 @@ def main(argv=None):
     total_cases = len(configs) * runs
     expected_cases = max(0, total_cases - skipped_cases - unsupported_cases)
     expected_result_lines = expected_cases * 5
-    status = "complete" if len(rows) == expected_result_lines else "partial"
+    status = (
+        "complete"
+        if fail_count == 0 and len(rows) == expected_result_lines
+        else "partial"
+    )
     success_cases = len(rows) // 5
     _append_line(sections, render_effective_options(options, section="result"))
     if emitted_result_lines:

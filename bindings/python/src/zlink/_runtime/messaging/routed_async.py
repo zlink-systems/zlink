@@ -31,14 +31,13 @@ from ...contracts.errors.errors import (
 from ...contracts.eventing.codes import PollEventFlag, PollSourceKind
 from ...contracts.sockets.codes import RecvResult, RequestResult, SubmitResult
 from ..handles.native_support import (
-    _as_bytes_view,
     _clone_native_msg,
     _copy_routing_id,
     _raise_result_error,
     _request_result_from_code,
 )
 from .message_materializer import Message
-from .native_parts import _materialize_native_parts, _payload_parts
+from .native_parts import _materialize_native_parts
 
 
 def _close_messages(messages):
@@ -66,12 +65,6 @@ def _request_errno(result):
         RequestResult.NOT_SUPPORTED: errno.ENOTSUP,
         RequestResult.BACKPRESSURED: errno.EAGAIN,
     }.get(result, errno.EIO)
-
-
-def _snapshot_send_payload(payload):
-    """Freeze the logical packet before the first DONTWAIT admission attempt."""
-
-    return tuple(bytes(_as_bytes_view(part)) for part in _payload_parts(payload))
 
 
 class _CompletionEntry:
@@ -368,21 +361,45 @@ class _SendEntry(_CompletionEntry):
 
     __slots__ = ("target", "payload")
 
-    def __init__(self, loop, target, payload):
+    def __init__(self, loop, target, native_parts):
         super().__init__(ZLINK_COMPLETION_SEND, loop)
         self.target = None if target is None else bytes(target)
-        self.payload = payload
+        self.payload = native_parts
+
+    def clone_payload(self):
+        """Clone the retained zlink_msg values for one consuming submit call."""
+
+        clones = []
+        with self.condition:
+            if self.payload is None:
+                return None
+            try:
+                for native in self.payload:
+                    clones.append(_clone_native_msg(native))
+            except BaseException:
+                for clone in clones:
+                    lib().zlink_msg_close(ctypes.byref(clone))
+                raise
+        return clones
+
+    def _release_payload(self):
+        with self.condition:
+            native_parts = self.payload
+            self.payload = None
+        if native_parts is not None:
+            for native in native_parts:
+                lib().zlink_msg_close(ctypes.byref(native))
 
     def succeed_send(self):
-        self.payload = None
+        self._release_payload()
         super().succeed_send()
 
     def fail(self, error):
-        self.payload = None
+        self._release_payload()
         super().fail(error)
 
     def shutdown(self):
-        self.payload = None
+        self._release_payload()
         super().shutdown()
 
 
@@ -429,12 +446,8 @@ class CompletionOwner:
     def _unregister(self, entry):
         with self._lock:
             self._entries.pop(entry.context, None)
-            stale_ids = [
-                completion_id
-                for completion_id, candidate in self._entries_by_id.items()
-                if candidate is entry
-            ]
-            for completion_id in stale_ids:
+            completion_id = int(entry.completion_id)
+            if self._entries_by_id.get(completion_id) is entry:
                 self._entries_by_id.pop(completion_id, None)
             if not self._entries:
                 self._cancel_runtime_callback_locked()
@@ -466,10 +479,10 @@ class CompletionOwner:
 
     def _schedule_runtime_owner_locked(self, preferred=None):
         if self._runtime_handle is not None:
-            callback = self._runtime_handle
+            thread = self._runtime_handle
             loop = self._runtime_loop
             if (
-                not callback.cancelled()
+                thread.is_alive()
                 and loop is not None
                 and not loop.is_closed()
                 and loop.is_running()
@@ -486,24 +499,28 @@ class CompletionOwner:
         loop = self._select_runtime_loop_locked(preferred)
         if loop is None:
             return
+        try:
+            self._ensure_runtime_poller_locked()
+        except Exception:
+            self._fail_runtime_wait(lib().zlink_errno())
+            return
         self._runtime_loop = loop
         try:
-            if getattr(loop, "_thread_id", None) == threading.get_ident():
-                self._runtime_handle = loop.call_soon(self._runtime_pump, loop)
-            else:
-                self._runtime_handle = loop.call_soon_threadsafe(
-                    self._runtime_pump, loop
-                )
+            thread = threading.Thread(
+                target=self._runtime_wait_loop,
+                name="zlink-python-completion",
+                daemon=True,
+            )
+            self._runtime_handle = thread
+            thread.start()
         except RuntimeError:
             self._runtime_loop = None
             self._runtime_handle = None
 
     def _cancel_runtime_callback_locked(self):
-        callback = self._runtime_handle
         self._runtime_handle = None
         self._runtime_loop = None
-        if callback is not None:
-            callback.cancel()
+        self._signal_runtime_wait_locked()
 
     def _ensure_wake_pair_locked(self):
         if self._wake_reader is not None:
@@ -610,55 +627,56 @@ class CompletionOwner:
         with self._lock:
             self._state_changed.notify_all()
 
-    def _runtime_pump(self, loop):
-        with self._lock:
-            self._runtime_handle = None
-            if (
-                self._shutdown
-                or self._public_owner is not None
-                or self._sync_waiters != 0
-                or self._runtime_loop is not loop
-                or not self._entries
-            ):
-                return
-        if not self._poll_wait_lock.acquire(blocking=False):
-            return
-        try:
+    def _runtime_wait_loop(self):
+        """Block on Core progress; the wake FD handles ownership changes."""
+
+        current = threading.current_thread()
+        while True:
             with self._lock:
                 if (
-                    self._shutdown
+                    self._runtime_handle is not current
+                    or self._shutdown
                     or self._public_owner is not None
                     or self._sync_waiters != 0
                     or not self._entries
                 ):
                     return
-                try:
-                    self._ensure_runtime_poller_locked()
-                except Exception:
-                    self._fail_runtime_wait(lib().zlink_errno())
-                    return
-                poller = self._runtime_poller
-            native_event = ZlinkPollerEvent()
-            error_out = ctypes.c_int()
-            rc = lib().zlink_poller_wait(
-                poller, ctypes.byref(native_event), 1, 0, ctypes.byref(error_out)
-            )
-        finally:
-            self._poll_wait_lock.release()
-        if rc > 0:
-            if int(native_event.source_kind) == int(PollSourceKind.FD):
+            with self._poll_wait_lock:
+                with self._lock:
+                    if (
+                        self._runtime_handle is not current
+                        or self._shutdown
+                        or self._public_owner is not None
+                        or self._sync_waiters != 0
+                        or not self._entries
+                    ):
+                        return
+                    poller = self._runtime_poller
+                native_event = ZlinkPollerEvent()
+                error_out = ctypes.c_int()
+                rc = lib().zlink_poller_wait(
+                    poller,
+                    ctypes.byref(native_event),
+                    1,
+                    -1,
+                    ctypes.byref(error_out),
+                )
+                native_errno = lib().zlink_errno() if rc < 0 else 0
+            with self._lock:
+                self._state_changed.notify_all()
+            if rc > 0 and int(native_event.source_kind) == int(PollSourceKind.FD):
                 self._clear_runtime_wake()
-            else:
+                continue
+            if rc > 0:
                 try:
                     self.drain()
                 except Exception:
                     self._fail_runtime_wait(lib().zlink_errno())
                     return
-        elif rc < 0 and lib().zlink_errno() not in (errno.EINTR, errno.EAGAIN):
-            self._fail_runtime_wait(lib().zlink_errno())
-            return
-        with self._lock:
-            self._schedule_runtime_owner_locked(loop)
+                continue
+            if rc < 0 and native_errno not in (errno.EINTR, errno.EAGAIN):
+                self._fail_runtime_wait(native_errno)
+                return
 
     def transfer_to_public(self, poller_owner):
         with self._lock:
@@ -897,15 +915,16 @@ class CompletionOwner:
         with self._lock:
             if self._shutdown or entry.settled:
                 return
-            payload = entry.payload
         try:
-            native_parts = _materialize_native_parts(payload)
+            native_parts = entry.clone_payload()
         except Exception as error:
             with self._lock:
                 if self._shutdown or entry.settled:
                     return
             entry.fail(error)
             self._unregister(entry)
+            return
+        if native_parts is None:
             return
         with self._lock:
             if self._shutdown or entry.settled:
@@ -944,12 +963,17 @@ class CompletionOwner:
                 self._schedule_runtime_owner_locked(entry.loop)
 
     async def submit_send(self, target, payload):
+        native_parts = _materialize_native_parts(payload)
         entry = _SendEntry(
             asyncio.get_running_loop(),
             target,
-            _snapshot_send_payload(payload),
+            native_parts,
         )
-        self._register(entry)
+        try:
+            self._register(entry)
+        except BaseException:
+            entry._release_payload()
+            raise
         self._attempt_send(entry)
         await entry.wait_async()
 

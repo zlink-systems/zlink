@@ -268,7 +268,7 @@ def test_writable_completion_rejects_mismatched_send_correlation(mismatch):
     target = b"expected-route"
     socket = type("Socket", (), {"_handle": 1})()
     owner = CompletionOwner(socket)
-    entry = _SendEntry(None, target, (b"payload",))
+    entry = _SendEntry(None, target, [])
     assert entry.await_writable(71)
     completion = _completion(
         ZLINK_COMPLETION_WRITABLE,
@@ -316,7 +316,7 @@ def test_terminal_writable_is_typed_and_never_retried(
     target = b"terminal-route"
     socket = type("Socket", (), {"_handle": 1})()
     owner = CompletionOwner(socket)
-    entry = _SendEntry(None, target, (b"payload",))
+    entry = _SendEntry(None, target, [])
     assert entry.await_writable(81)
     completion = _completion(
         ZLINK_COMPLETION_WRITABLE,
@@ -339,6 +339,27 @@ def test_terminal_writable_is_typed_and_never_retried(
     assert entry._error.result == expected_result
     assert entry._error.native_errno == native_errno
     assert closer.closed == 1
+
+
+def test_send_entry_releases_retained_native_snapshot_exactly_once():
+    class NativeCloser:
+        def __init__(self):
+            self.closed = 0
+
+        def zlink_msg_close(self, _message):
+            self.closed += 1
+
+    closer = NativeCloser()
+    entry = _SendEntry(None, None, [ZlinkMsg(), ZlinkMsg()])
+    with patch("zlink._runtime.messaging.routed_async.lib", return_value=closer):
+        entry.fail(
+            zlink.SubmitError(
+                zlink.SubmitResult.TERMINATED,
+                getattr(errno, "ESHUTDOWN", errno.ECANCELED),
+            )
+        )
+        entry.shutdown()
+    assert closer.closed == 2
 
 
 def test_public_routed_send_without_route_has_no_wait_token():

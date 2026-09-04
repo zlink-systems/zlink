@@ -59,12 +59,40 @@ def test_raw_hot_path_keeps_gil_release_and_part_failure_cleanup():
     assert "for (Py_ssize_t j = i; j < prepared.count; ++j)" in native_text
 
 
-def test_async_completion_runtime_uses_no_thread_or_timer_polling():
+def test_async_completion_runtime_uses_blocking_event_wait_without_timer_polling():
     completion_text = (
         SRC / "_runtime" / "messaging" / "routed_async.py"
     ).read_text(encoding="utf-8")
-    for forbidden in ("threading.Thread", "asyncio.sleep", "call_later"):
+    for forbidden in (
+        "asyncio.sleep",
+        "call_later",
+        "self._runtime_pump",
+        "run_in_executor",
+    ):
         assert forbidden not in completion_text, forbidden
+    assert "target=self._runtime_wait_loop" in completion_text
+    assert "daemon=True" in completion_text
+    assert "ctypes.byref(native_event),\n                    1,\n                    -1," in completion_text
+
+
+def test_managed_send_retains_native_messages_instead_of_bytes_snapshots():
+    completion_text = (
+        SRC / "_runtime" / "messaging" / "routed_async.py"
+    ).read_text(encoding="utf-8")
+    assert "entry.clone_payload()" in completion_text
+    assert "_clone_native_msg(native)" in completion_text
+    assert "_snapshot_send_payload" not in completion_text
+
+
+def test_completion_registry_release_is_constant_time():
+    completion_text = (
+        SRC / "_runtime" / "messaging" / "routed_async.py"
+    ).read_text(encoding="utf-8")
+    unregister = completion_text.split("    def _unregister", 1)[1].split(
+        "    def ", 1
+    )[0]
+    assert "self._entries_by_id.get(completion_id)" in unregister
+    assert "self._entries_by_id.items()" not in unregister
 
 
 def test_native_send_builders_do_not_allocate_factory_closures():

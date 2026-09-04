@@ -52,6 +52,7 @@ from run_benchmarks import (
     _release_stream_start,
     _require_binding_runtime,
     _result_pattern,
+    _run_pattern_captured,
     _validate_python_build_options,
     parse_args,
     pattern_direction,
@@ -61,6 +62,18 @@ import zlink
 
 
 class PerfMultiRunnerTests(unittest.TestCase):
+    def test_runner_does_not_treat_partial_results_from_failed_case_as_success(self):
+        partial = (
+            "RESULT,current,MULTI_PUBSUB,tcp,1024,throughput,1.000\n"
+            "server shutdown timed out"
+        )
+        with mock.patch("run_benchmarks._run_pattern", side_effect=SystemExit(partial)):
+            output, failed = _run_pattern_captured(
+                object(), {}, "PUBSUB", "tcp", "1024", "8"
+            )
+        self.assertTrue(failed)
+        self.assertEqual(output, partial)
+
     def test_multi_clients_default_to_one_hundred_for_every_pattern(self):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(_clients_for_pattern("DEALER_DEALER", None), "100")

@@ -26,8 +26,8 @@ async def main(argv=None):
     endpoint = benchmark_endpoint(args.transport, "multi-dealer-router")
     stop = threading.Event()
     # ROUTER routed send is HWM-managed: `submit()` owns the DONTWAIT retry
-    # state. After backpressure it retains the packet and target, waits for
-    # event-loop POLLOUT, drains through NO_DATA, and retries only for the
+    # state. After backpressure it retains the packet and target, blocks on
+    # POLLCOMPLETION, drains through NO_DATA, and retries only for the
     # matching WRITABLE token/context/RID. The benchmark only tracks the
     # returned task; it does not add a second retry queue.
     pending_tasks = set()
@@ -64,7 +64,7 @@ async def main(argv=None):
                             raise send_errors[0]
                         # Pending public send awaitables and stdin share this
                         # event loop. The completion owner drives retries from
-                        # POLLOUT; cooperative turns preserve scheduler fairness.
+                        # WRITABLE; cooperative turns preserve scheduler fairness.
                         ready_count = safe_poll(poller, poll_events, 0)
                         for offset in range(ready_count):
                             if poll_events.slot(offset) != 0 or not (
