@@ -779,3 +779,22 @@ LTO ON) 2트리, 최초 1회 configure 후 재사용. correctness는 dev(LTO 링
 optional 미clear→std::exchange(nullopt)로 수정(8bae89dc0f 유래, cpp-stream-stall이 남긴 diff). root 아니나 정확한 수정.
 **다음**: 패키지 재빌드(dev/release)→TicTacToe/Bingo 3x·cross-language·**perf STREAM 재측정**→잔여(java·node .NET→Node stream·
 ZoneWorld)→Phase 12.2·13→Phase 9 tag·10.
+
+## D-081 (2026-09-04 12:xx) wake fix 재검증 = STREAM stall 해소 확인, 잔여 R 4건(correctness 3 + HWM-deferred 1)
+codex sol reverify(c12c736ca6 + application_job_queue.hpp 포함). **STREAM lost-wake stall 해소 확인**: cpp TicTacToe/Bingo
+stream timeout·JoinGameNotify stall 재현 안 됨(실샘플 3/3), C++↔.NET STREAM 양방향·DeliveryDispatch/SupportChat/GameQuest/
+ShoppingMall PASS, node .NET→Node STREAM 전달 완료(stall 해소). sha256 gate PASS(새 lib 34445dc6). **perf STREAM(1-client
+1024B) ±5% PASS**(throughput↑ latency↓ 전 transport). C++ cross-language browser 제외 전 stage PASS(spot-route 7·relocation·
+user-spot-join 12 포함).
+**잔여 R(wake fix와 별개, HWM 비의존 3 + HWM-deferred 1)**:
+- (R1) cpp ZoneWorld 0/3: HTTP 504·"unexpected ZMP frame header"·"RouteMesh channel send target not found". 별개(ZMP/RouteMesh).
+- (R2) java TicTacToe 2/2·Bingo 1/1: AuthenticateReq가 handler까지 도달 후 handler_exception/target unavailable. java-specific
+  handler/route 회귀(cpp DI/codec와 다른 root).
+- (R3) node .NET→Node STREAM: data req/reply 완료했으나 flow file packet/flow/origin=null로 assertion 실패(관측성, 전달 정상).
+- (R4-deferred) cpp multi STREAM 100-client strict: 전 transport rc=2, tcp는 272k samples 처리 후 timeout_error=1(고동시성).
+  **B의 HWM credit multi 등록순서 버그로 추정 → B 수정 대기**.
+**P**: M6A·M6B1343·E2E inventory 278; java ShoppingMall forbidden-pattern(TTT Thread.sleep, 기존); package wrapper drift
+(Go managed-version·Node package 0.15.2·Node http-client tar integrity). **E**: browser chromium 미설치.
+**간헐(비지속, 재실행 통과)**: TTT preflight mesh_node_vertical permits_in_use==0 1회, Bingo play-a SIGSEGV 1회 — 감시 필요.
+**다음(correctness, fast/dev 빌드)**: R1 ZoneWorld·R2 java authenticate 진단·수정(병렬), R3 node flow-correlation(관측성).
+R4는 B HWM-wake 대기. perf STREAM 전체 pattern/size 게이트도 B 수정 후.
